@@ -1,7 +1,6 @@
 import React, { useState, useMemo, useCallback, useRef, useEffect, useLayoutEffect } from 'react';
 import { Room, Table, User as UserType, ParkedTicket, CartItem, RoleDefinition, Permission } from '../types';
 import {
-    Clock,
     User,
     Lock,
     Plus,
@@ -24,14 +23,23 @@ import {
     X
 } from 'lucide-react';
 import { LazyMotion, domAnimation, m, AnimatePresence, useReducedMotion } from 'framer-motion';
+import { Capacitor } from '@capacitor/core';
 import TableOptionsModal from './TableOptionsModal';
 import SplitTicketModal from './SplitTicketModal';
 import TableMoveConfirmationModal from './TableMoveConfirmationModal';
 import { createPaymentFractionPlan } from '../utils/paymentFractions';
+import { getTableChairSlots, TableChairSlot } from '../utils/tableChairs';
+import { shouldReduceTableMotion } from '../utils/tableMotionPolicy';
+import {
+    buildTableAccountDisplayEntries,
+    renameTableAccountTicket,
+    summarizeOpenTableAccounts
+} from '../utils/tableAccountPresentation';
 import { getRenderableFloorTables } from '../utils/tableLayout';
 import { hasPendingKdsDispatch } from '../utils/kdsPresentation';
 import { resolveOperationalApiUrl } from '../utils/masterOperationalApi';
 import { requestJson } from '../services/network/httpClient';
+import { canAccessOtherSellerTables, isTableLockedForUser } from '../utils/tableAccessPolicy';
 import {
     beginPosInteraction,
     expectInteractionRender,
@@ -89,16 +97,11 @@ interface SmartTableModel {
     isPartiallySubtotalized: boolean;
     subtotalizedTicketCount: number;
     ticketCount: number;
-    progress: number;
-    serviceStage: {
-        icon: string;
-        label: string;
-    };
-    needsRevenueGlow: boolean;
     hasPendingKitchenDispatch: boolean;
     lastOrderHint: string;
     firstCustomerName?: string;
     joinedPrimaryLabel?: string;
+    temporaryAlias?: string;
 }
 
 interface TooltipState {
@@ -147,26 +150,27 @@ const BarTabsModal: React.FC<{
     onClose: () => void;
     onOpenTab: (ticket: ParkedTicket) => void;
     onCreateTab: (name: string) => void;
+    onRenameTab?: (ticket: ParkedTicket, name: string, fractionIndex?: number) => void | Promise<void>;
     allowCreate?: boolean;
     titleLabel?: string;
     accountMode?: boolean;
-}> = ({ table, tickets, currencySymbol, onClose, onOpenTab, onCreateTab, allowCreate = true, titleLabel = 'Barra / Minutas', accountMode = false }) => {
+}> = ({ table, tickets, currencySymbol, onClose, onOpenTab, onCreateTab, onRenameTab, allowCreate = true, titleLabel = 'Barra / Minutas', accountMode = false }) => {
     const [tabName, setTabName] = useState('');
+    const [editingEntryKey, setEditingEntryKey] = useState<string | null>(null);
+    const [editingName, setEditingName] = useState('');
     const nextName = `${accountMode ? 'Cuenta' : 'Minuta'} ${tickets.length + 1}`;
-    const total = tickets.reduce((sum, ticket) => {
-        const itemsTotal = (ticket.items || []).reduce((acc, item) => acc + Number(item.price || 0) * Number(item.quantity || 0), 0);
-        return sum + Number(ticket.total ?? itemsTotal ?? 0);
-    }, 0);
+    const accountEntries = useMemo(() => buildTableAccountDisplayEntries(tickets), [tickets]);
+    const openSummary = useMemo(() => summarizeOpenTableAccounts(accountEntries), [accountEntries]);
 
     return (
-        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm">
-            <div className="w-full max-w-2xl rounded-[2rem] bg-white shadow-2xl overflow-hidden">
-                <div className="flex items-start justify-between gap-4 border-b border-slate-100 p-6">
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-900/55 p-4 backdrop-blur-sm">
+            <div className="w-full max-w-2xl overflow-hidden rounded-[2rem] border border-sky-100 bg-gradient-to-br from-sky-50 via-white to-indigo-50 shadow-2xl">
+                <div className="flex items-start justify-between gap-4 border-b border-sky-100 bg-white/85 p-6">
                     <div>
                             <p className="text-[10px] font-black uppercase tracking-[0.25em] text-blue-500">{titleLabel}</p>
                         <h2 className="mt-1 text-3xl font-black text-slate-900">{table.nombre || table.name || 'Barra'}</h2>
                             <p className="mt-1 text-sm font-bold text-slate-500">
-                            {tickets.length} cuenta(s) abierta(s) · {currencySymbol}{total.toLocaleString()}
+                            {openSummary.count} cuenta(s) abierta(s) · {currencySymbol}{openSummary.total.toLocaleString()}
                         </p>
                     </div>
                     <button onClick={onClose} className="rounded-full bg-slate-100 p-3 text-slate-500 hover:bg-slate-200">
@@ -174,52 +178,98 @@ const BarTabsModal: React.FC<{
                     </button>
                 </div>
 
-                <div className="grid gap-4 p-6 md:grid-cols-[1fr_280px]">
-                    <div className="space-y-3 max-h-[52vh] overflow-y-auto pr-1">
-                        {tickets.length === 0 ? (
+                <div className="grid gap-4 bg-sky-50/45 p-6 md:grid-cols-[1fr_280px]">
+                    <div className="max-h-[52vh] space-y-3 overflow-y-auto rounded-[1.75rem] border border-sky-100 bg-white/60 p-3 pr-2">
+                        {accountEntries.length === 0 ? (
                             <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center">
                                 <ReceiptText size={38} className="mx-auto mb-3 text-slate-300" />
                                 <p className="font-black text-slate-700">No hay cuentas abiertas</p>
                                 <p className="mt-1 text-sm font-semibold text-slate-400">No hay artículos pendientes en esta mesa.</p>
                             </div>
                         ) : (
-                            tickets.map((ticket, index) => {
-                                const ticketTotal = Number(ticket.total ?? (ticket.items || []).reduce((acc, item) => acc + Number(item.price || 0) * Number(item.quantity || 0), 0));
-                                const label = ticket.barTabName || ticket.alias || ticket.name || `Cuenta ${index + 1}`;
+                            accountEntries.map((entry) => {
+                                const ticket = entry.ticket;
                                 const subtotalState = getTicketSubtotalization(ticket);
+                                const canRename = Boolean(accountMode && onRenameTab);
+                                const isPaid = entry.status === 'PAID';
                                 return (
-                                    <button
-                                        key={ticket.id}
-                                        type="button"
-                                        onClick={() => onOpenTab(ticket)}
-                                        className={`flex w-full items-center justify-between gap-4 rounded-3xl border p-4 text-left shadow-sm transition-all ${subtotalState.isSubtotalized
-                                            ? 'border-violet-300 bg-violet-50 hover:border-violet-400 hover:bg-violet-100'
-                                            : 'border-slate-100 bg-white hover:border-blue-300 hover:bg-blue-50'
-                                        }`}
-                                    >
-                                        <div className="min-w-0">
-                                            <div className="flex flex-wrap items-center gap-2">
-                                                <p className="truncate text-lg font-black text-slate-900">{label}</p>
-                                                {subtotalState.isSubtotalized && (
-                                                    <span className="rounded-full bg-violet-600 px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.14em] text-white">
-                                                        Subtotalizado
-                                                    </span>
-                                                )}
-                                            </div>
-                                            <p className="mt-1 text-xs font-bold uppercase tracking-wide text-slate-400">
-                                                {(ticket.items || []).length} línea(s) · {new Date(ticket.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                                            </p>
-                                            {subtotalState.isSubtotalized && subtotalState.subtotalizedAt && (
-                                                <p className="mt-1 text-[10px] font-black text-violet-600">
-                                                    Pre-cuenta {new Date(subtotalState.subtotalizedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                                                    {subtotalState.subtotalizedBy ? ` · ${subtotalState.subtotalizedBy}` : ''}
-                                                </p>
+                                    <div key={entry.key} className={`rounded-3xl border shadow-sm transition-all ${isPaid ? 'border-emerald-200 bg-emerald-50/70' : subtotalState.isSubtotalized ? 'border-violet-300 bg-violet-50' : 'border-sky-100 bg-white'}`}>
+                                        <div className="flex items-stretch gap-2 p-2">
+                                            <button
+                                                type="button"
+                                                onClick={() => !isPaid && onOpenTab(ticket)}
+                                                disabled={isPaid}
+                                                className="table-account-action flex min-w-0 flex-1 select-none appearance-none items-center justify-between gap-4 rounded-2xl border-0 bg-white p-2 text-left transition-colors [-webkit-tap-highlight-color:transparent] hover:bg-sky-50 disabled:cursor-default"
+                                            >
+                                                <div className="min-w-0">
+                                                    <div className="flex flex-wrap items-center gap-2">
+                                                        <p className="truncate text-lg font-black text-slate-900">{entry.displayLabel}</p>
+                                                        {entry.fractionIndex && (
+                                                            <span className={`rounded-full px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.14em] ${isPaid ? 'bg-emerald-600 text-white' : 'bg-sky-100 text-sky-700'}`}>
+                                                                {isPaid ? 'Cobrada' : 'Pendiente'}
+                                                            </span>
+                                                        )}
+                                                        {subtotalState.isSubtotalized && (
+                                                            <span className="rounded-full bg-violet-600 px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.14em] text-white">
+                                                                Subtotalizado
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                    <p className="mt-1 text-xs font-bold uppercase tracking-wide text-slate-400">
+                                                        {(ticket.items || []).length} línea(s) · {new Date(ticket.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                                    </p>
+                                                    {subtotalState.isSubtotalized && subtotalState.subtotalizedAt && (
+                                                        <p className="mt-1 text-[10px] font-black text-violet-600">
+                                                            Pre-cuenta {new Date(subtotalState.subtotalizedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                                            {subtotalState.subtotalizedBy ? ` · ${subtotalState.subtotalizedBy}` : ''}
+                                                        </p>
+                                                    )}
+                                                </div>
+                                                <span className={`shrink-0 text-xl font-black ${isPaid ? 'text-emerald-700' : subtotalState.isSubtotalized ? 'text-violet-700' : 'text-emerald-600'}`}>
+                                                    {currencySymbol}{entry.amount.toLocaleString()}
+                                                </span>
+                                            </button>
+                                            {canRename && (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        setEditingEntryKey(entry.key);
+                                                        setEditingName(entry.editName);
+                                                    }}
+                                                    className="table-account-rename flex w-12 shrink-0 appearance-none items-center justify-center rounded-2xl border-0 bg-sky-50 text-slate-400 hover:bg-sky-100 hover:text-blue-600"
+                                                    aria-label={`Renombrar ${entry.accountLabel}`}
+                                                    title="Renombrar cuenta"
+                                                >
+                                                    <Pencil size={18} />
+                                                </button>
                                             )}
                                         </div>
-                                        <span className={`shrink-0 text-xl font-black ${subtotalState.isSubtotalized ? 'text-violet-700' : 'text-emerald-600'}`}>
-                                            {currencySymbol}{ticketTotal.toLocaleString()}
-                                        </span>
-                                    </button>
+                                        {canRename && editingEntryKey === entry.key && (
+                                            <form
+                                                className="flex gap-2 border-t border-slate-100 p-3"
+                                                onSubmit={(event) => {
+                                                    event.preventDefault();
+                                                    const nextValue = editingName.trim();
+                                                    if (!nextValue) return;
+                                                    void Promise.resolve(onRenameTab?.(ticket, nextValue, entry.fractionIndex)).then(() => setEditingEntryKey(null));
+                                                }}
+                                            >
+                                                <input
+                                                    autoFocus
+                                                    value={editingName}
+                                                    onChange={event => setEditingName(event.target.value)}
+                                                    aria-label="Nombre de la cuenta"
+                                                    className="min-w-0 flex-1 rounded-xl border border-blue-200 bg-white px-3 py-2 font-bold text-slate-900 outline-none focus:border-blue-500"
+                                                />
+                                                <button type="submit" disabled={!editingName.trim()} className="rounded-xl bg-blue-600 px-4 text-white disabled:opacity-40" aria-label="Guardar nombre de cuenta">
+                                                    <Check size={18} />
+                                                </button>
+                                                <button type="button" onClick={() => setEditingEntryKey(null)} className="rounded-xl bg-slate-100 px-4 text-slate-500" aria-label="Cancelar edición de cuenta">
+                                                    <X size={18} />
+                                                </button>
+                                            </form>
+                                        )}
+                                    </div>
                                 );
                             })
                         )}
@@ -358,12 +408,6 @@ const summarizeParkedTicket = (ticket: ParkedTicket): ParkedOrderSummary | null 
     };
 };
 
-const getServiceStage = (progress: number): { icon: string; label: string } => {
-    if (progress < 0.34) return { icon: '🥗', label: 'Entradas' };
-    if (progress < 0.67) return { icon: '🥩', label: 'Plato fuerte' };
-    return { icon: '🍰', label: 'Postre' };
-};
-
 const inferArchetype = (table: Table): TableArchetype => {
     if (table.shape === 'BAR') return 'BAR';
     if (table.shape === 'BOOTH') return 'BOOTH';
@@ -401,11 +445,11 @@ const getSmartStatus = (table: Table, elapsedMinutes: number, hasDigitizedItems:
     return 'FREE';
 };
 
-const computeLastOrderHint = (model: Pick<SmartTableModel, 'smartStatus' | 'serviceStage' | 'hasDigitizedItems'>): string => {
+const computeLastOrderHint = (model: Pick<SmartTableModel, 'smartStatus' | 'hasDigitizedItems'>): string => {
     if (model.smartStatus === 'SUBTOTALIZED') return 'Pre-cuenta impresa';
     if (model.smartStatus === 'ATTENTION') return 'Sin pedido reciente (+10m)';
     if (!model.hasDigitizedItems) return 'Aun sin pedidos cargados';
-    return `${model.serviceStage.label} en curso`;
+    return 'Pedido registrado';
 };
 
 const statusPalette: Record<
@@ -495,7 +539,12 @@ const TableMap: React.FC<TableMapProps> = ({
     const [isControlCenterOpen, setIsControlCenterOpen] = useState(false);
     const [tableNotice, setTableNotice] = useState<TableNoticeState | null>(null);
     const [openingTableId, setOpeningTableId] = useState<string | null>(null);
-    const reduceMotion = useReducedMotion();
+    const prefersReducedMotion = useReducedMotion();
+    const reduceMotion = shouldReduceTableMotion({
+        prefersReducedMotion: Boolean(prefersReducedMotion),
+        isNativePlatform: Capacitor.isNativePlatform(),
+        platform: Capacitor.getPlatform()
+    });
 
     const closeTablePreview = useCallback((table: Table, close: () => void) => {
         close();
@@ -553,6 +602,7 @@ const TableMap: React.FC<TableMapProps> = ({
 
     const activeRoom = useMemo(() => rooms.find(r => r.id === activeRoomId), [rooms, activeRoomId]);
     const usesWhiteBackground = activeRoom?.data?.backgroundStyle === 'WHITE';
+    const showsTableChairs = activeRoom?.data?.tableLayoutStyle !== 'NORMAL';
     const roomLabelById = useMemo(() => {
         return new Map(rooms.map(room => [room.id, getRoomLabel(room)]));
     }, [rooms]);
@@ -578,6 +628,7 @@ const TableMap: React.FC<TableMapProps> = ({
         currentRolePermissions.includes('ALL') ||
         currentRolePermissions.includes(TABLE_CONTROL_CENTER_PERMISSION)
     );
+    const hasOtherSellerTableAccess = canAccessOtherSellerTables(currentRolePermissions, Boolean(isAdmin));
     const roomTables = useMemo(
         () => safeTables.filter(table => table.roomId === activeRoomId),
         [safeTables, activeRoomId]
@@ -801,22 +852,6 @@ const TableMap: React.FC<TableMapProps> = ({
         [serviceTables, getVisualTableState, isTableOccupiedFromTicket]
     );
 
-    const averageTicket = useMemo(() => {
-        if (occupiedLikeTables.length === 0) return 0;
-        const total = occupiedLikeTables.reduce((acc, table) => {
-            const persistedTotal = Number(table.currentOrderTotal || 0);
-            const parkedSummary = getParkedSummaryForTable(table);
-            const parkedTotal = parkedSummary
-                ? (parkedSummary.hasExplicitTotal
-                    ? parkedSummary.finalTotal
-                    : (persistedTotal > NO_ORDER_TOTAL_THRESHOLD ? persistedTotal : parkedSummary.calculatedTotal))
-                : 0;
-            const resolvedTotal = parkedTotal > NO_ORDER_TOTAL_THRESHOLD ? parkedTotal : persistedTotal;
-            return acc + resolvedTotal;
-        }, 0);
-        return total / occupiedLikeTables.length;
-    }, [occupiedLikeTables, getParkedSummaryForTable]);
-
     const expectedStayMinutes = useMemo(() => {
         const elapsed = occupiedLikeTables
             .map(table => getElapsedMinutes(table.timeSeated))
@@ -827,8 +862,6 @@ const TableMap: React.FC<TableMapProps> = ({
         const averageElapsed = elapsed.reduce((acc, value) => acc + value, 0) / elapsed.length;
         return clamp(Math.round(averageElapsed * 1.18), 45, 130);
     }, [occupiedLikeTables]);
-
-    const highRevenueThreshold = useMemo(() => averageTicket * 1.5, [averageTicket]);
 
     const smartTables = useMemo<SmartTableModel[]>(() => {
         return serviceTables.map((rawTable, index) => {
@@ -862,20 +895,21 @@ const TableMap: React.FC<TableMapProps> = ({
                 displayTable.editingLock
                 && String(displayTable.editingLock.ownerId || '') !== String(localTableLockOwnerId || '')
             );
-            const isLocked = isBeingEdited || (
-                isOccupiedLike &&
-                Boolean(bloqueoMeseros) &&
-                Boolean(displayTable.waiterId) &&
-                displayTable.waiterId !== currentUser.id &&
-                !isAdmin
-            );
+            const isLocked = isTableLockedForUser({
+                isBeingEdited,
+                isOccupiedLike,
+                waiterLockEnabled: Boolean(bloqueoMeseros),
+                waiterId: displayTable.waiterId,
+                currentUserId: currentUser.id,
+                canAccessOtherSeller: hasOtherSellerTableAccess,
+            });
 
-            const progress = isOccupiedLike ? clamp(elapsedMinutes / Math.max(1, expectedStayMinutes), 0, 1) : 0;
-            const serviceStage = getServiceStage(progress);
-            const needsRevenueGlow = isOccupiedLike && highRevenueThreshold > 0 && total >= highRevenueThreshold;
             const hasPendingKitchenDispatch = getTableTickets(displayTable).some(hasPendingKdsDispatch);
             const firstCustomerName = getTableTickets(displayTable)
                 .map(ticket => String(ticket.customerSnapshot?.name || ticket.customerName || '').trim())
+                .find(Boolean);
+            const temporaryAlias = getTableTickets(displayTable)
+                .map(ticket => String(ticket.alias || '').trim())
                 .find(Boolean);
 
             const baseModel: SmartTableModel = {
@@ -893,12 +927,10 @@ const TableMap: React.FC<TableMapProps> = ({
                 isPartiallySubtotalized,
                 subtotalizedTicketCount,
                 ticketCount,
-                progress,
-                serviceStage,
-                needsRevenueGlow,
                 hasPendingKitchenDispatch,
                 lastOrderHint: '',
                 firstCustomerName,
+                temporaryAlias,
                 joinedPrimaryLabel: isJoinedSecondary
                     ? String(table.joinedSourceTableName || '').trim() || undefined
                     : undefined
@@ -909,7 +941,7 @@ const TableMap: React.FC<TableMapProps> = ({
                 lastOrderHint: computeLastOrderHint(baseModel)
             };
         });
-    }, [serviceTables, bloqueoMeseros, currentUser.id, isAdmin, localTableLockOwnerId, expectedStayMinutes, highRevenueThreshold, getParkedSummaryForTable, enrichTableWithParkedTicket, getTableTickets, getVisualTableState]);
+    }, [serviceTables, bloqueoMeseros, currentUser.id, hasOtherSellerTableAccess, localTableLockOwnerId, getParkedSummaryForTable, enrichTableWithParkedTicket, getTableTickets, getVisualTableState]);
 
     const createTableAccount = useCallback(async (table: Table, requestedName?: string) => {
         const existingTickets = getTableTickets(table);
@@ -946,6 +978,13 @@ const TableMap: React.FC<TableMapProps> = ({
         setSelectedAccountTable(nextTable);
         return ticket;
     }, [currentUser.id, currentUser.name, getTableTickets, onUpdateParkedTickets, onUpdateTables, parkedTickets, roomLabelById, tables]);
+
+    const renameTableAccount = useCallback(async (table: Table, ticket: ParkedTicket, requestedName: string, fractionIndex?: number) => {
+        const nextTicket = renameTableAccountTicket(ticket, getTableLabel(table), requestedName, fractionIndex);
+        if (nextTicket === ticket) return;
+        const nextTickets = (parkedTickets || []).map(candidate => candidate.id === ticket.id ? nextTicket : candidate);
+        await Promise.resolve(onUpdateParkedTickets?.(nextTickets));
+    }, [onUpdateParkedTickets, parkedTickets]);
 
     const stats = useMemo(() => {
         const total = smartTables.length;
@@ -1987,9 +2026,9 @@ const TableMap: React.FC<TableMapProps> = ({
                                     <SmartTableNode
                                         key={model.table.id}
                                         model={model}
-                                        currencySymbol={currencySymbol}
                                         reduceMotion={Boolean(reduceMotion)}
                                         lightBackground={usesWhiteBackground}
+                                        showChairs={showsTableChairs}
                                         onSelect={handleNodeSelect}
                                         onTooltipOpen={openTooltip}
                                         onTooltipMove={moveTooltip}
@@ -2154,6 +2193,7 @@ const TableMap: React.FC<TableMapProps> = ({
                         onCreateTab={(name) => {
                             void createTableAccount(selectedAccountTable, name);
                         }}
+                        onRenameTab={(ticket, name, fractionIndex) => renameTableAccount(selectedAccountTable, ticket, name, fractionIndex)}
                     />
                 )}
 
@@ -2417,20 +2457,49 @@ const TableMap: React.FC<TableMapProps> = ({
     );
 };
 
+const TABLE_CHAIR_POSITION_CLASS: Record<TableChairSlot, string> = {
+    TOP_CENTER: '-top-7 left-1/2 -translate-x-1/2',
+    BOTTOM_CENTER: '-bottom-7 left-1/2 -translate-x-1/2 rotate-180',
+    LEFT_CENTER: '-left-7 top-1/2 -translate-y-1/2 -rotate-90',
+    RIGHT_CENTER: '-right-7 top-1/2 -translate-y-1/2 rotate-90'
+};
+
+const TableChairMarkers = React.memo(({ model, visible }: { model: SmartTableModel; visible: boolean }) => {
+    if (!visible || model.archetype === 'BAR' || model.archetype === 'BOOTH' || model.archetype === 'CHAISE_LONGUE') {
+        return null;
+    }
+
+    return (
+        <div aria-hidden="true" className="pointer-events-none absolute inset-0 z-0">
+            {getTableChairSlots().map(slot => (
+                <span
+                    key={slot}
+                    className={`absolute h-5 w-7 ${TABLE_CHAIR_POSITION_CLASS[slot]}`}
+                >
+                    <span className="absolute inset-x-0 bottom-0 h-4 rounded-[0.5rem] border border-slate-300/80 bg-gradient-to-br from-slate-200 via-slate-300 to-slate-400 shadow-[0_3px_8px_rgba(15,23,42,0.34)]" />
+                    <span className="absolute left-1/2 top-0 h-1.5 w-6 -translate-x-1/2 rounded-[0.35rem] border border-slate-200/80 bg-gradient-to-b from-slate-100 to-slate-400 shadow-[0_2px_5px_rgba(15,23,42,0.28)]" />
+                </span>
+            ))}
+        </div>
+    );
+});
+
+TableChairMarkers.displayName = 'TableChairMarkers';
+
 const SmartTableNode = React.memo(({
     model,
-    currencySymbol,
     reduceMotion,
     lightBackground,
+    showChairs,
     onSelect,
     onTooltipOpen,
     onTooltipMove,
     onTooltipClose
 }: {
     model: SmartTableModel;
-    currencySymbol: string;
     reduceMotion: boolean;
     lightBackground: boolean;
+    showChairs: boolean;
     onSelect: (model: SmartTableModel) => void;
     onTooltipOpen: (model: SmartTableModel, x: number, y: number) => void;
     onTooltipMove: (modelId: string, x: number, y: number) => void;
@@ -2447,9 +2516,6 @@ const SmartTableNode = React.memo(({
 
     useEffect(() => () => clearLongPress(), [clearLongPress]);
 
-    const ringRadius = 12;
-    const ringCircumference = 2 * Math.PI * ringRadius;
-    const ringOffset = ringCircumference * (1 - model.progress);
     const shapeClass =
         model.archetype === 'CIRCLE' || model.archetype === 'BAR'
             ? 'rounded-full'
@@ -2486,7 +2552,7 @@ const SmartTableNode = React.memo(({
             }}
             onPointerUp={() => clearLongPress()}
             onPointerCancel={() => clearLongPress()}
-            className={`absolute isolate overflow-hidden border text-left transition-[box-shadow,border-color,background-color] duration-300 ${shapeClass} ${lightBackground && isFree ? 'border-emerald-500/50 bg-white text-slate-900 shadow-lg shadow-slate-200/70' : statusPalette[model.smartStatus].shell}`}
+            className={`absolute isolate overflow-visible border text-left transition-[box-shadow,border-color,background-color] duration-300 ${shapeClass} ${lightBackground && isFree ? 'border-emerald-500/50 bg-white text-slate-900 shadow-lg shadow-slate-200/70' : statusPalette[model.smartStatus].shell}`}
             style={{
                 left: model.table.posX,
                 top: model.table.posY,
@@ -2496,23 +2562,15 @@ const SmartTableNode = React.memo(({
                 willChange: 'transform, opacity'
             }}
         >
-            {model.needsRevenueGlow && (
-                <m.div
-                    className="pointer-events-none absolute -inset-2 rounded-[inherit]"
-                    style={{
-                        background: 'radial-gradient(circle, rgba(251,191,36,0.42) 0%, rgba(245,158,11,0.24) 40%, rgba(245,158,11,0) 74%)'
-                    }}
-                    animate={reduceMotion ? { opacity: 0.35 } : { opacity: [0.3, 0.65, 0.3], scale: [0.98, 1.04, 0.98] }}
-                    transition={{ duration: 1.8, repeat: Infinity, ease: 'easeInOut' }}
-                />
-            )}
+            <TableChairMarkers model={model} visible={showChairs} />
 
             {model.smartStatus === 'ATTENTION' && (
                 <m.div
                     className="pointer-events-none absolute inset-0 rounded-[inherit] border border-amber-300/80"
+                    style={{ opacity: reduceMotion ? 0.8 : undefined }}
                     animate={
                         reduceMotion
-                            ? { opacity: 0.8 }
+                            ? undefined
                             : {
                                 opacity: [0.36, 1, 0.36],
                                 boxShadow: [
@@ -2522,16 +2580,17 @@ const SmartTableNode = React.memo(({
                                 ]
                             }
                     }
-                    transition={{ duration: 1.65, repeat: Infinity, ease: 'easeInOut' }}
+                    transition={reduceMotion ? undefined : { duration: 1.65, repeat: Infinity, ease: 'easeInOut' }}
                 />
             )}
 
             {model.smartStatus === 'CHECK_REQUESTED' && (
                 <m.div
                     className="pointer-events-none absolute -inset-[1px] rounded-[inherit] border border-fuchsia-300/80"
+                    style={{ opacity: reduceMotion ? 0.9 : undefined }}
                     animate={
                         reduceMotion
-                            ? { opacity: 0.9 }
+                            ? undefined
                             : {
                                 opacity: [0.5, 0.95, 0.5],
                                 boxShadow: [
@@ -2541,7 +2600,7 @@ const SmartTableNode = React.memo(({
                                 ]
                             }
                     }
-                    transition={{ duration: 1.6, repeat: Infinity, ease: 'easeInOut' }}
+                    transition={reduceMotion ? undefined : { duration: 1.6, repeat: Infinity, ease: 'easeInOut' }}
                 />
             )}
 
@@ -2601,30 +2660,14 @@ const SmartTableNode = React.memo(({
                                     >
                                         {model.subtotalizedTicketCount}/{model.ticketCount}
                                     </div>
-                                ) : (
-                                    <>
-                                        <svg className="h-8 w-8 -rotate-90" viewBox="0 0 32 32">
-                                            <circle cx="16" cy="16" r={ringRadius} stroke="rgba(255,255,255,0.25)" strokeWidth="3" fill="none" />
-                                            <circle
-                                                cx="16"
-                                                cy="16"
-                                                r={ringRadius}
-                                                stroke="rgba(56,189,248,0.95)"
-                                                strokeWidth="3"
-                                                fill="none"
-                                                strokeLinecap="round"
-                                                strokeDasharray={ringCircumference}
-                                                strokeDashoffset={ringOffset}
-                                            />
-                                        </svg>
-                                        <span
-                                            className={`absolute inset-0 flex items-center justify-center text-[10px] ${model.hasPendingKitchenDispatch ? 'rounded-full bg-amber-400 text-amber-950 shadow-[0_0_18px_rgba(251,191,36,0.8)]' : ''}`}
-                                            title={model.hasPendingKitchenDispatch ? 'Pedido pendiente de recepción en cocina' : model.serviceStage.label}
-                                        >
-                                            {model.hasPendingKitchenDispatch ? <CircleHelp size={19} strokeWidth={3} /> : model.serviceStage.icon}
-                                        </span>
-                                    </>
-                                )}
+                                ) : model.hasPendingKitchenDispatch ? (
+                                    <span
+                                        className="absolute inset-0 flex items-center justify-center rounded-full bg-amber-400 text-amber-950 shadow-[0_0_18px_rgba(251,191,36,0.8)]"
+                                        title="Pedido pendiente de recepción en cocina"
+                                    >
+                                        <CircleHelp size={19} strokeWidth={3} />
+                                    </span>
+                                ) : null}
                             </div>
                         </div>
 
@@ -2632,19 +2675,16 @@ const SmartTableNode = React.memo(({
                             <p className="flex items-center justify-center gap-1 text-base font-black tracking-tight drop-shadow-[0_2px_6px_rgba(2,6,23,0.5)] truncate">
                                 {model.joinedPrimaryLabel ? (
                                     <><Link2 size={15} strokeWidth={3} className="shrink-0" /> {model.joinedPrimaryLabel}</>
-                                ) : (model.table.nombre || model.table.name)}
+                                ) : (model.temporaryAlias || model.table.nombre || model.table.name)}
                             </p>
-                        </div>
-
-                        <div className="flex items-center justify-between text-[11px] font-semibold">
-                            <span className="inline-flex items-center gap-1">
-                                <Clock size={11} />
-                                {model.elapsedLabel}
-                            </span>
-                            {!model.joinedPrimaryLabel && (
-                                <span className="font-black">{currencySymbol}{model.total.toLocaleString()}</span>
+                            {model.temporaryAlias && !model.joinedPrimaryLabel && (
+                                <p className="mt-1 truncate text-[9px] font-bold uppercase tracking-wide text-white/70">
+                                    {model.table.nombre || model.table.name}
+                                </p>
                             )}
                         </div>
+
+                        <div aria-hidden="true" className="h-8" />
                     </>
                 )}
             </div>

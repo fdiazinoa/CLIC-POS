@@ -206,6 +206,12 @@ export const buildSalePostedSummary = (transaction: Transaction | UnknownRecord)
         ) || undefined,
         user_id: firstString(record.userId, record.user_id) || undefined,
         user_name: firstString(record.userName, record.user_name) || undefined,
+        sales_commission_percent: hasValue(record.salesCommissionPercent ?? record.sales_commission_percent)
+            ? numberOrZero(record.salesCommissionPercent ?? record.sales_commission_percent)
+            : undefined,
+        sales_commission_amount: hasValue(record.salesCommissionAmount ?? record.sales_commission_amount)
+            ? numberOrZero(record.salesCommissionAmount ?? record.sales_commission_amount)
+            : undefined,
         ncf: firstString(record.ncf) || undefined,
         ncf_type: firstString(record.ncfType, record.ncf_type) || undefined,
         due_date: firstString(record.dueDate, record.due_date) || undefined,

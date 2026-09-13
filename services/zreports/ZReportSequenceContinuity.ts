@@ -106,17 +106,15 @@ export const resolveZSequenceContinuity = (input: {
 };
 
 /**
- * A freshly restored ERP-managed series cannot authorize a Z from nextNumber
- * alone. A durable ERP revision is required before the POS consumes a number.
+ * The authenticated ERP terminal snapshot is the authority for nextNumber.
+ * Richer high-water evidence remains an additional monotonic guard when the
+ * server publishes it, but its absence must not block an ERP-managed series.
  */
 export const requireErpZSequenceAuthority = (
   series: DocumentSeries & Record<string, unknown>,
   evidence: ZSequenceContinuityEvidence,
 ): void => {
   if (normalized(series.source) !== 'ERP_TERMINAL_CONFIG') return;
-  if (!evidence.erpRevision || evidence.erpHighWatermark === null) {
-    throw new Error('Z_SEQUENCE_AUTHORITY_REQUIRED');
-  }
 
   if (
     evidence.erpHighWatermark !== null &&

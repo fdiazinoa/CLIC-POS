@@ -5,7 +5,7 @@ import { X, Check, Calculator, PieChart, TrendingUp, DollarSign } from 'lucide-r
 interface ProfitCalculatorProps {
   initialCost: number;
   initialPrice: number; // Final Price including tax
-  initialMargin: number; // Percentage
+  initialMargin: number; // Markup percentage over net cost (legacy field name)
   taxRate: number; // e.g. 0.18 for 18%
   currencySymbol: string;
   onApply: (values: { cost: number; price: number; margin: number }) => void;
@@ -33,14 +33,14 @@ const ProfitCalculator: React.FC<ProfitCalculatorProps> = ({
 
   // --- LOGIC ---
 
-  // 1. Calculate Price based on Cost + Margin
+  // 1. Calculate Price based on Cost + markup over cost.
   const calculateFromCostMargin = (c: number, m: number) => {
     const netPrice = c * (1 + m / 100);
     const finalPrice = netPrice * (1 + taxRate);
     setPrice(finalPrice.toFixed(2));
   };
 
-  // 2. Calculate Margin based on Cost + Final Price
+  // 2. Calculate markup over cost based on Cost + Final Price.
   const calculateFromPrice = (p: number, c: number) => {
     if (c <= 0) return;
     const netPrice = p / (1 + taxRate);
@@ -109,8 +109,8 @@ const ProfitCalculator: React.FC<ProfitCalculatorProps> = ({
               <Calculator size={24} className="text-blue-400" />
             </div>
             <div>
-              <h2 className="text-xl font-bold">Calculadora de Rentabilidad</h2>
-              <p className="text-xs text-slate-400">Ajusta costos y márgenes dinámicamente</p>
+              <h2 className="text-xl font-bold">Calculadora de precio y rentabilidad</h2>
+              <p className="text-xs text-slate-400">Ajusta el precio usando markup sobre costo</p>
             </div>
           </div>
           <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-full transition-colors">
@@ -142,7 +142,7 @@ const ProfitCalculator: React.FC<ProfitCalculatorProps> = ({
             {/* Margin Slider & Input */}
             <div className="bg-emerald-50 p-4 rounded-2xl border border-emerald-100">
               <div className="flex justify-between items-end mb-2">
-                <label className="text-xs font-bold text-emerald-800 uppercase tracking-wider block">2. Margen Deseado</label>
+                <label className="text-xs font-bold text-emerald-800 uppercase tracking-wider block">2. Markup deseado sobre costo</label>
                 <div className="flex items-baseline gap-1">
                   <input 
                     type="number" 

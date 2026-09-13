@@ -1343,6 +1343,10 @@ export interface User {
   syncSource?: 'LOCAL' | 'LOCAL_SEED' | 'ERP_SNAPSHOT';
   isActive?: boolean;
   version?: number;
+  /** Límite individual de descuento. Si falta, hereda el límite del rol. */
+  maxDiscountPercent?: number;
+  /** Porcentaje de comisión capturado en cada venta finalizada. */
+  commissionPercent?: number;
 }
 
 export interface UserBiometrics {
@@ -1506,7 +1510,15 @@ export interface Product {
   imageVersion?: string;
   imageLocalPath?: string | null;
   barcode?: string;
+  barcode_2?: string;
+  barcode2?: string;
+  barcode_3?: string;
+  barcode3?: string;
+  reference?: string;
+  referenceCode?: string;
+  reference_code?: string;
   cost?: number;
+  is_active?: boolean;
   is_sellable?: boolean;
   theoreticalCost?: number; // New calculated cost
   type?: ProductType;
@@ -1554,6 +1566,7 @@ export interface Product {
   familyId?: string;
   subfamilyId?: string;
   brandId?: string;
+  posCategoryId?: string;
   operationalFlags?: ProductOperationalFlags;
   requires_verification?: boolean;
   updatedAt?: string;
@@ -1639,6 +1652,7 @@ export interface Room {
     gridConfig?: any;
     backgroundImage?: string;
     backgroundStyle?: 'DARK' | 'WHITE';
+    tableLayoutStyle?: 'NORMAL' | 'CHAIRS';
   };
 }
 
@@ -1797,6 +1811,9 @@ export interface Transaction {
   // User & Terminal
   userId: string;
   userName: string;
+  /** Snapshot inmutable de la comisión vigente al completar la venta. */
+  salesCommissionPercent?: number;
+  salesCommissionAmount?: number;
   terminalId?: string;
   terminalName?: string;
 
@@ -2309,6 +2326,8 @@ export interface PaymentFractionPart {
   index: number;
   amount: number;
   status: 'PENDING' | 'PAID';
+  /** Nombre operativo independiente para identificar esta cuota en la mesa. */
+  name?: string;
   payments?: PaymentEntry[];
   voluntaryTip?: number;
   paidAt?: string;
@@ -2669,6 +2688,7 @@ export type Permission =
   | 'POS_REPEAT_Z_REPORT'
   | 'POS_VIEW_ACTIVE_CASH'
   | 'POS_MANAGE_PARKED'
+  | 'POS_ACCESS_OTHER_SELLER_TABLES'
   | 'TABLE_CONTROL_CENTER'
 
   // --- CATALOG ---
@@ -2676,6 +2696,11 @@ export type Permission =
   | 'CATALOG_MANAGE'
   | 'CATALOG_VIEW_COST'
   | 'TARIFF_MANAGE'
+  | 'POS_CATALOG_CONFLICT_VIEW'
+  | 'POS_CATALOG_CONFLICT_RETRY'
+  | 'POS_CATALOG_CONFLICT_DISCARD'
+  | 'POS_CATALOG_CONFLICT_ACCEPT_ERP'
+  | 'POS_CATALOG_CONFLICT_FORCE'
 
   // --- INVENTORY ---
   | 'INVENTORY_VIEW'

@@ -86,6 +86,7 @@ import {
 } from './ErpMasterSyncStrategy';
 import { mergePosCategoryPresentation } from '../../utils/posCatalogPresentation';
 import { persistMasterNumberRangesFromSnapshot } from './MasterNumberRangeService';
+import { preserveLocalCatalog } from './preserveLocalCatalog';
 
 export type SyncableCollection =
     | 'products' | 'items' | 'taxes' | 'customers' | 'suppliers' | 'warehouses'
@@ -2277,18 +2278,20 @@ class SyncManager {
             const persistedFamilies = Array.isArray(baseConfig?.families) ? baseConfig.families : [];
             const persistedSubfamilies = Array.isArray(baseConfig?.subfamilies) ? baseConfig.subfamilies : [];
             const persistedBrands = Array.isArray(baseConfig?.brands) ? baseConfig.brands : [];
-            const missingCommercialClassifications =
-                persistedDepartments.length === 0 ||
-                persistedSections.length === 0 ||
-                persistedFamilies.length === 0 ||
-                persistedSubfamilies.length === 0 ||
-                persistedBrands.length === 0;
+            // Some classification levels are optional. Treating every empty list as
+            // missing forced a full catalog config pull on every manifest cycle.
+            const hasPersistedCatalogClassifications = [
+                persistedProductGroups,
+                persistedTerminalAllowedCategories,
+                persistedDepartments,
+                persistedSections,
+                persistedFamilies,
+                persistedSubfamilies,
+                persistedBrands,
+            ].some(rows => rows.length > 0);
             const requiresCatalogConfigFetch = Boolean(
                 apiSyncAdapter.isErpActiveOperationalTarget() &&
-                (
-                    (persistedProductGroups.length === 0 && persistedTerminalAllowedCategories.length === 0) ||
-                    missingCommercialClassifications
-                )
+                !hasPersistedCatalogClassifications
             );
             if (requiresDocumentSeriesConfigFetch) {
                 console.warn('POS_DOCUMENT_SERIES_CONFIG_FETCH_REQUIRED', {
@@ -2814,7 +2817,8 @@ class SyncManager {
         const configTariffs = Array.isArray(businessConfig?.tariffs) ? businessConfig.tariffs : [];
 
         if (normalizedPrices.length === 0) {
-            await db.save('productPrices' as any, []);
+            const preservedPrices = await preserveLocalCatalog('productPrices', []) as ProductPrice[];
+            await db.save('productPrices' as any, preservedPrices);
             window.dispatchEvent(new CustomEvent('productPricesUpdated'));
             return 0;
         }
@@ -2896,7 +2900,11 @@ class SyncManager {
             nextTariffsByProduct.set(productId, canonicalizeTariffEntries(currentTariffs, configTariffs));
         }
 
-        await db.save('productPrices' as any, Array.from(nextPriceDocs.values()));
+        const preservedPrices = await preserveLocalCatalog(
+            'productPrices',
+            Array.from(nextPriceDocs.values()),
+        ) as ProductPrice[];
+        await db.save('productPrices' as any, preservedPrices);
 
         const activeTerminalId =
             localStorage.getItem('active_terminal_id') ||
@@ -2927,7 +2935,11 @@ class SyncManager {
         }
 
         if (updatedProducts > 0) {
-            await db.save('products' as any, Array.from(localById.values()));
+            const preservedProducts = await preserveLocalCatalog(
+                'products',
+                Array.from(localById.values()),
+            ) as Product[];
+            await db.save('products' as any, preservedProducts);
             window.dispatchEvent(new CustomEvent('productsUpdated'));
         }
         window.dispatchEvent(new CustomEvent('productPricesUpdated'));
@@ -3809,7 +3821,11 @@ class SyncManager {
         }
 
         if (updatedCount > 0 || duplicateIdsToRemove.size > 0) {
-            await db.save('products' as any, Array.from(localProductsById.values()));
+            const preservedProducts = await preserveLocalCatalog(
+                'products',
+                Array.from(localProductsById.values()),
+            ) as Product[];
+            await db.save('products' as any, preservedProducts);
         }
 
         this.scheduleImageSyncWorker('products', rawItems as any[], 'applySnapshotProducts');
@@ -4708,10 +4724,10 @@ class SyncManager {
                 if (!value || typeof value !== 'object' || visited.has(value) || depth > maxDepth) continue;
                 visited.add(value);
 
-                if (Array.isArray(value)) {
-                    for (const item of value) queue.push({ value: item, depth: depth + 1 });
-                    continue;
-                }
+                // Catalog row arrays can contain thousands of products. Their rows
+                // cannot own sibling classification collections, so descending into
+                // every item only creates allocations and long GC pauses.
+                if (Array.isArray(value)) continue;
 
                 const record = value as Record<string, unknown>;
                 for (const [key, child] of Object.entries(record)) {
@@ -4729,8 +4745,10 @@ class SyncManager {
             return [];
         };
         const pickRowsDeep = (keyNames: string[], ...values: unknown[]): unknown[] => {
-            const direct = pickRows(...values);
-            if (direct.length > 0) return direct;
+            // An explicit empty array is authoritative: that classification level is
+            // valid but empty. Do not fall back to scanning the complete snapshot.
+            const direct = values.find((value): value is unknown[] => Array.isArray(value));
+            if (direct) return direct;
             return findFirstRowsByKey(root, keyNames);
         };
 
@@ -4748,7 +4766,11 @@ class SyncManager {
                 const name = normalizeName(record.name || record.nombre || record.label || record.description || record.descripcion || record.code || entry);
                 if (!name) continue;
                 const id = normalizeName(record.id || record.uuid || record.code || `${fallbackPrefix}-${index + 1}`);
-                const code = normalizeName(record.code || record.codigo || id || name);
+                const hasExplicitCode = Object.prototype.hasOwnProperty.call(record, 'code')
+                    || Object.prototype.hasOwnProperty.call(record, 'codigo');
+                const code = hasExplicitCode
+                    ? normalizeName(record.code ?? record.codigo)
+                    : normalizeName(id || name);
                 const rawSortOrder = record.sortOrder ?? record.sort_order ?? record.displayOrder ?? record.display_order ?? record.posSortOrder ?? record.pos_sort_order;
                 const numericSortOrder = rawSortOrder === '' || rawSortOrder === null || rawSortOrder === undefined
                     ? undefined
@@ -4756,7 +4778,7 @@ class SyncManager {
                 const rawIsActive = record.isActive ?? record.is_active ?? record.isEnabled ?? record.is_enabled ?? record.enabled ?? record.active;
                 byId.set(id || code || name, {
                     id: id || code || name,
-                    code: code || id || name,
+                    code: hasExplicitCode ? code : (code || id || name),
                     name,
                     parentId: normalizeName(record.parentId || record.parent_id || record.parent || record.parentCode || record.parent_code) || undefined,
                     color: normalizeName(record.color || record.hexColor || record.hex_color || record.posColor || record.pos_color) || undefined,
@@ -4855,7 +4877,11 @@ class SyncManager {
                 : {};
             const name = normalizeName(record.name || record.nombre || record.label || record.description || record.descripcion || entry);
             if (!name) continue;
-            const code = normalizeName(record.code || record.id || name);
+            const hasExplicitCode = Object.prototype.hasOwnProperty.call(record, 'code')
+                || Object.prototype.hasOwnProperty.call(record, 'codigo');
+            const code = hasExplicitCode
+                ? normalizeName(record.code ?? record.codigo)
+                : normalizeName(record.id || name);
             const rawSortOrder = record.sortOrder ?? record.sort_order ?? record.displayOrder ?? record.display_order ?? record.posSortOrder ?? record.pos_sort_order;
             const numericSortOrder = rawSortOrder === '' || rawSortOrder === null || rawSortOrder === undefined
                 ? undefined
@@ -4863,7 +4889,7 @@ class SyncManager {
             const rawIsActive = record.isActive ?? record.is_active ?? record.isEnabled ?? record.is_enabled ?? record.enabled ?? record.active;
             await db.saveDocument('categories' as any, {
                 id: normalizeName(record.id) || code || `erp-category-${index + 1}`,
-                code: code || name,
+                code: hasExplicitCode ? code : (code || name),
                 name,
                 description: normalizeName(record.description || record.descripcion) || undefined,
                 color: normalizeName(record.color || record.hexColor || record.hex_color || record.posColor || record.pos_color) || undefined,
@@ -7061,7 +7087,9 @@ class SyncManager {
             console.log('📤 SyncManager: Pushed Z-Report to Server');
         } catch (error) {
             console.error('❌ SyncManager: Failed to push Z-Report:', error);
-            // We don't throw here to avoid blocking the UI, as it's already saved locally
+            // The report is already durable locally, but callers must know that the
+            // transport failed so they can preserve a retryable status and the error.
+            throw error;
         }
     }
 

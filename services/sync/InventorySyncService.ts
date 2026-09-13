@@ -7,9 +7,11 @@
 import { apiSyncAdapter } from './ApiSyncAdapter';
 import { permissionService } from './PermissionService';
 import { InventoryLedgerEntry } from '../../types';
+import { isPosSaleActive } from '../../utils/posSaleActivity';
 
 class InventorySyncService {
     private lastStockBalanceMaps = new Map<string, Record<string, number>>();
+    private pollInFlight = false;
 
     private buildStockBalanceCacheKey(productId?: string): string {
         return String(productId || '__ALL__').trim() || '__ALL__';
@@ -54,10 +56,19 @@ class InventorySyncService {
         }
 
         const interval = setInterval(async () => {
-            const movements = await this.pullPendingMovements();
+            if (this.pollInFlight || isPosSaleActive()) return;
+            this.pollInFlight = true;
+            try {
+                const movements = await this.pullPendingMovements();
 
-            if (movements.length > 0) {
-                await onNewMovements(movements);
+                // Movements remain pending remotely until the ticket becomes idle.
+                if (movements.length > 0 && !isPosSaleActive()) {
+                    await onNewMovements(movements);
+                }
+            } catch (error) {
+                console.warn('⚠️ Inventory polling iteration failed:', error);
+            } finally {
+                this.pollInFlight = false;
             }
         }, intervalMs);
 

@@ -122,6 +122,27 @@ test('la WebView entrega el snapshot operativo al servidor nativo sin sobreescri
   assert.match(appSource, /No se pudo confirmar la orden local/);
 });
 
+test('la impresión Android no bloquea ventas ni el bridge operativo de mesas', () => {
+  for (const method of ['printEscPos', 'printEscpos', 'printRaw', 'printHtml', 'print']) {
+    assert.match(appSource, new RegExp(`'${method}'`));
+    assert.match(bridgeSource, new RegExp(`${method}: true`));
+    assert.match(bridgeSource, new RegExp(`"${method}" ->`));
+  }
+  assert.match(bridgeSource, /private val printBridgeExecutor = Executors\.newSingleThreadExecutor\(\)/);
+  assert.match(bridgeSource, /"printEscPos", "printEscpos", "printRaw", "printHtml", "print" -> printBridgeExecutor/);
+});
+
+test('cerrar el mapa confirma el toque antes de montar ventas de forma concurrente', () => {
+  const tableMapStart = appSource.indexOf("case 'TABLE_MAP':");
+  const tableDesignerStart = appSource.indexOf("case 'TABLE_DESIGNER':", tableMapStart);
+  const tableMapSource = appSource.slice(tableMapStart, tableDesignerStart);
+
+  assert.match(tableMapSource, /setTableMapExitPending\(true\)/);
+  assert.match(tableMapSource, /requestAnimationFrame\(\(\) => handleViewChange\('POS'\)\)/);
+  assert.match(tableMapSource, /Abriendo venta…/);
+  assert.doesNotMatch(tableMapSource, /onClick=\{\(\) => setCurrentView\('POS'\)\}/);
+});
+
 test('el puente Android publica reconciliación, locks y sincronización serializada al frontend', () => {
   assert.match(bridgeSource, /fun getMasterRestaurantState/);
   assert.match(bridgeSource, /fun acquireMasterTableLock/);
@@ -140,6 +161,22 @@ test('el puente Android publica reconciliación, locks y sincronización seriali
   assert.match(appSource, /editingLock: remoteTable\.editingLock/);
   assert.match(appSource, /pendingMasterTableSyncRef\.current/);
   assert.match(appSource, /mergePendingClientTableTickets\(responseParkedTickets, pendingTableSync\)/);
+});
+
+test('las operaciones Master no bloquean CrRendererMain mediante JavascriptInterface síncrona', () => {
+  assert.match(bridgeSource, /private val asyncBridgeExecutor = Executors\.newSingleThreadExecutor\(\)/);
+  assert.match(bridgeSource, /fun callAsync\(requestID: String\?, method: String\?, payloadJson: String\?\)/);
+  assert.match(bridgeSource, /"startMasterServer" -> startMasterServer\(payloadJson\)/);
+  assert.match(bridgeSource, /"getMasterRestaurantState" -> getMasterRestaurantState\(payloadJson\)/);
+  assert.match(bridgeSource, /webViewRef\.get\(\)\?\.evaluateJavascript\(script, null\)/);
+  assert.match(appSource, /asyncMethods\.has\(method\) && typeof runtimeWindow\.AndroidPrinter\.callAsync === 'function'/);
+  assert.match(appSource, /window\.addEventListener\(eventName, onResult\)/);
+  assert.match(appSource, /runtimeWindow\.AndroidPrinter\.callAsync\(requestID, method, JSON\.stringify\(payload \|\| \{\}\)\)/);
+  assert.match(appSource, /runtimeWindow\.__CLIC_NATIVE_ASYNC_IN_FLIGHT__/);
+  assert.match(appSource, /const existing = coalescedAsyncMethods\.has\(method\) \? asyncInFlight\.get\(method\) : undefined/);
+  assert.match(appSource, /if \(asyncInFlight\.get\(method\) === pending\) asyncInFlight\.delete\(method\)/);
+  assert.match(appSource, /const initialPublishTimer = window\.setTimeout/);
+  assert.match(appSource, /window\.clearTimeout\(initialPublishTimer\)/);
 });
 
 test('la Master Android implementa autenticación y lectura de catálogos para clientes', () => {

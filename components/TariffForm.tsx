@@ -1,3 +1,4 @@
+import { saveLocalProducts } from '../services/sync/saveLocalCatalog';
 
 import React, { useState, useEffect, useMemo } from 'react';
 import {
@@ -10,6 +11,7 @@ import { db } from '../utils/db';
 import { tariffMatchesIdentifier } from '../utils/masterIdentity';
 
 interface TariffFormProps {
+   actorId?: string;
    initialData?: Tariff | null;
    products: Product[];
    config: BusinessConfig;
@@ -22,8 +24,9 @@ interface TariffFormProps {
 type TabType = 'GENERAL' | 'RULES' | 'ITEMS';
 
 const TariffForm: React.FC<TariffFormProps> = ({
-   initialData, products, config, availableTariffs = [], onSave, onUpdateProducts, onClose
+   actorId, initialData, products, config, availableTariffs = [], onSave, onUpdateProducts, onClose
 }) => {
+   const [priceDrafts, setPriceDrafts] = useState<Record<string, string>>({});
    const [activeTab, setActiveTab] = useState<TabType>('GENERAL');
    const [formData, setFormData] = useState<Tariff>({
       id: `TRF_${Date.now()}`,
@@ -129,7 +132,7 @@ const TariffForm: React.FC<TariffFormProps> = ({
       return parseFloat(rawPrice.toFixed(2));
    };
 
-   const applyBulkAdjustment = () => {
+   const applyBulkAdjustment = async () => {
       const val = parseFloat(bulkAdjustment);
       if (!val || val === 0) return;
 
@@ -161,7 +164,8 @@ const TariffForm: React.FC<TariffFormProps> = ({
 
       // Persist changes to DB (Granular Update)
       if (updatedProducts.length > 0) {
-         db.saveDocuments('products', updatedProducts).catch(console.error);
+         try { await saveLocalProducts(updatedProducts, actorId); }
+         catch (error) { alert(error instanceof Error ? error.message : 'No se pudo guardar el precio.'); return; }
       }
 
       // Update base prices if callback provided
@@ -178,7 +182,7 @@ const TariffForm: React.FC<TariffFormProps> = ({
       setBulkAdjustment('');
    };
 
-   const handleManualPriceChange = (productId: string, val: string) => {
+   const handleManualPriceChange = async (productId: string, val: string) => {
       const price = parseFloat(val);
       if (isNaN(price)) return;
       setFormData(prev => ({
@@ -218,7 +222,8 @@ const TariffForm: React.FC<TariffFormProps> = ({
          };
 
          // Persist single product change
-         db.saveDocument('products', updatedProduct).catch(console.error);
+         try { await saveLocalProducts([updatedProduct], actorId); }
+         catch (error) { alert(error instanceof Error ? error.message : 'No se pudo guardar el precio.'); return; }
          db.saveDocument('productPrices' as any, {
             id: `${productId}_${formData.id}`,
             productId,
@@ -619,8 +624,13 @@ const TariffForm: React.FC<TariffFormProps> = ({
                                              <span className="text-lg font-bold text-gray-400">$</span>
                                              <input
                                                 type="number"
-                                                value={finalPrice}
-                                                onChange={(e) => handleManualPriceChange(product.id, e.target.value)}
+                                                value={priceDrafts[product.id] ?? finalPrice}
+                                                onChange={(e) => setPriceDrafts(previous => ({ ...previous, [product.id]: e.target.value }))}
+                                                onBlur={() => {
+                                                   const draft = priceDrafts[product.id];
+                                                   if (draft !== undefined && draft.trim() && Number(draft) !== finalPrice) void handleManualPriceChange(product.id, draft);
+                                                   setPriceDrafts(previous => { const next = { ...previous }; delete next[product.id]; return next; });
+                                                }}
                                                 className={`w-24 text-right font-black text-xl outline-none border-b-2 focus:border-purple-500 bg-transparent ${margin < 0 ? 'text-red-500 border-red-200' : 'text-gray-900 border-transparent'}`}
                                              />
                                           </div>

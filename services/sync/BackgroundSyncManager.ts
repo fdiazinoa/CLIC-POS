@@ -1,4 +1,3 @@
-import { pendingOperationsRecovery, discoverPendingOperationsRecovery } from '../recovery/recoveryService';
 import { isRecoveredOperation } from '../recovery/PendingOperationsRecovery';
 import { db } from '../../utils/db';
 import { dbAdapter } from '../db';
@@ -24,6 +23,7 @@ import {
 
 export interface SyncState {
     pendingCount: number;
+    blockedCount: number;
     isSyncing: boolean;
     hasError: boolean;
     lastSyncTime: string | null;
@@ -44,6 +44,7 @@ class BackgroundSyncManager {
     private nextRetryDelayMs: number | null = null;
     private state: SyncState = {
         pendingCount: 0,
+        blockedCount: 0,
         isSyncing: false,
         hasError: false,
         lastSyncTime: null
@@ -52,6 +53,17 @@ class BackgroundSyncManager {
     private readonly FAST_RETRY_DELAY_MS = 5000;
     private readonly RECOVERABLE_TRANSACTION_RETRY_DELAY_MS = 15000;
     private readonly STUCK_SYNCING_TIMEOUT_MS = 120000;
+    private readonly PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000;
+    private readonly PRUNE_STORAGE_KEY = 'clic_pos_last_sync_prune_at_v1';
+
+    /**
+     * Yield to the browser task queue between sync batches. Awaiting native
+     * SQLite can resume through microtasks repeatedly; an explicit task yield
+     * guarantees that a pending sale/table input gets a chance to run first.
+     */
+    private yieldToOperatorUi(): Promise<void> {
+        return new Promise(resolve => window.setTimeout(resolve, 0));
+    }
 
     /**
      * Initialize the background sync manager
@@ -73,7 +85,6 @@ class BackgroundSyncManager {
 
         // Recover interrupted sync states from previous crashes/reloads.
         await this.recoverStuckSyncItems();
-        await this.recoverCompletedTransactionsForReplay();
         await transferReceiptService.recoverInterrupted();
 
         // Initial count of pending items
@@ -81,6 +92,9 @@ class BackgroundSyncManager {
 
         // Start background worker
         this.startWorker();
+        if (navigator.onLine && this.state.pendingCount > 0) {
+            this.scheduleSync(0);
+        }
 
         this.onlineHandler = () => {
             console.log('🌐 Network is back online. Triggering immediate sync...');
@@ -194,6 +208,9 @@ class BackgroundSyncManager {
             'erp_disabled',
             'erp_not_ready_for_sales',
             'slave_direct_erp_sync_forbidden',
+            'z_sequence_series_forbidden',
+            'z_sequence_scope_forbidden',
+            'z_sequence_event_invalid',
             'operational sync target is not configured',
             'no se pudo resolver el artículo pos',
             'no se pudo resolver el articulo pos',
@@ -213,6 +230,15 @@ class BackgroundSyncManager {
         }
 
         const status = item?.syncStatus;
+        if (collectionName === 'catalogEdits' && status === 'PENDING') {
+            const nextAttemptAt = Number(item?.nextAttemptAt);
+            if (Number.isFinite(nextAttemptAt) && nextAttemptAt > Date.now()) {
+                const delay = Math.max(1000, nextAttemptAt - Date.now());
+                this.nextRetryDelayMs = this.nextRetryDelayMs === null
+                    ? delay
+                    : Math.min(this.nextRetryDelayMs, delay);
+            }
+        }
         if (status === 'PENDING') return true;
         if (status === 'RETRY_WAIT') return true;
         if (status === 'SYNCING') {
@@ -325,10 +351,6 @@ class BackgroundSyncManager {
         let pausedForSaleActivity = false;
 
         try {
-            await discoverPendingOperationsRecovery().catch(error => collectionErrors.push(`recoveryAvailability: ${error.message}`));
-            if (isSyncFeatureEnabled('pending_operations_recovery')) {
-                await pendingOperationsRecovery.sendPending().catch(error => collectionErrors.push(`originals: ${error.message}`));
-            }
             const receiptQueue = await transferReceiptService.processDue();
             const retryingReceipts = receiptQueue.filter(item => item.status === 'RETRY_WAIT');
             if (retryingReceipts.length > 0) {
@@ -360,13 +382,10 @@ class BackgroundSyncManager {
                 });
             }
 
+            await this.yieldToOperatorUi();
+
             if (isPosSaleActive()) {
                 pausedForSaleActivity = true;
-                this.updateState({
-                    isSyncing: false,
-                    hasError: collectionErrors.length > 0,
-                    lastSyncTime: new Date().toISOString()
-                });
                 console.log('⏸️ BackgroundSyncManager: Heavy sync paused while sale cart is active.');
                 return;
             }
@@ -379,12 +398,31 @@ class BackgroundSyncManager {
                 collectionErrors.push(`customerMutations: ${error?.message || 'unknown error'}`);
             });
 
+            await this.yieldToOperatorUi();
+
+            if (isPosSaleActive()) {
+                pausedForSaleActivity = true;
+                return;
+            }
+
+            const { catalogEditQueue, catalogEditsEnabled } = await import('./catalogEdits');
+            if (catalogEditsEnabled()) await catalogEditQueue.process().catch((error: Error) => {
+                collectionErrors.push(`catalogEdits: ${error.message}`);
+            });
+
+            if (isPosSaleActive()) {
+                pausedForSaleActivity = true;
+                return;
+            }
+
             // Local operator mutations never contain biometric templates.
             await this.processCollection<any>('posUserMutations', async (item) => {
                 await apiSyncAdapter.pushPosUserMutation(item);
             }).catch((error: any) => {
                 collectionErrors.push(`posUserMutations: ${error?.message || 'unknown error'}`);
             });
+
+            await this.yieldToOperatorUi();
 
             // The SALE_COMMITTED durable event owns its inventory movements.
             // Sending the legacy ledger as well would duplicate the operation.
@@ -426,33 +464,41 @@ class BackgroundSyncManager {
 
             // Report range cursors only after the normal master/document queues.
             // The local row remains pending until the ERP acknowledges it.
-            await reportPendingMasterNumberRangeProgress().catch((error: any) => {
-                collectionErrors.push(`masterNumberRanges: ${error?.message || 'unknown error'}`);
-            });
-
-            if (isSyncFeatureEnabled('pending_operations_recovery') && !isPosSaleActive()) {
-                await pendingOperationsRecovery.updateRetainedBackup().catch(error => collectionErrors.push(`backup: ${error.message}`));
+            if (!isPosSaleActive()) {
+                await reportPendingMasterNumberRangeProgress().catch((error: any) => {
+                    collectionErrors.push(`masterNumberRanges: ${error?.message || 'unknown error'}`);
+                });
+            } else {
+                pausedForSaleActivity = true;
             }
 
-            this.updateState({
-                isSyncing: false,
-                hasError: collectionErrors.length > 0,
-                lastSyncTime: new Date().toISOString()
-            });
-
-            // 5. Prune old data to keep the database small
-            await this.pruneSyncedItems();
+            // Maintenance stays visible as synchronization and only runs while idle.
+            if (!isPosSaleActive()) await this.pruneSyncedItems();
             if (collectionErrors.length > 0) {
                 console.warn('⚠️ BackgroundSyncManager: Partial sync with errors:', collectionErrors);
                 shouldRetrySoon = true;
             }
         } catch (error) {
             console.error('❌ BackgroundSyncManager: Sync failed:', error);
-            this.updateState({ isSyncing: false, hasError: true });
+            collectionErrors.push(error instanceof Error ? error.message : String(error));
             shouldRetrySoon = true;
         } finally {
             this.isProcessing = false;
-            await this.updatePendingCount(pausedForSaleActivity ? ['transactions'] : undefined);
+            try {
+                if (!isPosSaleActive()) {
+                    await this.updatePendingCount(pausedForSaleActivity ? ['transactions'] : undefined);
+                } else {
+                    pausedForSaleActivity = true;
+                }
+            } catch (error) {
+                collectionErrors.push(error instanceof Error ? error.message : String(error));
+                console.warn('⚠️ BackgroundSyncManager: Pending count refresh failed:', error);
+            }
+            this.updateState({
+                isSyncing: false,
+                hasError: collectionErrors.length > 0,
+                lastSyncTime: new Date().toISOString()
+            });
             if (navigator.onLine && (shouldRetrySoon || this.state.pendingCount > 0)) {
                 if (pausedForSaleActivity && this.state.pendingCount === 0) return;
                 this.scheduleSync(this.nextRetryDelayMs ?? this.FAST_RETRY_DELAY_MS);
@@ -479,6 +525,7 @@ class BackgroundSyncManager {
         collectionName: string,
         pushFn: (item: T) => Promise<void>
     ) {
+        if (isPosSaleActive()) return;
         const data = await db.get(collectionName as any) as T[];
         if (!Array.isArray(data)) return;
 
@@ -550,6 +597,7 @@ class BackgroundSyncManager {
                         `[SYNC_BSM] marked COMPLETED collection=transactions id=${transaction.id} source_transaction_id=${transaction.source_transaction_id || 'n/a'}`
                     );
                 }
+                await this.yieldToOperatorUi();
             } catch (error: any) {
                 if (collectionName === 'transactions' && this.isRecoverableTransactionSyncError(error)) {
                     console.warn(
@@ -601,6 +649,7 @@ class BackgroundSyncManager {
     private async updatePendingCount(collectionOverride?: string[]) {
         const durableBatchActive = isSyncFeatureEnabled('sqlite_outbox_v2');
         let count = 0;
+        let blockedCount = 0;
         let oldestCreatedAt: number | null = null;
         if (durableBatchActive && durableOutboxRepository.isSupported()) {
             await durableOutboxRepository.refreshMetrics();
@@ -610,13 +659,17 @@ class BackgroundSyncManager {
                 ? Date.now() - durableMetrics.outbox_oldest_age
                 : null;
         }
-        const collections = (collectionOverride || this.operationalCollections).filter(collection =>
+        const collections = (collectionOverride || [...this.operationalCollections, 'catalogEdits']).filter(collection =>
             !durableBatchActive || (collection !== 'transactions' && collection !== 'inventoryLedger')
         );
 
         for (const col of collections) {
             const data = await db.get(col as any) || [];
             if (Array.isArray(data)) {
+                blockedCount += data.filter((item: any) =>
+                    this.shouldSyncItem(col, item) &&
+                    ['BLOCKED_FUNCTIONAL', 'ERROR', 'FAILED_FINAL'].includes(String(item?.syncStatus || '').toUpperCase())
+                ).length;
                 const pendingItems = data.filter((item: any) =>
                     this.shouldSyncItem(col, item) &&
                     this.isOperationalSyncPending(item, col)
@@ -646,7 +699,7 @@ class BackgroundSyncManager {
         count += pendingRanges.length;
 
         syncMetrics.setOutboxState(count, oldestCreatedAt);
-        this.updateState({ pendingCount: count });
+        this.updateState({ pendingCount: count, blockedCount });
     }
 
     private updateState(newState: Partial<SyncState>) {
@@ -675,6 +728,40 @@ class BackgroundSyncManager {
             apiSyncAdapter.resetCircuit();
         }
         this.scheduleSync(0);
+    }
+
+    /** Send only the selected Z, without draining unrelated operational queues. */
+    async retryZReport(id: string): Promise<void> {
+        if (this.isProcessing) throw new Error('Hay un envío en curso. Espera a que termine antes de reintentar.');
+        this.isProcessing = true;
+        try {
+            const report = await db.getDocument('zReports', id) as any;
+            if (!report) throw new Error('No se encontró el cierre Z local.');
+            if (String(report.syncError || '').includes('Z_SEQUENCE_IDEMPOTENCY_CONFLICT')) {
+                throw new Error('Conflicto de identidad del cierre Z. Debe conciliarse con el servidor antes de reenviar; se conserva la secuencia original.');
+            }
+            try {
+                await apiSyncAdapter.pushZReport(report);
+            } catch (error: any) {
+                await db.saveDocument('zReports', {
+                    ...report,
+                    syncStatus: this.isFunctionalSyncError(error) ? 'BLOCKED_FUNCTIONAL' : 'ERROR',
+                    syncError: error?.message || String(error),
+                });
+                throw error;
+            }
+            await db.saveDocument('zReports', {
+                ...report,
+                syncStatus: 'COMPLETED',
+                syncError: undefined,
+                syncBlockedReason: undefined,
+                syncBlockedAt: undefined,
+                syncStartedAt: undefined,
+                syncRetryAfter: undefined,
+            });
+        } finally {
+            this.isProcessing = false;
+        }
     }
 
     async triggerSyncAndWait() {
@@ -760,68 +847,18 @@ class BackgroundSyncManager {
     }
 
     /**
-     * One-time safeguard for terminals affected by silent push drops.
-     * Re-queue recent COMPLETED transactions on slave nodes; duplicates are ignored on Master.
-     */
-    private async recoverCompletedTransactionsForReplay() {
-        const terminalId = permissionService.getTerminalId();
-        if (!terminalId) return;
-
-        const shouldReplayForSlave = !permissionService.isMasterTerminal();
-        const shouldReplayForErp = this.isErpOperationalPushConfigured();
-        if (!shouldReplayForSlave && !shouldReplayForErp) return;
-
-        const flagSuffix = shouldReplayForErp ? 'erp_v3' : 'v2';
-        const flagKey = `sync_replay_completed_transactions_${flagSuffix}_${terminalId}`;
-        if (localStorage.getItem(flagKey) === '1') return;
-
-        try {
-            const transactions = await db.get('transactions') as any[];
-            if (!Array.isArray(transactions) || transactions.length === 0) {
-                localStorage.setItem(flagKey, '1');
-                return;
-            }
-
-            const cutoffMs = Date.now() - (72 * 60 * 60 * 1000); // 72h lookback
-            let changed = 0;
-
-            for (const txn of transactions) {
-                const txnDate = this.resolveItemDate(txn);
-                if (!txnDate || txnDate.getTime() < cutoffMs) continue;
-
-                if (isRecoveredOperation(txn)) continue;
-                const hasLegacyMissingStatus = txn?.syncStatus === undefined || txn?.syncStatus === null || txn?.syncStatus === '';
-                const shouldReplayCompleted = txn?.syncStatus === 'COMPLETED';
-
-                // Requeue recent transactions once:
-                // - on slave nodes for legacy silent push bugs
-                // - on ERP-bound terminals after introducing the direct ERP operational channel
-                // - Missing status gets normalized to PENDING.
-                if (hasLegacyMissingStatus || shouldReplayCompleted) {
-                    txn.syncStatus = 'PENDING';
-                    txn._forceSyncReplay = true;
-                    if (!txn.syncError) {
-                        txn.syncError = 'Recovered by replay safeguard v2';
-                    }
-                    changed++;
-                }
-            }
-
-            if (changed > 0) {
-                await db.save('transactions', transactions);
-                console.warn(`♻️ BackgroundSyncManager: Re-queued ${changed} recent completed transactions for replay.`);
-            }
-        } catch (error) {
-            console.warn('⚠️ BackgroundSyncManager: Failed replay recovery for completed transactions:', error);
-        } finally {
-            localStorage.setItem(flagKey, '1');
-        }
-    }
-
-    /**
      * Prune old COMPLETED items to keep the local database healthy
      */
     private async pruneSyncedItems() {
+        if (isPosSaleActive()) return;
+        let previousPruneAt = 0;
+        try {
+            previousPruneAt = Number(window.localStorage.getItem(this.PRUNE_STORAGE_KEY) || 0);
+        } catch {
+            // Continue without persisted throttle when storage is unavailable.
+        }
+        if (Number.isFinite(previousPruneAt) && Date.now() - previousPruneAt < this.PRUNE_INTERVAL_MS) return;
+
         const RETENTION_DAYS = 30;
         const now = new Date();
         const cutoff = new Date(now.getTime() - (RETENTION_DAYS * 24 * 60 * 60 * 1000));
@@ -831,11 +868,11 @@ class BackgroundSyncManager {
         const collections = this.operationalCollections;
 
         for (const colName of collections) {
+            if (isPosSaleActive()) return;
             try {
                 const data = await db.get(colName as any) as any[];
                 if (!Array.isArray(data)) continue;
 
-                const toKeep: any[] = [];
                 const toPruneIds: string[] = [];
 
                 data.forEach(item => {
@@ -851,21 +888,28 @@ class BackgroundSyncManager {
 
                     if (isSynced && isOld) {
                         toPruneIds.push(item.id);
-                    } else {
-                        toKeep.push(item);
                     }
                 });
 
                 if (toPruneIds.length > 0) {
                     console.log(`🗑️ Pruning ${toPruneIds.length} items from ${colName}`);
-                    // Use saveCollection (expensive but correct for mass delete in legacy db.ts)
-                    // Or call deleteDocument for each. Since we just migrated to IDB, 
-                    // saveCollection with the new array will rewrite the store.
-                    await db.save(colName as any, toKeep);
+                    for (let index = 0; index < toPruneIds.length; index += 1) {
+                        if (isPosSaleActive()) return;
+                        await db.deleteDocument(colName as any, toPruneIds[index]);
+                        if (index > 0 && index % 25 === 0) {
+                            await new Promise<void>(resolve => window.setTimeout(resolve, 0));
+                        }
+                    }
                 }
+                await new Promise<void>(resolve => window.setTimeout(resolve, 0));
             } catch (error) {
                 console.error(`❌ Failed to prune ${colName}:`, error);
             }
+        }
+        try {
+            window.localStorage.setItem(this.PRUNE_STORAGE_KEY, String(Date.now()));
+        } catch {
+            // Best effort only; cleanup itself has already completed.
         }
     }
 }

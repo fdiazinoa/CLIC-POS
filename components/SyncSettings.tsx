@@ -4,25 +4,60 @@ import { RefreshCw, CheckCircle2, AlertCircle, Clock, UploadCloud, DownloadCloud
 import { syncManager } from '../services/sync/SyncManager';
 import { permissionService } from '../services/sync/PermissionService';
 import { backgroundSyncManager } from '../services/sync/BackgroundSyncManager';
-import { BusinessConfig } from '../types';
+import { BusinessConfig, RoleDefinition, User } from '../types';
 import SyncProgressModal from './SyncProgressModal';
 import { db } from '../utils/db';
+import { dbAdapter } from '../services/db';
 import { loadSyncProfile, resolveSyncTarget, SyncProfile, ResolvedSyncTarget } from '../services/sync/SyncProfile';
 import { posCloudStagingService } from '../services/sync/PosCloudStagingService';
 import { resetDeviceIdentityBySupport } from '../utils/deviceRevocation';
 import { getConfigPushV2Diagnostics, triggerErpSyncOutbox } from '../utils/erpSyncLifecycle';
 import { syncTriggerCoordinator } from '../services/sync/SyncTriggerCoordinator';
+import { CATALOG_CONFLICT_PERMISSIONS, catalogEditQueue, hasCatalogConflictPermission, resolveCatalogConflict, shouldShowCatalogEditInSyncMonitor } from '../services/sync/catalogEdits';
+
+const catalogFieldLabels: Record<string, string> = {
+    tax_ids: 'Impuestos',
+    measurement_unit: 'Unidad de inventario',
+    purchase_unit: 'Unidad de compra',
+    department_id: 'Departamento',
+    section_id: 'Sección',
+    family_id: 'Familia',
+    subfamily_id: 'Subfamilia',
+    brand_id: 'Marca',
+    pos_category_id: 'Categoría POS',
+    precio_venta: 'Precio',
+};
+
+export const resolveSyncDocumentDisplayId = (collection: string, document: any): string => {
+    if (collection === 'catalogEdits') {
+        const label = String(document?.label || '').trim();
+        const field = catalogFieldLabels[String(document?.mutation?.field || '')]
+            || String(document?.mutation?.field || '').trim();
+        if (label && field) return `${label} · ${field}`;
+        if (label) return label;
+    }
+    return document?.sequenceNumber
+        || document?.displayId
+        || document?.code
+        || document?.documentRef
+        || document?.reference
+        || document?.id;
+};
 
 interface SyncSettingsProps {
     config: BusinessConfig;
+    currentUser: User | null;
+    roles: RoleDefinition[];
     onClose: () => void;
 }
 
-const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
+const SyncSettings: React.FC<SyncSettingsProps> = ({ config, currentUser, roles, onClose }) => {
     const [status, setStatus] = useState<any[]>([]);
     const [isSyncing, setIsSyncing] = useState(false);
     const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
-    const [isMaster, setIsMaster] = useState(false);
+    const [isMaster, setIsMaster] = useState(
+        () => permissionService.isMasterTerminal() || loadSyncProfile().posRuntime === 'MASTER'
+    );
     const [connectionStatus, setConnectionStatus] = useState<any>(null);
     const [masterUrl, setMasterUrl] = useState('');
     const [isTestingConnection, setIsTestingConnection] = useState(false);
@@ -32,11 +67,15 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
     const [statusFilter, setStatusFilter] = useState<'ALL' | 'PENDING' | 'ERROR'>('ALL');
     const [terminalFilter, setTerminalFilter] = useState('ALL');
     const [auditData, setAuditData] = useState<any[]>([]);
+    const [auditLoadError, setAuditLoadError] = useState<string | null>(null);
+    const [isLoadingAudit, setIsLoadingAudit] = useState(true);
     const [selectedJson, setSelectedJson] = useState<any>(null);
     const [isRefreshingAudit, setIsRefreshingAudit] = useState(false);
     const [erpForwardStatus, setErpForwardStatus] = useState<any>(null);
     const [isRetryingErpForward, setIsRetryingErpForward] = useState(false);
     const [jsonCopyStatus, setJsonCopyStatus] = useState<'COPIED' | 'ERROR' | null>(null);
+    const retryInFlight = React.useRef(false);
+    const auditLoadInFlight = React.useRef(false);
     const [retryingDocumentKey, setRetryingDocumentKey] = useState<string | null>(null);
     const [retryFeedback, setRetryFeedback] = useState<{ key: string; type: 'success' | 'error' | 'pending'; message: string } | null>(null);
     const [currentPage, setCurrentPage] = useState(1);
@@ -58,10 +97,25 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
         message: string;
     } | null>(null);
 
+    const nativePagination = typeof dbAdapter.getSyncMonitorPage === 'function';
+    const [auditTotals, setAuditTotals] = useState({ total: 0, blocked: 0 });
+    const auditReloadRequested = React.useRef(false);
+    const activeAuditQuery = React.useRef<string | null>(null);
+    const loadAuditRef = React.useRef<() => Promise<void>>(async () => {});
+    const auditQueryKey = JSON.stringify([currentPage, rowsPerPage, searchTerm, statusFilter, terminalFilter]);
+    const latestAuditQuery = React.useRef(auditQueryKey);
+    latestAuditQuery.current = auditQueryKey;
+    const localBlockedCount = nativePagination ? auditTotals.blocked : auditData.filter((item) => item.status === 'ERROR').length;
+    const canViewCatalogConflicts = hasCatalogConflictPermission(currentUser, roles, CATALOG_CONFLICT_PERMISSIONS.view);
+    const canRetryCatalogConflicts = canViewCatalogConflicts && hasCatalogConflictPermission(currentUser, roles, CATALOG_CONFLICT_PERMISSIONS.retry);
+    const canDiscardCatalogConflicts = canViewCatalogConflicts && hasCatalogConflictPermission(currentUser, roles, CATALOG_CONFLICT_PERMISSIONS.discard);
+    const canAcceptErpCatalogConflicts = canViewCatalogConflicts && hasCatalogConflictPermission(currentUser, roles, CATALOG_CONFLICT_PERMISSIONS.acceptErp);
+    const canForceCatalogConflicts = canViewCatalogConflicts && hasCatalogConflictPermission(currentUser, roles, CATALOG_CONFLICT_PERMISSIONS.force);
+
     const resolveDocumentStatus = (raw: any): 'SYNCED' | 'PENDING' | 'ERROR' => {
         const status = String(raw?.syncStatus || raw?.cloudSyncStatus || '').toUpperCase();
-        if (status === 'COMPLETED' || status === 'SYNCED') return 'SYNCED';
-        if (status === 'ERROR') return 'ERROR';
+        if (['COMPLETED', 'SYNCED', 'SYNCED_CLOUD', 'SYNCED_ACTIVE', 'SYNCED_MASTER', 'APPLIED_ERP'].includes(status)) return 'SYNCED';
+        if (['ERROR', 'BLOCKED_FUNCTIONAL', 'FAILED_FINAL'].includes(status)) return 'ERROR';
         return 'PENDING';
     };
 
@@ -131,110 +185,51 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
         ).trim();
     };
 
-    const loadStatus = async () => {
+    const loadAuditData = async () => {
+        if (activeTab !== 'MONITOR') return;
+        if (auditLoadInFlight.current) {
+            if (activeAuditQuery.current !== auditQueryKey) auditReloadRequested.current = true;
+            return;
+        }
+        auditLoadInFlight.current = true;
+        activeAuditQuery.current = auditQueryKey;
+        setIsLoadingAudit(true);
+        setAuditLoadError(null);
         try {
-            const statuses = await syncManager.getSyncStatus();
-            setStatus(statuses);
-            setIsMaster(permissionService.isMasterTerminal());
-            const profile = loadSyncProfile();
-            const target = resolveSyncTarget(profile);
-            setSyncProfile(profile);
-            setSyncTarget(target);
-            const persistedValue = await db.get('config');
-            const persistedConfig = persistedValue && !Array.isArray(persistedValue)
-                ? persistedValue as unknown as BusinessConfig
-                : null;
-            const effectiveConfig = persistedConfig || config;
-            const enabledCurrencies = (effectiveConfig.currencies || [])
-                .filter((currency) => currency.isEnabled)
-                .map((currency) => currency.code);
-            const baseCurrency = (effectiveConfig.currencies || [])
-                .find((currency) => currency.isBase)?.code
-                || enabledCurrencies[0]
-                || 'DOP';
-            const configPushState = getConfigPushV2Diagnostics();
-            setConfigPushDiagnostics({
-                baseCurrency,
-                enabledCurrencies,
-                versionHash: configPushState.versionHash,
-                configVersion: Number(configPushState.domainVersions.config || 0),
-                appliedAt: configPushState.appliedAt,
-            });
-
-            // Get connection status
-            const connStatus = syncManager.getSyncConnectionStatus();
-            setConnectionStatus(connStatus);
-
-            // Load connected terminals if Master
-            let opStatus: any = null;
-            if (permissionService.isMasterTerminal()) {
-                const terminals = await syncManager.getConnectedTerminals();
-                opStatus = await syncManager.getOperationalStatus();
-                setErpForwardStatus(opStatus?.erpForward || null);
-
-                const allTerminalIds = new Set([
-                    ...terminals.map(t => t.terminalId),
-                    ...(opStatus?.terminals?.map((t: any) => t.terminalId) || [])
-                ]);
-                const [
-                    products,
-                    customers,
-                    suppliers,
-                    users,
-                    warehouses,
-                    paymentMethods,
-                    internalSequences,
-                    productStocks
-                ] = await Promise.all([
-                    db.get('products'),
-                    db.get('customers'),
-                    db.get('suppliers'),
-                    db.get('users'),
-                    db.get('warehouses'),
-                    db.get('paymentMethods'),
-                    db.get('internalSequences'),
-                    db.get('productStocks')
-                ]);
-                setDiagnosticCounts({
-                    products: Array.isArray(products) ? products.length : 0,
-                    customers: Array.isArray(customers) ? customers.length : 0,
-                    suppliers: Array.isArray(suppliers) ? suppliers.length : 0,
-                    users: Array.isArray(users) ? users.length : 0,
-                    warehouses: Array.isArray(warehouses) ? warehouses.length : 0,
-                    paymentMethods: Array.isArray(paymentMethods) ? paymentMethods.length : 0,
-                    internalSequences: Array.isArray(internalSequences) ? internalSequences.length : 0,
-                    productStocks: Array.isArray(productStocks) ? productStocks.length : 0,
-                });
-
-                const mergedTerminals = Array.from(allTerminalIds)
-                    .filter(tid => /^t\d+$/i.test(tid)) // Only show "real" terminals (t1, t2, t3...)
-                    .map(tid => {
-                        const connectedInfo = terminals.find(t => t.terminalId === tid);
-                        const opInfo = opStatus?.terminals?.find((t: any) => t.terminalId === tid);
-                        const isLocal = tid === permissionService.getTerminalId();
-
-                        return {
-                            terminalId: tid,
-                            ip: isLocal ? 'Localhost' : (connectedInfo?.ip || '-'),
-                            lastSeen: isLocal ? new Date().toISOString() : (connectedInfo?.lastSeen || null),
-                            ...(connectedInfo || {}),
-                            ...(opInfo || {}),
-                            status: isLocal ? 'MASTER' : (connectedInfo?.status || 'OFFLINE')
-                        };
-                    });
-
-                setConnectedTerminals(mergedTerminals);
-            } else {
-                setErpForwardStatus(null);
-            }
-
             // Load Audit Data for Data Monitor
             if (activeTab === 'MONITOR') {
-                const [txns, reservations, movements, zReports] = await Promise.all([
-                    db.get('transactions'),
-                    db.get('reservations'),
-                    db.get('inventoryLedger'),
-                    db.get('zReports')
+                const page = nativePagination ? await dbAdapter.getSyncMonitorPage!({
+                    page: currentPage, pageSize: rowsPerPage, search: searchTerm, status: statusFilter, terminal: terminalFilter,
+                }) : null;
+                if (auditQueryKey !== latestAuditQuery.current) return;
+                if (page) {
+                    setAuditTotals({ total: page.total, blocked: page.blocked });
+                    const lastPage = Math.max(1, Math.ceil(page.total / rowsPerPage));
+                    if (currentPage > lastPage) { setCurrentPage(lastPage); return; }
+                }
+                const readCollection = (name: string) => page ? Promise.resolve(page.collections[name] || []) : db.get(name as any);
+                const [
+                    txns,
+                    reservations,
+                    movements,
+                    zReports,
+                    cashMovements,
+                    customerMutations,
+                    posUserMutations,
+                    catalogEdits,
+                    walletTransactions,
+                    loyaltyEvents,
+                ] = await Promise.all([
+                    readCollection('transactions'),
+                    readCollection('reservations'),
+                    readCollection('inventoryLedger'),
+                    readCollection('zReports'),
+                    readCollection('cashMovements'),
+                    readCollection('customerMutations'),
+                    readCollection('posUserMutations'),
+                    readCollection('catalogEdits'),
+                    readCollection('wallet_transactions'),
+                    readCollection('loyalty_events'),
                 ]);
 
                 const transactionRefs = new Set<string>();
@@ -336,11 +331,162 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                     raw: z
                 }));
 
-                const combined = [...formattedTxns, ...formattedRes, ...formattedMovs, ...formattedZs]
+                const formatOperationalDocuments = (
+                    collection: string,
+                    type: string,
+                    documents: any,
+                ) => (Array.isArray(documents) ? documents : []).map((document: any) => ({
+                    key: `${collection}:${document.id}`,
+                    collection,
+                    id: resolveSyncDocumentDisplayId(collection, document),
+                    terminalId: document.terminalId || document.source_terminal_id || '-',
+                    terminalLabel: resolveTerminalDisplayName(document.terminalId || document.source_terminal_id || '-'),
+                    type,
+                    date: document.syncBlockedAt
+                        || document.updatedAt
+                        || document.createdAt
+                        || document.timestamp
+                        || document.date
+                        || '1970-01-01T00:00:00.000Z',
+                    status: resolveDocumentStatus(document),
+                    error: resolveDocumentError(document),
+                    raw: document,
+                }));
+
+                const formattedOperational = [
+                    ...formatOperationalDocuments('cashMovements', 'EFECTIVO', cashMovements),
+                    ...formatOperationalDocuments('customerMutations', 'CLIENTE', customerMutations),
+                    ...formatOperationalDocuments('posUserMutations', 'USUARIO', posUserMutations),
+                    ...formatOperationalDocuments('catalogEdits', 'CATÁLOGO', (catalogEdits as any[] || []).filter(edit =>
+                        shouldShowCatalogEditInSyncMonitor(edit, canViewCatalogConflicts)
+                    )),
+                    ...formatOperationalDocuments('wallet_transactions', 'WALLET', walletTransactions),
+                    ...formatOperationalDocuments('loyalty_events', 'LEALTAD', loyaltyEvents),
+                ];
+
+                const combined = [...formattedTxns, ...formattedRes, ...formattedMovs, ...formattedZs, ...formattedOperational]
                     .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
                 setAuditData(combined);
             }
+        } catch (error) {
+            console.error('Error loading local sync documents:', error);
+            setAuditLoadError('No se pudieron cargar los documentos locales. Pulsa Refrescar lista para reintentar.');
+        } finally {
+            auditLoadInFlight.current = false;
+            activeAuditQuery.current = null;
+            setIsLoadingAudit(false);
+            if (auditReloadRequested.current) {
+                auditReloadRequested.current = false;
+                void loadAuditRef.current();
+            }
+        }
+    };
+
+    loadAuditRef.current = loadAuditData;
+
+    const loadStatus = async () => {
+        // Local documents must remain available when remote diagnostics fail or stall.
+        await loadAuditData();
+        try {
+            const statuses = await syncManager.getSyncStatus();
+            setStatus(statuses);
+            const profile = loadSyncProfile();
+            const target = resolveSyncTarget(profile);
+            setSyncProfile(profile);
+            setSyncTarget(target);
+            const persistedValue = await db.get('config');
+            const persistedConfig = persistedValue && !Array.isArray(persistedValue)
+                ? persistedValue as unknown as BusinessConfig
+                : null;
+            const effectiveConfig = persistedConfig || config;
+            const enabledCurrencies = (effectiveConfig.currencies || [])
+                .filter((currency) => currency.isEnabled)
+                .map((currency) => currency.code);
+            const baseCurrency = (effectiveConfig.currencies || [])
+                .find((currency) => currency.isBase)?.code
+                || enabledCurrencies[0]
+                || 'DOP';
+            const configPushState = getConfigPushV2Diagnostics();
+            setConfigPushDiagnostics({
+                baseCurrency,
+                enabledCurrencies,
+                versionHash: configPushState.versionHash,
+                configVersion: Number(configPushState.domainVersions.config || 0),
+                appliedAt: configPushState.appliedAt,
+            });
+
+            // Get connection status
+            const connStatus = syncManager.getSyncConnectionStatus();
+            setConnectionStatus(connStatus);
+            const effectiveIsMaster = permissionService.isMasterTerminal()
+                || profile.posRuntime === 'MASTER'
+                || String(connStatus?.mode || '').toUpperCase() === 'MASTER';
+            setIsMaster(effectiveIsMaster);
+
+            // Load connected terminals if Master
+            let opStatus: any = null;
+            if (effectiveIsMaster) {
+                const terminals = await syncManager.getConnectedTerminals();
+                opStatus = await syncManager.getOperationalStatus();
+                setErpForwardStatus(opStatus?.erpForward || null);
+
+                const allTerminalIds = new Set([
+                    ...terminals.map(t => t.terminalId),
+                    ...(opStatus?.terminals?.map((t: any) => t.terminalId) || [])
+                ]);
+                const [
+                    products,
+                    customers,
+                    suppliers,
+                    users,
+                    warehouses,
+                    paymentMethods,
+                    internalSequences,
+                    productStocks
+                ] = await Promise.all([
+                    db.get('products'),
+                    db.get('customers'),
+                    db.get('suppliers'),
+                    db.get('users'),
+                    db.get('warehouses'),
+                    db.get('paymentMethods'),
+                    db.get('internalSequences'),
+                    db.get('productStocks')
+                ]);
+                setDiagnosticCounts({
+                    products: Array.isArray(products) ? products.length : 0,
+                    customers: Array.isArray(customers) ? customers.length : 0,
+                    suppliers: Array.isArray(suppliers) ? suppliers.length : 0,
+                    users: Array.isArray(users) ? users.length : 0,
+                    warehouses: Array.isArray(warehouses) ? warehouses.length : 0,
+                    paymentMethods: Array.isArray(paymentMethods) ? paymentMethods.length : 0,
+                    internalSequences: Array.isArray(internalSequences) ? internalSequences.length : 0,
+                    productStocks: Array.isArray(productStocks) ? productStocks.length : 0,
+                });
+
+                const mergedTerminals = Array.from(allTerminalIds)
+                    .filter(tid => /^t\d+$/i.test(tid)) // Only show "real" terminals (t1, t2, t3...)
+                    .map(tid => {
+                        const connectedInfo = terminals.find(t => t.terminalId === tid);
+                        const opInfo = opStatus?.terminals?.find((t: any) => t.terminalId === tid);
+                        const isLocal = tid === permissionService.getTerminalId();
+
+                        return {
+                            terminalId: tid,
+                            ip: isLocal ? 'Localhost' : (connectedInfo?.ip || '-'),
+                            lastSeen: isLocal ? new Date().toISOString() : (connectedInfo?.lastSeen || null),
+                            ...(connectedInfo || {}),
+                            ...(opInfo || {}),
+                            status: isLocal ? 'MASTER' : (connectedInfo?.status || 'OFFLINE')
+                        };
+                    });
+
+                setConnectedTerminals(mergedTerminals);
+            } else {
+                setErpForwardStatus(null);
+            }
+
         } catch (error) {
             console.error('Error loading sync status:', error);
         }
@@ -362,6 +508,7 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
 
     // Memoized Filtered Content
     const filteredAuditData = React.useMemo(() => {
+        if (nativePagination) return auditData;
         return auditData.filter(item => {
             const itemId = String(item.id || '').toLowerCase();
             const matchesSearch = itemId.includes(searchTerm.toLowerCase()) ||
@@ -424,19 +571,16 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
     const resolveRetryResult = async (item: any): Promise<{ status: 'SYNCED' | 'PENDING' | 'ERROR'; error?: string }> => {
         if (!item?.collection) return { status: 'PENDING' };
 
-        const data = await db.get(item.collection as any);
-        if (!Array.isArray(data)) return { status: 'PENDING' };
-
         if (item.collection === 'inventoryLedger' && Array.isArray(item.raw?.movements)) {
             const movementIds = new Set(item.raw.movements.map((movement: any) => movement.id).filter(Boolean));
-            const movements = data.filter((movement: any) => movementIds.has(movement.id));
+            const movements = (await Promise.all(Array.from(movementIds).map(id => db.getDocument('inventoryLedger', String(id))))).filter(Boolean);
             return {
                 status: aggregateDocumentStatus(movements),
                 error: movements.map(resolveDocumentError).find(Boolean)
             };
         }
 
-        const document = data.find((entry: any) => entry.id === item.raw?.id) || null;
+        const document = await db.getDocument(item.collection as any, item.raw?.id);
         if (!document) return { status: 'PENDING' };
 
         return {
@@ -446,20 +590,31 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
     };
 
     // Pagination Logic
-    const totalPages = Math.ceil(filteredAuditData.length / rowsPerPage);
-    const paginatedData = filteredAuditData.slice(
+    const auditTotal = nativePagination ? auditTotals.total : filteredAuditData.length;
+    const totalPages = Math.ceil(auditTotal / rowsPerPage);
+    const paginatedData = nativePagination ? filteredAuditData : filteredAuditData.slice(
         (currentPage - 1) * rowsPerPage,
         currentPage * rowsPerPage
     );
 
     const startIndex = (currentPage - 1) * rowsPerPage;
-    const endIndex = Math.min(startIndex + rowsPerPage, filteredAuditData.length);
+    const endIndex = Math.min(startIndex + rowsPerPage, auditTotal);
 
     // Periodic polling
     useEffect(() => {
-        const interval = setInterval(loadStatus, 5000);
+        const interval = setInterval(() => {
+            if (!retryInFlight.current) void loadAuditData();
+        }, 30000);
         return () => clearInterval(interval);
-    }, []);
+    }, [activeTab, currentPage, rowsPerPage, searchTerm, statusFilter, terminalFilter]);
+
+    const firstAuditQuery = React.useRef(true);
+    useEffect(() => {
+        if (firstAuditQuery.current) { firstAuditQuery.current = false; return; }
+        if (!nativePagination || activeTab !== 'MONITOR') return;
+        const timer = window.setTimeout(() => void loadAuditRef.current(), 200);
+        return () => window.clearTimeout(timer);
+    }, [activeTab, currentPage, rowsPerPage, searchTerm, statusFilter, terminalFilter]);
 
 
 
@@ -518,64 +673,77 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
     };
 
     const handleRetryDocument = async (item: any) => {
+        if (retryInFlight.current) return;
+        retryInFlight.current = true;
         const feedbackKey = item?.key || `${item?.collection || 'document'}:${item?.id || item?.raw?.id || Date.now()}`;
         try {
             if (!item?.collection || !item?.raw?.id) return;
             setRetryingDocumentKey(feedbackKey);
             setRetryFeedback({ key: feedbackKey, type: 'pending', message: 'Reintentando envio...' });
 
-            if (item.collection === 'inventoryLedger' && Array.isArray(item.raw.movements)) {
-                await Promise.all(item.raw.movements.map((movement: any) =>
-                    db.saveDocument('inventoryLedger' as any, {
-                        ...movement,
+            if (item.collection === 'catalogEdits') {
+                if (!canRetryCatalogConflicts) throw new Error('Tu rol no permite reintentar cambios de catálogo.');
+                await db.saveDocument('catalogEdits', {
+                    ...item.raw, status: 'PENDING', syncStatus: 'PENDING', syncError: undefined,
+                    nextAttemptAt: 0, message: 'Reintento solicitado por un usuario autorizado.',
+                });
+                await catalogEditQueue.process();
+            } else if (item.collection === 'zReports') {
+                await backgroundSyncManager.retryZReport(item.raw.id);
+            } else {
+                if (item.collection === 'inventoryLedger' && Array.isArray(item.raw.movements)) {
+                    await Promise.all(item.raw.movements.map((movement: any) =>
+                        db.saveDocument('inventoryLedger' as any, {
+                            ...movement,
+                            syncStatus: 'PENDING',
+                            syncError: undefined,
+                            cloudSyncStatus: undefined,
+                            cloudSyncError: undefined,
+                            erpSyncStatus: undefined,
+                            erpSyncResponse: undefined,
+                            erpSyncedAt: undefined,
+                            syncRetryAfter: undefined,
+                            syncStartedAt: undefined,
+                            syncBlockedReason: undefined,
+                            syncBlockedAt: undefined
+                        })
+                    ));
+                } else {
+                    await db.saveDocument(item.collection as any, {
+                        ...item.raw,
                         syncStatus: 'PENDING',
                         syncError: undefined,
                         cloudSyncStatus: undefined,
                         cloudSyncError: undefined,
+                        syncResponse: undefined,
+                        syncedAt: undefined,
                         erpSyncStatus: undefined,
                         erpSyncResponse: undefined,
                         erpSyncedAt: undefined,
                         syncRetryAfter: undefined,
                         syncStartedAt: undefined,
                         syncBlockedReason: undefined,
-                        syncBlockedAt: undefined
-                    })
-                ));
-            } else {
-                await db.saveDocument(item.collection as any, {
-                    ...item.raw,
-                    syncStatus: 'PENDING',
-                    syncError: undefined,
-                    cloudSyncStatus: undefined,
-                    cloudSyncError: undefined,
-                    syncResponse: undefined,
-                    syncedAt: undefined,
-                    erpSyncStatus: undefined,
-                    erpSyncResponse: undefined,
-                    erpSyncedAt: undefined,
-                    syncRetryAfter: undefined,
-                    syncStartedAt: undefined,
-                    syncBlockedReason: undefined,
-                    syncBlockedAt: undefined,
-                    _forceSyncReplay: item.collection === 'transactions' ? true : item.raw?._forceSyncReplay
-                });
-            }
-
-            await backgroundSyncManager.triggerSyncAndWait();
-
-            if (
-                item.collection === 'transactions' &&
-                permissionService.isMasterTerminal() &&
-                !syncManager.isUsingErpOperationalTarget()
-            ) {
-                try {
-                    await syncManager.retryErpForwardQueue([resolveRetryId(item)].filter(Boolean) as string[]);
-                } catch (error) {
-                    console.warn('ERP forward queue retry failed after local requeue:', error);
+                        syncBlockedAt: undefined,
+                        _forceSyncReplay: item.collection === 'transactions' ? true : item.raw?._forceSyncReplay
+                    });
                 }
-            }
 
-            await loadStatus();
+                await backgroundSyncManager.triggerSyncAndWait();
+
+                if (
+                    item.collection === 'transactions' &&
+                    permissionService.isMasterTerminal() &&
+                    !syncManager.isUsingErpOperationalTarget()
+                ) {
+                    try {
+                        await syncManager.retryErpForwardQueue([resolveRetryId(item)].filter(Boolean) as string[]);
+                    } catch (error) {
+                        console.warn('ERP forward queue retry failed after local requeue:', error);
+                    }
+                }
+
+            }
+            await loadAuditData();
 
             const result = await resolveRetryResult(item);
             if (result.status === 'SYNCED') {
@@ -583,10 +751,10 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
             } else if (result.status === 'ERROR') {
                 const message = result.error || 'El reintento termino con error.';
                 setRetryFeedback({ key: feedbackKey, type: 'error', message });
-                alert('❌ Reintento falló: ' + message);
+
             } else {
                 setRetryFeedback({ key: feedbackKey, type: 'pending', message: 'Reintento solicitado. El documento sigue pendiente.' });
-                alert('⏳ Reintento solicitado. El documento sigue pendiente; revisa el estado en unos segundos.');
+
             }
         } catch (error) {
             console.error('Error retrying document sync:', error);
@@ -595,7 +763,44 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                 type: 'error',
                 message: error instanceof Error ? error.message : 'Error desconocido'
             });
-            alert('❌ No se pudo reintentar el documento: ' + (error instanceof Error ? error.message : 'Error desconocido'));
+            await loadAuditData();
+        } finally {
+            retryInFlight.current = false;
+            setRetryingDocumentKey(null);
+        }
+    };
+
+    const handleCatalogConflictAction = async (item: any, action: 'RETRY' | 'DISCARD' | 'ACCEPT_ERP' | 'FORCE') => {
+        const permissions = {
+            RETRY: canRetryCatalogConflicts,
+            DISCARD: canDiscardCatalogConflicts,
+            ACCEPT_ERP: canAcceptErpCatalogConflicts,
+            FORCE: canForceCatalogConflicts,
+        };
+        if (!permissions[action] || !currentUser?.id) {
+            setRetryFeedback({ key: item.key, type: 'error', message: 'Tu rol no permite ejecutar esta acción.' });
+            return;
+        }
+        const warning = action === 'FORCE'
+            ? 'Se intentará reemplazar el valor actual del ERP con el valor local. ¿Continuar?'
+            : action === 'ACCEPT_ERP'
+                ? 'Se abandonará el cambio local y se descargará el valor vigente del ERP. ¿Continuar?'
+                : action === 'DISCARD'
+                    ? 'Se descartará este cambio local pendiente. ¿Continuar?'
+                    : null;
+        if (warning && !window.confirm(warning)) return;
+        setRetryingDocumentKey(item.key);
+        setRetryFeedback({ key: item.key, type: 'pending', message: 'Resolviendo conflicto...' });
+        try {
+            await resolveCatalogConflict(item.raw, action, currentUser.id);
+            if (action === 'ACCEPT_ERP') await triggerErpSyncOutbox('manual_sync');
+            await loadAuditData();
+            setRetryFeedback({ key: item.key, type: 'success', message: action === 'ACCEPT_ERP'
+                ? 'Valor del ERP aceptado y actualización solicitada.'
+                : action === 'DISCARD' ? 'Cambio local descartado.' : 'Nuevo intento guardado en la cola durable.' });
+        } catch (error) {
+            setRetryFeedback({ key: item.key, type: 'error', message: error instanceof Error ? error.message : 'No se pudo resolver el conflicto.' });
+            await loadAuditData();
         } finally {
             setRetryingDocumentKey(null);
         }
@@ -604,7 +809,7 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
     const handleRefreshAudit = async () => {
         setIsRefreshingAudit(true);
         try {
-            await loadStatus();
+            await loadAuditData();
         } finally {
             setIsRefreshingAudit(false);
         }
@@ -775,19 +980,18 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
     };
 
     return (
-        <div className="flex flex-col h-full bg-gray-50 animate-in fade-in slide-in-from-right-10 duration-300 relative">
+        <div className="flex flex-col h-full min-h-0 min-w-0 bg-gray-50 animate-in fade-in slide-in-from-right-10 duration-300 relative">
             <SyncProgressModal
                 isOpen={showProgressModal}
                 onClose={() => window.location.reload()}
                 modules={syncModules}
             />
 
-            <PendingOperationsRecoveryPanel />
             {/* Header */}
-            <div className="bg-white px-8 py-6 border-b border-gray-200 flex justify-between items-center shrink-0">
+            <div className="bg-white px-4 py-4 sm:px-8 sm:py-6 border-b border-gray-200 flex justify-between items-center shrink-0">
                 <div className="flex-1">
-                    <div className="flex items-center gap-3">
-                        <h1 className="text-2xl font-black text-gray-800 flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-3">
+                        <h1 className="text-lg sm:text-2xl font-black text-gray-800 flex items-center gap-2">
                             <RefreshCw className={`text-blue-600 ${isSyncing ? 'animate-spin' : ''}`} /> Centro de Sincronización
                         </h1>
                         {/* Connection Status Badge */}
@@ -809,12 +1013,13 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                 <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-full text-gray-400 transition-colors"><X size={24} /></button>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-8">
+            <div className="flex-1 min-h-0 min-w-0 overflow-y-auto p-3 sm:p-8">
                 <div className="max-w-5xl mx-auto space-y-8">
+                    <PendingOperationsRecoveryPanel />
 
                     {/* Status Card */}
-                    <div className="bg-white rounded-3xl p-8 shadow-sm border border-gray-100">
-                        <div className="flex items-center justify-between mb-8">
+                    <div className="bg-white rounded-3xl p-3 sm:p-8 shadow-sm border border-gray-100">
+                        <div className="flex flex-col items-stretch gap-4 mb-8">
                             <div className="flex items-center gap-4">
                                 <div className={`p-4 rounded-2xl ${isMaster ? 'bg-purple-100 text-purple-600' : 'bg-blue-100 text-blue-600'}`}>
                                     {isMaster ? <Server size={32} /> : <Database size={32} />}
@@ -834,7 +1039,7 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                             <button
                                 onClick={handleSync}
                                 disabled={isSyncing}
-                                className={`px-8 py-4 rounded-2xl font-black text-white shadow-lg flex items-center gap-3 transition-all active:scale-95 ${isMaster
+                                className={`shrink-0 justify-center px-8 py-4 rounded-2xl font-black text-white shadow-lg flex items-center gap-3 transition-all active:scale-95 ${isMaster
                                     ? 'bg-purple-600 hover:bg-purple-700 shadow-purple-200'
                                     : 'bg-blue-600 hover:bg-blue-700 shadow-blue-200'
                                     }`}
@@ -864,7 +1069,7 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                         </div>
 
                         {/* Tab Navigation */}
-                        <div className="flex gap-2 p-1 bg-gray-100 rounded-2xl mb-8">
+                        <div className="flex flex-wrap gap-2 p-1 bg-gray-100 rounded-2xl mb-8">
                             {[
                                 { id: 'MONITOR', label: 'Monitor de Datos', icon: Database },
                                 { id: 'TERMINALS', label: 'Terminales', icon: Monitor, hidden: !isMaster },
@@ -1073,14 +1278,16 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                                 </div>
 
                                 {isMaster && erpForwardStatus && (
-                                    <div className={`rounded-2xl border p-4 shadow-sm ${erpForwardStatus.pending > 0 ? 'bg-amber-50 border-amber-200' : 'bg-emerald-50 border-emerald-200'}`}>
+                                    <div className={`rounded-2xl border p-4 shadow-sm ${erpForwardStatus.pending > 0 || localBlockedCount > 0 ? 'bg-amber-50 border-amber-200' : 'bg-emerald-50 border-emerald-200'}`}>
                                         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                                             <div>
-                                                <h3 className={`text-sm font-black uppercase tracking-widest ${erpForwardStatus.pending > 0 ? 'text-amber-800' : 'text-emerald-800'}`}>
+                                                <h3 className={`text-sm font-black uppercase tracking-widest ${erpForwardStatus.pending > 0 || localBlockedCount > 0 ? 'text-amber-800' : 'text-emerald-800'}`}>
                                                     Cola de envío ERP
                                                 </h3>
-                                                <p className={`mt-1 text-sm font-bold ${erpForwardStatus.pending > 0 ? 'text-amber-700' : 'text-emerald-700'}`}>
-                                                    {erpForwardStatus.pending > 0
+                                                <p className={`mt-1 text-sm font-bold ${erpForwardStatus.pending > 0 || localBlockedCount > 0 ? 'text-amber-700' : 'text-emerald-700'}`}>
+                                                    {localBlockedCount > 0
+                                                        ? `${localBlockedCount} documento(s) bloqueado(s); requieren revisión o reintento manual`
+                                                        : erpForwardStatus.pending > 0
                                                         ? `${erpForwardStatus.pending} documento(s) esperando envío al ERP`
                                                         : 'Sin documentos pendientes hacia ERP'}
                                                 </p>
@@ -1100,6 +1307,21 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                                             </button>
                                         </div>
                                     </div>
+                                )}
+
+                                {localBlockedCount > 0 && (
+                                    <button
+                                        onClick={() => {
+                                            setSearchTerm('');
+                                            setTerminalFilter('ALL');
+                                            setStatusFilter('ERROR');
+                                            setCurrentPage(1);
+                                            document.querySelector('.audit-table-container')?.scrollTo({ top: 0 });
+                                        }}
+                                        className="w-full rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-left text-sm font-bold text-red-700 hover:bg-red-100"
+                                    >
+                                        Ver {localBlockedCount} documento(s) con error o bloqueo
+                                    </button>
                                 )}
 
                                 {/* Filter Bar */}
@@ -1148,8 +1370,14 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                                     </button>
                                 </div>
 
+                                {auditLoadError && (
+                                    <p role="alert" className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm font-bold text-red-700">
+                                        {auditLoadError}
+                                    </p>
+                                )}
+
                                 {/* Audit Table */}
-                                <div className="audit-table-container overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-sm overflow-y-auto max-h-[600px]">
+                                <div className="audit-table-container overflow-auto rounded-2xl border border-gray-100 bg-white shadow-sm max-h-[600px]">
                                     <table className="w-full border-collapse">
                                         <thead className="bg-gray-50 border-b border-gray-100">
                                             <tr>
@@ -1158,7 +1386,7 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                                                 <th className="text-center py-4 px-6 text-xs font-bold text-gray-400 uppercase">Tipo</th>
                                                 <th className="text-center py-4 px-6 text-xs font-bold text-gray-400 uppercase">Fecha Local</th>
                                                 <th className="text-center py-4 px-6 text-xs font-bold text-gray-400 uppercase">Estado Nube</th>
-                                                <th className="text-right py-4 px-6 text-xs font-bold text-gray-400 uppercase">Acciones</th>
+                                                <th className="sticky right-0 z-10 bg-gray-50 text-right py-4 px-3 text-xs font-bold text-gray-400 uppercase">Acciones</th>
                                             </tr>
                                         </thead>
                                         <tbody className="divide-y divide-gray-50">
@@ -1166,11 +1394,21 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                                                 const rowKey = item.key || item.raw.id || `${item.collection}-${idx}`;
                                                 const isRetryingThisDocument = retryingDocumentKey === rowKey;
                                                 const rowRetryFeedback = retryFeedback?.key === rowKey ? retryFeedback : null;
+                                                const isCatalogDocument = item.collection === 'catalogEdits';
+                                                const isCatalogConflict = isCatalogDocument
+                                                    && ['CONFLICT', 'REJECTED'].includes(String(item.raw?.status || '').toUpperCase())
+                                                    && !item.raw?.resolution;
+                                                const isDiscardableCatalogFailure = isCatalogDocument
+                                                    && String(item.raw?.status || '').toUpperCase() === 'PENDING'
+                                                    && Boolean(item.error);
 
                                                 return (
                                                 <tr key={rowKey} className="hover:bg-gray-50/50 transition-colors">
                                                     <td className="py-4 px-6">
                                                         <div className="font-bold text-gray-700 font-mono text-sm">{item.id}</div>
+                                                        <div className="mt-0.5 text-[9px] font-black uppercase tracking-wider text-slate-400">
+                                                            {item.collection}
+                                                        </div>
                                                         {item.movementCount > 1 && (
                                                             <div className="text-[10px] text-slate-400 font-bold mt-0.5">
                                                                 {item.movementCount} movimientos agrupados
@@ -1178,6 +1416,11 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                                                         )}
                                                         {item.raw?.ncf && (
                                                             <div className="text-[10px] text-blue-600 font-bold mt-0.5">{item.raw.ncf}</div>
+                                                        )}
+                                                        {item.error && (
+                                                            <div className="mt-1 max-w-[360px] break-words text-[10px] font-semibold text-red-600">
+                                                                {item.error}
+                                                            </div>
                                                         )}
                                                     </td>
                                                     <td className="py-4 px-6 text-center">
@@ -1222,8 +1465,8 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                                                             )}
                                                         </div>
                                                     </td>
-                                                    <td className="py-4 px-6 text-right">
-                                                        <div className="flex items-center justify-end gap-2">
+                                                    <td className="sticky right-0 bg-white py-4 px-3 text-right border-l border-gray-100">
+                                                        <div className="flex flex-col sm:flex-row items-stretch justify-end gap-2">
                                                             <button
                                                                 onClick={() => setSelectedJson(item.raw)}
                                                                 className="inline-flex items-center gap-1.5 rounded-lg border border-blue-700 bg-blue-600 px-3 py-2 text-[10px] font-black uppercase tracking-wider text-white shadow-sm transition-all hover:bg-blue-700"
@@ -1231,10 +1474,10 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                                                             >
                                                                 <Code size={14} /> JSON
                                                             </button>
-                                                            {item.status !== 'SYNCED' && (
+                                                            {item.status !== 'SYNCED' && (!isCatalogDocument || (!isCatalogConflict && canRetryCatalogConflicts)) && (
                                                                 <button
                                                                     onClick={() => handleRetryDocument(item)}
-                                                                    disabled={isRetryingThisDocument}
+                                                                    disabled={retryingDocumentKey !== null}
                                                                     className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-[10px] font-black uppercase tracking-wider shadow-sm transition-all ${
                                                                         isRetryingThisDocument
                                                                             ? 'border-slate-300 bg-slate-200 text-slate-500'
@@ -1246,6 +1489,31 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                                                                 >
                                                                     <RotateCcw size={14} className={isRetryingThisDocument ? 'animate-spin' : ''} />
                                                                     {isRetryingThisDocument ? 'Enviando...' : 'Reenviar'}
+                                                                </button>
+                                                            )}
+                                                            {isCatalogConflict && canRetryCatalogConflicts && (
+                                                                <button onClick={() => void handleCatalogConflictAction(item, 'RETRY')} disabled={retryingDocumentKey !== null}
+                                                                    className="inline-flex items-center justify-center rounded-lg border border-amber-600 bg-amber-500 px-3 py-2 text-[10px] font-black uppercase tracking-wider text-white hover:bg-amber-600 disabled:opacity-50">
+                                                                    Reintentar
+                                                                </button>
+                                                            )}
+                                                            {(isCatalogConflict || isDiscardableCatalogFailure) && canDiscardCatalogConflicts && (
+                                                                <button onClick={() => void handleCatalogConflictAction(item, 'DISCARD')} disabled={retryingDocumentKey !== null}
+                                                                    className="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-[10px] font-black uppercase tracking-wider text-slate-700 hover:bg-slate-100 disabled:opacity-50">
+                                                                    Descartar
+                                                                </button>
+                                                            )}
+                                                            {isCatalogConflict && canAcceptErpCatalogConflicts && (
+                                                                <button onClick={() => void handleCatalogConflictAction(item, 'ACCEPT_ERP')} disabled={retryingDocumentKey !== null}
+                                                                    className="inline-flex items-center justify-center rounded-lg border border-blue-700 bg-blue-600 px-3 py-2 text-[10px] font-black uppercase tracking-wider text-white hover:bg-blue-700 disabled:opacity-50">
+                                                                    Aceptar ERP
+                                                                </button>
+                                                            )}
+                                                            {isCatalogConflict && canForceCatalogConflicts && (
+                                                                <button onClick={() => void handleCatalogConflictAction(item, 'FORCE')} disabled={retryingDocumentKey !== null || item.raw?.conflictCurrent === undefined}
+                                                                    className="inline-flex items-center justify-center rounded-lg border border-red-800 bg-red-700 px-3 py-2 text-[10px] font-black uppercase tracking-wider text-white hover:bg-red-800 disabled:opacity-40"
+                                                                    title={item.raw?.conflictCurrent === undefined ? 'Refresca el conflicto para obtener el valor vigente del ERP.' : 'Forzar el valor local'}>
+                                                                    Forzar
                                                                 </button>
                                                             )}
                                                         </div>
@@ -1269,7 +1537,7 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                                             {filteredAuditData.length === 0 && (
                                                 <tr>
                                                     <td colSpan={6} className="py-12 text-center text-gray-400 italic">
-                                                        No se encontraron documentos procesados.
+                                                        {isLoadingAudit ? 'Cargando documentos locales...' : auditLoadError ? 'Lista de documentos no disponible.' : 'No se encontraron documentos procesados.'}
                                                     </td>
                                                 </tr>
                                             )}
@@ -1282,7 +1550,7 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                                     <div className="flex flex-col md:flex-row items-center justify-between gap-4 py-2 px-2 animate-in fade-in slide-in-from-bottom-2 duration-500">
                                         {/* Records Summary */}
                                         <div className="text-sm font-medium text-gray-400">
-                                            Mostrando <span className="text-gray-700 font-bold">{filteredAuditData.length > 0 ? startIndex + 1 : 0}</span> - <span className="text-gray-700 font-bold">{endIndex}</span> de <span className="text-gray-700 font-bold">{filteredAuditData.length}</span> documentos
+                                            Mostrando <span className="text-gray-700 font-bold">{filteredAuditData.length > 0 ? startIndex + 1 : 0}</span> - <span className="text-gray-700 font-bold">{endIndex}</span> de <span className="text-gray-700 font-bold">{auditTotal}</span> documentos
                                         </div>
 
                                         {/* Navigation and Density */}

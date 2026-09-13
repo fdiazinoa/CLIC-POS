@@ -12,7 +12,7 @@ import {
 } from '../../sync/masterNumberRangeContract';
 
 const DB_NAME = 'clic_pos_indexeddb';
-const DB_VERSION = 22; // v22 adds original capture and isolated recovery staging stores
+const DB_VERSION = 23; // v23 adds durable automatic catalog edits
 const OLD_DB_KEY = 'clic_pos_db_v1';
 const OPEN_TIMEOUT_MS = 15000;
 const CURSOR_IDLE_TIMEOUT_MS = 3000;
@@ -25,7 +25,7 @@ const STORES = [
     'internalSequences', 'fiscalRanges', 'fiscalAllocations',
     'localFiscalBuffer', 'campaigns', 'coupons', 'zReports', 'xReports',
     'receptions', 'productStocks', 'supplierProductPrices',
-    'productPrices',
+    'productPrices', 'catalogEdits',
     'inventoryTracking', 'rooms', 'tables', 'globalSequenceCounter',
     'watchlists', 'syncMetadata', 'inventorySnapshots', 'inventoryAuditLogs', 'inventoryCounts',
     'offline_receptions', 'offline_reception_queue', 'offline_reception_conflicts',

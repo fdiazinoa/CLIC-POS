@@ -16,6 +16,7 @@ import {
   Product, ProductAttribute, ProductVariant, ProductFractionRule, ModifierGroup, ComboGroup, BusinessConfig, Tariff, TariffPrice, TaxDefinition, Warehouse, ProductOperationalFlags, InventoryLedgerEntry, ProductStock, StockTransfer, Season, Supplier
 } from '../types';
 import { isValidRemoteMediaUrl } from '../utils/media';
+import { createUuid } from '../utils/uuid';
 import ProfitCalculator from './ProfitCalculator';
 import RecipeManager from './RecipeManager';
 import ProductionAreaManager from './ProductionAreaManager';
@@ -26,7 +27,8 @@ import { UnitSelector } from './UnitSelector';
 import { ConversionHelper } from './ConversionHelper';
 import { calculateCost, UNITS } from '../utils/units';
 import LabelPrintModal from './LabelPrintModal';
-import { normalizeTaxIdentifiersForSelection, taxIdentifierSetMatches } from '../utils/taxIdentity';
+import { canonicalizeTaxIdentifiers, findTaxByIdentifier, normalizeTaxIdentifiersForSelection, taxIdentifierSetMatches } from '../utils/taxIdentity';
+import { ProductEditorHeader, ProductEditorTabs, type ProductEditorTab } from './product-editor/ProductEditorChrome';
 import {
   canonicalizeTariffEntries,
   canonicalizeWarehouseIds,
@@ -37,6 +39,7 @@ import {
   resolveWarehouseId,
   tariffMatchesIdentifier,
 } from '../utils/masterIdentity';
+import { buildProductEditorSyncMarker } from '../utils/productEditorSync';
 import {
   extractWarehouseStockBalances,
   productIdMatchesInventoryReference,
@@ -45,6 +48,9 @@ import {
   resolveOperationalProductId,
 } from '../utils/productReferences';
 import { normalizeRestaurantProductConfig, resolveRestaurantProductConfig } from '../utils/restaurantProductConfig';
+import { normalizeCategoryOption, preferCategoryOptionWithErpIdentity } from '../utils/categoryOptions';
+import { resolveProductEditorCapabilities } from '../utils/productEditorTabs';
+import { normalizeProductTaxRate, resolveProductSummaryStock } from '../utils/productEditorSummary';
 
 interface ProductFormProps {
   initialData?: Product | null;
@@ -881,6 +887,12 @@ export const extractRestaurantSuggestionTemplates = (product: Partial<Product>):
 
 type ProductTab = 'GENERAL' | 'CLASSIFICATION' | 'LABELS' | 'OPERATIVE' | 'TAXES' | 'PRICING' | 'VARIANTS' | 'MODIFIERS' | 'LOGISTICS' | 'STOCKS' | 'KARDEX' | 'RECIPE';
 
+const normalizeProductTab = (tab: ProductTab): ProductTab => {
+  if (tab === 'CLASSIFICATION') return 'GENERAL';
+  if (tab === 'TAXES') return 'OPERATIVE';
+  return tab;
+};
+
 const DEFAULT_OPERATIONAL_FLAGS: ProductOperationalFlags = {
   isWeighted: false,
   trackInventory: true,
@@ -901,39 +913,6 @@ const VARIANT_TEMPLATES = [
   { name: 'Calzado US', attr: 'Número', opts: ['7', '8', '9', '10', '11'] },
   { name: 'Capacidad', attr: 'Memoria', opts: ['64GB', '128GB', '256GB'] }
 ];
-
-const normalizeCategoryOption = (entry: unknown): { id: string; name: string } | null => {
-  if (typeof entry === 'string') {
-    const name = entry.trim();
-    return name ? { id: name, name } : null;
-  }
-  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null;
-  const record = entry as Record<string, unknown>;
-  const name = String(
-    record.name ||
-    record.nombre ||
-    record.label ||
-    record.description ||
-    record.descripcion ||
-    record.code ||
-    record.id ||
-    ''
-  ).trim();
-  if (!name) return null;
-  const id = String(record.id || record.code || name).trim();
-  return { id: id || name, name };
-};
-
-const buildStockSyncMarker = (product?: Partial<Product> | null): string => {
-  if (!product) return 'NO_STOCK';
-
-  const balances = Object.entries(product.stockBalances || {})
-    .map(([warehouseId, quantity]) => `${warehouseId}:${Number(quantity || 0)}`)
-    .sort()
-    .join('|');
-
-  return balances || 'NO_STOCK';
-};
 
 const readNumericBalance = (record: Record<string, unknown> | null | undefined, key: string): number | undefined => {
   const value = record && key ? record[key] : undefined;
@@ -995,7 +974,7 @@ const resolveWarehouseStockFromRecord = (
 const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availableTariffs, warehouses = [], transfers = [], purchaseOrders = [], hasHistory = false, currentUser, roles = [], onSave, onClose, suppliers = [], seasons = [], initialTab = 'GENERAL', allProducts = [] }) => {
   const MAX_IMAGE_BYTES = 700 * 1024; // ~700 KB to avoid oversized base64 blobs blocking saves
   const isNativeAndroidRuntime = Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
-  const [activeTab, setActiveTab] = useState<ProductTab>(initialTab || 'GENERAL');
+  const [activeTab, setActiveTab] = useState<ProductTab>(normalizeProductTab(initialTab || 'GENERAL'));
   const [showConversionHelper, setShowConversionHelper] = useState(false);
   const [kardexWarehouse, setKardexWarehouse] = useState<string>(
     config.inventoryScope?.visibleWarehouseIds?.[0] || 'ALL'
@@ -1004,6 +983,10 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
   const inventoryDebugTextareaRef = useRef<HTMLTextAreaElement>(null);
   const lastInitialSyncRef = useRef<string>('');
   const stockSyncRequestIdRef = useRef(0);
+  const initialDataSyncMarker = useMemo(
+    () => buildProductEditorSyncMarker(initialData),
+    [initialData]
+  );
 
   // --- STATE ---
   const [showProfitCalc, setShowProfitCalc] = useState<string | null>(null);
@@ -1025,9 +1008,31 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
   const [pendingOption, setPendingOption] = useState<Record<string, string>>({});
   const [inventoryDebugCopyStatus, setInventoryDebugCopyStatus] = useState<'IDLE' | 'COPIED' | 'ERROR'>('IDLE');
   const [erpCategoryOptions, setErpCategoryOptions] = useState<Array<{ id: string; name: string }>>([]);
+  const [editorViewport, setEditorViewport] = useState<{ height: number; offsetTop: number } | null>(null);
+  const [visibleAdditionalBarcodes, setVisibleAdditionalBarcodes] = useState(() => {
+    if (initialData?.barcode_3 || initialData?.barcode3) return 2;
+    if (initialData?.barcode_2 || initialData?.barcode2) return 1;
+    return 0;
+  });
 
   // Kardex Filter State
   const [kardexTerminal, setKardexTerminal] = useState<string>('ALL');
+
+  useEffect(() => {
+    if (!isNativeAndroidRuntime || !window.visualViewport) return;
+    const viewport = window.visualViewport;
+    const syncViewport = () => setEditorViewport({
+      height: Math.round(viewport.height),
+      offsetTop: Math.round(viewport.offsetTop),
+    });
+    syncViewport();
+    viewport.addEventListener('resize', syncViewport);
+    viewport.addEventListener('scroll', syncViewport);
+    return () => {
+      viewport.removeEventListener('resize', syncViewport);
+      viewport.removeEventListener('scroll', syncViewport);
+    };
+  }, [isNativeAndroidRuntime]);
 
   // Transit Popover state (warehouseId or null)
   const [openTransitPopover, setOpenTransitPopover] = useState<string | null>(null);
@@ -1071,7 +1076,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
 
   const [formData, setFormData] = useState<Product>(() => {
     const base = initialData || {
-      id: crypto.randomUUID(),
+      id: createUuid(),
       name: '',
       type: 'PRODUCT',
       category: 'General',
@@ -1089,6 +1094,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
       appliedTaxIds: config.taxes?.[0] ? [config.taxes[0].id] : [],
       cost: 0,
       description: '',
+      is_active: true,
       operationalFlags: DEFAULT_OPERATIONAL_FLAGS,
       warehouseSettings: {}
     };
@@ -1102,12 +1108,15 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
   });
 
   useEffect(() => {
-    setActiveTab(initialTab || 'GENERAL');
+    setActiveTab(normalizeProductTab(initialTab || 'GENERAL'));
   }, [initialTab, initialData?.id]);
 
   const [warehouseSettings, setWarehouseSettings] = useState<Record<string, { min: number, max: number }>>(
     () => canonicalizeWarehouseRecord(initialData?.warehouseSettings || {}, warehouses)
   );
+  const editorBaselineRef = useRef(JSON.stringify({ product: formData, warehouseSettings }));
+  const editorSnapshot = JSON.stringify({ product: formData, warehouseSettings });
+  const isDirty = editorSnapshot !== editorBaselineRef.current;
 
   const normalizedFormTariffs = useMemo(() => canonicalizeTariffEntries(formData.tariffs || [], availableTariffs), [formData.tariffs, availableTariffs]);
   const categoryOptions = useMemo(() => {
@@ -1116,7 +1125,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
       const option = normalizeCategoryOption(entry);
       if (!option) return;
       const key = option.name.trim().toLowerCase();
-      if (!byName.has(key)) byName.set(key, option);
+      byName.set(key, preferCategoryOptionWithErpIdentity(byName.get(key), option));
     };
 
     (config.posCategories || []).forEach(addOption);
@@ -1348,7 +1357,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
   useEffect(() => {
     const shouldLoadProductionAreas =
       config?.operational?.usa_modulos_cocina === true &&
-      activeTab === 'OPERATIVE' &&
+      (activeTab === 'MODIFIERS' || activeTab === 'RECIPE') &&
       !productionAreasLoaded;
 
     if (!shouldLoadProductionAreas) return;
@@ -1367,25 +1376,27 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
   // --- SYNC STATE WITH PROPS (For Real-time Sync Updates) ---
   useEffect(() => {
     if (!initialData) return;
+    if (isDirty) return;
 
-    const initialTimestamp = initialData.updatedAt || (initialData as any).createdAt || (initialData as any).created_at || 'NO_TS';
-    const stockMarker = buildStockSyncMarker(initialData);
-    const syncMarker = `${initialData.id || 'NO_ID'}::${initialTimestamp}::${stockMarker}`;
+    const syncMarker = `${initialData.id || 'NO_ID'}::${initialDataSyncMarker}`;
     if (lastInitialSyncRef.current === syncMarker) {
       return;
     }
 
     console.log(`🔄 ProductForm: Syncing internal state with updated initialData for ${initialData.id}`);
-    setFormData(normalizeProductActivationState(normalizeRestaurantProductConfig({
+    const nextFormData = normalizeProductActivationState(normalizeRestaurantProductConfig({
       ...initialData,
       tariffs: initialData.tariffs || [],
       attributes: initialData.attributes || [],
       variants: initialData.variants || [],
       stockBalances: initialData.stockBalances || {}
-    })));
-    setWarehouseSettings(canonicalizeWarehouseRecord(initialData.warehouseSettings || {}, warehouses));
+    }));
+    const nextWarehouseSettings = canonicalizeWarehouseRecord(initialData.warehouseSettings || {}, warehouses);
+    setFormData(nextFormData);
+    setWarehouseSettings(nextWarehouseSettings);
+    editorBaselineRef.current = JSON.stringify({ product: nextFormData, warehouseSettings: nextWarehouseSettings });
     lastInitialSyncRef.current = syncMarker;
-  }, [initialData?.id, initialData?.updatedAt, (initialData as any)?.createdAt, (initialData as any)?.created_at, initialData?.stockBalances]);
+  }, [initialData?.id, initialDataSyncMarker, isDirty]);
 
   useEffect(() => {
     setFormData(prev => normalizeProductActivationState(prev));
@@ -1923,6 +1934,30 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     e.target.value = '';
   };
 
+  const updateAdditionalBarcode = (index: number, value: string) => {
+    const field = index === 0 ? 'barcode_2' : 'barcode_3';
+    const alias = index === 0 ? 'barcode2' : 'barcode3';
+    setFormData(prev => ({ ...prev, [field]: value, [alias]: value } as Product));
+  };
+
+  const removeAdditionalBarcode = (index: number) => {
+    setFormData(prev => {
+      if (index === 0 && visibleAdditionalBarcodes > 1) {
+        const nextValue = prev.barcode_3 || prev.barcode3 || '';
+        return { ...prev, barcode_2: nextValue, barcode2: nextValue, barcode_3: '', barcode3: '' };
+      }
+      const field = index === 0 ? 'barcode_2' : 'barcode_3';
+      const alias = index === 0 ? 'barcode2' : 'barcode3';
+      return { ...prev, [field]: '', [alias]: '' } as Product;
+    });
+    setVisibleAdditionalBarcodes(count => Math.max(0, count - 1));
+  };
+
+  const copyBarcode = async (value: string) => {
+    if (!value || !navigator.clipboard?.writeText) return;
+    await navigator.clipboard.writeText(value);
+  };
+
   const handleCalculateInventory = async (whId: string) => {
     if (!formData.id) return;
     setIsCalculating(whId);
@@ -2050,6 +2085,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
 
     const updatedProduct = normalizeRestaurantProductConfig({
       ...formData,
+      appliedTaxIds: canonicalizeTaxIdentifiers(formData.appliedTaxIds, config.taxes),
       price: resolvedBasePrice,
       production_area_id: productionAreaId || undefined,
       tariffs: normalizedTariffsForSave,
@@ -2071,24 +2107,48 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
   };
 
   const OperationalSwitch = ({ label, description, checked, onChange, icon: Icon }: any) => (
-    <div
+    <button
+      type="button"
+      role="switch"
+      aria-checked={Boolean(checked)}
       onClick={() => onChange(!checked)}
-      className={`p-4 rounded-2xl border-2 cursor-pointer flex items-center justify-between transition-all ${checked ? 'bg-blue-50 border-blue-500 shadow-sm' : 'bg-white border-gray-100 hover:border-gray-200'}`}
+      className="flex min-h-14 w-full cursor-pointer appearance-none items-center justify-between gap-3 bg-white px-1 py-3 text-left transition-colors"
     >
       <div className="flex items-center gap-3">
-        <div className={`p-2 rounded-xl ${checked ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-400'}`}>
+        <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${checked ? 'bg-blue-50 text-blue-700' : 'bg-slate-50 text-slate-400'}`}>
           <Icon size={18} />
         </div>
         <div>
-          <p className={`text-sm font-bold ${checked ? 'text-blue-900' : 'text-gray-700'}`}>{label}</p>
-          <p className="text-[10px] text-gray-400 font-medium mt-0.5">{description}</p>
+          <p className={`text-sm font-bold ${checked ? 'text-slate-900' : 'text-slate-700'}`}>{label}</p>
+          <p className="mt-0.5 text-[11px] font-medium text-slate-500">{description}</p>
         </div>
       </div>
       <div className={`w-10 h-5 rounded-full relative transition-colors ${checked ? 'bg-blue-600' : 'bg-gray-300'}`}>
         <div className={`absolute top-1 w-3 h-3 rounded-full bg-white transition-all ${checked ? 'left-6' : 'left-1'}`} />
       </div>
-    </div>
+    </button>
   );
+
+  const ProductionRoutingCard = () => config?.operational?.usa_modulos_cocina ? (
+    <section className="rounded-2xl border border-slate-200 bg-white p-5">
+      <div className="mb-4 flex items-center gap-3">
+        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-50 text-blue-600"><Monitor size={18} /></div>
+        <div>
+          <h4 className="text-sm font-black text-slate-800">Ruteo de producción</h4>
+          <p className="text-xs text-slate-500">Enrutamiento de la comanda</p>
+        </div>
+      </div>
+      <label className="mb-1 block text-xs font-semibold text-slate-700">Centro de producción destino</label>
+      <select
+        value={formData.production_area_id || (formData as any).productionAreaId || (formData as any).metadata?.production_area_id || (formData as any).metadata?.productionAreaId || ''}
+        onChange={event => setFormData({ ...formData, production_area_id: event.target.value })}
+        className="min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-bold outline-none focus:border-blue-400"
+      >
+        <option value="">Ninguno (no enviar a cocina)</option>
+        {productionAreas.map(area => <option key={area.id} value={area.id}>{area.nombre} ({area.modo_salida})</option>)}
+      </select>
+    </section>
+  ) : null;
 
   const makeLocalId = (prefix: string) => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
   const resolvedRestaurantFormConfig = resolveRestaurantProductConfig(formData);
@@ -2472,57 +2532,120 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     updateRestaurantProduct({ note_presets: restaurantNotePresets.filter((_, i) => i !== index) });
   };
 
+  const productType = String(formData.type || 'PRODUCT').toUpperCase();
+  const restaurantContext = config.vertical === 'RESTAURANT' || config?.operational?.usa_modulos_cocina === true;
+  const editorCapabilities = resolveProductEditorCapabilities(productType, restaurantContext);
+  const supportsInventory = editorCapabilities.inventory;
+  const supportsVariants = editorCapabilities.variants;
+  const supportsProduction = editorCapabilities.production;
+  const primaryTabs: ProductEditorTab[] = [
+    { id: 'GENERAL', label: 'General', icon: Info },
+    { id: 'OPERATIVE', label: 'Venta', icon: ShoppingCart },
+    { id: 'PRICING', label: 'Precios', icon: Tag },
+    ...(supportsVariants ? [{ id: 'VARIANTS', label: 'Variantes', icon: Layers }] : []),
+    ...(supportsInventory ? [{ id: 'INVENTORY', label: 'Inventario', icon: Box }] : []),
+    ...(supportsProduction ? [{ id: 'PRODUCTION', label: 'Producción', icon: Settings2 }] : []),
+    { id: 'LABELS', label: 'Etiquetas', icon: Printer },
+  ];
+  const inventoryTabs: ProductEditorTab[] = [
+    { id: 'STOCKS', label: 'Por almacén', icon: Building2 },
+    { id: 'LOGISTICS', label: 'Reposición', icon: Truck },
+    { id: 'KARDEX', label: 'Movimientos', icon: BookOpen },
+  ];
+  const productionTabs: ProductEditorTab[] = [
+    { id: 'RECIPE', label: 'Receta / Kit', icon: Layers },
+    ...(restaurantContext ? [{ id: 'MODIFIERS', label: 'Modificadores y combos', icon: Plus }] : []),
+  ];
+  const activePrimaryTab = ['STOCKS', 'LOGISTICS', 'KARDEX'].includes(activeTab)
+    ? 'INVENTORY'
+    : ['RECIPE', 'MODIFIERS'].includes(activeTab)
+      ? 'PRODUCTION'
+      : activeTab;
+  const selectedTaxRate = canonicalizeTaxIdentifiers(formData.appliedTaxIds, config.taxes)
+    .map((taxId) => normalizeProductTaxRate(findTaxByIdentifier(config.taxes, taxId)?.rate))
+    .reduce((sum, rate) => sum + rate, 0);
+  const summaryPrice = Number(normalizedFormTariffs.find((entry) =>
+    tariffMatchesIdentifier(entry, defaultTariffId) || tariffMatchesIdentifier(entry, 'trf-gen')
+  )?.price ?? formData.price ?? 0);
+  const summaryNetPrice = selectedTaxRate > 0 ? summaryPrice / (1 + selectedTaxRate) : summaryPrice;
+  const summaryMargin = summaryNetPrice > 0
+    ? ((summaryNetPrice - Number(formData.cost || 0)) / summaryNetPrice) * 100
+    : 0;
+  const summaryStock = resolveProductSummaryStock(
+    warehouses.map((warehouse) => (
+      resolveWarehouseStockFromRecord(stockBalanceSource, warehouse)
+      ?? resolveWarehouseStockFromRecord(formData.stockBalances as Record<string, unknown>, warehouse)
+    )),
+    formData.stock,
+  );
+  const productImages = Array.from(new Set([formData.image, ...(formData.images || [])].filter((value): value is string => Boolean(value))));
+
+  const selectPrimaryTab = (tabId: string) => {
+    if (tabId === 'INVENTORY') return setActiveTab('STOCKS');
+    if (tabId === 'PRODUCTION') return setActiveTab(productType === 'KIT' || productType === 'RECETA' ? 'RECIPE' : (restaurantContext ? 'MODIFIERS' : 'RECIPE'));
+    setActiveTab(tabId as ProductTab);
+  };
+
+  const handleRequestClose = () => {
+    if (isDirty && !window.confirm('Tienes cambios sin guardar. ¿Deseas descartarlos?')) return;
+    onClose();
+  };
+
+  useEffect(() => {
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (!isDirty) return;
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [isDirty]);
+
+  useEffect(() => {
+    if (activePrimaryTab === 'INVENTORY' && !supportsInventory) setActiveTab('GENERAL');
+    if (activePrimaryTab === 'VARIANTS' && !supportsVariants) setActiveTab('GENERAL');
+    if (activePrimaryTab === 'PRODUCTION' && !supportsProduction) setActiveTab('GENERAL');
+  }, [activePrimaryTab, supportsInventory, supportsProduction, supportsVariants]);
+
   return (
-    <div className="fixed inset-0 z-[80] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="bg-white rounded-[2.5rem] w-full max-w-5xl h-[90vh] shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95 duration-200 relative">
+    <div
+      className="fixed inset-x-0 top-0 z-[80] flex h-dvh items-center justify-center bg-black/50 p-0 backdrop-blur-sm sm:p-3"
+      style={editorViewport ? { height: `${editorViewport.height}px`, top: `${editorViewport.offsetTop}px` } : undefined}
+    >
+      <div className="relative flex h-full max-h-full w-full flex-col overflow-hidden bg-white sm:max-w-[1500px] sm:rounded-2xl sm:border sm:border-slate-200 sm:shadow-xl">
 
-        {/* Header */}
-        <div className="p-6 border-b flex justify-between items-center bg-gray-50/50 shrink-0">
-          <div className="flex items-center gap-4">
-            <div className="p-3 bg-blue-600 text-white rounded-2xl shadow-lg"><Package size={24} /></div>
-            <div>
-              <h2 className="text-xl font-black text-gray-800">{initialData ? 'Editar Artículo' : 'Nuevo Artículo'}</h2>
-              <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">Gestión Centralizada</p>
-            </div>
-          </div>
-          <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-full text-gray-400 transition-colors"><X size={24} /></button>
-        </div>
+        <ProductEditorHeader
+          isNew={!initialData}
+          isActive={formData.is_active !== false}
+          productType={productType}
+          sku={formData.sku || formData.reference || formData.barcode}
+          updatedAt={initialData?.updatedAt}
+          onClose={handleRequestClose}
+        />
 
-        {/* Tabs Navigation */}
-        <div className="mobile-tab-scroller no-scrollbar px-4 border-b bg-white shrink-0">
-          {[
-            { id: 'GENERAL', label: 'General', icon: Info },
-            { id: 'CLASSIFICATION', label: 'Clasificación', icon: ListTree },
-            { id: 'LABELS', label: 'Etiquetas', icon: Printer },
-            { id: 'OPERATIVE', label: 'Operativa', icon: Settings2 },
-            { id: 'PRICING', label: 'Tarifas', icon: Tag },
-            { id: 'VARIANTS', label: 'Variantes', icon: Layers },
-            { id: 'MODIFIERS', label: 'Modificadores', icon: Plus },
-            { id: 'STOCKS', label: 'Existencias', icon: ClipboardList },
-            { id: 'KARDEX', label: 'Kardex', icon: BookOpen },
-            { id: 'RECIPE', label: 'Receta / Kit', icon: Layers }, // Using Layers or similar
-            { id: 'LOGISTICS', label: 'Logística', icon: Truck },
-            { id: 'TAXES', label: 'Impuestos', icon: Percent },
-          ].map(tab => (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id as ProductTab)}
-              className={`mobile-tab-item flex items-center gap-2 py-4 font-bold text-xs transition-all border-b-4 ${activeTab === tab.id ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
-            >
-              <tab.icon size={14} /> {tab.label}
-            </button>
-          ))}
-        </div>
+        <ProductEditorTabs tabs={primaryTabs} activeId={activePrimaryTab} onSelect={selectPrimaryTab} />
 
         {/* Content Area */}
-        <div className="flex-1 overflow-y-auto p-8 bg-gray-50/30 no-scrollbar">
+        <main className="min-h-0 flex-1 overflow-y-auto bg-white p-3 sm:p-5 lg:p-6">
+
+          {activePrimaryTab === 'INVENTORY' && (
+            <div className="mx-auto mb-4 max-w-7xl">
+              <ProductEditorTabs tabs={inventoryTabs} activeId={activeTab} onSelect={(id) => setActiveTab(id as ProductTab)} compact label="Secciones de inventario" />
+            </div>
+          )}
+
+          {activePrimaryTab === 'PRODUCTION' && (
+            <div className="mx-auto mb-4 max-w-7xl">
+              <ProductEditorTabs tabs={productionTabs} activeId={activeTab} onSelect={(id) => setActiveTab(id as ProductTab)} compact label="Secciones de producción" />
+            </div>
+          )}
 
           {/* TAB: KARDEX (IMPLEMENTATION) */}
           {activeTab === 'KARDEX' && (
             <div className="max-w-4xl mx-auto space-y-6 animate-in fade-in">
               <div className="flex justify-between items-center bg-white p-6 rounded-[2rem] border border-gray-100 shadow-sm">
                 <div>
-                  <h3 className="text-xl font-bold text-gray-800">Libro Mayor de Inventario</h3>
+                  <h3 className="text-xl font-bold text-gray-800">Movimientos de inventario</h3>
                   <p className="text-sm text-gray-500">Historial transaccional y valoración CPP.</p>
                   {permissionService.isSlaveTerminal() && (
                     <div className="mt-2 flex items-center gap-2 text-[10px] font-bold text-blue-600 bg-blue-50 px-3 py-1 rounded-full w-fit">
@@ -2554,27 +2677,6 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                       {config.terminals.map(t => <option key={t.id} value={t.id}>{t.id}</option>)}
                       <option value="LOCAL">Local (Legacy)</option>
                     </select>
-                  </div>
-                  <div className="bg-white p-5 rounded-[2rem] border border-gray-100 shadow-sm space-y-3">
-                    <label className="block text-[10px] font-black text-gray-500 uppercase">Video del producto (opcional)</label>
-                    <input
-                      type="url"
-                      value={productVideo?.url || ''}
-                      onChange={event => updateProductVideo('url', event.target.value)}
-                      placeholder="https://cdn.ejemplo.com/producto.mp4"
-                      className="w-full p-3 bg-gray-50 border-2 border-transparent rounded-xl text-sm focus:bg-white focus:border-blue-200 outline-none"
-                    />
-                    <input
-                      type="url"
-                      value={productVideo?.posterUrl || ''}
-                      onChange={event => updateProductVideo('posterUrl', event.target.value)}
-                      placeholder="URL de imagen de portada (opcional)"
-                      className="w-full p-3 bg-gray-50 border-2 border-transparent rounded-xl text-sm focus:bg-white focus:border-blue-200 outline-none"
-                    />
-                    {productVideo?.url && isValidRemoteMediaUrl(productVideo.url) && (
-                      <video src={productVideo.url} poster={productVideo.posterUrl} controls playsInline className="w-full aspect-video rounded-xl bg-black object-contain" />
-                    )}
-                    <p className="text-[10px] text-gray-400">Use una URL HTTPS de almacenamiento/CDN. El POS guarda la referencia, no el archivo pesado.</p>
                   </div>
                 </div>
               </div>
@@ -2786,17 +2888,17 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
             </div>
           )}
 
-          {/* Resto de las pestañas permanecen iguales */}
           {activeTab === 'GENERAL' && (
-            <div className="max-w-4xl mx-auto space-y-6 animate-in fade-in">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-                <div className="md:col-span-1 space-y-4">
-                  <label className="block text-[10px] font-black text-gray-500 uppercase ml-1">Imagen Principal</label>
+            <div className="mx-auto max-w-7xl animate-in fade-in">
+              <div className="grid grid-cols-1 gap-5 lg:grid-cols-4">
+                <aside className="space-y-4 lg:col-span-1">
+                  <section className="rounded-2xl border border-slate-200 bg-white p-4">
+                  <h3 className="mb-3 text-sm font-black text-slate-800">Imagen del producto</h3>
                   <div
                     onClick={() => fileInputRef.current?.click()}
                     onPaste={handleImagePaste}
                     tabIndex={0} // Make div focusable to receive paste events
-                    className="aspect-square bg-white rounded-[2rem] border-4 border-dashed border-gray-200 flex flex-col items-center justify-center relative overflow-hidden group cursor-pointer hover:border-blue-400 transition-all outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-50"
+                    className="group relative flex aspect-square cursor-pointer flex-col items-center justify-center overflow-hidden rounded-xl border border-dashed border-slate-300 bg-slate-50 outline-none transition-all hover:border-blue-400 focus:border-blue-400 focus:ring-4 focus:ring-blue-50"
                   >
                     {formData.image ? <img src={formData.image} className="w-full h-full object-cover" /> : (
                       <div className="flex flex-col items-center gap-2 text-gray-300">
@@ -2830,7 +2932,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                           e.stopPropagation();
                           fileInputRef.current?.click();
                         }}
-                        className="px-3 py-2 bg-white text-blue-600 rounded-xl shadow-lg active:scale-95 transition-all border border-gray-100 inline-flex items-center gap-2"
+                        className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-blue-600 shadow-sm transition-all active:scale-95"
                         title="Subir desde galería o archivo"
                       >
                         <Upload size={18} />
@@ -2839,7 +2941,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                       {canUseExplicitPaste && (
                         <button
                           onClick={handlePasteFromClipboard}
-                          className="px-3 py-2 bg-white text-emerald-600 rounded-xl shadow-lg active:scale-95 transition-all border border-gray-100 inline-flex items-center gap-2"
+                          className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-emerald-600 shadow-sm transition-all active:scale-95"
                           title="Pegar imagen desde portapapeles"
                         >
                           <ClipboardList size={18} />
@@ -2856,138 +2958,250 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                           const term = encodeURIComponent(formData.name || formData.category || 'producto');
                           window.open(`https://www.google.com/search?tbm=isch&q=${term}`, '_blank');
                         }}
-                        className="p-3 bg-white text-blue-600 rounded-xl shadow-lg hover:scale-110 active:scale-95 transition-all border border-gray-100"
+                        className="flex h-10 w-10 items-center justify-center rounded-lg border border-slate-200 bg-white text-blue-600 shadow-sm transition-all hover:scale-105 active:scale-95"
                         title="Buscar en Google Imágenes"
                       >
                         <Search size={20} />
                       </button>
                     </div>
                   </div>
-                </div>
-                <div className="md:col-span-2 space-y-6">
-                  <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-gray-100 space-y-4">
-                    <div>
-                      <label className="block text-[10px] font-black text-gray-500 uppercase mb-1 ml-1">Nombre Comercial</label>
-                      <input type="text" value={formData.name} onChange={e => setFormData({ ...formData, name: e.target.value })} onPaste={(e) => e.stopPropagation()} className="w-full p-4 bg-gray-50 border-2 border-transparent rounded-2xl text-lg font-bold text-gray-800 focus:bg-white focus:border-blue-200 transition-all select-text" />
-                    </div>
-                    <div className="grid grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-[10px] font-black text-gray-500 uppercase mb-1 ml-1">Código de Barra</label>
-                        <input type="text" value={formData.barcode || ''} onChange={e => setFormData({ ...formData, barcode: e.target.value })} onPaste={(e) => e.stopPropagation()} className="w-full p-3 bg-white border-2 border-gray-100 rounded-xl font-mono text-sm select-text" />
-                      </div>
-                      <div>
-                        <label className="block text-[10px] font-black text-gray-500 uppercase mb-1 ml-1">SKU</label>
-                        <input type="text" value={(formData as any).sku || ''} onChange={e => setFormData({ ...formData, sku: e.target.value } as Product)} onPaste={(e) => e.stopPropagation()} className="w-full p-3 bg-white border-2 border-gray-100 rounded-xl font-mono text-sm select-text" />
-                      </div>
-                      <div>
-                        <label className="block text-[10px] font-black text-gray-500 uppercase mb-1 ml-1">Código de Barra 2</label>
-                        <input type="text" value={(formData as any).barcode_2 || (formData as any).barcode2 || ''} onChange={e => setFormData({ ...formData, barcode_2: e.target.value, barcode2: e.target.value } as Product)} onPaste={(e) => e.stopPropagation()} className="w-full p-3 bg-white border-2 border-gray-100 rounded-xl font-mono text-sm select-text" />
-                      </div>
-                      <div>
-                        <label className="block text-[10px] font-black text-gray-500 uppercase mb-1 ml-1">Código de Barra 3</label>
-                        <input type="text" value={(formData as any).barcode_3 || (formData as any).barcode3 || ''} onChange={e => setFormData({ ...formData, barcode_3: e.target.value, barcode3: e.target.value } as Product)} onPaste={(e) => e.stopPropagation()} className="w-full p-3 bg-white border-2 border-gray-100 rounded-xl font-mono text-sm select-text" />
-                      </div>
-                      <div>
-                        <label className="block text-[10px] font-black text-gray-500 uppercase mb-1 ml-1">Referencia</label>
-                        <input type="text" value={(formData as any).reference || (formData as any).referenceCode || (formData as any).reference_code || ''} onChange={e => setFormData({ ...formData, reference: e.target.value, referenceCode: e.target.value, reference_code: e.target.value } as Product)} onPaste={(e) => e.stopPropagation()} className="w-full p-3 bg-white border-2 border-gray-100 rounded-xl font-mono text-sm select-text" />
-                      </div>
-                      <div>
-                        <label className="block text-[10px] font-black text-gray-500 uppercase mb-1 ml-1">Costo Unitario (CPP)</label>
-                        <div className="relative">
-                          <input disabled type={canViewCost ? "number" : "password"} value={canViewCost ? (formData.cost || 0) : '******'} className="w-full p-3 bg-gray-100 border-2 border-transparent rounded-xl font-bold text-gray-500 cursor-not-allowed" />
-                          {!canViewCost && <div className="absolute inset-0 flex items-center justify-center"><span className="text-xs text-gray-400 font-bold bg-gray-100 px-2 rounded">Oculto</span></div>}
-                        </div>
-                      </div>
-                    </div>
+                  <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
+                    {productImages.map((image, index) => (
+                      <button
+                        key={`${image.slice(0, 30)}-${index}`}
+                        type="button"
+                        onClick={() => setFormData(prev => ({ ...prev, image }))}
+                        aria-label={`Seleccionar imagen ${index + 1} como principal`}
+                        className={`h-14 w-14 shrink-0 overflow-hidden rounded-lg border-2 ${formData.image === image ? 'border-blue-600' : 'border-slate-200'}`}
+                      >
+                        <img src={image} alt="" className="h-full w-full object-cover" />
+                      </button>
+                    ))}
+                    <button type="button" onClick={() => fileInputRef.current?.click()} className="flex h-14 w-14 shrink-0 flex-col items-center justify-center rounded-lg border border-dashed border-slate-300 text-[10px] font-bold text-slate-500">
+                      <Plus size={16} /> Agregar
+                    </button>
                   </div>
+                  </section>
 
-                  {/* UOM Configuration */}
-                  <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-gray-100 space-y-4">
-                    <h3 className="text-sm font-bold text-gray-800 flex items-center gap-2">
+                  <section className="space-y-3 rounded-2xl border border-slate-200 bg-white p-4">
+                    <h3 className="flex items-center gap-2 text-sm font-black text-slate-800">
                       <Scale size={16} className="text-blue-600" />
-                      Unidades y Medidas
+                      Unidades de medida
                     </h3>
-                    <div className="grid grid-cols-2 gap-4">
-                      <div>
-                        <UnitSelector
-                          label="Unidad de Compra"
-                          value={formData.purchaseUnit || ''}
-                          onChange={val => setFormData({ ...formData, purchaseUnit: val })}
-                          config={config}
-                          onConfigUpdate={newConfig => {
-                            // In a real app we might want to lift this state up or save globally immediately
-                            // But since ProductForm receives config as prop, we can verify if we need to call a parent handler.
-                            // For now, we trust UnitSelector's internal fetch, but we should ideally update the local config context if possible.
-                            console.log('Config updated with new unit:', newConfig.units);
-                          }}
-                        />
-                      </div>
-                      <div>
-                        <UnitSelector
-                          label="Unidad de Inventario (Base)"
-                          value={formData.measurementUnit || ''}
-                          onChange={val => setFormData({ ...formData, measurementUnit: val })}
-                          config={config}
-                          onConfigUpdate={newConfig => {
-                            console.log('Config updated with new unit:', newConfig.units);
-                          }}
-                        />
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-[10px] font-black text-gray-500 uppercase mb-1 ml-1">Factor de Conversión</label>
-                        <div className="flex gap-2 items-center">
-                          <div className="relative flex-1">
-                            <input
-                              type="number"
-                              placeholder="1"
-                              value={formData.conversionFactor || ''}
-                              onChange={e => setFormData({ ...formData, conversionFactor: parseFloat(e.target.value) })}
-                              className="w-full p-3 bg-gray-50 border-2 border-transparent rounded-xl text-sm font-medium focus:bg-white focus:border-blue-200"
-                            />
-                            <div className="absolute right-3 top-3 text-xs text-gray-400 font-bold">Base / Compra</div>
-                          </div>
-
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              setShowConversionHelper(true);
-                            }}
-                            className="p-3 bg-blue-100 hover:bg-blue-200 text-blue-600 rounded-xl transition-colors cursor-pointer shadow-sm border border-blue-200 h-full aspect-square flex items-center justify-center"
-                            title="Calculadora de Conversión"
-                          >
-                            <Calculator size={18} />
-                          </button>
-                        </div>
-                        {formData.purchaseUnit && formData.measurementUnit && formData.conversionFactor && (formData.conversionFactor > 1) && (
-                          <p className="text-[10px] text-blue-600 mt-1 pl-1">
-                            1 {formData.purchaseUnit} = {formData.conversionFactor} {formData.measurementUnit}
-                          </p>
-                        )}
-                      </div>
-
-                      {/* Yield Field for Recipes */}
-                      {formData.type === 'RECETA' && (
-                        <div>
-                          <label className="block text-[10px] font-black text-gray-500 uppercase mb-1 ml-1">Rendimiento de Bachada</label>
+                    <UnitSelector
+                      label="Unidad de compra"
+                      value={formData.purchaseUnit || ''}
+                      onChange={val => setFormData({ ...formData, purchaseUnit: val })}
+                      config={config}
+                      onConfigUpdate={newConfig => console.log('Config updated with new unit:', newConfig.units)}
+                    />
+                    <UnitSelector
+                      label="Unidad de inventario"
+                      value={formData.measurementUnit || ''}
+                      onChange={val => setFormData({ ...formData, measurementUnit: val })}
+                      config={config}
+                      onConfigUpdate={newConfig => console.log('Config updated with new unit:', newConfig.units)}
+                    />
+                    <div>
+                      <label className="mb-1 ml-1 block text-[10px] font-black uppercase text-slate-500">Factor de conversión</label>
+                      <div className="flex items-center gap-2">
+                        <div className="relative min-w-0 flex-1">
                           <input
                             type="number"
                             placeholder="1"
-                            value={formData.batchYield || ''}
-                            onChange={e => setFormData({ ...formData, batchYield: parseFloat(e.target.value) })}
-                            className="w-full p-3 bg-blue-50 border-2 border-blue-100 rounded-xl text-sm font-bold text-blue-800 focus:border-blue-300"
+                            value={formData.conversionFactor || ''}
+                            onChange={e => setFormData({ ...formData, conversionFactor: parseFloat(e.target.value) })}
+                            className="w-full rounded-xl border border-slate-200 bg-white p-3 pr-24 text-sm font-medium focus:border-blue-300"
                           />
-                          <p className="text-[10px] text-gray-400 mt-1 pl-1">Unidades producidas por esta receta</p>
+                          <div className="absolute right-3 top-3 text-xs font-bold text-gray-400">Base / Compra</div>
                         </div>
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            setShowConversionHelper(true);
+                          }}
+                          className="flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-xl border border-blue-200 bg-white text-blue-600 transition-colors hover:bg-blue-50"
+                          title="Calculadora de Conversión"
+                        >
+                          <Calculator size={18} />
+                        </button>
+                      </div>
+                      {formData.purchaseUnit && formData.measurementUnit && formData.conversionFactor && formData.conversionFactor > 1 && (
+                        <p className="mt-1 pl-1 text-[10px] text-blue-600">
+                          1 {formData.purchaseUnit} = {formData.conversionFactor} {formData.measurementUnit}
+                        </p>
                       )}
                     </div>
-                  </div>
+                    {formData.type === 'RECETA' && (
+                      <div>
+                        <label className="mb-1 ml-1 block text-[10px] font-black uppercase text-gray-500">Rendimiento de Bachada</label>
+                        <input
+                          type="number"
+                          placeholder="1"
+                          value={formData.batchYield || ''}
+                          onChange={e => setFormData({ ...formData, batchYield: parseFloat(e.target.value) })}
+                          className="w-full rounded-xl border border-blue-200 bg-white p-3 text-sm font-bold text-blue-800 focus:border-blue-300"
+                        />
+                        <p className="mt-1 pl-1 text-[10px] text-gray-400">Unidades producidas por esta receta</p>
+                      </div>
+                    )}
+                  </section>
+                </aside>
+                <div className="space-y-5 lg:col-span-2">
+                  <section className="space-y-4 rounded-2xl border border-slate-200 bg-white p-5">
+                    <h3 className="text-sm font-black text-slate-800">Información básica</h3>
+                    <div className="grid grid-cols-1 gap-4 md:grid-cols-[minmax(0,2fr)_minmax(12rem,1fr)]">
+                      <div>
+                        <label className="mb-1 block text-xs font-semibold text-slate-700">Nombre comercial <span className="text-red-500">*</span></label>
+                        <input type="text" value={formData.name} onChange={e => setFormData({ ...formData, name: e.target.value })} onPaste={(e) => e.stopPropagation()} className="min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-base font-bold text-slate-900 outline-none transition-colors focus:border-blue-400" />
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-xs font-semibold text-slate-700">Tipo de artículo</label>
+                        <select value={formData.type || 'PRODUCT'} onChange={e => setFormData({ ...formData, type: e.target.value as Product['type'] })} className="min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-bold outline-none focus:border-blue-400">
+                          <option value="PRODUCT">Producto</option>
+                          <option value="SERVICE">Servicio</option>
+                          <option value="MATERIA_PRIMA">Materia prima</option>
+                          <option value="PRODUCTO_TERMINADO">Producto terminado</option>
+                          <option value="RECETA">Receta</option>
+                          <option value="KIT">Kit</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold text-slate-700">Descripción</label>
+                      <textarea rows={3} maxLength={2000} value={formData.description || ''} onChange={e => setFormData({ ...formData, description: e.target.value })} onPaste={(e) => e.stopPropagation()} className="w-full resize-y rounded-xl border border-slate-200 bg-white p-3 text-sm text-slate-700 outline-none transition-colors focus:border-blue-400" />
+                      <p className="mt-1 text-right text-[11px] text-slate-400">{(formData.description || '').length}/2000</p>
+                    </div>
+                  </section>
 
+                  <section className="rounded-2xl border border-slate-200 bg-white p-5">
+                    <h3 className="mb-3 text-sm font-black text-slate-800">Códigos y referencias</h3>
+                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                      <div>
+                        <label className="mb-1 block text-xs font-semibold text-slate-700">Código de barras principal</label>
+                        <div className="flex min-h-11 items-center rounded-xl border border-slate-200 bg-white pr-1 focus-within:border-blue-400">
+                          <input type="text" value={formData.barcode || ''} onChange={e => setFormData({ ...formData, barcode: e.target.value })} onPaste={(e) => e.stopPropagation()} className="min-w-0 flex-1 bg-transparent px-3 font-mono text-sm outline-none" />
+                          <button type="button" onClick={() => void copyBarcode(formData.barcode || '')} className="flex h-10 w-10 appearance-none items-center justify-center rounded-lg bg-white text-slate-400 hover:text-blue-600" aria-label="Copiar código de barras"><Copy size={16} /></button>
+                        </div>
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-xs font-semibold text-slate-700">SKU</label>
+                        <input type="text" value={(formData as any).sku || ''} onChange={e => setFormData({ ...formData, sku: e.target.value } as Product)} onPaste={(e) => e.stopPropagation()} className="min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 font-mono text-sm outline-none focus:border-blue-400" />
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-xs font-semibold text-slate-700">Referencia</label>
+                        <input type="text" value={(formData as any).reference || (formData as any).referenceCode || (formData as any).reference_code || ''} onChange={e => setFormData({ ...formData, reference: e.target.value, referenceCode: e.target.value, reference_code: e.target.value } as Product)} onPaste={(e) => e.stopPropagation()} className="min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 font-mono text-sm outline-none focus:border-blue-400" />
+                      </div>
+                      {Array.from({ length: visibleAdditionalBarcodes }).map((_, index) => {
+                        const value = index === 0 ? (formData.barcode_2 || formData.barcode2 || '') : (formData.barcode_3 || formData.barcode3 || '');
+                        return (
+                          <div key={index}>
+                            <label className="mb-1 block text-xs font-semibold text-slate-700">Código adicional {index + 1}</label>
+                            <div className="flex min-h-11 items-center rounded-xl border border-slate-200 bg-white pr-1 focus-within:border-blue-400">
+                              <input type="text" value={value} onChange={event => updateAdditionalBarcode(index, event.target.value)} className="min-w-0 flex-1 bg-transparent px-3 font-mono text-sm outline-none" />
+                              <button type="button" onClick={() => removeAdditionalBarcode(index)} className="flex h-10 w-10 appearance-none items-center justify-center rounded-lg bg-white text-slate-400 hover:text-red-500" aria-label={`Eliminar código adicional ${index + 1}`}><X size={16} /></button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    {visibleAdditionalBarcodes < 2 && (
+                      <button type="button" onClick={() => setVisibleAdditionalBarcodes(count => Math.min(2, count + 1))} className="mt-3 inline-flex min-h-11 appearance-none items-center gap-2 rounded-xl border border-blue-200 bg-white px-4 text-xs font-bold text-blue-700 hover:bg-blue-50">
+                        <Plus size={16} /> Agregar código
+                      </button>
+                    )}
+                  </section>
+
+                  <section className="space-y-3 rounded-2xl border border-slate-200 bg-white p-4">
+                    <h3 className="flex items-center gap-2 text-sm font-black text-slate-800"><ListTree size={16} className="text-blue-600" /> Clasificación comercial</h3>
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
+                      <div>
+                        <label className="mb-1 block text-xs font-semibold text-slate-700">Departamento</label>
+                        <select value={formData.departmentId || ''} onChange={event => setFormData({ ...formData, departmentId: event.target.value })} className="min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-blue-400">
+                          <option value="">Sin definir</option>
+                          {config.departments?.map(department => <option key={department.id} value={department.id}>{department.name}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-xs font-semibold text-slate-700">Sección</label>
+                        <select value={formData.sectionId || ''} onChange={event => setFormData({ ...formData, sectionId: event.target.value })} className="min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-blue-400">
+                          <option value="">Sin definir</option>
+                          {config.sections?.map(section => <option key={section.id} value={section.id}>{section.name}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-xs font-semibold text-slate-700">Categoría de venta POS</label>
+                        <select
+                          value={formData.category}
+                          onChange={e => {
+                            const category = categoryOptions.find(candidate => candidate.name === e.target.value);
+                            setFormData({ ...formData, category: e.target.value, posCategoryId: category?.id || '' });
+                          }}
+                          disabled={categoryOptions.length === 0}
+                          className="min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-blue-400 disabled:opacity-60"
+                        >
+                          <option value="">-- Seleccione Categoría de venta POS --</option>
+                          {categoryOptions.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-xs font-semibold text-slate-700">Marca</label>
+                        <select value={formData.brandId || ''} onChange={event => setFormData({ ...formData, brandId: event.target.value })} className="min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-blue-400">
+                          <option value="">Sin marca</option>
+                          {config.brands?.map(brand => <option key={brand.id} value={brand.id}>{brand.name}</option>)}
+                        </select>
+                      </div>
+                    </div>
+                  </section>
+
+                  <section className="rounded-2xl border border-slate-200 bg-white p-5">
+                    <h3 className="text-sm font-black text-slate-800">Multimedia</h3>
+                    <p className="mb-3 mt-1 text-xs text-slate-500">Video remoto opcional. Se guarda la referencia URL.</p>
+                    <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                      <input type="url" value={productVideo?.url || ''} onChange={event => updateProductVideo('url', event.target.value)} placeholder="URL del video" className="min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-blue-400" />
+                      <input type="url" value={productVideo?.posterUrl || ''} onChange={event => updateProductVideo('posterUrl', event.target.value)} placeholder="URL de portada" className="min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-blue-400" />
+                    </div>
+                    {productVideo?.url && isValidRemoteMediaUrl(productVideo.url) && <video src={productVideo.url} poster={productVideo.posterUrl} controls playsInline className="mt-3 aspect-video w-full rounded-xl bg-black object-contain" />}
+                  </section>
                 </div>
+
+                <aside className="space-y-4 lg:col-span-1">
+                  <section className="rounded-2xl border border-blue-100 bg-white p-4">
+                    <h3 className="text-sm font-black text-slate-800">Estado y disponibilidad</h3>
+                    <button type="button" onClick={() => setFormData(prev => ({ ...prev, is_active: prev.is_active === false }))} role="switch" aria-checked={formData.is_active !== false} className="mt-4 flex min-h-11 w-full items-center gap-3 text-left">
+                      <span className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${formData.is_active !== false ? 'bg-emerald-600' : 'bg-slate-300'}`}>
+                        <span className={`absolute top-1 h-4 w-4 rounded-full bg-white transition-all ${formData.is_active !== false ? 'left-6' : 'left-1'}`} />
+                      </span>
+                      <span className={`text-sm font-bold ${formData.is_active !== false ? 'text-emerald-700' : 'text-slate-600'}`}>{formData.is_active !== false ? 'Activo' : 'Inactivo'}</span>
+                    </button>
+                    <p className="text-xs leading-relaxed text-slate-500">Controla si el artículo puede utilizarse en los procesos del ERP y del POS.</p>
+                  </section>
+
+                  {canViewCost && (
+                    <section className="rounded-2xl border border-slate-200 bg-white p-4">
+                      <h3 className="text-sm font-black text-slate-800">Información de costos</h3>
+                      <label className="mb-1 mt-4 block text-xs font-semibold text-slate-600">Costo unitario (CPP)</label>
+                      <div className="flex min-h-11 items-center rounded-xl border border-slate-200 bg-white px-3 focus-within:border-blue-400">
+                        <span className="mr-2 text-sm font-bold text-slate-500">{config.currencySymbol}</span>
+                        <input min="0" step="0.01" type="number" value={formData.cost ?? 0} onChange={event => setFormData({ ...formData, cost: Math.max(0, Number(event.target.value) || 0) })} className="min-w-0 flex-1 bg-transparent text-base font-black text-slate-900 outline-none" />
+                      </div>
+                      <p className="mt-2 text-[11px] leading-relaxed text-slate-500">Editable con permiso de costos. Los movimientos de inventario también pueden actualizar el CPP.</p>
+                    </section>
+                  )}
+
+                  <section className="rounded-2xl border border-slate-200 bg-white p-4">
+                    <h3 className="text-sm font-black text-slate-800">Resumen</h3>
+                    <dl className="mt-3 divide-y divide-slate-100 text-xs">
+                      {supportsInventory && <div className="flex items-center justify-between gap-3 py-2"><dt className="text-slate-500">Existencia total</dt><dd className="font-black text-slate-900">{summaryStock.toLocaleString()} {formData.measurementUnit || 'und.'}</dd></div>}
+                      <div className="flex items-center justify-between gap-3 py-2"><dt className="text-slate-500">Precio de venta</dt><dd className="font-black text-slate-900">{config.currencySymbol}{summaryPrice.toFixed(2)}</dd></div>
+                      {canViewCost && <div className="flex items-center justify-between gap-3 py-2"><dt className="text-slate-500">Margen estimado</dt><dd className={`font-black ${summaryMargin >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>{summaryMargin.toFixed(1)}%</dd></div>}
+                      <div className="flex items-center justify-between gap-3 py-2"><dt className="text-slate-500">Impuestos</dt><dd className="font-black text-slate-900">{(selectedTaxRate * 100).toFixed(2)}%</dd></div>
+                      {initialData?.updatedAt && <div className="flex items-start justify-between gap-3 py-2"><dt className="text-slate-500">Actualizado</dt><dd className="text-right font-semibold text-slate-700">{new Date(initialData.updatedAt).toLocaleString()}</dd></div>}
+                    </dl>
+                  </section>
+                </aside>
               </div>
             </div>
           )}
@@ -3154,7 +3368,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
           )}
 
           {activeTab === 'STOCKS' && (
-            <div className="max-w-4xl mx-auto space-y-8 animate-in fade-in">
+            <div className="max-w-7xl mx-auto space-y-8 animate-in fade-in">
               <div className="bg-white p-8 rounded-[2rem] border border-gray-100 shadow-sm space-y-6">
                 <div className="flex justify-between items-center">
                   <div>
@@ -3229,7 +3443,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
           )}
 
           {activeTab === 'PRICING' && (
-            <div className="max-w-4xl mx-auto space-y-6 animate-in fade-in">
+            <div className="max-w-7xl mx-auto space-y-6 animate-in fade-in">
               <div className="bg-white p-8 rounded-[2rem] border border-gray-100 shadow-sm">
                 <div className="flex justify-between items-center mb-6">
                   <div>
@@ -3248,6 +3462,10 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                   {availableTariffs.length > 0 ? availableTariffs.map(tariff => {
                     const tariffData = normalizedFormTariffs.find(t => tariffMatchesIdentifier(t, tariff.id) || tariffMatchesIdentifier(t, (tariff as any).code));
                     const isEnabled = !!tariffData;
+                    const finalPrice = Number(tariffData?.price || 0);
+                    const netPrice = selectedTaxRate > 0 ? finalPrice / (1 + selectedTaxRate) : finalPrice;
+                    const taxAmount = finalPrice - netPrice;
+                    const margin = netPrice > 0 ? ((netPrice - Number(formData.cost || 0)) / netPrice) * 100 : 0;
 
                     return (
                       <div key={tariff.id} className={`p-6 rounded-2xl border-2 transition-all ${isEnabled ? 'bg-white border-purple-200 shadow-sm' : 'bg-gray-50 border-gray-100 opacity-60'}`}>
@@ -3266,15 +3484,19 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                           </div>
 
                           {isEnabled && (
-                            <div className="flex items-center gap-6">
+                            <div className="flex flex-wrap items-center justify-end gap-5">
                               {canViewCost && (
                                 <div className="text-center">
-                                  <p className="text-[10px] font-bold text-gray-400 uppercase">Margen Neto</p>
-                                  <p className={`font-black text-sm ${tariffData.margin! > 20 ? 'text-emerald-600' : 'text-orange-500'}`}>
-                                    {tariffData.margin?.toFixed(1)}%
+                                  <p className="text-[10px] font-bold text-gray-400 uppercase">Margen</p>
+                                  <p className={`font-black text-sm ${margin >= 20 ? 'text-emerald-600' : 'text-orange-500'}`}>
+                                    {margin.toFixed(1)}%
                                   </p>
                                 </div>
                               )}
+                              <div className="hidden text-right xl:block">
+                                <p className="text-[10px] font-bold uppercase text-slate-400">Sin impuesto / impuesto</p>
+                                <p className="text-xs font-bold text-slate-600">{config.currencySymbol}{netPrice.toFixed(2)} / {config.currencySymbol}{taxAmount.toFixed(2)}</p>
+                              </div>
                               <div className="relative">
                                 <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 font-bold">{config.currencySymbol}</span>
                                 <input
@@ -3290,7 +3512,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                                       tariffs: formData.tariffs.map(t => tariffMatchesIdentifier(t, tariff.id) || tariffMatchesIdentifier(t, (tariff as any).code) ? { ...t, price: newPrice } : t)
                                     });
                                   }}
-                                  className="w-32 pl-8 pr-3 py-2 bg-gray-50 border border-gray-200 rounded-xl font-black text-purple-700 outline-none focus:ring-2 focus:ring-purple-200"
+                                  className="w-36 pl-16 pr-3 py-2 bg-gray-50 border border-gray-200 rounded-xl font-black text-purple-700 outline-none focus:ring-2 focus:ring-purple-200"
                                 />
                               </div>
                               {canViewCost && (
@@ -3319,61 +3541,50 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
           )}
 
           {activeTab === 'OPERATIVE' && (
-            <div className="max-w-4xl mx-auto space-y-6 animate-in fade-in">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <OperationalSwitch
-                  label="Disponible para la Venta"
-                  description="Muestra este producto en el POS para facturación."
-                  checked={formData.is_sellable !== false}
-                  onChange={(v: boolean) => setFormData({ ...formData, is_sellable: v })}
-                  icon={ShoppingCart}
-                />
-                <OperationalSwitch label="¿Es Producto Pesado?" description="Activa lectura de Balanza y etiquetas." checked={formData.operationalFlags?.isWeighted} onChange={(v: boolean) => updateOperationalFlag('isWeighted', v)} icon={Scale} />
-                <OperationalSwitch label="Controlar Stock" description="Valida existencias y descuenta del almacén." checked={formData.operationalFlags?.trackInventory} onChange={(v: boolean) => updateOperationalFlag('trackInventory', v)} icon={Box} />
-                <OperationalSwitch label="Generar Etiqueta al Recibir" description="Imprime ticket al entrar mercancía." checked={formData.operationalFlags?.autoPrintLabel} onChange={(v: boolean) => updateOperationalFlag('autoPrintLabel', v)} icon={Zap} />
-                <OperationalSwitch label="Solicitar Precio en Caja" description="Precio Abierto al momento de marcar." checked={formData.operationalFlags?.promptPrice} onChange={(v: boolean) => updateOperationalFlag('promptPrice', v)} icon={DollarSign} />
-                <OperationalSwitch label="Venta Solo Enteros" description="Bloquea decimales en la cantidad." checked={formData.operationalFlags?.integersOnly} onChange={(v: boolean) => updateOperationalFlag('integersOnly', v)} icon={Ban} />
-                <OperationalSwitch label="Verificación Edad (+18)" description="Validación obligatoria de cédula." checked={formData.operationalFlags?.ageRestricted} onChange={(v: boolean) => updateOperationalFlag('ageRestricted', v)} icon={ShieldCheck} />
-                <OperationalSwitch label="Permitir Venta Negativa" description="Vende aunque no haya stock." checked={formData.operationalFlags?.allowNegativeStock} onChange={(v: boolean) => updateOperationalFlag('allowNegativeStock', v)} icon={AlertCircle} />
-                <OperationalSwitch label="Excluir de Promociones" description="Ignora cupones y descuentos globales." checked={formData.operationalFlags?.excludeFromPromotions} onChange={(v: boolean) => updateOperationalFlag('excludeFromPromotions', v)} icon={Tag} />
-                <OperationalSwitch label="Excluir de Puntos" description="Este producto no genera puntos de lealtad." checked={formData.operationalFlags?.excludeFromLoyalty} onChange={(v: boolean) => updateOperationalFlag('excludeFromLoyalty', v)} icon={Award} />
-                <OperationalSwitch label="Usa Lotes / Vencimiento" description="Trazabilidad por lote y fecha de expiración." checked={formData.operationalFlags?.usesLots} onChange={(v: boolean) => updateOperationalFlag('usesLots', v)} icon={Calendar} />
-                <OperationalSwitch label="Usa Números de Serie" description="Trazabilidad por código único por unidad." checked={formData.operationalFlags?.usesSerial} onChange={(v: boolean) => updateOperationalFlag('usesSerial', v)} icon={ScanBarcode} />
+            <div className="mx-auto max-w-7xl space-y-5 animate-in fade-in">
+              <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+                <section className="rounded-2xl border border-slate-200 bg-white p-4">
+                  <h3 className="mb-3 text-sm font-black text-slate-800">Disponibilidad</h3>
+                  <div className="divide-y divide-slate-100">
+                    <OperationalSwitch label="Disponible para la venta" description="Muestra este artículo en el POS." checked={formData.is_sellable !== false} onChange={(v: boolean) => setFormData({ ...formData, is_sellable: v })} icon={ShoppingCart} />
+                    {supportsInventory && <OperationalSwitch label="Controlar stock" description="Valida y descuenta existencias." checked={formData.operationalFlags?.trackInventory} onChange={(v: boolean) => updateOperationalFlag('trackInventory', v)} icon={Box} />}
+                    {supportsInventory && <OperationalSwitch label="Permitir venta negativa" description="Permite vender sin existencia disponible." checked={formData.operationalFlags?.allowNegativeStock} onChange={(v: boolean) => updateOperationalFlag('allowNegativeStock', v)} icon={AlertCircle} />}
+                  </div>
+                </section>
+
+                <section className="rounded-2xl border border-slate-200 bg-white p-4">
+                  <h3 className="mb-3 text-sm font-black text-slate-800">Comportamiento en caja</h3>
+                  <div className="divide-y divide-slate-100">
+                    <OperationalSwitch label="Solicitar precio en caja" description="Permite indicar el precio al marcar." checked={formData.operationalFlags?.promptPrice} onChange={(v: boolean) => updateOperationalFlag('promptPrice', v)} icon={DollarSign} />
+                    <OperationalSwitch label="Venta solo en enteros" description="Impide cantidades decimales." checked={formData.operationalFlags?.integersOnly} onChange={(v: boolean) => updateOperationalFlag('integersOnly', v)} icon={Ban} />
+                    <OperationalSwitch label="Producto pesado" description="Activa lectura de balanza y etiquetas." checked={formData.operationalFlags?.isWeighted} onChange={(v: boolean) => updateOperationalFlag('isWeighted', v)} icon={Scale} />
+                  </div>
+                </section>
+
+                <section className="rounded-2xl border border-slate-200 bg-white p-4">
+                  <h3 className="mb-3 text-sm font-black text-slate-800">Restricciones</h3>
+                  <div className="divide-y divide-slate-100">
+                    <OperationalSwitch label="Verificación de edad (+18)" description="Solicita validación antes de vender." checked={formData.operationalFlags?.ageRestricted} onChange={(v: boolean) => updateOperationalFlag('ageRestricted', v)} icon={ShieldCheck} />
+                    <OperationalSwitch label="Excluir de promociones" description="No aplica cupones ni descuentos globales." checked={formData.operationalFlags?.excludeFromPromotions} onChange={(v: boolean) => updateOperationalFlag('excludeFromPromotions', v)} icon={Tag} />
+                    <OperationalSwitch label="Excluir de puntos" description="No genera puntos de lealtad." checked={formData.operationalFlags?.excludeFromLoyalty} onChange={(v: boolean) => updateOperationalFlag('excludeFromLoyalty', v)} icon={Award} />
+                  </div>
+                </section>
+
+                <section className="rounded-2xl border border-slate-200 bg-white p-4">
+                  <h3 className="mb-3 text-sm font-black text-slate-800">Automatización y trazabilidad</h3>
+                  <div className="divide-y divide-slate-100">
+                    <OperationalSwitch label="Generar etiqueta al recibir" description="Imprime una etiqueta al entrar mercancía." checked={formData.operationalFlags?.autoPrintLabel} onChange={(v: boolean) => updateOperationalFlag('autoPrintLabel', v)} icon={Zap} />
+                    <OperationalSwitch label="Usa lotes / vencimiento" description="Trazabilidad por lote y expiración." checked={formData.operationalFlags?.usesLots} onChange={(v: boolean) => updateOperationalFlag('usesLots', v)} icon={Calendar} />
+                    <OperationalSwitch label="Usa números de serie" description="Trazabilidad individual por unidad." checked={formData.operationalFlags?.usesSerial} onChange={(v: boolean) => updateOperationalFlag('usesSerial', v)} icon={ScanBarcode} />
+                  </div>
+                </section>
               </div>
-
-              {/* ROUTING SECTION */}
-              {config?.operational?.usa_modulos_cocina && (
-                <div className="bg-white p-8 rounded-[2rem] border border-gray-100 shadow-sm space-y-4 mt-6">
-                  <div className="flex items-center gap-3 mb-2">
-                    <div className="p-2 bg-blue-100 text-blue-600 rounded-xl">
-                      <Monitor size={18} />
-                    </div>
-                    <div>
-                      <h4 className="text-sm font-black text-slate-800 uppercase tracking-tight">Ruteo de Producción</h4>
-                      <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Enrutamiento de Comanda</p>
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-[10px] font-black text-gray-500 uppercase mb-2 ml-1">Centro de Producción Destino</label>
-                    <select
-                      value={formData.production_area_id || (formData as any).productionAreaId || (formData as any).metadata?.production_area_id || (formData as any).metadata?.productionAreaId || ''}
-                      onChange={e => setFormData({ ...formData, production_area_id: e.target.value })}
-                      className="w-full p-4 bg-gray-50 border-2 border-transparent rounded-2xl text-sm font-bold text-gray-800 focus:bg-white focus:border-blue-200 transition-all outline-none"
-                    >
-                      <option value="">Ninguno (No enviar a cocina)</option>
-                      {productionAreas.map(pa => (
-                        <option key={pa.id} value={pa.id}>{pa.nombre} ({pa.modo_salida})</option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-              )}
             </div>
           )}
 
           {activeTab === 'MODIFIERS' && (
             <div className="max-w-5xl mx-auto space-y-6 animate-in fade-in">
+              <ProductionRoutingCard />
               <div className="bg-white p-8 rounded-[2rem] border border-gray-100 shadow-sm">
                 <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
                   <div>
@@ -3609,88 +3820,6 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
             </div>
           )}
 
-          {activeTab === 'CLASSIFICATION' && (
-            <div className="max-w-4xl mx-auto space-y-8 animate-in fade-in">
-              <div className="bg-white p-8 rounded-[2rem] border border-gray-100 shadow-sm space-y-8">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                  <div className="space-y-4">
-                    <div className="space-y-4">
-                      <label className="block text-xs font-bold text-gray-400 uppercase tracking-widest ml-1">Jerarquía de Almacén</label>
-                      <div className="space-y-4">
-                        <div>
-                          <label className="block text-xs font-bold text-gray-700 mb-2">Departamento</label>
-                          <select
-                            value={formData.departmentId || ''}
-                            onChange={(e) => setFormData({ ...formData, departmentId: e.target.value })}
-                            className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl font-medium outline-none focus:ring-2 focus:ring-blue-500"
-                          >
-                            <option value="">-- Sin Definir --</option>
-                            {config.departments?.map(d => (
-                              <option key={d.id} value={d.id}>{d.name}</option>
-                            ))}
-                          </select>
-                        </div>
-                        <div>
-                          <label className="block text-xs font-bold text-gray-700 mb-2">Sección</label>
-                          <select
-                            value={formData.sectionId || ''}
-                            onChange={(e) => setFormData({ ...formData, sectionId: e.target.value })}
-                            className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl font-medium outline-none focus:ring-2 focus:ring-blue-500"
-                          >
-                            <option value="">-- Sin Definir --</option>
-                            {config.sections?.map(s => (
-                              <option key={s.id} value={s.id}>{s.name}</option>
-                            ))}
-                          </select>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="space-y-4">
-                      <label className="block text-xs font-bold text-gray-400 uppercase tracking-widest ml-1">Clasificación Comercial</label>
-                      <div className="space-y-4">
-                        <div>
-                          <label className="block text-xs font-bold text-gray-700 mb-2">Categoría de venta POS</label>
-                          <div className="relative">
-                            <select
-                              value={formData.category}
-                              onChange={(e) => setFormData({ ...formData, category: e.target.value })}
-                              disabled={categoryOptions.length === 0}
-                              className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl font-medium outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-60 disabled:cursor-not-allowed"
-                            >
-                              <option value="">-- Seleccione Categoría de venta POS --</option>
-                              {categoryOptions.map(c => (
-                                <option key={c.id} value={c.name}>{c.name}</option>
-                              ))}
-                            </select>
-                          </div>
-                          <p className="text-[10px] text-gray-400 mt-1 pl-1">
-                            {categoryOptions.length > 0
-                              ? 'Agrupa el artículo en la pantalla de ventas. Seleccione una categoría sincronizada/configurada.'
-                              : 'No hay categorías de venta POS sincronizadas todavía.'}
-                          </p>
-                        </div>
-                        <div>
-                          <label className="block text-xs font-bold text-gray-700 mb-2">Marca</label>
-                          <select
-                            value={formData.brandId || ''}
-                            onChange={(e) => setFormData({ ...formData, brandId: e.target.value })}
-                            className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl font-medium outline-none focus:ring-2 focus:ring-blue-500"
-                          >
-                            <option value="">-- Sin Marca --</option>
-                            {config.brands?.map(b => (
-                              <option key={b.id} value={b.id}>{b.name}</option>
-                            ))}
-                          </select>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-
           {activeTab === 'LABELS' && (
             <div className="max-w-4xl mx-auto space-y-6 animate-in fade-in">
               <div className="bg-white p-8 rounded-[2rem] border border-gray-100 shadow-sm space-y-6">
@@ -3752,7 +3881,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                         </div>
 
                         <div className="mb-6">
-                          <h4 className="text-xl font-black text-gray-800">Sugerencia Magic</h4>
+                          <h4 className="text-xl font-black text-gray-800">Sugerencia inteligente</h4>
                           <p className="text-xs text-gray-400 font-bold uppercase tracking-widest mt-1">
                             Sede: {warehouses.find(w => w.id === calcResult.warehouseId)?.name}
                           </p>
@@ -3961,7 +4090,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                                   onClick={(e) => { e.preventDefault(); handleCalculateInventory(wh.id); }}
                                   disabled={isCalculating === wh.id}
                                   className="p-2 hover:bg-blue-50 text-blue-600 rounded-xl transition-all active:scale-95 disabled:opacity-30"
-                                  title="Calcular Magic Min/Max para este almacén"
+                                  title="Sugerir niveles mínimo y máximo"
                                 >
                                   {isCalculating === wh.id ? <RefreshCw size={16} className="animate-spin" /> : <Sparkles size={16} />}
                                 </button>
@@ -3979,7 +4108,9 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
 
           {
             activeTab === 'RECIPE' && (
-              <RecipeManager
+              <div className="mx-auto max-w-7xl space-y-5">
+                <ProductionRoutingCard />
+                <RecipeManager
                 product={formData}
                 allProducts={allProducts}
                 onUpdate={(updates) => {
@@ -4008,12 +4139,13 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                   });
                 }}
                 currencySymbol={config.currencySymbol}
-              />
+                />
+              </div>
             )
           }
 
           {
-            activeTab === 'TAXES' && (
+            activeTab === 'OPERATIVE' && (
               <div className="max-w-4xl mx-auto space-y-6 animate-in fade-in">
                 <div className="bg-white p-8 rounded-[2rem] border border-gray-100 shadow-sm">
                   <h3 className="text-xl font-bold text-gray-800 mb-6">Impuestos Aplicables</h3>
@@ -4024,7 +4156,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                         <div
                           key={tax.id}
                           onClick={() => {
-                            const current = formData.appliedTaxIds || [];
+                            const current = canonicalizeTaxIdentifiers(formData.appliedTaxIds, config.taxes);
                             const normalizedCurrent = normalizeTaxIdentifiersForSelection(current, tax);
                             setFormData({
                               ...formData,
@@ -4039,7 +4171,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                             </div>
                             <div><p className="font-bold text-gray-800">{tax.name}</p></div>
                           </div>
-                          <span className="font-black text-lg text-gray-700">{((tax.rate || 0) * 100).toFixed(2)}%</span>
+                          <span className="font-black text-lg text-gray-700">{(normalizeProductTaxRate(tax.rate) * 100).toFixed(2)}%</span>
                         </div>
                       );
                     })}
@@ -4049,23 +4181,26 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
             )
           }
 
-        </div >
+        </main>
 
         {/* Footer Actions */}
-        < div className="p-6 border-t bg-white flex justify-between items-center shrink-0" >
-          <div>{hasHistory && <span className="flex items-center gap-2 text-xs text-orange-600 bg-orange-50 px-3 py-2 rounded-xl font-bold"><ShieldAlert size={16} /> Producto con historial</span>}</div>
+        <div className="flex shrink-0 items-center justify-between gap-3 border-t border-slate-200 bg-white px-4 py-3 sm:px-6">
+          <div className="min-w-0">
+            {hasHistory && <span className="hidden items-center gap-2 rounded-lg border border-orange-200 bg-orange-50 px-3 py-2 text-xs font-bold text-orange-700 sm:flex"><ShieldAlert size={16} /> Producto con historial</span>}
+            {isDirty && <span className="text-xs font-semibold text-amber-700 sm:ml-3">Cambios sin guardar</span>}
+          </div>
           <div className="flex gap-3">
-            <button type="button" onClick={onClose} className="px-6 py-3 rounded-xl font-bold text-gray-500 hover:bg-gray-100 transition-colors">Cancelar</button>
+            <button type="button" onClick={handleRequestClose} className="min-h-11 rounded-xl px-4 font-bold text-slate-600 transition-colors hover:bg-slate-100 sm:px-6">Cancelar</button>
             <button
               type="button"
               onClick={handleFinalSave}
               disabled={isSaving}
-              className="px-8 py-3 bg-blue-600 text-white rounded-xl font-bold shadow-lg hover:bg-blue-700 active:scale-95 flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:bg-blue-600"
+              className="flex min-h-11 items-center gap-2 rounded-xl bg-blue-600 px-5 font-bold text-white shadow-sm hover:bg-blue-700 active:scale-95 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-blue-600 sm:px-8"
             >
               <Save size={20} /> {isSaving ? 'Guardando...' : 'Guardar Producto'}
             </button>
           </div>
-        </div >
+        </div>
 
         {showRestaurantSuggestionModal && (
           <div className="fixed inset-0 z-[170] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-in fade-in">

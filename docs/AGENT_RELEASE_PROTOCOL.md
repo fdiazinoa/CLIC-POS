@@ -20,6 +20,8 @@ Usa siempre esta jerarquía:
 
 **No compilar un release desde código que exista solo en runtime o solo en la worktree firmada.**
 
+**No promover un APK que no supere la [Constitución antirregresión](./APK_RELEASE_CONSTITUTION.md) y la baseline 1.1.363.**
+
 Antes de compilar, cada fix debe cumplir una de estas dos condiciones:
 
 - ya está en `develop`, o
@@ -50,7 +52,8 @@ Antes de compilar, cada fix debe cumplir una de estas dos condiciones:
    - subir `versionCode` / `versionName`
    - compilar
    - verificar firma
-8. **Registrar** junto al release:
+8. **Ejecutar la puerta de promoción** con evidencia de las tres topologías y sus métricas.
+9. **Registrar** junto al release:
    - versión
    - commit fuente
    - PRs incluidos

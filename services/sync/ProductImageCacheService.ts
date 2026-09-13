@@ -103,29 +103,46 @@ type NormalizationContext = {
   warehouses: Warehouse[];
 };
 
-const resolveIncomingTaxIds = (item: IncomingProduct, localProduct?: Product): string[] => {
+export const resolveIncomingTaxIds = (item: IncomingProduct, localProduct?: Product): string[] => {
   const metadata = asObject(item.metadata);
-  const candidates: unknown[] = [
-    item.appliedTaxIds,
-    item.tax_ids,
-    item.taxIds,
-    item.tax_codes,
-    metadata.appliedTaxIds,
-    metadata.tax_ids,
-    metadata.taxIds,
-    metadata.tax_codes,
-    metadata.taxes,
-    localProduct?.appliedTaxIds,
+  const remoteCandidates: Array<[Record<string, unknown>, string]> = [
+    [item as Record<string, unknown>, 'appliedTaxIds'],
+    [item as Record<string, unknown>, 'tax_ids'],
+    [item as Record<string, unknown>, 'taxIds'],
+    [item as Record<string, unknown>, 'tax_codes'],
+    [metadata, 'appliedTaxIds'],
+    [metadata, 'tax_ids'],
+    [metadata, 'taxIds'],
+    [metadata, 'tax_codes'],
+    [metadata, 'taxes'],
   ];
 
-  for (const candidate of candidates) {
-    const normalized = normalizeTaxIdList(candidate);
-    if (normalized.length > 0) {
-      return normalized;
-    }
+  let hasExplicitRemoteTaxValue = false;
+  for (const [owner, key] of remoteCandidates) {
+    if (!Object.prototype.hasOwnProperty.call(owner, key) || owner[key] === undefined) continue;
+    hasExplicitRemoteTaxValue = true;
+    const normalized = normalizeTaxIdList(owner[key]);
+    // Some legacy projections contain an empty camelCase alias together with
+    // a populated canonical tax_ids field. A populated explicit alias wins;
+    // an explicit clear is honored only when every remote alias is empty.
+    if (normalized.length > 0) return normalized;
   }
 
-  return [];
+  return hasExplicitRemoteTaxValue ? [] : normalizeTaxIdList(localProduct?.appliedTaxIds);
+};
+
+export const resolveIncomingTariffs = (
+  item: IncomingProduct,
+  localProduct?: Product,
+  tariffs: BusinessConfig['tariffs'] = []
+): TariffPrice[] => {
+  const metadata = asObject(item.metadata);
+  for (const [owner, key] of [[item as Record<string, unknown>, 'tariffs'], [metadata, 'tariffs']] as const) {
+    if (Object.prototype.hasOwnProperty.call(owner, key) && owner[key] !== undefined) {
+      return canonicalizeTariffEntries(normalizeTariffEntries(owner[key]), tariffs || []);
+    }
+  }
+  return canonicalizeTariffEntries(localProduct?.tariffs || [], tariffs || []);
 };
 
 class ProductImageCacheService {
@@ -311,6 +328,7 @@ class ProductImageCacheService {
     const imageUrl = this.resolveRemoteImageUrl(item);
     const imageVersion = this.resolveRemoteImageVersion(item, imageUrl);
     const metadata = asObject(item.metadata);
+    const classifications = asObject(item.classifications ?? metadata.classifications);
     const incomingOperationalFlags = asObject(item.operationalFlags ?? item.operational_flags);
     const localOperationalFlags = asObject(localProduct?.operationalFlags);
     const recipeDetails = asArray(item.recipeDetails ?? item.recipe_details);
@@ -396,9 +414,27 @@ class ProductImageCacheService {
     const normalized: IncomingProduct = {
       ...item,
       name: asString(item.name) || asString(item.nombre) || localProduct?.name || '',
+      description: Object.prototype.hasOwnProperty.call(item, 'description') ? asString(item.description) : localProduct?.description || '',
+      sku: Object.prototype.hasOwnProperty.call(item, 'sku') ? asString(item.sku) : localProduct?.sku || '',
+      external_code: Object.prototype.hasOwnProperty.call(item, 'external_code') ? asString(item.external_code) : localProduct?.external_code || '',
+      externalCode: Object.prototype.hasOwnProperty.call(item, 'external_code') ? asString(item.external_code) : localProduct?.externalCode || '',
+      reference: Object.prototype.hasOwnProperty.call(item, 'external_code') ? asString(item.external_code) : localProduct?.reference || '',
+      barcode: Object.prototype.hasOwnProperty.call(item, 'barcode') ? asString(item.barcode) : localProduct?.barcode || '',
+      barcode_2: Object.prototype.hasOwnProperty.call(item, 'barcode_2') ? asString(item.barcode_2) : localProduct?.barcode_2 || '',
+      barcode2: Object.prototype.hasOwnProperty.call(item, 'barcode_2') ? asString(item.barcode_2) : localProduct?.barcode2 || '',
+      barcode_3: Object.prototype.hasOwnProperty.call(item, 'barcode_3') ? asString(item.barcode_3) : localProduct?.barcode_3 || '',
+      barcode3: Object.prototype.hasOwnProperty.call(item, 'barcode_3') ? asString(item.barcode_3) : localProduct?.barcode3 || '',
       price: asNumber(item.price ?? item.precio_venta, localProduct?.price ?? 0),
       cost: asNumber(item.cost ?? item.costo_unitario, localProduct?.cost ?? 0),
+      type: asString(item.type) as Product['type'] || localProduct?.type || 'PRODUCT',
+      is_active: asBoolean(item.is_active, localProduct?.is_active ?? true),
       category: asString(item.category) || asString(item.categoria) || localProduct?.category || 'GENERAL',
+      departmentId: asString(item.departmentId ?? item.department_id ?? metadata.departmentId ?? metadata.department_id ?? classifications.department_id),
+      sectionId: asString(item.sectionId ?? item.section_id ?? metadata.sectionId ?? metadata.section_id ?? classifications.section_id),
+      familyId: asString(item.familyId ?? item.family_id ?? metadata.familyId ?? metadata.family_id ?? classifications.family_id),
+      subfamilyId: asString(item.subfamilyId ?? item.subfamily_id ?? metadata.subfamilyId ?? metadata.subfamily_id ?? classifications.subfamily_id),
+      brandId: asString(item.brandId ?? item.brand_id ?? metadata.brandId ?? metadata.brand_id ?? classifications.brand_id),
+      posCategoryId: asString(item.posCategoryId ?? item.pos_category_id ?? item.category_id ?? metadata.posCategoryId ?? metadata.pos_category_id ?? classifications.pos_category_id ?? classifications.category_id),
       image: localProduct?.image || undefined,
       imageUrl: localProduct?.imageUrl || undefined,
       imageVersion: localProduct?.imageVersion || undefined,
@@ -409,12 +445,7 @@ class ProductImageCacheService {
       ]),
       attributes: Array.isArray(item.attributes) ? item.attributes : localProduct?.attributes || [],
       variants: Array.isArray(item.variants) ? item.variants : localProduct?.variants || [],
-      tariffs: canonicalizeTariffEntries(
-        normalizeTariffEntries(item.tariffs).length > 0
-          ? normalizeTariffEntries(item.tariffs)
-          : (normalizeTariffEntries(metadata.tariffs).length > 0 ? normalizeTariffEntries(metadata.tariffs) : localProduct?.tariffs || []),
-        context.tariffs || []
-      ),
+      tariffs: resolveIncomingTariffs(item, localProduct, context.tariffs),
       recipeDetails: recipeDetails.length > 0 ? recipeDetails : localProduct?.recipeDetails || [],
       appliedTaxIds: resolveIncomingTaxIds(item, localProduct),
       stockBalances: normalizedStockBalances,

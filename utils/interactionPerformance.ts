@@ -1,3 +1,4 @@
+import {diagLegacy} from '../diagnostics/runtime';
 export type PosInteractionOperation =
   | 'PIN_LOGIN'
   | 'PRODUCT_SEARCH_INPUT'
@@ -104,6 +105,7 @@ const updateDuration = (trace: PosInteractionTrace, stage: PosInteractionStage) 
 
 export const markInteractionStage = (trace: PosInteractionTrace | null | undefined, stage: PosInteractionStage) => {
   if (!trace) return;
+  diagLegacy(trace.operation, stage, trace.metadata);
   // The acceptance metric is time to the first visible response. A later state
   // update or render must never replace the first marker and inflate the result.
   if (trace.stages[stage] !== undefined) return;

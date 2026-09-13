@@ -47,7 +47,10 @@ test('changing currentView does not recreate the ERP lifecycle timers', () => {
   const lifecycleEffectStart = appSource.lastIndexOf('useEffect(() => {', appSource.indexOf('const setupPending = hasPendingTerminalSetup'));
   const lifecycleEffectEnd = appSource.indexOf('// --- RECONNECTION BANNER ---', lifecycleEffectStart);
   const lifecycleEffect = appSource.slice(lifecycleEffectStart, lifecycleEffectEnd);
-  assert.match(lifecycleEffect, /\}, \[erpLifecycleReady, deviceId, getCurrentTerminal\]\);/);
+  assert.match(
+    lifecycleEffect,
+    /\}, \[erpLifecycleReady, deviceId, getCurrentTerminal, isDataLoaded, lockSupersededTerminal, terminalAuthorizationBlock\]\);/,
+  );
   assert.doesNotMatch(lifecycleEffect, /\[[^\]]*currentView[^\]]*\]/);
 });
 

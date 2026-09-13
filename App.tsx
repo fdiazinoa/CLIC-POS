@@ -1,4 +1,3 @@
-import { discoverPendingOperationsRecovery } from "./services/recovery/recoveryService";
 import RecoveryCloseDialog from './components/RecoveryCloseDialog';
 import AutomaticRecoveryDialog from './components/AutomaticRecoveryDialog';
 import type { RecoveryCloseInput } from './services/recovery/RecoveryCloseController';
@@ -86,6 +85,7 @@ import { buildPaymentPostedPayload, buildSalePostedPayload } from './services/sy
 import { paymentIntentService } from './services/payments/PaymentIntentService';
 import { syncTriggerCoordinator, type SyncTriggerReason } from './services/sync/SyncTriggerCoordinator';
 import { queueCustomerMutation } from './services/sync/CustomerSyncQueue';
+import { selectCustomersCreatedByClients } from './services/sync/masterCustomerReconciliation';
 import { withCustomerNumberSnapshot } from './services/sync/customerIdentityContract';
 import { createNumberedMaster } from './services/sync/MasterNumberRangeService';
 import {
@@ -107,7 +107,6 @@ import { calculateTransactionFiscalSummary } from './utils/fiscalBreakdown';
 import { extractTerminalOperationalDocumentState } from './utils/terminalConfigSnapshot';
 import { mergeDocumentSeriesCollection, resolveDocumentAssignmentId } from './utils/documentSeriesIdentity';
 import { requireErpZSequenceAuthority, resolveZSequenceContinuity } from './services/zreports/ZReportSequenceContinuity';
-import { ZReportRecoveryService } from './services/recovery/ZReportRecoveryService';
 import { ThermalPrinterService } from './services/printer/ThermalPrinterService';
 import { resolveDeviceRoleValue } from './utils/deviceRoleHelpers';
 import { isPosSaleActive, POS_SALE_ACTIVITY_EVENT } from './utils/posSaleActivity';
@@ -220,6 +219,7 @@ import {
   isTransactionReservedForClose,
   releaseClosingTransactionIds,
   reserveClosingTransactionIds,
+  reconcileTransactionsForZPreview,
 } from './services/sync/ClosedTransactionMembership';
 import { inventorySyncService } from './services/sync/InventorySyncService';
 import { processInventoryDeduction } from './utils/inventoryEngine';
@@ -402,6 +402,8 @@ type PendingTableLockRelease = {
 type ParkedTicketSyncOptions = {
   deferRemote?: boolean;
   reason?: 'cart_changed' | 'debounced' | 'explicit' | 'customer_assigned';
+  /** Persist only the active ticket while the operator is typing. */
+  changedTicketId?: string;
 };
 
 type PendingClientTableSync = {
@@ -432,6 +434,7 @@ const FLOOR_PLAN_STORAGE_KEY = 'clic_pos_floor_plan_mirror_v1';
 const ACTIVE_USER_SESSION_STORAGE_KEY = 'clic_pos_active_user_session_v1';
 const FORCE_LOGIN_AFTER_EXIT_STORAGE_KEY = 'clic_pos_force_login_after_exit_v1';
 const PENDING_CLIENT_TABLE_SYNC_STORAGE_KEY = 'clic_pos_pending_client_table_sync_v1';
+const CLIENT_TABLE_POLL_INTERVAL_MS = 1000;
 // Un operador puede encadenar mesa → artículo → mesa en menos de un segundo.
 // El journal local ya está escrito; SQLite/Outbox esperan esta ventana para no
 // competir con la siguiente pintura, pero conservan orden FIFO después de ella.
@@ -702,7 +705,7 @@ const writeCriticalCollectionsMirror = (parkedTickets: ParkedTicket[], cashMovem
 
 const persistPendingClientTableSync = async (pending: PendingClientTableSync): Promise<void> => {
   writePendingTableSyncMirror(pending);
-  await db.save('pendingClientTableSync' as any, pending);
+  await db.saveDocument('pendingClientTableSync' as any, pending);
 };
 
 const writePendingTableSyncMirror = (pending: PendingClientTableSync): void => {
@@ -728,7 +731,7 @@ const readPendingClientTableSync = async (): Promise<PendingClientTableSync | nu
   }
 
   try {
-    const persisted = await db.get('pendingClientTableSync' as any) as unknown as PendingClientTableSync | null;
+    const persisted = await db.getDocument('pendingClientTableSync' as any, 'current') as unknown as PendingClientTableSync | null;
     return persisted?.status === 'PENDING' && Array.isArray(persisted.parkedTickets)
       ? persisted
       : null;
@@ -749,7 +752,7 @@ const clearPendingClientTableSync = async (): Promise<void> => {
   } catch {
     // ignore
   }
-  await db.save('pendingClientTableSync' as any, cleared).catch(() => undefined);
+  await db.saveDocument('pendingClientTableSync' as any, cleared).catch(() => undefined);
 };
 
 const mergeById = <T extends { id?: string }>(primary: T[], fallback: T[]): T[] => {
@@ -771,6 +774,12 @@ const parkedTicketReferencesTable = (ticket: ParkedTicket, tableId: string): boo
   return joinedTableIds.some((joinedTableId: unknown) =>
     String(joinedTableId || '').trim() === normalizedTableId
   );
+};
+
+const scopeTicketsForTableSync = (tickets: ParkedTicket[], tableId?: string): ParkedTicket[] => {
+  const normalizedTableId = String(tableId || '').trim();
+  if (!normalizedTableId) return tickets;
+  return tickets.filter(ticket => parkedTicketReferencesTable(ticket, normalizedTableId));
 };
 
 const mergePendingClientTableTickets = (
@@ -1855,6 +1864,7 @@ const AppContent: React.FC = () => {
     }
     return isVisorMode ? 'VISOR' : 'LOGIN';
   });
+  const [tableMapExitPending, setTableMapExitPending] = useState(false);
   const currentViewRef = useRef<ViewState>(currentView);
   const currentUserRef = useRef<User | null>(null);
   const [scanTargetTicketId, setScanTargetTicketId] = useState<string | null>(null); // NEW: Auto-select ticket from scan
@@ -1866,6 +1876,7 @@ const AppContent: React.FC = () => {
 
   useEffect(() => {
     currentViewRef.current = currentView;
+    if (currentView !== 'TABLE_MAP') setTableMapExitPending(false);
   }, [currentView]);
 
   useEffect(() => {
@@ -1970,18 +1981,6 @@ const AppContent: React.FC = () => {
   const [isSecurityLoaded, setIsSecurityLoaded] = useState(false);
   const [bootstrapError, setBootstrapError] = useState<string | null>(null);
   const [licenseError, setLicenseError] = useState<string | null>(null);
-  const [, refreshRecoveryAvailability] = useState(0);
-  useEffect(() => {
-    if (!isDataLoaded || !isSecurityLoaded) return;
-    let active = true;
-    const discover = () => { void discoverPendingOperationsRecovery().then(() => {
-      if (active) refreshRecoveryAvailability(value => value + 1);
-    }).catch(() => { /* Keep validated offline availability; retry on reconnection. */ }); };
-    discover();
-    window.addEventListener('online', discover);
-    return () => { active = false; window.removeEventListener('online', discover); };
-  }, [isDataLoaded, isSecurityLoaded]);
-
   const [terminalAuthorizationBlock, setTerminalAuthorizationBlock] = useState<TerminalAuthorizationBlock | null>(
     () => readPersistedTerminalAuthorizationBlock(),
   );
@@ -2098,9 +2097,66 @@ const AppContent: React.FC = () => {
         return value;
       };
 
+      let asyncRequestSequence = 0;
+      const asyncMethods = new Set([
+        'printEscPos',
+        'printEscpos',
+        'printRaw',
+        'printHtml',
+        'print',
+        'startMasterServer',
+        'updateMasterServerConfig',
+        'stopMasterServer',
+        'getMasterServerStatus',
+        'getMasterRestaurantState',
+        'getMasterRestaurantRevision',
+        'acquireMasterTableLock',
+        'releaseMasterTableLock',
+      ]);
+      const coalescedAsyncMethods = new Set([
+        'startMasterServer',
+        'updateMasterServerConfig',
+        'stopMasterServer',
+        'getMasterServerStatus',
+        'getMasterRestaurantState',
+        'getMasterRestaurantRevision',
+      ]);
+      const asyncInFlight: Map<string, Promise<unknown>> = runtimeWindow.__CLIC_NATIVE_ASYNC_IN_FLIGHT__
+        || new Map<string, Promise<unknown>>();
+      runtimeWindow.__CLIC_NATIVE_ASYNC_IN_FLIGHT__ = asyncInFlight;
       const call = (method: string, payload?: unknown) => {
         if (!runtimeWindow.AndroidPrinter || typeof runtimeWindow.AndroidPrinter[method] !== 'function') {
           return Promise.resolve({ status: 'error', success: false, printed: false, message: `Missing native method: ${method}` });
+        }
+
+        if (asyncMethods.has(method) && typeof runtimeWindow.AndroidPrinter.callAsync === 'function') {
+          const existing = coalescedAsyncMethods.has(method) ? asyncInFlight.get(method) : undefined;
+          if (existing) return existing;
+          const requestID = `native-${Date.now()}-${++asyncRequestSequence}`;
+          const pending = new Promise((resolve) => {
+            const eventName = 'clic:native-async-result';
+            let timeoutID: number | undefined;
+            const onResult = (event: Event) => {
+              const detail = (event as CustomEvent<{ requestID?: string; raw?: unknown }>).detail || {};
+              if (detail.requestID !== requestID) return;
+              window.removeEventListener(eventName, onResult);
+              if (timeoutID) window.clearTimeout(timeoutID);
+              resolve(parseResult(detail.raw));
+            };
+            window.addEventListener(eventName, onResult);
+            timeoutID = window.setTimeout(() => {
+              window.removeEventListener(eventName, onResult);
+              resolve({ status: 'error', success: false, message: `Native async call timeout: ${method}` });
+            }, 30000);
+            runtimeWindow.AndroidPrinter.callAsync(requestID, method, JSON.stringify(payload || {}));
+          });
+          if (coalescedAsyncMethods.has(method)) {
+            asyncInFlight.set(method, pending);
+            void pending.finally(() => {
+              if (asyncInFlight.get(method) === pending) asyncInFlight.delete(method);
+            });
+          }
+          return pending;
         }
 
         const raw = runtimeWindow.AndroidPrinter[method](JSON.stringify(payload || {}));
@@ -4118,6 +4174,10 @@ const AppContent: React.FC = () => {
       const nativeBridge = (window as any).ClicPOSNativePrinter;
       if (typeof nativeBridge?.getMasterRestaurantState !== 'function') return;
       if (!isNativeStandaloneTerminalRuntime(getCurrentTerminal())) return;
+      // Never classify the native bootstrap snapshot against an empty React
+      // customer array. Wait until SQLite hydration is complete so only a
+      // customer genuinely created by a Client terminal is queued for ERP.
+      if (!isDataLoaded) return;
 
       masterRestaurantPollInFlightRef.current = true;
       try {
@@ -4197,9 +4257,11 @@ const AppContent: React.FC = () => {
         const selectedTables = floorPlanSelection?.tables || nextTables;
         const reconciledTables = reconcileTablesWithParkedTickets(selectedTables, nextParkedTickets);
         const nextCustomers = Array.isArray(state?.customers) ? state.customers : customers;
-        const knownCustomerIds = new Set(customers.map(customer => String(customer.id)));
-        const customersCreatedByClients = nextCustomers.filter(
-          (customer: Customer) => !knownCustomerIds.has(String(customer.id))
+        const persistedCustomers = await db.get('customers') as Customer[] | null;
+        const customersCreatedByClients = selectCustomersCreatedByClients(
+          nextCustomers,
+          customers,
+          Array.isArray(persistedCustomers) ? persistedCustomers : [],
         );
         const productRoutingUpdates = Array.isArray(state?.productRoutingUpdates)
           ? state.productRoutingUpdates
@@ -4310,8 +4372,19 @@ const AppContent: React.FC = () => {
 
     // Iniciar/actualizar configuración sin publicar rooms/tables/tickets. El
     // servidor nativo es la fuente operativa después de su bootstrap inicial.
-    void ensureMasterServer(false).then(() => reconcileNativeRestaurantState());
-    const publishMasterCatalog = () => void ensureMasterServer(false);
+    // Initial collection hydration updates several dependencies in a short burst.
+    // Coalesce those renders so only the final catalog snapshot crosses the native bridge.
+    const initialPublishTimer = window.setTimeout(() => {
+      void ensureMasterServer(false).then(() => reconcileNativeRestaurantState());
+    }, 250);
+    let catalogPublishTimer: number | undefined;
+    const publishMasterCatalog = () => {
+      if (catalogPublishTimer) window.clearTimeout(catalogPublishTimer);
+      catalogPublishTimer = window.setTimeout(() => {
+        catalogPublishTimer = undefined;
+        void ensureMasterServer(false);
+      }, 250);
+    };
     const watchdog = window.setInterval(() => void ensureMasterServerHealth(), 30000);
     const restaurantPoll = window.setInterval(() => void pollNativeRestaurantRevision(), 1000);
     window.addEventListener('online', ensureMasterServerHealth);
@@ -4328,6 +4401,8 @@ const AppContent: React.FC = () => {
 
     return () => {
       disposed = true;
+      window.clearTimeout(initialPublishTimer);
+      if (catalogPublishTimer) window.clearTimeout(catalogPublishTimer);
       window.clearInterval(watchdog);
       window.clearInterval(restaurantPoll);
       window.removeEventListener('online', ensureMasterServerHealth);
@@ -4540,6 +4615,8 @@ const AppContent: React.FC = () => {
       'KIOSK_WELCOME',
       'KIOSK_BROWSER',
       'KIOSK_PAYMENT',
+      'SETTINGS',
+      'SETTINGS_SYNC',
     ]);
     if (!inputSensitiveViews.has(currentView)) return;
 
@@ -4794,6 +4871,50 @@ const AppContent: React.FC = () => {
       if (!Number.isFinite(moveTime)) return latestCloseTs <= 0;
       return latestCloseTs <= 0 || moveTime > (latestCloseTs - DRIFT_TOLERANCE_MS);
     });
+  };
+
+  const handleOpenZReport = async () => {
+    try {
+      const terminal = getCurrentTerminal();
+      const terminalRole = terminal?.config?.deviceRole?.role
+        || terminal?.config?.terminalType
+        || terminal?.config?.terminal_type;
+      if (terminalRole === DeviceRole.ORDER_TAKER) {
+        console.warn('[ORDER_TAKER_FINANCIAL_CLOSING_BLOCKED]', 'Z_REPORT');
+        return;
+      }
+      const terminalIds = Array.from(getTerminalReferenceKeys(terminal?.id || 'T1'));
+      const reconciliation = await reconcileTransactionsForZPreview(transactions, {
+        loadHistory: async () => ((await db.get('transactionHistory')) as Transaction[]) || [],
+        loadReports: async () => ((await db.get('zReports')) as ZReport[]) || [],
+        deleteActive: async (transactionId) => db.deleteDocument('transactions', transactionId),
+      }, { terminalIds });
+
+      if (reconciliation.removedClosed.length > 0) {
+        console.warn(
+          `Z_PREVIEW_MEMBERSHIP_RECONCILED count=${reconciliation.removedClosed.length}`
+          + ` lastClosedDocument=${reconciliation.lastClosedDocumentId || 'unknown'}`
+        );
+      }
+      setTransactions(reconciliation.transactions);
+      setViewData(undefined);
+      setCurrentView('Z_REPORT');
+    } catch (error) {
+      console.error('Z_PREVIEW_MEMBERSHIP_FAILED', error);
+      alert('No se pudo comprobar la pertenencia de las ventas a cierres anteriores. No se abrió el cierre Z.');
+    }
+  };
+
+  const handleOpenFinanceFromPos = (initialCashMovementType?: 'IN' | 'OUT' | 'X_REPORT') => {
+    const terminal = getCurrentTerminal();
+    const terminalRole = terminal?.config?.deviceRole?.role
+      || terminal?.config?.terminalType
+      || terminal?.config?.terminal_type;
+    if (initialCashMovementType === 'X_REPORT' && terminalRole === DeviceRole.ORDER_TAKER) {
+      console.warn('[ORDER_TAKER_FINANCIAL_CLOSING_BLOCKED]', 'X_REPORT');
+      return;
+    }
+    handleViewChange('FINANCE', { initialCashMovementType });
   };
 
   const belongsToCurrentCashier = useCallback((record?: { userId?: string | null; userName?: string | null }) => {
@@ -5225,7 +5346,11 @@ const AppContent: React.FC = () => {
   }, [getCurrentTerminal]);
 
   const releaseActiveTableEditLock = useCallback(async (
-    options: { deferRemote?: boolean; trace?: ReturnType<typeof getLatestPosInteraction> } = {},
+    options: {
+      deferRemote?: boolean;
+      waitForPersistence?: boolean;
+      trace?: ReturnType<typeof getLatestPosInteraction>;
+    } = {},
   ): Promise<boolean> => {
     const lock = activeTableEditLockRef.current;
     if (!lock) {
@@ -5264,7 +5389,7 @@ const AppContent: React.FC = () => {
     } as PendingTableLockRelease;
 
     const releaseOperation = (async (): Promise<boolean> => {
-      await persistenceBarrier;
+      if (options.waitForPersistence !== false) await persistenceBarrier;
       if (pendingTableLockReleasesRef.current.get(tableId) !== pendingRelease) return true;
       pendingRelease.phase = 'RELEASING';
       for (let attempt = 1; attempt <= 3; attempt += 1) {
@@ -5315,6 +5440,20 @@ const AppContent: React.FC = () => {
       const released = await releaseActiveTableEditLock({ deferRemote: true });
       if (!released) {
         alert('No se pudo liberar la mesa anterior. Reintente antes de abrir otra mesa.');
+        return false;
+      }
+    }
+
+    // No permitir que una misma terminal acumule locks remotos al recorrer mesas.
+    // Antes de tomar otra, confirmar todas las liberaciones anteriores.
+    const priorReleases = Array.from(pendingTableLockReleasesRef.current.entries())
+      .filter(([pendingTableId]) => pendingTableId !== tableId)
+      .map(([, pendingRelease]) => pendingRelease.promise);
+    if (priorReleases.length > 0) {
+      const releaseResults = await Promise.all(priorReleases);
+      if (releaseResults.some(released => !released)) {
+        alert('No se pudo liberar la mesa anterior en la Caja Master. Reintente antes de abrir otra mesa.');
+        await fetchTables();
         return false;
       }
     }
@@ -5941,11 +6080,6 @@ const AppContent: React.FC = () => {
             console.warn(`[POS-2A] Flagged ${recoveredPaymentIntents} interrupted payment intent(s) for reconciliation.`);
           }
         }
-
-        // RECOVERY: Run in background so startup never blocks on heavy history stores.
-        void ZReportRecoveryService
-          .recoverOrphanedReports({ notifyUser: false })
-          .catch((recoveryError) => console.warn('⚠️ Startup Z-report recovery skipped:', recoveryError));
 
         let currentConfig = data.config;
         const normalizedBootConfig = normalizeTerminalDocumentAssignments(currentConfig);
@@ -6972,10 +7106,26 @@ const AppContent: React.FC = () => {
       const interval = setInterval(() => {
         if (isPosSaleActive()) return;
         void fetchTables();
-      }, isClientTerminalMode() ? 3000 : 10000);
+      }, isClientTerminalMode() ? CLIENT_TABLE_POLL_INTERVAL_MS : 10000);
       return () => clearInterval(interval);
     }
   }, [config.vertical, config.terminals, deviceId, currentView]);
+
+  useEffect(() => {
+    if (!isClientTerminalMode() || currentView === 'TABLE_DESIGNER') return;
+
+    const refreshVisibleTables = () => {
+      if (document.visibilityState !== 'visible' || isPosSaleActive()) return;
+      void fetchTables();
+    };
+
+    window.addEventListener('focus', refreshVisibleTables);
+    document.addEventListener('visibilitychange', refreshVisibleTables);
+    return () => {
+      window.removeEventListener('focus', refreshVisibleTables);
+      document.removeEventListener('visibilitychange', refreshVisibleTables);
+    };
+  }, [currentView]);
 
   useEffect(() => {
     // --- SYNC EVENT LISTENERS (For Slave Terminals) ---
@@ -8373,22 +8523,37 @@ const AppContent: React.FC = () => {
       const ticketId = String(ticket?.id || '').trim();
       return !ticketId || !closedRestaurantOrderIdsRef.current.has(ticketId);
     });
+    const changedTicketId = String(options.changedTicketId || '').trim();
+    const persistTicketsLocally = async () => {
+      if (!changedTicketId) {
+        await db.save('parkedTickets', validTickets);
+        return;
+      }
+
+      const changedTicket = validTickets.find(ticket => String(ticket.id) === changedTicketId);
+      if (changedTicket) {
+        await db.saveDocument('parkedTickets', changedTicket);
+      } else {
+        await db.deleteDocument('parkedTickets', changedTicketId);
+      }
+    };
     if (isClientTerminalMode()) {
       const editLock = activeTableEditLockRef.current;
+      const tableSyncTickets = scopeTicketsForTableSync(validTickets, editLock?.tableId);
       const pendingSync: PendingClientTableSync = {
         id: 'current',
         status: 'PENDING',
         tableId: editLock?.tableId,
         queuedAt: new Date().toISOString(),
         reason: options.reason || 'explicit',
-        parkedTickets: validTickets,
+        parkedTickets: tableSyncTickets,
       };
       pendingClientTableSyncRef.current = pendingSync;
       writePendingTableSyncMirror(pendingSync);
-      writeCriticalCollectionsMirror(validTickets, cashMovements);
+      if (!changedTicketId) writeCriticalCollectionsMirror(validTickets, cashMovements);
       setParkedTickets(validTickets);
       const persistLocal = () => Promise.allSettled([
-        db.save('parkedTickets', validTickets),
+        persistTicketsLocally(),
         persistPendingClientTableSync(pendingSync),
       ]);
 
@@ -8403,7 +8568,7 @@ const AppContent: React.FC = () => {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            parkedTickets: validTickets,
+            parkedTickets: tableSyncTickets,
             tableId: editLock?.tableId,
             ownerId: editLock?.ownerId,
             lockToken: editLock?.token,
@@ -8452,6 +8617,7 @@ const AppContent: React.FC = () => {
       isNativeAndroidRuntime() &&
       isNativeStandaloneTerminalRuntime(getCurrentTerminal());
     const masterEditLock = servesAsNativeMaster ? activeTableEditLockRef.current : null;
+    const masterTableSyncTickets = scopeTicketsForTableSync(validTickets, masterEditLock?.tableId);
     const masterPendingSync: PendingClientTableSync | null = masterEditLock?.tableId
       ? {
           id: 'current',
@@ -8459,7 +8625,7 @@ const AppContent: React.FC = () => {
           tableId: String(masterEditLock.tableId),
           queuedAt: new Date().toISOString(),
           reason: options.reason || 'explicit',
-          parkedTickets: validTickets,
+          parkedTickets: masterTableSyncTickets,
         }
       : null;
     // Debe registrarse antes de cualquier await de persistencia: el poll nativo
@@ -8468,13 +8634,10 @@ const AppContent: React.FC = () => {
       pendingMasterTableSyncRef.current = masterPendingSync;
       writePendingTableSyncMirror(masterPendingSync);
     }
-    writeCriticalCollectionsMirror(validTickets, cashMovements);
+    if (!changedTicketId) writeCriticalCollectionsMirror(validTickets, cashMovements);
     setParkedTickets(validTickets);
     const persistMasterTickets = async () => {
-      // En Android, saveCollection produce un solo executeSet transaccional:
-      // DELETE de la colección seguido por todos los UPSERT. La operación queda
-      // atómica y evita la cadena de transacciones por cada ticket.
-      await db.save('parkedTickets', validTickets);
+      await persistTicketsLocally();
     };
 
     // La caja maestra Android también debe confirmar el cambio en el servidor
@@ -8493,7 +8656,7 @@ const AppContent: React.FC = () => {
           // puede estar guardando otra al mismo tiempo y su estado no debe ser
           // reemplazado por el snapshot completo de la Master.
           body: JSON.stringify({
-            parkedTickets: validTickets,
+            parkedTickets: masterTableSyncTickets,
             ...(masterEditLock?.tableId ? {
               tableId: masterEditLock.tableId,
               ownerId: masterEditLock.ownerId,
@@ -10433,7 +10596,17 @@ const AppContent: React.FC = () => {
       if (syncManager.isInitialized) {
         try {
           await syncManager.pushZReport(newZReport);
+          newZReport.syncStatus = syncManager.isUsingErpOperationalTarget()
+            ? 'APPLIED_ERP'
+            : 'COMPLETED';
+          newZReport.syncError = undefined;
+          await db.saveDocument('zReports', newZReport);
+          setZReports(prev => prev.map(report => report.id === newZReport.id ? { ...newZReport } : report));
         } catch (e) {
+          newZReport.syncStatus = 'RETRY_WAIT';
+          newZReport.syncError = e instanceof Error ? e.message : String(e || 'No se pudo enviar el cierre Z');
+          await db.saveDocument('zReports', newZReport);
+          setZReports(prev => prev.map(report => report.id === newZReport.id ? { ...newZReport } : report));
           console.warn('⚠️ [App.tsx] Z-Report push failed (queued):', e);
         }
       } else {
@@ -11148,10 +11321,19 @@ const AppContent: React.FC = () => {
           <div className="h-screen bg-slate-950 overflow-hidden relative">
             <button
               type="button"
-              onClick={() => setCurrentView('POS')}
+              onClick={() => {
+                if (tableMapExitPending) return;
+                // Paint acknowledgement before mounting the heavier sales
+                // catalog. The transition lets React yield to input on slower
+                // restaurant terminals instead of presenting a frozen map.
+                setTableMapExitPending(true);
+                window.requestAnimationFrame(() => handleViewChange('POS'));
+              }}
+              disabled={tableMapExitPending}
+              aria-busy={tableMapExitPending}
               className="absolute left-4 top-4 z-50 rounded-2xl border border-white/15 bg-slate-950/60 px-4 py-2.5 text-sm font-black text-slate-100 shadow-[0_16px_40px_rgba(2,6,23,0.55)] backdrop-blur-xl hover:bg-white/[0.14] active:scale-[0.98]"
             >
-              Cerrar
+              {tableMapExitPending ? 'Abriendo venta…' : 'Cerrar'}
             </button>
             <div className="h-full overflow-hidden relative">
               <TableMap
@@ -11316,7 +11498,7 @@ const AppContent: React.FC = () => {
                       await handleUpdateParkedTickets(nextTickets, { reason: 'explicit' });
                     }
                   } finally {
-                    if (temporaryLockAcquired) await releaseActiveTableEditLock();
+                    if (temporaryLockAcquired) await releaseActiveTableEditLock({ waitForPersistence: false });
                   }
                 }}
                 onParkedOrderSplitResult={handleParkedOrderSplitFromMap}
@@ -11421,12 +11603,9 @@ const AppContent: React.FC = () => {
             onOpenAttendance={() => setCurrentView('ATTENDANCE')}
             onOpenCustomers={() => setCurrentView('CUSTOMERS')}
             onOpenHistory={() => setCurrentView('HISTORY')}
-            onOpenFinance={(initialCashMovementType) => handleViewChange('FINANCE', { initialCashMovementType })}
+            onOpenFinance={handleOpenFinanceFromPos}
             onRegisterCashMovement={handleRegisterMovement}
-            onOpenZReport={() => {
-              setViewData(undefined);
-              setCurrentView('Z_REPORT');
-            }}
+            onOpenZReport={() => { void handleOpenZReport(); }}
             onOpenInventoryTracking={(productId) => handleViewChange('TRACKING', { productId })}
             onOpenAudit={() => handleViewChange('INVENTORY_AUDIT')}
             onOpenTableMap={async () => {
@@ -11570,7 +11749,11 @@ const AppContent: React.FC = () => {
               // liberación remota conservan su orden, pero nunca bloquean volver
               // al mapa ni la siguiente interacción del operador.
               setTables(reconciled);
-              void releaseActiveTableEditLock({ deferRemote: true });
+              if (closedOrderId) {
+                void releaseActiveTableEditLock({ deferRemote: true });
+              } else {
+                void releaseActiveTableEditLock({ deferRemote: true, waitForPersistence: false });
+              }
               window.setTimeout(() => {
                 void (async () => {
                   await clearActiveCartDraftStorage().catch((error) => console.warn('No se pudo limpiar borrador activo tras cerrar mesa:', error));
@@ -11674,8 +11857,8 @@ const AppContent: React.FC = () => {
               const freshStocks = await db.get('productStocks') as ProductStock[] || [];
               setProductStocks(freshStocks);
             }}
-            onOpenFinance={(initialCashMovementType) => handleViewChange('FINANCE', { initialCashMovementType })}
-            onOpenZReport={() => setCurrentView('Z_REPORT')}
+            onOpenFinance={handleOpenFinanceFromPos}
+            onOpenZReport={() => { void handleOpenZReport(); }}
             onOpenSupplyChain={() => setCurrentView('SUPPLY_CHAIN')}
             onOpenFranchise={() => setCurrentView('FRANCHISE_DASHBOARD')}
             onOpenTableDesigner={() => {
@@ -11746,8 +11929,8 @@ const AppContent: React.FC = () => {
               const freshStocks = await db.get('productStocks') as ProductStock[] || [];
               setProductStocks(freshStocks);
             }}
-            onOpenFinance={(initialCashMovementType) => handleViewChange('FINANCE', { initialCashMovementType })}
-            onOpenZReport={() => setCurrentView('Z_REPORT')}
+            onOpenFinance={handleOpenFinanceFromPos}
+            onOpenZReport={() => { void handleOpenZReport(); }}
             onOpenSupplyChain={() => setCurrentView('SUPPLY_CHAIN')}
             onOpenFranchise={() => setCurrentView('FRANCHISE_DASHBOARD')}
             onOpenTableDesigner={() => {
@@ -11898,7 +12081,7 @@ const AppContent: React.FC = () => {
               onRegisterMovement={handleRegisterMovement}
               onCloseXReport={handleXReport}
               onPrintXReport={handlePrintXReport}
-              onOpenZReport={() => setCurrentView('Z_REPORT')}
+              onOpenZReport={() => { void handleOpenZReport(); }}
               onClose={() => setCurrentView(viewData?.returnView === 'TABLE_MAP' ? 'TABLE_MAP' : 'POS')}
             />
           );

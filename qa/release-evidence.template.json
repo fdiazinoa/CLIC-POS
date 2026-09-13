@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "sourceCommit": "REPLACE_WITH_FULL_COMMIT",
+  "versionName": "REPLACE_WITH_VERSION",
+  "versionCode": 0,
+  "apkSha256": "REPLACE_WITH_SHA256",
+  "certificateSha256": "REPLACE_WITH_CERTIFICATE_SHA256",
+  "topologies": {
+    "standaloneMaster": false,
+    "masterClient": false,
+    "orderTaker": false
+  },
+  "contracts": {
+    "upgradePreservesLocalData": false,
+    "salesAndTablesRemainResponsive": false,
+    "tablesReleaseOnExit": false,
+    "tablesRefreshAcrossTerminals": false,
+    "orderSaveWorks": false,
+    "orderTakerHidesXAndZ": false,
+    "orderTakerSkipsReceiptTypePrompt": false,
+    "restaurantPortraitActionsVisible": false,
+    "temporaryTableNameWorks": false,
+    "pancuviUsersRemainDeduplicated": false,
+    "pricePosToErp": false,
+    "priceErpToPos": false,
+    "taxPosToErp": false,
+    "taxErpToPos": false,
+    "operationsPosToErp": false,
+    "operationsErpToPos": false,
+    "catalogFieldsRemainIsolated": false,
+    "catalogSnapshotDoesNotRebound": false,
+    "heartbeatAdvances": false,
+    "noPendingOperationsAfterDrain": false
+  },
+  "metrics": {
+    "anrCount": 0,
+    "crashCount": 0,
+    "unresolvedOutboxCount": 0,
+    "spontaneousMutationCount": 0,
+    "pendingDrainSeconds": 0,
+    "heartbeatAgeSeconds": 0,
+    "salesTablesNavigationP95Ms": 0,
+    "idleTrafficWindowSeconds": 15,
+    "idleRxBytes": 0,
+    "idleTxBytes": 0
+  },
+  "devices": [
+    {
+      "serial": "REPLACE_WITH_SERIAL",
+      "role": "REPLACE_WITH_ROLE",
+      "versionName": "REPLACE_WITH_VERSION",
+      "versionCode": 0,
+      "installedWithReplace": true,
+      "processStable": false
+    }
+  ],
+  "notes": []
+}

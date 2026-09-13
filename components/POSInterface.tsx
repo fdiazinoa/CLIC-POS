@@ -57,6 +57,7 @@ import { couponService } from '../utils/couponService';
 import { resolveScannedCouponCode } from '../utils/couponScan';
 import { calculateInventoryDeductions, resolveInventoryConsumptionMode, transferStockToCommitted } from '../utils/inventoryEngine';
 import { useSupervisorAuth } from '../hooks/useSupervisorAuth';
+import { calculateSalesCommission } from '../utils/userSalesPolicy';
 import SupervisorModal from './SupervisorModal';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { useBottomSafeOffset } from '../hooks/useBottomSafeOffset';
@@ -74,6 +75,7 @@ import { printCashMovementReceipt, printComanda, printPrecuenta } from '../utils
 import { canStepCartQuantity, isValidCartQuantity, isValidCartQuantityTransition } from '../utils/cartQuantity';
 import ModifierModal from './ModifierModal';
 import { productHasRestaurantConfiguration, resolveRestaurantProductConfig } from '../utils/restaurantProductConfig';
+import { shouldBlockTableMapForDirectSale } from '../utils/restaurantNavigation';
 import { visorSync } from '../utils/visorSync';
 import { isCustomerDisplaySurface, maybeAutoLaunchCustomerDisplay } from '../utils/customerDisplay';
 import ProductQuickActions from './ProductQuickActions';
@@ -107,7 +109,7 @@ import { persistStandaloneRefundTransaction, persistStandaloneSaleHistory } from
 import { resolveCustomerImageSrc, resolveProductImageSrc } from '../utils/entityImage';
 import { getWarehouseScopedNumber, resolveProductActiveWarehouseIds } from '../utils/masterIdentity';
 import { buildTransactionSettlementFields } from '../utils/paymentSettlement';
-import { isPaymentFractionPlanCurrent } from '../utils/paymentFractions';
+import { isPaymentFractionPlanCurrent, retainCurrentPaymentFractionPlan } from '../utils/paymentFractions';
 import SplitTicketModal from './SplitTicketModal';
 import { getTerminalSnapshotSellers, resolveTerminalSellerName } from '../utils/terminalSnapshotSellers';
 import { productIdentityCandidates, productReferenceCandidates, resolveOperationalProductId } from '../utils/productReferences';
@@ -193,6 +195,7 @@ export interface POSInterfaceProps {
       options?: {
          deferRemote?: boolean;
          reason?: 'cart_changed' | 'debounced' | 'explicit' | 'customer_assigned';
+         changedTicketId?: string;
       },
    ) => void | Promise<void>;
    onTableOrderSaved?: (table: Table, ticket: ParkedTicket) => void | Promise<void>;
@@ -1979,8 +1982,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const canChangeTariff = hasPermission('POS_CHANGE_TARIFF');
    const canCheckout = hasPermission('POS_CHECKOUT');
    const canSellWithOpenZ = hasPermission('POS_ALLOW_SALES_WITH_OPEN_Z');
-   const canCloseXReport = hasPermission('POS_CLOSE_X');
-   const canCloseZReport = hasPermission('POS_CLOSE_Z');
+   const canCloseXReport = !isOrderTakerMode && hasPermission('POS_CLOSE_X');
+   const canCloseZReport = !isOrderTakerMode && hasPermission('POS_CLOSE_Z');
    const canRegisterCashMovement = hasPermission('CASH_IN_OUT' as Permission);
    const cartItemEditCapabilities = useMemo(
       () => resolveCartItemEditCapabilities(userPermissions),
@@ -2129,6 +2132,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    }, [activeTerminalConfig, transactions, terminalId, zReports]);
 
    const canProceedWithOperationalSession = useCallback(async (): Promise<boolean> => {
+      // Una terminal de toma de pedidos no factura ni administra jornadas fiscales.
+      // Guardar debe limitarse a enviar/aparcar el pedido en la Master.
+      if (isOrderTakerMode) return true;
       if (!activeTerminalConfig || terminalTransactions.length === 0) return true;
 
       const sessionStartDate = terminalTransactions[0]?.date;
@@ -2142,7 +2148,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          "¿Desea continuar facturando de todos modos?\n" +
          "(Seleccione 'Aceptar' para continuar, 'Cancelar' para ir a Cierre Z)"
       );
-   }, [activeTerminalConfig, terminalTransactions]);
+   }, [activeTerminalConfig, isOrderTakerMode, terminalTransactions]);
 
    const [showTariffSelector, setShowTariffSelector] = useState(false);
    const [productForModifiers, setProductForModifiers] = useState<Product | null>(null);
@@ -3923,7 +3929,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       const checkFiscalStatus = async () => {
          const type = requiredSaleFiscalType;
-         if (isFiscalModeDisabled) {
+         if (isOrderTakerMode || isFiscalModeDisabled) {
             setStatus(null);
             setFiscalStatus({
                type,
@@ -4035,13 +4041,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       return () => {
          cancelled = true;
       };
-   }, [isFiscalModeDisabled, requiredSaleFiscalType, terminalId]);
+   }, [isFiscalModeDisabled, isOrderTakerMode, requiredSaleFiscalType, terminalId]);
 
    const fiscalReserveAlert = useMemo(() => {
-      if (isFiscalModeDisabled) return null;
+      if (isOrderTakerMode || isFiscalModeDisabled) return null;
       if (!fiscalStatus.hasNCF) return null;
       return getFiscalReserveAlert(fiscalStatus.remaining || 0, fiscalStatus.total || 0, fiscalCompliance);
-   }, [fiscalCompliance, fiscalStatus.hasNCF, fiscalStatus.remaining, fiscalStatus.total, isFiscalModeDisabled]);
+   }, [fiscalCompliance, fiscalStatus.hasNCF, fiscalStatus.remaining, fiscalStatus.total, isFiscalModeDisabled, isOrderTakerMode]);
 
    const shouldShowFiscalReserveAlert = Boolean(
       fiscalReserveAlert &&
@@ -4543,6 +4549,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          barTabId: existing?.barTabId || activeBarTabId || undefined,
          barTabName: existing?.barTabName || activeBarTabName || undefined,
          serviceType: effectiveOrderServiceType,
+         paymentFraction: retainCurrentPaymentFractionPlan(existing?.paymentFraction, cartTotal),
       };
 
       const nextTickets = [
@@ -4562,6 +4569,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          void Promise.resolve(onUpdateParkedTicketsRef.current(nextTickets, {
             deferRemote: true,
             reason: 'cart_changed',
+            changedTicketId: orderId,
          })).catch((error) => {
             console.error('[TABLE_SYNC] No se pudo persistir la cola local de la mesa:', error);
          });
@@ -4576,6 +4584,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          try {
             await Promise.resolve(onUpdateParkedTicketsRef.current(nextTickets, {
                reason: batchClientSync ? 'debounced' : 'explicit',
+               changedTicketId: orderId,
             }));
             if (closedTableOrderIdsRef.current.has(String(orderId))) {
                return;
@@ -4838,6 +4847,24 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          if (originalItem && updatedItem.quantity > originalItem.quantity) {
             const diff = updatedItem.quantity - originalItem.quantity;
             if (!canAddItemToCart(updatedItem, diff)) return;
+         }
+         const requestedLineDiscountPercent = updatedItem.adjustmentSource === 'MANUAL_DISCOUNT'
+            ? Math.max(0, Number(updatedItem.discountRate || 0) * 100)
+            : 0;
+         const previousLineDiscountPercent = originalItem.adjustmentSource === 'MANUAL_DISCOUNT'
+            ? Math.max(0, Number(originalItem.discountRate || 0) * 100)
+            : 0;
+         if (requestedLineDiscountPercent > previousLineDiscountPercent + 0.0001) {
+            const authorized = await requestApproval({
+               permission: 'POS_DISCOUNT',
+               actionDescription: `Aplicar ${requestedLineDiscountPercent.toFixed(2)}% de descuento a ${updatedItem.name}`,
+               context: {
+                  itemId: updatedItem.cartId,
+                  originalValue: previousLineDiscountPercent,
+                  newValue: requestedLineDiscountPercent,
+               },
+            });
+            if (!authorized) return;
          }
          newCart = cart.map(item => item.cartId === updatedItem.cartId ? updatedItem : item);
       }
@@ -5504,6 +5531,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                const documentConsignmentFields = getConsignmentTicketFields(documentItems);
                const payableTotal = documentTotal + (voluntaryTip || 0);
                const transactionSettlement = buildTransactionSettlementFields(paymentsForTransaction, payableTotal, baseCurrency.code);
+               const salesCommission = !isRefundOnly
+                  ? calculateSalesCommission(documentTotal, currentUser)
+                  : {};
 
                const txn = await withTimeout(transactionService.createTransaction({
                   documentType: hasReturns ? 'REFUND' : 'TICKET',
@@ -5519,6 +5549,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   ...transactionSettlement,
                   userId: currentUser.id,
                   userName: currentUser.name,
+                  ...salesCommission,
                   terminalId: terminalId,
                   status: !isRefundOnly && creditAmount > 0 ? 'PENDING' : 'COMPLETED',
                   customerId: customerForCheckout?.id,
@@ -5805,7 +5836,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       checkoutTraceRef.current = trace;
       expectInteractionRender(trace, 'POS_INTERACTION_VIEW');
       if (isOrderTakerMode) {
-         await handleSendAndExit();
+         try {
+            await handleSendAndExit();
+         } catch (error) {
+            console.error('[ORDER_TAKER_SAVE_FAILED]', error);
+            setErrorToast('No se pudo guardar el pedido en la terminal principal. La mesa permanece abierta.');
+            window.setTimeout(() => setErrorToast(null), 3500);
+         }
          return;
       }
       const invalidQuantityItem = cart.find(item => !isValidCartQuantity(item.quantity));
@@ -6529,12 +6566,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          ? existingParked?.alias
          : (aliasInput.trim() || undefined);
       const ticketTotal = ticketItems.reduce((sum, item) => sum + (Number(item.price || 0) * Number(item.quantity || 0)), 0);
+      const resolvedTicketTotal = cartOverride ? Math.max(0, ticketTotal - discountAmount) : cartTotal;
       const newParked: ParkedTicket = {
          id: parkedTicketId,
          name: buildParkedTicketName(),
          alias: normalizedAlias,
          items: [...ticketItems],
-         total: cartOverride ? Math.max(0, ticketTotal - discountAmount) : cartTotal,
+         total: resolvedTicketTotal,
          discountAmount,
          discountType: globalDiscount.type,
          discountValue: globalDiscount.value,
@@ -6559,6 +6597,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          barTabId: existingParked?.barTabId || activeBarTabId || undefined,
          barTabName: existingParked?.barTabName || activeBarTabName || undefined,
          serviceType: effectiveOrderServiceType,
+         paymentFraction: retainCurrentPaymentFractionPlan(existingParked?.paymentFraction, resolvedTicketTotal),
       };
 
       // Remove existing if updating same ID
@@ -6626,6 +6665,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          barTabId: existingParked?.barTabId || activeBarTabId || undefined,
          barTabName: existingParked?.barTabName || activeBarTabName || undefined,
          serviceType: effectiveOrderServiceType,
+         paymentFraction: retainCurrentPaymentFractionPlan(existingParked?.paymentFraction, cartTotal),
       };
 
       const updatedTickets = [
@@ -6676,6 +6716,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const trace = beginPosInteraction('CHANGE_TABLE', { tableId: activeTable?.id || null, cartItems: cart.length });
       expectInteractionRender(trace, 'APP_VIEW');
       if (blockRecoveredUberOrderMutation('volver al mapa de mesas')) return;
+
+      if (shouldBlockTableMapForDirectSale(cart.length, Boolean(activeTable))) {
+         setErrorToast('Debes cobrar o cancelar la venta directa antes de ir a Mesas.');
+         window.setTimeout(() => setErrorToast(null), 3500);
+         markInteractionStage(trace, 'HANDLER_END');
+         return;
+      }
 
       setShowParkedList(false);
       closeParkAliasModal();
@@ -6863,6 +6910,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             setIsReturnMode(!isReturnMode);
             break;
          case 'Z_REPORT':
+            if (isOrderTakerMode) return;
             if (!canCloseZReport) {
                alert('No tienes permiso para realizar Cierre Z.');
                return;
@@ -6911,11 +6959,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             break;
          case 'TABLES':
             if (!showTableMapButton) break;
-            if ((config.vertical === 'RESTAURANT' || config.vertical === 'RETAIL') && cart.length > 0) {
-               handleSendAndExit();
-            } else {
-               if (onOpenTableMap) onOpenTableMap();
-            }
+            void handleBackToMap();
             break;
          case 'loyalty_card': setShowLoyaltyModal(true); break;
          case 'AGENDA': if (onOpenAgenda) onOpenAgenda(); break;
@@ -7001,6 +7045,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             globalDiscountValue={globalDiscount.value}
             showLogout={false}
             allowWaitList={!activeTable}
+            hideFinancialClosings={isOrderTakerMode}
          />
       </div>
    );
@@ -7281,7 +7326,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   ) : !navigator.onLine ? (
                      <CloudOff size={18} className="text-red-500" />
                   ) : (
-                     <Cloud size={18} className={syncState.hasError || syncState.pendingCount > 0 ? 'text-amber-500' : 'text-emerald-500'} />
+                     <Cloud size={18} className={syncState.hasError || syncState.pendingCount > 0 || syncState.blockedCount > 0 ? 'text-amber-500' : 'text-emerald-500'} />
                   )}
                   <div className="flex flex-col leading-none">
                      <span className="text-[9px] font-black text-gray-400 uppercase tracking-widest hidden md:block">Sincronización</span>
@@ -7290,7 +7335,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            ? 'text-amber-600'
                            : !navigator.onLine
                               ? 'text-red-600'
-                              : syncState.hasError || syncState.pendingCount > 0
+                              : syncState.hasError || syncState.pendingCount > 0 || syncState.blockedCount > 0
                                  ? 'text-amber-600'
                                  : 'text-emerald-600'
                      }`}>
@@ -7298,7 +7343,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            ? 'Sincronizando'
                            : !navigator.onLine
                               ? 'Offline'
-                              : syncState.pendingCount > 0
+                              : syncState.blockedCount > 0
+                                 ? `Bloqueado · ${syncState.blockedCount}`
+                                 : syncState.pendingCount > 0
                                  ? `Online · ${syncState.pendingCount}`
                                  : 'Online'}
                      </span>
@@ -7526,138 +7573,125 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         <ChefHat size={18} /><span>Cocina</span>
                      </button>
                      <button type="button" aria-pressed={rightSidebarTab === 'ACTIONS'} onClick={() => setRightSidebarTab(tab => tab === 'ACTIONS' ? 'CART' : 'ACTIONS')} className="flex min-h-11 items-center justify-center gap-2 rounded-xl bg-slate-800 px-2 text-xs font-black text-white">
-                        <span role="status" aria-label={!navigator.onLine ? 'Sin conexión' : syncState.isSyncing ? 'Sincronizando' : syncState.hasError || syncState.pendingCount > 0 ? 'Sincronización pendiente' : 'Online'} className={`h-2 w-2 shrink-0 rounded-full ${!navigator.onLine ? 'bg-red-400' : syncState.isSyncing || syncState.hasError || syncState.pendingCount > 0 ? 'bg-amber-400' : 'bg-emerald-400'}`} />
+                        <span role="status" aria-label={!navigator.onLine ? 'Sin conexión' : syncState.isSyncing ? 'Sincronizando' : syncState.hasError || syncState.pendingCount > 0 || syncState.blockedCount > 0 ? 'Sincronización pendiente' : 'Online'} className={`h-2 w-2 shrink-0 rounded-full ${!navigator.onLine ? 'bg-red-400' : syncState.isSyncing || syncState.hasError || syncState.pendingCount > 0 || syncState.blockedCount > 0 ? 'bg-amber-400' : 'bg-emerald-400'}`} />
                         <span>{rightSidebarTab === 'ACTIONS' ? 'Ver pedido' : 'Opciones'}</span>
                      </button>
                   </nav>
                   <div className="pos-full-action-grid mx-auto grid max-w-[1180px] grid-cols-3 gap-3">
-                     <div className="rounded-2xl border border-blue-200 bg-blue-50/50 p-2 shadow-sm">
-                        <div className="mb-2 rounded-xl bg-blue-600 py-2 text-center text-[10px] font-black uppercase tracking-[0.22em] text-white shadow-sm shadow-blue-600/25">
-                           Venta
-                        </div>
+                     <div role="group" aria-label="Venta" className="rounded-2xl border border-blue-200 bg-blue-50/50 p-2 shadow-sm">
                         <div className="grid grid-cols-2 gap-2">
                         <button
                            type="button"
                            onClick={() => handleGridAction('DISCOUNT')}
-                           className={`flex h-12 items-center justify-center gap-2 rounded-xl border px-3 text-xs font-black uppercase tracking-wide shadow-sm transition-all active:scale-95 ${globalDiscount.value > 0 ? 'border-rose-500 bg-rose-600 text-white shadow-rose-600/25 hover:bg-rose-700' : 'border-blue-500 bg-blue-600 text-white shadow-blue-600/25 hover:bg-blue-700'}`}
+                           className={`flex h-16 items-center justify-center gap-2 rounded-xl border px-3 text-sm font-black uppercase tracking-wide shadow-sm transition-all active:scale-95 ${globalDiscount.value > 0 ? 'border-rose-500 bg-rose-600 text-white shadow-rose-600/25 hover:bg-rose-700' : 'border-blue-500 bg-blue-600 text-white shadow-blue-600/25 hover:bg-blue-700'}`}
                         >
-                           <Percent size={16} />
+                           <Percent size={20} />
                            <span>Desc %</span>
                         </button>
                         <button
                            type="button"
                            onClick={() => handleGridAction('COUPON')}
-                           className="flex h-12 items-center justify-center gap-2 rounded-xl border border-blue-500 bg-blue-600 px-3 text-xs font-black uppercase tracking-wide text-white shadow-sm shadow-blue-600/25 transition-all hover:bg-blue-700 active:scale-95"
+                           className="flex h-16 items-center justify-center gap-2 rounded-xl border border-blue-500 bg-blue-600 px-3 text-sm font-black uppercase tracking-wide text-white shadow-sm shadow-blue-600/25 transition-all hover:bg-blue-700 active:scale-95"
                         >
-                           <Tag size={16} />
+                           <Tag size={20} />
                            <span>Cupones</span>
                         </button>
                         <button
                            type="button"
                            onClick={() => handleGridAction('loyalty_card')}
-                           className="flex h-12 items-center justify-center gap-2 rounded-xl border border-blue-500 bg-blue-600 px-3 text-xs font-black uppercase tracking-wide text-white shadow-sm shadow-blue-600/25 transition-all hover:bg-blue-700 active:scale-95"
+                           className="flex h-16 items-center justify-center gap-2 rounded-xl border border-blue-500 bg-blue-600 px-3 text-sm font-black uppercase tracking-wide text-white shadow-sm shadow-blue-600/25 transition-all hover:bg-blue-700 active:scale-95"
                         >
-                           <CreditCard size={16} />
+                           <CreditCard size={20} />
                            <span>Tarjeta</span>
                         </button>
                         <button
                            type="button"
                            onClick={() => handleGridAction('SAVE')}
-                           className="flex h-12 items-center justify-center gap-2 rounded-xl border border-orange-400 bg-orange-500 px-3 text-xs font-black uppercase tracking-wide text-white shadow-sm shadow-orange-500/25 transition-all hover:bg-orange-600 active:scale-95"
+                           className="flex h-16 items-center justify-center gap-2 rounded-xl border border-orange-400 bg-orange-500 px-3 text-sm font-black uppercase tracking-wide text-white shadow-sm shadow-orange-500/25 transition-all hover:bg-orange-600 active:scale-95"
                         >
-                           <Save size={16} />
+                           <Save size={20} />
                            <span>Guardar</span>
                         </button>
                         </div>
                      </div>
 
-                     <div className="rounded-2xl border border-orange-200 bg-orange-50/60 p-2 shadow-sm">
-                        <div className="mb-2 rounded-xl bg-orange-500 py-2 text-center text-[10px] font-black uppercase tracking-[0.22em] text-white shadow-sm shadow-orange-500/25">
-                           Comanda
-                        </div>
+                     <div role="group" aria-label="Comanda" className="rounded-2xl border border-orange-200 bg-orange-50/60 p-2 shadow-sm">
                         <div className="grid grid-cols-2 gap-2">
                         <button
                            type="button"
                            onClick={() => { void handleBackToMap(); }}
-                           className="flex h-12 items-center justify-center gap-2 rounded-xl border border-orange-400 bg-orange-500 px-3 text-xs font-black uppercase tracking-wide text-white shadow-sm shadow-orange-500/25 transition-all hover:bg-orange-600 active:scale-95"
+                           className="flex h-16 items-center justify-center gap-2 rounded-xl border border-orange-400 bg-orange-500 px-3 text-sm font-black uppercase tracking-wide text-white shadow-sm shadow-orange-500/25 transition-all hover:bg-orange-600 active:scale-95"
                         >
-                           <Layout size={16} />
+                           <Layout size={20} />
                            <span>Mesas</span>
                         </button>
                         <button
                            type="button"
                            onClick={handlePrintPrecuenta}
                            disabled={cart.length === 0}
-                           className="flex h-12 items-center justify-center gap-2 rounded-xl border border-orange-400 bg-orange-500 px-3 text-xs font-black uppercase tracking-wide text-white shadow-sm shadow-orange-500/25 transition-all hover:bg-orange-600 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
+                           className="flex h-16 items-center justify-center gap-2 rounded-xl border border-orange-400 bg-orange-500 px-3 text-sm font-black uppercase tracking-wide text-white shadow-sm shadow-orange-500/25 transition-all hover:bg-orange-600 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
                         >
-                           <Printer size={16} />
+                           <Printer size={20} />
                            <span>Sub-total</span>
                         </button>
                         <button
                            type="button"
                            onClick={() => { void handleDispatchCommand(); }}
                            disabled={cart.length === 0}
-                           className="flex h-12 items-center justify-center gap-2 rounded-xl border border-orange-400 bg-orange-500 px-3 text-xs font-black uppercase tracking-wide text-white shadow-sm shadow-orange-500/25 transition-all hover:bg-orange-600 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
+                           className="flex h-16 items-center justify-center gap-2 rounded-xl border border-orange-400 bg-orange-500 px-3 text-sm font-black uppercase tracking-wide text-white shadow-sm shadow-orange-500/25 transition-all hover:bg-orange-600 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
                         >
-                           <ChefHat size={16} />
+                           <ChefHat size={20} />
                            <span>Cocina</span>
                         </button>
                         <button
                            type="button"
                            onClick={onOpenHistory}
-                           className="flex h-12 items-center justify-center gap-2 rounded-xl border border-orange-400 bg-orange-500 px-3 text-xs font-black uppercase tracking-wide text-white shadow-sm shadow-orange-500/25 transition-all hover:bg-orange-600 active:scale-95"
+                           className="flex h-16 items-center justify-center gap-2 rounded-xl border border-orange-400 bg-orange-500 px-3 text-sm font-black uppercase tracking-wide text-white shadow-sm shadow-orange-500/25 transition-all hover:bg-orange-600 active:scale-95"
                         >
-                           <History size={16} />
+                           <History size={20} />
                            <span>Tickets</span>
                         </button>
                         </div>
                      </div>
 
-                     <div className="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-2 shadow-sm">
-                        <div className="mb-2 rounded-xl bg-emerald-600 py-2 text-center text-[10px] font-black uppercase tracking-[0.22em] text-white shadow-sm shadow-emerald-600/25">
-                           Caja
-                        </div>
+                     <div role="group" aria-label="Caja" className="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-2 shadow-sm">
                         <div className="grid grid-cols-2 gap-2">
                         <button
                            type="button"
                            onClick={() => handleGridAction('DRAWER')}
-                           className="flex h-12 items-center justify-center gap-2 rounded-xl border border-emerald-500 bg-emerald-600 px-3 text-xs font-black uppercase tracking-wide text-white shadow-sm shadow-emerald-600/25 transition-all hover:bg-emerald-700 active:scale-95"
+                           className="flex h-16 items-center justify-center gap-2 rounded-xl border border-emerald-500 bg-emerald-600 px-3 text-sm font-black uppercase tracking-wide text-white shadow-sm shadow-emerald-600/25 transition-all hover:bg-emerald-700 active:scale-95"
                         >
-                           <Box size={16} />
+                           <Box size={20} />
                            <span>Cajón</span>
                         </button>
                         {canCloseZReport && (
                            <button
                               type="button"
                               onClick={() => handleGridAction('Z_REPORT')}
-                              className="flex h-12 items-center justify-center gap-2 rounded-xl border border-red-500 bg-red-600 px-3 text-xs font-black uppercase tracking-wide text-white shadow-sm shadow-red-600/25 transition-all hover:bg-red-700 active:scale-95"
+                              className="flex h-16 items-center justify-center gap-2 rounded-xl border border-red-500 bg-red-600 px-3 text-sm font-black uppercase tracking-wide text-white shadow-sm shadow-red-600/25 transition-all hover:bg-red-700 active:scale-95"
                            >
-                              <Lock size={16} />
+                              <Lock size={20} />
                               <span>Cierre Z</span>
                            </button>
                         )}
                         <button
                            type="button"
                            onClick={() => onOpenSettings()}
-                           className="flex h-12 items-center justify-center gap-2 rounded-xl border border-emerald-500 bg-emerald-600 px-3 text-xs font-black uppercase tracking-wide text-white shadow-sm shadow-emerald-600/25 transition-all hover:bg-emerald-700 active:scale-95"
+                           className="flex h-16 items-center justify-center gap-2 rounded-xl border border-emerald-500 bg-emerald-600 px-3 text-sm font-black uppercase tracking-wide text-white shadow-sm shadow-emerald-600/25 transition-all hover:bg-emerald-700 active:scale-95"
                         >
-                           <Settings size={16} />
+                           <Settings size={20} />
                            <span>Ajustes</span>
                         </button>
-                        <button
+                        {canCloseXReport && <button
                            type="button"
                            onClick={() => {
-                              if (!canCloseXReport) {
-                                 alert('No tienes permiso para realizar Cierre X.');
-                                 return;
-                              }
                               onOpenFinance('X_REPORT');
                            }}
-                           className="flex h-12 items-center justify-center gap-2 rounded-xl border border-emerald-500 bg-emerald-600 px-3 text-xs font-black uppercase tracking-wide text-white shadow-sm shadow-emerald-600/25 transition-all hover:bg-emerald-700 active:scale-95"
+                           className="flex h-16 items-center justify-center gap-2 rounded-xl border border-emerald-500 bg-emerald-600 px-3 text-sm font-black uppercase tracking-wide text-white shadow-sm shadow-emerald-600/25 transition-all hover:bg-emerald-700 active:scale-95"
                         >
-                           <ClipboardCheck size={16} />
+                           <ClipboardCheck size={20} />
                            <span>Cierre X</span>
-                        </button>
+                        </button>}
                         </div>
                      </div>
                   </div>
@@ -8099,7 +8133,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   </div>
                )}
 
-               {!isFiscalModeDisabled && (
+               {!isOrderTakerMode && !isFiscalModeDisabled && (
                   <div className={`mt-1 flex items-center gap-2 px-3 py-1.5 rounded-lg border text-[10px] font-bold uppercase ${canCheckoutWithFiscalPolicy ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : 'bg-red-50 text-red-600 border-red-100 animate-pulse'}`}>
                      <Landmark size={12} />
                      <span>Status Fiscal: {`${fiscalStatus.type} ${fiscalStatus.hasNCF ? (fiscalStatus.isTerminalBlock ? 'Bloque Terminal' : (fiscalStatus.isUsingPool ? 'Reservado en Pool' : 'Lote Global Activo')) : 'Agotado'}`}</span>
@@ -8485,6 +8519,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                               globalDiscountValue={globalDiscount.value}
                               showLogout={false}
                               allowWaitList={!activeTable}
+                              hideFinancialClosings={isOrderTakerMode}
                            />
                         </div>
                         <SupermarketTicketSummary
@@ -8508,6 +8543,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                               globalDiscountValue={globalDiscount.value}
                               showLogout={false}
                               allowWaitList={!activeTable}
+                              hideFinancialClosings={isOrderTakerMode}
                            />
                            <div className="supermarket-checkout-buttons">
                               <button
@@ -8521,10 +8557,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                  onClick={async () => {
                                     if (cart.length > 0 && canCheckoutWithFiscalPolicy) {
                                        startCheckoutInteraction();
-                                       const validation = validateTerminalDocument(config, terminalId, 'TICKET');
-                                       if (!validation.isValid) {
-                                          alert(validation.error);
-                                          return;
+                                       if (!isOrderTakerMode) {
+                                          const validation = validateTerminalDocument(config, terminalId, 'TICKET');
+                                          if (!validation.isValid) {
+                                             alert(validation.error);
+                                             return;
+                                          }
                                        }
                                        if (!await canProceedWithOperationalSession()) return;
                                        proceedToCheckout();
@@ -8645,10 +8683,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                           onClick={async () => {
                                              if (cart.length > 0 && canCheckoutWithFiscalPolicy) {
                                                 startCheckoutInteraction();
-                                                const validation = validateTerminalDocument(config, terminalId, 'TICKET');
-                                                if (!validation.isValid) {
-                                                   alert(validation.error);
-                                                   return;
+                                                if (!isOrderTakerMode) {
+                                                   const validation = validateTerminalDocument(config, terminalId, 'TICKET');
+                                                   if (!validation.isValid) {
+                                                      alert(validation.error);
+                                                      return;
+                                                   }
                                                 }
                                                 if (!await canProceedWithOperationalSession()) return;
                                                 proceedToCheckout();
@@ -8702,7 +8742,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             isMobile && mobileView === 'TICKET' && rightSidebarTab === 'CART' && (
                <div
                   ref={mobileFooterRef}
-                  className="fixed left-0 right-0 bg-white border-t border-gray-100 p-4 shadow-[0_-10px_30px_rgba(0,0,0,0.05)] z-50 animate-in slide-in-from-bottom-5"
+                  data-testid="portrait-ticket-actions"
+                  className="pos-portrait-ticket-actions fixed left-0 right-0 bg-white border-t border-gray-100 p-4 shadow-[0_-10px_30px_rgba(0,0,0,0.05)] z-50 animate-in slide-in-from-bottom-5"
                   style={mobileFooterStyle}
                >
                   {activeTable && activeTableAccounts.length > 1 && (
@@ -8856,14 +8897,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                const numVal = parseFloat(val) || 0;
                const isSubtotalizedMutation = hasSubtotalizedCart;
                if (!(await authorizeSubtotalizedEdit('Modificar descuento de ticket subtotalizado'))) return;
-               if (!isSubtotalizedMutation) {
-                  const authorized = await requestApproval({
-                     permission: 'POS_DISCOUNT',
-                     actionDescription: 'Aplicar Descuento Global',
-                     context: { newValue: type === 'PERCENT' ? numVal : undefined, originalValue: cartSubtotal }
-                  });
-                  if (!authorized) return;
-               }
+               const authorized = await requestApproval({
+                  permission: 'POS_DISCOUNT',
+                  actionDescription: 'Aplicar Descuento Global',
+                  context: {
+                     newValue: type === 'PERCENT'
+                        ? numVal
+                        : (cartSubtotal > 0 ? (numVal / cartSubtotal) * 100 : 0),
+                     originalValue: cartSubtotal,
+                  }
+               });
+               if (!authorized) return;
 
                if (isSubtotalizedMutation) onUpdateCart(current => clearCartSubtotalization(current));
                setGlobalDiscount({ value: numVal, type });
@@ -9401,8 +9445,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                <div className="bg-white rounded-[2.5rem] w-full max-w-lg shadow-2xl overflow-hidden animate-in zoom-in-95">
                   <div className="p-6 border-b bg-gray-50 flex justify-between items-center">
                      <div>
-                        <h3 className="font-black text-xl text-gray-800">Guardar En Espera</h3>
-                        <p className="text-sm text-gray-500 mt-1">Agrega un alias para ubicar esta factura más rápido.</p>
+                        <h3 className="font-black text-xl text-gray-800">{activeTable ? 'Nombre temporal de mesa' : 'Guardar En Espera'}</h3>
+                        <p className="text-sm text-gray-500 mt-1">{activeTable ? 'Agrega o modifica el nombre visible mientras esta mesa tenga una cuenta activa.' : 'Agrega un alias para ubicar esta factura más rápido.'}</p>
                      </div>
                      <button onClick={closeParkAliasModal} className="p-2 hover:bg-gray-200 rounded-full">
                         <X size={20} />
@@ -9411,7 +9455,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   <div className="p-6 space-y-4">
                      <div>
                         <label htmlFor="park-ticket-alias" className="block text-sm font-bold text-gray-700 mb-2">
-                           Alias de la factura
+                           {activeTable ? 'Nombre temporal' : 'Alias de la factura'}
                         </label>
                         <input
                            id="park-ticket-alias"
@@ -9423,7 +9467,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                  void handleParkCurrentTicket(parkTicketAlias);
                               }
                            }}
-                           placeholder="Ej. Cliente VIP, Pedido oficina, Recoger luego"
+                           placeholder={activeTable ? 'Ej. Cumpleaños Ana, Terraza VIP' : 'Ej. Cliente VIP, Pedido oficina, Recoger luego'}
                            maxLength={80}
                            className="w-full rounded-2xl border border-gray-200 px-4 py-3 text-base font-medium text-gray-800 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                         />
@@ -9444,7 +9488,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         onClick={() => void handleParkCurrentTicket(parkTicketAlias)}
                         className="flex-1 rounded-2xl bg-blue-600 px-4 py-3 text-sm font-black uppercase tracking-[0.12em] text-white hover:bg-blue-700 transition-colors"
                      >
-                        Guardar En Espera
+                        {activeTable ? 'Actualizar mesa' : 'Guardar En Espera'}
                      </button>
                   </div>
                </div>

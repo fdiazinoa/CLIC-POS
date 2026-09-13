@@ -2,13 +2,13 @@ import React, { useState, useEffect } from 'react';
 import {
     ArrowLeft, Calendar, Clock, DollarSign, FileText,
     Printer, Mail, ChevronRight, Search, AlertTriangle,
-    Banknote, CheckCircle, RefreshCw
+    Banknote, CheckCircle, RefreshCw, UploadCloud
 } from 'lucide-react';
 import { ZReport, BusinessConfig, User, RoleDefinition, Transaction } from '../types';
 import { db } from '../utils/db';
 import { ThermalPrinterService } from '../services/printer/ThermalPrinterService';
-import { ZReportRecoveryService } from '../services/recovery/ZReportRecoveryService';
 import { sendZReportEmailViaErp } from '../services/email/zReportEmailService';
+import { syncManager } from '../services/sync/SyncManager';
 import { ALL_CLOSE_REPORT_SECTIONS, buildCloseReportDetails, resolveCloseReportSections } from '../utils/closeReportOptions';
 import { getZReportPaymentMethodSummary, paymentMethodSummaryTotal } from '../utils/zReportPaymentSummary';
 
@@ -31,6 +31,7 @@ const ZReportHistory: React.FC<ZReportHistoryProps> = ({ config, currentUser, ro
     const [reprintingReportId, setReprintingReportId] = useState<string | null>(null);
     const [reprocessingReportId, setReprocessingReportId] = useState<string | null>(null);
     const [emailingReportId, setEmailingReportId] = useState<string | null>(null);
+    const [sendingReportId, setSendingReportId] = useState<string | null>(null);
 
     const sortReportsByDate = (data: ZReport[]) =>
         [...(data || [])].sort((a, b) =>
@@ -64,25 +65,6 @@ const ZReportHistory: React.FC<ZReportHistoryProps> = ({ config, currentUser, ro
                     setReports(sortReportsByDate(data || []));
                 }
 
-                // Recovery runs in background so UI never stays blocked in spinner.
-                // It also restores missing single reports (not only empty-history scenarios).
-                void (async () => {
-                    try {
-                        const recoveredCount = await ZReportRecoveryService.recoverOrphanedReports({
-                            notifyUser: false,
-                            runOncePerSession: true,
-                            enrichHistory: false
-                        });
-                        if (recoveredCount > 0) {
-                            const recovered = await withTimeout(db.get('zReports') as Promise<ZReport[]>, 4000, 'RELOAD_Z_REPORTS');
-                            if (!cancelled) {
-                                setReports(sortReportsByDate(recovered || []));
-                            }
-                        }
-                    } catch (recoveryError) {
-                        console.warn('⚠️ ZReportHistory: recovery failed', recoveryError);
-                    }
-                })();
             } catch (error) {
                 console.error("Error loading Z-Reports:", error);
             } finally {
@@ -262,6 +244,41 @@ const ZReportHistory: React.FC<ZReportHistoryProps> = ({ config, currentUser, ro
         }
     };
 
+    const handleSendZReport = async (report: ZReport) => {
+        if (sendingReportId) return;
+        setSendingReportId(report.id);
+        const pendingReport: ZReport = {
+            ...report,
+            syncStatus: 'PENDING',
+            syncError: undefined,
+        };
+        try {
+            await db.saveDocument('zReports', pendingReport);
+            await syncManager.pushZReport(pendingReport);
+            const sentReport: ZReport = {
+                ...pendingReport,
+                syncStatus: syncManager.isUsingErpOperationalTarget() ? 'APPLIED_ERP' : 'COMPLETED',
+                syncError: undefined,
+            };
+            await db.saveDocument('zReports', sentReport);
+            setReports(current => current.map(item => item.id === sentReport.id ? sentReport : item));
+            setSelectedReport(sentReport);
+            alert(`Cierre ${sentReport.sequenceNumber} recibido por el servidor.`);
+        } catch (error) {
+            const failedReport: ZReport = {
+                ...pendingReport,
+                syncStatus: 'RETRY_WAIT',
+                syncError: error instanceof Error ? error.message : String(error || 'No se pudo enviar el cierre Z'),
+            };
+            await db.saveDocument('zReports', failedReport);
+            setReports(current => current.map(item => item.id === failedReport.id ? failedReport : item));
+            setSelectedReport(failedReport);
+            alert(`No se pudo enviar ${failedReport.sequenceNumber}. Quedó guardado para reintento.\n\n${failedReport.syncError}`);
+        } finally {
+            setSendingReportId(null);
+        }
+    };
+
     // --- DETAIL VIEW ---
     if (selectedReport) {
         const r = selectedReport;
@@ -298,6 +315,15 @@ const ZReportHistory: React.FC<ZReportHistoryProps> = ({ config, currentUser, ro
                     </div>
 
                     <div className="flex gap-2">
+                        <button
+                            onClick={() => handleSendZReport(r)}
+                            disabled={sendingReportId === r.id}
+                            className="px-4 py-2 bg-emerald-50 hover:bg-emerald-600 hover:text-white rounded-xl text-emerald-700 transition-all font-bold text-sm flex items-center gap-2 shadow-sm disabled:opacity-60 disabled:cursor-wait"
+                            title="Enviar este mismo cierre al ERP de forma idempotente"
+                        >
+                            <UploadCloud size={18} className={sendingReportId === r.id ? 'animate-pulse' : ''} />
+                            <span className="hidden sm:inline">{sendingReportId === r.id ? 'Enviando...' : 'Enviar a ERP'}</span>
+                        </button>
                         {canRepeatZReport && (
                             <button
                                 onClick={() => handleRepeatZReport(r)}

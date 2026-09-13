@@ -11,6 +11,7 @@ import { User, RoleDefinition, Shift, TimeRecord, ZReportModule } from '../types
 import { AVAILABLE_PERMISSIONS } from '../constants';
 import { biometricService } from '../services/BiometricAuthService';
 import { resolveTeamHubTabs, TeamHubMode, TeamHubTab } from '../utils/teamHubAccess';
+import { normalizeSalesPercent } from '../utils/userSalesPolicy';
 
 interface TeamHubProps {
    users: User[];
@@ -206,6 +207,8 @@ const TeamHub: React.FC<TeamHubProps> = ({
             role: userForm.role!,
             photo: userForm.photo,
             biometrics: userForm.biometrics,
+            maxDiscountPercent: userForm.maxDiscountPercent,
+            commissionPercent: userForm.commissionPercent,
             syncSource: 'LOCAL',
          };
          onUpdateUsers([...users, newUser]);
@@ -575,7 +578,7 @@ const TeamHub: React.FC<TeamHubProps> = ({
                   {/* User Modal */}
                   {isUserModalOpen && (
                      <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
-                        <div className="bg-white rounded-2xl w-full max-w-md p-6 shadow-2xl">
+                        <div className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl">
                            <h3 className="text-xl font-bold text-gray-800 mb-6">{editingUser ? 'Editar Usuario' : 'Nuevo Usuario'}</h3>
                            <div className="space-y-4">
                               <div>
@@ -592,6 +595,42 @@ const TeamHub: React.FC<TeamHubProps> = ({
                                     <select value={userForm.role || 'CASHIER'} onChange={e => setUserForm({ ...userForm, role: e.target.value })} className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 text-sm">
                                        {roles.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
                                     </select>
+                                 </div>
+                              </div>
+                              <div className="grid grid-cols-2 gap-4">
+                                 <div>
+                                    <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Descuento máximo (%)</label>
+                                    <input
+                                       type="number"
+                                       min="0"
+                                       max="100"
+                                       step="0.01"
+                                       value={userForm.maxDiscountPercent ?? ''}
+                                       onChange={e => setUserForm({
+                                          ...userForm,
+                                          maxDiscountPercent: normalizeSalesPercent(e.target.value),
+                                       })}
+                                       className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"
+                                       placeholder="Hereda del rol"
+                                    />
+                                    <p className="mt-1 text-[10px] text-gray-400">Vacío: usa el límite configurado en el rol.</p>
+                                 </div>
+                                 <div>
+                                    <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Comisión en venta (%)</label>
+                                    <input
+                                       type="number"
+                                       min="0"
+                                       max="100"
+                                       step="0.01"
+                                       value={userForm.commissionPercent ?? ''}
+                                       onChange={e => setUserForm({
+                                          ...userForm,
+                                          commissionPercent: normalizeSalesPercent(e.target.value),
+                                       })}
+                                       className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"
+                                       placeholder="0.00"
+                                    />
+                                    <p className="mt-1 text-[10px] text-gray-400">Se guarda como snapshot al completar la venta.</p>
                                  </div>
                               </div>
                               <div>

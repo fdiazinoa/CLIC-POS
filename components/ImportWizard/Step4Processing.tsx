@@ -3,6 +3,7 @@ import { CheckCircle, AlertTriangle, Loader2, Download, XCircle } from 'lucide-r
 import { BusinessConfig, Product, Customer, Supplier, Warehouse } from '../../types';
 import { ImportMode, ImportJob, ImportError } from '../../types/importExport';
 import { SYSTEM_FIELDS } from '../../constants/importFields';
+import { createUuid } from '../../utils/uuid';
 
 interface Step4ProcessingProps {
     data: any[];
@@ -89,7 +90,7 @@ const Step4Processing: React.FC<Step4ProcessingProps> = ({
 
                     try {
                         const product: Product = {
-                            id: productsMap.get(sku)?.id || crypto.randomUUID(),
+                            id: productsMap.get(sku)?.id || createUuid(),
                             name: String(getValue(row, 'name') || 'Unnamed Product'),
                             price: parseFloat(getValue(row, 'price')) || 0,
                             cost: parseFloat(getValue(row, 'cost')) || 0,
@@ -257,7 +258,7 @@ const Step4Processing: React.FC<Step4ProcessingProps> = ({
                     }
 
                     const newCustomer: Customer = {
-                        id: crypto.randomUUID(),
+                        id: createUuid(),
                         name: String(name),
                         taxId: getValue(row, 'taxId'),
                         email: getValue(row, 'email'),

@@ -4,6 +4,8 @@ Guía para mejoras del APK móvil: dónde editar, dónde firmar, versión y vali
 
 Complementa este checklist con [docs/AGENT_RELEASE_PROTOCOL.md](./AGENT_RELEASE_PROTOCOL.md), que define la fuente de verdad, el gate de limpieza y cómo coordinar a Codex, Cursor y AG sin partir fixes entre varias worktrees.
 
+La [Constitución antirregresión](./APK_RELEASE_CONSTITUTION.md) es obligatoria: todo APK debe superar las puertas `prebuild` y `promote` contra la baseline 1.1.363.
+
 ## Rutas de referencia
 
 | Rol | Ruta |
@@ -39,6 +41,12 @@ En otros equipos, sustituye la parte base por tu clon; el worktree firmado debe 
    ```
 
    Debe estar vacío. Si no lo está, detener el release y alinear la base.
+
+   Ejecutar además la puerta automatizada antes de incrementar la versión:
+
+   ```bash
+   npm run qa:release-gate -- --source-commit HEAD --require-clean
+   ```
 
 5. **Firma válida** (solo en el worktree firmado; no mover ni borrar el keystore):
    - `android/key.properties`
@@ -120,6 +128,14 @@ El script:
    - e-CF ya no se queda en `Nuevo`
    - crédito sin cliente se bloquea
    - crédito sobre límite pide autorización o bloquea según rol
+
+    Completar `qa/release-evidence.template.json` con evidencia real y exigir:
+
+    ```bash
+    npm run qa:release-promote -- --evidence /ruta/absoluta/release-evidence.json
+    ```
+
+    Sin esta segunda puerta el APK sigue siendo candidato y no puede promoverse.
 
 11. **Git**:
     - Crear rama desde `develop`

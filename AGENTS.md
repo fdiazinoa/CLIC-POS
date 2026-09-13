@@ -22,6 +22,7 @@ Para evitar releases incompletos, usa siempre esta jerarquía:
 
 Detalle operativo: [docs/APK_RELEASE_CHECKLIST.md](./docs/APK_RELEASE_CHECKLIST.md).
 Protocolo de coordinación con agentes: [docs/AGENT_RELEASE_PROTOCOL.md](./docs/AGENT_RELEASE_PROTOCOL.md).
+Constitución antirregresión obligatoria: [docs/APK_RELEASE_CONSTITUTION.md](./docs/APK_RELEASE_CONSTITUTION.md).
 
 ## Ramas
 
@@ -37,4 +38,5 @@ En `android/app/build.gradle`, **`versionCode`** debe subir en cada subida a Pla
 
 - [docs/APK_RELEASE_CHECKLIST.md](./docs/APK_RELEASE_CHECKLIST.md) — flujo build + firma + verificación.
 - [docs/AGENT_RELEASE_PROTOCOL.md](./docs/AGENT_RELEASE_PROTOCOL.md) — protocolo para Codex, Cursor y AG; evita mezclar fixes entre ramas, runtime y APK.
+- [docs/APK_RELEASE_CONSTITUTION.md](./docs/APK_RELEASE_CONSTITUTION.md) — baseline 1.1.363, puertas prebuild/promote y presupuestos que bloquean regresiones.
 - [docs/ANDROID_APK_SQLITE.md](./docs/ANDROID_APK_SQLITE.md) — notas SQLite / APK (si aplica a tu tarea).

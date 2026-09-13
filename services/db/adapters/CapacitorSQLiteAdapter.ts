@@ -1,3 +1,4 @@
+import { SYNC_MONITOR_PAGE_SQL, syncMonitorPageParams, decodeSyncMonitorPage, type SyncMonitorPageRequest } from '../SyncMonitorPage';
 import { Capacitor } from '@capacitor/core';
 import type {
     DatabaseAdapter,
@@ -86,6 +87,11 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         this.db = null;
         this.sqliteConnection = null;
         this.isReady = false;
+    }
+
+    async getSyncMonitorPage(request: SyncMonitorPageRequest) {
+        const result = await this.ensureDb().query(SYNC_MONITOR_PAGE_SQL, syncMonitorPageParams(request));
+        return decodeSyncMonitorPage(result.values?.[0]);
     }
 
     async getCollection<T>(collectionName: string, _queryParams?: Record<string, string>): Promise<T[] | any> {

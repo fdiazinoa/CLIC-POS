@@ -1,0 +1,46 @@
+name: APK release gate
+
+on:
+  pull_request:
+    branches:
+      - develop
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  apk-release-gate:
+    name: apk-release-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify golden APK baseline
+        run: npm run qa:release-gate -- --source-commit "$GITHUB_SHA" --require-clean --report release-gate-report.json
+
+      - name: Build web assets
+        run: npm run build
+
+      - name: Upload gate report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk-release-gate-report
+          path: release-gate-report.json
+          if-no-files-found: ignore
+          retention-days: 30

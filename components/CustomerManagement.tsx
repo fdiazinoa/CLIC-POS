@@ -27,10 +27,12 @@ import {
    mapLegacyFiscalCodeToElectronic
 } from '../utils/fiscal/fiscalHelpers';
 import { resolveCustomerImageSrc } from '../utils/entityImage';
+import { createUuid } from '../utils/uuid';
 import {
    buildPaymentSettlementSummary,
    resolveCurrencySymbol,
 } from '../utils/paymentSettlement';
+import { collapseEmptyPosCustomerShadows } from '../services/customers/customerPresentation';
 
 interface CustomerManagementProps {
    customers: Customer[];
@@ -277,7 +279,7 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
    const filteredCustomers = useMemo(() => {
       // If we have a remote result and search term matches its RNC, include it or prioritize it?
       // Actually we'll handle remote result separately in the UI
-      return customers.filter(c => {
+      return collapseEmptyPosCustomerShadows(customers).filter(c => {
          const searchLower = searchTerm.toLowerCase();
          const matchesSearch =
             c.name.toLowerCase().includes(searchLower) ||
@@ -429,7 +431,7 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
          } else {
             const newCustomer: Customer = {
                ...customerPayload as Customer,
-               id: formData.id || crypto.randomUUID(),
+               id: formData.id || createUuid(),
                createdAt: new Date().toISOString(),
                totalSpent: 0,
                lastVisit: new Date().toISOString()
