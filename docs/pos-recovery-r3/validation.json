@@ -1,0 +1,14 @@
+{
+  "erpCommit": "6b05ff8d7274d89bc0fc863c0a23bd9ac65a22a5",
+  "erpPr": 2001,
+  "erpPrObservedState": "MERGED",
+  "archiveSha256": "5a192ee89fd21041b880e30a21974cb930b8e8b144084f6ede0ac262ae18a9b9",
+  "sha256sums": "PASS",
+  "erpFixtureVerifier": "PASS: 4 packages + 1 candidate, 3 byte vectors, 5 negative cases",
+  "erpSchemaVerifier": "PASS: 42 envelopes, 10 negative checks, 15 original assessments, none certified",
+  "posPureCalculationCases": 8,
+  "posProjectionCases": 21,
+  "serializerEvidenceCases": 14,
+  "nativeDefinitions": 20,
+  "noHttpDbOrBusinessEffects": true
+}

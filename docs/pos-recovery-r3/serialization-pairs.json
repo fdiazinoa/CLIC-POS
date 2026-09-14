@@ -1,0 +1,4106 @@
+{
+  "status": "OFFLINE_SYNTHETIC_SERIALIZER_EVIDENCE",
+  "sourceCommit": "2e200a2ff7854cbb08fa8218cffb09dbdb7bdf57",
+  "sourceHashes": {
+    "types.ts": "bc0f77f5ad904edd9a00d72184d9388b992bd39e023fea70f4858115f0072e0b",
+    "services/sync/ApiSyncAdapter.ts": "b627b10eb6efccafdc2c84a99937d3b6b73c9d39f76056c62a418fa150655ae6",
+    "services/sync/erpOutboundPayloads.ts": "1cc038b7935f813b42c0003b85950992fdb5278e372a664681dc5b1ca0d8dbe2",
+    "services/sync/customerIdentityContract.ts": "9c2cff25b488a7b4bfa700794705dfad0134309c5adcfead75d69a03d26d511e",
+    "services/sync/sourceIdentity.ts": "bba75c88e6565eedceea599e9f968d4edb06dfdb57b719a7931df206e914fd44",
+    "services/sync/SalePostedContract.ts": "d22eef2959766fe434c332d540a4f9b2b2a5b92c4ccfcf41c31c2ba9bdb98925"
+  },
+  "limitations": [
+    "Synthetic objects, no client documents extracted; native Date tags recorded separately from JSON.",
+    "Credential context is synthetic; adapter body method extracted verbatim. No auth, network, DB or provider calls.",
+    "Collection/advance have no proven send path; no invented payload.",
+    "Default-time/invalid-time examples describe existing sender behavior, prohibited as silent recovery adaptation."
+  ],
+  "cases": [
+    {
+      "id": "SALE_DIRECT",
+      "route": "/api/sync/transactions",
+      "localRuntimeTimestamps": [
+        {
+          "id": "pay-usd",
+          "type": "Date",
+          "value": "2026-09-06T03:59:00.123Z"
+        }
+      ],
+      "localJson": {
+        "id": "sale-fixture",
+        "displayId": "T-001",
+        "date": "2026-09-05T23:59:00-04:00",
+        "terminalId": "fixture-terminal",
+        "userId": "fixture-user",
+        "userName": "Cajero ficticio",
+        "documentType": "TICKET",
+        "status": "COMPLETED",
+        "items": [
+          {
+            "id": "product-fixture",
+            "cartId": "cart-line-fixture",
+            "name": "Producto ficticio",
+            "quantity": 1,
+            "price": 550,
+            "category": "fixture",
+            "images": [
+              "synthetic-image"
+            ],
+            "attributes": [
+              {
+                "id": "a",
+                "name": "Color"
+              }
+            ],
+            "variants": [],
+            "tariffs": [
+              {
+                "id": "not-uuid"
+              }
+            ],
+            "appliedTaxIds": [],
+            "netAmount": 550,
+            "taxAmount": 0,
+            "totalAmount": 550,
+            "selected_modifiers": [
+              {
+                "id": "selected",
+                "price": 0
+              }
+            ],
+            "availableModifiers": [
+              {
+                "id": "definition"
+              }
+            ],
+            "tariffId": "not-uuid"
+          }
+        ],
+        "payments": [
+          {
+            "id": "pay-usd",
+            "method": "CASH",
+            "amount": 600,
+            "timestamp": "2026-09-06T03:59:00.123Z",
+            "currencyCode": "USD",
+            "amountOriginal": 10,
+            "exchangeRate": 60,
+            "appliedAmount": 550,
+            "changeAmount": 50,
+            "changeCurrencyCode": "DOP",
+            "gatewayRawResponse": {
+              "synthetic": true
+            },
+            "gatewayReceiptClient": "SYNTHETIC RECEIPT",
+            "gatewayReference": "SYNTHETIC-REF"
+          }
+        ],
+        "total": 550,
+        "netAmount": 550,
+        "taxAmount": 0,
+        "discountAmount": 0,
+        "fiscalMode": "NONE",
+        "device_id": "DEVICE-SYNTHETIC",
+        "customerId": "customer-fixture",
+        "customerName": "Cliente ficticio",
+        "customerSnapshot": {
+          "name": "Cliente ficticio",
+          "taxId": "SYNTHETIC-NON-FISCAL",
+          "customer_code": "C-001"
+        }
+      },
+      "serializedItem": {
+        "id": "sale-fixture",
+        "displayId": "T-001",
+        "date": "2026-09-05T23:59:00-04:00",
+        "terminalId": "fixture-terminal",
+        "userId": "fixture-user",
+        "userName": "Cajero ficticio",
+        "documentType": "TICKET",
+        "status": "COMPLETED",
+        "items": [
+          {
+            "id": "product-fixture",
+            "cartId": "cart-line-fixture",
+            "name": "Producto ficticio",
+            "quantity": 1,
+            "price": 550,
+            "category": "fixture",
+            "appliedTaxIds": [],
+            "netAmount": 550,
+            "taxAmount": 0,
+            "totalAmount": 550,
+            "selected_modifiers": [
+              {
+                "id": "selected",
+                "price": 0
+              }
+            ]
+          }
+        ],
+        "payments": [
+          {
+            "id": "pay-usd",
+            "method": "CASH",
+            "creditOverrideApproved": false,
+            "amount": 600,
+            "timestamp": "2026-09-06T03:59:00.123Z",
+            "currencyCode": "USD",
+            "amountOriginal": 10,
+            "exchangeRate": 60,
+            "appliedAmount": 550,
+            "changeAmount": 50,
+            "changeCurrencyCode": "DOP",
+            "amountApplied": 550,
+            "gatewayReference": "SYNTHETIC-REF",
+            "source_channel": "POS",
+            "source_payment_id": "pay-usd",
+            "source_transaction_id": "sale-fixture",
+            "source_display_id": "T-001",
+            "source_terminal_id": "fixture-terminal",
+            "device_id": "DEVICE-SYNTHETIC",
+            "payment_method": "CASH",
+            "currency_code": "USD",
+            "exchange_rate": 60,
+            "applied_amount": 550,
+            "change_amount": 50,
+            "change_currency_code": "DOP"
+          }
+        ],
+        "total": 550,
+        "netAmount": 550,
+        "taxAmount": 0,
+        "discountAmount": 0,
+        "fiscalMode": "NONE",
+        "device_id": "DEVICE-SYNTHETIC",
+        "customerId": "customer-fixture",
+        "customerName": "Cliente ficticio",
+        "customerSnapshot": {
+          "name": "Cliente ficticio",
+          "taxId": "SYNTHETIC-NON-FISCAL",
+          "customer_code": "C-001"
+        },
+        "source_channel": "POS",
+        "source_transaction_id": "sale-fixture",
+        "source_display_id": "T-001",
+        "source_terminal_id": "fixture-terminal",
+        "fiscalProvider": "NONE",
+        "transaction_date": "2026-09-05T23:59:00-04:00",
+        "currency_code": "USD",
+        "exchange_rate": 60,
+        "customer_ref": "customer-fixture",
+        "customer_code": "C-001",
+        "customer": {
+          "customer_code": "C-001"
+        }
+      },
+      "httpBody": {
+        "items": [
+          {
+            "id": "sale-fixture",
+            "displayId": "T-001",
+            "date": "2026-09-05T23:59:00-04:00",
+            "terminalId": "44444444-4444-4444-8444-444444444444",
+            "userId": "fixture-user",
+            "userName": "Cajero ficticio",
+            "documentType": "TICKET",
+            "status": "COMPLETED",
+            "items": [
+              {
+                "id": "product-fixture",
+                "cartId": "cart-line-fixture",
+                "name": "Producto ficticio",
+                "quantity": 1,
+                "price": 550,
+                "category": "fixture",
+                "appliedTaxIds": [],
+                "netAmount": 550,
+                "taxAmount": 0,
+                "totalAmount": 550,
+                "selected_modifiers": [
+                  {
+                    "id": "selected",
+                    "price": 0
+                  }
+                ]
+              }
+            ],
+            "payments": [
+              {
+                "id": "pay-usd",
+                "method": "CASH",
+                "creditOverrideApproved": false,
+                "amount": 600,
+                "timestamp": "2026-09-06T03:59:00.123Z",
+                "currencyCode": "USD",
+                "amountOriginal": 10,
+                "exchangeRate": 60,
+                "appliedAmount": 550,
+                "changeAmount": 50,
+                "changeCurrencyCode": "DOP",
+                "amountApplied": 550,
+                "gatewayReference": "SYNTHETIC-REF",
+                "source_channel": "POS",
+                "source_payment_id": "pay-usd",
+                "source_transaction_id": "sale-fixture",
+                "source_display_id": "T-001",
+                "source_terminal_id": "44444444-4444-4444-8444-444444444444",
+                "device_id": "DEVICE-SYNTHETIC",
+                "payment_method": "CASH",
+                "currency_code": "USD",
+                "exchange_rate": 60,
+                "applied_amount": 550,
+                "change_amount": 50,
+                "change_currency_code": "DOP",
+                "terminalId": "44444444-4444-4444-8444-444444444444",
+                "terminal_id": "44444444-4444-4444-8444-444444444444",
+                "erp_terminal_id": "44444444-4444-4444-8444-444444444444",
+                "local_terminal_id": "fixture-terminal",
+                "localTerminalId": "fixture-terminal"
+              }
+            ],
+            "total": 550,
+            "netAmount": 550,
+            "taxAmount": 0,
+            "discountAmount": 0,
+            "fiscalMode": "NONE",
+            "device_id": "DEVICE-SYNTHETIC",
+            "customerId": "customer-fixture",
+            "customerName": "Cliente ficticio",
+            "customerSnapshot": {
+              "name": "Cliente ficticio",
+              "taxId": "SYNTHETIC-NON-FISCAL",
+              "customer_code": "C-001"
+            },
+            "source_channel": "POS",
+            "source_transaction_id": "sale-fixture",
+            "source_display_id": "T-001",
+            "source_terminal_id": "44444444-4444-4444-8444-444444444444",
+            "fiscalProvider": "NONE",
+            "transaction_date": "2026-09-05T23:59:00-04:00",
+            "currency_code": "USD",
+            "exchange_rate": 60,
+            "customer_ref": "customer-fixture",
+            "customer_code": "C-001",
+            "customer": {
+              "customer_code": "C-001"
+            },
+            "terminal_id": "44444444-4444-4444-8444-444444444444",
+            "erp_terminal_id": "44444444-4444-4444-8444-444444444444",
+            "local_terminal_id": "fixture-terminal",
+            "localTerminalId": "fixture-terminal"
+          }
+        ],
+        "terminalId": "44444444-4444-4444-8444-444444444444",
+        "terminal_id": "44444444-4444-4444-8444-444444444444",
+        "tenantId": "11111111-1111-4111-8111-111111111111",
+        "tenant_id": "11111111-1111-4111-8111-111111111111",
+        "companyId": "22222222-2222-4222-8222-222222222222",
+        "company_id": "22222222-2222-4222-8222-222222222222",
+        "storeId": "33333333-3333-4333-8333-333333333333",
+        "store_id": "33333333-3333-4333-8333-333333333333",
+        "sync_channel": "ERP_ACTIVE",
+        "device_id": "DEVICE-SYNTHETIC",
+        "deviceId": "DEVICE-SYNTHETIC"
+      },
+      "fieldDifferences": [
+        {
+          "path": "/terminalId",
+          "change": "CHANGED",
+          "before": "fixture-terminal",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/items/0/images",
+          "change": "REMOVED",
+          "before": [
+            "synthetic-image"
+          ]
+        },
+        {
+          "path": "/items/0/attributes",
+          "change": "REMOVED",
+          "before": [
+            {
+              "id": "a",
+              "name": "Color"
+            }
+          ]
+        },
+        {
+          "path": "/items/0/variants",
+          "change": "REMOVED",
+          "before": []
+        },
+        {
+          "path": "/items/0/tariffs",
+          "change": "REMOVED",
+          "before": [
+            {
+              "id": "not-uuid"
+            }
+          ]
+        },
+        {
+          "path": "/items/0/availableModifiers",
+          "change": "REMOVED",
+          "before": [
+            {
+              "id": "definition"
+            }
+          ]
+        },
+        {
+          "path": "/items/0/tariffId",
+          "change": "REMOVED",
+          "before": "not-uuid"
+        },
+        {
+          "path": "/payments/0/gatewayRawResponse",
+          "change": "REMOVED",
+          "before": {
+            "synthetic": true
+          }
+        },
+        {
+          "path": "/payments/0/gatewayReceiptClient",
+          "change": "REMOVED",
+          "before": "SYNTHETIC RECEIPT"
+        },
+        {
+          "path": "/payments/0/creditOverrideApproved",
+          "change": "ADDED",
+          "after": false
+        },
+        {
+          "path": "/payments/0/amountApplied",
+          "change": "ADDED",
+          "after": 550
+        },
+        {
+          "path": "/payments/0/source_channel",
+          "change": "ADDED",
+          "after": "POS"
+        },
+        {
+          "path": "/payments/0/source_payment_id",
+          "change": "ADDED",
+          "after": "pay-usd"
+        },
+        {
+          "path": "/payments/0/source_transaction_id",
+          "change": "ADDED",
+          "after": "sale-fixture"
+        },
+        {
+          "path": "/payments/0/source_display_id",
+          "change": "ADDED",
+          "after": "T-001"
+        },
+        {
+          "path": "/payments/0/source_terminal_id",
+          "change": "ADDED",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/payments/0/device_id",
+          "change": "ADDED",
+          "after": "DEVICE-SYNTHETIC"
+        },
+        {
+          "path": "/payments/0/payment_method",
+          "change": "ADDED",
+          "after": "CASH"
+        },
+        {
+          "path": "/payments/0/currency_code",
+          "change": "ADDED",
+          "after": "USD"
+        },
+        {
+          "path": "/payments/0/exchange_rate",
+          "change": "ADDED",
+          "after": 60
+        },
+        {
+          "path": "/payments/0/applied_amount",
+          "change": "ADDED",
+          "after": 550
+        },
+        {
+          "path": "/payments/0/change_amount",
+          "change": "ADDED",
+          "after": 50
+        },
+        {
+          "path": "/payments/0/change_currency_code",
+          "change": "ADDED",
+          "after": "DOP"
+        },
+        {
+          "path": "/payments/0/terminalId",
+          "change": "ADDED",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/payments/0/terminal_id",
+          "change": "ADDED",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/payments/0/erp_terminal_id",
+          "change": "ADDED",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/payments/0/local_terminal_id",
+          "change": "ADDED",
+          "after": "fixture-terminal"
+        },
+        {
+          "path": "/payments/0/localTerminalId",
+          "change": "ADDED",
+          "after": "fixture-terminal"
+        },
+        {
+          "path": "/source_channel",
+          "change": "ADDED",
+          "after": "POS"
+        },
+        {
+          "path": "/source_transaction_id",
+          "change": "ADDED",
+          "after": "sale-fixture"
+        },
+        {
+          "path": "/source_display_id",
+          "change": "ADDED",
+          "after": "T-001"
+        },
+        {
+          "path": "/source_terminal_id",
+          "change": "ADDED",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/fiscalProvider",
+          "change": "ADDED",
+          "after": "NONE"
+        },
+        {
+          "path": "/transaction_date",
+          "change": "ADDED",
+          "after": "2026-09-05T23:59:00-04:00"
+        },
+        {
+          "path": "/currency_code",
+          "change": "ADDED",
+          "after": "USD"
+        },
+        {
+          "path": "/exchange_rate",
+          "change": "ADDED",
+          "after": 60
+        },
+        {
+          "path": "/customer_ref",
+          "change": "ADDED",
+          "after": "customer-fixture"
+        },
+        {
+          "path": "/customer_code",
+          "change": "ADDED",
+          "after": "C-001"
+        },
+        {
+          "path": "/customer",
+          "change": "ADDED",
+          "after": {
+            "customer_code": "C-001"
+          }
+        },
+        {
+          "path": "/terminal_id",
+          "change": "ADDED",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/erp_terminal_id",
+          "change": "ADDED",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/local_terminal_id",
+          "change": "ADDED",
+          "after": "fixture-terminal"
+        },
+        {
+          "path": "/localTerminalId",
+          "change": "ADDED",
+          "after": "fixture-terminal"
+        }
+      ],
+      "notes": []
+    },
+    {
+      "id": "REFUND_STORE_CREDIT",
+      "route": "/api/sync/transactions",
+      "localRuntimeTimestamps": [
+        {
+          "id": "refund-pay",
+          "type": "Date",
+          "value": "2026-09-06T03:59:00.000Z"
+        }
+      ],
+      "localJson": {
+        "id": "refund-fixture",
+        "displayId": "NC-001",
+        "date": "2026-09-05T23:59:00-04:00",
+        "terminalId": "fixture-terminal",
+        "userId": "fixture-user",
+        "userName": "Cajero ficticio",
+        "documentType": "REFUND",
+        "status": "REFUNDED",
+        "items": [
+          {
+            "id": "product-fixture",
+            "cartId": "cart-line-fixture",
+            "name": "Producto ficticio",
+            "quantity": 1,
+            "price": 50,
+            "category": "fixture",
+            "images": [],
+            "attributes": [],
+            "variants": [],
+            "tariffs": [],
+            "appliedTaxIds": [],
+            "netAmount": 50,
+            "taxAmount": 0,
+            "totalAmount": 50
+          }
+        ],
+        "payments": [
+          {
+            "id": "refund-pay",
+            "method": "STORE_CREDIT",
+            "methodLabel": "Nota de crédito",
+            "amount": 50,
+            "timestamp": "2026-09-06T03:59:00.000Z"
+          }
+        ],
+        "total": 50,
+        "netAmount": 50,
+        "taxAmount": 0,
+        "discountAmount": 0,
+        "fiscalMode": "NONE",
+        "originalTransactionId": "closed-fixture",
+        "device_id": "DEVICE-SYNTHETIC"
+      },
+      "serializedItem": {
+        "id": "refund-fixture",
+        "displayId": "NC-001",
+        "date": "2026-09-05T23:59:00-04:00",
+        "terminalId": "fixture-terminal",
+        "userId": "fixture-user",
+        "userName": "Cajero ficticio",
+        "documentType": "REFUND",
+        "status": "REFUNDED",
+        "items": [
+          {
+            "id": "product-fixture",
+            "cartId": "cart-line-fixture",
+            "name": "Producto ficticio",
+            "quantity": 1,
+            "price": 50,
+            "category": "fixture",
+            "appliedTaxIds": [],
+            "netAmount": 50,
+            "taxAmount": 0,
+            "totalAmount": 50
+          }
+        ],
+        "payments": [
+          {
+            "id": "refund-pay",
+            "method": "STORE_CREDIT",
+            "methodLabel": "Nota de crédito",
+            "creditOverrideApproved": false,
+            "amount": 50,
+            "timestamp": "2026-09-06T03:59:00.000Z",
+            "currencyCode": "DOP",
+            "source_channel": "POS",
+            "source_payment_id": "refund-pay",
+            "source_transaction_id": "refund-fixture",
+            "source_display_id": "NC-001",
+            "source_terminal_id": "fixture-terminal",
+            "device_id": "DEVICE-SYNTHETIC",
+            "payment_method": "STORE_CREDIT",
+            "currency_code": "DOP"
+          }
+        ],
+        "total": 50,
+        "netAmount": 50,
+        "taxAmount": 0,
+        "discountAmount": 0,
+        "fiscalMode": "NONE",
+        "originalTransactionId": "closed-fixture",
+        "device_id": "DEVICE-SYNTHETIC",
+        "source_channel": "POS",
+        "source_transaction_id": "refund-fixture",
+        "source_display_id": "NC-001",
+        "source_terminal_id": "fixture-terminal",
+        "source_credit_note_id": "refund-fixture",
+        "original_transaction_id": "closed-fixture",
+        "fiscalProvider": "NONE",
+        "transaction_date": "2026-09-05T23:59:00-04:00",
+        "currency_code": "DOP"
+      },
+      "httpBody": {
+        "items": [
+          {
+            "id": "refund-fixture",
+            "displayId": "NC-001",
+            "date": "2026-09-05T23:59:00-04:00",
+            "terminalId": "44444444-4444-4444-8444-444444444444",
+            "userId": "fixture-user",
+            "userName": "Cajero ficticio",
+            "documentType": "REFUND",
+            "status": "REFUNDED",
+            "items": [
+              {
+                "id": "product-fixture",
+                "cartId": "cart-line-fixture",
+                "name": "Producto ficticio",
+                "quantity": 1,
+                "price": 50,
+                "category": "fixture",
+                "appliedTaxIds": [],
+                "netAmount": 50,
+                "taxAmount": 0,
+                "totalAmount": 50
+              }
+            ],
+            "payments": [
+              {
+                "id": "refund-pay",
+                "method": "STORE_CREDIT",
+                "methodLabel": "Nota de crédito",
+                "creditOverrideApproved": false,
+                "amount": 50,
+                "timestamp": "2026-09-06T03:59:00.000Z",
+                "currencyCode": "DOP",
+                "source_channel": "POS",
+                "source_payment_id": "refund-pay",
+                "source_transaction_id": "refund-fixture",
+                "source_display_id": "NC-001",
+                "source_terminal_id": "44444444-4444-4444-8444-444444444444",
+                "device_id": "DEVICE-SYNTHETIC",
+                "payment_method": "STORE_CREDIT",
+                "currency_code": "DOP",
+                "terminalId": "44444444-4444-4444-8444-444444444444",
+                "terminal_id": "44444444-4444-4444-8444-444444444444",
+                "erp_terminal_id": "44444444-4444-4444-8444-444444444444",
+                "local_terminal_id": "fixture-terminal",
+                "localTerminalId": "fixture-terminal"
+              }
+            ],
+            "total": 50,
+            "netAmount": 50,
+            "taxAmount": 0,
+            "discountAmount": 0,
+            "fiscalMode": "NONE",
+            "originalTransactionId": "closed-fixture",
+            "device_id": "DEVICE-SYNTHETIC",
+            "source_channel": "POS",
+            "source_transaction_id": "refund-fixture",
+            "source_display_id": "NC-001",
+            "source_terminal_id": "44444444-4444-4444-8444-444444444444",
+            "source_credit_note_id": "refund-fixture",
+            "original_transaction_id": "closed-fixture",
+            "fiscalProvider": "NONE",
+            "transaction_date": "2026-09-05T23:59:00-04:00",
+            "currency_code": "DOP",
+            "terminal_id": "44444444-4444-4444-8444-444444444444",
+            "erp_terminal_id": "44444444-4444-4444-8444-444444444444",
+            "local_terminal_id": "fixture-terminal",
+            "localTerminalId": "fixture-terminal"
+          }
+        ],
+        "terminalId": "44444444-4444-4444-8444-444444444444",
+        "terminal_id": "44444444-4444-4444-8444-444444444444",
+        "tenantId": "11111111-1111-4111-8111-111111111111",
+        "tenant_id": "11111111-1111-4111-8111-111111111111",
+        "companyId": "22222222-2222-4222-8222-222222222222",
+        "company_id": "22222222-2222-4222-8222-222222222222",
+        "storeId": "33333333-3333-4333-8333-333333333333",
+        "store_id": "33333333-3333-4333-8333-333333333333",
+        "sync_channel": "ERP_ACTIVE",
+        "device_id": "DEVICE-SYNTHETIC",
+        "deviceId": "DEVICE-SYNTHETIC"
+      },
+      "fieldDifferences": [
+        {
+          "path": "/terminalId",
+          "change": "CHANGED",
+          "before": "fixture-terminal",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/items/0/images",
+          "change": "REMOVED",
+          "before": []
+        },
+        {
+          "path": "/items/0/attributes",
+          "change": "REMOVED",
+          "before": []
+        },
+        {
+          "path": "/items/0/variants",
+          "change": "REMOVED",
+          "before": []
+        },
+        {
+          "path": "/items/0/tariffs",
+          "change": "REMOVED",
+          "before": []
+        },
+        {
+          "path": "/payments/0/creditOverrideApproved",
+          "change": "ADDED",
+          "after": false
+        },
+        {
+          "path": "/payments/0/currencyCode",
+          "change": "ADDED",
+          "after": "DOP"
+        },
+        {
+          "path": "/payments/0/source_channel",
+          "change": "ADDED",
+          "after": "POS"
+        },
+        {
+          "path": "/payments/0/source_payment_id",
+          "change": "ADDED",
+          "after": "refund-pay"
+        },
+        {
+          "path": "/payments/0/source_transaction_id",
+          "change": "ADDED",
+          "after": "refund-fixture"
+        },
+        {
+          "path": "/payments/0/source_display_id",
+          "change": "ADDED",
+          "after": "NC-001"
+        },
+        {
+          "path": "/payments/0/source_terminal_id",
+          "change": "ADDED",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/payments/0/device_id",
+          "change": "ADDED",
+          "after": "DEVICE-SYNTHETIC"
+        },
+        {
+          "path": "/payments/0/payment_method",
+          "change": "ADDED",
+          "after": "STORE_CREDIT"
+        },
+        {
+          "path": "/payments/0/currency_code",
+          "change": "ADDED",
+          "after": "DOP"
+        },
+        {
+          "path": "/payments/0/terminalId",
+          "change": "ADDED",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/payments/0/terminal_id",
+          "change": "ADDED",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/payments/0/erp_terminal_id",
+          "change": "ADDED",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/payments/0/local_terminal_id",
+          "change": "ADDED",
+          "after": "fixture-terminal"
+        },
+        {
+          "path": "/payments/0/localTerminalId",
+          "change": "ADDED",
+          "after": "fixture-terminal"
+        },
+        {
+          "path": "/source_channel",
+          "change": "ADDED",
+          "after": "POS"
+        },
+        {
+          "path": "/source_transaction_id",
+          "change": "ADDED",
+          "after": "refund-fixture"
+        },
+        {
+          "path": "/source_display_id",
+          "change": "ADDED",
+          "after": "NC-001"
+        },
+        {
+          "path": "/source_terminal_id",
+          "change": "ADDED",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/source_credit_note_id",
+          "change": "ADDED",
+          "after": "refund-fixture"
+        },
+        {
+          "path": "/original_transaction_id",
+          "change": "ADDED",
+          "after": "closed-fixture"
+        },
+        {
+          "path": "/fiscalProvider",
+          "change": "ADDED",
+          "after": "NONE"
+        },
+        {
+          "path": "/transaction_date",
+          "change": "ADDED",
+          "after": "2026-09-05T23:59:00-04:00"
+        },
+        {
+          "path": "/currency_code",
+          "change": "ADDED",
+          "after": "DOP"
+        },
+        {
+          "path": "/terminal_id",
+          "change": "ADDED",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/erp_terminal_id",
+          "change": "ADDED",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/local_terminal_id",
+          "change": "ADDED",
+          "after": "fixture-terminal"
+        },
+        {
+          "path": "/localTerminalId",
+          "change": "ADDED",
+          "after": "fixture-terminal"
+        }
+      ],
+      "notes": []
+    },
+    {
+      "id": "REFUND_CARD",
+      "route": "/api/sync/transactions",
+      "localRuntimeTimestamps": [
+        {
+          "id": "refund-pay",
+          "type": "Date",
+          "value": "2026-09-06T03:59:00.000Z"
+        }
+      ],
+      "localJson": {
+        "id": "refund-fixture",
+        "displayId": "NC-001",
+        "date": "2026-09-05T23:59:00-04:00",
+        "terminalId": "fixture-terminal",
+        "userId": "fixture-user",
+        "userName": "Cajero ficticio",
+        "documentType": "REFUND",
+        "status": "REFUNDED",
+        "items": [
+          {
+            "id": "product-fixture",
+            "cartId": "cart-line-fixture",
+            "name": "Producto ficticio",
+            "quantity": 1,
+            "price": 50,
+            "category": "fixture",
+            "images": [],
+            "attributes": [],
+            "variants": [],
+            "tariffs": [],
+            "appliedTaxIds": [],
+            "netAmount": 50,
+            "taxAmount": 0,
+            "totalAmount": 50
+          }
+        ],
+        "payments": [
+          {
+            "id": "refund-pay",
+            "method": "CARD",
+            "methodLabel": "Nota de crédito",
+            "amount": 50,
+            "timestamp": "2026-09-06T03:59:00.000Z",
+            "gatewayTransactionType": "REFUND"
+          }
+        ],
+        "total": 50,
+        "netAmount": 50,
+        "taxAmount": 0,
+        "discountAmount": 0,
+        "fiscalMode": "NONE",
+        "originalTransactionId": "closed-fixture",
+        "device_id": "DEVICE-SYNTHETIC"
+      },
+      "serializedItem": {
+        "id": "refund-fixture",
+        "displayId": "NC-001",
+        "date": "2026-09-05T23:59:00-04:00",
+        "terminalId": "fixture-terminal",
+        "userId": "fixture-user",
+        "userName": "Cajero ficticio",
+        "documentType": "REFUND",
+        "status": "REFUNDED",
+        "items": [
+          {
+            "id": "product-fixture",
+            "cartId": "cart-line-fixture",
+            "name": "Producto ficticio",
+            "quantity": 1,
+            "price": 50,
+            "category": "fixture",
+            "appliedTaxIds": [],
+            "netAmount": 50,
+            "taxAmount": 0,
+            "totalAmount": 50
+          }
+        ],
+        "payments": [
+          {
+            "id": "refund-pay",
+            "method": "CARD",
+            "methodLabel": "Nota de crédito",
+            "creditOverrideApproved": false,
+            "amount": 50,
+            "timestamp": "2026-09-06T03:59:00.000Z",
+            "currencyCode": "DOP",
+            "gatewayTransactionType": "REFUND",
+            "source_channel": "POS",
+            "source_payment_id": "refund-pay",
+            "source_transaction_id": "refund-fixture",
+            "source_display_id": "NC-001",
+            "source_terminal_id": "fixture-terminal",
+            "device_id": "DEVICE-SYNTHETIC",
+            "payment_method": "CARD",
+            "currency_code": "DOP"
+          }
+        ],
+        "total": 50,
+        "netAmount": 50,
+        "taxAmount": 0,
+        "discountAmount": 0,
+        "fiscalMode": "NONE",
+        "originalTransactionId": "closed-fixture",
+        "device_id": "DEVICE-SYNTHETIC",
+        "source_channel": "POS",
+        "source_transaction_id": "refund-fixture",
+        "source_display_id": "NC-001",
+        "source_terminal_id": "fixture-terminal",
+        "source_credit_note_id": "refund-fixture",
+        "original_transaction_id": "closed-fixture",
+        "fiscalProvider": "NONE",
+        "transaction_date": "2026-09-05T23:59:00-04:00",
+        "currency_code": "DOP"
+      },
+      "httpBody": {
+        "items": [
+          {
+            "id": "refund-fixture",
+            "displayId": "NC-001",
+            "date": "2026-09-05T23:59:00-04:00",
+            "terminalId": "44444444-4444-4444-8444-444444444444",
+            "userId": "fixture-user",
+            "userName": "Cajero ficticio",
+            "documentType": "REFUND",
+            "status": "REFUNDED",
+            "items": [
+              {
+                "id": "product-fixture",
+                "cartId": "cart-line-fixture",
+                "name": "Producto ficticio",
+                "quantity": 1,
+                "price": 50,
+                "category": "fixture",
+                "appliedTaxIds": [],
+                "netAmount": 50,
+                "taxAmount": 0,
+                "totalAmount": 50
+              }
+            ],
+            "payments": [
+              {
+                "id": "refund-pay",
+                "method": "CARD",
+                "methodLabel": "Nota de crédito",
+                "creditOverrideApproved": false,
+                "amount": 50,
+                "timestamp": "2026-09-06T03:59:00.000Z",
+                "currencyCode": "DOP",
+                "gatewayTransactionType": "REFUND",
+                "source_channel": "POS",
+                "source_payment_id": "refund-pay",
+                "source_transaction_id": "refund-fixture",
+                "source_display_id": "NC-001",
+                "source_terminal_id": "44444444-4444-4444-8444-444444444444",
+                "device_id": "DEVICE-SYNTHETIC",
+                "payment_method": "CARD",
+                "currency_code": "DOP",
+                "terminalId": "44444444-4444-4444-8444-444444444444",
+                "terminal_id": "44444444-4444-4444-8444-444444444444",
+                "erp_terminal_id": "44444444-4444-4444-8444-444444444444",
+                "local_terminal_id": "fixture-terminal",
+                "localTerminalId": "fixture-terminal"
+              }
+            ],
+            "total": 50,
+            "netAmount": 50,
+            "taxAmount": 0,
+            "discountAmount": 0,
+            "fiscalMode": "NONE",
+            "originalTransactionId": "closed-fixture",
+            "device_id": "DEVICE-SYNTHETIC",
+            "source_channel": "POS",
+            "source_transaction_id": "refund-fixture",
+            "source_display_id": "NC-001",
+            "source_terminal_id": "44444444-4444-4444-8444-444444444444",
+            "source_credit_note_id": "refund-fixture",
+            "original_transaction_id": "closed-fixture",
+            "fiscalProvider": "NONE",
+            "transaction_date": "2026-09-05T23:59:00-04:00",
+            "currency_code": "DOP",
+            "terminal_id": "44444444-4444-4444-8444-444444444444",
+            "erp_terminal_id": "44444444-4444-4444-8444-444444444444",
+            "local_terminal_id": "fixture-terminal",
+            "localTerminalId": "fixture-terminal"
+          }
+        ],
+        "terminalId": "44444444-4444-4444-8444-444444444444",
+        "terminal_id": "44444444-4444-4444-8444-444444444444",
+        "tenantId": "11111111-1111-4111-8111-111111111111",
+        "tenant_id": "11111111-1111-4111-8111-111111111111",
+        "companyId": "22222222-2222-4222-8222-222222222222",
+        "company_id": "22222222-2222-4222-8222-222222222222",
+        "storeId": "33333333-3333-4333-8333-333333333333",
+        "store_id": "33333333-3333-4333-8333-333333333333",
+        "sync_channel": "ERP_ACTIVE",
+        "device_id": "DEVICE-SYNTHETIC",
+        "deviceId": "DEVICE-SYNTHETIC"
+      },
+      "fieldDifferences": [
+        {
+          "path": "/terminalId",
+          "change": "CHANGED",
+          "before": "fixture-terminal",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/items/0/images",
+          "change": "REMOVED",
+          "before": []
+        },
+        {
+          "path": "/items/0/attributes",
+          "change": "REMOVED",
+          "before": []
+        },
+        {
+          "path": "/items/0/variants",
+          "change": "REMOVED",
+          "before": []
+        },
+        {
+          "path": "/items/0/tariffs",
+          "change": "REMOVED",
+          "before": []
+        },
+        {
+          "path": "/payments/0/creditOverrideApproved",
+          "change": "ADDED",
+          "after": false
+        },
+        {
+          "path": "/payments/0/currencyCode",
+          "change": "ADDED",
+          "after": "DOP"
+        },
+        {
+          "path": "/payments/0/source_channel",
+          "change": "ADDED",
+          "after": "POS"
+        },
+        {
+          "path": "/payments/0/source_payment_id",
+          "change": "ADDED",
+          "after": "refund-pay"
+        },
+        {
+          "path": "/payments/0/source_transaction_id",
+          "change": "ADDED",
+          "after": "refund-fixture"
+        },
+        {
+          "path": "/payments/0/source_display_id",
+          "change": "ADDED",
+          "after": "NC-001"
+        },
+        {
+          "path": "/payments/0/source_terminal_id",
+          "change": "ADDED",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/payments/0/device_id",
+          "change": "ADDED",
+          "after": "DEVICE-SYNTHETIC"
+        },
+        {
+          "path": "/payments/0/payment_method",
+          "change": "ADDED",
+          "after": "CARD"
+        },
+        {
+          "path": "/payments/0/currency_code",
+          "change": "ADDED",
+          "after": "DOP"
+        },
+        {
+          "path": "/payments/0/terminalId",
+          "change": "ADDED",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/payments/0/terminal_id",
+          "change": "ADDED",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/payments/0/erp_terminal_id",
+          "change": "ADDED",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/payments/0/local_terminal_id",
+          "change": "ADDED",
+          "after": "fixture-terminal"
+        },
+        {
+          "path": "/payments/0/localTerminalId",
+          "change": "ADDED",
+          "after": "fixture-terminal"
+        },
+        {
+          "path": "/source_channel",
+          "change": "ADDED",
+          "after": "POS"
+        },
+        {
+          "path": "/source_transaction_id",
+          "change": "ADDED",
+          "after": "refund-fixture"
+        },
+        {
+          "path": "/source_display_id",
+          "change": "ADDED",
+          "after": "NC-001"
+        },
+        {
+          "path": "/source_terminal_id",
+          "change": "ADDED",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/source_credit_note_id",
+          "change": "ADDED",
+          "after": "refund-fixture"
+        },
+        {
+          "path": "/original_transaction_id",
+          "change": "ADDED",
+          "after": "closed-fixture"
+        },
+        {
+          "path": "/fiscalProvider",
+          "change": "ADDED",
+          "after": "NONE"
+        },
+        {
+          "path": "/transaction_date",
+          "change": "ADDED",
+          "after": "2026-09-05T23:59:00-04:00"
+        },
+        {
+          "path": "/currency_code",
+          "change": "ADDED",
+          "after": "DOP"
+        },
+        {
+          "path": "/terminal_id",
+          "change": "ADDED",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/erp_terminal_id",
+          "change": "ADDED",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/local_terminal_id",
+          "change": "ADDED",
+          "after": "fixture-terminal"
+        },
+        {
+          "path": "/localTerminalId",
+          "change": "ADDED",
+          "after": "fixture-terminal"
+        }
+      ],
+      "notes": []
+    },
+    {
+      "id": "CARD_VOID",
+      "route": "/api/sync/transactions",
+      "localRuntimeTimestamps": [
+        {
+          "id": "refund-pay",
+          "type": "Date",
+          "value": "2026-09-06T03:59:00.000Z"
+        }
+      ],
+      "localJson": {
+        "id": "refund-fixture",
+        "displayId": "NC-001",
+        "date": "2026-09-05T23:59:00-04:00",
+        "terminalId": "fixture-terminal",
+        "userId": "fixture-user",
+        "userName": "Cajero ficticio",
+        "documentType": "REFUND",
+        "status": "REFUNDED",
+        "items": [
+          {
+            "id": "product-fixture",
+            "cartId": "cart-line-fixture",
+            "name": "Producto ficticio",
+            "quantity": 1,
+            "price": 50,
+            "category": "fixture",
+            "images": [],
+            "attributes": [],
+            "variants": [],
+            "tariffs": [],
+            "appliedTaxIds": [],
+            "netAmount": 50,
+            "taxAmount": 0,
+            "totalAmount": 50
+          }
+        ],
+        "payments": [
+          {
+            "id": "refund-pay",
+            "method": "CARD",
+            "methodLabel": "Nota de crédito",
+            "amount": 50,
+            "timestamp": "2026-09-06T03:59:00.000Z",
+            "gatewayTransactionType": "VOID"
+          }
+        ],
+        "total": 50,
+        "netAmount": 50,
+        "taxAmount": 0,
+        "discountAmount": 0,
+        "fiscalMode": "NONE",
+        "originalTransactionId": "closed-fixture",
+        "device_id": "DEVICE-SYNTHETIC"
+      },
+      "serializedItem": {
+        "id": "refund-fixture",
+        "displayId": "NC-001",
+        "date": "2026-09-05T23:59:00-04:00",
+        "terminalId": "fixture-terminal",
+        "userId": "fixture-user",
+        "userName": "Cajero ficticio",
+        "documentType": "REFUND",
+        "status": "REFUNDED",
+        "items": [
+          {
+            "id": "product-fixture",
+            "cartId": "cart-line-fixture",
+            "name": "Producto ficticio",
+            "quantity": 1,
+            "price": 50,
+            "category": "fixture",
+            "appliedTaxIds": [],
+            "netAmount": 50,
+            "taxAmount": 0,
+            "totalAmount": 50
+          }
+        ],
+        "payments": [
+          {
+            "id": "refund-pay",
+            "method": "CARD",
+            "methodLabel": "Nota de crédito",
+            "creditOverrideApproved": false,
+            "amount": 50,
+            "timestamp": "2026-09-06T03:59:00.000Z",
+            "currencyCode": "DOP",
+            "gatewayTransactionType": "VOID",
+            "source_channel": "POS",
+            "source_payment_id": "refund-pay",
+            "source_transaction_id": "refund-fixture",
+            "source_display_id": "NC-001",
+            "source_terminal_id": "fixture-terminal",
+            "device_id": "DEVICE-SYNTHETIC",
+            "payment_method": "CARD",
+            "currency_code": "DOP"
+          }
+        ],
+        "total": 50,
+        "netAmount": 50,
+        "taxAmount": 0,
+        "discountAmount": 0,
+        "fiscalMode": "NONE",
+        "originalTransactionId": "closed-fixture",
+        "device_id": "DEVICE-SYNTHETIC",
+        "source_channel": "POS",
+        "source_transaction_id": "refund-fixture",
+        "source_display_id": "NC-001",
+        "source_terminal_id": "fixture-terminal",
+        "source_credit_note_id": "refund-fixture",
+        "original_transaction_id": "closed-fixture",
+        "fiscalProvider": "NONE",
+        "transaction_date": "2026-09-05T23:59:00-04:00",
+        "currency_code": "DOP"
+      },
+      "httpBody": {
+        "items": [
+          {
+            "id": "refund-fixture",
+            "displayId": "NC-001",
+            "date": "2026-09-05T23:59:00-04:00",
+            "terminalId": "44444444-4444-4444-8444-444444444444",
+            "userId": "fixture-user",
+            "userName": "Cajero ficticio",
+            "documentType": "REFUND",
+            "status": "REFUNDED",
+            "items": [
+              {
+                "id": "product-fixture",
+                "cartId": "cart-line-fixture",
+                "name": "Producto ficticio",
+                "quantity": 1,
+                "price": 50,
+                "category": "fixture",
+                "appliedTaxIds": [],
+                "netAmount": 50,
+                "taxAmount": 0,
+                "totalAmount": 50
+              }
+            ],
+            "payments": [
+              {
+                "id": "refund-pay",
+                "method": "CARD",
+                "methodLabel": "Nota de crédito",
+                "creditOverrideApproved": false,
+                "amount": 50,
+                "timestamp": "2026-09-06T03:59:00.000Z",
+                "currencyCode": "DOP",
+                "gatewayTransactionType": "VOID",
+                "source_channel": "POS",
+                "source_payment_id": "refund-pay",
+                "source_transaction_id": "refund-fixture",
+                "source_display_id": "NC-001",
+                "source_terminal_id": "44444444-4444-4444-8444-444444444444",
+                "device_id": "DEVICE-SYNTHETIC",
+                "payment_method": "CARD",
+                "currency_code": "DOP",
+                "terminalId": "44444444-4444-4444-8444-444444444444",
+                "terminal_id": "44444444-4444-4444-8444-444444444444",
+                "erp_terminal_id": "44444444-4444-4444-8444-444444444444",
+                "local_terminal_id": "fixture-terminal",
+                "localTerminalId": "fixture-terminal"
+              }
+            ],
+            "total": 50,
+            "netAmount": 50,
+            "taxAmount": 0,
+            "discountAmount": 0,
+            "fiscalMode": "NONE",
+            "originalTransactionId": "closed-fixture",
+            "device_id": "DEVICE-SYNTHETIC",
+            "source_channel": "POS",
+            "source_transaction_id": "refund-fixture",
+            "source_display_id": "NC-001",
+            "source_terminal_id": "44444444-4444-4444-8444-444444444444",
+            "source_credit_note_id": "refund-fixture",
+            "original_transaction_id": "closed-fixture",
+            "fiscalProvider": "NONE",
+            "transaction_date": "2026-09-05T23:59:00-04:00",
+            "currency_code": "DOP",
+            "terminal_id": "44444444-4444-4444-8444-444444444444",
+            "erp_terminal_id": "44444444-4444-4444-8444-444444444444",
+            "local_terminal_id": "fixture-terminal",
+            "localTerminalId": "fixture-terminal"
+          }
+        ],
+        "terminalId": "44444444-4444-4444-8444-444444444444",
+        "terminal_id": "44444444-4444-4444-8444-444444444444",
+        "tenantId": "11111111-1111-4111-8111-111111111111",
+        "tenant_id": "11111111-1111-4111-8111-111111111111",
+        "companyId": "22222222-2222-4222-8222-222222222222",
+        "company_id": "22222222-2222-4222-8222-222222222222",
+        "storeId": "33333333-3333-4333-8333-333333333333",
+        "store_id": "33333333-3333-4333-8333-333333333333",
+        "sync_channel": "ERP_ACTIVE",
+        "device_id": "DEVICE-SYNTHETIC",
+        "deviceId": "DEVICE-SYNTHETIC"
+      },
+      "fieldDifferences": [
+        {
+          "path": "/terminalId",
+          "change": "CHANGED",
+          "before": "fixture-terminal",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/items/0/images",
+          "change": "REMOVED",
+          "before": []
+        },
+        {
+          "path": "/items/0/attributes",
+          "change": "REMOVED",
+          "before": []
+        },
+        {
+          "path": "/items/0/variants",
+          "change": "REMOVED",
+          "before": []
+        },
+        {
+          "path": "/items/0/tariffs",
+          "change": "REMOVED",
+          "before": []
+        },
+        {
+          "path": "/payments/0/creditOverrideApproved",
+          "change": "ADDED",
+          "after": false
+        },
+        {
+          "path": "/payments/0/currencyCode",
+          "change": "ADDED",
+          "after": "DOP"
+        },
+        {
+          "path": "/payments/0/source_channel",
+          "change": "ADDED",
+          "after": "POS"
+        },
+        {
+          "path": "/payments/0/source_payment_id",
+          "change": "ADDED",
+          "after": "refund-pay"
+        },
+        {
+          "path": "/payments/0/source_transaction_id",
+          "change": "ADDED",
+          "after": "refund-fixture"
+        },
+        {
+          "path": "/payments/0/source_display_id",
+          "change": "ADDED",
+          "after": "NC-001"
+        },
+        {
+          "path": "/payments/0/source_terminal_id",
+          "change": "ADDED",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/payments/0/device_id",
+          "change": "ADDED",
+          "after": "DEVICE-SYNTHETIC"
+        },
+        {
+          "path": "/payments/0/payment_method",
+          "change": "ADDED",
+          "after": "CARD"
+        },
+        {
+          "path": "/payments/0/currency_code",
+          "change": "ADDED",
+          "after": "DOP"
+        },
+        {
+          "path": "/payments/0/terminalId",
+          "change": "ADDED",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/payments/0/terminal_id",
+          "change": "ADDED",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/payments/0/erp_terminal_id",
+          "change": "ADDED",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/payments/0/local_terminal_id",
+          "change": "ADDED",
+          "after": "fixture-terminal"
+        },
+        {
+          "path": "/payments/0/localTerminalId",
+          "change": "ADDED",
+          "after": "fixture-terminal"
+        },
+        {
+          "path": "/source_channel",
+          "change": "ADDED",
+          "after": "POS"
+        },
+        {
+          "path": "/source_transaction_id",
+          "change": "ADDED",
+          "after": "refund-fixture"
+        },
+        {
+          "path": "/source_display_id",
+          "change": "ADDED",
+          "after": "NC-001"
+        },
+        {
+          "path": "/source_terminal_id",
+          "change": "ADDED",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/source_credit_note_id",
+          "change": "ADDED",
+          "after": "refund-fixture"
+        },
+        {
+          "path": "/original_transaction_id",
+          "change": "ADDED",
+          "after": "closed-fixture"
+        },
+        {
+          "path": "/fiscalProvider",
+          "change": "ADDED",
+          "after": "NONE"
+        },
+        {
+          "path": "/transaction_date",
+          "change": "ADDED",
+          "after": "2026-09-05T23:59:00-04:00"
+        },
+        {
+          "path": "/currency_code",
+          "change": "ADDED",
+          "after": "DOP"
+        },
+        {
+          "path": "/terminal_id",
+          "change": "ADDED",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/erp_terminal_id",
+          "change": "ADDED",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/local_terminal_id",
+          "change": "ADDED",
+          "after": "fixture-terminal"
+        },
+        {
+          "path": "/localTerminalId",
+          "change": "ADDED",
+          "after": "fixture-terminal"
+        }
+      ],
+      "notes": []
+    },
+    {
+      "id": "CASH_REFUND_UNVERIFIED",
+      "route": "/api/sync/transactions",
+      "localRuntimeTimestamps": [
+        {
+          "id": "refund-pay",
+          "type": "Date",
+          "value": "2026-09-06T03:59:00.000Z"
+        }
+      ],
+      "localJson": {
+        "id": "refund-fixture",
+        "displayId": "NC-001",
+        "date": "2026-09-05T23:59:00-04:00",
+        "terminalId": "fixture-terminal",
+        "userId": "fixture-user",
+        "userName": "Cajero ficticio",
+        "documentType": "REFUND",
+        "status": "REFUNDED",
+        "items": [
+          {
+            "id": "product-fixture",
+            "cartId": "cart-line-fixture",
+            "name": "Producto ficticio",
+            "quantity": 1,
+            "price": 50,
+            "category": "fixture",
+            "images": [],
+            "attributes": [],
+            "variants": [],
+            "tariffs": [],
+            "appliedTaxIds": [],
+            "netAmount": 50,
+            "taxAmount": 0,
+            "totalAmount": 50
+          }
+        ],
+        "payments": [
+          {
+            "id": "refund-pay",
+            "method": "CASH",
+            "methodLabel": "Nota de crédito",
+            "amount": 50,
+            "timestamp": "2026-09-06T03:59:00.000Z"
+          }
+        ],
+        "total": 50,
+        "netAmount": 50,
+        "taxAmount": 0,
+        "discountAmount": 0,
+        "fiscalMode": "NONE",
+        "originalTransactionId": "closed-fixture",
+        "device_id": "DEVICE-SYNTHETIC"
+      },
+      "serializedItem": {
+        "id": "refund-fixture",
+        "displayId": "NC-001",
+        "date": "2026-09-05T23:59:00-04:00",
+        "terminalId": "fixture-terminal",
+        "userId": "fixture-user",
+        "userName": "Cajero ficticio",
+        "documentType": "REFUND",
+        "status": "REFUNDED",
+        "items": [
+          {
+            "id": "product-fixture",
+            "cartId": "cart-line-fixture",
+            "name": "Producto ficticio",
+            "quantity": 1,
+            "price": 50,
+            "category": "fixture",
+            "appliedTaxIds": [],
+            "netAmount": 50,
+            "taxAmount": 0,
+            "totalAmount": 50
+          }
+        ],
+        "payments": [
+          {
+            "id": "refund-pay",
+            "method": "CASH",
+            "methodLabel": "Nota de crédito",
+            "creditOverrideApproved": false,
+            "amount": 50,
+            "timestamp": "2026-09-06T03:59:00.000Z",
+            "currencyCode": "DOP",
+            "source_channel": "POS",
+            "source_payment_id": "refund-pay",
+            "source_transaction_id": "refund-fixture",
+            "source_display_id": "NC-001",
+            "source_terminal_id": "fixture-terminal",
+            "device_id": "DEVICE-SYNTHETIC",
+            "payment_method": "CASH",
+            "currency_code": "DOP"
+          }
+        ],
+        "total": 50,
+        "netAmount": 50,
+        "taxAmount": 0,
+        "discountAmount": 0,
+        "fiscalMode": "NONE",
+        "originalTransactionId": "closed-fixture",
+        "device_id": "DEVICE-SYNTHETIC",
+        "source_channel": "POS",
+        "source_transaction_id": "refund-fixture",
+        "source_display_id": "NC-001",
+        "source_terminal_id": "fixture-terminal",
+        "source_credit_note_id": "refund-fixture",
+        "original_transaction_id": "closed-fixture",
+        "fiscalProvider": "NONE",
+        "transaction_date": "2026-09-05T23:59:00-04:00",
+        "currency_code": "DOP"
+      },
+      "httpBody": {
+        "items": [
+          {
+            "id": "refund-fixture",
+            "displayId": "NC-001",
+            "date": "2026-09-05T23:59:00-04:00",
+            "terminalId": "44444444-4444-4444-8444-444444444444",
+            "userId": "fixture-user",
+            "userName": "Cajero ficticio",
+            "documentType": "REFUND",
+            "status": "REFUNDED",
+            "items": [
+              {
+                "id": "product-fixture",
+                "cartId": "cart-line-fixture",
+                "name": "Producto ficticio",
+                "quantity": 1,
+                "price": 50,
+                "category": "fixture",
+                "appliedTaxIds": [],
+                "netAmount": 50,
+                "taxAmount": 0,
+                "totalAmount": 50
+              }
+            ],
+            "payments": [
+              {
+                "id": "refund-pay",
+                "method": "CASH",
+                "methodLabel": "Nota de crédito",
+                "creditOverrideApproved": false,
+                "amount": 50,
+                "timestamp": "2026-09-06T03:59:00.000Z",
+                "currencyCode": "DOP",
+                "source_channel": "POS",
+                "source_payment_id": "refund-pay",
+                "source_transaction_id": "refund-fixture",
+                "source_display_id": "NC-001",
+                "source_terminal_id": "44444444-4444-4444-8444-444444444444",
+                "device_id": "DEVICE-SYNTHETIC",
+                "payment_method": "CASH",
+                "currency_code": "DOP",
+                "terminalId": "44444444-4444-4444-8444-444444444444",
+                "terminal_id": "44444444-4444-4444-8444-444444444444",
+                "erp_terminal_id": "44444444-4444-4444-8444-444444444444",
+                "local_terminal_id": "fixture-terminal",
+                "localTerminalId": "fixture-terminal"
+              }
+            ],
+            "total": 50,
+            "netAmount": 50,
+            "taxAmount": 0,
+            "discountAmount": 0,
+            "fiscalMode": "NONE",
+            "originalTransactionId": "closed-fixture",
+            "device_id": "DEVICE-SYNTHETIC",
+            "source_channel": "POS",
+            "source_transaction_id": "refund-fixture",
+            "source_display_id": "NC-001",
+            "source_terminal_id": "44444444-4444-4444-8444-444444444444",
+            "source_credit_note_id": "refund-fixture",
+            "original_transaction_id": "closed-fixture",
+            "fiscalProvider": "NONE",
+            "transaction_date": "2026-09-05T23:59:00-04:00",
+            "currency_code": "DOP",
+            "terminal_id": "44444444-4444-4444-8444-444444444444",
+            "erp_terminal_id": "44444444-4444-4444-8444-444444444444",
+            "local_terminal_id": "fixture-terminal",
+            "localTerminalId": "fixture-terminal"
+          }
+        ],
+        "terminalId": "44444444-4444-4444-8444-444444444444",
+        "terminal_id": "44444444-4444-4444-8444-444444444444",
+        "tenantId": "11111111-1111-4111-8111-111111111111",
+        "tenant_id": "11111111-1111-4111-8111-111111111111",
+        "companyId": "22222222-2222-4222-8222-222222222222",
+        "company_id": "22222222-2222-4222-8222-222222222222",
+        "storeId": "33333333-3333-4333-8333-333333333333",
+        "store_id": "33333333-3333-4333-8333-333333333333",
+        "sync_channel": "ERP_ACTIVE",
+        "device_id": "DEVICE-SYNTHETIC",
+        "deviceId": "DEVICE-SYNTHETIC"
+      },
+      "fieldDifferences": [
+        {
+          "path": "/terminalId",
+          "change": "CHANGED",
+          "before": "fixture-terminal",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/items/0/images",
+          "change": "REMOVED",
+          "before": []
+        },
+        {
+          "path": "/items/0/attributes",
+          "change": "REMOVED",
+          "before": []
+        },
+        {
+          "path": "/items/0/variants",
+          "change": "REMOVED",
+          "before": []
+        },
+        {
+          "path": "/items/0/tariffs",
+          "change": "REMOVED",
+          "before": []
+        },
+        {
+          "path": "/payments/0/creditOverrideApproved",
+          "change": "ADDED",
+          "after": false
+        },
+        {
+          "path": "/payments/0/currencyCode",
+          "change": "ADDED",
+          "after": "DOP"
+        },
+        {
+          "path": "/payments/0/source_channel",
+          "change": "ADDED",
+          "after": "POS"
+        },
+        {
+          "path": "/payments/0/source_payment_id",
+          "change": "ADDED",
+          "after": "refund-pay"
+        },
+        {
+          "path": "/payments/0/source_transaction_id",
+          "change": "ADDED",
+          "after": "refund-fixture"
+        },
+        {
+          "path": "/payments/0/source_display_id",
+          "change": "ADDED",
+          "after": "NC-001"
+        },
+        {
+          "path": "/payments/0/source_terminal_id",
+          "change": "ADDED",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/payments/0/device_id",
+          "change": "ADDED",
+          "after": "DEVICE-SYNTHETIC"
+        },
+        {
+          "path": "/payments/0/payment_method",
+          "change": "ADDED",
+          "after": "CASH"
+        },
+        {
+          "path": "/payments/0/currency_code",
+          "change": "ADDED",
+          "after": "DOP"
+        },
+        {
+          "path": "/payments/0/terminalId",
+          "change": "ADDED",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/payments/0/terminal_id",
+          "change": "ADDED",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/payments/0/erp_terminal_id",
+          "change": "ADDED",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/payments/0/local_terminal_id",
+          "change": "ADDED",
+          "after": "fixture-terminal"
+        },
+        {
+          "path": "/payments/0/localTerminalId",
+          "change": "ADDED",
+          "after": "fixture-terminal"
+        },
+        {
+          "path": "/source_channel",
+          "change": "ADDED",
+          "after": "POS"
+        },
+        {
+          "path": "/source_transaction_id",
+          "change": "ADDED",
+          "after": "refund-fixture"
+        },
+        {
+          "path": "/source_display_id",
+          "change": "ADDED",
+          "after": "NC-001"
+        },
+        {
+          "path": "/source_terminal_id",
+          "change": "ADDED",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/source_credit_note_id",
+          "change": "ADDED",
+          "after": "refund-fixture"
+        },
+        {
+          "path": "/original_transaction_id",
+          "change": "ADDED",
+          "after": "closed-fixture"
+        },
+        {
+          "path": "/fiscalProvider",
+          "change": "ADDED",
+          "after": "NONE"
+        },
+        {
+          "path": "/transaction_date",
+          "change": "ADDED",
+          "after": "2026-09-05T23:59:00-04:00"
+        },
+        {
+          "path": "/currency_code",
+          "change": "ADDED",
+          "after": "DOP"
+        },
+        {
+          "path": "/terminal_id",
+          "change": "ADDED",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/erp_terminal_id",
+          "change": "ADDED",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/local_terminal_id",
+          "change": "ADDED",
+          "after": "fixture-terminal"
+        },
+        {
+          "path": "/localTerminalId",
+          "change": "ADDED",
+          "after": "fixture-terminal"
+        }
+      ],
+      "notes": [
+        "Diagnostic input, not a validated cash-refund flow"
+      ]
+    },
+    {
+      "id": "CASH_MOVEMENT",
+      "route": "/api/sync/cash/movements",
+      "localRuntimeTimestamps": [],
+      "localJson": {
+        "id": "fund-fixture",
+        "type": "IN",
+        "amount": 1000,
+        "reason": "Fondo explícito ficticio",
+        "timestamp": "2026-09-05T23:59:00-04:00",
+        "userId": "fixture-user",
+        "userName": "Cajero ficticio",
+        "terminalId": "fixture-terminal",
+        "currencyCode": "DOP",
+        "device_id": "DEVICE-SYNTHETIC"
+      },
+      "serializedItem": {
+        "id": "fund-fixture",
+        "type": "IN",
+        "amount": 1000,
+        "reason": "Fondo explícito ficticio",
+        "timestamp": "2026-09-05T23:59:00-04:00",
+        "userId": "fixture-user",
+        "userName": "Cajero ficticio",
+        "terminalId": "fixture-terminal",
+        "currencyCode": "DOP",
+        "device_id": "DEVICE-SYNTHETIC",
+        "source_channel": "POS",
+        "source_cash_movement_id": "fund-fixture",
+        "source_terminal_id": "fixture-terminal",
+        "created_at": "2026-09-05T23:59:00-04:00",
+        "movement_type": "IN",
+        "currency_code": "DOP"
+      },
+      "httpBody": {
+        "items": [
+          {
+            "id": "fund-fixture",
+            "type": "IN",
+            "amount": 1000,
+            "reason": "Fondo explícito ficticio",
+            "timestamp": "2026-09-05T23:59:00-04:00",
+            "userId": "fixture-user",
+            "userName": "Cajero ficticio",
+            "terminalId": "44444444-4444-4444-8444-444444444444",
+            "currencyCode": "DOP",
+            "device_id": "DEVICE-SYNTHETIC",
+            "source_channel": "POS",
+            "source_cash_movement_id": "fund-fixture",
+            "source_terminal_id": "44444444-4444-4444-8444-444444444444",
+            "created_at": "2026-09-05T23:59:00-04:00",
+            "movement_type": "IN",
+            "currency_code": "DOP",
+            "terminal_id": "44444444-4444-4444-8444-444444444444",
+            "erp_terminal_id": "44444444-4444-4444-8444-444444444444",
+            "local_terminal_id": "fixture-terminal",
+            "localTerminalId": "fixture-terminal"
+          }
+        ],
+        "terminalId": "44444444-4444-4444-8444-444444444444",
+        "terminal_id": "44444444-4444-4444-8444-444444444444",
+        "tenantId": "11111111-1111-4111-8111-111111111111",
+        "tenant_id": "11111111-1111-4111-8111-111111111111",
+        "companyId": "22222222-2222-4222-8222-222222222222",
+        "company_id": "22222222-2222-4222-8222-222222222222",
+        "storeId": "33333333-3333-4333-8333-333333333333",
+        "store_id": "33333333-3333-4333-8333-333333333333",
+        "sync_channel": "ERP_ACTIVE",
+        "device_id": "DEVICE-SYNTHETIC",
+        "deviceId": "DEVICE-SYNTHETIC"
+      },
+      "fieldDifferences": [
+        {
+          "path": "/terminalId",
+          "change": "CHANGED",
+          "before": "fixture-terminal",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/source_channel",
+          "change": "ADDED",
+          "after": "POS"
+        },
+        {
+          "path": "/source_cash_movement_id",
+          "change": "ADDED",
+          "after": "fund-fixture"
+        },
+        {
+          "path": "/source_terminal_id",
+          "change": "ADDED",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/created_at",
+          "change": "ADDED",
+          "after": "2026-09-05T23:59:00-04:00"
+        },
+        {
+          "path": "/movement_type",
+          "change": "ADDED",
+          "after": "IN"
+        },
+        {
+          "path": "/currency_code",
+          "change": "ADDED",
+          "after": "DOP"
+        },
+        {
+          "path": "/terminal_id",
+          "change": "ADDED",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/erp_terminal_id",
+          "change": "ADDED",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/local_terminal_id",
+          "change": "ADDED",
+          "after": "fixture-terminal"
+        },
+        {
+          "path": "/localTerminalId",
+          "change": "ADDED",
+          "after": "fixture-terminal"
+        }
+      ],
+      "notes": []
+    },
+    {
+      "id": "Z_REPORT",
+      "route": "/api/sync/z-reports",
+      "localRuntimeTimestamps": [],
+      "localJson": {
+        "id": "z-fixture",
+        "terminalId": "fixture-terminal",
+        "sequenceNumber": "Z-002",
+        "openedAt": "2026-09-05T23:59:00-04:00",
+        "closedAt": "2026-09-06T16:00:00.000Z",
+        "closedByUserId": "fixture-user",
+        "closedByUserName": "Cajero ficticio",
+        "baseCurrency": "DOP",
+        "totalsByMethod": {
+          "CASH": 550
+        },
+        "cashExpected": {
+          "USD": 10,
+          "DOP": -50
+        },
+        "cashCounted": {
+          "USD": 10,
+          "DOP": 0
+        },
+        "cashDiscrepancy": {
+          "USD": 0,
+          "DOP": 50
+        },
+        "cashSales": 600,
+        "cashIn": 0,
+        "cashOut": 50,
+        "transactionCount": 1,
+        "notes": "Synthetic schema-only example; declaration is not a physical count or executed close.",
+        "device_id": "DEVICE-SYNTHETIC"
+      },
+      "serializedItem": {
+        "id": "z-fixture",
+        "terminalId": "fixture-terminal",
+        "sequenceNumber": "Z-002",
+        "openedAt": "2026-09-05T23:59:00-04:00",
+        "closedAt": "2026-09-06T16:00:00.000Z",
+        "closedByUserId": "fixture-user",
+        "closedByUserName": "Cajero ficticio",
+        "baseCurrency": "DOP",
+        "totalsByMethod": {
+          "CASH": 550
+        },
+        "cashExpected": {
+          "USD": 10,
+          "DOP": -50
+        },
+        "cashCounted": {
+          "USD": 10,
+          "DOP": 0
+        },
+        "cashDiscrepancy": {
+          "USD": 0,
+          "DOP": 50
+        },
+        "cashSales": 600,
+        "cashIn": 0,
+        "cashOut": 50,
+        "transactionCount": 1,
+        "notes": "Synthetic schema-only example; declaration is not a physical count or executed close.",
+        "device_id": "DEVICE-SYNTHETIC",
+        "source_channel": "POS",
+        "source_z_report_id": "z-fixture",
+        "source_terminal_id": "fixture-terminal",
+        "currency_code": "DOP"
+      },
+      "httpBody": {
+        "items": [
+          {
+            "id": "z-fixture",
+            "terminalId": "44444444-4444-4444-8444-444444444444",
+            "sequenceNumber": "Z-002",
+            "openedAt": "2026-09-05T23:59:00-04:00",
+            "closedAt": "2026-09-06T16:00:00.000Z",
+            "closedByUserId": "fixture-user",
+            "closedByUserName": "Cajero ficticio",
+            "baseCurrency": "DOP",
+            "totalsByMethod": {
+              "CASH": 550
+            },
+            "cashExpected": {
+              "USD": 10,
+              "DOP": -50
+            },
+            "cashCounted": {
+              "USD": 10,
+              "DOP": 0
+            },
+            "cashDiscrepancy": {
+              "USD": 0,
+              "DOP": 50
+            },
+            "cashSales": 600,
+            "cashIn": 0,
+            "cashOut": 50,
+            "transactionCount": 1,
+            "notes": "Synthetic schema-only example; declaration is not a physical count or executed close.",
+            "device_id": "DEVICE-SYNTHETIC",
+            "source_channel": "POS",
+            "source_z_report_id": "z-fixture",
+            "source_terminal_id": "44444444-4444-4444-8444-444444444444",
+            "currency_code": "DOP",
+            "terminal_id": "44444444-4444-4444-8444-444444444444",
+            "erp_terminal_id": "44444444-4444-4444-8444-444444444444",
+            "local_terminal_id": "fixture-terminal",
+            "localTerminalId": "fixture-terminal"
+          }
+        ],
+        "terminalId": "44444444-4444-4444-8444-444444444444",
+        "terminal_id": "44444444-4444-4444-8444-444444444444",
+        "tenantId": "11111111-1111-4111-8111-111111111111",
+        "tenant_id": "11111111-1111-4111-8111-111111111111",
+        "companyId": "22222222-2222-4222-8222-222222222222",
+        "company_id": "22222222-2222-4222-8222-222222222222",
+        "storeId": "33333333-3333-4333-8333-333333333333",
+        "store_id": "33333333-3333-4333-8333-333333333333",
+        "sync_channel": "ERP_ACTIVE",
+        "device_id": "DEVICE-SYNTHETIC",
+        "deviceId": "DEVICE-SYNTHETIC"
+      },
+      "fieldDifferences": [
+        {
+          "path": "/terminalId",
+          "change": "CHANGED",
+          "before": "fixture-terminal",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/source_channel",
+          "change": "ADDED",
+          "after": "POS"
+        },
+        {
+          "path": "/source_z_report_id",
+          "change": "ADDED",
+          "after": "z-fixture"
+        },
+        {
+          "path": "/source_terminal_id",
+          "change": "ADDED",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/currency_code",
+          "change": "ADDED",
+          "after": "DOP"
+        },
+        {
+          "path": "/terminal_id",
+          "change": "ADDED",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/erp_terminal_id",
+          "change": "ADDED",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/local_terminal_id",
+          "change": "ADDED",
+          "after": "fixture-terminal"
+        },
+        {
+          "path": "/localTerminalId",
+          "change": "ADDED",
+          "after": "fixture-terminal"
+        }
+      ],
+      "notes": [
+        "Shape fixture only, not an executed close or verified count"
+      ]
+    },
+    {
+      "id": "WALLET_PAYMENT",
+      "route": "/api/sync/operational/events",
+      "localRuntimeTimestamps": [],
+      "localJson": {
+        "id": "wallet-event-fixture",
+        "walletId": "wallet-fixture",
+        "type": "PAYMENT",
+        "amount": -20,
+        "referenceId": "T-001",
+        "timestamp": "2026-09-06T00:10:00.000-04:00",
+        "createdAt": "2026-09-06T00:10:00.000-04:00",
+        "terminalId": "fixture-terminal",
+        "operationalChannel": "WALLET",
+        "syncStatus": "PENDING",
+        "device_id": "DEVICE-SYNTHETIC"
+      },
+      "serializedItem": {
+        "id": "wallet-event-fixture",
+        "walletId": "wallet-fixture",
+        "type": "PAYMENT",
+        "amount": -20,
+        "referenceId": "T-001",
+        "timestamp": "2026-09-06T00:10:00.000-04:00",
+        "createdAt": "2026-09-06T00:10:00.000-04:00",
+        "terminalId": "fixture-terminal",
+        "operationalChannel": "WALLET",
+        "syncStatus": "PENDING",
+        "device_id": "DEVICE-SYNTHETIC",
+        "source_channel": "POS",
+        "source_event_id": "wallet-event-fixture",
+        "source_terminal_id": "fixture-terminal",
+        "source_transaction_id": "T-001",
+        "event_type": "WALLET",
+        "created_at": "2026-09-06T00:10:00.000-04:00"
+      },
+      "httpBody": {
+        "items": [
+          {
+            "id": "wallet-event-fixture",
+            "walletId": "wallet-fixture",
+            "type": "PAYMENT",
+            "amount": -20,
+            "referenceId": "T-001",
+            "timestamp": "2026-09-06T00:10:00.000-04:00",
+            "createdAt": "2026-09-06T00:10:00.000-04:00",
+            "terminalId": "44444444-4444-4444-8444-444444444444",
+            "operationalChannel": "WALLET",
+            "syncStatus": "PENDING",
+            "device_id": "DEVICE-SYNTHETIC",
+            "source_channel": "POS",
+            "source_event_id": "wallet-event-fixture",
+            "source_terminal_id": "44444444-4444-4444-8444-444444444444",
+            "source_transaction_id": "T-001",
+            "event_type": "WALLET",
+            "created_at": "2026-09-06T00:10:00.000-04:00",
+            "terminal_id": "44444444-4444-4444-8444-444444444444",
+            "erp_terminal_id": "44444444-4444-4444-8444-444444444444",
+            "local_terminal_id": "fixture-terminal",
+            "localTerminalId": "fixture-terminal"
+          }
+        ],
+        "terminalId": "44444444-4444-4444-8444-444444444444",
+        "terminal_id": "44444444-4444-4444-8444-444444444444",
+        "tenantId": "11111111-1111-4111-8111-111111111111",
+        "tenant_id": "11111111-1111-4111-8111-111111111111",
+        "companyId": "22222222-2222-4222-8222-222222222222",
+        "company_id": "22222222-2222-4222-8222-222222222222",
+        "storeId": "33333333-3333-4333-8333-333333333333",
+        "store_id": "33333333-3333-4333-8333-333333333333",
+        "sync_channel": "ERP_ACTIVE",
+        "device_id": "DEVICE-SYNTHETIC",
+        "deviceId": "DEVICE-SYNTHETIC"
+      },
+      "fieldDifferences": [
+        {
+          "path": "/terminalId",
+          "change": "CHANGED",
+          "before": "fixture-terminal",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/source_channel",
+          "change": "ADDED",
+          "after": "POS"
+        },
+        {
+          "path": "/source_event_id",
+          "change": "ADDED",
+          "after": "wallet-event-fixture"
+        },
+        {
+          "path": "/source_terminal_id",
+          "change": "ADDED",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/source_transaction_id",
+          "change": "ADDED",
+          "after": "T-001"
+        },
+        {
+          "path": "/event_type",
+          "change": "ADDED",
+          "after": "WALLET"
+        },
+        {
+          "path": "/created_at",
+          "change": "ADDED",
+          "after": "2026-09-06T00:10:00.000-04:00"
+        },
+        {
+          "path": "/terminal_id",
+          "change": "ADDED",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/erp_terminal_id",
+          "change": "ADDED",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/local_terminal_id",
+          "change": "ADDED",
+          "after": "fixture-terminal"
+        },
+        {
+          "path": "/localTerminalId",
+          "change": "ADDED",
+          "after": "fixture-terminal"
+        }
+      ],
+      "notes": [
+        "Local operational row has signed amount; currency/customer are in wallet master, not in this emitted row."
+      ]
+    },
+    {
+      "id": "COLLECTION",
+      "localJson": {
+        "id": "collection-fixture",
+        "displayId": "R-001",
+        "customerId": "customer-fixture",
+        "customerName": "Cliente ficticio",
+        "date": "2026-09-06T00:10:00-04:00",
+        "terminalId": "fixture-terminal",
+        "userId": "fixture-user",
+        "userName": "Cajero ficticio",
+        "totalAmount": 100,
+        "method": "CASH",
+        "currencyCode": "DOP",
+        "exchangeRate": 1,
+        "receivedAmountOriginal": 100,
+        "receivedAmountBase": 100,
+        "appliedAmountBase": 80,
+        "unappliedAmountBase": 20,
+        "allocations": [
+          {
+            "id": "alloc-fixture",
+            "collectionId": "collection-fixture",
+            "transactionId": "closed-fixture",
+            "amount": 30,
+            "timestamp": "2026-09-06T00:10:00-04:00"
+          },
+          {
+            "id": "alloc-second",
+            "collectionId": "collection-fixture",
+            "transactionId": "closed-second",
+            "amount": 50,
+            "timestamp": "2026-09-06T00:10:00-04:00"
+          }
+        ]
+      },
+      "httpBody": null,
+      "route": null,
+      "reason": "NO_VERIFIED_OPERATIONAL_ERP_SERIALIZER",
+      "requiredReadOnlyDependencies": [
+        "closed-fixture",
+        "closed-second"
+      ]
+    },
+    {
+      "id": "BOOKING_ADVANCE",
+      "localJson": {
+        "id": "advance-fixture",
+        "displayId": "ANT-001",
+        "customerId": "customer-fixture",
+        "customerName": "Cliente ficticio",
+        "date": "2026-09-06T00:10:00-04:00",
+        "terminalId": "fixture-terminal",
+        "userId": "fixture-user",
+        "userName": "Cajero ficticio",
+        "totalAmount": 30,
+        "method": "CASH",
+        "currencyCode": "DOP",
+        "exchangeRate": 1,
+        "receivedAmountOriginal": 30,
+        "receivedAmountBase": 30,
+        "appliedAmountBase": 0,
+        "unappliedAmountBase": 30,
+        "allocations": [],
+        "bookingActivityId": "booking-fixture"
+      },
+      "httpBody": null,
+      "route": null,
+      "reason": "NO_VERIFIED_OPERATIONAL_ERP_SERIALIZER",
+      "requiredReadOnlyDependencies": []
+    },
+    {
+      "id": "FISCAL_BEFORE_POTENTIAL_RESEND",
+      "route": "/api/sync/transactions",
+      "localRuntimeTimestamps": [
+        {
+          "id": "pay-usd",
+          "type": "string",
+          "value": "2026-09-06T03:59:00.123Z"
+        }
+      ],
+      "localJson": {
+        "id": "sale-fixture",
+        "displayId": "T-001",
+        "date": "2026-09-05T23:59:00-04:00",
+        "terminalId": "fixture-terminal",
+        "userId": "fixture-user",
+        "userName": "Cajero ficticio",
+        "documentType": "TICKET",
+        "status": "COMPLETED",
+        "items": [
+          {
+            "id": "product-fixture",
+            "cartId": "cart-line-fixture",
+            "name": "Producto ficticio",
+            "quantity": 1,
+            "price": 550,
+            "category": "fixture",
+            "images": [
+              "synthetic-image"
+            ],
+            "attributes": [
+              {
+                "id": "a",
+                "name": "Color"
+              }
+            ],
+            "variants": [],
+            "tariffs": [
+              {
+                "id": "not-uuid"
+              }
+            ],
+            "appliedTaxIds": [],
+            "netAmount": 550,
+            "taxAmount": 0,
+            "totalAmount": 550,
+            "selected_modifiers": [
+              {
+                "id": "selected",
+                "price": 0
+              }
+            ],
+            "availableModifiers": [
+              {
+                "id": "definition"
+              }
+            ],
+            "tariffId": "not-uuid"
+          }
+        ],
+        "payments": [
+          {
+            "id": "pay-usd",
+            "method": "CASH",
+            "amount": 600,
+            "timestamp": "2026-09-06T03:59:00.123Z",
+            "currencyCode": "USD",
+            "amountOriginal": 10,
+            "exchangeRate": 60,
+            "appliedAmount": 550,
+            "changeAmount": 50,
+            "changeCurrencyCode": "DOP",
+            "gatewayRawResponse": {
+              "synthetic": true
+            },
+            "gatewayReceiptClient": "SYNTHETIC RECEIPT",
+            "gatewayReference": "SYNTHETIC-REF"
+          }
+        ],
+        "total": 550,
+        "netAmount": 550,
+        "taxAmount": 0,
+        "discountAmount": 0,
+        "fiscalMode": "ELECTRONIC",
+        "device_id": "DEVICE-SYNTHETIC",
+        "customerId": "customer-fixture",
+        "customerName": "Cliente ficticio",
+        "customerSnapshot": {
+          "name": "Cliente ficticio",
+          "taxId": "SYNTHETIC-NON-FISCAL",
+          "customer_code": "C-001"
+        },
+        "ncfType": "E31",
+        "electronicNcf": "E310000000001",
+        "ncf": "E310000000001",
+        "fiscalSyncStatus": "PENDING",
+        "fiscalProvider": "POLARIS"
+      },
+      "serializedItem": {
+        "id": "sale-fixture",
+        "displayId": "T-001",
+        "date": "2026-09-05T23:59:00-04:00",
+        "terminalId": "fixture-terminal",
+        "userId": "fixture-user",
+        "userName": "Cajero ficticio",
+        "documentType": "TICKET",
+        "status": "COMPLETED",
+        "items": [
+          {
+            "id": "product-fixture",
+            "cartId": "cart-line-fixture",
+            "name": "Producto ficticio",
+            "quantity": 1,
+            "price": 550,
+            "category": "fixture",
+            "appliedTaxIds": [],
+            "netAmount": 550,
+            "taxAmount": 0,
+            "totalAmount": 550,
+            "selected_modifiers": [
+              {
+                "id": "selected",
+                "price": 0
+              }
+            ]
+          }
+        ],
+        "payments": [
+          {
+            "id": "pay-usd",
+            "method": "CASH",
+            "creditOverrideApproved": false,
+            "amount": 600,
+            "timestamp": "2026-09-06T03:59:00.123Z",
+            "currencyCode": "USD",
+            "amountOriginal": 10,
+            "exchangeRate": 60,
+            "appliedAmount": 550,
+            "changeAmount": 50,
+            "changeCurrencyCode": "DOP",
+            "amountApplied": 550,
+            "gatewayReference": "SYNTHETIC-REF",
+            "source_channel": "POS",
+            "source_payment_id": "pay-usd",
+            "source_transaction_id": "sale-fixture",
+            "source_display_id": "T-001",
+            "source_terminal_id": "fixture-terminal",
+            "device_id": "DEVICE-SYNTHETIC",
+            "payment_method": "CASH",
+            "currency_code": "USD",
+            "exchange_rate": 60,
+            "applied_amount": 550,
+            "change_amount": 50,
+            "change_currency_code": "DOP"
+          }
+        ],
+        "total": 550,
+        "netAmount": 550,
+        "taxAmount": 0,
+        "discountAmount": 0,
+        "fiscalMode": "ELECTRONIC",
+        "device_id": "DEVICE-SYNTHETIC",
+        "customerId": "customer-fixture",
+        "customerName": "Cliente ficticio",
+        "customerSnapshot": {
+          "name": "Cliente ficticio",
+          "taxId": "SYNTHETIC-NON-FISCAL",
+          "customer_code": "C-001"
+        },
+        "ncfType": "E31",
+        "electronicNcf": "E310000000001",
+        "ncf": "E310000000001",
+        "fiscalSyncStatus": "PENDING",
+        "fiscalProvider": "POLARIS",
+        "source_channel": "POS",
+        "source_transaction_id": "sale-fixture",
+        "source_display_id": "T-001",
+        "source_terminal_id": "fixture-terminal",
+        "transaction_date": "2026-09-05T23:59:00-04:00",
+        "currency_code": "USD",
+        "exchange_rate": 60,
+        "customer_ref": "customer-fixture",
+        "customer_code": "C-001",
+        "customer": {
+          "customer_code": "C-001"
+        }
+      },
+      "httpBody": {
+        "items": [
+          {
+            "id": "sale-fixture",
+            "displayId": "T-001",
+            "date": "2026-09-05T23:59:00-04:00",
+            "terminalId": "44444444-4444-4444-8444-444444444444",
+            "userId": "fixture-user",
+            "userName": "Cajero ficticio",
+            "documentType": "TICKET",
+            "status": "COMPLETED",
+            "items": [
+              {
+                "id": "product-fixture",
+                "cartId": "cart-line-fixture",
+                "name": "Producto ficticio",
+                "quantity": 1,
+                "price": 550,
+                "category": "fixture",
+                "appliedTaxIds": [],
+                "netAmount": 550,
+                "taxAmount": 0,
+                "totalAmount": 550,
+                "selected_modifiers": [
+                  {
+                    "id": "selected",
+                    "price": 0
+                  }
+                ]
+              }
+            ],
+            "payments": [
+              {
+                "id": "pay-usd",
+                "method": "CASH",
+                "creditOverrideApproved": false,
+                "amount": 600,
+                "timestamp": "2026-09-06T03:59:00.123Z",
+                "currencyCode": "USD",
+                "amountOriginal": 10,
+                "exchangeRate": 60,
+                "appliedAmount": 550,
+                "changeAmount": 50,
+                "changeCurrencyCode": "DOP",
+                "amountApplied": 550,
+                "gatewayReference": "SYNTHETIC-REF",
+                "source_channel": "POS",
+                "source_payment_id": "pay-usd",
+                "source_transaction_id": "sale-fixture",
+                "source_display_id": "T-001",
+                "source_terminal_id": "44444444-4444-4444-8444-444444444444",
+                "device_id": "DEVICE-SYNTHETIC",
+                "payment_method": "CASH",
+                "currency_code": "USD",
+                "exchange_rate": 60,
+                "applied_amount": 550,
+                "change_amount": 50,
+                "change_currency_code": "DOP",
+                "terminalId": "44444444-4444-4444-8444-444444444444",
+                "terminal_id": "44444444-4444-4444-8444-444444444444",
+                "erp_terminal_id": "44444444-4444-4444-8444-444444444444",
+                "local_terminal_id": "fixture-terminal",
+                "localTerminalId": "fixture-terminal"
+              }
+            ],
+            "total": 550,
+            "netAmount": 550,
+            "taxAmount": 0,
+            "discountAmount": 0,
+            "fiscalMode": "ELECTRONIC",
+            "device_id": "DEVICE-SYNTHETIC",
+            "customerId": "customer-fixture",
+            "customerName": "Cliente ficticio",
+            "customerSnapshot": {
+              "name": "Cliente ficticio",
+              "taxId": "SYNTHETIC-NON-FISCAL",
+              "customer_code": "C-001"
+            },
+            "ncfType": "E31",
+            "electronicNcf": "E310000000001",
+            "ncf": "E310000000001",
+            "fiscalSyncStatus": "PENDING",
+            "fiscalProvider": "POLARIS",
+            "source_channel": "POS",
+            "source_transaction_id": "sale-fixture",
+            "source_display_id": "T-001",
+            "source_terminal_id": "44444444-4444-4444-8444-444444444444",
+            "transaction_date": "2026-09-05T23:59:00-04:00",
+            "currency_code": "USD",
+            "exchange_rate": 60,
+            "customer_ref": "customer-fixture",
+            "customer_code": "C-001",
+            "customer": {
+              "customer_code": "C-001"
+            },
+            "terminal_id": "44444444-4444-4444-8444-444444444444",
+            "erp_terminal_id": "44444444-4444-4444-8444-444444444444",
+            "local_terminal_id": "fixture-terminal",
+            "localTerminalId": "fixture-terminal"
+          }
+        ],
+        "terminalId": "44444444-4444-4444-8444-444444444444",
+        "terminal_id": "44444444-4444-4444-8444-444444444444",
+        "tenantId": "11111111-1111-4111-8111-111111111111",
+        "tenant_id": "11111111-1111-4111-8111-111111111111",
+        "companyId": "22222222-2222-4222-8222-222222222222",
+        "company_id": "22222222-2222-4222-8222-222222222222",
+        "storeId": "33333333-3333-4333-8333-333333333333",
+        "store_id": "33333333-3333-4333-8333-333333333333",
+        "sync_channel": "ERP_ACTIVE",
+        "device_id": "DEVICE-SYNTHETIC",
+        "deviceId": "DEVICE-SYNTHETIC"
+      },
+      "fieldDifferences": [
+        {
+          "path": "/terminalId",
+          "change": "CHANGED",
+          "before": "fixture-terminal",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/items/0/images",
+          "change": "REMOVED",
+          "before": [
+            "synthetic-image"
+          ]
+        },
+        {
+          "path": "/items/0/attributes",
+          "change": "REMOVED",
+          "before": [
+            {
+              "id": "a",
+              "name": "Color"
+            }
+          ]
+        },
+        {
+          "path": "/items/0/variants",
+          "change": "REMOVED",
+          "before": []
+        },
+        {
+          "path": "/items/0/tariffs",
+          "change": "REMOVED",
+          "before": [
+            {
+              "id": "not-uuid"
+            }
+          ]
+        },
+        {
+          "path": "/items/0/availableModifiers",
+          "change": "REMOVED",
+          "before": [
+            {
+              "id": "definition"
+            }
+          ]
+        },
+        {
+          "path": "/items/0/tariffId",
+          "change": "REMOVED",
+          "before": "not-uuid"
+        },
+        {
+          "path": "/payments/0/gatewayRawResponse",
+          "change": "REMOVED",
+          "before": {
+            "synthetic": true
+          }
+        },
+        {
+          "path": "/payments/0/gatewayReceiptClient",
+          "change": "REMOVED",
+          "before": "SYNTHETIC RECEIPT"
+        },
+        {
+          "path": "/payments/0/creditOverrideApproved",
+          "change": "ADDED",
+          "after": false
+        },
+        {
+          "path": "/payments/0/amountApplied",
+          "change": "ADDED",
+          "after": 550
+        },
+        {
+          "path": "/payments/0/source_channel",
+          "change": "ADDED",
+          "after": "POS"
+        },
+        {
+          "path": "/payments/0/source_payment_id",
+          "change": "ADDED",
+          "after": "pay-usd"
+        },
+        {
+          "path": "/payments/0/source_transaction_id",
+          "change": "ADDED",
+          "after": "sale-fixture"
+        },
+        {
+          "path": "/payments/0/source_display_id",
+          "change": "ADDED",
+          "after": "T-001"
+        },
+        {
+          "path": "/payments/0/source_terminal_id",
+          "change": "ADDED",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/payments/0/device_id",
+          "change": "ADDED",
+          "after": "DEVICE-SYNTHETIC"
+        },
+        {
+          "path": "/payments/0/payment_method",
+          "change": "ADDED",
+          "after": "CASH"
+        },
+        {
+          "path": "/payments/0/currency_code",
+          "change": "ADDED",
+          "after": "USD"
+        },
+        {
+          "path": "/payments/0/exchange_rate",
+          "change": "ADDED",
+          "after": 60
+        },
+        {
+          "path": "/payments/0/applied_amount",
+          "change": "ADDED",
+          "after": 550
+        },
+        {
+          "path": "/payments/0/change_amount",
+          "change": "ADDED",
+          "after": 50
+        },
+        {
+          "path": "/payments/0/change_currency_code",
+          "change": "ADDED",
+          "after": "DOP"
+        },
+        {
+          "path": "/payments/0/terminalId",
+          "change": "ADDED",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/payments/0/terminal_id",
+          "change": "ADDED",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/payments/0/erp_terminal_id",
+          "change": "ADDED",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/payments/0/local_terminal_id",
+          "change": "ADDED",
+          "after": "fixture-terminal"
+        },
+        {
+          "path": "/payments/0/localTerminalId",
+          "change": "ADDED",
+          "after": "fixture-terminal"
+        },
+        {
+          "path": "/source_channel",
+          "change": "ADDED",
+          "after": "POS"
+        },
+        {
+          "path": "/source_transaction_id",
+          "change": "ADDED",
+          "after": "sale-fixture"
+        },
+        {
+          "path": "/source_display_id",
+          "change": "ADDED",
+          "after": "T-001"
+        },
+        {
+          "path": "/source_terminal_id",
+          "change": "ADDED",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/transaction_date",
+          "change": "ADDED",
+          "after": "2026-09-05T23:59:00-04:00"
+        },
+        {
+          "path": "/currency_code",
+          "change": "ADDED",
+          "after": "USD"
+        },
+        {
+          "path": "/exchange_rate",
+          "change": "ADDED",
+          "after": 60
+        },
+        {
+          "path": "/customer_ref",
+          "change": "ADDED",
+          "after": "customer-fixture"
+        },
+        {
+          "path": "/customer_code",
+          "change": "ADDED",
+          "after": "C-001"
+        },
+        {
+          "path": "/customer",
+          "change": "ADDED",
+          "after": {
+            "customer_code": "C-001"
+          }
+        },
+        {
+          "path": "/terminal_id",
+          "change": "ADDED",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/erp_terminal_id",
+          "change": "ADDED",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/local_terminal_id",
+          "change": "ADDED",
+          "after": "fixture-terminal"
+        },
+        {
+          "path": "/localTerminalId",
+          "change": "ADDED",
+          "after": "fixture-terminal"
+        }
+      ],
+      "notes": [
+        "Serialization capability only; fiscal local upsert does not prove durable new remote revision."
+      ]
+    },
+    {
+      "id": "FISCAL_AFTER_POTENTIAL_RESEND",
+      "route": "/api/sync/transactions",
+      "localRuntimeTimestamps": [
+        {
+          "id": "pay-usd",
+          "type": "string",
+          "value": "2026-09-06T03:59:00.123Z"
+        }
+      ],
+      "localJson": {
+        "id": "sale-fixture",
+        "displayId": "T-001",
+        "date": "2026-09-05T23:59:00-04:00",
+        "terminalId": "fixture-terminal",
+        "userId": "fixture-user",
+        "userName": "Cajero ficticio",
+        "documentType": "TICKET",
+        "status": "COMPLETED",
+        "items": [
+          {
+            "id": "product-fixture",
+            "cartId": "cart-line-fixture",
+            "name": "Producto ficticio",
+            "quantity": 1,
+            "price": 550,
+            "category": "fixture",
+            "images": [
+              "synthetic-image"
+            ],
+            "attributes": [
+              {
+                "id": "a",
+                "name": "Color"
+              }
+            ],
+            "variants": [],
+            "tariffs": [
+              {
+                "id": "not-uuid"
+              }
+            ],
+            "appliedTaxIds": [],
+            "netAmount": 550,
+            "taxAmount": 0,
+            "totalAmount": 550,
+            "selected_modifiers": [
+              {
+                "id": "selected",
+                "price": 0
+              }
+            ],
+            "availableModifiers": [
+              {
+                "id": "definition"
+              }
+            ],
+            "tariffId": "not-uuid"
+          }
+        ],
+        "payments": [
+          {
+            "id": "pay-usd",
+            "method": "CASH",
+            "amount": 600,
+            "timestamp": "2026-09-06T03:59:00.123Z",
+            "currencyCode": "USD",
+            "amountOriginal": 10,
+            "exchangeRate": 60,
+            "appliedAmount": 550,
+            "changeAmount": 50,
+            "changeCurrencyCode": "DOP",
+            "gatewayRawResponse": {
+              "synthetic": true
+            },
+            "gatewayReceiptClient": "SYNTHETIC RECEIPT",
+            "gatewayReference": "SYNTHETIC-REF"
+          }
+        ],
+        "total": 550,
+        "netAmount": 550,
+        "taxAmount": 0,
+        "discountAmount": 0,
+        "fiscalMode": "ELECTRONIC",
+        "device_id": "DEVICE-SYNTHETIC",
+        "customerId": "customer-fixture",
+        "customerName": "Cliente ficticio",
+        "customerSnapshot": {
+          "name": "Cliente ficticio",
+          "taxId": "SYNTHETIC-NON-FISCAL",
+          "customer_code": "C-001"
+        },
+        "ncfType": "E31",
+        "electronicNcf": "E310000000001",
+        "ncf": "E310000000001",
+        "fiscalSyncStatus": "SYNCED",
+        "fiscalProvider": "POLARIS",
+        "fiscalReferenceId": "SYNTHETIC-PROVIDER-ID",
+        "fiscalSyncedAt": "2026-09-06T16:00:00.000Z",
+        "fiscalResponseMessage": "Synthetic accepted"
+      },
+      "serializedItem": {
+        "id": "sale-fixture",
+        "displayId": "T-001",
+        "date": "2026-09-05T23:59:00-04:00",
+        "terminalId": "fixture-terminal",
+        "userId": "fixture-user",
+        "userName": "Cajero ficticio",
+        "documentType": "TICKET",
+        "status": "COMPLETED",
+        "items": [
+          {
+            "id": "product-fixture",
+            "cartId": "cart-line-fixture",
+            "name": "Producto ficticio",
+            "quantity": 1,
+            "price": 550,
+            "category": "fixture",
+            "appliedTaxIds": [],
+            "netAmount": 550,
+            "taxAmount": 0,
+            "totalAmount": 550,
+            "selected_modifiers": [
+              {
+                "id": "selected",
+                "price": 0
+              }
+            ]
+          }
+        ],
+        "payments": [
+          {
+            "id": "pay-usd",
+            "method": "CASH",
+            "creditOverrideApproved": false,
+            "amount": 600,
+            "timestamp": "2026-09-06T03:59:00.123Z",
+            "currencyCode": "USD",
+            "amountOriginal": 10,
+            "exchangeRate": 60,
+            "appliedAmount": 550,
+            "changeAmount": 50,
+            "changeCurrencyCode": "DOP",
+            "amountApplied": 550,
+            "gatewayReference": "SYNTHETIC-REF",
+            "source_channel": "POS",
+            "source_payment_id": "pay-usd",
+            "source_transaction_id": "sale-fixture",
+            "source_display_id": "T-001",
+            "source_terminal_id": "fixture-terminal",
+            "device_id": "DEVICE-SYNTHETIC",
+            "payment_method": "CASH",
+            "currency_code": "USD",
+            "exchange_rate": 60,
+            "applied_amount": 550,
+            "change_amount": 50,
+            "change_currency_code": "DOP"
+          }
+        ],
+        "total": 550,
+        "netAmount": 550,
+        "taxAmount": 0,
+        "discountAmount": 0,
+        "fiscalMode": "ELECTRONIC",
+        "device_id": "DEVICE-SYNTHETIC",
+        "customerId": "customer-fixture",
+        "customerName": "Cliente ficticio",
+        "customerSnapshot": {
+          "name": "Cliente ficticio",
+          "taxId": "SYNTHETIC-NON-FISCAL",
+          "customer_code": "C-001"
+        },
+        "ncfType": "E31",
+        "electronicNcf": "E310000000001",
+        "ncf": "E310000000001",
+        "fiscalSyncStatus": "SYNCED",
+        "fiscalProvider": "POLARIS",
+        "fiscalReferenceId": "SYNTHETIC-PROVIDER-ID",
+        "fiscalSyncedAt": "2026-09-06T16:00:00.000Z",
+        "fiscalResponseMessage": "Synthetic accepted",
+        "source_channel": "POS",
+        "source_transaction_id": "sale-fixture",
+        "source_display_id": "T-001",
+        "source_terminal_id": "fixture-terminal",
+        "transaction_date": "2026-09-05T23:59:00-04:00",
+        "currency_code": "USD",
+        "exchange_rate": 60,
+        "customer_ref": "customer-fixture",
+        "customer_code": "C-001",
+        "customer": {
+          "customer_code": "C-001"
+        }
+      },
+      "httpBody": {
+        "items": [
+          {
+            "id": "sale-fixture",
+            "displayId": "T-001",
+            "date": "2026-09-05T23:59:00-04:00",
+            "terminalId": "44444444-4444-4444-8444-444444444444",
+            "userId": "fixture-user",
+            "userName": "Cajero ficticio",
+            "documentType": "TICKET",
+            "status": "COMPLETED",
+            "items": [
+              {
+                "id": "product-fixture",
+                "cartId": "cart-line-fixture",
+                "name": "Producto ficticio",
+                "quantity": 1,
+                "price": 550,
+                "category": "fixture",
+                "appliedTaxIds": [],
+                "netAmount": 550,
+                "taxAmount": 0,
+                "totalAmount": 550,
+                "selected_modifiers": [
+                  {
+                    "id": "selected",
+                    "price": 0
+                  }
+                ]
+              }
+            ],
+            "payments": [
+              {
+                "id": "pay-usd",
+                "method": "CASH",
+                "creditOverrideApproved": false,
+                "amount": 600,
+                "timestamp": "2026-09-06T03:59:00.123Z",
+                "currencyCode": "USD",
+                "amountOriginal": 10,
+                "exchangeRate": 60,
+                "appliedAmount": 550,
+                "changeAmount": 50,
+                "changeCurrencyCode": "DOP",
+                "amountApplied": 550,
+                "gatewayReference": "SYNTHETIC-REF",
+                "source_channel": "POS",
+                "source_payment_id": "pay-usd",
+                "source_transaction_id": "sale-fixture",
+                "source_display_id": "T-001",
+                "source_terminal_id": "44444444-4444-4444-8444-444444444444",
+                "device_id": "DEVICE-SYNTHETIC",
+                "payment_method": "CASH",
+                "currency_code": "USD",
+                "exchange_rate": 60,
+                "applied_amount": 550,
+                "change_amount": 50,
+                "change_currency_code": "DOP",
+                "terminalId": "44444444-4444-4444-8444-444444444444",
+                "terminal_id": "44444444-4444-4444-8444-444444444444",
+                "erp_terminal_id": "44444444-4444-4444-8444-444444444444",
+                "local_terminal_id": "fixture-terminal",
+                "localTerminalId": "fixture-terminal"
+              }
+            ],
+            "total": 550,
+            "netAmount": 550,
+            "taxAmount": 0,
+            "discountAmount": 0,
+            "fiscalMode": "ELECTRONIC",
+            "device_id": "DEVICE-SYNTHETIC",
+            "customerId": "customer-fixture",
+            "customerName": "Cliente ficticio",
+            "customerSnapshot": {
+              "name": "Cliente ficticio",
+              "taxId": "SYNTHETIC-NON-FISCAL",
+              "customer_code": "C-001"
+            },
+            "ncfType": "E31",
+            "electronicNcf": "E310000000001",
+            "ncf": "E310000000001",
+            "fiscalSyncStatus": "SYNCED",
+            "fiscalProvider": "POLARIS",
+            "fiscalReferenceId": "SYNTHETIC-PROVIDER-ID",
+            "fiscalSyncedAt": "2026-09-06T16:00:00.000Z",
+            "fiscalResponseMessage": "Synthetic accepted",
+            "source_channel": "POS",
+            "source_transaction_id": "sale-fixture",
+            "source_display_id": "T-001",
+            "source_terminal_id": "44444444-4444-4444-8444-444444444444",
+            "transaction_date": "2026-09-05T23:59:00-04:00",
+            "currency_code": "USD",
+            "exchange_rate": 60,
+            "customer_ref": "customer-fixture",
+            "customer_code": "C-001",
+            "customer": {
+              "customer_code": "C-001"
+            },
+            "terminal_id": "44444444-4444-4444-8444-444444444444",
+            "erp_terminal_id": "44444444-4444-4444-8444-444444444444",
+            "local_terminal_id": "fixture-terminal",
+            "localTerminalId": "fixture-terminal"
+          }
+        ],
+        "terminalId": "44444444-4444-4444-8444-444444444444",
+        "terminal_id": "44444444-4444-4444-8444-444444444444",
+        "tenantId": "11111111-1111-4111-8111-111111111111",
+        "tenant_id": "11111111-1111-4111-8111-111111111111",
+        "companyId": "22222222-2222-4222-8222-222222222222",
+        "company_id": "22222222-2222-4222-8222-222222222222",
+        "storeId": "33333333-3333-4333-8333-333333333333",
+        "store_id": "33333333-3333-4333-8333-333333333333",
+        "sync_channel": "ERP_ACTIVE",
+        "device_id": "DEVICE-SYNTHETIC",
+        "deviceId": "DEVICE-SYNTHETIC"
+      },
+      "fieldDifferences": [
+        {
+          "path": "/terminalId",
+          "change": "CHANGED",
+          "before": "fixture-terminal",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/items/0/images",
+          "change": "REMOVED",
+          "before": [
+            "synthetic-image"
+          ]
+        },
+        {
+          "path": "/items/0/attributes",
+          "change": "REMOVED",
+          "before": [
+            {
+              "id": "a",
+              "name": "Color"
+            }
+          ]
+        },
+        {
+          "path": "/items/0/variants",
+          "change": "REMOVED",
+          "before": []
+        },
+        {
+          "path": "/items/0/tariffs",
+          "change": "REMOVED",
+          "before": [
+            {
+              "id": "not-uuid"
+            }
+          ]
+        },
+        {
+          "path": "/items/0/availableModifiers",
+          "change": "REMOVED",
+          "before": [
+            {
+              "id": "definition"
+            }
+          ]
+        },
+        {
+          "path": "/items/0/tariffId",
+          "change": "REMOVED",
+          "before": "not-uuid"
+        },
+        {
+          "path": "/payments/0/gatewayRawResponse",
+          "change": "REMOVED",
+          "before": {
+            "synthetic": true
+          }
+        },
+        {
+          "path": "/payments/0/gatewayReceiptClient",
+          "change": "REMOVED",
+          "before": "SYNTHETIC RECEIPT"
+        },
+        {
+          "path": "/payments/0/creditOverrideApproved",
+          "change": "ADDED",
+          "after": false
+        },
+        {
+          "path": "/payments/0/amountApplied",
+          "change": "ADDED",
+          "after": 550
+        },
+        {
+          "path": "/payments/0/source_channel",
+          "change": "ADDED",
+          "after": "POS"
+        },
+        {
+          "path": "/payments/0/source_payment_id",
+          "change": "ADDED",
+          "after": "pay-usd"
+        },
+        {
+          "path": "/payments/0/source_transaction_id",
+          "change": "ADDED",
+          "after": "sale-fixture"
+        },
+        {
+          "path": "/payments/0/source_display_id",
+          "change": "ADDED",
+          "after": "T-001"
+        },
+        {
+          "path": "/payments/0/source_terminal_id",
+          "change": "ADDED",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/payments/0/device_id",
+          "change": "ADDED",
+          "after": "DEVICE-SYNTHETIC"
+        },
+        {
+          "path": "/payments/0/payment_method",
+          "change": "ADDED",
+          "after": "CASH"
+        },
+        {
+          "path": "/payments/0/currency_code",
+          "change": "ADDED",
+          "after": "USD"
+        },
+        {
+          "path": "/payments/0/exchange_rate",
+          "change": "ADDED",
+          "after": 60
+        },
+        {
+          "path": "/payments/0/applied_amount",
+          "change": "ADDED",
+          "after": 550
+        },
+        {
+          "path": "/payments/0/change_amount",
+          "change": "ADDED",
+          "after": 50
+        },
+        {
+          "path": "/payments/0/change_currency_code",
+          "change": "ADDED",
+          "after": "DOP"
+        },
+        {
+          "path": "/payments/0/terminalId",
+          "change": "ADDED",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/payments/0/terminal_id",
+          "change": "ADDED",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/payments/0/erp_terminal_id",
+          "change": "ADDED",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/payments/0/local_terminal_id",
+          "change": "ADDED",
+          "after": "fixture-terminal"
+        },
+        {
+          "path": "/payments/0/localTerminalId",
+          "change": "ADDED",
+          "after": "fixture-terminal"
+        },
+        {
+          "path": "/source_channel",
+          "change": "ADDED",
+          "after": "POS"
+        },
+        {
+          "path": "/source_transaction_id",
+          "change": "ADDED",
+          "after": "sale-fixture"
+        },
+        {
+          "path": "/source_display_id",
+          "change": "ADDED",
+          "after": "T-001"
+        },
+        {
+          "path": "/source_terminal_id",
+          "change": "ADDED",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/transaction_date",
+          "change": "ADDED",
+          "after": "2026-09-05T23:59:00-04:00"
+        },
+        {
+          "path": "/currency_code",
+          "change": "ADDED",
+          "after": "USD"
+        },
+        {
+          "path": "/exchange_rate",
+          "change": "ADDED",
+          "after": 60
+        },
+        {
+          "path": "/customer_ref",
+          "change": "ADDED",
+          "after": "customer-fixture"
+        },
+        {
+          "path": "/customer_code",
+          "change": "ADDED",
+          "after": "C-001"
+        },
+        {
+          "path": "/customer",
+          "change": "ADDED",
+          "after": {
+            "customer_code": "C-001"
+          }
+        },
+        {
+          "path": "/terminal_id",
+          "change": "ADDED",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/erp_terminal_id",
+          "change": "ADDED",
+          "after": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "path": "/local_terminal_id",
+          "change": "ADDED",
+          "after": "fixture-terminal"
+        },
+        {
+          "path": "/localTerminalId",
+          "change": "ADDED",
+          "after": "fixture-terminal"
+        }
+      ],
+      "notes": [
+        "Not a FiscalUpdate event; same transaction ID. No resend executed."
+      ]
+    },
+    {
+      "id": "BATCH_PAYLOADS",
+      "localJson": {
+        "id": "sale-fixture",
+        "displayId": "T-001",
+        "date": "2026-09-05T23:59:00-04:00",
+        "terminalId": "fixture-terminal",
+        "userId": "fixture-user",
+        "userName": "Cajero ficticio",
+        "documentType": "TICKET",
+        "status": "COMPLETED",
+        "items": [
+          {
+            "id": "product-fixture",
+            "cartId": "cart-line-fixture",
+            "name": "Producto ficticio",
+            "quantity": 1,
+            "price": 550,
+            "category": "fixture",
+            "images": [
+              "synthetic-image"
+            ],
+            "attributes": [
+              {
+                "id": "a",
+                "name": "Color"
+              }
+            ],
+            "variants": [],
+            "tariffs": [
+              {
+                "id": "not-uuid"
+              }
+            ],
+            "appliedTaxIds": [],
+            "netAmount": 550,
+            "taxAmount": 0,
+            "totalAmount": 550,
+            "selected_modifiers": [
+              {
+                "id": "selected",
+                "price": 0
+              }
+            ],
+            "availableModifiers": [
+              {
+                "id": "definition"
+              }
+            ],
+            "tariffId": "not-uuid"
+          }
+        ],
+        "payments": [
+          {
+            "id": "pay-usd",
+            "method": "CASH",
+            "amount": 600,
+            "timestamp": "2026-09-06T03:59:00.123Z",
+            "currencyCode": "USD",
+            "amountOriginal": 10,
+            "exchangeRate": 60,
+            "appliedAmount": 550,
+            "changeAmount": 50,
+            "changeCurrencyCode": "DOP",
+            "gatewayRawResponse": {
+              "synthetic": true
+            },
+            "gatewayReceiptClient": "SYNTHETIC RECEIPT",
+            "gatewayReference": "SYNTHETIC-REF"
+          }
+        ],
+        "total": 550,
+        "netAmount": 550,
+        "taxAmount": 0,
+        "discountAmount": 0,
+        "fiscalMode": "NONE",
+        "device_id": "DEVICE-SYNTHETIC",
+        "customerId": "customer-fixture",
+        "customerName": "Cliente ficticio",
+        "customerSnapshot": {
+          "name": "Cliente ficticio",
+          "taxId": "SYNTHETIC-NON-FISCAL",
+          "customer_code": "C-001"
+        }
+      },
+      "saleEventPayload": {
+        "transaction": {
+          "id": "sale-fixture",
+          "displayId": "T-001",
+          "date": "2026-09-05T23:59:00-04:00",
+          "terminalId": "fixture-terminal",
+          "userId": "fixture-user",
+          "userName": "Cajero ficticio",
+          "documentType": "TICKET",
+          "status": "COMPLETED",
+          "items": [
+            {
+              "id": "product-fixture",
+              "cartId": "cart-line-fixture",
+              "name": "Producto ficticio",
+              "quantity": 1,
+              "price": 550,
+              "category": "fixture",
+              "images": [
+                "synthetic-image"
+              ],
+              "attributes": [
+                {
+                  "id": "a",
+                  "name": "Color"
+                }
+              ],
+              "variants": [],
+              "tariffs": [
+                {
+                  "id": "not-uuid"
+                }
+              ],
+              "appliedTaxIds": [],
+              "netAmount": 550,
+              "taxAmount": 0,
+              "totalAmount": 550,
+              "selected_modifiers": [
+                {
+                  "id": "selected",
+                  "price": 0
+                }
+              ],
+              "availableModifiers": [
+                {
+                  "id": "definition"
+                }
+              ],
+              "tariffId": "not-uuid"
+            }
+          ],
+          "payments": [
+            {
+              "id": "pay-usd",
+              "method": "CASH",
+              "amount": 600,
+              "timestamp": "2026-09-06T03:59:00.123Z",
+              "currencyCode": "USD",
+              "amountOriginal": 10,
+              "exchangeRate": 60,
+              "appliedAmount": 550,
+              "changeAmount": 50,
+              "changeCurrencyCode": "DOP",
+              "gatewayRawResponse": {
+                "synthetic": true
+              },
+              "gatewayReceiptClient": "SYNTHETIC RECEIPT",
+              "gatewayReference": "SYNTHETIC-REF"
+            }
+          ],
+          "total": 550,
+          "netAmount": 550,
+          "taxAmount": 0,
+          "discountAmount": 0,
+          "fiscalMode": "NONE",
+          "device_id": "DEVICE-SYNTHETIC",
+          "customerId": "customer-fixture",
+          "customerName": "Cliente ficticio",
+          "customerSnapshot": {
+            "name": "Cliente ficticio",
+            "taxId": "SYNTHETIC-NON-FISCAL",
+            "customer_code": "C-001"
+          }
+        },
+        "summary": {
+          "transaction_id": "sale-fixture",
+          "display_id": "T-001",
+          "document_type": "TICKET",
+          "status": "COMPLETED",
+          "total": 550,
+          "tax_amount": 0,
+          "net_amount": 550,
+          "discount_amount": 0,
+          "item_count": 1,
+          "payment_count": 1,
+          "customer_id": "customer-fixture",
+          "customer_code": "C-001",
+          "customer": {
+            "customer_code": "C-001"
+          },
+          "customer_name": "Cliente ficticio",
+          "customer_tax_id": "SYNTHETIC-NON-FISCAL",
+          "user_id": "fixture-user",
+          "user_name": "Cajero ficticio",
+          "pending_balance": 0,
+          "wallet_payment_amount": 0,
+          "wallet_deposit_amount": 0,
+          "loyalty_points_used": 0,
+          "coupon_codes": [],
+          "fiscal_mode": "NONE"
+        },
+        "occurred_at": "2026-09-06T03:59:00.000Z"
+      },
+      "paymentEventPayload": {
+        "summary": {
+          "transaction_id": "sale-fixture",
+          "display_id": "T-001",
+          "document_type": "TICKET",
+          "status": "COMPLETED",
+          "total": 550,
+          "tax_amount": 0,
+          "net_amount": 550,
+          "discount_amount": 0,
+          "item_count": 1,
+          "payment_count": 1,
+          "customer_id": "customer-fixture",
+          "customer_code": "C-001",
+          "customer": {
+            "customer_code": "C-001"
+          },
+          "customer_name": "Cliente ficticio",
+          "customer_tax_id": "SYNTHETIC-NON-FISCAL",
+          "user_id": "fixture-user",
+          "user_name": "Cajero ficticio",
+          "pending_balance": 0,
+          "wallet_payment_amount": 0,
+          "wallet_deposit_amount": 0,
+          "loyalty_points_used": 0,
+          "coupon_codes": [],
+          "fiscal_mode": "NONE"
+        },
+        "payments": [
+          {
+            "id": "pay-usd",
+            "method": "CASH",
+            "amount": 600,
+            "timestamp": "2026-09-06T03:59:00.123Z",
+            "currencyCode": "USD",
+            "amountOriginal": 10,
+            "exchangeRate": 60,
+            "appliedAmount": 550,
+            "changeAmount": 50,
+            "changeCurrencyCode": "DOP",
+            "gatewayRawResponse": {
+              "synthetic": true
+            },
+            "gatewayReceiptClient": "SYNTHETIC RECEIPT",
+            "gatewayReference": "SYNTHETIC-REF"
+          }
+        ],
+        "occurred_at": "2026-09-06T03:59:00.000Z"
+      },
+      "notes": [
+        "Real pure payload builders; CheckoutDiagnostics stubbed. No durable outbox persisted.",
+        "These are event payloads, not the complete HTTP batch envelope. Direct sanitizer is NOT applied by these builders."
+      ]
+    },
+    {
+      "id": "ORIGINAL_SALE_REFUND_MUTATION",
+      "before": {
+        "id": "closed-fixture",
+        "displayId": "T-001",
+        "date": "2026-09-05T23:59:00-04:00",
+        "terminalId": "fixture-terminal",
+        "userId": "fixture-user",
+        "userName": "Cajero ficticio",
+        "documentType": "TICKET",
+        "status": "COMPLETED",
+        "items": [
+          {
+            "id": "product-fixture",
+            "cartId": "cart-line-fixture",
+            "name": "Producto ficticio",
+            "quantity": 11,
+            "price": 50,
+            "category": "fixture",
+            "images": [
+              "synthetic-image"
+            ],
+            "attributes": [
+              {
+                "id": "a",
+                "name": "Color"
+              }
+            ],
+            "variants": [],
+            "tariffs": [
+              {
+                "id": "not-uuid"
+              }
+            ],
+            "appliedTaxIds": [],
+            "netAmount": 550,
+            "taxAmount": 0,
+            "totalAmount": 550,
+            "selected_modifiers": [
+              {
+                "id": "selected",
+                "price": 0
+              }
+            ],
+            "availableModifiers": [
+              {
+                "id": "definition"
+              }
+            ],
+            "tariffId": "not-uuid"
+          }
+        ],
+        "payments": [
+          {
+            "id": "pay-usd",
+            "method": "CASH",
+            "amount": 600,
+            "timestamp": "2026-09-06T03:59:00.123Z",
+            "currencyCode": "USD",
+            "amountOriginal": 10,
+            "exchangeRate": 60,
+            "appliedAmount": 550,
+            "changeAmount": 50,
+            "changeCurrencyCode": "DOP",
+            "gatewayRawResponse": {
+              "synthetic": true
+            },
+            "gatewayReceiptClient": "SYNTHETIC RECEIPT",
+            "gatewayReference": "SYNTHETIC-REF"
+          }
+        ],
+        "total": 550,
+        "netAmount": 550,
+        "taxAmount": 0,
+        "discountAmount": 0,
+        "fiscalMode": "NONE",
+        "device_id": "DEVICE-SYNTHETIC",
+        "customerId": "customer-fixture",
+        "customerName": "Cliente ficticio",
+        "customerSnapshot": {
+          "name": "Cliente ficticio",
+          "taxId": "SYNTHETIC-NON-FISCAL",
+          "customer_code": "C-001"
+        },
+        "zReportId": "z-previous",
+        "zReportSequence": "Z-001"
+      },
+      "after": {
+        "id": "closed-fixture",
+        "displayId": "T-001",
+        "date": "2026-09-05T23:59:00-04:00",
+        "terminalId": "fixture-terminal",
+        "userId": "fixture-user",
+        "userName": "Cajero ficticio",
+        "documentType": "TICKET",
+        "status": "PARTIAL_REFUND",
+        "items": [
+          {
+            "id": "product-fixture",
+            "cartId": "cart-line-fixture",
+            "name": "Producto ficticio",
+            "quantity": 11,
+            "price": 50,
+            "category": "fixture",
+            "images": [
+              "synthetic-image"
+            ],
+            "attributes": [
+              {
+                "id": "a",
+                "name": "Color"
+              }
+            ],
+            "variants": [],
+            "tariffs": [
+              {
+                "id": "not-uuid"
+              }
+            ],
+            "appliedTaxIds": [],
+            "netAmount": 550,
+            "taxAmount": 0,
+            "totalAmount": 550,
+            "selected_modifiers": [
+              {
+                "id": "selected",
+                "price": 0
+              }
+            ],
+            "availableModifiers": [
+              {
+                "id": "definition"
+              }
+            ],
+            "tariffId": "not-uuid"
+          }
+        ],
+        "payments": [
+          {
+            "id": "pay-usd",
+            "method": "CASH",
+            "amount": 600,
+            "timestamp": "2026-09-06T03:59:00.123Z",
+            "currencyCode": "USD",
+            "amountOriginal": 10,
+            "exchangeRate": 60,
+            "appliedAmount": 550,
+            "changeAmount": 50,
+            "changeCurrencyCode": "DOP",
+            "gatewayRawResponse": {
+              "synthetic": true
+            },
+            "gatewayReceiptClient": "SYNTHETIC RECEIPT",
+            "gatewayReference": "SYNTHETIC-REF"
+          }
+        ],
+        "total": 550,
+        "netAmount": 550,
+        "taxAmount": 0,
+        "discountAmount": 0,
+        "fiscalMode": "NONE",
+        "device_id": "DEVICE-SYNTHETIC",
+        "customerId": "customer-fixture",
+        "customerName": "Cliente ficticio",
+        "customerSnapshot": {
+          "name": "Cliente ficticio",
+          "taxId": "SYNTHETIC-NON-FISCAL",
+          "customer_code": "C-001"
+        },
+        "zReportId": "z-previous",
+        "zReportSequence": "Z-001",
+        "relatedTransactions": [
+          "refund-fixture"
+        ],
+        "updatedAt": "2026-09-06T16:00:00.000Z",
+        "syncStatus": "PENDING"
+      },
+      "fieldDifferences": [
+        {
+          "path": "/status",
+          "change": "CHANGED",
+          "before": "COMPLETED",
+          "after": "PARTIAL_REFUND"
+        },
+        {
+          "path": "/relatedTransactions",
+          "change": "ADDED",
+          "after": [
+            "refund-fixture"
+          ]
+        },
+        {
+          "path": "/updatedAt",
+          "change": "ADDED",
+          "after": "2026-09-06T16:00:00.000Z"
+        },
+        {
+          "path": "/syncStatus",
+          "change": "ADDED",
+          "after": "PENDING"
+        }
+      ],
+      "revision": null,
+      "route": null,
+      "notes": [
+        "Synthetic partial refund: one of eleven units at 50; original total 550 unchanged.",
+        "Construction traced to localRefundPersistence; persistence NOT invoked. No durable revision history proven; flag PENDING is not remote ACK."
+      ]
+    }
+  ],
+  "timestampCases": [
+    {
+      "inputType": "string",
+      "input": "2026-09-05T23:59:00.123-04:00",
+      "wire": "2026-09-06T03:59:00.123Z"
+    },
+    {
+      "inputType": "string",
+      "input": "2026-09-06T00:01:00.000-04:00",
+      "wire": "2026-09-06T04:01:00.000Z"
+    },
+    {
+      "inputType": "number",
+      "input": 1788666600000,
+      "wire": "2026-09-06T03:50:00.000Z"
+    },
+    {
+      "inputType": "object",
+      "input": null,
+      "wire": "2026-09-06T16:00:00.000Z"
+    },
+    {
+      "inputType": "undefined",
+      "input": "ABSENT",
+      "wire": "2026-09-06T16:00:00.000Z"
+    },
+    {
+      "inputType": "string",
+      "input": "invalid",
+      "wire": null
+    }
+  ]
+}

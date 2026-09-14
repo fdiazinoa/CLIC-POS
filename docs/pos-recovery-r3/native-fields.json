@@ -1,0 +1,2278 @@
+[
+  {
+    "name": "SyncStatus",
+    "extends": [],
+    "fields": [],
+    "definitionKind": "TypeAliasDeclaration"
+  },
+  {
+    "name": "CloudSyncStatus",
+    "extends": [],
+    "fields": [],
+    "definitionKind": "TypeAliasDeclaration"
+  },
+  {
+    "name": "FiscalRangeDGII",
+    "extends": [],
+    "fields": [
+      {
+        "name": "id",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "name": "type",
+        "optional": false,
+        "type": "FiscalDocumentCode"
+      },
+      {
+        "name": "prefix",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "name": "startNumber",
+        "optional": false,
+        "type": "number"
+      },
+      {
+        "name": "endNumber",
+        "optional": false,
+        "type": "number"
+      },
+      {
+        "name": "currentGlobal",
+        "optional": false,
+        "type": "number"
+      },
+      {
+        "name": "expiryDate",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "name": "isActive",
+        "optional": false,
+        "type": "boolean"
+      }
+    ],
+    "definitionKind": "InterfaceDeclaration"
+  },
+  {
+    "name": "FiscalAllocation",
+    "extends": [],
+    "fields": [
+      {
+        "name": "id",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "name": "terminalId",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "name": "fiscalRangeId",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "name": "ncfType",
+        "optional": false,
+        "type": "FiscalDocumentCode"
+      },
+      {
+        "name": "reservedStart",
+        "optional": false,
+        "type": "number"
+      },
+      {
+        "name": "reservedEnd",
+        "optional": false,
+        "type": "number"
+      },
+      {
+        "name": "nextNumber",
+        "optional": false,
+        "type": "number"
+      },
+      {
+        "name": "status",
+        "optional": false,
+        "type": "'ACTIVE' | 'PAUSED' | 'EXHAUSTED' | 'RELEASED' | 'CONFLICTED' | 'LEGACY'"
+      },
+      {
+        "name": "releasedAt",
+        "optional": false,
+        "type": "string | null"
+      },
+      {
+        "name": "prefix",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "metadata",
+        "optional": true,
+        "type": "Record<string, any>"
+      }
+    ],
+    "definitionKind": "InterfaceDeclaration"
+  },
+  {
+    "name": "LocalFiscalBuffer",
+    "extends": [],
+    "fields": [
+      {
+        "name": "id",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "name": "type",
+        "optional": false,
+        "type": "FiscalDocumentCode"
+      },
+      {
+        "name": "prefix",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "name": "currentNumber",
+        "optional": false,
+        "type": "number"
+      },
+      {
+        "name": "endNumber",
+        "optional": false,
+        "type": "number"
+      },
+      {
+        "name": "expiryDate",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "name": "startNumber",
+        "optional": true,
+        "type": "number"
+      },
+      {
+        "name": "terminalId",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "fiscalRangeId",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "allocationId",
+        "optional": true,
+        "type": "string"
+      }
+    ],
+    "definitionKind": "InterfaceDeclaration"
+  },
+  {
+    "name": "DocumentType",
+    "extends": [],
+    "fields": [],
+    "definitionKind": "TypeAliasDeclaration"
+  },
+  {
+    "name": "DocumentSeries",
+    "extends": [],
+    "fields": [
+      {
+        "name": "id",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "name": "code",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "documentType",
+        "optional": false,
+        "type": "DocumentType"
+      },
+      {
+        "name": "name",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "name": "description",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "name": "prefix",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "name": "nextNumber",
+        "optional": false,
+        "type": "number"
+      },
+      {
+        "name": "padding",
+        "optional": false,
+        "type": "number"
+      },
+      {
+        "name": "enabled",
+        "optional": true,
+        "type": "boolean"
+      },
+      {
+        "name": "source",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "icon",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "name": "color",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "name": "businessUnit",
+        "optional": true,
+        "type": "string"
+      }
+    ],
+    "definitionKind": "InterfaceDeclaration"
+  },
+  {
+    "name": "PaymentMethod",
+    "extends": [],
+    "fields": [],
+    "definitionKind": "TypeAliasDeclaration"
+  },
+  {
+    "name": "Product",
+    "extends": [],
+    "fields": [
+      {
+        "name": "id",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "name": "sku",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "external_code",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "externalCode",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "created_source",
+        "optional": true,
+        "type": "'POS' | string"
+      },
+      {
+        "name": "source_terminal_id",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "master_number_range_id",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "master_number_value",
+        "optional": true,
+        "type": "number"
+      },
+      {
+        "name": "name",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "name": "price",
+        "optional": false,
+        "type": "number"
+      },
+      {
+        "name": "category",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "name": "posSortOrder",
+        "optional": true,
+        "type": "number"
+      },
+      {
+        "name": "stock",
+        "optional": true,
+        "type": "number"
+      },
+      {
+        "name": "qty_committed",
+        "optional": true,
+        "type": "number"
+      },
+      {
+        "name": "image",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "imageUrl",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "imageVersion",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "imageLocalPath",
+        "optional": true,
+        "type": "string | null"
+      },
+      {
+        "name": "barcode",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "cost",
+        "optional": true,
+        "type": "number"
+      },
+      {
+        "name": "is_sellable",
+        "optional": true,
+        "type": "boolean"
+      },
+      {
+        "name": "theoreticalCost",
+        "optional": true,
+        "type": "number"
+      },
+      {
+        "name": "type",
+        "optional": true,
+        "type": "ProductType"
+      },
+      {
+        "name": "isInventoriable",
+        "optional": true,
+        "type": "boolean"
+      },
+      {
+        "name": "kitInventoryMode",
+        "optional": true,
+        "type": "KitInventoryMode"
+      },
+      {
+        "name": "recipeDetails",
+        "optional": true,
+        "type": "RecipeDetail[]"
+      },
+      {
+        "name": "images",
+        "optional": false,
+        "type": "string[]"
+      },
+      {
+        "name": "media",
+        "optional": true,
+        "type": "MediaAsset[]"
+      },
+      {
+        "name": "attributes",
+        "optional": false,
+        "type": "ProductAttribute[]"
+      },
+      {
+        "name": "variants",
+        "optional": false,
+        "type": "ProductVariant[]"
+      },
+      {
+        "name": "tariffs",
+        "optional": false,
+        "type": "TariffPrice[]"
+      },
+      {
+        "name": "stockBalances",
+        "optional": true,
+        "type": "Record<string, number>"
+      },
+      {
+        "name": "activeInWarehouses",
+        "optional": true,
+        "type": "string[]"
+      },
+      {
+        "name": "appliedTaxIds",
+        "optional": false,
+        "type": "string[]"
+      },
+      {
+        "name": "minStock",
+        "optional": true,
+        "type": "number"
+      },
+      {
+        "name": "warehouseSettings",
+        "optional": true,
+        "type": "Record<string, { min: number, max: number }>"
+      },
+      {
+        "name": "availableModifiers",
+        "optional": true,
+        "type": "Modifier[]"
+      },
+      {
+        "name": "modifier_groups",
+        "optional": true,
+        "type": "ModifierGroup[]"
+      },
+      {
+        "name": "modifierGroups",
+        "optional": true,
+        "type": "ModifierGroup[]"
+      },
+      {
+        "name": "fraction_rule",
+        "optional": true,
+        "type": "ProductFractionRule"
+      },
+      {
+        "name": "fractionRule",
+        "optional": true,
+        "type": "ProductFractionRule"
+      },
+      {
+        "name": "combo_groups",
+        "optional": true,
+        "type": "ComboGroup[]"
+      },
+      {
+        "name": "comboGroups",
+        "optional": true,
+        "type": "ComboGroup[]"
+      },
+      {
+        "name": "note_presets",
+        "optional": true,
+        "type": "string[]"
+      },
+      {
+        "name": "notePresets",
+        "optional": true,
+        "type": "string[]"
+      },
+      {
+        "name": "product_type",
+        "optional": true,
+        "type": "'SIMPLE' | 'COMBO' | 'FRACTIONABLE' | 'SERVICE' | string"
+      },
+      {
+        "name": "restaurant",
+        "optional": true,
+        "type": "{\n    product_type?: 'SIMPLE' | 'COMBO' | 'FRACTIONABLE' | 'SERVICE' | string;\n    production_area_id?: string;\n    productType?: string;\n    productionAreaId?: string;\n    modifier_groups?: ModifierGroup[];\n    modifierGroups?: ModifierGroup[];\n    fraction_rule?: ProductFractionRule;\n    fractionRule?: ProductFractionRule;\n    combo_groups?: ComboGroup[];\n    comboGroups?: ComboGroup[];\n    note_presets?: string[];\n    notePresets?: string[];\n    [key: string]: any;\n  }"
+      },
+      {
+        "name": "description",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "departmentId",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "sectionId",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "familyId",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "subfamilyId",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "brandId",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "operationalFlags",
+        "optional": true,
+        "type": "ProductOperationalFlags"
+      },
+      {
+        "name": "requires_verification",
+        "optional": true,
+        "type": "boolean"
+      },
+      {
+        "name": "updatedAt",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "hasActivePromotion",
+        "optional": true,
+        "type": "boolean"
+      },
+      {
+        "name": "returnReason",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "subtotalizedAt",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "subtotalizedBy",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "primarySupplierId",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "production_area_id",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "measurementUnit",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "purchaseUnit",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "conversionFactor",
+        "optional": true,
+        "type": "number"
+      },
+      {
+        "name": "batchYield",
+        "optional": true,
+        "type": "number"
+      }
+    ],
+    "definitionKind": "InterfaceDeclaration"
+  },
+  {
+    "name": "CartItem",
+    "extends": [
+      "extends Product"
+    ],
+    "fields": [
+      {
+        "name": "quantity",
+        "optional": false,
+        "type": "number"
+      },
+      {
+        "name": "cartId",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "name": "isReturnLine",
+        "optional": true,
+        "type": "boolean"
+      },
+      {
+        "name": "createdAt",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "modifiers",
+        "optional": true,
+        "type": "string[]"
+      },
+      {
+        "name": "restaurantConfig",
+        "optional": true,
+        "type": "{\n    modifierGroups?: Record<string, string[]>;\n    comboGroups?: Record<string, string[]>;\n    fractions?: Array<{ id: string; name: string; price: number; ratio: number }>;\n    selected_modifiers?: any[];\n    selected_fraction_parts?: any[];\n    selected_combo_items?: any[];\n    product_type?: string;\n    production_area_id?: string;\n    note?: string;\n  }"
+      },
+      {
+        "name": "selected_modifiers",
+        "optional": true,
+        "type": "any[]"
+      },
+      {
+        "name": "selected_fraction_parts",
+        "optional": true,
+        "type": "any[]"
+      },
+      {
+        "name": "selected_combo_items",
+        "optional": true,
+        "type": "any[]"
+      },
+      {
+        "name": "note",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "originalPrice",
+        "optional": true,
+        "type": "number"
+      },
+      {
+        "name": "discountAmount",
+        "optional": true,
+        "type": "number"
+      },
+      {
+        "name": "discountRate",
+        "optional": true,
+        "type": "number"
+      },
+      {
+        "name": "netAmount",
+        "optional": true,
+        "type": "number"
+      },
+      {
+        "name": "taxAmount",
+        "optional": true,
+        "type": "number"
+      },
+      {
+        "name": "totalAmount",
+        "optional": true,
+        "type": "number"
+      },
+      {
+        "name": "taxRate",
+        "optional": true,
+        "type": "number"
+      },
+      {
+        "name": "adjustmentSource",
+        "optional": true,
+        "type": "'PROMOTION' | 'MANUAL_DISCOUNT' | 'MANUAL_PRICE_OVERRIDE' | 'TARIFF'"
+      },
+      {
+        "name": "appliedPromotionCode",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "appliedPromotionName",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "promotionTrace",
+        "optional": true,
+        "type": "PromotionApplicationTrace"
+      },
+      {
+        "name": "salespersonId",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "ncf",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "appliedPromotionId",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "trackingId",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "trackingCode",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "trackingData",
+        "optional": true,
+        "type": "any[]"
+      },
+      {
+        "name": "variantInfo",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "variantSku",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "variantId",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "variantBarcodes",
+        "optional": true,
+        "type": "string[]"
+      },
+      {
+        "name": "dispatched",
+        "optional": true,
+        "type": "boolean"
+      },
+      {
+        "name": "restaurantCommittedAt",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "orderNumber",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "tableDisplayLabel",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "tableRoomLabel",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "kdsStatus",
+        "optional": true,
+        "type": "'ENVIADO' | 'DEVUELTO' | 'RETURN_PENDING' | string"
+      },
+      {
+        "name": "kdsOrderId",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "kdsAreaId",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "kdsItemIds",
+        "optional": true,
+        "type": "string[]"
+      },
+      {
+        "name": "kdsReturnedAt",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "kdsOriginalPrice",
+        "optional": true,
+        "type": "number"
+      },
+      {
+        "name": "voidedByKdsReturn",
+        "optional": true,
+        "type": "boolean"
+      },
+      {
+        "name": "consignmentId",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "consignmentDocumentNo",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "consignmentLineId",
+        "optional": true,
+        "type": "string"
+      }
+    ],
+    "definitionKind": "InterfaceDeclaration"
+  },
+  {
+    "name": "Transaction",
+    "extends": [],
+    "fields": [
+      {
+        "name": "id",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "name": "globalSequence",
+        "optional": true,
+        "type": "number"
+      },
+      {
+        "name": "displayId",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "source_channel",
+        "optional": true,
+        "type": "'POS'"
+      },
+      {
+        "name": "source_transaction_id",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "source_display_id",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "source_terminal_id",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "device_id",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "source_credit_note_id",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "original_transaction_id",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "original_display_id",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "documentType",
+        "optional": true,
+        "type": "DocumentType"
+      },
+      {
+        "name": "seriesId",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "seriesNumber",
+        "optional": true,
+        "type": "number"
+      },
+      {
+        "name": "date",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "name": "updatedAt",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "items",
+        "optional": false,
+        "type": "CartItem[]"
+      },
+      {
+        "name": "total",
+        "optional": false,
+        "type": "number"
+      },
+      {
+        "name": "payments",
+        "optional": false,
+        "type": "any[]"
+      },
+      {
+        "name": "userId",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "name": "userName",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "name": "terminalId",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "terminalName",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "status",
+        "optional": false,
+        "type": "'PENDING' | 'COMPLETED' | 'REFUNDED' | 'PARTIAL_REFUND'"
+      },
+      {
+        "name": "authorizedById",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "authorizedByName",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "customerId",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "customerName",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "customerSnapshot",
+        "optional": true,
+        "type": "{\n    name: string;\n    customer_code?: string;\n    master_number_range_id?: string;\n    master_number_value?: number;\n    source_terminal_id?: string;\n    created_source?: string;\n    taxId?: string;\n    address?: string;\n    phone?: string;\n    email?: string;\n    isTaxExempt?: boolean;\n  }"
+      },
+      {
+        "name": "taxAmount",
+        "optional": true,
+        "type": "number"
+      },
+      {
+        "name": "netAmount",
+        "optional": true,
+        "type": "number"
+      },
+      {
+        "name": "taxBreakdown",
+        "optional": true,
+        "type": "any[]"
+      },
+      {
+        "name": "discountAmount",
+        "optional": true,
+        "type": "number"
+      },
+      {
+        "name": "discountType",
+        "optional": true,
+        "type": "'PERCENT' | 'FIXED'"
+      },
+      {
+        "name": "discountValue",
+        "optional": true,
+        "type": "number"
+      },
+      {
+        "name": "isTaxIncluded",
+        "optional": true,
+        "type": "boolean"
+      },
+      {
+        "name": "couponCode",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "coupons",
+        "optional": true,
+        "type": "RedeemedCouponRef[]"
+      },
+      {
+        "name": "ncf",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "ncfType",
+        "optional": true,
+        "type": "FiscalDocumentCode"
+      },
+      {
+        "name": "legacyNcf",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "electronicNcf",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "fiscalMode",
+        "optional": true,
+        "type": "FiscalMode"
+      },
+      {
+        "name": "fiscalProvider",
+        "optional": true,
+        "type": "FiscalProviderId"
+      },
+      {
+        "name": "fiscalSyncStatus",
+        "optional": true,
+        "type": "CloudSyncStatus"
+      },
+      {
+        "name": "fiscalSyncError",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "fiscalSyncedAt",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "fiscalReferenceId",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "fiscalResponseMessage",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "fiscalCorrectionAudit",
+        "optional": true,
+        "type": "FiscalCorrectionAuditEntry[]"
+      },
+      {
+        "name": "affectedNCF",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "affectedInvoiceNumber",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "affectedInvoiceDate",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "observations",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "cloudSyncStatus",
+        "optional": true,
+        "type": "CloudSyncStatus"
+      },
+      {
+        "name": "cloudSyncError",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "cloudSyncedAt",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "reservationId",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "reservationCode",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "priorAdvancePaid",
+        "optional": true,
+        "type": "number"
+      },
+      {
+        "name": "balanceDueAtSale",
+        "optional": true,
+        "type": "number"
+      },
+      {
+        "name": "dueDate",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "pendingBalance",
+        "optional": true,
+        "type": "number"
+      },
+      {
+        "name": "settlementCurrencyCode",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "settlementExchangeRate",
+        "optional": true,
+        "type": "number"
+      },
+      {
+        "name": "settlementReceivedOriginal",
+        "optional": true,
+        "type": "number"
+      },
+      {
+        "name": "settlementReceivedBase",
+        "optional": true,
+        "type": "number"
+      },
+      {
+        "name": "settlementAppliedBase",
+        "optional": true,
+        "type": "number"
+      },
+      {
+        "name": "settlementChangeBase",
+        "optional": true,
+        "type": "number"
+      },
+      {
+        "name": "settlementChangeCurrencyCode",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "settlement_currency_code",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "settlement_exchange_rate",
+        "optional": true,
+        "type": "number"
+      },
+      {
+        "name": "settlement_received_original",
+        "optional": true,
+        "type": "number"
+      },
+      {
+        "name": "settlement_received_base",
+        "optional": true,
+        "type": "number"
+      },
+      {
+        "name": "settlement_applied_base",
+        "optional": true,
+        "type": "number"
+      },
+      {
+        "name": "settlement_change_base",
+        "optional": true,
+        "type": "number"
+      },
+      {
+        "name": "settlement_change_currency_code",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "relatedTransactions",
+        "optional": true,
+        "type": "string[]"
+      },
+      {
+        "name": "originalTransactionId",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "refundReason",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "syncStatus",
+        "optional": true,
+        "type": "SyncStatus"
+      },
+      {
+        "name": "syncError",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "syncResponse",
+        "optional": true,
+        "type": "any"
+      },
+      {
+        "name": "syncedAt",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "erpSyncStatus",
+        "optional": true,
+        "type": "'APPLIED' | 'SKIPPED_ALREADY_APPLIED' | 'ERROR'"
+      },
+      {
+        "name": "erpSyncResponse",
+        "optional": true,
+        "type": "any"
+      },
+      {
+        "name": "erpSyncedAt",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "zReportId",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "zReportSequence",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "walletDepositAmount",
+        "optional": true,
+        "type": "number"
+      },
+      {
+        "name": "walletPaymentAmount",
+        "optional": true,
+        "type": "number"
+      },
+      {
+        "name": "serviceType",
+        "optional": true,
+        "type": "OrderServiceType"
+      },
+      {
+        "name": "service_type",
+        "optional": true,
+        "type": "OrderServiceType"
+      },
+      {
+        "name": "serviceTaxPolicySnapshot",
+        "optional": true,
+        "type": "AppliedServiceTaxPolicySnapshot"
+      },
+      {
+        "name": "service_tax_policy_snapshot",
+        "optional": true,
+        "type": "AppliedServiceTaxPolicySnapshot"
+      },
+      {
+        "name": "serviceChargeAmount",
+        "optional": true,
+        "type": "number"
+      },
+      {
+        "name": "voluntaryTipAmount",
+        "optional": true,
+        "type": "number"
+      },
+      {
+        "name": "orderNumber",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "tableDisplayLabel",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "tableRoomLabel",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "marketplaceSourceChannel",
+        "optional": true,
+        "type": "'UBER_EATS'"
+      },
+      {
+        "name": "marketplaceSourceOrderId",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "marketplaceSourceStoreId",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "marketplaceTenantId",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "marketplaceCompanyId",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "marketplaceStoreId",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "skipErpSaleSync",
+        "optional": true,
+        "type": "boolean"
+      },
+      {
+        "name": "erpConfirmationStatus",
+        "optional": true,
+        "type": "'PENDING' | 'SYNCED' | 'ERROR'"
+      },
+      {
+        "name": "erpConfirmationError",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "erpConfirmedAt",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "consignmentId",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "consignmentDocumentNo",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "consignmentLineId",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "consignmentSyncStatus",
+        "optional": true,
+        "type": "'PENDING' | 'SYNCED' | 'ERROR'"
+      },
+      {
+        "name": "consignmentSyncError",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "consignmentSyncedAt",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "consignmentSyncResponse",
+        "optional": true,
+        "type": "any"
+      }
+    ],
+    "definitionKind": "InterfaceDeclaration"
+  },
+  {
+    "name": "CashMovement",
+    "extends": [],
+    "fields": [
+      {
+        "name": "id",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "name": "type",
+        "optional": false,
+        "type": "'IN' | 'OUT'"
+      },
+      {
+        "name": "amount",
+        "optional": false,
+        "type": "number"
+      },
+      {
+        "name": "reason",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "name": "timestamp",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "name": "userId",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "name": "userName",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "name": "currencyCode",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "terminalId",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "syncStatus",
+        "optional": true,
+        "type": "SyncStatus"
+      },
+      {
+        "name": "syncError",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "source_channel",
+        "optional": true,
+        "type": "'POS'"
+      },
+      {
+        "name": "source_cash_movement_id",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "source_terminal_id",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "device_id",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "created_at",
+        "optional": true,
+        "type": "string"
+      }
+    ],
+    "definitionKind": "InterfaceDeclaration"
+  },
+  {
+    "name": "PaymentEntry",
+    "extends": [],
+    "fields": [
+      {
+        "name": "id",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "name": "method",
+        "optional": false,
+        "type": "PaymentMethod"
+      },
+      {
+        "name": "methodId",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "methodLabel",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "methodIcon",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "creditOverrideApproved",
+        "optional": true,
+        "type": "boolean"
+      },
+      {
+        "name": "amount",
+        "optional": false,
+        "type": "number"
+      },
+      {
+        "name": "timestamp",
+        "optional": false,
+        "type": "Date"
+      },
+      {
+        "name": "currencyCode",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "amountOriginal",
+        "optional": true,
+        "type": "number"
+      },
+      {
+        "name": "exchangeRate",
+        "optional": true,
+        "type": "number"
+      },
+      {
+        "name": "appliedAmount",
+        "optional": true,
+        "type": "number"
+      },
+      {
+        "name": "changeAmount",
+        "optional": true,
+        "type": "number"
+      },
+      {
+        "name": "changeCurrencyCode",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "amountApplied",
+        "optional": true,
+        "type": "number"
+      },
+      {
+        "name": "payment_method",
+        "optional": true,
+        "type": "PaymentMethod | string"
+      },
+      {
+        "name": "currency_code",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "exchange_rate",
+        "optional": true,
+        "type": "number"
+      },
+      {
+        "name": "applied_amount",
+        "optional": true,
+        "type": "number"
+      },
+      {
+        "name": "change_amount",
+        "optional": true,
+        "type": "number"
+      },
+      {
+        "name": "change_currency_code",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "source_channel",
+        "optional": true,
+        "type": "'POS'"
+      },
+      {
+        "name": "source_payment_id",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "source_transaction_id",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "source_display_id",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "source_terminal_id",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "device_id",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "gatewayProvider",
+        "optional": true,
+        "type": "PaymentIntegrationProvider"
+      },
+      {
+        "name": "gatewayIntegrationId",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "paymentIntentId",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "gatewayIdempotencyKey",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "gatewayTransactionType",
+        "optional": true,
+        "type": "'SALE' | 'VOID' | 'REFUND' | 'GET_LAST_TRX'"
+      },
+      {
+        "name": "gatewayStatus",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "gatewayResponseCode",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "gatewayResponseMessage",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "gatewayAuthorizationCode",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "gatewayReference",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "gatewaySequenceNumber",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "gatewayInvoiceNumber",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "gatewayBatchNumber",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "gatewayMerchantId",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "gatewayTerminalId",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "gatewayOrderNumber",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "gatewayProcessedAmount",
+        "optional": true,
+        "type": "number"
+      },
+      {
+        "name": "gatewayProcessedTaxAmount",
+        "optional": true,
+        "type": "number"
+      },
+      {
+        "name": "gatewayMaskedPan",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "gatewayCardBrand",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "gatewayEntryMode",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "gatewayReceiptMerchant",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "gatewayReceiptClient",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "gatewaySignatureData",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "gatewayRequireSignature",
+        "optional": true,
+        "type": "boolean"
+      },
+      {
+        "name": "gatewayRawResponse",
+        "optional": true,
+        "type": "Record<string, any>"
+      }
+    ],
+    "definitionKind": "InterfaceDeclaration"
+  },
+  {
+    "name": "WalletTransactionType",
+    "extends": [],
+    "fields": [],
+    "definitionKind": "TypeAliasDeclaration"
+  },
+  {
+    "name": "WalletTransaction",
+    "extends": [],
+    "fields": [
+      {
+        "name": "id",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "name": "walletId",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "name": "type",
+        "optional": false,
+        "type": "WalletTransactionType"
+      },
+      {
+        "name": "amount",
+        "optional": false,
+        "type": "number"
+      },
+      {
+        "name": "referenceId",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "timestamp",
+        "optional": false,
+        "type": "string"
+      }
+    ],
+    "definitionKind": "InterfaceDeclaration"
+  },
+  {
+    "name": "Wallet",
+    "extends": [],
+    "fields": [
+      {
+        "name": "id",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "name": "customerId",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "name": "balance",
+        "optional": false,
+        "type": "number"
+      },
+      {
+        "name": "currency",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "name": "status",
+        "optional": false,
+        "type": "'ACTIVE' | 'BLOCKED'"
+      },
+      {
+        "name": "lastActivity",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "name": "transactions",
+        "optional": false,
+        "type": "WalletTransaction[]"
+      },
+      {
+        "name": "pushToken",
+        "optional": true,
+        "type": "string"
+      }
+    ],
+    "definitionKind": "InterfaceDeclaration"
+  },
+  {
+    "name": "ZReport",
+    "extends": [],
+    "fields": [
+      {
+        "name": "id",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "name": "terminalId",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "name": "sequenceNumber",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "name": "seriesId",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "seriesNumber",
+        "optional": true,
+        "type": "number"
+      },
+      {
+        "name": "source_channel",
+        "optional": true,
+        "type": "'POS'"
+      },
+      {
+        "name": "source_z_report_id",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "source_terminal_id",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "device_id",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "openedAt",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "name": "closedAt",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "name": "closedByUserId",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "name": "closedByUserName",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "name": "baseCurrency",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "name": "totalsByMethod",
+        "optional": false,
+        "type": "Record<string, number>"
+      },
+      {
+        "name": "paymentMethodSummary",
+        "optional": true,
+        "type": "ZReportPaymentMethodLine[]"
+      },
+      {
+        "name": "paymentMethodDeclarations",
+        "optional": true,
+        "type": "ZReportPaymentMethodDeclaration[]"
+      },
+      {
+        "name": "cashExpected",
+        "optional": false,
+        "type": "Record<string, number>"
+      },
+      {
+        "name": "cashCounted",
+        "optional": false,
+        "type": "Record<string, number>"
+      },
+      {
+        "name": "cashDiscrepancy",
+        "optional": false,
+        "type": "Record<string, number>"
+      },
+      {
+        "name": "denominationBreakdown",
+        "optional": true,
+        "type": "ZReportDenominationBreakdown"
+      },
+      {
+        "name": "denomination_breakdown",
+        "optional": true,
+        "type": "ZReportDenominationBreakdown"
+      },
+      {
+        "name": "cashSales",
+        "optional": false,
+        "type": "number"
+      },
+      {
+        "name": "cashIn",
+        "optional": false,
+        "type": "number"
+      },
+      {
+        "name": "cashOut",
+        "optional": false,
+        "type": "number"
+      },
+      {
+        "name": "cashMovementDetails",
+        "optional": true,
+        "type": "ZReportCashMovementLine[]"
+      },
+      {
+        "name": "requireCashFundOnZ",
+        "optional": true,
+        "type": "boolean"
+      },
+      {
+        "name": "fixedCashFundAmount",
+        "optional": true,
+        "type": "number"
+      },
+      {
+        "name": "cashToLeaveInDrawer",
+        "optional": true,
+        "type": "number"
+      },
+      {
+        "name": "cashToWithdraw",
+        "optional": true,
+        "type": "number"
+      },
+      {
+        "name": "transactionCount",
+        "optional": false,
+        "type": "number"
+      },
+      {
+        "name": "notes",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "name": "declared_totals",
+        "optional": true,
+        "type": "ZReportDeclaredTotals"
+      },
+      {
+        "name": "system_totals",
+        "optional": true,
+        "type": "ZReportSystemTotals"
+      },
+      {
+        "name": "sync_audit",
+        "optional": true,
+        "type": "ZReportSyncAudit"
+      },
+      {
+        "name": "stats",
+        "optional": true,
+        "type": "ZReportStats"
+      },
+      {
+        "name": "serviceTypeSummary",
+        "optional": true,
+        "type": "ServiceTypeSummaryLine[]"
+      },
+      {
+        "name": "serviceTypeTransactions",
+        "optional": true,
+        "type": "ServiceTypeTransactionLine[]"
+      },
+      {
+        "name": "closeTaxSummary",
+        "optional": true,
+        "type": "Array<{ name: string; rate?: number; amount: number }>"
+      },
+      {
+        "name": "enabledSections",
+        "optional": true,
+        "type": "CloseReportSection[]"
+      },
+      {
+        "name": "reportDetails",
+        "optional": true,
+        "type": "CloseReportDetails"
+      },
+      {
+        "name": "syncStatus",
+        "optional": true,
+        "type": "SyncStatus"
+      },
+      {
+        "name": "syncError",
+        "optional": true,
+        "type": "string"
+      }
+    ],
+    "definitionKind": "InterfaceDeclaration"
+  },
+  {
+    "name": "CollectionMethod",
+    "extends": [],
+    "fields": [],
+    "definitionKind": "TypeAliasDeclaration"
+  },
+  {
+    "name": "CollectionAllocation",
+    "extends": [],
+    "fields": [
+      {
+        "name": "id",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "name": "collectionId",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "name": "transactionId",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "name": "amount",
+        "optional": false,
+        "type": "number"
+      },
+      {
+        "name": "timestamp",
+        "optional": false,
+        "type": "string"
+      }
+    ],
+    "definitionKind": "InterfaceDeclaration"
+  },
+  {
+    "name": "Collection",
+    "extends": [],
+    "fields": [
+      {
+        "name": "id",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "name": "displayId",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "name": "seriesId",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "seriesNumber",
+        "optional": true,
+        "type": "number"
+      },
+      {
+        "name": "customerId",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "name": "customerName",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "name": "date",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "name": "totalAmount",
+        "optional": false,
+        "type": "number"
+      },
+      {
+        "name": "method",
+        "optional": false,
+        "type": "CollectionMethod"
+      },
+      {
+        "name": "currencyCode",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "exchangeRate",
+        "optional": true,
+        "type": "number"
+      },
+      {
+        "name": "receivedAmountOriginal",
+        "optional": true,
+        "type": "number"
+      },
+      {
+        "name": "receivedAmountBase",
+        "optional": true,
+        "type": "number"
+      },
+      {
+        "name": "appliedAmountBase",
+        "optional": true,
+        "type": "number"
+      },
+      {
+        "name": "unappliedAmountBase",
+        "optional": true,
+        "type": "number"
+      },
+      {
+        "name": "reference",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "userId",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "name": "userName",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "name": "terminalId",
+        "optional": false,
+        "type": "string"
+      },
+      {
+        "name": "bookingActivityId",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "opportunityId",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "allocations",
+        "optional": false,
+        "type": "CollectionAllocation[]"
+      },
+      {
+        "name": "notes",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "syncStatus",
+        "optional": true,
+        "type": "SyncStatus"
+      },
+      {
+        "name": "zReportId",
+        "optional": true,
+        "type": "string"
+      },
+      {
+        "name": "zReportSequence",
+        "optional": true,
+        "type": "string"
+      }
+    ],
+    "definitionKind": "InterfaceDeclaration"
+  }
+]
