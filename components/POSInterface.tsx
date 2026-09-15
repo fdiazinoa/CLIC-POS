@@ -3302,7 +3302,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const variantBarcodes = Array.isArray(selectedVariant?.barcode)
          ? selectedVariant.barcode.map((value) => String(value || '').trim()).filter(Boolean)
          : [];
-      const effectiveTaxIds = resolveEffectiveTaxIds(product.appliedTaxIds, activeTerminalConfig);
+      const effectiveTaxIds = resolveEffectiveTaxIds(product.appliedTaxIds, activeTerminalConfig, product.taxable);
       const taxSignature = effectiveTaxIds.slice().sort().join('|');
       const productRestaurantConfig = resolveRestaurantProductConfig(product);
       const productionAreaId = resolveProductionAreaId(product);
@@ -3318,7 +3318,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       // to avoid using setter for logic that triggers side effects.
       const existing = (cart || []).find(i => {
          const iMods = buildModifierSignature(i.modifiers);
-         const existingTaxSignature = resolveEffectiveTaxIds(i.appliedTaxIds, activeTerminalConfig).slice().sort().join('|');
+         const existingTaxSignature = resolveEffectiveTaxIds(i.appliedTaxIds, activeTerminalConfig, i.taxable).slice().sort().join('|');
          const existingIdentityKey = String((i as any).cartIdentityKey || productLineIdentityKey(i, i.price));
          const existingConsignmentKey = i.consignmentLineId || '';
          return existingIdentityKey === lineIdentityKey

@@ -20,8 +20,6 @@ export const calculateTransactionTaxSummary = (
   const safeItems = Array.isArray(items) ? items : [];
   const safeTaxes = Array.isArray(taxes) ? taxes : [];
   const normalizedDefaultTaxRate = Math.max(0, Number(defaultTaxRate) || 0);
-  const hasExplicitItemTaxes = safeItems.some(item => (item.appliedTaxIds || []).length > 0);
-
   let grossAmount = 0;
   let netAmount = 0;
   let taxAmount = 0;
@@ -30,12 +28,21 @@ export const calculateTransactionTaxSummary = (
     const quantity = Math.abs(Number(item.quantity) || 0);
     const unitPrice = round2(Math.abs(Number(item.price) || 0));
     const lineGross = round2(unitPrice * quantity);
-    const itemTaxRate = hasExplicitItemTaxes
-      ? (item.appliedTaxIds || []).reduce((sum, taxId) => {
+    const legacyTaxIds = (item as CartItem & { tax_ids?: string[] }).tax_ids;
+    const itemTaxIds = Array.isArray(item.appliedTaxIds)
+      ? item.appliedTaxIds
+      : Array.isArray(legacyTaxIds)
+        ? legacyTaxIds
+        : undefined;
+    const hasExplicitItemTaxes = Array.isArray(itemTaxIds);
+    const itemTaxRate = item.taxable === false
+      ? 0
+      : hasExplicitItemTaxes
+        ? itemTaxIds.reduce((sum, taxId) => {
           const tax = findTaxByIdentifier(safeTaxes, taxId);
           return sum + (tax?.rate || 0);
         }, 0)
-      : normalizedDefaultTaxRate;
+        : normalizedDefaultTaxRate;
 
     let lineNet = lineGross;
     let lineTax = 0;

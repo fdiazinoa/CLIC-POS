@@ -1533,6 +1533,8 @@ export interface Product {
   stockBalances?: Record<string, number>;
   activeInWarehouses?: string[];
   appliedTaxIds: string[];
+  /** ERP tax applicability signal; an explicit false always means tax exempt. */
+  taxable?: boolean;
   minStock?: number;
   warehouseSettings?: Record<string, { min: number, max: number }>;
   availableModifiers?: Modifier[];
