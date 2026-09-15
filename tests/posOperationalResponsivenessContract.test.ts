@@ -63,6 +63,28 @@ test('the table map overlays a retained memoized POS instead of remounting it', 
   assert.match(layoutSource, /currentView === 'POS' \|\| currentView === 'TABLE_MAP'/);
   assert.match(layoutSource, /\{renderView\('POS'\)\}/);
   assert.match(layoutSource, /data-table-map-overlay="true"/);
+  const persistentHostStart = appSource.indexOf('const PersistentPOSHost');
+  const persistentHostEnd = appSource.indexOf('const TableMapLifecycleBoundary', persistentHostStart);
+  const persistentHostSource = appSource.slice(persistentHostStart, persistentHostEnd);
+  assert.doesNotMatch(persistentHostSource, /visible \? 'h-full' : 'hidden'/);
+  assert.match(persistentHostSource, /pointer-events-none select-none/);
+  assert.match(persistentHostSource, /contain: 'layout paint style'/);
+  assert.match(persistentHostSource, /setAttribute\('inert', ''\)/);
+});
+
+test('opening a table hydrates the retained POS before removing the map overlay', () => {
+  const tableMapStart = appSource.indexOf("case 'TABLE_MAP':");
+  const tableDesignerStart = appSource.indexOf("case 'TABLE_DESIGNER':", tableMapStart);
+  const tableMapSource = appSource.slice(tableMapStart, tableDesignerStart);
+  const cartUpdate = tableMapSource.indexOf('setCart(nextCart)');
+  const deferredNavigation = tableMapSource.indexOf('window.requestAnimationFrame', cartUpdate);
+  const posNavigation = tableMapSource.indexOf("setCurrentView('POS')", deferredNavigation);
+
+  assert.ok(cartUpdate >= 0);
+  assert.ok(deferredNavigation > cartUpdate);
+  assert.ok(posNavigation > deferredNavigation);
+  assert.match(tableMapSource, /markInteractionStage\(openTrace, 'POS_UPDATE_START'\)/);
+  assert.match(tableMapSource, /markInteractionStage\(openTrace, 'NAVIGATION_START'\)/);
 });
 
 test('automatic synchronization waits for the retained POS to become interactive', () => {
