@@ -66,7 +66,7 @@ test('the table map overlays a retained memoized POS instead of remounting it', 
   assert.match(appSource, /data-pos-persistent-host="true"/);
   assert.match(layoutSource, /currentView === 'POS' \|\| currentView === 'TABLE_MAP'/);
   assert.match(layoutSource, /\{renderView\('POS'\)\}/);
-  assert.match(layoutSource, /data-table-map-overlay="true"/);
+  assert.match(layoutSource, /data-table-map-persistent-host="true"|TableMapLifecycleBoundary/);
   const persistentHostStart = appSource.indexOf('const PersistentPOSHost');
   const persistentHostEnd = appSource.indexOf('const TableMapLifecycleBoundary', persistentHostStart);
   const persistentHostSource = appSource.slice(persistentHostStart, persistentHostEnd);
@@ -75,6 +75,21 @@ test('the table map overlays a retained memoized POS instead of remounting it', 
   assert.match(persistentHostSource, /contain: 'layout style'/);
   assert.doesNotMatch(persistentHostSource, /translateZ|willChange/);
   assert.match(persistentHostSource, /setAttribute\('inert', ''\)/);
+});
+
+test('the table map stays mounted and rejects overlapping table opens', () => {
+  const tableMapSource = readFileSync(new URL('../components/TableMap.tsx', import.meta.url), 'utf8');
+  const layoutStart = appSource.indexOf('const renderWithLayout');
+  const layoutSource = appSource.slice(layoutStart, appSource.indexOf('if (!isDataLoaded)', layoutStart));
+
+  assert.match(appSource, /data-table-map-persistent-host="true"/);
+  assert.match(appSource, /const MemoizedTableMap = React\.memo\(TableMap\)/);
+  assert.match(appSource, /<StableTableMap/);
+  assert.match(layoutSource, /tableMapHasMounted \|\| currentView === 'TABLE_MAP'/);
+  assert.match(layoutSource, /<TableMapLifecycleBoundary visible=\{currentView === 'TABLE_MAP'\}>/);
+  assert.doesNotMatch(layoutSource, /currentView === 'TABLE_MAP' \? \(\s*<div[^>]*data-table-map-overlay/);
+  assert.match(tableMapSource, /if \(openingTableIdRef\.current\) return;/);
+  assert.match(tableMapSource, /openingTableIdRef\.current = String\(model\.table\.id\)/);
 });
 
 test('opening a table hydrates the retained POS before removing the map overlay', () => {

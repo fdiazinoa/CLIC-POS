@@ -539,6 +539,7 @@ const TableMap: React.FC<TableMapProps> = ({
     const [isControlCenterOpen, setIsControlCenterOpen] = useState(false);
     const [tableNotice, setTableNotice] = useState<TableNoticeState | null>(null);
     const [openingTableId, setOpeningTableId] = useState<string | null>(null);
+    const openingTableIdRef = useRef<string | null>(null);
     const prefersReducedMotion = useReducedMotion();
     const reduceMotion = shouldReduceTableMotion({
         prefersReducedMotion: Boolean(prefersReducedMotion),
@@ -1445,6 +1446,10 @@ const TableMap: React.FC<TableMapProps> = ({
 
     const handleNodeSelect = useCallback(
         (model: SmartTableModel) => {
+            // React state is not synchronous: two taps delivered in the same
+            // frame used to start two lock/open/navigation chains. The ref is
+            // the authoritative single-flight guard for operator input.
+            if (openingTableIdRef.current) return;
             if (model.isLocked) {
                 const editingOwner = model.table.editingLock?.userName || model.table.editingLock?.terminalId;
                 alert(editingOwner
@@ -1456,15 +1461,22 @@ const TableMap: React.FC<TableMapProps> = ({
             const trace = beginPosInteraction(operation, { tableId: model.table.id });
             expectInteractionRender(trace, 'TABLE_MAP_VIEW');
             markInteractionStateUpdate(trace, 1);
+            openingTableIdRef.current = String(model.table.id);
             setOpeningTableId(String(model.table.id));
             if (handleTransferTableClick(model.table)) {
                 markInteractionStage(trace, 'HANDLER_END');
+                openingTableIdRef.current = null;
                 setOpeningTableId(null);
                 return;
             }
             void handleTableAction(model.table).finally(() => {
                 markInteractionStage(trace, 'HANDLER_END');
-                setOpeningTableId(null);
+                // Keep the guard through the navigation frame. This also
+                // absorbs a queued click from a slow Android touch pipeline.
+                window.setTimeout(() => {
+                    openingTableIdRef.current = null;
+                    setOpeningTableId(null);
+                }, 350);
             });
         },
         [handleTableAction, handleTransferTableClick, transferSelection]
