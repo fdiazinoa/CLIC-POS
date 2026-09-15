@@ -6042,7 +6042,11 @@ const AppContent: React.FC = () => {
       markInteractionStage(trace, 'NAVIGATION_START');
       markInteractionStage(trace, 'POS_UPDATE_START');
       markInteractionStateUpdate(trace, 1);
-      handleViewChange('POS');
+      // POS is already mounted, so this commit only removes the overlay. A
+      // concurrent update can remain pending indefinitely under continuous
+      // WebView work and leave the acknowledgement button stuck.
+      setViewData(undefined);
+      setCurrentView('POS');
     });
     markInteractionStage(trace, 'HANDLER_END');
   };

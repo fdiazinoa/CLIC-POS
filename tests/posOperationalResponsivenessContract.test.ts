@@ -40,7 +40,7 @@ test('closing the table map acknowledges input and records visible/interactable 
   assert.match(closeHandlerSource, /setTableMapExitPending\(true\)/);
   assert.match(closeHandlerSource, /requestAnimationFrame\(\(\) => \{/);
   assert.match(closeHandlerSource, /markInteractionStage\(trace, 'VISUAL_ACK'\)/);
-  assert.match(closeHandlerSource, /handleViewChange\('POS'\)/);
+  assert.match(closeHandlerSource, /setCurrentView\('POS'\)/);
   assert.doesNotMatch(tableMapSource, /onClick=\{\(\) => setCurrentView\('POS'\)\}/);
 });
 
