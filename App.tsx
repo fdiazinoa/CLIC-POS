@@ -1867,6 +1867,7 @@ const MemoizedPOSInterface = React.memo(POSInterface);
  * the memo boundary, while handlers always execute their latest closure.
  */
 const PersistentPOSHost: React.FC<PersistentPOSHostProps> = ({ visible, onInteractive, ...incomingProps }) => {
+  const hostRef = useRef<HTMLDivElement>(null);
   const latestPropsRef = useRef(incomingProps);
   const callbackProxiesRef = useRef(new Map<string, (...args: unknown[]) => unknown>());
   latestPropsRef.current = incomingProps;
@@ -1886,15 +1887,34 @@ const PersistentPOSHost: React.FC<PersistentPOSHostProps> = ({ visible, onIntera
 
   useLayoutEffect(() => {
     if (!visible) return;
-    const trace = getLatestPosInteraction('CLOSE_TABLE_MAP');
-    if (!trace || trace.stages.FIRST_FRAME_INTERACTIVE !== undefined) return;
+    const trace = (['OPEN_TABLE', 'CLOSE_TABLE_MAP'] as const)
+      .map(operation => getLatestPosInteraction(operation))
+      .filter(candidate => candidate && candidate.stages.FIRST_FRAME_INTERACTIVE === undefined)
+      .sort((left, right) => (right?.startedAt || 0) - (left?.startedAt || 0))[0];
+    if (!trace) return;
     markInteractionStage(trace, 'NAVIGATION_END');
     markInteractionStage(trace, 'POS_UPDATE_END');
-    markInteractionVisibleAndInteractive(trace, onInteractive);
+    markInteractionVisibleAndInteractive(
+      trace,
+      trace.operation === 'CLOSE_TABLE_MAP' ? onInteractive : undefined,
+    );
   }, [onInteractive, visible]);
 
+  useLayoutEffect(() => {
+    const host = hostRef.current;
+    if (!host) return;
+    if (visible) host.removeAttribute('inert');
+    else host.setAttribute('inert', '');
+  }, [visible]);
+
   return (
-    <div className={visible ? 'h-full' : 'hidden'} aria-hidden={!visible} data-pos-persistent-host="true">
+    <div
+      ref={hostRef}
+      className={`h-full ${visible ? '' : 'pointer-events-none select-none'}`}
+      aria-hidden={!visible}
+      data-pos-persistent-host="true"
+      style={{ contain: 'layout paint style', transform: 'translateZ(0)', willChange: 'transform' }}
+    >
       <MemoizedPOSInterface {...stableProps} />
     </div>
   );
@@ -11630,10 +11650,19 @@ const AppContent: React.FC = () => {
 
                   const openTrace = getLatestPosInteraction('OPEN_TABLE');
                   markInteractionStateUpdate(openTrace, nextCart.length + 3);
+                  markInteractionStage(openTrace, 'POS_UPDATE_START');
                   setCart(nextCart);
                   setSelectedCustomer(nextSelectedCustomer);
                   setActiveTable(selectedTable);
-                  setCurrentView('POS');
+                  // Hydrate the retained POS while the opaque map is still in
+                  // front. Removing the overlay in the next browser task keeps
+                  // ticket work separate from the first visible POS frame.
+                  window.requestAnimationFrame(() => {
+                    window.setTimeout(() => {
+                      markInteractionStage(openTrace, 'NAVIGATION_START');
+                      setCurrentView('POS');
+                    }, 0);
+                  });
                 }}
                 onRefreshTables={fetchTables}
                 onUpdateTables={async (nextTables) => {
