@@ -38,10 +38,12 @@ Object.assign(globalThis, {
 
 const { getInitialConfig } = await import('../constants');
 const { db } = await import('../utils/db');
+const { dbAdapter } = await import('../services/db');
 const lifecycle = await import('../utils/erpSyncLifecycle');
 const { resolvePosSalesStartView } = await import('../utils/posStartupView');
 
 const terminalId = '9ffc6771-7845-4976-afd3-20cebc3cc6e8';
+const taxId = '7e70f4fd-240d-4665-99c9-603f3615ee0e';
 const deviceId = 'DEV-QA-CONTRACT';
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value));
 const collections = new Map<string, unknown>();
@@ -564,6 +566,47 @@ test('applies prices + terminal_config + loyalty atomically and ACKs APPLIED', a
     assert.equal((collections.get('productPrices') as any[]).length, 1);
     const state = JSON.parse(localStorage.getItem('clic_pos_config_push_v2_state') || '{}');
     assert.deepEqual(state.domainVersions, { prices: 2, terminal_config: 3, loyalty: 4 });
+});
+
+test('CONFIG_PUSH_V2 applies fiscal and catalog together before ACK APPLIED', async () => {
+    resetHarness();
+    const originalAtomicSave = dbAdapter.saveDocumentsAtomically;
+    const committedCollections: string[][] = [];
+    (dbAdapter as any).saveDocumentsAtomically = async (documents: any[], _requireAbsent: boolean, replaceCollections: string[]) => {
+        committedCollections.push([...replaceCollections]);
+        const grouped = new Map<string, any[]>();
+        for (const document of documents) {
+            const rows = grouped.get(document.collectionName) || [];
+            rows.push(clone(document.document));
+            grouped.set(document.collectionName, rows);
+        }
+        for (const collection of replaceCollections) {
+            const rows = grouped.get(collection) || [];
+            collections.set(collection, collection === 'config' ? clone(rows[0] || {}) : clone(rows));
+        }
+    };
+    try {
+        const { result, acks, snapshotUrls } = await runEvent({
+            id: 'fiscal-catalog-coupled',
+            scopes: ['catalog'],
+            versions: { catalog: 12, fiscal: 8 },
+            domains: {
+                fiscal: { taxes: [{ id: taxId, code: '001', name: 'ITBIS', rate: 0.18 }] },
+                catalog: { products: [{ id: 'shirt-a', sku: 'REF-0001', name: 'CAMISA A', taxable: true, tax_id: taxId }] },
+            },
+        });
+        assert.equal(result?.applied, 1);
+        assert.equal(acks[0].status, 'APPLIED');
+        assert.match(snapshotUrls[0], /scopes=catalog%2Cfiscal/);
+        assert.equal(committedCollections.length, 1);
+        assert.ok(committedCollections[0].includes('taxes'));
+        assert.ok(committedCollections[0].includes('products'));
+        const shirt = (collections.get('products') as any[]).find((product) => product.sku === 'REF-0001');
+        assert.equal(shirt.taxable, true);
+        assert.deepEqual(shirt.appliedTaxIds, [taxId]);
+    } finally {
+        (dbAdapter as any).saveDocumentsAtomically = originalAtomicSave;
+    }
 });
 
 test('rolls back every prior collection when a later domain is invalid', async () => {

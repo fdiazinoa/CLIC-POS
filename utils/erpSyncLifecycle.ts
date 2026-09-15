@@ -22,6 +22,7 @@ import {
 import { extractTerminalConfigRequestedScopes } from './terminalConfigPushScopes';
 import { applyTerminalConfigSnapshot, mergeTerminalConfigSnapshots } from './terminalConfigSnapshot';
 import { db } from './db';
+import { dbAdapter } from '../services/db';
 import { DEFAULT_TERMINAL_DOCUMENT_ASSIGNMENTS } from '../constants';
 import { getDefaultRoleConfig, normalizeDeviceRoleValue, resolveDeviceRoleValue } from './deviceRoleHelpers';
 import { resolveOrderTakerContract } from './orderTakerPolicy';
@@ -54,6 +55,11 @@ import { authenticatedActivityTracker } from '../services/sync/AuthenticatedActi
 import { syncMetrics } from '../services/sync/SyncMetrics';
 import { persistMasterNumberRangesFromSnapshot } from '../services/sync/MasterNumberRangeService';
 import { extractMasterNumberRanges } from '../services/sync/masterNumberRangeContract';
+import {
+    applyAuthoritativeProductTaxes,
+    normalizeErpTaxDefinition,
+    readAuthoritativeProductTaxIds,
+} from './erpFiscalCatalogSync';
 
 type TenantIdentity = {
     tenantId?: string | null;
@@ -793,12 +799,81 @@ const applyConfigPushV2Domain = async (
     return touchedCollections;
 };
 
+const applyConfigPushV2DomainsAtomically = async (
+    scopes: string[],
+    domains: Record<string, unknown>,
+): Promise<string[]> => {
+    if (!dbAdapter.saveDocumentsAtomically) {
+        throw new Error('CONFIG_PUSH_V2_ATOMIC_STORAGE_UNAVAILABLE');
+    }
+    const orderedScopes = [...scopes].sort((left, right) => {
+        const order = ['fiscal', 'catalog'];
+        const leftIndex = order.indexOf(left);
+        const rightIndex = order.indexOf(right);
+        return (leftIndex < 0 ? order.length : leftIndex) - (rightIndex < 0 ? order.length : rightIndex);
+    });
+    const writes = new Map<string, unknown>();
+    for (const scope of orderedScopes) {
+        const domainWrites = await buildConfigPushV2DomainWrites(scope, domains[scope]);
+        const hasRanges = extractMasterNumberRanges(domains[scope]).length > 0;
+        if (domainWrites.length === 0 && !hasRanges) {
+            throw new Error(`Dominio ${scope} no contiene colecciones aplicables`);
+        }
+        domainWrites.forEach((write) => writes.set(write.collection, write.value));
+    }
+
+    for (const [collection, originalValue] of writes) {
+        let value = originalValue;
+        if (collection === 'taxes' && Array.isArray(value)) {
+            value = value.map(normalizeErpTaxDefinition).filter((tax) => Boolean(tax.id));
+        }
+        if (collection === 'products' && Array.isArray(value)) {
+            const authoritative = value.map((product) => applyAuthoritativeProductTaxes(asObject(product)));
+            if ((import.meta as any).env?.VITE_POS_CATALOG_EDITS_ENABLED === 'true') {
+                const { preserveLocalCatalog } = await import('../services/sync/preserveLocalCatalog');
+                const preserved = await preserveLocalCatalog(collection, authoritative) as Record<string, unknown>[];
+                const sourceById = new Map(authoritative.map((product) => [String(product.id || ''), product]));
+                value = preserved.map((product) => {
+                    const source = sourceById.get(String(product.id || ''));
+                    return source && readAuthoritativeProductTaxIds(source) !== undefined
+                        ? applyAuthoritativeProductTaxes({ ...product, taxable: source.taxable, tax_ids: source.tax_ids })
+                        : product;
+                });
+            } else {
+                value = authoritative;
+            }
+        } else if (['productPrices', 'config', 'categories'].includes(collection) && (import.meta as any).env?.VITE_POS_CATALOG_EDITS_ENABLED === 'true') {
+            const { preserveLocalCatalog } = await import('../services/sync/preserveLocalCatalog');
+            value = await preserveLocalCatalog(collection, value);
+        }
+        writes.set(collection, value);
+    }
+
+    const documents = Array.from(writes.entries()).flatMap(([collectionName, value]) => {
+        const rows = Array.isArray(value) ? value : [{ ...asObject(value), id: asObject(value).id || 'current' }];
+        return rows.map((document) => {
+            const normalized = asObject(document);
+            if (!String(normalized.id || '').trim()) {
+                throw new Error(`CONFIG_PUSH_V2_DOCUMENT_ID_MISSING:${collectionName}`);
+            }
+            return { collectionName, document: normalized as { id: string; [key: string]: any } };
+        });
+    });
+    const replaceCollections = Array.from(writes.keys());
+    await dbAdapter.saveDocumentsAtomically(documents, false, replaceCollections);
+    if (writes.has('config')) await assertConfigPushV2ConfigPersisted(writes.get('config'));
+    return replaceCollections;
+};
+
 const dispatchConfigPushV2CollectionUpdates = async (collections: string[]) => {
     const uniqueCollections = Array.from(new Set(collections));
     uniqueCollections
         .filter((collection) => collection !== 'config')
         .forEach((collection) => {
-            window.dispatchEvent(new CustomEvent(`${collection}Updated`));
+            const fiscalCatalogFull = collection === 'products' && uniqueCollections.includes('taxes');
+            window.dispatchEvent(new CustomEvent(`${collection}Updated`, {
+                detail: fiscalCatalogFull ? { fiscalCatalogFull: true, source: 'CONFIG_PUSH_V2' } : undefined,
+            }));
         });
     if (uniqueCollections.some((collection) => ['categories', 'productCategories', 'productGroups', 'collections'].includes(collection))) {
         window.dispatchEvent(new CustomEvent('categoriesUpdated'));
@@ -938,7 +1013,11 @@ const processConfigPushV2Event = async (
         return 'APPLIED';
     }
 
-    const staleScopes = scopes.filter((scope) => Number(versions[scope] || 0) > getConfigPushV2LocalVersion(state, scope));
+    const staleScopesBase = scopes.filter((scope) => Number(versions[scope] || 0) > getConfigPushV2LocalVersion(state, scope));
+    const couplesFiscalCatalog = staleScopesBase.some((scope) => scope === 'catalog' || scope === 'fiscal');
+    const staleScopes = couplesFiscalCatalog
+        ? Array.from(new Set([...staleScopesBase, 'fiscal', 'catalog']))
+        : staleScopesBase;
     scopes.forEach((scope) => {
         configPushV2Log('config_push_v2_domain_version_compared', {
             reason: 'outbox_event',
@@ -1058,12 +1137,18 @@ const processConfigPushV2Event = async (
             const domains = normalizeConfigPushV2Domains(snapshotPayload.domains);
             const snapshotVersions = normalizeVersionsMap(snapshotPayload.versions);
             const nextDomainVersions = { ...(state.domainVersions || {}) };
+            let touchedCollections: string[] = [];
             const rollbackJournal: ConfigPushV2RollbackJournal = new Map();
-            const touchedCollections: string[] = [];
             try {
+                if (couplesFiscalCatalog) {
+                    touchedCollections = await applyConfigPushV2DomainsAtomically(staleScopes, domains);
+                } else {
+                    for (const scope of staleScopes) {
+                        touchedCollections.push(...await applyConfigPushV2Domain(scope, domains[scope], rollbackJournal));
+                    }
+                }
                 for (const scope of staleScopes) {
-                    const touchedForScope = await applyConfigPushV2Domain(scope, domains[scope], rollbackJournal);
-                    touchedCollections.push(...touchedForScope);
+                    const touchedForScope = await buildConfigPushV2DomainWrites(scope, domains[scope]);
                     nextDomainVersions[scope] = Number(snapshotVersions[scope] ?? versions[scope] ?? 0);
                     configPushV2Log('config_snapshot_domain_applied', {
                         event_id: eventId,
@@ -1083,14 +1168,17 @@ const processConfigPushV2Event = async (
                     );
                 }
             } catch (error) {
-                await rollbackConfigPushV2Collections(rollbackJournal);
+                if (!couplesFiscalCatalog) {
+                    await rollbackConfigPushV2Collections(rollbackJournal);
+                }
                 configPushV2Log('config_snapshot_apply_failed', {
                     event_id: eventId,
                     snapshot_id: snapshotId,
                     version_hash: versionHash,
                     scopes: staleScopes,
                     code: compactErrorDetail(error),
-                    rolled_back_collections: rollbackJournal.size,
+                    rolled_back_collections: couplesFiscalCatalog ? 0 : rollbackJournal.size,
+                    atomic_transaction: couplesFiscalCatalog,
                 });
                 throw error;
             }

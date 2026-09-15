@@ -61,7 +61,8 @@ import {
   RefundProcessingOptions,
   PaymentMethodDefinition,
   FiscalDocumentCorrectionInput,
-  TerminalConfig
+  TerminalConfig,
+  TaxDefinition
 } from './types';
 import {
   DEFAULT_ROLES,
@@ -138,6 +139,7 @@ import {
 import { NativeLaunchContext, shouldRestoreNativeSession } from './utils/nativeSessionResume';
 import { markRestaurantLinesCommitted } from './utils/restaurantHotReversal';
 import { removeStaleChargedEmptyTickets } from './utils/tableTicketIntegrity';
+import { reconcileOpenCartFiscalData } from './utils/erpFiscalCatalogSync';
 
 // Component Imports
 import ModernLoginScreen from './components/ModernLoginScreen';
@@ -6879,6 +6881,36 @@ const AppContent: React.FC = () => {
 
             markBootStage('TERMINAL_CONFIG_READY');
 
+            // One-time authoritative fiscal/catalog repair. The marker is only
+            // persisted after both FULL snapshots commit locally.
+            const fiscalCatalogRepairRevision = 'tax-association-full-v1';
+            const fiscalCatalogTerminalId = normalizeCanonicalErpTerminalId(
+              effectivePairedTerminal.config?.erpTerminalId || effectivePairedTerminal.id
+            );
+            const fiscalCatalogRepairKey = fiscalCatalogTerminalId
+              ? `clic_pos_fiscal_catalog_full_revision:${fiscalCatalogTerminalId}`
+              : null;
+            if (
+              fiscalCatalogRepairKey
+              && resolveSyncTarget().kind === 'ERP_ACTIVE'
+              && localStorage.getItem(fiscalCatalogRepairKey) !== fiscalCatalogRepairRevision
+            ) {
+              try {
+                console.info('[SYNC_FISCAL_CATALOG_REPAIR_REQUIRED]', {
+                  terminal_id: fiscalCatalogTerminalId,
+                  revision: fiscalCatalogRepairRevision,
+                });
+                await syncManager.forceFiscalCatalogFullPull();
+                localStorage.setItem(fiscalCatalogRepairKey, fiscalCatalogRepairRevision);
+              } catch (error) {
+                console.warn('[SYNC_FISCAL_CATALOG_REPAIR_DEFERRED]', {
+                  terminal_id: fiscalCatalogTerminalId,
+                  revision: fiscalCatalogRepairRevision,
+                  error: error instanceof Error ? error.message : String(error),
+                });
+              }
+            }
+
             // Auto-heal catalog/config drift on startup.
             // This catches the "2 categories / old products" mixed-state on both master and slaves.
             try {
@@ -7356,6 +7388,11 @@ const AppContent: React.FC = () => {
             }
           }
           break;
+        case 'taxes':
+          if (Array.isArray(freshData)) {
+            setConfig((previous) => ({ ...previous, taxes: freshData as TaxDefinition[] }));
+          }
+          break;
         case 'customers': setCustomers(freshData as Customer[]); break;
         case 'suppliers': setSuppliers(freshData as Supplier[]); break;
         case 'users': setUsers(visiblePosUsersForRuntime(freshData)); break;
@@ -7386,7 +7423,38 @@ const AppContent: React.FC = () => {
       }
     };
 
+    const applyFiscalCatalogRefresh = async () => {
+      const [freshTaxes, freshProducts] = await Promise.all([
+        db.get('taxes' as any) as Promise<TaxDefinition[]>,
+        db.get('products') as Promise<Product[]>,
+      ]);
+      if (!Array.isArray(freshTaxes) || !Array.isArray(freshProducts) || freshProducts.length === 0) {
+        throw new Error('FISCAL_CATALOG_REFRESH_INCOMPLETE');
+      }
+      setConfig((previous) => ({ ...previous, taxes: freshTaxes }));
+      setProducts(freshProducts);
+      setCart((previous) => {
+        const reconciled = reconcileOpenCartFiscalData(previous, freshProducts);
+        if (reconciled.updatedSkus.length > 0) {
+          console.info('[OPEN_CART_FISCAL_LINES_RECREATED]', {
+            skus: reconciled.updatedSkus,
+            count: reconciled.updatedSkus.length,
+          });
+        }
+        return reconciled.cart;
+      });
+    };
+
     const handleSyncEvent = (event: Event) => {
+      if (
+        event.type === 'productsUpdated'
+        && Boolean((event as CustomEvent<{ fiscalCatalogFull?: boolean }>).detail?.fiscalCatalogFull)
+      ) {
+        void applyFiscalCatalogRefresh().catch((error) => {
+          console.error('Failed to apply atomic fiscal catalog refresh:', error);
+        });
+        return;
+      }
       if (event.type === 'productsUpdated' || event.type === 'productStocksUpdated') {
         scheduleCatalogRefresh(event.type);
         return;
@@ -7396,7 +7464,7 @@ const AppContent: React.FC = () => {
       });
     };
 
-    const syncEvents = ['productsUpdated', 'customersUpdated', 'suppliersUpdated', 'usersUpdated', 'rolesUpdated', 'purchaseOrdersUpdated', 'transfersUpdated', 'internalSequencesUpdated', 'transactionsUpdated', 'cashMovementsUpdated', 'zReportsUpdated', 'warehousesUpdated', 'productStocksUpdated', 'tablesUpdated', 'productionAreasUpdated', 'promotionsUpdated'];
+    const syncEvents = ['productsUpdated', 'taxesUpdated', 'customersUpdated', 'suppliersUpdated', 'usersUpdated', 'rolesUpdated', 'purchaseOrdersUpdated', 'transfersUpdated', 'internalSequencesUpdated', 'transactionsUpdated', 'cashMovementsUpdated', 'zReportsUpdated', 'warehousesUpdated', 'productStocksUpdated', 'tablesUpdated', 'productionAreasUpdated', 'promotionsUpdated'];
     syncEvents.forEach(e => window.addEventListener(e, handleSyncEvent));
 
     // Android defers heavy collections during db.init(). The customer sync can
