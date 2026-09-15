@@ -14,6 +14,7 @@ import { resetDeviceIdentityBySupport } from '../utils/deviceRevocation';
 import { getConfigPushV2Diagnostics, triggerErpSyncOutbox } from '../utils/erpSyncLifecycle';
 import { syncTriggerCoordinator } from '../services/sync/SyncTriggerCoordinator';
 import { CATALOG_CONFLICT_PERMISSIONS, catalogEditQueue, hasCatalogConflictPermission, resolveCatalogConflict, shouldShowCatalogEditInSyncMonitor } from '../services/sync/catalogEdits';
+import { waitForBackgroundSyncWindow, yieldBackgroundSyncChunk } from '../utils/backgroundSyncScheduler';
 
 const catalogFieldLabels: Record<string, string> = {
     tax_ids: 'Impuestos',
@@ -55,6 +56,7 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, currentUser, roles,
     const [status, setStatus] = useState<any[]>([]);
     const [isSyncing, setIsSyncing] = useState(false);
     const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
+    const [syncFeedback, setSyncFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
     const [isMaster, setIsMaster] = useState(
         () => permissionService.isMasterTerminal() || loadSyncProfile().posRuntime === 'MASTER'
     );
@@ -618,30 +620,43 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, currentUser, roles,
 
 
 
-    const handleSync = async () => {
+    const handleSync = () => {
+        if (isSyncing) return;
         setIsSyncing(true);
-        try {
-            await syncTriggerCoordinator.request({ reason: 'MANUAL' });
-            if (syncManager.isUsingConfigPushV2Primary()) {
-                await syncManager.syncTerminalManifestInBackground(undefined, { reason: 'manual_sync' });
-            } else {
-                // Legacy/POS master modes preserve their existing catalog flow.
-                await syncManager.syncAllCatalogs();
-            }
+        setSyncFeedback(null);
 
-            if (isMaster) {
-                alert('✅ Sincronización completa. Catálogos enviados y datos operativos recibidos.');
-            } else {
-                alert('✅ Sincronización exitosa. Todos los catálogos han sido actualizados desde el Master.');
+        // Detach the batch from the click handler. Every phase enters through
+        // the same idle gate as automatic sync, so downloads, applies and
+        // uploads cannot compete with an operator transition.
+        void (async () => {
+            try {
+                await waitForBackgroundSyncWindow();
+                await syncTriggerCoordinator.request({ reason: 'MANUAL' });
+                await yieldBackgroundSyncChunk();
+                if (syncManager.isUsingConfigPushV2Primary()) {
+                    await syncManager.syncTerminalManifestInBackground(undefined, { reason: 'manual_sync' });
+                } else {
+                    // Legacy/POS master modes preserve their existing catalog flow.
+                    await syncManager.syncAllCatalogs();
+                }
+
+                setLastSyncTime(new Date());
+                setSyncFeedback({
+                    type: 'success',
+                    message: 'Sincronización completada en segundo plano.',
+                });
+                await yieldBackgroundSyncChunk();
+                await loadStatus();
+            } catch (error) {
+                console.error('Sync error:', error);
+                setSyncFeedback({
+                    type: 'error',
+                    message: 'No se pudo completar la sincronización. Revise el monitor para más detalles.',
+                });
+            } finally {
+                setIsSyncing(false);
             }
-            setLastSyncTime(new Date());
-            await loadStatus();
-        } catch (error) {
-            console.error('Sync error:', error);
-            alert('❌ Error durante la sincronización: ' + (error instanceof Error ? error.message : 'Error desconocido'));
-        } finally {
-            setIsSyncing(false);
-        }
+        })();
     };
 
     const handleRetryConfigPush = async () => {
@@ -1055,6 +1070,15 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, currentUser, roles,
                                     </>
                                 )}
                             </button>
+
+                            {syncFeedback ? (
+                                <p
+                                    role="status"
+                                    className={`text-xs font-bold ${syncFeedback.type === 'error' ? 'text-red-600' : 'text-emerald-600'}`}
+                                >
+                                    {syncFeedback.message}
+                                </p>
+                            ) : null}
 
                             <button
                                 onClick={handleForcePull}

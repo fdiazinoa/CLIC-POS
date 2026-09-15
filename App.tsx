@@ -1860,6 +1860,29 @@ type PersistentPOSHostProps = React.ComponentProps<typeof POSInterface> & {
   onInteractive?: () => void;
 };
 const MemoizedPOSInterface = React.memo(POSInterface);
+const MemoizedTableMap = React.memo(TableMap);
+
+/** Keeps TableMap data fresh without rerendering it for unrelated POS state. */
+const StableTableMap: React.FC<React.ComponentProps<typeof TableMap>> = (incomingProps) => {
+  const latestPropsRef = useRef(incomingProps);
+  const callbackProxiesRef = useRef(new Map<string, (...args: unknown[]) => unknown>());
+  latestPropsRef.current = incomingProps;
+
+  const stableProps = Object.fromEntries(Object.entries(incomingProps).map(([key, value]) => {
+    if (typeof value !== 'function') return [key, value];
+    let proxy = callbackProxiesRef.current.get(key);
+    if (!proxy) {
+      proxy = (...args: unknown[]) => {
+        const latest = (latestPropsRef.current as unknown as Record<string, unknown>)[key];
+        return typeof latest === 'function' ? latest(...args) : undefined;
+      };
+      callbackProxiesRef.current.set(key, proxy);
+    }
+    return [key, proxy];
+  })) as React.ComponentProps<typeof TableMap>;
+
+  return <MemoizedTableMap {...stableProps} />;
+};
 
 /**
  * Keeps the sales surface mounted while the table map is in front. Function
@@ -1920,14 +1943,35 @@ const PersistentPOSHost: React.FC<PersistentPOSHostProps> = ({ visible, onIntera
   );
 };
 
-const TableMapLifecycleBoundary: React.FC<React.PropsWithChildren> = ({ children }) => {
-  useLayoutEffect(() => () => {
+const TableMapLifecycleBoundary: React.FC<React.PropsWithChildren<{ visible: boolean }>> = ({ children, visible }) => {
+  const hostRef = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    const host = hostRef.current;
+    if (!host) return;
+    if (visible) host.removeAttribute('inert');
+    else host.setAttribute('inert', '');
+  }, [visible]);
+
+  useLayoutEffect(() => {
+    if (visible) return;
     const trace = getLatestPosInteraction('CLOSE_TABLE_MAP');
     if (!trace || trace.stages.TABLE_MAP_UNMOUNT_END !== undefined) return;
     markInteractionStage(trace, 'TABLE_MAP_UNMOUNT_START');
     markInteractionStage(trace, 'TABLE_MAP_UNMOUNT_END');
-  }, []);
-  return <>{children}</>;
+  }, [visible]);
+
+  return (
+    <div
+      ref={hostRef}
+      className={`absolute inset-0 z-40 ${visible ? 'visible' : 'invisible pointer-events-none select-none'}`}
+      aria-hidden={!visible}
+      data-table-map-persistent-host="true"
+      style={{ contain: 'layout style' }}
+    >
+      {children}
+    </div>
+  );
 };
 
 const AppContent: React.FC = () => {
@@ -1950,6 +1994,7 @@ const AppContent: React.FC = () => {
     return isVisorMode ? 'VISOR' : 'LOGIN';
   });
   const [tableMapExitPending, setTableMapExitPending] = useState(false);
+  const [tableMapHasMounted, setTableMapHasMounted] = useState(false);
   const tableMapExitTransitionRef = useRef<OperatorUiTransitionToken | null>(null);
   const currentViewRef = useRef<ViewState>(currentView);
   const currentUserRef = useRef<User | null>(null);
@@ -1962,6 +2007,7 @@ const AppContent: React.FC = () => {
 
   useEffect(() => {
     currentViewRef.current = currentView;
+    if (currentView === 'TABLE_MAP') setTableMapHasMounted(true);
     if (currentView !== 'TABLE_MAP') setTableMapExitPending(false);
   }, [currentView]);
 
@@ -11549,7 +11595,7 @@ const AppContent: React.FC = () => {
           )
         );
         return (
-          <TableMapLifecycleBoundary>
+          <>
           <div className="h-screen bg-slate-950 overflow-hidden relative">
             <button
               type="button"
@@ -11561,7 +11607,7 @@ const AppContent: React.FC = () => {
               {tableMapExitPending ? 'Abriendo venta…' : 'Cerrar'}
             </button>
             <div className="h-full overflow-hidden relative">
-              <TableMap
+              <StableTableMap
                 rooms={rooms}
                 currentRoomId={activeRoomId}
                 onChangeRoom={setActiveRoomId}
@@ -11743,7 +11789,7 @@ const AppContent: React.FC = () => {
               />
             </div>
           </div>
-          </TableMapLifecycleBoundary>
+          </>
         );
       }
 
@@ -13125,10 +13171,10 @@ const AppContent: React.FC = () => {
       ? (
         <div className="h-screen overflow-hidden relative" data-pos-table-shell="true">
           {renderView('POS')}
-          {currentView === 'TABLE_MAP' ? (
-            <div className="absolute inset-0 z-40" data-table-map-overlay="true">
+          {tableMapHasMounted || currentView === 'TABLE_MAP' ? (
+            <TableMapLifecycleBoundary visible={currentView === 'TABLE_MAP'}>
               {renderView('TABLE_MAP')}
-            </div>
+            </TableMapLifecycleBoundary>
           ) : null}
         </div>
       )
