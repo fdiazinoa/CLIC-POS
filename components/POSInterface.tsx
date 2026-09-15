@@ -8102,7 +8102,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                  <span className="text-[9px] bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded font-bold">TEMP</span>
                               )}
                               {isDelinquent && (
-                                 <span className="text-[9px] bg-red-600 text-white px-1.5 py-0.5 rounded font-black animate-pulse shadow-lg shadow-red-200">
+                                 <span className="text-[9px] bg-red-600 text-white px-1.5 py-0.5 rounded font-black shadow-lg shadow-red-200">
                                     DEUDA VENCIDA / CRÉDITO BLOQUEADO
                                  </span>
                               )}
@@ -8129,7 +8129,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
                {shouldShowFiscalReserveAlert && fiscalReserveAlert && (
                   <div
-                     className={`mt-3 mb-2 rounded-2xl border px-3 py-2.5 shadow-sm animate-pulse ${
+                     className={`mt-3 mb-2 rounded-2xl border px-3 py-2.5 shadow-sm ${
                         fiscalReserveAlert.tone === 'critical'
                            ? 'border-red-200 bg-red-50 text-red-800'
                            : 'border-amber-200 bg-amber-50 text-amber-800'
@@ -8146,7 +8146,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                )}
 
                {!isOrderTakerMode && !isFiscalModeDisabled && (
-                  <div className={`mt-1 flex items-center gap-2 px-3 py-1.5 rounded-lg border text-[10px] font-bold uppercase ${canCheckoutWithFiscalPolicy ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : 'bg-red-50 text-red-600 border-red-100 animate-pulse'}`}>
+                  <div className={`mt-1 flex items-center gap-2 px-3 py-1.5 rounded-lg border text-[10px] font-bold uppercase ${canCheckoutWithFiscalPolicy ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : 'bg-red-50 text-red-600 border-red-100'}`}>
                      <Landmark size={12} />
                      <span>Status Fiscal: {`${fiscalStatus.type} ${fiscalStatus.hasNCF ? (fiscalStatus.isTerminalBlock ? 'Bloque Terminal' : (fiscalStatus.isUsingPool ? 'Reservado en Pool' : 'Lote Global Activo')) : 'Agotado'}`}</span>
                   </div>
