@@ -253,10 +253,14 @@ export const getLatestPosInteraction = (operation: PosInteractionOperation) =>
 export const markInteractionVisibleAndInteractive = (trace: PosInteractionTrace | null | undefined) => {
   if (!trace || typeof window === 'undefined') return;
   window.requestAnimationFrame(() => {
+    markInteractionStage(trace, 'VISUAL_ACK');
     markInteractionStage(trace, 'FIRST_FRAME_VISIBLE');
-    window.requestAnimationFrame(() => {
+    // The DOM has committed and the frame is ready to paint. Probe the next
+    // task instead of waiting another display frame; event handlers are ready
+    // as soon as control returns to the browser event loop.
+    window.setTimeout(() => {
       markInteractionStage(trace, 'FIRST_FRAME_INTERACTIVE');
-    });
+    }, 0);
   });
 };
 

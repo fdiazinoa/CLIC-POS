@@ -6037,17 +6037,14 @@ const AppContent: React.FC = () => {
     if (tableMapExitPending) return;
     const trace = beginPosInteraction('CLOSE_TABLE_MAP', { posLifecycle: 'retained' });
     setTableMapExitPending(true);
-    window.requestAnimationFrame(() => {
-      markInteractionStage(trace, 'VISUAL_ACK');
-      markInteractionStage(trace, 'NAVIGATION_START');
-      markInteractionStage(trace, 'POS_UPDATE_START');
-      markInteractionStateUpdate(trace, 1);
-      // POS is already mounted, so this commit only removes the overlay. A
-      // concurrent update can remain pending indefinitely under continuous
-      // WebView work and leave the acknowledgement button stuck.
-      setViewData(undefined);
-      setCurrentView('POS');
-    });
+    markInteractionStage(trace, 'NAVIGATION_START');
+    markInteractionStage(trace, 'POS_UPDATE_START');
+    markInteractionStateUpdate(trace, 1);
+    // POS is already mounted, so this synchronous commit only removes the
+    // overlay. Waiting for a requestAnimationFrame here needlessly adds one
+    // whole frame before React can expose the retained sales surface.
+    setViewData(undefined);
+    setCurrentView('POS');
     markInteractionStage(trace, 'HANDLER_END');
   };
 

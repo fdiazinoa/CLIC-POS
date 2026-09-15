@@ -3,6 +3,10 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 const appSource = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
+const interactionPerformanceSource = readFileSync(
+  new URL('../utils/interactionPerformance.ts', import.meta.url),
+  'utf8',
+);
 const nativeBridgeSource = readFileSync(
   new URL('../native-stubs/android/ClicPOSNativePrinterBridge.kt', import.meta.url),
   'utf8',
@@ -38,9 +42,11 @@ test('closing the table map acknowledges input and records visible/interactable 
   assert.match(tableMapSource, /Abriendo venta…/);
   assert.match(closeHandlerSource, /beginPosInteraction\('CLOSE_TABLE_MAP'/);
   assert.match(closeHandlerSource, /setTableMapExitPending\(true\)/);
-  assert.match(closeHandlerSource, /requestAnimationFrame\(\(\) => \{/);
-  assert.match(closeHandlerSource, /markInteractionStage\(trace, 'VISUAL_ACK'\)/);
+  assert.doesNotMatch(closeHandlerSource, /requestAnimationFrame\(\(\) => \{/);
+  assert.match(closeHandlerSource, /markInteractionStage\(trace, 'NAVIGATION_START'\)/);
   assert.match(closeHandlerSource, /setCurrentView\('POS'\)/);
+  assert.match(interactionPerformanceSource, /markInteractionStage\(trace, 'VISUAL_ACK'\)/);
+  assert.match(interactionPerformanceSource, /window\.setTimeout\(\(\) => \{/);
   assert.doesNotMatch(tableMapSource, /onClick=\{\(\) => setCurrentView\('POS'\)\}/);
 });
 

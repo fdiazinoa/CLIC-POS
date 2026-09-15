@@ -143,7 +143,8 @@ test('cerrar el mapa confirma el toque antes de mostrar el POS persistente', () 
   assert.match(tableMapSource, /onClick=\{handleCloseTableMap\}/);
   assert.match(tableMapSource, /Abriendo venta…/);
   assert.match(closeHandlerSource, /setTableMapExitPending\(true\)/);
-  assert.match(closeHandlerSource, /requestAnimationFrame\(\(\) => \{/);
+  assert.doesNotMatch(closeHandlerSource, /requestAnimationFrame\(\(\) => \{/);
+  assert.match(closeHandlerSource, /markInteractionStage\(trace, 'NAVIGATION_START'\)/);
   assert.match(closeHandlerSource, /setCurrentView\('POS'\)/);
   assert.match(appSource, /data-pos-persistent-host="true"/);
   assert.doesNotMatch(tableMapSource, /onClick=\{\(\) => setCurrentView\('POS'\)\}/);
