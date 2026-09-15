@@ -90,6 +90,18 @@ test('the table map stays mounted and rejects overlapping table opens', () => {
   assert.doesNotMatch(layoutSource, /currentView === 'TABLE_MAP' \? \(\s*<div[^>]*data-table-map-overlay/);
   assert.match(tableMapSource, /if \(openingTableIdRef\.current\) return;/);
   assert.match(tableMapSource, /openingTableIdRef\.current = String\(model\.table\.id\)/);
+  assert.match(appSource, /setSuppressProductInputUntilMs\(Date\.now\(\) \+ 300\)/);
+  assert.match(appSource, /suppressProductInputUntilMs=\{suppressProductInputUntilMs\}/);
+});
+
+test('a queued table tap cannot activate the catalog after navigation', () => {
+  const posSource = readFileSync(new URL('../components/POSInterface.tsx', import.meta.url), 'utf8');
+  const handlerStart = posSource.indexOf('const handleProductClick = useCallback');
+  const handlerEnd = posSource.indexOf('const handleSearchConsignments', handlerStart);
+  const handlerSource = posSource.slice(handlerStart, handlerEnd);
+
+  assert.match(posSource, /suppressProductInputUntilMs\?: number/);
+  assert.match(handlerSource, /if \(Date\.now\(\) < suppressProductInputUntilMs\) return;/);
 });
 
 test('opening a table hydrates the retained POS before removing the map overlay', () => {

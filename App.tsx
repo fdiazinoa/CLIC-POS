@@ -1995,6 +1995,7 @@ const AppContent: React.FC = () => {
   });
   const [tableMapExitPending, setTableMapExitPending] = useState(false);
   const [tableMapHasMounted, setTableMapHasMounted] = useState(false);
+  const [suppressProductInputUntilMs, setSuppressProductInputUntilMs] = useState(0);
   const tableMapExitTransitionRef = useRef<OperatorUiTransitionToken | null>(null);
   const currentViewRef = useRef<ViewState>(currentView);
   const currentUserRef = useRef<User | null>(null);
@@ -11622,6 +11623,10 @@ const AppContent: React.FC = () => {
                 }}
                 onTableClick={(table) => {
                   console.log('Mesa seleccionada:', table.name);
+                  // A queued Android tap can arrive after the map disappears
+                  // and otherwise activate the product at the same position.
+                  // Guard only catalog input; the rest of POS stays responsive.
+                  setSuppressProductInputUntilMs(Date.now() + 300);
                   const pendingClientSync = isClientTerminalMode()
                     ? pendingClientTableSyncRef.current
                     : null;
@@ -12063,6 +12068,7 @@ const AppContent: React.FC = () => {
             onKioskPay={() => handleViewChange('KIOSK_PAYMENT' as any)}
             activeTerminalId={getCurrentTerminal()!.id}
             onUpdateActiveTableGuests={handleUpdateActiveTableGuests}
+            suppressProductInputUntilMs={suppressProductInputUntilMs}
           />
         );
 

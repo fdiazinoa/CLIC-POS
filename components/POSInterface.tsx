@@ -225,6 +225,9 @@ export interface POSInterfaceProps {
    internalSequences?: any[];
    rooms?: Room[];
    productPrices?: ProductPrice[];
+   /** Ignore catalog taps briefly after table navigation so a queued second
+    * touch cannot land on the newly exposed product grid. */
+   suppressProductInputUntilMs?: number;
 }
 
 type ProductionAreaConfig = {
@@ -1157,7 +1160,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    onKioskPay,
    internalSequences,
    rooms = [],
-   productPrices: externalProductPrices = []
+   productPrices: externalProductPrices = [],
+   suppressProductInputUntilMs = 0,
 }) => {
    markRenderStart('POS_INTERACTION_VIEW');
    const cartEndRef = useRef<HTMLDivElement>(null);
@@ -3391,6 +3395,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    }, [activeTerminalConfig, authorizeSubtotalizedEdit, blockRecoveredUberOrderMutation, canAddItemToCart, cart, ensureSalesWithOpenZPermission, getProductPrice, hasSubtotalizedCart, onUpdateCart]);
 
    const handleProductClick = useCallback((product: Product) => {
+      if (Date.now() < suppressProductInputUntilMs) return;
       // MOBILE INTERCEPTION
       if (isMobile && !defaultSalesWarehouseId) {
          setPendingProductToAdd(product);
@@ -3417,7 +3422,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       else if (hasVariants) setSelectedProductForVariants(product);
       else if (hasRestaurantConfig) setProductForModifiers(product);
       else addToCart(product, isReturnMode ? -1 : 1);
-   }, [isMobile, defaultSalesWarehouseId, ensureSalesWithOpenZPermission, canAddItemToCart, addToCart, isReturnMode]);
+   }, [isMobile, defaultSalesWarehouseId, ensureSalesWithOpenZPermission, canAddItemToCart, addToCart, isReturnMode, suppressProductInputUntilMs]);
 
    const handleSearchConsignments = useCallback(async () => {
       setIsSearchingConsignments(true);
