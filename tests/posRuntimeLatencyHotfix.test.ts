@@ -46,6 +46,19 @@ test('automatic sync remains visually silent while preserving actionable status'
   assert.match(posSource, /syncState\.hasError \|\| syncState\.pendingCount > 0 \|\| syncState\.blockedCount > 0/);
 });
 
+test('manual synchronization is detached, idle-gated and non-blocking', () => {
+  const handleSyncStart = syncSettingsSource.indexOf('const handleSync = () =>');
+  const handleSyncEnd = syncSettingsSource.indexOf('const handleRetryConfigPush', handleSyncStart);
+  const handleSyncSource = syncSettingsSource.slice(handleSyncStart, handleSyncEnd);
+
+  assert.ok(handleSyncStart >= 0 && handleSyncEnd > handleSyncStart);
+  assert.match(handleSyncSource, /void \(async \(\) =>/);
+  assert.match(handleSyncSource, /await waitForBackgroundSyncWindow\(\)/);
+  assert.match(handleSyncSource, /await yieldBackgroundSyncChunk\(\)/);
+  assert.doesNotMatch(handleSyncSource, /alert\(/);
+  assert.match(handleSyncSource, /setSyncFeedback/);
+});
+
 test('background queues yield cooperatively between operational jobs', () => {
   const printQueueSource = readFileSync(new URL('../services/printer/OfflinePrintQueueService.ts', import.meta.url), 'utf8');
   assert.match(backgroundSyncSource, /yieldToOperatorUi\(\): Promise<void>/);
