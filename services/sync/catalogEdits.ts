@@ -4,9 +4,10 @@ import { apiSyncAdapter } from './ApiSyncAdapter';
 import { readTerminalCredentialsSync } from './TerminalCredentialStore';
 import { loadSyncProfile } from './SyncProfile';
 import { CatalogEditQueue, type CatalogEdit, type CatalogScope } from './CatalogEditQueue';
-import type { BusinessConfig, Permission, RoleDefinition, User } from '../../types';
+import type { BusinessConfig, Permission, Product, RoleDefinition, User } from '../../types';
 import { v4 as uuid } from 'uuid';
 import { buildStaleTaxConflictRebase, canonicalizeTaxMutationValues } from '../../utils/taxIdentity';
+import { waitForBackgroundSyncWindow } from '../../utils/backgroundSyncScheduler';
 export const catalogEditsEnabled = () => import.meta.env.VITE_POS_CATALOG_EDITS_ENABLED === 'true';
 export function catalogScopeMatches(scope: CatalogScope) {
     const profile = loadSyncProfile();
@@ -21,6 +22,82 @@ export function catalogScopeMatches(scope: CatalogScope) {
         && (profile.erpBaseUrl || profile.cloudBaseUrl || '').replace(/\/$/, '') === scope.baseUrl.replace(/\/$/, '');
 }
 export const readCatalogEdits = async (): Promise<CatalogEdit[]> => ((await db.get('catalogEdits')) || []) as CatalogEdit[];
+
+let authoritativeCatalogRecoveryTimer: ReturnType<typeof setTimeout> | null = null;
+const scheduleAuthoritativeCatalogRecovery = () => {
+    if (authoritativeCatalogRecoveryTimer) return;
+    authoritativeCatalogRecoveryTimer = globalThis.setTimeout(() => {
+        authoritativeCatalogRecoveryTimer = null;
+        void (async () => {
+            await waitForBackgroundSyncWindow();
+            const { syncManager } = await import('./SyncManager');
+            try {
+                await syncManager.forceFiscalCatalogFullPull();
+            } catch (error) {
+                console.warn('[CATALOG_EDIT_REJECTED_FULL_RECOVERY_FAILED]', error);
+                await syncManager.pullCatalog('products', true, { ignoreThrottle: true });
+            }
+            await syncManager.pullCatalog('productPrices', true, { ignoreThrottle: true });
+            console.info('[CATALOG_EDIT_REJECTED_AUTHORITATIVE_RECOVERY_APPLIED]');
+        })().catch((error) => {
+            console.error('[CATALOG_EDIT_REJECTED_AUTHORITATIVE_RECOVERY_FAILED]', error);
+        });
+    }, 0);
+};
+
+export const restoreRejectedProductValue = async (edit: CatalogEdit, recoverAuthoritativeSnapshot = true): Promise<void> => {
+    const { mutation } = edit;
+    if (!['prices', 'tariff_prices', 'item_taxes'].includes(mutation.domain)) return;
+    const products = await db.get('products') as Product[];
+    if (!Array.isArray(products)) return;
+    const product = products.find(candidate => candidate.id === mutation.recordId);
+    if (!product) return;
+
+    const restored: Product = { ...product };
+    if (mutation.domain === 'prices' && mutation.field === 'precio_venta') {
+        const previousPrice = Number(mutation.before);
+        if (!Number.isFinite(previousPrice)) return;
+        restored.price = previousPrice;
+    } else if (mutation.domain === 'item_taxes' && mutation.field === 'tax_ids') {
+        const previousTaxIds = Array.isArray(mutation.before)
+            ? mutation.before.map(value => String(value || '').trim()).filter(Boolean)
+            : [];
+        restored.appliedTaxIds = [...previousTaxIds];
+        restored.taxable = previousTaxIds.length > 0;
+        (restored as Product & { tax_ids?: string[] }).tax_ids = [...previousTaxIds];
+    } else if (mutation.domain === 'tariff_prices') {
+        const tariffs = Array.isArray(product.tariffs) ? [...product.tariffs] : [];
+        const index = tariffs.findIndex(entry => String(entry?.tariffId || '').trim() === mutation.field);
+        const previous = mutation.before && typeof mutation.before === 'object' && !Array.isArray(mutation.before)
+            ? mutation.before as { price?: unknown; margin?: unknown }
+            : null;
+        if (previous) {
+            const previousPrice = Number(previous.price);
+            if (!Number.isFinite(previousPrice)) return;
+            const restoredTariff = {
+                ...(index >= 0 ? tariffs[index] : {}),
+                tariffId: mutation.field,
+                price: previousPrice,
+                margin: previous.margin === null || previous.margin === undefined ? undefined : Number(previous.margin),
+            };
+            if (index >= 0) tariffs[index] = restoredTariff;
+            else tariffs.push(restoredTariff);
+            const rejectedPrice = mutation.after && typeof mutation.after === 'object' && !Array.isArray(mutation.after)
+                ? Number((mutation.after as { price?: unknown }).price)
+                : Number.NaN;
+            if (Number(restored.price) === rejectedPrice) restored.price = previousPrice;
+        } else if (index >= 0) {
+            tariffs.splice(index, 1);
+        }
+        restored.tariffs = tariffs;
+    }
+
+    await db.saveDocument('products', restored);
+    window.dispatchEvent(new CustomEvent('productsUpdated', {
+        detail: { catalogEditRejected: true, mutationId: edit.id, code: edit.syncError },
+    }));
+    if (recoverAuthoritativeSnapshot && edit.syncError === 'CATALOG_EDIT_FORBIDDEN') scheduleAuthoritativeCatalogRecovery();
+};
 
 export function shouldShowCatalogEditInSyncMonitor(
     edit: Pick<CatalogEdit, 'status' | 'resolution'>,
@@ -124,6 +201,7 @@ export async function resolveCatalogConflict(
 export const catalogEditQueue = new CatalogEditQueue({
     read: readCatalogEdits, save: edit => db.saveDocument('catalogEdits', edit),
     matchesScope: catalogScopeMatches, now: Date.now,
+    onPermanentRejection: async (edit) => restoreRejectedProductValue(edit, true),
     send: async edit => {
         let outboundEdit = edit;
         let currentTaxes: BusinessConfig['taxes'] | undefined;

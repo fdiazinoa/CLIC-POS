@@ -29,8 +29,21 @@ export interface CatalogQueueDependencies {
     save(edit: CatalogEdit): Promise<void>;
     matchesScope(scope: CatalogScope): boolean;
     send(edit: CatalogEdit): Promise<CatalogResult>;
+    onPermanentRejection?(edit: CatalogEdit, code: string): Promise<void>;
     now(): number;
 }
+const permanentRejection = (error: unknown): { code: string; message: string } | null => {
+    const message = error instanceof Error ? error.message : String(error || '');
+    const httpStatus = Number((error as { httpStatus?: unknown } | null)?.httpStatus)
+        || Number(message.match(/failed(?: after re-auth)?:\s*(\d{3})/i)?.[1]);
+    if (![400, 403, 404, 422].includes(httpStatus)) return null;
+    return {
+        code: httpStatus === 403 ? 'CATALOG_EDIT_FORBIDDEN' : `CATALOG_EDIT_HTTP_${httpStatus}`,
+        message: httpStatus === 403
+            ? 'La terminal no tiene permiso para editar el catálogo. Se restauró el valor anterior y no se volverá a intentar automáticamente.'
+            : `El ERP rechazó definitivamente el cambio de catálogo (HTTP ${httpStatus}).`,
+    };
+};
 const resultMatchesRequestedValue = (current: unknown, requested: CatalogMutationValue): boolean => {
     if (Array.isArray(current) && Array.isArray(requested)) {
         return current.length === requested.length && current.every((value, index) => value === requested[index]);
@@ -96,6 +109,25 @@ export class CatalogEditQueue {
                     ? `El valor cambió en ERP: ${JSON.stringify(result.current)}. Revisa la configuración recibida del ERP antes de editar de nuevo.`
                     : effectiveStatus === 'APPLIED' ? undefined : result.code });
             } catch (error) {
+                const rejection = permanentRejection(error);
+                if (rejection) {
+                    outcomes.set(edit.id, 'REJECTED');
+                    const rejected = {
+                        ...edit,
+                        status: 'REJECTED' as const,
+                        syncStatus: 'ERROR' as const,
+                        syncError: rejection.code,
+                        nextAttemptAt: 0,
+                        message: rejection.message,
+                    };
+                    await this.deps.save(rejected);
+                    try {
+                        await this.deps.onPermanentRejection?.(rejected, rejection.code);
+                    } catch (restoreError) {
+                        console.error('No se pudo restaurar el valor local rechazado por ERP:', restoreError);
+                    }
+                    continue;
+                }
                 const attempts = edit.attempts + 1;
                 await this.deps.save({ ...edit, attempts, syncStatus: 'PENDING',
                     syncError: error instanceof Error ? error.message : 'Envío pendiente',

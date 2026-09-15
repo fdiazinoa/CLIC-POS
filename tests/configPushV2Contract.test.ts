@@ -592,7 +592,7 @@ test('CONFIG_PUSH_V2 applies fiscal and catalog together before ACK APPLIED', as
             versions: { catalog: 12, fiscal: 8 },
             domains: {
                 fiscal: { taxes: [{ id: taxId, code: '001', name: 'ITBIS', rate: 0.18 }] },
-                catalog: { products: [{ id: 'shirt-a', sku: 'REF-0001', name: 'CAMISA A', taxable: true, tax_id: taxId }] },
+                catalog: { products: [{ id: 'shirt-a', sku: 'REF-0001', name: 'CAMISA A', precio_venta: 100.57, taxable: true, tax_id: taxId }] },
             },
         });
         assert.equal(result?.applied, 1);
@@ -603,6 +603,7 @@ test('CONFIG_PUSH_V2 applies fiscal and catalog together before ACK APPLIED', as
         assert.ok(committedCollections[0].includes('products'));
         const shirt = (collections.get('products') as any[]).find((product) => product.sku === 'REF-0001');
         assert.equal(shirt.taxable, true);
+        assert.equal(shirt.price, 100.57);
         assert.deepEqual(shirt.appliedTaxIds, [taxId]);
     } finally {
         (dbAdapter as any).saveDocumentsAtomically = originalAtomicSave;
