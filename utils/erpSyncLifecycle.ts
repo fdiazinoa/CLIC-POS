@@ -60,6 +60,7 @@ import {
     normalizeErpTaxDefinition,
     readAuthoritativeProductTaxIds,
 } from './erpFiscalCatalogSync';
+import { productImageCacheService } from '../services/sync/ProductImageCacheService';
 
 type TenantIdentity = {
     tenantId?: string | null;
@@ -828,7 +829,9 @@ const applyConfigPushV2DomainsAtomically = async (
             value = value.map(normalizeErpTaxDefinition).filter((tax) => Boolean(tax.id));
         }
         if (collection === 'products' && Array.isArray(value)) {
-            const authoritative = value.map((product) => applyAuthoritativeProductTaxes(asObject(product)));
+            const authoritative = await productImageCacheService.normalizeIncomingProducts(
+                value.map((product) => applyAuthoritativeProductTaxes(asObject(product))),
+            ) as Record<string, unknown>[];
             if ((import.meta as any).env?.VITE_POS_CATALOG_EDITS_ENABLED === 'true') {
                 const { preserveLocalCatalog } = await import('../services/sync/preserveLocalCatalog');
                 const preserved = await preserveLocalCatalog(collection, authoritative) as Record<string, unknown>[];

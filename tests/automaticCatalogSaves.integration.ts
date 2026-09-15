@@ -16,12 +16,16 @@ localStorage.setItem('clic_erp_sync_company_id', '00000000-0000-4000-8000-000000
 localStorage.setItem('CLIC_POS_DEVICE_ID', 'device-1');
 const { dbAdapter } = await import('../services/db');
 const { db } = await import('../utils/db');
-const { catalogEditQueue } = await import('../services/sync/catalogEdits');
+const { catalogEditQueue, restoreRejectedProductValue } = await import('../services/sync/catalogEdits');
 const { deleteLocalProduct, saveLocalProducts, saveLocalClassifications } = await import('../services/sync/saveLocalCatalog');
 const store = new Map<string, any>();
 let sends = 0;
 let failSave = false;
 (db as any).get = async (key: string) => structuredClone(store.get(key) ?? []);
+(db as any).saveDocument = async (key: string, document: any) => {
+    const rows = (store.get(key) || []).filter((row: any) => row.id !== document.id);
+    store.set(key, [...rows, structuredClone(document)]);
+};
 (dbAdapter as any).getCollection = async (key: string) => structuredClone(store.get(key) ?? []);
 (dbAdapter as any).saveDocumentsAtomically = async (documents: any[], _requireAbsent = false, replaceCollections: string[] = []) => {
     if (failSave) throw new Error('Disk full');
@@ -142,6 +146,30 @@ test('failed atomic storage neither publishes nor loses the previous local price
     try { await assert.rejects(() => saveLocalProducts([{ ...product, price: 99 } as any], 'operator'), /Disk full/); }
     finally { failSave = false; }
     assert.equal(store.get('products')[0].price, 10); assert.equal(store.get('catalogEdits'), undefined); assert.equal(sends, 0);
+});
+test('a forbidden ERP edit restores optimistic price and tax values in the local catalog', async () => {
+    const taxId = '00000000-0000-4000-8000-000000000099';
+    store.clear();
+    store.set('products', [{ ...product, price: 19, taxable: false, appliedTaxIds: [], tax_ids: [] }]);
+    const baseEdit = {
+        id: 'rejected-price',
+        scope: { tenantId, terminalId, companyId: localStorage.getItem('clic_erp_sync_company_id'), deviceId: 'device-1', baseUrl: 'https://erp.example.test' },
+        label: product.name,
+        status: 'REJECTED', syncStatus: 'ERROR', syncError: 'CATALOG_EDIT_FORBIDDEN', attempts: 0, nextAttemptAt: 0, createdAt: new Date().toISOString(),
+    } as any;
+    await restoreRejectedProductValue({
+        ...baseEdit,
+        mutation: { id: baseEdit.id, recordId: product.id, domain: 'prices', field: 'precio_venta', before: 10, after: 19, actorId: 'operator' },
+    }, false);
+    await restoreRejectedProductValue({
+        ...baseEdit,
+        id: 'rejected-tax',
+        mutation: { id: 'rejected-tax', recordId: product.id, domain: 'item_taxes', field: 'tax_ids', before: [taxId], after: [], actorId: 'operator' },
+    }, false);
+    assert.equal(store.get('products')[0].price, 10);
+    assert.equal(store.get('products')[0].taxable, true);
+    assert.deepEqual(store.get('products')[0].appliedTaxIds, [taxId]);
+    assert.deepEqual(store.get('products')[0].tax_ids, [taxId]);
 });
 test('incoming ERP snapshot preserves pending local fields without creating an outgoing echo', async () => {
     store.clear(); store.set('products', [product]);

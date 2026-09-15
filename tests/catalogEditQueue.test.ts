@@ -4,10 +4,10 @@ import { CatalogEditQueue, type CatalogEdit, type CatalogResult } from '../servi
 const makeEdit = (): CatalogEdit => ({ id: 'mutation-1', scope: { tenantId: 'tenant', terminalId: 'terminal', companyId: 'company', deviceId: 'device', baseUrl: 'https://erp.test' },
     mutation: { id: 'mutation-1', recordId: 'product', domain: 'prices', field: 'precio_venta', before: 10, after: 15, actorId: 'operator' },
     label: 'Product', status: 'PENDING', attempts: 0, nextAttemptAt: 0, createdAt: '2026-09-10' });
-function harness(send: (edit: CatalogEdit) => Promise<CatalogResult>, matchesScope = true) {
+function harness(send: (edit: CatalogEdit) => Promise<CatalogResult>, matchesScope = true, onPermanentRejection?: (edit: CatalogEdit, code: string) => Promise<void>) {
     let edit = makeEdit(); let now = 1000;
     const queue = new CatalogEditQueue({ read: async () => [structuredClone(edit)], save: async next => { edit = next; },
-        matchesScope: () => matchesScope, now: () => now, send });
+        matchesScope: () => matchesScope, now: () => now, send, onPermanentRejection });
     return { queue, get: () => edit, advance: () => { now += 400000; } };
 }
 test('lost ACK retries the same immutable mutation after backoff, then applies', async () => {
@@ -57,6 +57,23 @@ test('conflicts remain visible and are not automatically overwritten or retried'
     await h.queue.process(); h.advance(); await h.queue.process();
     assert.equal(sent, 1); assert.equal(h.get().status, 'CONFLICT'); assert.match(h.get().message!, /99/);
     assert.equal(h.get().conflictCurrent, 99);
+});
+test('a terminal catalog permission 403 is rejected once and restores the optimistic value', async () => {
+    let sent = 0;
+    const restored: Array<[string, string]> = [];
+    const h = harness(async () => {
+        sent += 1;
+        throw Object.assign(new Error('Operational sync failed: 403 — Terminal sin permiso de edición de catálogo.'), { httpStatus: 403 });
+    }, true, async (edit, code) => { restored.push([edit.id, code]); });
+    await h.queue.process();
+    assert.equal(h.get().status, 'REJECTED');
+    assert.equal(h.get().syncStatus, 'ERROR');
+    assert.equal(h.get().syncError, 'CATALOG_EDIT_FORBIDDEN');
+    assert.match(h.get().message!, /restauró el valor anterior/);
+    assert.deepEqual(restored, [['mutation-1', 'CATALOG_EDIT_FORBIDDEN']]);
+    h.advance();
+    await h.queue.process();
+    assert.equal(sent, 1);
 });
 test('a stale baseline is applied when ERP already has the requested value', async () => {
     const h = harness(async () => ({ id: 'mutation-1', status: 'CONFLICT', current: 15 }));

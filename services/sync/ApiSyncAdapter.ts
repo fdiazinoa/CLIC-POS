@@ -3152,7 +3152,10 @@ class ApiSyncAdapter {
                     target: retriedTarget,
                 });
                 if (authRejection) throw authRejection;
-                throw new Error(`Operational sync failed after re-auth: ${retryResponse.status} ${retryResponse.statusText}${retryText ? ` — ${retryText.slice(0, 400)}` : ''}`);
+                throw Object.assign(
+                    new Error(`Operational sync failed after re-auth: ${retryResponse.status} ${retryResponse.statusText}${retryText ? ` — ${retryText.slice(0, 400)}` : ''}`),
+                    { httpStatus: retryResponse.status, responseBody: retryText.slice(0, 400) },
+                );
             }
 
             const data = await this.parseOperationalResponse(retryResponse);
@@ -3168,7 +3171,10 @@ class ApiSyncAdapter {
                 target,
             });
             if (authRejection) throw authRejection;
-            throw new Error(`Operational sync failed: ${response.status} ${response.statusText}${text ? ` — ${text.slice(0, 400)}` : ''}`);
+            throw Object.assign(
+                new Error(`Operational sync failed: ${response.status} ${response.statusText}${text ? ` — ${text.slice(0, 400)}` : ''}`),
+                { httpStatus: response.status, responseBody: text.slice(0, 400) },
+            );
         }
         const data = await this.parseOperationalResponse(response);
         return options.includeHttpStatus ? { httpStatus: response.status, data } : data;
