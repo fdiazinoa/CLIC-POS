@@ -12,6 +12,7 @@ import {
   getLatestPosInteraction,
   markInteractionStage,
   markInteractionStateUpdate,
+  markInteractionVisibleAndInteractive,
   markRenderEnd,
   markRenderStart,
   measureInteractionStage,
@@ -1843,6 +1844,58 @@ const App: React.FC = () => {
       </KioskSecurityProvider>
     </ThemeProvider>
   );
+};
+
+type PersistentPOSHostProps = React.ComponentProps<typeof POSInterface> & { visible: boolean };
+const MemoizedPOSInterface = React.memo(POSInterface);
+
+/**
+ * Keeps the sales surface mounted while the table map is in front. Function
+ * props are proxied through refs so App-level navigation renders do not defeat
+ * the memo boundary, while handlers always execute their latest closure.
+ */
+const PersistentPOSHost: React.FC<PersistentPOSHostProps> = ({ visible, ...incomingProps }) => {
+  const latestPropsRef = useRef(incomingProps);
+  const callbackProxiesRef = useRef(new Map<string, (...args: unknown[]) => unknown>());
+  latestPropsRef.current = incomingProps;
+
+  const stableProps = Object.fromEntries(Object.entries(incomingProps).map(([key, value]) => {
+    if (typeof value !== 'function') return [key, value];
+    let proxy = callbackProxiesRef.current.get(key);
+    if (!proxy) {
+      proxy = (...args: unknown[]) => {
+        const latest = (latestPropsRef.current as Record<string, unknown>)[key];
+        return typeof latest === 'function' ? latest(...args) : undefined;
+      };
+      callbackProxiesRef.current.set(key, proxy);
+    }
+    return [key, proxy];
+  })) as React.ComponentProps<typeof POSInterface>;
+
+  useLayoutEffect(() => {
+    if (!visible) return;
+    const trace = getLatestPosInteraction('CLOSE_TABLE_MAP');
+    if (!trace || trace.stages.FIRST_FRAME_INTERACTIVE !== undefined) return;
+    markInteractionStage(trace, 'NAVIGATION_END');
+    markInteractionStage(trace, 'POS_UPDATE_END');
+    markInteractionVisibleAndInteractive(trace);
+  }, [visible]);
+
+  return (
+    <div className={visible ? 'h-full' : 'hidden'} aria-hidden={!visible} data-pos-persistent-host="true">
+      <MemoizedPOSInterface {...stableProps} />
+    </div>
+  );
+};
+
+const TableMapLifecycleBoundary: React.FC<React.PropsWithChildren> = ({ children }) => {
+  useLayoutEffect(() => () => {
+    const trace = getLatestPosInteraction('CLOSE_TABLE_MAP');
+    if (!trace || trace.stages.TABLE_MAP_UNMOUNT_END !== undefined) return;
+    markInteractionStage(trace, 'TABLE_MAP_UNMOUNT_START');
+    markInteractionStage(trace, 'TABLE_MAP_UNMOUNT_END');
+  }, []);
+  return <>{children}</>;
 };
 
 const AppContent: React.FC = () => {
@@ -5978,6 +6031,20 @@ const AppContent: React.FC = () => {
     React.startTransition(() => {
       setCurrentView(view);
     });
+  };
+
+  const handleCloseTableMap = () => {
+    if (tableMapExitPending) return;
+    const trace = beginPosInteraction('CLOSE_TABLE_MAP', { posLifecycle: 'retained' });
+    setTableMapExitPending(true);
+    window.requestAnimationFrame(() => {
+      markInteractionStage(trace, 'VISUAL_ACK');
+      markInteractionStage(trace, 'NAVIGATION_START');
+      markInteractionStage(trace, 'POS_UPDATE_START');
+      markInteractionStateUpdate(trace, 1);
+      handleViewChange('POS');
+    });
+    markInteractionStage(trace, 'HANDLER_END');
   };
 
   const validateSupervisorPin = React.useCallback((pin: string): boolean => {
@@ -11086,8 +11153,8 @@ const AppContent: React.FC = () => {
     return finalizedCreditNote;
   };
 
-  const renderView = () => {
-    switch (currentView) {
+  const renderView = (view: ViewState = currentView) => {
+    switch (view) {
       case 'ACTIVATION':
         return (
           <ActivationScreen
@@ -11318,17 +11385,11 @@ const AppContent: React.FC = () => {
           )
         );
         return (
+          <TableMapLifecycleBoundary>
           <div className="h-screen bg-slate-950 overflow-hidden relative">
             <button
               type="button"
-              onClick={() => {
-                if (tableMapExitPending) return;
-                // Paint acknowledgement before mounting the heavier sales
-                // catalog. The transition lets React yield to input on slower
-                // restaurant terminals instead of presenting a frozen map.
-                setTableMapExitPending(true);
-                window.requestAnimationFrame(() => handleViewChange('POS'));
-              }}
+              onClick={handleCloseTableMap}
               disabled={tableMapExitPending}
               aria-busy={tableMapExitPending}
               className="absolute left-4 top-4 z-50 rounded-2xl border border-white/15 bg-slate-950/60 px-4 py-2.5 text-sm font-black text-slate-100 shadow-[0_16px_40px_rgba(2,6,23,0.55)] backdrop-blur-xl hover:bg-white/[0.14] active:scale-[0.98]"
@@ -11509,6 +11570,7 @@ const AppContent: React.FC = () => {
               />
             </div>
           </div>
+          </TableMapLifecycleBoundary>
         );
       }
 
@@ -11576,7 +11638,8 @@ const AppContent: React.FC = () => {
         }
         if (!currentUser) { setCurrentView('LOGIN'); return null; }
         return (
-          <POSInterface
+          <PersistentPOSHost
+            visible={currentView === 'POS'}
             config={config}
             currentUser={currentUser}
             roles={roles}
@@ -12884,7 +12947,18 @@ const AppContent: React.FC = () => {
     }
 
     const role = getCurrentDeviceRole();
-    const content = renderView();
+    const content = currentView === 'POS' || currentView === 'TABLE_MAP'
+      ? (
+        <div className="h-screen overflow-hidden relative" data-pos-table-shell="true">
+          {renderView('POS')}
+          {currentView === 'TABLE_MAP' ? (
+            <div className="absolute inset-0 z-40" data-table-map-overlay="true">
+              {renderView('TABLE_MAP')}
+            </div>
+          ) : null}
+        </div>
+      )
+      : renderView();
 
     // Handle escape hatch for kiosk modes
     const handleEscapeHatch = async () => {
