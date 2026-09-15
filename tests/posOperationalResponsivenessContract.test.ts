@@ -19,6 +19,10 @@ const printQueueSource = readFileSync(
   new URL('../services/printer/OfflinePrintQueueService.ts', import.meta.url),
   'utf8',
 );
+const operatorUiTransitionSource = readFileSync(
+  new URL('../utils/operatorUiTransition.ts', import.meta.url),
+  'utf8',
+);
 
 test('Android printing never uses the synchronous WebView bridge path', () => {
   for (const method of ['printEscPos', 'printEscpos', 'printRaw', 'printHtml', 'print']) {
@@ -59,6 +63,19 @@ test('the table map overlays a retained memoized POS instead of remounting it', 
   assert.match(layoutSource, /currentView === 'POS' \|\| currentView === 'TABLE_MAP'/);
   assert.match(layoutSource, /\{renderView\('POS'\)\}/);
   assert.match(layoutSource, /data-table-map-overlay="true"/);
+});
+
+test('automatic synchronization waits for the retained POS to become interactive', () => {
+  const closeHandlerStart = appSource.indexOf('const handleCloseTableMap');
+  const closeHandlerEnd = appSource.indexOf('const validateSupervisorPin', closeHandlerStart);
+  const closeHandlerSource = appSource.slice(closeHandlerStart, closeHandlerEnd);
+
+  assert.match(closeHandlerSource, /beginOperatorUiTransition\('CLOSE_TABLE_MAP'\)/);
+  assert.match(closeHandlerSource, /completeOperatorUiTransition\(tableMapExitTransitionRef\.current\)/);
+  assert.match(appSource, /syncTriggerCoordinator\.configure\(async[\s\S]*?const deferred = await waitForOperatorUiTransition\(\)/);
+  assert.match(appSource, /source: 'periodic_outbox'/);
+  assert.match(appSource, /source: `terminal_config:\$\{reason\}`/);
+  assert.match(operatorUiTransitionSource, /DEFAULT_MAX_HOLD_MS = 1_500/);
 });
 
 test('background queues yield between jobs and respect active operator input', () => {

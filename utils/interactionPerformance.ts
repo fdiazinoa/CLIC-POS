@@ -250,7 +250,10 @@ export const getPosInteractionReport = () => {
 export const getLatestPosInteraction = (operation: PosInteractionOperation) =>
   [...traces].reverse().find(trace => trace.operation === operation);
 
-export const markInteractionVisibleAndInteractive = (trace: PosInteractionTrace | null | undefined) => {
+export const markInteractionVisibleAndInteractive = (
+  trace: PosInteractionTrace | null | undefined,
+  onInteractive?: () => void,
+) => {
   if (!trace || typeof window === 'undefined') return;
   window.requestAnimationFrame(() => {
     markInteractionStage(trace, 'VISUAL_ACK');
@@ -260,6 +263,7 @@ export const markInteractionVisibleAndInteractive = (trace: PosInteractionTrace 
     // as soon as control returns to the browser event loop.
     window.setTimeout(() => {
       markInteractionStage(trace, 'FIRST_FRAME_INTERACTIVE');
+      onInteractive?.();
     }, 0);
   });
 };

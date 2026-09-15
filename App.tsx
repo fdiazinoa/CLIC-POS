@@ -17,6 +17,12 @@ import {
   markRenderStart,
   measureInteractionStage,
 } from './utils/interactionPerformance';
+import {
+  beginOperatorUiTransition,
+  completeOperatorUiTransition,
+  waitForOperatorUiTransition,
+  type OperatorUiTransitionToken,
+} from './utils/operatorUiTransition';
 
 import React, { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef } from 'react';
 import { Capacitor } from '@capacitor/core';
@@ -1846,7 +1852,10 @@ const App: React.FC = () => {
   );
 };
 
-type PersistentPOSHostProps = React.ComponentProps<typeof POSInterface> & { visible: boolean };
+type PersistentPOSHostProps = React.ComponentProps<typeof POSInterface> & {
+  visible: boolean;
+  onInteractive?: () => void;
+};
 const MemoizedPOSInterface = React.memo(POSInterface);
 
 /**
@@ -1854,7 +1863,7 @@ const MemoizedPOSInterface = React.memo(POSInterface);
  * props are proxied through refs so App-level navigation renders do not defeat
  * the memo boundary, while handlers always execute their latest closure.
  */
-const PersistentPOSHost: React.FC<PersistentPOSHostProps> = ({ visible, ...incomingProps }) => {
+const PersistentPOSHost: React.FC<PersistentPOSHostProps> = ({ visible, onInteractive, ...incomingProps }) => {
   const latestPropsRef = useRef(incomingProps);
   const callbackProxiesRef = useRef(new Map<string, (...args: unknown[]) => unknown>());
   latestPropsRef.current = incomingProps;
@@ -1878,8 +1887,8 @@ const PersistentPOSHost: React.FC<PersistentPOSHostProps> = ({ visible, ...incom
     if (!trace || trace.stages.FIRST_FRAME_INTERACTIVE !== undefined) return;
     markInteractionStage(trace, 'NAVIGATION_END');
     markInteractionStage(trace, 'POS_UPDATE_END');
-    markInteractionVisibleAndInteractive(trace);
-  }, [visible]);
+    markInteractionVisibleAndInteractive(trace, onInteractive);
+  }, [onInteractive, visible]);
 
   return (
     <div className={visible ? 'h-full' : 'hidden'} aria-hidden={!visible} data-pos-persistent-host="true">
@@ -1918,6 +1927,7 @@ const AppContent: React.FC = () => {
     return isVisorMode ? 'VISOR' : 'LOGIN';
   });
   const [tableMapExitPending, setTableMapExitPending] = useState(false);
+  const tableMapExitTransitionRef = useRef<OperatorUiTransitionToken | null>(null);
   const currentViewRef = useRef<ViewState>(currentView);
   const currentUserRef = useRef<User | null>(null);
   const [scanTargetTicketId, setScanTargetTicketId] = useState<string | null>(null); // NEW: Auto-select ticket from scan
@@ -3499,6 +3509,9 @@ const AppContent: React.FC = () => {
     const requestConditionalTerminalConfig = async (
       reason: 'startup' | 'connection_restored' | 'safety_check',
     ) => {
+      const deferred = await waitForOperatorUiTransition();
+      if (deferred) console.info('[SYNC_DEFERRED_FOR_UI]', { source: `terminal_config:${reason}` });
+      if (disposed) return;
       const erpTerminalId =
         currentTerminal.config?.erpTerminalId
         || loadSyncProfile().erpTerminalId
@@ -3715,6 +3728,9 @@ const AppContent: React.FC = () => {
 
     syncTriggerCoordinator.configure(async ({ reasons, collections, imageOnly, domainVersions }) => {
       if (disposed || !navigator.onLine || isPosOnlyCloudStagingTarget()) return;
+      const deferred = await waitForOperatorUiTransition();
+      if (deferred) console.info('[SYNC_DEFERRED_FOR_UI]', { source: 'sync_trigger', reasons });
+      if (disposed || !navigator.onLine) return;
       const needsLifecycle = reasons.some((reason) => lifecycleReasons.has(reason));
       syncMetrics.increment('polls_total');
       syncMetrics.markPullStarted();
@@ -3820,8 +3836,12 @@ const AppContent: React.FC = () => {
         if (disposed) return;
         if (navigator.onLine) {
           try {
-            await triggerErpSyncOutbox('periodic');
-            outboxPollFailures = 0;
+            const deferred = await waitForOperatorUiTransition();
+            if (deferred) console.info('[SYNC_DEFERRED_FOR_UI]', { source: 'periodic_outbox' });
+            if (!disposed && navigator.onLine) {
+              await triggerErpSyncOutbox('periodic');
+              outboxPollFailures = 0;
+            }
           } catch (error) {
             outboxPollFailures += 1;
             console.warn('[ERP SYNC] periodic outbox pull failed; retrying with backoff.', {
@@ -6036,6 +6056,7 @@ const AppContent: React.FC = () => {
   const handleCloseTableMap = () => {
     if (tableMapExitPending) return;
     const trace = beginPosInteraction('CLOSE_TABLE_MAP', { posLifecycle: 'retained' });
+    tableMapExitTransitionRef.current = beginOperatorUiTransition('CLOSE_TABLE_MAP');
     setTableMapExitPending(true);
     markInteractionStage(trace, 'NAVIGATION_START');
     markInteractionStage(trace, 'POS_UPDATE_START');
@@ -6047,6 +6068,11 @@ const AppContent: React.FC = () => {
     setCurrentView('POS');
     markInteractionStage(trace, 'HANDLER_END');
   };
+
+  const handleTableMapCloseInteractive = useCallback(() => {
+    completeOperatorUiTransition(tableMapExitTransitionRef.current);
+    tableMapExitTransitionRef.current = null;
+  }, []);
 
   const validateSupervisorPin = React.useCallback((pin: string): boolean => {
     const cleanedPin = pin.trim();
@@ -11641,6 +11667,7 @@ const AppContent: React.FC = () => {
         return (
           <PersistentPOSHost
             visible={currentView === 'POS'}
+            onInteractive={handleTableMapCloseInteractive}
             config={config}
             currentUser={currentUser}
             roles={roles}
