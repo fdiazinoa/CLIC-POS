@@ -16,7 +16,7 @@ No se encontró Redux ni Zustand en este flujo. El estado operativo reside en `A
 | Carrito, promociones, impuestos y totales | Los `useMemo` no sobreviven a un desmontaje, por lo que el primer render volvía a calcularlos y a crear sus controles. | Permanecen montados y sólo cambian cuando cambian sus datos. |
 | Encabezado y controles | Se reconstruían con `POSInterface`; callbacks inline del padre cambiaban de identidad en cada navegación. | Proxies estables mantienen la frontera memoizada sin capturar closures obsoletos. |
 | Credenciales, mesa y ticket | El estado fuente permanecía en `AppContent`, pero la vista consumidora se recreaba y repetía su inicialización. | Se conservan tanto el estado fuente como la instancia consumidora. |
-| SQLite, KDS y sincronización | El montaje podía releer `productPrices`, revisar la cola KDS y habilitar efectos de sincronización. | No hubo consulta, recurso de red ni sincronización iniciada por los 40 cierres medidos. |
+| SQLite, KDS y sincronización | El montaje podía releer `productPrices`, revisar la cola KDS y habilitar efectos de sincronización. | No hubo consulta, recurso de red ni sincronización iniciada por los 40 cierres medidos. Además, los disparadores automáticos nuevos esperan ahora el primer frame interactivo. |
 
 La superficie auditada contiene 39 registros de `useEffect`; los efectos cuyos guards lo permitían volvían a ejecutarse en cada montaje. No se encontró cambio de ruta ni `key` como causa primaria: la exclusión mutua del `switch renderView()` era suficiente para destruir `POSInterface`.
 
@@ -52,7 +52,9 @@ El APK diagnóstico también correlaciona commits React, funciones instrumentada
 
 El POS permanece montado en un host estable y el mapa de Mesas se presenta como una capa. `React.memo` evita actualizar `POSInterface` cuando sus datos no cambiaron; los callbacks se mantienen estables mediante proxies que ejecutan siempre el cierre más reciente. Al ocultar el POS, los cambios reales de carrito, mesa, ticket, productos o sincronización todavía atraviesan la frontera y se renderizan; sólo se omiten renders causados por identidad nueva de callbacks.
 
-No se cambió la lógica de venta, persistencia, locks, cobro ni sincronización. Tampoco se añadió `startTransition` como sustituto del trabajo: el trabajo de remontaje fue eliminado.
+No se cambió la lógica de venta, persistencia, locks, cobro ni los payloads/reintentos de sincronización. Tampoco se añadió `startTransition` como sustituto del trabajo: el trabajo de remontaje fue eliminado.
+
+Como protección adicional, el clic `Cerrar` abre una compuerta de interacción que se libera inmediatamente después de marcar el primer frame interactivo. Mientras está activa, el coordinador ERP, el outbox periódico y el refresco automático de configuración esperan sin perder su solicitud. Un límite de seguridad de 1.5 s evita que un WebView que no entregue el callback detenga la sincronización indefinidamente. La compuerta no cancela una operación que ya estuviera en vuelo; evita que una nueva comience durante la transición.
 
 El primer candidato dejó el cambio de vista dentro de `startTransition`; bajo trabajo continuo del WebView podía quedar pendiente y mantener `Abriendo venta…` en pantalla. El candidato final confirma el cambio pequeño de vista de forma síncrona. También se eliminó una espera de un frame antes del cambio y la sonda de interactividad ya no agrega artificialmente un segundo frame completo.
 
@@ -75,7 +77,7 @@ El objetivo de regreso al POS se cumple en sincronización normal (p50 menor de 
 
 - TypeScript: correcto.
 - Build Vite de producción: correcto.
-- Pruebas focalizadas: 30 correctas.
+- Pruebas focalizadas: 34 correctas, incluidas liberación normal, transiciones superpuestas y límite de seguridad de la compuerta.
 - Gate APK: 117 contratos correctos.
 - APK firmado candidato: 1.1.377, `versionCode` 1377, commit `7bf7d1d`.
 - Firma: certificado esperado de CLIC POS.
