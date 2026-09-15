@@ -137,6 +137,7 @@ import {
 } from './utils/tableLayout';
 import { NativeLaunchContext, shouldRestoreNativeSession } from './utils/nativeSessionResume';
 import { markRestaurantLinesCommitted } from './utils/restaurantHotReversal';
+import { removeStaleChargedEmptyTickets } from './utils/tableTicketIntegrity';
 
 // Component Imports
 import ModernLoginScreen from './components/ModernLoginScreen';
@@ -4322,10 +4323,17 @@ const AppContent: React.FC = () => {
         // (locks, otra mesa, heartbeat). Mientras la Master guarda su mesa activa,
         // conservar ese borrador para que un snapshot anterior no borre la primera
         // digitación antes de que termine el PUT atómico.
-        const nextParkedTickets = mergePendingClientTableTickets(
+        const mergedRemoteParkedTickets = mergePendingClientTableTickets(
           remoteParkedTickets,
           pendingMasterTableSyncRef.current,
         );
+        const { tickets: nextParkedTickets, removedTicketIds: repairedRemoteTicketIds } =
+          removeStaleChargedEmptyTickets(mergedRemoteParkedTickets);
+        if (repairedRemoteTicketIds.length > 0) {
+          console.warn('[TABLE_TICKET_REPAIR] Removed stale charged empty tickets from native snapshot', {
+            count: repairedRemoteTicketIds.length,
+          });
+        }
         const selectedRooms = floorPlanSelection?.rooms || nextRooms;
         const selectedTables = floorPlanSelection?.tables || nextTables;
         const reconciledTables = reconcileTablesWithParkedTickets(selectedTables, nextParkedTickets);
@@ -5213,9 +5221,16 @@ const AppContent: React.FC = () => {
           console.debug('[TABLE_LAYOUT_CLIENT_UNCHANGED]', { revision: responseRevision });
           return;
         }
-        const nextParkedTickets = hasAuthoritativeParkedTickets
+        const mergedRemoteParkedTickets = hasAuthoritativeParkedTickets
           ? mergePendingClientTableTickets(responseParkedTickets, pendingTableSync)
           : [];
+        const { tickets: nextParkedTickets, removedTicketIds: repairedRemoteTicketIds } =
+          removeStaleChargedEmptyTickets(mergedRemoteParkedTickets);
+        if (repairedRemoteTicketIds.length > 0) {
+          console.warn('[TABLE_TICKET_REPAIR] Removed stale charged empty tickets from table snapshot', {
+            count: repairedRemoteTicketIds.length,
+          });
+        }
         const ticketsForReconciliation = hasAuthoritativeParkedTickets ? nextParkedTickets : parkedTickets;
         const mergeRemoteTables = (incomingTables: Table[], previousTables: Table[]) => {
           if (isClientRuntime) {
@@ -6658,11 +6673,25 @@ const AppContent: React.FC = () => {
           const mirroredParkedTickets = canHydrateOperationalTicketsLocally
             ? readArrayMirrorFromLocalStorage<ParkedTicket>(PARKED_TICKETS_STORAGE_KEY)
             : [];
-          const restoredParkedTickets = canHydrateOperationalTicketsLocally
+          const mergedParkedTickets = canHydrateOperationalTicketsLocally
             ? mergeById(Array.isArray(data.parkedTickets) ? data.parkedTickets : [], mirroredParkedTickets)
             : [];
+          const { tickets: restoredParkedTickets, removedTicketIds: repairedStartupTicketIds } =
+            removeStaleChargedEmptyTickets(mergedParkedTickets);
           setParkedTickets(restoredParkedTickets);
-          if (canHydrateOperationalTicketsLocally && restoredParkedTickets.length > (Array.isArray(data.parkedTickets) ? data.parkedTickets.length : 0)) {
+          if (repairedStartupTicketIds.length > 0) {
+            console.warn('[TABLE_TICKET_REPAIR] Removed stale charged empty tickets during startup', {
+              count: repairedStartupTicketIds.length,
+            });
+            writeCriticalCollectionsMirror(restoredParkedTickets, restoredCashMovements);
+          }
+          if (
+            canHydrateOperationalTicketsLocally
+            && (
+              repairedStartupTicketIds.length > 0
+              || restoredParkedTickets.length > (Array.isArray(data.parkedTickets) ? data.parkedTickets.length : 0)
+            )
+          ) {
             void db.save('parkedTickets', restoredParkedTickets).catch((error) => console.warn('No se pudo restaurar tickets en espera desde espejo local:', error));
           }
           setTransfers(data.transfers || []);
@@ -8317,11 +8346,22 @@ const AppContent: React.FC = () => {
         const mirroredParkedTickets = canHydrateOperationalTicketsLocally
           ? readArrayMirrorFromLocalStorage<ParkedTicket>(PARKED_TICKETS_STORAGE_KEY)
           : [];
-        const restoredParkedTickets = canHydrateOperationalTicketsLocally
+        const mergedParkedTickets = canHydrateOperationalTicketsLocally
           ? mergeById(freshData.parkedTickets, mirroredParkedTickets)
           : [];
+        const { tickets: restoredParkedTickets, removedTicketIds: repairedBindingTicketIds } =
+          removeStaleChargedEmptyTickets(mergedParkedTickets);
         setParkedTickets(restoredParkedTickets);
-        if (canHydrateOperationalTicketsLocally && restoredParkedTickets.length > freshData.parkedTickets.length) {
+        if (repairedBindingTicketIds.length > 0) {
+          console.warn('[TABLE_TICKET_REPAIR] Removed stale charged empty tickets after terminal binding', {
+            count: repairedBindingTicketIds.length,
+          });
+          writeCriticalCollectionsMirror(restoredParkedTickets, cashMovements);
+        }
+        if (
+          canHydrateOperationalTicketsLocally
+          && (repairedBindingTicketIds.length > 0 || restoredParkedTickets.length > freshData.parkedTickets.length)
+        ) {
           await db.save('parkedTickets', restoredParkedTickets);
         }
       }
@@ -8613,7 +8653,10 @@ const AppContent: React.FC = () => {
     tickets: ParkedTicket[],
     options: ParkedTicketSyncOptions = { reason: 'explicit' },
   ) => {
-    const validTickets = (Array.isArray(tickets) ? tickets : []).filter(ticket => {
+    const integrityCheckedTickets = removeStaleChargedEmptyTickets(
+      Array.isArray(tickets) ? tickets : [],
+    ).tickets;
+    const validTickets = integrityCheckedTickets.filter(ticket => {
       const ticketId = String(ticket?.id || '').trim();
       return !ticketId || !closedRestaurantOrderIdsRef.current.has(ticketId);
     });

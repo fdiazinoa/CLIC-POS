@@ -4777,6 +4777,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const updateCartItem = async (updatedItem: CartItem | null, cartIdToDelete?: string) => {
       if (blockRecoveredUberOrderMutation('editar el pedido')) return;
       const isSubtotalizedMutation = hasSubtotalizedCart;
+      const isDeletingItem = Boolean(cartIdToDelete || updatedItem === null);
       if (!(await authorizeSubtotalizedEdit('Modificar artículo o cantidad de ticket subtotalizado'))) return;
 
       let newCart: CartItem[] = [];
@@ -4870,6 +4871,18 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
 
       if (isSubtotalizedMutation) newCart = clearCartSubtotalization(newCart);
+
+      // Borrar la última línea debe cerrar esta cuenta mediante el mismo flujo
+      // explícito usado al salir de una mesa vacía. Persistir `items: []` sobre
+      // el ticket anterior dejaría su total viejo y reviviría un cargo fantasma
+      // después de reiniciar la app.
+      if (isDeletingItem && activeTable && newCart.length === 0) {
+         setActiveCartItemId(null);
+         setEditingItem(null);
+         await releaseActiveEmptyTable({ silent: true, force: true });
+         return;
+      }
+
       onUpdateCart(newCart);
 
       // KDS Sync (if active table)
