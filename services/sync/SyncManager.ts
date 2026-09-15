@@ -87,6 +87,12 @@ import {
 import { mergePosCategoryPresentation } from '../../utils/posCatalogPresentation';
 import { persistMasterNumberRangesFromSnapshot } from './MasterNumberRangeService';
 import { preserveLocalCatalog } from './preserveLocalCatalog';
+import {
+    applyAuthoritativeProductTaxes,
+    normalizeErpTaxDefinition,
+    resolveProductTaxLog,
+} from '../../utils/erpFiscalCatalogSync';
+import { findTaxByIdentifier } from '../../utils/taxIdentity';
 
 export type SyncableCollection =
     | 'products' | 'items' | 'taxes' | 'customers' | 'suppliers' | 'warehouses'
@@ -6598,6 +6604,125 @@ class SyncManager {
     }
 
     /**
+     * Replaces the fiscal master and product catalog as one local commit.
+     * Taxes are downloaded first so every product association can be resolved
+     * before anything becomes visible to the selling UI.
+     */
+    async forceFiscalCatalogFullPull(): Promise<{ taxes: number; products: number }> {
+        const target = syncPolicy.resolve();
+        if (target.kind !== 'ERP_ACTIVE' || !target.canPullMasters) {
+            throw new Error('FULL_FISCAL_CATALOG_REQUIRES_ERP_ACTIVE');
+        }
+        if (!dbAdapter.saveDocumentsAtomically) {
+            throw new Error('FULL_FISCAL_CATALOG_ATOMIC_STORAGE_UNAVAILABLE');
+        }
+
+        setCatalogDiagnosticStatus('SYNCING');
+        this.isInternalSyncing = true;
+        this.isInternalPulling = true;
+        try {
+            const taxSnapshot = await apiSyncAdapter.pullFullSnapshot('taxes');
+            const taxes = taxSnapshot.items
+                .map(normalizeErpTaxDefinition)
+                .filter((tax) => Boolean(tax.id));
+            if (taxes.length === 0) {
+                throw new Error('FULL_FISCAL_CATALOG_EMPTY_TAX_MASTER');
+            }
+
+            const productSnapshot = await apiSyncAdapter.pullFullSnapshot('products');
+            if (productSnapshot.items.length === 0) {
+                throw new Error('FULL_FISCAL_CATALOG_EMPTY_PRODUCT_MASTER');
+            }
+            const authoritativeProducts = productSnapshot.items.map((item: any) =>
+                applyAuthoritativeProductTaxes(item)
+            );
+            const products = (await this.enrichPulledProducts(authoritativeProducts))
+                .map((item: any) => normalizeRestaurantProductConfig(applyAuthoritativeProductTaxes(item)))
+                .filter((product: any) => Boolean(product.id));
+            if (products.length !== productSnapshot.items.length) {
+                throw new Error('FULL_FISCAL_CATALOG_PRODUCT_ID_MISSING');
+            }
+
+            const unresolvedTaxIds = Array.from(new Set(products.flatMap((product: any) =>
+                (product.appliedTaxIds || []).filter((taxId: string) =>
+                    !findTaxByIdentifier(taxes, taxId)
+                )
+            )));
+            if (unresolvedTaxIds.length > 0) {
+                throw new Error(`FULL_FISCAL_CATALOG_UNRESOLVED_TAX_IDS:${unresolvedTaxIds.join(',')}`);
+            }
+
+            const [currentConfig, currentProducts] = await Promise.all([
+                db.get('config') as unknown as Promise<BusinessConfig>,
+                db.get('products') as unknown as Promise<Product[]>,
+            ]);
+            const currentProductByIdentity = new Map((Array.isArray(currentProducts) ? currentProducts : []).flatMap((product) => [
+                [String(product.id || ''), product] as const,
+                ...(product.sku ? [[String(product.sku), product] as const] : []),
+            ]));
+            const fiscallyChangedProducts = products.filter((product: any) => {
+                const previous = currentProductByIdentity.get(String(product.id || ''))
+                    || currentProductByIdentity.get(String(product.sku || ''));
+                return !previous
+                    || previous.taxable !== product.taxable
+                    || JSON.stringify(previous.appliedTaxIds || []) !== JSON.stringify(product.appliedTaxIds || []);
+            });
+            const nextConfig = {
+                ...(currentConfig || {}),
+                id: (currentConfig as any)?.id || 'current',
+                taxes,
+            };
+            await dbAdapter.saveDocumentsAtomically([
+                ...taxes.map((document) => ({ collectionName: 'taxes', document })),
+                ...products.map((document) => ({ collectionName: 'products', document })),
+                { collectionName: 'config', document: nextConfig },
+            ], false, ['taxes', 'products', 'config']);
+
+            const taxVersion = Number(taxSnapshot.latestVersion || 0);
+            const productVersion = Number(productSnapshot.latestVersion || 0);
+            this.syncVersions.set('taxes', taxVersion);
+            this.syncVersions.set('products', productVersion);
+            localStorage.setItem('sync_version_taxes', String(taxVersion));
+            localStorage.setItem('sync_version_products', String(productVersion));
+            localStorage.removeItem('sync_timestamp_taxes');
+            localStorage.removeItem('sync_timestamp_products');
+            this.clearTimestampCursorState('products');
+
+            fiscallyChangedProducts
+                .forEach((product: any) => console.info(
+                    '[SYNC_FISCAL_PRODUCT_APPLIED]',
+                    resolveProductTaxLog(product, taxes, productVersion),
+                ));
+
+            await productImageCacheService.syncSnapshotItems(products as Product[]);
+            setCatalogDiagnosticStatus('SYNCED');
+            window.dispatchEvent(new CustomEvent('taxesUpdated'));
+            window.dispatchEvent(new CustomEvent('productsUpdated', {
+                detail: {
+                    fiscalCatalogFull: true,
+                    taxVersion,
+                    productVersion,
+                },
+            }));
+            console.info('[SYNC_FISCAL_CATALOG_FULL_APPLIED]', {
+                order: ['taxes', 'products'],
+                taxes: taxes.length,
+                products: products.length,
+                tax_version: taxVersion,
+                product_version: productVersion,
+                transaction: 'committed',
+            });
+            return { taxes: taxes.length, products: products.length };
+        } catch (error) {
+            setCatalogDiagnosticStatus('ERROR');
+            throw error;
+        } finally {
+            this.isInternalSyncing = false;
+            this.isInternalPulling = false;
+        }
+    }
+
+    /**
      * Force pull all catalogs (Slave: from Master, Master: from Server)
      * Resets local versions to 0 to force full download
      */
@@ -6642,7 +6767,7 @@ class SyncManager {
             { id: 'loyaltyPrograms', label: 'Programas de Fidelidad' },
             { id: 'pointsRules', label: 'Reglas de Puntos' },
         ];
-        const modules = target.kind === 'ERP_ACTIVE'
+        let modules = target.kind === 'ERP_ACTIVE'
             ? baseModules.filter(module => [
                 'config',
                 'products',
@@ -6680,6 +6805,32 @@ class SyncManager {
 
         // Initialize progress UI
         window.dispatchEvent(new CustomEvent('syncStart', { detail: { modules } }));
+
+        if (target.kind === 'ERP_ACTIVE') {
+            window.dispatchEvent(new CustomEvent('syncProgress', {
+                detail: { id: 'taxes', status: 'PROCESSING', message: 'Descargando maestro fiscal FULL...' },
+            }));
+            window.dispatchEvent(new CustomEvent('syncProgress', {
+                detail: { id: 'products', status: 'PROCESSING', message: 'Esperando maestro fiscal...' },
+            }));
+            try {
+                const result = await this.forceFiscalCatalogFullPull();
+                window.dispatchEvent(new CustomEvent('syncProgress', {
+                    detail: { id: 'taxes', status: 'SUCCESS', message: 'Maestro fiscal aplicado', count: result.taxes },
+                }));
+                window.dispatchEvent(new CustomEvent('syncProgress', {
+                    detail: { id: 'products', status: 'SUCCESS', message: 'Catálogo fiscal aplicado', count: result.products },
+                }));
+            } catch (error: any) {
+                for (const id of ['taxes', 'products']) {
+                    window.dispatchEvent(new CustomEvent('syncProgress', {
+                        detail: { id, status: 'ERROR', message: error?.message || 'Error en sincronización fiscal FULL' },
+                    }));
+                }
+                throw error;
+            }
+            modules = modules.filter((module) => !['taxes', 'products'].includes(module.id));
+        }
 
         for (const module of modules) {
             try {

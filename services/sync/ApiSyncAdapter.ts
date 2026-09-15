@@ -23,6 +23,7 @@ import {
 } from './SyncProfile';
 import { isPosCloudStagingPushCollection } from './PosCloudStagingService';
 import { looksLikeUuidString } from '../../utils/documentSeriesIdentity';
+import { requireCanonicalErpTerminalId } from './terminalIdentity';
 import {
     reportSyncErrorDiagnostic,
     setCatalogDiagnosticStatus,
@@ -4115,6 +4116,88 @@ class ApiSyncAdapter {
 	            lastSyncedAt: cursor,
 	            syncStatus: 'SYNCED_WITH_FULL_FALLBACK',
 	        };
+	    }
+
+    /**
+     * Downloads an authoritative ERP master snapshot without consulting local
+     * versions, timestamps, cursors or HTTP caches.
+     */
+    async pullFullSnapshot(collection: 'taxes' | 'products'): Promise<PullDeltaResult> {
+        if (!isErpMasterPullCollection(collection)) {
+            throw new Error(`FULL_MASTER_COLLECTION_NOT_SUPPORTED:${collection}`);
+        }
+
+        const request = async (allowReauth: boolean): Promise<PullDeltaResult> => {
+            const target = await this.authenticateOperationalTarget(!allowReauth, 'background', 'PULL_MASTERS');
+            if (target.kind !== 'ERP_ACTIVE' || target.useLocalTarget) {
+                throw new Error(`FULL_ERP_PULL_REQUIRES_ERP_ACTIVE:${collection}`);
+            }
+
+            const terminalId = requireCanonicalErpTerminalId(target.terminalId);
+            const url = new URL(`${target.baseUrl}/collections/${collection}/full`);
+            url.searchParams.set('terminal_id', terminalId);
+            const headers = {
+                ...this.buildOperationalHeaders(target, target.token),
+                'Cache-Control': 'no-cache, no-store, max-age=0',
+                Pragma: 'no-cache',
+            };
+            const response = await this.fetchWithRetry(url.toString(), {
+                method: 'GET',
+                headers,
+                cache: 'no-store',
+            }, 2, 500, 'background', 'PULL_MASTERS');
+
+            if (response.status === 401 && allowReauth) {
+                this.erpAuthToken = null;
+                this.clearCanonicalErpSyncToken();
+                return request(false);
+            }
+            if (!response.ok) {
+                const responseBody = await response.text().catch(() => '');
+                throw this.buildProtectedPullError({
+                    collection,
+                    endpoint: url.toString(),
+                    status: response.status,
+                    responseBody,
+                    headers,
+                });
+            }
+
+            const payload = await response.json();
+            const items = readArrayPayload(payload, collection);
+            const latestVersion = Number(
+                payload?.latestVersion
+                ?? payload?.version
+                ?? payload?.fullSyncVersion
+                ?? payload?.metadata?.version
+                ?? 0
+            );
+            const serverTime = pickFirstString(
+                payload?.serverTime,
+                payload?.server_time,
+                payload?.timestamp,
+            ) || new Date().toISOString();
+
+            console.info('[SYNC_FULL_MASTER_DOWNLOADED]', {
+                collection,
+                terminal_id: terminalId,
+                count: items.length,
+                version: Number.isFinite(latestVersion) ? latestVersion : 0,
+                cache: 'bypassed',
+            });
+
+            return {
+                items,
+                serverTime,
+                isFullDownload: true,
+                latestVersion: Number.isFinite(latestVersion) ? latestVersion : 0,
+                cursor: null,
+                nextCursor: null,
+                lastSyncedAt: serverTime,
+            };
+        };
+
+        return request(true);
     }
 
     private async pullErpTimestampCursorDelta(

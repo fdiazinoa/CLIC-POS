@@ -11,6 +11,7 @@ import {
 } from '../../utils/masterIdentity';
 import { isPosSaleActive, POS_SALE_ACTIVITY_EVENT } from '../../utils/posSaleActivity';
 import { extractWarehouseStockBalances, productIdentityCandidates } from '../../utils/productReferences';
+import { applyAuthoritativeProductTaxes } from '../../utils/erpFiscalCatalogSync';
 
 type IncomingProduct = Partial<Product> & Record<string, any>;
 
@@ -108,11 +109,15 @@ export const resolveIncomingTaxIds = (item: IncomingProduct, localProduct?: Prod
   const remoteCandidates: Array<[Record<string, unknown>, string]> = [
     [item as Record<string, unknown>, 'appliedTaxIds'],
     [item as Record<string, unknown>, 'tax_ids'],
+    [item as Record<string, unknown>, 'tax_id'],
     [item as Record<string, unknown>, 'taxIds'],
+    [item as Record<string, unknown>, 'taxId'],
     [item as Record<string, unknown>, 'tax_codes'],
     [metadata, 'appliedTaxIds'],
     [metadata, 'tax_ids'],
+    [metadata, 'tax_id'],
     [metadata, 'taxIds'],
+    [metadata, 'taxId'],
     [metadata, 'tax_codes'],
     [metadata, 'taxes'],
   ];
@@ -500,10 +505,10 @@ class ProductImageCacheService {
         normalized.imageUrl = imageUrl;
         normalized.imageVersion = imageVersion;
       }
-      return normalized;
+      return applyAuthoritativeProductTaxes(normalized);
     }
 
-    return normalized;
+    return applyAuthoritativeProductTaxes(normalized);
   }
 
   private async getNormalizationContext(): Promise<NormalizationContext> {
