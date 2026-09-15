@@ -146,10 +146,15 @@ export const getTerminalDefaultTaxIds = (terminalConfig?: TerminalTaxConfig): st
 
 export const resolveEffectiveTaxIds = (
   itemTaxIds?: string[] | null,
-  terminalConfig?: TerminalTaxConfig
+  terminalConfig?: TerminalTaxConfig,
+  taxable?: boolean,
 ): string[] => {
-  const directTaxIds = normalizeTaxIds(itemTaxIds);
-  return directTaxIds.length > 0 ? directTaxIds : getTerminalDefaultTaxIds(terminalConfig);
+  if (taxable === false) return [];
+  // Modern catalog rows always carry an array. An explicit empty array is the
+  // product-level decision "Sin impuestos" and must not inherit terminal tax.
+  if (Array.isArray(itemTaxIds)) return normalizeTaxIds(itemTaxIds);
+  // Only genuinely legacy rows with no tax field inherit the terminal default.
+  return getTerminalDefaultTaxIds(terminalConfig);
 };
 
 export const resolveEffectiveTaxes = (
@@ -160,12 +165,19 @@ export const resolveEffectiveTaxes = (
   fallbackTaxName = 'Impuesto',
   allowedTaxIds?: string[],
 ): TaxDefinition[] => {
-  const itemTaxIds = normalizeTaxIds(
-    Array.isArray((item as TaxableLineItem).appliedTaxIds)
-      ? (item as TaxableLineItem).appliedTaxIds
-      : (item as TaxableLineItem).tax_ids
-  );
-  const resolvedTaxes = resolveEffectiveTaxIds(itemTaxIds, terminalConfig)
+  if ((item as TaxableLineItem).taxable === false) return [];
+
+  const rawItemTaxIds = Array.isArray((item as TaxableLineItem).appliedTaxIds)
+    ? (item as TaxableLineItem).appliedTaxIds
+    : Array.isArray((item as TaxableLineItem).tax_ids)
+      ? (item as TaxableLineItem).tax_ids
+      : undefined;
+  const hasExplicitItemTaxIds = Array.isArray(rawItemTaxIds);
+  const resolvedTaxes = resolveEffectiveTaxIds(
+    rawItemTaxIds,
+    terminalConfig,
+    (item as TaxableLineItem).taxable,
+  )
     .map((taxId) => findTaxByIdentifier(config.taxes || [], taxId))
     .filter(Boolean) as TaxDefinition[];
   const normalizedAllowedTaxIds = allowedTaxIds === undefined
@@ -187,6 +199,10 @@ export const resolveEffectiveTaxes = (
   // An explicit service policy is authoritative and must never reintroduce a
   // filtered tax through the legacy global-rate fallback.
   if (normalizedAllowedTaxIds !== undefined) return allowedTaxes;
+
+  // Empty or unknown explicit identifiers are still authoritative. In
+  // particular, never convert a stale foreign tax id into the local default.
+  if (hasExplicitItemTaxIds) return allowedTaxes;
 
   const shouldFallbackForTaxableItem = (item as TaxableLineItem).taxable === true;
   const effectiveFallbackRate = fallbackTaxRate > EPSILON
