@@ -50,7 +50,7 @@ function scoped<T>(span:Span,work:()=>T):T{const prior=invocationSpan;invocation
 export const diagEnabled=()=>enabled;
 export function diagRun<T>(name:string,work:()=>T,kind='background'):T{
  if(!enabled || (kind==='direct-helper'&&!syncSpan))return work();
- const user=/ModernLoginScreen.*handleKeyPress|POSInterface.*handleProductCardClick|TableMap.*handleNodeSelect/.test(name)&&input&&clock()-input.at<150;
+ const user=/ModernLoginScreen.*handleKeyPress|POSInterface.*handleProductCardClick|TableMap.*handleNodeSelect|App.*handleCloseTableMap/.test(name)&&input&&clock()-input.at<150;
  if(user){deadline=clock()+5000;targetEvents=0;}
  if(!active())return work();
  const parent=context();const t:Trace=(!user&&parent?.t)||{id:`POS-${String(++seq).padStart(6,'0')}`,name,start:clock()};
@@ -115,13 +115,29 @@ function installBridge(){const cap=(globalThis as any).Capacitor;if(!cap?.native
   if(!active())return cb(p,m,o,fn);const parent=context();return cb(p,m,o,function(this:any,...args:any[]){return diagRun(`CapacitorCallback:${p}.${m}`,()=>scoped(parent||{id:++sseq,parent:null,name:`${p}.${m}`,start:clock()},()=>fn?.apply(this,args)));});
  };
 }
+function installStorageReadObserver(){
+ const proto=globalThis.Storage?.prototype as (Storage & {__posDiagnosticGetItem?:boolean})|undefined;
+ if(!proto||proto.__posDiagnosticGetItem)return;
+ const original=proto.getItem;
+ Object.defineProperty(proto,'__posDiagnosticGetItem',{value:true});
+ proto.getItem=function(key:string){
+  if(!active())return original.call(this,key);
+  const start=clock();
+  try{return original.call(this,key);}
+  finally{
+   let hash=0x811c9dc5;
+   for(let index=0;index<key.length;index++){hash^=key.charCodeAt(index);hash=Math.imul(hash,0x01000193);}
+   emit('LOCAL_STORAGE_READ',{keyHash:`fnv1a-${(hash>>>0).toString(16).padStart(8,'0')}`,duration:clock()-start},context(),start);
+  }
+ };
+}
 export async function installDiagnostics(){
  if(!native()?.enabled())return;
  await import('zone.js');enabled=true;session=Date.now().toString(36);
  const channel=new MessageChannel();drain=channel.port2;channel.port1.onmessage=closeChain;
  const before=clock(),bootNs=native().clock(),after=clock();emit('CLOCK_SYNC',{bootNs,jsBefore:before,jsAfter:after,uncertaintyMs:after-before});
  for(const type of ['click','input','keydown'])document.addEventListener(type,e=>{input={at:e.timeStamp,type:e.type};},{capture:true,passive:true});
- installCommitHook();installBridge();
+ installCommitHook();installBridge();installStorageReadObserver();
  const {registerPlugin}=await import('@capacitor/core');const sink=registerPlugin<{send(o:{payload:string}):Promise<void>}>('PosDiagnosticSink');
  for(const type of ['longtask','long-animation-frame'])if(PerformanceObserver.supportedEntryTypes.includes(type))new PerformanceObserver(list=>{for(const e of list.getEntries())if(active())emit(type.toUpperCase(),{duration:e.duration},undefined,e.startTime);}).observe({type,buffered:false});
  const flush=()=>{flushTargets();if(!queue.length)return;const t=clock(),batch=queue;queue=[];for(const [operation,stats] of shortSync)batch.push({name:'SHORT_SYNC_SUMMARY',operation,...stats,session,ts:clock(),thresholdMs:1});shortSync.clear();if(lastCost)batch.push(lastCost);const payload=JSON.stringify(batch);void sink.send({payload}).catch(()=>{drops+=batch.length;});lastCost={name:'DIAGNOSTIC_COST',ts:clock(),session,flushMs:clock()-t,emitMs:overhead,drops};overhead=0;performance.clearMarks();};

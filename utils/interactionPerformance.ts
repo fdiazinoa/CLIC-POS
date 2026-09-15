@@ -6,6 +6,7 @@ export type PosInteractionOperation =
   | 'ADD_TICKET_ITEM'
   | 'OPEN_TABLE'
   | 'CHANGE_TABLE'
+  | 'CLOSE_TABLE_MAP'
   | 'OPEN_SALE_SCREEN'
   | 'CHECKOUT_OPEN'
   | 'PAYMENT_CONFIRM';
@@ -23,18 +24,29 @@ export type PosInteractionStage =
   | 'FILTER_END'
   | 'SYNC_START'
   | 'SYNC_END'
-  | 'LOCAL_UNLOCK';
+  | 'LOCAL_UNLOCK'
+  | 'VISUAL_ACK'
+  | 'NAVIGATION_START'
+  | 'NAVIGATION_END'
+  | 'TABLE_MAP_UNMOUNT_START'
+  | 'TABLE_MAP_UNMOUNT_END'
+  | 'POS_UPDATE_START'
+  | 'POS_UPDATE_END'
+  | 'FIRST_FRAME_VISIBLE'
+  | 'FIRST_FRAME_INTERACTIVE';
 
 export interface PosInteractionTrace {
   id: string;
   operation: PosInteractionOperation;
   startedAt: number;
   stages: Partial<Record<PosInteractionStage, number>>;
-  durations: Partial<Record<'handler' | 'render' | 'sql' | 'filter' | 'sync' | 'inputToVisible' | 'inputToLocalUnlock', number>>;
+  durations: Partial<Record<'handler' | 'render' | 'sql' | 'filter' | 'sync' | 'navigation' | 'tableMapUnmount' | 'posUpdate' | 'inputToVisible' | 'inputToInteractive' | 'inputToLocalUnlock', number>>;
   renderCount: number;
   allocationsApprox: number;
   metadata?: Record<string, unknown>;
   renderTarget?: string;
+  longTasks: Array<{ startMs: number; durationMs: number }>;
+  memory: Array<{ stage: PosInteractionStage; usedJsHeapBytes?: number; totalJsHeapBytes?: number }>;
 }
 
 const MAX_TRACES = 300;
@@ -50,6 +62,15 @@ const pendingEmissions: Array<{
 
 const now = () => typeof performance !== 'undefined' ? performance.now() : Date.now();
 const round = (value: number) => Math.round(value * 100) / 100;
+const readMemory = (stage: PosInteractionStage) => {
+  if (typeof performance === 'undefined') return { stage };
+  const memory = (performance as Performance & { memory?: { usedJSHeapSize?: number; totalJSHeapSize?: number } }).memory;
+  return {
+    stage,
+    usedJsHeapBytes: memory?.usedJSHeapSize,
+    totalJsHeapBytes: memory?.totalJSHeapSize,
+  };
+};
 
 const flushEmissions = () => {
   emissionScheduled = false;
@@ -88,6 +109,9 @@ const updateDuration = (trace: PosInteractionTrace, stage: PosInteractionStage) 
     ['SQL_END', 'sql'],
     ['FILTER_END', 'filter'],
     ['SYNC_END', 'sync'],
+    ['NAVIGATION_END', 'navigation'],
+    ['TABLE_MAP_UNMOUNT_END', 'tableMapUnmount'],
+    ['POS_UPDATE_END', 'posUpdate'],
   ];
   for (const [endStage, durationName] of pairs) {
     if (stage !== endStage) continue;
@@ -95,8 +119,11 @@ const updateDuration = (trace: PosInteractionTrace, stage: PosInteractionStage) 
     const start = trace.stages[startStage];
     if (start !== undefined) trace.durations[durationName] = round(value - start);
   }
-  if (stage === 'RENDER_END') {
+  if (stage === 'RENDER_END' || stage === 'FIRST_FRAME_VISIBLE') {
     trace.durations.inputToVisible = round(value - trace.startedAt);
+  }
+  if (stage === 'FIRST_FRAME_INTERACTIVE') {
+    trace.durations.inputToInteractive = round(value - trace.startedAt);
   }
   if (stage === 'LOCAL_UNLOCK') {
     trace.durations.inputToLocalUnlock = round(value - trace.startedAt);
@@ -110,6 +137,9 @@ export const markInteractionStage = (trace: PosInteractionTrace | null | undefin
   // update or render must never replace the first marker and inflate the result.
   if (trace.stages[stage] !== undefined) return;
   trace.stages[stage] = now();
+  if (stage === 'INPUT_RECEIVED' || stage === 'FIRST_FRAME_VISIBLE' || stage === 'FIRST_FRAME_INTERACTIVE') {
+    trace.memory.push(readMemory(stage));
+  }
   updateDuration(trace, stage);
   emit(trace, stage);
 };
@@ -128,6 +158,8 @@ export const beginPosInteraction = (
     renderCount: 0,
     allocationsApprox: 0,
     metadata,
+    longTasks: [],
+    memory: [readMemory('INPUT_RECEIVED')],
   };
   traces.push(trace);
   if (traces.length > MAX_TRACES) traces.splice(0, traces.length - MAX_TRACES);
@@ -218,6 +250,39 @@ export const getPosInteractionReport = () => {
 export const getLatestPosInteraction = (operation: PosInteractionOperation) =>
   [...traces].reverse().find(trace => trace.operation === operation);
 
+export const markInteractionVisibleAndInteractive = (
+  trace: PosInteractionTrace | null | undefined,
+  onInteractive?: () => void,
+) => {
+  if (!trace || typeof window === 'undefined') return;
+  window.requestAnimationFrame(() => {
+    markInteractionStage(trace, 'VISUAL_ACK');
+    markInteractionStage(trace, 'FIRST_FRAME_VISIBLE');
+    // The DOM has committed and the frame is ready to paint. Probe the next
+    // task instead of waiting another display frame; event handlers are ready
+    // as soon as control returns to the browser event loop.
+    window.setTimeout(() => {
+      markInteractionStage(trace, 'FIRST_FRAME_INTERACTIVE');
+      onInteractive?.();
+    }, 0);
+  });
+};
+
+if (typeof PerformanceObserver !== 'undefined' && PerformanceObserver.supportedEntryTypes?.includes('longtask')) {
+  try {
+    new PerformanceObserver(list => {
+      const trace = getLatestPosInteraction('CLOSE_TABLE_MAP');
+      if (!trace || trace.stages.FIRST_FRAME_INTERACTIVE !== undefined) return;
+      for (const entry of list.getEntries()) {
+        if (entry.startTime + entry.duration < trace.startedAt) continue;
+        trace.longTasks.push({ startMs: round(entry.startTime - trace.startedAt), durationMs: round(entry.duration) });
+      }
+    }).observe({ entryTypes: ['longtask'] });
+  } catch {
+    // Capability is optional on older Android WebViews.
+  }
+}
+
 declare global {
   interface Window {
     __CLIC_POS_PERFORMANCE__?: {
@@ -231,7 +296,7 @@ declare global {
 if (typeof window !== 'undefined') {
   window.__CLIC_POS_PERFORMANCE__ = {
     getReport: getPosInteractionReport,
-    getTraces: () => traces.map(trace => ({ ...trace, stages: { ...trace.stages }, durations: { ...trace.durations } })),
+    getTraces: () => traces.map(trace => ({ ...trace, stages: { ...trace.stages }, durations: { ...trace.durations }, longTasks: [...trace.longTasks], memory: [...trace.memory] })),
     clear: () => {
       traces.splice(0, traces.length);
       pendingByRenderTarget.clear();

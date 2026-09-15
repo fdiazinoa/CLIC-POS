@@ -132,14 +132,21 @@ test('la impresión Android no bloquea ventas ni el bridge operativo de mesas', 
   assert.match(bridgeSource, /"printEscPos", "printEscpos", "printRaw", "printHtml", "print" -> printBridgeExecutor/);
 });
 
-test('cerrar el mapa confirma el toque antes de montar ventas de forma concurrente', () => {
+test('cerrar el mapa confirma el toque antes de mostrar el POS persistente', () => {
   const tableMapStart = appSource.indexOf("case 'TABLE_MAP':");
   const tableDesignerStart = appSource.indexOf("case 'TABLE_DESIGNER':", tableMapStart);
   const tableMapSource = appSource.slice(tableMapStart, tableDesignerStart);
+  const closeHandlerStart = appSource.indexOf('const handleCloseTableMap');
+  const closeHandlerEnd = appSource.indexOf('const validateSupervisorPin', closeHandlerStart);
+  const closeHandlerSource = appSource.slice(closeHandlerStart, closeHandlerEnd);
 
-  assert.match(tableMapSource, /setTableMapExitPending\(true\)/);
-  assert.match(tableMapSource, /requestAnimationFrame\(\(\) => handleViewChange\('POS'\)\)/);
+  assert.match(tableMapSource, /onClick=\{handleCloseTableMap\}/);
   assert.match(tableMapSource, /Abriendo venta…/);
+  assert.match(closeHandlerSource, /setTableMapExitPending\(true\)/);
+  assert.doesNotMatch(closeHandlerSource, /requestAnimationFrame\(\(\) => \{/);
+  assert.match(closeHandlerSource, /markInteractionStage\(trace, 'NAVIGATION_START'\)/);
+  assert.match(closeHandlerSource, /setCurrentView\('POS'\)/);
+  assert.match(appSource, /data-pos-persistent-host="true"/);
   assert.doesNotMatch(tableMapSource, /onClick=\{\(\) => setCurrentView\('POS'\)\}/);
 });
 

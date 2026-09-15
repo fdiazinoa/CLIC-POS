@@ -12,10 +12,17 @@ import {
   getLatestPosInteraction,
   markInteractionStage,
   markInteractionStateUpdate,
+  markInteractionVisibleAndInteractive,
   markRenderEnd,
   markRenderStart,
   measureInteractionStage,
 } from './utils/interactionPerformance';
+import {
+  beginOperatorUiTransition,
+  completeOperatorUiTransition,
+  waitForOperatorUiTransition,
+  type OperatorUiTransitionToken,
+} from './utils/operatorUiTransition';
 
 import React, { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef } from 'react';
 import { Capacitor } from '@capacitor/core';
@@ -1845,6 +1852,61 @@ const App: React.FC = () => {
   );
 };
 
+type PersistentPOSHostProps = React.ComponentProps<typeof POSInterface> & {
+  visible: boolean;
+  onInteractive?: () => void;
+};
+const MemoizedPOSInterface = React.memo(POSInterface);
+
+/**
+ * Keeps the sales surface mounted while the table map is in front. Function
+ * props are proxied through refs so App-level navigation renders do not defeat
+ * the memo boundary, while handlers always execute their latest closure.
+ */
+const PersistentPOSHost: React.FC<PersistentPOSHostProps> = ({ visible, onInteractive, ...incomingProps }) => {
+  const latestPropsRef = useRef(incomingProps);
+  const callbackProxiesRef = useRef(new Map<string, (...args: unknown[]) => unknown>());
+  latestPropsRef.current = incomingProps;
+
+  const stableProps = Object.fromEntries(Object.entries(incomingProps).map(([key, value]) => {
+    if (typeof value !== 'function') return [key, value];
+    let proxy = callbackProxiesRef.current.get(key);
+    if (!proxy) {
+      proxy = (...args: unknown[]) => {
+        const latest = (latestPropsRef.current as Record<string, unknown>)[key];
+        return typeof latest === 'function' ? latest(...args) : undefined;
+      };
+      callbackProxiesRef.current.set(key, proxy);
+    }
+    return [key, proxy];
+  })) as React.ComponentProps<typeof POSInterface>;
+
+  useLayoutEffect(() => {
+    if (!visible) return;
+    const trace = getLatestPosInteraction('CLOSE_TABLE_MAP');
+    if (!trace || trace.stages.FIRST_FRAME_INTERACTIVE !== undefined) return;
+    markInteractionStage(trace, 'NAVIGATION_END');
+    markInteractionStage(trace, 'POS_UPDATE_END');
+    markInteractionVisibleAndInteractive(trace, onInteractive);
+  }, [onInteractive, visible]);
+
+  return (
+    <div className={visible ? 'h-full' : 'hidden'} aria-hidden={!visible} data-pos-persistent-host="true">
+      <MemoizedPOSInterface {...stableProps} />
+    </div>
+  );
+};
+
+const TableMapLifecycleBoundary: React.FC<React.PropsWithChildren> = ({ children }) => {
+  useLayoutEffect(() => () => {
+    const trace = getLatestPosInteraction('CLOSE_TABLE_MAP');
+    if (!trace || trace.stages.TABLE_MAP_UNMOUNT_END !== undefined) return;
+    markInteractionStage(trace, 'TABLE_MAP_UNMOUNT_START');
+    markInteractionStage(trace, 'TABLE_MAP_UNMOUNT_END');
+  }, []);
+  return <>{children}</>;
+};
+
 const AppContent: React.FC = () => {
   markRenderStart('APP_VIEW');
   const { clearSecurityState, setSupervisorPinValidator } = useKioskSecurityContext();
@@ -1865,6 +1927,7 @@ const AppContent: React.FC = () => {
     return isVisorMode ? 'VISOR' : 'LOGIN';
   });
   const [tableMapExitPending, setTableMapExitPending] = useState(false);
+  const tableMapExitTransitionRef = useRef<OperatorUiTransitionToken | null>(null);
   const currentViewRef = useRef<ViewState>(currentView);
   const currentUserRef = useRef<User | null>(null);
   const [scanTargetTicketId, setScanTargetTicketId] = useState<string | null>(null); // NEW: Auto-select ticket from scan
@@ -3446,6 +3509,9 @@ const AppContent: React.FC = () => {
     const requestConditionalTerminalConfig = async (
       reason: 'startup' | 'connection_restored' | 'safety_check',
     ) => {
+      const deferred = await waitForOperatorUiTransition();
+      if (deferred) console.info('[SYNC_DEFERRED_FOR_UI]', { source: `terminal_config:${reason}` });
+      if (disposed) return;
       const erpTerminalId =
         currentTerminal.config?.erpTerminalId
         || loadSyncProfile().erpTerminalId
@@ -3662,6 +3728,9 @@ const AppContent: React.FC = () => {
 
     syncTriggerCoordinator.configure(async ({ reasons, collections, imageOnly, domainVersions }) => {
       if (disposed || !navigator.onLine || isPosOnlyCloudStagingTarget()) return;
+      const deferred = await waitForOperatorUiTransition();
+      if (deferred) console.info('[SYNC_DEFERRED_FOR_UI]', { source: 'sync_trigger', reasons });
+      if (disposed || !navigator.onLine) return;
       const needsLifecycle = reasons.some((reason) => lifecycleReasons.has(reason));
       syncMetrics.increment('polls_total');
       syncMetrics.markPullStarted();
@@ -3767,8 +3836,12 @@ const AppContent: React.FC = () => {
         if (disposed) return;
         if (navigator.onLine) {
           try {
-            await triggerErpSyncOutbox('periodic');
-            outboxPollFailures = 0;
+            const deferred = await waitForOperatorUiTransition();
+            if (deferred) console.info('[SYNC_DEFERRED_FOR_UI]', { source: 'periodic_outbox' });
+            if (!disposed && navigator.onLine) {
+              await triggerErpSyncOutbox('periodic');
+              outboxPollFailures = 0;
+            }
           } catch (error) {
             outboxPollFailures += 1;
             console.warn('[ERP SYNC] periodic outbox pull failed; retrying with backoff.', {
@@ -5979,6 +6052,27 @@ const AppContent: React.FC = () => {
       setCurrentView(view);
     });
   };
+
+  const handleCloseTableMap = () => {
+    if (tableMapExitPending) return;
+    const trace = beginPosInteraction('CLOSE_TABLE_MAP', { posLifecycle: 'retained' });
+    tableMapExitTransitionRef.current = beginOperatorUiTransition('CLOSE_TABLE_MAP');
+    setTableMapExitPending(true);
+    markInteractionStage(trace, 'NAVIGATION_START');
+    markInteractionStage(trace, 'POS_UPDATE_START');
+    markInteractionStateUpdate(trace, 1);
+    // POS is already mounted, so this synchronous commit only removes the
+    // overlay. Waiting for a requestAnimationFrame here needlessly adds one
+    // whole frame before React can expose the retained sales surface.
+    setViewData(undefined);
+    setCurrentView('POS');
+    markInteractionStage(trace, 'HANDLER_END');
+  };
+
+  const handleTableMapCloseInteractive = useCallback(() => {
+    completeOperatorUiTransition(tableMapExitTransitionRef.current);
+    tableMapExitTransitionRef.current = null;
+  }, []);
 
   const validateSupervisorPin = React.useCallback((pin: string): boolean => {
     const cleanedPin = pin.trim();
@@ -11086,8 +11180,8 @@ const AppContent: React.FC = () => {
     return finalizedCreditNote;
   };
 
-  const renderView = () => {
-    switch (currentView) {
+  const renderView = (view: ViewState = currentView) => {
+    switch (view) {
       case 'ACTIVATION':
         return (
           <ActivationScreen
@@ -11318,17 +11412,11 @@ const AppContent: React.FC = () => {
           )
         );
         return (
+          <TableMapLifecycleBoundary>
           <div className="h-screen bg-slate-950 overflow-hidden relative">
             <button
               type="button"
-              onClick={() => {
-                if (tableMapExitPending) return;
-                // Paint acknowledgement before mounting the heavier sales
-                // catalog. The transition lets React yield to input on slower
-                // restaurant terminals instead of presenting a frozen map.
-                setTableMapExitPending(true);
-                window.requestAnimationFrame(() => handleViewChange('POS'));
-              }}
+              onClick={handleCloseTableMap}
               disabled={tableMapExitPending}
               aria-busy={tableMapExitPending}
               className="absolute left-4 top-4 z-50 rounded-2xl border border-white/15 bg-slate-950/60 px-4 py-2.5 text-sm font-black text-slate-100 shadow-[0_16px_40px_rgba(2,6,23,0.55)] backdrop-blur-xl hover:bg-white/[0.14] active:scale-[0.98]"
@@ -11509,6 +11597,7 @@ const AppContent: React.FC = () => {
               />
             </div>
           </div>
+          </TableMapLifecycleBoundary>
         );
       }
 
@@ -11576,7 +11665,9 @@ const AppContent: React.FC = () => {
         }
         if (!currentUser) { setCurrentView('LOGIN'); return null; }
         return (
-          <POSInterface
+          <PersistentPOSHost
+            visible={currentView === 'POS'}
+            onInteractive={handleTableMapCloseInteractive}
             config={config}
             currentUser={currentUser}
             roles={roles}
@@ -12884,7 +12975,18 @@ const AppContent: React.FC = () => {
     }
 
     const role = getCurrentDeviceRole();
-    const content = renderView();
+    const content = currentView === 'POS' || currentView === 'TABLE_MAP'
+      ? (
+        <div className="h-screen overflow-hidden relative" data-pos-table-shell="true">
+          {renderView('POS')}
+          {currentView === 'TABLE_MAP' ? (
+            <div className="absolute inset-0 z-40" data-table-map-overlay="true">
+              {renderView('TABLE_MAP')}
+            </div>
+          ) : null}
+        </div>
+      )
+      : renderView();
 
     // Handle escape hatch for kiosk modes
     const handleEscapeHatch = async () => {

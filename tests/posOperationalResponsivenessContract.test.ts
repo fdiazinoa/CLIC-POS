@@ -3,6 +3,10 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 const appSource = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
+const interactionPerformanceSource = readFileSync(
+  new URL('../utils/interactionPerformance.ts', import.meta.url),
+  'utf8',
+);
 const nativeBridgeSource = readFileSync(
   new URL('../native-stubs/android/ClicPOSNativePrinterBridge.kt', import.meta.url),
   'utf8',
@@ -13,6 +17,10 @@ const backgroundSyncSource = readFileSync(
 );
 const printQueueSource = readFileSync(
   new URL('../services/printer/OfflinePrintQueueService.ts', import.meta.url),
+  'utf8',
+);
+const operatorUiTransitionSource = readFileSync(
+  new URL('../utils/operatorUiTransition.ts', import.meta.url),
   'utf8',
 );
 
@@ -26,15 +34,48 @@ test('Android printing never uses the synchronous WebView bridge path', () => {
   assert.match(nativeBridgeSource, /"printEscPos", "printEscpos", "printRaw", "printHtml", "print" -> printBridgeExecutor/);
 });
 
-test('closing the table map acknowledges input before concurrent POS rendering', () => {
+test('closing the table map acknowledges input and records visible/interactable frames', () => {
   const tableMapStart = appSource.indexOf("case 'TABLE_MAP':");
   const tableDesignerStart = appSource.indexOf("case 'TABLE_DESIGNER':", tableMapStart);
   const tableMapSource = appSource.slice(tableMapStart, tableDesignerStart);
+  const closeHandlerStart = appSource.indexOf('const handleCloseTableMap');
+  const closeHandlerEnd = appSource.indexOf('const validateSupervisorPin', closeHandlerStart);
+  const closeHandlerSource = appSource.slice(closeHandlerStart, closeHandlerEnd);
 
-  assert.match(tableMapSource, /setTableMapExitPending\(true\)/);
-  assert.match(tableMapSource, /requestAnimationFrame\(\(\) => handleViewChange\('POS'\)\)/);
+  assert.match(tableMapSource, /onClick=\{handleCloseTableMap\}/);
   assert.match(tableMapSource, /Abriendo venta…/);
+  assert.match(closeHandlerSource, /beginPosInteraction\('CLOSE_TABLE_MAP'/);
+  assert.match(closeHandlerSource, /setTableMapExitPending\(true\)/);
+  assert.doesNotMatch(closeHandlerSource, /requestAnimationFrame\(\(\) => \{/);
+  assert.match(closeHandlerSource, /markInteractionStage\(trace, 'NAVIGATION_START'\)/);
+  assert.match(closeHandlerSource, /setCurrentView\('POS'\)/);
+  assert.match(interactionPerformanceSource, /markInteractionStage\(trace, 'VISUAL_ACK'\)/);
+  assert.match(interactionPerformanceSource, /window\.setTimeout\(\(\) => \{/);
   assert.doesNotMatch(tableMapSource, /onClick=\{\(\) => setCurrentView\('POS'\)\}/);
+});
+
+test('the table map overlays a retained memoized POS instead of remounting it', () => {
+  const layoutStart = appSource.indexOf('const renderWithLayout');
+  const layoutSource = appSource.slice(layoutStart, appSource.indexOf('if (!isDataLoaded)', layoutStart));
+
+  assert.match(appSource, /const MemoizedPOSInterface = React\.memo\(POSInterface\)/);
+  assert.match(appSource, /data-pos-persistent-host="true"/);
+  assert.match(layoutSource, /currentView === 'POS' \|\| currentView === 'TABLE_MAP'/);
+  assert.match(layoutSource, /\{renderView\('POS'\)\}/);
+  assert.match(layoutSource, /data-table-map-overlay="true"/);
+});
+
+test('automatic synchronization waits for the retained POS to become interactive', () => {
+  const closeHandlerStart = appSource.indexOf('const handleCloseTableMap');
+  const closeHandlerEnd = appSource.indexOf('const validateSupervisorPin', closeHandlerStart);
+  const closeHandlerSource = appSource.slice(closeHandlerStart, closeHandlerEnd);
+
+  assert.match(closeHandlerSource, /beginOperatorUiTransition\('CLOSE_TABLE_MAP'\)/);
+  assert.match(closeHandlerSource, /completeOperatorUiTransition\(tableMapExitTransitionRef\.current\)/);
+  assert.match(appSource, /syncTriggerCoordinator\.configure\(async[\s\S]*?const deferred = await waitForOperatorUiTransition\(\)/);
+  assert.match(appSource, /source: 'periodic_outbox'/);
+  assert.match(appSource, /source: `terminal_config:\$\{reason\}`/);
+  assert.match(operatorUiTransitionSource, /DEFAULT_MAX_HOLD_MS = 1_500/);
 });
 
 test('background queues yield between jobs and respect active operator input', () => {
