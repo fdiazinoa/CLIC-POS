@@ -230,6 +230,8 @@ export interface POSInterfaceProps {
    suppressProductInputUntilMs?: number;
 }
 
+const EMPTY_PRODUCT_PRICES: ProductPrice[] = [];
+
 type ProductionAreaConfig = {
    id: string;
    name?: string;
@@ -1160,7 +1162,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    onKioskPay,
    internalSequences,
    rooms = [],
-   productPrices: externalProductPrices = [],
+   productPrices: externalProductPrices = EMPTY_PRODUCT_PRICES,
    suppressProductInputUntilMs = 0,
 }) => {
    markRenderStart('POS_INTERACTION_VIEW');
