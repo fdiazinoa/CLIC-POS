@@ -20,9 +20,9 @@ import {
 import {
   beginOperatorUiTransition,
   completeOperatorUiTransition,
-  waitForOperatorUiTransition,
   type OperatorUiTransitionToken,
 } from './utils/operatorUiTransition';
+import { waitForBackgroundSyncWindow } from './utils/backgroundSyncScheduler';
 
 import React, { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef } from 'react';
 import { Capacitor } from '@capacitor/core';
@@ -1910,10 +1910,10 @@ const PersistentPOSHost: React.FC<PersistentPOSHostProps> = ({ visible, onIntera
   return (
     <div
       ref={hostRef}
-      className={`h-full ${visible ? '' : 'pointer-events-none select-none'}`}
+      className={`h-full ${visible ? 'visible' : 'invisible pointer-events-none select-none'}`}
       aria-hidden={!visible}
       data-pos-persistent-host="true"
-      style={{ contain: 'layout paint style', transform: 'translateZ(0)', willChange: 'transform' }}
+      style={{ contain: 'layout style' }}
     >
       <MemoizedPOSInterface {...stableProps} />
     </div>
@@ -3532,7 +3532,7 @@ const AppContent: React.FC = () => {
     const requestConditionalTerminalConfig = async (
       reason: 'startup' | 'connection_restored' | 'safety_check',
     ) => {
-      const deferred = await waitForOperatorUiTransition();
+      const deferred = await waitForBackgroundSyncWindow();
       if (deferred) console.info('[SYNC_DEFERRED_FOR_UI]', { source: `terminal_config:${reason}` });
       if (disposed) return;
       const erpTerminalId =
@@ -3556,6 +3556,7 @@ const AppContent: React.FC = () => {
             forceRemoteFetch: false,
             forceFullCatalog: false,
             supplementalMode: 'background',
+            deferDuringSale: true,
           });
           if (!refreshedConfig) {
             throw new Error('La configuración condicional no pudo aplicarse.');
@@ -3751,7 +3752,7 @@ const AppContent: React.FC = () => {
 
     syncTriggerCoordinator.configure(async ({ reasons, collections, imageOnly, domainVersions }) => {
       if (disposed || !navigator.onLine || isPosOnlyCloudStagingTarget()) return;
-      const deferred = await waitForOperatorUiTransition();
+      const deferred = await waitForBackgroundSyncWindow();
       if (deferred) console.info('[SYNC_DEFERRED_FOR_UI]', { source: 'sync_trigger', reasons });
       if (disposed || !navigator.onLine) return;
       const needsLifecycle = reasons.some((reason) => lifecycleReasons.has(reason));
@@ -3795,6 +3796,7 @@ const AppContent: React.FC = () => {
               forceRemoteFetch: true,
               forceFullCatalog: false,
               dispatchEvent: true,
+              deferDuringSale: true,
             });
             await syncManager.syncAllCatalogs();
             authenticatedRequestSucceeded = true;
@@ -3859,7 +3861,7 @@ const AppContent: React.FC = () => {
         if (disposed) return;
         if (navigator.onLine) {
           try {
-            const deferred = await waitForOperatorUiTransition();
+            const deferred = await waitForBackgroundSyncWindow();
             if (deferred) console.info('[SYNC_DEFERRED_FOR_UI]', { source: 'periodic_outbox' });
             if (!disposed && navigator.onLine) {
               await triggerErpSyncOutbox('periodic');
@@ -7311,6 +7313,7 @@ const AppContent: React.FC = () => {
     };
 
     const flushCatalogRefresh = async () => {
+      await waitForBackgroundSyncWindow();
       const startedAt = posCatalogDebugNow();
       catalogRefreshTimer = null;
 
@@ -7378,6 +7381,7 @@ const AppContent: React.FC = () => {
     };
 
     const handleSyncUpdate = async (event: Event) => {
+      await waitForBackgroundSyncWindow();
       const startedAt = posCatalogDebugNow();
       const collection = event.type.replace('Updated', '');
       console.log(`🔔 App: Sync update received for ${collection}. Refreshing state...`);
@@ -7444,6 +7448,7 @@ const AppContent: React.FC = () => {
     };
 
     const applyFiscalCatalogRefresh = async () => {
+      await waitForBackgroundSyncWindow();
       const [freshTaxes, freshProducts] = await Promise.all([
         db.get('taxes' as any) as Promise<TaxDefinition[]>,
         db.get('products') as Promise<Product[]>,
@@ -7509,6 +7514,7 @@ const AppContent: React.FC = () => {
     const handleConfigUpdated = async (event: Event) => {
       const incomingConfig = (event as CustomEvent<BusinessConfig>)?.detail;
       if (!incomingConfig || Array.isArray(incomingConfig) || !incomingConfig.terminals) return;
+      await waitForBackgroundSyncWindow();
 
       // Detect if we actually need a full sync re-init
       const sanitize = (c: any) => {

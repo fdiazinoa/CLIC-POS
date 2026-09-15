@@ -5,6 +5,7 @@ import { apiSyncAdapter } from './ApiSyncAdapter';
 import { permissionService } from './PermissionService';
 import { InventoryLedgerEntry, CashMovement, ZReport, SyncStatus } from '../../types';
 import { isPosSaleActive, POS_SALE_ACTIVITY_EVENT } from '../../utils/posSaleActivity';
+import { waitForBackgroundSyncWindow, yieldBackgroundSyncChunk } from '../../utils/backgroundSyncScheduler';
 import { syncPolicy } from './SyncProfile';
 import { authenticatedActivityTracker } from './AuthenticatedActivityTracker';
 import { syncMetrics } from './SyncMetrics';
@@ -62,7 +63,7 @@ class BackgroundSyncManager {
      * guarantees that a pending sale/table input gets a chance to run first.
      */
     private yieldToOperatorUi(): Promise<void> {
-        return new Promise(resolve => window.setTimeout(resolve, 0));
+        return yieldBackgroundSyncChunk();
     }
 
     /**
@@ -328,6 +329,9 @@ class BackgroundSyncManager {
      * Main sync loop
      */
     async sync() {
+        if (this.isProcessing || !navigator.onLine || isPosSaleActive()) return;
+        const deferred = await waitForBackgroundSyncWindow();
+        if (deferred) console.info('[SYNC_DEFERRED_FOR_UI]', { source: 'operational_push' });
         if (this.isProcessing || !navigator.onLine || isPosSaleActive()) return;
         const operationalTarget = syncPolicy.resolve();
         if (operationalTarget.kind === 'NONE' || !operationalTarget.canPushOperations) {

@@ -7334,9 +7334,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                </div>
 
                <div className="pos-catalog-sync flex h-9 md:h-auto items-center gap-2 px-2.5 md:px-4 py-1.5 md:py-2 rounded-xl md:rounded-2xl bg-gray-50 border border-gray-100 shadow-inner shrink-0">
-                  {syncState.isSyncing ? (
-                     <RefreshCw size={18} className="text-amber-500 animate-spin" />
-                  ) : !navigator.onLine ? (
+                  {!navigator.onLine ? (
                      <CloudOff size={18} className="text-red-500" />
                   ) : (
                      <Cloud size={18} className={syncState.hasError || syncState.pendingCount > 0 || syncState.blockedCount > 0 ? 'text-amber-500' : 'text-emerald-500'} />
@@ -7344,17 +7342,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   <div className="flex flex-col leading-none">
                      <span className="text-[9px] font-black text-gray-400 uppercase tracking-widest hidden md:block">Sincronización</span>
                      <span className={`text-[10px] font-bold ${
-                        syncState.isSyncing
-                           ? 'text-amber-600'
-                           : !navigator.onLine
+                        !navigator.onLine
                               ? 'text-red-600'
                               : syncState.hasError || syncState.pendingCount > 0 || syncState.blockedCount > 0
                                  ? 'text-amber-600'
                                  : 'text-emerald-600'
                      }`}>
-                        {syncState.isSyncing
-                           ? 'Sincronizando'
-                           : !navigator.onLine
+                        {!navigator.onLine
                               ? 'Offline'
                               : syncState.blockedCount > 0
                                  ? `Bloqueado · ${syncState.blockedCount}`
@@ -7586,7 +7580,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         <ChefHat size={18} /><span>Cocina</span>
                      </button>
                      <button type="button" aria-pressed={rightSidebarTab === 'ACTIONS'} onClick={() => setRightSidebarTab(tab => tab === 'ACTIONS' ? 'CART' : 'ACTIONS')} className="flex min-h-11 items-center justify-center gap-2 rounded-xl bg-slate-800 px-2 text-xs font-black text-white">
-                        <span role="status" aria-label={!navigator.onLine ? 'Sin conexión' : syncState.isSyncing ? 'Sincronizando' : syncState.hasError || syncState.pendingCount > 0 || syncState.blockedCount > 0 ? 'Sincronización pendiente' : 'Online'} className={`h-2 w-2 shrink-0 rounded-full ${!navigator.onLine ? 'bg-red-400' : syncState.isSyncing || syncState.hasError || syncState.pendingCount > 0 || syncState.blockedCount > 0 ? 'bg-amber-400' : 'bg-emerald-400'}`} />
+                        <span role="status" aria-label={!navigator.onLine ? 'Sin conexión' : syncState.hasError || syncState.pendingCount > 0 || syncState.blockedCount > 0 ? 'Sincronización pendiente' : 'Online'} className={`h-2 w-2 shrink-0 rounded-full ${!navigator.onLine ? 'bg-red-400' : syncState.hasError || syncState.pendingCount > 0 || syncState.blockedCount > 0 ? 'bg-amber-400' : 'bg-emerald-400'}`} />
                         <span>{rightSidebarTab === 'ACTIONS' ? 'Ver pedido' : 'Opciones'}</span>
                      </button>
                   </nav>
