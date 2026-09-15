@@ -1,7 +1,9 @@
 import WebSocket from 'ws';
 
 const endpoint = process.env.CLIC_POS_CDP_URL || 'http://127.0.0.1:9222/json';
-const requestedCycles = Number(process.argv[2] || 20);
+const args = process.argv.slice(2);
+const requestedCycles = Number(args.find(argument => /^\d+$/.test(argument)) || 20);
+const offline = args.includes('--offline');
 const pages = await (await fetch(endpoint)).json();
 const page = pages.find(candidate => candidate.type === 'page' && candidate.url?.startsWith('https://localhost'));
 if (!page?.webSocketDebuggerUrl) throw new Error(`No CLIC POS WebView found at ${endpoint}`);
@@ -114,13 +116,30 @@ const measureInPage = async cyclesRequested => {
 };
 
 try {
+  if (offline) {
+    await call('Network.enable');
+    await call('Network.emulateNetworkConditions', {
+      offline: true,
+      latency: 0,
+      downloadThroughput: -1,
+      uploadThroughput: -1,
+    });
+  }
   const result = await call('Runtime.evaluate', {
     expression: `(${measureInPage.toString()})(${JSON.stringify(requestedCycles)})`,
     awaitPromise: true,
     returnByValue: true,
   });
   if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text);
-  process.stdout.write(`${JSON.stringify(result.result.value, null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify({ scenario: offline ? 'sync-transport-offline' : 'sync-active', ...result.result.value }, null, 2)}\n`);
 } finally {
+  if (offline) {
+    await call('Network.emulateNetworkConditions', {
+      offline: false,
+      latency: 0,
+      downloadThroughput: -1,
+      uploadThroughput: -1,
+    });
+  }
   socket.close();
 }
