@@ -23,6 +23,10 @@ const operatorUiTransitionSource = readFileSync(
   new URL('../utils/operatorUiTransition.ts', import.meta.url),
   'utf8',
 );
+const backgroundSyncSchedulerSource = readFileSync(
+  new URL('../utils/backgroundSyncScheduler.ts', import.meta.url),
+  'utf8',
+);
 
 test('Android printing never uses the synchronous WebView bridge path', () => {
   for (const method of ['printEscPos', 'printEscpos', 'printRaw', 'printHtml', 'print']) {
@@ -67,8 +71,9 @@ test('the table map overlays a retained memoized POS instead of remounting it', 
   const persistentHostEnd = appSource.indexOf('const TableMapLifecycleBoundary', persistentHostStart);
   const persistentHostSource = appSource.slice(persistentHostStart, persistentHostEnd);
   assert.doesNotMatch(persistentHostSource, /visible \? 'h-full' : 'hidden'/);
-  assert.match(persistentHostSource, /pointer-events-none select-none/);
-  assert.match(persistentHostSource, /contain: 'layout paint style'/);
+  assert.match(persistentHostSource, /invisible pointer-events-none select-none/);
+  assert.match(persistentHostSource, /contain: 'layout style'/);
+  assert.doesNotMatch(persistentHostSource, /translateZ|willChange/);
   assert.match(persistentHostSource, /setAttribute\('inert', ''\)/);
 });
 
@@ -94,10 +99,13 @@ test('automatic synchronization waits for the retained POS to become interactive
 
   assert.match(closeHandlerSource, /beginOperatorUiTransition\('CLOSE_TABLE_MAP'\)/);
   assert.match(closeHandlerSource, /completeOperatorUiTransition\(tableMapExitTransitionRef\.current\)/);
-  assert.match(appSource, /syncTriggerCoordinator\.configure\(async[\s\S]*?const deferred = await waitForOperatorUiTransition\(\)/);
+  assert.match(appSource, /syncTriggerCoordinator\.configure\(async[\s\S]*?const deferred = await waitForBackgroundSyncWindow\(\)/);
   assert.match(appSource, /source: 'periodic_outbox'/);
   assert.match(appSource, /source: `terminal_config:\$\{reason\}`/);
   assert.match(operatorUiTransitionSource, /DEFAULT_MAX_HOLD_MS = 1_500/);
+  assert.match(backgroundSyncSchedulerSource, /await waitForOperatorUiTransition\(\)/);
+  assert.match(backgroundSyncSchedulerSource, /await waitForPosSaleIdle\(\)/);
+  assert.match(backgroundSyncSchedulerSource, /requestIdleCallback/);
 });
 
 test('background queues yield between jobs and respect active operator input', () => {

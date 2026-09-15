@@ -70,7 +70,8 @@ import { DEVICE_SUPERSEDED_MESSAGE, dispatchDeviceRevoked } from '../../utils/de
 import { isConfigPushV2Enabled } from '../../utils/erpSyncLifecycle';
 import { syncTriggerCoordinator } from './SyncTriggerCoordinator';
 import { normalizeCanonicalErpTerminalId, resolveCanonicalErpTerminalId } from './terminalIdentity';
-import { isPosSaleActive, waitForPosSaleIdle } from '../../utils/posSaleActivity';
+import { isPosSaleActive } from '../../utils/posSaleActivity';
+import { waitForBackgroundSyncWindow } from '../../utils/backgroundSyncScheduler';
 import { POS_MASTER_OPERATIONAL_CATALOGS } from '../../utils/posMasterCatalogContract';
 import {
     isClientTerminalMode,
@@ -2175,7 +2176,7 @@ class SyncManager {
         }
 
         if (options?.deferDuringSale) {
-            await waitForPosSaleIdle();
+            await waitForBackgroundSyncWindow();
         }
         if (this.isDisabled || this.terminalManifestSyncInFlight || !navigator.onLine) {
             return null;
@@ -2230,7 +2231,7 @@ class SyncManager {
                 return null;
             }
             if (options?.deferDuringSale) {
-                await waitForPosSaleIdle();
+                await waitForBackgroundSyncWindow();
             }
             this.recordSnapshotDiagnostics('manifest', manifest.snapshot_meta);
 
@@ -3205,7 +3206,7 @@ class SyncManager {
         try {
         if (this.isDisabled) return null;
         if (options?.deferDuringSale) {
-            await waitForPosSaleIdle();
+            await waitForBackgroundSyncWindow();
         }
         const refreshStartedAt = posCatalogDebugNow();
 
@@ -3457,7 +3458,7 @@ class SyncManager {
         }
 
         if (options?.deferDuringSale) {
-            await waitForPosSaleIdle();
+            await waitForBackgroundSyncWindow();
         }
 
         // Numeric master ranges are independent from the generic document collections.
@@ -3633,7 +3634,7 @@ class SyncManager {
         const runSupplementalMasterData = async () => {
             try {
                 if (options?.deferDuringSale) {
-                    await waitForPosSaleIdle();
+                    await waitForBackgroundSyncWindow();
                 }
                 if (options?.persist !== false) {
                     try { await this.refreshErpPaymentMethods(); }
@@ -5756,6 +5757,8 @@ class SyncManager {
         }
     ): Promise<number> {
         if (this.isDisabled) return 0;
+        await waitForBackgroundSyncWindow();
+        if (this.isDisabled) return 0;
         const target = syncPolicy.resolve();
         if (target.kind === 'POS_CLOUD_STAGING') {
             logSkippedNonMasterPull(collection, target.kind, 'POS_CLOUD_STAGING_PULL_BLOCKED');
@@ -5855,6 +5858,10 @@ class SyncManager {
                     cursor: timestampCursor,
                     limit: 500,
                 } : undefined);
+	            // The request itself is asynchronous; the operator may have begun
+	            // a sale while it was in flight. Do not parse/apply the payload in
+	            // the same busy window as that interaction.
+	            await waitForBackgroundSyncWindow();
 	            const { items, serverTime, isFullDownload, latestVersion, cursor, nextCursor, lastSyncedAt, hasMore } = response;
 	            let metadataCache: any = undefined;
 

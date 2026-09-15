@@ -31,18 +31,26 @@ test('startup manifest is owned by the ERP lifecycle without a duplicate boot ca
 
 test('background config and print retries defer while POS input is active', () => {
   assert.match(syncSource, /deferDuringSale\?: boolean/);
-  assert.match(syncSource, /if \(options\?\.deferDuringSale\) \{\s*await waitForPosSaleIdle\(\);/);
+  assert.match(syncSource, /if \(options\?\.deferDuringSale\) \{\s*await waitForBackgroundSyncWindow\(\);/);
   assert.match(syncSource, /syncTerminalManifestInBackground[\s\S]*deferDuringSale: true/);
   assert.match(syncSource, /lastBackgroundTerminalManifestSyncAt < 60_000/);
   assert.match(appSource, /buildTerminalConfigRefreshRequest\(detail\)[\s\S]*deferDuringSale: true/);
   assert.match(appSource, /if \(!isDataLoaded \|\| isPosSaleActive\(\)\) return;/);
   assert.match(appSource, /addEventListener\(POS_SALE_ACTIVITY_EVENT, wakeQueue as EventListener\)/);
+  assert.match(syncSource, /async pullCatalog[\s\S]*?await waitForBackgroundSyncWindow\(\)/);
+});
+
+test('automatic sync remains visually silent while preserving actionable status', () => {
+  assert.doesNotMatch(posSource, /syncState\.isSyncing \? \(\s*<RefreshCw[\s\S]*?animate-spin/);
+  assert.doesNotMatch(posSource, /\? 'Sincronizando'/);
+  assert.match(posSource, /syncState\.hasError \|\| syncState\.pendingCount > 0 \|\| syncState\.blockedCount > 0/);
 });
 
 test('background queues yield cooperatively between operational jobs', () => {
   const printQueueSource = readFileSync(new URL('../services/printer/OfflinePrintQueueService.ts', import.meta.url), 'utf8');
   assert.match(backgroundSyncSource, /yieldToOperatorUi\(\): Promise<void>/);
   assert.match(backgroundSyncSource, /await this\.yieldToOperatorUi\(\)/);
+  assert.match(backgroundSyncSource, /await waitForBackgroundSyncWindow\(\)/);
   assert.match(printQueueSource, /if \(isPosSaleActive\(\)\) break/);
   assert.match(printQueueSource, /await yieldToOperatorUi\(\)/);
 });
