@@ -60,7 +60,7 @@ export function temporalDiagnosticsPlugin(enabled:boolean):Plugin {
           if(ts.isFunctionExpression(u))return f.updateFunctionExpression(u,u.modifiers,u.asteriskToken,u.name,u.typeParameters,u.parameters,u.type,body);
           if(ts.isFunctionDeclaration(u))return f.updateFunctionDeclaration(u,u.modifiers,u.asteriskToken,u.name,u.typeParameters,u.parameters,u.type,body);
         }
-        const handler=ui && /^(handleKeyPress|handleProductCardClick|handleProductClick|handleNodeSelect|handleTableAction|handleConfigUpdated|addToCart|authorizeSubtotalizedEdit|blockRecoveredUberOrderMutation|ensureSalesWithOpenZPermission|canAddItemToCart|getProductPrice|onUpdateCart|handleUpdateParkedTickets|handleFocusIn)$/.test(label);
+        const handler=ui && /^(handleKeyPress|handleProductCardClick|handleProductClick|handleNodeSelect|handleTableAction|handleCloseTableMap|handleConfigUpdated|addToCart|authorizeSubtotalizedEdit|blockRecoveredUberOrderMutation|ensureSalesWithOpenZPermission|canAddItemToCart|getProductPrice|onUpdateCart|handleUpdateParkedTickets|handleFocusIn)$/.test(label);
         const method=service && /^(initialize|getCollection|readStoredDocuments|fromStoredDocuments)$/.test(label);
         const continuation=ts.isCallExpression(p)&&((ts.isPropertyAccessExpression(p.expression)&&/^(then|catch|finally)$/.test(p.expression.name.text))||p.expression.getText(source)==='queueMicrotask');
         if(!handler&&!method&&!continuation)return updated;
@@ -89,4 +89,3 @@ export function temporalDiagnosticsPlugin(enabled:boolean):Plugin {
     };inspect(runtime);
   }};
 }
-
