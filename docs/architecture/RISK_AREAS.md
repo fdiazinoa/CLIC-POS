@@ -1,6 +1,6 @@
 # Áreas de riesgo y límites
 
-Auditoría estática: 2026-09-16. Fuente: `origin/develop` en `a186a8c33cabf8700c28dba85deaabfe76b03f81`. No certifica comportamiento en hardware ni estado desplegado del ERP. Las referencias son relativas a la raíz del repositorio.
+Auditoría estática: 2026-09-16. Fuente: `origin/develop` en `669f9624c85de40129169e6779aa6983f1441fea`. No certifica comportamiento en hardware ni estado desplegado del ERP. Las referencias son relativas a la raíz del repositorio.
 
 
 Son riesgos inferidos de la fuente, no incidentes reproducidos ni certificados como resueltos por esta tarea documental.
@@ -46,3 +46,9 @@ Toda mejora de performance exige QA funcional. Long Tasks JS >50 ms, forced sync
 4. Reparar lint y deuda de build/test en tareas separadas desde develop; no mezclar cambios funcionales con instalación del protocolo.
 5. Configurar protección de develop/main y checks obligatorios mediante administración autorizada; esta ejecución no cambia settings remotos.
 6. Mantener iguales contratos Node/Kotlin con pruebas de transporte en hardware; registrar receptor ERP/flags usados.
+
+## Actualización de auditoría: procedimiento interno
+
+Fuente actual develop `669f9624c85de40129169e6779aa6983f1441fea`. Se reenumeraron 1055 archivos y se escanearon 818 fuentes. Se contrastó el delta operativo desde la auditoría anterior: App y masterOperationalApi ahora validan master vinculado/tenant/rol antes de usar rutas de mesas y otras operaciones; los timeouts de login cliente empiezan después de esa validación. Ver `tests/orderTakerMasterRouting.test.ts`, `tests/loginDestinationPerformance.test.ts`, `utils/terminalLoginLabel.ts` y `utils/interactionPerformance.ts`. No se cambió este código durante la instalación.
+
+Cloud-Admin se inspeccionó en otro repo local; ver [CLOUD_ADMIN_DEPLOYMENT.md](CLOUD_ADMIN_DEPLOYMENT.md). El procedimiento separa code/internal/deployment/testing/production/released. Fuente inspeccionada no certifica estado desplegado ni rollout flags.

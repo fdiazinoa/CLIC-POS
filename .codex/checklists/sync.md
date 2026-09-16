@@ -14,3 +14,5 @@ Cada punto pertinente requiere esperado/observado y enlace a evidencia para cand
 - [ ] Lease expirado tras crash, doble worker y batch límite/event ordering seguros.
 - [ ] Reinicio después de apply antes de ack no duplica stock/deuda/cierre/cobro.
 - [ ] Capturar counters/tráfico/last_erp_applied/pending/oldest_age y verificar ERP receptor de prueba.
+
+- [ ] Validador sync-validator distinto de QA/reviewer/performance y todos los autores; consistencia/orden causal por agregado, no simple aparición eventual.

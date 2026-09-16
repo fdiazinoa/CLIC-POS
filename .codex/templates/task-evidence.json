@@ -1,75 +1,303 @@
 {
-  "schemaVersion": 1,
-  "taskId": "REEMPLAZAR",
-  "baseSha": "SHA_BASE_COMPLETO",
-  "candidateSha": "SHA_CANDIDATO_COMPLETO",
+  "schemaVersion": 2,
+  "taskId": "REPLACE",
+  "baseSha": "FULL_SHA",
+  "candidateSha": "FULL_SHA",
   "implementationAuthors": [
-    "SESSION_DEVELOPER_REAL"
+    "REAL_DEVELOPER_SESSION"
   ],
   "additionalRequiredGates": [],
+  "approvedArtifact": {
+    "application": "CLIC-POS",
+    "filename": "REPLACE.apk",
+    "localPath": "/absolute/REPLACE.apk",
+    "versionName": "REPLACE",
+    "versionCode": 0,
+    "commitSha": "FULL_SHA",
+    "buildId": "REPLACE",
+    "buildDate": "REPLACE_ISO",
+    "sizeBytes": 0,
+    "sha256": "REPLACE",
+    "certificateSha256": "REPLACE",
+    "packageName": "com.clicpos.app",
+    "buildType": "release",
+    "instrumented": false,
+    "diagnostic": false,
+    "temporary": false
+  },
   "gates": {
     "analysis": {
       "status": "PENDING",
       "role": "analyst",
-      "agentId": "SESSION_REAL",
-      "candidateSha": "SHA_CANDIDATO_COMPLETO",
+      "agentId": "REAL_SESSION",
+      "candidateSha": "FULL_SHA",
       "artifacts": []
     },
     "plan": {
       "status": "PENDING",
       "role": "plan-approver",
-      "agentId": "SESSION_REAL",
-      "candidateSha": "SHA_CANDIDATO_COMPLETO",
+      "agentId": "REAL_SESSION",
+      "candidateSha": "FULL_SHA",
       "artifacts": []
     },
     "review": {
       "status": "PENDING",
       "role": "reviewer",
-      "agentId": "SESSION_REAL",
-      "candidateSha": "SHA_CANDIDATO_COMPLETO",
+      "agentId": "REAL_SESSION",
+      "candidateSha": "FULL_SHA",
       "artifacts": []
     },
     "qa": {
       "status": "PENDING",
       "role": "qa",
-      "agentId": "SESSION_REAL",
-      "candidateSha": "SHA_CANDIDATO_COMPLETO",
+      "agentId": "REAL_SESSION",
+      "candidateSha": "FULL_SHA",
       "artifacts": []
     },
     "functional": {
       "status": "PENDING",
       "role": "qa",
-      "agentId": "SESSION_REAL",
-      "candidateSha": "SHA_CANDIDATO_COMPLETO",
+      "agentId": "REAL_SESSION",
+      "candidateSha": "FULL_SHA",
       "artifacts": []
     },
     "regression": {
       "status": "PENDING",
       "role": "qa",
-      "agentId": "SESSION_REAL",
-      "candidateSha": "SHA_CANDIDATO_COMPLETO",
+      "agentId": "REAL_SESSION",
+      "candidateSha": "FULL_SHA",
       "artifacts": []
     },
     "sync": {
       "status": "PENDING",
-      "role": "qa",
-      "agentId": "SESSION_REAL",
-      "candidateSha": "SHA_CANDIDATO_COMPLETO",
+      "role": "sync-validator",
+      "agentId": "REAL_SESSION",
+      "candidateSha": "FULL_SHA",
       "artifacts": []
     },
     "offline": {
       "status": "PENDING",
       "role": "qa",
-      "agentId": "SESSION_REAL",
-      "candidateSha": "SHA_CANDIDATO_COMPLETO",
+      "agentId": "REAL_SESSION",
+      "candidateSha": "FULL_SHA",
+      "artifacts": []
+    },
+    "device": {
+      "status": "PENDING",
+      "role": "qa",
+      "agentId": "REAL_SESSION",
+      "candidateSha": "FULL_SHA",
       "artifacts": []
     },
     "performance": {
       "status": "PENDING",
       "role": "performance",
-      "agentId": "SESSION_REAL",
-      "candidateSha": "SHA_CANDIDATO_COMPLETO",
+      "agentId": "REAL_SESSION",
+      "candidateSha": "FULL_SHA",
       "artifacts": []
+    },
+    "build": {
+      "status": "PENDING",
+      "role": "release",
+      "agentId": "REAL_SESSION",
+      "candidateSha": "FULL_SHA",
+      "artifacts": [],
+      "artifact": {
+        "application": "CLIC-POS",
+        "filename": "REPLACE.apk",
+        "localPath": "/absolute/REPLACE.apk",
+        "versionName": "REPLACE",
+        "versionCode": 0,
+        "commitSha": "FULL_SHA",
+        "buildId": "REPLACE",
+        "buildDate": "REPLACE_ISO",
+        "sizeBytes": 0,
+        "sha256": "REPLACE",
+        "certificateSha256": "REPLACE",
+        "packageName": "com.clicpos.app",
+        "buildType": "release",
+        "instrumented": false,
+        "diagnostic": false,
+        "temporary": false
+      }
+    },
+    "internalApproval": {
+      "status": "PENDING",
+      "role": "orchestrator",
+      "agentId": "REAL_SESSION",
+      "candidateSha": "FULL_SHA",
+      "artifacts": [],
+      "artifact": {
+        "application": "CLIC-POS",
+        "filename": "REPLACE.apk",
+        "localPath": "/absolute/REPLACE.apk",
+        "versionName": "REPLACE",
+        "versionCode": 0,
+        "commitSha": "FULL_SHA",
+        "buildId": "REPLACE",
+        "buildDate": "REPLACE_ISO",
+        "sizeBytes": 0,
+        "sha256": "REPLACE",
+        "certificateSha256": "REPLACE",
+        "packageName": "com.clicpos.app",
+        "buildType": "release",
+        "instrumented": false,
+        "diagnostic": false,
+        "temporary": false
+      }
+    },
+    "internalDeployment": {
+      "status": "PENDING",
+      "role": "internal-deploy",
+      "agentId": "REAL_SESSION",
+      "candidateSha": "FULL_SHA",
+      "artifacts": [],
+      "artifact": {
+        "application": "CLIC-POS",
+        "filename": "REPLACE.apk",
+        "localPath": "/absolute/REPLACE.apk",
+        "versionName": "REPLACE",
+        "versionCode": 0,
+        "commitSha": "FULL_SHA",
+        "buildId": "REPLACE",
+        "buildDate": "REPLACE_ISO",
+        "sizeBytes": 0,
+        "sha256": "REPLACE",
+        "certificateSha256": "REPLACE",
+        "packageName": "com.clicpos.app",
+        "buildType": "release",
+        "instrumented": false,
+        "diagnostic": false,
+        "temporary": false
+      },
+      "environment": "INTERNAL_TESTING",
+      "releaseStatus": "internal_testing",
+      "steps": [
+        {
+          "name": "IDENTIFY",
+          "status": "PENDING"
+        },
+        {
+          "name": "VALIDATE",
+          "status": "PENDING"
+        },
+        {
+          "name": "INSPECT_CURRENT",
+          "status": "PENDING"
+        },
+        {
+          "name": "UPLOAD_NEW",
+          "status": "PENDING"
+        },
+        {
+          "name": "VERIFY_STORAGE",
+          "status": "PENDING"
+        },
+        {
+          "name": "PUBLISH_INTERNAL",
+          "status": "PENDING"
+        },
+        {
+          "name": "VERIFY_DOWNLOAD",
+          "status": "PENDING"
+        },
+        {
+          "name": "CLEANUP",
+          "status": "PENDING"
+        }
+      ],
+      "storage": {
+        "sha256": "REPLACE",
+        "sizeBytes": 0
+      },
+      "download": {
+        "sha256": "REPLACE",
+        "sizeBytes": 0
+      },
+      "publishedReference": "",
+      "previousInspected": false,
+      "previousRetainedUntilVerification": false
+    },
+    "internalTesting": {
+      "status": "PENDING",
+      "role": "qa",
+      "agentId": "REAL_SESSION",
+      "candidateSha": "FULL_SHA",
+      "artifacts": [],
+      "artifact": {
+        "application": "CLIC-POS",
+        "filename": "REPLACE.apk",
+        "localPath": "/absolute/REPLACE.apk",
+        "versionName": "REPLACE",
+        "versionCode": 0,
+        "commitSha": "FULL_SHA",
+        "buildId": "REPLACE",
+        "buildDate": "REPLACE_ISO",
+        "sizeBytes": 0,
+        "sha256": "REPLACE",
+        "certificateSha256": "REPLACE",
+        "packageName": "com.clicpos.app",
+        "buildType": "release",
+        "instrumented": false,
+        "diagnostic": false,
+        "temporary": false
+      }
+    },
+    "productionApproval": {
+      "status": "PENDING",
+      "role": "release",
+      "agentId": "REAL_SESSION",
+      "candidateSha": "FULL_SHA",
+      "artifacts": [],
+      "artifact": {
+        "application": "CLIC-POS",
+        "filename": "REPLACE.apk",
+        "localPath": "/absolute/REPLACE.apk",
+        "versionName": "REPLACE",
+        "versionCode": 0,
+        "commitSha": "FULL_SHA",
+        "buildId": "REPLACE",
+        "buildDate": "REPLACE_ISO",
+        "sizeBytes": 0,
+        "sha256": "REPLACE",
+        "certificateSha256": "REPLACE",
+        "packageName": "com.clicpos.app",
+        "buildType": "release",
+        "instrumented": false,
+        "diagnostic": false,
+        "temporary": false
+      }
+    },
+    "productionRelease": {
+      "status": "PENDING",
+      "role": "release",
+      "agentId": "REAL_SESSION",
+      "candidateSha": "FULL_SHA",
+      "artifacts": [],
+      "artifact": {
+        "application": "CLIC-POS",
+        "filename": "REPLACE.apk",
+        "localPath": "/absolute/REPLACE.apk",
+        "versionName": "REPLACE",
+        "versionCode": 0,
+        "commitSha": "FULL_SHA",
+        "buildId": "REPLACE",
+        "buildDate": "REPLACE_ISO",
+        "sizeBytes": 0,
+        "sha256": "REPLACE",
+        "certificateSha256": "REPLACE",
+        "packageName": "com.clicpos.app",
+        "buildType": "release",
+        "instrumented": false,
+        "diagnostic": false,
+        "temporary": false
+      },
+      "environment": "PRODUCTION",
+      "publishedReference": "",
+      "download": {
+        "sha256": "REPLACE",
+        "sizeBytes": 0
+      }
     }
   }
 }

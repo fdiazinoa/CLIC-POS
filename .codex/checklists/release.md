@@ -16,3 +16,8 @@ Cada punto pertinente requiere esperado/observado y enlace a evidencia para cand
 - [ ] Print/fiscal/offline/sync/auth y datos históricos después de upgrade verificados.
 - [ ] Promote/runtime evidence, PRs, rollback y fuente archivados; merge fallido revert del merge commit mediante PR.
 - [ ] No publicar/instalar/desplegar si esta tarea solo solicita documentación.
+
+- [ ] INTERNAL_TESTING_PASSED con artefacto exacto publicado/descargado/probado; gates internal→deployment→testing→production acumulativos.
+- [ ] Producción aprobada por release independiente de build/developer/deploy/testing; ejecutor release distinto de su aprobador.
+- [ ] verify --stage production antes de publicar; verify --stage released requiere evidencia real ambiente PRODUCTION.
+- [ ] No available por aprobado-interno; internal-deploy nunca promueve producción.
