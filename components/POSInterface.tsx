@@ -97,7 +97,6 @@ import {
    measureInteractionStage,
    PosInteractionTrace,
 } from '../utils/interactionPerformance';
-import { beginTableMapOpen, markTableMapOpenStage } from '../diagnostics/tableMapOpen';
 import {
    calculateTaxBreakdownFromItems,
    consolidateTaxBreakdownForDisplay,
@@ -6734,7 +6733,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    };
 
    const handleBackToMap = async () => {
-      beginTableMapOpen(undefined);
       const trace = beginPosInteraction('CHANGE_TABLE', { tableId: activeTable?.id || null, cartItems: cart.length });
       expectInteractionRender(trace, 'APP_VIEW');
       if (blockRecoveredUberOrderMutation('volver al mapa de mesas')) return;
@@ -6760,7 +6758,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             await saveActiveTableOrderForMap();
             if (onOpenTableMap) await Promise.resolve(onOpenTableMap());
             markInteractionStage(trace, 'HANDLER_END');
-            markTableMapOpenStage('HANDLER_END');
             if (requiresBackgroundDispatch) {
                window.setTimeout(() => {
                   window.requestAnimationFrame(() => {
@@ -6776,7 +6773,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       if (onOpenTableMap) await Promise.resolve(onOpenTableMap());
       markInteractionStage(trace, 'HANDLER_END');
-      markTableMapOpenStage('HANDLER_END');
    };
 
    const handleRestoreTicket = (parked: ParkedTicket) => {
