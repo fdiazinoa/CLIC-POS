@@ -172,6 +172,20 @@ class AndroidPrinterBridge @JvmOverloads constructor(context: Context, webView: 
 
                   window.ClicPOSNativePrinter = {
                     platform: 'android',
+                    debugLog: function (payload) {
+                      try {
+                        if (!window.AndroidPrinter || typeof window.AndroidPrinter.debugLog !== 'function') {
+                          return { status: 'error', success: false, message: 'Missing native debugLog' };
+                        }
+                        var serialized = typeof payload === 'string' ? payload : JSON.stringify(payload == null ? {} : payload);
+                        if (typeof serialized !== 'string') return { status: 'error', success: false, message: 'Invalid debugLog payload' };
+                        var result = parseResult(window.AndroidPrinter.debugLog(serialized));
+                        if (result && typeof result === 'object' && result.success === true && String(result.status || '').toLowerCase() !== 'error' && typeof result.then !== 'function') return result;
+                        return { status: 'error', success: false, message: 'Native debugLog failed' };
+                      } catch (error) {
+                        return { status: 'error', success: false, message: 'Native debugLog failed' };
+                      }
+                    },
                     validateDgiiRnc: function (payload) { return call('validateDgiiRnc', payload); },
                     printEscPos: function (payload) { return call('printEscPos', payload); },
                     printEscpos: function (payload) { return call('printEscpos', payload); },
