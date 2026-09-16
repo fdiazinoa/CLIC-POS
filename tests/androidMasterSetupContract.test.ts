@@ -156,7 +156,7 @@ test('la activacion cliente cierra el progreso cuando la terminal esta ocupada',
     terminalSelectorSource,
     /if \(response\.status === 409\) \{[\s\S]*?keepAuthorizationModalOpen = true;[\s\S]*?closeBindingProgress\(\);/
   );
-  assert.match(terminalSelectorSource, /message: 'La terminal está ocupada por otro equipo\.'/);
+  assert.match(terminalSelectorSource, /message: response\.data\?\.message \|\| 'La terminal está ocupada por otro equipo\.'/);
 });
 
 test('la reasignacion de una cliente se resuelve exclusivamente en la Maestra local', () => {

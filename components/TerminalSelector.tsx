@@ -85,6 +85,7 @@ interface DeviceAuthorizationIssue {
 }
 
 interface TerminalSelectorResponse {
+  message?: string;
   tenant_id: string;
   tenant_name?: string | null;
   erp_base_url?: string | null;
@@ -93,6 +94,8 @@ interface TerminalSelectorResponse {
 }
 
 interface BindTerminalResponse {
+  code?: string;
+  message?: string;
   success: boolean;
   source?: string | null;
   current_device_id?: string | null;
@@ -1055,7 +1058,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           { stage: 'LIST_TERMINALS' }
         );
         if (!response.ok) {
-          throw new Error(`No se pudieron cargar las terminales (${response.status}).`);
+          throw new Error(response.data?.message || `No se pudieron cargar las terminales (${response.status}).`);
         }
 
         const data = response.data;
@@ -1216,7 +1219,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           setPendingTerminal(occupiedTerminal);
           setAuthorizationIssue({
             code: 'TAKEOVER_REQUIRED',
-            message: 'La terminal está ocupada por otro equipo.',
+            message: response.data?.message || 'La terminal está ocupada por otro equipo.',
             httpStatus: 409,
             terminal: occupiedTerminal,
             currentDeviceId,
@@ -1230,6 +1233,9 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
         if (!response.ok) {
           const detail = response.text;
           if (response.status === 404) {
+            if (response.data?.code === 'MASTER_SETUP_TERMINAL_NOT_IN_SCOPE') {
+              throw new Error(response.data.message || 'La terminal ya no está disponible para esta Maestra. Actualice el listado.');
+            }
             throw new Error(
               'La Caja Maestra no incluye el protocolo de autorización cliente actualizado. '
               + 'Instala este mismo APK en la Maestra y en la terminal cliente.'

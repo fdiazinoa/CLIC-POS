@@ -4274,7 +4274,15 @@ const AppContent: React.FC = () => {
 
       const payload = {
         port: 3001,
-        config,
+        config: {
+          ...config,
+          runtimeTerminalId: currentTerminal.config?.erpTerminalId || currentTerminal.id,
+          masterSetupContext: {
+            ...currentTerminal.config?.erpBinding,
+            erpBaseUrl: resolveSetupErpBaseUrl() || '',
+            erpEnabled: getStoredTerminalSetupMode() !== 'SERVER_LOCAL' && isErpManagedPosUserRuntime(),
+          },
+        },
         users,
         catalogs,
         restaurantRevision: masterRestaurantRevisionRef.current,
