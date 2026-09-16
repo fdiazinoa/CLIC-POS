@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { buildEscPosTicketPayload } from '../services/printer/EscPosFormatter';
 
 const appSource = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
 const posSource = readFileSync(new URL('../components/POSInterface.tsx', import.meta.url), 'utf8');
@@ -89,6 +90,28 @@ test('la factura muestra el descuento junto al artículo y separa el descuento g
   assert.match(htmlPrinterSource, /const discountTotal = Math\.max\(0, Number\(transaction\.discountAmount \|\| 0\)\)/);
   assert.match(escPosPrinterSource, /Descuento articulo \(\$\{discount\.discountPercentageLabel\}\)/);
   assert.match(escPosPrinterSource, /'  Precio final'/);
-  assert.match(escPosPrinterSource, /DESCUENTO GENERAL/);
   assert.match(escPosPrinterSource, /globalDiscountTotal/);
 });
+
+for (const globalDiscount of [0, 11.7]) {
+  test(`ESC/POS separates line and global discounts (${globalDiscount}) with actual amounts`, () => {
+    const payload = buildEscPosTicketPayload({
+      id: 'qa-discount', date: '2026-09-16T00:00:00Z', terminalId: 'qa',
+      userId: 'qa', userName: 'QA', status: 'COMPLETED', payments: [],
+      items: [{ id: 'qa-item', name: 'QA articulo', quantity: 1, originalPrice: 130, price: 117 }],
+      total: 117 - globalDiscount, discountAmount: globalDiscount,
+      discountType: 'PERCENT', discountValue: globalDiscount ? 10 : 0,
+    } as any, { companyInfo: { name: 'QA' }, currencySymbol: 'RD$', receiptConfig: {}, taxes: [], terminals: [] } as any);
+    assert.ok(payload);
+    const text = Buffer.from(payload!, 'base64').toString('latin1');
+    assert.match(text, /Descuento articulo \(10%\)[^\r\n]*-RD\$13\.00/);
+    assert.match(text, /Precio final[^\r\n]*RD\$117\.00/);
+    if (globalDiscount) {
+      assert.match(text, /DESCUENTO TOTAL \(10%\)[^\r\n]*RD\$11\.70/);
+      assert.match(text, /TOTAL[^\r\n]*RD\$105\.30/);
+    } else {
+      assert.doesNotMatch(text, /DESCUENTO TOTAL/);
+      assert.match(text, /TOTAL[^\r\n]*RD\$117\.00/);
+    }
+  });
+}
