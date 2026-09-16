@@ -1,3 +1,19 @@
+# Procedimiento multiagente obligatorio CLIC-POS
+
+Para toda tarea sigue [WORKFLOW.md](WORKFLOW.md): ANÁLISIS → PLAN aprobado → IMPLEMENTACIÓN → REVIEW independiente → QA → PERFORMANCE cuando aplique → RELEASE. Lee los mapas en docs/architecture y verifica diferencias contra la base actual.
+
+El coordinador debe delegar analyst, developer, reviewer, qa, performance y release en sesiones con identidades registradas y responsabilidades de .codex/agents/*.md. Delega trabajos independientes en paralelo solo después del plan; limita a un escritor por archivo y conserva orden de gates. Reviewer/QA pueden trabajar en paralelo sobre un candidato congelado; release espera todas las evidencias. Ningún agente aprueba su trabajo; author y validator deben ser distintos. Si no hay agentes disponibles, detener aprobación/release y registrar BLOCKED, sin autoaprobar.
+
+Ejecuta .codex/scripts/workflow-gate.mjs plan antes de implementar: activa suites por rutas y dependencias conservadoras. Flujos críticos ventas/cobros/tickets/mesas/Z/impresión/offline/sync/Outbox/Inbox/auth activan sus pruebas incluso por impacto indirecto; analyst/reviewer/QA amplían la matriz. Un gate fallido vuelve a implementación; cada nuevo SHA invalida aprobaciones anteriores. Objetivo respuesta interactiva p95 <=50 ms; performance exige evidencia cuantitativa y QA funcional.
+
+Git obligatorio: rama nueva desde origin/develop, feature/<modulo>-<tarea> o fix/<modulo>-<bug>; hotfix solo urgencias. Commits Conventional pequeños; validar, push y PR a develop. Main estable: prohibido push directo y merge directo. No cambiar código ajeno ni resolver conflictos de otra tarea. Si principal está sucio/conflictivo, usar worktree aislada desde develop y reportar la excepción de ubicación.
+
+Prioridad: ERP web conectado sin romper POS local. Cambios mínimos compatibles; flag si riesgo. No loaders/timers arbitrarios, quitar funcionalidades o apagar sync para ocultar rendimiento. Scripts destructivos no son QA. Nunca editar evidencia/baseline para conseguir PASS.
+
+Los Markdown definen contratos humanos; los TOML adyacentes registran roles en clientes compatibles. No son procesos residentes ni fronteras de seguridad; no cambian configuración global o protección de ramas. Detalles de carga/fallback y gates ejecutables en WORKFLOW.md.
+
+---
+
 # CLIC-POS — contexto para agentes (Codex, Cursor)
 
 ## Qué es este repo
@@ -26,7 +42,7 @@ Constitución antirregresión obligatoria: [docs/APK_RELEASE_CONSTITUTION.md](./
 
 ## Ramas
 
-- Base habitual: **`develop`**. Las ramas **`fix/*`** y **`feat/*`** (o `codex/*`) son para PRs; el nombre describe el cambio.
+- Base habitual: **`develop`**. Las ramas **`feature/<modulo>-<tarea>`** y **`fix/<modulo>-<bug>`** son para PRs; **`hotfix/*`** se reserva para urgencias.
 - **Git no permite** tener la **misma** rama checked out en dos sitios a la vez. Si el worktree firmado usa otra rama que el principal, es normal: alinea código con merge, cherry-pick o **rsync de archivos** según el checklist antes de `assembleRelease`.
 - Antes de un release: confirma que el worktree tiene el mismo código que la rama que vas a integrar (revisa diff frente a `origin`).
 
