@@ -134,7 +134,7 @@ import OrderServiceTypeDialog from './OrderServiceTypeDialog';
 import OrderServiceTypeButton from './OrderServiceTypeButton';
 import { resolveAppliedServiceTaxPolicy } from '../utils/serviceTaxPolicy';
 import { normalizeProductionOutputMode, resolveProductionOutputTargets } from '../utils/productionOutputMode';
-import { isClientTerminalMode, resolveOperationalApiUrl } from '../utils/masterOperationalApi';
+import { isClientTerminalMode, resolveValidatedOperationalApiUrl } from '../utils/masterOperationalApi';
 import ProductionRoutingAssignmentModal, {
    type ProductionRoutingPromptArea,
    type ProductionRoutingPromptItem,
@@ -5715,11 +5715,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      ));
                      await Promise.resolve(onTableOrderClosed?.(activeTable, activeTable.currentOrderId, remaining));
                      if (!hasOtherTableAccounts) {
+                        const releaseEndpoint = await resolveValidatedOperationalApiUrl('/api/mesas/liberar');
                         // 1. Free table in the main API so status/currentOrderId are reset.
                         const controller = new AbortController();
                         const timeoutId = window.setTimeout(() => controller.abort(), 4000);
                         try {
-                           const releaseRes = await fetch(resolveOperationalApiUrl('/api/mesas/liberar'), {
+                           const releaseRes = await fetch(releaseEndpoint, {
                               method: 'POST',
                               headers: { 'Content-Type': 'application/json' },
                               body: JSON.stringify({ tableId: activeTable.id }),
@@ -6552,10 +6553,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
 
       void (async () => {
+         let releaseEndpoint: string;
+         try { releaseEndpoint = await resolveValidatedOperationalApiUrl('/api/mesas/liberar'); }
+         catch (error) { console.warn('No se pudo validar la master para liberar mesa:', error); return; }
          const controller = new AbortController();
          const timeoutId = window.setTimeout(() => controller.abort(), 2500);
          try {
-            const releaseRes = await fetch(resolveOperationalApiUrl('/api/mesas/liberar'), {
+            const releaseRes = await fetch(releaseEndpoint, {
                method: 'POST',
                headers: { 'Content-Type': 'application/json' },
                body: JSON.stringify({ tableId: tableToRelease.id }),

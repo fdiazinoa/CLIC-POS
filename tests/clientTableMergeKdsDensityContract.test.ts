@@ -16,7 +16,7 @@ test('la Cliente solicita una unión atómica y refresca el estado autoritativo 
   );
 
   assert.match(mergeSource, /requestJson<any>/);
-  assert.match(mergeSource, /resolveOperationalApiUrl\('\/api\/mesas\/unir'\)/);
+  assert.match(mergeSource, /resolveValidatedOperationalApiUrl\('\/api\/mesas\/unir'\)/);
   assert.match(mergeSource, /mainTableId: primarySourceTableId/);
   assert.match(mergeSource, /secondaryTableIds: \[targetTable\.id\]/);
   assert.match(mergeSource, /await Promise\.resolve\(onRefreshTables\?\.\(\)\)/);
