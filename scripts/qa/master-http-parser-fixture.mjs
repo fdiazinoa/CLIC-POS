@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 // Compile the literal production parser, not a second implementation of it.
@@ -35,7 +35,7 @@ ${source.slice(lineStart, lineEnd)}
 `;
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) {
   const source = readFileSync(process.argv[2], 'utf8');
   writeFileSync(process.argv[3], parserFixture(source, process.argv[4] || ''));
 }
