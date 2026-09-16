@@ -63,7 +63,7 @@ export const resolveSyncFeatureFlagValue = (
 
 export const isSyncFeatureEnabled = (name: SyncFeatureFlagName): boolean => {
     // Keep the access statically analyzable so Vite replaces production flags in the bundle.
-    const env = import.meta.env ?? ({} as typeof import.meta.env);
+    const env = import.meta.env ?? ({} as Record<string, unknown>);
     return resolveSyncFeatureFlagValue(name, {
         localValue: typeof localStorage !== 'undefined'
             ? localStorage.getItem(`${LOCAL_PREFIX}${name}`)

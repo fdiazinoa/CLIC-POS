@@ -14,7 +14,7 @@ const realtimeServiceSource = await readFile(
 );
 
 test('private realtime production flags remain statically injectable by Vite', () => {
-    assert.match(featureFlagSource, /const env = import\.meta\.env \?\? \(\{\} as typeof import\.meta\.env\);/);
+    assert.match(featureFlagSource, /const env = import\.meta\.env \?\? \(\{\} as Record<string, unknown>\);/);
     assert.doesNotMatch(featureFlagSource, /import\.meta as any\)\?\.env/);
     assert.match(productionEnv, /^VITE_PRIVATE_REALTIME_ENABLED=true$/m);
     assert.match(productionEnv, /^VITE_SYNC_PRIVATE_REALTIME_ENABLED=true$/m);
