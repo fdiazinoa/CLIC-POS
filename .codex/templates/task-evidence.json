@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "taskId": "REEMPLAZAR",
+  "baseSha": "SHA_BASE_COMPLETO",
+  "candidateSha": "SHA_CANDIDATO_COMPLETO",
+  "implementationAuthors": [
+    "SESSION_DEVELOPER_REAL"
+  ],
+  "additionalRequiredGates": [],
+  "gates": {
+    "analysis": {
+      "status": "PENDING",
+      "role": "analyst",
+      "agentId": "SESSION_REAL",
+      "candidateSha": "SHA_CANDIDATO_COMPLETO",
+      "artifacts": []
+    },
+    "plan": {
+      "status": "PENDING",
+      "role": "plan-approver",
+      "agentId": "SESSION_REAL",
+      "candidateSha": "SHA_CANDIDATO_COMPLETO",
+      "artifacts": []
+    },
+    "review": {
+      "status": "PENDING",
+      "role": "reviewer",
+      "agentId": "SESSION_REAL",
+      "candidateSha": "SHA_CANDIDATO_COMPLETO",
+      "artifacts": []
+    },
+    "qa": {
+      "status": "PENDING",
+      "role": "qa",
+      "agentId": "SESSION_REAL",
+      "candidateSha": "SHA_CANDIDATO_COMPLETO",
+      "artifacts": []
+    },
+    "functional": {
+      "status": "PENDING",
+      "role": "qa",
+      "agentId": "SESSION_REAL",
+      "candidateSha": "SHA_CANDIDATO_COMPLETO",
+      "artifacts": []
+    },
+    "regression": {
+      "status": "PENDING",
+      "role": "qa",
+      "agentId": "SESSION_REAL",
+      "candidateSha": "SHA_CANDIDATO_COMPLETO",
+      "artifacts": []
+    },
+    "sync": {
+      "status": "PENDING",
+      "role": "qa",
+      "agentId": "SESSION_REAL",
+      "candidateSha": "SHA_CANDIDATO_COMPLETO",
+      "artifacts": []
+    },
+    "offline": {
+      "status": "PENDING",
+      "role": "qa",
+      "agentId": "SESSION_REAL",
+      "candidateSha": "SHA_CANDIDATO_COMPLETO",
+      "artifacts": []
+    },
+    "performance": {
+      "status": "PENDING",
+      "role": "performance",
+      "agentId": "SESSION_REAL",
+      "candidateSha": "SHA_CANDIDATO_COMPLETO",
+      "artifacts": []
+    }
+  }
+}
