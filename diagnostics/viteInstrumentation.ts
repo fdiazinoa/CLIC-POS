@@ -44,7 +44,8 @@ export function temporalDiagnosticsPlugin(enabled:boolean):Plugin {
         if(!label && ts.isCallExpression(p) && ts.isVariableDeclaration(p.parent))label=p.parent.name.getText(source);
         if(ts.isJsxExpression(p)&&ts.isJsxAttribute(p.parent))label=p.parent.name.getText(source);
         const target=/^(ProductGridCard|resolveActiveTariffPrice|productTariffPriceById|focusSalesScannerInput|restoreScannerFocus|checkIsMobile|buildWarehouseTokens|warehouseMatchesIdentifier|resolveWarehouseId)$/.test(label);
-        if(target){
+        const tableMapTarget=/^(POSInterface|ProductGridCard|TableMap|TableChairMarkers|SmartTableNode|DonutMetric|MetricCard|GlassButton|safeTables|roomLabelById|currentRolePermissions|roomTables|obstacleTables|serviceTables|allServiceTables|parkedSummaryByOrderId|parkedSummaryByTableId|occupiedForTools|freeForTools|occupiedLikeTables|expectedStayMinutes|smartTables|stats|splitTicketItems|pendingMoveSource|pendingMoveTarget|pendingMoveItems|tooltipPosition|renderTableControlActions)$/.test(label);
+        if(target||tableMapTarget){
           count++;const u=updated as any;
           let metadata:ts.Expression=f.createIdentifier('undefined');
           const refs:ts.ObjectLiteralElementLike[]=[];
@@ -55,7 +56,11 @@ export function temporalDiagnosticsPlugin(enabled:boolean):Plugin {
           }
           if(label==='productTariffPriceById')for(const n of ['activeTariffTokens','productPriceIndex','products'])refs.push(f.createShorthandPropertyAssignment(n));
           if(refs.length)metadata=f.createArrowFunction(undefined,undefined,[],undefined,f.createToken(ts.SyntaxKind.EqualsGreaterThanToken),f.createParenthesizedExpression(f.createObjectLiteralExpression([f.createPropertyAssignment('key',key),f.createPropertyAssignment('refs',f.createObjectLiteralExpression(refs)),...(label==='productTariffPriceById'?[f.createPropertyAssignment('sizes',f.createObjectLiteralExpression([f.createPropertyAssignment('products',f.createPropertyAccessChain(f.createIdentifier('products'),f.createToken(ts.SyntaxKind.QuestionDotToken),'length'))]))]:[])])));
-          const body=f.createBlock([f.createReturnStatement(f.createCallExpression(f.createIdentifier('__posDiagTarget'),undefined,[f.createStringLiteral(id.split('/').pop()+':'+label+':'+(source.getLineAndCharacterOfPosition(original.getStart(source)).line+1)),f.createArrowFunction(undefined,undefined,[],undefined,f.createToken(ts.SyntaxKind.EqualsGreaterThanToken),u.body),metadata, /^(focusSalesScannerInput|restoreScannerFocus)$/.test(label)?f.createTrue():f.createFalse()]))],true);
+          const measureFn=tableMapTarget?f.createIdentifier('__tableMapWork'):f.createIdentifier('__posDiagTarget');
+          const measureArgs=tableMapTarget
+            ? [f.createStringLiteral(id.split('/').pop()+':'+label+':'+(source.getLineAndCharacterOfPosition(original.getStart(source)).line+1)),f.createArrowFunction(undefined,undefined,[],undefined,f.createToken(ts.SyntaxKind.EqualsGreaterThanToken),u.body)]
+            : [f.createStringLiteral(id.split('/').pop()+':'+label+':'+(source.getLineAndCharacterOfPosition(original.getStart(source)).line+1)),f.createArrowFunction(undefined,undefined,[],undefined,f.createToken(ts.SyntaxKind.EqualsGreaterThanToken),u.body),metadata, /^(focusSalesScannerInput|restoreScannerFocus)$/.test(label)?f.createTrue():f.createFalse()];
+          const body=f.createBlock([f.createReturnStatement(f.createCallExpression(measureFn,undefined,measureArgs))],true);
           if(ts.isArrowFunction(u))return f.updateArrowFunction(u,u.modifiers,u.typeParameters,u.parameters,u.type,u.equalsGreaterThanToken,body);
           if(ts.isFunctionExpression(u))return f.updateFunctionExpression(u,u.modifiers,u.asteriskToken,u.name,u.typeParameters,u.parameters,u.type,body);
           if(ts.isFunctionDeclaration(u))return f.updateFunctionDeclaration(u,u.modifiers,u.asteriskToken,u.name,u.typeParameters,u.parameters,u.type,body);
@@ -77,7 +82,7 @@ export function temporalDiagnosticsPlugin(enabled:boolean):Plugin {
     };
     const result=ts.transform(source,[transform]);const output=ts.createPrinter().printFile(result.transformed[0]);result.dispose();
     if(!count)return;
-    return {code:`import {diagRun as __posDiagRun,diagSet as __posDiagSet,diagSync as __posDiagSync,diagTarget as __posDiagTarget} from '/diagnostics/runtime';\n`+output,map:null};
+    return {code:`import {diagRun as __posDiagRun,diagSet as __posDiagSet,diagSync as __posDiagSync,diagTarget as __posDiagTarget} from '/diagnostics/runtime';\nimport {measureTableMapWork as __tableMapWork} from '/diagnostics/tableMapOpen';\n`+output,map:null};
   }, generateBundle(_options,bundle){
     if(!enabled)return;
     const runtime=Object.values(bundle).find((c:any)=>c.type==='chunk'&&Object.keys(c.modules).some(k=>k.endsWith('/diagnostics/runtime.ts'))) as any;

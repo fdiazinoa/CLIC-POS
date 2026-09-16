@@ -49,6 +49,10 @@ import {
     markRenderEnd,
     markRenderStart,
 } from '../utils/interactionPerformance';
+import {
+    markTableMapOpenStage,
+    recordTableMapData,
+} from '../diagnostics/tableMapOpen';
 
 interface TableMapProps {
     rooms: Room[];
@@ -518,8 +522,16 @@ const TableMap: React.FC<TableMapProps> = ({
     onOpenTableLayoutDesigner,
     onChangeRoom
 }) => {
+    markTableMapOpenStage('DATA_PREPARATION_START');
+    recordTableMapData({
+        tables: Array.isArray(tables) ? tables.length : 0,
+        rooms: Array.isArray(rooms) ? rooms.length : 0,
+        tickets: Array.isArray(parkedTickets) ? parkedTickets.length : 0,
+        accounts: Array.isArray(parkedTickets) ? parkedTickets.filter(ticket => (ticket.items || []).length > 0).length : 0,
+    });
     markRenderStart('TABLE_MAP_VIEW');
     useLayoutEffect(() => markRenderEnd('TABLE_MAP_VIEW'));
+    useLayoutEffect(() => markTableMapOpenStage('TABLE_MAP_MOUNT'), []);
     const [activeRoomId, setActiveRoomId] = useState<string>(initialRoomId || rooms[0]?.id || '');
     const [selectedTable, setSelectedTable] = useState<Table | null>(null);
     const [selectedBarTable, setSelectedBarTable] = useState<Table | null>(null);
@@ -1732,10 +1744,12 @@ const TableMap: React.FC<TableMapProps> = ({
         [pendingMoveSource, resolveTicketForTable]
     );
 
+    markTableMapOpenStage('DATA_PREPARATION_END');
     return (
         <LazyMotion features={domAnimation}>
             <div
                 ref={mapShellRef}
+                data-table-map-root="true"
                 className={`relative h-full w-full overflow-hidden select-none ${usesWhiteBackground ? 'bg-white text-slate-900' : 'bg-slate-950 text-slate-100'}`}
             >
                 <div className={`absolute inset-0 ${usesWhiteBackground ? 'bg-white' : 'bg-gradient-to-br from-[#030712] via-[#07122a] to-[#040816]'}`} />
@@ -2538,6 +2552,7 @@ const SmartTableNode = React.memo(({
 
     return (
         <m.button
+            data-table-map-node="true"
             data-table-node="true"
             type="button"
             custom={model.index}
