@@ -340,7 +340,11 @@ export const getPosInteractionReport = () => {
   const operations = Array.from(new Set(traces.map(trace => trace.operation)));
   return Object.fromEntries(operations.map(operation => {
     const samples = traces.filter(trace => trace.operation === operation);
-    const measured = samples.filter(trace => (!trace.destinationMode || trace.status === 'completed') && (trace.metadata?.measurementBoundary !== 'authorized-input-to-destination' || trace.metadata.inputBoundaryValidated === true));
+    const destinationTargets = new Set(samples.filter(trace => trace.destinationMode && trace.renderTarget).map(trace => trace.renderTarget));
+    // A selector and a hydrated ticket are different destinations. Never pool
+    // their durations into an operation-level input percentile.
+    const mixedDestinations = destinationTargets.size > 1;
+    const measured = samples.filter(trace => (!trace.destinationMode || (!mixedDestinations && trace.status === 'completed')) && (trace.metadata?.measurementBoundary !== 'authorized-input-to-destination' || trace.metadata.inputBoundaryValidated === true));
     const visible = measured.flatMap(trace => trace.metadata?.measurementBoundary === 'authorized-input-to-destination'
       && trace.stages.FIRST_FRAME_VISIBLE === undefined ? [] : trace.durations.inputToVisible ?? []);
     const interactive = measured.flatMap(trace => trace.durations.inputToInteractive ?? []);
@@ -350,6 +354,7 @@ export const getPosInteractionReport = () => {
       samples: samples.length,
       invalidInputBoundarySamples: samples.filter(trace => trace.metadata?.measurementBoundary === 'authorized-input-to-destination' && trace.metadata.inputBoundaryValidated !== true).length,
       terminatedWithoutDestinationSamples: samples.filter(trace => trace.destinationMode && !['pending', 'completed'].includes(trace.status)).length,
+      mixedDestinations,
       longTaskAttributionTruncatedSamples: samples.filter(trace => trace.metadata?.longTaskAttributionTruncated).length,
       visibleSamples: visible.length,
       interactiveSamples: interactive.length,
@@ -357,11 +362,19 @@ export const getPosInteractionReport = () => {
       destinations: Object.fromEntries([...new Set(samples.filter(trace => trace.destinationMode).map(trace => trace.renderTarget || 'unresolved'))].map(target => {
         const destinationSamples = samples.filter(trace => trace.destinationMode && (trace.renderTarget || 'unresolved') === target);
         const completed = destinationSamples.filter(trace => trace.status === 'completed');
+        const inputVisible = completed.flatMap(trace => trace.metadata?.inputBoundaryValidated ? trace.durations.inputToVisible ?? [] : []);
+        const inputInteractive = completed.flatMap(trace => trace.metadata?.inputBoundaryValidated ? trace.durations.inputToInteractive ?? [] : []);
         return [target, {
           samples: destinationSamples.length,
           completed: completed.length,
+          inputBoundarySamples: inputInteractive.length,
+          inputToVisibleP50Ms: percentile(inputVisible, 0.5),
+          inputToVisibleP95Ms: percentile(inputVisible, 0.95),
+          inputToVisibleP99Ms: percentile(inputVisible, 0.99),
+          inputToDestinationP50Ms: percentile(inputInteractive, 0.5),
           handlerToDestinationP95Ms: percentile(completed.flatMap(trace => trace.stages.FIRST_FRAME_INTERACTIVE === undefined ? [] : trace.stages.FIRST_FRAME_INTERACTIVE - trace.stages.HANDLER_START!), 0.95),
-          inputToDestinationP95Ms: percentile(completed.flatMap(trace => trace.metadata?.inputBoundaryValidated ? trace.durations.inputToInteractive ?? [] : []), 0.95),
+          inputToDestinationP95Ms: percentile(inputInteractive, 0.95),
+          inputToDestinationP99Ms: percentile(inputInteractive, 0.99),
         }];
       })),
       inputLatencyP50Ms: percentile(visible, 0.5),

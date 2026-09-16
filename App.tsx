@@ -11,12 +11,13 @@ import {
   beginDestinationInteraction,
   commitInteractionDestination,
   expectInteractionDestination,
+  finishInteraction,
+  isInteractionPending,
   type PosInteractionTrace,
   expectInteractionRender,
   getLatestPosInteraction,
   markInteractionStage,
   markInteractionStateUpdate,
-  markInteractionVisibleAndInteractive,
   markRenderEnd,
   markRenderStart,
   measureInteractionStage,
@@ -1869,6 +1870,7 @@ const App: React.FC = () => {
 type PersistentPOSHostProps = React.ComponentProps<typeof POSInterface> & {
   visible: boolean;
   closeTrace?: PosInteractionTrace | null;
+  tableDestination?: { trace: PosInteractionTrace; tableId: string; orderId: string; cart: CartItem[] } | null;
   onInteractive?: () => void;
 };
 const MemoizedPOSInterface = React.memo(POSInterface);
@@ -1901,10 +1903,11 @@ const StableTableMap: React.FC<React.ComponentProps<typeof TableMap>> = (incomin
  * props are proxied through refs so App-level navigation renders do not defeat
  * the memo boundary, while handlers always execute their latest closure.
  */
-const PersistentPOSHost: React.FC<PersistentPOSHostProps> = ({ visible, closeTrace, onInteractive, ...incomingProps }) => {
+const PersistentPOSHost: React.FC<PersistentPOSHostProps> = ({ visible, closeTrace, tableDestination, onInteractive, ...incomingProps }) => {
   const hostRef = useRef<HTMLDivElement>(null);
   const consumedCloseTraceRef = useRef<PosInteractionTrace | null>(null);
   const destinationVisibleRef = useRef(visible);
+  const currentTableDestinationRef = useRef<typeof tableDestination>(null);
   const latestPropsRef = useRef(incomingProps);
   const callbackProxiesRef = useRef(new Map<string, (...args: unknown[]) => unknown>());
   latestPropsRef.current = incomingProps;
@@ -1924,16 +1927,20 @@ const PersistentPOSHost: React.FC<PersistentPOSHostProps> = ({ visible, closeTra
 
   useLayoutEffect(() => {
     destinationVisibleRef.current = visible;
-    return () => { destinationVisibleRef.current = false; };
-  }, [visible]);
+    currentTableDestinationRef.current = tableDestination
+      && tableDestination.tableId === String(incomingProps.activeTable?.id || '')
+      && tableDestination.orderId === String(incomingProps.activeTable?.currentOrderId || '')
+      && tableDestination.cart === incomingProps.cart ? tableDestination : null;
+    return () => {
+      destinationVisibleRef.current = false;
+      currentTableDestinationRef.current = null;
+    };
+  }, [visible, tableDestination, incomingProps.activeTable, incomingProps.cart]);
 
   useLayoutEffect(() => {
     if (!visible) return;
     const freshCloseTrace = closeTrace && closeTrace !== consumedCloseTraceRef.current ? closeTrace : null;
-    const trace = freshCloseTrace || (['OPEN_TABLE'] as const)
-      .map(operation => getLatestPosInteraction(operation))
-      .filter(candidate => candidate && candidate.stages.FIRST_FRAME_INTERACTIVE === undefined)
-      .sort((left, right) => (right?.startedAt || 0) - (left?.startedAt || 0))[0];
+    const trace = freshCloseTrace || currentTableDestinationRef.current?.trace;
     if (!trace) return;
     markInteractionStage(trace, 'NAVIGATION_END');
     markInteractionStage(trace, 'POS_UPDATE_END');
@@ -1941,8 +1948,8 @@ const PersistentPOSHost: React.FC<PersistentPOSHostProps> = ({ visible, closeTra
       consumedCloseTraceRef.current = trace;
       commitInteractionDestination(trace, 'POS_RETAINED', onInteractive, () => destinationVisibleRef.current);
     }
-    else markInteractionVisibleAndInteractive(trace);
-  }, [closeTrace, onInteractive, visible]);
+    else commitInteractionDestination(trace, 'POS_TABLE', undefined, () => destinationVisibleRef.current && currentTableDestinationRef.current === tableDestination);
+  }, [closeTrace, onInteractive, visible, tableDestination, incomingProps.activeTable, incomingProps.cart]);
 
   useLayoutEffect(() => {
     const host = hostRef.current;
@@ -2018,6 +2025,7 @@ const AppContent: React.FC = () => {
   const [suppressProductInputUntilMs, setSuppressProductInputUntilMs] = useState(0);
   const tableMapExitTransitionRef = useRef<OperatorUiTransitionToken | null>(null);
   const tableMapCloseTraceRef = useRef<PosInteractionTrace | null>(null);
+  const tableOpenDestinationRef = useRef<PersistentPOSHostProps['tableDestination']>(null);
   const currentViewRef = useRef<ViewState>(currentView);
   const currentUserRef = useRef<User | null>(null);
   const [scanTargetTicketId, setScanTargetTicketId] = useState<string | null>(null); // NEW: Auto-select ticket from scan
@@ -6232,6 +6240,7 @@ const AppContent: React.FC = () => {
   const handleCloseTableMap = (event?: React.MouseEvent) => {
     if (tableMapExitPending) return;
     const trace = beginDestinationInteraction('CLOSE_TABLE_MAP', event?.timeStamp, tableMapCloseTraceRef.current);
+    finishInteraction(tableOpenDestinationRef.current?.trace, 'cancelled');
     tableMapCloseTraceRef.current = trace;
     expectInteractionDestination(trace, 'POS_RETAINED');
     tableMapExitTransitionRef.current = beginOperatorUiTransition('CLOSE_TABLE_MAP');
@@ -11706,6 +11715,7 @@ const AppContent: React.FC = () => {
             </button>
             <div className="h-full overflow-hidden relative">
               <StableTableMap
+                visible={currentView === 'TABLE_MAP'}
                 rooms={rooms}
                 currentRoomId={activeRoomId}
                 onChangeRoom={setActiveRoomId}
@@ -11718,7 +11728,7 @@ const AppContent: React.FC = () => {
                     alert('No se pudo liberar la mesa en la Caja Master. Reintente antes de abrirla nuevamente.');
                   }
                 }}
-                onTableClick={(table) => {
+                onTableClick={(table, openTrace) => {
                   console.log('Mesa seleccionada:', table.name);
                   // A queued Android tap can arrive after the map disappears
                   // and otherwise activate the product at the same position.
@@ -11802,7 +11812,10 @@ const AppContent: React.FC = () => {
                     }
                   }
 
-                  const openTrace = getLatestPosInteraction('OPEN_TABLE');
+                  if (tableOpenDestinationRef.current?.trace !== openTrace) finishInteraction(tableOpenDestinationRef.current?.trace, 'cancelled');
+                  tableOpenDestinationRef.current = isInteractionPending(openTrace)
+                    ? { trace: openTrace, tableId: String(selectedTable.id), orderId: String(selectedTable.currentOrderId || ''), cart: nextCart }
+                    : null;
                   markInteractionStateUpdate(openTrace, nextCart.length + 3);
                   markInteractionStage(openTrace, 'POS_UPDATE_START');
                   setCart(nextCart);
@@ -11962,6 +11975,7 @@ const AppContent: React.FC = () => {
           <PersistentPOSHost
             visible={currentView === 'POS'}
             closeTrace={tableMapCloseTraceRef.current}
+            tableDestination={tableOpenDestinationRef.current}
             onInteractive={handleTableMapCloseInteractive}
             config={config}
             currentUser={currentUser}
