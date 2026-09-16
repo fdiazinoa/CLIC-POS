@@ -1,4 +1,7 @@
 import test from 'node:test';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import assert from 'node:assert/strict';
 import { classify, validateEvidence, safeOutput } from './workflow-gate.mjs';
 const plan = { baseSha: 'base', candidateSha: 'candidate', ...classify(['App.tsx']) };
@@ -46,4 +49,13 @@ test('log and report destinations cannot overwrite repository code', () => {
   assert.throws(() => safeOutput(new URL('../../App.tsx', import.meta.url).pathname));
   assert.throws(() => safeOutput(new URL('../agents/new.toml', import.meta.url).pathname));
   assert.ok(safeOutput('/private/tmp/clic-pos-workflow-output.json').endsWith('clic-pos-workflow-output.json'));
+});
+
+test('dangling external symlink cannot create new repository code', () => {
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'workflow-output-'));
+  try {
+    const link=path.join(dir,'report');
+    fs.symlinkSync(new URL('../../workflow-forbidden-new-module.ts',import.meta.url).pathname,link);
+    assert.throws(()=>safeOutput(link));
+  } finally { fs.rmSync(dir,{recursive:true,force:true}); }
 });

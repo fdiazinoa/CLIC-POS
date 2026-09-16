@@ -19,7 +19,7 @@ Entorno local Node v24.11.1 / npm 11.6.2; CI declara Node 22. La diferencia se r
 | npm run test:catalog-sync | PASS: 89 tests y 18 de integración automatic saves |
 | node --test services/sync/PrivateRealtimeAuthorization.test.mjs | BLOCKED/fallo: importa vitest no declarado ni instalado; no hay runner corroborado |
 | node --check .codex/scripts/workflow-gate.mjs | PASS |
-| node --test .codex/scripts/workflow-gate.test.mjs | 8/8 PASS; incluye rechazo de FAIL/BLOCKED/N/A, autoaprobación, SHA obsoleto, artefactos ausentes y destino de salida dentro repo |
+| node --test .codex/scripts/workflow-gate.test.mjs | 9/9 PASS; incluye rechazo de FAIL/BLOCKED/N/A, autoaprobación, SHA obsoleto, artefactos ausentes y destino de salida dentro repo |
 | QA independiente de archivos/contratos | 18 archivos solicitados presentes; seis TOML parsean con tomllib; plantilla JSON válida con nueve gates; enlaces locales verificados; 45 tests de selector crítico existen |
 | git diff --check | PASS |
 
@@ -27,7 +27,7 @@ Los logs locales están en `/private/tmp/clic-pos-multiagent-{install,build,lint
 
 ## Revisión independiente y correcciones
 
-El reviewer encontró import espurio tomado de comentario en inventario, nomenclatura de ramas heredada contradictoria, salida --out que podía sobrescribir código y comando MJS mal caracterizado. Se corrigieron extractor/rama, guard de salida con resolución de symlinks y descripción del bloqueo Vitest. Se añadió prueba de protección del destino. Ningún archivo funcional POS se modificó para corregirlos.
+El reviewer encontró import espurio tomado de comentario en inventario, nomenclatura de ramas heredada contradictoria, salida --out que podía sobrescribir código y comando MJS mal caracterizado. Se corrigieron extractor/rama, guard de salida con resolución de symlinks y descripción del bloqueo Vitest. Se añadieron pruebas de protección del destino, incluido enlace simbólico colgante identificado en segunda revisión. Ningún archivo funcional POS se modificó para corregirlos.
 
 ## Gates no ejecutados y límites
 

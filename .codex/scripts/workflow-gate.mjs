@@ -32,7 +32,11 @@ export function safeOutput(file) {
   const absolute = path.resolve(file);
   let ancestor = absolute;
   const tail = [];
-  while (!fs.existsSync(ancestor)) {
+  const entryExists = file => {
+    try { fs.lstatSync(file); return true; }
+    catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+  };
+  while (!entryExists(ancestor)) {
     tail.unshift(path.basename(ancestor));
     const parent = path.dirname(ancestor);
     if (parent === ancestor) throw new Error('Destino no resoluble');
