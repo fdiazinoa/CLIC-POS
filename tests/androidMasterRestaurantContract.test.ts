@@ -243,7 +243,7 @@ test('el polling en segundo plano no hace parpadear el modal de reconexión', ()
     appSource.indexOf('const retryClientMasterConnection'),
     appSource.indexOf('const openTableForService'),
   );
-  assert.match(retrySource, /setClientMasterTablesStatus\('CHECKING'\)/);
+  assert.match(retrySource, /publishClientMasterState\('CHECKING', 'EXPLICIT_RETRY'\)/);
 });
 
 test('el watchdog KDS comprueba en silencio y no reconstruye órdenes sin cambios', () => {
