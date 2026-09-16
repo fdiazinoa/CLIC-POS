@@ -9,6 +9,9 @@ import java.net.NetworkInterface
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.URLDecoder
+import java.net.URL
+import java.net.HttpURLConnection
+import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.util.Collections
 import java.util.UUID
@@ -277,11 +280,110 @@ object ClicPOSMasterHttpServer {
         }
     }
 
+    /** Only activation requests refresh this directory; no idle polling or catalog mutation. */
+    private fun refreshSetupDirectory(): JSONObject {
+        val snapshot = JSONObject(configSnapshot.toString())
+        val context = snapshot.optJSONObject("masterSetupContext") ?: return snapshot
+        if (!context.optBoolean("erpEnabled", false)) return snapshot
+        val tenantId = context.optString("tenantId").trim()
+        val companyId = context.optString("companyId").trim()
+        val storeId = context.optString("storeId").trim()
+        val baseUrl = context.optString("erpBaseUrl").trim().trimEnd('/')
+        check(tenantId.isNotBlank() && companyId.isNotBlank() && storeId.isNotBlank() && baseUrl.isNotBlank()) {
+            "MASTER_SETUP_CONTEXT_INVALID: Falta la identidad ERP de empresa/sucursal de la Maestra."
+        }
+        val query = listOf("tenant_id" to tenantId, "company_id" to companyId, "store_id" to storeId)
+            .joinToString("&") { (key, value) -> "$key=${URLEncoder.encode(value, StandardCharsets.UTF_8.name())}" }
+        val connection = URL("$baseUrl/api/sync/terminals?$query").openConnection() as HttpURLConnection
+        val directory = try {
+            connection.connectTimeout = 4000
+            connection.readTimeout = 4000
+            connection.instanceFollowRedirects = false
+            check(connection.responseCode == 200) { "MASTER_SETUP_DIRECTORY_UNAVAILABLE: No se pudo validar el listado ERP." }
+            JSONObject(connection.inputStream.bufferedReader(StandardCharsets.UTF_8).use { it.readText() })
+                .optJSONArray("terminals") ?: error("MASTER_SETUP_DIRECTORY_INVALID: ERP no devolvió terminals.")
+        } catch (error: Exception) {
+            if (error.message?.startsWith("MASTER_SETUP_") == true) throw error
+            throw IllegalStateException("MASTER_SETUP_DIRECTORY_UNAVAILABLE: No se pudo consultar el listado ERP; reintente cuando haya conexión.", error)
+        } finally {
+            connection.disconnect()
+        }
+        return applyPersistedBindings(projectSetupDirectory(snapshot, directory), preserveRemoteBindings = true)
+    }
+
+    private fun projectSetupDirectory(snapshot: JSONObject, directory: JSONArray): JSONObject {
+        val context = snapshot.getJSONObject("masterSetupContext")
+        val tenantId = context.getString("tenantId")
+        val companyId = context.getString("companyId")
+        val storeId = context.getString("storeId")
+        val previous = snapshot.optJSONArray("terminals") ?: JSONArray()
+        val scoped = JSONArray()
+        for (index in 0 until directory.length()) {
+            val record = directory.optJSONObject(index) ?: continue
+            // Validate locally too: a server ignoring filters must never leak another company.
+            if (record.optString("tenant_id") != tenantId || record.optString("company_id") != companyId ||
+                record.optString("store_id") != storeId) continue
+            val id = record.optString("id").trim()
+            if (id.isBlank()) continue
+            if (record.optString("status").lowercase() in listOf("archived", "deleted", "inactive", "disabled")) continue
+            var existing = JSONObject()
+            for (oldIndex in 0 until previous.length()) {
+                val candidate = previous.optJSONObject(oldIndex) ?: continue
+                if (candidate.optString("id") == id || candidate.optJSONObject("config")?.optString("erpTerminalId") == id) {
+                    existing = candidate
+                    break
+                }
+            }
+            val config = JSONObject((existing.optJSONObject("config") ?: JSONObject()).toString())
+            val type = record.optString("terminal_type").ifBlank { "STANDARD_POS" }
+            val masterId = record.optString("master_terminal_id").takeUnless { it == "null" }.orEmpty()
+            if (type == "ORDER_TAKER" && masterId.isNotBlank() && masterId != snapshot.optString("runtimeTerminalId")) continue
+            val deviceId = record.optString("device_id").takeUnless { it == "null" }.orEmpty()
+            val binding = config.optJSONObject("erpBinding") ?: JSONObject()
+            binding.put("tenantId", tenantId).put("companyId", companyId).put("storeId", storeId)
+                .put("terminalId", id).put("terminalName", record.optString("name")).put("role", type)
+                .put("deviceId", deviceId)
+            config.put("erpBinding", binding).put("erpTerminalId", id)
+                .put("terminalType", type).put("terminal_type", type)
+                .put("masterTerminalId", masterId).put("currentDeviceId", deviceId)
+                .put("isPrimaryNode", id == snapshot.optString("runtimeTerminalId"))
+                .put("capabilities", record.optJSONArray("capabilities") ?: JSONArray())
+                .put("restrictions", record.optJSONArray("restrictions") ?: JSONArray())
+                .put("terminalName", record.optString("name"))
+            if (id != snapshot.optString("runtimeTerminalId")) {
+                val role = config.optJSONObject("deviceRole") ?: JSONObject()
+                config.put("deviceRole", role.put("role", type))
+            }
+            if (type == "ORDER_TAKER" && masterId == snapshot.optString("runtimeTerminalId")) {
+                config.put("governedByMaster", true)
+                val sync = config.optJSONObject("syncConfig") ?: JSONObject()
+                config.put("syncConfig", sync.put("mode", "SLAVE").put("isEnabled", true))
+            }
+            val terminal = JSONObject(record.toString())
+                .put("config", config).put("terminalType", type).put("masterTerminalId", masterId)
+            scoped.put(terminal)
+        }
+        snapshot.put("terminals", scoped)
+        return snapshot
+    }
+
+    private fun setupTenantId(snapshot: JSONObject, query: JSONObject): String {
+        val context = snapshot.optJSONObject("masterSetupContext")
+        val authoritative = if (context?.optBoolean("erpEnabled", false) == true) context.optString("tenantId") else ""
+        val requested = query.optString("tenant_id")
+        check(authoritative.isBlank() || requested.isBlank() || requested == authoritative) {
+            "MASTER_SETUP_TENANT_MISMATCH: La Cliente pertenece a otro tenant."
+        }
+        return authoritative.ifBlank { requested.ifBlank { "default-tenant" } }
+    }
+
     private fun buildTerminalListResponse(rawTarget: String): JSONObject {
+        val setupSnapshot = refreshSetupDirectory()
         val query = parseQuery(rawTarget)
         val deviceId = query.optString("pos_device_id")
-        val tenantId = query.optString("tenant_id").ifBlank { "default-tenant" }
-        val terminals = configSnapshot.optJSONArray("terminals") ?: JSONArray()
+        val tenantId = setupTenantId(setupSnapshot, query)
+        val erpManaged = setupSnapshot.optJSONObject("masterSetupContext")?.optBoolean("erpEnabled", false) == true
+        val terminals = setupSnapshot.optJSONArray("terminals") ?: JSONArray()
         val result = JSONArray()
 
         for (index in 0 until terminals.length()) {
@@ -354,7 +456,7 @@ object ClicPOSMasterHttpServer {
                     .put("terminal_code", terminalConfig.optString("stationNumber").takeIf { it.isNotBlank() } ?: JSONObject.NULL)
                     .put("binding_status", if (occupied) "OCCUPIED" else "AVAILABLE")
                     .put("is_occupied", occupied)
-                    .put("can_reauthorize", occupied)
+                    .put("can_reauthorize", occupied && !erpManaged)
                     .put("erpTerminalId", erpTerminalId)
                     .put("name", terminalName)
                     .put("location", firstNonBlank(
@@ -390,7 +492,9 @@ object ClicPOSMasterHttpServer {
         bindTerminal(socket, parseQuery(rawTarget), includeSnapshot = false)
     }
 
+    @Synchronized
     private fun bindTerminal(socket: Socket, payload: JSONObject, includeSnapshot: Boolean) {
+        val setupSnapshot = refreshSetupDirectory()
         val selectedTerminalId = firstNonBlank(
             payload.optString("terminal_id"),
             payload.optString("erp_terminal_id")
@@ -400,14 +504,13 @@ object ClicPOSMasterHttpServer {
             payload.optString("pos_device_id"),
             payload.optString("device_id")
         )
-        val tenantId = firstNonBlank(
-            payload.optString("tenant_id"),
-            payload.optString("tenantId"),
-            "default-tenant"
-        )
-        val forceTransfer = payload.optBoolean("force_transfer", false)
-            || payload.optString("force_transfer").equals("true", ignoreCase = true)
-        val terminals = configSnapshot.optJSONArray("terminals") ?: JSONArray()
+        val tenantId = setupTenantId(setupSnapshot, payload)
+        val erpManaged = setupSnapshot.optJSONObject("masterSetupContext")?.optBoolean("erpEnabled", false) == true
+        val forceTransfer = !erpManaged && (payload.optBoolean("force_transfer", false)
+            || payload.optString("force_transfer").equals("true", ignoreCase = true))
+        check(deviceId.isNotBlank() && selectedTerminalId.isNotBlank()) { "MASTER_SETUP_BIND_IDENTITY_INVALID" }
+        check(!erpManaged || selectedTerminalId != setupSnapshot.optString("runtimeTerminalId")) { "MASTER_SETUP_CANNOT_BIND_MASTER" }
+        val terminals = setupSnapshot.optJSONArray("terminals") ?: JSONArray()
         var selectedTerminal: JSONObject? = null
 
         for (index in 0 until terminals.length()) {
@@ -432,7 +535,7 @@ object ClicPOSMasterHttpServer {
                     JSONObject()
                         .put("success", false)
                         .put("code", "TERMINAL_OCCUPIED")
-                        .put("message", "La terminal ya está ocupada por otro equipo.")
+                        .put("message", if (erpManaged) "La terminal está ocupada. Autorice este equipo desde ERP; la Maestra no liberará el vínculo." else "La terminal ya está ocupada por otro equipo.")
                         .put("current_device_id", currentDeviceId)
                         .toString()
                 )
@@ -459,13 +562,15 @@ object ClicPOSMasterHttpServer {
                 404,
                 JSONObject()
                     .put("success", false)
-                    .put("message", "La terminal seleccionada no existe en la Maestra.")
+                    .put("code", "MASTER_SETUP_TERMINAL_NOT_IN_SCOPE")
+                    .put("message", "La terminal seleccionada ya no pertenece al listado compatible de esta Maestra. Actualice el listado.")
                     .toString()
             )
             return
         }
 
-        configSnapshot = JSONObject(configSnapshot.toString())
+        // Keep the existing local-only binding semantics; ERP setup uses a separate projection.
+        if (!erpManaged) configSnapshot = JSONObject(setupSnapshot.toString())
         val terminalConfig = boundTerminal.optJSONObject("config") ?: JSONObject()
         val terminalId = boundTerminal.optString("id")
         val erpTerminalId = firstNonBlank(
@@ -511,7 +616,7 @@ object ClicPOSMasterHttpServer {
 
         if (includeSnapshot) {
             response
-                .put("config", JSONObject(configSnapshot.toString()))
+                .put("config", JSONObject(setupSnapshot.toString()))
                 .put("users", JSONArray(usersSnapshot.toString()))
         }
 
@@ -1607,7 +1712,7 @@ object ClicPOSMasterHttpServer {
         writeResponse(socket, 200, JSONObject().put("success", true).toString())
     }
 
-    private fun applyPersistedBindings(snapshot: JSONObject): JSONObject {
+    private fun applyPersistedBindings(snapshot: JSONObject, preserveRemoteBindings: Boolean = false): JSONObject {
         val bindings = readPersistedBindings()
         val terminals = snapshot.optJSONArray("terminals") ?: return snapshot
         for (index in 0 until terminals.length()) {
@@ -1618,9 +1723,16 @@ object ClicPOSMasterHttpServer {
             val config = terminal.optJSONObject("config") ?: JSONObject().also {
                 terminal.put("config", it)
             }
+            val remoteDeviceId = config.optString("currentDeviceId").trim()
+            if (preserveRemoteBindings && remoteDeviceId.isNotBlank() && remoteDeviceId != persistedDeviceId) continue
             config
                 .put("currentDeviceId", persistedDeviceId)
                 .put("governedByMaster", true)
+            if (preserveRemoteBindings && terminalId != snapshot.optString("runtimeTerminalId")) {
+                config.put("isPrimaryNode", false)
+                val sync = config.optJSONObject("syncConfig") ?: JSONObject()
+                config.put("syncConfig", sync.put("mode", "SLAVE").put("isEnabled", true))
+            }
         }
         return snapshot
     }
@@ -1644,14 +1756,29 @@ object ClicPOSMasterHttpServer {
     }
 
     private fun buildInitialConfigResponse(terminalId: String, rawTarget: String): JSONObject {
+        val setupSnapshot = refreshSetupDirectory()
         val query = parseQuery(rawTarget)
+        val terminals = setupSnapshot.optJSONArray("terminals") ?: JSONArray()
+        var selected: JSONObject? = null
+        for (index in 0 until terminals.length()) {
+            val terminal = terminals.optJSONObject(index) ?: continue
+            if (terminal.optString("id") == terminalId) { selected = terminal; break }
+        }
+        val erpManaged = setupSnapshot.optJSONObject("masterSetupContext")?.optBoolean("erpEnabled", false) == true
+        if (erpManaged) {
+            check(selected != null) { "MASTER_SETUP_TERMINAL_NOT_IN_SCOPE" }
+            val deviceId = query.optString("pos_device_id")
+            check(deviceId.isNotBlank() && selected?.optJSONObject("config")?.optString("currentDeviceId") == deviceId) {
+                "MASTER_SETUP_TERMINAL_NOT_BOUND: Autorice y vincule este equipo antes de cargar su configuración."
+            }
+        }
         return JSONObject()
             .put("success", true)
             .put("source", "ANDROID_MASTER")
-            .put("tenant_id", query.optString("tenant_id").ifBlank { "default-tenant" })
+            .put("tenant_id", setupTenantId(setupSnapshot, query))
             .put("terminal_id", query.optString("local_terminal_id").ifBlank { terminalId })
             .put("erp_terminal_id", terminalId)
-            .put("config", JSONObject(configSnapshot.toString()))
+            .put("config", JSONObject(setupSnapshot.toString()))
             .put("rooms", JSONArray(roomsSnapshot.toString()))
             .put("tables", buildTablesWithEditLocks())
             .put("items", getSyncCollection("products"))
