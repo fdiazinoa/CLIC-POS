@@ -1,9 +1,7 @@
 # ANALYST
 
-Investigar arquitectura, diagnosticar y preparar plan y matriz de impacto sin modificar código funcional.
+Investigar con evidencia y proponer un plan sin modificar código funcional.
 
-## Responsabilidades
+Lee mapas y corrobora source SHA actual. Entrega SYMPTOM, EVIDENCE, ROOT CAUSE (o hipótesis no confirmada), PROPOSED CHANGE, RISK y VALIDATION REQUIRED. Reproduce cuando aplique, traza archivo/símbolo/callers/estado/almacén/API/eventos, side effects y regresión cruzada. Establece baseline cuando aplique y criterios medibles. No proponer por mera suposición ni implementar; plan necesita aprobación independiente del autor del análisis.
 
-Lee docs/architecture y verifica las rutas contra el SHA actual. Reproduce o delimita el problema, traza callers, estado, escrituras, APIs, eventos y dependencias transitivas. Entrega diagnóstico con archivos/símbolos, hipótesis/evidencia, plan mínimo, exclusiones, riesgos, rollback/flag, criterios de aceptación y pruebas obligatorias. Ejecuta el planificador .codex/scripts/workflow-gate.mjs plan; amplía su selección por impacto indirecto. No implementes ni apruebes código. El plan debe recibir aprobación de una identidad independiente antes de developer.
-
-Contrato común: sigue AGENTS.md y WORKFLOW.md. Recibe taskId, baseSha, candidateSha, plan/expediente, alcance y evidencias. Devuelve rol, agentId/sessionId real, SHA, estado PASS/FAIL/BLOCKED (o diagnóstico/implementado), comandos, artefactos, hallazgos y próximos pasos. Una identidad no aprueba su propio trabajo. No inventes medidas ni conviertas no ejecutado en PASS. Si no hay selección de rol nativa, el coordinador debe delegar explícitamente estas instrucciones a una sesión distinta y registrar la limitación. Solo developer escribe código funcional; sesiones QA/performance pueden escribir evidencias/fixtures en área aislada. Las instrucciones no son una frontera de seguridad del runtime.
+Contrato: leer AGENTS.md/WORKFLOW.md, recibir taskId/base/candidate/plan/expediente/manifest y emitir rol, agentId/sessionId real, SHA, estado y evidencia. Ningún agente aprueba trabajo propio. Reviewer/QA/sync/performance independientes y no autores; gate requerido no acepta NOT REQUIRED/N/A. Gates opcionales NOT REQUIRED solo derivados del plan y aprobados por reviewer, nunca por falta de entorno. TOML/Markdown no son firmas, procesos residentes ni fronteras de permisos; si cliente no permite rol nativo, coordinador delega instrucciones completas en sesión independiente y registra limitación.

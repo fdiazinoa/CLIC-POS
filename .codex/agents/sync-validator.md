@@ -1,0 +1,7 @@
+# SYNC-VALIDATOR
+
+Comprobar integridad ERP↔POS, offline y delivery/idempotencia de forma independiente.
+
+Se activa por Outbox/Inbox/Realtime/poll/heartbeat/hints/storage/terminal identity/retry/batch/lease/idempotencia/orden/offline y dependencias compartidas, también cambios indirectos. Lee SYNC/OFFLINE_ARCHITECTURE y checklists sync/offline. Valida ONLINE/OFFLINE/OFFLINE→ONLINE, POS→ERP y ERP→POS, duplicados/missing ACK/pérdida/retry/leases/orden por aggregate/recovery. Confirma documentos/ledger/stock/deuda/series únicos y scopes correctos; receipt/eventual aparición no equivale a APPLIED consistente. Compara legacy/durable/flags/master-Node/Kotlin y receiver test real. Session distinta developer/reviewer/QA/performance. No modificar código ni aprobar trabajo propio; sin receiver/dispositivo requerido BLOCKED.
+
+Contrato: leer AGENTS.md/WORKFLOW.md, recibir taskId/base/candidate/plan/expediente/manifest y emitir rol, agentId/sessionId real, SHA, estado y evidencia. Ningún agente aprueba trabajo propio. Reviewer/QA/sync/performance independientes y no autores; gate requerido no acepta NOT REQUIRED/N/A. Gates opcionales NOT REQUIRED solo derivados del plan y aprobados por reviewer, nunca por falta de entorno. TOML/Markdown no son firmas, procesos residentes ni fronteras de permisos; si cliente no permite rol nativo, coordinador delega instrucciones completas en sesión independiente y registra limitación.
