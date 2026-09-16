@@ -68,12 +68,14 @@ const waitFor = async (expression, timeoutMs = 5000) => {
 };
 
 await call('Performance.enable');
+await evaluate(`window.__TABLE_MAP_DIAGNOSTICS__?.arm?.(120)`);
 const capability = await evaluate(`({
   diagnostics: globalThis.__POS_DIAGNOSTICS__?.status?.(),
   tableMapApi: typeof window.__TABLE_MAP_DIAGNOSTICS__,
+  tableMapStatus: window.__TABLE_MAP_DIAGNOSTICS__?.status?.(),
   view: document.querySelector('[data-table-map-persistent-host]')?.getAttribute('aria-hidden'),
 })`);
-if (!capability?.diagnostics?.active || capability.tableMapApi !== 'object') {
+if (!capability?.tableMapStatus?.active || capability.tableMapApi !== 'object') {
   throw new Error(`Diagnostic runtime is not active: ${JSON.stringify(capability)}`);
 }
 

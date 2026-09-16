@@ -31,14 +31,11 @@ const runs: TableMapOpenRun[] = [];
 let activeRun: TableMapOpenRun | undefined;
 let sequence = 0;
 let tableMapMounted = false;
+let armedUntil = 0;
 
 const now = () => performance.now();
 const diagnosticsActive = () => {
-  try {
-    return Boolean((globalThis as any).__POS_DIAGNOSTICS__?.status?.().active);
-  } catch {
-    return false;
-  }
+  return now() < armedUntil;
 };
 
 export const beginTableMapOpen = (data: TableMapOpenRun['data']) => {
@@ -128,6 +125,8 @@ declare global {
     __TABLE_MAP_DIAGNOSTICS__?: {
       getRuns: () => TableMapOpenRun[];
       clear: () => void;
+      arm: (seconds?: number) => void;
+      status: () => { active: boolean; armedUntil: number };
     };
   }
 }
@@ -135,6 +134,10 @@ declare global {
 if (typeof window !== 'undefined') {
   window.__TABLE_MAP_DIAGNOSTICS__ = {
     getRuns: () => structuredClone(runs),
+    arm: (seconds = 45) => {
+      armedUntil = now() + Math.min(Math.max(seconds, 1), 120) * 1000;
+    },
+    status: () => ({ active: diagnosticsActive(), armedUntil }),
     clear: () => {
       runs.splice(0, runs.length);
       activeRun = undefined;

@@ -44,7 +44,7 @@ export function temporalDiagnosticsPlugin(enabled:boolean):Plugin {
         if(!label && ts.isCallExpression(p) && ts.isVariableDeclaration(p.parent))label=p.parent.name.getText(source);
         if(ts.isJsxExpression(p)&&ts.isJsxAttribute(p.parent))label=p.parent.name.getText(source);
         const target=/^(ProductGridCard|resolveActiveTariffPrice|productTariffPriceById|focusSalesScannerInput|restoreScannerFocus|checkIsMobile|buildWarehouseTokens|warehouseMatchesIdentifier|resolveWarehouseId)$/.test(label);
-        const tableMapTarget=/^(POSInterface|ProductGridCard|TableMap|TableChairMarkers|SmartTableNode|DonutMetric|MetricCard|GlassButton|safeTables|roomLabelById|currentRolePermissions|roomTables|obstacleTables|serviceTables|allServiceTables|parkedSummaryByOrderId|parkedSummaryByTableId|occupiedForTools|freeForTools|occupiedLikeTables|expectedStayMinutes|smartTables|stats|splitTicketItems|pendingMoveSource|pendingMoveTarget|pendingMoveItems|tooltipPosition|renderTableControlActions)$/.test(label);
+        const tableMapTarget=/^(POSInterface|ProductGridCard|TableMap|TableChairMarkers|SmartTableNode|DonutMetric|MetricCard|GlassButton|fitRestaurantViewport|safeTables|roomLabelById|currentRolePermissions|roomTables|obstacleTables|serviceTables|allServiceTables|parkedSummaryByOrderId|parkedSummaryByTableId|occupiedForTools|freeForTools|occupiedLikeTables|expectedStayMinutes|smartTables|stats|splitTicketItems|pendingMoveSource|pendingMoveTarget|pendingMoveItems|tooltipPosition|renderTableControlActions)$/.test(label);
         if(target||tableMapTarget){
           count++;const u=updated as any;
           let metadata:ts.Expression=f.createIdentifier('undefined');
