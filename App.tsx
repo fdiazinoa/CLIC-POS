@@ -23,12 +23,6 @@ import {
   type OperatorUiTransitionToken,
 } from './utils/operatorUiTransition';
 import { waitForBackgroundSyncWindow } from './utils/backgroundSyncScheduler';
-import {
-  markTableMapOpenStage,
-  markTableMapVisible,
-  recordTableMapReactCommit,
-} from './diagnostics/tableMapOpen';
-
 import React, { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef } from 'react';
 import { Capacitor } from '@capacitor/core';
 import { v4 as uuidv4 } from 'uuid';
@@ -1956,14 +1950,6 @@ const TableMapLifecycleBoundary: React.FC<React.PropsWithChildren<{ visible: boo
     if (!host) return;
     if (visible) host.removeAttribute('inert');
     else host.setAttribute('inert', '');
-    if (visible) {
-      markTableMapOpenStage('REACT_COMMIT');
-      markTableMapVisible(host.querySelector<HTMLElement>('[data-table-map-root]'));
-    }
-  }, [visible]);
-
-  useEffect(() => {
-    if (visible) markTableMapOpenStage('TABLE_MAP_EFFECTS');
   }, [visible]);
 
   useLayoutEffect(() => {
@@ -1977,10 +1963,10 @@ const TableMapLifecycleBoundary: React.FC<React.PropsWithChildren<{ visible: boo
   return (
     <div
       ref={hostRef}
-      className={`absolute inset-0 z-40 ${visible ? 'visible' : 'invisible pointer-events-none select-none'}`}
+      className={`absolute inset-0 z-40 ${visible ? 'opacity-100' : 'opacity-0 pointer-events-none select-none'}`}
       aria-hidden={!visible}
       data-table-map-persistent-host="true"
-      style={{ contain: 'layout style' }}
+      style={{ contain: 'layout style', willChange: 'opacity' }}
     >
       {children}
     </div>
@@ -11621,7 +11607,6 @@ const AppContent: React.FC = () => {
               {tableMapExitPending ? 'Abriendo venta…' : 'Cerrar'}
             </button>
             <div className="h-full overflow-hidden relative">
-              <React.Profiler id="TableMapSubtree" onRender={recordTableMapReactCommit}>
               <StableTableMap
                 rooms={rooms}
                 currentRoomId={activeRoomId}
@@ -11806,7 +11791,6 @@ const AppContent: React.FC = () => {
                   handleViewChange('TABLE_DESIGNER');
                 }}
               />
-              </React.Profiler>
             </div>
           </div>
           </>
@@ -11912,7 +11896,6 @@ const AppContent: React.FC = () => {
             onOpenInventoryTracking={(productId) => handleViewChange('TRACKING', { productId })}
             onOpenAudit={() => handleViewChange('INVENTORY_AUDIT')}
             onOpenTableMap={async () => {
-              markTableMapOpenStage('NAVIGATION_START');
               const changeTrace = getLatestPosInteraction('CHANGE_TABLE');
               markInteractionStateUpdate(changeTrace, 3);
               const releasingTableId = String(activeTableEditLockRef.current?.tableId || '');

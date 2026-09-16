@@ -49,10 +49,6 @@ import {
     markRenderEnd,
     markRenderStart,
 } from '../utils/interactionPerformance';
-import {
-    markTableMapOpenStage,
-    recordTableMapData,
-} from '../diagnostics/tableMapOpen';
 
 interface TableMapProps {
     rooms: Room[];
@@ -522,16 +518,8 @@ const TableMap: React.FC<TableMapProps> = ({
     onOpenTableLayoutDesigner,
     onChangeRoom
 }) => {
-    markTableMapOpenStage('DATA_PREPARATION_START');
-    recordTableMapData({
-        tables: Array.isArray(tables) ? tables.length : 0,
-        rooms: Array.isArray(rooms) ? rooms.length : 0,
-        tickets: Array.isArray(parkedTickets) ? parkedTickets.length : 0,
-        accounts: Array.isArray(parkedTickets) ? parkedTickets.filter(ticket => (ticket.items || []).length > 0).length : 0,
-    });
     markRenderStart('TABLE_MAP_VIEW');
     useLayoutEffect(() => markRenderEnd('TABLE_MAP_VIEW'));
-    useLayoutEffect(() => markTableMapOpenStage('TABLE_MAP_MOUNT'), []);
     const [activeRoomId, setActiveRoomId] = useState<string>(initialRoomId || rooms[0]?.id || '');
     const [selectedTable, setSelectedTable] = useState<Table | null>(null);
     const [selectedBarTable, setSelectedBarTable] = useState<Table | null>(null);
@@ -578,6 +566,12 @@ const TableMap: React.FC<TableMapProps> = ({
 
     const mapShellRef = useRef<HTMLDivElement | null>(null);
     const viewportRef = useRef<HTMLDivElement | null>(null);
+    const viewportSizeRef = useRef({
+        width: typeof window === 'undefined' ? CANVAS_WIDTH : window.innerWidth,
+        height: typeof window === 'undefined' ? CANVAS_HEIGHT : window.innerHeight,
+    });
+    const hasObservedViewportRef = useRef(false);
+    const initialViewportCorrectionRef = useRef<number | null>(null);
     const panRef = useRef<{ pointerId: number; startX: number; startY: number; originX: number; originY: number } | null>(null);
     const viewportStateRef = useRef(viewport);
 
@@ -649,14 +643,13 @@ const TableMap: React.FC<TableMapProps> = ({
 
     const fitRestaurantViewport = useCallback(() => {
         if (!isRestaurantMode) return;
-        const el = viewportRef.current;
-        if (!el) return;
-        const rect = el.getBoundingClientRect();
+        const { width, height } = viewportSizeRef.current;
+        if (width <= 0 || height <= 0) return;
         const sidebarReserve = hasControlCenterAccess && isControlCenterOpen ? RESTAURANT_SIDEBAR_RESERVE_PX : 0;
         const bottomBarReserve = isRestaurantMode ? RESTAURANT_BOTTOM_BAR_RESERVE_PX : 0;
         const edgePad = 18;
-        const usableW = Math.max(280, rect.width - sidebarReserve - edgePad);
-        const usableH = Math.max(220, rect.height - bottomBarReserve - edgePad);
+        const usableW = Math.max(280, width - sidebarReserve - edgePad);
+        const usableH = Math.max(220, height - bottomBarReserve - edgePad);
 
         // El mapa se centra en el viewport completo; el aside solo cubre la derecha. Desplazamos el
         // encuadre hacia la izquierda y arriba para que el centro visual quede en la zona libre.
@@ -706,22 +699,42 @@ const TableMap: React.FC<TableMapProps> = ({
         const el = viewportRef.current;
         if (!el || typeof ResizeObserver === 'undefined') return;
         let timer: number | undefined;
-        const ro = new ResizeObserver(() => {
+        const ro = new ResizeObserver(([entry]) => {
+            if (!entry) return;
+            const nextSize = {
+                width: entry.contentRect.width,
+                height: entry.contentRect.height,
+            };
+            if (nextSize.width <= 0 || nextSize.height <= 0) return;
+            const previousSize = viewportSizeRef.current;
+            const sizeChanged = Math.abs(previousSize.width - nextSize.width) >= 1
+                || Math.abs(previousSize.height - nextSize.height) >= 1;
+            viewportSizeRef.current = nextSize;
+            if (!sizeChanged) {
+                hasObservedViewportRef.current = true;
+                return;
+            }
+            if (!hasObservedViewportRef.current) {
+                hasObservedViewportRef.current = true;
+                initialViewportCorrectionRef.current = window.requestAnimationFrame(() => {
+                    initialViewportCorrectionRef.current = null;
+                    fitRestaurantViewport();
+                });
+                return;
+            }
             if (timer) window.clearTimeout(timer);
             timer = window.setTimeout(() => fitRestaurantViewport(), 80);
         });
         ro.observe(el);
         return () => {
             if (timer) window.clearTimeout(timer);
+            if (initialViewportCorrectionRef.current !== null) {
+                window.cancelAnimationFrame(initialViewportCorrectionRef.current);
+                initialViewportCorrectionRef.current = null;
+            }
             ro.disconnect();
         };
     }, [isRestaurantMode, fitRestaurantViewport]);
-
-    useEffect(() => {
-        if (!isRestaurantMode) return;
-        const id = window.requestAnimationFrame(() => fitRestaurantViewport());
-        return () => window.cancelAnimationFrame(id);
-    }, [roomTables, isRestaurantMode, fitRestaurantViewport]);
 
     const obstacleTables = useMemo(
         () => roomTables.filter(table => table.shape === 'OBSTACLE'),
@@ -1744,12 +1757,10 @@ const TableMap: React.FC<TableMapProps> = ({
         [pendingMoveSource, resolveTicketForTable]
     );
 
-    markTableMapOpenStage('DATA_PREPARATION_END');
     return (
         <LazyMotion features={domAnimation}>
             <div
                 ref={mapShellRef}
-                data-table-map-root="true"
                 className={`relative h-full w-full overflow-hidden select-none ${usesWhiteBackground ? 'bg-white text-slate-900' : 'bg-slate-950 text-slate-100'}`}
             >
                 <div className={`absolute inset-0 ${usesWhiteBackground ? 'bg-white' : 'bg-gradient-to-br from-[#030712] via-[#07122a] to-[#040816]'}`} />
@@ -2552,7 +2563,6 @@ const SmartTableNode = React.memo(({
 
     return (
         <m.button
-            data-table-map-node="true"
             data-table-node="true"
             type="button"
             custom={model.index}
