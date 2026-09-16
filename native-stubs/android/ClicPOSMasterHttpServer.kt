@@ -250,6 +250,10 @@ object ClicPOSMasterHttpServer {
                         handleTerminalClaim(client, parts.getOrNull(1) ?: path)
                     method == "POST" && path == "/api/setup/bind-terminal" ->
                         handleTerminalBinding(client, body)
+                    method == "POST" && path == "/api/setup/device-requests" ->
+                        handleDeviceRequest(client, JSONObject(body), false)
+                    method == "GET" && path == "/api/setup/device-requests" ->
+                        handleDeviceRequest(client, parseQuery(parts.getOrNull(1) ?: path), true)
                     method == "GET" && path.startsWith("/api/setup/initial-config/") ->
                         writeResponse(
                             client,
@@ -457,6 +461,7 @@ object ClicPOSMasterHttpServer {
                     .put("binding_status", if (occupied) "OCCUPIED" else "AVAILABLE")
                     .put("is_occupied", occupied)
                     .put("can_reauthorize", occupied && !erpManaged)
+                    .put("can_request_authorization", occupied && erpManaged && terminalId != setupSnapshot.optString("runtimeTerminalId"))
                     .put("erpTerminalId", erpTerminalId)
                     .put("name", terminalName)
                     .put("location", firstNonBlank(
@@ -492,6 +497,58 @@ object ClicPOSMasterHttpServer {
         bindTerminal(socket, parseQuery(rawTarget), includeSnapshot = false)
     }
 
+    /** Explicit administrative request only. Never persists a local binding or accepts a takeover. */
+    private fun handleDeviceRequest(socket: Socket, payload: JSONObject, readStatus: Boolean) {
+        val snapshot = refreshSetupDirectory()
+        val context = snapshot.optJSONObject("masterSetupContext")
+        check(context?.optBoolean("erpEnabled", false) == true) { "DEVICE_REQUEST_ERP_REQUIRED" }
+        val allowed = setOf("tenant_id", "company_id", "store_id", "terminal_id", "device_id", "app_version") +
+            if (readStatus) setOf("request_id") else emptySet()
+        check(payload.keys().asSequence().all { it in allowed }) { "DEVICE_REQUEST_UNSUPPORTED_FIELD" }
+        val terminalId = payload.optString("terminal_id")
+        val deviceId = payload.optString("device_id")
+        val uuid = Regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+        check(uuid.matches(terminalId) && Regex("^DEV-[A-Z0-9]{8,64}$").matches(deviceId)) { "DEVICE_REQUEST_IDENTITY_INVALID" }
+        for ((field, key) in listOf("tenant_id" to "tenantId", "company_id" to "companyId", "store_id" to "storeId")) {
+            check(payload.optString(field) == context!!.optString(key)) { "DEVICE_REQUEST_SCOPE_INVALID" }
+        }
+        val terminals = snapshot.optJSONArray("terminals") ?: JSONArray()
+        check(terminalId != snapshot.optString("runtimeTerminalId") &&
+            (0 until terminals.length()).any { terminals.optJSONObject(it)?.optString("id") == terminalId }) { "DEVICE_REQUEST_TERMINAL_NOT_IN_SCOPE" }
+        val requestId = payload.optString("request_id")
+        check(!readStatus || uuid.matches(requestId)) { "DEVICE_REQUEST_ID_INVALID" }
+        val query = listOf("tenant_id", "company_id", "store_id", "device_id").joinToString("&") {
+            "$it=${URLEncoder.encode(payload.optString(it), StandardCharsets.UTF_8.name())}"
+        }
+        val suffix = if (readStatus) "/$requestId?$query" else ""
+        val connection = URL("${context!!.getString("erpBaseUrl").trimEnd('/')}/api/sync/terminals/$terminalId/device-requests$suffix").openConnection() as HttpURLConnection
+        try {
+            connection.connectTimeout = 4000
+            connection.readTimeout = 12000
+            connection.instanceFollowRedirects = false
+            connection.requestMethod = if (readStatus) "GET" else "POST"
+            connection.useCaches = false
+            connection.setRequestProperty("X-Device-Id", deviceId)
+            connection.setRequestProperty("Content-Type", "application/json")
+            if (!readStatus) {
+                connection.doOutput = true
+                connection.outputStream.use { it.write(payload.toString().toByteArray(StandardCharsets.UTF_8)) }
+            }
+            val status = connection.responseCode
+            val stream = if (status in 200..299) connection.inputStream else connection.errorStream
+            val response = JSONObject(stream?.bufferedReader(StandardCharsets.UTF_8)?.use { it.readText() } ?: "{}")
+            if (status == 200) {
+                check(response.optBoolean("success") && uuid.matches(response.optString("request_id")) &&
+                    response.optString("terminal_id") == terminalId && response.optString("requested_device_id") == deviceId &&
+                    (if (readStatus) response.optString("request_id") == requestId && response.has("binding_authorized")
+                    else response.optString("status") == "PENDING")) { "DEVICE_REQUEST_CONFIRMATION_INVALID" }
+            }
+            writeResponse(socket, status, response.toString())
+        } finally {
+            connection.disconnect()
+        }
+    }
+
     @Synchronized
     private fun bindTerminal(socket: Socket, payload: JSONObject, includeSnapshot: Boolean) {
         val setupSnapshot = refreshSetupDirectory()
@@ -506,6 +563,7 @@ object ClicPOSMasterHttpServer {
         )
         val tenantId = setupTenantId(setupSnapshot, payload)
         val erpManaged = setupSnapshot.optJSONObject("masterSetupContext")?.optBoolean("erpEnabled", false) == true
+        check(!erpManaged || !payload.optBoolean("force_transfer", false)) { "MASTER_SETUP_FORCE_TRANSFER_FORBIDDEN" }
         val forceTransfer = !erpManaged && (payload.optBoolean("force_transfer", false)
             || payload.optString("force_transfer").equals("true", ignoreCase = true))
         check(deviceId.isNotBlank() && selectedTerminalId.isNotBlank()) { "MASTER_SETUP_BIND_IDENTITY_INVALID" }

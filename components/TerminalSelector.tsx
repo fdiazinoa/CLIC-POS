@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { requestTerminalDeviceAuthorization, isDeviceRequestApproved, type DeviceRequestReceipt } from '../services/setup/terminalDeviceRequests';
 import { Capacitor } from '@capacitor/core';
 import {
   AlertTriangle,
@@ -64,6 +65,7 @@ interface TerminalCard {
   location: string;
   occupied: boolean;
   canReauthorize: boolean;
+  canRequestAuthorization?: boolean;
   currentDeviceId?: string;
   config: TerminalConfig;
   terminalType?: string;
@@ -855,6 +857,8 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
   const [showTransferModal, setShowTransferModal] = useState(false);
   const [pendingTerminal, setPendingTerminal] = useState<TerminalCard | null>(null);
   const [authorizationIssue, setAuthorizationIssue] = useState<DeviceAuthorizationIssue | null>(null);
+  const [deviceRequest, setDeviceRequest] = useState<DeviceRequestReceipt | null>(null);
+  const [deviceRequestError, setDeviceRequestError] = useState<string | null>(null);
   const [isRetryingAuthorization, setIsRetryingAuthorization] = useState(false);
   const [authorizationPollAttempt, setAuthorizationPollAttempt] = useState(0);
   const [bindingProgress, setBindingProgress] = useState<TerminalBindingProgressState>(() => createInitialProgressState());
@@ -1669,15 +1673,74 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
 
   const handleCardClick = useCallback(
     async (terminal: TerminalCard) => {
-      if (isBinding || shouldBlockAlreadyBound || !isTerminalBindingSelectable(terminal)) return;
+      if (isBinding || shouldBlockAlreadyBound) return;
+      if (terminal.occupied && (terminal.canRequestAuthorization || expectsErpDirect)) {
+        setPendingTerminal(terminal);
+        let savedRequest: DeviceRequestReceipt | null = null;
+        try {
+          const saved = JSON.parse(localStorage.getItem(`clic_device_request:${terminal.id}:${deviceId}`) || 'null');
+          if (saved?.terminal_id === terminal.id && saved?.requested_device_id === deviceId) savedRequest = saved;
+        } catch { /* An invalid receipt is not a confirmation. POST remains idempotent in ERP. */ }
+        setDeviceRequest(savedRequest);
+        setDeviceRequestError(null);
+        setAuthorizationIssue({ code: 'ADMINISTRATIVE_REQUEST_REQUIRED',
+          message: 'Solicita autorización administrativa. El vínculo actual no se modificará mientras esté pendiente.',
+          terminal, currentDeviceId: terminal.currentDeviceId, generatedDeviceId: deviceId,
+          pairingStatus: 'WAITING_CLOUD_ADMIN_REAUTHORIZATION' });
+        setShowTransferModal(true);
+        return;
+      }
+      if (!isTerminalBindingSelectable(terminal)) return;
 
       setConfirmTerminalId(terminal.id);
     },
-    [isBinding, shouldBlockAlreadyBound]
+    [isBinding, shouldBlockAlreadyBound, expectsErpDirect, deviceId]
   );
+
+  const handleAdministrativeRequest = async () => {
+    if (!pendingTerminal || isRetryingAuthorization || isBinding) return;
+    setIsRetryingAuthorization(true);
+    setDeviceRequestError(null);
+    try {
+      const identity = { tenant_id: pendingTerminal.tenantId || tenantId,
+        company_id: pendingTerminal.companyId || '', store_id: pendingTerminal.storeId || '',
+        terminal_id: pendingTerminal.erpTerminalId || pendingTerminal.id, device_id: deviceId };
+      const receipt = await requestTerminalDeviceAuthorization({
+        baseUrl: expectsErpDirect ? erpBaseUrl || '' : apiBase, viaMaster: !expectsErpDirect,
+        identity, requestId: deviceRequest?.request_id, appVersion: resolveAppVersion(),
+      });
+      setDeviceRequest(receipt);
+      try {
+        localStorage.setItem(`clic_device_request:${pendingTerminal.id}:${deviceId}`, JSON.stringify(receipt));
+      } catch { /* ERP receipt remains confirmed even when the optional local mirror is unavailable. */ }
+      if (isDeviceRequestApproved(receipt)) {
+        // Refresh the scoped contract before the normal binding flow. No takeover flag is used.
+        const result = await requestJson<{ terminals: any[] }>({
+          url: expectsErpDirect
+            ? `${erpBaseUrl}/api/sync/terminals?${new URLSearchParams({ tenant_id: identity.tenant_id, company_id: identity.company_id, store_id: identity.store_id })}`
+            : `${apiBase}/terminals?${new URLSearchParams({ pos_device_id: deviceId, tenant_id: identity.tenant_id })}`,
+          timeoutMs: 12000,
+        });
+        const record = result.data?.terminals?.find(item => item.id === identity.terminal_id);
+        const actualDevice = record?.device_id || record?.currentDeviceId;
+        if (!result.ok || actualDevice !== deviceId
+          || record?.tenant_id !== identity.tenant_id || record?.company_id !== identity.company_id || record?.store_id !== identity.store_id
+          || resolveOrderTakerContract(record).terminalType !== resolveOrderTakerContract(pendingTerminal).terminalType
+          || resolveOrderTakerContract(record).masterTerminalId !== resolveOrderTakerContract(pendingTerminal).masterTerminalId) {
+          throw new Error('La aprobación todavía no coincide con el contrato vigente de la terminal. Activación bloqueada.');
+        }
+        await bindTerminal(pendingTerminal, false);
+      }
+    } catch (requestError) {
+      setDeviceRequestError(requestError instanceof Error ? requestError.message : 'No se confirmó la solicitud.');
+    } finally {
+      setIsRetryingAuthorization(false);
+    }
+  };
 
   useEffect(() => {
     if (!showTransferModal || !pendingTerminal || !authorizationIssue) return;
+    if (pendingTerminal.canRequestAuthorization || authorizationIssue.code === 'ADMINISTRATIVE_REQUEST_REQUIRED') return;
     if (!expectsErpDirect || !erpBaseUrl || isBinding || isRetryingAuthorization) return;
 
     const delayMs = Math.min(5000 * (2 ** authorizationPollAttempt), 60000);
@@ -1854,7 +1917,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
                       </div>
                       <div className="grid gap-4 md:grid-cols-2">
                         {store.terminals.map((terminal) => {
-                          const selectable = isTerminalBindingSelectable(terminal);
+                          const selectable = isTerminalBindingSelectable(terminal) || terminal.canRequestAuthorization || (expectsErpDirect && terminal.occupied);
                           const occupied = terminal.occupied;
                           return (
                             <button
@@ -1884,7 +1947,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
                                 {occupied ? (
                                   <span className="flex items-center gap-1.5 text-xs font-black text-amber-700">
                                     <Lock size={13} />
-                                    {terminal.canReauthorize ? 'Reautorizar' : 'No disponible'}
+                                    {terminal.canRequestAuthorization || expectsErpDirect ? 'Solicitar autorización' : terminal.canReauthorize ? 'Reautorizar' : 'No disponible'}
                                   </span>
                                 ) : (
                                   <span className="text-xs font-black text-blue-700">Vincular</span>
@@ -2000,20 +2063,25 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
                 </div>
                 <div className="min-w-0">
                   <p className="text-[10px] font-black uppercase tracking-[0.26em] text-amber-500 sm:text-[11px] sm:tracking-[0.3em]">
-                    Terminal local ocupada
+                    Terminal ocupada
                   </p>
                   <h4 className="mt-2 text-lg font-black leading-tight tracking-tight text-slate-900 sm:text-xl md:text-2xl">
                     Esta terminal está vinculada a otro equipo
                   </h4>
                   <p className="mt-2.5 text-sm font-medium leading-relaxed text-slate-500 sm:text-[15px]">
-                    La Maestra local tiene <span className="font-black text-slate-800">{pendingTerminal.name}</span>{' '}
+                    El contrato vigente mantiene <span className="font-black text-slate-800">{pendingTerminal.name}</span>{' '}
                     asociada a otro dispositivo cliente.
                   </p>
                 </div>
               </div>
 
               <div className="mt-4 rounded-2xl border border-amber-100 bg-amber-50/70 px-4 py-3.5 text-sm font-medium leading-relaxed text-amber-900 sm:mt-5 sm:px-5">
-                <p>No se creará otra terminal ni se cambiará el ERP. Puedes reintentar o reasignar esta terminal local al equipo actual.</p>
+                <p>{pendingTerminal.canRequestAuthorization || expectsErpDirect
+                  ? 'El POS puede solicitar revisión administrativa, pero no aprobar ni transferir el vínculo.'
+                  : 'Puedes reintentar o reasignar esta terminal local al equipo actual.'}</p>
+                {deviceRequest && <p className="mt-2 break-all">Solicitud confirmada: {deviceRequest.request_id}. Estado: {deviceRequest.status}.
+                  {deviceRequest.status === 'APPROVED' && !deviceRequest.binding_authorized ? ' Binding aún no autorizado; activación bloqueada.' : ''}</p>}
+                {deviceRequestError && <p role="alert" className="mt-2 text-red-700">{deviceRequestError}</p>}
                 {authorizationIssue.message && (
                   <p className="mt-2 break-words font-mono text-xs">{authorizationIssue.message}</p>
                 )}
@@ -2060,19 +2128,19 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
 
               <div className="mt-4 rounded-2xl border border-blue-100 bg-blue-50/70 px-4 py-3.5">
                 <p className="text-[10px] font-black uppercase tracking-[0.28em] text-blue-500">
-                  Asociación administrada por la Maestra
+                  Autorización del dispositivo
                 </p>
                 <p className="mt-2 text-xs font-semibold leading-relaxed text-blue-700">
                   {isRetryingAuthorization
                     ? 'Consultando nuevamente la autorización del dispositivo...'
-                    : expectsErpDirect
+                    : expectsErpDirect || pendingTerminal.canRequestAuthorization
                       ? 'La autorización debe completarse desde Cloud Admin. El POS solo comprobará el estado y no puede autorizarse por sí mismo.'
                       : 'La reasignación solo cambia qué equipo cliente utiliza esta terminal dentro de la red local.'}
                 </p>
               </div>
               <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3.5 text-xs font-semibold leading-relaxed text-amber-900">
-                {expectsErpDirect
-                  ? `Identifique en Cloud Admin el dispositivo solicitante: ${authorizationIssue.generatedDeviceId}. Reintentar solo consulta si la autorización externa ya fue completada.`
+                {expectsErpDirect || pendingTerminal.canRequestAuthorization
+                  ? `Dispositivo solicitante: ${authorizationIssue.generatedDeviceId}. Solicitar registra una petición pendiente; Actualizar estado no aprueba ni transfiere el vínculo.`
                   : 'Autorizar este equipo liberará el cliente anterior. La acción ya está protegida por el PIN administrador de la Maestra.'}
               </div>
             </div>
@@ -2086,12 +2154,17 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
                     setAuthorizationIssue(null);
                     setIsRetryingAuthorization(false);
                   }}
+                  disabled={isBinding || isRetryingAuthorization}
                   className="w-full rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-black text-slate-600 shadow-sm transition hover:border-slate-300 hover:bg-slate-50 sm:w-auto"
                 >
                   Cancelar
                 </button>
                 <button
                   onClick={() => {
+                    if (pendingTerminal.canRequestAuthorization || expectsErpDirect) {
+                      void handleAdministrativeRequest();
+                      return;
+                    }
                     setIsRetryingAuthorization(true);
                     void bindTerminal(pendingTerminal, false);
                   }}
@@ -2099,9 +2172,10 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
                   className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-blue-600 px-5 py-3 text-sm font-black text-white shadow-lg shadow-blue-600/20 transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
                 >
                   {(isBinding || isRetryingAuthorization) ? <RefreshCw size={16} className="animate-spin" /> : <RefreshCw size={16} />}
-                  {(isBinding || isRetryingAuthorization) ? 'Reintentando...' : 'Reintentar conexión'}
+                  {(isBinding || isRetryingAuthorization) ? 'Consultando...' : pendingTerminal.canRequestAuthorization || expectsErpDirect
+                    ? deviceRequest ? 'Actualizar estado' : 'Solicitar autorización' : 'Reintentar conexión'}
                 </button>
-                {!expectsErpDirect && (
+                {!expectsErpDirect && !pendingTerminal.canRequestAuthorization && (
                   <button
                     onClick={() => {
                       setIsRetryingAuthorization(true);

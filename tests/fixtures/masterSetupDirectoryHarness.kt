@@ -32,6 +32,24 @@ fun main() {
         .put(record("other-master", master = "other"))
         .put(record("archived").put("status", "archived"))
     val http = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+    val terminalUuid = "0efd23be-d73f-42aa-ab7d-5895b56edee0"
+    val requestUuid = "ff405c30-1fd7-4f03-a1d1-36e997250e44"
+    var devicePosts = 0
+    var deviceRequestStatus = "PENDING"
+    http.createContext("/api/sync/terminals/$terminalUuid/device-requests") { exchange ->
+        check(exchange.requestHeaders.getFirst("X-Device-Id") == "DEV-50WKC4HD")
+        if (exchange.requestMethod == "POST") {
+            devicePosts++
+            val payload = JSONObject(exchange.requestBody.bufferedReader().readText())
+            check(payload.length() == 5 && !payload.has("force_transfer"))
+        }
+        val receipt = JSONObject().put("success", true).put("request_id", requestUuid)
+            .put("status", deviceRequestStatus).put("terminal_id", terminalUuid).put("requested_device_id", "DEV-50WKC4HD")
+        if (exchange.requestMethod == "GET") receipt.put("binding_authorized", false)
+        val bytes = receipt.toString().toByteArray()
+        exchange.sendResponseHeaders(200, bytes.size.toLong())
+        exchange.responseBody.use { it.write(bytes) }
+    }
     http.createContext("/api/sync/terminals") { exchange ->
         requests++
         requestedQuery = exchange.requestURI.rawQuery
@@ -77,10 +95,11 @@ fun main() {
         ServerSocket(0).use { listener ->
             val client = Socket("127.0.0.1", listener.localPort)
             listener.accept().use { accepted ->
-                invoke("bindTerminal", accepted, JSONObject().put("terminal_id", "Caja 01")
-                    .put("pos_device_id", "test-device").put("tenant_id", "tenant").put("force_transfer", true), true)
-                accepted.shutdownOutput()
-                check(client.getInputStream().bufferedReader().readText().contains("TERMINAL_OCCUPIED"))
+                try {
+                    invoke("bindTerminal", accepted, JSONObject().put("terminal_id", "Caja 01")
+                        .put("pos_device_id", "test-device").put("tenant_id", "tenant").put("force_transfer", true), true)
+                    error("forced takeover accepted")
+                } catch (error: IllegalStateException) { check(error.message!!.contains("FORCE_TRANSFER_FORBIDDEN")) }
             }
             client.close()
         }
@@ -93,6 +112,49 @@ fun main() {
         check((invoke("buildInitialConfigResponse", "Caja 01", "/api/setup/initial-config/Caja?pos_device_id=test-device") as JSONObject)
             .getString("tenant_id") == "tenant")
         println("PASS: initial-config validates scope and device binding")
+        val requestSnapshot = JSONObject(original.toString())
+        val requestContext = requestSnapshot.getJSONObject("masterSetupContext")
+        val requestPayload = JSONObject().put("tenant_id", "9eda7d73-76e4-4432-ad13-4934fefe8f69")
+            .put("company_id", "6b6153ce-501e-4702-9ae9-34a3f1ab9042")
+            .put("store_id", "de8dd318-12e7-4a3f-b0e8-4ea1bdb70c07")
+            .put("terminal_id", terminalUuid).put("device_id", "DEV-50WKC4HD")
+        for ((field, key) in listOf("tenant_id" to "tenantId", "company_id" to "companyId", "store_id" to "storeId")) {
+            requestContext.put(key, requestPayload.getString(field))
+        }
+        directory = JSONArray().put(record(terminalUuid, tenant = requestPayload.getString("tenant_id"),
+            company = requestPayload.getString("company_id"), store = requestPayload.getString("store_id"), device = "DEV-HUUCIX17"))
+        setConfig(requestSnapshot)
+        fun request(payload: JSONObject, read: Boolean): String {
+            return ServerSocket(0).use { listener ->
+                Socket("127.0.0.1", listener.localPort).use { client ->
+                    listener.accept().use { accepted ->
+                        invoke("handleDeviceRequest", accepted, payload, read)
+                        accepted.shutdownOutput()
+                        client.getInputStream().bufferedReader().readText()
+                    }
+                }
+            }
+        }
+        val beforeSnapshot = requestSnapshot.toString()
+        check((invoke("buildTerminalListResponse", "/api/setup/terminals?pos_device_id=DEV-50WKC4HD") as JSONObject)
+            .getJSONArray("terminals").getJSONObject(0).getBoolean("can_request_authorization"))
+        check(devicePosts == 0) // GET directory never creates requests.
+        repeat(2) { check(request(requestPayload, false).contains(requestUuid)) }
+        check(devicePosts == 2)
+        val query = JSONObject(requestPayload.toString()).put("request_id", requestUuid)
+        check(request(query, true).contains("PENDING"))
+        deviceRequestStatus = "APPROVED"
+        check(request(query, true).contains("\"binding_authorized\":false"))
+        for (badPayload in listOf(JSONObject(requestPayload.toString()).put("force_transfer", false),
+            JSONObject(requestPayload.toString()).put("company_id", "other"),
+            JSONObject(requestPayload.toString()).put("terminal_id", "11111111-1111-1111-1111-111111111111"))) {
+            try { request(badPayload, false); error("invalid request accepted") }
+            catch (error: IllegalStateException) { check(error.message!!.startsWith("DEVICE_REQUEST_")) }
+        }
+        check(devicePosts == 2 && requestSnapshot.toString() == beforeSnapshot)
+        check(directory.getJSONObject(0).getString("device_id") == "DEV-HUUCIX17")
+        println("PASS: explicit request proxy, retry receipt, pending/approved state, scope, forbidden fields and binding unchanged")
+        setConfig(original)
         val before = requests
         setConfig(JSONObject(original.toString()).also { it.getJSONObject("masterSetupContext").put("erpEnabled", false) })
         check((invoke("buildTerminalListResponse", "/api/setup/terminals") as JSONObject).getJSONArray("terminals").length() == 1)
