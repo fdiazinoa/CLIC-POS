@@ -42,13 +42,14 @@ export const persistLocalDeviceId = (deviceId: string) => {
   localStorage.setItem(DEVICE_PAIRING_SESSION_STORAGE_KEY, normalized);
 };
 
-const persistDeviceIdToPreferences = async (deviceId: string) => {
+const persistDeviceIdToPreferences = async (deviceId: string, requirePersistence = false) => {
   const normalized = normalize(deviceId);
   if (!normalized) return;
   try {
     await Preferences.set({ key: PERSISTENT_DEVICE_ID_STORAGE_KEY, value: normalized });
   } catch (error) {
     console.warn('[device_identity] persistent_storage_write_failed', error);
+    if (requirePersistence) throw new Error('DEVICE_IDENTITY_STORAGE_UNAVAILABLE: No se pudo guardar la identidad persistida.');
   }
 };
 
@@ -58,7 +59,7 @@ const readDeviceIdFromPreferences = async (): Promise<string> => {
     return normalize(result.value);
   } catch (error) {
     console.warn('[device_identity] persistent_storage_read_failed', error);
-    return '';
+    throw new Error('DEVICE_IDENTITY_STORAGE_UNAVAILABLE: No se pudo recuperar la identidad persistida. No se generará otra.');
   }
 };
 
@@ -66,39 +67,58 @@ export const resolveOrCreateLocalDeviceId = (): string => {
   const existing = resolveLocalDeviceId();
   if (existing) {
     persistLocalDeviceId(existing);
-    void persistDeviceIdToPreferences(existing);
     return existing;
   }
 
-  const generated = `DEV-${Math.random().toString(36).substring(2, 10).toUpperCase()}`;
-  persistLocalDeviceId(generated);
-  void persistDeviceIdToPreferences(generated);
-  console.info('device_id_generated_first_install', { deviceId: generated });
-  return generated;
+  throw new Error('DEVICE_IDENTITY_NOT_READY: Recupera primero la identidad persistida antes de sincronizar.');
 };
 
-export const resolveOrCreatePersistentDeviceId = async (): Promise<string> => {
-  const persistentDeviceId = await readDeviceIdFromPreferences();
+export const createPersistentDeviceIdentityResolver = (storage: {
+  readPersistent: () => Promise<string>;
+  readLocal: () => string;
+  writeLocal: (id: string) => void;
+  writePersistent: (id: string) => Promise<void>;
+  generate: () => string;
+}) => {
+let deviceIdentityInitialization: Promise<string> | null = null;
+const initializePersistentDeviceId = async (): Promise<string> => {
+  const persistentDeviceId = await storage.readPersistent();
   if (persistentDeviceId) {
-    persistLocalDeviceId(persistentDeviceId);
+    storage.writeLocal(persistentDeviceId);
     console.info('device_id_loaded_from_persistent_storage', { deviceId: persistentDeviceId });
     return persistentDeviceId;
   }
 
-  const localDeviceId = resolveLocalDeviceId();
+  const localDeviceId = storage.readLocal();
   if (localDeviceId) {
-    persistLocalDeviceId(localDeviceId);
-    await persistDeviceIdToPreferences(localDeviceId);
+    await storage.writePersistent(localDeviceId);
+    storage.writeLocal(localDeviceId);
     console.info('device_id_restored_after_db_reset', { deviceId: localDeviceId });
     return localDeviceId;
   }
 
-  const generated = `DEV-${Math.random().toString(36).substring(2, 10).toUpperCase()}`;
-  persistLocalDeviceId(generated);
-  await persistDeviceIdToPreferences(generated);
+  const generated = storage.generate();
+  await storage.writePersistent(generated);
+  storage.writeLocal(generated);
   console.info('device_id_generated_first_install', { deviceId: generated });
   return generated;
 };
+
+return (): Promise<string> => {
+  if (!deviceIdentityInitialization) {
+    deviceIdentityInitialization = initializePersistentDeviceId().finally(() => {
+      deviceIdentityInitialization = null;
+    });
+  }
+  return deviceIdentityInitialization;
+};
+};
+
+export const resolveOrCreatePersistentDeviceId = createPersistentDeviceIdentityResolver({
+  readPersistent: readDeviceIdFromPreferences, readLocal: resolveLocalDeviceId,
+  writeLocal: persistLocalDeviceId, writePersistent: id => persistDeviceIdToPreferences(id, true),
+  generate: () => `DEV-${Math.random().toString(36).substring(2, 10).toUpperCase()}`,
+});
 
 export const restorePersistentDeviceIdAfterDbReset = async (): Promise<string> => {
   const deviceId = await resolveOrCreatePersistentDeviceId();

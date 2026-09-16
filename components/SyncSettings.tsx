@@ -10,7 +10,6 @@ import { db } from '../utils/db';
 import { dbAdapter } from '../services/db';
 import { loadSyncProfile, resolveSyncTarget, SyncProfile, ResolvedSyncTarget } from '../services/sync/SyncProfile';
 import { posCloudStagingService } from '../services/sync/PosCloudStagingService';
-import { resetDeviceIdentityBySupport } from '../utils/deviceRevocation';
 import { getConfigPushV2Diagnostics, triggerErpSyncOutbox } from '../utils/erpSyncLifecycle';
 import { syncTriggerCoordinator } from '../services/sync/SyncTriggerCoordinator';
 import { CATALOG_CONFLICT_PERMISSIONS, catalogEditQueue, hasCatalogConflictPermission, resolveCatalogConflict, shouldShowCatalogEditInSyncMonitor } from '../services/sync/catalogEdits';
@@ -1168,32 +1167,10 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, currentUser, roles,
                                 )}
 
                                 <div className="mt-10 pt-6 border-t border-blue-100">
-                                    <button
-                                        onClick={async () => {
-                                            if (await clicConfirm('⚠️ SOPORTE: ¿Deseas resetear la identidad física de este dispositivo?\n\nAl hacerlo:\n- Se generará un nuevo device_id DEV-*.\n- Cloud-Admin deberá reautorizar este equipo.\n- Se borrará la IP de la Maestra guardada.\n- Se reseteará la configuración local.\n\nNo uses esta opción para limpiar solo la BD local.')) {
-                                                try {
-                                                    // 1. Explicit support-only identity reset
-                                                    await resetDeviceIdentityBySupport();
-                                                    localStorage.removeItem('pos_master_ip');
-                                                    localStorage.removeItem('CLIC_POS_MASTER_URL');
-                                                    localStorage.removeItem('pos_sync_status');
-
-                                                    // 2. Wipe Local DB Config to avoid stale Slave/Master role mismatch
-                                                    await db.deleteDocument('config', 'config' as any); // Delete whole config document
-
-                                                    console.log("🧺 Terminal identity reset by support & local config wiped.");
-                                                    window.location.reload();
-                                                } catch (err) {
-                                                    console.error("Error during reset:", err);
-                                                    alert("Error al resetear. Se recomienda limpiar el caché del navegador manualmente.");
-                                                }
-                                            }
-                                        }}
-                                        className="w-full py-3 bg-red-50 hover:bg-red-100 text-red-600 rounded-xl font-bold text-sm transition-colors flex items-center justify-center gap-2 border border-red-100"
-                                    >
-                                        <Monitor size={18} />
-                                        Resetear identidad del dispositivo (Soporte)
-                                    </button>
+                                    <p className="rounded-xl border border-blue-100 bg-blue-50 p-3 text-sm text-blue-800">
+                                        La identidad del equipo se conserva fuera de la BD local. Limpiar la BD o actualizar el APK no cambia el dispositivo.
+                                        Para cambiar de equipo, vincula el dispositivo nuevo mediante autorización administrativa.
+                                    </p>
                                 </div>
                             </div>
                         )}

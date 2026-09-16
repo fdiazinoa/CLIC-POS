@@ -13,7 +13,7 @@ import {
 } from './erpOutboundPayloads';
 import { permissionService } from './PermissionService';
 import { getSyncDeviceToken, markSyncDeviceTokenInvalid, persistSyncDeviceToken, previewSyncDeviceToken, resolveSyncDeviceToken } from './deviceToken';
-import { DEVICE_SUPERSEDED_MESSAGE, dispatchDeviceRevoked, resolveLocalDeviceId, resolveOrCreateLocalDeviceId } from '../../utils/deviceRevocation';
+import { DEVICE_SUPERSEDED_MESSAGE, dispatchDeviceRevoked, resolveLocalDeviceId } from '../../utils/deviceRevocation';
 import {
     getSyncProfileSourcePriority,
     loadSyncProfile,
@@ -1209,8 +1209,7 @@ class ApiSyncAdapter {
             storedCredentials.deviceId,
             safeLocalStorageGet('CLIC_POS_DEVICE_ID'),
             safeLocalStorageGet('pos_device_id'),
-            safeLocalStorageGet('clic_pos_device_id'),
-            resolveOrCreateLocalDeviceId()
+            safeLocalStorageGet('clic_pos_device_id')
         );
     }
 
