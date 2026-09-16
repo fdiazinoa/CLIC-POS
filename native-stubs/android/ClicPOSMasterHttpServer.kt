@@ -161,7 +161,7 @@ object ClicPOSMasterHttpServer {
         socket.use { client ->
             try {
                 client.soTimeout = 5000
-                val input = client.getInputStream()
+                val input = java.io.BufferedInputStream(client.getInputStream())
                 val requestLine = readAsciiLine(input)
                 if (requestLine.isBlank()) return
 

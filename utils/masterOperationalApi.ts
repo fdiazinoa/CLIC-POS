@@ -140,6 +140,12 @@ const uuid = (value: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4
 const scopeValue = (source: Record<string, any>, field: 'tenant' | 'company' | 'store') =>
   id(source[`${field}Id`] || source[`${field}_id`] || source[`local${field[0].toUpperCase()}${field.slice(1)}Id`]);
 
+export const assertOperationalMasterContractReady = (contract: OperationalMasterContract): void => {
+  if (contract.erpManaged && ![contract.terminalId, contract.masterTerminalId, contract.tenantId, contract.companyId, contract.storeId].every(uuid)) {
+    throw new Error('MASTER_CONTRACT_MISSING: falta UUID o empresa/sucursal del vínculo ERP vigente.');
+  }
+};
+
 export const validateOperationalMasterEndpoint = (
   base: string, remote: Record<string, any>, contract: OperationalMasterContract,
 ): string => {
@@ -162,9 +168,7 @@ export const validateOperationalMasterEndpoint = (
   const advertisedRoles = [remote, remote.runtime, remote.masterSetupContext].filter(Boolean).map(resolveTerminalRuntimeRole);
   if (!isEligibleOperationalMasterConfig(remote) || advertisedRoles.some(role => role && role !== DeviceRole.STANDARD_POS)) throw new Error('MASTER_ROLE_INVALID: el servidor no es una Caja Master operativa.');
   if (contract.erpManaged) {
-    if (![contract.terminalId, contract.masterTerminalId, contract.tenantId, contract.companyId, contract.storeId].every(uuid)) {
-      throw new Error('MASTER_CONTRACT_MISSING: falta UUID o empresa/sucursal del vínculo ERP vigente.');
-    }
+    assertOperationalMasterContractReady(contract);
     if (!serving || servingId !== id(contract.masterTerminalId) || (declaredId && declaredId !== id(contract.masterTerminalId))) throw new Error('MASTER_IDENTITY_MISMATCH: UUID de master distinto del vínculo vigente.');
     const context = remote.masterSetupContext || {};
     for (const field of ['tenant', 'company', 'store'] as const) {
@@ -182,12 +186,17 @@ export const createOperationalMasterResolver = (options: {
   getContract: () => OperationalMasterContract;
   discover: () => Promise<Array<{ baseUrl: string; config: Record<string, any> }>>;
   mirror: (base: string) => void;
+  isReady?: () => boolean;
 }) => {
   let accepted: { key: string; base: string } | null = null;
   let pending: { key: string; work: Promise<string> } | null = null;
   let generation = 0;
   const key = ({ localIps: _localIps, ...identity }: OperationalMasterContract) => JSON.stringify(identity);
+  const assertReady = () => {
+    if (options.isReady && !options.isReady()) throw new Error('MASTER_ENDPOINT_NOT_READY: el vínculo todavía está cargando.');
+  };
   const current = () => {
+    if (options.isReady && !options.isReady()) return '';
     if (!accepted) return '';
     if (accepted.key !== key(options.getContract())) { accepted = null; return ''; }
     const host = new URL(accepted.base).hostname.toLowerCase();
@@ -197,19 +206,28 @@ export const createOperationalMasterResolver = (options: {
   };
   const invalidate = () => { accepted = null; pending = null; generation += 1; };
   const ensure = async (): Promise<string> => {
+    assertReady();
     const cached = current();
     if (cached) return cached;
     const contract = options.getContract();
+    assertOperationalMasterContractReady(contract);
     const contractKey = key(contract);
     if (pending?.key === contractKey) return pending.work;
     const attemptGeneration = generation;
+    const assertCurrentAttempt = () => {
+      if (attemptGeneration !== generation || key(options.getContract()) !== contractKey) throw new Error('MASTER_CONTRACT_CHANGED: cambió el vínculo durante la validación.');
+      assertReady();
+    };
     const work = (async () => {
-      const candidates = await options.discover();
+      let candidates: Awaited<ReturnType<typeof options.discover>>;
+      try { candidates = await options.discover(); }
+      catch (error) { assertCurrentAttempt(); throw error; }
+      assertCurrentAttempt();
       let failure: unknown = new Error('MASTER_UNAVAILABLE: no se encontró la master vinculada.');
       for (const candidate of candidates) {
         try {
           const base = validateOperationalMasterEndpoint(candidate.baseUrl, candidate.config, { ...contract, localIps: options.getContract().localIps });
-          if (attemptGeneration !== generation || key(options.getContract()) !== contractKey) throw new Error('MASTER_CONTRACT_CHANGED: cambió el vínculo durante la validación.');
+          assertCurrentAttempt();
           accepted = { key: contractKey, base };
           options.mirror(base);
           return base;
@@ -220,7 +238,26 @@ export const createOperationalMasterResolver = (options: {
     pending = { key: contractKey, work };
     try { return await work; } finally { if (pending?.work === work) pending = null; }
   };
-  return { current, ensure, invalidate };
+  // One immediate reconciliation, not a timer or retry loop. ensure retains its
+  // strict superseded error for callers that do not request reconciliation.
+  const ensureCurrent = async (budget = { remaining: 1 }) => {
+    try { return await ensure(); }
+    catch (error) {
+      if (!(error instanceof Error) || !error.message.startsWith('MASTER_CONTRACT_CHANGED:')) throw error;
+      if (budget.remaining <= 0) throw error;
+      budget.remaining -= 1;
+      return ensure();
+    }
+  };
+  const captureAuthority = () => {
+    const capturedKey = key(options.getContract());
+    const capturedGeneration = generation;
+    return () => (!options.isReady || options.isReady())
+      && capturedGeneration === generation && capturedKey === key(options.getContract())
+      && accepted?.key === capturedKey
+      && !options.getContract().localIps.map(id).includes(new URL(accepted.base).hostname.toLowerCase());
+  };
+  return { current, ensure, ensureCurrent, captureAuthority, invalidate };
 };
 
 let operationalMasterResolver: ReturnType<typeof createOperationalMasterResolver> | null = null;
@@ -230,7 +267,7 @@ export const setOperationalMasterResolver = (resolver: ReturnType<typeof createO
 export const resolveValidatedOperationalApiUrl = async (path: string): Promise<string> => {
   if (isClientTerminalMode()) {
     if (!operationalMasterResolver) throw new Error('MASTER_ENDPOINT_NOT_READY: el vínculo todavía está cargando.');
-    await operationalMasterResolver.ensure();
+    await operationalMasterResolver.ensureCurrent();
   }
   return resolveOperationalApiUrl(path);
 };
