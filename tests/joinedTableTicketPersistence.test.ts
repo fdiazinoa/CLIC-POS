@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
+import { createPaymentFractionPlan, retainCurrentPaymentFractionPlan } from '../utils/paymentFractions';
 
 // Exercise the actual three POS builders and App reconciliation, not a second
 // implementation of the save logic. No server, device or business data writes.
@@ -21,6 +22,7 @@ function save(builder: string, ticket: any, activeTable: any, items: any[]) {
     existing: ticket, existingParked: ticket, activeTable,
     orderId: ticket.id, parkedTicketId: ticket.id,
     cart: items, ticketItems: items, cartTotal: 150, ticketTotal: 150,
+    resolvedTicketTotal: 150, retainCurrentPaymentFractionPlan,
     discountAmount: 0, globalDiscount: { type: 'PERCENT', value: 0 },
     selectedCustomer: null, activeBarTabName: null, activeBarTabId: null,
     activeTableContext: { compactLabel: activeTable.name, roomLabel: 'QA' },
@@ -33,6 +35,16 @@ function save(builder: string, ticket: any, activeTable: any, items: any[]) {
 }
 
 for (const builder of ['syncedTicket', 'newParked', 'tableOrder']) {
+  for (const originalTotal of [150, 100]) {
+    test(`${builder}: retains only an installment plan matching the current total ${originalTotal}`, () => {
+      const table = { id: 'TABLE_01', name: 'Mesa 1', status: 'OCCUPIED' };
+      const plan = createPaymentFractionPlan(originalTotal, 3, '2026-09-16T00:00:00Z');
+      const ticket = { id: 'installments', name: table.name, tableId: table.id, paymentFraction: plan };
+      const next = save(builder, ticket, table, [{ id: 'single', price: 150, quantity: 1 }]);
+      assert.equal(next.total, 150);
+      assert.deepEqual(next.paymentFraction, originalTotal === 150 ? plan : undefined);
+    });
+  }
   for (const ids of [['TABLE_01', 'TABLE_02'], ['TABLE_01', 'TABLE_02', 'TABLE_03']]) {
    for (const enteredId of ids) {
     test(`${builder}: editing ${enteredId} in group of ${ids.length} preserves the whole joined account through save/reload/retry`, () => {
