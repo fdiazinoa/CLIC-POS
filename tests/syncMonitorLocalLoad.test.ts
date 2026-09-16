@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import ts from 'typescript';
+import { shouldShowCatalogEditInSyncMonitor } from '../services/sync/catalogEdits';
 
 // Execute the component's real loader and document formatting with isolated I/O.
 const source = readFileSync(new URL('../components/SyncSettings.tsx', import.meta.url), 'utf8');
@@ -9,9 +10,15 @@ const loaders = source.slice(source.indexOf('    const resolveDocumentStatus'), 
 const javascript = ts.transpileModule(loaders, {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
 }).outputText;
+// Execute the actual exported formatter without importing the full React/DB singleton tree.
+const formatter = source.slice(source.indexOf('const catalogFieldLabels:'), source.indexOf('interface SyncSettingsProps'));
+const formatterJavascript = ts.transpileModule(formatter.replace('export const', 'const'), {
+  compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
+}).outputText;
+const resolveSyncDocumentDisplayId = new Function(`${formatterJavascript}; return resolveSyncDocumentDisplayId;`)();
 
-function setup(get: (collection: string) => Promise<any[]>, getSyncStatus: () => Promise<unknown>, nativePage?: () => Promise<any>) {
-  const state = { rows: [] as any[], error: null as string | null, loading: false, totals: { total: 0, blocked: 0 } };
+function setup(get: (collection: string) => Promise<any[]>, getSyncStatus: () => Promise<unknown>, nativePage?: () => Promise<any>, canViewCatalogConflicts = false) {
+  const state = { rows: [] as any[], error: null as string | null, loading: false, totals: { total: 0, blocked: 0 }, caughtErrors: [] as unknown[] };
   const deps = {
     nativePagination: Boolean(nativePage), dbAdapter: { getSyncMonitorPage: nativePage },
     currentPage: 1, rowsPerPage: 10, searchTerm: '', statusFilter: 'ALL', terminalFilter: 'ALL',
@@ -22,7 +29,8 @@ function setup(get: (collection: string) => Promise<any[]>, getSyncStatus: () =>
     setAuditData: (rows: any[]) => { state.rows = rows; },
     setAuditLoadError: (error: string | null) => { state.error = error; },
     setIsLoadingAudit: (loading: boolean) => { state.loading = loading; },
-    console: { error() {} },
+    resolveSyncDocumentDisplayId, shouldShowCatalogEditInSyncMonitor, canViewCatalogConflicts,
+    console: { error(...args: unknown[]) { state.caughtErrors.push(args); } },
   };
   const load = new Function(...Object.keys(deps), `${javascript}\nreturn { loadStatus, loadAuditData };`)(...Object.values(deps));
   return { state, ...load };
@@ -46,6 +54,7 @@ test('three local blocked documents appear even while remote diagnostics never f
   await loading;
   assert.equal(state.rows.length, 3);
   assert.equal(state.error, null);
+  assert.equal(state.caughtErrors.length, 1, 'only the intentional remote timeout was caught');
 });
 
 test('local read failure is visible and a local retry recovers without a network call', async () => {
@@ -61,6 +70,7 @@ test('local read failure is visible and a local retry recovers without a network
   await loadAuditData();
   assert.equal(state.error, null);
   assert.equal(state.rows.length, 3);
+  assert.equal(state.caughtErrors.length, 1, 'retry must not catch a hidden formatter ReferenceError');
 });
 
 test('overlapping refreshes share the in-flight guard and preserve displayed documents', async () => {
@@ -82,6 +92,8 @@ test('overlapping refreshes share the in-flight guard and preserve displayed doc
   await first;
   assert.equal(state.rows.length, 3);
   assert.equal(state.loading, false);
+  assert.equal(state.error, null);
+  assert.deepEqual(state.caughtErrors, []);
 });
 
 test('native monitor uses the SQLite page and global counts without reading whole collections', async () => {
@@ -92,4 +104,35 @@ test('native monitor uses the SQLite page and global counts without reading whol
   assert.equal(state.rows.length, 1);
   assert.equal(state.rows[0].id, 'ZS002');
   assert.deepEqual(state.totals, { total: 350, blocked: 12 });
+  assert.deepEqual(state.caughtErrors, []);
+});
+
+test('nonempty catalog edits use the real formatter and permission filter, never expose resolved conflicts', async () => {
+  for (const permitted of [false, true]) {
+    const edits = [
+      { id: 'pending', label: 'Artículo', mutation: { field: 'tax_ids' }, status: 'PENDING' },
+      { id: 'conflict', label: 'Conflicto', status: 'CONFLICT' },
+      { id: 'rejected', label: 'Rechazado', status: 'REJECTED' },
+      { id: 'resolved', label: 'Resuelto', status: 'CONFLICT', resolution: 'ACCEPT_ERP' },
+    ];
+    const { state, loadAuditData } = setup(async collection => collection === 'catalogEdits' ? edits : [],
+      async () => assert.fail('local refresh cannot require remote diagnostics'), undefined, permitted);
+    await loadAuditData();
+    assert.deepEqual(state.rows.map((row: any) => row.raw.id), permitted ? ['pending', 'conflict', 'rejected'] : ['pending']);
+    assert.equal(state.rows[0].id, 'Artículo · Impuestos');
+    assert.equal(state.error, null);
+    assert.deepEqual(state.caughtErrors, []);
+  }
+});
+
+test('a completed refresh replaces changed local data instead of retaining a stale document snapshot', async () => {
+  let documents = [{ id: 'old', syncStatus: 'PENDING' }];
+  const { state, loadAuditData } = setup(async collection => collection === 'cashMovements' ? documents : [], async () => {});
+  await loadAuditData();
+  assert.equal(state.rows[0].id, 'old');
+  documents = [{ id: 'new', syncStatus: 'APPLIED' }];
+  await loadAuditData();
+  assert.deepEqual(state.rows.map((row: any) => row.id), ['new']);
+  assert.equal(state.error, null);
+  assert.deepEqual(state.caughtErrors, []);
 });

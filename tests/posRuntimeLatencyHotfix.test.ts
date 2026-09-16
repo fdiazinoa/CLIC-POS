@@ -87,7 +87,7 @@ test('ERP startup work waits until the local UI is ready and leaves an operator 
 });
 
 test('restaurant login paints the local floor map before remote reconciliation', () => {
-  const loginStart = appSource.indexOf('onLogin: async (u: User) =>');
+  const loginStart = appSource.indexOf('onLogin: async (u: User, input?: { startedAt: number }) =>');
   const tableCase = appSource.indexOf("case 'TABLE_MAP':", loginStart);
   const loginBlock = appSource.slice(loginStart, tableCase);
   assert.ok(loginStart >= 0 && tableCase > loginStart);
@@ -104,7 +104,8 @@ test('PIN validation contains no artificial success or failure delay', () => {
     const checkEnd = source.indexOf('const handleKeyPress', checkStart);
     const block = source.slice(checkStart, checkEnd);
     assert.doesNotMatch(block, /setTimeout/);
-    assert.match(block, /onLogin\(user\)/);
+    assert.ok(checkStart >= 0 && checkEnd > checkStart);
+    assert.match(block, /onLogin\(user, \{ startedAt: lastAuthorizedInputAtRef\.current \?\? performance\.now\(\) \}\)/);
   }
 });
 
