@@ -90,6 +90,30 @@ test('destination ownership, lazy lifetime, callbacks and real checkout branches
     caller('PersistentPOSHost', hooks, '../App.tsx')({ visible: true, closeTrace, onInteractive: () => released++ });
     effects.splice(0).forEach(effect => effect()); paint();
     assert.equal(released, 1, 'real retained host releases functional transition even after cancellation');
+    for (const lifecycle of ['unmount-before-frame', 'unmount-before-task', 'strict-mode-replay'] as const) {
+      const mountedTrace = api.beginDestinationInteraction('CLOSE_TABLE_MAP', clock);
+      api.expectInteractionDestination(mountedTrace, 'POS_RETAINED');
+      let completions = 0;
+      caller('PersistentPOSHost', hooks, '../App.tsx')({ visible: true, closeTrace: mountedTrace, onInteractive: () => completions++ });
+      const setup = effects.splice(0) as Array<() => void | (() => void)>;
+      const cleanups = setup.map(effect => effect());
+      assert.ok(cleanups.some(cleanup => typeof cleanup === 'function'), 'host must expose an unmount cleanup');
+      if (lifecycle === 'unmount-before-task') {
+        clock += 10; frames.splice(0).forEach(frame => frame());
+      }
+      cleanups.forEach(cleanup => { if (typeof cleanup === 'function') cleanup(); });
+      if (lifecycle === 'strict-mode-replay') setup.forEach(effect => effect());
+      paint();
+      assert.equal(completions, 1, `${lifecycle}: release the functional transition exactly once`);
+      if (lifecycle === 'strict-mode-replay') {
+        assert.equal(mountedTrace.status, 'completed');
+        assert.notEqual(mountedTrace.stages.FIRST_FRAME_INTERACTIVE, undefined);
+      } else {
+        assert.equal(mountedTrace.status, 'cancelled');
+        assert.equal(mountedTrace.stages.FIRST_FRAME_INTERACTIVE, undefined);
+        if (lifecycle === 'unmount-before-frame') assert.equal(mountedTrace.stages.FIRST_FRAME_VISIBLE, undefined);
+      }
+    }
     const hidden = api.beginDestinationInteraction('CLOSE_TABLE_MAP', clock);
     caller('TableMapLifecycleBoundary', hooks, '../App.tsx')({ visible: false, closeTrace: hidden });
     effects.splice(0).forEach(effect => effect());

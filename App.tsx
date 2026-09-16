@@ -1924,6 +1924,10 @@ const PersistentPOSHost: React.FC<PersistentPOSHostProps> = ({ visible, closeTra
 
   useLayoutEffect(() => {
     destinationVisibleRef.current = visible;
+    return () => { destinationVisibleRef.current = false; };
+  }, [visible]);
+
+  useLayoutEffect(() => {
     if (!visible) return;
     const freshCloseTrace = closeTrace && closeTrace !== consumedCloseTraceRef.current ? closeTrace : null;
     const trace = freshCloseTrace || (['OPEN_TABLE'] as const)
