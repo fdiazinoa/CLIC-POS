@@ -147,17 +147,24 @@ export const markInteractionStage = (trace: PosInteractionTrace | null | undefin
 export const beginPosInteraction = (
   operation: PosInteractionOperation,
   metadata?: Record<string, unknown>,
+  inputStartedAt?: number,
 ): PosInteractionTrace => {
-  const startedAt = now();
+  const handlerStartedAt = now();
+  const inputBoundaryValidated = inputStartedAt !== undefined && Number.isFinite(inputStartedAt)
+    && inputStartedAt >= 0 && inputStartedAt <= handlerStartedAt && handlerStartedAt - inputStartedAt < 60_000
+    ;
+  const startedAt = inputBoundaryValidated ? inputStartedAt! : handlerStartedAt;
   const trace: PosInteractionTrace = {
     id: `${operation}-${Date.now()}-${++sequence}`,
     operation,
     startedAt,
-    stages: { INPUT_RECEIVED: startedAt, HANDLER_START: startedAt },
+    stages: { INPUT_RECEIVED: startedAt, HANDLER_START: handlerStartedAt },
     durations: {},
     renderCount: 0,
     allocationsApprox: 0,
-    metadata,
+    metadata: metadata?.measurementBoundary === 'authorized-input-to-destination'
+      ? { ...metadata, inputBoundaryValidated, inputBoundarySource: inputBoundaryValidated ? 'authorized-last-pin' : 'handler-fallback', longTaskAttributionWindowMs: 10_000 }
+      : metadata,
     longTasks: [],
     memory: [readMemory('INPUT_RECEIVED')],
   };
@@ -198,8 +205,15 @@ export const markRenderEnd = (renderTarget: string) => {
   const pending = pendingByRenderTarget.get(renderTarget) || [];
   if (pending.length === 0) return;
   pendingByRenderTarget.delete(renderTarget);
+  const destination = pending.filter(trace => trace.metadata?.measurementBoundary === 'authorized-input-to-destination');
+  for (const trace of destination) {
+    markInteractionStage(trace, 'RENDER_END');
+    markInteractionVisibleAndInteractive(trace);
+  }
+  const legacy = pending.filter(trace => !destination.includes(trace));
+  if (legacy.length === 0) return;
   window.requestAnimationFrame(() => {
-    for (const trace of pending) {
+    for (const trace of legacy) {
       if (trace.stages.RENDER_END === undefined) markInteractionStage(trace, 'RENDER_END');
     }
   });
@@ -229,14 +243,25 @@ export const getPosInteractionReport = () => {
   const operations = Array.from(new Set(traces.map(trace => trace.operation)));
   return Object.fromEntries(operations.map(operation => {
     const samples = traces.filter(trace => trace.operation === operation);
-    const visible = samples.flatMap(trace => trace.durations.inputToVisible ?? []);
+    const measured = samples.filter(trace => trace.metadata?.measurementBoundary !== 'authorized-input-to-destination' || trace.metadata.inputBoundaryValidated === true);
+    const visible = measured.flatMap(trace => trace.metadata?.measurementBoundary === 'authorized-input-to-destination'
+      && trace.stages.FIRST_FRAME_VISIBLE === undefined ? [] : trace.durations.inputToVisible ?? []);
+    const interactive = measured.flatMap(trace => trace.durations.inputToInteractive ?? []);
     const filters = samples.flatMap(trace => trace.durations.filter ?? []);
     const localUnlocks = samples.flatMap(trace => trace.durations.inputToLocalUnlock ?? []);
     return [operation, {
       samples: samples.length,
+      invalidInputBoundarySamples: samples.length - measured.length,
+      longTaskAttributionTruncatedSamples: samples.filter(trace => trace.metadata?.longTaskAttributionTruncated).length,
+      visibleSamples: visible.length,
+      interactiveSamples: interactive.length,
+      markerSemantics: 'FIRST_FRAME_VISIBLE=rAF prepaint proxy; FIRST_FRAME_INTERACTIVE=next-task proxy; legacy RENDER_END=rAF commit proxy. None is DisplayPresent or measured input responsiveness.',
       inputLatencyP50Ms: percentile(visible, 0.5),
       inputLatencyP95Ms: percentile(visible, 0.95),
       inputLatencyP99Ms: percentile(visible, 0.99),
+      inputToInteractiveP50Ms: percentile(interactive, 0.5),
+      inputToInteractiveP95Ms: percentile(interactive, 0.95),
+      inputToInteractiveP99Ms: percentile(interactive, 0.99),
       localUnlockP50Ms: percentile(localUnlocks, 0.5),
       localUnlockP95Ms: percentile(localUnlocks, 0.95),
       localUnlockP99Ms: percentile(localUnlocks, 0.99),
@@ -271,11 +296,21 @@ export const markInteractionVisibleAndInteractive = (
 if (typeof PerformanceObserver !== 'undefined' && PerformanceObserver.supportedEntryTypes?.includes('longtask')) {
   try {
     new PerformanceObserver(list => {
-      const trace = getLatestPosInteraction('CLOSE_TABLE_MAP');
-      if (!trace || trace.stages.FIRST_FRAME_INTERACTIVE !== undefined) return;
+      const active = traces.filter(trace => {
+        if (!['CLOSE_TABLE_MAP', 'OPEN_SALE_SCREEN', 'OPEN_TABLE', 'CHANGE_TABLE'].includes(trace.operation)) return false;
+        const completion = trace.stages.FIRST_FRAME_INTERACTIVE ?? (trace.metadata?.measurementBoundary === 'authorized-input-to-destination' ? undefined : trace.stages.RENDER_END);
+        if (completion !== undefined) return true; // observer delivery may follow the completion marker
+        if (now() - trace.startedAt < 10_000) return true;
+        trace.metadata = { ...trace.metadata, longTaskAttributionTruncated: true };
+        return false;
+      });
       for (const entry of list.getEntries()) {
-        if (entry.startTime + entry.duration < trace.startedAt) continue;
-        trace.longTasks.push({ startMs: round(entry.startTime - trace.startedAt), durationMs: round(entry.duration) });
+        for (const trace of active) {
+          const completion = trace.stages.FIRST_FRAME_INTERACTIVE ?? (trace.metadata?.measurementBoundary === 'authorized-input-to-destination' ? undefined : trace.stages.RENDER_END);
+          if (entry.startTime + entry.duration < trace.startedAt || (completion !== undefined && entry.startTime > completion)) continue;
+          trace.longTasks.push({ startMs: round(entry.startTime - trace.startedAt), durationMs: round(entry.duration) });
+          if (trace.longTasks.length > 50) trace.longTasks.splice(0, trace.longTasks.length - 50);
+        }
       }
     }).observe({ entryTypes: ['longtask'] });
   } catch {

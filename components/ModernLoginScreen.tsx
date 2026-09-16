@@ -27,7 +27,8 @@ const isGeneratedAvatarPlaceholder = (value: string): boolean => {
 };
 
 interface ModernLoginScreenProps {
-  onLogin: (user: UserType) => void;
+  onLogin: (user: UserType, input?: { startedAt: number }) => void;
+  terminalLabel?: string;
   subVertical: string;
   availableUsers: UserType[];
   config: TerminalConfig;
@@ -37,8 +38,10 @@ const ModernLoginScreen: React.FC<ModernLoginScreenProps> = ({
   onLogin,
   subVertical,
   availableUsers,
-  config
+  config,
+  terminalLabel
 }) => {
+  const lastAuthorizedInputAtRef = React.useRef<number | undefined>(undefined);
   markRenderStart('LOGIN_PIN');
   const [pin, setPin] = useState('');
   const [error, setError] = useState(false);
@@ -129,7 +132,7 @@ const ModernLoginScreen: React.FC<ModernLoginScreenProps> = ({
   const checkLogin = useCallback((inputPin: string) => {
     const user = selectedUser?.pin === inputPin ? selectedUser : usersByPin.get(inputPin);
     if (user) {
-      onLogin(user);
+      onLogin(user, { startedAt: lastAuthorizedInputAtRef.current ?? performance.now() });
     } else {
       setError(true);
       setPin('');
@@ -138,6 +141,7 @@ const ModernLoginScreen: React.FC<ModernLoginScreenProps> = ({
 
   const handleKeyPress = useCallback((key: string) => {
     const trace = beginPosInteraction('PIN_LOGIN', { source: 'keypad', key: key === 'BACK' ? 'BACK' : key === 'C' ? 'CLEAR' : 'DIGIT' });
+    lastAuthorizedInputAtRef.current = trace.startedAt;
     expectInteractionRender(trace, 'LOGIN_PIN');
     setError(false);
     if (key === 'C') {
@@ -157,6 +161,7 @@ const ModernLoginScreen: React.FC<ModernLoginScreenProps> = ({
 
   const handlePinInputChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
     const trace = beginPosInteraction('PIN_LOGIN', { source: 'hardware_input' });
+    lastAuthorizedInputAtRef.current = trace.startedAt;
     expectInteractionRender(trace, 'LOGIN_PIN');
     const nextPin = event.target.value.replace(/\D/g, '').slice(0, 4);
     setError(false);
@@ -444,7 +449,7 @@ const ModernLoginScreen: React.FC<ModernLoginScreenProps> = ({
             )}
 
             <div className="mt-6 text-center text-xs text-slate-300/85">
-              <p>Terminal ID: POS-001</p>
+              <p>Terminal ID: {terminalLabel || config.erpBinding?.terminalName || config.erpTerminalId || 'Sin identificar'}</p>
               {buildVersion && <p className="mt-1 text-sky-200/95 font-semibold">Versión: {buildVersion}</p>}
             </div>
           </div>

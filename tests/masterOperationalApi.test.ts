@@ -3,6 +3,8 @@ import test from 'node:test';
 
 import {
   canUseLocalOperationalTableStore,
+  createOperationalMasterResolver,
+  setOperationalMasterResolver,
   isClientTerminalMode,
   resolveMasterOperationalBaseUrl,
   resolveOperationalApiUrl
@@ -12,7 +14,17 @@ const createStorage = (values: Record<string, string>) => ({
   getItem: (key: string) => values[key] ?? null
 });
 
-test('la caja cliente dirige las operaciones de mesas a la Master vinculada', () => {
+const prepare = async (storage: ReturnType<typeof createStorage>) => {
+  const resolver = createOperationalMasterResolver({
+    getContract: () => ({ erpManaged: false, terminalId: '', masterTerminalId: '', tenantId: '', companyId: '', storeId: '', deviceId: '', localIps: [] }),
+    discover: async () => [{ baseUrl: resolveMasterOperationalBaseUrl(storage), config: {} }],
+    mirror: () => {},
+  });
+  setOperationalMasterResolver(resolver);
+  await resolver.ensure();
+};
+
+test('la caja cliente dirige las operaciones de mesas a la Master validada', async () => {
   const storage = createStorage({
     clic_pos_terminal_setup_mode: 'CLIENT',
     CLIC_POS_MASTER_URL: 'http://192.168.1.20:3001/'
@@ -21,32 +33,35 @@ test('la caja cliente dirige las operaciones de mesas a la Master vinculada', ()
   assert.equal(isClientTerminalMode(storage), true);
   assert.equal(canUseLocalOperationalTableStore(storage), false);
   assert.equal(resolveMasterOperationalBaseUrl(storage), 'http://192.168.1.20:3001');
+  await prepare(storage);
   assert.equal(
     resolveOperationalApiUrl('/api/mesas?terminal_id=POS-002', storage),
     'http://192.168.1.20:3001/api/mesas?terminal_id=POS-002'
   );
 });
 
-test('la caja cliente conserva compatibilidad con pos_master_ip', () => {
+test('la caja cliente conserva compatibilidad validada con pos_master_ip', async () => {
   const storage = createStorage({
     pos_master_ip: '192.168.1.21'
   });
 
   assert.equal(isClientTerminalMode(storage), true);
   assert.equal(canUseLocalOperationalTableStore(storage), false);
+  await prepare(storage);
   assert.equal(
     resolveOperationalApiUrl('/api/mesas/abrir', storage),
     'http://192.168.1.21:3001/api/mesas/abrir'
   );
 });
 
-test('la caja cliente corrige HTTPS persistido para una IP privada del Master', () => {
+test('la caja cliente corrige HTTPS persistido para una IP privada del Master', async () => {
   const storage = createStorage({
     clic_pos_terminal_setup_mode: 'CLIENT',
     CLIC_POS_MASTER_URL: 'https://192.168.1.21:3001/api/'
   });
 
   assert.equal(resolveMasterOperationalBaseUrl(storage), 'http://192.168.1.21:3001');
+  await prepare(storage);
   assert.equal(
     resolveOperationalApiUrl('/api/config', storage),
     'http://192.168.1.21:3001/api/config'
@@ -77,11 +92,13 @@ test('Master web mantiene rutas relativas y Master Android usa el servidor nativ
   assert.equal(canUseLocalOperationalTableStore(erpStorage), true);
 });
 
-test('una Cliente Android conserva la URL LAN de la Master', () => {
+test('una Cliente Android conserva la URL LAN validada de la Master', async () => {
   const storage = createStorage({
     clic_pos_terminal_setup_mode: 'CLIENT',
     CLIC_POS_MASTER_URL: 'http://10.0.0.94:3001'
   });
+
+  await prepare(storage);
 
   assert.equal(
     resolveOperationalApiUrl('/api/mesas/parked-tickets', storage, true),

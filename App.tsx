@@ -129,7 +129,14 @@ import {
 import {
   canUseLocalOperationalTableStore,
   isClientTerminalMode,
-  resolveOperationalApiUrl
+  resolveOperationalApiUrl,
+  resolveValidatedOperationalApiUrl,
+  createOperationalMasterResolver,
+  buildOperationalMasterContract,
+  setOperationalMasterResolver,
+  setOperationalTerminalReader,
+  validateOperationalMasterEndpoint,
+  type OperationalMasterContract,
 } from './utils/masterOperationalApi';
 import {
   hasDesignedFloorPlan,
@@ -139,6 +146,7 @@ import { NativeLaunchContext, shouldRestoreNativeSession } from './utils/nativeS
 import { markRestaurantLinesCommitted } from './utils/restaurantHotReversal';
 import { removeStaleChargedEmptyTickets } from './utils/tableTicketIntegrity';
 import { reconcileOpenCartFiscalData } from './utils/erpFiscalCatalogSync';
+import { resolveTerminalLoginLabel } from './utils/terminalLoginLabel';
 
 // Component Imports
 import ModernLoginScreen from './components/ModernLoginScreen';
@@ -4184,7 +4192,8 @@ const AppContent: React.FC = () => {
   const clientMasterFailureCountRef = useRef(0);
   const clientMasterLastSuccessAtRef = useRef(0);
   const clientMasterTablesFetchInFlightRef = useRef(false);
-  const clientValidatedMasterBaseUrlRef = useRef('');
+  const clientOperationalResolverRef = useRef<ReturnType<typeof createOperationalMasterResolver> | null>(null);
+  const clientLocalIpsRef = useRef<string[] | null>(null);
   const [collections, setCollections] = useState<Collection[]>([]);
   const [activeRoomId, setActiveRoomId] = useState<string>('');
   const [activeRoomId2, setActiveRoomId2] = useState<string>(''); // For backward compatibility if needed
@@ -4372,7 +4381,7 @@ const AppContent: React.FC = () => {
         if (floorPlanSelection?.reason === 'PRESERVE_MASTER_DESIGN' && !masterFloorPlanRestoreInFlightRef.current) {
           masterFloorPlanRestoreInFlightRef.current = true;
           try {
-            const response = await fetch(resolveOperationalApiUrl('/api/mesas/layout'), {
+            const response = await fetch(await resolveValidatedOperationalApiUrl('/api/mesas/layout'), {
               method: 'PUT',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
@@ -5200,61 +5209,89 @@ const AppContent: React.FC = () => {
     return shouldBlock;
   };
 
-  const ensureEligibleClientMasterEndpoint = async (): Promise<string> => {
+  const routingSyncProfile = useMemo(() => loadSyncProfile(), [config]);
+  const getClientMasterContract = (terminal: any = getCurrentTerminal(), businessConfig: any = config): OperationalMasterContract => buildOperationalMasterContract({
+    terminal: terminal || {},
+    businessConfig,
+    binding: getStoredErpSyncBinding(),
+    profile: routingSyncProfile,
+    storedMasterId: localStorage.getItem('masterTerminalId') || '',
+    deviceId: localStorage.getItem('clic_pos_persistent_device_id') || localStorage.getItem('pos_device_id') || deviceId || '',
+    localIps: clientLocalIpsRef.current || [],
+  });
+  const clientRoutingContextRef = useRef({ getContract: getClientMasterContract, getTerminal: getCurrentTerminal, discover: async (): Promise<Array<{ baseUrl: string; config: Record<string, any> }>> => [] });
+  clientRoutingContextRef.current.getContract = getClientMasterContract;
+  clientRoutingContextRef.current.getTerminal = getCurrentTerminal;
+
+  const discoverEligibleClientMasterEndpoint = async () => {
+    if (clientLocalIpsRef.current === null) {
+      const bridge = (window as any).ClicPOSNativePrinter;
+      try {
+        const status = typeof bridge?.getMasterServerStatus === 'function'
+          ? parseNativeBridgeJson(await Promise.resolve(bridge.getMasterServerStatus({ port: 3001 })))
+          : {};
+        clientLocalIpsRef.current = [...new Set([status?.localIp, ...(status?.localIps || [])].filter(Boolean))] as string[];
+      } catch { clientLocalIpsRef.current = []; }
+    }
     const candidates: Array<{ host: string; source: 'STORED' | 'CLOUD' | 'LAN' }> = [];
+    const attempted = new Set<string>();
     const appendCandidate = (value: string | null | undefined, source: 'STORED' | 'CLOUD' | 'LAN') => {
       const host = normalizeMasterHost(value || '');
       if (host && !candidates.some(candidate => candidate.host === host)) candidates.push({ host, source });
     };
-    appendCandidate(localStorage.getItem('CLIC_POS_MASTER_URL'), 'STORED');
     appendCandidate(localStorage.getItem('pos_master_ip'), 'STORED');
-
-    const tryCandidates = async (): Promise<string | null> => {
+    appendCandidate(localStorage.getItem('CLIC_POS_MASTER_URL'), 'STORED');
+    let failure: unknown = new Error('MASTER_UNAVAILABLE: no se encontró la Caja Master vinculada.');
+    const tryCandidates = async () => {
       for (const candidate of candidates) {
         for (const baseUrl of buildMasterUrlCandidates(candidate.host)) {
-          if (clientValidatedMasterBaseUrlRef.current === baseUrl) return baseUrl;
+          if (attempted.has(baseUrl)) continue;
+          attempted.add(baseUrl);
           const controller = new AbortController();
           const timeoutId = window.setTimeout(() => controller.abort(), 2500);
           try {
             const response = await fetch(`${baseUrl}/api/config`, { signal: controller.signal });
-            if (!response.ok) continue;
+            if (!response.ok) throw new Error(`MASTER_CONFIG_HTTP_${response.status}`);
             const remoteConfig = await response.json();
-            if (!isEligibleOperationalMasterConfig(remoteConfig)) {
-              console.warn('[MASTER_DISCOVERY] Se rechazó KDS/terminal no-Master', { baseUrl });
-              continue;
-            }
-            const resolvedHost = normalizeMasterHost(new URL(baseUrl).hostname);
-            localStorage.setItem('pos_master_ip', resolvedHost);
-            localStorage.setItem('CLIC_POS_MASTER_URL', baseUrl);
+            validateOperationalMasterEndpoint(baseUrl, remoteConfig, getClientMasterContract());
             localStorage.setItem('CLIC_POS_MASTER_DISCOVERY', candidate.source);
-            clientValidatedMasterBaseUrlRef.current = baseUrl;
-            return baseUrl;
-          } catch {
-            // Probar siguiente candidato conocido o descubierto.
-          } finally {
-            window.clearTimeout(timeoutId);
-          }
+            return [{ baseUrl, config: remoteConfig }];
+          } catch (error) { failure = error; }
+          finally { window.clearTimeout(timeoutId); }
         }
       }
       return null;
     };
-
-    const storedOrKnown = await tryCandidates();
-    if (storedOrKnown) return storedOrKnown;
-
+    const known = await tryCandidates();
+    if (known) return known;
     const cloudEndpoint = await resolveMasterEndpointFromCloud().catch(() => null);
     appendCandidate(cloudEndpoint?.localIp || cloudEndpoint?.endpointUrl, 'CLOUD');
-    const cloudResolved = await tryCandidates();
-    if (cloudResolved) return cloudResolved;
-
+    const cloud = await tryCandidates();
+    if (cloud) return cloud;
     const lanCandidates = await discoverLanMasterCandidates({ timeoutMs: 2500 });
     lanCandidates.forEach(candidate => appendCandidate(candidate.host, 'LAN'));
-    const lanResolved = await tryCandidates();
-    if (lanResolved) return lanResolved;
-
-    throw new Error('No se encontró una Caja Master operativa; se descartaron KDS y terminales auxiliares.');
+    const lan = await tryCandidates();
+    if (lan) return lan;
+    throw failure;
   };
-
+  clientRoutingContextRef.current.discover = discoverEligibleClientMasterEndpoint;
+  if (!clientOperationalResolverRef.current) {
+    clientOperationalResolverRef.current = createOperationalMasterResolver({
+      getContract: () => clientRoutingContextRef.current.getContract(),
+      discover: () => clientRoutingContextRef.current.discover(),
+      mirror: baseUrl => {
+        localStorage.setItem('pos_master_ip', new URL(baseUrl).hostname);
+        localStorage.setItem('CLIC_POS_MASTER_URL', baseUrl);
+      },
+    });
+  }
+  useLayoutEffect(() => {
+    const resolver = clientOperationalResolverRef.current!;
+    setOperationalMasterResolver(resolver);
+    setOperationalTerminalReader(() => clientRoutingContextRef.current.getTerminal() as any);
+    return () => { setOperationalMasterResolver(null); setOperationalTerminalReader(null); };
+  }, []);
+  const ensureEligibleClientMasterEndpoint = () => clientOperationalResolverRef.current!.ensure();
   const fetchTables = async () => {
     const isClientRuntime = isClientTerminalMode();
     if (isClientRuntime && clientMasterTablesFetchInFlightRef.current) {
@@ -5494,7 +5531,7 @@ const AppContent: React.FC = () => {
       ? '/api/mesas/bloquear'
       : '/api/mesas/desbloquear';
     const response = await requestJson<any>({
-      url: resolveOperationalApiUrl(endpoint),
+      url: await resolveValidatedOperationalApiUrl(endpoint),
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -5712,68 +5749,15 @@ const AppContent: React.FC = () => {
   const retryClientMasterConnection = useCallback(async () => {
     clientMasterFailureCountRef.current = 0;
     setClientMasterTablesStatus('CHECKING');
-    const candidates: Array<{ host: string; source: 'STORED' | 'CLOUD' | 'LAN' }> = [];
-    const appendCandidate = (value: string | null | undefined, source: 'STORED' | 'CLOUD' | 'LAN') => {
-      const host = normalizeMasterHost(value || '');
-      if (host && !candidates.some(candidate => candidate.host === host)) candidates.push({ host, source });
-    };
-    appendCandidate(localStorage.getItem('CLIC_POS_MASTER_URL'), 'STORED');
-    appendCandidate(localStorage.getItem('pos_master_ip'), 'STORED');
-    const attemptedBaseUrls = new Set<string>();
-
-    const tryCandidates = async (): Promise<boolean> => {
-      for (const candidate of candidates) {
-        for (const baseUrl of buildMasterUrlCandidates(candidate.host)) {
-          if (attemptedBaseUrls.has(baseUrl)) continue;
-          attemptedBaseUrls.add(baseUrl);
-          let timeout: number | undefined;
-          try {
-            const controller = new AbortController();
-            timeout = window.setTimeout(() => controller.abort(), 2500);
-            const [response, configResponse] = await Promise.all([
-              fetch(`${baseUrl}/api/sync/ping`, { signal: controller.signal }),
-              fetch(`${baseUrl}/api/config`, { signal: controller.signal }),
-            ]);
-            if (!response.ok || !configResponse.ok) continue;
-            const remoteConfig = await configResponse.json();
-            if (!isEligibleOperationalMasterConfig(remoteConfig)) {
-              console.warn('[MASTER_DISCOVERY] Se rechazó un terminal no-Master', { baseUrl });
-              continue;
-            }
-
-            const resolvedHost = normalizeMasterHost(new URL(baseUrl).hostname);
-            localStorage.setItem('pos_master_ip', resolvedHost);
-            localStorage.setItem('CLIC_POS_MASTER_URL', baseUrl);
-            localStorage.setItem('CLIC_POS_MASTER_DISCOVERY', candidate.source);
-            await fetchTables();
-            return true;
-          } catch {
-            // Try the next URL/host before declaring the Master offline.
-          } finally {
-            if (timeout !== undefined) window.clearTimeout(timeout);
-          }
-        }
-      }
-      return false;
-    };
-
-    if (await tryCandidates()) return;
-
+    clientOperationalResolverRef.current!.invalidate();
     try {
-      const cloudEndpoint = await resolveMasterEndpointFromCloud();
-      appendCandidate(cloudEndpoint?.localIp || cloudEndpoint?.endpointUrl, 'CLOUD');
-      if (await tryCandidates()) return;
-
-      const lanCandidates = await discoverLanMasterCandidates({ timeoutMs: 2500 });
-      lanCandidates.forEach(candidate => appendCandidate(candidate.host, 'LAN'));
-      if (await tryCandidates()) return;
+      await ensureEligibleClientMasterEndpoint();
+      await fetchTables();
     } catch (error) {
       console.warn('[MASTER_LAN] Rediscovery failed:', error);
+      setClientMasterTablesStatus('OFFLINE');
     }
-
-    setClientMasterTablesStatus('OFFLINE');
   }, [fetchTables]);
-
   const openTableForService = useCallback(async (table: Table): Promise<Table | null> => {
     if (!currentUser) return null;
 
@@ -5788,7 +5772,7 @@ const AppContent: React.FC = () => {
 
     try {
       const res = await requestJson<any>({
-        url: resolveOperationalApiUrl('/api/mesas/abrir'),
+        url: await resolveValidatedOperationalApiUrl('/api/mesas/abrir'),
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -6500,7 +6484,7 @@ const AppContent: React.FC = () => {
 
         markBootStage('PAIRING_READY');
         const shouldResolveMasterFromCloud = !masterIp && (
-          shouldPairAsClient || localPairedTerminal?.config?.isPrimaryNode === false
+          shouldPairAsClient || isClientTerminalMode() || localPairedTerminal?.config?.isPrimaryNode === false
         );
 
         if (shouldResolveMasterFromCloud) {
@@ -6567,12 +6551,13 @@ const AppContent: React.FC = () => {
         }
 
         const shouldFetchConfigFromMaster = !!masterIp && (
-          !localPairedTerminal || localPairedTerminal?.config?.isPrimaryNode === false
+          isClientTerminalMode() || !localPairedTerminal || localPairedTerminal?.config?.isPrimaryNode === false
         );
 
-        if (masterIp && !shouldFetchConfigFromMaster && localPairedTerminal?.config?.isPrimaryNode) {
+        if (masterIp && !isClientTerminalMode() && !shouldFetchConfigFromMaster && localPairedTerminal?.config?.isPrimaryNode) {
           console.warn('⚠️ Stale pos_master_ip detected on MASTER terminal. Clearing slave pointer.');
           localStorage.removeItem('pos_master_ip');
+          localStorage.removeItem('CLIC_POS_MASTER_URL');
         }
 
         if (shouldFetchConfigFromMaster) {
@@ -6588,6 +6573,7 @@ const AppContent: React.FC = () => {
                 if (!res.ok) continue;
 
                 const payload = await res.json();
+                validateOperationalMasterEndpoint(baseUrl, payload, getClientMasterContract(localPairedTerminal, currentConfig));
                 localStorage.setItem('CLIC_POS_MASTER_URL', baseUrl);
                 localStorage.setItem('pos_master_ip', new URL(baseUrl).hostname);
                 return payload;
@@ -8849,7 +8835,7 @@ const AppContent: React.FC = () => {
 
       const syncOperation = async () => {
         await persistLocal();
-        const response = await fetch(resolveOperationalApiUrl('/api/mesas/parked-tickets'), {
+        const response = await fetch(await resolveValidatedOperationalApiUrl('/api/mesas/parked-tickets'), {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -8934,7 +8920,7 @@ const AppContent: React.FC = () => {
       // Master evita que un snapshot anterior vuelva a insertar una orden ya cobrada.
       const syncOperation = async () => {
         await persistMasterTickets();
-        const response = await fetch(resolveOperationalApiUrl('/api/mesas/parked-tickets'), {
+        const response = await fetch(await resolveValidatedOperationalApiUrl('/api/mesas/parked-tickets'), {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           // Con lock activo, actualizar únicamente esta mesa. Una Terminal Cliente
@@ -9041,7 +9027,7 @@ const AppContent: React.FC = () => {
       setTables(prev => prev.map(t => t.id === activeTable.id ? updatedTable : t));
 
       const editLock = activeTableEditLockRef.current;
-      const response = await fetch(resolveOperationalApiUrl(`/api/tables/${encodeURIComponent(String(activeTable.id))}`), {
+      const response = await fetch(await resolveValidatedOperationalApiUrl(`/api/tables/${encodeURIComponent(String(activeTable.id))}`), {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -9081,10 +9067,11 @@ const AppContent: React.FC = () => {
     await db.save('customers', localCustomers);
 
     if (isClientTerminalMode()) {
+      const customerEndpoint = await resolveValidatedOperationalApiUrl('/api/customers');
       const controller = new AbortController();
       const timeoutId = window.setTimeout(() => controller.abort(), 5000);
       try {
-        const response = await fetch(resolveOperationalApiUrl('/api/customers'), {
+        const response = await fetch(customerEndpoint, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ customer }),
@@ -10160,7 +10147,7 @@ const AppContent: React.FC = () => {
     // Android Master replaces the complete layout in one persisted mutation.
     // This avoids partial saves (rooms succeeded but tables failed, or vice versa)
     // and makes an intentionally empty table list authoritative.
-    const atomicRes = await fetch(resolveOperationalApiUrl('/api/mesas/layout'), {
+    const atomicRes = await fetch(await resolveValidatedOperationalApiUrl('/api/mesas/layout'), {
       method: 'PUT',
       headers,
       body: JSON.stringify({ rooms: normalizedRoomsPayload, tables: normalizedTablesPayload })
@@ -10189,7 +10176,7 @@ const AppContent: React.FC = () => {
     }
 
     // Compatibility fallback for servers that predate the atomic endpoint.
-    const snapshotRes = await fetch(resolveOperationalApiUrl('/api/mesas'));
+    const snapshotRes = await fetch(await resolveValidatedOperationalApiUrl('/api/mesas'));
     if (!snapshotRes.ok) {
       throw new Error(`No se pudo leer estado actual de mesas (HTTP ${snapshotRes.status})`);
     }
@@ -10203,7 +10190,7 @@ const AppContent: React.FC = () => {
 
     // Upsert rooms first
     for (const roomPayload of normalizedRoomsPayload) {
-      const res = await fetch(resolveOperationalApiUrl(`/api/rooms/${encodeURIComponent(roomPayload.id)}`), {
+      const res = await fetch(await resolveValidatedOperationalApiUrl(`/api/rooms/${encodeURIComponent(roomPayload.id)}`), {
         method: 'PUT',
         headers,
         body: JSON.stringify(roomPayload)
@@ -10215,7 +10202,7 @@ const AppContent: React.FC = () => {
 
     // Upsert tables with normalized designer defaults
     for (const tablePayload of normalizedTablesPayload) {
-      const res = await fetch(resolveOperationalApiUrl(`/api/tables/${encodeURIComponent(tablePayload.id)}`), {
+      const res = await fetch(await resolveValidatedOperationalApiUrl(`/api/tables/${encodeURIComponent(tablePayload.id)}`), {
         method: 'PUT',
         headers,
         body: JSON.stringify(tablePayload)
@@ -10228,7 +10215,7 @@ const AppContent: React.FC = () => {
     // Delete removed tables, then rooms
     const removedTables = serverTables.filter(t => !nextTableIds.has(t.id));
     for (const table of removedTables) {
-      const res = await fetch(resolveOperationalApiUrl(`/api/tables/${encodeURIComponent(table.id)}`), { method: 'DELETE' });
+      const res = await fetch(await resolveValidatedOperationalApiUrl(`/api/tables/${encodeURIComponent(table.id)}`), { method: 'DELETE' });
       if (!res.ok) {
         throw new Error(`Error eliminando mesa ${table.id} (HTTP ${res.status})`);
       }
@@ -10236,7 +10223,7 @@ const AppContent: React.FC = () => {
 
     const removedRooms = serverRooms.filter(r => !nextRoomIds.has(r.id));
     for (const room of removedRooms) {
-      const res = await fetch(resolveOperationalApiUrl(`/api/rooms/${encodeURIComponent(room.id)}`), { method: 'DELETE' });
+      const res = await fetch(await resolveValidatedOperationalApiUrl(`/api/rooms/${encodeURIComponent(room.id)}`), { method: 'DELETE' });
       if (!res.ok) {
         throw new Error(`Error eliminando sala ${room.id} (HTTP ${res.status})`);
       }
@@ -11551,11 +11538,11 @@ const AppContent: React.FC = () => {
         }
         const loginProps = {
           config: getCurrentTerminal()!.config as any,
+          terminalLabel: resolveTerminalLoginLabel(getCurrentTerminal()),
           availableUsers: users,
           subVertical: config.subVertical,
-          onLogin: async (u: User) => {
-            const trace = beginPosInteraction('OPEN_SALE_SCREEN', { userId: u.id });
-            expectInteractionRender(trace, 'APP_VIEW');
+          onLogin: async (u: User, input?: { startedAt: number }) => {
+            const trace = beginPosInteraction('OPEN_SALE_SCREEN', { measurementBoundary: 'authorized-input-to-destination' }, input?.startedAt);
             markInteractionStateUpdate(trace, 2);
             setCurrentUser(u);
             const role = getCurrentDeviceRole();
@@ -11568,6 +11555,7 @@ const AppContent: React.FC = () => {
             else {
               // Multi-Vertical Startup Flow
               const salesStartView = resolvePosSalesStartView(config, terminal?.config);
+              expectInteractionRender(trace, salesStartView === 'TABLE_MAP' ? 'TABLE_MAP_VIEW' : 'POS_INTERACTION_VIEW');
               setCurrentView(salesStartView);
               if (salesStartView === 'TABLE_MAP') {
                 // Mostrar el mapa con el snapshot local ya hidratado. La red no
@@ -12054,7 +12042,7 @@ const AppContent: React.FC = () => {
                   await clearActiveCartDraftStorage().catch((error) => console.warn('No se pudo limpiar borrador activo tras cerrar mesa:', error));
                   await db.save('tables', reconciled).catch(error => console.error('Failed to persist table release:', error));
                   try {
-                    await fetch(resolveOperationalApiUrl(`/api/tables/${encodeURIComponent(String(table.id))}`), {
+                    await fetch(await resolveValidatedOperationalApiUrl(`/api/tables/${encodeURIComponent(String(table.id))}`), {
                       method: 'PUT',
                       headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify(nextTable)

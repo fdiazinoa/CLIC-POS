@@ -37,7 +37,7 @@ import {
 } from '../utils/tableAccountPresentation';
 import { getRenderableFloorTables } from '../utils/tableLayout';
 import { hasPendingKdsDispatch } from '../utils/kdsPresentation';
-import { resolveOperationalApiUrl } from '../utils/masterOperationalApi';
+import { resolveValidatedOperationalApiUrl } from '../utils/masterOperationalApi';
 import { requestJson } from '../services/network/httpClient';
 import { canAccessOtherSellerTables, isTableLockedForUser } from '../utils/tableAccessPolicy';
 import {
@@ -1128,7 +1128,7 @@ const TableMap: React.FC<TableMapProps> = ({
             const primarySourceTableId = String(sourceTicket.primaryTableId || sourceTable.id);
             try {
                 const response = await requestJson<any>({
-                    url: resolveOperationalApiUrl('/api/mesas/unir'),
+                    url: await resolveValidatedOperationalApiUrl('/api/mesas/unir'),
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -1442,7 +1442,7 @@ const TableMap: React.FC<TableMapProps> = ({
             }
 
             try {
-                const res = await fetch(resolveOperationalApiUrl('/api/mesas/abrir'), {
+                const res = await fetch(await resolveValidatedOperationalApiUrl('/api/mesas/abrir'), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -2187,7 +2187,7 @@ const TableMap: React.FC<TableMapProps> = ({
                         }}
                         onFree={async () => {
                             try {
-                                const res = await fetch(resolveOperationalApiUrl('/api/mesas/liberar'), {
+                                const res = await fetch(await resolveValidatedOperationalApiUrl('/api/mesas/liberar'), {
                                     method: 'POST',
                                     headers: { 'Content-Type': 'application/json' },
                                     body: JSON.stringify({ tableId: selectedTable.id })

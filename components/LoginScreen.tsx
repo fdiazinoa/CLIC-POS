@@ -17,13 +17,15 @@ import {
 const suppressNativeSoftKeyboardForPin = Capacitor.isNativePlatform();
 
 interface LoginScreenProps {
-  onLogin: (user: UserType) => void;
+  onLogin: (user: UserType, input?: { startedAt: number }) => void;
+  terminalLabel?: string;
   subVertical: string;
   availableUsers: UserType[];
   config: TerminalConfig;
 }
 
-const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, subVertical, availableUsers, config }) => {
+const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, subVertical, availableUsers, config, terminalLabel }) => {
+  const lastAuthorizedInputAtRef = React.useRef<number | undefined>(undefined);
   markRenderStart('LOGIN_PIN');
   const [pin, setPin] = useState('');
   const [error, setError] = useState(false);
@@ -103,7 +105,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, subVertical, availab
   const checkLogin = React.useCallback((inputPin: string) => {
     const user = selectedUser?.pin === inputPin ? selectedUser : usersByPin.get(inputPin);
     if (user) {
-      onLogin(user);
+      onLogin(user, { startedAt: lastAuthorizedInputAtRef.current ?? performance.now() });
     } else {
       setError(true);
       setPin('');
@@ -112,6 +114,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, subVertical, availab
 
   const handleKeyPress = React.useCallback((key: string) => {
     const trace = beginPosInteraction('PIN_LOGIN', { source: 'keypad', key: key === 'BACK' ? 'BACK' : key === 'C' ? 'CLEAR' : 'DIGIT' });
+    lastAuthorizedInputAtRef.current = trace.startedAt;
     expectInteractionRender(trace, 'LOGIN_PIN');
     setError(false);
     if (key === 'C') {
@@ -133,6 +136,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, subVertical, availab
 
   const handlePinInputChange = React.useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
     const trace = beginPosInteraction('PIN_LOGIN', { source: 'hardware_input' });
+    lastAuthorizedInputAtRef.current = trace.startedAt;
     expectInteractionRender(trace, 'LOGIN_PIN');
     const nextPin = event.target.value.replace(/\D/g, '').slice(0, 4);
     setError(false);
@@ -440,7 +444,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, subVertical, availab
         </div>
 
         <div className="text-center text-gray-300/85 text-xs mt-auto pt-2">
-          <p>Terminal ID: POS-001</p>
+          <p>Terminal ID: {terminalLabel || config.erpBinding?.terminalName || config.erpTerminalId || 'Sin identificar'}</p>
           {buildVersion && <p className="mt-1 text-blue-200 font-semibold">Versión: {buildVersion}</p>}
         </div>
 

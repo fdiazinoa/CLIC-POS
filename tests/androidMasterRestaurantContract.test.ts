@@ -77,7 +77,7 @@ test('la Master Android reemplaza el layout completo en una sola mutación persi
   assert.match(serverSource, /private fun handleFloorPlanReplace/);
   assert.match(serverSource, /reconcileTablesWithParkedTickets\(tables, parkedTicketsSnapshot\)/);
   assert.match(serverSource, /applyClientRestaurantMutation\(rooms = rooms, tables = reconciledTables\)/);
-  assert.match(appSource, /resolveOperationalApiUrl\('\/api\/mesas\/layout'\)/);
+  assert.match(appSource, /resolveValidatedOperationalApiUrl\('\/api\/mesas\/layout'\)/);
   assert.doesNotMatch(appSource, /normalizedTablesInput\.length === 0 && existingDbTables\.length > 0/);
   assert.match(appSource, /window\.localStorage\.removeItem\(FLOOR_PLAN_STORAGE_KEY\)/);
 });
@@ -118,7 +118,7 @@ test('la WebView entrega el snapshot operativo al servidor nativo sin sobreescri
   assert.match(serverSource, /PREFS_RESTAURANT_KEY/);
   assert.match(appSource, /getMasterRestaurantState/);
   assert.match(appSource, /db\.save\('parkedTickets', nextParkedTickets\)/);
-  assert.match(appSource, /resolveOperationalApiUrl\('\/api\/mesas\/parked-tickets'\)/);
+  assert.match(appSource, /resolveValidatedOperationalApiUrl\('\/api\/mesas\/parked-tickets'\)/);
   assert.match(appSource, /No se pudo confirmar la orden local/);
 });
 
@@ -307,7 +307,7 @@ test('un KDS no levanta ni puede ser seleccionado como Caja Master', () => {
   assert.match(pairingSource, /isEligibleOperationalMasterConfig\(fetchedConfig\)/);
   assert.match(scannerSource, /isEligibleOperationalMasterConfig\(await configResponse\.json\(\)\)/);
   assert.match(appSource, /ensureEligibleClientMasterEndpoint/);
-  assert.match(appSource, /Se rechazó KDS\/terminal no-Master/);
+  assert.match(appSource, /validateOperationalMasterEndpoint\(baseUrl, remoteConfig, getClientMasterContract\(\)\)/);
 });
 
 test('la terminal cliente intenta IP guardada, Cloud y descubrimiento LAN antes de pedir la IP manual', () => {

@@ -35,7 +35,8 @@ test('la Master permite persistir comensales y clientes creados por una terminal
   assert.match(serverSource, /catalogVersions\["customers"\]/);
   assert.match(serverSource, /\.put\("customers", getSyncCollection\("customers"\)\)/);
   assert.match(serverSource, /hasInitializedCatalogs && acknowledgedRevision < restaurantRevision\.get\(\)/);
-  assert.match(appSource, /fetch\(resolveOperationalApiUrl\('\/api\/customers'\)/);
+  assert.match(appSource, /const customerEndpoint = await resolveValidatedOperationalApiUrl\('\/api\/customers'\);\s*const controller = new AbortController\(\)/);
+  assert.match(appSource, /fetch\(customerEndpoint,/);
   assert.match(appSource, /await queueCustomerMutation\('UPSERT', customer\)/);
   assert.match(appSource, /backgroundSyncManager\.triggerSync\(\)\.catch\(console\.error\)/);
 });
