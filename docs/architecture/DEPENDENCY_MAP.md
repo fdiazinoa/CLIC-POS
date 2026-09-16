@@ -1,6 +1,6 @@
 # Dependencias y regresiones cruzadas
 
-Auditoría estática: 2026-09-16. Fuente: `origin/develop` en `a186a8c33cabf8700c28dba85deaabfe76b03f81`. No certifica comportamiento en hardware ni estado desplegado del ERP. Las referencias son relativas a la raíz del repositorio.
+Auditoría estática: 2026-09-16. Fuente: `origin/develop` en `669f9624c85de40129169e6779aa6983f1441fea`. No certifica comportamiento en hardware ni estado desplegado del ERP. Las referencias son relativas a la raíz del repositorio.
 
 
 El inventario automático adjunto incluye todas las fuentes escaneadas. Esta matriz añade efectos, almacenamiento y riesgos para los módulos operativos; imports no prueban por sí solos una ejecución E2E.
@@ -32,3 +32,9 @@ El inventario automático adjunto incluye todas las fuentes escaneadas. Esta mat
 ## Activación transitiva
 
 Modificar un contrato compartido activa todas sus filas consumidoras, aunque el diff no toque sus componentes. `types.ts`, `constants.ts`, App, DB adapters, config, identidad, imports/build y utilidades compartidas requieren clasificación amplia por defecto. El analista traza callers, escrituras y eventos, propone pruebas; reviewer y QA pueden ampliar el alcance. El coordinador no puede reducirlo solo porque haya pocos archivos cambiados.
+
+## Actualización de auditoría: procedimiento interno
+
+Fuente actual develop `669f9624c85de40129169e6779aa6983f1441fea`. Se reenumeraron 1055 archivos y se escanearon 818 fuentes. Se contrastó el delta operativo desde la auditoría anterior: App y masterOperationalApi ahora validan master vinculado/tenant/rol antes de usar rutas de mesas y otras operaciones; los timeouts de login cliente empiezan después de esa validación. Ver `tests/orderTakerMasterRouting.test.ts`, `tests/loginDestinationPerformance.test.ts`, `utils/terminalLoginLabel.ts` y `utils/interactionPerformance.ts`. No se cambió este código durante la instalación.
+
+Cloud-Admin se inspeccionó en otro repo local; ver [CLOUD_ADMIN_DEPLOYMENT.md](CLOUD_ADMIN_DEPLOYMENT.md). El procedimiento separa code/internal/deployment/testing/production/released. Fuente inspeccionada no certifica estado desplegado ni rollout flags.

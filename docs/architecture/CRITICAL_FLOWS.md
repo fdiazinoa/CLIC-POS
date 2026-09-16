@@ -1,6 +1,6 @@
 # Flujos críticos
 
-Auditoría estática: 2026-09-16. Fuente: `origin/develop` en `a186a8c33cabf8700c28dba85deaabfe76b03f81`. No certifica comportamiento en hardware ni estado desplegado del ERP. Las referencias son relativas a la raíz del repositorio.
+Auditoría estática: 2026-09-16. Fuente: `origin/develop` en `669f9624c85de40129169e6779aa6983f1441fea`. No certifica comportamiento en hardware ni estado desplegado del ERP. Las referencias son relativas a la raíz del repositorio.
 
 
 Cada fila indica un recorrido observado en fuente y un contrato que QA debe demostrar. El éxito de HTTP no acredita persistencia/aplicación ERP.
@@ -58,3 +58,13 @@ Probar caída de red antes del envío, después de recepción ERP antes del ack,
 | LAN/operacional | server/routes/sync.ts, native-stubs/android/ClicPOSMasterHttpServer.kt, NetworkSyncService | No equivalencia asumida de Express y Kotlin; probar contratos master/cliente y ACK |
 
 Tests: durableOutboxV2, durableOutboxBatchSender, operationalAcknowledgement, realtimeNotificationScope, realtimePollingContract, adaptivePollingScheduler, erpHeartbeatScheduler, syncTriggerCoordinator, catalogMultiTerminalRoundTrip. El código de Inbox receptor ERP y políticas Supabase desplegadas quedan fuera de esta auditoría; validar contra entorno de prueba real antes de release afectado.
+
+## Actualización de auditoría: procedimiento interno
+
+Fuente actual develop `669f9624c85de40129169e6779aa6983f1441fea`. Se reenumeraron 1055 archivos y se escanearon 818 fuentes. Se contrastó el delta operativo desde la auditoría anterior: App y masterOperationalApi ahora validan master vinculado/tenant/rol antes de usar rutas de mesas y otras operaciones; los timeouts de login cliente empiezan después de esa validación. Ver `tests/orderTakerMasterRouting.test.ts`, `tests/loginDestinationPerformance.test.ts`, `utils/terminalLoginLabel.ts` y `utils/interactionPerformance.ts`. No se cambió este código durante la instalación.
+
+Cloud-Admin se inspeccionó en otro repo local; ver [CLOUD_ADMIN_DEPLOYMENT.md](CLOUD_ADMIN_DEPLOYMENT.md). El procedimiento separa code/internal/deployment/testing/production/released. Fuente inspeccionada no certifica estado desplegado ni rollout flags.
+
+## Tickets: recorrido explícito
+
+Listado TicketHistory/POSInterface → seleccionar transaction/parked ticket → abrir/editar App/cart → recuperar persisted draft/history o services/recovery → PaymentModal.onConfirm → App.handleTransactionComplete → closed membership/history → impresión y sync. Cada edición debe respetar permisos/cartId/qty/precio/impuesto/mesa/fracción; una transacción perteneciente a Z nunca reaparece pendiente por pull. Referencias tableTicketIntegrity, ClosedTransactionMembership, paymentFractionPersistenceContract, joinedTableTicketPersistence y closedTransactionMembership. Puntos de fallo: restored state obsoleto, master no validado, doble reserva/pago, cierre parcial y repetición después de ACK perdido. Fuente define orden real de persistencia antes de publicar UI; salida física no es commit financiero.
