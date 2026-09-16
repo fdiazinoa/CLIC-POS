@@ -668,6 +668,8 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
                </div>
 
                {/* System Calculation - Only visible with POS_VIEW_ACTIVE_CASH permission */}
+               {/* Legacy active-cash view is intentionally disabled; retain its JSX without enabling it. */}
+               {/* eslint-disable-next-line no-constant-binary-expression */}
                {false && hasPermission('POS_VIEW_ACTIVE_CASH') && (
                   <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100">
                      <h3 className="font-bold text-gray-500 uppercase text-xs tracking-wider mb-4">Balance Teórico (Sistema)</h3>

@@ -657,7 +657,6 @@ const printTicketInternal = async (transaction: Transaction, config: BusinessCon
     } else {
         throw new PrintOutputError('POPUP_BLOCKED');
     }
-    return false;
 };
 
 export const printIntegratedPaymentArtifacts = async (
