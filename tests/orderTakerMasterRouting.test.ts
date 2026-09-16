@@ -137,3 +137,12 @@ test('cambio de vínculo mientras discover está pendiente no publica contrato a
   const pending = resolver.ensure(); active = { ...contract, masterTerminalId: '9ffc6771-7845-4976-afd3-20cebc3cc6e8' }; finish();
   await assert.rejects(pending, /CONTRACT_CHANGED/); assert.equal(resolver.current(), '');
 });
+
+test('timeouts de transporte customer/release comienzan después de resolver master', () => {
+  const app = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
+  assert.match(app, /const customerEndpoint = await resolveValidatedOperationalApiUrl\('\/api\/customers'\);\s*const controller = new AbortController\(\);\s*const timeoutId/);
+  const pos = readFileSync(new URL('../components/POSInterface.tsx', import.meta.url), 'utf8');
+  assert.match(pos, /const releaseEndpoint = await resolveValidatedOperationalApiUrl\('\/api\/mesas\/liberar'\);[\s\S]*?const controller = new AbortController\(\)/);
+  assert.match(pos, /try \{ releaseEndpoint = await resolveValidatedOperationalApiUrl\('\/api\/mesas\/liberar'\); \}[\s\S]*?const controller = new AbortController\(\)/);
+  for (const source of [app, pos]) assert.doesNotMatch(source, /controller\.abort\(\), \d+\);\s*try \{\s*const \w+ = await fetch\(await resolveValidatedOperationalApiUrl/);
+});

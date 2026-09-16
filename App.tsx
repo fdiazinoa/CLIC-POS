@@ -9067,10 +9067,11 @@ const AppContent: React.FC = () => {
     await db.save('customers', localCustomers);
 
     if (isClientTerminalMode()) {
+      const customerEndpoint = await resolveValidatedOperationalApiUrl('/api/customers');
       const controller = new AbortController();
       const timeoutId = window.setTimeout(() => controller.abort(), 5000);
       try {
-        const response = await fetch(await resolveValidatedOperationalApiUrl('/api/customers'), {
+        const response = await fetch(customerEndpoint, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ customer }),
