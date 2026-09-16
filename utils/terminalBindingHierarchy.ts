@@ -14,6 +14,7 @@ export interface TerminalBindingRecord {
   bindingStatus?: string;
   occupied: boolean;
   canReauthorize: boolean;
+  canRequestAuthorization?: boolean;
   currentDeviceId?: string;
   config: Record<string, any>;
   [key: string]: any;
@@ -153,6 +154,7 @@ export const normalizeTerminalBindingRecord = (
     terminalCode: firstText(raw.terminal_code, raw.terminalCode, config.stationNumber) || undefined,
     bindingStatus,
     occupied,
+    canRequestAuthorization: readBoolean(raw.can_request_authorization ?? raw.canRequestAuthorization) === true,
     canReauthorize: explicitCanReauthorize ?? occupied,
     currentDeviceId,
     config,
