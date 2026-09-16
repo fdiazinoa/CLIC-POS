@@ -1,7 +1,7 @@
 import { recordCheckoutDiagnostic } from '../services/CheckoutDiagnostics';
 import { allowsDefaultPaymentMethods } from '../utils/erpPaymentMethods';
 
-import React, { useState, useEffect, useLayoutEffect, useMemo } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import {
    X, CreditCard, Banknote, QrCode, CheckCircle2,
    Trash2, Plus, Wallet, Printer, Mail, ShieldAlert,
@@ -43,6 +43,8 @@ import {
 import { paymentIntentService } from '../services/payments/PaymentIntentService';
 import {
    beginPosInteraction,
+   commitInteractionDestination,
+   type PosInteractionTrace,
    expectInteractionRender,
    markInteractionStage,
    markInteractionStateUpdate,
@@ -58,6 +60,7 @@ import { sendReceiptEmailViaErp } from '../services/email/receiptEmailService';
 import { buildReceiptEmailPayload } from '../services/email/receiptEmailPayload';
 
 interface PaymentModalProps {
+   openingTrace?: PosInteractionTrace | null;
    total: number;
    items: CartItem[]; // Added items prop
    taxAmount?: number;
@@ -241,9 +244,15 @@ type GatewayProgressOverlayState = {
 
 import SupervisorAuthModal from './SupervisorAuthModal';
 
-const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmount = 0, currencySymbol, config, onClose, onConfirm, themeColor, customer, isDelinquent, users, isMaster, currentUser, roles, isRestaurantMode, isInstallmentPayment = false }) => {
+const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, total, items, taxAmount = 0, currencySymbol, config, onClose, onConfirm, themeColor, customer, isDelinquent, users, isMaster, currentUser, roles, isRestaurantMode, isInstallmentPayment = false }) => {
    markRenderStart('PAYMENT_MODAL');
    useLayoutEffect(() => markRenderEnd('PAYMENT_MODAL'));
+   const openingDestinationMounted = useRef(false);
+   useLayoutEffect(() => {
+      openingDestinationMounted.current = true;
+      commitInteractionDestination(openingTrace, 'PAYMENT_MODAL', undefined, () => openingDestinationMounted.current);
+      return () => { openingDestinationMounted.current = false; };
+   }, [openingTrace]);
    const [payments, setPayments] = useState<PaymentEntry[]>([]);
    const [activeMethodKey, setActiveMethodKey] = useState<string>('');
    const [inputAmount, setInputAmount] = useState<string>('');

@@ -48,7 +48,7 @@ test('closing the table map acknowledges input and records visible/interactable 
 
   assert.match(tableMapSource, /onClick=\{handleCloseTableMap\}/);
   assert.match(tableMapSource, /Abriendo venta…/);
-  assert.match(closeHandlerSource, /beginPosInteraction\('CLOSE_TABLE_MAP'/);
+  assert.match(closeHandlerSource, /beginDestinationInteraction\('CLOSE_TABLE_MAP'/);
   assert.match(closeHandlerSource, /setTableMapExitPending\(true\)/);
   assert.doesNotMatch(closeHandlerSource, /requestAnimationFrame\(\(\) => \{/);
   assert.match(closeHandlerSource, /markInteractionStage\(trace, 'NAVIGATION_START'\)/);
@@ -86,7 +86,7 @@ test('the table map stays mounted and rejects overlapping table opens', () => {
   assert.match(appSource, /const MemoizedTableMap = React\.memo\(TableMap\)/);
   assert.match(appSource, /<StableTableMap/);
   assert.match(layoutSource, /tableMapHasMounted \|\| currentView === 'TABLE_MAP'/);
-  assert.match(layoutSource, /<TableMapLifecycleBoundary visible=\{currentView === 'TABLE_MAP'\}>/);
+  assert.match(layoutSource, /<TableMapLifecycleBoundary visible=\{currentView === 'TABLE_MAP'\} closeTrace=\{tableMapCloseTraceRef.current\}>/);
   assert.doesNotMatch(layoutSource, /currentView === 'TABLE_MAP' \? \(\s*<div[^>]*data-table-map-overlay/);
   assert.match(tableMapSource, /if \(openingTableIdRef\.current\) return;/);
   assert.match(tableMapSource, /openingTableIdRef\.current = String\(model\.table\.id\)/);

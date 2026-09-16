@@ -30,6 +30,7 @@ export type PosInteractionStage =
   | 'NAVIGATION_END'
   | 'TABLE_MAP_UNMOUNT_START'
   | 'TABLE_MAP_UNMOUNT_END'
+  | 'TABLE_MAP_HIDE'
   | 'POS_UPDATE_START'
   | 'POS_UPDATE_END'
   | 'FIRST_FRAME_VISIBLE'
@@ -45,11 +46,17 @@ export interface PosInteractionTrace {
   allocationsApprox: number;
   metadata?: Record<string, unknown>;
   renderTarget?: string;
+  destinationMode?: boolean;
+  status: 'pending' | 'completed' | 'cancelled' | 'failed' | 'expired';
+  destinationCommitScheduled?: boolean;
   longTasks: Array<{ startMs: number; durationMs: number }>;
   memory: Array<{ stage: PosInteractionStage; usedJsHeapBytes?: number; totalJsHeapBytes?: number }>;
 }
 
 const MAX_TRACES = 300;
+// Lazy expiry: telemetry never adds an idle timer or cancels business work.
+const TRACE_TTL_MS = 60_000;
+const MAX_PENDING_EMISSIONS = MAX_TRACES * 32;
 const traces: PosInteractionTrace[] = [];
 const pendingByRenderTarget = new Map<string, PosInteractionTrace[]>();
 let sequence = 0;
@@ -91,6 +98,7 @@ const flushEmissions = () => {
 
 const emit = (trace: PosInteractionTrace, stage: PosInteractionStage) => {
   pendingEmissions.push({ trace, stage, stageAt: trace.stages[stage] ?? now() });
+  if (pendingEmissions.length > MAX_PENDING_EMISSIONS) pendingEmissions.splice(0, pendingEmissions.length - MAX_PENDING_EMISSIONS);
   if (emissionScheduled) return;
   emissionScheduled = true;
   if (typeof window !== 'undefined' && 'requestIdleCallback' in window) {
@@ -119,7 +127,7 @@ const updateDuration = (trace: PosInteractionTrace, stage: PosInteractionStage) 
     const start = trace.stages[startStage];
     if (start !== undefined) trace.durations[durationName] = round(value - start);
   }
-  if (stage === 'RENDER_END' || stage === 'FIRST_FRAME_VISIBLE') {
+  if (stage === 'FIRST_FRAME_VISIBLE' || (stage === 'RENDER_END' && trace.stages.FIRST_FRAME_VISIBLE === undefined)) {
     trace.durations.inputToVisible = round(value - trace.startedAt);
   }
   if (stage === 'FIRST_FRAME_INTERACTIVE') {
@@ -131,7 +139,9 @@ const updateDuration = (trace: PosInteractionTrace, stage: PosInteractionStage) 
 };
 
 export const markInteractionStage = (trace: PosInteractionTrace | null | undefined, stage: PosInteractionStage) => {
-  if (!trace) return;
+  // Legacy traces may still record deferred sync/SQL after their visual marker.
+  // Destination traces, unlike those legacy samples, have a terminal lifetime.
+  if (!trace || (trace.destinationMode ? !isInteractionPending(trace) : !traces.includes(trace))) return;
   diagLegacy(trace.operation, stage, trace.metadata);
   // The acceptance metric is time to the first visible response. A later state
   // update or render must never replace the first marker and inflate the result.
@@ -150,6 +160,7 @@ export const beginPosInteraction = (
   inputStartedAt?: number,
 ): PosInteractionTrace => {
   const handlerStartedAt = now();
+  pruneInteractions();
   const inputBoundaryValidated = inputStartedAt !== undefined && Number.isFinite(inputStartedAt)
     && inputStartedAt >= 0 && inputStartedAt <= handlerStartedAt && handlerStartedAt - inputStartedAt < 60_000
     ;
@@ -158,6 +169,7 @@ export const beginPosInteraction = (
     id: `${operation}-${Date.now()}-${++sequence}`,
     operation,
     startedAt,
+    status: 'pending',
     stages: { INPUT_RECEIVED: startedAt, HANDLER_START: handlerStartedAt },
     durations: {},
     renderCount: 0,
@@ -169,13 +181,18 @@ export const beginPosInteraction = (
     memory: [readMemory('INPUT_RECEIVED')],
   };
   traces.push(trace);
-  if (traces.length > MAX_TRACES) traces.splice(0, traces.length - MAX_TRACES);
+  while (traces.length > MAX_TRACES) {
+    const oldest = traces[0];
+    finishInteraction(oldest, 'expired');
+    traces.shift();
+  }
   emit(trace, 'INPUT_RECEIVED');
   emit(trace, 'HANDLER_START');
   return trace;
 };
 
 export const expectInteractionRender = (trace: PosInteractionTrace, renderTarget: string) => {
+  if (!isInteractionPending(trace) || trace.destinationMode) return;
   // Keep the first requested visual target. Some flows continue toward a second
   // screen, but the interaction has already responded visibly by then.
   if (trace.renderTarget) return;
@@ -183,6 +200,83 @@ export const expectInteractionRender = (trace: PosInteractionTrace, renderTarget
   const pending = pendingByRenderTarget.get(renderTarget) || [];
   pending.push(trace);
   pendingByRenderTarget.set(renderTarget, pending.slice(-20));
+};
+
+const removePending = (trace: PosInteractionTrace) => {
+  for (const [target, pending] of pendingByRenderTarget) {
+    const remaining = pending.filter(candidate => candidate !== trace);
+    if (remaining.length) pendingByRenderTarget.set(target, remaining);
+    else pendingByRenderTarget.delete(target);
+  }
+};
+
+export const finishInteraction = (
+  trace: PosInteractionTrace | null | undefined,
+  status: Exclude<PosInteractionTrace['status'], 'pending'>,
+) => {
+  if (!trace || trace.status !== 'pending') return;
+  trace.status = status;
+  removePending(trace);
+};
+
+const pruneInteractions = () => {
+  for (const trace of traces) {
+    if (trace.status === 'pending' && now() - trace.startedAt >= TRACE_TTL_MS) finishInteraction(trace, 'expired');
+  }
+};
+
+export const isInteractionPending = (trace: PosInteractionTrace | null | undefined): trace is PosInteractionTrace => {
+  if (!trace || !traces.includes(trace) || trace.status !== 'pending') return false;
+  if (now() - trace.startedAt >= TRACE_TTL_MS) finishInteraction(trace, 'expired');
+  return trace.status === 'pending';
+};
+
+/** Only this trace's owner can acknowledge its final destination. */
+export const beginDestinationInteraction = (
+  operation: PosInteractionOperation,
+  inputTimeStamp?: number,
+  previous?: PosInteractionTrace | null,
+) => {
+  finishInteraction(previous, 'cancelled');
+  const trace = beginPosInteraction(operation, { measurementBoundary: 'authorized-input-to-destination' }, inputTimeStamp);
+  trace.destinationMode = true;
+  trace.metadata = { ...trace.metadata, inputBoundarySource: trace.metadata?.inputBoundaryValidated ? 'event-timeStamp' : 'handler-fallback' };
+  return trace;
+};
+
+export const expectInteractionDestination = (trace: PosInteractionTrace | null | undefined, target: string) => {
+  if (!isInteractionPending(trace) || !trace.destinationMode || trace.renderTarget) return;
+  trace.renderTarget = target;
+};
+
+export const commitInteractionDestination = (
+  trace: PosInteractionTrace | null | undefined,
+  target: string,
+  onInteractive?: () => void,
+  isCurrent?: () => boolean,
+) => {
+  if (isInteractionPending(trace) && trace.destinationMode && trace.renderTarget === target && !trace.destinationCommitScheduled) {
+    trace.destinationCommitScheduled = true;
+    trace.renderCount += 1;
+    markInteractionStage(trace, 'RENDER_END');
+    markInteractionVisibleAndInteractive(trace, onInteractive, isCurrent);
+  } else if (onInteractive) {
+    // Functional transition completion must not depend on telemetry lifetime.
+    markInteractionVisibleAndInteractive(null, onInteractive);
+  }
+};
+
+/** Observes an existing async flow; never changes its result or error. */
+export const observeDestinationAttempt = async <T>(trace: PosInteractionTrace, work: () => Promise<T>): Promise<T> => {
+  try {
+    return await work();
+  } catch (error) {
+    finishInteraction(trace, 'failed');
+    throw error;
+  } finally {
+    markInteractionStage(trace, 'HANDLER_END');
+    if (!trace.renderTarget) finishInteraction(trace, 'cancelled');
+  }
 };
 
 export const markInteractionStateUpdate = (
@@ -195,6 +289,7 @@ export const markInteractionStateUpdate = (
 };
 
 export const markRenderStart = (renderTarget: string) => {
+  pruneInteractions();
   for (const trace of pendingByRenderTarget.get(renderTarget) || []) {
     trace.renderCount += 1;
     if (trace.stages.RENDER_START === undefined) markInteractionStage(trace, 'RENDER_START');
@@ -202,6 +297,7 @@ export const markRenderStart = (renderTarget: string) => {
 };
 
 export const markRenderEnd = (renderTarget: string) => {
+  pruneInteractions();
   const pending = pendingByRenderTarget.get(renderTarget) || [];
   if (pending.length === 0) return;
   pendingByRenderTarget.delete(renderTarget);
@@ -240,10 +336,11 @@ const percentile = (values: number[], fraction: number) => {
 };
 
 export const getPosInteractionReport = () => {
+  pruneInteractions();
   const operations = Array.from(new Set(traces.map(trace => trace.operation)));
   return Object.fromEntries(operations.map(operation => {
     const samples = traces.filter(trace => trace.operation === operation);
-    const measured = samples.filter(trace => trace.metadata?.measurementBoundary !== 'authorized-input-to-destination' || trace.metadata.inputBoundaryValidated === true);
+    const measured = samples.filter(trace => (!trace.destinationMode || trace.status === 'completed') && (trace.metadata?.measurementBoundary !== 'authorized-input-to-destination' || trace.metadata.inputBoundaryValidated === true));
     const visible = measured.flatMap(trace => trace.metadata?.measurementBoundary === 'authorized-input-to-destination'
       && trace.stages.FIRST_FRAME_VISIBLE === undefined ? [] : trace.durations.inputToVisible ?? []);
     const interactive = measured.flatMap(trace => trace.durations.inputToInteractive ?? []);
@@ -251,11 +348,22 @@ export const getPosInteractionReport = () => {
     const localUnlocks = samples.flatMap(trace => trace.durations.inputToLocalUnlock ?? []);
     return [operation, {
       samples: samples.length,
-      invalidInputBoundarySamples: samples.length - measured.length,
+      invalidInputBoundarySamples: samples.filter(trace => trace.metadata?.measurementBoundary === 'authorized-input-to-destination' && trace.metadata.inputBoundaryValidated !== true).length,
+      terminatedWithoutDestinationSamples: samples.filter(trace => trace.destinationMode && !['pending', 'completed'].includes(trace.status)).length,
       longTaskAttributionTruncatedSamples: samples.filter(trace => trace.metadata?.longTaskAttributionTruncated).length,
       visibleSamples: visible.length,
       interactiveSamples: interactive.length,
       markerSemantics: 'FIRST_FRAME_VISIBLE=rAF prepaint proxy; FIRST_FRAME_INTERACTIVE=next-task proxy; legacy RENDER_END=rAF commit proxy. None is DisplayPresent or measured input responsiveness.',
+      destinations: Object.fromEntries([...new Set(samples.filter(trace => trace.destinationMode).map(trace => trace.renderTarget || 'unresolved'))].map(target => {
+        const destinationSamples = samples.filter(trace => trace.destinationMode && (trace.renderTarget || 'unresolved') === target);
+        const completed = destinationSamples.filter(trace => trace.status === 'completed');
+        return [target, {
+          samples: destinationSamples.length,
+          completed: completed.length,
+          handlerToDestinationP95Ms: percentile(completed.flatMap(trace => trace.stages.FIRST_FRAME_INTERACTIVE === undefined ? [] : trace.stages.FIRST_FRAME_INTERACTIVE - trace.stages.HANDLER_START!), 0.95),
+          inputToDestinationP95Ms: percentile(completed.flatMap(trace => trace.metadata?.inputBoundaryValidated ? trace.durations.inputToInteractive ?? [] : []), 0.95),
+        }];
+      })),
       inputLatencyP50Ms: percentile(visible, 0.5),
       inputLatencyP95Ms: percentile(visible, 0.95),
       inputLatencyP99Ms: percentile(visible, 0.99),
@@ -278,16 +386,20 @@ export const getLatestPosInteraction = (operation: PosInteractionOperation) =>
 export const markInteractionVisibleAndInteractive = (
   trace: PosInteractionTrace | null | undefined,
   onInteractive?: () => void,
+  isCurrent?: () => boolean,
 ) => {
-  if (!trace || typeof window === 'undefined') return;
+  if (typeof window === 'undefined') { onInteractive?.(); return; }
   window.requestAnimationFrame(() => {
+    if (isCurrent && !isCurrent()) finishInteraction(trace, 'cancelled');
     markInteractionStage(trace, 'VISUAL_ACK');
     markInteractionStage(trace, 'FIRST_FRAME_VISIBLE');
     // The DOM has committed and the frame is ready to paint. Probe the next
     // task instead of waiting another display frame; event handlers are ready
     // as soon as control returns to the browser event loop.
     window.setTimeout(() => {
+      if (isCurrent && !isCurrent()) finishInteraction(trace, 'cancelled');
       markInteractionStage(trace, 'FIRST_FRAME_INTERACTIVE');
+      if (trace?.destinationMode) finishInteraction(trace, 'completed');
       onInteractive?.();
     }, 0);
   });
@@ -297,6 +409,7 @@ if (typeof PerformanceObserver !== 'undefined' && PerformanceObserver.supportedE
   try {
     new PerformanceObserver(list => {
       const active = traces.filter(trace => {
+        if (trace.destinationMode && !['pending', 'completed'].includes(trace.status)) return false;
         if (!['CLOSE_TABLE_MAP', 'OPEN_SALE_SCREEN', 'OPEN_TABLE', 'CHANGE_TABLE'].includes(trace.operation)) return false;
         const completion = trace.stages.FIRST_FRAME_INTERACTIVE ?? (trace.metadata?.measurementBoundary === 'authorized-input-to-destination' ? undefined : trace.stages.RENDER_END);
         if (completion !== undefined) return true; // observer delivery may follow the completion marker
@@ -333,6 +446,7 @@ if (typeof window !== 'undefined') {
     getReport: getPosInteractionReport,
     getTraces: () => traces.map(trace => ({ ...trace, stages: { ...trace.stages }, durations: { ...trace.durations }, longTasks: [...trace.longTasks], memory: [...trace.memory] })),
     clear: () => {
+      for (const trace of traces) finishInteraction(trace, 'cancelled');
       traces.splice(0, traces.length);
       pendingByRenderTarget.clear();
       pendingEmissions.splice(0, pendingEmissions.length);

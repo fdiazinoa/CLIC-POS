@@ -9,7 +9,7 @@ const settingsSource = readFileSync(new URL('../components/Settings.tsx', import
 
 test('guardar pedido no depende de jornada ni documento fiscal en ORDER_TAKER', () => {
   assert.match(posSource, /if \(isOrderTakerMode\) return true;[\s\S]*isSessionExpired/);
-  assert.match(posSource, /if \(!isOrderTakerMode\) \{\s*const validation = validateTerminalDocument/);
+  assert.match(posSource, /if \(validateFiscal && !isOrderTakerMode\) \{\s*const validation = validateTerminalDocument/);
   assert.match(posSource, /\[ORDER_TAKER_SAVE_FAILED\]/);
   assert.match(posSource, /La mesa permanece abierta/);
 });
