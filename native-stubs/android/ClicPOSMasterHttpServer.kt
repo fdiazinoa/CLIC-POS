@@ -225,7 +225,7 @@ object ClicPOSMasterHttpServer {
                     method == "GET" && path == "/api/users" ->
                         writeResponse(client, 200, usersSnapshot.toString())
                     method == "GET" && path == "/api/mesas" ->
-                        writeResponse(client, 200, buildRestaurantSnapshot().toString())
+                        writeResponse(client, 200, serializeRestaurantSnapshot())
                     method == "POST" && path == "/api/mesas/bloquear" ->
                         writeLockResponse(client, acquireTableEditLock(parseJsonBody(body)))
                     method == "POST" && path == "/api/mesas/desbloquear" ->
@@ -1127,6 +1127,21 @@ object ClicPOSMasterHttpServer {
         .put("customers", getSyncCollection("customers"))
         .put("productRoutingUpdates", JSONArray(productRoutingOverrides.values.map { JSONObject(it.toString()) }))
         .put("revision", restaurantRevision.get())
+
+    /**
+     * Published rooms, tickets and customers are replaced, never edited in place.
+     * Only this immediate HTTP serialization may borrow those references; the
+     * bridge and persistence retain the detached builder above. Tables still need
+     * a copy for the live lock overlay, and routing updates retain their copies.
+     */
+    private fun serializeRestaurantSnapshot(): String = JSONObject()
+        .put("rooms", roomsSnapshot)
+        .put("tables", buildTablesWithEditLocks())
+        .put("parkedTickets", parkedTicketsSnapshot)
+        .put("customers", catalogSnapshots.optJSONArray("customers") ?: JSONArray())
+        .put("productRoutingUpdates", JSONArray(productRoutingOverrides.values.map { JSONObject(it.toString()) }))
+        .put("revision", restaurantRevision.get())
+        .toString()
 
     fun getRestaurantState(): JSONObject = buildRestaurantSnapshot()
 
