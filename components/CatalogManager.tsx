@@ -1664,6 +1664,8 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                <ErrorBoundary componentName="CatalogManager Content">
                   <div className={`h-full min-h-0 ${viewMode === 'PRODUCTS' ? 'overflow-hidden' : 'overflow-y-auto custom-scrollbar'}`}>
                {viewMode === 'PRODUCTS' && renderProductCatalog()}
+               {/* Legacy product view is intentionally disabled; retain its JSX without enabling it. */}
+               {/* eslint-disable-next-line no-constant-binary-expression */}
                {false && viewMode === 'PRODUCTS' && (
                   <div className="min-h-full p-10 md:p-16 max-w-[1600px] mx-auto w-full">
                      {isTablet && (

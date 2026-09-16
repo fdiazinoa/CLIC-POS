@@ -503,8 +503,8 @@ class BackgroundSyncManager {
                 hasError: collectionErrors.length > 0,
                 lastSyncTime: new Date().toISOString()
             });
-            if (navigator.onLine && (shouldRetrySoon || this.state.pendingCount > 0)) {
-                if (pausedForSaleActivity && this.state.pendingCount === 0) return;
+            if (navigator.onLine && (shouldRetrySoon || this.state.pendingCount > 0)
+                && !(pausedForSaleActivity && this.state.pendingCount === 0)) {
                 this.scheduleSync(this.nextRetryDelayMs ?? this.FAST_RETRY_DELAY_MS);
             }
         }
