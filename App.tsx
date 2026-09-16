@@ -4192,6 +4192,11 @@ const AppContent: React.FC = () => {
   const clientMasterFailureCountRef = useRef(0);
   const clientMasterLastSuccessAtRef = useRef(0);
   const clientMasterTablesFetchInFlightRef = useRef(false);
+  const clientMasterTablesFetchPromiseRef = useRef<Promise<{ ok: boolean; pending?: boolean; error?: unknown }> | null>(null);
+  const clientMasterTablesRevalidationBudgetRef = useRef<{ remaining: number } | null>(null);
+  const clientMasterDiagnosticRef = useRef('');
+  const clientMasterConnectionAttemptRef = useRef({ id: 0, startedAt: 0 });
+  const [clientMasterDiagnostic, setClientMasterDiagnostic] = useState({ phase: 'BOOT_LOADING', code: '' });
   const clientOperationalResolverRef = useRef<ReturnType<typeof createOperationalMasterResolver> | null>(null);
   const clientLocalIpsRef = useRef<string[] | null>(null);
   const [collections, setCollections] = useState<Collection[]>([]);
@@ -5187,19 +5192,43 @@ const AppContent: React.FC = () => {
     });
   }, []);
 
+  const publishClientMasterState = (status: 'CHECKING' | 'ONLINE' | 'OFFLINE', phase: string, error?: unknown) => {
+    const reason = error instanceof Error ? error.message : '';
+    const code = reason.match(/^MASTER_[A-Z_]+(?:_\d+)?(?=:|$)/)?.[0]
+      || (error ? 'MASTER_TRANSPORT' : '');
+    const transition = `${status}:${phase}:${code}`;
+    if (clientMasterDiagnosticRef.current === transition) return;
+    clientMasterDiagnosticRef.current = transition;
+    setClientMasterTablesStatus(status);
+    setClientMasterDiagnostic({ phase, code });
+    const contract = clientRoutingContextRef.current.getContract();
+    try {
+      (window as any).ClicPOSNativePrinter?.debugLog?.(JSON.stringify({
+        tag: 'ClicPOSConnection', message: 'MASTER_CONNECTION_TRANSITION',
+        data: { status, phase, code, atMs: Math.round(performance.now()),
+          attemptId: clientMasterConnectionAttemptRef.current.id,
+          elapsedMs: Math.max(0, Math.round(performance.now() - clientMasterConnectionAttemptRef.current.startedAt)),
+          scopePresent: { tenant: Boolean(contract.tenantId), company: Boolean(contract.companyId), store: Boolean(contract.storeId), master: Boolean(contract.masterTerminalId) } },
+      }));
+    } catch { /* Diagnostic output must not change connection policy. */ }
+  };
   const markClientMasterOnline = () => {
     if (!isClientTerminalMode()) return;
     clientMasterFailureCountRef.current = 0;
     clientMasterLastSuccessAtRef.current = Date.now();
-    setClientMasterTablesStatus('ONLINE');
+    publishClientMasterState('ONLINE', 'TABLES_READY');
   };
 
   const recordClientMasterFailure = (source: string, error: unknown): boolean => {
+    const reason = error instanceof Error ? error.message : '';
+    if (reason.startsWith('MASTER_CONTRACT_CHANGED:') || reason.startsWith('MASTER_ENDPOINT_NOT_READY:')) return false;
+    const invalidContract = /^MASTER_(CONTRACT_MISSING|SCOPE_MISMATCH|IDENTITY_MISMATCH|ROLE_INVALID|SELF_ENDPOINT|SELF_IDENTITY):/.test(reason);
+    if (invalidContract) { publishClientMasterState('OFFLINE', source, error); return true; }
     clientMasterFailureCountRef.current += 1;
     const failureCount = clientMasterFailureCountRef.current;
     const hadRecentSuccess = Date.now() - clientMasterLastSuccessAtRef.current < 15_000;
     const shouldBlock = failureCount >= (hadRecentSuccess ? 3 : 2);
-    if (shouldBlock) setClientMasterTablesStatus('OFFLINE');
+    if (shouldBlock) publishClientMasterState('OFFLINE', source, error);
     console.error(shouldBlock ? '[TABLE_LAYOUT_CLIENT_BLOCKED]' : '[TABLE_LAYOUT_CLIENT_RETRY]', {
       source,
       masterUrl: localStorage.getItem('CLIC_POS_MASTER_URL') || localStorage.getItem('pos_master_ip'),
@@ -5219,7 +5248,8 @@ const AppContent: React.FC = () => {
     deviceId: localStorage.getItem('clic_pos_persistent_device_id') || localStorage.getItem('pos_device_id') || deviceId || '',
     localIps: clientLocalIpsRef.current || [],
   });
-  const clientRoutingContextRef = useRef({ getContract: getClientMasterContract, getTerminal: getCurrentTerminal, discover: async (): Promise<Array<{ baseUrl: string; config: Record<string, any> }>> => [] });
+  const clientRoutingContextRef = useRef({ ready: isDataLoaded, getContract: getClientMasterContract, getTerminal: getCurrentTerminal, discover: async (): Promise<Array<{ baseUrl: string; config: Record<string, any> }>> => [] });
+  clientRoutingContextRef.current.ready = isDataLoaded;
   clientRoutingContextRef.current.getContract = getClientMasterContract;
   clientRoutingContextRef.current.getTerminal = getCurrentTerminal;
 
@@ -5278,6 +5308,7 @@ const AppContent: React.FC = () => {
   if (!clientOperationalResolverRef.current) {
     clientOperationalResolverRef.current = createOperationalMasterResolver({
       getContract: () => clientRoutingContextRef.current.getContract(),
+      isReady: () => clientRoutingContextRef.current.ready,
       discover: () => clientRoutingContextRef.current.discover(),
       mirror: baseUrl => {
         localStorage.setItem('pos_master_ip', new URL(baseUrl).hostname);
@@ -5291,37 +5322,63 @@ const AppContent: React.FC = () => {
     setOperationalTerminalReader(() => clientRoutingContextRef.current.getTerminal() as any);
     return () => { setOperationalMasterResolver(null); setOperationalTerminalReader(null); };
   }, []);
-  const ensureEligibleClientMasterEndpoint = () => clientOperationalResolverRef.current!.ensure();
+  const ensureEligibleClientMasterEndpoint = (budget: { remaining: number }) => clientOperationalResolverRef.current!.ensureCurrent(budget);
   const fetchTables = async () => {
     const isClientRuntime = isClientTerminalMode();
-    if (isClientRuntime && clientMasterTablesFetchInFlightRef.current) {
-      return;
+    if (isClientRuntime && !clientRoutingContextRef.current.ready) {
+      publishClientMasterState('CHECKING', 'BOOT_LOADING');
+      return { ok: false, pending: true };
     }
-    if (isClientRuntime) clientMasterTablesFetchInFlightRef.current = true;
+    if (isClientRuntime && clientMasterTablesFetchInFlightRef.current && clientMasterTablesFetchPromiseRef.current) return clientMasterTablesFetchPromiseRef.current;
+    const reconciliationBudget = clientMasterTablesRevalidationBudgetRef.current || { remaining: 1 };
+    const work = (async (): Promise<{ ok: boolean; pending?: boolean; error?: unknown }> => {
+    if (isClientRuntime) {
+      clientMasterTablesFetchInFlightRef.current = true;
+      clientMasterConnectionAttemptRef.current = { id: clientMasterConnectionAttemptRef.current.id + 1, startedAt: performance.now() };
+    }
+    let authorityIsCurrent = () => true;
+    let requestController: AbortController | undefined;
+    let requestTimeout: number | undefined;
     try {
-      const terminalId = getCurrentTerminal()?.id;
+      const masterEndpoint = isClientRuntime ? await ensureEligibleClientMasterEndpoint(reconciliationBudget) : '';
+      if (isClientRuntime) authorityIsCurrent = clientOperationalResolverRef.current!.captureAuthority();
+      const assertCurrentAuthority = () => {
+        if (!authorityIsCurrent()) throw new Error('MASTER_CONTRACT_CHANGED: cambió el vínculo durante la descarga de mesas.');
+      };
+      assertCurrentAuthority();
+      const terminalId = clientRoutingContextRef.current.getTerminal()?.id;
       const query = terminalId ? `?terminal_id=${encodeURIComponent(terminalId)}` : '';
       const endpoint = isClientRuntime
-        ? `${await ensureEligibleClientMasterEndpoint()}/api/mesas${query}`
+        ? `${masterEndpoint}/api/mesas${query}`
         : resolveOperationalApiUrl(`/api/mesas${query}`);
-      const res = await fetch(endpoint);
+      // A transport deadline, not a retry timer. Start only after the current
+      // master authority is validated; standalone/native Master is unchanged.
+      if (isClientRuntime) {
+        requestController = new AbortController();
+        requestTimeout = window.setTimeout(() => requestController!.abort(), 5000);
+      }
+      const res = await fetch(endpoint, requestController ? { signal: requestController.signal } : undefined);
       if (!res.ok) {
-        throw new Error(`Master respondió HTTP ${res.status}`);
+        throw new Error(`MASTER_TABLES_HTTP_${res.status}: la Caja Master no entregó las mesas.`);
       }
       if (res.ok) {
         const contentType = res.headers.get('content-type') || '';
         if (!contentType.toLowerCase().includes('application/json')) {
-          throw new Error('API de mesas no disponible en este entorno.');
+          throw new Error('MASTER_TABLES_INVALID_JSON: API de mesas no disponible en este entorno.');
         }
-        const data = await res.json();
+        let data: any;
+        try { data = await res.json(); }
+        catch (error) {
+          if (requestController?.signal.aborted) throw error;
+          throw new Error('MASTER_TABLES_INVALID_JSON: la Caja Master no entregó JSON válido.');
+        }
+        if (requestTimeout !== undefined) { window.clearTimeout(requestTimeout); requestTimeout = undefined; }
+        assertCurrentAuthority();
         const responseRevision = Number(data?.revision || 0);
         const hasUnchangedClientRevision = isClientRuntime
           && Number.isFinite(responseRevision)
           && responseRevision > 0
           && responseRevision === lastAppliedClientRestaurantRevisionRef.current;
-        if (Number.isFinite(responseRevision) && responseRevision > masterRestaurantRevisionRef.current) {
-          masterRestaurantRevisionRef.current = responseRevision;
-        }
         const hasAuthoritativeParkedTickets = Array.isArray(data?.parkedTickets);
         const responseParkedTickets = hasAuthoritativeParkedTickets ? data.parkedTickets : [];
         let pendingTableSync = isClientRuntime
@@ -5329,12 +5386,16 @@ const AppContent: React.FC = () => {
           : pendingMasterTableSyncRef.current;
         if (isClientRuntime && !pendingTableSync) {
           pendingTableSync = await readPendingClientTableSync();
+          assertCurrentAuthority();
           if (pendingTableSync) pendingClientTableSyncRef.current = pendingTableSync;
+        }
+        if (Number.isFinite(responseRevision) && responseRevision > masterRestaurantRevisionRef.current) {
+          masterRestaurantRevisionRef.current = responseRevision;
         }
         if (hasUnchangedClientRevision && !pendingTableSync) {
           markClientMasterOnline();
           console.debug('[TABLE_LAYOUT_CLIENT_UNCHANGED]', { revision: responseRevision });
-          return;
+          return { ok: true };
         }
         const mergedRemoteParkedTickets = hasAuthoritativeParkedTickets
           ? mergePendingClientTableTickets(responseParkedTickets, pendingTableSync)
@@ -5400,7 +5461,7 @@ const AppContent: React.FC = () => {
             }
             return mergeRemoteTables(data, previousTables);
           });
-          return;
+          return { ok: true };
         }
 
         const nextTables = Array.isArray(data?.tables) ? data.tables : [];
@@ -5466,11 +5527,16 @@ const AppContent: React.FC = () => {
           );
         }
       }
-    } catch (e) {
+      return { ok: true };
+    } catch (caught) {
+      const e = requestController?.signal.aborted
+        ? new Error('MASTER_TABLES_TIMEOUT: la Caja Master no respondió las mesas a tiempo.') : caught;
       console.warn("Failed to fetch tables from Master/API:", e);
       if (isClientRuntime) {
+        if (!authorityIsCurrent()) return { ok: false, pending: true, error: new Error('MASTER_CONTRACT_CHANGED: cambió el vínculo durante la descarga de mesas.') };
+        if (e instanceof Error && /MASTER_(CONTRACT_CHANGED|ENDPOINT_NOT_READY):/.test(e.message)) return { ok: false, pending: true, error: e };
         recordClientMasterFailure('tables_poll', e);
-        return;
+        return { ok: false, error: e };
       }
       console.warn('Using local rooms/tables because this terminal owns its operational database.');
       try {
@@ -5505,9 +5571,27 @@ const AppContent: React.FC = () => {
       } catch (fallbackError) {
         console.error('Failed to load tables from local DB:', fallbackError);
       }
+      return { ok: false, error: e };
     } finally {
+      if (requestTimeout !== undefined) window.clearTimeout(requestTimeout);
       if (isClientRuntime) clientMasterTablesFetchInFlightRef.current = false;
     }
+    })();
+    const sharedWork = (async () => {
+      let result: Awaited<typeof work>;
+      try { result = await work; }
+      finally { if (clientMasterTablesFetchPromiseRef.current === sharedWork) clientMasterTablesFetchPromiseRef.current = null; }
+      if (result.pending && result.error instanceof Error && result.error.message.startsWith('MASTER_CONTRACT_CHANGED:')
+        && clientRoutingContextRef.current.ready && reconciliationBudget.remaining > 0) {
+        reconciliationBudget.remaining -= 1;
+        clientMasterTablesRevalidationBudgetRef.current = reconciliationBudget;
+        try { return await fetchTables(); }
+        finally { clientMasterTablesRevalidationBudgetRef.current = null; }
+      }
+      return result;
+    })();
+    if (isClientRuntime) clientMasterTablesFetchPromiseRef.current = sharedWork;
+    return sharedWork;
   };
 
   const invokeTableEditLock = useCallback(async (
@@ -5747,15 +5831,16 @@ const AppContent: React.FC = () => {
   ]);
 
   const retryClientMasterConnection = useCallback(async () => {
+    if (!clientRoutingContextRef.current.ready) return;
     clientMasterFailureCountRef.current = 0;
-    setClientMasterTablesStatus('CHECKING');
-    clientOperationalResolverRef.current!.invalidate();
+    publishClientMasterState('CHECKING', 'EXPLICIT_RETRY');
+    if (!clientMasterTablesFetchInFlightRef.current) clientOperationalResolverRef.current!.invalidate();
     try {
-      await ensureEligibleClientMasterEndpoint();
-      await fetchTables();
+      const result = await fetchTables();
+      if (!result.ok && clientRoutingContextRef.current.ready) publishClientMasterState('OFFLINE', 'EXPLICIT_RETRY', result.error);
     } catch (error) {
       console.warn('[MASTER_LAN] Rediscovery failed:', error);
-      setClientMasterTablesStatus('OFFLINE');
+      publishClientMasterState('OFFLINE', 'EXPLICIT_RETRY', error);
     }
   }, [fetchTables]);
   const openTableForService = useCallback(async (table: Table): Promise<Table | null> => {
@@ -7309,6 +7394,7 @@ const AppContent: React.FC = () => {
 
   useEffect(() => {
     // Poll tables if in restaurant mode OR retail with tables enabled
+    if (!isDataLoaded) return;
     const usesTables = (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId)?.config?.operational?.usa_mesas;
 
     // IMPORTANT: avoid overriding local edits while designing layout
@@ -7326,10 +7412,10 @@ const AppContent: React.FC = () => {
       }, isClientTerminalMode() ? CLIENT_TABLE_POLL_INTERVAL_MS : 10000);
       return () => clearInterval(interval);
     }
-  }, [config.vertical, config.terminals, deviceId, currentView]);
+  }, [config.vertical, config.terminals, deviceId, currentView, isDataLoaded]);
 
   useEffect(() => {
-    if (!isClientTerminalMode() || currentView === 'TABLE_DESIGNER') return;
+    if (!isDataLoaded || !isClientTerminalMode() || currentView === 'TABLE_DESIGNER') return;
 
     const refreshVisibleTables = () => {
       if (document.visibilityState !== 'visible' || isPosSaleActive()) return;
@@ -7342,7 +7428,7 @@ const AppContent: React.FC = () => {
       window.removeEventListener('focus', refreshVisibleTables);
       document.removeEventListener('visibilitychange', refreshVisibleTables);
     };
-  }, [currentView]);
+  }, [currentView, isDataLoaded]);
 
   useEffect(() => {
     // --- SYNC EVENT LISTENERS (For Slave Terminals) ---
@@ -11716,7 +11802,7 @@ const AppContent: React.FC = () => {
                     }, 0);
                   });
                 }}
-                onRefreshTables={fetchTables}
+                onRefreshTables={async () => { await fetchTables(); }}
                 onUpdateTables={async (nextTables) => {
                   setTables(nextTables);
                   if (canUseLocalOperationalTableStore()) {
@@ -13516,6 +13602,7 @@ const AppContent: React.FC = () => {
               <p className="mt-2 text-sm font-semibold leading-6 text-slate-300">
                 Las operaciones del restaurante están bloqueadas para evitar trabajar con salas, mesas o cuentas desactualizadas.
               </p>
+              <p className="mt-2 text-xs text-slate-400">{clientMasterDiagnostic.phase}{clientMasterDiagnostic.code ? ` · ${clientMasterDiagnostic.code}` : ''}</p>
               <button
                 type="button"
                 onClick={() => void retryClientMasterConnection()}
