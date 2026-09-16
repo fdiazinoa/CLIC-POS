@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import ts from 'typescript';
 
 const posSource = readFileSync(
   new URL('../components/POSInterface.tsx', import.meta.url),
@@ -27,11 +28,40 @@ test('table checkout keeps the completed-sale modal mounted until the cashier cl
 });
 
 test('closing the completed-sale modal performs the deferred table navigation', () => {
-  assert.match(
-    posSource,
-    /onClose=\{\(\) => \{\s*setShowPaymentModal\(false\);\s*if \(returnToTableMapAfterPayment && onOpenTableMap\) \{\s*setReturnToTableMapAfterPayment\(false\);\s*onOpenTableMap\(\);/,
-    'the explicit modal close action must return restaurant sales to the table map'
-  );
+  const file = ts.createSourceFile('POSInterface.tsx', posSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const handlers: ts.ArrowFunction[] = [];
+  const visit = (node: ts.Node) => {
+    if (ts.isJsxSelfClosingElement(node) && node.tagName.getText(file) === 'UnifiedPaymentModal') {
+      for (const attribute of node.attributes.properties) {
+        if (ts.isJsxAttribute(attribute) && attribute.name.getText(file) === 'onClose'
+          && attribute.initializer && ts.isJsxExpression(attribute.initializer)
+          && attribute.initializer.expression && ts.isArrowFunction(attribute.initializer.expression)) {
+          handlers.push(attribute.initializer.expression);
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
+  assert.equal(handlers.length, 1, 'identify the actual checkout modal, not another onClose');
+  const body = ts.transpileModule(`const close = ${handlers[0].getText(file)};`, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
+  }).outputText;
+  for (const deferred of [false, true]) {
+    for (const hasNavigation of [false, true]) {
+      const calls: unknown[][] = [];
+      const close = new Function('recordCheckoutDiagnostic', 'setShowPaymentModal',
+        'returnToTableMapAfterPayment', 'onOpenTableMap', 'setReturnToTableMapAfterPayment', `${body}; return close;`)(
+        (event: string) => calls.push(['diagnostic', event]),
+        (value: boolean) => calls.push(['visible', value]), deferred,
+        hasNavigation ? () => calls.push(['navigate']) : undefined,
+        (value: boolean) => calls.push(['deferred', value]),
+      );
+      close();
+      assert.deepEqual(calls, [ ['diagnostic', 'PAYMENT_CLOSE'], ['visible', false],
+        ...(deferred && hasNavigation ? [['deferred', false], ['navigate']] : []) ]);
+    }
+  }
 });
 
 test('closing a restaurant order releases its edit lock without waiting for another table', () => {

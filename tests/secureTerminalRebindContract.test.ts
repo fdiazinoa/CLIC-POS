@@ -54,6 +54,8 @@ test('la selección de tipo de terminal siempre precede la lista cuando no exist
 test('la interfaz ERP identifica el device y no ofrece autoautorizar', () => {
   assert.match(selectorSource, /La autorización debe completarse desde Cloud Admin/);
   assert.match(selectorSource, /authorizationIssue\.generatedDeviceId/);
-  assert.match(selectorSource, /Reintentar solo consulta si la autorización externa ya fue completada/);
-  assert.match(selectorSource, /!expectsErpDirect && \(/);
+  assert.match(selectorSource, /Solicitud confirmada: \{deviceRequest\.request_id\}/);
+  assert.match(selectorSource, /Actualizar estado no aprueba ni transfiere el vínculo/);
+  assert.match(selectorSource, /if \(pendingTerminal\.canRequestAuthorization \|\| expectsErpDirect\) \{\s*void handleAdministrativeRequest\(\);\s*return;/);
+  assert.match(selectorSource, /!expectsErpDirect && !pendingTerminal\.canRequestAuthorization && \(/);
 });

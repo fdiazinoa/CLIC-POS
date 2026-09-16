@@ -18,12 +18,18 @@ const globalKeyboardSource = readFileSync(
   new URL('../components/GlobalVirtualKeyboard.tsx', import.meta.url),
   'utf8',
 );
+const posSource = readFileSync(new URL('../components/POSInterface.tsx', import.meta.url), 'utf8');
 
 test('la activación Android permite mostrar y redimensionar el teclado virtual', () => {
   assert.match(mainActivitySource, /SOFT_INPUT_STATE_UNSPECIFIED/);
   assert.match(mainActivitySource, /SOFT_INPUT_ADJUST_RESIZE/);
   assert.doesNotMatch(mainActivitySource, /SOFT_INPUT_STATE_ALWAYS_HIDDEN/);
-  assert.doesNotMatch(mainActivitySource, /SOFT_INPUT_ADJUST_NOTHING/);
+  // Overlay is intentional only in the scoped restaurant POS, never the activation default.
+  assert.match(mainActivitySource, /private volatile boolean keyboardOverlayMode;/);
+  assert.doesNotMatch(mainActivitySource, /keyboardOverlayMode\s*=\s*true/);
+  assert.match(mainActivitySource, /keyboardOverlayMode\s*\? WindowManager\.LayoutParams\.SOFT_INPUT_ADJUST_NOTHING\s*: WindowManager\.LayoutParams\.SOFT_INPUT_ADJUST_RESIZE/);
+  assert.match(posSource, /androidBridge\.setKeyboardOverlayMode\(true\);\s*return \(\) => androidBridge\.setKeyboardOverlayMode\?\.\(false\)/);
+  assert.match(posSource, /if \(!isRestaurantMode \|\| !\(Capacitor\.isNativePlatform\(\) && Capacitor\.getPlatform\(\) === 'android'\)\) return;/);
   assert.doesNotMatch(mainActivitySource, /SOFT_INPUT_ADJUST_PAN/);
   assert.match(manifestSource, /android:windowSoftInputMode="adjustResize"/);
 });

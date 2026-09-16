@@ -5,6 +5,7 @@ import { buildCloseTaxSummary, getCloseReceiptSummary, closeTaxLabel } from '../
 import { buildServiceTypeReport } from '../utils/orderServiceType';
 import { buildEscPosZReportPayload } from '../services/printer/EscPosFormatter';
 import { generateZReportReceipt } from '../services/printer/templates/ZReportReceipt';
+import { buildNativeZReportContent } from '../services/recovery/NativeZReport';
 
 const transactions: any[] = [
   { id: 'local', serviceType: 'DINE_IN', total: 5000, taxAmount: 720,
@@ -113,9 +114,32 @@ test('snapshot survives roundtrip/reprint and takes priority over live config an
 
 test('X y Z persisten el mismo snapshot y no imprimen un borrador previo', () => {
   const app = readFileSync(new URL('../App.tsx',import.meta.url),'utf8');
-  assert.equal(app.match(/closeTaxSummary: buildCloseTaxSummary\(terminalTransactions\)/g)?.length,2);
+  assert.match(app, /closeTaxSummary: buildCloseTaxSummary\(terminalTransactions\)/);
+  const producerStart = app.indexOf('const nativeZContent = buildNativeZReportContent({');
+  const persist = app.indexOf("await db.saveDocument('zReports', newZReport)", producerStart);
+  assert.ok(producerStart >= 0 && persist > producerStart);
+  const zFlow = app.slice(producerStart, persist);
+  assert.match(zFlow, /buildNativeZReportContent\(\{\s*terminalTransactions,/);
+  assert.match(zFlow, /const newZReport:[\s\S]*?= \{\s*\.\.\.nativeZContent,/);
+  assert.doesNotMatch(zFlow.slice(zFlow.indexOf('const newZReport:')), /closeTaxSummary:/,
+    'do not overwrite the persisted producer snapshot with a live calculation');
   const dashboard = readFileSync(new URL('../components/ZReportDashboard.tsx',import.meta.url),'utf8');
   assert.doesNotMatch(dashboard,/tempReport|\.printZReport\(/);
+});
+
+test('actual native Z producer matches the X tax builder from the exact persisted transaction set', () => {
+  const persisted = JSON.parse(JSON.stringify([...transactions,
+    { id: 'exempt', total: 100, taxAmount: 0, items: [], payments: [] },
+    { id: 'refund', documentType: 'REFUND', total: 118, taxAmount: 18, items: [], payments: [] },
+    { id: 'other-rate', total: 116, taxAmount: 16, taxBreakdown: [{ name: 'ITBIS', rate: .16, amount: 16 }], items: [], payments: [] },
+  ])).map((transaction: any) => ({ date: '2026-09-02T10:00:00Z', items: [], payments: [], ...transaction }));
+  const before = JSON.stringify(persisted);
+  const native = buildNativeZReportContent({ terminalTransactions: persisted,
+    terminalCashMovements: [], terminalCollections: [], terminalId: 't1', config,
+    notes: 'QA', fallbackOpenedAt: '2026-09-02T00:00:00Z' });
+  assert.deepEqual(native.closeTaxSummary, buildCloseTaxSummary(persisted));
+  assert.ok(native.closeTaxSummary.some(line => line.rate === 16 && line.amount === 16));
+  assert.equal(JSON.stringify(persisted), before);
 });
 
 test('checkout persists the calculated tax breakdown for regular and split sales', () => {
