@@ -92,7 +92,8 @@ test('serialization and native exceptions cannot throw, schedule work, leak erro
 
 test('native empty, malformed, primitive, error and thenable responses never become diagnostic success', () => {
   for (const raw of [null, '', 'not JSON', 'null', 'true', '{"success":false,"message":"native rejected"}',
-    '{"status":"error","success":true}', { success: true, then() {} }, Promise.resolve({ success: true })]) {
+    '{"status":"error","success":true}', '{"status":"ERROR","success":true}',
+    { success: true, then() {} }, Promise.resolve({ success: true })]) {
     const fixture = emitted({ debugLog: () => raw }); assert.equal(fixture.invoke('{}').success, false);
     assert.deepEqual(fixture.calls, ['{}']);
   }

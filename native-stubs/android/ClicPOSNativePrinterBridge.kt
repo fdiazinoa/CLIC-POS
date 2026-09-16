@@ -180,7 +180,7 @@ class AndroidPrinterBridge @JvmOverloads constructor(context: Context, webView: 
                         var serialized = typeof payload === 'string' ? payload : JSON.stringify(payload == null ? {} : payload);
                         if (typeof serialized !== 'string') return { status: 'error', success: false, message: 'Invalid debugLog payload' };
                         var result = parseResult(window.AndroidPrinter.debugLog(serialized));
-                        if (result && typeof result === 'object' && result.success === true && result.status !== 'error' && typeof result.then !== 'function') return result;
+                        if (result && typeof result === 'object' && result.success === true && String(result.status || '').toLowerCase() !== 'error' && typeof result.then !== 'function') return result;
                         return { status: 'error', success: false, message: 'Native debugLog failed' };
                       } catch (error) {
                         return { status: 'error', success: false, message: 'Native debugLog failed' };
