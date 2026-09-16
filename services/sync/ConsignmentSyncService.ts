@@ -3,7 +3,7 @@ import { requestJson } from '../network/httpClient';
 import { readTerminalCredentialsSync } from './TerminalCredentialStore';
 import { resolveSyncDeviceToken } from './deviceToken';
 import { loadSyncProfile, resolveSyncTarget } from './SyncProfile';
-import { persistLocalDeviceId, resolveLocalDeviceId } from '../../utils/deviceRevocation';
+import { resolveLocalDeviceId } from '../../utils/deviceRevocation';
 
 export interface ErpConsignmentLine {
     id: string;
@@ -233,20 +233,16 @@ const resolveRequestContext = () => {
     const target = resolveSyncTarget(profile);
     const credentials = readTerminalCredentialsSync();
     const terminalId = target.terminalId || profile.erpTerminalId || credentials.terminalId || '';
-    const deviceId = credentials.deviceId || resolveOrCreateLocalDeviceId();
+    const deviceId = credentials.deviceId || requireLocalDeviceId();
     const tenantId = profile.erpTenantId || profile.cloudTenantId || localStorage.getItem('clic_erp_sync_tenant_id') || '';
 
     return { profile, target, credentials, terminalId, deviceId, tenantId };
 };
 
-const resolveOrCreateLocalDeviceId = (): string => {
+const requireLocalDeviceId = (): string => {
     const existing = resolveLocalDeviceId();
     if (existing) return existing;
-    const generated = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-        ? `pos-${crypto.randomUUID()}`
-        : `pos-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-    persistLocalDeviceId(generated);
-    return generated;
+    throw new Error('DEVICE_IDENTITY_NOT_READY: Recupera la identidad persistida antes de sincronizar consignaciones.');
 };
 
 const buildHeaders = (includeContentType = false): Record<string, string> => {
