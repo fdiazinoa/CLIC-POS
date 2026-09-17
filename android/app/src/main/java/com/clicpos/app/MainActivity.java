@@ -43,6 +43,7 @@ public class MainActivity extends BridgeActivity {
     private static final String TAG = "CLICPOS_MAIN";
     private boolean activityRecreated;
     private volatile boolean keyboardOverlayMode;
+    private final PosKeyboardWindowPolicy keyboardWindowPolicy = new PosKeyboardWindowPolicy();
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
@@ -92,14 +93,19 @@ public class MainActivity extends BridgeActivity {
 
     @Override
     public void onResume() {
+        // Preserve the visibility decision on reentry before Android resumes window focus.
+        keyboardWindowPolicy.onResume();
+        enforcePosWindowPolicy();
         super.onResume();
         enforcePosWindowPolicy();
     }
 
     private void enforcePosWindowPolicy() {
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        int softInputMode = WindowManager.LayoutParams.SOFT_INPUT_STATE_UNSPECIFIED
-                | (keyboardOverlayMode
+        int softInputMode = keyboardWindowPolicy.resolveSoftInputMode(
+                WindowManager.LayoutParams.SOFT_INPUT_STATE_UNSPECIFIED,
+                WindowManager.LayoutParams.SOFT_INPUT_STATE_UNCHANGED,
+                keyboardOverlayMode
                         ? WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING
                         : WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
         getWindow().setSoftInputMode(softInputMode);
