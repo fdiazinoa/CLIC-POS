@@ -42,8 +42,14 @@ import { requestJson } from '../services/network/httpClient';
 import { canAccessOtherSellerTables, isTableLockedForUser } from '../utils/tableAccessPolicy';
 import {
     beginPosInteraction,
+    beginDestinationInteraction,
+    commitInteractionDestination,
+    expectInteractionDestination,
+    finishInteraction,
+    isInteractionPending,
+    observeDestinationAttempt,
+    type PosInteractionTrace,
     expectInteractionRender,
-    getLatestPosInteraction,
     markInteractionStage,
     markInteractionStateUpdate,
     markRenderEnd,
@@ -51,11 +57,13 @@ import {
 } from '../utils/interactionPerformance';
 
 interface TableMapProps {
+    /** Diagnostic ownership only; the retained host controls visibility. */
+    visible?: boolean;
     rooms: Room[];
     currentRoomId?: string;
     tables: Table[];
     parkedTickets?: ParkedTicket[];
-    onTableClick: (table: Table) => void;
+    onTableClick: (table: Table, trace?: PosInteractionTrace) => void;
     onBeforeTableOpen?: (table: Table) => boolean | Promise<boolean>;
     onTableOpenCancelled?: (table: Table) => void | Promise<void>;
     currencySymbol: string;
@@ -148,8 +156,8 @@ const BarTabsModal: React.FC<{
     tickets: ParkedTicket[];
     currencySymbol: string;
     onClose: () => void;
-    onOpenTab: (ticket: ParkedTicket) => void;
-    onCreateTab: (name: string) => void;
+    onOpenTab: (ticket: ParkedTicket, inputTimeStamp?: number) => void;
+    onCreateTab: (name: string, inputTimeStamp?: number) => void;
     onRenameTab?: (ticket: ParkedTicket, name: string, fractionIndex?: number) => void | Promise<void>;
     allowCreate?: boolean;
     titleLabel?: string;
@@ -197,7 +205,7 @@ const BarTabsModal: React.FC<{
                                         <div className="flex items-stretch gap-2 p-2">
                                             <button
                                                 type="button"
-                                                onClick={() => !isPaid && onOpenTab(ticket)}
+                                                onClick={(event) => !isPaid && onOpenTab(ticket, event.timeStamp)}
                                                 disabled={isPaid}
                                                 className="table-account-action flex min-w-0 flex-1 select-none appearance-none items-center justify-between gap-4 rounded-2xl border-0 bg-white p-2 text-left transition-colors [-webkit-tap-highlight-color:transparent] hover:bg-sky-50 disabled:cursor-default"
                                             >
@@ -288,8 +296,8 @@ const BarTabsModal: React.FC<{
                         />
                         <button
                             type="button"
-                            onClick={() => {
-                                onCreateTab(tabName.trim() || nextName);
+                            onClick={(event) => {
+                                onCreateTab(tabName.trim() || nextName, event.timeStamp);
                                 setTabName('');
                             }}
                             className="mt-4 flex w-full items-center justify-center gap-2 rounded-2xl bg-blue-600 py-4 text-sm font-black uppercase tracking-wide text-white shadow-lg shadow-blue-100 active:scale-95"
@@ -494,6 +502,7 @@ const statusPalette: Record<
 };
 
 const TableMap: React.FC<TableMapProps> = ({
+    visible = true,
     rooms,
     currentRoomId: initialRoomId,
     tables,
@@ -540,6 +549,60 @@ const TableMap: React.FC<TableMapProps> = ({
     const [tableNotice, setTableNotice] = useState<TableNoticeState | null>(null);
     const [openingTableId, setOpeningTableId] = useState<string | null>(null);
     const openingTableIdRef = useRef<string | null>(null);
+    const openTraceRef = useRef<PosInteractionTrace | null>(null);
+    const openingOriginVisibleRef = useRef(visible);
+    const localDestinationRef = useRef<{ trace: PosInteractionTrace; target: string; tableId: string } | null>(null);
+    const committedLocalDestinationRef = useRef<typeof localDestinationRef.current>(null);
+
+    const beginTableInteraction = useCallback((source: 'map-node' | 'account-selection' | 'bar-selection' | 'bar-create' | 'preview-open' | 'notice-open', inputTimeStamp?: number) => {
+        const trace = beginDestinationInteraction('OPEN_TABLE', inputTimeStamp, openTraceRef.current);
+        trace.metadata = { ...trace.metadata, source };
+        openTraceRef.current = trace;
+        localDestinationRef.current = null;
+        return trace;
+    }, []);
+
+    const expectLocalDestination = useCallback((trace: PosInteractionTrace, target: string, table: Table) => {
+        if (!openingOriginVisibleRef.current) finishInteraction(trace, 'cancelled');
+        if (!isInteractionPending(trace)) return;
+        expectInteractionDestination(trace, target);
+        localDestinationRef.current = { trace, target, tableId: String(table.id) };
+    }, []);
+
+    const openPosTable = useCallback((table: Table, trace: PosInteractionTrace) => {
+        if (!openingOriginVisibleRef.current && trace.renderTarget !== 'POS_TABLE') finishInteraction(trace, 'cancelled');
+        expectInteractionDestination(trace, 'POS_TABLE');
+        try {
+            onTableClick(table, trace);
+        } catch (error) {
+            finishInteraction(trace, 'failed');
+            throw error;
+        } finally {
+            markInteractionStage(trace, 'HANDLER_END');
+        }
+    }, [onTableClick]);
+
+    useLayoutEffect(() => {
+        openingOriginVisibleRef.current = visible;
+        // Pending lock/open work still runs, but a hidden origin cannot later
+        // claim a successful interaction. A transferred POS destination owns
+        // its own lifecycle and must survive the normal map→POS handoff.
+        if (!visible && openTraceRef.current?.renderTarget !== 'POS_TABLE') finishInteraction(openTraceRef.current, 'cancelled');
+        const owner = localDestinationRef.current;
+        const renderedTable = owner?.target === 'TABLE_ACCOUNTS' ? selectedAccountTable
+            : owner?.target === 'BAR_TABS' ? selectedBarTable
+                : owner?.target === 'TABLE_PREVIEW' ? selectedTable
+                    : owner?.target === 'TABLE_NOTICE' ? tableNotice?.tableToOpen : null;
+        const ready = visible && owner && String(renderedTable?.id || '') === owner.tableId;
+        committedLocalDestinationRef.current = ready ? owner : null;
+        if (ready) {
+            commitInteractionDestination(owner.trace, owner.target, undefined, () => committedLocalDestinationRef.current === owner);
+        }
+        return () => {
+            openingOriginVisibleRef.current = false;
+            committedLocalDestinationRef.current = null;
+        };
+    }, [visible, selectedAccountTable, selectedBarTable, selectedTable, tableNotice]);
     const prefersReducedMotion = useReducedMotion();
     const reduceMotion = shouldReduceTableMotion({
         prefersReducedMotion: Boolean(prefersReducedMotion),
@@ -548,6 +611,7 @@ const TableMap: React.FC<TableMapProps> = ({
     });
 
     const closeTablePreview = useCallback((table: Table, close: () => void) => {
+        finishInteraction(localDestinationRef.current?.trace, 'cancelled');
         close();
         void Promise.resolve(onTableOpenCancelled?.(table))
             .then(() => onRefreshTables?.())
@@ -555,6 +619,7 @@ const TableMap: React.FC<TableMapProps> = ({
     }, [onRefreshTables, onTableOpenCancelled]);
 
     const closeTableNotice = useCallback(() => {
+        finishInteraction(localDestinationRef.current?.trace, 'cancelled');
         const tableToRelease = tableNotice?.tableToOpen;
         setTableNotice(null);
         if (tableToRelease) {
@@ -1381,8 +1446,7 @@ const TableMap: React.FC<TableMapProps> = ({
         return true;
     }, [completeTableTransfer, isTableMoveTargetOccupied, resolveTicketForTable, transferSelection]);
 
-    const handleTableAction = useCallback(async (table: Table) => {
-        const trace = getLatestPosInteraction('OPEN_TABLE');
+    const handleTableAction = useCallback((table: Table, trace: PosInteractionTrace) => observeDestinationAttempt(trace, async () => {
         const primaryTableId = String(table.joinedSourceTableId || '').trim();
         const operationalTable = primaryTableId
             ? safeTables.find(candidate => String(candidate.id) === primaryTableId) || table
@@ -1390,19 +1454,21 @@ const TableMap: React.FC<TableMapProps> = ({
         if (onBeforeTableOpen && !(await onBeforeTableOpen(operationalTable))) {
             return;
         }
-        if (trace) expectInteractionRender(trace, 'APP_VIEW');
         const tableTickets = getTableTickets(operationalTable);
         if (isRestaurantMode && operationalTable.shape !== 'BAR' && tableTickets.length > 0) {
+            expectLocalDestination(trace, 'TABLE_ACCOUNTS', operationalTable);
             setSelectedAccountTable(operationalTable);
             return;
         }
         if (operationalTable.shape === 'BAR') {
+            expectLocalDestination(trace, 'BAR_TABS', operationalTable);
             setSelectedBarTable(operationalTable);
             return;
         }
 
         const joinedTableName = String(operationalTable.joinedTableName || '').trim();
         if (isRestaurantMode && joinedTableName) {
+            expectLocalDestination(trace, 'TABLE_NOTICE', operationalTable);
             setTableNotice({
                 title: 'Mesa unida',
                 message: `${getTableLabel(operationalTable)} está unida con ${joinedTableName}. Ambas mesas comparten la misma cuenta.`,
@@ -1413,7 +1479,7 @@ const TableMap: React.FC<TableMapProps> = ({
         }
 
         if (operationalTable.status === 'OCCUPIED' || operationalTable.status === 'RESERVED') {
-            onTableClick(operationalTable);
+            openPosTable(operationalTable, trace);
             return;
         }
 
@@ -1421,7 +1487,7 @@ const TableMap: React.FC<TableMapProps> = ({
             if (onUpdateParkedTickets && onUpdateTables) {
                 const ticket = await createTableAccount(operationalTable);
                 setSelectedAccountTable(null);
-                onTableClick({
+                openPosTable({
                     ...operationalTable,
                     status: 'OCCUPIED',
                     currentOrderId: ticket.id,
@@ -1429,14 +1495,14 @@ const TableMap: React.FC<TableMapProps> = ({
                     timeSeated: ticket.timestamp,
                     waiterId: operationalTable.waiterId || currentUser.id,
                     waiterName: operationalTable.waiterName || currentUser.name
-                });
+                }, trace);
                 return;
             }
             if (onOpenTable) {
                 const openedTable = await onOpenTable(operationalTable);
                 if (openedTable) {
                     onRefreshTables?.();
-                    onTableClick(openedTable);
+                    openPosTable(openedTable, trace);
                 }
                 return;
             }
@@ -1455,27 +1521,31 @@ const TableMap: React.FC<TableMapProps> = ({
                 const data = await res.json();
                 if (res.ok && data.status === 'success') {
                     onRefreshTables?.();
-                    onTableClick({ ...operationalTable, currentOrderId: data.orden_id, status: 'FREE' });
+                    openPosTable({ ...operationalTable, currentOrderId: data.orden_id, status: 'FREE' }, trace);
                 } else {
+                    finishInteraction(trace, 'failed');
                     alert(data?.message || 'Error abriendo mesa');
                 }
             } catch (error) {
+                finishInteraction(trace, 'failed');
                 console.error(error);
                 alert('Error de conexion con el servicio de mesas');
             }
             return;
         }
 
+        expectLocalDestination(trace, 'TABLE_PREVIEW', operationalTable);
         setSelectedTable(operationalTable);
-    }, [createTableAccount, currentUser.id, currentUser.name, getTableTickets, isRestaurantMode, onBeforeTableOpen, onOpenTable, onRefreshTables, onTableClick, onUpdateParkedTickets, onUpdateTables, safeTables]);
+    }), [createTableAccount, currentUser.id, currentUser.name, expectLocalDestination, getTableTickets, isRestaurantMode, onBeforeTableOpen, onOpenTable, onRefreshTables, openPosTable, onUpdateParkedTickets, onUpdateTables, safeTables]);
 
     const handleNodeSelect = useCallback(
-        (model: SmartTableModel) => {
+        (model: SmartTableModel, inputTimeStamp?: number) => {
             // React state is not synchronous: two taps delivered in the same
             // frame used to start two lock/open/navigation chains. The ref is
             // the authoritative single-flight guard for operator input.
             if (openingTableIdRef.current) return;
             if (model.isLocked) {
+                if (!transferSelection) finishInteraction(beginTableInteraction('map-node', inputTimeStamp), 'cancelled');
                 const editingOwner = model.table.editingLock?.userName || model.table.editingLock?.terminalId;
                 alert(editingOwner
                     ? `Mesa en digitación por ${editingOwner}. Estará disponible cuando esa terminal vuelva al mapa de mesas.`
@@ -1483,8 +1553,10 @@ const TableMap: React.FC<TableMapProps> = ({
                 return;
             }
             const operation = transferSelection ? 'CHANGE_TABLE' : 'OPEN_TABLE';
-            const trace = beginPosInteraction(operation, { tableId: model.table.id });
-            expectInteractionRender(trace, 'TABLE_MAP_VIEW');
+            const trace = operation === 'CHANGE_TABLE'
+                ? beginPosInteraction(operation, { tableId: model.table.id })
+                : beginTableInteraction('map-node', inputTimeStamp);
+            if (operation === 'CHANGE_TABLE') expectInteractionRender(trace, 'TABLE_MAP_VIEW');
             markInteractionStateUpdate(trace, 1);
             openingTableIdRef.current = String(model.table.id);
             setOpeningTableId(String(model.table.id));
@@ -1494,7 +1566,7 @@ const TableMap: React.FC<TableMapProps> = ({
                 setOpeningTableId(null);
                 return;
             }
-            void handleTableAction(model.table).finally(() => {
+            void handleTableAction(model.table, trace).finally(() => {
                 markInteractionStage(trace, 'HANDLER_END');
                 // Keep the guard through the navigation frame. This also
                 // absorbs a queued click from a slow Android touch pipeline.
@@ -1504,7 +1576,7 @@ const TableMap: React.FC<TableMapProps> = ({
                 }, 350);
             });
         },
-        [handleTableAction, handleTransferTableClick, transferSelection]
+        [beginTableInteraction, handleTableAction, handleTransferTableClick, transferSelection]
     );
 
     const handleZoom = useCallback((delta: number) => {
@@ -1840,10 +1912,10 @@ const TableMap: React.FC<TableMapProps> = ({
                                     {tableNotice.tableToOpen && (
                                         <button
                                             type="button"
-                                            onClick={() => {
+                                            onClick={(event) => {
                                                 const tableToOpen = tableNotice.tableToOpen;
                                                 setTableNotice(null);
-                                                if (tableToOpen) onTableClick(tableToOpen);
+                                                if (tableToOpen) openPosTable(tableToOpen, beginTableInteraction('notice-open', event.timeStamp));
                                             }}
                                             className="rounded-2xl bg-slate-950 px-4 py-2.5 text-sm font-black text-white shadow-lg active:scale-[0.98]"
                                         >
@@ -2145,7 +2217,7 @@ const TableMap: React.FC<TableMapProps> = ({
                             .map(candidate => String(candidate.id))}
                         onClose={() => closeTablePreview(selectedTable, () => setSelectedTable(null))}
                         onAddOrder={() => {
-                            onTableClick(selectedTable);
+                            openPosTable(selectedTable, beginTableInteraction('preview-open'));
                             setSelectedTable(null);
                         }}
                         onPrintPrecheck={() => {
@@ -2216,15 +2288,15 @@ const TableMap: React.FC<TableMapProps> = ({
                         accountMode
                         titleLabel="Cuentas de la mesa"
                         onClose={() => closeTablePreview(selectedAccountTable, () => setSelectedAccountTable(null))}
-                        onOpenTab={(ticket) => {
+                        onOpenTab={(ticket, inputTimeStamp) => {
                             const total = Number(ticket.total ?? (ticket.items || []).reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0), 0));
-                            onTableClick({
+                            openPosTable({
                                 ...selectedAccountTable,
                                 status: 'OCCUPIED',
                                 currentOrderId: ticket.id,
                                 currentOrderTotal: total,
                                 timeSeated: selectedAccountTable.timeSeated || ticket.timestamp
-                            });
+                            }, beginTableInteraction('account-selection', inputTimeStamp));
                             setSelectedAccountTable(null);
                         }}
                         onCreateTab={(name) => {
@@ -2240,10 +2312,10 @@ const TableMap: React.FC<TableMapProps> = ({
                         tickets={getBarTickets(selectedBarTable)}
                         currencySymbol={currencySymbol}
                         onClose={() => closeTablePreview(selectedBarTable, () => setSelectedBarTable(null))}
-                        onOpenTab={(ticket) => {
+                        onOpenTab={(ticket, inputTimeStamp) => {
                             const label = ticket.barTabName || ticket.alias || ticket.name || 'Minuta';
                             const total = Number(ticket.total ?? (ticket.items || []).reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0), 0));
-                            onTableClick({
+                            openPosTable({
                                 ...selectedBarTable,
                                 status: 'OCCUPIED',
                                 currentOrderId: ticket.id,
@@ -2251,12 +2323,12 @@ const TableMap: React.FC<TableMapProps> = ({
                                 timeSeated: selectedBarTable.timeSeated || ticket.timestamp,
                                 barTabId: ticket.barTabId || ticket.id,
                                 barTabName: label
-                            });
+                            }, beginTableInteraction('bar-selection', inputTimeStamp));
                             setSelectedBarTable(null);
                         }}
-                        onCreateTab={(name) => {
+                        onCreateTab={(name, inputTimeStamp) => {
                             const orderId = `BAR-${selectedBarTable.id}-${Date.now()}`;
-                            onTableClick({
+                            openPosTable({
                                 ...selectedBarTable,
                                 status: 'OCCUPIED',
                                 currentOrderId: orderId,
@@ -2266,7 +2338,7 @@ const TableMap: React.FC<TableMapProps> = ({
                                 waiterName: currentUser.name,
                                 barTabId: orderId,
                                 barTabName: name
-                            });
+                            }, beginTableInteraction('bar-create', inputTimeStamp));
                             setSelectedBarTable(null);
                         }}
                     />
@@ -2537,7 +2609,7 @@ const SmartTableNode = React.memo(({
     reduceMotion: boolean;
     lightBackground: boolean;
     showChairs: boolean;
-    onSelect: (model: SmartTableModel) => void;
+    onSelect: (model: SmartTableModel, inputTimeStamp?: number) => void;
     onTooltipOpen: (model: SmartTableModel, x: number, y: number) => void;
     onTooltipMove: (modelId: string, x: number, y: number) => void;
     onTooltipClose: (modelId: string) => void;
@@ -2571,7 +2643,7 @@ const SmartTableNode = React.memo(({
             animate="visible"
             whileHover={reduceMotion ? undefined : { scale: 1.035, y: -2 }}
             transition={{ type: 'spring', stiffness: 300, damping: 25, mass: 0.6 }}
-            onClick={() => onSelect(model)}
+            onClick={(event) => onSelect(model, event.timeStamp)}
             onMouseEnter={(event) => onTooltipOpen(model, event.clientX, event.clientY)}
             onMouseMove={(event) => onTooltipMove(model.table.id, event.clientX, event.clientY)}
             onMouseLeave={() => {

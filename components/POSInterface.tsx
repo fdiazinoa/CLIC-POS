@@ -88,6 +88,10 @@ import { printReservation } from '../utils/printer';
 import MobileCartButton from './MobileCartButton';
 import {
    beginPosInteraction,
+   beginDestinationInteraction,
+   expectInteractionDestination,
+   finishInteraction,
+   observeDestinationAttempt,
    expectInteractionRender,
    getLatestPosInteraction,
    markInteractionStage,
@@ -1183,6 +1187,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const paymentFinalizationInFlightRef = useRef(false);
    const activeAddTraceRef = useRef<PosInteractionTrace | null>(null);
    const checkoutTraceRef = useRef<PosInteractionTrace | null>(null);
+   const paymentModalTraceRef = useRef<PosInteractionTrace | null>(null);
    const searchFilterTraceRef = useRef<PosInteractionTrace | null>(null);
    useLayoutEffect(() => markRenderEnd('POS_INTERACTION_VIEW'));
    const activeTableHydrationRef = useRef<{ key: string; missingTicket: boolean } | null>(null);
@@ -5852,10 +5857,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       setSuccessToast(`Cuenta dividida en ${splitCount}: cuentas guardadas en Tickets en Espera`);
    };
 
-   const proceedToCheckout = async () => {
-      const trace = checkoutTraceRef.current || beginPosInteraction('CHECKOUT_OPEN', { source: 'checkout_action' });
-      checkoutTraceRef.current = trace;
-      expectInteractionRender(trace, 'POS_INTERACTION_VIEW');
+   const proceedToCheckout = (trace: PosInteractionTrace) => observeDestinationAttempt(trace, async () => {
       if (isOrderTakerMode) {
          try {
             await handleSendAndExit();
@@ -5911,16 +5913,34 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
       setReturnToTableMapAfterPayment(false);
       recordCheckoutDiagnostic('CHECKOUT_OPEN', { items: processedCart, expectedItemCount: cart.length, total: cartTotal, tableId: activeTable?.id, orderId: activeTable?.currentOrderId, terminalId: activeTerminalId });
+      expectInteractionDestination(trace, 'PAYMENT_MODAL');
+      paymentModalTraceRef.current = trace;
       setShowPaymentModal(true);
       markInteractionStateUpdate(trace, 2);
       markInteractionStage(trace, 'HANDLER_END');
-      checkoutTraceRef.current = null;
+   });
+
+   const startCheckoutInteraction = (inputTimeStamp?: number) => {
+      const trace = beginDestinationInteraction('CHECKOUT_OPEN', inputTimeStamp, checkoutTraceRef.current);
+      checkoutTraceRef.current = trace;
+      return trace;
    };
 
-   const startCheckoutInteraction = () => {
-      const trace = beginPosInteraction('CHECKOUT_OPEN', { cartItems: cart.length });
-      checkoutTraceRef.current = trace;
-      expectInteractionRender(trace, 'POS_INTERACTION_VIEW');
+   // Each caller keeps its own trace across the existing session warning and
+   // supervisor awaits. A render of either warning is not the payment modal.
+   const requestCheckout = (inputTimeStamp: number, validateFiscal: boolean) => {
+      const trace = startCheckoutInteraction(inputTimeStamp);
+      return observeDestinationAttempt(trace, async () => {
+         if (validateFiscal && !isOrderTakerMode) {
+            const validation = validateTerminalDocument(config, terminalId, 'TICKET');
+            if (!validation.isValid) {
+               alert(validation.error);
+               return;
+            }
+         }
+         if (!await canProceedWithOperationalSession()) return;
+         return proceedToCheckout(trace);
+      });
    };
 
    const persistProductionRoutingAssignments = async (
@@ -8572,18 +8592,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                  <span>Salir</span>
                               </button>
                               <button
-                                 onClick={async () => {
+                                 onClick={async (event) => {
                                     if (cart.length > 0 && canCheckoutWithFiscalPolicy) {
-                                       startCheckoutInteraction();
-                                       if (!isOrderTakerMode) {
-                                          const validation = validateTerminalDocument(config, terminalId, 'TICKET');
-                                          if (!validation.isValid) {
-                                             alert(validation.error);
-                                             return;
-                                          }
-                                       }
-                                       if (!await canProceedWithOperationalSession()) return;
-                                       proceedToCheckout();
+                                       void requestCheckout(event.timeStamp, true);
                                     } else if (!canCheckoutWithFiscalPolicy) {
                                        alert("No hay secuencias fiscales disponibles.");
                                     }
@@ -8698,18 +8709,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                           <span>Salir</span>
                                        </button>
                                        <button
-                                          onClick={async () => {
+                                          onClick={async (event) => {
                                              if (cart.length > 0 && canCheckoutWithFiscalPolicy) {
-                                                startCheckoutInteraction();
-                                                if (!isOrderTakerMode) {
-                                                   const validation = validateTerminalDocument(config, terminalId, 'TICKET');
-                                                   if (!validation.isValid) {
-                                                      alert(validation.error);
-                                                      return;
-                                                   }
-                                                }
-                                                if (!await canProceedWithOperationalSession()) return;
-                                                proceedToCheckout();
+                                                void requestCheckout(event.timeStamp, true);
                                              } else if (!canCheckoutWithFiscalPolicy) {
                                                 alert("No hay secuencias fiscales disponibles.");
                                              }
@@ -8731,11 +8733,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                           <span>Salir</span>
                                        </button>
                                        <button
-                                          onClick={async () => {
+                                          onClick={async (event) => {
                                              if (cart.length > 0) {
-                                                startCheckoutInteraction();
-                                                if (!await canProceedWithOperationalSession()) return;
-                                                proceedToCheckout();
+                                                void requestCheckout(event.timeStamp, false);
                                              }
                                           }}
                                           disabled={cart.length === 0}
@@ -8841,11 +8841,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         <span className="text-3xl font-black text-gray-900 tracking-tighter leading-none">{baseCurrency.symbol}{cartTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                      </div>
                      <button
-                        onClick={async () => {
+                        onClick={async (event) => {
                            if (cart.length > 0 && canCheckoutWithFiscalPolicy) {
-                              startCheckoutInteraction();
-                              if (!await canProceedWithOperationalSession()) return;
-                              proceedToCheckout();
+                              void requestCheckout(event.timeStamp, false);
                            }
                         }}
                         disabled={cart.length === 0 || !canCheckoutWithFiscalPolicy}
@@ -8879,7 +8877,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                onConfirm={handleSplitConfirm}
             />
          )}
-         {showPaymentModal && <UnifiedPaymentModal total={amountDueNow} items={cart} taxAmount={nextPaymentFractionPart && cartTotal > 0 ? cartTax * (amountDueNow / cartTotal) : cartTax} currencySymbol={baseCurrency.symbol} config={config} onClose={() => {
+         {showPaymentModal && <UnifiedPaymentModal openingTrace={paymentModalTraceRef.current} total={amountDueNow} items={cart} taxAmount={nextPaymentFractionPart && cartTotal > 0 ? cartTax * (amountDueNow / cartTotal) : cartTax} currencySymbol={baseCurrency.symbol} config={config} onClose={() => {
+            finishInteraction(paymentModalTraceRef.current, 'cancelled');
             recordCheckoutDiagnostic('PAYMENT_CLOSE');
             setShowPaymentModal(false);
             if (returnToTableMapAfterPayment && onOpenTableMap) {

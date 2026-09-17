@@ -51,11 +51,12 @@ test('closing the completed-sale modal performs the deferred table navigation', 
     for (const hasNavigation of [false, true]) {
       const calls: unknown[][] = [];
       const close = new Function('recordCheckoutDiagnostic', 'setShowPaymentModal',
-        'returnToTableMapAfterPayment', 'onOpenTableMap', 'setReturnToTableMapAfterPayment', `${body}; return close;`)(
+        'returnToTableMapAfterPayment', 'onOpenTableMap', 'setReturnToTableMapAfterPayment', 'finishInteraction', 'paymentModalTraceRef', `${body}; return close;`)(
         (event: string) => calls.push(['diagnostic', event]),
         (value: boolean) => calls.push(['visible', value]), deferred,
         hasNavigation ? () => calls.push(['navigate']) : undefined,
         (value: boolean) => calls.push(['deferred', value]),
+        () => {}, { current: null },
       );
       close();
       assert.deepEqual(calls, [ ['diagnostic', 'PAYMENT_CLOSE'], ['visible', false],

@@ -49,8 +49,11 @@ test('supermarket description separates code and highlights existing variant; mo
 test('checkout retains existing fiscal/session guards and shared action dispatcher', () => {
   const source = readFileSync(new URL('../components/POSInterface.tsx', import.meta.url), 'utf8');
   const footer = source.slice(source.indexOf('// --- RETAIL MODE FOOTER'), source.indexOf('// --- VISUAL MODE FOOTER'));
-  assert.match(footer, /validateTerminalDocument\(config, terminalId, 'TICKET'\)/);
-  assert.match(footer, /canProceedWithOperationalSession\(\)/);
+  assert.match(footer, /requestCheckout\(event.timeStamp, true\)/);
+  const checkoutEntry = source.slice(source.indexOf('const requestCheckout'), source.indexOf('const persistProductionRoutingAssignments'));
+  assert.match(checkoutEntry, /validateFiscal && !isOrderTakerMode/);
+  assert.match(checkoutEntry, /validateTerminalDocument\(config, terminalId, 'TICKET'\)/);
+  assert.match(checkoutEntry, /if \(!await canProceedWithOperationalSession\(\)\) return;/);
   assert.match(footer, /cart\.length === 0 \|\| !canCheckoutWithFiscalPolicy/);
   assert.equal((footer.match(/onAction=\{handleGridAction\}/g) || []).length, 2);
 });
