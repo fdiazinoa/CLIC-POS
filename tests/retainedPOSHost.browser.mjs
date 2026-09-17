@@ -69,6 +69,8 @@ function POSInterface({ mode, onAdd }) {
   useEffect(() => { window.fixture.mounts++; }, []);
   window.fixture.setModal = value => flushSync(() => setModal(value));
   return <main data-pos-scanner-enabled={modal ? 'false' : 'true'}>
+    <input id="receiver" data-pos-scanner-receiver="true" data-barcode-scanner-target="true" inputMode="none"
+      tabIndex={-1} style={{ position: 'absolute', width: 1, height: 1, opacity: 0, pointerEvents: 'none' }} />
     <input id="search" data-barcode-scanner-target="true" inputMode="search" enterKeyHint="search"
       className={mode === 'main' ? 'w-full h-11 bg-gray-100 outline-none focus:bg-white focus:ring-2 focus:ring-blue-500' : 'w-full h-11 bg-gray-100 outline-none focus:bg-white focus:ring-2 focus:ring-purple-500 transition-all'}
       value={query} onChange={e => setQuery(e.target.value)} />
@@ -93,7 +95,9 @@ function Shell() {
   const scannerEnabledViews = ${initializer(text, 'scannerEnabledViews')};
   useBarcodeScanner({ enabled: scannerEnabledViews, onScan: code => window.fixture.scans.push(code) });
   window.fixture.toggle = show => flushSync(() => setCurrentView(show ? 'POS' : 'TABLE_MAP'));
-  window.fixture.focus = () => focusSalesScannerInput(document);
+  // This test compares host CSS only; both arms use the current explicit receiver.
+  // scannerFocus.browser.mjs separately compares baseline/candidate focus behavior.
+  window.fixture.focus = () => focusSalesScannerInput(document, document.querySelector('#receiver'));
   return <div className="h-screen overflow-hidden relative">
     <PersistentPOSHost visible={currentView === 'POS'} mode={window.mode} onAdd={() => window.fixture.clicks++} />
     <div id="map-layer" style={{ position: 'absolute', inset: 0, zIndex: 40, pointerEvents: currentView === 'POS' ? 'none' : 'auto' }}>
@@ -169,10 +173,10 @@ try {
       await page.screenshot({ path: path.join(out, `${variant}-${mode}-hidden.png`) });
       await page.evaluate(() => { window.fixture.toggle(true); document.querySelector('#outside').focus(); window.fixture.focus(); });
       const immediateFocus = await page.evaluate(() => document.activeElement.id);
-      if (variant === 'candidate') assert.equal(immediateFocus, 'search', 'candidate permits focus immediately after reveal');
+      if (variant === 'candidate') assert.equal(immediateFocus, 'receiver', 'candidate permits quiet focus immediately after reveal');
       await page.waitForTimeout(250);
       await page.evaluate(() => window.fixture.focus());
-      assert.equal(await page.evaluate(() => document.activeElement.id), 'search');
+      assert.equal(await page.evaluate(() => document.activeElement.id), 'receiver');
       await page.locator('#manual').fill('Cliente editado');
       await page.evaluate(() => window.fixture.focus());
       assert.equal(await page.evaluate(() => document.activeElement.id), 'manual');

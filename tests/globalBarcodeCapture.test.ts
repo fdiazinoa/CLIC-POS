@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test, { type TestContext } from 'node:test';
 import { readFileSync } from 'node:fs';
-import { attachGlobalBarcodeCapture, focusSalesScannerInput } from '../utils/globalBarcodeCapture';
+import { attachGlobalBarcodeCapture } from '../utils/globalBarcodeCapture';
 import { detectTicketPattern } from '../hooks/useBarcodeScanner';
 
 function harness(t: TestContext) {
@@ -195,9 +195,9 @@ test('focus change, blur, shortcuts and cleanup cancel pending buffers', t => {
     assert.deepEqual(h.scans, []);
 });
 
-test('manual paste, deletion and composing text are not auto-scans', t => {
+test('manual paste, drop, deletion and composing text are not auto-scans', t => {
     const h = harness(t);
-    for (const extra of [{ inputType: 'insertFromPaste' }, { inputType: 'deleteContentBackward' }, { isComposing: true }]) {
+    for (const extra of [{ inputType: 'insertFromPaste' }, { inputType: 'insertFromDrop' }, { inputType: 'deleteContentBackward' }, { isComposing: true }]) {
         h.search.value = '987654321';
         h.input('987654321', h.search, extra);
         t.mock.timers.tick(300);
@@ -205,30 +205,26 @@ test('manual paste, deletion and composing text are not auto-scans', t => {
     assert.deepEqual(h.scans, []);
 });
 
-test('focus recovery selects only visible POS search and leaves forms/modals alone', () => {
-    let focused = 0;
-    let modal = false;
-    const doc = { activeElement: { tagName: 'BODY' }, querySelector: (selector: string) => {
-        if (selector === '[data-pos-scanner-enabled="true"]') return { querySelectorAll: () => [
-            { getClientRects: () => [], focus: () => assert.fail('hidden input') },
-            { getClientRects: () => [1], focus: () => { focused++; } },
-        ] };
-        return modal ? {} : null;
-    } };
-    focusSalesScannerInput(doc as unknown as Document);
-    assert.equal(focused, 1);
-    doc.activeElement.tagName = 'INPUT';
-    focusSalesScannerInput(doc as unknown as Document);
-    doc.activeElement.tagName = 'BODY'; modal = true;
-    focusSalesScannerInput(doc as unknown as Document);
-    assert.equal(focused, 1);
+test('IME-only character continuation on marked quiet receiver emits once with suffix and idle', t => {
+    const h = harness(t);
+    for (const suffix of ['Enter', 'Tab', 'idle']) {
+        for (const character of 'IME123') {
+            h.search.value += character;
+            h.input(character);
+            t.mock.timers.tick(15);
+        }
+        if (suffix !== 'idle') h.key(suffix, h.search);
+        t.mock.timers.tick(300);
+        assert.equal(h.search.value, '');
+    }
+    assert.deepEqual(h.scans, ['IME123', 'IME123', 'IME123']);
 });
 
-test('POS marks both search inputs, blocks modal capture and preserves return quantity', () => {
+test('POS marks manual inputs and quiet receiver, blocks modal capture and preserves return quantity', () => {
     const pos = readFileSync(new URL('../components/POSInterface.tsx', import.meta.url), 'utf8');
-    assert.equal(pos.match(/data-barcode-scanner-target="true"/g)?.length, 2);
+    assert.equal(pos.match(/data-barcode-scanner-target="true"/g)?.length, 3);
     assert.match(pos, /data-pos-scanner-enabled=\{!isAnyModalOpen/);
-    assert.match(pos, /focusSalesScannerInput\(document\)/);
+    assert.match(pos, /attachSalesScannerFocus\(window, \(\) => salesScannerReceiverRef\.current\)/);
     const process = pos.slice(pos.indexOf('const processBarcode ='), pos.indexOf('const isAnyModalOpen'));
     assert.match(process, /setSearchTerm\(''\)/);
     assert.ok(process.indexOf("setSearchTerm('')") < process.indexOf('routeScannedCoupon(trimmed)'));
