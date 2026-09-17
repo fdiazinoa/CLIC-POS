@@ -29,6 +29,7 @@ import SplitTicketModal from './SplitTicketModal';
 import TableMoveConfirmationModal from './TableMoveConfirmationModal';
 import { createPaymentFractionPlan } from '../utils/paymentFractions';
 import { getTableChairSlots, TableChairSlot } from '../utils/tableChairs';
+import { getWholeTableMoveTotal } from '../utils/tableMoveTotal';
 import { shouldReduceTableMotion } from '../utils/tableMotionPolicy';
 import {
     buildTableAccountDisplayEntries,
@@ -1294,7 +1295,9 @@ const TableMap: React.FC<TableMapProps> = ({
 
         const targetItems = mode === 'MERGE' && targetTicket?.items?.length ? targetTicket.items : [];
         const nextItems = [...ensureCartIds(sourceTicket.items || []), ...ensureCartIds(targetItems)];
-        const nextTotal = nextItems.reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0), 0);
+        const nextTotal = mode === 'MOVE'
+            ? getWholeTableMoveTotal(sourceTicket)
+            : nextItems.reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0), 0);
         const targetRoomLabel = roomLabelById.get(targetTable.roomId);
         const sourceRoomLabel = roomLabelById.get(sourceTable.roomId);
         const targetTableLabel = getTableLabel(targetTable);
