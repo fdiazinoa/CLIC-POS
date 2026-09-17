@@ -160,7 +160,7 @@ test('real table branches own selectors and hydrated POS destinations without bo
     const effects: Array<() => void | (() => void)> = []; const refs: Array<{ current: any }> = [];
     let refIndex = 0; let cleanups: Array<void | (() => void)> = [];
     const host = declaration('App', 'PersistentPOSHost', {
-      ...api, React: { createElement: () => null }, MemoizedPOSInterface: () => null,
+      ...api, React: { createElement: () => null }, MemoizedPOSInterface: () => null, notifySalesScannerHostVisibility() {},
       useRef: (value: unknown) => refs[refIndex++] ||= { current: value },
       useLayoutEffect: (effect: () => void | (() => void)) => { effects.push(effect); },
     });

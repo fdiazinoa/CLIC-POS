@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import test, { type TestContext } from 'node:test';
-import { attachSalesScannerFocus, focusSalesScannerInput } from '../utils/globalBarcodeCapture';
+import { attachSalesScannerFocus, focusSalesScannerInput, notifySalesScannerHostVisibility, SALES_SCANNER_HOST_VISIBILITY } from '../utils/globalBarcodeCapture';
 
 function fixture(t?: TestContext) {
     t?.mock.timers.enable({ apis: ['setTimeout'] });
-    const listeners = new Map<string, Set<() => void>>();
-    const add = (key: string, fn: () => void) => {
+    const listeners = new Map<string, Set<(event?: any) => void>>();
+    const add = (key: string, fn: (event?: any) => void) => {
         if (!listeners.has(key)) listeners.set(key, new Set());
         listeners.get(key)!.add(fn);
     };
@@ -17,9 +17,10 @@ function fixture(t?: TestContext) {
         removeEventListener: (name: string, fn: () => void) => listeners.get(`doc:${name}`)?.delete(fn),
         getClientRects: () => assert.fail('geometry read'),
     };
+    const host = { ownerDocument: doc };
     const makeInput = () => ({ tagName: 'INPUT', ownerDocument: doc, isConnected: true, disabled: false, readOnly: false,
         inputMode: 'none', dataset: { posScannerReceiver: 'true' },
-        closest: (selector: string) => selector === '[data-pos-scanner-enabled]'
+        closest: (selector: string) => selector === '[data-pos-persistent-host="true"]' ? host : selector === '[data-pos-scanner-enabled]'
             ? { getAttribute: () => enabled ? 'true' : 'false' } : hiddenHost ? {} : null,
         getClientRects: () => assert.fail('geometry read'), getBoundingClientRect: () => assert.fail('geometry read'),
         focus(options: FocusOptions) { assert.deepEqual(options, { preventScroll: true }); calls++; doc.activeElement = this; },
@@ -32,9 +33,9 @@ function fixture(t?: TestContext) {
         getComputedStyle: () => assert.fail('computed style read'),
     };
     const focus = () => focusSalesScannerInput(doc as unknown as Document, receiver as unknown as HTMLInputElement);
-    const mount = () => attachSalesScannerFocus(win as unknown as Window, () => receiver as unknown as HTMLInputElement);
-    const event = (name: string) => [...(listeners.get(name) || [])].forEach(fn => fn());
-    return { doc, original, body, focus, mount, event, listeners, calls: () => calls,
+    const mount = (getReceiver: () => HTMLInputElement | null = () => receiver as unknown as HTMLInputElement) => attachSalesScannerFocus(win as unknown as Window, getReceiver);
+    const event = (name: string, payload = {}) => [...(listeners.get(name) || [])].forEach(fn => fn(payload));
+    return { doc, host, original, body, focus, mount, event, listeners, calls: () => calls,
         receiver: () => receiver, replace: () => { receiver = makeInput(); },
         blocked: (value: boolean) => { blocked = value; }, hidden: (value: boolean) => { hiddenHost = value; },
         enabled: (value: boolean) => { enabled = value; },
@@ -43,6 +44,50 @@ function fixture(t?: TestContext) {
 
 test('explicit quiet receiver gets focus without geometry and never refocuses itself', () => {
     const f = fixture(); f.focus(); f.focus(); assert.equal(f.calls(), 1);
+});
+
+test('retained host notification bubbles with an explicit boolean and its own dispatch target', () => {
+    const events: CustomEvent[] = [];
+    const host = { dispatchEvent: (event: CustomEvent) => { events.push(event); return true; } };
+    notifySalesScannerHostVisibility(host as unknown as HTMLElement, true);
+    notifySalesScannerHostVisibility(host as unknown as HTMLElement, false);
+    assert.deepEqual(events.map(event => ({ type: event.type, bubbles: event.bubbles, visible: event.detail.visible })), [
+        { type: SALES_SCANNER_HOST_VISIBILITY, bubbles: true, visible: true },
+        { type: SALES_SCANNER_HOST_VISIBILITY, bubbles: true, visible: false },
+    ]);
+});
+
+test('owned committed reveal rearms after an earlier inert rejection; hide cancels the pending timer', t => {
+    const f = fixture(t); f.hidden(true); const cleanup = f.mount(); t.mock.timers.tick(1); assert.equal(f.calls(), 0);
+    f.hidden(false); f.event(SALES_SCANNER_HOST_VISIBILITY, { target: f.host, detail: { visible: true } });
+    f.event(SALES_SCANNER_HOST_VISIBILITY, { target: f.host, detail: { visible: false } });
+    t.mock.timers.tick(1); assert.equal(f.calls(), 0);
+    f.event(SALES_SCANNER_HOST_VISIBILITY, { target: f.host, detail: { visible: true } });
+    t.mock.timers.tick(1); assert.equal(f.calls(), 1); cleanup();
+});
+
+test('foreign target and malformed visibility neither cancel nor arm another receiver', t => {
+    const f = fixture(t); const cleanup = f.mount();
+    f.event(SALES_SCANNER_HOST_VISIBILITY, { target: {}, detail: { visible: false } });
+    for (const visible of [null, undefined, 'false', 0]) f.event(SALES_SCANNER_HOST_VISIBILITY, { target: f.host, detail: { visible } });
+    t.mock.timers.tick(1); assert.equal(f.calls(), 1);
+    f.doc.activeElement = f.body;
+    f.event(SALES_SCANNER_HOST_VISIBILITY, { target: {}, detail: { visible: true } });
+    t.mock.timers.tick(1); assert.equal(f.calls(), 1); cleanup();
+});
+
+test('owned reveal is only a hint and never bypasses document, receiver, manual or modal guards', t => {
+    for (const guard of ['modal', 'manual', 'hidden-document', 'disconnected', 'foreign-document', 'null']) {
+        const f = fixture(t); const cleanup = f.mount(guard === 'null' ? () => null : undefined);
+        f.event('blur');
+        if (guard === 'modal') f.blocked(true);
+        if (guard === 'manual') f.doc.activeElement = { tagName: 'INPUT' };
+        if (guard === 'hidden-document') f.doc.visibilityState = 'hidden';
+        if (guard === 'disconnected') f.receiver().isConnected = false;
+        if (guard === 'foreign-document') f.receiver().ownerDocument = {} as typeof f.doc;
+        f.event(SALES_SCANNER_HOST_VISIBILITY, { target: f.host, detail: { visible: true } });
+        t.mock.timers.tick(1); assert.equal(f.calls(), 0, guard); cleanup(); t.mock.timers.reset();
+    }
 });
 for (const manual of [{ tagName: 'INPUT' }, { tagName: 'TEXTAREA' }, { tagName: 'SELECT' }, { tagName: 'DIV', isContentEditable: true }]) {
     test(`manual ${manual.tagName} keeps focus`, () => {

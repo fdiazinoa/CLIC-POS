@@ -83,7 +83,7 @@ test('destination ownership, lazy lifetime, callbacks and real checkout branches
     let released = 0;
     const effects: Array<() => void> = [];
     const hooks = {
-      ...api, React: { createElement: () => null }, MemoizedPOSInterface: () => null,
+      ...api, React: { createElement: () => null }, MemoizedPOSInterface: () => null, notifySalesScannerHostVisibility() {},
       useRef: (value: unknown) => ({ current: value }),
       useLayoutEffect: (effect: () => void) => { effects.push(effect); },
     };

@@ -12,6 +12,13 @@ const blocked = (doc: Document) => Boolean(
     doc.querySelector('[role="dialog"], dialog[open], [aria-modal="true"]')
 );
 
+export const SALES_SCANNER_HOST_VISIBILITY = 'pos:scanner-host-visibility';
+
+/** Emitted by the retained owner after committing its inert/visible boundary. */
+export function notifySalesScannerHostVisibility(host: HTMLElement, visible: boolean) {
+    host.dispatchEvent(new CustomEvent(SALES_SCANNER_HOST_VISIBILITY, { bubbles: true, detail: { visible } }));
+}
+
 /** Only the explicit quiet receiver may acquire automatic IME focus. No layout reads. */
 export function focusSalesScannerInput(doc: Document, input: HTMLInputElement | null) {
     if (!input || input.ownerDocument !== doc || !input.isConnected || doc.visibilityState !== 'visible' ||
@@ -45,12 +52,22 @@ export function attachSalesScannerFocus(win: Window, getReceiver: () => HTMLInpu
         else restore();
     };
     const onVisibility = () => { if (win.document.visibilityState === 'hidden') cancel(); else restore(); };
+    const onHostVisibility = (event: Event) => {
+        const input = getReceiver();
+        const visible = (event as CustomEvent<{ visible?: unknown }>).detail?.visible;
+        if (disposed || typeof visible !== 'boolean' || !input || !input.isConnected || input.ownerDocument !== win.document) return;
+        const host = input.closest('[data-pos-persistent-host="true"]');
+        if (!host || event.target !== host || host.ownerDocument !== win.document) return;
+        if (visible) restore();
+        else cancel();
+    };
     restore();
     win.addEventListener('click', restore);
     win.addEventListener('focusin', onFocusIn);
     win.addEventListener('focusout', restore);
     win.addEventListener('focus', restore);
     win.addEventListener('blur', cancel);
+    win.addEventListener(SALES_SCANNER_HOST_VISIBILITY, onHostVisibility);
     win.document.addEventListener('visibilitychange', onVisibility);
     return () => {
         disposed = true;
@@ -60,6 +77,7 @@ export function attachSalesScannerFocus(win: Window, getReceiver: () => HTMLInpu
         win.removeEventListener('focusout', restore);
         win.removeEventListener('focus', restore);
         win.removeEventListener('blur', cancel);
+        win.removeEventListener(SALES_SCANNER_HOST_VISIBILITY, onHostVisibility);
         win.document.removeEventListener('visibilitychange', onVisibility);
     };
 }

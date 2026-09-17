@@ -56,7 +56,7 @@ const makeBundle = async text => (await build({
 import React, { useRef, useLayoutEffect, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { flushSync, createPortal } from 'react-dom';
-import { focusSalesScannerInput } from './utils/globalBarcodeCapture';
+import { focusSalesScannerInput, notifySalesScannerHostVisibility } from './utils/globalBarcodeCapture';
 import { useBarcodeScanner } from './hooks/useBarcodeScanner';
 const getLatestPosInteraction = () => undefined;
 const markInteractionStage = () => {};
