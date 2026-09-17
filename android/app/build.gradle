@@ -36,8 +36,8 @@ android {
         buildConfigField "boolean", "POS_DIAGNOSTICS", nativeDiagnostics ? "true" : "false"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1399
-        versionName "1.1.399"
+        versionCode 1401
+        versionName "1.1.401"
         manifestPlaceholders = [
                 usesCleartextTraffic: "true",
                 diagnosticProfileable: nativeDiagnostics ? "true" : "false",
