@@ -1940,7 +1940,7 @@ const PersistentPOSHost: React.FC<PersistentPOSHostProps> = ({ visible, onIntera
   return (
     <div
       ref={hostRef}
-      className={`h-full ${visible ? 'visible' : 'invisible pointer-events-none select-none'}`}
+      className={`h-full ${visible ? 'opacity-100' : 'opacity-0 pointer-events-none select-none'}`}
       aria-hidden={!visible}
       data-pos-persistent-host="true"
       style={{ contain: 'layout style' }}
