@@ -12,13 +12,74 @@ const blocked = (doc: Document) => Boolean(
     doc.querySelector('[role="dialog"], dialog[open], [aria-modal="true"]')
 );
 
-/** IME-only readers need an input, but must not steal focus from forms. */
-export function focusSalesScannerInput(doc: Document) {
-    if (blocked(doc) || isEditable(doc.activeElement as HTMLElement)) return;
-    const root = doc.querySelector('[data-pos-scanner-enabled="true"]');
-    const inputs = root?.querySelectorAll<HTMLInputElement>('[data-barcode-scanner-target="true"]');
-    const input = inputs && Array.from(inputs).find(field => field.getClientRects().length > 0);
-    input?.focus({ preventScroll: true });
+export const SALES_SCANNER_HOST_VISIBILITY = 'pos:scanner-host-visibility';
+
+/** Emitted by the retained owner after committing its inert/visible boundary. */
+export function notifySalesScannerHostVisibility(host: HTMLElement, visible: boolean) {
+    host.dispatchEvent(new CustomEvent(SALES_SCANNER_HOST_VISIBILITY, { bubbles: true, detail: { visible } }));
+}
+
+/** Only the explicit quiet receiver may acquire automatic IME focus. No layout reads. */
+export function focusSalesScannerInput(doc: Document, input: HTMLInputElement | null) {
+    if (!input || input.ownerDocument !== doc || !input.isConnected || doc.visibilityState !== 'visible' ||
+        input.dataset.posScannerReceiver !== 'true' || input.inputMode !== 'none' || input.disabled || input.readOnly ||
+        input === doc.activeElement || isEditable(doc.activeElement as HTMLElement) || blocked(doc)) return;
+    const root = input.closest('[data-pos-scanner-enabled]');
+    if (!root || root.getAttribute('data-pos-scanner-enabled') !== 'true' ||
+        input.closest('[hidden], [inert], [aria-hidden="true"]')) return;
+    input.focus({ preventScroll: true });
+}
+
+/** Event-bound restoration; the receiver ref and all route/modal guards are read at execution. */
+export function attachSalesScannerFocus(win: Window, getReceiver: () => HTMLInputElement | null) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let disposed = false;
+    const cancel = () => { clearTimeout(timer); timer = undefined; };
+    const restore = () => {
+        const input = getReceiver();
+        if (disposed || !input || input.disabled || input.readOnly || win.document.visibilityState !== 'visible' ||
+            input === win.document.activeElement || isEditable(win.document.activeElement as HTMLElement)) return;
+        if (timer !== undefined) return;
+        // A click may reveal the retained POS or open a modal. Inert/dialog
+        // eligibility must be checked after its handler, not used to skip a reveal.
+        timer = setTimeout(() => {
+            timer = undefined;
+            if (!disposed) focusSalesScannerInput(win.document, getReceiver());
+        }, 0);
+    };
+    const onFocusIn = () => {
+        if (isEditable(win.document.activeElement as HTMLElement)) cancel();
+        else restore();
+    };
+    const onVisibility = () => { if (win.document.visibilityState === 'hidden') cancel(); else restore(); };
+    const onHostVisibility = (event: Event) => {
+        const input = getReceiver();
+        const visible = (event as CustomEvent<{ visible?: unknown }>).detail?.visible;
+        if (disposed || typeof visible !== 'boolean' || !input || !input.isConnected || input.ownerDocument !== win.document) return;
+        const host = input.closest('[data-pos-persistent-host="true"]');
+        if (!host || event.target !== host || host.ownerDocument !== win.document) return;
+        if (visible) restore();
+        else cancel();
+    };
+    restore();
+    win.addEventListener('click', restore);
+    win.addEventListener('focusin', onFocusIn);
+    win.addEventListener('focusout', restore);
+    win.addEventListener('focus', restore);
+    win.addEventListener('blur', cancel);
+    win.addEventListener(SALES_SCANNER_HOST_VISIBILITY, onHostVisibility);
+    win.document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+        disposed = true;
+        cancel();
+        win.removeEventListener('click', restore);
+        win.removeEventListener('focusin', onFocusIn);
+        win.removeEventListener('focusout', restore);
+        win.removeEventListener('focus', restore);
+        win.removeEventListener('blur', cancel);
+        win.removeEventListener(SALES_SCANNER_HOST_VISIBILITY, onHostVisibility);
+        win.document.removeEventListener('visibilitychange', onVisibility);
+    };
 }
 
 /** One buffer for HID and marked search-field IME input. A new burst of the

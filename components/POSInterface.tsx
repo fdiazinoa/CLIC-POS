@@ -48,7 +48,7 @@ import { validateTerminalDocument } from '../utils/validation';
 import { isSessionExpired } from '../utils/session';
 import { FiscalRangeDGII } from '../types';
 import { parseScaleBarcode } from '../utils/barcodeParser';
-import { focusSalesScannerInput } from '../utils/globalBarcodeCapture';
+import { attachSalesScannerFocus } from '../utils/globalBarcodeCapture';
 import { transactionService } from '../services/transactionService';
 import { resolveTerminalDocumentSeriesId, validateTerminalSeries } from '../utils/seriesValidation';
 import { applyPromotions } from '../utils/promotionEngine';
@@ -2331,6 +2331,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [isScannerOpen, setIsScannerOpen] = useState(false);
    const [cameraAvailability, setCameraAvailability] = useState<CameraAvailability>('UNKNOWN');
    const scannerRef = useRef<Html5Qrcode | null>(null);
+   const salesScannerReceiverRef = useRef<HTMLInputElement>(null);
    const searchInputRef = useRef<HTMLInputElement>(null);
    const retailSearchInputRef = useRef<HTMLInputElement>(null);
    const parkAliasInputRef = useRef<HTMLInputElement>(null);
@@ -3879,19 +3880,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    useEffect(() => {
       if (isAnyModalOpen) return;
-      let timer: ReturnType<typeof setTimeout>;
-      const restoreScannerFocus = () => {
-         clearTimeout(timer);
-         // Wait for the click handler to open any modal before checking guards.
-         timer = setTimeout(() => focusSalesScannerInput(document), 0);
-      };
-      restoreScannerFocus();
-      window.addEventListener('pointerup', restoreScannerFocus);
-      return () => {
-         clearTimeout(timer);
-         window.removeEventListener('pointerup', restoreScannerFocus);
-      };
-   }, [isAnyModalOpen, isRetailMode]);
+      return attachSalesScannerFocus(window, () => salesScannerReceiverRef.current);
+   }, [isAnyModalOpen, isRetailMode, isMobile]);
 
    useEffect(() => {
       if (isAnyModalOpen) return;
@@ -7111,6 +7101,19 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             )}px`,
          } as React.CSSProperties}
       >
+         <input
+            ref={salesScannerReceiverRef}
+            data-pos-scanner-receiver="true"
+            data-barcode-scanner-target="true"
+            type="text"
+            inputMode="none"
+            tabIndex={-1}
+            autoComplete="off"
+            autoCapitalize="off"
+            spellCheck={false}
+            aria-label="Lector de códigos"
+            style={{ position: 'absolute', width: 1, height: 1, padding: 0, border: 0, opacity: 0, pointerEvents: 'none', outline: 'none' }}
+         />
          <SupervisorAuthModal
             isOpen={showSupervisorAuth}
             onClose={() => setShowSupervisorAuth(false)}
@@ -7910,7 +7913,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                  handleRetailSearchSubmit(e.currentTarget.value);
                               }
                            }}
-                           autoFocus
                            className="w-full pl-12 pr-12 py-2.5 bg-gray-100 rounded-xl border-none outline-none focus:bg-white focus:ring-2 focus:ring-purple-500 text-sm font-bold transition-all"
                         />
                         <button

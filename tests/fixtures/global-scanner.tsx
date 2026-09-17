@@ -1,7 +1,7 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { useBarcodeScanner } from '../../hooks/useBarcodeScanner';
-import { focusSalesScannerInput } from '../../utils/globalBarcodeCapture';
+import { attachSalesScannerFocus } from '../../utils/globalBarcodeCapture';
 
 // No APIs or persistence: counts routing events, never creates a sale.
 function ScannerQA() {
@@ -9,11 +9,14 @@ function ScannerQA() {
     const [scans, setScans] = useState<string[]>([]);
     const [manual, setManual] = useState(0);
     const [modal, setModal] = useState(false);
+    const receiver = useRef<HTMLInputElement>(null);
     // Deliberately do not clear from onScan: unknown codes and other routes
     // must leave the controlled input ready without help from catalog lookup.
     useBarcodeScanner({ onScan: code => { setScans(prev => [...prev, code]); } });
-    useEffect(() => { focusSalesScannerInput(document); }, [modal]);
+    useEffect(() => { if (!modal) return attachSalesScannerFocus(window, () => receiver.current); }, [modal]);
     return <main data-pos-scanner-enabled={modal ? 'false' : 'true'}>
+        <input ref={receiver} data-pos-scanner-receiver="true" data-barcode-scanner-target="true" inputMode="none"
+            tabIndex={-1} aria-label="Scanner receiver" style={{ position: 'absolute', opacity: 0, width: 1, height: 1 }} />
         <input aria-label="Search" data-barcode-scanner-target="true" value={value}
             onChange={event => setValue(event.target.value)}
             onKeyDown={event => { if (event.key === 'Enter') setManual(count => count + 1); }} />

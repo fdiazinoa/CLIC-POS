@@ -80,6 +80,7 @@ import {
 import { parseScaleBarcode } from './utils/barcodeParser';
 import { useKioskMode } from './hooks/useKioskMode';
 import { useBarcodeScanner } from './hooks/useBarcodeScanner';
+import { notifySalesScannerHostVisibility } from './utils/globalBarcodeCapture';
 import { db } from './utils/db'; // Import Local DB
 import { dbAdapter } from './services/db'; // Import Adapter for Healthcheck
 import { syncManager } from './services/sync/SyncManager';
@@ -1956,6 +1957,7 @@ const PersistentPOSHost: React.FC<PersistentPOSHostProps> = ({ visible, closeTra
     if (!host) return;
     if (visible) host.removeAttribute('inert');
     else host.setAttribute('inert', '');
+    notifySalesScannerHostVisibility(host, visible);
   }, [visible]);
 
   return (
