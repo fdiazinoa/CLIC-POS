@@ -111,24 +111,27 @@ class Socket {
   }
   close() { this.closed = true; }
 }
-const inventory = (url = 'https://localhost/', transport = 'ws://127.0.0.1:9222/devtools/page/test') => async (_url, options) => {
+// This deliberately bounded fake implements only the checker-used socket surface;
+// adapt its constructor at the test injection boundary, not the production API.
+const SocketFixture = Socket as unknown as typeof WebSocket;
+const inventory = (url = 'https://localhost/', transport = 'ws://127.0.0.1:9222/devtools/page/test'): typeof fetch => async (_url, options) => {
   assert.equal(options.redirect, 'error');
-  return { ok: true, json: async () => [{ type: 'page', url, webSocketDebuggerUrl: transport }] };
+  return Response.json([{ type: 'page', url, webSocketDebuggerUrl: transport }]);
 };
 test('bounded CDP succeeds read-only; closes on timeout/errors; exact origin and transport', async () => {
   Socket.behavior = 'success';
-  assert.equal((await runPreflight('http://127.0.0.1:9222', 'focused', { fetchImpl: inventory(), WebSocketImpl: Socket, timeoutMs: 20 })).valid, true);
+  assert.equal((await runPreflight('http://127.0.0.1:9222', 'focused', { fetchImpl: inventory(), WebSocketImpl: SocketFixture, timeoutMs: 20 })).valid, true);
   assert.equal(Socket.latest.closed, true);
-  assert.equal((await runPreflight('http://127.0.0.1:9222', 'focused', { fetchImpl: inventory('https://localhost/', 'ws://localhost:9222/x'), WebSocketImpl: Socket, timeoutMs: 20 })).valid, true);
+  assert.equal((await runPreflight('http://127.0.0.1:9222', 'focused', { fetchImpl: inventory('https://localhost/', 'ws://localhost:9222/x'), WebSocketImpl: SocketFixture, timeoutMs: 20 })).valid, true);
   for (const behavior of ['open-timeout', 'evaluate-timeout', 'exception']) {
     Socket.behavior = behavior;
-    await assert.rejects(runPreflight('http://127.0.0.1:9222', 'focused', { fetchImpl: inventory(), WebSocketImpl: Socket, timeoutMs: 20 }), error => !String(error).includes('SECRET-ERROR'));
+    await assert.rejects(runPreflight('http://127.0.0.1:9222', 'focused', { fetchImpl: inventory(), WebSocketImpl: SocketFixture, timeoutMs: 20 }), error => !String(error).includes('SECRET-ERROR'));
     assert.equal(Socket.latest.closed, true);
   }
-  for (const url of ['https://localhost.evil/', 'https://localhost:123/']) await assert.rejects(runPreflight('http://127.0.0.1:9222', 'focused', { fetchImpl: inventory(url), WebSocketImpl: Socket }), /exact POS/);
-  await assert.rejects(runPreflight('http://127.0.0.1:9222', 'focused', { fetchImpl: inventory('https://localhost/', 'ws://example.com:9222/x'), WebSocketImpl: Socket }), /loopback/);
-  await assert.rejects(runPreflight('http://127.0.0.1:9222', 'focused', { fetchImpl: inventory('https://localhost/', 'ws://127.0.0.1:9222/x?token=private'), WebSocketImpl: Socket }), /loopback/);
-  await assert.rejects(runPreflight('http://127.0.0.1:9222', 'focused', { fetchImpl: (_url, { signal }) => new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(Error('SECRET-FETCH')))), WebSocketImpl: Socket, timeoutMs: 20 }), /inventory failed or timed out/);
+  for (const url of ['https://localhost.evil/', 'https://localhost:123/']) await assert.rejects(runPreflight('http://127.0.0.1:9222', 'focused', { fetchImpl: inventory(url), WebSocketImpl: SocketFixture }), /exact POS/);
+  await assert.rejects(runPreflight('http://127.0.0.1:9222', 'focused', { fetchImpl: inventory('https://localhost/', 'ws://example.com:9222/x'), WebSocketImpl: SocketFixture }), /loopback/);
+  await assert.rejects(runPreflight('http://127.0.0.1:9222', 'focused', { fetchImpl: inventory('https://localhost/', 'ws://127.0.0.1:9222/x?token=private'), WebSocketImpl: SocketFixture }), /loopback/);
+  await assert.rejects(runPreflight('http://127.0.0.1:9222', 'focused', { fetchImpl: (_url, { signal }) => new Promise<Response>((_resolve, reject) => signal.addEventListener('abort', () => reject(Error('SECRET-FETCH')))), WebSocketImpl: SocketFixture, timeoutMs: 20 }), /inventory failed or timed out/);
 });
 
 test('report refuses repository, symlink and overwrite destinations', () => {
