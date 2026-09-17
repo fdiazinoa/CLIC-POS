@@ -3,10 +3,13 @@ import fs from 'fs';
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 import { temporalDiagnosticsPlugin } from './diagnostics/viteInstrumentation';
+import { scannerFocusDiagnosticsPlugin } from './diagnostics/scannerFocusInstrumentation';
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, '.', '');
   const diagnostic = process.env.CLIC_POS_DIAGNOSTICS === 'true';
+  const scannerFocusDiagnostic = process.env.CLIC_POS_SCANNER_FOCUS_DIAGNOSTICS === 'true';
+  if (diagnostic && scannerFocusDiagnostic) throw new Error('Scanner attribution cannot use broad temporal diagnostics');
 
   // Read certificates if they exist
   // Read certificates if they exist and USE_HTTPS is true
@@ -42,7 +45,7 @@ export default defineConfig(({ mode }) => {
         }
       }
     },
-    plugins: [temporalDiagnosticsPlugin(diagnostic), react()],
+    plugins: [scannerFocusDiagnosticsPlugin(scannerFocusDiagnostic), temporalDiagnosticsPlugin(diagnostic), react()],
     define: {
       __POS_DIAGNOSTIC_BUILD__: JSON.stringify(diagnostic),
       'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY),
