@@ -47,7 +47,7 @@ test('real table branches own selectors and hydrated POS destinations without bo
     const baseTable = { id: 'table-a', name: 'Table A', status: 'FREE', shape: 'SQUARE' };
     const setup = (overrides: Record<string, unknown> = {}) => {
       const state: Record<string, any> = { selectedAccountTable: null, selectedBarTable: null, selectedTable: null, tableNotice: null };
-      const refs = { openTraceRef: { current: null as any }, localDestinationRef: { current: null as any }, committedLocalDestinationRef: { current: null as any } };
+      const refs = { openTraceRef: { current: null as any }, openingOriginVisibleRef: { current: true }, localDestinationRef: { current: null as any }, committedLocalDestinationRef: { current: null as any } };
       const opened: Array<{ table: any; trace: any }> = [];
       const cancelled: unknown[] = [];
       const bindings: Record<string, any> = {
@@ -201,6 +201,52 @@ test('real table branches own selectors and hydrated POS destinations without bo
     renderHost({ visible: true, tableDestination: staleOwner, activeTable: appState.activeTable, cart: items });
     renderHost({ visible: true, tableDestination: null, activeTable: appState.activeTable, cart: items });
     paint(); assert.equal(stale.status, 'cancelled'); assert.equal(stale.stages.FIRST_FRAME_VISIBLE, undefined);
+
+    for (const lifecycle of ['hide-pending', 'unmount-pending', 'hide-show-pending', 'strict-mode-replay', 'normal-handoff'] as const) {
+      clear(); ownerRef.current = null; appState.view = 'TABLE_MAP';
+      let resolveLock!: (allowed: boolean) => void;
+      const lock = new Promise<boolean>(resolve => { resolveLock = resolve; });
+      let businessCalls = 0;
+      const pendingFlow = setup({
+        onBeforeTableOpen: () => lock,
+        onTableClick: (table: unknown, trace: unknown) => { businessCalls++; onTableClick(table, trace); },
+      });
+      const originCleanup = pendingFlow.commitLocal(true);
+      const pendingTrace = pendingFlow.bindings.beginTableInteraction('map-node', clock);
+      const pendingOpen = pendingFlow.open({ ...baseTable, status: 'OCCUPIED', currentOrderId: 'account-selected' }, pendingTrace);
+      assert.equal(ownerRef.current, null, 'App does not own the trace while its pre-open lock awaits');
+      if (lifecycle.startsWith('hide')) {
+        const closeMap = declaration('App', 'handleCloseTableMap', {
+          ...api, tableOpenDestinationRef: ownerRef, tableMapExitPending: false,
+          tableMapCloseTraceRef: { current: null }, tableMapExitTransitionRef: { current: null },
+          beginOperatorUiTransition: () => null, setTableMapExitPending() {}, setViewData() {},
+          setCurrentView: (view: string) => { appState.view = view; },
+        });
+        closeMap({ timeStamp: clock }); originCleanup(); pendingFlow.commitLocal(false);
+        assert.equal(pendingTrace.status, 'cancelled');
+        if (lifecycle === 'hide-show-pending') pendingFlow.commitLocal(true);
+      } else if (lifecycle !== 'normal-handoff') {
+        originCleanup();
+        if (lifecycle === 'strict-mode-replay') pendingFlow.commitLocal(true);
+      }
+      resolveLock(true); await pendingOpen;
+      assert.equal(businessCalls, 1, `${lifecycle}: preserve the existing async opening callback`);
+      if (lifecycle === 'normal-handoff') {
+        assert.equal(pendingTrace.renderTarget, 'POS_TABLE');
+        originCleanup(); pendingFlow.commitLocal(false);
+        assert.equal(pendingTrace.status, 'pending', 'normal ownership transfer must survive hiding Mesas');
+      }
+      paint();
+      renderHost({ visible: true, tableDestination: ownerRef.current, activeTable: appState.activeTable, cart: appState.cart });
+      paint();
+      const expected = lifecycle === 'strict-mode-replay' || lifecycle === 'normal-handoff' ? 'completed' : 'cancelled';
+      assert.equal(pendingTrace.status, expected, lifecycle);
+      if (expected === 'cancelled') {
+        assert.equal(pendingTrace.stages.FIRST_FRAME_VISIBLE, undefined);
+        assert.equal(pendingTrace.stages.FIRST_FRAME_INTERACTIVE, undefined);
+        assert.equal(ownerRef.current, null, 'abandoned trace must not be transferred back into App');
+      }
+    }
     assert.doesNotMatch(sources.TableMap.text, /getLatestPosInteraction/);
     assert.doesNotMatch(sources.App.text, /getLatestPosInteraction\('OPEN_TABLE'\)/);
   } finally {

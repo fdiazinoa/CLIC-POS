@@ -550,6 +550,7 @@ const TableMap: React.FC<TableMapProps> = ({
     const [openingTableId, setOpeningTableId] = useState<string | null>(null);
     const openingTableIdRef = useRef<string | null>(null);
     const openTraceRef = useRef<PosInteractionTrace | null>(null);
+    const openingOriginVisibleRef = useRef(visible);
     const localDestinationRef = useRef<{ trace: PosInteractionTrace; target: string; tableId: string } | null>(null);
     const committedLocalDestinationRef = useRef<typeof localDestinationRef.current>(null);
 
@@ -562,12 +563,14 @@ const TableMap: React.FC<TableMapProps> = ({
     }, []);
 
     const expectLocalDestination = useCallback((trace: PosInteractionTrace, target: string, table: Table) => {
+        if (!openingOriginVisibleRef.current) finishInteraction(trace, 'cancelled');
         if (!isInteractionPending(trace)) return;
         expectInteractionDestination(trace, target);
         localDestinationRef.current = { trace, target, tableId: String(table.id) };
     }, []);
 
     const openPosTable = useCallback((table: Table, trace: PosInteractionTrace) => {
+        if (!openingOriginVisibleRef.current && trace.renderTarget !== 'POS_TABLE') finishInteraction(trace, 'cancelled');
         expectInteractionDestination(trace, 'POS_TABLE');
         try {
             onTableClick(table, trace);
@@ -580,6 +583,11 @@ const TableMap: React.FC<TableMapProps> = ({
     }, [onTableClick]);
 
     useLayoutEffect(() => {
+        openingOriginVisibleRef.current = visible;
+        // Pending lock/open work still runs, but a hidden origin cannot later
+        // claim a successful interaction. A transferred POS destination owns
+        // its own lifecycle and must survive the normal map→POS handoff.
+        if (!visible && openTraceRef.current?.renderTarget !== 'POS_TABLE') finishInteraction(openTraceRef.current, 'cancelled');
         const owner = localDestinationRef.current;
         const renderedTable = owner?.target === 'TABLE_ACCOUNTS' ? selectedAccountTable
             : owner?.target === 'BAR_TABS' ? selectedBarTable
@@ -590,7 +598,10 @@ const TableMap: React.FC<TableMapProps> = ({
         if (ready) {
             commitInteractionDestination(owner.trace, owner.target, undefined, () => committedLocalDestinationRef.current === owner);
         }
-        return () => { committedLocalDestinationRef.current = null; };
+        return () => {
+            openingOriginVisibleRef.current = false;
+            committedLocalDestinationRef.current = null;
+        };
     }, [visible, selectedAccountTable, selectedBarTable, selectedTable, tableNotice]);
     const prefersReducedMotion = useReducedMotion();
     const reduceMotion = shouldReduceTableMotion({
