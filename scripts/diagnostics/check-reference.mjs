@@ -3,7 +3,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
+const checkerRepository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
 const modes = ['reference', 'diagnostic', 'focused'];
 const types = ['undefined', 'function', 'object', 'boolean', 'number', 'string', 'symbol', 'bigint'];
@@ -26,7 +28,7 @@ export function writeExternalReport(out, result, roots) {
   let parent = path.dirname(target), suffix = [];
   while (!fs.existsSync(parent)) { suffix.unshift(path.basename(parent)); parent = path.dirname(parent); }
   const actual = path.join(fs.realpathSync(parent), ...suffix, path.basename(target));
-  const worktrees = roots ?? execFileSync('git', ['worktree', 'list', '--porcelain'], { encoding: 'utf8' })
+  const worktrees = roots ?? execFileSync('git', ['worktree', 'list', '--porcelain'], { encoding: 'utf8', cwd: checkerRepository })
     .split('\n').filter(line => line.startsWith('worktree ')).map(line => fs.realpathSync(line.slice(9)));
   if (worktrees.some(root => { const real = fs.realpathSync(root); return actual === real || actual.startsWith(real + path.sep); }) || fs.existsSync(target) && fs.lstatSync(target).isSymbolicLink()) throw Error('Report must be external and not a symlink');
   // wx prevents replacement, including a dangling symlink or a raced target.

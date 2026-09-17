@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 import { resolveDiagnosticMode, verifyExecutableAssets, verifyWebAssets, verifyNativeArtifact } from '../scripts/diagnostics/release-diagnostic-mode.mjs';
 import { runPreflight, safeResult, writeExternalReport } from '../scripts/diagnostics/check-reference.mjs';
 
@@ -139,6 +140,21 @@ test('report refuses repository, symlink and overwrite destinations', () => {
   assert.throws(() => writeExternalReport(out, {}, [source]), /EEXIST/);
   const dangling = path.join(dir, 'dangling.json'); fs.symlinkSync(path.join(source, 'missing.json'), dangling);
   assert.throws(() => writeExternalReport(dangling, {}, [source]), /EEXIST/);
+});
+
+test('actual default report guard uses checker repository, not a foreign Git caller CWD', () => {
+  const dir = fixture(), foreign = path.join(dir, 'foreign'); fs.mkdirSync(foreign);
+  execFileSync('git', ['init', '--quiet', foreign]);
+  const inside = path.join(root, 'tests', `forbidden-${path.basename(dir)}.json`);
+  const outside = path.join(dir, 'external.json');
+  const checker = pathToFileURL(path.join(root, 'scripts/diagnostics/check-reference.mjs')).href;
+  const code = `import assert from 'node:assert/strict';import fs from 'node:fs';import {writeExternalReport} from ${JSON.stringify(checker)};
+    assert.throws(()=>writeExternalReport(${JSON.stringify(inside)},{valid:false}),/external/);
+    assert.equal(fs.existsSync(${JSON.stringify(inside)}),false);
+    writeExternalReport(${JSON.stringify(outside)},{valid:false});`;
+  execFileSync(process.execPath, ['--input-type=module', '-e', code], { cwd: foreign });
+  assert.equal(fs.existsSync(inside), false);
+  assert.deepEqual(JSON.parse(fs.readFileSync(outside, 'utf8')), { valid: false });
 });
 
 test('actual unchanged monotonic version helper/selection uses canonical and history before source checkout', () => {
