@@ -71,9 +71,15 @@ test('the table map overlays a retained memoized POS instead of remounting it', 
   const persistentHostEnd = appSource.indexOf('const TableMapLifecycleBoundary', persistentHostStart);
   const persistentHostSource = appSource.slice(persistentHostStart, persistentHostEnd);
   assert.doesNotMatch(persistentHostSource, /visible \? 'h-full' : 'hidden'/);
-  assert.match(persistentHostSource, /invisible pointer-events-none select-none/);
+  assert.match(persistentHostSource, /className=\{`h-full \$\{visible \? 'opacity-100' : 'opacity-0 pointer-events-none select-none'\}`\}/);
+  assert.doesNotMatch(persistentHostSource, /\binvisible\b|visibility\s*:|['"]visible['"]/);
+  assert.match(persistentHostSource, /aria-hidden=\{!visible\}/);
+  assert.match(persistentHostSource, /<MemoizedPOSInterface \{\.\.\.stableProps\} \/>/);
+  assert.match(persistentHostSource, /latestPropsRef\.current = incomingProps/);
+  assert.match(persistentHostSource, /callbackProxiesRef\.current\.set\(key, proxy\)/);
   assert.match(persistentHostSource, /contain: 'layout style'/);
-  assert.doesNotMatch(persistentHostSource, /translateZ|willChange/);
+  assert.doesNotMatch(persistentHostSource, /translateZ|willChange|will-change|transition|display\s*:|\bhidden\b(?=['"` ])|\bkey=|return null|visible &&|visible \?\s*</);
+  assert.match(persistentHostSource, /if \(visible\) host\.removeAttribute\('inert'\)/);
   assert.match(persistentHostSource, /setAttribute\('inert', ''\)/);
 });
 
