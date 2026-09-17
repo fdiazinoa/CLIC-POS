@@ -6,6 +6,11 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const checkerRepository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+function canonicalPath(value) {
+  let existing = path.resolve(value), suffix = [];
+  while (!fs.existsSync(existing)) { suffix.unshift(path.basename(existing)); existing = path.dirname(existing); }
+  return path.join(fs.realpathSync(existing), ...suffix);
+}
 
 const modes = ['reference', 'diagnostic', 'focused'];
 const types = ['undefined', 'function', 'object', 'boolean', 'number', 'string', 'symbol', 'bigint'];
@@ -25,12 +30,12 @@ export function safeResult(value, mode) {
 }
 export function writeExternalReport(out, result, roots) {
   const target = path.resolve(out);
-  let parent = path.dirname(target), suffix = [];
-  while (!fs.existsSync(parent)) { suffix.unshift(path.basename(parent)); parent = path.dirname(parent); }
-  const actual = path.join(fs.realpathSync(parent), ...suffix, path.basename(target));
+  const actual = path.join(canonicalPath(path.dirname(target)), path.basename(target));
   const worktrees = roots ?? execFileSync('git', ['worktree', 'list', '--porcelain'], { encoding: 'utf8', cwd: checkerRepository })
-    .split('\n').filter(line => line.startsWith('worktree ')).map(line => fs.realpathSync(line.slice(9)));
-  if (worktrees.some(root => { const real = fs.realpathSync(root); return actual === real || actual.startsWith(real + path.sep); }) || fs.existsSync(target) && fs.lstatSync(target).isSymbolicLink()) throw Error('Report must be external and not a symlink');
+    .split('\n').filter(line => line.startsWith('worktree ')).map(line => line.slice(9));
+  // Git may retain prunable historical paths. Protect their reserved roots too,
+  // resolving existing ancestors without pruning or mutating repository metadata.
+  if (worktrees.some(root => { const real = canonicalPath(root); return actual === real || actual.startsWith(real + path.sep); }) || fs.existsSync(target) && fs.lstatSync(target).isSymbolicLink()) throw Error('Report must be external and not a symlink');
   // wx prevents replacement, including a dangling symlink or a raced target.
   fs.mkdirSync(path.dirname(actual), { recursive: true });
   fs.writeFileSync(actual, JSON.stringify(result, null, 2), { flag: 'wx' });

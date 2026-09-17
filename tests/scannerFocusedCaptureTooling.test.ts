@@ -134,6 +134,9 @@ test('bounded CDP succeeds read-only; closes on timeout/errors; exact origin and
 test('report refuses repository, symlink and overwrite destinations', () => {
   const dir = fixture(), source = path.join(dir, 'source'); fs.mkdirSync(source);
   assert.throws(() => writeExternalReport(path.join(source, 'x.json'), {}, [source]), /external/);
+  const missingWorktree = path.join(dir, 'prunable-source');
+  assert.throws(() => writeExternalReport(path.join(missingWorktree, 'x.json'), {}, [missingWorktree]), /external/);
+  assert.equal(fs.existsSync(missingWorktree), false);
   const link = path.join(dir, 'linked'); fs.symlinkSync(source, link);
   assert.throws(() => writeExternalReport(path.join(link, 'x.json'), {}, [source]), /external/);
   const out = path.join(dir, 'report.json'); writeExternalReport(out, clean, [source]);
