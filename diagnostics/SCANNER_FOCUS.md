@@ -46,7 +46,7 @@ and armed in alternating matched sessions. HOST/fake tests do not prove Android
 IME behavior or HID/IME-only reader acceptance. A functional hito B fix and any
 APK need separate evidence, approval and gates.
 
-## Physical tooling is not authorized or proven by this implementation
+## Canonical focused-control preparation (diagnostic only)
 
 APK400 has native POS_DIAGNOSTICS=false and does not expose DevTools or this API.
 No runtime extra can enable them in that normal APK. Existing MainActivity and
@@ -55,13 +55,51 @@ the existing intent combination `pos_diagnostic_control=true`,
 `pos_diagnostics=false` enables control-only DevTools without native observers.
 The focused frontend must nevertheless be built with CLIC_POS_DIAGNOSTICS=false
 and CLIC_POS_SCANNER_FOCUS_DIAGNOSTICS=true, not the broad diagnostics bootstrap.
-Native Gradle currently derives POS_DIAGNOSTICS from CLIC_POS_DIAGNOSTICS too;
-the canonical release script uses that same environment through frontend and
-Gradle. Thus it does NOT presently offer a verified single-command split-stage
-diagnostic build. No script/Gradle/policy/version was changed here. A future
-split-stage preparation/asset/provenance/signature procedure requires separate
-review, authorization and physical build gates; do not run ordinary production
-release commands with these assumptions or classify such a shell as normal.
+`CLIC_POS_NATIVE_DIAGNOSTICS` independently controls POS_DIAGNOSTICS and
+profileable. If absent, it falls back to the legacy broad flag; all absent means
+normal. Present values must be exactly true/false. Broad+focused, or either
+frontend diagnostic flag without native control, fails before release effects.
+The canonical script exports one resolved environment across all build stages:
+
+```sh
+CLIC_POS_DIAGNOSTICS=false \
+CLIC_POS_SCANNER_FOCUS_DIAGNOSTICS=true \
+CLIC_POS_NATIVE_DIAGNOSTICS=true \
+CLIC_POS_RELEASE_LAN_HTTP_ENABLED=true \
+./scripts/release-android.sh <reviewed-frozen-source-SHA>
+```
+
+This command still requires a clean exact source containing latest develop,
+independent source QA/review, prebuild, explicit owner experimental authorization
+and independent artifact review. It does not grant CODE_VALIDATED or normal
+internal/production approval. Diagnostic/native-control bundles are instrumented,
+temporary, non-promotable and cannot fill the normal approvedArtifact manifest.
+The release checks executable API/Zone presence in dist, copied assets and actual
+APK-extracted assets (including stale/extra executable rejection), generated
+native flag, packaged profileable/package/version, LAN policy and signature.
+Keep SHA/hash/certificate/build metadata with the diagnostic evidence. Default
+normal and legacy broad builds retain their respective behavior.
+
+Root alone operates ADB/build. Install the ONE authorized artifact with install-r
+in client123 first, require >=15s stable process/UI plus preserved identity,
+session/pairing/data and app LAN evidence, then master101. Stop on canary failure.
+Do not clear/uninstall/downgrade or change show_ime_with_hard_keyboard/WebView.
+Any subsequent normal artifact requires fresh explicit authorization.
+
+After an initial control-only launch outside an operation, keep observers false:
+`pos_diagnostic_control=true`, `pos_diagnostics=false`. **capture.py does not launch
+the app; its legacy broad pos_diagnostics=true hint is inapplicable here.**
+Use a root-owned loopback ADB forward and run the read-only bounded preflight:
+
+```sh
+node scripts/diagnostics/check-reference.mjs http://127.0.0.1:<PORT> focused /tmp/<new-external-report>.json
+```
+
+The checker requires exact https://localhost origin, all five focused methods,
+absent broad API/Zone and native observers false. Fetch, socket open and evaluate
+are individually <=10s, owned timers/socket cleaned, no auto-arm or business call.
+Only safe enums/booleans/clocks are reported; repository or symlink output and
+existing reports are rejected. Read-only CDP can itself influence scheduling.
 
 If a future approved control-only shell exposes CDP, the external operator must
 verify the focused API exists, broad __POS_DIAGNOSTICS__/Zone/native-active do
@@ -75,3 +113,20 @@ If arming does not execute before resume, report missing coverage/BLOCKED; an
 arm after resume cannot retroactively attribute the first focus. Do not add
 polling, recurring observers, keyboard policy, autoarming or another bridge to
 work around this gap without a newly approved plan.
+
+Record acknowledged arm monotonic deadline/window and separately timestamped
+resume; reject gaps, non-overlap, drops or observerErrors. Preserve original PID
+and intent on HOME/resume. Keep default (no BACK/manual cleanup) and manual-visible
+IME cases separate. Reader QA needs current positive HID inventory AND real scan;
+prior presence or injected text is not a physical reader PASS.
+
+Alternate same-APK unarmed/armed and trace-off/on under matched data/roles/settings,
+WebViews and sync, reporting only the incremental cost actually controlled.
+Normal400 vs focused candidate also includes B1/integration changes and cannot
+prove wrapper/native-control overhead <=5%. Under ONE artifact authorization an
+otherwise identical normal comparator may be unavailable: full overhead gate
+then remains BLOCKED, not PASS. Host tests do not resolve that limitation. Such
+captures are exploratory attribution, not quantitative final acceptance. Do not
+sum inclusive segments or guess an internal Blink/IME/GC cause from DOM-focus
+alone. End with disarm/cleanup, close only owned captures/forwards, retain evidence;
+an installed higher diagnostic counter is not destructively downgraded.

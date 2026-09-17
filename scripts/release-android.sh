@@ -3,6 +3,11 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Fail before git/network/checkout/version/build effects. One resolved environment
+# is inherited by Vite, Capacitor and Gradle; never fall back to broad diagnostics.
+DIAGNOSTIC_FLAGS="$(node "${SCRIPT_DIR}/diagnostics/release-diagnostic-mode.mjs" resolve)"
+IFS='|' read -r CLIC_POS_DIAGNOSTICS CLIC_POS_SCANNER_FOCUS_DIAGNOSTICS CLIC_POS_NATIVE_DIAGNOSTICS DIAGNOSTIC_MODE DIAGNOSTIC_ARTIFACT <<< "${DIAGNOSTIC_FLAGS}"
+export CLIC_POS_DIAGNOSTICS CLIC_POS_SCANNER_FOCUS_DIAGNOSTICS CLIC_POS_NATIVE_DIAGNOSTICS
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 COMMON_GIT_DIR="$(git -C "${REPO_ROOT}" rev-parse --path-format=absolute --git-common-dir)"
 SOURCE_REPO_ROOT="$(dirname "${COMMON_GIT_DIR}")"
@@ -211,6 +216,10 @@ SOURCE_COMMIT="$(git -C "${REPO_ROOT}" rev-parse --verify "${SOURCE_REF}")" || f
 SOURCE_COMMIT_SHORT="$(git -C "${REPO_ROOT}" rev-parse --short "${SOURCE_COMMIT}")"
 SOURCE_BRANCH="$(git -C "${REPO_ROOT}" rev-parse --abbrev-ref "${SOURCE_REF}" 2>/dev/null || true)"
 [[ -n "${SOURCE_BRANCH}" ]] || SOURCE_BRANCH="${SOURCE_REF}"
+[[ "$(git -C "${REPO_ROOT}" rev-parse HEAD)" == "${SOURCE_COMMIT}" ]] || fail "El script debe ejecutarse desde el commit fuente exacto"
+[[ -z "$(git -C "${REPO_ROOT}" status --porcelain)" ]] || fail "La worktree fuente no está limpia"
+git -C "${REPO_ROOT}" merge-base --is-ancestor origin/develop "${SOURCE_COMMIT}" || fail "El candidato omite origin/develop"
+SOURCE_BASE="$(git -C "${REPO_ROOT}" rev-parse origin/develop)"
 
 [[ -d "${CANONICAL_BUILD_WORKTREE}" ]] || fail "No existe la worktree canónica: ${CANONICAL_BUILD_WORKTREE}"
 
@@ -261,6 +270,7 @@ info "Fuente del release: ${SOURCE_REF} (${SOURCE_COMMIT_SHORT})"
 info "VersionCode siguiente: ${NEXT_VERSION_CODE}"
 info "VersionName siguiente: ${VERSION_NAME}"
 info "HTTP LAN Master/Cliente: ${LAN_HTTP_ENABLED}"
+info "Modalidad: ${DIAGNOSTIC_MODE}; diagnóstico experimental no promovible=${DIAGNOSTIC_ARTIFACT}"
 info "Worktree de firma: ${CANONICAL_BUILD_WORKTREE}"
 
 # Build in the canonical checkout; signing material stays in its original location.
@@ -315,6 +325,8 @@ fs.mkdirSync(path.dirname(report), { recursive: true });
 fs.writeFileSync(report, JSON.stringify({ sourceCommit, assetsVerified: true, hashes }, null, 2));
 console.log(`Assets verificados: ${Object.keys(hashes).length}`);
 NODE
+node "${BUILD_WORKTREE}/scripts/diagnostics/release-diagnostic-mode.mjs" verify \
+  "${BUILD_WORKTREE}" "${ASSET_REPORT}" "${SOURCE_COMMIT}"
 
 # Gradle owns the canonical output directory. Historical deliverables remain in
 # RELEASE_HISTORY_DIR; only the APK produced by this run stays in app/build.
@@ -332,7 +344,16 @@ info "Verificando política HTTP LAN del manifiesto"
 verify_apk_network_policy "${AAPT}" "${APK_SRC}" "${LAN_HTTP_ENABLED}"
 
 info "Verificando firma"
-"${APKSIGNER}" verify --print-certs "${APK_SRC}"
+SIGNATURE_RESULT="$("${APKSIGNER}" verify --print-certs "${APK_SRC}")"
+echo "${SIGNATURE_RESULT}"
+CERTIFICATE_SHA256="$(echo "${SIGNATURE_RESULT}" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')"
+[[ "${CERTIFICATE_SHA256}" =~ ^[a-fA-F0-9]{64}$ ]] || fail "No se pudo resolver el certificado verificado"
+node "${BUILD_WORKTREE}/scripts/diagnostics/release-diagnostic-mode.mjs" verify \
+  "${BUILD_WORKTREE}" "${ASSET_REPORT}" "${SOURCE_COMMIT}" "${APK_SRC}" "${AAPT}" "${NEXT_VERSION_CODE}" "${VERSION_NAME}"
+APK_SHA256="$(node -e 'const fs=require("fs"),c=require("crypto");console.log(c.createHash("sha256").update(fs.readFileSync(process.argv[1])).digest("hex"))' "${APK_SRC}")"
+APK_SIZE="$(wc -c < "${APK_SRC}" | tr -d ' ')"
+BUILD_DATE="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+BUILD_ID="clic-pos-${VERSION_NAME}-${SOURCE_COMMIT_SHORT}-$(date -u '+%Y%m%dT%H%M%SZ')"
 
 DEST_DIR="${CANONICAL_BUILD_WORKTREE}/android/app/build/outputs/apk/release"
 mkdir -p "${DEST_DIR}"
@@ -357,6 +378,25 @@ sourceRef=${SOURCE_REF}
 sourceBranch=${SOURCE_BRANCH}
 sourceCommit=${SOURCE_COMMIT}
 sourceCommitShort=${SOURCE_COMMIT_SHORT}
+sourceBase=${SOURCE_BASE}
+diagnosticMode=${DIAGNOSTIC_MODE}
+broadDiagnostics=${CLIC_POS_DIAGNOSTICS}
+focusedDiagnostics=${CLIC_POS_SCANNER_FOCUS_DIAGNOSTICS}
+nativeDiagnostics=${CLIC_POS_NATIVE_DIAGNOSTICS}
+diagnostic=${DIAGNOSTIC_ARTIFACT}
+instrumented=${DIAGNOSTIC_ARTIFACT}
+temporary=${DIAGNOSTIC_ARTIFACT}
+releaseEligible=false
+packageName=com.clicpos.app
+buildType=release
+buildId=${BUILD_ID}
+buildDate=${BUILD_DATE}
+sizeBytes=${APK_SIZE}
+sha256=${APK_SHA256}
+certificateSha256=${CERTIFICATE_SHA256}
+apkExtractedAssetsVerified=true
+nativeFlagsVerified=true
+manifestProfileableVerified=true
 lanHttpEnabled=${LAN_HTTP_ENABLED}
 manifestNetworkPolicyVerified=true
 packagedAssetsVerified=true
@@ -371,7 +411,11 @@ builtAt=$(date '+%Y-%m-%d %H:%M:%S %Z')
 EOF
 
 sync_release_artifacts "${DEST_DIR}" "${RELEASE_HISTORY_DIR}"
-info "APK listo"
+if [[ "${DIAGNOSTIC_ARTIFACT}" == "true" ]]; then
+  info "APK diagnóstico experimental: NO promovible; sólo experimento autorizado"
+else
+  info "APK candidato listo; promoción pendiente"
+fi
 echo "APK=${APK_DEST}"
 echo "METADATA=${METADATA_DEST}"
 echo "REPORT=${REPORT_DEST}"
