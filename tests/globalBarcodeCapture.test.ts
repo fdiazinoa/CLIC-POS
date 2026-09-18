@@ -41,7 +41,8 @@ function harness(t: TestContext) {
             t.mock.timers.tick(gap);
         }
     };
-    return { scans, body, search, key, input, burst, send, cleanup, block: () => { blocked = true; } };
+    const quiet = { ...search, dataset: { barcodeScannerTarget: 'true', posScannerReceiver: 'true' }, inputMode: 'none', value: '' };
+    return { scans, body, search, quiet, key, input, burst, send, cleanup, block: (value = true) => { blocked = value; } };
 }
 
 for (const suffix of ['Enter', 'Tab', 'idle']) {
@@ -239,3 +240,63 @@ test('ticket routing remains compatible and malformed QR URLs cannot crash scann
     assert.equal(detectTicketPattern('bad dgii.gov.do'), null);
     assert.equal(detectTicketPattern('987654321'), null);
 });
+
+
+test('incomplete quiet-receiver scan times out without poisoning the next IME scan', t => {
+    const h = harness(t);
+    h.quiet.value = '12';
+    h.input('12', h.quiet);
+    t.mock.timers.tick(300);
+    assert.equal(h.quiet.value, '');
+    assert.deepEqual(h.scans, []);
+    h.quiet.value += '987654321';
+    h.input('987654321', h.quiet);
+    h.key('Enter', h.quiet);
+    assert.equal(h.quiet.value, '');
+    assert.deepEqual(h.scans, ['987654321']);
+});
+
+test('blocked quiet-receiver scan discards only its temporary input before resuming', t => {
+    const h = harness(t);
+    h.quiet.value = '987654321';
+    h.block();
+    h.input('987654321', h.quiet);
+    t.mock.timers.tick(300);
+    assert.equal(h.quiet.value, '');
+    assert.deepEqual(h.scans, []);
+    h.block(false);
+    h.quiet.value += '987654321';
+    h.input('987654321', h.quiet);
+    h.key('Enter', h.quiet);
+    assert.deepEqual(h.scans, ['987654321']);
+});
+
+test('blur abandons a partial quiet scan without erasing a manual search', t => {
+    const h = harness(t);
+    h.search.value = 'manual search';
+    h.quiet.value = '12';
+    h.input('12', h.quiet);
+    h.send('blur');
+    t.mock.timers.tick(300);
+    assert.equal(h.quiet.value, '');
+    assert.equal(h.search.value, 'manual search');
+    assert.deepEqual(h.scans, []);
+});
+
+for (const suffix of ['Enter', 'Tab', 'idle']) {
+    test(`Android Unidentified key followed by IME character, ${suffix}: emits once per physical scan`, t => {
+        const h = harness(t);
+        for (let scan = 0; scan < 2; scan++) {
+            for (const character of '987654321') {
+                h.key('Unidentified', h.quiet);
+                h.quiet.value += character;
+                h.input(character, h.quiet);
+                t.mock.timers.tick(20);
+            }
+            if (suffix !== 'idle') assert.equal(h.key(suffix, h.quiet).prevented, true);
+            t.mock.timers.tick(300);
+            assert.equal(h.quiet.value, '');
+        }
+        assert.deepEqual(h.scans, ['987654321', '987654321']);
+    });
+}
