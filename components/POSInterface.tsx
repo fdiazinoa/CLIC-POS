@@ -4043,7 +4043,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       return () => {
          cancelled = true;
       };
-   }, [isFiscalModeDisabled, isOrderTakerMode, requiredSaleFiscalType, terminalId]);
+   }, [
+      isFiscalModeDisabled,
+      isOrderTakerMode,
+      requiredSaleFiscalType,
+      terminalId,
+      activeTerminalConfig?.fiscal?.fiscalAllocations,
+      activeTerminalConfig?.fiscal?.fiscalRanges
+   ]);
 
    const fiscalReserveAlert = useMemo(() => {
       if (isOrderTakerMode || isFiscalModeDisabled) return null;
