@@ -95,8 +95,17 @@ export function attachGlobalBarcodeCapture(win: Window, options: BarcodeCaptureO
     let atomic = false;
     let clearingInput = false;
     let completed: { target: HTMLElement | null; code: string; at: number } | undefined;
+    // The dedicated receiver is uncontrolled and contains only transient scanner
+    // text. Abandoned scans must not survive in its native value. Manual search
+    // inputs retain their text when capture is cancelled.
+    const clearQuietInput = (el: HTMLElement | null) => {
+        if (el?.tagName === 'INPUT' && el.dataset.posScannerReceiver === 'true') {
+            (el as HTMLInputElement).value = '';
+        }
+    };
     const reset = () => {
         clearTimeout(timer);
+        clearQuietInput(target);
         code = '';
         burst = 0;
         atomic = false;
@@ -147,6 +156,9 @@ export function attachGlobalBarcodeCapture(win: Window, options: BarcodeCaptureO
         const el = event.target as HTMLElement | null;
         if (!eligible(el) || event.isComposing || event.ctrlKey || event.altKey || event.metaKey) { cancel(); return; }
         if (event.repeat) return;
+        // Android readers can deliver Unidentified before each valid insertText
+        // event. It carries no character: let onInput continue the same burst.
+        if (event.key === 'Unidentified' && el?.dataset?.barcodeScannerTarget === 'true') return;
         if (event.key === 'Enter' || event.key === 'Tab') {
             if (target === el && (atomic || (burst >= 3 && burst === code.length))) {
                 if (emit()) consume(event);
@@ -174,7 +186,7 @@ export function attachGlobalBarcodeCapture(win: Window, options: BarcodeCaptureO
         if (el?.tagName !== 'INPUT' || el.dataset.barcodeScannerTarget !== 'true') { cancel(); return; }
         const input = event as InputEvent;
         if (!eligible(el) || input.isComposing || input.inputType?.startsWith('delete') ||
-            input.inputType === 'insertFromPaste' || input.inputType === 'insertFromDrop') { cancel(); return; }
+            input.inputType === 'insertFromPaste' || input.inputType === 'insertFromDrop') { clearQuietInput(el); cancel(); return; }
         const value = el.value;
         completed = undefined;
         const now = Date.now();
