@@ -81,6 +81,8 @@ export const selectAuthoritativeFloorPlan = (options: {
       return {
         ...localTable,
         ...incomingTable,
+        // Operational locks are authoritative even when omitted after release.
+        editingLock: incomingTable.editingLock,
         roomId: localTable.roomId,
         name: localTable.name,
         nombre: localTable.nombre,

@@ -1150,9 +1150,12 @@ object ClicPOSMasterHttpServer {
      * avoids cloning and serializing the complete restaurant snapshot every
      * second while the POS is idle.
      */
-    fun getRestaurantRevision(): JSONObject = JSONObject()
-        .put("success", true)
-        .put("revision", restaurantRevision.get())
+    fun getRestaurantRevision(): JSONObject {
+        cleanupExpiredTableLocks()
+        return JSONObject()
+            .put("success", true)
+            .put("revision", restaurantRevision.get())
+    }
 
     private fun handleParkedTicketsUpdate(socket: Socket, body: String) {
         val payload = runCatching { if (body.isBlank()) JSONObject() else JSONObject(body) }

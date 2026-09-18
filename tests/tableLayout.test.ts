@@ -210,3 +210,29 @@ test('ubica cada mesa nueva en el primer espacio libre sin concentrarlas', () =>
     [[40, 40], [160, 40], [280, 40], [400, 40]]
   );
 });
+
+test('snapshot autoritativo elimina lock liberado sin cambiar geometría ni cuenta', () => {
+  const lock = { ownerId: 'client-1', acquiredAt: 100, expiresAt: 200 };
+  const local = { ...designedTable, editingLock: lock, currentOrderId: 'ORDER-OLD' };
+  const incoming = { ...designedTable, posX: 999, status: 'OCCUPIED' as const, currentOrderId: 'ORDER-TAX', currentOrderTotal: 1327.5 };
+  const selected = selectAuthoritativeFloorPlan({ local: { rooms: [], tables: [local] }, incoming: { rooms: [], tables: [incoming] }, isClientTerminal: false });
+  assert.equal(selected.tables[0].editingLock, undefined);
+  assert.equal(selected.tables[0].posX, designedTable.posX);
+  assert.equal(selected.tables[0].currentOrderId, 'ORDER-TAX');
+  assert.equal(selected.tables[0].currentOrderTotal, 1327.5);
+  assert.deepEqual(local.editingLock, lock);
+});
+
+test('snapshot autoritativo conserva el lock vigente del dueño remoto', () => {
+  const lock = { ownerId: 'client-current', acquiredAt: 100, expiresAt: 999999 };
+  const incoming = { ...designedTable, editingLock: lock };
+  const selected = selectAuthoritativeFloorPlan({ local: { rooms: [], tables: [{ ...designedTable, editingLock: { ...lock, ownerId: 'old' } }] }, incoming: { rooms: [], tables: [incoming] }, isClientTerminal: false });
+  assert.deepEqual(selected.tables[0].editingLock, lock);
+});
+
+test('mesa ausente del snapshot conserva su estado local al proteger identidad del plano', () => {
+  const local = { ...designedTable, editingLock: { ownerId: 'client-1', acquiredAt: 100, expiresAt: 200 }, currentOrderTotal: 375 };
+  const selected = selectAuthoritativeFloorPlan({ local: { rooms: [], tables: [local] }, incoming: { rooms: [], tables: [] }, isClientTerminal: false });
+  assert.equal(selected.reason, 'PRESERVE_MASTER_DESIGN');
+  assert.deepEqual(selected.tables, [local]);
+});
