@@ -128,11 +128,14 @@ fun main(args: Array<String>) {
     val owner = JSONObject().put("tableId", "table-1").put("ownerId", "owner-1")
     val first = server.acquireTableEditLock(owner).getJSONObject("lock")
     val lockRevision = revision()
+    check(server.getRestaurantRevision().getLong("revision") == lockRevision)
+    check((field("tableEditLocks").get(server) as ConcurrentHashMap<String, JSONObject>).containsKey("table-1"))
     val locked = snapshot().getJSONArray("tables").getJSONObject(0).getJSONObject("editingLock")
     check(!locked.has("token") && locked.getLong("expiresAt") == first.getLong("expiresAt"))
     Thread.sleep(3) // Ensure a different renewal millisecond; production TTL remains 45 seconds.
     val renewed = server.acquireTableEditLock(owner).getJSONObject("lock")
     check(revision() == lockRevision && renewed.getLong("expiresAt") > first.getLong("expiresAt"))
+    check(server.getRestaurantRevision().getLong("revision") == lockRevision)
     check(snapshot().getJSONArray("tables").getJSONObject(0).getJSONObject("editingLock").getLong("expiresAt") == renewed.getLong("expiresAt"))
     check(server.releaseTableEditLock(JSONObject(owner.toString()).put("token", renewed.getString("token"))).getBoolean("success"))
     check(revision() == lockRevision + 1 && !snapshot().getJSONArray("tables").getJSONObject(0).has("editingLock"))
@@ -141,7 +144,11 @@ fun main(args: Array<String>) {
     // Fixture aging, not a shortened TTL: production cleanup sees an actually expired stored lease.
     val locks = field("tableEditLocks").get(server) as ConcurrentHashMap<String, JSONObject>
     locks["table-1"] = JSONObject(locks["table-1"].toString()).put("expiresAt", System.currentTimeMillis() - 1)
-    check(!snapshot().getJSONArray("tables").getJSONObject(0).has("editingLock") && revision() == expiryRevision + 1)
+    // Probe first: no full snapshot may be needed to observe lease expiration.
+    check(server.getRestaurantRevision().getLong("revision") == expiryRevision + 1)
+    check(!locks.containsKey("table-1"))
+    check(server.getRestaurantRevision().getLong("revision") == expiryRevision + 1)
+    check(!snapshot().getJSONArray("tables").getJSONObject(0).has("editingLock"))
     println("PASS: lock redaction/renewal without revision/release/expiry preserve current overlay")
 
     val beforeCustomers = revision()

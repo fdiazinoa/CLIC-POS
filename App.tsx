@@ -5451,7 +5451,7 @@ const AppContent: React.FC = () => {
             const remoteTable = incomingById.get(String(localTable.id));
             if (!remoteTable) return localTable;
             incomingById.delete(String(localTable.id));
-            if (!localFloorPlan) return { ...localTable, ...remoteTable };
+            if (!localFloorPlan) return { ...localTable, ...remoteTable, editingLock: remoteTable.editingLock };
             return {
               ...remoteTable,
               ...localTable,
