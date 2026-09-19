@@ -1,0 +1,295 @@
+{
+  "indexedDbReopen": "pass",
+  "initialErrorAbsent": true,
+  "initialOptionCount": 8,
+  "initialPage": "1 de 2",
+  "multipleManualStep": "1Extras",
+  "twoSelectedTotal": "RD$640.00",
+  "beverageActive": "2Bebida",
+  "requiredAlert": "Seleccione Bebida.",
+  "requiredFocus": "true",
+  "singleAutoAdvance": "3Nota",
+  "standardPayload": {
+    "modifiers": [
+      "Extras: + Bacon (RD$60.00)",
+      "Extras: + Extra queso (RD$30.00)",
+      "Bebida: Agua con Gas",
+      "Nota: Salsa aparte"
+    ],
+    "finalPrice": 640,
+    "note": "Salsa aparte",
+    "restaurantConfig": {
+      "modifierGroups": {
+        "extras": [
+          "bacon",
+          "extra-cheese"
+        ]
+      },
+      "comboGroups": {
+        "drink": [
+          "sparkling-water"
+        ]
+      },
+      "fractions": [],
+      "selected_modifiers": [
+        {
+          "group_id": "extras",
+          "group_name": "Extras",
+          "modifier_id": "bacon",
+          "name": "Bacon",
+          "modifier_type": "ADD",
+          "affects_price": true,
+          "price_delta": 60
+        },
+        {
+          "group_id": "extras",
+          "group_name": "Extras",
+          "modifier_id": "extra-cheese",
+          "name": "Extra queso",
+          "modifier_type": "ADD",
+          "affects_price": true,
+          "price_delta": 30
+        }
+      ],
+      "selected_fraction_parts": [],
+      "selected_combo_items": [
+        {
+          "group_id": "drink",
+          "group_name": "Bebida",
+          "item_id": "sparkling-water",
+          "product_id": "drink-1",
+          "name": "Agua con Gas",
+          "price_delta": 0
+        }
+      ],
+      "product_type": "COMBO",
+      "production_area_id": "qa-kitchen",
+      "note": "Salsa aparte"
+    },
+    "taxIds": [
+      "qa-tax-preserved"
+    ],
+    "taxable": true
+  },
+  "ninePage2Selected": [
+    "Jalapeño+RD$15.00"
+  ],
+  "ninePage1Persisted": [
+    "Bacon+RD$60.00"
+  ],
+  "seventeenThirdPageCount": 1,
+  "seventeenPageLabel": "3 de 3",
+  "seventeenSelectionPersisted": [
+    "Bacon+RD$60.00"
+  ],
+  "minRequiredAlert": "Seleccione Extras.",
+  "maxThreeSelected": 3,
+  "minTwoCanAdvance": "2Bebida",
+  "singleCancelKeepsStep": "1Extras",
+  "trimmedNote": "urgente",
+  "freeQuantityTotal": "RD$580.00",
+  "fraction-highest": {
+    "total": "RD$700.00",
+    "payload": {
+      "modifiers": [
+        "Fracciones: Clásica / Premium",
+        "Bebida: Agua con Gas"
+      ],
+      "finalPrice": 700,
+      "restaurantConfig": {
+        "modifierGroups": {},
+        "comboGroups": {
+          "drink": [
+            "sparkling-water"
+          ]
+        },
+        "fractions": [
+          {
+            "id": "pizza-1",
+            "product_id": "pizza-1",
+            "name": "Clásica",
+            "price": 500,
+            "ratio": 0.5
+          },
+          {
+            "id": "pizza-2",
+            "product_id": "pizza-2",
+            "name": "Premium",
+            "price": 700,
+            "ratio": 0.5
+          }
+        ],
+        "selected_modifiers": [],
+        "selected_fraction_parts": [
+          {
+            "id": "pizza-1",
+            "product_id": "pizza-1",
+            "name": "Clásica",
+            "price": 500,
+            "ratio": 0.5
+          },
+          {
+            "id": "pizza-2",
+            "product_id": "pizza-2",
+            "name": "Premium",
+            "price": 700,
+            "ratio": 0.5
+          }
+        ],
+        "selected_combo_items": [
+          {
+            "group_id": "drink",
+            "group_name": "Bebida",
+            "item_id": "sparkling-water",
+            "product_id": "drink-1",
+            "name": "Agua con Gas",
+            "price_delta": 0
+          }
+        ],
+        "product_type": "FRACTIONABLE",
+        "production_area_id": "qa-kitchen"
+      },
+      "taxIds": [
+        "qa-tax-preserved"
+      ],
+      "taxable": true
+    }
+  },
+  "fraction-average": {
+    "total": "RD$600.00",
+    "payload": {
+      "modifiers": [
+        "Fracciones: Clásica / Premium",
+        "Bebida: Agua con Gas"
+      ],
+      "finalPrice": 600,
+      "restaurantConfig": {
+        "modifierGroups": {},
+        "comboGroups": {
+          "drink": [
+            "sparkling-water"
+          ]
+        },
+        "fractions": [
+          {
+            "id": "pizza-1",
+            "product_id": "pizza-1",
+            "name": "Clásica",
+            "price": 500,
+            "ratio": 0.5
+          },
+          {
+            "id": "pizza-2",
+            "product_id": "pizza-2",
+            "name": "Premium",
+            "price": 700,
+            "ratio": 0.5
+          }
+        ],
+        "selected_modifiers": [],
+        "selected_fraction_parts": [
+          {
+            "id": "pizza-1",
+            "product_id": "pizza-1",
+            "name": "Clásica",
+            "price": 500,
+            "ratio": 0.5
+          },
+          {
+            "id": "pizza-2",
+            "product_id": "pizza-2",
+            "name": "Premium",
+            "price": 700,
+            "ratio": 0.5
+          }
+        ],
+        "selected_combo_items": [
+          {
+            "group_id": "drink",
+            "group_name": "Bebida",
+            "item_id": "sparkling-water",
+            "product_id": "drink-1",
+            "name": "Agua con Gas",
+            "price_delta": 0
+          }
+        ],
+        "product_type": "FRACTIONABLE",
+        "production_area_id": "qa-kitchen"
+      },
+      "taxIds": [
+        "qa-tax-preserved"
+      ],
+      "taxable": true
+    }
+  },
+  "fraction-diff": {
+    "total": "RD$700.00",
+    "payload": {
+      "modifiers": [
+        "Fracciones: Clásica / Premium",
+        "Bebida: Agua con Gas"
+      ],
+      "finalPrice": 700,
+      "restaurantConfig": {
+        "modifierGroups": {},
+        "comboGroups": {
+          "drink": [
+            "sparkling-water"
+          ]
+        },
+        "fractions": [
+          {
+            "id": "pizza-1",
+            "product_id": "pizza-1",
+            "name": "Clásica",
+            "price": 500,
+            "ratio": 0.5
+          },
+          {
+            "id": "pizza-2",
+            "product_id": "pizza-2",
+            "name": "Premium",
+            "price": 700,
+            "ratio": 0.5
+          }
+        ],
+        "selected_modifiers": [],
+        "selected_fraction_parts": [
+          {
+            "id": "pizza-1",
+            "product_id": "pizza-1",
+            "name": "Clásica",
+            "price": 500,
+            "ratio": 0.5
+          },
+          {
+            "id": "pizza-2",
+            "product_id": "pizza-2",
+            "name": "Premium",
+            "price": 700,
+            "ratio": 0.5
+          }
+        ],
+        "selected_combo_items": [
+          {
+            "group_id": "drink",
+            "group_name": "Bebida",
+            "item_id": "sparkling-water",
+            "product_id": "drink-1",
+            "name": "Agua con Gas",
+            "price_delta": 0
+          }
+        ],
+        "product_type": "FRACTIONABLE",
+        "production_area_id": "qa-kitchen"
+      },
+      "taxIds": [
+        "qa-tax-preserved"
+      ],
+      "taxable": true
+    }
+  },
+  "finalRedirectStep": "2Bebida",
+  "finalRedirectFocus": "true",
+  "emptyFallbackFocus": "true"
+}

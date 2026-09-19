@@ -1,7 +1,14 @@
-import React, { useMemo, useState } from 'react';
-import { X, Check, Plus, AlertCircle, MessageSquare } from 'lucide-react';
-import { Product, Modifier, ModifierGroup, ComboGroup, ProductFractionOption } from '../types';
+import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { AlertCircle, Check, ChevronLeft, ChevronRight, MessageSquare, Plus, X } from 'lucide-react';
+import { ComboGroup, Modifier, ModifierGroup, Product, ProductFractionOption } from '../types';
+import {
+  focusFirstModifierOption,
+  isModifierSelectionCountValid,
+  MODIFIER_MODAL_LAYOUT,
+  paginateModifierOptions,
+} from '../utils/modifierModalPresentation';
 import { resolveRestaurantProductConfig } from '../utils/restaurantProductConfig';
+import './ModifierModal.css';
 
 interface ModifierModalProps {
   product: Product;
@@ -11,25 +18,58 @@ interface ModifierModalProps {
   onConfirm: (modifiers: string[], finalPrice: number, note?: string, restaurantConfig?: Record<string, unknown>) => void;
 }
 
-export const MODIFIER_GROUP_VISUAL_STYLES = [
-  { section: 'border-blue-200 bg-blue-50/70', title: 'text-blue-800', badge: 'bg-blue-100 text-blue-700', accent: 'bg-blue-500' },
-  { section: 'border-amber-200 bg-amber-50/70', title: 'text-amber-800', badge: 'bg-amber-100 text-amber-700', accent: 'bg-amber-500' },
-  { section: 'border-emerald-200 bg-emerald-50/70', title: 'text-emerald-800', badge: 'bg-emerald-100 text-emerald-700', accent: 'bg-emerald-500' },
-  { section: 'border-violet-200 bg-violet-50/70', title: 'text-violet-800', badge: 'bg-violet-100 text-violet-700', accent: 'bg-violet-500' },
-  { section: 'border-rose-200 bg-rose-50/70', title: 'text-rose-800', badge: 'bg-rose-100 text-rose-700', accent: 'bg-rose-500' },
-  { section: 'border-cyan-200 bg-cyan-50/70', title: 'text-cyan-800', badge: 'bg-cyan-100 text-cyan-700', accent: 'bg-cyan-500' },
-] as const;
+const SINGLE_ADVANCE_DELAY_MS = 250;
 
-export const getModifierGroupVisualStyle = (index: number) => (
-  MODIFIER_GROUP_VISUAL_STYLES[Math.abs(index) % MODIFIER_GROUP_VISUAL_STYLES.length]
-);
+type Step =
+  | { id: string; kind: 'fraction'; name: string; partIndex: number }
+  | { id: string; kind: 'modifier'; name: string; group: ModifierGroup }
+  | { id: string; kind: 'combo'; name: string; group: ComboGroup }
+  | { id: 'note'; kind: 'note'; name: string };
 
-const ModifierModal: React.FC<ModifierModalProps> = ({ 
-  product, 
-  currencySymbol, 
-  themeColor, 
-  onClose, 
-  onConfirm 
+interface OptionCardProps {
+  id: string;
+  label: string;
+  meta: string;
+  selected: boolean;
+  multiple: boolean;
+  onSelect: (id: string) => void;
+}
+
+const OptionCard = memo<OptionCardProps>(({ id, label, meta, selected, multiple, onSelect }) => {
+  const handleClick = useCallback(() => onSelect(id), [id, onSelect]);
+  return (
+    <button
+      type="button"
+      role={multiple ? 'checkbox' : 'radio'}
+      aria-checked={selected}
+      data-modifier-option="true"
+      onClick={handleClick}
+      className={`flex min-h-[88px] w-full items-center gap-3 rounded-2xl border-2 px-4 py-3 text-left transition-colors active:scale-[0.99] ${
+        selected
+          ? 'border-blue-600 bg-blue-50 text-blue-950 shadow-sm'
+          : 'border-slate-200 bg-white text-slate-900 hover:border-blue-300 hover:bg-slate-50'
+      }`}
+    >
+      <span className={`flex h-9 w-9 shrink-0 items-center justify-center border-2 ${multiple ? 'rounded-lg' : 'rounded-full'} ${
+        selected ? 'border-blue-600 bg-blue-600 text-white' : 'border-slate-300 bg-white text-transparent'
+      }`}>
+        <Check size={15} strokeWidth={3.5} aria-hidden="true" />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block text-lg font-black leading-tight">{label}</span>
+        <span className="mt-1 block text-sm font-bold text-slate-500">{meta}</span>
+      </span>
+    </button>
+  );
+});
+OptionCard.displayName = 'OptionCard';
+
+const ModifierModal: React.FC<ModifierModalProps> = ({
+  product,
+  currencySymbol,
+  themeColor,
+  onClose,
+  onConfirm,
 }) => {
   const restaurantConfigSource = useMemo(() => resolveRestaurantProductConfig(product), [product]);
   const productType = String(restaurantConfigSource.product_type || product.product_type || product.type || 'SIMPLE').toUpperCase();
@@ -37,109 +77,92 @@ const ModifierModal: React.FC<ModifierModalProps> = ({
     const structured = restaurantConfigSource.modifier_groups || [];
     if (structured.length > 0) {
       return structured
-        .map(group => ({
-          ...group,
-          modifiers: (group.modifiers || []).filter(mod => mod.active !== false),
-        }))
+        .map(group => ({ ...group, modifiers: (group.modifiers || []).filter(mod => mod.active !== false) }))
         .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0));
     }
     if (!product.availableModifiers?.length) return [];
     return [{
-      id: 'legacy-modifiers',
-      name: 'Extras',
-      selection_type: 'MULTIPLE',
-      required: false,
-      min_select: 0,
-      max_select: null,
-      free_quantity: 0,
-      modifiers: product.availableModifiers,
+      id: 'legacy-modifiers', name: 'Extras', selection_type: 'MULTIPLE', required: false,
+      min_select: 0, max_select: null, free_quantity: 0, modifiers: product.availableModifiers,
     }];
   }, [product.availableModifiers, restaurantConfigSource.modifier_groups]);
-
   const comboGroups = useMemo<ComboGroup[]>(
     () => (restaurantConfigSource.combo_groups || [])
       .map(group => ({ ...group, items: (group.items || []).filter(item => item.active !== false) }))
       .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0)),
-    [restaurantConfigSource.combo_groups]
+    [restaurantConfigSource.combo_groups],
   );
   const fractionRule = restaurantConfigSource.fraction_rule;
   const fractionOptions = useMemo<ProductFractionOption[]>(
     () => (fractionRule?.options || []).filter(option => option.active !== false),
-    [fractionRule]
+    [fractionRule],
   );
   const maxFractionParts = Math.max(2, Number(fractionRule?.max_parts || (fractionRule?.fraction_mode === 'QUARTER' ? 4 : 2)));
   const notePresets = restaurantConfigSource.note_presets || [];
+
+  const steps = useMemo<Step[]>(() => [
+    ...Array.from({ length: fractionOptions.length > 0 ? maxFractionParts : 0 }, (_, partIndex): Step => ({
+      id: `fraction-${partIndex}`, kind: 'fraction', name: `Parte ${partIndex + 1}`, partIndex,
+    })),
+    ...modifierGroups.map((group): Step => ({ id: `modifier-${group.id}`, kind: 'modifier', name: group.name, group })),
+    ...comboGroups.map((group): Step => ({ id: `combo-${group.id}`, kind: 'combo', name: group.name, group })),
+    { id: 'note', kind: 'note', name: 'Nota' },
+  ], [comboGroups, fractionOptions.length, maxFractionParts, modifierGroups]);
 
   const [selectedModifiersByGroup, setSelectedModifiersByGroup] = useState<Record<string, string[]>>({});
   const [selectedCombosByGroup, setSelectedCombosByGroup] = useState<Record<string, string[]>>({});
   const [selectedFractions, setSelectedFractions] = useState<Record<number, string>>({});
   const [note, setNote] = useState('');
+  const [activeStepIndex, setActiveStepIndex] = useState(0);
+  const [pagesByStep, setPagesByStep] = useState<Record<string, number>>({});
+  const [attemptedStepId, setAttemptedStepId] = useState<string | null>(null);
+  const [completedStepIds, setCompletedStepIds] = useState<Record<string, true>>({});
+  const autoAdvanceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const confirmationStartedRef = useRef(false);
+  const activeStepIndexRef = useRef(activeStepIndex);
+  const activeStepRef = useRef<Step | undefined>(steps[0]);
+  const modifierSelectionsRef = useRef(selectedModifiersByGroup);
+  const comboSelectionsRef = useRef(selectedCombosByGroup);
+  const fractionSelectionsRef = useRef(selectedFractions);
+  const optionAreaRef = useRef<HTMLDivElement>(null);
 
-  const toggleModifier = (modifier: Modifier) => {
-    const group = modifierGroups.find(candidate => candidate.modifiers.some(mod => mod.id === modifier.id));
-    if (!group) return;
-    const maxSelect = group.selection_type === 'SINGLE' ? 1 : Number(group.max_select || 0);
-    setSelectedModifiersByGroup(prev => {
-      const current = prev[group.id] || [];
-      const exists = current.includes(modifier.id);
-      if (exists) return { ...prev, [group.id]: current.filter(id => id !== modifier.id) };
-      if (group.selection_type === 'SINGLE') return { ...prev, [group.id]: [modifier.id] };
-      if (maxSelect > 0 && current.length >= maxSelect) return prev;
-      return { ...prev, [group.id]: [...current, modifier.id] };
-    });
-  };
+  modifierSelectionsRef.current = selectedModifiersByGroup;
+  comboSelectionsRef.current = selectedCombosByGroup;
+  fractionSelectionsRef.current = selectedFractions;
 
-  const toggleComboItem = (group: ComboGroup, itemId: string) => {
-    const maxSelect = Number(group.max_select || 1);
-    setSelectedCombosByGroup(prev => {
-      const current = prev[group.id] || [];
-      const exists = current.includes(itemId);
-      if (exists) return { ...prev, [group.id]: current.filter(id => id !== itemId) };
-      if (maxSelect <= 1) return { ...prev, [group.id]: [itemId] };
-      if (current.length >= maxSelect) return prev;
-      return { ...prev, [group.id]: [...current, itemId] };
-    });
-  };
+  const cancelAutoAdvance = useCallback(() => {
+    if (autoAdvanceTimer.current) clearTimeout(autoAdvanceTimer.current);
+    autoAdvanceTimer.current = null;
+  }, []);
 
-  const validationErrors = useMemo(() => {
-    const errors: string[] = [];
-    modifierGroups.forEach(group => {
-      const selectedCount = (selectedModifiersByGroup[group.id] || []).length;
-      const minSelect = group.required ? Math.max(1, Number(group.min_select || 1)) : Number(group.min_select || 0);
-      if (selectedCount < minSelect) errors.push(`Seleccione ${group.name}`);
-    });
-    comboGroups.forEach(group => {
-      const selectedCount = (selectedCombosByGroup[group.id] || []).length;
-      const minSelect = group.required ? Math.max(1, Number(group.min_select || 1)) : Number(group.min_select || 0);
-      if (selectedCount < minSelect) errors.push(`Seleccione ${group.name}`);
-    });
-    if (fractionOptions.length > 0) {
-      const selectedCount = Array.from({ length: maxFractionParts }).filter((_, index) => selectedFractions[index]).length;
-      if (productType === 'FRACTIONABLE' && selectedCount === 0) errors.push('Seleccione las fracciones');
-      if (selectedCount > 0 && selectedCount < maxFractionParts) errors.push('Complete todas las fracciones');
-    }
-    return errors;
-  }, [comboGroups, fractionOptions.length, maxFractionParts, modifierGroups, productType, selectedCombosByGroup, selectedFractions, selectedModifiersByGroup]);
+  useEffect(() => {
+    activeStepIndexRef.current = activeStepIndex;
+    activeStepRef.current = steps[activeStepIndex];
+  }, [activeStepIndex, steps]);
+  useEffect(() => cancelAutoAdvance, [cancelAutoAdvance]);
+  useEffect(() => {
+    cancelAutoAdvance();
+  }, [cancelAutoAdvance, product.id]);
 
-  const getModifierPrice = (modifier: Modifier) => Number(modifier.price_delta ?? modifier.price ?? 0);
-  const getFractionOptionId = (option: ProductFractionOption) => String(option.option_product_id || option.product_id || option.id || option.name || '');
-  const getFractionOptionPrice = (option: ProductFractionOption) => Number(option.price_override ?? option.price ?? product.price ?? 0);
+  const getModifierPrice = useCallback((modifier: Modifier) => Number(modifier.price_delta ?? modifier.price ?? 0), []);
+  const getFractionOptionId = useCallback((option: ProductFractionOption) => String(option.option_product_id || option.product_id || option.id || option.name || ''), []);
+  const getFractionOptionPrice = useCallback((option: ProductFractionOption) => Number(option.price_override ?? option.price ?? product.price ?? 0), [product.price]);
 
   const selectedModifierObjects = useMemo(() => modifierGroups.flatMap(group => {
     const selectedIds = selectedModifiersByGroup[group.id] || [];
-    return selectedIds.map(id => ({ group, modifier: group.modifiers.find(mod => mod.id === id) })).filter(entry => entry.modifier) as Array<{ group: ModifierGroup; modifier: Modifier }>;
+    return selectedIds.map(id => ({ group, modifier: group.modifiers.find(mod => mod.id === id) }))
+      .filter(entry => entry.modifier) as Array<{ group: ModifierGroup; modifier: Modifier }>;
   }), [modifierGroups, selectedModifiersByGroup]);
-
   const selectedComboObjects = useMemo(() => comboGroups.flatMap(group => {
     const selectedIds = selectedCombosByGroup[group.id] || [];
-    return selectedIds.map(id => ({ group, item: group.items.find(candidate => String(candidate.id || candidate.product_id) === id) })).filter(entry => entry.item) as Array<{ group: ComboGroup; item: any }>;
+    return selectedIds.map(id => ({ group, item: group.items.find(candidate => String(candidate.id || candidate.product_id) === id) }))
+      .filter(entry => entry.item) as Array<{ group: ComboGroup; item: ComboGroup['items'][number] }>;
   }), [comboGroups, selectedCombosByGroup]);
-
   const selectedFractionObjects = useMemo(() => Array.from({ length: maxFractionParts })
     .map((_, index) => fractionOptions.find(option => getFractionOptionId(option) === selectedFractions[index]))
-    .filter(Boolean) as ProductFractionOption[], [fractionOptions, maxFractionParts, selectedFractions]);
+    .filter(Boolean) as ProductFractionOption[], [fractionOptions, getFractionOptionId, maxFractionParts, selectedFractions]);
 
-  const calculateFractionBase = () => {
+  const calculateFractionBase = useCallback(() => {
     if (selectedFractionObjects.length === 0 || selectedFractionObjects.length < maxFractionParts) return product.price;
     const prices = selectedFractionObjects.map(getFractionOptionPrice);
     const rule = String(fractionRule?.pricing_rule || 'HIGHEST_PRICE').toUpperCase();
@@ -148,38 +171,157 @@ const ModifierModal: React.FC<ModifierModalProps> = ({
       const ratio = 1 / maxFractionParts;
       return prices.reduce((sum, price) => sum + (price * ratio), 0);
     }
-    if (rule === 'BASE_PLUS_DIFF') {
-      return Number(product.price || 0) + Math.max(0, Math.max(...prices) - Number(product.price || 0));
-    }
+    if (rule === 'BASE_PLUS_DIFF') return Number(product.price || 0) + Math.max(0, Math.max(...prices) - Number(product.price || 0));
     return product.price;
-  };
+  }, [fractionRule?.pricing_rule, getFractionOptionPrice, maxFractionParts, product.price, selectedFractionObjects]);
+  const calculateModifiersTotal = useCallback(() => modifierGroups.reduce((sum, group) => {
+    const selectedIds = selectedModifiersByGroup[group.id] || [];
+    let freeRemaining = Number(group.free_quantity || 0);
+    selectedIds.forEach(id => {
+      const modifier = group.modifiers.find(mod => mod.id === id);
+      if (!modifier || modifier.modifier_type === 'REMOVE' || modifier.affects_price === false) return;
+      if (freeRemaining > 0) { freeRemaining -= 1; return; }
+      sum += getModifierPrice(modifier);
+    });
+    return sum;
+  }, 0), [getModifierPrice, modifierGroups, selectedModifiersByGroup]);
+  const calculateComboTotal = useCallback(
+    () => selectedComboObjects.reduce((sum, entry) => sum + Number(entry.item.price_delta || 0), 0),
+    [selectedComboObjects],
+  );
+  const fractionBase = calculateFractionBase();
+  const extrasTotal = calculateModifiersTotal() + calculateComboTotal();
+  const total = fractionBase + extrasTotal;
 
-  const calculateModifiersTotal = () => {
-    return modifierGroups.reduce((sum, group) => {
-      const selectedIds = selectedModifiersByGroup[group.id] || [];
-      let freeRemaining = Number(group.free_quantity || 0);
-      selectedIds.forEach(id => {
-        const modifier = group.modifiers.find(mod => mod.id === id);
-        if (!modifier || modifier.modifier_type === 'REMOVE' || modifier.affects_price === false) return;
-        if (freeRemaining > 0) {
-          freeRemaining -= 1;
-          return;
-        }
-        sum += getModifierPrice(modifier);
-      });
-      return sum;
-    }, 0);
-  };
+  const fractionSelectionCount = Object.keys(selectedFractions).filter(key => selectedFractions[Number(key)]).length;
+  const isStepValid = useCallback((step: Step) => {
+    if (step.kind === 'note') return true;
+    if (step.kind === 'modifier') return isModifierSelectionCountValid((selectedModifiersByGroup[step.group.id] || []).length, step.group);
+    if (step.kind === 'combo') return isModifierSelectionCountValid((selectedCombosByGroup[step.group.id] || []).length, step.group);
+    if (productType !== 'FRACTIONABLE' && fractionSelectionCount === 0) return true;
+    return Boolean(selectedFractions[step.partIndex]);
+  }, [fractionSelectionCount, productType, selectedCombosByGroup, selectedFractions, selectedModifiersByGroup]);
 
-  const calculateComboTotal = () => selectedComboObjects.reduce((sum, entry) => sum + Number(entry.item.price_delta || 0), 0);
+  const focusFirstOption = useCallback(() => {
+    requestAnimationFrame(() => focusFirstModifierOption(optionAreaRef.current));
+  }, []);
+  const showStepError = useCallback((step: Step) => {
+    setPagesByStep(prev => ({ ...prev, [step.id]: 0 }));
+    setAttemptedStepId(step.id);
+    focusFirstOption();
+  }, [focusFirstOption]);
+  const moveToStep = useCallback((index: number) => {
+    cancelAutoAdvance();
+    setAttemptedStepId(null);
+    setActiveStepIndex(Math.max(0, Math.min(index, steps.length - 1)));
+  }, [cancelAutoAdvance, steps.length]);
+  const scheduleAutoAdvance = useCallback((stepIndex: number, stepId: string) => {
+    cancelAutoAdvance();
+    autoAdvanceTimer.current = setTimeout(() => {
+      if (activeStepIndexRef.current !== stepIndex || stepIndex >= steps.length - 1) return;
+      setAttemptedStepId(null);
+      setCompletedStepIds(prev => ({ ...prev, [stepId]: true }));
+      setActiveStepIndex(stepIndex + 1);
+      autoAdvanceTimer.current = null;
+    }, SINGLE_ADVANCE_DELAY_MS);
+  }, [cancelAutoAdvance, steps.length]);
 
-  const calculateTotal = () => calculateFractionBase() + calculateModifiersTotal() + calculateComboTotal();
-
-  const buildModifierLabels = () => {
-    const labels: string[] = [];
-    if (selectedFractionObjects.length > 0) {
-      labels.push(`Fracciones: ${selectedFractionObjects.map(option => option.name || getFractionOptionId(option)).join(' / ')}`);
+  const activeStep = steps[activeStepIndex];
+  const handleOptionSelect = useCallback((optionId: string) => {
+    const currentStep = activeStepRef.current;
+    const currentStepIndex = activeStepIndexRef.current;
+    if (!currentStep) return;
+    setAttemptedStepId(null);
+    if (currentStep.kind === 'fraction') {
+      const next = { ...fractionSelectionsRef.current, [currentStep.partIndex]: optionId };
+      fractionSelectionsRef.current = next;
+      setSelectedFractions(next);
+      scheduleAutoAdvance(currentStepIndex, currentStep.id);
+      return;
     }
+    if (currentStep.kind === 'modifier') {
+      const group = currentStep.group;
+      const maxSelect = group.selection_type === 'SINGLE' ? 1 : Number(group.max_select || 0);
+      const current = modifierSelectionsRef.current[group.id] || [];
+      if (current.includes(optionId)) {
+        cancelAutoAdvance();
+        const next = { ...modifierSelectionsRef.current, [group.id]: current.filter(id => id !== optionId) };
+        modifierSelectionsRef.current = next;
+        setSelectedModifiersByGroup(next);
+      } else if (group.selection_type === 'SINGLE') {
+        const next = { ...modifierSelectionsRef.current, [group.id]: [optionId] };
+        modifierSelectionsRef.current = next;
+        setSelectedModifiersByGroup(next);
+        if (isModifierSelectionCountValid(1, group)) scheduleAutoAdvance(currentStepIndex, currentStep.id);
+      } else if (maxSelect <= 0 || current.length < maxSelect) {
+        const next = { ...modifierSelectionsRef.current, [group.id]: [...current, optionId] };
+        modifierSelectionsRef.current = next;
+        setSelectedModifiersByGroup(next);
+      }
+      return;
+    }
+    if (currentStep.kind === 'combo') {
+      const group = currentStep.group;
+      const maxSelect = Number(group.max_select || 1);
+      const current = comboSelectionsRef.current[group.id] || [];
+      if (current.includes(optionId)) {
+        cancelAutoAdvance();
+        const next = { ...comboSelectionsRef.current, [group.id]: current.filter(id => id !== optionId) };
+        comboSelectionsRef.current = next;
+        setSelectedCombosByGroup(next);
+      } else if (maxSelect <= 1) {
+        const next = { ...comboSelectionsRef.current, [group.id]: [optionId] };
+        comboSelectionsRef.current = next;
+        setSelectedCombosByGroup(next);
+        if (isModifierSelectionCountValid(1, group)) scheduleAutoAdvance(currentStepIndex, currentStep.id);
+      } else if (current.length < maxSelect) {
+        const next = { ...comboSelectionsRef.current, [group.id]: [...current, optionId] };
+        comboSelectionsRef.current = next;
+        setSelectedCombosByGroup(next);
+      }
+    }
+  }, [cancelAutoAdvance, scheduleAutoAdvance]);
+
+  const validationMessage = activeStep && attemptedStepId === activeStep.id && !isStepValid(activeStep)
+    ? activeStep.kind === 'fraction' ? 'Seleccione una opción para esta parte.' : `Seleccione ${activeStep.name}.`
+    : null;
+
+  const handleContinue = useCallback(() => {
+    if (!activeStep) return;
+    cancelAutoAdvance();
+    if (activeStepIndex < steps.length - 1) {
+      if (!isStepValid(activeStep)) { showStepError(activeStep); return; }
+      setCompletedStepIds(prev => ({ ...prev, [activeStep.id]: true }));
+      moveToStep(activeStepIndex + 1);
+      return;
+    }
+    const firstInvalidIndex = steps.findIndex(step => !isStepValid(step));
+    if (firstInvalidIndex >= 0) {
+      const invalidStep = steps[firstInvalidIndex];
+      setActiveStepIndex(firstInvalidIndex);
+      setPagesByStep(prev => ({ ...prev, [invalidStep.id]: 0 }));
+      setAttemptedStepId(invalidStep.id);
+      focusFirstOption();
+      return;
+    }
+    if (confirmationStartedRef.current) return;
+    confirmationStartedRef.current = true;
+
+    const selectedModifierSnapshot = selectedModifierObjects.map(({ group, modifier }) => ({
+      group_id: group.id, group_name: group.name, modifier_id: modifier.id, product_id: modifier.product_id,
+      name: modifier.name, modifier_type: modifier.modifier_type || 'ADD', affects_price: modifier.affects_price !== false,
+      price_delta: getModifierPrice(modifier),
+    }));
+    const selectedFractionSnapshot = selectedFractionObjects.map(option => ({
+      id: getFractionOptionId(option), product_id: option.product_id || option.option_product_id,
+      name: option.name || getFractionOptionId(option), price: getFractionOptionPrice(option), ratio: 1 / maxFractionParts,
+    }));
+    const selectedComboSnapshot = selectedComboObjects.map(({ group, item }) => ({
+      group_id: group.id, group_name: group.name, item_id: item.id || item.product_id, product_id: item.product_id,
+      name: item.name || item.product_id, price_delta: Number(item.price_delta || 0),
+    }));
+    const labels: string[] = [];
+    if (selectedFractionObjects.length > 0) labels.push(`Fracciones: ${selectedFractionObjects.map(option => option.name || getFractionOptionId(option)).join(' / ')}`);
     selectedModifierObjects.forEach(({ group, modifier }) => {
       const price = getModifierPrice(modifier);
       const prefix = modifier.modifier_type === 'REMOVE' || modifier.affects_price === false ? '' : price > 0 ? '+ ' : '';
@@ -190,283 +332,150 @@ const ModifierModal: React.FC<ModifierModalProps> = ({
       labels.push(`${group.name}: ${item.name || item.product_id}${delta > 0 ? ` (+${currencySymbol}${delta.toFixed(2)})` : ''}`);
     });
     if (note.trim()) labels.push(`Nota: ${note.trim()}`);
-    return labels;
-  };
-
-  const handleConfirm = () => {
-    if (validationErrors.length > 0) return;
-    const selectedModifierSnapshot = selectedModifierObjects.map(({ group, modifier }) => ({
-      group_id: group.id,
-      group_name: group.name,
-      modifier_id: modifier.id,
-      product_id: modifier.product_id,
-      name: modifier.name,
-      modifier_type: modifier.modifier_type || 'ADD',
-      affects_price: modifier.affects_price !== false,
-      price_delta: getModifierPrice(modifier),
-    }));
-    const selectedFractionSnapshot = selectedFractionObjects.map(option => ({
-      id: getFractionOptionId(option),
-      product_id: option.product_id || option.option_product_id,
-      name: option.name || getFractionOptionId(option),
-      price: getFractionOptionPrice(option),
-      ratio: 1 / maxFractionParts,
-    }));
-    const selectedComboSnapshot = selectedComboObjects.map(({ group, item }) => ({
-      group_id: group.id,
-      group_name: group.name,
-      item_id: item.id || item.product_id,
-      product_id: item.product_id,
-      name: item.name || item.product_id,
-      price_delta: Number(item.price_delta || 0),
-    }));
-    onConfirm(buildModifierLabels(), calculateTotal(), note.trim() || undefined, {
-      modifierGroups: selectedModifiersByGroup,
-      comboGroups: selectedCombosByGroup,
-      fractions: selectedFractionSnapshot,
-      selected_modifiers: selectedModifierSnapshot,
-      selected_fraction_parts: selectedFractionSnapshot,
-      selected_combo_items: selectedComboSnapshot,
-      product_type: productType,
-      production_area_id: restaurantConfigSource.production_area_id,
-      note: note.trim() || undefined,
+    onConfirm(labels, total, note.trim() || undefined, {
+      modifierGroups: selectedModifiersByGroup, comboGroups: selectedCombosByGroup, fractions: selectedFractionSnapshot,
+      selected_modifiers: selectedModifierSnapshot, selected_fraction_parts: selectedFractionSnapshot,
+      selected_combo_items: selectedComboSnapshot, product_type: productType,
+      production_area_id: restaurantConfigSource.production_area_id, note: note.trim() || undefined,
     });
-  };
+  }, [activeStep, activeStepIndex, cancelAutoAdvance, currencySymbol, focusFirstOption, getFractionOptionId, getFractionOptionPrice, getModifierPrice, isStepValid, maxFractionParts, moveToStep, note, onConfirm, productType, restaurantConfigSource.production_area_id, selectedComboObjects, selectedCombosByGroup, selectedFractionObjects, selectedModifierObjects, selectedModifiersByGroup, showStepError, steps, total]);
 
-  const addNotePreset = (preset: string) => {
-    setNote(prev => {
-      const current = prev.trim();
-      if (!current) return preset;
-      if (current.includes(preset)) return current;
-      return `${current}; ${preset}`;
+  const handleClose = useCallback(() => { cancelAutoAdvance(); onClose(); }, [cancelAutoAdvance, onClose]);
+  const addNotePreset = useCallback((preset: string) => setNote(prev => {
+    const current = prev.trim();
+    if (!current) return preset;
+    if (current.includes(preset)) return current;
+    return `${current}; ${preset}`;
+  }), []);
+
+  const activeOptions = useMemo(() => {
+    if (!activeStep || activeStep.kind === 'note') return [];
+    if (activeStep.kind === 'fraction') return fractionOptions.map(option => ({
+      id: getFractionOptionId(option), label: option.name || getFractionOptionId(option),
+      meta: `${currencySymbol}${getFractionOptionPrice(option).toFixed(2)}`,
+      selected: selectedFractions[activeStep.partIndex] === getFractionOptionId(option), multiple: false,
+    }));
+    if (activeStep.kind === 'modifier') return activeStep.group.modifiers.map(modifier => {
+      const price = getModifierPrice(modifier);
+      return {
+        id: modifier.id, label: modifier.name,
+        meta: modifier.modifier_type === 'REMOVE' || modifier.affects_price === false || price === 0 ? 'Sin costo' : `${price > 0 ? '+' : ''}${currencySymbol}${price.toFixed(2)}`,
+        selected: (selectedModifiersByGroup[activeStep.group.id] || []).includes(modifier.id),
+        multiple: activeStep.group.selection_type !== 'SINGLE',
+      };
     });
-  };
+    return activeStep.group.items.map(item => {
+      const id = String(item.id || item.product_id || item.name);
+      const delta = Number(item.price_delta || 0);
+      return { id, label: item.name || id, meta: delta === 0 ? 'Sin costo' : `${delta > 0 ? '+' : ''}${currencySymbol}${delta.toFixed(2)}`, selected: (selectedCombosByGroup[activeStep.group.id] || []).includes(id), multiple: Number(activeStep.group.max_select || 1) > 1 };
+    });
+  }, [activeStep, currencySymbol, fractionOptions, getFractionOptionId, getFractionOptionPrice, getModifierPrice, selectedCombosByGroup, selectedFractions, selectedModifiersByGroup]);
 
-  const selectFraction = (partIndex: number, optionId: string) => {
-    setSelectedFractions(prev => ({ ...prev, [partIndex]: optionId }));
-  };
+  const currentPage = activeStep ? Math.min(pagesByStep[activeStep.id] || 0, Math.max(0, Math.ceil(activeOptions.length / MODIFIER_MODAL_LAYOUT.optionsPerPage) - 1)) : 0;
+  const pageCount = Math.max(1, Math.ceil(activeOptions.length / MODIFIER_MODAL_LAYOUT.optionsPerPage));
+  const pageOptions = paginateModifierOptions(activeOptions, currentPage);
+  const selectedCount = activeOptions.filter(option => option.selected).length;
+  const changePage = useCallback((nextPage: number) => {
+    if (!activeStep) return;
+    cancelAutoAdvance();
+    setPagesByStep(prev => ({ ...prev, [activeStep.id]: Math.max(0, Math.min(nextPage, pageCount - 1)) }));
+  }, [activeStep, cancelAutoAdvance, pageCount]);
 
-  const selectionTextClass = {
-    blue: 'text-blue-700',
-    orange: 'text-orange-700',
-    gray: 'text-gray-900',
-  }[themeColor] || 'text-indigo-700';
+  const summaryForStep = useCallback((step: Step) => {
+    if (step.kind === 'note') return note.trim() ? 'Con nota' : 'Sin nota';
+    if (step.kind === 'fraction') {
+      const option = fractionOptions.find(candidate => getFractionOptionId(candidate) === selectedFractions[step.partIndex]);
+      return option?.name || '';
+    }
+    const selectedCount = step.kind === 'modifier'
+      ? (selectedModifiersByGroup[step.group.id] || []).length
+      : (selectedCombosByGroup[step.group.id] || []).length;
+    return `${selectedCount} ${selectedCount === 1 ? 'seleccionado' : 'seleccionados'}`;
+  }, [fractionOptions, getFractionOptionId, note, selectedCombosByGroup, selectedFractions, selectedModifiersByGroup]);
 
-  const selectedCardClass = {
-    blue: 'border-blue-300 bg-blue-50 shadow-blue-100',
-    orange: 'border-orange-300 bg-orange-50 shadow-orange-100',
-    gray: 'border-gray-400 bg-gray-50 shadow-gray-100',
-  }[themeColor] || 'border-indigo-300 bg-indigo-50 shadow-indigo-100';
-
-  const selectedBadgeClass = {
-    blue: 'bg-blue-600 text-white',
-    orange: 'bg-orange-600 text-white',
-    gray: 'bg-gray-900 text-white',
-  }[themeColor] || 'bg-indigo-600 text-white';
-
-  const themeBtnClass = {
-    blue: 'bg-blue-600 hover:bg-blue-700',
-    orange: 'bg-orange-600 hover:bg-orange-700',
-    gray: 'bg-gray-800 hover:bg-gray-900',
-  }[themeColor] || 'bg-indigo-600 hover:bg-indigo-700';
-
-  const renderSelectionButton = (selected: boolean, label: string, meta: string | null, onClick: () => void) => (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`flex min-h-[4.5rem] items-center gap-3 rounded-2xl border-2 p-3 text-left shadow-sm transition-all active:scale-[0.98] ${
-        selected
-          ? `${selectedCardClass} ${selectionTextClass}`
-          : 'border-gray-200 bg-white text-gray-700 hover:border-gray-300 hover:bg-gray-50'
-      }`}
-    >
-      <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border-2 transition-all ${
-        selected ? `${selectedBadgeClass} border-transparent` : 'border-gray-200 bg-gray-50 text-transparent'
-      }`}>
-        <Check size={16} strokeWidth={3} />
-      </span>
-      <span className="min-w-0 flex-1">
-        <span className="block truncate text-base font-black leading-tight">{label}</span>
-        {meta && <span className="mt-1 block text-xs font-black uppercase tracking-wide text-gray-500">{meta}</span>}
-      </span>
-    </button>
-  );
-
-  const hasAdvancedConfiguration = modifierGroups.length > 0 || comboGroups.length > 0 || fractionOptions.length > 0 || notePresets.length > 0;
+  const themeButtonClass = ({ blue: 'bg-blue-600 hover:bg-blue-700', orange: 'bg-orange-600 hover:bg-orange-700', gray: 'bg-slate-800 hover:bg-slate-900' } as Record<string, string>)[themeColor] || 'bg-blue-600 hover:bg-blue-700';
+  const nextStep = steps[activeStepIndex + 1];
+  const activeStepDetails = (() => {
+    if (!activeStep || activeStep.kind === 'note') return '';
+    if (activeStep.kind === 'fraction') {
+      const required = productType === 'FRACTIONABLE' || fractionSelectionCount > 0;
+      return `${required ? 'Obligatorio' : 'Opcional'} · Selección única${required ? ' · Mínimo 1' : ''} · Máximo 1`;
+    }
+    const minSelect = activeStep.group.required
+      ? Math.max(1, Number(activeStep.group.min_select || 1))
+      : Number(activeStep.group.min_select || 0);
+    const maxSelect = activeStep.kind === 'modifier'
+      ? (activeStep.group.selection_type === 'SINGLE' ? 1 : Number(activeStep.group.max_select || 0))
+      : Math.max(1, Number(activeStep.group.max_select || 1));
+    const multiple = activeStep.kind === 'modifier'
+      ? activeStep.group.selection_type !== 'SINGLE'
+      : maxSelect > 1;
+    return [
+      minSelect > 0 ? 'Obligatorio' : 'Opcional',
+      multiple ? 'Selección múltiple' : 'Selección única',
+      minSelect > 0 ? `Mínimo ${minSelect}` : '',
+      maxSelect > 0 ? `Máximo ${maxSelect}` : '',
+    ].filter(Boolean).join(' · ');
+  })();
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
-      <div className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh] border border-gray-100">
-        
-        {/* Header */}
-        <div className="flex items-start justify-between gap-4 border-b border-gray-100 bg-white px-6 py-5">
-          <div className="min-w-0">
-            <p className="text-[10px] font-black uppercase tracking-[0.18em] text-gray-400">Modificadores</p>
-            <h2 className="mt-1 truncate text-2xl font-black leading-tight text-gray-900">{product.name}</h2>
-            <p className="mt-1 text-xs font-black uppercase tracking-widest text-gray-500">{currencySymbol}{Number(product.price || 0).toFixed(2)} base</p>
-          </div>
-          <button 
-            onClick={onClose}
-            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-gray-100 text-gray-500 transition-colors hover:bg-gray-200 hover:text-gray-900"
-          >
-            <X size={20} />
-          </button>
-        </div>
-
-        {/* Body */}
-        <div className="p-6 flex-1 overflow-y-auto space-y-6">
-          {fractionOptions.length > 0 && (
-            <section>
-              <h3 className="text-xs font-black text-gray-500 uppercase tracking-widest mb-3">
-                Fracciones {selectedFractionObjects.length > 0 && <span className="text-gray-400">({String(fractionRule?.pricing_rule || 'HIGHEST_PRICE')})</span>}
-              </h3>
-              <div className="space-y-3">
-                {Array.from({ length: maxFractionParts }).map((_, partIndex) => (
-                  <div key={partIndex}>
-                    <p className="mb-2 text-[11px] font-black uppercase text-gray-400">Parte {partIndex + 1}</p>
-                    <div className="grid grid-cols-2 gap-2">
-                      {fractionOptions.map(option => {
-                        const optionId = getFractionOptionId(option);
-                        return renderSelectionButton(
-                          selectedFractions[partIndex] === optionId,
-                          option.name || optionId,
-                          `${currencySymbol}${getFractionOptionPrice(option).toFixed(2)}`,
-                          () => selectFraction(partIndex, optionId)
-                        );
-                      })}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </section>
-          )}
-
-          {modifierGroups.map((group, groupIndex) => {
-            const selectedCount = (selectedModifiersByGroup[group.id] || []).length;
-            const minSelect = group.required ? Math.max(1, Number(group.min_select || 1)) : Number(group.min_select || 0);
-            const maxSelect = group.selection_type === 'SINGLE' ? 1 : Number(group.max_select || 0);
-            const counterLabel = maxSelect > 0 ? `${selectedCount}/${maxSelect}` : `${selectedCount}`;
-            const groupStyle = getModifierGroupVisualStyle(groupIndex);
-            return (
-            <section key={group.id} className={`rounded-3xl border-2 p-4 ${groupStyle.section}`}>
-              <div className="mb-3 flex items-center justify-between gap-3">
-                <div className="flex items-start gap-2">
-                  <span className={`mt-1 h-3 w-1.5 shrink-0 rounded-full ${groupStyle.accent}`} />
-                  <div>
-                  <h3 className={`text-xs font-black uppercase tracking-widest ${groupStyle.title}`}>
-                    {group.name} {group.required && <span className="text-red-500">*</span>}
-                  </h3>
-                  {minSelect > 0 && (
-                    <p className="mt-1 text-[11px] font-bold text-gray-400">Mínimo {minSelect}</p>
-                  )}
-                  </div>
-                </div>
-                <span className={`rounded-full px-3 py-1 text-[10px] font-black uppercase ${
-                  minSelect > 0 && selectedCount < minSelect ? 'bg-red-100 text-red-600' : groupStyle.badge
-                }`}>
-                  {counterLabel}
-                </span>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                {group.modifiers.map(mod => {
-                  const selected = (selectedModifiersByGroup[group.id] || []).includes(mod.id);
-                  const price = getModifierPrice(mod);
-                  const meta = mod.modifier_type === 'REMOVE' || mod.affects_price === false ? 'Sin costo' : price > 0 ? `+${currencySymbol}${price.toFixed(2)}` : null;
-                  return (
-                    <div key={mod.id}>
-                      {renderSelectionButton(selected, mod.name, meta, () => toggleModifier(mod))}
-                    </div>
-                  );
-                })}
-              </div>
-            </section>
-          )})}
-
-          {comboGroups.map(group => {
-            const selectedCount = (selectedCombosByGroup[group.id] || []).length;
-            const minSelect = group.required ? Math.max(1, Number(group.min_select || 1)) : Number(group.min_select || 0);
-            const maxSelect = Math.max(1, Number(group.max_select || 1));
-            return (
-            <section key={group.id}>
-              <div className="mb-3 flex items-center justify-between gap-3">
-                <div>
-                  <h3 className="text-xs font-black text-gray-500 uppercase tracking-widest">
-                    {group.name} {group.required && <span className="text-red-500">*</span>}
-                  </h3>
-                  {minSelect > 0 && (
-                    <p className="mt-1 text-[11px] font-bold text-gray-400">Mínimo {minSelect}</p>
-                  )}
-                </div>
-                <span className={`rounded-full px-3 py-1 text-[10px] font-black uppercase ${
-                  minSelect > 0 && selectedCount < minSelect ? 'bg-red-50 text-red-500' : 'bg-gray-100 text-gray-500'
-                }`}>
-                  {selectedCount}/{maxSelect}
-                </span>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                {group.items.map(item => {
-                  const itemId = String(item.id || item.product_id || item.name);
-                  const selected = (selectedCombosByGroup[group.id] || []).includes(itemId);
-                  const delta = Number(item.price_delta || 0);
-                  return (
-                    <div key={itemId}>
-                      {renderSelectionButton(selected, item.name || itemId, delta > 0 ? `+${currencySymbol}${delta.toFixed(2)}` : null, () => toggleComboItem(group, itemId))}
-                    </div>
-                  );
-                })}
-              </div>
-            </section>
-          )})}
-
-          <section>
-            <div className="mb-3 flex items-center gap-2">
-              <MessageSquare size={16} className="text-gray-400" />
-              <h3 className="text-xs font-black text-gray-500 uppercase tracking-widest">Nota cocina</h3>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/65 p-2 backdrop-blur-sm sm:p-4">
+      <div role="dialog" aria-modal="true" aria-labelledby="modifier-modal-title" className="flex max-h-[94vh] w-full max-w-7xl flex-col overflow-hidden rounded-3xl border border-slate-200 bg-slate-50 shadow-2xl">
+        <header className="shrink-0 border-b border-slate-200 bg-white px-4 py-4 sm:px-7">
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <p className="text-[11px] font-black uppercase tracking-[0.2em] text-blue-600">Modificadores</p>
+              <h2 id="modifier-modal-title" className="mt-1 truncate text-2xl font-black text-slate-950 sm:text-3xl">{product.name}</h2>
+              <p className="mt-1 text-sm font-bold text-slate-500 sm:text-lg">Precio base · {currencySymbol}{Number(product.price || 0).toFixed(2)}</p>
             </div>
-            {notePresets.length > 0 && (
-              <div className="mb-3 flex flex-wrap gap-2">
-                {notePresets.map(preset => (
-                  <button key={preset} type="button" onClick={() => addNotePreset(preset)} className="rounded-full border border-gray-200 px-3 py-2 text-xs font-black text-gray-500 hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700">
-                    {preset}
+            <button type="button" aria-label="Cerrar modificadores" onClick={handleClose} className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-slate-100 text-slate-600 hover:bg-slate-200"><X size={22} /></button>
+          </div>
+          <nav aria-label="Pasos de modificadores" className="mt-4 overflow-x-auto pb-1">
+            <ol className="mx-auto flex min-w-max items-start justify-center sm:min-w-0">
+            {steps.map((step, index) => {
+              const active = index === activeStepIndex;
+              const complete = Boolean(completedStepIds[step.id]) && isStepValid(step);
+              return (
+                <li key={step.id} className={`flex items-start ${index === steps.length - 1 ? 'flex-none' : 'flex-1'}`}>
+                  <button type="button" onClick={() => moveToStep(index)} aria-current={active ? 'step' : undefined} className="group flex min-w-24 flex-col items-center text-center">
+                    <span className={`flex h-10 w-10 items-center justify-center rounded-full border-2 text-sm font-black transition-colors ${active ? 'border-blue-600 bg-blue-600 text-white' : complete ? 'border-blue-600 bg-blue-50 text-blue-700' : 'border-slate-300 bg-white text-slate-500'}`}>{complete && !active ? <Check size={18} strokeWidth={3} /> : index + 1}</span>
+                    <span className={`mt-1.5 block max-w-28 truncate text-xs font-black ${active || complete ? 'text-blue-800' : 'text-slate-400'}`}>{step.name}</span>
+                    {complete && !active && <span className="block max-w-28 truncate text-[10px] font-bold text-slate-500">{summaryForStep(step)}</span>}
                   </button>
-                ))}
+                  {index < steps.length - 1 && <span aria-hidden="true" className={`mt-5 h-0.5 min-w-8 flex-1 ${complete ? 'bg-blue-400' : 'bg-slate-200'}`} />}
+                </li>
+              );
+            })}
+            </ol>
+          </nav>
+        </header>
+
+        <main className="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-7" ref={optionAreaRef}>
+          {activeStep?.kind === 'note' ? (
+            <section className="mx-auto max-w-3xl">
+              <div className="mb-4 flex items-center gap-3"><MessageSquare className="text-blue-600" /><div><h3 className="text-xl font-black text-slate-950">Nota de cocina</h3><p className="text-sm font-medium text-slate-500">Agrega instrucciones especiales para preparar este artículo.</p></div></div>
+              {notePresets.length > 0 && <div className="mb-4 flex flex-wrap gap-2">{notePresets.map(preset => <button key={preset} type="button" onClick={() => addNotePreset(preset)} className="min-h-11 rounded-xl border border-slate-200 bg-white px-4 text-sm font-bold text-slate-700 hover:border-blue-300 hover:bg-blue-50">{preset}</button>)}</div>}
+              <textarea value={note} onChange={event => setNote(event.target.value)} className="min-h-36 w-full rounded-2xl border-2 border-slate-200 bg-white p-4 text-base font-semibold text-slate-800 outline-none focus:border-blue-500" placeholder="Ej: alérgico al maní, salsa aparte..." autoFocus />
+            </section>
+          ) : activeStep ? (
+            <section aria-describedby={validationMessage ? 'modifier-validation-error' : undefined} className={`mx-auto max-w-6xl rounded-2xl border p-4 sm:p-5 ${validationMessage ? 'border-red-300 bg-red-50/40' : 'border-blue-200 bg-blue-50/40'}`}>
+              <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+                <div tabIndex={-1} data-step-focus="true"><h3 className="text-2xl font-black text-slate-950">{activeStep.name}</h3><p className="mt-1 text-sm font-semibold text-slate-500 sm:text-base">{activeStepDetails}</p></div>
+                <span className="rounded-full bg-slate-100 px-3 py-2 text-xs font-black text-slate-600">{selectedCount} {selectedCount === 1 ? 'seleccionado' : 'seleccionados'}</span>
               </div>
-            )}
-            <textarea
-              value={note}
-              onChange={event => setNote(event.target.value)}
-              className="min-h-[5rem] w-full rounded-2xl border-2 border-gray-100 bg-gray-50 p-4 text-sm font-bold text-gray-700 outline-none transition-all focus:border-blue-200 focus:bg-white"
-              placeholder="Ej: alérgico al maní, salsa aparte..."
-            />
-          </section>
+              {validationMessage && <div id="modifier-validation-error" role="alert" className="mb-4 flex items-center gap-2 text-sm font-bold text-red-700"><AlertCircle size={18} />{validationMessage}</div>}
+              <div className="modifier-option-grid" role={activeOptions[0]?.multiple ? 'group' : 'radiogroup'}>{pageOptions.map(option => <OptionCard key={`${activeStep.id}-${option.id}`} {...option} onSelect={handleOptionSelect} />)}</div>
+              {pageCount > 1 && <div className="mt-5 flex items-center justify-center gap-3"><button type="button" onClick={() => changePage(currentPage - 1)} disabled={currentPage === 0} className="flex min-h-12 items-center gap-2 rounded-xl border border-slate-200 bg-white px-5 font-black text-slate-700 disabled:opacity-40"><ChevronLeft size={19} />Anterior</button><span className="min-w-16 text-center text-sm font-black text-slate-600">{currentPage + 1} de {pageCount}</span><button type="button" onClick={() => changePage(currentPage + 1)} disabled={currentPage === pageCount - 1} className="flex min-h-12 items-center gap-2 rounded-xl border border-slate-200 bg-white px-5 font-black text-slate-700 disabled:opacity-40">Siguiente<ChevronRight size={19} /></button></div>}
+            </section>
+          ) : null}
+        </main>
 
-          {!hasAdvancedConfiguration && (
-            <p className="text-gray-400 text-center py-4">No hay modificadores disponibles para este producto.</p>
-          )}
-        </div>
-
-        {/* Footer */}
-        <div className="p-4 bg-white border-t border-gray-100 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)]">
-           {validationErrors.length > 0 && (
-             <div className="mb-3 flex items-start gap-2 rounded-xl bg-red-50 px-3 py-2 text-xs font-bold text-red-600">
-               <AlertCircle size={16} className="mt-0.5 shrink-0" />
-               <span>{validationErrors[0]}</span>
-             </div>
-           )}
-           <div className="flex justify-between items-center mb-4 px-2">
-             <span className="text-gray-500">Total Item</span>
-             <span className="text-xl font-bold text-gray-900">{currencySymbol}{calculateTotal().toFixed(2)}</span>
-           </div>
-           <button 
-             onClick={handleConfirm}
-             disabled={validationErrors.length > 0}
-             className={`w-full py-3 rounded-xl font-bold text-white shadow-lg flex items-center justify-center gap-2 transition-transform active:scale-95 disabled:cursor-not-allowed disabled:bg-gray-300 disabled:shadow-none ${themeBtnClass}`}
-           >
-             <Plus size={20} />
-             Agregar al Pedido
-           </button>
-        </div>
-
+        <footer className="shrink-0 border-t border-slate-200 bg-white px-4 py-4 shadow-[0_-6px_20px_rgba(15,23,42,0.06)] sm:px-7">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-stretch">
+            <dl className="grid grid-cols-3 gap-3 text-sm sm:w-[40%] sm:grid-cols-1 sm:gap-1 sm:border-r sm:border-slate-200 sm:pr-7"><div className="sm:flex sm:items-center sm:justify-between"><dt className="font-bold text-slate-400">Base</dt><dd className="mt-1 font-black text-slate-900 sm:mt-0">{currencySymbol}{Number(fractionBase).toFixed(2)}</dd></div><div className="sm:flex sm:items-center sm:justify-between"><dt className="font-bold text-slate-400">Extras</dt><dd className="mt-1 font-black text-slate-900 sm:mt-0">{currencySymbol}{Number(extrasTotal).toFixed(2)}</dd></div><div className="sm:flex sm:items-center sm:justify-between"><dt className="font-black text-slate-600">Total</dt><dd className="mt-1 text-lg font-black text-blue-700 sm:mt-0">{currencySymbol}{Number(total).toFixed(2)}</dd></div></dl>
+            <button type="button" onClick={handleContinue} className={`flex min-h-14 flex-1 items-center justify-center gap-2 rounded-2xl px-6 text-base font-black text-white shadow-lg active:scale-[0.99] sm:ml-3 sm:min-h-[72px] sm:text-lg ${themeButtonClass}`}>{nextStep ? <>Continuar a {nextStep.name}<ChevronRight size={20} /></> : <><Plus size={20} />Agregar al pedido · {currencySymbol}{Number(total).toFixed(2)}</>}</button>
+          </div>
+        </footer>
       </div>
     </div>
   );
