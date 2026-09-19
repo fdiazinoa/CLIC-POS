@@ -1,0 +1,5 @@
+
+> clic-pos@0.0.0 qa:release-promote
+> node ./scripts/qa/apk-release-gate.mjs --stage promote --evidence .codex/reports/command-modal-apk/release-evidence.json
+
+[apk-release-gate] FAILED: Topología no aprobada: standaloneMaster

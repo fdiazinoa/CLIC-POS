@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-09-19T17:57:39.013293+00:00",
+  "mode": "read-only-pre-upgrade",
+  "device": {
+    "serial": "127.0.0.1:6555",
+    "model": "Pixel C",
+    "androidVersion": "11",
+    "sdk": 30,
+    "adbState": "device"
+  },
+  "app": {
+    "packageName": "com.clicpos.app",
+    "versionName": "1.1.405",
+    "versionCode": 1405,
+    "firstInstallTime": "2026-09-10 23:57:54",
+    "lastUpdateTime": "2026-09-18 00:53:06",
+    "installedBaseApkSha256": "7fea820f7a4146b79c35a04fd92413ed01645d2c62f974d1b4d090079d730fdc",
+    "pidBefore": 23523,
+    "pidAfter": 23523,
+    "resumedActivity": "com.clicpos.app/.MainActivity",
+    "webView": {
+      "title": "CLIC POS",
+      "url": "https://localhost/",
+      "viewport": {
+        "width": 1280,
+        "height": 820,
+        "dpr": 2
+      }
+    }
+  },
+  "terminal": {
+    "id": "69dc181d-b85e-486b-8f7f-c0d21b69d298",
+    "name": "CAJA 4",
+    "code": "POS-003",
+    "setupMode": "SERVER_ERP",
+    "identityCopiesAgree": true
+  },
+  "database": {
+    "name": "clic_pos_native",
+    "access": "temporary read-only CapacitorSQLite connection",
+    "counts": {
+      "products": 165,
+      "transactions": 0,
+      "parkedTickets": 2,
+      "config": 1
+    },
+    "configDocumentSha256": "a2239e7706d7fc70d2ad02bcd27aba6dc885742f35d8385a0cb7803134647b2e"
+  },
+  "invariants": {
+    "singleAuthorizedDevice": true,
+    "packageMatches": true,
+    "processStableDuringRead": true,
+    "terminalIdentityPresent": true,
+    "terminalIdentityConsistentAcrossSafeStorageKeys": true,
+    "configDocumentPresent": true,
+    "secretsCaptured": false,
+    "writesPerformed": false,
+    "installPerformed": false,
+    "appDataCleared": false
+  },
+  "limitations": [
+    "No APK was built or installed during this baseline.",
+    "No PIN, token, credential, endpoint, tenant, customer, product, or transaction content was captured.",
+    "Collection counts and the config hash are intended for post-upgrade comparison."
+  ]
+}

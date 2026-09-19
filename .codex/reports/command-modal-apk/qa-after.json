@@ -1,0 +1,163 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-09-19T18:07:12.500510+00:00",
+  "status": "PASS_WITH_OBSERVATION",
+  "sourceCommit": "00b6871",
+  "device": {
+    "serial": "127.0.0.1:6555",
+    "model": "Pixel C",
+    "androidVersion": "11",
+    "sdk": 30
+  },
+  "installation": {
+    "packageName": "com.clicpos.app",
+    "versionName": "1.1.407",
+    "versionCode": 1407,
+    "installedBaseApkSha256": "8d2b2d55aadb9eee6013637a9d52701b96afb204f08d424f5ce79337e419f9e5",
+    "expectedApkSha256Match": true,
+    "methodEvidence": "/tmp/command-modal-apk-install.log"
+  },
+  "stability": {
+    "pidBefore": 24407,
+    "pidAfter": 24407,
+    "observationSeconds": 16,
+    "mainActivityResumed": true,
+    "matchingCrashTransportErrors": 0,
+    "sanitizedLog": "/tmp/command-modal-apk-logcat-sanitized.log"
+  },
+  "terminal": {
+    "id": "69dc181d-b85e-486b-8f7f-c0d21b69d298",
+    "name": "CAJA 4",
+    "code": "POS-003",
+    "setupMode": "SERVER_ERP",
+    "coreIdentityPreserved": true,
+    "observation": "clic_erp_sync_local_terminal_id now contains POS-003 while UUID-bearing identity keys remain unchanged"
+  },
+  "database": {
+    "countsBefore": {
+      "products": 165,
+      "transactions": 0,
+      "parkedTickets": 2,
+      "config": 1
+    },
+    "countsAfter": {
+      "products": 165,
+      "transactions": 0,
+      "parkedTickets": 2,
+      "config": 1
+    },
+    "countsPreserved": true,
+    "configSha256Before": "a2239e7706d7fc70d2ad02bcd27aba6dc885742f35d8385a0cb7803134647b2e",
+    "configSha256After": "11709b9ab7214a04e59c046855a486ee093154f455e1dbacb573a6d6bb010a44",
+    "configHashPreserved": false,
+    "configDocumentPresent": true,
+    "configTopLevelKeys": [
+      "auditLogs",
+      "availablePrinters",
+      "brands",
+      "businessConfig",
+      "business_config",
+      "campaigns",
+      "companyInfo",
+      "coupons",
+      "currencies",
+      "currencySymbol",
+      "departments",
+      "families",
+      "features",
+      "fiscalCompliance",
+      "id",
+      "integrations",
+      "inventoryScope",
+      "labelTemplates",
+      "loyalty",
+      "metadata",
+      "operational",
+      "pantalla_inicio",
+      "paymentMethods",
+      "paymentMethodsSource",
+      "posCategories",
+      "productGroups",
+      "promotions",
+      "receiptConfig",
+      "scales",
+      "seasons",
+      "sections",
+      "serviceTaxPolicies",
+      "startScreen",
+      "subVertical",
+      "subfamilies",
+      "tariffs",
+      "taxRate",
+      "taxes",
+      "terminalSnapshots",
+      "terminals",
+      "themeColor",
+      "usa_mesas",
+      "usesTables",
+      "ux",
+      "vertical",
+      "vertical_negocio"
+    ]
+  },
+  "uiSmoke": {
+    "realInstalledWebView": true,
+    "product": "Hamburguesa BBQ - Regular",
+    "catalogBadge": "SIN STOCK (not changed)",
+    "modalOpened": true,
+    "landscapeViewport": "1280x820 CSS px @ DPR2",
+    "portraitViewport": "900x1200 CSS px @ DPR2",
+    "extras": [
+      "Bacon +60",
+      "Extra queso +30"
+    ],
+    "base": 550,
+    "total": 640,
+    "beverageStepReached": true,
+    "drinkSelected": "Agua con Gas",
+    "noteStepReached": true,
+    "closedWithoutConfirm": true,
+    "transactionsStillZero": true,
+    "orientationRestored": true
+  },
+  "screenshots": [
+    {
+      "path": "/tmp/command-modal-apk-after-extras-landscape.png",
+      "sha256": "2ce936040535bc1477f119dcf069892feb298d6f4d462b4e8baa4bfe935866b2"
+    },
+    {
+      "path": "/tmp/command-modal-apk-after-note-landscape.png",
+      "sha256": "3b3cfb46de63341500a22d8d8131aa445a225bd4dd374629d75ddfbb0b54d570"
+    },
+    {
+      "path": "/tmp/command-modal-apk-after-cancelled-landscape.png",
+      "sha256": "5c100dff293b42cf61a7739462b520d2c43bf59fe1ee8891933a5ac78b553436"
+    },
+    {
+      "path": "/tmp/command-modal-apk-after-extras-portrait.png",
+      "sha256": "789691d8736e3fbde81e93fa4b6a0dce42174cc938895e66c603ec13b2db0846"
+    },
+    {
+      "path": "/tmp/command-modal-apk-after-note-portrait.png",
+      "sha256": "84f6d6cbe6fda765615b57fb1f8be191472777328bbd6bf96bb892f04bcb4343"
+    },
+    {
+      "path": "/tmp/command-modal-apk-after-cancelled-portrait.png",
+      "sha256": "2a8b4697d2be8ebbc0f2da071a2477952fb35d5d03c5632d664a295fed0e866b"
+    }
+  ],
+  "safety": {
+    "saleCreated": false,
+    "paymentCreated": false,
+    "configurationEditedByQa": false,
+    "stockEdited": false,
+    "manualSyncTriggered": false,
+    "secretsCaptured": false,
+    "orientationSettingRestored": true
+  },
+  "observation": "The config document exists and collection counts/core identity are preserved, but its raw SHA-256 changed after upgrade/startup. Without a sanitized pre-upgrade structural copy, QA cannot attribute the exact field change or attest byte-identical config.",
+  "pending": [
+    "Client/Master topology validation",
+    "promotion gate"
+  ]
+}

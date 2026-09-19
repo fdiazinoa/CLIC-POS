@@ -1,0 +1,74 @@
+✔ los descuentos Android usan el teclado numérico embebido y excluyen LatinIME (0.763833ms)
+✔ los límites del teclado coinciden con el tipo de descuento (0.109709ms)
+✔ Cierre Z usa teclado numérico interno en Android para todos los importes (0.447666ms)
+✔ acciones de precio usan teclado interno y toleran artículos ERP sin price (0.1455ms)
+✔ el teclado de precio no se interpreta como clic fuera del menú de acciones (0.065333ms)
+✔ precio y descuento del artículo comparten el teclado interno sin abrir LatinIME (0.084875ms)
+✔ ERP catalog and price snapshots preserve pending and unconfirmed applied local edits (2.773125ms)
+POS_DOCUMENT_SERIES_MISSING_AFTER_CONFIG {
+  terminalId: '0f77877f-66b2-4820-b956-997cd5b4b575',
+  checkedSource: 'terminal_config.resolved.documents.document_series'
+}
+POS_DOCUMENT_SERIES_NORMALIZED { count: 1, source: 'legacy', codes: [ 'TCKS0012' ] }
+✔ LEGACY_B conserva NCF aunque providerId sea NONE y enabled venga false (1.2635ms)
+✔ normaliza el snapshot contradictorio de Caja 2 como fiscal LEGACY_B activo (5.272208ms)
+✔ hidrata la serie TICKET publicada en resolved.terminalFiscalConfig (17.879875ms)
+✔ normaliza la serie persistida para recuperación offline antes del siguiente sync (0.103917ms)
+✔ el modo NONE explícito continúa deshabilitando comprobantes fiscales (0.099541ms)
+✔ el checkout contiene un fail-safe contra facturas fiscales sin NCF (1.175209ms)
+⚠️ Supabase credentials missing in .env. Cloud features will be disabled.
+✔ autodiscovery only accepts the Master for the active tenant (0.938792ms)
+✔ la vinculación acepta una Master aunque falle temporalmente /api/users (17.057958ms)
+✔ la vinculación conserva los usuarios entregados por la Master (0.269166ms)
+✔ la vinculación informa por separado un error HTTP de configuración (2.367708ms)
+✔ la vinculación espera el arranque de la Master y conecta con backoff (7.799958ms)
+✔ la vinculación reintenta cuando el puerto abre antes de que la configuración Master esté lista (0.475583ms)
+✔ la espera de arranque no reintenta errores funcionales 4xx (0.158625ms)
+✔ la espera de arranque respeta la ventana máxima y conserva el último error (0.217333ms)
+✔ el modal limita cada página a ocho opciones sin alterar el orden (1.029584ms)
+✔ el contrato visual conserva cuadrícula táctil 4x2 y responsive a dos columnas (0.399541ms)
+✔ la validación conserva mínimos obligatorios y opcionales (0.116375ms)
+✔ un error local enfoca la primera opción antes que el encabezado (0.143791ms)
+✔ un error final al volver a un grupo enfoca su primera opción (0.067125ms)
+✔ un grupo obligatorio vacío usa el encabezado como foco alternativo (0.074333ms)
+✔ la barra de categorías usa dos filas con separación y conserva el desplazamiento horizontal (0.342667ms)
+✔ las primeras seis categorías llenan la fila superior antes de usar la segunda (0.80525ms)
+✔ más de doce categorías continúa horizontalmente en otro bloque de seis por dos (0.124458ms)
+✔ los botones permiten nombres de categoría en hasta dos líneas sin extender su columna (0.335291ms)
+✔ el catálogo expandido distribuye cuatro columnas y evita filas menores de 176 px (0.542667ms)
+✔ el modo restaurante de escritorio activa siempre el catálogo 2x4 aunque expandTicket esté deshabilitado (0.173791ms)
+✔ las tarjetas expandidas ocupan su fila sin conservar alturas fijas que corten la segunda línea (0.215541ms)
+✔ nombres largos no ensanchan la tarjeta ni recortan la insignia de inventario (0.198709ms)
+✔ el área de artículos conserva márgenes simétricos y calcula las filas sobre el viewport desplazable (0.340375ms)
+✔ un padrón parcial conserva usuarios locales ausentes y agrega los entrantes (0.607ms)
+✔ una respuesta parcial vacía no borra credenciales offline (0.046792ms)
+✔ solo una baja explícita elimina un usuario (0.087208ms)
+✔ una actualización parcial conserva PIN, foto y biometría existentes (0.044083ms)
+✔ un snapshot global autoritativo reemplaza solo usuarios ERP anteriores (0.053916ms)
+✔ identifica semillas actuales y heredadas sin confundir usuarios ERP (0.0675ms)
+✔ un padrón ERP válido retira semillas pero una respuesta vacía no las borra (0.058ms)
+✔ un tenant ERP nunca usa el roster local o demo como fuente de autorización (0.044416ms)
+✔ un usuario local no puede operar cuando la autoridad es ERP (0.046042ms)
+✔ los usuarios ERP sustituyen visualmente los defaults cuando existen (0.064458ms)
+✔ la comparación del padrón detecta cambios aunque la cantidad sea igual (0.077917ms)
+✔ resuelve identificadores de contratos ERP por alias conocidos (0.030459ms)
+✔ pairing y full pull usan la reconciliación protegida (0.834625ms)
+✔ el bloqueo DEVICE_SUPERSEDED sobrevive a una recarga y solo se elimina explícitamente (0.958292ms)
+✔ el último error DEVICE_SUPERSEDED impide la reautorización local aunque falte el bloque serializado (0.095542ms)
+✔ un device_id de nivel superior no autoriza porque puede ser eco de la solicitud (0.152792ms)
+✔ el dispositivo se autoriza únicamente cuando coincide con una identidad canónica (0.08375ms)
+✔ requires_reauth o device_authorized=false prevalecen sobre una identidad coincidente (0.038709ms)
+✔ el botón reintentar valida con ERP y el lifecycle queda detenido mientras exista bloqueo (1.005875ms)
+✔ la sincronización no reconcilia ni registra automáticamente un dispositivo reemplazado (0.411083ms)
+✔ persists the complete client binding in native Preferences for APK upgrades (0.294583ms)
+✔ restores client network and configuration mirrors before boot pairing checks (0.135875ms)
+✔ refreshes the native recovery payload whenever terminal config is persisted (0.053291ms)
+✔ checkpoints an existing paired terminal on the first healthy boot after upgrading (0.188292ms)
+ℹ tests 60
+ℹ suites 0
+ℹ pass 60
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 401.337375

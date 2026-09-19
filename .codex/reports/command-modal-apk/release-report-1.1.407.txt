@@ -1,0 +1,17 @@
+versionCode=1407
+versionName=1.1.407
+sourceRef=00b687112522bfa6eb872fcf2f9c8f6b6fa30b31
+sourceBranch=00b687112522bfa6eb872fcf2f9c8f6b6fa30b31
+sourceCommit=00b687112522bfa6eb872fcf2f9c8f6b6fa30b31
+sourceCommitShort=00b6871
+lanHttpEnabled=true
+manifestNetworkPolicyVerified=true
+packagedAssetsVerified=true
+packagedAssetsReport=/Users/felixdiaz/.gemini/antigravity/playground/tensor-planetoid/_worktrees/CLIC-POS/CLIC-POS-mobile-sqlite/android/app/build/outputs/apk/release/packaged-assets-1.1.407.json
+releaseGatePrebuildPassed=true
+releaseGateReport=/Users/felixdiaz/.gemini/antigravity/playground/tensor-planetoid/_worktrees/CLIC-POS/CLIC-POS-mobile-sqlite/android/app/build/outputs/apk/release/release-gate-1.1.407.json
+promotionGatePassed=false
+canonicalBuildWorktree=/Users/felixdiaz/.gemini/antigravity/playground/tensor-planetoid/_worktrees/CLIC-POS/CLIC-POS-mobile-sqlite
+artifact=/Users/felixdiaz/.gemini/antigravity/playground/tensor-planetoid/_worktrees/CLIC-POS/CLIC-POS-mobile-sqlite/android/app/build/outputs/apk/release/Clic-Pos-1.1.407-release.apk
+metadata=/Users/felixdiaz/.gemini/antigravity/playground/tensor-planetoid/_worktrees/CLIC-POS/CLIC-POS-mobile-sqlite/android/app/build/outputs/apk/release/output-metadata-1.1.407.json
+builtAt=2026-09-19 13:59:14 AST
