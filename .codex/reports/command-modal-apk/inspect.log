@@ -1,0 +1,16 @@
+APK=/Users/felixdiaz/.gemini/antigravity/playground/tensor-planetoid/_worktrees/CLIC-POS/CLIC-POS-mobile-sqlite/android/app/build/outputs/apk/release/Clic-Pos-1.1.407-release.apk
+SIZE=33391757
+SHA256=8d2b2d55aadb9eee6013637a9d52701b96afb204f08d424f5ce79337e419f9e5
+PACKAGE=com.clicpos.app
+Signer #1 certificate DN: CN=CLIC POS, OU=Mobile, O=CLIC POS, L=Santo Domingo, ST=Distrito Nacional, C=DO
+Signer #1 certificate SHA-256 digest: 17746ded8c0d08a839ac5c3e84903b46c6f537f798d053a94e021355af188e2c
+Signer #1 certificate SHA-1 digest: a9880b1746413c94daa38ddcff488442601c7ca5
+Signer #1 certificate MD5 digest: 371473ea505fd0ba526e0ffc31c525f7
+TARGET_VERSION_CODE=1407
+TARGET_VERSION_NAME=1.1.407
+LAN_HTTP_ENABLED=true
+REPORT=/Users/felixdiaz/.gemini/antigravity/playground/tensor-planetoid/_worktrees/CLIC-POS/CLIC-POS-mobile-sqlite/android/app/build/outputs/apk/release/release-report-1.1.407.txt
+SERIAL=127.0.0.1:6555
+VERSIÓN INSTALADA ANTES:
+    versionCode=1405 minSdk=24 targetSdk=36
+    versionName=1.1.405
