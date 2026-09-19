@@ -1,0 +1,15 @@
+# Coordinación y alcance
+
+Tarea `command-modal-flow`; coordinador `/root`; rama `feature/pos-command-modal-flow`, creada desde `origin/develop` en `bcbc46c02d74246da16698cae54e3887a11e6ffd`. Base incluye la corrección previa del catálogo; esta tarea no modifica sincronización. Candidato de código final: `82749aa1d365bc0dd5c9cbc1d0f8d36cd03b8da5`.
+
+La especificación adjunta y la imagen son requisitos de diseño aportados por el usuario. Alcance: presentación y navegación del modal real, conservando cálculos, impuestos en el caller y payload del pedido. No hay autorización de APK, instalación ni publicación de versión.
+
+Roles independientes: analyst/reviewer `/root/sync_review` (Astra Medium), aprobador del plan `/root` (distinto del analista, no autor funcional), developer `/root/modal_developer` (Sol Medium), QA `/root/qa` (Sol Medium), sync-validator `/root/sync_validator` (Astra Medium), performance `/root/performance`, release `/root/release` e internal-deploy `/root/internal_deploy`. Se delegaron contratos de los roles Markdown en sesiones separadas; las rutas de agentes no son firmas ni selección nativa TOML. El developer preparatorio `/root/developer` fue interrumpido sin cambios funcionales y reemplazado para ejecutar el plan aprobado. El coordinador no editó código funcional.
+
+La revisión rechazó el primer commit por foco de validación incorrecto. Se corrigió en commit separado, con fallback al encabezado solo si no hay opciones. Un tercer commit ajustó exclusivamente la alineación del último paso y un cuarto corrigió el texto singular «1 seleccionado». `review.md` conserva el historial. QA distingue pruebas de helpers y pruebas reales de React/navegador; las capturas usan datos sintéticos y estilos reales, sin modificar catálogo operativo. Las métricas de performance permanecen vinculadas a `0473b58`, anterior únicamente al ajuste de texto; no se atribuyen mediciones nuevas al SHA final.
+
+Comportamiento anterior: todas las secciones simultáneas, sin paginación, cuadrícula de una/dos columnas y validación visible al abrir. Comportamiento nuevo: pasos dinámicos con regreso y resumen, ocho opciones por página, 4×2 horizontal/2 columnas vertical, selección conservada, single con avance breve cancelable y multiple manual, nota final, errores al intento y pie fijo con Base/Extras/Total. El último paso confirma explícitamente; nunca se agrega automáticamente.
+
+Archivos funcionales: `components/ModifierModal.tsx`, `components/ModifierModal.css`, `utils/modifierModalPresentation.ts`; pruebas actualizadas: `tests/modifierGroupVisuals.test.ts`. Sin cambios en POSInterface, App, tipos, DB o sync. Se conservaron fórmulas de fracciones, cantidades gratuitas, ADD/REMOVE, deltas de combos, labels y snapshots.
+
+La entrega es código y evidencia revisables mediante PR hacia develop. Los informes individuales delimitan qué gates locales pasan y qué validación de APK/topología/rendimiento integral permanece pendiente. Ningún estado local autoriza build APK, instalación, merge o publicación; user approval para APK sigue pendiente por instrucción expresa.
