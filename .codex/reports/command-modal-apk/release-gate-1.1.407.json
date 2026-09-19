@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "status": "PASSED",
+  "stage": "prebuild",
+  "checkedAt": "2026-09-19T17:58:44.565Z",
+  "baseline": {
+    "versionName": "1.1.363",
+    "versionCode": 1363,
+    "requiredAncestorCommit": "766be5b8c15f4ca69da3527b5f8e35ae0f3877f5"
+  },
+  "resolvedCommit": "00b687112522bfa6eb872fcf2f9c8f6b6fa30b31",
+  "versionCode": 1407,
+  "testsExecuted": [
+    "tests/apkReleaseGate.test.ts",
+    "tests/androidDiscountKeypadContract.test.ts",
+    "tests/androidMasterRestaurantContract.test.ts",
+    "tests/androidReleaseNetworkSecurity.test.ts",
+    "tests/backgroundSyncRecoveryContract.test.ts",
+    "tests/catalogSnapshotPreservationContract.test.ts",
+    "tests/clientTableBatchSyncContract.test.ts",
+    "tests/durableOutboxBatchSender.test.ts",
+    "tests/durableOutboxV2.test.ts",
+    "tests/erpHeartbeatScheduler.test.ts",
+    "tests/masterLanDiscovery.test.ts",
+    "tests/orderTakerPolicy.test.ts",
+    "tests/posUserReconciliation.test.ts",
+    "tests/realtimePollingContract.test.ts",
+    "tests/syncInactivityPolicy.test.ts",
+    "tests/syncMetrics.test.ts",
+    "tests/syncTriggerCoordinator.test.ts",
+    "tests/tableAccountModalLockContract.test.ts",
+    "tests/terminalUpgradePersistence.test.ts"
+  ]
+}

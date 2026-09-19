@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "sourceCommit": "00b687112522bfa6eb872fcf2f9c8f6b6fa30b31",
+  "versionName": "1.1.407",
+  "versionCode": 1407,
+  "apkSha256": "8d2b2d55aadb9eee6013637a9d52701b96afb204f08d424f5ce79337e419f9e5",
+  "certificateSha256": "17746ded8c0d08a839ac5c3e84903b46c6f537f798d053a94e021355af188e2c",
+  "topologies": {
+    "standaloneMaster": false,
+    "masterClient": false,
+    "orderTaker": false
+  },
+  "contracts": {
+    "upgradePreservesLocalData": false,
+    "salesAndTablesRemainResponsive": false,
+    "tablesReleaseOnExit": false,
+    "tablesRefreshAcrossTerminals": false,
+    "orderSaveWorks": false,
+    "orderTakerHidesXAndZ": false,
+    "orderTakerSkipsReceiptTypePrompt": false,
+    "restaurantPortraitActionsVisible": false,
+    "temporaryTableNameWorks": false,
+    "pancuviUsersRemainDeduplicated": false,
+    "pricePosToErp": false,
+    "priceErpToPos": false,
+    "taxPosToErp": false,
+    "taxErpToPos": false,
+    "operationsPosToErp": false,
+    "operationsErpToPos": false,
+    "catalogFieldsRemainIsolated": false,
+    "catalogSnapshotDoesNotRebound": false,
+    "heartbeatAdvances": false,
+    "noPendingOperationsAfterDrain": false
+  },
+  "metrics": {
+    "anrCount": 0,
+    "crashCount": 0,
+    "unresolvedOutboxCount": null,
+    "spontaneousMutationCount": null,
+    "pendingDrainSeconds": null,
+    "heartbeatAgeSeconds": null,
+    "salesTablesNavigationP95Ms": null,
+    "idleTrafficWindowSeconds": null,
+    "idleRxBytes": null,
+    "idleTxBytes": null
+  },
+  "devices": [
+    {
+      "serial": "127.0.0.1:6555",
+      "role": "emulator SERVER_ERP",
+      "versionName": "1.1.407",
+      "versionCode": 1407,
+      "installedWithReplace": true,
+      "processStable": true
+    }
+  ],
+  "notes": [
+    "APK candidato solicitado para emulador. Cliente y Master pendientes por alcance expl\u00edcito del usuario. M\u00e9tricas no observadas permanecen null; contratos false significan no demostrados. Sin promoci\u00f3n a producci\u00f3n.",
+    "Smoke Android PASS_WITH_OBSERVATION: identidad y conteos 165 productos, 0 transacciones, 2 tickets parqueados conservados; PID estable 16s sin crash/ANR en ventana observada.",
+    "Modal real landscape/portrait PASS, Bacon+queso total640, Bebida y Nota, cancelaci\u00f3n sin venta.",
+    "Config hash cambi\u00f3; campo exacto no atribuible con baseline disponible. No se atestigua igualdad completa de configuraci\u00f3n. Clave clic_erp_sync_local_terminal_id ahora POS-003, identidad UUID principal intacta."
+  ]
+}

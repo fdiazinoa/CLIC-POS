@@ -1,0 +1,39 @@
+{
+  "role": "RELEASE",
+  "sessionId": "/root/release",
+  "status": "VERIFIED_CANDIDATE_FOR_EMULATOR_ONLY",
+  "sourceCommit": "00b687112522bfa6eb872fcf2f9c8f6b6fa30b31",
+  "versionName": "1.1.407",
+  "versionCode": 1407,
+  "packageName": "com.clicpos.app",
+  "buildType": "release",
+  "apkPath": "/Users/felixdiaz/.gemini/antigravity/playground/tensor-planetoid/_worktrees/CLIC-POS/CLIC-POS-mobile-sqlite/android/app/build/outputs/apk/release/Clic-Pos-1.1.407-release.apk",
+  "sizeBytes": 33391757,
+  "sha256": "8d2b2d55aadb9eee6013637a9d52701b96afb204f08d424f5ce79337e419f9e5",
+  "certificateSha256": "17746ded8c0d08a839ac5c3e84903b46c6f537f798d053a94e021355af188e2c",
+  "signatureVerified": true,
+  "lanHttpEnabled": true,
+  "manifestNetworkPolicyVerified": true,
+  "debuggableManifestAttributePresent": false,
+  "testOnlyManifestAttributePresent": false,
+  "packagedAssetsVerifiedCount": 44,
+  "extraPackagedPublicFiles": [
+    "assets/public/cordova.js",
+    "assets/public/cordova_plugins.js"
+  ],
+  "ancestryVerified": [
+    "origin/develop",
+    "766be5b8c15f4ca69da3527b5f8e35ae0f3877f5",
+    "7bb04dcd5004c74353c6dda8305aa1be5bb4090e",
+    "bcd71c8",
+    "70498f5",
+    "06ed4f7"
+  ],
+  "prebuild": "PASSED",
+  "promotionGatePassed": false,
+  "physicalTopologies": "PENDING",
+  "installation": "NOT_EXECUTED_BY_RELEASE",
+  "metadataPath": "/Users/felixdiaz/.gemini/antigravity/playground/tensor-planetoid/_worktrees/CLIC-POS/CLIC-POS-mobile-sqlite/android/app/build/outputs/apk/release/output-metadata-1.1.407.json",
+  "buildReportPath": "/Users/felixdiaz/.gemini/antigravity/playground/tensor-planetoid/_worktrees/CLIC-POS/CLIC-POS-mobile-sqlite/android/app/build/outputs/apk/release/release-report-1.1.407.txt",
+  "packagedAssetsReportPath": "/Users/felixdiaz/.gemini/antigravity/playground/tensor-planetoid/_worktrees/CLIC-POS/CLIC-POS-mobile-sqlite/android/app/build/outputs/apk/release/packaged-assets-1.1.407.json"
+}
