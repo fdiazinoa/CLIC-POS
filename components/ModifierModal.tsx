@@ -387,8 +387,10 @@ const ModifierModal: React.FC<ModifierModalProps> = ({
       const option = fractionOptions.find(candidate => getFractionOptionId(candidate) === selectedFractions[step.partIndex]);
       return option?.name || '';
     }
-    if (step.kind === 'modifier') return `${(selectedModifiersByGroup[step.group.id] || []).length} seleccionados`;
-    return `${(selectedCombosByGroup[step.group.id] || []).length} seleccionados`;
+    const selectedCount = step.kind === 'modifier'
+      ? (selectedModifiersByGroup[step.group.id] || []).length
+      : (selectedCombosByGroup[step.group.id] || []).length;
+    return `${selectedCount} ${selectedCount === 1 ? 'seleccionado' : 'seleccionados'}`;
   }, [fractionOptions, getFractionOptionId, note, selectedCombosByGroup, selectedFractions, selectedModifiersByGroup]);
 
   const themeButtonClass = ({ blue: 'bg-blue-600 hover:bg-blue-700', orange: 'bg-orange-600 hover:bg-orange-700', gray: 'bg-slate-800 hover:bg-slate-900' } as Record<string, string>)[themeColor] || 'bg-blue-600 hover:bg-blue-700';
