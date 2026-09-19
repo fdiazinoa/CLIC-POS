@@ -434,7 +434,7 @@ const ModifierModal: React.FC<ModifierModalProps> = ({
               const active = index === activeStepIndex;
               const complete = Boolean(completedStepIds[step.id]) && isStepValid(step);
               return (
-                <li key={step.id} className="flex flex-1 items-start">
+                <li key={step.id} className={`flex items-start ${index === steps.length - 1 ? 'flex-none' : 'flex-1'}`}>
                   <button type="button" onClick={() => moveToStep(index)} aria-current={active ? 'step' : undefined} className="group flex min-w-24 flex-col items-center text-center">
                     <span className={`flex h-10 w-10 items-center justify-center rounded-full border-2 text-sm font-black transition-colors ${active ? 'border-blue-600 bg-blue-600 text-white' : complete ? 'border-blue-600 bg-blue-50 text-blue-700' : 'border-slate-300 bg-white text-slate-500'}`}>{complete && !active ? <Check size={18} strokeWidth={3} /> : index + 1}</span>
                     <span className={`mt-1.5 block max-w-28 truncate text-xs font-black ${active || complete ? 'text-blue-800' : 'text-slate-400'}`}>{step.name}</span>
