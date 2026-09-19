@@ -105,12 +105,14 @@ export const mergeIncomingRestaurantProductConfig = <T extends Record<string, an
   const notePresets = asArray<string>(familyValue('note_presets', 'notePresets', hasLocalProduct ? local.note_presets : undefined));
   const productType = asTrimmedString(productTypeRaw) || asTrimmedString(source.type) || 'SIMPLE';
   const productionAreaId = asTrimmedString(productionAreaRaw) || undefined;
+  const productionAreaExplicitlyCleared = incomingProductionArea.present && !productionAreaId;
+  const canonicalProductionAreaId = productionAreaExplicitlyCleared ? null : productionAreaId;
   const normalizedFractionRule = fractionRule || undefined;
   const restaurant: Record<string, unknown> = {
     ...localRestaurant,
     ...incomingRestaurant,
     product_type: productType,
-    production_area_id: productionAreaId,
+    production_area_id: canonicalProductionAreaId,
     modifier_groups: modifierGroups,
     fraction_rule: normalizedFractionRule,
     combo_groups: comboGroups,
@@ -124,11 +126,21 @@ export const mergeIncomingRestaurantProductConfig = <T extends Record<string, an
   for (const alias of ['productType', 'productionAreaId', 'modifierGroups', 'fractionRule', 'comboGroups', 'notePresets']) {
     delete canonicalIncoming[alias];
   }
+  if (incomingProductionArea.present) {
+    delete canonicalIncoming.productionAreaID;
+    delete canonicalIncoming.productionArea;
+    const metadata = { ...asObject(canonicalIncoming.metadata) };
+    delete metadata.production_area_id;
+    delete metadata.productionAreaId;
+    if (Object.keys(metadata).length > 0 || hasOwn(canonicalIncoming, 'metadata')) {
+      canonicalIncoming.metadata = metadata;
+    }
+  }
 
   return {
     ...canonicalIncoming,
     product_type: productType,
-    production_area_id: productionAreaId,
+    production_area_id: canonicalProductionAreaId,
     modifier_groups: modifierGroups,
     fraction_rule: normalizedFractionRule,
     combo_groups: comboGroups,

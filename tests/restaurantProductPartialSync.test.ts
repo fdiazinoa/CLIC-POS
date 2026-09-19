@@ -175,6 +175,39 @@ test('new products keep legacy type and metadata production-area fallbacks', () 
   assert.equal(config.production_area_id, 'metadata-kitchen');
 });
 
+test('explicit production-area clear survives JSON persistence without metadata resurrection', () => {
+  const cleared = mergeIncomingRestaurantProductConfig({
+    id: fixture.id,
+    production_area_id: null,
+    productionAreaID: 'legacy-root-kitchen',
+    productionArea: 'legacy-root-name',
+    metadata: {
+      production_area_id: 'old-metadata-kitchen',
+      productionAreaId: 'old-metadata-camel-kitchen',
+      preserved: 'metadata-value',
+    },
+  }, fixture);
+  const persisted = JSON.parse(JSON.stringify(cleared));
+
+  assert.equal(Object.prototype.hasOwnProperty.call(persisted, 'production_area_id'), true);
+  assert.equal(persisted.production_area_id, null);
+  assert.equal(persisted.restaurant.production_area_id, null);
+  assert.deepEqual(persisted.metadata, { preserved: 'metadata-value' });
+  assert.equal(persisted.productionAreaID, undefined);
+  assert.equal(persisted.productionArea, undefined);
+  assert.equal(resolveRestaurantProductConfig(persisted).production_area_id, undefined);
+
+  const posFallback = persisted.production_area_id
+    || persisted.productionAreaId
+    || persisted.productionAreaID
+    || persisted.productionArea
+    || persisted.restaurantConfig?.production_area_id
+    || resolveRestaurantProductConfig(persisted).production_area_id
+    || persisted.metadata?.production_area_id
+    || persisted.metadata?.productionAreaId;
+  assert.equal(String(posFallback || '').trim(), '');
+});
+
 test('SyncManager incremental pull persists absent families and honors a later explicit clear', async () => {
   installMemoryDb();
   const originalResolve = syncPolicy.resolve;
@@ -190,7 +223,16 @@ test('SyncManager incremental pull persists absent families and honors a later e
 
   const responses = [
     { id: fixture.id, name: fixture.name, price: 575, _op: 'UPDATE' },
-    { id: fixture.id, modifier_groups: [], comboGroups: null, note_presets: null, fraction_rule: null, _op: 'UPDATE' },
+    {
+      id: fixture.id,
+      modifier_groups: [],
+      comboGroups: null,
+      note_presets: null,
+      fraction_rule: null,
+      production_area_id: null,
+      metadata: { production_area_id: 'stale-kitchen', preserved: 'sync-metadata' },
+      _op: 'UPDATE',
+    },
   ];
   (apiSyncAdapter as any).pullDelta = async () => ({
     items: [responses.shift()],
@@ -217,7 +259,9 @@ test('SyncManager incremental pull persists absent families and honors a later e
     assert.deepEqual(resolveRestaurantProductConfig(persisted).note_presets, []);
     assert.equal(resolveRestaurantProductConfig(persisted).fraction_rule, undefined);
     assert.equal(resolveRestaurantProductConfig(persisted).product_type, 'COMBO');
-    assert.equal(resolveRestaurantProductConfig(persisted).production_area_id, 'fixture-kitchen');
+    const reopened = JSON.parse(JSON.stringify(persisted));
+    assert.equal(resolveRestaurantProductConfig(reopened).production_area_id, undefined);
+    assert.deepEqual(reopened.metadata, { preserved: 'sync-metadata' });
   } finally {
     (syncPolicy as any).resolve = originalResolve;
     (apiSyncAdapter as any).pullDelta = originalPullDelta;
