@@ -1,0 +1,13 @@
+# Coordinación y alcance de entrega
+
+Tarea `sync-command-modifiers`, coordinador `/root`. Base `a0cfcae1ccc3086d4ce64e099ff0ee232a706a79`; candidato funcional revisado `70498f5df019d6ea802b4acd6c7a25cc96db405f`. Rama `fix/sync-command-modifiers` creada desde `origin/develop` en la worktree aislada de la tarea. No se modificaron otras worktrees operativas ni datos ERP.
+
+Roles independientes: analyst `/root/sync_review` (Astra Medium), developer `/root/developer` (Sol Medium), reviewer/aprobador del plan `/root/reviewer` (Astra Medium), QA `/root/qa` (Sol Medium), sync-validator `/root/sync_validator` (Astra Medium), performance `/root/performance`, release `/root/release` e internal-deploy `/root/internal_deploy`. Se delegaron sus contratos Markdown en sesiones independientes; las rutas canónicas son identidades de agentes de esta ejecución, no firmas criptográficas ni registro nativo TOML. Coordinador no editó código funcional. Reviewer, QA, sync y performance no son autores de la implementación.
+
+La revisión inicial rechazó `1a520f2` por resurrección del área de producción desde metadata después de serializar. El developer lo corrigió en un segundo commit. `review.md` conserva el historial y aprobación del candidato funcional final. Los demás informes separan evidencia focal de los gates completos.
+
+El usuario autorizó QA en el emulador y comunicó que no dispone de cliente adicional. Se comprobó la instalación existente 1.1.405 (1405), terminal CAJA 4 `69dc181d-b85e-486b-8f7f-c0d21b69d298`, sin generar ni instalar APK. El producto y las opciones estaban presentes y el modal calculó RD$640; se canceló sin añadir carrito ni crear ventas. Esta observación no valida el candidato Android ni explica retrospectivamente la ausencia reportada.
+
+El cambio soluciona una pérdida reproducida ante entradas parciales de catálogo; no declara resuelto el incidente histórico de Caja 4. El snapshot completo no perdió opciones en el harness de aplicación. El replay atómico completo en IndexedDB detectó un defecto preexistente distinto; la persistencia directa de productos y los pulls posteriores no equivalen a aprobar ese replay. Sin cliente de prueba ni APK candidato, los gates completos siguen bloqueados y la entrega corresponde a un PR draft hacia develop. No hay merge, build APK, instalación ni publicación.
+
+Los JSON completos obtenidos mediante SELECT de solo lectura y los harnesses locales viven en `/tmp`; no se versionaron clientes ni secretos. La fixture de pruebas es sintética. Los informes referencian logs y límites del entorno; no confunden IndexedDB simulado, SSR, Chrome real y Android instalado.

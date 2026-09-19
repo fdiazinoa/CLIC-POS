@@ -1,0 +1,78 @@
+{
+  "id": "fixture-command-product",
+  "sku": "CMD-001",
+  "name": "Hamburguesa de prueba",
+  "price": 550,
+  "type": "PRODUCT",
+  "taxable": true,
+  "tax_ids": ["fixture-tax"],
+  "appliedTaxIds": ["fixture-tax"],
+  "stockBalances": { "fixture-warehouse": 7 },
+  "activeInWarehouses": ["fixture-warehouse"],
+  "product_type": "COMBO",
+  "production_area_id": "fixture-kitchen",
+  "modifier_groups": [
+    {
+      "id": "fixture-extras",
+      "name": "Extras",
+      "selection_type": "MULTIPLE",
+      "required": false,
+      "min_select": 0,
+      "max_select": null,
+      "free_quantity": 0,
+      "modifiers": [
+        { "id": "fixture-bacon", "name": "Bacon", "active": true, "price_delta": 60, "affects_price": true, "modifier_type": "ADD" },
+        { "id": "fixture-cheese", "name": "Extra queso", "active": true, "price_delta": 30, "affects_price": true, "modifier_type": "ADD" },
+        { "id": "fixture-no-tomato", "name": "Sin tomate", "active": true, "price_delta": 0, "affects_price": false, "modifier_type": "REMOVE" }
+      ]
+    }
+  ],
+  "combo_groups": [
+    {
+      "id": "fixture-drink",
+      "name": "Bebida",
+      "required": true,
+      "min_select": 1,
+      "max_select": 1,
+      "items": [
+        { "id": "fixture-water", "product_id": "fixture-water-product", "name": "Agua con gas", "active": true, "price_delta": 0 }
+      ]
+    }
+  ],
+  "fraction_rule": null,
+  "note_presets": ["Sin hielo", "Salsa aparte", "Para llevar"],
+  "restaurant": {
+    "product_type": "COMBO",
+    "production_area_id": "fixture-kitchen",
+    "modifier_groups": [
+      {
+        "id": "fixture-extras",
+        "name": "Extras",
+        "selection_type": "MULTIPLE",
+        "required": false,
+        "min_select": 0,
+        "max_select": null,
+        "free_quantity": 0,
+        "modifiers": [
+          { "id": "fixture-bacon", "name": "Bacon", "active": true, "price_delta": 60, "affects_price": true, "modifier_type": "ADD" },
+          { "id": "fixture-cheese", "name": "Extra queso", "active": true, "price_delta": 30, "affects_price": true, "modifier_type": "ADD" },
+          { "id": "fixture-no-tomato", "name": "Sin tomate", "active": true, "price_delta": 0, "affects_price": false, "modifier_type": "REMOVE" }
+        ]
+      }
+    ],
+    "combo_groups": [
+      {
+        "id": "fixture-drink",
+        "name": "Bebida",
+        "required": true,
+        "min_select": 1,
+        "max_select": 1,
+        "items": [
+          { "id": "fixture-water", "product_id": "fixture-water-product", "name": "Agua con gas", "active": true, "price_delta": 0 }
+        ]
+      }
+    ],
+    "fraction_rule": null,
+    "note_presets": ["Sin hielo", "Salsa aparte", "Para llevar"]
+  }
+}

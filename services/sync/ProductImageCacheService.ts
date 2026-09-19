@@ -12,6 +12,7 @@ import {
 import { isPosSaleActive, POS_SALE_ACTIVITY_EVENT } from '../../utils/posSaleActivity';
 import { extractWarehouseStockBalances, productIdentityCandidates } from '../../utils/productReferences';
 import { applyAuthoritativeProductTaxes } from '../../utils/erpFiscalCatalogSync';
+import { mergeIncomingRestaurantProductConfig } from '../../utils/restaurantProductConfig';
 
 type IncomingProduct = Partial<Product> & Record<string, any>;
 
@@ -505,10 +506,10 @@ class ProductImageCacheService {
         normalized.imageUrl = imageUrl;
         normalized.imageVersion = imageVersion;
       }
-      return applyAuthoritativeProductTaxes(normalized);
+      return applyAuthoritativeProductTaxes(mergeIncomingRestaurantProductConfig(normalized, localProduct));
     }
 
-    return applyAuthoritativeProductTaxes(normalized);
+    return applyAuthoritativeProductTaxes(mergeIncomingRestaurantProductConfig(normalized, localProduct));
   }
 
   private async getNormalizationContext(): Promise<NormalizationContext> {
