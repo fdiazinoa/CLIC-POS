@@ -17,3 +17,9 @@ export const isModifierSelectionCountValid = (
   selectedCount: number,
   group: { required?: boolean; min_select?: number },
 ) => selectedCount >= (group.required ? Math.max(1, Number(group.min_select || 1)) : Number(group.min_select || 0));
+
+export const focusFirstModifierOption = (container: ParentNode | null): void => {
+  const target = container?.querySelector<HTMLElement>('[data-modifier-option="true"]')
+    ?? container?.querySelector<HTMLElement>('[data-step-focus="true"]');
+  target?.focus();
+};

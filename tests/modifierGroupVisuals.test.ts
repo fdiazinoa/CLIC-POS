@@ -3,10 +3,27 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import {
+  focusFirstModifierOption,
   isModifierSelectionCountValid,
   MODIFIER_MODAL_LAYOUT,
   paginateModifierOptions,
 } from '../utils/modifierModalPresentation';
+
+const focusFixture = (withOption: boolean) => {
+  const documentState: { activeElement: unknown } = { activeElement: null };
+  const option = { focus: () => { documentState.activeElement = option; } };
+  const heading = { focus: () => { documentState.activeElement = heading; } };
+  const selectors: string[] = [];
+  const container = {
+    querySelector(selector: string) {
+      selectors.push(selector);
+      if (selector === '[data-modifier-option="true"]') return withOption ? option : null;
+      if (selector === '[data-step-focus="true"]') return heading;
+      return null;
+    },
+  } as unknown as ParentNode;
+  return { container, documentState, heading, option, selectors };
+};
 
 test('el modal limita cada página a ocho opciones sin alterar el orden', () => {
   const options = Array.from({ length: 17 }, (_, index) => index + 1);
@@ -39,4 +56,27 @@ test('la validación conserva mínimos obligatorios y opcionales', () => {
   assert.equal(isModifierSelectionCountValid(1, { required: true, min_select: 0 }), true);
   assert.equal(isModifierSelectionCountValid(1, { required: false, min_select: 2 }), false);
   assert.equal(isModifierSelectionCountValid(2, { required: false, min_select: 2 }), true);
+});
+
+test('un error local enfoca la primera opción antes que el encabezado', () => {
+  const fixture = focusFixture(true);
+  focusFirstModifierOption(fixture.container);
+  assert.equal(fixture.documentState.activeElement, fixture.option);
+  assert.deepEqual(fixture.selectors, ['[data-modifier-option="true"]']);
+});
+
+test('un error final al volver a un grupo enfoca su primera opción', () => {
+  const fixture = focusFixture(true);
+  focusFirstModifierOption(fixture.container);
+  assert.equal(fixture.documentState.activeElement, fixture.option);
+});
+
+test('un grupo obligatorio vacío usa el encabezado como foco alternativo', () => {
+  const fixture = focusFixture(false);
+  focusFirstModifierOption(fixture.container);
+  assert.equal(fixture.documentState.activeElement, fixture.heading);
+  assert.deepEqual(fixture.selectors, [
+    '[data-modifier-option="true"]',
+    '[data-step-focus="true"]',
+  ]);
 });

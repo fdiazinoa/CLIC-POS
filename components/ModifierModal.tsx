@@ -2,6 +2,7 @@ import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from '
 import { AlertCircle, Check, ChevronLeft, ChevronRight, MessageSquare, Plus, X } from 'lucide-react';
 import { ComboGroup, Modifier, ModifierGroup, Product, ProductFractionOption } from '../types';
 import {
+  focusFirstModifierOption,
   isModifierSelectionCountValid,
   MODIFIER_MODAL_LAYOUT,
   paginateModifierOptions,
@@ -202,7 +203,7 @@ const ModifierModal: React.FC<ModifierModalProps> = ({
   }, [fractionSelectionCount, productType, selectedCombosByGroup, selectedFractions, selectedModifiersByGroup]);
 
   const focusFirstOption = useCallback(() => {
-    requestAnimationFrame(() => optionAreaRef.current?.querySelector<HTMLElement>('[data-modifier-option="true"], [data-step-focus="true"]')?.focus());
+    requestAnimationFrame(() => focusFirstModifierOption(optionAreaRef.current));
   }, []);
   const showStepError = useCallback((step: Step) => {
     setPagesByStep(prev => ({ ...prev, [step.id]: 0 }));
@@ -392,6 +393,28 @@ const ModifierModal: React.FC<ModifierModalProps> = ({
 
   const themeButtonClass = ({ blue: 'bg-blue-600 hover:bg-blue-700', orange: 'bg-orange-600 hover:bg-orange-700', gray: 'bg-slate-800 hover:bg-slate-900' } as Record<string, string>)[themeColor] || 'bg-blue-600 hover:bg-blue-700';
   const nextStep = steps[activeStepIndex + 1];
+  const activeStepDetails = (() => {
+    if (!activeStep || activeStep.kind === 'note') return '';
+    if (activeStep.kind === 'fraction') {
+      const required = productType === 'FRACTIONABLE' || fractionSelectionCount > 0;
+      return `${required ? 'Obligatorio' : 'Opcional'} · Selección única${required ? ' · Mínimo 1' : ''} · Máximo 1`;
+    }
+    const minSelect = activeStep.group.required
+      ? Math.max(1, Number(activeStep.group.min_select || 1))
+      : Number(activeStep.group.min_select || 0);
+    const maxSelect = activeStep.kind === 'modifier'
+      ? (activeStep.group.selection_type === 'SINGLE' ? 1 : Number(activeStep.group.max_select || 0))
+      : Math.max(1, Number(activeStep.group.max_select || 1));
+    const multiple = activeStep.kind === 'modifier'
+      ? activeStep.group.selection_type !== 'SINGLE'
+      : maxSelect > 1;
+    return [
+      minSelect > 0 ? 'Obligatorio' : 'Opcional',
+      multiple ? 'Selección múltiple' : 'Selección única',
+      minSelect > 0 ? `Mínimo ${minSelect}` : '',
+      maxSelect > 0 ? `Máximo ${maxSelect}` : '',
+    ].filter(Boolean).join(' · ');
+  })();
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/65 p-2 backdrop-blur-sm sm:p-4">
@@ -435,7 +458,7 @@ const ModifierModal: React.FC<ModifierModalProps> = ({
           ) : activeStep ? (
             <section aria-describedby={validationMessage ? 'modifier-validation-error' : undefined} className={`mx-auto max-w-6xl rounded-2xl border p-4 sm:p-5 ${validationMessage ? 'border-red-300 bg-red-50/40' : 'border-blue-200 bg-blue-50/40'}`}>
               <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
-                <div tabIndex={-1} data-step-focus="true"><h3 className="text-2xl font-black text-slate-950">{activeStep.name}</h3><p className="mt-1 text-sm font-semibold text-slate-500 sm:text-base">{activeStep.kind === 'modifier' && activeStep.group.selection_type !== 'SINGLE' ? 'Puedes elegir varias opciones.' : activeStep.kind === 'combo' && Number(activeStep.group.max_select || 1) > 1 ? 'Puedes elegir varias opciones.' : 'Elige una opción.'}</p></div>
+                <div tabIndex={-1} data-step-focus="true"><h3 className="text-2xl font-black text-slate-950">{activeStep.name}</h3><p className="mt-1 text-sm font-semibold text-slate-500 sm:text-base">{activeStepDetails}</p></div>
                 <span className="rounded-full bg-slate-100 px-3 py-2 text-xs font-black text-slate-600">{selectedCount} {selectedCount === 1 ? 'seleccionado' : 'seleccionados'}</span>
               </div>
               {validationMessage && <div id="modifier-validation-error" role="alert" className="mb-4 flex items-center gap-2 text-sm font-bold text-red-700"><AlertCircle size={18} />{validationMessage}</div>}
