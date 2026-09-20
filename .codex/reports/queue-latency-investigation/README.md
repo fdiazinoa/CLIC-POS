@@ -106,6 +106,31 @@ La entrada del operador marca el POS como activo durante 5 segundos. El sincroni
 continúa pausado durante ese intervalo. Por tanto, una fotografía con texto escrito y `Online · 3` puede
 mostrar una cola existente mientras su procesamiento está deliberadamente suspendido.
 
+## Qué representa `Online` en amarillo sin contador
+
+La fotografía posterior al soporte muestra `Online` en amarillo y sin número. En 1.1.405 esa combinación
+tiene una interpretación exacta: `navigator.onLine=true`, `pendingCount=0`, `blockedCount=0` y
+`hasError=true`. No representa una sincronización todavía activa.
+
+El flujo permite conservar ese amarillo como estado residual:
+
+1. El evento offline fija `BackgroundSyncManager.hasError=true`.
+2. El botón **Sincronizar Todo** de Configuración solicita reconciliación/manifiesto y catálogos mediante
+   `syncTriggerCoordinator` y `SyncManager`; no limpia directamente el estado de
+   `BackgroundSyncManager`.
+3. Al volver la red, el worker operacional intenta arrancar, pero puede retornar antes de poner
+   `hasError=false` si detecta actividad del POS.
+4. La cabecera muestra el texto a partir de los contadores y el color también a partir de `hasError`;
+   por eso puede resultar `Online` amarillo sin contador.
+
+Los archivos que implementan este comportamiento son iguales entre el commit de 1.1.405 (`64bbdf8`) y
+la base analizada. Esto confirma la semántica del indicador y una posible inconsistencia visual, pero no
+demuestra que el error residual bloquee el hilo o cause la lentitud.
+
+El botón manual sí puede iniciar trabajo de configuración y catálogo. Una degradación que ocurra solo
+durante ese trabajo debe medirse como operación separada; el color amarillo que permanece después no
+prueba que ese trabajo continúe.
+
 ## Ruta observada y costos posibles
 
 | Función | Hilo/medio | Operación | Duración medida | Posible impacto en UI |
