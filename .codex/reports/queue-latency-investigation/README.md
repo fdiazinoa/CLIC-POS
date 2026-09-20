@@ -41,6 +41,28 @@ WebView, controladores, temperatura, memoria, configuración y estado local. Que
 normalmente durante el día y reportara la lentitud de noche refuerza una causa acumulativa o
 intermitente, no un costo fijo de la interfaz.
 
+## Perfil conocido del equipo afectado
+
+El usuario aportó una ficha histórica del mismo equipo para describir su configuración. Se toman como
+referencia de hardware los siguientes datos:
+
+| Propiedad | Valor informado |
+|---|---|
+| Placa/fabricante | Intel Corporation `MAHOBAY` |
+| Arquitectura | x86_64, 4 núcleos |
+| Memoria | 7.65 GB; ficha muestra 192 MB / 512 MB como asignación/límite de la app |
+| Pantalla | 1366 × 742 px, 128 dpi |
+| Sistema | Android 13, API 33 |
+| Conectividad | En línea por 4G, ahorro de datos desactivado |
+| Capacidad mostrada | 39.93 GB; la ficha no permite inferir latencia ni salud del almacenamiento |
+| Operación | `STANDARD_POS`, modo `offline optimistic`, stock activo, cero impresoras registradas |
+
+La ficha fue generada cuando el equipo aún mostraba APK 1.1.374. El usuario confirmó que actualmente
+ejecuta 1.1.405. Por ello, el WebView 129 y los datos de APK/vigencia de la imagen no se usan como estado
+runtime del incidente y deben capturarse nuevamente. La RAM y los cuatro núcleos no sugieren por sí solos
+escasez de capacidad; red 4G, almacenamiento, temperatura y la capa Android x86 requieren comparación
+directa con uno de los equipos master-cliente que funciona bien.
+
 ## Medición en emulador
 
 Se midió desde el despacho de `input` hasta dos `requestAnimationFrame`, alternando búsquedas `fr` y
