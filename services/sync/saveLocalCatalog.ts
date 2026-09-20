@@ -7,6 +7,7 @@ import { catalogEditQueue, catalogEditsEnabled, currentCatalogScope, readCatalog
 import { changedCatalogFields, changedCatalogLifecycle, classificationKeys, itemOperationalFlagDefaults, type LocalCatalogChange } from './catalogLocalChanges';
 import { loadSyncProfile } from './SyncProfile';
 import type { CatalogEdit } from './CatalogEditQueue';
+import { assertCurrentPosCatalogEditAuthorized } from './catalogEditAuthorization';
 let writes: Promise<unknown> = Promise.resolve();
 let lastTimestamp = 0;
 function serial<T>(work: () => Promise<T>): Promise<T> {
@@ -43,6 +44,7 @@ async function persist(documents: DurableDocumentMutation[], changes: LocalCatal
 // Only user save handlers call these functions. ERP snapshot writes keep using db.
 export function saveLocalProducts(next: Product[], actorId?: string, previousSnapshot?: Product[]): Promise<void> {
     return serial(async () => {
+        if (loadSyncProfile().cloudChannel === 'ERP_ACTIVE') await assertCurrentPosCatalogEditAuthorized();
         if (!catalogEditsEnabled() || loadSyncProfile().cloudChannel !== 'ERP_ACTIVE') { await db.saveDocuments('products', next); return; }
         const previous = previousSnapshot || await db.get('products') as Product[];
         const lifecycleChanges = changedCatalogLifecycle(previous, next, 'item_lifecycle');
@@ -74,6 +76,7 @@ export function saveLocalProducts(next: Product[], actorId?: string, previousSna
 }
 export function deleteLocalProduct(product: Product, remaining: Product[], actorId?: string): Promise<void> {
     return serial(async () => {
+        if (loadSyncProfile().cloudChannel === 'ERP_ACTIVE') await assertCurrentPosCatalogEditAuthorized();
         if (!catalogEditsEnabled() || loadSyncProfile().cloudChannel !== 'ERP_ACTIVE') {
             await db.deleteDocument('products', product.id); return;
         }
@@ -83,6 +86,7 @@ export function deleteLocalProduct(product: Product, remaining: Product[], actor
 }
 export function saveLocalClassifications(next: BusinessConfig, actorId?: string): Promise<void> {
     return serial(async () => {
+        if (loadSyncProfile().cloudChannel === 'ERP_ACTIVE') await assertCurrentPosCatalogEditAuthorized();
         if (!catalogEditsEnabled() || loadSyncProfile().cloudChannel !== 'ERP_ACTIVE') { await db.save('config', next); return; }
         const previous = await db.get('config') as unknown as BusinessConfig;
         const kinds: Record<string, string> = { departments: 'DEPARTMENTS', sections: 'SECTIONS', families: 'FAMILIES', subfamilies: 'SUBFAMILIES', brands: 'BRANDS', posCategories: 'POS_CATEGORIES' };
