@@ -123,9 +123,10 @@ El flujo permite conservar ese amarillo como estado residual:
 4. La cabecera muestra el texto a partir de los contadores y el color también a partir de `hasError`;
    por eso puede resultar `Online` amarillo sin contador.
 
-Los archivos que implementan este comportamiento son iguales entre el commit de 1.1.405 (`64bbdf8`) y
-la base analizada. Esto confirma la semántica del indicador y una posible inconsistencia visual, pero no
-demuestra que el error residual bloquee el hilo o cause la lentitud.
+La lógica relevante del indicador y del flujo manual no cambió entre el commit de 1.1.405 (`64bbdf8`)
+y la base analizada. `SyncSettings.tsx` y `BackgroundSyncManager.ts` son idénticos; `POSInterface.tsx`
+solo difiere en dependencias fiscales ajenas a este indicador. Esto confirma la semántica visual, pero
+no demuestra que el error residual bloquee el hilo o cause la lentitud.
 
 El botón manual sí puede iniciar trabajo de configuración y catálogo. Una degradación que ocurra solo
 durante ese trabajo debe medirse como operación separada; el color amarillo que permanece después no

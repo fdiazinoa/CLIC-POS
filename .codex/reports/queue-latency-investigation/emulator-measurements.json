@@ -72,9 +72,10 @@
       "pendingCount": 0,
       "blockedCount": 0,
       "hasError": true,
+      "isSyncing": "unknown_from_indicator",
       "activeSyncProven": false
     },
-    "versionParity": "Relevant files are unchanged between 1.1.405 commit 64bbdf8 and the analyzed base.",
+    "versionParity": "Relevant indicator and manual-sync logic is unchanged; POSInterface differs only in unrelated fiscal-effect dependencies.",
     "performanceCausality": "not established"
   },
   "cleanup": {
