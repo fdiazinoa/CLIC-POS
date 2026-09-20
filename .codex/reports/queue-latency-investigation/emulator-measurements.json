@@ -1,0 +1,54 @@
+{
+  "capturedAt": "2026-09-19",
+  "taskId": "queue-latency-20260919",
+  "sourceSha": "8cf4a2a510f4a66e095d60d6246dd4e61a95aafd",
+  "installedVersion": {
+    "versionName": "1.1.407",
+    "versionCode": 1407
+  },
+  "environment": {
+    "device": "Genymotion Pixel C emulator",
+    "android": 11,
+    "webView": "83.0.4103.120",
+    "hardware": "vbox86 / emulated EGL",
+    "physicalClientRepresented": false
+  },
+  "inputToTwoAnimationFramesSummaryMs": [
+    {
+      "scenario": "zero_pending",
+      "samples": 100,
+      "p50": 33.3,
+      "p95": 34.3,
+      "p99": 34.4,
+      "max": 50.4
+    },
+    {
+      "scenario": "three_pending_sync_paused_by_operator_input",
+      "samples": 100,
+      "p50": 33.3,
+      "p95": 34.5,
+      "p99": 34.5,
+      "max": 34.9,
+      "finalSyntheticStatuses": ["PENDING", "PENDING", "PENDING"]
+    }
+  ],
+  "idleV8Profile": {
+    "durationMs": 15192,
+    "samples": 2661,
+    "idlePercent": 99.66,
+    "scope": "idle emulator only"
+  },
+  "limitations": [
+    "Individual input latency samples and the measurement script were not preserved.",
+    "Quantiles are a recorded summary and cannot be independently recomputed from this artifact.",
+    "Synchronization was paused by operator input; active queue processing was not measured."
+  ],
+  "cleanup": {
+    "syntheticDocumentsBefore": 3,
+    "syntheticDocumentsAfter": 0,
+    "sessionRestored": true,
+    "orientationRestored": true,
+    "syntheticTransactionsSentToErp": false
+  },
+  "decision": "CAUSE_NOT_REPRODUCED_NO_BASELINE_CHANGE"
+}
