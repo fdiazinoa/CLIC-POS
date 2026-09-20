@@ -7,7 +7,8 @@ import { CatalogEditQueue, type CatalogEdit, type CatalogScope } from './Catalog
 import type { BusinessConfig, Permission, Product, RoleDefinition, User } from '../../types';
 import { v4 as uuid } from 'uuid';
 import { buildStaleTaxConflictRebase, canonicalizeTaxMutationValues } from '../../utils/taxIdentity';
-import { waitForBackgroundSyncWindow } from '../../utils/backgroundSyncScheduler';
+import { waitForBackgroundSyncWindow, yieldBackgroundSyncChunk } from '../../utils/backgroundSyncScheduler';
+import { isPosSaleActive } from '../../utils/posSaleActivity';
 export const catalogEditsEnabled = () => import.meta.env.VITE_POS_CATALOG_EDITS_ENABLED === 'true';
 export function catalogScopeMatches(scope: CatalogScope) {
     const profile = loadSyncProfile();
@@ -201,6 +202,9 @@ export async function resolveCatalogConflict(
 export const catalogEditQueue = new CatalogEditQueue({
     read: readCatalogEdits, save: edit => db.saveDocument('catalogEdits', edit),
     matchesScope: catalogScopeMatches, now: Date.now,
+    shouldPause: isPosSaleActive,
+    yieldToUi: yieldBackgroundSyncChunk,
+    chunkSize: 25,
     onPermanentRejection: async (edit) => restoreRejectedProductValue(edit, true),
     send: async edit => {
         let outboundEdit = edit;

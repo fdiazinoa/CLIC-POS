@@ -47,8 +47,13 @@ export function saveLocalProducts(next: Product[], actorId?: string, previousSna
         if (loadSyncProfile().cloudChannel === 'ERP_ACTIVE') await assertCurrentPosCatalogEditAuthorized();
         if (!catalogEditsEnabled() || loadSyncProfile().cloudChannel !== 'ERP_ACTIVE') { await db.saveDocuments('products', next); return; }
         const previous = previousSnapshot || await db.get('products') as Product[];
-        const lifecycleChanges = changedCatalogLifecycle(previous, next, 'item_lifecycle');
-        const previousForFields = [...previous, ...next.filter(row => !previous.some(old => old.id === row.id)).map(row => ({
+        // Product saves are patches. An omitted row must never become a delete: the
+        // explicit deleteLocalProduct flow owns lifecycle deletions. This matters for
+        // bulk and tariff editors, which intentionally submit only the touched rows.
+        const nextIds = new Set(next.map(row => row.id));
+        const previousForPatch = previous.filter(row => nextIds.has(row.id));
+        const lifecycleChanges = changedCatalogLifecycle(previousForPatch, next, 'item_lifecycle');
+        const previousForFields = [...previousForPatch, ...next.filter(row => !previousForPatch.some(old => old.id === row.id)).map(row => ({
             ...row, price: 0, cost: 0, description: '', reference: '', barcode: '', barcode_2: '', barcode_3: '',
             tariffs: [], appliedTaxIds: [], operationalFlags: itemOperationalFlagDefaults, type: 'PRODUCT',
             measurementUnit: 'Unidad', purchaseUnit: 'Unidad', is_active: true,

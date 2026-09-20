@@ -153,6 +153,63 @@ test('single-product save uses the UI snapshot when storage already contains the
     ]);
     assert.equal(sends, 1);
 });
+test('partial bulk product saves never enqueue deletions for untouched catalog rows', async () => {
+    const products = Array.from({ length: 165 }, (_, index) => ({
+        id: `00000000-0000-4000-8000-${String(index + 1000).padStart(12, '0')}`,
+        name: `Producto ${index + 1}`,
+        sku: `ART-${String(index + 1).padStart(6, '0')}`,
+        price: 10,
+        appliedTaxIds: [],
+        operationalFlags: { trackInventory: true },
+    }));
+    for (const touchedCount of [0, 3, 10, 20, 25, 50, 100]) {
+        store.clear(); sends = 0;
+        store.set('products', structuredClone(products));
+        const touched = products.slice(0, touchedCount).map(row => ({
+            ...row,
+            operationalFlags: { ...row.operationalFlags, trackInventory: false },
+        }));
+
+        // Tariff and bulk editors submit only the changed rows and may omit the
+        // previous snapshot, so this must remain a patch instead of a full replace.
+        await saveLocalProducts(touched as any, 'operator');
+
+        const queue = store.get('catalogEdits') || [];
+        assert.equal(store.get('products').length, 165);
+        assert.equal(queue.length, touchedCount);
+        assert.ok(queue.every((entry: any) => entry.mutation.domain === 'item_operations'));
+        assert.ok(queue.every((entry: any) => entry.mutation.field === 'trackInventory'));
+        assert.ok(queue.every((entry: any) => entry.mutation.field !== 'delete'));
+        assert.equal(sends, touchedCount > 0 ? 1 : 0);
+    }
+
+    store.clear(); sends = 0;
+    store.set('products', structuredClone(products));
+    const catalogManagerSelection = products.slice(0, 25).map(row => ({
+        ...row,
+        name: `${row.name} actualizado`,
+        price: 12,
+        appliedTaxIds: ['00000000-0000-4000-8000-000000009999'],
+        operationalFlags: { ...row.operationalFlags, trackInventory: false },
+    }));
+    await saveLocalProducts(catalogManagerSelection as any, 'operator', products as any);
+    const catalogManagerQueue = store.get('catalogEdits') || [];
+    assert.equal(store.get('products').length, 165);
+    assert.equal(catalogManagerQueue.length, 100);
+    for (const domain of ['prices', 'item_taxes', 'item_operations', 'item_general']) {
+        assert.equal(catalogManagerQueue.filter((entry: any) => entry.mutation.domain === domain).length, 25);
+    }
+    assert.ok(catalogManagerQueue.every((entry: any) => entry.mutation.field !== 'delete'));
+
+    store.clear(); sends = 0;
+    store.set('products', structuredClone(products));
+    await deleteLocalProduct(products[0] as any, products.slice(1) as any, 'operator');
+    const deleteQueue = store.get('catalogEdits') || [];
+    assert.equal(store.get('products').length, 164);
+    assert.equal(deleteQueue.length, 1);
+    assert.equal(deleteQueue[0].mutation.recordId, products[0].id);
+    assert.equal(deleteQueue[0].mutation.field, 'delete');
+});
 test('failed atomic storage neither publishes nor loses the previous local price', async () => {
     store.clear(); store.set('products', [product]); sends = 0; failSave = true;
     try { await assert.rejects(() => saveLocalProducts([{ ...product, price: 99 } as any], 'operator'), /Disk full/); }
