@@ -172,7 +172,8 @@ solo se active con el volumen o las características de ese entorno.
 
 ## Evidencia Supabase del terminal afectado
 
-Se consultó en modo de solo lectura el proyecto `Clic-Pos` para `Caja 01 / DEV-DPI5IPY5`, en la ventana
+Se consultó en modo de solo lectura el proyecto `Clic-Pos` para `Caja 01`, identificada mediante el dato
+de dispositivo aportado por el usuario, en la ventana
 21:30–23:40 de Santo Domingo del 19 de septiembre. El registro confirmó versión runtime 1.1.405 y
 contacto del terminal durante el incidente.
 
@@ -189,15 +190,17 @@ Resultados:
   2.53 s y 2.99 s respectivamente.
 
 El código 1.1.405 espera confirmación de aplicación del ERP antes de considerar completada cada
-transacción y procesa la ruta legacy secuencialmente. La espera HTTP es asíncrona, pero una ráfaga de
-diez operaciones mantiene vivo el ciclo durante varios minutos y alterna cada evento con persistencia
-SQLite, métricas y conteos. La coincidencia temporal hace **probable** que soporte liberara un backlog
-operacional y que al terminar cesara el trabajo repetitivo asociado. Todavía falta una traza del hilo UI
+transacción y procesa la ruta legacy secuencialmente. La espera HTTP es asíncrona; cada elemento sí
+implica persistencia SQLite y métricas, mientras el conteo agregado ocurre antes y después del ciclo.
+Los diez pares recibidos durante nueve minutos son **compatibles** con un drenaje de backlog alrededor
+de la intervención, pero también podrían incluir operaciones creadas gradualmente. No se conservaron IDs
+correlacionados ni timestamps locales de creación para distinguirlos. Todavía falta una traza del hilo UI
 para demostrar que ese trabajo produjo la lentitud visual.
 
-Supabase no muestra rechazo, error de aplicación ni dead letter que explique el incidente. Sí registra
-mayor latencia de procesamiento mientras se drenó el grupo. Esto orienta el diagnóstico hacia backlog,
-reintentos/escaneos locales y duración del pipeline ERP, en lugar de un fallo de Supabase.
+Las tablas de Supabase consultadas no muestran rechazo, error de aplicación ni dead letter que explique
+el incidente. Sí registran mayor latencia de procesamiento durante la ventana de soporte. Esto orienta
+el diagnóstico hacia un posible backlog, reintentos/escaneos locales y duración del pipeline ERP, sin
+descartar esperas transitorias del backend ni atribuirle la lentitud visual.
 
 La configuración remota contiene un campo superior `role=MASTER`, pero el contrato operativo registra
 `deviceRole=STANDARD_POS`, `terminal_type=STANDARD_POS` e `isPrimaryNode=false`; el código resuelve este
