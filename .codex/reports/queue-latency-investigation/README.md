@@ -34,11 +34,12 @@ En el emulador, la búsqueda de catálogo mantuvo el mismo orden de latencia con
 con tres transacciones pendientes mientras el POS pausaba la sincronización por actividad del operador.
 La sola presencia de `Online · 3` no reprodujo la lentitud.
 
-El equipo del cliente fue fabricado para Windows y convertido a Android, igual que los equipos
-master-cliente usados con éxito en laboratorio. La conversión no explica por sí sola la lentitud. Sí
-quedan por comparar diferencias de esa unidad: almacenamiento, WebView, controladores, temperatura,
-memoria, configuración y estado local. Que el cliente operara normalmente durante el día y reportara la
-lentitud de noche refuerza una causa acumulativa o intermitente, no un costo fijo de la interfaz.
+Según el usuario, el equipo del cliente fue fabricado para Windows y convertido a Android, igual que los
+equipos master-cliente usados con éxito en laboratorio. Bajo ese reporte operativo, la conversión no
+explica por sí sola la lentitud. Sí quedan por comparar diferencias de esa unidad: almacenamiento,
+WebView, controladores, temperatura, memoria, configuración y estado local. Que el cliente operara
+normalmente durante el día y reportara la lentitud de noche refuerza una causa acumulativa o
+intermitente, no un costo fijo de la interfaz.
 
 ## Medición en emulador
 
@@ -105,9 +106,10 @@ Las hipótesis prioritarias para medir en el equipo físico son:
    los equipos master-cliente equivalentes que funcionan bien.
 5. Presión térmica, memoria o GC después de varias horas de operación.
 
-Supabase debe considerarse si la traza muestra que polling/hints/heartbeat coinciden con el bloqueo o si
-el runtime tenía habilitado un override de Realtime. El canal Realtime privado no es candidato principal
-bajo la configuración predeterminada.
+El destino operacional, incluido el ERP cuando corresponda, debe investigarse para el HTTP, polling y
+heartbeat. Supabase solo entra como candidato si se demuestra que el runtime tenía habilitado su canal
+Realtime/hints y que esa actividad coincide con el bloqueo. El canal Realtime privado no es candidato
+principal bajo la configuración predeterminada.
 
 ## Captura mínima pendiente en el equipo del cliente
 
