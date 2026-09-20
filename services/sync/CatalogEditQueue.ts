@@ -30,6 +30,9 @@ export interface CatalogQueueDependencies {
     matchesScope(scope: CatalogScope): boolean;
     send(edit: CatalogEdit): Promise<CatalogResult>;
     onPermanentRejection?(edit: CatalogEdit, code: string): Promise<void>;
+    shouldPause?(): boolean;
+    yieldToUi?(): Promise<void>;
+    chunkSize?: number;
     now(): number;
 }
 const permanentRejection = (error: unknown): { code: string; message: string } | null => {
@@ -67,8 +70,15 @@ export class CatalogEditQueue {
     private async run() {
         const rows = (await this.deps.read()).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
         const outcomes = new Map(rows.map(edit => [edit.id, edit.status]));
+        const chunkSize = Math.max(1, Math.trunc(this.deps.chunkSize || 25));
+        let processed = 0;
         for (const edit of rows) {
             if (edit.status !== 'PENDING') continue;
+            if (processed > 0 && processed % chunkSize === 0) {
+                await this.deps.yieldToUi?.();
+            }
+            if (this.deps.shouldPause?.()) return;
+            processed += 1;
             const now = this.deps.now();
             if (!this.deps.matchesScope(edit.scope)) {
                 const scopeError = 'CATALOG_EDIT_SCOPE_MISMATCH';

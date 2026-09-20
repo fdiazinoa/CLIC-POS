@@ -100,3 +100,91 @@ test('conflict on the first change blocks later offline values', async () => {
         matchesScope: () => true, now: () => 1000, send: async edit => { sent.push(edit.id); return { id: edit.id, status: 'CONFLICT' }; } });
     await q.process(); assert.deepEqual(sent, ['mutation-1']); assert.equal(rows[1].status, 'CONFLICT');
 });
+test('large queues yield in chunks and pause before sending more work during a sale', async () => {
+    let rows = Array.from({ length: 60 }, (_, index) => {
+        const id = `mutation-${index + 1}`;
+        return {
+            ...makeEdit(),
+            id,
+            mutation: { ...makeEdit().mutation, id },
+            createdAt: `2026-09-10T00:00:${String(index).padStart(2, '0')}.000Z`,
+        };
+    });
+    const sent: string[] = [];
+    let paused = false;
+    let yields = 0;
+    const q = new CatalogEditQueue({
+        read: async () => structuredClone(rows),
+        save: async next => { rows = rows.map(row => row.id === next.id ? next : row); },
+        matchesScope: () => true,
+        now: () => 1000,
+        send: async edit => { sent.push(edit.id); return { id: edit.id, status: 'APPLIED' }; },
+        chunkSize: 25,
+        shouldPause: () => paused,
+        yieldToUi: async () => { yields += 1; paused = true; },
+    });
+
+    await q.process();
+    assert.equal(sent.length, 25);
+    assert.equal(yields, 1);
+    assert.equal(rows.filter(row => row.status === 'PENDING').length, 35);
+
+    paused = false;
+    await q.process();
+    assert.equal(sent.length, 50);
+    assert.equal(rows.filter(row => row.status === 'PENDING').length, 10);
+
+    paused = false;
+    await q.process();
+    assert.equal(sent.length, 60);
+    assert.equal(rows.filter(row => row.status === 'PENDING').length, 0);
+});
+test('a queue paused at entry sends nothing until operator activity ends', async () => {
+    let row = makeEdit();
+    let paused = true;
+    let sent = 0;
+    const q = new CatalogEditQueue({
+        read: async () => [structuredClone(row)],
+        save: async next => { row = next; },
+        matchesScope: () => true,
+        now: () => 1000,
+        send: async edit => { sent += 1; return { id: edit.id, status: 'APPLIED' }; },
+        shouldPause: () => paused,
+    });
+
+    await q.process();
+    assert.equal(sent, 0);
+    assert.equal(row.status, 'PENDING');
+
+    paused = false;
+    await q.process();
+    assert.equal(sent, 1);
+    assert.equal(row.status, 'APPLIED');
+});
+test('operator activity starting during a send pauses before the next mutation', async () => {
+    let rows = [makeEdit(), {
+        ...makeEdit(),
+        id: 'mutation-2',
+        mutation: { ...makeEdit().mutation, id: 'mutation-2' },
+        createdAt: '2026-09-11',
+    }];
+    let paused = false;
+    const sent: string[] = [];
+    const q = new CatalogEditQueue({
+        read: async () => structuredClone(rows),
+        save: async next => { rows = rows.map(row => row.id === next.id ? next : row); },
+        matchesScope: () => true,
+        now: () => 1000,
+        send: async edit => { sent.push(edit.id); paused = true; return { id: edit.id, status: 'APPLIED' }; },
+        shouldPause: () => paused,
+    });
+
+    await q.process();
+    assert.deepEqual(sent, ['mutation-1']);
+    assert.equal(rows[1].status, 'PENDING');
+
+    paused = false;
+    await q.process();
+    assert.deepEqual(sent, ['mutation-1', 'mutation-2']);
+    assert.equal(rows[1].status, 'APPLIED');
+});
