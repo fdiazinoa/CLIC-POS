@@ -23,20 +23,23 @@
   ],
   "deadLetters": 0,
   "remoteOutboxEvents": 0,
-  "processingLatencyMs": {
+  "processingLatency": {
     "definition": "processed_at - created_at in erp_sync_inbox",
     "percentileMethod": "PostgreSQL percentile_cont",
-    "before2255": {
-      "SALE_POSTED": {"n": 36, "avg": 2258.9, "p50": 1874.6, "p95": 4276.1, "max": 4859.1},
-      "PAYMENT_POSTED": {"n": 36, "avg": 2678.4, "p50": 2276.3, "p95": 4659.4, "max": 5257.1}
-    },
-    "supportWindow2255To2310": {
-      "SALE_POSTED": {"n": 10, "avg": 3263.2, "p50": 2746.2, "p95": 5424.5, "max": 6153.7},
-      "PAYMENT_POSTED": {"n": 10, "avg": 3709.3, "p50": 3212.7, "p95": 5848.7, "max": 6502.7}
-    },
-    "after2310": {
-      "SALE_POSTED": {"n": 8, "avg": 2527.1, "p50": 2279.5, "p95": 3843.3, "max": 3936.8},
-      "PAYMENT_POSTED": {"n": 8, "avg": 2989.5, "p50": 2694.5, "p95": 4387.9, "max": 4510.8}
+    "unit": "milliseconds",
+    "windows": {
+      "before2255": {
+        "SALE_POSTED": {"n": 36, "avg": 2258.9, "p50": 1874.6, "p95": 4276.1, "max": 4859.1},
+        "PAYMENT_POSTED": {"n": 36, "avg": 2678.4, "p50": 2276.3, "p95": 4659.4, "max": 5257.1}
+      },
+      "supportWindow2255To2310": {
+        "SALE_POSTED": {"n": 10, "avg": 3263.2, "p50": 2746.2, "p95": 5424.5, "max": 6153.7},
+        "PAYMENT_POSTED": {"n": 10, "avg": 3709.3, "p50": 3212.7, "p95": 5848.7, "max": 6502.7}
+      },
+      "after2310": {
+        "SALE_POSTED": {"n": 8, "avg": 2527.1, "p50": 2279.5, "p95": 3843.3, "max": 3936.8},
+        "PAYMENT_POSTED": {"n": 8, "avg": 2989.5, "p50": 2694.5, "p95": 4387.9, "max": 4510.8}
+      }
     }
   },
   "supportWindowMinuteCounts": [

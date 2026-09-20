@@ -184,7 +184,7 @@ Resultados:
 - cero eventos del outbox remoto para ese terminal en la ventana;
 - exactamente 10 ventas y 10 pagos recibidos entre 22:57 y 23:06, alrededor de la intervención de
   soporte;
-- en esa ventana de drenaje, `SALE_POSTED` tuvo promedio 3.26 s, p95 5.42 s y máximo 6.15 s;
+- en esa ventana de soporte, `SALE_POSTED` tuvo promedio 3.26 s, p95 5.42 s y máximo 6.15 s;
 - `PAYMENT_POSTED` tuvo promedio 3.71 s, p95 5.85 s y máximo 6.50 s;
 - antes de esa ventana, los promedios eran 2.26 s para venta y 2.68 s para pago; después de 23:10,
   2.53 s y 2.99 s respectivamente.
