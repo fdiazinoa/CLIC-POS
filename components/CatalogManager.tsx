@@ -34,6 +34,10 @@ import { resolveProductImageSrc } from '../utils/entityImage';
 import { useBarcodeScanner } from '../hooks/useBarcodeScanner';
 import { createNumberedMaster } from '../services/sync/MasterNumberRangeService';
 import { buildProductEditorSyncMarker } from '../utils/productEditorSync';
+import {
+   POS_CATALOG_EDIT_DISABLED_MESSAGE,
+   resolveCurrentPosCatalogEditAuthorization,
+} from '../services/sync/catalogEditAuthorization';
 
 interface CatalogManagerProps {
    products: Product[];
@@ -655,6 +659,11 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
    };
 
    const canManage = hasPermission('CATALOG_MANAGE');
+   const catalogEditAuthorization = useMemo(
+      () => resolveCurrentPosCatalogEditAuthorization(config, terminalId),
+      [config, terminalId]
+   );
+   const canEditCatalog = canManage && catalogEditAuthorization.allowed;
    const isTablet = viewportWidth >= 1024 && viewportWidth < 1280;
    const isDesktop = viewportWidth >= 1280;
    const isLargeCatalogLayout = isTablet || isDesktop;
@@ -856,8 +865,8 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
       if (!prod) return;
 
       consumedInitialProductIdRef.current = initialProductId;
-      setEditingProduct(prod);
-   }, [initialProductId, products]);
+      if (canEditCatalog) setEditingProduct(prod);
+   }, [canEditCatalog, initialProductId, products]);
 
    const tariffs = useMemo(
       () => (Array.isArray(config?.tariffs) ? config.tariffs.filter((entry): entry is Tariff => Boolean(entry && typeof entry === 'object' && (entry as any).id)) : []),
@@ -875,6 +884,19 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
    const [editingGroup, setEditingGroup] = useState<ProductGroup | null | 'NEW'>(null);
    const [editingSeason, setEditingSeason] = useState<Season | null | 'NEW'>(null);
    const [erpCategoryOptions, setErpCategoryOptions] = useState<Array<{ id: string; name: string }>>([]);
+
+   useEffect(() => {
+      if (canEditCatalog) return;
+      setEditingProduct(null);
+      setEditingTariff(null);
+      setEditingGroup(null);
+      setEditingSeason(null);
+      setQuickPriceProduct(null);
+      setShowBulkModal(false);
+      setSelectedIds(new Set());
+      setOpenActionsId(null);
+      if (viewMode === 'VARIANTS') setViewMode('PRODUCTS');
+   }, [canEditCatalog, viewMode]);
 
    const categories = useMemo(
       () => {
@@ -1097,6 +1119,10 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
    };
 
    const handleBulkUpdate = async (changes: any) => {
+      if (!canEditCatalog) {
+         alert(POS_CATALOG_EDIT_DISABLED_MESSAGE);
+         return;
+      }
       setShowBulkModal(false);
 
       try {
@@ -1169,7 +1195,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
       alert(`¡Listo! Se actualizaron ${updatedCount} productos.`);
    };
 
-   if (viewMode === 'VARIANTS') return <VariantManager onClose={() => setViewMode('PRODUCTS')} />;
+   if (viewMode === 'VARIANTS' && canEditCatalog) return <VariantManager onClose={() => setViewMode('PRODUCTS')} />;
    if (editingProduct) return <ProductForm key={editingProduct === 'NEW' ? 'NEW' : editingProduct.id} initialData={editingProduct === 'NEW' ? null : editingProduct} config={config} warehouses={runtimeWarehouses} availableTariffs={tariffs} hasHistory={runtimeTransactions?.some(t => t.items?.some(item => item.id === (editingProduct as any).id)) ?? false} currentUser={currentUser} roles={roles} onSave={handleSaveProduct} onClose={() => setEditingProduct(null)} transfers={transfers} purchaseOrders={purchaseOrders} suppliers={suppliers} seasons={config.seasons || []} initialTab={initialTab} allProducts={products} />
    if (editingTariff) return <TariffForm initialData={editingTariff === 'NEW' ? null : editingTariff} products={products} config={config} availableTariffs={tariffs} actorId={currentUser?.id} onSave={handleSaveTariff} onUpdateProducts={onUpdateProducts} onClose={() => setEditingTariff(null)} />;
    if (editingGroup) return <GroupForm initialData={editingGroup === 'NEW' ? null : editingGroup} products={products} onSave={handleSaveGroup} onClose={() => setEditingGroup(null)} />;
@@ -1179,6 +1205,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
          actorId={currentUser?.id}
          config={config}
          products={products}
+         readOnly={!canEditCatalog}
          onUpdateProducts={onUpdateProducts}
          onUpdateConfig={(nextConfig) => {
             setCatalogConfig(nextConfig);
@@ -1189,6 +1216,10 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
    );
 
    async function handleSaveProduct(savedProduct: Product) {
+      if (!canEditCatalog) {
+         alert(POS_CATALOG_EDIT_DISABLED_MESSAGE);
+         return;
+      }
       try {
          const oldProduct = products.find(p => p.id === savedProduct.id);
          const exists = !!oldProduct;
@@ -1286,6 +1317,10 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
    })();
 
    const openQuickPriceEditor = (product: Product) => {
+      if (!canEditCatalog) {
+         alert(POS_CATALOG_EDIT_DISABLED_MESSAGE);
+         return;
+      }
       const tariffPrice = (product.tariffs || []).find((entry) => entry.tariffId === defaultPosTariff?.id);
       setQuickPriceValue(String(Number(tariffPrice?.price ?? product.price ?? 0)));
       setQuickPriceProduct(product);
@@ -1327,7 +1362,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
    };
 
    async function handleDeleteProduct(product: Product) {
-      if (!canManage || !product?.id) return;
+      if (!canEditCatalog || !product?.id) return;
       const label = product.name || product.id;
       if (!await clicConfirm(`¿Eliminar el artículo "${label}"? El ERP impedirá la baja si tiene ventas, movimientos, existencias o recetas asociadas.`)) return;
 
@@ -1351,6 +1386,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
    }
 
    function handleSaveTariff(savedTariff: Tariff) {
+      if (!canEditCatalog) return alert(POS_CATALOG_EDIT_DISABLED_MESSAGE);
       const exists = tariffs.some(t => t.id === savedTariff.id);
       const nextConfig = { ...config, tariffs: exists ? tariffs.map(t => t.id === savedTariff.id ? savedTariff : t) : [...tariffs, savedTariff] };
       setCatalogConfig(nextConfig);
@@ -1359,6 +1395,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
    }
 
    function handleSaveGroup(savedGroup: ProductGroup) {
+      if (!canEditCatalog) return alert(POS_CATALOG_EDIT_DISABLED_MESSAGE);
       const exists = currentProductGroups.some(g => g.id === savedGroup.id);
       const nextConfig = { ...config, productGroups: exists ? currentProductGroups.map(g => g.id === savedGroup.id ? savedGroup : g) : [...currentProductGroups, savedGroup] };
       setCatalogConfig(nextConfig);
@@ -1367,6 +1404,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
    }
 
    function handleSaveSeason(savedSeason: Season) {
+      if (!canEditCatalog) return alert(POS_CATALOG_EDIT_DISABLED_MESSAGE);
       const exists = currentSeasons.some(s => s.id === savedSeason.id);
       const nextConfig = { ...config, seasons: exists ? currentSeasons.map(s => s.id === savedSeason.id ? savedSeason : s) : [...currentSeasons, savedSeason] };
       setCatalogConfig(nextConfig);
@@ -1375,6 +1413,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
    }
 
    async function handleDeleteGroup(groupId: string) {
+      if (!canEditCatalog) return alert(POS_CATALOG_EDIT_DISABLED_MESSAGE);
       const group = currentProductGroups.find((entry) => entry.id === groupId);
       if (!group) return;
       if (!await clicConfirm(`¿Eliminar el grupo "${group.name}"?`)) return;
@@ -1387,6 +1426,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
    }
 
    async function handleDeleteSeason(seasonId: string) {
+      if (!canEditCatalog) return alert(POS_CATALOG_EDIT_DISABLED_MESSAGE);
       const season = currentSeasons.find((entry) => entry.id === seasonId);
       if (!season) return;
       if (!await clicConfirm(`¿Eliminar la temporada "${season.name}"?`)) return;
@@ -1401,11 +1441,11 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
    const renderProductActions = (product: Product) => (
       <ProductRowActions
          product={product}
-         canManage={canManage}
+         canManage={canEditCatalog}
          isOpen={openActionsId === product.id}
          onToggle={() => setOpenActionsId((id) => id === product.id ? null : product.id)}
          onPrice={() => openQuickPriceEditor(product)}
-         onEdit={() => setEditingProduct(product)}
+         onEdit={() => canEditCatalog ? setEditingProduct(product) : alert(POS_CATALOG_EDIT_DISABLED_MESSAGE)}
          onStock={() => setViewMode('STOCKS')}
          onDelete={() => void handleDeleteProduct(product)}
       />
@@ -1427,7 +1467,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                <button type="button" onClick={() => document.querySelector<HTMLInputElement>('[data-barcode-scanner-target=\"true\"]')?.focus({ preventScroll: true })} className="flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-50 text-blue-600 hover:bg-blue-100 focus-visible:ring-4 focus-visible:ring-blue-100" aria-label="Escanear código de barras" title="Escanear código de barras"><ScanBarcode size={22} /></button>
                <button type="button" onClick={() => setShowAdvancedFilters((value) => !value)} className={`flex h-12 items-center gap-2 rounded-2xl border px-4 text-sm font-black transition ${showAdvancedFilters ? 'border-blue-600 bg-blue-50 text-blue-700' : 'border-gray-200 bg-white text-gray-700 hover:border-blue-200'}`}><SlidersHorizontal size={18} /> Filtros</button>
                <select value={warehouseFilter} onChange={(event) => setWarehouseFilter(event.target.value)} className="h-12 max-w-[220px] rounded-2xl border border-gray-200 bg-white px-4 text-sm font-bold text-gray-700 outline-none focus:border-blue-400" aria-label="Filtrar por almacén"><option value="ALL">Todos los almacenes</option>{runtimeWarehouses.map((warehouse) => <option key={warehouse.id} value={warehouse.id}>{warehouse.name}</option>)}</select>
-               {canManage && <button type="button" onClick={() => setEditingProduct('NEW')} className="flex h-12 items-center gap-2 rounded-2xl bg-blue-600 px-5 text-sm font-black text-white transition hover:bg-blue-700 active:scale-95"><Plus size={20} /> Nuevo producto</button>}
+               {canEditCatalog && <button type="button" onClick={() => setEditingProduct('NEW')} className="flex h-12 items-center gap-2 rounded-2xl bg-blue-600 px-5 text-sm font-black text-white transition hover:bg-blue-700 active:scale-95"><Plus size={20} /> Nuevo producto</button>}
             </div>
          </div>
 
@@ -1450,7 +1490,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
          </div>
 
          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-            {canManage && <button type="button" onClick={toggleAllSelection} className="flex h-11 items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 text-sm font-black text-gray-700"><CheckSquare size={18} className="text-blue-600" /> Seleccionar página</button>}
+            {canEditCatalog && <button type="button" onClick={toggleAllSelection} className="flex h-11 items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 text-sm font-black text-gray-700"><CheckSquare size={18} className="text-blue-600" /> Seleccionar página</button>}
             <label className="ml-auto flex items-center gap-2 text-sm font-bold text-gray-500">Ordenar por:<select value={productSort} onChange={(event) => setProductSort(event.target.value as ProductSortMode)} className="h-11 rounded-xl border border-gray-200 bg-white px-3 text-sm font-bold text-gray-700 outline-none"><option value="NAME_ASC">Nombre A-Z</option><option value="NAME_DESC">Nombre Z-A</option><option value="PRICE_ASC">Precio menor-mayor</option><option value="PRICE_DESC">Precio mayor-menor</option><option value="STOCK_ASC">Stock menor-mayor</option><option value="STOCK_DESC">Stock mayor-menor</option><option value="RECENT">Más recientes</option></select></label>
          </div>
 
@@ -1461,17 +1501,17 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
 
          {isCatalogLoading && products.length === 0 ? <div className="space-y-2" aria-label="Cargando productos">{Array.from({ length: 6 }).map((_, index) => <div key={index} className="h-28 animate-pulse rounded-2xl border border-gray-100 bg-gray-50" />)}</div>
          : catalogLoadError && products.length === 0 ? <div className="rounded-2xl border border-red-100 bg-red-50 p-8 text-center"><h3 className="text-xl font-black text-gray-900">No pudimos cargar los productos</h3><button type="button" onClick={() => window.location.reload()} className="mt-4 rounded-xl bg-blue-600 px-5 py-3 font-black text-white">Reintentar</button></div>
-         : sortedProducts.length === 0 ? <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50 p-10 text-center"><Package className="mx-auto mb-3 text-gray-300" size={36} /><h3 className="text-xl font-black text-gray-900">{products.length === 0 ? 'No hay productos registrados' : 'No encontramos productos para estos filtros'}</h3><p className="mt-2 text-sm font-semibold text-gray-500">{products.length === 0 ? 'Crea el primer artículo para comenzar tu catálogo.' : 'Prueba otra búsqueda o limpia los filtros activos.'}</p><button type="button" onClick={products.length === 0 ? () => setEditingProduct('NEW') : clearProductFilters} className="mt-5 rounded-xl bg-blue-600 px-5 py-3 text-sm font-black text-white">{products.length === 0 ? '+ Nuevo producto' : 'Limpiar filtros'}</button></div>
+         : sortedProducts.length === 0 ? <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50 p-10 text-center"><Package className="mx-auto mb-3 text-gray-300" size={36} /><h3 className="text-xl font-black text-gray-900">{products.length === 0 ? 'No hay productos registrados' : 'No encontramos productos para estos filtros'}</h3><p className="mt-2 text-sm font-semibold text-gray-500">{products.length === 0 ? (canEditCatalog ? 'Crea el primer artículo para comenzar tu catálogo.' : 'El catálogo está disponible en modo de solo lectura.') : 'Prueba otra búsqueda o limpia los filtros activos.'}</p>{(products.length > 0 || canEditCatalog) && <button type="button" onClick={products.length === 0 ? () => setEditingProduct('NEW') : clearProductFilters} className="mt-5 rounded-xl bg-blue-600 px-5 py-3 text-sm font-black text-white">{products.length === 0 ? '+ Nuevo producto' : 'Limpiar filtros'}</button>}</div>
          : productDisplayMode === 'TABLE' && isLargeCatalogLayout ? <div className="overflow-x-auto rounded-2xl border border-gray-200 bg-white"><table className="w-full min-w-[1050px] select-none text-left text-sm"><thead className="sticky top-0 z-10 border-b border-gray-100 bg-white text-[11px] font-black uppercase tracking-wider text-gray-500"><tr><th className="p-4"><span className="sr-only">Seleccionar</span></th><th className="p-4">Producto</th><th className="p-4">Referencia / SKU</th><th className="p-4">Código de barras</th><th className="p-4">Categoría</th><th className="p-4">Stock</th><th className="p-4">Precio</th><th className="p-4">Estado</th><th className="p-4 text-right">Acciones</th></tr></thead><tbody className="divide-y divide-gray-100">{pagedProducts.map((product) => {
             const sku = productSkuValues(product)[0] || product.id; const barcode = productBarcodeValues(product)[0] || ''; const stock = productStockForWarehouse(product, warehouseFilter); const status = productStockStatus(product, warehouseFilter);
-            return <tr key={product.id} className={selectedIds.has(product.id) ? 'bg-blue-50/60' : 'bg-white hover:bg-blue-50/20'}><td className="p-4"><button type="button" onClick={() => toggleSelection(product.id)} className="flex h-10 w-10 items-center justify-center bg-transparent shadow-none" aria-label={`Seleccionar ${product.name}`}>{selectedIds.has(product.id) ? <CheckSquare className="text-blue-600" size={20} /> : <Square className="text-gray-300" size={20} />}</button></td><td className="p-4"><div className="flex min-w-[230px] items-center gap-4"><ProductThumbnail product={product} /><div className="min-w-0"><button type="button" onClick={() => setEditingProduct(product)} className="block max-w-[260px] truncate bg-transparent text-left font-black text-gray-900 shadow-none hover:text-blue-600">{product.name}</button><p className="mt-1 max-w-[260px] truncate text-xs font-semibold text-gray-400">{product.description || formatProductType(product) || 'Artículo de catálogo'}</p></div></div></td><td className="p-4"><CopyableCode value={sku} label="referencia" onCopy={copyProductValue} /></td><td className="p-4"><CopyableCode value={barcode} label="código de barras" onCopy={copyProductValue} /></td><td className="p-4 font-bold text-gray-600">{product.category || 'Sin categoría'}</td><td className="p-4"><StockIndicator value={stock} status={status} onClick={() => setViewMode('STOCKS')} /></td><td className="p-4"><ProductPriceBlock product={product} currency={config.currencySymbol} /></td><td className="p-4"><ActiveBadge active={productIsActive(product)} sellable={product.is_sellable !== false} /></td><td className="p-4">{renderProductActions(product)}</td></tr>;
+            return <tr key={product.id} className={selectedIds.has(product.id) ? 'bg-blue-50/60' : 'bg-white hover:bg-blue-50/20'}><td className="p-4">{canEditCatalog && <button type="button" onClick={() => toggleSelection(product.id)} className="flex h-10 w-10 items-center justify-center bg-transparent shadow-none" aria-label={`Seleccionar ${product.name}`}>{selectedIds.has(product.id) ? <CheckSquare className="text-blue-600" size={20} /> : <Square className="text-gray-300" size={20} />}</button>}</td><td className="p-4"><div className="flex min-w-[230px] items-center gap-4"><ProductThumbnail product={product} /><div className="min-w-0"><span className="block max-w-[260px] truncate text-left font-black text-gray-900">{product.name}</span><p className="mt-1 max-w-[260px] truncate text-xs font-semibold text-gray-400">{product.description || formatProductType(product) || 'Artículo de catálogo'}</p></div></div></td><td className="p-4"><CopyableCode value={sku} label="referencia" onCopy={copyProductValue} /></td><td className="p-4"><CopyableCode value={barcode} label="código de barras" onCopy={copyProductValue} /></td><td className="p-4 font-bold text-gray-600">{product.category || 'Sin categoría'}</td><td className="p-4"><StockIndicator value={stock} status={status} onClick={() => setViewMode('STOCKS')} /></td><td className="p-4"><ProductPriceBlock product={product} currency={config.currencySymbol} /></td><td className="p-4"><ActiveBadge active={productIsActive(product)} sellable={product.is_sellable !== false} /></td><td className="p-4">{renderProductActions(product)}</td></tr>;
          })}</tbody></table></div>
          : <div className="overflow-visible rounded-2xl border border-gray-200 bg-white divide-y divide-gray-100">{pagedProducts.map((product) => {
             const sku = productSkuValues(product)[0] || product.id; const barcode = productBarcodeValues(product)[0] || ''; const stock = productStockForWarehouse(product, warehouseFilter); const status = productStockStatus(product, warehouseFilter);
             return <article key={product.id} className={`catalog-product-row relative select-none bg-white px-3 py-4 transition-colors md:px-4 ${selectedIds.has(product.id) ? 'bg-blue-50/60' : 'hover:bg-blue-50/20'}`}>
-               <div className="flex items-center justify-center">{canManage && <button type="button" onClick={() => toggleSelection(product.id)} className="flex h-11 w-11 items-center justify-center rounded-xl bg-transparent shadow-none" aria-label={`${selectedIds.has(product.id) ? 'Quitar selección de' : 'Seleccionar'} ${product.name}`}>{selectedIds.has(product.id) ? <CheckSquare className="text-blue-600" size={21} /> : <Square className="text-gray-300" size={21} />}</button>}</div>
+               <div className="flex items-center justify-center">{canEditCatalog && <button type="button" onClick={() => toggleSelection(product.id)} className="flex h-11 w-11 items-center justify-center rounded-xl bg-transparent shadow-none" aria-label={`${selectedIds.has(product.id) ? 'Quitar selección de' : 'Seleccionar'} ${product.name}`}>{selectedIds.has(product.id) ? <CheckSquare className="text-blue-600" size={21} /> : <Square className="text-gray-300" size={21} />}</button>}</div>
                <ProductThumbnail product={product} />
-               <div className="min-w-0"><button type="button" onClick={() => setEditingProduct(product)} className="block max-w-full truncate bg-transparent text-left text-base font-black text-gray-900 shadow-none hover:text-blue-600">{product.name}</button><p className="mt-1 line-clamp-1 text-xs font-semibold text-gray-500">{product.description || formatProductType(product) || 'Artículo de catálogo'}</p><div className="mt-2 flex flex-wrap gap-1.5"><span className="rounded-lg bg-blue-50 px-2 py-1 text-[11px] font-black text-blue-700">{product.category || 'Sin categoría'}</span><ActiveBadge active={productIsActive(product)} sellable={product.is_sellable !== false} compact /></div></div>
+               <div className="min-w-0"><span className="block max-w-full truncate text-left text-base font-black text-gray-900">{product.name}</span><p className="mt-1 line-clamp-1 text-xs font-semibold text-gray-500">{product.description || formatProductType(product) || 'Artículo de catálogo'}</p><div className="mt-2 flex flex-wrap gap-1.5"><span className="rounded-lg bg-blue-50 px-2 py-1 text-[11px] font-black text-blue-700">{product.category || 'Sin categoría'}</span><ActiveBadge active={productIsActive(product)} sellable={product.is_sellable !== false} compact /></div></div>
                <div className="catalog-product-block space-y-2"><CopyableCode value={sku} label="referencia" onCopy={copyProductValue} strong /><CopyableCode value={barcode} label="código de barras" onCopy={copyProductValue} /></div>
                <div className="catalog-product-block"><StockIndicator value={stock} status={status} onClick={() => setViewMode('STOCKS')} /></div>
                <div className="catalog-product-block"><ProductPriceBlock product={product} currency={config.currencySymbol} /></div>
@@ -1488,6 +1528,12 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
    return (
       <div className={`responsive-shell flex min-h-0 h-full bg-white animate-in fade-in slide-in-from-right-10 duration-300 relative ${isTablet ? 'flex-row' : 'flex-col'}`}>
 
+         {canManage && !catalogEditAuthorization.allowed && (
+            <div className="absolute left-1/2 top-3 z-[90] w-[min(92%,760px)] -translate-x-1/2 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-3 text-center text-sm font-bold text-amber-900 shadow-lg">
+               Catálogo en solo lectura. {POS_CATALOG_EDIT_DISABLED_MESSAGE}
+            </div>
+         )}
+
          {/* SIDEBAR - Tablet Only */}
          {isTablet && (
             <div className="w-[300px] bg-[#f2f4f7] border-r border-gray-100 flex flex-col p-8 shrink-0 h-full">
@@ -1503,7 +1549,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                <nav className="flex-1 space-y-3">
                   <SidebarItem label="Productos" icon={<Package size={22} />} active={viewMode === 'PRODUCTS'} onClick={() => setViewMode('PRODUCTS')} />
                   <SidebarItem label="Monitor BI" icon={<Activity size={22} />} active={viewMode === 'BI_MONITOR'} onClick={() => setViewMode('BI_MONITOR')} />
-                  {canManage && <SidebarItem label="Variantes" icon={<Layers size={22} />} active={(viewMode as string) === 'VARIANTS'} onClick={() => setViewMode('VARIANTS')} />}
+                  {canEditCatalog && <SidebarItem label="Variantes" icon={<Layers size={22} />} active={(viewMode as string) === 'VARIANTS'} onClick={() => setViewMode('VARIANTS')} />}
                   <SidebarItem label="Clasificaciones" icon={<Grid size={22} />} active={(viewMode as string) === 'CLASSIFICATIONS'} onClick={() => setViewMode('CLASSIFICATIONS')} />
                   <SidebarItem label="Grupos" icon={<Grid size={22} />} active={viewMode === 'GROUPS'} onClick={() => setViewMode('GROUPS')} />
                   <SidebarItem label="Temporadas" icon={<Sun size={22} />} active={viewMode === 'SEASONS'} onClick={() => setViewMode('SEASONS')} />
@@ -1545,7 +1591,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                         <div className="inline-flex items-center gap-2 min-w-max pb-1">
                            <button onClick={() => setViewMode('PRODUCTS')} className={`inline-flex items-center gap-2 px-4 py-3 text-sm font-bold rounded-t-2xl border-b-4 transition-colors ${viewMode === 'PRODUCTS' ? 'border-blue-600 text-blue-600 bg-white' : 'border-transparent text-gray-400 bg-white'}`}>Productos</button>
                            <button onClick={() => setViewMode('BI_MONITOR')} className={`inline-flex items-center gap-2 px-4 py-3 text-sm font-bold rounded-t-2xl border-b-4 transition-colors ${viewMode === 'BI_MONITOR' ? 'border-blue-600 text-blue-600 bg-white' : 'border-transparent text-gray-400 bg-white'}`}>Monitor</button>
-                           {canManage && <button onClick={() => setViewMode('VARIANTS')} className={`inline-flex items-center gap-2 px-4 py-3 text-sm font-bold rounded-t-2xl border-b-4 transition-colors ${(viewMode as string) === 'VARIANTS' ? 'border-blue-600 text-blue-600 bg-white' : 'border-transparent text-gray-400 bg-white'}`}>Variantes</button>}
+                           {canEditCatalog && <button onClick={() => setViewMode('VARIANTS')} className={`inline-flex items-center gap-2 px-4 py-3 text-sm font-bold rounded-t-2xl border-b-4 transition-colors ${(viewMode as string) === 'VARIANTS' ? 'border-blue-600 text-blue-600 bg-white' : 'border-transparent text-gray-400 bg-white'}`}>Variantes</button>}
                            <button onClick={() => setViewMode('CLASSIFICATIONS')} className={`inline-flex items-center gap-2 px-4 py-3 text-sm font-bold rounded-t-2xl border-b-4 transition-colors ${(viewMode as string) === 'CLASSIFICATIONS' ? 'border-blue-600 text-blue-600 bg-white' : 'border-transparent text-gray-400 bg-white'}`}>Clasificaciones</button>
                            <button onClick={() => setViewMode('GROUPS')} className={`inline-flex items-center gap-2 px-4 py-3 text-sm font-bold rounded-t-2xl border-b-4 transition-colors ${viewMode === 'GROUPS' ? 'border-blue-600 text-blue-600 bg-white' : 'border-transparent text-gray-400 bg-white'}`}>Grupos</button>
                            <button onClick={() => setViewMode('SEASONS')} className={`inline-flex items-center gap-2 px-4 py-3 text-sm font-bold rounded-t-2xl border-b-4 transition-colors ${viewMode === 'SEASONS' ? 'border-blue-600 text-blue-600 bg-white' : 'border-transparent text-gray-400 bg-white'}`}>Temporadas</button>
@@ -1569,7 +1615,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                         />
                      </div>}
                   </div>
-                  {canManage && viewMode !== 'PRODUCTS' && (
+                  {canEditCatalog && viewMode !== 'PRODUCTS' && (
                      <button
                         onClick={() => {
                            if (viewMode === 'TARIFFS') setEditingTariff('NEW');
@@ -1616,7 +1662,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                            className="h-16 w-full rounded-3xl border border-gray-200 bg-white pl-14 pr-5 text-base font-semibold text-gray-700 outline-none transition-all focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
                         />
                      </div>
-                     {canManage && (
+                     {canEditCatalog && (
                         <button
                            onClick={() => {
                               if (viewMode === 'TARIFFS') setEditingTariff('NEW');
@@ -1641,7 +1687,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                         <span className="whitespace-nowrap text-sm font-black">seleccionados</span>
                      </div>
                      <div className="flex items-center gap-2">
-                        {canManage && (
+                        {canEditCatalog && (
                            <button
                               onClick={() => setShowBulkModal(true)}
                               className="flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-black text-white transition hover:bg-blue-700 active:scale-95"
@@ -1699,7 +1745,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
 
                      {!isLargeCatalogLayout && (
                         <div className="mb-8 flex items-center gap-3">
-                           {canManage && (
+                           {canEditCatalog && (
                               <button
                                  onClick={toggleAllSelection}
                                  className={`h-14 w-14 shrink-0 rounded-2xl border flex items-center justify-center transition-all shadow-sm ${
@@ -1757,7 +1803,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                                     key={product.id}
                                     onClick={() => {
                                        if (selectedIds.size > 0) toggleSelection(product.id);
-                                       else if (isLargeCatalogLayout) setEditingProduct(product);
+                                       else if (isLargeCatalogLayout && canEditCatalog) setEditingProduct(product);
                                     }}
                                     className={`group rounded-[2rem] border bg-white p-4 shadow-sm transition-all ${
                                        isSelected
@@ -1767,7 +1813,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                                  >
                                     <div className="flex flex-col gap-4 md:flex-row md:items-center">
                                        <div className="flex items-center gap-4 min-w-0 flex-1">
-                                          {canManage && (
+                                          {canEditCatalog && (
                                              <button
                                                 onClick={(e) => { e.stopPropagation(); toggleSelection(product.id); }}
                                                 className={`h-11 w-11 shrink-0 rounded-2xl border flex items-center justify-center transition-all ${
@@ -1826,7 +1872,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                                              </p>
                                           </div>
 
-                                          {canManage && (
+                                          {canEditCatalog && (
                                              <div className="flex items-center gap-2">
                                                 <button
                                                    onClick={(e) => { e.stopPropagation(); openQuickPriceEditor(product); }}
@@ -1893,7 +1939,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
 
                {viewMode === 'TARIFFS' && (
                   <div className="p-16 max-w-[1600px] mx-auto w-full flex-1 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-10 pb-40">
-                     {tariffs.length === 0 && !canManage ? renderEmptyState('TARIFFS') : null}
+                     {tariffs.length === 0 && !canEditCatalog ? renderEmptyState('TARIFFS') : null}
                      {tariffs.map(tariff => (
                         <div key={tariff.id} className="bg-white rounded-[3rem] p-10 shadow-sm border-2 border-transparent hover:border-blue-500/20 hover:shadow-2xl hover:shadow-blue-500/5 transition-all relative overflow-hidden group">
                            <div className="flex justify-between items-start mb-10">
@@ -1901,7 +1947,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                                  <Tag size={40} strokeWidth={2.5} />
                               </div>
                               <div className="flex gap-3">
-                                 <button onClick={() => setEditingTariff(tariff)} className="p-4 bg-[#f2f4f7] text-gray-400 hover:text-blue-600 hover:bg-white hover:shadow-xl rounded-[1.5rem] transition-all"><Edit2 size={24} strokeWidth={2.5} /></button>
+                                 {canEditCatalog && <button onClick={() => setEditingTariff(tariff)} className="p-4 bg-[#f2f4f7] text-gray-400 hover:text-blue-600 hover:bg-white hover:shadow-xl rounded-[1.5rem] transition-all"><Edit2 size={24} strokeWidth={2.5} /></button>}
                               </div>
                            </div>
                            <h3 className="text-3xl font-black text-gray-900 mb-4 tracking-tight">{tariff.name}</h3>
@@ -1923,10 +1969,10 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                            </div>
                         </div>
                      ))}
-                     <button onClick={() => setEditingTariff('NEW')} className="bg-gray-50 rounded-[3rem] p-10 border-4 border-dashed border-gray-100 hover:border-blue-200 hover:bg-white transition-all flex flex-col items-center justify-center text-gray-300 hover:text-blue-600 gap-8 group">
+                     {canEditCatalog && <button onClick={() => setEditingTariff('NEW')} className="bg-gray-50 rounded-[3rem] p-10 border-4 border-dashed border-gray-100 hover:border-blue-200 hover:bg-white transition-all flex flex-col items-center justify-center text-gray-300 hover:text-blue-600 gap-8 group">
                         <div className="p-8 bg-white rounded-full shadow-2xl text-blue-600 group-hover:scale-110 transition-transform duration-500"><Plus size={60} strokeWidth={4} /></div>
                         <span className="text-2xl font-black">Nueva Lista</span>
-                     </button>
+                     </button>}
                   </div>
                )}
 
@@ -1942,7 +1988,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                         </span>
                      </div>
                     <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-8">
-                        {currentProductGroups.length === 0 && !canManage ? renderEmptyState('GROUPS') : null}
+                        {currentProductGroups.length === 0 && !canEditCatalog ? renderEmptyState('GROUPS') : null}
                         {currentProductGroups.map((group) => (
                            <div key={group.id} className="bg-white rounded-[2.5rem] p-8 border border-gray-100 shadow-sm hover:shadow-xl transition-all">
                               <div className="flex items-start justify-between gap-4 mb-6">
@@ -1953,7 +1999,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                                        <h3 className="text-2xl font-black text-gray-900">{group.name}</h3>
                                     </div>
                                  </div>
-                                 {canManage && (
+                                 {canEditCatalog && (
                                     <div className="flex items-center gap-2">
                                        <button onClick={() => setEditingGroup(group)} className="p-3 rounded-2xl bg-gray-50 text-gray-500 hover:text-blue-600 hover:bg-white hover:shadow-lg transition-all">
                                           <Edit2 size={18} />
@@ -1971,7 +2017,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                               </div>
                            </div>
                         ))}
-                        {canManage && (
+                        {canEditCatalog && (
                            <button onClick={() => setEditingGroup('NEW')} className="bg-gray-50 rounded-[2.5rem] p-8 border-4 border-dashed border-gray-100 hover:border-blue-200 hover:bg-white transition-all flex flex-col items-center justify-center text-gray-300 hover:text-blue-600 gap-6 min-h-[260px]">
                               <div className="p-6 bg-white rounded-full shadow-xl text-blue-600"><Plus size={42} strokeWidth={3.5} /></div>
                               <span className="text-xl font-black">Nuevo Grupo</span>
@@ -1993,7 +2039,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                         </span>
                      </div>
                     <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-8">
-                        {currentSeasons.length === 0 && !canManage ? renderEmptyState('SEASONS') : null}
+                        {currentSeasons.length === 0 && !canEditCatalog ? renderEmptyState('SEASONS') : null}
                         {currentSeasons.map((season) => (
                            <div key={season.id} className="bg-white rounded-[2.5rem] p-8 border border-gray-100 shadow-sm hover:shadow-xl transition-all">
                               <div className="flex items-start justify-between gap-4 mb-6">
@@ -2006,7 +2052,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                                     </div>
                                     <h3 className="text-2xl font-black text-gray-900">{season.name}</h3>
                                  </div>
-                                 {canManage && (
+                                 {canEditCatalog && (
                                     <div className="flex items-center gap-2">
                                        <button onClick={() => setEditingSeason(season)} className="p-3 rounded-2xl bg-gray-50 text-gray-500 hover:text-blue-600 hover:bg-white hover:shadow-lg transition-all">
                                           <Edit2 size={18} />
@@ -2036,7 +2082,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                                     <p className="text-xs font-black uppercase tracking-[0.16em] text-gray-400 mb-1">Categorías</p>
                                     <p className="text-2xl font-black text-gray-900">{season.affectedCategories?.length || 0}</p>
                                  </div>
-                                 {canManage && (
+                                 {canEditCatalog && (
                                     <button onClick={() => handleBulkRecalculate(season)} className="px-5 py-3 rounded-2xl bg-yellow-50 text-yellow-700 font-black hover:bg-yellow-100 transition-all flex items-center gap-2">
                                        <RefreshCw size={16} /> Recalcular
                                     </button>
@@ -2044,7 +2090,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                               </div>
                            </div>
                         ))}
-                        {canManage && (
+                        {canEditCatalog && (
                            <button onClick={() => setEditingSeason('NEW')} className="bg-gray-50 rounded-[2.5rem] p-8 border-4 border-dashed border-gray-100 hover:border-blue-200 hover:bg-white transition-all flex flex-col items-center justify-center text-gray-300 hover:text-blue-600 gap-6 min-h-[300px]">
                               <div className="p-6 bg-white rounded-full shadow-xl text-blue-600"><Plus size={42} strokeWidth={3.5} /></div>
                               <span className="text-xl font-black">Nueva Temporada</span>

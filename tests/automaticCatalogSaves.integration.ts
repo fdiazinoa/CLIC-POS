@@ -21,7 +21,19 @@ const { deleteLocalProduct, saveLocalProducts, saveLocalClassifications } = awai
 const store = new Map<string, any>();
 let sends = 0;
 let failSave = false;
-(db as any).get = async (key: string) => structuredClone(store.get(key) ?? []);
+const authorizedTerminal = {
+    id: terminalId,
+    config: {
+        erpTerminalId: terminalId,
+        posCatalogEdits: { enabled: true },
+    },
+};
+(db as any).get = async (key: string) => {
+    const value = structuredClone(store.get(key) ?? []);
+    if (key !== 'config') return value;
+    const config = Array.isArray(value) ? {} : value;
+    return { ...config, terminals: config.terminals || [authorizedTerminal] };
+};
 (db as any).saveDocument = async (key: string, document: any) => {
     const rows = (store.get(key) || []).filter((row: any) => row.id !== document.id);
     store.set(key, [...rows, structuredClone(document)]);
@@ -325,4 +337,18 @@ test('opening classification editor and saving identical values adds nothing to 
     await saveLocalClassifications(structuredClone(config) as any, 'operator');
     await saveLocalClassifications({ departments: [{ id: product.id, name: 'Bebidas', code: '' }] } as any, 'operator');
     assert.equal(store.get('catalogEdits'), undefined); assert.equal(sends, 0);
+});
+test('disabled ERP permission rejects a product mutation before changing local data', async () => {
+    store.clear(); sends = 0;
+    store.set('config', {
+        terminals: [{ ...authorizedTerminal, config: { ...authorizedTerminal.config, posCatalogEdits: { enabled: false } } }],
+    });
+    store.set('products', [product]);
+    await assert.rejects(
+        saveLocalProducts([{ ...product, price: 99 } as any], 'operator', [product] as any),
+        /El ERP no autoriza cambios de catálogo/,
+    );
+    assert.equal(store.get('products')[0].price, 10);
+    assert.equal(store.get('catalogEdits'), undefined);
+    assert.equal(sends, 0);
 });

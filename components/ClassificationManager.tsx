@@ -9,6 +9,7 @@ import { BusinessConfig, ClassificationItem, Product } from '../types';
 import { db } from '../utils/db';
 import { createUuid } from '../utils/uuid';
 import { syncManager } from '../services/sync/SyncManager';
+import { POS_CATALOG_EDIT_DISABLED_MESSAGE } from '../services/sync/catalogEditAuthorization';
 import {
     categoryAliases,
     comparePosProducts,
@@ -25,6 +26,7 @@ interface ClassificationManagerProps {
     products?: Product[];
     onUpdateProducts?: (products: Product[]) => void;
     onClose: () => void;
+    readOnly?: boolean;
 }
 
 type ClassificationType = 'DEPARTMENTS' | 'SECTIONS' | 'FAMILIES' | 'SUBFAMILIES' | 'BRANDS' | 'POS_CATEGORIES';
@@ -84,6 +86,7 @@ const ClassificationManager: React.FC<ClassificationManagerProps> = ({
     products = [],
     onUpdateProducts,
     onClose,
+    readOnly = false,
 }) => {
     const [activeType, setActiveType] = useState<ClassificationType>('DEPARTMENTS');
     const [editingItem, setEditingItem] = useState<ClassificationItem | null>(null);
@@ -91,6 +94,12 @@ const ClassificationManager: React.FC<ClassificationManagerProps> = ({
     const [localPosCategories, setLocalPosCategories] = useState<ClassificationItem[]>([]);
     const [selectedCategoryId, setSelectedCategoryId] = useState('');
     const [isSavingProductOrder, setIsSavingProductOrder] = useState(false);
+
+    useEffect(() => {
+        if (!readOnly) return;
+        setEditingItem(null);
+        setIsCreating(false);
+    }, [readOnly]);
 
     const activeDef = CLASSIFICATION_TYPES.find(t => t.id === activeType)!;
     const posCategoryItems = useMemo(() => {
@@ -196,6 +205,10 @@ const ClassificationManager: React.FC<ClassificationManagerProps> = ({
             activeType === 'SUBFAMILIES' ? 'Familia' : '';
 
     const persistItems = async (nextItems: ClassificationItem[]) => {
+        if (readOnly) {
+            alert(POS_CATALOG_EDIT_DISABLED_MESSAGE);
+            return false;
+        }
         const nextConfig = { ...config, [activeDef.prop]: nextItems };
         try { await saveLocalClassifications(nextConfig, actorId); }
         catch (error) { alert(error instanceof Error ? error.message : 'No se pudo guardar la clasificación.'); return false; }
@@ -275,6 +288,7 @@ const ClassificationManager: React.FC<ClassificationManagerProps> = ({
     };
 
     const handleMoveProduct = async (productId: string, direction: -1 | 1) => {
+        if (readOnly) return alert(POS_CATALOG_EDIT_DISABLED_MESSAGE);
         const currentIndex = orderedCategoryProducts.findIndex(product => product.id === productId);
         const targetIndex = currentIndex + direction;
         if (currentIndex < 0 || targetIndex < 0 || targetIndex >= orderedCategoryProducts.length || isSavingProductOrder) return;
@@ -345,12 +359,14 @@ const ClassificationManager: React.FC<ClassificationManagerProps> = ({
                     <div>
                         <h2 className="text-xl font-black text-gray-800">{activeDef.label}</h2>
                         <p className="text-sm text-gray-500">
-                            {supportsPosPresentation
+                            {readOnly
+                                ? 'Solo lectura: el ERP no autoriza cambios de catálogo desde este POS.'
+                                : supportsPosPresentation
                                 ? 'Configure nombre, orden, color y visibilidad en el POS.'
                                 : `Gestión de maestro de ${activeDef.label.toLowerCase()}`}
                         </p>
                     </div>
-                    <button
+                    {!readOnly && <button
                         onClick={() => {
                             setEditingItem({ id: '', name: '', code: '', color: '#2563EB', isActive: true });
                             setIsCreating(true);
@@ -358,7 +374,7 @@ const ClassificationManager: React.FC<ClassificationManagerProps> = ({
                         className="px-4 py-2 bg-blue-600 text-white rounded-xl font-bold text-sm shadow-lg shadow-blue-200 hover:bg-blue-700 transition-all flex items-center gap-2"
                     >
                         <Plus size={18} /> Nuevo Elemento
-                    </button>
+                    </button>}
                 </div>
 
                 {/* List / Form */}
@@ -493,7 +509,7 @@ const ClassificationManager: React.FC<ClassificationManagerProps> = ({
                                                     )}
                                                 </div>
                                             </div>
-                                            <div className="flex gap-1 opacity-60 group-hover:opacity-100 transition-opacity">
+                                            {!readOnly && <div className="flex gap-1 opacity-60 group-hover:opacity-100 transition-opacity">
                                                 {supportsPosPresentation && (
                                                     <>
                                                         <button
@@ -530,7 +546,7 @@ const ClassificationManager: React.FC<ClassificationManagerProps> = ({
                                                 <button onClick={() => handleDelete(item.id)} className="p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-600 rounded-lg">
                                                     <Trash2 size={16} />
                                                 </button>
-                                            </div>
+                                            </div>}
                                         </div>
                                     </div>
                                 );
@@ -569,7 +585,7 @@ const ClassificationManager: React.FC<ClassificationManagerProps> = ({
                                                 {productIndex + 1}
                                             </span>
                                             <span className="min-w-0 flex-1 truncate text-sm font-bold text-gray-700">{product.name}</span>
-                                            <button
+                                            {!readOnly && <button
                                                 type="button"
                                                 disabled={productIndex === 0 || isSavingProductOrder}
                                                 onClick={() => void handleMoveProduct(product.id, -1)}
@@ -577,8 +593,8 @@ const ClassificationManager: React.FC<ClassificationManagerProps> = ({
                                                 title="Subir artículo"
                                             >
                                                 <ArrowUp size={16} />
-                                            </button>
-                                            <button
+                                            </button>}
+                                            {!readOnly && <button
                                                 type="button"
                                                 disabled={productIndex === orderedCategoryProducts.length - 1 || isSavingProductOrder}
                                                 onClick={() => void handleMoveProduct(product.id, 1)}
@@ -586,7 +602,7 @@ const ClassificationManager: React.FC<ClassificationManagerProps> = ({
                                                 title="Bajar artículo"
                                             >
                                                 <ArrowDown size={16} />
-                                            </button>
+                                            </button>}
                                         </div>
                                     ))}
                                 </div>
