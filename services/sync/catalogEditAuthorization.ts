@@ -29,8 +29,8 @@ const readSnapshotEnabled = (snapshotValue: unknown): boolean | null => {
     const resolved = asRecord(snapshot.resolved);
     const resolvedTerminal = asRecord(resolved.terminal);
     const candidates = [
-        asRecord(terminal.config),
         asRecord(snapshot.config),
+        asRecord(terminal.config),
         asRecord(resolvedTerminal.config),
         asRecord(resolved.config),
         asRecord(asRecord(snapshot.terminal_config).config),
