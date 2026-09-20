@@ -22,6 +22,12 @@ Git: nueva feature/<modulo>-<tarea> o fix/<modulo>-<bug> desde origin/develop; h
 
 # CLIC-POS — contexto para agentes (Codex, Cursor)
 
+## Functional freeze del piloto
+
+**CLIC-POS 1.1.405 / build 1405 es el PILOT FUNCTIONAL BASELINE.** Antes de cualquier cambio posterior, leer y cumplir [docs/PILOT_FUNCTIONAL_FREEZE_1.1.405.md](./docs/PILOT_FUNCTIONAL_FREEZE_1.1.405.md).
+
+Priorizar observación. Solo modificar ante bug reproducible, fallo operativo, riesgo de integridad demostrado, regresión, requisito necesario de producción o solicitud funcional explícita. Aplicar reproducir → medir → causa → alcance mínimo → fix → regresión → antes/después. No hacer refactors ni optimizaciones especulativas; proteger los caminos validados y completar los campos obligatorios del reporte/PR. El indicador legacy ERP se corrige únicamente en su proyección visual; no reenviar SALE/PAY ni modificar Inbox/Outbox para corregirlo. CPU Cliente permanece KNOWN ISSUE / PENDING OPTIMIZATION sin impacto demostrado. No realizar downgrade automático de datos/esquema.
+
 ## Qué es este repo
 
 Frontend POS (Vite/React) con shell Android vía Capacitor; SQLite nativo en APK.
