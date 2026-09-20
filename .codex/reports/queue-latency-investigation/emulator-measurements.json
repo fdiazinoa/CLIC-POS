@@ -43,6 +43,26 @@
     "Quantiles are a recorded summary and cannot be independently recomputed from this artifact.",
     "Synchronization was paused by operator input; active queue processing was not measured."
   ],
+  "operatorReportedExperiment": {
+    "networkDisconnected": true,
+    "transactionsReported": 20,
+    "billingSlownessPerceived": false,
+    "networkRestored": true,
+    "deliveryReportedSuccessful": true,
+    "timingsOrIndividualAcksPreserved": false
+  },
+  "postExperimentReadOnlySnapshot": {
+    "online": true,
+    "transactionsByStatus": {
+      "PENDING": 10
+    },
+    "pendingWithSyncError": 0,
+    "pendingWithForceReplay": 0,
+    "dbUpdatedAtMin": "2026-09-20T02:56:43.587Z",
+    "dbUpdatedAtMax": "2026-09-20T03:00:00.000Z",
+    "syncIndicatorPresentInActiveView": false,
+    "correlationToReportedTwenty": "unknown"
+  },
   "cleanup": {
     "syntheticDocumentsBefore": 3,
     "syntheticDocumentsAfter": 0,

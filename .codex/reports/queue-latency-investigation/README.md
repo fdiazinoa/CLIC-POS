@@ -73,6 +73,18 @@ Se midió desde el despacho de `input` hasta dos `requestAnimationFrame`, altern
 | 0 pendientes | 100 | 33.30 ms | 34.30 ms | 34.40 ms | 50.40 ms | sin cola |
 | 3 pendientes, sincronización pausada por entrada | 100 | 33.30 ms | 34.50 ms | 34.50 ms | 34.90 ms | 3 `PENDING` |
 
+El usuario ejecutó además una prueba operativa cualitativa: desconectó internet, generó 20
+transacciones, continuó facturando sin percibir lentitud y reactivó internet. Reportó que la aplicación
+las envió sin dificultad. Esta observación cubre mejor la experiencia durante acumulación y retorno de
+red, pero no conserva tiempos ni ACK individuales.
+
+Una lectura posterior de solo lectura encontró 10 documentos `PENDING`, sin `syncError` ni
+`_forceSyncReplay`, actualizados entre `2026-09-20T02:56:43.587Z` y `03:00:00.000Z`. En esa captura la
+aplicación estaba online, pero la vista activa no mostraba el indicador de sincronización. No es posible
+demostrar si esos diez pertenecen al grupo reportado, a operaciones posteriores o a una sesión cuyo
+worker ya no estaba activo. Por ello, la prueba confirma ausencia de lentitud percibida en el emulador,
+pero no certifica desde la persistencia que las veinte recibieran ACK.
+
 Una captura V8 separada de 15.192 s en reposo produjo 2,661 muestras, 99.66% en reposo. Esa captura
 describe únicamente el reposo del emulador y no demuestra el comportamiento del equipo físico durante
 sincronización activa. El expediente conserva los percentiles agregados de entrada, pero no las 200
@@ -112,8 +124,11 @@ se serializan. Esto es una hipótesis plausible de escalamiento, pero no una cau
 
 ## Interpretación de la observación nocturna
 
-La prueba del emulador solo descarta degradación por la mera presencia de tres documentos pendientes
-mientras la entrada mantiene pausada la sincronización; no cubre el procesamiento activo sospechado.
+Las mediciones instrumentadas del emulador solo descartan degradación por la mera presencia de tres
+documentos pendientes mientras la entrada mantiene pausada la sincronización. La prueba cualitativa de
+20 operaciones tampoco mostró lentitud percibida al acumular y restablecer la red, aunque no permite
+atribuir tiempos ni certificar ACK individuales. El procesamiento activo sospechado sigue sin una traza
+correlacionada.
 La no reproducción reportada en laboratorio y master-cliente orienta la investigación hacia una
 condición de datos, red, carga o estado de la unidad del cliente, sin excluir un defecto de software que
 solo se active con el volumen o las características de ese entorno.
