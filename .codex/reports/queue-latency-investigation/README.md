@@ -170,6 +170,44 @@ La no reproducción reportada en laboratorio y master-cliente orienta la investi
 condición de datos, red, carga o estado de la unidad del cliente, sin excluir un defecto de software que
 solo se active con el volumen o las características de ese entorno.
 
+## Evidencia Supabase del terminal afectado
+
+Se consultó en modo de solo lectura el proyecto `Clic-Pos` para `Caja 01 / DEV-DPI5IPY5`, en la ventana
+21:30–23:40 de Santo Domingo del 19 de septiembre. El registro confirmó versión runtime 1.1.405 y
+contacto del terminal durante el incidente.
+
+Resultados:
+
+- 54 eventos `SALE_POSTED` y 54 `PAYMENT_POSTED`, todos `APPLIED` y sin `last_error`;
+- cero dead letters vinculadas al terminal/tenant en la ventana;
+- cero eventos del outbox remoto para ese terminal en la ventana;
+- exactamente 10 ventas y 10 pagos recibidos entre 22:57 y 23:06, alrededor de la intervención de
+  soporte;
+- en esa ventana de drenaje, `SALE_POSTED` tuvo promedio 3.26 s, p95 5.42 s y máximo 6.15 s;
+- `PAYMENT_POSTED` tuvo promedio 3.71 s, p95 5.85 s y máximo 6.50 s;
+- antes de esa ventana, los promedios eran 2.26 s para venta y 2.68 s para pago; después de 23:10,
+  2.53 s y 2.99 s respectivamente.
+
+El código 1.1.405 espera confirmación de aplicación del ERP antes de considerar completada cada
+transacción y procesa la ruta legacy secuencialmente. La espera HTTP es asíncrona, pero una ráfaga de
+diez operaciones mantiene vivo el ciclo durante varios minutos y alterna cada evento con persistencia
+SQLite, métricas y conteos. La coincidencia temporal hace **probable** que soporte liberara un backlog
+operacional y que al terminar cesara el trabajo repetitivo asociado. Todavía falta una traza del hilo UI
+para demostrar que ese trabajo produjo la lentitud visual.
+
+Supabase no muestra rechazo, error de aplicación ni dead letter que explique el incidente. Sí registra
+mayor latencia de procesamiento mientras se drenó el grupo. Esto orienta el diagnóstico hacia backlog,
+reintentos/escaneos locales y duración del pipeline ERP, en lugar de un fallo de Supabase.
+
+La configuración remota contiene un campo superior `role=MASTER`, pero el contrato operativo registra
+`deviceRole=STANDARD_POS`, `terminal_type=STANDARD_POS` e `isPrimaryNode=false`; el código resuelve este
+último como binding `SLAVE`. No hay evidencia de que el equipo estuviera actuando como servidor master.
+
+También existen siete snapshots de manifiesto creados entre 22:11 y 22:42 que actualmente figuran
+`STALE`, sin `last_error`, mientras los snapshots fiscal e inventario figuran `READY`. Todos los
+manifiestos anteriores fueron actualizados a `STALE` a las 23:23, por lo que no se puede afirmar que ya
+estuvieran obsoletos al momento de la lentitud; se conservan como dato de contexto, no como causa.
+
 Las hipótesis prioritarias para medir en el equipo físico son:
 
 1. Operación o colección específica que estaba reintentándose antes del **Sincronizar Todo** y dejó de

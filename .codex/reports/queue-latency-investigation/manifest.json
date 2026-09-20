@@ -10,6 +10,7 @@
     "idle-javascript.cpuprofile",
     "idle-v8-clock.json",
     "qa.md",
+    "supabase-readonly-evidence.json",
     "workflow-plan.json"
   ],
   "formalCandidateSha": null,
