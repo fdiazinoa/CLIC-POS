@@ -110,7 +110,7 @@ mostrar una cola existente mientras su procesamiento está deliberadamente suspe
 
 La fotografía posterior al soporte muestra `Online` en amarillo y sin número. En 1.1.405 esa combinación
 tiene una interpretación exacta: `navigator.onLine=true`, `pendingCount=0`, `blockedCount=0` y
-`hasError=true`. No representa una sincronización todavía activa.
+`hasError=true`. No prueba que la sincronización siga activa ni que haya terminado.
 
 El flujo permite conservar ese amarillo como estado residual:
 
