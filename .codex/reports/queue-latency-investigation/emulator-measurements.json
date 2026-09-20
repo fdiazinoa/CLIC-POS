@@ -65,7 +65,9 @@
   },
   "clientSupportObservation": {
     "actionReported": "Synchronize all",
+    "systemSlowBeforeAction": true,
     "deliveryReportedSuccessful": true,
+    "systemResponsiveAfterAction": true,
     "headerAfterAction": "Online in amber without a count",
     "codeInterpretation": {
       "navigatorOnline": true,
@@ -76,7 +78,7 @@
       "activeSyncProven": false
     },
     "versionParity": "Relevant indicator and manual-sync logic is unchanged; POSInterface differs only in unrelated fiscal-effect dependencies.",
-    "performanceCausality": "not established"
+    "performanceCausality": "temporal association established; responsible sub-operation unknown"
   },
   "cleanup": {
     "syntheticDocumentsBefore": 3,

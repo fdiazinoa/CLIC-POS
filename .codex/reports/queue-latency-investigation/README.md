@@ -132,6 +132,17 @@ El botón manual sí puede iniciar trabajo de configuración y catálogo. Una de
 durante ese trabajo debe medirse como operación separada; el color amarillo que permanece después no
 prueba que ese trabajo continúe.
 
+El usuario aclaró que el sistema estaba lento antes de la intervención y volvió a responder con fluidez
+después de que soporte ejecutara **Sincronizar Todo** y observara el envío. Esta recuperación temporal es
+evidencia relevante de asociación con el estado de sincronización del cliente. Reduce el peso de una
+limitación permanente de hardware o de un caché estático, pero no identifica todavía qué suboperación
+resolvió el síntoma.
+
+El botón manual puede reconciliar el outbox ERP, manifiesto/configuración y catálogos; el worker
+operacional disparado al recuperar la red actúa por separado. Sin logs correlacionados no se puede
+distinguir entre una operación que dejó de reintentarse, una cola operacional que se drenó en paralelo,
+un refresco de catálogo/configuración o la simple desaparición de una condición transitoria de red.
+
 ## Ruta observada y costos posibles
 
 | Función | Hilo/medio | Operación | Duración medida | Posible impacto en UI |
@@ -161,13 +172,15 @@ solo se active con el volumen o las características de ese entorno.
 
 Las hipótesis prioritarias para medir en el equipo físico son:
 
-1. Retrasos o reintentos del destino operacional resuelto en esa franja horaria, incluido ERP si el
+1. Operación o colección específica que estaba reintentándose antes del **Sincronizar Todo** y dejó de
+   hacerlo al recuperar la fluidez.
+2. Retrasos o reintentos del destino operacional resuelto en esa franja horaria, incluido ERP si el
    perfil era `ERP_ACTIVE`.
-2. Crecimiento del historial local que vuelve costosos los escaneos completos y el cruce por el puente Android.
-3. Contención con sincronización de inventario, cierres, polling, heartbeat u otras tareas que coincidan de noche.
-4. Diferencias de almacenamiento, WebView, GPU, controladores o configuración de esa unidad frente a
+3. Crecimiento del historial local que vuelve costosos los escaneos completos y el cruce por el puente Android.
+4. Contención con sincronización de inventario, cierres, polling, heartbeat u otras tareas que coincidan de noche.
+5. Diferencias de almacenamiento, WebView, GPU, controladores o configuración de esa unidad frente a
    los equipos master-cliente equivalentes que funcionan bien.
-5. Presión térmica, memoria o GC después de varias horas de operación.
+6. Presión térmica, memoria o GC después de varias horas de operación.
 
 El destino operacional, incluido el ERP cuando corresponda, debe investigarse para el HTTP, polling y
 heartbeat. Supabase solo entra como candidato si se demuestra que el runtime tenía habilitado su canal
