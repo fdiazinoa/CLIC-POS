@@ -39,6 +39,16 @@ test('ERP terminal explicitly disables POS catalog mutations', () => {
   });
 });
 
+test('canonical snapshot config wins over a stale nested terminal copy', () => {
+  const config = configWithPermission(true);
+  config.terminals[0].config.erpSnapshot.terminal.config.posCatalogEdits.enabled = false;
+  assert.deepEqual(resolvePosCatalogEditAuthorization(config, profile, 'CAJA 4'), {
+    allowed: true,
+    governedByErp: true,
+    reason: 'ENABLED',
+  });
+});
+
 test('ERP-managed catalog fails closed while terminal permission is missing', () => {
   assert.equal(resolvePosCatalogEditAuthorization({ terminals: [] } as any, profile, 'CAJA 4').allowed, false);
 });
