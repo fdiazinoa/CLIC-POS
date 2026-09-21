@@ -235,6 +235,7 @@ export interface POSInterfaceProps {
 }
 
 const EMPTY_PRODUCT_PRICES: ProductPrice[] = [];
+const CATALOG_RENDER_BATCH_SIZE = 64;
 
 type ProductionAreaConfig = {
    id: string;
@@ -4195,6 +4196,41 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       return result;
    }, [sortedSalesCatalogProductEntries, categoryFilter, catalogSearchQuery, canonicalizeCategory, effectiveAllowedCategorySet, categoryLookup.presentationByCanonical, isRetailMode]);
 
+   // Keep the full result set searchable, but do not mount every restaurant
+   // product card when opening a ticket or returning from the table map.
+   const catalogWindowKey = `${categoryFilter}\u0000${catalogSearchQuery}`;
+   const [catalogWindow, setCatalogWindow] = useState({ key: catalogWindowKey, limit: CATALOG_RENDER_BATCH_SIZE });
+   const catalogViewportRef = useRef<HTMLDivElement>(null);
+   const catalogGridRef = useRef<HTMLDivElement>(null);
+   const visibleCatalogLimit = catalogWindow.key === catalogWindowKey
+      ? catalogWindow.limit
+      : CATALOG_RENDER_BATCH_SIZE;
+   const visibleCatalogProducts = useMemo(
+      () => filteredProducts.slice(0, visibleCatalogLimit),
+      [filteredProducts, visibleCatalogLimit]
+   );
+   const hasMoreCatalogProducts = !isRetailMode && visibleCatalogProducts.length < filteredProducts.length;
+   const showMoreCatalogProducts = useCallback(() => {
+      setCatalogWindow((previous) => ({
+         key: catalogWindowKey,
+         limit: Math.min(
+            filteredProducts.length,
+            (previous.key === catalogWindowKey ? previous.limit : CATALOG_RENDER_BATCH_SIZE) + CATALOG_RENDER_BATCH_SIZE
+         ),
+      }));
+   }, [catalogWindowKey, filteredProducts.length]);
+   const handleCatalogScroll = useCallback((event: React.UIEvent<HTMLDivElement>) => {
+      if (!hasMoreCatalogProducts) return;
+      const viewport = event.currentTarget;
+      if (viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 300) {
+         showMoreCatalogProducts();
+      }
+   }, [hasMoreCatalogProducts, showMoreCatalogProducts]);
+   useLayoutEffect(() => {
+      catalogViewportRef.current?.scrollTo({ top: 0 });
+      catalogGridRef.current?.scrollTo({ top: 0 });
+   }, [catalogWindowKey]);
+
    const submitProductTextSearch = useCallback((rawValue: string, focusTarget?: React.RefObject<HTMLInputElement>): boolean => {
       const normalizedTextSearch = normalizeSearchToken(rawValue);
       if (normalizedTextSearch) {
@@ -7562,11 +7598,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             </div>
 
             <div
+               ref={catalogViewportRef}
+               onScroll={handleCatalogScroll}
                className={`flex-1 min-h-0 bg-[#eef2f6] ${usesExpandedCatalog ? 'relative overflow-hidden' : `overflow-y-auto ${isMobile ? 'p-3' : 'p-8'}`} custom-scrollbar scrollbar-thin dark:bg-slate-900`}
                style={bottomAwareScrollStyle}
             >
-               <div className={gridClass} style={expandedCatalogGridStyle}>
-                  {!isRetailMode && filteredProducts.map((product, idx) => (
+               <div ref={catalogGridRef} className={gridClass} style={expandedCatalogGridStyle} onScroll={handleCatalogScroll}>
+                  {!isRetailMode && visibleCatalogProducts.map((product, idx) => (
                      <ProductGridCard
                         key={product.id || `prod-${idx}`}
                         product={product}
@@ -7588,6 +7626,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         onProductContextMenu={handleProductCardContextMenu}
                      />
                   ))}
+                  {hasMoreCatalogProducts && (
+                     <button
+                        type="button"
+                        onClick={showMoreCatalogProducts}
+                        className="col-span-full min-h-12 rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm font-bold text-slate-700 hover:bg-slate-50"
+                     >
+                        Ver más artículos ({filteredProducts.length - visibleCatalogProducts.length} restantes)
+                     </button>
+                  )}
                </div>
             </div>
             {/* VIRTUAL KEYBOARD SLOT */}

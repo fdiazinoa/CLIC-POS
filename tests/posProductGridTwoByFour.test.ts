@@ -63,7 +63,7 @@ test('el área de artículos conserva márgenes simétricos y calcula las filas 
   const gridStart = source.indexOf('const gridClass');
   const gridEnd = source.indexOf('const categoryContainerClass', gridStart);
   const gridSource = source.slice(gridStart, gridEnd);
-  const productsStart = source.indexOf('filteredProducts.map');
+  const productsStart = source.indexOf('visibleCatalogProducts.map');
   const productsSource = source.slice(productsStart - 800, productsStart + 200);
   const paddingStart = source.indexOf('const bottomAwareScrollStyle');
   const paddingEnd = source.indexOf('const mobileFooterStyle', paddingStart);

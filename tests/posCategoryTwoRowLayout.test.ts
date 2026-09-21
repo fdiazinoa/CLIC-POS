@@ -34,7 +34,7 @@ test('más de doce categorías continúa horizontalmente en otro bloque de seis 
 
 test('los botones permiten nombres de categoría en hasta dos líneas sin extender su columna', () => {
   const selectorStart = source.indexOf('CATEGORY SELECTOR BAR');
-  const productsStart = source.indexOf('filteredProducts.map', selectorStart);
+  const productsStart = source.indexOf('visibleCatalogProducts.map', selectorStart);
   const selectorSource = source.slice(selectorStart, productsStart);
 
   assert.ok(selectorStart >= 0, 'No se encontró el selector de categorías');
