@@ -1693,6 +1693,37 @@ export const mergeTerminalConfigSnapshots = (
   return merged;
 };
 
+export const mergeCatalogDeltaIntoSnapshot = (
+  cachedSnapshot: TerminalConfigSnapshot,
+  incomingSnapshot: TerminalConfigSnapshot,
+  delta: { items_upsert?: unknown[]; items_delete?: unknown[] }
+): TerminalConfigSnapshot => {
+  const cachedItems = cachedSnapshot?.masters?.items;
+  if (!Array.isArray(cachedItems)) {
+    throw new Error('No hay un catálogo completo guardado para aplicar el delta.');
+  }
+  const itemsById = new Map<string, any>();
+  for (const item of cachedItems) {
+    const id = asString(item?.id);
+    if (id) itemsById.set(id, item);
+  }
+  for (const item of asArray(delta.items_upsert)) {
+    const id = asString(item?.id);
+    if (id) itemsById.set(id, item);
+  }
+  for (const item of asArray(delta.items_delete)) {
+    const id = asString(item?.id);
+    if (id) itemsById.delete(id);
+  }
+  return {
+    ...incomingSnapshot,
+    masters: {
+      ...incomingSnapshot.masters,
+      items: [...itemsById.values()],
+    },
+  };
+};
+
 const resolveTerminalTemplate = (config: BusinessConfig, terminalId: string): TerminalConfig => {
   const existing = (config.terminals || []).find((terminal) => terminal.id === terminalId)?.config;
   const first = (config.terminals || [])[0]?.config;

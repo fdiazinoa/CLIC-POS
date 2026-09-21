@@ -38,6 +38,7 @@ import {
     applyTerminalConfigSnapshot,
     extractTerminalConfigSnapshot,
     extractTerminalOperationalDocumentState,
+    mergeCatalogDeltaIntoSnapshot,
 } from '../../utils/terminalConfigSnapshot';
 import { buildMasterUrlFromHost } from '../../utils/cloudMasterRegistry';
 import {
@@ -63,7 +64,7 @@ import {
 import { canonicalizeTariffEntries, resolveTariffId } from '../../utils/masterIdentity';
 import { ensureSyncDeviceToken, getInvalidatedSyncDeviceTokenInfo, resolveSyncDeviceToken } from './deviceToken';
 import { normalizeRestaurantProductConfig } from '../../utils/restaurantProductConfig';
-import { protectsLocalCatalogFromCloud, syncPolicy } from './SyncProfile';
+import { protectsLocalCatalogFromCloud, syncPolicy, updateClientMasterUrl } from './SyncProfile';
 import { isPosCloudStagingPushCollection } from './PosCloudStagingService';
 import { reportSyncErrorDiagnostic, setCatalogDiagnosticStatus } from './SyncErrorDiagnostic';
 import { DEVICE_SUPERSEDED_MESSAGE, dispatchDeviceRevoked } from '../../utils/deviceRevocation';
@@ -88,6 +89,9 @@ import {
 import { mergePosCategoryPresentation } from '../../utils/posCatalogPresentation';
 import { persistMasterNumberRangesFromSnapshot } from './MasterNumberRangeService';
 import { preserveLocalCatalog } from './preserveLocalCatalog';
+import { pendingCatalogDeleteIds, pendingCatalogProductIds } from './preserveLocalCatalog';
+import { buildTerminalSyncAuthHeaders } from './TerminalCredentialStore';
+import { canDeleteCatalogProduct, keepProductAfterAuthoritativeFull, resolveRemoteCatalogDeletionIds } from './catalogReconciliation';
 import {
     applyAuthoritativeProductTaxes,
     normalizeErpTaxDefinition,
@@ -932,6 +936,10 @@ class SyncManager {
         if (!this.isMaster && !savedMasterUrl) {
             savedMasterUrl = runtimeMasterUrl;
             localStorage.setItem('CLIC_POS_MASTER_URL', runtimeMasterUrl);
+        }
+
+        if (!this.isMaster && savedMasterUrl) {
+            updateClientMasterUrl(savedMasterUrl);
         }
 
         this.syncConfig = terminal?.config.syncConfig || {
@@ -3003,34 +3011,26 @@ class SyncManager {
         if (incoming.length === 0) return 0;
 
         const localProducts = (await db.get('products')) as Product[];
-        const { localById, localByBarcode, localByCode } = this.buildLocalProductLookupMaps(localProducts);
+        const protectedIds = await pendingCatalogProductIds();
+        const productsById = new Map(localProducts.map((product) => [product.id, product]));
+        const idsToDelete = resolveRemoteCatalogDeletionIds(
+            incoming.map((item: any) => String(item?.id || '').trim()).filter(Boolean),
+            localProducts,
+        );
 
-        const idsToDelete = new Set<string>();
-
-        for (const rawItem of incoming) {
-            const candidates = this.catalogDeleteCandidates(rawItem as Record<string, unknown>);
-
-            for (const candidate of candidates) {
-                const byId = localById.get(candidate);
-                if (byId?.id) idsToDelete.add(byId.id);
-
-                const byCode = localByCode.get(candidate);
-                if (byCode?.id) idsToDelete.add(byCode.id);
-
-                const byBarcode = localByBarcode.get(candidate);
-                if (byBarcode?.id) idsToDelete.add(byBarcode.id);
-            }
-        }
-
+        let deletedCount = 0;
         for (const id of idsToDelete) {
+            const local = productsById.get(id);
+            if (local && !canDeleteCatalogProduct(local, protectedIds)) continue;
             await db.deleteDocument('products', id);
+            deletedCount += 1;
         }
 
-        if (idsToDelete.size > 0) {
+        if (deletedCount > 0) {
             window.dispatchEvent(new CustomEvent('productsUpdated'));
         }
 
-        return idsToDelete.size;
+        return deletedCount;
     }
 
     private imageBackedDeleteCandidates(
@@ -3144,7 +3144,7 @@ class SyncManager {
         const transfersDelete = Array.isArray(delta.transfers_delete) ? delta.transfers_delete : [];
 
         const productUpserted = itemsUpsert.length > 0
-            ? await this.applySnapshotProducts({ masters: { items: itemsUpsert } })
+            ? await this.applySnapshotProducts({ masters: { items: itemsUpsert } }, { incremental: true })
             : 0;
         const productDeleted = itemsDelete.length > 0
             ? await this.deleteSnapshotProducts(itemsDelete)
@@ -3228,6 +3228,26 @@ class SyncManager {
         const snapshotTerminalId = context.localTerminalId || context.terminalId;
         const cachedSnapshot = baseConfig.terminalSnapshots?.[snapshotTerminalId] || null;
         const currentCatalogCursor = this.readStoredCatalogCursor(snapshotTerminalId);
+        const cachedCatalogItems = cachedSnapshot?.masters?.items;
+        let hasCompleteCachedCatalog = Array.isArray(cachedCatalogItems);
+        const catalogItems: Record<string, string> = {};
+        if (currentCatalogCursor && Array.isArray(cachedCatalogItems) && cachedCatalogItems.length > 0) {
+            const cachedIds = new Set(cachedCatalogItems.map((item) => String(item?.id || '').trim()).filter(Boolean));
+            for (const item of cachedCatalogItems) {
+                const id = String(item?.id || '').trim();
+                const hash = String((item as any)?._catalog_hash || '').trim();
+                if (id && /^[a-f0-9]{40}$/.test(hash)) catalogItems[id] = hash;
+            }
+            const localProducts = ((await db.get('products')) as Product[]) || [];
+            const presentIds = new Set(localProducts.flatMap((product) => [
+                String(product?.id || '').trim(),
+                String((product as any)?.sourceItemId || (product as any)?.source_item_id
+                    || (product as any)?.erpProductId || '').trim(),
+            ]).filter((id) => cachedIds.has(id)));
+            const pendingDeletes = await pendingCatalogDeleteIds();
+            hasCompleteCachedCatalog = [...cachedIds].every((id) => presentIds.has(id) || pendingDeletes.has(id))
+                && cachedIds.size === Object.keys(catalogItems).length;
+        }
         const currentTerminalCursorMap = this.readStoredTerminalCursorMap(snapshotTerminalId);
         const requestedMasterScopes = Array.isArray(options?.masterScopes)
             ? Array.from(new Set(options.masterScopes.filter(Boolean)))
@@ -3307,7 +3327,10 @@ class SyncManager {
                 if (context.posDeviceId) params.set('pos_device_id', context.posDeviceId);
                 if (context.posDeviceId) params.set('device_id', context.posDeviceId);
                 if (context.localTerminalId) params.set('local_terminal_id', context.localTerminalId);
-                if (!options?.forceFullCatalog && currentCatalogCursor) params.set('catalog_cursor', currentCatalogCursor);
+                if (!options?.forceFullCatalog && hasCompleteCachedCatalog && currentCatalogCursor) {
+                    params.set('catalog_cursor', currentCatalogCursor);
+                }
+                if (requestedMasterScopes?.includes('items')) params.set('catalog_delta_capable', '1');
                 if (requestedMasterScopes) {
                     params.set('master_scopes', requestedMasterScopes.length > 0 ? requestedMasterScopes.join(',') : 'none');
                 }
@@ -3334,11 +3357,19 @@ class SyncManager {
                         requestedBlockScopes,
                         requestedResolvedScopes,
                     });
+                    const catalogAuthHeaders = buildTerminalSyncAuthHeaders();
+                    const sendCatalogState = Boolean(catalogAuthHeaders['X-Sync-Token']
+                        && currentCatalogCursor && hasCompleteCachedCatalog
+                        && !options?.forceFullCatalog && requestedMasterScopes?.includes('items'));
                     const result = await fetchAndReadWithTimeout(endpoint, {
+                        method: sendCatalogState ? 'POST' : 'GET',
                         headers: {
                             Accept: 'application/json',
+                            ...(sendCatalogState ? { 'Content-Type': 'application/json' } : {}),
                             ...this.buildPosDeviceHeaders(context.posDeviceId),
+                            ...(sendCatalogState ? catalogAuthHeaders : {}),
                         },
+                        ...(sendCatalogState ? { body: JSON.stringify({ catalog_items: catalogItems }) } : {}),
                     }, async (response) => {
                         if (!response.ok) {
                             throw await this.buildTerminalEndpointError(
@@ -3471,7 +3502,10 @@ class SyncManager {
                 if (catalogDelta) {
                     await this.applyCatalogDelta(catalogDelta);
                 } else {
-                    await this.applySnapshotProducts(snapshot);
+                    await this.applySnapshotProducts(snapshot, {
+                        authoritativeFull: Boolean(payload && nextCatalogCursor && requestedMasterScopes?.includes('items')),
+                        cachedSnapshot,
+                    });
                 }
                 const structuredMasterData = await this.refreshTerminalStructuredMasterData(snapshot, catalogDelta, {
                     terminalIds: [
@@ -3500,6 +3534,7 @@ class SyncManager {
                 elapsedMs: posCatalogDebugElapsedMs(refreshStartedAt),
                 error: String((error as Error)?.message || error),
             });
+            throw error;
         }
 
         const configAfterStructuredMasterDataRaw = (await db.get('config')) as unknown;
@@ -3510,11 +3545,14 @@ class SyncManager {
                 ? configAfterStructuredMasterDataRaw as BusinessConfig
                 : baseConfig;
 
+        const configSnapshot = catalogDelta
+            ? mergeCatalogDeltaIntoSnapshot(cachedSnapshot!, snapshot, catalogDelta)
+            : snapshot;
         const applied = applyTerminalConfigSnapshot(configForTerminalSnapshot, {
             terminalId: snapshotTerminalId,
             posDeviceId: context.posDeviceId || undefined,
             bindingMode: context.bindingMode,
-            incomingSnapshot: snapshot,
+            incomingSnapshot: configSnapshot,
             cachedSnapshot,
         });
 
@@ -3558,9 +3596,6 @@ class SyncManager {
         localStorage.setItem('active_terminal_id', applied.terminalId);
         localStorage.setItem('CLIC_POS_TERMINAL_ID', applied.terminalId);
         let nextTerminalCursorMap = { ...currentTerminalCursorMap };
-        if (nextCatalogCursor) {
-            this.persistCatalogCursor(snapshotTerminalId, nextCatalogCursor);
-        }
 
         if (!protectLocalCatalog && requestedBlockScopes?.includes('inventory')) {
             const inventoryPayload = await this.fetchTerminalInventoryBlock(
@@ -3656,6 +3691,12 @@ class SyncManager {
             await runSupplementalMasterData();
         }
 
+        // Advance only after the catalog and terminal snapshot were saved successfully.
+        // A partial SQLite failure must replay the same delta on the next sync.
+        if (nextCatalogCursor && !protectLocalCatalog && options?.persist !== false) {
+            this.persistCatalogCursor(snapshotTerminalId, nextCatalogCursor);
+        }
+
         posCatalogDebugLog('refreshTerminalResolvedConfig: completed', {
             changed,
             usedCatalogDelta: Boolean(catalogDelta),
@@ -3672,13 +3713,19 @@ class SyncManager {
         }
     }
 
-    private async applySnapshotProducts(snapshot: unknown): Promise<number> {
+    private async applySnapshotProducts(
+        snapshot: unknown,
+        options?: { authoritativeFull?: boolean; incremental?: boolean; cachedSnapshot?: { masters?: { items?: unknown[] } } | null },
+    ): Promise<number> {
         const startedAt = posCatalogDebugNow();
+        if (options?.authoritativeFull && !Array.isArray((snapshot as any)?.masters?.items)) {
+            throw new Error('La descarga completa del catálogo llegó sin artículos.');
+        }
         const rawItems = Array.isArray((snapshot as any)?.masters?.items)
             ? (snapshot as any).masters.items
             : [];
 
-        if (rawItems.length === 0) {
+        if (rawItems.length === 0 && !options?.authoritativeFull) {
             return 0;
         }
 
@@ -3700,6 +3747,7 @@ class SyncManager {
         const localByIdentity = this.buildLocalProductIdentityLookup(localProducts);
         const preserveOperationalInventory = apiSyncAdapter.isErpActiveOperationalTarget();
         let updatedCount = 0;
+        const touchedIds = new Set<string>();
         const duplicateIdsToRemove = new Set<string>();
         const traceRaw = rawItems.filter((item: unknown) => posCatalogDebugMatchesRaw(item));
 
@@ -3808,6 +3856,13 @@ class SyncManager {
             }
 
             item = normalizeRestaurantProductConfig(item as any) as Product;
+            item = {
+                ...item,
+                syncSource: 'ERP_SNAPSHOT',
+                sourceItemId: incomingRemoteId,
+                source_item_id: incomingRemoteId,
+                erpProductId: incomingRemoteId,
+            } as Product;
             if (!preserveOperationalInventory) {
                 await this.syncSnapshotProductStocks(item as Product, runtimeWarehouses, existingStocksByProductWarehouse);
             }
@@ -3820,6 +3875,7 @@ class SyncManager {
                 localByIdentity.set(candidate, item as Product);
             }
             localProductsById.set(String(item.id).trim(), item as Product);
+            touchedIds.add(String(item.id).trim());
             updatedCount += 1;
         }
 
@@ -3827,12 +3883,42 @@ class SyncManager {
             localProductsById.delete(duplicateId);
         }
 
-        if (updatedCount > 0 || duplicateIdsToRemove.size > 0) {
+        let staleCount = 0;
+        if (options?.authoritativeFull) {
+            const remoteIds = new Set<string>(rawItems.map((item: any) => String(item?.id || '').trim()).filter(Boolean));
+            const cachedIds = new Set<string>((options.cachedSnapshot?.masters?.items || [])
+                .map((item: any) => String(item?.id || '').trim()).filter(Boolean));
+            const protectedIds = await pendingCatalogProductIds();
+            for (const [id, product] of localProductsById) {
+                if (!keepProductAfterAuthoritativeFull(product, remoteIds, cachedIds, protectedIds)) {
+                    localProductsById.delete(id);
+                    staleCount += 1;
+                }
+            }
+        }
+
+        if (updatedCount > 0 || duplicateIdsToRemove.size > 0 || staleCount > 0) {
+            // Only remote rows present in this delta may confirm pending local
+            // edits. Comparing unrelated local rows would acknowledge edits
+            // that ERP has never returned in a snapshot.
+            const incomingForPreservation = options?.incremental
+                ? [...touchedIds].map((id) => localProductsById.get(id)).filter(Boolean) as Product[]
+                : Array.from(localProductsById.values());
             const preservedProducts = await preserveLocalCatalog(
                 'products',
-                Array.from(localProductsById.values()),
+                incomingForPreservation,
             ) as Product[];
-            await db.save('products' as any, preservedProducts);
+            if (options?.incremental) {
+                const preservedById = new Map(preservedProducts.map((product) => [product.id, product]));
+                for (const id of touchedIds) {
+                    const product = preservedById.get(id);
+                    if (product) await db.saveDocument('products', product);
+                    else await db.deleteDocument('products', id);
+                }
+                for (const id of duplicateIdsToRemove) await db.deleteDocument('products', id);
+            } else {
+                await db.save('products' as any, preservedProducts);
+            }
         }
 
         this.scheduleImageSyncWorker('products', rawItems as any[], 'applySnapshotProducts');
@@ -3843,7 +3929,7 @@ class SyncManager {
             await posCatalogDebugLogDbRows('after applySnapshotProducts product apply');
         }
 
-        if (updatedCount > 0) {
+        if (updatedCount > 0 || staleCount > 0) {
             window.dispatchEvent(new CustomEvent('productsUpdated'));
             window.dispatchEvent(new CustomEvent('productStocksUpdated'));
         }
@@ -5097,6 +5183,7 @@ class SyncManager {
     private finalizeRecovery(url: string) {
         const normalizedUrl = this.normalizeMasterUrlForStorage(url) || url;
         localStorage.setItem('CLIC_POS_MASTER_URL', normalizedUrl);
+        updateClientMasterUrl(normalizedUrl);
 
         // Legacy support
         try {
@@ -7316,6 +7403,7 @@ class SyncManager {
 
         // Save to localStorage for persistence
         localStorage.setItem('CLIC_POS_MASTER_URL', normalizedUrl);
+        updateClientMasterUrl(normalizedUrl);
         try {
             const urlObj = new URL(normalizedUrl);
             localStorage.setItem('pos_master_ip', urlObj.hostname);
