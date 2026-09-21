@@ -23,6 +23,7 @@ import {
   listTerminalsFromErp,
   type RuntimeTerminalRecoveryState,
 } from '../services/setup/erpTerminalSetup';
+import { pairingSnapshotItems } from '../services/setup/pairingCatalogSnapshot';
 import { markSyncDeviceTokenInvalid, persistSyncDeviceToken } from '../services/sync/deviceToken';
 import { persistMasterNumberRangesFromSnapshot } from '../services/sync/MasterNumberRangeService';
 import {
@@ -1566,9 +1567,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           config: initialConfigData.config || data.config,
           users: data.users,
           masterIp: resolvedMasterHost,
-          snapshotItems: Array.isArray(initialConfigData.items)
-            ? initialConfigData.items
-            : (Array.isArray(initialConfigData.terminal_config?.masters?.items) ? initialConfigData.terminal_config?.masters?.items : undefined),
+          snapshotItems: pairingSnapshotItems<Product>(initialConfigData),
           rooms: Array.isArray(initialConfigData.rooms) ? initialConfigData.rooms : undefined,
           tables: Array.isArray(initialConfigData.tables) ? initialConfigData.tables : undefined,
           snapshotMeta: {
