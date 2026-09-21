@@ -12,6 +12,27 @@ export function cloneCatalogPayload<T>(payload: T): T {
     return JSON.parse(JSON.stringify(payload)) as T;
 }
 
+export async function pendingCatalogProductIds(): Promise<Set<string>> {
+    const edits = await dbAdapter.getCollection<CatalogEdit>('catalogEdits');
+    return new Set(edits
+        .filter(edit => (
+            edit.status === 'PENDING' || (edit.status === 'APPLIED' && !edit.snapshotConfirmedAt)
+        ) && catalogScopeMatches(edit.scope))
+        .map(edit => edit.mutation.recordId)
+        .filter(Boolean));
+}
+
+export async function pendingCatalogDeleteIds(): Promise<Set<string>> {
+    const edits = await dbAdapter.getCollection<CatalogEdit>('catalogEdits');
+    return new Set(edits
+        .filter(edit => (
+            edit.status === 'PENDING' || (edit.status === 'APPLIED' && !edit.snapshotConfirmedAt)
+        ) && catalogScopeMatches(edit.scope)
+            && edit.mutation.domain === 'item_lifecycle' && edit.mutation.field === 'delete')
+        .map(edit => edit.mutation.recordId)
+        .filter(Boolean));
+}
+
 // Snapshot writes must not undo edits waiting for ERP acknowledgement or an
 // applied edit whose confirming snapshot has not arrived yet. These writes
 // never create outgoing mutations; capture exists only in user handlers.

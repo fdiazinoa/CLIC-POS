@@ -17,8 +17,10 @@ test('ERP catalog and price snapshots preserve pending and unconfirmed applied l
   );
   assert.match(
     source,
-    /preserveLocalCatalog\(\s*'products',\s*Array\.from\(localProductsById\.values\(\)\),\s*\)/,
+    /const incomingForPreservation = options\?\.incremental\s*\? \[\.\.\.touchedIds\]/,
   );
+  assert.match(source, /: Array\.from\(localProductsById\.values\(\)\)/);
+  assert.match(source, /preserveLocalCatalog\(\s*'products',\s*incomingForPreservation,\s*\)/);
   assert.match(preservation, /edit\.status === 'APPLIED' && !edit\.snapshotConfirmedAt/);
   assert.match(preservation, /catalogSnapshotConfirmsMutation\(collection, payload, mutation\)/);
   assert.match(preservation, /snapshotConfirmedAt: new Date\(\)\.toISOString\(\)/);
