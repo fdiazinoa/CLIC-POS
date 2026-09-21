@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { TerminalConfigSnapshot } from '../types';
 import { mergeCatalogDeltaIntoSnapshot } from '../utils/terminalConfigSnapshot';
+import { compactStoredTerminalCatalog } from '../utils/compactTerminalCatalogSnapshot';
 import { canDeleteCatalogProduct, keepProductAfterAuthoritativeFull, resolveRemoteCatalogDeletionIds } from '../services/sync/catalogReconciliation';
 import type { Product } from '../types';
 
@@ -30,6 +31,28 @@ test('un delta sin catálogo completo previo falla antes de guardar el cursor', 
     snapshot([{ id: 'a', name: 'A' }]),
     { items_upsert: [{ id: 'a', name: 'A' }] },
   ), /catálogo completo/);
+});
+
+test('la configuración guarda solo identidad y hash de artículos para el siguiente delta', () => {
+  const items = Array.from({ length: 2430 }, (_, index) => ({
+    id: `item-${index}`,
+    name: 'ARTÍCULO DE PRUEBA '.repeat(100),
+    _catalog_hash: 'a'.repeat(40),
+  }));
+  const full = snapshot(items);
+  const config = compactStoredTerminalCatalog({
+    terminals: [{ id: 'master-1', config: { erpSnapshot: full } }],
+    terminalSnapshots: { 'master-1': full },
+  });
+  assert.ok(JSON.stringify({ terminals: [{ config: { erpSnapshot: full } }], terminalSnapshots: { 'master-1': full } }).length > 4 * 1024 * 1024);
+  assert.ok(JSON.stringify(config).length < 4 * 1024 * 1024);
+  const cached = config.terminalSnapshots['master-1'];
+  assert.deepEqual(cached.masters?.items?.[0], { id: 'item-0', _catalog_hash: 'a'.repeat(40) });
+  const merged = mergeCatalogDeltaIntoSnapshot(cached, snapshot([]), {
+    items_upsert: [{ id: 'item-0', name: 'Actualizado', _catalog_hash: 'b'.repeat(40) }],
+  });
+  assert.equal(merged.masters?.items?.length, items.length);
+  assert.equal((merged.masters?.items?.[0] as any).name, 'Actualizado');
 });
 
 test('full autoritativo elimina ERP ausente y conserva local y cambios pendientes', () => {

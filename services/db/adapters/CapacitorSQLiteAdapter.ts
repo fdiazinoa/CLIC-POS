@@ -10,11 +10,13 @@ import type {
 } from '../DatabaseAdapter';
 import { DURABLE_OUTBOX_SCHEMA_SQL } from '../../sync/DurableOutboxSchema';
 import { applyMasterNumberToDocument, buildNumberedCustomerMutation } from '../../sync/masterNumberRangeContract';
+import { compactStoredTerminalCatalog } from '../../../utils/compactTerminalCatalogSnapshot';
 
 const DB_NAME = 'clic_pos_native';
 const DB_VERSION = 1;
 const DOCUMENT_READ_BATCH_SIZE = 15;
 const MAX_DOCUMENT_JSON_BYTES = 4 * 1024 * 1024;
+const CONFIG_READ_CHUNK_SIZE = 256 * 1024;
 const DOCUMENT_SCHEMA_MIGRATION_KEY = 'documents_schema_v2_migrated';
 const DOCUMENT_UPSERT_SQL = `
     INSERT INTO documents (collection_name, doc_id, data, sort_order, updatedAt)
@@ -555,16 +557,31 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
 
         while (true) {
             const result = await db.query(
-                'SELECT data FROM documents WHERE collection_name = ? ORDER BY sort_order ASC, updatedAt ASC LIMIT ? OFFSET ?',
-                [collectionName, DOCUMENT_READ_BATCH_SIZE, offset]
+                'SELECT doc_id, length(data) AS data_length, CASE WHEN length(data) <= ? THEN data ELSE NULL END AS data FROM documents WHERE collection_name = ? ORDER BY sort_order ASC, updatedAt ASC LIMIT ? OFFSET ?',
+                [MAX_DOCUMENT_JSON_BYTES, collectionName, DOCUMENT_READ_BATCH_SIZE, offset]
             );
             const rows = Array.isArray(result?.values) ? result.values : [];
             if (rows.length === 0) break;
 
             for (const row of rows) {
-                const rawValue = row && typeof row === 'object' ? (row as Record<string, unknown>).data : null;
+                const storedRow = row && typeof row === 'object' ? row as Record<string, unknown> : {};
+                let rawValue = storedRow.data;
+                if (rawValue === null && collectionName === 'config' && typeof storedRow.doc_id === 'string') {
+                    const chunks: string[] = [];
+                    const length = Number(storedRow.data_length) || 0;
+                    for (let start = 1; start <= length; start += CONFIG_READ_CHUNK_SIZE) {
+                        const chunk = await db.query(
+                            'SELECT substr(data, ?, ?) AS data FROM documents WHERE collection_name = ? AND doc_id = ?',
+                            [start, CONFIG_READ_CHUNK_SIZE, collectionName, storedRow.doc_id]
+                        );
+                        const text = chunk.values?.[0]?.data;
+                        if (typeof text !== 'string') throw new Error('No se pudo leer la configuración SQLite completa.');
+                        chunks.push(text);
+                    }
+                    rawValue = chunks.join('');
+                }
                 if (typeof rawValue !== 'string' || !rawValue.trim()) continue;
-                if (rawValue.length > MAX_DOCUMENT_JSON_BYTES) {
+                if (collectionName !== 'config' && rawValue.length > MAX_DOCUMENT_JSON_BYTES) {
                     console.error(
                         `[CapacitorSQLiteAdapter] Skipping oversized ${collectionName} document `
                         + `(${rawValue.length} bytes) to avoid Android bridge OOM`
@@ -572,9 +589,11 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
                     continue;
                 }
                 try {
-                    docs.push(JSON.parse(rawValue));
+                    const parsed = JSON.parse(rawValue);
+                    docs.push(collectionName === 'config' ? compactStoredTerminalCatalog(parsed) : parsed);
                 } catch (error) {
                     console.warn(`[CapacitorSQLiteAdapter] Failed to parse ${collectionName} row:`, error);
+                    if (collectionName === 'config') throw error;
                 }
             }
 
@@ -700,7 +719,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
 
     private toStoredDocuments(collectionName: string, data: any): any[] {
         if (collectionName === 'config' && data && !Array.isArray(data)) {
-            return [{ ...data, id: (data as any).id || 'current' }];
+            return [{ ...compactStoredTerminalCatalog(data), id: (data as any).id || 'current' }];
         }
 
         if (collectionName === 'globalSequenceCounter' && typeof data === 'number') {

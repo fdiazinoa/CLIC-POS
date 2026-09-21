@@ -41,6 +41,7 @@ import { resolveTariffId, resolveWarehouseId } from './masterIdentity';
 import { resolveOrderTakerContract } from './orderTakerPolicy';
 import { resolveDeviceProfile, toDeviceProfileContract } from './deviceProfile';
 import { normalizeServiceTaxPolicies } from './serviceTaxPolicy';
+import { compactStoredTerminalCatalog } from './compactTerminalCatalogSnapshot';
 
 const asObject = (value: unknown): Record<string, any> => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
@@ -2862,7 +2863,7 @@ export const applyTerminalConfigSnapshot = (
   };
 
   return {
-    config: nextConfig,
+    config: compactStoredTerminalCatalog(nextConfig),
     terminalId,
     snapshot: effectiveSnapshot,
     snapshotSource,
