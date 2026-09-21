@@ -1829,7 +1829,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    );
 
    useEffect(() => {
-      if (!isRestaurantMode || !(Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android')) return;
+      if (!(isRestaurantMode || isRetailMode) || !(Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android')) return;
       const androidBridge = (window as Window & {
          ClicPOSAppBridge?: { setKeyboardOverlayMode?: (enabled: boolean) => void };
       }).ClicPOSAppBridge;
@@ -1837,7 +1837,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       androidBridge.setKeyboardOverlayMode(true);
       return () => androidBridge.setKeyboardOverlayMode?.(false);
-   }, [isRestaurantMode]);
+   }, [isRestaurantMode, isRetailMode]);
 
    const canReceiveConsignments = resolveConsignmentDownloadEnabled(activeTerminalConfig?.operational);
    const showTableMapButton = Boolean(activeTerminalConfig?.operational?.usa_mesas);
@@ -4160,6 +4160,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    }, [categoryLookup.presentationByCanonical, salesCatalogProductEntries]);
 
    const filteredProducts = useMemo(() => {
+      // The retail ticket has no catalog grid. Keep only a bounded set of
+      // suggestions so a 4,000-item catalog does not render on every keystroke.
+      if (isRetailMode && !catalogSearchQuery.trim()) return [];
       const normalizedCategoryFilter = categoryFilter === 'ALL'
          ? 'ALL'
          : canonicalizeCategory(categoryFilter);
@@ -4183,14 +4186,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             if (seenIds.has(p.id)) return false;
             seenIds.add(p.id);
             return true;
-         });
+         }).slice(0, isRetailMode ? 60 : undefined);
       const trace = searchFilterTraceRef.current;
       if (trace?.stages.FILTER_START !== undefined && trace.stages.FILTER_END === undefined) {
          trace.allocationsApprox += filtered.length + result.length + 1;
          markInteractionStage(trace, 'FILTER_END');
       }
       return result;
-   }, [sortedSalesCatalogProductEntries, categoryFilter, catalogSearchQuery, canonicalizeCategory, effectiveAllowedCategorySet, categoryLookup.presentationByCanonical]);
+   }, [sortedSalesCatalogProductEntries, categoryFilter, catalogSearchQuery, canonicalizeCategory, effectiveAllowedCategorySet, categoryLookup.presentationByCanonical, isRetailMode]);
 
    const submitProductTextSearch = useCallback((rawValue: string, focusTarget?: React.RefObject<HTMLInputElement>): boolean => {
       const normalizedTextSearch = normalizeSearchToken(rawValue);
@@ -7563,7 +7566,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                style={bottomAwareScrollStyle}
             >
                <div className={gridClass} style={expandedCatalogGridStyle}>
-                  {filteredProducts.map((product, idx) => (
+                  {!isRetailMode && filteredProducts.map((product, idx) => (
                      <ProductGridCard
                         key={product.id || `prod-${idx}`}
                         product={product}
