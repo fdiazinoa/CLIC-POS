@@ -63,7 +63,7 @@ import {
 import { canonicalizeTariffEntries, resolveTariffId } from '../../utils/masterIdentity';
 import { ensureSyncDeviceToken, getInvalidatedSyncDeviceTokenInfo, resolveSyncDeviceToken } from './deviceToken';
 import { normalizeRestaurantProductConfig } from '../../utils/restaurantProductConfig';
-import { protectsLocalCatalogFromCloud, syncPolicy } from './SyncProfile';
+import { protectsLocalCatalogFromCloud, syncPolicy, updateClientMasterUrl } from './SyncProfile';
 import { isPosCloudStagingPushCollection } from './PosCloudStagingService';
 import { reportSyncErrorDiagnostic, setCatalogDiagnosticStatus } from './SyncErrorDiagnostic';
 import { DEVICE_SUPERSEDED_MESSAGE, dispatchDeviceRevoked } from '../../utils/deviceRevocation';
@@ -932,6 +932,10 @@ class SyncManager {
         if (!this.isMaster && !savedMasterUrl) {
             savedMasterUrl = runtimeMasterUrl;
             localStorage.setItem('CLIC_POS_MASTER_URL', runtimeMasterUrl);
+        }
+
+        if (!this.isMaster && savedMasterUrl) {
+            updateClientMasterUrl(savedMasterUrl);
         }
 
         this.syncConfig = terminal?.config.syncConfig || {
@@ -5097,6 +5101,7 @@ class SyncManager {
     private finalizeRecovery(url: string) {
         const normalizedUrl = this.normalizeMasterUrlForStorage(url) || url;
         localStorage.setItem('CLIC_POS_MASTER_URL', normalizedUrl);
+        updateClientMasterUrl(normalizedUrl);
 
         // Legacy support
         try {
@@ -7316,6 +7321,7 @@ class SyncManager {
 
         // Save to localStorage for persistence
         localStorage.setItem('CLIC_POS_MASTER_URL', normalizedUrl);
+        updateClientMasterUrl(normalizedUrl);
         try {
             const urlObj = new URL(normalizedUrl);
             localStorage.setItem('pos_master_ip', urlObj.hostname);
