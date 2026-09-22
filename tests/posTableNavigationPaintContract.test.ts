@@ -19,3 +19,12 @@ test('Android table map disables expensive backdrop filters without changing web
   assert.match(styles, /backdrop-filter: none;/);
   assert.match(app, /Capacitor\.getPlatform\(\) === 'android' \? '' : 'backdrop-blur-xl'/);
 });
+
+test('Android table cards avoid entry animation and per-card compositing layers', () => {
+  assert.match(tableMap, /const lightweightMap = Capacitor\.getPlatform\(\) === 'android'/);
+  assert.match(tableMap, /variants=\{reduceMotion \? undefined : TABLE_ENTRY_VARIANTS\}/);
+  assert.match(tableMap, /initial=\{reduceMotion \? false : 'hidden'\}/);
+  assert.match(tableMap, /willChange: lightweightMap \? undefined : 'transform, opacity'/);
+  assert.match(styles, /\[data-table-map-lightweight="true"\] \[data-table-node="true"\] \{\s*box-shadow: none;\s*transition: none;/);
+  assert.match(tableMap, /!lightweightMap && !usesWhiteBackground/);
+});
