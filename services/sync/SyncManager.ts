@@ -6,6 +6,7 @@
  */
 
 import { syncErpPaymentMethods } from './PaymentMethodsSync';
+import { freezeCount, freezePhase } from '../../diagnostics/freezeCounters';
 import { fetchAndReadWithTimeout } from '../network/fetchAndReadWithTimeout';
 import { db } from '../../utils/db';
 import { dbAdapter } from '../db';
@@ -3196,6 +3197,8 @@ class SyncManager {
             deferDuringSale?: boolean;
         }
     ): Promise<BusinessConfig | null> {
+        freezeCount('CONFIG_APPLY_COUNT');
+        freezePhase('CONFIG_APPLY_START');
         const previousRefresh = this.terminalConfigRefreshQueue;
         let releaseRefresh!: () => void;
         this.terminalConfigRefreshQueue = new Promise<void>((resolve) => {
@@ -3704,6 +3707,7 @@ class SyncManager {
             requestedBlockScopes,
             elapsedMs: posCatalogDebugElapsedMs(refreshStartedAt),
         });
+        freezePhase('CONFIG_APPLY_END');
 
         return options?.persist !== false && options?.supplementalMode !== 'background' && options?.supplementalMode !== 'skip'
             ? (await db.get('config') as unknown as BusinessConfig) || nextConfig
@@ -3728,6 +3732,9 @@ class SyncManager {
         if (rawItems.length === 0 && !options?.authoritativeFull) {
             return 0;
         }
+
+        freezeCount('CATALOG_APPLY_COUNT', rawItems.length);
+        freezePhase('CATALOG_APPLY_START', rawItems.length);
 
         const normalizedItems = await this.enrichPulledProducts(rawItems);
         const localProducts = (await db.get('products')) as Product[];
@@ -3941,6 +3948,7 @@ class SyncManager {
             duplicateDeletes: duplicateIdsToRemove.size,
             elapsedMs: posCatalogDebugElapsedMs(startedAt),
         });
+        freezePhase('CATALOG_APPLY_END', rawItems.length);
 
         return updatedCount;
     }

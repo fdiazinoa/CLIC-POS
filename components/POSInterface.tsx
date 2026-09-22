@@ -1,4 +1,5 @@
 import { recordCheckoutDiagnostic, setCheckoutCaptureContext } from '../services/CheckoutDiagnostics';
+import { freezeCount } from '../diagnostics/freezeCounters';
 import { MobilePosNavigation } from './MobilePosNavigation';
 import React, { useState, useMemo, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import { Capacitor } from '@capacitor/core';
@@ -852,6 +853,7 @@ const ProductGridCard = React.memo(({
    onProductTouchEnd,
    onProductContextMenu,
 }: ProductGridCardProps) => {
+   freezeCount('CATALOG_CARD_RENDER_COUNT');
    const productName = product.name || '';
    const isWeighted = product.type === 'SERVICE' || productName.toLowerCase().includes('(peso)');
    const hasVariants = (product.variants || []).length > 0 || (product.attributes || []).length > 0;
@@ -1170,6 +1172,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    productPrices: externalProductPrices = EMPTY_PRODUCT_PRICES,
    suppressProductInputUntilMs = 0,
 }) => {
+   freezeCount('POS_RENDER_COUNT');
    markRenderStart('POS_INTERACTION_VIEW');
    const cartEndRef = useRef<HTMLDivElement>(null);
    const posRootRef = useRef<HTMLDivElement>(null);
@@ -1203,6 +1206,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const catalogProducts = products;
 
    useEffect(() => {
+      freezeCount('EFFECT_PRODUCT_PRICES');
       setProductPrices(Array.isArray(externalProductPrices) ? externalProductPrices : []);
    }, [externalProductPrices]);
 
@@ -2185,6 +2189,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [searchTerm, setSearchTerm] = useState('');
    const [catalogSearchQuery, setCatalogSearchQuery] = useState('');
    useEffect(() => {
+      freezeCount('EFFECT_SEARCH_DEBOUNCE');
       const trace = searchFilterTraceRef.current;
       const timer = window.setTimeout(() => {
          markInteractionStage(trace, 'FILTER_START');
@@ -2253,7 +2258,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [syncState, setSyncState] = useState<SyncState>(backgroundSyncManager.getState());
 
    useEffect(() => {
-      return backgroundSyncManager.subscribe(setSyncState);
+      freezeCount('EFFECT_SYNC_SUBSCRIBE');
+      return backgroundSyncManager.subscribe((next) => {
+         freezeCount('SYNC_STATE_CHANGE_COUNT');
+         setSyncState(next);
+      });
    }, []);
 
    useEffect(() => {
@@ -4161,6 +4170,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    }, [categoryLookup.presentationByCanonical, salesCatalogProductEntries]);
 
    const filteredProducts = useMemo(() => {
+      freezeCount('SEARCH_RENDER_COUNT');
       // The retail ticket has no catalog grid. Keep only a bounded set of
       // suggestions so a 4,000-item catalog does not render on every keystroke.
       if (isRetailMode && !catalogSearchQuery.trim()) return [];
@@ -4206,7 +4216,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       ? catalogWindow.limit
       : CATALOG_RENDER_BATCH_SIZE;
    const visibleCatalogProducts = useMemo(
-      () => filteredProducts.slice(0, visibleCatalogLimit),
+      () => {
+         freezeCount('CATALOG_RENDER_COUNT');
+         return filteredProducts.slice(0, visibleCatalogLimit);
+      },
       [filteredProducts, visibleCatalogLimit]
    );
    const hasMoreCatalogProducts = !isRetailMode && visibleCatalogProducts.length < filteredProducts.length;
