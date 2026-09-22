@@ -8,6 +8,7 @@ def allowReleaseCleartext = providers.gradleProperty('clicPosAllowReleaseClearte
         .orElse('false')
         .get()
         .toBoolean()
+def diagnosticBuild = System.getenv('CLIC_POS_DIAGNOSTICS') == 'true'
 
 if (hasReleaseKeystore) {
     keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
@@ -51,6 +52,7 @@ android {
     }
     buildTypes {
         release {
+            if (diagnosticBuild) versionNameSuffix '-diagnostic'
             minifyEnabled false
             manifestPlaceholders = [
                     usesCleartextTraffic: allowReleaseCleartext ? "true" : "false",

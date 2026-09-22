@@ -257,6 +257,11 @@ else
   VERSION_NAME="1.0.${NEXT_VERSION_CODE}"
 fi
 
+ARTIFACT_VERSION_NAME="${VERSION_NAME}"
+if [[ "${CLIC_POS_DIAGNOSTICS:-false}" == "true" ]]; then
+  ARTIFACT_VERSION_NAME="${VERSION_NAME}-diagnostic"
+fi
+
 info "Fuente del release: ${SOURCE_REF} (${SOURCE_COMMIT_SHORT})"
 info "VersionCode siguiente: ${NEXT_VERSION_CODE}"
 info "VersionName siguiente: ${VERSION_NAME}"
@@ -322,7 +327,7 @@ info "Ejecutando ./gradlew assembleRelease"
 (cd "${BUILD_WORKTREE}/android" && ./gradlew assembleRelease \
   "-PclicPosAllowReleaseCleartext=${LAN_HTTP_ENABLED}")
 
-APK_SRC="${BUILD_WORKTREE}/android/app/build/outputs/apk/release/Clic-Pos-${VERSION_NAME}-release.apk"
+APK_SRC="${BUILD_WORKTREE}/android/app/build/outputs/apk/release/Clic-Pos-${ARTIFACT_VERSION_NAME}-release.apk"
 METADATA_SRC="${BUILD_WORKTREE}/android/app/build/outputs/apk/release/output-metadata.json"
 
 require_file "${APK_SRC}"
@@ -337,11 +342,11 @@ info "Verificando firma"
 DEST_DIR="${CANONICAL_BUILD_WORKTREE}/android/app/build/outputs/apk/release"
 mkdir -p "${DEST_DIR}"
 
-APK_DEST="${DEST_DIR}/Clic-Pos-${VERSION_NAME}-release.apk"
-METADATA_DEST="${DEST_DIR}/output-metadata-${VERSION_NAME}.json"
-REPORT_DEST="${DEST_DIR}/release-report-${VERSION_NAME}.txt"
-ASSET_REPORT_DEST="${DEST_DIR}/packaged-assets-${VERSION_NAME}.json"
-RELEASE_GATE_REPORT_DEST="${DEST_DIR}/release-gate-${VERSION_NAME}.json"
+APK_DEST="${DEST_DIR}/Clic-Pos-${ARTIFACT_VERSION_NAME}-release.apk"
+METADATA_DEST="${DEST_DIR}/output-metadata-${ARTIFACT_VERSION_NAME}.json"
+REPORT_DEST="${DEST_DIR}/release-report-${ARTIFACT_VERSION_NAME}.txt"
+ASSET_REPORT_DEST="${DEST_DIR}/packaged-assets-${ARTIFACT_VERSION_NAME}.json"
+RELEASE_GATE_REPORT_DEST="${DEST_DIR}/release-gate-${ARTIFACT_VERSION_NAME}.json"
 
 [[ "${APK_SRC}" == "${APK_DEST}" ]] || cp "${APK_SRC}" "${APK_DEST}"
 cp "${METADATA_SRC}" "${METADATA_DEST}"
@@ -352,7 +357,9 @@ rm "${RELEASE_GATE_REPORT}"
 
 cat > "${REPORT_DEST}" <<EOF
 versionCode=${NEXT_VERSION_CODE}
-versionName=${VERSION_NAME}
+versionName=${ARTIFACT_VERSION_NAME}
+functionalBaselineVersion=${SOURCE_VERSION_NAME}
+diagnosticBuild=${CLIC_POS_DIAGNOSTICS:-false}
 sourceRef=${SOURCE_REF}
 sourceBranch=${SOURCE_BRANCH}
 sourceCommit=${SOURCE_COMMIT}
@@ -376,4 +383,4 @@ echo "APK=${APK_DEST}"
 echo "METADATA=${METADATA_DEST}"
 echo "REPORT=${REPORT_DEST}"
 echo "SOURCE_COMMIT=${SOURCE_COMMIT_SHORT}"
-echo "VERSION_NAME=${VERSION_NAME}"
+echo "VERSION_NAME=${ARTIFACT_VERSION_NAME}"

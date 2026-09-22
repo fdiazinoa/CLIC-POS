@@ -8,6 +8,9 @@ import { scannerFocusDiagnosticsPlugin } from './diagnostics/scannerFocusInstrum
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, '.', '');
   const diagnostic = process.env.CLIC_POS_DIAGNOSTICS === 'true';
+  // Freeze investigation uses the untransformed functional bundle so V8 frames
+  // map directly to TypeScript. The older broad observer remains opt-in.
+  const broadDiagnostics = diagnostic && process.env.CLIC_POS_BROAD_DIAGNOSTICS === 'true';
   const scannerFocusDiagnostic = process.env.CLIC_POS_SCANNER_FOCUS_DIAGNOSTICS === 'true';
   if (diagnostic && scannerFocusDiagnostic) throw new Error('Scanner attribution cannot use broad temporal diagnostics');
 
@@ -45,7 +48,7 @@ export default defineConfig(({ mode }) => {
         }
       }
     },
-    plugins: [scannerFocusDiagnosticsPlugin(scannerFocusDiagnostic), temporalDiagnosticsPlugin(diagnostic), react()],
+    plugins: [scannerFocusDiagnosticsPlugin(scannerFocusDiagnostic), temporalDiagnosticsPlugin(broadDiagnostics), react()],
     define: {
       __POS_DIAGNOSTIC_BUILD__: JSON.stringify(diagnostic),
       'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY),
@@ -57,7 +60,7 @@ export default defineConfig(({ mode }) => {
         // Selective diagnostics use the normal React renderer; no profiling build.
       }
     },
-    esbuild: diagnostic ? { keepNames: true, supported: { 'async-await': false } } : undefined,
+    esbuild: diagnostic ? { keepNames: true, ...(broadDiagnostics ? { supported: { 'async-await': false } } : {}) } : undefined,
     build: {
       target: diagnostic ? 'es2020' : 'modules',
       sourcemap: diagnostic,
