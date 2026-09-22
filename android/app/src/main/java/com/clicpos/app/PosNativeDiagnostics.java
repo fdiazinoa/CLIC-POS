@@ -16,13 +16,14 @@ import org.json.JSONObject;
 public final class PosNativeDiagnostics {
     public static volatile PosNativeDiagnostics current;
     private final boolean active;
+    private final boolean controlOnly;
     private Handler eventWriter;
     private final java.util.concurrent.atomic.AtomicInteger pendingBytes = new java.util.concurrent.atomic.AtomicInteger();
     public PosNativeDiagnostics(Activity activity) {
         active=BuildConfig.POS_DIAGNOSTICS && activity.getIntent().getBooleanExtra("pos_diagnostics",false);
         // Read-only calibration access is independent of observer activation.
         // Both switches are unavailable in ordinary production builds.
-        boolean controlOnly=BuildConfig.POS_DIAGNOSTICS
+        controlOnly=BuildConfig.POS_DIAGNOSTICS
                 && activity.getIntent().getBooleanExtra("pos_diagnostic_control",false);
         if(active || controlOnly) android.webkit.WebView.setWebContentsDebuggingEnabled(true);
         if(!active)return;
@@ -40,6 +41,11 @@ public final class PosNativeDiagnostics {
     }
     @JavascriptInterface public boolean enabled(){return active;}
     @JavascriptInterface public String clock(){return String.valueOf(SystemClock.elapsedRealtimeNanos());}
+    /** Sparse diagnostic milestones survive a blocked JavaScript inspector. */
+    @JavascriptInterface public void mark(String name,int products){
+        if(!(active || controlOnly) || name==null || !name.matches("[A-Z0-9_]{1,64}") || products < -1 || products > 100000)return;
+        Log.i("POS_FREEZE_DIAG", "stage="+name+" products="+products+" bootMs="+SystemClock.elapsedRealtime());
+    }
     @JavascriptInterface public void section(String id,String operation,boolean begin){
         if(!active||!id.matches("POS-[0-9]{6,}"))return;String name=id+"|ACTION|"+operation.replaceAll("[^a-zA-Z0-9_.:/-]","_");name=name.substring(0,Math.min(120,name.length()));int cookie=id.hashCode();if(Build.VERSION.SDK_INT>=29){if(begin)Trace.beginAsyncSection(name,cookie);else Trace.endAsyncSection(name,cookie);}
     }

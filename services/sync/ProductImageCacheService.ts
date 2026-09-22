@@ -13,6 +13,7 @@ import { isPosSaleActive, POS_SALE_ACTIVITY_EVENT } from '../../utils/posSaleAct
 import { extractWarehouseStockBalances, productIdentityCandidates } from '../../utils/productReferences';
 import { applyAuthoritativeProductTaxes } from '../../utils/erpFiscalCatalogSync';
 import { mergeIncomingRestaurantProductConfig } from '../../utils/restaurantProductConfig';
+import { freezePhase } from '../../diagnostics/freezeCounters';
 
 type IncomingProduct = Partial<Product> & Record<string, any>;
 
@@ -532,11 +533,18 @@ class ProductImageCacheService {
       return [];
     }
 
+    freezePhase('IMAGE_NORMALIZE_START', items.length);
     const [lookups, context] = await Promise.all([
       this.getLocalProductLookups(),
       this.getNormalizationContext(),
     ]);
-    return items.map((item) => this.normalizeSingleIncomingProduct(item, this.findLocalProductMatch(item, lookups), context));
+    freezePhase('IMAGE_LOOKUPS_READY');
+    const result = items.map((item, index) => {
+      if ((index & 255) === 0) freezePhase('IMAGE_ITEM_PROGRESS', index);
+      return this.normalizeSingleIncomingProduct(item, this.findLocalProductMatch(item, lookups), context);
+    });
+    freezePhase('IMAGE_NORMALIZE_END', result.length);
+    return result;
   }
 
   private async saveLocalImage(product: Product, imageUrl: string, imageVersion: string): Promise<boolean> {

@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useCallback, useRef, useEffect, useLayoutEffect } from 'react';
+import { freezeCount } from '../diagnostics/freezeCounters';
 import { Room, Table, User as UserType, ParkedTicket, CartItem, RoleDefinition, Permission } from '../types';
 import {
     User,
@@ -528,6 +529,7 @@ const TableMap: React.FC<TableMapProps> = ({
     onOpenTableLayoutDesigner,
     onChangeRoom
 }) => {
+    freezeCount('TABLE_RENDER_COUNT');
     markRenderStart('TABLE_MAP_VIEW');
     useLayoutEffect(() => markRenderEnd('TABLE_MAP_VIEW'));
     const [activeRoomId, setActiveRoomId] = useState<string>(initialRoomId || rooms[0]?.id || '');

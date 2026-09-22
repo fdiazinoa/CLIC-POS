@@ -6,6 +6,7 @@ import { isRecoveredOperation } from './services/recovery/PendingOperationsRecov
 import { recordCheckoutDiagnostic } from './services/CheckoutDiagnostics';
 import { allowsDefaultPaymentMethods } from './utils/erpPaymentMethods';
 import { createStartupTrace } from './utils/startupTrace';
+import { freezeCount, freezePhase } from './diagnostics/freezeCounters';
 import {
   beginPosInteraction,
   beginDestinationInteraction,
@@ -2008,6 +2009,7 @@ const TableMapLifecycleBoundary: React.FC<React.PropsWithChildren<{ visible: boo
 };
 
 const AppContent: React.FC = () => {
+  freezeCount('APP_RENDER_COUNT');
   markRenderStart('APP_VIEW');
   const { clearSecurityState, setSupervisorPinValidator } = useKioskSecurityContext();
   // --- GLOBAL STATE ---
@@ -6341,6 +6343,7 @@ const AppContent: React.FC = () => {
       console.log('🚀 loadData started');
       const markBootStage = createStartupTrace();
       markBootStage('STARTED');
+      freezePhase('LOCAL_DATA_START');
       try {
         console.log('⏳ Calling db.init()...');
         const data = await Promise.race([
@@ -6353,6 +6356,7 @@ const AppContent: React.FC = () => {
         ]);
         console.log('✅ db.init() returned:', data ? Object.keys(data) : 'null');
         markBootStage('LOCAL_DATABASE_READY');
+        freezePhase('LOCAL_DATA_READY');
 
         if (isSyncFeatureEnabled('sqlite_outbox_v2')) {
           if (!durableOutboxRepository.isSupported()) {
@@ -6837,6 +6841,7 @@ const AppContent: React.FC = () => {
           setCustomers(Array.isArray(persistedCustomers) ? persistedCustomers : (data.customers || []));
           setTransactions(data.transactions || []);
           const startupProducts = Array.isArray(data.products) ? data.products : [];
+          freezeCount('CATALOG_STATE_APPLY_COUNT', startupProducts.length);
           setProducts(startupProducts);
           setWarehouses(data.warehouses || []);
           const mirroredCashMovements = readArrayMirrorFromLocalStorage<CashMovement>(CASH_MOVEMENTS_STORAGE_KEY);
@@ -7023,8 +7028,10 @@ const AppContent: React.FC = () => {
             }
 
             markBootStage('LOCAL_STATE_READY');
+            freezePhase('SYNC_START');
             await syncManager.initialize(finalConfig, effectivePairedTerminal.id);
             markBootStage('SYNC_INITIALIZED');
+            freezePhase('SYNC_END');
 
             // El login arranca desde SQLite; la verificación ERP ocurre después
             // de abrir la pantalla para no bloquear PIN/mesas con la red.
@@ -7135,6 +7142,7 @@ const AppContent: React.FC = () => {
             }
 
             markBootStage('CATALOG_READY');
+            freezePhase('CATALOG_READY');
             // Master Re-hydration Step: This ensures state is always up to date with DB 
             // after any async drift fixes or sync initializations.
             try {
@@ -7314,6 +7322,7 @@ const AppContent: React.FC = () => {
             currencyScheduleExecutor.initialize();
 
             markBootStage('READY');
+            freezePhase('READY');
             console.log('🎉 Setting isDataLoaded = true');
             setIsDataLoaded(true);
 
@@ -7463,6 +7472,7 @@ const AppContent: React.FC = () => {
 
   useEffect(() => {
     // --- SYNC EVENT LISTENERS (For Slave Terminals) ---
+    freezeCount('EFFECT_SYNC_EVENT_LISTENERS');
     let catalogRefreshTimer: any = null;
     const pendingCatalogRefresh = {
       products: false,
@@ -7482,6 +7492,7 @@ const AppContent: React.FC = () => {
       if (pendingCatalogRefresh.products) {
         const freshProducts = await db.get('products') as Product[];
         if (Array.isArray(freshProducts) && freshProducts.length > 0) {
+          freezeCount('CATALOG_STATE_APPLY_COUNT', freshProducts.length);
           setProducts(freshProducts);
         } else {
           console.warn('Catalog refresh skipped: products collection was empty or unavailable; preserving current POS catalog.');
@@ -7524,6 +7535,7 @@ const AppContent: React.FC = () => {
     };
 
     const scheduleCatalogRefresh = (eventType: string) => {
+      freezeCount('SYNC_EVENT_COUNT');
       if (eventType === 'productsUpdated') pendingCatalogRefresh.products = true;
       if (eventType === 'productStocksUpdated') pendingCatalogRefresh.productStocks = true;
 
@@ -7538,6 +7550,7 @@ const AppContent: React.FC = () => {
     };
 
     const handleSyncUpdate = async (event: Event) => {
+      freezeCount('SYNC_EVENT_COUNT');
       await waitForBackgroundSyncWindow();
       const startedAt = posCatalogDebugNow();
       const collection = event.type.replace('Updated', '');
@@ -7549,6 +7562,7 @@ const AppContent: React.FC = () => {
       switch (collection) {
         case 'products':
           if (Array.isArray(freshData) && freshData.length > 0) {
+            freezeCount('CATALOG_STATE_APPLY_COUNT', freshData.length);
             setProducts(freshData as Product[]);
           } else {
             console.warn('productsUpdated skipped: products collection was empty or unavailable; preserving current POS catalog.');
@@ -7669,9 +7683,11 @@ const AppContent: React.FC = () => {
 
   useEffect(() => {
     const handleConfigUpdated = async (event: Event) => {
+      freezePhase('CONFIG_EVENT_ENTER');
       const incomingConfig = (event as CustomEvent<BusinessConfig>)?.detail;
       if (!incomingConfig || Array.isArray(incomingConfig) || !incomingConfig.terminals) return;
       await waitForBackgroundSyncWindow();
+      freezePhase('CONFIG_EVENT_WINDOW_READY');
 
       // Detect if we actually need a full sync re-init
       const sanitize = (c: any) => {
@@ -7691,17 +7707,20 @@ const AppContent: React.FC = () => {
 
       const oldConfigJson = JSON.stringify(sanitize(config));
       const newConfigJson = JSON.stringify(sanitize(incomingConfig));
+      freezePhase('CONFIG_EVENT_COMPARED');
       const hasSubstantialChanges = oldConfigJson !== newConfigJson;
 
       persistInitialTerminalConfig(incomingConfig);
       if (!hasSubstantialChanges) {
         console.log('🔔 App: configUpdated received but no structural changes detected. Skipping re-init.');
         setConfig(incomingConfig);
+        freezePhase('CONFIG_EVENT_NO_CHANGE');
         return;
       }
 
       console.log('🔔 App: configUpdated received. Applying synchronized config...');
       setConfig(incomingConfig);
+      freezePhase('CONFIG_EVENT_SET_STATE');
 
       // Startup owns initialization and the security bootstrap. Manifest/catalog
       // events may update React state, but must not restart sync recursively.
@@ -7738,6 +7757,7 @@ const AppContent: React.FC = () => {
         authLevelService.init(incomingConfig, currentTerminal.id);
         terminalRouter.init(incomingConfig, currentTerminal.id, currentTerminal.config.deviceRole || null);
         await syncManager.initialize(incomingConfig, currentTerminal.id);
+        freezePhase('CONFIG_EVENT_SYNC_INITIALIZED');
 
         // If allowed categories changed but local catalog is stale/partial, force a products refresh.
         const normalizeCategory = (value: any) =>
@@ -7779,6 +7799,7 @@ const AppContent: React.FC = () => {
         }
 
         await syncConfigToLocalServer(incomingConfig, { surfaceErrors: false });
+        freezePhase('CONFIG_EVENT_DONE');
       } catch (error) {
         console.error('❌ Failed to apply synced config at runtime:', error);
       }
