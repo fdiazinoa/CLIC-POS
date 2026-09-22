@@ -92,12 +92,13 @@ try {
 
     await page.evaluate(() => window.fixture.setMapActive(false));
     const hidden = await page.locator('[data-table-map-persistent-host]').evaluate(node => ({
+      opacity: getComputedStyle(node).opacity,
       visibility: getComputedStyle(node).visibility,
       inert: node.inert,
       ariaHidden: node.getAttribute('aria-hidden'),
       focusInside: node.contains(document.activeElement),
     }));
-    assert.deepEqual(hidden, { visibility: 'hidden', inert: true, ariaHidden: 'true', focusInside: false });
+    assert.deepEqual(hidden, { opacity: '0', visibility: 'visible', inert: true, ariaHidden: 'true', focusInside: false });
     for (let index = 0; index < 5; index++) {
       const id = `nav-${index}`;
       const point = { x: 90 + index * 145, y: 90 };

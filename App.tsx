@@ -1965,7 +1965,7 @@ const PersistentPOSHost: React.FC<PersistentPOSHostProps> = ({ visible, closeTra
   return (
     <div
       ref={hostRef}
-      className={`h-full ${visible ? 'visible' : 'invisible pointer-events-none select-none'}`}
+      className={`h-full ${visible ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none select-none'}`}
       aria-hidden={!visible}
       data-pos-persistent-host="true"
       style={{ contain: 'layout style' }}
@@ -1999,7 +1999,7 @@ const TableMapLifecycleBoundary: React.FC<React.PropsWithChildren<{ visible: boo
   return (
     <div
       ref={hostRef}
-      className={`absolute inset-0 z-40 ${visible ? 'visible' : 'invisible pointer-events-none'}`}
+      className={`absolute inset-0 z-40 ${visible ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}`}
       aria-hidden={!visible}
       data-table-map-persistent-host="true"
       style={{ contain: 'layout style' }}

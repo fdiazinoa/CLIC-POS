@@ -71,7 +71,7 @@ test('the table map overlays a retained memoized POS instead of remounting it', 
   const persistentHostEnd = appSource.indexOf('const TableMapLifecycleBoundary', persistentHostStart);
   const persistentHostSource = appSource.slice(persistentHostStart, persistentHostEnd);
   assert.doesNotMatch(persistentHostSource, /visible \? 'h-full' : 'hidden'/);
-  assert.match(persistentHostSource, /className=\{`h-full \$\{visible \? 'opacity-100' : 'opacity-0 pointer-events-none select-none'\}`\}/);
+  assert.match(persistentHostSource, /className=\{`h-full \$\{visible \? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none select-none'\}`\}/);
   assert.doesNotMatch(persistentHostSource, /\binvisible\b|visibility\s*:|['"]visible['"]/);
   assert.match(persistentHostSource, /aria-hidden=\{!visible\}/);
   assert.match(persistentHostSource, /<MemoizedPOSInterface \{\.\.\.stableProps\} \/>/);

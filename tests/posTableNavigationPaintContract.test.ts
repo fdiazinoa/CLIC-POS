@@ -6,10 +6,18 @@ const app = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
 const tableMap = readFileSync(new URL('../components/TableMap.tsx', import.meta.url), 'utf8');
 const styles = readFileSync(new URL('../index.css', import.meta.url), 'utf8');
 
-test('the retained POS stays mounted but is not painted behind the table map', () => {
+test('the retained POS stays mounted, transparent and inert behind the table map', () => {
   assert.match(app, /data-pos-persistent-host="true"/);
-  assert.match(app, /visible \? 'visible' : 'invisible pointer-events-none select-none'/);
-  assert.doesNotMatch(app, /visible \? 'opacity-100' : 'opacity-0 pointer-events-none select-none'/);
+  assert.match(app, /visible \? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none select-none'/);
+  assert.match(app, /if \(visible\) host\.removeAttribute\('inert'\);\s*else host\.setAttribute\('inert', ''\);/);
+  assert.doesNotMatch(app, /visible \? 'visible' : 'invisible pointer-events-none select-none'/);
+});
+
+test('the retained table map is transparent and inert when inactive', () => {
+  assert.match(app, /data-table-map-persistent-host="true"/);
+  assert.match(app, /visible \? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'/);
+  assert.match(app, /if \(visible\) host\.removeAttribute\('inert'\);\s*else \{\s*host\.setAttribute\('inert', ''\);/);
+  assert.doesNotMatch(app, /visible \? 'visible' : 'invisible pointer-events-none'/);
 });
 
 test('Android table map disables expensive backdrop filters without changing web styling', () => {

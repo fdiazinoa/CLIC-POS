@@ -37,15 +37,15 @@ test('the retained table map is removed from hit testing when inactive and inter
   const boundaryEnd = appSource.indexOf('const AppContent', boundaryStart);
   const boundarySource = appSource.slice(boundaryStart, boundaryEnd);
 
-  assert.match(boundarySource, /visible \? 'visible' : 'invisible pointer-events-none'/);
+  assert.match(boundarySource, /visible \? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'/);
   assert.match(boundarySource, /setAttribute\('inert', ''\)/);
   assert.match(boundarySource, /removeAttribute\('inert'\)/);
   assert.match(boundarySource, /host\.contains\(activeElement\)/);
   assert.match(boundarySource, /activeElement\.blur\(\)/);
   assert.match(boundarySource, /aria-hidden=\{!visible\}/);
   assert.doesNotMatch(boundarySource, /willChange: 'opacity'/);
-  // inert and visibility:hidden must keep descendants out of hit testing.
-  assert.doesNotMatch(boundarySource, /opacity-0 pointer-events-none/);
+  // inert must keep descendants out of hit testing, even if one overrides pointer-events.
+  assert.doesNotMatch(boundarySource, /visible \? 'visible' : 'invisible pointer-events-none'/);
 });
 
 test('temporary table map profiling hooks are absent from production sources', () => {
