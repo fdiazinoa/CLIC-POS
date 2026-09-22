@@ -58,8 +58,8 @@ import {
 } from '../../utils/posCatalogDebugTrace';
 import { canonicalizeWarehouseRecord } from '../../utils/masterIdentity';
 import {
+    createInventoryBalanceMatcher,
     extractWarehouseStockBalances,
-    productIdMatchesInventoryReference,
     productIdentityCandidates,
 } from '../../utils/productReferences';
 import { canonicalizeTariffEntries, resolveTariffId } from '../../utils/masterIdentity';
@@ -2596,12 +2596,12 @@ class SyncManager {
         const nextStockKeys = new Set<string>();
 
         freezePhase('INVENTORY_DIRECT_MATCH_START', localProducts.length);
+        const matchBalances = createInventoryBalanceMatcher(localProducts, remoteBalances);
+        freezePhase('INVENTORY_DIRECT_INDEX_READY', remoteBalances.length);
         for (let productIndex = 0; productIndex < localProducts.length; productIndex++) {
             if ((productIndex & 63) === 0) freezePhase('INVENTORY_DIRECT_MATCH_PROGRESS', productIndex);
             const product = localProducts[productIndex];
-            const matchedBalances = remoteBalances.filter((entry) =>
-                productIdMatchesInventoryReference(entry, product, localProducts)
-            );
+            const matchedBalances = matchBalances(productIndex);
             if (matchedBalances.length === 0) continue;
 
             const normalizedStockBalances = canonicalizeWarehouseRecord(
@@ -2719,12 +2719,12 @@ class SyncManager {
         const now = new Date().toISOString();
 
         freezePhase('INVENTORY_BLOCK_MATCH_START', localProducts.length);
+        const matchBalances = createInventoryBalanceMatcher(localProducts, normalizedBalances);
+        freezePhase('INVENTORY_BLOCK_INDEX_READY', normalizedBalances.length);
         for (let productIndex = 0; productIndex < localProducts.length; productIndex++) {
             if ((productIndex & 63) === 0) freezePhase('INVENTORY_BLOCK_MATCH_PROGRESS', productIndex);
             const product = localProducts[productIndex];
-            const matchedBalances = normalizedBalances.filter((entry) =>
-                productIdMatchesInventoryReference(entry, product, localProducts)
-            );
+            const matchedBalances = matchBalances(productIndex);
             if (matchedBalances.length === 0) {
                 continue;
             }
