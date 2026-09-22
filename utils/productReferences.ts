@@ -418,20 +418,27 @@ export const createInventoryBalanceMatcher = <T>(
     return linked;
   });
 
-  const balanceTokens = balances.map((balance) => {
+  const balanceIndicesByToken = new Map<string, number[]>();
+  balances.forEach((balance, index) => {
     const values = balance && typeof balance === 'object'
       ? productIdentityCandidates(balance as Record<string, unknown>)
       : uniqueValues([trimValue(balance)]);
-    return values.map(normalizeToken).filter(Boolean);
+    for (const token of new Set(values.map(normalizeToken).filter(Boolean))) {
+      const indices = balanceIndicesByToken.get(token) || [];
+      indices.push(index);
+      balanceIndicesByToken.set(token, indices);
+    }
   });
 
-  return (productIndex) => {
-    const tokens = linkedTokens[productIndex];
-    if (!tokens || tokens.size === 0) return [];
-    return balances.filter((_, balanceIndex) =>
-      balanceTokens[balanceIndex].some((token) => tokens.has(token))
-    );
-  };
+  const matchesByProduct = linkedTokens.map((tokens) => {
+    const matchedIndices = new Set<number>();
+    for (const token of tokens) {
+      for (const index of balanceIndicesByToken.get(token) || []) matchedIndices.add(index);
+    }
+    return [...matchedIndices].sort((left, right) => left - right).map((index) => balances[index]);
+  });
+
+  return (productIndex) => matchesByProduct[productIndex] || [];
 };
 
 export const resolveProductStockRow = (

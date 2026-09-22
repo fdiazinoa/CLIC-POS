@@ -2595,8 +2595,9 @@ class SyncManager {
         );
         const nextStockKeys = new Set<string>();
 
-        const matchBalances = createInventoryBalanceMatcher(localProducts, remoteBalances);
         freezePhase('INVENTORY_DIRECT_MATCH_START', localProducts.length);
+        const matchBalances = createInventoryBalanceMatcher(localProducts, remoteBalances);
+        freezePhase('INVENTORY_DIRECT_INDEX_READY', remoteBalances.length);
         for (let productIndex = 0; productIndex < localProducts.length; productIndex++) {
             if ((productIndex & 63) === 0) freezePhase('INVENTORY_DIRECT_MATCH_PROGRESS', productIndex);
             const product = localProducts[productIndex];
@@ -2717,8 +2718,9 @@ class SyncManager {
         const nextStockKeys = new Set<string>();
         const now = new Date().toISOString();
 
-        const matchBalances = createInventoryBalanceMatcher(localProducts, normalizedBalances);
         freezePhase('INVENTORY_BLOCK_MATCH_START', localProducts.length);
+        const matchBalances = createInventoryBalanceMatcher(localProducts, normalizedBalances);
+        freezePhase('INVENTORY_BLOCK_INDEX_READY', normalizedBalances.length);
         for (let productIndex = 0; productIndex < localProducts.length; productIndex++) {
             if ((productIndex & 63) === 0) freezePhase('INVENTORY_BLOCK_MATCH_PROGRESS', productIndex);
             const product = localProducts[productIndex];
