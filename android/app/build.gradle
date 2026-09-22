@@ -9,6 +9,7 @@ def allowReleaseCleartext = providers.gradleProperty('clicPosAllowReleaseClearte
         .get()
         .toBoolean()
 def diagnosticBuild = System.getenv('CLIC_POS_DIAGNOSTICS') == 'true'
+def webviewProfileQa = System.getenv('CLIC_POS_WEBVIEW_PROFILE') == 'true'
 
 if (hasReleaseKeystore) {
     keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
@@ -23,6 +24,7 @@ android {
     defaultConfig {
         applicationId "com.clicpos.app"
         buildConfigField "boolean", "POS_DIAGNOSTICS", System.getenv("CLIC_POS_DIAGNOSTICS") == "true" ? "true" : "false"
+        buildConfigField "boolean", "WEBVIEW_PROFILE_QA", webviewProfileQa ? "true" : "false"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1421
@@ -53,6 +55,7 @@ android {
     buildTypes {
         release {
             if (diagnosticBuild) versionNameSuffix '-diagnostic'
+            if (webviewProfileQa) versionNameSuffix '-profile'
             minifyEnabled false
             manifestPlaceholders = [
                     usesCleartextTraffic: allowReleaseCleartext ? "true" : "false",
