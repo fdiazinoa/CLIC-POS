@@ -1980,7 +1980,11 @@ const TableMapLifecycleBoundary: React.FC<React.PropsWithChildren<{ visible: boo
     const host = hostRef.current;
     if (!host) return;
     if (visible) host.removeAttribute('inert');
-    else host.setAttribute('inert', '');
+    else {
+      host.setAttribute('inert', '');
+      const activeElement = host.ownerDocument.activeElement;
+      if (activeElement instanceof HTMLElement && host.contains(activeElement)) activeElement.blur();
+    }
   }, [visible]);
 
   useLayoutEffect(() => {
@@ -1993,7 +1997,7 @@ const TableMapLifecycleBoundary: React.FC<React.PropsWithChildren<{ visible: boo
   return (
     <div
       ref={hostRef}
-      className={`absolute inset-0 z-40 ${visible ? 'opacity-100' : 'opacity-0 pointer-events-none select-none'}`}
+      className={`absolute inset-0 z-40 ${visible ? 'opacity-100' : 'hidden'}`}
       aria-hidden={!visible}
       data-table-map-persistent-host="true"
       style={{ contain: 'layout style', willChange: 'opacity' }}

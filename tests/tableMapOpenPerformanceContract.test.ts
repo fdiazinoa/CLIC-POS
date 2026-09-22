@@ -32,17 +32,21 @@ test('first mount does not schedule a redundant unconditional viewport fit', () 
   assert.match(fitEffectsSource, /if \(!hasObservedViewportRef\.current\)/);
 });
 
-test('the retained table map is hidden accessibly and revealed with opacity', () => {
+test('the retained table map is removed from hit testing when inactive and interactive when visible', () => {
   const boundaryStart = appSource.indexOf('const TableMapLifecycleBoundary');
   const boundaryEnd = appSource.indexOf('const AppContent', boundaryStart);
   const boundarySource = appSource.slice(boundaryStart, boundaryEnd);
 
-  assert.match(boundarySource, /visible \? 'opacity-100' : 'opacity-0 pointer-events-none select-none'/);
+  assert.match(boundarySource, /visible \? 'opacity-100' : 'hidden'/);
   assert.match(boundarySource, /setAttribute\('inert', ''\)/);
   assert.match(boundarySource, /removeAttribute\('inert'\)/);
+  assert.match(boundarySource, /host\.contains\(activeElement\)/);
+  assert.match(boundarySource, /activeElement\.blur\(\)/);
   assert.match(boundarySource, /aria-hidden=\{!visible\}/);
   assert.match(boundarySource, /willChange: 'opacity'/);
-  assert.doesNotMatch(boundarySource, /\binvisible\b|visibility/);
+  // pointer-events:none is inherited but a descendant with pointer-events:auto
+  // can opt back into hit testing. display:none on the host cannot be overridden.
+  assert.doesNotMatch(boundarySource, /opacity-0 pointer-events-none/);
 });
 
 test('temporary table map profiling hooks are absent from production sources', () => {
