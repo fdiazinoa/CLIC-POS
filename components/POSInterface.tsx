@@ -1,5 +1,5 @@
 import { recordCheckoutDiagnostic, setCheckoutCaptureContext } from '../services/CheckoutDiagnostics';
-import { freezeCount } from '../diagnostics/freezeCounters';
+import { freezeCount, freezePhase } from '../diagnostics/freezeCounters';
 import { MobilePosNavigation } from './MobilePosNavigation';
 import React, { useState, useMemo, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import { Capacitor } from '@capacitor/core';
@@ -4224,6 +4224,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    );
    const hasMoreCatalogProducts = !isRetailMode && visibleCatalogProducts.length < filteredProducts.length;
    const showMoreCatalogProducts = useCallback(() => {
+      freezeCount('CATALOG_LOAD_MORE_COUNT');
+      freezePhase('CATALOG_LOAD_MORE');
       setCatalogWindow((previous) => ({
          key: catalogWindowKey,
          limit: Math.min(

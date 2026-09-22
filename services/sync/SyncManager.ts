@@ -3736,10 +3736,14 @@ class SyncManager {
         freezeCount('CATALOG_APPLY_COUNT', rawItems.length);
         freezePhase('CATALOG_APPLY_START', rawItems.length);
 
+        freezePhase('CATALOG_ENRICH_START', rawItems.length);
         const normalizedItems = await this.enrichPulledProducts(rawItems);
+        freezePhase('CATALOG_ENRICH_END', normalizedItems.length);
+        freezePhase('CATALOG_READ_LOCAL_START');
         const localProducts = (await db.get('products')) as Product[];
         const runtimeWarehouses = ((await db.get('warehouses')) as Warehouse[]) || [];
         const existingProductStocks = ((await db.get('productStocks')) as ProductStock[]) || [];
+        freezePhase('CATALOG_READ_LOCAL_END', localProducts.length);
         const existingStocksByProductWarehouse = new Map<string, ProductStock>(
             existingProductStocks.map((stock) => [
                 this.buildSnapshotProductStockLookupKey(stock?.productId || '', stock?.warehouseId || ''),
@@ -3757,6 +3761,7 @@ class SyncManager {
         const touchedIds = new Set<string>();
         const duplicateIdsToRemove = new Set<string>();
         const traceRaw = rawItems.filter((item: unknown) => posCatalogDebugMatchesRaw(item));
+        freezePhase('CATALOG_LOOKUPS_READY', localProductsById.size);
 
         if (traceRaw.length > 0) {
             posCatalogDebugLog('applySnapshotProducts: raw snapshot items', {
@@ -3765,6 +3770,7 @@ class SyncManager {
         }
 
         for (const [index, normalizedItem] of normalizedItems.entries()) {
+            if ((index & 255) === 0) freezePhase('CATALOG_ITEM_PROGRESS', index);
             if (!normalizedItem?.id) continue;
             const rawItem = rawItems[index] as Record<string, unknown> | undefined;
             let item = normalizeRestaurantProductConfig(normalizedItem as any) as any;
@@ -3885,6 +3891,7 @@ class SyncManager {
             touchedIds.add(String(item.id).trim());
             updatedCount += 1;
         }
+        freezePhase('CATALOG_ITEMS_DONE', updatedCount);
 
         for (const duplicateId of duplicateIdsToRemove) {
             localProductsById.delete(duplicateId);
@@ -3905,6 +3912,7 @@ class SyncManager {
         }
 
         if (updatedCount > 0 || duplicateIdsToRemove.size > 0 || staleCount > 0) {
+            freezePhase('CATALOG_PRESERVE_START', updatedCount);
             // Only remote rows present in this delta may confirm pending local
             // edits. Comparing unrelated local rows would acknowledge edits
             // that ERP has never returned in a snapshot.
@@ -3915,6 +3923,8 @@ class SyncManager {
                 'products',
                 incomingForPreservation,
             ) as Product[];
+            freezePhase('CATALOG_PRESERVE_END', preservedProducts.length);
+            freezePhase('CATALOG_PERSIST_START', preservedProducts.length);
             if (options?.incremental) {
                 const preservedById = new Map(preservedProducts.map((product) => [product.id, product]));
                 for (const id of touchedIds) {
@@ -3926,6 +3936,7 @@ class SyncManager {
             } else {
                 await db.save('products' as any, preservedProducts);
             }
+            freezePhase('CATALOG_PERSIST_END', preservedProducts.length);
         }
 
         this.scheduleImageSyncWorker('products', rawItems as any[], 'applySnapshotProducts');
