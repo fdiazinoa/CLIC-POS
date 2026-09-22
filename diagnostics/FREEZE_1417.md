@@ -27,6 +27,12 @@ adb -s SERIAL shell dumpsys meminfo com.clicpos.app
 
 El muestreador no ejecuta `Runtime.evaluate` antes de iniciar la captura: conserva el perfil aun si el event loop ya no responde. Después de detener el perfil intenta volcar los contadores; un timeout ahí no invalida `javascript.cpuprofile`. Mantener el proceso vivo hasta guardar logcat acotado, PIDs, CPU por hilo, memoria y timeline.
 
-Los `.map` de `dist/assets` corresponden al mismo bundle empacado. Resolver los frames con esos mapas y verificar archivo, función y línea fuente del commit del APK. No atribuir causa raíz a un stack minificado o a una mera correlación temporal. Si no aparece el freeze, informar **NO reproducido** y comparar WebView, Android, catálogo, configuración y flags con la 159; no introducir un loop artificial.
+Usar **los `.map` del APK exacto**, no los de otro build local. Después de la captura:
+
+```sh
+node scripts/diagnostics/summarize-freeze.mjs DIRECTORIO_CAPTURA/javascript.cpuprofile RUTA_ASSETS_DEL_APK
+```
+
+El analizador rechaza mapas ausentes; verificar además archivo, función y línea fuente del commit del APK. No atribuir causa raíz a un stack minificado o a una mera correlación temporal. Si no aparece el freeze, informar **NO reproducido** y comparar WebView, Android, catálogo, configuración y flags con la 159; no introducir un loop artificial.
 
 No activar `pos_diagnostics=true` salvo una segunda captura justificada: habilita el observador amplio histórico y añade carga. La primera captura debe usar solo `pos_diagnostic_control=true` y el sampler corto.

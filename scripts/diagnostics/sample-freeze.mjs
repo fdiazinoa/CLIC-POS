@@ -49,7 +49,7 @@ try {
   fs.writeFileSync(path.join(output, 'javascript.cpuprofile'), JSON.stringify(profile));
   const summary = { startedAt, stoppedAt: new Date().toISOString(), seconds,
     nodes: profile.nodes?.length || 0, samples: profile.samples?.length || 0,
-    source: tab.url };
+    sourceOrigin: new URL(tab.url).origin };
   fs.writeFileSync(path.join(output, 'profile-summary.json'), JSON.stringify(summary, null, 2));
   console.log(JSON.stringify(summary));
 
