@@ -384,6 +384,56 @@ export const productIdMatchesInventoryReference = (
   return false;
 };
 
+/**
+ * Resolve inventory balances for a whole catalog without repeating the legacy
+ * full-catalog alias scan for every product/balance pair. Matching remains
+ * one-hop: products sharing one identity token contribute their other tokens,
+ * but those newly contributed tokens do not link a third product.
+ */
+export const createInventoryBalanceMatcher = <T>(
+  products: Array<Partial<Product> | Record<string, unknown>>,
+  balances: T[]
+): ((productIndex: number) => T[]) => {
+  const productTokens = products.map((product) =>
+    new Set(productIdentityCandidates(product).map(normalizeToken).filter(Boolean))
+  );
+  const productIndicesByToken = new Map<string, number[]>();
+  productTokens.forEach((tokens, index) => {
+    for (const token of tokens) {
+      const indices = productIndicesByToken.get(token) || [];
+      indices.push(index);
+      productIndicesByToken.set(token, indices);
+    }
+  });
+
+  const linkedTokens = productTokens.map((ownTokens) => {
+    const linked = new Set(ownTokens);
+    const directNeighbors = new Set<number>();
+    for (const token of ownTokens) {
+      for (const index of productIndicesByToken.get(token) || []) directNeighbors.add(index);
+    }
+    for (const index of directNeighbors) {
+      for (const token of productTokens[index]) linked.add(token);
+    }
+    return linked;
+  });
+
+  const balanceTokens = balances.map((balance) => {
+    const values = balance && typeof balance === 'object'
+      ? productIdentityCandidates(balance as Record<string, unknown>)
+      : uniqueValues([trimValue(balance)]);
+    return values.map(normalizeToken).filter(Boolean);
+  });
+
+  return (productIndex) => {
+    const tokens = linkedTokens[productIndex];
+    if (!tokens || tokens.size === 0) return [];
+    return balances.filter((_, balanceIndex) =>
+      balanceTokens[balanceIndex].some((token) => tokens.has(token))
+    );
+  };
+};
+
 export const resolveProductStockRow = (
   product: Partial<Product> | Record<string, unknown> | null | undefined,
   warehouseId: unknown,
