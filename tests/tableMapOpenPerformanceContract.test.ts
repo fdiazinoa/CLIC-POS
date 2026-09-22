@@ -37,15 +37,14 @@ test('the retained table map is removed from hit testing when inactive and inter
   const boundaryEnd = appSource.indexOf('const AppContent', boundaryStart);
   const boundarySource = appSource.slice(boundaryStart, boundaryEnd);
 
-  assert.match(boundarySource, /visible \? 'opacity-100' : 'hidden'/);
+  assert.match(boundarySource, /visible \? 'visible' : 'invisible pointer-events-none'/);
   assert.match(boundarySource, /setAttribute\('inert', ''\)/);
   assert.match(boundarySource, /removeAttribute\('inert'\)/);
   assert.match(boundarySource, /host\.contains\(activeElement\)/);
   assert.match(boundarySource, /activeElement\.blur\(\)/);
   assert.match(boundarySource, /aria-hidden=\{!visible\}/);
-  assert.match(boundarySource, /willChange: 'opacity'/);
-  // pointer-events:none is inherited but a descendant with pointer-events:auto
-  // can opt back into hit testing. display:none on the host cannot be overridden.
+  assert.doesNotMatch(boundarySource, /willChange: 'opacity'/);
+  // inert and visibility:hidden must keep descendants out of hit testing.
   assert.doesNotMatch(boundarySource, /opacity-0 pointer-events-none/);
 });
 

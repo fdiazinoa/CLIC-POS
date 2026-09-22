@@ -612,6 +612,7 @@ const TableMap: React.FC<TableMapProps> = ({
         isNativePlatform: Capacitor.isNativePlatform(),
         platform: Capacitor.getPlatform()
     });
+    const lightweightMap = Capacitor.getPlatform() === 'android';
 
     const closeTablePreview = useCallback((table: Table, close: () => void) => {
         finishInteraction(localDestinationRef.current?.trace, 'cancelled');
@@ -1841,9 +1842,9 @@ const TableMap: React.FC<TableMapProps> = ({
                 className={`relative h-full w-full overflow-hidden select-none ${usesWhiteBackground ? 'bg-white text-slate-900' : 'bg-slate-950 text-slate-100'}`}
                 data-table-map-lightweight={Capacitor.getPlatform() === 'android' ? 'true' : undefined}
             >
-                <div className={`absolute inset-0 ${usesWhiteBackground ? 'bg-white' : 'bg-gradient-to-br from-[#030712] via-[#07122a] to-[#040816]'}`} />
+                <div className={`absolute inset-0 ${usesWhiteBackground ? 'bg-white' : lightweightMap ? 'bg-slate-950' : 'bg-gradient-to-br from-[#030712] via-[#07122a] to-[#040816]'}`} />
 
-                <div
+                {!lightweightMap && <div
                     className={`absolute inset-0 pointer-events-none ${usesWhiteBackground ? 'opacity-70' : 'opacity-45'}`}
                     style={{
                         backgroundImage: [
@@ -1855,9 +1856,9 @@ const TableMap: React.FC<TableMapProps> = ({
                         backgroundSize: `${34 * viewport.scale}px ${34 * viewport.scale}px, ${34 * viewport.scale}px ${34 * viewport.scale}px, 100% 100%, 100% 100%`,
                         backgroundPosition: `${viewport.x * 0.06}px ${viewport.y * 0.06}px, ${viewport.x * 0.06}px ${viewport.y * 0.06}px, center, center`
                     }}
-                />
+                />}
 
-                {!usesWhiteBackground && <div className="absolute inset-0 pointer-events-none bg-[radial-gradient(circle_at_20%_18%,rgba(56,189,248,0.22),transparent_48%),radial-gradient(circle_at_82%_78%,rgba(168,85,247,0.16),transparent_42%)]" />}
+                {!lightweightMap && !usesWhiteBackground && <div className="absolute inset-0 pointer-events-none bg-[radial-gradient(circle_at_20%_18%,rgba(56,189,248,0.22),transparent_48%),radial-gradient(circle_at_82%_78%,rgba(168,85,247,0.16),transparent_42%)]" />}
 
                 {openingTableId && (
                     <div className="pointer-events-none absolute left-1/2 top-4 z-[70] -translate-x-1/2 rounded-full bg-sky-500 px-5 py-2 text-xs font-black uppercase tracking-widest text-slate-950 shadow-xl">
@@ -2113,7 +2114,7 @@ const TableMap: React.FC<TableMapProps> = ({
                 >
                     <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2">
                         <div
-                            className="will-change-transform"
+                            className={lightweightMap ? undefined : 'will-change-transform'}
                             style={{
                                 transform: `translate3d(${viewport.x}px, ${viewport.y}px, 0) scale(${viewport.scale})`,
                                 transformOrigin: 'center center'
@@ -2142,6 +2143,7 @@ const TableMap: React.FC<TableMapProps> = ({
                                         key={model.table.id}
                                         model={model}
                                         reduceMotion={Boolean(reduceMotion)}
+                                        lightweightMap={lightweightMap}
                                         lightBackground={usesWhiteBackground}
                                         showChairs={showsTableChairs}
                                         onSelect={handleNodeSelect}
@@ -2604,6 +2606,7 @@ TableChairMarkers.displayName = 'TableChairMarkers';
 const SmartTableNode = React.memo(({
     model,
     reduceMotion,
+    lightweightMap,
     lightBackground,
     showChairs,
     onSelect,
@@ -2613,6 +2616,7 @@ const SmartTableNode = React.memo(({
 }: {
     model: SmartTableModel;
     reduceMotion: boolean;
+    lightweightMap: boolean;
     lightBackground: boolean;
     showChairs: boolean;
     onSelect: (model: SmartTableModel, inputTimeStamp?: number) => void;
@@ -2644,9 +2648,9 @@ const SmartTableNode = React.memo(({
             data-table-node="true"
             type="button"
             custom={model.index}
-            variants={TABLE_ENTRY_VARIANTS}
-            initial="hidden"
-            animate="visible"
+            variants={reduceMotion ? undefined : TABLE_ENTRY_VARIANTS}
+            initial={reduceMotion ? false : 'hidden'}
+            animate={reduceMotion ? undefined : 'visible'}
             whileHover={reduceMotion ? undefined : { scale: 1.035, y: -2 }}
             transition={{ type: 'spring', stiffness: 300, damping: 25, mass: 0.6 }}
             onClick={(event) => onSelect(model, event.timeStamp)}
@@ -2674,7 +2678,7 @@ const SmartTableNode = React.memo(({
                 width: model.table.width,
                 height: model.table.height,
                 rotate: `${model.table.rotation || 0}deg`,
-                willChange: 'transform, opacity'
+                willChange: lightweightMap ? undefined : 'transform, opacity'
             }}
         >
             <TableChairMarkers model={model} visible={showChairs} />

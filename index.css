@@ -8,6 +8,12 @@
   backdrop-filter: none;
 }
 
+/* Keep status colors, but avoid a per-table shadow repaint on Android. */
+[data-table-map-lightweight="true"] [data-table-node="true"] {
+  box-shadow: none;
+  transition: none;
+}
+
 *,
 *::before,
 *::after {
