@@ -7,6 +7,7 @@ import { recordCheckoutDiagnostic } from './services/CheckoutDiagnostics';
 import { allowsDefaultPaymentMethods } from './utils/erpPaymentMethods';
 import { createStartupTrace } from './utils/startupTrace';
 import { freezeCount, freezePhase } from './diagnostics/freezeCounters';
+import { markWebviewProfileNavigation } from './diagnostics/webviewProfileMarks';
 import {
   beginPosInteraction,
   beginDestinationInteraction,
@@ -2035,10 +2036,27 @@ const AppContent: React.FC = () => {
   const tableMapCloseTraceRef = useRef<PosInteractionTrace | null>(null);
   const tableOpenDestinationRef = useRef<PersistentPOSHostProps['tableDestination']>(null);
   const currentViewRef = useRef<ViewState>(currentView);
+  const lastProfiledViewRef = useRef<ViewState>(currentView);
   const currentUserRef = useRef<User | null>(null);
   const [scanTargetTicketId, setScanTargetTicketId] = useState<string | null>(null); // NEW: Auto-select ticket from scan
   const [restoringHistory, setRestoringHistory] = useState(false);
   useLayoutEffect(() => markRenderEnd('APP_VIEW'));
+  useLayoutEffect(() => {
+    const previousView = lastProfiledViewRef.current;
+    lastProfiledViewRef.current = currentView;
+    const direction = previousView === 'POS' && currentView === 'TABLE_MAP'
+      ? 'SALES_TO_TABLES'
+      : previousView === 'TABLE_MAP' && currentView === 'POS'
+        ? 'TABLES_TO_SALES'
+        : null;
+    if (!direction) return;
+    markWebviewProfileNavigation(`${direction}_COMMIT`);
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      if (currentViewRef.current === currentView) {
+        markWebviewProfileNavigation(`${direction}_VISIBLE`);
+      }
+    }));
+  }, [currentView]);
   const [config, setConfig] = useState<BusinessConfig>(() => getInitialConfig('Supermercado' as any));
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isLandscape, setIsLandscape] = useState(window.innerWidth > window.innerHeight);
@@ -6247,6 +6265,7 @@ const AppContent: React.FC = () => {
 
   const handleCloseTableMap = (event?: React.MouseEvent) => {
     if (tableMapExitPending) return;
+    markWebviewProfileNavigation('TABLES_TO_SALES_INPUT');
     const trace = beginDestinationInteraction('CLOSE_TABLE_MAP', event?.timeStamp, tableMapCloseTraceRef.current);
     finishInteraction(tableOpenDestinationRef.current?.trace, 'cancelled');
     tableMapCloseTraceRef.current = trace;
@@ -6260,6 +6279,7 @@ const AppContent: React.FC = () => {
     // overlay. Waiting for a requestAnimationFrame here needlessly adds one
     // whole frame before React can expose the retained sales surface.
     setViewData(undefined);
+    markWebviewProfileNavigation('TABLES_TO_SALES_STATE');
     setCurrentView('POS');
     markInteractionStage(trace, 'HANDLER_END');
   };
@@ -12036,6 +12056,7 @@ const AppContent: React.FC = () => {
             onOpenInventoryTracking={(productId) => handleViewChange('TRACKING', { productId })}
             onOpenAudit={() => handleViewChange('INVENTORY_AUDIT')}
             onOpenTableMap={async () => {
+              markWebviewProfileNavigation('SALES_TO_TABLES_STATE');
               const changeTrace = getLatestPosInteraction('CHANGE_TABLE');
               markInteractionStateUpdate(changeTrace, 3);
               const releasingTableId = String(activeTableEditLockRef.current?.tableId || '');

@@ -1,5 +1,6 @@
 import { recordCheckoutDiagnostic, setCheckoutCaptureContext } from '../services/CheckoutDiagnostics';
 import { freezeCount, freezePhase } from '../diagnostics/freezeCounters';
+import { markWebviewProfileNavigation } from '../diagnostics/webviewProfileMarks';
 import { MobilePosNavigation } from './MobilePosNavigation';
 import React, { useState, useMemo, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import { Capacitor } from '@capacitor/core';
@@ -6808,6 +6809,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    };
 
    const handleBackToMap = async () => {
+      markWebviewProfileNavigation('SALES_TO_TABLES_INPUT');
       const trace = beginPosInteraction('CHANGE_TABLE', { tableId: activeTable?.id || null, cartItems: cart.length });
       expectInteractionRender(trace, 'APP_VIEW');
       if (blockRecoveredUberOrderMutation('volver al mapa de mesas')) return;

@@ -8,6 +8,7 @@ import { scannerFocusDiagnosticsPlugin } from './diagnostics/scannerFocusInstrum
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, '.', '');
   const diagnostic = process.env.CLIC_POS_DIAGNOSTICS === 'true';
+  const webviewProfileQa = process.env.CLIC_POS_WEBVIEW_PROFILE === 'true';
   // Freeze investigation uses the untransformed functional bundle so V8 frames
   // map directly to TypeScript. The older broad observer remains opt-in.
   const broadDiagnostics = diagnostic && process.env.CLIC_POS_BROAD_DIAGNOSTICS === 'true';
@@ -51,6 +52,7 @@ export default defineConfig(({ mode }) => {
     plugins: [scannerFocusDiagnosticsPlugin(scannerFocusDiagnostic), temporalDiagnosticsPlugin(broadDiagnostics), react()],
     define: {
       __POS_DIAGNOSTIC_BUILD__: JSON.stringify(diagnostic),
+      __POS_WEBVIEW_PROFILE_BUILD__: JSON.stringify(webviewProfileQa),
       'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY),
       'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY)
     },
@@ -63,7 +65,7 @@ export default defineConfig(({ mode }) => {
     esbuild: diagnostic ? { keepNames: true, ...(broadDiagnostics ? { supported: { 'async-await': false } } : {}) } : undefined,
     build: {
       target: diagnostic ? 'es2020' : 'modules',
-      sourcemap: diagnostic,
+      sourcemap: diagnostic || webviewProfileQa,
       chunkSizeWarningLimit: 700,
       rollupOptions: {
         output: {
