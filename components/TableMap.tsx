@@ -1839,6 +1839,7 @@ const TableMap: React.FC<TableMapProps> = ({
             <div
                 ref={mapShellRef}
                 className={`relative h-full w-full overflow-hidden select-none ${usesWhiteBackground ? 'bg-white text-slate-900' : 'bg-slate-950 text-slate-100'}`}
+                data-table-map-lightweight={Capacitor.getPlatform() === 'android' ? 'true' : undefined}
             >
                 <div className={`absolute inset-0 ${usesWhiteBackground ? 'bg-white' : 'bg-gradient-to-br from-[#030712] via-[#07122a] to-[#040816]'}`} />
 
