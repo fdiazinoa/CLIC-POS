@@ -7683,9 +7683,11 @@ const AppContent: React.FC = () => {
 
   useEffect(() => {
     const handleConfigUpdated = async (event: Event) => {
+      freezePhase('CONFIG_EVENT_ENTER');
       const incomingConfig = (event as CustomEvent<BusinessConfig>)?.detail;
       if (!incomingConfig || Array.isArray(incomingConfig) || !incomingConfig.terminals) return;
       await waitForBackgroundSyncWindow();
+      freezePhase('CONFIG_EVENT_WINDOW_READY');
 
       // Detect if we actually need a full sync re-init
       const sanitize = (c: any) => {
@@ -7705,17 +7707,20 @@ const AppContent: React.FC = () => {
 
       const oldConfigJson = JSON.stringify(sanitize(config));
       const newConfigJson = JSON.stringify(sanitize(incomingConfig));
+      freezePhase('CONFIG_EVENT_COMPARED');
       const hasSubstantialChanges = oldConfigJson !== newConfigJson;
 
       persistInitialTerminalConfig(incomingConfig);
       if (!hasSubstantialChanges) {
         console.log('🔔 App: configUpdated received but no structural changes detected. Skipping re-init.');
         setConfig(incomingConfig);
+        freezePhase('CONFIG_EVENT_NO_CHANGE');
         return;
       }
 
       console.log('🔔 App: configUpdated received. Applying synchronized config...');
       setConfig(incomingConfig);
+      freezePhase('CONFIG_EVENT_SET_STATE');
 
       // Startup owns initialization and the security bootstrap. Manifest/catalog
       // events may update React state, but must not restart sync recursively.
@@ -7752,6 +7757,7 @@ const AppContent: React.FC = () => {
         authLevelService.init(incomingConfig, currentTerminal.id);
         terminalRouter.init(incomingConfig, currentTerminal.id, currentTerminal.config.deviceRole || null);
         await syncManager.initialize(incomingConfig, currentTerminal.id);
+        freezePhase('CONFIG_EVENT_SYNC_INITIALIZED');
 
         // If allowed categories changed but local catalog is stale/partial, force a products refresh.
         const normalizeCategory = (value: any) =>
@@ -7793,6 +7799,7 @@ const AppContent: React.FC = () => {
         }
 
         await syncConfigToLocalServer(incomingConfig, { surfaceErrors: false });
+        freezePhase('CONFIG_EVENT_DONE');
       } catch (error) {
         console.error('❌ Failed to apply synced config at runtime:', error);
       }

@@ -2462,6 +2462,7 @@ class SyncManager {
 
             if (shouldRunInventoryTask) {
                 void Promise.allSettled([inventoryTask]).then(async ([inventoryResult]) => {
+                    freezePhase('INVENTORY_TASK_SETTLED');
                     if (inventoryResult.status === 'rejected') {
                         this.readyToSellState.failedOperations += 1;
                         this.publishSyncHealthUpdate();
@@ -2484,7 +2485,9 @@ class SyncManager {
                     let inventoryAppliedCount = 0;
 
                     if (shouldApplyInventoryPayload) {
+                        freezePhase('INVENTORY_BLOCK_APPLY_START', inventoryBalances.length);
                         inventoryAppliedCount = await this.applyTerminalInventoryBlock(inventoryBalances);
+                        freezePhase('INVENTORY_BLOCK_APPLY_END', inventoryAppliedCount);
                         this.persistInventoryVersion(localTerminalId, inventoryPayload?.inventory_version || remoteInventoryVersion);
                     } else if (inventoryPayload?.has_changes === false) {
                         this.persistInventoryVersion(localTerminalId, inventoryPayload?.inventory_version || remoteInventoryVersion);
@@ -2496,7 +2499,9 @@ class SyncManager {
                             inventoryAppliedCount === 0;
 
                         if (shouldForceDirectInventoryRefresh) {
+                            freezePhase('INVENTORY_DIRECT_REFRESH_START');
                             const directRefreshCount = await this.refreshOperationalInventorySnapshot();
+                            freezePhase('INVENTORY_DIRECT_REFRESH_END', directRefreshCount);
                             if (directRefreshCount > 0) {
                                 inventoryAppliedCount = directRefreshCount;
                             }
@@ -2552,6 +2557,7 @@ class SyncManager {
     }
 
     private async refreshOperationalInventorySnapshot(): Promise<number> {
+        freezePhase('INVENTORY_DIRECT_ENTER');
         if (!apiSyncAdapter.isErpActiveOperationalTarget()) {
             return 0;
         }
@@ -2570,6 +2576,7 @@ class SyncManager {
         }
 
         const remoteBalances = await apiSyncAdapter.pullOperationalStockBalances();
+        freezePhase('INVENTORY_DIRECT_REMOTE_READY', Array.isArray(remoteBalances) ? remoteBalances.length : 0);
         if (!Array.isArray(remoteBalances) || remoteBalances.length === 0) {
             return 0;
         }
@@ -2588,7 +2595,10 @@ class SyncManager {
         );
         const nextStockKeys = new Set<string>();
 
-        for (const product of localProducts) {
+        freezePhase('INVENTORY_DIRECT_MATCH_START', localProducts.length);
+        for (let productIndex = 0; productIndex < localProducts.length; productIndex++) {
+            if ((productIndex & 63) === 0) freezePhase('INVENTORY_DIRECT_MATCH_PROGRESS', productIndex);
+            const product = localProducts[productIndex];
             const matchedBalances = remoteBalances.filter((entry) =>
                 productIdMatchesInventoryReference(entry, product, localProducts)
             );
@@ -2642,6 +2652,7 @@ class SyncManager {
                 nextStocksById.set(nextStock.id, nextStock);
             }
         }
+        freezePhase('INVENTORY_DIRECT_MATCH_END', localProducts.length);
 
         if (updatedProducts.size === 0) {
             return 0;
@@ -2666,6 +2677,7 @@ class SyncManager {
     }
 
     private async applyTerminalInventoryBlock(balances: TerminalInventoryBalancePayload[]): Promise<number> {
+        freezePhase('INVENTORY_BLOCK_ENTER', Array.isArray(balances) ? balances.length : 0);
         const normalizedBalances = Array.isArray(balances) ? balances : [];
         if (normalizedBalances.length === 0) {
             return 0;
@@ -2706,7 +2718,10 @@ class SyncManager {
         const nextStockKeys = new Set<string>();
         const now = new Date().toISOString();
 
-        for (const product of localProducts) {
+        freezePhase('INVENTORY_BLOCK_MATCH_START', localProducts.length);
+        for (let productIndex = 0; productIndex < localProducts.length; productIndex++) {
+            if ((productIndex & 63) === 0) freezePhase('INVENTORY_BLOCK_MATCH_PROGRESS', productIndex);
+            const product = localProducts[productIndex];
             const matchedBalances = normalizedBalances.filter((entry) =>
                 productIdMatchesInventoryReference(entry, product, localProducts)
             );
