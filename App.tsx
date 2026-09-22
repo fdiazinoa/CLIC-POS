@@ -1998,10 +1998,10 @@ const TableMapLifecycleBoundary: React.FC<React.PropsWithChildren<{ visible: boo
   return (
     <div
       ref={hostRef}
-      className={`absolute inset-0 z-40 ${visible ? 'opacity-100' : 'hidden'}`}
+      className={`absolute inset-0 z-40 ${visible ? 'visible' : 'invisible pointer-events-none'}`}
       aria-hidden={!visible}
       data-table-map-persistent-host="true"
-      style={{ contain: 'layout style', willChange: 'opacity' }}
+      style={{ contain: 'layout style' }}
     >
       {children}
     </div>
