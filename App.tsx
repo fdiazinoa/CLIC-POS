@@ -1964,7 +1964,7 @@ const PersistentPOSHost: React.FC<PersistentPOSHostProps> = ({ visible, closeTra
   return (
     <div
       ref={hostRef}
-      className={`h-full ${visible ? 'opacity-100' : 'opacity-0 pointer-events-none select-none'}`}
+      className={`h-full ${visible ? 'visible' : 'invisible pointer-events-none select-none'}`}
       aria-hidden={!visible}
       data-pos-persistent-host="true"
       style={{ contain: 'layout style' }}
@@ -11736,7 +11736,7 @@ const AppContent: React.FC = () => {
               onClick={handleCloseTableMap}
               disabled={tableMapExitPending}
               aria-busy={tableMapExitPending}
-              className="absolute left-4 top-4 z-50 rounded-2xl border border-white/15 bg-slate-950/60 px-4 py-2.5 text-sm font-black text-slate-100 shadow-[0_16px_40px_rgba(2,6,23,0.55)] backdrop-blur-xl hover:bg-white/[0.14] active:scale-[0.98]"
+              className={`absolute left-4 top-4 z-50 rounded-2xl border border-white/15 bg-slate-950/90 px-4 py-2.5 text-sm font-black text-slate-100 shadow-[0_16px_40px_rgba(2,6,23,0.55)] hover:bg-white/[0.14] active:scale-[0.98] ${Capacitor.getPlatform() === 'android' ? '' : 'backdrop-blur-xl'}`}
             >
               {tableMapExitPending ? 'Abriendo venta…' : 'Cerrar'}
             </button>

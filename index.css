@@ -2,6 +2,12 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Android WebView: avoid repainting the map's large translucent blur layers. */
+[data-table-map-lightweight="true"] [class*="backdrop-blur"] {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
 *,
 *::before,
 *::after {
