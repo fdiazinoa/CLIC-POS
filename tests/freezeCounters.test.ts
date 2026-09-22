@@ -3,6 +3,8 @@ import test from 'node:test';
 
 test('freeze counters are bounded, aggregate products, and alert only at the rate threshold', async () => {
   (globalThis as any).__POS_DIAGNOSTIC_BUILD__ = true;
+  const nativeMarks: Array<[string, number]> = [];
+  (globalThis as any).POSDiagnostics = { mark: (name: string, products: number) => nativeMarks.push([name, products]) };
   const { freezeCount, freezePhase, freezeSnapshot } = await import('../diagnostics/freezeCounters');
 
   for (let index = 0; index < 100; index++) freezeCount('CATALOG_APPLY_COUNT', 2430);
@@ -16,5 +18,8 @@ test('freeze counters are bounded, aggregate products, and alert only at the rat
   assert.equal(snapshot.alerts[0].name, 'CATALOG_APPLY_COUNT');
   assert.equal(snapshot.timeline.length, 256);
   assert.equal(snapshot.timeline.at(-1)?.products, 2430);
+  assert.equal(nativeMarks.filter(([name]) => name === 'CATALOG_APPLY_START').length, 32);
+  assert.deepEqual(nativeMarks.find(([name]) => name === 'HOT_CATALOG_APPLY_COUNT'), ['HOT_CATALOG_APPLY_COUNT', 100]);
   assert.equal(JSON.stringify(snapshot).includes('productName'), false);
+  delete (globalThis as any).POSDiagnostics;
 });

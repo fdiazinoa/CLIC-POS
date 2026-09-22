@@ -9,6 +9,8 @@ const startedAt = Date.now();
 const counters = new Map<string, Counter>();
 const timeline: Milestone[] = [];
 const alerts: Array<{ name: string; wallTime: string; executionsInFiveSeconds: number }> = [];
+const nativeMarksByName = new Map<string, number>();
+let nativeMarks = 0;
 const MAX_TIMELINE = 256;
 const MAX_ALERTS = 64;
 
@@ -29,6 +31,7 @@ export function freezeCount(name: string, processed = 0): void {
   row.windowCount++;
   if (row.windowCount === 100 && alerts.length < MAX_ALERTS) {
     alerts.push({ name, wallTime: new Date(now).toISOString(), executionsInFiveSeconds: row.windowCount });
+    try { (globalThis as any).POSDiagnostics?.mark(`HOT_${name}`, row.windowCount); } catch { /* diagnostic bridge optional */ }
   }
 }
 
@@ -38,6 +41,12 @@ export function freezePhase(name: string, products?: number): void {
   if (timeline.length >= MAX_TIMELINE) timeline.shift();
   timeline.push({ name, wallTime: new Date(now).toISOString(), elapsedMs: now - startedAt,
     ...(products === undefined ? {} : { products }) });
+  const emittedForName = nativeMarksByName.get(name) || 0;
+  if (emittedForName < 32 && nativeMarks < 512) {
+    nativeMarksByName.set(name, emittedForName + 1);
+    nativeMarks++;
+    try { (globalThis as any).POSDiagnostics?.mark(name, products ?? -1); } catch { /* diagnostic bridge optional */ }
+  }
 }
 
 export function freezeSnapshot() {
