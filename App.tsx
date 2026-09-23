@@ -6089,6 +6089,7 @@ const AppContent: React.FC = () => {
   }, [clearSecurityState, currentView, getCurrentDeviceRole, isAdminMode, isDataLoaded]);
 
   const scannerEnabledViews = currentView === 'POS'
+    || currentView === 'TABLE_MAP'
     || currentView === 'HISTORY'
     || currentView === 'KIOSK_BROWSER'
     || currentView === 'KIOSK_WELCOME';

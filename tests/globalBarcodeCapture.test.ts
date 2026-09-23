@@ -36,7 +36,7 @@ function harness(t: TestContext) {
         return event;
     };
     const key = (key: string, target = body, extra = {}) => send('keydown', { key, target, ...extra });
-    const input = (data: string | null, target = search, extra = {}) => send('input', { target, data, inputType: 'insertText', ...extra });
+    const input = (data: string | null, target: any = search, extra = {}) => send('input', { target, data, inputType: 'insertText', ...extra });
     const burst = (code: string, target = body, gap = 20) => {
         for (const ch of code) {
             key(ch, target);
@@ -211,6 +211,42 @@ test('table modal consumes only a live HID terminator, without routing the barco
     h.burst('7501234567890');
     assert.equal(h.key('Enter').prevented, true);
     assert.deepEqual(h.scans, ['7501234567890']);
+});
+
+test('table modal keeps the scanner listener mounted across POS to TABLE_MAP', () => {
+    const app = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
+    const views = app.slice(app.indexOf('const scannerEnabledViews ='), app.indexOf('useBarcodeScanner({'));
+    assert.match(views, /currentView === 'TABLE_MAP'/);
+});
+
+test('modal HID suffix is consumed when a focused input also emits input events', t => {
+    const h = harness(t);
+    const nameInput = { tagName: 'INPUT', dataset: {}, value: '' };
+    h.modal();
+    for (const character of '7501234567890') {
+        h.key(character, nameInput);
+        nameInput.value += character;
+        h.input(character, nameInput);
+        t.mock.timers.tick(10);
+    }
+    const suffix = h.key('Enter', nameInput);
+    assert.equal(suffix.prevented, true);
+    assert.equal(suffix.immediateStopped, true);
+    assert.deepEqual(h.scans, []);
+});
+
+test('modal Android Unidentified plus insertText still consumes the HID suffix', t => {
+    const h = harness(t);
+    const nameInput = { tagName: 'INPUT', dataset: {}, value: '' };
+    h.modal();
+    for (const character of '7501234567890') {
+        h.key('Unidentified', nameInput);
+        nameInput.value += character;
+        h.input(character, nameInput);
+        t.mock.timers.tick(10);
+    }
+    assert.equal(h.key('Enter', nameInput).prevented, true);
+    assert.deepEqual(h.scans, []);
 });
 
 test('slow manual typing and focus change do not suppress Enter in Mesas', t => {
