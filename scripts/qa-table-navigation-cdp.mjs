@@ -99,6 +99,7 @@ try {
     await waitTableModal(false);
   }
   await evaluate('window.__CLIC_POS_PERFORMANCE__?.clear()');
+  await evaluate("performance.clearMarks('CLIC_TABLE_QA_SCANNER_FOCUS_START'); performance.clearMarks('CLIC_TABLE_QA_SCANNER_FOCUS_END'); true");
   for (let index = 0; index < cycles; index += 1) {
     await waitTableModal(false);
     await evaluate("performance.clearMarks('CLIC_TABLE_QA_UI_INTERACTIVE'); true");
@@ -147,6 +148,15 @@ try {
   });
   output.completedAt = new Date().toISOString();
   output.hitTesting = hitTesting;
+  const scannerFocusMarks = await evaluate(`(() => {
+    const starts = performance.getEntriesByName('CLIC_TABLE_QA_SCANNER_FOCUS_START').map(entry => entry.startTime);
+    const ends = performance.getEntriesByName('CLIC_TABLE_QA_SCANNER_FOCUS_END').map(entry => entry.startTime);
+    return { starts, ends };
+  })()`);
+  output.scannerFocus = summarize(scannerFocusMarks.starts
+    .slice(0, scannerFocusMarks.ends.length)
+    .map((start, index) => scannerFocusMarks.ends[index] - start)
+    .filter(duration => duration >= 0));
   output.summary = {
     toTablesInputToRenderEndProxyMs: summarize(duration(results.toTables, 'INPUT_RECEIVED', 'RENDER_END')),
     toTablesInputToInteractiveNextTaskProxyMs: summarize(results.toTablesInteractive),
