@@ -47,7 +47,7 @@ const label = direction === 'toTables' ? 'MESAS' : 'Cerrar';
 
 try {
   await call('Tracing.start', {
-    categories: 'devtools.timeline,disabled-by-default-devtools.timeline,blink.user_timing,cc,disabled-by-default-cc.debug',
+    categories: 'devtools.timeline,disabled-by-default-devtools.timeline,blink.user_timing,blink_style,accessibility,cc,disabled-by-default-cc.debug',
     transferMode: 'ReturnAsStream',
   });
   await wait(100);

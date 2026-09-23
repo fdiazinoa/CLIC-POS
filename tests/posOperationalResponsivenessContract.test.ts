@@ -94,6 +94,9 @@ test('QA host variants keep Venta visually stable and shield it without changing
   assert.match(persistentHostSource, /onKeyDownCapture=\{shieldSalesEvent\}/);
   assert.match(persistentHostSource, /onTouchStartCapture=\{shieldSalesEvent\}/);
   assert.match(layoutSource, /data-pos-scanner-enabled=\{tableLatencyQaEnabled && tableQa.hostMode !== 'baseline' && currentView === 'TABLE_MAP' \? 'false' : undefined\}/);
+  const posSource = readFileSync(new URL('../components/POSInterface.tsx', import.meta.url), 'utf8');
+  assert.match(posSource, /getTableLatencyQaState\(\)\.hostMode !== 'baseline'/);
+  assert.match(posSource, /closest\('\[data-pos-table-shell\]'\)\?\.getAttribute\('data-pos-scanner-enabled'\) === 'false'/);
 });
 
 test('the table map stays mounted and rejects overlapping table opens', () => {
