@@ -5820,7 +5820,11 @@ const AppContent: React.FC = () => {
         throw new Error(result?.message || 'No se pudo bloquear la mesa.');
       }
       activeTableEditLockRef.current = lock as ActiveTableEditLock;
-      setActiveTableEditLock(lock as ActiveTableEditLock);
+      // The map does not run the lock heartbeat. Avoid an extra full App
+      // commit behind it; publish this state with the POS table hydration.
+      if (currentViewRef.current !== 'TABLE_MAP') {
+        setActiveTableEditLock(lock as ActiveTableEditLock);
+      }
       return true;
     } catch (error: any) {
       const lockedBy = String(error?.lock?.userName || error?.lock?.terminalId || 'otra terminal');
@@ -11865,6 +11869,10 @@ const AppContent: React.FC = () => {
                     : null;
                   markInteractionStateUpdate(openTrace, nextCart.length + 3);
                   markInteractionStage(openTrace, 'POS_UPDATE_START');
+                  // The lock ref is already authoritative. Batch the heartbeat
+                  // state with the ticket so opening a table does not repaint
+                  // the entire map while it is still the visible host.
+                  setActiveTableEditLock(activeTableEditLockRef.current);
                   setCart(nextCart);
                   setSelectedCustomer(nextSelectedCustomer);
                   setActiveTable(selectedTable);

@@ -150,6 +150,7 @@ test('real table branches own selectors and hydrated POS destinations without bo
       setSuppressProductInputUntilMs() {}, isClientTerminalMode: () => false, pendingClientTableSyncRef: { current: null },
       parkedTickets: [{ id: 'account-selected', tableId: baseTable.id, items }], transactions: [], customers: [],
       markRestaurantLinesCommitted: (value: unknown[]) => value,
+      activeTableEditLockRef: { current: null }, setActiveTableEditLock() {},
       setCart: (value: unknown) => { appState.cart = value; }, setSelectedCustomer() {},
       setActiveTable: (value: unknown) => { appState.activeTable = value; }, setCurrentView: (value: unknown) => { appState.view = value; },
     });
@@ -220,6 +221,7 @@ test('real table branches own selectors and hydrated POS destinations without bo
           ...api, tableOpenDestinationRef: ownerRef, tableMapExitPending: false,
           tableMapCloseTraceRef: { current: null }, tableMapExitTransitionRef: { current: null },
           beginOperatorUiTransition: () => null, setTableMapExitPending() {}, setViewData() {},
+          markWebviewProfileNavigation() {},
           setCurrentView: (view: string) => { appState.view = view; },
         });
         closeMap({ timeStamp: clock }); originCleanup(); pendingFlow.commitLocal(false);
