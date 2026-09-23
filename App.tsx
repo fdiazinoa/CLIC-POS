@@ -1964,8 +1964,8 @@ const PersistentPOSHost: React.FC<PersistentPOSHostProps> = ({ visible, minimalC
   useLayoutEffect(() => {
     const host = hostRef.current;
     if (!host) return;
-    if (visible) host.removeAttribute('inert');
-    else host.setAttribute('inert', '');
+    // The modal table map owns input while open. Keep the sales host's visual
+    // and accessible subtree unchanged instead of invalidating every card.
     if (!(tableLatencyQaEnabled && ['pure-switch', 'minimal-sales', 'minimal-tables'].includes(getTableLatencyQaState().mode))) {
       notifySalesScannerHostVisibility(host, visible);
     }
@@ -1974,8 +1974,7 @@ const PersistentPOSHost: React.FC<PersistentPOSHostProps> = ({ visible, minimalC
   return (
     <div
       ref={hostRef}
-      className={`h-full ${visible ? 'visible' : 'invisible pointer-events-none select-none'}`}
-      aria-hidden={!visible}
+      className="h-full"
       data-pos-persistent-host="true"
       style={{ contain: 'layout style' }}
     >
@@ -1990,18 +1989,15 @@ const PersistentPOSHost: React.FC<PersistentPOSHostProps> = ({ visible, minimalC
   );
 };
 
-const TableMapLifecycleBoundary: React.FC<React.PropsWithChildren<{ visible: boolean; closeTrace?: PosInteractionTrace | null }>> = ({ children, visible, closeTrace }) => {
-  const hostRef = useRef<HTMLDivElement>(null);
+const TableMapLifecycleBoundary: React.FC<React.PropsWithChildren<{ visible: boolean; closeTrace?: PosInteractionTrace | null; onRequestClose: () => void }>> = ({ children, visible, closeTrace, onRequestClose }) => {
+  const hostRef = useRef<HTMLDialogElement>(null);
 
   useLayoutEffect(() => {
     const host = hostRef.current;
     if (!host) return;
-    if (visible) host.removeAttribute('inert');
-    else {
-      host.setAttribute('inert', '');
-      const activeElement = host.ownerDocument.activeElement;
-      if (activeElement instanceof HTMLElement && host.contains(activeElement)) activeElement.blur();
-    }
+    if (visible && !host.open) host.showModal();
+    else if (!visible && host.open) host.close();
+    return () => { if (host.open) host.close(); };
   }, [visible]);
 
   useLayoutEffect(() => {
@@ -2012,15 +2008,16 @@ const TableMapLifecycleBoundary: React.FC<React.PropsWithChildren<{ visible: boo
   }, [closeTrace, visible]);
 
   return (
-    <div
+    <dialog
       ref={hostRef}
-      className={`absolute inset-0 z-40 ${visible ? 'visible' : 'invisible pointer-events-none'}`}
-      aria-hidden={!visible}
+      className="bg-slate-950 text-white"
+      aria-label="Mesas"
+      onCancel={(event) => { event.preventDefault(); onRequestClose(); }}
       data-table-map-persistent-host="true"
-      style={{ contain: 'layout style' }}
+      style={{ position: 'fixed', inset: 0, width: '100vw', height: '100dvh', maxWidth: 'none', maxHeight: 'none', margin: 0, padding: 0, border: 0, overflow: 'hidden', contain: 'layout style' }}
     >
       {children}
-    </div>
+    </dialog>
   );
 };
 
@@ -13426,7 +13423,7 @@ const AppContent: React.FC = () => {
         <div className="h-screen overflow-hidden relative" data-pos-table-shell="true">
           {renderView('POS')}
           {tableMapHasMounted || currentView === 'TABLE_MAP' ? (
-            <TableMapLifecycleBoundary visible={currentView === 'TABLE_MAP'} closeTrace={tableMapCloseTraceRef.current}>
+            <TableMapLifecycleBoundary visible={currentView === 'TABLE_MAP'} closeTrace={tableMapCloseTraceRef.current} onRequestClose={() => handleCloseTableMap()}>
               {renderView('TABLE_MAP')}
             </TableMapLifecycleBoundary>
           ) : null}
