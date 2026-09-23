@@ -9,6 +9,12 @@ import { createStartupTrace } from './utils/startupTrace';
 import { freezeCount, freezePhase } from './diagnostics/freezeCounters';
 import { markWebviewProfileNavigation } from './diagnostics/webviewProfileMarks';
 import {
+  getTableLatencyQaState,
+  subscribeTableLatencyQa,
+  tableLatencyQaEnabled,
+  tableLatencyQaMark,
+} from './diagnostics/tableLatencyQa';
+import {
   beginPosInteraction,
   beginDestinationInteraction,
   commitInteractionDestination,
@@ -1872,6 +1878,7 @@ const App: React.FC = () => {
 
 type PersistentPOSHostProps = React.ComponentProps<typeof POSInterface> & {
   visible: boolean;
+  minimalContent?: boolean;
   closeTrace?: PosInteractionTrace | null;
   tableDestination?: { trace: PosInteractionTrace; tableId: string; orderId: string; cart: CartItem[] } | null;
   onInteractive?: () => void;
@@ -1906,7 +1913,7 @@ const StableTableMap: React.FC<React.ComponentProps<typeof TableMap>> = (incomin
  * props are proxied through refs so App-level navigation renders do not defeat
  * the memo boundary, while handlers always execute their latest closure.
  */
-const PersistentPOSHost: React.FC<PersistentPOSHostProps> = ({ visible, closeTrace, tableDestination, onInteractive, ...incomingProps }) => {
+const PersistentPOSHost: React.FC<PersistentPOSHostProps> = ({ visible, minimalContent, closeTrace, tableDestination, onInteractive, ...incomingProps }) => {
   const hostRef = useRef<HTMLDivElement>(null);
   const consumedCloseTraceRef = useRef<PosInteractionTrace | null>(null);
   const destinationVisibleRef = useRef(visible);
@@ -1959,7 +1966,9 @@ const PersistentPOSHost: React.FC<PersistentPOSHostProps> = ({ visible, closeTra
     if (!host) return;
     if (visible) host.removeAttribute('inert');
     else host.setAttribute('inert', '');
-    notifySalesScannerHostVisibility(host, visible);
+    if (!(tableLatencyQaEnabled && ['pure-switch', 'minimal-sales', 'minimal-tables'].includes(getTableLatencyQaState().mode))) {
+      notifySalesScannerHostVisibility(host, visible);
+    }
   }, [visible]);
 
   return (
@@ -1970,7 +1979,13 @@ const PersistentPOSHost: React.FC<PersistentPOSHostProps> = ({ visible, closeTra
       data-pos-persistent-host="true"
       style={{ contain: 'layout style' }}
     >
-      <MemoizedPOSInterface {...stableProps} />
+      {minimalContent ? <div>VENTA QA</div> : tableLatencyQaEnabled ? (
+        <React.Profiler id="POSInterface" onRender={(_id, phase, actualDuration, baseDuration, startTime, commitTime) => {
+          tableLatencyQaMark('REACT_POS_RENDER', { phase, actualDuration, baseDuration, startTime, commitTime });
+        }}>
+          <MemoizedPOSInterface {...stableProps} />
+        </React.Profiler>
+      ) : <MemoizedPOSInterface {...stableProps} />}
     </div>
   );
 };
@@ -2012,6 +2027,7 @@ const TableMapLifecycleBoundary: React.FC<React.PropsWithChildren<{ visible: boo
 const AppContent: React.FC = () => {
   freezeCount('APP_RENDER_COUNT');
   markRenderStart('APP_VIEW');
+  const tableQa = React.useSyncExternalStore(subscribeTableLatencyQa, getTableLatencyQaState, getTableLatencyQaState);
   const { clearSecurityState, setSupervisorPinValidator } = useKioskSecurityContext();
   // --- GLOBAL STATE ---
   const [activeTable, setActiveTable] = useState<Table | null>(null); // New state for selected table context
@@ -2029,12 +2045,33 @@ const AppContent: React.FC = () => {
     }
     return isVisorMode ? 'VISOR' : 'LOGIN';
   });
+  useEffect(() => {
+    if (!tableLatencyQaEnabled || !window.__CLIC_TABLE_LATENCY_QA__) return;
+    const controls = window.__CLIC_TABLE_LATENCY_QA__;
+    controls.showTables = () => {
+      if (!['pure-switch', 'minimal-sales', 'minimal-tables'].includes(getTableLatencyQaState().mode)) return;
+      tableLatencyQaMark('PURE_INPUT');
+      tableLatencyQaMark('VIEW_CHANGE_REQUEST');
+      setCurrentView('TABLE_MAP');
+    };
+    controls.showSales = () => {
+      if (!['pure-switch', 'minimal-sales', 'minimal-tables'].includes(getTableLatencyQaState().mode)) return;
+      tableLatencyQaMark('PURE_INPUT');
+      tableLatencyQaMark('VIEW_CHANGE_REQUEST');
+      setCurrentView('POS');
+    };
+    return () => {
+      delete controls.showTables;
+      delete controls.showSales;
+    };
+  }, []);
   const [tableMapExitPending, setTableMapExitPending] = useState(false);
   const [tableMapHasMounted, setTableMapHasMounted] = useState(false);
   const [suppressProductInputUntilMs, setSuppressProductInputUntilMs] = useState(0);
   const tableMapExitTransitionRef = useRef<OperatorUiTransitionToken | null>(null);
   const tableMapCloseTraceRef = useRef<PosInteractionTrace | null>(null);
   const tableOpenDestinationRef = useRef<PersistentPOSHostProps['tableDestination']>(null);
+  const tableQaPreparedCartRef = useRef<{ tableId: string; cart: CartItem[]; customer: Customer | null; table: Table } | null>(null);
   const currentViewRef = useRef<ViewState>(currentView);
   const lastProfiledViewRef = useRef<ViewState>(currentView);
   const currentUserRef = useRef<User | null>(null);
@@ -2050,7 +2087,16 @@ const AppContent: React.FC = () => {
         ? 'TABLES_TO_SALES'
         : null;
     if (!direction) return;
+    const activeTrace = direction === 'SALES_TO_TABLES'
+      ? getLatestPosInteraction('CHANGE_TABLE')
+      : tableOpenDestinationRef.current?.trace || tableMapCloseTraceRef.current;
+    markInteractionStage(activeTrace, 'REACT_COMMIT_END');
+    tableLatencyQaMark('REACT_COMMIT_END', { direction });
     markWebviewProfileNavigation(`${direction}_COMMIT`);
+    requestAnimationFrame(() => {
+      tableLatencyQaMark('FIRST_FRAME_VISIBLE', { direction, semantic: 'prepaint-rAF-proxy' });
+      setTimeout(() => tableLatencyQaMark('UI_INTERACTIVE', { direction, semantic: 'next-task-proxy' }), 0);
+    });
     requestAnimationFrame(() => requestAnimationFrame(() => {
       if (currentViewRef.current === currentView) {
         markWebviewProfileNavigation(`${direction}_VISIBLE`);
@@ -4221,6 +4267,9 @@ const AppContent: React.FC = () => {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
+  const tableQaProducts = useMemo(() => tableLatencyQaEnabled && tableQa.productLimit !== null
+    ? products.slice(0, Math.max(0, tableQa.productLimit))
+    : products, [products, tableQa.productLimit]);
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
   const [cashMovements, setCashMovements] = useState<CashMovement[]>([]);
   const [zReports, setZReports] = useState<ZReport[]>([]);
@@ -6269,6 +6318,7 @@ const AppContent: React.FC = () => {
 
   const handleCloseTableMap = (event?: React.MouseEvent) => {
     if (tableMapExitPending) return;
+    tableLatencyQaMark('TABLES_CLOSE_INPUT');
     markWebviewProfileNavigation('TABLES_TO_SALES_INPUT');
     const trace = beginDestinationInteraction('CLOSE_TABLE_MAP', event?.timeStamp, tableMapCloseTraceRef.current);
     finishInteraction(tableOpenDestinationRef.current?.trace, 'cancelled');
@@ -6284,6 +6334,8 @@ const AppContent: React.FC = () => {
     // whole frame before React can expose the retained sales surface.
     setViewData(undefined);
     markWebviewProfileNavigation('TABLES_TO_SALES_STATE');
+    markInteractionStage(trace, 'VIEW_CHANGE_REQUEST');
+    tableLatencyQaMark('VIEW_CHANGE_REQUEST', { traceId: trace.id, destination: 'POS' });
     setCurrentView('POS');
     markInteractionStage(trace, 'HANDLER_END');
   };
@@ -11765,6 +11817,10 @@ const AppContent: React.FC = () => {
               {tableMapExitPending ? 'Abriendo venta…' : 'Cerrar'}
             </button>
             <div className="h-full overflow-hidden relative">
+              {tableLatencyQaEnabled && tableQa.mode === 'minimal-tables' ? <div>MESAS QA</div> : (
+              <React.Profiler id="TableMap" onRender={(_id, phase, actualDuration, baseDuration, startTime, commitTime) => {
+                tableLatencyQaMark('REACT_TABLE_RENDER', { phase, actualDuration, baseDuration, startTime, commitTime });
+              }}>
               <StableTableMap
                 visible={currentView === 'TABLE_MAP'}
                 rooms={rooms}
@@ -11781,6 +11837,8 @@ const AppContent: React.FC = () => {
                 }}
                 onTableClick={(table, openTrace) => {
                   console.log('Mesa seleccionada:', table.name);
+                  markInteractionStage(openTrace, 'CART_LOAD_START');
+                  tableLatencyQaMark('CART_LOAD_START', { traceId: openTrace?.id });
                   // A queued Android tap can arrive after the map disappears
                   // and otherwise activate the product at the same position.
                   // Guard only catalog input; the rest of POS stays responsive.
@@ -11818,7 +11876,14 @@ const AppContent: React.FC = () => {
                     }
                     return null;
                   };
-                  if (table.currentOrderId) {
+                  const preparedTable = tableLatencyQaEnabled && tableQa.mode === 'preloaded'
+                    && tableQaPreparedCartRef.current?.tableId === String(table.id)
+                    ? tableQaPreparedCartRef.current : null;
+                  if (preparedTable) {
+                    nextCart = preparedTable.cart;
+                    nextSelectedCustomer = preparedTable.customer;
+                    selectedTable = preparedTable.table;
+                  } else if (table.currentOrderId) {
                     let activeParkedTickets = initialParkedTickets;
                     let parked = activeParkedTickets.find(p => p.id === table.currentOrderId)
                       || (!isBarTableContext ? activeParkedTickets.find(p => String(p.tableId) === String(table.id)) : undefined);
@@ -11863,6 +11928,14 @@ const AppContent: React.FC = () => {
                     }
                   }
 
+                  if (tableLatencyQaEnabled && !preparedTable) {
+                    tableQaPreparedCartRef.current = {
+                      tableId: String(table.id), cart: nextCart, customer: nextSelectedCustomer, table: selectedTable
+                    };
+                  }
+                  markInteractionStage(openTrace, 'CART_LOAD_END');
+                  tableLatencyQaMark('CART_LOAD_END', { traceId: openTrace?.id, items: nextCart.length, preloaded: Boolean(preparedTable) });
+
                   if (tableOpenDestinationRef.current?.trace !== openTrace) finishInteraction(tableOpenDestinationRef.current?.trace, 'cancelled');
                   tableOpenDestinationRef.current = isInteractionPending(openTrace)
                     ? { trace: openTrace, tableId: String(selectedTable.id), orderId: String(selectedTable.currentOrderId || ''), cart: nextCart }
@@ -11882,6 +11955,8 @@ const AppContent: React.FC = () => {
                   window.requestAnimationFrame(() => {
                     window.setTimeout(() => {
                       markInteractionStage(openTrace, 'NAVIGATION_START');
+                      markInteractionStage(openTrace, 'VIEW_CHANGE_REQUEST');
+                      tableLatencyQaMark('VIEW_CHANGE_REQUEST', { traceId: openTrace?.id, destination: 'POS' });
                       setCurrentView('POS');
                     }, 0);
                   });
@@ -11957,6 +12032,8 @@ const AppContent: React.FC = () => {
                   handleViewChange('TABLE_DESIGNER');
                 }}
               />
+              </React.Profiler>
+              )}
             </div>
           </div>
           </>
@@ -12029,6 +12106,7 @@ const AppContent: React.FC = () => {
         return (
           <PersistentPOSHost
             visible={currentView === 'POS'}
+            minimalContent={tableLatencyQaEnabled && tableQa.mode === 'minimal-sales'}
             closeTrace={tableMapCloseTraceRef.current}
             tableDestination={tableOpenDestinationRef.current}
             onInteractive={handleTableMapCloseInteractive}
@@ -12037,7 +12115,7 @@ const AppContent: React.FC = () => {
             roles={roles}
             users={users}
             customers={customers}
-            products={products}
+            products={tableQaProducts}
             onUpdateProducts={setProducts}
             warehouses={warehouses}
             cart={cart}
@@ -12073,6 +12151,8 @@ const AppContent: React.FC = () => {
               void releaseActiveTableEditLock({ deferRemote: true, trace: changeTrace });
               setActiveTable(null);
               setViewData(null);
+              markInteractionStage(changeTrace, 'VIEW_CHANGE_REQUEST');
+              tableLatencyQaMark('VIEW_CHANGE_REQUEST', { traceId: changeTrace?.id, destination: 'TABLE_MAP' });
               setCurrentView('TABLE_MAP');
               // Liberación y reconciliación ocurren después del cambio visual;
               // no bloquear la navegación por red, SQLite ni heartbeat.
