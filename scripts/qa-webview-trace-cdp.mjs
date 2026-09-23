@@ -51,7 +51,7 @@ const prefix = direction === 'toTables' ? 'SALES_TO_TABLES' : 'TABLES_TO_SALES';
 try {
   await evaluate(`performance.clearMarks('CLIC_TABLE_QA_UI_INTERACTIVE'); performance.clearMarks(${JSON.stringify(`${prefix}_VISIBLE`)}); true`);
   await call('Tracing.start', {
-    categories: 'devtools.timeline,disabled-by-default-devtools.timeline,blink.user_timing,blink_style,accessibility,cc,disabled-by-default-cc.debug',
+    categories: 'devtools.timeline,disabled-by-default-devtools.timeline,blink.user_timing,cc,disabled-by-default-cc.debug',
     transferMode: 'ReturnAsStream',
   });
   await wait(100);

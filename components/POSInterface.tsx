@@ -3894,10 +3894,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (isAnyModalOpen) return;
 
       const handleCentralBarcodeScan = (event: Event) => {
-         // The retained Venta tree still owns this window listener while Mesas
-         // overlays it in the host experiment. Do not consume an external scan.
-         if (tableLatencyQaEnabled && getTableLatencyQaState().hostMode !== 'baseline' &&
-            salesScannerReceiverRef.current?.closest('[data-pos-table-shell]')?.getAttribute('data-pos-scanner-enabled') === 'false') return;
          const barcode = (event as CustomEvent<{ barcode?: string }>).detail?.barcode;
          if (!barcode) return;
          processBarcode(barcode);
