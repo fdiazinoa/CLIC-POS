@@ -13,6 +13,7 @@ import {
   subscribeTableLatencyQa,
   tableLatencyQaEnabled,
   tableLatencyQaMark,
+  type TableLatencyQaHostMode,
 } from './diagnostics/tableLatencyQa';
 import {
   beginPosInteraction,
@@ -1878,6 +1879,7 @@ const App: React.FC = () => {
 
 type PersistentPOSHostProps = React.ComponentProps<typeof POSInterface> & {
   visible: boolean;
+  qaHostMode?: TableLatencyQaHostMode;
   minimalContent?: boolean;
   closeTrace?: PosInteractionTrace | null;
   tableDestination?: { trace: PosInteractionTrace; tableId: string; orderId: string; cart: CartItem[] } | null;
@@ -1913,8 +1915,9 @@ const StableTableMap: React.FC<React.ComponentProps<typeof TableMap>> = (incomin
  * props are proxied through refs so App-level navigation renders do not defeat
  * the memo boundary, while handlers always execute their latest closure.
  */
-const PersistentPOSHost: React.FC<PersistentPOSHostProps> = ({ visible, minimalContent, closeTrace, tableDestination, onInteractive, ...incomingProps }) => {
+const PersistentPOSHost: React.FC<PersistentPOSHostProps> = ({ visible, qaHostMode = 'baseline', minimalContent, closeTrace, tableDestination, onInteractive, ...incomingProps }) => {
   const hostRef = useRef<HTMLDivElement>(null);
+  const stableOverlay = tableLatencyQaEnabled && qaHostMode !== 'baseline';
   const consumedCloseTraceRef = useRef<PosInteractionTrace | null>(null);
   const destinationVisibleRef = useRef(visible);
   const currentTableDestinationRef = useRef<typeof tableDestination>(null);
@@ -1964,20 +1967,37 @@ const PersistentPOSHost: React.FC<PersistentPOSHostProps> = ({ visible, minimalC
   useLayoutEffect(() => {
     const host = hostRef.current;
     if (!host) return;
-    if (visible) host.removeAttribute('inert');
+    if (visible || (stableOverlay && qaHostMode !== 'overlay-inert')) host.removeAttribute('inert');
     else host.setAttribute('inert', '');
+    if (stableOverlay && !visible) {
+      const activeElement = host.ownerDocument.activeElement;
+      if (activeElement instanceof HTMLElement && host.contains(activeElement)) activeElement.blur();
+    }
     if (!(tableLatencyQaEnabled && ['pure-switch', 'minimal-sales', 'minimal-tables'].includes(getTableLatencyQaState().mode))) {
       notifySalesScannerHostVisibility(host, visible);
     }
-  }, [visible]);
+  }, [visible, stableOverlay, qaHostMode]);
+
+  const shieldSalesEvent = (event: React.SyntheticEvent) => {
+    if (!stableOverlay || visible) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.type === 'focus' && event.target instanceof HTMLElement) event.target.blur();
+  };
 
   return (
     <div
       ref={hostRef}
-      className={`h-full ${visible ? 'visible' : 'invisible pointer-events-none select-none'}`}
-      aria-hidden={!visible}
+      className={stableOverlay ? 'h-full' : `h-full ${visible ? 'visible' : 'invisible pointer-events-none select-none'}`}
+      aria-hidden={stableOverlay ? qaHostMode === 'overlay-aria' ? !visible : undefined : !visible}
       data-pos-persistent-host="true"
       style={{ contain: 'layout style' }}
+      onFocusCapture={shieldSalesEvent}
+      onKeyDownCapture={shieldSalesEvent}
+      onBeforeInputCapture={shieldSalesEvent}
+      onClickCapture={shieldSalesEvent}
+      onPointerDownCapture={shieldSalesEvent}
+      onTouchStartCapture={shieldSalesEvent}
     >
       {minimalContent ? <div>VENTA QA</div> : tableLatencyQaEnabled ? (
         <React.Profiler id="POSInterface" onRender={(_id, phase, actualDuration, baseDuration, startTime, commitTime) => {
@@ -1990,7 +2010,7 @@ const PersistentPOSHost: React.FC<PersistentPOSHostProps> = ({ visible, minimalC
   );
 };
 
-const TableMapLifecycleBoundary: React.FC<React.PropsWithChildren<{ visible: boolean; closeTrace?: PosInteractionTrace | null }>> = ({ children, visible, closeTrace }) => {
+const TableMapLifecycleBoundary: React.FC<React.PropsWithChildren<{ visible: boolean; stableOverlay: boolean; closeTrace?: PosInteractionTrace | null }>> = ({ children, visible, stableOverlay, closeTrace }) => {
   const hostRef = useRef<HTMLDivElement>(null);
 
   useLayoutEffect(() => {
@@ -2014,7 +2034,7 @@ const TableMapLifecycleBoundary: React.FC<React.PropsWithChildren<{ visible: boo
   return (
     <div
       ref={hostRef}
-      className={`absolute inset-0 z-40 ${visible ? 'visible' : 'invisible pointer-events-none'}`}
+      className={`absolute inset-0 z-40 ${stableOverlay ? 'bg-slate-950' : ''} ${visible ? 'visible' : 'invisible pointer-events-none'}`}
       aria-hidden={!visible}
       data-table-map-persistent-host="true"
       style={{ contain: 'layout style' }}
@@ -12106,6 +12126,7 @@ const AppContent: React.FC = () => {
         return (
           <PersistentPOSHost
             visible={currentView === 'POS'}
+            qaHostMode={tableQa.hostMode}
             minimalContent={tableLatencyQaEnabled && tableQa.mode === 'minimal-sales'}
             closeTrace={tableMapCloseTraceRef.current}
             tableDestination={tableOpenDestinationRef.current}
@@ -13423,10 +13444,11 @@ const AppContent: React.FC = () => {
     const role = getCurrentDeviceRole();
     const content = currentView === 'POS' || currentView === 'TABLE_MAP'
       ? (
-        <div className="h-screen overflow-hidden relative" data-pos-table-shell="true">
+        <div className="h-screen overflow-hidden relative" data-pos-table-shell="true"
+          data-pos-scanner-enabled={tableLatencyQaEnabled && tableQa.hostMode !== 'baseline' && currentView === 'TABLE_MAP' ? 'false' : undefined}>
           {renderView('POS')}
           {tableMapHasMounted || currentView === 'TABLE_MAP' ? (
-            <TableMapLifecycleBoundary visible={currentView === 'TABLE_MAP'} closeTrace={tableMapCloseTraceRef.current}>
+            <TableMapLifecycleBoundary visible={currentView === 'TABLE_MAP'} stableOverlay={tableLatencyQaEnabled && tableQa.hostMode !== 'baseline'} closeTrace={tableMapCloseTraceRef.current}>
               {renderView('TABLE_MAP')}
             </TableMapLifecycleBoundary>
           ) : null}

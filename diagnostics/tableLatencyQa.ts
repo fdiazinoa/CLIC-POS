@@ -2,13 +2,15 @@
 export const tableLatencyQaEnabled = import.meta.env.VITE_TABLE_LATENCY_QA === 'true';
 
 export type TableLatencyQaMode = 'real' | 'mock-lock' | 'preloaded' | 'pure-switch' | 'minimal-sales' | 'minimal-tables';
+export type TableLatencyQaHostMode = 'baseline' | 'overlay' | 'overlay-aria' | 'overlay-inert';
 export type TableLatencyQaState = {
   mode: TableLatencyQaMode;
+  hostMode: TableLatencyQaHostMode;
   productLimit: number | null;
   cardLimit: number | null;
 };
 
-let state: TableLatencyQaState = { mode: 'real', productLimit: null, cardLimit: null };
+let state: TableLatencyQaState = { mode: 'real', hostMode: 'baseline', productLimit: null, cardLimit: null };
 const listeners = new Set<() => void>();
 
 export const getTableLatencyQaState = () => state;

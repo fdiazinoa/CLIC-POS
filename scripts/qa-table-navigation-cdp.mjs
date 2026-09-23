@@ -33,7 +33,15 @@ const evaluate = async expression => {
   return result.result?.value;
 };
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
-const isVisible = async host => evaluate(`(() => { const node = document.querySelector('[${host}]'); return Boolean(node && getComputedStyle(node).visibility === 'visible'); })()`);
+const isVisible = async host => evaluate(`(() => {
+  const node = document.querySelector('[${host}]');
+  if (!node || getComputedStyle(node).visibility !== 'visible') return false;
+  if ('${host}' === 'data-pos-persistent-host') {
+    const tableHost = document.querySelector('[data-table-map-persistent-host]');
+    return !tableHost || getComputedStyle(tableHost).visibility !== 'visible';
+  }
+  return true;
+})()`);
 const waitVisible = async (host, timeoutMs = 10000) => {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -86,6 +94,7 @@ const output = {
 try {
   const version = await evaluate("document.body.innerText.match(/APK v[^\\n]+/)?.[0] || null");
   output.version = version;
+  output.hostMode = await evaluate("window.__CLIC_TABLE_LATENCY_QA__?.get()?.hostMode || 'unavailable'");
   if (await isVisible('data-table-map-persistent-host')) {
     await tapText('Cerrar');
     await waitVisible('data-pos-persistent-host');
@@ -116,7 +125,14 @@ try {
     toTablesInputToRenderEndProxyMs: summarize(duration(results.toTables, 'INPUT_RECEIVED', 'RENDER_END')),
     toSalesInputToVisiblePrepaintProxyMs: summarize(duration(results.toSales, 'INPUT_RECEIVED', 'FIRST_FRAME_VISIBLE')),
     toSalesInputToInteractiveNextTaskProxyMs: summarize(duration(results.toSales, 'INPUT_RECEIVED', 'FIRST_FRAME_INTERACTIVE')),
+    toTablesInputToReactCommitMs: summarize(duration(results.toTables, 'INPUT_RECEIVED', 'REACT_COMMIT_END')),
+    toSalesInputToReactCommitMs: summarize(duration(results.toSales, 'INPUT_RECEIVED', 'REACT_COMMIT_END')),
   };
+  output.dom = await evaluate(`(() => ({
+    nodes: document.querySelectorAll('*').length,
+    productCards: document.querySelectorAll('.pos-product-card').length,
+    salesClass: document.querySelector('[data-pos-persistent-host]')?.className,
+  }))()`);
   if (process.env.CLIC_POS_INCLUDE_TRACES === 'true') output.traces = results;
   console.log(JSON.stringify(output));
 } finally {
