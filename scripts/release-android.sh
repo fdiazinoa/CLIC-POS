@@ -249,7 +249,7 @@ fi
 
 if [[ "${SOURCE_VERSION_CODE}" == "${NEXT_VERSION_CODE}" && -n "${SOURCE_VERSION_NAME}" ]]; then
   VERSION_NAME="${SOURCE_VERSION_NAME}"
-elif [[ "${LATEST_RELEASE_VERSION_NAME}" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+elif [[ "${LATEST_RELEASE_VERSION_NAME}" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)(-(diagnostic|profile))*$ ]]; then
   VERSION_NAME="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.$((BASH_REMATCH[3] + 1))"
 elif [[ "${SOURCE_VERSION_NAME}" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
   VERSION_NAME="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.$((BASH_REMATCH[3] + 1))"
@@ -260,6 +260,9 @@ fi
 ARTIFACT_VERSION_NAME="${VERSION_NAME}"
 if [[ "${CLIC_POS_DIAGNOSTICS:-false}" == "true" ]]; then
   ARTIFACT_VERSION_NAME="${VERSION_NAME}-diagnostic"
+fi
+if [[ "${CLIC_POS_WEBVIEW_PROFILE:-false}" == "true" ]]; then
+  ARTIFACT_VERSION_NAME="${ARTIFACT_VERSION_NAME}-profile"
 fi
 
 info "Fuente del release: ${SOURCE_REF} (${SOURCE_COMMIT_SHORT})"
@@ -360,6 +363,7 @@ versionCode=${NEXT_VERSION_CODE}
 versionName=${ARTIFACT_VERSION_NAME}
 functionalBaselineVersion=${SOURCE_VERSION_NAME}
 diagnosticBuild=${CLIC_POS_DIAGNOSTICS:-false}
+webviewProfileQa=${CLIC_POS_WEBVIEW_PROFILE:-false}
 sourceRef=${SOURCE_REF}
 sourceBranch=${SOURCE_BRANCH}
 sourceCommit=${SOURCE_COMMIT}
