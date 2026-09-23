@@ -1964,8 +1964,14 @@ const PersistentPOSHost: React.FC<PersistentPOSHostProps> = ({ visible, minimalC
   useLayoutEffect(() => {
     const host = hostRef.current;
     if (!host) return;
-    if (visible) host.removeAttribute('inert');
-    else host.setAttribute('inert', '');
+    // Keep Venta visually stable. Only its accessibility root changes, after
+    // releasing any scanner focus, while Mesas owns the modal boundary.
+    if (visible) host.removeAttribute('aria-hidden');
+    else {
+      const activeElement = host.ownerDocument.activeElement;
+      if (activeElement instanceof HTMLElement && host.contains(activeElement)) activeElement.blur();
+      host.setAttribute('aria-hidden', 'true');
+    }
     if (!(tableLatencyQaEnabled && ['pure-switch', 'minimal-sales', 'minimal-tables'].includes(getTableLatencyQaState().mode))) {
       notifySalesScannerHostVisibility(host, visible);
     }
@@ -1974,8 +1980,7 @@ const PersistentPOSHost: React.FC<PersistentPOSHostProps> = ({ visible, minimalC
   return (
     <div
       ref={hostRef}
-      className={`h-full ${visible ? 'visible' : 'invisible pointer-events-none select-none'}`}
-      aria-hidden={!visible}
+      className="h-full"
       data-pos-persistent-host="true"
       style={{ contain: 'layout style' }}
     >
@@ -1990,18 +1995,52 @@ const PersistentPOSHost: React.FC<PersistentPOSHostProps> = ({ visible, minimalC
   );
 };
 
-const TableMapLifecycleBoundary: React.FC<React.PropsWithChildren<{ visible: boolean; closeTrace?: PosInteractionTrace | null }>> = ({ children, visible, closeTrace }) => {
+const TableMapLifecycleBoundary: React.FC<React.PropsWithChildren<{ visible: boolean; closeTrace?: PosInteractionTrace | null; onRequestClose: () => void }>> = ({ children, visible, closeTrace, onRequestClose }) => {
   const hostRef = useRef<HTMLDivElement>(null);
+  const onRequestCloseRef = useRef(onRequestClose);
+  onRequestCloseRef.current = onRequestClose;
 
   useLayoutEffect(() => {
     const host = hostRef.current;
     if (!host) return;
-    if (visible) host.removeAttribute('inert');
-    else {
+    if (!visible) {
       host.setAttribute('inert', '');
       const activeElement = host.ownerDocument.activeElement;
       if (activeElement instanceof HTMLElement && host.contains(activeElement)) activeElement.blur();
+      return;
     }
+    host.removeAttribute('inert');
+    const doc = host.ownerDocument;
+    const focusable = () => [...host.querySelectorAll<HTMLElement>(
+      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    )].filter(element => element.getClientRects().length > 0 && getComputedStyle(element).visibility === 'visible');
+    const focusFirst = () => (focusable()[0] || host).focus({ preventScroll: true });
+    const onFocusIn = (event: FocusEvent) => {
+      if (!host.contains(event.target as Node)) focusFirst();
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        onRequestCloseRef.current();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const candidates = focusable();
+      const activeIndex = candidates.indexOf(doc.activeElement as HTMLElement);
+      const nextIndex = event.shiftKey
+        ? activeIndex <= 0 ? candidates.length - 1 : activeIndex - 1
+        : activeIndex < 0 || activeIndex === candidates.length - 1 ? 0 : activeIndex + 1;
+      event.preventDefault();
+      (candidates[nextIndex] || host).focus({ preventScroll: true });
+    };
+    doc.addEventListener('focusin', onFocusIn, true);
+    doc.addEventListener('keydown', onKeyDown, true);
+    focusFirst();
+    return () => {
+      doc.removeEventListener('focusin', onFocusIn, true);
+      doc.removeEventListener('keydown', onKeyDown, true);
+    };
   }, [visible]);
 
   useLayoutEffect(() => {
@@ -2014,8 +2053,12 @@ const TableMapLifecycleBoundary: React.FC<React.PropsWithChildren<{ visible: boo
   return (
     <div
       ref={hostRef}
-      className={`absolute inset-0 z-40 ${visible ? 'visible' : 'invisible pointer-events-none'}`}
+      className={`absolute inset-0 z-40 bg-slate-950 text-white ${visible ? 'visible' : 'invisible pointer-events-none'}`}
+      role={visible ? 'dialog' : undefined}
+      aria-modal={visible ? true : undefined}
       aria-hidden={!visible}
+      aria-label="Mesas"
+      tabIndex={-1}
       data-table-map-persistent-host="true"
       style={{ contain: 'layout style' }}
     >
@@ -13426,7 +13469,7 @@ const AppContent: React.FC = () => {
         <div className="h-screen overflow-hidden relative" data-pos-table-shell="true">
           {renderView('POS')}
           {tableMapHasMounted || currentView === 'TABLE_MAP' ? (
-            <TableMapLifecycleBoundary visible={currentView === 'TABLE_MAP'} closeTrace={tableMapCloseTraceRef.current}>
+            <TableMapLifecycleBoundary visible={currentView === 'TABLE_MAP'} closeTrace={tableMapCloseTraceRef.current} onRequestClose={() => handleCloseTableMap()}>
               {renderView('TABLE_MAP')}
             </TableMapLifecycleBoundary>
           ) : null}
