@@ -6,7 +6,7 @@ Fecha: 2026-09-23. Equipo: POS físico `10.0.0.129:5555`. Build candidato firmad
 
 - **Brecha 1 (modalidad): cerrada.** `dialog.showModal()` fue descartado por latencia (Venta→Mesas p95 170.3 ms). La alternativa autorizada, overlay opaco con `role="dialog"`, `aria-modal="true"` y focus trap centralizado, pasó los gates físicos sin `inert` sobre Venta.
 - **Brecha 2 (foco scanner): no aplica.** `SCANNER_FOCUS_START/END`, 50 cierres: p50 9.1 ms, p95 13.6 ms, p99/max 16.7 ms. No se modificó el scheduling de foco.
-- **Brecha 3 (regresión): parcial.** Navegación, búsqueda, carrito, scroll, cantidad, modificadores, descuento por artículo, Tickets, Cobrar, venta, pago e impresión pasaron. La ruta lógica del scanner pasó; **no había lector HID físico conectado** a este POS, por lo que su prueba real queda pendiente. No declarar apto para piloto hasta validarla.
+- **Brecha 3 (regresión): parcial.** Navegación, búsqueda, carrito, scroll, cantidad, modificadores, descuento por artículo, Mesas, cambio de mesa, Tickets, Cobrar, venta, pago e impresión pasaron. La ruta lógica del scanner pasó; **no había lector HID físico conectado** a este POS, por lo que su prueba real queda pendiente. No declarar apto para piloto hasta validarla.
 
 ## Medición final en 129
 
@@ -26,8 +26,8 @@ Tras reset de gfxinfo: 221/505 frames Android janky (43.76%), p50 30 ms, p95 85 
 - Focus trap: 8 Tab + 8 Shift+Tab permanecieron dentro de Mesas; al abrir, foco en Cerrar. Árbol AX: un diálogo accesible llamado “Mesas” y cero tarjetas de Venta expuestas. Venta queda `aria-hidden` mientras el diálogo está abierto; no se aplica `inert` a su subtree. Al cerrar se retira `aria-hidden` y retorna el foco al receptor scanner.
 - Scanner lógico: un evento `barcodeScanned` durante Mesas no llegó a Venta; el primer evento tras cerrar produjo exactamente una traza de scan. **HID físico pendiente**, porque `dumpsys input/usb` no muestra lector conectado (solo touchscreen Weida, impresora Sewoo y WLAN Realtek).
 - Catálogo: scroll 0/25/50/75/100% con tarjetas visibles hasta el final; búsqueda fuera de viewport encontró 2 resultados Veggie; catálogo restaurado y carrito vacío.
-- Mesas: Mesa 2 y Mesa 3 vacías abrieron y cerraron; quedaron libres. Mesa 1 ocupada no se alteró. Cambio efectivo de una venta entre mesas no se ejecutó.
-- Venta: Papas fritas RD$125 + ITBIS, cantidad 1→2→1, descuento por artículo 10%: total RD$132.75. Tickets→Venta conservó artículo y descuento. Cobrar abrió y se completó **una venta QA en efectivo RD$132.75**. La app mostró “¡Venta Exitosa!”. La orden de impresión fue aceptada y el usuario confirmó que el ticket **salió físicamente** de la Sewoo.
+- Mesas: Mesa 2 y Mesa 3 vacías abrieron y cerraron. Se abrió una cuenta QA con Papas fritas en Mesa 2, se movió la cuenta completa a Mesa 3 y allí se verificaron el artículo y RD$147.50. Se cobró en efectivo; ambas mesas quedaron libres. Mesa 1 ocupada no se alteró.
+- Venta: Papas fritas RD$125 + ITBIS, cantidad 1→2→1, descuento por artículo 10%: total RD$132.75. Tickets→Venta conservó artículo y descuento. Cobrar abrió y se completó **una venta QA en efectivo RD$132.75**. La app mostró “¡Venta Exitosa!”. La orden de impresión fue aceptada y el usuario confirmó que el ticket **salió físicamente** de la Sewoo. La prueba de cambio de mesa añadió **una segunda venta QA en efectivo RD$147.50** para cerrar la cuenta trasladada.
 - Modificadores: Hamburguesa BBQ - Regular, Bacon +RD$60, bebida obligatoria Agua con Gas; producto agregado y total RD$719.80 con ITBIS; carrito descartado sin cobrar.
 - Proceso Android PID 10191 permaneció estable; sin `ANR in com.clicpos.app`, `FATAL EXCEPTION` ni cierre forzado en logcat posterior.
 - Descuento global perdido tras Tickets es un **bug preexistente separado**: [issue #771](https://github.com/fdiazinoa/CLIC-POS/issues/771). No se mezcló con este fix.
