@@ -45,11 +45,13 @@ const waitVisible = async (host, timeoutMs = 10000) => {
 const tapText = async label => {
   const findPoint = () => evaluate(`(() => {
     const label = ${JSON.stringify(label)};
-    const button = [...document.querySelectorAll('button')].find(candidate =>
+    const source = document.querySelector(label === 'MESAS' ? '[data-pos-persistent-host]' : '[data-table-map-persistent-host]');
+    const button = [...(source?.querySelectorAll('button') || [])].find(candidate =>
       candidate.innerText.trim() === label && candidate.getBoundingClientRect().width > 0 &&
       getComputedStyle(candidate).visibility === 'visible');
     if (!button) return null;
     const rect = button.getBoundingClientRect();
+    if (!button.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2))) return null;
     return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
   })()`);
   let point;

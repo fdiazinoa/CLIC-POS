@@ -31,10 +31,12 @@ const evaluate = async expression => {
 };
 const tap = async label => {
   const point = await evaluate(`(() => {
-    const node = [...document.querySelectorAll('button')].find(button => button.innerText.trim() === ${JSON.stringify(label)}
+    const source = document.querySelector(${JSON.stringify(direction === 'toTables' ? '[data-pos-persistent-host]' : '[data-table-map-persistent-host]')});
+    const node = [...(source?.querySelectorAll('button') || [])].find(button => button.innerText.trim() === ${JSON.stringify(label)}
       && button.getBoundingClientRect().width > 0 && getComputedStyle(button).visibility === 'visible');
     if (!node) return null;
     const rect = node.getBoundingClientRect();
+    if (!node.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2))) return null;
     return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
   })()`);
   if (!point) throw new Error(`Button not visible: ${label}`);
@@ -44,8 +46,10 @@ const tap = async label => {
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 const destination = direction === 'toTables' ? 'data-table-map-persistent-host' : 'data-pos-persistent-host';
 const label = direction === 'toTables' ? 'MESAS' : 'Cerrar';
+const prefix = direction === 'toTables' ? 'SALES_TO_TABLES' : 'TABLES_TO_SALES';
 
 try {
+  await evaluate(`performance.clearMarks('CLIC_TABLE_QA_UI_INTERACTIVE'); performance.clearMarks(${JSON.stringify(`${prefix}_VISIBLE`)}); true`);
   await call('Tracing.start', {
     categories: 'devtools.timeline,disabled-by-default-devtools.timeline,blink.user_timing,cc,disabled-by-default-cc.debug',
     transferMode: 'ReturnAsStream',
@@ -53,11 +57,26 @@ try {
   await wait(100);
   await tap(label);
   const deadline = Date.now() + 12000;
+  let destinationReached = false;
   while (Date.now() < deadline) {
-    if (await evaluate(`(() => { const node = document.querySelector('[${destination}]'); return Boolean(node && getComputedStyle(node).visibility === 'visible'); })()`)) break;
+    if (await evaluate(`(() => {
+      const node = document.querySelector('[${destination}]');
+      const table = document.querySelector('[data-table-map-persistent-host]');
+      return Boolean(node && getComputedStyle(node).visibility === 'visible'
+        && (${JSON.stringify(direction)} === 'toTables' || !table || getComputedStyle(table).visibility !== 'visible'));
+    })()`)) { destinationReached = true; break; }
     await wait(35);
   }
-  await wait(700);
+  if (!destinationReached) throw new Error(`Destination not visible for ${direction}`);
+  let marksReached = false;
+  while (Date.now() < deadline) {
+    marksReached = await evaluate(`Boolean(performance.getEntriesByName('CLIC_TABLE_QA_UI_INTERACTIVE').length
+      && performance.getEntriesByName(${JSON.stringify(`${prefix}_VISIBLE`)}).length)`);
+    if (marksReached) break;
+    await wait(35);
+  }
+  if (!marksReached) throw new Error(`Interactive/visible marks missing for ${direction}`);
+  await wait(200);
   await call('Tracing.end');
   const { stream } = await completed;
   let traceJson = '';
@@ -70,9 +89,13 @@ try {
   const events = JSON.parse(traceJson).traceEvents || [];
   const marks = events.filter(event => /SALES_TO_TABLES|TABLES_TO_SALES|CLIC_TABLE_QA/.test(event.name || ''))
     .map(event => ({ name: event.name, ph: event.ph, ts: event.ts, dur: event.dur }));
-  const prefix = direction === 'toTables' ? 'SALES_TO_TABLES' : 'TABLES_TO_SALES';
   const windowStart = marks.find(mark => mark.name === `${prefix}_INPUT`)?.ts;
-  const windowEnd = marks.find(mark => mark.name === `${prefix}_VISIBLE`)?.ts;
+  const visibleMark = marks.find(mark => mark.name === `${prefix}_VISIBLE`)?.ts;
+  const interactiveMark = marks.find(mark => mark.name === 'CLIC_TABLE_QA_UI_INTERACTIVE')?.ts;
+  if (!Number.isFinite(windowStart) || !Number.isFinite(visibleMark) || !Number.isFinite(interactiveMark)) {
+    throw new Error(`Missing navigation trace marks for ${direction}`);
+  }
+  const windowEnd = Math.max(interactiveMark, visibleMark) + 150000;
   const summaries = new Map();
   for (const event of events) {
     if (event.ph !== 'X' || !Number.isFinite(event.dur)) continue;
@@ -91,9 +114,22 @@ try {
   const styleDetails = events.filter(event => event.name === 'UpdateLayoutTree'
     && event.ph === 'X' && (!Number.isFinite(windowStart) || (event.ts >= windowStart && event.ts <= windowEnd)))
     .map(event => ({ durationMs: Math.round(event.dur / 100) / 10, args: event.args }));
+  const threadNames = new Map(events.filter(event => event.ph === 'M' && event.name === 'thread_name')
+    .map(event => [`${event.pid}:${event.tid}`, event.args?.name]));
+  const rendererThreadEvents = events.filter(event => event.ph === 'X' && Number.isFinite(event.dur)
+    && /CrRendererMain/.test(threadNames.get(`${event.pid}:${event.tid}`) || '')
+    && (!Number.isFinite(windowStart) || (event.ts >= windowStart && event.ts <= windowEnd)));
+  const rendererMain = [...new Set(rendererThreadEvents.map(event => event.name))]
+    .filter(name => /Style|Layout|Paint|Accessibility|RunTask|FunctionCall|EventDispatch|Commit/i.test(name))
+    .map(name => ({ name, totalMs: Math.round(rendererThreadEvents.filter(event => event.name === name)
+      .reduce((sum, event) => sum + event.dur, 0) / 100) / 10 }))
+    .sort((a, b) => b.totalMs - a.totalMs).slice(0, 15);
+  const drawFrames = events.filter(event => /DrawFrames?/.test(event.name || '')
+    && (!Number.isFinite(windowStart) || (event.ts >= windowStart && event.ts <= windowEnd)))
+    .map(event => ({ name: event.name, durationMs: Number.isFinite(event.dur) ? Math.round(event.dur / 100) / 10 : null }));
   console.log(JSON.stringify({ direction, eventCount: events.length, traceBytes: traceJson.length,
-    inputToVisibleMarkMs: Number.isFinite(windowStart) && Number.isFinite(windowEnd) ? Math.round((windowEnd - windowStart) / 100) / 10 : null,
-    top, styleDetails, marks }));
+    inputToVisibleMarkMs: Math.round((visibleMark - windowStart) / 100) / 10,
+    top, styleDetails, rendererMain, drawFrames, marks }));
 } finally {
   socket.close();
 }
