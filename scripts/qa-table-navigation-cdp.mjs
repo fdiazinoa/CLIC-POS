@@ -33,23 +33,25 @@ const evaluate = async expression => {
   return result.result?.value;
 };
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
-const isVisible = async host => evaluate(`(() => { const node = document.querySelector('[${host}]'); return Boolean(node && getComputedStyle(node).visibility === 'visible'); })()`);
-const waitVisible = async (host, timeoutMs = 10000) => {
+const isTableModalOpen = async () => evaluate("Boolean(document.querySelector('dialog[data-table-map-persistent-host][open]'))");
+const waitTableModal = async (open, timeoutMs = 10000) => {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (await isVisible(host)) return;
+    if (await isTableModalOpen() === open) return;
     await wait(35);
   }
-  throw new Error(`Timeout waiting for ${host}`);
+  throw new Error(`Timeout waiting for table modal open=${open}`);
 };
 const tapText = async label => {
   const findPoint = () => evaluate(`(() => {
     const label = ${JSON.stringify(label)};
-    const button = [...document.querySelectorAll('button')].find(candidate =>
+    const source = document.querySelector(label === 'MESAS' ? '[data-pos-persistent-host]' : 'dialog[data-table-map-persistent-host][open]');
+    const button = [...(source?.querySelectorAll('button') || [])].find(candidate =>
       candidate.innerText.trim() === label && candidate.getBoundingClientRect().width > 0 &&
       getComputedStyle(candidate).visibility === 'visible');
     if (!button) return null;
     const rect = button.getBoundingClientRect();
+    if (!button.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2))) return null;
     return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
   })()`);
   let point;
@@ -75,7 +77,7 @@ const summarize = samples => ({
   max: samples.length ? Math.max(...samples) : null,
 });
 
-const results = { toTables: [], toSales: [] };
+const results = { toTables: [], toSales: [], toTablesInteractive: [] };
 const output = {
   device: process.env.CLIC_POS_DEVICE || 'unknown',
   cycles,
@@ -86,22 +88,44 @@ const output = {
 try {
   const version = await evaluate("document.body.innerText.match(/APK v[^\\n]+/)?.[0] || null");
   output.version = version;
-  if (await isVisible('data-table-map-persistent-host')) {
+  if (await isTableModalOpen()) {
     await tapText('Cerrar');
-    await waitVisible('data-pos-persistent-host');
+    await waitTableModal(false);
   }
   await evaluate('window.__CLIC_POS_PERFORMANCE__?.clear()');
   for (let index = 0; index < cycles; index += 1) {
-    await waitVisible('data-pos-persistent-host');
+    await waitTableModal(false);
+    await evaluate("performance.clearMarks('CLIC_TABLE_QA_UI_INTERACTIVE'); true");
     await tapText('MESAS');
-    await waitVisible('data-table-map-persistent-host');
-    await wait(80);
+    await waitTableModal(true);
+    const tableInteractiveMark = await evaluate(`new Promise((resolve, reject) => {
+      const deadline = performance.now() + 5000;
+      const poll = () => {
+        const mark = performance.getEntriesByName('CLIC_TABLE_QA_UI_INTERACTIVE').find(entry => entry.detail?.direction === 'SALES_TO_TABLES');
+        if (mark) resolve(mark.startTime);
+        else if (performance.now() > deadline) reject(new Error('Missing SALES_TO_TABLES interactive mark'));
+        else setTimeout(poll, 20);
+      };
+      poll();
+    })`);
     const toTables = await evaluate("window.__CLIC_POS_PERFORMANCE__?.getTraces().filter(trace => trace.operation === 'CHANGE_TABLE').at(-1)");
     results.toTables.push(toTables);
+    if (Number.isFinite(tableInteractiveMark) && Number.isFinite(toTables?.stages?.INPUT_RECEIVED)) {
+      results.toTablesInteractive.push(tableInteractiveMark - toTables.stages.INPUT_RECEIVED);
+    }
 
+    await evaluate("performance.clearMarks('CLIC_TABLE_QA_UI_INTERACTIVE'); true");
     await tapText('Cerrar');
-    await waitVisible('data-pos-persistent-host');
-    await wait(80);
+    await waitTableModal(false);
+    await evaluate(`new Promise((resolve, reject) => {
+      const deadline = performance.now() + 5000;
+      const poll = () => {
+        if (performance.getEntriesByName('CLIC_TABLE_QA_UI_INTERACTIVE').some(entry => entry.detail?.direction === 'TABLES_TO_SALES')) resolve(true);
+        else if (performance.now() > deadline) reject(new Error('Missing TABLES_TO_SALES interactive mark'));
+        else setTimeout(poll, 20);
+      };
+      poll();
+    })`);
     const toSales = await evaluate("window.__CLIC_POS_PERFORMANCE__?.getTraces().filter(trace => trace.operation === 'CLOSE_TABLE_MAP').at(-1)");
     results.toSales.push(toSales);
     if ((index + 1) % 10 === 0) console.error(`Completed ${index + 1}/${cycles} cycles`);
@@ -114,6 +138,7 @@ try {
   output.completedAt = new Date().toISOString();
   output.summary = {
     toTablesInputToRenderEndProxyMs: summarize(duration(results.toTables, 'INPUT_RECEIVED', 'RENDER_END')),
+    toTablesInputToInteractiveNextTaskProxyMs: summarize(results.toTablesInteractive),
     toSalesInputToVisiblePrepaintProxyMs: summarize(duration(results.toSales, 'INPUT_RECEIVED', 'FIRST_FRAME_VISIBLE')),
     toSalesInputToInteractiveNextTaskProxyMs: summarize(duration(results.toSales, 'INPUT_RECEIVED', 'FIRST_FRAME_INTERACTIVE')),
   };
