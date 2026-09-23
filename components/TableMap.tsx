@@ -2887,7 +2887,7 @@ MetricCard.displayName = 'MetricCard';
 const GlassButton: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement>> = ({ className = '', children, ...props }) => (
     <button
         {...props}
-        className={`h-12 w-12 rounded-2xl border border-white/15 bg-white/[0.08] backdrop-blur-xl text-slate-100 shadow-[0_12px_26px_rgba(2,6,23,0.5)] hover:bg-white/[0.16] active:scale-95 transition-all flex items-center justify-center ${className}`}
+        className={`h-12 w-12 rounded-2xl border border-white/15 bg-white/[0.08] backdrop-blur-xl text-slate-100 shadow-[0_12px_26px_rgba(2,6,23,0.5)] hover:bg-white/[0.16] active:scale-95 flex items-center justify-center ${className}`}
     >
         {children}
     </button>

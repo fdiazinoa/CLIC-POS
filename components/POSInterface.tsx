@@ -7412,7 +7412,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          )}
 
          {/* LEFT AREA: PRODUCTS */}
-         <div className={`flex-1 min-h-0 flex flex-col min-w-0 bg-gray-50 transition-all duration-300 ${isMobile && mobileView === 'TICKET' ? 'hidden' : 'flex'} ${isRetailMode ? '!hidden' : ''}`}>
+         <div className={`flex-1 min-h-0 flex flex-col min-w-0 bg-gray-50 ${isMobile && mobileView === 'TICKET' ? 'hidden' : 'flex'} ${isRetailMode ? '!hidden' : ''}`}>
             <header data-search-open={compactSearchOpen || Boolean(searchTerm) ? 'true' : 'false'} className="pos-catalog-header bg-white px-3 md:px-8 py-2 md:py-4 border-b border-gray-200 flex flex-wrap items-center gap-1.5 md:gap-6 shadow-sm z-10 shrink-0">
                <div className="pos-catalog-identity flex items-center gap-3 pr-0 md:pr-4 border-r-0 md:border-r border-gray-100 shrink-0">
                   <div className="w-9 h-9 md:w-10 md:h-10 rounded-full bg-gray-50 overflow-hidden border border-gray-200 shadow-inner shrink-0">
@@ -7815,7 +7815,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          </div >
 
          {/* RIGHT SIDEBAR: CURRENT TICKET */}
-         <div className={`pos-ticket-sidebar ${!isMobile && !isRetailMode ? 'w-96 shrink-0' : 'w-full'} h-full min-h-0 bg-white border-l border-gray-200 shadow-2xl flex flex-col z-20 transition-all duration-300 ${isMobile && mobileView === 'PRODUCTS' && !isRetailMode ? 'hidden' : 'flex'}`}>
+         <div className={`pos-ticket-sidebar ${!isMobile && !isRetailMode ? 'w-96 shrink-0' : 'w-full'} h-full min-h-0 bg-white border-l border-gray-200 shadow-2xl flex flex-col z-20 ${isMobile && mobileView === 'PRODUCTS' && !isRetailMode ? 'hidden' : 'flex'}`}>
 
             {/* MOBILE HEADER */}
             < div className={`${isMobile ? 'flex' : 'hidden'} px-4 py-3 border-b border-gray-100 bg-white flex-col gap-3 shrink-0`} >
