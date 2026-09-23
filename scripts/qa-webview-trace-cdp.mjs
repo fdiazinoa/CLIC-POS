@@ -54,7 +54,7 @@ try {
   await tap(label);
   const deadline = Date.now() + 12000;
   while (Date.now() < deadline) {
-    if (await evaluate(`getComputedStyle(document.querySelector('[${destination}]')).visibility === 'visible'`)) break;
+    if (await evaluate(`(() => { const node = document.querySelector('[${destination}]'); return Boolean(node && getComputedStyle(node).visibility === 'visible'); })()`)) break;
     await wait(35);
   }
   await wait(700);
