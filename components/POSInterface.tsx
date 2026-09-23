@@ -2,6 +2,7 @@ import { recordCheckoutDiagnostic, setCheckoutCaptureContext } from '../services
 import { freezeCount, freezePhase } from '../diagnostics/freezeCounters';
 import { markWebviewProfileNavigation } from '../diagnostics/webviewProfileMarks';
 import { getTableLatencyQaState, subscribeTableLatencyQa, tableLatencyQaEnabled, tableLatencyQaMark } from '../diagnostics/tableLatencyQa';
+import { catalogViewportWindow } from '../utils/catalogViewportWindow';
 import { MobilePosNavigation } from './MobilePosNavigation';
 import React, { useState, useMemo, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import { Capacitor } from '@capacitor/core';
@@ -238,7 +239,7 @@ export interface POSInterfaceProps {
 }
 
 const EMPTY_PRODUCT_PRICES: ProductPrice[] = [];
-const CATALOG_RENDER_BATCH_SIZE = 64;
+const CATALOG_OVERSCAN_ROWS = 1;
 
 type ProductionAreaConfig = {
    id: string;
@@ -2024,7 +2025,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
         return "grid [grid-template-columns:repeat(auto-fill,minmax(210px,1fr))] gap-4 md:gap-5 content-start auto-rows-fr";
       }
       if (usesExpandedCatalog) {
-        return "absolute inset-0 grid min-h-0 grid-cols-4 gap-3 content-start overflow-y-auto px-4 py-3";
+        return "grid min-h-0 grid-cols-4 gap-3 content-start px-4 py-3";
       }
       if (isMobile) {
          return "grid [grid-template-columns:repeat(auto-fill,minmax(138px,1fr))] gap-2.5 content-start";
@@ -2034,15 +2035,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
       return "grid [grid-template-columns:repeat(auto-fill,minmax(160px,1fr))] gap-3 md:gap-4 content-start";
    }, [isMobile, usesExpandedCatalog, usesSupermarketLayout, uxConfig.gridDensity]);
-
-   const expandedCatalogGridStyle = useMemo(
-      () => usesExpandedCatalog
-         ? {
-            gridAutoRows: 'max(176px, calc((100% - 0.75rem) / 2))',
-         } as React.CSSProperties
-         : undefined,
-      [usesExpandedCatalog]
-   );
 
    const categoryContainerClass = useMemo(() => {
       if (usesSupermarketLayout) {
@@ -4219,51 +4211,108 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       return result;
    }, [sortedSalesCatalogProductEntries, categoryFilter, catalogSearchQuery, canonicalizeCategory, effectiveAllowedCategorySet, categoryLookup.presentationByCanonical, isRetailMode]);
 
-   // Keep the full result set searchable, but do not mount every restaurant
-   // product card when opening a ticket or returning from the table map.
+   // Keep the complete result set searchable. Only the ProductCard DOM follows
+   // the current scroll viewport; leaving Venta mounted preserves its state.
    const catalogWindowKey = `${categoryFilter}\u0000${catalogSearchQuery}`;
-   const [catalogWindow, setCatalogWindow] = useState({ key: catalogWindowKey, limit: CATALOG_RENDER_BATCH_SIZE });
    const catalogViewportRef = useRef<HTMLDivElement>(null);
    const catalogGridRef = useRef<HTMLDivElement>(null);
-   const visibleCatalogLimit = catalogWindow.key === catalogWindowKey
-      ? catalogWindow.limit
-      : CATALOG_RENDER_BATCH_SIZE;
-   const qaVisibleCatalogLimit = tableLatencyQaEnabled && tableQa.cardLimit !== null
-      ? Math.max(0, tableQa.cardLimit)
-      : visibleCatalogLimit;
+   const catalogScrollFrameRef = useRef<number | null>(null);
+   const [catalogScroll, setCatalogScroll] = useState({ key: catalogWindowKey, top: 0 });
+   const [catalogMeasurements, setCatalogMeasurements] = useState({
+      key: '', viewportHeight: 0, columns: 4, rowHeight: 0, rowGap: 12, paddingTop: 0, paddingBottom: 0,
+   });
+   const catalogMeasurementKey = `${usesExpandedCatalog}:${usesSupermarketLayout}:${isMobile}:${uxConfig.gridDensity}:${uxConfig.showProductImages}`;
+   const estimatedCatalogRowHeight = usesExpandedCatalog
+      ? 176
+      : usesSupermarketLayout
+         ? 230
+         : isMobile
+            ? (uxConfig.showProductImages ? 194 : 148)
+            : (uxConfig.showProductImages ? 214 : 166);
+   const catalogProductsForGrid = tableLatencyQaEnabled && tableQa.cardLimit !== null
+      ? filteredProducts.slice(0, Math.max(0, tableQa.cardLimit))
+      : filteredProducts;
+   const catalogRowHeight = catalogMeasurements.key === catalogMeasurementKey && catalogMeasurements.rowHeight > 0
+      ? catalogMeasurements.rowHeight
+      : estimatedCatalogRowHeight;
+   const catalogViewportHeight = catalogMeasurements.viewportHeight || 640;
+   const effectiveCatalogRowHeight = usesExpandedCatalog
+      ? Math.max(176, (catalogViewportHeight - 24 - catalogMeasurements.rowGap) / 2)
+      : catalogRowHeight;
+   const virtualCatalogWindow = catalogViewportWindow({
+      itemCount: isRetailMode ? 0 : catalogProductsForGrid.length,
+      columns: catalogMeasurements.columns,
+      rowHeight: effectiveCatalogRowHeight,
+      rowGap: catalogMeasurements.rowGap,
+      paddingTop: catalogMeasurements.paddingTop,
+      paddingBottom: catalogMeasurements.paddingBottom,
+      scrollTop: catalogScroll.key === catalogWindowKey ? catalogScroll.top : 0,
+      viewportHeight: catalogViewportHeight,
+      overscanRows: CATALOG_OVERSCAN_ROWS,
+   });
    const visibleCatalogProducts = useMemo(
       () => {
          freezeCount('CATALOG_RENDER_COUNT');
-         tableLatencyQaMark('VISIBLE_PRODUCTS_BUILD_START', { filtered: filteredProducts.length });
-         const visible = filteredProducts.slice(0, qaVisibleCatalogLimit);
+         tableLatencyQaMark('VISIBLE_PRODUCTS_BUILD_START', { filtered: catalogProductsForGrid.length });
+         const visible = catalogProductsForGrid.slice(virtualCatalogWindow.startIndex, virtualCatalogWindow.endIndex);
          tableLatencyQaMark('VISIBLE_PRODUCTS_BUILD_END', { visible: visible.length });
          return visible;
       },
-      [filteredProducts, qaVisibleCatalogLimit]
+      [catalogProductsForGrid, virtualCatalogWindow.startIndex, virtualCatalogWindow.endIndex]
    );
-   const hasMoreCatalogProducts = !isRetailMode && visibleCatalogProducts.length < filteredProducts.length;
-   const showMoreCatalogProducts = useCallback(() => {
-      freezeCount('CATALOG_LOAD_MORE_COUNT');
-      freezePhase('CATALOG_LOAD_MORE');
-      setCatalogWindow((previous) => ({
-         key: catalogWindowKey,
-         limit: Math.min(
-            filteredProducts.length,
-            (previous.key === catalogWindowKey ? previous.limit : CATALOG_RENDER_BATCH_SIZE) + CATALOG_RENDER_BATCH_SIZE
-         ),
-      }));
-   }, [catalogWindowKey, filteredProducts.length]);
    const handleCatalogScroll = useCallback((event: React.UIEvent<HTMLDivElement>) => {
-      if (!hasMoreCatalogProducts) return;
-      const viewport = event.currentTarget;
-      if (viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 300) {
-         showMoreCatalogProducts();
-      }
-   }, [hasMoreCatalogProducts, showMoreCatalogProducts]);
+      const top = event.currentTarget.scrollTop;
+      if (catalogScrollFrameRef.current !== null) cancelAnimationFrame(catalogScrollFrameRef.current);
+      catalogScrollFrameRef.current = requestAnimationFrame(() => {
+         setCatalogScroll({ key: catalogWindowKey, top });
+         catalogScrollFrameRef.current = null;
+      });
+   }, [catalogWindowKey]);
    useLayoutEffect(() => {
       catalogViewportRef.current?.scrollTo({ top: 0 });
-      catalogGridRef.current?.scrollTo({ top: 0 });
+      setCatalogScroll({ key: catalogWindowKey, top: 0 });
    }, [catalogWindowKey]);
+   useLayoutEffect(() => {
+      const viewport = catalogViewportRef.current;
+      const grid = catalogGridRef.current;
+      if (!viewport || !grid) return;
+      const measure = () => {
+         if (viewport.clientWidth < 1 || viewport.clientHeight < 1) return;
+         const computed = getComputedStyle(grid);
+         const columns = computed.gridTemplateColumns.split(/\s+/).filter(Boolean).length || 1;
+         const rowGap = parseFloat(computed.rowGap) || 0;
+         const paddingTop = parseFloat(computed.paddingTop) || 0;
+         const paddingBottom = parseFloat(computed.paddingBottom) || 0;
+         const firstCard = grid.querySelector<HTMLElement>('.pos-product-card');
+         const measuredRowHeight = firstCard?.getBoundingClientRect().height || estimatedCatalogRowHeight;
+         setCatalogMeasurements(previous => {
+            const next = {
+               key: catalogMeasurementKey,
+               viewportHeight: viewport.clientHeight,
+               columns,
+               rowHeight: measuredRowHeight,
+               rowGap,
+               paddingTop,
+               paddingBottom,
+            };
+            return previous.key === next.key
+               && previous.viewportHeight === next.viewportHeight
+               && previous.columns === next.columns
+               && Math.abs(previous.rowHeight - next.rowHeight) < 0.5
+               && previous.rowGap === next.rowGap
+               && previous.paddingTop === next.paddingTop
+               && previous.paddingBottom === next.paddingBottom
+               ? previous : next;
+         });
+      };
+      measure();
+      const observer = new ResizeObserver(measure);
+      observer.observe(viewport);
+      return () => observer.disconnect();
+   }, [catalogMeasurementKey, estimatedCatalogRowHeight, visibleCatalogProducts.length]);
+   useEffect(() => () => {
+      if (catalogScrollFrameRef.current !== null) cancelAnimationFrame(catalogScrollFrameRef.current);
+   }, []);
 
    const submitProductTextSearch = useCallback((rawValue: string, focusTarget?: React.RefObject<HTMLInputElement>): boolean => {
       const normalizedTextSearch = normalizeSearchToken(rawValue);
@@ -7635,13 +7684,28 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             <div
                ref={catalogViewportRef}
                onScroll={handleCatalogScroll}
-               className={`flex-1 min-h-0 bg-[#eef2f6] ${usesExpandedCatalog ? 'relative overflow-hidden' : `overflow-y-auto ${isMobile ? 'p-3' : 'p-8'}`} custom-scrollbar scrollbar-thin dark:bg-slate-900`}
+               className={`flex-1 min-h-0 overflow-y-auto bg-[#eef2f6] ${usesExpandedCatalog ? 'p-0' : isMobile ? 'p-3' : 'p-8'} custom-scrollbar scrollbar-thin dark:bg-slate-900`}
                style={bottomAwareScrollStyle}
             >
-               <div ref={catalogGridRef} className={gridClass} style={expandedCatalogGridStyle} onScroll={handleCatalogScroll}>
+               <div
+                  className="relative w-full"
+                  style={{ height: virtualCatalogWindow.totalHeight }}
+                  data-catalog-product-count={catalogProductsForGrid.length}
+                  data-catalog-card-count={visibleCatalogProducts.length}
+               >
+                  <div
+                     ref={catalogGridRef}
+                     className={`${gridClass} absolute inset-x-0 top-0`}
+                     style={{
+                        transform: `translateY(${virtualCatalogWindow.offsetTop}px)`,
+                        gridAutoRows: usesExpandedCatalog || catalogMeasurements.key === catalogMeasurementKey
+                           ? `${effectiveCatalogRowHeight}px`
+                           : undefined,
+                     }}
+                  >
                   {!isRetailMode && visibleCatalogProducts.map((product, idx) => (
                      <ProductGridCard
-                        key={product.id || `prod-${idx}`}
+                        key={product.id || `prod-${virtualCatalogWindow.startIndex + idx}`}
                         product={product}
                         usesSupermarketLayout={usesSupermarketLayout}
                         usesExpandedCatalog={usesExpandedCatalog}
@@ -7661,15 +7725,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         onProductContextMenu={handleProductCardContextMenu}
                      />
                   ))}
-                  {hasMoreCatalogProducts && (
-                     <button
-                        type="button"
-                        onClick={showMoreCatalogProducts}
-                        className="col-span-full min-h-12 rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm font-bold text-slate-700 hover:bg-slate-50"
-                     >
-                        Ver más artículos ({filteredProducts.length - visibleCatalogProducts.length} restantes)
-                     </button>
-                  )}
+                  </div>
                </div>
             </div>
             {/* VIRTUAL KEYBOARD SLOT */}

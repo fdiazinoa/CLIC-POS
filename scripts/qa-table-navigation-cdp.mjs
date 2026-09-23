@@ -33,7 +33,7 @@ const evaluate = async expression => {
   return result.result?.value;
 };
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
-const isVisible = async host => evaluate(`getComputedStyle(document.querySelector('[${host}]')).visibility === 'visible'`);
+const isVisible = async host => evaluate(`(() => { const node = document.querySelector('[${host}]'); return Boolean(node && getComputedStyle(node).visibility === 'visible'); })()`);
 const waitVisible = async (host, timeoutMs = 10000) => {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {

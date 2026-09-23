@@ -8,10 +8,11 @@ test('el catálogo expandido distribuye cuatro columnas y evita filas menores de
   const gridStart = source.indexOf('const gridClass');
   const gridEnd = source.indexOf('const categoryContainerClass', gridStart);
   const gridSource = source.slice(gridStart, gridEnd);
+  const viewportSource = source.slice(source.indexOf('const catalogViewportHeight'), source.indexOf('const visibleCatalogProducts'));
 
   assert.ok(gridStart >= 0, 'No se encontró la configuración del grid de artículos');
-  assert.match(gridSource, /absolute inset-0 grid min-h-0 grid-cols-4 gap-3 content-start overflow-y-auto px-4 py-3/);
-  assert.match(gridSource, /gridAutoRows: 'max\(176px, calc\(\(100% - 0\.75rem\) \/ 2\)\)'/);
+  assert.match(gridSource, /grid min-h-0 grid-cols-4 gap-3 content-start px-4 py-3/);
+  assert.match(viewportSource, /Math\.max\(176, \(catalogViewportHeight - 24 - catalogMeasurements\.rowGap\) \/ 2\)/);
   assert.doesNotMatch(
     gridSource,
     /gridTemplateRows/,
@@ -69,8 +70,8 @@ test('el área de artículos conserva márgenes simétricos y calcula las filas 
   const paddingEnd = source.indexOf('const mobileFooterStyle', paddingStart);
   const paddingSource = source.slice(paddingStart, paddingEnd);
 
-  assert.match(gridSource, /overflow-y-auto px-4 py-3/);
-  assert.match(productsSource, /usesExpandedCatalog \? 'relative overflow-hidden'/);
+  assert.match(gridSource, /grid min-h-0 grid-cols-4 gap-3 content-start px-4 py-3/);
+  assert.match(source, /overflow-y-auto bg-\[#eef2f6\]/);
   assert.match(paddingSource, /usesExpandedCatalog\s*\? '0px'/);
   assert.doesNotMatch(paddingSource, /usesExpandedCatalog[\s\S]*var\(--bottom-safe-offset/);
 });
