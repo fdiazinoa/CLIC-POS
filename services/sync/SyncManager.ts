@@ -3204,6 +3204,7 @@ class SyncManager {
             dispatchEvent?: boolean;
             forceRemoteFetch?: boolean;
             forceFullCatalog?: boolean;
+            requireCatalogDelta?: boolean;
             requestTimeoutMs?: number;
             masterScopes?: TerminalManifestMasterScope[];
             blockScopes?: TerminalManifestBlockScope[];
@@ -3265,6 +3266,9 @@ class SyncManager {
             const pendingDeletes = await pendingCatalogDeleteIds();
             hasCompleteCachedCatalog = [...cachedIds].every((id) => presentIds.has(id) || pendingDeletes.has(id))
                 && cachedIds.size === Object.keys(catalogItems).length;
+        }
+        if (options?.requireCatalogDelta && (!currentCatalogCursor || !hasCompleteCachedCatalog)) {
+            return null;
         }
         const currentTerminalCursorMap = this.readStoredTerminalCursorMap(snapshotTerminalId);
         const requestedMasterScopes = Array.isArray(options?.masterScopes)
@@ -3427,6 +3431,9 @@ class SyncManager {
                         typeof payload?.snapshot_meta?.catalog_cursor === 'string'
                             ? payload.snapshot_meta.catalog_cursor.trim() || null
                             : null;
+                    if (options?.requireCatalogDelta && (!catalogDelta || !nextCatalogCursor)) {
+                        throw new Error('ERP_CATALOG_DELTA_UNAVAILABLE');
+                    }
 
                     const snapshotMasters = (snapshot as any)?.masters;
                     const traceRows = Array.isArray(snapshotMasters?.items)

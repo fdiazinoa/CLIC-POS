@@ -570,6 +570,9 @@ test('applies prices + terminal_config + loyalty atomically and ACKs APPLIED', a
 
 test('CONFIG_PUSH_V2 applies fiscal and catalog together before ACK APPLIED', async () => {
     resetHarness();
+    localStorage.setItem('clic_pos_config_push_v2_state', JSON.stringify({
+        versionHash: 'previous-fiscal-hash', domainVersions: { catalog: 11, fiscal: 7 }, inFlight: null,
+    }));
     const originalAtomicSave = dbAdapter.saveDocumentsAtomically;
     const committedCollections: string[][] = [];
     (dbAdapter as any).saveDocumentsAtomically = async (documents: any[], _requireAbsent: boolean, replaceCollections: string[]) => {
@@ -607,6 +610,88 @@ test('CONFIG_PUSH_V2 applies fiscal and catalog together before ACK APPLIED', as
         assert.deepEqual(shirt.appliedTaxIds, [taxId]);
     } finally {
         (dbAdapter as any).saveDocumentsAtomically = originalAtomicSave;
+    }
+});
+
+test('catalog-only version bump uses the projected delta and does not download the full snapshot', async () => {
+    const { config } = resetHarness();
+    localStorage.setItem('clic_pos_config_push_v2_state', JSON.stringify({
+        versionHash: 'previous-hash', domainVersions: { catalog: 1880, fiscal: 996 }, inFlight: null,
+    }));
+    const { syncManager } = await import('../services/sync/SyncManager');
+    const originalRefresh = syncManager.refreshTerminalResolvedConfig;
+    const calls: unknown[] = [];
+    (syncManager as any).refreshTerminalResolvedConfig = async (_snapshot: unknown, options: unknown) => {
+        calls.push(options);
+        return config;
+    };
+    try {
+        const { result, acks, snapshotUrls } = await runEvent({
+            id: 'catalog-delta-only',
+            scopes: ['catalog', 'fiscal'],
+            versions: { catalog: 1881, fiscal: 996 },
+        });
+        assert.equal(result?.applied, 1);
+        assert.equal(acks[0].status, 'APPLIED');
+        assert.equal(snapshotUrls.length, 0);
+        assert.equal(calls.length, 1);
+        const options = calls[0] as Record<string, unknown>;
+        assert.equal(options.forceRemoteFetch, true);
+        assert.equal(options.requireCatalogDelta, true);
+        assert.deepEqual(options.resolvedScopes, ['catalog']);
+        assert.ok((options.masterScopes as string[]).includes('items'));
+        const state = JSON.parse(localStorage.getItem('clic_pos_config_push_v2_state') || '{}');
+        assert.equal(state.domainVersions.catalog, 1881);
+        assert.equal(state.domainVersions.fiscal, 996);
+        assert.equal(state.versionHash, 'hash-catalog-delta-only');
+    } finally {
+        (syncManager as any).refreshTerminalResolvedConfig = originalRefresh;
+    }
+});
+
+test('strict catalog delta does not fetch or ACK when the local catalog cursor is absent', async () => {
+    resetHarness();
+    const { syncManager } = await import('../services/sync/SyncManager');
+    let fetchCount = 0;
+    globalThis.fetch = (async () => {
+        fetchCount += 1;
+        throw new Error('unexpected fetch');
+    }) as typeof fetch;
+    const result = await syncManager.refreshTerminalResolvedConfig(undefined, {
+        forceRemoteFetch: true,
+        requireCatalogDelta: true,
+        masterScopes: ['items'],
+        resolvedScopes: ['catalog'],
+        supplementalMode: 'skip',
+    });
+    assert.equal(result, null);
+    assert.equal(fetchCount, 0);
+});
+
+test('catalog delta unavailable requests the fiscal/catalog snapshot and never ACKs APPLIED on failure', async () => {
+    resetHarness();
+    localStorage.setItem('clic_pos_config_push_v2_state', JSON.stringify({
+        versionHash: 'previous-hash', domainVersions: { catalog: 1880, fiscal: 996 }, inFlight: null,
+    }));
+    const { syncManager } = await import('../services/sync/SyncManager');
+    const originalRefresh = syncManager.refreshTerminalResolvedConfig;
+    (syncManager as any).refreshTerminalResolvedConfig = async () => null;
+    try {
+        const { result, acks, snapshotUrls } = await runEvent({
+            id: 'catalog-delta-fallback',
+            scopes: ['catalog', 'fiscal'],
+            versions: { catalog: 1881, fiscal: 996 },
+            snapshotResponses: [new Response(JSON.stringify({ status: 'error', code: 'SYNC_SNAPSHOT_FAILED' }), {
+                status: 409,
+                headers: { 'Content-Type': 'application/json' },
+            })],
+        });
+        assert.equal(result?.failed, 1);
+        assert.equal(acks[0].status, 'FAILED');
+        assert.equal(snapshotUrls.length, 1);
+        assert.match(snapshotUrls[0], /scopes=catalog%2Cfiscal/);
+    } finally {
+        (syncManager as any).refreshTerminalResolvedConfig = originalRefresh;
     }
 });
 

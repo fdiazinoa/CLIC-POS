@@ -1030,6 +1030,61 @@ const processConfigPushV2Event = async (
             download_required: staleScopes.includes(scope),
         });
     });
+    // A catalog-only version bump can use the existing projected item delta.
+    // Keep the fiscal/catalog atomic snapshot path whenever fiscal also changed.
+    const catalogOnlyChange = staleScopesBase.length === 1
+        && staleScopesBase[0] === 'catalog'
+        && scopes.every((scope) => scope === 'catalog' || scope === 'fiscal')
+        && getConfigPushV2LocalVersion(state, 'catalog') > 0
+        && getConfigPushV2LocalVersion(state, 'fiscal') > 0
+        && Number(versions.fiscal || 0) === getConfigPushV2LocalVersion(state, 'fiscal');
+    if (catalogOnlyChange) {
+        let deltaApplied = false;
+        try {
+            const { syncManager } = await import('../services/sync/SyncManager');
+            const refreshed = await syncManager.refreshTerminalResolvedConfig(undefined, {
+                forceRemoteFetch: true,
+                requireCatalogDelta: true,
+                masterScopes: ['items', 'customers', 'suppliers', 'sellers', 'pos_users', 'pos_roles'],
+                resolvedScopes: ['catalog'],
+                supplementalMode: 'skip',
+            });
+            deltaApplied = Boolean(refreshed);
+        } catch (error) {
+            configPushV2Log('config_push_v2_catalog_delta_fallback', {
+                event_id: eventId,
+                code: compactErrorDetail(error),
+            });
+        }
+        if (deltaApplied) {
+            writeConfigPushV2State({
+                versionHash,
+                domainVersions: {
+                    ...(state.domainVersions || {}),
+                    ...Object.fromEntries(scopes.map((scope) => [scope, Number(versions[scope] || 0)])),
+                },
+                appliedAt: new Date().toISOString(),
+                inFlight: readConfigPushV2State().inFlight,
+            });
+            syncMetrics.markApplyFinished();
+            await ackErpOutboxEvent(eventId, 'APPLIED');
+            clearConfigPushV2InFlight();
+            configPushV2Log('config_push_v2_catalog_delta_applied', {
+                event_id: eventId,
+                scopes,
+                duration_ms: Date.now() - startedAt,
+            });
+            configPushV2Log('CONFIG_PUSH_V2_APPLY_COMPLETED', {
+                outbox_id: eventId,
+                event_type: 'CONFIG_PUSH_V2',
+                snapshot_id: snapshotId,
+                scopes,
+                status: 'APPLIED',
+                duration_ms: Date.now() - startedAt,
+            });
+            return 'APPLIED';
+        }
+    }
     if (staleScopes.length === 0) {
         configPushV2Log('CONFIG_PUSH_V2_ALREADY_APPLIED', {
             outbox_id: eventId,
