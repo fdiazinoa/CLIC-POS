@@ -33,7 +33,7 @@ const evaluate = async expression => {
   return result.result?.value;
 };
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
-const isTableModalOpen = async () => evaluate("Boolean(document.querySelector('dialog[data-table-map-persistent-host][open]'))");
+const isTableModalOpen = async () => evaluate('Boolean(document.querySelector(\'[data-table-map-persistent-host][aria-modal="true"]\'))');
 const waitTableModal = async (open, timeoutMs = 10000) => {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -42,10 +42,15 @@ const waitTableModal = async (open, timeoutMs = 10000) => {
   }
   throw new Error(`Timeout waiting for table modal open=${open}`);
 };
+const hitTest = async expected => evaluate(`(() => {
+  const hit = document.elementFromPoint(100, 300);
+  const host = document.querySelector(${JSON.stringify(expected === 'tables' ? '[data-table-map-persistent-host][aria-modal="true"]' : '[data-pos-persistent-host]')});
+  return Boolean(hit && host && host.contains(hit));
+})()`);
 const tapText = async label => {
   const findPoint = () => evaluate(`(() => {
     const label = ${JSON.stringify(label)};
-    const source = document.querySelector(label === 'MESAS' ? '[data-pos-persistent-host]' : 'dialog[data-table-map-persistent-host][open]');
+    const source = document.querySelector(label === 'MESAS' ? '[data-pos-persistent-host]' : '[data-table-map-persistent-host][aria-modal="true"]');
     const button = [...(source?.querySelectorAll('button') || [])].find(candidate =>
       candidate.innerText.trim() === label && candidate.getBoundingClientRect().width > 0 &&
       getComputedStyle(candidate).visibility === 'visible');
@@ -78,6 +83,7 @@ const summarize = samples => ({
 });
 
 const results = { toTables: [], toSales: [], toTablesInteractive: [] };
+const hitTesting = { tables: 0, sales: 0 };
 const output = {
   device: process.env.CLIC_POS_DEVICE || 'unknown',
   cycles,
@@ -98,6 +104,8 @@ try {
     await evaluate("performance.clearMarks('CLIC_TABLE_QA_UI_INTERACTIVE'); true");
     await tapText('MESAS');
     await waitTableModal(true);
+    if (!await hitTest('tables')) throw new Error(`Table overlay lost hit test at cycle ${index + 1}`);
+    hitTesting.tables += 1;
     const tableInteractiveMark = await evaluate(`new Promise((resolve, reject) => {
       const deadline = performance.now() + 5000;
       const poll = () => {
@@ -117,6 +125,8 @@ try {
     await evaluate("performance.clearMarks('CLIC_TABLE_QA_UI_INTERACTIVE'); true");
     await tapText('Cerrar');
     await waitTableModal(false);
+    if (!await hitTest('sales')) throw new Error(`Sales host lost hit test at cycle ${index + 1}`);
+    hitTesting.sales += 1;
     await evaluate(`new Promise((resolve, reject) => {
       const deadline = performance.now() + 5000;
       const poll = () => {
@@ -136,6 +146,7 @@ try {
     return Number.isFinite(first) && Number.isFinite(last) ? [last - first] : [];
   });
   output.completedAt = new Date().toISOString();
+  output.hitTesting = hitTesting;
   output.summary = {
     toTablesInputToRenderEndProxyMs: summarize(duration(results.toTables, 'INPUT_RECEIVED', 'RENDER_END')),
     toTablesInputToInteractiveNextTaskProxyMs: summarize(results.toTablesInteractive),
