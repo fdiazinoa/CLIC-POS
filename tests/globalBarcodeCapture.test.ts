@@ -8,8 +8,10 @@ function harness(t: TestContext) {
     t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
     const listeners = new Map<string, Set<(event: any) => void>>();
     let blocked = false;
+    let tableModal = false;
     const win = {
-        document: { querySelector: () => blocked ? {} : null },
+        document: { querySelector: (selector: string) => selector.includes('data-table-map-persistent-host')
+            ? (tableModal ? {} : null) : (blocked || tableModal ? {} : null) },
         addEventListener(name: string, fn: any) {
             if (!listeners.has(name)) listeners.set(name, new Set());
             listeners.get(name)!.add(fn);
@@ -27,8 +29,9 @@ function harness(t: TestContext) {
     } });
     t.after(cleanup);
     const send = (name: string, props: any = {}) => {
-        const event = { target: body, prevented: false, stopped: false,
-            preventDefault() { this.prevented = true; }, stopPropagation() { this.stopped = true; }, ...props };
+        const event = { target: body, prevented: false, stopped: false, immediateStopped: false,
+            preventDefault() { this.prevented = true; }, stopPropagation() { this.stopped = true; },
+            stopImmediatePropagation() { this.immediateStopped = true; }, ...props };
         listeners.get(name)?.forEach(fn => fn(event));
         return event;
     };
@@ -42,7 +45,8 @@ function harness(t: TestContext) {
         }
     };
     const quiet = { ...search, dataset: { barcodeScannerTarget: 'true', posScannerReceiver: 'true' }, inputMode: 'none', value: '' };
-    return { scans, body, search, quiet, key, input, burst, send, cleanup, block: (value = true) => { blocked = value; } };
+    return { scans, body, search, quiet, key, input, burst, send, cleanup,
+        block: (value = true) => { blocked = value; }, modal: (value = true) => { tableModal = value; } };
 }
 
 for (const suffix of ['Enter', 'Tab', 'idle']) {
@@ -185,6 +189,40 @@ test('payment/modal guard cancels a pending scan and all document/product scans'
     h.block();
     t.mock.timers.tick(300);
     h.burst('TCK123456'); h.key('Enter');
+    assert.deepEqual(h.scans, []);
+});
+
+test('table modal consumes only a live HID terminator, without routing the barcode', t => {
+    const h = harness(t);
+    const closeButton = { tagName: 'BUTTON', dataset: {}, value: '' };
+    h.modal();
+    assert.equal(h.key('Enter', closeButton).prevented, false);
+    assert.equal(h.key('Tab', closeButton).prevented, false);
+    for (let i = 0; i < 50; i++) {
+        h.burst('7501234567890', closeButton, 10);
+        const suffix = h.key(i % 2 ? 'NumpadEnter' : 'Enter', closeButton);
+        assert.equal(suffix.prevented, true);
+        assert.equal(suffix.stopped, true);
+        assert.equal(suffix.immediateStopped, true);
+    }
+    assert.deepEqual(h.scans, []);
+    assert.equal(h.key('Enter', closeButton).prevented, false);
+    h.modal(false);
+    h.burst('7501234567890');
+    assert.equal(h.key('Enter').prevented, true);
+    assert.deepEqual(h.scans, ['7501234567890']);
+});
+
+test('slow manual typing and focus change do not suppress Enter in Mesas', t => {
+    const h = harness(t);
+    const closeButton = { tagName: 'BUTTON', dataset: {}, value: '' };
+    h.modal();
+    h.burst('manual', closeButton, 150);
+    assert.equal(h.key('Enter', closeButton).prevented, false);
+    h.burst('7501234567890', closeButton, 10);
+    h.send('focusin', { target: closeButton });
+    assert.equal(h.key('Enter', closeButton).prevented, false);
+    assert.equal(h.key('Escape', closeButton).prevented, false);
     assert.deepEqual(h.scans, []);
 });
 
