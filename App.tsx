@@ -1964,8 +1964,14 @@ const PersistentPOSHost: React.FC<PersistentPOSHostProps> = ({ visible, minimalC
   useLayoutEffect(() => {
     const host = hostRef.current;
     if (!host) return;
-    // The modal table map owns input while open. Keep the sales host's visual
-    // and accessible subtree unchanged instead of invalidating every card.
+    // Keep Venta visually stable. Only its accessibility root changes, after
+    // releasing any scanner focus, while Mesas owns the modal boundary.
+    if (visible) host.removeAttribute('aria-hidden');
+    else {
+      const activeElement = host.ownerDocument.activeElement;
+      if (activeElement instanceof HTMLElement && host.contains(activeElement)) activeElement.blur();
+      host.setAttribute('aria-hidden', 'true');
+    }
     if (!(tableLatencyQaEnabled && ['pure-switch', 'minimal-sales', 'minimal-tables'].includes(getTableLatencyQaState().mode))) {
       notifySalesScannerHostVisibility(host, visible);
     }
@@ -1990,14 +1996,51 @@ const PersistentPOSHost: React.FC<PersistentPOSHostProps> = ({ visible, minimalC
 };
 
 const TableMapLifecycleBoundary: React.FC<React.PropsWithChildren<{ visible: boolean; closeTrace?: PosInteractionTrace | null; onRequestClose: () => void }>> = ({ children, visible, closeTrace, onRequestClose }) => {
-  const hostRef = useRef<HTMLDialogElement>(null);
+  const hostRef = useRef<HTMLDivElement>(null);
+  const onRequestCloseRef = useRef(onRequestClose);
+  onRequestCloseRef.current = onRequestClose;
 
   useLayoutEffect(() => {
     const host = hostRef.current;
     if (!host) return;
-    if (visible && !host.open) host.showModal();
-    else if (!visible && host.open) host.close();
-    return () => { if (host.open) host.close(); };
+    if (!visible) {
+      host.setAttribute('inert', '');
+      const activeElement = host.ownerDocument.activeElement;
+      if (activeElement instanceof HTMLElement && host.contains(activeElement)) activeElement.blur();
+      return;
+    }
+    host.removeAttribute('inert');
+    const doc = host.ownerDocument;
+    const focusable = () => [...host.querySelectorAll<HTMLElement>(
+      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    )].filter(element => element.getClientRects().length > 0 && getComputedStyle(element).visibility === 'visible');
+    const focusFirst = () => (focusable()[0] || host).focus({ preventScroll: true });
+    const onFocusIn = (event: FocusEvent) => {
+      if (!host.contains(event.target as Node)) focusFirst();
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        onRequestCloseRef.current();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const candidates = focusable();
+      const activeIndex = candidates.indexOf(doc.activeElement as HTMLElement);
+      const nextIndex = event.shiftKey
+        ? activeIndex <= 0 ? candidates.length - 1 : activeIndex - 1
+        : activeIndex < 0 || activeIndex === candidates.length - 1 ? 0 : activeIndex + 1;
+      event.preventDefault();
+      (candidates[nextIndex] || host).focus({ preventScroll: true });
+    };
+    doc.addEventListener('focusin', onFocusIn, true);
+    doc.addEventListener('keydown', onKeyDown, true);
+    focusFirst();
+    return () => {
+      doc.removeEventListener('focusin', onFocusIn, true);
+      doc.removeEventListener('keydown', onKeyDown, true);
+    };
   }, [visible]);
 
   useLayoutEffect(() => {
@@ -2008,16 +2051,19 @@ const TableMapLifecycleBoundary: React.FC<React.PropsWithChildren<{ visible: boo
   }, [closeTrace, visible]);
 
   return (
-    <dialog
+    <div
       ref={hostRef}
-      className="bg-slate-950 text-white"
+      className={`absolute inset-0 z-40 bg-slate-950 text-white ${visible ? 'visible' : 'invisible pointer-events-none'}`}
+      role={visible ? 'dialog' : undefined}
+      aria-modal={visible ? true : undefined}
+      aria-hidden={!visible}
       aria-label="Mesas"
-      onCancel={(event) => { event.preventDefault(); onRequestClose(); }}
+      tabIndex={-1}
       data-table-map-persistent-host="true"
-      style={{ position: 'fixed', inset: 0, width: '100vw', height: '100dvh', maxWidth: 'none', maxHeight: 'none', margin: 0, padding: 0, border: 0, overflow: 'hidden', contain: 'layout style' }}
+      style={{ contain: 'layout style' }}
     >
       {children}
-    </dialog>
+    </div>
   );
 };
 

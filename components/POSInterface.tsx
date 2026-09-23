@@ -3894,9 +3894,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (isAnyModalOpen) return;
 
       const handleCentralBarcodeScan = (event: Event) => {
-         // The retained sales component still listens while the native table
-         // dialog is open; a scanner event must not mutate its hidden cart.
-         if (document.querySelector('dialog[data-table-map-persistent-host][open]')) return;
+         // The retained sales component still listens behind the table modal;
+         // direct native scanner events must not mutate its hidden cart.
+         if (document.querySelector('[data-table-map-persistent-host][aria-modal="true"]')) return;
          const barcode = (event as CustomEvent<{ barcode?: string }>).detail?.barcode;
          if (!barcode) return;
          processBarcode(barcode);

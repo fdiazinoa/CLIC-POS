@@ -73,26 +73,30 @@ test('the table map overlays a retained memoized POS instead of remounting it', 
   assert.doesNotMatch(persistentHostSource, /visible \? 'h-full' : 'hidden'/);
   assert.match(persistentHostSource, /className="h-full"/);
   assert.doesNotMatch(persistentHostSource, /opacity-0|opacity-100/);
-  assert.doesNotMatch(persistentHostSource, /aria-hidden=|setAttribute\('inert'|removeAttribute\('inert'/);
+  assert.doesNotMatch(persistentHostSource, /setAttribute\('inert'|removeAttribute\('inert'/);
+  assert.match(persistentHostSource, /host\.setAttribute\('aria-hidden', 'true'\)/);
+  assert.match(persistentHostSource, /host\.removeAttribute\('aria-hidden'\)/);
   assert.match(persistentHostSource, /<MemoizedPOSInterface \{\.\.\.stableProps\} \/>/);
   assert.match(persistentHostSource, /latestPropsRef\.current = incomingProps/);
   assert.match(persistentHostSource, /callbackProxiesRef\.current\.set\(key, proxy\)/);
   assert.match(persistentHostSource, /contain: 'layout style'/);
-  assert.doesNotMatch(persistentHostSource, /translateZ|willChange|will-change|transition|display\s*:|\bhidden\b(?=['"` ])|\bkey=|return null|visible &&|visible \?\s*</);
+  assert.doesNotMatch(persistentHostSource, /translateZ|willChange|will-change|transition|display\s*:|className=.*\bhidden\b|\bkey=|return null|visible &&|visible \?\s*</);
 });
 
-test('table modality uses native top layer without mutating the sales subtree', () => {
+test('table modality uses one focus boundary without making sales inert', () => {
   const boundaryStart = appSource.indexOf('const TableMapLifecycleBoundary');
   const boundaryEnd = appSource.indexOf('const AppContent', boundaryStart);
   const boundarySource = appSource.slice(boundaryStart, boundaryEnd);
   const posSource = readFileSync(new URL('../components/POSInterface.tsx', import.meta.url), 'utf8');
 
-  assert.match(boundarySource, /<dialog/);
-  assert.match(boundarySource, /host\.showModal\(\)/);
-  assert.match(boundarySource, /host\.close\(\)/);
-  assert.match(boundarySource, /onCancel=\{\(event\) => \{ event\.preventDefault\(\); onRequestClose\(\); \}\}/);
-  assert.doesNotMatch(boundarySource, /setAttribute\('inert'|aria-hidden=\{!visible\}/);
-  assert.match(posSource, /document\.querySelector\('dialog\[data-table-map-persistent-host\]\[open\]'\)/);
+  assert.match(boundarySource, /role=\{visible \? 'dialog' : undefined\}/);
+  assert.match(boundarySource, /aria-modal=\{visible \? true : undefined\}/);
+  assert.match(boundarySource, /doc\.addEventListener\('focusin', onFocusIn, true\)/);
+  assert.match(boundarySource, /doc\.addEventListener\('keydown', onKeyDown, true\)/);
+  assert.match(boundarySource, /event\.key !== 'Tab'/);
+  assert.match(boundarySource, /event\.shiftKey/);
+  assert.match(boundarySource, /host\.setAttribute\('inert', ''\)/);
+  assert.match(posSource, /document\.querySelector\('\[data-table-map-persistent-host\]\[aria-modal="true"\]'\)/);
 });
 
 test('the table map stays mounted and rejects overlapping table opens', () => {
