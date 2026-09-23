@@ -10,6 +10,7 @@ def allowReleaseCleartext = providers.gradleProperty('clicPosAllowReleaseClearte
         .toBoolean()
 def diagnosticBuild = System.getenv('CLIC_POS_DIAGNOSTICS') == 'true'
 def webviewProfileQa = System.getenv('CLIC_POS_WEBVIEW_PROFILE') == 'true'
+def tableLatencyQa = System.getenv('CLIC_POS_TABLE_LATENCY_QA') == 'true'
 
 if (hasReleaseKeystore) {
     keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
@@ -56,6 +57,7 @@ android {
         release {
             if (diagnosticBuild) versionNameSuffix '-diagnostic'
             if (webviewProfileQa) versionNameSuffix '-profile'
+            if (tableLatencyQa) versionNameSuffix '-tableqa'
             minifyEnabled false
             manifestPlaceholders = [
                     usesCleartextTraffic: allowReleaseCleartext ? "true" : "false",

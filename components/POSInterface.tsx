@@ -1,6 +1,7 @@
 import { recordCheckoutDiagnostic, setCheckoutCaptureContext } from '../services/CheckoutDiagnostics';
 import { freezeCount, freezePhase } from '../diagnostics/freezeCounters';
 import { markWebviewProfileNavigation } from '../diagnostics/webviewProfileMarks';
+import { getTableLatencyQaState, subscribeTableLatencyQa, tableLatencyQaEnabled, tableLatencyQaMark } from '../diagnostics/tableLatencyQa';
 import { MobilePosNavigation } from './MobilePosNavigation';
 import React, { useState, useMemo, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import { Capacitor } from '@capacitor/core';
@@ -1175,6 +1176,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 }) => {
    freezeCount('POS_RENDER_COUNT');
    markRenderStart('POS_INTERACTION_VIEW');
+   const tableQa = React.useSyncExternalStore(subscribeTableLatencyQa, getTableLatencyQaState, getTableLatencyQaState);
    const cartEndRef = useRef<HTMLDivElement>(null);
    const posRootRef = useRef<HTMLDivElement>(null);
    const mobileFooterRef = useRef<HTMLDivElement>(null);
@@ -3121,6 +3123,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    }, [getTariffPrice]);
 
    const productCodeIndex = useMemo(() => {
+      tableLatencyQaMark('PRICE_RESOLUTION_START', { products: products.length });
       const index = new Map<string, { product: Product; price: number; modifiers: string[]; selectedVariant?: ProductVariant; variantInfo?: string }>();
       const addCode = (code: unknown, value: { product: Product; price: number; modifiers: string[]; selectedVariant?: ProductVariant; variantInfo?: string }) => {
          if (Array.isArray(code)) {
@@ -3158,6 +3161,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          }
       }
 
+      tableLatencyQaMark('PRICE_RESOLUTION_END', { indexedCodes: index.size });
       return index;
    }, [getProductPrice, productHasActiveTariff, products]);
 
@@ -4159,7 +4163,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    }, [canonicalizeCategory, dedupedSalesCatalogProducts, displayCategory, productHasActiveTariff, warehouses]);
 
    const sortedSalesCatalogProductEntries = useMemo(() => {
-      return [...salesCatalogProductEntries].sort((left, right) => {
+      tableLatencyQaMark('SORT_START', { products: salesCatalogProductEntries.length });
+      const sorted = [...salesCatalogProductEntries].sort((left, right) => {
          const leftCategoryOrder = categoryLookup.presentationByCanonical.get(left.normalizedCategory)?.sortOrder ?? Number.MAX_SAFE_INTEGER;
          const rightCategoryOrder = categoryLookup.presentationByCanonical.get(right.normalizedCategory)?.sortOrder ?? Number.MAX_SAFE_INTEGER;
          if (leftCategoryOrder !== rightCategoryOrder) return leftCategoryOrder - rightCategoryOrder;
@@ -4168,13 +4173,19 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          }
          return comparePosProducts(left.product, right.product);
       });
+      tableLatencyQaMark('SORT_END', { products: sorted.length });
+      return sorted;
    }, [categoryLookup.presentationByCanonical, salesCatalogProductEntries]);
 
    const filteredProducts = useMemo(() => {
       freezeCount('SEARCH_RENDER_COUNT');
+      tableLatencyQaMark('FILTER_START', { products: sortedSalesCatalogProductEntries.length });
       // The retail ticket has no catalog grid. Keep only a bounded set of
       // suggestions so a 4,000-item catalog does not render on every keystroke.
-      if (isRetailMode && !catalogSearchQuery.trim()) return [];
+      if (isRetailMode && !catalogSearchQuery.trim()) {
+         tableLatencyQaMark('FILTER_END', { products: 0 });
+         return [];
+      }
       const normalizedCategoryFilter = categoryFilter === 'ALL'
          ? 'ALL'
          : canonicalizeCategory(categoryFilter);
@@ -4204,6 +4215,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          trace.allocationsApprox += filtered.length + result.length + 1;
          markInteractionStage(trace, 'FILTER_END');
       }
+      tableLatencyQaMark('FILTER_END', { products: result.length });
       return result;
    }, [sortedSalesCatalogProductEntries, categoryFilter, catalogSearchQuery, canonicalizeCategory, effectiveAllowedCategorySet, categoryLookup.presentationByCanonical, isRetailMode]);
 
@@ -4216,12 +4228,18 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const visibleCatalogLimit = catalogWindow.key === catalogWindowKey
       ? catalogWindow.limit
       : CATALOG_RENDER_BATCH_SIZE;
+   const qaVisibleCatalogLimit = tableLatencyQaEnabled && tableQa.cardLimit !== null
+      ? Math.max(0, tableQa.cardLimit)
+      : visibleCatalogLimit;
    const visibleCatalogProducts = useMemo(
       () => {
          freezeCount('CATALOG_RENDER_COUNT');
-         return filteredProducts.slice(0, visibleCatalogLimit);
+         tableLatencyQaMark('VISIBLE_PRODUCTS_BUILD_START', { filtered: filteredProducts.length });
+         const visible = filteredProducts.slice(0, qaVisibleCatalogLimit);
+         tableLatencyQaMark('VISIBLE_PRODUCTS_BUILD_END', { visible: visible.length });
+         return visible;
       },
-      [filteredProducts, visibleCatalogLimit]
+      [filteredProducts, qaVisibleCatalogLimit]
    );
    const hasMoreCatalogProducts = !isRetailMode && visibleCatalogProducts.length < filteredProducts.length;
    const showMoreCatalogProducts = useCallback(() => {

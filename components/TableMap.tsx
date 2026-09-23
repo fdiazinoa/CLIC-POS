@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useCallback, useRef, useEffect, useLayoutEffect } from 'react';
 import { freezeCount } from '../diagnostics/freezeCounters';
+import { getTableLatencyQaState, tableLatencyQaEnabled, tableLatencyQaMark } from '../diagnostics/tableLatencyQa';
 import { Room, Table, User as UserType, ParkedTicket, CartItem, RoleDefinition, Permission } from '../types';
 import {
     User,
@@ -1457,16 +1458,27 @@ const TableMap: React.FC<TableMapProps> = ({
         const operationalTable = primaryTableId
             ? safeTables.find(candidate => String(candidate.id) === primaryTableId) || table
             : table;
-        if (onBeforeTableOpen && !(await onBeforeTableOpen(operationalTable))) {
-            return;
-        }
+        markInteractionStage(trace, 'TABLE_LOCK_START');
+        tableLatencyQaMark('TABLE_LOCK_START', { traceId: trace.id });
+        const qaMode = tableLatencyQaEnabled ? getTableLatencyQaState().mode : 'real';
+        const skipLock = qaMode === 'mock-lock' || qaMode === 'preloaded';
+        const lockGranted = skipLock || !onBeforeTableOpen || await onBeforeTableOpen(operationalTable);
+        markInteractionStage(trace, 'TABLE_LOCK_END');
+        tableLatencyQaMark('TABLE_LOCK_END', { traceId: trace.id, simulated: skipLock });
+        if (!lockGranted) return;
+        markInteractionStage(trace, 'ACCOUNT_RESOLVE_START');
+        tableLatencyQaMark('ACCOUNT_RESOLVE_START', { traceId: trace.id });
         const tableTickets = getTableTickets(operationalTable);
         if (isRestaurantMode && operationalTable.shape !== 'BAR' && tableTickets.length > 0) {
+            markInteractionStage(trace, 'ACCOUNT_RESOLVE_END');
+            tableLatencyQaMark('ACCOUNT_RESOLVE_END', { traceId: trace.id, destination: 'accounts' });
             expectLocalDestination(trace, 'TABLE_ACCOUNTS', operationalTable);
             setSelectedAccountTable(operationalTable);
             return;
         }
         if (operationalTable.shape === 'BAR') {
+            markInteractionStage(trace, 'ACCOUNT_RESOLVE_END');
+            tableLatencyQaMark('ACCOUNT_RESOLVE_END', { traceId: trace.id, destination: 'bar' });
             expectLocalDestination(trace, 'BAR_TABS', operationalTable);
             setSelectedBarTable(operationalTable);
             return;
@@ -1474,6 +1486,8 @@ const TableMap: React.FC<TableMapProps> = ({
 
         const joinedTableName = String(operationalTable.joinedTableName || '').trim();
         if (isRestaurantMode && joinedTableName) {
+            markInteractionStage(trace, 'ACCOUNT_RESOLVE_END');
+            tableLatencyQaMark('ACCOUNT_RESOLVE_END', { traceId: trace.id, destination: 'notice' });
             expectLocalDestination(trace, 'TABLE_NOTICE', operationalTable);
             setTableNotice({
                 title: 'Mesa unida',
@@ -1485,6 +1499,8 @@ const TableMap: React.FC<TableMapProps> = ({
         }
 
         if (operationalTable.status === 'OCCUPIED' || operationalTable.status === 'RESERVED') {
+            markInteractionStage(trace, 'ACCOUNT_RESOLVE_END');
+            tableLatencyQaMark('ACCOUNT_RESOLVE_END', { traceId: trace.id, destination: 'pos' });
             openPosTable(operationalTable, trace);
             return;
         }
@@ -1492,6 +1508,8 @@ const TableMap: React.FC<TableMapProps> = ({
         if (isRestaurantMode) {
             if (onUpdateParkedTickets && onUpdateTables) {
                 const ticket = await createTableAccount(operationalTable);
+                markInteractionStage(trace, 'ACCOUNT_RESOLVE_END');
+                tableLatencyQaMark('ACCOUNT_RESOLVE_END', { traceId: trace.id, destination: 'new-account' });
                 setSelectedAccountTable(null);
                 openPosTable({
                     ...operationalTable,
@@ -1506,6 +1524,8 @@ const TableMap: React.FC<TableMapProps> = ({
             }
             if (onOpenTable) {
                 const openedTable = await onOpenTable(operationalTable);
+                markInteractionStage(trace, 'ACCOUNT_RESOLVE_END');
+                tableLatencyQaMark('ACCOUNT_RESOLVE_END', { traceId: trace.id, destination: 'remote-open' });
                 if (openedTable) {
                     onRefreshTables?.();
                     openPosTable(openedTable, trace);
@@ -1526,6 +1546,8 @@ const TableMap: React.FC<TableMapProps> = ({
 
                 const data = await res.json();
                 if (res.ok && data.status === 'success') {
+                    markInteractionStage(trace, 'ACCOUNT_RESOLVE_END');
+                    tableLatencyQaMark('ACCOUNT_RESOLVE_END', { traceId: trace.id, destination: 'api-open' });
                     onRefreshTables?.();
                     openPosTable({ ...operationalTable, currentOrderId: data.orden_id, status: 'FREE' }, trace);
                 } else {
@@ -1541,6 +1563,8 @@ const TableMap: React.FC<TableMapProps> = ({
         }
 
         expectLocalDestination(trace, 'TABLE_PREVIEW', operationalTable);
+        markInteractionStage(trace, 'ACCOUNT_RESOLVE_END');
+        tableLatencyQaMark('ACCOUNT_RESOLVE_END', { traceId: trace.id, destination: 'preview' });
         setSelectedTable(operationalTable);
     }), [createTableAccount, currentUser.id, currentUser.name, expectLocalDestination, getTableTickets, isRestaurantMode, onBeforeTableOpen, onOpenTable, onRefreshTables, openPosTable, onUpdateParkedTickets, onUpdateTables, safeTables]);
 
@@ -1562,6 +1586,8 @@ const TableMap: React.FC<TableMapProps> = ({
             const trace = operation === 'CHANGE_TABLE'
                 ? beginPosInteraction(operation, { tableId: model.table.id })
                 : beginTableInteraction('map-node', inputTimeStamp);
+            markInteractionStage(trace, 'TABLE_TOUCH_RECEIVED');
+            tableLatencyQaMark('TABLE_TOUCH_RECEIVED', { traceId: trace.id });
             if (operation === 'CHANGE_TABLE') expectInteractionRender(trace, 'TABLE_MAP_VIEW');
             markInteractionStateUpdate(trace, 1);
             openingTableIdRef.current = String(model.table.id);

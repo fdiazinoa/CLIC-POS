@@ -52,6 +52,7 @@ test('real table branches own selectors and hydrated POS destinations without bo
       const cancelled: unknown[] = [];
       const bindings: Record<string, any> = {
         ...api, ...refs, useCallback: (fn: unknown) => fn, window: browser, console: { error() {}, log() {} },
+        tableLatencyQaEnabled: false, tableLatencyQaMark() {}, getTableLatencyQaState: () => ({ mode: 'real' }),
         safeTables: [baseTable], getTableTickets: () => [], isRestaurantMode: true,
         onBeforeTableOpen: async () => true, onOpenTable: undefined, onRefreshTables() {},
         onUpdateParkedTickets: undefined, onUpdateTables: undefined,
@@ -147,6 +148,7 @@ test('real table branches own selectors and hydrated POS destinations without bo
     const ownerRef = { current: null as any };
     const onTableClick = attribute('App', 'onTableClick', 'tableOpenDestinationRef.current', {
       ...api, window: browser, console: { log() {} }, tableOpenDestinationRef: ownerRef,
+      tableLatencyQaEnabled: false, tableLatencyQaMark() {},
       setSuppressProductInputUntilMs() {}, isClientTerminalMode: () => false, pendingClientTableSyncRef: { current: null },
       parkedTickets: [{ id: 'account-selected', tableId: baseTable.id, items }], transactions: [], customers: [],
       markRestaurantLinesCommitted: (value: unknown[]) => value,
@@ -162,6 +164,7 @@ test('real table branches own selectors and hydrated POS destinations without bo
     let refIndex = 0; let cleanups: Array<void | (() => void)> = [];
     const host = declaration('App', 'PersistentPOSHost', {
       ...api, React: { createElement: () => null }, MemoizedPOSInterface: () => null, notifySalesScannerHostVisibility() {},
+      tableLatencyQaEnabled: false, tableLatencyQaMark() {},
       useRef: (value: unknown) => refs[refIndex++] ||= { current: value },
       useLayoutEffect: (effect: () => void | (() => void)) => { effects.push(effect); },
     });
@@ -221,7 +224,7 @@ test('real table branches own selectors and hydrated POS destinations without bo
           ...api, tableOpenDestinationRef: ownerRef, tableMapExitPending: false,
           tableMapCloseTraceRef: { current: null }, tableMapExitTransitionRef: { current: null },
           beginOperatorUiTransition: () => null, setTableMapExitPending() {}, setViewData() {},
-          markWebviewProfileNavigation() {},
+          markWebviewProfileNavigation() {}, tableLatencyQaMark() {},
           setCurrentView: (view: string) => { appState.view = view; },
         });
         closeMap({ timeStamp: clock }); originCleanup(); pendingFlow.commitLocal(false);

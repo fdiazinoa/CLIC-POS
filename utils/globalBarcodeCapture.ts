@@ -1,3 +1,5 @@
+import { tableLatencyQaMark } from '../diagnostics/tableLatencyQa';
+
 export interface BarcodeCaptureOptions {
     onScan: (code: string) => void;
     prefixTimeout?: number;
@@ -27,7 +29,9 @@ export function focusSalesScannerInput(doc: Document, input: HTMLInputElement | 
     const root = input.closest('[data-pos-scanner-enabled]');
     if (!root || root.getAttribute('data-pos-scanner-enabled') !== 'true' ||
         input.closest('[hidden], [inert], [aria-hidden="true"]')) return;
+    tableLatencyQaMark('SCANNER_FOCUS_START');
     input.focus({ preventScroll: true });
+    tableLatencyQaMark('SCANNER_FOCUS_END');
 }
 
 /** Event-bound restoration; the receiver ref and all route/modal guards are read at execution. */
