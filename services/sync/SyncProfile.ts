@@ -536,6 +536,12 @@ export function isPosOnlyCloudStagingTarget(profile: SyncProfile = loadSyncProfi
         && resolveSyncTarget(activeProfile).kind === 'POS_CLOUD_STAGING';
 }
 
+/** A client receives operational data from its Master, not from the ERP lifecycle. */
+export function isPosMasterClientProfile(profile: SyncProfile = loadSyncProfile()): boolean {
+    const activeProfile = normalizeProfile(profile);
+    return activeProfile.posRuntime === 'SLAVE' || activeProfile.cloudChannel === 'POS_MASTER';
+}
+
 export function protectsLocalCatalogFromCloud(profile: SyncProfile = loadSyncProfile()): boolean {
     return isPosOnlyCloudStagingTarget(profile);
 }
