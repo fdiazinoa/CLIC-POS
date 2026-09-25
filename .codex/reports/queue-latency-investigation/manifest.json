@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "taskId": "queue-latency-20260919",
+  "baseSha": "8cf4a2a510f4a66e095d60d6246dd4e61a95aafd",
+  "scope": "Analysis and emulator evidence only; no functional source change",
+  "decision": "CAUSE_NOT_REPRODUCED_NO_BASELINE_CHANGE",
+  "evidence": [
+    "README.md",
+    "emulator-measurements.json",
+    "idle-javascript.cpuprofile",
+    "idle-v8-clock.json",
+    "qa.md",
+    "supabase-readonly-evidence.json",
+    "workflow-plan.json"
+  ],
+  "formalCandidateSha": null,
+  "candidateNote": "Set by Git review after the evidence-only commit; omitted here to avoid a self-referential commit hash."
+}
