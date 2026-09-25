@@ -20,6 +20,11 @@ test('wait list visibility still honors existing context', () => {
   assert.ok(!actions('ticket', false).includes('PARK_LIST'));
   assert.ok(actions('ticket', false).includes('SAVE'));
 });
+test('table context can hide generic Guardar without hiding direct-sale actions globally', () => {
+  const html = renderToStaticMarkup(React.createElement(ActionGrid, { ...props, actionRegion: 'ticket', allowWaitList: false, allowSave: false }));
+  assert.doesNotMatch(html, /data-action-id="(?:PARK_LIST|SAVE)"/);
+  assert.match(html, /data-action-id="DISCOUNT"/);
+});
 test('summary renders supplied totals, units and projected points without changing them', () => {
   const html = renderToStaticMarkup(React.createElement(SupermarketTicketSummary, {symbol: 'RD$', subtotal: 2625, discount: 0, tax: 400.42, total: 2625, units: 3, points: 262}));
   assert.match(html, /RD\$2,625.00/);

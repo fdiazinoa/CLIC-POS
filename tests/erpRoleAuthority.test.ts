@@ -41,7 +41,7 @@ test('los roles base locales conservan el contrato canónico', () => {
   assert.deepEqual(supervisor?.permissions, [
     'POS_VOID_ITEM', 'POS_DISCOUNT', 'POS_OPEN_DRAWER', 'POS_RETURNS',
     'POS_REPRINT_RECEIPT', 'POS_NEW_SALE', 'POS_CHECKOUT', 'POS_CHANGE_TARIFF',
-    'POS_VIEW_X_REPORT', 'POS_CLOSE_X', 'POS_ALLOW_SALES_WITH_OPEN_Z', 'POS_ACCESS_OTHER_SELLER_TABLES', 'TABLE_CONTROL_CENTER',
+    'POS_VIEW_X_REPORT', 'POS_CLOSE_X', 'POS_ALLOW_SALES_WITH_OPEN_Z', 'POS_ACCESS_OTHER_SELLER_TABLES', 'POS_EXIT_TABLE_MAP', 'TABLE_CONTROL_CENTER',
   ]);
   assert.equal(cashier?.permissions.includes('POS_CLOSE_Z'), false);
 });

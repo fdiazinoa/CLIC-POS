@@ -2,8 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { useIsMobile } from '../hooks/useIsMobile';
+import { isMobileViewport, useIsMobile } from '../hooks/useIsMobile';
 import { MobilePosNavigation } from '../components/MobilePosNavigation';
+import { resolveMobileOrderTakerActions } from '../utils/orderTakerPolicy';
 
 function TabletProbe() {
   return <span>{useIsMobile(900) ? 'mobile' : 'desktop'}</span>;
@@ -34,4 +35,60 @@ test('terminals without table navigation keep actions without exposing tables', 
   const html = renderToStaticMarkup(<MobilePosNavigation onOpenActions={() => {}} />);
   assert.doesNotMatch(html, /mobile-open-tables/);
   assert.match(html, /mobile-open-actions/);
+});
+
+test('portrait order taker exposes kitchen and save-order actions without a cashier checkout', () => {
+  const html = renderToStaticMarkup(<MobilePosNavigation
+    onOpenTables={() => {}}
+    onOpenActions={() => {}}
+    onDispatchOrder={() => {}}
+    onSaveOrder={() => {}}
+    hasOrderItems
+  />);
+  assert.match(html, /aria-label="Toma de pedido"/);
+  assert.match(html, /data-testid="mobile-dispatch-order"/);
+  assert.match(html, /data-testid="mobile-save-order"/);
+  assert.match(html, /Guardar pedido/);
+  assert.doesNotMatch(html, /Cobrar|Cajero/);
+});
+
+test('empty portrait order keeps kitchen and save-order disabled', () => {
+  const html = renderToStaticMarkup(<MobilePosNavigation
+    onOpenActions={() => {}}
+    onSaveOrder={() => {}}
+    onDispatchOrder={() => {}}
+  />);
+  assert.match(html, /disabled="" data-testid="mobile-dispatch-order"/);
+  assert.match(html, /disabled="" data-testid="mobile-save-order"/);
+});
+
+test('1080px order-taker portrait uses one-panel mobile layout; landscape stays desktop', () => {
+  assert.equal(isMobileViewport(1080, 1920, 900, true), true);
+  assert.equal(isMobileViewport(1920, 1080, 900, true), false);
+  // M27X reports a 1080px physical width but about 785 CSS px in WebView.
+  assert.equal(isMobileViewport(785, 1396, 768, true), true);
+  assert.equal(isMobileViewport(1396, 785, 768, true), false);
+  assert.equal(isMobileViewport(1080, 1920, 900, false), false);
+  assert.equal(isMobileViewport(899, 1920, 900, false), true);
+});
+
+test('portrait order taker keeps Mesas and Cocina with stale operational flags', () => {
+  const actions = resolveMobileOrderTakerActions(true, false, true);
+  assert.deepEqual(actions, { showTables: true, showKitchen: true });
+  const html = renderToStaticMarkup(<MobilePosNavigation
+    onOpenTables={actions.showTables ? () => {} : undefined}
+    onDispatchOrder={actions.showKitchen ? () => {} : undefined}
+    onSaveOrder={() => {}}
+    onOpenActions={() => {}}
+    hasOrderItems
+  />);
+  for (const testId of ['mobile-open-tables', 'mobile-dispatch-order', 'mobile-save-order', 'mobile-open-actions']) {
+    assert.match(html, new RegExp(`data-testid="${testId}"`));
+  }
+});
+
+test('ordinary POS does not gain kitchen action and no table handler means no Mesas', () => {
+  assert.deepEqual(resolveMobileOrderTakerActions(false, false, true), { showTables: false, showKitchen: false });
+  assert.deepEqual(resolveMobileOrderTakerActions(false, true, true), { showTables: true, showKitchen: false });
+  assert.deepEqual(resolveMobileOrderTakerActions(true, false, false), { showTables: false, showKitchen: true });
 });

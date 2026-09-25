@@ -16,6 +16,7 @@ interface ActionGridProps {
     orientation?: 'horizontal' | 'vertical';
     showLogout?: boolean;
     allowWaitList?: boolean;
+    allowSave?: boolean;
     showTakeout?: boolean;
     isTakeout?: boolean;
     serviceType?: OrderServiceType;
@@ -33,6 +34,7 @@ const ActionGrid: React.FC<ActionGridProps> = ({
     orientation = 'horizontal',
     showLogout = true,
     allowWaitList = true,
+    allowSave = true,
     showTakeout = false,
     isTakeout = false,
     serviceType = isTakeout ? 'TAKEOUT' : 'DINE_IN',
@@ -124,7 +126,7 @@ const ActionGrid: React.FC<ActionGridProps> = ({
                 {/* WAIT GROUP (Orange) */}
                 {allowWaitList && renderButton('PARK_LIST', 'Espera', <Inbox />, 'wait', false, parkedTicketsCount > 0 ? parkedTicketsCount : false)}
                 {renderButton('RESERVATION', 'Reserva', <StickyNote />, 'wait')}
-                {renderButton('SAVE', 'Guardar', <Save />, 'wait')}
+                {allowSave && renderButton('SAVE', 'Guardar', <Save />, 'wait')}
                 {showTakeout && renderButton('TAKEOUT', serviceType === 'DELIVERY' ? 'Delivery ✓' : serviceType === 'TAKEOUT' ? 'Para llevar ✓' : 'Tipo de servicio', serviceType === 'DELIVERY' ? <Truck /> : serviceType === 'TAKEOUT' ? <ShoppingBag /> : <Building2 />, 'wait', false, false, serviceType !== 'DINE_IN')}
 
                 {/* UTILITY GROUP (Gray) */}

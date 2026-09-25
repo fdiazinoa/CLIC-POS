@@ -15,7 +15,7 @@ const cart = [
 const actionProps = {config, onAction: (id: string) => { document.body.dataset.lastAction = id; }, parkedTicketsCount: 2, isReturnMode: false, hasCartItems: true, globalDiscountValue: 0, showLogout: false, showTakeout: true};
 createRoot(document.getElementById('root')!).render(<main className="h-screen flex flex-col bg-white">
   <header className="p-5 text-xl font-bold border-b">Supermercado — QA visual sin operaciones</header>
-  <ProductTableSupermarket cart={cart} config={config} currencySymbol="RD$" lastAddedCartId={null} onRemoveItem={()=>{}} taxIncluded />
+  <ProductTableSupermarket cart={cart} config={config} currencySymbol="RD$" lastAddedCartId={null} onEditItem={()=>{}} taxIncluded />
   <footer className="supermarket-footer flex-none border-t p-4">
     <div className="supermarket-footer-secondary min-w-0"><ActionGrid {...actionProps} actionRegion="other" /></div>
     <SupermarketTicketSummary symbol="RD$" subtotal={2625} discount={0} tax={400.42} total={2625} units={3} points={262} />
