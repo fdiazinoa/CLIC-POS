@@ -40,6 +40,7 @@ import {
 } from '../utils/creditRules';
 import TicketOptionsModal from './TicketOptionsModal';
 import CartItemOptionsModal from './CartItemOptionsModal';
+import { resetCompletedSaleDiscount } from '../utils/checkoutDiscountLifecycle';
 import { preserveCartItemCommercialFields, resolveCartItemEditCapabilities } from '../utils/cartItemEditPermissions';
 import ProductVariantSelector from './ProductVariantSelector';
 import { resolveVariantSalesPrice } from '../utils/variantSalesPrice';
@@ -5627,7 +5628,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
                   recordCheckoutDiagnostic('CART_CLEAR_REQUEST', { items: cart, tableId: activeTable?.id, orderId: activeTable?.currentOrderId, reason: 'POS_CLEAR_05' });
                   onUpdateCart([]);
-                  if (redeemedCoupon) setGlobalDiscount({ type: 'PERCENT', value: 0 });
+                  resetCompletedSaleDiscount(setGlobalDiscount);
                   setRedeemedCoupon(null);
                   setCouponCode('');
                   onSelectCustomer(null);
@@ -5650,7 +5651,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   }
                   recordCheckoutDiagnostic('CART_CLEAR_REQUEST', { items: cart, tableId: activeTable?.id, orderId: activeTable?.currentOrderId, reason: 'POS_CLEAR_06' });
                   onUpdateCart([]);
-                  if (redeemedCoupon) setGlobalDiscount({ type: 'PERCENT', value: 0 });
+                  resetCompletedSaleDiscount(setGlobalDiscount);
                   setRedeemedCoupon(null);
                   setCouponCode('');
                   onSelectCustomer(null);
@@ -5890,7 +5891,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
                recordCheckoutDiagnostic('CART_CLEAR_REQUEST', { items: cart, tableId: activeTable?.id, orderId: activeTable?.currentOrderId, reason: 'POS_CLEAR_07' });
                onUpdateCart([]);
-               if (redeemedCoupon) setGlobalDiscount({ type: 'PERCENT', value: 0 });
+               resetCompletedSaleDiscount(setGlobalDiscount);
                setRedeemedCoupon(null);
                setCouponCode('');
                onSelectCustomer(null);
@@ -7508,12 +7509,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   </div>
                   <div className="flex flex-col leading-tight md:hidden min-w-0">
                      <p className="text-[11px] font-black text-slate-800 truncate max-w-[96px]">{currentUser.name.split(' ')[0]}</p>
-                     <p className="text-[9px] font-black text-slate-400 uppercase tracking-[0.24em] mt-1">Cajero</p>
+                     <p className="text-[9px] font-black text-slate-400 uppercase tracking-[0.24em] mt-1">{isOrderTakerMode ? 'Toma de pedido' : 'Cajero'}</p>
                      <p className="text-[0.66rem] font-extrabold text-red-500 uppercase tracking-[0.16em] mt-1 truncate max-w-[96px]">{terminalDisplayLabel}</p>
                   </div>
                   <div className="hidden lg:block leading-tight">
                      <p className="text-sm font-black text-gray-800 truncate max-w-[120px]">{currentUser.name}</p>
-                     <p className="text-[10px] font-bold text-blue-500 uppercase tracking-widest">Cajero</p>
+                     <p className="text-[10px] font-bold text-blue-500 uppercase tracking-widest">{isOrderTakerMode ? 'Toma de pedido' : 'Cajero'}</p>
                      <p className="text-[0.84rem] font-extrabold text-red-500 uppercase tracking-[0.16em] mt-1 truncate max-w-[140px]">{terminalDisplayLabel}</p>
                   </div>
                </div>
@@ -7663,6 +7664,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      setRightSidebarTab('ACTIONS');
                      setMobileView('TICKET');
                   }}
+                  onDispatchOrder={isOrderTakerMode && activeTerminalConfig?.operational?.usa_modulos_cocina ? () => { void handleDispatchCommand(); } : undefined}
+                  onSaveOrder={isOrderTakerMode ? (inputTimeStamp) => { void requestCheckout(inputTimeStamp, false); } : undefined}
+                  hasOrderItems={cart.length > 0}
                />
             )}
 
@@ -8372,7 +8376,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   taxIncluded={isTaxIncluded}
                   currencySymbol={baseCurrency.symbol}
                   lastAddedCartId={lastAddedCartId}
-                  onRemoveItem={(cartId) => updateCartItem(null, cartId)}
+                  onEditItem={(cartId) => {
+                     const selectedLine = cart.find(item => item.cartId === cartId);
+                     if (selectedLine) setEditingItem(selectedLine);
+                  }}
                   containerStyle={isMobile ? bottomAwareScrollStyle : undefined}
                />
             ) : (

@@ -35,3 +35,28 @@ test('terminals without table navigation keep actions without exposing tables', 
   assert.doesNotMatch(html, /mobile-open-tables/);
   assert.match(html, /mobile-open-actions/);
 });
+
+test('portrait order taker exposes kitchen and save-order actions without a cashier checkout', () => {
+  const html = renderToStaticMarkup(<MobilePosNavigation
+    onOpenTables={() => {}}
+    onOpenActions={() => {}}
+    onDispatchOrder={() => {}}
+    onSaveOrder={() => {}}
+    hasOrderItems
+  />);
+  assert.match(html, /aria-label="Toma de pedido"/);
+  assert.match(html, /data-testid="mobile-dispatch-order"/);
+  assert.match(html, /data-testid="mobile-save-order"/);
+  assert.match(html, /Guardar pedido/);
+  assert.doesNotMatch(html, /Cobrar|Cajero/);
+});
+
+test('empty portrait order keeps kitchen and save-order disabled', () => {
+  const html = renderToStaticMarkup(<MobilePosNavigation
+    onOpenActions={() => {}}
+    onSaveOrder={() => {}}
+    onDispatchOrder={() => {}}
+  />);
+  assert.match(html, /disabled="" data-testid="mobile-dispatch-order"/);
+  assert.match(html, /disabled="" data-testid="mobile-save-order"/);
+});
