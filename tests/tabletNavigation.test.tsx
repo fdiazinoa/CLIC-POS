@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { useIsMobile } from '../hooks/useIsMobile';
+import { isMobileViewport, useIsMobile } from '../hooks/useIsMobile';
 import { MobilePosNavigation } from '../components/MobilePosNavigation';
 
 function TabletProbe() {
@@ -59,4 +59,14 @@ test('empty portrait order keeps kitchen and save-order disabled', () => {
   />);
   assert.match(html, /disabled="" data-testid="mobile-dispatch-order"/);
   assert.match(html, /disabled="" data-testid="mobile-save-order"/);
+});
+
+test('1080px order-taker portrait uses one-panel mobile layout; landscape stays desktop', () => {
+  assert.equal(isMobileViewport(1080, 1920, 900, true), true);
+  assert.equal(isMobileViewport(1920, 1080, 900, true), false);
+  // M27X reports a 1080px physical width but about 785 CSS px in WebView.
+  assert.equal(isMobileViewport(785, 1396, 768, true), true);
+  assert.equal(isMobileViewport(1396, 785, 768, true), false);
+  assert.equal(isMobileViewport(1080, 1920, 900, false), false);
+  assert.equal(isMobileViewport(899, 1920, 900, false), true);
 });

@@ -1988,7 +1988,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       onSelectCustomer
    ]);
 
-   const isMobile = useIsMobile(isTabletProfile ? 900 : 768);
+   const isMobile = useIsMobile(isTabletProfile ? 900 : 768, isOrderTakerMode);
    const tariffSelectorRef = useRef<HTMLDivElement>(null);
 
    const userPermissions = useMemo(() => {
@@ -7507,12 +7507,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   <div className="w-9 h-9 md:w-10 md:h-10 rounded-full bg-gray-50 overflow-hidden border border-gray-200 shadow-inner shrink-0">
                      {currentUser.photo ? <img src={currentUser.photo} className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center bg-blue-50 text-blue-600 font-bold">{currentUser.name.charAt(0)}</div>}
                   </div>
-                  <div className="flex flex-col leading-tight md:hidden min-w-0">
+                  <div className={`flex flex-col leading-tight min-w-0 ${isMobile ? '' : 'md:hidden'}`}>
                      <p className="text-[11px] font-black text-slate-800 truncate max-w-[96px]">{currentUser.name.split(' ')[0]}</p>
                      <p className="text-[9px] font-black text-slate-400 uppercase tracking-[0.24em] mt-1">{isOrderTakerMode ? 'Toma de pedido' : 'Cajero'}</p>
                      <p className="text-[0.66rem] font-extrabold text-red-500 uppercase tracking-[0.16em] mt-1 truncate max-w-[96px]">{terminalDisplayLabel}</p>
                   </div>
-                  <div className="hidden lg:block leading-tight">
+                  <div className={`${isMobile ? 'hidden' : 'hidden lg:block'} leading-tight`}>
                      <p className="text-sm font-black text-gray-800 truncate max-w-[120px]">{currentUser.name}</p>
                      <p className="text-[10px] font-bold text-blue-500 uppercase tracking-widest">{isOrderTakerMode ? 'Toma de pedido' : 'Cajero'}</p>
                      <p className="text-[0.84rem] font-extrabold text-red-500 uppercase tracking-[0.16em] mt-1 truncate max-w-[140px]">{terminalDisplayLabel}</p>
