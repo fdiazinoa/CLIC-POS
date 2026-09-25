@@ -4369,6 +4369,8 @@ const AppContent: React.FC = () => {
   const [activeCartDraftRestorePrompt, setActiveCartDraftRestorePrompt] = useState<ActiveCartDraft | null>(null);
   const masterRestaurantRevisionRef = useRef(0);
   const lastAppliedClientRestaurantRevisionRef = useRef(0);
+  const lastAppliedClientTablesSnapshotVersionRef = useRef('');
+  const lastAppliedClientTablesAuthorityRef = useRef('');
   const masterRestaurantPollInFlightRef = useRef(false);
   const parkedTicketSyncQueueRef = useRef<Promise<void>>(Promise.resolve());
   const pendingClientTableSyncRef = useRef<PendingClientTableSync | null>(null);
@@ -5470,7 +5472,7 @@ const AppContent: React.FC = () => {
     return () => { setOperationalMasterResolver(null); setOperationalTerminalReader(null); };
   }, []);
   const ensureEligibleClientMasterEndpoint = (budget: { remaining: number }) => clientOperationalResolverRef.current!.ensureCurrent(budget);
-  const fetchTables = async () => {
+  const fetchTables = async (lightProbe = false) => {
     const isClientRuntime = isClientTerminalMode();
     if (isClientRuntime && !clientRoutingContextRef.current.ready) {
       publishClientMasterState('CHECKING', 'BOOT_LOADING');
@@ -5498,13 +5500,42 @@ const AppContent: React.FC = () => {
       const endpoint = isClientRuntime
         ? `${masterEndpoint}/api/mesas${query}`
         : resolveOperationalApiUrl(`/api/mesas${query}`);
+      let observedSnapshotVersion = '';
       // A transport deadline, not a retry timer. Start only after the current
       // master authority is validated; standalone/native Master is unchanged.
       if (isClientRuntime) {
         requestController = new AbortController();
         requestTimeout = window.setTimeout(() => requestController!.abort(), 5000);
+        if (lightProbe) {
+          // Explicit navigation keeps its single full GET. Only idle polling
+          // probes the HTTP representation version, not the write revision.
+          const probe = await fetch(`${masterEndpoint}/api/mesas/revision`, { signal: requestController.signal });
+          assertCurrentAuthority();
+          if (probe.status !== 404) {
+            if (!probe.ok) throw new Error(`MASTER_TABLES_PROBE_HTTP_${probe.status}: la Caja Master no entregó la revisión de mesas.`);
+            const probeData = await probe.json();
+            observedSnapshotVersion = typeof probeData?.version === 'string' ? probeData.version : '';
+            if (!observedSnapshotVersion) throw new Error('MASTER_TABLES_PROBE_INVALID: revisión de mesas inválida.');
+            assertCurrentAuthority();
+            if (masterEndpoint === lastAppliedClientTablesAuthorityRef.current
+                && observedSnapshotVersion === lastAppliedClientTablesSnapshotVersionRef.current) {
+              const pendingSync = pendingClientTableSyncRef.current || await readPendingClientTableSync();
+              assertCurrentAuthority();
+              if (!pendingSync) {
+                window.clearTimeout(requestTimeout);
+                requestTimeout = undefined;
+                markClientMasterOnline();
+                return { ok: true };
+              }
+              pendingClientTableSyncRef.current = pendingSync;
+            }
+          }
+        }
       }
       const res = await fetch(endpoint, requestController ? { signal: requestController.signal } : undefined);
+      if (isClientRuntime && !observedSnapshotVersion) {
+        observedSnapshotVersion = res.headers?.get('x-restaurant-snapshot-version') || '';
+      }
       if (!res.ok) {
         throw new Error(`MASTER_TABLES_HTTP_${res.status}: la Caja Master no entregó las mesas.`);
       }
@@ -5525,7 +5556,9 @@ const AppContent: React.FC = () => {
         const hasUnchangedClientRevision = isClientRuntime
           && Number.isFinite(responseRevision)
           && responseRevision > 0
-          && responseRevision === lastAppliedClientRestaurantRevisionRef.current;
+          && responseRevision === lastAppliedClientRestaurantRevisionRef.current
+          && masterEndpoint === lastAppliedClientTablesAuthorityRef.current
+          && (!observedSnapshotVersion || observedSnapshotVersion === lastAppliedClientTablesSnapshotVersionRef.current);
         const hasAuthoritativeParkedTickets = Array.isArray(data?.parkedTickets);
         const responseParkedTickets = hasAuthoritativeParkedTickets ? data.parkedTickets : [];
         let pendingTableSync = isClientRuntime
@@ -5540,6 +5573,8 @@ const AppContent: React.FC = () => {
           masterRestaurantRevisionRef.current = responseRevision;
         }
         if (hasUnchangedClientRevision && !pendingTableSync) {
+          if (observedSnapshotVersion) lastAppliedClientTablesSnapshotVersionRef.current = observedSnapshotVersion;
+          lastAppliedClientTablesAuthorityRef.current = masterEndpoint;
           markClientMasterOnline();
           console.debug('[TABLE_LAYOUT_CLIENT_UNCHANGED]', { revision: responseRevision });
           return { ok: true };
@@ -5648,6 +5683,9 @@ const AppContent: React.FC = () => {
           if (Number.isFinite(responseRevision) && responseRevision > 0) {
             lastAppliedClientRestaurantRevisionRef.current = responseRevision;
           }
+          if (observedSnapshotVersion) lastAppliedClientTablesSnapshotVersionRef.current = observedSnapshotVersion;
+          else lastAppliedClientTablesSnapshotVersionRef.current = '';
+          lastAppliedClientTablesAuthorityRef.current = masterEndpoint;
         } else if (nextRooms.length > 0) {
           setRooms(previousRooms => {
             const localFloorPlan = locallySavedFloorPlanRef.current;
@@ -7575,7 +7613,7 @@ const AppContent: React.FC = () => {
       if (!isPosSaleActive()) void fetchTables();
       const interval = setInterval(() => {
         if (isPosSaleActive()) return;
-        void fetchTables();
+        void fetchTables(true);
       }, isClientTerminalMode() ? CLIENT_TABLE_POLL_INTERVAL_MS : 10000);
       return () => clearInterval(interval);
     }

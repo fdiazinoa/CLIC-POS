@@ -38,6 +38,11 @@ object ClicPOSMasterHttpServer {
     @Volatile private var parkedTicketsSnapshot = JSONArray()
     @Volatile private var catalogSnapshots = JSONObject()
     private val restaurantRevision = AtomicLong(0)
+    // HTTP representation version is separate from the restaurant write fence:
+    // customers, routing overrides and lock renewals can change /api/mesas
+    // without advancing restaurantRevision.
+    private val restaurantSnapshotEpoch = UUID.randomUUID().toString()
+    private val restaurantSnapshotVersion = AtomicLong(0)
     private val syncTokens = ConcurrentHashMap<String, String>()
     private val catalogVersions = ConcurrentHashMap<String, Long>()
     private val productRoutingOverrides = ConcurrentHashMap<String, JSONObject>()
@@ -224,8 +229,10 @@ object ClicPOSMasterHttpServer {
                         writeResponse(client, 200, configSnapshot.toString())
                     method == "GET" && path == "/api/users" ->
                         writeResponse(client, 200, usersSnapshot.toString())
+                    method == "GET" && path == "/api/mesas/revision" ->
+                        writeResponse(client, 200, getRestaurantSnapshotVersion().toString())
                     method == "GET" && path == "/api/mesas" ->
-                        writeResponse(client, 200, serializeRestaurantSnapshot())
+                        writeRestaurantSnapshotResponse(client)
                     method == "POST" && path == "/api/mesas/bloquear" ->
                         writeLockResponse(client, acquireTableEditLock(parseJsonBody(body)))
                     method == "POST" && path == "/api/mesas/desbloquear" ->
@@ -713,7 +720,10 @@ object ClicPOSMasterHttpServer {
             (tables != null && tables.toString() != tablesSnapshot.toString()) ||
             (parkedTickets != null && parkedTickets.toString() != parkedTicketsSnapshot.toString())
         updateRestaurantSnapshot(rooms, tables, parkedTickets)
-        if (changed) restaurantRevision.incrementAndGet()
+        if (changed) {
+            restaurantRevision.incrementAndGet()
+            restaurantSnapshotVersion.incrementAndGet()
+        }
         persistRestaurantSnapshot()
     }
 
@@ -733,9 +743,11 @@ object ClicPOSMasterHttpServer {
                 catalogVersions[collection] = maxOf(now, priorVersion + 1)
             }
         }
+        val customersChanged = previous.optJSONArray("customers")?.toString() != next.optJSONArray("customers")?.toString()
         val nextProducts = next.optJSONArray("products")
-        if (nextProducts != null) reconcileProductRoutingOverrides(nextProducts, acknowledgedRevision)
+        val routingChanged = nextProducts != null && reconcileProductRoutingOverrides(nextProducts, acknowledgedRevision)
         catalogSnapshots = next
+        if (customersChanged || routingChanged) restaurantSnapshotVersion.incrementAndGet()
     }
 
     private fun applyClientRestaurantMutation(
@@ -745,6 +757,7 @@ object ClicPOSMasterHttpServer {
     ) {
         updateRestaurantSnapshot(rooms, tables, parkedTickets)
         restaurantRevision.incrementAndGet()
+        restaurantSnapshotVersion.incrementAndGet()
         persistRestaurantSnapshot()
     }
 
@@ -926,6 +939,7 @@ object ClicPOSMasterHttpServer {
             val previousVersion = catalogVersions["products"] ?: 0
             catalogVersions["products"] = maxOf(System.currentTimeMillis(), previousVersion + 1)
             restaurantRevision.incrementAndGet()
+            restaurantSnapshotVersion.incrementAndGet()
             persistRestaurantSnapshot()
         }
 
@@ -946,8 +960,9 @@ object ClicPOSMasterHttpServer {
         }
     }
 
-    private fun reconcileProductRoutingOverrides(products: JSONArray, acknowledgedRevision: Long) {
+    private fun reconcileProductRoutingOverrides(products: JSONArray, acknowledgedRevision: Long): Boolean {
         val currentRevision = restaurantRevision.get()
+        var changed = false
         for (index in 0 until products.length()) {
             val product = products.optJSONObject(index) ?: continue
             val productId = product.optString("id").trim()
@@ -961,12 +976,13 @@ object ClicPOSMasterHttpServer {
                 overrideUpdatedAt.isNotBlank() && incomingUpdatedAt > overrideUpdatedAt
 
             if (masterAcknowledgedRoute || authoritativeRouteIsNewer) {
-                productRoutingOverrides.remove(productId)
+                if (productRoutingOverrides.remove(productId) != null) changed = true
             } else {
                 product.put("production_area_id", overrideAreaId)
                 product.put("updatedAt", overrideUpdatedAt)
             }
         }
+        return changed
     }
 
     private fun authorizeSyncRequest(
@@ -1008,7 +1024,10 @@ object ClicPOSMasterHttpServer {
                 removed = true
             }
         }
-        if (removed) restaurantRevision.incrementAndGet()
+        if (removed) {
+            restaurantRevision.incrementAndGet()
+            restaurantSnapshotVersion.incrementAndGet()
+        }
     }
 
     private fun activeTableLock(tableId: String): JSONObject? {
@@ -1056,6 +1075,7 @@ object ClicPOSMasterHttpServer {
             .put("acquiredAt", acquiredAt)
             .put("expiresAt", now + TABLE_EDIT_LOCK_TTL_MS)
         tableEditLocks[tableId] = lock
+        restaurantSnapshotVersion.incrementAndGet()
         if (current == null) {
             restaurantRevision.incrementAndGet()
         }
@@ -1095,6 +1115,7 @@ object ClicPOSMasterHttpServer {
 
         tableEditLocks.remove(tableId)
         restaurantRevision.incrementAndGet()
+        restaurantSnapshotVersion.incrementAndGet()
         return JSONObject().put("success", true).put("_httpStatus", 200)
     }
 
@@ -1155,6 +1176,22 @@ object ClicPOSMasterHttpServer {
         return JSONObject()
             .put("success", true)
             .put("revision", restaurantRevision.get())
+    }
+
+    fun getRestaurantSnapshotVersion(): JSONObject {
+        cleanupExpiredTableLocks()
+        return JSONObject()
+            .put("version", restaurantSnapshotVersionTag())
+    }
+
+    private fun restaurantSnapshotVersionTag(): String = "$restaurantSnapshotEpoch:${restaurantSnapshotVersion.get()}"
+
+    private fun writeRestaurantSnapshotResponse(socket: Socket) {
+        // Capture the tag before serialization: a concurrent update can cause
+        // one extra refresh, but must never label an older body as newer.
+        val version = getRestaurantSnapshotVersion().getString("version")
+        writeResponse(socket, 200, serializeRestaurantSnapshot(),
+            mapOf("X-Restaurant-Snapshot-Version" to version))
     }
 
     private fun handleParkedTicketsUpdate(socket: Socket, body: String) {
@@ -1606,6 +1643,7 @@ object ClicPOSMasterHttpServer {
         val now = System.currentTimeMillis()
         catalogVersions["customers"] = maxOf(now, (catalogVersions["customers"] ?: 0) + 1)
         restaurantRevision.incrementAndGet()
+        restaurantSnapshotVersion.incrementAndGet()
 
         writeResponse(socket, 200, JSONObject()
             .put("success", true)
@@ -1886,7 +1924,7 @@ object ClicPOSMasterHttpServer {
         return output.toString(StandardCharsets.UTF_8.name())
     }
 
-    private fun writeResponse(socket: Socket, status: Int, body: String) {
+    private fun writeResponse(socket: Socket, status: Int, body: String, extraHeaders: Map<String, String> = emptyMap()) {
         runCatching {
             val statusText = when (status) {
                 200 -> "OK"
@@ -1904,8 +1942,10 @@ object ClicPOSMasterHttpServer {
                 append("Access-Control-Allow-Origin: *\r\n")
                 append("Access-Control-Allow-Methods: GET, POST, PUT, OPTIONS\r\n")
                 append("Access-Control-Allow-Headers: Content-Type, X-Active-Terminal-Id, X-Device-Id, X-POS-Device-Id, X-Sync-Token\r\n")
+                append("Access-Control-Expose-Headers: X-Restaurant-Snapshot-Version\r\n")
                 append("Access-Control-Allow-Private-Network: true\r\n")
                 append("Access-Control-Max-Age: 600\r\n")
+                for ((name, value) in extraHeaders) append("$name: $value\r\n")
                 append("Connection: close\r\n")
                 append("Content-Length: ${bytes.size}\r\n\r\n")
             }
