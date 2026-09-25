@@ -99,6 +99,19 @@ export function attachGlobalBarcodeCapture(win: Window, options: BarcodeCaptureO
     let atomic = false;
     let clearingInput = false;
     let completed: { target: HTMLElement | null; code: string; at: number } | undefined;
+    let modalTarget: HTMLElement | null = null;
+    let modalLastAt = 0;
+    let modalBurst = 0;
+    let modalAwaitingInput = false;
+    const resetModalBurst = () => { modalTarget = null; modalLastAt = 0; modalBurst = 0; modalAwaitingInput = false; };
+    const tableModalOpen = () => Boolean(win.document.querySelector('[data-table-map-persistent-host="true"][aria-modal="true"]'));
+    const appendModalCharacters = (el: HTMLElement, length: number) => {
+        const now = Date.now();
+        if (modalTarget !== el || now - modalLastAt > prefixTimeout) resetModalBurst();
+        modalTarget = el;
+        modalLastAt = now;
+        modalBurst += length;
+    };
     // The dedicated receiver is uncontrolled and contains only transient scanner
     // text. Abandoned scans must not survive in its native value. Manual search
     // inputs retain their text when capture is cancelled.
@@ -115,7 +128,7 @@ export function attachGlobalBarcodeCapture(win: Window, options: BarcodeCaptureO
         atomic = false;
         target = null;
     };
-    const cancel = () => { reset(); completed = undefined; };
+    const cancel = () => { reset(); resetModalBurst(); completed = undefined; };
     const eligible = (el: HTMLElement | null) => !blocked(win.document) && (
         !isEditable(el) || (el?.dataset?.barcodeScannerTarget === 'true' &&
             !(el as HTMLInputElement).readOnly && !(el as HTMLInputElement).disabled)
@@ -158,6 +171,36 @@ export function attachGlobalBarcodeCapture(win: Window, options: BarcodeCaptureO
     const consume = (event: KeyboardEvent) => { event.preventDefault(); event.stopPropagation(); };
     const onKey = (event: KeyboardEvent) => {
         const el = event.target as HTMLElement | null;
+        if (tableModalOpen()) {
+            // The sales scan is blocked by the modal, but the HID suffix must
+            // not activate its focused button. Track only a live keydown burst;
+            // an ordinary Enter with no scanner burst keeps its native action.
+            reset();
+            completed = undefined;
+            if (event.isComposing || event.ctrlKey || event.altKey || event.metaKey || event.repeat) {
+                resetModalBurst();
+                return;
+            }
+            if (event.key === 'Enter' || event.key === 'NumpadEnter' || event.key === 'Tab') {
+                const scannerTerminator = modalTarget === el && modalBurst >= 6 &&
+                    Date.now() - modalLastAt <= prefixTimeout;
+                resetModalBurst();
+                if (scannerTerminator) {
+                    consume(event);
+                    event.stopImmediatePropagation();
+                }
+                return;
+            }
+            if (event.key === 'Unidentified' && el?.tagName === 'INPUT') {
+                modalAwaitingInput = true;
+                return;
+            }
+            if (event.key.length !== 1) { resetModalBurst(); return; }
+            modalAwaitingInput = false;
+            appendModalCharacters(el, 1);
+            return;
+        }
+        resetModalBurst();
         if (!eligible(el) || event.isComposing || event.ctrlKey || event.altKey || event.metaKey) { cancel(); return; }
         if (event.repeat) return;
         // Android readers can deliver Unidentified before each valid insertText
@@ -187,6 +230,13 @@ export function attachGlobalBarcodeCapture(win: Window, options: BarcodeCaptureO
     const onInput = (event: Event) => {
         if (clearingInput) return;
         const el = event.target as HTMLInputElement | null;
+        if (tableModalOpen()) {
+            const input = event as InputEvent;
+            if (modalAwaitingInput && el?.tagName === 'INPUT' && input.inputType === 'insertText' &&
+                !input.isComposing && input.data) appendModalCharacters(el, input.data.length);
+            modalAwaitingInput = false;
+            return;
+        }
         if (el?.tagName !== 'INPUT' || el.dataset.barcodeScannerTarget !== 'true') { cancel(); return; }
         const input = event as InputEvent;
         if (!eligible(el) || input.isComposing || input.inputType?.startsWith('delete') ||

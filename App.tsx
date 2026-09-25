@@ -327,6 +327,7 @@ import {
 import {
   loadSyncProfile,
   isPosOnlyCloudStagingTarget,
+  isPosMasterClientProfile,
   resolveSyncTarget,
   saveSyncProfileFromContract,
   type SyncPermissions,
@@ -3676,12 +3677,6 @@ const AppContent: React.FC = () => {
     if (!tenantIdentity.tenantId && !tenantIdentity.tenantSlug && !tenantIdentity.tenantEmail) return;
 
     let disposed = false;
-    const recoveredErpBaseUrl = resolveSetupErpBaseUrl();
-
-    if (recoveredErpBaseUrl) {
-      persistSetupErpBaseUrls(recoveredErpBaseUrl);
-    }
-
     const publishEndpoint = async () => {
       const operationalTerminalId = currentTerminal.config?.stationNumber || currentTerminal.id;
       const terminalName = currentTerminal.config?.terminalName || operationalTerminalId;
@@ -3696,6 +3691,18 @@ const AppContent: React.FC = () => {
         console.log(`[CLOUD] Terminal ${terminalName} publicada en cloud: ${endpoint.localIp}`);
       }
     };
+
+    // Clients use the Master over LAN. Keep endpoint publication, but do not
+    // start ERP heartbeat, outbox, manifest, or config polling on them.
+    if (isPosMasterClientProfile()) {
+      void publishEndpoint();
+      return () => { disposed = true; };
+    }
+
+    const recoveredErpBaseUrl = resolveSetupErpBaseUrl();
+    if (recoveredErpBaseUrl) {
+      persistSetupErpBaseUrls(recoveredErpBaseUrl);
+    }
 
     const LEGACY_HEARTBEAT_INTERVAL_MS = 60_000;
     // Keep the active heartbeat ahead of the five-minute healthy reconciliation.
@@ -6089,6 +6096,7 @@ const AppContent: React.FC = () => {
   }, [clearSecurityState, currentView, getCurrentDeviceRole, isAdminMode, isDataLoaded]);
 
   const scannerEnabledViews = currentView === 'POS'
+    || currentView === 'TABLE_MAP'
     || currentView === 'HISTORY'
     || currentView === 'KIOSK_BROWSER'
     || currentView === 'KIOSK_WELCOME';
