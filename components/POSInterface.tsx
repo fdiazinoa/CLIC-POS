@@ -80,6 +80,7 @@ import { canStepCartQuantity, isValidCartQuantity, isValidCartQuantityTransition
 import ModifierModal from './ModifierModal';
 import { productHasRestaurantConfiguration, resolveRestaurantProductConfig } from '../utils/restaurantProductConfig';
 import { shouldBlockTableMapForDirectSale } from '../utils/restaurantNavigation';
+import { isDirectSaleParkedTicket } from '../utils/directSaleParkedTickets';
 import { visorSync } from '../utils/visorSync';
 import { isCustomerDisplaySurface, maybeAutoLaunchCustomerDisplay } from '../utils/customerDisplay';
 import ProductQuickActions from './ProductQuickActions';
@@ -1851,6 +1852,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const canReceiveConsignments = resolveConsignmentDownloadEnabled(activeTerminalConfig?.operational);
    const showTableMapButton = Boolean(activeTerminalConfig?.operational?.usa_mesas);
    const hideTableExtras = isRestaurantMode && !!activeTable;
+   const canParkDirectSale = !activeTable;
    const restaurantActionGridClass = !isRestaurantMode
       ? 'grid-cols-[112px_minmax(0,1fr)]'
       : showTableMapButton
@@ -2442,6 +2444,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [showPromoSheet, setShowPromoSheet] = useState(false);
    const [selectedPromoProduct, setSelectedPromoProduct] = useState<Product | null>(null);
 
+   const directSaleParkedTickets = useMemo(
+      () => (Array.isArray(parkedTickets) ? parkedTickets : []).filter(isDirectSaleParkedTicket),
+      [parkedTickets]
+   );
+
    const buildParkedTicketName = useCallback(() => {
       if (activeTable) {
          if (activeBarTabName) return activeBarTabName;
@@ -2452,8 +2459,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          return selectedCustomer.name;
       }
 
-      return `Ticket #${(Array.isArray(parkedTickets) ? parkedTickets : []).length + 1}`;
-   }, [activeTable, activeBarTabName, activeTableContext.compactLabel, selectedCustomer, parkedTickets]);
+      return `Ticket #${directSaleParkedTickets.length + 1}`;
+   }, [activeTable, activeBarTabName, activeTableContext.compactLabel, selectedCustomer, directSaleParkedTickets.length]);
 
    const closeParkAliasModal = useCallback(() => {
       setShowParkAliasModal(false);
@@ -2461,7 +2468,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    }, []);
 
    const openParkAliasModal = useCallback(() => {
-      if (cart.length === 0) return;
+      if (activeTable || cart.length === 0) return;
 
       const existingParked = activeTable?.currentOrderId
          ? parkedTickets.find((ticket) => ticket.id === activeTable.currentOrderId)
@@ -2470,6 +2477,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       setParkTicketAlias(existingParked?.alias || '');
       setShowParkAliasModal(true);
    }, [activeTable, cart.length, parkedTickets]);
+
+   useEffect(() => {
+      if (canParkDirectSale) return;
+      setShowParkedList(false);
+      closeParkAliasModal();
+   }, [canParkDirectSale, closeParkAliasModal]);
 
    useEffect(() => {
       if (!showParkAliasModal) return;
@@ -6923,13 +6936,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    };
 
    const handleRestoreTicket = (parked: ParkedTicket) => {
-      onUpdateCart(markRestaurantLinesCommitted(parked.items, parked.timestamp));
-      setOrderServiceType(parked.serviceType || 'DINE_IN');
-      if (parked.customerId) {
-         const found = (customers || []).find(c => c.id === parked.customerId);
+      const directTicket = canParkDirectSale
+         ? directSaleParkedTickets.find(ticket => ticket.id === parked.id)
+         : undefined;
+      if (!directTicket || !isDirectSaleParkedTicket(directTicket)) return;
+      onUpdateCart(markRestaurantLinesCommitted(directTicket.items, directTicket.timestamp));
+      setOrderServiceType(directTicket.serviceType || 'DINE_IN');
+      if (directTicket.customerId) {
+         const found = (customers || []).find(c => c.id === directTicket.customerId);
          if (found) onSelectCustomer(found);
       }
-      onUpdateParkedTickets(parkedTickets.filter(p => p.id !== parked.id));
+      onUpdateParkedTickets(parkedTickets.filter(p => p.id !== directTicket.id));
       setActiveRecoveredReservation(null);
       setShowParkedList(false);
       returnToTicketView();
@@ -7054,7 +7071,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             setShowCouponModal(true);
             break;
          case 'PARK_LIST':
-            if (activeTable) {
+            if (!canParkDirectSale) {
                setShowParkedList(false);
                break;
             }
@@ -7120,7 +7137,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             setCashMovementAmount('');
             setCashMovementReason('');
             break;
-         case 'SAVE': openParkAliasModal(); break;
+         case 'SAVE': if (canParkDirectSale) openParkAliasModal(); break;
          case 'TAKEOUT':
             setShowServiceTypeDialog(true);
             break;
@@ -7206,12 +7223,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                handleGridAction(action);
             }}
             config={config}
-            parkedTicketsCount={parkedTickets.length}
+            parkedTicketsCount={directSaleParkedTickets.length}
             isReturnMode={isReturnMode}
             hasCartItems={cart.length > 0}
             globalDiscountValue={globalDiscount.value}
             showLogout={false}
             allowWaitList={!activeTable}
+            allowSave={canParkDirectSale}
             hideFinancialClosings={isOrderTakerMode}
          />
       </div>
@@ -7758,9 +7776,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      <button type="button" onClick={() => { void handleBackToMap(); }} className="flex min-h-11 items-center justify-center gap-2 rounded-xl bg-orange-500 px-2 text-xs font-black text-white">
                         <Layout size={18} /><span>Mesas</span>
                      </button>
-                     <button type="button" onClick={() => handleGridAction('SAVE')} className="flex min-h-11 items-center justify-center gap-2 rounded-xl bg-blue-600 px-2 text-xs font-black text-white">
-                        <Save size={18} /><span>Guardar</span>
-                     </button>
+                     {canParkDirectSale && (
+                        <button type="button" onClick={() => handleGridAction('SAVE')} className="flex min-h-11 items-center justify-center gap-2 rounded-xl bg-blue-600 px-2 text-xs font-black text-white">
+                           <Save size={18} /><span>Guardar</span>
+                        </button>
+                     )}
                      <button type="button" onClick={() => { void handleDispatchCommand(); }} disabled={cart.length === 0} className="flex min-h-11 items-center justify-center gap-2 rounded-xl bg-orange-500 px-2 text-xs font-black text-white disabled:opacity-40">
                         <ChefHat size={18} /><span>Cocina</span>
                      </button>
@@ -7796,14 +7816,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            <CreditCard size={20} />
                            <span>Tarjeta</span>
                         </button>
-                        <button
-                           type="button"
-                           onClick={() => handleGridAction('SAVE')}
-                           className="flex h-16 items-center justify-center gap-2 rounded-xl border border-orange-400 bg-orange-500 px-3 text-sm font-black uppercase tracking-wide text-white shadow-sm shadow-orange-500/25 transition-all hover:bg-orange-600 active:scale-95"
-                        >
-                           <Save size={20} />
-                           <span>Guardar</span>
-                        </button>
+                        {canParkDirectSale && (
+                           <button
+                              type="button"
+                              onClick={() => handleGridAction('SAVE')}
+                              className="flex h-16 items-center justify-center gap-2 rounded-xl border border-orange-400 bg-orange-500 px-3 text-sm font-black uppercase tracking-wide text-white shadow-sm shadow-orange-500/25 transition-all hover:bg-orange-600 active:scale-95"
+                           >
+                              <Save size={20} />
+                              <span>Guardar</span>
+                           </button>
+                        )}
                         </div>
                      </div>
 
@@ -7921,13 +7943,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            <Trash2 size={20} />
                         </button>
                      )}
-                     <button onClick={openParkAliasModal} className="h-10 w-10 rounded-xl bg-blue-600 text-white shadow-sm shadow-blue-600/25 hover:bg-blue-700 flex items-center justify-center" title="Guardar Ticket">
-                        <Save size={20} />
-                     </button>
-                     {!activeTable && (
+                     {canParkDirectSale && (
+                        <button onClick={openParkAliasModal} className="h-10 w-10 rounded-xl bg-blue-600 text-white shadow-sm shadow-blue-600/25 hover:bg-blue-700 flex items-center justify-center" title="Guardar Ticket">
+                           <Save size={20} />
+                        </button>
+                     )}
+                     {canParkDirectSale && (
                         <button onClick={() => setShowParkedList(!showParkedList)} className="h-10 w-10 rounded-xl bg-orange-500 text-white shadow-sm shadow-orange-500/25 hover:bg-orange-600 relative flex items-center justify-center" title="Recuperar Ticket">
                            <Inbox size={20} />
-                           {(Array.isArray(parkedTickets) ? parkedTickets : []).length > 0 && (
+                           {directSaleParkedTickets.length > 0 && (
                               <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-orange-500 rounded-full border-2 border-white"></span>
                            )}
                         </button>
@@ -8704,12 +8728,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                               orientation="horizontal"
                               onAction={handleGridAction}
                               config={config}
-                              parkedTicketsCount={parkedTickets.length}
+                              parkedTicketsCount={directSaleParkedTickets.length}
                               isReturnMode={isReturnMode}
                               hasCartItems={cart.length > 0}
                               globalDiscountValue={globalDiscount.value}
                               showLogout={false}
                               allowWaitList={!activeTable}
+                              allowSave={canParkDirectSale}
                               hideFinancialClosings={isOrderTakerMode}
                            />
                         </div>
@@ -8728,12 +8753,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                               orientation="horizontal"
                               onAction={handleGridAction}
                               config={config}
-                              parkedTicketsCount={parkedTickets.length}
+                              parkedTicketsCount={directSaleParkedTickets.length}
                               isReturnMode={isReturnMode}
                               hasCartItems={cart.length > 0}
                               globalDiscountValue={globalDiscount.value}
                               showLogout={false}
                               allowWaitList={!activeTable}
+                              allowSave={canParkDirectSale}
                               hideFinancialClosings={isOrderTakerMode}
                            />
                            <div className="supermarket-checkout-buttons">
@@ -8949,15 +8975,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         )}
                         {!hideTableExtras && (
                            <>
-                              <button onClick={openParkAliasModal} className="flex h-12 min-w-[58px] flex-col items-center justify-center gap-0.5 rounded-xl bg-orange-500 px-2 text-white shadow-sm shadow-orange-500/25 active:scale-95">
-                                 <Save size={18} />
-                                 <span className="text-[9px] font-bold uppercase">Grd.</span>
-                              </button>
-                              {!activeTable && (
+                              {canParkDirectSale && (
+                                 <button onClick={openParkAliasModal} className="flex h-12 min-w-[58px] flex-col items-center justify-center gap-0.5 rounded-xl bg-orange-500 px-2 text-white shadow-sm shadow-orange-500/25 active:scale-95">
+                                    <Save size={18} />
+                                    <span className="text-[9px] font-bold uppercase">Grd.</span>
+                                 </button>
+                              )}
+                              {canParkDirectSale && (
                                  <button onClick={() => setShowParkedList(!showParkedList)} className="relative flex h-12 min-w-[58px] flex-col items-center justify-center gap-0.5 rounded-xl bg-orange-500 px-2 text-white shadow-sm shadow-orange-500/25 active:scale-95">
                                     <Inbox size={18} />
                                     <span className="text-[9px] font-bold uppercase">Esp.</span>
-                                    {(Array.isArray(parkedTickets) ? parkedTickets : []).length > 0 && <span className="absolute -top-1 -right-1 w-2 h-2 bg-orange-500 rounded-full"></span>}
+                                    {directSaleParkedTickets.length > 0 && <span className="absolute -top-1 -right-1 w-2 h-2 bg-orange-500 rounded-full"></span>}
                                  </button>
                               )}
                               <button onClick={openReservationModal} className="flex h-12 min-w-[58px] flex-col items-center justify-center gap-0.5 rounded-xl bg-orange-500 px-2 text-white shadow-sm shadow-orange-500/25 active:scale-95">
@@ -9610,7 +9638,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          }
 
          {/* Save Parked Ticket Alias */}
-         {showParkAliasModal && (
+         {showParkAliasModal && canParkDirectSale && (
             <div className="fixed inset-0 z-[101] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in zoom-in-95">
                <div className="bg-white rounded-[2.5rem] w-full max-w-lg shadow-2xl overflow-hidden animate-in zoom-in-95">
                   <div className="p-6 border-b bg-gray-50 flex justify-between items-center">
@@ -9634,7 +9662,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            onChange={(e) => setParkTicketAlias(e.target.value)}
                            onKeyDown={(e) => {
                               if (e.key === 'Enter') {
-                                 void handleParkCurrentTicket(parkTicketAlias);
+                                 if (canParkDirectSale) void handleParkCurrentTicket(parkTicketAlias);
                               }
                            }}
                            placeholder={activeTable ? 'Ej. Cumpleaños Ana, Terraza VIP' : 'Ej. Cliente VIP, Pedido oficina, Recoger luego'}
@@ -9655,7 +9683,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         Cancelar
                      </button>
                      <button
-                        onClick={() => void handleParkCurrentTicket(parkTicketAlias)}
+                        onClick={() => { if (canParkDirectSale) void handleParkCurrentTicket(parkTicketAlias); }}
                         className="flex-1 rounded-2xl bg-blue-600 px-4 py-3 text-sm font-black uppercase tracking-[0.12em] text-white hover:bg-blue-700 transition-colors"
                      >
                         {activeTable ? 'Actualizar mesa' : 'Guardar En Espera'}
@@ -9667,7 +9695,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
          {/* List of Parked Tickets */}
          {
-            showParkedList && !activeTable && (
+            showParkedList && canParkDirectSale && (
                <div className="fixed inset-0 z-[100] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in zoom-in-95">
                   <div className="bg-white rounded-[2.5rem] w-full max-w-md shadow-2xl overflow-hidden animate-in zoom-in-95">
                      <div className="p-6 border-b bg-gray-50 flex justify-between items-center">
@@ -9675,7 +9703,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         <button onClick={() => setShowParkedList(false)} className="p-2 hover:bg-gray-200 rounded-full"><X size={20} /></button>
                      </div>
                      <div className="p-4 overflow-y-auto max-h-[60vh] space-y-3">
-                        {(Array.isArray(parkedTickets) ? parkedTickets : []).map((pt, idx) => (
+                        {directSaleParkedTickets.map((pt, idx) => (
                            <div key={pt.id || `parked-${idx}`} onClick={() => handleRestoreTicket(pt)} className="p-4 bg-white border border-gray-100 rounded-2xl hover:border-orange-400 hover:bg-orange-50 cursor-pointer group transition-all">
                               <div className="flex justify-between items-start mb-2">
                                  <div className="min-w-0 pr-3">
@@ -9699,7 +9727,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                               </div>
                            </div>
                         ))}
-                        {(Array.isArray(parkedTickets) ? parkedTickets : []).length === 0 && <div className="py-10 text-center text-gray-400 italic">No hay tickets guardados</div>}
+                        {directSaleParkedTickets.length === 0 && <div className="py-10 text-center text-gray-400 italic">No hay tickets directos guardados</div>}
                      </div>
                   </div>
                </div>
