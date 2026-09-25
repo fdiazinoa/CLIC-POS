@@ -222,6 +222,7 @@ test('real table branches own selectors and hydrated POS destinations without bo
       if (lifecycle.startsWith('hide')) {
         const closeMap = declaration('App', 'handleCloseTableMap', {
           ...api, tableOpenDestinationRef: ownerRef, tableMapExitPending: false,
+          canCloseTableMapToDirectSale: true,
           tableMapCloseTraceRef: { current: null }, tableMapExitTransitionRef: { current: null },
           beginOperatorUiTransition: () => null, setTableMapExitPending() {}, setViewData() {},
           markWebviewProfileNavigation() {}, tableLatencyQaMark() {},

@@ -5,6 +5,7 @@ import { originalProvenance } from './services/recovery/RecoveryRuntime';
 import { isRecoveredOperation } from './services/recovery/PendingOperationsRecovery';
 import { recordCheckoutDiagnostic } from './services/CheckoutDiagnostics';
 import { allowsDefaultPaymentMethods } from './utils/erpPaymentMethods';
+import { canExitTableMapToDirectSale } from './utils/tableMapExitPermission';
 import { createStartupTrace } from './utils/startupTrace';
 import { freezeCount, freezePhase } from './diagnostics/freezeCounters';
 import { markWebviewProfileNavigation } from './diagnostics/webviewProfileMarks';
@@ -2123,6 +2124,7 @@ const AppContent: React.FC = () => {
   const currentViewRef = useRef<ViewState>(currentView);
   const lastProfiledViewRef = useRef<ViewState>(currentView);
   const currentUserRef = useRef<User | null>(null);
+  const requestCloseTableMapRef = useRef<() => void>(() => {});
   const [scanTargetTicketId, setScanTargetTicketId] = useState<string | null>(null); // NEW: Auto-select ticket from scan
   const [restoringHistory, setRestoringHistory] = useState(false);
   useLayoutEffect(() => markRenderEnd('APP_VIEW'));
@@ -2201,6 +2203,11 @@ const AppContent: React.FC = () => {
           setViewData(null);
           setCurrentView('TABLE_MAP');
         }
+        return;
+      }
+
+      if (view === 'TABLE_MAP') {
+        requestCloseTableMapRef.current();
         return;
       }
 
@@ -6409,7 +6416,9 @@ const AppContent: React.FC = () => {
     });
   };
 
+  const canCloseTableMapToDirectSale = canExitTableMapToDirectSale(currentUser, roles);
   const handleCloseTableMap = (event?: React.MouseEvent) => {
+    if (!canCloseTableMapToDirectSale) return;
     if (tableMapExitPending) return;
     tableLatencyQaMark('TABLES_CLOSE_INPUT');
     markWebviewProfileNavigation('TABLES_TO_SALES_INPUT');
@@ -6432,6 +6441,7 @@ const AppContent: React.FC = () => {
     setCurrentView('POS');
     markInteractionStage(trace, 'HANDLER_END');
   };
+  requestCloseTableMapRef.current = () => handleCloseTableMap();
 
   const handleTableMapCloseInteractive = useCallback(() => {
     completeOperatorUiTransition(tableMapExitTransitionRef.current);
@@ -11967,7 +11977,7 @@ const AppContent: React.FC = () => {
         return (
           <>
           <div className="h-screen bg-slate-950 overflow-hidden relative">
-            <button
+            {canCloseTableMapToDirectSale && <button
               type="button"
               onClick={handleCloseTableMap}
               disabled={tableMapExitPending}
@@ -11975,7 +11985,7 @@ const AppContent: React.FC = () => {
               className={`absolute left-4 top-4 z-50 rounded-2xl border border-white/15 bg-slate-950/90 px-4 py-2.5 text-sm font-black text-slate-100 shadow-[0_16px_40px_rgba(2,6,23,0.55)] hover:bg-white/[0.14] active:scale-[0.98] ${Capacitor.getPlatform() === 'android' ? '' : 'backdrop-blur-xl'}`}
             >
               {tableMapExitPending ? 'Abriendo venta…' : 'Cerrar'}
-            </button>
+            </button>}
             <div className="h-full overflow-hidden relative">
               {tableLatencyQaEnabled && tableQa.mode === 'minimal-tables' ? <div>MESAS QA</div> : (
               <React.Profiler id="TableMap" onRender={(_id, phase, actualDuration, baseDuration, startTime, commitTime) => {
