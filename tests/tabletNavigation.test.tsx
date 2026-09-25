@@ -4,6 +4,7 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { isMobileViewport, useIsMobile } from '../hooks/useIsMobile';
 import { MobilePosNavigation } from '../components/MobilePosNavigation';
+import { resolveMobileOrderTakerActions } from '../utils/orderTakerPolicy';
 
 function TabletProbe() {
   return <span>{useIsMobile(900) ? 'mobile' : 'desktop'}</span>;
@@ -69,4 +70,25 @@ test('1080px order-taker portrait uses one-panel mobile layout; landscape stays 
   assert.equal(isMobileViewport(1396, 785, 768, true), false);
   assert.equal(isMobileViewport(1080, 1920, 900, false), false);
   assert.equal(isMobileViewport(899, 1920, 900, false), true);
+});
+
+test('portrait order taker keeps Mesas and Cocina with stale operational flags', () => {
+  const actions = resolveMobileOrderTakerActions(true, false, true);
+  assert.deepEqual(actions, { showTables: true, showKitchen: true });
+  const html = renderToStaticMarkup(<MobilePosNavigation
+    onOpenTables={actions.showTables ? () => {} : undefined}
+    onDispatchOrder={actions.showKitchen ? () => {} : undefined}
+    onSaveOrder={() => {}}
+    onOpenActions={() => {}}
+    hasOrderItems
+  />);
+  for (const testId of ['mobile-open-tables', 'mobile-dispatch-order', 'mobile-save-order', 'mobile-open-actions']) {
+    assert.match(html, new RegExp(`data-testid="${testId}"`));
+  }
+});
+
+test('ordinary POS does not gain kitchen action and no table handler means no Mesas', () => {
+  assert.deepEqual(resolveMobileOrderTakerActions(false, false, true), { showTables: false, showKitchen: false });
+  assert.deepEqual(resolveMobileOrderTakerActions(false, true, true), { showTables: true, showKitchen: false });
+  assert.deepEqual(resolveMobileOrderTakerActions(true, false, false), { showTables: false, showKitchen: true });
 });

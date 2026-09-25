@@ -138,6 +138,7 @@ import {
    type ErpConsignmentLine,
 } from '../services/sync/ConsignmentSyncService';
 import { resolveDeviceRoleValue } from '../utils/deviceRoleHelpers';
+import { resolveMobileOrderTakerActions } from '../utils/orderTakerPolicy';
 import { resolveTerminalDeviceProfile } from '../utils/deviceProfile';
 import { shouldApplyRestaurantServiceCharge } from '../utils/orderServiceType';
 import OrderServiceTypeDialog from './OrderServiceTypeDialog';
@@ -1897,6 +1898,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       activeTerminalConfigRaw?.roleCode,
       activeTerminalConfigRaw?.role_code,
    ], DeviceRole.STANDARD_POS) === DeviceRole.ORDER_TAKER;
+   const mobileOrderTakerActions = resolveMobileOrderTakerActions(
+      isOrderTakerMode,
+      showTableMapButton,
+      Boolean(onOpenTableMap),
+   );
    const activeDeviceProfile = useMemo(() => resolveTerminalDeviceProfile(
       activeTerminal,
       isOrderTakerMode ? DeviceRole.ORDER_TAKER : activeTerminalConfig?.deviceRole?.role,
@@ -7659,12 +7665,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
             {isMobile && !isKioskMode && (
                <MobilePosNavigation
-                  onOpenTables={showTableMapButton && onOpenTableMap ? () => { void handleBackToMap(); } : undefined}
+                  onOpenTables={mobileOrderTakerActions.showTables ? () => { void handleBackToMap(); } : undefined}
                   onOpenActions={() => {
                      setRightSidebarTab('ACTIONS');
                      setMobileView('TICKET');
                   }}
-                  onDispatchOrder={isOrderTakerMode && activeTerminalConfig?.operational?.usa_modulos_cocina ? () => { void handleDispatchCommand(); } : undefined}
+                  onDispatchOrder={mobileOrderTakerActions.showKitchen ? () => { void handleDispatchCommand(); } : undefined}
                   onSaveOrder={isOrderTakerMode ? (inputTimeStamp) => { void requestCheckout(inputTimeStamp, false); } : undefined}
                   hasOrderItems={cart.length > 0}
                />
