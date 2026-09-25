@@ -29,7 +29,9 @@ test('la unión conserva la mesa origen como cuenta principal y un solo ticket',
   assert.match(tableMapSource, /diagnosticContext: \{ operation: 'TABLE_MERGE' \}/);
   assert.match(nativeServerSource, /val affectedTableIds = mutableSetOf\(tableId\)/);
   assert.match(nativeServerSource, /affectedTableIds\.none/);
-  assert.match(tableMapSource, /<Link2 size=\{15\} strokeWidth=\{3\}/);
+  assert.match(tableMapSource, /<Link2 size=\{10\} className="shrink-0"/);
+  assert.match(tableMapSource, /\{getTableLabel\(model\.table\)\}/);
+  assert.match(tableMapSource, /\{model\.temporaryAlias \|\| model\.joinedPrimaryLabel\}/);
   assert.doesNotMatch(tableMapSource, /Unida a \{model\.joinedPrimaryLabel\}/);
   assert.doesNotMatch(tableMapSource, /'Cuenta compartida'/);
 });

@@ -2817,14 +2817,13 @@ const SmartTableNode = React.memo(({
                         </div>
 
                         <div className="text-center leading-none">
-                            <p className="flex items-center justify-center gap-1 text-base font-black tracking-tight drop-shadow-[0_2px_6px_rgba(2,6,23,0.5)] truncate">
-                                {model.joinedPrimaryLabel ? (
-                                    <><Link2 size={15} strokeWidth={3} className="shrink-0" /> {model.joinedPrimaryLabel}</>
-                                ) : (model.temporaryAlias || model.table.nombre || model.table.name)}
+                            <p className="truncate text-base font-black uppercase tracking-tight drop-shadow-[0_2px_6px_rgba(2,6,23,0.5)]">
+                                {getTableLabel(model.table)}
                             </p>
-                            {model.temporaryAlias && !model.joinedPrimaryLabel && (
-                                <p className="mt-1 truncate text-[9px] font-bold uppercase tracking-wide text-white/70">
-                                    {model.table.nombre || model.table.name}
+                            {(model.temporaryAlias || model.joinedPrimaryLabel) && (
+                                <p className="mt-1 flex items-center justify-center gap-1 truncate text-[9px] font-semibold text-white/75">
+                                    {model.joinedPrimaryLabel && <Link2 size={10} className="shrink-0" />}
+                                    <span className="truncate">{model.temporaryAlias || model.joinedPrimaryLabel}</span>
                                 </p>
                             )}
                         </div>

@@ -83,6 +83,16 @@ export const isOrderTakerTerminal = (terminal: unknown): boolean => (
   resolveTerminalTypeFromContract(terminal) === ORDER_TAKER_TERMINAL_TYPE
 );
 
+/** Portrait ORDER_TAKER mirrors its landscape command bar even with stale operational flags. */
+export const resolveMobileOrderTakerActions = (
+  isOrderTaker: boolean,
+  tablesConfigured: boolean,
+  hasTableMapHandler: boolean,
+) => ({
+  showTables: hasTableMapHandler && (isOrderTaker || tablesConfigured),
+  showKitchen: isOrderTaker,
+});
+
 export const isTerminalAllowedForBinding = (
   terminal: unknown,
   expectedType?: PosTerminalType | null,

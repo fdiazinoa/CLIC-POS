@@ -1,6 +1,6 @@
 import React, { CSSProperties, useEffect, useRef, useState } from 'react';
-import { Trash2 } from 'lucide-react';
 import { CartItem, BusinessConfig } from '../types';
+import { createSupermarketLineInteraction } from '../utils/supermarketLineInteraction';
 import './supermarketTicket.css';
 
 interface ProductTableSupermarketProps {
@@ -8,7 +8,7 @@ interface ProductTableSupermarketProps {
     config: BusinessConfig;
     currencySymbol: string;
     lastAddedCartId: string | null;
-    onRemoveItem: (cartId: string) => void;
+    onEditItem: (cartId: string) => void;
     containerStyle?: CSSProperties;
     taxIncluded?: boolean;
 }
@@ -18,12 +18,19 @@ const ProductTableSupermarket: React.FC<ProductTableSupermarketProps> = ({
     config,
     currencySymbol,
     lastAddedCartId,
-    onRemoveItem,
+    onEditItem,
     containerStyle,
     taxIncluded = false
 }) => {
     const [highlightedId, setHighlightedId] = useState<string | null>(null);
     const containerRef = useRef<HTMLDivElement>(null);
+    const onEditItemRef = useRef(onEditItem);
+    onEditItemRef.current = onEditItem;
+    const lineInteractionRef = useRef<ReturnType<typeof createSupermarketLineInteraction> | null>(null);
+    if (!lineInteractionRef.current) {
+        lineInteractionRef.current = createSupermarketLineInteraction((cartId) => onEditItemRef.current(cartId));
+    }
+    const lineInteraction = lineInteractionRef.current;
 
     useEffect(() => {
         if (lastAddedCartId) {
@@ -53,7 +60,6 @@ const ProductTableSupermarket: React.FC<ProductTableSupermarketProps> = ({
                         <th className="supermarket-money px-4 py-3 text-right">Precio<span className="block text-[9px] tracking-normal font-medium normal-case">Unitario</span></th>
                         <th className="supermarket-money px-4 py-3 text-right">ITBIS<span className="block text-[9px] tracking-normal font-medium normal-case">{taxIncluded ? 'Incluido · línea' : 'Por línea'}</span></th>
                         <th className="supermarket-money px-4 py-3 text-right text-gray-800">Total</th>
-                        <th className="w-8"></th>
                     </tr>
                 </thead>
                 <tbody className="text-sm divide-y divide-gray-50">
@@ -68,8 +74,17 @@ const ProductTableSupermarket: React.FC<ProductTableSupermarketProps> = ({
                         return (
                             <tr
                                 key={item.cartId}
+                                tabIndex={0}
+                                aria-label={`Editar ${item.name}, cantidad ${item.quantity}`}
+                                onClick={() => item.cartId && lineInteraction.click(item.cartId)}
+                                onContextMenu={(event) => item.cartId && lineInteraction.contextMenu(item.cartId, event)}
+                                onKeyDown={(event) => item.cartId && lineInteraction.keyDown(item.cartId, {
+                                    key: event.key,
+                                    isRowTarget: event.target === event.currentTarget,
+                                    preventDefault: () => event.preventDefault(),
+                                })}
                                 className={`
-                                    group transition-colors duration-500
+                                    group cursor-pointer transition-colors duration-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500
                                     ${isHighlighted ? 'bg-blue-50/80 animate-pulse' : 'hover:bg-gray-50'}
                                     ${isReturn ? 'bg-red-50/30' : ''}
                                 `}
@@ -116,16 +131,6 @@ const ProductTableSupermarket: React.FC<ProductTableSupermarketProps> = ({
                                     {currencySymbol}{total.toFixed(2)}
                                 </td>
 
-                                {/* ACCIONES (Hover) */}
-                                <td className="px-1 text-center">
-                                    <button
-                                        onClick={() => onRemoveItem(item.cartId!)}
-                                        className="p-1.5 rounded text-gray-300 hover:text-red-500 hover:bg-red-50 opacity-0 group-hover:opacity-100 transition-all transform hover:scale-110"
-                                        title="Eliminar línea"
-                                    >
-                                        <Trash2 size={16} />
-                                    </button>
-                                </td>
                             </tr>
                         );
                     })}
