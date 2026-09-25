@@ -7,7 +7,7 @@ const once = (before, after) => {
   source = source.replace(before, after);
 };
 if (mutation === 'cloned-http') {
-  once('writeResponse(client, 200, serializeRestaurantSnapshot())', 'writeResponse(client, 200, buildRestaurantSnapshot().toString())');
+  once('writeResponse(socket, 200, serializeRestaurantSnapshot(),', 'writeResponse(socket, 200, buildRestaurantSnapshot().toString(),');
 } else if (mutation === 'borrowed-bridge') {
   once('fun getRestaurantState(): JSONObject = buildRestaurantSnapshot()', 'fun getRestaurantState(): JSONObject = buildRestaurantSnapshot().put("rooms", roomsSnapshot)');
 } else if (mutation === 'revision-cache') {

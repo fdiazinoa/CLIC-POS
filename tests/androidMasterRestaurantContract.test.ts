@@ -32,6 +32,21 @@ test('la Master Android expone el estado compartido de restaurante', () => {
   assert.match(serverSource, /\.put\("parkedTickets", JSONArray\(parkedTicketsSnapshot\.toString\(\)\)\)/);
 });
 
+test('la Cliente sondea una versión ligera que incluye clientes y renovaciones de locks', () => {
+  assert.match(serverSource, /path == "\/api\/mesas\/revision" ->\s*writeResponse\(client, 200, getRestaurantSnapshotVersion\(\)\.toString\(\)\)/);
+  assert.match(serverSource, /private val restaurantSnapshotEpoch = UUID\.randomUUID\(\)\.toString\(\)/);
+  assert.match(serverSource, /customersChanged \|\| routingChanged\) restaurantSnapshotVersion\.incrementAndGet\(\)/);
+  assert.match(serverSource, /tableEditLocks\[tableId\] = lock\s+restaurantSnapshotVersion\.incrementAndGet\(\)/);
+  const fetchTablesSource = appSource.slice(appSource.indexOf('const fetchTables = async ('), appSource.indexOf('const invokeTableEditLock'));
+  assert.match(fetchTablesSource, /fetch\(`\$\{masterEndpoint\}\/api\/mesas\/revision`/);
+  assert.match(fetchTablesSource, /probe\.status !== 404/);
+  assert.match(fetchTablesSource, /if \(lightProbe\) \{/);
+  assert.match(fetchTablesSource, /masterEndpoint === lastAppliedClientTablesAuthorityRef\.current\s+&& observedSnapshotVersion === lastAppliedClientTablesSnapshotVersionRef\.current/);
+  assert.match(fetchTablesSource, /pendingClientTableSyncRef\.current \|\| await readPendingClientTableSync\(\)/);
+  assert.match(fetchTablesSource, /observedSnapshotVersion === lastAppliedClientTablesSnapshotVersionRef\.current\)/);
+  assert.match(appSource, /void fetchTables\(true\)/);
+});
+
 test('la Master Android permite abrir y liberar mesas desde una terminal cliente', () => {
   assert.match(serverSource, /method == "POST" && path == "\/api\/mesas\/abrir"/);
   assert.match(serverSource, /method == "POST" && path == "\/api\/mesas\/liberar"/);
@@ -228,7 +243,7 @@ test('un fallo transitorio no muestra de inmediato la Master como desconectada',
 
 test('el polling en segundo plano no hace parpadear el modal de reconexión', () => {
   const fetchTablesSource = appSource.slice(
-    appSource.indexOf('const fetchTables = async () =>'),
+    appSource.indexOf('const fetchTables = async ('),
     appSource.indexOf('const invokeTableEditLock'),
   );
   assert.match(fetchTablesSource, /clientMasterTablesFetchInFlightRef\.current/);

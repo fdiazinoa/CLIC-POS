@@ -94,13 +94,17 @@ function declaration(name: string) {
   };
   visit(file); assert.equal(matches.length, 1, `actual App ${name} handler`); return matches[0];
 }
-function setup(transport: (...args: any[]) => Promise<any>, timers?: { setTimeout: (callback: () => void, ms: number) => number; clearTimeout: (id: number) => void }) {
+function setup(transport: (...args: any[]) => Promise<any>, timers?: { setTimeout: (callback: () => void, ms: number) => number; clearTimeout: (id: number) => void }, probeTransport?: (...args: any[]) => Promise<any>) {
   let active = { ...contract }; const statuses: string[] = []; const diagnostics: any[] = [];
   const context = { current: { ready: false, getContract: () => active, getTerminal: () => ({ id: active.terminalId }) } };
   let discoveries = 0;
   const resolver = createOperationalMasterResolver({ isReady: () => context.current.ready, getContract: () => active,
     mirror: () => {}, discover: async () => { discoveries++; return [{ baseUrl: '10.0.0.101', config: remote() }]; } });
   const failureCount = { current: 0 };
+  const appliedVersion = { current: '' };
+  const appliedAuthority = { current: 'http://10.0.0.101:3001' };
+  const pendingSync = { current: null as any };
+  let tableUpdates = 0;
   const deps: Record<string, any> = {
     isClientTerminalMode: () => true, clientRoutingContextRef: context,
     clientOperationalResolverRef: { current: resolver },
@@ -111,10 +115,19 @@ function setup(transport: (...args: any[]) => Promise<any>, timers?: { setTimeou
     setClientMasterTablesStatus: (status: string) => statuses.push(status), setClientMasterDiagnostic: () => {},
     window: { setTimeout: timers?.setTimeout ?? setTimeout, clearTimeout: timers?.clearTimeout ?? clearTimeout,
       ClicPOSNativePrinter: { debugLog: (text: string) => diagnostics.push(JSON.parse(text)) } },
-    console: { warn() {}, error() {}, debug() {} }, localStorage: { getItem: () => null },
-    fetch: transport, pendingClientTableSyncRef: { current: null }, pendingMasterTableSyncRef: { current: null },
+    console: { warn() {}, error() {}, debug() {}, log() {} }, localStorage: { getItem: () => null },
+    fetch: (endpoint: string, options: any) => endpoint.includes('/api/mesas/revision')
+      ? (probeTransport?.(endpoint, options) ?? Promise.resolve({ ok: false, status: 404 })) : transport(endpoint, options),
+    pendingClientTableSyncRef: pendingSync, pendingMasterTableSyncRef: { current: null },
     readPendingClientTableSync: async () => null, lastAppliedClientRestaurantRevisionRef: { current: 1 },
+    lastAppliedClientTablesSnapshotVersionRef: appliedVersion, lastAppliedClientTablesAuthorityRef: appliedAuthority,
     masterRestaurantRevisionRef: { current: 1 },
+    removeStaleChargedEmptyTickets: (tickets: any[]) => ({ tickets, removedTicketIds: [] }),
+    mergePendingClientTableTickets: (tickets: any[]) => tickets,
+    reconcileTablesWithParkedTickets: (tables: any[]) => tables,
+    parkedTickets: [], locallySavedFloorPlanRef: { current: null },
+    setTables: (update: any) => { tableUpdates++; update([]); },
+    setRooms: () => {}, setActiveRoomId: (update: any) => update(''), setParkedTickets: () => {},
     useCallback: (callback: any) => callback,
   };
   const declarations = ['publishClientMasterState', 'markClientMasterOnline', 'recordClientMasterFailure',
@@ -123,9 +136,10 @@ function setup(transport: (...args: any[]) => Promise<any>, timers?: { setTimeou
   const javascript = ts.transpileModule(declarations, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText;
   const handlers = new Function(...Object.keys(deps), `${javascript}; return { fetchTables, retryClientMasterConnection, recordClientMasterFailure };`)(...Object.values(deps));
   return { ...handlers, context, statuses, diagnostics, failureCount, resolver,
+    appliedVersion, appliedAuthority, pendingSync, tableUpdates: () => tableUpdates,
     discoveries: () => discoveries, change: (value: Partial<OperationalMasterContract>) => { active = { ...active, ...value }; } };
 }
-const response = () => ({ ok: true, headers: { get: () => 'application/json' }, json: async () => ({ revision: 1 }) });
+const response = () => ({ ok: true, headers: { get: (name: string) => name === 'content-type' ? 'application/json' : null }, json: async () => ({ revision: 1 }) });
 
 test('actual App boot blocks probes without outages and ready overlapping probes publish ONLINE once', async () => {
   let calls = 0; const waiting = gate();
@@ -238,6 +252,58 @@ test('same successful idle revision produces no periodic React status or native 
   const fixture = setup(async () => response()); fixture.context.current.ready = true;
   for (let index = 0; index < 10; index++) assert.equal((await fixture.fetchTables()).ok, true);
   assert.deepEqual(fixture.statuses, ['ONLINE']); assert.equal(fixture.diagnostics.length, 1);
+});
+
+test('lightweight table polls skip unchanged bodies and apply a new representation version', async () => {
+  let version = 'boot-a:1'; let fullGets = 0; let probes = 0;
+  const fixture = setup(async () => {
+    fullGets++;
+    return { ...response(), headers: { get: (name: string) => name === 'x-restaurant-snapshot-version' ? version : 'application/json' } };
+  }, undefined, async () => {
+    probes++;
+    return { ok: true, status: 200, json: async () => ({ version }) };
+  });
+  fixture.context.current.ready = true;
+  fixture.appliedVersion.current = version;
+  assert.equal((await fixture.fetchTables(true)).ok, true);
+  assert.equal(probes, 1); assert.equal(fullGets, 0);
+  version = 'boot-a:2';
+  assert.equal((await fixture.fetchTables(true)).ok, true);
+  assert.equal(fullGets, 1); assert.equal(fixture.appliedVersion.current, version);
+  assert.equal(fixture.tableUpdates(), 1);
+  assert.equal((await fixture.fetchTables(true)).ok, true);
+  assert.equal(probes, 3); assert.equal(fullGets, 1);
+});
+
+test('legacy Master with same numeric revision still reconciles after authority changes', async () => {
+  const fixture = setup(async () => response());
+  fixture.context.current.ready = true;
+  fixture.appliedAuthority.current = 'http://10.0.0.200:3001';
+  assert.equal((await fixture.fetchTables(true)).ok, true);
+  assert.equal(fixture.tableUpdates(), 1);
+  assert.equal(fixture.appliedAuthority.current, 'http://10.0.0.101:3001');
+});
+
+test('a pending client table sync bypasses an unchanged lightweight probe', async () => {
+  let fullGets = 0;
+  const fixture = setup(async () => { fullGets++; return response(); }, undefined,
+    async () => ({ ok: true, status: 200, json: async () => ({ version: 'boot-a:1' }) }));
+  fixture.context.current.ready = true;
+  fixture.appliedVersion.current = 'boot-a:1';
+  fixture.pendingSync.current = { ticketId: 'pending-qa' };
+  assert.equal((await fixture.fetchTables(true)).ok, true);
+  assert.equal(fullGets, 1); assert.equal(fixture.tableUpdates(), 1);
+});
+
+test('a failed lightweight probe does not advance the applied version or download the snapshot', async () => {
+  let fullGets = 0;
+  const fixture = setup(async () => { fullGets++; return response(); }, undefined,
+    async () => ({ ok: false, status: 500 }));
+  fixture.context.current.ready = true;
+  fixture.appliedVersion.current = 'boot-a:1';
+  assert.equal((await fixture.fetchTables(true)).ok, false);
+  assert.equal(fixture.appliedVersion.current, 'boot-a:1');
+  assert.equal(fullGets, 0);
 });
 
 test('actual explicit retry shares one reconciliation budget across resolver and snapshot instead of looping on churn', async () => {

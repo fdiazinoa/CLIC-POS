@@ -13,7 +13,8 @@ test('only HTTP borrows restaurant collections for immediate String serializatio
   assert.match(serializer, /put\("tables", buildTablesWithEditLocks\(\)\)/);
   assert.match(serializer, /productRoutingOverrides\.values\.map \{ JSONObject\(it\.toString\(\)\) \}/);
   assert.equal((source.match(/serializeRestaurantSnapshot\(\)/g) || []).length, 2);
-  assert.match(source, /path == "\/api\/mesas" ->\s*writeResponse\(client, 200, serializeRestaurantSnapshot\(\)\)/);
+  assert.match(source, /path == "\/api\/mesas" ->\s*writeRestaurantSnapshotResponse\(client\)/);
+  assert.match(source, /writeResponse\(socket, 200, serializeRestaurantSnapshot\(\),/);
   assert.match(source, /fun getRestaurantState\(\): JSONObject = buildRestaurantSnapshot\(\)/);
   assert.match(source, /putString\(PREFS_RESTAURANT_KEY, buildRestaurantSnapshot\(\)\.toString\(\)\)/);
 });

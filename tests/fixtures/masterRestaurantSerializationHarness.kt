@@ -22,14 +22,16 @@ private fun invoke(name: String, vararg args: Any?): Any? {
     }
 }
 private fun revision() = (field("restaurantRevision").get(server) as AtomicLong).get()
-private class HttpSocket : Socket() {
+private fun snapshotVersion() = server.getRestaurantSnapshotVersion().getString("version")
+private class HttpSocket(private val path: String = "/api/mesas") : Socket() {
     val output = ByteArrayOutputStream()
-    override fun getInputStream() = ByteArrayInputStream("GET /api/mesas HTTP/1.1\r\n\r\n".toByteArray())
+    val request = "GET $path HTTP/1.1\r\n\r\n".toByteArray()
+    override fun getInputStream() = ByteArrayInputStream(request)
     override fun getOutputStream() = output
     override fun close() {}
 }
-private fun http(): String {
-    val socket = HttpSocket()
+private fun http(path: String = "/api/mesas"): String {
+    val socket = HttpSocket(path)
     invoke("handleClient", socket)
     val response = socket.output.toString("UTF-8")
     check(response.startsWith("HTTP/1.1 200 OK\r\n"))
@@ -57,6 +59,7 @@ private fun reset() {
     for (name in listOf("roomsSnapshot", "tablesSnapshot", "parkedTicketsSnapshot")) field(name).set(server, JSONArray())
     field("catalogSnapshots").set(server, JSONObject())
     (field("restaurantRevision").get(server) as AtomicLong).set(0)
+    (field("restaurantSnapshotVersion").get(server) as AtomicLong).set(0)
     for (name in listOf("tableEditLocks", "productRoutingOverrides", "catalogVersions"))
         (field(name).get(server) as ConcurrentHashMap<*, *>).clear()
 }
@@ -123,10 +126,29 @@ fun main(args: Array<String>) {
     counted.forEach { it.encodes = 0 }
     check(JSONObject(http()).similar(JSONObject(old)))
     check(counted.all { it.encodes == 0 }) { "HTTP reintroduced redundant collection stringify/parse" }
+    val stableVersion = snapshotVersion()
+    val fullResponse = HttpSocket()
+    invoke("handleClient", fullResponse)
+    val fullHeaders = fullResponse.output.toString("UTF-8").substringBefore("\r\n\r\n")
+    check(fullHeaders.contains("X-Restaurant-Snapshot-Version: $stableVersion\r\n"))
+    check(fullHeaders.contains("Access-Control-Expose-Headers: X-Restaurant-Snapshot-Version\r\n"))
+    var idleWireBytes = 0
+    repeat(15) {
+        val probe = HttpSocket("/api/mesas/revision")
+        invoke("handleClient", probe)
+        idleWireBytes += probe.request.size + probe.output.size()
+        check(JSONObject(probe.output.toString("UTF-8").substringAfter("\r\n\r\n")).getString("version") == stableVersion)
+    }
+    check(idleWireBytes <= 10_240) { "idle probe wire budget exceeded: $idleWireBytes bytes" }
+    println("PASS: 15 idle HTTP probes use $idleWireBytes wire bytes without serializing the snapshot")
+    check(counted.all { it.encodes == 0 }) { "lightweight probes serialized the full snapshot" }
+    check(http("/api/mesas/revision").toByteArray(Charsets.UTF_8).size < 100)
     println("PASS: three baseline source-array stringify calls removed; final response equivalent")
 
     val owner = JSONObject().put("tableId", "table-1").put("ownerId", "owner-1")
     val first = server.acquireTableEditLock(owner).getJSONObject("lock")
+    val acquiredVersion = snapshotVersion()
+    check(acquiredVersion != stableVersion)
     val lockRevision = revision()
     check(server.getRestaurantRevision().getLong("revision") == lockRevision)
     check((field("tableEditLocks").get(server) as ConcurrentHashMap<String, JSONObject>).containsKey("table-1"))
@@ -134,28 +156,53 @@ fun main(args: Array<String>) {
     check(!locked.has("token") && locked.getLong("expiresAt") == first.getLong("expiresAt"))
     Thread.sleep(3) // Ensure a different renewal millisecond; production TTL remains 45 seconds.
     val renewed = server.acquireTableEditLock(owner).getJSONObject("lock")
+    val renewedVersion = snapshotVersion()
+    check(renewedVersion != acquiredVersion)
     check(revision() == lockRevision && renewed.getLong("expiresAt") > first.getLong("expiresAt"))
     check(server.getRestaurantRevision().getLong("revision") == lockRevision)
     check(snapshot().getJSONArray("tables").getJSONObject(0).getJSONObject("editingLock").getLong("expiresAt") == renewed.getLong("expiresAt"))
     check(server.releaseTableEditLock(JSONObject(owner.toString()).put("token", renewed.getString("token"))).getBoolean("success"))
+    check(snapshotVersion() != renewedVersion)
     check(revision() == lockRevision + 1 && !snapshot().getJSONArray("tables").getJSONObject(0).has("editingLock"))
     server.acquireTableEditLock(owner)
     val expiryRevision = revision()
+    val preExpiryVersion = snapshotVersion()
     // Fixture aging, not a shortened TTL: production cleanup sees an actually expired stored lease.
     val locks = field("tableEditLocks").get(server) as ConcurrentHashMap<String, JSONObject>
     locks["table-1"] = JSONObject(locks["table-1"].toString()).put("expiresAt", System.currentTimeMillis() - 1)
     // Probe first: no full snapshot may be needed to observe lease expiration.
     check(server.getRestaurantRevision().getLong("revision") == expiryRevision + 1)
+    check(snapshotVersion() != preExpiryVersion)
     check(!locks.containsKey("table-1"))
     check(server.getRestaurantRevision().getLong("revision") == expiryRevision + 1)
     check(!snapshot().getJSONArray("tables").getJSONObject(0).has("editingLock"))
     println("PASS: lock redaction/renewal without revision/release/expiry preserve current overlay")
 
     val beforeCustomers = revision()
+    val beforeCustomersVersion = snapshotVersion()
     invoke("updateCatalogSnapshots", JSONObject().put("customers", rows(77)), beforeCustomers)
     check(revision() == beforeCustomers && snapshot().getJSONArray("customers").getJSONObject(0).getInt("generation") == 77)
+    check(snapshotVersion() != beforeCustomersVersion)
+    val unchangedCustomersVersion = snapshotVersion()
+    invoke("updateCatalogSnapshots", JSONObject().put("customers", rows(77)), beforeCustomers)
+    check(snapshotVersion() == unchangedCustomersVersion)
     invoke("updateCatalogSnapshots", JSONObject(), revision())
+    check(snapshotVersion() != unchangedCustomersVersion)
     check(snapshot().getJSONArray("customers").length() == 0)
+    val beforeCustomerUpsert = snapshotVersion()
+    invoke("handleCustomerUpsert", HttpSocket(), JSONObject().put("customer",
+        JSONObject().put("id", "qa-customer").put("name", "QA Customer")).toString())
+    check(snapshotVersion() != beforeCustomerUpsert)
+    val route = JSONObject().put("productId", "qa-product").put("productionAreaId", "qa-area")
+    routing["qa-product"] = route
+    val beforeRouteRemoval = snapshotVersion()
+    invoke("updateCatalogSnapshots", JSONObject().put("customers", snapshot().getJSONArray("customers"))
+        .put("products", JSONArray().put(JSONObject().put("id", "qa-product")
+            .put("production_area_id", "qa-area"))), revision())
+    check(!routing.containsKey("qa-product") && snapshotVersion() != beforeRouteRemoval)
+    val beforeWebView = snapshotVersion()
+    invoke("updateRestaurantSnapshotFromWebView", rows(81), null, null, revision())
+    check(snapshotVersion() != beforeWebView)
     publish(rows(8), rows(9), rows(10))
     val beforeStale = snapshot()
     invoke("updateRestaurantSnapshotFromWebView", rows(999), null, rows(999), revision() - 1)
