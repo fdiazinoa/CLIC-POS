@@ -34,6 +34,7 @@ import {
    FISCAL_DOCUMENT_LABELS,
    getFiscalDisplayCode,
    getFiscalDisplayNcf,
+   getFiscalProviderLabel,
    getFiscalRetryActionLabel,
    isElectronicFiscalTransaction,
    isRefundLikeTransaction
@@ -1021,7 +1022,7 @@ const TicketDetailDrawer: React.FC<{
                                  )}
                                  {tx.fiscalProvider && tx.fiscalProvider !== 'NONE' && (
                                     <span className="px-2 py-1 rounded-full bg-white border border-slate-200 text-[10px] font-black text-slate-600">
-                                       {tx.fiscalProvider}
+                                       {getFiscalProviderLabel(tx.fiscalProvider)}
                                     </span>
                                  )}
                               </div>

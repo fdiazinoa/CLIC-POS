@@ -1,4 +1,4 @@
-export type FiscalProviderId = 'POLARIS' | 'DIGIFACT';
+export type FiscalProviderId = 'POLARIS' | 'DIGIFACT' | 'MSELLER';
 export type ElectronicDocumentCode = 'E31' | 'E32' | 'E34' | 'E44' | 'E45';
 export type FiscalCredentialSource = 'env' | 'sqlite' | 'supabase';
 
@@ -109,9 +109,17 @@ export interface FiscalDocumentIssueResult {
     environment: number;
     documentCode: ElectronicDocumentCode;
     providerTransactionId?: string;
+    providerReference?: string;
+    eNCF?: string;
     status?: string;
     message: string;
     pending?: boolean;
+    diagnostics?: {
+        internalTrackId?: string;
+        securityCode?: string;
+        qrUrl?: string;
+        signedDate?: string;
+    };
     raw?: unknown;
 }
 
@@ -120,8 +128,12 @@ export interface FiscalStatusResult {
     providerId: FiscalProviderId;
     environment: number;
     providerTransactionId: string;
+    providerReference?: string;
+    eNCF?: string;
     status?: string;
     message: string;
+    pending?: boolean;
+    diagnostics?: FiscalDocumentIssueResult['diagnostics'];
     raw?: unknown;
 }
 
