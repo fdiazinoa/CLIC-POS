@@ -28,6 +28,8 @@ import { DEFAULT_DOCUMENT_SERIES, DEFAULT_TERMINAL_CONFIG, INITIAL_TARIFFS, INIT
 import {
   DEFAULT_FISCAL_COMPLIANCE_CONFIG,
   normalizeFiscalMode,
+  normalizeFiscalProviderDeliveryMode,
+  normalizeFiscalProviderId,
 } from './fiscal/fiscalHelpers';
 import {
   canonicalizeDocumentSeries,
@@ -188,6 +190,52 @@ const normalizeStartScreen = (value: string): 'VENTA_DIRECTA' | 'MAPA_MESAS' | u
 };
 
 const cloneDeep = <T>(value: T): T => JSON.parse(JSON.stringify(value));
+
+const isFiscalSecretKey = (key: string): boolean => {
+  const normalizedKey = key.replace(/[^A-Za-z0-9]/g, '').toLowerCase();
+  if (normalizedKey === 'credentialkey') return false;
+  return normalizedKey.includes('token')
+    || normalizedKey.includes('password')
+    || normalizedKey === 'pass'
+    || normalizedKey === 'apikey'
+    || normalizedKey.includes('secret')
+    || normalizedKey === 'authorization'
+    || normalizedKey === 'credentials'
+    || normalizedKey === 'credential'
+    || normalizedKey === 'username'
+    || normalizedKey === 'user'
+    || normalizedKey === 'email';
+};
+
+const stripFiscalSecrets = (value: unknown): any => {
+  if (Array.isArray(value)) return value.map((entry) => stripFiscalSecrets(entry));
+  const source = asObject(value);
+  if (Object.keys(source).length === 0) return value;
+  return Object.entries(source).reduce<Record<string, any>>((safe, [key, entry]) => {
+    if (isFiscalSecretKey(key)) return safe;
+    safe[key] = entry && typeof entry === 'object' ? stripFiscalSecrets(entry) : entry;
+    return safe;
+  }, {});
+};
+
+export const sanitizeFiscalConfigSecrets = <T>(value: T): T =>
+  stripFiscalSecrets(value) as T;
+
+export const sanitizeTerminalSnapshotFiscalSecrets = (snapshot: TerminalConfigSnapshot | null): TerminalConfigSnapshot | null => {
+  if (!snapshot) return null;
+  const visit = (value: unknown): any => {
+    if (Array.isArray(value)) return value.map((entry) => visit(entry));
+    const source = asObject(value);
+    if (Object.keys(source).length === 0) return value;
+    return Object.entries(source).reduce<Record<string, any>>((safe, [key, entry]) => {
+      const normalizedKey = key.replace(/[^A-Za-z0-9]/g, '').toLowerCase();
+      const isFiscalBlock = normalizedKey === 'fiscal' || normalizedKey === 'terminalfiscalconfig';
+      safe[key] = isFiscalBlock ? stripFiscalSecrets(entry) : visit(entry);
+      return safe;
+    }, {});
+  };
+  return visit(cloneDeep(snapshot)) as TerminalConfigSnapshot;
+};
 
 /**
  * ERP (Settings → Terminal) guarda jornada/Z en `terminal.config.session`:
@@ -2224,6 +2272,42 @@ export const applyTerminalConfigSnapshot = (
     ]
   );
   const isNoFiscalMode = fiscalModeFromSnapshot === 'NONE';
+  const hasResolvedFiscalProvider = [
+    'providerId',
+    'provider_id',
+    'provider',
+  ].some((key) => Object.prototype.hasOwnProperty.call(resolvedTerminalFiscalConfig, key));
+  const resolvedFiscalProviderId = hasResolvedFiscalProvider
+    ? normalizeFiscalProviderId(
+      resolvedTerminalFiscalConfig.providerId
+      ?? resolvedTerminalFiscalConfig.provider_id
+      ?? resolvedTerminalFiscalConfig.provider
+    )
+    : undefined;
+  const resolvedFiscalEnvironmentValue = Number(
+    resolvedTerminalFiscalConfig.environment
+    ?? resolvedTerminalFiscalConfig.ambiente
+    ?? 0
+  );
+  const resolvedFiscalEnvironment = (
+    resolvedFiscalEnvironmentValue === 0
+    || resolvedFiscalEnvironmentValue === 1
+    || resolvedFiscalEnvironmentValue === 2
+    || (resolvedFiscalProviderId !== 'MSELLER' && resolvedFiscalEnvironmentValue === 3)
+  ) ? resolvedFiscalEnvironmentValue : 0;
+  const resolvedFiscalDeliveryMode = resolvedFiscalProviderId === 'MSELLER'
+    ? 'DELEGATED_ERP'
+    : normalizeFiscalProviderDeliveryMode(
+      resolvedTerminalFiscalConfig.deliveryMode
+      ?? resolvedTerminalFiscalConfig.delivery_mode
+    );
+  const resolvedFiscalCredentialKeyRaw = asString(
+    resolvedTerminalFiscalConfig.credentialKey
+    ?? resolvedTerminalFiscalConfig.credential_key
+  );
+  const resolvedFiscalCredentialKey = resolvedFiscalProviderId === 'MSELLER'
+    ? resolvedFiscalCredentialKeyRaw || undefined
+    : resolvedFiscalCredentialKeyRaw.replace(/[^A-Za-z0-9]/g, '').toUpperCase() || undefined;
   const fiscalRanges = (isNoFiscalMode ? [] : rawFiscalRangeRows)
     .map((item, index) => normalizeFiscalRange(item, index))
     .filter(Boolean) as FiscalRangeDGII[];
@@ -2535,19 +2619,26 @@ export const applyTerminalConfigSnapshot = (
         deviceRoleDefaults.defaultRoute,
     },
     fiscal: {
-      ...terminalTemplate.fiscal,
+      ...(stripFiscalSecrets(terminalTemplate.fiscal) as TerminalConfig['fiscal']),
       enabled:
         isNoFiscalMode
           ? false
           : fiscalModeFromSnapshot === 'LEGACY_B'
             ? true
-            : terminalTemplate.fiscal.enabled,
+            : resolvedFiscalProviderId && resolvedFiscalProviderId !== 'NONE'
+              ? true
+              : terminalTemplate.fiscal.enabled,
       providerId:
         isNoFiscalMode
           ? 'NONE'
           : fiscalModeFromSnapshot === 'LEGACY_B'
             ? undefined
-            : terminalTemplate.fiscal.providerId,
+            : resolvedFiscalProviderId || terminalTemplate.fiscal.providerId,
+      ...(resolvedFiscalProviderId && resolvedFiscalProviderId !== 'NONE' ? {
+        environment: resolvedFiscalEnvironment,
+        deliveryMode: resolvedFiscalDeliveryMode,
+        credentialKey: resolvedFiscalCredentialKey,
+      } : {}),
       ...(fiscalModeFromSnapshot ? {
         mode: fiscalModeFromSnapshot,
         fiscalMode: fiscalModeFromSnapshot,
@@ -2676,7 +2767,7 @@ export const applyTerminalConfigSnapshot = (
         ) ||
         terminalTemplate.erpBinding?.role,
     },
-    erpSnapshot: effectiveSnapshot || undefined,
+    erpSnapshot: sanitizeTerminalSnapshotFiscalSecrets(effectiveSnapshot) || undefined,
     metadata: {
       ...(terminalTemplate.metadata || {}),
       ...fallbackMetadata,

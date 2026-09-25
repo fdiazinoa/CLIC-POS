@@ -2,6 +2,7 @@ import { Capacitor, CapacitorHttp } from '@capacitor/core';
 import { CompanyInfo, FiscalProviderDeliveryMode, FiscalProviderId, Transaction } from '../../types';
 import { buildMasterUrlFromHost, resolveMasterEndpointFromCloud } from '../../utils/cloudMasterRegistry';
 import { db } from '../../utils/db';
+import { isDelegatedFiscalProvider } from '../../utils/fiscal/fiscalHelpers';
 
 export interface FiscalCredentialMetaResponse {
     providerId: FiscalProviderId;
@@ -29,9 +30,19 @@ export interface FiscalIssueResponse {
     environment: number;
     documentCode: 'E31' | 'E32' | 'E34';
     providerTransactionId?: string;
+    providerReference?: string;
+    eNCF?: string;
     status?: string;
     message: string;
     pending?: boolean;
+    diagnostics?: {
+        internalTrackId?: string;
+        securityCode?: string;
+        qrUrl?: string;
+        signedDate?: string;
+    };
+    qrUrl?: string;
+    securityCode?: string;
     raw?: unknown;
 }
 
@@ -40,9 +51,14 @@ export interface FiscalStatusResponse {
     providerId: FiscalProviderId;
     environment: number;
     providerTransactionId: string;
+    providerReference?: string;
+    eNCF?: string;
     status?: string;
     message: string;
     pending?: boolean;
+    diagnostics?: FiscalIssueResponse['diagnostics'];
+    qrUrl?: string;
+    securityCode?: string;
     raw?: unknown;
 }
 
@@ -345,7 +361,10 @@ const buildFiscalEndpointCandidates = async (
     ]);
 };
 
-const buildDelegatedFiscalEndpointCandidates = async (path: string): Promise<string[]> => {
+const buildDelegatedFiscalEndpointCandidates = async (
+    path: string,
+    options?: { erpOnly?: boolean }
+): Promise<string[]> => {
     const normalizedPath = path.startsWith('/') ? path : `/${path}`;
     const fiscalPath = `/api/fiscal${normalizedPath}`;
     const env = (import.meta as any)?.env || {};
@@ -356,8 +375,13 @@ const buildDelegatedFiscalEndpointCandidates = async (path: string): Promise<str
         || normalizeBaseUrl(env.VITE_ERP_SYNC_API_URL)
         || normalizeBaseUrl(env.VITE_SYNC_API_URL);
     const pinnedFiscalBase = normalizeBaseUrl(localStorage.getItem(FISCAL_BACKEND_BASE_KEY));
-    const endpoints = uniqueStrings([
+    const erpEndpoints = uniqueStrings([
         persistedErpBase ? `${persistedErpBase}${fiscalPath}` : null,
+    ]);
+    if (options?.erpOnly) return erpEndpoints;
+
+    const endpoints = uniqueStrings([
+        ...erpEndpoints,
         pinnedFiscalBase ? `${pinnedFiscalBase}${fiscalPath}` : null,
     ]);
 
@@ -418,6 +442,79 @@ const extractFiscalMessage = (payload: any): string => {
     }
 
     return '';
+};
+
+const PENDING_FISCAL_STATUS_PATTERN = /(?:^|\b)(?:pending|processing|queued|received|sent|pendiente|procesando|cola|recibido|enviado|en espera)(?:\b|$)/i;
+const FAILED_FISCAL_STATUS_PATTERN = /rechazad|rejected|error|fallid|failed|inv[aá]lid|denegad|denied|cancelad|anulad/i;
+const PENDING_FISCAL_MESSAGE_PATTERN = /en espera|procesando|pendiente/i;
+
+export const normalizeFiscalProviderResponse = <T extends FiscalIssueResponse | FiscalStatusResponse>(
+    payload: T
+): T => {
+    const raw = payload?.raw && typeof payload.raw === 'object' ? payload.raw as Record<string, any> : {};
+    const diagnostics = payload?.diagnostics && typeof payload.diagnostics === 'object'
+        ? payload.diagnostics
+        : {};
+    const eNCF = cleanString(
+        payload?.eNCF
+        || raw.eNCF
+        || raw.ecf
+        || raw.electronicNcf
+        || raw.ncf
+    );
+    const providerReference = cleanString(
+        payload?.providerReference
+        || raw.providerReference
+        || raw.internalTrackId
+        || diagnostics.internalTrackId
+    );
+    const providerTransactionId = cleanString(
+        payload?.providerTransactionId
+        || providerReference
+        || eNCF
+    );
+    const status = cleanString(payload?.status || raw.status);
+    const message = cleanString(payload?.message || extractFiscalMessage(raw));
+    const explicitlyPending = payload?.pending === true || raw.pending === true;
+    const failedStatus = FAILED_FISCAL_STATUS_PATTERN.test(status);
+    const pending = Boolean(
+        explicitlyPending
+        || (!failedStatus && (
+            PENDING_FISCAL_STATUS_PATTERN.test(status)
+            || (!/\bno\b/i.test(message) && PENDING_FISCAL_MESSAGE_PATTERN.test(message))
+        ))
+    );
+    const success = pending
+        ? payload.success
+        : failedStatus
+            ? false
+            : payload.success;
+    const qrUrl = cleanString(payload?.qrUrl || diagnostics.qrUrl || raw.qrUrl || raw.qr_url);
+    const securityCode = cleanString(
+        payload?.securityCode
+        || diagnostics.securityCode
+        || raw.securityCode
+        || raw.security_code
+        || raw.codigoSeguridad
+    );
+
+    return {
+        ...payload,
+        ...(providerTransactionId ? { providerTransactionId } : {}),
+        ...(providerReference ? { providerReference } : {}),
+        ...(eNCF ? { eNCF } : {}),
+        ...(status ? { status } : {}),
+        ...(message ? { message } : {}),
+        success,
+        pending,
+        ...(qrUrl ? { qrUrl } : {}),
+        ...(securityCode ? { securityCode } : {}),
+        diagnostics: {
+            ...diagnostics,
+            ...(qrUrl ? { qrUrl } : {}),
+            ...(securityCode ? { securityCode } : {}),
+        },
+    } as T;
 };
 
 const joinProviderMessages = (values: unknown[]): string => {
@@ -1107,10 +1204,10 @@ const requestFiscalJson = async <T extends Record<string, any>>(
     path: string,
     init: RequestInit,
     invalidPayloadFactory: (status: number) => T,
-    options?: { delegatedToErp?: boolean; localOnly?: boolean }
+    options?: { delegatedToErp?: boolean; localOnly?: boolean; erpOnly?: boolean }
 ): Promise<{ response: FiscalHttpResponse; payload: T }> => {
     const endpoints = options?.delegatedToErp
-        ? await buildDelegatedFiscalEndpointCandidates(path)
+        ? await buildDelegatedFiscalEndpointCandidates(path, { erpOnly: options.erpOnly })
         : await buildFiscalEndpointCandidates(path, { localOnly: options?.localOnly });
     let lastInvalid: { response: FiscalHttpResponse; payload: T } | null = null;
     let lastError: Error | null = null;
@@ -1171,22 +1268,25 @@ const requestFiscalJson = async <T extends Record<string, any>>(
     throw lastError || new Error('No se pudo contactar el backend fiscal.');
 };
 
-export const issueFiscalDocument = async (
+const fiscalIssueInFlight = new Map<string, Promise<FiscalIssueResponse>>();
+
+const issueFiscalDocumentOnce = async (
     input: IssueFiscalDocumentInput
 ): Promise<FiscalIssueResponse> => {
     if (!input.transaction.ncfType || !String(input.transaction.ncfType).startsWith('E')) {
         throw new Error('Solo se pueden emitir documentos electrónicos con esta ruta.');
     }
 
-    const localCredential = await resolveLocalFiscalCredential(
-        input.providerId,
-        input.companyInfo,
-        input.credentialKey
-    );
+    const isMSeller = input.providerId === 'MSELLER';
+    const localCredential = isMSeller
+        ? null
+        : await resolveLocalFiscalCredential(
+            input.providerId,
+            input.companyInfo,
+            input.credentialKey
+        );
     const isLocalDirectDigiFact = input.providerId === 'DIGIFACT' && Boolean(localCredential?.record.authToken);
-    const isDelegatedProvider =
-        input.providerId === 'DIGIFACT'
-        && input.deliveryMode === 'DELEGATED_ERP'
+    const isDelegatedProvider = isDelegatedFiscalProvider(input.providerId, input.deliveryMode)
         && !localCredential?.record.authToken;
 
     if (isLocalDirectDigiFact && isNativeAndroidRuntime() && localCredential?.record.authToken) {
@@ -1204,7 +1304,9 @@ export const issueFiscalDocument = async (
                 providerId: input.providerId,
                 environment: input.environment,
                 documentCode: input.transaction.ncfType,
-                authToken: localCredential?.record.authToken,
+                ...(!isMSeller && localCredential?.record.authToken
+                    ? { authToken: localCredential.record.authToken }
+                    : {}),
                 companyInfo: input.companyInfo,
                 transaction: input.transaction,
                 options: {
@@ -1215,11 +1317,13 @@ export const issueFiscalDocument = async (
                     modificationCode: input.modificationCode,
                     unitCodeGoods: input.unitCodeGoods,
                     unitCodeServices: input.unitCodeServices,
-                    deliveryMode: input.deliveryMode,
-                    apiBaseUrl: input.apiBaseUrl,
-                    testUrl: input.testUrl,
-                    issueUrl: input.issueUrl,
-                    statusUrl: input.statusUrl,
+                    deliveryMode: isMSeller ? 'DELEGATED_ERP' : input.deliveryMode,
+                    ...(!isMSeller ? {
+                        apiBaseUrl: input.apiBaseUrl,
+                        testUrl: input.testUrl,
+                        issueUrl: input.issueUrl,
+                        statusUrl: input.statusUrl,
+                    } : {}),
                     establishmentCode: input.establishmentCode,
                     branchCode: input.branchCode,
                     branchName: input.branchName,
@@ -1234,14 +1338,30 @@ export const issueFiscalDocument = async (
             documentCode: input.transaction.ncfType as FiscalIssueResponse['documentCode'],
             message: ''
         }),
-        { delegatedToErp: isDelegatedProvider, localOnly: isLocalDirectDigiFact }
+        { delegatedToErp: isDelegatedProvider, localOnly: isLocalDirectDigiFact, erpOnly: isMSeller }
     );
 
     if (!response.ok && payload?.success !== false) {
         throw new Error(payload?.message || `Error fiscal HTTP ${response.status}`);
     }
 
-    return payload as FiscalIssueResponse;
+    return normalizeFiscalProviderResponse(payload as FiscalIssueResponse);
+};
+
+export const issueFiscalDocument = (
+    input: IssueFiscalDocumentInput
+): Promise<FiscalIssueResponse> => {
+    const idempotencyKey = `${input.providerId}:${input.transaction.id}`;
+    const existing = fiscalIssueInFlight.get(idempotencyKey);
+    if (existing) return existing;
+
+    const request = issueFiscalDocumentOnce(input).finally(() => {
+        if (fiscalIssueInFlight.get(idempotencyKey) === request) {
+            fiscalIssueInFlight.delete(idempotencyKey);
+        }
+    });
+    fiscalIssueInFlight.set(idempotencyKey, request);
+    return request;
 };
 
 export const getFiscalDocumentStatus = async (
@@ -1252,11 +1372,12 @@ export const getFiscalDocumentStatus = async (
     credentialKey?: string,
     deliveryMode?: FiscalProviderDeliveryMode
 ): Promise<FiscalStatusResponse> => {
-    const localCredential = await resolveLocalFiscalCredential(providerId, companyInfo, credentialKey);
+    const isMSeller = providerId === 'MSELLER';
+    const localCredential = isMSeller
+        ? null
+        : await resolveLocalFiscalCredential(providerId, companyInfo, credentialKey);
     const isLocalDirectDigiFact = providerId === 'DIGIFACT' && Boolean(localCredential?.record.authToken);
-    const isDelegatedProvider =
-        providerId === 'DIGIFACT'
-        && deliveryMode === 'DELEGATED_ERP'
+    const isDelegatedProvider = isDelegatedFiscalProvider(providerId, deliveryMode)
         && !localCredential?.record.authToken;
     const params = new URLSearchParams({
         providerId,
@@ -1292,17 +1413,14 @@ export const getFiscalDocumentStatus = async (
             providerTransactionId,
             message: ''
         }),
-        { delegatedToErp: isDelegatedProvider, localOnly: isLocalDirectDigiFact }
+        { delegatedToErp: isDelegatedProvider, localOnly: isLocalDirectDigiFact, erpOnly: isMSeller }
     );
 
     if (!response.ok && payload?.success !== false) {
         throw new Error(payload?.message || `Error fiscal HTTP ${response.status}`);
     }
 
-    return {
-        ...(payload as FiscalStatusResponse),
-        pending: /en espera|procesando|pendiente/i.test(String((payload as any)?.status || '')) || /en espera|procesando|pendiente/i.test(String((payload as any)?.message || ''))
-    };
+    return normalizeFiscalProviderResponse(payload as FiscalStatusResponse);
 };
 
 export const testFiscalProviderConnection = async (
@@ -1317,7 +1435,10 @@ export const testFiscalProviderConnection = async (
         statusUrl?: string;
     }
 ) => {
-    const localCredential = await resolveLocalFiscalCredential(providerId, companyInfo, credentialKey);
+    const isMSeller = providerId === 'MSELLER';
+    const localCredential = isMSeller
+        ? null
+        : await resolveLocalFiscalCredential(providerId, companyInfo, credentialKey);
     if (providerId === 'DIGIFACT' && isNativeAndroidRuntime() && localCredential?.record.authToken) {
         const auth = await resolveDirectDigifactAuth(
             {
@@ -1399,21 +1520,26 @@ export const testFiscalProviderConnection = async (
                 body: JSON.stringify({
                     providerId,
                     environment,
-                    authToken: localCredential?.record.authToken,
+                    ...(!isMSeller && localCredential?.record.authToken
+                        ? { authToken: localCredential.record.authToken }
+                        : {}),
                     companyInfo,
                     options: {
                         credentialKey,
-                        apiBaseUrl: endpointOptions?.apiBaseUrl,
-                        testUrl: endpointOptions?.testUrl,
-                        issueUrl: endpointOptions?.issueUrl,
-                        statusUrl: endpointOptions?.statusUrl
+                        ...(!isMSeller ? {
+                            apiBaseUrl: endpointOptions?.apiBaseUrl,
+                            testUrl: endpointOptions?.testUrl,
+                            issueUrl: endpointOptions?.issueUrl,
+                            statusUrl: endpointOptions?.statusUrl
+                        } : {})
                     }
                 })
             },
             (status) => buildInvalidFiscalPayload(status, {
                 success: false,
                 message: ''
-            })
+            }),
+            { delegatedToErp: isMSeller, erpOnly: isMSeller }
         );
 
         const backendLooksUnavailable = !response.ok || /backend fiscal/i.test(String(payload?.message || ''));
@@ -1439,6 +1565,18 @@ export const getFiscalCredentialMetadata = async (
     companyInfo?: CompanyInfo,
     credentialKey?: string
 ): Promise<FiscalCredentialMetaResponse> => {
+    if (providerId === 'MSELLER') {
+        return {
+            providerId,
+            hasCredential: false,
+            resolvedCredentialKey: deriveCredentialKey(companyInfo, credentialKey),
+            availableSources: [],
+            hasLocalCredential: false,
+            hasSupabaseCredential: false,
+            hasEnvCredential: false,
+            supportsSupabaseWrite: false,
+        };
+    }
     const localMeta = await buildLocalCredentialMeta(providerId, companyInfo, credentialKey);
     if (localMeta?.hasCredential) {
         return localMeta;
@@ -1479,6 +1617,9 @@ export const saveLocalFiscalCredential = async (
     credentialKey?: string,
     label?: string
 ): Promise<FiscalCredentialMutationResponse> => {
+    if (providerId === 'MSELLER') {
+        throw new Error('MSeller e-CF administra sus credenciales exclusivamente en el ERP.');
+    }
     const normalizedToken = String(authToken || '').trim();
     if (!normalizedToken) {
         throw new Error('Ingresa un Authentication Token válido.');
@@ -1522,6 +1663,9 @@ export const saveSupabaseFiscalCredential = async (
     companyInfo?: CompanyInfo,
     credentialKey?: string
 ): Promise<FiscalCredentialMutationResponse> => {
+    if (providerId === 'MSELLER') {
+        throw new Error('MSeller e-CF administra sus credenciales exclusivamente en el ERP.');
+    }
     const { response, payload } = await requestFiscalJson<FiscalCredentialMutationResponse>(
         '/credentials/supabase',
         {
@@ -1556,6 +1700,9 @@ export const deleteLocalFiscalCredential = async (
     companyInfo?: CompanyInfo,
     credentialKey?: string
 ): Promise<FiscalCredentialMutationResponse> => {
+    if (providerId === 'MSELLER') {
+        throw new Error('MSeller e-CF no guarda credenciales locales en el POS.');
+    }
     const resolvedCredentialKey = deriveCredentialKey(companyInfo, credentialKey);
     await db.deleteDocument(LOCAL_FISCAL_CREDENTIAL_COLLECTION as any, buildLocalCredentialRecordId(providerId, resolvedCredentialKey));
     await db.deleteDocument(LOCAL_FISCAL_CREDENTIAL_COLLECTION as any, buildLocalCredentialRecordId(providerId));
@@ -1579,6 +1726,9 @@ export const deleteSupabaseFiscalCredential = async (
     companyInfo?: CompanyInfo,
     credentialKey?: string
 ): Promise<FiscalCredentialMutationResponse> => {
+    if (providerId === 'MSELLER') {
+        throw new Error('MSeller e-CF administra sus credenciales exclusivamente en el ERP.');
+    }
     const { response, payload } = await requestFiscalJson<FiscalCredentialMutationResponse>(
         '/credentials/supabase',
         {

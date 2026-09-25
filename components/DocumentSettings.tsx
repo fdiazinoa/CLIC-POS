@@ -24,8 +24,11 @@ import {
 } from '../services/fiscal/fiscalService';
 import {
    FISCAL_DOCUMENT_LABELS,
+   getEffectiveFiscalComplianceConfig,
    getFiscalReserveAlert,
    getFiscalComplianceConfig,
+   getFiscalProviderLabel,
+   isDelegatedFiscalProvider,
    SUPPORTED_FISCAL_CODES
 } from '../utils/fiscal/fiscalHelpers';
 import { isFiscalDocumentSeries, resolveDocumentSeriesDisplayPrefix } from '../utils/documentSeriesIdentity';
@@ -606,18 +609,27 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
 
    const [isAddingRange, setIsAddingRange] = useState(false);
    const [newRange, setNewRange] = useState<Partial<FiscalRangeDGII>>({ type: 'B01', prefix: 'B01', startNumber: 1, endNumber: 1000, expiryDate: '2026-12-31' });
-   const fiscalCompliance = useMemo(() => getFiscalComplianceConfig(businessConfig), [businessConfig]);
+   const activeFiscalTerminalConfig = useMemo(() => {
+      const requestedTerminalId = String(terminalId || activeTerminalId || '').trim();
+      if (!requestedTerminalId) return undefined;
+      return businessConfig?.terminals?.find((terminal) => terminal.id === requestedTerminalId)?.config;
+   }, [activeTerminalId, businessConfig?.terminals, terminalId]);
+   const fiscalCompliance = useMemo(
+      () => getEffectiveFiscalComplianceConfig(businessConfig, activeFiscalTerminalConfig),
+      [activeFiscalTerminalConfig, businessConfig]
+   );
    const selectedFiscalProviderConfig = useMemo(
       () => fiscalCompliance.providers.find(provider => provider.id === fiscalCompliance.defaultProvider),
       [fiscalCompliance]
    );
-   const isDelegatedDigiFactProvider =
-      fiscalCompliance.defaultProvider === 'DIGIFACT'
-      && selectedFiscalProviderConfig?.deliveryMode === 'DELEGATED_ERP';
+   const isDelegatedProvider = isDelegatedFiscalProvider(
+      fiscalCompliance.defaultProvider,
+      selectedFiscalProviderConfig?.deliveryMode
+   );
 
    const refreshCredentialMeta = async () => {
       const requestId = ++credentialMetaRequestSeq.current;
-      if (!businessConfig || fiscalCompliance.defaultProvider === 'NONE') {
+      if (!businessConfig || fiscalCompliance.defaultProvider === 'NONE' || isDelegatedProvider) {
          if (requestId === credentialMetaRequestSeq.current) {
             setCredentialMeta(null);
             setCredentialLabel('');
@@ -1051,10 +1063,11 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
          return;
       }
 
-      if (isDelegatedDigiFactProvider) {
+      if (isDelegatedProvider) {
+         const providerLabel = getFiscalProviderLabel(fiscalCompliance.defaultProvider);
          setFiscalFeedback({
             kind: 'success',
-            message: 'DigiFact se valida desde ERP > Integraciones e-CF. El POS solo delega la emisión al backend ERP y no guarda token local.'
+            message: `${providerLabel} se valida desde ERP > Integraciones e-CF. El POS solo delega la emisión al backend ERP y no guarda credenciales locales.`
          });
          return;
       }
@@ -1092,8 +1105,8 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
       const requestContext = getCredentialRequestContext();
       if (!requestContext) return;
 
-      if (requestContext.providerId === 'DIGIFACT' && isDelegatedDigiFactProvider) {
-         setFiscalFeedback({ kind: 'error', message: 'DigiFact no guarda token en el POS. Administra la credencial segura desde ERP > Integraciones e-CF.' });
+      if (isDelegatedProvider) {
+         setFiscalFeedback({ kind: 'error', message: `${getFiscalProviderLabel(requestContext.providerId)} no guarda credenciales en el POS. Adminístralas desde ERP > Integraciones e-CF.` });
          return;
       }
 
@@ -1134,8 +1147,8 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
       const requestContext = getCredentialRequestContext();
       if (!requestContext) return;
 
-      if (requestContext.providerId === 'DIGIFACT' && isDelegatedDigiFactProvider) {
-         setFiscalFeedback({ kind: 'error', message: 'DigiFact no guarda token desde el POS. Administra la credencial segura desde ERP > Integraciones e-CF.' });
+      if (isDelegatedProvider) {
+         setFiscalFeedback({ kind: 'error', message: `${getFiscalProviderLabel(requestContext.providerId)} no guarda credenciales desde el POS. Adminístralas desde ERP > Integraciones e-CF.` });
          return;
       }
 
@@ -1174,8 +1187,8 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
       const requestContext = getCredentialRequestContext();
       if (!requestContext) return;
 
-      if (requestContext.providerId === 'DIGIFACT' && isDelegatedDigiFactProvider) {
-         setFiscalFeedback({ kind: 'error', message: 'DigiFact no usa credenciales locales en el POS.' });
+      if (isDelegatedProvider) {
+         setFiscalFeedback({ kind: 'error', message: `${getFiscalProviderLabel(requestContext.providerId)} no usa credenciales locales en el POS.` });
          return;
       }
 
@@ -1215,8 +1228,8 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
       const requestContext = getCredentialRequestContext();
       if (!requestContext) return;
 
-      if (requestContext.providerId === 'DIGIFACT' && isDelegatedDigiFactProvider) {
-         setFiscalFeedback({ kind: 'error', message: 'DigiFact no administra credenciales desde el POS.' });
+      if (isDelegatedProvider) {
+         setFiscalFeedback({ kind: 'error', message: `${getFiscalProviderLabel(requestContext.providerId)} no administra credenciales desde el POS.` });
          return;
       }
 
@@ -1443,6 +1456,7 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
                               <label className="block text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] mb-2">Proveedor por Defecto</label>
                               <select
                                  value={fiscalCompliance.defaultProvider}
+                                 disabled={fiscalCompliance.defaultProvider === 'MSELLER' && activeFiscalTerminalConfig?.fiscal?.providerId === 'MSELLER'}
                                  onChange={(e) => updateFiscalCompliance(current => ({ ...current, defaultProvider: e.target.value as any }))}
                                  className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-slate-800"
                               >
@@ -1458,6 +1472,7 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
                               <label className="block text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] mb-2">Ambiente del Proveedor</label>
                               <select
                                  value={fiscalCompliance.providers.find(provider => provider.id === fiscalCompliance.defaultProvider)?.environment ?? 0}
+                                 disabled={fiscalCompliance.defaultProvider === 'MSELLER' && activeFiscalTerminalConfig?.fiscal?.providerId === 'MSELLER'}
                                  onChange={(e) => updateFiscalCompliance(current => ({
                                     ...current,
                                     providers: current.providers.map(provider =>
@@ -1468,10 +1483,20 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
                                  }))}
                                  className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-slate-800"
                               >
-                                 <option value={0}>Ambiente 0</option>
-                                 <option value={1}>Ambiente 1</option>
-                                 <option value={2}>Ambiente 2</option>
-                                 <option value={3}>Ambiente 3</option>
+                                 {fiscalCompliance.defaultProvider === 'MSELLER' ? (
+                                    <>
+                                       <option value={0}>TesteCF (0)</option>
+                                       <option value={1}>CerteCF (1)</option>
+                                       <option value={2}>eCF / Producción (2)</option>
+                                    </>
+                                 ) : (
+                                    <>
+                                       <option value={0}>Ambiente 0</option>
+                                       <option value={1}>Ambiente 1</option>
+                                       <option value={2}>Ambiente 2</option>
+                                       <option value={3}>Ambiente 3</option>
+                                    </>
+                                 )}
                               </select>
                            </div>
 
@@ -1567,6 +1592,7 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
                                  <input
                                     type="text"
                                     value={selectedFiscalProviderConfig.credentialKey || ''}
+                                    readOnly={fiscalCompliance.defaultProvider === 'MSELLER'}
                                     onChange={(e) => updateSelectedProvider({ credentialKey: e.target.value.toUpperCase() })}
                                     className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-slate-800"
                                     placeholder="Opcional. Si se deja vacío, se usará el RNC de la empresa."
@@ -1647,13 +1673,13 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
                                     Estos defaults técnicos se envían con la venta al proveedor fiscal activo. Más adelante podremos sobrescribirlos por producto si un cliente necesita un catálogo fiscal más fino.
                                  </p>
                               </div>
-                              {isDelegatedDigiFactProvider ? (
+                              {isDelegatedProvider ? (
                                  <div className="md:col-span-4 mt-2 p-5 rounded-[1.75rem] border border-emerald-200 bg-emerald-50 shadow-sm space-y-3">
                                     <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
                                        <div>
                                           <p className="text-[11px] font-black text-emerald-700 uppercase tracking-[0.2em] mb-2">Credencial administrada por ERP</p>
                                           <p className="text-sm font-bold text-emerald-900">
-                                             DigiFact se configura en ERP &gt; Integraciones e-CF. El POS no guarda token ni contraseña; solo usa la referencia de credencial y delega la emisión al backend ERP.
+                                             {getFiscalProviderLabel(fiscalCompliance.defaultProvider)} se configura en ERP &gt; Integraciones e-CF. El POS no guarda token ni contraseña; solo usa la referencia de credencial y delega la emisión al backend ERP.
                                           </p>
                                        </div>
                                        <div className="px-3 py-2 rounded-2xl bg-white border border-emerald-200 text-emerald-700 text-xs font-black">

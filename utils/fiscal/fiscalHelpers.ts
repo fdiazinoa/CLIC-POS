@@ -44,6 +44,17 @@ export const DEFAULT_FISCAL_PROVIDERS: FiscalProviderConfig[] = [
     modificationCode: 2,
     unitCodeGoods: 47,
     unitCodeServices: 43
+  },
+  {
+    id: 'MSELLER',
+    enabled: true,
+    environment: 0,
+    displayName: 'MSeller e-CF',
+    deliveryMode: 'DELEGATED_ERP',
+    tipoIngreso: 1,
+    modificationCode: 2,
+    unitCodeGoods: 47,
+    unitCodeServices: 43
   }
 ];
 
@@ -76,7 +87,7 @@ export const normalizeFiscalCredentialKey = (value: unknown): string =>
 
 export const normalizeFiscalProviderId = (value: unknown): FiscalProviderId => {
   const normalized = typeof value === 'string' ? value.trim().toUpperCase() : '';
-  if (normalized === 'POLARIS' || normalized === 'DIGIFACT' || normalized === 'NONE') {
+  if (normalized === 'POLARIS' || normalized === 'DIGIFACT' || normalized === 'MSELLER' || normalized === 'NONE') {
     return normalized;
   }
   return 'NONE';
@@ -106,8 +117,12 @@ export const normalizeFiscalMode = (value: unknown): FiscalMode => {
 export const isFiscalComplianceDisabled = (mode?: FiscalMode | null): boolean =>
   mode === 'NONE';
 
-const normalizeFiscalEnvironment = (value: unknown): FiscalProviderEnvironment => {
+const normalizeFiscalEnvironment = (
+  value: unknown,
+  providerId?: FiscalProviderId
+): FiscalProviderEnvironment => {
   const parsed = Number(value);
+  if (providerId === 'MSELLER') return parsed === 0 || parsed === 1 || parsed === 2 ? parsed : 0;
   return parsed === 0 || parsed === 1 || parsed === 2 || parsed === 3 ? parsed : 0;
 };
 
@@ -227,6 +242,18 @@ export const normalizeFiscalProviderDeliveryMode = (value: unknown): FiscalProvi
   return undefined;
 };
 
+export const isDelegatedFiscalProvider = (
+  providerId?: FiscalProviderId | null,
+  deliveryMode?: FiscalProviderDeliveryMode | null
+): boolean => providerId === 'MSELLER' || deliveryMode === 'DELEGATED_ERP';
+
+export const getFiscalProviderLabel = (providerId?: FiscalProviderId | null): string => {
+  if (providerId === 'MSELLER') return 'MSeller e-CF';
+  if (providerId === 'DIGIFACT') return 'DigiFact';
+  if (providerId === 'POLARIS') return 'Polaris';
+  return 'proveedor fiscal';
+};
+
 const getTerminalFiscalProviderConfig = (
   terminalConfig?: TerminalConfig | null
 ): FiscalProviderConfig | null => {
@@ -259,8 +286,8 @@ const getTerminalFiscalProviderConfig = (
   return {
     id: providerId,
     enabled: enabled ?? true,
-    environment: normalizeFiscalEnvironment(fiscal.environment),
-    deliveryMode: normalizeFiscalProviderDeliveryMode(
+    environment: normalizeFiscalEnvironment(fiscal.environment, providerId),
+    deliveryMode: providerId === 'MSELLER' ? 'DELEGATED_ERP' : normalizeFiscalProviderDeliveryMode(
       fiscal.deliveryMode
       ?? fiscal.delivery_mode
       ?? fiscal.fiscalDeliveryMode
@@ -272,7 +299,9 @@ const getTerminalFiscalProviderConfig = (
     testUrl: normalizeOptionalString(fiscal.testUrl ?? fiscal.test_url),
     issueUrl: normalizeOptionalString(fiscal.issueUrl ?? fiscal.issue_url),
     statusUrl: normalizeOptionalString(fiscal.statusUrl ?? fiscal.status_url),
-    credentialKey: normalizeFiscalCredentialKey(fiscal.credentialKey ?? fiscal.credential_key) || undefined,
+    credentialKey: providerId === 'MSELLER'
+      ? normalizeOptionalString(fiscal.credentialKey ?? fiscal.credential_key)
+      : normalizeFiscalCredentialKey(fiscal.credentialKey ?? fiscal.credential_key) || undefined,
     establishmentCode: normalizeFiscalEstablishmentCode(
       fiscal.establishmentCode
       ?? fiscal.establishment_code
@@ -482,9 +511,64 @@ export const canRetryFiscalTransaction = (tx?: Partial<Transaction> | null): boo
 
 export const getFiscalRetryActionLabel = (tx?: Partial<Transaction> | null): string => {
   if (!canRetryFiscalTransaction(tx)) return '';
-  return tx?.fiscalReferenceId && tx.fiscalSyncStatus === 'PENDING'
+  return tx?.fiscalReferenceId || tx?.fiscalCertifiedNcf
     ? 'Consultar estado'
     : 'Reintentar envío';
+};
+
+export const getExistingFiscalProviderReference = (
+  tx?: Partial<Transaction> | null
+): string | undefined => {
+  const reference = String(tx?.fiscalReferenceId || tx?.fiscalCertifiedNcf || '').trim();
+  return reference || undefined;
+};
+
+type FiscalProviderResultData = {
+  providerTransactionId?: string;
+  providerReference?: string;
+  eNCF?: string;
+  status?: string;
+  message?: string;
+  qrUrl?: string;
+  securityCode?: string;
+  diagnostics?: {
+    qrUrl?: string;
+    securityCode?: string;
+  };
+};
+
+export const applyFiscalProviderResult = (
+  transaction: Transaction,
+  result: FiscalProviderResultData
+): Transaction => {
+  const certifiedNcf = String(result.eNCF || '').trim() || transaction.fiscalCertifiedNcf;
+  const providerReference = String(
+    result.providerTransactionId
+    || result.providerReference
+    || transaction.fiscalReferenceId
+    || certifiedNcf
+    || ''
+  ).trim() || undefined;
+  const qrUrl = String(result.qrUrl || result.diagnostics?.qrUrl || '').trim() || transaction.fiscalQrUrl;
+  const securityCode = String(
+    result.securityCode
+    || result.diagnostics?.securityCode
+    || ''
+  ).trim() || transaction.fiscalSecurityCode;
+
+  return {
+    ...transaction,
+    ...(certifiedNcf ? {
+      ncf: certifiedNcf,
+      electronicNcf: certifiedNcf,
+      fiscalCertifiedNcf: certifiedNcf,
+    } : {}),
+    fiscalReferenceId: providerReference,
+    fiscalProviderStatus: String(result.status || '').trim() || transaction.fiscalProviderStatus,
+    fiscalQrUrl: qrUrl,
+    fiscalSecurityCode: securityCode,
+    fiscalResponseMessage: String(result.message || '').trim() || transaction.fiscalResponseMessage,
+  };
 };
 
 export const mapLegacyFiscalCodeToElectronic = (code: NCFType): FiscalDocumentCode => {
@@ -541,7 +625,14 @@ export const getFiscalComplianceConfig = (
   const defaultProviderIds = new Set(DEFAULT_FISCAL_PROVIDERS.map(provider => provider.id));
   const mergedProviders = DEFAULT_FISCAL_PROVIDERS.map(defaultProvider => {
     const custom = (incoming.providers || []).find(provider => provider.id === defaultProvider.id);
-    return custom ? { ...defaultProvider, ...custom } : defaultProvider;
+    const merged = custom ? { ...defaultProvider, ...custom } : defaultProvider;
+    return merged.id === 'MSELLER'
+      ? {
+        ...merged,
+        environment: normalizeFiscalEnvironment(merged.environment, 'MSELLER'),
+        deliveryMode: 'DELEGATED_ERP' as const
+      }
+      : merged;
   }).concat(
     (incoming.providers || [])
       .filter(provider => provider?.id && !defaultProviderIds.has(provider.id))
@@ -677,7 +768,14 @@ export const getFiscalProviderConfig = (
   const fallback = DEFAULT_FISCAL_PROVIDERS.find(provider => provider.id === providerId)
     || DEFAULT_FISCAL_PROVIDERS[0];
   const match = (config.providers || []).find(provider => provider.id === providerId);
-  return match ? { ...fallback, ...match } : { ...fallback };
+  const resolved = match ? { ...fallback, ...match } : { ...fallback };
+  return providerId === 'MSELLER'
+    ? {
+      ...resolved,
+      environment: normalizeFiscalEnvironment(resolved.environment, 'MSELLER'),
+      deliveryMode: 'DELEGATED_ERP'
+    }
+    : resolved;
 };
 
 export const getFiscalProviderCredentialKey = (

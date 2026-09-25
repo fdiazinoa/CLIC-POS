@@ -20,7 +20,12 @@ import {
     setTerminalBindingDiagnosticStatus,
 } from '../services/sync/SyncErrorDiagnostic';
 import { extractTerminalConfigRequestedScopes } from './terminalConfigPushScopes';
-import { applyTerminalConfigSnapshot, mergeTerminalConfigSnapshots } from './terminalConfigSnapshot';
+import {
+    applyTerminalConfigSnapshot,
+    mergeTerminalConfigSnapshots,
+    sanitizeFiscalConfigSecrets,
+    sanitizeTerminalSnapshotFiscalSecrets,
+} from './terminalConfigSnapshot';
 import { db } from './db';
 import { dbAdapter } from '../services/db';
 import { DEFAULT_TERMINAL_DOCUMENT_ASSIGNMENTS } from '../constants';
@@ -1976,7 +1981,7 @@ const persistPendingTerminalConfigSnapshot = (event: SyncOutboxEvent) => {
         masterScopes: requestedScopes.selective ? (requestedScopes.masterScopes || []) : undefined,
         blockScopes: requestedScopes.selective ? (requestedScopes.blockScopes || []) : undefined,
         resolvedScopes: requestedScopes.selective ? (requestedScopes.resolvedScopes || []) : undefined,
-        snapshot: terminalConfig,
+        snapshot: sanitizeTerminalSnapshotFiscalSecrets(terminalConfig as TerminalConfigSnapshot),
     };
 
     localStorage.setItem(TERMINAL_CONFIG_PENDING_SNAPSHOT_KEY, JSON.stringify(pendingSnapshot));
@@ -2320,10 +2325,10 @@ const applyErpConfigPushToLocalTerminal = async ({
         (localTerminalId ? localConfig.terminalSnapshots?.[localTerminalId] : null) ||
         (resolvedTerminalId ? localConfig.terminalSnapshots?.[resolvedTerminalId] : null) ||
         null;
-    const nextErpSnapshot = mergeTerminalConfigSnapshots(
+    const nextErpSnapshot = sanitizeTerminalSnapshotFiscalSecrets(mergeTerminalConfigSnapshots(
         existingSnapshot,
         snapshot as TerminalConfigSnapshot
-    ) || (snapshot as TerminalConfigSnapshot);
+    ) || (snapshot as TerminalConfigSnapshot)) as TerminalConfigSnapshot;
     const terminalTypeContract = resolveOrderTakerContract({
         ...incomingConfig,
         ...incomingResolved,
@@ -2351,6 +2356,7 @@ const applyErpConfigPushToLocalTerminal = async ({
     ], resolveDeviceRole(incomingDeviceRole.role)));
     const nextTerminalConfig: TerminalConfig = {
         ...currentConfig,
+        fiscal: sanitizeFiscalConfigSecrets(currentConfig.fiscal),
         ...deviceProfileContract,
         terminalType: String(incomingDeviceRole.role || terminalTypeContract.terminalType),
         terminal_type: String(incomingDeviceRole.role || terminalTypeContract.terminalType),
@@ -2409,19 +2415,25 @@ const applyErpConfigPushToLocalTerminal = async ({
     };
 
     const nextTerminals = localConfig.terminals.map((terminal, index) => {
-        if (index !== targetIndex) {
-            return terminal;
-        }
-
+        const resolvedConfig = index === targetIndex ? nextTerminalConfig : terminal.config;
         return {
             ...terminal,
-            id: terminal.id || resolvedTerminalId,
-            config: nextTerminalConfig,
+            ...(index === targetIndex ? { id: terminal.id || resolvedTerminalId } : {}),
+            config: {
+                ...resolvedConfig,
+                fiscal: sanitizeFiscalConfigSecrets(resolvedConfig.fiscal),
+                erpSnapshot: sanitizeTerminalSnapshotFiscalSecrets(resolvedConfig.erpSnapshot || null) || undefined,
+            },
         };
     });
 
     const terminalSnapshots = {
-        ...(localConfig.terminalSnapshots || {}),
+        ...Object.fromEntries(
+            Object.entries(localConfig.terminalSnapshots || {}).map(([key, value]) => [
+                key,
+                sanitizeTerminalSnapshotFiscalSecrets(value || null),
+            ])
+        ),
         ...(localTerminalId ? { [localTerminalId]: nextErpSnapshot } : {}),
         ...(resolvedTerminalId ? { [resolvedTerminalId]: nextErpSnapshot } : {}),
     };

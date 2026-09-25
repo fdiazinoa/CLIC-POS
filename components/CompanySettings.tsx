@@ -13,6 +13,7 @@ import {
 import { BusinessConfig, CompanyInfo } from '../types';
 import {
   getDefaultFiscalProvider,
+  getFiscalProviderLabel,
   getFiscalProviderCredentialKey,
   normalizeFiscalCredentialKey
 } from '../utils/fiscal/fiscalHelpers';
@@ -51,11 +52,7 @@ const CompanySettings: React.FC<CompanySettingsProps> = ({ config, onUpdateConfi
   }, [config.companyInfo]);
 
   const activeProviderId = getDefaultFiscalProvider(config);
-  const activeProviderLabel = activeProviderId === 'DIGIFACT'
-    ? 'DigiFact'
-    : activeProviderId === 'POLARIS'
-      ? 'Polaris'
-      : 'proveedor fiscal';
+  const activeProviderLabel = getFiscalProviderLabel(activeProviderId);
   const resolvedCredentialKey = getFiscalProviderCredentialKey(config, activeProviderId);
   const normalizedCompanyRnc = normalizeFiscalCredentialKey(company.rnc);
   const normalizedCredentialKey = normalizeFiscalCredentialKey(resolvedCredentialKey);

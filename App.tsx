@@ -357,15 +357,19 @@ import {
 } from './services/sync/terminalIdentity';
 import { normalizeErpBaseUrl, resolveErpBaseUrl } from './utils/erpBaseUrl';
 import {
+  applyFiscalProviderResult,
   canRetryFiscalTransaction,
   getEffectiveFiscalComplianceConfig,
   getFiscalDisplayCode,
   getFiscalProviderConfig,
+  getFiscalProviderLabel,
+  getExistingFiscalProviderReference,
   getProviderEnvironment,
   getDefaultFiscalProvider,
   resolveFiscalProviderEstablishmentCode,
   resolveFiscalProviderCashierCode,
-  resolveCreditNoteFiscalCode
+  resolveCreditNoteFiscalCode,
+  isDelegatedFiscalProvider
 } from './utils/fiscal/fiscalHelpers';
 import { getFiscalDocumentStatus, issueFiscalDocument } from './services/fiscal/fiscalService';
 import { azulMcmService } from './services/payments/AzulMcmService';
@@ -9861,6 +9865,10 @@ const AppContent: React.FC = () => {
       fiscalSyncStatus: 'PENDING',
       fiscalSyncError: undefined,
       fiscalReferenceId: undefined,
+      fiscalCertifiedNcf: undefined,
+      fiscalProviderStatus: undefined,
+      fiscalQrUrl: undefined,
+      fiscalSecurityCode: undefined,
       fiscalResponseMessage: `Corrección e-CF aplicada por ${currentUser?.name || 'usuario POS'}. Pendiente de reenvío fiscal.`,
       fiscalSyncedAt: undefined,
       syncStatus: transaction.syncStatus === 'COMPLETED' ? transaction.syncStatus : 'PENDING',
@@ -9941,11 +9949,10 @@ const AppContent: React.FC = () => {
 
       const finalStatus = result.pending ? 'PENDING' : result.success ? 'SYNCED' : 'ERROR';
       const refreshedTransaction: Transaction = {
-        ...transaction,
+        ...applyFiscalProviderResult(transaction, result),
         fiscalSyncStatus: finalStatus,
-        fiscalSyncError: result.success ? undefined : result.message,
-        fiscalReferenceId: providerTransactionId,
-        fiscalResponseMessage: result.message,
+        fiscalSyncError: result.success || result.pending ? undefined : result.message,
+        fiscalReferenceId: result.providerTransactionId || providerTransactionId,
         fiscalSyncedAt: result.success && !result.pending ? new Date().toISOString() : transaction.fiscalSyncedAt
       };
 
@@ -9966,12 +9973,15 @@ const AppContent: React.FC = () => {
       }
     } catch (error: any) {
       if (attempt >= 8) {
+        const remainsPending = isDelegatedFiscalProvider(providerId, deliveryMode);
         const failedTransaction: Transaction = {
           ...transaction,
-          fiscalSyncStatus: 'ERROR',
-          fiscalSyncError: error?.message || 'No se pudo consultar el estado del e-CF.',
+          fiscalSyncStatus: remainsPending ? 'PENDING' : 'ERROR',
+          fiscalSyncError: remainsPending ? undefined : error?.message || 'No se pudo consultar el estado del e-CF.',
           fiscalReferenceId: providerTransactionId,
-          fiscalResponseMessage: error?.message || 'No se pudo consultar el estado del e-CF.'
+          fiscalResponseMessage: remainsPending
+            ? 'Consulta pendiente: el ERP no está disponible. Se conservará la referencia para reintentar sin duplicar el e-CF.'
+            : error?.message || 'No se pudo consultar el estado del e-CF.'
         };
         await upsertFiscalTransaction(failedTransaction);
         return;
@@ -10005,6 +10015,19 @@ const AppContent: React.FC = () => {
       const fiscalCompliance = getEffectiveFiscalComplianceConfig(config, terminalConfig);
       const environment = getProviderEnvironment(fiscalCompliance, providerId);
       const providerConfig = getFiscalProviderConfig(fiscalCompliance, providerId);
+      const existingReference = getExistingFiscalProviderReference(transaction);
+      if (existingReference) {
+        await pollFiscalDocumentStatus(
+          transaction,
+          providerId,
+          environment,
+          existingReference,
+          providerConfig.credentialKey,
+          providerConfig.deliveryMode,
+          1
+        );
+        return;
+      }
       const establishmentCode = resolveFiscalProviderEstablishmentCode(providerConfig, fiscalCompliance, terminalConfig, config);
       const cashierCode = resolveFiscalProviderCashierCode(providerConfig, fiscalCompliance, terminalConfig, config);
       const fiscalSummary = calculateTransactionFiscalSummary(transaction, config, { terminalConfig });
@@ -10044,11 +10067,9 @@ const AppContent: React.FC = () => {
 
       const finalStatus = result.pending ? 'PENDING' : result.success ? 'SYNCED' : 'ERROR';
       const finalizedTransaction: Transaction = {
-        ...baseTransaction,
+        ...applyFiscalProviderResult(baseTransaction, result),
         fiscalSyncStatus: finalStatus,
-        fiscalSyncError: result.success ? undefined : result.message,
-        fiscalReferenceId: result.providerTransactionId || baseTransaction.fiscalReferenceId,
-        fiscalResponseMessage: result.message,
+        fiscalSyncError: result.success || result.pending ? undefined : result.message,
         fiscalSyncedAt: result.success && !result.pending ? new Date().toISOString() : baseTransaction.fiscalSyncedAt
       };
 
@@ -10068,11 +10089,17 @@ const AppContent: React.FC = () => {
       }
     } catch (error: any) {
       console.error('Error during syncFiscalDocument:', error);
+      const terminalConfig = config.terminals?.find((terminal) => terminal.id === transaction.terminalId)?.config;
+      const fiscalCompliance = getEffectiveFiscalComplianceConfig(config, terminalConfig);
+      const providerConfig = getFiscalProviderConfig(fiscalCompliance, providerId);
+      const remainsPending = isDelegatedFiscalProvider(providerId, providerConfig.deliveryMode);
       const failedTransaction: Transaction = {
         ...transaction,
-        fiscalSyncStatus: 'ERROR',
-        fiscalSyncError: error?.message || 'No se pudo inicializar la emisión del comprobante.',
-        fiscalResponseMessage: error?.message || 'Error en configuración fiscal.'
+        fiscalSyncStatus: remainsPending ? 'PENDING' : 'ERROR',
+        fiscalSyncError: remainsPending ? undefined : error?.message || 'No se pudo inicializar la emisión del comprobante.',
+        fiscalResponseMessage: remainsPending
+          ? 'Emisión pendiente: el ERP no está disponible. El POS conservará este e-CF para sincronizarlo sin generar otro número.'
+          : error?.message || 'Error en configuración fiscal.'
       };
       await upsertFiscalTransaction(failedTransaction);
     }
@@ -10088,13 +10115,14 @@ const AppContent: React.FC = () => {
     const fiscalCompliance = getEffectiveFiscalComplianceConfig(config, terminalConfig);
     const environment = getProviderEnvironment(fiscalCompliance, providerId);
     const providerConfig = getFiscalProviderConfig(fiscalCompliance, providerId);
-    const shouldPollExistingAttempt = transaction.fiscalSyncStatus === 'PENDING' && Boolean(transaction.fiscalReferenceId);
-    const providerLabel = providerId === 'DIGIFACT' ? 'DigiFact' : providerId === 'POLARIS' ? 'Polaris' : 'proveedor fiscal';
+    const existingReference = getExistingFiscalProviderReference(transaction);
+    const shouldPollExistingAttempt = Boolean(existingReference);
+    const providerLabel = getFiscalProviderLabel(providerId);
     const retryingTransaction: Transaction = {
       ...transaction,
       fiscalSyncStatus: 'PENDING',
       fiscalSyncError: undefined,
-      fiscalReferenceId: shouldPollExistingAttempt ? transaction.fiscalReferenceId : undefined,
+      fiscalReferenceId: shouldPollExistingAttempt ? existingReference : undefined,
       fiscalResponseMessage: shouldPollExistingAttempt
         ? `Consultando estado actualizado del e-CF en ${providerLabel}...`
         : `Reintentando envío del e-CF a ${providerLabel}...`
@@ -10102,12 +10130,12 @@ const AppContent: React.FC = () => {
 
     await upsertFiscalTransaction(retryingTransaction);
 
-    if (shouldPollExistingAttempt && transaction.fiscalReferenceId) {
+    if (shouldPollExistingAttempt && existingReference) {
       await pollFiscalDocumentStatus(
         retryingTransaction,
         providerId,
         environment,
-        transaction.fiscalReferenceId,
+        existingReference,
         providerConfig.credentialKey,
         providerConfig.deliveryMode,
         1
@@ -10118,6 +10146,49 @@ const AppContent: React.FC = () => {
     await syncFiscalDocument(retryingTransaction);
     return 'Reintento de envío fiscal iniciado.';
   }, [config, pollFiscalDocumentStatus, syncFiscalDocument, upsertFiscalTransaction]);
+
+  const fiscalRecoveryInFlightRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    let disposed = false;
+
+    const resumePendingDelegatedFiscalDocuments = async () => {
+      if (disposed || !navigator.onLine) return;
+      const storedTransactions = await db.get('transactions') as Transaction[] || [];
+      const pendingMSeller = storedTransactions.filter((candidate) =>
+        candidate.fiscalProvider === 'MSELLER'
+        && candidate.fiscalSyncStatus === 'PENDING'
+        && String(candidate.ncfType || '').startsWith('E')
+        && !fiscalRecoveryInFlightRef.current.has(candidate.id)
+      );
+
+      for (const candidate of pendingMSeller) {
+        if (disposed) return;
+        fiscalRecoveryInFlightRef.current.add(candidate.id);
+        try {
+          await syncFiscalDocument(candidate);
+        } catch (error) {
+          console.warn('No se pudo reanudar todavía la sincronización fiscal delegada:', error);
+        } finally {
+          fiscalRecoveryInFlightRef.current.delete(candidate.id);
+        }
+      }
+    };
+
+    const handleFiscalOnline = () => {
+      void resumePendingDelegatedFiscalDocuments();
+    };
+
+    window.addEventListener('online', handleFiscalOnline);
+    if (navigator.onLine) {
+      void resumePendingDelegatedFiscalDocuments();
+    }
+
+    return () => {
+      disposed = true;
+      window.removeEventListener('online', handleFiscalOnline);
+    };
+  }, [syncFiscalDocument]);
 
   const handleTransactionComplete = async (txn: Transaction) => {
     // Cover checkout paths that construct a transaction without transactionService.

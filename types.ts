@@ -225,7 +225,7 @@ export type NCFType = 'B01' | 'B02' | 'B04' | 'B14' | 'B15';
 export type ElectronicNCFType = 'E31' | 'E32' | 'E34' | 'E44' | 'E45';
 export type FiscalDocumentCode = NCFType | ElectronicNCFType;
 export type FiscalMode = 'NONE' | 'LEGACY_B' | 'ECF';
-export type FiscalProviderId = 'NONE' | 'POLARIS' | 'DIGIFACT';
+export type FiscalProviderId = 'NONE' | 'POLARIS' | 'DIGIFACT' | 'MSELLER';
 export type FiscalProviderEnvironment = 0 | 1 | 2 | 3;
 export type FiscalProviderDeliveryMode = 'LOCAL_DIRECT' | 'DELEGATED_ERP';
 
@@ -1865,6 +1865,10 @@ export interface Transaction {
   fiscalSyncError?: string;
   fiscalSyncedAt?: string;
   fiscalReferenceId?: string;
+  fiscalCertifiedNcf?: string;
+  fiscalProviderStatus?: string;
+  fiscalQrUrl?: string;
+  fiscalSecurityCode?: string;
   fiscalResponseMessage?: string;
   fiscalCorrectionAudit?: FiscalCorrectionAuditEntry[];
   affectedNCF?: string;             // NCF de la factura afectada (para Notas de Crédito B04)
