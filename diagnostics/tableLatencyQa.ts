@@ -1,5 +1,6 @@
 /** Temporary diagnostic controls. The Vite flag is unset in normal APK builds. */
-export const tableLatencyQaEnabled = import.meta.env.VITE_TABLE_LATENCY_QA === 'true';
+const tableLatencyQaEnv = import.meta.env as ImportMetaEnv | undefined;
+export const tableLatencyQaEnabled = tableLatencyQaEnv?.VITE_TABLE_LATENCY_QA === 'true';
 
 export type TableLatencyQaMode = 'real' | 'mock-lock' | 'preloaded' | 'pure-switch' | 'minimal-sales' | 'minimal-tables';
 export type TableLatencyQaState = {

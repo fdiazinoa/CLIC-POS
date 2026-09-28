@@ -21,8 +21,9 @@ export function transformScannerFocus(code: string, id: string, enabled: boolean
       "const root = scannerFocusMeasure(__focusScope, 'closest', () => input.closest('[data-pos-scanner-enabled]'));");
     code = replaceOnce(code, "input.closest('[hidden], [inert], [aria-hidden=\"true\"]')) return;",
       "scannerFocusMeasure(__focusScope, 'closest', () => input.closest('[hidden], [inert], [aria-hidden=\"true\"]'))) return;");
-    code = replaceOnce(code, '    input.focus({ preventScroll: true });\n}',
-      "    scannerFocusMeasure(__focusScope, 'DOM-focus', () => input.focus({ preventScroll: true }));\n    } finally { scannerFocusEnd(__focusScope); }\n}");
+    code = replaceOnce(code,
+      "    tableLatencyQaMark('SCANNER_FOCUS_START');\n    input.focus({ preventScroll: true });\n    tableLatencyQaMark('SCANNER_FOCUS_END');\n}",
+      "    tableLatencyQaMark('SCANNER_FOCUS_START');\n    scannerFocusMeasure(__focusScope, 'DOM-focus', () => input.focus({ preventScroll: true }));\n    tableLatencyQaMark('SCANNER_FOCUS_END');\n    } finally { scannerFocusEnd(__focusScope); }\n}");
     code = replaceOnce(code, 'const cancel = () => { clearTimeout(timer); timer = undefined; };',
       "const cancel = (reason: Event | string = 'cleanup') => { clearTimeout(timer); timer = undefined; scannerFocusPoint('cancel', () => ({ doc: win.document, reason: reason as any })); };");
     code = replaceOnce(code, 'const restore = () => {\n        const input = getReceiver();',
