@@ -94,6 +94,7 @@ import { buildTerminalSyncAuthHeaders } from './TerminalCredentialStore';
 import { canDeleteCatalogProduct, keepProductAfterAuthoritativeFull, resolveRemoteCatalogDeletionIds } from './catalogReconciliation';
 import type { ClientMasterAuthority } from '../../utils/operationalMasterConfig';
 import { persistValidatedClientMasterTargetAsync } from '../../utils/clientMasterBinding';
+import { legacyMutationJournal } from './LegacyMutationJournal';
 import {
     applyAuthoritativeProductTaxes,
     normalizeErpTaxDefinition,
@@ -837,6 +838,15 @@ class SyncManager {
         initializationMode?: 'STANDARD' | 'AUTHORITY_RECOVERY';
         authorityRecoveryGeneration?: number;
     }) {
+        const requestedAuthorityFingerprint = options?.clientMasterAuthority?.status === 'VALIDATED'
+            ? new URL(options.clientMasterAuthority.baseUrl).origin
+            : undefined;
+        if (legacyMutationJournal.isInitialized()) {
+            if (requestedAuthorityFingerprint) {
+                legacyMutationJournal.assertRemoteAuthorityAllowed(requestedAuthorityFingerprint);
+            }
+            legacyMutationJournal.assertAuthorityGenerationChangeAllowed();
+        }
         const isAuthorityRecoveryInitialization = options?.initializationMode === 'AUTHORITY_RECOVERY';
         if (isAuthorityRecoveryInitialization) {
             if (options?.authorityRecoveryGeneration !== this.authorityRecoveryGeneration) {

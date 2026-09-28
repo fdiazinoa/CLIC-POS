@@ -342,6 +342,7 @@ import {
   type ClientMasterAuthority,
 } from './utils/operationalMasterConfig';
 import { persistValidatedClientMasterTargetAsync, resolveClientMasterTerminalId } from './utils/clientMasterBinding';
+import { legacyMutationJournal } from './services/sync/LegacyMutationJournal';
 import { markSyncDeviceTokenInvalid, persistSyncDeviceToken } from './services/sync/deviceToken';
 import {
   extractErpRegisterAuth,
@@ -6533,6 +6534,11 @@ const AppContent: React.FC = () => {
         console.log('✅ db.init() returned:', data ? Object.keys(data) : 'null');
         markBootStage('LOCAL_DATABASE_READY');
         freezePhase('LOCAL_DATA_READY');
+        try {
+          await legacyMutationJournal.initializeForStartup();
+        } catch (journalError) {
+          console.error('[LEGACY_MUTATION_JOURNAL_BOOT_BLOCKED]', journalError);
+        }
 
         if (isSyncFeatureEnabled('sqlite_outbox_v2')) {
           if (!durableOutboxRepository.isSupported()) {
@@ -7189,6 +7195,7 @@ const AppContent: React.FC = () => {
                     },
                   }),
                   persistValidated: async (authority) => {
+                    legacyMutationJournal.assertRemoteAuthorityAllowed(new URL(authority.baseUrl).origin);
                     await persistValidatedClientMasterTargetAsync(authority.baseUrl);
                     localStorage.setItem('CLIC_POS_MASTER_DISCOVERY', authority.source);
                   },
@@ -7199,6 +7206,9 @@ const AppContent: React.FC = () => {
                     return normalized;
                   },
                   initialize: async (authority, activeConfig) => {
+                    if (authority.status === 'VALIDATED') {
+                      legacyMutationJournal.assertRemoteAuthorityAllowed(new URL(authority.baseUrl).origin);
+                    }
                     await syncManager.initialize(activeConfig || finalConfig, effectivePairedTerminal.id, {
                       clientMasterAuthority: authority,
                       disableRemoteServices: (reason) => backgroundSyncManager.disableRemoteSync(reason),
