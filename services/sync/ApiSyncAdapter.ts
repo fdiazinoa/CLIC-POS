@@ -399,6 +399,7 @@ class ApiSyncAdapter {
     private offlineListener: (() => void) | null = null;
     private operationalAuthorityEnabled = true;
     private operationalAuthorityRevision = 0;
+    private operationalAuthorityAbortController: AbortController | null = new AbortController();
 
     private readonly salesCircuitBreaker = new SyncCircuitBreaker('sales');
     private readonly backgroundCircuitBreaker = new SyncCircuitBreaker('background');
@@ -689,8 +690,11 @@ class ApiSyncAdapter {
         retries = 2,
         backoff = 500,
         channel: CircuitBreakerChannel = 'background',
-        operation: OperationalSyncOperation = channel === 'sales' ? 'PUSH_OPERATIONS' : 'PULL_MASTERS'
+        operation: OperationalSyncOperation = channel === 'sales' ? 'PUSH_OPERATIONS' : 'PULL_MASTERS',
+        authorityRevision = this.operationalAuthorityRevision,
+        authoritySignal = this.operationalAuthorityAbortController?.signal,
     ): Promise<Response> {
+        this.assertOperationalAuthorityCurrent(authorityRevision, authoritySignal);
         // Add jitter to backoff (±20% randomness)
         const jitter = backoff * 0.2;
         const effectiveBackoff = backoff + (Math.random() * jitter * 2 - jitter);
@@ -767,7 +771,9 @@ class ApiSyncAdapter {
                 body: options.body,
                 timeoutMs: this.resolveRequestTimeoutMs(url, operation),
                 diagnosticContext: fetchContext,
+                signal: authoritySignal,
             });
+            this.assertOperationalAuthorityCurrent(authorityRevision, authoritySignal);
             const response = new Response(nativeResponse.text, {
                 status: nativeResponse.status,
                 headers: nativeResponse.headers,
@@ -798,12 +804,13 @@ class ApiSyncAdapter {
             // If 503 Service Unavailable or 504 Gateway Timeout, retry
             if ((response.status === 503 || response.status === 504) && retries > 0) {
                 console.warn(`⚠️ Request failed with ${response.status}, retrying in ${Math.round(effectiveBackoff)}ms...`);
-                await new Promise(r => setTimeout(r, effectiveBackoff));
-                return this.fetchWithRetry(url, options, retries - 1, backoff * 2, channel, operation);
+                await this.waitForAuthorityRetry(effectiveBackoff, authorityRevision, authoritySignal);
+                return this.fetchWithRetry(url, options, retries - 1, backoff * 2, channel, operation, authorityRevision, authoritySignal);
             }
 
             return response;
         } catch (error: any) {
+            if (!this.isOperationalAuthorityCurrent(authorityRevision, authoritySignal)) throw error;
             const isConnectionError = this.isRecoverableConnectionError(error);
             const isTimeout = error?.name === 'AbortError';
             const httpClientDiagnostic = error?.__httpClientDiagnostic;
@@ -855,12 +862,44 @@ class ApiSyncAdapter {
 
             if ((isConnectionError || isTimeout) && retries > 0 && circuitBreaker.canRetry()) {
                 console.warn(`⚠️ Connection error (${error.message}), retrying in ${Math.round(effectiveBackoff)}ms...`);
-                await new Promise(r => setTimeout(r, effectiveBackoff));
-                return this.fetchWithRetry(url, options, retries - 1, backoff * 1.5, channel, operation);
+                await this.waitForAuthorityRetry(effectiveBackoff, authorityRevision, authoritySignal);
+                return this.fetchWithRetry(url, options, retries - 1, backoff * 1.5, channel, operation, authorityRevision, authoritySignal);
             }
 
             throw error;
         }
+    }
+
+    private isOperationalAuthorityCurrent(revision: number, signal?: AbortSignal): boolean {
+        return this.operationalAuthorityEnabled
+            && revision === this.operationalAuthorityRevision
+            && !signal?.aborted;
+    }
+
+    private assertOperationalAuthorityCurrent(revision: number, signal?: AbortSignal): void {
+        if (!this.isOperationalAuthorityCurrent(revision, signal)) {
+            throw new DOMException('Master authority changed', 'AbortError');
+        }
+    }
+
+    private waitForAuthorityRetry(delayMs: number, revision: number, signal?: AbortSignal): Promise<void> {
+        this.assertOperationalAuthorityCurrent(revision, signal);
+        return new Promise((resolve, reject) => {
+            const abort = () => {
+                clearTimeout(timeout);
+                reject(new DOMException('Master authority changed', 'AbortError'));
+            };
+            const timeout = setTimeout(() => {
+                signal?.removeEventListener('abort', abort);
+                try {
+                    this.assertOperationalAuthorityCurrent(revision, signal);
+                    resolve();
+                } catch (error) {
+                    reject(error);
+                }
+            }, delayMs);
+            signal?.addEventListener('abort', abort, { once: true });
+        });
     }
 
     private async fetchWithoutCircuitBreaker(url: string, options: RequestInit = {}, timeoutMs = 5000): Promise<Response> {
@@ -886,6 +925,7 @@ class ApiSyncAdapter {
     async initialize(config: SyncConfig): Promise<void> {
         this.resetOperationalAuthority();
         this.operationalAuthorityEnabled = true;
+        this.operationalAuthorityAbortController = new AbortController();
         this.config = config;
         await this.authenticate();
         this.setupOnlineDetection();
@@ -6174,6 +6214,8 @@ class ApiSyncAdapter {
      * Master without touching durable queues or local business data. */
     resetOperationalAuthority(): void {
         this.operationalAuthorityRevision += 1;
+        this.operationalAuthorityAbortController?.abort();
+        this.operationalAuthorityAbortController = null;
         this.operationalAuthorityEnabled = false;
         this.config = null;
         this.authToken = null;

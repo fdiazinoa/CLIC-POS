@@ -603,6 +603,10 @@ class BackgroundSyncManager {
 
                 // Attempt push
                 await pushFn(item);
+                if (!this.remoteEnabled || generation !== this.remoteGeneration) {
+                    console.warn(`🛑 BackgroundSyncManager: Ignoring stale ACK for ${collectionName} item ${item.id}.`);
+                    return;
+                }
                 authenticatedActivityTracker.record('PUSH');
                 syncMetrics.increment('pushes_total');
                 authenticatedActivityTracker.record('ACK');
@@ -639,6 +643,7 @@ class BackgroundSyncManager {
                 }
                 await this.yieldToOperatorUi();
             } catch (error: any) {
+                if (!this.remoteEnabled || generation !== this.remoteGeneration) return;
                 if (collectionName === 'transactions' && this.isRecoverableTransactionSyncError(error)) {
                     console.warn(
                         `⏳ BackgroundSyncManager: Deferred recoverable transaction sync ${item.id}:`,

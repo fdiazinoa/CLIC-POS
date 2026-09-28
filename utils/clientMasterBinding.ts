@@ -1,5 +1,6 @@
 import type { BusinessConfig } from '../types';
 import { updateClientMasterUrl } from '../services/sync/SyncProfile';
+import { saveTerminalCredentialsSync } from '../services/sync/TerminalCredentialStore';
 
 const value = (input: unknown): string => String(input || '').trim();
 
@@ -37,23 +38,32 @@ export const persistValidatedClientMasterTarget = (
     storage?: MasterTargetStorage;
     persistProfile?: (url: string) => boolean;
   } = {},
-): void => {
+): (() => void) => {
   const storage = dependencies.storage || localStorage;
   const persistProfile = dependencies.persistProfile || updateClientMasterUrl;
   const normalizedUrl = new URL(baseUrl).origin;
   const nextHost = new URL(normalizedUrl).hostname;
   const previousUrl = storage.getItem('CLIC_POS_MASTER_URL');
   const previousHost = storage.getItem('pos_master_ip');
+  const rollback = () => {
+    restore(storage, 'CLIC_POS_MASTER_URL', previousUrl);
+    restore(storage, 'pos_master_ip', previousHost);
+    if (!dependencies.storage) saveTerminalCredentialsSync({ masterUrl: previousUrl, masterIp: previousHost });
+    if (previousUrl) persistProfile(previousUrl);
+  };
 
   try {
     storage.setItem('CLIC_POS_MASTER_URL', normalizedUrl);
     storage.setItem('pos_master_ip', nextHost);
+    if (!dependencies.storage) saveTerminalCredentialsSync({ masterUrl: normalizedUrl, masterIp: nextHost });
     if (!persistProfile(normalizedUrl)) throw new Error('MASTER_SYNC_PROFILE_PERSIST_FAILED');
+    return rollback;
   } catch (error) {
     let mirrorsRestored = false;
     try {
       restore(storage, 'CLIC_POS_MASTER_URL', previousUrl);
       restore(storage, 'pos_master_ip', previousHost);
+      if (!dependencies.storage) saveTerminalCredentialsSync({ masterUrl: previousUrl, masterIp: previousHost });
       mirrorsRestored = true;
     } catch {
       // The fail-closed cleanup below removes any partially changed mirrors.

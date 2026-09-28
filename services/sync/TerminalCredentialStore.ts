@@ -210,9 +210,13 @@ const writeLegacyMirrors = (credentials: TerminalCredentials): void => {
         }
         if (credentials.masterIp) {
             storage.setItem('pos_master_ip', credentials.masterIp);
+        } else if (credentials.masterIp === null) {
+            storage.removeItem('pos_master_ip');
         }
         if (credentials.masterUrl) {
             storage.setItem('CLIC_POS_MASTER_URL', credentials.masterUrl);
+        } else if (credentials.masterUrl === null) {
+            storage.removeItem('CLIC_POS_MASTER_URL');
         }
         if (credentials.setupMode) {
             storage.setItem('clic_pos_terminal_setup_mode', credentials.setupMode);
