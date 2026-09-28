@@ -6852,8 +6852,11 @@ const AppContent: React.FC = () => {
           setCurrentView('AGENDA');
         }
 
-        const shouldFetchConfigFromMaster = (
+        const shouldFetchConfigFromMaster = !!masterIp && (
           isClientTerminalMode() || !localPairedTerminal || localPairedTerminal?.config?.isPrimaryNode === false
+        );
+        const shouldDiscoverConfigFromMaster = !masterIp && (
+          isClientTerminalMode() || localPairedTerminal?.config?.isPrimaryNode === false
         );
 
         if (masterIp && !isClientTerminalMode() && !shouldFetchConfigFromMaster && localPairedTerminal?.config?.isPrimaryNode) {
@@ -6862,7 +6865,7 @@ const AppContent: React.FC = () => {
           localStorage.removeItem('CLIC_POS_MASTER_URL');
         }
 
-        if (shouldFetchConfigFromMaster) {
+        if (shouldFetchConfigFromMaster || shouldDiscoverConfigFromMaster) {
           console.log("🔄 Slave Mode: Fetching latest config from Master...");
           try {
             const resolvedMaster = await resolveOperationalMasterConfig<any>({
