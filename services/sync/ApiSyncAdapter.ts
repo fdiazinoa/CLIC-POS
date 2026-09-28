@@ -38,6 +38,7 @@ import {
     buildTerminalSyncAuthHeaders,
     clearStoredSyncToken,
     readTerminalCredentialsSync,
+    saveTerminalCredentials,
     saveTerminalCredentialsSync,
 } from './TerminalCredentialStore';
 import { extractErpRegisterAuth } from './erpRegisterResponse';
@@ -60,7 +61,12 @@ import {
 } from '../../utils/syncCapabilities';
 import { classifyMasterPullFailure } from './masterPullFailure';
 import { isTerminalAuthorizationSuperseded } from '../../utils/terminalAuthorizationGuard';
-import { LegacyMutationJournal, legacyMutationJournal } from './LegacyMutationJournal';
+import {
+    attachLegacyMutationReceipt,
+    copyLegacyMutationReceipt,
+    LegacyMutationJournal,
+    legacyMutationJournal,
+} from './LegacyMutationJournal';
 
 /**
  * API Sync Adapter
@@ -927,15 +933,28 @@ export class ApiSyncAdapter {
         return `${new URL(url).origin}|${this.config?.terminalId || ''}`;
     }
 
+    private createOperationCorrelationId(operation: string): string {
+        try {
+            return `${operation}:${crypto.randomUUID()}`;
+        } catch {
+            return `${operation}:${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        }
+    }
+
     private async acknowledgeLegacyResponse(
         response: Response,
         classification: 'RESPONSE_VALID' | 'SAFE_PRE_SIDE_EFFECT',
-        callerAckReference: string,
-    ): Promise<void> {
+        durableReference: string,
+    ): Promise<any> {
         const id = this.legacyJournalIds.get(response);
         if (!id) return;
-        await this.mutationJournal.acknowledge(id, classification, callerAckReference);
+        await this.mutationJournal.acknowledge(id, classification, durableReference);
         this.legacyJournalIds.delete(response);
+    }
+
+    private attachLegacyResponseReceipt<T>(response: Response, payload: T): T {
+        const id = this.legacyJournalIds.get(response);
+        return id ? attachLegacyMutationReceipt(payload, id) : payload;
     }
 
     private async rejectMalformedLegacyResponse(response: Response): Promise<void> {
@@ -946,7 +965,7 @@ export class ApiSyncAdapter {
 
     private async acknowledgeLegacyJsonResponse(
         response: Response,
-        callerAckReference: string,
+        responseReference: string,
         validator: (payload: any) => boolean = payload => Boolean(payload && typeof payload === 'object'),
     ): Promise<any> {
         const text = await response.clone().text().catch(() => '');
@@ -961,32 +980,37 @@ export class ApiSyncAdapter {
             if (this.legacyJournalIds.has(response)) throw new Error('LEGACY_MUTATION_RESPONSE_SCHEMA_INVALID');
             return payload;
         }
-        await this.acknowledgeLegacyResponse(response, 'RESPONSE_VALID', callerAckReference);
-        return payload;
+        return this.attachLegacyResponseReceipt(response, payload);
     }
 
-    private async acknowledgeLegacy401(response: Response, callerAckReference: string): Promise<void> {
+    private async acknowledgeLegacy401(response: Response, durableReference: string): Promise<void> {
         if (response.status !== 401) return;
-        await this.acknowledgeLegacyResponse(response, 'SAFE_PRE_SIDE_EFFECT', callerAckReference);
+        await saveTerminalCredentials({
+            syncToken: null,
+            syncTokenExpiresAt: null,
+            authStatus: 'NEEDS_REAUTH',
+            lastAuthError: durableReference,
+        });
+        await this.acknowledgeLegacyResponse(response, 'SAFE_PRE_SIDE_EFFECT', durableReference);
     }
 
     private async completeOperationalLegacyMutation(
         response: Response,
         payload: any,
-        callerAck?: { reference: string; validate: (payload: any) => void },
+        responseValidator?: { reference: string; validate: (payload: any) => void },
     ): Promise<void> {
         if (!this.legacyJournalIds.has(response)) return;
-        if (!callerAck) {
+        if (!responseValidator) {
             await this.rejectMalformedLegacyResponse(response);
             throw new Error('LEGACY_MUTATION_CALLER_ACK_REQUIRED');
         }
         try {
-            callerAck.validate(payload);
+            responseValidator.validate(payload);
         } catch (error) {
             await this.rejectMalformedLegacyResponse(response);
             throw error;
         }
-        await this.acknowledgeLegacyResponse(response, 'RESPONSE_VALID', callerAck.reference);
+        this.attachLegacyResponseReceipt(response, payload);
     }
 
     private assertOperationalResponseObject(payload: any): void {
@@ -3272,7 +3296,8 @@ export class ApiSyncAdapter {
             reauthenticateOn401?: boolean;
             expectedRecoveryScope?: string;
             recoveryOriginal?: { document: any; collection: string };
-            callerAck?: { reference: string; validate: (payload: any) => void };
+            responseValidator?: { reference: string; validate: (payload: any) => void };
+            operationCorrelationId?: string;
         } = {},
     ): Promise<any> {
         const target = await this.authenticateOperationalTarget(false, 'sales', 'PUSH_OPERATIONS');
@@ -3286,6 +3311,7 @@ export class ApiSyncAdapter {
             if (reference) requestBody.originalRefs = [{ itemIndex: 0, ...reference }];
         }
         const serializedBody = JSON.stringify(requestBody);
+        const operationCorrelationId = options.operationCorrelationId || this.createOperationCorrelationId(`operational:${path}`);
         if (options.maxRequestBytes && new TextEncoder().encode(serializedBody).byteLength > options.maxRequestBytes) {
             throw new Error(`BATCH_PAYLOAD_TOO_LARGE: request exceeds ${options.maxRequestBytes} bytes`);
         }
@@ -3300,7 +3326,7 @@ export class ApiSyncAdapter {
                     : {}),
             },
             body: serializedBody
-        }, 2, 500, 'sales', 'PUSH_OPERATIONS');
+        }, 2, 500, 'sales', 'PUSH_OPERATIONS', undefined, undefined, operationCorrelationId);
 
         if (response.status === 401 && options.reauthenticateOn401 !== false) {
             await this.acknowledgeLegacy401(response, `postOperationalPayload:${path}:401`);
@@ -3327,7 +3353,7 @@ export class ApiSyncAdapter {
                         : {}),
                 },
                 body: serializedRetryBody
-            }, 2, 500, 'sales', 'PUSH_OPERATIONS');
+            }, 2, 500, 'sales', 'PUSH_OPERATIONS', undefined, undefined, operationCorrelationId);
 
             if (!retryResponse.ok) {
                 await this.acknowledgeLegacy401(retryResponse, `postOperationalPayload:${path}:retry-401`);
@@ -3346,8 +3372,10 @@ export class ApiSyncAdapter {
             }
 
             const data = await this.parseOperationalResponse(retryResponse);
-            await this.completeOperationalLegacyMutation(retryResponse, data, options.callerAck);
-            return options.includeHttpStatus ? { httpStatus: retryResponse.status, data } : data;
+            await this.completeOperationalLegacyMutation(retryResponse, data, options.responseValidator);
+            return options.includeHttpStatus
+                ? copyLegacyMutationReceipt(data, { httpStatus: retryResponse.status, data })
+                : data;
         }
 
         if (!response.ok) {
@@ -3366,8 +3394,10 @@ export class ApiSyncAdapter {
             );
         }
         const data = await this.parseOperationalResponse(response);
-        await this.completeOperationalLegacyMutation(response, data, options.callerAck);
-        return options.includeHttpStatus ? { httpStatus: response.status, data } : data;
+        await this.completeOperationalLegacyMutation(response, data, options.responseValidator);
+        return options.includeHttpStatus
+            ? copyLegacyMutationReceipt(data, { httpStatus: response.status, data })
+            : data;
     }
 
     async postTransferReceipt(
@@ -3385,9 +3415,8 @@ export class ApiSyncAdapter {
                 `/transfers/${encodeURIComponent(normalizedTransferId)}/receipts`,
                 payload,
                 {
-                    includeHttpStatus: true,
-                    reauthenticateOn401: false,
-                    callerAck: {
+                    includeHttpStatus: true, reauthenticateOn401: false,
+                    responseValidator: {
                         reference: `postTransferReceipt:${normalizedTransferId}`,
                         validate: data => this.assertOperationalResponseObject(data),
                     },
@@ -3412,9 +3441,8 @@ export class ApiSyncAdapter {
                 `/terminals/${encodeURIComponent(normalizedTerminalId)}/master-number-ranges/progress`,
                 payload,
                 {
-                    includeHttpStatus: true,
-                    reauthenticateOn401: false,
-                    callerAck: {
+                    includeHttpStatus: true, reauthenticateOn401: false,
+                    responseValidator: {
                         reference: `pushMasterNumberRangeProgress:${normalizedTerminalId}`,
                         validate: data => this.assertOperationalResponseObject(data),
                     },
@@ -3458,7 +3486,7 @@ export class ApiSyncAdapter {
         if (!normalized) throw new Error('REFUND_SOURCE_ID_MISSING');
         return this.postOperationalPayload(`/refund-sources/${encodeURIComponent(normalized)}/prepare`, payload, {
             reauthenticateOn401: false,
-            callerAck: {
+            responseValidator: {
                 reference: `prepareRefundSource:${payload.commandId}`,
                 validate: data => this.assertOperationalResponseObject(data),
             },
@@ -3476,7 +3504,7 @@ export class ApiSyncAdapter {
             maxRequestBytes: 2 * 1024 * 1024,
             reauthenticateOn401: false,
             expectedRecoveryScope: originalProvenance().key,
-            callerAck: {
+            responseValidator: {
                 reference: `receiveRecoveryOriginals:${records.length}`,
                 validate: data => this.assertOperationalResponseObject(data),
             },
@@ -3513,7 +3541,7 @@ export class ApiSyncAdapter {
         return this.postOperationalPayload('/originals/commercial-status', { references }, {
             reauthenticateOn401: false,
             expectedRecoveryScope: originalProvenance().key,
-            callerAck: {
+            responseValidator: {
                 reference: `getOriginalCommercialStatus:${references.length}`,
                 validate: data => this.assertOperationalResponseObject(data),
             },
@@ -3524,7 +3552,7 @@ export class ApiSyncAdapter {
         return this.postOperationalPayload('/originals/snapshots', {}, {
             reauthenticateOn401: false,
             expectedRecoveryScope: originalProvenance().key,
-            callerAck: {
+            responseValidator: {
                 reference: 'createRecoverySnapshot',
                 validate: data => this.assertOperationalResponseObject(data),
             },
@@ -3716,8 +3744,9 @@ export class ApiSyncAdapter {
         collection: string,
         items: any[],
         action: SyncChange['action'] = 'BULK_UPDATE',
-        mode: 'UPSERT' | 'FULL_REPLACE' = 'UPSERT'
-    ): Promise<void> {
+        mode: 'UPSERT' | 'FULL_REPLACE' = 'UPSERT',
+        operationCorrelationId = this.createOperationCorrelationId(`push:${collection}`),
+    ): Promise<any> {
         const normalizedItems = Array.isArray(items) ? items : [];
         if (normalizedItems.length === 0) {
             console.warn(`[POS_CLOUD_STAGING] push skipped collection=${collection}: no items to stage`);
@@ -3825,13 +3854,13 @@ export class ApiSyncAdapter {
                     'X-Sync-Token': this.authToken
                 },
                 body: JSON.stringify({ items: normalizedItems, mode })
-            }, 2, 500, 'background', 'PUSH_MASTERS');
+            }, 2, 500, 'background', 'PUSH_MASTERS', undefined, undefined, operationCorrelationId);
 
             if (response.status === 401) {
                 // Token expired, re-authenticate
                 await this.acknowledgeLegacy401(response, `push:${collection}:401`);
                 await this.authenticate();
-                return this.push(collection, items, action, mode);
+                return this.push(collection, items, action, mode, operationCorrelationId);
             }
 
             if (!response.ok) {
@@ -3844,6 +3873,7 @@ export class ApiSyncAdapter {
                 payload => Boolean(payload && typeof payload === 'object' && Number.isFinite(Number(payload.version))),
             );
             console.log(`📤 ApiSyncAdapter: Pushed ${normalizedItems.length} items to ${collection} (v${data.version})`);
+            return data;
         } catch (error) {
             console.error(`❌ ApiSyncAdapter: Error pushing ${collection}:`, error);
             this.isOnline = false;
@@ -5448,7 +5478,8 @@ export class ApiSyncAdapter {
         normalizedTransaction: any,
         txId: string,
         itemsCount: number | string,
-        skipErpForward = false
+        skipErpForward = false,
+        operationCorrelationId = this.createOperationCorrelationId(`pushTransaction:${txId}`),
     ): Promise<Response> {
         await this.ensurePushReady('sales');
         const erpBaseUrl = this.resolveClientErpBaseUrlForInbox();
@@ -5484,7 +5515,7 @@ export class ApiSyncAdapter {
                     ...(erpBaseUrl ? { erp_base_url: erpBaseUrl } : {}),
                     ...(skipErpForward ? { skip_erp_forward: true } : {})
                 })
-            }, 2, 500, 'sales');
+            }, 2, 500, 'sales', 'PUSH_OPERATIONS', undefined, undefined, operationCorrelationId);
 
             if (response.status === 401) {
                 await this.acknowledgeLegacy401(response, `pushTransaction:${txId}:401:${retryCount}`);
@@ -5506,7 +5537,7 @@ export class ApiSyncAdapter {
         );
     }
 
-    async pushTransaction(transaction: any): Promise<void> {
+    async pushTransaction(transaction: any): Promise<any> {
         if (isRecoveredOperation(transaction)) throw new Error('RECOVERED_OPERATION_NO_REPLAY');
         try {
             const normalizedTransaction = buildErpSalePayload(transaction);
@@ -5717,6 +5748,7 @@ export class ApiSyncAdapter {
                     `[SYNC_TX_PUSH] ERP inbox OK [${types}] tx=${txId} host=${erp?.erpBaseUrlUsed || 'n/a'} erp_document_id=${docIds || 'n/a'}`
                 );
             }
+            return syncBody;
         } catch (error) {
             console.error('❌ ApiSyncAdapter: Error pushing transaction:', error);
             this.isOnline = false;
@@ -5727,12 +5759,12 @@ export class ApiSyncAdapter {
     /**
      * Push a single inventory movement to Master
      */
-    async pushInventoryMovement(movement: any): Promise<void> {
+    async pushInventoryMovement(movement: any): Promise<any> {
         try {
             const payload = buildErpInventoryLedgerPayload(movement);
             const documentId = String(payload.source_inventory_movement_id || payload.id);
             const acknowledgement = await this.postOperationalPayload('/inventory/movements', { items: [payload] }, {
-                callerAck: {
+                responseValidator: {
                     reference: `pushInventoryMovement:${documentId}`,
                     validate: data => {
                         this.assertOperationalResponseObject(data);
@@ -5746,6 +5778,7 @@ export class ApiSyncAdapter {
                 'INVENTORY',
             );
             console.log(`📤 ApiSyncAdapter: Pushed inventory movement ${payload.source_inventory_movement_id || payload.id}`);
+            return acknowledgement;
         } catch (error) {
             console.error('❌ ApiSyncAdapter: Error pushing inventory movement:', error);
             this.isOnline = false;
@@ -5753,7 +5786,7 @@ export class ApiSyncAdapter {
         }
     }
 
-    async pushCustomerMutation(mutation: any): Promise<void> {
+    async pushCustomerMutation(mutation: any): Promise<any> {
         try {
             const customerId = String(mutation?.customerId || mutation?.customer?.id || '').trim();
             if (!customerId) throw new Error('CUSTOMER_ID_MISSING');
@@ -5761,7 +5794,7 @@ export class ApiSyncAdapter {
             const acknowledgement = await this.postOperationalPayload('/customers/upsert', {
                 items: [buildCustomerMutationEnvelope({ ...mutation, customerId, operation: mutation.operation || 'UPSERT' })],
             }, {
-                callerAck: {
+                responseValidator: {
                     reference: `pushCustomerMutation:${mutationId}`,
                     validate: data => {
                         this.assertOperationalResponseObject(data);
@@ -5773,6 +5806,7 @@ export class ApiSyncAdapter {
             assertOperationalAcknowledgement(acknowledgement, mutationId, 'CUSTOMER');
             assertCustomerNumberAcknowledgement(acknowledgement, mutation.customer);
             console.log(`📤 ApiSyncAdapter: Pushed customer mutation ${mutation.id}`);
+            return acknowledgement;
         } catch (error) {
             console.error('❌ ApiSyncAdapter: Error pushing customer mutation:', error);
             this.isOnline = false;
@@ -5787,7 +5821,7 @@ export class ApiSyncAdapter {
             scope: edit.scope, mutation: edit.mutation,
         }, {
             reauthenticateOn401: false,
-            callerAck: {
+            responseValidator: {
                 reference: `sendCatalogEdit:${edit.id}`,
                 validate: data => {
                     this.assertOperationalResponseObject(data);
@@ -5800,7 +5834,7 @@ export class ApiSyncAdapter {
         });
     }
 
-    async pushPosUserMutation(mutation: any): Promise<void> {
+    async pushPosUserMutation(mutation: any): Promise<any> {
         try {
             const mutationId = String(mutation?.id || '').trim();
             const sourceUserId = String(mutation?.sourceUserId || '').trim();
@@ -5817,7 +5851,7 @@ export class ApiSyncAdapter {
                     createdAt: mutation.createdAt,
                 }],
             }, {
-                callerAck: {
+                responseValidator: {
                     reference: `pushPosUserMutation:${mutationId}`,
                     validate: data => {
                         this.assertOperationalResponseObject(data);
@@ -5830,6 +5864,7 @@ export class ApiSyncAdapter {
             }
             assertOperationalAcknowledgement(acknowledgement, mutationId, 'POS_USER');
             console.log(`📤 ApiSyncAdapter: Pushed POS user mutation ${mutationId}`);
+            return acknowledgement;
         } catch (error) {
             console.error('❌ ApiSyncAdapter: Error pushing POS user mutation:', error);
             throw error;
@@ -5843,7 +5878,7 @@ export class ApiSyncAdapter {
             currencies,
             actor,
         }, {
-            callerAck: {
+            responseValidator: {
                 reference: `saveCurrencies:${mutationId}`,
                 validate: data => {
                     this.assertOperationalResponseObject(data);
@@ -5862,7 +5897,7 @@ export class ApiSyncAdapter {
             taxes,
             actor,
         }, {
-            callerAck: {
+            responseValidator: {
                 reference: `saveTaxes:${mutationId}`,
                 validate: data => {
                     this.assertOperationalResponseObject(data);
@@ -5879,7 +5914,7 @@ export class ApiSyncAdapter {
         const acknowledgement = await this.postOperationalPayload('/currencies/schedules', {
             items: [{ ...schedule, id: scheduleId }],
         }, {
-            callerAck: {
+            responseValidator: {
                 reference: `scheduleCurrencyRate:${scheduleId}`,
                 validate: data => {
                     this.assertOperationalResponseObject(data);
@@ -5899,7 +5934,10 @@ export class ApiSyncAdapter {
     /**
      * Push a single inventory count session to Master
      */
-    async pushInventoryCount(countSession: any): Promise<void> {
+    async pushInventoryCount(
+        countSession: any,
+        operationCorrelationId = this.createOperationCorrelationId(`pushInventoryCount:${countSession?.id || 'unknown'}`),
+    ): Promise<any> {
         try {
             await this.ensurePushReady();
             const response = await this.fetchWithRetry(`${this.config.masterUrl}/api/sync/inventory/counts`, {
@@ -5909,18 +5947,18 @@ export class ApiSyncAdapter {
                     'X-Sync-Token': this.authToken || ''
                 },
                 body: JSON.stringify({ items: [countSession] })
-            });
+            }, 2, 500, 'background', 'PUSH_OPERATIONS', undefined, undefined, operationCorrelationId);
 
             if (response.status === 401) {
                 await this.acknowledgeLegacy401(response, `pushInventoryCount:${countSession.id}:401`);
                 await this.authenticate();
-                return this.pushInventoryCount(countSession);
+                return this.pushInventoryCount(countSession, operationCorrelationId);
             }
 
             if (!response.ok) {
                 throw new Error(`Push inventory count failed: ${response.statusText}`);
             }
-            await this.acknowledgeLegacyJsonResponse(response, `pushInventoryCount:${countSession.id}`, payload => {
+            const acknowledgement = await this.acknowledgeLegacyJsonResponse(response, `pushInventoryCount:${countSession.id}`, payload => {
                 try {
                     this.assertOperationalResponseObject(payload);
                     assertOperationalAcknowledgement(payload, String(countSession.id), 'INVENTORY_COUNT');
@@ -5930,6 +5968,7 @@ export class ApiSyncAdapter {
                 }
             });
             console.log(`📤 ApiSyncAdapter: Pushed inventory count ${countSession.id}`);
+            return acknowledgement;
         } catch (error) {
             console.error('❌ ApiSyncAdapter: Error pushing inventory count:', error);
             this.isOnline = false;
@@ -5940,7 +5979,7 @@ export class ApiSyncAdapter {
     /**
      * Push a single cash movement to Master
      */
-    async pushCashMovement(movement: any): Promise<void> {
+    async pushCashMovement(movement: any): Promise<any> {
         if (isRecoveredOperation(movement)) throw new Error('RECOVERED_OPERATION_NO_REPLAY');
         try {
             const normalizedMovement = buildErpCashMovementPayload(movement);
@@ -5948,9 +5987,9 @@ export class ApiSyncAdapter {
             const recoveryOptions = isSyncFeatureEnabled('pending_operations_recovery')
                 ? { reauthenticateOn401: false, expectedRecoveryScope: originalProvenance().key, recoveryOriginal: { document: movement, collection: 'cashMovements' } }
                 : {};
-            await this.postOperationalPayload('/cash/movements', { items: [normalizedMovement] }, {
+            const acknowledgement = await this.postOperationalPayload('/cash/movements', { items: [normalizedMovement] }, {
                 ...recoveryOptions,
-                callerAck: {
+                responseValidator: {
                     reference: `pushCashMovement:${documentId}`,
                     validate: data => {
                         this.assertOperationalResponseObject(data);
@@ -5959,6 +5998,7 @@ export class ApiSyncAdapter {
                 },
             });
             console.log(`📤 ApiSyncAdapter: Pushed cash movement ${normalizedMovement.source_cash_movement_id || normalizedMovement.id}`);
+            return acknowledgement;
         } catch (error) {
             console.error('❌ ApiSyncAdapter: Error pushing cash movement:', error);
             this.isOnline = false;
@@ -5969,13 +6009,13 @@ export class ApiSyncAdapter {
     /**
      * Push a single Z-Report to Master
      */
-    async pushZReport(report: any): Promise<void> {
+    async pushZReport(report: any): Promise<any> {
         if (isRecoveredOperation(report)) throw new Error('RECOVERED_OPERATION_NO_REPLAY');
         try {
             const normalizedReport = buildErpZReportPayload(report);
             const documentId = String(normalizedReport.source_z_report_id || normalizedReport.id);
-            await this.postOperationalPayload('/z-reports', { items: [normalizedReport] }, {
-                callerAck: {
+            const acknowledgement = await this.postOperationalPayload('/z-reports', { items: [normalizedReport] }, {
+                responseValidator: {
                     reference: `pushZReport:${documentId}`,
                     validate: data => {
                         this.assertOperationalResponseObject(data);
@@ -5984,6 +6024,7 @@ export class ApiSyncAdapter {
                 },
             });
             console.log(`📤 ApiSyncAdapter: Pushed Z-Report ${normalizedReport.source_z_report_id || normalizedReport.id}`);
+            return acknowledgement;
         } catch (error) {
             console.error('❌ ApiSyncAdapter: Error pushing Z-Report:', error);
             this.isOnline = false;
@@ -5994,7 +6035,7 @@ export class ApiSyncAdapter {
     /**
      * Push wallet / loyalty operational events (normalized, idempotent by source_event_id on Master).
      */
-    async pushOperationalEvents(items: Record<string, unknown>[]): Promise<void> {
+    async pushOperationalEvents(items: Record<string, unknown>[]): Promise<any> {
         if (items.some(isRecoveredOperation)) throw new Error('RECOVERED_OPERATION_NO_REPLAY');
         if (!items.length) return;
         try {
@@ -6006,8 +6047,8 @@ export class ApiSyncAdapter {
                 return buildErpWalletEventPayload(row);
             });
             const documentIds = normalized.map(row => String((row as any).source_event_id || (row as any).id || '')).filter(Boolean);
-            await this.postOperationalPayload('/operational/events', { items: normalized }, {
-                callerAck: {
+            const acknowledgement = await this.postOperationalPayload('/operational/events', { items: normalized }, {
+                responseValidator: {
                     reference: `pushOperationalEvents:${documentIds.join(',')}`,
                     validate: data => {
                         this.assertOperationalResponseObject(data);
@@ -6018,6 +6059,7 @@ export class ApiSyncAdapter {
                 },
             });
             console.log(`📤 ApiSyncAdapter: Pushed ${normalized.length} operational event(s)`);
+            return acknowledgement;
         } catch (error) {
             console.error('❌ ApiSyncAdapter: Error pushing operational events:', error);
             this.isOnline = false;
@@ -6035,7 +6077,7 @@ export class ApiSyncAdapter {
         const eventIds = events.map(event => String((event as any).eventId || (event as any).id || '')).filter(Boolean);
         return this.postOperationalPayload('/inbox/batch', { events }, {
             maxRequestBytes: 512 * 1024,
-            callerAck: {
+            responseValidator: {
                 reference: `pushDurableOutboxBatch:${eventIds.join(',')}`,
                 validate: data => {
                     this.assertOperationalResponseObject(data);
@@ -6074,7 +6116,10 @@ export class ApiSyncAdapter {
     /**
      * Acknowledge pending transactions (Master only)
      */
-    async ackPendingTransactions(ids: string[]): Promise<void> {
+    async ackPendingTransactions(
+        ids: string[],
+        operationCorrelationId = this.createOperationCorrelationId('ackPendingTransactions'),
+    ): Promise<any> {
         if (!this.config || !this.isOnline) return;
         if (!ids || ids.length === 0) return;
 
@@ -6087,14 +6132,14 @@ export class ApiSyncAdapter {
                     'X-Sync-Token': this.authToken || ''
                 },
                 body: JSON.stringify({ ids })
-            });
+            }, 2, 500, 'background', 'PUSH_OPERATIONS', undefined, undefined, operationCorrelationId);
 
             if (response.status === 401) {
                 await this.acknowledgeLegacy401(response, `ackPendingTransactions:${ids.join(',')}:401`);
                 await this.authenticate();
-                return this.ackPendingTransactions(ids);
+                return this.ackPendingTransactions(ids, operationCorrelationId);
             }
-            await this.acknowledgeLegacyJsonResponse(response, `ackPendingTransactions:${ids.join(',')}`, payload => {
+            return await this.acknowledgeLegacyJsonResponse(response, `ackPendingTransactions:${ids.join(',')}`, payload => {
                 try {
                     this.assertOperationalResponseObject(payload);
                     for (const id of ids) assertOperationalAcknowledgement(payload, id, 'PENDING_TRANSACTION_ACK');
@@ -6135,7 +6180,10 @@ export class ApiSyncAdapter {
     /**
      * Acknowledge pending inventory movements (Master only)
      */
-    async ackPendingInventoryMovements(ids: string[]): Promise<void> {
+    async ackPendingInventoryMovements(
+        ids: string[],
+        operationCorrelationId = this.createOperationCorrelationId('ackPendingInventoryMovements'),
+    ): Promise<any> {
         if (!this.config || !this.isOnline) return;
         if (!ids || ids.length === 0) return;
 
@@ -6148,14 +6196,14 @@ export class ApiSyncAdapter {
                     'X-Sync-Token': this.authToken || ''
                 },
                 body: JSON.stringify({ ids })
-            });
+            }, 2, 500, 'background', 'PUSH_OPERATIONS', undefined, undefined, operationCorrelationId);
 
             if (response.status === 401) {
                 await this.acknowledgeLegacy401(response, `ackPendingInventoryMovements:${ids.join(',')}:401`);
                 await this.authenticate();
-                return this.ackPendingInventoryMovements(ids);
+                return this.ackPendingInventoryMovements(ids, operationCorrelationId);
             }
-            await this.acknowledgeLegacyJsonResponse(response, `ackPendingInventoryMovements:${ids.join(',')}`, payload => {
+            return await this.acknowledgeLegacyJsonResponse(response, `ackPendingInventoryMovements:${ids.join(',')}`, payload => {
                 try {
                     this.assertOperationalResponseObject(payload);
                     for (const id of ids) assertOperationalAcknowledgement(payload, id, 'PENDING_INVENTORY_ACK');
@@ -6172,7 +6220,12 @@ export class ApiSyncAdapter {
     /**
      * Report a sync error to Master
      */
-    async reportError(error: string, itemType: string, itemId: string): Promise<void> {
+    async reportError(
+        error: string,
+        itemType: string,
+        itemId: string,
+        operationCorrelationId = this.createOperationCorrelationId(`reportError:${itemType}:${itemId}`),
+    ): Promise<any> {
         if (!this.config || !this.isOnline) return;
 
         try {
@@ -6190,14 +6243,14 @@ export class ApiSyncAdapter {
                     terminalId: this.config.terminalId,
                     timestamp: new Date().toISOString()
                 })
-            });
+            }, 2, 500, 'background', 'PUSH_OPERATIONS', undefined, undefined, operationCorrelationId);
 
             if (response.status === 401) {
                 await this.acknowledgeLegacy401(response, `reportError:${itemType}:${itemId}:401`);
                 await this.authenticate();
-                return this.reportError(error, itemType, itemId);
+                return this.reportError(error, itemType, itemId, operationCorrelationId);
             }
-            await this.acknowledgeLegacyJsonResponse(response, `reportError:${itemType}:${itemId}`, payload => {
+            return await this.acknowledgeLegacyJsonResponse(response, `reportError:${itemType}:${itemId}`, payload => {
                 try {
                     this.assertOperationalResponseObject(payload);
                     assertOperationalAcknowledgement(payload, itemId, 'SYNC_ERROR_REPORT');
@@ -6275,7 +6328,10 @@ export class ApiSyncAdapter {
         }
     }
 
-    async retryErpForwardQueue(ids?: string[]): Promise<any> {
+    async retryErpForwardQueue(
+        ids?: string[],
+        operationCorrelationId = this.createOperationCorrelationId('retryErpForwardQueue'),
+    ): Promise<any> {
         if (!this.config) return null;
 
         if (!this.authToken) {
@@ -6289,7 +6345,7 @@ export class ApiSyncAdapter {
                 'X-Sync-Token': this.authToken || ''
             },
             body: JSON.stringify({ ids: Array.isArray(ids) ? ids : undefined })
-        });
+        }, 2, 500, 'background', 'PUSH_OPERATIONS', undefined, undefined, operationCorrelationId);
 
         if (response.status === 401) {
             await this.acknowledgeLegacy401(response, `retryErpForwardQueue:401`);
@@ -6301,7 +6357,7 @@ export class ApiSyncAdapter {
                     'X-Sync-Token': this.authToken || ''
                 },
                 body: JSON.stringify({ ids: Array.isArray(ids) ? ids : undefined })
-            });
+            }, 2, 500, 'background', 'PUSH_OPERATIONS', undefined, undefined, operationCorrelationId);
             if (!retryResponse.ok) {
                 throw new Error(`ERP forward retry failed: ${retryResponse.status} ${retryResponse.statusText}`);
             }
@@ -6529,7 +6585,10 @@ export class ApiSyncAdapter {
     /**
      * Reset all operational data for a specific terminal on the Master server
      */
-    async resetTerminalData(terminalId: string): Promise<void> {
+    async resetTerminalData(
+        terminalId: string,
+        operationCorrelationId = this.createOperationCorrelationId(`resetTerminalData:${terminalId}`),
+    ): Promise<any> {
         if (!this.config || !this.isOnline) return;
 
         if (!this.authToken) {
@@ -6543,22 +6602,23 @@ export class ApiSyncAdapter {
                     'Content-Type': 'application/json',
                     'X-Sync-Token': this.authToken || ''
                 }
-            });
+            }, 2, 500, 'background', 'PUSH_OPERATIONS', undefined, undefined, operationCorrelationId);
 
             if (response.status === 401) {
                 await this.acknowledgeLegacy401(response, `resetTerminalData:${terminalId}:401`);
                 await this.authenticate();
-                return this.resetTerminalData(terminalId);
+                return this.resetTerminalData(terminalId, operationCorrelationId);
             }
 
             if (!response.ok) {
                 throw new Error(`Reset terminal data failed: ${response.statusText}`);
             }
-            await this.acknowledgeLegacyJsonResponse(response, `resetTerminalData:${terminalId}`, payload => {
+            const acknowledgement = await this.acknowledgeLegacyJsonResponse(response, `resetTerminalData:${terminalId}`, payload => {
                 try { this.assertOperationalResponseObject(payload); return true; } catch { return false; }
             });
 
             console.log(`✅ ApiSyncAdapter: Reset terminal data for ${terminalId} on Master`);
+            return acknowledgement;
         } catch (error) {
             console.error('❌ ApiSyncAdapter: Error resetting terminal data:', error);
             throw error;

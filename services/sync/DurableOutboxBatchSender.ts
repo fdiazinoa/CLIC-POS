@@ -6,6 +6,7 @@ import {
     type DurableOutboxRepository,
 } from './DurableOutboxRepository';
 import { syncMetrics } from './SyncMetrics';
+import { completeLegacyMutationAfterDurableAck } from './LegacyMutationJournal';
 
 export const POS_2B_MAX_TRANSACTIONS = 25;
 export const POS_2B_MAX_EVENTS = 50;
@@ -231,6 +232,10 @@ export class DurableOutboxBatchSender {
 
         syncMetrics.setBatchSize(selection.events.length);
         syncMetrics.markAckFinished(now.toISOString());
+        await completeLegacyMutationAfterDurableAck(
+            response,
+            `DurableOutboxBatchSender:${selection.events.map(record => record.eventId).join(',')}`,
+        );
         return summary;
     }
 }

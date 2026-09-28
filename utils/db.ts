@@ -16,6 +16,7 @@ import { Capacitor } from '@capacitor/core';
 import { permissionService } from '../services/sync/PermissionService';
 import { mergeDocumentSeriesCollection, mergeIncomingDocumentSeriesWithoutRewind } from './documentSeriesIdentity';
 import { reconcilePreparedFiscalCollections } from './fiscalPreparedAuthority';
+import { completeLegacyMutationAfterDurableAck } from '../services/sync/LegacyMutationJournal';
 
 const DB_KEY = 'clic_pos_db_v1';
 let initPromise: Promise<any> | null = null;
@@ -1152,7 +1153,9 @@ export const db = {
       // 4. Reset Sync Center Counters on Master Server
       try {
         const { apiSyncAdapter } = await import('../services/sync/ApiSyncAdapter');
-        await apiSyncAdapter.resetTerminalData(terminalId);
+        const result = await apiSyncAdapter.resetTerminalData(terminalId);
+        await dbAdapter.saveDocument('legacyMutationCompletions', { id: `reset-terminal-${terminalId}`, completedAt: new Date().toISOString() });
+        await completeLegacyMutationAfterDurableAck(result, `db:resetTerminalData:${terminalId}`);
         console.log('✅ Sync center counters reset on Master');
       } catch (error) {
         console.warn('⚠️ Could not reset sync center counters on Master (offline or server unreachable)', error);
@@ -1163,7 +1166,9 @@ export const db = {
       // If it's Master, we also want to clear all operational data on the server
       try {
         const { apiSyncAdapter } = await import('../services/sync/ApiSyncAdapter');
-        await apiSyncAdapter.resetTerminalData('ALL');
+        const result = await apiSyncAdapter.resetTerminalData('ALL');
+        await dbAdapter.saveDocument('legacyMutationCompletions', { id: 'reset-terminal-ALL', completedAt: new Date().toISOString() });
+        await completeLegacyMutationAfterDurableAck(result, 'db:resetTerminalData:ALL');
         console.log('✅ Global sync center counters reset on Master server');
       } catch (error) {
         console.warn('⚠️ Could not reset global sync center counters on Master server', error);

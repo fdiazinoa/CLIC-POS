@@ -1,6 +1,7 @@
 import { dbAdapter } from '../db';
 import type { MasterNumberRangeEntityType, MasterNumberRangeRecord } from '../db/DatabaseAdapter';
 import { apiSyncAdapter } from './ApiSyncAdapter';
+import { completeLegacyMutationAfterDurableAck } from './LegacyMutationJournal';
 import { permissionService } from './PermissionService';
 import { resolveCanonicalErpTerminalId } from './terminalIdentity';
 import { syncPolicy } from './SyncProfile';
@@ -158,6 +159,7 @@ export const reportPendingMasterNumberRangeProgress = async (): Promise<number> 
         for (const entry of batch) {
             await dbAdapter.markMasterNumberRangeProgressReported(entry.range.id, entry.lastIssuedNumber);
         }
+        await completeLegacyMutationAfterDurableAck(response, `MasterNumberRangeService:${context.terminalId}`);
         notifyUpdated();
         return batch.length;
     } catch (error: any) {

@@ -2,6 +2,7 @@ import { isRecoveredOperation } from '../recovery/PendingOperationsRecovery';
 import { db } from '../../utils/db';
 import { dbAdapter } from '../db';
 import { apiSyncAdapter } from './ApiSyncAdapter';
+import { completeLegacyMutationAfterDurableAck } from './LegacyMutationJournal';
 import { permissionService } from './PermissionService';
 import { InventoryLedgerEntry, CashMovement, ZReport, SyncStatus } from '../../types';
 import { isPosSaleActive, POS_SALE_ACTIVITY_EVENT } from '../../utils/posSaleActivity';
@@ -413,7 +414,7 @@ class BackgroundSyncManager {
             } else {
                 // Legacy path remains available while POS-2B is dark.
                 await this.processCollection<any>('transactions', async (item) => {
-                    await apiSyncAdapter.pushTransaction(item);
+                    return apiSyncAdapter.pushTransaction(item);
                 }).catch((error: any) => {
                     collectionErrors.push(`transactions: ${error?.message || 'unknown error'}`);
                 });
@@ -429,8 +430,9 @@ class BackgroundSyncManager {
 
             // 2) Customer mutations
             await this.processCollection<any>('customerMutations', async (item) => {
-                await apiSyncAdapter.pushCustomerMutation(item);
+                const result = await apiSyncAdapter.pushCustomerMutation(item);
                 if (syncPolicy.resolve().kind === 'ERP_ACTIVE') await markNumberedMasterSynced(item.customer);
+                return result;
             }).catch((error: any) => {
                 collectionErrors.push(`customerMutations: ${error?.message || 'unknown error'}`);
             });
@@ -454,7 +456,7 @@ class BackgroundSyncManager {
 
             // Local operator mutations never contain biometric templates.
             await this.processCollection<any>('posUserMutations', async (item) => {
-                await apiSyncAdapter.pushPosUserMutation(item);
+                return apiSyncAdapter.pushPosUserMutation(item);
             }).catch((error: any) => {
                 collectionErrors.push(`posUserMutations: ${error?.message || 'unknown error'}`);
             });
@@ -465,7 +467,7 @@ class BackgroundSyncManager {
             // Sending the legacy ledger as well would duplicate the operation.
             if (!durableBatchActive) {
                 await this.processCollection<InventoryLedgerEntry>('inventoryLedger', async (item) => {
-                    await apiSyncAdapter.pushInventoryMovement(item);
+                    return apiSyncAdapter.pushInventoryMovement(item);
                 }).catch((error: any) => {
                     collectionErrors.push(`inventoryLedger: ${error?.message || 'unknown error'}`);
                 });
@@ -473,28 +475,28 @@ class BackgroundSyncManager {
 
             // 3) Cash Movements
             await this.processCollection<CashMovement>('cashMovements', async (item) => {
-                await (apiSyncAdapter as any).pushCashMovement?.(item);
+                return (apiSyncAdapter as any).pushCashMovement?.(item);
             }).catch((error: any) => {
                 collectionErrors.push(`cashMovements: ${error?.message || 'unknown error'}`);
             });
 
             // 4) Z-Reports
             await this.processCollection<ZReport>('zReports', async (item) => {
-                await (apiSyncAdapter as any).pushZReport?.(item);
+                return (apiSyncAdapter as any).pushZReport?.(item);
             }).catch((error: any) => {
                 collectionErrors.push(`zReports: ${error?.message || 'unknown error'}`);
             });
 
             // 5) Wallet operational events (ERP-normalized queue)
             await this.processCollection<any>('wallet_transactions', async (item) => {
-                await (apiSyncAdapter as any).pushOperationalEvents?.([item]);
+                return (apiSyncAdapter as any).pushOperationalEvents?.([item]);
             }).catch((error: any) => {
                 collectionErrors.push(`wallet_transactions: ${error?.message || 'unknown error'}`);
             });
 
             // 6) Loyalty points events (optional collection; often empty until wired to earn/burn)
             await this.processCollection<any>('loyalty_events', async (item) => {
-                await (apiSyncAdapter as any).pushOperationalEvents?.([item]);
+                return (apiSyncAdapter as any).pushOperationalEvents?.([item]);
             }).catch((error: any) => {
                 collectionErrors.push(`loyalty_events: ${error?.message || 'unknown error'}`);
             });
@@ -561,7 +563,7 @@ class BackgroundSyncManager {
         updatedAt?: string
     }>(
         collectionName: string,
-        pushFn: (item: T) => Promise<void>
+        pushFn: (item: T) => Promise<any>
     ) {
         const generation = this.remoteGeneration;
         if (!this.remoteEnabled || isPosSaleActive()) return;
@@ -602,7 +604,7 @@ class BackgroundSyncManager {
                 await db.saveDocument(collectionName as any, item as any);
 
                 // Attempt push
-                await pushFn(item);
+                const mutationResult = await pushFn(item);
                 if (!this.remoteEnabled || generation !== this.remoteGeneration) {
                     console.warn(`🛑 BackgroundSyncManager: Ignoring stale ACK for ${collectionName} item ${item.id}.`);
                     return;
@@ -635,6 +637,10 @@ class BackgroundSyncManager {
                 delete (item as any).syncRetryAfter;
                 delete (item as any).syncStartedAt;
                 await db.saveDocument(collectionName as any, item as any);
+                await completeLegacyMutationAfterDurableAck(
+                    mutationResult,
+                    `BackgroundSyncManager:${collectionName}:${item.id}`,
+                );
                 if (collectionName === 'transactions') {
                     const transaction = item as any;
                     console.log(
@@ -786,7 +792,17 @@ class BackgroundSyncManager {
                 throw new Error('Conflicto de identidad del cierre Z. Debe conciliarse con el servidor antes de reenviar; se conserva la secuencia original.');
             }
             try {
-                await apiSyncAdapter.pushZReport(report);
+                const mutationResult = await apiSyncAdapter.pushZReport(report);
+                await db.saveDocument('zReports', {
+                    ...report,
+                    syncStatus: 'COMPLETED',
+                    syncError: undefined,
+                    syncBlockedReason: undefined,
+                    syncBlockedAt: undefined,
+                    syncStartedAt: undefined,
+                    syncRetryAfter: undefined,
+                });
+                await completeLegacyMutationAfterDurableAck(mutationResult, `BackgroundSyncManager:retryZReport:${id}`);
             } catch (error: any) {
                 await db.saveDocument('zReports', {
                     ...report,
@@ -795,15 +811,6 @@ class BackgroundSyncManager {
                 });
                 throw error;
             }
-            await db.saveDocument('zReports', {
-                ...report,
-                syncStatus: 'COMPLETED',
-                syncError: undefined,
-                syncBlockedReason: undefined,
-                syncBlockedAt: undefined,
-                syncStartedAt: undefined,
-                syncRetryAfter: undefined,
-            });
         } finally {
             this.isProcessing = false;
         }

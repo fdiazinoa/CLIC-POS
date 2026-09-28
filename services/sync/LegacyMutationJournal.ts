@@ -1,6 +1,7 @@
 import { dbAdapter } from '../db';
 
 export const LEGACY_MUTATION_JOURNAL_COLLECTION = 'legacyMutationJournal';
+export const LEGACY_MUTATION_RECEIPT = Symbol.for('clic.legacyMutationReceipt');
 const CLOSED_RETENTION = 200;
 
 export type LegacyMutationClassification =
@@ -32,6 +33,43 @@ export interface LegacyMutationJournalStore {
     saveDocument<T extends { id: string }>(collectionName: string, document: T): Promise<void>;
     deleteDocument(collectionName: string, id: string): Promise<void>;
 }
+
+export type LegacyMutationReceiptCarrier = {
+    [LEGACY_MUTATION_RECEIPT]?: string[];
+};
+
+export const attachLegacyMutationReceipt = <T>(value: T, journalId: string): T => {
+    if (!value || (typeof value !== 'object' && typeof value !== 'function')) return value;
+    const carrier = value as T & LegacyMutationReceiptCarrier;
+    const current = carrier[LEGACY_MUTATION_RECEIPT] || [];
+    Object.defineProperty(carrier, LEGACY_MUTATION_RECEIPT, {
+        configurable: true,
+        enumerable: true,
+        writable: true,
+        value: [...current, journalId],
+    });
+    return value;
+};
+
+export const completeLegacyMutationAfterDurableAck = async (
+    value: unknown,
+    callerAckReference: string,
+    journal: LegacyMutationJournal = legacyMutationJournal,
+): Promise<void> => {
+    const ids = value && (typeof value === 'object' || typeof value === 'function')
+        ? ((value as LegacyMutationReceiptCarrier)[LEGACY_MUTATION_RECEIPT] || [])
+        : [];
+    for (const id of ids) {
+        await journal.acknowledge(id, 'RESPONSE_VALID', callerAckReference);
+    }
+};
+
+export const copyLegacyMutationReceipt = <T>(source: unknown, target: T): T => {
+    const ids = source && (typeof source === 'object' || typeof source === 'function')
+        ? ((source as LegacyMutationReceiptCarrier)[LEGACY_MUTATION_RECEIPT] || [])
+        : [];
+    return ids.reduce((current, id) => attachLegacyMutationReceipt(current, id), target);
+};
 
 const randomId = (): string => {
     try {

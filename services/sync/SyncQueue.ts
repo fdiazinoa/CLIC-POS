@@ -1,4 +1,5 @@
 import { dbAdapter } from '../db';
+import { completeLegacyMutationAfterDurableAck } from './LegacyMutationJournal';
 
 export interface SyncItem {
     id: string;
@@ -83,14 +84,15 @@ class SyncQueueService {
             const payload = typeof item.payload === 'string' ? JSON.parse(item.payload) : item.payload;
 
             // Handle different sync types
+            let mutationResult: unknown;
             if (item.type === 'TRANSACTION') {
                 // Use TransactionSyncService for real transaction sync
                 const { transactionSyncService } = await import('./TransactionSyncService');
-                await transactionSyncService.pushTransaction(payload);
+                mutationResult = await transactionSyncService.pushTransaction(payload);
             } else if (item.type === 'INVENTORY_ADJUSTMENT') {
                 // Use ApiSyncAdapter for inventory movements
                 const { apiSyncAdapter } = await import('./ApiSyncAdapter');
-                await apiSyncAdapter.pushInventoryMovement(payload);
+                mutationResult = await apiSyncAdapter.pushInventoryMovement(payload);
             } else {
                 // For other types, use mock sync for now
                 await new Promise(resolve => setTimeout(resolve, 500));
@@ -101,15 +103,17 @@ class SyncQueueService {
                 `UPDATE sync_queue SET status = 'SYNCED' WHERE id = ?`,
                 [item.id]
             );
+            await completeLegacyMutationAfterDurableAck(mutationResult, `SyncQueue:${item.id}:SYNCED`);
             console.log(`✅ Item ${item.id} synced successfully.`);
 
         } catch (error: any) {
             console.error(`❌ Failed to sync item ${item.id}:`, error);
 
             // Report error to Master
+            let reportResult: unknown;
             try {
                 const { apiSyncAdapter } = await import('./ApiSyncAdapter');
-                await apiSyncAdapter.reportError(error.message, item.type, item.id);
+                reportResult = await apiSyncAdapter.reportError(error.message, item.type, item.id);
             } catch (reportError) {
                 console.warn('Could not report sync error to Master:', reportError);
             }
@@ -119,6 +123,7 @@ class SyncQueueService {
                 `UPDATE sync_queue SET status = 'ERROR', retryCount = retryCount + 1, error = ? WHERE id = ?`,
                 [error.message, item.id]
             );
+            await completeLegacyMutationAfterDurableAck(reportResult, `SyncQueue:${item.id}:ERROR_RECORDED`);
         }
     }
 

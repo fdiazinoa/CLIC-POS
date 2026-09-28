@@ -3,6 +3,7 @@ import type { BusinessConfig, StockTransfer, TerminalConfig } from '../../types'
 import { db } from '../../utils/db';
 import { resolveLocalDeviceId } from '../../utils/deviceRevocation';
 import { apiSyncAdapter } from './ApiSyncAdapter';
+import { completeLegacyMutationAfterDurableAck } from './LegacyMutationJournal';
 
 export const TRANSFER_RECEIPT_QUEUE_COLLECTION = 'transfer_receipt_queue';
 export const TRANSFER_RECEIPT_QUEUE_UPDATED_EVENT = 'transferReceiptQueueUpdated';
@@ -362,6 +363,7 @@ export class TransferReceiptService {
                 snapshotRefreshError: undefined,
             };
             await this.persist(applied);
+            await completeLegacyMutationAfterDurableAck(response, `TransferReceiptService:${sending.id}:APPLIED`);
             await this.retrySnapshotRefresh(applied);
         } catch (error) {
             const status = readHttpStatus(error);

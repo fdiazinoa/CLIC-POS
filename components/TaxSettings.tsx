@@ -3,6 +3,7 @@ import { ArrowLeft, Percent, Plus, Save, ShieldAlert, Trash2 } from 'lucide-reac
 import { BusinessConfig, Product, TaxDefinition } from '../types';
 import { apiSyncAdapter } from '../services/sync/ApiSyncAdapter';
 import { syncPolicy } from '../services/sync/SyncProfile';
+import { completeLegacyMutationAfterDurableAck } from '../services/sync/LegacyMutationJournal';
 
 interface TaxSettingsProps {
   config: BusinessConfig;
@@ -156,8 +157,9 @@ const TaxSettings: React.FC<TaxSettingsProps> = ({
     });
 
     try {
+      let mutationResult: any;
       if (syncPolicy.targetKind() === 'ERP_ACTIVE') {
-        await apiSyncAdapter.saveTaxes(normalizedTaxes, {
+        mutationResult = await apiSyncAdapter.saveTaxes(normalizedTaxes, {
           userId: currentUser?.id || 'POS',
           userName: currentUser?.name || 'POS',
           terminalId,
@@ -169,6 +171,10 @@ const TaxSettings: React.FC<TaxSettingsProps> = ({
         taxRate: nextTaxRate,
         taxes: normalizedTaxes,
       }));
+      await completeLegacyMutationAfterDurableAck(
+        mutationResult,
+        `TaxSettings:save:${new Date().toISOString()}`,
+      );
       alert('Configuración de impuestos guardada correctamente.');
     } catch (error: any) {
       alert(`No se pudieron sincronizar los impuestos: ${error?.message || 'error desconocido'}`);

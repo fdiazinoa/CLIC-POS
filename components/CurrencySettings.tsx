@@ -7,6 +7,8 @@ import {
 import { CurrencyConfig, BusinessConfig, CurrencyRateSchedule, User } from '../types';
 import { apiSyncAdapter } from '../services/sync/ApiSyncAdapter';
 import { syncPolicy } from '../services/sync/SyncProfile';
+import { completeLegacyMutationAfterDurableAck } from '../services/sync/LegacyMutationJournal';
+import { db } from '../utils/db';
 import {
   getLocalCurrencyAudit,
   getLocalCurrencySchedules,
@@ -289,7 +291,13 @@ const CurrencySettings: React.FC<CurrencySettingsProps> = ({ config, onUpdateCon
         terminalId,
       };
       if (syncPolicy.targetKind() === 'ERP_ACTIVE') {
-        await apiSyncAdapter.scheduleCurrencyRate(payload);
+        const mutationResult = await apiSyncAdapter.scheduleCurrencyRate(payload);
+        await db.saveDocument('legacyMutationCompletions' as any, {
+          id: `CurrencySettings:schedule:${payload.id}`,
+          scheduleId: payload.id,
+          completedAt: new Date().toISOString(),
+        });
+        await completeLegacyMutationAfterDurableAck(mutationResult, `CurrencySettings:schedule:${payload.id}`);
       } else {
         await scheduleLocalCurrencyRate(payload);
         setSchedules(await getLocalCurrencySchedules());
@@ -316,8 +324,9 @@ const CurrencySettings: React.FC<CurrencySettingsProps> = ({ config, onUpdateCon
           lastModified: now,
           lastModifiedBy: actor.name,
         }));
+        let mutationResult: any;
         if (syncPolicy.targetKind() === 'ERP_ACTIVE') {
-          await apiSyncAdapter.saveCurrencies(stampedCurrencies, {
+          mutationResult = await apiSyncAdapter.saveCurrencies(stampedCurrencies, {
             userId: actor.id,
             userName: actor.name,
             terminalId,
@@ -325,6 +334,7 @@ const CurrencySettings: React.FC<CurrencySettingsProps> = ({ config, onUpdateCon
         }
         await recordCurrencyChanges(initialCurrencies, stampedCurrencies, actor, terminalId, syncPolicy.targetKind() === 'ERP_ACTIVE' ? 'ERP' : 'MANUAL');
         await Promise.resolve(onUpdateConfig({ ...config, currencies: stampedCurrencies, currencySymbol: baseCurrency.symbol }));
+        await completeLegacyMutationAfterDurableAck(mutationResult, `CurrencySettings:save:${now}`);
         alert("Configuración guardada y auditada.");
         onClose();
       } catch (error: any) {

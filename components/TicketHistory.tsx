@@ -73,6 +73,7 @@ import {
    recordInvoiceAuditEvent,
 } from '../services/invoices/InvoiceReviewService';
 import { resolveInvoiceScan, resolveInvoiceSearchReference, transactionInvoiceScanAliases } from '../utils/invoiceScan';
+import { completeLegacyMutationAfterDurableAck } from '../services/sync/LegacyMutationJournal';
 
 interface TicketHistoryProps {
    transactions: Transaction[];
@@ -2262,6 +2263,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
       requestMode: RefundRequestMode = 'STANDARD'
    ) => {
       let refundOptions: RefundProcessingOptions | undefined;
+      let refundPreparationResult: unknown;
 
       if (originalTx.erpRefundSource && requestMode === 'AZUL_GATEWAY_REFUND') {
          alert('Las devoluciones de tarjeta integradas todavía no están disponibles para facturas consultadas en ERP.');
@@ -2545,6 +2547,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
                   })),
                },
             );
+            refundPreparationResult = preparationPayload;
             const prepared = normalizeErpRefundPreparation(preparationPayload, {
                commandId,
                sourceId: originalTx.erpRefundSource.sourceId,
@@ -2563,7 +2566,11 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
       }
 
       try {
-         await onRefundTransaction(originalTx, refundItems, conditions, reason || 'Devolución', refundOptions);
+         const persistedRefund = await onRefundTransaction(originalTx, refundItems, conditions, reason || 'Devolución', refundOptions);
+         await completeLegacyMutationAfterDurableAck(
+            refundPreparationResult,
+            `TicketHistory:refund:${persistedRefund?.id || originalTx.id}`,
+         );
          setIsRefundModalOpen(false);
          setRefundTx(null);
          setRefundRequestMode('STANDARD');

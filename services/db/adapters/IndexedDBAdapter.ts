@@ -12,7 +12,7 @@ import {
 } from '../../sync/masterNumberRangeContract';
 
 const DB_NAME = 'clic_pos_indexeddb';
-const DB_VERSION = 24; // v24 adds the local-only legacy mutation journal
+const DB_VERSION = 25; // v25 adds durable completion markers for journaled LAN mutations
 const OLD_DB_KEY = 'clic_pos_db_v1';
 const OPEN_TIMEOUT_MS = 15000;
 const CURSOR_IDLE_TIMEOUT_MS = 3000;
@@ -36,7 +36,7 @@ const STORES = [
     'invoiceReviewFlags', 'invoiceAuditEvents', 'invoiceAdjustments',
     'masterNumberRanges', 'masterNumberSyncReceipts',
     'recoveryOriginals', 'recoveryState', 'recoveryStage', 'wallet_transactions',
-    'legacyMutationJournal'
+    'legacyMutationJournal', 'legacyMutationCompletions'
 ];
 
 export class IndexedDBAdapter implements DatabaseAdapter {

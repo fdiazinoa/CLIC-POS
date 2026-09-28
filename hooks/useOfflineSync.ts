@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { db } from '../utils/db';
 import { apiSyncAdapter } from '../services/sync/ApiSyncAdapter';
+import { completeLegacyMutationAfterDurableAck } from '../services/sync/LegacyMutationJournal';
 import { PurchaseOrder, StockTransfer } from '../types';
 
 export type OfflineReceiptDocumentType = 'PURCHASE_ORDER' | 'TRANSFER_IN' | 'INVENTORY_COUNT';
@@ -201,28 +202,30 @@ export const useOfflineSync = ({ onAfterLocalProcess }: UseOfflineSyncOptions = 
     }
 
     if (item.documentType === 'INVENTORY_COUNT') {
-      await apiSyncAdapter.pushInventoryCount(item.payload as any);
-      return;
+      return [await apiSyncAdapter.pushInventoryCount(item.payload as any)];
     }
+
+    const mutationResults: any[] = [];
 
     if (item.documentType === 'PURCHASE_ORDER') {
       const order = await db.getDocument('purchaseOrders', item.documentId);
       if (order) {
-        await apiSyncAdapter.push('purchaseOrders', [order], 'UPDATE', 'UPSERT');
+        mutationResults.push(await apiSyncAdapter.push('purchaseOrders', [order], 'UPDATE', 'UPSERT'));
       }
     } else {
       const transfer = await db.getDocument('transfers', item.documentId);
       if (transfer) {
-        await apiSyncAdapter.push('transfers', [transfer], 'UPDATE', 'UPSERT');
+        mutationResults.push(await apiSyncAdapter.push('transfers', [transfer], 'UPDATE', 'UPSERT'));
       }
     }
 
     if (item.appliedReceptionId) {
       const reception = await db.getDocument('receptions', item.appliedReceptionId);
       if (reception) {
-        await apiSyncAdapter.push('receptions', [reception], 'CREATE', 'UPSERT');
+        mutationResults.push(await apiSyncAdapter.push('receptions', [reception], 'CREATE', 'UPSERT'));
       }
     }
+    return mutationResults;
   }, []);
 
   const processPendingQueue = useCallback(async () => {
@@ -278,10 +281,16 @@ export const useOfflineSync = ({ onAfterLocalProcess }: UseOfflineSyncOptions = 
             await onAfterLocalProcess?.();
           }
 
-          await pushAppliedPackage(workingItem);
+          const mutationResults = await pushAppliedPackage(workingItem);
 
           await db.deleteDocument(queueCollection as any, workingItem.id);
           await clearScanLogsForDocument(workingItem.documentId);
+          for (const mutationResult of mutationResults || []) {
+            await completeLegacyMutationAfterDurableAck(
+              mutationResult,
+              `OfflineReceptionQueue:${workingItem.id}:deleted`,
+            );
+          }
           setSyncToast(`Sincronización completa: Recepción #${workingItem.documentCode} procesada`);
         } catch (error: any) {
           if (!workingItem.forceOverwrite && isConflictError(error)) {

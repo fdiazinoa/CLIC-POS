@@ -94,7 +94,7 @@ import { buildTerminalSyncAuthHeaders } from './TerminalCredentialStore';
 import { canDeleteCatalogProduct, keepProductAfterAuthoritativeFull, resolveRemoteCatalogDeletionIds } from './catalogReconciliation';
 import type { ClientMasterAuthority } from '../../utils/operationalMasterConfig';
 import { persistValidatedClientMasterTargetAsync } from '../../utils/clientMasterBinding';
-import { legacyMutationJournal } from './LegacyMutationJournal';
+import { completeLegacyMutationAfterDurableAck, legacyMutationJournal } from './LegacyMutationJournal';
 import {
     applyAuthoritativeProductTaxes,
     normalizeErpTaxDefinition,
@@ -5874,7 +5874,16 @@ class SyncManager {
             // const timestamp = new Date().toISOString();
             // console.log(`[PUSH_DISPARADO] ${timestamp} Enviando cambio al Master: ${items.length} items in ${collection}`);
 
-            await apiSyncAdapter.push(collection, items, 'BULK_UPDATE', 'FULL_REPLACE');
+            const result = await apiSyncAdapter.push(collection, items, 'BULK_UPDATE', 'FULL_REPLACE');
+
+            const durableReference = `SyncManager:pushCatalog:${collection}:${Date.now()}`;
+            await db.saveDocument('legacyMutationCompletions' as any, {
+                id: durableReference,
+                collection,
+                itemCount: items.length,
+                completedAt: new Date().toISOString(),
+            });
+            await completeLegacyMutationAfterDurableAck(result, durableReference);
 
             // Update local version tracking
             const metadata = await apiSyncAdapter.getMetadata(collection);
@@ -7395,7 +7404,14 @@ class SyncManager {
         if (!permissionService.isMasterTerminal()) return null;
 
         try {
-            return await apiSyncAdapter.retryErpForwardQueue(ids);
+            const result = await apiSyncAdapter.retryErpForwardQueue(ids);
+            await dbAdapter.saveDocument('legacyMutationCompletions', {
+                id: 'retry-erp-forward-queue',
+                ids: ids || [],
+                completedAt: new Date().toISOString(),
+            });
+            await completeLegacyMutationAfterDurableAck(result, `SyncManager:retryErpForwardQueue:${(ids || []).join(',')}`);
+            return result;
         } catch (error) {
             console.error('Error retrying ERP forward queue:', error);
             throw error;
@@ -7546,7 +7562,16 @@ class SyncManager {
                 return;
             }
 
-            await apiSyncAdapter.push(collection, [item], action, 'UPSERT');
+            const result = await apiSyncAdapter.push(collection, [item], action, 'UPSERT');
+            const durableReference = `SyncManager:broadcastChange:${collection}:${item.id}:${action}`;
+            await db.saveDocument('legacyMutationCompletions' as any, {
+                id: durableReference,
+                collection,
+                documentId: item.id,
+                action,
+                completedAt: new Date().toISOString(),
+            });
+            await completeLegacyMutationAfterDurableAck(result, durableReference);
             console.log(`📡 Broadcasted ${action} for ${collection} (item ${item.id})`);
         } catch (error: any) {
             if (error.message === 'Cannot push while offline') {
@@ -7571,11 +7596,13 @@ class SyncManager {
         }
 
         try {
-            await apiSyncAdapter.push('products', [{
+            const result = await apiSyncAdapter.push('products', [{
                 id: product.id,
                 production_area_id: product.production_area_id,
                 updatedAt: product.updatedAt,
             }], 'UPDATE', 'UPSERT');
+            await db.saveDocument('products', product);
+            await completeLegacyMutationAfterDurableAck(result, `SyncManager:broadcastProductRoutingChange:${product.id}`);
             console.log('[PRODUCTION_ROUTING] Product route published', { productId: product.id });
         } catch (error: any) {
             if (error?.message === 'Cannot push while offline') {
@@ -7593,7 +7620,9 @@ class SyncManager {
      */
     async pushZReport(report: any) {
         try {
-            await apiSyncAdapter.pushZReport(report);
+            const result = await apiSyncAdapter.pushZReport(report);
+            await db.saveDocument('zReports', { ...report, syncStatus: 'COMPLETED', syncError: undefined });
+            await completeLegacyMutationAfterDurableAck(result, `SyncManager:pushZReport:${report.id}`);
             console.log('📤 SyncManager: Pushed Z-Report to Server');
         } catch (error) {
             console.error('❌ SyncManager: Failed to push Z-Report:', error);
@@ -7610,7 +7639,9 @@ class SyncManager {
         // If we are Master, we still want to push to the Server so it has the record
         // The Server is the source of truth for the "Global Ledger"
         try {
-            await apiSyncAdapter.pushInventoryMovement(movement);
+            const result = await apiSyncAdapter.pushInventoryMovement(movement);
+            await db.saveDocument('inventoryLedger', { ...movement, syncStatus: 'COMPLETED', syncError: undefined });
+            await completeLegacyMutationAfterDurableAck(result, `SyncManager:pushInventoryMovement:${movement.id}`);
             console.log('📤 SyncManager: Pushed inventory movement to Server');
         } catch (error) {
             console.error('❌ SyncManager: Failed to push inventory movement:', error);
@@ -7649,7 +7680,13 @@ class SyncManager {
      */
     async resetTerminalData(terminalId: string) {
         try {
-            await apiSyncAdapter.resetTerminalData(terminalId);
+            const result = await apiSyncAdapter.resetTerminalData(terminalId);
+            await dbAdapter.saveDocument('legacyMutationCompletions', {
+                id: `reset-terminal-${terminalId}`,
+                terminalId,
+                completedAt: new Date().toISOString(),
+            });
+            await completeLegacyMutationAfterDurableAck(result, `SyncManager:resetTerminalData:${terminalId}`);
             console.log(`✅ SyncManager: Reset signal sent for terminal ${terminalId}`);
         } catch (error) {
             console.warn(`⚠️ SyncManager: Failed to send reset signal for terminal ${terminalId}:`, error);
