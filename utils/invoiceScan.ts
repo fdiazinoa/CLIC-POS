@@ -30,6 +30,11 @@ export const isRecognizedInvoiceScan = (rawValue: string): boolean => {
   }
 };
 
+export const shouldRouteInvoiceScan = (
+  rawValue: string,
+  matches: { coupon?: boolean; scale?: boolean; product?: boolean } = {},
+): boolean => !matches.coupon && !matches.scale && !matches.product && isRecognizedInvoiceScan(rawValue);
+
 export const extractInvoiceScanReferences = (rawValue: string): string[] => {
   const raw = rawValue.trim();
   const references = new Set<string>();
@@ -66,6 +71,27 @@ export const extractInvoiceScanReferences = (rawValue: string): string[] => {
   return [...references];
 };
 
+export const resolveInvoiceSearchReference = (rawValue: string): string =>
+  extractInvoiceScanReferences(rawValue)[0] || rawValue.trim();
+
+export const transactionInvoiceScanAliases = (transaction: Transaction): string[] => {
+  const aliases = new Set<string>();
+  [
+    transaction.id,
+    transaction.displayId,
+    transaction.ncf,
+    transaction.electronicNcf,
+    transaction.fiscalCertifiedNcf,
+    transaction.fiscalReferenceId,
+    transaction.fiscalQrUrl,
+    transaction.source_transaction_id,
+    transaction.source_display_id,
+    transaction.erpRefundSource?.sourceId,
+    transaction.erpRefundSource?.reference,
+  ].forEach(alias => add(aliases, alias));
+  return [...aliases];
+};
+
 export type InvoiceScanResolution =
   | { status: 'MATCH'; transactionId: string; transaction: Transaction }
   | { status: 'AMBIGUOUS'; transactionIds: string[] }
@@ -77,21 +103,7 @@ export const resolveInvoiceScan = (rawValue: string, transactions: Transaction[]
 
   const matches = new Map<string, Transaction>();
   transactions.forEach((transaction) => {
-    const aliases = new Set<string>();
-    [
-      transaction.id,
-      transaction.displayId,
-      transaction.ncf,
-      transaction.electronicNcf,
-      transaction.fiscalCertifiedNcf,
-      transaction.fiscalReferenceId,
-      transaction.fiscalQrUrl,
-      transaction.source_transaction_id,
-      transaction.source_display_id,
-      transaction.erpRefundSource?.sourceId,
-      transaction.erpRefundSource?.reference,
-    ].forEach(alias => add(aliases, alias));
-    if ([...aliases].some(alias => references.has(alias))) matches.set(transaction.id, transaction);
+    if (transactionInvoiceScanAliases(transaction).some(alias => references.has(alias))) matches.set(transaction.id, transaction);
   });
 
   if (matches.size === 1) {

@@ -72,7 +72,7 @@ import {
    createInvoiceReview,
    recordInvoiceAuditEvent,
 } from '../services/invoices/InvoiceReviewService';
-import { resolveInvoiceScan } from '../utils/invoiceScan';
+import { resolveInvoiceScan, resolveInvoiceSearchReference, transactionInvoiceScanAliases } from '../utils/invoiceScan';
 
 interface TicketHistoryProps {
    transactions: Transaction[];
@@ -1863,6 +1863,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
       if (!scanValue || !historyLoaded || handledInitialSelectionRef.current === scanValue) return;
       handledInitialSelectionRef.current = scanValue;
       const resolution = resolveInvoiceScan(scanValue, allKnownTransactions);
+      const normalizedReference = resolveInvoiceSearchReference(scanValue);
 
       if (resolution.status === 'MATCH') {
          setSearchTerm(resolution.transaction.displayId || resolution.transaction.id);
@@ -1870,7 +1871,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
          setSelectedTxId(resolution.transactionId);
          setErpSearchError(null);
       } else {
-         setSearchTerm(scanValue);
+         setSearchTerm(normalizedReference);
          setExpandedId(null);
          setSelectedTxId(null);
          setErpSearchError(resolution.status === 'AMBIGUOUS'
@@ -1979,6 +1980,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
                (t.userName || '').toLowerCase().includes(lowerTerm) ||
                (t.id || '').toLowerCase().includes(lowerTerm) ||
                t.displayId?.toLowerCase().includes(lowerTerm) ||
+               transactionInvoiceScanAliases(t).some(alias => alias.toLowerCase().includes(lowerTerm)) ||
                t.total.toString().includes(lowerTerm)
             );
          }

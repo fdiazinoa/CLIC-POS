@@ -6168,7 +6168,9 @@ const AppContent: React.FC = () => {
 
       window.dispatchEvent(new CustomEvent('barcodeScanned', { detail: { barcode } }));
     },
-    onTicketScan: currentView === 'POS' || currentView === 'HISTORY'
+    // Venta owns product/scale/coupon precedence. History can consume invoice
+    // patterns directly because no product routing is active there.
+    onTicketScan: currentView === 'HISTORY'
       ? (ticketId) => {
         console.log(`🎟️ Smart Scan: Opening Ticket History for ${ticketId}`);
         setScanTargetTicketId(ticketId);

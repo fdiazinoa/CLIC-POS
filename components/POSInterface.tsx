@@ -59,7 +59,7 @@ import { applyPromotions } from '../utils/promotionEngine';
 import { calculatePointsEarned, getPrimaryLoyaltyCard } from '../utils/loyaltyEngine';
 import { couponService } from '../utils/couponService';
 import { resolveScannedCouponCode } from '../utils/couponScan';
-import { isRecognizedInvoiceScan } from '../utils/invoiceScan';
+import { shouldRouteInvoiceScan } from '../utils/invoiceScan';
 import { calculateInventoryDeductions, resolveInventoryConsumptionMode, transferStockToCommitted } from '../utils/inventoryEngine';
 import { useSupervisorAuth } from '../hooks/useSupervisorAuth';
 import { calculateSalesCommission } from '../utils/userSalesPolicy';
@@ -3794,11 +3794,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          // Not a JSON or invalid
       }
 
-      if (isRecognizedInvoiceScan(trimmed)) {
-         onOpenInvoiceActions(trimmed);
-         return;
-      }
-
       // 1. Try Scale Parser
       if (config.scaleLabelConfig?.isEnabled) {
          const scaleItem = parseScaleBarcode(trimmed, config.scaleLabelConfig);
@@ -3842,6 +3837,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          }
          setErrorToast(`Producto agregado: ${match.product.name}`);
          setTimeout(() => setErrorToast(null), 1500);
+         return;
+      }
+
+      // Invoice-like prefixes are intentionally evaluated after scale/product
+      // lookup so an existing SKU such as INV001 or NC-SODA keeps POS priority.
+      if (shouldRouteInvoiceScan(trimmed)) {
+         onOpenInvoiceActions(trimmed);
          return;
       }
 
@@ -9677,13 +9679,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   // Not a JSON or invalid
                }
 
-               // 0.1 Try Transaction Search (Direct bypass for TCK... barcodes)
-               if (isRecognizedInvoiceScan(trimmed)) {
-                  onOpenInvoiceActions(trimmed);
-                  setIsScannerOpen(false);
-                  return { success: true, message: 'Factura Identificada' };
-               }
-
                // 1. Try Scale Parser
                if (config.scaleLabelConfig?.isEnabled) {
                   const scaleItem = parseScaleBarcode(code, config.scaleLabelConfig);
@@ -9713,6 +9708,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   // Direct add for speed
                   addToCart(product);
                   return { success: true, message: `${product.name} Agregado` };
+               }
+
+               if (shouldRouteInvoiceScan(trimmed)) {
+                  onOpenInvoiceActions(trimmed);
+                  setIsScannerOpen(false);
+                  return { success: true, message: 'Factura Identificada' };
                }
 
                return { success: false, message: 'Producto no encontrado' };

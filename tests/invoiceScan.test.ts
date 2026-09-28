@@ -2,7 +2,14 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import type { Transaction } from '../types';
-import { extractInvoiceScanReferences, isRecognizedInvoiceScan, resolveInvoiceScan } from '../utils/invoiceScan';
+import {
+  extractInvoiceScanReferences,
+  isRecognizedInvoiceScan,
+  resolveInvoiceScan,
+  resolveInvoiceSearchReference,
+  shouldRouteInvoiceScan,
+  transactionInvoiceScanAliases,
+} from '../utils/invoiceScan';
 
 const transaction = (overrides: Partial<Transaction> = {}): Transaction => ({
   id: 'tx-actual-1',
@@ -47,14 +54,40 @@ test('recognition excludes products/coupons/reservations and parses valid DGII/J
   assert.deepEqual(extractInvoiceScanReferences(JSON.stringify({ type: 'INVOICE_RETURN', id: 'tx-actual-1' })), ['TX-ACTUAL-1']);
 });
 
+test('invoice-like product codes keep catalog priority in HID and camera routing', () => {
+  for (const barcode of ['INV001', 'NC-SODA', 'B01ABC', 'E31001', 'TXN-PRODUCT']) {
+    assert.equal(isRecognizedInvoiceScan(barcode), true);
+    assert.equal(shouldRouteInvoiceScan(barcode, { product: true }), false);
+    assert.equal(shouldRouteInvoiceScan(barcode), true);
+  }
+  assert.equal(shouldRouteInvoiceScan('TCK01-000123'), true);
+});
+
+test('search reference and aliases normalize JSON/DGII input for local ambiguity and ERP lookup', () => {
+  assert.equal(resolveInvoiceSearchReference('{"type":"INVOICE_RETURN","ncf":"b0200000011"}'), 'B0200000011');
+  assert.equal(resolveInvoiceSearchReference('https://dgii.gov.do/check?ncf=B0200000011&trackId=TRACK-123'), 'B0200000011');
+  assert.deepEqual(transactionInvoiceScanAliases(transaction()), [
+    'TX-ACTUAL-1', 'TCK01-000123', 'B0200000011', 'E320000000001', 'TRACK-123', 'ERP-SOURCE-1',
+  ]);
+});
+
 test('POS keeps coupon precedence and delegates invoice actions to the secured TicketHistory flow', () => {
   const pos = readFileSync(new URL('../components/POSInterface.tsx', import.meta.url), 'utf8');
   const process = pos.slice(pos.indexOf('const processBarcode ='), pos.indexOf('const isAnyModalOpen'));
-  assert.ok(process.indexOf('routeScannedCoupon(trimmed)') < process.indexOf('isRecognizedInvoiceScan(trimmed)'));
+  assert.ok(process.indexOf('routeScannedCoupon(trimmed)') < process.indexOf('shouldRouteInvoiceScan(trimmed)'));
+  assert.ok(process.indexOf('findProductByAnyCode(trimmed)') < process.indexOf('shouldRouteInvoiceScan(trimmed)'));
+  const camera = pos.slice(pos.indexOf('<BarcodeScannerModal'), pos.indexOf('quickActionData &&'));
+  assert.ok(camera.indexOf('routeScannedCoupon(trimmed)') < camera.indexOf('shouldRouteInvoiceScan(trimmed)'));
+  assert.ok(camera.indexOf("(products || []).find(p => p.barcode === code)") < camera.indexOf('shouldRouteInvoiceScan(trimmed)'));
   assert.doesNotMatch(pos, /<ReturnModal|handleProcessReturn/);
+
+  const app = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
+  assert.match(app, /onTicketScan: currentView === 'HISTORY'/);
 
   const history = readFileSync(new URL('../components/TicketHistory.tsx', import.meta.url), 'utf8');
   assert.match(history, /setSelectedTxId\(resolution\.transactionId\)/);
+  assert.match(history, /setSearchTerm\(normalizedReference\)/);
+  assert.match(history, /transactionInvoiceScanAliases\(t\)/);
   assert.match(history, /setRefundTx\(tx\);\s*setIsRefundModalOpen\(true\)/);
   assert.match(history, /requestApproval\(/);
 });
