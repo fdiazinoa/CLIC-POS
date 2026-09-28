@@ -9,7 +9,10 @@ import {
   type LegacyMutationJournalStore,
 } from '../services/sync/LegacyMutationJournal';
 import { setNativeRequestTransportForTests } from '../services/network/httpClient';
-import { dispatchLegacyLanMutation } from '../services/sync/LegacyLanMutationTransport';
+import {
+  dispatchLegacyLanMutation,
+  validateLegacyTableStateResponse,
+} from '../services/sync/LegacyLanMutationTransport';
 import { setTerminalCredentialNativeWriterForTests } from '../services/sync/TerminalCredentialStore';
 
 class Store implements LegacyMutationJournalStore {
@@ -271,6 +274,30 @@ for (const invalidPayload of [{ success: false }, { message: 'missing explicit a
     } finally {
       restore();
     }
+  });
+}
+
+test('Android 1.1.435 table state response validates the nested table identity and snapshots', () => {
+  const validate = validateLegacyTableStateResponse('table-7');
+  assert.doesNotThrow(() => validate({
+    success: true,
+    table: { id: 'table-7', status: 'OCCUPIED' },
+    tables: [{ id: 'table-7' }],
+    parkedTickets: [{ id: 'order-1', tableId: 'table-7' }],
+    revision: 19,
+  }));
+});
+
+for (const [label, payload] of [
+  ['success false', { success: false, table: { id: 'table-7' }, tables: [], parkedTickets: [], revision: 19 }],
+  ['top-level id only', { success: true, id: 'table-7', tables: [], parkedTickets: [], revision: 19 }],
+  ['wrong nested table', { success: true, table: { id: 'table-8' }, tables: [], parkedTickets: [], revision: 19 }],
+  ['missing tables snapshot', { success: true, table: { id: 'table-7' }, parkedTickets: [], revision: 19 }],
+  ['missing parked tickets snapshot', { success: true, table: { id: 'table-7' }, tables: [], revision: 19 }],
+  ['missing revision', { success: true, table: { id: 'table-7' }, tables: [], parkedTickets: [] }],
+] as const) {
+  test(`table state response rejects ${label}`, () => {
+    assert.throws(() => validateLegacyTableStateResponse('table-7')(payload));
   });
 }
 

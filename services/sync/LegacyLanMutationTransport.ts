@@ -21,6 +21,18 @@ export const validateLegacyEntityResponse = (expectedId: string) => (data: unkno
     if (String((data as any).id || '') !== String(expectedId)) throw new Error('RESPONSE_ENTITY_ID_MISMATCH');
 };
 
+export const validateLegacyTableStateResponse = (expectedId: string) => (data: unknown): void => {
+    validateLegacySuccessResponse(data);
+    const response = data as Record<string, any>;
+    validateLegacyResponseObject(response.table);
+    if (String(response.table.id || '') !== String(expectedId)) throw new Error('RESPONSE_TABLE_ID_MISMATCH');
+    if (!Array.isArray(response.tables)) throw new Error('RESPONSE_TABLES_SNAPSHOT_REQUIRED');
+    if (!Array.isArray(response.parkedTickets)) throw new Error('RESPONSE_PARKED_TICKETS_SNAPSHOT_REQUIRED');
+    if (typeof response.revision !== 'number' || !Number.isFinite(response.revision)) {
+        throw new Error('RESPONSE_RESTAURANT_REVISION_REQUIRED');
+    }
+};
+
 export const persistLegacyLanMutationCompletion = async (
     correlationId: string,
     reference: string,

@@ -350,6 +350,7 @@ import {
   validateLegacyEntityResponse,
   validateLegacyResponseObject,
   validateLegacySuccessResponse,
+  validateLegacyTableStateResponse,
 } from './services/sync/LegacyLanMutationTransport';
 import { markSyncDeviceTokenInvalid, persistSyncDeviceToken } from './services/sync/deviceToken';
 import {
@@ -12583,7 +12584,7 @@ const AppContent: React.FC = () => {
                     lockToken: editLock?.token,
                   }),
                   operation: 'TABLE_OCCUPANCY_UPDATE',
-                  validateResponse: validateLegacyEntityResponse(String(table.id)),
+                  validateResponse: validateLegacyTableStateResponse(String(table.id)),
                 }).then(receipt => receipt.completeAfterDurableCommit(`App:table-occupied:${table.id}`, () =>
                   persistLegacyLanMutationCompletion(receipt.correlationId, `App:table-occupied:${table.id}`, receipt.response.status)
                 )).catch(error => {
@@ -12688,7 +12689,7 @@ const AppContent: React.FC = () => {
                       headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify(nextTable),
                       operation: 'TABLE_RELEASE_STATE_UPDATE',
-                      validateResponse: validateLegacyEntityResponse(String(table.id)),
+                      validateResponse: validateLegacyTableStateResponse(String(table.id)),
                     });
                     await receipt.completeAfterDurableCommit(`App:table-release-state:${table.id}`, () =>
                       persistLegacyLanMutationCompletion(receipt.correlationId, `App:table-release-state:${table.id}`, receipt.response.status)

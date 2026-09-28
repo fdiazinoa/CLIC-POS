@@ -39,6 +39,8 @@ test('restaurant Master mutations use the journaled LAN dispatcher', () => {
   assert.match(app, /dispatchLegacyLanMutation<any>[\s\S]*PARKED_TICKETS_SYNC/);
   assert.match(app, /dispatchLegacyLanMutation<any>[\s\S]*FLOOR_PLAN_REPLACE/);
   assert.match(app, /dispatchLegacyLanMutation<any>[\s\S]*CUSTOMER_UPSERT/);
+  assert.match(app, /operation:\s*'TABLE_OCCUPANCY_UPDATE',[\s\S]{0,160}?validateResponse:\s*validateLegacyTableStateResponse\(String\(table\.id\)\)/);
+  assert.match(app, /operation:\s*'TABLE_RELEASE_STATE_UPDATE',[\s\S]{0,160}?validateResponse:\s*validateLegacyTableStateResponse\(String\(table\.id\)\)/);
   assert.match(read('components/POSInterface.tsx'), /operation:\s*'SPLIT_TRANSACTION'/);
   assert.match(read('components/UnitSelector.tsx'), /operation:\s*'CONFIG_UNIT_UPSERT'/);
   assert.match(read('components/InventoryAudit.tsx'), /operation:\s*'INVENTORY_AUDIT_COMMIT'/);

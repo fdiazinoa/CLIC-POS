@@ -223,10 +223,14 @@ test('la Cliente usa transporte nativo para bloquear y abrir mesas en Android', 
     appSource.indexOf('useKioskMode', appSource.indexOf('const openTableForService')),
   );
 
-  assert.match(lockBlock, /requestJson<any>\(\{/);
+  assert.match(lockBlock, /dispatchLegacyLanMutation<any>\(\{/);
   assert.match(lockBlock, /TABLE_LOCK_/);
-  assert.match(openBlock, /requestJson<any>\(\{/);
+  assert.match(lockBlock, /validateResponse:\s*validateLegacySuccessResponse/);
+  assert.doesNotMatch(lockBlock, /requestJson<any>\(|fetch\(/);
+  assert.match(openBlock, /dispatchLegacyLanMutation<any>\(\{/);
   assert.match(openBlock, /operation: 'TABLE_OPEN'/);
+  assert.match(openBlock, /validateResponse:/);
+  assert.doesNotMatch(openBlock, /requestJson<any>\(|fetch\(/);
 });
 
 test('la Master Android se reactiva al volver al primer plano y el cliente reintenta con espera', () => {
