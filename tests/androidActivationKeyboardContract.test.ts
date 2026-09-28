@@ -28,8 +28,8 @@ test('la activación Android permite mostrar y redimensionar el teclado virtual'
   assert.match(mainActivitySource, /private volatile boolean keyboardOverlayMode;/);
   assert.doesNotMatch(mainActivitySource, /keyboardOverlayMode\s*=\s*true/);
   assert.match(mainActivitySource, /keyboardOverlayMode\s*\? WindowManager\.LayoutParams\.SOFT_INPUT_ADJUST_NOTHING\s*: WindowManager\.LayoutParams\.SOFT_INPUT_ADJUST_RESIZE/);
-  assert.match(posSource, /androidBridge\.setKeyboardOverlayMode\(true\);\s*return \(\) => androidBridge\.setKeyboardOverlayMode\?\.\(false\)/);
-  assert.match(posSource, /if \(!isRestaurantMode \|\| !\(Capacitor\.isNativePlatform\(\) && Capacitor\.getPlatform\(\) === 'android'\)\) return;/);
+  assert.match(posSource, /if \(!\(isRestaurantMode \|\| isRetailMode\) \|\| !\(Capacitor\.isNativePlatform\(\) && Capacitor\.getPlatform\(\) === 'android'\)\) return;/);
+  assert.match(posSource, /androidBridge\.setKeyboardOverlayMode\(true\);\s*return \(\) => androidBridge\.setKeyboardOverlayMode\?\.\(false\);\s*\}, \[isRestaurantMode, isRetailMode\]\)/);
   assert.doesNotMatch(mainActivitySource, /SOFT_INPUT_ADJUST_PAN/);
   assert.match(manifestSource, /android:windowSoftInputMode="adjustResize"/);
 });

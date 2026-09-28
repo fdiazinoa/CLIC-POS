@@ -19,6 +19,7 @@ for (const bootComplete of [false, true]) {
       config: { terminals: [terminal] }, isDataLoaded: bootComplete, deviceId: 'd1',
       currentUser: null, currentView: 'LOGIN', console: { log() {}, error() {} },
       async waitForBackgroundSyncWindow() { return false; },
+      freezePhase() {},
       persistInitialTerminalConfig() {}, setConfig(value: unknown) { applied = value; },
       localStorage: { getItem() { return ''; } },
       permissionService: { initialize() {} }, authLevelService: { init() {} }, terminalRouter: { init() {} },

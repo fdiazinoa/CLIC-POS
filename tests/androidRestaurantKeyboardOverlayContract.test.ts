@@ -14,8 +14,9 @@ test('Android exposes a scoped keyboard overlay mode and preserves resize as the
   assert.match(activitySource, /public void setKeyboardOverlayMode\(boolean enabled\)/);
 });
 
-test('restaurant POS enables overlay mode and restores the default when leaving', () => {
-  assert.match(posSource, /if \(!isRestaurantMode \|\| !\(Capacitor\.isNativePlatform\(\)/);
+test('restaurant and retail POS enable overlay mode and restore the default when leaving', () => {
+  assert.match(posSource, /if \(!\(isRestaurantMode \|\| isRetailMode\) \|\| !\(Capacitor\.isNativePlatform\(\)/);
   assert.match(posSource, /androidBridge\.setKeyboardOverlayMode\(true\)/);
   assert.match(posSource, /return \(\) => androidBridge\.setKeyboardOverlayMode\?\.\(false\)/);
+  assert.match(posSource, /\}, \[isRestaurantMode, isRetailMode\]\)/);
 });

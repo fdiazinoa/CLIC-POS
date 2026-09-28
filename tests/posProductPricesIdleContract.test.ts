@@ -11,8 +11,11 @@ test('the optional productPrices prop uses a stable empty reference', () => {
 });
 
 test('product price state only follows the external dependency', () => {
-  assert.match(
-    source,
-    /useEffect\(\(\) => \{\s*setProductPrices\(Array\.isArray\(externalProductPrices\) \? externalProductPrices : \[\]\);\s*\}, \[externalProductPrices\]\)/,
+  const dependencyEffect = source.slice(
+    source.indexOf('   useEffect(() => {\n      freezeCount(\'EFFECT_PRODUCT_PRICES\');'),
+    source.indexOf('   useEffect(() => {', source.indexOf('   useEffect(() => {\n      freezeCount(\'EFFECT_PRODUCT_PRICES\');') + 1),
   );
+  assert.match(dependencyEffect, /freezeCount\('EFFECT_PRODUCT_PRICES'\)/);
+  assert.match(dependencyEffect, /setProductPrices\(Array\.isArray\(externalProductPrices\) \? externalProductPrices : \[\]\)/);
+  assert.match(dependencyEffect, /\}, \[externalProductPrices\]\);/);
 });

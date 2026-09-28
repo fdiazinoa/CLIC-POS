@@ -46,5 +46,5 @@ test('la Master Android no duplica el polling nativo con GET api mesas', () => {
   assert.match(pollingEffect, /isNativeAndroidRuntime\(\) && isNativeStandaloneTerminalRuntime\(getCurrentTerminal\(\)\)/);
   assert.match(pollingEffect, /return;/);
   assert.match(pollingEffect, /if \(!isPosSaleActive\(\)\) void fetchTables\(\)/);
-  assert.match(pollingEffect, /setInterval\(\(\) => \{\s*if \(isPosSaleActive\(\)\) return;\s*void fetchTables\(\);/);
+  assert.match(pollingEffect, /setInterval\(\(\) => \{\s*if \(isPosSaleActive\(\)\) return;\s*void fetchTables\(true\);/);
 });
