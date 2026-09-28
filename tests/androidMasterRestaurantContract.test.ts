@@ -18,6 +18,7 @@ const pairingSource = readFileSync(new URL('../components/TerminalBindingScreen.
 const lanDiscoverySource = readFileSync(new URL('../utils/masterLanDiscovery.ts', import.meta.url), 'utf8');
 const scannerSource = readFileSync(new URL('../services/sync/NetworkScanner.ts', import.meta.url), 'utf8');
 const appSource = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
+const clientMasterBindingSource = readFileSync(new URL('../utils/clientMasterBinding.ts', import.meta.url), 'utf8');
 const kitchenDisplaySource = readFileSync(
   new URL('../components/kds/KitchenDisplay.tsx', import.meta.url),
   'utf8',
@@ -229,9 +230,20 @@ test('la Cliente usa transporte nativo para bloquear y abrir mesas en Android', 
 });
 
 test('la Master Android se reactiva al volver al primer plano y el cliente reintenta con espera', () => {
+  const masterTargetPersistence = clientMasterBindingSource.slice(
+    clientMasterBindingSource.indexOf('export const persistValidatedClientMasterTarget'),
+  );
   assert.match(appSource, /addListener\?\.\('resume', ensureMasterServerHealth\)/);
   assert.match(appSource, /discoverLanMasterCandidates\(\{ timeoutMs: 2500 \}\)/);
-  assert.match(appSource, /localStorage\.setItem\('CLIC_POS_MASTER_URL', baseUrl\)/);
+  assert.match(appSource, /mirror: baseUrl => \{\s*persistValidatedClientMasterTarget\(baseUrl\)/);
+  assert.match(masterTargetPersistence, /const persistProfile = dependencies\.persistProfile \|\| updateClientMasterUrl/);
+  assert.match(masterTargetPersistence, /storage\.setItem\('CLIC_POS_MASTER_URL', normalizedUrl\)/);
+  assert.match(masterTargetPersistence, /storage\.setItem\('pos_master_ip', nextHost\)/);
+  assert.match(masterTargetPersistence, /if \(!persistProfile\(normalizedUrl\)\) throw new Error\('MASTER_SYNC_PROFILE_PERSIST_FAILED'\)/);
+  assert.match(masterTargetPersistence, /restore\(storage, 'CLIC_POS_MASTER_URL', previousUrl\)/);
+  assert.match(masterTargetPersistence, /restore\(storage, 'pos_master_ip', previousHost\)/);
+  assert.match(masterTargetPersistence, /const profileRestored = previousUrl \? persistProfile\(previousUrl\) : true/);
+  assert.match(masterTargetPersistence, /storage\.removeItem\('CLIC_POS_MASTER_URL'\)[\s\S]*storage\.removeItem\('pos_master_ip'\)/);
   assert.match(appSource, /`\$\{baseUrl\}\/api\/sync\/ping`/);
 });
 
