@@ -225,6 +225,10 @@ test('direct LAN mutation remains DISPATCHED while the high-level durable commit
       method: 'POST',
       body: '{}',
       operation: 'TABLE_OPEN',
+      validateResponse: (data) => {
+        assert.equal(data.success, true);
+        assert.equal(data.revision, 9);
+      },
       journal,
       authorityState: { revision: 7, terminalId: 'terminal-a' },
     });
@@ -240,6 +244,35 @@ test('direct LAN mutation remains DISPATCHED while the high-level durable commit
     restore();
   }
 });
+
+for (const invalidPayload of [{ success: false }, { message: 'missing explicit acknowledgement' }]) {
+  test(`2xx legacy mutation with invalid schema becomes OUTCOME_UNKNOWN: ${JSON.stringify(invalidPayload)}`, async () => {
+    const restore = installAndroid();
+    const store = new Store();
+    const journal = new LegacyMutationJournal(store);
+    await journal.initializeForStartup();
+    setNativeRequestTransportForTests((async () => ({ status: 200, data: invalidPayload })) as any);
+    try {
+      await assert.rejects(
+        dispatchLegacyLanMutation<any>({
+          url: 'http://10.0.0.129:3001/api/mesas/liberar',
+          method: 'POST',
+          body: '{}',
+          operation: 'TABLE_RELEASE',
+          validateResponse: (data) => {
+            if (data?.success !== true) throw new Error('SUCCESS_ACK_REQUIRED');
+          },
+          journal,
+          authorityState: { revision: 7, terminalId: 'terminal-a' },
+        }),
+        /LEGACY_MUTATION_RESPONSE_SCHEMA_INVALID/,
+      );
+      assert.equal([...store.rows.values()][0]?.state, 'OUTCOME_UNKNOWN');
+    } finally {
+      restore();
+    }
+  });
+}
 
 test('operational LAN response without a migrated caller ACK becomes OUTCOME_UNKNOWN', async () => {
   const restore = installAndroid();

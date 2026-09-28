@@ -8,6 +8,7 @@ import { resolveValidatedOperationalApiUrl } from '../utils/masterOperationalApi
 import {
   dispatchLegacyLanMutation,
   persistLegacyLanMutationCompletion,
+  validateLegacySuccessResponse,
 } from '../services/sync/LegacyLanMutationTransport';
 
 interface InventoryAuditProps {
@@ -103,6 +104,10 @@ const InventoryAudit: React.FC<InventoryAuditProps> = ({ products, warehouseId, 
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ warehouseId }),
         operation: 'INVENTORY_AUDIT_START',
+        validateResponse: (data) => {
+          validateLegacySuccessResponse(data);
+          if (!data.sessionId || !data.startedAt) throw new Error('AUDIT_SESSION_ACK_REQUIRED');
+        },
       });
       const data = res.data;
       if (data.success) {
@@ -136,6 +141,7 @@ const InventoryAudit: React.FC<InventoryAuditProps> = ({ products, warehouseId, 
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ items: itemsPayload }),
         operation: 'INVENTORY_AUDIT_DRAFT',
+        validateResponse: validateLegacySuccessResponse,
       });
       await res.completeAfterDurableCommit(
         `InventoryAudit:draft:${session.id}`,
@@ -230,6 +236,7 @@ const InventoryAudit: React.FC<InventoryAuditProps> = ({ products, warehouseId, 
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ method: reconciliationMethod, userId: 'CURRENT_USER' }),
         operation: 'INVENTORY_AUDIT_COMMIT',
+        validateResponse: validateLegacySuccessResponse,
       });
       const data = res.data;
       if (data.success) {

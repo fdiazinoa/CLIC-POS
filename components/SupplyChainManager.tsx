@@ -25,6 +25,7 @@ import { resolveValidatedOperationalApiUrl } from '../utils/masterOperationalApi
 import {
    dispatchLegacyLanMutation,
    persistLegacyLanMutationCompletion,
+   validateLegacySuccessResponse,
 } from '../services/sync/LegacyLanMutationTransport';
 
 interface SupplyChainManagerProps {
@@ -318,6 +319,7 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
                dueDate: order.dueDate
             }),
             operation: 'PURCHASE_ORDER_EMAIL',
+            validateResponse: validateLegacySuccessResponse,
          });
 
          const data = response.data;

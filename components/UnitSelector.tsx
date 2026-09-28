@@ -6,6 +6,7 @@ import { resolveValidatedOperationalApiUrl } from '../utils/masterOperationalApi
 import {
     dispatchLegacyLanMutation,
     persistLegacyLanMutationCompletion,
+    validateLegacyResponseObject,
 } from '../services/sync/LegacyLanMutationTransport';
 
 interface UnitSelectorProps {
@@ -79,6 +80,10 @@ export const UnitSelector: React.FC<UnitSelectorProps> = ({
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(updatedConfig),
                 operation: 'CONFIG_UNIT_UPSERT',
+                validateResponse: (data) => {
+                    validateLegacyResponseObject(data);
+                    if (!Array.isArray(data.terminals)) throw new Error('CONFIG_TERMINALS_REQUIRED');
+                },
             });
             await response.completeAfterDurableCommit(
                 `UnitSelector:add:${newUnit.code}`,

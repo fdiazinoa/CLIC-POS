@@ -42,7 +42,11 @@ import { getRenderableFloorTables } from '../utils/tableLayout';
 import { hasPendingKdsDispatch } from '../utils/kdsPresentation';
 import { resolveValidatedOperationalApiUrl } from '../utils/masterOperationalApi';
 import { requestJson } from '../services/network/httpClient';
-import { dispatchLegacyLanMutation } from '../services/sync/LegacyLanMutationTransport';
+import {
+    dispatchLegacyLanMutation,
+    persistLegacyLanMutationCompletion,
+    validateLegacySuccessResponse,
+} from '../services/sync/LegacyLanMutationTransport';
 import { canAccessOtherSellerTables, isTableLockedForUser } from '../utils/tableAccessPolicy';
 import {
     beginPosInteraction,
@@ -1208,11 +1212,13 @@ const TableMap: React.FC<TableMapProps> = ({
                     }),
                     timeoutMs: 5000,
                     operation: 'TABLE_MERGE',
+                    validateResponse: validateLegacySuccessResponse,
                 });
                 const result = response.data;
                 if (response.response.ok && result?.success !== false) {
+                    await Promise.resolve(onRefreshTables?.());
                     await response.completeAfterDurableCommit(`TableMap:merge:${primarySourceTableId}`, async () => {
-                        await Promise.resolve(onRefreshTables?.());
+                        await persistLegacyLanMutationCompletion(response.correlationId, `TableMap:merge:${primarySourceTableId}`, response.response.status);
                     });
                     setTransferSelection(null);
                     setTableNotice({
@@ -1547,11 +1553,16 @@ const TableMap: React.FC<TableMapProps> = ({
                         waiterName: currentUser.name
                     }),
                     operation: 'TABLE_OPEN',
+                    validateResponse: (data) => {
+                        validateLegacySuccessResponse(data);
+                        if (!data.orden_id) throw new Error('TABLE_ORDER_ID_REQUIRED');
+                    },
                 });
                 const data = res.data;
                 if (res.response.ok && data.status === 'success') {
+                    await Promise.resolve(onRefreshTables?.());
                     await res.completeAfterDurableCommit(`TableMap:open:${operationalTable.id}`, async () => {
-                        await Promise.resolve(onRefreshTables?.());
+                        await persistLegacyLanMutationCompletion(res.correlationId, `TableMap:open:${operationalTable.id}`, res.response.status);
                     });
                     markInteractionStage(trace, 'ACCOUNT_RESOLVE_END');
                     tableLatencyQaMark('ACCOUNT_RESOLVE_END', { traceId: trace.id, destination: 'api-open' });
@@ -2306,11 +2317,13 @@ const TableMap: React.FC<TableMapProps> = ({
                                     headers: { 'Content-Type': 'application/json' },
                                     body: JSON.stringify({ tableId: selectedTable.id }),
                                     operation: 'TABLE_RELEASE',
+                                    validateResponse: validateLegacySuccessResponse,
                                 });
                                 const data = res.data;
                                 if (data.success) {
+                                    await Promise.resolve(onRefreshTables?.());
                                     await res.completeAfterDurableCommit(`TableMap:release:${selectedTable.id}`, async () => {
-                                        await Promise.resolve(onRefreshTables?.());
+                                        await persistLegacyLanMutationCompletion(res.correlationId, `TableMap:release:${selectedTable.id}`, res.response.status);
                                     });
                                     setSelectedTable(null);
                                 } else {

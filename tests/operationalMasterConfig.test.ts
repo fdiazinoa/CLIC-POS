@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import {
   resolveClientMasterAuthority,
   resolveOperationalMasterConfig,
+  runJournalGuardedMasterDiscovery,
   runClientMasterStartup,
   type ClientMasterAuthority,
 } from '../utils/operationalMasterConfig';
@@ -47,14 +48,22 @@ test('App cloud discovery is read-only until a candidate validates', () => {
   calls.forEach(call => assert.match(call, /persist:\s*false/));
 });
 
-test('an unavailable mutation journal blocks client discovery while preserving local startup', () => {
+test('journal guard runs before real remote discovery and blocks it without side effects', async () => {
+  const events: string[] = [];
+  await assert.rejects(
+    runJournalGuardedMasterDiscovery(
+      () => { events.push('journal'); throw new Error('LEGACY_MUTATION_OUTCOME_UNKNOWN'); },
+      async () => { events.push('discovery'); return 'remote'; },
+    ),
+    /OUTCOME_UNKNOWN/,
+  );
+  assert.deepEqual(events, ['journal']);
+
   const source = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
-  const guard = source.indexOf('isOperationalClientBoot && !legacyMutationJournal.isHealthy()');
+  const guard = source.indexOf('legacyMutationJournal.assertRemoteAuthorityAllowed()');
   const discovery = source.indexOf('runClientMasterStartup<BusinessConfig');
   assert.ok(guard > 0 && discovery > guard, 'journal health must gate discovery before any remote candidate work');
-  assert.match(source.slice(guard, discovery), /backgroundSyncManager\.disableRemoteSync/);
-  assert.match(source.slice(guard, discovery), /resetOperationalAuthority/);
-  assert.match(source.slice(guard, discovery), /refreshedTerminalConfig = finalConfig/);
+  assert.match(source, /runJournalGuardedMasterDiscovery\([\s\S]*?resolveMasterEndpointFromCloud/);
 });
 
 test('stale and self candidates cannot mutate existing Master mirrors', async () => {

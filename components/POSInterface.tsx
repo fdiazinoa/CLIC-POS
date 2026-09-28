@@ -71,7 +71,6 @@ import PromoBottomSheet from './PromoBottomSheet';
 import { backgroundSyncManager, SyncState } from '../services/sync/BackgroundSyncManager';
 import { syncManager } from '../services/sync/SyncManager';
 import { isSyncFeatureEnabled } from '../services/sync/SyncFeatureFlags';
-import { requestJson } from '../services/network/httpClient';
 import ProductTableSupermarket from './ProductTableSupermarket';
 import SupermarketTicketSummary from './SupermarketTicketSummary';
 import BarcodeScannerModal from './BarcodeScannerModal';
@@ -148,6 +147,8 @@ import { isClientTerminalMode, resolveValidatedOperationalApiUrl } from '../util
 import {
    dispatchLegacyLanMutation,
    persistLegacyLanMutationCompletion,
+   validateLegacySuccessResponse,
+   type LegacyLanMutationReceipt,
 } from '../services/sync/LegacyLanMutationTransport';
 import ProductionRoutingAssignmentModal, {
    type ProductionRoutingPromptArea,
@@ -322,20 +323,21 @@ const normalizeViewMode = (value: unknown): string => {
 
 const isRetailViewMode = (value: unknown): boolean => normalizeViewMode(value) === 'RETAIL';
 
-const postJsonWithTimeout = async (url: string, payload: unknown, timeoutMs = 5000) => {
-   const response = await requestJson<any>({
+const postJournaledKdsJson = async (
+   url: string,
+   payload: unknown,
+   operation: string,
+   timeoutMs = 5000,
+): Promise<LegacyLanMutationReceipt<any>> => {
+   return dispatchLegacyLanMutation<any>({
       url,
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
       timeoutMs,
-      diagnosticContext: { operation: 'KDS_POST' },
+      operation,
+      validateResponse: validateLegacySuccessResponse,
    });
-   const data = response.data;
-   if (!response.ok) {
-      throw new Error(data?.message || data?.error || `HTTP ${response.status}`);
-   }
-   return data;
 };
 
 const getConsignmentDocumentNo = (consignment: ErpConsignment): string =>
@@ -1454,6 +1456,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          if (queue.length === 0) return;
 
          const nextQueue: any[] = [];
+         const sentReceipts: Array<{ receipt: LegacyLanMutationReceipt<any>; reference: string }> = [];
          let sentCount = 0;
          for (const entry of queue) {
             const status = String(entry?.status || 'PENDING').toUpperCase();
@@ -1468,7 +1471,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             }
 
             try {
-               await postJsonWithTimeout(`${kdsBaseUrl}/api/ordenes/${encodeURIComponent(orderId)}`, {
+               const updateReceipt = await postJournaledKdsJson(`${kdsBaseUrl}/api/ordenes/${encodeURIComponent(orderId)}`, {
                   items: payload.items || [],
                   total: payload.total || 0,
                   status: 'OCCUPIED',
@@ -1481,8 +1484,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   area: payload.area,
                   sourceTerminal: payload.sourceTerminal,
                   kdsTiming: payload.kdsTiming,
-               });
-               await postJsonWithTimeout(`${kdsBaseUrl}/api/ordenes/enviar-comanda/${encodeURIComponent(orderId)}`, payload);
+               }, 'KDS_ORDER_UPDATE_RETRY');
+               sentReceipts.push({ receipt: updateReceipt, reference: `KDS:retry:update:${orderId}` });
+               const dispatchReceipt = await postJournaledKdsJson(
+                  `${kdsBaseUrl}/api/ordenes/enviar-comanda/${encodeURIComponent(orderId)}`,
+                  payload,
+                  'KDS_ORDER_DISPATCH_RETRY',
+               );
+               sentReceipts.push({ receipt: dispatchReceipt, reference: `KDS:retry:dispatch:${orderId}` });
                await markKdsQueueItemsSent(entry);
                sentCount += 1;
             } catch (error: any) {
@@ -1497,6 +1506,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          }
 
          await db.save('kdsDispatchQueue' as any, nextQueue);
+         for (const { receipt, reference } of sentReceipts) {
+            await receipt.completeAfterDurableCommit(reference, () =>
+               persistLegacyLanMutationCompletion(receipt.correlationId, reference, receipt.response.status)
+            );
+         }
          if (sentCount > 0) {
             setSuccessToast(`${sentCount} comanda(s) pendiente(s) enviada(s) a cocina`);
          }
@@ -5639,6 +5653,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   body: JSON.stringify(splitPayload),
                   timeoutMs: 25000,
                   operation: 'SPLIT_TRANSACTION',
+                  validateResponse: (data) => {
+                     validateLegacySuccessResponse(data);
+                     if (!data.result || (!data.result.sale && !data.result.refund)) throw new Error('SPLIT_TRANSACTION_RESULT_REQUIRED');
+                  },
                });
 
                const data = response.data;
@@ -5871,6 +5889,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                               body: JSON.stringify({ tableId: activeTable.id }),
                               timeoutMs: 4000,
                               operation: 'POS_TABLE_RELEASE',
+                              validateResponse: validateLegacySuccessResponse,
                            });
                         if (!releaseRes.response.ok) {
                            throw new Error(`HTTP ${releaseRes.response.status}`);
@@ -6295,6 +6314,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          let printedCount = 0;
          let sentKdsCount = 0;
          let queuedKdsCount = 0;
+         const successfulKdsReceipts: Array<{ receipt: LegacyLanMutationReceipt<any>; reference: string }> = [];
          const dispatchedCartIds = new Set<string>();
          const queuedCartIds = new Set<string>();
          const sentCartIds = new Set<string>();
@@ -6394,7 +6414,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   });
                } else {
                   try {
-                     await postJsonWithTimeout(`${kdsBaseUrl}/api/ordenes/${encodeURIComponent(orderId)}`, {
+                     const updateReceipt = await postJournaledKdsJson(`${kdsBaseUrl}/api/ordenes/${encodeURIComponent(orderId)}`, {
                         items: kdsItems,
                         total: areaTotal,
                         status: 'OCCUPIED',
@@ -6407,9 +6427,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         table: kdsTablePayload,
                         area: kdsPayload.area,
                         kdsTiming: kdsPayload.kdsTiming,
-                     });
+                     }, 'KDS_ORDER_UPDATE');
+                     successfulKdsReceipts.push({ receipt: updateReceipt, reference: `KDS:update:${orderId}` });
                      const endpoint = `${kdsBaseUrl}/api/ordenes/enviar-comanda/${encodeURIComponent(orderId)}`;
-                     await postJsonWithTimeout(endpoint, kdsPayload);
+                     const dispatchReceipt = await postJournaledKdsJson(endpoint, kdsPayload, 'KDS_ORDER_DISPATCH');
+                     successfulKdsReceipts.push({ receipt: dispatchReceipt, reference: `KDS:dispatch:${orderId}` });
                      sentKdsCount += 1;
                      areaData.items.forEach(item => sentCartIds.add(getCartDispatchKey(item)));
                   } catch (kdsError: any) {
@@ -6493,6 +6515,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             }
          }
 
+         for (const { receipt, reference } of successfulKdsReceipts) {
+            await receipt.completeAfterDurableCommit(reference, () =>
+               persistLegacyLanMutationCompletion(receipt.correlationId, reference, receipt.response.status)
+            );
+         }
+
          const parts = [
             printedCount > 0 ? `${printedCount} ticket(s)` : '',
             sentKdsCount > 0 ? `${sentKdsCount} KDS` : '',
@@ -6555,14 +6583,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             return;
          }
 
-         await postJsonWithTimeout(`${kdsBaseUrl}/api/cocina/cambiar-estado`, {
+         const kdsReturnReceipt = await postJournaledKdsJson(`${kdsBaseUrl}/api/cocina/cambiar-estado`, {
             orden_id: orderId,
             item_id: item.kdsItemIds?.[0],
             item_ids: item.kdsItemIds || [],
             cart_id: item.cartId,
             producto_id: item.id,
             nuevo_estado: 'DEVUELTO',
-         });
+         }, 'KDS_ITEM_RETURN');
 
          const returnedAt = new Date().toISOString();
          const newCart = cart.map((cartItem) => {
@@ -6582,8 +6610,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          if (activeTable && onUpdateParkedTickets) {
             const ticketId = activeTable.currentOrderId;
             const total = newCart.reduce((sum, cartItem) => sum + (Number(cartItem.price || 0) * Number(cartItem.quantity || 0)), 0);
-            onUpdateParkedTickets(parkedTickets.map(ticket => ticket.id === ticketId ? { ...ticket, items: newCart, total } : ticket));
+            await Promise.resolve(onUpdateParkedTickets(parkedTickets.map(ticket => ticket.id === ticketId ? { ...ticket, items: newCart, total } : ticket)));
          }
+
+         const returnReference = `KDS:return:${orderId}:${item.cartId}`;
+         await kdsReturnReceipt.completeAfterDurableCommit(returnReference, () =>
+            persistLegacyLanMutationCompletion(kdsReturnReceipt.correlationId, returnReference, kdsReturnReceipt.response.status)
+         );
 
          setSuccessToast(`Artículo devuelto en cocina: ${item.name}`);
       } catch (error: any) {
@@ -6725,6 +6758,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                body: JSON.stringify({ tableId: tableToRelease.id }),
                timeoutMs: 2500,
                operation: 'POS_TABLE_RELEASE_EMPTY',
+               validateResponse: validateLegacySuccessResponse,
             });
             const releaseData = releaseRes.data;
 

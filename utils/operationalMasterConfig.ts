@@ -21,6 +21,14 @@ export const unavailableClientMasterAuthority = (): ClientMasterAuthority<never>
   status: 'UNAVAILABLE',
 });
 
+export async function runJournalGuardedMasterDiscovery<T>(
+  assertJournalAllowsRemoteAuthority: () => void,
+  discover: () => Promise<T>,
+): Promise<T> {
+  assertJournalAllowsRemoteAuthority();
+  return discover();
+}
+
 type ResolveOperationalMasterConfigOptions<T> = {
   storedHosts: Array<string | null | undefined>;
   resolveCloudHost: () => Promise<string | null | undefined>;

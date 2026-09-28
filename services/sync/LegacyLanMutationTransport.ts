@@ -5,6 +5,22 @@ import { dbAdapter } from '../db';
 
 const COMPLETION_COLLECTION = 'legacyMutationCompletions';
 
+export function validateLegacyResponseObject(data: unknown): asserts data is Record<string, any> {
+    if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('RESPONSE_OBJECT_REQUIRED');
+}
+
+export function validateLegacySuccessResponse(data: unknown): void {
+    validateLegacyResponseObject(data);
+    if ((data as any).success !== true && String((data as any).status || '').toLowerCase() !== 'success') {
+        throw new Error('RESPONSE_SUCCESS_ACK_REQUIRED');
+    }
+}
+
+export const validateLegacyEntityResponse = (expectedId: string) => (data: unknown): void => {
+    validateLegacyResponseObject(data);
+    if (String((data as any).id || '') !== String(expectedId)) throw new Error('RESPONSE_ENTITY_ID_MISMATCH');
+};
+
 export const persistLegacyLanMutationCompletion = async (
     correlationId: string,
     reference: string,
@@ -34,6 +50,7 @@ export const dispatchLegacyLanMutation = async <T = any>(input: {
     body?: BodyInit | null;
     timeoutMs?: number;
     operation: string;
+    validateResponse: (data: T, response: Response) => void;
     correlationId?: string;
     assertAuthorityCurrent?: () => boolean;
     journal?: LegacyMutationJournal;
@@ -44,7 +61,13 @@ export const dispatchLegacyLanMutation = async <T = any>(input: {
     const generation = authority.revision;
     const terminalId = authority.terminalId || '';
     const fingerprint = `${new URL(input.url).origin}|${terminalId}`;
-    const correlationId = input.correlationId || `${input.operation}:${crypto.randomUUID()}`;
+    let randomSuffix: string;
+    try {
+        randomSuffix = crypto.randomUUID();
+    } catch {
+        randomSuffix = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    }
+    const correlationId = input.correlationId || `${input.operation}:${randomSuffix}`;
     const entry = await journal.begin({
         operationCorrelationId: correlationId,
         authorityFingerprint: fingerprint,
@@ -74,6 +97,14 @@ export const dispatchLegacyLanMutation = async <T = any>(input: {
         if (response.status !== 401 && !response.ok) {
             await journal.markOutcomeUnknown(entry.id, response.status);
             throw Object.assign(new Error(`LEGACY_MUTATION_OUTCOME_UNKNOWN:${response.status}`), { httpStatus: response.status });
+        }
+        if (response.ok) {
+            try {
+                input.validateResponse(native.data, response);
+            } catch (error) {
+                await journal.markOutcomeUnknown(entry.id, response.status);
+                throw Object.assign(new Error('LEGACY_MUTATION_RESPONSE_SCHEMA_INVALID'), { cause: error, httpStatus: response.status });
+            }
         }
         let completed = false;
         return {

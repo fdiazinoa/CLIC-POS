@@ -38,6 +38,7 @@ import { resolveValidatedOperationalApiUrl } from '../utils/masterOperationalApi
 import {
    dispatchLegacyLanMutation,
    persistLegacyLanMutationCompletion,
+   validateLegacySuccessResponse,
 } from '../services/sync/LegacyLanMutationTransport';
 
 interface CustomerManagementProps {
@@ -905,6 +906,7 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ customerId: selectedCustomer.id }),
             operation: 'WALLET_WELCOME_EMAIL',
+            validateResponse: validateLegacySuccessResponse,
          });
          const data = response.data;
          if (data.success) {
