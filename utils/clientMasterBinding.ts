@@ -24,7 +24,9 @@ export const resolveClientMasterTerminalId = (
 };
 
 type MasterTargetStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
-let asyncMasterTargetGeneration = 0;
+let asyncMasterTargetSequence = 0;
+let asyncMasterTargetReservation = 0;
+let asyncMasterTargetOwner = 0;
 
 const restore = (storage: MasterTargetStorage, key: string, previous: string | null) => {
   if (previous === null) storage.removeItem(key);
@@ -90,21 +92,36 @@ export const persistValidatedClientMasterTarget = (
 export const persistValidatedClientMasterTargetAsync = async (
   baseUrl: string,
 ): Promise<() => Promise<void>> => {
-  const generation = ++asyncMasterTargetGeneration;
+  const previousReservation = asyncMasterTargetReservation;
+  const previousOwner = asyncMasterTargetOwner;
+  const generation = ++asyncMasterTargetSequence;
+  asyncMasterTargetReservation = generation;
   const normalizedUrl = new URL(baseUrl).origin;
   const nextHost = new URL(normalizedUrl).hostname;
-  const rollback = persistValidatedClientMasterTarget(normalizedUrl);
-  await awaitTerminalCredentialWrites();
+  let rollback: (() => void) | null = null;
+  try {
+    rollback = persistValidatedClientMasterTarget(normalizedUrl);
+    await awaitTerminalCredentialWrites();
+  } catch (error) {
+    if (asyncMasterTargetReservation === generation) {
+      asyncMasterTargetReservation = previousReservation;
+      asyncMasterTargetOwner = previousOwner;
+    }
+    throw error;
+  }
+  if (asyncMasterTargetReservation === generation) asyncMasterTargetOwner = generation;
   return async () => {
     const credentials = readTerminalCredentialsSync();
-    const ownsMirrors = generation === asyncMasterTargetGeneration
+    const ownsMirrors = generation === asyncMasterTargetReservation
+      && generation === asyncMasterTargetOwner
       && localStorage.getItem('CLIC_POS_MASTER_URL') === normalizedUrl
       && localStorage.getItem('pos_master_ip') === nextHost
       && loadSyncProfile().masterUrl === normalizedUrl
       && credentials.masterUrl === normalizedUrl
       && credentials.masterIp === nextHost;
     if (!ownsMirrors) return;
-    asyncMasterTargetGeneration += 1;
+    asyncMasterTargetReservation = ++asyncMasterTargetSequence;
+    asyncMasterTargetOwner = 0;
     rollback();
     await awaitTerminalCredentialWrites();
   };

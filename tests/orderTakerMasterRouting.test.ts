@@ -289,6 +289,68 @@ test('rollback tardío de A no sobrescribe autoridad B ya publicada', async () =
   }
 });
 
+test('tentativa B parcial restaura ownership A y permite limpiar A obsoleta', async () => {
+  const oldStorage = globalThis.localStorage;
+  const values = new Map<string, string>([['clic_pos_terminal_setup_mode', 'ORDER_TAKER']]);
+  let failBHost = false;
+  const storage = {
+    get length() { return values.size; },
+    clear: () => values.clear(),
+    getItem: (name: string) => values.get(name) ?? null,
+    key: (index: number) => [...values.keys()][index] ?? null,
+    removeItem: (name: string) => { values.delete(name); },
+    setItem: (name: string, value: string) => {
+      if (failBHost && name === 'pos_master_ip' && value === '10.0.0.102') {
+        failBHost = false;
+        throw new Error('PARTIAL_B_PERSIST_FAILED');
+      }
+      values.set(name, String(value));
+    },
+  } as Storage;
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: storage });
+  let releaseA!: () => void;
+  let markAStarted!: () => void;
+  const aStarted = new Promise<void>(resolve => { markAStarted = resolve; });
+  let nativeWrite = 0;
+  setTerminalCredentialNativeWriterForTests(async () => {
+    nativeWrite += 1;
+    if (nativeWrite === 1) {
+      markAStarted();
+      await new Promise<void>(resolve => { releaseA = resolve; });
+    }
+  });
+  let active = { ...contract };
+  let nextBase = '10.0.0.101';
+  const resolver = createOperationalMasterResolver({
+    getContract: () => active,
+    discover: async () => [{ baseUrl: nextBase, config: remote() }],
+    mirror: base => persistValidatedClientMasterTargetAsync(base),
+  });
+  try {
+    saveSyncProfile({ contractedProduct: 'POS_ONLY', posRuntime: 'SLAVE', cloudChannel: 'POS_MASTER', dataMaster: 'POS_MASTER',
+      cloudSyncEnabled: false, customerErpAccess: false, erpUiEnabled: false, contractSource: 'BACKEND_REGISTER' });
+    const writeA = resolver.ensure();
+    await aStarted;
+    active = { ...contract, terminalType: 'ORDER_TAKER' };
+    nextBase = '10.0.0.102';
+    resolver.invalidate();
+    failBHost = true;
+    await assert.rejects(resolver.ensure(), /PARTIAL_B_PERSIST_FAILED/);
+    assert.equal(storage.getItem('CLIC_POS_MASTER_URL'), 'http://10.0.0.101:3001');
+    releaseA();
+    await assert.rejects(writeA, /CONTRACT_CHANGED/);
+    assert.equal(resolver.current(), '');
+    assert.equal(storage.getItem('CLIC_POS_MASTER_URL'), null);
+    assert.equal(storage.getItem('pos_master_ip'), null);
+    assert.equal(loadSyncProfile().masterUrl, undefined);
+    assert.equal(readTerminalCredentialsSync().masterUrl ?? null, null);
+    assert.equal(readTerminalCredentialsSync().masterIp ?? null, null);
+  } finally {
+    setTerminalCredentialNativeWriterForTests(null);
+    Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: oldStorage });
+  }
+});
+
 test('timeouts de transporte customer/release comienzan después de resolver master', () => {
   const app = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
   const customer = app.slice(app.indexOf('const handleAddCustomer'), app.indexOf('const handleRepairLegacyReceivables'));
