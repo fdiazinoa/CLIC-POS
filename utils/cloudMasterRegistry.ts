@@ -1,6 +1,9 @@
 import { isNativeAndroidRuntime } from './erpBaseUrl';
 import { ensureSupabaseSessionRestored, supabase } from './supabase';
 import { resolveStoredTenantIdentity, type TenantIdentity } from './tenantIdentityStorage';
+import { buildMasterUrlCandidates, buildMasterUrlFromHost, normalizeMasterHost } from './masterEndpointUrl';
+
+export { buildMasterUrlCandidates, buildMasterUrlFromHost, normalizeMasterHost } from './masterEndpointUrl';
 
 export type { TenantIdentity } from './tenantIdentityStorage';
 
@@ -178,72 +181,6 @@ const fetchWithTimeout = async (input: RequestInfo | URL, init: RequestInit = {}
             globalThis.clearTimeout(timeoutId);
         }
     }
-};
-
-export const normalizeMasterHost = (value?: string | null) => {
-    const trimmed = normalizeOptional(value);
-    if (!trimmed) return '';
-
-    try {
-        const withProtocol = /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
-        const parsed = new URL(withProtocol);
-        return parsed.hostname || trimmed.replace(/^https?:\/\//i, '').replace(/:\d+$/, '');
-    } catch {
-        return trimmed.replace(/^https?:\/\//i, '').replace(/:\d+$/, '');
-    }
-};
-
-const isLoopbackHost = (host: string) => host === 'localhost' || host === '127.0.0.1';
-
-const isPrivateIpv4Host = (host: string) => (
-    /^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)
-    || /^192\.168\.\d{1,3}\.\d{1,3}$/.test(host)
-    || /^172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}$/.test(host)
-);
-
-const isLocalNetworkHost = (host: string) => isLoopbackHost(host) || isPrivateIpv4Host(host);
-
-const isAndroidWebRuntime = () => (
-    typeof navigator !== 'undefined'
-    && /Android/i.test(navigator.userAgent || '')
-);
-
-export const buildMasterUrlFromHost = (
-    host?: string | null,
-    port = 3001,
-    preferredProtocol?: string | null,
-) => {
-    const normalizedHost = normalizeMasterHost(host);
-    if (!normalizedHost) return '';
-
-    const normalizedProtocol = normalizeOptional(preferredProtocol).replace(/:$/, '');
-    const runtimeProtocol = typeof window !== 'undefined'
-        ? normalizeOptional(window.location.protocol).replace(/:$/, '')
-        : '';
-    const protocol = isLocalNetworkHost(normalizedHost)
-        ? 'http'
-        : (normalizedProtocol || runtimeProtocol || 'http');
-
-    return `${protocol}://${normalizedHost}:${port}`;
-};
-
-export const buildMasterUrlCandidates = (
-    host?: string | null,
-    port = 3001,
-) => {
-    const normalizedHost = normalizeMasterHost(host);
-    if (!normalizedHost) return [];
-
-    const candidates = [buildMasterUrlFromHost(normalizedHost, port)];
-
-    if (isAndroidWebRuntime() && isLoopbackHost(normalizedHost)) {
-        candidates.push(
-            buildMasterUrlFromHost('10.0.3.2', port, 'http'),
-            buildMasterUrlFromHost('10.0.2.2', port, 'http'),
-        );
-    }
-
-    return dedupeStrings(candidates);
 };
 
 const normalizeEndpointRecord = (row: Record<string, any> | null | undefined): CloudMasterEndpoint | null => {
@@ -510,14 +447,17 @@ export const persistMasterEndpoint = (endpoint: CloudMasterEndpoint | null) => {
     }
 };
 
-export const resolveMasterEndpointFromCloud = async (identity?: TenantIdentity): Promise<CloudMasterEndpoint | null> => {
+export const resolveMasterEndpointFromCloud = async (
+    identity?: TenantIdentity,
+    options: { persist?: boolean } = {},
+): Promise<CloudMasterEndpoint | null> => {
     const effectiveIdentity = identity || getStoredTenantIdentity();
     const query = buildResolveQuery(effectiveIdentity);
     if (!query) return null;
 
     const directEndpoint = await callDirectRpc(DIRECT_RESOLVE_RPC_CANDIDATES, buildRpcPayload(effectiveIdentity));
     if (directEndpoint) {
-        persistMasterEndpoint(directEndpoint);
+        if (options.persist !== false) persistMasterEndpoint(directEndpoint);
         return directEndpoint;
     }
 
@@ -532,7 +472,7 @@ export const resolveMasterEndpointFromCloud = async (identity?: TenantIdentity):
             const endpoint = normalizeEndpointRecord(payload?.endpoint as Record<string, any> | undefined);
             if (!endpoint) continue;
 
-            persistMasterEndpoint(endpoint);
+            if (options.persist !== false) persistMasterEndpoint(endpoint);
             return endpoint;
         } catch (error) {
             console.warn('[cloudMasterRegistry] resolve fallback failed:', url, error);
@@ -548,6 +488,9 @@ export const publishMasterEndpointToCloud = async (payload: {
     terminalName?: string;
     isPrimary?: boolean;
 }): Promise<CloudMasterEndpoint | null> => {
+    // Only an operational primary may author the tenant's Master endpoint.
+    if (payload.isPrimary !== true) return null;
+
     const identity = getStoredTenantIdentity();
     if (!identity.tenantId && !identity.tenantSlug && !identity.tenantEmail) {
         return null;

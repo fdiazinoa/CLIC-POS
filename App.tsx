@@ -331,11 +331,14 @@ import {
   isPosMasterClientProfile,
   resolveSyncTarget,
   saveSyncProfileFromContract,
+  updateClientMasterUrl,
   type SyncPermissions,
   type SyncProfile,
   type SyncProfilePersistenceDiagnostic,
   type SyncProfileSource
 } from './services/sync/SyncProfile';
+import { resolveOperationalMasterConfig } from './utils/operationalMasterConfig';
+import { resolveClientMasterTerminalId } from './utils/clientMasterBinding';
 import { markSyncDeviceTokenInvalid, persistSyncDeviceToken } from './services/sync/deviceToken';
 import {
   extractErpRegisterAuth,
@@ -3703,10 +3706,9 @@ const AppContent: React.FC = () => {
       }
     };
 
-    // Clients use the Master over LAN. Keep endpoint publication, but do not
-    // start ERP heartbeat, outbox, manifest, or config polling on them.
+    // Clients consume the Master endpoint; they must never publish their own
+    // LAN address as the tenant Master.
     if (isPosMasterClientProfile()) {
-      void publishEndpoint();
       return () => { disposed = true; };
     }
 
@@ -5473,6 +5475,7 @@ const AppContent: React.FC = () => {
       mirror: baseUrl => {
         localStorage.setItem('pos_master_ip', new URL(baseUrl).hostname);
         localStorage.setItem('CLIC_POS_MASTER_URL', baseUrl);
+        updateClientMasterUrl(baseUrl);
       },
     });
   }
@@ -6787,7 +6790,7 @@ const AppContent: React.FC = () => {
         );
 
         if (shouldResolveMasterFromCloud) {
-          const cloudEndpoint = await resolveMasterEndpointFromCloud();
+          const cloudEndpoint = await resolveMasterEndpointFromCloud(undefined, { persist: false });
           const discoveredMasterIp = normalizeMasterHost(cloudEndpoint?.localIp || cloudEndpoint?.endpointUrl || '');
           if (discoveredMasterIp) {
             masterIp = discoveredMasterIp;
@@ -6849,7 +6852,7 @@ const AppContent: React.FC = () => {
           setCurrentView('AGENDA');
         }
 
-        const shouldFetchConfigFromMaster = !!masterIp && (
+        const shouldFetchConfigFromMaster = (
           isClientTerminalMode() || !localPairedTerminal || localPairedTerminal?.config?.isPrimaryNode === false
         );
 
@@ -6861,41 +6864,34 @@ const AppContent: React.FC = () => {
 
         if (shouldFetchConfigFromMaster) {
           console.log("🔄 Slave Mode: Fetching latest config from Master...");
-          const fetchConfigFromMaster = async (host: string) => {
-            for (const baseUrl of buildMasterUrlCandidates(host)) {
-              const targetUrl = `${baseUrl}/api/config`;
-              const controller = new AbortController();
-              const timeoutId = setTimeout(() => controller.abort(), 3000);
-
-              try {
-                const res = await fetch(targetUrl, { signal: controller.signal });
-                if (!res.ok) continue;
-
-                const payload = await res.json();
-                validateOperationalMasterEndpoint(baseUrl, payload, getClientMasterContract(localPairedTerminal, currentConfig));
-                localStorage.setItem('CLIC_POS_MASTER_URL', baseUrl);
-                localStorage.setItem('pos_master_ip', new URL(baseUrl).hostname);
-                return payload;
-              } finally {
-                clearTimeout(timeoutId);
-              }
-            }
-
-            return null;
-          };
-
           try {
-            let fetchedConfig = masterIp ? await fetchConfigFromMaster(masterIp) : null;
+            const resolvedMaster = await resolveOperationalMasterConfig<any>({
+              storedHosts: [masterIp, localStorage.getItem('CLIC_POS_MASTER_URL')],
+              resolveCloudHost: async () => {
+                const endpoint = await resolveMasterEndpointFromCloud(undefined, { persist: false });
+                return endpoint?.localIp || endpoint?.endpointUrl;
+              },
+              discoverLanHosts: async () => (await discoverLanMasterCandidates({ timeoutMs: 2500 }))
+                .map(candidate => candidate.host),
+              validate: (baseUrl, payload) => {
+                validateOperationalMasterEndpoint(baseUrl, payload, getClientMasterContract(localPairedTerminal, currentConfig));
+              },
+              onCandidateFailure: (candidate, baseUrl, error) => {
+                console.warn('[MASTER_CONFIG_CANDIDATE_REJECTED]', {
+                  source: candidate.source,
+                  baseUrl,
+                  reason: error instanceof Error ? error.message : String(error),
+                });
+              },
+            });
+            const fetchedConfig = resolvedMaster?.config || null;
 
-            if (!fetchedConfig) {
-              const cloudEndpoint = await resolveMasterEndpointFromCloud();
-              const refreshedMasterIp = normalizeMasterHost(cloudEndpoint?.localIp || cloudEndpoint?.endpointUrl || '');
-
-              if (refreshedMasterIp && refreshedMasterIp !== masterIp) {
-                console.warn(`⚠️ Master IP actualizada desde cloud: ${masterIp || 'N/D'} -> ${refreshedMasterIp}`);
-                masterIp = refreshedMasterIp;
-                fetchedConfig = await fetchConfigFromMaster(refreshedMasterIp);
-              }
+            if (resolvedMaster) {
+              masterIp = new URL(resolvedMaster.baseUrl).hostname;
+              localStorage.setItem('CLIC_POS_MASTER_URL', resolvedMaster.baseUrl);
+              localStorage.setItem('pos_master_ip', masterIp);
+              localStorage.setItem('CLIC_POS_MASTER_DISCOVERY', resolvedMaster.source);
+              updateClientMasterUrl(resolvedMaster.baseUrl);
             }
 
             if (fetchedConfig && fetchedConfig.terminals) {
@@ -8448,7 +8444,18 @@ const AppContent: React.FC = () => {
           erpTenantId: setupResult?.syncProfile?.erpTenantId || resolvedTenantId,
           erpTerminalId: resolvedErpTerminalId,
           masterUrl: isSlave ? finalResolvedMasterUrl : undefined,
-          masterTerminalId: isSlave ? terminalId : undefined,
+          masterTerminalId: isSlave ? resolveClientMasterTerminalId(
+            updatedConfig,
+            [terminalId, resolvedOperationalTerminalId, resolvedErpTerminalId],
+            [
+              setupResult?.syncProfile?.masterTerminalId,
+              setupResult?.incomingProfile?.masterTerminalId,
+              setupResult?.profile?.masterTerminalId,
+              selectedTerminal?.config?.masterTerminalId,
+              selectedTerminal?.config?.master_terminal_id,
+              localStorage.getItem('clic_pos_master_terminal_id'),
+            ],
+          ) : undefined,
           masterReady: Boolean(isSlave && finalResolvedMasterUrl),
           cloudStagingReady: !isErpDirectBinding && !isSlave,
           erpReadyForSales: resolvedErpReadyForSales,
@@ -8536,12 +8543,14 @@ const AppContent: React.FC = () => {
         console.log('ℹ️ Native standalone runtime detected. Skipping backend binding sync.');
       }
 
-      void publishMasterEndpointToCloud({
-        deviceId,
-        terminalId: resolvedOperationalTerminalId,
-        terminalName: resolvedTerminalName,
-        isPrimary: !isSlave,
-      });
+      if (!isSlave) {
+        void publishMasterEndpointToCloud({
+          deviceId,
+          terminalId: resolvedOperationalTerminalId,
+          terminalName: resolvedTerminalName,
+          isPrimary: true,
+        });
+      }
 
       persistStoredErpSyncBinding({
         tenantId: setupResult?.tenantId || localStorage.getItem('active_tenant_id') || null,
