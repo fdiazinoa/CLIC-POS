@@ -4,6 +4,9 @@ import { readFileSync } from 'node:fs';
 import { buildOperationalMasterContract, canUseLocalOperationalTableStore, createOperationalMasterResolver,
   isClientTerminalMode, resolveOperationalApiUrl, resolveValidatedOperationalApiUrl,
   setOperationalMasterResolver, setOperationalTerminalReader, validateOperationalMasterEndpoint, type OperationalMasterContract } from '../utils/masterOperationalApi';
+import { persistValidatedClientMasterTargetAsync } from '../utils/clientMasterBinding';
+import { loadSyncProfile, saveSyncProfile } from '../services/sync/SyncProfile';
+import { readTerminalCredentialsSync, setTerminalCredentialNativeWriterForTests } from '../services/sync/TerminalCredentialStore';
 
 const contract: OperationalMasterContract = { erpManaged: true,
   terminalId: '0efd23be-d73f-42aa-ab7d-5895b56edee0', masterTerminalId: '0f77877f-66b2-4820-b956-997cd5b4b575',
@@ -229,6 +232,61 @@ test('fallo de persistencia no publica autoridad y conserva el mirror previo', a
   await assert.rejects(resolver.ensure(), /PERSIST_FAILED/);
   assert.equal(resolver.current(), '');
   assert.equal(persisted, 'http://10.0.0.90:3001');
+});
+
+test('rollback tardío de A no sobrescribe autoridad B ya publicada', async () => {
+  const oldStorage = globalThis.localStorage;
+  const values = new Map<string, string>([['clic_pos_terminal_setup_mode', 'ORDER_TAKER']]);
+  const storage = {
+    get length() { return values.size; },
+    clear: () => values.clear(),
+    getItem: (name: string) => values.get(name) ?? null,
+    key: (index: number) => [...values.keys()][index] ?? null,
+    removeItem: (name: string) => { values.delete(name); },
+    setItem: (name: string, value: string) => { values.set(name, String(value)); },
+  } as Storage;
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: storage });
+  let releaseA!: () => void;
+  let markAStarted!: () => void;
+  const aStarted = new Promise<void>(resolve => { markAStarted = resolve; });
+  let nativeWrite = 0;
+  setTerminalCredentialNativeWriterForTests(async () => {
+    nativeWrite += 1;
+    if (nativeWrite === 1) {
+      markAStarted();
+      await new Promise<void>(resolve => { releaseA = resolve; });
+    }
+  });
+  let active = { ...contract };
+  let nextBase = '10.0.0.101';
+  const resolver = createOperationalMasterResolver({
+    getContract: () => active,
+    discover: async () => [{ baseUrl: nextBase, config: remote() }],
+    mirror: base => persistValidatedClientMasterTargetAsync(base),
+  });
+  try {
+    saveSyncProfile({ contractedProduct: 'POS_ONLY', posRuntime: 'SLAVE', cloudChannel: 'POS_MASTER', dataMaster: 'POS_MASTER',
+      cloudSyncEnabled: false, customerErpAccess: false, erpUiEnabled: false, contractSource: 'BACKEND_REGISTER' });
+    const writeA = resolver.ensure();
+    await aStarted;
+    active = { ...contract, terminalType: 'ORDER_TAKER' };
+    nextBase = '10.0.0.102';
+    resolver.invalidate();
+    const writeB = resolver.ensure();
+    for (let turn = 0; turn < 10 && storage.getItem('CLIC_POS_MASTER_URL') !== 'http://10.0.0.102:3001'; turn += 1) await Promise.resolve();
+    assert.equal(storage.getItem('CLIC_POS_MASTER_URL'), 'http://10.0.0.102:3001');
+    releaseA();
+    await assert.rejects(writeA, /CONTRACT_CHANGED/);
+    assert.equal(await writeB, 'http://10.0.0.102:3001');
+    assert.equal(resolver.current(), 'http://10.0.0.102:3001');
+    assert.equal(storage.getItem('pos_master_ip'), '10.0.0.102');
+    assert.equal(loadSyncProfile().masterUrl, 'http://10.0.0.102:3001');
+    assert.equal(readTerminalCredentialsSync().masterUrl, 'http://10.0.0.102:3001');
+    assert.equal(readTerminalCredentialsSync().masterIp, '10.0.0.102');
+  } finally {
+    setTerminalCredentialNativeWriterForTests(null);
+    Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: oldStorage });
+  }
 });
 
 test('timeouts de transporte customer/release comienzan después de resolver master', () => {

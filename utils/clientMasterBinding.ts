@@ -1,6 +1,6 @@
 import type { BusinessConfig } from '../types';
-import { restoreClientMasterUrl, updateClientMasterUrl } from '../services/sync/SyncProfile';
-import { awaitTerminalCredentialWrites, saveTerminalCredentialsSync } from '../services/sync/TerminalCredentialStore';
+import { loadSyncProfile, restoreClientMasterUrl, updateClientMasterUrl } from '../services/sync/SyncProfile';
+import { awaitTerminalCredentialWrites, readTerminalCredentialsSync, saveTerminalCredentialsSync } from '../services/sync/TerminalCredentialStore';
 
 const value = (input: unknown): string => String(input || '').trim();
 
@@ -24,6 +24,7 @@ export const resolveClientMasterTerminalId = (
 };
 
 type MasterTargetStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
+let asyncMasterTargetGeneration = 0;
 
 const restore = (storage: MasterTargetStorage, key: string, previous: string | null) => {
   if (previous === null) storage.removeItem(key);
@@ -89,9 +90,21 @@ export const persistValidatedClientMasterTarget = (
 export const persistValidatedClientMasterTargetAsync = async (
   baseUrl: string,
 ): Promise<() => Promise<void>> => {
-  const rollback = persistValidatedClientMasterTarget(baseUrl);
+  const generation = ++asyncMasterTargetGeneration;
+  const normalizedUrl = new URL(baseUrl).origin;
+  const nextHost = new URL(normalizedUrl).hostname;
+  const rollback = persistValidatedClientMasterTarget(normalizedUrl);
   await awaitTerminalCredentialWrites();
   return async () => {
+    const credentials = readTerminalCredentialsSync();
+    const ownsMirrors = generation === asyncMasterTargetGeneration
+      && localStorage.getItem('CLIC_POS_MASTER_URL') === normalizedUrl
+      && localStorage.getItem('pos_master_ip') === nextHost
+      && loadSyncProfile().masterUrl === normalizedUrl
+      && credentials.masterUrl === normalizedUrl
+      && credentials.masterIp === nextHost;
+    if (!ownsMirrors) return;
+    asyncMasterTargetGeneration += 1;
     rollback();
     await awaitTerminalCredentialWrites();
   };
