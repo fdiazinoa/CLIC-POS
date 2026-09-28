@@ -336,7 +336,11 @@ import {
   type SyncProfilePersistenceDiagnostic,
   type SyncProfileSource
 } from './services/sync/SyncProfile';
-import { resolveOperationalMasterConfig } from './utils/operationalMasterConfig';
+import {
+  resolveClientMasterAuthority,
+  runClientMasterStartup,
+  type ClientMasterAuthority,
+} from './utils/operationalMasterConfig';
 import { persistValidatedClientMasterTarget, resolveClientMasterTerminalId } from './utils/clientMasterBinding';
 import { markSyncDeviceTokenInvalid, persistSyncDeviceToken } from './services/sync/deviceToken';
 import {
@@ -5414,56 +5418,47 @@ const AppContent: React.FC = () => {
   clientRoutingContextRef.current.getContract = getClientMasterContract;
   clientRoutingContextRef.current.getTerminal = getCurrentTerminal;
 
-  const discoverEligibleClientMasterEndpoint = async () => {
-    if (clientLocalIpsRef.current === null) {
-      const bridge = (window as any).ClicPOSNativePrinter;
-      try {
-        const status = typeof bridge?.getMasterServerStatus === 'function'
-          ? parseNativeBridgeJson(await Promise.resolve(bridge.getMasterServerStatus({ port: 3001 })))
-          : {};
-        clientLocalIpsRef.current = [...new Set([status?.localIp, ...(status?.localIps || [])].filter(Boolean))] as string[];
-      } catch { clientLocalIpsRef.current = []; }
-    }
-    const candidates: Array<{ host: string; source: 'STORED' | 'CLOUD' | 'LAN' }> = [];
-    const attempted = new Set<string>();
-    const appendCandidate = (value: string | null | undefined, source: 'STORED' | 'CLOUD' | 'LAN') => {
-      const host = normalizeMasterHost(value || '');
-      if (host && !candidates.some(candidate => candidate.host === host)) candidates.push({ host, source });
-    };
-    appendCandidate(localStorage.getItem('pos_master_ip'), 'STORED');
-    appendCandidate(localStorage.getItem('CLIC_POS_MASTER_URL'), 'STORED');
-    let failure: unknown = new Error('MASTER_UNAVAILABLE: no se encontró la Caja Master vinculada.');
-    const tryCandidates = async () => {
-      for (const candidate of candidates) {
-        for (const baseUrl of buildMasterUrlCandidates(candidate.host)) {
-          if (attempted.has(baseUrl)) continue;
-          attempted.add(baseUrl);
-          const controller = new AbortController();
-          const timeoutId = window.setTimeout(() => controller.abort(), 2500);
-          try {
-            const response = await fetch(`${baseUrl}/api/config`, { signal: controller.signal });
-            if (!response.ok) throw new Error(`MASTER_CONFIG_HTTP_${response.status}`);
-            const remoteConfig = await response.json();
-            validateOperationalMasterEndpoint(baseUrl, remoteConfig, getClientMasterContract());
-            localStorage.setItem('CLIC_POS_MASTER_DISCOVERY', candidate.source);
-            return [{ baseUrl, config: remoteConfig }];
-          } catch (error) { failure = error; }
-          finally { window.clearTimeout(timeoutId); }
-        }
+  const hydrateClientLocalIps = async (): Promise<string[]> => {
+    const bridge = (window as any).ClicPOSNativePrinter;
+    const addresses: unknown[] = [];
+    try {
+      if (typeof bridge?.getMasterServerStatus === 'function') {
+        const status = parseNativeBridgeJson(await Promise.resolve(bridge.getMasterServerStatus({ port: 3001 })));
+        addresses.push(status?.localIp, ...(status?.localIps || []));
       }
-      return null;
-    };
-    const known = await tryCandidates();
-    if (known) return known;
-    const cloudEndpoint = await resolveMasterEndpointFromCloud(undefined, { persist: false }).catch(() => null);
-    appendCandidate(cloudEndpoint?.localIp || cloudEndpoint?.endpointUrl, 'CLOUD');
-    const cloud = await tryCandidates();
-    if (cloud) return cloud;
-    const lanCandidates = await discoverLanMasterCandidates({ timeoutMs: 2500 });
-    lanCandidates.forEach(candidate => appendCandidate(candidate.host, 'LAN'));
-    const lan = await tryCandidates();
-    if (lan) return lan;
-    throw failure;
+      if (typeof bridge?.getDeviceInfo === 'function') {
+        const deviceInfo = parseNativeBridgeJson(await Promise.resolve(bridge.getDeviceInfo()));
+        addresses.push(deviceInfo?.localIp, ...(deviceInfo?.localIps || []));
+      }
+    } catch (error) {
+      console.warn('[MASTER_LOCAL_IDENTITY_UNAVAILABLE]', error);
+    }
+    const localIps = [...new Set(addresses
+      .map(value => normalizeMasterHost(String(value || '')))
+      .filter(host => host && host !== '0.0.0.0' && host !== '::'))];
+    clientLocalIpsRef.current = localIps;
+    return localIps;
+  };
+  const discoverEligibleClientMasterEndpoint = async () => {
+    const localIps = clientLocalIpsRef.current || await hydrateClientLocalIps();
+    if (localIps.length === 0) throw new Error('MASTER_LOCAL_IDENTITY_UNAVAILABLE');
+    const authority = await resolveClientMasterAuthority<Record<string, any>>({
+      storedHosts: [localStorage.getItem('pos_master_ip'), localStorage.getItem('CLIC_POS_MASTER_URL')],
+      resolveCloudHost: async () => {
+        const endpoint = await resolveMasterEndpointFromCloud(undefined, { persist: false }).catch(() => null);
+        return endpoint?.localIp || endpoint?.endpointUrl;
+      },
+      discoverLanHosts: async () => (await discoverLanMasterCandidates({ timeoutMs: 2500, localIps }))
+        .map(candidate => candidate.host),
+      rejectHosts: localIps,
+      timeoutMs: 8_000,
+      validate: (baseUrl, payload) => {
+        validateOperationalMasterEndpoint(baseUrl, payload, getClientMasterContract());
+      },
+    });
+    if (authority.status === 'UNAVAILABLE') throw new Error('MASTER_UNAVAILABLE: no se encontró la Caja Master vinculada.');
+    localStorage.setItem('CLIC_POS_MASTER_DISCOVERY', authority.source);
+    return [{ baseUrl: authority.baseUrl, config: authority.config, source: authority.source }];
   };
   clientRoutingContextRef.current.discover = discoverEligibleClientMasterEndpoint;
   if (!clientOperationalResolverRef.current) {
@@ -6854,58 +6849,11 @@ const AppContent: React.FC = () => {
         const shouldFetchConfigFromMaster = !!masterIp && (
           isClientTerminalMode() || !localPairedTerminal || localPairedTerminal?.config?.isPrimaryNode === false
         );
-        const shouldDiscoverConfigFromMaster = !masterIp && (
-          isClientTerminalMode() || localPairedTerminal?.config?.isPrimaryNode === false
-        );
 
         if (masterIp && !isClientTerminalMode() && !shouldFetchConfigFromMaster && localPairedTerminal?.config?.isPrimaryNode) {
           console.warn('⚠️ Stale pos_master_ip detected on MASTER terminal. Clearing slave pointer.');
           localStorage.removeItem('pos_master_ip');
           localStorage.removeItem('CLIC_POS_MASTER_URL');
-        }
-
-        if (shouldFetchConfigFromMaster || shouldDiscoverConfigFromMaster) {
-          console.log("🔄 Slave Mode: Fetching latest config from Master...");
-          try {
-            const resolvedMaster = await resolveOperationalMasterConfig<any>({
-              storedHosts: [masterIp, localStorage.getItem('CLIC_POS_MASTER_URL')],
-              resolveCloudHost: async () => {
-                const endpoint = await resolveMasterEndpointFromCloud(undefined, { persist: false });
-                return endpoint?.localIp || endpoint?.endpointUrl;
-              },
-              discoverLanHosts: async () => (await discoverLanMasterCandidates({ timeoutMs: 2500 }))
-                .map(candidate => candidate.host),
-              validate: (baseUrl, payload) => {
-                validateOperationalMasterEndpoint(baseUrl, payload, getClientMasterContract(localPairedTerminal, currentConfig));
-              },
-              onCandidateFailure: (candidate, baseUrl, error) => {
-                console.warn('[MASTER_CONFIG_CANDIDATE_REJECTED]', {
-                  source: candidate.source,
-                  baseUrl,
-                  reason: error instanceof Error ? error.message : String(error),
-                });
-              },
-            });
-            const fetchedConfig = resolvedMaster?.config || null;
-
-            if (resolvedMaster) {
-              masterIp = new URL(resolvedMaster.baseUrl).hostname;
-              persistValidatedClientMasterTarget(resolvedMaster.baseUrl);
-              localStorage.setItem('CLIC_POS_MASTER_DISCOVERY', resolvedMaster.source);
-            }
-
-            if (fetchedConfig && fetchedConfig.terminals) {
-              const normalizedFetchedConfig = normalizeTerminalDocumentAssignments(fetchedConfig);
-              const configFromMaster = normalizedFetchedConfig.config;
-              if (configFromMaster && !Array.isArray(configFromMaster) && configFromMaster.terminals) {
-                console.log("✅ Config fetched from Master. Saving to local DB...");
-                await db.save('config', configFromMaster);
-                currentConfig = configFromMaster;
-              }
-            }
-          } catch (e: any) {
-            console.error("❌ Failed to fetch config from Master (Timeout/Network):", e.name === 'AbortError' ? 'Timeout' : e.message);
-          }
         }
 
         if (localPairedTerminal && currentConfig && !Array.isArray(currentConfig)) {
@@ -7204,20 +7152,97 @@ const AppContent: React.FC = () => {
 
             markBootStage('LOCAL_STATE_READY');
             freezePhase('SYNC_START');
-            await syncManager.initialize(finalConfig, effectivePairedTerminal.id);
-            markBootStage('SYNC_INITIALIZED');
-            freezePhase('SYNC_END');
-
-            // El login arranca desde SQLite; la verificación ERP ocurre después
-            // de abrir la pantalla para no bloquear PIN/mesas con la red.
             let startupErpUsers: User[] | null = null;
             try {
               let refreshedTerminalConfig: BusinessConfig | null;
-              if (isErpSetupMode) {
+              const isOperationalClientBoot = shouldFetchConfigFromMaster || isClientTerminalMode()
+                || effectivePairedTerminal.config?.isPrimaryNode === false;
+              if (isOperationalClientBoot) {
+                const startup = await runClientMasterStartup<BusinessConfig, BusinessConfig | null>({
+                  fallbackConfig: finalConfig,
+                  hydrateLocalIps: hydrateClientLocalIps,
+                  resolveAuthority: async (localIps) => resolveClientMasterAuthority<BusinessConfig>({
+                    storedHosts: [masterIp, localStorage.getItem('CLIC_POS_MASTER_URL')],
+                    resolveCloudHost: async () => {
+                      const endpoint = await resolveMasterEndpointFromCloud(undefined, { persist: false });
+                      return endpoint?.localIp || endpoint?.endpointUrl;
+                    },
+                    discoverLanHosts: async () => (await discoverLanMasterCandidates({
+                      timeoutMs: 2500,
+                      localIps,
+                    })).map(candidate => candidate.host),
+                    rejectHosts: localIps,
+                    timeoutMs: 8_000,
+                    validate: (baseUrl, payload) => {
+                      validateOperationalMasterEndpoint(
+                        baseUrl,
+                        payload,
+                        getClientMasterContract(effectivePairedTerminal, finalConfig),
+                      );
+                    },
+                    onCandidateFailure: (candidate, baseUrl, error) => {
+                      console.warn('[MASTER_CONFIG_CANDIDATE_REJECTED]', {
+                        source: candidate.source,
+                        baseUrl,
+                        reason: error instanceof Error ? error.message : String(error),
+                      });
+                    },
+                  }),
+                  persistValidated: (authority) => {
+                    persistValidatedClientMasterTarget(authority.baseUrl);
+                    localStorage.setItem('CLIC_POS_MASTER_DISCOVERY', authority.source);
+                  },
+                  applyValidatedConfig: async (remoteConfig) => {
+                    const normalized = normalizeTerminalDocumentAssignments(remoteConfig).config;
+                    if (!normalized || Array.isArray(normalized) || !normalized.terminals) return finalConfig;
+                    await db.save('config', normalized);
+                    return normalized;
+                  },
+                  initialize: async (authority, activeConfig) => {
+                    await syncManager.initialize(activeConfig || finalConfig, effectivePairedTerminal.id, {
+                      clientMasterAuthority: authority,
+                      recoverClientMasterAuthority: async (): Promise<ClientMasterAuthority<unknown>> => {
+                        clientOperationalResolverRef.current?.invalidate();
+                        try {
+                          const [candidate] = await discoverEligibleClientMasterEndpoint();
+                          return candidate
+                            ? {
+                              status: 'VALIDATED',
+                              baseUrl: candidate.baseUrl,
+                              config: candidate.config,
+                              source: candidate.source,
+                            }
+                            : { status: 'UNAVAILABLE' };
+                        } catch {
+                          return { status: 'UNAVAILABLE' };
+                        }
+                      },
+                    });
+                  },
+                  refresh: async (authority, activeConfig) => {
+                    if (isErpSetupMode) return activeConfig;
+                    return syncManager.refreshTerminalResolvedConfig(undefined, {
+                      baseConfig: activeConfig,
+                      dispatchEvent: false,
+                      requestTimeoutMs: 8_000,
+                      supplementalMode: 'background',
+                      validatedMasterBaseUrl: authority.baseUrl,
+                    });
+                  },
+                });
+                clientLocalIpsRef.current = startup.localIps;
+                if (startup.authority.status === 'VALIDATED') {
+                  masterIp = new URL(startup.authority.baseUrl).hostname;
+                }
+                finalConfig = startup.config;
+                refreshedTerminalConfig = startup.refresh || startup.config;
+              } else if (isErpSetupMode) {
+                await syncManager.initialize(finalConfig, effectivePairedTerminal.id);
                 const localStartupUsers = await db.get('users') as User[];
                 startupErpUsers = Array.isArray(localStartupUsers) ? localStartupUsers : [];
                 refreshedTerminalConfig = finalConfig;
               } else {
+                await syncManager.initialize(finalConfig, effectivePairedTerminal.id);
                 refreshedTerminalConfig = await syncManager.refreshTerminalResolvedConfig(undefined, {
                   baseConfig: finalConfig,
                   dispatchEvent: false,
@@ -7225,6 +7250,9 @@ const AppContent: React.FC = () => {
                   supplementalMode: 'background',
                 });
               }
+
+              markBootStage('SYNC_INITIALIZED');
+              freezePhase('SYNC_END');
 
               if (refreshedTerminalConfig) {
                 finalConfig = refreshedTerminalConfig;
@@ -7236,7 +7264,9 @@ const AppContent: React.FC = () => {
                   ) || effectivePairedTerminal;
               }
             } catch (refreshError) {
-              console.warn('⚠️ Startup terminal snapshot refresh failed. Using last known local config.', refreshError);
+              markBootStage('SYNC_INITIALIZED');
+              freezePhase('SYNC_END');
+              console.warn('⚠️ Startup Master authority/terminal refresh failed. Using last known local config offline.', refreshError);
             }
 
             markBootStage('TERMINAL_CONFIG_READY');

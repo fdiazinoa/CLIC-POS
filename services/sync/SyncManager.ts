@@ -11,7 +11,6 @@ import { fetchAndReadWithTimeout } from '../network/fetchAndReadWithTimeout';
 import { db } from '../../utils/db';
 import { dbAdapter } from '../db';
 import { apiSyncAdapter, ProductImageManifestItem, ProductImagePayloadItem } from './ApiSyncAdapter';
-import { NetworkScanner } from './NetworkScanner';
 import { v4 as uuidv4 } from 'uuid';
 import { Capacitor } from '@capacitor/core';
 import { permissionService } from './PermissionService';
@@ -93,6 +92,8 @@ import { preserveLocalCatalog } from './preserveLocalCatalog';
 import { pendingCatalogDeleteIds, pendingCatalogProductIds } from './preserveLocalCatalog';
 import { buildTerminalSyncAuthHeaders } from './TerminalCredentialStore';
 import { canDeleteCatalogProduct, keepProductAfterAuthoritativeFull, resolveRemoteCatalogDeletionIds } from './catalogReconciliation';
+import type { ClientMasterAuthority } from '../../utils/operationalMasterConfig';
+import { persistValidatedClientMasterTarget } from '../../utils/clientMasterBinding';
 import {
     applyAuthoritativeProductTaxes,
     normalizeErpTaxDefinition,
@@ -375,6 +376,8 @@ class SyncManager {
     private syncConfig: SyncConfig | null = null;
     private isMaster: boolean = false;
     private isDisabled: boolean = false;
+    private clientMasterAuthority: ClientMasterAuthority<unknown> | null = null;
+    private recoverClientMasterAuthority: (() => Promise<ClientMasterAuthority<unknown>>) | null = null;
     private initializedLocalTerminalId: string | null = null;
     private imageSyncInProgress = false;
     private lastProductImageManifestVersion = 0;
@@ -708,7 +711,13 @@ class SyncManager {
         }
     }
 
-    private resolveTerminalConfigSyncApiBase(context: { erpBaseUrl: string | null }): string | null {
+    private resolveTerminalConfigSyncApiBase(
+        context: { erpBaseUrl: string | null },
+        validatedMasterBaseUrl?: string,
+    ): string | null {
+        if (validatedMasterBaseUrl) {
+            return `${new URL(validatedMasterBaseUrl).origin}/api/sync`;
+        }
         const activeTarget = syncPolicy.resolve();
         if (activeTarget.kind === 'POS_MASTER' && activeTarget.baseUrl) {
             return activeTarget.baseUrl;
@@ -752,13 +761,24 @@ class SyncManager {
         return Array.from(new Set(candidates.map((value) => value.trim()).filter(Boolean)));
     }
 
-    private buildTerminalConfigEndpointCandidates(context: { erpBaseUrl: string | null }): Array<{
+    private buildTerminalConfigEndpointCandidates(
+        context: { erpBaseUrl: string | null },
+        validatedMasterBaseUrl?: string,
+    ): Array<{
         baseUrl: string;
         mode: string;
         includeErpBaseUrl: boolean;
     }> {
-        const syncApiBase = this.resolveTerminalConfigSyncApiBase(context);
+        const syncApiBase = this.resolveTerminalConfigSyncApiBase(context, validatedMasterBaseUrl);
         const useAbsoluteEndpoint = this.shouldUseAbsoluteTerminalConfigEndpoint();
+
+        if (validatedMasterBaseUrl) {
+            return [{
+                baseUrl: syncApiBase!,
+                mode: 'validated-master-authority',
+                includeErpBaseUrl: false,
+            }];
+        }
 
         if (!useAbsoluteEndpoint) {
             return [{
@@ -800,12 +820,14 @@ class SyncManager {
     /**
      * Initialize sync manager
      */
-    async initialize(config: BusinessConfig, terminalId: string) {
+    async initialize(config: BusinessConfig, terminalId: string, options?: {
+        clientMasterAuthority?: ClientMasterAuthority<unknown>;
+        recoverClientMasterAuthority?: () => Promise<ClientMasterAuthority<unknown>>;
+    }) {
         // Ensure a device token exists for this browser instance
         this.ensureDeviceToken();
         this.initializedLocalTerminalId = terminalId;
         this.beginReadyToSellBootstrap('P0_INITIALIZE_SYNC_MANAGER');
-        this.rehydrateOperationalTargetFromConfig(config, terminalId);
 
         // Detect Network Mode
         // NOTE: We allow SyncManager even in network mode for Master to manage terminals
@@ -825,10 +847,49 @@ class SyncManager {
         // terminal config; treating that stale flag as authoritative rewrites
         // the paired Master URL to this device and breaks tables/KDS routing.
         this.isMaster = !isOperationalClient && permissionService.isMasterTerminal();
+        const requestedClientAuthority = isOperationalClient
+            ? (options?.clientMasterAuthority || this.clientMasterAuthority)
+            : null;
+        this.clientMasterAuthority = requestedClientAuthority;
+        if (options?.recoverClientMasterAuthority) {
+            this.recoverClientMasterAuthority = options.recoverClientMasterAuthority;
+        } else if (!isOperationalClient) {
+            this.recoverClientMasterAuthority = null;
+        }
+        this.isDisabled = false;
+
+        if (isOperationalClient && requestedClientAuthority?.status === 'UNAVAILABLE') {
+            this.isDisabled = true;
+            this.syncConfig = {
+                mode: 'SLAVE',
+                autoSyncIntervalMs: 30000,
+                isEnabled: false,
+            };
+            this.stopAutoSync();
+            if (this.imageSyncWorkerTimer) {
+                window.clearTimeout(this.imageSyncWorkerTimer);
+                this.imageSyncWorkerTimer = null;
+            }
+            this.imageSyncWorkerQueue = [];
+            this.isRecoveringConnection = false;
+            apiSyncAdapter.setOnConnectionRestored(async () => undefined);
+            apiSyncAdapter.setOnConnectionLost(() => undefined);
+            await realtimeNotificationService.disconnect('DISABLED');
+            await this.loadSyncVersions();
+            this.loadProductImageSyncState();
+            this.isInitialized = true;
+            console.warn('⚠️ SyncManager initialized in local offline mode: Master authority unavailable.');
+            return;
+        }
+
+        this.rehydrateOperationalTargetFromConfig(config, terminalId);
 
         // Get sync configuration from terminal config
         const terminal = (config.terminals || []).find(t => t.id === terminalId);
-        let savedMasterUrl = localStorage.getItem('CLIC_POS_MASTER_URL');
+        const validatedClientMasterUrl = requestedClientAuthority?.status === 'VALIDATED'
+            ? new URL(requestedClientAuthority.baseUrl).origin
+            : null;
+        let savedMasterUrl = validatedClientMasterUrl || localStorage.getItem('CLIC_POS_MASTER_URL');
         const runtimeMasterUrl = buildMasterUrlFromHost(window.location.hostname);
 
         const parseHostname = (url: string): string | null => {
@@ -861,7 +922,7 @@ class SyncManager {
             }
         };
 
-        if (savedMasterUrl) {
+        if (savedMasterUrl && !validatedClientMasterUrl) {
             const normalizedSavedMasterUrl = normalizeStoredMasterUrl(savedMasterUrl);
             if (normalizedSavedMasterUrl && normalizedSavedMasterUrl !== savedMasterUrl) {
                 console.warn(`⚠️ SyncManager: Normalizing stored master URL (${savedMasterUrl}) -> ${normalizedSavedMasterUrl}`);
@@ -895,7 +956,7 @@ class SyncManager {
         }
 
         // Slave terminals: prefer explicit paired master IP over stale saved URL.
-        if (!this.isMaster) {
+        if (!this.isMaster && !validatedClientMasterUrl) {
             const legacyMasterIp = localStorage.getItem('pos_master_ip');
             if (legacyMasterIp) {
                 const forcedSlaveMasterUrl = buildMasterUrlFromLegacyInput(legacyMasterIp);
@@ -912,7 +973,7 @@ class SyncManager {
         }
 
         // Fallback: Check for 'pos_master_ip' (set by TerminalBindingScreen)
-        if (!savedMasterUrl) {
+        if (!savedMasterUrl && !validatedClientMasterUrl) {
             const legacyIp = localStorage.getItem('pos_master_ip');
             if (legacyIp) {
                 savedMasterUrl = buildMasterUrlFromLegacyInput(legacyIp);
@@ -921,7 +982,7 @@ class SyncManager {
         }
 
         // Slave safety: never keep loopback master URL when running from a remote host.
-        if (!this.isMaster && savedMasterUrl) {
+        if (!this.isMaster && savedMasterUrl && !validatedClientMasterUrl) {
             const effectiveSavedHost = parseHostname(savedMasterUrl);
             const isEffectiveSavedLoopback = effectiveSavedHost === 'localhost' || effectiveSavedHost === '127.0.0.1';
             if (isEffectiveSavedLoopback && !isRuntimeLoopback) {
@@ -934,12 +995,12 @@ class SyncManager {
         }
 
         // Last resort on slave: use runtime host as master URL if nothing is configured.
-        if (!this.isMaster && !savedMasterUrl) {
+        if (!this.isMaster && !savedMasterUrl && !validatedClientMasterUrl) {
             savedMasterUrl = runtimeMasterUrl;
             localStorage.setItem('CLIC_POS_MASTER_URL', runtimeMasterUrl);
         }
 
-        if (!this.isMaster && savedMasterUrl) {
+        if (!this.isMaster && savedMasterUrl && !validatedClientMasterUrl) {
             updateClientMasterUrl(savedMasterUrl);
         }
 
@@ -3211,6 +3272,7 @@ class SyncManager {
             resolvedScopes?: TerminalManifestResolvedScope[];
             supplementalMode?: 'inline' | 'background' | 'skip';
             deferDuringSale?: boolean;
+            validatedMasterBaseUrl?: string;
         }
     ): Promise<BusinessConfig | null> {
         freezeCount('CONFIG_APPLY_COUNT');
@@ -3288,8 +3350,14 @@ class SyncManager {
         const pendingSnapshot = snapshot
             ? null
             : this.getPendingTerminalSnapshot(context.terminalId, snapshotTerminalId);
-        const endpointCandidates = this.buildTerminalConfigEndpointCandidates(context);
-        const syncApiBase = this.resolveTerminalConfigSyncApiBase(context);
+        const endpointCandidates = this.buildTerminalConfigEndpointCandidates(
+            context,
+            options?.validatedMasterBaseUrl,
+        );
+        const syncApiBase = this.resolveTerminalConfigSyncApiBase(
+            context,
+            options?.validatedMasterBaseUrl,
+        );
         const useAbsoluteEndpoint = this.shouldUseAbsoluteTerminalConfigEndpoint();
         const canFetchRemote = Boolean(
             context.terminalId &&
@@ -5203,17 +5271,21 @@ class SyncManager {
         // Notify UI
         window.dispatchEvent(new CustomEvent('sync:reconnecting', { detail: { status: 'searching' } }));
 
-        const savedMasterUrl = localStorage.getItem('CLIC_POS_MASTER_URL');
-        const currentIp = savedMasterUrl ? new URL(savedMasterUrl).hostname : null;
+        console.log('🕵️‍♂️ Auto-Discovery: requesting a fully validated Master authority.');
 
-        console.log(`🕵️‍♂️ Auto-Discovery: Starting scan. Last successful IP: ${currentIp}`);
+        const authority = this.recoverClientMasterAuthority
+            ? await this.recoverClientMasterAuthority().catch(() => ({ status: 'UNAVAILABLE' } as const))
+            : ({ status: 'UNAVAILABLE' } as const);
 
-        // Delegate scanning to NetworkScanner
-        const foundUrl = await NetworkScanner.findMaster(currentIp || undefined);
-
-        if (foundUrl) {
-            console.log(`🎉 Auto-Discovery: MASTER FOUND at ${foundUrl}`);
-            this.finalizeRecovery(foundUrl);
+        if (authority.status === 'VALIDATED') {
+            console.log(`🎉 Auto-Discovery: validated MASTER FOUND at ${authority.baseUrl}`);
+            try {
+                this.finalizeRecovery(authority);
+            } catch (error) {
+                console.warn('❌ Auto-Discovery: validated Master could not be persisted.', error);
+                window.dispatchEvent(new CustomEvent('sync:reconnecting', { detail: { status: 'failed' } }));
+                this.isRecoveringConnection = false;
+            }
         } else {
             console.warn('❌ Auto-Discovery: Could not find Master. Waiting for manual retry.');
             window.dispatchEvent(new CustomEvent('sync:reconnecting', { detail: { status: 'failed' } }));
@@ -5221,21 +5293,15 @@ class SyncManager {
         }
     }
 
-    private finalizeRecovery(url: string) {
-        const normalizedUrl = this.normalizeMasterUrlForStorage(url) || url;
-        localStorage.setItem('CLIC_POS_MASTER_URL', normalizedUrl);
-        updateClientMasterUrl(normalizedUrl);
-
-        // Legacy support
-        try {
-            const urlObj = new URL(normalizedUrl);
-            localStorage.setItem('pos_master_ip', urlObj.hostname);
-        } catch (e) {
-            // Ignore
-        }
+    private finalizeRecovery(authority: Extract<ClientMasterAuthority<unknown>, { status: 'VALIDATED' }>) {
+        const normalizedUrl = this.normalizeMasterUrlForStorage(authority.baseUrl) || authority.baseUrl;
+        persistValidatedClientMasterTarget(normalizedUrl, {
+            persistProfile: normalizedUrl => updateClientMasterUrl(normalizedUrl),
+        });
+        this.clientMasterAuthority = { ...authority, baseUrl: normalizedUrl };
 
         if (this.syncConfig) {
-            this.syncConfig.masterUrl = url;
+            this.syncConfig.masterUrl = normalizedUrl;
         }
 
         // Critical: Reset Adapter & Circuit Breaker
@@ -5243,7 +5309,7 @@ class SyncManager {
         apiSyncAdapter.resetCircuit();
 
         // Notify UI
-        window.dispatchEvent(new CustomEvent('sync:reconnecting', { detail: { status: 'connected', url } }));
+        window.dispatchEvent(new CustomEvent('sync:reconnecting', { detail: { status: 'connected', url: normalizedUrl } }));
 
         // Resume Sync
         this.isRecoveringConnection = false;

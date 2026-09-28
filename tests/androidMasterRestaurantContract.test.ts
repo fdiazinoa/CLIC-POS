@@ -234,7 +234,7 @@ test('la Master Android se reactiva al volver al primer plano y el cliente reint
     clientMasterBindingSource.indexOf('export const persistValidatedClientMasterTarget'),
   );
   assert.match(appSource, /addListener\?\.\('resume', ensureMasterServerHealth\)/);
-  assert.match(appSource, /discoverLanMasterCandidates\(\{ timeoutMs: 2500 \}\)/);
+  assert.match(appSource, /discoverLanMasterCandidates\(\{[\s\S]{0,100}timeoutMs: 2500,[\s\S]{0,100}localIps/);
   assert.match(appSource, /mirror: baseUrl => \{\s*persistValidatedClientMasterTarget\(baseUrl\)/);
   assert.match(masterTargetPersistence, /const persistProfile = dependencies\.persistProfile \|\| updateClientMasterUrl/);
   assert.match(masterTargetPersistence, /storage\.setItem\('CLIC_POS_MASTER_URL', normalizedUrl\)/);
@@ -334,7 +334,8 @@ test('un KDS no levanta ni puede ser seleccionado como Caja Master', () => {
   assert.match(pairingSource, /isEligibleOperationalMasterConfig\(fetchedConfig\)/);
   assert.match(scannerSource, /isEligibleOperationalMasterConfig\(await configResponse\.json\(\)\)/);
   assert.match(appSource, /ensureEligibleClientMasterEndpoint/);
-  assert.match(appSource, /validateOperationalMasterEndpoint\(baseUrl, remoteConfig, getClientMasterContract\(\)\)/);
+  assert.match(appSource, /resolveClientMasterAuthority<Record<string, any>>/);
+  assert.match(appSource, /validateOperationalMasterEndpoint\(baseUrl, payload, getClientMasterContract\(\)\)/);
 });
 
 test('la terminal cliente intenta IP guardada, Cloud y descubrimiento LAN antes de pedir la IP manual', () => {
@@ -342,7 +343,8 @@ test('la terminal cliente intenta IP guardada, Cloud y descubrimiento LAN antes 
   assert.match(pairingSource, /discoverLanMasterCandidates\(\{ timeoutMs: 2500 \}\)/);
   assert.match(pairingSource, /No se encontró una Caja Master disponible en esta red/);
   assert.match(lanDiscoverySource, /discoverMasterServers\(\{ timeoutMs: options\.timeoutMs \|\| 2500 \}\)/);
-  assert.match(lanDiscoverySource, /NetworkScanner\.findMaster/);
+  assert.match(lanDiscoverySource, /NetworkScanner\.findUntrustedMasterCandidateByIdentity/);
+  assert.doesNotMatch(lanDiscoverySource, /NetworkScanner\.findMaster\(/);
   assert.match(lanDiscoverySource, /discoveredTenantId === expectedTenantId/);
   assert.match(scannerSource, /\/api\/sync\/identify/);
   assert.doesNotMatch(scannerSource, /\/api\/network\/identify/);
