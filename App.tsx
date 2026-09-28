@@ -7201,6 +7201,11 @@ const AppContent: React.FC = () => {
                   initialize: async (authority, activeConfig) => {
                     await syncManager.initialize(activeConfig || finalConfig, effectivePairedTerminal.id, {
                       clientMasterAuthority: authority,
+                      disableRemoteServices: (reason) => backgroundSyncManager.disableRemoteSync(reason),
+                      enableRemoteServices: async () => {
+                        backgroundSyncManager.enableRemoteSync();
+                        await backgroundSyncManager.initialize();
+                      },
                       recoverClientMasterAuthority: async (): Promise<ClientMasterAuthority<unknown>> => {
                         clientOperationalResolverRef.current?.invalidate();
                         try {
@@ -7523,7 +7528,14 @@ const AppContent: React.FC = () => {
             }
 
             // NOTE: NetworkSyncService deprecated. SyncManager/ApiSyncAdapter handles sync now.
-            backgroundSyncManager.initialize().catch(console.error);
+            if (syncManager.canStartRemoteServices()) {
+              if (!backgroundSyncManager.isRemoteSyncActive()) {
+                backgroundSyncManager.enableRemoteSync();
+                backgroundSyncManager.initialize().catch(console.error);
+              }
+            } else {
+              backgroundSyncManager.disableRemoteSync('master-authority-unavailable');
+            }
             currencyScheduleExecutor.initialize();
 
             markBootStage('READY');

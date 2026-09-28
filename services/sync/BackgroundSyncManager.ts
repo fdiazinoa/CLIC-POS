@@ -36,6 +36,8 @@ class BackgroundSyncManager {
     private interval: any = null;
     private retryTimeout: any = null;
     private initialized = false;
+    private remoteEnabled = true;
+    private remoteGeneration = 0;
     private listeners: Set<(state: SyncState) => void> = new Set();
     private onlineHandler: (() => void) | null = null;
     private offlineHandler: (() => void) | null = null;
@@ -70,6 +72,11 @@ class BackgroundSyncManager {
      * Initialize the background sync manager
      */
     async initialize() {
+        if (!this.remoteEnabled) {
+            console.warn('🛑 BackgroundSyncManager remote work is disabled until Master authority recovers.');
+            return;
+        }
+        const generation = this.remoteGeneration;
         if (dbAdapter.adapterType === 'network') {
             console.log("🛑 BackgroundSyncManager disabled: Running in Network Mode.");
             return;
@@ -77,6 +84,7 @@ class BackgroundSyncManager {
 
         if (this.initialized) {
             await this.updatePendingCount();
+            if (!this.remoteEnabled || generation !== this.remoteGeneration) return;
             this.startWorker();
             return;
         }
@@ -86,10 +94,13 @@ class BackgroundSyncManager {
 
         // Recover interrupted sync states from previous crashes/reloads.
         await this.recoverStuckSyncItems();
+        if (!this.remoteEnabled || generation !== this.remoteGeneration) return;
         await transferReceiptService.recoverInterrupted();
+        if (!this.remoteEnabled || generation !== this.remoteGeneration) return;
 
         // Initial count of pending items
         await this.updatePendingCount();
+        if (!this.remoteEnabled || generation !== this.remoteGeneration) return;
 
         // Start background worker
         this.startWorker();
@@ -132,21 +143,42 @@ class BackgroundSyncManager {
         window.addEventListener(POS_SALE_ACTIVITY_EVENT, this.saleActivityHandler);
     }
 
-    stopForAuthorizationLoss() {
+    disableRemoteSync(reason = 'master-authority-unavailable') {
+        this.remoteEnabled = false;
+        this.remoteGeneration += 1;
         if (this.interval) clearInterval(this.interval);
         this.interval = null;
         this.clearRetryTimeout();
-        this.isProcessing = false;
         if (this.onlineHandler) window.removeEventListener('online', this.onlineHandler);
         if (this.offlineHandler) window.removeEventListener('offline', this.offlineHandler);
         if (this.focusHandler) window.removeEventListener('focus', this.focusHandler);
         if (this.visibilityHandler) document.removeEventListener('visibilitychange', this.visibilityHandler);
         if (this.saleActivityHandler) window.removeEventListener(POS_SALE_ACTIVITY_EVENT, this.saleActivityHandler);
+        this.onlineHandler = null;
+        this.offlineHandler = null;
+        this.focusHandler = null;
+        this.visibilityHandler = null;
+        this.saleActivityHandler = null;
         this.initialized = false;
-        console.warn('🛑 BackgroundSyncManager stopped because terminal authorization was revoked.');
+        console.warn(`🛑 BackgroundSyncManager remote work stopped (${reason}).`);
+    }
+
+    enableRemoteSync() {
+        if (this.remoteEnabled) return;
+        this.remoteEnabled = true;
+        this.remoteGeneration += 1;
+    }
+
+    isRemoteSyncActive(): boolean {
+        return this.remoteEnabled && this.initialized;
+    }
+
+    stopForAuthorizationLoss() {
+        this.disableRemoteSync('terminal-authorization-revoked');
     }
 
     private startWorker() {
+        if (!this.remoteEnabled) return;
         if (this.interval) clearInterval(this.interval);
         this.interval = setInterval(() => this.sync(), this.WORKER_INTERVAL_MS);
         console.log(`⚙️ BackgroundSyncManager: Worker started (${this.WORKER_INTERVAL_MS / 1000}s interval)`);
@@ -159,7 +191,7 @@ class BackgroundSyncManager {
     }
 
     private scheduleSync(delayMs = this.FAST_RETRY_DELAY_MS) {
-        if (!navigator.onLine) return;
+        if (!this.remoteEnabled || !navigator.onLine) return;
 
         if (delayMs <= 0) {
             this.clearRetryTimeout();
@@ -329,10 +361,11 @@ class BackgroundSyncManager {
      * Main sync loop
      */
     async sync() {
-        if (this.isProcessing || !navigator.onLine || isPosSaleActive()) return;
+        if (!this.remoteEnabled || this.isProcessing || !navigator.onLine || isPosSaleActive()) return;
+        const generation = this.remoteGeneration;
         const deferred = await waitForBackgroundSyncWindow();
         if (deferred) console.info('[SYNC_DEFERRED_FOR_UI]', { source: 'operational_push' });
-        if (this.isProcessing || !navigator.onLine || isPosSaleActive()) return;
+        if (!this.remoteEnabled || generation !== this.remoteGeneration || this.isProcessing || !navigator.onLine || isPosSaleActive()) return;
         const operationalTarget = syncPolicy.resolve();
         if (operationalTarget.kind === 'NONE' || !operationalTarget.canPushOperations) {
             console.log(
@@ -503,7 +536,8 @@ class BackgroundSyncManager {
                 hasError: collectionErrors.length > 0,
                 lastSyncTime: new Date().toISOString()
             });
-            if (navigator.onLine && (shouldRetrySoon || this.state.pendingCount > 0)
+            if (this.remoteEnabled && generation === this.remoteGeneration
+                && navigator.onLine && (shouldRetrySoon || this.state.pendingCount > 0)
                 && !(pausedForSaleActivity && this.state.pendingCount === 0)) {
                 this.scheduleSync(this.nextRetryDelayMs ?? this.FAST_RETRY_DELAY_MS);
             }
@@ -529,7 +563,8 @@ class BackgroundSyncManager {
         collectionName: string,
         pushFn: (item: T) => Promise<void>
     ) {
-        if (isPosSaleActive()) return;
+        const generation = this.remoteGeneration;
+        if (!this.remoteEnabled || isPosSaleActive()) return;
         const data = await db.get(collectionName as any) as T[];
         if (!Array.isArray(data)) return;
 
@@ -553,6 +588,7 @@ class BackgroundSyncManager {
         });
 
         for (const item of pending) {
+            if (!this.remoteEnabled || generation !== this.remoteGeneration) return;
             if (isPosSaleActive()) {
                 console.log(`⏸️ BackgroundSyncManager: ${collectionName} paused for active POS input.`);
                 return;

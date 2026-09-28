@@ -378,6 +378,13 @@ class SyncManager {
     private isDisabled: boolean = false;
     private clientMasterAuthority: ClientMasterAuthority<unknown> | null = null;
     private recoverClientMasterAuthority: (() => Promise<ClientMasterAuthority<unknown>>) | null = null;
+    private disableRemoteServices: ((reason: string) => void) | null = null;
+    private enableRemoteServices: (() => Promise<void>) | null = null;
+    private initializedConfig: BusinessConfig | null = null;
+    private authorityRecoveryOnlineHandler: (() => void) | null = null;
+    private authorityRecoveryTimer: number | null = null;
+    private authorityRecoveryPromise: Promise<boolean> | null = null;
+    private authorityRecoveryDelayMs = 1_000;
     private initializedLocalTerminalId: string | null = null;
     private imageSyncInProgress = false;
     private lastProductImageManifestVersion = 0;
@@ -487,6 +494,7 @@ class SyncManager {
         localStorage.removeItem(`${TIMESTAMP_COLLECTION_CURSOR_KEY_PREFIX}${collection}`);
     }
     private imageSyncWorkerTimer: any = null;
+    private initialImageSyncTimer: number | null = null;
     private imageSyncWorkerQueue: Array<{
         kind: 'products' | ImageBackedCollection;
         items: any[];
@@ -823,11 +831,18 @@ class SyncManager {
     async initialize(config: BusinessConfig, terminalId: string, options?: {
         clientMasterAuthority?: ClientMasterAuthority<unknown>;
         recoverClientMasterAuthority?: () => Promise<ClientMasterAuthority<unknown>>;
+        disableRemoteServices?: (reason: string) => void;
+        enableRemoteServices?: () => Promise<void>;
     }) {
         // Ensure a device token exists for this browser instance
         this.ensureDeviceToken();
         this.initializedLocalTerminalId = terminalId;
+        this.initializedConfig = config;
         this.beginReadyToSellBootstrap('P0_INITIALIZE_SYNC_MANAGER');
+        if (this.initialImageSyncTimer !== null) {
+            window.clearTimeout(this.initialImageSyncTimer);
+            this.initialImageSyncTimer = null;
+        }
 
         // Detect Network Mode
         // NOTE: We allow SyncManager even in network mode for Master to manage terminals
@@ -856,6 +871,8 @@ class SyncManager {
         } else if (!isOperationalClient) {
             this.recoverClientMasterAuthority = null;
         }
+        if (options?.disableRemoteServices) this.disableRemoteServices = options.disableRemoteServices;
+        if (options?.enableRemoteServices) this.enableRemoteServices = options.enableRemoteServices;
         this.isDisabled = false;
 
         if (isOperationalClient && requestedClientAuthority?.status === 'UNAVAILABLE') {
@@ -866,6 +883,8 @@ class SyncManager {
                 isEnabled: false,
             };
             this.stopAutoSync();
+            this.disableRemoteServices?.('master-authority-unavailable');
+            apiSyncAdapter.resetOperationalAuthority();
             if (this.imageSyncWorkerTimer) {
                 window.clearTimeout(this.imageSyncWorkerTimer);
                 this.imageSyncWorkerTimer = null;
@@ -875,11 +894,18 @@ class SyncManager {
             apiSyncAdapter.setOnConnectionRestored(async () => undefined);
             apiSyncAdapter.setOnConnectionLost(() => undefined);
             await realtimeNotificationService.disconnect('DISABLED');
+            this.installAuthorityRecovery();
             await this.loadSyncVersions();
             this.loadProductImageSyncState();
             this.isInitialized = true;
             console.warn('⚠️ SyncManager initialized in local offline mode: Master authority unavailable.');
             return;
+        }
+
+        if (isOperationalClient && requestedClientAuthority?.status === 'VALIDATED') {
+            this.clearAuthorityRecovery();
+            this.disableRemoteServices?.('master-authority-rotating');
+            await realtimeNotificationService.disconnect('DISABLED');
         }
 
         this.rehydrateOperationalTargetFromConfig(config, terminalId);
@@ -1057,7 +1083,8 @@ class SyncManager {
 
         if (!this.isMaster) {
             this.attachImageSyncReconnectHandler();
-            window.setTimeout(() => {
+            this.initialImageSyncTimer = window.setTimeout(() => {
+                this.initialImageSyncTimer = null;
                 this.syncProductImages({
                     forceManifestCheck: this.productImageHashes.size === 0 || this.lastProductImageManifestVersion === 0
                 }).catch((error) => {
@@ -1141,6 +1168,17 @@ class SyncManager {
         }
 
         this.isInitialized = true;
+        if (isOperationalClient && requestedClientAuthority?.status === 'VALIDATED') {
+            await this.enableRemoteServices?.();
+        }
+    }
+
+    canStartRemoteServices(): boolean {
+        return !this.isDisabled && (
+            this.isMaster
+            || this.clientMasterAuthority?.status === 'VALIDATED'
+            || !isClientTerminalMode()
+        );
     }
 
     public async fastSyncCoreData(): Promise<void> {
@@ -5261,71 +5299,101 @@ class SyncManager {
 
     private isRecoveringConnection = false;
 
-    /**
-     * AUTO-DISCOVERY: Recover connection by scanning local network
-     */
-    private async startRecoveryProcess() {
-        if (this.isRecoveringConnection || this.isMaster) return;
+    private clearAuthorityRecovery() {
+        if (this.authorityRecoveryTimer !== null) {
+            window.clearTimeout(this.authorityRecoveryTimer);
+            this.authorityRecoveryTimer = null;
+        }
+        if (this.authorityRecoveryOnlineHandler) {
+            window.removeEventListener('online', this.authorityRecoveryOnlineHandler);
+            this.authorityRecoveryOnlineHandler = null;
+        }
+        this.authorityRecoveryDelayMs = 1_000;
+    }
+
+    private installAuthorityRecovery() {
+        if (!this.recoverClientMasterAuthority || this.isMaster) return;
+        if (!this.authorityRecoveryOnlineHandler) {
+            this.authorityRecoveryOnlineHandler = () => this.scheduleAuthorityRecovery(0);
+            window.addEventListener('online', this.authorityRecoveryOnlineHandler);
+        }
+        if (navigator.onLine) this.scheduleAuthorityRecovery(this.authorityRecoveryDelayMs);
+    }
+
+    private scheduleAuthorityRecovery(delayMs: number) {
+        if (!this.isDisabled || this.authorityRecoveryTimer !== null || this.authorityRecoveryPromise) return;
+        this.authorityRecoveryTimer = window.setTimeout(() => {
+            this.authorityRecoveryTimer = null;
+            void this.attemptAuthorityRecovery();
+        }, Math.max(0, delayMs));
+    }
+
+    private async attemptAuthorityRecovery(): Promise<boolean> {
+        if (!this.recoverClientMasterAuthority || this.isMaster) return false;
+        if (this.authorityRecoveryPromise) return this.authorityRecoveryPromise;
+
         this.isRecoveringConnection = true;
-
-        // Notify UI
         window.dispatchEvent(new CustomEvent('sync:reconnecting', { detail: { status: 'searching' } }));
+        this.authorityRecoveryPromise = (async () => {
+            const authority = await this.recoverClientMasterAuthority!().catch(
+                () => ({ status: 'UNAVAILABLE' } as const),
+            );
+            if (authority.status !== 'VALIDATED') return false;
+            await this.finalizeRecovery(authority);
+            return true;
+        })();
 
-        console.log('🕵️‍♂️ Auto-Discovery: requesting a fully validated Master authority.');
-
-        const authority = this.recoverClientMasterAuthority
-            ? await this.recoverClientMasterAuthority().catch(() => ({ status: 'UNAVAILABLE' } as const))
-            : ({ status: 'UNAVAILABLE' } as const);
-
-        if (authority.status === 'VALIDATED') {
-            console.log(`🎉 Auto-Discovery: validated MASTER FOUND at ${authority.baseUrl}`);
-            try {
-                this.finalizeRecovery(authority);
-            } catch (error) {
-                console.warn('❌ Auto-Discovery: validated Master could not be persisted.', error);
-                window.dispatchEvent(new CustomEvent('sync:reconnecting', { detail: { status: 'failed' } }));
-                this.isRecoveringConnection = false;
-            }
-        } else {
-            console.warn('❌ Auto-Discovery: Could not find Master. Waiting for manual retry.');
-            window.dispatchEvent(new CustomEvent('sync:reconnecting', { detail: { status: 'failed' } }));
+        let recovered = false;
+        try {
+            recovered = await this.authorityRecoveryPromise;
+            return recovered;
+        } catch (error) {
+            console.warn('❌ Auto-Discovery: validated Master recovery failed.', error);
+            return false;
+        } finally {
+            this.authorityRecoveryPromise = null;
             this.isRecoveringConnection = false;
+            if (!recovered) {
+                window.dispatchEvent(new CustomEvent('sync:reconnecting', { detail: { status: 'failed' } }));
+                this.authorityRecoveryDelayMs = Math.min(this.authorityRecoveryDelayMs * 2, 30_000);
+                if (this.isDisabled && navigator.onLine) this.scheduleAuthorityRecovery(this.authorityRecoveryDelayMs);
+            }
         }
     }
 
-    private finalizeRecovery(authority: Extract<ClientMasterAuthority<unknown>, { status: 'VALIDATED' }>) {
+    /**
+     * AUTO-DISCOVERY: recover only through the validated authority resolver.
+     */
+    private async startRecoveryProcess() {
+        await this.attemptAuthorityRecovery();
+    }
+
+    private async finalizeRecovery(authority: Extract<ClientMasterAuthority<unknown>, { status: 'VALIDATED' }>) {
         const normalizedUrl = this.normalizeMasterUrlForStorage(authority.baseUrl) || authority.baseUrl;
         persistValidatedClientMasterTarget(normalizedUrl, {
             persistProfile: normalizedUrl => updateClientMasterUrl(normalizedUrl),
         });
-        this.clientMasterAuthority = { ...authority, baseUrl: normalizedUrl };
+        const validatedAuthority = { ...authority, baseUrl: normalizedUrl };
+        const config = this.initializedConfig;
+        const terminalId = this.initializedLocalTerminalId;
+        if (!config || !terminalId) throw new Error('MASTER_RECOVERY_LOCAL_CONTEXT_MISSING');
 
-        if (this.syncConfig) {
-            this.syncConfig.masterUrl = normalizedUrl;
-        }
-
-        // Critical: Reset Adapter & Circuit Breaker
-        apiSyncAdapter.updateMasterUrl(normalizedUrl);
-        apiSyncAdapter.resetCircuit();
+        await this.initialize(config, terminalId, {
+            clientMasterAuthority: validatedAuthority,
+            recoverClientMasterAuthority: this.recoverClientMasterAuthority || undefined,
+            disableRemoteServices: this.disableRemoteServices || undefined,
+            enableRemoteServices: this.enableRemoteServices || undefined,
+        });
+        await this.refreshTerminalResolvedConfig(undefined, {
+            baseConfig: config,
+            dispatchEvent: false,
+            requestTimeoutMs: 8_000,
+            supplementalMode: 'background',
+            validatedMasterBaseUrl: normalizedUrl,
+        });
 
         // Notify UI
         window.dispatchEvent(new CustomEvent('sync:reconnecting', { detail: { status: 'connected', url: normalizedUrl } }));
-
-        // Resume Sync
-        this.isRecoveringConnection = false;
-
-        // Force immediate sync
-        setTimeout(async () => {
-            console.log('🔄 SyncManager: Triggering immediate post-recovery sync.');
-            if (this.isUsingConfigPushV2Primary()) {
-                await syncTriggerCoordinator.request({ reason: 'ONLINE' });
-                await this.syncTerminalManifestInBackground(undefined, { reason: 'connection_restored' });
-                return;
-            }
-            this.checkForUpdates().then((updates) => {
-                if (updates.length > 0) this.syncAllCatalogs();
-            });
-        }, 1000);
     }
 
     private loadProductImageSyncState() {

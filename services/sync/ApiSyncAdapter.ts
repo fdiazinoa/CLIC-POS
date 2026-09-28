@@ -397,6 +397,8 @@ class ApiSyncAdapter {
     private lastOperationalStockBalanceMaps = new Map<string, Record<string, number>>();
     private onlineListener: (() => void) | null = null;
     private offlineListener: (() => void) | null = null;
+    private operationalAuthorityEnabled = true;
+    private operationalAuthorityRevision = 0;
 
     private readonly salesCircuitBreaker = new SyncCircuitBreaker('sales');
     private readonly backgroundCircuitBreaker = new SyncCircuitBreaker('background');
@@ -882,6 +884,8 @@ class ApiSyncAdapter {
      * Initialize the adapter with configuration
      */
     async initialize(config: SyncConfig): Promise<void> {
+        this.resetOperationalAuthority();
+        this.operationalAuthorityEnabled = true;
         this.config = config;
         await this.authenticate();
         this.setupOnlineDetection();
@@ -908,6 +912,8 @@ class ApiSyncAdapter {
     async authenticate(force = false, channel: CircuitBreakerChannel = 'background'): Promise<void> {
         this.ensureConfig();
         if (!this.config) throw new Error('ApiSyncAdapter not initialized'); // Should be caught by ensureConfig
+        const authorityRevision = this.operationalAuthorityRevision;
+        const authorityConfig = this.config;
 
         if (!force && this.authToken) {
             return;
@@ -919,22 +925,26 @@ class ApiSyncAdapter {
 
         const authPromise = (async () => {
             try {
-                const response = await this.fetchWithRetry(`${this.config!.masterUrl}/api/sync/auth`, {
+                const response = await this.fetchWithRetry(`${authorityConfig.masterUrl}/api/sync/auth`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                         ...this.getLocalDeviceHeaders(),
                     },
                     body: JSON.stringify({
-                        terminalId: this.config!.terminalId,
-                        terminal_id: this.config!.terminalId,
+                        terminalId: authorityConfig.terminalId,
+                        terminal_id: authorityConfig.terminalId,
                         deviceToken: this.getLocalDeviceId(),
                         device_id: this.getLocalDeviceId()
                     })
                 }, 2, 500, channel);
 
+                if (!this.operationalAuthorityEnabled || authorityRevision !== this.operationalAuthorityRevision) {
+                    throw new Error('MASTER_AUTHORITY_CHANGED');
+                }
+
                 if (!response.ok) {
-                    await this.handleDeviceSupersededResponse(response, this.config!.terminalId);
+                    await this.handleDeviceSupersededResponse(response, authorityConfig.terminalId);
                     let errorMessage = `Authentication failed: ${response.status} ${response.statusText}`;
                     try {
                         const errorData = await response.json();
@@ -950,8 +960,11 @@ class ApiSyncAdapter {
                 }
 
                 const data = await response.json();
+                if (!this.operationalAuthorityEnabled || authorityRevision !== this.operationalAuthorityRevision) {
+                    throw new Error('MASTER_AUTHORITY_CHANGED');
+                }
                 if (data?.terminal_id || data?.terminal_uuid || data?.operational_identity || data?.sync_state) {
-                    persistErpSyncAuthIdentity(data, this.config!.terminalId);
+                    persistErpSyncAuthIdentity(data, authorityConfig.terminalId);
                     if (erpSyncAuthRequiresFullBootstrap(data)) {
                         clearErpIncrementalSyncState();
                         markErpFullBootstrapRequired(data);
@@ -960,23 +973,26 @@ class ApiSyncAdapter {
                 }
                 this.authToken = data.token;
                 this.isOnline = true;
-                console.log(`✅ Authenticated with Master terminal: ${this.config!.terminalId}`);
+                console.log(`✅ Authenticated with Master terminal: ${authorityConfig.terminalId}`);
             } catch (error: unknown) {
+                const authorityIsCurrent = this.operationalAuthorityEnabled
+                    && authorityRevision === this.operationalAuthorityRevision;
                 if (this.isCircuitBreakerOpenError(error)) {
                     console.warn(`⚠️ Authentication deferred: ${ERP_TEMPORARILY_UNAVAILABLE_ERROR}, waiting before retry.`);
-                } else {
+                } else if (authorityIsCurrent) {
                     this.logAuthFailure('master', error);
                 }
-                this.isOnline = false;
+                if (authorityIsCurrent) this.isOnline = false;
                 throw error;
             }
         })();
 
-        this.authInFlight[channel] = authPromise.finally(() => {
-            this.authInFlight[channel] = null;
+        const trackedPromise = authPromise.finally(() => {
+            if (this.authInFlight[channel] === trackedPromise) this.authInFlight[channel] = null;
         });
+        this.authInFlight[channel] = trackedPromise;
 
-        return this.authInFlight[channel]!;
+        return trackedPromise;
     }
 
     private buildSyncApiBase(url: string): string {
@@ -3393,6 +3409,9 @@ class ApiSyncAdapter {
      * Attempts to reconstruct config from localStorage if missing.
      */
     private ensureConfig() {
+        if (!this.operationalAuthorityEnabled) {
+            throw new Error('MASTER_AUTHORITY_UNAVAILABLE');
+        }
         if (this.config) return;
 
         const masterUrl = localStorage.getItem('CLIC_POS_MASTER_URL');
@@ -6149,6 +6168,37 @@ class ApiSyncAdapter {
      */
     clearAuth(): void {
         this.authToken = null;
+    }
+
+    /** Clears every in-memory transport credential/configuration for the prior
+     * Master without touching durable queues or local business data. */
+    resetOperationalAuthority(): void {
+        this.operationalAuthorityRevision += 1;
+        this.operationalAuthorityEnabled = false;
+        this.config = null;
+        this.authToken = null;
+        this.erpAuthToken = null;
+        this.authInFlight = { sales: null, background: null };
+        this.erpAuthInFlight = { sales: null, background: null };
+        this.isOnline = false;
+        this.onConnectionRestored = null;
+        this.onConnectionLostCallback = null;
+        if (this.onlineListener) window.removeEventListener('online', this.onlineListener);
+        if (this.offlineListener) window.removeEventListener('offline', this.offlineListener);
+        this.onlineListener = null;
+        this.offlineListener = null;
+        this.resetCircuitBreaker();
+        this.isOnline = false;
+    }
+
+    getOperationalAuthorityState(): { enabled: boolean; masterUrl: string | null; terminalId: string | null; authenticated: boolean; revision: number } {
+        return {
+            enabled: this.operationalAuthorityEnabled,
+            masterUrl: this.config?.masterUrl || null,
+            terminalId: this.config?.terminalId || null,
+            authenticated: Boolean(this.authToken),
+            revision: this.operationalAuthorityRevision,
+        };
     }
     /**
      * Fetch lightweight product image manifest
