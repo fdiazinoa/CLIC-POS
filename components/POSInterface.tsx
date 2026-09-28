@@ -3761,7 +3761,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    }, [searchTerm, routeScannedCoupon, findProductByAnyCode, addToCart, isReturnMode]);
 
    // --- BARCODE SCANNER LOGIC ---
-   const processBarcode = useCallback((code: string) => {
+   const processBarcode = useCallback((
+      code: string,
+      context: { onReservationRecovered?: () => void } = {},
+   ) => {
       const trimmed = code.trim();
       if (!trimmed) return { success: false, message: 'Código vacío' };
       const trace = beginPosInteraction('BARCODE_SCAN', { codeLength: trimmed.length });
@@ -3782,6 +3785,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   || activeReservationByScanCode.get(String(data.code || ''));
                if (found) {
                   handleRecoverReservation(found);
+                  context.onReservationRecovered?.();
                   return { success: true, message: 'Reserva recuperada' };
                }
             }
@@ -9649,7 +9653,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          <BarcodeScannerModal
             isOpen={isScannerOpen}
             onClose={() => setIsScannerOpen(false)}
-            onScan={async (code) => processBarcode(code)}
+            onScan={async (code) => processBarcode(code, {
+               onReservationRecovered: () => setIsScannerOpen(false),
+            })}
          />
          {
             quickActionData && (

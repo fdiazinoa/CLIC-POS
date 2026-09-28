@@ -80,7 +80,9 @@ test('POS keeps coupon precedence and delegates invoice actions to the secured T
   assert.ok(process.indexOf('findProductByAnyCode(trimmed)') < process.indexOf('shouldRouteInvoiceScan(trimmed)'));
   assert.match(process, /activeReservationByScanCode\.get/);
   const camera = pos.slice(pos.indexOf('<BarcodeScannerModal'), pos.indexOf('quickActionData &&'));
-  assert.match(camera, /onScan=\{async \(code\) => processBarcode\(code\)\}/);
+  assert.match(camera, /onScan=\{async \(code\) => processBarcode\(code, \{/);
+  assert.match(camera, /onReservationRecovered: \(\) => setIsScannerOpen\(false\)/);
+  assert.equal((camera.match(/processBarcode\(code/g) || []).length, 1, 'camera decodes through the shared pipeline once');
   assert.doesNotMatch(camera, /reservations \|\||products \|\||parseScaleBarcode|shouldRouteInvoiceScan/);
   const hid = pos.slice(pos.indexOf('const handleCentralBarcodeScan'), pos.indexOf("window.addEventListener('barcodeScanned'"));
   assert.match(hid, /processBarcode\(barcode\)/);
@@ -95,4 +97,13 @@ test('POS keeps coupon precedence and delegates invoice actions to the secured T
   assert.match(history, /transactionInvoiceScanAliases\(t\)/);
   assert.match(history, /setRefundTx\(tx\);\s*setIsRefundModalOpen\(true\)/);
   assert.match(history, /requestApproval\(/);
+});
+
+test('camera reservation recovery closes the scanner once without changing product routing', () => {
+  const source = readFileSync(new URL('../components/POSInterface.tsx', import.meta.url), 'utf8');
+  const process = source.slice(source.indexOf('const processBarcode ='), source.indexOf('const isAnyModalOpen'));
+  const reservation = process.slice(process.indexOf("data.type === 'RESERVATION_NOTE'"), process.indexOf("data.type === 'INVOICE_RETURN'"));
+  assert.equal((reservation.match(/handleRecoverReservation\(found\)/g) || []).length, 1);
+  assert.equal((reservation.match(/context\.onReservationRecovered\?\.\(\)/g) || []).length, 1);
+  assert.ok(process.indexOf('findProductByAnyCode(trimmed)') < process.indexOf('shouldRouteInvoiceScan(trimmed)'));
 });

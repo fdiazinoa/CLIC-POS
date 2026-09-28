@@ -5455,7 +5455,7 @@ const AppContent: React.FC = () => {
     };
     const known = await tryCandidates();
     if (known) return known;
-    const cloudEndpoint = await resolveMasterEndpointFromCloud().catch(() => null);
+    const cloudEndpoint = await resolveMasterEndpointFromCloud(undefined, { persist: false }).catch(() => null);
     appendCandidate(cloudEndpoint?.localIp || cloudEndpoint?.endpointUrl, 'CLOUD');
     const cloud = await tryCandidates();
     if (cloud) return cloud;

@@ -33,6 +33,49 @@ test('self stored endpoint is candidate-local and cloud Master is selected witho
   ]);
 });
 
+test('App cloud discovery is read-only until a candidate validates', () => {
+  const source = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
+  const calls = source.match(/resolveMasterEndpointFromCloud\([^;]+/g) || [];
+  assert.ok(calls.length >= 3, 'expected all App cloud discovery callsites');
+  calls.forEach(call => assert.match(call, /persist:\s*false/));
+});
+
+test('stale and self candidates cannot mutate existing Master mirrors', async () => {
+  const values = new Map<string, string>([
+    ['CLIC_POS_MASTER_URL', 'http://10.0.0.10:3001'],
+    ['pos_master_ip', '10.0.0.10'],
+  ]);
+  let mirrorWrites = 0;
+  const result = await resolveOperationalMasterConfig<{ runtimeTerminalId: string }>({
+    storedHosts: ['10.0.0.28'],
+    resolveCloudHost: async () => '10.0.0.40',
+    discoverLanHosts: async () => [],
+    fetchImpl: async (url) => response({
+      runtimeTerminalId: String(url).includes('10.0.0.28') ? 'CLIENT' : 'STALE-MASTER',
+    }),
+    validate: (_baseUrl, config) => {
+      if (config.runtimeTerminalId === 'CLIENT') throw new Error('MASTER_SELF_ENDPOINT');
+      throw new Error('MASTER_IDENTITY_MISMATCH');
+    },
+  });
+  if (result) {
+    mirrorWrites++;
+    persistValidatedClientMasterTarget(result.baseUrl, {
+      storage: {
+        getItem: key => values.get(key) ?? null,
+        setItem: (key, value) => { values.set(key, value); },
+        removeItem: key => { values.delete(key); },
+      },
+      persistProfile: () => true,
+    });
+  }
+
+  assert.equal(result, null);
+  assert.equal(mirrorWrites, 0);
+  assert.equal(values.get('CLIC_POS_MASTER_URL'), 'http://10.0.0.10:3001');
+  assert.equal(values.get('pos_master_ip'), '10.0.0.10');
+});
+
 test('transport, HTTP, JSON, and validation failures continue through LAN candidates', async () => {
   const result = await resolveOperationalMasterConfig<Record<string, unknown>>({
     storedHosts: ['10.0.0.1'],
