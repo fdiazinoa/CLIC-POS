@@ -2,8 +2,15 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { Capacitor } from '@capacitor/core';
 import { ApiSyncAdapter } from '../services/sync/ApiSyncAdapter';
-import { LegacyMutationJournal, type LegacyMutationJournalEntry, type LegacyMutationJournalStore } from '../services/sync/LegacyMutationJournal';
+import {
+  completeLegacyMutationAfterDurableAck,
+  LegacyMutationJournal,
+  type LegacyMutationJournalEntry,
+  type LegacyMutationJournalStore,
+} from '../services/sync/LegacyMutationJournal';
 import { setNativeRequestTransportForTests } from '../services/network/httpClient';
+import { dispatchLegacyLanMutation } from '../services/sync/LegacyLanMutationTransport';
+import { setTerminalCredentialNativeWriterForTests } from '../services/sync/TerminalCredentialStore';
 
 class Store implements LegacyMutationJournalStore {
   rows = new Map<string, LegacyMutationJournalEntry>();
@@ -94,7 +101,9 @@ test('valid 2xx stays blocking until caller schema validation and durable acknow
       { method: 'POST', body: '{}' }, 2, 1, 'background', 'PUSH_MASTERS',
     );
     assert.equal(journal.hasBlockingMutations(), true);
-    await adapter.acknowledgeLegacyJsonResponse(response, 'push:products:1', (payload: any) => payload?.success === true);
+    const provisional = await adapter.acknowledgeLegacyJsonResponse(response, 'push:products:1', (payload: any) => payload?.success === true);
+    assert.equal(journal.hasBlockingMutations(), true);
+    await completeLegacyMutationAfterDurableAck(provisional, 'caller:products:durable', journal);
     assert.equal(journal.hasBlockingMutations(), false);
     assert.equal([...store.rows.values()][0]?.state, 'CLOSED');
   } finally {
@@ -118,14 +127,115 @@ test('operational LAN caller closes only after its endpoint validator accepts th
   })) as any);
   try {
     const result = await adapter.postOperationalPayload('/inventory/movements', { items: [{ id: 'movement-a' }] }, {
-      callerAck: {
+      responseValidator: {
         reference: 'pushInventoryMovement:movement-a',
         validate: (payload: any) => assert.deepEqual(payload.processedIds, ['movement-a']),
       },
     });
     assert.equal(result.success, true);
+    assert.equal(journal.hasBlockingMutations(), true);
+    await completeLegacyMutationAfterDurableAck(result, 'caller:movement-a:durable', journal);
     assert.equal(journal.hasBlockingMutations(), false);
-    assert.equal([...store.rows.values()][0]?.callerAckReference, 'pushInventoryMovement:movement-a');
+    assert.equal([...store.rows.values()][0]?.callerAckReference, 'caller:movement-a:durable');
+  } finally {
+    restore();
+  }
+});
+
+test('LAN 401 replay keeps one correlation and closes the first attempt only after durable reauth state', async () => {
+  const restore = installAndroid();
+  const { adapter, journal, store } = await adapterFor();
+  adapter.authenticateOperationalTarget = async () => ({
+    baseUrl: 'http://10.0.0.129:3001/api/sync',
+    terminalId: 'terminal-a',
+    token: 'token-a',
+    useLocalTarget: true,
+    kind: 'LOCAL_MASTER',
+  });
+  let requests = 0;
+  let writerStarted!: () => void;
+  const writerStart = new Promise<void>(resolve => { writerStarted = resolve; });
+  let releaseWriter!: () => void;
+  const writerGate = new Promise<void>(resolve => { releaseWriter = resolve; });
+  setTerminalCredentialNativeWriterForTests(async () => {
+    writerStarted();
+    await writerGate;
+  });
+  setNativeRequestTransportForTests((async () => {
+    requests += 1;
+    return requests === 1
+      ? { status: 401, data: { error: 'expired' } }
+      : { status: 200, data: { success: true, processedIds: ['movement-a'] } };
+  }) as any);
+  try {
+    const pending = adapter.postOperationalPayload('/inventory/movements', { items: [{ id: 'movement-a' }] }, {
+      responseValidator: {
+        reference: 'pushInventoryMovement:movement-a',
+        validate: (payload: any) => assert.deepEqual(payload.processedIds, ['movement-a']),
+      },
+    });
+    await writerStart;
+    assert.equal(requests, 1);
+    assert.equal([...store.rows.values()][0]?.state, 'DISPATCHED');
+    releaseWriter();
+    const result = await pending;
+    const rows = [...store.rows.values()];
+    assert.equal(requests, 2);
+    assert.equal(new Set(rows.map(row => row.operationCorrelationId)).size, 1);
+    assert.equal(rows.filter(row => row.state === 'CLOSED').length, 1);
+    assert.equal(rows.filter(row => row.state === 'DISPATCHED').length, 1);
+    await completeLegacyMutationAfterDurableAck(result, 'caller:movement-a:durable', journal);
+    assert.equal(journal.hasBlockingMutations(), false);
+  } finally {
+    setTerminalCredentialNativeWriterForTests(null);
+    restore();
+  }
+});
+
+test('kill after a valid response but before caller durable ACK promotes the row to OUTCOME_UNKNOWN', async () => {
+  const restore = installAndroid();
+  const { adapter, journal, store } = await adapterFor();
+  setNativeRequestTransportForTests((async () => ({ status: 200, data: { success: true, version: 3 } })) as any);
+  try {
+    const response = await adapter.fetchWithRetry(
+      'http://10.0.0.129:3001/api/sync/collections/products/push',
+      { method: 'POST', body: '{}' }, 0, 1, 'background', 'PUSH_MASTERS',
+    );
+    await adapter.acknowledgeLegacyJsonResponse(response, 'provisional', (payload: any) => payload?.version === 3);
+    assert.equal(journal.hasBlockingMutations(), true);
+    const restarted = new LegacyMutationJournal(store);
+    await restarted.initializeForStartup();
+    assert.equal(restarted.hasOutcomeUnknown(), true);
+  } finally {
+    restore();
+  }
+});
+
+test('direct LAN mutation remains DISPATCHED while the high-level durable commit is pending', async () => {
+  const restore = installAndroid();
+  const store = new Store();
+  const journal = new LegacyMutationJournal(store);
+  await journal.initializeForStartup();
+  setNativeRequestTransportForTests((async () => ({ status: 200, data: { success: true, revision: 9 } })) as any);
+  let release!: () => void;
+  const durableGate = new Promise<void>(resolve => { release = resolve; });
+  try {
+    const receipt = await dispatchLegacyLanMutation<any>({
+      url: 'http://10.0.0.129:3001/api/mesas/abrir',
+      method: 'POST',
+      body: '{}',
+      operation: 'TABLE_OPEN',
+      journal,
+      authorityState: { revision: 7, terminalId: 'terminal-a' },
+    });
+    const completion = receipt.completeAfterDurableCommit('TableMap:open:1', async () => durableGate);
+    await Promise.resolve();
+    assert.equal(journal.hasBlockingMutations(), true);
+    assert.equal([...store.rows.values()][0]?.state, 'DISPATCHED');
+    release();
+    await completion;
+    assert.equal(journal.hasBlockingMutations(), false);
+    assert.equal([...store.rows.values()][0]?.callerAckReference, 'TableMap:open:1');
   } finally {
     restore();
   }

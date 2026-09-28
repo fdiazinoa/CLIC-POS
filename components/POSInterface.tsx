@@ -145,6 +145,10 @@ import OrderServiceTypeButton from './OrderServiceTypeButton';
 import { resolveAppliedServiceTaxPolicy } from '../utils/serviceTaxPolicy';
 import { normalizeProductionOutputMode, resolveProductionOutputTargets } from '../utils/productionOutputMode';
 import { isClientTerminalMode, resolveValidatedOperationalApiUrl } from '../utils/masterOperationalApi';
+import {
+   dispatchLegacyLanMutation,
+   persistLegacyLanMutationCompletion,
+} from '../services/sync/LegacyLanMutationTransport';
 import ProductionRoutingAssignmentModal, {
    type ProductionRoutingPromptArea,
    type ProductionRoutingPromptItem,
@@ -5628,13 +5632,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   return result.sale || result.refund || null;
                }
 
-               const response = await withTimeout(fetch('/api/transactions/split', {
+               const response = await dispatchLegacyLanMutation<any>({
+                  url: await resolveValidatedOperationalApiUrl('/api/transactions/split'),
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify(splitPayload)
-               }), 25000, 'TIMEOUT_SPLIT_FETCH');
+                  body: JSON.stringify(splitPayload),
+                  timeoutMs: 25000,
+                  operation: 'SPLIT_TRANSACTION',
+               });
 
-               const data = await withTimeout(response.json(), 4000, 'TIMEOUT_SPLIT_PARSE');
+               const data = response.data;
                if (data.success) {
                   if (data.result?.sale) {
                      data.result.sale = await syncConsignmentSettlement(data.result.sale);
@@ -5648,6 +5655,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   onSelectCustomer(null);
                   setIsReturnMode(false);
                   setRefundAuthorizedBy(null);
+                  await response.completeAfterDurableCommit(
+                     `POSInterface:split:${data.result?.sale?.id || data.result?.refund?.id || response.correlationId}`,
+                     () => persistLegacyLanMutationCompletion(
+                        response.correlationId,
+                        `POSInterface:split:${data.result?.sale?.id || data.result?.refund?.id || 'completed'}`,
+                        response.response.status,
+                     ),
+                  );
                   return data.result.sale || data.result.refund;
                } else {
                   alert(`Error en transacción: ${data.message}`);
@@ -5849,25 +5864,24 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      if (!hasOtherTableAccounts) {
                         const releaseEndpoint = await resolveValidatedOperationalApiUrl('/api/mesas/liberar');
                         // 1. Free table in the main API so status/currentOrderId are reset.
-                        const controller = new AbortController();
-                        const timeoutId = window.setTimeout(() => controller.abort(), 4000);
-                        try {
-                           const releaseRes = await fetch(releaseEndpoint, {
+                        const releaseRes = await dispatchLegacyLanMutation<any>({
+                              url: releaseEndpoint,
                               method: 'POST',
                               headers: { 'Content-Type': 'application/json' },
                               body: JSON.stringify({ tableId: activeTable.id }),
-                              signal: controller.signal
+                              timeoutMs: 4000,
+                              operation: 'POS_TABLE_RELEASE',
                            });
-                           if (!releaseRes.ok) {
-                              throw new Error(`HTTP ${releaseRes.status}`);
-                           }
-                           const releaseData = await releaseRes.json().catch(() => null);
-                           if (releaseData && releaseData.success === false) {
-                              throw new Error(releaseData.message || 'No se pudo liberar la mesa');
-                           }
-                        } finally {
-                           window.clearTimeout(timeoutId);
+                        if (!releaseRes.response.ok) {
+                           throw new Error(`HTTP ${releaseRes.response.status}`);
                         }
+                        const releaseData = releaseRes.data;
+                        if (releaseData && releaseData.success === false) {
+                           throw new Error(releaseData.message || 'No se pudo liberar la mesa');
+                        }
+                        await releaseRes.completeAfterDurableCommit(`POSInterface:release:${activeTable.id}`, () =>
+                           persistLegacyLanMutationCompletion(releaseRes.correlationId, `POSInterface:release:${activeTable.id}`, releaseRes.response.status)
+                        );
                      }
                   } catch (e) {
                      console.error("Failed to free table:", e);
@@ -6703,24 +6717,25 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          let releaseEndpoint: string;
          try { releaseEndpoint = await resolveValidatedOperationalApiUrl('/api/mesas/liberar'); }
          catch (error) { console.warn('No se pudo validar la master para liberar mesa:', error); return; }
-         const controller = new AbortController();
-         const timeoutId = window.setTimeout(() => controller.abort(), 2500);
          try {
-            const releaseRes = await fetch(releaseEndpoint, {
+            const releaseRes = await dispatchLegacyLanMutation<any>({
+               url: releaseEndpoint,
                method: 'POST',
                headers: { 'Content-Type': 'application/json' },
                body: JSON.stringify({ tableId: tableToRelease.id }),
-               signal: controller.signal
+               timeoutMs: 2500,
+               operation: 'POS_TABLE_RELEASE_EMPTY',
             });
-            const releaseData = await releaseRes.json().catch(() => null);
+            const releaseData = releaseRes.data;
 
-            if (!releaseRes.ok || (releaseData && releaseData.success === false)) {
-               throw new Error(releaseData?.message || `HTTP ${releaseRes.status}`);
+            if (!releaseRes.response.ok || (releaseData && releaseData.success === false)) {
+               throw new Error(releaseData?.message || `HTTP ${releaseRes.response.status}`);
             }
+            await releaseRes.completeAfterDurableCommit(`POSInterface:release-empty:${tableToRelease.id}`, () =>
+               persistLegacyLanMutationCompletion(releaseRes.correlationId, `POSInterface:release-empty:${tableToRelease.id}`, releaseRes.response.status)
+            );
          } catch (error) {
             console.warn('No se pudo confirmar la liberacion de mesa en servidor:', error);
-         } finally {
-            window.clearTimeout(timeoutId);
          }
       })();
 

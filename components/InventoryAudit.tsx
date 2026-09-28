@@ -4,6 +4,11 @@ import {
   Save, RefreshCw, Plus, Minus, Camera, Zap, Clock, FileText, Calculator
 } from 'lucide-react';
 import { Product } from '../types';
+import { resolveValidatedOperationalApiUrl } from '../utils/masterOperationalApi';
+import {
+  dispatchLegacyLanMutation,
+  persistLegacyLanMutationCompletion,
+} from '../services/sync/LegacyLanMutationTransport';
 
 interface InventoryAuditProps {
   products: Product[];
@@ -92,14 +97,20 @@ const InventoryAudit: React.FC<InventoryAuditProps> = ({ products, warehouseId, 
 
   const startSession = async () => {
     try {
-      const res = await fetch('/api/audit/start', {
+      const res = await dispatchLegacyLanMutation<any>({
+        url: await resolveValidatedOperationalApiUrl('/api/audit/start'),
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ warehouseId })
+        body: JSON.stringify({ warehouseId }),
+        operation: 'INVENTORY_AUDIT_START',
       });
-      const data = await res.json();
+      const data = res.data;
       if (data.success) {
         setSession({ id: data.sessionId, startedAt: data.startedAt, status: 'OPEN' });
+        await res.completeAfterDurableCommit(
+          `InventoryAudit:start:${data.sessionId}`,
+          () => persistLegacyLanMutationCompletion(res.correlationId, `InventoryAudit:start:${data.sessionId}`, res.response.status),
+        );
       } else {
         alert('Error iniciando sesión: ' + data.error);
       }
@@ -119,11 +130,17 @@ const InventoryAudit: React.FC<InventoryAuditProps> = ({ products, warehouseId, 
         systemQtyAtStart: item.systemStock
       }));
 
-      await fetch(`/api/audit/${session.id}/items`, {
+      const res = await dispatchLegacyLanMutation<any>({
+        url: await resolveValidatedOperationalApiUrl(`/api/audit/${session.id}/items`),
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ items: itemsPayload })
+        body: JSON.stringify({ items: itemsPayload }),
+        operation: 'INVENTORY_AUDIT_DRAFT',
       });
+      await res.completeAfterDurableCommit(
+        `InventoryAudit:draft:${session.id}`,
+        () => persistLegacyLanMutationCompletion(res.correlationId, `InventoryAudit:draft:${session.id}`, res.response.status),
+      );
 
       // Show small toast?
       setLastScannedCode('Borrador Guardado');
@@ -207,13 +224,19 @@ const InventoryAudit: React.FC<InventoryAuditProps> = ({ products, warehouseId, 
     await handleSaveDraft();
 
     try {
-      const res = await fetch(`/api/audit/${session.id}/commit`, {
+      const res = await dispatchLegacyLanMutation<any>({
+        url: await resolveValidatedOperationalApiUrl(`/api/audit/${session.id}/commit`),
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ method: reconciliationMethod, userId: 'CURRENT_USER' })
+        body: JSON.stringify({ method: reconciliationMethod, userId: 'CURRENT_USER' }),
+        operation: 'INVENTORY_AUDIT_COMMIT',
       });
-      const data = await res.json();
+      const data = res.data;
       if (data.success) {
+        await res.completeAfterDurableCommit(
+          `InventoryAudit:commit:${session.id}`,
+          () => persistLegacyLanMutationCompletion(res.correlationId, `InventoryAudit:commit:${session.id}`, res.response.status),
+        );
         alert('Auditoría finalizada correctamente.');
         onClose();
         window.location.reload(); // Force refresh to see stock updates

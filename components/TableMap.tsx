@@ -42,6 +42,7 @@ import { getRenderableFloorTables } from '../utils/tableLayout';
 import { hasPendingKdsDispatch } from '../utils/kdsPresentation';
 import { resolveValidatedOperationalApiUrl } from '../utils/masterOperationalApi';
 import { requestJson } from '../services/network/httpClient';
+import { dispatchLegacyLanMutation } from '../services/sync/LegacyLanMutationTransport';
 import { canAccessOtherSellerTables, isTableLockedForUser } from '../utils/tableAccessPolicy';
 import {
     beginPosInteraction,
@@ -1197,7 +1198,7 @@ const TableMap: React.FC<TableMapProps> = ({
         if (mode === 'MERGE') {
             const primarySourceTableId = String(sourceTicket.primaryTableId || sourceTable.id);
             try {
-                const response = await requestJson<any>({
+                const response = await dispatchLegacyLanMutation<any>({
                     url: await resolveValidatedOperationalApiUrl('/api/mesas/unir'),
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -1206,11 +1207,13 @@ const TableMap: React.FC<TableMapProps> = ({
                         secondaryTableIds: [targetTable.id]
                     }),
                     timeoutMs: 5000,
-                    diagnosticContext: { operation: 'TABLE_MERGE' }
+                    operation: 'TABLE_MERGE',
                 });
                 const result = response.data;
-                if (response.ok && result?.success !== false) {
-                    await Promise.resolve(onRefreshTables?.());
+                if (response.response.ok && result?.success !== false) {
+                    await response.completeAfterDurableCommit(`TableMap:merge:${primarySourceTableId}`, async () => {
+                        await Promise.resolve(onRefreshTables?.());
+                    });
                     setTransferSelection(null);
                     setTableNotice({
                         title: 'Mesas unidas',
@@ -1219,7 +1222,7 @@ const TableMap: React.FC<TableMapProps> = ({
                     });
                     return;
                 }
-                if (response.status !== 404 && response.status !== 501) {
+                if (response.response.status !== 404 && response.response.status !== 501) {
                     alert(result?.message || 'La Caja Master no pudo unir las mesas.');
                     return;
                 }
@@ -1534,18 +1537,22 @@ const TableMap: React.FC<TableMapProps> = ({
             }
 
             try {
-                const res = await fetch(await resolveValidatedOperationalApiUrl('/api/mesas/abrir'), {
+                const res = await dispatchLegacyLanMutation<any>({
+                    url: await resolveValidatedOperationalApiUrl('/api/mesas/abrir'),
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         tableId: operationalTable.id,
                         waiterId: currentUser.id,
                         waiterName: currentUser.name
-                    })
+                    }),
+                    operation: 'TABLE_OPEN',
                 });
-
-                const data = await res.json();
-                if (res.ok && data.status === 'success') {
+                const data = res.data;
+                if (res.response.ok && data.status === 'success') {
+                    await res.completeAfterDurableCommit(`TableMap:open:${operationalTable.id}`, async () => {
+                        await Promise.resolve(onRefreshTables?.());
+                    });
                     markInteractionStage(trace, 'ACCOUNT_RESOLVE_END');
                     tableLatencyQaMark('ACCOUNT_RESOLVE_END', { traceId: trace.id, destination: 'api-open' });
                     onRefreshTables?.();
@@ -2293,14 +2300,18 @@ const TableMap: React.FC<TableMapProps> = ({
                         }}
                         onFree={async () => {
                             try {
-                                const res = await fetch(await resolveValidatedOperationalApiUrl('/api/mesas/liberar'), {
+                                const res = await dispatchLegacyLanMutation<any>({
+                                    url: await resolveValidatedOperationalApiUrl('/api/mesas/liberar'),
                                     method: 'POST',
                                     headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({ tableId: selectedTable.id })
+                                    body: JSON.stringify({ tableId: selectedTable.id }),
+                                    operation: 'TABLE_RELEASE',
                                 });
-                                const data = await res.json();
+                                const data = res.data;
                                 if (data.success) {
-                                    onRefreshTables?.();
+                                    await res.completeAfterDurableCommit(`TableMap:release:${selectedTable.id}`, async () => {
+                                        await Promise.resolve(onRefreshTables?.());
+                                    });
                                     setSelectedTable(null);
                                 } else {
                                     alert('Error liberando mesa: ' + data.message);

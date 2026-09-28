@@ -47,6 +47,16 @@ test('App cloud discovery is read-only until a candidate validates', () => {
   calls.forEach(call => assert.match(call, /persist:\s*false/));
 });
 
+test('an unavailable mutation journal blocks client discovery while preserving local startup', () => {
+  const source = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
+  const guard = source.indexOf('isOperationalClientBoot && !legacyMutationJournal.isHealthy()');
+  const discovery = source.indexOf('runClientMasterStartup<BusinessConfig');
+  assert.ok(guard > 0 && discovery > guard, 'journal health must gate discovery before any remote candidate work');
+  assert.match(source.slice(guard, discovery), /backgroundSyncManager\.disableRemoteSync/);
+  assert.match(source.slice(guard, discovery), /resetOperationalAuthority/);
+  assert.match(source.slice(guard, discovery), /refreshedTerminalConfig = finalConfig/);
+});
+
 test('stale and self candidates cannot mutate existing Master mirrors', async () => {
   const values = new Map<string, string>([
     ['CLIC_POS_MASTER_URL', 'http://10.0.0.10:3001'],

@@ -21,6 +21,11 @@ import { db } from '../utils/db';
 import { syncManager } from '../services/sync/SyncManager';
 import { resolveSupplierImageSrc } from '../utils/entityImage';
 import { createUuid } from '../utils/uuid';
+import { resolveValidatedOperationalApiUrl } from '../utils/masterOperationalApi';
+import {
+   dispatchLegacyLanMutation,
+   persistLegacyLanMutationCompletion,
+} from '../services/sync/LegacyLanMutationTransport';
 
 interface SupplyChainManagerProps {
    products: Product[];
@@ -300,7 +305,8 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
       try {
          // In a real app, we would generate a PDF here.
          // For now, we'll send a structured HTML email via our backend.
-         const response = await fetch('/api/email/purchase-order', {
+         const response = await dispatchLegacyLanMutation<any>({
+            url: await resolveValidatedOperationalApiUrl('/api/email/purchase-order'),
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -310,13 +316,22 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
                items: order.items,
                total: order.totalCost,
                dueDate: order.dueDate
-            })
+            }),
+            operation: 'PURCHASE_ORDER_EMAIL',
          });
 
-         const data = await response.json();
+         const data = response.data;
          if (data.success) {
             alert(`Orden enviada a ${supplier.email}`);
             onUpdateOrder({ ...order, sentAt: new Date().toISOString() });
+            await response.completeAfterDurableCommit(
+               `SupplyChainManager:email:${order.id}`,
+               () => persistLegacyLanMutationCompletion(
+                  response.correlationId,
+                  `SupplyChainManager:email:${order.id}`,
+                  response.response.status,
+               ),
+            );
          } else {
             alert("Error al enviar email: " + data.message);
          }
