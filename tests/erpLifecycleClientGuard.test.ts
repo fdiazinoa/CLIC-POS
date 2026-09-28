@@ -46,7 +46,7 @@ test('Master ERP bootstrap and non-client profiles retain their lifecycle', () =
   }), false);
 });
 
-test('App bypasses ERP timers on clients while preserving endpoint publication', () => {
+test('App clients skip endpoint publication and ERP timers while primary Master still publishes', () => {
   const source = readFileSync(path.resolve(import.meta.dirname, '../App.tsx'), 'utf8');
   const start = source.indexOf('  const erpLifecycleReady =');
   const end = source.indexOf('  // --- RECONNECTION BANNER ---', start);
@@ -54,7 +54,10 @@ test('App bypasses ERP timers on clients while preserving endpoint publication',
   const effect = source.slice(start, end);
   const guard = effect.indexOf('if (isPosMasterClientProfile())');
   assert.ok(guard > effect.indexOf('const publishEndpoint = async'));
-  assert.match(effect.slice(guard, guard + 180), /void publishEndpoint\(\);[\s\S]*?return \(\) => \{ disposed = true; \};/);
+  assert.match(effect.slice(guard, guard + 180), /return \(\) => \{ disposed = true; \};/);
+  assert.doesNotMatch(effect.slice(guard, guard + 180), /publishEndpoint\(\)/);
+  assert.match(effect.slice(0, guard), /isPrimary: currentTerminal\.config\?\.isPrimaryNode !== false/);
+  assert.ok(effect.indexOf('void publishEndpoint();', guard) > guard, 'non-client primary lifecycle publishes after the client guard');
   assert.ok(guard < effect.indexOf('createErpHeartbeatScheduler('));
   assert.ok(guard < effect.indexOf('syncTriggerCoordinator.configure('));
   assert.ok(guard < effect.indexOf('scheduleNextOutboxPoll('));

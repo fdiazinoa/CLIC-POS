@@ -118,6 +118,7 @@ export class CatalogEditQueue {
                     message: effectiveStatus === 'CONFLICT'
                     ? `El valor cambió en ERP: ${JSON.stringify(result.current)}. Revisa la configuración recibida del ERP antes de editar de nuevo.`
                     : effectiveStatus === 'APPLIED' ? undefined : result.code });
+                await completeLegacyMutationAfterDurableAck(result, `CatalogEditQueue:${edit.id}:${effectiveStatus}`);
             } catch (error) {
                 const rejection = permanentRejection(error);
                 if (rejection) {
@@ -148,3 +149,4 @@ export class CatalogEditQueue {
         }
     }
 }
+import { completeLegacyMutationAfterDurableAck } from './LegacyMutationJournal';

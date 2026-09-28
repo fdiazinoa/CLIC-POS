@@ -18,6 +18,7 @@ const pairingSource = readFileSync(new URL('../components/TerminalBindingScreen.
 const lanDiscoverySource = readFileSync(new URL('../utils/masterLanDiscovery.ts', import.meta.url), 'utf8');
 const scannerSource = readFileSync(new URL('../services/sync/NetworkScanner.ts', import.meta.url), 'utf8');
 const appSource = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
+const clientMasterBindingSource = readFileSync(new URL('../utils/clientMasterBinding.ts', import.meta.url), 'utf8');
 const kitchenDisplaySource = readFileSync(
   new URL('../components/kds/KitchenDisplay.tsx', import.meta.url),
   'utf8',
@@ -222,16 +223,31 @@ test('la Cliente usa transporte nativo para bloquear y abrir mesas en Android', 
     appSource.indexOf('useKioskMode', appSource.indexOf('const openTableForService')),
   );
 
-  assert.match(lockBlock, /requestJson<any>\(\{/);
+  assert.match(lockBlock, /dispatchLegacyLanMutation<any>\(\{/);
   assert.match(lockBlock, /TABLE_LOCK_/);
-  assert.match(openBlock, /requestJson<any>\(\{/);
+  assert.match(lockBlock, /validateResponse:\s*validateLegacySuccessResponse/);
+  assert.doesNotMatch(lockBlock, /requestJson<any>\(|fetch\(/);
+  assert.match(openBlock, /dispatchLegacyLanMutation<any>\(\{/);
   assert.match(openBlock, /operation: 'TABLE_OPEN'/);
+  assert.match(openBlock, /validateResponse:/);
+  assert.doesNotMatch(openBlock, /requestJson<any>\(|fetch\(/);
 });
 
 test('la Master Android se reactiva al volver al primer plano y el cliente reintenta con espera', () => {
+  const masterTargetPersistence = clientMasterBindingSource.slice(
+    clientMasterBindingSource.indexOf('export const persistValidatedClientMasterTarget'),
+  );
   assert.match(appSource, /addListener\?\.\('resume', ensureMasterServerHealth\)/);
-  assert.match(appSource, /discoverLanMasterCandidates\(\{ timeoutMs: 2500 \}\)/);
-  assert.match(appSource, /localStorage\.setItem\('CLIC_POS_MASTER_URL', baseUrl\)/);
+  assert.match(appSource, /discoverLanMasterCandidates\(\{[\s\S]{0,100}timeoutMs: 2500,[\s\S]{0,100}localIps/);
+  assert.match(appSource, /mirror: baseUrl => persistValidatedClientMasterTargetAsync\(baseUrl\)/);
+  assert.match(masterTargetPersistence, /const persistProfile = dependencies\.persistProfile \|\| updateClientMasterUrl/);
+  assert.match(masterTargetPersistence, /storage\.setItem\('CLIC_POS_MASTER_URL', normalizedUrl\)/);
+  assert.match(masterTargetPersistence, /storage\.setItem\('pos_master_ip', nextHost\)/);
+  assert.match(masterTargetPersistence, /if \(!persistProfile\(normalizedUrl\)\) throw new Error\('MASTER_SYNC_PROFILE_PERSIST_FAILED'\)/);
+  assert.match(masterTargetPersistence, /restore\(storage, 'CLIC_POS_MASTER_URL', previousUrl\)/);
+  assert.match(masterTargetPersistence, /restore\(storage, 'pos_master_ip', previousHost\)/);
+  assert.match(masterTargetPersistence, /const profileRestored = restoreProfile\(previousUrl\)/);
+  assert.match(masterTargetPersistence, /storage\.removeItem\('CLIC_POS_MASTER_URL'\)[\s\S]*storage\.removeItem\('pos_master_ip'\)/);
   assert.match(appSource, /`\$\{baseUrl\}\/api\/sync\/ping`/);
 });
 
@@ -322,7 +338,8 @@ test('un KDS no levanta ni puede ser seleccionado como Caja Master', () => {
   assert.match(pairingSource, /isEligibleOperationalMasterConfig\(fetchedConfig\)/);
   assert.match(scannerSource, /isEligibleOperationalMasterConfig\(await configResponse\.json\(\)\)/);
   assert.match(appSource, /ensureEligibleClientMasterEndpoint/);
-  assert.match(appSource, /validateOperationalMasterEndpoint\(baseUrl, remoteConfig, getClientMasterContract\(\)\)/);
+  assert.match(appSource, /resolveClientMasterAuthority<Record<string, any>>/);
+  assert.match(appSource, /validateOperationalMasterEndpoint\(baseUrl, payload, getClientMasterContract\(\)\)/);
 });
 
 test('la terminal cliente intenta IP guardada, Cloud y descubrimiento LAN antes de pedir la IP manual', () => {
@@ -330,7 +347,8 @@ test('la terminal cliente intenta IP guardada, Cloud y descubrimiento LAN antes 
   assert.match(pairingSource, /discoverLanMasterCandidates\(\{ timeoutMs: 2500 \}\)/);
   assert.match(pairingSource, /No se encontró una Caja Master disponible en esta red/);
   assert.match(lanDiscoverySource, /discoverMasterServers\(\{ timeoutMs: options\.timeoutMs \|\| 2500 \}\)/);
-  assert.match(lanDiscoverySource, /NetworkScanner\.findMaster/);
+  assert.match(lanDiscoverySource, /NetworkScanner\.findUntrustedMasterCandidateByIdentity/);
+  assert.doesNotMatch(lanDiscoverySource, /NetworkScanner\.findMaster\(/);
   assert.match(lanDiscoverySource, /discoveredTenantId === expectedTenantId/);
   assert.match(scannerSource, /\/api\/sync\/identify/);
   assert.doesNotMatch(scannerSource, /\/api\/network\/identify/);

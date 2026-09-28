@@ -222,16 +222,27 @@ export function saveSyncProfile(profile: SyncProfile): void {
 }
 
 /** Keep the client sync target aligned with the Master URL used by the LAN adapter. */
-export function updateClientMasterUrl(masterUrl: string): void {
+export function updateClientMasterUrl(masterUrl: string): boolean {
     const normalizedUrl = normalizeBaseUrl(masterUrl);
-    if (!normalizedUrl) return;
+    if (!normalizedUrl) return false;
 
     const profile = loadSyncProfile();
-    if (profile.posRuntime !== 'SLAVE' || profile.cloudChannel !== 'POS_MASTER') return;
-    if (profile.masterUrl === normalizedUrl) return;
+    if (profile.posRuntime !== 'SLAVE' || profile.cloudChannel !== 'POS_MASTER') return false;
+    if (profile.masterUrl === normalizedUrl) return true;
 
     // Preserve the contract source and its priority; only the LAN address changes.
     saveSyncProfile({ ...profile, masterUrl: normalizedUrl });
+    return loadSyncProfile().masterUrl === normalizedUrl;
+}
+
+/** Restores the client Master target, including the valid "no previous URL"
+ * state used by atomic authority rollback. */
+export function restoreClientMasterUrl(masterUrl: string | null): boolean {
+    const profile = loadSyncProfile();
+    if (profile.posRuntime !== 'SLAVE' || profile.cloudChannel !== 'POS_MASTER') return false;
+    const normalizedUrl = masterUrl ? normalizeBaseUrl(masterUrl) : undefined;
+    saveSyncProfile({ ...profile, masterUrl: normalizedUrl });
+    return (loadSyncProfile().masterUrl || undefined) === normalizedUrl;
 }
 
 const writeProfileMismatchDiagnostic = (diagnostic: SyncProfilePersistenceDiagnostic): void => {

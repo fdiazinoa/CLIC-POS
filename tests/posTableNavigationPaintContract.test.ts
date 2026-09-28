@@ -7,9 +7,18 @@ const tableMap = readFileSync(new URL('../components/TableMap.tsx', import.meta.
 const styles = readFileSync(new URL('../index.css', import.meta.url), 'utf8');
 
 test('the retained POS stays mounted but is not painted behind the table map', () => {
-  assert.match(app, /data-pos-persistent-host="true"/);
-  assert.match(app, /visible \? 'visible' : 'invisible pointer-events-none select-none'/);
-  assert.doesNotMatch(app, /visible \? 'opacity-100' : 'opacity-0 pointer-events-none select-none'/);
+  const hostStart = app.indexOf('const PersistentPOSHost');
+  const hostSource = app.slice(hostStart, app.indexOf('const TableMapLifecycleBoundary', hostStart));
+  assert.match(hostSource, /data-pos-persistent-host="true"/);
+  assert.match(hostSource, /className="h-full"/);
+  assert.match(hostSource, /if \(visible\) host\.removeAttribute\('aria-hidden'\)/);
+  assert.match(hostSource, /host\.setAttribute\('aria-hidden', 'true'\)/);
+  assert.doesNotMatch(hostSource, /\binvisible\b|opacity-0|opacity-100|setAttribute\('inert'/);
+
+  const shellStart = app.indexOf('data-pos-table-shell="true"');
+  const shellSource = app.slice(shellStart, app.indexOf(': renderView();', shellStart));
+  assert.match(shellSource, /\{renderView\('POS'\)\}/);
+  assert.match(shellSource, /<TableMapLifecycleBoundary visible=\{currentView === 'TABLE_MAP'\}/);
 });
 
 test('Android table map disables expensive backdrop filters without changing web styling', () => {

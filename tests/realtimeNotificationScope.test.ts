@@ -5,6 +5,7 @@ import {
     isSyncHintV2Payload,
     payloadAppliesToRealtimeScope,
 } from '../services/sync/RealtimeHintScope';
+import { RealtimeNotificationService } from '../services/sync/RealtimeNotificationService';
 
 const binding = {
     tenantId: 'tenant-a',
@@ -43,4 +44,23 @@ test('rejects tenant, store and terminal mismatches', () => {
 
 test('accepts wildcard terminal only inside the matching tenant and store', () => {
     assert.equal(payloadAppliesToRealtimeScope({ ...hint, terminalId: '*' }, binding, true), true);
+});
+
+test('disconnect during realtime authorization prevents stale channel creation', async () => {
+    let resolveAuthorization!: (value: any) => void;
+    const authorization = new Promise<any>(resolve => { resolveAuthorization = resolve; });
+    let channelCalls = 0;
+    const service = new RealtimeNotificationService((async () => authorization) as any);
+    (service as any).connectionGeneration = 1;
+    const connecting = (service as any).connect('http://10.0.0.129:3001', 'tenant-a', 'store-a', 'terminal-a', 1);
+    await Promise.resolve();
+    await service.disconnect('DISABLED');
+    resolveAuthorization({
+        client: { channel: () => { channelCalls += 1; return {}; } },
+        scope: { tenantId: 'tenant-a', storeId: 'store-a', terminalId: 'terminal-a' },
+    });
+    await connecting;
+    assert.equal(channelCalls, 0);
+    assert.equal(service.getState(), 'DISABLED');
+    assert.deepEqual((service as any).channels, []);
 });

@@ -2,6 +2,12 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, Check, X } from 'lucide-react';
 import { UnitDefinition, BusinessConfig } from '../types';
+import { resolveValidatedOperationalApiUrl } from '../utils/masterOperationalApi';
+import {
+    dispatchLegacyLanMutation,
+    persistLegacyLanMutationCompletion,
+    validateLegacyResponseObject,
+} from '../services/sync/LegacyLanMutationTransport';
 
 interface UnitSelectorProps {
     label: string;
@@ -68,11 +74,25 @@ export const UnitSelector: React.FC<UnitSelectorProps> = ({
 
         // Persist to Backend
         try {
-            await fetch('/api/config', {
+            const response = await dispatchLegacyLanMutation<any>({
+                url: await resolveValidatedOperationalApiUrl('/api/config'),
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(updatedConfig)
+                body: JSON.stringify(updatedConfig),
+                operation: 'CONFIG_UNIT_UPSERT',
+                validateResponse: (data) => {
+                    validateLegacyResponseObject(data);
+                    if (!Array.isArray(data.terminals)) throw new Error('CONFIG_TERMINALS_REQUIRED');
+                },
             });
+            await response.completeAfterDurableCommit(
+                `UnitSelector:add:${newUnit.code}`,
+                () => persistLegacyLanMutationCompletion(
+                    response.correlationId,
+                    `UnitSelector:add:${newUnit.code}`,
+                    response.response.status,
+                ),
+            );
 
             // Select the new unit
             onChange(newUnit.code);

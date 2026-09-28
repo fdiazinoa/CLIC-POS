@@ -12,6 +12,10 @@ export class NetworkAdapter implements DatabaseAdapter {
 
     private lastCheckedMasterIp: string | null = null;
 
+    private rejectUnjournaledMutation(operation: string): void {
+        throw new Error(`LEGACY_NETWORK_ADAPTER_MUTATION_BLOCKED:${operation}`);
+    }
+
     private initializeBaseUrl() {
         const storedMasterUrl = localStorage.getItem('CLIC_POS_MASTER_URL');
         const masterIp = localStorage.getItem('pos_master_ip');
@@ -140,6 +144,7 @@ export class NetworkAdapter implements DatabaseAdapter {
     }
 
     async saveCollection<T>(collectionName: string, data: T[]): Promise<void> {
+        this.rejectUnjournaledMutation(`saveCollection:${collectionName}`);
         if (!collectionName) {
             console.warn('⚠️ NetworkAdapter: saveCollection called with undefined collectionName');
             return;
@@ -227,6 +232,7 @@ export class NetworkAdapter implements DatabaseAdapter {
     }
 
     async saveDocument<T extends { id: string }>(collectionName: string, doc: T): Promise<void> {
+        this.rejectUnjournaledMutation(`saveDocument:${collectionName}:${doc?.id || ''}`);
         if (!doc.id) {
             console.error(`❌ NetworkAdapter: Attempted to save document to ${collectionName} without ID.`, doc);
             return;
@@ -269,12 +275,14 @@ export class NetworkAdapter implements DatabaseAdapter {
     }
 
     async bulkUpsert<T extends { id: string }>(collectionName: string, docs: T[]): Promise<void> {
+        this.rejectUnjournaledMutation(`bulkUpsert:${collectionName}:${docs.length}`);
         for (const doc of docs || []) {
             await this.saveDocument(collectionName, doc);
         }
     }
 
     async bulkUpdateProducts(productIds: string[], updates: any, userId?: string, userName?: string): Promise<void> {
+        this.rejectUnjournaledMutation(`bulkUpdateProducts:${productIds.length}`);
         const url = this.getUrl('bulk/products');
         try {
             const res = await fetch(url, {
@@ -312,6 +320,7 @@ export class NetworkAdapter implements DatabaseAdapter {
     }
 
     async deleteDocument(collectionName: string, id: string): Promise<void> {
+        this.rejectUnjournaledMutation(`deleteDocument:${collectionName}:${id}`);
         try {
             const url = this.getUrl(`${collectionName}/${id}`);
             await fetch(url, {

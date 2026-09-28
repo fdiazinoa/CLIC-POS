@@ -15,12 +15,14 @@ test('la Cliente solicita una unión atómica y refresca el estado autoritativo 
     tableMapSource.indexOf("if (mode === 'MOVE' && requestedItems)"),
   );
 
-  assert.match(mergeSource, /requestJson<any>/);
+  assert.match(mergeSource, /dispatchLegacyLanMutation<any>/);
   assert.match(mergeSource, /resolveValidatedOperationalApiUrl\('\/api\/mesas\/unir'\)/);
   assert.match(mergeSource, /mainTableId: primarySourceTableId/);
   assert.match(mergeSource, /secondaryTableIds: \[targetTable\.id\]/);
   assert.match(mergeSource, /await Promise\.resolve\(onRefreshTables\?\.\(\)\)/);
-  assert.match(mergeSource, /response\.status !== 404 && response\.status !== 501/);
+  assert.match(mergeSource, /operation: 'TABLE_MERGE'/);
+  assert.match(mergeSource, /validateResponse: validateLegacySuccessResponse/);
+  assert.doesNotMatch(mergeSource, /requestJson<any>|fetch\(/);
 });
 
 test('la Master Android consolida artículos y referencias de mesas en un solo ticket', () => {

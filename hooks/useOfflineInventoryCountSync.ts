@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { InventoryCountSession } from '../types';
 import { db } from '../utils/db';
 import { apiSyncAdapter } from '../services/sync/ApiSyncAdapter';
+import { completeLegacyMutationAfterDurableAck } from '../services/sync/LegacyMutationJournal';
 
 interface UseOfflineInventoryCountSyncOptions {
   enabled?: boolean;
@@ -111,7 +112,7 @@ export const useOfflineInventoryCountSync = ({ enabled = true }: UseOfflineInven
 
   const pushSession = useCallback(async (session: InventoryCountSession) => {
     if (!navigator.onLine) throw new Error('Cannot push while offline');
-    await apiSyncAdapter.push('inventoryCounts', [session], 'CREATE', 'UPSERT');
+    return apiSyncAdapter.push('inventoryCounts', [session], 'CREATE', 'UPSERT');
   }, []);
 
   const processQueue = useCallback(async () => {
@@ -152,10 +153,14 @@ export const useOfflineInventoryCountSync = ({ enabled = true }: UseOfflineInven
             await db.saveDocument(queueCollection as any, item as any);
           }
 
-          await pushSession(item.payload);
+          const mutationResult = await pushSession(item.payload);
 
           await db.deleteDocument(queueCollection as any, item.id);
           await clearScanLogsForSession(item.payload.id);
+          await completeLegacyMutationAfterDurableAck(
+            mutationResult,
+            `OfflineInventoryCountQueue:${item.id}:deleted`,
+          );
 
           setSyncToast(`Sincronización completa: Conteo #${item.payload.id} procesado`);
         } catch (error: any) {

@@ -33,6 +33,15 @@ export interface TerminalCredentials {
 }
 
 const CREDENTIALS_KEY = 'clic_terminal_credentials_v1';
+let credentialWriteGeneration = 0;
+let credentialWriteQueue: Promise<void> = Promise.resolve();
+let writeNativeCredentials = (value: string) => Preferences.set({ key: CREDENTIALS_KEY, value });
+
+export const setTerminalCredentialNativeWriterForTests = (
+    writer: ((value: string) => Promise<void>) | null,
+): void => {
+    writeNativeCredentials = writer || ((value: string) => Preferences.set({ key: CREDENTIALS_KEY, value }));
+};
 
 const getStorage = (): Storage | null => {
     try {
@@ -210,9 +219,13 @@ const writeLegacyMirrors = (credentials: TerminalCredentials): void => {
         }
         if (credentials.masterIp) {
             storage.setItem('pos_master_ip', credentials.masterIp);
+        } else if (credentials.masterIp === null) {
+            storage.removeItem('pos_master_ip');
         }
         if (credentials.masterUrl) {
             storage.setItem('CLIC_POS_MASTER_URL', credentials.masterUrl);
+        } else if (credentials.masterUrl === null) {
+            storage.removeItem('CLIC_POS_MASTER_URL');
         }
         if (credentials.setupMode) {
             storage.setItem('clic_pos_terminal_setup_mode', credentials.setupMode);
@@ -285,17 +298,28 @@ export const readTerminalCredentials = async (): Promise<TerminalCredentials> =>
     }
 };
 
+const persistTerminalCredentialsNative = (next: TerminalCredentials, generation: number): Promise<void> => {
+    const operation = credentialWriteQueue.then(async () => {
+        if (generation !== credentialWriteGeneration) return;
+        try {
+            await writeNativeCredentials(JSON.stringify(next));
+        } catch {
+            // Native Preferences is optional in some builds.
+        }
+    });
+    credentialWriteQueue = operation.catch(() => undefined);
+    return operation;
+};
+
+export const awaitTerminalCredentialWrites = async (): Promise<void> => {
+    await credentialWriteQueue;
+};
+
 export const saveTerminalCredentials = async (patch: TerminalCredentials): Promise<TerminalCredentials> => {
     const storage = getStorage();
     const current = readTerminalCredentialsSync();
-    let nativeCurrent: TerminalCredentials = {};
-    try {
-        const result = await Preferences.get({ key: CREDENTIALS_KEY });
-        nativeCurrent = readJson(result?.value || null);
-    } catch {
-        // Native Preferences is optional in some builds.
-    }
-    const next = normalizeTerminalCredentialsIdentity(mergeCredentials(nativeCurrent, current, patch));
+    const generation = ++credentialWriteGeneration;
+    const next = normalizeTerminalCredentialsIdentity(mergeCredentials(current, patch));
     writeLegacyMirrors(next);
 
     try {
@@ -304,11 +328,7 @@ export const saveTerminalCredentials = async (patch: TerminalCredentials): Promi
         // A storage quota error must not erase the terminal binding.
     }
 
-    try {
-        await Preferences.set({ key: CREDENTIALS_KEY, value: JSON.stringify(next) });
-    } catch {
-        // Native Preferences is optional in some builds.
-    }
+    await persistTerminalCredentialsNative(next, generation);
 
     return next;
 };
@@ -316,6 +336,7 @@ export const saveTerminalCredentials = async (patch: TerminalCredentials): Promi
 export const saveTerminalCredentialsSync = (patch: TerminalCredentials): TerminalCredentials => {
     const storage = getStorage();
     const current = readTerminalCredentialsSync();
+    const generation = ++credentialWriteGeneration;
     const next = normalizeTerminalCredentialsIdentity(mergeCredentials(current, patch));
     writeLegacyMirrors(next);
     try {
@@ -323,7 +344,7 @@ export const saveTerminalCredentialsSync = (patch: TerminalCredentials): Termina
     } catch {
         // A storage quota error must not erase the terminal binding.
     }
-    void saveTerminalCredentials(patch);
+    void persistTerminalCredentialsNative(next, generation);
     return next;
 };
 

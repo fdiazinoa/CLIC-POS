@@ -30,8 +30,7 @@ import {
    OrderServiceType, CashMovement
 } from '../types';
 import { hasProductPromotion } from '../utils/promotionEngine';
-import { getDefaultFiscalProvider, getEffectiveFiscalComplianceConfig, getFiscalReserveAlert, isTerminalFiscalReceiptRequired, mapElectronicFiscalCodeToLegacy, resolveCreditNoteFiscalCode, resolveSaleFiscalCode } from '../utils/fiscal/fiscalHelpers';
-import { calculateTransactionTaxSummary } from '../utils/taxSummary';
+import { getDefaultFiscalProvider, getEffectiveFiscalComplianceConfig, getFiscalReserveAlert, isTerminalFiscalReceiptRequired, mapElectronicFiscalCodeToLegacy, resolveSaleFiscalCode } from '../utils/fiscal/fiscalHelpers';
 import UnifiedPaymentModal from './PaymentModal';
 import {
    evaluateCreditSupervisorGate,
@@ -60,6 +59,7 @@ import { applyPromotions } from '../utils/promotionEngine';
 import { calculatePointsEarned, getPrimaryLoyaltyCard } from '../utils/loyaltyEngine';
 import { couponService } from '../utils/couponService';
 import { resolveScannedCouponCode } from '../utils/couponScan';
+import { shouldRouteInvoiceScan } from '../utils/invoiceScan';
 import { calculateInventoryDeductions, resolveInventoryConsumptionMode, transferStockToCommitted } from '../utils/inventoryEngine';
 import { useSupervisorAuth } from '../hooks/useSupervisorAuth';
 import { calculateSalesCommission } from '../utils/userSalesPolicy';
@@ -67,12 +67,10 @@ import SupervisorModal from './SupervisorModal';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { useBottomSafeOffset } from '../hooks/useBottomSafeOffset';
 import MobileConfigModal from './MobileConfigModal';
-import ReturnModal from './ReturnModal';
 import PromoBottomSheet from './PromoBottomSheet';
 import { backgroundSyncManager, SyncState } from '../services/sync/BackgroundSyncManager';
 import { syncManager } from '../services/sync/SyncManager';
 import { isSyncFeatureEnabled } from '../services/sync/SyncFeatureFlags';
-import { requestJson } from '../services/network/httpClient';
 import ProductTableSupermarket from './ProductTableSupermarket';
 import SupermarketTicketSummary from './SupermarketTicketSummary';
 import BarcodeScannerModal from './BarcodeScannerModal';
@@ -146,6 +144,12 @@ import OrderServiceTypeButton from './OrderServiceTypeButton';
 import { resolveAppliedServiceTaxPolicy } from '../utils/serviceTaxPolicy';
 import { normalizeProductionOutputMode, resolveProductionOutputTargets } from '../utils/productionOutputMode';
 import { isClientTerminalMode, resolveValidatedOperationalApiUrl } from '../utils/masterOperationalApi';
+import {
+   dispatchLegacyLanMutation,
+   persistLegacyLanMutationCompletion,
+   validateLegacySuccessResponse,
+   type LegacyLanMutationReceipt,
+} from '../services/sync/LegacyLanMutationTransport';
 import ProductionRoutingAssignmentModal, {
    type ProductionRoutingPromptArea,
    type ProductionRoutingPromptItem,
@@ -218,6 +222,7 @@ export interface POSInterfaceProps {
    onOpenAttendance: () => void;
    onOpenCustomers: () => void;
    onOpenHistory: () => void;
+   onOpenInvoiceActions: (scanValue: string) => void;
    onOpenFinance: (initialCashMovementType?: 'IN' | 'OUT' | 'X_REPORT') => void;
    onRegisterCashMovement?: (type: 'IN' | 'OUT', amount: number, reason: string) => CashMovement | void | Promise<CashMovement | void>;
    onOpenZReport?: () => void;
@@ -283,9 +288,6 @@ const buildModifierSignature = (modifiers?: unknown[]): string => {
    return modifiers.map((modifier) => String(modifier ?? '')).sort().join('|');
 };
 
-const looksLikeDocumentScan = (code: string): boolean =>
-   /^(TCK|INV|B0[1-4]|E3[1245]|NC|ZS|ZR|REC|TXN-)/i.test(code.trim());
-
 const normalizeBooleanSetting = (value: unknown): boolean | undefined => {
    if (typeof value === 'boolean') return value;
    if (typeof value === 'number') return value === 1;
@@ -321,20 +323,21 @@ const normalizeViewMode = (value: unknown): string => {
 
 const isRetailViewMode = (value: unknown): boolean => normalizeViewMode(value) === 'RETAIL';
 
-const postJsonWithTimeout = async (url: string, payload: unknown, timeoutMs = 5000) => {
-   const response = await requestJson<any>({
+const postJournaledKdsJson = async (
+   url: string,
+   payload: unknown,
+   operation: string,
+   timeoutMs = 5000,
+): Promise<LegacyLanMutationReceipt<any>> => {
+   return dispatchLegacyLanMutation<any>({
       url,
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
       timeoutMs,
-      diagnosticContext: { operation: 'KDS_POST' },
+      operation,
+      validateResponse: validateLegacySuccessResponse,
    });
-   const data = response.data;
-   if (!response.ok) {
-      throw new Error(data?.message || data?.error || `HTTP ${response.status}`);
-   }
-   return data;
 };
 
 const getConsignmentDocumentNo = (consignment: ErpConsignment): string =>
@@ -1155,6 +1158,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    onOpenAttendance,
    onOpenCustomers,
    onOpenHistory,
+   onOpenInvoiceActions,
    onOpenFinance,
    onRegisterCashMovement,
    onOpenZReport,
@@ -1452,6 +1456,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          if (queue.length === 0) return;
 
          const nextQueue: any[] = [];
+         const sentReceipts: Array<{ receipt: LegacyLanMutationReceipt<any>; reference: string }> = [];
          let sentCount = 0;
          for (const entry of queue) {
             const status = String(entry?.status || 'PENDING').toUpperCase();
@@ -1466,7 +1471,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             }
 
             try {
-               await postJsonWithTimeout(`${kdsBaseUrl}/api/ordenes/${encodeURIComponent(orderId)}`, {
+               const updateReceipt = await postJournaledKdsJson(`${kdsBaseUrl}/api/ordenes/${encodeURIComponent(orderId)}`, {
                   items: payload.items || [],
                   total: payload.total || 0,
                   status: 'OCCUPIED',
@@ -1479,8 +1484,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   area: payload.area,
                   sourceTerminal: payload.sourceTerminal,
                   kdsTiming: payload.kdsTiming,
-               });
-               await postJsonWithTimeout(`${kdsBaseUrl}/api/ordenes/enviar-comanda/${encodeURIComponent(orderId)}`, payload);
+               }, 'KDS_ORDER_UPDATE_RETRY');
+               sentReceipts.push({ receipt: updateReceipt, reference: `KDS:retry:update:${orderId}` });
+               const dispatchReceipt = await postJournaledKdsJson(
+                  `${kdsBaseUrl}/api/ordenes/enviar-comanda/${encodeURIComponent(orderId)}`,
+                  payload,
+                  'KDS_ORDER_DISPATCH_RETRY',
+               );
+               sentReceipts.push({ receipt: dispatchReceipt, reference: `KDS:retry:dispatch:${orderId}` });
                await markKdsQueueItemsSent(entry);
                sentCount += 1;
             } catch (error: any) {
@@ -1495,6 +1506,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          }
 
          await db.save('kdsDispatchQueue' as any, nextQueue);
+         for (const { receipt, reference } of sentReceipts) {
+            await receipt.completeAfterDurableCommit(reference, () =>
+               persistLegacyLanMutationCompletion(receipt.correlationId, reference, receipt.response.status)
+            );
+         }
          if (sentCount > 0) {
             setSuccessToast(`${sentCount} comanda(s) pendiente(s) enviada(s) a cocina`);
          }
@@ -2443,10 +2459,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [pendingProductToAdd, setPendingProductToAdd] = useState<Product | null>(null);
    const [pendingTrackingProduct, setPendingTrackingProduct] = useState<{ product: Product, quantity: number, price?: number, modifiers?: string[] } | null>(null);
 
-   // --- SMART QR RETURNS ---
-   const [showReturnModal, setShowReturnModal] = useState(false);
-   const [returnInvoiceId, setReturnInvoiceId] = useState<string | null>(null);
-
    // --- PROMO BOTTOM SHEET ---
    const [showPromoSheet, setShowPromoSheet] = useState(false);
    const [selectedPromoProduct, setSelectedPromoProduct] = useState<Product | null>(null);
@@ -2976,17 +2988,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
       return index;
    }, [activeReservations]);
-
-   const transactionByScanCode = useMemo(() => {
-      const index = new Map<string, Transaction>();
-      for (const transaction of transactions || []) {
-         if (transaction.id) index.set(String(transaction.id), transaction);
-         if (transaction.displayId) index.set(String(transaction.displayId), transaction);
-         if ((transaction as any).ncf) index.set(String((transaction as any).ncf), transaction);
-         if ((transaction as any).electronicNcf) index.set(String((transaction as any).electronicNcf), transaction);
-      }
-      return index;
-   }, [transactions]);
 
    const selectedCustomerActiveReservationsCount = useMemo(() => {
       if (!selectedCustomer) return 0;
@@ -3778,9 +3779,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    }, [searchTerm, routeScannedCoupon, findProductByAnyCode, addToCart, isReturnMode]);
 
    // --- BARCODE SCANNER LOGIC ---
-   const processBarcode = useCallback((code: string) => {
+   const processBarcode = useCallback((
+      code: string,
+      context: { onReservationRecovered?: () => void } = {},
+   ) => {
       const trimmed = code.trim();
-      if (!trimmed) return;
+      if (!trimmed) return { success: false, message: 'Código vacío' };
       const trace = beginPosInteraction('BARCODE_SCAN', { codeLength: trimmed.length });
       activeAddTraceRef.current = trace;
       expectInteractionRender(trace, 'POS_INTERACTION_VIEW');
@@ -3788,7 +3792,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       // A hardware scan is consumed even when routing/lookup finds no match.
       setSearchTerm('');
 
-      if (routeScannedCoupon(trimmed)) return;
+      if (routeScannedCoupon(trimmed)) return { success: true, message: 'Cupón leído. Valide para aplicarlo.' };
 
       // 0. Try Smart QR (JSON)
       try {
@@ -3799,13 +3803,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   || activeReservationByScanCode.get(String(data.code || ''));
                if (found) {
                   handleRecoverReservation(found);
-                  return;
+                  context.onReservationRecovered?.();
+                  return { success: true, message: 'Reserva recuperada' };
                }
             }
             if (data.type === 'INVOICE_RETURN' && data.id) {
-               setReturnInvoiceId(data.id);
-               setShowReturnModal(true);
-               return;
+               onOpenInvoiceActions(trimmed);
+               return { success: true, message: 'Factura identificada' };
             }
          }
       } catch (e) {
@@ -3833,11 +3837,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   }
                }
                setTimeout(() => setErrorToast(null), 3000);
-               return;
+               return { success: true, message: `${product.name} agregado` };
             } else {
                setErrorToast(`Producto PLU ${scaleItem.plu} no encontrado`);
                setTimeout(() => setErrorToast(null), 3000);
-               return;
+               return { success: false, message: `Producto PLU ${scaleItem.plu} no encontrado` };
             }
          }
       }
@@ -3855,27 +3859,27 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          }
          setErrorToast(`Producto agregado: ${match.product.name}`);
          setTimeout(() => setErrorToast(null), 1500);
-         return;
+         return { success: true, message: `${match.product.name} agregado` };
+      }
+
+      // Invoice-like prefixes are intentionally evaluated after scale/product
+      // lookup so an existing SKU such as INV001 or NC-SODA keeps POS priority.
+      if (shouldRouteInvoiceScan(trimmed)) {
+         onOpenInvoiceActions(trimmed);
+         return { success: true, message: 'Factura identificada' };
       }
 
       // 3. Try Transaction Search only for document-looking scans. Product
       // barcodes should not pay the cost of scanning large ticket histories.
-      if (looksLikeDocumentScan(trimmed)) {
-         const txnFound = transactionByScanCode.get(trimmed);
-         if (txnFound) {
-            setReturnInvoiceId(txnFound.id);
-            setShowReturnModal(true);
-            return;
-         }
-      }
       setErrorToast('Código no encontrado');
       setTimeout(() => setErrorToast(null), 2000);
+      return { success: false, message: 'Código no encontrado' };
       } finally {
          markInteractionStateUpdate(trace, 1);
          if (trace.stages.HANDLER_END === undefined) markInteractionStage(trace, 'HANDLER_END');
          if (activeAddTraceRef.current === trace) activeAddTraceRef.current = null;
       }
-   }, [activeReservationByScanCode, addToCart, config.scaleLabelConfig, handleProductClick, getProductPrice, handleRecoverReservation, findProductByAnyCode, productCodeIndex, routeScannedCoupon, transactionByScanCode, isReturnMode]);
+   }, [activeReservationByScanCode, addToCart, config.scaleLabelConfig, handleProductClick, getProductPrice, handleRecoverReservation, findProductByAnyCode, productCodeIndex, routeScannedCoupon, onOpenInvoiceActions, isReturnMode]);
 
    const isAnyModalOpen = !!(
       showSafetyGate ||
@@ -3896,7 +3900,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       productForScale ||
       showLoyaltyModal ||
       isScannerOpen ||
-      showReturnModal ||
       showPromoSheet ||
       showMobileConfigModal ||
       showReservationModal ||
@@ -5643,13 +5646,20 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   return result.sale || result.refund || null;
                }
 
-               const response = await withTimeout(fetch('/api/transactions/split', {
+               const response = await dispatchLegacyLanMutation<any>({
+                  url: await resolveValidatedOperationalApiUrl('/api/transactions/split'),
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify(splitPayload)
-               }), 25000, 'TIMEOUT_SPLIT_FETCH');
+                  body: JSON.stringify(splitPayload),
+                  timeoutMs: 25000,
+                  operation: 'SPLIT_TRANSACTION',
+                  validateResponse: (data) => {
+                     validateLegacySuccessResponse(data);
+                     if (!data.result || (!data.result.sale && !data.result.refund)) throw new Error('SPLIT_TRANSACTION_RESULT_REQUIRED');
+                  },
+               });
 
-               const data = await withTimeout(response.json(), 4000, 'TIMEOUT_SPLIT_PARSE');
+               const data = response.data;
                if (data.success) {
                   if (data.result?.sale) {
                      data.result.sale = await syncConsignmentSettlement(data.result.sale);
@@ -5663,6 +5673,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   onSelectCustomer(null);
                   setIsReturnMode(false);
                   setRefundAuthorizedBy(null);
+                  await response.completeAfterDurableCommit(
+                     `POSInterface:split:${data.result?.sale?.id || data.result?.refund?.id || response.correlationId}`,
+                     () => persistLegacyLanMutationCompletion(
+                        response.correlationId,
+                        `POSInterface:split:${data.result?.sale?.id || data.result?.refund?.id || 'completed'}`,
+                        response.response.status,
+                     ),
+                  );
                   return data.result.sale || data.result.refund;
                } else {
                   alert(`Error en transacción: ${data.message}`);
@@ -5864,25 +5882,25 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      if (!hasOtherTableAccounts) {
                         const releaseEndpoint = await resolveValidatedOperationalApiUrl('/api/mesas/liberar');
                         // 1. Free table in the main API so status/currentOrderId are reset.
-                        const controller = new AbortController();
-                        const timeoutId = window.setTimeout(() => controller.abort(), 4000);
-                        try {
-                           const releaseRes = await fetch(releaseEndpoint, {
+                        const releaseRes = await dispatchLegacyLanMutation<any>({
+                              url: releaseEndpoint,
                               method: 'POST',
                               headers: { 'Content-Type': 'application/json' },
                               body: JSON.stringify({ tableId: activeTable.id }),
-                              signal: controller.signal
+                              timeoutMs: 4000,
+                              operation: 'POS_TABLE_RELEASE',
+                              validateResponse: validateLegacySuccessResponse,
                            });
-                           if (!releaseRes.ok) {
-                              throw new Error(`HTTP ${releaseRes.status}`);
-                           }
-                           const releaseData = await releaseRes.json().catch(() => null);
-                           if (releaseData && releaseData.success === false) {
-                              throw new Error(releaseData.message || 'No se pudo liberar la mesa');
-                           }
-                        } finally {
-                           window.clearTimeout(timeoutId);
+                        if (!releaseRes.response.ok) {
+                           throw new Error(`HTTP ${releaseRes.response.status}`);
                         }
+                        const releaseData = releaseRes.data;
+                        if (releaseData && releaseData.success === false) {
+                           throw new Error(releaseData.message || 'No se pudo liberar la mesa');
+                        }
+                        await releaseRes.completeAfterDurableCommit(`POSInterface:release:${activeTable.id}`, () =>
+                           persistLegacyLanMutationCompletion(releaseRes.correlationId, `POSInterface:release:${activeTable.id}`, releaseRes.response.status)
+                        );
                      }
                   } catch (e) {
                      console.error("Failed to free table:", e);
@@ -6296,6 +6314,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          let printedCount = 0;
          let sentKdsCount = 0;
          let queuedKdsCount = 0;
+         const successfulKdsReceipts: Array<{ receipt: LegacyLanMutationReceipt<any>; reference: string }> = [];
          const dispatchedCartIds = new Set<string>();
          const queuedCartIds = new Set<string>();
          const sentCartIds = new Set<string>();
@@ -6395,7 +6414,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   });
                } else {
                   try {
-                     await postJsonWithTimeout(`${kdsBaseUrl}/api/ordenes/${encodeURIComponent(orderId)}`, {
+                     const updateReceipt = await postJournaledKdsJson(`${kdsBaseUrl}/api/ordenes/${encodeURIComponent(orderId)}`, {
                         items: kdsItems,
                         total: areaTotal,
                         status: 'OCCUPIED',
@@ -6408,9 +6427,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         table: kdsTablePayload,
                         area: kdsPayload.area,
                         kdsTiming: kdsPayload.kdsTiming,
-                     });
+                     }, 'KDS_ORDER_UPDATE');
+                     successfulKdsReceipts.push({ receipt: updateReceipt, reference: `KDS:update:${orderId}` });
                      const endpoint = `${kdsBaseUrl}/api/ordenes/enviar-comanda/${encodeURIComponent(orderId)}`;
-                     await postJsonWithTimeout(endpoint, kdsPayload);
+                     const dispatchReceipt = await postJournaledKdsJson(endpoint, kdsPayload, 'KDS_ORDER_DISPATCH');
+                     successfulKdsReceipts.push({ receipt: dispatchReceipt, reference: `KDS:dispatch:${orderId}` });
                      sentKdsCount += 1;
                      areaData.items.forEach(item => sentCartIds.add(getCartDispatchKey(item)));
                   } catch (kdsError: any) {
@@ -6494,6 +6515,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             }
          }
 
+         for (const { receipt, reference } of successfulKdsReceipts) {
+            await receipt.completeAfterDurableCommit(reference, () =>
+               persistLegacyLanMutationCompletion(receipt.correlationId, reference, receipt.response.status)
+            );
+         }
+
          const parts = [
             printedCount > 0 ? `${printedCount} ticket(s)` : '',
             sentKdsCount > 0 ? `${sentKdsCount} KDS` : '',
@@ -6556,14 +6583,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             return;
          }
 
-         await postJsonWithTimeout(`${kdsBaseUrl}/api/cocina/cambiar-estado`, {
+         const kdsReturnReceipt = await postJournaledKdsJson(`${kdsBaseUrl}/api/cocina/cambiar-estado`, {
             orden_id: orderId,
             item_id: item.kdsItemIds?.[0],
             item_ids: item.kdsItemIds || [],
             cart_id: item.cartId,
             producto_id: item.id,
             nuevo_estado: 'DEVUELTO',
-         });
+         }, 'KDS_ITEM_RETURN');
 
          const returnedAt = new Date().toISOString();
          const newCart = cart.map((cartItem) => {
@@ -6583,8 +6610,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          if (activeTable && onUpdateParkedTickets) {
             const ticketId = activeTable.currentOrderId;
             const total = newCart.reduce((sum, cartItem) => sum + (Number(cartItem.price || 0) * Number(cartItem.quantity || 0)), 0);
-            onUpdateParkedTickets(parkedTickets.map(ticket => ticket.id === ticketId ? { ...ticket, items: newCart, total } : ticket));
+            await Promise.resolve(onUpdateParkedTickets(parkedTickets.map(ticket => ticket.id === ticketId ? { ...ticket, items: newCart, total } : ticket)));
          }
+
+         const returnReference = `KDS:return:${orderId}:${item.cartId}`;
+         await kdsReturnReceipt.completeAfterDurableCommit(returnReference, () =>
+            persistLegacyLanMutationCompletion(kdsReturnReceipt.correlationId, returnReference, kdsReturnReceipt.response.status)
+         );
 
          setSuccessToast(`Artículo devuelto en cocina: ${item.name}`);
       } catch (error: any) {
@@ -6718,24 +6750,26 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          let releaseEndpoint: string;
          try { releaseEndpoint = await resolveValidatedOperationalApiUrl('/api/mesas/liberar'); }
          catch (error) { console.warn('No se pudo validar la master para liberar mesa:', error); return; }
-         const controller = new AbortController();
-         const timeoutId = window.setTimeout(() => controller.abort(), 2500);
          try {
-            const releaseRes = await fetch(releaseEndpoint, {
+            const releaseRes = await dispatchLegacyLanMutation<any>({
+               url: releaseEndpoint,
                method: 'POST',
                headers: { 'Content-Type': 'application/json' },
                body: JSON.stringify({ tableId: tableToRelease.id }),
-               signal: controller.signal
+               timeoutMs: 2500,
+               operation: 'POS_TABLE_RELEASE_EMPTY',
+               validateResponse: validateLegacySuccessResponse,
             });
-            const releaseData = await releaseRes.json().catch(() => null);
+            const releaseData = releaseRes.data;
 
-            if (!releaseRes.ok || (releaseData && releaseData.success === false)) {
-               throw new Error(releaseData?.message || `HTTP ${releaseRes.status}`);
+            if (!releaseRes.response.ok || (releaseData && releaseData.success === false)) {
+               throw new Error(releaseData?.message || `HTTP ${releaseRes.response.status}`);
             }
+            await releaseRes.completeAfterDurableCommit(`POSInterface:release-empty:${tableToRelease.id}`, () =>
+               persistLegacyLanMutationCompletion(releaseRes.correlationId, `POSInterface:release-empty:${tableToRelease.id}`, releaseRes.response.status)
+            );
          } catch (error) {
             console.warn('No se pudo confirmar la liberacion de mesa en servidor:', error);
-         } finally {
-            window.clearTimeout(timeoutId);
          }
       })();
 
@@ -6971,99 +7005,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          alert("Cajón Abierto Exitosamente");
          // In a real app, this would trigger the hardware command
       }
-   };
-
-   const handleProcessReturn = async (originalTransaction: Transaction, itemsToReturn: { itemId: string, quantity: number }[]) => {
-      // 1. Calculate Refund Totals
-      const returnItems: CartItem[] = [];
-
-      itemsToReturn.forEach(returnItem => {
-         const originalItem = (originalTransaction.items || []).find(i => i.cartId === returnItem.itemId);
-         if (originalItem) {
-            returnItems.push({
-               ...originalItem,
-               quantity: Math.abs(returnItem.quantity),
-               cartId: `RET-${Date.now()}-${returnItem.itemId}`,
-               price: originalItem.price
-            });
-         }
-      });
-
-      const refundSummary = calculateTransactionTaxSummary(
-         returnItems,
-         config.taxes || [],
-         Boolean(originalTransaction.isTaxIncluded),
-         config.taxRate || 0
-      );
-      const refundTotal = refundSummary.total;
-
-      const fiscalCompliance = getEffectiveFiscalComplianceConfig(config, activeTerminalConfig);
-      const creditNoteFiscalType = resolveCreditNoteFiscalCode(fiscalCompliance.mode);
-      const creditNoteNcf = fiscalCompliance.mode === 'NONE'
-         ? undefined
-         : await db.getNextNCF(creditNoteFiscalType, terminalId, 50);
-
-      // 2. Create Refund Transaction
-      const refundTxn = await transactionService.createTransaction({
-         documentType: 'REFUND',
-         seriesId: activeTerminalConfig?.documentAssignments?.['REFUND'] || 'REFUND-GENERIC',
-         date: new Date().toISOString(),
-         items: returnItems,
-         total: refundTotal,
-         payments: [],
-         userId: currentUser.id,
-         userName: currentUser.name,
-         terminalId: terminalId,
-         status: 'REFUNDED',
-         customerId: originalTransaction.customerId,
-         customerName: originalTransaction.customerName,
-         originalTransactionId: originalTransaction.id,
-         electronicNcf: creditNoteFiscalType.startsWith('E') ? creditNoteNcf : undefined,
-         fiscalMode: fiscalCompliance.mode,
-         fiscalProvider: creditNoteFiscalType.startsWith('E') ? getDefaultFiscalProvider(config, activeTerminalConfig) : 'NONE',
-         taxAmount: refundSummary.taxAmount,
-         netAmount: refundSummary.netAmount,
-         affectedNCF: originalTransaction.ncf,
-         affectedInvoiceNumber: originalTransaction.displayId || originalTransaction.id,
-         ncf: creditNoteNcf,
-         ncfType: creditNoteNcf ? creditNoteFiscalType : undefined,
-         refundReason: 'Smart QR Return',
-         isTaxIncluded: originalTransaction.isTaxIncluded
-      });
-
-      const sellableConditions = new Map<string, 'SELLABLE' | 'DAMAGED'>();
-      returnItems.forEach(item => sellableConditions.set(item.cartId, 'SELLABLE'));
-
-      await persistStandaloneRefundTransaction(
-         {
-            ...refundTxn,
-            items: returnItems,
-            total: refundTotal,
-            status: 'REFUNDED',
-            refundReason: 'Smart QR Return',
-            syncStatus: 'PENDING'
-         },
-         {
-            warehouseId: defaultSalesWarehouseId || 'wh_central',
-            terminalId,
-            originalTransaction,
-            conditions: sellableConditions
-         }
-      );
-
-      if (!(Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android')) {
-         try {
-            await fetch(`/api/transactions/${originalTransaction.id}`, {
-               method: 'PUT',
-               headers: { 'Content-Type': 'application/json' },
-               body: JSON.stringify({ status: 'REFUNDED' })
-            });
-         } catch (e) {
-            console.error("Failed to update original transaction status:", e);
-         }
-      }
-
-      alert(`Devolución registrada: ${config.currencySymbol}${refundTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}\nTicket original (${originalTransaction.displayId}) marcado como REEMBOLSADO.`);
    };
 
    // --- ACTION GRID HANDLER ---
@@ -7483,15 +7424,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             currentWarehouseId={defaultSalesWarehouseId}
             currentTariffId={activeTariffId}
             currentCategory={categoryFilter}
-         />
-
-         <ReturnModal
-            isOpen={showReturnModal}
-            onClose={() => setShowReturnModal(false)}
-            invoiceId={returnInvoiceId}
-            transactions={transactions}
-            onProcessReturn={handleProcessReturn}
-            config={config}
          />
 
          {isMobile && mobileView === 'PRODUCTS' && (
@@ -9770,83 +9702,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          <BarcodeScannerModal
             isOpen={isScannerOpen}
             onClose={() => setIsScannerOpen(false)}
-            onScan={async (code) => {
-               const trace = beginPosInteraction('BARCODE_SCAN', { source: 'camera' });
-               expectInteractionRender(trace, 'POS_INTERACTION_VIEW');
-               try {
-               // 0. Try Smart QR (JSON)
-               const trimmed = code.trim();
-               if (routeScannedCoupon(trimmed)) {
-                  return { success: true, message: 'Cupón leído. Valide para aplicarlo.' };
-               }
-
-               try {
-                  if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
-                     const data = JSON.parse(trimmed);
-                     if (data.type === 'RESERVATION_NOTE' && (data.id || data.code)) {
-                        const found = (reservations || []).find(r => r.id === data.id || r.code === data.code);
-                        if (found) {
-                           handleRecoverReservation(found);
-                           setIsScannerOpen(false);
-                           return { success: true, message: 'Reserva Recuperada' };
-                        }
-                     }
-                     if (data.type === 'INVOICE_RETURN' && data.id) {
-                        setReturnInvoiceId(data.id);
-                        setShowReturnModal(true);
-                        setIsScannerOpen(false);
-                        return { success: true, message: 'Factura Identificada' };
-                     }
-                  }
-               } catch (e) {
-                  // Not a JSON or invalid
-               }
-
-               // 0.1 Try Transaction Search (Direct bypass for TCK... barcodes)
-               const txnFound = (transactions || []).find(t => t.displayId === trimmed || t.id === trimmed);
-               if (txnFound) {
-                  setReturnInvoiceId(txnFound.id);
-                  setShowReturnModal(true);
-                  setIsScannerOpen(false);
-                  return { success: true, message: 'Factura Identificada' };
-               }
-
-               // 1. Try Scale Parser
-               if (config.scaleLabelConfig?.isEnabled) {
-                  const scaleItem = parseScaleBarcode(code, config.scaleLabelConfig);
-                  if (scaleItem) {
-                     const product = (products || []).find(p => p.barcode === scaleItem.plu || p.id === scaleItem.plu);
-                     if (product) {
-                        if (!canAddItemToCart(product)) return { success: false, message: 'No disponible en almacén' };
-
-                        if (scaleItem.type === 'WEIGHT') {
-                           addToCart(product, scaleItem.value);
-                           return { success: true, message: `${product.name} (${scaleItem.value.toFixed(3)}kg)` };
-                        } else {
-                           const unitPrice = getProductPrice(product);
-                           const weight = unitPrice > 0 ? scaleItem.value / unitPrice : 1;
-                           addToCart(product, weight);
-                           return { success: true, message: `${product.name} ($${scaleItem.value})` };
-                        }
-                     }
-                  }
-               }
-
-               // 2. Normal Search
-               const product = (products || []).find(p => p.barcode === code);
-               if (product) {
-                  if (!canAddItemToCart(product)) return { success: false, message: 'No disponible en almacén' };
-
-                  // Direct add for speed
-                  addToCart(product);
-                  return { success: true, message: `${product.name} Agregado` };
-               }
-
-               return { success: false, message: 'Producto no encontrado' };
-               } finally {
-                  markInteractionStage(trace, 'HANDLER_END');
-               }
-            }}
+            onScan={async (code) => processBarcode(code, {
+               onReservationRecovered: () => setIsScannerOpen(false),
+            })}
          />
          {
             quickActionData && (

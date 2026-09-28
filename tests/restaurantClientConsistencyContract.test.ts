@@ -36,8 +36,15 @@ test('la Master permite persistir comensales y clientes creados por una terminal
   assert.match(serverSource, /catalogVersions\["customers"\]/);
   assert.match(serverSource, /\.put\("customers", getSyncCollection\("customers"\)\)/);
   assert.match(serverSource, /hasInitializedCatalogs && acknowledgedRevision < restaurantRevision\.get\(\)/);
-  assert.match(appSource, /const customerEndpoint = await resolveValidatedOperationalApiUrl\('\/api\/customers'\);\s*const controller = new AbortController\(\)/);
-  assert.match(appSource, /fetch\(customerEndpoint,/);
+  const customerMutationSource = appSource.slice(
+    appSource.indexOf('const handleAddCustomer'),
+    appSource.indexOf('const handleRepairLegacyReceivables'),
+  );
+  assert.match(customerMutationSource, /const customerEndpoint = await resolveValidatedOperationalApiUrl\('\/api\/customers'\)/);
+  assert.match(customerMutationSource, /dispatchLegacyLanMutation<any>\(\{/);
+  assert.match(customerMutationSource, /operation: 'CUSTOMER_UPSERT'/);
+  assert.match(customerMutationSource, /validateResponse:/);
+  assert.doesNotMatch(customerMutationSource, /requestJson<any>\(|fetch\(/);
   assert.match(appSource, /await queueCustomerMutation\('UPSERT', customer\)/);
   assert.match(appSource, /backgroundSyncManager\.triggerSync\(\)\.catch\(console\.error\)/);
 });

@@ -66,7 +66,23 @@ test('real table branches own selectors and hydrated POS destinations without bo
         setTableNotice: (value: unknown) => { state.tableNotice = value; },
         resolveValidatedOperationalApiUrl: async (path: string) => path,
         fetch: async () => ({ ok: true, json: async () => ({ status: 'success', orden_id: 'http-account' }) }),
+        validateLegacySuccessResponse: (data: any) => {
+          if (data?.success !== true && data?.status !== 'success') throw new Error('invalid response');
+        },
+        persistLegacyLanMutationCompletion: async () => {},
         ...overrides,
+      };
+      bindings.dispatchLegacyLanMutation = async (input: any) => {
+        const raw = await bindings.fetch(input.url, { method: input.method, body: input.body });
+        const data = await raw.json();
+        if (!raw.ok) throw new Error('HTTP_ERROR');
+        input.validateResponse(data, raw);
+        return {
+          data,
+          response: { ok: true, status: 200 },
+          correlationId: 'qa-table-open',
+          completeAfterDurableCommit: async (_reference: string, persist: () => Promise<void>) => persist(),
+        };
       };
       for (const name of ['beginTableInteraction', 'expectLocalDestination', 'openPosTable']) bindings[name] = declaration('TableMap', name, bindings);
       const open = declaration('TableMap', 'handleTableAction', bindings);

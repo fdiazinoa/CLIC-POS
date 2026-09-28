@@ -1,16 +1,10 @@
 import { useEffect, useRef } from 'react';
 import { attachGlobalBarcodeCapture, type BarcodeCaptureOptions } from '../utils/globalBarcodeCapture';
+import { extractInvoiceScanReferences, isRecognizedInvoiceScan } from '../utils/invoiceScan';
 
 export const detectTicketPattern = (code: string): string | null => {
-    if (/^TCK/i.test(code) || /^B0[1-4]\d+/i.test(code)) return code.toUpperCase();
-    if (code.includes('dgii.gov.do')) {
-        try {
-            const url = new URL(code);
-            return url.searchParams.get('ncf') || url.searchParams.get('trackId') || null;
-        } catch { return null; }
-    }
-    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}/i.test(code)) return code;
-    return null;
+    if (!isRecognizedInvoiceScan(code)) return null;
+    return extractInvoiceScanReferences(code)[0] || code.trim();
 };
 
 export const useBarcodeScanner = ({ onScan, onTicketScan, enabled = true, prefixTimeout = 100, idleTimeout = 250 }:

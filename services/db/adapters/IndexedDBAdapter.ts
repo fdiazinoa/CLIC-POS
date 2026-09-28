@@ -12,11 +12,12 @@ import {
 } from '../../sync/masterNumberRangeContract';
 
 const DB_NAME = 'clic_pos_indexeddb';
-const DB_VERSION = 23; // v23 adds durable automatic catalog edits
+const DB_VERSION = 25; // v25 adds durable completion markers for journaled LAN mutations
 const OLD_DB_KEY = 'clic_pos_db_v1';
 const OPEN_TIMEOUT_MS = 15000;
 const CURSOR_IDLE_TIMEOUT_MS = 3000;
 const CURSOR_HARD_TIMEOUT_MS = 8000;
+const STRICT_DURABLE_COLLECTIONS = new Set(['legacyMutationJournal', 'legacyMutationCompletions']);
 
 const STORES = [
     'config', 'users', 'roles', 'customers', 'warehouses',
@@ -35,7 +36,8 @@ const STORES = [
     'currencyAuditLogs', 'currencyRateSchedules',
     'invoiceReviewFlags', 'invoiceAuditEvents', 'invoiceAdjustments',
     'masterNumberRanges', 'masterNumberSyncReceipts',
-    'recoveryOriginals', 'recoveryState', 'recoveryStage', 'wallet_transactions'
+    'recoveryOriginals', 'recoveryState', 'recoveryStage', 'wallet_transactions',
+    'legacyMutationJournal', 'legacyMutationCompletions'
 ];
 
 export class IndexedDBAdapter implements DatabaseAdapter {
@@ -197,6 +199,19 @@ export class IndexedDBAdapter implements DatabaseAdapter {
         return !this.storageOnlyMode && !!this.db && this.db.objectStoreNames.contains(collectionName);
     }
 
+    private isStrictDurableCollection(collectionName: string): boolean {
+        return STRICT_DURABLE_COLLECTIONS.has(collectionName);
+    }
+
+    private assertStrictDurableStoresAvailable(): void {
+        if (!this.db || this.storageOnlyMode) throw new Error('LEGACY_MUTATION_DURABLE_STORE_UNAVAILABLE');
+        for (const collectionName of STRICT_DURABLE_COLLECTIONS) {
+            if (!this.db.objectStoreNames.contains(collectionName)) {
+                throw new Error(`LEGACY_MUTATION_DURABLE_STORE_MISSING:${collectionName}`);
+            }
+        }
+    }
+
     private fallbackKey(collectionName: string): string {
         return `${DB_NAME}__fallback__${collectionName}`;
     }
@@ -321,6 +336,7 @@ export class IndexedDBAdapter implements DatabaseAdapter {
 
     async getCollection<T>(collectionName: string, _queryParams?: Record<string, string>): Promise<T[]> {
         if (!this.db && !this.storageOnlyMode) throw new Error('DB not connected');
+        if (this.isStrictDurableCollection(collectionName)) this.assertStrictDurableStoresAvailable();
 
         return new Promise((resolve, reject) => {
             try {
@@ -359,6 +375,7 @@ export class IndexedDBAdapter implements DatabaseAdapter {
                 }
 
                 if (!this.hasStore(collectionName)) {
+                    if (this.isStrictDurableCollection(collectionName)) return reject(new Error('LEGACY_MUTATION_DURABLE_STORE_UNAVAILABLE'));
                     const docs = this.readFallbackCollection(collectionName);
                     return resolve(this.fromStoredDocuments(collectionName, docs));
                 }
@@ -374,6 +391,7 @@ export class IndexedDBAdapter implements DatabaseAdapter {
                 request.onerror = () => reject(request.error);
             } catch (e) {
                 console.error(`Error getting collection ${collectionName}:`, e);
+                if (this.isStrictDurableCollection(collectionName)) return reject(e);
                 const docs = this.readFallbackCollection(collectionName);
                 resolve(this.fromStoredDocuments(collectionName, docs));
             }
@@ -382,6 +400,7 @@ export class IndexedDBAdapter implements DatabaseAdapter {
 
     async saveCollection<T>(collectionName: string, data: T[]): Promise<void> {
         if (!this.db && !this.storageOnlyMode) throw new Error('DB not connected');
+        if (this.isStrictDurableCollection(collectionName)) this.assertStrictDurableStoresAvailable();
         const docs = this.toStoredDocuments(collectionName, data);
 
         return new Promise((resolve, reject) => {
@@ -391,6 +410,7 @@ export class IndexedDBAdapter implements DatabaseAdapter {
             }
 
             if (!this.hasStore(collectionName)) {
+                if (this.isStrictDurableCollection(collectionName)) return reject(new Error('LEGACY_MUTATION_DURABLE_STORE_UNAVAILABLE'));
                 this.writeFallbackCollection(collectionName, docs);
                 return resolve();
             }
@@ -402,7 +422,11 @@ export class IndexedDBAdapter implements DatabaseAdapter {
             docs.forEach(doc => store.put(doc));
 
             transaction.oncomplete = () => resolve();
+            if (this.isStrictDurableCollection(collectionName)) {
+                transaction.onabort = () => reject(transaction.error || new Error('LEGACY_MUTATION_DURABLE_WRITE_ABORTED'));
+            }
             transaction.onerror = () => {
+                if (this.isStrictDurableCollection(collectionName)) return reject(transaction.error || new Error('LEGACY_MUTATION_DURABLE_WRITE_FAILED'));
                 console.warn(`[IndexedDBAdapter] saveCollection fallback for ${collectionName}:`, transaction.error);
                 try {
                     this.writeFallbackCollection(collectionName, docs);
@@ -416,6 +440,7 @@ export class IndexedDBAdapter implements DatabaseAdapter {
 
     async saveDocument<T extends { id: string }>(collectionName: string, doc: T): Promise<void> {
         if (!this.db && !this.storageOnlyMode) throw new Error('DB not connected');
+        if (this.isStrictDurableCollection(collectionName)) this.assertStrictDurableStoresAvailable();
 
         return new Promise((resolve, reject) => {
             // Use localStorage for heavy collections to match getCollection behavior and avoid lock contention
@@ -429,6 +454,7 @@ export class IndexedDBAdapter implements DatabaseAdapter {
             }
 
             if (!this.hasStore(collectionName)) {
+                if (this.isStrictDurableCollection(collectionName)) return reject(new Error('LEGACY_MUTATION_DURABLE_STORE_UNAVAILABLE'));
                 this.upsertFallbackDocument(collectionName, doc);
                 return resolve();
             }
@@ -439,7 +465,11 @@ export class IndexedDBAdapter implements DatabaseAdapter {
                 store.put(doc);
 
                 transaction.oncomplete = () => resolve();
+                if (this.isStrictDurableCollection(collectionName)) {
+                    transaction.onabort = () => reject(transaction.error || new Error('LEGACY_MUTATION_DURABLE_WRITE_ABORTED'));
+                }
                 transaction.onerror = () => {
+                    if (this.isStrictDurableCollection(collectionName)) return reject(transaction.error || new Error('LEGACY_MUTATION_DURABLE_WRITE_FAILED'));
                     console.warn(`[IndexedDBAdapter] saveDocument fallback for ${collectionName}:`, transaction.error);
                     try {
                         this.upsertFallbackDocument(collectionName, doc);
@@ -450,6 +480,7 @@ export class IndexedDBAdapter implements DatabaseAdapter {
                 };
             } catch (error) {
                 console.warn(`[IndexedDBAdapter] saveDocument immediate fallback for ${collectionName}:`, error);
+                if (this.isStrictDurableCollection(collectionName)) return reject(error);
                 try {
                     this.upsertFallbackDocument(collectionName, doc);
                     resolve();
@@ -744,6 +775,7 @@ export class IndexedDBAdapter implements DatabaseAdapter {
 
     async deleteDocument(collectionName: string, id: string): Promise<void> {
         if (!this.db && !this.storageOnlyMode) throw new Error('DB not connected');
+        if (this.isStrictDurableCollection(collectionName)) this.assertStrictDurableStoresAvailable();
 
         return new Promise((resolve, reject) => {
             if (this.isFallbackOnlyCollection(collectionName)) {
@@ -753,6 +785,7 @@ export class IndexedDBAdapter implements DatabaseAdapter {
             }
 
             if (!this.hasStore(collectionName)) {
+                if (this.isStrictDurableCollection(collectionName)) return reject(new Error('LEGACY_MUTATION_DURABLE_STORE_UNAVAILABLE'));
                 const docs = this.readFallbackCollection(collectionName).filter((doc: any) => doc?.id !== id);
                 this.writeFallbackCollection(collectionName, docs);
                 return resolve();

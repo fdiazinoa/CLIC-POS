@@ -153,7 +153,11 @@ test('client KDS dispatch self-heals missing routing from the Master', () => {
   );
   assert.match(adapterSource, /pullLinkedMasterSnapshot\(\s*collection: string,/);
   assert.match(adapterSource, /\/api\/sync\/collections\/\$\{collection\}\/data/);
-  assert.match(posSource, /diagnosticContext: \{ operation: 'KDS_POST' \}/);
+  for (const operation of ['KDS_ORDER_UPDATE_RETRY', 'KDS_ORDER_DISPATCH_RETRY', 'KDS_ORDER_UPDATE', 'KDS_ORDER_DISPATCH', 'KDS_ITEM_RETURN']) {
+    assert.match(posSource, new RegExp(`['"]${operation}['"]`));
+  }
+  assert.match(posSource, /validateResponse: validateLegacySuccessResponse/);
+  assert.doesNotMatch(posSource, /postJsonWithTimeout|requestJson<any>/);
   assert.match(posSource, /routingCatalogs = await readProductionRoutingCatalogs\(\)/);
 });
 

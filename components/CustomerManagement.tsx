@@ -34,6 +34,12 @@ import {
    resolveCurrencySymbol,
 } from '../utils/paymentSettlement';
 import { collapseEmptyPosCustomerShadows } from '../services/customers/customerPresentation';
+import { resolveValidatedOperationalApiUrl } from '../utils/masterOperationalApi';
+import {
+   dispatchLegacyLanMutation,
+   persistLegacyLanMutationCompletion,
+   validateLegacySuccessResponse,
+} from '../services/sync/LegacyLanMutationTransport';
 
 interface CustomerManagementProps {
    customers: Customer[];
@@ -894,13 +900,24 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
    const handleSendWalletEmail = async () => {
       if (!selectedCustomer) return;
       try {
-         const response = await fetch('/api/wallet/send-welcome-email', {
+         const response = await dispatchLegacyLanMutation<any>({
+            url: await resolveValidatedOperationalApiUrl('/api/wallet/send-welcome-email'),
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ customerId: selectedCustomer.id })
+            body: JSON.stringify({ customerId: selectedCustomer.id }),
+            operation: 'WALLET_WELCOME_EMAIL',
+            validateResponse: validateLegacySuccessResponse,
          });
-         const data = await response.json();
+         const data = response.data;
          if (data.success) {
+            await response.completeAfterDurableCommit(
+               `CustomerManagement:welcome-email:${selectedCustomer.id}`,
+               () => persistLegacyLanMutationCompletion(
+                  response.correlationId,
+                  `CustomerManagement:welcome-email:${selectedCustomer.id}`,
+                  response.response.status,
+               ),
+            );
             alert('Email enviado correctamente');
          } else {
             alert('Error al enviar email: ' + data.message);

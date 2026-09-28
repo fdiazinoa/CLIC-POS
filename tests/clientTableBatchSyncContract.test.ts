@@ -81,10 +81,10 @@ test('la cola pendiente solo se limpia después de una confirmación exitosa de 
   assert.match(updateHandler, /if \(!changedTicketId\) writeCriticalCollectionsMirror\(validTickets, cashMovements\);\s*setParkedTickets\(validTickets\);/);
   assert.match(updateHandler, /if \(options\.deferRemote\) \{\s*window\.setTimeout\(\(\) => void persistLocal\(\), 0\);\s*return;/);
   assert.match(updateHandler, /requestAnimationFrame\(\(\) => window\.setTimeout\(resolve, 0\)\)/);
-  assert.match(updateHandler, /if \(!response\.ok \|\| result\?\.success === false\)/);
+  assert.match(updateHandler, /if \(!response\.response\.ok \|\| result\?\.success === false\)/);
   assert.match(updateHandler, /await clearPendingClientTableSync\(\)/);
   assert.ok(
     updateHandler.indexOf('await clearPendingClientTableSync()')
-      > updateHandler.indexOf('if (!response.ok || result?.success === false)'),
+      > updateHandler.indexOf('if (!response.response.ok || result?.success === false)'),
   );
 });

@@ -97,7 +97,7 @@ const persistLightweightSyncNotice = (payload: unknown, collections: string[]) =
     }));
 };
 
-class RealtimeNotificationService {
+export class RealtimeNotificationService {
     private channels: RealtimeChannel[] = [];
     private storeId: string | null = null;
     private terminalId: string | null = null;
@@ -106,6 +106,11 @@ class RealtimeNotificationService {
     private state: RealtimeConnectionState = 'DISABLED';
     private stateListeners = new Set<(state: RealtimeConnectionState) => void>();
     private hasSubscribed = false;
+    private connectionGeneration = 0;
+
+    constructor(
+        private readonly authorizePrivateRealtime: typeof ensurePrivateRealtimeAuthorization = ensurePrivateRealtimeAuthorization,
+    ) {}
 
     getState(): RealtimeConnectionState {
         return this.state;
@@ -167,7 +172,10 @@ class RealtimeNotificationService {
             return this.initializePromise;
         }
 
-        const operation = this.connect(masterUrl, binding.tenantId || '', storeId, terminalId);
+        const generation = ++this.connectionGeneration;
+        await this.disconnectChannels('CONNECTING');
+        if (generation !== this.connectionGeneration) return;
+        const operation = this.connect(masterUrl, binding.tenantId || '', storeId, terminalId, generation);
         this.initializeKey = key;
         this.initializePromise = operation;
         try {
@@ -180,16 +188,16 @@ class RealtimeNotificationService {
         }
     }
 
-    private async connect(masterUrl: string, tenantId: string, storeId: string, terminalId: string) {
-        await this.disconnect('CONNECTING');
+    private async connect(masterUrl: string, tenantId: string, storeId: string, terminalId: string, generation: number) {
         this.storeId = storeId;
         this.terminalId = terminalId;
         this.setState('CONNECTING');
-        const authorization = await ensurePrivateRealtimeAuthorization({
+        const authorization = await this.authorizePrivateRealtime({
             tenantId,
             storeId,
             terminalId,
         }, masterUrl);
+        if (generation !== this.connectionGeneration) return;
         const channelClient = authorization.client;
         const terminalTopic = buildPrivateSyncTopic(authorization.scope);
         const channelNames = [
@@ -272,6 +280,7 @@ class RealtimeNotificationService {
         });
 
         channel.subscribe(async (status) => {
+            if (generation !== this.connectionGeneration) return;
             if (status === 'SUBSCRIBED') {
                 subscribedChannels.add(channelNames[channelIndex]);
                 console.log('📡 RealtimeNotificationService: Subscribed to private sync scope.');
@@ -302,10 +311,21 @@ class RealtimeNotificationService {
         });
         });
 
+        if (generation !== this.connectionGeneration) {
+            await Promise.all(channels.map(channel => channel.unsubscribe()));
+            return;
+        }
         this.channels = channels;
     }
 
     async disconnect(nextState: RealtimeConnectionState = 'DISCONNECTED') {
+        this.connectionGeneration += 1;
+        this.initializePromise = null;
+        this.initializeKey = null;
+        await this.disconnectChannels(nextState);
+    }
+
+    private async disconnectChannels(nextState: RealtimeConnectionState) {
         if (this.channels.length > 0) {
             const existing = this.channels;
             this.channels = [];

@@ -49,9 +49,12 @@ async function runBoot(isErpSetupMode: boolean, fail = false) {
   const calls: string[] = []; const initial = { terminals: [] }; const config = { terminals: [] };
   const users: unknown[] = []; // An empty roster must not cause a second query or a fallback to old users.
   const execute = runInNewContext(ts.transpile(`(async () => {${block}\nreturn { users: startupErpUsers, config: finalConfig };})`, { target: ts.ScriptTarget.ES2022 }), {
-    isErpSetupMode, finalConfig: initial, currentConfig: initial, effectivePairedTerminal: { id: 't1' },
+    isErpSetupMode, shouldFetchConfigFromMaster: false, isClientTerminalMode: () => false,
+    finalConfig: initial, currentConfig: initial, effectivePairedTerminal: { id: 't1', config: { isPrimaryNode: true } },
     pairedTerminal: { id: 't1' }, storedDeviceId: 'd1', console: { warn() {} }, setConfig() {},
+    markBootStage() {}, freezePhase() {},
     syncManager: {
+      initialize: async () => {},
       refreshErpStartupSecurity: async () => { calls.push('security'); if (fail) throw new Error('offline'); return { config, users }; },
       refreshTerminalResolvedConfig: async () => { calls.push('general'); return config; },
     },

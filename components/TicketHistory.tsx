@@ -1,5 +1,5 @@
 
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
    ArrowLeft, Search, Calendar, ChevronDown, ChevronUp,
    Printer, RotateCcw, AlertCircle, Check, X, FileText,
@@ -72,6 +72,8 @@ import {
    createInvoiceReview,
    recordInvoiceAuditEvent,
 } from '../services/invoices/InvoiceReviewService';
+import { resolveInvoiceScan, resolveInvoiceSearchReference, transactionInvoiceScanAliases } from '../utils/invoiceScan';
+import { completeLegacyMutationAfterDurableAck } from '../services/sync/LegacyMutationJournal';
 
 interface TicketHistoryProps {
    transactions: Transaction[];
@@ -83,6 +85,7 @@ interface TicketHistoryProps {
    onClose: () => void;
    activeTerminalId: string;
    initialSelectedId?: string | null; // NEW: For Smart Scan
+   onInitialSelectionHandled?: () => void;
    onRetryFiscalDocument?: (transaction: Transaction) => Promise<string>;
    customers?: Customer[];
    onCorrectFiscalDocument?: (transaction: Transaction, correction: FiscalDocumentCorrectionInput) => Promise<Transaction>;
@@ -1449,7 +1452,7 @@ const TicketDetailDrawer: React.FC<{
    );
 };
 
-const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, currentUser, onUpdateConfig, users, roles, onClose, activeTerminalId, onRefundTransaction, initialSelectedId, onRetryFiscalDocument, customers = [], onCorrectFiscalDocument }) => {
+const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, currentUser, onUpdateConfig, users, roles, onClose, activeTerminalId, onRefundTransaction, initialSelectedId, onInitialSelectionHandled, onRetryFiscalDocument, customers = [], onCorrectFiscalDocument }) => {
    const [searchTerm, setSearchTerm] = useState('');
    const [expandedId, setExpandedId] = useState<string | null>(null);
    const [showFilters, setShowFilters] = useState(false);
@@ -1461,14 +1464,6 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
 
    // ... (keep loadHistory useEffect)
 
-   // Handle Initial Selection (Smart Scan)
-   useEffect(() => {
-      if (initialSelectedId) {
-         setSearchTerm(initialSelectedId); // Filter by ID
-         setExpandedId(initialSelectedId); // Auto-expand details
-         setSelectedTxId(initialSelectedId);
-      }
-   }, [initialSelectedId]);
    const [filterTerminal, setFilterTerminal] = useState('');
    const [filterCashier, setFilterCashier] = useState('');
    const [filterCustomer, setFilterCustomer] = useState('');
@@ -1486,6 +1481,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
    const [giftReceiptTx, setGiftReceiptTx] = useState<Transaction | null>(null);
 
    const [historyTransactions, setHistoryTransactions] = useState<Transaction[]>([]);
+   const [historyLoaded, setHistoryLoaded] = useState(false);
    const [zReportMap, setZReportMap] = useState<Map<string, string>>(new Map()); // Map zReportId -> Sequence
    const [zReports, setZReports] = useState<ZReport[]>([]);
    const [selectedTxId, setSelectedTxId] = useState<string | null>(null);
@@ -1499,6 +1495,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
    const [erpSearchLoading, setErpSearchLoading] = useState(false);
    const [erpSearchError, setErpSearchError] = useState<string | null>(null);
    const [erpMatches, setErpMatches] = useState<ErpRefundSourceMatch[]>([]);
+   const handledInitialSelectionRef = useRef<string | null>(null);
    const allKnownTransactions = useMemo(
       () => Array.from(new Map([...historyTransactions, ...transactions].map(transaction => [transaction.id, transaction])).values()),
       [historyTransactions, transactions]
@@ -1853,22 +1850,40 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
             }
          } catch (e) {
             console.error("Failed to load history:", e);
+         } finally {
+            setHistoryLoaded(true);
          }
       };
       loadHistory();
    }, []);
 
-   // Handle Initial Selection (Smart Scan)
+   // Resolve after archived history is ready so business references never get
+   // mistaken for the primary Transaction.id used by the drawer/refund flow.
    useEffect(() => {
-      if (initialSelectedId) {
-         setSearchTerm(initialSelectedId); // Filter by ID
-         // Attempt to find it immediately if loaded
-         // Note: We might need to wait for history to load, but filtering by ID usually works 
-         // as filteredTransactions recomputes.
-         setExpandedId(initialSelectedId); // Auto-expand details if we had inline details
-         // For Drawer:
-         setSelectedTxId(initialSelectedId);
+      const scanValue = initialSelectedId?.trim();
+      if (!scanValue || !historyLoaded || handledInitialSelectionRef.current === scanValue) return;
+      handledInitialSelectionRef.current = scanValue;
+      const resolution = resolveInvoiceScan(scanValue, allKnownTransactions);
+      const normalizedReference = resolveInvoiceSearchReference(scanValue);
+
+      if (resolution.status === 'MATCH') {
+         setSearchTerm(resolution.transaction.displayId || resolution.transaction.id);
+         setExpandedId(resolution.transactionId);
+         setSelectedTxId(resolution.transactionId);
+         setErpSearchError(null);
+      } else {
+         setSearchTerm(normalizedReference);
+         setExpandedId(null);
+         setSelectedTxId(null);
+         setErpSearchError(resolution.status === 'AMBIGUOUS'
+            ? 'El QR coincide con más de una factura. Selecciona la factura correcta.'
+            : 'No se encontró la factura local. Puedes consultarla en ERP sin alterar la venta actual.');
       }
+      onInitialSelectionHandled?.();
+   }, [allKnownTransactions, historyLoaded, initialSelectedId, onInitialSelectionHandled]);
+
+   useEffect(() => {
+      if (!initialSelectedId) handledInitialSelectionRef.current = null;
    }, [initialSelectedId]);
 
    // --- SMART SEARCH LOGIC ---
@@ -1966,6 +1981,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
                (t.userName || '').toLowerCase().includes(lowerTerm) ||
                (t.id || '').toLowerCase().includes(lowerTerm) ||
                t.displayId?.toLowerCase().includes(lowerTerm) ||
+               transactionInvoiceScanAliases(t).some(alias => alias.toLowerCase().includes(lowerTerm)) ||
                t.total.toString().includes(lowerTerm)
             );
          }
@@ -2247,6 +2263,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
       requestMode: RefundRequestMode = 'STANDARD'
    ) => {
       let refundOptions: RefundProcessingOptions | undefined;
+      let refundPreparationResult: unknown;
 
       if (originalTx.erpRefundSource && requestMode === 'AZUL_GATEWAY_REFUND') {
          alert('Las devoluciones de tarjeta integradas todavía no están disponibles para facturas consultadas en ERP.');
@@ -2530,6 +2547,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
                   })),
                },
             );
+            refundPreparationResult = preparationPayload;
             const prepared = normalizeErpRefundPreparation(preparationPayload, {
                commandId,
                sourceId: originalTx.erpRefundSource.sourceId,
@@ -2548,7 +2566,11 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
       }
 
       try {
-         await onRefundTransaction(originalTx, refundItems, conditions, reason || 'Devolución', refundOptions);
+         const persistedRefund = await onRefundTransaction(originalTx, refundItems, conditions, reason || 'Devolución', refundOptions);
+         await completeLegacyMutationAfterDurableAck(
+            refundPreparationResult,
+            `TicketHistory:refund:${persistedRefund?.id || originalTx.id}`,
+         );
          setIsRefundModalOpen(false);
          setRefundTx(null);
          setRefundRequestMode('STANDARD');

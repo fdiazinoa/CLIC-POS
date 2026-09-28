@@ -336,6 +336,22 @@ import {
   type SyncProfilePersistenceDiagnostic,
   type SyncProfileSource
 } from './services/sync/SyncProfile';
+import {
+  resolveClientMasterAuthority,
+  runJournalGuardedMasterDiscovery,
+  runClientMasterStartup,
+  type ClientMasterAuthority,
+} from './utils/operationalMasterConfig';
+import { persistValidatedClientMasterTargetAsync, resolveClientMasterTerminalId } from './utils/clientMasterBinding';
+import { completeLegacyMutationAfterDurableAck, legacyMutationJournal } from './services/sync/LegacyMutationJournal';
+import {
+  dispatchLegacyLanMutation,
+  persistLegacyLanMutationCompletion,
+  validateLegacyEntityResponse,
+  validateLegacyResponseObject,
+  validateLegacySuccessResponse,
+  validateLegacyTableStateResponse,
+} from './services/sync/LegacyLanMutationTransport';
 import { markSyncDeviceTokenInvalid, persistSyncDeviceToken } from './services/sync/deviceToken';
 import {
   extractErpRegisterAuth,
@@ -2675,19 +2691,29 @@ const AppContent: React.FC = () => {
     console.log(`Attempting to sync to: ${serverUrl}`);
 
     try {
-      const res = await fetch(serverUrl, {
+      const res = await dispatchLegacyLanMutation<any>({
+        url: serverUrl,
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(nextConfig)
+        body: JSON.stringify(nextConfig),
+        operation: 'CONFIG_SYNC',
+        validateResponse: data => {
+          validateLegacyResponseObject(data);
+          if (!Array.isArray(data.terminals)) throw new Error('CONFIG_TERMINALS_ACK_REQUIRED');
+        },
       });
 
-      if (res.ok) {
+      if (res.response.ok) {
+        await res.completeAfterDurableCommit(
+          'App:config-sync',
+          () => persistLegacyLanMutationCompletion(res.correlationId, 'App:config-sync', res.response.status),
+        );
         console.log('Sync success: Config pushed to server.');
       } else {
-        const errorText = await res.text();
-        console.error('Sync failed:', res.status, res.statusText, errorText);
+        const errorText = await res.response.text();
+        console.error('Sync failed:', res.response.status, res.response.statusText, errorText);
         if (shouldSurfaceSyncErrors) {
-          alert(`Error al sincronizar: El servidor respondió ${res.status}\nDetalle: ${errorText}`);
+          alert(`Error al sincronizar: El servidor respondió ${res.response.status}\nDetalle: ${errorText}`);
         }
       }
     } catch (e) {
@@ -3703,10 +3729,9 @@ const AppContent: React.FC = () => {
       }
     };
 
-    // Clients use the Master over LAN. Keep endpoint publication, but do not
-    // start ERP heartbeat, outbox, manifest, or config polling on them.
+    // Clients consume the Master endpoint; they must never publish their own
+    // LAN address as the tenant Master.
     if (isPosMasterClientProfile()) {
-      void publishEndpoint();
       return () => { disposed = true; };
     }
 
@@ -4546,18 +4571,27 @@ const AppContent: React.FC = () => {
         if (floorPlanSelection?.reason === 'PRESERVE_MASTER_DESIGN' && !masterFloorPlanRestoreInFlightRef.current) {
           masterFloorPlanRestoreInFlightRef.current = true;
           try {
-            const response = await fetch(await resolveValidatedOperationalApiUrl('/api/mesas/layout'), {
+            const response = await dispatchLegacyLanMutation<any>({
+              url: await resolveValidatedOperationalApiUrl('/api/mesas/layout'),
               method: 'PUT',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 rooms: floorPlanSelection.rooms,
                 tables: floorPlanSelection.tables,
               }),
+              operation: 'MASTER_LAYOUT_RESTORE',
+              validateResponse: data => {
+                validateLegacySuccessResponse(data);
+                if (!Array.isArray(data.rooms) || !Array.isArray(data.tables)) throw new Error('LAYOUT_ACK_REQUIRED');
+              },
             });
-            const result = await response.json().catch(() => null);
-            if (!response.ok || result?.success === false) {
-              throw new Error(result?.message || `HTTP ${response.status}`);
+            const result = response.data;
+            if (!response.response.ok || result?.success === false) {
+              throw new Error(result?.message || `HTTP ${response.response.status}`);
             }
+            await response.completeAfterDurableCommit('App:master-layout-restore', () =>
+              persistLegacyLanMutationCompletion(response.correlationId, 'App:master-layout-restore', response.response.status)
+            );
             const restoredRevision = Number(result?.revision || revision);
             masterRestaurantRevisionRef.current = Math.max(revision, restoredRevision);
             console.warn('[MASTER_LAN] Restored designed floor plan after rejecting ERP seed tables', {
@@ -5413,56 +5447,51 @@ const AppContent: React.FC = () => {
   clientRoutingContextRef.current.getContract = getClientMasterContract;
   clientRoutingContextRef.current.getTerminal = getCurrentTerminal;
 
-  const discoverEligibleClientMasterEndpoint = async () => {
-    if (clientLocalIpsRef.current === null) {
-      const bridge = (window as any).ClicPOSNativePrinter;
-      try {
-        const status = typeof bridge?.getMasterServerStatus === 'function'
-          ? parseNativeBridgeJson(await Promise.resolve(bridge.getMasterServerStatus({ port: 3001 })))
-          : {};
-        clientLocalIpsRef.current = [...new Set([status?.localIp, ...(status?.localIps || [])].filter(Boolean))] as string[];
-      } catch { clientLocalIpsRef.current = []; }
-    }
-    const candidates: Array<{ host: string; source: 'STORED' | 'CLOUD' | 'LAN' }> = [];
-    const attempted = new Set<string>();
-    const appendCandidate = (value: string | null | undefined, source: 'STORED' | 'CLOUD' | 'LAN') => {
-      const host = normalizeMasterHost(value || '');
-      if (host && !candidates.some(candidate => candidate.host === host)) candidates.push({ host, source });
-    };
-    appendCandidate(localStorage.getItem('pos_master_ip'), 'STORED');
-    appendCandidate(localStorage.getItem('CLIC_POS_MASTER_URL'), 'STORED');
-    let failure: unknown = new Error('MASTER_UNAVAILABLE: no se encontró la Caja Master vinculada.');
-    const tryCandidates = async () => {
-      for (const candidate of candidates) {
-        for (const baseUrl of buildMasterUrlCandidates(candidate.host)) {
-          if (attempted.has(baseUrl)) continue;
-          attempted.add(baseUrl);
-          const controller = new AbortController();
-          const timeoutId = window.setTimeout(() => controller.abort(), 2500);
-          try {
-            const response = await fetch(`${baseUrl}/api/config`, { signal: controller.signal });
-            if (!response.ok) throw new Error(`MASTER_CONFIG_HTTP_${response.status}`);
-            const remoteConfig = await response.json();
-            validateOperationalMasterEndpoint(baseUrl, remoteConfig, getClientMasterContract());
-            localStorage.setItem('CLIC_POS_MASTER_DISCOVERY', candidate.source);
-            return [{ baseUrl, config: remoteConfig }];
-          } catch (error) { failure = error; }
-          finally { window.clearTimeout(timeoutId); }
-        }
+  const hydrateClientLocalIps = async (): Promise<string[]> => {
+    const bridge = (window as any).ClicPOSNativePrinter;
+    const addresses: unknown[] = [];
+    try {
+      if (typeof bridge?.getMasterServerStatus === 'function') {
+        const status = parseNativeBridgeJson(await Promise.resolve(bridge.getMasterServerStatus({ port: 3001 })));
+        addresses.push(status?.localIp, ...(status?.localIps || []));
       }
-      return null;
-    };
-    const known = await tryCandidates();
-    if (known) return known;
-    const cloudEndpoint = await resolveMasterEndpointFromCloud().catch(() => null);
-    appendCandidate(cloudEndpoint?.localIp || cloudEndpoint?.endpointUrl, 'CLOUD');
-    const cloud = await tryCandidates();
-    if (cloud) return cloud;
-    const lanCandidates = await discoverLanMasterCandidates({ timeoutMs: 2500 });
-    lanCandidates.forEach(candidate => appendCandidate(candidate.host, 'LAN'));
-    const lan = await tryCandidates();
-    if (lan) return lan;
-    throw failure;
+      if (typeof bridge?.getDeviceInfo === 'function') {
+        const deviceInfo = parseNativeBridgeJson(await Promise.resolve(bridge.getDeviceInfo()));
+        addresses.push(deviceInfo?.localIp, ...(deviceInfo?.localIps || []));
+      }
+    } catch (error) {
+      console.warn('[MASTER_LOCAL_IDENTITY_UNAVAILABLE]', error);
+    }
+    const localIps = [...new Set(addresses
+      .map(value => normalizeMasterHost(String(value || '')))
+      .filter(host => host && host !== '0.0.0.0' && host !== '::'))];
+    clientLocalIpsRef.current = localIps;
+    return localIps;
+  };
+  const discoverEligibleClientMasterEndpoint = async () => {
+    legacyMutationJournal.assertRemoteAuthorityAllowed();
+    const localIps = clientLocalIpsRef.current || await hydrateClientLocalIps();
+    if (localIps.length === 0) throw new Error('MASTER_LOCAL_IDENTITY_UNAVAILABLE');
+    const authority = await resolveClientMasterAuthority<Record<string, any>>({
+      storedHosts: [localStorage.getItem('pos_master_ip'), localStorage.getItem('CLIC_POS_MASTER_URL')],
+      resolveCloudHost: async () => {
+        const endpoint = await runJournalGuardedMasterDiscovery(
+          () => legacyMutationJournal.assertRemoteAuthorityAllowed(),
+          () => resolveMasterEndpointFromCloud(undefined, { persist: false }),
+        ).catch(() => null);
+        return endpoint?.localIp || endpoint?.endpointUrl;
+      },
+      discoverLanHosts: async () => (await discoverLanMasterCandidates({ timeoutMs: 2500, localIps }))
+        .map(candidate => candidate.host),
+      rejectHosts: localIps,
+      timeoutMs: 8_000,
+      validate: (baseUrl, payload) => {
+        validateOperationalMasterEndpoint(baseUrl, payload, getClientMasterContract());
+      },
+    });
+    if (authority.status === 'UNAVAILABLE') throw new Error('MASTER_UNAVAILABLE: no se encontró la Caja Master vinculada.');
+    localStorage.setItem('CLIC_POS_MASTER_DISCOVERY', authority.source);
+    return [{ baseUrl: authority.baseUrl, config: authority.config, source: authority.source }];
   };
   clientRoutingContextRef.current.discover = discoverEligibleClientMasterEndpoint;
   if (!clientOperationalResolverRef.current) {
@@ -5470,10 +5499,7 @@ const AppContent: React.FC = () => {
       getContract: () => clientRoutingContextRef.current.getContract(),
       isReady: () => clientRoutingContextRef.current.ready,
       discover: () => clientRoutingContextRef.current.discover(),
-      mirror: baseUrl => {
-        localStorage.setItem('pos_master_ip', new URL(baseUrl).hostname);
-        localStorage.setItem('CLIC_POS_MASTER_URL', baseUrl);
-      },
+      mirror: baseUrl => persistValidatedClientMasterTargetAsync(baseUrl),
     });
   }
   useLayoutEffect(() => {
@@ -5810,21 +5836,25 @@ const AppContent: React.FC = () => {
     const endpoint = action === 'acquire'
       ? '/api/mesas/bloquear'
       : '/api/mesas/desbloquear';
-    const response = await requestJson<any>({
+    const response = await dispatchLegacyLanMutation<any>({
       url: await resolveValidatedOperationalApiUrl(endpoint),
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
       timeoutMs: 5000,
-      diagnosticContext: { operation: `TABLE_LOCK_${action.toUpperCase()}` },
+      operation: `TABLE_LOCK_${action.toUpperCase()}`,
+      validateResponse: validateLegacySuccessResponse,
     });
     const result = response.data;
-    if (!response.ok || result?.success === false) {
-      const error = new Error(result?.message || `Master respondió HTTP ${response.status}`);
+    if (!response.response.ok || result?.success === false) {
+      const error = new Error(result?.message || `Master respondió HTTP ${response.response.status}`);
       (error as any).code = result?.code;
       (error as any).lock = result?.lock;
       throw error;
     }
+    await response.completeAfterDurableCommit(`App:table-lock:${action}:${String(payload.tableId || '')}`, () =>
+      persistLegacyLanMutationCompletion(response.correlationId, `App:table-lock:${action}`, response.response.status)
+    );
     return result;
   }, [getCurrentTerminal]);
 
@@ -6056,7 +6086,7 @@ const AppContent: React.FC = () => {
     };
 
     try {
-      const res = await requestJson<any>({
+      const res = await dispatchLegacyLanMutation<any>({
         url: await resolveValidatedOperationalApiUrl('/api/mesas/abrir'),
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -6066,11 +6096,18 @@ const AppContent: React.FC = () => {
           waiterName: currentUser.name
         }),
         timeoutMs: 5000,
-        diagnosticContext: { operation: 'TABLE_OPEN' },
+        operation: 'TABLE_OPEN',
+        validateResponse: data => {
+          validateLegacyResponseObject(data);
+          if (String(data.status || '').toLowerCase() !== 'success') throw new Error('TABLE_OPEN_ACK_REQUIRED');
+        },
       });
 
       const data = res.data;
-      if (res.ok && data.status === 'success') {
+      if (res.response.ok && data.status === 'success') {
+        await res.completeAfterDurableCommit(`App:table-open:${table.id}`, () =>
+          persistLegacyLanMutationCompletion(res.correlationId, `App:table-open:${table.id}`, res.response.status)
+        );
         markClientMasterOnline();
         const responseRevision = Number(data?.revision || 0);
         if (Number.isFinite(responseRevision) && responseRevision > masterRestaurantRevisionRef.current) {
@@ -6165,7 +6202,9 @@ const AppContent: React.FC = () => {
 
       window.dispatchEvent(new CustomEvent('barcodeScanned', { detail: { barcode } }));
     },
-    onTicketScan: currentView === 'POS' || currentView === 'HISTORY'
+    // Venta owns product/scale/coupon precedence. History can consume invoice
+    // patterns directly because no product routing is active there.
+    onTicketScan: currentView === 'HISTORY'
       ? (ticketId) => {
         console.log(`🎟️ Smart Scan: Opening Ticket History for ${ticketId}`);
         setScanTargetTicketId(ticketId);
@@ -6536,6 +6575,11 @@ const AppContent: React.FC = () => {
         console.log('✅ db.init() returned:', data ? Object.keys(data) : 'null');
         markBootStage('LOCAL_DATABASE_READY');
         freezePhase('LOCAL_DATA_READY');
+        try {
+          await legacyMutationJournal.initializeForStartup();
+        } catch (journalError) {
+          console.error('[LEGACY_MUTATION_JOURNAL_BOOT_BLOCKED]', journalError);
+        }
 
         if (isSyncFeatureEnabled('sqlite_outbox_v2')) {
           if (!durableOutboxRepository.isSupported()) {
@@ -6787,11 +6831,18 @@ const AppContent: React.FC = () => {
         );
 
         if (shouldResolveMasterFromCloud) {
-          const cloudEndpoint = await resolveMasterEndpointFromCloud();
-          const discoveredMasterIp = normalizeMasterHost(cloudEndpoint?.localIp || cloudEndpoint?.endpointUrl || '');
-          if (discoveredMasterIp) {
-            masterIp = discoveredMasterIp;
-            console.log(`[BOOT] Master resuelto desde Cloud-Admin: ${discoveredMasterIp}`);
+          try {
+            const cloudEndpoint = await runJournalGuardedMasterDiscovery(
+              () => legacyMutationJournal.assertRemoteAuthorityAllowed(),
+              () => resolveMasterEndpointFromCloud(undefined, { persist: false }),
+            );
+            const discoveredMasterIp = normalizeMasterHost(cloudEndpoint?.localIp || cloudEndpoint?.endpointUrl || '');
+            if (discoveredMasterIp) {
+              masterIp = discoveredMasterIp;
+              console.log(`[BOOT] Master resuelto desde Cloud-Admin: ${discoveredMasterIp}`);
+            }
+          } catch (journalOrDiscoveryError) {
+            console.warn('[BOOT] Remote Master discovery skipped:', journalOrDiscoveryError);
           }
         }
 
@@ -6857,59 +6908,6 @@ const AppContent: React.FC = () => {
           console.warn('⚠️ Stale pos_master_ip detected on MASTER terminal. Clearing slave pointer.');
           localStorage.removeItem('pos_master_ip');
           localStorage.removeItem('CLIC_POS_MASTER_URL');
-        }
-
-        if (shouldFetchConfigFromMaster) {
-          console.log("🔄 Slave Mode: Fetching latest config from Master...");
-          const fetchConfigFromMaster = async (host: string) => {
-            for (const baseUrl of buildMasterUrlCandidates(host)) {
-              const targetUrl = `${baseUrl}/api/config`;
-              const controller = new AbortController();
-              const timeoutId = setTimeout(() => controller.abort(), 3000);
-
-              try {
-                const res = await fetch(targetUrl, { signal: controller.signal });
-                if (!res.ok) continue;
-
-                const payload = await res.json();
-                validateOperationalMasterEndpoint(baseUrl, payload, getClientMasterContract(localPairedTerminal, currentConfig));
-                localStorage.setItem('CLIC_POS_MASTER_URL', baseUrl);
-                localStorage.setItem('pos_master_ip', new URL(baseUrl).hostname);
-                return payload;
-              } finally {
-                clearTimeout(timeoutId);
-              }
-            }
-
-            return null;
-          };
-
-          try {
-            let fetchedConfig = masterIp ? await fetchConfigFromMaster(masterIp) : null;
-
-            if (!fetchedConfig) {
-              const cloudEndpoint = await resolveMasterEndpointFromCloud();
-              const refreshedMasterIp = normalizeMasterHost(cloudEndpoint?.localIp || cloudEndpoint?.endpointUrl || '');
-
-              if (refreshedMasterIp && refreshedMasterIp !== masterIp) {
-                console.warn(`⚠️ Master IP actualizada desde cloud: ${masterIp || 'N/D'} -> ${refreshedMasterIp}`);
-                masterIp = refreshedMasterIp;
-                fetchedConfig = await fetchConfigFromMaster(refreshedMasterIp);
-              }
-            }
-
-            if (fetchedConfig && fetchedConfig.terminals) {
-              const normalizedFetchedConfig = normalizeTerminalDocumentAssignments(fetchedConfig);
-              const configFromMaster = normalizedFetchedConfig.config;
-              if (configFromMaster && !Array.isArray(configFromMaster) && configFromMaster.terminals) {
-                console.log("✅ Config fetched from Master. Saving to local DB...");
-                await db.save('config', configFromMaster);
-                currentConfig = configFromMaster;
-              }
-            }
-          } catch (e: any) {
-            console.error("❌ Failed to fetch config from Master (Timeout/Network):", e.name === 'AbortError' ? 'Timeout' : e.message);
-          }
         }
 
         if (localPairedTerminal && currentConfig && !Array.isArray(currentConfig)) {
@@ -7208,20 +7206,126 @@ const AppContent: React.FC = () => {
 
             markBootStage('LOCAL_STATE_READY');
             freezePhase('SYNC_START');
-            await syncManager.initialize(finalConfig, effectivePairedTerminal.id);
-            markBootStage('SYNC_INITIALIZED');
-            freezePhase('SYNC_END');
-
-            // El login arranca desde SQLite; la verificación ERP ocurre después
-            // de abrir la pantalla para no bloquear PIN/mesas con la red.
             let startupErpUsers: User[] | null = null;
             try {
               let refreshedTerminalConfig: BusinessConfig | null;
-              if (isErpSetupMode) {
+              const isOperationalClientBoot = shouldFetchConfigFromMaster || isClientTerminalMode()
+                || effectivePairedTerminal.config?.isPrimaryNode === false;
+              let mutationJournalBlocksDiscovery = false;
+              if (isOperationalClientBoot) {
+                try {
+                  legacyMutationJournal.assertRemoteAuthorityAllowed();
+                } catch (journalError) {
+                  mutationJournalBlocksDiscovery = true;
+                  console.error('[MASTER_DISCOVERY_BLOCKED]', journalError);
+                }
+              }
+              if (mutationJournalBlocksDiscovery) {
+                backgroundSyncManager.disableRemoteSync('legacy-mutation-journal-unavailable');
+                apiSyncAdapter.resetOperationalAuthority();
+                refreshedTerminalConfig = finalConfig;
+              } else if (isOperationalClientBoot) {
+                const startup = await runClientMasterStartup<BusinessConfig, BusinessConfig | null>({
+                  fallbackConfig: finalConfig,
+                  hydrateLocalIps: hydrateClientLocalIps,
+                  resolveAuthority: async (localIps) => resolveClientMasterAuthority<BusinessConfig>({
+                    storedHosts: [masterIp, localStorage.getItem('CLIC_POS_MASTER_URL')],
+                    resolveCloudHost: async () => {
+                      const endpoint = await runJournalGuardedMasterDiscovery(
+                        () => legacyMutationJournal.assertRemoteAuthorityAllowed(),
+                        () => resolveMasterEndpointFromCloud(undefined, { persist: false }),
+                      );
+                      return endpoint?.localIp || endpoint?.endpointUrl;
+                    },
+                    discoverLanHosts: async () => (await discoverLanMasterCandidates({
+                      timeoutMs: 2500,
+                      localIps,
+                    })).map(candidate => candidate.host),
+                    rejectHosts: localIps,
+                    timeoutMs: 8_000,
+                    validate: (baseUrl, payload) => {
+                      validateOperationalMasterEndpoint(
+                        baseUrl,
+                        payload,
+                        getClientMasterContract(effectivePairedTerminal, finalConfig),
+                      );
+                    },
+                    onCandidateFailure: (candidate, baseUrl, error) => {
+                      console.warn('[MASTER_CONFIG_CANDIDATE_REJECTED]', {
+                        source: candidate.source,
+                        baseUrl,
+                        reason: error instanceof Error ? error.message : String(error),
+                      });
+                    },
+                  }),
+                  persistValidated: async (authority) => {
+                    legacyMutationJournal.assertRemoteAuthorityAllowed(new URL(authority.baseUrl).origin);
+                    await persistValidatedClientMasterTargetAsync(authority.baseUrl);
+                    localStorage.setItem('CLIC_POS_MASTER_DISCOVERY', authority.source);
+                  },
+                  applyValidatedConfig: async (remoteConfig) => {
+                    const normalized = normalizeTerminalDocumentAssignments(remoteConfig).config;
+                    if (!normalized || Array.isArray(normalized) || !normalized.terminals) return finalConfig;
+                    await db.save('config', normalized);
+                    return normalized;
+                  },
+                  initialize: async (authority, activeConfig) => {
+                    if (authority.status === 'VALIDATED') {
+                      legacyMutationJournal.assertRemoteAuthorityAllowed(new URL(authority.baseUrl).origin);
+                    }
+                    await syncManager.initialize(activeConfig || finalConfig, effectivePairedTerminal.id, {
+                      clientMasterAuthority: authority,
+                      disableRemoteServices: (reason) => backgroundSyncManager.disableRemoteSync(reason),
+                      enableRemoteServices: async (isAuthorityCurrent) => {
+                        if (isAuthorityCurrent && !isAuthorityCurrent()) return;
+                        backgroundSyncManager.enableRemoteSync();
+                        await backgroundSyncManager.initialize();
+                        if (isAuthorityCurrent && !isAuthorityCurrent()) {
+                          backgroundSyncManager.disableRemoteSync('master-authority-changed-during-enable');
+                        }
+                      },
+                      recoverClientMasterAuthority: async (): Promise<ClientMasterAuthority<unknown>> => {
+                        clientOperationalResolverRef.current?.invalidate();
+                        try {
+                          const [candidate] = await discoverEligibleClientMasterEndpoint();
+                          return candidate
+                            ? {
+                              status: 'VALIDATED',
+                              baseUrl: candidate.baseUrl,
+                              config: candidate.config,
+                              source: candidate.source,
+                            }
+                            : { status: 'UNAVAILABLE' };
+                        } catch {
+                          return { status: 'UNAVAILABLE' };
+                        }
+                      },
+                    });
+                  },
+                  refresh: async (authority, activeConfig) => {
+                    if (isErpSetupMode) return activeConfig;
+                    return syncManager.refreshTerminalResolvedConfig(undefined, {
+                      baseConfig: activeConfig,
+                      dispatchEvent: false,
+                      requestTimeoutMs: 8_000,
+                      supplementalMode: 'background',
+                      validatedMasterBaseUrl: authority.baseUrl,
+                    });
+                  },
+                });
+                clientLocalIpsRef.current = startup.localIps;
+                if (startup.authority.status === 'VALIDATED') {
+                  masterIp = new URL(startup.authority.baseUrl).hostname;
+                }
+                finalConfig = startup.config;
+                refreshedTerminalConfig = startup.refresh || startup.config;
+              } else if (isErpSetupMode) {
+                await syncManager.initialize(finalConfig, effectivePairedTerminal.id);
                 const localStartupUsers = await db.get('users') as User[];
                 startupErpUsers = Array.isArray(localStartupUsers) ? localStartupUsers : [];
                 refreshedTerminalConfig = finalConfig;
               } else {
+                await syncManager.initialize(finalConfig, effectivePairedTerminal.id);
                 refreshedTerminalConfig = await syncManager.refreshTerminalResolvedConfig(undefined, {
                   baseConfig: finalConfig,
                   dispatchEvent: false,
@@ -7229,6 +7333,9 @@ const AppContent: React.FC = () => {
                   supplementalMode: 'background',
                 });
               }
+
+              markBootStage('SYNC_INITIALIZED');
+              freezePhase('SYNC_END');
 
               if (refreshedTerminalConfig) {
                 finalConfig = refreshedTerminalConfig;
@@ -7240,7 +7347,9 @@ const AppContent: React.FC = () => {
                   ) || effectivePairedTerminal;
               }
             } catch (refreshError) {
-              console.warn('⚠️ Startup terminal snapshot refresh failed. Using last known local config.', refreshError);
+              markBootStage('SYNC_INITIALIZED');
+              freezePhase('SYNC_END');
+              console.warn('⚠️ Startup Master authority/terminal refresh failed. Using last known local config offline.', refreshError);
             }
 
             markBootStage('TERMINAL_CONFIG_READY');
@@ -7459,7 +7568,10 @@ const AppContent: React.FC = () => {
                     await db.deleteDocument('transactions', transactionId);
                   },
                 });
-                await apiSyncAdapter.ackPendingTransactions(txns.map(t => t.id));
+                const ackResult = await apiSyncAdapter.ackPendingTransactions(txns.map(t => t.id));
+                const ackReference = `App:ackPendingTransactions:${txns.map(t => t.id).join(',')}`;
+                await persistLegacyLanMutationCompletion('ack-pending-transactions', ackReference, 200);
+                await completeLegacyMutationAfterDurableAck(ackResult, ackReference);
                 if (receipt.skippedClosed.length > 0) {
                   console.warn(`Z_MEMBERSHIP_SYNC_REPLAY_IGNORED count=${receipt.skippedClosed.length}`);
                 }
@@ -7485,7 +7597,10 @@ const AppContent: React.FC = () => {
                   affectedProducts.add(move.productId);
                   affectedWarehouses.add(move.warehouseId);
                 }
-                await apiSyncAdapter.ackPendingInventoryMovements(movements.map(m => m.id));
+                const ackResult = await apiSyncAdapter.ackPendingInventoryMovements(movements.map(m => m.id));
+                const ackReference = `App:ackPendingInventory:${movements.map(m => m.id).join(',')}`;
+                await persistLegacyLanMutationCompletion('ack-pending-inventory', ackReference, 200);
+                await completeLegacyMutationAfterDurableAck(ackResult, ackReference);
                 for (const productId of affectedProducts) {
                   for (const warehouseId of affectedWarehouses) {
                     await db.recalculateProductStock(productId, warehouseId);
@@ -7497,7 +7612,14 @@ const AppContent: React.FC = () => {
             }
 
             // NOTE: NetworkSyncService deprecated. SyncManager/ApiSyncAdapter handles sync now.
-            backgroundSyncManager.initialize().catch(console.error);
+            if (syncManager.canStartRemoteServices()) {
+              if (!backgroundSyncManager.isRemoteSyncActive()) {
+                backgroundSyncManager.enableRemoteSync();
+                backgroundSyncManager.initialize().catch(console.error);
+              }
+            } else {
+              backgroundSyncManager.disableRemoteSync('master-authority-unavailable');
+            }
             currencyScheduleExecutor.initialize();
 
             markBootStage('READY');
@@ -8448,7 +8570,18 @@ const AppContent: React.FC = () => {
           erpTenantId: setupResult?.syncProfile?.erpTenantId || resolvedTenantId,
           erpTerminalId: resolvedErpTerminalId,
           masterUrl: isSlave ? finalResolvedMasterUrl : undefined,
-          masterTerminalId: isSlave ? terminalId : undefined,
+          masterTerminalId: isSlave ? resolveClientMasterTerminalId(
+            updatedConfig,
+            [terminalId, resolvedOperationalTerminalId, resolvedErpTerminalId],
+            [
+              setupResult?.syncProfile?.masterTerminalId,
+              setupResult?.incomingProfile?.masterTerminalId,
+              setupResult?.profile?.masterTerminalId,
+              selectedTerminal?.config?.masterTerminalId,
+              selectedTerminal?.config?.master_terminal_id,
+              localStorage.getItem('clic_pos_master_terminal_id'),
+            ],
+          ) : undefined,
           masterReady: Boolean(isSlave && finalResolvedMasterUrl),
           cloudStagingReady: !isErpDirectBinding && !isSlave,
           erpReadyForSales: resolvedErpReadyForSales,
@@ -8514,19 +8647,33 @@ const AppContent: React.FC = () => {
             stepId: 'sync',
             message: 'Enviando identidad de la terminal al backend local...',
           });
-          const res = await fetch(configSyncUrl, {
+          const res = await dispatchLegacyLanMutation<any>({
+            url: configSyncUrl,
             method: 'PUT',
             headers: {
               'Content-Type': 'application/json',
               'X-Active-Terminal-Id': terminalId,
               'X-Device-Id': deviceId,
             },
-            body: JSON.stringify(updatedConfig)
+            body: JSON.stringify(updatedConfig),
+            operation: 'TERMINAL_BINDING_SYNC',
+            validateResponse: data => {
+              validateLegacyResponseObject(data);
+              if (!Array.isArray(data.terminals)) throw new Error('CONFIG_TERMINALS_ACK_REQUIRED');
+            },
           });
-          if (!res.ok) {
-            const detail = await res.text().catch(() => '');
-            throw new Error(`HTTP ${res.status} ${detail}`.trim());
+          if (!res.response.ok) {
+            const detail = await res.response.text().catch(() => '');
+            throw new Error(`HTTP ${res.response.status} ${detail}`.trim());
           }
+          await res.completeAfterDurableCommit(
+            `App:terminal-binding:${terminalId}`,
+            () => persistLegacyLanMutationCompletion(
+              res.correlationId,
+              `App:terminal-binding:${terminalId}`,
+              res.response.status,
+            ),
+          );
           console.log(`✅ Binding synced to backend at ${configSyncUrl}`);
         } catch (e) {
           console.error("❌ Failed to sync binding to backend:", e);
@@ -8536,12 +8683,14 @@ const AppContent: React.FC = () => {
         console.log('ℹ️ Native standalone runtime detected. Skipping backend binding sync.');
       }
 
-      void publishMasterEndpointToCloud({
-        deviceId,
-        terminalId: resolvedOperationalTerminalId,
-        terminalName: resolvedTerminalName,
-        isPrimary: !isSlave,
-      });
+      if (!isSlave) {
+        void publishMasterEndpointToCloud({
+          deviceId,
+          terminalId: resolvedOperationalTerminalId,
+          terminalName: resolvedTerminalName,
+          isPrimary: true,
+        });
+      }
 
       persistStoredErpSyncBinding({
         tenantId: setupResult?.tenantId || localStorage.getItem('active_tenant_id') || null,
@@ -9152,7 +9301,8 @@ const AppContent: React.FC = () => {
 
       const syncOperation = async () => {
         await persistLocal();
-        const response = await fetch(await resolveValidatedOperationalApiUrl('/api/mesas/parked-tickets'), {
+        const response = await dispatchLegacyLanMutation<any>({
+          url: await resolveValidatedOperationalApiUrl('/api/mesas/parked-tickets'),
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -9161,11 +9311,16 @@ const AppContent: React.FC = () => {
             ownerId: editLock?.ownerId,
             lockToken: editLock?.token,
             baseRevision: masterRestaurantRevisionRef.current,
-          })
+          }),
+          operation: 'PARKED_TICKETS_SYNC',
+          validateResponse: data => {
+            validateLegacySuccessResponse(data);
+            if (!Array.isArray(data.parkedTickets)) throw new Error('PARKED_TICKETS_ACK_REQUIRED');
+          },
         });
-        const result = await response.json().catch(() => null);
-        if (!response.ok || result?.success === false) {
-          throw new Error(result?.message || `Master respondió HTTP ${response.status}`);
+        const result = response.data;
+        if (!response.response.ok || result?.success === false) {
+          throw new Error(result?.message || `Master respondió HTTP ${response.response.status}`);
         }
         const sharedTickets = Array.isArray(result?.parkedTickets) ? result.parkedTickets : validTickets;
         const responseRevision = Number(result?.revision || 0);
@@ -9188,6 +9343,9 @@ const AppContent: React.FC = () => {
           pendingClientTableSyncRef.current = null;
           await clearPendingClientTableSync();
         }
+        await response.completeAfterDurableCommit(`App:parked-tickets:${changedTicketId || 'all'}`, () =>
+          persistLegacyLanMutationCompletion(response.correlationId, `App:parked-tickets:${changedTicketId || 'all'}`, response.response.status)
+        );
         void fetchTables().catch(error => {
           console.warn('[TABLE_SYNC] No se pudo refrescar el mapa después de guardar:', error);
         });
@@ -9237,7 +9395,8 @@ const AppContent: React.FC = () => {
       // Master evita que un snapshot anterior vuelva a insertar una orden ya cobrada.
       const syncOperation = async () => {
         await persistMasterTickets();
-        const response = await fetch(await resolveValidatedOperationalApiUrl('/api/mesas/parked-tickets'), {
+        const response = await dispatchLegacyLanMutation<any>({
+          url: await resolveValidatedOperationalApiUrl('/api/mesas/parked-tickets'),
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           // Con lock activo, actualizar únicamente esta mesa. Una Terminal Cliente
@@ -9252,10 +9411,15 @@ const AppContent: React.FC = () => {
               baseRevision: masterRestaurantRevisionRef.current,
             } : {}),
           }),
+          operation: 'MASTER_PARKED_TICKETS_SYNC',
+          validateResponse: data => {
+            validateLegacySuccessResponse(data);
+            if (!Array.isArray(data.parkedTickets)) throw new Error('PARKED_TICKETS_ACK_REQUIRED');
+          },
         });
-        const result = await response.json().catch(() => null);
-        if (!response.ok || result?.success === false) {
-          throw new Error(result?.message || `No se pudo confirmar la orden local (HTTP ${response.status})`);
+        const result = response.data;
+        if (!response.response.ok || result?.success === false) {
+          throw new Error(result?.message || `No se pudo confirmar la orden local (HTTP ${response.response.status})`);
         }
         const sharedTickets = Array.isArray(result?.parkedTickets) ? result.parkedTickets : validTickets;
         const newerPendingSync = pendingMasterTableSyncRef.current;
@@ -9285,6 +9449,9 @@ const AppContent: React.FC = () => {
             parkedTickets: [],
           });
         }
+        await response.completeAfterDurableCommit(`App:master-parked-tickets:${changedTicketId || 'all'}`, () =>
+          persistLegacyLanMutationCompletion(response.correlationId, `App:master-parked-tickets:${changedTicketId || 'all'}`, response.response.status)
+        );
       };
       const queuedSync = parkedTicketSyncQueueRef.current
         .catch(() => undefined)
@@ -9344,18 +9511,24 @@ const AppContent: React.FC = () => {
       setTables(prev => prev.map(t => t.id === activeTable.id ? updatedTable : t));
 
       const editLock = activeTableEditLockRef.current;
-      const response = await fetch(await resolveValidatedOperationalApiUrl(`/api/tables/${encodeURIComponent(String(activeTable.id))}`), {
+      const response = await dispatchLegacyLanMutation<any>({
+        url: await resolveValidatedOperationalApiUrl(`/api/tables/${encodeURIComponent(String(activeTable.id))}`),
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           guests,
           ownerId: editLock?.ownerId,
           lockToken: editLock?.token,
-        })
+        }),
+        operation: 'TABLE_GUESTS_UPDATE',
+        validateResponse: data => {
+          validateLegacySuccessResponse(data);
+          if (!Array.isArray(data.tables)) throw new Error('TABLES_ACK_REQUIRED');
+        },
       });
-      const result = await response.json().catch(() => null);
-      if (!response.ok || result?.success === false) {
-        throw new Error(result?.message || `Master respondió HTTP ${response.status}`);
+      const result = response.data;
+      if (!response.response.ok || result?.success === false) {
+        throw new Error(result?.message || `Master respondió HTTP ${response.response.status}`);
       }
       if (Array.isArray(result?.tables)) setTables(result.tables);
       if (Array.isArray(result?.parkedTickets)) setParkedTickets(result.parkedTickets);
@@ -9366,6 +9539,9 @@ const AppContent: React.FC = () => {
       await db.save('tables', Array.isArray(result?.tables) ? result.tables : tables.map(
         table => table.id === activeTable.id ? updatedTable : table
       ));
+      await response.completeAfterDurableCommit(`App:table-guests:${activeTable.id}`, () =>
+        persistLegacyLanMutationCompletion(response.correlationId, `App:table-guests:${activeTable.id}`, response.response.status)
+      );
     } catch (e) {
       console.error("Failed to update guest count:", e);
       alert('No se pudo guardar la cantidad de comensales en la Caja Master.');
@@ -9385,30 +9561,33 @@ const AppContent: React.FC = () => {
 
     if (isClientTerminalMode()) {
       const customerEndpoint = await resolveValidatedOperationalApiUrl('/api/customers');
-      const controller = new AbortController();
-      const timeoutId = window.setTimeout(() => controller.abort(), 5000);
-      try {
-        const response = await fetch(customerEndpoint, {
+      const response = await dispatchLegacyLanMutation<any>({
+          url: customerEndpoint,
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ customer }),
-          signal: controller.signal,
+          timeoutMs: 5000,
+          operation: 'CUSTOMER_UPSERT',
+          validateResponse: data => {
+            validateLegacySuccessResponse(data);
+            if (!Array.isArray(data.customers)) throw new Error('CUSTOMERS_ACK_REQUIRED');
+          },
         });
-        const result = await response.json().catch(() => null);
-        if (!response.ok || result?.success === false) {
-          throw new Error(result?.message || `Master respondió HTTP ${response.status}`);
+        const result = response.data;
+        if (!response.response.ok || result?.success === false) {
+          throw new Error(result?.message || `Master respondió HTTP ${response.response.status}`);
         }
         const sharedCustomers = Array.isArray(result?.customers) ? result.customers : localCustomers;
         setCustomers(sharedCustomers);
         await db.save('customers', sharedCustomers);
+        await response.completeAfterDurableCommit(`App:customer:${customer.id}`, () =>
+          persistLegacyLanMutationCompletion(response.correlationId, `App:customer:${customer.id}`, response.response.status)
+        );
         const revision = Number(result?.revision || 0);
         if (Number.isFinite(revision) && revision > masterRestaurantRevisionRef.current) {
           masterRestaurantRevisionRef.current = revision;
         }
-        return;
-      } finally {
-        window.clearTimeout(timeoutId);
-      }
+      return;
     }
 
     if (!customer.master_number_range_id) await queueCustomerMutation('UPSERT', customer);
@@ -10531,15 +10710,21 @@ const AppContent: React.FC = () => {
     // Android Master replaces the complete layout in one persisted mutation.
     // This avoids partial saves (rooms succeeded but tables failed, or vice versa)
     // and makes an intentionally empty table list authoritative.
-    const atomicRes = await fetch(await resolveValidatedOperationalApiUrl('/api/mesas/layout'), {
+    const atomicRes = await dispatchLegacyLanMutation<any>({
+      url: await resolveValidatedOperationalApiUrl('/api/mesas/layout'),
       method: 'PUT',
       headers,
-      body: JSON.stringify({ rooms: normalizedRoomsPayload, tables: normalizedTablesPayload })
+      body: JSON.stringify({ rooms: normalizedRoomsPayload, tables: normalizedTablesPayload }),
+      operation: 'FLOOR_PLAN_REPLACE',
+      validateResponse: data => {
+        validateLegacySuccessResponse(data);
+        if (!Array.isArray(data.rooms) || !Array.isArray(data.tables)) throw new Error('LAYOUT_ACK_REQUIRED');
+      },
     });
-    if (atomicRes.status !== 404) {
-      const atomicResult = await parseJsonOrSkipServerSync(atomicRes, 'Layout de mesas');
-      if (!atomicRes.ok || atomicResult?.success === false) {
-        throw new Error(atomicResult?.message || `Error guardando layout (HTTP ${atomicRes.status})`);
+    if (atomicRes.response.status !== 404) {
+      const atomicResult = atomicRes.data;
+      if (!atomicRes.response.ok || atomicResult?.success === false) {
+        throw new Error(atomicResult?.message || `Error guardando layout (HTTP ${atomicRes.response.status})`);
       }
       if (atomicResult) {
         const responseRevision = Number(atomicResult.revision || 0);
@@ -10553,8 +10738,12 @@ const AppContent: React.FC = () => {
           .map(table => String(table.id))
           .filter(tableId => !confirmedTableIds.has(tableId));
         if (missingTableIds.length > 0) {
+          await atomicRes.markOutcomeUnknown();
           throw new Error(`La Master devolvió un plano incompleto (${missingTableIds.length} mesas faltantes).`);
         }
+        await atomicRes.completeAfterDurableCommit('App:floor-plan-replace', () =>
+          persistLegacyLanMutationCompletion(atomicRes.correlationId, 'App:floor-plan-replace', atomicRes.response.status)
+        );
         return { rooms: confirmedRooms, tables: confirmedTables };
       }
     }
@@ -10574,43 +10763,61 @@ const AppContent: React.FC = () => {
 
     // Upsert rooms first
     for (const roomPayload of normalizedRoomsPayload) {
-      const res = await fetch(await resolveValidatedOperationalApiUrl(`/api/rooms/${encodeURIComponent(roomPayload.id)}`), {
+      const res = await dispatchLegacyLanMutation<any>({
+        url: await resolveValidatedOperationalApiUrl(`/api/rooms/${encodeURIComponent(roomPayload.id)}`),
         method: 'PUT',
         headers,
-        body: JSON.stringify(roomPayload)
+        body: JSON.stringify(roomPayload),
+        operation: 'FLOOR_ROOM_UPSERT',
+        validateResponse: validateLegacyEntityResponse(roomPayload.id),
       });
-      if (!res.ok) {
-        throw new Error(`Error guardando sala ${roomPayload.id} (HTTP ${res.status})`);
+      if (!res.response.ok) {
+        throw new Error(`Error guardando sala ${roomPayload.id} (HTTP ${res.response.status})`);
       }
+      await res.completeAfterDurableCommit(`App:room-upsert:${roomPayload.id}`, () =>
+        persistLegacyLanMutationCompletion(res.correlationId, `App:room-upsert:${roomPayload.id}`, res.response.status)
+      );
     }
 
     // Upsert tables with normalized designer defaults
     for (const tablePayload of normalizedTablesPayload) {
-      const res = await fetch(await resolveValidatedOperationalApiUrl(`/api/tables/${encodeURIComponent(tablePayload.id)}`), {
+      const res = await dispatchLegacyLanMutation<any>({
+        url: await resolveValidatedOperationalApiUrl(`/api/tables/${encodeURIComponent(tablePayload.id)}`),
         method: 'PUT',
         headers,
-        body: JSON.stringify(tablePayload)
+        body: JSON.stringify(tablePayload),
+        operation: 'FLOOR_TABLE_UPSERT',
+        validateResponse: validateLegacyEntityResponse(tablePayload.id),
       });
-      if (!res.ok) {
-        throw new Error(`Error guardando mesa ${tablePayload.id} (HTTP ${res.status})`);
+      if (!res.response.ok) {
+        throw new Error(`Error guardando mesa ${tablePayload.id} (HTTP ${res.response.status})`);
       }
+      await res.completeAfterDurableCommit(`App:table-upsert:${tablePayload.id}`, () =>
+        persistLegacyLanMutationCompletion(res.correlationId, `App:table-upsert:${tablePayload.id}`, res.response.status)
+      );
     }
 
     // Delete removed tables, then rooms
     const removedTables = serverTables.filter(t => !nextTableIds.has(t.id));
     for (const table of removedTables) {
-      const res = await fetch(await resolveValidatedOperationalApiUrl(`/api/tables/${encodeURIComponent(table.id)}`), { method: 'DELETE' });
-      if (!res.ok) {
-        throw new Error(`Error eliminando mesa ${table.id} (HTTP ${res.status})`);
+      const res = await dispatchLegacyLanMutation<any>({ url: await resolveValidatedOperationalApiUrl(`/api/tables/${encodeURIComponent(table.id)}`), method: 'DELETE', operation: 'FLOOR_TABLE_DELETE', validateResponse: validateLegacySuccessResponse });
+      if (!res.response.ok) {
+        throw new Error(`Error eliminando mesa ${table.id} (HTTP ${res.response.status})`);
       }
+      await res.completeAfterDurableCommit(`App:table-delete:${table.id}`, () =>
+        persistLegacyLanMutationCompletion(res.correlationId, `App:table-delete:${table.id}`, res.response.status)
+      );
     }
 
     const removedRooms = serverRooms.filter(r => !nextRoomIds.has(r.id));
     for (const room of removedRooms) {
-      const res = await fetch(await resolveValidatedOperationalApiUrl(`/api/rooms/${encodeURIComponent(room.id)}`), { method: 'DELETE' });
-      if (!res.ok) {
-        throw new Error(`Error eliminando sala ${room.id} (HTTP ${res.status})`);
+      const res = await dispatchLegacyLanMutation<any>({ url: await resolveValidatedOperationalApiUrl(`/api/rooms/${encodeURIComponent(room.id)}`), method: 'DELETE', operation: 'FLOOR_ROOM_DELETE', validateResponse: validateLegacySuccessResponse });
+      if (!res.response.ok) {
+        throw new Error(`Error eliminando sala ${room.id} (HTTP ${res.response.status})`);
       }
+      await res.completeAfterDurableCommit(`App:room-delete:${room.id}`, () =>
+        persistLegacyLanMutationCompletion(res.correlationId, `App:room-delete:${room.id}`, res.response.status)
+      );
     }
     return null;
   };
@@ -12306,6 +12513,10 @@ const AppContent: React.FC = () => {
             onOpenAttendance={() => setCurrentView('ATTENDANCE')}
             onOpenCustomers={() => setCurrentView('CUSTOMERS')}
             onOpenHistory={() => setCurrentView('HISTORY')}
+            onOpenInvoiceActions={(scanValue) => {
+              setScanTargetTicketId(scanValue);
+              setCurrentView('HISTORY');
+            }}
             onOpenFinance={handleOpenFinanceFromPos}
             onRegisterCashMovement={handleRegisterMovement}
             onOpenZReport={() => { void handleOpenZReport(); }}
@@ -12361,15 +12572,20 @@ const AppContent: React.FC = () => {
 
               if (!isClientTerminalMode()) {
                 const editLock = activeTableEditLockRef.current;
-                void fetch(resolveOperationalApiUrl(`/api/tables/${encodeURIComponent(String(table.id))}`), {
+                void dispatchLegacyLanMutation<any>({
+                  url: resolveOperationalApiUrl(`/api/tables/${encodeURIComponent(String(table.id))}`),
                   method: 'PUT',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({
                     ...updatedTable,
                     ownerId: editLock?.ownerId,
                     lockToken: editLock?.token,
-                  })
-                }).catch(error => {
+                  }),
+                  operation: 'TABLE_OCCUPANCY_UPDATE',
+                  validateResponse: validateLegacyTableStateResponse(String(table.id)),
+                }).then(receipt => receipt.completeAfterDurableCommit(`App:table-occupied:${table.id}`, () =>
+                  persistLegacyLanMutationCompletion(receipt.correlationId, `App:table-occupied:${table.id}`, receipt.response.status)
+                )).catch(error => {
                   console.warn('No se pudo persistir estado ocupado de mesa en API:', error);
                 });
               }
@@ -12465,11 +12681,17 @@ const AppContent: React.FC = () => {
                   await clearActiveCartDraftStorage().catch((error) => console.warn('No se pudo limpiar borrador activo tras cerrar mesa:', error));
                   await db.save('tables', reconciled).catch(error => console.error('Failed to persist table release:', error));
                   try {
-                    await fetch(await resolveValidatedOperationalApiUrl(`/api/tables/${encodeURIComponent(String(table.id))}`), {
+                    const receipt = await dispatchLegacyLanMutation<any>({
+                      url: await resolveValidatedOperationalApiUrl(`/api/tables/${encodeURIComponent(String(table.id))}`),
                       method: 'PUT',
                       headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify(nextTable)
+                      body: JSON.stringify(nextTable),
+                      operation: 'TABLE_RELEASE_STATE_UPDATE',
+                      validateResponse: validateLegacyTableStateResponse(String(table.id)),
                     });
+                    await receipt.completeAfterDurableCommit(`App:table-release-state:${table.id}`, () =>
+                      persistLegacyLanMutationCompletion(receipt.correlationId, `App:table-release-state:${table.id}`, receipt.response.status)
+                    );
                   } catch (error) {
                     console.warn('No se pudo persistir estado libre de mesa en API:', error);
                   }
@@ -12729,6 +12951,7 @@ const AppContent: React.FC = () => {
             roles={roles}
             customers={customers}
             initialSelectedId={scanTargetTicketId}
+            onInitialSelectionHandled={() => setScanTargetTicketId(null)}
             activeTerminalId={getCurrentTerminal()?.id || 'T1'}
             onUpdateConfig={handleConfigUpdate}
             onClose={() => {

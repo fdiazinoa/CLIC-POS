@@ -40,7 +40,7 @@ const finallyStart = sync.indexOf('        } finally {', sync.indexOf('    async
 const finallyEnd = sync.indexOf('\n    }\n', finallyStart);
 const actualFinally = sync.slice(finallyStart + '        } finally {'.length, finallyEnd);
 assert.ok(actualFinally.includes('this.scheduleSync'));
-const finish = Function('navigator', 'isPosSaleActive', 'pausedForSaleActivity', 'shouldRetrySoon', 'collectionErrors',
+const finish = Function('navigator', 'isPosSaleActive', 'pausedForSaleActivity', 'shouldRetrySoon', 'collectionErrors', 'generation',
   `return (async function() { try {} finally { ${actualFinally} }).call(this);`);
 
 for (const scenario of [
@@ -54,9 +54,10 @@ for (const scenario of [
     const delays: number[] = [];
     const errors = ['existing collection error'];
     const manager = { isProcessing: true, state: { pendingCount: scenario.pending }, nextRetryDelayMs: null,
+      remoteEnabled: true, remoteGeneration: 1,
       FAST_RETRY_DELAY_MS: 5000, updatePendingCount: async () => {},
       updateState(update: any) { Object.assign(this.state, update); }, scheduleSync(delay: number) { delays.push(delay); } };
-    await finish.call(manager, { onLine: scenario.online }, () => scenario.paused, scenario.paused, scenario.retry, errors);
+    await finish.call(manager, { onLine: scenario.online }, () => scenario.paused, scenario.paused, scenario.retry, errors, 1);
     assert.equal(manager.isProcessing, false);
     assert.equal((manager.state as any).isSyncing, false);
     assert.equal((manager.state as any).hasError, true);
@@ -64,7 +65,7 @@ for (const scenario of [
     assert.deepEqual(delays, scenario.schedules ? [5000] : []);
     manager.nextRetryDelayMs = 15000 as any;
     delays.length = 0;
-    await finish.call(manager, { onLine: scenario.online }, () => scenario.paused, scenario.paused, scenario.retry, errors);
+    await finish.call(manager, { onLine: scenario.online }, () => scenario.paused, scenario.paused, scenario.retry, errors, 1);
     assert.deepEqual(delays, scenario.schedules ? [15000] : []);
   });
 }
@@ -77,20 +78,20 @@ test('both intentionally disabled legacy UI branches remain literal false and lo
 
 test('actual finally never suppresses an exception from the protected work', async () => {
   const failure = new Error('protected work failed');
-  const run = Function('failure', 'navigator', 'isPosSaleActive', 'pausedForSaleActivity', 'shouldRetrySoon', 'collectionErrors',
+  const run = Function('failure', 'navigator', 'isPosSaleActive', 'pausedForSaleActivity', 'shouldRetrySoon', 'collectionErrors', 'generation',
     `return (async function() { try { throw failure; } finally { ${actualFinally} }).call(this);`);
-  const manager = { state: { pendingCount: 0 }, updatePendingCount: async () => {}, updateState() {},
+  const manager = { state: { pendingCount: 0 }, remoteEnabled: true, remoteGeneration: 1, updatePendingCount: async () => {}, updateState() {},
     scheduleSync() { assert.fail('paused empty queue must not schedule'); } };
-  await assert.rejects(run.call(manager, failure, { onLine: true }, () => true, true, true, []), error => error === failure);
+  await assert.rejects(run.call(manager, failure, { onLine: true }, () => true, true, true, [], 1), error => error === failure);
 });
 
 test('actual finally retry predicate matches the previous schedule decision across its full boolean matrix', async () => {
   for (const online of [false, true]) for (const paused of [false, true])
     for (const pending of [0, 2]) for (const retry of [false, true]) {
       let scheduled = 0;
-      const manager = { state: { pendingCount: pending }, FAST_RETRY_DELAY_MS: 5000,
+      const manager = { state: { pendingCount: pending }, remoteEnabled: true, remoteGeneration: 1, FAST_RETRY_DELAY_MS: 5000,
         updatePendingCount: async () => {}, updateState() {}, scheduleSync(delay: number) { assert.equal(delay, 5000); scheduled++; } };
-      await finish.call(manager, { onLine: online }, () => paused, paused, retry, []);
+      await finish.call(manager, { onLine: online }, () => paused, paused, retry, [], 1);
       assert.equal(scheduled, Number(online && (retry || pending > 0) && !(paused && pending === 0)));
     }
 });

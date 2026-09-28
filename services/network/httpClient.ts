@@ -9,6 +9,7 @@ export interface RequestJsonInput {
     body?: unknown;
     timeoutMs?: number;
     diagnosticContext?: Record<string, unknown>;
+    signal?: AbortSignal;
 }
 
 export interface RequestJsonResult<T = unknown> {
@@ -47,6 +48,13 @@ export interface HttpClientErrorDiagnostic {
 }
 
 const INVALID_HEADER_VALUES = new Set(['', 'undefined', 'null', '[object object]']);
+let nativeRequestTransport = (options: Parameters<typeof CapacitorHttp.request>[0]) => CapacitorHttp.request(options);
+
+export const setNativeRequestTransportForTests = (
+    transport: ((options: Parameters<typeof CapacitorHttp.request>[0]) => ReturnType<typeof CapacitorHttp.request>) | null,
+): void => {
+    nativeRequestTransport = transport || ((options) => CapacitorHttp.request(options));
+};
 
 const isNativeHttpPreferred = (): boolean => {
     try {
@@ -162,6 +170,7 @@ export const attachHttpClientDiagnostic = (error: unknown, diagnostic: HttpClien
 };
 
 export async function requestJson<T = unknown>(input: RequestJsonInput): Promise<RequestJsonResult<T>> {
+    if (input.signal?.aborted) throw new DOMException('Authority request aborted', 'AbortError');
     const method = String(input.method || 'GET').toUpperCase();
     const headers = sanitizeHeaders(input.headers);
     const headersSummary = summarizeHeaders(headers);
@@ -211,7 +220,7 @@ export async function requestJson<T = unknown>(input: RequestJsonInput): Promise
         try {
             console.log('[FETCH_SENT]', { ...baseDiagnostic, fetchStage: 'NATIVE_HTTP_SENT' });
             console.log('[NATIVE_HTTP_SENT]', baseDiagnostic);
-            const response = await CapacitorHttp.request({
+            const nativeRequest = nativeRequestTransport({
                 method,
                 url: input.url,
                 headers,
@@ -219,6 +228,18 @@ export async function requestJson<T = unknown>(input: RequestJsonInput): Promise
                 connectTimeout: timeoutMs,
                 readTimeout: timeoutMs,
             });
+            let nativeAbort: (() => void) | null = null;
+            const response = input.signal
+                ? await Promise.race([
+                    nativeRequest,
+                    new Promise<never>((_, reject) => {
+                        nativeAbort = () => reject(new DOMException('Authority request aborted', 'AbortError'));
+                        input.signal!.addEventListener('abort', nativeAbort, { once: true });
+                    }),
+                ]).finally(() => {
+                    if (nativeAbort) input.signal?.removeEventListener('abort', nativeAbort);
+                })
+                : await nativeRequest;
             const text = stringifyNativeData(response.data);
             const data = typeof response.data === 'string' ? parseJsonText<T>(response.data) : (response.data as T | null);
             const result: RequestJsonResult<T> = {
@@ -251,6 +272,8 @@ export async function requestJson<T = unknown>(input: RequestJsonInput): Promise
     }
 
     const controller = new AbortController();
+    const abortFromCaller = () => controller.abort();
+    input.signal?.addEventListener('abort', abortFromCaller, { once: true });
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
         console.log('[FETCH_SENT]', { ...baseDiagnostic, fetchStage: 'FETCH_SENT' });
@@ -263,8 +286,9 @@ export async function requestJson<T = unknown>(input: RequestJsonInput): Promise
             cache: 'no-store',
             signal: controller.signal,
         });
-        clearTimeout(timeout);
         const text = await response.text();
+        clearTimeout(timeout);
+        input.signal?.removeEventListener('abort', abortFromCaller);
         const result: RequestJsonResult<T> = {
             ok: response.ok,
             status: response.status,
@@ -278,6 +302,7 @@ export async function requestJson<T = unknown>(input: RequestJsonInput): Promise
         return result;
     } catch (error: any) {
         clearTimeout(timeout);
+        input.signal?.removeEventListener('abort', abortFromCaller);
         const diagnostic: HttpClientErrorDiagnostic = {
             ...baseDiagnostic,
             networkEngine,

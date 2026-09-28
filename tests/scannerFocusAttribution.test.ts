@@ -106,6 +106,13 @@ for (const file of ['utils/globalBarcodeCapture.ts', 'components/GlobalVirtualKe
     const source = ts.createSourceFile(file, enabled, ts.ScriptTarget.Latest, true, file.endsWith('tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
     assert.equal((source as any).parseDiagnostics.length, 0);
     assert.ok(enabled.includes('scannerFocus'));
+    if (file === 'utils/globalBarcodeCapture.ts') {
+      const start = enabled.indexOf("tableLatencyQaMark('SCANNER_FOCUS_START')");
+      const focus = enabled.indexOf("scannerFocusMeasure(__focusScope, 'DOM-focus'", start);
+      const end = enabled.indexOf("tableLatencyQaMark('SCANNER_FOCUS_END')", focus);
+      const finallyEnd = enabled.indexOf('finally { scannerFocusEnd(__focusScope); }', end);
+      assert.ok(start >= 0 && start < focus && focus < end && end < finallyEnd);
+    }
   });
 }
 test('drift fails compilation instead of silently claiming incomplete attribution', () => {
@@ -120,6 +127,7 @@ function instrumentedModule(file: string, enabled: boolean, capture: ReturnType<
   const bindings = { scannerFocusBegin: capture.begin, scannerFocusEnd: capture.end, scannerFocusMeasure: capture.measure, scannerFocusPoint: capture.point };
   const require = (path: string) => {
     if (path.endsWith('/diagnostics/scannerFocus')) return bindings;
+    if (path.endsWith('/diagnostics/tableLatencyQa')) return { tableLatencyQaMark() {} };
     if (path === 'react') return { __esModule: true, default: {}, useEffect: globals.useEffect, useState: () => [false, () => {}], useRef: () => ({ current: null }) };
     if (path === '@capacitor/core') return { Capacitor: { getPlatform: () => 'android' } };
     if (path === './VirtualKeyboard' || path === 'react/jsx-runtime') return {};
@@ -160,6 +168,20 @@ test('enabled/unarmed/armed helper preserves original DOM operation order and ti
   assert.equal(dormant.records.length, 0);
   assert.ok(armed.records.some(row => row.point === 'DOM-focus'));
   assert.ok(armed.records.some(row => row.point === 'run' && row.reason === 'mount'));
+});
+test('enabled helper preserves the exact focus exception while closing its diagnostic scope', () => {
+  const f = fixture(); f.capture.arm('host-reveal');
+  const body = { tagName: 'BODY' };
+  const doc: any = { body, activeElement: body, visibilityState: 'visible', querySelector: () => null };
+  const root = { getAttribute: () => 'true' };
+  const failure = new Error('focus failed');
+  const input: any = { ownerDocument: doc, isConnected: true, dataset: { posScannerReceiver: 'true' }, inputMode: 'none', tagName: 'INPUT',
+    closest: (selector: string) => selector === '[data-pos-scanner-enabled]' ? root : null,
+    focus: () => { throw failure; } };
+  const module = instrumentedModule('utils/globalBarcodeCapture.ts', true, f.capture, { setTimeout, clearTimeout });
+  assert.throws(() => module.focusSalesScannerInput(doc, input), error => error === failure);
+  assert.deepEqual(f.capture.snapshot().records.map(row => row.point),
+    ['guards-simple', 'blocked-query', 'closest', 'closest', 'DOM-focus', 'focus-total']);
 });
 test('manual instrumentation preserves accepted/rejected pointer paths and records only existing JS boundaries', () => {
   function run(enabled: boolean, armed: boolean, reject: string) {

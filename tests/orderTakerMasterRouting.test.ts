@@ -4,6 +4,9 @@ import { readFileSync } from 'node:fs';
 import { buildOperationalMasterContract, canUseLocalOperationalTableStore, createOperationalMasterResolver,
   isClientTerminalMode, resolveOperationalApiUrl, resolveValidatedOperationalApiUrl,
   setOperationalMasterResolver, setOperationalTerminalReader, validateOperationalMasterEndpoint, type OperationalMasterContract } from '../utils/masterOperationalApi';
+import { persistValidatedClientMasterTargetAsync } from '../utils/clientMasterBinding';
+import { loadSyncProfile, saveSyncProfile } from '../services/sync/SyncProfile';
+import { readTerminalCredentialsSync, setTerminalCredentialNativeWriterForTests } from '../services/sync/TerminalCredentialStore';
 
 const contract: OperationalMasterContract = { erpManaged: true,
   terminalId: '0efd23be-d73f-42aa-ab7d-5895b56edee0', masterTerminalId: '0f77877f-66b2-4820-b956-997cd5b4b575',
@@ -138,11 +141,227 @@ test('cambio de vínculo mientras discover está pendiente no publica contrato a
   await assert.rejects(pending, /CONTRACT_CHANGED/); assert.equal(resolver.current(), '');
 });
 
+test('mirror pendiente revierte autoridad antigua si cambia el contrato o se invalida', async () => {
+  for (const supersede of ['contract', 'invalidate'] as const) {
+    let active = { ...contract };
+    let persisted = 'http://10.0.0.90:3001';
+    const waiting = (() => {
+      let release!: () => void;
+      const promise = new Promise<void>(resolve => { release = resolve; });
+      return { promise, release };
+    })();
+    const resolver = createOperationalMasterResolver({
+      getContract: () => active,
+      discover: async () => [{ baseUrl: '10.0.0.101', config: remote() }],
+      mirror: async base => {
+        const previous = persisted;
+        persisted = base;
+        await waiting.promise;
+        return () => { persisted = previous; };
+      },
+    });
+    const pending = resolver.ensure();
+    await Promise.resolve();
+    await Promise.resolve();
+    assert.equal(persisted, 'http://10.0.0.101:3001');
+    if (supersede === 'contract') active = { ...contract, terminalType: 'ORDER_TAKER' };
+    else resolver.invalidate();
+    waiting.release();
+    await assert.rejects(pending, /CONTRACT_CHANGED/);
+    assert.equal(resolver.current(), '');
+    assert.equal(persisted, 'http://10.0.0.90:3001');
+  }
+});
+
+test('reconcile pendiente revierte el mirror si la autoridad se invalida', async () => {
+  let persisted = 'http://10.0.0.90:3001';
+  let writes = 0;
+  const resolver = createOperationalMasterResolver({
+    getContract: () => contract,
+    discover: async () => [{ baseUrl: '10.0.0.101', config: remote() }],
+    mirror: base => {
+      const previous = persisted;
+      persisted = base;
+      writes += 1;
+      return () => { persisted = previous; };
+    },
+  });
+  const base = await resolver.ensure();
+  assert.equal(writes, 1);
+  assert.equal(await resolver.ensure(), base);
+  assert.equal(writes, 1);
+
+  persisted = 'http://10.0.0.90:3001';
+  let release!: () => void;
+  const waiting = new Promise<void>(resolve => { release = resolve; });
+  let racingWrites = 0;
+  const racing = createOperationalMasterResolver({
+    getContract: () => contract,
+    discover: async () => [{ baseUrl: '10.0.0.101', config: remote() }],
+    mirror: async next => {
+      const previous = persisted;
+      persisted = next;
+      racingWrites += 1;
+      if (racingWrites > 1) await waiting;
+      return () => { persisted = previous; };
+    },
+  });
+  await racing.ensure();
+  persisted = 'http://10.0.0.90:3001';
+  const reconciliation = racing.reconcileMirror(base);
+  await Promise.resolve();
+  racing.invalidate();
+  release();
+  await assert.rejects(reconciliation, /CONTRACT_CHANGED/);
+  assert.equal(racing.current(), '');
+  assert.equal(persisted, 'http://10.0.0.90:3001');
+});
+
+test('fallo de persistencia no publica autoridad y conserva el mirror previo', async () => {
+  let persisted = 'http://10.0.0.90:3001';
+  const resolver = createOperationalMasterResolver({
+    getContract: () => contract,
+    discover: async () => [{ baseUrl: '10.0.0.101', config: remote() }],
+    mirror: base => {
+      const previous = persisted;
+      persisted = base;
+      persisted = previous;
+      throw new Error('MASTER_SYNC_PROFILE_PERSIST_FAILED');
+    },
+  });
+  await assert.rejects(resolver.ensure(), /PERSIST_FAILED/);
+  assert.equal(resolver.current(), '');
+  assert.equal(persisted, 'http://10.0.0.90:3001');
+});
+
+test('rollback tardío de A no sobrescribe autoridad B ya publicada', async () => {
+  const oldStorage = globalThis.localStorage;
+  const values = new Map<string, string>([['clic_pos_terminal_setup_mode', 'ORDER_TAKER']]);
+  const storage = {
+    get length() { return values.size; },
+    clear: () => values.clear(),
+    getItem: (name: string) => values.get(name) ?? null,
+    key: (index: number) => [...values.keys()][index] ?? null,
+    removeItem: (name: string) => { values.delete(name); },
+    setItem: (name: string, value: string) => { values.set(name, String(value)); },
+  } as Storage;
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: storage });
+  let releaseA!: () => void;
+  let markAStarted!: () => void;
+  const aStarted = new Promise<void>(resolve => { markAStarted = resolve; });
+  let nativeWrite = 0;
+  setTerminalCredentialNativeWriterForTests(async () => {
+    nativeWrite += 1;
+    if (nativeWrite === 1) {
+      markAStarted();
+      await new Promise<void>(resolve => { releaseA = resolve; });
+    }
+  });
+  let active = { ...contract };
+  let nextBase = '10.0.0.101';
+  const resolver = createOperationalMasterResolver({
+    getContract: () => active,
+    discover: async () => [{ baseUrl: nextBase, config: remote() }],
+    mirror: base => persistValidatedClientMasterTargetAsync(base),
+  });
+  try {
+    saveSyncProfile({ contractedProduct: 'POS_ONLY', posRuntime: 'SLAVE', cloudChannel: 'POS_MASTER', dataMaster: 'POS_MASTER',
+      cloudSyncEnabled: false, customerErpAccess: false, erpUiEnabled: false, contractSource: 'BACKEND_REGISTER' });
+    const writeA = resolver.ensure();
+    await aStarted;
+    active = { ...contract, terminalType: 'ORDER_TAKER' };
+    nextBase = '10.0.0.102';
+    resolver.invalidate();
+    const writeB = resolver.ensure();
+    for (let turn = 0; turn < 10 && storage.getItem('CLIC_POS_MASTER_URL') !== 'http://10.0.0.102:3001'; turn += 1) await Promise.resolve();
+    assert.equal(storage.getItem('CLIC_POS_MASTER_URL'), 'http://10.0.0.102:3001');
+    releaseA();
+    await assert.rejects(writeA, /CONTRACT_CHANGED/);
+    assert.equal(await writeB, 'http://10.0.0.102:3001');
+    assert.equal(resolver.current(), 'http://10.0.0.102:3001');
+    assert.equal(storage.getItem('pos_master_ip'), '10.0.0.102');
+    assert.equal(loadSyncProfile().masterUrl, 'http://10.0.0.102:3001');
+    assert.equal(readTerminalCredentialsSync().masterUrl, 'http://10.0.0.102:3001');
+    assert.equal(readTerminalCredentialsSync().masterIp, '10.0.0.102');
+  } finally {
+    setTerminalCredentialNativeWriterForTests(null);
+    Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: oldStorage });
+  }
+});
+
+test('tentativa B parcial restaura ownership A y permite limpiar A obsoleta', async () => {
+  const oldStorage = globalThis.localStorage;
+  const values = new Map<string, string>([['clic_pos_terminal_setup_mode', 'ORDER_TAKER']]);
+  let failBHost = false;
+  const storage = {
+    get length() { return values.size; },
+    clear: () => values.clear(),
+    getItem: (name: string) => values.get(name) ?? null,
+    key: (index: number) => [...values.keys()][index] ?? null,
+    removeItem: (name: string) => { values.delete(name); },
+    setItem: (name: string, value: string) => {
+      if (failBHost && name === 'pos_master_ip' && value === '10.0.0.102') {
+        failBHost = false;
+        throw new Error('PARTIAL_B_PERSIST_FAILED');
+      }
+      values.set(name, String(value));
+    },
+  } as Storage;
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: storage });
+  let releaseA!: () => void;
+  let markAStarted!: () => void;
+  const aStarted = new Promise<void>(resolve => { markAStarted = resolve; });
+  let nativeWrite = 0;
+  setTerminalCredentialNativeWriterForTests(async () => {
+    nativeWrite += 1;
+    if (nativeWrite === 1) {
+      markAStarted();
+      await new Promise<void>(resolve => { releaseA = resolve; });
+    }
+  });
+  let active = { ...contract };
+  let nextBase = '10.0.0.101';
+  const resolver = createOperationalMasterResolver({
+    getContract: () => active,
+    discover: async () => [{ baseUrl: nextBase, config: remote() }],
+    mirror: base => persistValidatedClientMasterTargetAsync(base),
+  });
+  try {
+    saveSyncProfile({ contractedProduct: 'POS_ONLY', posRuntime: 'SLAVE', cloudChannel: 'POS_MASTER', dataMaster: 'POS_MASTER',
+      cloudSyncEnabled: false, customerErpAccess: false, erpUiEnabled: false, contractSource: 'BACKEND_REGISTER' });
+    const writeA = resolver.ensure();
+    await aStarted;
+    active = { ...contract, terminalType: 'ORDER_TAKER' };
+    nextBase = '10.0.0.102';
+    resolver.invalidate();
+    failBHost = true;
+    await assert.rejects(resolver.ensure(), /PARTIAL_B_PERSIST_FAILED/);
+    assert.equal(storage.getItem('CLIC_POS_MASTER_URL'), 'http://10.0.0.101:3001');
+    releaseA();
+    await assert.rejects(writeA, /CONTRACT_CHANGED/);
+    assert.equal(resolver.current(), '');
+    assert.equal(storage.getItem('CLIC_POS_MASTER_URL'), null);
+    assert.equal(storage.getItem('pos_master_ip'), null);
+    assert.equal(loadSyncProfile().masterUrl, undefined);
+    assert.equal(readTerminalCredentialsSync().masterUrl ?? null, null);
+    assert.equal(readTerminalCredentialsSync().masterIp ?? null, null);
+  } finally {
+    setTerminalCredentialNativeWriterForTests(null);
+    Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: oldStorage });
+  }
+});
+
 test('timeouts de transporte customer/release comienzan después de resolver master', () => {
   const app = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
-  assert.match(app, /const customerEndpoint = await resolveValidatedOperationalApiUrl\('\/api\/customers'\);\s*const controller = new AbortController\(\);\s*const timeoutId/);
+  const customer = app.slice(app.indexOf('const handleAddCustomer'), app.indexOf('const handleRepairLegacyReceivables'));
+  assert.ok(customer.indexOf("resolveValidatedOperationalApiUrl('/api/customers')") < customer.indexOf('dispatchLegacyLanMutation<any>'));
+  assert.match(customer, /url: customerEndpoint,[\s\S]*?timeoutMs: 5000/);
   const pos = readFileSync(new URL('../components/POSInterface.tsx', import.meta.url), 'utf8');
-  assert.match(pos, /const releaseEndpoint = await resolveValidatedOperationalApiUrl\('\/api\/mesas\/liberar'\);[\s\S]*?const controller = new AbortController\(\)/);
-  assert.match(pos, /try \{ releaseEndpoint = await resolveValidatedOperationalApiUrl\('\/api\/mesas\/liberar'\); \}[\s\S]*?const controller = new AbortController\(\)/);
-  for (const source of [app, pos]) assert.doesNotMatch(source, /controller\.abort\(\), \d+\);\s*try \{\s*const \w+ = await fetch\(await resolveValidatedOperationalApiUrl/);
+  const closeRelease = pos.slice(pos.indexOf("const releaseEndpoint = await resolveValidatedOperationalApiUrl('/api/mesas/liberar')"), pos.indexOf('await onExitToMap', pos.indexOf("const releaseEndpoint = await resolveValidatedOperationalApiUrl('/api/mesas/liberar')")));
+  assert.ok(closeRelease.indexOf('resolveValidatedOperationalApiUrl') < closeRelease.indexOf('dispatchLegacyLanMutation<any>'));
+  assert.match(closeRelease, /url: releaseEndpoint,[\s\S]*?timeoutMs: 4000/);
+  const emptyRelease = pos.slice(pos.indexOf("try { releaseEndpoint = await resolveValidatedOperationalApiUrl('/api/mesas/liberar'); }"), pos.indexOf('const releaseData', pos.indexOf("try { releaseEndpoint = await resolveValidatedOperationalApiUrl('/api/mesas/liberar'); }")));
+  assert.ok(emptyRelease.indexOf('resolveValidatedOperationalApiUrl') < emptyRelease.indexOf('dispatchLegacyLanMutation<any>'));
+  assert.match(emptyRelease, /url: releaseEndpoint,[\s\S]*?timeoutMs: 2500/);
+  for (const source of [customer, closeRelease, emptyRelease]) assert.doesNotMatch(source, /requestJson<any>|fetch\(/);
 });

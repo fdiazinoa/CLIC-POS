@@ -44,6 +44,10 @@ class NetworkSyncService {
         status: 'OFFLINE'
     };
 
+    private rejectUnjournaledLegacyMutation(operation: string): never {
+        throw new Error(`LEGACY_NETWORK_SYNC_MUTATION_BLOCKED:${operation}:USE_SYNC_MANAGER`);
+    }
+
     constructor() {
         this.terminalId = localStorage.getItem('CLIC_POS_TERMINAL_ID');
         this.token = localStorage.getItem('CLIC_POS_SYNC_TOKEN');
@@ -489,6 +493,7 @@ class NetworkSyncService {
     }
 
     private async pushPendingTransactions() {
+        this.rejectUnjournaledLegacyMutation('pushPendingTransactions');
         // In a real implementation, we would track pending items in a separate queue table
         // For now, we'll scan for items with syncStatus = 'PENDING' if we added that field
         // Or we can rely on the 'pending_transactions' collection if we were using it locally.
@@ -534,6 +539,7 @@ class NetworkSyncService {
     }
 
     private async pushPendingInventory() {
+        this.rejectUnjournaledLegacyMutation('pushPendingInventory');
         const ledger = await dbAdapter.getCollection('inventoryLedger') || [];
 
         // CRITICAL FIX: Push ALL pending movements, not just last 50
@@ -580,6 +586,7 @@ class NetworkSyncService {
     }
 
     private async pushCollection(collection: string) {
+        this.rejectUnjournaledLegacyMutation(`pushCollection:${collection}`);
         try {
             const data = await dbAdapter.getCollection(collection) || [];
             if (data.length === 0) return;

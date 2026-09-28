@@ -14,6 +14,7 @@ Object.defineProperty(globalThis, 'localStorage', {
 
 const { apiSyncAdapter } = await import('../services/sync/ApiSyncAdapter');
 const { syncManager } = await import('../services/sync/SyncManager');
+const { db } = await import('../utils/db');
 
 test('Z transport failures reach the caller so the durable report stays retryable', async () => {
   const originalPush = apiSyncAdapter.pushZReport;
@@ -33,9 +34,15 @@ test('Z transport failures reach the caller so the durable report stays retryabl
 
 test('an acknowledged retry completes without allocating a replacement report', async () => {
   const originalPush = apiSyncAdapter.pushZReport;
+  const originalSave = db.saveDocument;
   let received: any = null;
+  let persisted: any = null;
   apiSyncAdapter.pushZReport = async (report: any) => {
     received = report;
+  };
+  db.saveDocument = async (collection: any, value: any) => {
+    assert.equal(collection, 'zReports');
+    persisted = value;
   };
 
   const report = { id: 'ZR-10', sequenceNumber: 'ZS001000010' };
@@ -44,8 +51,11 @@ test('an acknowledged retry completes without allocating a replacement report', 
     assert.equal(received, report);
     assert.equal(received.id, 'ZR-10');
     assert.equal(received.sequenceNumber, 'ZS001000010');
+    assert.equal(persisted.id, 'ZR-10');
+    assert.equal(persisted.syncStatus, 'COMPLETED');
   } finally {
     apiSyncAdapter.pushZReport = originalPush;
+    db.saveDocument = originalSave;
   }
 });
 

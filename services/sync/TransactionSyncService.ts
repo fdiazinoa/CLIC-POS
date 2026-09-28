@@ -15,11 +15,12 @@ class TransactionSyncService {
      * Send transaction from slave to master
      * (Called automatically via SyncQueue)
      */
-    async pushTransaction(transaction: Transaction): Promise<void> {
+    async pushTransaction(transaction: Transaction): Promise<any> {
         try {
             // Use apiSyncAdapter to push to Master terminal
-            await apiSyncAdapter.pushTransaction(transaction);
+            const result = await apiSyncAdapter.pushTransaction(transaction);
             console.log(`📤 TransactionSync: Pushed transaction ${transaction.id} to master`);
+            return result;
         } catch (error) {
             console.error('Error pushing transaction:', error);
             throw error;

@@ -2,6 +2,7 @@ import { isRecoveredOperation } from '../recovery/PendingOperationsRecovery';
 import { db } from '../../utils/db';
 import { dbAdapter } from '../db';
 import { apiSyncAdapter } from './ApiSyncAdapter';
+import { completeLegacyMutationAfterDurableAck } from './LegacyMutationJournal';
 import { permissionService } from './PermissionService';
 import { InventoryLedgerEntry, CashMovement, ZReport, SyncStatus } from '../../types';
 import { isPosSaleActive, POS_SALE_ACTIVITY_EVENT } from '../../utils/posSaleActivity';
@@ -36,6 +37,8 @@ class BackgroundSyncManager {
     private interval: any = null;
     private retryTimeout: any = null;
     private initialized = false;
+    private remoteEnabled = true;
+    private remoteGeneration = 0;
     private listeners: Set<(state: SyncState) => void> = new Set();
     private onlineHandler: (() => void) | null = null;
     private offlineHandler: (() => void) | null = null;
@@ -70,6 +73,11 @@ class BackgroundSyncManager {
      * Initialize the background sync manager
      */
     async initialize() {
+        if (!this.remoteEnabled) {
+            console.warn('🛑 BackgroundSyncManager remote work is disabled until Master authority recovers.');
+            return;
+        }
+        const generation = this.remoteGeneration;
         if (dbAdapter.adapterType === 'network') {
             console.log("🛑 BackgroundSyncManager disabled: Running in Network Mode.");
             return;
@@ -77,6 +85,7 @@ class BackgroundSyncManager {
 
         if (this.initialized) {
             await this.updatePendingCount();
+            if (!this.remoteEnabled || generation !== this.remoteGeneration) return;
             this.startWorker();
             return;
         }
@@ -86,10 +95,13 @@ class BackgroundSyncManager {
 
         // Recover interrupted sync states from previous crashes/reloads.
         await this.recoverStuckSyncItems();
+        if (!this.remoteEnabled || generation !== this.remoteGeneration) return;
         await transferReceiptService.recoverInterrupted();
+        if (!this.remoteEnabled || generation !== this.remoteGeneration) return;
 
         // Initial count of pending items
         await this.updatePendingCount();
+        if (!this.remoteEnabled || generation !== this.remoteGeneration) return;
 
         // Start background worker
         this.startWorker();
@@ -132,21 +144,42 @@ class BackgroundSyncManager {
         window.addEventListener(POS_SALE_ACTIVITY_EVENT, this.saleActivityHandler);
     }
 
-    stopForAuthorizationLoss() {
+    disableRemoteSync(reason = 'master-authority-unavailable') {
+        this.remoteEnabled = false;
+        this.remoteGeneration += 1;
         if (this.interval) clearInterval(this.interval);
         this.interval = null;
         this.clearRetryTimeout();
-        this.isProcessing = false;
         if (this.onlineHandler) window.removeEventListener('online', this.onlineHandler);
         if (this.offlineHandler) window.removeEventListener('offline', this.offlineHandler);
         if (this.focusHandler) window.removeEventListener('focus', this.focusHandler);
         if (this.visibilityHandler) document.removeEventListener('visibilitychange', this.visibilityHandler);
         if (this.saleActivityHandler) window.removeEventListener(POS_SALE_ACTIVITY_EVENT, this.saleActivityHandler);
+        this.onlineHandler = null;
+        this.offlineHandler = null;
+        this.focusHandler = null;
+        this.visibilityHandler = null;
+        this.saleActivityHandler = null;
         this.initialized = false;
-        console.warn('🛑 BackgroundSyncManager stopped because terminal authorization was revoked.');
+        console.warn(`🛑 BackgroundSyncManager remote work stopped (${reason}).`);
+    }
+
+    enableRemoteSync() {
+        if (this.remoteEnabled) return;
+        this.remoteEnabled = true;
+        this.remoteGeneration += 1;
+    }
+
+    isRemoteSyncActive(): boolean {
+        return this.remoteEnabled && this.initialized;
+    }
+
+    stopForAuthorizationLoss() {
+        this.disableRemoteSync('terminal-authorization-revoked');
     }
 
     private startWorker() {
+        if (!this.remoteEnabled) return;
         if (this.interval) clearInterval(this.interval);
         this.interval = setInterval(() => this.sync(), this.WORKER_INTERVAL_MS);
         console.log(`⚙️ BackgroundSyncManager: Worker started (${this.WORKER_INTERVAL_MS / 1000}s interval)`);
@@ -159,7 +192,7 @@ class BackgroundSyncManager {
     }
 
     private scheduleSync(delayMs = this.FAST_RETRY_DELAY_MS) {
-        if (!navigator.onLine) return;
+        if (!this.remoteEnabled || !navigator.onLine) return;
 
         if (delayMs <= 0) {
             this.clearRetryTimeout();
@@ -329,10 +362,11 @@ class BackgroundSyncManager {
      * Main sync loop
      */
     async sync() {
-        if (this.isProcessing || !navigator.onLine || isPosSaleActive()) return;
+        if (!this.remoteEnabled || this.isProcessing || !navigator.onLine || isPosSaleActive()) return;
+        const generation = this.remoteGeneration;
         const deferred = await waitForBackgroundSyncWindow();
         if (deferred) console.info('[SYNC_DEFERRED_FOR_UI]', { source: 'operational_push' });
-        if (this.isProcessing || !navigator.onLine || isPosSaleActive()) return;
+        if (!this.remoteEnabled || generation !== this.remoteGeneration || this.isProcessing || !navigator.onLine || isPosSaleActive()) return;
         const operationalTarget = syncPolicy.resolve();
         if (operationalTarget.kind === 'NONE' || !operationalTarget.canPushOperations) {
             console.log(
@@ -380,7 +414,7 @@ class BackgroundSyncManager {
             } else {
                 // Legacy path remains available while POS-2B is dark.
                 await this.processCollection<any>('transactions', async (item) => {
-                    await apiSyncAdapter.pushTransaction(item);
+                    return apiSyncAdapter.pushTransaction(item);
                 }).catch((error: any) => {
                     collectionErrors.push(`transactions: ${error?.message || 'unknown error'}`);
                 });
@@ -396,8 +430,9 @@ class BackgroundSyncManager {
 
             // 2) Customer mutations
             await this.processCollection<any>('customerMutations', async (item) => {
-                await apiSyncAdapter.pushCustomerMutation(item);
+                const result = await apiSyncAdapter.pushCustomerMutation(item);
                 if (syncPolicy.resolve().kind === 'ERP_ACTIVE') await markNumberedMasterSynced(item.customer);
+                return result;
             }).catch((error: any) => {
                 collectionErrors.push(`customerMutations: ${error?.message || 'unknown error'}`);
             });
@@ -421,7 +456,7 @@ class BackgroundSyncManager {
 
             // Local operator mutations never contain biometric templates.
             await this.processCollection<any>('posUserMutations', async (item) => {
-                await apiSyncAdapter.pushPosUserMutation(item);
+                return apiSyncAdapter.pushPosUserMutation(item);
             }).catch((error: any) => {
                 collectionErrors.push(`posUserMutations: ${error?.message || 'unknown error'}`);
             });
@@ -432,7 +467,7 @@ class BackgroundSyncManager {
             // Sending the legacy ledger as well would duplicate the operation.
             if (!durableBatchActive) {
                 await this.processCollection<InventoryLedgerEntry>('inventoryLedger', async (item) => {
-                    await apiSyncAdapter.pushInventoryMovement(item);
+                    return apiSyncAdapter.pushInventoryMovement(item);
                 }).catch((error: any) => {
                     collectionErrors.push(`inventoryLedger: ${error?.message || 'unknown error'}`);
                 });
@@ -440,28 +475,28 @@ class BackgroundSyncManager {
 
             // 3) Cash Movements
             await this.processCollection<CashMovement>('cashMovements', async (item) => {
-                await (apiSyncAdapter as any).pushCashMovement?.(item);
+                return (apiSyncAdapter as any).pushCashMovement?.(item);
             }).catch((error: any) => {
                 collectionErrors.push(`cashMovements: ${error?.message || 'unknown error'}`);
             });
 
             // 4) Z-Reports
             await this.processCollection<ZReport>('zReports', async (item) => {
-                await (apiSyncAdapter as any).pushZReport?.(item);
+                return (apiSyncAdapter as any).pushZReport?.(item);
             }).catch((error: any) => {
                 collectionErrors.push(`zReports: ${error?.message || 'unknown error'}`);
             });
 
             // 5) Wallet operational events (ERP-normalized queue)
             await this.processCollection<any>('wallet_transactions', async (item) => {
-                await (apiSyncAdapter as any).pushOperationalEvents?.([item]);
+                return (apiSyncAdapter as any).pushOperationalEvents?.([item]);
             }).catch((error: any) => {
                 collectionErrors.push(`wallet_transactions: ${error?.message || 'unknown error'}`);
             });
 
             // 6) Loyalty points events (optional collection; often empty until wired to earn/burn)
             await this.processCollection<any>('loyalty_events', async (item) => {
-                await (apiSyncAdapter as any).pushOperationalEvents?.([item]);
+                return (apiSyncAdapter as any).pushOperationalEvents?.([item]);
             }).catch((error: any) => {
                 collectionErrors.push(`loyalty_events: ${error?.message || 'unknown error'}`);
             });
@@ -503,7 +538,8 @@ class BackgroundSyncManager {
                 hasError: collectionErrors.length > 0,
                 lastSyncTime: new Date().toISOString()
             });
-            if (navigator.onLine && (shouldRetrySoon || this.state.pendingCount > 0)
+            if (this.remoteEnabled && generation === this.remoteGeneration
+                && navigator.onLine && (shouldRetrySoon || this.state.pendingCount > 0)
                 && !(pausedForSaleActivity && this.state.pendingCount === 0)) {
                 this.scheduleSync(this.nextRetryDelayMs ?? this.FAST_RETRY_DELAY_MS);
             }
@@ -527,9 +563,10 @@ class BackgroundSyncManager {
         updatedAt?: string
     }>(
         collectionName: string,
-        pushFn: (item: T) => Promise<void>
+        pushFn: (item: T) => Promise<any>
     ) {
-        if (isPosSaleActive()) return;
+        const generation = this.remoteGeneration;
+        if (!this.remoteEnabled || isPosSaleActive()) return;
         const data = await db.get(collectionName as any) as T[];
         if (!Array.isArray(data)) return;
 
@@ -553,6 +590,7 @@ class BackgroundSyncManager {
         });
 
         for (const item of pending) {
+            if (!this.remoteEnabled || generation !== this.remoteGeneration) return;
             if (isPosSaleActive()) {
                 console.log(`⏸️ BackgroundSyncManager: ${collectionName} paused for active POS input.`);
                 return;
@@ -566,7 +604,11 @@ class BackgroundSyncManager {
                 await db.saveDocument(collectionName as any, item as any);
 
                 // Attempt push
-                await pushFn(item);
+                const mutationResult = await pushFn(item);
+                if (!this.remoteEnabled || generation !== this.remoteGeneration) {
+                    console.warn(`🛑 BackgroundSyncManager: Ignoring stale ACK for ${collectionName} item ${item.id}.`);
+                    return;
+                }
                 authenticatedActivityTracker.record('PUSH');
                 syncMetrics.increment('pushes_total');
                 authenticatedActivityTracker.record('ACK');
@@ -595,6 +637,10 @@ class BackgroundSyncManager {
                 delete (item as any).syncRetryAfter;
                 delete (item as any).syncStartedAt;
                 await db.saveDocument(collectionName as any, item as any);
+                await completeLegacyMutationAfterDurableAck(
+                    mutationResult,
+                    `BackgroundSyncManager:${collectionName}:${item.id}`,
+                );
                 if (collectionName === 'transactions') {
                     const transaction = item as any;
                     console.log(
@@ -603,6 +649,7 @@ class BackgroundSyncManager {
                 }
                 await this.yieldToOperatorUi();
             } catch (error: any) {
+                if (!this.remoteEnabled || generation !== this.remoteGeneration) return;
                 if (collectionName === 'transactions' && this.isRecoverableTransactionSyncError(error)) {
                     console.warn(
                         `⏳ BackgroundSyncManager: Deferred recoverable transaction sync ${item.id}:`,
@@ -745,7 +792,17 @@ class BackgroundSyncManager {
                 throw new Error('Conflicto de identidad del cierre Z. Debe conciliarse con el servidor antes de reenviar; se conserva la secuencia original.');
             }
             try {
-                await apiSyncAdapter.pushZReport(report);
+                const mutationResult = await apiSyncAdapter.pushZReport(report);
+                await db.saveDocument('zReports', {
+                    ...report,
+                    syncStatus: 'COMPLETED',
+                    syncError: undefined,
+                    syncBlockedReason: undefined,
+                    syncBlockedAt: undefined,
+                    syncStartedAt: undefined,
+                    syncRetryAfter: undefined,
+                });
+                await completeLegacyMutationAfterDurableAck(mutationResult, `BackgroundSyncManager:retryZReport:${id}`);
             } catch (error: any) {
                 await db.saveDocument('zReports', {
                     ...report,
@@ -754,15 +811,6 @@ class BackgroundSyncManager {
                 });
                 throw error;
             }
-            await db.saveDocument('zReports', {
-                ...report,
-                syncStatus: 'COMPLETED',
-                syncError: undefined,
-                syncBlockedReason: undefined,
-                syncBlockedAt: undefined,
-                syncStartedAt: undefined,
-                syncRetryAfter: undefined,
-            });
         } finally {
             this.isProcessing = false;
         }
