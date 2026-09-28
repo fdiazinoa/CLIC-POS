@@ -69,6 +69,8 @@ test('search reference and aliases normalize JSON/DGII input for local ambiguity
   assert.deepEqual(transactionInvoiceScanAliases(transaction()), [
     'TX-ACTUAL-1', 'TCK01-000123', 'B0200000011', 'E320000000001', 'TRACK-123', 'ERP-SOURCE-1',
   ]);
+  const fiscalUrlOnly = transaction({ ncf: undefined, fiscalReferenceId: undefined, fiscalQrUrl: 'https://dgii.gov.do/check?ncf=B0200000099' });
+  assert.equal(resolveInvoiceScan('B0200000099', [fiscalUrlOnly]).status, 'MATCH');
 });
 
 test('POS keeps coupon precedence and delegates invoice actions to the secured TicketHistory flow', () => {

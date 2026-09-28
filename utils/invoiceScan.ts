@@ -89,6 +89,9 @@ export const transactionInvoiceScanAliases = (transaction: Transaction): string[
     transaction.erpRefundSource?.sourceId,
     transaction.erpRefundSource?.reference,
   ].forEach(alias => add(aliases, alias));
+  if (transaction.fiscalQrUrl) {
+    extractInvoiceScanReferences(transaction.fiscalQrUrl).forEach(reference => add(aliases, reference));
+  }
   return [...aliases];
 };
 
