@@ -9,11 +9,14 @@ export const resolveClientMasterTerminalId = (
 ): string | undefined => {
   const localIds = new Set(localTerminalIds.map(value).filter(Boolean));
   const primary = (config.terminals || []).find(terminal => terminal?.config?.isPrimaryNode === true);
-  const ordered = [
-    ...candidates,
-    primary?.config?.erpTerminalId,
-    primary?.id,
-  ].map(value).filter(Boolean);
+  if (!primary) return undefined;
+  const primaryIds = new Set([
+    primary.config?.erpTerminalId,
+    primary.id,
+  ].map(value).filter(Boolean));
+  const corroboratedCandidate = candidates.map(value).find(candidate => primaryIds.has(candidate));
 
-  return ordered.find(candidate => !localIds.has(candidate));
+  return [corroboratedCandidate, primary.config?.erpTerminalId, primary.id]
+    .map(value)
+    .find(candidate => candidate && primaryIds.has(candidate) && !localIds.has(candidate));
 };

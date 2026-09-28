@@ -59,6 +59,12 @@ test('client pairing rejects its own ids and resolves the primary identity', () 
     ],
   } as any;
   assert.equal(resolveClientMasterTerminalId(config, ['CLIENT', 'ERP-CLIENT'], ['CLIENT', 'ERP-CLIENT']), 'ERP-MASTER');
+  assert.equal(resolveClientMasterTerminalId(config, ['CLIENT', 'ERP-CLIENT'], ['STALE-OTHER-MASTER']), 'ERP-MASTER');
+});
+
+test('client pairing never trusts an uncorroborated master id without a primary terminal', () => {
+  const config = { terminals: [{ id: 'CLIENT', config: { isPrimaryNode: false } }] } as any;
+  assert.equal(resolveClientMasterTerminalId(config, ['CLIENT'], ['STALE-OTHER-MASTER']), undefined);
 });
 
 test('non-primary devices are rejected before cloud publication work starts', () => {
