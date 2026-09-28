@@ -85,10 +85,10 @@ test('changing a Master URL does not rewrite an ERP profile', () => {
 test('manual changes, recovery, and boot all reconcile the client sync profile', () => {
   const source = readFileSync(path.resolve(import.meta.dirname, '../services/sync/SyncManager.ts'), 'utf8');
   const boot = source.slice(source.indexOf('async initialize(config:'), source.indexOf('private finalizeRecovery('));
-  const recovery = source.slice(source.indexOf('private finalizeRecovery('), source.indexOf('async setMasterUrl('));
+  const recovery = source.slice(source.indexOf('private async finalizeRecovery('), source.indexOf('async setMasterUrl('));
   const manual = source.slice(source.indexOf('async setMasterUrl('));
 
   assert.match(boot, /updateClientMasterUrl\(savedMasterUrl\)/);
-  assert.match(recovery, /updateClientMasterUrl\(normalizedUrl\)/);
+  assert.match(recovery, /persistValidatedClientMasterTargetAsync\(normalizedUrl\)/);
   assert.match(manual, /updateClientMasterUrl\(normalizedUrl\)/);
 });
