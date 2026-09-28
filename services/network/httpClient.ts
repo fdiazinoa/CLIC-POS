@@ -10,7 +10,6 @@ export interface RequestJsonInput {
     timeoutMs?: number;
     diagnosticContext?: Record<string, unknown>;
     signal?: AbortSignal;
-    requireAbortableTransport?: boolean;
 }
 
 export interface RequestJsonResult<T = unknown> {
@@ -49,6 +48,13 @@ export interface HttpClientErrorDiagnostic {
 }
 
 const INVALID_HEADER_VALUES = new Set(['', 'undefined', 'null', '[object object]']);
+let nativeRequestTransport = (options: Parameters<typeof CapacitorHttp.request>[0]) => CapacitorHttp.request(options);
+
+export const setNativeRequestTransportForTests = (
+    transport: ((options: Parameters<typeof CapacitorHttp.request>[0]) => ReturnType<typeof CapacitorHttp.request>) | null,
+): void => {
+    nativeRequestTransport = transport || ((options) => CapacitorHttp.request(options));
+};
 
 const isNativeHttpPreferred = (): boolean => {
     try {
@@ -168,24 +174,7 @@ export async function requestJson<T = unknown>(input: RequestJsonInput): Promise
     const method = String(input.method || 'GET').toUpperCase();
     const headers = sanitizeHeaders(input.headers);
     const headersSummary = summarizeHeaders(headers);
-    const nativeEngine = getNetworkEngine();
-    const networkEngine: NetworkEngine = input.requireAbortableTransport && nativeEngine === 'capacitor-http'
-        ? 'fetch'
-        : nativeEngine;
-    if (input.requireAbortableTransport && nativeEngine === 'capacitor-http') {
-        await new Promise<void>((resolve, reject) => {
-            const abort = () => {
-                clearTimeout(timer);
-                reject(new DOMException('Authority request aborted before dispatch', 'AbortError'));
-            };
-            const timer = setTimeout(() => {
-                input.signal?.removeEventListener('abort', abort);
-                resolve();
-            }, 0);
-            input.signal?.addEventListener('abort', abort, { once: true });
-        });
-    }
-    if (input.signal?.aborted) throw new DOMException('Authority request aborted', 'AbortError');
+    const networkEngine = getNetworkEngine();
     const timeoutMs = input.timeoutMs || 5000;
     const bodySize = resolveBodySize(input.body);
     const platform = (() => {
@@ -231,7 +220,7 @@ export async function requestJson<T = unknown>(input: RequestJsonInput): Promise
         try {
             console.log('[FETCH_SENT]', { ...baseDiagnostic, fetchStage: 'NATIVE_HTTP_SENT' });
             console.log('[NATIVE_HTTP_SENT]', baseDiagnostic);
-            const nativeRequest = CapacitorHttp.request({
+            const nativeRequest = nativeRequestTransport({
                 method,
                 url: input.url,
                 headers,

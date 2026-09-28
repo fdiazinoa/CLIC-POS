@@ -60,6 +60,7 @@ import {
 } from '../../utils/syncCapabilities';
 import { classifyMasterPullFailure } from './masterPullFailure';
 import { isTerminalAuthorizationSuperseded } from '../../utils/terminalAuthorizationGuard';
+import { LegacyMutationJournal, legacyMutationJournal } from './LegacyMutationJournal';
 
 /**
  * API Sync Adapter
@@ -148,6 +149,9 @@ interface TerminalInventoryPayload {
 
 type CircuitBreakerChannel = 'sales' | 'background';
 type OperationalSyncOperation = Exclude<SyncDiagnosticOperation, 'REGISTER_TERMINAL'>;
+type SyncTransportClass = 'LAN_AUTH' | 'LAN_LEGACY' | 'ERP_CLOUD';
+type MutationDispatchPolicy = 'DEFAULT' | 'LEGACY_NO_RETRY';
+type SyncRequestInit = RequestInit & { clicTransportClass?: SyncTransportClass };
 
 const ERP_TEMPORARILY_UNAVAILABLE_ERROR = 'ERP temporalmente no disponible';
 const ERP_SYNC_TOKEN_KEYS = [
@@ -386,13 +390,13 @@ class SyncCircuitBreaker {
     }
 }
 
-class ApiSyncAdapter {
+export class ApiSyncAdapter {
     private config: SyncConfig | null = null;
     private authToken: string | null = null;
     private erpAuthToken: string | null = null;
     private operationalTargetHint: { terminalId: string | null; baseUrl: string | null } = { terminalId: null, baseUrl: null };
     private isOnline: boolean = true;
-    private authInFlight: Record<CircuitBreakerChannel, Promise<void> | null> = { sales: null, background: null };
+    private authInFlight: Promise<void> | null = null;
     private erpAuthInFlight: Record<CircuitBreakerChannel, Promise<string> | null> = { sales: null, background: null };
     private lastOperationalStockBalanceMaps = new Map<string, Record<string, number>>();
     private onlineListener: (() => void) | null = null;
@@ -400,6 +404,7 @@ class ApiSyncAdapter {
     private operationalAuthorityEnabled = true;
     private operationalAuthorityRevision = 0;
     private operationalAuthorityAbortController: AbortController | null = new AbortController();
+    private readonly legacyJournalIds = new WeakMap<Response, string>();
 
     private readonly salesCircuitBreaker = new SyncCircuitBreaker('sales');
     private readonly backgroundCircuitBreaker = new SyncCircuitBreaker('background');
@@ -407,6 +412,8 @@ class ApiSyncAdapter {
     private lastAuthLogAt: Record<'master' | 'erp', number> = { master: 0, erp: 0 };
     private readonly AUTH_LOG_THROTTLE_MS = 5000;
     private readonly ERP_REAUTH_RETRY_WINDOW_MS = 30000;
+
+    constructor(private readonly mutationJournal: LegacyMutationJournal = legacyMutationJournal) {}
 
     private isCircuitBreakerOpenError(error: unknown): boolean {
         const message = error instanceof Error ? error.message : String(error || '');
@@ -686,14 +693,15 @@ class ApiSyncAdapter {
      */
     private async fetchWithRetry(
         url: string,
-        options: RequestInit = {},
+        options: SyncRequestInit = {},
         retries = 2,
         backoff = 500,
         channel: CircuitBreakerChannel = 'background',
         operation: OperationalSyncOperation = channel === 'sales' ? 'PUSH_OPERATIONS' : 'PULL_MASTERS',
         authorityRevision = this.operationalAuthorityRevision,
         authoritySignal = this.operationalAuthorityAbortController?.signal,
-        authorityRequestId = `${authorityRevision}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        diagnosticRequestId = `${authorityRevision}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        mutationDispatch: MutationDispatchPolicy = 'DEFAULT',
     ): Promise<Response> {
         this.assertOperationalAuthorityCurrent(authorityRevision, authoritySignal);
         // Add jitter to backoff (±20% randomness)
@@ -708,9 +716,11 @@ class ApiSyncAdapter {
         const method = String(options.method || 'GET').toUpperCase();
         const headers = this.normalizeFetchHeaders(options.headers);
         const isMutatingRequest = !['GET', 'HEAD', 'OPTIONS'].includes(method);
-        headers['X-CLIC-Authority-Revision'] = String(authorityRevision);
-        headers['X-CLIC-Authority-Request-Id'] = authorityRequestId;
-        if (isMutatingRequest && !headers['Idempotency-Key']) headers['Idempotency-Key'] = authorityRequestId;
+        const transportClass = options.clicTransportClass || this.classifyTransport(url, method);
+        const effectiveMutationDispatch: MutationDispatchPolicy = transportClass === 'LAN_LEGACY'
+            ? 'LEGACY_NO_RETRY'
+            : mutationDispatch;
+        const authorityFingerprint = this.currentAuthorityFingerprint(url);
         const headersSummary = this.summarizeFetchHeaders(headers);
         const bodySize = this.getBodySize(options.body);
         const capacitorPlatform = this.resolveCapacitorPlatform();
@@ -768,7 +778,21 @@ class ApiSyncAdapter {
             profileSourcePriority: fetchContext.profileSourcePriority,
         });
 
+        let legacyJournalId: string | null = null;
         try {
+            if (effectiveMutationDispatch === 'LEGACY_NO_RETRY' && isMutatingRequest) {
+                const journalEntry = await this.mutationJournal.begin({
+                    operationCorrelationId: diagnosticRequestId,
+                    authorityFingerprint,
+                    generation: authorityRevision,
+                    method,
+                    url,
+                    diagnosticRequestId,
+                });
+                legacyJournalId = journalEntry.id;
+                await this.mutationJournal.prepareDispatch(legacyJournalId, authorityFingerprint, authorityRevision);
+                this.assertOperationalAuthorityCurrent(authorityRevision, authoritySignal);
+            }
             const nativeResponse = await requestJson({
                 url,
                 method,
@@ -777,13 +801,19 @@ class ApiSyncAdapter {
                 timeoutMs: this.resolveRequestTimeoutMs(url, operation),
                 diagnosticContext: fetchContext,
                 signal: authoritySignal,
-                requireAbortableTransport: isMutatingRequest,
             });
             this.assertOperationalAuthorityCurrent(authorityRevision, authoritySignal);
             const response = new Response(nativeResponse.text, {
                 status: nativeResponse.status,
                 headers: nativeResponse.headers,
             });
+            if (legacyJournalId) {
+                this.legacyJournalIds.set(response, legacyJournalId);
+                await this.mutationJournal.recordHttpStatus(legacyJournalId, response.status);
+                if (response.status !== 401 && !response.ok) {
+                    await this.mutationJournal.markOutcomeUnknown(legacyJournalId, response.status);
+                }
+            }
             console.log('[FETCH_RESPONSE]', {
                 ...fetchContext,
                 networkEngine: nativeResponse.networkEngine,
@@ -808,14 +838,22 @@ class ApiSyncAdapter {
             }
 
             // If 503 Service Unavailable or 504 Gateway Timeout, retry
-            if ((response.status === 503 || response.status === 504) && retries > 0) {
+            if (effectiveMutationDispatch !== 'LEGACY_NO_RETRY' && (response.status === 503 || response.status === 504) && retries > 0) {
                 console.warn(`⚠️ Request failed with ${response.status}, retrying in ${Math.round(effectiveBackoff)}ms...`);
                 await this.waitForAuthorityRetry(effectiveBackoff, authorityRevision, authoritySignal);
-                return this.fetchWithRetry(url, options, retries - 1, backoff * 2, channel, operation, authorityRevision, authoritySignal, authorityRequestId);
+                return this.fetchWithRetry(url, options, retries - 1, backoff * 2, channel, operation, authorityRevision, authoritySignal, diagnosticRequestId, mutationDispatch);
+            }
+
+            if (legacyJournalId && response.status !== 401 && !response.ok) {
+                throw Object.assign(new Error(`LEGACY_MUTATION_OUTCOME_UNKNOWN:${response.status}`), {
+                    httpStatus: response.status,
+                    legacyMutationJournalId: legacyJournalId,
+                });
             }
 
             return response;
         } catch (error: any) {
+            if (legacyJournalId) await this.mutationJournal.markOutcomeUnknown(legacyJournalId, null);
             if (!this.isOperationalAuthorityCurrent(authorityRevision, authoritySignal)) throw error;
             const isConnectionError = this.isRecoverableConnectionError(error);
             const isTimeout = error?.name === 'AbortError';
@@ -866,13 +904,94 @@ class ApiSyncAdapter {
                 }
             }
 
-            if ((isConnectionError || isTimeout) && retries > 0 && circuitBreaker.canRetry()) {
+            if (effectiveMutationDispatch !== 'LEGACY_NO_RETRY' && (isConnectionError || isTimeout) && retries > 0 && circuitBreaker.canRetry()) {
                 console.warn(`⚠️ Connection error (${error.message}), retrying in ${Math.round(effectiveBackoff)}ms...`);
                 await this.waitForAuthorityRetry(effectiveBackoff, authorityRevision, authoritySignal);
-                return this.fetchWithRetry(url, options, retries - 1, backoff * 1.5, channel, operation, authorityRevision, authoritySignal, authorityRequestId);
+                return this.fetchWithRetry(url, options, retries - 1, backoff * 1.5, channel, operation, authorityRevision, authoritySignal, diagnosticRequestId, mutationDispatch);
             }
 
             throw error;
+        }
+    }
+
+    private classifyTransport(url: string, method: string): SyncTransportClass {
+        const configuredOrigin = this.config?.masterUrl ? new URL(this.config.masterUrl).origin : null;
+        const parsed = new URL(url);
+        if (!configuredOrigin || parsed.origin !== configuredOrigin) return 'ERP_CLOUD';
+        if (method === 'POST' && /\/(?:api\/sync\/)?auth\/?$/i.test(parsed.pathname)) return 'LAN_AUTH';
+        if (method === 'POST' && /\/api\/sync\/images\/batch\/?$/i.test(parsed.pathname)) return 'ERP_CLOUD';
+        return ['GET', 'HEAD', 'OPTIONS'].includes(method) ? 'ERP_CLOUD' : 'LAN_LEGACY';
+    }
+
+    private currentAuthorityFingerprint(url: string): string {
+        return `${new URL(url).origin}|${this.config?.terminalId || ''}`;
+    }
+
+    private async acknowledgeLegacyResponse(
+        response: Response,
+        classification: 'RESPONSE_VALID' | 'SAFE_PRE_SIDE_EFFECT',
+        callerAckReference: string,
+    ): Promise<void> {
+        const id = this.legacyJournalIds.get(response);
+        if (!id) return;
+        await this.mutationJournal.acknowledge(id, classification, callerAckReference);
+        this.legacyJournalIds.delete(response);
+    }
+
+    private async rejectMalformedLegacyResponse(response: Response): Promise<void> {
+        const id = this.legacyJournalIds.get(response);
+        if (!id) return;
+        await this.mutationJournal.markOutcomeUnknown(id, response.status);
+    }
+
+    private async acknowledgeLegacyJsonResponse(
+        response: Response,
+        callerAckReference: string,
+        validator: (payload: any) => boolean = payload => Boolean(payload && typeof payload === 'object'),
+    ): Promise<any> {
+        const text = await response.clone().text().catch(() => '');
+        let payload: any = null;
+        try {
+            payload = text.trim() ? JSON.parse(text) : null;
+        } catch {
+            payload = null;
+        }
+        if (!validator(payload)) {
+            await this.rejectMalformedLegacyResponse(response);
+            if (this.legacyJournalIds.has(response)) throw new Error('LEGACY_MUTATION_RESPONSE_SCHEMA_INVALID');
+            return payload;
+        }
+        await this.acknowledgeLegacyResponse(response, 'RESPONSE_VALID', callerAckReference);
+        return payload;
+    }
+
+    private async acknowledgeLegacy401(response: Response, callerAckReference: string): Promise<void> {
+        if (response.status !== 401) return;
+        await this.acknowledgeLegacyResponse(response, 'SAFE_PRE_SIDE_EFFECT', callerAckReference);
+    }
+
+    private async completeOperationalLegacyMutation(
+        response: Response,
+        payload: any,
+        callerAck?: { reference: string; validate: (payload: any) => void },
+    ): Promise<void> {
+        if (!this.legacyJournalIds.has(response)) return;
+        if (!callerAck) {
+            await this.rejectMalformedLegacyResponse(response);
+            throw new Error('LEGACY_MUTATION_CALLER_ACK_REQUIRED');
+        }
+        try {
+            callerAck.validate(payload);
+        } catch (error) {
+            await this.rejectMalformedLegacyResponse(response);
+            throw error;
+        }
+        await this.acknowledgeLegacyResponse(response, 'RESPONSE_VALID', callerAck.reference);
+    }
+
+    private assertOperationalResponseObject(payload: any): void {
+        if (!payload || typeof payload !== 'object' || Array.isArray(payload) || 'raw' in payload) {
+            throw new Error('LEGACY_MUTATION_RESPONSE_SCHEMA_INVALID');
         }
     }
 
@@ -965,8 +1084,8 @@ class ApiSyncAdapter {
             return;
         }
 
-        if (!force && this.authInFlight[channel]) {
-            return this.authInFlight[channel]!;
+        if (this.authInFlight) {
+            return this.authInFlight;
         }
 
         const authPromise = (async () => {
@@ -1034,9 +1153,9 @@ class ApiSyncAdapter {
         })();
 
         const trackedPromise = authPromise.finally(() => {
-            if (this.authInFlight[channel] === trackedPromise) this.authInFlight[channel] = null;
+            if (this.authInFlight === trackedPromise) this.authInFlight = null;
         });
-        this.authInFlight[channel] = trackedPromise;
+        this.authInFlight = trackedPromise;
 
         return trackedPromise;
     }
@@ -1901,6 +2020,7 @@ class ApiSyncAdapter {
 
         const response = await this.fetchWithRetry(endpoint, {
             method: 'POST',
+            clicTransportClass: 'ERP_CLOUD',
             headers,
             body: JSON.stringify({
                 terminalId: target.terminalId,
@@ -2982,6 +3102,7 @@ class ApiSyncAdapter {
             };
             const response = await this.fetchWithRetry(authEndpoint, {
                 method: 'POST',
+                clicTransportClass: target.useLocalTarget ? 'LAN_AUTH' : 'ERP_CLOUD',
                 headers: authHeaders,
                 body: JSON.stringify({
                     terminalId: target.terminalId,
@@ -3151,6 +3272,7 @@ class ApiSyncAdapter {
             reauthenticateOn401?: boolean;
             expectedRecoveryScope?: string;
             recoveryOriginal?: { document: any; collection: string };
+            callerAck?: { reference: string; validate: (payload: any) => void };
         } = {},
     ): Promise<any> {
         const target = await this.authenticateOperationalTarget(false, 'sales', 'PUSH_OPERATIONS');
@@ -3169,6 +3291,7 @@ class ApiSyncAdapter {
         }
         const response = await this.fetchWithRetry(`${target.baseUrl}${path}`, {
             method: 'POST',
+            clicTransportClass: target.useLocalTarget ? 'LAN_LEGACY' : 'ERP_CLOUD',
             headers: {
                 ...this.buildOperationalHeaders(target, target.token, true),
                 ...this.getLocalDeviceHeaders(),
@@ -3180,6 +3303,7 @@ class ApiSyncAdapter {
         }, 2, 500, 'sales', 'PUSH_OPERATIONS');
 
         if (response.status === 401 && options.reauthenticateOn401 !== false) {
+            await this.acknowledgeLegacy401(response, `postOperationalPayload:${path}:401`);
             if (target.useLocalTarget) {
                 this.authToken = null;
             } else {
@@ -3194,6 +3318,7 @@ class ApiSyncAdapter {
             }
             const retryResponse = await this.fetchWithRetry(`${retriedTarget.baseUrl}${path}`, {
                 method: 'POST',
+                clicTransportClass: retriedTarget.useLocalTarget ? 'LAN_LEGACY' : 'ERP_CLOUD',
                 headers: {
                     ...this.buildOperationalHeaders(retriedTarget, retriedTarget.token, true),
                     ...this.getLocalDeviceHeaders(),
@@ -3205,6 +3330,7 @@ class ApiSyncAdapter {
             }, 2, 500, 'sales', 'PUSH_OPERATIONS');
 
             if (!retryResponse.ok) {
+                await this.acknowledgeLegacy401(retryResponse, `postOperationalPayload:${path}:retry-401`);
                 const retryText = await retryResponse.clone().text().catch(() => '');
                 await this.handleDeviceSupersededResponse(retryResponse, retriedTarget.terminalId);
                 const authRejection = await this.buildOperationalSyncAuthRejection({
@@ -3220,10 +3346,12 @@ class ApiSyncAdapter {
             }
 
             const data = await this.parseOperationalResponse(retryResponse);
+            await this.completeOperationalLegacyMutation(retryResponse, data, options.callerAck);
             return options.includeHttpStatus ? { httpStatus: retryResponse.status, data } : data;
         }
 
         if (!response.ok) {
+            await this.acknowledgeLegacy401(response, `postOperationalPayload:${path}:401-no-retry`);
             const text = await response.clone().text().catch(() => '');
             await this.handleDeviceSupersededResponse(response, target.terminalId);
             const authRejection = await this.buildOperationalSyncAuthRejection({
@@ -3238,6 +3366,7 @@ class ApiSyncAdapter {
             );
         }
         const data = await this.parseOperationalResponse(response);
+        await this.completeOperationalLegacyMutation(response, data, options.callerAck);
         return options.includeHttpStatus ? { httpStatus: response.status, data } : data;
     }
 
@@ -3255,7 +3384,14 @@ class ApiSyncAdapter {
             return await this.postOperationalPayload(
                 `/transfers/${encodeURIComponent(normalizedTransferId)}/receipts`,
                 payload,
-                { includeHttpStatus: true, reauthenticateOn401: false },
+                {
+                    includeHttpStatus: true,
+                    reauthenticateOn401: false,
+                    callerAck: {
+                        reference: `postTransferReceipt:${normalizedTransferId}`,
+                        validate: data => this.assertOperationalResponseObject(data),
+                    },
+                },
             );
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error || 'Transfer receipt failed');
@@ -3275,7 +3411,14 @@ class ApiSyncAdapter {
             return await this.postOperationalPayload(
                 `/terminals/${encodeURIComponent(normalizedTerminalId)}/master-number-ranges/progress`,
                 payload,
-                { includeHttpStatus: true, reauthenticateOn401: false },
+                {
+                    includeHttpStatus: true,
+                    reauthenticateOn401: false,
+                    callerAck: {
+                        reference: `pushMasterNumberRangeProgress:${normalizedTerminalId}`,
+                        validate: data => this.assertOperationalResponseObject(data),
+                    },
+                },
             );
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error || 'Master range progress failed');
@@ -3315,6 +3458,10 @@ class ApiSyncAdapter {
         if (!normalized) throw new Error('REFUND_SOURCE_ID_MISSING');
         return this.postOperationalPayload(`/refund-sources/${encodeURIComponent(normalized)}/prepare`, payload, {
             reauthenticateOn401: false,
+            callerAck: {
+                reference: `prepareRefundSource:${payload.commandId}`,
+                validate: data => this.assertOperationalResponseObject(data),
+            },
         });
     }
 
@@ -3325,7 +3472,15 @@ class ApiSyncAdapter {
     }
 
     async receiveRecoveryOriginals(records: unknown[]): Promise<any> {
-        return this.postOperationalPayload('/originals/batch', { records }, { maxRequestBytes: 2 * 1024 * 1024, reauthenticateOn401: false, expectedRecoveryScope: originalProvenance().key });
+        return this.postOperationalPayload('/originals/batch', { records }, {
+            maxRequestBytes: 2 * 1024 * 1024,
+            reauthenticateOn401: false,
+            expectedRecoveryScope: originalProvenance().key,
+            callerAck: {
+                reference: `receiveRecoveryOriginals:${records.length}`,
+                validate: data => this.assertOperationalResponseObject(data),
+            },
+        });
     }
 
     /** Frozen close bodies bypass commercial payload enrichment and automatic reauthentication. */
@@ -3336,6 +3491,7 @@ class ApiSyncAdapter {
         if (target.useLocalTarget || originalProvenance().key !== scopeKey) throw new Error('RECOVERY_SCOPE_CHANGED');
         const response = await this.fetchWithRetry(`${target.baseUrl}/originals${path}`, {
             method: exactBody === undefined ? 'GET' : 'POST',
+            clicTransportClass: target.useLocalTarget && exactBody !== undefined ? 'LAN_LEGACY' : 'ERP_CLOUD',
             headers: { ...this.buildOperationalHeaders(target, target.token, exactBody !== undefined), ...this.getLocalDeviceHeaders() },
             ...(exactBody === undefined ? {} : { body: exactBody }),
         }, 0, 500, 'sales', 'PUSH_OPERATIONS');
@@ -3343,16 +3499,36 @@ class ApiSyncAdapter {
         await this.handleDeviceSupersededResponse(response, target.terminalId);
         const payload = await response.json();
         if (response.status === 404 && path.endsWith('/result') && payload.code === 'CLOSE_RESULT_NOT_FOUND') return null;
+        if (response.status === 401) await this.acknowledgeLegacy401(response, `receivedCloseRequest:${path}:401`);
         if (!response.ok) throw Object.assign(new Error(payload.code || 'RECEIVED_CLOSE_HTTP_ERROR'), { httpStatus: response.status });
+        if (!payload || typeof payload !== 'object') {
+            await this.rejectMalformedLegacyResponse(response);
+            throw new Error('LEGACY_MUTATION_RESPONSE_SCHEMA_INVALID');
+        }
+        await this.acknowledgeLegacyResponse(response, 'RESPONSE_VALID', `receivedCloseRequest:${path}`);
         return payload;
     }
 
     async getOriginalCommercialStatus(references: unknown[]): Promise<any> {
-        return this.postOperationalPayload('/originals/commercial-status', { references }, { reauthenticateOn401: false, expectedRecoveryScope: originalProvenance().key });
+        return this.postOperationalPayload('/originals/commercial-status', { references }, {
+            reauthenticateOn401: false,
+            expectedRecoveryScope: originalProvenance().key,
+            callerAck: {
+                reference: `getOriginalCommercialStatus:${references.length}`,
+                validate: data => this.assertOperationalResponseObject(data),
+            },
+        });
     }
 
     async createRecoverySnapshot(): Promise<any> {
-        return this.postOperationalPayload('/originals/snapshots', {}, { reauthenticateOn401: false, expectedRecoveryScope: originalProvenance().key });
+        return this.postOperationalPayload('/originals/snapshots', {}, {
+            reauthenticateOn401: false,
+            expectedRecoveryScope: originalProvenance().key,
+            callerAck: {
+                reference: 'createRecoverySnapshot',
+                validate: data => this.assertOperationalResponseObject(data),
+            },
+        });
     }
 
     async retainedEpochRequest(requestId: string, body?: unknown): Promise<any> {
@@ -3363,6 +3539,7 @@ class ApiSyncAdapter {
         const path = '/originals/retained-epochs' + (body === undefined ? '/' + encodeURIComponent(requestId) : '');
         const response = await this.fetchWithRetry(`${target.baseUrl}${path}`, {
             method: body === undefined ? 'GET' : 'POST',
+            clicTransportClass: target.useLocalTarget && body !== undefined ? 'LAN_LEGACY' : 'ERP_CLOUD',
             headers: {...this.buildOperationalHeaders(target, target.token, body !== undefined), ...this.getLocalDeviceHeaders()},
             ...(body === undefined ? {} : {body:JSON.stringify(body)}),
         }, 0, 500, 'background', 'PUSH_OPERATIONS');
@@ -3370,7 +3547,13 @@ class ApiSyncAdapter {
         await this.handleDeviceSupersededResponse(response, target.terminalId);
         const payload = await response.json();
         if (response.status === 404 && body === undefined && payload.code === 'RESUME_REQUEST_NOT_FOUND') return null;
+        if (response.status === 401) await this.acknowledgeLegacy401(response, `retainedEpochRequest:${requestId}:401`);
         if (!response.ok) throw Object.assign(new Error(payload.code || 'RETAINED_EPOCH_HTTP_ERROR'), {httpStatus:response.status});
+        if (!payload || typeof payload !== 'object') {
+            await this.rejectMalformedLegacyResponse(response);
+            throw new Error('LEGACY_MUTATION_RESPONSE_SCHEMA_INVALID');
+        }
+        await this.acknowledgeLegacyResponse(response, 'RESPONSE_VALID', `retainedEpochRequest:${requestId}`);
         return payload;
     }
 
@@ -3585,6 +3768,7 @@ class ApiSyncAdapter {
                 const primaryUrl = `${authTarget.baseUrl}/cloud-staging/masters/${collection}`;
                 const primaryResponse = await this.fetchWithRetry(primaryUrl, {
                     method: 'POST',
+                    clicTransportClass: 'ERP_CLOUD',
                     headers: this.buildOperationalHeaders(authTarget, authTarget.token, true),
                     body: buildBody()
                 }, 2, 500, 'background', 'PUSH_MASTERS');
@@ -3645,6 +3829,7 @@ class ApiSyncAdapter {
 
             if (response.status === 401) {
                 // Token expired, re-authenticate
+                await this.acknowledgeLegacy401(response, `push:${collection}:401`);
                 await this.authenticate();
                 return this.push(collection, items, action, mode);
             }
@@ -3653,7 +3838,11 @@ class ApiSyncAdapter {
                 throw new Error(`Push failed: ${response.statusText}`);
             }
 
-            const data = await response.json();
+            const data = await this.acknowledgeLegacyJsonResponse(
+                response,
+                `push:${collection}:${normalizedItems.length}`,
+                payload => Boolean(payload && typeof payload === 'object' && Number.isFinite(Number(payload.version))),
+            );
             console.log(`📤 ApiSyncAdapter: Pushed ${normalizedItems.length} items to ${collection} (v${data.version})`);
         } catch (error) {
             console.error(`❌ ApiSyncAdapter: Error pushing ${collection}:`, error);
@@ -4865,6 +5054,7 @@ class ApiSyncAdapter {
         try {
             const response = await this.fetchWithRetry(`${this.config.masterUrl}/api/sync/products/images/pull`, {
                 method: 'POST',
+                clicTransportClass: 'ERP_CLOUD',
                 headers: {
                     'Content-Type': 'application/json',
                     'X-Sync-Token': this.authToken || ''
@@ -5236,6 +5426,7 @@ class ApiSyncAdapter {
             });
             const response = await this.fetchWithRetry(postUrl, {
                 method: 'POST',
+                clicTransportClass: 'ERP_CLOUD',
                 headers: this.buildOperationalHeaders(target, target.token, true),
                 body: JSON.stringify(requestBody)
             }, 2, 500, 'sales', 'PUSH_OPERATIONS');
@@ -5283,6 +5474,7 @@ class ApiSyncAdapter {
             );
             const response = await this.fetchWithRetry(postUrl, {
                 method: 'POST',
+                clicTransportClass: 'LAN_LEGACY',
                 headers: {
                     'Content-Type': 'application/json',
                     'X-Sync-Token': this.authToken || ''
@@ -5294,6 +5486,9 @@ class ApiSyncAdapter {
                 })
             }, 2, 500, 'sales');
 
+            if (response.status === 401) {
+                await this.acknowledgeLegacy401(response, `pushTransaction:${txId}:401:${retryCount}`);
+            }
             if (response.status !== 401 || retryCount === 1) {
                 return response;
             }
@@ -5462,12 +5657,18 @@ class ApiSyncAdapter {
                 );
             }
 
-            let syncBody: any = null;
-            try {
-                syncBody = await response.json();
-            } catch {
-                // non-JSON response
-            }
+            const syncBody = await this.acknowledgeLegacyJsonResponse(
+                response,
+                `pushTransaction:${txId}:applied`,
+                payload => Boolean(
+                    payload
+                    && typeof payload === 'object'
+                    && !(typeof payload.applyFailedCount === 'number' && payload.applyFailedCount > 0)
+                    && !payload?.erpInbox?.skipped
+                    && !this.hasRealApplyErrorResponse(payload, JSON.stringify(payload))
+                    && this.hasErpApplyConfirmation(payload, JSON.stringify(payload))
+                ),
+            );
             const erp = syncBody?.erpInbox;
             const r0 = Array.isArray(erp?.results) ? erp.results[0] : null;
             console.log(
@@ -5529,10 +5730,19 @@ class ApiSyncAdapter {
     async pushInventoryMovement(movement: any): Promise<void> {
         try {
             const payload = buildErpInventoryLedgerPayload(movement);
-            const acknowledgement = await this.postOperationalPayload('/inventory/movements', { items: [payload] });
+            const documentId = String(payload.source_inventory_movement_id || payload.id);
+            const acknowledgement = await this.postOperationalPayload('/inventory/movements', { items: [payload] }, {
+                callerAck: {
+                    reference: `pushInventoryMovement:${documentId}`,
+                    validate: data => {
+                        this.assertOperationalResponseObject(data);
+                        assertOperationalAcknowledgement(data, documentId, 'INVENTORY');
+                    },
+                },
+            });
             assertOperationalAcknowledgement(
                 acknowledgement,
-                String(payload.source_inventory_movement_id || payload.id),
+                documentId,
                 'INVENTORY',
             );
             console.log(`📤 ApiSyncAdapter: Pushed inventory movement ${payload.source_inventory_movement_id || payload.id}`);
@@ -5547,10 +5757,20 @@ class ApiSyncAdapter {
         try {
             const customerId = String(mutation?.customerId || mutation?.customer?.id || '').trim();
             if (!customerId) throw new Error('CUSTOMER_ID_MISSING');
+            const mutationId = String(mutation.id);
             const acknowledgement = await this.postOperationalPayload('/customers/upsert', {
                 items: [buildCustomerMutationEnvelope({ ...mutation, customerId, operation: mutation.operation || 'UPSERT' })],
+            }, {
+                callerAck: {
+                    reference: `pushCustomerMutation:${mutationId}`,
+                    validate: data => {
+                        this.assertOperationalResponseObject(data);
+                        assertOperationalAcknowledgement(data, mutationId, 'CUSTOMER');
+                        assertCustomerNumberAcknowledgement(data, mutation.customer);
+                    },
+                },
             });
-            assertOperationalAcknowledgement(acknowledgement, String(mutation.id), 'CUSTOMER');
+            assertOperationalAcknowledgement(acknowledgement, mutationId, 'CUSTOMER');
             assertCustomerNumberAcknowledgement(acknowledgement, mutation.customer);
             console.log(`📤 ApiSyncAdapter: Pushed customer mutation ${mutation.id}`);
         } catch (error) {
@@ -5565,7 +5785,19 @@ class ApiSyncAdapter {
         if (!catalogScopeMatches(edit.scope)) throw new Error('El cambio pertenece a otra vinculación.');
         return this.postOperationalPayload('/catalog-edits/mutations', {
             scope: edit.scope, mutation: edit.mutation,
-        }, { reauthenticateOn401: false });
+        }, {
+            reauthenticateOn401: false,
+            callerAck: {
+                reference: `sendCatalogEdit:${edit.id}`,
+                validate: data => {
+                    this.assertOperationalResponseObject(data);
+                    if (String(data.id || '') !== String(edit.id)
+                        || !['APPLIED', 'CONFLICT', 'REJECTED'].includes(String(data.status || ''))) {
+                        throw new Error('CATALOG_EDIT_ACK_INVALID');
+                    }
+                },
+            },
+        });
     }
 
     async pushPosUserMutation(mutation: any): Promise<void> {
@@ -5584,6 +5816,14 @@ class ApiSyncAdapter {
                     user: mutation.user,
                     createdAt: mutation.createdAt,
                 }],
+            }, {
+                callerAck: {
+                    reference: `pushPosUserMutation:${mutationId}`,
+                    validate: data => {
+                        this.assertOperationalResponseObject(data);
+                        assertOperationalAcknowledgement(data, mutationId, 'POS_USER');
+                    },
+                },
             });
             if (!acknowledgement) {
                 throw new Error('POS_USER_ACK_MISSING: ERP no confirmó la mutación');
@@ -5602,6 +5842,14 @@ class ApiSyncAdapter {
             mutationId,
             currencies,
             actor,
+        }, {
+            callerAck: {
+                reference: `saveCurrencies:${mutationId}`,
+                validate: data => {
+                    this.assertOperationalResponseObject(data);
+                    assertOperationalAcknowledgement(data, mutationId, 'CURRENCY');
+                },
+            },
         });
         assertOperationalAcknowledgement(acknowledgement, mutationId, 'CURRENCY');
         return acknowledgement;
@@ -5613,6 +5861,14 @@ class ApiSyncAdapter {
             mutationId,
             taxes,
             actor,
+        }, {
+            callerAck: {
+                reference: `saveTaxes:${mutationId}`,
+                validate: data => {
+                    this.assertOperationalResponseObject(data);
+                    assertOperationalAcknowledgement(data, mutationId, 'TAX');
+                },
+            },
         });
         assertOperationalAcknowledgement(acknowledgement, mutationId, 'TAX');
         return acknowledgement;
@@ -5622,6 +5878,14 @@ class ApiSyncAdapter {
         const scheduleId = String(schedule.id || `currency-schedule-${Date.now()}`);
         const acknowledgement = await this.postOperationalPayload('/currencies/schedules', {
             items: [{ ...schedule, id: scheduleId }],
+        }, {
+            callerAck: {
+                reference: `scheduleCurrencyRate:${scheduleId}`,
+                validate: data => {
+                    this.assertOperationalResponseObject(data);
+                    assertOperationalAcknowledgement(data, scheduleId, 'CURRENCY_SCHEDULE');
+                },
+            },
         });
         assertOperationalAcknowledgement(acknowledgement, scheduleId, 'CURRENCY_SCHEDULE');
         return acknowledgement;
@@ -5648,6 +5912,7 @@ class ApiSyncAdapter {
             });
 
             if (response.status === 401) {
+                await this.acknowledgeLegacy401(response, `pushInventoryCount:${countSession.id}:401`);
                 await this.authenticate();
                 return this.pushInventoryCount(countSession);
             }
@@ -5655,6 +5920,15 @@ class ApiSyncAdapter {
             if (!response.ok) {
                 throw new Error(`Push inventory count failed: ${response.statusText}`);
             }
+            await this.acknowledgeLegacyJsonResponse(response, `pushInventoryCount:${countSession.id}`, payload => {
+                try {
+                    this.assertOperationalResponseObject(payload);
+                    assertOperationalAcknowledgement(payload, String(countSession.id), 'INVENTORY_COUNT');
+                    return true;
+                } catch {
+                    return false;
+                }
+            });
             console.log(`📤 ApiSyncAdapter: Pushed inventory count ${countSession.id}`);
         } catch (error) {
             console.error('❌ ApiSyncAdapter: Error pushing inventory count:', error);
@@ -5670,7 +5944,20 @@ class ApiSyncAdapter {
         if (isRecoveredOperation(movement)) throw new Error('RECOVERED_OPERATION_NO_REPLAY');
         try {
             const normalizedMovement = buildErpCashMovementPayload(movement);
-            await this.postOperationalPayload('/cash/movements', { items: [normalizedMovement] }, isSyncFeatureEnabled('pending_operations_recovery') ? { reauthenticateOn401: false, expectedRecoveryScope: originalProvenance().key, recoveryOriginal: {document:movement,collection:'cashMovements'} } : {});
+            const documentId = String(normalizedMovement.source_cash_movement_id || normalizedMovement.id);
+            const recoveryOptions = isSyncFeatureEnabled('pending_operations_recovery')
+                ? { reauthenticateOn401: false, expectedRecoveryScope: originalProvenance().key, recoveryOriginal: { document: movement, collection: 'cashMovements' } }
+                : {};
+            await this.postOperationalPayload('/cash/movements', { items: [normalizedMovement] }, {
+                ...recoveryOptions,
+                callerAck: {
+                    reference: `pushCashMovement:${documentId}`,
+                    validate: data => {
+                        this.assertOperationalResponseObject(data);
+                        assertOperationalAcknowledgement(data, documentId, 'CASH_MOVEMENT');
+                    },
+                },
+            });
             console.log(`📤 ApiSyncAdapter: Pushed cash movement ${normalizedMovement.source_cash_movement_id || normalizedMovement.id}`);
         } catch (error) {
             console.error('❌ ApiSyncAdapter: Error pushing cash movement:', error);
@@ -5686,7 +5973,16 @@ class ApiSyncAdapter {
         if (isRecoveredOperation(report)) throw new Error('RECOVERED_OPERATION_NO_REPLAY');
         try {
             const normalizedReport = buildErpZReportPayload(report);
-            await this.postOperationalPayload('/z-reports', { items: [normalizedReport] });
+            const documentId = String(normalizedReport.source_z_report_id || normalizedReport.id);
+            await this.postOperationalPayload('/z-reports', { items: [normalizedReport] }, {
+                callerAck: {
+                    reference: `pushZReport:${documentId}`,
+                    validate: data => {
+                        this.assertOperationalResponseObject(data);
+                        assertOperationalAcknowledgement(data, documentId, 'Z_REPORT');
+                    },
+                },
+            });
             console.log(`📤 ApiSyncAdapter: Pushed Z-Report ${normalizedReport.source_z_report_id || normalizedReport.id}`);
         } catch (error) {
             console.error('❌ ApiSyncAdapter: Error pushing Z-Report:', error);
@@ -5709,7 +6005,18 @@ class ApiSyncAdapter {
                 }
                 return buildErpWalletEventPayload(row);
             });
-            await this.postOperationalPayload('/operational/events', { items: normalized });
+            const documentIds = normalized.map(row => String((row as any).source_event_id || (row as any).id || '')).filter(Boolean);
+            await this.postOperationalPayload('/operational/events', { items: normalized }, {
+                callerAck: {
+                    reference: `pushOperationalEvents:${documentIds.join(',')}`,
+                    validate: data => {
+                        this.assertOperationalResponseObject(data);
+                        for (const documentId of documentIds) {
+                            assertOperationalAcknowledgement(data, documentId, 'OPERATIONAL_EVENT');
+                        }
+                    },
+                },
+            });
             console.log(`📤 ApiSyncAdapter: Pushed ${normalized.length} operational event(s)`);
         } catch (error) {
             console.error('❌ ApiSyncAdapter: Error pushing operational events:', error);
@@ -5725,8 +6032,18 @@ class ApiSyncAdapter {
     async pushDurableOutboxBatch(events: object[]): Promise<any> {
         if (!events.length) return { results: [] };
         if (events.length > 50) throw new Error('BATCH_EVENT_LIMIT_EXCEEDED');
+        const eventIds = events.map(event => String((event as any).eventId || (event as any).id || '')).filter(Boolean);
         return this.postOperationalPayload('/inbox/batch', { events }, {
             maxRequestBytes: 512 * 1024,
+            callerAck: {
+                reference: `pushDurableOutboxBatch:${eventIds.join(',')}`,
+                validate: data => {
+                    this.assertOperationalResponseObject(data);
+                    if (!Array.isArray(data.results)) throw new Error('OUTBOX_BATCH_ACK_INVALID');
+                    const resultIds = new Set(data.results.map((result: any) => String(result?.eventId || result?.id || '')));
+                    if (eventIds.some(id => !resultIds.has(id))) throw new Error('OUTBOX_BATCH_ACK_MISSING');
+                },
+            },
         });
     }
 
@@ -5773,9 +6090,19 @@ class ApiSyncAdapter {
             });
 
             if (response.status === 401) {
+                await this.acknowledgeLegacy401(response, `ackPendingTransactions:${ids.join(',')}:401`);
                 await this.authenticate();
                 return this.ackPendingTransactions(ids);
             }
+            await this.acknowledgeLegacyJsonResponse(response, `ackPendingTransactions:${ids.join(',')}`, payload => {
+                try {
+                    this.assertOperationalResponseObject(payload);
+                    for (const id of ids) assertOperationalAcknowledgement(payload, id, 'PENDING_TRANSACTION_ACK');
+                    return true;
+                } catch {
+                    return false;
+                }
+            });
         } catch (error) {
             console.error('❌ ApiSyncAdapter: Error acknowledging pending transactions:', error);
         }
@@ -5824,9 +6151,19 @@ class ApiSyncAdapter {
             });
 
             if (response.status === 401) {
+                await this.acknowledgeLegacy401(response, `ackPendingInventoryMovements:${ids.join(',')}:401`);
                 await this.authenticate();
                 return this.ackPendingInventoryMovements(ids);
             }
+            await this.acknowledgeLegacyJsonResponse(response, `ackPendingInventoryMovements:${ids.join(',')}`, payload => {
+                try {
+                    this.assertOperationalResponseObject(payload);
+                    for (const id of ids) assertOperationalAcknowledgement(payload, id, 'PENDING_INVENTORY_ACK');
+                    return true;
+                } catch {
+                    return false;
+                }
+            });
         } catch (error) {
             console.error('❌ ApiSyncAdapter: Error acknowledging pending inventory movements:', error);
         }
@@ -5856,9 +6193,19 @@ class ApiSyncAdapter {
             });
 
             if (response.status === 401) {
+                await this.acknowledgeLegacy401(response, `reportError:${itemType}:${itemId}:401`);
                 await this.authenticate();
                 return this.reportError(error, itemType, itemId);
             }
+            await this.acknowledgeLegacyJsonResponse(response, `reportError:${itemType}:${itemId}`, payload => {
+                try {
+                    this.assertOperationalResponseObject(payload);
+                    assertOperationalAcknowledgement(payload, itemId, 'SYNC_ERROR_REPORT');
+                    return true;
+                } catch {
+                    return false;
+                }
+            });
         } catch (error) {
             console.error('❌ ApiSyncAdapter: Error reporting sync error:', error);
         }
@@ -5945,6 +6292,7 @@ class ApiSyncAdapter {
         });
 
         if (response.status === 401) {
+            await this.acknowledgeLegacy401(response, `retryErpForwardQueue:401`);
             await this.authenticate(true);
             const retryResponse = await this.fetchWithRetry(`${this.config.masterUrl}/api/sync/erp-forward/retry`, {
                 method: 'POST',
@@ -5957,14 +6305,18 @@ class ApiSyncAdapter {
             if (!retryResponse.ok) {
                 throw new Error(`ERP forward retry failed: ${retryResponse.status} ${retryResponse.statusText}`);
             }
-            return retryResponse.json();
+            return this.acknowledgeLegacyJsonResponse(retryResponse, 'retryErpForwardQueue:retry', payload => {
+                try { this.assertOperationalResponseObject(payload); return true; } catch { return false; }
+            });
         }
 
         if (!response.ok) {
             throw new Error(`ERP forward retry failed: ${response.status} ${response.statusText}`);
         }
 
-        return response.json();
+        return this.acknowledgeLegacyJsonResponse(response, 'retryErpForwardQueue', payload => {
+            try { this.assertOperationalResponseObject(payload); return true; } catch { return false; }
+        });
     }
 
     /**
@@ -6194,6 +6546,7 @@ class ApiSyncAdapter {
             });
 
             if (response.status === 401) {
+                await this.acknowledgeLegacy401(response, `resetTerminalData:${terminalId}:401`);
                 await this.authenticate();
                 return this.resetTerminalData(terminalId);
             }
@@ -6201,6 +6554,9 @@ class ApiSyncAdapter {
             if (!response.ok) {
                 throw new Error(`Reset terminal data failed: ${response.statusText}`);
             }
+            await this.acknowledgeLegacyJsonResponse(response, `resetTerminalData:${terminalId}`, payload => {
+                try { this.assertOperationalResponseObject(payload); return true; } catch { return false; }
+            });
 
             console.log(`✅ ApiSyncAdapter: Reset terminal data for ${terminalId} on Master`);
         } catch (error) {
@@ -6226,7 +6582,7 @@ class ApiSyncAdapter {
         this.config = null;
         this.authToken = null;
         this.erpAuthToken = null;
-        this.authInFlight = { sales: null, background: null };
+        this.authInFlight = null;
         this.erpAuthInFlight = { sales: null, background: null };
         this.isOnline = false;
         this.onConnectionRestored = null;
@@ -6290,6 +6646,7 @@ class ApiSyncAdapter {
             await this.ensureAuthenticated();
             const response = await this.fetchWithRetry(`${this.config.masterUrl}/api/sync/images/batch`, {
                 method: 'POST',
+                clicTransportClass: 'ERP_CLOUD',
                 headers: {
                     'Content-Type': 'application/json',
                     'X-Sync-Token': this.authToken || ''
