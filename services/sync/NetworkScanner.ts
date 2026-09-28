@@ -7,7 +7,7 @@
 import { isEligibleOperationalMasterConfig } from '../../utils/masterServerEligibility';
 
 export class NetworkScanner {
-    private static readonly TIMEOUT_MS = 400;
+    private static readonly IDENTITY_TIMEOUT_MS = 1_000;
     private static readonly CONFIG_VALIDATION_TIMEOUT_MS = 2_500;
     private static readonly PORTS = [3000, 3001];
     private static readonly BATCH_SIZE = 32;
@@ -160,7 +160,7 @@ export class NetworkScanner {
 
     private static async verifyIdentity(baseUrl: string, expectedTenantId?: string): Promise<boolean> {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), this.TIMEOUT_MS);
+        const timeoutId = setTimeout(() => controller.abort(), this.IDENTITY_TIMEOUT_MS);
         try {
             const res = await fetch(`${baseUrl}/api/sync/identify`, {
                 signal: controller.signal,
