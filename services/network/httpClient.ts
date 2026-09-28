@@ -10,6 +10,7 @@ export interface RequestJsonInput {
     timeoutMs?: number;
     diagnosticContext?: Record<string, unknown>;
     signal?: AbortSignal;
+    requireAbortableTransport?: boolean;
 }
 
 export interface RequestJsonResult<T = unknown> {
@@ -167,7 +168,24 @@ export async function requestJson<T = unknown>(input: RequestJsonInput): Promise
     const method = String(input.method || 'GET').toUpperCase();
     const headers = sanitizeHeaders(input.headers);
     const headersSummary = summarizeHeaders(headers);
-    const networkEngine = getNetworkEngine();
+    const nativeEngine = getNetworkEngine();
+    const networkEngine: NetworkEngine = input.requireAbortableTransport && nativeEngine === 'capacitor-http'
+        ? 'fetch'
+        : nativeEngine;
+    if (input.requireAbortableTransport && nativeEngine === 'capacitor-http') {
+        await new Promise<void>((resolve, reject) => {
+            const abort = () => {
+                clearTimeout(timer);
+                reject(new DOMException('Authority request aborted before dispatch', 'AbortError'));
+            };
+            const timer = setTimeout(() => {
+                input.signal?.removeEventListener('abort', abort);
+                resolve();
+            }, 0);
+            input.signal?.addEventListener('abort', abort, { once: true });
+        });
+    }
+    if (input.signal?.aborted) throw new DOMException('Authority request aborted', 'AbortError');
     const timeoutMs = input.timeoutMs || 5000;
     const bodySize = resolveBodySize(input.body);
     const platform = (() => {

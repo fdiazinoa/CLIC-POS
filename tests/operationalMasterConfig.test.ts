@@ -7,7 +7,9 @@ import {
   runClientMasterStartup,
   type ClientMasterAuthority,
 } from '../utils/operationalMasterConfig';
-import { persistValidatedClientMasterTarget, resolveClientMasterTerminalId } from '../utils/clientMasterBinding';
+import { persistValidatedClientMasterTarget, persistValidatedClientMasterTargetAsync, resolveClientMasterTerminalId } from '../utils/clientMasterBinding';
+import { loadSyncProfile, saveSyncProfile } from '../services/sync/SyncProfile';
+import { saveTerminalCredentials, setTerminalCredentialNativeWriterForTests } from '../services/sync/TerminalCredentialStore';
 
 const response = (body: unknown, status = 200) => ({
   ok: status >= 200 && status < 300,
@@ -172,6 +174,61 @@ test('validated Master persistence rolls back a partial localStorage write befor
   assert.equal(values.get('CLIC_POS_MASTER_URL'), 'http://10.0.0.10:3001');
   assert.equal(values.get('pos_master_ip'), '10.0.0.10');
   assert.equal(profileWrites, 1, 'only rollback reconciliation may touch the prior profile');
+});
+
+test('validated Master rollback restores a real SLAVE/POS_MASTER profile with no previous URL', async () => {
+  const previousStorage = globalThis.localStorage;
+  const values = new Map<string, string>();
+  const storage = {
+    get length() { return values.size; },
+    clear: () => values.clear(),
+    getItem: (key: string) => values.get(key) ?? null,
+    key: (index: number) => [...values.keys()][index] ?? null,
+    removeItem: (key: string) => { values.delete(key); },
+    setItem: (key: string, value: string) => { values.set(key, String(value)); },
+  } as Storage;
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: storage });
+  try {
+    saveSyncProfile({
+      contractedProduct: 'POS_ONLY', posRuntime: 'SLAVE', cloudChannel: 'POS_MASTER', dataMaster: 'POS_MASTER',
+      cloudSyncEnabled: false, customerErpAccess: false, erpUiEnabled: false,
+      contractSource: 'BACKEND_REGISTER', masterReady: false,
+    });
+    const rollback = await persistValidatedClientMasterTargetAsync('http://10.0.0.129:3001');
+    await rollback();
+    assert.equal(storage.getItem('CLIC_POS_MASTER_URL'), null);
+    assert.equal(storage.getItem('pos_master_ip'), null);
+    assert.equal(loadSyncProfile().masterUrl, undefined);
+  } finally {
+    Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: previousStorage });
+  }
+});
+
+test('serialized credential persistence leaves rollback newer than a delayed native A write', async () => {
+  const nativeWrites: string[] = [];
+  let releaseFirst!: () => void;
+  let markFirstStarted!: () => void;
+  const firstStarted = new Promise<void>(resolve => { markFirstStarted = resolve; });
+  let first = true;
+  setTerminalCredentialNativeWriterForTests(async (value: string) => {
+    nativeWrites.push(value);
+    if (first) {
+      first = false;
+      markFirstStarted();
+      await new Promise<void>(resolve => { releaseFirst = resolve; });
+    }
+  });
+  try {
+    const writeA = saveTerminalCredentials({ masterUrl: 'http://10.0.0.129:3001', masterIp: '10.0.0.129' });
+    await firstStarted;
+    const rollback = saveTerminalCredentials({ masterUrl: null, masterIp: null });
+    releaseFirst();
+    await Promise.all([writeA, rollback]);
+    assert.equal(JSON.parse(nativeWrites.at(-1) || '{}').masterUrl, null);
+    assert.equal(JSON.parse(nativeWrites.at(-1) || '{}').masterIp, null);
+  } finally {
+    setTerminalCredentialNativeWriterForTests(null);
+  }
 });
 
 test('client startup enforces hydrate → identity candidate → slow full validation → persist → initialize → refresh', async () => {

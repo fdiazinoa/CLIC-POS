@@ -93,7 +93,7 @@ import { pendingCatalogDeleteIds, pendingCatalogProductIds } from './preserveLoc
 import { buildTerminalSyncAuthHeaders } from './TerminalCredentialStore';
 import { canDeleteCatalogProduct, keepProductAfterAuthoritativeFull, resolveRemoteCatalogDeletionIds } from './catalogReconciliation';
 import type { ClientMasterAuthority } from '../../utils/operationalMasterConfig';
-import { persistValidatedClientMasterTarget } from '../../utils/clientMasterBinding';
+import { persistValidatedClientMasterTargetAsync } from '../../utils/clientMasterBinding';
 import {
     applyAuthoritativeProductTaxes,
     normalizeErpTaxDefinition,
@@ -379,7 +379,7 @@ class SyncManager {
     private clientMasterAuthority: ClientMasterAuthority<unknown> | null = null;
     private recoverClientMasterAuthority: (() => Promise<ClientMasterAuthority<unknown>>) | null = null;
     private disableRemoteServices: ((reason: string) => void) | null = null;
-    private enableRemoteServices: (() => Promise<void>) | null = null;
+    private enableRemoteServices: ((isAuthorityCurrent?: () => boolean) => Promise<void>) | null = null;
     private initializedConfig: BusinessConfig | null = null;
     private authorityRecoveryOnlineHandler: (() => void) | null = null;
     private authorityRecoveryTimer: number | null = null;
@@ -833,7 +833,7 @@ class SyncManager {
         clientMasterAuthority?: ClientMasterAuthority<unknown>;
         recoverClientMasterAuthority?: () => Promise<ClientMasterAuthority<unknown>>;
         disableRemoteServices?: (reason: string) => void;
-        enableRemoteServices?: () => Promise<void>;
+        enableRemoteServices?: (isAuthorityCurrent?: () => boolean) => Promise<void>;
         initializationMode?: 'STANDARD' | 'AUTHORITY_RECOVERY';
         authorityRecoveryGeneration?: number;
     }) {
@@ -5395,7 +5395,7 @@ class SyncManager {
             throw new Error('MASTER_AUTHORITY_RECOVERY_CANCELLED');
         }
         const normalizedUrl = this.normalizeMasterUrlForStorage(authority.baseUrl) || authority.baseUrl;
-        const rollbackPersistedAuthority = persistValidatedClientMasterTarget(normalizedUrl, { persistProfile: updateClientMasterUrl });
+        const rollbackPersistedAuthority = await persistValidatedClientMasterTargetAsync(normalizedUrl);
         const validatedAuthority = { ...authority, baseUrl: normalizedUrl };
         const config = this.initializedConfig;
         const terminalId = this.initializedLocalTerminalId;
@@ -5430,7 +5430,7 @@ class SyncManager {
             }
             this.authorityRecoveryDelayMs = 1_000;
         } catch (error) {
-            if (generation === this.authorityRecoveryGeneration) rollbackPersistedAuthority();
+            if (generation === this.authorityRecoveryGeneration) await rollbackPersistedAuthority();
             throw error;
         }
 
@@ -5449,7 +5449,10 @@ class SyncManager {
         }, 12000);
         await realtimeNotificationService.initialize(masterUrl, terminalId);
         if (generation !== this.authorityRecoveryGeneration) throw new Error('MASTER_AUTHORITY_RECOVERY_CANCELLED');
-        await this.enableRemoteServices?.();
+        await this.enableRemoteServices?.(() => generation === this.authorityRecoveryGeneration);
+        if (generation !== this.authorityRecoveryGeneration) {
+            throw new Error('MASTER_AUTHORITY_RECOVERY_CANCELLED');
+        }
     }
 
     private async restoreUnavailableAfterRecoveryFailure(reason: string) {

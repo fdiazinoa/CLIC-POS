@@ -1,6 +1,6 @@
 import type { BusinessConfig } from '../types';
-import { updateClientMasterUrl } from '../services/sync/SyncProfile';
-import { saveTerminalCredentialsSync } from '../services/sync/TerminalCredentialStore';
+import { restoreClientMasterUrl, updateClientMasterUrl } from '../services/sync/SyncProfile';
+import { awaitTerminalCredentialWrites, saveTerminalCredentialsSync } from '../services/sync/TerminalCredentialStore';
 
 const value = (input: unknown): string => String(input || '').trim();
 
@@ -37,10 +37,15 @@ export const persistValidatedClientMasterTarget = (
   dependencies: {
     storage?: MasterTargetStorage;
     persistProfile?: (url: string) => boolean;
+    restoreProfile?: (url: string | null) => boolean;
   } = {},
 ): (() => void) => {
   const storage = dependencies.storage || localStorage;
   const persistProfile = dependencies.persistProfile || updateClientMasterUrl;
+  const restoreProfile = dependencies.restoreProfile
+    || (dependencies.persistProfile
+      ? (url: string | null) => url ? dependencies.persistProfile!(url) : true
+      : restoreClientMasterUrl);
   const normalizedUrl = new URL(baseUrl).origin;
   const nextHost = new URL(normalizedUrl).hostname;
   const previousUrl = storage.getItem('CLIC_POS_MASTER_URL');
@@ -49,7 +54,7 @@ export const persistValidatedClientMasterTarget = (
     restore(storage, 'CLIC_POS_MASTER_URL', previousUrl);
     restore(storage, 'pos_master_ip', previousHost);
     if (!dependencies.storage) saveTerminalCredentialsSync({ masterUrl: previousUrl, masterIp: previousHost });
-    if (previousUrl) persistProfile(previousUrl);
+    restoreProfile(previousUrl);
   };
 
   try {
@@ -68,7 +73,7 @@ export const persistValidatedClientMasterTarget = (
     } catch {
       // The fail-closed cleanup below removes any partially changed mirrors.
     }
-    const profileRestored = previousUrl ? persistProfile(previousUrl) : true;
+    const profileRestored = restoreProfile(previousUrl);
     if (!mirrorsRestored || !profileRestored) {
       try {
         storage.removeItem('CLIC_POS_MASTER_URL');
@@ -79,4 +84,15 @@ export const persistValidatedClientMasterTarget = (
     }
     throw error;
   }
+};
+
+export const persistValidatedClientMasterTargetAsync = async (
+  baseUrl: string,
+): Promise<() => Promise<void>> => {
+  const rollback = persistValidatedClientMasterTarget(baseUrl);
+  await awaitTerminalCredentialWrites();
+  return async () => {
+    rollback();
+    await awaitTerminalCredentialWrites();
+  };
 };

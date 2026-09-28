@@ -693,6 +693,7 @@ class ApiSyncAdapter {
         operation: OperationalSyncOperation = channel === 'sales' ? 'PUSH_OPERATIONS' : 'PULL_MASTERS',
         authorityRevision = this.operationalAuthorityRevision,
         authoritySignal = this.operationalAuthorityAbortController?.signal,
+        authorityRequestId = `${authorityRevision}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
     ): Promise<Response> {
         this.assertOperationalAuthorityCurrent(authorityRevision, authoritySignal);
         // Add jitter to backoff (±20% randomness)
@@ -706,6 +707,10 @@ class ApiSyncAdapter {
 
         const method = String(options.method || 'GET').toUpperCase();
         const headers = this.normalizeFetchHeaders(options.headers);
+        const isMutatingRequest = !['GET', 'HEAD', 'OPTIONS'].includes(method);
+        headers['X-CLIC-Authority-Revision'] = String(authorityRevision);
+        headers['X-CLIC-Authority-Request-Id'] = authorityRequestId;
+        if (isMutatingRequest && !headers['Idempotency-Key']) headers['Idempotency-Key'] = authorityRequestId;
         const headersSummary = this.summarizeFetchHeaders(headers);
         const bodySize = this.getBodySize(options.body);
         const capacitorPlatform = this.resolveCapacitorPlatform();
@@ -772,6 +777,7 @@ class ApiSyncAdapter {
                 timeoutMs: this.resolveRequestTimeoutMs(url, operation),
                 diagnosticContext: fetchContext,
                 signal: authoritySignal,
+                requireAbortableTransport: isMutatingRequest,
             });
             this.assertOperationalAuthorityCurrent(authorityRevision, authoritySignal);
             const response = new Response(nativeResponse.text, {
@@ -805,7 +811,7 @@ class ApiSyncAdapter {
             if ((response.status === 503 || response.status === 504) && retries > 0) {
                 console.warn(`⚠️ Request failed with ${response.status}, retrying in ${Math.round(effectiveBackoff)}ms...`);
                 await this.waitForAuthorityRetry(effectiveBackoff, authorityRevision, authoritySignal);
-                return this.fetchWithRetry(url, options, retries - 1, backoff * 2, channel, operation, authorityRevision, authoritySignal);
+                return this.fetchWithRetry(url, options, retries - 1, backoff * 2, channel, operation, authorityRevision, authoritySignal, authorityRequestId);
             }
 
             return response;
@@ -863,7 +869,7 @@ class ApiSyncAdapter {
             if ((isConnectionError || isTimeout) && retries > 0 && circuitBreaker.canRetry()) {
                 console.warn(`⚠️ Connection error (${error.message}), retrying in ${Math.round(effectiveBackoff)}ms...`);
                 await this.waitForAuthorityRetry(effectiveBackoff, authorityRevision, authoritySignal);
-                return this.fetchWithRetry(url, options, retries - 1, backoff * 1.5, channel, operation, authorityRevision, authoritySignal);
+                return this.fetchWithRetry(url, options, retries - 1, backoff * 1.5, channel, operation, authorityRevision, authoritySignal, authorityRequestId);
             }
 
             throw error;

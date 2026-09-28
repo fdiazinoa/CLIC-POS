@@ -128,7 +128,7 @@ export async function resolveClientMasterAuthority<T = Record<string, unknown>>(
 type ClientMasterStartupOptions<TConfig, TRefresh> = {
   hydrateLocalIps: () => Promise<string[]>;
   resolveAuthority: (localIps: string[]) => Promise<ClientMasterAuthority<TConfig>>;
-  persistValidated: (authority: Extract<ClientMasterAuthority<TConfig>, { status: 'VALIDATED' }>) => void;
+  persistValidated: (authority: Extract<ClientMasterAuthority<TConfig>, { status: 'VALIDATED' }>) => void | Promise<void>;
   applyValidatedConfig: (config: TConfig) => Promise<TConfig>;
   initialize: (authority: ClientMasterAuthority<TConfig>, config: TConfig | null) => Promise<void>;
   refresh: (
@@ -166,7 +166,7 @@ export async function runClientMasterStartup<TConfig, TRefresh>(
 
   if (authority.status === 'VALIDATED') {
     try {
-      options.persistValidated(authority);
+      await options.persistValidated(authority);
       activeConfig = await options.applyValidatedConfig(authority.config);
     } catch (error) {
       authority = { status: 'UNAVAILABLE' };

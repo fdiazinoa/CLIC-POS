@@ -185,7 +185,7 @@ export const validateOperationalMasterEndpoint = (
 export const createOperationalMasterResolver = (options: {
   getContract: () => OperationalMasterContract;
   discover: () => Promise<Array<{ baseUrl: string; config: Record<string, any> }>>;
-  mirror: (base: string) => void;
+  mirror: (base: string) => unknown | Promise<unknown>;
   isReady?: () => boolean;
 }) => {
   let accepted: { key: string; base: string } | null = null;
@@ -201,7 +201,6 @@ export const createOperationalMasterResolver = (options: {
     if (accepted.key !== key(options.getContract())) { accepted = null; return ''; }
     const host = new URL(accepted.base).hostname.toLowerCase();
     if (options.getContract().localIps.map(id).includes(host)) { invalidate(); return ''; }
-    options.mirror(accepted.base);
     return accepted.base;
   };
   const invalidate = () => { accepted = null; pending = null; generation += 1; };
@@ -229,7 +228,7 @@ export const createOperationalMasterResolver = (options: {
           const base = validateOperationalMasterEndpoint(candidate.baseUrl, candidate.config, { ...contract, localIps: options.getContract().localIps });
           assertCurrentAttempt();
           accepted = { key: contractKey, base };
-          options.mirror(base);
+          await options.mirror(base);
           return base;
         } catch (error) { failure = error; }
       }

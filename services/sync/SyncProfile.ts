@@ -235,6 +235,16 @@ export function updateClientMasterUrl(masterUrl: string): boolean {
     return loadSyncProfile().masterUrl === normalizedUrl;
 }
 
+/** Restores the client Master target, including the valid "no previous URL"
+ * state used by atomic authority rollback. */
+export function restoreClientMasterUrl(masterUrl: string | null): boolean {
+    const profile = loadSyncProfile();
+    if (profile.posRuntime !== 'SLAVE' || profile.cloudChannel !== 'POS_MASTER') return false;
+    const normalizedUrl = masterUrl ? normalizeBaseUrl(masterUrl) : undefined;
+    saveSyncProfile({ ...profile, masterUrl: normalizedUrl });
+    return (loadSyncProfile().masterUrl || undefined) === normalizedUrl;
+}
+
 const writeProfileMismatchDiagnostic = (diagnostic: SyncProfilePersistenceDiagnostic): void => {
     try {
         localStorage.setItem(PROFILE_MISMATCH_STORAGE_KEY, JSON.stringify(diagnostic, null, 2));

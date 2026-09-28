@@ -341,7 +341,7 @@ import {
   runClientMasterStartup,
   type ClientMasterAuthority,
 } from './utils/operationalMasterConfig';
-import { persistValidatedClientMasterTarget, resolveClientMasterTerminalId } from './utils/clientMasterBinding';
+import { persistValidatedClientMasterTargetAsync, resolveClientMasterTerminalId } from './utils/clientMasterBinding';
 import { markSyncDeviceTokenInvalid, persistSyncDeviceToken } from './services/sync/deviceToken';
 import {
   extractErpRegisterAuth,
@@ -5466,8 +5466,8 @@ const AppContent: React.FC = () => {
       getContract: () => clientRoutingContextRef.current.getContract(),
       isReady: () => clientRoutingContextRef.current.ready,
       discover: () => clientRoutingContextRef.current.discover(),
-      mirror: baseUrl => {
-        persistValidatedClientMasterTarget(baseUrl);
+      mirror: async baseUrl => {
+        await persistValidatedClientMasterTargetAsync(baseUrl);
       },
     });
   }
@@ -7188,8 +7188,8 @@ const AppContent: React.FC = () => {
                       });
                     },
                   }),
-                  persistValidated: (authority) => {
-                    persistValidatedClientMasterTarget(authority.baseUrl);
+                  persistValidated: async (authority) => {
+                    await persistValidatedClientMasterTargetAsync(authority.baseUrl);
                     localStorage.setItem('CLIC_POS_MASTER_DISCOVERY', authority.source);
                   },
                   applyValidatedConfig: async (remoteConfig) => {
@@ -7202,9 +7202,13 @@ const AppContent: React.FC = () => {
                     await syncManager.initialize(activeConfig || finalConfig, effectivePairedTerminal.id, {
                       clientMasterAuthority: authority,
                       disableRemoteServices: (reason) => backgroundSyncManager.disableRemoteSync(reason),
-                      enableRemoteServices: async () => {
+                      enableRemoteServices: async (isAuthorityCurrent) => {
+                        if (isAuthorityCurrent && !isAuthorityCurrent()) return;
                         backgroundSyncManager.enableRemoteSync();
                         await backgroundSyncManager.initialize();
+                        if (isAuthorityCurrent && !isAuthorityCurrent()) {
+                          backgroundSyncManager.disableRemoteSync('master-authority-changed-during-enable');
+                        }
                       },
                       recoverClientMasterAuthority: async (): Promise<ClientMasterAuthority<unknown>> => {
                         clientOperationalResolverRef.current?.invalidate();

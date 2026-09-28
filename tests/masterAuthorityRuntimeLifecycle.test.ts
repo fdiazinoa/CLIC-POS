@@ -159,6 +159,8 @@ test('real singleton lifecycle blocks stale pushes, recovers once, and rotates a
   let failRefreshHost: string | null = null;
   let purgeCalls = 0;
   let retryFetchCalls = 0;
+  let recoveryEnableGate: Promise<void> | null = null;
+  let recoveryEnableStarted: (() => void) | null = null;
 
   globalThis.fetch = (async (input: string | URL | Request) => {
     const url = String(input);
@@ -211,7 +213,12 @@ test('real singleton lifecycle blocks stale pushes, recovers once, and rotates a
     });
   };
   const disableRemoteServices = (reason: string) => backgroundSyncManager.disableRemoteSync(reason);
-  const enableRemoteServices = async () => {
+  const enableRemoteServices = async (isAuthorityCurrent?: () => boolean) => {
+    if (isAuthorityCurrent && recoveryEnableGate) {
+      recoveryEnableStarted?.();
+      await recoveryEnableGate;
+      if (!isAuthorityCurrent()) return;
+    }
     backgroundSyncManager.enableRemoteSync();
     await backgroundSyncManager.initialize();
   };
@@ -314,6 +321,31 @@ test('real singleton lifecycle blocks stale pushes, recovers once, and rotates a
     assert.ok(realtimeDisconnects >= 2);
     assert.equal(realtimeInitializations, 3);
 
+    let releaseRecoveryEnable!: () => void;
+    const enableStarted = new Promise<void>(resolve => { recoveryEnableStarted = resolve; });
+    recoveryEnableGate = new Promise<void>(resolve => { releaseRecoveryEnable = resolve; });
+    recoveredHost = '10.0.0.170';
+    online = false;
+    await syncManager.initialize(config, terminalId, {
+      clientMasterAuthority: { status: 'UNAVAILABLE' }, recoverClientMasterAuthority: recoverAuthority,
+      disableRemoteServices, enableRemoteServices,
+    });
+    online = true;
+    const recoveryDuringEnable = (syncManager as any).attemptAuthorityRecovery() as Promise<boolean>;
+    await enableStarted;
+    const authorityAfterRemount = { status: 'VALIDATED', baseUrl: 'http://10.0.0.180:3001', config, source: 'STORED' } as const;
+    persistValidatedClientMasterTarget(authorityAfterRemount.baseUrl);
+    await syncManager.initialize(config, terminalId, {
+      clientMasterAuthority: authorityAfterRemount, recoverClientMasterAuthority: recoverAuthority,
+      disableRemoteServices, enableRemoteServices,
+    });
+    releaseRecoveryEnable();
+    assert.equal(await recoveryDuringEnable, false);
+    assert.equal(apiSyncAdapter.getOperationalAuthorityState().masterUrl, authorityAfterRemount.baseUrl);
+    assert.equal(backgroundSyncManager.isRemoteSyncActive(), true);
+    recoveryEnableGate = null;
+    recoveryEnableStarted = null;
+
     const staleItem = { id: 'catalog-edit-race', syncStatus: 'PENDING' } as any;
     const savedStatuses: string[] = [];
     let releasePush!: () => void;
@@ -335,7 +367,7 @@ test('real singleton lifecycle blocks stale pushes, recovers once, and rotates a
     (db as any).saveDocument = originalDbSaveDocument;
 
     const retryRace = (apiSyncAdapter as any).fetchWithRetry(
-      'http://10.0.0.140:3001/authority-retry-race', {}, 2, 500, 'background', 'PULL_MASTERS',
+      'http://10.0.0.180:3001/authority-retry-race', {}, 2, 500, 'background', 'PULL_MASTERS',
     ) as Promise<Response>;
     await Promise.resolve();
     await Promise.resolve();
@@ -355,7 +387,7 @@ test('real singleton lifecycle blocks stale pushes, recovers once, and rotates a
     assert.equal((syncManager as any).isDisabled, true);
     assert.equal(backgroundSyncManager.isRemoteSyncActive(), false);
     assert.equal(apiSyncAdapter.getOperationalAuthorityState().enabled, false);
-    assert.equal(storage.getItem('CLIC_POS_MASTER_URL'), 'http://10.0.0.140:3001');
+    assert.equal(storage.getItem('CLIC_POS_MASTER_URL'), 'http://10.0.0.180:3001');
     assert.equal((syncManager as any).authorityRecoveryDelayMs, 2_000);
     assert.equal(scheduled.size, 1, 'failed auth retains one backoff retry');
 
@@ -367,7 +399,7 @@ test('real singleton lifecycle blocks stale pushes, recovers once, and rotates a
     assert.equal(await refreshFailure, false);
     assert.equal((syncManager as any).isDisabled, true);
     assert.equal(backgroundSyncManager.isRemoteSyncActive(), false);
-    assert.equal(storage.getItem('CLIC_POS_MASTER_URL'), 'http://10.0.0.140:3001');
+    assert.equal(storage.getItem('CLIC_POS_MASTER_URL'), 'http://10.0.0.180:3001');
     assert.equal((syncManager as any).authorityRecoveryDelayMs, 4_000);
     assert.equal(scheduled.size, 1, 'refresh failure advances one deduplicated backoff retry');
     assert.equal(purgeCalls, 0, 'authority recovery and remount never purge synced history');
