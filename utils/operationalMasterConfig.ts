@@ -13,6 +13,14 @@ export type OperationalMasterConfigResult<T> = {
   source: OperationalMasterConfigSource;
 };
 
+export type ClientMasterAuthority<T = Record<string, unknown>> =
+  | ({ status: 'VALIDATED' } & OperationalMasterConfigResult<T>)
+  | { status: 'UNAVAILABLE' };
+
+export const unavailableClientMasterAuthority = (): ClientMasterAuthority<never> => ({
+  status: 'UNAVAILABLE',
+});
+
 type ResolveOperationalMasterConfigOptions<T> = {
   storedHosts: Array<string | null | undefined>;
   resolveCloudHost: () => Promise<string | null | undefined>;
@@ -20,6 +28,7 @@ type ResolveOperationalMasterConfigOptions<T> = {
   validate: (baseUrl: string, config: T) => void;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
+  rejectHosts?: string[];
   onCandidateFailure?: (candidate: OperationalMasterConfigCandidate, baseUrl: string, error: unknown) => void;
 };
 
@@ -32,9 +41,22 @@ export async function resolveOperationalMasterConfig<T = Record<string, unknown>
   options: ResolveOperationalMasterConfigOptions<T>,
 ): Promise<OperationalMasterConfigResult<T> | null> {
   const fetchImpl = options.fetchImpl || fetch;
-  const timeoutMs = options.timeoutMs ?? 3000;
+  const timeoutMs = options.timeoutMs ?? 8_000;
   const candidates: OperationalMasterConfigCandidate[] = [];
   const attempted = new Set<string>();
+  const rejectedHosts = new Set((options.rejectHosts || []).map(normalizeMasterHost).map(host => host.toLowerCase()).filter(Boolean));
+
+  const isForbiddenHost = (host: string): boolean => {
+    const normalized = normalizeMasterHost(host).toLowerCase();
+    return !normalized
+      || normalized === 'localhost'
+      || normalized === '::1'
+      || normalized === '[::1]'
+      || normalized === '0.0.0.0'
+      || normalized === '::'
+      || /^127\./.test(normalized)
+      || rejectedHosts.has(normalized);
+  };
 
   const append = (values: Array<string | null | undefined>, source: OperationalMasterConfigSource) => {
     values.forEach((value) => {
@@ -45,6 +67,14 @@ export async function resolveOperationalMasterConfig<T = Record<string, unknown>
 
   const tryPendingCandidates = async (): Promise<OperationalMasterConfigResult<T> | null> => {
     for (const candidate of candidates) {
+      if (isForbiddenHost(candidate.host)) {
+        options.onCandidateFailure?.(
+          candidate,
+          candidate.host,
+          new Error('MASTER_SELF_ENDPOINT: candidate rejected before config fetch.'),
+        );
+        continue;
+      }
       for (const baseUrl of buildMasterUrlCandidates(candidate.host)) {
         if (attempted.has(baseUrl)) continue;
         attempted.add(baseUrl);
@@ -86,4 +116,70 @@ export async function resolveOperationalMasterConfig<T = Record<string, unknown>
     return null;
   }
   return tryPendingCandidates();
+}
+
+export async function resolveClientMasterAuthority<T = Record<string, unknown>>(
+  options: ResolveOperationalMasterConfigOptions<T>,
+): Promise<ClientMasterAuthority<T>> {
+  const result = await resolveOperationalMasterConfig(options);
+  return result ? { status: 'VALIDATED', ...result } : { status: 'UNAVAILABLE' };
+}
+
+type ClientMasterStartupOptions<TConfig, TRefresh> = {
+  hydrateLocalIps: () => Promise<string[]>;
+  resolveAuthority: (localIps: string[]) => Promise<ClientMasterAuthority<TConfig>>;
+  persistValidated: (authority: Extract<ClientMasterAuthority<TConfig>, { status: 'VALIDATED' }>) => void;
+  applyValidatedConfig: (config: TConfig) => Promise<TConfig>;
+  initialize: (authority: ClientMasterAuthority<TConfig>, config: TConfig | null) => Promise<void>;
+  refresh: (
+    authority: Extract<ClientMasterAuthority<TConfig>, { status: 'VALIDATED' }>,
+    config: TConfig,
+  ) => Promise<TRefresh>;
+  fallbackConfig: TConfig;
+};
+
+export type ClientMasterStartupResult<TConfig, TRefresh> = {
+  authority: ClientMasterAuthority<TConfig>;
+  config: TConfig;
+  refresh: TRefresh | null;
+  localIps: string[];
+};
+
+/**
+ * Executes the real client startup barrier. A remote adapter can only be
+ * initialized after local identity hydration, full validation, and atomic
+ * persistence have all succeeded. UNAVAILABLE still initializes local state,
+ * but never invokes the remote refresh callback.
+ */
+export async function runClientMasterStartup<TConfig, TRefresh>(
+  options: ClientMasterStartupOptions<TConfig, TRefresh>,
+): Promise<ClientMasterStartupResult<TConfig, TRefresh>> {
+  const localIps = Array.from(new Set(
+    (await options.hydrateLocalIps()).map(normalizeMasterHost).filter(Boolean),
+  ));
+  let authority: ClientMasterAuthority<TConfig> = { status: 'UNAVAILABLE' };
+  let activeConfig = options.fallbackConfig;
+
+  if (localIps.length > 0) {
+    authority = await options.resolveAuthority(localIps);
+  }
+
+  if (authority.status === 'VALIDATED') {
+    try {
+      options.persistValidated(authority);
+      activeConfig = await options.applyValidatedConfig(authority.config);
+    } catch (error) {
+      authority = { status: 'UNAVAILABLE' };
+      await options.initialize(authority, activeConfig);
+      throw error;
+    }
+  }
+
+  await options.initialize(authority, activeConfig);
+  if (authority.status === 'UNAVAILABLE') {
+    return { authority, config: activeConfig, refresh: null, localIps };
+  }
+
+  const refreshed = await options.refresh(authority, activeConfig);
+  return { authority, config: activeConfig, refresh: refreshed, localIps };
 }

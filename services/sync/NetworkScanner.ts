@@ -35,6 +35,27 @@ export class NetworkScanner {
         return null;
     }
 
+    /**
+     * Discovers a Master by its lightweight identity endpoint only.
+     *
+     * The returned URL is deliberately untrusted: callers MUST fetch and
+     * validate /api/config before persisting it or enabling remote sync.
+     */
+    static async findUntrustedMasterCandidateByIdentity(
+        currentIp?: string,
+        expectedTenantId?: string,
+        excludedHosts: string[] = [],
+    ): Promise<string | null> {
+        const excluded = new Set(excludedHosts.map(host => host.trim().toLowerCase()).filter(Boolean));
+        const subnets = this.determineSubnets(currentIp);
+
+        for (const subnet of subnets) {
+            const foundUrl = await this.scanSubnetByIdentity(subnet, expectedTenantId, excluded);
+            if (foundUrl) return foundUrl;
+        }
+        return null;
+    }
+
     private static determineSubnets(currentIp?: string): string[] {
         const subnets = new Set<string>();
 
@@ -80,6 +101,32 @@ export class NetworkScanner {
         return null;
     }
 
+    private static async scanSubnetByIdentity(
+        subnet: string,
+        expectedTenantId: string | undefined,
+        excludedHosts: Set<string>,
+    ): Promise<string | null> {
+        const ips = [];
+        for (let i = 1; i < 255; i++) {
+            const ip = `${subnet}.${i}`;
+            if (!excludedHosts.has(ip.toLowerCase())) ips.push(ip);
+        }
+
+        for (let i = 0; i < ips.length; i += this.BATCH_SIZE) {
+            const batch = ips.slice(i, i + this.BATCH_SIZE);
+            const promiseResults = await Promise.all(batch.map(async ip => {
+                const matches = await Promise.all(this.PORTS.map(async port => {
+                    const url = `http://${ip}:${port}`;
+                    return await this.verifyIdentity(url, expectedTenantId) ? url : null;
+                }));
+                return matches.find(Boolean) || null;
+            }));
+            const found = promiseResults.find(url => url !== null);
+            if (found) return found;
+        }
+        return null;
+    }
+
     private static async checkIp(ip: string, expectedTenantId?: string): Promise<string | null> {
         const matches = await Promise.all(this.PORTS.map(async port => {
             const url = `http://${ip}:${port}`;
@@ -92,6 +139,26 @@ export class NetworkScanner {
     }
 
     private static async verifyIdent(baseUrl: string, expectedTenantId?: string): Promise<boolean> {
+        if (!await this.verifyIdentity(baseUrl, expectedTenantId)) return false;
+        const configController = new AbortController();
+        const configTimeoutId = setTimeout(
+            () => configController.abort(),
+            this.CONFIG_VALIDATION_TIMEOUT_MS
+        );
+        try {
+            const configResponse = await fetch(`${baseUrl}/api/config`, {
+                signal: configController.signal,
+            });
+            if (!configResponse.ok) return false;
+            return isEligibleOperationalMasterConfig(await configResponse.json());
+        } catch {
+            return false;
+        } finally {
+            clearTimeout(configTimeoutId);
+        }
+    }
+
+    private static async verifyIdentity(baseUrl: string, expectedTenantId?: string): Promise<boolean> {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), this.TIMEOUT_MS);
         try {
@@ -108,26 +175,10 @@ export class NetworkScanner {
                     || !discoveredTenantId
                     || discoveredTenantId === expectedTenantId;
                 if (data.app === 'CLIC-POS' && data.role === 'MASTER' && tenantMatches) {
-                    // La identidad es liviana; la configuración puede ser grande y necesita
-                    // su propio margen para distinguir la Master real de un KDS mal anunciado.
-                    clearTimeout(timeoutId);
-                    const configController = new AbortController();
-                    const configTimeoutId = setTimeout(
-                        () => configController.abort(),
-                        this.CONFIG_VALIDATION_TIMEOUT_MS
-                    );
-                    try {
-                        const configResponse = await fetch(`${baseUrl}/api/config`, {
-                            signal: configController.signal,
-                        });
-                        if (!configResponse.ok) return false;
-                        return isEligibleOperationalMasterConfig(await configResponse.json());
-                    } finally {
-                        clearTimeout(configTimeoutId);
-                    }
+                    return true;
                 }
             }
-        } catch (e) {
+        } catch {
             // Ignore connection errors
         } finally {
             clearTimeout(timeoutId);

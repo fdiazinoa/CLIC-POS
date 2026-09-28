@@ -17,12 +17,13 @@ const resolveExpectedTenantId = (): string => (
 ).trim();
 
 export const discoverLanMasterCandidates = async (
-  options: { expectedTenantId?: string; timeoutMs?: number } = {}
+  options: { expectedTenantId?: string; timeoutMs?: number; localIps?: string[] } = {}
 ): Promise<LanMasterCandidate[]> => {
   const expectedTenantId = (options.expectedTenantId || resolveExpectedTenantId()).trim();
   const nativeBridge = window.ClicPOSNativePrinter;
   const candidates: LanMasterCandidate[] = [];
   let localIpHint = '';
+  const localIps = new Set((options.localIps || []).map(normalizeMasterHost).filter(Boolean));
 
   if (typeof nativeBridge?.discoverMasterServers === 'function') {
     try {
@@ -40,7 +41,7 @@ export const discoverLanMasterCandidates = async (
         })
         .forEach(master => {
           const host = normalizeMasterHost(master.host || master.url || '');
-          if (!host || candidates.some(candidate => candidate.host === host)) return;
+          if (!host || localIps.has(host) || candidates.some(candidate => candidate.host === host)) return;
           candidates.push({
             host,
             url: master.url,
@@ -60,12 +61,20 @@ export const discoverLanMasterCandidates = async (
     try {
       const deviceInfo = await nativeBridge.getDeviceInfo();
       localIpHint = String(deviceInfo?.localIp || deviceInfo?.localIps?.[0] || '');
+      [deviceInfo?.localIp, ...(deviceInfo?.localIps || [])]
+        .map(normalizeMasterHost)
+        .filter(Boolean)
+        .forEach(ip => localIps.add(ip));
     } catch {
       localIpHint = '';
     }
   }
 
-  const scannedUrl = await NetworkScanner.findMaster(localIpHint || undefined, expectedTenantId || undefined);
+  const scannedUrl = await NetworkScanner.findUntrustedMasterCandidateByIdentity(
+    localIpHint || options.localIps?.[0] || undefined,
+    expectedTenantId || undefined,
+    [...localIps],
+  );
   const scannedHost = normalizeMasterHost(scannedUrl || '');
   return scannedHost ? [{ host: scannedHost, url: scannedUrl || undefined }] : [];
 };

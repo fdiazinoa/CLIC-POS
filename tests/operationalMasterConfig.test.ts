@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
-import { resolveOperationalMasterConfig } from '../utils/operationalMasterConfig';
+import {
+  resolveClientMasterAuthority,
+  resolveOperationalMasterConfig,
+  runClientMasterStartup,
+  type ClientMasterAuthority,
+} from '../utils/operationalMasterConfig';
 import { persistValidatedClientMasterTarget, resolveClientMasterTerminalId } from '../utils/clientMasterBinding';
 
 const response = (body: unknown, status = 200) => ({
@@ -167,4 +172,144 @@ test('validated Master persistence rolls back a partial localStorage write befor
   assert.equal(values.get('CLIC_POS_MASTER_URL'), 'http://10.0.0.10:3001');
   assert.equal(values.get('pos_master_ip'), '10.0.0.10');
   assert.equal(profileWrites, 1, 'only rollback reconciliation may touch the prior profile');
+});
+
+test('client startup enforces hydrate → identity candidate → slow full validation → persist → initialize → refresh', async () => {
+  const events: string[] = [];
+  const masterConfig = { terminals: [{ id: 'MASTER' }] };
+  let persisted = 0;
+  const startedAt = Date.now();
+
+  const result = await runClientMasterStartup({
+    fallbackConfig: { terminals: [{ id: 'CLIENT' }] },
+    hydrateLocalIps: async () => {
+      events.push('localIps hydrated');
+      return ['10.0.0.28', '192.168.50.28'];
+    },
+    resolveAuthority: async (localIps) => resolveClientMasterAuthority({
+      storedHosts: ['10.0.0.28'],
+      resolveCloudHost: async () => null,
+      discoverLanHosts: async () => {
+        events.push('identity candidate');
+        return ['10.0.0.129'];
+      },
+      rejectHosts: localIps,
+      timeoutMs: 8_000,
+      fetchImpl: async (url, init) => {
+        events.push(`full config:${String(url)}`);
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(resolve, 2_600);
+          init?.signal?.addEventListener('abort', () => {
+            clearTimeout(timer);
+            reject(new DOMException('Aborted', 'AbortError'));
+          }, { once: true });
+        });
+        return response(masterConfig);
+      },
+      validate: (baseUrl) => events.push(`validated:${baseUrl}`),
+    }),
+    persistValidated: (authority) => {
+      events.push(`persist:${authority.baseUrl}`);
+      persisted += 1;
+    },
+    applyValidatedConfig: async (config) => {
+      events.push('apply config');
+      return config;
+    },
+    initialize: async (authority) => {
+      events.push(authority.status === 'VALIDATED' ? `initialize:${authority.baseUrl}` : 'initialize:offline');
+    },
+    refresh: async (authority) => {
+      events.push(`refresh:${authority.baseUrl}`);
+      return masterConfig;
+    },
+  });
+
+  assert.equal(result.authority.status, 'VALIDATED');
+  assert.equal(persisted, 1);
+  assert.ok(Date.now() - startedAt >= 2_500, 'the full config response must exceed the rejected 2.5s budget');
+  assert.deepEqual(events, [
+    'localIps hydrated',
+    'identity candidate',
+    'full config:http://10.0.0.129:3001/api/config',
+    'validated:http://10.0.0.129:3001',
+    'persist:http://10.0.0.129:3001',
+    'apply config',
+    'initialize:http://10.0.0.129:3001',
+    'refresh:http://10.0.0.129:3001',
+  ]);
+});
+
+test('incomplete local identity and all-invalid candidates remain offline without mutation or refresh', async () => {
+  for (const localIps of [[], ['10.0.0.28', '192.168.50.28']]) {
+    let persistCalls = 0;
+    let refreshCalls = 0;
+    const initialized: string[] = [];
+    const result = await runClientMasterStartup({
+      fallbackConfig: { local: true },
+      hydrateLocalIps: async () => localIps,
+      resolveAuthority: async (hydrated) => resolveClientMasterAuthority({
+        storedHosts: ['10.0.0.28', '127.0.0.1', '0.0.0.0'],
+        resolveCloudHost: async () => '192.168.50.28',
+        discoverLanHosts: async () => [],
+        rejectHosts: hydrated,
+        fetchImpl: async () => assert.fail('self/loopback/wildcard candidates must be rejected before fetch'),
+        validate: () => assert.fail('invalid candidates cannot validate'),
+      }),
+      persistValidated: () => { persistCalls++; },
+      applyValidatedConfig: async config => config,
+      initialize: async authority => { initialized.push(authority.status); },
+      refresh: async () => { refreshCalls++; return null; },
+    });
+    assert.equal(result.authority.status, 'UNAVAILABLE');
+    assert.equal(persistCalls, 0);
+    assert.equal(refreshCalls, 0);
+    assert.deepEqual(initialized, ['UNAVAILABLE']);
+  }
+});
+
+test('persistence rollback failure path initializes local-only and never refreshes remote', async () => {
+  const authority: ClientMasterAuthority<{ terminals: never[] }> = {
+    status: 'VALIDATED',
+    baseUrl: 'http://10.0.0.129:3001',
+    source: 'LAN',
+    config: { terminals: [] },
+  };
+  const initialized: string[] = [];
+  let refreshCalls = 0;
+  await assert.rejects(() => runClientMasterStartup({
+    fallbackConfig: { terminals: [] },
+    hydrateLocalIps: async () => ['10.0.0.28'],
+    resolveAuthority: async () => authority,
+    persistValidated: () => { throw new Error('MASTER_SYNC_PROFILE_PERSIST_FAILED'); },
+    applyValidatedConfig: async config => config,
+    initialize: async current => { initialized.push(current.status); },
+    refresh: async () => { refreshCalls++; return null; },
+  }), /PROFILE_PERSIST_FAILED/);
+  assert.deepEqual(initialized, ['UNAVAILABLE']);
+  assert.equal(refreshCalls, 0);
+});
+
+test('offline remount followed by validated authority uses only the new explicit target', async () => {
+  const initialized: string[] = [];
+  const refreshed: string[] = [];
+  const run = (authority: ClientMasterAuthority<{ generation: number }>) => runClientMasterStartup({
+    fallbackConfig: { generation: 0 },
+    hydrateLocalIps: async () => ['10.0.0.28'],
+    resolveAuthority: async () => authority,
+    persistValidated: () => undefined,
+    applyValidatedConfig: async config => config,
+    initialize: async current => { initialized.push(current.status === 'VALIDATED' ? current.baseUrl : 'OFFLINE'); },
+    refresh: async current => { refreshed.push(current.baseUrl); return current.config; },
+  });
+
+  await run({ status: 'UNAVAILABLE' });
+  await run({
+    status: 'VALIDATED',
+    baseUrl: 'http://10.0.0.140:3001',
+    source: 'CLOUD',
+    config: { generation: 2 },
+  });
+  assert.deepEqual(initialized, ['OFFLINE', 'http://10.0.0.140:3001']);
+  assert.deepEqual(refreshed, ['http://10.0.0.140:3001']);
 });
