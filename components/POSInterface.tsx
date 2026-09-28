@@ -30,8 +30,7 @@ import {
    OrderServiceType, CashMovement
 } from '../types';
 import { hasProductPromotion } from '../utils/promotionEngine';
-import { getDefaultFiscalProvider, getEffectiveFiscalComplianceConfig, getFiscalReserveAlert, isTerminalFiscalReceiptRequired, mapElectronicFiscalCodeToLegacy, resolveCreditNoteFiscalCode, resolveSaleFiscalCode } from '../utils/fiscal/fiscalHelpers';
-import { calculateTransactionTaxSummary } from '../utils/taxSummary';
+import { getDefaultFiscalProvider, getEffectiveFiscalComplianceConfig, getFiscalReserveAlert, isTerminalFiscalReceiptRequired, mapElectronicFiscalCodeToLegacy, resolveSaleFiscalCode } from '../utils/fiscal/fiscalHelpers';
 import UnifiedPaymentModal from './PaymentModal';
 import {
    evaluateCreditSupervisorGate,
@@ -60,6 +59,7 @@ import { applyPromotions } from '../utils/promotionEngine';
 import { calculatePointsEarned, getPrimaryLoyaltyCard } from '../utils/loyaltyEngine';
 import { couponService } from '../utils/couponService';
 import { resolveScannedCouponCode } from '../utils/couponScan';
+import { isRecognizedInvoiceScan } from '../utils/invoiceScan';
 import { calculateInventoryDeductions, resolveInventoryConsumptionMode, transferStockToCommitted } from '../utils/inventoryEngine';
 import { useSupervisorAuth } from '../hooks/useSupervisorAuth';
 import { calculateSalesCommission } from '../utils/userSalesPolicy';
@@ -67,7 +67,6 @@ import SupervisorModal from './SupervisorModal';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { useBottomSafeOffset } from '../hooks/useBottomSafeOffset';
 import MobileConfigModal from './MobileConfigModal';
-import ReturnModal from './ReturnModal';
 import PromoBottomSheet from './PromoBottomSheet';
 import { backgroundSyncManager, SyncState } from '../services/sync/BackgroundSyncManager';
 import { syncManager } from '../services/sync/SyncManager';
@@ -218,6 +217,7 @@ export interface POSInterfaceProps {
    onOpenAttendance: () => void;
    onOpenCustomers: () => void;
    onOpenHistory: () => void;
+   onOpenInvoiceActions: (scanValue: string) => void;
    onOpenFinance: (initialCashMovementType?: 'IN' | 'OUT' | 'X_REPORT') => void;
    onRegisterCashMovement?: (type: 'IN' | 'OUT', amount: number, reason: string) => CashMovement | void | Promise<CashMovement | void>;
    onOpenZReport?: () => void;
@@ -282,9 +282,6 @@ const buildModifierSignature = (modifiers?: unknown[]): string => {
    if (!Array.isArray(modifiers) || modifiers.length === 0) return '';
    return modifiers.map((modifier) => String(modifier ?? '')).sort().join('|');
 };
-
-const looksLikeDocumentScan = (code: string): boolean =>
-   /^(TCK|INV|B0[1-4]|E3[1245]|NC|ZS|ZR|REC|TXN-)/i.test(code.trim());
 
 const normalizeBooleanSetting = (value: unknown): boolean | undefined => {
    if (typeof value === 'boolean') return value;
@@ -1155,6 +1152,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    onOpenAttendance,
    onOpenCustomers,
    onOpenHistory,
+   onOpenInvoiceActions,
    onOpenFinance,
    onRegisterCashMovement,
    onOpenZReport,
@@ -2443,10 +2441,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [pendingProductToAdd, setPendingProductToAdd] = useState<Product | null>(null);
    const [pendingTrackingProduct, setPendingTrackingProduct] = useState<{ product: Product, quantity: number, price?: number, modifiers?: string[] } | null>(null);
 
-   // --- SMART QR RETURNS ---
-   const [showReturnModal, setShowReturnModal] = useState(false);
-   const [returnInvoiceId, setReturnInvoiceId] = useState<string | null>(null);
-
    // --- PROMO BOTTOM SHEET ---
    const [showPromoSheet, setShowPromoSheet] = useState(false);
    const [selectedPromoProduct, setSelectedPromoProduct] = useState<Product | null>(null);
@@ -2976,17 +2970,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
       return index;
    }, [activeReservations]);
-
-   const transactionByScanCode = useMemo(() => {
-      const index = new Map<string, Transaction>();
-      for (const transaction of transactions || []) {
-         if (transaction.id) index.set(String(transaction.id), transaction);
-         if (transaction.displayId) index.set(String(transaction.displayId), transaction);
-         if ((transaction as any).ncf) index.set(String((transaction as any).ncf), transaction);
-         if ((transaction as any).electronicNcf) index.set(String((transaction as any).electronicNcf), transaction);
-      }
-      return index;
-   }, [transactions]);
 
    const selectedCustomerActiveReservationsCount = useMemo(() => {
       if (!selectedCustomer) return 0;
@@ -3803,13 +3786,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                }
             }
             if (data.type === 'INVOICE_RETURN' && data.id) {
-               setReturnInvoiceId(data.id);
-               setShowReturnModal(true);
+               onOpenInvoiceActions(trimmed);
                return;
             }
          }
       } catch (e) {
          // Not a JSON or invalid
+      }
+
+      if (isRecognizedInvoiceScan(trimmed)) {
+         onOpenInvoiceActions(trimmed);
+         return;
       }
 
       // 1. Try Scale Parser
@@ -3860,14 +3847,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       // 3. Try Transaction Search only for document-looking scans. Product
       // barcodes should not pay the cost of scanning large ticket histories.
-      if (looksLikeDocumentScan(trimmed)) {
-         const txnFound = transactionByScanCode.get(trimmed);
-         if (txnFound) {
-            setReturnInvoiceId(txnFound.id);
-            setShowReturnModal(true);
-            return;
-         }
-      }
       setErrorToast('Código no encontrado');
       setTimeout(() => setErrorToast(null), 2000);
       } finally {
@@ -3875,7 +3854,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          if (trace.stages.HANDLER_END === undefined) markInteractionStage(trace, 'HANDLER_END');
          if (activeAddTraceRef.current === trace) activeAddTraceRef.current = null;
       }
-   }, [activeReservationByScanCode, addToCart, config.scaleLabelConfig, handleProductClick, getProductPrice, handleRecoverReservation, findProductByAnyCode, productCodeIndex, routeScannedCoupon, transactionByScanCode, isReturnMode]);
+   }, [activeReservationByScanCode, addToCart, config.scaleLabelConfig, handleProductClick, getProductPrice, handleRecoverReservation, findProductByAnyCode, productCodeIndex, routeScannedCoupon, onOpenInvoiceActions, isReturnMode]);
 
    const isAnyModalOpen = !!(
       showSafetyGate ||
@@ -3896,7 +3875,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       productForScale ||
       showLoyaltyModal ||
       isScannerOpen ||
-      showReturnModal ||
       showPromoSheet ||
       showMobileConfigModal ||
       showReservationModal ||
@@ -6973,99 +6951,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
    };
 
-   const handleProcessReturn = async (originalTransaction: Transaction, itemsToReturn: { itemId: string, quantity: number }[]) => {
-      // 1. Calculate Refund Totals
-      const returnItems: CartItem[] = [];
-
-      itemsToReturn.forEach(returnItem => {
-         const originalItem = (originalTransaction.items || []).find(i => i.cartId === returnItem.itemId);
-         if (originalItem) {
-            returnItems.push({
-               ...originalItem,
-               quantity: Math.abs(returnItem.quantity),
-               cartId: `RET-${Date.now()}-${returnItem.itemId}`,
-               price: originalItem.price
-            });
-         }
-      });
-
-      const refundSummary = calculateTransactionTaxSummary(
-         returnItems,
-         config.taxes || [],
-         Boolean(originalTransaction.isTaxIncluded),
-         config.taxRate || 0
-      );
-      const refundTotal = refundSummary.total;
-
-      const fiscalCompliance = getEffectiveFiscalComplianceConfig(config, activeTerminalConfig);
-      const creditNoteFiscalType = resolveCreditNoteFiscalCode(fiscalCompliance.mode);
-      const creditNoteNcf = fiscalCompliance.mode === 'NONE'
-         ? undefined
-         : await db.getNextNCF(creditNoteFiscalType, terminalId, 50);
-
-      // 2. Create Refund Transaction
-      const refundTxn = await transactionService.createTransaction({
-         documentType: 'REFUND',
-         seriesId: activeTerminalConfig?.documentAssignments?.['REFUND'] || 'REFUND-GENERIC',
-         date: new Date().toISOString(),
-         items: returnItems,
-         total: refundTotal,
-         payments: [],
-         userId: currentUser.id,
-         userName: currentUser.name,
-         terminalId: terminalId,
-         status: 'REFUNDED',
-         customerId: originalTransaction.customerId,
-         customerName: originalTransaction.customerName,
-         originalTransactionId: originalTransaction.id,
-         electronicNcf: creditNoteFiscalType.startsWith('E') ? creditNoteNcf : undefined,
-         fiscalMode: fiscalCompliance.mode,
-         fiscalProvider: creditNoteFiscalType.startsWith('E') ? getDefaultFiscalProvider(config, activeTerminalConfig) : 'NONE',
-         taxAmount: refundSummary.taxAmount,
-         netAmount: refundSummary.netAmount,
-         affectedNCF: originalTransaction.ncf,
-         affectedInvoiceNumber: originalTransaction.displayId || originalTransaction.id,
-         ncf: creditNoteNcf,
-         ncfType: creditNoteNcf ? creditNoteFiscalType : undefined,
-         refundReason: 'Smart QR Return',
-         isTaxIncluded: originalTransaction.isTaxIncluded
-      });
-
-      const sellableConditions = new Map<string, 'SELLABLE' | 'DAMAGED'>();
-      returnItems.forEach(item => sellableConditions.set(item.cartId, 'SELLABLE'));
-
-      await persistStandaloneRefundTransaction(
-         {
-            ...refundTxn,
-            items: returnItems,
-            total: refundTotal,
-            status: 'REFUNDED',
-            refundReason: 'Smart QR Return',
-            syncStatus: 'PENDING'
-         },
-         {
-            warehouseId: defaultSalesWarehouseId || 'wh_central',
-            terminalId,
-            originalTransaction,
-            conditions: sellableConditions
-         }
-      );
-
-      if (!(Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android')) {
-         try {
-            await fetch(`/api/transactions/${originalTransaction.id}`, {
-               method: 'PUT',
-               headers: { 'Content-Type': 'application/json' },
-               body: JSON.stringify({ status: 'REFUNDED' })
-            });
-         } catch (e) {
-            console.error("Failed to update original transaction status:", e);
-         }
-      }
-
-      alert(`Devolución registrada: ${config.currencySymbol}${refundTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}\nTicket original (${originalTransaction.displayId}) marcado como REEMBOLSADO.`);
-   };
-
    // --- ACTION GRID HANDLER ---
    const handleGridAction = (action: string) => {
       switch (action) {
@@ -7483,15 +7368,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             currentWarehouseId={defaultSalesWarehouseId}
             currentTariffId={activeTariffId}
             currentCategory={categoryFilter}
-         />
-
-         <ReturnModal
-            isOpen={showReturnModal}
-            onClose={() => setShowReturnModal(false)}
-            invoiceId={returnInvoiceId}
-            transactions={transactions}
-            onProcessReturn={handleProcessReturn}
-            config={config}
          />
 
          {isMobile && mobileView === 'PRODUCTS' && (
@@ -9792,8 +9668,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         }
                      }
                      if (data.type === 'INVOICE_RETURN' && data.id) {
-                        setReturnInvoiceId(data.id);
-                        setShowReturnModal(true);
+                        onOpenInvoiceActions(trimmed);
                         setIsScannerOpen(false);
                         return { success: true, message: 'Factura Identificada' };
                      }
@@ -9803,10 +9678,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                }
 
                // 0.1 Try Transaction Search (Direct bypass for TCK... barcodes)
-               const txnFound = (transactions || []).find(t => t.displayId === trimmed || t.id === trimmed);
-               if (txnFound) {
-                  setReturnInvoiceId(txnFound.id);
-                  setShowReturnModal(true);
+               if (isRecognizedInvoiceScan(trimmed)) {
+                  onOpenInvoiceActions(trimmed);
                   setIsScannerOpen(false);
                   return { success: true, message: 'Factura Identificada' };
                }

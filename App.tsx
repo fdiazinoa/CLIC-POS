@@ -12315,6 +12315,10 @@ const AppContent: React.FC = () => {
             onOpenAttendance={() => setCurrentView('ATTENDANCE')}
             onOpenCustomers={() => setCurrentView('CUSTOMERS')}
             onOpenHistory={() => setCurrentView('HISTORY')}
+            onOpenInvoiceActions={(scanValue) => {
+              setScanTargetTicketId(scanValue);
+              setCurrentView('HISTORY');
+            }}
             onOpenFinance={handleOpenFinanceFromPos}
             onRegisterCashMovement={handleRegisterMovement}
             onOpenZReport={() => { void handleOpenZReport(); }}
@@ -12738,6 +12742,7 @@ const AppContent: React.FC = () => {
             roles={roles}
             customers={customers}
             initialSelectedId={scanTargetTicketId}
+            onInitialSelectionHandled={() => setScanTargetTicketId(null)}
             activeTerminalId={getCurrentTerminal()?.id || 'T1'}
             onUpdateConfig={handleConfigUpdate}
             onClose={() => {
