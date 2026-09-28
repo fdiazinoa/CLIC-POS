@@ -3763,7 +3763,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    // --- BARCODE SCANNER LOGIC ---
    const processBarcode = useCallback((code: string) => {
       const trimmed = code.trim();
-      if (!trimmed) return;
+      if (!trimmed) return { success: false, message: 'Código vacío' };
       const trace = beginPosInteraction('BARCODE_SCAN', { codeLength: trimmed.length });
       activeAddTraceRef.current = trace;
       expectInteractionRender(trace, 'POS_INTERACTION_VIEW');
@@ -3771,7 +3771,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       // A hardware scan is consumed even when routing/lookup finds no match.
       setSearchTerm('');
 
-      if (routeScannedCoupon(trimmed)) return;
+      if (routeScannedCoupon(trimmed)) return { success: true, message: 'Cupón leído. Valide para aplicarlo.' };
 
       // 0. Try Smart QR (JSON)
       try {
@@ -3782,12 +3782,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   || activeReservationByScanCode.get(String(data.code || ''));
                if (found) {
                   handleRecoverReservation(found);
-                  return;
+                  return { success: true, message: 'Reserva recuperada' };
                }
             }
             if (data.type === 'INVOICE_RETURN' && data.id) {
                onOpenInvoiceActions(trimmed);
-               return;
+               return { success: true, message: 'Factura identificada' };
             }
          }
       } catch (e) {
@@ -3815,11 +3815,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   }
                }
                setTimeout(() => setErrorToast(null), 3000);
-               return;
+               return { success: true, message: `${product.name} agregado` };
             } else {
                setErrorToast(`Producto PLU ${scaleItem.plu} no encontrado`);
                setTimeout(() => setErrorToast(null), 3000);
-               return;
+               return { success: false, message: `Producto PLU ${scaleItem.plu} no encontrado` };
             }
          }
       }
@@ -3837,20 +3837,21 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          }
          setErrorToast(`Producto agregado: ${match.product.name}`);
          setTimeout(() => setErrorToast(null), 1500);
-         return;
+         return { success: true, message: `${match.product.name} agregado` };
       }
 
       // Invoice-like prefixes are intentionally evaluated after scale/product
       // lookup so an existing SKU such as INV001 or NC-SODA keeps POS priority.
       if (shouldRouteInvoiceScan(trimmed)) {
          onOpenInvoiceActions(trimmed);
-         return;
+         return { success: true, message: 'Factura identificada' };
       }
 
       // 3. Try Transaction Search only for document-looking scans. Product
       // barcodes should not pay the cost of scanning large ticket histories.
       setErrorToast('Código no encontrado');
       setTimeout(() => setErrorToast(null), 2000);
+      return { success: false, message: 'Código no encontrado' };
       } finally {
          markInteractionStateUpdate(trace, 1);
          if (trace.stages.HANDLER_END === undefined) markInteractionStage(trace, 'HANDLER_END');
@@ -9648,79 +9649,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          <BarcodeScannerModal
             isOpen={isScannerOpen}
             onClose={() => setIsScannerOpen(false)}
-            onScan={async (code) => {
-               const trace = beginPosInteraction('BARCODE_SCAN', { source: 'camera' });
-               expectInteractionRender(trace, 'POS_INTERACTION_VIEW');
-               try {
-               // 0. Try Smart QR (JSON)
-               const trimmed = code.trim();
-               if (routeScannedCoupon(trimmed)) {
-                  return { success: true, message: 'Cupón leído. Valide para aplicarlo.' };
-               }
-
-               try {
-                  if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
-                     const data = JSON.parse(trimmed);
-                     if (data.type === 'RESERVATION_NOTE' && (data.id || data.code)) {
-                        const found = (reservations || []).find(r => r.id === data.id || r.code === data.code);
-                        if (found) {
-                           handleRecoverReservation(found);
-                           setIsScannerOpen(false);
-                           return { success: true, message: 'Reserva Recuperada' };
-                        }
-                     }
-                     if (data.type === 'INVOICE_RETURN' && data.id) {
-                        onOpenInvoiceActions(trimmed);
-                        setIsScannerOpen(false);
-                        return { success: true, message: 'Factura Identificada' };
-                     }
-                  }
-               } catch (e) {
-                  // Not a JSON or invalid
-               }
-
-               // 1. Try Scale Parser
-               if (config.scaleLabelConfig?.isEnabled) {
-                  const scaleItem = parseScaleBarcode(code, config.scaleLabelConfig);
-                  if (scaleItem) {
-                     const product = (products || []).find(p => p.barcode === scaleItem.plu || p.id === scaleItem.plu);
-                     if (product) {
-                        if (!canAddItemToCart(product)) return { success: false, message: 'No disponible en almacén' };
-
-                        if (scaleItem.type === 'WEIGHT') {
-                           addToCart(product, scaleItem.value);
-                           return { success: true, message: `${product.name} (${scaleItem.value.toFixed(3)}kg)` };
-                        } else {
-                           const unitPrice = getProductPrice(product);
-                           const weight = unitPrice > 0 ? scaleItem.value / unitPrice : 1;
-                           addToCart(product, weight);
-                           return { success: true, message: `${product.name} ($${scaleItem.value})` };
-                        }
-                     }
-                  }
-               }
-
-               // 2. Normal Search
-               const product = (products || []).find(p => p.barcode === code);
-               if (product) {
-                  if (!canAddItemToCart(product)) return { success: false, message: 'No disponible en almacén' };
-
-                  // Direct add for speed
-                  addToCart(product);
-                  return { success: true, message: `${product.name} Agregado` };
-               }
-
-               if (shouldRouteInvoiceScan(trimmed)) {
-                  onOpenInvoiceActions(trimmed);
-                  setIsScannerOpen(false);
-                  return { success: true, message: 'Factura Identificada' };
-               }
-
-               return { success: false, message: 'Producto no encontrado' };
-               } finally {
-                  markInteractionStage(trace, 'HANDLER_END');
-               }
-            }}
+            onScan={async (code) => processBarcode(code)}
          />
          {
             quickActionData && (

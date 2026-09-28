@@ -78,9 +78,12 @@ test('POS keeps coupon precedence and delegates invoice actions to the secured T
   const process = pos.slice(pos.indexOf('const processBarcode ='), pos.indexOf('const isAnyModalOpen'));
   assert.ok(process.indexOf('routeScannedCoupon(trimmed)') < process.indexOf('shouldRouteInvoiceScan(trimmed)'));
   assert.ok(process.indexOf('findProductByAnyCode(trimmed)') < process.indexOf('shouldRouteInvoiceScan(trimmed)'));
+  assert.match(process, /activeReservationByScanCode\.get/);
   const camera = pos.slice(pos.indexOf('<BarcodeScannerModal'), pos.indexOf('quickActionData &&'));
-  assert.ok(camera.indexOf('routeScannedCoupon(trimmed)') < camera.indexOf('shouldRouteInvoiceScan(trimmed)'));
-  assert.ok(camera.indexOf("(products || []).find(p => p.barcode === code)") < camera.indexOf('shouldRouteInvoiceScan(trimmed)'));
+  assert.match(camera, /onScan=\{async \(code\) => processBarcode\(code\)\}/);
+  assert.doesNotMatch(camera, /reservations \|\||products \|\||parseScaleBarcode|shouldRouteInvoiceScan/);
+  const hid = pos.slice(pos.indexOf('const handleCentralBarcodeScan'), pos.indexOf("window.addEventListener('barcodeScanned'"));
+  assert.match(hid, /processBarcode\(barcode\)/);
   assert.doesNotMatch(pos, /<ReturnModal|handleProcessReturn/);
 
   const app = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');

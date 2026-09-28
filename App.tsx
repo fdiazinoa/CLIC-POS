@@ -331,14 +331,13 @@ import {
   isPosMasterClientProfile,
   resolveSyncTarget,
   saveSyncProfileFromContract,
-  updateClientMasterUrl,
   type SyncPermissions,
   type SyncProfile,
   type SyncProfilePersistenceDiagnostic,
   type SyncProfileSource
 } from './services/sync/SyncProfile';
 import { resolveOperationalMasterConfig } from './utils/operationalMasterConfig';
-import { resolveClientMasterTerminalId } from './utils/clientMasterBinding';
+import { persistValidatedClientMasterTarget, resolveClientMasterTerminalId } from './utils/clientMasterBinding';
 import { markSyncDeviceTokenInvalid, persistSyncDeviceToken } from './services/sync/deviceToken';
 import {
   extractErpRegisterAuth,
@@ -5473,9 +5472,7 @@ const AppContent: React.FC = () => {
       isReady: () => clientRoutingContextRef.current.ready,
       discover: () => clientRoutingContextRef.current.discover(),
       mirror: baseUrl => {
-        localStorage.setItem('pos_master_ip', new URL(baseUrl).hostname);
-        localStorage.setItem('CLIC_POS_MASTER_URL', baseUrl);
-        updateClientMasterUrl(baseUrl);
+        persistValidatedClientMasterTarget(baseUrl);
       },
     });
   }
@@ -6893,10 +6890,8 @@ const AppContent: React.FC = () => {
 
             if (resolvedMaster) {
               masterIp = new URL(resolvedMaster.baseUrl).hostname;
-              localStorage.setItem('CLIC_POS_MASTER_URL', resolvedMaster.baseUrl);
-              localStorage.setItem('pos_master_ip', masterIp);
+              persistValidatedClientMasterTarget(resolvedMaster.baseUrl);
               localStorage.setItem('CLIC_POS_MASTER_DISCOVERY', resolvedMaster.source);
-              updateClientMasterUrl(resolvedMaster.baseUrl);
             }
 
             if (fetchedConfig && fetchedConfig.terminals) {

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import { resolveOperationalMasterConfig } from '../utils/operationalMasterConfig';
-import { resolveClientMasterTerminalId } from '../utils/clientMasterBinding';
+import { persistValidatedClientMasterTarget, resolveClientMasterTerminalId } from '../utils/clientMasterBinding';
 
 const response = (body: unknown, status = 200) => ({
   ok: status >= 200 && status < 300,
@@ -71,4 +71,57 @@ test('non-primary devices are rejected before cloud publication work starts', ()
   const source = readFileSync(new URL('../utils/cloudMasterRegistry.ts', import.meta.url), 'utf8');
   const publication = source.slice(source.indexOf('export const publishMasterEndpointToCloud'));
   assert.ok(publication.indexOf("if (payload.isPrimary !== true) return null") < publication.indexOf('getStoredTenantIdentity()'));
+});
+
+test('validated Master persistence rolls mirrors back when SyncProfile persistence fails, then recovers', () => {
+  const values = new Map<string, string>([
+    ['CLIC_POS_MASTER_URL', 'http://10.0.0.10:3001'],
+    ['pos_master_ip', '10.0.0.10'],
+  ]);
+  const storage = {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => { values.set(key, value); },
+    removeItem: (key: string) => { values.delete(key); },
+  };
+  let profileUrl = 'http://10.0.0.10:3001';
+  let rejectNext = true;
+  const persistProfile = (url: string) => {
+    if (rejectNext && url === 'http://10.0.0.129:3001') { rejectNext = false; return false; }
+    profileUrl = url;
+    return true;
+  };
+
+  assert.throws(() => persistValidatedClientMasterTarget('http://10.0.0.129:3001', { storage, persistProfile }), /PROFILE_PERSIST_FAILED/);
+  assert.equal(values.get('CLIC_POS_MASTER_URL'), 'http://10.0.0.10:3001');
+  assert.equal(values.get('pos_master_ip'), '10.0.0.10');
+  assert.equal(profileUrl, 'http://10.0.0.10:3001');
+
+  persistValidatedClientMasterTarget('http://10.0.0.129:3001', { storage, persistProfile });
+  assert.equal(values.get('CLIC_POS_MASTER_URL'), 'http://10.0.0.129:3001');
+  assert.equal(values.get('pos_master_ip'), '10.0.0.129');
+  assert.equal(profileUrl, 'http://10.0.0.129:3001');
+});
+
+test('validated Master persistence rolls back a partial localStorage write before profile mutation', () => {
+  const values = new Map<string, string>([
+    ['CLIC_POS_MASTER_URL', 'http://10.0.0.10:3001'],
+    ['pos_master_ip', '10.0.0.10'],
+  ]);
+  let failHostWrite = true;
+  let profileWrites = 0;
+  const storage = {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => {
+      if (key === 'pos_master_ip' && failHostWrite) { failHostWrite = false; throw new Error('QUOTA'); }
+      values.set(key, value);
+    },
+    removeItem: (key: string) => { values.delete(key); },
+  };
+  assert.throws(() => persistValidatedClientMasterTarget('http://10.0.0.129:3001', {
+    storage,
+    persistProfile: () => { profileWrites++; return true; },
+  }), /QUOTA/);
+  assert.equal(values.get('CLIC_POS_MASTER_URL'), 'http://10.0.0.10:3001');
+  assert.equal(values.get('pos_master_ip'), '10.0.0.10');
+  assert.equal(profileWrites, 1, 'only rollback reconciliation may touch the prior profile');
 });
