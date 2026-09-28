@@ -140,9 +140,15 @@ test('cambio de vínculo mientras discover está pendiente no publica contrato a
 
 test('timeouts de transporte customer/release comienzan después de resolver master', () => {
   const app = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
-  assert.match(app, /const customerEndpoint = await resolveValidatedOperationalApiUrl\('\/api\/customers'\);\s*const controller = new AbortController\(\);\s*const timeoutId/);
+  const customer = app.slice(app.indexOf('const handleAddCustomer'), app.indexOf('const handleRepairLegacyReceivables'));
+  assert.ok(customer.indexOf("resolveValidatedOperationalApiUrl('/api/customers')") < customer.indexOf('dispatchLegacyLanMutation<any>'));
+  assert.match(customer, /url: customerEndpoint,[\s\S]*?timeoutMs: 5000/);
   const pos = readFileSync(new URL('../components/POSInterface.tsx', import.meta.url), 'utf8');
-  assert.match(pos, /const releaseEndpoint = await resolveValidatedOperationalApiUrl\('\/api\/mesas\/liberar'\);[\s\S]*?const controller = new AbortController\(\)/);
-  assert.match(pos, /try \{ releaseEndpoint = await resolveValidatedOperationalApiUrl\('\/api\/mesas\/liberar'\); \}[\s\S]*?const controller = new AbortController\(\)/);
-  for (const source of [app, pos]) assert.doesNotMatch(source, /controller\.abort\(\), \d+\);\s*try \{\s*const \w+ = await fetch\(await resolveValidatedOperationalApiUrl/);
+  const closeRelease = pos.slice(pos.indexOf("const releaseEndpoint = await resolveValidatedOperationalApiUrl('/api/mesas/liberar')"), pos.indexOf('await onExitToMap', pos.indexOf("const releaseEndpoint = await resolveValidatedOperationalApiUrl('/api/mesas/liberar')")));
+  assert.ok(closeRelease.indexOf('resolveValidatedOperationalApiUrl') < closeRelease.indexOf('dispatchLegacyLanMutation<any>'));
+  assert.match(closeRelease, /url: releaseEndpoint,[\s\S]*?timeoutMs: 4000/);
+  const emptyRelease = pos.slice(pos.indexOf("try { releaseEndpoint = await resolveValidatedOperationalApiUrl('/api/mesas/liberar'); }"), pos.indexOf('const releaseData', pos.indexOf("try { releaseEndpoint = await resolveValidatedOperationalApiUrl('/api/mesas/liberar'); }")));
+  assert.ok(emptyRelease.indexOf('resolveValidatedOperationalApiUrl') < emptyRelease.indexOf('dispatchLegacyLanMutation<any>'));
+  assert.match(emptyRelease, /url: releaseEndpoint,[\s\S]*?timeoutMs: 2500/);
+  for (const source of [customer, closeRelease, emptyRelease]) assert.doesNotMatch(source, /requestJson<any>|fetch\(/);
 });

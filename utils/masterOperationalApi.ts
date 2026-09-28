@@ -256,7 +256,11 @@ export const createOperationalMasterResolver = (options: {
       && accepted?.key === capturedKey
       && !options.getContract().localIps.map(id).includes(new URL(accepted.base).hostname.toLowerCase());
   };
-  return { current, ensure, ensureCurrent, captureAuthority, invalidate };
+  const reconcileMirror = async (base: string): Promise<void> => {
+    if (current() !== base) throw new Error('MASTER_CONTRACT_CHANGED: cambió la autoridad antes de reparar sus mirrors.');
+    await options.mirror(base);
+  };
+  return { current, ensure, ensureCurrent, reconcileMirror, captureAuthority, invalidate };
 };
 
 let operationalMasterResolver: ReturnType<typeof createOperationalMasterResolver> | null = null;
@@ -266,7 +270,10 @@ export const setOperationalMasterResolver = (resolver: ReturnType<typeof createO
 export const resolveValidatedOperationalApiUrl = async (path: string): Promise<string> => {
   if (isClientTerminalMode()) {
     if (!operationalMasterResolver) throw new Error('MASTER_ENDPOINT_NOT_READY: el vínculo todavía está cargando.');
-    await operationalMasterResolver.ensureCurrent();
+    const validatedBase = await operationalMasterResolver.ensureCurrent();
+    if (resolveMasterOperationalBaseUrl() !== validatedBase) {
+      await operationalMasterResolver.reconcileMirror(validatedBase);
+    }
   }
   return resolveOperationalApiUrl(path);
 };
