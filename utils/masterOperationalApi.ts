@@ -227,8 +227,15 @@ export const createOperationalMasterResolver = (options: {
         try {
           const base = validateOperationalMasterEndpoint(candidate.baseUrl, candidate.config, { ...contract, localIps: options.getContract().localIps });
           assertCurrentAttempt();
+          const rollback = await options.mirror(base);
+          try {
+            assertCurrentAttempt();
+            validateOperationalMasterEndpoint(candidate.baseUrl, candidate.config, options.getContract());
+          } catch (error) {
+            if (typeof rollback === 'function') await rollback();
+            throw error;
+          }
           accepted = { key: contractKey, base };
-          await options.mirror(base);
           return base;
         } catch (error) { failure = error; }
       }
@@ -257,8 +264,14 @@ export const createOperationalMasterResolver = (options: {
       && !options.getContract().localIps.map(id).includes(new URL(accepted.base).hostname.toLowerCase());
   };
   const reconcileMirror = async (base: string): Promise<void> => {
+    const reconciliationGeneration = generation;
+    const contractKey = key(options.getContract());
     if (current() !== base) throw new Error('MASTER_CONTRACT_CHANGED: cambió la autoridad antes de reparar sus mirrors.');
-    await options.mirror(base);
+    const rollback = await options.mirror(base);
+    if (reconciliationGeneration !== generation || contractKey !== key(options.getContract()) || current() !== base) {
+      if (typeof rollback === 'function') await rollback();
+      throw new Error('MASTER_CONTRACT_CHANGED: cambió la autoridad mientras se reparaban sus mirrors.');
+    }
   };
   return { current, ensure, ensureCurrent, reconcileMirror, captureAuthority, invalidate };
 };

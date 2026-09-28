@@ -239,7 +239,7 @@ test('la Master Android se reactiva al volver al primer plano y el cliente reint
   );
   assert.match(appSource, /addListener\?\.\('resume', ensureMasterServerHealth\)/);
   assert.match(appSource, /discoverLanMasterCandidates\(\{[\s\S]{0,100}timeoutMs: 2500,[\s\S]{0,100}localIps/);
-  assert.match(appSource, /mirror: async baseUrl => \{\s*await persistValidatedClientMasterTargetAsync\(baseUrl\)/);
+  assert.match(appSource, /mirror: baseUrl => persistValidatedClientMasterTargetAsync\(baseUrl\)/);
   assert.match(masterTargetPersistence, /const persistProfile = dependencies\.persistProfile \|\| updateClientMasterUrl/);
   assert.match(masterTargetPersistence, /storage\.setItem\('CLIC_POS_MASTER_URL', normalizedUrl\)/);
   assert.match(masterTargetPersistence, /storage\.setItem\('pos_master_ip', nextHost\)/);

@@ -5499,9 +5499,7 @@ const AppContent: React.FC = () => {
       getContract: () => clientRoutingContextRef.current.getContract(),
       isReady: () => clientRoutingContextRef.current.ready,
       discover: () => clientRoutingContextRef.current.discover(),
-      mirror: async baseUrl => {
-        await persistValidatedClientMasterTargetAsync(baseUrl);
-      },
+      mirror: baseUrl => persistValidatedClientMasterTargetAsync(baseUrl),
     });
   }
   useLayoutEffect(() => {

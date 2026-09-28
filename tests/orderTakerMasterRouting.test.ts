@@ -138,6 +138,99 @@ test('cambio de vínculo mientras discover está pendiente no publica contrato a
   await assert.rejects(pending, /CONTRACT_CHANGED/); assert.equal(resolver.current(), '');
 });
 
+test('mirror pendiente revierte autoridad antigua si cambia el contrato o se invalida', async () => {
+  for (const supersede of ['contract', 'invalidate'] as const) {
+    let active = { ...contract };
+    let persisted = 'http://10.0.0.90:3001';
+    const waiting = (() => {
+      let release!: () => void;
+      const promise = new Promise<void>(resolve => { release = resolve; });
+      return { promise, release };
+    })();
+    const resolver = createOperationalMasterResolver({
+      getContract: () => active,
+      discover: async () => [{ baseUrl: '10.0.0.101', config: remote() }],
+      mirror: async base => {
+        const previous = persisted;
+        persisted = base;
+        await waiting.promise;
+        return () => { persisted = previous; };
+      },
+    });
+    const pending = resolver.ensure();
+    await Promise.resolve();
+    await Promise.resolve();
+    assert.equal(persisted, 'http://10.0.0.101:3001');
+    if (supersede === 'contract') active = { ...contract, terminalType: 'ORDER_TAKER' };
+    else resolver.invalidate();
+    waiting.release();
+    await assert.rejects(pending, /CONTRACT_CHANGED/);
+    assert.equal(resolver.current(), '');
+    assert.equal(persisted, 'http://10.0.0.90:3001');
+  }
+});
+
+test('reconcile pendiente revierte el mirror si la autoridad se invalida', async () => {
+  let persisted = 'http://10.0.0.90:3001';
+  let writes = 0;
+  const resolver = createOperationalMasterResolver({
+    getContract: () => contract,
+    discover: async () => [{ baseUrl: '10.0.0.101', config: remote() }],
+    mirror: base => {
+      const previous = persisted;
+      persisted = base;
+      writes += 1;
+      return () => { persisted = previous; };
+    },
+  });
+  const base = await resolver.ensure();
+  assert.equal(writes, 1);
+  assert.equal(await resolver.ensure(), base);
+  assert.equal(writes, 1);
+
+  persisted = 'http://10.0.0.90:3001';
+  let release!: () => void;
+  const waiting = new Promise<void>(resolve => { release = resolve; });
+  let racingWrites = 0;
+  const racing = createOperationalMasterResolver({
+    getContract: () => contract,
+    discover: async () => [{ baseUrl: '10.0.0.101', config: remote() }],
+    mirror: async next => {
+      const previous = persisted;
+      persisted = next;
+      racingWrites += 1;
+      if (racingWrites > 1) await waiting;
+      return () => { persisted = previous; };
+    },
+  });
+  await racing.ensure();
+  persisted = 'http://10.0.0.90:3001';
+  const reconciliation = racing.reconcileMirror(base);
+  await Promise.resolve();
+  racing.invalidate();
+  release();
+  await assert.rejects(reconciliation, /CONTRACT_CHANGED/);
+  assert.equal(racing.current(), '');
+  assert.equal(persisted, 'http://10.0.0.90:3001');
+});
+
+test('fallo de persistencia no publica autoridad y conserva el mirror previo', async () => {
+  let persisted = 'http://10.0.0.90:3001';
+  const resolver = createOperationalMasterResolver({
+    getContract: () => contract,
+    discover: async () => [{ baseUrl: '10.0.0.101', config: remote() }],
+    mirror: base => {
+      const previous = persisted;
+      persisted = base;
+      persisted = previous;
+      throw new Error('MASTER_SYNC_PROFILE_PERSIST_FAILED');
+    },
+  });
+  await assert.rejects(resolver.ensure(), /PERSIST_FAILED/);
+  assert.equal(resolver.current(), '');
+  assert.equal(persisted, 'http://10.0.0.90:3001');
+});
+
 test('timeouts de transporte customer/release comienzan después de resolver master', () => {
   const app = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
   const customer = app.slice(app.indexOf('const handleAddCustomer'), app.indexOf('const handleRepairLegacyReceivables'));
