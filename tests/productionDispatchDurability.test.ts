@@ -12,9 +12,12 @@ import {
   isProductionPrintAutoRetryEligible,
   isProductionRetryDue,
   mergeProductionDispatchIntent,
+  resolveAndRetryAmbiguousProductionPrint,
+  retryPendingProductionPrints,
   runProductionDispatchAttempt,
   runProductionPrintAttempt,
 } from '../services/restaurant/ProductionOrderDispatcher';
+import { db } from '../utils/db';
 import { resolveProductionOutputTargets } from '../utils/productionOutputMode';
 
 test('dispatcher intent is deterministic and starts pending before network delivery', () => {
@@ -213,7 +216,47 @@ test('ambiguous print requires explicit operator reconciliation before a retry',
     'CONFIRMED_NOT_PRINTED',
     new Date('2026-09-29T12:00:00.000Z'),
   );
-  assert.equal(retry?.status, 'PENDING');
-  assert.equal(retry?.nextRetryAt, '2026-09-29T12:00:00.000Z');
+  assert.equal(retry?.status, 'RECONCILING');
+  assert.equal(retry?.nextRetryAt, undefined);
   assert.equal(isProductionPrintAutoRetryEligible(unknown), false);
+});
+
+test('manual print reconciliation and scheduler race issue exactly one print', async () => {
+  const get = db.get;
+  const save = db.save;
+  const unknown = {
+    ...createProductionPrintIntent({
+      orderId: 'TXN-RACE', areaId: 'kitchen', areaName: 'Kitchen', cartIds: ['c-race'], items: [],
+    }),
+    status: 'OUTCOME_UNKNOWN' as const,
+  };
+  let queue = [unknown];
+  let printCalls = 0;
+  let releasePrint!: () => void;
+  const printReleased = new Promise<void>((resolve) => { releasePrint = resolve; });
+  try {
+    db.get = (async (collection: string) => collection === 'productionPrintQueue' ? queue : []) as typeof db.get;
+    db.save = (async (collection: string, value: unknown) => {
+      if (collection === 'productionPrintQueue') queue = value as typeof queue;
+    }) as typeof db.save;
+
+    const manual = resolveAndRetryAmbiguousProductionPrint(unknown.id, async () => {
+      printCalls += 1;
+      await printReleased;
+      return true;
+    });
+    while (printCalls === 0) await new Promise((resolve) => setTimeout(resolve, 0));
+    const scheduled = retryPendingProductionPrints(async () => {
+      printCalls += 1;
+      return true;
+    });
+    releasePrint();
+    await Promise.all([manual, scheduled]);
+
+    assert.equal(printCalls, 1);
+    assert.deepEqual(queue, []);
+  } finally {
+    db.get = get;
+    db.save = save;
+  }
 });

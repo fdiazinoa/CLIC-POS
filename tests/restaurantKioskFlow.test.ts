@@ -31,6 +31,7 @@ test('restaurant kiosk keeps service selection and modifier flow separate from r
   assert.match(app, /listAmbiguousProductionPrints/);
   assert.match(app, /Sí, se imprimió/);
   assert.match(app, /No imprimió: reintentar/);
+  assert.match(app, /disabled=\{resolvingProductionPrintId === intent\.id\}/);
   const afterSaleCommit = app.slice(app.indexOf('await handleTransactionComplete(txn)'));
   assert.match(afterSaleCommit, /catch \(productionError\)/);
 });

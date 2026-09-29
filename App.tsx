@@ -140,6 +140,7 @@ import {
   dispatchProductionPrint,
   dispatchProductionOrder,
   listAmbiguousProductionPrints,
+  resolveAndRetryAmbiguousProductionPrint,
   resolveAmbiguousProductionPrint,
   retryPendingProductionPrints,
   retryPendingProductionOrders,
@@ -5016,6 +5017,7 @@ const AppContent: React.FC = () => {
   const [kioskServiceType, setKioskServiceType] = useState<Extract<OrderServiceType, 'DINE_IN' | 'TAKEOUT'> | null>(null);
   const [kioskOrderNumber, setKioskOrderNumber] = useState<string | null>(null);
   const [ambiguousProductionPrints, setAmbiguousProductionPrints] = useState<ProductionPrintIntent[]>([]);
+  const [resolvingProductionPrintId, setResolvingProductionPrintId] = useState<string | null>(null);
   const refreshAmbiguousProductionPrints = useCallback(() => {
     void listAmbiguousProductionPrints()
       .then(setAmbiguousProductionPrints)
@@ -5056,19 +5058,26 @@ const AppContent: React.FC = () => {
     intent: ProductionPrintIntent,
     resolution: 'CONFIRMED_PRINTED' | 'CONFIRMED_NOT_PRINTED',
   ) => {
-    const reconciled = await resolveAmbiguousProductionPrint(intent.id, resolution);
-    if (resolution === 'CONFIRMED_NOT_PRINTED' && reconciled) {
-      await dispatchProductionPrint(reconciled, (printIntent) => printComanda(config, {
-        items: printIntent.items,
-        orderNumber: printIntent.orderNumber,
-        customerName: printIntent.customerName,
-        areaTitle: printIntent.areaName,
-        productionAreaId: printIntent.areaId,
-        printerId: printIntent.printerId,
-      }));
+    if (resolvingProductionPrintId) return;
+    setResolvingProductionPrintId(intent.id);
+    try {
+      if (resolution === 'CONFIRMED_PRINTED') {
+        await resolveAmbiguousProductionPrint(intent.id);
+      } else {
+        await resolveAndRetryAmbiguousProductionPrint(intent.id, (printIntent) => printComanda(config, {
+          items: printIntent.items,
+          orderNumber: printIntent.orderNumber,
+          customerName: printIntent.customerName,
+          areaTitle: printIntent.areaName,
+          productionAreaId: printIntent.areaId,
+          printerId: printIntent.printerId,
+        }));
+      }
+    } finally {
+      setResolvingProductionPrintId(null);
+      refreshAmbiguousProductionPrints();
     }
-    refreshAmbiguousProductionPrints();
-  }, [config, refreshAmbiguousProductionPrints]);
+  }, [config, refreshAmbiguousProductionPrints, resolvingProductionPrintId]);
   useEffect(() => {
     setPosSaleActivity({ active: cart.length > 0, cartCount: cart.length });
     return () => setPosSaleActivity({ active: false, cartCount: 0 });
@@ -14381,15 +14390,17 @@ const AppContent: React.FC = () => {
                   <div className="mt-4 grid gap-2 sm:grid-cols-2">
                     <button
                       type="button"
+                      disabled={resolvingProductionPrintId === intent.id}
                       onClick={() => void reconcileAmbiguousProductionPrint(intent, 'CONFIRMED_PRINTED')}
-                      className="rounded-xl bg-emerald-600 px-4 py-3 text-sm font-black text-white"
+                      className="rounded-xl bg-emerald-600 px-4 py-3 text-sm font-black text-white disabled:cursor-wait disabled:opacity-50"
                     >
                       Sí, se imprimió
                     </button>
                     <button
                       type="button"
+                      disabled={resolvingProductionPrintId === intent.id}
                       onClick={() => void reconcileAmbiguousProductionPrint(intent, 'CONFIRMED_NOT_PRINTED')}
-                      className="rounded-xl bg-slate-900 px-4 py-3 text-sm font-black text-white"
+                      className="rounded-xl bg-slate-900 px-4 py-3 text-sm font-black text-white disabled:cursor-wait disabled:opacity-50"
                     >
                       No imprimió: reintentar
                     </button>

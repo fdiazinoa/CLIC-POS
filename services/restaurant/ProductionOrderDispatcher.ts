@@ -59,7 +59,7 @@ export type ProductionDispatchResult = {
 
 export type ProductionPrintIntent = {
   id: string;
-  status: 'PENDING' | 'OUTCOME_UNKNOWN';
+  status: 'PENDING' | 'OUTCOME_UNKNOWN' | 'RECONCILING';
   attempts: number;
   createdAt: string;
   updatedAt: string;
@@ -88,6 +88,7 @@ export const createSerializedCollectionMutator = () => {
 };
 
 const mutateProductionQueues = createSerializedCollectionMutator();
+const activePrintReconciliations = new Set<string>();
 
 export const calculateProductionNextRetryAt = (
   attempts: number,
@@ -431,7 +432,8 @@ export const isProductionPrintAutoRetryEligible = (intent: ProductionPrintIntent
   intent.status === 'PENDING' && isProductionRetryDue(intent);
 
 export const listAmbiguousProductionPrints = async (): Promise<ProductionPrintIntent[]> =>
-  mutateProductionQueues(async () => (await readPrintQueue()).filter((intent) => intent.status === 'OUTCOME_UNKNOWN'));
+  mutateProductionQueues(async () => (await readPrintQueue()).filter((intent) =>
+    intent.status === 'OUTCOME_UNKNOWN' || intent.status === 'RECONCILING'));
 
 export const applyProductionPrintReconciliation = (
   intent: ProductionPrintIntent,
@@ -439,41 +441,35 @@ export const applyProductionPrintReconciliation = (
   now = new Date(),
 ): ProductionPrintIntent | null => resolution === 'CONFIRMED_PRINTED' ? null : {
   ...intent,
-  status: 'PENDING',
-  nextRetryAt: now.toISOString(),
+  status: 'RECONCILING',
+  nextRetryAt: undefined,
   lastError: 'PRODUCTION_PRINT_OPERATOR_CONFIRMED_NOT_PRINTED',
   updatedAt: now.toISOString(),
 };
 
 export const resolveAmbiguousProductionPrint = async (
   intentId: string,
-  resolution: 'CONFIRMED_PRINTED' | 'CONFIRMED_NOT_PRINTED',
 ): Promise<ProductionPrintIntent | null> => {
-  if (resolution === 'CONFIRMED_PRINTED') {
-    await removePrintIntent(intentId);
-    return null;
-  }
-  return mutateProductionQueues(async () => {
+  await mutateProductionQueues(async () => {
     const queue = await readPrintQueue();
     const current = queue.find((intent) => intent.id === intentId);
-    if (!current || current.status !== 'OUTCOME_UNKNOWN') return null;
-    const reconciled = applyProductionPrintReconciliation(current, resolution);
-    if (!reconciled) return null;
-    await db.save(PRINT_QUEUE_COLLECTION, queue.map((intent) => intent.id === intentId ? reconciled : intent));
-    return reconciled;
+    if (!current || !['OUTCOME_UNKNOWN', 'RECONCILING'].includes(current.status)) return;
+    await db.save(PRINT_QUEUE_COLLECTION, queue.filter((intent) => intent.id !== intentId));
   });
+  return null;
 };
 
 export const runProductionPrintAttempt = async (
   intent: ProductionPrintIntent,
   print: (intent: ProductionPrintIntent) => Promise<boolean>,
   checkpoint: (intent: ProductionPrintIntent) => Promise<void>,
+  inFlightStatus: Extract<ProductionPrintIntent['status'], 'OUTCOME_UNKNOWN' | 'RECONCILING'> = 'OUTCOME_UNKNOWN',
 ): Promise<{ intent: ProductionPrintIntent; status: 'PRINTED' | 'PENDING' | 'OUTCOME_UNKNOWN'; error?: string }> => {
   // Persist ambiguity before handing bytes to the printer. A crash, timeout or
   // late transport completion must require reconciliation instead of duplicating paper.
   const inFlight: ProductionPrintIntent = {
     ...intent,
-    status: 'OUTCOME_UNKNOWN',
+    status: inFlightStatus,
     attempts: Number(intent.attempts || 0) + 1,
     updatedAt: new Date().toISOString(),
     lastError: 'PRODUCTION_PRINT_OUTCOME_UNKNOWN',
@@ -483,6 +479,7 @@ export const runProductionPrintAttempt = async (
     if (await print(inFlight)) return { intent: inFlight, status: 'PRINTED' };
     const unknown = {
       ...inFlight,
+      status: 'OUTCOME_UNKNOWN' as const,
       lastError: 'PRODUCTION_PRINT_OUTCOME_UNKNOWN',
       updatedAt: new Date().toISOString(),
     };
@@ -491,11 +488,38 @@ export const runProductionPrintAttempt = async (
   } catch (error) {
     const unknown = {
       ...inFlight,
+      status: 'OUTCOME_UNKNOWN' as const,
       lastError: error instanceof Error ? error.message : 'PRODUCTION_PRINT_OUTCOME_UNKNOWN',
       updatedAt: new Date().toISOString(),
     };
     await checkpoint(unknown);
     return { intent: unknown, status: 'OUTCOME_UNKNOWN', error: unknown.lastError };
+  }
+};
+
+export const resolveAndRetryAmbiguousProductionPrint = async (
+  intentId: string,
+  print: (intent: ProductionPrintIntent) => Promise<boolean>,
+): Promise<{ intent: ProductionPrintIntent; status: 'PRINTED' | 'PENDING' | 'OUTCOME_UNKNOWN'; error?: string } | null> => {
+  const claimed = await mutateProductionQueues(async () => {
+    if (activePrintReconciliations.has(intentId)) return null;
+    const queue = await readPrintQueue();
+    const current = queue.find((intent) => intent.id === intentId);
+    if (!current || !['OUTCOME_UNKNOWN', 'RECONCILING'].includes(current.status)) return null;
+    const reconciled = applyProductionPrintReconciliation(current, 'CONFIRMED_NOT_PRINTED');
+    if (!reconciled) return null;
+    await db.save(PRINT_QUEUE_COLLECTION, queue.map((intent) => intent.id === intentId ? reconciled : intent));
+    activePrintReconciliations.add(intentId);
+    return reconciled;
+  });
+  if (!claimed) return null;
+
+  try {
+    const result = await runProductionPrintAttempt(claimed, print, savePrintIntent, 'RECONCILING');
+    if (result.status === 'PRINTED') await removePrintIntent(intentId);
+    return result;
+  } finally {
+    activePrintReconciliations.delete(intentId);
   }
 };
 
