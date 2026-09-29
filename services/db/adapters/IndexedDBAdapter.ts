@@ -12,7 +12,7 @@ import {
 } from '../../sync/masterNumberRangeContract';
 
 const DB_NAME = 'clic_pos_indexeddb';
-const DB_VERSION = 26; // v26 adds strict durable production dispatch and print queues
+const DB_VERSION = 27; // v27 adds the strict durable promotions store
 const OLD_DB_KEY = 'clic_pos_db_v1';
 const OPEN_TIMEOUT_MS = 15000;
 const CURSOR_IDLE_TIMEOUT_MS = 3000;
@@ -22,6 +22,7 @@ const STRICT_DURABLE_COLLECTIONS = new Set([
     'legacyMutationCompletions',
     'kdsDispatchQueue',
     'productionPrintQueue',
+    'promotions',
 ]);
 
 const STORES = [
@@ -43,7 +44,7 @@ const STORES = [
     'masterNumberRanges', 'masterNumberSyncReceipts',
     'recoveryOriginals', 'recoveryState', 'recoveryStage', 'wallet_transactions',
     'legacyMutationJournal', 'legacyMutationCompletions',
-    'kdsDispatchQueue', 'productionPrintQueue'
+    'kdsDispatchQueue', 'productionPrintQueue', 'promotions'
 ];
 
 export class IndexedDBAdapter implements DatabaseAdapter {

@@ -74,6 +74,20 @@ export const mergePromotionCollection = (
     .map((promotion) => mergePromotionMediaContract(existingById.get(String(promotion.id || '')), promotion));
 };
 
+export const mergePromotionsPreservingMedia = (
+  existing: Promotion[] | undefined,
+  incoming: unknown,
+  preserveMissing = true,
+): Promotion[] => {
+  const mergedIncoming = mergePromotionCollection(existing, incoming);
+  if (!preserveMissing || !Array.isArray(incoming)) return mergedIncoming;
+  const incomingIds = new Set(mergedIncoming.map((promotion) => String(promotion.id || '')));
+  return [
+    ...mergedIncoming,
+    ...(existing || []).filter((promotion) => !incomingIds.has(String(promotion.id || ''))),
+  ];
+};
+
 const RESTAURANT_TIME_ZONE = 'America/Santo_Domingo';
 const DAY_KEYS: Record<string, string> = { Sun: 'D', Mon: 'L', Tue: 'M', Wed: 'X', Thu: 'J', Fri: 'V', Sat: 'S' };
 

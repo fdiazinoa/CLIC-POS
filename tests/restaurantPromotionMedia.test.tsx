@@ -5,6 +5,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import type { Promotion } from '../types';
 import {
   mergePromotionCollection,
+  mergePromotionsPreservingMedia,
   resolveRestaurantPromotionCreative,
 } from '../utils/promotionMedia';
 import RestaurantPromotionBanner from '../components/kiosk/RestaurantPromotionBanner';
@@ -88,6 +89,24 @@ test('promotion media merge preserves omitted media and treats empty media as au
   assert.deepEqual(cleared[0].media, []);
   const snake = mergePromotionCollection([], [{ ...withoutMedia, promotion_media: [{ id: 's', media_type: 'IMAGE', media_url: 'https://cdn.example/s.jpg', sort_order: 4, is_active: true }] }]);
   assert.equal(snake[0].media?.[0].sortOrder, 4);
+});
+
+test('offline bootstrap merge keeps configured and persisted promotions with persisted media first', () => {
+  const configured = promotion({ id: 'configured' });
+  const persisted = promotion({
+    id: 'offline',
+    media: [{ id: 'offline-image', type: 'IMAGE', url: 'https://cdn.example/offline.jpg' }],
+  });
+  const merged = mergePromotionsPreservingMedia([configured], [persisted]);
+  assert.deepEqual(merged.map((entry) => entry.id), ['offline', 'configured']);
+  assert.equal(merged[0].media?.[0].url, 'https://cdn.example/offline.jpg');
+});
+
+test('App memoizes promotion creative by durable inputs and a minute time bucket', async () => {
+  const source = await import('node:fs').then(({ readFileSync }) => readFileSync(new URL('../App.tsx', import.meta.url), 'utf8'));
+  assert.match(source, /kioskRestaurantPromotionCreative = useMemo/);
+  assert.match(source, /promotionCreativeMinuteBucket = Math\.floor\(Date\.now\(\) \/ 60_000\)/);
+  assert.match(source, /mergePromotionsPreservingMedia\([\s\S]{0,120}persistedPromotions/);
 });
 
 test('restaurant promotional banner renders horizontally only when resolver returns an applicable offer', () => {

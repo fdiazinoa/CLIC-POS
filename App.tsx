@@ -130,7 +130,7 @@ import { calculateTransactionFiscalSummary, freezeAuthoritativeLineFiscalAmounts
 import { resolveAppliedServiceTaxPolicy } from './utils/serviceTaxPolicy';
 import { shouldApplyRestaurantServiceCharge } from './utils/orderServiceType';
 import { calculateRestaurantServiceCharge, isRestaurantBusiness } from './utils/businessVertical';
-import { mergePromotionCollection, resolveRestaurantPromotionCreative } from './utils/promotionMedia';
+import { mergePromotionCollection, mergePromotionsPreservingMedia, resolveRestaurantPromotionCreative } from './utils/promotionMedia';
 import { resolveRestaurantProductConfig } from './utils/restaurantProductConfig';
 import { resolveKdsBaseUrl } from './utils/kdsRouting';
 import { resolveProductionOutputTargets } from './utils/productionOutputMode';
@@ -5298,6 +5298,32 @@ const AppContent: React.FC = () => {
   };
   const isRestaurantTerminal = (terminal?: any) =>
     isRestaurantBusiness(config, terminal?.config);
+  const promotionCreativeTerminal = getCurrentTerminal();
+  const promotionCreativeMinuteBucket = Math.floor(Date.now() / 60_000);
+  const kioskRestaurantPromotionCreative = useMemo(() => (
+    isRestaurantBusiness(config, promotionCreativeTerminal?.config)
+      ? resolveRestaurantPromotionCreative(
+          config.promotions,
+          products,
+          config,
+          promotionCreativeTerminal?.id,
+          new Date(promotionCreativeMinuteBucket * 60_000),
+          selectedCustomer,
+        )
+      : null
+  ), [
+    config.business_config,
+    config.businessConfig,
+    config.productGroups,
+    config.promotions,
+    config.terminals,
+    config.vertical,
+    products,
+    promotionCreativeMinuteBucket,
+    promotionCreativeTerminal?.config,
+    promotionCreativeTerminal?.id,
+    selectedCustomer,
+  ]);
 
   const getLatestZCloseTimestamp = (terminalId: string) => {
     const terminalAliases = getTerminalReferenceKeys(terminalId);
@@ -6706,6 +6732,16 @@ const AppContent: React.FC = () => {
         }
 
         let currentConfig = data.config;
+        const persistedPromotions = await db.get('promotions' as any).catch(() => []);
+        if (!Array.isArray(currentConfig) && currentConfig) {
+          currentConfig = {
+            ...currentConfig,
+            promotions: mergePromotionsPreservingMedia(
+              currentConfig.promotions,
+              persistedPromotions,
+            ),
+          };
+        }
         const normalizedBootConfig = normalizeTerminalDocumentAssignments(currentConfig);
         if (normalizedBootConfig.changed && normalizedBootConfig.config) {
           currentConfig = normalizedBootConfig.config;
@@ -7544,12 +7580,13 @@ const AppContent: React.FC = () => {
             // Master Re-hydration Step: This ensures state is always up to date with DB 
             // after any async drift fixes or sync initializations.
             try {
-              const [dbConfig, dbProducts, dbUsers, dbRoles, dbSequences] = await Promise.all([
+              const [dbConfig, dbProducts, dbUsers, dbRoles, dbSequences, dbPromotions] = await Promise.all([
                 db.get('config') as Promise<any>,
                 db.get('products') as Promise<Product[]>,
                 db.get('users') as Promise<User[]>,
                 db.get('roles') as Promise<RoleDefinition[]>,
-                db.get('internalSequences') as Promise<any[]>
+                db.get('internalSequences') as Promise<any[]>,
+                db.get('promotions' as any) as Promise<any[]>,
               ]);
 
               // CRITICAL: db.get returns an array from IndexedDB. We must unwrap config.
@@ -7562,6 +7599,10 @@ const AppContent: React.FC = () => {
               }
 
               if (syncedConfig && syncedConfig.terminals) {
+                syncedConfig = {
+                  ...syncedConfig,
+                  promotions: mergePromotionsPreservingMedia(syncedConfig.promotions, dbPromotions),
+                };
                 console.log('📦 App: Hydrating config from DB:', syncedConfig.id || 'main');
                 setConfig(syncedConfig);
               }
@@ -9005,8 +9046,10 @@ const AppContent: React.FC = () => {
       const freshData = await db.init();
       const hydratedConfigFromDb = resolvePersistedBusinessConfig(await db.get('config') as unknown) || postSyncConfig;
       const preservedSyncAuth = hydratedConfigFromDb.metadata?.syncAuth || updatedConfig.metadata?.syncAuth;
+      const persistedPromotionsAfterSync = await db.get('promotions' as any).catch(() => []);
       const hydratedConfig: BusinessConfig = {
         ...hydratedConfigFromDb,
+        promotions: mergePromotionsPreservingMedia(hydratedConfigFromDb.promotions, persistedPromotionsAfterSync),
         metadata: {
           ...(hydratedConfigFromDb.metadata || {}),
           ...(preservedSyncAuth ? { syncAuth: preservedSyncAuth } : {}),
@@ -13464,9 +13507,6 @@ const AppContent: React.FC = () => {
       case 'KIOSK_WELCOME':
         const kioskWelcomeTerminal = getCurrentTerminal();
         const kioskWelcomeRestaurantMode = isRestaurantBusiness(config, kioskWelcomeTerminal?.config);
-        const kioskWelcomePromotionCreative = kioskWelcomeRestaurantMode
-          ? resolveRestaurantPromotionCreative(config.promotions, products, config, kioskWelcomeTerminal?.id)
-          : null;
         return (
           <KioskWelcome
             onStartShopping={() => {
@@ -13476,7 +13516,7 @@ const AppContent: React.FC = () => {
               handleViewChange('KIOSK_BROWSER');
             }}
             restaurantMode={kioskWelcomeRestaurantMode}
-            promotionCreative={kioskWelcomePromotionCreative}
+            promotionCreative={kioskRestaurantPromotionCreative}
             onSelectServiceType={(serviceType) => {
               clearSecurityState();
               setSelectedCustomer(null);
@@ -13504,9 +13544,6 @@ const AppContent: React.FC = () => {
       case 'KIOSK_BROWSER':
         const kioskBrowserTerminal = getCurrentTerminal();
         const kioskBrowserRestaurantMode = isRestaurantBusiness(config, kioskBrowserTerminal?.config);
-        const kioskBrowserPromotionCreative = kioskBrowserRestaurantMode
-          ? resolveRestaurantPromotionCreative(config.promotions, products, config, kioskBrowserTerminal?.id, new Date(), selectedCustomer)
-          : null;
         return (
           <KioskProductBrowser
             products={products}
@@ -13551,7 +13588,7 @@ const AppContent: React.FC = () => {
             redeemedCoupon={kioskRedeemedCoupon}
             restaurantMode={kioskBrowserRestaurantMode}
             serviceType={kioskServiceType}
-            promotionCreative={kioskBrowserPromotionCreative}
+            promotionCreative={kioskRestaurantPromotionCreative}
           />
         );
 

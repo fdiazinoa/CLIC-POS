@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
 import { indexedDB, IDBKeyRange } from 'fake-indexeddb';
 import { IndexedDBAdapter } from '../services/db/adapters/IndexedDBAdapter';
 
@@ -34,6 +35,7 @@ test('strict journal transaction failure rejects without creating a localStorage
       'legacyMutationCompletions',
       'kdsDispatchQueue',
       'productionPrintQueue',
+      'promotions',
     ].includes(name) },
     transaction: () => {
       queueMicrotask(() => transaction.onerror?.());
@@ -63,6 +65,31 @@ test('production queues survive restart in strict IndexedDB stores without fallb
   assert.deepEqual((await restarted.getCollection<any>('productionPrintQueue')).map(row => row.id), ['print-1']);
   assert.equal([...storage.keys()].some(key => /(?:kdsDispatchQueue|productionPrintQueue)/.test(key)), false);
   await restarted.disconnect();
+});
+
+test('promotion media survives offline IndexedDB restart in the strict promotions store', async () => {
+  storage.clear();
+  await deleteDatabase();
+  const first = new IndexedDBAdapter();
+  await first.connect();
+  await first.saveDocument('promotions', {
+    id: 'promo-offline',
+    media: [{ id: 'hero', type: 'IMAGE', url: 'https://cdn.example/offline.jpg', active: true }],
+  });
+  await first.disconnect();
+
+  const restarted = new IndexedDBAdapter();
+  await restarted.connect();
+  const promotions = await restarted.getCollection<any>('promotions');
+  assert.equal(promotions[0]?.media?.[0]?.url, 'https://cdn.example/offline.jpg');
+  assert.equal([...storage.keys()].some(key => key.includes('promotions')), false);
+  await restarted.disconnect();
+});
+
+test('native SQLite keeps promotions on the generic durable documents contract', () => {
+  const source = readFileSync(new URL('../services/db/adapters/CapacitorSQLiteAdapter.ts', import.meta.url), 'utf8');
+  assert.match(source, /INSERT INTO documents \(collection_name, doc_id, data, sort_order, updatedAt\)/);
+  assert.match(source, /saveDocument<T extends \{ id: string \}>\(collectionName: string, doc: T\)/);
 });
 
 test('strict journal rows survive an IndexedDB restart and ignore fallback copies', async () => {
