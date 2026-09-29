@@ -30,6 +30,9 @@ import SecurityOverlay from './SecurityOverlay';
 import { useKioskSecurityContext } from './KioskContext';
 import ModifierModal from '../ModifierModal';
 import { productHasRestaurantConfiguration, resolveRestaurantProductConfig } from '../../utils/restaurantProductConfig';
+import type { PromotionCreative } from '../../utils/promotionMedia';
+import RestaurantKioskOrderPanel from './RestaurantKioskOrderPanel';
+import RestaurantPromotionBanner from './RestaurantPromotionBanner';
 
 const normalizeToken = (value: unknown): string =>
   typeof value === 'string' ? value.trim().toLowerCase() : value != null ? String(value).trim().toLowerCase() : '';
@@ -114,6 +117,7 @@ interface KioskProductBrowserProps {
   redeemedCoupon?: RedeemedCouponRef | null;
   restaurantMode?: boolean;
   serviceType?: Extract<OrderServiceType, 'DINE_IN' | 'TAKEOUT'> | null;
+  promotionCreative?: PromotionCreative | null;
 }
 
 const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
@@ -131,6 +135,7 @@ const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
   redeemedCoupon,
   restaurantMode = false,
   serviceType,
+  promotionCreative,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [lastScanned, setLastScanned] = useState<string | null>(null);
@@ -141,6 +146,8 @@ const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
   const [logoLoadError, setLogoLoadError] = useState(false);
   const [modifierProduct, setModifierProduct] = useState<Product | null>(null);
   const [checkoutError, setCheckoutError] = useState('');
+  const [showOrderReview, setShowOrderReview] = useState(false);
+  const [promotionFilterProductIds, setPromotionFilterProductIds] = useState<string[] | null>(null);
 
   const [showPromoSheet, setShowPromoSheet] = useState(false);
   const [selectedPromoProduct, setSelectedPromoProduct] = useState<Product | null>(null);
@@ -526,9 +533,10 @@ const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
         || String((product as any).item_code || '').toLowerCase().includes(normalizedSearch)
         || String((product as any).code || '').toLowerCase().includes(normalizedSearch);
       const matchesCategory = selectedCategory === 'Todos' || canonicalizeCategory(product.category) === canonicalizeCategory(selectedCategory);
-      return matchesSearch && matchesCategory;
+      const matchesPromotion = !promotionFilterProductIds || promotionFilterProductIds.includes(product.id);
+      return matchesSearch && matchesCategory && matchesPromotion;
     }),
-    [canonicalizeCategory, searchQuery, selectedCategory, sellableProducts]
+    [canonicalizeCategory, promotionFilterProductIds, searchQuery, selectedCategory, sellableProducts]
   );
 
   const suggestions = useMemo(
@@ -692,6 +700,13 @@ const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
     onCancel();
   };
 
+  const handlePromotionBannerClick = () => {
+    if (!promotionCreative) return;
+    setSearchQuery('');
+    setSelectedCategory('Todos');
+    setPromotionFilterProductIds(promotionCreative.productIds);
+  };
+
   const handleHardwareScan = useCallback((rawCode: string) => {
     const code = rawCode.trim();
     if (!code) return;
@@ -756,7 +771,7 @@ const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
 
   return (
     <div className="fixed inset-0 w-screen h-screen flex bg-slate-50 overflow-hidden">
-      <section className="flex-[7] min-w-0 h-full flex flex-col overflow-hidden">
+      <section className={`${restaurantMode ? 'flex-1' : 'flex-[7]'} min-w-0 h-full flex flex-col overflow-hidden`}>
         <header className="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between z-10">
           <div className="flex items-center gap-3">
             <div className="w-11 h-11 rounded-xl bg-blue-600 text-white font-black flex items-center justify-center overflow-hidden shadow-sm">
@@ -795,6 +810,27 @@ const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
         </header>
 
         <div className="flex-1 overflow-y-auto p-6 pb-40">
+          {restaurantMode && <RestaurantPromotionBanner creative={promotionCreative} onSelect={handlePromotionBannerClick} />}
+
+          {restaurantMode && (
+            <div className="mb-5 flex gap-3 overflow-x-auto pb-1">
+              {categories.map(cat => (
+                <button
+                  key={cat}
+                  onClick={() => {
+                    setPromotionFilterProductIds(null);
+                    setSelectedCategory(cat);
+                  }}
+                  className={`min-h-[52px] whitespace-nowrap rounded-2xl px-5 font-black transition-all ${selectedCategory === cat && !promotionFilterProductIds
+                    ? 'bg-orange-600 text-white shadow-lg'
+                    : 'border border-slate-200 bg-white text-slate-600'}`}
+                >
+                  {cat}
+                </button>
+              ))}
+            </div>
+          )}
+
           <div className="grid grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-6">
             {filteredProducts.slice(0, 30).map(product => {
               const imageSrc = resolveProductImageSrc(product);
@@ -895,7 +931,7 @@ const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
             />
           </div>
 
-          <div className="overflow-x-auto no-scrollbar">
+          {!restaurantMode && <div className="overflow-x-auto no-scrollbar">
             <div className="flex gap-3 pb-1">
               {categories.map(cat => (
                 <button
@@ -910,7 +946,7 @@ const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
                 </button>
               ))}
             </div>
-          </div>
+          </div>}
         </div>
       </section>
 
@@ -922,7 +958,7 @@ const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
         </div>
       )}
 
-      <aside className={`flex-[3] min-w-[360px] bg-white border-l border-slate-200 h-full flex flex-col shadow-2xl ${cartPulse ? 'animate-pulse' : ''}`}>
+      {!restaurantMode && <aside className={`flex-[3] min-w-[360px] bg-white border-l border-slate-200 h-full flex flex-col shadow-2xl ${cartPulse ? 'animate-pulse' : ''}`}>
         <div className="bg-blue-700 text-white p-6">
           <div className="flex items-center gap-3 mb-1">
             <ShoppingCart size={30} strokeWidth={2.5} />
@@ -1061,7 +1097,24 @@ const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
             {restaurantMode ? 'Cancelar pedido' : 'Cancelar compra'}
           </button>
         </div>
-      </aside>
+      </aside>}
+
+      {restaurantMode && (
+        <RestaurantKioskOrderPanel
+          open={showOrderReview}
+          cart={cart}
+          itemCount={itemCount}
+          total={total}
+          formatMoney={formatMoney}
+          checkoutError={checkoutError}
+          onOpen={() => setShowOrderReview(true)}
+          onClose={() => setShowOrderReview(false)}
+          onDecrease={handleDecrease}
+          onIncrease={handleIncrease}
+          onRemove={onRemoveFromCart}
+          onCheckout={handleCheckoutAttempt}
+        />
+      )}
 
       {weightInstructionOpen && weighingProduct && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in">

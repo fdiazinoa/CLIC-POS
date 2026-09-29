@@ -128,6 +128,9 @@ const PromotionBuilder: React.FC<PromotionBuilderProps> = ({ products, config, t
    const [selectedTerminals, setSelectedTerminals] = useState<string[]>([]); // Empty = All
    const [videoUrl, setVideoUrl] = useState('');
    const [videoPosterUrl, setVideoPosterUrl] = useState('');
+   const [imageUrl, setImageUrl] = useState('');
+   const [imageActive, setImageActive] = useState(true);
+   const [imageSortOrder, setImageSortOrder] = useState(0);
 
    // Computed Lists
    const categories = Array.from(new Set(products.map(p => p.category)));
@@ -181,6 +184,9 @@ const PromotionBuilder: React.FC<PromotionBuilderProps> = ({ products, config, t
       setSelectedTerminals([]);
       setVideoUrl('');
       setVideoPosterUrl('');
+      setImageUrl('');
+      setImageActive(true);
+      setImageSortOrder(0);
       setViewMode('EDIT');
    };
 
@@ -203,8 +209,12 @@ const PromotionBuilder: React.FC<PromotionBuilderProps> = ({ products, config, t
       setPriority(promo.priority || 1);
       setSelectedTerminals(promo.terminalIds || []);
       const promoVideo = promo.media?.find(media => media.type === 'VIDEO');
+      const promoImage = promo.media?.find(media => media.type === 'IMAGE');
       setVideoUrl(promoVideo?.url || '');
       setVideoPosterUrl(promoVideo?.posterUrl || '');
+      setImageUrl(promoImage?.url || '');
+      setImageActive(promoImage?.active !== false);
+      setImageSortOrder(Number(promoImage?.sortOrder || 0));
       setViewMode('EDIT');
    };
 
@@ -241,6 +251,35 @@ const PromotionBuilder: React.FC<PromotionBuilderProps> = ({ products, config, t
          alert('La URL del video debe comenzar con http:// o https://.');
          return;
       }
+      if (imageUrl && !isValidRemoteMediaUrl(imageUrl)) {
+         alert('La URL de la imagen debe comenzar con http:// o https://.');
+         return;
+      }
+
+      const existingVideo = editingPromotion?.media?.find(media => media.type === 'VIDEO');
+      const existingImage = editingPromotion?.media?.find(media => media.type === 'IMAGE');
+      const preservedMedia = (editingPromotion?.media || []).filter((media) =>
+         media.id !== existingVideo?.id && media.id !== existingImage?.id);
+      const media = [
+         ...preservedMedia,
+         ...(imageUrl ? [{
+            ...existingImage,
+            id: existingImage?.id || 'promotion-primary-image',
+            type: 'IMAGE' as const,
+            url: imageUrl.trim(),
+            active: imageActive,
+            sortOrder: imageSortOrder,
+         }] : []),
+         ...(videoUrl ? [{
+            ...existingVideo,
+            id: existingVideo?.id || 'promotion-primary-video',
+            type: 'VIDEO' as const,
+            url: videoUrl.trim(),
+            posterUrl: videoPosterUrl.trim() || undefined,
+            active: existingVideo?.active !== false,
+            sortOrder: existingVideo?.sortOrder ?? 0,
+         }] : []),
+      ];
 
       const newPromo: Promotion = {
          id: editingId || Math.random().toString(36).substr(2, 9),
@@ -277,15 +316,8 @@ const PromotionBuilder: React.FC<PromotionBuilderProps> = ({ products, config, t
          targetRefs: editingPromotion?.targetType === targetType && editingPromotion?.targetValue === targetValue
             ? editingPromotion.targetRefs
             : undefined,
-         priority
-         ,media: videoUrl ? [{
-            id: 'promotion-primary-video',
-            type: 'VIDEO',
-            url: videoUrl.trim(),
-            posterUrl: videoPosterUrl.trim() || undefined,
-            active: true,
-            sortOrder: 0,
-         }] : undefined
+         priority,
+         media: media.length > 0 ? media : undefined,
       };
 
       let updatedPromotions;
@@ -762,13 +794,26 @@ const PromotionBuilder: React.FC<PromotionBuilderProps> = ({ products, config, t
                <label className="block text-xs font-bold text-gray-400 uppercase tracking-widest mb-4">5. Multimedia de la oferta</label>
                <div className="bg-white p-5 rounded-2xl border border-gray-200 grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-3">
+                     <input type="url" value={imageUrl} onChange={event => setImageUrl(event.target.value)} placeholder="URL HTTPS de imagen promocional" className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl text-sm outline-none focus:border-blue-400" />
+                     <div className="grid grid-cols-2 gap-3">
+                        <label className="flex min-h-12 items-center gap-2 rounded-xl border border-gray-200 bg-gray-50 px-3 text-sm font-bold text-gray-600">
+                           <input type="checkbox" checked={imageActive} onChange={event => setImageActive(event.target.checked)} />
+                           Imagen activa
+                        </label>
+                        <input type="number" value={imageSortOrder} onChange={event => setImageSortOrder(Number(event.target.value) || 0)} placeholder="Orden" className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl text-sm outline-none focus:border-blue-400" />
+                     </div>
                      <input type="url" value={videoUrl} onChange={event => setVideoUrl(event.target.value)} placeholder="URL HTTPS del video (MP4/WebM)" className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl text-sm outline-none focus:border-blue-400" />
                      <input type="url" value={videoPosterUrl} onChange={event => setVideoPosterUrl(event.target.value)} placeholder="URL de portada (opcional)" className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl text-sm outline-none focus:border-blue-400" />
                      <p className="text-xs text-gray-400">Compatible con productos, promociones y ofertas. El archivo debe vivir en el ERP/CDN.</p>
                   </div>
-                  {videoUrl && isValidRemoteMediaUrl(videoUrl) && (
-                     <video src={videoUrl} poster={videoPosterUrl || undefined} controls playsInline className="w-full aspect-video rounded-xl bg-black object-contain" />
-                  )}
+                  <div className="space-y-3">
+                     {imageUrl && isValidRemoteMediaUrl(imageUrl) && (
+                        <img src={imageUrl} alt="Vista previa de la promoción" className="w-full aspect-video rounded-xl bg-gray-100 object-cover" />
+                     )}
+                     {videoUrl && isValidRemoteMediaUrl(videoUrl) && (
+                        <video src={videoUrl} poster={videoPosterUrl || undefined} controls playsInline className="w-full aspect-video rounded-xl bg-black object-contain" />
+                     )}
+                  </div>
                </div>
             </section>
 

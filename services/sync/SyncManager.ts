@@ -101,6 +101,7 @@ import {
     resolveProductTaxLog,
 } from '../../utils/erpFiscalCatalogSync';
 import { findTaxByIdentifier } from '../../utils/taxIdentity';
+import { mergePromotionCollection, mergePromotionMediaContract } from '../../utils/promotionMedia';
 
 export type SyncableCollection =
     | 'products' | 'items' | 'taxes' | 'customers' | 'suppliers' | 'warehouses'
@@ -6292,6 +6293,11 @@ class SyncManager {
                             safeItems = await this.reconcileFullDownloadPosUsers(safeItems, fullItems);
                         }
 
+                        if (collection === 'promotions') {
+                            const existing = (await db.get('promotions' as any)) as any[];
+                            safeItems = mergePromotionCollection(existing, safeItems);
+                        }
+
                         await db.save(collection as any, safeItems);
                         if (collection === 'documentSeries') {
                             await this.mirrorDocumentSeriesToInternalSequences(safeItems);
@@ -6385,6 +6391,11 @@ class SyncManager {
                     safeItems = await this.reconcileFullDownloadPosUsers(safeItems, items);
                 }
 
+                if (collection === 'promotions') {
+                    const existing = (await db.get('promotions' as any)) as any[];
+                    safeItems = mergePromotionCollection(existing, safeItems);
+                }
+
                 if (collection === 'products' && safeItems.length === 0) {
                     const localProducts = await db.get('products');
                     const localCount = Array.isArray(localProducts) ? localProducts.length : 0;
@@ -6431,6 +6442,10 @@ class SyncManager {
                         if (collection === 'products') {
                             const enriched = await this.enrichPulledProducts([finalItem]);
                             finalItem = normalizeRestaurantProductConfig(enriched[0]);
+                        } else if (collection === 'promotions') {
+                            const existing = ((await db.get('promotions' as any)) as any[] || [])
+                                .find((promotion) => String(promotion?.id || '') === String(finalItem?.id || ''));
+                            finalItem = mergePromotionMediaContract(existing, finalItem);
                         } else if (this.isImageBackedCollection(collection)) {
                             finalItem = await masterDataImageCacheService.normalizeIncomingItem(collection, finalItem as any);
                         }

@@ -1,0 +1,63 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import React from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import type { Promotion } from '../types';
+import {
+  mergePromotionCollection,
+  resolveRestaurantPromotionCreative,
+} from '../utils/promotionMedia';
+import RestaurantPromotionBanner from '../components/kiosk/RestaurantPromotionBanner';
+import RestaurantKioskOrderPanel from '../components/kiosk/RestaurantKioskOrderPanel';
+
+const config = {
+  vertical: 'RESTAURANT',
+  terminals: [{ id: 'T1', config: { operational: { vertical_negocio: 'RESTAURANT' } } }],
+  productGroups: [{ id: 'g1', name: 'Combos', productIds: ['p1'] }],
+} as any;
+const product = { id: 'p1', name: 'Hamburguesa', category: 'Comida', price: 10 } as any;
+const promotion = (overrides: Partial<Promotion> = {}): Promotion => ({
+  id: 'promo-1', name: 'Best Lunch', type: 'DISCOUNT', priority: 1,
+  targetType: 'PRODUCT', targetValue: 'p1', benefitValue: 10,
+  schedule: { days: ['L', 'M', 'X', 'J', 'V', 'S', 'D'], startTime: '00:00', endTime: '23:59', isActive: true },
+  terminalIds: ['T1'],
+  media: [{ id: 'hero', type: 'IMAGE', url: 'https://cdn.example/lunch.jpg', active: true, sortOrder: 2 }],
+  ...overrides,
+});
+
+test('selects only active applicable commercial promotion images with stable sort order', () => {
+  const inactive = promotion({ id: 'inactive', schedule: { ...promotion().schedule, isActive: false }, media: [{ id: 'a', type: 'IMAGE', url: 'https://cdn.example/a.jpg', sortOrder: 0 }] });
+  const wrongProduct = promotion({ id: 'wrong', targetValue: 'p2', media: [{ id: 'b', type: 'IMAGE', url: 'https://cdn.example/b.jpg', sortOrder: 0 }] });
+  const video = promotion({ id: 'video', media: [{ id: 'v', type: 'VIDEO', url: 'https://cdn.example/ad.mp4', sortOrder: 0 }] });
+  const selected = resolveRestaurantPromotionCreative([inactive, wrongProduct, video, promotion()], [product], config, 'T1', new Date('2026-09-29T12:00:00'));
+  assert.equal(selected?.promotionId, 'promo-1');
+  assert.deepEqual(selected?.productIds, ['p1']);
+});
+
+test('promotion media merge preserves omitted media and treats empty media as authoritative', () => {
+  const existing = [promotion()];
+  const { media: _media, ...withoutMedia } = promotion();
+  const preserved = mergePromotionCollection(existing, [{ ...withoutMedia, name: 'Renombrada' }]);
+  assert.equal(preserved[0].media?.[0].url, 'https://cdn.example/lunch.jpg');
+  const cleared = mergePromotionCollection(existing, [{ ...withoutMedia, promotion_media: [] }]);
+  assert.deepEqual(cleared[0].media, []);
+  const snake = mergePromotionCollection([], [{ ...withoutMedia, promotion_media: [{ id: 's', media_type: 'IMAGE', media_url: 'https://cdn.example/s.jpg', sort_order: 4, is_active: true }] }]);
+  assert.equal(snake[0].media?.[0].sortOrder, 4);
+});
+
+test('restaurant promotional banner renders horizontally only when resolver returns an applicable offer', () => {
+  const creative = resolveRestaurantPromotionCreative([promotion()], [product], config, 'T1', new Date('2026-09-29T12:00:00'));
+  const banner = renderToStaticMarkup(<RestaurantPromotionBanner creative={creative} onSelect={() => undefined} />);
+  assert.match(banner, /Oferta destacada/);
+  assert.match(banner, /min-h-\[150px\]/);
+  assert.equal(renderToStaticMarkup(<RestaurantPromotionBanner creative={null} onSelect={() => undefined} />), '');
+});
+
+test('restaurant order review exposes touch controls and the compact order button', () => {
+  const cart = [{ ...product, quantity: 2, cartId: 'line-1' }] as any;
+  const markup = renderToStaticMarkup(<RestaurantKioskOrderPanel open cart={cart} itemCount={2} total={20} formatMoney={(value) => `$${value.toFixed(2)}`} onOpen={() => undefined} onClose={() => undefined} onDecrease={() => undefined} onIncrease={() => undefined} onRemove={() => undefined} onCheckout={() => undefined} />);
+  assert.match(markup, /Ver pedido/);
+  assert.match(markup, /2 unidades/);
+  assert.match(markup, /Revisa antes de pagar/);
+  assert.match(markup, /Continuar al pago/);
+});

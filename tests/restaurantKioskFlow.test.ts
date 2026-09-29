@@ -10,6 +10,10 @@ test('terminal restaurant vertical wins over the POS fallback and accepts the le
   } as any), 'RESTAURANT');
   assert.equal(isRestaurantBusiness({ vertical: 'RESTAURANT' } as any, null), true);
   assert.equal(resolveEffectiveBusinessVertical({ vertical: 'RETAIL' } as any, null), 'RETAIL');
+  assert.equal(resolveEffectiveBusinessVertical({
+    vertical: 'RETAIL',
+    business_config: { businessVertical: 'RESTAURANTE' },
+  } as any, null), 'RESTAURANT');
 });
 
 test('restaurant kiosk keeps service selection and modifier flow separate from retail behavior', () => {

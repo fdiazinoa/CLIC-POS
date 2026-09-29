@@ -130,6 +130,7 @@ import { calculateTransactionFiscalSummary, freezeAuthoritativeLineFiscalAmounts
 import { resolveAppliedServiceTaxPolicy } from './utils/serviceTaxPolicy';
 import { shouldApplyRestaurantServiceCharge } from './utils/orderServiceType';
 import { calculateRestaurantServiceCharge, isRestaurantBusiness } from './utils/businessVertical';
+import { mergePromotionCollection, resolveRestaurantPromotionCreative } from './utils/promotionMedia';
 import { resolveRestaurantProductConfig } from './utils/restaurantProductConfig';
 import { resolveKdsBaseUrl } from './utils/kdsRouting';
 import { resolveProductionOutputTargets } from './utils/productionOutputMode';
@@ -5295,9 +5296,8 @@ const AppContent: React.FC = () => {
     if (normalizedValues.length === 0) return isDefaultTerminal;
     return normalizedValues.some(value => aliases.has(value));
   };
-  const isRestaurantVertical = (value?: string | null) => value === 'RESTAURANT' || value === 'RESTAURANTE';
   const isRestaurantTerminal = (terminal?: any) =>
-    isRestaurantVertical(terminal?.config?.operational?.vertical_negocio) || config.vertical === 'RESTAURANT';
+    isRestaurantBusiness(config, terminal?.config);
 
   const getLatestZCloseTimestamp = (terminalId: string) => {
     const terminalAliases = getTerminalReferenceKeys(terminalId);
@@ -8022,7 +8022,10 @@ const AppContent: React.FC = () => {
         case 'warehouses': setWarehouses(Array.isArray(freshData) ? freshData as Warehouse[] : []); break;
         case 'promotions': {
           if (Array.isArray(freshData)) {
-            setConfig((previous) => ({ ...previous, promotions: freshData as any[] }));
+            setConfig((previous) => ({
+              ...previous,
+              promotions: mergePromotionCollection(previous.promotions, freshData),
+            }));
           }
           break;
         }
@@ -13461,6 +13464,9 @@ const AppContent: React.FC = () => {
       case 'KIOSK_WELCOME':
         const kioskWelcomeTerminal = getCurrentTerminal();
         const kioskWelcomeRestaurantMode = isRestaurantBusiness(config, kioskWelcomeTerminal?.config);
+        const kioskWelcomePromotionCreative = kioskWelcomeRestaurantMode
+          ? resolveRestaurantPromotionCreative(config.promotions, products, config, kioskWelcomeTerminal?.id)
+          : null;
         return (
           <KioskWelcome
             onStartShopping={() => {
@@ -13470,6 +13476,7 @@ const AppContent: React.FC = () => {
               handleViewChange('KIOSK_BROWSER');
             }}
             restaurantMode={kioskWelcomeRestaurantMode}
+            promotionCreative={kioskWelcomePromotionCreative}
             onSelectServiceType={(serviceType) => {
               clearSecurityState();
               setSelectedCustomer(null);
@@ -13497,6 +13504,9 @@ const AppContent: React.FC = () => {
       case 'KIOSK_BROWSER':
         const kioskBrowserTerminal = getCurrentTerminal();
         const kioskBrowserRestaurantMode = isRestaurantBusiness(config, kioskBrowserTerminal?.config);
+        const kioskBrowserPromotionCreative = kioskBrowserRestaurantMode
+          ? resolveRestaurantPromotionCreative(config.promotions, products, config, kioskBrowserTerminal?.id)
+          : null;
         return (
           <KioskProductBrowser
             products={products}
@@ -13541,6 +13551,7 @@ const AppContent: React.FC = () => {
             redeemedCoupon={kioskRedeemedCoupon}
             restaurantMode={kioskBrowserRestaurantMode}
             serviceType={kioskServiceType}
+            promotionCreative={kioskBrowserPromotionCreative}
           />
         );
 
@@ -14253,7 +14264,7 @@ const AppContent: React.FC = () => {
     isClientTerminalMode()
     && clientMasterTablesStatus !== 'ONLINE'
     && (currentView === 'TABLE_MAP' || currentView === 'POS')
-    && (config.vertical === 'RESTAURANT' || isRestaurantTerminal(getCurrentTerminal()))
+    && isRestaurantTerminal(getCurrentTerminal())
   );
 
   return (

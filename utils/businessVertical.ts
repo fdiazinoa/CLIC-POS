@@ -10,16 +10,20 @@ const normalizeVertical = (value: unknown): EffectiveBusinessVertical | undefine
 };
 
 export const resolveEffectiveBusinessVertical = (
-  config: Pick<BusinessConfig, 'vertical'>,
+  config: Pick<BusinessConfig, 'vertical' | 'business_config' | 'businessConfig'>,
   terminalConfig?: Pick<TerminalConfig, 'operational'> | null,
 ): EffectiveBusinessVertical => (
   normalizeVertical(terminalConfig?.operational?.vertical_negocio)
+  || normalizeVertical(config.business_config?.businessVertical)
+  || normalizeVertical(config.business_config?.vertical_negocio)
+  || normalizeVertical(config.businessConfig?.businessVertical)
+  || normalizeVertical(config.businessConfig?.vertical_negocio)
   || normalizeVertical(config.vertical)
   || 'RETAIL'
 );
 
 export const isRestaurantBusiness = (
-  config: Pick<BusinessConfig, 'vertical'>,
+  config: Pick<BusinessConfig, 'vertical' | 'business_config' | 'businessConfig'>,
   terminalConfig?: Pick<TerminalConfig, 'operational'> | null,
 ): boolean => resolveEffectiveBusinessVertical(config, terminalConfig) === 'RESTAURANT';
 

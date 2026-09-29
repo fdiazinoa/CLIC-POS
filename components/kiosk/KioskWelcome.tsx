@@ -8,6 +8,7 @@
 import React from 'react';
 import { Building2, ShoppingBag, ShoppingCart, Settings, UtensilsCrossed } from 'lucide-react';
 import type { OrderServiceType } from '../../types';
+import type { PromotionCreative } from '../../utils/promotionMedia';
 
 interface KioskWelcomeProps {
     onStartShopping: () => void;
@@ -15,6 +16,7 @@ interface KioskWelcomeProps {
     onAdminAccess?: () => void;
     restaurantMode?: boolean;
     onSelectServiceType?: (serviceType: Extract<OrderServiceType, 'DINE_IN' | 'TAKEOUT'>) => void;
+    promotionCreative?: PromotionCreative | null;
 }
 
 const KioskWelcome: React.FC<KioskWelcomeProps> = ({
@@ -23,6 +25,7 @@ const KioskWelcome: React.FC<KioskWelcomeProps> = ({
     onAdminAccess,
     restaurantMode = false,
     onSelectServiceType,
+    promotionCreative,
 }) => {
     const normalizedStoreName = storeName
         .replace(/\bDEMO(S)?\b/gi, '')
@@ -50,18 +53,19 @@ const KioskWelcome: React.FC<KioskWelcomeProps> = ({
                 </button>
             )}
 
-            {/* Video Background */}
-            <video
-                autoPlay
-                muted
-                loop
-                playsInline
-                className="absolute inset-0 w-full h-full object-cover"
-            >
-                <source src="https://assets.mixkit.co/videos/preview/mixkit-woman-shopping-for-clothes-in-store-3444-large.mp4" type="video/mp4" />
-                {/* Fallback for when video fails or loads */}
-                <div className="w-full h-full bg-gradient-to-br from-blue-900 to-indigo-900" />
-            </video>
+            {restaurantMode ? (
+                promotionCreative ? (
+                    <img src={promotionCreative.media.url} alt={promotionCreative.promotionName} className="absolute inset-0 h-full w-full object-cover" />
+                ) : (
+                    <div className="absolute inset-0 bg-gradient-to-br from-orange-950 via-amber-900 to-slate-950" />
+                )
+            ) : (
+                /* Retail keeps its existing video welcome unchanged. */
+                <video autoPlay muted loop playsInline className="absolute inset-0 w-full h-full object-cover">
+                    <source src="https://assets.mixkit.co/videos/preview/mixkit-woman-shopping-for-clothes-in-store-3444-large.mp4" type="video/mp4" />
+                    <div className="w-full h-full bg-gradient-to-br from-blue-900 to-indigo-900" />
+                </video>
+            )}
 
             {/* Dark Overlay */}
             <div className="absolute inset-0 bg-black/40 backdrop-blur-[2px]" />
