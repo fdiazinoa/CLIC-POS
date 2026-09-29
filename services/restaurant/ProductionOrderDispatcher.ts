@@ -1,7 +1,11 @@
 import type { CartItem } from '../../types';
 import { db } from '../../utils/db';
-import { requestJson } from '../network/httpClient';
-import { validateLegacySuccessResponse } from '../sync/LegacyLanMutationTransport';
+import {
+  dispatchLegacyLanMutation,
+  persistLegacyLanMutationCompletion,
+  validateLegacySuccessResponse,
+  type LegacyLanMutationReceipt,
+} from '../sync/LegacyLanMutationTransport';
 
 const QUEUE_COLLECTION = 'kdsDispatchQueue' as any;
 const PRINT_QUEUE_COLLECTION = 'productionPrintQueue' as any;
@@ -193,31 +197,42 @@ export const buildProductionDispatchRequests = (intent: ProductionDispatchIntent
 
 type ProductionRequests = ReturnType<typeof buildProductionDispatchRequests>;
 export type ProductionRequest = ProductionRequests[keyof ProductionRequests];
+export type ProductionDispatchOperations = {
+  update: 'KDS_ORDER_UPDATE' | 'KDS_ORDER_UPDATE_RETRY';
+  dispatch: 'KDS_ORDER_DISPATCH' | 'KDS_ORDER_DISPATCH_RETRY';
+};
+
+const DEFAULT_OPERATIONS: ProductionDispatchOperations = {
+  update: 'KDS_ORDER_UPDATE',
+  dispatch: 'KDS_ORDER_DISPATCH',
+};
 
 const requestIntentJson = async (
   intent: ProductionDispatchIntent,
   request: ProductionRequest,
-) => {
-  const response = await requestJson<any>({
-    url: request.url,
-    method: request.method,
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Idempotency-Key': `${intent.id}:${request.operation}`,
-    },
-    body: JSON.stringify(request.body),
-    timeoutMs: 5000,
-    diagnosticContext: { operation: request.operation, correlationId: `${intent.id}:${request.operation}` },
-  });
-  if (response.status < 200 || response.status >= 300) {
-    throw Object.assign(new Error(`PRODUCTION_REQUEST_FAILED:${response.status}`), { httpStatus: response.status });
-  }
-  validateLegacySuccessResponse(response.data);
-};
+  operation: ProductionDispatchOperations[keyof ProductionDispatchOperations],
+): Promise<LegacyLanMutationReceipt<any>> => dispatchLegacyLanMutation<any>({
+  url: request.url,
+  method: request.method,
+  headers: {
+    'Content-Type': 'application/json',
+    'X-Idempotency-Key': `${intent.id}:${request.operation}`,
+  },
+  body: JSON.stringify(request.body),
+  timeoutMs: 5000,
+  operation,
+  correlationId: `${intent.id}:${operation}`,
+  validateResponse: validateLegacySuccessResponse,
+  // Both KDS endpoints upsert deterministic order/line identities. Closing an
+  // ambiguous journal row is safe because the durable phase can replay it.
+  idempotentReplaySafe: true,
+});
+
+type ProductionAttemptReceipt = Pick<LegacyLanMutationReceipt<any>, 'correlationId' | 'response' | 'completeAfterDurableCommit'>;
 
 export const runProductionDispatchAttempt = async (
   intent: ProductionDispatchIntent,
-  request: (request: ProductionRequest) => Promise<void>,
+  request: (request: ProductionRequest) => Promise<ProductionAttemptReceipt | void>,
   checkpoint: (intent: ProductionDispatchIntent) => Promise<void>,
 ): Promise<ProductionDispatchIntent> => {
   const requests = buildProductionDispatchRequests(intent);
@@ -226,11 +241,21 @@ export const runProductionDispatchAttempt = async (
     // The direct-payload KDS endpoint upserts deterministic line identities.
     // Dispatch first so an ambiguous metadata PUT can never prevent kitchen delivery.
     if (current.phase === 'DISPATCH_PENDING') {
-      await request(requests.dispatch);
+      const dispatchReceipt = await request(requests.dispatch);
+      if (dispatchReceipt) {
+        const reference = `KDS:dispatch:${intent.id}`;
+        await dispatchReceipt.completeAfterDurableCommit(reference, () =>
+          persistLegacyLanMutationCompletion(dispatchReceipt.correlationId, reference, dispatchReceipt.response.status));
+      }
       current = { ...current, phase: 'UPDATE_PENDING', updatedAt: new Date().toISOString() };
       await checkpoint(current);
     }
-    await request(requests.update);
+    const updateReceipt = await request(requests.update);
+    if (updateReceipt) {
+      const reference = `KDS:update:${intent.id}`;
+      await updateReceipt.completeAfterDurableCommit(reference, () =>
+        persistLegacyLanMutationCompletion(updateReceipt.correlationId, reference, updateReceipt.response.status));
+    }
     return current;
   } catch (error) {
     const failure = error instanceof Error ? error : new Error('KDS_UNREACHABLE');
@@ -245,6 +270,7 @@ export const runProductionDispatchAttempt = async (
  */
 export const dispatchProductionOrder = async (
   intent: ProductionDispatchIntent,
+  operations: ProductionDispatchOperations = DEFAULT_OPERATIONS,
 ): Promise<ProductionDispatchResult> => {
   await saveIntent(intent);
   if (!intent.kdsBaseUrl) {
@@ -254,7 +280,11 @@ export const dispatchProductionOrder = async (
   try {
     await runProductionDispatchAttempt(
       intent,
-      (request) => requestIntentJson(intent, request),
+      (request) => requestIntentJson(
+        intent,
+        request,
+        request.method === 'POST' ? operations.dispatch : operations.update,
+      ),
       saveIntent,
     );
     await removeIntent(intent.id);
@@ -274,14 +304,16 @@ export const dispatchProductionOrder = async (
   }
 };
 
-export const retryPendingProductionOrders = async (): Promise<ProductionDispatchResult[]> => {
+export const retryPendingProductionOrders = async (
+  operations: ProductionDispatchOperations = DEFAULT_OPERATIONS,
+): Promise<ProductionDispatchResult[]> => {
   if (retryInFlight) return [];
   retryInFlight = true;
   try {
     const queue = await readQueue();
     const results: ProductionDispatchResult[] = [];
     for (const intent of queue) {
-      results.push(await dispatchProductionOrder(intent));
+      results.push(await dispatchProductionOrder(intent, operations));
     }
     return results;
   } finally {

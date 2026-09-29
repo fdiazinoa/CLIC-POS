@@ -1458,7 +1458,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (kdsRetryInFlightRef.current) return;
       kdsRetryInFlightRef.current = true;
       try {
-         const results = await retryPendingProductionOrders();
+         const results = await retryPendingProductionOrders({
+            update: 'KDS_ORDER_UPDATE_RETRY',
+            dispatch: 'KDS_ORDER_DISPATCH_RETRY',
+         });
          const sent = results.filter(result => result.status === 'SENT');
          for (const result of sent) await markKdsQueueItemsSent(result.intent);
          const sentCount = sent.length;
@@ -6351,7 +6354,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   cartIds: areaData.items.map(getCartDispatchKey),
                   payload: kdsPayload,
                });
-               const dispatchResult = await dispatchProductionOrder(intent);
+               const dispatchResult = await dispatchProductionOrder(intent, {
+                  update: 'KDS_ORDER_UPDATE',
+                  dispatch: 'KDS_ORDER_DISPATCH',
+               });
                if (dispatchResult.status === 'SENT') {
                   sentKdsCount += 1;
                   areaData.items.forEach(item => sentCartIds.add(getCartDispatchKey(item)));

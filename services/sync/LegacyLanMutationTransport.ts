@@ -67,6 +67,7 @@ export const dispatchLegacyLanMutation = async <T = any>(input: {
     assertAuthorityCurrent?: () => boolean;
     journal?: LegacyMutationJournal;
     authorityState?: { revision: number; terminalId: string | null };
+    idempotentReplaySafe?: boolean;
 }): Promise<LegacyLanMutationReceipt<T>> => {
     const journal = input.journal || legacyMutationJournal;
     const authority = input.authorityState || apiSyncAdapter.getOperationalAuthorityState();
@@ -139,6 +140,13 @@ export const dispatchLegacyLanMutation = async <T = any>(input: {
     } catch (error: any) {
         const httpStatus = Number.isFinite(Number(error?.httpStatus)) ? Number(error.httpStatus) : null;
         await journal.markOutcomeUnknown(entry.id, httpStatus);
-        throw error;
+        if (input.idempotentReplaySafe) {
+            await journal.acknowledge(entry.id, 'SAFE_IDEMPOTENT_REPLAY', `IDEMPOTENT_REPLAY:${correlationId}`);
+        }
+        throw Object.assign(error instanceof Error ? error : new Error('LEGACY_MUTATION_OUTCOME_UNKNOWN'), {
+            journalId: entry.id,
+            correlationId,
+            idempotentReplaySafe: Boolean(input.idempotentReplaySafe),
+        });
     }
 };
