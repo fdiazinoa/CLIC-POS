@@ -230,6 +230,28 @@ const requestIntentJson = async (
 
 type ProductionAttemptReceipt = Pick<LegacyLanMutationReceipt<any>, 'correlationId' | 'response' | 'completeAfterDurableCommit'>;
 
+const acknowledgeProductionReceipt = async (
+  receipt: ProductionAttemptReceipt | void,
+  reference: string,
+): Promise<void> => {
+  if (!receipt) return;
+  const durableReference = receipt.response.ok
+    ? reference
+    : `${reference}:retryable:${receipt.response.status}`;
+  await receipt.completeAfterDurableCommit(durableReference, () =>
+    persistLegacyLanMutationCompletion(
+      receipt.correlationId,
+      durableReference,
+      receipt.response.status,
+    ));
+  if (!receipt.response.ok) {
+    throw Object.assign(
+      new Error(`PRODUCTION_DELIVERY_REJECTED:${receipt.response.status}`),
+      { httpStatus: receipt.response.status },
+    );
+  }
+};
+
 export const runProductionDispatchAttempt = async (
   intent: ProductionDispatchIntent,
   request: (request: ProductionRequest) => Promise<ProductionAttemptReceipt | void>,
@@ -242,20 +264,12 @@ export const runProductionDispatchAttempt = async (
     // Dispatch first so an ambiguous metadata PUT can never prevent kitchen delivery.
     if (current.phase === 'DISPATCH_PENDING') {
       const dispatchReceipt = await request(requests.dispatch);
-      if (dispatchReceipt) {
-        const reference = `KDS:dispatch:${intent.id}`;
-        await dispatchReceipt.completeAfterDurableCommit(reference, () =>
-          persistLegacyLanMutationCompletion(dispatchReceipt.correlationId, reference, dispatchReceipt.response.status));
-      }
+      await acknowledgeProductionReceipt(dispatchReceipt, `KDS:dispatch:${intent.id}`);
       current = { ...current, phase: 'UPDATE_PENDING', updatedAt: new Date().toISOString() };
       await checkpoint(current);
     }
     const updateReceipt = await request(requests.update);
-    if (updateReceipt) {
-      const reference = `KDS:update:${intent.id}`;
-      await updateReceipt.completeAfterDurableCommit(reference, () =>
-        persistLegacyLanMutationCompletion(updateReceipt.correlationId, reference, updateReceipt.response.status));
-    }
+    await acknowledgeProductionReceipt(updateReceipt, `KDS:update:${intent.id}`);
     return current;
   } catch (error) {
     const failure = error instanceof Error ? error : new Error('KDS_UNREACHABLE');
@@ -271,8 +285,20 @@ export const runProductionDispatchAttempt = async (
 export const dispatchProductionOrder = async (
   intent: ProductionDispatchIntent,
   operations: ProductionDispatchOperations = DEFAULT_OPERATIONS,
+  dependencies?: {
+    save: (intent: ProductionDispatchIntent) => Promise<void>;
+    remove: (intentId: string) => Promise<void>;
+    request: (
+      intent: ProductionDispatchIntent,
+      request: ProductionRequest,
+      operation: ProductionDispatchOperations[keyof ProductionDispatchOperations],
+    ) => Promise<ProductionAttemptReceipt>;
+  },
 ): Promise<ProductionDispatchResult> => {
-  await saveIntent(intent);
+  const persist = dependencies?.save || saveIntent;
+  const remove = dependencies?.remove || removeIntent;
+  const request = dependencies?.request || requestIntentJson;
+  await persist(intent);
   if (!intent.kdsBaseUrl) {
     return { intent, status: 'PENDING', error: 'KDS_HOST_NOT_CONFIGURED' };
   }
@@ -280,14 +306,14 @@ export const dispatchProductionOrder = async (
   try {
     await runProductionDispatchAttempt(
       intent,
-      (request) => requestIntentJson(
+      (productionRequest) => request(
         intent,
-        request,
-        request.method === 'POST' ? operations.dispatch : operations.update,
+        productionRequest,
+        productionRequest.method === 'POST' ? operations.dispatch : operations.update,
       ),
-      saveIntent,
+      persist,
     );
-    await removeIntent(intent.id);
+    await remove(intent.id);
     return { intent, status: 'SENT' };
   } catch (error: any) {
     const message = error instanceof Error ? error.message : 'KDS_UNREACHABLE';
@@ -299,7 +325,7 @@ export const dispatchProductionOrder = async (
       lastError: message,
       updatedAt: new Date().toISOString(),
     };
-    await saveIntent(pending);
+    await persist(pending);
     return { intent: pending, status: 'PENDING', error: message };
   }
 };

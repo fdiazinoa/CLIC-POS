@@ -5,6 +5,7 @@ import {
   buildProductionDispatchRequests,
   createProductionDispatchIntent,
   createProductionPrintIntent,
+  dispatchProductionOrder,
   isProductionPrintAutoRetryEligible,
   mergeProductionDispatchIntent,
   runProductionDispatchAttempt,
@@ -74,6 +75,40 @@ test('PUT timeout after dispatch checkpoints recovery and restart does not resen
     async (checkpoint) => { recovered = checkpoint; },
   );
   assert.deepEqual(calls, ['PUT']);
+});
+
+test('401 is acknowledged as pre-side-effect but remains queued and is never SENT', async () => {
+  const payload = {
+    orderId: 'TXN-401', date: '2026-09-29T12:00:00.000Z', terminalId: 'T1',
+    userName: 'Kiosk', customerName: 'Cliente General',
+    area: { id: 'kitchen', name: 'Cocina' }, items: [], total: 0,
+  };
+  const intent = createProductionDispatchIntent({ kdsBaseUrl: 'http://kds:8001', cartIds: ['c1'], payload });
+  let queue = [intent];
+  let acknowledgements = 0;
+  const result = await dispatchProductionOrder(intent, {
+    update: 'KDS_ORDER_UPDATE',
+    dispatch: 'KDS_ORDER_DISPATCH',
+  }, {
+    save: async (next) => {
+      queue = [...queue.filter((entry) => entry.id !== next.id), next];
+    },
+    remove: async (id) => { queue = queue.filter((entry) => entry.id !== id); },
+    request: async () => ({
+      correlationId: 'kds-401',
+      response: new Response('', { status: 401 }),
+      completeAfterDurableCommit: async () => {
+        acknowledgements += 1;
+      },
+    }),
+  });
+
+  assert.equal(result.status, 'PENDING');
+  assert.equal(result.error, 'PRODUCTION_DELIVERY_REJECTED:401');
+  assert.equal(acknowledgements, 1);
+  assert.equal(queue.length, 1);
+  assert.equal(queue[0]?.status, 'PENDING');
+  assert.equal(queue[0]?.phase, 'DISPATCH_PENDING');
 });
 
 test('retry merge retains the incremented attempt count', () => {

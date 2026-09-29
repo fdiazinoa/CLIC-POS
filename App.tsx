@@ -5015,7 +5015,10 @@ const AppContent: React.FC = () => {
   useEffect(() => {
     const retryProductionOrders = () => {
       if (getCurrentDeviceRoleRaw() !== DeviceRole.SELF_CHECKOUT) return;
-      void retryPendingProductionOrders().catch((error) => {
+      void retryPendingProductionOrders({
+        update: 'KDS_ORDER_UPDATE_RETRY',
+        dispatch: 'KDS_ORDER_DISPATCH_RETRY',
+      }).catch((error) => {
         console.warn('[PRODUCTION] No se pudieron reintentar las comandas pendientes:', error);
       });
       void retryPendingProductionPrints((intent) => printComanda(config, {
