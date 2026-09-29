@@ -1,10 +1,7 @@
 import type { CartItem } from '../../types';
 import { db } from '../../utils/db';
-import {
-  dispatchLegacyLanMutation,
-  persistLegacyLanMutationCompletion,
-  validateLegacySuccessResponse,
-} from '../sync/LegacyLanMutationTransport';
+import { requestJson } from '../network/httpClient';
+import { validateLegacySuccessResponse } from '../sync/LegacyLanMutationTransport';
 
 const QUEUE_COLLECTION = 'kdsDispatchQueue' as any;
 const PRINT_QUEUE_COLLECTION = 'productionPrintQueue' as any;
@@ -36,6 +33,7 @@ export type ProductionDispatchPayload = {
 export type ProductionDispatchIntent = {
   id: string;
   status: 'PENDING';
+  phase: 'DISPATCH_PENDING' | 'UPDATE_PENDING';
   attempts: number;
   createdAt: string;
   updatedAt: string;
@@ -56,7 +54,7 @@ export type ProductionDispatchResult = {
 
 export type ProductionPrintIntent = {
   id: string;
-  status: 'PENDING';
+  status: 'PENDING' | 'OUTCOME_UNKNOWN';
   attempts: number;
   createdAt: string;
   updatedAt: string;
@@ -98,6 +96,7 @@ const readQueue = async (): Promise<ProductionDispatchIntent[]> => {
       ...entry,
       id: String(entry?.id || buildProductionDispatchIntentId(orderId, areaId, cartIds)),
       status: 'PENDING',
+      phase: entry?.phase === 'UPDATE_PENDING' ? 'UPDATE_PENDING' : 'DISPATCH_PENDING',
       attempts: Number(entry?.attempts || 0),
       createdAt: entry?.createdAt || new Date().toISOString(),
       updatedAt: entry?.updatedAt || new Date().toISOString(),
@@ -118,6 +117,9 @@ export const mergeProductionDispatchIntent = (
   ...incoming,
   createdAt: existing.createdAt,
   attempts: Math.max(Number(existing.attempts || 0), Number(incoming.attempts || 0)),
+  phase: existing.phase === 'UPDATE_PENDING' || incoming.phase === 'UPDATE_PENDING'
+    ? 'UPDATE_PENDING'
+    : 'DISPATCH_PENDING',
 });
 
 const saveIntent = async (intent: ProductionDispatchIntent): Promise<void> => {
@@ -147,6 +149,7 @@ export const createProductionDispatchIntent = (input: {
   return {
     id: buildProductionDispatchIntentId(input.payload.orderId, areaId, cartIds),
     status: 'PENDING',
+    phase: 'DISPATCH_PENDING',
     attempts: 0,
     createdAt: now,
     updatedAt: now,
@@ -159,8 +162,8 @@ export const createProductionDispatchIntent = (input: {
   };
 };
 
-export const buildProductionDispatchRequests = (intent: ProductionDispatchIntent) => ([
-  {
+export const buildProductionDispatchRequests = (intent: ProductionDispatchIntent) => ({
+  update: {
     method: 'PUT' as const,
     url: `${intent.kdsBaseUrl}/api/ordenes/${encodeURIComponent(intent.orderId)}`,
     operation: 'KDS_ORDER_UPDATE',
@@ -180,30 +183,60 @@ export const buildProductionDispatchRequests = (intent: ProductionDispatchIntent
       kdsTiming: intent.payload.kdsTiming,
     },
   },
-  {
+  dispatch: {
     method: 'POST' as const,
     url: `${intent.kdsBaseUrl}/api/ordenes/enviar-comanda/${encodeURIComponent(intent.orderId)}`,
     operation: 'KDS_ORDER_DISPATCH',
     body: intent.payload,
   },
-]);
+});
+
+type ProductionRequests = ReturnType<typeof buildProductionDispatchRequests>;
+export type ProductionRequest = ProductionRequests[keyof ProductionRequests];
 
 const requestIntentJson = async (
   intent: ProductionDispatchIntent,
-  method: 'POST' | 'PUT',
-  url: string,
-  body: unknown,
-  operation: string,
-) => dispatchLegacyLanMutation<any>({
-  url,
-  method,
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify(body),
-  timeoutMs: 5000,
-  operation,
-  correlationId: `${intent.id}:${operation}`,
-  validateResponse: validateLegacySuccessResponse,
-});
+  request: ProductionRequest,
+) => {
+  const response = await requestJson<any>({
+    url: request.url,
+    method: request.method,
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Idempotency-Key': `${intent.id}:${request.operation}`,
+    },
+    body: JSON.stringify(request.body),
+    timeoutMs: 5000,
+    diagnosticContext: { operation: request.operation, correlationId: `${intent.id}:${request.operation}` },
+  });
+  if (response.status < 200 || response.status >= 300) {
+    throw Object.assign(new Error(`PRODUCTION_REQUEST_FAILED:${response.status}`), { httpStatus: response.status });
+  }
+  validateLegacySuccessResponse(response.data);
+};
+
+export const runProductionDispatchAttempt = async (
+  intent: ProductionDispatchIntent,
+  request: (request: ProductionRequest) => Promise<void>,
+  checkpoint: (intent: ProductionDispatchIntent) => Promise<void>,
+): Promise<ProductionDispatchIntent> => {
+  const requests = buildProductionDispatchRequests(intent);
+  let current = intent;
+  try {
+    // The direct-payload KDS endpoint upserts deterministic line identities.
+    // Dispatch first so an ambiguous metadata PUT can never prevent kitchen delivery.
+    if (current.phase === 'DISPATCH_PENDING') {
+      await request(requests.dispatch);
+      current = { ...current, phase: 'UPDATE_PENDING', updatedAt: new Date().toISOString() };
+      await checkpoint(current);
+    }
+    await request(requests.update);
+    return current;
+  } catch (error) {
+    const failure = error instanceof Error ? error : new Error('KDS_UNREACHABLE');
+    throw Object.assign(failure, { productionIntent: current });
+  }
+};
 
 /**
  * Persists the deterministic dispatch intent before any LAN request. Payment is
@@ -219,22 +252,20 @@ export const dispatchProductionOrder = async (
   }
 
   try {
-    const [updateRequest, dispatchRequest] = buildProductionDispatchRequests(intent);
-    const updateReceipt = await requestIntentJson(intent, updateRequest.method, updateRequest.url, updateRequest.body, updateRequest.operation);
-    const dispatchReceipt = await requestIntentJson(intent, dispatchRequest.method, dispatchRequest.url, dispatchRequest.body, dispatchRequest.operation);
-
+    await runProductionDispatchAttempt(
+      intent,
+      (request) => requestIntentJson(intent, request),
+      saveIntent,
+    );
     await removeIntent(intent.id);
-    await updateReceipt.completeAfterDurableCommit(`KDS:update:${intent.id}`, () =>
-      persistLegacyLanMutationCompletion(updateReceipt.correlationId, `KDS:update:${intent.id}`, updateReceipt.response.status));
-    await dispatchReceipt.completeAfterDurableCommit(`KDS:dispatch:${intent.id}`, () =>
-      persistLegacyLanMutationCompletion(dispatchReceipt.correlationId, `KDS:dispatch:${intent.id}`, dispatchReceipt.response.status));
     return { intent, status: 'SENT' };
-  } catch (error) {
+  } catch (error: any) {
     const message = error instanceof Error ? error.message : 'KDS_UNREACHABLE';
+    const attempted = error?.productionIntent || intent;
     const pending: ProductionDispatchIntent = {
-      ...intent,
+      ...attempted,
       status: 'PENDING',
-      attempts: intent.attempts + 1,
+      attempts: Number(attempted.attempts || 0) + 1,
       lastError: message,
       updatedAt: new Date().toISOString(),
     };
@@ -298,35 +329,75 @@ export const createProductionPrintIntent = (input: Omit<ProductionPrintIntent, '
   };
 };
 
+export const isProductionPrintAutoRetryEligible = (intent: ProductionPrintIntent): boolean =>
+  intent.status === 'PENDING';
+
+export const runProductionPrintAttempt = async (
+  intent: ProductionPrintIntent,
+  print: (intent: ProductionPrintIntent) => Promise<boolean>,
+  checkpoint: (intent: ProductionPrintIntent) => Promise<void>,
+): Promise<{ intent: ProductionPrintIntent; status: 'PRINTED' | 'PENDING' | 'OUTCOME_UNKNOWN'; error?: string }> => {
+  // Persist ambiguity before handing bytes to the printer. A crash, timeout or
+  // late transport completion must require reconciliation instead of duplicating paper.
+  const inFlight: ProductionPrintIntent = {
+    ...intent,
+    status: 'OUTCOME_UNKNOWN',
+    attempts: Number(intent.attempts || 0) + 1,
+    updatedAt: new Date().toISOString(),
+    lastError: 'PRODUCTION_PRINT_OUTCOME_UNKNOWN',
+  };
+  await checkpoint(inFlight);
+  try {
+    if (await print(inFlight)) return { intent: inFlight, status: 'PRINTED' };
+    const pending = {
+      ...inFlight,
+      status: 'PENDING' as const,
+      lastError: 'PRODUCTION_PRINTER_NOT_CONFIRMED',
+      updatedAt: new Date().toISOString(),
+    };
+    await checkpoint(pending);
+    return { intent: pending, status: 'PENDING', error: pending.lastError };
+  } catch (error) {
+    const unknown = {
+      ...inFlight,
+      lastError: error instanceof Error ? error.message : 'PRODUCTION_PRINT_OUTCOME_UNKNOWN',
+      updatedAt: new Date().toISOString(),
+    };
+    await checkpoint(unknown);
+    return { intent: unknown, status: 'OUTCOME_UNKNOWN', error: unknown.lastError };
+  }
+};
+
 export const dispatchProductionPrint = async (
   intent: ProductionPrintIntent,
   print: (intent: ProductionPrintIntent) => Promise<boolean>,
-): Promise<{ intent: ProductionPrintIntent; status: 'PRINTED' | 'PENDING'; error?: string }> => {
+): Promise<{ intent: ProductionPrintIntent; status: 'PRINTED' | 'PENDING' | 'OUTCOME_UNKNOWN'; error?: string }> => {
   await savePrintIntent(intent);
-  try {
-    if (!await print(intent)) throw new Error('PRODUCTION_PRINTER_NOT_CONFIRMED');
+  const result = await runProductionPrintAttempt(intent, print, savePrintIntent);
+  if (result.status === 'PRINTED') {
     await removePrintIntent(intent.id);
-    return { intent, status: 'PRINTED' };
-  } catch (error) {
-    const pending = {
-      ...intent,
-      attempts: Number(intent.attempts || 0) + 1,
-      updatedAt: new Date().toISOString(),
-      lastError: error instanceof Error ? error.message : 'PRODUCTION_PRINT_FAILED',
-    };
-    await savePrintIntent(pending);
-    return { intent: pending, status: 'PENDING', error: pending.lastError };
   }
+  return result;
 };
 
 export const retryPendingProductionPrints = async (
   print: (intent: ProductionPrintIntent) => Promise<boolean>,
 ) => {
-  const queue = await readPrintQueue();
-  const results = [];
-  for (const intent of queue) results.push(await dispatchProductionPrint(intent, print));
-  return results;
+  if (printRetryInFlight) return [];
+  printRetryInFlight = true;
+  try {
+    const queue = await readPrintQueue();
+    const results = [];
+    for (const intent of queue.filter(isProductionPrintAutoRetryEligible)) {
+      results.push(await dispatchProductionPrint(intent, print));
+    }
+    return results;
+  } finally {
+    printRetryInFlight = false;
+  }
 };
+
+let printRetryInFlight = false;
 
 export const buildProductionDispatchItems = (items: CartItem[], areaId: string) =>
   items.map((item, index) => ({
