@@ -7,6 +7,7 @@ import {
 } from '../sync/LegacyLanMutationTransport';
 
 const QUEUE_COLLECTION = 'kdsDispatchQueue' as any;
+const PRINT_QUEUE_COLLECTION = 'productionPrintQueue' as any;
 
 export type ProductionDispatchPayload = {
   orderId: string;
@@ -53,6 +54,23 @@ export type ProductionDispatchResult = {
   error?: string;
 };
 
+export type ProductionPrintIntent = {
+  id: string;
+  status: 'PENDING';
+  attempts: number;
+  createdAt: string;
+  updatedAt: string;
+  lastError?: string;
+  orderId: string;
+  areaId: string;
+  areaName: string;
+  cartIds: string[];
+  orderNumber?: string;
+  customerName?: string;
+  items: CartItem[];
+  printerId?: string;
+};
+
 const normalizedIdentityPart = (value: unknown): string =>
   encodeURIComponent(String(value ?? '').trim().toLowerCase());
 
@@ -92,12 +110,22 @@ const readQueue = async (): Promise<ProductionDispatchIntent[]> => {
   }).filter((entry) => Boolean(entry.orderId && entry.areaId));
 };
 
+export const mergeProductionDispatchIntent = (
+  existing: ProductionDispatchIntent,
+  incoming: ProductionDispatchIntent,
+): ProductionDispatchIntent => ({
+  ...existing,
+  ...incoming,
+  createdAt: existing.createdAt,
+  attempts: Math.max(Number(existing.attempts || 0), Number(incoming.attempts || 0)),
+});
+
 const saveIntent = async (intent: ProductionDispatchIntent): Promise<void> => {
   const queue = await readQueue();
   const existing = queue.find((entry) => entry.id === intent.id);
   const next = existing
     ? queue.map((entry) => entry.id === intent.id
-      ? { ...existing, ...intent, createdAt: existing.createdAt, attempts: existing.attempts }
+      ? mergeProductionDispatchIntent(existing, intent)
       : entry)
     : [...queue, intent];
   await db.save(QUEUE_COLLECTION, next);
@@ -131,14 +159,44 @@ export const createProductionDispatchIntent = (input: {
   };
 };
 
-const postIntentJson = async (
+export const buildProductionDispatchRequests = (intent: ProductionDispatchIntent) => ([
+  {
+    method: 'PUT' as const,
+    url: `${intent.kdsBaseUrl}/api/ordenes/${encodeURIComponent(intent.orderId)}`,
+    operation: 'KDS_ORDER_UPDATE',
+    body: {
+      items: intent.payload.items,
+      total: intent.payload.total,
+      status: 'OCCUPIED',
+      displayId: intent.payload.displayId,
+      orderNumber: intent.payload.orderNumber,
+      terminalId: intent.payload.terminalId,
+      userName: intent.payload.userName,
+      customerName: intent.payload.customerName,
+      serviceType: intent.payload.serviceType,
+      table: intent.payload.table,
+      area: intent.payload.area,
+      sourceTerminal: intent.payload.sourceTerminal,
+      kdsTiming: intent.payload.kdsTiming,
+    },
+  },
+  {
+    method: 'POST' as const,
+    url: `${intent.kdsBaseUrl}/api/ordenes/enviar-comanda/${encodeURIComponent(intent.orderId)}`,
+    operation: 'KDS_ORDER_DISPATCH',
+    body: intent.payload,
+  },
+]);
+
+const requestIntentJson = async (
   intent: ProductionDispatchIntent,
+  method: 'POST' | 'PUT',
   url: string,
   body: unknown,
   operation: string,
 ) => dispatchLegacyLanMutation<any>({
   url,
-  method: 'POST',
+  method,
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify(body),
   timeoutMs: 5000,
@@ -161,32 +219,9 @@ export const dispatchProductionOrder = async (
   }
 
   try {
-    const updateReceipt = await postIntentJson(
-      intent,
-      `${intent.kdsBaseUrl}/api/ordenes/${encodeURIComponent(intent.orderId)}`,
-      {
-        items: intent.payload.items,
-        total: intent.payload.total,
-        status: 'OCCUPIED',
-        displayId: intent.payload.displayId,
-        orderNumber: intent.payload.orderNumber,
-        terminalId: intent.payload.terminalId,
-        userName: intent.payload.userName,
-        customerName: intent.payload.customerName,
-        serviceType: intent.payload.serviceType,
-        table: intent.payload.table,
-        area: intent.payload.area,
-        sourceTerminal: intent.payload.sourceTerminal,
-        kdsTiming: intent.payload.kdsTiming,
-      },
-      'KDS_ORDER_UPDATE',
-    );
-    const dispatchReceipt = await postIntentJson(
-      intent,
-      `${intent.kdsBaseUrl}/api/ordenes/enviar-comanda/${encodeURIComponent(intent.orderId)}`,
-      intent.payload,
-      'KDS_ORDER_DISPATCH',
-    );
+    const [updateRequest, dispatchRequest] = buildProductionDispatchRequests(intent);
+    const updateReceipt = await requestIntentJson(intent, updateRequest.method, updateRequest.url, updateRequest.body, updateRequest.operation);
+    const dispatchReceipt = await requestIntentJson(intent, dispatchRequest.method, dispatchRequest.url, dispatchRequest.body, dispatchRequest.operation);
 
     await removeIntent(intent.id);
     await updateReceipt.completeAfterDurableCommit(`KDS:update:${intent.id}`, () =>
@@ -212,18 +247,86 @@ export const retryPendingProductionOrders = async (): Promise<ProductionDispatch
   if (retryInFlight) return [];
   retryInFlight = true;
   try {
-  const queue = await readQueue();
-  const results: ProductionDispatchResult[] = [];
-  for (const intent of queue) {
-    results.push(await dispatchProductionOrder(intent));
-  }
-  return results;
+    const queue = await readQueue();
+    const results: ProductionDispatchResult[] = [];
+    for (const intent of queue) {
+      results.push(await dispatchProductionOrder(intent));
+    }
+    return results;
   } finally {
     retryInFlight = false;
   }
 };
 
 let retryInFlight = false;
+
+const readPrintQueue = async (): Promise<ProductionPrintIntent[]> => {
+  const stored = await db.get(PRINT_QUEUE_COLLECTION).catch(() => []);
+  return Array.isArray(stored) ? stored as ProductionPrintIntent[] : [];
+};
+
+const savePrintIntent = async (intent: ProductionPrintIntent): Promise<void> => {
+  const queue = await readPrintQueue();
+  const existing = queue.find((entry) => entry.id === intent.id);
+  const nextIntent = existing ? {
+    ...existing,
+    ...intent,
+    createdAt: existing.createdAt,
+    attempts: Math.max(Number(existing.attempts || 0), Number(intent.attempts || 0)),
+  } : intent;
+  await db.save(PRINT_QUEUE_COLLECTION, existing
+    ? queue.map((entry) => entry.id === intent.id ? nextIntent : entry)
+    : [...queue, nextIntent]);
+};
+
+const removePrintIntent = async (intentId: string): Promise<void> => {
+  const queue = await readPrintQueue();
+  await db.save(PRINT_QUEUE_COLLECTION, queue.filter((entry) => entry.id !== intentId));
+};
+
+export const createProductionPrintIntent = (input: Omit<ProductionPrintIntent, 'id' | 'status' | 'attempts' | 'createdAt' | 'updatedAt'>): ProductionPrintIntent => {
+  const now = new Date().toISOString();
+  const cartIds = Array.from(new Set(input.cartIds.map(String).filter(Boolean))).sort();
+  return {
+    ...input,
+    id: `print:${buildProductionDispatchIntentId(input.orderId, input.areaId, cartIds)}`,
+    status: 'PENDING',
+    attempts: 0,
+    createdAt: now,
+    updatedAt: now,
+    cartIds,
+  };
+};
+
+export const dispatchProductionPrint = async (
+  intent: ProductionPrintIntent,
+  print: (intent: ProductionPrintIntent) => Promise<boolean>,
+): Promise<{ intent: ProductionPrintIntent; status: 'PRINTED' | 'PENDING'; error?: string }> => {
+  await savePrintIntent(intent);
+  try {
+    if (!await print(intent)) throw new Error('PRODUCTION_PRINTER_NOT_CONFIRMED');
+    await removePrintIntent(intent.id);
+    return { intent, status: 'PRINTED' };
+  } catch (error) {
+    const pending = {
+      ...intent,
+      attempts: Number(intent.attempts || 0) + 1,
+      updatedAt: new Date().toISOString(),
+      lastError: error instanceof Error ? error.message : 'PRODUCTION_PRINT_FAILED',
+    };
+    await savePrintIntent(pending);
+    return { intent: pending, status: 'PENDING', error: pending.lastError };
+  }
+};
+
+export const retryPendingProductionPrints = async (
+  print: (intent: ProductionPrintIntent) => Promise<boolean>,
+) => {
+  const queue = await readPrintQueue();
+  const results = [];
+  for (const intent of queue) results.push(await dispatchProductionPrint(intent, print));
+  return results;
+};
 
 export const buildProductionDispatchItems = (items: CartItem[], areaId: string) =>
   items.map((item, index) => ({

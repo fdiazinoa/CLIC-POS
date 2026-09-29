@@ -24,4 +24,9 @@ test('restaurant kiosk keeps service selection and modifier flow separate from r
   assert.match(browser, /no tiene centro de producción configurado/);
   assert.match(app, /setKioskServiceType\(null\)/);
   assert.match(app, /cartId: sourceCartId \|\| uuidv4\(\)/);
+  assert.match(app, /const \{ shouldPrint, shouldSendKds \} = resolveProductionOutputTargets/);
+  assert.match(app, /createProductionPrintIntent/);
+  assert.match(app, /retryPendingProductionPrints/);
+  const afterSaleCommit = app.slice(app.indexOf('await handleTransactionComplete(txn)'));
+  assert.match(afterSaleCommit, /catch \(productionError\)/);
 });

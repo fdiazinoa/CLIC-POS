@@ -1,7 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { createProductionDispatchIntent } from '../services/restaurant/ProductionOrderDispatcher';
+import {
+  buildProductionDispatchRequests,
+  createProductionDispatchIntent,
+  createProductionPrintIntent,
+  mergeProductionDispatchIntent,
+} from '../services/restaurant/ProductionOrderDispatcher';
+import { resolveProductionOutputTargets } from '../utils/productionOutputMode';
 
 test('dispatcher intent is deterministic and starts pending before network delivery', () => {
   const payload = {
@@ -19,6 +25,42 @@ test('dispatcher intent is deterministic and starts pending before network deliv
 test('dispatcher persists intent before issuing either KDS request and retry is payment-independent', () => {
   const source = readFileSync(new URL('../services/restaurant/ProductionOrderDispatcher.ts', import.meta.url), 'utf8');
   const dispatchBody = source.slice(source.indexOf('export const dispatchProductionOrder'), source.indexOf('export const retryPendingProductionOrders'));
-  assert.ok(dispatchBody.indexOf('await saveIntent(intent)') < dispatchBody.indexOf('await postIntentJson'));
+  assert.ok(dispatchBody.indexOf('await saveIntent(intent)') < dispatchBody.indexOf('await requestIntentJson'));
   assert.doesNotMatch(source, /PaymentIntentService|createTransaction|paymentMethod/);
+});
+
+test('KDS update uses the supported PUT contract and dispatch remains POST', () => {
+  const payload = {
+    orderId: 'TXN-1', date: '2026-09-29T12:00:00.000Z', terminalId: 'T1',
+    userName: 'Kiosk', customerName: 'Cliente General',
+    area: { id: 'kitchen', name: 'Cocina' }, items: [], total: 0,
+  };
+  const intent = createProductionDispatchIntent({ kdsBaseUrl: 'http://kds:8001', cartIds: ['c1'], payload });
+  const [update, dispatch] = buildProductionDispatchRequests(intent);
+  assert.equal(update.method, 'PUT');
+  assert.equal(update.url, 'http://kds:8001/api/ordenes/TXN-1');
+  assert.equal(dispatch.method, 'POST');
+});
+
+test('retry merge retains the incremented attempt count', () => {
+  const payload = {
+    orderId: 'TXN-1', date: '2026-09-29T12:00:00.000Z', terminalId: 'T1',
+    userName: 'Kiosk', customerName: 'Cliente General',
+    area: { id: 'kitchen', name: 'Cocina' }, items: [], total: 0,
+  };
+  const existing = { ...createProductionDispatchIntent({ cartIds: ['c1'], payload }), attempts: 2 };
+  const retried = { ...existing, attempts: 3, lastError: 'offline' };
+  assert.equal(mergeProductionDispatchIntent(existing, retried).attempts, 3);
+});
+
+test('printer-only production creates a durable print identity without enabling KDS', () => {
+  assert.deepEqual(resolveProductionOutputTargets('PRINTER'), {
+    mode: 'PRINTER', shouldPrint: true, shouldSendKds: false,
+  });
+  const intent = createProductionPrintIntent({
+    orderId: 'TXN-1', areaId: 'bar', areaName: 'Bar', cartIds: ['c1'],
+    items: [{ id: 'p1', cartId: 'c1', name: 'Bebida', quantity: 1 } as any],
+  });
+  assert.equal(intent.status, 'PENDING');
+  assert.match(intent.id, /^print:kds:txn-1:bar:c1$/);
 });

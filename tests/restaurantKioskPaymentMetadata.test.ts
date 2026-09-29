@@ -1,6 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildSalePostedPayload } from '../services/sync/SalePostedContract';
+import { calculateRestaurantServiceCharge } from '../utils/businessVertical';
+
+test('restaurant kiosk legal tip uses gross after discount, matching POS', () => {
+  assert.equal(calculateRestaurantServiceCharge(118, 18, 10), 10);
+  assert.equal(calculateRestaurantServiceCharge(118, 0, 10), 11.8);
+});
 
 test('SALE_POSTED preserves restaurant service, legal tip and order metadata', () => {
   const transaction = {

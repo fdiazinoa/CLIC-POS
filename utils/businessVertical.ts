@@ -22,3 +22,13 @@ export const isRestaurantBusiness = (
   config: Pick<BusinessConfig, 'vertical'>,
   terminalConfig?: Pick<TerminalConfig, 'operational'> | null,
 ): boolean => resolveEffectiveBusinessVertical(config, terminalConfig) === 'RESTAURANT';
+
+export const calculateRestaurantServiceCharge = (
+  grossLineTotal: number,
+  discountAmount: number,
+  percentage: number,
+): number => {
+  const base = Math.max(0, Number(grossLineTotal || 0) - Math.max(0, Number(discountAmount || 0)));
+  const rate = Math.max(0, Number(percentage || 0)) / 100;
+  return Math.round((base * rate + Number.EPSILON) * 100) / 100;
+};

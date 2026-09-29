@@ -129,14 +129,17 @@ import { calculateTransactionTaxSummary } from './utils/taxSummary';
 import { calculateTransactionFiscalSummary, freezeAuthoritativeLineFiscalAmounts } from './utils/fiscalBreakdown';
 import { resolveAppliedServiceTaxPolicy } from './utils/serviceTaxPolicy';
 import { shouldApplyRestaurantServiceCharge } from './utils/orderServiceType';
-import { isRestaurantBusiness } from './utils/businessVertical';
+import { calculateRestaurantServiceCharge, isRestaurantBusiness } from './utils/businessVertical';
 import { resolveRestaurantProductConfig } from './utils/restaurantProductConfig';
 import { resolveKdsBaseUrl } from './utils/kdsRouting';
 import { resolveProductionOutputTargets } from './utils/productionOutputMode';
 import {
   buildProductionDispatchItems,
+  createProductionPrintIntent,
   createProductionDispatchIntent,
+  dispatchProductionPrint,
   dispatchProductionOrder,
+  retryPendingProductionPrints,
   retryPendingProductionOrders,
 } from './services/restaurant/ProductionOrderDispatcher';
 import { extractTerminalOperationalDocumentState } from './utils/terminalConfigSnapshot';
@@ -270,7 +273,7 @@ import { inventorySyncService } from './services/sync/InventorySyncService';
 import { processInventoryDeduction } from './utils/inventoryEngine';
 import { useOfflineInventoryCountSync } from './hooks/useOfflineInventoryCountSync';
 import { printLabelsFromTemplate } from './utils/labelPrinter';
-import { printIntegratedPaymentArtifacts, printPrecuenta, printTicket } from './utils/printer';
+import { printComanda, printIntegratedPaymentArtifacts, printPrecuenta, printTicket } from './utils/printer';
 import { offlinePrintQueueService } from './services/printer/OfflinePrintQueueService';
 import { nativePrintBridge } from './services/printer/NativePrintBridge';
 import { persistStandaloneRefundTransaction } from './services/localRefundPersistence';
@@ -1904,7 +1907,11 @@ const buildKioskPaymentTotals = (
   const serviceChargeRate = shouldApplyServiceCharge
     ? Math.max(0, Number(serviceTaxPolicySnapshot?.legalTip?.percentage ?? config.tipsConfig?.serviceCharge?.percentage) || 0)
     : 0;
-  const serviceChargeAmount = roundMoney(summary.subtotal * (serviceChargeRate / 100));
+  const serviceChargeAmount = calculateRestaurantServiceCharge(
+    summary.grossLineTotal,
+    summary.discountAmount,
+    serviceChargeRate,
+  );
   const total = roundMoney(summary.total + serviceChargeAmount);
 
   return {
@@ -5011,6 +5018,16 @@ const AppContent: React.FC = () => {
       void retryPendingProductionOrders().catch((error) => {
         console.warn('[PRODUCTION] No se pudieron reintentar las comandas pendientes:', error);
       });
+      void retryPendingProductionPrints((intent) => printComanda(config, {
+        items: intent.items,
+        orderNumber: intent.orderNumber,
+        customerName: intent.customerName,
+        areaTitle: intent.areaName,
+        productionAreaId: intent.areaId,
+        printerId: intent.printerId,
+      })).catch((error) => {
+        console.warn('[PRODUCTION] No se pudieron reintentar las comandas impresas pendientes:', error);
+      });
     };
     retryProductionOrders();
     const interval = window.setInterval(retryProductionOrders, 10000);
@@ -5021,7 +5038,7 @@ const AppContent: React.FC = () => {
       window.removeEventListener('online', retryProductionOrders);
       window.removeEventListener('focus', retryProductionOrders);
     };
-  }, [getCurrentDeviceRoleRaw]);
+  }, [config, getCurrentDeviceRoleRaw]);
   useEffect(() => {
     setPosSaleActivity({ active: cart.length > 0, cartCount: cart.length });
     return () => setPosSaleActivity({ active: false, cartCount: 0 });
@@ -13777,56 +13794,81 @@ const AppContent: React.FC = () => {
                 // Save and Sync
                 await handleTransactionComplete(txn);
                 if (kioskPaymentRestaurantMode) {
-                  const productionAreas = Array.isArray(kioskProductionAreas) ? kioskProductionAreas : [];
-                  const areaById = new Map(productionAreas.map((area: any) => [String(area.id), area]));
-                  const grouped = new Map<string, CartItem[]>();
-                  for (const item of txn.items || []) {
-                    const areaId = String(resolveRestaurantProductConfig(item).production_area_id || '').trim();
-                    if (!areaId || !areaById.has(areaId)) {
-                      throw new Error(`${item.name} no tiene un centro de producción disponible.`);
+                  try {
+                    const productionAreas = Array.isArray(kioskProductionAreas) ? kioskProductionAreas : [];
+                    const areaById = new Map(productionAreas.map((area: any) => [String(area.id), area]));
+                    const grouped = new Map<string, CartItem[]>();
+                    for (const item of txn.items || []) {
+                      const areaId = String(resolveRestaurantProductConfig(item).production_area_id || '').trim();
+                      if (!areaId || !areaById.has(areaId)) {
+                        throw new Error(`${item.name} no tiene un centro de producción disponible.`);
+                      }
+                      grouped.set(areaId, [...(grouped.get(areaId) || []), item]);
                     }
-                    grouped.set(areaId, [...(grouped.get(areaId) || []), item]);
-                  }
 
-                  for (const [areaId, areaItems] of grouped) {
-                    const area: any = areaById.get(areaId);
-                    const { shouldSendKds } = resolveProductionOutputTargets(area?.modo_salida);
-                    if (!shouldSendKds) continue;
-                    const warningMinutes = Math.max(1, Number(area?.kds_warning_minutes) || 10);
-                    const criticalMinutes = Math.max(warningMinutes + 1, Number(area?.kds_critical_minutes) || 20);
-                    const payload = {
-                      orderId: txn.id,
-                      displayId: txn.displayId || txn.id,
-                      orderNumber: txn.orderNumber,
-                      date: txn.date,
-                      terminalId: currentTerminal.id,
-                      sourceTerminal: {
-                        id: currentTerminal.id,
-                        code: activeConfig.stationNumber || activeConfig.erpBinding?.stationNumber || currentTerminal.id,
-                        name: activeConfig.terminalName || activeConfig.erpBinding?.terminalName || currentTerminal.name,
-                      },
-                      userName: kioskOperator.name,
-                      customerName: txn.customerName || 'Cliente General',
-                      serviceType: kioskServiceType || undefined,
-                      table: null,
-                      area: {
-                        id: areaId,
-                        name: area.nombre || area.name || areaId,
-                        targetTerminalId: area.target_terminal_id || null,
-                        targetTerminalName: area.target_terminal_name || area.nombre || area.name || areaId,
-                        warningMinutes,
-                        criticalMinutes,
-                      },
-                      kdsTiming: { warningMinutes, criticalMinutes },
-                      items: buildProductionDispatchItems(areaItems, areaId),
-                      total: roundMoney(areaItems.reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0), 0)),
-                    };
-                    const intent = createProductionDispatchIntent({
-                      kdsBaseUrl: resolveKdsBaseUrl(area, config),
-                      cartIds: areaItems.map(item => item.cartId),
-                      payload,
-                    });
-                    await dispatchProductionOrder(intent);
+                    for (const [areaId, areaItems] of grouped) {
+                      const area: any = areaById.get(areaId);
+                      const { shouldPrint, shouldSendKds } = resolveProductionOutputTargets(area?.modo_salida);
+                      const areaName = area.nombre || area.name || areaId;
+                      if (shouldPrint) {
+                        const printIntent = createProductionPrintIntent({
+                          orderId: txn.id,
+                          areaId,
+                          areaName,
+                          cartIds: areaItems.map(item => item.cartId),
+                          orderNumber: txn.orderNumber,
+                          customerName: txn.customerName || 'Cliente General',
+                          items: areaItems,
+                          printerId: area.printer_id || area.printerId,
+                        });
+                        await dispatchProductionPrint(printIntent, (intent) => printComanda(config, {
+                          items: intent.items,
+                          orderNumber: intent.orderNumber,
+                          customerName: intent.customerName,
+                          areaTitle: intent.areaName,
+                          productionAreaId: intent.areaId,
+                          printerId: intent.printerId,
+                        }));
+                      }
+                      if (!shouldSendKds) continue;
+                      const warningMinutes = Math.max(1, Number(area?.kds_warning_minutes) || 10);
+                      const criticalMinutes = Math.max(warningMinutes + 1, Number(area?.kds_critical_minutes) || 20);
+                      const payload = {
+                        orderId: txn.id,
+                        displayId: txn.displayId || txn.id,
+                        orderNumber: txn.orderNumber,
+                        date: txn.date,
+                        terminalId: currentTerminal.id,
+                        sourceTerminal: {
+                          id: currentTerminal.id,
+                          code: activeConfig.stationNumber || activeConfig.erpBinding?.stationNumber || currentTerminal.id,
+                          name: activeConfig.terminalName || activeConfig.erpBinding?.terminalName || currentTerminal.name,
+                        },
+                        userName: kioskOperator.name,
+                        customerName: txn.customerName || 'Cliente General',
+                        serviceType: kioskServiceType || undefined,
+                        table: null,
+                        area: {
+                          id: areaId,
+                          name: areaName,
+                          targetTerminalId: area.target_terminal_id || null,
+                          targetTerminalName: area.target_terminal_name || areaName,
+                          warningMinutes,
+                          criticalMinutes,
+                        },
+                        kdsTiming: { warningMinutes, criticalMinutes },
+                        items: buildProductionDispatchItems(areaItems, areaId),
+                        total: roundMoney(areaItems.reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0), 0)),
+                      };
+                      const intent = createProductionDispatchIntent({
+                        kdsBaseUrl: resolveKdsBaseUrl(area, config),
+                        cartIds: areaItems.map(item => item.cartId),
+                        payload,
+                      });
+                      await dispatchProductionOrder(intent);
+                    }
+                  } catch (productionError) {
+                    console.error('[PRODUCTION] La venta quedó guardada; la salida a cocina requiere reintento:', productionError);
                   }
                 }
                 return txn;
