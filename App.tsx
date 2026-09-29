@@ -336,6 +336,13 @@ import {
 import { terminalConfigRequestCoordinator } from './services/sync/TerminalConfigRequestCoordinator';
 import { clearPersistedSupabaseSession, supabase } from './utils/supabase';
 import type { RuntimeTerminalRecoveryState } from './services/setup/erpTerminalSetup';
+import {
+  clearClientBindingRecovery,
+  createMasterAuthorityFingerprint,
+  readClientBindingRecovery,
+  resolveMasterAuthorityIdentity,
+  validateClientBindingAck,
+} from './services/setup/clientBindingRecovery';
 import { resolveCustomerImageSrc } from './utils/entityImage';
 import { posCatalogDebugElapsedMs, posCatalogDebugLog, posCatalogDebugLogDbRows, posCatalogDebugMatchesRaw, posCatalogDebugNow, posCatalogDebugSummarizeItem } from './utils/posCatalogDebugTrace';
 import { buildTerminalConfigRefreshRequest, type TerminalConfigSyncRequestDetail } from './utils/terminalConfigPushScopes';
@@ -1701,7 +1708,7 @@ const buildConfigSyncUrl = (): string | null => {
   return `${buildRuntimeMasterUrl()}/api/config`;
 };
 
-const resolveReachableMasterBinding = async (host: string): Promise<{ host: string; baseUrl: string } | null> => {
+const resolveReachableMasterBinding = async (host: string): Promise<{ host: string; baseUrl: string; config: Record<string, any> } | null> => {
   const normalizedHost = normalizeMasterHost(host);
   if (!normalizedHost) return null;
 
@@ -1721,6 +1728,7 @@ const resolveReachableMasterBinding = async (host: string): Promise<{ host: stri
       return {
         host: new URL(baseUrl).hostname,
         baseUrl,
+        config: remoteConfig,
       };
     } catch {
       // try next candidate
@@ -7197,6 +7205,16 @@ const AppContent: React.FC = () => {
           // when transaction stores are large or locked.
 
           // 3. Verificación de Vinculación - USE finalConfig (Master prioritized)
+          const pendingClientBindingRecovery = readClientBindingRecovery();
+          if (pendingClientBindingRecovery) {
+            localStorage.setItem(TERMINAL_SETUP_MODE_KEY, 'CLIENT');
+            localStorage.setItem(TERMINAL_SETUP_PENDING_KEY, '1');
+            localStorage.setItem(TERMINAL_BINDING_STATUS_KEY, 'BINDING_RESTORE_PENDING');
+            setCurrentView('TERMINAL_PAIRING');
+            setIsDataLoaded(true);
+            setIsSecurityLoaded(true);
+            return;
+          }
           const terminals = finalConfig.terminals || [];
           let pairedTerminal = terminals.find(
             (t: any) => t.config?.currentDeviceId === storedDeviceId
@@ -8377,6 +8395,39 @@ const AppContent: React.FC = () => {
       if (!setupResult?.boundConfig) {
         throw new Error('La vinculación debe provenir del backend central de setup. No se recibió configuración enlazada.');
       }
+      const pendingClientRecovery = readClientBindingRecovery();
+      if (isLocalClientBinding) {
+        if (!reachableMasterBinding || !finalResolvedMasterUrl) {
+          throw new Error('MASTER_UNAVAILABLE: no se pudo validar la autoridad del ACK cliente.');
+        }
+        const expectedMasterTerminalId = pendingClientRecovery?.masterTerminalId
+          || setupResult?.syncProfile?.masterTerminalId
+          || setupResult?.incomingProfile?.masterTerminalId
+          || setupResult?.profile?.masterTerminalId
+          || resolveMasterAuthorityIdentity(reachableMasterBinding.config);
+        validateOperationalMasterEndpoint(finalResolvedMasterUrl, reachableMasterBinding.config, {
+          erpManaged: false,
+          terminalId,
+          masterTerminalId: expectedMasterTerminalId,
+          tenantId: pendingClientRecovery?.tenantId || setupResult?.tenantId || '',
+          companyId: pendingClientRecovery?.companyId || setupResult?.companyId || '',
+          storeId: pendingClientRecovery?.storeId || setupResult?.storeId || '',
+          deviceId,
+          localIps: clientLocalIpsRef.current || [],
+        }, { strictPairing: true });
+        if (pendingClientRecovery && (
+          pendingClientRecovery.authorityUrl !== finalResolvedMasterUrl
+          || pendingClientRecovery.authorityFingerprint !== createMasterAuthorityFingerprint(reachableMasterBinding.config)
+        )) {
+          throw new Error('MASTER_AUTHORITY_CHANGED: la autoridad no coincide con el ACK pendiente.');
+        }
+        validateClientBindingAck({
+          response: { current_device_id: deviceId, config: setupResult.boundConfig },
+          terminalId,
+          deviceId,
+          masterTerminalId: expectedMasterTerminalId,
+        });
+      }
       preserveTerminalBindingAfterRegister = true;
       setupResult.progress?.({
         stepId: 'apply',
@@ -8737,11 +8788,6 @@ const AppContent: React.FC = () => {
         await db.save('users', reconciledUsers);
       }
 
-      if (isSlave && finalResolvedMasterIp) {
-        localStorage.setItem('pos_master_ip', finalResolvedMasterIp);
-        localStorage.setItem('CLIC_POS_MASTER_URL', finalResolvedMasterUrl);
-      }
-
       // If user takes control of a MASTER terminal, clear stale slave pointers.
       if (!isSlave) {
         localStorage.removeItem('pos_master_ip');
@@ -8751,7 +8797,7 @@ const AppContent: React.FC = () => {
 
       // Always persist binding to backend before re-initializing sync.
       // This prevents pulling old config right after takeover.
-      if (configSyncUrl) {
+      if (configSyncUrl && !isSlave) {
         try {
           setupResult.progress?.({
             stepId: 'sync',
@@ -8810,7 +8856,7 @@ const AppContent: React.FC = () => {
         companyId: setupResult?.companyId || null,
         storeId: setupResult?.storeId || null,
       });
-      setTerminalBindingDiagnosticStatus('BOUND');
+      setTerminalBindingDiagnosticStatus(isSlave ? 'BINDING_RESTORE_PENDING' : 'BOUND');
 
       const shouldRestoreRemoteData = !!finalResolvedMasterIp && isSlave;
 
@@ -8835,11 +8881,15 @@ const AppContent: React.FC = () => {
             })
           };
 
-          localStorage.setItem('pos_master_ip', finalResolvedMasterIp);
-          localStorage.setItem('CLIC_POS_MASTER_URL', finalResolvedMasterUrl);
-
           // Re-initialize sync manager with a temporary slave profile to pull history/catalogs
-          await syncManager.initialize(remoteRestoreConfig, terminalId);
+          await syncManager.initialize(remoteRestoreConfig, terminalId, {
+            clientMasterAuthority: {
+              status: 'VALIDATED',
+              baseUrl: finalResolvedMasterUrl,
+              config: reachableMasterBinding?.config || {},
+              source: 'STORED',
+            },
+          });
           setupResult.progress?.({
             stepId: 'sync',
             message: 'Restaurando historial operativo de la terminal anterior...',
@@ -8871,9 +8921,7 @@ const AppContent: React.FC = () => {
           setXReports(Array.isArray(freshData.xReports) ? freshData.xReports : []);
         } catch (error) {
           console.error('Failed to restore history:', error);
-          alert(shouldTakeover
-            ? 'Se tomó control de la terminal, pero no se pudo restaurar la información del equipo anterior. Revisa conectividad cloud/red local.'
-            : 'No se pudo restaurar el historial desde la Maestra. El equipo funcionará, pero sin datos previos.');
+          throw error;
         }
       }
 
@@ -8888,7 +8936,14 @@ const AppContent: React.FC = () => {
         message: 'Inicializando servicios del POS con la nueva terminal...',
       });
       permissionService.initialize(updatedConfig, terminalId);
-      await syncManager.initialize(updatedConfig, terminalId);
+      await syncManager.initialize(updatedConfig, terminalId, isSlave ? {
+        clientMasterAuthority: {
+          status: 'VALIDATED',
+          baseUrl: finalResolvedMasterUrl,
+          config: reachableMasterBinding?.config || {},
+          source: 'STORED',
+        },
+      } : undefined);
       if (isErpDirectBinding) {
         try {
           setupResult.progress?.({
@@ -9088,7 +9143,17 @@ const AppContent: React.FC = () => {
       if (Array.isArray(freshData.collections)) setCollections(freshData.collections);
       if (Array.isArray(freshData.supplierProductPrices)) setSupplierProductPrices(freshData.supplierProductPrices);
 
-      localStorage.removeItem(TERMINAL_SETUP_PENDING_KEY);
+      if (isSlave) {
+        const completedRecovery = readClientBindingRecovery();
+        if (!completedRecovery) {
+          throw new Error('BINDING_RECOVERY_STATE_MISSING: no se puede finalizar un cliente sin el ACK durable.');
+        }
+        localStorage.setItem('pos_master_ip', finalResolvedMasterIp);
+        localStorage.setItem('CLIC_POS_MASTER_URL', finalResolvedMasterUrl);
+        localStorage.setItem('CLIC_POS_MASTER_DISCOVERY', 'ACK_RECOVERY');
+        localStorage.setItem('clic_pos_master_terminal_id', completedRecovery.masterTerminalId);
+        localStorage.setItem('clic_pos_terminal_type', selectedTerminal?.config?.terminalType || 'STANDARD_POS');
+      }
       localStorage.setItem('active_terminal_id', terminalId);
       localStorage.setItem('CLIC_POS_TERMINAL_ID', terminalId);
       localStorage.setItem('clic_last_authorized_erp_terminal_id', resolvedErpTerminalId);
@@ -9108,6 +9173,9 @@ const AppContent: React.FC = () => {
         companyId: setupResult?.companyId || null,
         storeId: setupResult?.storeId || null,
       });
+      if (isSlave) clearClientBindingRecovery();
+      localStorage.removeItem(TERMINAL_SETUP_PENDING_KEY);
+      localStorage.setItem(TERMINAL_BINDING_STATUS_KEY, 'BOUND');
       setTerminalBindingDiagnosticStatus('BOUND');
       setCatalogDiagnosticStatus('SYNCED');
       setSalesPushDiagnosticStatus(
@@ -9144,6 +9212,7 @@ const AppContent: React.FC = () => {
       const errorMessage = error instanceof Error ? error.message : String(error || '');
       const canResumeExistingTerminalOffline = Boolean(
         preserveTerminalBindingAfterRegister
+        && !readClientBindingRecovery()
         && previousActiveTerminalId
         && isDataLoaded
         && isRecoverableNetworkConnectivityMessage(errorMessage)
@@ -9162,7 +9231,15 @@ const AppContent: React.FC = () => {
       }
 
       if (preserveTerminalBindingAfterRegister) {
-        setTerminalBindingDiagnosticStatus('BOUND');
+        const pendingRecovery = readClientBindingRecovery();
+        if (pendingRecovery) {
+          localStorage.setItem(TERMINAL_SETUP_PENDING_KEY, '1');
+          localStorage.setItem(TERMINAL_BINDING_STATUS_KEY, 'BINDING_RESTORE_PENDING');
+          setTerminalBindingDiagnosticStatus('BINDING_RESTORE_PENDING');
+          setCurrentView('TERMINAL_PAIRING');
+        } else {
+          setTerminalBindingDiagnosticStatus('BOUND');
+        }
         setCatalogDiagnosticStatus('ERROR');
         reportSyncErrorDiagnostic({
           operation: 'REGISTER_TERMINAL',

@@ -51,6 +51,13 @@ import {
   isTerminalBindingSelectable,
   normalizeTerminalBindingRecord,
 } from '../utils/terminalBindingHierarchy';
+import { validateOperationalMasterEndpoint, type OperationalMasterContract } from '../utils/masterOperationalApi';
+import {
+  createMasterAuthorityFingerprint,
+  persistClientBindingRecovery,
+  resolveMasterAuthorityIdentity,
+  validateClientBindingAck,
+} from '../services/setup/clientBindingRecovery';
 
 interface TerminalCard {
   id: string;
@@ -296,6 +303,7 @@ interface TerminalSelectorProps {
   tenantId?: string;
   erpBaseUrl?: string;
   masterIp?: string;
+  masterAuthority?: { baseUrl: string; config: Record<string, any>; localIps: string[] } | null;
   isAlreadyBound: boolean;
   onBound: (payload: BoundTerminalPayload) => Promise<void>;
   onBack: () => void;
@@ -839,6 +847,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
   tenantId: initialTenantId,
   erpBaseUrl: initialErpBaseUrl,
   masterIp = '',
+  masterAuthority = null,
   isAlreadyBound,
   onBound,
   onBack,
@@ -1203,6 +1212,28 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           });
         }
 
+        if (!masterAuthority) {
+          throw new Error('MASTER_ENDPOINT_NOT_VALIDATED: valide la Caja Master antes de vincular.');
+        }
+        const selectedMasterId = resolveOrderTakerContract(terminal).masterTerminalId
+          || resolveMasterAuthorityIdentity(masterAuthority.config);
+        const pairingContract: OperationalMasterContract = {
+          erpManaged: false,
+          terminalId: terminal.id,
+          masterTerminalId: selectedMasterId,
+          tenantId: terminal.tenantId || tenantId || '',
+          companyId: terminal.companyId || '',
+          storeId: terminal.storeId || '',
+          deviceId,
+          localIps: masterAuthority.localIps,
+        };
+        const validatedAuthorityUrl = validateOperationalMasterEndpoint(
+          masterAuthority.baseUrl,
+          masterAuthority.config,
+          pairingContract,
+          { strictPairing: true },
+        );
+
         const response = await requestMasterSetup<BindTerminalResponse>(
           `${apiBase}/bind-terminal`,
           {
@@ -1250,6 +1281,26 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
         }
 
         data = response.data;
+        if (bindingMode === 'SLAVE' && data) {
+          validateClientBindingAck({
+            response: data as Record<string, any>,
+            terminalId: data.terminal_id || terminal.id,
+            deviceId,
+            masterTerminalId: selectedMasterId,
+          });
+          persistClientBindingRecovery({
+            authorityUrl: validatedAuthorityUrl,
+            authorityFingerprint: createMasterAuthorityFingerprint(masterAuthority.config),
+            masterTerminalId: selectedMasterId,
+            terminalId: data.terminal_id || terminal.id,
+            deviceId,
+            tenantId: data.tenant_id || terminal.tenantId || tenantId || '',
+            companyId: data.company_id || terminal.companyId || '',
+            storeId: data.store_id || terminal.storeId || '',
+          });
+          localStorage.setItem('clic_terminal_binding_status', 'BINDING_RESTORE_PENDING');
+          localStorage.setItem('clic_pos_terminal_setup_pending', '1');
+        }
       }
 
         if (!data) {
@@ -1491,21 +1542,23 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
         console.info('[POS_ERP_PAIRING_UI]', {
           ...pairingDiagnosticBase,
           authResponseCode: 'OK',
-          pairingStatus: 'BOUND',
+          pairingStatus: bindingMode === 'SLAVE' ? 'BINDING_RESTORE_PENDING' : 'BOUND',
         });
         localStorage.setItem('clic_last_pairing_diagnostic', JSON.stringify({
           ...pairingDiagnosticBase,
           authResponseCode: 'OK',
-          pairingStatus: 'BOUND',
+          pairingStatus: bindingMode === 'SLAVE' ? 'BINDING_RESTORE_PENDING' : 'BOUND',
           at: new Date().toISOString(),
         }));
         const canonicalTerminalId = resolvedErpTerminalId || null;
         const selectedContract = resolveOrderTakerContract(terminal);
-        localStorage.setItem('clic_pos_terminal_type', selectedContract.terminalType);
-        if (selectedContract.masterTerminalId) {
-          localStorage.setItem('clic_pos_master_terminal_id', selectedContract.masterTerminalId);
-        } else {
-          localStorage.removeItem('clic_pos_master_terminal_id');
+        if (bindingMode !== 'SLAVE') {
+          localStorage.setItem('clic_pos_terminal_type', selectedContract.terminalType);
+          if (selectedContract.masterTerminalId) {
+            localStorage.setItem('clic_pos_master_terminal_id', selectedContract.masterTerminalId);
+          } else {
+            localStorage.removeItem('clic_pos_master_terminal_id');
+          }
         }
         console.info('canonical_terminal_selected', {
           terminalId: canonicalTerminalId,
@@ -1667,7 +1720,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
         }
       }
     },
-    [apiBase, bindingMode, closeBindingProgress, currentConfig, deviceId, erpBaseUrl, expectsErpDirect, failBindingProgress, masterIpInput, onBound, startBindingProgress, tenantId, updateBindingProgress, useErpDirectMasterAndroid, usesErpDirect]
+    [apiBase, bindingMode, closeBindingProgress, currentConfig, deviceId, erpBaseUrl, expectsErpDirect, failBindingProgress, masterAuthority, masterIpInput, onBound, startBindingProgress, tenantId, updateBindingProgress, useErpDirectMasterAndroid, usesErpDirect]
   );
 
   const handleCardClick = useCallback(
