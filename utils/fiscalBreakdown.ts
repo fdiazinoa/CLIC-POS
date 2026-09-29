@@ -1,4 +1,4 @@
-import { BusinessConfig, TaxDefinition, TerminalConfig, Transaction } from '../types';
+import { BusinessConfig, Customer, TaxDefinition, TerminalConfig, Transaction } from '../types';
 import { findTaxByIdentifier } from './taxIdentity';
 
 const EPSILON = 0.0001;
@@ -137,11 +137,62 @@ interface AuthoritativeLineOptions extends TaxBreakdownOptions {
   transactionTotal?: number;
 }
 
-type TaxableTransaction = Pick<Transaction, 'items' | 'discountAmount' | 'isTaxIncluded' | 'taxAmount' | 'total'> & {
+type TaxableTransaction = Pick<Transaction, 'items' | 'discountAmount' | 'isTaxIncluded' | 'taxAmount' | 'netAmount' | 'total'> & {
   taxBreakdown?: FiscalTaxBreakdownLine[];
   customerSnapshot?: Pick<NonNullable<Transaction['customerSnapshot']>, 'isTaxExempt'>;
   serviceTaxPolicySnapshot?: Transaction['serviceTaxPolicySnapshot'];
   service_tax_policy_snapshot?: Transaction['service_tax_policy_snapshot'];
+};
+
+type CustomerSnapshotSource = Pick<Customer, 'name' | 'taxId' | 'address' | 'phone' | 'email' | 'isTaxExempt'>;
+
+export const buildTransactionCustomerSnapshot = (
+  customer: CustomerSnapshotSource,
+): NonNullable<Transaction['customerSnapshot']> => ({
+  name: customer.name,
+  taxId: customer.taxId,
+  address: customer.address,
+  phone: customer.phone,
+  email: customer.email,
+  isTaxExempt: customer.isTaxExempt === true,
+});
+
+const hasReconciledZeroTaxLines = (transaction: TaxableTransaction): boolean => {
+  const items = Array.isArray(transaction.items) ? transaction.items : [];
+  const transactionNetAmount = transaction.netAmount;
+  if (
+    items.length === 0
+    || typeof transactionNetAmount !== 'number'
+    || !Number.isFinite(transactionNetAmount)
+    || typeof transaction.total !== 'number'
+    || !Number.isFinite(transaction.total)
+  ) {
+    return false;
+  }
+
+  let lineNetTotal = 0;
+  let lineTotal = 0;
+  const allLinesAreCompleteZeroTax = items.every((item) => {
+    const netAmount = item.netAmount;
+    const taxAmount = item.taxAmount;
+    const totalAmount = item.totalAmount;
+    if (
+      typeof netAmount !== 'number' || !Number.isFinite(netAmount)
+      || typeof taxAmount !== 'number' || !Number.isFinite(taxAmount)
+      || typeof totalAmount !== 'number' || !Number.isFinite(totalAmount)
+      || Math.abs(taxAmount) > EPSILON
+      || Math.abs(netAmount - totalAmount) > 0.01
+    ) {
+      return false;
+    }
+    lineNetTotal += netAmount;
+    lineTotal += totalAmount;
+    return true;
+  });
+
+  return allLinesAreCompleteZeroTax
+    && Math.abs(round2(lineNetTotal) - round2(transactionNetAmount)) <= 0.01
+    && Math.abs(round2(lineTotal) - round2(transaction.total)) <= 0.01;
 };
 
 /**
@@ -160,6 +211,13 @@ export const hasAuthoritativeZeroTax = (transaction: TaxableTransaction): boolea
   const explicitBreakdown = Array.isArray(transaction.taxBreakdown)
     ? transaction.taxBreakdown
     : undefined;
+  const hasNonZeroItemTax = (transaction.items || []).some(
+    (item) => typeof item?.taxAmount === 'number'
+      && Number.isFinite(item.taxAmount)
+      && Math.abs(item.taxAmount) > EPSILON,
+  );
+  if (hasNonZeroItemTax) return false;
+
   const hasNonZeroBreakdown = explicitBreakdown?.some(
     (line) => typeof line?.amount === 'number'
       && Number.isFinite(line.amount)
@@ -174,7 +232,9 @@ export const hasAuthoritativeZeroTax = (transaction: TaxableTransaction): boolea
         && Math.abs(line.amount) <= EPSILON,
     ));
 
-  return hasExplicitZeroBreakdown || transaction.customerSnapshot?.isTaxExempt === true;
+  return hasExplicitZeroBreakdown
+    || transaction.customerSnapshot?.isTaxExempt === true
+    || hasReconciledZeroTaxLines(transaction);
 };
 
 export const getTerminalDefaultTaxIds = (terminalConfig?: TerminalTaxConfig): string[] =>

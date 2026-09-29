@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import { buildEscPosTicketPayload } from '../services/printer/EscPosFormatter';
+import { buildTicketTaxPresentationHtml } from '../utils/printer';
 import {
+  buildTransactionCustomerSnapshot,
   calculateTransactionFiscalSummary,
   consolidateTaxBreakdownForDisplay,
   hasAuthoritativeZeroTax,
@@ -147,16 +148,128 @@ test('un impuesto positivo persistido prevalece sobre un snapshot exento y las l
   assert.equal(calculateTransactionFiscalSummary(transaction, config).taxTotal, 18);
   assert.deepEqual(consolidateTaxBreakdownForDisplay([zeroLine], taxes), []);
   assert.equal(zeroLine.amount, 0);
+
+  const positiveLineConflict = {
+    ...transaction,
+    taxAmount: 0,
+    taxBreakdown: [],
+    items: [{
+      price: 100,
+      quantity: 1,
+      appliedTaxIds: ['erp-itbis-18'],
+      netAmount: 100,
+      taxAmount: 18,
+      totalAmount: 118,
+    }],
+  } as any;
+  assert.equal(hasAuthoritativeZeroTax(positiveLineConflict), false);
+  assert.equal(calculateTransactionFiscalSummary(positiveLineConflict, config).taxTotal, 18);
 });
 
-test('la impresión HTML omite impuestos por artículo y total cuando el resumen fiscal es cero', () => {
-  const source = readFileSync(new URL('../utils/printer.ts', import.meta.url), 'utf8');
-  const posSource = readFileSync(new URL('../components/POSInterface.tsx', import.meta.url), 'utf8');
+test('líneas históricas fiscales completas conservan autoridad cero en el comprobante RD$600', () => {
+  const config = {
+    companyInfo: { name: 'Restaurante Clic Pos', rnc: '', phone: '', address: '' },
+    currencySymbol: 'RD$',
+    receiptConfig: {},
+    taxRate: 0.18,
+    taxes,
+    terminals: [],
+  } as any;
+  const prices = [210, 150, 130, 110];
+  const transaction = {
+    id: 'historic-b14-zero-lines',
+    displayId: 'TKT000019',
+    documentType: 'TICKET',
+    seriesId: 'b14',
+    date: '2026-09-29T15:03:00.000Z',
+    ncfType: 'B14',
+    items: prices.map((price, index) => ({
+      id: `water-${index}`,
+      cartId: `water-${index}`,
+      name: `Agua ${index + 1}`,
+      quantity: 1,
+      price,
+      appliedTaxIds: ['erp-itbis-18'],
+      netAmount: price,
+      taxAmount: 0,
+      totalAmount: price,
+    })),
+    netAmount: 600,
+    taxAmount: 0,
+    total: 600,
+    payments: [{ id: 'card-1', method: 'CARD', amount: 600 }],
+    userId: 'user-1',
+    userName: 'Cajero',
+    terminalId: 'terminal-1',
+    status: 'COMPLETED',
+  } as any;
 
-  assert.match(source, /taxExempt: suppressZeroTaxPresentation/);
-  assert.match(source, /\$\{taxLineHtml\}/);
-  assert.doesNotMatch(source, /taxLineHtml \|\| `<br\/>Impuestos:/);
-  assert.match(source, /\$\{Math\.abs\(taxTotal\) > 0\.0001 \? `<div class="total-row">/);
-  assert.equal(posSource.match(/isTaxExempt: customerForCheckout\.isTaxExempt/g)?.length, 2);
-  assert.match(posSource, /transactionTotal: saleTotal,[\s\S]{0,160}taxExempt: isSelectedCustomerTaxExempt/);
+  assert.equal(hasAuthoritativeZeroTax(transaction), true);
+  assert.equal(calculateTransactionFiscalSummary(transaction, config).taxTotal, 0);
+
+  const htmlTax = buildTicketTaxPresentationHtml(transaction, config);
+  assert.deepEqual(htmlTax.itemTaxHtml, ['', '', '', '']);
+  assert.equal(htmlTax.totalTaxHtml, '');
+
+  const decoded = Buffer.from(buildEscPosTicketPayload(transaction, config) || '', 'base64').toString('latin1');
+  assert.doesNotMatch(decoded, /ITBIS 18%|IMPUESTOS/);
+
+  const inconsistentHistory = {
+    ...transaction,
+    items: transaction.items.map((item: any, index: number) => (
+      index === 0 ? { ...item, totalAmount: item.totalAmount + 1 } : item
+    )),
+  } as any;
+  assert.equal(hasAuthoritativeZeroTax(inconsistentHistory), false);
+  assert.equal(calculateTransactionFiscalSummary(inconsistentHistory, config).taxTotal, 108);
+});
+
+test('el generador HTML fiscal usado por printTicket distingue comprobantes exentos y gravados', () => {
+  const config = {
+    companyInfo: { name: 'CLIC POS', rnc: '', phone: '', address: '' },
+    currencySymbol: 'RD$',
+    receiptConfig: {},
+    taxRate: 0.18,
+    taxes,
+    terminals: [],
+  } as any;
+  const base = {
+    id: 'tax-html', displayId: 'tax-html', documentType: 'TICKET', seriesId: 'ticket',
+    date: '2026-09-29T15:03:00.000Z',
+    items: [{ id: 'water', cartId: 'water', name: 'Agua', quantity: 1, price: 100, appliedTaxIds: ['erp-itbis-18'] }],
+    payments: [], userId: 'user', userName: 'Cajero', terminalId: 'terminal', status: 'COMPLETED',
+  } as any;
+  const exempt = { ...base, total: 100, netAmount: 100, taxAmount: 0, taxBreakdown: [] } as any;
+  const taxed = {
+    ...base,
+    total: 118,
+    netAmount: 100,
+    taxAmount: 18,
+    taxBreakdown: [{ id: 'erp-itbis-18', name: 'ITBIS', rate: 0.18, amount: 18, taxableBase: 100, total: 118, lineCount: 1 }],
+  } as any;
+
+  const exemptHtml = buildTicketTaxPresentationHtml(exempt, config);
+  assert.deepEqual(exemptHtml.itemTaxHtml, ['']);
+  assert.equal(exemptHtml.totalTaxHtml, '');
+
+  const taxedHtml = buildTicketTaxPresentationHtml(taxed, config);
+  assert.match(taxedHtml.itemTaxHtml[0], /ITBIS 18%: RD\$18\.00/);
+  assert.match(taxedHtml.totalTaxHtml, /TOTAL IMPUESTOS/);
+  assert.match(taxedHtml.totalTaxHtml, /RD\$18\.00/);
+});
+
+test('el snapshot fiscal compartido conserva la exención en checkout estándar y split', () => {
+  const customer = {
+    name: 'MERCASEND SRL',
+    taxId: '130090752',
+    address: 'Santo Domingo',
+    phone: '8090000000',
+    email: 'cliente@example.com',
+    isTaxExempt: true,
+  } as any;
+
+  const standardSnapshot = buildTransactionCustomerSnapshot(customer);
+  const splitSnapshot = buildTransactionCustomerSnapshot(customer);
+  assert.equal(standardSnapshot.isTaxExempt, true);
+  assert.deepEqual(splitSnapshot, standardSnapshot);
 });

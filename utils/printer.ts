@@ -1,7 +1,7 @@
 import { trackCheckoutPrint } from '../services/CheckoutPrintTracking';
 import { notifyBrowserPrint } from '../services/printer/BrowserPrint';
 import { PrintOutputError, runPrintTask } from '../services/printer/PrintFeedback';
-import { Transaction, BusinessConfig, Reservation, CartItem, Table, CashMovement } from '../types';
+import { Transaction, BusinessConfig, Reservation, CartItem, Table, CashMovement, TerminalConfig } from '../types';
 import { PrintRouterService } from '../services/printer/PrintRouterService';
 import { buildEscPosCashDrawerPayload, buildEscPosCashMovementReceiptPayload, buildEscPosComandaPayload, buildEscPosReservationPayload, buildEscPosSubtotalPayload, buildEscPosTicketPayload, buildEscPosVoucherPayload, shouldOpenDrawerForTransaction } from '../services/printer/EscPosFormatter';
 import { shouldSuppressBrowserPrintFallback } from '../services/printer/PrintRuntime';
@@ -207,6 +207,41 @@ export const printGatewayReceipt = async (
     }
 ): Promise<boolean> => printGatewayVoucher(config, params);
 
+export const buildTicketTaxPresentationHtml = (
+    transaction: Transaction,
+    config: BusinessConfig,
+    terminalConfig?: TerminalConfig,
+): {
+    fiscalSummary: ReturnType<typeof calculateTransactionFiscalSummary>;
+    itemTaxHtml: string[];
+    totalTaxHtml: string;
+} => {
+    const fiscalSummary = calculateTransactionFiscalSummary(transaction, config, { terminalConfig });
+    const suppressZeroTaxPresentation = hasAuthoritativeZeroTax(transaction);
+    const currencySymbol = config.currencySymbol;
+    const isTaxIncluded = transaction.isTaxIncluded || false;
+    const itemTaxHtml = transaction.items.map((item) => {
+        const breakdown = consolidateTaxBreakdownForDisplay(calculateTaxBreakdownFromItems([item], config, {
+            isTaxIncluded,
+            terminalConfig,
+            absoluteLineValues: true,
+            taxExempt: suppressZeroTaxPresentation,
+        }), config.taxes);
+
+        return breakdown.length > 0
+            ? `<br/>${breakdown.map(tax => `${formatTaxLineLabel(tax)}: ${currencySymbol}${Number(tax.amount || 0).toFixed(2)}`).join('<br/>')}`
+            : '';
+    });
+    const totalTaxHtml = Math.abs(fiscalSummary.taxTotal) > 0.0001
+        ? `<div class="total-row">
+                    <span>TOTAL IMPUESTOS</span>
+                    <span>${currencySymbol}${fiscalSummary.taxTotal.toFixed(2)}</span>
+                </div>`
+        : '';
+
+    return { fiscalSummary, itemTaxHtml, totalTaxHtml };
+};
+
 const printTicketInternal = async (transaction: Transaction, config: BusinessConfig): Promise<boolean> => {
     const { companyInfo, currencySymbol, receiptConfig, currencies } = config;
     const users = ((await dbAdapter.getCollection('users')) || []) as any[];
@@ -217,8 +252,6 @@ const printTicketInternal = async (transaction: Transaction, config: BusinessCon
 
     // Calculate totals and savings
     let lineDiscountTotal = 0;
-    const isTaxIncluded = transaction.isTaxIncluded || false;
-
     transaction.items.forEach(item => {
         const originalPrice = item.originalPrice || item.price;
         lineDiscountTotal += Math.max(0, (originalPrice - item.price) * item.quantity);
@@ -226,11 +259,10 @@ const printTicketInternal = async (transaction: Transaction, config: BusinessCon
 
     const discountTotal = Math.max(0, Number(transaction.discountAmount || 0));
 
-    const fiscalSummary = calculateTransactionFiscalSummary(transaction, config, { terminalConfig });
+    const taxPresentation = buildTicketTaxPresentationHtml(transaction, config, terminalConfig);
+    const fiscalSummary = taxPresentation.fiscalSummary;
     const subtotal = fiscalSummary.subtotal;
-    const taxTotal = fiscalSummary.taxTotal;
     const finalTotal = fiscalSummary.total;
-    const suppressZeroTaxPresentation = hasAuthoritativeZeroTax(transaction);
     const savings = lineDiscountTotal + discountTotal;
     const redeemedCouponCodes = resolveReceiptCouponCodes(transaction);
 
@@ -404,17 +436,9 @@ const printTicketInternal = async (transaction: Transaction, config: BusinessCon
 
             <table class="items-table">
                 <tbody>
-                    ${transaction.items.map(item => {
+                    ${transaction.items.map((item, itemIndex) => {
             const lineVal = item.price * item.quantity;
-            const itemTaxBreakdown = consolidateTaxBreakdownForDisplay(calculateTaxBreakdownFromItems([item], config, {
-                isTaxIncluded,
-                terminalConfig,
-                absoluteLineValues: true,
-                taxExempt: suppressZeroTaxPresentation,
-            }), config.taxes);
-            const taxLineHtml = itemTaxBreakdown.length > 0
-                ? `<br/>${itemTaxBreakdown.map(tax => `${formatTaxLineLabel(tax)}: ${currencySymbol}${Number(tax.amount || 0).toFixed(2)}`).join('<br/>')}`
-                : '';
+            const taxLineHtml = taxPresentation.itemTaxHtml[itemIndex] || '';
             const lineDiscount = resolveLineDiscountPresentation(item);
             const variantText = formatReceiptVariant(item.variantInfo, receiptConfig?.showVariantLabels);
             const modifiers = receiptModifiersWithoutVariant(item.modifiers, item.variantInfo);
@@ -476,10 +500,7 @@ const printTicketInternal = async (transaction: Transaction, config: BusinessCon
                     <span>${globalDiscountLabel}</span>
                     <span>-${currencySymbol}${(discountTotal || 0).toFixed(2)}</span>
                 </div>` : ''}
-                ${Math.abs(taxTotal) > 0.0001 ? `<div class="total-row">
-                    <span>TOTAL IMPUESTOS</span>
-                    <span>${currencySymbol}${(taxTotal || 0).toFixed(2)}</span>
-                </div>` : ''}
+                ${taxPresentation.totalTaxHtml}
                 
                 <div class="total-row total-final">
                     <span>TOTAL</span>
