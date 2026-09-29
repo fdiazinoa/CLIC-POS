@@ -18,7 +18,7 @@ import {
   CreditCard,
   Sparkles
 } from 'lucide-react';
-import { Product, CartItem, BusinessConfig, ProductPrice, Tariff, Warehouse, Customer, RedeemedCouponRef } from '../../types';
+import { Product, CartItem, BusinessConfig, ProductPrice, Tariff, Warehouse, Customer, RedeemedCouponRef, OrderServiceType } from '../../types';
 import { hasProductPromotion } from '../../utils/promotionEngine';
 import { parseScaleBarcode } from '../../utils/barcodeParser';
 import { db } from '../../utils/db';
@@ -28,6 +28,8 @@ import { productIdentityCandidates, resolveOperationalProductId } from '../../ut
 import PromoBottomSheet from '../PromoBottomSheet';
 import SecurityOverlay from './SecurityOverlay';
 import { useKioskSecurityContext } from './KioskContext';
+import ModifierModal from '../ModifierModal';
+import { productHasRestaurantConfiguration, resolveRestaurantProductConfig } from '../../utils/restaurantProductConfig';
 
 const normalizeToken = (value: unknown): string =>
   typeof value === 'string' ? value.trim().toLowerCase() : value != null ? String(value).trim().toLowerCase() : '';
@@ -110,6 +112,8 @@ interface KioskProductBrowserProps {
   customerConfidenceIndex?: number;
   selectedCustomer?: Customer | null;
   redeemedCoupon?: RedeemedCouponRef | null;
+  restaurantMode?: boolean;
+  serviceType?: Extract<OrderServiceType, 'DINE_IN' | 'TAKEOUT'> | null;
 }
 
 const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
@@ -124,7 +128,9 @@ const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
   terminalId,
   customerConfidenceIndex = 0.75,
   selectedCustomer,
-  redeemedCoupon
+  redeemedCoupon,
+  restaurantMode = false,
+  serviceType,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [lastScanned, setLastScanned] = useState<string | null>(null);
@@ -133,6 +139,8 @@ const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
   const [cartPulse, setCartPulse] = useState(false);
   const [language, setLanguage] = useState<'ES' | 'EN'>('ES');
   const [logoLoadError, setLogoLoadError] = useState(false);
+  const [modifierProduct, setModifierProduct] = useState<Product | null>(null);
+  const [checkoutError, setCheckoutError] = useState('');
 
   const [showPromoSheet, setShowPromoSheet] = useState(false);
   const [selectedPromoProduct, setSelectedPromoProduct] = useState<Product | null>(null);
@@ -583,17 +591,21 @@ const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
       return;
     }
 
-    if (product.type === 'SERVICE') {
+    if (!restaurantMode && product.type === 'SERVICE') {
       setWeighingProduct(product);
       setWeightInstructionOpen(true);
       return;
     }
 
     const pricedProduct = buildPricedProduct(product);
+    if (restaurantMode && productHasRestaurantConfiguration(pricedProduct)) {
+      setModifierProduct(pricedProduct);
+      return;
+    }
     onAddToCart(pricedProduct);
-    markNeedsVerification(pricedProduct);
+    if (!restaurantMode) markNeedsVerification(pricedProduct);
     triggerAddFeedback(product.name, product.id);
-  }, [buildPricedProduct, getProductAvailability, markNeedsVerification, onAddToCart]);
+  }, [buildPricedProduct, getProductAvailability, markNeedsVerification, onAddToCart, restaurantMode]);
 
   const startWeighingFlow = () => {
     setWeightInstructionOpen(false);
@@ -636,7 +648,7 @@ const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
 
   const handleDecrease = (item: CartItem) => {
     if (item.quantity <= 1) {
-      onRemoveFromCart(item.id);
+      onRemoveFromCart(item.cartId || item.id);
       return;
     }
     onAddToCart(item, -1);
@@ -648,6 +660,16 @@ const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
 
   const handleCheckoutAttempt = () => {
     if (cart.length === 0) return;
+    if (restaurantMode) {
+      const unrouted = cart.find(item => !resolveRestaurantProductConfig(item).production_area_id);
+      if (unrouted) {
+        setCheckoutError(`${unrouted.name} no tiene centro de producción configurado. Solicita asistencia.`);
+        return;
+      }
+      setCheckoutError('');
+      onCheckout();
+      return;
+    }
     if (checkVerificationBeforePayment(cart)) return;
 
     const auditHit = shouldAuditTransaction({
@@ -750,8 +772,9 @@ const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
               )}
             </div>
             <div>
-              <p className="text-xs uppercase tracking-widest text-slate-400 font-bold">Self Checkout</p>
+              <p className="text-xs uppercase tracking-widest text-slate-400 font-bold">{restaurantMode ? 'Ordena aquí' : 'Self Checkout'}</p>
               <p className="text-xl font-black text-slate-800">{config.companyInfo?.name || 'CLIC POS'}</p>
+              {restaurantMode && <p className="text-xs font-black uppercase tracking-wide text-orange-600">{serviceType === 'TAKEOUT' ? 'Para llevar' : 'Comer aquí'}</p>}
             </div>
           </div>
 
@@ -787,7 +810,7 @@ const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
                   className={`bg-white rounded-3xl border text-left overflow-hidden group flex flex-col h-[360px] transition-all active:scale-[0.98] ${isUnavailable ? 'opacity-70 cursor-not-allowed grayscale-[0.35]' : ''} ${activeAddProductId === product.id ? 'border-emerald-400 ring-4 ring-emerald-100' : 'border-slate-200 hover:border-blue-200 hover:shadow-xl hover:-translate-y-1'}`}
                 >
                   <div className="relative h-[62%] bg-slate-50 border-b border-slate-100 p-5 flex items-center justify-center">
-                    {product.type === 'SERVICE' && (
+                    {!restaurantMode && product.type === 'SERVICE' && (
                       <div className="absolute top-3 left-3 bg-orange-100 text-orange-700 px-2.5 py-1 rounded-full text-xs font-black flex items-center gap-1">
                         <Scale size={12} />
                         Requiere pesaje
@@ -829,7 +852,7 @@ const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
                         }}
                       />
                     ) : (
-                      <span className="text-7xl">{product.category === 'Bebidas' ? '🥤' : '📦'}</span>
+                      <span className="text-7xl">{product.category === 'Bebidas' ? '🥤' : restaurantMode ? '🍽️' : '📦'}</span>
                     )}
                   </div>
 
@@ -840,7 +863,7 @@ const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
                     <div className="mt-auto flex items-center justify-between">
                       <div className="text-2xl font-black text-slate-900">
                         {formatMoney(price)}
-                        {product.type === 'SERVICE' && <span className="text-xs font-bold text-slate-400 ml-1">/kg</span>}
+                        {!restaurantMode && product.type === 'SERVICE' && <span className="text-xs font-bold text-slate-400 ml-1">/kg</span>}
                       </div>
                       <div className={`w-12 h-12 text-white rounded-2xl flex items-center justify-center shadow-md ${isUnavailable ? 'bg-slate-300' : 'bg-blue-600'}`}>
                         <Plus size={24} />
@@ -903,7 +926,7 @@ const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
         <div className="bg-blue-700 text-white p-6">
           <div className="flex items-center gap-3 mb-1">
             <ShoppingCart size={30} strokeWidth={2.5} />
-            <h2 className="text-3xl font-black">Tu Carrito</h2>
+            <h2 className="text-3xl font-black">{restaurantMode ? 'Tu Pedido' : 'Tu Carrito'}</h2>
           </div>
           <p className="text-blue-100 text-lg font-semibold">{itemCount} {itemCount === 1 ? 'articulo' : 'articulos'}</p>
           {(selectedCustomer || redeemedCoupon) && (
@@ -958,14 +981,17 @@ const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
           ) : (
             <div className="flex flex-col gap-3">
               {cart.map(item => (
-                <div key={item.id} className="rounded-2xl border border-slate-200 p-4 bg-white shadow-sm">
+                <div key={item.cartId || item.id} className="rounded-2xl border border-slate-200 p-4 bg-white shadow-sm">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <h4 className="font-black text-slate-800 text-lg leading-tight line-clamp-2">{item.name}</h4>
                       <p className="text-sm text-slate-500 mt-1">{formatMoney(item.originalPrice || item.price)} x {item.quantity}</p>
+                      {restaurantMode && item.modifiers?.length ? (
+                        <p className="mt-1 text-xs font-semibold text-slate-400">{item.modifiers.join(' · ')}</p>
+                      ) : null}
                     </div>
                     <button
-                      onClick={() => onRemoveFromCart(item.id)}
+                      onClick={() => onRemoveFromCart(item.cartId || item.id)}
                       className="w-10 h-10 rounded-xl bg-slate-100 hover:bg-red-100 text-slate-500 hover:text-red-600 flex items-center justify-center transition-colors"
                       title="Eliminar"
                     >
@@ -1022,11 +1048,17 @@ const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
             PAGAR AHORA
           </button>
 
+          {checkoutError && (
+            <p role="alert" className="rounded-xl bg-red-50 px-4 py-3 text-center text-sm font-black text-red-700">
+              {checkoutError}
+            </p>
+          )}
+
           <button
             onClick={handleCancelPurchase}
             className="w-full min-h-[62px] bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-2xl font-black text-lg transition-colors"
           >
-            Cancelar compra
+            {restaurantMode ? 'Cancelar pedido' : 'Cancelar compra'}
           </button>
         </div>
       </aside>
@@ -1110,7 +1142,28 @@ const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
         config={config}
       />
 
-      <SecurityOverlay
+      {restaurantMode && modifierProduct && (
+        <ModifierModal
+          product={modifierProduct}
+          currencySymbol={moneySymbol}
+          themeColor="orange"
+          onClose={() => setModifierProduct(null)}
+          onConfirm={(modifiers, finalPrice, note, restaurantConfig) => {
+            onAddToCart({
+              ...modifierProduct,
+              price: finalPrice,
+              modifiers,
+              note,
+              restaurantConfig: restaurantConfig as CartItem['restaurantConfig'],
+              production_area_id: String(restaurantConfig?.production_area_id || modifierProduct.production_area_id || '').trim() || undefined,
+            } as Product & Partial<CartItem>);
+            triggerAddFeedback(modifierProduct.name, modifierProduct.id);
+            setModifierProduct(null);
+          }}
+        />
+      )}
+
+      {!restaurantMode && <SecurityOverlay
         isOpen={isLocked}
         lockReason={lockReason}
         lockMessage={lockMessage}
@@ -1133,7 +1186,7 @@ const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
           clearSecurityState();
           onCancel();
         }}
-      />
+      />}
     </div>
   );
 };

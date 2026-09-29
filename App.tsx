@@ -75,7 +75,8 @@ import {
   PaymentMethodDefinition,
   FiscalDocumentCorrectionInput,
   TerminalConfig,
-  TaxDefinition
+  TaxDefinition,
+  OrderServiceType
 } from './types';
 import {
   DEFAULT_ROLES,
@@ -125,7 +126,19 @@ import { buildCloseTaxSummary } from './utils/closeReceiptSummary';
 import { buildZReportPaymentMethodSummary } from './utils/zReportPaymentSummary';
 import { applyPromotions, hasProductPromotion } from './utils/promotionEngine';
 import { calculateTransactionTaxSummary } from './utils/taxSummary';
-import { calculateTransactionFiscalSummary } from './utils/fiscalBreakdown';
+import { calculateTransactionFiscalSummary, freezeAuthoritativeLineFiscalAmounts } from './utils/fiscalBreakdown';
+import { resolveAppliedServiceTaxPolicy } from './utils/serviceTaxPolicy';
+import { shouldApplyRestaurantServiceCharge } from './utils/orderServiceType';
+import { isRestaurantBusiness } from './utils/businessVertical';
+import { resolveRestaurantProductConfig } from './utils/restaurantProductConfig';
+import { resolveKdsBaseUrl } from './utils/kdsRouting';
+import { resolveProductionOutputTargets } from './utils/productionOutputMode';
+import {
+  buildProductionDispatchItems,
+  createProductionDispatchIntent,
+  dispatchProductionOrder,
+  retryPendingProductionOrders,
+} from './services/restaurant/ProductionOrderDispatcher';
 import { extractTerminalOperationalDocumentState } from './utils/terminalConfigSnapshot';
 import { mergeDocumentSeriesCollection, resolveDocumentAssignmentId } from './utils/documentSeriesIdentity';
 import { requireErpZSequenceAuthority, resolveZSequenceContinuity } from './services/zreports/ZReportSequenceContinuity';
@@ -1848,7 +1861,8 @@ const buildKioskPaymentTotals = (
   cart: CartItem[],
   config: BusinessConfig,
   terminalConfig?: BusinessConfig['terminals'][number]['config'],
-  discountAmount = 0
+  discountAmount = 0,
+  serviceType?: Extract<OrderServiceType, 'DINE_IN' | 'TAKEOUT'> | null,
 ) => {
   const activeTariff = resolveKioskActiveTariff(config, terminalConfig);
   const isTaxIncluded = activeTariff?.taxIncluded ?? true;
@@ -1864,6 +1878,9 @@ const buildKioskPaymentTotals = (
     return sum + Math.abs(price * quantity);
   }, 0));
   const safeDiscountAmount = roundMoney(Math.min(Math.max(0, discountAmount), grossLineTotal));
+  const serviceTaxPolicySnapshot = serviceType
+    ? resolveAppliedServiceTaxPolicy(config, terminalConfig, serviceType)
+    : undefined;
   const summary = calculateTransactionFiscalSummary(
     {
       items: cart,
@@ -1871,20 +1888,38 @@ const buildKioskPaymentTotals = (
       discountAmount: safeDiscountAmount,
       isTaxIncluded,
       taxAmount: defaultTaxRate > 0 ? 1 : 0,
+      serviceTaxPolicySnapshot,
     } as Transaction,
     config,
-    { terminalConfig }
+    { terminalConfig, allowedTaxIds: serviceTaxPolicySnapshot?.taxIds }
   );
+  const shouldApplyServiceCharge = Boolean(serviceType) && shouldApplyRestaurantServiceCharge({
+    isRestaurantMode: true,
+    serviceType: serviceType!,
+    serviceCharge: config.tipsConfig?.serviceCharge,
+    grossAfterDiscount: summary.total,
+    guests: 1,
+    legalTipPolicy: serviceTaxPolicySnapshot?.legalTip,
+  });
+  const serviceChargeRate = shouldApplyServiceCharge
+    ? Math.max(0, Number(serviceTaxPolicySnapshot?.legalTip?.percentage ?? config.tipsConfig?.serviceCharge?.percentage) || 0)
+    : 0;
+  const serviceChargeAmount = roundMoney(summary.subtotal * (serviceChargeRate / 100));
+  const total = roundMoney(summary.total + serviceChargeAmount);
 
   return {
     subtotal: summary.subtotal,
     tax: summary.taxTotal,
-    total: summary.total,
+    total,
     subtotalBeforeDiscounts,
     discountAmount: safeDiscountAmount,
     totalSavings: roundMoney(Math.max(0, subtotalBeforeDiscounts - summary.total)),
     taxIncluded: isTaxIncluded,
     taxLabel: `ITBIS${isTaxIncluded ? ' incluido' : ''} (${roundMoney(defaultTaxRate * 100)}%)`,
+    serviceChargeAmount,
+    serviceChargeLabel: serviceChargeAmount > 0 ? `Propina legal (${roundMoney(serviceChargeRate)}%)` : undefined,
+    serviceTaxPolicySnapshot,
+    taxBreakdown: summary.taxBreakdown,
   };
 };
 
@@ -4968,6 +5003,25 @@ const AppContent: React.FC = () => {
 
   const [kioskRedeemedCoupon, setKioskRedeemedCoupon] = useState<RedeemedCouponRef | null>(null);
   const [kioskCouponBenefit, setKioskCouponBenefit] = useState<KioskCouponBenefit | null>(null);
+  const [kioskServiceType, setKioskServiceType] = useState<Extract<OrderServiceType, 'DINE_IN' | 'TAKEOUT'> | null>(null);
+  const [kioskOrderNumber, setKioskOrderNumber] = useState<string | null>(null);
+  useEffect(() => {
+    const retryProductionOrders = () => {
+      if (getCurrentDeviceRoleRaw() !== DeviceRole.SELF_CHECKOUT) return;
+      void retryPendingProductionOrders().catch((error) => {
+        console.warn('[PRODUCTION] No se pudieron reintentar las comandas pendientes:', error);
+      });
+    };
+    retryProductionOrders();
+    const interval = window.setInterval(retryProductionOrders, 10000);
+    window.addEventListener('online', retryProductionOrders);
+    window.addEventListener('focus', retryProductionOrders);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener('online', retryProductionOrders);
+      window.removeEventListener('focus', retryProductionOrders);
+    };
+  }, [getCurrentDeviceRoleRaw]);
   useEffect(() => {
     setPosSaleActivity({ active: cart.length > 0, cartCount: cart.length });
     return () => setPosSaleActivity({ active: false, cartCount: 0 });
@@ -13349,12 +13403,23 @@ const AppContent: React.FC = () => {
 
       // Kiosk / Self-Checkout Views
       case 'KIOSK_WELCOME':
+        const kioskWelcomeTerminal = getCurrentTerminal();
+        const kioskWelcomeRestaurantMode = isRestaurantBusiness(config, kioskWelcomeTerminal?.config);
         return (
           <KioskWelcome
             onStartShopping={() => {
               clearSecurityState();
               setSelectedCustomer(null);
               clearKioskCoupon();
+              handleViewChange('KIOSK_BROWSER');
+            }}
+            restaurantMode={kioskWelcomeRestaurantMode}
+            onSelectServiceType={(serviceType) => {
+              clearSecurityState();
+              setSelectedCustomer(null);
+              clearKioskCoupon();
+              setKioskServiceType(serviceType);
+              setKioskOrderNumber(`K-${Date.now().toString(36).toUpperCase()}`);
               handleViewChange('KIOSK_BROWSER');
             }}
             storeName={config.companyInfo?.name}
@@ -13374,27 +13439,32 @@ const AppContent: React.FC = () => {
         );
 
       case 'KIOSK_BROWSER':
+        const kioskBrowserTerminal = getCurrentTerminal();
+        const kioskBrowserRestaurantMode = isRestaurantBusiness(config, kioskBrowserTerminal?.config);
         return (
           <KioskProductBrowser
             products={products}
             warehouses={warehouses}
             cart={cart}
             onAddToCart={(product, quantity = 1) => {
-              const existing = cart.find(item => item.id === product.id);
+              const sourceCartId = String((product as Partial<CartItem>).cartId || '').trim();
+              const existing = sourceCartId
+                ? cart.find(item => item.cartId === sourceCartId)
+                : kioskBrowserRestaurantMode ? undefined : cart.find(item => item.id === product.id);
               let newCart;
               if (existing) {
                 newCart = cart.map(item =>
-                  item.id === product.id
+                  (existing.cartId ? item.cartId === existing.cartId : item.id === existing.id)
                     ? { ...item, quantity: item.quantity + quantity }
                     : item
                 );
               } else {
-                newCart = [...cart, { ...product, quantity }];
+                newCart = [...cart, { ...product, quantity, cartId: sourceCartId || uuidv4() } as CartItem];
               }
-              setCart(applyKioskCartPromotions(newCart));
+              setCart(applyKioskCartPromotions(newCart.filter(item => item.quantity > 0)));
             }}
-            onRemoveFromCart={(productId) => {
-              const newCart = cart.filter(item => item.id !== productId);
+            onRemoveFromCart={(cartIdentity) => {
+              const newCart = cart.filter(item => (item.cartId || item.id) !== cartIdentity);
               setCart(applyKioskCartPromotions(newCart));
             }}
             onCheckout={() => handleViewChange('KIOSK_PAYMENT')}
@@ -13404,6 +13474,8 @@ const AppContent: React.FC = () => {
               setCart([]);
               setSelectedCustomer(null);
               clearKioskCoupon();
+              setKioskServiceType(null);
+              setKioskOrderNumber(null);
               handleViewChange('KIOSK_WELCOME');
             }}
             config={config}
@@ -13411,6 +13483,8 @@ const AppContent: React.FC = () => {
             customerConfidenceIndex={selectedCustomer ? 1 : 0.75}
             selectedCustomer={selectedCustomer}
             redeemedCoupon={kioskRedeemedCoupon}
+            restaurantMode={kioskBrowserRestaurantMode}
+            serviceType={kioskServiceType}
           />
         );
 
@@ -13448,7 +13522,14 @@ const AppContent: React.FC = () => {
         }, 0));
         const kioskCouponDiscountAmount = getKioskCouponDiscountAmount(kioskCartGrossTotal);
         const kioskPaymentMethods = resolveKioskPaymentMethods(config, selectedCustomer);
-        const kioskTotals = buildKioskPaymentTotals(cart, config, kioskActiveConfig, kioskCouponDiscountAmount);
+        const kioskPaymentRestaurantMode = isRestaurantBusiness(config, kioskActiveConfig);
+        const kioskTotals = buildKioskPaymentTotals(
+          cart,
+          config,
+          kioskActiveConfig,
+          kioskCouponDiscountAmount,
+          kioskPaymentRestaurantMode ? kioskServiceType : null,
+        );
         return (
           <KioskPayment
             cart={cart}
@@ -13475,6 +13556,27 @@ const AppContent: React.FC = () => {
               if (!currentTerminal || !activeConfig) {
                 console.error("Missing terminal config for kiosk transaction");
                 throw new Error('Esta terminal no tiene configuración activa para completar el pago.');
+              }
+              if (kioskPaymentRestaurantMode && !kioskServiceType) {
+                throw new Error('Selecciona si el pedido es para comer aquí o para llevar.');
+              }
+              if (kioskPaymentRestaurantMode) {
+                const unrouted = cart.find(item => !resolveRestaurantProductConfig(item).production_area_id);
+                if (unrouted) throw new Error(`${unrouted.name} no tiene centro de producción configurado.`);
+              }
+              const kioskProductionAreas = kioskPaymentRestaurantMode
+                ? await db.get('productionAreas' as any).catch(() => []) as any
+                : [];
+              if (kioskPaymentRestaurantMode) {
+                const availableAreaIds = new Set(
+                  (Array.isArray(kioskProductionAreas) ? kioskProductionAreas : [])
+                    .map((area: any) => String(area?.id || '').trim())
+                    .filter(Boolean),
+                );
+                const unavailableRoute = cart.find(item => !availableAreaIds.has(
+                  String(resolveRestaurantProductConfig(item).production_area_id || '').trim(),
+                ));
+                if (unavailableRoute) throw new Error(`${unavailableRoute.name} no tiene un centro de producción disponible.`);
               }
 
               // Calculate totals
@@ -13569,12 +13671,21 @@ const AppContent: React.FC = () => {
                   };
                 }
 
+                const kioskTransactionItems = freezeAuthoritativeLineFiscalAmounts(cart, config, {
+                  isTaxIncluded: kioskTotals.taxIncluded,
+                  terminalConfig: activeConfig,
+                  transactionNetAmount: kioskTotals.subtotal,
+                  transactionTaxAmount: kioskTotals.tax,
+                  transactionTotal: roundMoney(kioskTotals.total - kioskTotals.serviceChargeAmount),
+                  allowedTaxIds: kioskTotals.serviceTaxPolicySnapshot?.taxIds,
+                });
+
                 // Create Transaction
                 const txn = await transactionService.createTransaction({
                   documentType: 'TICKET',
                   seriesId: seriesId,
                   date: new Date().toISOString(),
-                  items: cart,
+                  items: kioskTransactionItems,
                   total: total,
                   payments: [{
                     id: `PAY-${Date.now()}`,
@@ -13603,6 +13714,7 @@ const AppContent: React.FC = () => {
                   } : undefined,
                   taxAmount: tax,
                   netAmount: subtotal,
+                  taxBreakdown: kioskTotals.taxBreakdown,
                   discountAmount: kioskTotals.discountAmount,
                   isTaxIncluded: kioskTotals.taxIncluded,
                   couponCode: kioskRedeemedCoupon?.code,
@@ -13612,6 +13724,12 @@ const AppContent: React.FC = () => {
                     campaignId: kioskRedeemedCoupon.campaignId,
                   }] : undefined,
                   walletPaymentAmount: isWalletPayment ? total : undefined,
+                  serviceType: kioskPaymentRestaurantMode ? kioskServiceType || undefined : undefined,
+                  service_type: kioskPaymentRestaurantMode ? kioskServiceType || undefined : undefined,
+                  serviceTaxPolicySnapshot: kioskPaymentRestaurantMode ? kioskTotals.serviceTaxPolicySnapshot : undefined,
+                  service_tax_policy_snapshot: kioskPaymentRestaurantMode ? kioskTotals.serviceTaxPolicySnapshot : undefined,
+                  serviceChargeAmount: kioskPaymentRestaurantMode ? kioskTotals.serviceChargeAmount : undefined,
+                  orderNumber: kioskPaymentRestaurantMode ? kioskOrderNumber || undefined : undefined,
                 });
 
                 if (kioskRedeemedCoupon) {
@@ -13658,6 +13776,59 @@ const AppContent: React.FC = () => {
 
                 // Save and Sync
                 await handleTransactionComplete(txn);
+                if (kioskPaymentRestaurantMode) {
+                  const productionAreas = Array.isArray(kioskProductionAreas) ? kioskProductionAreas : [];
+                  const areaById = new Map(productionAreas.map((area: any) => [String(area.id), area]));
+                  const grouped = new Map<string, CartItem[]>();
+                  for (const item of txn.items || []) {
+                    const areaId = String(resolveRestaurantProductConfig(item).production_area_id || '').trim();
+                    if (!areaId || !areaById.has(areaId)) {
+                      throw new Error(`${item.name} no tiene un centro de producción disponible.`);
+                    }
+                    grouped.set(areaId, [...(grouped.get(areaId) || []), item]);
+                  }
+
+                  for (const [areaId, areaItems] of grouped) {
+                    const area: any = areaById.get(areaId);
+                    const { shouldSendKds } = resolveProductionOutputTargets(area?.modo_salida);
+                    if (!shouldSendKds) continue;
+                    const warningMinutes = Math.max(1, Number(area?.kds_warning_minutes) || 10);
+                    const criticalMinutes = Math.max(warningMinutes + 1, Number(area?.kds_critical_minutes) || 20);
+                    const payload = {
+                      orderId: txn.id,
+                      displayId: txn.displayId || txn.id,
+                      orderNumber: txn.orderNumber,
+                      date: txn.date,
+                      terminalId: currentTerminal.id,
+                      sourceTerminal: {
+                        id: currentTerminal.id,
+                        code: activeConfig.stationNumber || activeConfig.erpBinding?.stationNumber || currentTerminal.id,
+                        name: activeConfig.terminalName || activeConfig.erpBinding?.terminalName || currentTerminal.name,
+                      },
+                      userName: kioskOperator.name,
+                      customerName: txn.customerName || 'Cliente General',
+                      serviceType: kioskServiceType || undefined,
+                      table: null,
+                      area: {
+                        id: areaId,
+                        name: area.nombre || area.name || areaId,
+                        targetTerminalId: area.target_terminal_id || null,
+                        targetTerminalName: area.target_terminal_name || area.nombre || area.name || areaId,
+                        warningMinutes,
+                        criticalMinutes,
+                      },
+                      kdsTiming: { warningMinutes, criticalMinutes },
+                      items: buildProductionDispatchItems(areaItems, areaId),
+                      total: roundMoney(areaItems.reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0), 0)),
+                    };
+                    const intent = createProductionDispatchIntent({
+                      kdsBaseUrl: resolveKdsBaseUrl(area, config),
+                      cartIds: areaItems.map(item => item.cartId),
+                      payload,
+                    });
+                    await dispatchProductionOrder(intent);
+                  }
+                }
                 return txn;
               } catch (error) {
                 console.error("Error creating kiosk transaction:", error);
@@ -13681,6 +13852,8 @@ const AppContent: React.FC = () => {
               setCart([]);
               setSelectedCustomer(null);
               clearKioskCoupon();
+              setKioskServiceType(null);
+              setKioskOrderNumber(null);
               handleViewChange('KIOSK_WELCOME');
             }}
           />
@@ -13863,6 +14036,8 @@ const AppContent: React.FC = () => {
                 setCart([]);
                 setSelectedCustomer(null);
                 clearKioskCoupon();
+                setKioskServiceType(null);
+                setKioskOrderNumber(null);
                 setCurrentView('KIOSK_WELCOME');
               }
             }}
