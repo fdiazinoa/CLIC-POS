@@ -222,8 +222,9 @@ const buildLocalBoundConfig = (input: {
   selectedTerminalId: string;
   posDeviceId: string;
   bindingMode: 'MASTER' | 'SLAVE';
+  masterTerminalId?: string;
 }) => {
-  const { currentConfig, selectedTerminalId, posDeviceId, bindingMode } = input;
+  const { currentConfig, selectedTerminalId, posDeviceId, bindingMode, masterTerminalId } = input;
   const now = new Date().toISOString();
 
   return {
@@ -248,6 +249,10 @@ const buildLocalBoundConfig = (input: {
       nextConfig.lastPairingDate = terminalId === selectedTerminalId ? now : nextConfig.lastPairingDate;
       nextConfig.isPrimaryNode = terminalId === selectedTerminalId ? bindingMode === 'MASTER' : Boolean(nextConfig.isPrimaryNode);
       nextConfig.governedByMaster = terminalId === selectedTerminalId ? bindingMode === 'SLAVE' : Boolean(nextConfig.governedByMaster);
+      if (terminalId === selectedTerminalId && bindingMode === 'SLAVE' && masterTerminalId) {
+        nextConfig.masterTerminalId = masterTerminalId;
+        nextConfig.master_terminal_id = masterTerminalId;
+      }
       nextConfig.syncConfig = {
         ...asObject(nextConfig.syncConfig),
         mode: terminalId === selectedTerminalId ? bindingMode : asString(nextConfig?.syncConfig?.mode) || 'MASTER',
@@ -314,6 +319,16 @@ const resolveLocalBinding = (input: {
     selectedTerminalId,
     posDeviceId,
     bindingMode,
+    masterTerminalId: (() => {
+      const activeTerminalId = asString(getSetting('active_terminal_id'));
+      const master = terminals.find((terminal: any) => {
+        const terminalConfig = asObject(terminal?.config);
+        const references = [terminal?.id, terminalConfig.erpTerminalId, asObject(terminalConfig.erpBinding).terminalId].map(asString);
+        return (activeTerminalId && references.includes(activeTerminalId))
+          || (terminalConfig.isPrimaryNode === true && terminalConfig.governedByMaster !== true);
+      });
+      return asString(master?.config?.erpTerminalId || asObject(master?.config?.erpBinding).terminalId || master?.id);
+    })(),
   });
 
   saveSetting('config', nextConfig);
@@ -328,6 +343,7 @@ const resolveLocalBinding = (input: {
       source: 'LOCAL',
       transferred: Boolean(occupiedDeviceId && occupiedDeviceId !== posDeviceId),
       current_device_id: posDeviceId,
+      master_terminal_id: asString(nextConfig?.terminals?.find((terminal: any) => asString(terminal?.id) === selectedTerminalId)?.config?.masterTerminalId) || null,
       previous_device_id: occupiedDeviceId && occupiedDeviceId !== posDeviceId ? occupiedDeviceId : null,
       config: nextConfig,
       users,

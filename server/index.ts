@@ -635,6 +635,30 @@ server.get('/api/:collection', (req, res) => {
         data = getCollection(dbName);
     }
     try {
+        if (collection === 'config' && data && !Array.isArray(data)) {
+            const activeTerminalId = String(getSetting('active_terminal_id') || '').trim();
+            const terminals = Array.isArray(data.terminals) ? data.terminals : [];
+            const servingTerminal = terminals.find((terminal: any) => {
+                const refs = [terminal?.id, terminal?.config?.erpTerminalId, terminal?.config?.erpBinding?.terminalId]
+                    .map((value: unknown) => String(value || '').trim());
+                return activeTerminalId && refs.includes(activeTerminalId);
+            });
+            const runtimeTerminalId = String(
+                servingTerminal?.config?.erpTerminalId
+                || servingTerminal?.config?.erpBinding?.terminalId
+                || servingTerminal?.id
+                || data.runtimeTerminalId
+                || ''
+            ).trim();
+            data = {
+                ...data,
+                ...(runtimeTerminalId ? { runtimeTerminalId } : {}),
+                masterSetupContext: {
+                    ...(data.masterSetupContext || {}),
+                    ...(servingTerminal?.config?.erpBinding || {}),
+                },
+            };
+        }
         const { result, totalCount } = processQuery(data, req.query);
 
         if (Array.isArray(data)) {

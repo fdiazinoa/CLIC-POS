@@ -612,6 +612,8 @@ object ClicPOSMasterHttpServer {
                 .put("lastPairingDate", java.time.Instant.now().toString())
                 .put("isPrimaryNode", false)
                 .put("governedByMaster", true)
+                .put("masterTerminalId", setupSnapshot.optString("runtimeTerminalId"))
+                .put("master_terminal_id", setupSnapshot.optString("runtimeTerminalId"))
             val syncConfig = config.optJSONObject("syncConfig") ?: JSONObject()
             syncConfig.put("mode", "SLAVE").put("isEnabled", true)
             config.put("syncConfig", syncConfig)
@@ -664,7 +666,8 @@ object ClicPOSMasterHttpServer {
             boundTerminal.optString("masterTerminalId"),
             boundTerminal.optString("master_terminal_id"),
             terminalConfig.optString("masterTerminalId"),
-            terminalConfig.optString("master_terminal_id")
+            terminalConfig.optString("master_terminal_id"),
+            setupSnapshot.optString("runtimeTerminalId")
         )
 
         val response = JSONObject()
@@ -674,6 +677,7 @@ object ClicPOSMasterHttpServer {
             .put("terminal_id", terminalId)
             .put("erp_terminal_id", erpTerminalId)
             .put("terminal_name", terminalName)
+            .put("current_device_id", deviceId)
             .put("terminal_type", terminalType)
             .put("master_terminal_id", if (masterTerminalId.isBlank()) JSONObject.NULL else masterTerminalId)
             .put("capabilities", terminalConfig.optJSONArray("capabilities") ?: JSONArray())
