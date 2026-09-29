@@ -1,4 +1,4 @@
-import type { BusinessConfig, MediaAsset, Product, Promotion } from '../types';
+import type { BusinessConfig, Customer, MediaAsset, Product, Promotion } from '../types';
 import { isValidRemoteMediaUrl, normalizeMediaAsset } from './media';
 
 export type PromotionCreative = {
@@ -74,16 +74,37 @@ export const mergePromotionCollection = (
     .map((promotion) => mergePromotionMediaContract(existingById.get(String(promotion.id || '')), promotion));
 };
 
-const DAY_KEYS = ['D', 'L', 'M', 'X', 'J', 'V', 'S'];
+const RESTAURANT_TIME_ZONE = 'America/Santo_Domingo';
+const DAY_KEYS: Record<string, string> = { Sun: 'D', Mon: 'L', Tue: 'M', Wed: 'X', Thu: 'J', Fri: 'V', Sat: 'S' };
+
+const restaurantCalendarParts = (now: Date) => {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: RESTAURANT_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    weekday: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(now).reduce<Record<string, string>>((result, part) => {
+    if (part.type !== 'literal') result[part.type] = part.value;
+    return result;
+  }, {});
+  return {
+    date: `${parts.year}-${parts.month}-${parts.day}`,
+    day: DAY_KEYS[parts.weekday],
+    time: `${parts.hour}:${parts.minute}`,
+  };
+};
 
 const promotionIsActiveAt = (promotion: Promotion, now: Date): boolean => {
   const schedule = promotion.schedule;
   if (!schedule || schedule.isActive === false) return false;
-  const date = now.toISOString().slice(0, 10);
+  const { date, day, time } = restaurantCalendarParts(now);
   if (schedule.startDate && date < schedule.startDate) return false;
   if (schedule.endDate && date > schedule.endDate) return false;
-  if (schedule.days?.length && !schedule.days.includes(DAY_KEYS[now.getDay()])) return false;
-  const time = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+  if (schedule.days?.length && !schedule.days.includes(day)) return false;
   if (schedule.startTime && schedule.endTime && schedule.startTime > schedule.endTime) {
     if (time < schedule.startTime && time > schedule.endTime) return false;
   } else {
@@ -92,6 +113,14 @@ const promotionIsActiveAt = (promotion: Promotion, now: Date): boolean => {
   }
   return true;
 };
+
+const promotionConditionsMatch = (promotion: Promotion, customer?: Customer | null): boolean =>
+  (promotion.conditions || []).every((condition) => {
+    if (condition.type === 'HAS_WALLET') return Boolean(customer?.wallet && customer.wallet.status === 'ACTIVE');
+    if (condition.type === 'CUSTOMER_TIER') return Boolean(customer && customer.tier === condition.value);
+    if (condition.type === 'HAS_POINTS_MIN') return Boolean(customer && Number(customer.loyaltyPoints || 0) >= Number(condition.value || 0));
+    return false;
+  });
 
 const token = (value: unknown): string => String(value || '').trim().toLowerCase();
 const referenceTokens = (value: unknown): string[] => {
@@ -171,11 +200,13 @@ export const resolveRestaurantPromotionCreative = (
   config: BusinessConfig,
   terminalId: string | undefined,
   now = new Date(),
+  customer?: Customer | null,
 ): PromotionCreative | null => {
-  const candidates: Array<PromotionCreative & { stableIndex: number }> = [];
+  const candidates: Array<PromotionCreative & { stableIndex: number; priority: number }> = [];
   let stableIndex = 0;
   for (const promotion of promotions || []) {
     if (!promotionIsActiveAt(promotion, now)) continue;
+    if (!promotionConditionsMatch(promotion, customer)) continue;
     if (!promotionMatchesTerminal(promotion, config, terminalId)) continue;
     const matchedProducts = promotionProducts(promotion, products, config);
     if (matchedProducts.length === 0) continue;
@@ -192,14 +223,16 @@ export const resolveRestaurantPromotionCreative = (
         productIds: matchedProducts.map((product) => product.id),
         productNames: matchedProducts.map((product) => product.name),
         stableIndex: index,
+        priority: Number(promotion.priority || 0),
       });
     }
   }
   candidates.sort((left, right) =>
-    Number(left.media.sortOrder || 0) - Number(right.media.sortOrder || 0)
+    right.priority - left.priority
+    || Number(left.media.sortOrder || 0) - Number(right.media.sortOrder || 0)
     || left.stableIndex - right.stableIndex);
   const selected = candidates[0];
   if (!selected) return null;
-  const { stableIndex: _stableIndex, ...creative } = selected;
+  const { stableIndex: _stableIndex, priority: _priority, ...creative } = selected;
   return creative;
 };

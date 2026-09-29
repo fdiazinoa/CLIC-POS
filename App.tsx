@@ -13505,7 +13505,7 @@ const AppContent: React.FC = () => {
         const kioskBrowserTerminal = getCurrentTerminal();
         const kioskBrowserRestaurantMode = isRestaurantBusiness(config, kioskBrowserTerminal?.config);
         const kioskBrowserPromotionCreative = kioskBrowserRestaurantMode
-          ? resolveRestaurantPromotionCreative(config.promotions, products, config, kioskBrowserTerminal?.id)
+          ? resolveRestaurantPromotionCreative(config.promotions, products, config, kioskBrowserTerminal?.id, new Date(), selectedCustomer)
           : null;
         return (
           <KioskProductBrowser

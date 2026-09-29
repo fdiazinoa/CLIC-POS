@@ -34,6 +34,51 @@ test('selects only active applicable commercial promotion images with stable sor
   assert.deepEqual(selected?.productIds, ['p1']);
 });
 
+test('conditioned promotion is hidden without customer and selected with an eligible customer', () => {
+  const conditioned = promotion({
+    conditions: [{ type: 'CUSTOMER_TIER', value: 'GOLD' }],
+    priority: 50,
+  });
+  const now = new Date('2026-09-29T16:00:00.000Z');
+  assert.equal(resolveRestaurantPromotionCreative([conditioned], [product], config, 'T1', now), null);
+  const selected = resolveRestaurantPromotionCreative(
+    [conditioned], [product], config, 'T1', now, { id: 'c1', name: 'Ana', tier: 'GOLD' } as any,
+  );
+  assert.equal(selected?.promotionId, 'promo-1');
+});
+
+test('promotion priority wins before media sortOrder with stable ties', () => {
+  const low = promotion({
+    id: 'low',
+    priority: 1,
+    media: [{ id: 'low-image', type: 'IMAGE', url: 'https://cdn.example/low.jpg', sortOrder: 0 }],
+  });
+  const high = promotion({
+    id: 'high',
+    priority: 20,
+    media: [{ id: 'high-image', type: 'IMAGE', url: 'https://cdn.example/high.jpg', sortOrder: 99 }],
+  });
+  const selected = resolveRestaurantPromotionCreative([low, high], [product], config, 'T1', new Date('2026-09-29T16:00:00.000Z'));
+  assert.equal(selected?.promotionId, 'high');
+});
+
+test('date, weekday and 21:00 schedule use the Santo Domingo local calendar consistently', () => {
+  const night = promotion({
+    id: 'night',
+    schedule: {
+      days: ['M'],
+      startDate: '2026-09-29',
+      endDate: '2026-09-29',
+      startTime: '20:00',
+      endTime: '22:00',
+      isActive: true,
+    },
+  });
+  // 01:00 UTC on Sep 30 is 21:00 on Sep 29 in Santo Domingo.
+  const selected = resolveRestaurantPromotionCreative([night], [product], config, 'T1', new Date('2026-09-30T01:00:00.000Z'));
+  assert.equal(selected?.promotionId, 'night');
+});
+
 test('promotion media merge preserves omitted media and treats empty media as authoritative', () => {
   const existing = [promotion()];
   const { media: _media, ...withoutMedia } = promotion();
