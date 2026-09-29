@@ -2,11 +2,15 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
+  applyProductionPrintReconciliation,
   buildProductionDispatchRequests,
+  calculateProductionNextRetryAt,
+  createSerializedCollectionMutator,
   createProductionDispatchIntent,
   createProductionPrintIntent,
   dispatchProductionOrder,
   isProductionPrintAutoRetryEligible,
+  isProductionRetryDue,
   mergeProductionDispatchIntent,
   runProductionDispatchAttempt,
   runProductionPrintAttempt,
@@ -24,6 +28,27 @@ test('dispatcher intent is deterministic and starts pending before network deliv
   assert.equal(first.id, second.id);
   assert.equal(first.status, 'PENDING');
   assert.equal(first.kdsBaseUrl, 'http://kds:8001');
+});
+
+test('serialized queue mutations preserve concurrent enqueues', async () => {
+  const mutate = createSerializedCollectionMutator();
+  let rows: string[] = [];
+  const enqueue = (id: string) => mutate(async () => {
+    const snapshot = [...rows];
+    await new Promise((resolve) => setTimeout(resolve, 2));
+    rows = [...snapshot, id];
+  });
+  await Promise.all([enqueue('kds-a'), enqueue('kds-b')]);
+  assert.deepEqual(rows, ['kds-a', 'kds-b']);
+});
+
+test('web and native adapters register both production queues as durable collections', () => {
+  const indexedDb = readFileSync(new URL('../services/db/adapters/IndexedDBAdapter.ts', import.meta.url), 'utf8');
+  const sqlite = readFileSync(new URL('../services/db/adapters/CapacitorSQLiteAdapter.ts', import.meta.url), 'utf8');
+  for (const collection of ['kdsDispatchQueue', 'productionPrintQueue']) {
+    assert.match(indexedDb, new RegExp(`STRICT_DURABLE_COLLECTIONS[\\s\\S]*${collection}`));
+    assert.match(sqlite, new RegExp(`STRICT_DURABLE_COLLECTIONS[\\s\\S]*${collection}`));
+  }
 });
 
 test('dispatcher persists intent before issuing either KDS request and retry is payment-independent', () => {
@@ -122,6 +147,14 @@ test('retry merge retains the incremented attempt count', () => {
   assert.equal(mergeProductionDispatchIntent(existing, retried).attempts, 3);
 });
 
+test('durable retry metadata applies exponential backoff while the scheduler keeps polling', () => {
+  const now = Date.parse('2026-09-29T12:00:00.000Z');
+  assert.equal(calculateProductionNextRetryAt(1, now), '2026-09-29T12:00:05.000Z');
+  assert.equal(calculateProductionNextRetryAt(3, now), '2026-09-29T12:00:20.000Z');
+  assert.equal(isProductionRetryDue({ nextRetryAt: '2026-09-29T12:00:20.000Z' }, now + 19_999), false);
+  assert.equal(isProductionRetryDue({ nextRetryAt: '2026-09-29T12:00:20.000Z' }, now + 20_000), true);
+});
+
 test('printer-only production creates a durable print identity without enabling KDS', () => {
   assert.deepEqual(resolveProductionOutputTargets('PRINTER'), {
     mode: 'PRINTER', shouldPrint: true, shouldSendKds: false,
@@ -165,4 +198,22 @@ test('false acknowledgement with late paper output remains unknown and is never 
   }
   assert.equal(printCalls, 1);
   assert.equal(paperOutputs, 1);
+});
+
+test('ambiguous print requires explicit operator reconciliation before a retry', () => {
+  const unknown = {
+    ...createProductionPrintIntent({
+      orderId: 'TXN-2', areaId: 'bar', areaName: 'Bar', cartIds: ['c2'], items: [],
+    }),
+    status: 'OUTCOME_UNKNOWN' as const,
+  };
+  assert.equal(applyProductionPrintReconciliation(unknown, 'CONFIRMED_PRINTED'), null);
+  const retry = applyProductionPrintReconciliation(
+    unknown,
+    'CONFIRMED_NOT_PRINTED',
+    new Date('2026-09-29T12:00:00.000Z'),
+  );
+  assert.equal(retry?.status, 'PENDING');
+  assert.equal(retry?.nextRetryAt, '2026-09-29T12:00:00.000Z');
+  assert.equal(isProductionPrintAutoRetryEligible(unknown), false);
 });

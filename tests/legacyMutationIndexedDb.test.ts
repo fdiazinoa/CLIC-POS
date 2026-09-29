@@ -29,7 +29,12 @@ test('strict journal transaction failure rejects without creating a localStorage
     objectStore: () => ({ put: () => undefined }),
   };
   adapter.db = {
-    objectStoreNames: { contains: (name: string) => name === 'legacyMutationJournal' || name === 'legacyMutationCompletions' },
+    objectStoreNames: { contains: (name: string) => [
+      'legacyMutationJournal',
+      'legacyMutationCompletions',
+      'kdsDispatchQueue',
+      'productionPrintQueue',
+    ].includes(name) },
     transaction: () => {
       queueMicrotask(() => transaction.onerror?.());
       return transaction;
@@ -41,6 +46,23 @@ test('strict journal transaction failure rejects without creating a localStorage
     /synthetic transaction failure/,
   );
   assert.equal([...storage.keys()].some(key => key.includes('legacyMutationJournal')), false);
+});
+
+test('production queues survive restart in strict IndexedDB stores without fallback copies', async () => {
+  storage.clear();
+  await deleteDatabase();
+  const first = new IndexedDBAdapter();
+  await first.connect();
+  await first.saveDocument('kdsDispatchQueue', { id: 'kds-1', status: 'PENDING' });
+  await first.saveDocument('productionPrintQueue', { id: 'print-1', status: 'OUTCOME_UNKNOWN' });
+  await first.disconnect();
+
+  const restarted = new IndexedDBAdapter();
+  await restarted.connect();
+  assert.deepEqual((await restarted.getCollection<any>('kdsDispatchQueue')).map(row => row.id), ['kds-1']);
+  assert.deepEqual((await restarted.getCollection<any>('productionPrintQueue')).map(row => row.id), ['print-1']);
+  assert.equal([...storage.keys()].some(key => /(?:kdsDispatchQueue|productionPrintQueue)/.test(key)), false);
+  await restarted.disconnect();
 });
 
 test('strict journal rows survive an IndexedDB restart and ignore fallback copies', async () => {

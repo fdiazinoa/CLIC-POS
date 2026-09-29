@@ -139,8 +139,11 @@ import {
   createProductionDispatchIntent,
   dispatchProductionPrint,
   dispatchProductionOrder,
+  listAmbiguousProductionPrints,
+  resolveAmbiguousProductionPrint,
   retryPendingProductionPrints,
   retryPendingProductionOrders,
+  type ProductionPrintIntent,
 } from './services/restaurant/ProductionOrderDispatcher';
 import { extractTerminalOperationalDocumentState } from './utils/terminalConfigSnapshot';
 import { mergeDocumentSeriesCollection, resolveDocumentAssignmentId } from './utils/documentSeriesIdentity';
@@ -5012,6 +5015,12 @@ const AppContent: React.FC = () => {
   const [kioskCouponBenefit, setKioskCouponBenefit] = useState<KioskCouponBenefit | null>(null);
   const [kioskServiceType, setKioskServiceType] = useState<Extract<OrderServiceType, 'DINE_IN' | 'TAKEOUT'> | null>(null);
   const [kioskOrderNumber, setKioskOrderNumber] = useState<string | null>(null);
+  const [ambiguousProductionPrints, setAmbiguousProductionPrints] = useState<ProductionPrintIntent[]>([]);
+  const refreshAmbiguousProductionPrints = useCallback(() => {
+    void listAmbiguousProductionPrints()
+      .then(setAmbiguousProductionPrints)
+      .catch((error) => console.warn('[PRODUCTION] No se pudo leer la reconciliación de impresión:', error));
+  }, []);
   useEffect(() => {
     const retryProductionOrders = () => {
       if (getCurrentDeviceRoleRaw() !== DeviceRole.SELF_CHECKOUT) return;
@@ -5030,7 +5039,7 @@ const AppContent: React.FC = () => {
         printerId: intent.printerId,
       })).catch((error) => {
         console.warn('[PRODUCTION] No se pudieron reintentar las comandas impresas pendientes:', error);
-      });
+      }).finally(refreshAmbiguousProductionPrints);
     };
     retryProductionOrders();
     const interval = window.setInterval(retryProductionOrders, 10000);
@@ -5041,7 +5050,25 @@ const AppContent: React.FC = () => {
       window.removeEventListener('online', retryProductionOrders);
       window.removeEventListener('focus', retryProductionOrders);
     };
-  }, [config, getCurrentDeviceRoleRaw]);
+  }, [config, getCurrentDeviceRoleRaw, refreshAmbiguousProductionPrints]);
+
+  const reconcileAmbiguousProductionPrint = useCallback(async (
+    intent: ProductionPrintIntent,
+    resolution: 'CONFIRMED_PRINTED' | 'CONFIRMED_NOT_PRINTED',
+  ) => {
+    const reconciled = await resolveAmbiguousProductionPrint(intent.id, resolution);
+    if (resolution === 'CONFIRMED_NOT_PRINTED' && reconciled) {
+      await dispatchProductionPrint(reconciled, (printIntent) => printComanda(config, {
+        items: printIntent.items,
+        orderNumber: printIntent.orderNumber,
+        customerName: printIntent.customerName,
+        areaTitle: printIntent.areaName,
+        productionAreaId: printIntent.areaId,
+        printerId: printIntent.printerId,
+      }));
+    }
+    refreshAmbiguousProductionPrints();
+  }, [config, refreshAmbiguousProductionPrints]);
   useEffect(() => {
     setPosSaleActivity({ active: cart.length > 0, cartCount: cart.length });
     return () => setPosSaleActivity({ active: false, cartCount: 0 });
@@ -13832,6 +13859,7 @@ const AppContent: React.FC = () => {
                           productionAreaId: intent.areaId,
                           printerId: intent.printerId,
                         }));
+                        refreshAmbiguousProductionPrints();
                       }
                       if (!shouldSendKds) continue;
                       const warningMinutes = Math.max(1, Number(area?.kds_warning_minutes) || 10);
@@ -14335,6 +14363,39 @@ const AppContent: React.FC = () => {
                   </button>
                 </div>
               </div>
+            </div>
+          </div>
+        )}
+        {getCurrentDeviceRoleRaw() === DeviceRole.SELF_CHECKOUT && ambiguousProductionPrints.length > 0 && (
+          <div className="fixed inset-0 z-[100120] flex items-center justify-center bg-slate-950/80 p-6 backdrop-blur-sm">
+            <div className="w-full max-w-xl rounded-3xl bg-white p-6 shadow-2xl">
+              <p className="text-xs font-black uppercase tracking-[0.2em] text-amber-600">Verificación requerida</p>
+              <h2 className="mt-2 text-2xl font-black text-slate-950">Confirme la comanda impresa</h2>
+              <p className="mt-2 text-sm font-semibold leading-6 text-slate-600">
+                La impresora no confirmó el resultado. Revise físicamente el papel antes de elegir una acción para evitar duplicados.
+              </p>
+              {ambiguousProductionPrints.slice(0, 1).map((intent) => (
+                <div key={intent.id} className="mt-5 rounded-2xl border border-amber-200 bg-amber-50 p-4">
+                  <div className="font-black text-slate-900">{intent.areaName} · {intent.orderNumber || intent.orderId}</div>
+                  <div className="mt-1 text-xs font-semibold text-slate-600">{intent.items.length} línea(s) · intento {intent.attempts}</div>
+                  <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                    <button
+                      type="button"
+                      onClick={() => void reconcileAmbiguousProductionPrint(intent, 'CONFIRMED_PRINTED')}
+                      className="rounded-xl bg-emerald-600 px-4 py-3 text-sm font-black text-white"
+                    >
+                      Sí, se imprimió
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void reconcileAmbiguousProductionPrint(intent, 'CONFIRMED_NOT_PRINTED')}
+                      className="rounded-xl bg-slate-900 px-4 py-3 text-sm font-black text-white"
+                    >
+                      No imprimió: reintentar
+                    </button>
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
         )}

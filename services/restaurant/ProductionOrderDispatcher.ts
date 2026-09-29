@@ -42,6 +42,7 @@ export type ProductionDispatchIntent = {
   createdAt: string;
   updatedAt: string;
   lastError?: string;
+  nextRetryAt?: string;
   kdsBaseUrl?: string;
   orderId: string;
   areaId: string;
@@ -63,6 +64,7 @@ export type ProductionPrintIntent = {
   createdAt: string;
   updatedAt: string;
   lastError?: string;
+  nextRetryAt?: string;
   orderId: string;
   areaId: string;
   areaName: string;
@@ -75,6 +77,27 @@ export type ProductionPrintIntent = {
 
 const normalizedIdentityPart = (value: unknown): string =>
   encodeURIComponent(String(value ?? '').trim().toLowerCase());
+
+export const createSerializedCollectionMutator = () => {
+  let tail: Promise<unknown> = Promise.resolve();
+  return async <T>(mutation: () => Promise<T>): Promise<T> => {
+    const run = tail.then(mutation, mutation);
+    tail = run.then(() => undefined, () => undefined);
+    return run;
+  };
+};
+
+const mutateProductionQueues = createSerializedCollectionMutator();
+
+export const calculateProductionNextRetryAt = (
+  attempts: number,
+  nowMs = Date.now(),
+): string => new Date(nowMs + Math.min(5 * 60_000, 5_000 * (2 ** Math.min(6, Math.max(0, attempts - 1))))).toISOString();
+
+export const isProductionRetryDue = (
+  intent: Pick<ProductionDispatchIntent, 'nextRetryAt'>,
+  nowMs = Date.now(),
+): boolean => !intent.nextRetryAt || Date.parse(intent.nextRetryAt) <= nowMs;
 
 export const getProductionCartIdentity = (item: Pick<CartItem, 'id' | 'cartId'>): string =>
   String(item.cartId || item.id || '').trim();
@@ -127,19 +150,23 @@ export const mergeProductionDispatchIntent = (
 });
 
 const saveIntent = async (intent: ProductionDispatchIntent): Promise<void> => {
-  const queue = await readQueue();
-  const existing = queue.find((entry) => entry.id === intent.id);
-  const next = existing
-    ? queue.map((entry) => entry.id === intent.id
-      ? mergeProductionDispatchIntent(existing, intent)
-      : entry)
-    : [...queue, intent];
-  await db.save(QUEUE_COLLECTION, next);
+  await mutateProductionQueues(async () => {
+    const queue = await readQueue();
+    const existing = queue.find((entry) => entry.id === intent.id);
+    const next = existing
+      ? queue.map((entry) => entry.id === intent.id
+        ? mergeProductionDispatchIntent(existing, intent)
+        : entry)
+      : [...queue, intent];
+    await db.save(QUEUE_COLLECTION, next);
+  });
 };
 
 const removeIntent = async (intentId: string): Promise<void> => {
-  const queue = await readQueue();
-  await db.save(QUEUE_COLLECTION, queue.filter((entry) => entry.id !== intentId));
+  await mutateProductionQueues(async () => {
+    const queue = await readQueue();
+    await db.save(QUEUE_COLLECTION, queue.filter((entry) => entry.id !== intentId));
+  });
 };
 
 export const createProductionDispatchIntent = (input: {
@@ -300,7 +327,15 @@ export const dispatchProductionOrder = async (
   const request = dependencies?.request || requestIntentJson;
   await persist(intent);
   if (!intent.kdsBaseUrl) {
-    return { intent, status: 'PENDING', error: 'KDS_HOST_NOT_CONFIGURED' };
+    const pending = {
+      ...intent,
+      attempts: Number(intent.attempts || 0) + 1,
+      nextRetryAt: calculateProductionNextRetryAt(Number(intent.attempts || 0) + 1),
+      updatedAt: new Date().toISOString(),
+      lastError: 'KDS_HOST_NOT_CONFIGURED',
+    };
+    await persist(pending);
+    return { intent: pending, status: 'PENDING', error: pending.lastError };
   }
 
   try {
@@ -322,6 +357,7 @@ export const dispatchProductionOrder = async (
       ...attempted,
       status: 'PENDING',
       attempts: Number(attempted.attempts || 0) + 1,
+      nextRetryAt: calculateProductionNextRetryAt(Number(attempted.attempts || 0) + 1),
       lastError: message,
       updatedAt: new Date().toISOString(),
     };
@@ -336,9 +372,9 @@ export const retryPendingProductionOrders = async (
   if (retryInFlight) return [];
   retryInFlight = true;
   try {
-    const queue = await readQueue();
+    const queue = await mutateProductionQueues(readQueue);
     const results: ProductionDispatchResult[] = [];
-    for (const intent of queue) {
+    for (const intent of queue.filter((entry) => isProductionRetryDue(entry))) {
       results.push(await dispatchProductionOrder(intent, operations));
     }
     return results;
@@ -355,22 +391,26 @@ const readPrintQueue = async (): Promise<ProductionPrintIntent[]> => {
 };
 
 const savePrintIntent = async (intent: ProductionPrintIntent): Promise<void> => {
-  const queue = await readPrintQueue();
-  const existing = queue.find((entry) => entry.id === intent.id);
-  const nextIntent = existing ? {
-    ...existing,
-    ...intent,
-    createdAt: existing.createdAt,
-    attempts: Math.max(Number(existing.attempts || 0), Number(intent.attempts || 0)),
-  } : intent;
-  await db.save(PRINT_QUEUE_COLLECTION, existing
-    ? queue.map((entry) => entry.id === intent.id ? nextIntent : entry)
-    : [...queue, nextIntent]);
+  await mutateProductionQueues(async () => {
+    const queue = await readPrintQueue();
+    const existing = queue.find((entry) => entry.id === intent.id);
+    const nextIntent = existing ? {
+      ...existing,
+      ...intent,
+      createdAt: existing.createdAt,
+      attempts: Math.max(Number(existing.attempts || 0), Number(intent.attempts || 0)),
+    } : intent;
+    await db.save(PRINT_QUEUE_COLLECTION, existing
+      ? queue.map((entry) => entry.id === intent.id ? nextIntent : entry)
+      : [...queue, nextIntent]);
+  });
 };
 
 const removePrintIntent = async (intentId: string): Promise<void> => {
-  const queue = await readPrintQueue();
-  await db.save(PRINT_QUEUE_COLLECTION, queue.filter((entry) => entry.id !== intentId));
+  await mutateProductionQueues(async () => {
+    const queue = await readPrintQueue();
+    await db.save(PRINT_QUEUE_COLLECTION, queue.filter((entry) => entry.id !== intentId));
+  });
 };
 
 export const createProductionPrintIntent = (input: Omit<ProductionPrintIntent, 'id' | 'status' | 'attempts' | 'createdAt' | 'updatedAt'>): ProductionPrintIntent => {
@@ -388,7 +428,41 @@ export const createProductionPrintIntent = (input: Omit<ProductionPrintIntent, '
 };
 
 export const isProductionPrintAutoRetryEligible = (intent: ProductionPrintIntent): boolean =>
-  intent.status === 'PENDING';
+  intent.status === 'PENDING' && isProductionRetryDue(intent);
+
+export const listAmbiguousProductionPrints = async (): Promise<ProductionPrintIntent[]> =>
+  mutateProductionQueues(async () => (await readPrintQueue()).filter((intent) => intent.status === 'OUTCOME_UNKNOWN'));
+
+export const applyProductionPrintReconciliation = (
+  intent: ProductionPrintIntent,
+  resolution: 'CONFIRMED_PRINTED' | 'CONFIRMED_NOT_PRINTED',
+  now = new Date(),
+): ProductionPrintIntent | null => resolution === 'CONFIRMED_PRINTED' ? null : {
+  ...intent,
+  status: 'PENDING',
+  nextRetryAt: now.toISOString(),
+  lastError: 'PRODUCTION_PRINT_OPERATOR_CONFIRMED_NOT_PRINTED',
+  updatedAt: now.toISOString(),
+};
+
+export const resolveAmbiguousProductionPrint = async (
+  intentId: string,
+  resolution: 'CONFIRMED_PRINTED' | 'CONFIRMED_NOT_PRINTED',
+): Promise<ProductionPrintIntent | null> => {
+  if (resolution === 'CONFIRMED_PRINTED') {
+    await removePrintIntent(intentId);
+    return null;
+  }
+  return mutateProductionQueues(async () => {
+    const queue = await readPrintQueue();
+    const current = queue.find((intent) => intent.id === intentId);
+    if (!current || current.status !== 'OUTCOME_UNKNOWN') return null;
+    const reconciled = applyProductionPrintReconciliation(current, resolution);
+    if (!reconciled) return null;
+    await db.save(PRINT_QUEUE_COLLECTION, queue.map((intent) => intent.id === intentId ? reconciled : intent));
+    return reconciled;
+  });
+};
 
 export const runProductionPrintAttempt = async (
   intent: ProductionPrintIntent,
@@ -443,7 +517,7 @@ export const retryPendingProductionPrints = async (
   if (printRetryInFlight) return [];
   printRetryInFlight = true;
   try {
-    const queue = await readPrintQueue();
+    const queue = await mutateProductionQueues(readPrintQueue);
     const results = [];
     for (const intent of queue.filter(isProductionPrintAutoRetryEligible)) {
       results.push(await dispatchProductionPrint(intent, print));
