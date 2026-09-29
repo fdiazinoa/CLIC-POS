@@ -7,6 +7,7 @@ const CLOSED_RETENTION = 200;
 export type LegacyMutationClassification =
     | 'RESPONSE_VALID'
     | 'SAFE_PRE_SIDE_EFFECT'
+    | 'SAFE_IDEMPOTENT_REPLAY'
     | 'OUTCOME_UNKNOWN'
     | 'NOT_DISPATCHED';
 
@@ -250,7 +251,7 @@ export class LegacyMutationJournal {
 
     async acknowledge(
         id: string,
-        classification: 'RESPONSE_VALID' | 'SAFE_PRE_SIDE_EFFECT' | 'NOT_DISPATCHED',
+        classification: 'RESPONSE_VALID' | 'SAFE_PRE_SIDE_EFFECT' | 'SAFE_IDEMPOTENT_REPLAY' | 'NOT_DISPATCHED',
         callerAckReference: string,
     ): Promise<void> {
         const entry = this.entries.get(id);

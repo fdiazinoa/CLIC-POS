@@ -179,6 +179,7 @@ export const buildSalePostedSummary = (transaction: Transaction | UnknownRecord)
             : undefined,
         service_tax_policy_snapshot:
             record.serviceTaxPolicySnapshot ?? record.service_tax_policy_snapshot ?? undefined,
+        order_number: firstString(record.orderNumber, record.order_number) || undefined,
         item_count: items.length,
         payment_count: payments.length,
         customer_id: firstString(record.customerId, record.customer_id, customer.id) || undefined,
@@ -337,8 +338,12 @@ export const assertSalePostedPayload = (
         && Math.abs(summaryTotal - transactionTotal) > tolerance) {
         details.push(`summary.total=${summaryTotal} vs transaction.total=${transactionTotal}`);
     }
-    if (!hasInvalidLineTotal && summaryTotalValue !== null && Math.abs(summaryTotal - lineTotal) > tolerance) {
-        details.push(`summary.total=${summaryTotal} vs lines.total=${lineTotal}`);
+    const serviceChargeAmount = roundAmount(
+        transaction.serviceChargeAmount ?? transaction.service_charge_amount,
+    );
+    const expectedTotalFromLines = roundAmount(lineTotal + serviceChargeAmount);
+    if (!hasInvalidLineTotal && summaryTotalValue !== null && Math.abs(summaryTotal - expectedTotalFromLines) > tolerance) {
+        details.push(`summary.total=${summaryTotal} vs lines.total+service_charge=${expectedTotalFromLines}`);
     }
     if (Number(summary.item_count) !== items.length) {
         details.push(`summary.item_count=${summary.item_count} vs transaction.items=${items.length}`);

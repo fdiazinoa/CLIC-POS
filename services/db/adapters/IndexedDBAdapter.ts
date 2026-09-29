@@ -12,12 +12,17 @@ import {
 } from '../../sync/masterNumberRangeContract';
 
 const DB_NAME = 'clic_pos_indexeddb';
-const DB_VERSION = 25; // v25 adds durable completion markers for journaled LAN mutations
+const DB_VERSION = 26; // v26 adds strict durable production dispatch and print queues
 const OLD_DB_KEY = 'clic_pos_db_v1';
 const OPEN_TIMEOUT_MS = 15000;
 const CURSOR_IDLE_TIMEOUT_MS = 3000;
 const CURSOR_HARD_TIMEOUT_MS = 8000;
-const STRICT_DURABLE_COLLECTIONS = new Set(['legacyMutationJournal', 'legacyMutationCompletions']);
+const STRICT_DURABLE_COLLECTIONS = new Set([
+    'legacyMutationJournal',
+    'legacyMutationCompletions',
+    'kdsDispatchQueue',
+    'productionPrintQueue',
+]);
 
 const STORES = [
     'config', 'users', 'roles', 'customers', 'warehouses',
@@ -37,7 +42,8 @@ const STORES = [
     'invoiceReviewFlags', 'invoiceAuditEvents', 'invoiceAdjustments',
     'masterNumberRanges', 'masterNumberSyncReceipts',
     'recoveryOriginals', 'recoveryState', 'recoveryStage', 'wallet_transactions',
-    'legacyMutationJournal', 'legacyMutationCompletions'
+    'legacyMutationJournal', 'legacyMutationCompletions',
+    'kdsDispatchQueue', 'productionPrintQueue'
 ];
 
 export class IndexedDBAdapter implements DatabaseAdapter {

@@ -18,6 +18,7 @@ const DOCUMENT_READ_BATCH_SIZE = 15;
 const MAX_DOCUMENT_JSON_BYTES = 4 * 1024 * 1024;
 const CONFIG_READ_CHUNK_SIZE = 256 * 1024;
 const DOCUMENT_SCHEMA_MIGRATION_KEY = 'documents_schema_v2_migrated';
+const STRICT_DURABLE_COLLECTIONS = ['kdsDispatchQueue', 'productionPrintQueue'] as const;
 const DOCUMENT_UPSERT_SQL = `
     INSERT INTO documents (collection_name, doc_id, data, sort_order, updatedAt)
     VALUES (
@@ -516,6 +517,9 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
                 value TEXT NOT NULL,
                 updatedAt TEXT NOT NULL
             );
+            ${STRICT_DURABLE_COLLECTIONS.map(collection => `
+            INSERT OR IGNORE INTO storage_meta (key, value, updatedAt)
+            VALUES ('durable_collection:${collection}', 'documents_v1', datetime('now'));`).join('')}
             CREATE TABLE IF NOT EXISTS sync_queue (
                 id TEXT PRIMARY KEY NOT NULL,
                 type TEXT NOT NULL,

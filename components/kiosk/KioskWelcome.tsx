@@ -6,18 +6,23 @@
  */
 
 import React from 'react';
-import { ShoppingCart, Settings } from 'lucide-react';
+import { Building2, ShoppingBag, ShoppingCart, Settings, UtensilsCrossed } from 'lucide-react';
+import type { OrderServiceType } from '../../types';
 
 interface KioskWelcomeProps {
     onStartShopping: () => void;
     storeName?: string;
     onAdminAccess?: () => void;
+    restaurantMode?: boolean;
+    onSelectServiceType?: (serviceType: Extract<OrderServiceType, 'DINE_IN' | 'TAKEOUT'>) => void;
 }
 
 const KioskWelcome: React.FC<KioskWelcomeProps> = ({
     onStartShopping,
     storeName = 'CLIC POS',
-    onAdminAccess
+    onAdminAccess,
+    restaurantMode = false,
+    onSelectServiceType,
 }) => {
     const normalizedStoreName = storeName
         .replace(/\bDEMO(S)?\b/gi, '')
@@ -27,7 +32,7 @@ const KioskWelcome: React.FC<KioskWelcomeProps> = ({
 
     return (
         <div
-            onClick={onStartShopping}
+            onClick={restaurantMode ? undefined : onStartShopping}
             className="w-full h-full relative overflow-hidden cursor-pointer"
         >
             {onAdminAccess && (
@@ -67,7 +72,9 @@ const KioskWelcome: React.FC<KioskWelcomeProps> = ({
                 {/* Logo/Icon */}
                 <div className="mb-8 animate-bounce-slow">
                     <div className="w-40 h-40 bg-white/10 backdrop-blur-md border border-white/20 rounded-full flex items-center justify-center shadow-2xl">
-                        <ShoppingCart size={80} className="text-white" strokeWidth={1.5} />
+                        {restaurantMode
+                            ? <UtensilsCrossed size={80} className="text-white" strokeWidth={1.5} />
+                            : <ShoppingCart size={80} className="text-white" strokeWidth={1.5} />}
                     </div>
                 </div>
 
@@ -77,15 +84,35 @@ const KioskWelcome: React.FC<KioskWelcomeProps> = ({
                 </h1>
 
                 <p className="text-3xl font-light mb-16 text-center max-w-3xl text-white/90 drop-shadow-md">
-                    Toca la pantalla para comenzar a comprar
+                    {restaurantMode ? '¿Cómo deseas disfrutar tu pedido?' : 'Toca la pantalla para comenzar a comprar'}
                 </p>
 
-                {/* Pulse Indicator */}
-                <div className="animate-pulse">
-                    <div className="w-24 h-24 rounded-full border-4 border-white/30 flex items-center justify-center">
-                        <div className="w-16 h-16 bg-white rounded-full opacity-20" />
+                {restaurantMode ? (
+                    <div className="grid w-full max-w-3xl grid-cols-2 gap-6" role="group" aria-label="Modalidad del pedido">
+                        <button
+                            type="button"
+                            onClick={() => onSelectServiceType?.('DINE_IN')}
+                            className="flex min-h-44 flex-col items-center justify-center gap-4 rounded-3xl border-2 border-white/30 bg-white/15 p-6 text-2xl font-black shadow-2xl backdrop-blur-md transition hover:bg-white/25 active:scale-[0.98]"
+                        >
+                            <Building2 size={54} />
+                            Comer aquí
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => onSelectServiceType?.('TAKEOUT')}
+                            className="flex min-h-44 flex-col items-center justify-center gap-4 rounded-3xl border-2 border-white/30 bg-white/15 p-6 text-2xl font-black shadow-2xl backdrop-blur-md transition hover:bg-white/25 active:scale-[0.98]"
+                        >
+                            <ShoppingBag size={54} />
+                            Para llevar
+                        </button>
                     </div>
-                </div>
+                ) : (
+                    <div className="animate-pulse">
+                        <div className="w-24 h-24 rounded-full border-4 border-white/30 flex items-center justify-center">
+                            <div className="w-16 h-16 bg-white rounded-full opacity-20" />
+                        </div>
+                    </div>
+                )}
 
                 {/* Store Info */}
                 <div className="absolute bottom-12 text-center">

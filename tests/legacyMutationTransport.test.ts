@@ -248,6 +248,36 @@ test('direct LAN mutation remains DISPATCHED while the high-level durable commit
   }
 });
 
+test('explicitly idempotent KDS timeout is journaled then closed for durable replay', async () => {
+  const restore = installAndroid();
+  const store = new Store();
+  const journal = new LegacyMutationJournal(store);
+  await journal.initializeForStartup();
+  setNativeRequestTransportForTests((async () => ({ status: 504, data: { error: 'late response' } })) as any);
+  try {
+    await assert.rejects(
+      dispatchLegacyLanMutation<any>({
+        url: 'http://10.0.0.129:3001/api/ordenes/enviar-comanda/order-1',
+        method: 'POST',
+        body: '{}',
+        operation: 'KDS_ORDER_DISPATCH',
+        correlationId: 'kds:order-1:kitchen:cart-1:KDS_ORDER_DISPATCH',
+        validateResponse: () => undefined,
+        idempotentReplaySafe: true,
+        journal,
+        authorityState: { revision: 7, terminalId: 'terminal-a' },
+      }),
+      /LEGACY_MUTATION_OUTCOME_UNKNOWN:504/,
+    );
+    const row = [...store.rows.values()][0];
+    assert.equal(row?.state, 'CLOSED');
+    assert.equal(row?.classification, 'SAFE_IDEMPOTENT_REPLAY');
+    assert.equal(journal.hasBlockingMutations(), false);
+  } finally {
+    restore();
+  }
+});
+
 for (const invalidPayload of [{ success: false }, { message: 'missing explicit acknowledgement' }]) {
   test(`2xx legacy mutation with invalid schema becomes OUTCOME_UNKNOWN: ${JSON.stringify(invalidPayload)}`, async () => {
     const restore = installAndroid();

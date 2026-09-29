@@ -30,6 +30,8 @@ export type KioskPaymentTotals = {
     discountAmount?: number;
     taxIncluded: boolean;
     taxLabel?: string;
+    serviceChargeAmount?: number;
+    serviceChargeLabel?: string;
 };
 
 type KioskLookupMode = 'ID' | 'PHONE' | 'COUPON';
@@ -608,7 +610,7 @@ const KioskPayment: React.FC<KioskPaymentProps> = ({
                             <h3 className="font-bold text-gray-500 mb-4 uppercase tracking-wider text-sm">Resumen de Compra</h3>
                             <div className="space-y-3 mb-6 max-h-60 overflow-y-auto pr-2">
                                 {cart.map(item => (
-                                    <div key={item.id} className="flex justify-between items-start text-gray-700">
+                                    <div key={item.cartId || item.id} className="flex justify-between items-start text-gray-700">
                                         <div>
                                             <span className="font-bold">{item.quantity}x</span> {item.name}
                                         </div>
@@ -634,6 +636,12 @@ const KioskPayment: React.FC<KioskPaymentProps> = ({
                                     <span>{taxLabel}</span>
                                     <span>${tax.toFixed(2)}</span>
                                 </div>
+                                {Number(totals?.serviceChargeAmount || 0) > 0 && (
+                                    <div className="flex justify-between font-semibold text-gray-600">
+                                        <span>{totals?.serviceChargeLabel || 'Propina legal'}</span>
+                                        <span>${Number(totals?.serviceChargeAmount || 0).toFixed(2)}</span>
+                                    </div>
+                                )}
                                 <div className="flex justify-between text-3xl font-black text-gray-900 pt-2">
                                     <span>Total</span>
                                     <span>${total.toFixed(2)}</span>
