@@ -66,6 +66,11 @@ export const canUseLocalOperationalTableStore = (
   storage: StorageReader | null = getStorage()
 ): boolean => !isClientTerminalMode(storage);
 
+/** Client and order-taker terminals never publish the global configuration. */
+export const canPublishGlobalConfigMutation = (
+  storage: StorageReader | null = getStorage()
+): boolean => !isClientTerminalMode(storage);
+
 export const resolveMasterOperationalBaseUrl = (
   storage: StorageReader | null = getStorage()
 ): string => {
@@ -113,6 +118,10 @@ export interface OperationalMasterContract {
   terminalType?: string;
 }
 
+export interface OperationalMasterValidationOptions {
+  strictPairing?: boolean;
+}
+
 export const buildOperationalMasterContract = (input: {
   terminal: Record<string, any>; businessConfig: Record<string, any>; binding: Record<string, any>;
   profile: Record<string, any>; storedMasterId?: string; deviceId: string; localIps: string[];
@@ -148,6 +157,7 @@ export const assertOperationalMasterContractReady = (contract: OperationalMaster
 
 export const validateOperationalMasterEndpoint = (
   base: string, remote: Record<string, any>, contract: OperationalMasterContract,
+  options: OperationalMasterValidationOptions = {},
 ): string => {
   const normalized = normalizeBaseUrl(base);
   const host = new URL(normalized).hostname.toLowerCase();
@@ -167,6 +177,30 @@ export const validateOperationalMasterEndpoint = (
   }
   const advertisedRoles = [remote, remote.runtime, remote.masterSetupContext].filter(Boolean).map(resolveTerminalRuntimeRole);
   if (!isEligibleOperationalMasterConfig(remote) || advertisedRoles.some(role => role && role !== DeviceRole.STANDARD_POS)) throw new Error('MASTER_ROLE_INVALID: el servidor no es una Caja Master operativa.');
+  if (options.strictPairing) {
+    if (!serving || !servingId || !declaredId) {
+      throw new Error('MASTER_IDENTITY_MISSING: la Caja Master no publica una identidad runtime/serving verificable.');
+    }
+    if (servingId !== declaredId) {
+      throw new Error('MASTER_IDENTITY_AMBIGUOUS: la identidad runtime no coincide con la terminal que sirve la configuración.');
+    }
+    if (contract.masterTerminalId && servingId !== id(contract.masterTerminalId)) {
+      throw new Error('MASTER_IDENTITY_MISMATCH: UUID de master distinto de la autoridad esperada.');
+    }
+    if (resolveTerminalRuntimeRole(serving) !== DeviceRole.STANDARD_POS) {
+      throw new Error('MASTER_ROLE_INVALID: el servidor no es una Caja Master STANDARD_POS.');
+    }
+    const context = remote.masterSetupContext || {};
+    for (const field of ['tenant', 'company', 'store'] as const) {
+      const expected = id(contract[`${field}Id`]);
+      if (!expected) continue;
+      const values = [binding, serving, context, remote, remote.metadata?.syncProfile].filter(Boolean)
+        .map(source => scopeValue(source, field)).filter(Boolean);
+      if (!values.length || values.some(value => value !== expected)) {
+        throw new Error(`MASTER_SCOPE_MISMATCH: ${field} no corresponde al vínculo esperado.`);
+      }
+    }
+  }
   if (contract.erpManaged) {
     assertOperationalMasterContractReady(contract);
     if (!serving || servingId !== id(contract.masterTerminalId) || (declaredId && declaredId !== id(contract.masterTerminalId))) throw new Error('MASTER_IDENTITY_MISMATCH: UUID de master distinto del vínculo vigente.');

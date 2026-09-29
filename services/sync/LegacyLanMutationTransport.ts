@@ -68,6 +68,8 @@ export const dispatchLegacyLanMutation = async <T = any>(input: {
     journal?: LegacyMutationJournal;
     authorityState?: { revision: number; terminalId: string | null };
     idempotentReplaySafe?: boolean;
+    reconciliationContext?: Record<string, unknown>;
+    safePreSideEffectStatuses?: number[];
 }): Promise<LegacyLanMutationReceipt<T>> => {
     const journal = input.journal || legacyMutationJournal;
     const authority = input.authorityState || apiSyncAdapter.getOperationalAuthorityState();
@@ -88,6 +90,7 @@ export const dispatchLegacyLanMutation = async <T = any>(input: {
         method: input.method,
         url: input.url,
         diagnosticRequestId: correlationId,
+        reconciliationContext: input.reconciliationContext,
     });
     await journal.prepareDispatch(entry.id, fingerprint, generation);
     const current = input.authorityState || apiSyncAdapter.getOperationalAuthorityState();
@@ -107,7 +110,8 @@ export const dispatchLegacyLanMutation = async <T = any>(input: {
         });
         const response = new Response(native.text, { status: native.status, headers: native.headers });
         await journal.recordHttpStatus(entry.id, response.status);
-        if (response.status !== 401 && !response.ok) {
+        const safePreSideEffect = response.status === 401 || input.safePreSideEffectStatuses?.includes(response.status);
+        if (!safePreSideEffect && !response.ok) {
             await journal.markOutcomeUnknown(entry.id, response.status);
             throw Object.assign(new Error(`LEGACY_MUTATION_OUTCOME_UNKNOWN:${response.status}`), { httpStatus: response.status });
         }
@@ -128,7 +132,7 @@ export const dispatchLegacyLanMutation = async <T = any>(input: {
             completeAfterDurableCommit: async (reference, persist) => {
                 if (completed) return;
                 await persist();
-                const classification: Exclude<LegacyMutationClassification, 'OUTCOME_UNKNOWN'> = response.status === 401
+                const classification: Exclude<LegacyMutationClassification, 'OUTCOME_UNKNOWN'> = safePreSideEffect
                     ? 'SAFE_PRE_SIDE_EFFECT'
                     : 'RESPONSE_VALID';
                 await journal.acknowledge(entry.id, classification, reference);

@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, Check, X } from 'lucide-react';
 import { UnitDefinition, BusinessConfig } from '../types';
-import { resolveValidatedOperationalApiUrl } from '../utils/masterOperationalApi';
+import { canPublishGlobalConfigMutation, resolveValidatedOperationalApiUrl } from '../utils/masterOperationalApi';
 import {
     dispatchLegacyLanMutation,
     persistLegacyLanMutationCompletion,
@@ -71,6 +71,14 @@ export const UnitSelector: React.FC<UnitSelectorProps> = ({
         // Optimistic Update
         const updatedConfig = { ...config, units: updatedCustomUnits };
         onConfigUpdate(updatedConfig);
+
+        if (!canPublishGlobalConfigMutation()) {
+            onChange(newUnit.code);
+            setIsAddingNew(false);
+            setNewUnitCode('');
+            setNewUnitName('');
+            return;
+        }
 
         // Persist to Backend
         try {

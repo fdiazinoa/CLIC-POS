@@ -23,6 +23,12 @@ import {
   STANDARD_POS_TERMINAL_TYPE,
   type PosTerminalType,
 } from '../utils/orderTakerPolicy';
+import { validateOperationalMasterEndpoint, type OperationalMasterContract } from '../utils/masterOperationalApi';
+import {
+  createMasterAuthorityFingerprint,
+  readClientBindingRecovery,
+} from '../services/setup/clientBindingRecovery';
+import { reconcileClientBindingMutation } from '../services/setup/clientBindingMutation';
 
 interface PairingResult {
   tenantId?: string;
@@ -112,7 +118,14 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
   // El modo inicial separa cajas adicionales y tomas de pedidos para que la
   // lista de activación no ofrezca un tipo de terminal incompatible.
   const [expectedTerminalType, setExpectedTerminalType] = useState<PosTerminalType | null>(initialExpectedTerminalType);
+  const [masterAuthority, setMasterAuthority] = useState<{
+    baseUrl: string;
+    config: Record<string, any>;
+    localIps: string[];
+  } | null>(null);
   const automaticDiscoveryRef = React.useRef('');
+  const recoveryAttemptedRef = React.useRef(false);
+  const [recoveryRetryNonce, setRecoveryRetryNonce] = useState(0);
 
   React.useEffect(() => {
     if (initialBindingMode) {
@@ -120,6 +133,19 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
       setExpectedTerminalType(initialExpectedTerminalType);
     }
   }, [initialBindingMode, initialExpectedTerminalType]);
+
+  const resolveLocalIpsForValidation = async (): Promise<string[]> => {
+    if (localIps.length > 0) return localIps;
+    try {
+      const response = await fetch('/api/network');
+      const payload = await response.json();
+      const addresses = Array.isArray(payload?.addresses) ? payload.addresses.map(String).filter(Boolean) : [];
+      setLocalIps(addresses);
+      return addresses;
+    } catch {
+      return [];
+    }
+  };
 
   const resolveReachableMaster = async (
     host: string,
@@ -131,6 +157,7 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
 
     for (const baseUrl of candidates) {
       try {
+        const validationLocalIps = await resolveLocalIpsForValidation();
         const { config: fetchedConfig, users: fetchedUsers } = options.waitForStartup
           ? await waitForMasterPairingResources(baseUrl, fetch, {
               onRetry: options.onRetry,
@@ -140,6 +167,17 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
         if (!isEligibleOperationalMasterConfig(fetchedConfig)) {
           throw new Error('El equipo encontrado no es una Caja Master operativa.');
         }
+        const strictContract: OperationalMasterContract = {
+          erpManaged: false,
+          terminalId: '',
+          masterTerminalId: '',
+          tenantId: tenantId && tenantId !== 'default-tenant' ? tenantId : '',
+          companyId: '',
+          storeId: '',
+          deviceId,
+          localIps: validationLocalIps,
+        };
+        validateOperationalMasterEndpoint(baseUrl, fetchedConfig, strictContract, { strictPairing: true });
         return {
           baseUrl,
           host: new URL(baseUrl).hostname,
@@ -158,22 +196,95 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
     connection: Awaited<ReturnType<typeof resolveReachableMaster>>,
     source: 'CLOUD' | 'LAN' | 'MANUAL'
   ) => {
-    await onConfigUpdate?.(connection.config);
-
     const fetchedAdmins = (connection.users || []).filter((user: any) =>
       user.role?.toUpperCase() === 'ADMIN' || user.role?.toUpperCase() === 'ADMINISTRADOR'
     );
     setMasterAdmins(fetchedAdmins);
-    if (connection.users) {
-      await onUsersUpdate?.(connection.users);
-    }
-
-    localStorage.setItem('pos_master_ip', connection.host);
-    localStorage.setItem('CLIC_POS_MASTER_URL', connection.baseUrl || buildMasterUrlFromHost(connection.host));
-    localStorage.setItem('CLIC_POS_MASTER_DISCOVERY', source);
+    const validationLocalIps = await resolveLocalIpsForValidation();
+    setMasterAuthority({ baseUrl: connection.baseUrl, config: connection.config, localIps: validationLocalIps });
     setMasterIp(connection.host);
     setStep('AUTH');
   };
+
+  React.useEffect(() => {
+    const recovery = readClientBindingRecovery();
+    if (!recovery || recoveryAttemptedRef.current) return;
+    recoveryAttemptedRef.current = true;
+    let cancelled = false;
+    const resume = async () => {
+      setIsConnecting(true);
+      setConnectionStatus('Reanudando restauración autorizada...');
+      try {
+        const validationLocalIps = await resolveLocalIpsForValidation();
+        const resources = await fetchMasterPairingResources(recovery.authorityUrl);
+        const contract: OperationalMasterContract = {
+          erpManaged: false,
+          terminalId: recovery.terminalId,
+          masterTerminalId: recovery.masterTerminalId,
+          tenantId: recovery.tenantId,
+          companyId: recovery.companyId,
+          storeId: recovery.storeId,
+          deviceId: recovery.deviceId,
+          localIps: validationLocalIps,
+        };
+        const authorityUrl = validateOperationalMasterEndpoint(
+          recovery.authorityUrl,
+          resources.config,
+          contract,
+          { strictPairing: true },
+        );
+        if (authorityUrl !== recovery.authorityUrl || createMasterAuthorityFingerprint(resources.config) !== recovery.authorityFingerprint) {
+          throw new Error('MASTER_AUTHORITY_CHANGED: la autoridad no coincide con el ACK pendiente.');
+        }
+        await reconcileClientBindingMutation({
+          authorityUrl,
+          authorityFingerprint: recovery.authorityFingerprint,
+          terminalId: recovery.terminalId,
+          deviceId: recovery.deviceId,
+          masterTerminalId: recovery.masterTerminalId,
+          tenantId: recovery.tenantId,
+          companyId: recovery.companyId,
+          storeId: recovery.storeId,
+        });
+        const params = new URLSearchParams({
+          pos_device_id: recovery.deviceId,
+          binding_mode: 'SLAVE',
+          local_terminal_id: recovery.terminalId,
+          ...(recovery.tenantId ? { tenant_id: recovery.tenantId } : {}),
+        });
+        const response = await fetch(`${authorityUrl}/api/setup/initial-config/${encodeURIComponent(recovery.terminalId)}?${params.toString()}`, {
+          headers: { 'X-Device-Id': recovery.deviceId },
+        });
+        if (!response.ok) throw new Error(`BINDING_RESTORE_CONFIG_HTTP_${response.status}`);
+        const initial = await response.json();
+        if (!initial?.config) throw new Error('BINDING_RESTORE_CONFIG_MISSING');
+        if (cancelled) return;
+        setMasterAuthority({ baseUrl: authorityUrl, config: resources.config, localIps: validationLocalIps });
+        setMasterIp(new URL(authorityUrl).hostname);
+        await onPair(recovery.terminalId, {
+          tenantId: recovery.tenantId,
+          companyId: recovery.companyId,
+          storeId: recovery.storeId,
+          boundConfig: initial.config,
+          boundUsers: resources.users,
+          masterIp: new URL(authorityUrl).hostname,
+          syncProfile: { masterTerminalId: recovery.masterTerminalId, masterUrl: authorityUrl },
+        });
+      } catch (resumeError) {
+        if (!cancelled) {
+          setError(resumeError instanceof Error ? resumeError.message : String(resumeError));
+          setStep('SLAVE_CONNECT');
+        }
+      } finally {
+        if (!cancelled) {
+          setIsConnecting(false);
+          setConnectionStatus('');
+        }
+      }
+    };
+    void resume();
+    return () => { cancelled = true; };
+  }, [deviceId, onPair, recoveryRetryNonce]);
 
   const handleModeSelect = (mode: 'MASTER' | 'SLAVE' | 'ORDER_TAKER') => {
     const nextBindingMode = mode === 'ORDER_TAKER' ? 'SLAVE' : mode;
@@ -201,6 +312,12 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
   };
 
   const handleConnectToMaster = async () => {
+    if (readClientBindingRecovery()) {
+      recoveryAttemptedRef.current = false;
+      setError(null);
+      setRecoveryRetryNonce((current) => current + 1);
+      return;
+    }
     if (!masterIp.trim()) {
       setError('Ingrese la IP de la Maestra');
       return;
@@ -238,6 +355,7 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
 
   React.useEffect(() => {
     if (step !== 'SLAVE_CONNECT' || bindingMode !== 'SLAVE') return;
+    if (readClientBindingRecovery()) return;
 
     const discoveryKey = `${deviceId}:${tenantId || ''}:${expectedTerminalType || ''}`;
     if (automaticDiscoveryRef.current === discoveryKey) return;
@@ -544,6 +662,7 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
               tenantId={tenantId}
               erpBaseUrl={erpBaseUrl}
               masterIp={masterIp}
+              masterAuthority={masterAuthority}
               isAlreadyBound={(config.terminals || []).some((terminal) => terminal.config?.currentDeviceId === deviceId)}
               onMasterIpChange={setMasterIp}
               onBack={() => setStep('AUTH')}
@@ -573,10 +692,6 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
                 progress,
                 recoveryState
               }) => {
-                await onConfigUpdate?.(boundConfig);
-                if (Array.isArray(users)) {
-                  await onUsersUpdate?.(users);
-                }
                 await onPair(terminalId, {
                   tenantId,
                   erpTerminalId,

@@ -393,7 +393,8 @@ object ClicPOSMasterHttpServer {
         val query = parseQuery(rawTarget)
         val deviceId = query.optString("pos_device_id")
         val tenantId = setupTenantId(setupSnapshot, query)
-        val erpManaged = setupSnapshot.optJSONObject("masterSetupContext")?.optBoolean("erpEnabled", false) == true
+        val setupContext = setupSnapshot.optJSONObject("masterSetupContext") ?: JSONObject()
+        val erpManaged = setupContext.optBoolean("erpEnabled", false)
         val terminals = setupSnapshot.optJSONArray("terminals") ?: JSONArray()
         val result = JSONArray()
 
@@ -440,8 +441,19 @@ object ClicPOSMasterHttpServer {
                 ?: terminalConfig.optJSONArray("restrictions")
                 ?: JSONArray()
             val occupied = currentDeviceId.isNotBlank() && currentDeviceId != deviceId
-            val companyId = firstNonBlank(terminal.optString("company_id"), terminalConfig.optString("company_id"))
-            val storeId = firstNonBlank(terminal.optString("store_id"), terminalConfig.optString("store_id"))
+            val erpBinding = terminalConfig.optJSONObject("erpBinding") ?: JSONObject()
+            val companyId = firstNonBlank(
+                terminal.optString("company_id"), terminal.optString("companyId"),
+                terminalConfig.optString("company_id"), terminalConfig.optString("companyId"),
+                erpBinding.optString("company_id"), erpBinding.optString("companyId"),
+                setupContext.optString("companyId")
+            )
+            val storeId = firstNonBlank(
+                terminal.optString("store_id"), terminal.optString("storeId"),
+                terminalConfig.optString("store_id"), terminalConfig.optString("storeId"),
+                erpBinding.optString("store_id"), erpBinding.optString("storeId"),
+                setupContext.optString("storeId")
+            )
             val companyName = firstNonBlank(
                 terminal.optString("company_name"),
                 terminalConfig.optString("company_name"),
@@ -459,9 +471,12 @@ object ClicPOSMasterHttpServer {
                 JSONObject()
                     .put("id", terminalId)
                     .put("tenant_id", tenantId)
+                    .put("tenantId", tenantId)
                     .put("company_id", if (companyId.isBlank()) JSONObject.NULL else companyId)
+                    .put("companyId", if (companyId.isBlank()) JSONObject.NULL else companyId)
                     .put("company_name", companyName)
                     .put("store_id", if (storeId.isBlank()) JSONObject.NULL else storeId)
+                    .put("storeId", if (storeId.isBlank()) JSONObject.NULL else storeId)
                     .put("store_name", storeName)
                     .put("terminal_name", terminalName)
                     .put("terminal_code", terminalConfig.optString("stationNumber").takeIf { it.isNotBlank() } ?: JSONObject.NULL)
@@ -612,6 +627,8 @@ object ClicPOSMasterHttpServer {
                 .put("lastPairingDate", java.time.Instant.now().toString())
                 .put("isPrimaryNode", false)
                 .put("governedByMaster", true)
+                .put("masterTerminalId", setupSnapshot.optString("runtimeTerminalId"))
+                .put("master_terminal_id", setupSnapshot.optString("runtimeTerminalId"))
             val syncConfig = config.optJSONObject("syncConfig") ?: JSONObject()
             syncConfig.put("mode", "SLAVE").put("isEnabled", true)
             config.put("syncConfig", syncConfig)
@@ -664,16 +681,47 @@ object ClicPOSMasterHttpServer {
             boundTerminal.optString("masterTerminalId"),
             boundTerminal.optString("master_terminal_id"),
             terminalConfig.optString("masterTerminalId"),
-            terminalConfig.optString("master_terminal_id")
+            terminalConfig.optString("master_terminal_id"),
+            setupSnapshot.optString("runtimeTerminalId")
         )
+        val setupContext = setupSnapshot.optJSONObject("masterSetupContext") ?: JSONObject()
+        val existingBinding = terminalConfig.optJSONObject("erpBinding") ?: JSONObject()
+        val companyId = firstNonBlank(
+            boundTerminal.optString("company_id"), boundTerminal.optString("companyId"),
+            terminalConfig.optString("company_id"), terminalConfig.optString("companyId"),
+            existingBinding.optString("company_id"), existingBinding.optString("companyId"),
+            setupContext.optString("companyId")
+        )
+        val storeId = firstNonBlank(
+            boundTerminal.optString("store_id"), boundTerminal.optString("storeId"),
+            terminalConfig.optString("store_id"), terminalConfig.optString("storeId"),
+            existingBinding.optString("store_id"), existingBinding.optString("storeId"),
+            setupContext.optString("storeId")
+        )
+        if (tenantId.isNotBlank() || companyId.isNotBlank() || storeId.isNotBlank()) {
+            existingBinding
+                .put("tenantId", tenantId)
+                .put("tenant_id", tenantId)
+                .put("companyId", companyId)
+                .put("company_id", companyId)
+                .put("storeId", storeId)
+                .put("store_id", storeId)
+            terminalConfig.put("erpBinding", existingBinding)
+        }
 
         val response = JSONObject()
             .put("success", true)
             .put("source", "ANDROID_MASTER")
             .put("tenant_id", tenantId)
+            .put("tenantId", tenantId)
+            .put("company_id", if (companyId.isBlank()) JSONObject.NULL else companyId)
+            .put("companyId", if (companyId.isBlank()) JSONObject.NULL else companyId)
+            .put("store_id", if (storeId.isBlank()) JSONObject.NULL else storeId)
+            .put("storeId", if (storeId.isBlank()) JSONObject.NULL else storeId)
             .put("terminal_id", terminalId)
             .put("erp_terminal_id", erpTerminalId)
             .put("terminal_name", terminalName)
+            .put("current_device_id", deviceId)
             .put("terminal_type", terminalType)
             .put("master_terminal_id", if (masterTerminalId.isBlank()) JSONObject.NULL else masterTerminalId)
             .put("capabilities", terminalConfig.optJSONArray("capabilities") ?: JSONArray())
