@@ -180,6 +180,12 @@ import {
    markRestaurantLinesCommitted,
    requiresRestaurantReductionApproval,
 } from '../utils/restaurantHotReversal';
+import {
+   buildProductionDispatchItems,
+   createProductionDispatchIntent,
+   dispatchProductionOrder,
+   retryPendingProductionOrders,
+} from '../services/restaurant/ProductionOrderDispatcher';
 
 // ... existing imports
 
@@ -1452,66 +1458,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (kdsRetryInFlightRef.current) return;
       kdsRetryInFlightRef.current = true;
       try {
-         const storedQueue = await db.get('kdsDispatchQueue' as any).catch(() => []) as any;
-         const queue = Array.isArray(storedQueue) ? storedQueue : [];
-         if (queue.length === 0) return;
-
-         const nextQueue: any[] = [];
-         const sentReceipts: Array<{ receipt: LegacyLanMutationReceipt<any>; reference: string }> = [];
-         let sentCount = 0;
-         for (const entry of queue) {
-            const status = String(entry?.status || 'PENDING').toUpperCase();
-            if (status === 'SENT') continue;
-
-            const payload = entry?.payload || {};
-            const kdsBaseUrl = String(entry?.kdsBaseUrl || '').trim().replace(/\/+$/, '');
-            const orderId = String(payload.orderId || entry?.orderId || '').trim();
-            if (!kdsBaseUrl || !orderId) {
-               nextQueue.push(entry);
-               continue;
-            }
-
-            try {
-               const updateReceipt = await postJournaledKdsJson(`${kdsBaseUrl}/api/ordenes/${encodeURIComponent(orderId)}`, {
-                  items: payload.items || [],
-                  total: payload.total || 0,
-                  status: 'OCCUPIED',
-                  displayId: payload.displayId,
-                  orderNumber: payload.orderNumber,
-                  terminalId: payload.terminalId,
-                  userName: payload.userName,
-                  customerName: payload.customerName,
-                  table: payload.table,
-                  area: payload.area,
-                  sourceTerminal: payload.sourceTerminal,
-                  kdsTiming: payload.kdsTiming,
-               }, 'KDS_ORDER_UPDATE_RETRY');
-               sentReceipts.push({ receipt: updateReceipt, reference: `KDS:retry:update:${orderId}` });
-               const dispatchReceipt = await postJournaledKdsJson(
-                  `${kdsBaseUrl}/api/ordenes/enviar-comanda/${encodeURIComponent(orderId)}`,
-                  payload,
-                  'KDS_ORDER_DISPATCH_RETRY',
-               );
-               sentReceipts.push({ receipt: dispatchReceipt, reference: `KDS:retry:dispatch:${orderId}` });
-               await markKdsQueueItemsSent(entry);
-               sentCount += 1;
-            } catch (error: any) {
-               nextQueue.push({
-                  ...entry,
-                  status: 'PENDING',
-                  attempts: Number(entry?.attempts || 0) + 1,
-                  lastError: error?.message || 'KDS_UNREACHABLE',
-                  updatedAt: new Date().toISOString(),
-               });
-            }
-         }
-
-         await db.save('kdsDispatchQueue' as any, nextQueue);
-         for (const { receipt, reference } of sentReceipts) {
-            await receipt.completeAfterDurableCommit(reference, () =>
-               persistLegacyLanMutationCompletion(receipt.correlationId, reference, receipt.response.status)
-            );
-         }
+         const results = await retryPendingProductionOrders();
+         const sent = results.filter(result => result.status === 'SENT');
+         for (const result of sent) await markKdsQueueItemsSent(result.intent);
+         const sentCount = sent.length;
          if (sentCount > 0) {
             setSuccessToast(`${sentCount} comanda(s) pendiente(s) enviada(s) a cocina`);
          }
@@ -6310,7 +6260,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          let printedCount = 0;
          let sentKdsCount = 0;
          let queuedKdsCount = 0;
-         const successfulKdsReceipts: Array<{ receipt: LegacyLanMutationReceipt<any>; reference: string }> = [];
          const dispatchedCartIds = new Set<string>();
          const queuedCartIds = new Set<string>();
          const sentCartIds = new Set<string>();
@@ -6360,7 +6309,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
             if (shouldSendKds) {
                const kdsBaseUrl = resolveKdsBaseUrl(areaData.area, config);
-               const kdsItems = buildKdsDispatchItems(areaData.items, areaId);
+               const kdsItems = buildProductionDispatchItems(areaData.items, areaId);
                const areaTotal = areaData.items.reduce((sum, item) => sum + (Number(item.price || 0) * Number(item.quantity || 0)), 0);
                const warningMinutes = normalizeKdsMinutes(areaData.area.kds_warning_minutes, 10);
                const criticalMinutes = Math.max(
@@ -6397,53 +6346,19 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   total: areaTotal,
                };
 
-               if (!kdsBaseUrl) {
+               const intent = createProductionDispatchIntent({
+                  kdsBaseUrl,
+                  cartIds: areaData.items.map(getCartDispatchKey),
+                  payload: kdsPayload,
+               });
+               const dispatchResult = await dispatchProductionOrder(intent);
+               if (dispatchResult.status === 'SENT') {
+                  sentKdsCount += 1;
+                  areaData.items.forEach(item => sentCartIds.add(getCartDispatchKey(item)));
+               } else {
                   queuedKdsCount += 1;
                   areaData.items.forEach(item => queuedCartIds.add(getCartDispatchKey(item)));
-                  await queuePendingKdsDispatch({
-                     reason: 'KDS_HOST_NOT_CONFIGURED',
-                     orderId,
-                     areaId,
-                     areaName: areaData.title,
-                     cartIds: areaData.items.map(getCartDispatchKey),
-                     payload: kdsPayload,
-                  });
-               } else {
-                  try {
-                     const updateReceipt = await postJournaledKdsJson(`${kdsBaseUrl}/api/ordenes/${encodeURIComponent(orderId)}`, {
-                        items: kdsItems,
-                        total: areaTotal,
-                        status: 'OCCUPIED',
-                        displayId: displayOrderRef,
-                        orderNumber,
-                        terminalId: activeTerminalId,
-                        sourceTerminal: kdsPayload.sourceTerminal,
-                        userName: currentUser.name,
-                        customerName: selectedCustomer?.name || 'Cliente General',
-                        table: kdsTablePayload,
-                        area: kdsPayload.area,
-                        kdsTiming: kdsPayload.kdsTiming,
-                     }, 'KDS_ORDER_UPDATE');
-                     successfulKdsReceipts.push({ receipt: updateReceipt, reference: `KDS:update:${orderId}` });
-                     const endpoint = `${kdsBaseUrl}/api/ordenes/enviar-comanda/${encodeURIComponent(orderId)}`;
-                     const dispatchReceipt = await postJournaledKdsJson(endpoint, kdsPayload, 'KDS_ORDER_DISPATCH');
-                     successfulKdsReceipts.push({ receipt: dispatchReceipt, reference: `KDS:dispatch:${orderId}` });
-                     sentKdsCount += 1;
-                     areaData.items.forEach(item => sentCartIds.add(getCartDispatchKey(item)));
-                  } catch (kdsError: any) {
-                     queuedKdsCount += 1;
-                     areaData.items.forEach(item => queuedCartIds.add(getCartDispatchKey(item)));
-                     console.warn('[KDS] No se pudo enviar comanda al KDS LAN:', kdsError);
-                     await queuePendingKdsDispatch({
-                        reason: kdsError?.message || 'KDS_UNREACHABLE',
-                        kdsBaseUrl,
-                        orderId,
-                        areaId,
-                        areaName: areaData.title,
-                        cartIds: areaData.items.map(getCartDispatchKey),
-                        payload: kdsPayload,
-                     });
-                  }
+                  console.warn('[KDS] Comanda conservada para reintento:', dispatchResult.error);
                }
             }
 
@@ -6509,12 +6424,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             } else {
                await handleParkCurrentTicket(undefined, updatedCart);
             }
-         }
-
-         for (const { receipt, reference } of successfulKdsReceipts) {
-            await receipt.completeAfterDurableCommit(reference, () =>
-               persistLegacyLanMutationCompletion(receipt.correlationId, reference, receipt.response.status)
-            );
          }
 
          const parts = [
