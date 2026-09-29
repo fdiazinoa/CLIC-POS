@@ -106,6 +106,7 @@ import {
    PosInteractionTrace,
 } from '../utils/interactionPerformance';
 import {
+   buildTransactionCustomerSnapshot,
    calculateTaxBreakdownFromItems,
    consolidateTaxBreakdownForDisplay,
    formatTaxLineLabel,
@@ -5306,6 +5307,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          const isFiscalModeDisabledForCheckout = fiscalCompliance.mode === 'NONE';
          const uberRecoveredOrder = isUberRecoveredReservation(activeRecoveredReservation) ? activeRecoveredReservation : null;
          const customerForCheckout = uberRecoveredOrder ? null : effectiveSelectedCustomer;
+         const checkoutCustomerSnapshot = customerForCheckout
+            ? buildTransactionCustomerSnapshot(customerForCheckout)
+            : undefined;
          const couponAssignedTo = redeemedCoupon?.assignedTo?.trim();
          if (couponAssignedTo && couponAssignedTo !== customerForCheckout?.id) {
             alert('El cupón aplicado está asignado a un cliente específico. Seleccione ese cliente antes de finalizar la venta.');
@@ -5499,6 +5503,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   transactionNetAmount: saleNetAmount,
                   transactionTaxAmount: saleTaxAmount,
                   transactionTotal: saleTotal,
+                  taxExempt: isSelectedCustomerTaxExempt,
                   allowedTaxIds: appliedServiceTaxPolicy.taxIds,
                });
                const salePayments = payments.filter(p => !['WALLET', 'ADVANCE'].includes(p.method));
@@ -5555,10 +5560,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         pendingBalance: creditAmount || undefined,
                         dueDate: creditAmount > 0 ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() : undefined,
                         balanceDueAtSale: creditAmount > 0 ? creditAmount : undefined,
-                        customerSnapshot: customerForCheckout ? {
-                           name: customerForCheckout.name,
-                           taxId: customerForCheckout.taxId
-                        } : undefined,
+                        customerSnapshot: checkoutCustomerSnapshot,
                         walletPaymentAmount: walletPaymentAmount > 0 ? walletPaymentAmount : undefined
                      },
                      refundTransaction: {
@@ -5757,15 +5759,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   discountType: globalDiscount.type,
                   discountValue: globalDiscount.value,
                   ...(isRefundOnly ? {} : couponSyncFields),
-                  customerSnapshot: customerForCheckout ? {
-                     name: customerForCheckout.name,
-                     taxId: customerForCheckout.taxId,
-                     address: customerForCheckout.address,
-                     phone: customerForCheckout.phone,
-                     email: customerForCheckout.email
-                  } : activeRecoveredReservation ? {
+                  customerSnapshot: checkoutCustomerSnapshot || (activeRecoveredReservation ? {
                      name: activeRecoveredReservation.customerName
-                  } : undefined,
+                  } : undefined),
                   isTaxIncluded: isTaxIncluded,
                   authorizedById: hasReturns ? refundAuthorizedBy?.id : undefined,
                   authorizedByName: hasReturns ? refundAuthorizedBy?.name : undefined,
