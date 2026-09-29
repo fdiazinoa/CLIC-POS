@@ -164,6 +164,7 @@ import {
 import {
   canUseLocalOperationalTableStore,
   isClientTerminalMode,
+  canPublishGlobalConfigMutation,
   resolveOperationalApiUrl,
   resolveValidatedOperationalApiUrl,
   createOperationalMasterResolver,
@@ -2734,6 +2735,10 @@ const AppContent: React.FC = () => {
     nextConfig: BusinessConfig,
     options?: { surfaceErrors?: boolean }
   ) => {
+    if (!canPublishGlobalConfigMutation()) {
+      console.log('ℹ️ Skipping global config publish from a governed client terminal.');
+      return;
+    }
     const serverUrl = buildConfigSyncUrl();
     const shouldSurfaceSyncErrors = options?.surfaceErrors ?? !isNativeAndroidRuntime();
 
@@ -8422,10 +8427,22 @@ const AppContent: React.FC = () => {
           throw new Error('MASTER_AUTHORITY_CHANGED: la autoridad no coincide con el ACK pendiente.');
         }
         validateClientBindingAck({
-          response: { current_device_id: deviceId, config: setupResult.boundConfig },
+          response: {
+            success: true,
+            terminal_id: terminalId,
+            master_terminal_id: expectedMasterTerminalId,
+            current_device_id: deviceId,
+            tenant_id: pendingClientRecovery?.tenantId || setupResult?.tenantId || '',
+            company_id: pendingClientRecovery?.companyId || setupResult?.companyId || '',
+            store_id: pendingClientRecovery?.storeId || setupResult?.storeId || '',
+            config: setupResult.boundConfig,
+          },
           terminalId,
           deviceId,
           masterTerminalId: expectedMasterTerminalId,
+          tenantId: pendingClientRecovery?.tenantId || setupResult?.tenantId || '',
+          companyId: pendingClientRecovery?.companyId || setupResult?.companyId || '',
+          storeId: pendingClientRecovery?.storeId || setupResult?.storeId || '',
         });
       }
       preserveTerminalBindingAfterRegister = true;
@@ -8797,7 +8814,7 @@ const AppContent: React.FC = () => {
 
       // Always persist binding to backend before re-initializing sync.
       // This prevents pulling old config right after takeover.
-      if (configSyncUrl && !isSlave) {
+      if (configSyncUrl && canPublishGlobalConfigMutation()) {
         try {
           setupResult.progress?.({
             stepId: 'sync',

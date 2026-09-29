@@ -66,6 +66,11 @@ export const canUseLocalOperationalTableStore = (
   storage: StorageReader | null = getStorage()
 ): boolean => !isClientTerminalMode(storage);
 
+/** Client and order-taker terminals never publish the global configuration. */
+export const canPublishGlobalConfigMutation = (
+  storage: StorageReader | null = getStorage()
+): boolean => !isClientTerminalMode(storage);
+
 export const resolveMasterOperationalBaseUrl = (
   storage: StorageReader | null = getStorage()
 ): string => {
