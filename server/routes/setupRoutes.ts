@@ -692,6 +692,18 @@ const createTerminalTemplate = (currentConfig: any, terminalId: string) => {
   return nextTemplate;
 };
 
+const resolveConfiguredMasterTerminalId = (currentConfig: any): string => {
+  const terminals = Array.isArray(currentConfig?.terminals) ? currentConfig.terminals : [];
+  const activeTerminalId = asString(getSetting('active_terminal_id'));
+  const master = terminals.find((terminal: any) => {
+    const terminalConfig = asObject(terminal?.config);
+    const references = [terminal?.id, terminalConfig.erpTerminalId, asObject(terminalConfig.erpBinding).terminalId].map(asString);
+    return (activeTerminalId && references.includes(activeTerminalId))
+      || (terminalConfig.isPrimaryNode === true && terminalConfig.governedByMaster !== true);
+  });
+  return asString(master?.config?.erpTerminalId || asObject(master?.config?.erpBinding).terminalId || master?.id);
+};
+
 const buildBoundConfig = (input: {
   currentConfig: any;
   overview: { branches: any[]; terminals: any[] };
@@ -699,8 +711,9 @@ const buildBoundConfig = (input: {
   selectedTerminalId: string;
   posDeviceId: string;
   bindingMode: 'MASTER' | 'SLAVE';
+  masterTerminalId: string;
 }) => {
-  const { currentConfig, overview, profilesByTerminalId, selectedTerminalId, posDeviceId, bindingMode } = input;
+  const { currentConfig, overview, profilesByTerminalId, selectedTerminalId, posDeviceId, bindingMode, masterTerminalId } = input;
   const now = new Date().toISOString();
   const nextTerminals = overview.terminals.map((terminal: any) => {
     const terminalId = asString(terminal.id);
@@ -719,6 +732,14 @@ const buildBoundConfig = (input: {
 
     const nextConfig = {
       ...baseConfig,
+      erpBinding: {
+        ...asObject(baseConfig.erpBinding),
+        terminalId,
+        tenantId: asString(terminal.tenant_id) || asString(asObject(baseConfig.erpBinding).tenantId) || undefined,
+        companyId: asString(terminal.company_id) || asString(asObject(baseConfig.erpBinding).companyId) || undefined,
+        storeId: asString(terminal.store_id) || asString(asObject(baseConfig.erpBinding).storeId) || undefined,
+        deviceId: terminalId === selectedTerminalId ? posDeviceId : nextCurrentDeviceId || undefined,
+      },
       currentDeviceId: nextCurrentDeviceId || undefined,
       lastPairingDate: terminalId === selectedTerminalId ? now : existingTerminal?.config?.lastPairingDate,
       isPrimaryNode: terminalId === selectedTerminalId ? bindingMode === 'MASTER' : Boolean(baseConfig.isPrimaryNode),
@@ -729,6 +750,10 @@ const buildBoundConfig = (input: {
         isEnabled: true,
       },
     };
+    if (terminalId === selectedTerminalId && bindingMode === 'SLAVE') {
+      nextConfig.masterTerminalId = masterTerminalId;
+      nextConfig.master_terminal_id = masterTerminalId;
+    }
 
     return {
       id: terminalId,
@@ -1053,6 +1078,7 @@ router.post('/bind-terminal', async (req, res) => {
       selectedTerminalId: targetErpTerminalId,
       posDeviceId,
       bindingMode,
+      masterTerminalId: resolveConfiguredMasterTerminalId(config),
     });
 
     saveSetting('config', boundConfig);
@@ -1074,12 +1100,13 @@ router.post('/bind-terminal', async (req, res) => {
       source: 'ERP',
       transferred: Boolean(occupiedDeviceId && occupiedDeviceId !== posDeviceId),
       tenant_id: resolvedErpTenantId,
-      terminal_id: targetOperationalTerminalId,
+      terminal_id: targetErpTerminalId,
       erp_terminal_id: targetErpTerminalId,
       terminal_name: targetTerminalName,
       company_id: asString(targetTerminal.company_id) || resolvedCompanyId || null,
       store_id: asString(targetTerminal.store_id) || resolvedStoreId || null,
       current_device_id: posDeviceId,
+      master_terminal_id: bindingMode === 'SLAVE' ? resolveConfiguredMasterTerminalId(config) : targetOperationalTerminalId,
       previous_device_id:
         asString(takeoverPayload?.previous_device_id)
         || (occupiedDeviceId && occupiedDeviceId !== posDeviceId ? occupiedDeviceId : null),

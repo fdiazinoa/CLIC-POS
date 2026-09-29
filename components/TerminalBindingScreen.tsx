@@ -28,6 +28,7 @@ import {
   createMasterAuthorityFingerprint,
   readClientBindingRecovery,
 } from '../services/setup/clientBindingRecovery';
+import { reconcileClientBindingMutation } from '../services/setup/clientBindingMutation';
 
 interface PairingResult {
   tenantId?: string;
@@ -235,6 +236,16 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
         if (authorityUrl !== recovery.authorityUrl || createMasterAuthorityFingerprint(resources.config) !== recovery.authorityFingerprint) {
           throw new Error('MASTER_AUTHORITY_CHANGED: la autoridad no coincide con el ACK pendiente.');
         }
+        await reconcileClientBindingMutation({
+          authorityUrl,
+          authorityFingerprint: recovery.authorityFingerprint,
+          terminalId: recovery.terminalId,
+          deviceId: recovery.deviceId,
+          masterTerminalId: recovery.masterTerminalId,
+          tenantId: recovery.tenantId,
+          companyId: recovery.companyId,
+          storeId: recovery.storeId,
+        });
         const params = new URLSearchParams({
           pos_device_id: recovery.deviceId,
           binding_mode: 'SLAVE',

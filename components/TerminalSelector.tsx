@@ -54,10 +54,9 @@ import {
 import { validateOperationalMasterEndpoint, type OperationalMasterContract } from '../utils/masterOperationalApi';
 import {
   createMasterAuthorityFingerprint,
-  persistClientBindingRecovery,
   resolveMasterAuthorityIdentity,
-  validateClientBindingAck,
 } from '../services/setup/clientBindingRecovery';
+import { dispatchClientBindingMutation } from '../services/setup/clientBindingMutation';
 
 interface TerminalCard {
   id: string;
@@ -1234,14 +1233,26 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           { strictPairing: true },
         );
 
-        const response = await requestMasterSetup<BindTerminalResponse>(
-          `${apiBase}/bind-terminal`,
-          {
+        const response = bindingMode === 'SLAVE'
+          ? await dispatchClientBindingMutation({
+            contract: {
+              authorityUrl: validatedAuthorityUrl,
+              authorityFingerprint: createMasterAuthorityFingerprint(masterAuthority.config),
+              terminalId: terminal.id,
+              deviceId,
+              masterTerminalId: selectedMasterId,
+              tenantId: terminal.tenantId || tenantId || '',
+              companyId: terminal.companyId || '',
+              storeId: terminal.storeId || '',
+            },
+            endpointUrl: `${validatedAuthorityUrl}/api/setup/bind-terminal`,
+            body: bindTerminalRequestBody,
+          })
+          : await requestMasterSetup<BindTerminalResponse>(`${apiBase}/bind-terminal`, {
             method: 'POST',
             body: bindTerminalRequestBody,
             stage: 'BIND_TERMINAL',
-          }
-        );
+          });
 
         if (response.status === 409) {
           keepAuthorizationModalOpen = true;
@@ -1280,27 +1291,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           throw new Error(detail || `No se pudo vincular la terminal (${response.status}).`);
         }
 
-        data = response.data;
-        if (bindingMode === 'SLAVE' && data) {
-          validateClientBindingAck({
-            response: data as Record<string, any>,
-            terminalId: data.terminal_id || terminal.id,
-            deviceId,
-            masterTerminalId: selectedMasterId,
-          });
-          persistClientBindingRecovery({
-            authorityUrl: validatedAuthorityUrl,
-            authorityFingerprint: createMasterAuthorityFingerprint(masterAuthority.config),
-            masterTerminalId: selectedMasterId,
-            terminalId: data.terminal_id || terminal.id,
-            deviceId,
-            tenantId: data.tenant_id || terminal.tenantId || tenantId || '',
-            companyId: data.company_id || terminal.companyId || '',
-            storeId: data.store_id || terminal.storeId || '',
-          });
-          localStorage.setItem('clic_terminal_binding_status', 'BINDING_RESTORE_PENDING');
-          localStorage.setItem('clic_pos_terminal_setup_pending', '1');
-        }
+        data = response.data as BindTerminalResponse | null;
       }
 
         if (!data) {

@@ -51,16 +51,25 @@ export const validateClientBindingAck = (input: {
   terminalId: string;
   deviceId: string;
   masterTerminalId: string;
+  tenantId?: string;
+  companyId?: string;
+  storeId?: string;
 }): BusinessConfig => {
   const { response } = input;
+  if (response.success !== true) {
+    throw new Error('BIND_ACK_SUCCESS_REQUIRED: la Maestra no confirmó el vínculo.');
+  }
+  if (normalized(response.terminal_id) !== normalized(input.terminalId)) {
+    throw new Error('BIND_ACK_TERMINAL_MISMATCH: terminal_id no coincide con la terminal seleccionada.');
+  }
+  if (lower(response.master_terminal_id) !== lower(input.masterTerminalId)) {
+    throw new Error('BIND_ACK_MASTER_MISMATCH: master_terminal_id no coincide con la autoridad validada.');
+  }
   if (normalized(response.current_device_id || response.currentDeviceId) !== normalized(input.deviceId)) {
     throw new Error('BIND_ACK_DEVICE_MISMATCH: la Maestra confirmó otro dispositivo.');
   }
   const config = response.config as BusinessConfig | undefined;
-  const terminal = config?.terminals?.find((entry: any) => (
-    normalized(entry.id) === normalized(input.terminalId)
-    || normalized(entry.config?.erpTerminalId) === normalized(input.terminalId)
-  ));
+  const terminal = config?.terminals?.find((entry: any) => normalized(entry.id) === normalized(input.terminalId));
   if (!terminal) throw new Error('BIND_ACK_TERMINAL_MISSING: la configuración confirmada no contiene la terminal cliente.');
   if (normalized(terminal.config?.currentDeviceId) !== normalized(input.deviceId)) {
     throw new Error('BIND_ACK_DEVICE_MISMATCH: currentDeviceId no coincide con este equipo.');
@@ -71,6 +80,20 @@ export const validateClientBindingAck = (input: {
   const acknowledgedMasterId = normalized(terminal.config?.masterTerminalId || terminal.config?.master_terminal_id);
   if (!acknowledgedMasterId || lower(acknowledgedMasterId) !== lower(input.masterTerminalId)) {
     throw new Error('BIND_ACK_MASTER_MISMATCH: masterTerminalId no coincide con la autoridad validada.');
+  }
+  const binding = terminal.config?.erpBinding || {};
+  for (const [field, expected] of [
+    ['tenant', input.tenantId],
+    ['company', input.companyId],
+    ['store', input.storeId],
+  ] as const) {
+    const normalizedExpected = normalized(expected);
+    if (!normalizedExpected) continue;
+    const topLevel = normalized(response[`${field}_id`]);
+    const embedded = normalized(binding[`${field}Id`] || binding[`${field}_id`] || (terminal as any)[`${field}Id`] || (terminal as any)[`${field}_id`]);
+    if (topLevel !== normalizedExpected || embedded !== normalizedExpected) {
+      throw new Error(`BIND_ACK_SCOPE_MISMATCH: ${field} no coincide con la selección local.`);
+    }
   }
   return config;
 };

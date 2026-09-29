@@ -27,6 +27,7 @@ export interface LegacyMutationJournalEntry {
     callerAckAt: string | null;
     callerAckReference: string | null;
     closedAt: string | null;
+    reconciliationContext?: Record<string, unknown>;
 }
 
 export interface LegacyMutationJournalStore {
@@ -167,6 +168,7 @@ export class LegacyMutationJournal {
         method: string;
         url: string;
         diagnosticRequestId: string;
+        reconciliationContext?: Record<string, unknown>;
     }): Promise<LegacyMutationJournalEntry> {
         if (!this.isHealthy() || this.hasOutcomeUnknown()) {
             throw new Error(this.isHealthy() ? 'LEGACY_MUTATION_OUTCOME_UNKNOWN' : 'LEGACY_MUTATION_JOURNAL_UNAVAILABLE');
@@ -189,6 +191,7 @@ export class LegacyMutationJournal {
             callerAckAt: null,
             callerAckReference: null,
             closedAt: null,
+            reconciliationContext: input.reconciliationContext,
         };
         this.entries.set(id, entry);
         this.blockingMutations.add(id);
@@ -277,6 +280,12 @@ export class LegacyMutationJournal {
 
     getBlockingIds(): string[] {
         return [...this.blockingMutations];
+    }
+
+    getBlockingEntries(): LegacyMutationJournalEntry[] {
+        return [...this.blockingMutations]
+            .map(id => this.entries.get(id))
+            .filter((entry): entry is LegacyMutationJournalEntry => Boolean(entry));
     }
 
     private async pruneClosedBestEffort(): Promise<void> {
