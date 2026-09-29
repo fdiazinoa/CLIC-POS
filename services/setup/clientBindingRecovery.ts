@@ -38,6 +38,28 @@ const scope = (remote: Record<string, any>, field: 'tenant' | 'company' | 'store
   return '';
 };
 
+export const resolveClientBindingExpectedScope = (input: {
+  terminal: Record<string, any>;
+  authority: Record<string, any>;
+  tenantId?: string;
+}): { tenantId: string; companyId: string; storeId: string; erpManaged: boolean } => {
+  const terminal = input.terminal || {};
+  const config = terminal.config || {};
+  const binding = config.erpBinding || {};
+  const context = input.authority?.masterSetupContext || {};
+  const erpManaged = context.erpEnabled === true || context.erp_enabled === true;
+  const resolved = {
+    tenantId: normalized(terminal.tenantId || terminal.tenant_id || binding.tenantId || binding.tenant_id || input.tenantId || scope(input.authority, 'tenant')),
+    companyId: normalized(terminal.companyId || terminal.company_id || binding.companyId || binding.company_id || scope(input.authority, 'company')),
+    storeId: normalized(terminal.storeId || terminal.store_id || binding.storeId || binding.store_id || scope(input.authority, 'store')),
+    erpManaged,
+  };
+  if (erpManaged && (!resolved.tenantId || !resolved.companyId || !resolved.storeId)) {
+    throw new Error('MASTER_SCOPE_REQUIRED: la autoridad ERP no publicó tenant/company/store completos.');
+  }
+  return resolved;
+};
+
 export const resolveMasterAuthorityIdentity = (remote: Record<string, any>): string =>
   terminalIdentity(resolveServingTerminalFromConfig(remote) as Record<string, any> | null);
 

@@ -5,6 +5,7 @@ import {
   createMasterAuthorityFingerprint,
   persistClientBindingRecovery,
   readClientBindingRecovery,
+  resolveClientBindingExpectedScope,
   validateClientBindingAck,
 } from '../services/setup/clientBindingRecovery';
 import { validateOperationalMasterEndpoint, type OperationalMasterContract } from '../utils/masterOperationalApi';
@@ -73,10 +74,34 @@ test('ACK cliente exige device, rol gobernado y masterTerminalId exactos', () =>
   assert.throws(() => validateClientBindingAck({ response: { ...response, success: false }, ...input }), /SUCCESS_REQUIRED/);
   assert.throws(() => validateClientBindingAck({ response: { ...response, terminal_id: 'OTHER' }, ...input }), /TERMINAL_MISMATCH/);
   assert.throws(() => validateClientBindingAck({ response: { ...response, master_terminal_id: 'OTHER' }, ...input }), /MASTER_MISMATCH/);
+  assert.throws(() => validateClientBindingAck({ response: { ...response, company_id: 'OTHER' }, ...input }), /SCOPE_MISMATCH/);
   assert.throws(() => validateClientBindingAck({ response: { ...response, current_device_id: 'OTHER' }, ...input }), /DEVICE_MISMATCH/);
   assert.throws(() => validateClientBindingAck({ response: { ...response, config: { terminals: [{ id: 'OTHER', config: config.terminals[0].config }] } }, ...input }), /TERMINAL_MISSING/);
   assert.throws(() => validateClientBindingAck({ response: { ...response, config: { terminals: [{ id: clientId, config: { ...config.terminals[0].config, governedByMaster: false } }] } }, ...input }), /ROLE_INVALID/);
   assert.throws(() => validateClientBindingAck({ response: { ...response, config: { terminals: [{ id: clientId, config: { ...config.terminals[0].config, masterTerminalId: 'OTHER' } }] } }, ...input }), /MASTER_MISMATCH/);
+});
+
+test('scope de bind usa tarjeta/config/autoridad y ERP exige identidad completa', () => {
+  const authority = remote() as any;
+  authority.masterSetupContext.erpEnabled = true;
+  assert.deepEqual(resolveClientBindingExpectedScope({
+    terminal: { config: { erpBinding: { tenantId: 'tenant-1' } } },
+    authority,
+  }), { tenantId: 'tenant-1', companyId: 'company-1', storeId: 'store-1', erpManaged: true });
+  const incomplete = {
+    runtimeTerminalId: masterId,
+    masterSetupContext: { erpEnabled: true, tenantId: 'tenant-1' },
+    terminals: [{ id: masterId, config: { isPrimaryNode: true, governedByMaster: false } }],
+  } as any;
+  assert.throws(() => resolveClientBindingExpectedScope({ terminal: {}, authority: incomplete }), /MASTER_SCOPE_REQUIRED/);
+  assert.deepEqual(resolveClientBindingExpectedScope({ terminal: {}, authority: { masterSetupContext: { erpEnabled: false } } }), {
+    tenantId: '', companyId: '', storeId: '', erpManaged: false,
+  });
+  const localConfig = { terminals: [{ id: clientId, config: { currentDeviceId: deviceId, isPrimaryNode: false, governedByMaster: true, masterTerminalId: masterId } }] } as any;
+  assert.equal(validateClientBindingAck({
+    response: { success: true, terminal_id: clientId, master_terminal_id: masterId, current_device_id: deviceId, config: localConfig },
+    terminalId: clientId, deviceId, masterTerminalId: masterId,
+  }), localConfig);
 });
 
 test('guard central impide publicar config global desde CLIENT y ORDER_TAKER', () => {
@@ -136,6 +161,10 @@ test('Express y servidor nativo conservan identidad/contrato de bind autoritativ
   assert.match(setup, /master_terminal_id: bindingMode === 'SLAVE'/);
   assert.match(setup, /terminal_id: targetErpTerminalId/);
   assert.match(nativeServer, /\/api\/setup\/bind-terminal/);
+  assert.match(nativeServer, /\.put\("company_id", if \(companyId\.isBlank\(\)\) JSONObject\.NULL else companyId\)/);
+  assert.match(nativeServer, /\.put\("companyId", if \(companyId\.isBlank\(\)\) JSONObject\.NULL else companyId\)/);
+  assert.match(nativeServer, /\.put\("store_id", if \(storeId\.isBlank\(\)\) JSONObject\.NULL else storeId\)/);
+  assert.match(nativeServer, /\.put\("storeId", if \(storeId\.isBlank\(\)\) JSONObject\.NULL else storeId\)/);
 });
 
 class JournalStore implements LegacyMutationJournalStore {

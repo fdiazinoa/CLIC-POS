@@ -54,6 +54,7 @@ import {
 import { validateOperationalMasterEndpoint, type OperationalMasterContract } from '../utils/masterOperationalApi';
 import {
   createMasterAuthorityFingerprint,
+  resolveClientBindingExpectedScope,
   resolveMasterAuthorityIdentity,
 } from '../services/setup/clientBindingRecovery';
 import { dispatchClientBindingMutation } from '../services/setup/clientBindingMutation';
@@ -1216,13 +1217,18 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
         }
         const selectedMasterId = resolveOrderTakerContract(terminal).masterTerminalId
           || resolveMasterAuthorityIdentity(masterAuthority.config);
+        const expectedScope = resolveClientBindingExpectedScope({
+          terminal,
+          authority: masterAuthority.config,
+          tenantId: terminal.tenantId || tenantId || '',
+        });
         const pairingContract: OperationalMasterContract = {
           erpManaged: false,
           terminalId: terminal.id,
           masterTerminalId: selectedMasterId,
-          tenantId: terminal.tenantId || tenantId || '',
-          companyId: terminal.companyId || '',
-          storeId: terminal.storeId || '',
+          tenantId: expectedScope.tenantId,
+          companyId: expectedScope.companyId,
+          storeId: expectedScope.storeId,
           deviceId,
           localIps: masterAuthority.localIps,
         };
@@ -1241,9 +1247,9 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
               terminalId: terminal.id,
               deviceId,
               masterTerminalId: selectedMasterId,
-              tenantId: terminal.tenantId || tenantId || '',
-              companyId: terminal.companyId || '',
-              storeId: terminal.storeId || '',
+              tenantId: expectedScope.tenantId,
+              companyId: expectedScope.companyId,
+              storeId: expectedScope.storeId,
             },
             endpointUrl: `${validatedAuthorityUrl}/api/setup/bind-terminal`,
             body: bindTerminalRequestBody,
