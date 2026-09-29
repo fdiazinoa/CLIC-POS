@@ -5499,6 +5499,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   transactionNetAmount: saleNetAmount,
                   transactionTaxAmount: saleTaxAmount,
                   transactionTotal: saleTotal,
+                  taxExempt: isSelectedCustomerTaxExempt,
                   allowedTaxIds: appliedServiceTaxPolicy.taxIds,
                });
                const salePayments = payments.filter(p => !['WALLET', 'ADVANCE'].includes(p.method));
@@ -5557,7 +5558,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         balanceDueAtSale: creditAmount > 0 ? creditAmount : undefined,
                         customerSnapshot: customerForCheckout ? {
                            name: customerForCheckout.name,
-                           taxId: customerForCheckout.taxId
+                           taxId: customerForCheckout.taxId,
+                           isTaxExempt: customerForCheckout.isTaxExempt
                         } : undefined,
                         walletPaymentAmount: walletPaymentAmount > 0 ? walletPaymentAmount : undefined
                      },
@@ -5762,7 +5764,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      taxId: customerForCheckout.taxId,
                      address: customerForCheckout.address,
                      phone: customerForCheckout.phone,
-                     email: customerForCheckout.email
+                     email: customerForCheckout.email,
+                     isTaxExempt: customerForCheckout.isTaxExempt
                   } : activeRecoveredReservation ? {
                      name: activeRecoveredReservation.customerName
                   } : undefined,

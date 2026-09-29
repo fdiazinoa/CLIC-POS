@@ -6,7 +6,7 @@ import { PrintRouterService } from '../services/printer/PrintRouterService';
 import { buildEscPosCashDrawerPayload, buildEscPosCashMovementReceiptPayload, buildEscPosComandaPayload, buildEscPosReservationPayload, buildEscPosSubtotalPayload, buildEscPosTicketPayload, buildEscPosVoucherPayload, shouldOpenDrawerForTransaction } from '../services/printer/EscPosFormatter';
 import { shouldSuppressBrowserPrintFallback } from '../services/printer/PrintRuntime';
 import { dbAdapter } from '../services/db';
-import { calculateTaxBreakdownFromItems, calculateTransactionFiscalSummary, consolidateTaxBreakdownForDisplay, formatTaxLineLabel } from './fiscalBreakdown';
+import { calculateTaxBreakdownFromItems, calculateTransactionFiscalSummary, consolidateTaxBreakdownForDisplay, formatTaxLineLabel, hasAuthoritativeZeroTax } from './fiscalBreakdown';
 import { resolveLineDiscountPresentation } from './lineDiscountPresentation';
 import { buildPaymentReceiptPresentation, buildPaymentSettlementSummary } from './paymentSettlement';
 import { getTerminalSnapshotSellers, resolveTerminalSellerName } from './terminalSnapshotSellers';
@@ -230,6 +230,7 @@ const printTicketInternal = async (transaction: Transaction, config: BusinessCon
     const subtotal = fiscalSummary.subtotal;
     const taxTotal = fiscalSummary.taxTotal;
     const finalTotal = fiscalSummary.total;
+    const suppressZeroTaxPresentation = hasAuthoritativeZeroTax(transaction);
     const savings = lineDiscountTotal + discountTotal;
     const redeemedCouponCodes = resolveReceiptCouponCodes(transaction);
 
@@ -409,8 +410,8 @@ const printTicketInternal = async (transaction: Transaction, config: BusinessCon
                 isTaxIncluded,
                 terminalConfig,
                 absoluteLineValues: true,
+                taxExempt: suppressZeroTaxPresentation,
             }), config.taxes);
-            const iTax = Math.abs(itemTaxBreakdown.reduce((sum, tax) => sum + Number(tax.amount || 0), 0));
             const taxLineHtml = itemTaxBreakdown.length > 0
                 ? `<br/>${itemTaxBreakdown.map(tax => `${formatTaxLineLabel(tax)}: ${currencySymbol}${Number(tax.amount || 0).toFixed(2)}`).join('<br/>')}`
                 : '';
@@ -450,7 +451,7 @@ const printTicketInternal = async (transaction: Transaction, config: BusinessCon
                                     ${lineDiscount.hasDiscount ? `<br/><strong>Precio final: ${currencySymbol}${lineDiscount.finalLineTotal.toFixed(2)}</strong>` : ''}
                                     ${variantText ? `<br/>${escapeHtml(variantText)}` : ''}
                                     ${modifiers.length ? `<br/>Op: ${escapeHtml(modifiers.join(', '))}` : ''}
-                                    ${taxLineHtml || `<br/>Impuestos: ${currencySymbol}${iTax.toFixed(2)}`}
+                                    ${taxLineHtml}
                                     ${sellerNameHtml}
                                     ${hasTrackingHtml ? `<br/>${trackingHtml.join('<br/>')}` : ''}
                                 </span>
@@ -475,10 +476,10 @@ const printTicketInternal = async (transaction: Transaction, config: BusinessCon
                     <span>${globalDiscountLabel}</span>
                     <span>-${currencySymbol}${(discountTotal || 0).toFixed(2)}</span>
                 </div>` : ''}
-                <div class="total-row">
+                ${Math.abs(taxTotal) > 0.0001 ? `<div class="total-row">
                     <span>TOTAL IMPUESTOS</span>
                     <span>${currencySymbol}${(taxTotal || 0).toFixed(2)}</span>
-                </div>
+                </div>` : ''}
                 
                 <div class="total-row total-final">
                     <span>TOTAL</span>

@@ -113,7 +113,9 @@ export const consolidateTaxBreakdownForDisplay = (
     current.lineCount += Math.round(toNumber(line.lineCount));
   });
 
-  return Array.from(grouped.values()).sort((left, right) => right.rate - left.rate);
+  return Array.from(grouped.values())
+    .filter((line) => Math.abs(line.amount) > EPSILON)
+    .sort((left, right) => right.rate - left.rate);
 };
 
 interface TaxBreakdownOptions {
@@ -137,8 +139,42 @@ interface AuthoritativeLineOptions extends TaxBreakdownOptions {
 
 type TaxableTransaction = Pick<Transaction, 'items' | 'discountAmount' | 'isTaxIncluded' | 'taxAmount' | 'total'> & {
   taxBreakdown?: FiscalTaxBreakdownLine[];
+  customerSnapshot?: Pick<NonNullable<Transaction['customerSnapshot']>, 'isTaxExempt'>;
   serviceTaxPolicySnapshot?: Transaction['serviceTaxPolicySnapshot'];
   service_tax_policy_snapshot?: Transaction['service_tax_policy_snapshot'];
+};
+
+/**
+ * Treats persisted zero tax as authoritative only when the header explicitly
+ * stores zero and the document also has an explicit zero breakdown or an
+ * exempt-customer snapshot. Missing legacy fields retain the calculation
+ * fallback, and any positive persisted breakdown remains visible.
+ */
+export const hasAuthoritativeZeroTax = (transaction: TaxableTransaction): boolean => {
+  const rawTaxAmount = transaction.taxAmount;
+  const hasNumericZeroTaxAmount = typeof rawTaxAmount === 'number'
+    && Number.isFinite(rawTaxAmount)
+    && Math.abs(rawTaxAmount) <= EPSILON;
+  if (!hasNumericZeroTaxAmount) return false;
+
+  const explicitBreakdown = Array.isArray(transaction.taxBreakdown)
+    ? transaction.taxBreakdown
+    : undefined;
+  const hasNonZeroBreakdown = explicitBreakdown?.some(
+    (line) => typeof line?.amount === 'number'
+      && Number.isFinite(line.amount)
+      && Math.abs(line.amount) > EPSILON,
+  ) === true;
+  if (hasNonZeroBreakdown) return false;
+
+  const hasExplicitZeroBreakdown = explicitBreakdown !== undefined
+    && (explicitBreakdown.length === 0 || explicitBreakdown.every(
+      (line) => typeof line?.amount === 'number'
+        && Number.isFinite(line.amount)
+        && Math.abs(line.amount) <= EPSILON,
+    ));
+
+  return hasExplicitZeroBreakdown || transaction.customerSnapshot?.isTaxExempt === true;
 };
 
 export const getTerminalDefaultTaxIds = (terminalConfig?: TerminalTaxConfig): string[] =>
@@ -325,17 +361,21 @@ export const calculateTransactionFiscalSummary = (
   const policySnapshot = transaction.serviceTaxPolicySnapshot || transaction.service_tax_policy_snapshot;
   const hasSnapshotTaxIds = !!policySnapshot
     && Object.prototype.hasOwnProperty.call(policySnapshot, 'taxIds');
+  const authoritativeZeroTax = hasAuthoritativeZeroTax(transaction);
   const computedBreakdown = calculateTaxBreakdownFromItems(transaction.items || [], config, {
     discountAmount,
     isTaxIncluded: !!transaction.isTaxIncluded,
     terminalConfig: options.terminalConfig,
     fallbackTaxRate,
+    taxExempt: authoritativeZeroTax,
     allowedTaxIds: hasSnapshotTaxIds ? policySnapshot?.taxIds : options.allowedTaxIds,
   });
 
-  const taxBreakdown = Array.isArray(transaction.taxBreakdown) && transaction.taxBreakdown.length > 0
-    ? transaction.taxBreakdown
-    : computedBreakdown;
+  const taxBreakdown = authoritativeZeroTax
+    ? []
+    : Array.isArray(transaction.taxBreakdown) && transaction.taxBreakdown.length > 0
+      ? transaction.taxBreakdown
+      : computedBreakdown;
 
   const taxTotal = round2(taxBreakdown.reduce((sum, line) => sum + toNumber(line.amount), 0));
   const subtotal = transaction.isTaxIncluded
