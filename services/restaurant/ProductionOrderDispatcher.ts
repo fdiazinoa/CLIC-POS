@@ -349,14 +349,13 @@ export const runProductionPrintAttempt = async (
   await checkpoint(inFlight);
   try {
     if (await print(inFlight)) return { intent: inFlight, status: 'PRINTED' };
-    const pending = {
+    const unknown = {
       ...inFlight,
-      status: 'PENDING' as const,
-      lastError: 'PRODUCTION_PRINTER_NOT_CONFIRMED',
+      lastError: 'PRODUCTION_PRINT_OUTCOME_UNKNOWN',
       updatedAt: new Date().toISOString(),
     };
-    await checkpoint(pending);
-    return { intent: pending, status: 'PENDING', error: pending.lastError };
+    await checkpoint(unknown);
+    return { intent: unknown, status: 'OUTCOME_UNKNOWN', error: unknown.lastError };
   } catch (error) {
     const unknown = {
       ...inFlight,

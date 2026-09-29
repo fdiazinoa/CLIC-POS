@@ -99,7 +99,7 @@ test('printer-only production creates a durable print identity without enabling 
   assert.match(intent.id, /^print:kds:txn-1:bar:c1$/);
 });
 
-test('late print after timeout remains outcome unknown and is excluded from automatic retry', async () => {
+test('false acknowledgement with late paper output remains unknown and is never auto-retried', async () => {
   const intent = createProductionPrintIntent({
     orderId: 'TXN-1', areaId: 'bar', areaName: 'Bar', cartIds: ['c1'],
     items: [{ id: 'p1', cartId: 'c1', name: 'Bebida', quantity: 1 } as any],
@@ -109,9 +109,9 @@ test('late print after timeout remains outcome unknown and is excluded from auto
   let checkpoint = intent;
   const result = await runProductionPrintAttempt(
     intent,
-    () => new Promise<boolean>((_resolve, reject) => {
+    () => new Promise<boolean>((resolve) => {
       printCalls += 1;
-      setTimeout(() => reject(new Error('PRINT_TIMEOUT')), 1);
+      setTimeout(() => resolve(false), 1);
       setTimeout(() => { paperOutputs += 1; }, 5);
     }),
     async (next) => { checkpoint = next; },
@@ -121,6 +121,13 @@ test('late print after timeout remains outcome unknown and is excluded from auto
   assert.equal(result.status, 'OUTCOME_UNKNOWN');
   assert.equal(checkpoint.status, 'OUTCOME_UNKNOWN');
   assert.equal(isProductionPrintAutoRetryEligible(checkpoint), false);
+  const automaticRetryQueue = [checkpoint].filter(isProductionPrintAutoRetryEligible);
+  for (const pending of automaticRetryQueue) {
+    await runProductionPrintAttempt(pending, async () => {
+      printCalls += 1;
+      return true;
+    }, async () => undefined);
+  }
   assert.equal(printCalls, 1);
   assert.equal(paperOutputs, 1);
 });
