@@ -82,7 +82,7 @@ interface TableMapProps {
     isRestaurantMode?: boolean;
     onOpenTable?: (table: Table) => Promise<Table | null>;
     onRefreshTables?: () => void | Promise<void>;
-    onUpdateTables?: (tables: Table[]) => void | Promise<void>;
+    onUpdateTables?: (tables: Table[], options?: { changedTableId?: string }) => void | Promise<void>;
     onUpdateParkedTickets?: (tickets: ParkedTicket[]) => void | Promise<void>;
     canViewBusinessMetrics?: boolean;
     roles?: RoleDefinition[];
@@ -1074,8 +1074,8 @@ const TableMap: React.FC<TableMapProps> = ({
         } as Table;
         const nextTables = (Array.isArray(tables) ? tables : []).map(candidate => candidate.id === table.id ? nextTable : candidate);
 
-        void Promise.resolve(onUpdateParkedTickets?.(nextTickets)).catch(error => console.error('No se pudo persistir la cuenta:', error));
-        void Promise.resolve(onUpdateTables?.(nextTables)).catch(error => console.error('No se pudo persistir la mesa:', error));
+        await Promise.resolve(onUpdateParkedTickets?.(nextTickets));
+        await Promise.resolve(onUpdateTables?.(nextTables, { changedTableId: String(table.id) }));
         setSelectedAccountTable(nextTable);
         return ticket;
     }, [currentUser.id, currentUser.name, getTableTickets, onUpdateParkedTickets, onUpdateTables, parkedTickets, roomLabelById, tables]);

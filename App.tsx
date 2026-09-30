@@ -12543,11 +12543,26 @@ const AppContent: React.FC = () => {
                   });
                 }}
                 onRefreshTables={async () => { await fetchTables(); }}
-                onUpdateTables={async (nextTables) => {
-                  setTables(nextTables);
-                  if (canUseLocalOperationalTableStore()) {
-                    await db.save('tables', nextTables);
+                onUpdateTables={async (nextTables, options) => {
+                  const changedTableId = String(options?.changedTableId || '').trim();
+                  if (changedTableId) {
+                    const changedTable = nextTables.find(table => String(table.id) === changedTableId);
+                    if (!changedTable) throw new Error('TABLE_ACCOUNT_TABLE_MISSING');
+                    setTables(previousTables => {
+                      const mergedTables = previousTables.map(table =>
+                        String(table.id) === changedTableId ? changedTable : table
+                      );
+                      if (canUseLocalOperationalTableStore()) {
+                        void db.save('tables', mergedTables).catch(error =>
+                          console.error('Failed to persist table account:', error)
+                        );
+                      }
+                      return mergedTables;
+                    });
+                    return;
                   }
+                  setTables(nextTables);
+                  if (canUseLocalOperationalTableStore()) await db.save('tables', nextTables);
                 }}
                 onUpdateParkedTickets={handleUpdateParkedTickets}
                 currencySymbol={config.currencySymbol}
@@ -12766,12 +12781,13 @@ const AppContent: React.FC = () => {
               } as Table;
 
               setTables(prev => {
-                const base = prev.some(t => t.id === updatedTable.id)
+                const nextTables = prev.some(t => t.id === updatedTable.id)
                   ? prev.map(t => t.id === updatedTable.id ? updatedTable : t)
                   : [...prev, updatedTable];
-                const reconciled = reconcileTablesWithParkedTickets(base, [ticket, ...(parkedTickets || [])]);
-                db.save('tables', reconciled).catch(error => console.error('Failed to persist table occupancy:', error));
-                return reconciled;
+                // El cierre de otra mesa puede seguir propagándose por React.
+                // Un snapshot viejo de parkedTickets no debe liberar mesas ajenas.
+                db.save('tables', nextTables).catch(error => console.error('Failed to persist table occupancy:', error));
+                return nextTables;
               });
 
               if (!isClientTerminalMode()) {
