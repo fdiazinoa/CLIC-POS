@@ -28,6 +28,63 @@ const localCommitEffect = (bindings: Record<string, unknown>) => executeExpressi
   (node, source) => ts.isCallExpression(node) && node.expression.getText(source) === 'useLayoutEffect'
     && node.arguments[0]?.getText(source).includes('committedLocalDestinationRef.current = ready') ? node.arguments[0] : undefined, bindings);
 
+test('abrir otra mesa conserva la cuenta anterior y espera a guardar la nueva', async () => {
+  const mesa4 = { id: 'mesa-4', name: 'Mesa 4', status: 'OCCUPIED', currentOrderId: 'orden-4' };
+  const mesa7 = { id: 'mesa-7', name: 'Mesa 7', status: 'FREE' };
+  const staleMesa4 = { ...mesa4, status: 'FREE', currentOrderId: undefined };
+  let releaseTicket!: () => void;
+  let persistedTables: any[] = [];
+  let selected: any = null;
+  const saveAccount = declaration('TableMap', 'createTableAccount', {
+    useCallback: (fn: unknown) => fn,
+    getTableTickets: () => [],
+    getTableLabel: (table: any) => table.name,
+    roomLabelById: new Map(),
+    currentUser: { id: 'user', name: 'Operator' },
+    parkedTickets: [{ id: 'orden-4', tableId: 'mesa-4', items: [{ id: 'item-4' }] }],
+    tables: [staleMesa4, mesa7],
+    onUpdateParkedTickets: () => new Promise<void>(resolve => { releaseTicket = resolve; }),
+    onUpdateTables: (nextTables: any[], options: any) => {
+      assert.equal(options.changedTableId, 'mesa-7');
+      const updateTables = attribute('App', 'onUpdateTables', 'changedTableId', {
+        setTables: (update: (previous: any[]) => any[]) => { persistedTables = update([mesa4, mesa7]); },
+        canUseLocalOperationalTableStore: () => false,
+        db: { save: async () => {} },
+        console,
+      }) as (tables: any[], options: any) => Promise<void>;
+      return updateTables(nextTables, options);
+    },
+    setSelectedAccountTable: (table: any) => { selected = table; },
+  }) as (table: any) => Promise<any>;
+
+  const opening = saveAccount(mesa7);
+  await Promise.resolve();
+  assert.equal(selected, null, 'la navegación espera el guardado de la cuenta');
+  releaseTicket();
+  const ticket = await opening;
+  assert.equal(ticket.tableId, 'mesa-7');
+  assert.equal(persistedTables.find(table => table.id === 'mesa-4').currentOrderId, 'orden-4');
+  assert.equal(persistedTables.find(table => table.id === 'mesa-4').status, 'OCCUPIED');
+  assert.equal(persistedTables.find(table => table.id === 'mesa-7').currentOrderId, ticket.id);
+});
+
+test('guardar la segunda mesa no libera la primera con tickets de un render anterior', async () => {
+  const mesa4 = { id: 'mesa-4', status: 'OCCUPIED', currentOrderId: 'orden-4', currentOrderTotal: 20 };
+  const mesa7 = { id: 'mesa-7', status: 'FREE', currentOrderId: undefined };
+  let savedTables: any[] = [];
+  const saveOrder = attribute('App', 'onTableOrderSaved', 'updatedTable', {
+    setTables: (update: (previous: any[]) => any[]) => { savedTables = update([mesa4, mesa7]); },
+    db: { save: async () => {} },
+    console,
+    isClientTerminalMode: () => true,
+    parkedTickets: [],
+  }) as (table: any, ticket: any) => Promise<void>;
+
+  await saveOrder(mesa7, { id: 'orden-7', tableId: 'mesa-7', items: [{ id: 'item-7', price: 10, quantity: 1 }], total: 10, timestamp: 'now' });
+  assert.deepEqual(savedTables.find(table => table.id === 'mesa-4'), mesa4);
+  assert.equal(savedTables.find(table => table.id === 'mesa-7').currentOrderId, 'orden-7');
+});
+
 test('real table branches own selectors and hydrated POS destinations without borrowing old traces', async () => {
   const priorWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
   const priorPerformance = Object.getOwnPropertyDescriptor(globalThis, 'performance');
