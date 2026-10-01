@@ -24,6 +24,7 @@ import { initSocket } from './socket.js';
 
 import { db, getCollection, getSetting, saveSetting } from './db';
 import { persistOperationalDocumentState } from './services/terminalOperationalState.js';
+import { mergeParkedTicketsForTable } from './tableTicketMerge.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -161,16 +162,13 @@ server.use('/api/sync/terminals', terminalConfigRoutes);
 server.use('/api/fiscal', fiscalRoutes);
 
 // --- Mesas & Salas Endpoints ---
-const getOpenParkedTickets = (): any[] => {
+const getPersistedParkedTickets = (): any[] => {
     try {
         const parkedTicketsBlob = db.prepare("SELECT value FROM settings WHERE key = 'parkedTickets'").get() as any;
         const parsed = parkedTicketsBlob ? JSON.parse(parkedTicketsBlob.value || '[]') : [];
-        return Array.isArray(parsed)
-            ? parsed.filter((ticket: any) =>
-                Array.isArray(ticket?.items) &&
-                ticket.items.some((item: any) => Number(item?.quantity || 0) > 0)
-            )
-            : [];
+        // A newly opened table has a valid empty account. Dropping it from an
+        // authoritative snapshot makes the next table refresh lose that account.
+        return Array.isArray(parsed) ? parsed : [];
     } catch (error) {
         console.warn('No se pudieron leer tickets parqueados para mesas:', error);
         return [];
@@ -227,7 +225,7 @@ server.get('/api/mesas', (req, res) => {
         }
 
         const tables = db.prepare("SELECT * FROM tables").all();
-        const parkedTickets = getOpenParkedTickets();
+        const parkedTickets = getPersistedParkedTickets();
         const parkedTicketsIndex = indexParkedTicketsForTables(parkedTickets);
 
         // Format for frontend (parse JSON 'data' field)
@@ -273,12 +271,12 @@ server.put('/api/mesas/parked-tickets', (req, res) => {
     }
 
     try {
-        saveSetting('parkedTickets', parkedTickets);
+        const tableId = String(req.body?.tableId || '').trim();
+        const nextTickets = mergeParkedTicketsForTable(getPersistedParkedTickets(), parkedTickets, tableId);
+        saveSetting('parkedTickets', nextTickets);
         res.json({
             success: true,
-            // ACK the exact persisted payload, including a newly opened empty
-            // account. The filtered view used for occupancy is not a write ACK.
-            parkedTickets
+            parkedTickets: nextTickets
         });
     } catch (error: any) {
         res.status(500).json({ success: false, message: error.message });
@@ -381,7 +379,7 @@ server.get('/api/tables', (req, res) => {
         // Note: In a real SQL environment, 'orders' would be a table. Here 'parkedTickets' is a JSON blob in settings.
 
         const allTables = db.prepare(`SELECT * FROM tables`).all() as any[];
-        const parkedTicketsIndex = indexParkedTicketsForTables(getOpenParkedTickets());
+        const parkedTicketsIndex = indexParkedTicketsForTables(getPersistedParkedTickets());
 
         // We manually join because SQLite JSON support varies by version/compilation and simple array join is efficient enough for cache
 

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { assertParkedTicketsAcknowledged } from '../utils/parkedTicketAck';
+import { mergeParkedTicketsForTable } from '../server/tableTicketMerge';
 
 const serverSource = readFileSync(new URL('../native-stubs/android/ClicPOSMasterHttpServer.kt', import.meta.url), 'utf8');
 const expressSource = readFileSync(new URL('../server/index.ts', import.meta.url), 'utf8');
@@ -51,7 +52,21 @@ test('Express confirma también la cuenta recién abierta sin artículos', () =>
     expressSource.indexOf("server.put('/api/mesas/parked-tickets'"),
     expressSource.indexOf('// Mover mesa'),
   );
-  assert.match(parkedTicketRoute, /saveSetting\('parkedTickets', parkedTickets\)/);
-  assert.match(parkedTicketRoute, /success: true,\s*\/\/[^\n]*\n\s*\/\/[^\n]*\n\s*parkedTickets\s*\}/);
-  assert.doesNotMatch(parkedTicketRoute, /parkedTickets: getOpenParkedTickets\(\)/);
+  assert.match(parkedTicketRoute, /mergeParkedTicketsForTable\(getPersistedParkedTickets\(\), parkedTickets, tableId\)/);
+  assert.match(parkedTicketRoute, /saveSetting\('parkedTickets', nextTickets\)/);
+  assert.match(parkedTicketRoute, /success: true,\s*parkedTickets: nextTickets/);
+  assert.match(expressSource, /const getPersistedParkedTickets[\s\S]*?return Array\.isArray\(parsed\) \? parsed : \[\]/);
+  assert.doesNotMatch(expressSource, /getOpenParkedTickets/);
+});
+
+test('Express actualiza solo la mesa digitada y conserva cuentas ajenas y vacías', () => {
+  const existing = [
+    { id: 'cuenta-4', tableId: 'mesa-4', items: [], total: 0 },
+    { id: 'cuenta-7', tableId: 'mesa-7', items: [{ id: 'cafe' }], total: 100 },
+  ];
+  const changed = [{ id: 'cuenta-4', tableId: 'mesa-4', items: [{ id: 'agua' }], total: 60 }];
+  const merged = mergeParkedTicketsForTable(existing, changed, 'mesa-4');
+  assert.deepEqual(merged, [existing[1], changed[0]]);
+  assert.doesNotThrow(() => assertParkedTicketsAcknowledged(changed, merged, 'cuenta-4', 'mesa-4'));
+  assert.deepEqual(mergeParkedTicketsForTable(existing, [], 'mesa-4'), [existing[1]]);
 });
