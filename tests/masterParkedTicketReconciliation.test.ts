@@ -5,7 +5,7 @@ import {
   type LegacyMutationJournalEntry,
   type LegacyMutationJournalStore,
 } from '../services/sync/LegacyMutationJournal';
-import { reconcileMasterParkedTicketOutcome } from '../services/sync/masterParkedTicketReconciliation';
+import { reconcileMasterParkedTicketOutcome, reconcileMasterRejectedTableMutations } from '../services/sync/masterParkedTicketReconciliation';
 
 class Store implements LegacyMutationJournalStore {
   rows = new Map<string, LegacyMutationJournalEntry>();
@@ -101,4 +101,49 @@ test('an additional ambiguous mutation prevents automatic reconciliation', async
     readNativeSnapshot: async () => ({ revision: 42, parkedTickets: [ticket] }),
   }), null);
   assert.equal(journal.hasBlockingMutations(), true);
+});
+
+test('old Android Master 409 table rejections are closed without replaying a mutation', async () => {
+  const store = new Store();
+  const journal = new LegacyMutationJournal(store);
+  await journal.initializeForStartup();
+  const entry = await journal.begin({
+    operationCorrelationId: 'MASTER_PARKED_TICKETS_SYNC:old',
+    authorityFingerprint: `${origin}|master-terminal`,
+    generation: 1,
+    method: 'PUT',
+    url: `${origin}/api/mesas/parked-tickets`,
+    diagnosticRequestId: 'old',
+  });
+  await journal.prepareDispatch(entry.id, entry.authorityFingerprint, 1);
+  await journal.recordHttpStatus(entry.id, 409);
+  await journal.markOutcomeUnknown(entry.id, 409);
+  const nowMs = Date.parse(journal.getEntry(entry.id)!.dispatchedAt!) + 16_000;
+  assert.equal(await reconcileMasterRejectedTableMutations({ journal, authorityOrigin: origin, nowMs }), 1);
+  assert.equal(journal.hasBlockingMutations(), false);
+  assert.equal(journal.getEntry(entry.id)?.classification, 'SAFE_PRE_SIDE_EFFECT');
+});
+
+test('ambiguous response, unrelated route, wrong authority and recent rejection remain blocked', async () => {
+  for (const scenario of [
+    { method: 'PUT', path: '/api/mesas/parked-tickets', status: null, authority: origin, ageMs: 16_000 },
+    { method: 'POST', path: '/api/mesas/unir', status: 409, authority: origin, ageMs: 16_000 },
+    { method: 'PUT', path: '/api/mesas/parked-tickets', status: 409, authority: 'http://10.0.0.28:3001', ageMs: 16_000 },
+    { method: 'PUT', path: '/api/mesas/parked-tickets', status: 409, authority: origin, ageMs: 5_000 },
+  ]) {
+    const journal = new LegacyMutationJournal(new Store());
+    await journal.initializeForStartup();
+    const entry = await journal.begin({
+      authorityFingerprint: `${scenario.authority}|master-terminal`,
+      generation: 1,
+      method: scenario.method,
+      url: `${scenario.authority}${scenario.path}`,
+      diagnosticRequestId: 'candidate',
+    });
+    await journal.prepareDispatch(entry.id, entry.authorityFingerprint, 1);
+    await journal.markOutcomeUnknown(entry.id, scenario.status);
+    const nowMs = Date.parse(journal.getEntry(entry.id)!.dispatchedAt!) + scenario.ageMs;
+    assert.equal(await reconcileMasterRejectedTableMutations({ journal, authorityOrigin: origin, nowMs }), 0);
+    assert.equal(journal.hasOutcomeUnknown(), true);
+  }
 });

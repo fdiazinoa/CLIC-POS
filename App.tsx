@@ -372,7 +372,7 @@ import {
 } from './utils/operationalMasterConfig';
 import { persistValidatedClientMasterTargetAsync, resolveClientMasterTerminalId } from './utils/clientMasterBinding';
 import { completeLegacyMutationAfterDurableAck, legacyMutationJournal } from './services/sync/LegacyMutationJournal';
-import { reconcileMasterParkedTicketOutcome } from './services/sync/masterParkedTicketReconciliation';
+import { reconcileMasterParkedTicketOutcome, reconcileMasterRejectedTableMutations } from './services/sync/masterParkedTicketReconciliation';
 import { assertParkedTicketsAcknowledged } from './utils/parkedTicketAck';
 import {
   dispatchLegacyLanMutation,
@@ -9606,6 +9606,12 @@ const AppContent: React.FC = () => {
       const syncOperation = async () => {
         await persistMasterTickets();
         const masterUrl = await resolveValidatedOperationalApiUrl('/api/mesas/parked-tickets');
+        if (legacyMutationJournal.hasOutcomeUnknown()) {
+          await reconcileMasterRejectedTableMutations({
+            journal: legacyMutationJournal,
+            authorityOrigin: new URL(masterUrl).origin,
+          });
+        }
         if (legacyMutationJournal.hasOutcomeUnknown() && masterEditLock?.tableId) {
           const nativeBridge = (window as any).ClicPOSNativePrinter;
           const reconciledRevision = typeof nativeBridge?.getMasterRestaurantState === 'function'
@@ -9627,6 +9633,21 @@ const AppContent: React.FC = () => {
             }
             return;
           }
+        }
+        if (legacyMutationJournal.hasOutcomeUnknown()) {
+          try {
+            (window as any).ClicPOSNativePrinter?.debugLog?.(JSON.stringify({
+              tag: 'ClicPOSTableJournal',
+              message: 'MASTER_TABLE_SAVE_BLOCKED',
+              data: legacyMutationJournal.getBlockingEntries().map(entry => ({
+                method: entry.method,
+                path: entry.canonicalPath,
+                httpStatus: entry.httpStatus,
+                operation: entry.operationCorrelationId.split(':')[0],
+                state: entry.state,
+              })),
+            }));
+          } catch { /* Diagnostics must never change admission. */ }
         }
         const response = await dispatchLegacyLanMutation<any>({
           url: masterUrl,
