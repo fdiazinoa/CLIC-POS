@@ -12,6 +12,35 @@ type Ticket = {
 
 type Snapshot = { revision?: number; parkedTickets?: unknown };
 
+// These are the only 409 responses emitted by the Android Master for these
+// routes, and each is returned before changing restaurant state. Older APKs
+// could leave the journal row OUTCOME_UNKNOWN despite recording HTTP 409.
+const isProvenPreMutationTableConflict = (method: string, path: string): boolean =>
+  (method === 'PUT' && (path === '/api/mesas/parked-tickets' || /^\/api\/tables\/[^/]+$/.test(path)))
+  || (method === 'POST' && (path === '/api/mesas/bloquear' || path === '/api/mesas/desbloquear'));
+
+export const reconcileMasterRejectedTableMutations = async (input: {
+  journal: LegacyMutationJournal;
+  authorityOrigin: string;
+  nowMs?: number;
+}): Promise<number> => {
+  if (!input.journal.isHealthy()) return 0;
+  let reconciled = 0;
+  for (const entry of input.journal.getBlockingEntries()) {
+    const dispatchedAt = Date.parse(entry.dispatchedAt || '');
+    if (entry.state !== 'OUTCOME_UNKNOWN'
+      || entry.httpStatus !== 409
+      || !entry.authorityFingerprint.startsWith(`${input.authorityOrigin}|`)
+      || !Number.isFinite(dispatchedAt)
+      || (input.nowMs ?? Date.now()) - dispatchedAt < 15_000
+      || !isProvenPreMutationTableConflict(entry.method, entry.canonicalPath)) continue;
+    await input.journal.acknowledge(entry.id, 'SAFE_PRE_SIDE_EFFECT',
+      `RECONCILED_ANDROID_MASTER_TABLE_409:${entry.canonicalPath}`);
+    reconciled += 1;
+  }
+  return reconciled;
+};
+
 /** Reconcile only a single, old self-Master table write against the native authority. */
 export const reconcileMasterParkedTicketOutcome = async (input: {
   journal: LegacyMutationJournal;
