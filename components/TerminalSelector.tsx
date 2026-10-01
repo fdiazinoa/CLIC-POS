@@ -38,6 +38,7 @@ import type { SyncPermissions, SyncProfile, SyncProfileSource } from '../service
 import {
   isTerminalAllowedForBinding,
   ORDER_TAKER_TERMINAL_TYPE,
+  resolveBindingMasterTerminalIds,
   resolveOrderTakerContract,
   type PosTerminalType,
 } from '../utils/orderTakerPolicy';
@@ -977,15 +978,10 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           tenantId: data.tenant_id,
         }) as TerminalCard)
         .filter((terminal) => Boolean(terminal.id));
-      const masterTerminalIds = new Set(
-        (Array.isArray(currentConfig.terminals) ? currentConfig.terminals : [])
-          .filter((entry) => entry?.config?.isPrimaryNode)
-          .flatMap((entry) => [
-            String(entry?.id || '').trim(),
-            String(entry?.config?.erpTerminalId || '').trim(),
-            String(entry?.config?.erpBinding?.terminalId || '').trim(),
-          ])
-          .filter(Boolean)
+      const masterTerminalIds = resolveBindingMasterTerminalIds(
+        bindingMode,
+        Array.isArray(currentConfig.terminals) ? currentConfig.terminals : [],
+        rawTerminals,
       );
       const visibleRawTerminals = rawTerminals.filter((terminal: any) => {
         const terminalId = String(terminal?.id || terminal?.terminal_id || terminal?.erp_terminal_id || '').trim();
