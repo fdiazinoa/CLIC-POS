@@ -5364,21 +5364,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             finalNcfType = undefined;
          } else if (isRefundOnly) {
             try {
-               finalNcf = await withTimeout(
-                  db.getNextNCF('B04', terminalId, activeTerminalConfig?.fiscal?.typeConfigs?.['B04']?.batchSize || 50),
-                  8000,
-                  'TIMEOUT_GET_REFUND_ONLY_NCF'
-               );
+               // NCF allocation mutates the durable pointer. A Promise.race timeout
+               // cannot cancel it and would allow a second checkout to race it.
+               finalNcf = await db.getNextNCF('B04', terminalId, activeTerminalConfig?.fiscal?.typeConfigs?.['B04']?.batchSize || 50);
                finalNcfType = finalNcf ? 'B04' : undefined;
             } catch (refundNcfError) {
                console.warn('No se pudo generar NCF B04 para devolución:', refundNcfError);
             }
          } else {
-            finalNcf = await withTimeout(
-               db.getNextNCF(fiscalStatus.type, terminalId, activeTerminalConfig?.fiscal?.typeConfigs?.[fiscalStatus.type]?.batchSize || 100),
-               8000,
-               'TIMEOUT_GET_NCF'
-            );
+            finalNcf = await db.getNextNCF(fiscalStatus.type, terminalId, activeTerminalConfig?.fiscal?.typeConfigs?.[fiscalStatus.type]?.batchSize || 100);
 
             if (!finalNcf) {
                alert(`CRÍTICO: No hay NCF de ${fiscalStatus.type === 'B01' || fiscalStatus.type === 'E31' ? 'Crédito Fiscal' : 'Consumo'} disponible. Pool DGII agotado.`);
@@ -5471,11 +5465,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
                if (!isFiscalModeDisabledForCheckout && Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android') {
                   try {
-                     refundNcf = await withTimeout(
-                        db.getNextNCF('B04', terminalId, activeTerminalConfig?.fiscal?.typeConfigs?.['B04']?.batchSize || 50),
-                        8000,
-                        'TIMEOUT_GET_REFUND_NCF'
-                     );
+                     refundNcf = await db.getNextNCF('B04', terminalId, activeTerminalConfig?.fiscal?.typeConfigs?.['B04']?.batchSize || 50);
                   } catch (refundNcfError) {
                      console.warn('No se pudo generar NCF B04 para devolución mixta:', refundNcfError);
                   }
