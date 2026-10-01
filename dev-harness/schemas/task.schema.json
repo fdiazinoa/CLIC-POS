@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://clic-pos.local/schemas/task.schema.json",
+  "title": "CLIC-POS harness task",
+  "type": "object",
+  "required": [
+    "task_id", "title", "description", "type", "risk", "status", "created_at",
+    "base_commit", "branch", "affected_modules", "required_agents", "required_gates",
+    "baseline", "implementation", "tests", "metrics", "evidence", "artifacts", "result",
+    "revision", "agent_assignments", "human_approvals"
+  ],
+  "properties": {
+    "task_id": { "type": "string", "pattern": "^POS-[0-9]{4}-[0-9]{4}$" },
+    "risk": { "enum": ["LOW", "MEDIUM", "HIGH", "CRITICAL"] },
+    "status": { "type": "string" },
+    "affected_modules": { "type": "array", "items": { "type": "string" } },
+    "required_agents": { "type": "array", "items": { "type": "string" } },
+    "required_gates": { "type": "array", "items": { "type": "string" } },
+    "evidence": { "type": "array" },
+    "artifacts": { "type": "array" },
+    "gates": { "type": "object" },
+    "revision": { "type": "integer", "minimum": 1 },
+    "agent_assignments": { "type": "object", "additionalProperties": { "type": "string" } },
+    "human_approvals": { "type": "object" },
+    "history": { "type": "array" }
+  },
+  "additionalProperties": true
+}
