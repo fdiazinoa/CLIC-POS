@@ -8,7 +8,7 @@ import { writeEvidence } from '../core/evidence.mjs';
 import { recordGate, verifyInternalRelease } from '../core/gates.mjs';
 import { assessRisk, loadHarnessConfig } from '../core/risk.mjs';
 import { runConfiguredGate } from '../core/runner.mjs';
-import { assignAgent, createTask, loadTask, recordHumanApproval, sealCandidate, setImplementer, transitionTask } from '../core/task-state.mjs';
+import { assignAgent, createTask, loadTask, reassessTask, recordHumanApproval, sealCandidate, setImplementer, transitionTask } from '../core/task-state.mjs';
 
 const root = path.resolve(import.meta.dirname, '../..');
 const [command, ...tokens] = process.argv.slice(2);
@@ -62,6 +62,17 @@ async function main() {
   if (command === 'assess') {
     const files = required(args.files, 'files').split(',').filter(Boolean);
     return output(assessRisk(files, await loadHarnessConfig(root)));
+  }
+  if (command === 'reassess') {
+    const config = await loadHarnessConfig(root);
+    const files = required(args.files, 'files').split(',').filter(Boolean);
+    return output(await reassessTask(
+      root,
+      required(args.task, 'task'),
+      required(args.actor, 'actor'),
+      assessRisk(files, config),
+      required(args.evidence, 'evidence')
+    ));
   }
   if (command === 'transition') {
     return output(await transitionTask(root, required(args.task, 'task'), required(args.to, 'to'), required(args.actor, 'actor'), args.reason || ''));
@@ -131,6 +142,7 @@ async function main() {
       'init --title T --files path[,path]',
       'show --task POS-YYYY-NNNN',
       'assess --files path[,path]',
+      'reassess --task ID --files path[,path] --actor ORCHESTRATOR --evidence PATH',
       'transition --task ID --to STATUS --actor NAME',
       'assign-agent --task ID --role ROLE --actor NAME --assigned-by ORCHESTRATOR',
       'implementer --task ID --actor NAME [--summary TEXT]',

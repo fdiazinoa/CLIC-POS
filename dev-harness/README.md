@@ -18,6 +18,8 @@ npm run harness -- run-gate --task POS-2026-0001 --gate BUILD_GATE --actor qa-1 
 
 Generated task state, evidence, reports, APKs and performance samples are ignored by Git by default. Attach them to the PR or approved evidence store; never commit credentials, personal data, operational database dumps, signing keys, tokens, or raw production payloads.
 
+If discovery changes the affected-file set or fixes a false-positive classification, the assigned orchestrator may run `reassess` with an existing evidence file. The old and new risk/gate sets remain in task history; gates are never removed silently.
+
 ## Layout
 
 - `config/clic-pos.json`: impact/risk matrix, gate order and authorized approver roles.
@@ -40,6 +42,8 @@ Generated task state, evidence, reports, APKs and performance samples are ignore
 7. `NOT_REQUIRED` needs a documented justification and independent gate owner review.
 8. Two automatic retries are the default; further failed attempts set the task to `BLOCKED` for human triage.
 9. Production promotion is always human-controlled and is not implemented by this harness.
+
+Non-release tasks finish at `COMPLETED` after their required gates. Only tasks that require `INTERNAL_RELEASE_GATE` enter the APK/internal-deployment lifecycle.
 
 Executable gate evidence stores the commit, cleanliness checks, exit code, byte counts and SHA-256 of stdout/stderr. Raw command output is intentionally not persisted because it may contain secrets; attach only independently scrubbed logs when they are needed.
 

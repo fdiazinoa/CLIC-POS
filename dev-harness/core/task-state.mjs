@@ -98,6 +98,17 @@ export async function transitionTask(root, taskId, nextStatus, actor, reason = '
     });
     if (incomplete.length > 0) throw new Error(`Cannot prepare release; incomplete gates: ${incomplete.join(', ')}`);
   }
+  if (nextStatus === 'COMPLETED') {
+    const strictPass = new Set(['BUILD_GATE', 'REVIEW_GATE', 'QA_GATE']);
+    const incomplete = task.required_gates.filter((gate) => {
+      const result = task.gates[gate]?.result;
+      return strictPass.has(gate) ? result !== 'PASS' : !['PASS', 'NOT_REQUIRED'].includes(result);
+    });
+    if (incomplete.length > 0) throw new Error(`Cannot complete task; incomplete gates: ${incomplete.join(', ')}`);
+    if (task.required_gates.includes('INTERNAL_RELEASE_GATE')) {
+      throw new Error('Release-targeted tasks cannot use COMPLETED; follow the internal release lifecycle');
+    }
+  }
   if (nextStatus === 'REVIEWING' && (!task.candidate_commit || !task.implementation?.completed_at)) {
     throw new Error('Implementation must be completed and sealed to a candidate commit before review');
   }
@@ -150,6 +161,23 @@ export async function assignAgent(root, taskId, role, actor, assignedBy) {
   task.agent_assignments ||= {};
   task.agent_assignments[role] = actor;
   task.history.push({ at: now(), event: 'AGENT_ASSIGNED', role, actor, assigned_by: assignedBy });
+  return saveTask(root, task);
+}
+
+export async function reassessTask(root, taskId, actor, assessment, evidence) {
+  const task = await loadTask(root, taskId);
+  if (task.agent_assignments?.ORCHESTRATOR !== actor) throw new Error('Only the assigned ORCHESTRATOR may reassess risk');
+  if (['READY_FOR_INTERNAL_RELEASE', 'BUILDING', 'APPROVED_FOR_INTERNAL_TESTING', 'DEPLOYING_INTERNAL', 'INTERNAL_TESTING', 'INTERNAL_TESTING_PASSED', 'APPROVED_FOR_PRODUCTION', 'RELEASED', 'COMPLETED'].includes(task.status)) {
+    throw new Error(`Risk cannot be reassessed in terminal/release state ${task.status}`);
+  }
+  await validateEvidenceFiles(root, [evidence]);
+  const previous = { risk: task.risk, affected_modules: task.affected_modules, required_gates: task.required_gates };
+  task.risk = assessment.risk;
+  task.affected_modules = assessment.affected_modules;
+  task.required_gates = assessment.required_gates;
+  task.risk_impacts = assessment.impacts;
+  task.evidence = [...new Set([...(task.evidence || []), evidence])];
+  task.history.push({ at: now(), event: 'RISK_REASSESSED', actor, previous, next: assessment, evidence });
   return saveTask(root, task);
 }
 

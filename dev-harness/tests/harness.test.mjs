@@ -209,3 +209,16 @@ test('release check rejects strict NOT_REQUIRED gates and ineligible state', () 
   assert.equal(result.failing.length, 3);
   assert.match(result.state_error, /not release-eligible/);
 });
+
+test('non-release tasks can complete only after strict core gates pass', async () => {
+  const root = await tempRoot();
+  const task = await createTask(root, { title: 'test', base_commit: 'abc', branch: 'feature/test' });
+  task.status = 'QA';
+  task.required_gates = ['BUILD_GATE', 'REVIEW_GATE', 'QA_GATE'];
+  task.gates = {
+    BUILD_GATE: { result: 'PASS' }, REVIEW_GATE: { result: 'PASS' }, QA_GATE: { result: 'PASS' }
+  };
+  await saveTask(root, task);
+  const completed = await transitionTask(root, task.task_id, 'COMPLETED', 'orchestrator');
+  assert.equal(completed.status, 'COMPLETED');
+});

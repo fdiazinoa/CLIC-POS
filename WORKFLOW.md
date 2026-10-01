@@ -12,6 +12,7 @@ NEW → ANALYZING → PLAN_READY → IMPLEMENTING → REVIEWING
   REVIEW PASS → QA
   QA FAIL → QA_FAILED → IMPLEMENTING
   QA PASS → SYNC_VALIDATION? → OFFLINE_VALIDATION? → PERFORMANCE?
+  non-release task, all required gates complete → COMPLETED
   required gate FAIL → matching *_FAILED → IMPLEMENTING
   gates complete → READY_FOR_INTERNAL_RELEASE → BUILDING
   BUILD PASS → APPROVED_FOR_INTERNAL_TESTING
@@ -62,6 +63,8 @@ The orchestrator assigns named actors to roles. After implementation, the develo
 `APPROVED_FOR_INTERNAL_TESTING` requires `PASS` or justified `NOT_REQUIRED` for optional domain gates and strict `PASS` for review, QA, build and internal release. The APK record must bind task, sealed candidate commit, version, checksum, verified signature and test results. An unsigned, missing or ambiguously sourced artifact fails closed.
 
 Internal testing never implies production approval. `APPROVED_FOR_PRODUCTION` is a separate human decision. See [docs/release/APK_AND_INTERNAL_DEPLOY.md](docs/release/APK_AND_INTERNAL_DEPLOY.md).
+
+Tasks whose impact matrix does not require `INTERNAL_RELEASE_GATE` finish at `COMPLETED` after every required gate is satisfied. They do not traverse APK or deployment states.
 
 ## Human approval
 
