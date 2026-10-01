@@ -372,6 +372,7 @@ import {
 } from './utils/operationalMasterConfig';
 import { persistValidatedClientMasterTargetAsync, resolveClientMasterTerminalId } from './utils/clientMasterBinding';
 import { completeLegacyMutationAfterDurableAck, legacyMutationJournal } from './services/sync/LegacyMutationJournal';
+import { assertParkedTicketsAcknowledged } from './utils/parkedTicketAck';
 import {
   dispatchLegacyLanMutation,
   persistLegacyLanMutationCompletion,
@@ -9519,7 +9520,7 @@ const AppContent: React.FC = () => {
           operation: 'PARKED_TICKETS_SYNC',
           validateResponse: data => {
             validateLegacySuccessResponse(data);
-            if (!Array.isArray(data.parkedTickets)) throw new Error('PARKED_TICKETS_ACK_REQUIRED');
+            assertParkedTicketsAcknowledged(tableSyncTickets, data.parkedTickets, changedTicketId, editLock?.tableId);
           },
         });
         const result = response.data;
@@ -9622,7 +9623,7 @@ const AppContent: React.FC = () => {
           operation: 'MASTER_PARKED_TICKETS_SYNC',
           validateResponse: data => {
             validateLegacySuccessResponse(data);
-            if (!Array.isArray(data.parkedTickets)) throw new Error('PARKED_TICKETS_ACK_REQUIRED');
+            assertParkedTicketsAcknowledged(masterTableSyncTickets, data.parkedTickets, changedTicketId, masterEditLock?.tableId);
           },
         });
         const result = response.data;

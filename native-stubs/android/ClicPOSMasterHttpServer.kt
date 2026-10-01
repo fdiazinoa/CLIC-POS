@@ -49,6 +49,7 @@ object ClicPOSMasterHttpServer {
     private val tableEditLocks = ConcurrentHashMap<String, JSONObject>()
     @Volatile private var restaurantStateLoaded = false
 
+    @Synchronized
     fun start(
         context: Context,
         requestedPort: Int = DEFAULT_PORT,
@@ -108,6 +109,7 @@ object ClicPOSMasterHttpServer {
         }
     }
 
+    @Synchronized
     fun updateConfig(
         config: JSONObject,
         users: JSONArray? = null,
@@ -1242,6 +1244,7 @@ object ClicPOSMasterHttpServer {
             mapOf("X-Restaurant-Snapshot-Version" to version))
     }
 
+    @Synchronized
     private fun handleParkedTicketsUpdate(socket: Socket, body: String) {
         val payload = runCatching { if (body.isBlank()) JSONObject() else JSONObject(body) }
             .getOrElse {
