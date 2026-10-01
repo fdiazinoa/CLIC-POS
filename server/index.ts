@@ -431,8 +431,7 @@ server.post('/api/mesas/unir', (req, res) => {
         if (!mainTableId || secondaryTableIds.length === 0) {
             return res.status(400).json({ success: false, message: 'Seleccione una mesa principal y al menos una secundaria.' });
         }
-        const allTickets = getSetting('parkedTickets');
-        const parkedTickets = Array.isArray(allTickets) ? allTickets : [];
+        const parkedTickets = getPersistedParkedTickets(true);
         const referencesTable = (ticket: any, tableId: string) =>
             String(ticket?.tableId || '') === tableId ||
             (Array.isArray(ticket?.joinedTableIds) && ticket.joinedTableIds.map(String).includes(tableId));
@@ -494,8 +493,7 @@ server.post('/api/mesas/liberar', (req, res) => {
         const table = db.prepare('SELECT * FROM tables WHERE id = ?').get(tableId) as any;
         const currentOrderId = String(table?.currentOrderId || '').trim();
         const tableShape = String(table?.shape || '').trim().toUpperCase();
-        const rawParkedTickets = getSetting('parkedTickets');
-        const parkedTickets = Array.isArray(rawParkedTickets) ? rawParkedTickets : [];
+        const parkedTickets = getPersistedParkedTickets(true);
         const nextParkedTickets = parkedTickets.filter((ticket: any) => {
             const ticketId = String(ticket?.id || '').trim();
             const ticketTableId = String(ticket?.tableId ?? '').trim();

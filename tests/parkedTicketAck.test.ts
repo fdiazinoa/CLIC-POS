@@ -66,6 +66,12 @@ test('Express rechaza un snapshot ilegible antes de sobrescribir otra mesa', () 
   assert.deepEqual(parsePersistedParkedTickets('[{"id":"cuenta-4","items":[]}]', true), [{ id: 'cuenta-4', items: [] }]);
   assert.throws(() => parsePersistedParkedTickets('{mal-json', true));
   assert.throws(() => parsePersistedParkedTickets('{"id":"no-array"}', true), /PARKED_TICKETS_SNAPSHOT_INVALID/);
+  const releaseRoute = expressSource.slice(
+    expressSource.indexOf("server.post('/api/mesas/liberar'"),
+    expressSource.indexOf('// Helper to process json-server style queries'),
+  );
+  assert.ok(releaseRoute.indexOf('getPersistedParkedTickets(true)') < releaseRoute.indexOf("saveSetting('parkedTickets', nextParkedTickets)"));
+  assert.doesNotMatch(releaseRoute, /getSetting\('parkedTickets'\)/);
 });
 
 test('Express actualiza solo la mesa digitada y conserva cuentas ajenas y vacías', () => {
