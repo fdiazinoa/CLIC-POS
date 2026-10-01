@@ -37,9 +37,7 @@ export const assertParkedTicketsAcknowledged = (
   }
   for (const ticket of expected) {
     const confirmed = actualById.get(String(ticket.id || ''));
-    if (!confirmed ||
-        JSON.stringify(stableValue(confirmed.items || [])) !== JSON.stringify(stableValue(ticket.items || [])) ||
-        Number(confirmed.total || 0) !== Number(ticket.total || 0)) {
+    if (!confirmed || JSON.stringify(stableValue(confirmed)) !== JSON.stringify(stableValue(ticket))) {
       throw new Error('PARKED_TICKETS_ACK_MISMATCH');
     }
   }

@@ -23,6 +23,9 @@ test('el ACK confirma la cuenta y los artículos exactos, no solo success=true',
   assert.throws(() => assertParkedTicketsAcknowledged(sent, [
     { id: 'cuenta-7', tableId: 'mesa-7', items: [], total: 0 },
   ], 'cuenta-4', 'mesa-4'), /PARKED_TICKETS_ACK_MISMATCH/);
+  assert.throws(() => assertParkedTicketsAcknowledged(sent, [
+    { id: 'cuenta-4', tableId: 'mesa-7', items: [{ id: 'agua', quantity: 2, price: 60 }], total: 120 },
+  ], 'cuenta-4'), /PARKED_TICKETS_ACK_MISMATCH/);
 });
 
 test('el ACK no acepta una cuenta eliminada ni una cuenta extra de la misma mesa', () => {
