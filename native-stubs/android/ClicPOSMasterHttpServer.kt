@@ -49,6 +49,7 @@ object ClicPOSMasterHttpServer {
     private val tableEditLocks = ConcurrentHashMap<String, JSONObject>()
     @Volatile private var restaurantStateLoaded = false
 
+    @Synchronized
     fun start(
         context: Context,
         requestedPort: Int = DEFAULT_PORT,
@@ -108,6 +109,7 @@ object ClicPOSMasterHttpServer {
         }
     }
 
+    @Synchronized
     fun updateConfig(
         config: JSONObject,
         users: JSONArray? = null,
@@ -1189,6 +1191,7 @@ object ClicPOSMasterHttpServer {
         return tables
     }
 
+    @Synchronized
     private fun buildRestaurantSnapshot(): JSONObject = JSONObject()
         .put("rooms", JSONArray(roomsSnapshot.toString()))
         .put("tables", buildTablesWithEditLocks())
@@ -1203,6 +1206,7 @@ object ClicPOSMasterHttpServer {
      * bridge and persistence retain the detached builder above. Tables still need
      * a copy for the live lock overlay, and routing updates retain their copies.
      */
+    @Synchronized
     private fun serializeRestaurantSnapshot(): String = JSONObject()
         .put("rooms", roomsSnapshot)
         .put("tables", buildTablesWithEditLocks())
@@ -1242,6 +1246,7 @@ object ClicPOSMasterHttpServer {
             mapOf("X-Restaurant-Snapshot-Version" to version))
     }
 
+    @Synchronized
     private fun handleParkedTicketsUpdate(socket: Socket, body: String) {
         val payload = runCatching { if (body.isBlank()) JSONObject() else JSONObject(body) }
             .getOrElse {
@@ -1542,6 +1547,7 @@ object ClicPOSMasterHttpServer {
         return reconciled
     }
 
+    @Synchronized
     private fun handleTableUpdate(socket: Socket, path: String, body: String) {
         val tableId = URLDecoder.decode(
             path.removePrefix("/api/tables/"),
@@ -1701,6 +1707,7 @@ object ClicPOSMasterHttpServer {
             .toString())
     }
 
+    @Synchronized
     private fun handleOpenTable(socket: Socket, body: String) {
         val payload = runCatching { if (body.isBlank()) JSONObject() else JSONObject(body) }
             .getOrElse {
@@ -1786,6 +1793,7 @@ object ClicPOSMasterHttpServer {
             .toString())
     }
 
+    @Synchronized
     private fun handleReleaseTable(socket: Socket, body: String) {
         val payload = runCatching { if (body.isBlank()) JSONObject() else JSONObject(body) }
             .getOrElse {

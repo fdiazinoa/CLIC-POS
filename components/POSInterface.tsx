@@ -4703,10 +4703,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             await Promise.resolve(onTableOrderSavedRef.current?.(activeTable, syncedTicket));
          } catch (error) {
             console.error('[TABLE_SYNC] No se pudo sincronizar automáticamente la mesa:', error);
-            if (batchClientSync) {
-               setErrorToast('Cambios guardados localmente. Pendiente de sincronizar.');
-               window.setTimeout(() => setErrorToast(null), 3000);
-            }
+            const syncErrorCode = error instanceof Error ? error.message.slice(0, 80) : 'ERROR_DESCONOCIDO';
+            setErrorToast(batchClientSync
+               ? 'Cambios guardados localmente. Pendiente de sincronizar.'
+               : `La Master no confirmó esta mesa (${syncErrorCode}). No cambies de mesa todavía.`);
+            window.setTimeout(() => setErrorToast(null), 5000);
          } finally {
             if (ticketAutoSyncFlushRef.current === flushTicketSync) {
                ticketAutoSyncFlushRef.current = null;
@@ -6737,7 +6738,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       try {
          await Promise.resolve(onUpdateParkedTickets(updatedTickets, { reason: 'explicit' }));
       } catch (error) {
-         setErrorToast('No se pudo confirmar con la Master. Los cambios siguen guardados localmente.');
+         const syncErrorCode = error instanceof Error ? error.message.slice(0, 80) : 'ERROR_DESCONOCIDO';
+         setErrorToast(`No se pudo confirmar con la Master (${syncErrorCode}). Los cambios siguen guardados localmente.`);
          window.setTimeout(() => setErrorToast(null), 3500);
          throw error;
       }
@@ -6808,7 +6810,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       try {
          await Promise.resolve(onUpdateParkedTickets(updatedTickets, { reason: 'explicit' }));
       } catch (error) {
-         setErrorToast('No se pudo confirmar con la Master. La mesa permanece abierta y pendiente.');
+         const syncErrorCode = error instanceof Error ? error.message.slice(0, 80) : 'ERROR_DESCONOCIDO';
+         setErrorToast(`No se pudo confirmar con la Master (${syncErrorCode}). La mesa permanece abierta y pendiente.`);
          window.setTimeout(() => setErrorToast(null), 3500);
          throw error;
       }
@@ -6837,7 +6840,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             // Cancellation keeps the operator in the order so nothing is lost.
             if (dispatchOutcome === 'DISPATCHED' || dispatchOutcome === 'CANCELLED') return;
          }
-         await handleParkCurrentTicket();
+         try {
+            await handleParkCurrentTicket();
+         } catch (error) {
+            console.error('[TABLE_SYNC] No se pudo salir de la mesa sin confirmación:', error);
+         }
       } else if (onOpenTableMap) {
          await Promise.resolve(onOpenTableMap());
       }
@@ -6867,7 +6874,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             // fresh lines. The regular Cocina action already marks them dispatched,
             // so this path cannot send the same line twice.
             const requiresBackgroundDispatch = cart.some(item => !item.dispatched);
-            await saveActiveTableOrderForMap();
+            try {
+               await saveActiveTableOrderForMap();
+            } catch (error) {
+               console.error('[TABLE_SYNC] La mesa sigue abierta porque el guardado no fue confirmado:', error);
+               markInteractionStage(trace, 'HANDLER_END');
+               return;
+            }
             if (onOpenTableMap) await Promise.resolve(onOpenTableMap());
             markInteractionStage(trace, 'HANDLER_END');
             if (requiresBackgroundDispatch) {

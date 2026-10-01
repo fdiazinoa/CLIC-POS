@@ -88,3 +88,18 @@ test('la cola pendiente solo se limpia después de una confirmación exitosa de 
       > updateHandler.indexOf('if (!response.response.ok || result?.success === false)'),
   );
 });
+
+test('Master y Cliente esperan la confirmación de la orden antes de abandonar la mesa', () => {
+  const updateHandler = appSource.slice(
+    appSource.indexOf('const handleUpdateParkedTickets'),
+    appSource.indexOf('const handleParkedOrderSplitFromMap'),
+  );
+  assert.equal((updateHandler.match(/if \(options\.reason === 'explicit' \|\| options\.reason === 'customer_assigned'\) \{\s*await queuedSync;/g) || []).length, 2);
+
+  const backToMap = posSource.slice(
+    posSource.indexOf('const handleBackToMap'),
+    posSource.indexOf('const handleRestoreTicket'),
+  );
+  assert.match(backToMap, /try \{\s*await saveActiveTableOrderForMap\(\);\s*\} catch \(error\) \{[\s\S]*?return;\s*\}\s*if \(onOpenTableMap\)/);
+  assert.match(posSource, /La Master no confirmó esta mesa \(\$\{syncErrorCode\}\)/);
+});
