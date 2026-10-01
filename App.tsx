@@ -9560,7 +9560,11 @@ const AppContent: React.FC = () => {
         .then(waitForTableInteractionIdle)
         .then(syncOperation);
       parkedTicketSyncQueueRef.current = queuedSync.catch(() => undefined);
-      void queuedSync.catch(error => console.warn('[TABLE_SYNC] Reconciliación cliente diferida:', error));
+      if (options.reason === 'explicit' || options.reason === 'customer_assigned') {
+        await queuedSync;
+      } else {
+        void queuedSync.catch(error => console.warn('[TABLE_SYNC] Reconciliación cliente diferida:', error));
+      }
       return;
     }
     const servesAsNativeMaster =
@@ -9663,7 +9667,11 @@ const AppContent: React.FC = () => {
         .then(waitForTableInteractionIdle)
         .then(syncOperation);
       parkedTicketSyncQueueRef.current = queuedSync.catch(() => undefined);
-      void queuedSync.catch(error => console.warn('[TABLE_SYNC] Reconciliación Master diferida:', error));
+      if (options.reason === 'explicit' || options.reason === 'customer_assigned') {
+        await queuedSync;
+      } else {
+        void queuedSync.catch(error => console.warn('[TABLE_SYNC] Reconciliación Master diferida:', error));
+      }
       return;
     }
     window.setTimeout(() => {

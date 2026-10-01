@@ -1616,7 +1616,11 @@ const TableMap: React.FC<TableMapProps> = ({
                 setOpeningTableId(null);
                 return;
             }
-            void handleTableAction(model.table, trace).finally(() => {
+            void handleTableAction(model.table, trace).catch((error) => {
+                console.error('No se pudo confirmar la cuenta en la Master:', error);
+                alert('No se pudo guardar la cuenta en la Caja Master. Reintente sin cambiar de mesa.');
+                void Promise.resolve(onTableOpenCancelled?.(model.table)).catch(console.error);
+            }).finally(() => {
                 markInteractionStage(trace, 'HANDLER_END');
                 // Keep the guard through the navigation frame. This also
                 // absorbs a queued click from a slow Android touch pipeline.
