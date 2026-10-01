@@ -53,7 +53,13 @@ export async function createTask(root, input) {
     revision: 1,
     agent_assignments: { ORCHESTRATOR: input.actor || 'orchestrator' },
     human_approvals: {},
-    history: [{ at: timestamp, event: 'TASK_CREATED', actor: input.actor || 'orchestrator' }]
+    history: [{
+      at: timestamp,
+      event: 'TASK_CREATED',
+      actor: input.actor || 'orchestrator',
+      affected_files: input.affected_files || [],
+      required_gates: input.required_gates || ['BUILD_GATE', 'REVIEW_GATE', 'QA_GATE']
+    }]
     };
     await writeJsonAtomic(taskFile(root, taskId), task);
     return task;
@@ -167,18 +173,28 @@ export async function assignAgent(root, taskId, role, actor, assignedBy) {
 export async function reassessTask(root, taskId, actor, assessment, evidence) {
   const task = await loadTask(root, taskId);
   if (task.agent_assignments?.ORCHESTRATOR !== actor) throw new Error('Only the assigned ORCHESTRATOR may reassess risk');
-  if (['READY_FOR_INTERNAL_RELEASE', 'BUILDING', 'APPROVED_FOR_INTERNAL_TESTING', 'DEPLOYING_INTERNAL', 'INTERNAL_TESTING', 'INTERNAL_TESTING_PASSED', 'APPROVED_FOR_PRODUCTION', 'RELEASED', 'COMPLETED'].includes(task.status)) {
-    throw new Error(`Risk cannot be reassessed in terminal/release state ${task.status}`);
+  if (!['ANALYZING', 'PLAN_READY', 'IMPLEMENTING'].includes(task.status)) {
+    throw new Error(`Risk can only be reassessed during analysis or implementation, not ${task.status}`);
   }
   await validateEvidenceFiles(root, [evidence]);
-  const previous = { risk: task.risk, affected_modules: task.affected_modules, required_gates: task.required_gates };
+  const previous = {
+    risk: task.risk,
+    affected_modules: task.affected_modules,
+    affected_files: task.affected_files,
+    required_gates: task.required_gates
+  };
+  const invalidatedGates = Object.keys(task.gates || {});
   task.risk = assessment.risk;
   task.affected_modules = assessment.affected_modules;
   task.affected_files = [...new Set(assessment.impacts.flatMap((impact) => impact.files))];
   task.required_gates = assessment.required_gates;
   task.risk_impacts = assessment.impacts;
+  task.gates = {};
   task.evidence = [...new Set([...(task.evidence || []), evidence])];
-  task.history.push({ at: now(), event: 'RISK_REASSESSED', actor, previous, next: assessment, evidence });
+  task.history.push({
+    at: now(), event: 'RISK_REASSESSED', actor, previous, next: assessment,
+    next_affected_files: task.affected_files, invalidated_gates: invalidatedGates, evidence
+  });
   return saveTask(root, task);
 }
 

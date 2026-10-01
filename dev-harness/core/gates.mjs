@@ -14,11 +14,23 @@ const FAILURE_STATUS = {
 };
 
 const STRICT_PASS_GATES = new Set(['BUILD_GATE', 'REVIEW_GATE', 'QA_GATE', 'INTERNAL_RELEASE_GATE']);
+const GATE_STATES = {
+  REVIEW_GATE: ['REVIEWING'],
+  QA_GATE: ['QA'],
+  SYNC_GATE: ['SYNC_VALIDATION'],
+  OFFLINE_GATE: ['OFFLINE_VALIDATION'],
+  PERFORMANCE_GATE: ['PERFORMANCE'],
+  BUILD_GATE: ['QA', 'BUILDING'],
+  INTERNAL_RELEASE_GATE: ['BUILDING']
+};
 
 export async function recordGate(root, taskId, input) {
   if (!GATE_RESULTS.includes(input.result)) throw new Error(`Invalid gate result: ${input.result}`);
   const task = await loadTask(root, taskId);
   if (!task.required_gates.includes(input.gate)) throw new Error(`${input.gate} is not required for ${taskId}`);
+  if (!GATE_STATES[input.gate]?.includes(task.status)) {
+    throw new Error(`${input.gate} cannot run while task is ${task.status}`);
+  }
   if (!input.actor || !input.role) throw new Error('Gate actor and role are required');
   if (task.agent_assignments?.[input.role] !== input.actor) {
     throw new Error(`${input.actor} is not the assigned ${input.role}`);

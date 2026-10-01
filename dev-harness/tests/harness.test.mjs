@@ -62,6 +62,7 @@ test('state machine rejects illegal transitions', async () => {
 async function selfApprovalFixture(result) {
   const root = await tempRoot();
   const task = await createTask(root, { title: 'test', base_commit: 'abc', branch: 'feature/test' });
+  task.status = 'REVIEWING';
   task.implementation = { actor: 'agent-dev' };
   task.candidate_commit = 'def';
   task.agent_assignments.REVIEWER = 'agent-dev';
@@ -116,6 +117,7 @@ test('APK signature verification fails for missing APK or non-verifier command',
 test('gate PASS requires assigned allowed role and existing evidence', async () => {
   const root = await tempRoot();
   const task = await createTask(root, { title: 'test', base_commit: 'abc', branch: 'feature/test' });
+  task.status = 'REVIEWING';
   task.implementation = { actor: 'agent-dev' };
   task.candidate_commit = 'def';
   task.agent_assignments.QA = 'agent-qa';
@@ -137,6 +139,7 @@ test('gate PASS requires assigned allowed role and existing evidence', async () 
 test('strict release gates cannot be NOT_REQUIRED and evidence must exist', async () => {
   const root = await tempRoot();
   const task = await createTask(root, { title: 'test', base_commit: 'abc', branch: 'feature/test' });
+  task.status = 'QA';
   task.candidate_commit = 'def';
   task.agent_assignments.QA = 'qa-1';
   task.required_gates = ['QA_GATE'];
@@ -206,6 +209,8 @@ test('retry exhaustion replaces an old PASS with BLOCKED', async () => {
       gate: 'QA_GATE', result: 'FAIL', actor: 'qa-1', role: 'QA', evidence: [evidence], allowed_roles: ['QA'], max_attempts: 3
     });
     assert.equal(failed.gates.QA_GATE.result, 'FAIL');
+    failed.status = 'QA'; // Fixture simulates completed reimplementation/review before the next QA attempt.
+    await saveTask(root, failed);
   }
   const blocked = await recordGate(root, task.task_id, {
     gate: 'QA_GATE', result: 'FAIL', actor: 'qa-1', role: 'QA', evidence: [evidence], allowed_roles: ['QA'], max_attempts: 3
@@ -253,9 +258,15 @@ test('risk reassessment updates the auditable affected-file scope', async () => 
   const task = await createTask(root, {
     title: 'test', base_commit: 'abc', branch: 'feature/test', affected_files: ['docs/old.md']
   });
+  task.status = 'IMPLEMENTING';
+  task.gates = { REVIEW_GATE: { result: 'PASS' } };
+  await saveTask(root, task);
   const evidence = await evidenceFile(root, 'reassess.json');
   const assessment = assessRisk(['services/sync/SyncManager.ts'], config);
   const updated = await reassessTask(root, task.task_id, 'orchestrator', assessment, evidence);
   assert.deepEqual(updated.affected_files, ['services/sync/SyncManager.ts']);
   assert.equal(updated.risk, 'HIGH');
+  assert.deepEqual(updated.gates, {});
+  assert.deepEqual(updated.history.at(-1).previous.affected_files, ['docs/old.md']);
+  assert.deepEqual(updated.history.at(-1).invalidated_gates, ['REVIEW_GATE']);
 });
