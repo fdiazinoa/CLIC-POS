@@ -820,7 +820,7 @@ export class ApiSyncAdapter {
                 await this.mutationJournal.recordHttpStatus(legacyJournalId, response.status);
                 safelyRejectedTableLock = isSafeTableLockRejection(url, method, response.status, nativeResponse.data);
                 if (safelyRejectedTableLock) {
-                    await this.mutationJournal.acknowledge(legacyJournalId, 'SAFE_PRE_SIDE_EFFECT', 'TABLE_EDIT_LOCK_REQUIRED');
+                    await this.mutationJournal.acknowledge(legacyJournalId, 'SAFE_PRE_SIDE_EFFECT', String((nativeResponse.data as Record<string, unknown>).code));
                 } else if (response.status !== 401 && !response.ok) {
                     await this.mutationJournal.markOutcomeUnknown(legacyJournalId, response.status);
                 }

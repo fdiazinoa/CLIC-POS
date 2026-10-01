@@ -64,8 +64,33 @@ test('only the Android Master table-lock rejection is provably pre-side-effect',
   const body = { success: false, code: 'TABLE_EDIT_LOCK_REQUIRED' };
   assert.equal(isSafeTableLockRejection('http://10.0.0.129:3001/api/mesas/parked-tickets', 'PUT', 409, body), true);
   assert.equal(isSafeTableLockRejection('http://10.0.0.129:3001/api/tables/table-7', 'PUT', 409, body), true);
+  assert.equal(isSafeTableLockRejection('http://10.0.0.129:3001/api/mesas/bloquear', 'POST', 409, { success: false, code: 'TABLE_EDIT_LOCKED' }), true);
+  assert.equal(isSafeTableLockRejection('http://10.0.0.129:3001/api/mesas/desbloquear', 'POST', 409, { success: false, code: 'TABLE_EDIT_LOCK_OWNERSHIP_MISMATCH' }), true);
+  assert.equal(isSafeTableLockRejection('http://10.0.0.129:3001/api/mesas/desbloquear', 'POST', 409, body), false);
   assert.equal(isSafeTableLockRejection('http://10.0.0.129:3001/api/tables/table-7', 'PUT', 409, { code: 'OTHER_CONFLICT' }), false);
   assert.equal(isSafeTableLockRejection('http://10.0.0.129:3001/api/sync/transactions', 'PUT', 409, body), false);
+});
+
+test('a rejected table unlock does not poison the journal', async () => {
+  const restore = installAndroid();
+  const store = new Store();
+  const journal = new LegacyMutationJournal(store);
+  await journal.initializeForStartup();
+  setNativeRequestTransportForTests((async () => ({ status: 409, data: { success: false, code: 'TABLE_EDIT_LOCK_OWNERSHIP_MISMATCH' } })) as any);
+  try {
+    await assert.rejects(dispatchLegacyLanMutation({
+      url: 'http://10.0.0.129:3001/api/mesas/desbloquear',
+      method: 'POST',
+      operation: 'TABLE_LOCK_RELEASE',
+      validateResponse: () => undefined,
+      journal,
+      authorityState: { revision: 7, terminalId: 'terminal-a' },
+    }), /TABLE_EDIT_LOCK_OWNERSHIP_MISMATCH/);
+    assert.equal(journal.hasBlockingMutations(), false);
+    assert.equal([...store.rows.values()][0]?.classification, 'SAFE_PRE_SIDE_EFFECT');
+  } finally {
+    restore();
+  }
 });
 
 test('direct table mutation closes a verified 409 lock rejection without blocking later work', async () => {

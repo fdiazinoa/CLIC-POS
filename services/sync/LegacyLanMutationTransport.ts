@@ -113,9 +113,10 @@ export const dispatchLegacyLanMutation = async <T = any>(input: {
         const response = new Response(native.text, { status: native.status, headers: native.headers });
         await journal.recordHttpStatus(entry.id, response.status);
         if (isSafeTableLockRejection(input.url, input.method, response.status, native.data)) {
-            await journal.acknowledge(entry.id, 'SAFE_PRE_SIDE_EFFECT', `${input.operation}:TABLE_EDIT_LOCK_REQUIRED`);
+            const rejectionCode = String((native.data as Record<string, unknown>).code);
+            await journal.acknowledge(entry.id, 'SAFE_PRE_SIDE_EFFECT', `${input.operation}:${rejectionCode}`);
             safelyRejected = true;
-            throw Object.assign(new Error('TABLE_EDIT_LOCK_REQUIRED'), { httpStatus: response.status });
+            throw Object.assign(new Error(rejectionCode), { httpStatus: response.status });
         }
         const safePreSideEffect = response.status === 401 || input.safePreSideEffectStatuses?.includes(response.status);
         if (!safePreSideEffect && !response.ok) {

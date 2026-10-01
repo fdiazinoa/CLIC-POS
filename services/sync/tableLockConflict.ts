@@ -5,14 +5,20 @@ export const isSafeTableLockRejection = (
   status: number,
   data: unknown,
 ): boolean => {
-  if (method.toUpperCase() !== 'PUT' || status !== 409) return false;
+  if (status !== 409) return false;
   if (!data || typeof data !== 'object' || Array.isArray(data)) return false;
-  if ((data as Record<string, unknown>).code !== 'TABLE_EDIT_LOCK_REQUIRED') return false;
+  const code = (data as Record<string, unknown>).code;
   let path: string;
   try {
     path = new URL(url).pathname;
   } catch {
     return false;
   }
-  return path === '/api/mesas/parked-tickets' || /^\/api\/tables\/[^/]+$/.test(path);
+  if (method.toUpperCase() === 'POST') {
+    return (path === '/api/mesas/bloquear' && code === 'TABLE_EDIT_LOCKED')
+      || (path === '/api/mesas/desbloquear' && code === 'TABLE_EDIT_LOCK_OWNERSHIP_MISMATCH');
+  }
+  return method.toUpperCase() === 'PUT'
+    && code === 'TABLE_EDIT_LOCK_REQUIRED'
+    && (path === '/api/mesas/parked-tickets' || /^\/api\/tables\/[^/]+$/.test(path));
 };
