@@ -6,6 +6,7 @@ import { getDefaultRoleConfig, resolveDeviceRoleValue } from '../utils/deviceRol
 import {
   isTerminalAllowedForBinding,
   ORDER_TAKER_TERMINAL_TYPE,
+  resolveBindingMasterTerminalIds,
   resolveOrderTakerContract,
   STANDARD_POS_TERMINAL_TYPE,
 } from '../utils/orderTakerPolicy';
@@ -35,6 +36,18 @@ test('only offers order takers assigned to the connected master', () => {
     isTerminalAllowedForBinding(assigned, ORDER_TAKER_TERMINAL_TYPE, ['master-002']),
     false
   );
+});
+
+test('slave binding ignores stale local master placeholder and uses connected master identity', () => {
+  const local = [{ id: 't1', config: { isPrimaryNode: true } }];
+  const listed = [
+    { id: 'master-001', config: { isPrimaryNode: true } },
+    { id: 'order-001', terminal_type: 'ORDER_TAKER', master_terminal_id: 'master-001' },
+  ];
+  const masterIds = resolveBindingMasterTerminalIds('SLAVE', local, listed);
+  assert.deepEqual([...masterIds], ['master-001']);
+  assert.equal(isTerminalAllowedForBinding(listed[1], ORDER_TAKER_TERMINAL_TYPE, masterIds), true);
+  assert.equal(isTerminalAllowedForBinding({ terminal_type: 'ORDER_TAKER', master_terminal_id: 'other-master' }, ORDER_TAKER_TERMINAL_TYPE, masterIds), false);
 });
 
 test('preserves master identity, capabilities and restrictions', () => {

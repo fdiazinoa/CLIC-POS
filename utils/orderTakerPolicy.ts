@@ -93,6 +93,25 @@ export const resolveMobileOrderTakerActions = (
   showKitchen: isOrderTaker,
 });
 
+/** A slave must use the connected master's list, not stale local placeholder IDs. */
+export const resolveBindingMasterTerminalIds = (
+  bindingMode: 'MASTER' | 'SLAVE',
+  localTerminals: unknown[],
+  listedTerminals: unknown[],
+): Set<string> => {
+  const source = bindingMode === 'SLAVE' ? listedTerminals : localTerminals;
+  return new Set(source
+    .map(asObject)
+    .filter((terminal) => asObject(terminal.config).isPrimaryNode === true)
+    .flatMap((terminal) => {
+      const config = asObject(terminal.config);
+      const erpBinding = asObject(config.erpBinding);
+      return [terminal.id, config.erpTerminalId, erpBinding.terminalId];
+    })
+    .map((value) => String(value || '').trim())
+    .filter(Boolean));
+};
+
 export const isTerminalAllowedForBinding = (
   terminal: unknown,
   expectedType?: PosTerminalType | null,
