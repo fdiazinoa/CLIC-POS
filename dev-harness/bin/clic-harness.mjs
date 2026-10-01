@@ -123,7 +123,7 @@ async function main() {
     }));
   }
   if (command === 'release-check') return output(verifyInternalRelease(await loadTask(root, required(args.task, 'task'))));
-  if (command === 'inspect-apk') return output(await inspectApk(required(args.file, 'file'), path.join(root, 'android/app/build.gradle')));
+  if (command === 'inspect-apk') return output(await inspectApk(required(args.file, 'file'), required(args.aapt, 'aapt')));
   if (command === 'register-apk') {
     const taskId = required(args.task, 'task');
     const apkPath = path.resolve(root, required(args.file, 'file'));
@@ -134,7 +134,7 @@ async function main() {
       ...signature
     });
     if (!signature.verified) throw new Error(`APK signature verification failed; evidence: ${signatureEvidence}`);
-    const metadata = await inspectApk(apkPath, path.join(root, 'android/app/build.gradle'));
+    const metadata = await inspectApk(apkPath, required(args.aapt, 'aapt'));
     return output(await recordApkArtifact(root, taskId, required(args.actor, 'actor'), metadata, signatureEvidence));
   }
   output({
@@ -152,8 +152,8 @@ async function main() {
       'gate --task ID --gate NAME --result PASS|FAIL|NOT_REQUIRED|BLOCKED --actor NAME --role ROLE --evidence PATH[,PATH]',
       'run-gate --task ID --gate NAME --actor NAME --role ROLE',
       'release-check --task ID',
-      'inspect-apk --file PATH',
-      'register-apk --task ID --file PATH --apksigner PATH --actor RELEASE_AGENT'
+      'inspect-apk --file PATH --aapt PATH',
+      'register-apk --task ID --file PATH --aapt PATH --apksigner PATH --actor RELEASE_AGENT'
     ]
   });
 }

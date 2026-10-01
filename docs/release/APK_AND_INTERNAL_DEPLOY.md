@@ -21,10 +21,10 @@ What does not exist in audited `main`: a fail-closed signed release script, CI/C
 9. Record task, commit, versions, file, checksum, signature identity and all gate results.
 10. Only then set `APPROVED_FOR_INTERNAL_TESTING`.
 
-The harness `inspect-apk` command records file metadata, Gradle version and SHA-256. It is not signature verification and cannot by itself pass `BUILD_GATE`. After a real gated build, `register-apk` requires an explicit Android SDK `apksigner` path, runs verification, records only a hash/size of verifier output, and binds the APK to the sealed candidate commit.
+The harness `inspect-apk` command requires an explicit Android SDK `aapt` path and extracts package/version metadata from the APK itself, plus SHA-256. It is not signature verification and cannot by itself pass `BUILD_GATE`. After a real gated build, `register-apk` requires explicit `aapt` and `apksigner` paths, requires recognizable successful verifier output, records only a hash/size of that output, and binds the APK to a clean checkout at the sealed candidate commit.
 
 ```bash
-npm run harness -- register-apk --task POS-YYYY-NNNN --file android/app/build/outputs/apk/release/<file>.apk --apksigner /absolute/sdk/build-tools/<version>/apksigner --actor <assigned-release-agent>
+npm run harness -- register-apk --task POS-YYYY-NNNN --file android/app/build/outputs/apk/release/<file>.apk --aapt /absolute/sdk/build-tools/<version>/aapt --apksigner /absolute/sdk/build-tools/<version>/apksigner --actor <assigned-release-agent>
 ```
 
 ## Safe Cloud-Admin publication

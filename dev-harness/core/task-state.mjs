@@ -174,6 +174,7 @@ export async function reassessTask(root, taskId, actor, assessment, evidence) {
   const previous = { risk: task.risk, affected_modules: task.affected_modules, required_gates: task.required_gates };
   task.risk = assessment.risk;
   task.affected_modules = assessment.affected_modules;
+  task.affected_files = [...new Set(assessment.impacts.flatMap((impact) => impact.files))];
   task.required_gates = assessment.required_gates;
   task.risk_impacts = assessment.impacts;
   task.evidence = [...new Set([...(task.evidence || []), evidence])];

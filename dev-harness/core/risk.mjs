@@ -25,7 +25,7 @@ export function assessRisk(files, config) {
   const unmatchedFiles = normalized.filter((file) => !matched.has(file));
   if (unmatchedFiles.length > 0 || impacts.length === 0) {
     impacts.push({ module: 'unclassified', risk: 'MEDIUM', files: unmatchedFiles, gates: ['BUILD_GATE', 'REVIEW_GATE', 'QA_GATE'] });
-    riskIndex = 1;
+    riskIndex = Math.max(riskIndex, 1);
   }
 
   const gates = [...new Set(impacts.flatMap((impact) => impact.gates))];

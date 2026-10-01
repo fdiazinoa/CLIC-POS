@@ -45,7 +45,7 @@ export async function recordGate(root, taskId, input) {
   task.gate_attempts ||= {};
   task.gate_attempts[input.gate] = attempt;
   const failureCount = (task.retries[input.gate] || 0) + (input.result === 'FAIL' ? 1 : 0);
-  if (input.result === 'FAIL' && Number.isFinite(input.max_attempts) && failureCount > input.max_attempts) {
+  if (input.result === 'FAIL' && Number.isFinite(input.max_attempts) && failureCount >= input.max_attempts) {
     task.status = 'BLOCKED';
     task.retries[input.gate] = failureCount;
     task.gates[input.gate] = {

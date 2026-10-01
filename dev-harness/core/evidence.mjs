@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import { assertSafeId, now, writeJsonAtomic } from './io.mjs';
@@ -29,7 +30,7 @@ export async function writeEvidence(root, taskId, category, payload) {
   assertSafeId(taskId, 'task id');
   assertSafeId(category, 'evidence category');
   const timestamp = now();
-  const filename = `${timestamp.replaceAll(':', '-')}.json`;
+  const filename = `${timestamp.replaceAll(':', '-')}-${randomUUID()}.json`;
   const relativePath = path.join('dev-harness/evidence', taskId, category, filename);
   await writeJsonAtomic(path.join(root, relativePath), redact({ ...payload, recorded_at: timestamp }));
   return relativePath.replaceAll('\\', '/');

@@ -3,10 +3,11 @@ import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { verifyApkSignature } from '../core/apk.mjs';
 import { redact, writeEvidence } from '../core/evidence.mjs';
 import { recordGate, verifyInternalRelease } from '../core/gates.mjs';
 import { assessRisk } from '../core/risk.mjs';
-import { createTask, loadTask, saveTask, transitionTask } from '../core/task-state.mjs';
+import { createTask, loadTask, reassessTask, saveTask, transitionTask } from '../core/task-state.mjs';
 
 const config = {
   gate_order: ['BUILD_GATE', 'REVIEW_GATE', 'QA_GATE', 'SYNC_GATE'],
@@ -45,6 +46,11 @@ test('mixed file sets retain an unclassified impact', () => {
   const result = assessRisk(['docs/a.md', 'server/unknown.mjs'], config);
   assert.deepEqual(result.affected_modules, ['docs', 'unclassified']);
   assert.deepEqual(result.impacts[1].files, ['server/unknown.mjs']);
+});
+
+test('an unclassified file never downgrades a classified HIGH risk', () => {
+  const result = assessRisk(['services/sync/SyncManager.ts', 'unknown/file.xyz'], config);
+  assert.equal(result.risk, 'HIGH');
 });
 
 test('state machine rejects illegal transitions', async () => {
@@ -89,6 +95,22 @@ test('evidence redacts structured and embedded secret formats', async () => {
   const root = await tempRoot();
   const file = await writeEvidence(root, 'POS-2026-0001', 'qa', { password: 'never-store-this' });
   assert.match(file, /^dev-harness\/evidence\/POS-2026-0001\/qa\//);
+});
+
+test('concurrent evidence writes always get unique immutable paths', async () => {
+  const root = await tempRoot();
+  const paths = await Promise.all(Array.from({ length: 100 }, (_, index) =>
+    writeEvidence(root, 'POS-2026-0001', 'qa', { index })
+  ));
+  assert.equal(new Set(paths).size, 100);
+});
+
+test('APK signature verification fails for missing APK or non-verifier command', async () => {
+  assert.equal(verifyApkSignature('/definitely/missing.apk', '/usr/bin/true').verified, false);
+  const root = await tempRoot();
+  const fakeApk = path.join(root, 'fake.apk');
+  await writeFile(fakeApk, 'PK-not-a-real-apk');
+  assert.equal(verifyApkSignature(fakeApk, '/usr/bin/true').verified, false);
 });
 
 test('gate PASS requires assigned allowed role and existing evidence', async () => {
@@ -179,11 +201,14 @@ test('retry exhaustion replaces an old PASS with BLOCKED', async () => {
   task.gates = { QA_GATE: { result: 'PASS' } };
   await saveTask(root, task);
   const evidence = await evidenceFile(root, 'qa-fail.json');
-  await recordGate(root, task.task_id, {
-    gate: 'QA_GATE', result: 'FAIL', actor: 'qa-1', role: 'QA', evidence: [evidence], allowed_roles: ['QA'], max_attempts: 1
-  });
+  for (let attempt = 1; attempt < 3; attempt += 1) {
+    const failed = await recordGate(root, task.task_id, {
+      gate: 'QA_GATE', result: 'FAIL', actor: 'qa-1', role: 'QA', evidence: [evidence], allowed_roles: ['QA'], max_attempts: 3
+    });
+    assert.equal(failed.gates.QA_GATE.result, 'FAIL');
+  }
   const blocked = await recordGate(root, task.task_id, {
-    gate: 'QA_GATE', result: 'FAIL', actor: 'qa-1', role: 'QA', evidence: [evidence], allowed_roles: ['QA'], max_attempts: 1
+    gate: 'QA_GATE', result: 'FAIL', actor: 'qa-1', role: 'QA', evidence: [evidence], allowed_roles: ['QA'], max_attempts: 3
   });
   assert.equal(blocked.status, 'BLOCKED');
   assert.equal(blocked.gates.QA_GATE.result, 'BLOCKED');
@@ -221,4 +246,16 @@ test('non-release tasks can complete only after strict core gates pass', async (
   await saveTask(root, task);
   const completed = await transitionTask(root, task.task_id, 'COMPLETED', 'orchestrator');
   assert.equal(completed.status, 'COMPLETED');
+});
+
+test('risk reassessment updates the auditable affected-file scope', async () => {
+  const root = await tempRoot();
+  const task = await createTask(root, {
+    title: 'test', base_commit: 'abc', branch: 'feature/test', affected_files: ['docs/old.md']
+  });
+  const evidence = await evidenceFile(root, 'reassess.json');
+  const assessment = assessRisk(['services/sync/SyncManager.ts'], config);
+  const updated = await reassessTask(root, task.task_id, 'orchestrator', assessment, evidence);
+  assert.deepEqual(updated.affected_files, ['services/sync/SyncManager.ts']);
+  assert.equal(updated.risk, 'HIGH');
 });
