@@ -9,6 +9,11 @@ test('la Master serializa el RMW de tickets con los snapshots publicados por la 
   assert.match(serverSource, /@Synchronized\s+fun start\(/);
   assert.match(serverSource, /@Synchronized\s+fun updateConfig\(/);
   assert.match(serverSource, /@Synchronized\s+private fun handleParkedTicketsUpdate\(/);
+  assert.match(serverSource, /@Synchronized\s+private fun handleTableUpdate\(/);
+  assert.match(serverSource, /@Synchronized\s+private fun handleOpenTable\(/);
+  assert.match(serverSource, /@Synchronized\s+private fun handleReleaseTable\(/);
+  assert.match(serverSource, /@Synchronized\s+private fun buildRestaurantSnapshot\(/);
+  assert.match(serverSource, /@Synchronized\s+private fun serializeRestaurantSnapshot\(/);
 });
 
 test('el ACK confirma la cuenta y los artículos exactos, no solo success=true', () => {
