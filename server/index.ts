@@ -276,7 +276,9 @@ server.put('/api/mesas/parked-tickets', (req, res) => {
         saveSetting('parkedTickets', parkedTickets);
         res.json({
             success: true,
-            parkedTickets: getOpenParkedTickets()
+            // ACK the exact persisted payload, including a newly opened empty
+            // account. The filtered view used for occupancy is not a write ACK.
+            parkedTickets
         });
     } catch (error: any) {
         res.status(500).json({ success: false, message: error.message });

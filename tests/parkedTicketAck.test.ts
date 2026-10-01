@@ -4,6 +4,7 @@ import test from 'node:test';
 import { assertParkedTicketsAcknowledged } from '../utils/parkedTicketAck';
 
 const serverSource = readFileSync(new URL('../native-stubs/android/ClicPOSMasterHttpServer.kt', import.meta.url), 'utf8');
+const expressSource = readFileSync(new URL('../server/index.ts', import.meta.url), 'utf8');
 
 test('la Master serializa el RMW de tickets con los snapshots publicados por la WebView', () => {
   assert.match(serverSource, /@Synchronized\s+fun start\(/);
@@ -43,4 +44,14 @@ test('el ACK no acepta una cuenta eliminada ni una cuenta extra de la misma mesa
     { id: 'cuenta-4', tableId: 'mesa-4', items: [], total: 0 },
     { id: 'cuenta-4b', tableId: 'mesa-4', items: [], total: 0 },
   ], 'cuenta-4', 'mesa-4'), /PARKED_TICKETS_ACK_MISMATCH/);
+});
+
+test('Express confirma también la cuenta recién abierta sin artículos', () => {
+  const parkedTicketRoute = expressSource.slice(
+    expressSource.indexOf("server.put('/api/mesas/parked-tickets'"),
+    expressSource.indexOf('// Mover mesa'),
+  );
+  assert.match(parkedTicketRoute, /saveSetting\('parkedTickets', parkedTickets\)/);
+  assert.match(parkedTicketRoute, /success: true,\s*\/\/[^\n]*\n\s*\/\/[^\n]*\n\s*parkedTickets\s*\}/);
+  assert.doesNotMatch(parkedTicketRoute, /parkedTickets: getOpenParkedTickets\(\)/);
 });
