@@ -67,6 +67,7 @@ import {
     LegacyMutationJournal,
     legacyMutationJournal,
 } from './LegacyMutationJournal';
+import { isSafeTableLockRejection } from './tableLockConflict';
 
 /**
  * API Sync Adapter
@@ -785,6 +786,7 @@ export class ApiSyncAdapter {
         });
 
         let legacyJournalId: string | null = null;
+        let safelyRejectedTableLock = false;
         try {
             if (effectiveMutationDispatch === 'LEGACY_NO_RETRY' && isMutatingRequest) {
                 const journalEntry = await this.mutationJournal.begin({
@@ -816,7 +818,10 @@ export class ApiSyncAdapter {
             if (legacyJournalId) {
                 this.legacyJournalIds.set(response, legacyJournalId);
                 await this.mutationJournal.recordHttpStatus(legacyJournalId, response.status);
-                if (response.status !== 401 && !response.ok) {
+                safelyRejectedTableLock = isSafeTableLockRejection(url, method, response.status, nativeResponse.data);
+                if (safelyRejectedTableLock) {
+                    await this.mutationJournal.acknowledge(legacyJournalId, 'SAFE_PRE_SIDE_EFFECT', 'TABLE_EDIT_LOCK_REQUIRED');
+                } else if (response.status !== 401 && !response.ok) {
                     await this.mutationJournal.markOutcomeUnknown(legacyJournalId, response.status);
                 }
             }
@@ -850,7 +855,7 @@ export class ApiSyncAdapter {
                 return this.fetchWithRetry(url, options, retries - 1, backoff * 2, channel, operation, authorityRevision, authoritySignal, diagnosticRequestId, mutationDispatch);
             }
 
-            if (legacyJournalId && response.status !== 401 && !response.ok) {
+            if (legacyJournalId && !safelyRejectedTableLock && response.status !== 401 && !response.ok) {
                 throw Object.assign(new Error(`LEGACY_MUTATION_OUTCOME_UNKNOWN:${response.status}`), {
                     httpStatus: response.status,
                     legacyMutationJournalId: legacyJournalId,
@@ -859,7 +864,7 @@ export class ApiSyncAdapter {
 
             return response;
         } catch (error: any) {
-            if (legacyJournalId) await this.mutationJournal.markOutcomeUnknown(legacyJournalId, null);
+            if (legacyJournalId && !safelyRejectedTableLock) await this.mutationJournal.markOutcomeUnknown(legacyJournalId, null);
             if (!this.isOperationalAuthorityCurrent(authorityRevision, authoritySignal)) throw error;
             const isConnectionError = this.isRecoverableConnectionError(error);
             const isTimeout = error?.name === 'AbortError';

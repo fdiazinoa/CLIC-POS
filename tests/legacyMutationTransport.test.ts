@@ -14,6 +14,7 @@ import {
   validateLegacyTableStateResponse,
 } from '../services/sync/LegacyLanMutationTransport';
 import { setTerminalCredentialNativeWriterForTests } from '../services/sync/TerminalCredentialStore';
+import { isSafeTableLockRejection } from '../services/sync/tableLockConflict';
 
 class Store implements LegacyMutationJournalStore {
   rows = new Map<string, LegacyMutationJournalEntry>();
@@ -58,6 +59,66 @@ const adapterFor = async () => {
   adapter.operationalAuthorityAbortController = new AbortController();
   return { adapter, journal, store };
 };
+
+test('only the Android Master table-lock rejection is provably pre-side-effect', () => {
+  const body = { success: false, code: 'TABLE_EDIT_LOCK_REQUIRED' };
+  assert.equal(isSafeTableLockRejection('http://10.0.0.129:3001/api/mesas/parked-tickets', 'PUT', 409, body), true);
+  assert.equal(isSafeTableLockRejection('http://10.0.0.129:3001/api/tables/table-7', 'PUT', 409, body), true);
+  assert.equal(isSafeTableLockRejection('http://10.0.0.129:3001/api/tables/table-7', 'PUT', 409, { code: 'OTHER_CONFLICT' }), false);
+  assert.equal(isSafeTableLockRejection('http://10.0.0.129:3001/api/sync/transactions', 'PUT', 409, body), false);
+});
+
+test('direct table mutation closes a verified 409 lock rejection without blocking later work', async () => {
+  const restore = installAndroid();
+  const store = new Store();
+  const journal = new LegacyMutationJournal(store);
+  await journal.initializeForStartup();
+  setNativeRequestTransportForTests((async () => ({ status: 409, data: { success: false, code: 'TABLE_EDIT_LOCK_REQUIRED' } })) as any);
+  try {
+    await assert.rejects(dispatchLegacyLanMutation({
+      url: 'http://10.0.0.129:3001/api/mesas/parked-tickets',
+      method: 'PUT',
+      operation: 'PARKED_TICKETS_SYNC',
+      validateResponse: () => undefined,
+      journal,
+      authorityState: { revision: 7, terminalId: 'terminal-a' },
+    }), /TABLE_EDIT_LOCK_REQUIRED/);
+    assert.equal(journal.hasBlockingMutations(), false);
+    assert.equal([...store.rows.values()][0]?.classification, 'SAFE_PRE_SIDE_EFFECT');
+    await journal.begin({ authorityFingerprint: 'http://10.0.0.129:3001|terminal-a', generation: 7, method: 'PUT', url: 'http://10.0.0.129:3001/api/tables/table-7', diagnosticRequestId: 'next' });
+  } finally {
+    restore();
+  }
+});
+
+test('adapter closes a verified 409 table-lock rejection but leaves other conflicts ambiguous', async () => {
+  const restore = installAndroid();
+  const { adapter, journal, store } = await adapterFor();
+  setNativeRequestTransportForTests((async () => ({ status: 409, data: { success: false, code: 'TABLE_EDIT_LOCK_REQUIRED' } })) as any);
+  try {
+    const response = await adapter.fetchWithRetry('http://10.0.0.129:3001/api/tables/table-7', { method: 'PUT', body: '{}' }, 0, 1, 'sales', 'TABLE_UPDATE');
+    assert.equal(response.status, 409);
+    assert.equal(journal.hasBlockingMutations(), false);
+    assert.equal([...store.rows.values()][0]?.classification, 'SAFE_PRE_SIDE_EFFECT');
+  } finally {
+    restore();
+  }
+});
+
+test('an unrecognized 409 remains OUTCOME_UNKNOWN', async () => {
+  const restore = installAndroid();
+  const { adapter, journal } = await adapterFor();
+  setNativeRequestTransportForTests((async () => ({ status: 409, data: { success: false, code: 'OTHER_CONFLICT' } })) as any);
+  try {
+    await assert.rejects(
+      adapter.fetchWithRetry('http://10.0.0.129:3001/api/tables/table-7', { method: 'PUT', body: '{}' }, 0, 1, 'sales', 'TABLE_UPDATE'),
+      /LEGACY_MUTATION_OUTCOME_UNKNOWN/,
+    );
+    assert.equal(journal.hasOutcomeUnknown(), true);
+  } finally {
+    restore();
+  }
+});
 
 for (const status of [500, 503, 504]) {
   test(`LAN legacy ${status} is one CapacitorHttp attempt and remains OUTCOME_UNKNOWN`, async () => {

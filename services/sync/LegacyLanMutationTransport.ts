@@ -2,6 +2,7 @@ import { requestJson } from '../network/httpClient';
 import { LegacyMutationJournal, legacyMutationJournal, type LegacyMutationClassification } from './LegacyMutationJournal';
 import { apiSyncAdapter } from './ApiSyncAdapter';
 import { dbAdapter } from '../db';
+import { isSafeTableLockRejection } from './tableLockConflict';
 
 const COMPLETION_COLLECTION = 'legacyMutationCompletions';
 
@@ -92,6 +93,7 @@ export const dispatchLegacyLanMutation = async <T = any>(input: {
         diagnosticRequestId: correlationId,
         reconciliationContext: input.reconciliationContext,
     });
+    let safelyRejected = false;
     await journal.prepareDispatch(entry.id, fingerprint, generation);
     const current = input.authorityState || apiSyncAdapter.getOperationalAuthorityState();
     if (current.revision !== generation || input.assertAuthorityCurrent?.() === false) {
@@ -110,6 +112,11 @@ export const dispatchLegacyLanMutation = async <T = any>(input: {
         });
         const response = new Response(native.text, { status: native.status, headers: native.headers });
         await journal.recordHttpStatus(entry.id, response.status);
+        if (isSafeTableLockRejection(input.url, input.method, response.status, native.data)) {
+            await journal.acknowledge(entry.id, 'SAFE_PRE_SIDE_EFFECT', `${input.operation}:TABLE_EDIT_LOCK_REQUIRED`);
+            safelyRejected = true;
+            throw Object.assign(new Error('TABLE_EDIT_LOCK_REQUIRED'), { httpStatus: response.status });
+        }
         const safePreSideEffect = response.status === 401 || input.safePreSideEffectStatuses?.includes(response.status);
         if (!safePreSideEffect && !response.ok) {
             await journal.markOutcomeUnknown(entry.id, response.status);
@@ -143,7 +150,7 @@ export const dispatchLegacyLanMutation = async <T = any>(input: {
         };
     } catch (error: any) {
         const httpStatus = Number.isFinite(Number(error?.httpStatus)) ? Number(error.httpStatus) : null;
-        await journal.markOutcomeUnknown(entry.id, httpStatus);
+        if (!safelyRejected) await journal.markOutcomeUnknown(entry.id, httpStatus);
         if (input.idempotentReplaySafe) {
             await journal.acknowledge(entry.id, 'SAFE_IDEMPOTENT_REPLAY', `IDEMPOTENT_REPLAY:${correlationId}`);
         }
