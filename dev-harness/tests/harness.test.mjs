@@ -80,6 +80,26 @@ test('state machine cannot skip the gate owned by the current phase', async () =
   );
 });
 
+test('state machine forces every required domain gate in order', async () => {
+  const root = await tempRoot();
+  const task = await createTask(root, { title: 'test', base_commit: 'abc', branch: 'feature/test' });
+  task.status = 'QA';
+  task.required_gates = ['BUILD_GATE', 'REVIEW_GATE', 'QA_GATE', 'SYNC_GATE', 'OFFLINE_GATE', 'PERFORMANCE_GATE'];
+  task.gates = { REVIEW_GATE: { result: 'PASS' }, QA_GATE: { result: 'PASS' }, BUILD_GATE: { result: 'PASS' } };
+  await saveTask(root, task);
+  await assert.rejects(
+    () => transitionTask(root, task.task_id, 'PERFORMANCE', 'orchestrator'),
+    /next state must be SYNC_VALIDATION/
+  );
+  const sync = await transitionTask(root, task.task_id, 'SYNC_VALIDATION', 'orchestrator');
+  sync.gates.SYNC_GATE = { result: 'PASS' };
+  await saveTask(root, sync);
+  await assert.rejects(
+    () => transitionTask(root, task.task_id, 'PERFORMANCE', 'orchestrator'),
+    /next state must be OFFLINE_VALIDATION/
+  );
+});
+
 async function selfApprovalFixture(result) {
   const root = await tempRoot();
   const task = await createTask(root, { title: 'test', base_commit: 'abc', branch: 'feature/test' });

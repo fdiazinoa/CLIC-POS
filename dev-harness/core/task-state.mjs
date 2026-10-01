@@ -108,6 +108,20 @@ export async function transitionTask(root, taskId, nextStatus, actor, reason = '
     const accepted = phaseGate.strict ? result === 'PASS' : ['PASS', 'NOT_REQUIRED'].includes(result);
     if (!accepted) throw new Error(`Cannot leave ${task.status}; ${phaseGate.gate} is incomplete`);
   }
+  const successStates = ['SYNC_VALIDATION', 'OFFLINE_VALIDATION', 'PERFORMANCE', 'READY_FOR_INTERNAL_RELEASE', 'COMPLETED'];
+  if (successStates.includes(nextStatus) && ['QA', 'SYNC_VALIDATION', 'OFFLINE_VALIDATION', 'PERFORMANCE'].includes(task.status)) {
+    const orderedDomains = [
+      { gate: 'SYNC_GATE', state: 'SYNC_VALIDATION' },
+      { gate: 'OFFLINE_GATE', state: 'OFFLINE_VALIDATION' },
+      { gate: 'PERFORMANCE_GATE', state: 'PERFORMANCE' }
+    ];
+    const startIndex = { QA: 0, SYNC_VALIDATION: 1, OFFLINE_VALIDATION: 2, PERFORMANCE: 3 }[task.status];
+    const nextDomain = orderedDomains.slice(startIndex).find(({ gate }) => task.required_gates.includes(gate));
+    const expectedState = nextDomain?.state || (task.required_gates.includes('INTERNAL_RELEASE_GATE') ? 'READY_FOR_INTERNAL_RELEASE' : 'COMPLETED');
+    if (nextStatus !== expectedState) {
+      throw new Error(`Cannot skip required gate phase; next state must be ${expectedState}`);
+    }
+  }
   if (nextStatus === 'READY_FOR_INTERNAL_RELEASE') {
     const preBuildGates = task.required_gates.filter((gate) => !['BUILD_GATE', 'INTERNAL_RELEASE_GATE'].includes(gate));
     const incomplete = preBuildGates.filter((gate) => {
