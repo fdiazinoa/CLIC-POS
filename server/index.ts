@@ -24,7 +24,7 @@ import { initSocket } from './socket.js';
 
 import { db, getCollection, getSetting, saveSetting } from './db';
 import { persistOperationalDocumentState } from './services/terminalOperationalState.js';
-import { mergeParkedTicketsForTable } from './tableTicketMerge.js';
+import { mergeParkedTicketsForTable, parsePersistedParkedTickets } from './tableTicketMerge.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -162,14 +162,14 @@ server.use('/api/sync/terminals', terminalConfigRoutes);
 server.use('/api/fiscal', fiscalRoutes);
 
 // --- Mesas & Salas Endpoints ---
-const getPersistedParkedTickets = (): any[] => {
+const getPersistedParkedTickets = (strict = false): any[] => {
     try {
         const parkedTicketsBlob = db.prepare("SELECT value FROM settings WHERE key = 'parkedTickets'").get() as any;
-        const parsed = parkedTicketsBlob ? JSON.parse(parkedTicketsBlob.value || '[]') : [];
         // A newly opened table has a valid empty account. Dropping it from an
         // authoritative snapshot makes the next table refresh lose that account.
-        return Array.isArray(parsed) ? parsed : [];
+        return parsePersistedParkedTickets(parkedTicketsBlob ? parkedTicketsBlob.value : null, strict);
     } catch (error) {
+        if (strict) throw error;
         console.warn('No se pudieron leer tickets parqueados para mesas:', error);
         return [];
     }
@@ -272,7 +272,7 @@ server.put('/api/mesas/parked-tickets', (req, res) => {
 
     try {
         const tableId = String(req.body?.tableId || '').trim();
-        const nextTickets = mergeParkedTicketsForTable(getPersistedParkedTickets(), parkedTickets, tableId);
+        const nextTickets = mergeParkedTicketsForTable(getPersistedParkedTickets(true), parkedTickets, tableId);
         saveSetting('parkedTickets', nextTickets);
         res.json({
             success: true,

@@ -3,6 +3,17 @@ type TableTicket = {
   joinedTableIds?: Array<string | number>;
 };
 
+export const parsePersistedParkedTickets = (raw: string | null, strict = false): unknown[] => {
+  try {
+    const parsed = raw === null ? [] : JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed;
+    throw new Error('PARKED_TICKETS_SNAPSHOT_INVALID');
+  } catch (error) {
+    if (strict) throw error;
+    return [];
+  }
+};
+
 const referencesTable = (ticket: TableTicket, tableId: string): boolean =>
   String(ticket.tableId || '') === tableId ||
   (Array.isArray(ticket.joinedTableIds) && ticket.joinedTableIds.some(id => String(id) === tableId));

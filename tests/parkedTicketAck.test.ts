@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { assertParkedTicketsAcknowledged } from '../utils/parkedTicketAck';
-import { mergeParkedTicketsForTable } from '../server/tableTicketMerge';
+import { mergeParkedTicketsForTable, parsePersistedParkedTickets } from '../server/tableTicketMerge';
 
 const serverSource = readFileSync(new URL('../native-stubs/android/ClicPOSMasterHttpServer.kt', import.meta.url), 'utf8');
 const expressSource = readFileSync(new URL('../server/index.ts', import.meta.url), 'utf8');
@@ -52,11 +52,20 @@ test('Express confirma también la cuenta recién abierta sin artículos', () =>
     expressSource.indexOf("server.put('/api/mesas/parked-tickets'"),
     expressSource.indexOf('// Mover mesa'),
   );
-  assert.match(parkedTicketRoute, /mergeParkedTicketsForTable\(getPersistedParkedTickets\(\), parkedTickets, tableId\)/);
+  assert.match(parkedTicketRoute, /mergeParkedTicketsForTable\(getPersistedParkedTickets\(true\), parkedTickets, tableId\)/);
   assert.match(parkedTicketRoute, /saveSetting\('parkedTickets', nextTickets\)/);
   assert.match(parkedTicketRoute, /success: true,\s*parkedTickets: nextTickets/);
-  assert.match(expressSource, /const getPersistedParkedTickets[\s\S]*?return Array\.isArray\(parsed\) \? parsed : \[\]/);
+  assert.match(expressSource, /const getPersistedParkedTickets = \(strict = false\)/);
+  assert.match(expressSource, /return parsePersistedParkedTickets\(parkedTicketsBlob \? parkedTicketsBlob.value : null, strict\)/);
+  assert.match(expressSource, /catch \(error\) \{\s*if \(strict\) throw error;/);
   assert.doesNotMatch(expressSource, /getOpenParkedTickets/);
+});
+
+test('Express rechaza un snapshot ilegible antes de sobrescribir otra mesa', () => {
+  assert.deepEqual(parsePersistedParkedTickets(null, true), []);
+  assert.deepEqual(parsePersistedParkedTickets('[{"id":"cuenta-4","items":[]}]', true), [{ id: 'cuenta-4', items: [] }]);
+  assert.throws(() => parsePersistedParkedTickets('{mal-json', true));
+  assert.throws(() => parsePersistedParkedTickets('{"id":"no-array"}', true), /PARKED_TICKETS_SNAPSHOT_INVALID/);
 });
 
 test('Express actualiza solo la mesa digitada y conserva cuentas ajenas y vacías', () => {
