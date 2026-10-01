@@ -59,6 +59,27 @@ test('state machine rejects illegal transitions', async () => {
   await assert.rejects(() => transitionTask(root, task.task_id, 'RELEASED', 'orchestrator'), /Illegal transition/);
 });
 
+test('state machine cannot skip the gate owned by the current phase', async () => {
+  const root = await tempRoot();
+  const task = await createTask(root, { title: 'test', base_commit: 'abc', branch: 'feature/test' });
+  task.status = 'REVIEWING';
+  task.required_gates = ['REVIEW_GATE', 'QA_GATE'];
+  await saveTask(root, task);
+  await assert.rejects(
+    () => transitionTask(root, task.task_id, 'QA', 'orchestrator'),
+    /REVIEW_GATE is incomplete/
+  );
+  const current = await loadTask(root, task.task_id);
+  current.gates.REVIEW_GATE = { result: 'PASS' };
+  await saveTask(root, current);
+  const qa = await transitionTask(root, task.task_id, 'QA', 'orchestrator');
+  assert.equal(qa.status, 'QA');
+  await assert.rejects(
+    () => transitionTask(root, task.task_id, 'SYNC_VALIDATION', 'orchestrator'),
+    /QA_GATE is incomplete/
+  );
+});
+
 async function selfApprovalFixture(result) {
   const root = await tempRoot();
   const task = await createTask(root, { title: 'test', base_commit: 'abc', branch: 'feature/test' });

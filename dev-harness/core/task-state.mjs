@@ -96,6 +96,18 @@ export async function transitionTask(root, taskId, nextStatus, actor, reason = '
   if (!LEGAL_TRANSITIONS[task.status]?.includes(nextStatus)) {
     throw new Error(`Illegal transition: ${task.status} -> ${nextStatus}`);
   }
+  const phaseGate = {
+    REVIEWING: { gate: 'REVIEW_GATE', strict: true, exitStates: ['QA'] },
+    QA: { gate: 'QA_GATE', strict: true, exitStates: ['SYNC_VALIDATION', 'OFFLINE_VALIDATION', 'PERFORMANCE', 'READY_FOR_INTERNAL_RELEASE', 'COMPLETED'] },
+    SYNC_VALIDATION: { gate: 'SYNC_GATE', strict: false, exitStates: ['OFFLINE_VALIDATION', 'PERFORMANCE', 'READY_FOR_INTERNAL_RELEASE', 'COMPLETED'] },
+    OFFLINE_VALIDATION: { gate: 'OFFLINE_GATE', strict: false, exitStates: ['PERFORMANCE', 'READY_FOR_INTERNAL_RELEASE', 'COMPLETED'] },
+    PERFORMANCE: { gate: 'PERFORMANCE_GATE', strict: false, exitStates: ['READY_FOR_INTERNAL_RELEASE', 'COMPLETED'] }
+  }[task.status];
+  if (phaseGate?.exitStates.includes(nextStatus) && task.required_gates.includes(phaseGate.gate)) {
+    const result = task.gates[phaseGate.gate]?.result;
+    const accepted = phaseGate.strict ? result === 'PASS' : ['PASS', 'NOT_REQUIRED'].includes(result);
+    if (!accepted) throw new Error(`Cannot leave ${task.status}; ${phaseGate.gate} is incomplete`);
+  }
   if (nextStatus === 'READY_FOR_INTERNAL_RELEASE') {
     const preBuildGates = task.required_gates.filter((gate) => !['BUILD_GATE', 'INTERNAL_RELEASE_GATE'].includes(gate));
     const incomplete = preBuildGates.filter((gate) => {
