@@ -372,6 +372,7 @@ import {
 } from './utils/operationalMasterConfig';
 import { persistValidatedClientMasterTargetAsync, resolveClientMasterTerminalId } from './utils/clientMasterBinding';
 import { completeLegacyMutationAfterDurableAck, legacyMutationJournal } from './services/sync/LegacyMutationJournal';
+import { reconcileMasterParkedTicketOutcome } from './services/sync/masterParkedTicketReconciliation';
 import { assertParkedTicketsAcknowledged } from './utils/parkedTicketAck';
 import {
   dispatchLegacyLanMutation,
@@ -9604,8 +9605,31 @@ const AppContent: React.FC = () => {
       // Master evita que un snapshot anterior vuelva a insertar una orden ya cobrada.
       const syncOperation = async () => {
         await persistMasterTickets();
+        const masterUrl = await resolveValidatedOperationalApiUrl('/api/mesas/parked-tickets');
+        if (legacyMutationJournal.hasOutcomeUnknown() && masterEditLock?.tableId) {
+          const nativeBridge = (window as any).ClicPOSNativePrinter;
+          const reconciledRevision = typeof nativeBridge?.getMasterRestaurantState === 'function'
+            ? await reconcileMasterParkedTicketOutcome({
+                journal: legacyMutationJournal,
+                tickets: validTickets,
+                tableId: String(masterEditLock.tableId),
+                authorityOrigin: new URL(masterUrl).origin,
+                readNativeSnapshot: async () => parseNativeBridgeJson(
+                  await Promise.resolve(nativeBridge.getMasterRestaurantState({})),
+                ),
+              })
+            : null;
+          if (reconciledRevision !== null) {
+            masterRestaurantRevisionRef.current = Math.max(masterRestaurantRevisionRef.current, reconciledRevision);
+            if (pendingMasterTableSyncRef.current === masterPendingSync) {
+              pendingMasterTableSyncRef.current = null;
+              writePendingTableSyncMirror({ id: 'current', status: 'EMPTY', queuedAt: new Date().toISOString(), parkedTickets: [] });
+            }
+            return;
+          }
+        }
         const response = await dispatchLegacyLanMutation<any>({
-          url: await resolveValidatedOperationalApiUrl('/api/mesas/parked-tickets'),
+          url: masterUrl,
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           // Con lock activo, actualizar únicamente esta mesa. Una Terminal Cliente
