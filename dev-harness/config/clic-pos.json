@@ -1,0 +1,99 @@
+{
+  "version": 1,
+  "task_prefix": "POS",
+  "max_automatic_retries": 2,
+  "gate_order": [
+    "BUILD_GATE",
+    "REVIEW_GATE",
+    "QA_GATE",
+    "SYNC_GATE",
+    "OFFLINE_GATE",
+    "PERFORMANCE_GATE",
+    "INTERNAL_RELEASE_GATE"
+  ],
+  "gates": {
+    "BUILD_GATE": {
+      "approver_roles": ["QA", "RELEASE"],
+      "execute_by_type": { "*": ["npm", "run", "build"] }
+    },
+    "REVIEW_GATE": { "approver_roles": ["REVIEWER"] },
+    "QA_GATE": {
+      "approver_roles": ["QA"],
+      "execute_by_type": { "INFRASTRUCTURE": ["npm", "run", "harness:test"] }
+    },
+    "SYNC_GATE": { "approver_roles": ["SYNC_VALIDATOR"] },
+    "OFFLINE_GATE": { "approver_roles": ["OFFLINE_VALIDATOR"] },
+    "PERFORMANCE_GATE": { "approver_roles": ["PERFORMANCE"] },
+    "INTERNAL_RELEASE_GATE": { "approver_roles": ["RELEASE"] }
+  },
+  "impact_matrix": [
+    {
+      "module": "harness-docs",
+      "risk": "LOW",
+      "patterns": ["^(dev-harness/|docs/|AGENTS\\.md$|WORKFLOW\\.md$)"],
+      "gates": ["BUILD_GATE", "REVIEW_GATE", "QA_GATE"]
+    },
+    {
+      "module": "ui-presentation",
+      "risk": "MEDIUM",
+      "patterns": ["^(components|styles)/", "\\.(css|tsx)$"],
+      "gates": ["BUILD_GATE", "REVIEW_GATE", "QA_GATE", "PERFORMANCE_GATE"]
+    },
+    {
+      "module": "sales-payment-ticket",
+      "risk": "HIGH",
+      "patterns": ["App\\.tsx$", "POSInterface", "Payment", "Ticket", "Refund", "refund", "pricing", "promotion", "fiscal", "transaction"],
+      "gates": ["BUILD_GATE", "REVIEW_GATE", "QA_GATE", "SYNC_GATE", "OFFLINE_GATE", "PERFORMANCE_GATE"]
+    },
+    {
+      "module": "tables-z-close",
+      "risk": "HIGH",
+      "patterns": ["Table", "ZReport", "CashMovement", "closure", "close"],
+      "gates": ["BUILD_GATE", "REVIEW_GATE", "QA_GATE", "SYNC_GATE", "OFFLINE_GATE", "PERFORMANCE_GATE"]
+    },
+    {
+      "module": "printing-peripherals",
+      "risk": "HIGH",
+      "patterns": ["printer", "Print", "Barcode", "native-stubs"],
+      "gates": ["BUILD_GATE", "REVIEW_GATE", "QA_GATE", "OFFLINE_GATE", "PERFORMANCE_GATE"]
+    },
+    {
+      "module": "storage-sqlite-offline",
+      "risk": "HIGH",
+      "patterns": ["services/db", "utils/db", "server/schema\\.sql$", "migration.*\\.sql$", "SQLite", "IndexedDB", "offline", "Offline", "localRefundPersistence"],
+      "gates": ["BUILD_GATE", "REVIEW_GATE", "QA_GATE", "SYNC_GATE", "OFFLINE_GATE", "PERFORMANCE_GATE"]
+    },
+    {
+      "module": "synchronization",
+      "risk": "HIGH",
+      "patterns": ["services/sync", "erpSyncLifecycle", "server/routes/sync", "outbox", "inbox", "realtime"],
+      "gates": ["BUILD_GATE", "REVIEW_GATE", "QA_GATE", "SYNC_GATE", "OFFLINE_GATE", "PERFORMANCE_GATE"]
+    },
+    {
+      "module": "authentication",
+      "risk": "HIGH",
+      "patterns": ["auth", "license", "session", "supabase"],
+      "gates": ["BUILD_GATE", "REVIEW_GATE", "QA_GATE", "SYNC_GATE", "OFFLINE_GATE"]
+    },
+    {
+      "module": "android-bridge",
+      "risk": "HIGH",
+      "patterns": ["^android/", "capacitor", "native-stubs"],
+      "gates": ["BUILD_GATE", "REVIEW_GATE", "QA_GATE", "OFFLINE_GATE", "PERFORMANCE_GATE"]
+    },
+    {
+      "module": "release-deployment-signing",
+      "risk": "CRITICAL",
+      "patterns": [
+        "^android/app/build\\.gradle$",
+        "^android/key\\.properties$",
+        "^android/keys/",
+        "^scripts/.*(release|deploy)",
+        "^services/.*(release|deploy)",
+        "^\\.github/.*(release|deploy)",
+        "^vercel\\.json$"
+      ],
+      "gates": ["BUILD_GATE", "REVIEW_GATE", "QA_GATE", "SYNC_GATE", "OFFLINE_GATE", "PERFORMANCE_GATE", "INTERNAL_RELEASE_GATE"]
+    }
+  ]
+}

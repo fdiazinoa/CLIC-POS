@@ -1,0 +1,16 @@
+{
+  "rule": "No agent may approve its own implementation.",
+  "agents": {
+    "ORCHESTRATOR": { "owns": ["task", "state", "assignment", "gates", "evidence"], "must_not": ["modify functional code", "approve implementation"] },
+    "ANALYST": { "produces": ["requirement", "evidence", "root cause", "files", "dependencies", "risk", "plan", "validation"], "must_not": ["modify code", "approve implementation"] },
+    "DEVELOPER": { "produces": ["minimal implementation", "implementation evidence"], "must_not": ["declare QA PASS", "approve own work"] },
+    "REVIEWER": { "approves": ["REVIEW_GATE"], "checks": ["regressions", "races", "stale state", "side effects", "leaks", "cleanup", "duplicates", "event loss", "sync", "offline", "React lifecycle", "rendering", "storage"] },
+    "QA": { "approves": ["QA_GATE", "BUILD_GATE"], "checks": ["functional behavior", "regression matrix"] },
+    "SYNC_VALIDATOR": { "approves": ["SYNC_GATE"], "checks": ["online", "reconnect", "POS_TO_ERP", "ERP_TO_POS", "outbox", "inbox", "retries", "duplicates", "order", "idempotency", "recovery"] },
+    "OFFLINE_VALIDATOR": { "approves": ["OFFLINE_GATE"], "checks": ["offline operation", "persistence", "restart", "pending operations", "reconnect", "recovery"] },
+    "PERFORMANCE": { "approves": ["PERFORMANCE_GATE"], "checks": ["baseline", "candidate", "p50", "p95", "p99", "max", "long tasks"] },
+    "RELEASE": { "approves": ["BUILD_GATE", "INTERNAL_RELEASE_GATE"], "must_not": ["approve with failed or missing gate", "choose artifact by newest timestamp"] },
+    "INTERNAL_DEPLOY": { "owns": ["approved artifact upload", "publish", "verification", "rollback"], "must_not": ["develop", "fix", "deploy an unapproved APK", "promote production"] }
+  }
+}
+

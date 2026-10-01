@@ -1,0 +1,106 @@
+{
+  "version": 1,
+  "capabilities": [
+    {
+      "id": "harness.test",
+      "input": "repository checkout",
+      "preconditions": ["Node.js >= 20"],
+      "action": "npm run harness:test",
+      "output": "TAP test result",
+      "evidence": ["captured stdout/stderr", "exit code"],
+      "pass_criteria": "exit code 0",
+      "fail_criteria": "non-zero exit code"
+    },
+    {
+      "id": "web.build",
+      "input": "checked-out candidate commit",
+      "preconditions": ["npm ci completed", "required non-secret environment available"],
+      "action": "npm run build",
+      "output": "dist/",
+      "evidence": ["commit SHA", "build log", "exit code"],
+      "pass_criteria": "TypeScript and Vite finish with exit code 0",
+      "fail_criteria": "any compilation or bundling error"
+    },
+    {
+      "id": "pos.qa.sale-payment-ticket",
+      "input": "candidate build and sale matrix",
+      "preconditions": ["isolated test data", "configured terminal"],
+      "action": "Execute exact/overpayment/multi-currency, tax and discount scenarios from CRITICAL_FLOWS.md",
+      "output": "scenario results",
+      "evidence": ["transaction ids", "totals", "persisted records", "screenshots/logs where available"],
+      "pass_criteria": "all expected totals and persisted effects match",
+      "fail_criteria": "mismatch, partial persistence, duplicate, or missing ticket"
+    },
+    {
+      "id": "pos.qa.tables-z",
+      "input": "restaurant-mode candidate and fixtures",
+      "preconditions": ["isolated test data"],
+      "action": "Exercise park/open/move/pay/close and Z close recovery matrix",
+      "output": "scenario results",
+      "evidence": ["table/order ids", "Z id", "before/after persistence"],
+      "pass_criteria": "no lost order and close is atomic/idempotent",
+      "fail_criteria": "empty reopened order, duplicate or partial close"
+    },
+    {
+      "id": "pos.sync.validate",
+      "input": "candidate with LAN master and ERP endpoint",
+      "preconditions": ["isolated tenant", "network fault controls"],
+      "action": "Validate POS->master->ERP and ERP outbox->POS, duplicates, ordering, retries and crash boundaries",
+      "output": "sync matrix results",
+      "evidence": ["event ids", "outbox/inbox states", "ack logs", "retry counts"],
+      "pass_criteria": "eventual APPLIED exactly once at business level",
+      "fail_criteria": "loss, duplicate side effect, stale state or unbounded retry"
+    },
+    {
+      "id": "pos.offline.recovery",
+      "input": "candidate on target runtime",
+      "preconditions": ["network can be disabled", "clean fixture"],
+      "action": "Operate offline, restart, reconnect and observe recovery",
+      "output": "recovery result",
+      "evidence": ["pending queue before restart", "local records", "post-reconnect state"],
+      "pass_criteria": "local operation survives restart and synchronizes without duplication",
+      "fail_criteria": "loss, partial write, duplicate or stuck pending operation"
+    },
+    {
+      "id": "pos.performance.compare",
+      "input": "baseline and candidate samples for same device/scenario",
+      "preconditions": ["same device profile", "same dataset", "at least 30 samples"],
+      "action": "Compare p50/p95/p99/max and long tasks >50ms",
+      "output": "JSON comparison report",
+      "evidence": ["raw samples", "device profile", "baseline commit", "candidate commit"],
+      "pass_criteria": "no configured p95/p99 regression and critical p95 <=50ms where applicable",
+      "fail_criteria": "threshold breach or incomparable environment"
+    },
+    {
+      "id": "android.apk.release",
+      "input": "approved commit in signed build worktree",
+      "preconditions": ["all required gates pass", "human authorizes signing", "local signing material exists"],
+      "action": "npm run android:apk:release",
+      "output": "signed release APK",
+      "evidence": ["build log", "commit SHA", "versionName", "versionCode", "SHA-256"],
+      "pass_criteria": "Gradle succeeds and APK signature/version/checksum verify",
+      "fail_criteria": "gate missing, unsigned artifact, build error or metadata mismatch"
+    },
+    {
+      "id": "apk.identify",
+      "input": "explicit APK path",
+      "preconditions": ["APK exists"],
+      "action": "npm run harness -- inspect-apk --file <path>",
+      "output": "filename, path, size, versionName, versionCode, SHA-256",
+      "evidence": ["JSON output"],
+      "pass_criteria": "metadata and checksum resolved",
+      "fail_criteria": "ambiguous/missing artifact or version"
+    },
+    {
+      "id": "cloud-admin.internal-deploy",
+      "input": "explicitly approved APK artifact record",
+      "preconditions": ["APPROVED_FOR_INTERNAL_TESTING", "upload API/storage contract verified", "human authorization"],
+      "action": "Upload new, verify storage, publish pointer, verify UI/download, then optionally retire old version",
+      "output": "internal deployment report",
+      "evidence": ["storage object id", "published URL", "download checksum", "previous pointer"],
+      "pass_criteria": "downloaded checksum equals approved APK and rollback pointer remains available",
+      "fail_criteria": "any partial step; restore prior pointer when possible"
+    }
+  ]
+}
+
