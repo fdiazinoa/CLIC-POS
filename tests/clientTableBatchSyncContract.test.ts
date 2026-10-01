@@ -101,5 +101,5 @@ test('Master y Cliente esperan la confirmación de la orden antes de abandonar l
     posSource.indexOf('const handleRestoreTicket'),
   );
   assert.match(backToMap, /try \{\s*await saveActiveTableOrderForMap\(\);\s*\} catch \(error\) \{[\s\S]*?return;\s*\}\s*if \(onOpenTableMap\)/);
-  assert.match(posSource, /La Master no confirmó los cambios de esta mesa/);
+  assert.match(posSource, /La Master no confirmó esta mesa \(\$\{syncErrorCode\}\)/);
 });

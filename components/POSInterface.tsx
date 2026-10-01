@@ -4703,9 +4703,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             await Promise.resolve(onTableOrderSavedRef.current?.(activeTable, syncedTicket));
          } catch (error) {
             console.error('[TABLE_SYNC] No se pudo sincronizar automáticamente la mesa:', error);
+            const syncErrorCode = error instanceof Error ? error.message.slice(0, 80) : 'ERROR_DESCONOCIDO';
             setErrorToast(batchClientSync
                ? 'Cambios guardados localmente. Pendiente de sincronizar.'
-               : 'La Master no confirmó los cambios de esta mesa. No cambies de mesa todavía.');
+               : `La Master no confirmó esta mesa (${syncErrorCode}). No cambies de mesa todavía.`);
             window.setTimeout(() => setErrorToast(null), 5000);
          } finally {
             if (ticketAutoSyncFlushRef.current === flushTicketSync) {
@@ -6737,7 +6738,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       try {
          await Promise.resolve(onUpdateParkedTickets(updatedTickets, { reason: 'explicit' }));
       } catch (error) {
-         setErrorToast('No se pudo confirmar con la Master. Los cambios siguen guardados localmente.');
+         const syncErrorCode = error instanceof Error ? error.message.slice(0, 80) : 'ERROR_DESCONOCIDO';
+         setErrorToast(`No se pudo confirmar con la Master (${syncErrorCode}). Los cambios siguen guardados localmente.`);
          window.setTimeout(() => setErrorToast(null), 3500);
          throw error;
       }
@@ -6808,7 +6810,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       try {
          await Promise.resolve(onUpdateParkedTickets(updatedTickets, { reason: 'explicit' }));
       } catch (error) {
-         setErrorToast('No se pudo confirmar con la Master. La mesa permanece abierta y pendiente.');
+         const syncErrorCode = error instanceof Error ? error.message.slice(0, 80) : 'ERROR_DESCONOCIDO';
+         setErrorToast(`No se pudo confirmar con la Master (${syncErrorCode}). La mesa permanece abierta y pendiente.`);
          window.setTimeout(() => setErrorToast(null), 3500);
          throw error;
       }
