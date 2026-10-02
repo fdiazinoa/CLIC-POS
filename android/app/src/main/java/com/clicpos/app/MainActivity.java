@@ -268,6 +268,20 @@ public class MainActivity extends BridgeActivity {
         }
 
         @JavascriptInterface
+        public String getAppStorageStats() {
+            try {
+                StatFs storage = new StatFs(getFilesDir().getAbsolutePath());
+                JSONObject result = new JSONObject();
+                result.put("availableBytes", storage.getAvailableBytes());
+                result.put("totalBytes", storage.getTotalBytes());
+                return result.toString();
+            } catch (Exception error) {
+                Log.w(TAG, "App storage stats unavailable", error);
+                return "{}";
+            }
+        }
+
+        @JavascriptInterface
         public void showSoftKeyboard() {
             runOnUiThread(() -> {
                 if (getBridge() == null || getBridge().getWebView() == null) {

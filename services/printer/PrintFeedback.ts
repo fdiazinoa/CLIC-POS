@@ -1,4 +1,5 @@
 import { clicAlert } from '../dialog/ClicDialogService';
+import { setLargeMasterSyncV3CriticalOperation } from '../sync/LargeMasterSyncV3OperationGate';
 
 const failureMessages: Record<string, string> = {
   BROWSER_UNAVAILABLE: 'Este documento utiliza el diálogo de impresión del navegador, que no está disponible en el APK. Ábrelo en la versión web para imprimirlo.',
@@ -48,6 +49,7 @@ export const runPrintTask = (
 
   let timer: ReturnType<typeof setTimeout>;
   let timedOut = false;
+  setLargeMasterSyncV3CriticalOperation('PRINT', true);
   const operation = Promise.resolve().then(task).catch(error => {
     if (!timedOut) notifyPrintFailure(title, error);
     return null;
@@ -71,6 +73,7 @@ export const runPrintTask = (
   void operation.finally(() => {
     clearTimeout(timer);
     pending.delete(key);
+    setLargeMasterSyncV3CriticalOperation('PRINT', false);
   });
   return result;
 };

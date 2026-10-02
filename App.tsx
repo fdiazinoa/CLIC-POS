@@ -93,6 +93,7 @@ import { useBarcodeScanner } from './hooks/useBarcodeScanner';
 import { notifySalesScannerHostVisibility } from './utils/globalBarcodeCapture';
 import { db } from './utils/db'; // Import Local DB
 import { dbAdapter } from './services/db'; // Import Adapter for Healthcheck
+import { bootstrapLargeMasterSyncV3Lifecycle } from './services/sync/LargeMasterSyncV3Lifecycle';
 import { syncManager } from './services/sync/SyncManager';
 import { apiSyncAdapter } from './services/sync/ApiSyncAdapter';
 import { requestJson } from './services/network/httpClient';
@@ -6698,6 +6699,7 @@ const AppContent: React.FC = () => {
           })
         ]);
         console.log('✅ db.init() returned:', data ? Object.keys(data) : 'null');
+        await bootstrapLargeMasterSyncV3Lifecycle(dbAdapter.masterSyncV3Store);
         markBootStage('LOCAL_DATABASE_READY');
         freezePhase('LOCAL_DATA_READY');
         try {
