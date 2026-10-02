@@ -58,6 +58,7 @@ import {
 } from '../utils/paymentSettlement';
 import { sendReceiptEmailViaErp } from '../services/email/receiptEmailService';
 import { buildReceiptEmailPayload } from '../services/email/receiptEmailPayload';
+import { setLargeMasterSyncV3CriticalOperation } from '../services/sync/LargeMasterSyncV3OperationGate';
 
 interface PaymentModalProps {
    openingTrace?: PosInteractionTrace | null;
@@ -253,6 +254,10 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, total,
       commitInteractionDestination(openingTrace, 'PAYMENT_MODAL', undefined, () => openingDestinationMounted.current);
       return () => { openingDestinationMounted.current = false; };
    }, [openingTrace]);
+   useEffect(() => {
+      setLargeMasterSyncV3CriticalOperation('PAYMENT', true);
+      return () => setLargeMasterSyncV3CriticalOperation('PAYMENT', false);
+   }, []);
    const [payments, setPayments] = useState<PaymentEntry[]>([]);
    const [activeMethodKey, setActiveMethodKey] = useState<string>('');
    const [inputAmount, setInputAmount] = useState<string>('');
