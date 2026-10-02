@@ -5973,8 +5973,15 @@ const AppContent: React.FC = () => {
     const endpoint = action === 'acquire'
       ? '/api/mesas/bloquear'
       : '/api/mesas/desbloquear';
+    const endpointUrl = await resolveValidatedOperationalApiUrl(endpoint);
+    if (legacyMutationJournal.hasOutcomeUnknown()) {
+      await reconcileMasterRejectedTableMutations({
+        journal: legacyMutationJournal,
+        authorityOrigin: new URL(endpointUrl).origin,
+      });
+    }
     const response = await dispatchLegacyLanMutation<any>({
-      url: await resolveValidatedOperationalApiUrl(endpoint),
+      url: endpointUrl,
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),

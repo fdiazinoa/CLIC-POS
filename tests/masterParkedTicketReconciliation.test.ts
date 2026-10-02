@@ -106,7 +106,7 @@ test('an additional ambiguous mutation prevents automatic reconciliation', async
   assert.equal(journal.hasBlockingMutations(), true);
 });
 
-test('old Android Master 409 table rejections are closed without replaying a mutation', async () => {
+test('an old client 409 table rejection is closed before a later table acquire', async () => {
   const store = new Store();
   const journal = new LegacyMutationJournal(store);
   await journal.initializeForStartup();
@@ -125,6 +125,14 @@ test('old Android Master 409 table rejections are closed without replaying a mut
   assert.equal(await reconcileMasterRejectedTableMutations({ journal, authorityOrigin: origin, nowMs }), 1);
   assert.equal(journal.hasBlockingMutations(), false);
   assert.equal(journal.getEntry(entry.id)?.classification, 'SAFE_PRE_SIDE_EFFECT');
+  await assert.doesNotReject(journal.begin({
+    operationCorrelationId: 'TABLE_LOCK_ACQUIRE:next',
+    authorityFingerprint: `${origin}|client-terminal`,
+    generation: 1,
+    method: 'POST',
+    url: `${origin}/api/mesas/bloquear`,
+    diagnosticRequestId: 'next-acquire',
+  }));
 });
 
 test('ambiguous response, unrelated route, wrong authority and recent rejection remain blocked', async () => {
