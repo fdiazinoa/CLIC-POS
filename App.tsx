@@ -1,4 +1,6 @@
 import RecoveryCloseDialog from './components/RecoveryCloseDialog';
+import LargeMasterSyncV3CanaryScreen from './components/LargeMasterSyncV3CanaryScreen';
+import { LARGE_MASTER_SYNC_V3_CANARY } from './services/sync/LargeMasterSyncV3Canary';
 import AutomaticRecoveryDialog from './components/AutomaticRecoveryDialog';
 import type { RecoveryCloseInput } from './services/recovery/RecoveryCloseController';
 import { originalProvenance } from './services/recovery/RecoveryRuntime';
@@ -1947,6 +1949,7 @@ const buildKioskPaymentTotals = (
 };
 
 const App: React.FC = () => {
+  if (LARGE_MASTER_SYNC_V3_CANARY) return <LargeMasterSyncV3CanaryScreen />;
   return (
     <ThemeProvider>
       <KioskSecurityProvider>

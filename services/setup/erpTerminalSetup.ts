@@ -97,6 +97,8 @@ export interface RuntimeTerminalRecoveryState {
 
 export interface RuntimeInitialConfigResponse {
   success: boolean;
+  bootstrapProtocol?: 'v3' | 'legacy';
+  masterSync?: Record<string, unknown>;
   tenant_id?: string;
   terminal_id?: string;
   erp_terminal_id?: string;
@@ -1815,6 +1817,7 @@ export const fetchInitialConfigFromErp = async (input: {
   tenantId: string;
   erpTerminalId: string;
   posDeviceId: string;
+  canaryV3?: boolean;
 }): Promise<RuntimeInitialConfigResponse> => {
   let payload: Record<string, any>;
   let configVersion: string | null = null;
@@ -1829,7 +1832,10 @@ export const fetchInitialConfigFromErp = async (input: {
       input.erpBaseUrl,
       `/api/setup/initial-config/${encodeURIComponent(input.erpTerminalId)}?${query.toString()}`,
       {
-        headers: buildDeviceHeaders(input.posDeviceId),
+        headers: {
+          ...buildDeviceHeaders(input.posDeviceId),
+          ...(input.canaryV3 ? { 'X-POS-Capabilities': 'largeMasterSyncV3' } : {}),
+        },
       }
     ));
     configVersion = asString(payload.config_version || payload.configVersion) || null;
@@ -1844,6 +1850,7 @@ export const fetchInitialConfigFromErp = async (input: {
           deviceId: input.posDeviceId,
           reason: 'pairing',
           deferPersistence: true,
+          ...(input.canaryV3 ? { capabilityHeader: 'largeMasterSyncV3' } : {}),
         }),
         'INITIAL_CONFIG'
       );
@@ -1918,6 +1925,10 @@ export const fetchInitialConfigFromErp = async (input: {
     success:
       payload?.success !== false
       && (!asString(payload?.status) || asString(payload?.status).toLowerCase() === 'success'),
+    ...(payload?.bootstrapProtocol === 'v3' ? {
+      bootstrapProtocol: 'v3' as const,
+      masterSync: asObject(payload?.masterSync),
+    } : {}),
     tenant_id: asString(terminalConfig.tenant_id) || input.tenantId,
     terminal_id: asString(terminalConfig.terminal_id) || input.erpTerminalId,
     erp_terminal_id: input.erpTerminalId,

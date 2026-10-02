@@ -27,6 +27,7 @@ type RequestInput<T> = {
   terminalId: string;
   tenantId?: string | null;
   deviceId?: string | null;
+  capabilityHeader?: 'largeMasterSyncV3';
   reason: TerminalConfigSyncReason;
   apply?: (payload: T) => Promise<void>;
   deferPersistence?: boolean;
@@ -186,6 +187,7 @@ export class TerminalConfigRequestCoordinator {
         headers['X-Device-Id'] = input.deviceId;
         headers['X-POS-Device-Id'] = input.deviceId;
       }
+      if (input.capabilityHeader) headers['X-POS-Capabilities'] = input.capabilityHeader;
 
       try {
         const response = await this.fetcher(endpoint, { method: 'GET', headers, signal });
