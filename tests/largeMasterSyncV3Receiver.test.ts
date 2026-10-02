@@ -71,10 +71,11 @@ const manifestAndResponses = async (
   input: Partial<Record<LargeMasterSyncV3Dataset, unknown[][]>>,
   version = 186,
   syncId = SYNC_ID,
+  declaredDatasets: readonly LargeMasterSyncV3Dataset[] = LARGE_MASTER_SYNC_V3_DATASETS,
 ) => {
   const responses = new Map<string, LargeMasterSyncV3HttpResponse>();
   const datasets: LargeMasterSyncV3Manifest['datasets'] = {};
-  for (const dataset of LARGE_MASTER_SYNC_V3_DATASETS) {
+  for (const dataset of LARGE_MASTER_SYNC_V3_DATASETS.filter(candidate => declaredDatasets.includes(candidate))) {
     const chunks = input[dataset] || [];
     const texts = chunks.map((records, index) => chunkText(dataset, index, records, syncId));
     const checksums = await Promise.all(texts.map(sha256Utf8));
@@ -127,12 +128,14 @@ test('hashes the exact ERP UTF-8 fixture before parsing', async () => {
   assert.notEqual(await sha256Utf8(`${article}\n`), await sha256Utf8(article));
 });
 
-test('rejects unsupported schemas, missing datasets, corrupt bytes and mismatched envelopes', async () => {
+test('rejects unsupported schemas, empty manifests, corrupt bytes and mismatched envelopes', async () => {
   const { manifest, responses } = await manifestAndResponses({ articles: [[{ id: 'A', taxable: true, taxIds: [], active: true }]] });
   assert.throws(() => validateLargeMasterSyncV3Manifest({ ...manifest, schemaVersion: 4 }), /SYNC_V3_MANIFEST_INVALID/);
-  const missing = structuredClone(manifest);
-  delete missing.datasets.prices;
-  assert.throws(() => validateLargeMasterSyncV3Manifest(missing), /SYNC_V3_MANIFEST_DATASETS_INVALID/);
+  assert.throws(() => validateLargeMasterSyncV3Manifest({ ...manifest, datasets: {} }), /SYNC_V3_MANIFEST_DATASETS_INVALID/);
+  assert.throws(() => validateLargeMasterSyncV3Manifest({
+    ...manifest,
+    datasets: { ...manifest.datasets, customers: manifest.datasets.articles },
+  }), /SYNC_V3_MANIFEST_DATASETS_INVALID/);
   const path = `/api/sync/v3/master-syncs/${SYNC_ID}/datasets/articles/chunks/0`;
   responses.get(path)!.text += ' ';
   const { store } = sqliteStore();
@@ -165,6 +168,48 @@ test('treats the disabled V3 response as a non-fatal legacy fallback', async () 
   }) };
   const client = new LargeMasterSyncV3Client({ store, transport, maxRetries: 0 });
   assert.deepEqual(await client.requestSync(), { fallback: 'legacy' });
+});
+
+test('manifest is authoritative for a non-empty subset, including zero datasets and barcode alias', async () => {
+  const { sqlite, store } = sqliteStore();
+  const declared = ['articles', 'variants', 'barcodes'] as const;
+  const { manifest, responses } = await manifestAndResponses({
+    articles: [[{ id: 'A1', sku: 'ONE', taxable: false, taxIds: [], active: true }]],
+    variants: [],
+    barcodes: [[{ articleId: 'A1', barcode: '7460999' }]],
+  }, 186, SYNC_ID, declared);
+  const validated = validateLargeMasterSyncV3Manifest(manifest);
+  assert.deepEqual(Object.keys(validated.datasets), declared);
+  assert.equal(validated.datasets.variants?.count, 0);
+  assert.equal(validated.datasets.variants?.chunks, 0);
+
+  const client = new LargeMasterSyncV3Client({ store, transport: new MapTransport(responses),
+    storageStats: async () => ({ availableBytes: 70 * 1024 * 1024, totalBytes: 2e9 }), maxRetries: 0 });
+  await client.resumeSync(SYNC_ID);
+  const progress = await store.readProgress(SYNC_ID);
+  assert.deepEqual(progress?.datasets.map(row => row.dataset), declared);
+  assert.equal(queryCount(sqlite, 'master_v3_variants'), 0);
+  const runtime = await LargeMasterSyncV3Runtime.open(store);
+  assert.deepEqual(await runtime?.findBarcode('7460999'), { articleId: 'A1', variantId: null });
+});
+
+test('manifest polling honors GENERATING body on 200/202 and reports FAILED', async () => {
+  const { store } = sqliteStore();
+  for (const status of [200, 202]) {
+    const client = new LargeMasterSyncV3Client({ store, maxRetries: 0, transport: {
+      request: async () => ({ status, headers: { 'retry-after': '3', 'content-type': 'application/json' },
+        text: JSON.stringify({ syncId: SYNC_ID, status: 'GENERATING' }) }),
+    } });
+    assert.deepEqual(await client.getManifest(SYNC_ID), { generating: true, retryAfterMs: 3000 });
+  }
+  for (const status of [200, 202]) {
+    const failed = new LargeMasterSyncV3Client({ store, maxRetries: 0, transport: {
+      request: async () => ({ status, headers: { 'content-type': 'application/json' },
+        text: JSON.stringify({ syncId: SYNC_ID, status: 'FAILED' }) }),
+    } });
+    await assert.rejects(() => failed.getManifest(SYNC_ID), (error: unknown) =>
+      error instanceof LargeMasterSyncV3Error && error.code === 'SYNC_V3_FAILED');
+  }
 });
 
 test('applies chunks atomically, resumes at the first missing chunk, activates by pointer and serves bounded lookups', async () => {
