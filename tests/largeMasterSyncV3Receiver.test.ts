@@ -237,3 +237,29 @@ test('keeps ACTIVE unchanged on failed activation and can atomically roll back t
   assert.deepEqual(await secondClient.rollbackSync(), { syncId: firstId, syncVersion: 186 });
   assert.deepEqual(await store.getActiveRuntimeVersion(), { syncId: firstId, syncVersion: 186 });
 });
+
+test('resumes persisted progress after interruptions at 10, 25, 50, 75 and 99 percent', async () => {
+  const articleChunks = Array.from({ length: 100 }, (_, index) => [[{
+    id: `A${index.toString().padStart(3, '0')}`, taxable: false, taxIds: [], active: true,
+  }]][0]);
+  for (const interruptedAt of [10, 25, 50, 75, 99]) {
+    const { sqlite, store } = sqliteStore();
+    const { manifest, responses } = await manifestAndResponses({ articles: articleChunks });
+    await store.prepare(manifest);
+    const beforeRestart = new LargeMasterSyncV3Client({ store, transport: new MapTransport(responses),
+      storageStats: async () => ({ availableBytes: 1e9, totalBytes: 2e9 }), maxRetries: 0 });
+    for (let index = 0; index < interruptedAt; index += 1) {
+      await beforeRestart.applyChunk(await beforeRestart.getChunk(manifest, 'articles', index));
+    }
+    const afterRestartTransport = new MapTransport(responses);
+    const afterRestart = new LargeMasterSyncV3Client({ store, transport: afterRestartTransport,
+      storageStats: async () => ({ availableBytes: 1e9, totalBytes: 2e9 }), maxRetries: 0 });
+    await afterRestart.resumeSync(SYNC_ID);
+    const resumed = afterRestartTransport.requests.filter(path => path.includes('/datasets/articles/chunks/'));
+    assert.equal(resumed.length, 100 - interruptedAt);
+    assert.ok(resumed[0].endsWith(`/chunks/${interruptedAt}`));
+    assert.equal(queryCount(sqlite, 'master_v3_articles'), 100);
+    assert.deepEqual(await store.getActiveRuntimeVersion(), { syncId: SYNC_ID, syncVersion: 186 });
+    sqlite.close();
+  }
+});
