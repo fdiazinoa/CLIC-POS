@@ -13,14 +13,27 @@ SOURCE_REF="${1:-origin/develop}"
 # direct Gradle release builds strict, but make the canonical release protocol
 # explicitly opt in to the cleartext LAN transport required by the product.
 LAN_HTTP_ENABLED="${CLIC_POS_RELEASE_LAN_HTTP_ENABLED:-true}"
+V3_CANARY_ENABLED="${VITE_LARGE_MASTER_SYNC_V3_CANARY:-false}"
+SIGNED_V3_CANARY_OPT_IN="${CLIC_POS_SIGNED_V3_CANARY:-false}"
 
 fail() {
   echo "ERROR: $*" >&2
   exit 1
 }
 
-if [[ "${VITE_LARGE_MASTER_SYNC_V3_CANARY:-false}" == "true" ]]; then
-  fail "El canario Large Master Sync V3 no puede compilarse como release firmado."
+for canary_flag in "${V3_CANARY_ENABLED}" "${SIGNED_V3_CANARY_OPT_IN}"; do
+  [[ "${canary_flag}" == "true" || "${canary_flag}" == "false" ]] \
+    || fail "Las banderas del canario firmado deben ser true o false."
+done
+if [[ "${V3_CANARY_ENABLED}" != "${SIGNED_V3_CANARY_OPT_IN}" ]]; then
+  fail "El canario V3 firmado requiere VITE_LARGE_MASTER_SYNC_V3_CANARY=true y CLIC_POS_SIGNED_V3_CANARY=true simultáneamente."
+fi
+if [[ "${V3_CANARY_ENABLED}" == "true" ]] && {
+  [[ "${CLIC_POS_DIAGNOSTICS:-false}" == "true" ]] ||
+  [[ "${CLIC_POS_WEBVIEW_PROFILE:-false}" == "true" ]] ||
+  [[ "${CLIC_POS_TABLE_LATENCY_QA:-false}" == "true" ]];
+}; then
+  fail "El canario V3 firmado no puede combinarse con otros modos diagnósticos."
 fi
 
 case "${LAN_HTTP_ENABLED}" in
@@ -253,7 +266,7 @@ fi
 
 if [[ "${SOURCE_VERSION_CODE}" == "${NEXT_VERSION_CODE}" && -n "${SOURCE_VERSION_NAME}" ]]; then
   VERSION_NAME="${SOURCE_VERSION_NAME}"
-elif [[ "${LATEST_RELEASE_VERSION_NAME}" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)(-(diagnostic|profile))*$ ]]; then
+elif [[ "${LATEST_RELEASE_VERSION_NAME}" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)(-(diagnostic|profile|canary))*$ ]]; then
   VERSION_NAME="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.$((BASH_REMATCH[3] + 1))"
 elif [[ "${SOURCE_VERSION_NAME}" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
   VERSION_NAME="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.$((BASH_REMATCH[3] + 1))"
@@ -268,11 +281,15 @@ fi
 if [[ "${CLIC_POS_WEBVIEW_PROFILE:-false}" == "true" ]]; then
   ARTIFACT_VERSION_NAME="${ARTIFACT_VERSION_NAME}-profile"
 fi
+if [[ "${V3_CANARY_ENABLED}" == "true" ]]; then
+  ARTIFACT_VERSION_NAME="${VERSION_NAME}-canary"
+fi
 
 info "Fuente del release: ${SOURCE_REF} (${SOURCE_COMMIT_SHORT})"
 info "VersionCode siguiente: ${NEXT_VERSION_CODE}"
 info "VersionName siguiente: ${VERSION_NAME}"
 info "HTTP LAN Master/Cliente: ${LAN_HTTP_ENABLED}"
+info "Canario V3 firmado, sin ventas: ${V3_CANARY_ENABLED}"
 info "Worktree de firma: ${CANONICAL_BUILD_WORKTREE}"
 
 # Build in the canonical checkout; signing material stays in its original location.
@@ -340,6 +357,10 @@ METADATA_SRC="${BUILD_WORKTREE}/android/app/build/outputs/apk/release/output-met
 require_file "${APK_SRC}"
 require_file "${METADATA_SRC}"
 
+ACTUAL_VERSION_NAME="$(extract_version_name_from_metadata "${METADATA_SRC}")"
+[[ "${ACTUAL_VERSION_NAME}" == "${NEXT_VERSION_CODE}|${ARTIFACT_VERSION_NAME}" ]] \
+  || fail "El metadata Android no coincide con la identidad del APK esperado: ${ARTIFACT_VERSION_NAME}"
+
 info "Verificando política HTTP LAN del manifiesto"
 verify_apk_network_policy "${AAPT}" "${APK_SRC}" "${LAN_HTTP_ENABLED}"
 
@@ -368,6 +389,10 @@ versionName=${ARTIFACT_VERSION_NAME}
 functionalBaselineVersion=${SOURCE_VERSION_NAME}
 diagnosticBuild=${CLIC_POS_DIAGNOSTICS:-false}
 webviewProfileQa=${CLIC_POS_WEBVIEW_PROFILE:-false}
+signedV3Canary=${V3_CANARY_ENABLED}
+signedV3CanaryOptIn=${SIGNED_V3_CANARY_OPT_IN}
+canaryNonPromotable=${V3_CANARY_ENABLED}
+salesEnabled=$([[ "${V3_CANARY_ENABLED}" == "true" ]] && echo false || echo true)
 sourceRef=${SOURCE_REF}
 sourceBranch=${SOURCE_BRANCH}
 sourceCommit=${SOURCE_COMMIT}
