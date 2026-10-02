@@ -11,6 +11,8 @@ import type {
 import { DURABLE_OUTBOX_SCHEMA_SQL } from '../../sync/DurableOutboxSchema';
 import { applyMasterNumberToDocument, buildNumberedCustomerMutation } from '../../sync/masterNumberRangeContract';
 import { compactStoredTerminalCatalog } from '../../../utils/compactTerminalCatalogSnapshot';
+import { LARGE_MASTER_SYNC_V3_SCHEMA_SQL } from '../LargeMasterSyncV3Schema';
+import { LargeMasterSyncV3SqliteStore } from '../LargeMasterSyncV3SqliteStore';
 
 const DB_NAME = 'clic_pos_native';
 const DB_VERSION = 1;
@@ -46,6 +48,9 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
     private isReady = false;
     private writeQueue: Promise<unknown> = Promise.resolve();
     public readonly adapterType = 'local';
+    public readonly masterSyncV3Store = new LargeMasterSyncV3SqliteStore(
+        () => this.ensureDb() as any,
+    );
 
     async connect(): Promise<void> {
         if (this.isReady) return;
@@ -550,6 +555,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             CREATE INDEX IF NOT EXISTS idx_master_number_ranges_allocation
             ON master_number_ranges(entity_type, status, start_number, range_id);
             ${DURABLE_OUTBOX_SCHEMA_SQL}
+            ${LARGE_MASTER_SYNC_V3_SCHEMA_SQL}
         `);
         await this.migrateLegacyCollectionsBlobTable();
     }

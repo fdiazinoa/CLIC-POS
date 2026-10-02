@@ -1,4 +1,5 @@
 import type { SyncMonitorPage, SyncMonitorPageRequest } from './SyncMonitorPage';
+import type { LargeMasterSyncV3Store } from '../sync/LargeMasterSyncV3Types';
 
 export type DurableOutboxStatus =
     | 'PENDING'
@@ -69,6 +70,8 @@ export interface DatabaseAdapter {
     connect(): Promise<void>;
     disconnect(): Promise<void>;
     readonly adapterType: 'local' | 'network';
+    /** Android-only, dark V3 staging store. Its presence does not announce a network capability. */
+    readonly masterSyncV3Store?: LargeMasterSyncV3Store;
 
     getSyncMonitorPage?(request: SyncMonitorPageRequest): Promise<SyncMonitorPage>;
 

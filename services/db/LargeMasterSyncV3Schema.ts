@@ -1,0 +1,125 @@
+export const LARGE_MASTER_SYNC_V3_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS sync_v3_sessions (
+  sync_id TEXT PRIMARY KEY NOT NULL,
+  sync_version INTEGER NOT NULL,
+  schema_version INTEGER NOT NULL CHECK (schema_version = 3),
+  status TEXT NOT NULL CHECK (status IN ('STAGING','VALIDATED','ACTIVE','FAILED','ROLLED_BACK')),
+  manifest_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  activated_at TEXT,
+  error_code TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_sync_v3_sessions_status_updated
+ON sync_v3_sessions(status, updated_at);
+
+CREATE TABLE IF NOT EXISTS sync_v3_dataset_progress (
+  sync_id TEXT NOT NULL,
+  dataset TEXT NOT NULL,
+  expected_count INTEGER NOT NULL CHECK (expected_count >= 0),
+  expected_chunks INTEGER NOT NULL CHECK (expected_chunks >= 0),
+  expected_checksum TEXT,
+  applied_count INTEGER NOT NULL DEFAULT 0,
+  applied_chunks INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL CHECK (status IN ('PENDING','APPLYING','COMPLETE','VALIDATED','FAILED')),
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (sync_id, dataset),
+  FOREIGN KEY (sync_id) REFERENCES sync_v3_sessions(sync_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS sync_v3_chunks (
+  sync_id TEXT NOT NULL,
+  dataset TEXT NOT NULL,
+  chunk_index INTEGER NOT NULL CHECK (chunk_index >= 0),
+  checksum TEXT NOT NULL,
+  record_count INTEGER NOT NULL CHECK (record_count >= 0),
+  raw_bytes INTEGER NOT NULL CHECK (raw_bytes >= 0),
+  status TEXT NOT NULL CHECK (status = 'APPLIED'),
+  applied_at TEXT NOT NULL,
+  PRIMARY KEY (sync_id, dataset, chunk_index),
+  FOREIGN KEY (sync_id, dataset) REFERENCES sync_v3_dataset_progress(sync_id, dataset) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS master_v3_state (
+  singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+  active_version INTEGER,
+  active_sync_id TEXT,
+  staging_version INTEGER,
+  staging_sync_id TEXT,
+  previous_version INTEGER,
+  previous_sync_id TEXT,
+  updated_at TEXT NOT NULL
+);
+INSERT OR IGNORE INTO master_v3_state(singleton, updated_at) VALUES (1, datetime('now'));
+
+CREATE TABLE IF NOT EXISTS master_v3_articles (
+  sync_version INTEGER NOT NULL,
+  article_id TEXT NOT NULL,
+  sku TEXT,
+  description TEXT,
+  article_type TEXT,
+  uom TEXT,
+  taxable INTEGER NOT NULL,
+  tax_ids_json TEXT NOT NULL,
+  family_id TEXT,
+  category_id TEXT,
+  active INTEGER NOT NULL,
+  PRIMARY KEY (sync_version, article_id)
+);
+CREATE INDEX IF NOT EXISTS idx_master_v3_articles_version_sku
+ON master_v3_articles(sync_version, sku);
+
+CREATE TABLE IF NOT EXISTS master_v3_tariffs (
+  sync_version INTEGER NOT NULL,
+  tariff_id TEXT NOT NULL,
+  code TEXT,
+  name TEXT,
+  currency TEXT,
+  active INTEGER NOT NULL,
+  PRIMARY KEY (sync_version, tariff_id)
+);
+
+CREATE TABLE IF NOT EXISTS master_v3_taxes (
+  sync_version INTEGER NOT NULL,
+  tax_id TEXT NOT NULL,
+  code TEXT,
+  name TEXT,
+  rate REAL,
+  active INTEGER NOT NULL,
+  PRIMARY KEY (sync_version, tax_id)
+);
+
+CREATE TABLE IF NOT EXISTS master_v3_variants (
+  sync_version INTEGER NOT NULL,
+  article_id TEXT NOT NULL,
+  variant_id TEXT NOT NULL,
+  code TEXT,
+  description TEXT,
+  active INTEGER NOT NULL,
+  PRIMARY KEY (sync_version, article_id, variant_id),
+  FOREIGN KEY (sync_version, article_id) REFERENCES master_v3_articles(sync_version, article_id)
+);
+
+CREATE TABLE IF NOT EXISTS master_v3_barcodes (
+  sync_version INTEGER NOT NULL,
+  barcode TEXT NOT NULL,
+  article_id TEXT NOT NULL,
+  variant_id TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (sync_version, barcode, article_id, variant_id),
+  FOREIGN KEY (sync_version, article_id) REFERENCES master_v3_articles(sync_version, article_id)
+);
+CREATE INDEX IF NOT EXISTS idx_master_v3_barcodes_lookup
+ON master_v3_barcodes(sync_version, barcode);
+
+CREATE TABLE IF NOT EXISTS master_v3_prices (
+  sync_version INTEGER NOT NULL,
+  article_id TEXT NOT NULL,
+  tariff_id TEXT NOT NULL,
+  price REAL NOT NULL,
+  PRIMARY KEY (sync_version, article_id, tariff_id),
+  FOREIGN KEY (sync_version, article_id) REFERENCES master_v3_articles(sync_version, article_id),
+  FOREIGN KEY (sync_version, tariff_id) REFERENCES master_v3_tariffs(sync_version, tariff_id)
+);
+CREATE INDEX IF NOT EXISTS idx_master_v3_prices_tariff_article
+ON master_v3_prices(sync_version, tariff_id, article_id);
+`;
