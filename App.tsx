@@ -9662,17 +9662,28 @@ const AppContent: React.FC = () => {
           if (unrelatedBlockingMutation) {
             throw new Error('LEGACY_MUTATION_OUTCOME_UNKNOWN');
           }
-          const result = parseNativeBridgeJson(await Promise.resolve(
-            nativeBridge.updateMasterParkedTickets({
-              parkedTickets: masterTableSyncTickets,
-              baseRevision: masterRestaurantRevisionRef.current,
-              ...(masterEditLock?.tableId ? {
-                tableId: masterEditLock.tableId,
-                ownerId: masterEditLock.ownerId,
-                lockToken: masterEditLock.token,
-              } : {}),
-            }),
-          ));
+          let baseRevision = masterRestaurantRevisionRef.current;
+          let result: any;
+          for (let attempt = 0; attempt < 3; attempt += 1) {
+            result = parseNativeBridgeJson(await Promise.resolve(
+              nativeBridge.updateMasterParkedTickets({
+                parkedTickets: masterTableSyncTickets,
+                baseRevision,
+                ...(masterEditLock?.tableId ? {
+                  tableId: masterEditLock.tableId,
+                  ownerId: masterEditLock.ownerId,
+                  lockToken: masterEditLock.token,
+                } : {}),
+              }),
+            ));
+            if (result?.code !== 'PARKED_TICKETS_BASE_REVISION_STALE') break;
+            const currentRevision = Number(result?.revision);
+            const stillOwnsTable = masterEditLock?.tableId
+              && activeTableEditLockRef.current?.tableId === masterEditLock.tableId
+              && activeTableEditLockRef.current?.token === masterEditLock.token;
+            if (!stillOwnsTable || !Number.isFinite(currentRevision) || currentRevision <= baseRevision) break;
+            baseRevision = currentRevision;
+          }
           if (result?.success !== true) {
             throw new Error(result?.code || result?.message || 'NATIVE_MASTER_PARKED_TICKETS_FAILED');
           }
@@ -13003,7 +13014,12 @@ const AppContent: React.FC = () => {
                 return nextTables;
               });
 
-              if (!isClientTerminalMode()) {
+              const servesAsNativeMaster = isNativeAndroidRuntime()
+                && isNativeStandaloneTerminalRuntime(getCurrentTerminal());
+              // El guardado nativo de parked tickets ya reconcilia la ocupación
+              // y devuelve la revisión. Un segundo PUT aquí la avanzaba otra vez
+              // sin actualizar el token usado por el siguiente guardado.
+              if (!isClientTerminalMode() && !servesAsNativeMaster) {
                 const editLock = activeTableEditLockRef.current;
                 void dispatchLegacyLanMutation<any>({
                   url: resolveOperationalApiUrl(`/api/tables/${encodeURIComponent(String(table.id))}`),
