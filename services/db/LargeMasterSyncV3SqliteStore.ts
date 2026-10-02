@@ -10,8 +10,10 @@ import {
 } from '../sync/LargeMasterSyncV3Types';
 
 type QueryResult = { values?: Array<Record<string, unknown>> };
+type SQLiteStatement = { statement: string; values: unknown[] };
 type SQLiteConnection = {
   execute(sql: string, transaction?: boolean): Promise<unknown>;
+  executeSet?(set: SQLiteStatement[], transaction?: boolean, returnMode?: string): Promise<unknown>;
   query(sql: string, values?: unknown[]): Promise<QueryResult>;
   run(sql: string, values?: unknown[], transaction?: boolean): Promise<unknown>;
 };
@@ -184,19 +186,23 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
           await db.execute('COMMIT;', false);
           return 'ALREADY_APPLIED';
         }
-        const progress = first(await db.query(`SELECT expected_chunks, applied_chunks FROM sync_v3_dataset_progress
+        const progress = first(await db.query(`SELECT expected_chunks FROM sync_v3_dataset_progress
           WHERE sync_id = ? AND dataset = ?`, [chunk.envelope.syncId, chunk.envelope.dataset]));
         if (!progress) throw new LargeMasterSyncV3Error('SYNC_V3_DATASET_NOT_DECLARED');
-        if (chunk.envelope.chunkIndex !== Number(progress.applied_chunks)
-          || chunk.envelope.chunkIndex >= Number(progress.expected_chunks)) {
+        const expectedChunks = Number(progress.expected_chunks);
+        const appliedIndexes = new Set(rows(await db.query(`SELECT chunk_index FROM sync_v3_chunks
+          WHERE sync_id = ? AND dataset = ? AND status = 'APPLIED'`,
+        [chunk.envelope.syncId, chunk.envelope.dataset])).map(row => Number(row.chunk_index)));
+        let firstMissing = 0;
+        while (firstMissing < expectedChunks && appliedIndexes.has(firstMissing)) firstMissing += 1;
+        if (chunk.envelope.chunkIndex !== firstMissing || chunk.envelope.chunkIndex >= expectedChunks) {
           throw new LargeMasterSyncV3Error('SYNC_V3_CHUNK_OUT_OF_ORDER');
         }
         const syncVersion = Number(session.sync_version);
         for (let offset = 0; offset < chunk.envelope.records.length; offset += CHUNK_SUB_BATCH_SIZE) {
           const batch = chunk.envelope.records.slice(offset, offset + CHUNK_SUB_BATCH_SIZE);
-          for (const rawRecord of batch) {
-            await this.upsertRecord(db, chunk.envelope.dataset, syncVersion, object(rawRecord));
-          }
+          await this.executeRecordBatch(db, batch.map(rawRecord =>
+            this.recordStatement(chunk.envelope.dataset, syncVersion, object(rawRecord))));
         }
         await this.fault?.('apply_after_records', {
           syncId: chunk.envelope.syncId, dataset: chunk.envelope.dataset, chunkIndex: chunk.envelope.chunkIndex,
@@ -208,11 +214,17 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
           chunk.envelope.syncId, chunk.envelope.dataset, chunk.envelope.chunkIndex,
           chunk.checksum, chunk.recordCount, chunk.rawBytes, timestamp,
         ], false);
+        const aggregate = first(await db.query(`SELECT COUNT(*) AS applied_chunks,
+          COALESCE(SUM(record_count), 0) AS applied_count FROM sync_v3_chunks
+          WHERE sync_id = ? AND dataset = ? AND status = 'APPLIED'`,
+        [chunk.envelope.syncId, chunk.envelope.dataset]));
+        const appliedChunks = Number(aggregate?.applied_chunks || 0);
+        const appliedCount = Number(aggregate?.applied_count || 0);
         await db.run(`UPDATE sync_v3_dataset_progress SET
-          applied_count = applied_count + ?, applied_chunks = applied_chunks + 1,
-          status = CASE WHEN applied_chunks + 1 = expected_chunks THEN 'COMPLETE' ELSE 'APPLYING' END,
+          applied_count = ?, applied_chunks = ?,
+          status = CASE WHEN ? = expected_chunks THEN 'COMPLETE' ELSE 'APPLYING' END,
           updated_at = ? WHERE sync_id = ? AND dataset = ?`, [
-          chunk.recordCount, timestamp, chunk.envelope.syncId, chunk.envelope.dataset,
+          appliedCount, appliedChunks, appliedChunks, timestamp, chunk.envelope.syncId, chunk.envelope.dataset,
         ], false);
         await db.run('UPDATE sync_v3_sessions SET updated_at = ? WHERE sync_id = ?',
           [timestamp, chunk.envelope.syncId], false);
@@ -266,6 +278,32 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
         if (Number(actual?.count) !== Number(expected.expected_count)) {
           throw new LargeMasterSyncV3Error('SYNC_V3_DATASET_COUNT_MISMATCH', dataset);
         }
+      }
+      const invalidTaxJson = first(await db.query(`SELECT article_id FROM master_v3_articles
+        WHERE sync_version = ? AND (
+          json_valid(tax_ids_json) = 0 OR
+          CASE WHEN json_valid(tax_ids_json) = 1 THEN json_type(tax_ids_json) != 'array' ELSE 0 END
+        ) LIMIT 1`, [syncVersion]));
+      if (invalidTaxJson) {
+        throw new LargeMasterSyncV3Error('SYNC_V3_ARTICLE_TAX_REFERENCE_INVALID');
+      }
+      const orphanTax = first(await db.query(`SELECT a.article_id FROM master_v3_articles a
+        JOIN json_each(a.tax_ids_json) tax_ref
+        LEFT JOIN master_v3_taxes tax ON tax.sync_version = a.sync_version
+          AND tax.tax_id = CAST(tax_ref.value AS TEXT)
+        WHERE a.sync_version = ? AND (
+          typeof(tax_ref.value) != 'text' OR trim(CAST(tax_ref.value AS TEXT)) = '' OR tax.tax_id IS NULL
+        ) LIMIT 1`, [syncVersion]));
+      if (orphanTax) {
+        throw new LargeMasterSyncV3Error('SYNC_V3_ARTICLE_TAX_REFERENCE_INVALID');
+      }
+      const orphanBarcodeVariant = first(await db.query(`SELECT barcode.barcode FROM master_v3_barcodes barcode
+        LEFT JOIN master_v3_variants variant ON variant.sync_version = barcode.sync_version
+          AND variant.article_id = barcode.article_id AND variant.variant_id = barcode.variant_id
+        WHERE barcode.sync_version = ? AND barcode.variant_id != '' AND variant.variant_id IS NULL
+        LIMIT 1`, [syncVersion]));
+      if (orphanBarcodeVariant) {
+        throw new LargeMasterSyncV3Error('SYNC_V3_BARCODE_VARIANT_REFERENCE_INVALID');
       }
       const foreignKeys = rows(await db.query('PRAGMA foreign_key_check;'));
       if (foreignKeys.length) throw new LargeMasterSyncV3Error('SYNC_V3_FOREIGN_KEY_CHECK_FAILED');
@@ -433,56 +471,60 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
     });
   }
 
-  private async upsertRecord(db: SQLiteConnection, dataset: LargeMasterSyncV3Dataset, version: number, row: RecordObject): Promise<void> {
+  private async executeRecordBatch(db: SQLiteConnection, statements: SQLiteStatement[]): Promise<void> {
+    if (!statements.length) return;
+    if (typeof db.executeSet === 'function') {
+      await db.executeSet(statements, false, 'no');
+      return;
+    }
+    // better-sqlite3 and host test adapters do not expose the Capacitor bridge batch API.
+    for (const entry of statements) await db.run(entry.statement, entry.values, false);
+  }
+
+  private recordStatement(dataset: LargeMasterSyncV3Dataset, version: number, row: RecordObject): SQLiteStatement {
     if (dataset === 'articles') {
       const taxIds = Array.isArray(row.taxIds) ? row.taxIds.map(String) : [];
-      await db.run(`INSERT INTO master_v3_articles
+      return { statement: `INSERT INTO master_v3_articles
         (sync_version, article_id, sku, description, article_type, uom, taxable, tax_ids_json, family_id, category_id, active)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(sync_version, article_id) DO UPDATE SET sku=excluded.sku, description=excluded.description,
         article_type=excluded.article_type, uom=excluded.uom, taxable=excluded.taxable,
         tax_ids_json=excluded.tax_ids_json, family_id=excluded.family_id, category_id=excluded.category_id, active=excluded.active`,
-      [version, requiredId(row, 'id'), optionalText(row.sku), optionalText(row.description), optionalText(row.type),
+      values: [version, requiredId(row, 'id'), optionalText(row.sku), optionalText(row.description), optionalText(row.type),
         optionalText(row.uom), row.taxable === true ? 1 : 0, JSON.stringify(taxIds), optionalText(row.familyId),
-        optionalText(row.categoryId), booleanInt(row.active)], false);
-      return;
+        optionalText(row.categoryId), booleanInt(row.active)] };
     }
     if (dataset === 'prices') {
-      await db.run(`INSERT INTO master_v3_prices(sync_version, article_id, tariff_id, price) VALUES (?, ?, ?, ?)
+      return { statement: `INSERT INTO master_v3_prices(sync_version, article_id, tariff_id, price) VALUES (?, ?, ?, ?)
         ON CONFLICT(sync_version, article_id, tariff_id) DO UPDATE SET price=excluded.price`,
-      [version, requiredId(row, 'articleId'), requiredId(row, 'tariffId'), finiteNumber(row.price, 'price')], false);
-      return;
+      values: [version, requiredId(row, 'articleId'), requiredId(row, 'tariffId'), finiteNumber(row.price, 'price')] };
     }
     if (dataset === 'tariffs') {
-      await db.run(`INSERT INTO master_v3_tariffs(sync_version, tariff_id, code, name, currency, active)
+      return { statement: `INSERT INTO master_v3_tariffs(sync_version, tariff_id, code, name, currency, active)
         VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(sync_version, tariff_id) DO UPDATE SET
         code=excluded.code, name=excluded.name, currency=excluded.currency, active=excluded.active`,
-      [version, requiredId(row, 'id'), optionalText(row.code), optionalText(row.name), optionalText(row.currency), booleanInt(row.active)], false);
-      return;
+      values: [version, requiredId(row, 'id'), optionalText(row.code), optionalText(row.name), optionalText(row.currency), booleanInt(row.active)] };
     }
     if (dataset === 'taxes') {
-      await db.run(`INSERT INTO master_v3_taxes(sync_version, tax_id, code, name, rate, active)
+      return { statement: `INSERT INTO master_v3_taxes(sync_version, tax_id, code, name, rate, active)
         VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(sync_version, tax_id) DO UPDATE SET
         code=excluded.code, name=excluded.name, rate=excluded.rate, active=excluded.active`,
-      [version, requiredId(row, 'id'), optionalText(row.code), optionalText(row.name),
-        row.rate == null ? null : finiteNumber(row.rate, 'rate'), booleanInt(row.active)], false);
-      return;
+      values: [version, requiredId(row, 'id'), optionalText(row.code), optionalText(row.name),
+        row.rate == null ? null : finiteNumber(row.rate, 'rate'), booleanInt(row.active)] };
     }
     if (dataset === 'variants') {
-      await db.run(`INSERT INTO master_v3_variants(sync_version, article_id, variant_id, code, description, active)
+      return { statement: `INSERT INTO master_v3_variants(sync_version, article_id, variant_id, code, description, active)
         VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(sync_version, article_id, variant_id) DO UPDATE SET
         code=excluded.code, description=excluded.description, active=excluded.active`,
-      [version, requiredId(row, 'articleId'), requiredId(row, 'id'), optionalText(row.code),
-        optionalText(row.description), booleanInt(row.active)], false);
-      return;
+      values: [version, requiredId(row, 'articleId'), requiredId(row, 'id'), optionalText(row.code),
+        optionalText(row.description), booleanInt(row.active)] };
     }
     if (dataset === 'barcodes') {
       const barcode = String(row.code ?? row.barcode ?? '').trim();
       if (!barcode) throw new LargeMasterSyncV3Error('SYNC_V3_RECORD_INVALID', 'Falta code/barcode');
-      await db.run(`INSERT INTO master_v3_barcodes(sync_version, barcode, article_id, variant_id)
+      return { statement: `INSERT INTO master_v3_barcodes(sync_version, barcode, article_id, variant_id)
         VALUES (?, ?, ?, ?) ON CONFLICT(sync_version, barcode, article_id, variant_id) DO NOTHING`,
-      [version, barcode, requiredId(row, 'articleId'), optionalText(row.variantId) || ''], false);
-      return;
+      values: [version, barcode, requiredId(row, 'articleId'), optionalText(row.variantId) || ''] };
     }
     throw new LargeMasterSyncV3Error('SYNC_V3_DATASET_UNSUPPORTED');
   }
