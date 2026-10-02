@@ -1,5 +1,5 @@
 import type { ParkedTicket, PaymentFractionPart } from '../types';
-import { isPaymentFractionPlanCurrent } from './paymentFractions';
+import { isFullyPaidParkedTicket, isPaymentFractionPlanCurrent } from './paymentFractions';
 
 export interface TableAccountDisplayEntry {
   key: string;
@@ -29,6 +29,7 @@ export const getTableAccountLabel = (ticket: ParkedTicket, index: number): strin
 export const buildTableAccountDisplayEntries = (
   tickets: ParkedTicket[],
 ): TableAccountDisplayEntry[] => tickets.flatMap((ticket, ticketIndex): TableAccountDisplayEntry[] => {
+  if (isFullyPaidParkedTicket(ticket)) return [];
   const accountLabel = getTableAccountLabel(ticket, ticketIndex);
   const total = ticketTotal(ticket);
   const plan = ticket.paymentFraction;

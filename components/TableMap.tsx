@@ -29,7 +29,7 @@ import { Capacitor } from '@capacitor/core';
 import TableOptionsModal from './TableOptionsModal';
 import SplitTicketModal from './SplitTicketModal';
 import TableMoveConfirmationModal from './TableMoveConfirmationModal';
-import { createPaymentFractionPlan } from '../utils/paymentFractions';
+import { createPaymentFractionPlan, isFullyPaidParkedTicket } from '../utils/paymentFractions';
 import { getTableChairSlots, TableChairSlot } from '../utils/tableChairs';
 import { getWholeTableMoveTotal } from '../utils/tableMoveTotal';
 import { shouldReduceTableMotion } from '../utils/tableMotionPolicy';
@@ -715,6 +715,16 @@ const TableMap: React.FC<TableMapProps> = ({
         [safeTables, activeRoomId]
     );
 
+    useEffect(() => {
+        if (!onUpdateParkedTickets) return;
+        const currentTickets = parkedTickets || [];
+        const nextTickets = currentTickets.filter(ticket => !isFullyPaidParkedTicket(ticket));
+        if (nextTickets.length === currentTickets.length) return;
+        void Promise.resolve(onUpdateParkedTickets(nextTickets))
+            .then(() => onRefreshTables?.())
+            .catch(error => console.error('No se pudo cerrar una cuenta con todas sus cuotas cobradas:', error));
+    }, [onRefreshTables, onUpdateParkedTickets, parkedTickets]);
+
     const fitRestaurantViewport = useCallback(() => {
         if (!isRestaurantMode) return;
         const { width, height } = viewportSizeRef.current;
@@ -862,7 +872,7 @@ const TableMap: React.FC<TableMapProps> = ({
 
     const getTableTickets = useCallback(
         (table: Table): ParkedTicket[] => (parkedTickets || [])
-            .filter(ticket => parkedTicketBelongsToTable(ticket, table.id))
+            .filter(ticket => parkedTicketBelongsToTable(ticket, table.id) && !isFullyPaidParkedTicket(ticket))
             .sort((a, b) => {
                 if (String(a.id) === String(table.currentOrderId)) return -1;
                 if (String(b.id) === String(table.currentOrderId)) return 1;
