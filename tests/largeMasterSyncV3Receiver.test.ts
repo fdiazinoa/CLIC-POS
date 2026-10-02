@@ -2,7 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import Database from 'better-sqlite3';
 import { LARGE_MASTER_SYNC_V3_SCHEMA_SQL } from '../services/db/LargeMasterSyncV3Schema';
-import { LargeMasterSyncV3SqliteStore } from '../services/db/LargeMasterSyncV3SqliteStore';
+import {
+  LargeMasterSyncV3SqliteStore,
+  type LargeMasterSyncV3SqliteFaultHook,
+} from '../services/db/LargeMasterSyncV3SqliteStore';
 import {
   LargeMasterSyncV3Client,
   sha256Utf8,
@@ -17,12 +20,33 @@ import {
   type LargeMasterSyncV3Manifest,
 } from '../services/sync/LargeMasterSyncV3Types';
 import { LargeMasterSyncV3Runtime } from '../services/sync/LargeMasterSyncV3Runtime';
+import {
+  bootstrapLargeMasterSyncV3Lifecycle,
+  getLargeMasterSyncV3Runtime,
+  resetLargeMasterSyncV3LifecycleForTests,
+} from '../services/sync/LargeMasterSyncV3Lifecycle';
+import {
+  resetLargeMasterSyncV3OperationGateForTests,
+  setLargeMasterSyncV3CriticalOperation,
+  waitForLargeMasterSyncV3OperationalWindow,
+} from '../services/sync/LargeMasterSyncV3OperationGate';
+import { setPosSaleActivity } from '../utils/posSaleActivity';
+import { readFileSync } from 'node:fs';
 
 const SYNC_ID = '00000000-0000-4000-8000-000000000001';
 const queryCount = (sqlite: Database.Database, table: string): number =>
   Number((sqlite.prepare(`SELECT COUNT(*) count FROM ${table}`).get() as { count: number }).count);
 
-const sqliteStore = () => {
+const serialWriteLock = () => {
+  let queue: Promise<unknown> = Promise.resolve();
+  return <T>(operation: () => Promise<T>): Promise<T> => {
+    const result = queue.then(operation, operation);
+    queue = result.then(() => undefined, () => undefined);
+    return result;
+  };
+};
+
+const sqliteStore = (fault?: LargeMasterSyncV3SqliteFaultHook) => {
   const sqlite = new Database(':memory:');
   sqlite.pragma('foreign_keys = ON');
   sqlite.exec(LARGE_MASTER_SYNC_V3_SCHEMA_SQL);
@@ -36,7 +60,8 @@ const sqliteStore = () => {
       return { changes: { changes: info.changes } };
     },
   };
-  return { sqlite, store: new LargeMasterSyncV3SqliteStore(() => connection) };
+  const writeLock = serialWriteLock();
+  return { sqlite, connection, writeLock, store: new LargeMasterSyncV3SqliteStore(() => connection, writeLock, fault) };
 };
 
 const chunkText = (dataset: LargeMasterSyncV3Dataset, chunkIndex: number, records: unknown[], syncId = SYNC_ID) =>
@@ -262,4 +287,144 @@ test('resumes persisted progress after interruptions at 10, 25, 50, 75 and 99 pe
     assert.deepEqual(await store.getActiveRuntimeVersion(), { syncId: SYNC_ID, syncVersion: 186 });
     sqlite.close();
   }
+});
+
+test('shares the adapter write lock and never yields inside BEGIN IMMEDIATE', async () => {
+  const { sqlite, store, writeLock } = sqliteStore();
+  const { manifest } = await manifestAndResponses({});
+  let release!: () => void;
+  const blocked = new Promise<void>(resolve => { release = resolve; });
+  const legacyWrite = writeLock(async () => blocked);
+  const preparation = store.prepare(manifest);
+  await new Promise(resolve => setTimeout(resolve, 5));
+  assert.equal(queryCount(sqlite, 'sync_v3_sessions'), 0);
+  release();
+  await legacyWrite;
+  await preparation;
+  assert.equal(queryCount(sqlite, 'sync_v3_sessions'), 1);
+  const source = readFileSync(new URL('../services/db/LargeMasterSyncV3SqliteStore.ts', import.meta.url), 'utf8');
+  assert.doesNotMatch(source, /setTimeout|queueMicrotask/);
+});
+
+test('resume is idempotent from VALIDATED and after ACTIVE', async () => {
+  let fault = true;
+  const { store } = sqliteStore(point => {
+    if (fault && point === 'activation_after_pointer') throw new Error('KILL_ACTIVATION');
+  });
+  const { responses } = await manifestAndResponses({
+    tariffs: [[{ id: 'T1', active: true }]],
+    articles: [[{ id: 'A1', taxable: false, taxIds: [], active: true }]],
+    prices: [[{ articleId: 'A1', tariffId: 'T1', price: 10 }]],
+  });
+  const firstTransport = new MapTransport(responses);
+  const client = new LargeMasterSyncV3Client({ store, transport: firstTransport,
+    storageStats: async () => ({ availableBytes: 1e9, totalBytes: 2e9 }), maxRetries: 0 });
+  await assert.rejects(() => client.resumeSync(SYNC_ID), /KILL_ACTIVATION/);
+  assert.equal((await store.readProgress(SYNC_ID))?.status, 'VALIDATED');
+  assert.equal(await store.getActiveRuntimeVersion(), null);
+
+  fault = false;
+  const requestsBefore = firstTransport.requests.length;
+  assert.deepEqual(await client.resumeSync(SYNC_ID), { syncId: SYNC_ID, syncVersion: 186 });
+  assert.equal(firstTransport.requests.slice(requestsBefore).filter(path => path.includes('/chunks/')).length, 0);
+  const requestsBeforeActiveResume = firstTransport.requests.length;
+  assert.deepEqual(await client.resumeSync(SYNC_ID), { syncId: SYNC_ID, syncVersion: 186 });
+  assert.equal(firstTransport.requests.slice(requestsBeforeActiveResume).filter(path => path.includes('/chunks/')).length, 0);
+});
+
+test('fault injection preserves ACTIVE across download, hash, parse, transaction, commit and dataset transition', async () => {
+  const stages = ['download', 'hash', 'parse'] as const;
+  for (const stage of stages) {
+    const { store } = sqliteStore();
+    const { responses } = await manifestAndResponses({ taxes: [[{ id: 'T', active: true }]] });
+    const client = new LargeMasterSyncV3Client({ store, transport: new MapTransport(responses),
+      storageStats: async () => ({ availableBytes: 1e9, totalBytes: 2e9 }), maxRetries: 0,
+      fault: point => { if (point === stage) throw new Error(`KILL_${stage}`); } });
+    await assert.rejects(() => client.resumeSync(SYNC_ID), new RegExp(`KILL_${stage}`));
+    assert.equal(await store.getActiveRuntimeVersion(), null);
+    assert.equal((await store.readProgress(SYNC_ID))?.chunks.length, 0);
+  }
+
+  for (const stage of ['apply_after_records', 'apply_before_commit', 'dataset_before_validate'] as const) {
+    let enabled = true;
+    const { sqlite, store } = sqliteStore(point => {
+      if (enabled && point === stage) throw new Error(`KILL_${stage}`);
+    });
+    const { responses } = await manifestAndResponses({ taxes: [[{ id: 'T', active: true }]] });
+    const client = new LargeMasterSyncV3Client({ store, transport: new MapTransport(responses),
+      storageStats: async () => ({ availableBytes: 1e9, totalBytes: 2e9 }), maxRetries: 0 });
+    await assert.rejects(() => client.resumeSync(SYNC_ID), new RegExp(`KILL_${stage}`));
+    assert.equal(await store.getActiveRuntimeVersion(), null);
+    if (stage === 'dataset_before_validate') {
+      assert.equal(queryCount(sqlite, 'master_v3_taxes'), 1);
+      assert.equal((await store.readProgress(SYNC_ID))?.datasets.find(row => row.dataset === 'taxes')?.status, 'COMPLETE');
+    } else {
+      assert.equal(queryCount(sqlite, 'master_v3_taxes'), 0);
+      assert.equal((await store.readProgress(SYNC_ID))?.chunks.length, 0);
+    }
+    enabled = false;
+    await client.resumeSync(SYNC_ID);
+    assert.deepEqual(await store.getActiveRuntimeVersion(), { syncId: SYNC_ID, syncVersion: 186 });
+  }
+});
+
+test('internal timeout, HTML 503 and category-scope fallback are classified before JSON parsing', async () => {
+  const { store } = sqliteStore();
+  const timeoutTransport: LargeMasterSyncV3Transport = {
+    request: async (_path, init) => new Promise((_resolve, reject) => {
+      init.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true });
+    }),
+  };
+  const timeoutClient = new LargeMasterSyncV3Client({ store, transport: timeoutTransport,
+    maxRetries: 0, requestTimeoutMs: 5 });
+  await assert.rejects(() => timeoutClient.requestSync(), (error: unknown) =>
+    error instanceof LargeMasterSyncV3Error && error.code === 'SYNC_V3_TIMEOUT');
+
+  const htmlClient = new LargeMasterSyncV3Client({ store, maxRetries: 0, transport: {
+    request: async () => ({ status: 503, headers: { 'content-type': 'text/html' }, text: '<h1>down</h1>' }),
+  } });
+  await assert.rejects(() => htmlClient.requestSync(), (error: unknown) =>
+    error instanceof LargeMasterSyncV3Error && error.code === 'SYNC_V3_HTTP_TEMPORARY');
+
+  const fallbackClient = new LargeMasterSyncV3Client({ store, maxRetries: 0, transport: {
+    request: async () => ({ status: 409, headers: { 'content-type': 'application/json' },
+      text: JSON.stringify({ code: 'SYNC_V3_CATEGORY_SCOPE_UNSUPPORTED', fallback: 'legacy' }) }),
+  } });
+  assert.deepEqual(await fallbackClient.requestSync(), { fallback: 'legacy' });
+});
+
+test('operation gate wakes on sale activity after payment clears without deadlock', async () => {
+  const previousWindow = globalThis.window;
+  const eventTarget = new EventTarget();
+  Object.assign(eventTarget, {
+    setTimeout,
+    clearTimeout,
+    dispatchEvent: eventTarget.dispatchEvent.bind(eventTarget),
+    addEventListener: eventTarget.addEventListener.bind(eventTarget),
+    removeEventListener: eventTarget.removeEventListener.bind(eventTarget),
+  });
+  Object.defineProperty(globalThis, 'window', { value: eventTarget, configurable: true, writable: true });
+  try {
+    resetLargeMasterSyncV3OperationGateForTests();
+    setLargeMasterSyncV3CriticalOperation('PAYMENT', true);
+    setPosSaleActivity({ active: true, cartCount: 1 });
+    let resolved = false;
+    const waiting = waitForLargeMasterSyncV3OperationalWindow().then(() => { resolved = true; });
+    setLargeMasterSyncV3CriticalOperation('PAYMENT', false);
+    await new Promise(resolve => setTimeout(resolve, 5));
+    assert.equal(resolved, false);
+    setPosSaleActivity({ active: false });
+    await Promise.race([waiting, new Promise((_, reject) => setTimeout(() => reject(new Error('DEADLOCK')), 100))]);
+    assert.equal(resolved, true);
+  } finally {
+    resetLargeMasterSyncV3OperationGateForTests();
+    setPosSaleActivity({ active: false });
+    Object.defineProperty(globalThis, 'window', { value: previousWindow, configurable: true, writable: true });
+  }
+});
+
+test('dark lifecycle is wired but cannot load runtime or start network work', async () => {
+  resetLargeMasterSyncV3LifecycleForTests();
+  assert.deepEqual(await bootstrapLargeMasterSyncV3Lifecycle(undefined), { enabled: false, runtime: null });
+  assert.equal(getLargeMasterSyncV3Runtime(), null);
 });
