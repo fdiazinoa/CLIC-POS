@@ -46,11 +46,12 @@ const serialWriteLock = () => {
   };
 };
 
-const sqliteStore = (fault?: LargeMasterSyncV3SqliteFaultHook) => {
+const sqliteStore = (fault?: LargeMasterSyncV3SqliteFaultHook, nativeBatch = false) => {
   const sqlite = new Database(':memory:');
   sqlite.pragma('foreign_keys = ON');
   sqlite.exec(LARGE_MASTER_SYNC_V3_SCHEMA_SQL);
-  const connection = {
+  const executeSetCalls: number[] = [];
+  const baseConnection = {
     async execute(sql: string) { sqlite.exec(sql); },
     async query(sql: string, values: unknown[] = []) {
       return { values: sqlite.prepare(sql).all(...values) as Array<Record<string, unknown>> };
@@ -60,8 +61,19 @@ const sqliteStore = (fault?: LargeMasterSyncV3SqliteFaultHook) => {
       return { changes: { changes: info.changes } };
     },
   };
+  const connection = nativeBatch ? {
+    ...baseConnection,
+    async executeSet(statements: Array<{ statement: string; values: unknown[] }>, transaction = true, returnMode = '') {
+      assert.equal(transaction, false);
+      assert.equal(returnMode, 'no');
+      executeSetCalls.push(statements.length);
+      for (const entry of statements) sqlite.prepare(entry.statement).run(...entry.values);
+      return { changes: { changes: statements.length } };
+    },
+  } : baseConnection;
   const writeLock = serialWriteLock();
-  return { sqlite, connection, writeLock, store: new LargeMasterSyncV3SqliteStore(() => connection, writeLock, fault) };
+  return { sqlite, connection, executeSetCalls, writeLock,
+    store: new LargeMasterSyncV3SqliteStore(() => connection, writeLock, fault) };
 };
 
 const chunkText = (dataset: LargeMasterSyncV3Dataset, chunkIndex: number, records: unknown[], syncId = SYNC_ID) =>
@@ -142,6 +154,16 @@ test('rejects unsupported schemas, empty manifests, corrupt bytes and mismatched
   const client = new LargeMasterSyncV3Client({ store, transport: new MapTransport(responses),
     storageStats: async () => ({ availableBytes: 1e9, totalBytes: 2e9 }), maxRetries: 0 });
   await assert.rejects(() => client.getChunk(manifest, 'articles', 0), /SYNC_V3_CHECKSUM_MISMATCH/);
+
+  const correct = chunkText('articles', 0, [{ id: 'A', taxable: true, taxIds: [], active: true }]);
+  for (const invalidRecordCount of ['', '-1', '1.0', '9007199254740992']) {
+    responses.set(path, { status: 200, text: correct, headers: {
+      'X-Sync-V3-Checksum': await sha256Utf8(correct),
+      ...(invalidRecordCount ? { 'X-Sync-V3-Record-Count': invalidRecordCount } : {}),
+    } });
+    await assert.rejects(() => client.getChunk(manifest, 'articles', 0), (error: unknown) =>
+      error instanceof LargeMasterSyncV3Error && error.code === 'SYNC_V3_RECORD_COUNT_INVALID');
+  }
 
   const wrongSync = chunkText('articles', 0, [{ id: 'A' }], '10000000-0000-4000-8000-000000000001');
   responses.set(path, { status: 200, text: wrongSync, headers: {
@@ -268,6 +290,16 @@ test('rolls back a partially invalid chunk together with its APPLIED marker', as
   assert.equal(queryCount(sqlite, 'sync_v3_chunks'), 0);
 });
 
+test('native sqlite path sends one executeSet call per bounded 250-record subbatch', async () => {
+  const { store, executeSetCalls } = sqliteStore(undefined, true);
+  const records = Array.from({ length: 501 }, (_, index) => ({ id: `T${index}`, active: true }));
+  const { manifest, responses } = await manifestAndResponses({ taxes: [records] }, 186, SYNC_ID, ['taxes']);
+  await store.prepare(manifest);
+  const client = new LargeMasterSyncV3Client({ store, transport: new MapTransport(responses), maxRetries: 0 });
+  await client.applyChunk(await client.getChunk(manifest, 'taxes', 0));
+  assert.deepEqual(executeSetCalls, [250, 250, 1]);
+});
+
 test('fails closed when StatFs capacity cannot hold staging plus SQLite overhead', async () => {
   const { store } = sqliteStore();
   const { responses } = await manifestAndResponses({ articles: [[{ id: 'A1', taxable: true, taxIds: [], active: true }]] });
@@ -308,6 +340,33 @@ test('keeps ACTIVE unchanged on failed activation and can atomically roll back t
   assert.deepEqual(await store.getActiveRuntimeVersion(), { syncId: firstId, syncVersion: 186 });
 });
 
+test('rejects orphan article tax and barcode variant references before activation', async () => {
+  const taxCase = sqliteStore();
+  const orphanTax = await manifestAndResponses({
+    taxes: [[{ id: 'T1', active: true }]],
+    articles: [[{ id: 'A1', taxable: true, taxIds: ['T404'], active: true }]],
+  }, 186, SYNC_ID, ['taxes', 'articles']);
+  const taxClient = new LargeMasterSyncV3Client({ store: taxCase.store,
+    transport: new MapTransport(orphanTax.responses),
+    storageStats: async () => ({ availableBytes: 1e9, totalBytes: 2e9 }), maxRetries: 0 });
+  await assert.rejects(() => taxClient.resumeSync(SYNC_ID), (error: unknown) =>
+    error instanceof LargeMasterSyncV3Error && error.code === 'SYNC_V3_ARTICLE_TAX_REFERENCE_INVALID');
+  assert.equal(await taxCase.store.getActiveRuntimeVersion(), null);
+
+  const barcodeCase = sqliteStore();
+  const orphanVariant = await manifestAndResponses({
+    articles: [[{ id: 'A1', taxable: false, taxIds: [], active: true }]],
+    variants: [[{ articleId: 'A1', id: 'V1', active: true }]],
+    barcodes: [[{ articleId: 'A1', variantId: 'V404', code: '7460001' }]],
+  }, 186, SYNC_ID, ['articles', 'variants', 'barcodes']);
+  const barcodeClient = new LargeMasterSyncV3Client({ store: barcodeCase.store,
+    transport: new MapTransport(orphanVariant.responses),
+    storageStats: async () => ({ availableBytes: 1e9, totalBytes: 2e9 }), maxRetries: 0 });
+  await assert.rejects(() => barcodeClient.resumeSync(SYNC_ID), (error: unknown) =>
+    error instanceof LargeMasterSyncV3Error && error.code === 'SYNC_V3_BARCODE_VARIANT_REFERENCE_INVALID');
+  assert.equal(await barcodeCase.store.getActiveRuntimeVersion(), null);
+});
+
 test('resumes persisted progress after interruptions at 10, 25, 50, 75 and 99 percent', async () => {
   const articleChunks = Array.from({ length: 100 }, (_, index) => [[{
     id: `A${index.toString().padStart(3, '0')}`, taxable: false, taxIds: [], active: true,
@@ -332,6 +391,49 @@ test('resumes persisted progress after interruptions at 10, 25, 50, 75 and 99 pe
     assert.deepEqual(await store.getActiveRuntimeVersion(), { syncId: SYNC_ID, syncVersion: 186 });
     sqlite.close();
   }
+});
+
+test('resume fills the first real chunk gap and recalculates progress with higher applied indexes', async () => {
+  const { sqlite, store } = sqliteStore();
+  const records = Array.from({ length: 5 }, (_, index) => [{
+    id: `A${index}`, taxable: false, taxIds: [], active: true,
+  }]);
+  const { manifest, responses } = await manifestAndResponses({ articles: records }, 186, SYNC_ID, ['articles']);
+  await store.prepare(manifest);
+  const seedClient = new LargeMasterSyncV3Client({ store, transport: new MapTransport(responses), maxRetries: 0 });
+  await seedClient.applyChunk(await seedClient.getChunk(manifest, 'articles', 0));
+
+  for (const index of [2, 4]) {
+    sqlite.prepare(`INSERT INTO master_v3_articles
+      (sync_version, article_id, taxable, tax_ids_json, active) VALUES (?, ?, 0, '[]', 1)`)
+      .run(186, `A${index}`);
+    const response = responses.get(`/api/sync/v3/master-syncs/${SYNC_ID}/datasets/articles/chunks/${index}`)!;
+    sqlite.prepare(`INSERT INTO sync_v3_chunks
+      (sync_id, dataset, chunk_index, checksum, record_count, raw_bytes, status, applied_at)
+      VALUES (?, 'articles', ?, ?, 1, ?, 'APPLIED', ?)`)
+      .run(SYNC_ID, index, response.headers['X-Sync-V3-Checksum'],
+        new TextEncoder().encode(response.text).byteLength, new Date().toISOString());
+  }
+  sqlite.prepare(`UPDATE sync_v3_dataset_progress SET applied_count = 99, applied_chunks = 3,
+    status = 'APPLYING' WHERE sync_id = ? AND dataset = 'articles'`).run(SYNC_ID);
+
+  assert.equal(await seedClient.applyChunk(await seedClient.getChunk(manifest, 'articles', 1)), 'APPLIED');
+  const afterFirstGap = await store.readProgress(SYNC_ID);
+  assert.equal(afterFirstGap?.datasets[0].appliedCount, 4);
+  assert.equal(afterFirstGap?.datasets[0].appliedChunks, 4);
+  assert.equal(afterFirstGap?.datasets[0].status, 'APPLYING');
+
+  const resumeTransport = new MapTransport(responses);
+  const client = new LargeMasterSyncV3Client({ store, transport: resumeTransport,
+    storageStats: async () => ({ availableBytes: 1e9, totalBytes: 2e9 }), maxRetries: 0 });
+  await client.resumeSync(SYNC_ID);
+  assert.deepEqual(resumeTransport.requests.filter(path => path.includes('/datasets/articles/chunks/')),
+    [`/api/sync/v3/master-syncs/${SYNC_ID}/datasets/articles/chunks/3`]);
+  const progress = await store.readProgress(SYNC_ID);
+  assert.equal(progress?.datasets[0].appliedCount, 5);
+  assert.equal(progress?.datasets[0].appliedChunks, 5);
+  assert.equal(progress?.datasets[0].status, 'VALIDATED');
+  assert.equal(queryCount(sqlite, 'master_v3_articles'), 5);
 });
 
 test('shares the adapter write lock and never yields inside BEGIN IMMEDIATE', async () => {
@@ -461,6 +563,47 @@ test('operation gate wakes on sale activity after payment clears without deadloc
     setPosSaleActivity({ active: false });
     await Promise.race([waiting, new Promise((_, reject) => setTimeout(() => reject(new Error('DEADLOCK')), 100))]);
     assert.equal(resolved, true);
+  } finally {
+    resetLargeMasterSyncV3OperationGateForTests();
+    setPosSaleActivity({ active: false });
+    Object.defineProperty(globalThis, 'window', { value: previousWindow, configurable: true, writable: true });
+  }
+});
+
+test('operation gate rechecks after parse before opening the sqlite transaction', async () => {
+  const previousWindow = globalThis.window;
+  const eventTarget = new EventTarget();
+  Object.assign(eventTarget, {
+    setTimeout,
+    clearTimeout,
+    dispatchEvent: eventTarget.dispatchEvent.bind(eventTarget),
+    addEventListener: eventTarget.addEventListener.bind(eventTarget),
+    removeEventListener: eventTarget.removeEventListener.bind(eventTarget),
+  });
+  Object.defineProperty(globalThis, 'window', { value: eventTarget, configurable: true, writable: true });
+  try {
+    resetLargeMasterSyncV3OperationGateForTests();
+    const { store } = sqliteStore();
+    const { responses } = await manifestAndResponses({ taxes: [[{ id: 'T1', active: true }]] },
+      186, SYNC_ID, ['taxes']);
+    let parsed!: () => void;
+    const parseReached = new Promise<void>(resolve => { parsed = resolve; });
+    const client = new LargeMasterSyncV3Client({ store, transport: new MapTransport(responses),
+      storageStats: async () => ({ availableBytes: 1e9, totalBytes: 2e9 }), maxRetries: 0,
+      fault: point => {
+        if (point === 'parse') {
+          setPosSaleActivity({ active: true, cartCount: 1 });
+          parsed();
+        }
+      },
+    });
+    const syncing = client.resumeSync(SYNC_ID);
+    await parseReached;
+    await new Promise(resolve => setTimeout(resolve, 5));
+    assert.equal((await store.readProgress(SYNC_ID))?.chunks.length, 0);
+    setPosSaleActivity({ active: false });
+    await Promise.race([syncing, new Promise((_, reject) => setTimeout(() => reject(new Error('DEADLOCK')), 100))]);
+    assert.deepEqual(await store.getActiveRuntimeVersion(), { syncId: SYNC_ID, syncVersion: 186 });
   } finally {
     resetLargeMasterSyncV3OperationGateForTests();
     setPosSaleActivity({ active: false });
