@@ -18,6 +18,7 @@ const pairingSource = readFileSync(new URL('../components/TerminalBindingScreen.
 const lanDiscoverySource = readFileSync(new URL('../utils/masterLanDiscovery.ts', import.meta.url), 'utf8');
 const scannerSource = readFileSync(new URL('../services/sync/NetworkScanner.ts', import.meta.url), 'utf8');
 const appSource = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
+const tableCloseStateSource = readFileSync(new URL('../utils/tableCloseState.ts', import.meta.url), 'utf8');
 const clientMasterBindingSource = readFileSync(new URL('../utils/clientMasterBinding.ts', import.meta.url), 'utf8');
 const kitchenDisplaySource = readFileSync(
   new URL('../components/kds/KitchenDisplay.tsx', import.meta.url),
@@ -188,7 +189,7 @@ test('la Master conserva y libera de forma simétrica las mesas unidas', () => {
   assert.match(serverSource, /TABLE_RELEASE_ORDER_MISMATCH/);
   assert.match(serverSource, /TABLE_RELEASE_HAS_REMAINING_ACCOUNTS/);
   assert.match(serverSource, /ticket\.optString\("id"\) != expectedOrderId && ticketReferencesTable\(ticket, tableId\)/);
-  assert.match(appSource, /parkedTicketBelongsToTable\(ticket, tableId\)/);
+  assert.match(tableCloseStateSource, /parkedTicketBelongsToTable\(ticket, tableId\)/);
 });
 
 test('la WebView entrega el snapshot operativo al servidor nativo sin sobreescribir cambios clientes en el watchdog', () => {
@@ -391,7 +392,10 @@ test('los renders de la Master no reemplazan el estado operativo nativo', () => 
   assert.match(masterServerEffect, /masterRestaurantBootstrapRequestedRef\.current/);
   assert.match(masterServerEffect, /activeTableEditLockRef\.current/);
   assert.match(masterServerEffect, /Restored designed floor plan after rejecting ERP seed tables/);
-  assert.match(masterServerEffect, /writeFloorPlanMirror\(selectedRooms, reconciledTables/);
+  assert.match(masterServerEffect, /writeFloorPlanMirror\(snapshot\.rooms, snapshot\.tables/);
+  assert.match(masterServerEffect, /lastAppliedMasterRestaurantRevisionRef\.current = applyResult\.appliedRevision/);
+  assert.match(masterServerEffect, /revision <= lastAppliedMasterRestaurantRevisionRef\.current/);
+  assert.match(masterServerEffect, /revision < masterRestaurantRevisionRef\.current/);
 });
 
 test('la Caja Master Android se anuncia y puede identificarse automáticamente en la red local', () => {

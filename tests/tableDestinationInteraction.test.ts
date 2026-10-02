@@ -76,6 +76,7 @@ test('guardar la segunda mesa no libera la primera con tickets de un render ante
     setTables: (update: (previous: any[]) => any[]) => { savedTables = update([mesa4, mesa7]); },
     db: { save: async () => {} },
     console,
+    isNativeAndroidRuntime: () => false,
     isClientTerminalMode: () => true,
     parkedTickets: [],
   }) as (table: any, ticket: any) => Promise<void>;
