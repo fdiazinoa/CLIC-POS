@@ -5975,9 +5975,12 @@ const AppContent: React.FC = () => {
       : '/api/mesas/desbloquear';
     const endpointUrl = await resolveValidatedOperationalApiUrl(endpoint);
     if (legacyMutationJournal.hasOutcomeUnknown()) {
+      const authorityState = apiSyncAdapter.getOperationalAuthorityState();
       await reconcileMasterRejectedTableMutations({
         journal: legacyMutationJournal,
         authorityOrigin: new URL(endpointUrl).origin,
+        terminalId: authorityState.terminalId || '',
+        generation: authorityState.revision,
       });
     }
     const response = await dispatchLegacyLanMutation<any>({
@@ -9693,9 +9696,12 @@ const AppContent: React.FC = () => {
         }
         const masterUrl = await resolveValidatedOperationalApiUrl('/api/mesas/parked-tickets');
         if (legacyMutationJournal.hasOutcomeUnknown()) {
+          const authorityState = apiSyncAdapter.getOperationalAuthorityState();
           await reconcileMasterRejectedTableMutations({
             journal: legacyMutationJournal,
             authorityOrigin: new URL(masterUrl).origin,
+            terminalId: authorityState.terminalId || '',
+            generation: authorityState.revision,
           });
         }
         if (legacyMutationJournal.hasOutcomeUnknown() && masterEditLock?.tableId) {

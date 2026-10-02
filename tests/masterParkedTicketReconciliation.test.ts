@@ -21,6 +21,27 @@ class Store implements LegacyMutationJournalStore {
 
 const ticket = { id: 'order-4', tableId: 'table-4', items: [{ id: 'water', quantity: 2 }], total: 283.2 };
 const origin = 'http://10.0.0.129:3001';
+const terminalId = 'client-terminal';
+const generation = 7;
+
+const persistedLegacy409 = (overrides: Partial<LegacyMutationJournalEntry> = {}): LegacyMutationJournalEntry => ({
+  id: 'legacy-409',
+  operationCorrelationId: 'PARKED_TICKETS_SYNC:legacy',
+  authorityFingerprint: `${origin}|${terminalId}`,
+  generation,
+  method: 'PUT',
+  canonicalPath: '/api/mesas/parked-tickets',
+  diagnosticRequestId: 'legacy-409',
+  state: 'OUTCOME_UNKNOWN',
+  createdAt: '2026-10-02T20:14:34.000Z',
+  dispatchedAt: '2026-10-02T20:14:35.000Z',
+  httpStatus: 409,
+  classification: 'OUTCOME_UNKNOWN',
+  callerAckAt: null,
+  callerAckReference: null,
+  closedAt: null,
+  ...overrides,
+});
 
 const fixture = async (operationCorrelationId = 'MASTER_PARKED_TICKETS_SYNC:one') => {
   const store = new Store();
@@ -108,53 +129,91 @@ test('an additional ambiguous mutation prevents automatic reconciliation', async
 
 test('an old client 409 table rejection is closed before a later table acquire', async () => {
   const store = new Store();
+  const entry = persistedLegacy409();
+  store.rows.set(entry.id, entry);
   const journal = new LegacyMutationJournal(store);
   await journal.initializeForStartup();
-  const entry = await journal.begin({
-    operationCorrelationId: 'MASTER_PARKED_TICKETS_SYNC:old',
-    authorityFingerprint: `${origin}|master-terminal`,
-    generation: 1,
-    method: 'PUT',
-    url: `${origin}/api/mesas/parked-tickets`,
-    diagnosticRequestId: 'old',
-  });
-  await journal.prepareDispatch(entry.id, entry.authorityFingerprint, 1);
-  await journal.recordHttpStatus(entry.id, 409);
-  await journal.markOutcomeUnknown(entry.id, 409);
-  const nowMs = Date.parse(journal.getEntry(entry.id)!.dispatchedAt!) + 16_000;
-  assert.equal(await reconcileMasterRejectedTableMutations({ journal, authorityOrigin: origin, nowMs }), 1);
+  const nowMs = Date.parse(entry.dispatchedAt!) + 16_000;
+  assert.equal(await reconcileMasterRejectedTableMutations({
+    journal,
+    authorityOrigin: origin,
+    terminalId,
+    generation,
+    nowMs,
+  }), 1);
   assert.equal(journal.hasBlockingMutations(), false);
   assert.equal(journal.getEntry(entry.id)?.classification, 'SAFE_PRE_SIDE_EFFECT');
   await assert.doesNotReject(journal.begin({
     operationCorrelationId: 'TABLE_LOCK_ACQUIRE:next',
-    authorityFingerprint: `${origin}|client-terminal`,
-    generation: 1,
+    authorityFingerprint: `${origin}|${terminalId}`,
+    generation,
     method: 'POST',
     url: `${origin}/api/mesas/bloquear`,
     diagnosticRequestId: 'next-acquire',
   }));
 });
 
-test('ambiguous response, unrelated route, wrong authority and recent rejection remain blocked', async () => {
+test('legacy recovery rejects ambiguous, unrelated, wrong identity, wrong generation and recent rows', async () => {
   for (const scenario of [
-    { method: 'PUT', path: '/api/mesas/parked-tickets', status: null, authority: origin, ageMs: 16_000 },
-    { method: 'POST', path: '/api/mesas/unir', status: 409, authority: origin, ageMs: 16_000 },
-    { method: 'PUT', path: '/api/mesas/parked-tickets', status: 409, authority: 'http://10.0.0.28:3001', ageMs: 16_000 },
-    { method: 'PUT', path: '/api/mesas/parked-tickets', status: 409, authority: origin, ageMs: 5_000 },
+    { method: 'PUT', path: '/api/mesas/parked-tickets', status: null, authority: origin, rowTerminalId: terminalId, rowGeneration: generation, ageMs: 16_000 },
+    { method: 'POST', path: '/api/mesas/unir', status: 409, authority: origin, rowTerminalId: terminalId, rowGeneration: generation, ageMs: 16_000 },
+    { method: 'PUT', path: '/api/mesas/parked-tickets', status: 409, authority: 'http://10.0.0.28:3001', rowTerminalId: terminalId, rowGeneration: generation, ageMs: 16_000 },
+    { method: 'PUT', path: '/api/mesas/parked-tickets', status: 409, authority: origin, rowTerminalId: 'other-terminal', rowGeneration: generation, ageMs: 16_000 },
+    { method: 'PUT', path: '/api/mesas/parked-tickets', status: 409, authority: origin, rowTerminalId: terminalId, rowGeneration: generation - 1, ageMs: 16_000 },
+    { method: 'PUT', path: '/api/mesas/parked-tickets', status: 409, authority: origin, rowTerminalId: terminalId, rowGeneration: generation, ageMs: 5_000 },
   ]) {
-    const journal = new LegacyMutationJournal(new Store());
-    await journal.initializeForStartup();
-    const entry = await journal.begin({
-      authorityFingerprint: `${scenario.authority}|master-terminal`,
-      generation: 1,
+    const store = new Store();
+    const entry = persistedLegacy409({
+      id: `candidate-${scenario.authority}-${scenario.rowTerminalId}-${scenario.rowGeneration}-${scenario.ageMs}`,
+      authorityFingerprint: `${scenario.authority}|${scenario.rowTerminalId}`,
+      generation: scenario.rowGeneration,
       method: scenario.method,
-      url: `${scenario.authority}${scenario.path}`,
-      diagnosticRequestId: 'candidate',
+      canonicalPath: scenario.path,
+      httpStatus: scenario.status,
     });
-    await journal.prepareDispatch(entry.id, entry.authorityFingerprint, 1);
-    await journal.markOutcomeUnknown(entry.id, scenario.status);
+    store.rows.set(entry.id, entry);
+    const journal = new LegacyMutationJournal(store);
+    await journal.initializeForStartup();
     const nowMs = Date.parse(journal.getEntry(entry.id)!.dispatchedAt!) + scenario.ageMs;
-    assert.equal(await reconcileMasterRejectedTableMutations({ journal, authorityOrigin: origin, nowMs }), 0);
+    assert.equal(await reconcileMasterRejectedTableMutations({
+      journal,
+      authorityOrigin: origin,
+      terminalId,
+      generation,
+      nowMs,
+    }), 0);
     assert.equal(journal.hasOutcomeUnknown(), true);
   }
+});
+
+test('a new marked parked-ticket conflict remains blocked after the legacy recovery age', async () => {
+  const store = new Store();
+  const journal = new LegacyMutationJournal(store);
+  await journal.initializeForStartup();
+  const entry = await journal.begin({
+    operationCorrelationId: 'PARKED_TICKETS_SYNC:other-conflict',
+    authorityFingerprint: `${origin}|${terminalId}`,
+    generation,
+    method: 'PUT',
+    url: `${origin}/api/mesas/parked-tickets`,
+    diagnosticRequestId: 'other-conflict',
+    reconciliationContext: { serverCode: 'OTHER_CONFLICT' },
+  });
+  await journal.prepareDispatch(entry.id, entry.authorityFingerprint, generation);
+  await journal.recordHttpStatus(entry.id, 409);
+  await journal.markOutcomeUnknown(entry.id, 409);
+  const persisted = journal.getEntry(entry.id)!;
+  assert.deepEqual(persisted.reconciliationContext, {
+    serverCode: 'OTHER_CONFLICT',
+    legacyMutationContractVersion: 2,
+  });
+  const nowMs = Date.parse(persisted.dispatchedAt!) + 16_000;
+  assert.equal(await reconcileMasterRejectedTableMutations({
+    journal,
+    authorityOrigin: origin,
+    terminalId,
+    generation,
+    nowMs,
+  }), 0);
+  assert.equal(journal.hasOutcomeUnknown(), true);
 });

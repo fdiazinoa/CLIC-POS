@@ -267,7 +267,7 @@ test('la Cliente usa transporte nativo para bloquear y abrir mesas en Android', 
   assert.match(lockBlock, /dispatchLegacyLanMutation<any>\(\{/);
   assert.match(lockBlock, /TABLE_LOCK_/);
   assert.match(lockBlock, /validateResponse:\s*validateLegacySuccessResponse/);
-  assert.match(lockBlock, /legacyMutationJournal\.hasOutcomeUnknown\(\)[\s\S]*reconcileMasterRejectedTableMutations\([\s\S]*authorityOrigin:\s*new URL\(endpointUrl\)\.origin[\s\S]*dispatchLegacyLanMutation<any>/);
+  assert.match(lockBlock, /legacyMutationJournal\.hasOutcomeUnknown\(\)[\s\S]*apiSyncAdapter\.getOperationalAuthorityState\(\)[\s\S]*reconcileMasterRejectedTableMutations\([\s\S]*authorityOrigin:\s*new URL\(endpointUrl\)\.origin,[\s\S]*terminalId:\s*authorityState\.terminalId[\s\S]*generation:\s*authorityState\.revision[\s\S]*dispatchLegacyLanMutation<any>/);
   assert.doesNotMatch(lockBlock, /requestJson<any>\(|fetch\(/);
   assert.match(openBlock, /dispatchLegacyLanMutation<any>\(\{/);
   assert.match(openBlock, /operation: 'TABLE_OPEN'/);
