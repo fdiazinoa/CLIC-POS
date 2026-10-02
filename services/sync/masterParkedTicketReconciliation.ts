@@ -89,12 +89,12 @@ export const resolveColdBootstrapLegacyRecoveryGeneration = (authorityState: {
 export const reconcileMasterParkedTicketOutcome = async (input: {
   journal: LegacyMutationJournal;
   tickets: Ticket[];
-  tableId: string;
+  tableId?: string;
   authorityOrigin: string;
   readNativeSnapshot: () => Promise<Snapshot>;
   nowMs?: number;
 }): Promise<number | null> => {
-  if (!input.tableId || !input.journal.isHealthy()) return null;
+  if (!input.journal.isHealthy()) return null;
   const blocking = input.journal.getBlockingEntries();
   if (blocking.length !== 1) return null;
   const entry = blocking[0];
