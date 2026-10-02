@@ -34,7 +34,7 @@ export const buildTableAccountDisplayEntries = (
   const plan = ticket.paymentFraction;
 
   if (plan && isPaymentFractionPlanCurrent(plan, total) && plan.parts.length > 1) {
-    return plan.parts.map((part) => {
+    return plan.parts.filter(part => part.status === 'PENDING').map((part) => {
       const fractionName = String(part.name || '').trim();
       const effectiveName = fractionName || accountLabel;
       return {

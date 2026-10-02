@@ -207,22 +207,20 @@ const BarTabsModal: React.FC<{
                                 const ticket = entry.ticket;
                                 const subtotalState = getTicketSubtotalization(ticket);
                                 const canRename = Boolean(accountMode && onRenameTab);
-                                const isPaid = entry.status === 'PAID';
                                 return (
-                                    <div key={entry.key} className={`rounded-3xl border shadow-sm transition-all ${isPaid ? 'border-emerald-200 bg-emerald-50/70' : subtotalState.isSubtotalized ? 'border-violet-300 bg-violet-50' : 'border-sky-100 bg-white'}`}>
+                                    <div key={entry.key} className={`rounded-3xl border shadow-sm transition-all ${subtotalState.isSubtotalized ? 'border-violet-300 bg-violet-50' : 'border-sky-100 bg-white'}`}>
                                         <div className="flex items-stretch gap-2 p-2">
                                             <button
                                                 type="button"
-                                                onClick={(event) => !isPaid && onOpenTab(ticket, event.timeStamp)}
-                                                disabled={isPaid}
-                                                className="table-account-action flex min-w-0 flex-1 select-none appearance-none items-center justify-between gap-4 rounded-2xl border-0 bg-white p-2 text-left transition-colors [-webkit-tap-highlight-color:transparent] hover:bg-sky-50 disabled:cursor-default"
+                                                onClick={(event) => onOpenTab(ticket, event.timeStamp)}
+                                                className="table-account-action flex min-w-0 flex-1 select-none appearance-none items-center justify-between gap-4 rounded-2xl border-0 bg-white p-2 text-left transition-colors [-webkit-tap-highlight-color:transparent] hover:bg-sky-50"
                                             >
                                                 <div className="min-w-0">
                                                     <div className="flex flex-wrap items-center gap-2">
                                                         <p className="truncate text-lg font-black text-slate-900">{entry.displayLabel}</p>
                                                         {entry.fractionIndex && (
-                                                            <span className={`rounded-full px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.14em] ${isPaid ? 'bg-emerald-600 text-white' : 'bg-sky-100 text-sky-700'}`}>
-                                                                {isPaid ? 'Cobrada' : 'Pendiente'}
+                                                            <span className="rounded-full bg-sky-100 px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.14em] text-sky-700">
+                                                                Pendiente
                                                             </span>
                                                         )}
                                                         {subtotalState.isSubtotalized && (
@@ -241,7 +239,7 @@ const BarTabsModal: React.FC<{
                                                         </p>
                                                     )}
                                                 </div>
-                                                <span className={`shrink-0 text-xl font-black ${isPaid ? 'text-emerald-700' : subtotalState.isSubtotalized ? 'text-violet-700' : 'text-emerald-600'}`}>
+                                                <span className={`shrink-0 text-xl font-black ${subtotalState.isSubtotalized ? 'text-violet-700' : 'text-emerald-600'}`}>
                                                     {currencySymbol}{entry.amount.toLocaleString()}
                                                 </span>
                                             </button>
