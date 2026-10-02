@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { canApplyMasterHttpRestaurantRevision } from '../utils/masterHttpRestaurantRevision';
+import {
+  canApplyMasterHttpRestaurantRevision,
+  canUseMasterSqliteRestaurantFallback,
+} from '../utils/masterHttpRestaurantRevision';
 
 test('a delayed HTTP 807 updater cannot overwrite native revision 808', () => {
   const responseRevision = 807;
@@ -29,4 +32,21 @@ test('revisionless Master HTTP bootstrap is allowed only before native authority
     knownRevision: 808,
     appliedRevision: 808,
   }), false);
+});
+
+test('a delayed SQLite fallback cannot overwrite native revision 808', () => {
+  let knownRevision = 0;
+  let appliedRevision = 0;
+  const nativeTables = [{ id: 'mesa-2', order: 'native-808' }];
+  const sqliteTables = [{ id: 'mesa-2', order: 'sqlite-stale' }];
+  const deferredUpdater = (previous: typeof nativeTables) =>
+    canUseMasterSqliteRestaurantFallback({ knownRevision, appliedRevision })
+      ? sqliteTables
+      : previous;
+
+  assert.equal(canUseMasterSqliteRestaurantFallback({ knownRevision, appliedRevision }), true);
+  knownRevision = 808;
+  appliedRevision = 808;
+  assert.strictEqual(deferredUpdater(nativeTables), nativeTables);
+  assert.equal(canUseMasterSqliteRestaurantFallback({ knownRevision, appliedRevision }), false);
 });

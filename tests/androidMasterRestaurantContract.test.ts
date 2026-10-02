@@ -49,6 +49,8 @@ test('la Cliente sondea una versión ligera que incluye clientes y renovaciones 
   assert.match(fetchTablesSource, /canApplyMasterHttpRestaurantRevision\(\{[\s\S]*lastAppliedMasterRestaurantRevisionRef\.current/);
   assert.match(fetchTablesSource, /setTables\(previousTables => \{\s*if \(!masterHttpRevisionIsCurrent\(\)\) return previousTables;/);
   assert.match(fetchTablesSource, /if \(!masterHttpRevisionIsCurrent\(\)\) return \{ ok: true \};\s*if \(hasAuthoritativeParkedTickets\)/);
+  assert.match(fetchTablesSource, /if \(!masterSqliteFallbackIsAllowed\(\)\) return \{ ok: false, error: e \};[\s\S]*await Promise\.all/);
+  assert.match(fetchTablesSource, /setTables\(previousTables => \{\s*if \(!masterSqliteFallbackIsAllowed\(\)\) return previousTables;/);
   assert.match(appSource, /void fetchTables\(true\)/);
 });
 

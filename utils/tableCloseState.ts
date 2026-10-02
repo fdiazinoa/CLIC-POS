@@ -11,6 +11,12 @@ const ticketMembershipIds = (ticket: ParkedTicket): Set<string> => new Set([
   ...(Array.isArray(ticket.joinedTableIds) ? ticket.joinedTableIds.map(id => String(id).trim()) : []),
 ].filter(Boolean));
 
+const ticketMembershipPriority = (ticket: ParkedTicket, tableId: string): number => {
+  if (String(ticket.tableId ?? '').trim() === tableId) return 0;
+  if (String(ticket.primaryTableId ?? '').trim() === tableId) return 1;
+  return 2;
+};
+
 const clearJoinedMembership = <T extends Table>(table: T): T => ({
   ...table,
   joinedTableId: undefined,
@@ -50,7 +56,14 @@ export const updateTablesAfterAccountClose = (input: {
     if (currentOrderId && currentOrderId !== closedOrderId) return table;
 
     const tableTickets = remainingTickets.filter(ticket => parkedTicketBelongsToTable(ticket, currentId));
-    const nextTicket = tableTickets[0];
+    const bestPriority = tableTickets.reduce(
+      (best, ticket) => Math.min(best, ticketMembershipPriority(ticket, currentId)),
+      Number.POSITIVE_INFINITY,
+    );
+    const preferredTickets = tableTickets.filter(
+      ticket => ticketMembershipPriority(ticket, currentId) === bestPriority,
+    );
+    const nextTicket = preferredTickets[0];
     if (nextTicket) {
       const explicitMembership = ticketMembershipIds(nextTicket);
       const primaryId = String(nextTicket.primaryTableId || nextTicket.tableId || '').trim();
@@ -58,7 +71,7 @@ export const updateTablesAfterAccountClose = (input: {
       const primaryTableName = String(primaryTable?.nombre || primaryTable?.name || '').trim();
       const isSharedAccount = Boolean(primaryId && explicitMembership.size > 1);
       const isSecondaryTable = isSharedAccount && currentId !== primaryId;
-      const remainingTotal = tableTickets.reduce((sum, ticket) => sum + ticketTotal(ticket), 0);
+      const remainingTotal = preferredTickets.reduce((sum, ticket) => sum + ticketTotal(ticket), 0);
       return {
         ...table,
         status: 'OCCUPIED',

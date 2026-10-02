@@ -9,3 +9,8 @@ export const canApplyMasterHttpRestaurantRevision = (input: {
   return input.responseRevision >= input.knownRevision
     && input.responseRevision >= input.appliedRevision;
 };
+
+export const canUseMasterSqliteRestaurantFallback = (input: {
+  knownRevision: number;
+  appliedRevision: number;
+}): boolean => input.knownRevision === 0 && input.appliedRevision === 0;

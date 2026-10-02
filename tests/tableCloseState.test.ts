@@ -214,3 +214,54 @@ test('split accounts reassign each formerly joined table from its own remaining 
     { id: 'mesa-2', order: 'order-c', total: 60 },
   ]);
 });
+
+test('direct table account beats stale joined membership regardless of ticket order', () => {
+  const mesa1 = table('mesa-1', 'order-a');
+  const mesa2 = table('mesa-2', 'order-a');
+  const staleJoinedB = ticket('order-b', 'mesa-1', {
+    joinedTableIds: ['mesa-1', 'mesa-2'],
+    total: 40,
+  });
+  const directC = ticket('order-c', 'mesa-2', { total: 60 });
+  for (const remainingTickets of [[staleJoinedB, directC], [directC, staleJoinedB]]) {
+    const result = updateTablesAfterAccountClose({
+      tables: [mesa1, mesa2],
+      closedTable: mesa1,
+      closedOrderId: 'order-a',
+      closedTicket: ticket('order-a', 'mesa-1', {
+        primaryTableId: 'mesa-1',
+        joinedTableIds: ['mesa-1', 'mesa-2'],
+      }),
+      remainingTickets,
+    });
+    assert.deepEqual(result.tables.map(item => ({
+      id: item.id,
+      order: item.currentOrderId,
+      total: item.currentOrderTotal,
+    })), [
+      { id: 'mesa-1', order: 'order-b', total: 40 },
+      { id: 'mesa-2', order: 'order-c', total: 60 },
+    ]);
+  }
+});
+
+test('primary table membership beats inherited joined membership', () => {
+  const mesa2 = table('mesa-2', 'order-a');
+  const inherited = ticket('order-b', 'mesa-1', {
+    joinedTableIds: ['mesa-1', 'mesa-2'],
+    total: 40,
+  });
+  const primary = ticket('order-c', 'mesa-3', {
+    primaryTableId: 'mesa-2',
+    joinedTableIds: ['mesa-2', 'mesa-3'],
+    total: 60,
+  });
+  const result = updateTablesAfterAccountClose({
+    tables: [mesa2],
+    closedTable: mesa2,
+    closedOrderId: 'order-a',
+    remainingTickets: [inherited, primary],
+  });
+  assert.equal(result.targetTable.currentOrderId, 'order-c');
+  assert.equal(result.targetTable.currentOrderTotal, 60);
+});

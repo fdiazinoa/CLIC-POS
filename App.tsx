@@ -390,7 +390,10 @@ import {
   mergeKnownMasterRestaurantRevision,
 } from './utils/masterRestaurantRevision';
 import { RestaurantPersistenceQueue } from './utils/restaurantPersistenceQueue';
-import { canApplyMasterHttpRestaurantRevision } from './utils/masterHttpRestaurantRevision';
+import {
+  canApplyMasterHttpRestaurantRevision,
+  canUseMasterSqliteRestaurantFallback,
+} from './utils/masterHttpRestaurantRevision';
 import { updateTablesAfterAccountClose } from './utils/tableCloseState';
 import {
   dispatchLegacyLanMutation,
@@ -5966,14 +5969,21 @@ const AppContent: React.FC = () => {
         return { ok: false, error: e };
       }
       console.warn('Using local rooms/tables because this terminal owns its operational database.');
+      const masterSqliteFallbackIsAllowed = () => canUseMasterSqliteRestaurantFallback({
+        knownRevision: masterRestaurantRevisionRef.current,
+        appliedRevision: lastAppliedMasterRestaurantRevisionRef.current,
+      });
+      if (!masterSqliteFallbackIsAllowed()) return { ok: false, error: e };
       try {
         const [localRooms, localTables] = await Promise.all([
           db.get('rooms') as Promise<Room[]>,
           db.get('tables') as Promise<Table[]>
         ]);
+        if (!masterSqliteFallbackIsAllowed()) return { ok: false, error: e };
         const nextRooms = Array.isArray(localRooms) ? localRooms : [];
         const nextTables = Array.isArray(localTables) ? localTables : [];
         setTables(previousTables => {
+          if (!masterSqliteFallbackIsAllowed()) return previousTables;
           if (nextTables.length > 0) {
             return reconcileTablesWithParkedTickets(nextTables, parkedTickets);
           }
@@ -5981,19 +5991,23 @@ const AppContent: React.FC = () => {
           return reconcileTablesWithParkedTickets(persistedFloorPlanMirror?.tables || [], parkedTickets);
         });
         if (nextRooms.length > 0) {
-          setRooms(nextRooms);
-          setActiveRoomId(prev =>
-            prev && nextRooms.some((room: Room) => room.id === prev)
+          setRooms(previousRooms => masterSqliteFallbackIsAllowed() ? nextRooms : previousRooms);
+          setActiveRoomId(prev => {
+            if (!masterSqliteFallbackIsAllowed()) return prev;
+            return prev && nextRooms.some((room: Room) => room.id === prev)
               ? prev
-              : (nextRooms[0]?.id || '')
-          );
+              : (nextRooms[0]?.id || '');
+          });
         } else if (persistedFloorPlanMirror?.rooms?.length) {
-          setRooms(persistedFloorPlanMirror.rooms);
-          setActiveRoomId(prev =>
-            prev && persistedFloorPlanMirror.rooms.some(room => room.id === prev)
+          setRooms(previousRooms => masterSqliteFallbackIsAllowed()
+            ? persistedFloorPlanMirror.rooms
+            : previousRooms);
+          setActiveRoomId(prev => {
+            if (!masterSqliteFallbackIsAllowed()) return prev;
+            return prev && persistedFloorPlanMirror.rooms.some(room => room.id === prev)
               ? prev
-              : persistedFloorPlanMirror.rooms[0].id
-          );
+              : persistedFloorPlanMirror.rooms[0].id;
+          });
         }
       } catch (fallbackError) {
         console.error('Failed to load tables from local DB:', fallbackError);
