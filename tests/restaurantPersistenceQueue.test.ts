@@ -27,3 +27,25 @@ test('a delayed scoped close cannot overwrite a newer authoritative snapshot', a
   await authoritativeWrite;
   assert.equal(storedOrder, 'new-authoritative-order');
 });
+
+test('a delayed scoped Mesa 1 save completes before a newer Mesa 2 snapshot', async () => {
+  const queue = new RestaurantPersistenceQueue();
+  const persisted: string[] = [];
+  let releaseMesa1!: () => void;
+  const mesa1Started = new Promise<void>(resolve => {
+    void queue.run(async () => {
+      resolve();
+      await new Promise<void>(release => { releaseMesa1 = release; });
+      persisted.push('mesa-1-scoped');
+    });
+  });
+  await mesa1Started;
+  const snapshotWrite = queue.run(async () => {
+    persisted.push('mesa-2-authoritative-snapshot');
+  });
+  await Promise.resolve();
+  assert.deepEqual(persisted, []);
+  releaseMesa1();
+  await snapshotWrite;
+  assert.deepEqual(persisted, ['mesa-1-scoped', 'mesa-2-authoritative-snapshot']);
+});

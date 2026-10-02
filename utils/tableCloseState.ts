@@ -23,6 +23,7 @@ export const updateTablesAfterAccountClose = (input: {
   tables: Table[];
   closedTable: Table;
   closedOrderId?: string;
+  closedTicket?: ParkedTicket;
   remainingTickets?: ParkedTicket[];
 }): { tables: Table[]; targetTable: Table; affectedTables: Table[] } => {
   const tableId = String(input.closedTable.id ?? '').trim();
@@ -56,32 +57,14 @@ export const updateTablesAfterAccountClose = (input: {
 
   const explicitMembership = nextTicket ? ticketMembershipIds(nextTicket) : new Set<string>();
   explicitMembership.add(tableId);
-  const closedMembership = new Set<string>([tableId]);
+  const closedMembership = input.closedTicket
+    ? ticketMembershipIds(input.closedTicket)
+    : new Set<string>();
+  closedMembership.add(tableId);
   if (closedOrderId) {
     input.tables.forEach(table => {
       if (String(table.currentOrderId || '').trim() === closedOrderId) {
         closedMembership.add(String(table.id));
-      }
-    });
-  }
-  let membershipExpanded = true;
-  while (membershipExpanded) {
-    membershipExpanded = false;
-    input.tables.forEach(table => {
-      const currentId = String(table.id);
-      const joinedIds = [table.joinedTableId, table.joinedSourceTableId]
-        .map(id => String(id || '').trim())
-        .filter(Boolean);
-      if (closedMembership.has(currentId)) {
-        joinedIds.forEach(joinedId => {
-          if (!closedMembership.has(joinedId)) {
-            closedMembership.add(joinedId);
-            membershipExpanded = true;
-          }
-        });
-      } else if (joinedIds.some(joinedId => closedMembership.has(joinedId))) {
-        closedMembership.add(currentId);
-        membershipExpanded = true;
       }
     });
   }
@@ -111,6 +94,10 @@ export const updateTablesAfterAccountClose = (input: {
       } as Table;
     }
     if (!closedMembership.has(currentId)) return table;
+    const currentOrderId = String(table.currentOrderId || '').trim();
+    const ownsAnotherOrder = Boolean(currentOrderId && currentOrderId !== closedOrderId);
+    const hasRemainingAccount = remainingTickets.some(ticket => parkedTicketBelongsToTable(ticket, currentId));
+    if (ownsAnotherOrder || hasRemainingAccount) return table;
     return clearJoinedMembership({
       ...table,
       status: 'FREE',

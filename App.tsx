@@ -13045,15 +13045,20 @@ const AppContent: React.FC = () => {
                 timeSeated: table.timeSeated || ticket.timestamp
               } as Table;
 
+              masterOperationalSnapshotRef.current = {
+                ...masterOperationalSnapshotRef.current,
+                tables: masterOperationalSnapshotRef.current.tables.some(item => item.id === updatedTable.id)
+                  ? masterOperationalSnapshotRef.current.tables.map(item => item.id === updatedTable.id ? updatedTable : item)
+                  : [...masterOperationalSnapshotRef.current.tables, updatedTable],
+              };
               setTables(prev => {
                 const nextTables = prev.some(t => t.id === updatedTable.id)
                   ? prev.map(t => t.id === updatedTable.id ? updatedTable : t)
                   : [...prev, updatedTable];
-                // El cierre de otra mesa puede seguir propagándose por React.
-                // Un snapshot viejo de parkedTickets no debe liberar mesas ajenas.
-                db.save('tables', nextTables).catch(error => console.error('Failed to persist table occupancy:', error));
                 return nextTables;
               });
+              void restaurantPersistenceQueueRef.current.run(() => db.saveDocument('tables', updatedTable))
+                .catch(error => console.error('Failed to persist table occupancy:', error));
 
               const servesAsNativeMaster = isNativeAndroidRuntime()
                 && isNativeStandaloneTerminalRuntime(getCurrentTerminal());
@@ -13112,6 +13117,9 @@ const AppContent: React.FC = () => {
             }}
             onTableOrderClosed={(table, _closedOrderId, remainingTickets = []) => {
               const closedOrderId = _closedOrderId ? String(_closedOrderId) : '';
+              const closedTicket = closedOrderId
+                ? masterOperationalSnapshotRef.current.parkedTickets.find(ticket => String(ticket.id) === closedOrderId)
+                : undefined;
               if (closedOrderId) {
                 closedRestaurantOrderIdsRef.current.add(closedOrderId);
                 if (closedRestaurantOrderIdsRef.current.size > 200) {
@@ -13123,6 +13131,7 @@ const AppContent: React.FC = () => {
                 tables: masterOperationalSnapshotRef.current.tables,
                 closedTable: table,
                 closedOrderId,
+                closedTicket,
                 remainingTickets,
               });
               const nextTable = closeState.targetTable;
@@ -13140,6 +13149,7 @@ const AppContent: React.FC = () => {
                   tables: previousTables,
                   closedTable: table,
                   closedOrderId,
+                  closedTicket,
                   remainingTickets,
                 }).tables;
               });

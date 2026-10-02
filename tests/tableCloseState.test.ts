@@ -134,3 +134,25 @@ test('a remaining account on the primary table frees old shared members only', (
   assert.equal(result.tables[1].status, 'FREE');
   assert.deepEqual(result.tables[2], mesa3);
 });
+
+test('stale joined metadata never frees a table that owns another live order', () => {
+  const mesa1 = table('mesa-1', 'order-a');
+  const mesa2 = {
+    ...table('mesa-2', 'order-b'),
+    joinedTableId: 'mesa-1',
+    joinedSourceTableId: 'mesa-1',
+  };
+  const orderB = ticket('order-b', 'mesa-2');
+  const result = updateTablesAfterAccountClose({
+    tables: [mesa1, mesa2],
+    closedTable: mesa1,
+    closedOrderId: 'order-a',
+    closedTicket: ticket('order-a', 'mesa-1', {
+      primaryTableId: 'mesa-1',
+      joinedTableIds: ['mesa-1', 'mesa-2'],
+    }),
+    remainingTickets: [orderB],
+  });
+  assert.equal(result.tables[0].status, 'FREE');
+  assert.deepEqual(result.tables[1], mesa2);
+});
