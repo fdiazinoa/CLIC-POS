@@ -189,7 +189,7 @@ test('la Master conserva y libera de forma simétrica las mesas unidas', () => {
   assert.match(serverSource, /TABLE_RELEASE_ORDER_MISMATCH/);
   assert.match(serverSource, /TABLE_RELEASE_HAS_REMAINING_ACCOUNTS/);
   assert.match(serverSource, /ticket\.optString\("id"\) != expectedOrderId && ticketReferencesTable\(ticket, tableId\)/);
-  assert.match(tableCloseStateSource, /parkedTicketBelongsToTable\(ticket, tableId\)/);
+  assert.match(tableCloseStateSource, /parkedTicketBelongsToTable\(ticket, currentId\)/);
 });
 
 test('la WebView entrega el snapshot operativo al servidor nativo sin sobreescribir cambios clientes en el watchdog', () => {

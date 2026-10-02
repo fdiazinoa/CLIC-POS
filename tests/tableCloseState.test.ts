@@ -156,3 +156,61 @@ test('stale joined metadata never frees a table that owns another live order', (
   assert.equal(result.tables[0].status, 'FREE');
   assert.deepEqual(result.tables[1], mesa2);
 });
+
+test('a table still pointing at closed shared order is reassigned to its remaining account', () => {
+  const mesa1 = {
+    ...table('mesa-1', 'order-a'),
+    joinedTableId: 'mesa-2',
+    joinedSourceTableId: 'mesa-1',
+  };
+  const mesa2 = {
+    ...table('mesa-2', 'order-a'),
+    joinedTableId: 'mesa-1',
+    joinedSourceTableId: 'mesa-1',
+  };
+  const orderB = ticket('order-b', 'mesa-2', { total: 75 });
+  const result = updateTablesAfterAccountClose({
+    tables: [mesa1, mesa2],
+    closedTable: mesa1,
+    closedOrderId: 'order-a',
+    closedTicket: ticket('order-a', 'mesa-1', {
+      primaryTableId: 'mesa-1',
+      joinedTableIds: ['mesa-1', 'mesa-2'],
+    }),
+    remainingTickets: [orderB],
+  });
+  assert.equal(result.tables[0].status, 'FREE');
+  assert.deepEqual(result.tables[1], {
+    ...mesa2,
+    status: 'OCCUPIED',
+    currentOrderId: 'order-b',
+    currentOrderTotal: 75,
+    timeSeated: orderB.timestamp,
+    joinedTableId: undefined,
+    joinedTableName: undefined,
+    joinedSourceTableId: undefined,
+    joinedSourceTableName: undefined,
+  });
+});
+
+test('split accounts reassign each formerly joined table from its own remaining ticket', () => {
+  const mesa1 = table('mesa-1', 'order-a');
+  const mesa2 = table('mesa-2', 'order-a');
+  const result = updateTablesAfterAccountClose({
+    tables: [mesa1, mesa2],
+    closedTable: mesa1,
+    closedOrderId: 'order-a',
+    closedTicket: ticket('order-a', 'mesa-1', {
+      primaryTableId: 'mesa-1',
+      joinedTableIds: ['mesa-1', 'mesa-2'],
+    }),
+    remainingTickets: [
+      ticket('order-b', 'mesa-1', { total: 40 }),
+      ticket('order-c', 'mesa-2', { total: 60 }),
+    ],
+  });
+  assert.deepEqual(result.tables.map(item => ({ id: item.id, order: item.currentOrderId, total: item.currentOrderTotal })), [
+    { id: 'mesa-1', order: 'order-b', total: 40 },
+    { id: 'mesa-2', order: 'order-c', total: 60 },
+  ]);
+});
