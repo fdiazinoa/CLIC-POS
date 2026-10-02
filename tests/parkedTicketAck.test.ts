@@ -6,6 +6,7 @@ import { mergeParkedTicketsForTable, parsePersistedParkedTickets } from '../serv
 
 const serverSource = readFileSync(new URL('../native-stubs/android/ClicPOSMasterHttpServer.kt', import.meta.url), 'utf8');
 const expressSource = readFileSync(new URL('../server/index.ts', import.meta.url), 'utf8');
+const appSource = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
 
 test('la Master serializa el RMW de tickets con los snapshots publicados por la WebView', () => {
   assert.match(serverSource, /@Synchronized\s+fun start\(/);
@@ -47,6 +48,68 @@ test('el ACK no acepta una cuenta eliminada ni una cuenta extra de la misma mesa
   ], 'cuenta-4', 'mesa-4'), /PARKED_TICKETS_ACK_MISMATCH/);
 });
 
+test('el ACK compara la representación JSON enviada y acepta Date convertido a ISO', () => {
+  const sent = [{
+    id: 'cuenta-fraccionada',
+    tableId: 'mesa-4',
+    items: [{ id: 'agua', quantity: 1, price: 100 }],
+    total: 100,
+    paymentFraction: {
+      count: 2,
+      parts: [{
+        index: 1,
+        amount: 50,
+        status: 'PAID',
+        payments: [{
+          id: 'pago-1',
+          method: 'CASH',
+          amount: 50,
+          timestamp: new Date('2026-10-02T12:00:00.000Z'),
+        }],
+      }, { index: 2, amount: 50, status: 'PENDING' }],
+    },
+  }];
+  const acknowledged = JSON.parse(JSON.stringify(sent));
+
+  assert.doesNotThrow(() => assertParkedTicketsAcknowledged(
+    sent,
+    acknowledged,
+    'cuenta-fraccionada',
+    'mesa-4',
+  ));
+});
+
+test('el ACK sigue rechazando un timestamp alterado después del roundtrip JSON', () => {
+  const sent = [{
+    id: 'cuenta-fraccionada',
+    tableId: 'mesa-4',
+    items: [],
+    paymentFraction: {
+      count: 2,
+      parts: [{
+        index: 1,
+        amount: 50,
+        status: 'PAID',
+        payments: [{
+          id: 'pago-1',
+          method: 'CASH',
+          amount: 50,
+          timestamp: new Date('2026-10-02T12:00:00.000Z'),
+        }],
+      }],
+    },
+  }];
+  const acknowledged = JSON.parse(JSON.stringify(sent));
+  acknowledged[0].paymentFraction.parts[0].payments[0].timestamp = '2026-10-02T12:00:01.000Z';
+
+  assert.throws(() => assertParkedTicketsAcknowledged(
+    sent,
+    acknowledged,
+    'cuenta-fraccionada',
+    'mesa-4',
+  ), /PARKED_TICKETS_ACK_MISMATCH/);
+});
+
 test('Express confirma también la cuenta recién abierta sin artículos', () => {
   const parkedTicketRoute = expressSource.slice(
     expressSource.indexOf("server.put('/api/mesas/parked-tickets'"),
@@ -84,6 +147,17 @@ test('Express actualiza solo la mesa digitada y conserva cuentas ajenas y vacía
   assert.deepEqual(merged, [existing[1], changed[0]]);
   assert.doesNotThrow(() => assertParkedTicketsAcknowledged(changed, merged, 'cuenta-4', 'mesa-4'));
   assert.deepEqual(mergeParkedTicketsForTable(existing, [], 'mesa-4'), [existing[1]]);
+});
+
+test('el scope de tickets reconoce membresía por primaryTableId en Web y App', () => {
+  const existing = [
+    { id: 'cuenta-primaria', primaryTableId: 'mesa-4', items: [{ id: 'agua' }] },
+    { id: 'cuenta-ajena', tableId: 'mesa-7', items: [{ id: 'cafe' }] },
+  ];
+  const changed = [{ id: 'cuenta-primaria', primaryTableId: 'mesa-4', items: [{ id: 'agua' }, { id: 'jugo' }] }];
+
+  assert.deepEqual(mergeParkedTicketsForTable(existing, changed, 'mesa-4'), [existing[1], changed[0]]);
+  assert.match(appSource, /return parkedTicketBelongsToTable\(ticket, normalizedTableId\)/);
 });
 
 test('release web y nativo detectan cuentas restantes por primaria y secundarias', () => {

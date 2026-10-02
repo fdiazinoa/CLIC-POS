@@ -860,13 +860,7 @@ const mergeById = <T extends { id?: string }>(primary: T[], fallback: T[]): T[] 
 const parkedTicketReferencesTable = (ticket: ParkedTicket, tableId: string): boolean => {
   const normalizedTableId = String(tableId || '').trim();
   if (!normalizedTableId) return false;
-  if (String(ticket?.tableId || '').trim() === normalizedTableId) return true;
-  const joinedTableIds = Array.isArray((ticket as any)?.joinedTableIds)
-    ? (ticket as any).joinedTableIds
-    : [];
-  return joinedTableIds.some((joinedTableId: unknown) =>
-    String(joinedTableId || '').trim() === normalizedTableId
-  );
+  return parkedTicketBelongsToTable(ticket, normalizedTableId);
 };
 
 const scopeTicketsForTableSync = (tickets: ParkedTicket[], tableId?: string): ParkedTicket[] => {

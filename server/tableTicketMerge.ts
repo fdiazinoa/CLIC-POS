@@ -1,5 +1,6 @@
 type TableTicket = {
   tableId?: string | number;
+  primaryTableId?: string | number;
   joinedTableIds?: Array<string | number>;
 };
 
@@ -16,6 +17,7 @@ export const parsePersistedParkedTickets = (raw: string | null, strict = false):
 
 const referencesTable = (ticket: TableTicket, tableId: string): boolean =>
   String(ticket.tableId || '') === tableId ||
+  String(ticket.primaryTableId || '') === tableId ||
   (Array.isArray(ticket.joinedTableIds) && ticket.joinedTableIds.some(id => String(id) === tableId));
 
 export const mergeParkedTicketsForTable = <T extends TableTicket>(

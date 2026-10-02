@@ -20,6 +20,9 @@ const stableValue = (value: unknown): unknown => {
   return value;
 };
 
+const stableWireValue = (value: unknown): unknown =>
+  stableValue(JSON.parse(JSON.stringify(value)));
+
 export const assertParkedTicketsAcknowledged = (
   submitted: TicketForAck[],
   acknowledged: unknown,
@@ -37,7 +40,7 @@ export const assertParkedTicketsAcknowledged = (
   }
   for (const ticket of expected) {
     const confirmed = actualById.get(String(ticket.id || ''));
-    if (!confirmed || JSON.stringify(stableValue(confirmed)) !== JSON.stringify(stableValue(ticket))) {
+    if (!confirmed || JSON.stringify(stableWireValue(confirmed)) !== JSON.stringify(stableWireValue(ticket))) {
       throw new Error('PARKED_TICKETS_ACK_MISMATCH');
     }
   }
