@@ -158,6 +158,16 @@ public class MainActivity extends BridgeActivity {
 
     private class AndroidAppBridge {
         @JavascriptInterface
+        public boolean isEmulator() {
+            String hardware = Build.HARDWARE == null ? "" : Build.HARDWARE.toLowerCase(java.util.Locale.ROOT);
+            String product = Build.PRODUCT == null ? "" : Build.PRODUCT.toLowerCase(java.util.Locale.ROOT);
+            String manufacturer = Build.MANUFACTURER == null ? "" : Build.MANUFACTURER.toLowerCase(java.util.Locale.ROOT);
+            return (hardware.contains("ranchu") || hardware.contains("goldfish"))
+                    && (product.startsWith("sdk") || product.contains("emulator"))
+                    || (hardware.equals("vbox86") && manufacturer.contains("genymobile"));
+        }
+
+        @JavascriptInterface
         public void setKeyboardOverlayMode(boolean enabled) {
             keyboardOverlayMode = enabled;
             runOnUiThread(() -> enforcePosWindowPolicy());

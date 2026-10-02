@@ -19,6 +19,10 @@ fail() {
   exit 1
 }
 
+if [[ "${VITE_LARGE_MASTER_SYNC_V3_CANARY:-false}" == "true" ]]; then
+  fail "El canario Large Master Sync V3 no puede compilarse como release firmado."
+fi
+
 case "${LAN_HTTP_ENABLED}" in
   true|false) ;;
   *) fail "CLIC_POS_RELEASE_LAN_HTTP_ENABLED debe ser true o false" ;;

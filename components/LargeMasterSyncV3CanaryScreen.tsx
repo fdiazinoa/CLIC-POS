@@ -4,7 +4,9 @@ import { SubVertical } from '../types';
 import { bindTerminalFromErp } from '../services/setup/erpTerminalSetup';
 import { readTerminalCredentialsSync } from '../services/sync/TerminalCredentialStore';
 import {
+  assertLargeMasterSyncV3CanaryEmulator,
   runLargeMasterSyncV3Canary,
+  validateLargeMasterSyncV3CanaryUrl,
   type LargeMasterSyncV3CanaryInput,
 } from '../services/sync/LargeMasterSyncV3Canary';
 
@@ -15,22 +17,33 @@ const initialIdentity = (): LargeMasterSyncV3CanaryInput => {
     tenantId: credentials.erpTenantId || credentials.tenantId || '',
     erpTerminalId: credentials.erpTerminalId || '',
     posDeviceId: credentials.deviceId || '',
-    syncToken: credentials.syncToken || '',
+    syncToken: '',
   };
 };
 
+export const canaryIdentityKey = (input: LargeMasterSyncV3CanaryInput): string => (
+  [validateLargeMasterSyncV3CanaryUrl(input.erpBaseUrl), input.tenantId.trim(),
+    input.erpTerminalId.trim(), input.posDeviceId.trim()].join('|')
+);
+
 const LargeMasterSyncV3CanaryScreen: React.FC = () => {
   const [identity, setIdentity] = useState(initialIdentity);
+  const [registeredIdentity, setRegisteredIdentity] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('Canario V3 sin ventas. Ninguna solicitud se envía hasta pulsar un botón.');
   const [progress, setProgress] = useState('');
   const update = (key: keyof LargeMasterSyncV3CanaryInput, value: string) => {
-    setIdentity(current => ({ ...current, [key]: value }));
+    setIdentity(current => ({ ...current, [key]: value, syncToken: '' }));
+    setRegisteredIdentity(null);
   };
   const register = async () => {
     setBusy(true);
+    setRegisteredIdentity(null);
+    setIdentity(current => ({ ...current, syncToken: '' }));
     setMessage('Registrando explícitamente esta terminal en ERP...');
     try {
+      assertLargeMasterSyncV3CanaryEmulator();
+      const erpBaseUrl = validateLargeMasterSyncV3CanaryUrl(identity.erpBaseUrl);
       const bound = await bindTerminalFromErp({
         currentConfig: getInitialConfig(SubVertical.SUPERMARKET),
         posDeviceId: identity.posDeviceId.trim(),
@@ -38,11 +51,14 @@ const LargeMasterSyncV3CanaryScreen: React.FC = () => {
         erpTerminalId: identity.erpTerminalId.trim(),
         bindingMode: 'MASTER',
         tenantId: identity.tenantId.trim(),
-        erpBaseUrl: identity.erpBaseUrl.trim(),
+        erpBaseUrl,
       });
       const token = bound.syncToken || bound.sync_token || '';
       if (!token) throw new Error('El registro ERP no devolvió syncToken. No se inició V3.');
-      setIdentity(current => ({ ...current, erpTerminalId: bound.erp_terminal_id, tenantId: bound.tenant_id, syncToken: token }));
+      const registered = { ...identity, erpBaseUrl, erpTerminalId: bound.erp_terminal_id,
+        tenantId: bound.tenant_id, syncToken: token };
+      setIdentity(registered);
+      setRegisteredIdentity(canaryIdentityKey(registered));
       setMessage('Registro autorizado. SyncToken disponible; pulsa “Probar descarga V3”.');
     } catch (error) {
       setMessage(`Registro detenido: ${error instanceof Error ? error.message : String(error)}`);
@@ -55,6 +71,9 @@ const LargeMasterSyncV3CanaryScreen: React.FC = () => {
     setProgress('');
     setMessage('Solicitando configuración inicial con capability V3...');
     try {
+      if (!registeredIdentity || registeredIdentity !== canaryIdentityKey(identity)) {
+        throw new Error('El syncToken no corresponde a la identidad actual. Registra esta terminal de nuevo.');
+      }
       const result = await runLargeMasterSyncV3Canary(identity, metric => {
         setProgress(`${metric.event}${metric.progress == null ? '' : ` · ${Math.round(metric.progress * 100)}%`}`);
       });
@@ -83,11 +102,11 @@ const LargeMasterSyncV3CanaryScreen: React.FC = () => {
               onChange={event => update(key, event.target.value)} disabled={busy} autoComplete="off" />
           </label>
         ))}
-        <p className="text-sm">SyncToken: {identity.syncToken ? 'disponible (oculto)' : 'no disponible; registra la terminal explícitamente'}</p>
+        <p className="text-sm">SyncToken: {registeredIdentity ? 'registrado en esta sesión (oculto)' : 'requiere registro explícito para este origen e identidad'}</p>
         <div className="flex flex-wrap gap-3">
           <button type="button" disabled={busy} onClick={() => void register()}
             className="rounded bg-slate-700 px-4 py-2 disabled:opacity-50">Registrar terminal</button>
-          <button type="button" disabled={busy || !identity.syncToken} onClick={() => void run()}
+          <button type="button" disabled={busy || !identity.syncToken || !registeredIdentity} onClick={() => void run()}
             className="rounded bg-blue-600 px-4 py-2 disabled:opacity-50">Probar descarga V3</button>
         </div>
         <p role="status" className="rounded bg-slate-800 p-3 break-words">{message}</p>

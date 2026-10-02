@@ -1,6 +1,5 @@
 import { Capacitor } from '@capacitor/core';
 import { dbAdapter } from '../db';
-import { requestJson } from '../network/httpClient';
 import type { fetchInitialConfigFromErp, RuntimeInitialConfigResponse } from '../setup/erpTerminalSetup';
 import {
   LargeMasterSyncV3Client,
@@ -21,6 +20,28 @@ export interface LargeMasterSyncV3CanaryInput {
   syncToken: string;
 }
 
+export const assertLargeMasterSyncV3CanaryEmulator = (): void => {
+  const bridge = (globalThis as typeof globalThis & {
+    ClicPOSAppBridge?: { isEmulator?: () => boolean };
+  }).ClicPOSAppBridge;
+  if (!Capacitor.isNativePlatform() || Capacitor.getPlatform() !== 'android' || bridge?.isEmulator?.() !== true) {
+    throw new Error('SYNC_V3_CANARY_EMULATOR_REQUIRED');
+  }
+};
+
+export const validateLargeMasterSyncV3CanaryUrl = (value: string): string => {
+  let url: URL;
+  try { url = new URL(value.trim()); } catch { throw new Error('SYNC_V3_CANARY_HTTPS_REQUIRED'); }
+  const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
+  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback)) {
+    throw new Error('SYNC_V3_CANARY_HTTPS_REQUIRED');
+  }
+  if (url.username || url.password || url.search || url.hash || url.pathname !== '/') {
+    throw new Error('SYNC_V3_CANARY_BASE_URL_INVALID');
+  }
+  return url.origin;
+};
+
 export type LargeMasterSyncV3CanaryResult =
   | { status: 'legacy-fallback' }
   | { status: 'complete'; syncId: string; syncVersion: number };
@@ -34,26 +55,34 @@ export const buildLargeMasterSyncV3CanaryHeaders = (input: LargeMasterSyncV3Cana
   'X-Terminal-Id': input.erpTerminalId.trim(),
 });
 
-export const createLargeMasterSyncV3CanaryTransport = (input: LargeMasterSyncV3CanaryInput): LargeMasterSyncV3Transport => ({
+export const createLargeMasterSyncV3CanaryTransport = (
+  input: LargeMasterSyncV3CanaryInput,
+  fetchImpl: typeof fetch = fetch,
+): LargeMasterSyncV3Transport => ({
   async request(path, init): Promise<LargeMasterSyncV3HttpResponse> {
-    const response = await requestJson({
-      url: `${input.erpBaseUrl.replace(/\/+$/, '')}${path}`,
+    if (!/^\/api\/sync\/v3\/master-syncs(?:\/[A-Za-z0-9_-]+)*$/.test(path)) {
+      throw new Error('SYNC_V3_CANARY_PATH_INVALID');
+    }
+    // V3 chunk checksums cover the exact JSON text; native HTTP may reserialize JSON data.
+    const response = await fetchImpl(`${validateLargeMasterSyncV3CanaryUrl(input.erpBaseUrl)}${path}`, {
       method: init.method,
       headers: buildLargeMasterSyncV3CanaryHeaders(input),
       signal: init.signal,
-      timeoutMs: 30_000,
-      diagnosticContext: { scope: 'SYNC_V3_CANARY', path },
+      cache: 'no-store',
+      credentials: 'omit',
+      redirect: 'error',
     });
     return {
       status: response.status,
-      headers: response.headers,
-      text: response.text || JSON.stringify(response.data ?? {}),
+      headers: Object.fromEntries(response.headers.entries()),
+      text: await response.text(),
     };
   },
 });
 
 type CanaryDependencies = {
   enabled?: boolean;
+  assertEmulator?: () => void;
   fetchInitialConfig: typeof fetchInitialConfigFromErp;
   getStore: () => Promise<LargeMasterSyncV3Store | undefined>;
   createClient: (store: LargeMasterSyncV3Store, input: LargeMasterSyncV3CanaryInput,
@@ -61,14 +90,12 @@ type CanaryDependencies = {
 };
 
 const defaultDependencies: CanaryDependencies = {
+  assertEmulator: assertLargeMasterSyncV3CanaryEmulator,
   fetchInitialConfig: async input => {
     const { fetchInitialConfigFromErp } = await import('../setup/erpTerminalSetup');
     return fetchInitialConfigFromErp(input);
   },
   async getStore() {
-    if (!Capacitor.isNativePlatform() || Capacitor.getPlatform() !== 'android') {
-      throw new Error('El canario V3 requiere Android nativo. No se iniciaron ventas.');
-    }
     await dbAdapter.connect();
     return dbAdapter.masterSyncV3Store;
   },
@@ -87,11 +114,13 @@ export const runLargeMasterSyncV3Canary = async (
   dependencies: CanaryDependencies = defaultDependencies,
 ): Promise<LargeMasterSyncV3CanaryResult> => {
   if (!(dependencies.enabled ?? LARGE_MASTER_SYNC_V3_CANARY)) throw new Error('SYNC_V3_CANARY_DISABLED');
+  (dependencies.assertEmulator ?? assertLargeMasterSyncV3CanaryEmulator)();
+  const erpBaseUrl = validateLargeMasterSyncV3CanaryUrl(input.erpBaseUrl);
   if (!input.erpBaseUrl || !input.tenantId || !input.erpTerminalId || !input.posDeviceId || !input.syncToken.trim()) {
     throw new Error('Faltan URL ERP, tenant, terminal, device o syncToken para el canario V3.');
   }
   const bootstrap: RuntimeInitialConfigResponse = await dependencies.fetchInitialConfig({
-    erpBaseUrl: input.erpBaseUrl,
+    erpBaseUrl,
     tenantId: input.tenantId,
     erpTerminalId: input.erpTerminalId,
     posDeviceId: input.posDeviceId,
@@ -103,9 +132,23 @@ export const runLargeMasterSyncV3Canary = async (
   }
   const store = await dependencies.getStore();
   if (!store) throw new Error('SYNC_V3_NATIVE_STORE_UNAVAILABLE');
-  const client = dependencies.createClient(store, input, onMetric);
+  const client = dependencies.createClient(store, { ...input, erpBaseUrl }, onMetric);
+  const incomplete = await store.findIncomplete();
   const requested = await client.requestSync();
   if ('fallback' in requested) return { status: 'legacy-fallback' };
-  const activated = await client.resumeSync(requested.syncId);
+  if (incomplete && (incomplete.syncId !== requested.syncId
+    || incomplete.syncVersion !== requested.syncVersion)) {
+    throw new Error('SYNC_V3_STAGING_CONFLICT: la descarga pendiente no coincide con la sesión vigente del ERP; no se borró ni reemplazó.');
+  }
+  const syncId = requested.syncId;
+  let activated;
+  try {
+    activated = await client.resumeSync(syncId);
+  } catch (error) {
+    if ((error as { code?: string })?.code === 'SYNC_V3_STAGING_CONFLICT') {
+      throw new Error('SYNC_V3_STAGING_CONFLICT: existe otra descarga en SQLite; no se borró ni reemplazó.');
+    }
+    throw error;
+  }
   return { status: 'complete', syncId: activated.syncId, syncVersion: activated.syncVersion };
 };
