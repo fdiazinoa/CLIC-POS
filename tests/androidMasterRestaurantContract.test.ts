@@ -149,6 +149,7 @@ test('la Master Android bloquea la digitación simultánea y limita la mutación
 
 test('la Master conserva y libera de forma simétrica las mesas unidas', () => {
   assert.match(serverSource, /private fun ticketReferencesTable/);
+  assert.match(serverSource, /ticket\.optString\("primaryTableId"\) == tableId/);
   assert.match(serverSource, /ticket\.optJSONArray\("joinedTableIds"\)/);
   assert.match(serverSource, /activeByTableId\[it\] = ticket/);
   assert.match(serverSource, /linkedTableIds\.contains\(table\.optString\("id"\)\)/);

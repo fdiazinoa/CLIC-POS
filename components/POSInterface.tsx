@@ -5914,15 +5914,22 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       } : undefined;
       const originalOrderId = activeTable?.currentOrderId;
       const existingOriginal = originalOrderId
-         ? parkedTickets.find(ticket => ticket.id === originalOrderId)
+         ? parkedTicketsRef.current.find(ticket => ticket.id === originalOrderId)
          : undefined;
+      const splitTableId = existingOriginal?.primaryTableId || existingOriginal?.tableId || activeTable?.id || 'manual';
+      const splitPrimaryTableId = existingOriginal?.primaryTableId;
+      const splitJoinedTableIds = existingOriginal?.joinedTableIds;
+      const splitBarTabId = existingOriginal?.barTabId || activeBarTabId || undefined;
+      const splitBarTabName = existingOriginal?.barTabName || activeBarTabName || undefined;
       const remainingTotal = remainingItems.reduce((acc, item) => acc + (Number(item.price || 0) * Number(item.quantity || 0)), 0);
       const remainingTicket: ParkedTicket | null = originalOrderId && remainingItems.length > 0 ? {
          ...(existingOriginal || {}),
          id: originalOrderId,
          name: existingOriginal?.name || `${baseName} - Cuenta 1/${splitCount}`,
          alias: existingOriginal?.alias,
-         tableId: activeTable?.id || existingOriginal?.tableId,
+         tableId: splitTableId,
+         primaryTableId: splitPrimaryTableId,
+         joinedTableIds: splitJoinedTableIds,
          items: remainingItems,
          total: remainingTotal,
          customerId: selectedCustomer?.id || existingOriginal?.customerId,
@@ -5932,13 +5939,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          orderNumber: readCartOrderNumber(remainingItems) || existingOriginal?.orderNumber,
          tableDisplayLabel: activeTableContext.compactLabel || existingOriginal?.tableDisplayLabel,
          tableRoomLabel: activeTableContext.roomLabel || existingOriginal?.tableRoomLabel,
-         barTabId: existingOriginal?.barTabId || activeBarTabId || undefined,
-         barTabName: existingOriginal?.barTabName || activeBarTabName || undefined,
+         barTabId: splitBarTabId,
+         barTabName: splitBarTabName,
          serviceType: existingOriginal?.serviceType || effectiveOrderServiceType,
       } : null;
       const newTickets: ParkedTicket[] = splitGroups.map((items, index) => ({
          id: `split-${now}-${index + 2}`,
-         tableId: activeTable?.id || 'manual',
+         tableId: splitTableId,
+         primaryTableId: splitPrimaryTableId,
+         joinedTableIds: splitJoinedTableIds,
          name: `${baseName} - Cuenta ${index + 2}/${splitCount}`,
          alias: `${baseName} - Cuenta ${index + 2}/${splitCount}`,
          items,
@@ -5948,18 +5957,19 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          customerSnapshot,
          tableDisplayLabel: activeTableContext.compactLabel || undefined,
          tableRoomLabel: activeTableContext.roomLabel || undefined,
-         barTabId: activeBarTabId || undefined,
-         barTabName: activeBarTabName || undefined,
+         barTabId: splitBarTabId,
+         barTabName: splitBarTabName,
          serviceType: effectiveOrderServiceType,
          timestamp: new Date().toISOString()
       }));
 
       const nextTickets = [
-         ...parkedTickets.filter(ticket => ticket.id !== originalOrderId),
+         ...parkedTicketsRef.current.filter(ticket => ticket.id !== originalOrderId),
          ...(remainingTicket ? [remainingTicket] : []),
          ...newTickets
       ];
-      onUpdateParkedTickets(nextTickets);
+      parkedTicketsRef.current = nextTickets;
+      onUpdateParkedTicketsRef.current(nextTickets);
       if (activeTable && remainingTicket) {
          void Promise.resolve(onTableOrderSaved?.(activeTable, remainingTicket));
       }

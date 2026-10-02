@@ -85,3 +85,21 @@ test('Express actualiza solo la mesa digitada y conserva cuentas ajenas y vacía
   assert.doesNotThrow(() => assertParkedTicketsAcknowledged(changed, merged, 'cuenta-4', 'mesa-4'));
   assert.deepEqual(mergeParkedTicketsForTable(existing, [], 'mesa-4'), [existing[1]]);
 });
+
+test('release web y nativo detectan cuentas restantes por primaria y secundarias', () => {
+  const nativeMembership = serverSource.slice(
+    serverSource.indexOf('private fun ticketReferencesTable'),
+    serverSource.indexOf('private fun parkedTicketTotal'),
+  );
+  const webRelease = expressSource.slice(
+    expressSource.indexOf("server.post('/api/mesas/liberar'"),
+    expressSource.indexOf('// Helper to process json-server style queries'),
+  );
+
+  assert.match(nativeMembership, /ticket\.optString\("tableId"\) == tableId/);
+  assert.match(nativeMembership, /ticket\.optString\("primaryTableId"\) == tableId/);
+  assert.match(nativeMembership, /joinedTableIds\.optString\(index\) == tableId/);
+  assert.match(webRelease, /ticket\?\.primaryTableId/);
+  assert.match(webRelease, /ticket\?\.joinedTableIds/);
+  assert.match(webRelease, /TABLE_RELEASE_HAS_REMAINING_ACCOUNTS/);
+});

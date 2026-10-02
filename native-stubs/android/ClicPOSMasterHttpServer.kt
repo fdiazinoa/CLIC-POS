@@ -1371,6 +1371,7 @@ object ClicPOSMasterHttpServer {
 
     private fun ticketReferencesTable(ticket: JSONObject, tableId: String): Boolean {
         if (ticket.optString("tableId") == tableId) return true
+        if (ticket.optString("primaryTableId") == tableId) return true
         val joinedTableIds = ticket.optJSONArray("joinedTableIds") ?: JSONArray()
         for (index in 0 until joinedTableIds.length()) {
             if (joinedTableIds.optString(index) == tableId) return true
