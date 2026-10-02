@@ -2,6 +2,7 @@ import { dbAdapter } from '../db';
 
 export const LEGACY_MUTATION_JOURNAL_COLLECTION = 'legacyMutationJournal';
 export const LEGACY_MUTATION_RECEIPT = Symbol.for('clic.legacyMutationReceipt');
+export const LEGACY_MUTATION_CONTRACT_VERSION = 2;
 const CLOSED_RETENTION = 200;
 
 export type LegacyMutationClassification =
@@ -191,7 +192,10 @@ export class LegacyMutationJournal {
             callerAckAt: null,
             callerAckReference: null,
             closedAt: null,
-            reconciliationContext: input.reconciliationContext,
+            reconciliationContext: {
+                ...input.reconciliationContext,
+                legacyMutationContractVersion: LEGACY_MUTATION_CONTRACT_VERSION,
+            },
         };
         this.entries.set(id, entry);
         this.blockingMutations.add(id);

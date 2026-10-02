@@ -4,11 +4,11 @@ import test from 'node:test';
 
 const source = readFileSync(new URL('../components/TableMap.tsx', import.meta.url), 'utf8');
 
-test('el modal expande las cuotas persistidas y resume solo las cuentas abiertas', () => {
+test('el modal recibe solo cuotas pendientes y no ofrece cuotas cobradas', () => {
   assert.match(source, /buildTableAccountDisplayEntries\(tickets\)/);
   assert.match(source, /summarizeOpenTableAccounts\(accountEntries\)/);
   assert.match(source, /accountEntries\.map\(\(entry\)/);
-  assert.match(source, /entry\.status === 'PAID'/);
+  assert.doesNotMatch(source, /onClick=\{\(event\) => !isPaid && onOpenTab/);
 });
 
 test('el modal permite renombrar cada cuenta o cuota y persiste el cambio', () => {

@@ -12,9 +12,9 @@ type Ticket = {
 
 type Snapshot = { revision?: number; parkedTickets?: unknown };
 
-// These are the only 409 responses emitted by the Android Master for these
-// routes, and each is returned before changing restaurant state. Older APKs
-// could leave the journal row OUTCOME_UNKNOWN despite recording HTTP 409.
+// Older APKs could leave these proven pre-mutation table conflicts as
+// OUTCOME_UNKNOWN with no contract marker. V2 rows retain their exact server
+// classification and must never be closed by this legacy-only recovery.
 const isProvenPreMutationTableConflict = (method: string, path: string): boolean =>
   (method === 'PUT' && (path === '/api/mesas/parked-tickets' || /^\/api\/tables\/[^/]+$/.test(path)))
   || (method === 'POST' && (path === '/api/mesas/bloquear' || path === '/api/mesas/desbloquear'));
@@ -22,15 +22,24 @@ const isProvenPreMutationTableConflict = (method: string, path: string): boolean
 export const reconcileMasterRejectedTableMutations = async (input: {
   journal: LegacyMutationJournal;
   authorityOrigin: string;
+  terminalId: string;
+  generation: number;
   nowMs?: number;
 }): Promise<number> => {
   if (!input.journal.isHealthy()) return 0;
   let reconciled = 0;
   for (const entry of input.journal.getBlockingEntries()) {
     const dispatchedAt = Date.parse(entry.dispatchedAt || '');
+    const rawContractVersion = entry.reconciliationContext?.legacyMutationContractVersion;
+    const isLegacyContract = rawContractVersion === undefined
+      || (typeof rawContractVersion === 'number'
+        && Number.isFinite(rawContractVersion)
+        && rawContractVersion < 2);
     if (entry.state !== 'OUTCOME_UNKNOWN'
       || entry.httpStatus !== 409
-      || !entry.authorityFingerprint.startsWith(`${input.authorityOrigin}|`)
+      || entry.authorityFingerprint !== `${input.authorityOrigin}|${input.terminalId}`
+      || entry.generation !== input.generation
+      || !isLegacyContract
       || !Number.isFinite(dispatchedAt)
       || (input.nowMs ?? Date.now()) - dispatchedAt < 15_000
       || !isProvenPreMutationTableConflict(entry.method, entry.canonicalPath)) continue;
@@ -40,6 +49,41 @@ export const reconcileMasterRejectedTableMutations = async (input: {
   }
   return reconciled;
 };
+
+export const reconcileLegacyClientTableConflictBeforeAuthorityAssertion = async (input: {
+  journal: LegacyMutationJournal;
+  authorityBaseUrl: string;
+  terminalId: string;
+  generation: number;
+  nowMs?: number;
+}): Promise<number> => {
+  if (!input.journal.hasOutcomeUnknown()) return 0;
+  const terminalId = String(input.terminalId || '').trim();
+  if (!terminalId || !input.authorityBaseUrl) return 0;
+  let authorityOrigin: string;
+  try {
+    authorityOrigin = new URL(input.authorityBaseUrl).origin;
+  } catch {
+    return 0;
+  }
+  return reconcileMasterRejectedTableMutations({
+    journal: input.journal,
+    authorityOrigin,
+    terminalId,
+    generation: input.generation,
+    nowMs: input.nowMs,
+  });
+};
+
+export const resolveColdBootstrapLegacyRecoveryGeneration = (authorityState: {
+  masterUrl: string | null;
+  terminalId: string | null;
+  revision: number;
+}): number => authorityState.revision === 0
+  && authorityState.masterUrl === null
+  && authorityState.terminalId === null
+    ? 1
+    : authorityState.revision;
 
 /** Reconcile only a single, old self-Master table write against the native authority. */
 export const reconcileMasterParkedTicketOutcome = async (input: {

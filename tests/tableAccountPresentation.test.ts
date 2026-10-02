@@ -34,13 +34,26 @@ test('muestra las tres cuotas de una cuenta fraccionada sin triplicar el total',
   assert.deepEqual(summarizeOpenTableAccounts(entries), { count: 3, total: 23050 });
 });
 
-test('conserva visibles las cuotas cobradas y resume solo las pendientes', () => {
+test('omite del selector las cuotas cobradas sin eliminarlas del ticket persistido', () => {
   const plan = createPaymentFractionPlan(300, 3);
   plan.parts[0] = { ...plan.parts[0], status: 'PAID' };
-  const entries = buildTableAccountDisplayEntries([ticket({ total: 300, paymentFraction: plan })]);
+  const persistedTicket = ticket({ total: 300, paymentFraction: plan });
+  const entries = buildTableAccountDisplayEntries([persistedTicket]);
 
-  assert.deepEqual(entries.map(entry => entry.status), ['PAID', 'PENDING', 'PENDING']);
+  assert.deepEqual(entries.map(entry => entry.status), ['PENDING', 'PENDING']);
+  assert.deepEqual(entries.map(entry => entry.fractionIndex), [2, 3]);
   assert.deepEqual(summarizeOpenTableAccounts(entries), { count: 2, total: 200 });
+  assert.equal(persistedTicket.paymentFraction?.parts.length, 3);
+  assert.equal(persistedTicket.paymentFraction?.parts[0].status, 'PAID');
+});
+
+test('una cuenta completamente cobrada no vuelve a aparecer como disponible', () => {
+  const plan = createPaymentFractionPlan(300, 3);
+  plan.parts = plan.parts.map(part => ({ ...part, status: 'PAID' }));
+  const persistedTicket = ticket({ total: 300, paymentFraction: plan });
+
+  assert.deepEqual(buildTableAccountDisplayEntries([persistedTicket]), []);
+  assert.equal(persistedTicket.paymentFraction?.parts.length, 3);
 });
 
 test('permite nombrar la primera cuenta sin perder sus datos operativos', () => {

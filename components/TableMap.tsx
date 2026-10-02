@@ -29,7 +29,7 @@ import { Capacitor } from '@capacitor/core';
 import TableOptionsModal from './TableOptionsModal';
 import SplitTicketModal from './SplitTicketModal';
 import TableMoveConfirmationModal from './TableMoveConfirmationModal';
-import { createPaymentFractionPlan } from '../utils/paymentFractions';
+import { createPaymentFractionPlan, isFullyPaidParkedTicket } from '../utils/paymentFractions';
 import { getTableChairSlots, TableChairSlot } from '../utils/tableChairs';
 import { getWholeTableMoveTotal } from '../utils/tableMoveTotal';
 import { shouldReduceTableMotion } from '../utils/tableMotionPolicy';
@@ -39,6 +39,7 @@ import {
     summarizeOpenTableAccounts
 } from '../utils/tableAccountPresentation';
 import { getRenderableFloorTables } from '../utils/tableLayout';
+import { parkedTicketBelongsToTable } from '../utils/parkedTicketTableMembership';
 import { hasPendingKdsDispatch } from '../utils/kdsPresentation';
 import { resolveValidatedOperationalApiUrl } from '../utils/masterOperationalApi';
 import { requestJson } from '../services/network/httpClient';
@@ -207,22 +208,20 @@ const BarTabsModal: React.FC<{
                                 const ticket = entry.ticket;
                                 const subtotalState = getTicketSubtotalization(ticket);
                                 const canRename = Boolean(accountMode && onRenameTab);
-                                const isPaid = entry.status === 'PAID';
                                 return (
-                                    <div key={entry.key} className={`rounded-3xl border shadow-sm transition-all ${isPaid ? 'border-emerald-200 bg-emerald-50/70' : subtotalState.isSubtotalized ? 'border-violet-300 bg-violet-50' : 'border-sky-100 bg-white'}`}>
+                                    <div key={entry.key} className={`rounded-3xl border shadow-sm transition-all ${subtotalState.isSubtotalized ? 'border-violet-300 bg-violet-50' : 'border-sky-100 bg-white'}`}>
                                         <div className="flex items-stretch gap-2 p-2">
                                             <button
                                                 type="button"
-                                                onClick={(event) => !isPaid && onOpenTab(ticket, event.timeStamp)}
-                                                disabled={isPaid}
-                                                className="table-account-action flex min-w-0 flex-1 select-none appearance-none items-center justify-between gap-4 rounded-2xl border-0 bg-white p-2 text-left transition-colors [-webkit-tap-highlight-color:transparent] hover:bg-sky-50 disabled:cursor-default"
+                                                onClick={(event) => onOpenTab(ticket, event.timeStamp)}
+                                                className="table-account-action flex min-w-0 flex-1 select-none appearance-none items-center justify-between gap-4 rounded-2xl border-0 bg-white p-2 text-left transition-colors [-webkit-tap-highlight-color:transparent] hover:bg-sky-50"
                                             >
                                                 <div className="min-w-0">
                                                     <div className="flex flex-wrap items-center gap-2">
                                                         <p className="truncate text-lg font-black text-slate-900">{entry.displayLabel}</p>
                                                         {entry.fractionIndex && (
-                                                            <span className={`rounded-full px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.14em] ${isPaid ? 'bg-emerald-600 text-white' : 'bg-sky-100 text-sky-700'}`}>
-                                                                {isPaid ? 'Cobrada' : 'Pendiente'}
+                                                            <span className="rounded-full bg-sky-100 px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.14em] text-sky-700">
+                                                                Pendiente
                                                             </span>
                                                         )}
                                                         {subtotalState.isSubtotalized && (
@@ -241,7 +240,7 @@ const BarTabsModal: React.FC<{
                                                         </p>
                                                     )}
                                                 </div>
-                                                <span className={`shrink-0 text-xl font-black ${isPaid ? 'text-emerald-700' : subtotalState.isSubtotalized ? 'text-violet-700' : 'text-emerald-600'}`}>
+                                                <span className={`shrink-0 text-xl font-black ${subtotalState.isSubtotalized ? 'text-violet-700' : 'text-emerald-600'}`}>
                                                     {currencySymbol}{entry.amount.toLocaleString()}
                                                 </span>
                                             </button>
@@ -716,6 +715,16 @@ const TableMap: React.FC<TableMapProps> = ({
         [safeTables, activeRoomId]
     );
 
+    useEffect(() => {
+        if (!onUpdateParkedTickets) return;
+        const currentTickets = parkedTickets || [];
+        const nextTickets = currentTickets.filter(ticket => !isFullyPaidParkedTicket(ticket));
+        if (nextTickets.length === currentTickets.length) return;
+        void Promise.resolve(onUpdateParkedTickets(nextTickets))
+            .then(() => onRefreshTables?.())
+            .catch(error => console.error('No se pudo cerrar una cuenta con todas sus cuotas cobradas:', error));
+    }, [onRefreshTables, onUpdateParkedTickets, parkedTickets]);
+
     const fitRestaurantViewport = useCallback(() => {
         if (!isRestaurantMode) return;
         const { width, height } = viewportSizeRef.current;
@@ -863,7 +872,7 @@ const TableMap: React.FC<TableMapProps> = ({
 
     const getTableTickets = useCallback(
         (table: Table): ParkedTicket[] => (parkedTickets || [])
-            .filter(ticket => String(ticket.tableId ?? '') === String(table.id))
+            .filter(ticket => parkedTicketBelongsToTable(ticket, table.id) && !isFullyPaidParkedTicket(ticket))
             .sort((a, b) => {
                 if (String(a.id) === String(table.currentOrderId)) return -1;
                 if (String(b.id) === String(table.currentOrderId)) return 1;
@@ -2319,7 +2328,10 @@ const TableMap: React.FC<TableMapProps> = ({
                                     url: await resolveValidatedOperationalApiUrl('/api/mesas/liberar'),
                                     method: 'POST',
                                     headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({ tableId: selectedTable.id }),
+                                    body: JSON.stringify({
+                                        tableId: selectedTable.id,
+                                        expectedOrderId: String(selectedTable.currentOrderId || ''),
+                                    }),
                                     operation: 'TABLE_RELEASE',
                                     validateResponse: validateLegacySuccessResponse,
                                 });

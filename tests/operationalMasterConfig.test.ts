@@ -60,9 +60,17 @@ test('journal guard runs before real remote discovery and blocks it without side
   assert.deepEqual(events, ['journal']);
 
   const source = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
+  const recovery = source.indexOf('reconcileLegacyClientTableConflictBeforeAuthorityAssertion({');
   const guard = source.indexOf('legacyMutationJournal.assertRemoteAuthorityAllowed()');
   const discovery = source.indexOf('runClientMasterStartup<BusinessConfig');
-  assert.ok(guard > 0 && discovery > guard, 'journal health must gate discovery before any remote candidate work');
+  assert.ok(recovery > 0 && guard > recovery && discovery > guard, 'strict legacy recovery and journal health must run before any remote candidate work');
+  assert.match(source.slice(recovery, guard), /resolveMasterOperationalBaseUrl\(\)[\s\S]*terminalId:[\s\S]*generation:/);
+  const coldBoot = source.indexOf('const isOperationalClientBoot');
+  const coldRecovery = source.indexOf('reconcileLegacyClientTableConflictBeforeAuthorityAssertion({', coldBoot);
+  const firstColdGuard = source.indexOf('legacyMutationJournal.assertRemoteAuthorityAllowed()', coldBoot);
+  assert.ok(coldBoot > 0 && coldRecovery > coldBoot && firstColdGuard > coldRecovery && discovery > firstColdGuard,
+    'cold bootstrap recovery must precede its first journal guard and authority discovery');
+  assert.match(source.slice(coldRecovery, firstColdGuard), /resolveColdBootstrapLegacyRecoveryGeneration\(bootstrapAuthorityState\)/);
   assert.match(source, /runJournalGuardedMasterDiscovery\([\s\S]*?resolveMasterEndpointFromCloud/);
 });
 

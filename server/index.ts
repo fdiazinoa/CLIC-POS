@@ -488,19 +488,49 @@ server.post('/api/mesas/unir', (req, res) => {
 
 // Liberar mesa (Clear Order)
 server.post('/api/mesas/liberar', (req, res) => {
-    const { tableId } = req.body;
+    const { tableId, expectedOrderId } = req.body;
     try {
         const table = db.prepare('SELECT * FROM tables WHERE id = ?').get(tableId) as any;
         const currentOrderId = String(table?.currentOrderId || '').trim();
-        const tableShape = String(table?.shape || '').trim().toUpperCase();
+        const normalizedExpectedOrderId = String(expectedOrderId || '').trim();
+        if (!normalizedExpectedOrderId) {
+            return res.status(400).json({
+                success: false,
+                code: 'TABLE_RELEASE_EXPECTATION_REQUIRED',
+                message: 'expectedOrderId es requerido',
+            });
+        }
+        if (!currentOrderId) return res.json({ success: true, alreadyReleased: true });
+        if (currentOrderId !== normalizedExpectedOrderId) {
+            return res.status(409).json({
+                success: false,
+                code: 'TABLE_RELEASE_ORDER_MISMATCH',
+                message: 'La mesa ya apunta a una orden diferente.',
+                currentOrderId,
+            });
+        }
         const parkedTickets = getPersistedParkedTickets(true);
+        const belongsToTable = (ticket: any) => {
+            const normalizedTableId = String(tableId || '').trim();
+            return String(ticket?.tableId ?? '').trim() === normalizedTableId
+                || String(ticket?.primaryTableId ?? '').trim() === normalizedTableId
+                || (Array.isArray(ticket?.joinedTableIds)
+                    && ticket.joinedTableIds.some((joinedTableId: unknown) => String(joinedTableId).trim() === normalizedTableId));
+        };
+        if (parkedTickets.some((ticket: any) => (
+            String(ticket?.id || '').trim() !== normalizedExpectedOrderId && belongsToTable(ticket)
+        ))) {
+            return res.status(409).json({
+                success: false,
+                code: 'TABLE_RELEASE_HAS_REMAINING_ACCOUNTS',
+                message: 'La mesa conserva otras cuentas abiertas.',
+            });
+        }
         const nextParkedTickets = parkedTickets.filter((ticket: any) => {
             const ticketId = String(ticket?.id || '').trim();
-            const ticketTableId = String(ticket?.tableId ?? '').trim();
             const ticketBarTabId = String(ticket?.barTabId || '').trim();
-            const isClosedOrder = currentOrderId && (ticketId === currentOrderId || ticketBarTabId === currentOrderId);
-            const isSameTable = tableShape !== 'BAR' && String(tableId || '').trim() && ticketTableId === String(tableId).trim();
-            return !isClosedOrder && !isSameTable;
+            const isClosedOrder = ticketId === normalizedExpectedOrderId || ticketBarTabId === normalizedExpectedOrderId;
+            return !isClosedOrder;
         });
 
         const releaseTable = db.transaction(() => {

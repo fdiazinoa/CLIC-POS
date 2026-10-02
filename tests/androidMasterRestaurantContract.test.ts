@@ -65,7 +65,8 @@ test('la Master conserva una cuenta abierta aunque todavía no tenga artículos'
   );
   assert.doesNotMatch(reconciliationSource, /if \(!hasItems\) continue/);
   assert.match(reconciliationSource, /Solo el endpoint explícito de liberación debe cerrar la mesa/);
-  assert.match(serverSource, /if \(!belongsToTable && !belongsToOrder\) remainingTickets\.put\(ticket\)/);
+  assert.match(serverSource, /val belongsToOrder = ticket\.optString\("id"\) == expectedOrderId/);
+  assert.match(serverSource, /if \(!belongsToOrder\) remainingTickets\.put\(ticket\)/);
 });
 
 test('la Master protege su borrador frente a revisiones provocadas por una Cliente', () => {
@@ -86,6 +87,38 @@ test('la Master protege su borrador frente a revisiones provocadas por una Clien
   assert.match(updateSource, /tableId: masterEditLock\.tableId/);
   assert.match(updateSource, /lockToken: masterEditLock\.token/);
   assert.match(updateSource, /baseRevision: masterRestaurantRevisionRef\.current/);
+  assert.match(updateSource, /nativeBridge\.updateMasterParkedTickets/);
+  assert.doesNotMatch(updateSource, /reconcileSupersededMasterParkedTicketOutcomes/);
+});
+
+test('una petición tardía de parked tickets no puede reemplazar una escritura más reciente', () => {
+  const updateSource = serverSource.slice(
+    serverSource.indexOf('fun updateParkedTickets(payload: JSONObject)'),
+    serverSource.indexOf('private fun mergeTicketsForTable'),
+  );
+  const staleFence = updateSource.indexOf('baseRevision < currentRevision');
+  const mutation = updateSource.indexOf('applyClientRestaurantMutation');
+
+  assert.match(updateSource, /PARKED_TICKETS_BASE_REVISION_REQUIRED/);
+  assert.match(updateSource, /PARKED_TICKETS_BASE_REVISION_STALE/);
+  assert.match(updateSource, /PARKED_TICKETS_BASE_REVISION_AHEAD/);
+  assert.ok(staleFence >= 0 && mutation > staleFence);
+  assert.match(appSource, /parkedTickets: masterTableSyncTickets,\s*baseRevision: masterRestaurantRevisionRef\.current,\s*\.\.\.\(masterEditLock\?\.tableId/);
+});
+
+test('acquire publica la revisión usada por el primer guardado de la mesa', () => {
+  const acquireSource = serverSource.slice(
+    serverSource.indexOf('fun acquireTableEditLock'),
+    serverSource.indexOf('fun releaseTableEditLock'),
+  );
+  const invokeSource = appSource.slice(
+    appSource.indexOf('const invokeTableEditLock'),
+    appSource.indexOf('const releaseActiveTableEditLock'),
+  );
+
+  assert.match(acquireSource, /restaurantRevision\.incrementAndGet\(\)[\s\S]*\.put\("revision", restaurantRevision\.get\(\)\)/);
+  assert.match(invokeSource, /const revision = Number\(result\?\.revision\)/);
+  assert.match(invokeSource, /masterRestaurantRevisionRef\.current = Math\.max\(masterRestaurantRevisionRef\.current, revision\)/);
 });
 
 test('la Master Android reemplaza el layout completo en una sola mutación persistida', () => {
@@ -116,12 +149,17 @@ test('la Master Android bloquea la digitación simultánea y limita la mutación
 
 test('la Master conserva y libera de forma simétrica las mesas unidas', () => {
   assert.match(serverSource, /private fun ticketReferencesTable/);
+  assert.match(serverSource, /ticket\.optString\("primaryTableId"\) == tableId/);
   assert.match(serverSource, /ticket\.optJSONArray\("joinedTableIds"\)/);
   assert.match(serverSource, /activeByTableId\[it\] = ticket/);
   assert.match(serverSource, /linkedTableIds\.contains\(table\.optString\("id"\)\)/);
-  assert.match(serverSource, /val belongsToTable = ticketReferencesTable\(ticket, tableId\)/);
+  assert.match(serverSource, /ticket\.optString\("id"\) != expectedOrderId && ticketReferencesTable\(ticket, tableId\)/);
   assert.match(serverSource, /table\.remove\("joinedTableId"\)/);
   assert.match(appSource, /joinedTableId: undefined,[\s\S]*joinedSourceTableName: undefined/);
+  assert.match(serverSource, /TABLE_RELEASE_ORDER_MISMATCH/);
+  assert.match(serverSource, /TABLE_RELEASE_HAS_REMAINING_ACCOUNTS/);
+  assert.match(serverSource, /ticket\.optString\("id"\) != expectedOrderId && ticketReferencesTable\(ticket, tableId\)/);
+  assert.match(appSource, /parkedTicketBelongsToTable\(ticket, tableId\)/);
 });
 
 test('la WebView entrega el snapshot operativo al servidor nativo sin sobreescribir cambios clientes en el watchdog', () => {
@@ -167,10 +205,13 @@ test('cerrar el mapa confirma el toque antes de mostrar el POS persistente', () 
 });
 
 test('el puente Android publica reconciliación, locks y sincronización serializada al frontend', () => {
+  assert.match(serverSource, /fun updateParkedTickets\(payload: JSONObject\)/);
+  assert.match(bridgeSource, /fun updateMasterParkedTickets/);
   assert.match(bridgeSource, /fun getMasterRestaurantState/);
   assert.match(bridgeSource, /fun acquireMasterTableLock/);
   assert.match(bridgeSource, /fun releaseMasterTableLock/);
   assert.match(appSource, /getMasterRestaurantState: \(payload: unknown\) => call\('getMasterRestaurantState', payload\)/);
+  assert.match(appSource, /updateMasterParkedTickets: \(payload: unknown\) => call\('updateMasterParkedTickets', payload\)/);
   assert.match(appSource, /acquireMasterTableLock: \(payload: unknown\) => call\('acquireMasterTableLock', payload\)/);
   assert.match(appSource, /releaseMasterTableLock: \(payload: unknown\) => call\('releaseMasterTableLock', payload\)/);
   assert.match(appSource, /parkedTicketSyncQueueRef\.current/);
@@ -226,6 +267,7 @@ test('la Cliente usa transporte nativo para bloquear y abrir mesas en Android', 
   assert.match(lockBlock, /dispatchLegacyLanMutation<any>\(\{/);
   assert.match(lockBlock, /TABLE_LOCK_/);
   assert.match(lockBlock, /validateResponse:\s*validateLegacySuccessResponse/);
+  assert.match(lockBlock, /legacyMutationJournal\.hasOutcomeUnknown\(\)[\s\S]*apiSyncAdapter\.getOperationalAuthorityState\(\)[\s\S]*reconcileMasterRejectedTableMutations\([\s\S]*authorityOrigin:\s*new URL\(endpointUrl\)\.origin,[\s\S]*terminalId:\s*authorityState\.terminalId[\s\S]*generation:\s*authorityState\.revision[\s\S]*dispatchLegacyLanMutation<any>/);
   assert.doesNotMatch(lockBlock, /requestJson<any>\(|fetch\(/);
   assert.match(openBlock, /dispatchLegacyLanMutation<any>\(\{/);
   assert.match(openBlock, /operation: 'TABLE_OPEN'/);

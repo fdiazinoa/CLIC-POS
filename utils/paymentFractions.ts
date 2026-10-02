@@ -1,4 +1,4 @@
-import type { PaymentFractionPlan } from '../types';
+import type { ParkedTicket, PaymentFractionPlan } from '../types';
 
 export const splitAmountIntoEqualParts = (total: number, count: number): number[] => {
   const safeCount = Math.max(2, Math.min(20, Math.trunc(count)));
@@ -30,6 +30,15 @@ export const isPaymentFractionPlanCurrent = (
   plan: PaymentFractionPlan | undefined,
   currentTotal: number
 ): boolean => Boolean(plan && Math.abs(plan.originalTotal - currentTotal) < 0.01);
+
+export const isFullyPaidParkedTicket = (ticket: ParkedTicket): boolean => {
+  const plan = ticket.paymentFraction;
+  return Boolean(
+    plan
+    && plan.parts.length > 1
+    && plan.parts.every(part => part.status === 'PAID'),
+  );
+};
 
 /**
  * Keeps an existing installment plan only while it still describes the current

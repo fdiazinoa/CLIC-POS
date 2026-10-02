@@ -168,6 +168,7 @@ import {
   canUseLocalOperationalTableStore,
   isClientTerminalMode,
   canPublishGlobalConfigMutation,
+  resolveMasterOperationalBaseUrl,
   resolveOperationalApiUrl,
   resolveValidatedOperationalApiUrl,
   createOperationalMasterResolver,
@@ -375,7 +376,13 @@ import {
 } from './utils/operationalMasterConfig';
 import { persistValidatedClientMasterTargetAsync, resolveClientMasterTerminalId } from './utils/clientMasterBinding';
 import { completeLegacyMutationAfterDurableAck, legacyMutationJournal } from './services/sync/LegacyMutationJournal';
-import { reconcileMasterParkedTicketOutcome, reconcileMasterRejectedTableMutations } from './services/sync/masterParkedTicketReconciliation';
+import {
+  reconcileLegacyClientTableConflictBeforeAuthorityAssertion,
+  reconcileMasterParkedTicketOutcome,
+  reconcileMasterRejectedTableMutations,
+  resolveColdBootstrapLegacyRecoveryGeneration,
+} from './services/sync/masterParkedTicketReconciliation';
+import { parkedTicketBelongsToTable } from './utils/parkedTicketTableMembership';
 import { assertParkedTicketsAcknowledged } from './utils/parkedTicketAck';
 import {
   dispatchLegacyLanMutation,
@@ -2472,6 +2479,7 @@ const AppContent: React.FC = () => {
         'print',
         'startMasterServer',
         'updateMasterServerConfig',
+        'updateMasterParkedTickets',
         'stopMasterServer',
         'getMasterServerStatus',
         'getMasterRestaurantState',
@@ -2553,6 +2561,7 @@ const AppContent: React.FC = () => {
         getKdsServerStatus: (payload: unknown) => call('getKdsServerStatus', payload),
         startMasterServer: (payload: unknown) => call('startMasterServer', payload),
         updateMasterServerConfig: (payload: unknown) => call('updateMasterServerConfig', payload),
+        updateMasterParkedTickets: (payload: unknown) => call('updateMasterParkedTickets', payload),
         stopMasterServer: (payload: unknown) => call('stopMasterServer', payload),
         getMasterServerStatus: (payload: unknown) => call('getMasterServerStatus', payload),
         getMasterRestaurantState: (payload: unknown) => call('getMasterRestaurantState', payload),
@@ -5598,6 +5607,13 @@ const AppContent: React.FC = () => {
     return localIps;
   };
   const discoverEligibleClientMasterEndpoint = async () => {
+    const authorityState = apiSyncAdapter.getOperationalAuthorityState();
+    await reconcileLegacyClientTableConflictBeforeAuthorityAssertion({
+      journal: legacyMutationJournal,
+      authorityBaseUrl: resolveMasterOperationalBaseUrl(),
+      terminalId: authorityState.terminalId || String(clientRoutingContextRef.current.getTerminal()?.id || ''),
+      generation: authorityState.revision,
+    });
     legacyMutationJournal.assertRemoteAuthorityAllowed();
     const localIps = clientLocalIpsRef.current || await hydrateClientLocalIps();
     if (localIps.length === 0) throw new Error('MASTER_LOCAL_IDENTITY_UNAVAILABLE');
@@ -5959,14 +5975,29 @@ const AppContent: React.FC = () => {
       : nativeBridge?.releaseMasterTableLock;
 
     if (servesAsNativeMaster && typeof bridgeMethod === 'function') {
-      return parseNativeBridgeJson(await Promise.resolve(bridgeMethod.call(nativeBridge, payload)));
+      const result = parseNativeBridgeJson(await Promise.resolve(bridgeMethod.call(nativeBridge, payload)));
+      const revision = Number(result?.revision);
+      if (Number.isFinite(revision) && revision >= 0) {
+        masterRestaurantRevisionRef.current = Math.max(masterRestaurantRevisionRef.current, revision);
+      }
+      return result;
     }
 
     const endpoint = action === 'acquire'
       ? '/api/mesas/bloquear'
       : '/api/mesas/desbloquear';
+    const endpointUrl = await resolveValidatedOperationalApiUrl(endpoint);
+    if (legacyMutationJournal.hasOutcomeUnknown()) {
+      const authorityState = apiSyncAdapter.getOperationalAuthorityState();
+      await reconcileMasterRejectedTableMutations({
+        journal: legacyMutationJournal,
+        authorityOrigin: new URL(endpointUrl).origin,
+        terminalId: authorityState.terminalId || '',
+        generation: authorityState.revision,
+      });
+    }
     const response = await dispatchLegacyLanMutation<any>({
-      url: await resolveValidatedOperationalApiUrl(endpoint),
+      url: endpointUrl,
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -5984,6 +6015,10 @@ const AppContent: React.FC = () => {
     await response.completeAfterDurableCommit(`App:table-lock:${action}:${String(payload.tableId || '')}`, () =>
       persistLegacyLanMutationCompletion(response.correlationId, `App:table-lock:${action}`, response.response.status)
     );
+    const revision = Number(result?.revision);
+    if (Number.isFinite(revision) && revision >= 0) {
+      masterRestaurantRevisionRef.current = Math.max(masterRestaurantRevisionRef.current, revision);
+    }
     return result;
   }, [getCurrentTerminal]);
 
@@ -7354,6 +7389,13 @@ const AppContent: React.FC = () => {
               let mutationJournalBlocksDiscovery = false;
               if (isOperationalClientBoot) {
                 try {
+                  const bootstrapAuthorityState = apiSyncAdapter.getOperationalAuthorityState();
+                  await reconcileLegacyClientTableConflictBeforeAuthorityAssertion({
+                    journal: legacyMutationJournal,
+                    authorityBaseUrl: resolveMasterOperationalBaseUrl(),
+                    terminalId: bootstrapAuthorityState.terminalId || String(effectivePairedTerminal.id || ''),
+                    generation: resolveColdBootstrapLegacyRecoveryGeneration(bootstrapAuthorityState),
+                  });
                   legacyMutationJournal.assertRemoteAuthorityAllowed();
                 } catch (journalError) {
                   mutationJournalBlocksDiscovery = true;
@@ -9610,11 +9652,76 @@ const AppContent: React.FC = () => {
       // Master evita que un snapshot anterior vuelva a insertar una orden ya cobrada.
       const syncOperation = async () => {
         await persistMasterTickets();
+        const nativeBridge = (window as any).ClicPOSNativePrinter;
+        if (typeof nativeBridge?.updateMasterParkedTickets === 'function') {
+          const unrelatedBlockingMutation = legacyMutationJournal.getBlockingEntries().some(entry => (
+            entry.state !== 'OUTCOME_UNKNOWN'
+            || entry.method !== 'PUT'
+            || entry.canonicalPath !== '/api/mesas/parked-tickets'
+            || !entry.operationCorrelationId.startsWith('MASTER_PARKED_TICKETS_SYNC:')
+          ));
+          if (unrelatedBlockingMutation) {
+            throw new Error('LEGACY_MUTATION_OUTCOME_UNKNOWN');
+          }
+          const result = parseNativeBridgeJson(await Promise.resolve(
+            nativeBridge.updateMasterParkedTickets({
+              parkedTickets: masterTableSyncTickets,
+              baseRevision: masterRestaurantRevisionRef.current,
+              ...(masterEditLock?.tableId ? {
+                tableId: masterEditLock.tableId,
+                ownerId: masterEditLock.ownerId,
+                lockToken: masterEditLock.token,
+              } : {}),
+            }),
+          ));
+          if (result?.success !== true) {
+            throw new Error(result?.code || result?.message || 'NATIVE_MASTER_PARKED_TICKETS_FAILED');
+          }
+          assertParkedTicketsAcknowledged(
+            masterTableSyncTickets,
+            result.parkedTickets,
+            changedTicketId,
+            masterEditLock?.tableId,
+          );
+          const responseRevision = Number(result?.revision || 0);
+          if (!Number.isFinite(responseRevision) || responseRevision <= 0) {
+            throw new Error('NATIVE_MASTER_RESTAURANT_REVISION_REQUIRED');
+          }
+          masterRestaurantRevisionRef.current = Math.max(masterRestaurantRevisionRef.current, responseRevision);
+          const sharedTickets = Array.isArray(result?.parkedTickets) ? result.parkedTickets : validTickets;
+          const newerPendingSync = pendingMasterTableSyncRef.current;
+          const effectiveSharedTickets = newerPendingSync && newerPendingSync !== masterPendingSync
+            ? mergePendingClientTableTickets(sharedTickets, newerPendingSync)
+            : sharedTickets;
+          const canApplyAcknowledgedSnapshot =
+            pendingMasterTableSyncRef.current === masterPendingSync
+            && currentViewRef.current === 'TABLE_MAP'
+            && !activeTableEditLockRef.current;
+          if (canApplyAcknowledgedSnapshot) {
+            setParkedTickets(effectiveSharedTickets);
+            if (Array.isArray(result?.tables)) {
+              setTables(reconcileTablesWithParkedTickets(result.tables, effectiveSharedTickets));
+            }
+          }
+          if (pendingMasterTableSyncRef.current === masterPendingSync) {
+            pendingMasterTableSyncRef.current = null;
+            writePendingTableSyncMirror({
+              id: 'current',
+              status: 'EMPTY',
+              queuedAt: new Date().toISOString(),
+              parkedTickets: [],
+            });
+          }
+          return;
+        }
         const masterUrl = await resolveValidatedOperationalApiUrl('/api/mesas/parked-tickets');
         if (legacyMutationJournal.hasOutcomeUnknown()) {
+          const authorityState = apiSyncAdapter.getOperationalAuthorityState();
           await reconcileMasterRejectedTableMutations({
             journal: legacyMutationJournal,
             authorityOrigin: new URL(masterUrl).origin,
+            terminalId: authorityState.terminalId || '',
+            generation: authorityState.revision,
           });
         }
         if (legacyMutationJournal.hasOutcomeUnknown() && masterEditLock?.tableId) {
@@ -9663,11 +9770,11 @@ const AppContent: React.FC = () => {
           // reemplazado por el snapshot completo de la Master.
           body: JSON.stringify({
             parkedTickets: masterTableSyncTickets,
+            baseRevision: masterRestaurantRevisionRef.current,
             ...(masterEditLock?.tableId ? {
               tableId: masterEditLock.tableId,
               ownerId: masterEditLock.ownerId,
               lockToken: masterEditLock.token,
-              baseRevision: masterRestaurantRevisionRef.current,
             } : {}),
           }),
           operation: 'MASTER_PARKED_TICKETS_SYNC',
@@ -12913,7 +13020,7 @@ const AppContent: React.FC = () => {
                 const isClosedOrder = closedOrderId && String(ticket.id) === closedOrderId;
                 return !isClosedOrder;
               });
-              const tableTickets = effectiveRemainingTickets.filter(ticket => String(ticket.tableId ?? '') === tableId);
+              const tableTickets = effectiveRemainingTickets.filter(ticket => parkedTicketBelongsToTable(ticket, tableId));
               const nextTicket = tableTickets[0];
               const remainingTotal = tableTickets.reduce((sum, ticket) => {
                 const itemsTotal = (ticket.items || []).reduce((itemSum, item) => itemSum + (Number(item.price || 0) * Number(item.quantity || 0)), 0);
