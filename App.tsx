@@ -375,7 +375,7 @@ import {
 } from './utils/operationalMasterConfig';
 import { persistValidatedClientMasterTargetAsync, resolveClientMasterTerminalId } from './utils/clientMasterBinding';
 import { completeLegacyMutationAfterDurableAck, legacyMutationJournal } from './services/sync/LegacyMutationJournal';
-import { reconcileMasterParkedTicketOutcome, reconcileMasterRejectedTableMutations } from './services/sync/masterParkedTicketReconciliation';
+import { reconcileMasterParkedTicketOutcome, reconcileMasterRejectedTableMutations, reconcileSupersededMasterParkedTicketOutcomes } from './services/sync/masterParkedTicketReconciliation';
 import { assertParkedTicketsAcknowledged } from './utils/parkedTicketAck';
 import {
   dispatchLegacyLanMutation,
@@ -2472,6 +2472,7 @@ const AppContent: React.FC = () => {
         'print',
         'startMasterServer',
         'updateMasterServerConfig',
+        'updateMasterParkedTickets',
         'stopMasterServer',
         'getMasterServerStatus',
         'getMasterRestaurantState',
@@ -2553,6 +2554,7 @@ const AppContent: React.FC = () => {
         getKdsServerStatus: (payload: unknown) => call('getKdsServerStatus', payload),
         startMasterServer: (payload: unknown) => call('startMasterServer', payload),
         updateMasterServerConfig: (payload: unknown) => call('updateMasterServerConfig', payload),
+        updateMasterParkedTickets: (payload: unknown) => call('updateMasterParkedTickets', payload),
         stopMasterServer: (payload: unknown) => call('stopMasterServer', payload),
         getMasterServerStatus: (payload: unknown) => call('getMasterServerStatus', payload),
         getMasterRestaurantState: (payload: unknown) => call('getMasterRestaurantState', payload),
@@ -9610,6 +9612,72 @@ const AppContent: React.FC = () => {
       // Master evita que un snapshot anterior vuelva a insertar una orden ya cobrada.
       const syncOperation = async () => {
         await persistMasterTickets();
+        const nativeBridge = (window as any).ClicPOSNativePrinter;
+        if (typeof nativeBridge?.updateMasterParkedTickets === 'function') {
+          const unrelatedBlockingMutation = legacyMutationJournal.getBlockingEntries().some(entry => (
+            entry.state !== 'OUTCOME_UNKNOWN'
+            || entry.method !== 'PUT'
+            || entry.canonicalPath !== '/api/mesas/parked-tickets'
+            || !entry.operationCorrelationId.startsWith('MASTER_PARKED_TICKETS_SYNC:')
+          ));
+          if (unrelatedBlockingMutation) {
+            throw new Error('LEGACY_MUTATION_OUTCOME_UNKNOWN');
+          }
+          const result = parseNativeBridgeJson(await Promise.resolve(
+            nativeBridge.updateMasterParkedTickets({
+              parkedTickets: masterTableSyncTickets,
+              ...(masterEditLock?.tableId ? {
+                tableId: masterEditLock.tableId,
+                ownerId: masterEditLock.ownerId,
+                lockToken: masterEditLock.token,
+                baseRevision: masterRestaurantRevisionRef.current,
+              } : {}),
+            }),
+          ));
+          if (result?.success !== true) {
+            throw new Error(result?.code || result?.message || 'NATIVE_MASTER_PARKED_TICKETS_FAILED');
+          }
+          assertParkedTicketsAcknowledged(
+            masterTableSyncTickets,
+            result.parkedTickets,
+            changedTicketId,
+            masterEditLock?.tableId,
+          );
+          const responseRevision = Number(result?.revision || 0);
+          if (!Number.isFinite(responseRevision) || responseRevision <= 0) {
+            throw new Error('NATIVE_MASTER_RESTAURANT_REVISION_REQUIRED');
+          }
+          masterRestaurantRevisionRef.current = Math.max(masterRestaurantRevisionRef.current, responseRevision);
+          await reconcileSupersededMasterParkedTicketOutcomes({
+            journal: legacyMutationJournal,
+            revision: responseRevision,
+          });
+          const sharedTickets = Array.isArray(result?.parkedTickets) ? result.parkedTickets : validTickets;
+          const newerPendingSync = pendingMasterTableSyncRef.current;
+          const effectiveSharedTickets = newerPendingSync && newerPendingSync !== masterPendingSync
+            ? mergePendingClientTableTickets(sharedTickets, newerPendingSync)
+            : sharedTickets;
+          const canApplyAcknowledgedSnapshot =
+            pendingMasterTableSyncRef.current === masterPendingSync
+            && currentViewRef.current === 'TABLE_MAP'
+            && !activeTableEditLockRef.current;
+          if (canApplyAcknowledgedSnapshot) {
+            setParkedTickets(effectiveSharedTickets);
+            if (Array.isArray(result?.tables)) {
+              setTables(reconcileTablesWithParkedTickets(result.tables, effectiveSharedTickets));
+            }
+          }
+          if (pendingMasterTableSyncRef.current === masterPendingSync) {
+            pendingMasterTableSyncRef.current = null;
+            writePendingTableSyncMirror({
+              id: 'current',
+              status: 'EMPTY',
+              queuedAt: new Date().toISOString(),
+              parkedTickets: [],
+            });
+          }
+          return;
+        }
         const masterUrl = await resolveValidatedOperationalApiUrl('/api/mesas/parked-tickets');
         if (legacyMutationJournal.hasOutcomeUnknown()) {
           await reconcileMasterRejectedTableMutations({

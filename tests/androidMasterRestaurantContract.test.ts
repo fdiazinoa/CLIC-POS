@@ -86,6 +86,8 @@ test('la Master protege su borrador frente a revisiones provocadas por una Clien
   assert.match(updateSource, /tableId: masterEditLock\.tableId/);
   assert.match(updateSource, /lockToken: masterEditLock\.token/);
   assert.match(updateSource, /baseRevision: masterRestaurantRevisionRef\.current/);
+  assert.match(updateSource, /nativeBridge\.updateMasterParkedTickets/);
+  assert.match(updateSource, /reconcileSupersededMasterParkedTicketOutcomes/);
 });
 
 test('la Master Android reemplaza el layout completo en una sola mutación persistida', () => {
@@ -167,10 +169,13 @@ test('cerrar el mapa confirma el toque antes de mostrar el POS persistente', () 
 });
 
 test('el puente Android publica reconciliación, locks y sincronización serializada al frontend', () => {
+  assert.match(serverSource, /fun updateParkedTickets\(payload: JSONObject\)/);
+  assert.match(bridgeSource, /fun updateMasterParkedTickets/);
   assert.match(bridgeSource, /fun getMasterRestaurantState/);
   assert.match(bridgeSource, /fun acquireMasterTableLock/);
   assert.match(bridgeSource, /fun releaseMasterTableLock/);
   assert.match(appSource, /getMasterRestaurantState: \(payload: unknown\) => call\('getMasterRestaurantState', payload\)/);
+  assert.match(appSource, /updateMasterParkedTickets: \(payload: unknown\) => call\('updateMasterParkedTickets', payload\)/);
   assert.match(appSource, /acquireMasterTableLock: \(payload: unknown\) => call\('acquireMasterTableLock', payload\)/);
   assert.match(appSource, /releaseMasterTableLock: \(payload: unknown\) => call\('releaseMasterTableLock', payload\)/);
   assert.match(appSource, /parkedTicketSyncQueueRef\.current/);

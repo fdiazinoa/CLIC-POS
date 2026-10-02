@@ -1256,13 +1256,26 @@ object ClicPOSMasterHttpServer {
                     .toString())
                 return
             }
+        val result = updateParkedTickets(payload)
+        val httpStatus = result.optInt("_httpStatus", 200)
+        result.remove("_httpStatus")
+        writeResponse(socket, httpStatus, result.toString())
+    }
+
+    /**
+     * Applies the same atomic table-scoped mutation used by the LAN endpoint,
+     * but can also be invoked directly by the WebView hosted by this Master.
+     * Avoiding a loopback HTTP request prevents a locally committed ticket from
+     * becoming OUTCOME_UNKNOWN only because its response timed out in transit.
+     */
+    @Synchronized
+    fun updateParkedTickets(payload: JSONObject): JSONObject {
         val tickets = payload.optJSONArray("parkedTickets")
         if (tickets == null) {
-            writeResponse(socket, 400, JSONObject()
+            return JSONObject()
                 .put("success", false)
                 .put("message", "parkedTickets debe ser un arreglo")
-                .toString())
-            return
+                .put("_httpStatus", 400)
         }
 
         val tableId = payload.optString("tableId").trim()
@@ -1274,12 +1287,11 @@ object ClicPOSMasterHttpServer {
                 lock.optString("ownerId") == ownerId &&
                 lock.optString("token") == lockToken
             if (!ownsLock) {
-                writeResponse(socket, 409, JSONObject()
+                return JSONObject()
                     .put("success", false)
                     .put("code", "TABLE_EDIT_LOCK_REQUIRED")
                     .put("message", "La terminal perdió el bloqueo de edición de la mesa.")
-                    .toString())
-                return
+                    .put("_httpStatus", 409)
             }
             mergeTicketsForTable(tableId, tickets)
         } else {
@@ -1288,12 +1300,11 @@ object ClicPOSMasterHttpServer {
 
         val reconciledTables = reconcileTablesWithParkedTickets(tablesSnapshot, nextTickets)
         applyClientRestaurantMutation(tables = reconciledTables, parkedTickets = nextTickets)
-        writeResponse(socket, 200, JSONObject()
+        return JSONObject()
             .put("success", true)
             .put("parkedTickets", JSONArray(parkedTicketsSnapshot.toString()))
             .put("tables", buildTablesWithEditLocks())
             .put("revision", restaurantRevision.get())
-            .toString())
     }
 
     private fun mergeTicketsForTable(tableId: String, incomingTickets: JSONArray): JSONArray {

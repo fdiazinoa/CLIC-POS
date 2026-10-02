@@ -80,6 +80,7 @@ class AndroidPrinterBridge @JvmOverloads constructor(context: Context, webView: 
                     print: true,
                     startMasterServer: true,
                     updateMasterServerConfig: true,
+                    updateMasterParkedTickets: true,
                     stopMasterServer: true,
                     getMasterServerStatus: true,
                     getMasterRestaurantState: true,
@@ -209,6 +210,7 @@ class AndroidPrinterBridge @JvmOverloads constructor(context: Context, webView: 
                     getKdsServerStatus: function (payload) { return call('getKdsServerStatus', payload); },
                     startMasterServer: function (payload) { return call('startMasterServer', payload); },
                     updateMasterServerConfig: function (payload) { return call('updateMasterServerConfig', payload); },
+                    updateMasterParkedTickets: function (payload) { return call('updateMasterParkedTickets', payload); },
                     stopMasterServer: function (payload) { return call('stopMasterServer', payload); },
                     getMasterServerStatus: function (payload) { return call('getMasterServerStatus', payload); },
                     discoverMasterServers: function (payload) { return call('discoverMasterServers', payload); },
@@ -822,6 +824,7 @@ class AndroidPrinterBridge @JvmOverloads constructor(context: Context, webView: 
                     "print" -> print(payloadJson)
                     "startMasterServer" -> startMasterServer(payloadJson)
                     "updateMasterServerConfig" -> updateMasterServerConfig(payloadJson)
+                    "updateMasterParkedTickets" -> updateMasterParkedTickets(payloadJson)
                     "stopMasterServer" -> stopMasterServer(payloadJson)
                     "getMasterServerStatus" -> getMasterServerStatus(payloadJson)
                     "getMasterRestaurantState" -> getMasterRestaurantState(payloadJson)
@@ -865,6 +868,16 @@ class AndroidPrinterBridge @JvmOverloads constructor(context: Context, webView: 
             catalogs,
             restaurantRevision
         ).toString()
+    }
+
+    @JavascriptInterface
+    fun updateMasterParkedTickets(payloadJson: String?): String {
+        val payload = runCatching {
+            if (payloadJson.isNullOrBlank()) JSONObject() else JSONObject(payloadJson)
+        }.getOrDefault(JSONObject())
+        return ClicPOSMasterHttpServer.updateParkedTickets(payload).apply {
+            remove("_httpStatus")
+        }.toString()
     }
 
     @JavascriptInterface
