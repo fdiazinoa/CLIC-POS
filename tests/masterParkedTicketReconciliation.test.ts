@@ -217,3 +217,51 @@ test('a new marked parked-ticket conflict remains blocked after the legacy recov
   }), 0);
   assert.equal(journal.hasOutcomeUnknown(), true);
 });
+
+for (const [label, reconciliationContext] of [
+  ['null marker', { legacyMutationContractVersion: null }],
+  ['empty marker', { legacyMutationContractVersion: '' }],
+  ['false marker', { legacyMutationContractVersion: false }],
+  ['NaN string marker', { legacyMutationContractVersion: 'NaN' }],
+] as const) {
+  test(`legacy recovery rejects ${label}`, async () => {
+    const store = new Store();
+    const entry = persistedLegacy409({ id: `malformed-${label}`, reconciliationContext });
+    store.rows.set(entry.id, entry);
+    const journal = new LegacyMutationJournal(store);
+    await journal.initializeForStartup();
+    assert.equal(await reconcileMasterRejectedTableMutations({
+      journal,
+      authorityOrigin: origin,
+      terminalId,
+      generation,
+      nowMs: Date.parse(entry.dispatchedAt!) + 16_000,
+    }), 0);
+    assert.equal(journal.hasOutcomeUnknown(), true);
+  });
+}
+
+for (const [label, reconciliationContext] of [
+  ['absent marker', undefined],
+  ['null context', null],
+  ['numeric version 1', { legacyMutationContractVersion: 1 }],
+] as const) {
+  test(`legacy recovery accepts ${label}`, async () => {
+    const store = new Store();
+    const entry = persistedLegacy409({
+      id: `legacy-${label}`,
+      reconciliationContext: reconciliationContext as Record<string, unknown> | undefined,
+    });
+    store.rows.set(entry.id, entry);
+    const journal = new LegacyMutationJournal(store);
+    await journal.initializeForStartup();
+    assert.equal(await reconcileMasterRejectedTableMutations({
+      journal,
+      authorityOrigin: origin,
+      terminalId,
+      generation,
+      nowMs: Date.parse(entry.dispatchedAt!) + 16_000,
+    }), 1);
+    assert.equal(journal.hasBlockingMutations(), false);
+  });
+}

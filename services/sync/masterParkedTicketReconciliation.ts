@@ -31,9 +31,10 @@ export const reconcileMasterRejectedTableMutations = async (input: {
   for (const entry of input.journal.getBlockingEntries()) {
     const dispatchedAt = Date.parse(entry.dispatchedAt || '');
     const rawContractVersion = entry.reconciliationContext?.legacyMutationContractVersion;
-    const contractVersion = Number(rawContractVersion);
     const isLegacyContract = rawContractVersion === undefined
-      || (Number.isFinite(contractVersion) && contractVersion < 2);
+      || (typeof rawContractVersion === 'number'
+        && Number.isFinite(rawContractVersion)
+        && rawContractVersion < 2);
     if (entry.state !== 'OUTCOME_UNKNOWN'
       || entry.httpStatus !== 409
       || entry.authorityFingerprint !== `${input.authorityOrigin}|${input.terminalId}`
