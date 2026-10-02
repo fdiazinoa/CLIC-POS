@@ -375,7 +375,8 @@ import {
 } from './utils/operationalMasterConfig';
 import { persistValidatedClientMasterTargetAsync, resolveClientMasterTerminalId } from './utils/clientMasterBinding';
 import { completeLegacyMutationAfterDurableAck, legacyMutationJournal } from './services/sync/LegacyMutationJournal';
-import { reconcileMasterParkedTicketOutcome, reconcileMasterRejectedTableMutations, reconcileSupersededMasterParkedTicketOutcomes } from './services/sync/masterParkedTicketReconciliation';
+import { reconcileMasterParkedTicketOutcome, reconcileMasterRejectedTableMutations } from './services/sync/masterParkedTicketReconciliation';
+import { parkedTicketBelongsToTable } from './utils/parkedTicketTableMembership';
 import { assertParkedTicketsAcknowledged } from './utils/parkedTicketAck';
 import {
   dispatchLegacyLanMutation,
@@ -5961,7 +5962,12 @@ const AppContent: React.FC = () => {
       : nativeBridge?.releaseMasterTableLock;
 
     if (servesAsNativeMaster && typeof bridgeMethod === 'function') {
-      return parseNativeBridgeJson(await Promise.resolve(bridgeMethod.call(nativeBridge, payload)));
+      const result = parseNativeBridgeJson(await Promise.resolve(bridgeMethod.call(nativeBridge, payload)));
+      const revision = Number(result?.revision);
+      if (Number.isFinite(revision) && revision >= 0) {
+        masterRestaurantRevisionRef.current = Math.max(masterRestaurantRevisionRef.current, revision);
+      }
+      return result;
     }
 
     const endpoint = action === 'acquire'
@@ -5986,6 +5992,10 @@ const AppContent: React.FC = () => {
     await response.completeAfterDurableCommit(`App:table-lock:${action}:${String(payload.tableId || '')}`, () =>
       persistLegacyLanMutationCompletion(response.correlationId, `App:table-lock:${action}`, response.response.status)
     );
+    const revision = Number(result?.revision);
+    if (Number.isFinite(revision) && revision >= 0) {
+      masterRestaurantRevisionRef.current = Math.max(masterRestaurantRevisionRef.current, revision);
+    }
     return result;
   }, [getCurrentTerminal]);
 
@@ -9626,11 +9636,11 @@ const AppContent: React.FC = () => {
           const result = parseNativeBridgeJson(await Promise.resolve(
             nativeBridge.updateMasterParkedTickets({
               parkedTickets: masterTableSyncTickets,
+              baseRevision: masterRestaurantRevisionRef.current,
               ...(masterEditLock?.tableId ? {
                 tableId: masterEditLock.tableId,
                 ownerId: masterEditLock.ownerId,
                 lockToken: masterEditLock.token,
-                baseRevision: masterRestaurantRevisionRef.current,
               } : {}),
             }),
           ));
@@ -9648,10 +9658,6 @@ const AppContent: React.FC = () => {
             throw new Error('NATIVE_MASTER_RESTAURANT_REVISION_REQUIRED');
           }
           masterRestaurantRevisionRef.current = Math.max(masterRestaurantRevisionRef.current, responseRevision);
-          await reconcileSupersededMasterParkedTicketOutcomes({
-            journal: legacyMutationJournal,
-            revision: responseRevision,
-          });
           const sharedTickets = Array.isArray(result?.parkedTickets) ? result.parkedTickets : validTickets;
           const newerPendingSync = pendingMasterTableSyncRef.current;
           const effectiveSharedTickets = newerPendingSync && newerPendingSync !== masterPendingSync
@@ -9731,11 +9737,11 @@ const AppContent: React.FC = () => {
           // reemplazado por el snapshot completo de la Master.
           body: JSON.stringify({
             parkedTickets: masterTableSyncTickets,
+            baseRevision: masterRestaurantRevisionRef.current,
             ...(masterEditLock?.tableId ? {
               tableId: masterEditLock.tableId,
               ownerId: masterEditLock.ownerId,
               lockToken: masterEditLock.token,
-              baseRevision: masterRestaurantRevisionRef.current,
             } : {}),
           }),
           operation: 'MASTER_PARKED_TICKETS_SYNC',
@@ -12981,7 +12987,7 @@ const AppContent: React.FC = () => {
                 const isClosedOrder = closedOrderId && String(ticket.id) === closedOrderId;
                 return !isClosedOrder;
               });
-              const tableTickets = effectiveRemainingTickets.filter(ticket => String(ticket.tableId ?? '') === tableId);
+              const tableTickets = effectiveRemainingTickets.filter(ticket => parkedTicketBelongsToTable(ticket, tableId));
               const nextTicket = tableTickets[0];
               const remainingTotal = tableTickets.reduce((sum, ticket) => {
                 const itemsTotal = (ticket.items || []).reduce((itemSum, item) => itemSum + (Number(item.price || 0) * Number(item.quantity || 0)), 0);

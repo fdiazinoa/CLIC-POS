@@ -1133,6 +1133,7 @@ object ClicPOSMasterHttpServer {
         return JSONObject()
             .put("success", true)
             .put("lock", JSONObject(lock.toString()))
+            .put("revision", restaurantRevision.get())
             .put("_httpStatus", 200)
     }
 
@@ -1150,7 +1151,10 @@ object ClicPOSMasterHttpServer {
 
         val current = activeTableLock(tableId)
         if (current == null) {
-            return JSONObject().put("success", true).put("_httpStatus", 200)
+            return JSONObject()
+                .put("success", true)
+                .put("revision", restaurantRevision.get())
+                .put("_httpStatus", 200)
         }
         val isOwner = ownerId.isNotBlank() && current.optString("ownerId") == ownerId
         val hasToken = token.isNotBlank() && current.optString("token") == token
@@ -1166,7 +1170,10 @@ object ClicPOSMasterHttpServer {
         tableEditLocks.remove(tableId)
         restaurantRevision.incrementAndGet()
         restaurantSnapshotVersion.incrementAndGet()
-        return JSONObject().put("success", true).put("_httpStatus", 200)
+        return JSONObject()
+            .put("success", true)
+            .put("revision", restaurantRevision.get())
+            .put("_httpStatus", 200)
     }
 
     private fun writeLockResponse(socket: Socket, result: JSONObject) {
@@ -1279,6 +1286,34 @@ object ClicPOSMasterHttpServer {
         }
 
         val tableId = payload.optString("tableId").trim()
+        if (tableId.isNotBlank()) cleanupExpiredTableLocks()
+        if (!payload.has("baseRevision") || payload.isNull("baseRevision")) {
+            return JSONObject()
+                .put("success", false)
+                .put("code", "PARKED_TICKETS_BASE_REVISION_REQUIRED")
+                .put("message", "baseRevision es requerido para actualizar tickets en espera.")
+                .put("revision", restaurantRevision.get())
+                .put("_httpStatus", 400)
+        }
+        val baseRevision = payload.optLong("baseRevision", -1L)
+        val currentRevision = restaurantRevision.get()
+        if (baseRevision < currentRevision) {
+            return JSONObject()
+                .put("success", false)
+                .put("code", "PARKED_TICKETS_BASE_REVISION_STALE")
+                .put("message", "La revisión de tickets fue reemplazada por un estado más reciente.")
+                .put("revision", currentRevision)
+                .put("_httpStatus", 409)
+        }
+        if (baseRevision > currentRevision) {
+            return JSONObject()
+                .put("success", false)
+                .put("code", "PARKED_TICKETS_BASE_REVISION_AHEAD")
+                .put("message", "La revisión solicitada no existe todavía en esta Master.")
+                .put("revision", currentRevision)
+                .put("_httpStatus", 409)
+        }
+
         val ownerId = payload.optString("ownerId").trim()
         val lockToken = payload.optString("lockToken").trim()
         val nextTickets = if (tableId.isNotBlank()) {
@@ -1815,10 +1850,12 @@ object ClicPOSMasterHttpServer {
                 return
             }
         val tableId = payload.optString("tableId").trim()
-        if (tableId.isBlank()) {
+        val expectedOrderId = payload.optString("expectedOrderId").trim()
+        if (tableId.isBlank() || expectedOrderId.isBlank()) {
             writeResponse(socket, 400, JSONObject()
                 .put("success", false)
-                .put("message", "tableId es requerido")
+                .put("code", "TABLE_RELEASE_EXPECTATION_REQUIRED")
+                .put("message", "tableId y expectedOrderId son requeridos")
                 .toString())
             return
         }
@@ -1831,6 +1868,38 @@ object ClicPOSMasterHttpServer {
             if (table.optString("id") != tableId) continue
             found = true
             orderId = table.optString("currentOrderId").trim()
+            if (orderId.isBlank()) {
+                writeResponse(socket, 200, JSONObject()
+                    .put("success", true)
+                    .put("alreadyReleased", true)
+                    .put("revision", restaurantRevision.get())
+                    .toString())
+                return
+            }
+            if (orderId != expectedOrderId) {
+                writeResponse(socket, 409, JSONObject()
+                    .put("success", false)
+                    .put("code", "TABLE_RELEASE_ORDER_MISMATCH")
+                    .put("message", "La mesa ya apunta a una orden diferente.")
+                    .put("currentOrderId", orderId)
+                    .put("revision", restaurantRevision.get())
+                    .toString())
+                return
+            }
+            val hasOtherAccount = (0 until parkedTicketsSnapshot.length())
+                .mapNotNull { parkedTicketsSnapshot.optJSONObject(it) }
+                .any { ticket ->
+                    ticket.optString("id") != expectedOrderId && ticketReferencesTable(ticket, tableId)
+                }
+            if (hasOtherAccount) {
+                writeResponse(socket, 409, JSONObject()
+                    .put("success", false)
+                    .put("code", "TABLE_RELEASE_HAS_REMAINING_ACCOUNTS")
+                    .put("message", "La mesa conserva otras cuentas abiertas.")
+                    .put("revision", restaurantRevision.get())
+                    .toString())
+                return
+            }
             table
                 .put("status", "FREE")
                 .put("currentOrderId", JSONObject.NULL)
@@ -1885,9 +1954,9 @@ object ClicPOSMasterHttpServer {
         val remainingTickets = JSONArray()
         for (index in 0 until parkedTicketsSnapshot.length()) {
             val ticket = parkedTicketsSnapshot.optJSONObject(index) ?: continue
-            val belongsToTable = ticketReferencesTable(ticket, tableId)
-            val belongsToOrder = orderId.isNotBlank() && ticket.optString("id") == orderId
-            if (!belongsToTable && !belongsToOrder) remainingTickets.put(ticket)
+            val belongsToOrder = ticket.optString("id") == expectedOrderId ||
+                ticket.optString("barTabId") == expectedOrderId
+            if (!belongsToOrder) remainingTickets.put(ticket)
         }
         applyClientRestaurantMutation(tables = updatedTables, parkedTickets = remainingTickets)
         writeResponse(socket, 200, JSONObject().put("success", true).toString())

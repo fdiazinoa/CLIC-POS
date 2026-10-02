@@ -41,32 +41,6 @@ export const reconcileMasterRejectedTableMutations = async (input: {
   return reconciled;
 };
 
-/**
- * A successful direct write to the in-process Android Master returns the
- * complete authoritative snapshot. Any older ambiguous loopback write is then
- * superseded and can no longer justify blocking future restaurant mutations.
- */
-export const reconcileSupersededMasterParkedTicketOutcomes = async (input: {
-  journal: LegacyMutationJournal;
-  revision: number;
-}): Promise<number> => {
-  if (!input.journal.isHealthy() || !Number.isFinite(input.revision) || input.revision <= 0) return 0;
-  let reconciled = 0;
-  for (const entry of input.journal.getBlockingEntries()) {
-    if (entry.state !== 'OUTCOME_UNKNOWN'
-      || entry.method !== 'PUT'
-      || entry.canonicalPath !== '/api/mesas/parked-tickets'
-      || !entry.operationCorrelationId.startsWith('MASTER_PARKED_TICKETS_SYNC:')) continue;
-    await input.journal.acknowledge(
-      entry.id,
-      'RESPONSE_VALID',
-      `SUPERSEDED_BY_NATIVE_MASTER_SNAPSHOT:${input.revision}`,
-    );
-    reconciled += 1;
-  }
-  return reconciled;
-};
-
 /** Reconcile only a single, old self-Master table write against the native authority. */
 export const reconcileMasterParkedTicketOutcome = async (input: {
   journal: LegacyMutationJournal;

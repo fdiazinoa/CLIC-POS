@@ -40,7 +40,7 @@ test('el servidor web conserva el mismo contrato de unión atómica', () => {
     webServerSource.indexOf("server.post('/api/mesas/liberar'"),
   );
 
-  assert.match(routeSource, /getSetting\('parkedTickets'\)/);
+  assert.match(routeSource, /getPersistedParkedTickets\(true\)/);
   assert.match(routeSource, /const mergedItems = Array\.from\(ticketsToJoin\.values\(\)\)\.flatMap/);
   assert.match(routeSource, /primaryTableId: mainTableId/);
   assert.match(routeSource, /joinedTableIds: Array\.from\(memberTableIds\)/);

@@ -44,4 +44,19 @@ test('liberar una cuenta vacía invalida cualquier flush antes de publicar el ci
   assert.match(branch, /closedTableOrderIdsRef\.current\.add\(releasedOrderId\)/);
   assert.match(branch, /const remaining = parkedTicketsRef\.current\.filter/);
   assert.ok(branch.indexOf('parkedTicketsRef.current = remaining') < branch.indexOf('onUpdateParkedTicketsRef.current(remaining)'));
+  assert.match(branch, /parkedTicketBelongsToTable\(ticket, releasedTableId\)/);
+  assert.match(branch, /expectedOrderId: String\(tableToRelease\.currentOrderId \|\| ''\)/);
+});
+
+test('el cierre final elimina solo la orden cobrada desde el snapshot vivo', () => {
+  const start = source.indexOf('// --- CRITICAL: Ticket Closing Logic ---');
+  const end = source.indexOf('// 3. Clear Active Table in UI', start);
+  const branch = source.slice(start, end);
+
+  assert.ok(start >= 0 && end > start);
+  assert.match(branch, /const remaining = parkedTicketsRef\.current\.filter/);
+  assert.ok(branch.indexOf('parkedTicketsRef.current = remaining') < branch.indexOf('onUpdateParkedTicketsRef.current(remaining)'));
+  assert.match(branch, /onTableOrderClosedRef\.current\?\./);
+  assert.match(branch, /parkedTicketBelongsToTable\(ticket, activeTableId\)/);
+  assert.match(branch, /expectedOrderId: closedOrderId/);
 });

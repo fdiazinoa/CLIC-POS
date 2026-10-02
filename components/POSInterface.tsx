@@ -60,6 +60,7 @@ import { calculatePointsEarned, getPrimaryLoyaltyCard } from '../utils/loyaltyEn
 import { couponService } from '../utils/couponService';
 import { resolveScannedCouponCode } from '../utils/couponScan';
 import { shouldRouteInvoiceScan } from '../utils/invoiceScan';
+import { parkedTicketBelongsToTable } from '../utils/parkedTicketTableMembership';
 import { calculateInventoryDeductions, resolveInventoryConsumptionMode, transferStockToCommitted } from '../utils/inventoryEngine';
 import { useSupervisorAuth } from '../hooks/useSupervisorAuth';
 import { calculateSalesCommission } from '../utils/userSalesPolicy';
@@ -1205,6 +1206,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const parkedTicketsRef = useRef<ParkedTicket[]>(parkedTickets);
    const onUpdateParkedTicketsRef = useRef(onUpdateParkedTickets);
    const onTableOrderSavedRef = useRef(onTableOrderSaved);
+   const onTableOrderClosedRef = useRef(onTableOrderClosed);
    const closedTableOrderIdsRef = useRef<Set<string>>(new Set());
    const paymentFinalizationInFlightRef = useRef(false);
    const activeAddTraceRef = useRef<PosInteractionTrace | null>(null);
@@ -1235,7 +1237,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    useEffect(() => {
       onUpdateParkedTicketsRef.current = onUpdateParkedTickets;
       onTableOrderSavedRef.current = onTableOrderSaved;
-   }, [onUpdateParkedTickets, onTableOrderSaved]);
+      onTableOrderClosedRef.current = onTableOrderClosed;
+   }, [onUpdateParkedTickets, onTableOrderSaved, onTableOrderClosed]);
 
    useEffect(() => {
       let cancelled = false;
@@ -5812,19 +5815,20 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         ticketAutoSyncTimeoutRef.current = null;
                      }
                      ticketAutoSyncFlushRef.current = null;
-                     const remaining = (Array.isArray(parkedTickets) ? parkedTickets : []).filter(p => {
+                     const remaining = parkedTicketsRef.current.filter(p => {
                         const ticketId = String(p.id || '').trim();
                         const ticketBarTabId = String((p as any).barTabId || '').trim();
                         const isClosedOrder = closedOrderId && ticketId === closedOrderId;
                         const isClosedBarTab = activeBarTabId && (ticketId === activeBarTabId || ticketBarTabId === activeBarTabId);
                         return !isClosedOrder && !isClosedBarTab;
                      });
-                     await Promise.resolve(onUpdateParkedTickets(remaining));
+                     parkedTicketsRef.current = remaining;
+                     await Promise.resolve(onUpdateParkedTicketsRef.current(remaining));
 
                      const hasOtherTableAccounts = remaining.some(ticket => (
-                        String(ticket.tableId ?? '') === activeTableId
+                        parkedTicketBelongsToTable(ticket, activeTableId)
                      ));
-                     await Promise.resolve(onTableOrderClosed?.(activeTable, activeTable.currentOrderId, remaining));
+                     await Promise.resolve(onTableOrderClosedRef.current?.(activeTable, activeTable.currentOrderId, remaining));
                      if (!hasOtherTableAccounts) {
                         const releaseEndpoint = await resolveValidatedOperationalApiUrl('/api/mesas/liberar');
                         // 1. Free table in the main API so status/currentOrderId are reset.
@@ -5832,7 +5836,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                               url: releaseEndpoint,
                               method: 'POST',
                               headers: { 'Content-Type': 'application/json' },
-                              body: JSON.stringify({ tableId: activeTable.id }),
+                              body: JSON.stringify({ tableId: activeTable.id, expectedOrderId: closedOrderId }),
                               timeoutMs: 4000,
                               operation: 'POS_TABLE_RELEASE',
                               validateResponse: validateLegacySuccessResponse,
@@ -6630,8 +6634,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             setErrorToast('No se pudo confirmar con la Master. La liberación quedó pendiente localmente.');
             window.setTimeout(() => setErrorToast(null), 3500);
          });
-         void Promise.resolve(onTableOrderClosed?.(tableToRelease, tableToRelease.currentOrderId, remaining));
-         if (remaining.some(ticket => String(ticket.tableId ?? '') === releasedTableId)) {
+         void Promise.resolve(onTableOrderClosedRef.current?.(tableToRelease, tableToRelease.currentOrderId, remaining));
+         if (remaining.some(ticket => parkedTicketBelongsToTable(ticket, releasedTableId))) {
             recordCheckoutDiagnostic('CART_CLEAR_REQUEST', { items: cart, tableId: activeTable?.id, orderId: activeTable?.currentOrderId, reason: 'POS_CLEAR_08' });
             onUpdateCart([]);
             onSelectCustomer(null);
@@ -6645,7 +6649,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             return true;
          }
       } else {
-         void Promise.resolve(onTableOrderClosed?.(tableToRelease, undefined, parkedTicketsRef.current));
+         void Promise.resolve(onTableOrderClosedRef.current?.(tableToRelease, undefined, parkedTicketsRef.current));
       }
 
       recordCheckoutDiagnostic('CART_CLEAR_REQUEST', { items: cart, tableId: activeTable?.id, orderId: activeTable?.currentOrderId, reason: 'POS_CLEAR_09' });
@@ -6666,7 +6670,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                url: releaseEndpoint,
                method: 'POST',
                headers: { 'Content-Type': 'application/json' },
-               body: JSON.stringify({ tableId: tableToRelease.id }),
+               body: JSON.stringify({ tableId: tableToRelease.id, expectedOrderId: String(tableToRelease.currentOrderId || '') }),
                timeoutMs: 2500,
                operation: 'POS_TABLE_RELEASE_EMPTY',
                validateResponse: validateLegacySuccessResponse,

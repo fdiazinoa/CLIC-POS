@@ -8,7 +8,6 @@ import {
 import {
   reconcileMasterParkedTicketOutcome,
   reconcileMasterRejectedTableMutations,
-  reconcileSupersededMasterParkedTicketOutcomes,
 } from '../services/sync/masterParkedTicketReconciliation';
 
 class Store implements LegacyMutationJournalStore {
@@ -105,37 +104,6 @@ test('an additional ambiguous mutation prevents automatic reconciliation', async
     readNativeSnapshot: async () => ({ revision: 42, parkedTickets: [ticket] }),
   }), null);
   assert.equal(journal.hasBlockingMutations(), true);
-});
-
-test('a successful direct native snapshot supersedes old ambiguous Master ticket writes only', async () => {
-  const store = new Store();
-  const journal = new LegacyMutationJournal(store);
-  await journal.initializeForStartup();
-  const parked = await journal.begin({
-    operationCorrelationId: 'MASTER_PARKED_TICKETS_SYNC:old-loopback',
-    authorityFingerprint: `${origin}|master-terminal`,
-    generation: 1,
-    method: 'PUT',
-    url: `${origin}/api/mesas/parked-tickets`,
-    diagnosticRequestId: 'old-loopback',
-  });
-  await journal.markOutcomeUnknown(parked.id, null);
-
-  assert.equal(await reconcileSupersededMasterParkedTicketOutcomes({ journal, revision: 43 }), 1);
-  assert.equal(journal.hasBlockingMutations(), false);
-  assert.equal(journal.getEntry(parked.id)?.callerAckReference, 'SUPERSEDED_BY_NATIVE_MASTER_SNAPSHOT:43');
-
-  const unrelated = await journal.begin({
-    operationCorrelationId: 'POS_TABLE_RELEASE:other',
-    authorityFingerprint: `${origin}|master-terminal`,
-    generation: 1,
-    method: 'POST',
-    url: `${origin}/api/mesas/liberar`,
-    diagnosticRequestId: 'other',
-  });
-  await journal.markOutcomeUnknown(unrelated.id, null);
-  assert.equal(await reconcileSupersededMasterParkedTicketOutcomes({ journal, revision: 44 }), 0);
-  assert.equal(journal.hasOutcomeUnknown(), true);
 });
 
 test('old Android Master 409 table rejections are closed without replaying a mutation', async () => {

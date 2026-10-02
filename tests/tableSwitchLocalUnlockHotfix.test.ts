@@ -103,6 +103,6 @@ test('cerrar una mesa vacía actualiza y desbloquea localmente antes de persisti
   const emptyReleaseEnd = posSource.indexOf('const handleParkCurrentTicket', emptyReleaseStart);
   const emptyReleaseSource = posSource.slice(emptyReleaseStart, emptyReleaseEnd);
   assert.match(emptyReleaseSource, /void Promise\.resolve\(onUpdateParkedTicketsRef\.current\(remaining\)\)/);
-  assert.match(emptyReleaseSource, /void Promise\.resolve\(onTableOrderClosed\?\.\(/);
+  assert.match(emptyReleaseSource, /void Promise\.resolve\(onTableOrderClosedRef\.current\?\.\(/);
   assert.doesNotMatch(emptyReleaseSource, /await Promise\.resolve\(onUpdateParkedTickets\(remaining\)\)/);
 });

@@ -39,6 +39,7 @@ import {
     summarizeOpenTableAccounts
 } from '../utils/tableAccountPresentation';
 import { getRenderableFloorTables } from '../utils/tableLayout';
+import { parkedTicketBelongsToTable } from '../utils/parkedTicketTableMembership';
 import { hasPendingKdsDispatch } from '../utils/kdsPresentation';
 import { resolveValidatedOperationalApiUrl } from '../utils/masterOperationalApi';
 import { requestJson } from '../services/network/httpClient';
@@ -861,7 +862,7 @@ const TableMap: React.FC<TableMapProps> = ({
 
     const getTableTickets = useCallback(
         (table: Table): ParkedTicket[] => (parkedTickets || [])
-            .filter(ticket => String(ticket.tableId ?? '') === String(table.id))
+            .filter(ticket => parkedTicketBelongsToTable(ticket, table.id))
             .sort((a, b) => {
                 if (String(a.id) === String(table.currentOrderId)) return -1;
                 if (String(b.id) === String(table.currentOrderId)) return 1;
@@ -2317,7 +2318,10 @@ const TableMap: React.FC<TableMapProps> = ({
                                     url: await resolveValidatedOperationalApiUrl('/api/mesas/liberar'),
                                     method: 'POST',
                                     headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({ tableId: selectedTable.id }),
+                                    body: JSON.stringify({
+                                        tableId: selectedTable.id,
+                                        expectedOrderId: String(selectedTable.currentOrderId || ''),
+                                    }),
                                     operation: 'TABLE_RELEASE',
                                     validateResponse: validateLegacySuccessResponse,
                                 });
