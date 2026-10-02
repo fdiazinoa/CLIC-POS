@@ -5206,13 +5206,18 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             return null;
          }
 
-         const fractionPlan = activeParkedTicket?.paymentFraction;
+         const activeOrderId = String(activeTable?.currentOrderId || activeParkedTicket?.id || '').trim();
+         const liveActiveParkedTicket = parkedTicketsRef.current.find(ticket => (
+            String(ticket.id) === activeOrderId
+         ));
+         const fractionPlan = liveActiveParkedTicket?.paymentFraction;
          const currentFractionPart = isPaymentFractionPlanCurrent(fractionPlan, cartTotal)
             ? fractionPlan?.parts.find(part => part.status === 'PENDING')
             : undefined;
          const pendingFractionParts = fractionPlan?.parts.filter(part => part.status === 'PENDING') || [];
 
          if (currentFractionPart && pendingFractionParts.length > 1) {
+            cancelTicketAutoSync();
             const paidAt = new Date().toISOString();
             const nextPlan = {
                ...fractionPlan!,
@@ -5224,14 +5229,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   paidAt
                } : part)
             };
-            const nextTickets = parkedTickets.map(ticket => ticket.id === activeParkedTicket?.id ? {
+            const nextTickets = parkedTicketsRef.current.map(ticket => String(ticket.id) === activeOrderId ? {
                ...ticket,
                paymentFraction: nextPlan
             } : ticket);
-            await Promise.resolve(onUpdateParkedTickets(nextTickets));
+            parkedTicketsRef.current = nextTickets;
+            await Promise.resolve(onUpdateParkedTicketsRef.current(nextTickets));
 
             return {
-               id: `fraction-${activeParkedTicket?.id}-${currentFractionPart.index}-${Date.now()}`,
+               id: `fraction-${activeOrderId}-${currentFractionPart.index}-${Date.now()}`,
                documentType: 'TICKET',
                date: paidAt,
                items: [],
@@ -6607,17 +6613,20 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (!activeTable || (!options.force && cart.length > 0)) return false;
 
       const tableToRelease = activeTable;
+      cancelTicketAutoSync();
 
       if (tableToRelease.currentOrderId) {
          const releasedOrderId = String(tableToRelease.currentOrderId);
          const releasedTableId = String(tableToRelease.id ?? '');
-         const remaining = parkedTickets.filter(p => {
+         closedTableOrderIdsRef.current.add(releasedOrderId);
+         const remaining = parkedTicketsRef.current.filter(p => {
             const isReleasedOrder = String(p.id) === releasedOrderId;
             return !isReleasedOrder;
          });
+         parkedTicketsRef.current = remaining;
          // El journal local se escribe de forma síncrona dentro del callback;
          // SQLite/Outbox continúan en su cola sin bloquear el regreso al mapa.
-         void Promise.resolve(onUpdateParkedTickets(remaining)).catch(() => {
+         void Promise.resolve(onUpdateParkedTicketsRef.current(remaining)).catch(() => {
             setErrorToast('No se pudo confirmar con la Master. La liberación quedó pendiente localmente.');
             window.setTimeout(() => setErrorToast(null), 3500);
          });
@@ -6636,7 +6645,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             return true;
          }
       } else {
-         void Promise.resolve(onTableOrderClosed?.(tableToRelease, undefined, parkedTickets));
+         void Promise.resolve(onTableOrderClosed?.(tableToRelease, undefined, parkedTicketsRef.current));
       }
 
       recordCheckoutDiagnostic('CART_CLEAR_REQUEST', { items: cart, tableId: activeTable?.id, orderId: activeTable?.currentOrderId, reason: 'POS_CLEAR_09' });

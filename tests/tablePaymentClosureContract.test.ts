@@ -21,3 +21,27 @@ test('la caja maestra descarta snapshots tardíos de una orden ya cobrada', () =
 test('el cleanup del autoguardado cancela el snapshot obsoleto sin enviarlo', () => {
   assert.match(source, /if \(ticketAutoSyncFlushRef\.current === flushTicketSync\) \{\s*ticketAutoSyncFlushRef\.current = null;\s*\}/);
 });
+
+test('una cuota intermedia se cobra desde el snapshot vivo y cancela el autoguardado anterior', () => {
+  const start = source.indexOf('if (currentFractionPart && pendingFractionParts.length > 1)');
+  const end = source.indexOf('if (currentFractionPart && pendingFractionParts.length === 1)', start);
+  const branch = source.slice(start, end);
+
+  assert.ok(start >= 0 && end > start);
+  assert.match(source.slice(source.indexOf('const handlePaymentConfirm'), start), /parkedTicketsRef\.current\.find/);
+  assert.match(branch, /cancelTicketAutoSync\(\)/);
+  assert.match(branch, /const nextTickets = parkedTicketsRef\.current\.map/);
+  assert.ok(branch.indexOf('parkedTicketsRef.current = nextTickets') < branch.indexOf('onUpdateParkedTicketsRef.current(nextTickets)'));
+});
+
+test('liberar una cuenta vacía invalida cualquier flush antes de publicar el cierre', () => {
+  const start = source.indexOf('const releaseActiveEmptyTable');
+  const end = source.indexOf('const handleParkCurrentTicket', start);
+  const branch = source.slice(start, end);
+
+  assert.ok(start >= 0 && end > start);
+  assert.match(branch, /cancelTicketAutoSync\(\)/);
+  assert.match(branch, /closedTableOrderIdsRef\.current\.add\(releasedOrderId\)/);
+  assert.match(branch, /const remaining = parkedTicketsRef\.current\.filter/);
+  assert.ok(branch.indexOf('parkedTicketsRef.current = remaining') < branch.indexOf('onUpdateParkedTicketsRef.current(remaining)'));
+});
