@@ -14,3 +14,5 @@ Enabling requires a separate reviewed change after schema, resume, checksum, sto
 6. Keep the prior runtime object alive for sales already in progress and swap only between sales.
 
 Disabling the future rollout must stop new requests without deleting or changing `active_version`; legacy rehydration must be completed before changing the authoritative read path.
+
+The staging writer pauses for the existing sale-activity signal and the concrete payment and print lifecycles. It checks the gate both before downloading a chunk and again immediately before the SQLite transaction, so activity that starts during download, hashing or parsing cannot overlap the write. There is intentionally no generic `UI_CRITICAL` state: no production lifecycle emitted that signal, so keeping it would imply protection that did not exist. Any future critical UI flow must wire its real mount/unmount lifecycle to this gate explicitly.

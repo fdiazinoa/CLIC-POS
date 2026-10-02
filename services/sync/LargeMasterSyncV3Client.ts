@@ -249,7 +249,14 @@ export class LargeMasterSyncV3Client {
         const checksum = await sha256Utf8(response.text);
         const hashMs = performance.now() - hashStarted;
         const expectedChecksum = header(response.headers, 'x-sync-v3-checksum').replace(/^"|"$/g, '');
-        const expectedRecordCount = Number(header(response.headers, 'x-sync-v3-record-count'));
+        const recordCountHeader = header(response.headers, 'x-sync-v3-record-count').trim();
+        if (!/^\d+$/.test(recordCountHeader)) {
+          throw new LargeMasterSyncV3Error('SYNC_V3_RECORD_COUNT_INVALID');
+        }
+        const expectedRecordCount = Number(recordCountHeader);
+        if (!Number.isSafeInteger(expectedRecordCount)) {
+          throw new LargeMasterSyncV3Error('SYNC_V3_RECORD_COUNT_INVALID');
+        }
         if (!SHA256.test(expectedChecksum) || checksum !== expectedChecksum) {
           throw new LargeMasterSyncV3Error('SYNC_V3_CHECKSUM_MISMATCH', undefined, true);
         }
@@ -339,6 +346,8 @@ export class LargeMasterSyncV3Client {
         if (applied.has(index)) continue;
         totalPauseMs += await waitForLargeMasterSyncV3OperationalWindow();
         const chunk = await this.getChunk(manifest, dataset, index, signal);
+        // Close the race where a sale/payment/print begins while the chunk is downloading or parsing.
+        totalPauseMs += await waitForLargeMasterSyncV3OperationalWindow();
         const result = await this.applyChunk(chunk);
         if (result === 'APPLIED') {
           appliedRecords += chunk.recordCount;

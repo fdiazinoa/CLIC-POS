@@ -1,6 +1,6 @@
 import { POS_SALE_ACTIVITY_EVENT, isPosSaleActive, waitForPosSaleIdle } from '../../utils/posSaleActivity';
 
-export type LargeMasterSyncV3CriticalOperation = 'PAYMENT' | 'PRINT' | 'UI_CRITICAL';
+export type LargeMasterSyncV3CriticalOperation = 'PAYMENT' | 'PRINT';
 
 const activeOperations = new Map<LargeMasterSyncV3CriticalOperation, number>();
 const listeners = new Set<() => void>();
