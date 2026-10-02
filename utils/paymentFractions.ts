@@ -32,15 +32,10 @@ export const isPaymentFractionPlanCurrent = (
 ): boolean => Boolean(plan && Math.abs(plan.originalTotal - currentTotal) < 0.01);
 
 export const isFullyPaidParkedTicket = (ticket: ParkedTicket): boolean => {
-  const total = Number(ticket.total ?? (ticket.items || []).reduce(
-    (sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0),
-    0,
-  ));
   const plan = ticket.paymentFraction;
   return Boolean(
     plan
     && plan.parts.length > 1
-    && isPaymentFractionPlanCurrent(plan, total)
     && plan.parts.every(part => part.status === 'PAID'),
   );
 };

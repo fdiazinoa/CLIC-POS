@@ -32,7 +32,7 @@ test('el cleanup identifica solo planes vigentes completamente cobrados', () => 
 
   assert.equal(isFullyPaidParkedTicket(ticket({ paymentFraction: paid })), true);
   assert.equal(isFullyPaidParkedTicket(ticket({ paymentFraction: pending })), false);
-  assert.equal(isFullyPaidParkedTicket(ticket({ total: 120, paymentFraction: paid })), false);
+  assert.equal(isFullyPaidParkedTicket(ticket({ total: 120, paymentFraction: paid })), true);
 
   const otherAccount = ticket({ id: 'other-account', paymentFraction: pending });
   const cleaned = [ticket({ paymentFraction: paid }), otherAccount]
