@@ -86,7 +86,11 @@ test('la Master protege su borrador frente a revisiones provocadas por una Clien
   assert.match(updateSource, /pendingMasterTableSyncRef\.current = masterPendingSync/);
   assert.match(updateSource, /tableId: masterEditLock\.tableId/);
   assert.match(updateSource, /lockToken: masterEditLock\.token/);
-  assert.match(updateSource, /baseRevision: masterRestaurantRevisionRef\.current/);
+  assert.match(updateSource, /let baseRevision = masterRestaurantRevisionRef\.current/);
+  assert.match(updateSource, /baseRevision,\s+\.\.\.\(masterEditLock\?\.tableId/);
+  assert.match(updateSource, /result\?\.code !== 'PARKED_TICKETS_BASE_REVISION_STALE'/);
+  assert.match(updateSource, /activeTableEditLockRef\.current\?\.token === masterEditLock\.token/);
+  assert.match(updateSource, /baseRevision = currentRevision/);
   assert.match(updateSource, /nativeBridge\.updateMasterParkedTickets/);
   assert.doesNotMatch(updateSource, /reconcileSupersededMasterParkedTicketOutcomes/);
 });
@@ -103,7 +107,17 @@ test('una petición tardía de parked tickets no puede reemplazar una escritura 
   assert.match(updateSource, /PARKED_TICKETS_BASE_REVISION_STALE/);
   assert.match(updateSource, /PARKED_TICKETS_BASE_REVISION_AHEAD/);
   assert.ok(staleFence >= 0 && mutation > staleFence);
-  assert.match(appSource, /parkedTickets: masterTableSyncTickets,\s*baseRevision: masterRestaurantRevisionRef\.current,\s*\.\.\.\(masterEditLock\?\.tableId/);
+  assert.match(appSource, /parkedTickets: masterTableSyncTickets,\s*baseRevision,\s*\.\.\.\(masterEditLock\?\.tableId/);
+});
+
+test('la Master no envía un segundo PUT de ocupación después del guardado nativo del ticket', () => {
+  const savedSource = appSource.slice(
+    appSource.indexOf('onTableOrderSaved={async (table, ticket) =>'),
+    appSource.indexOf('onSelectTableAccount=', appSource.indexOf('onTableOrderSaved={async (table, ticket) =>')),
+  );
+  assert.match(savedSource, /const servesAsNativeMaster = isNativeAndroidRuntime\(\)/);
+  assert.match(savedSource, /if \(!isClientTerminalMode\(\) && !servesAsNativeMaster\) \{/);
+  assert.match(savedSource, /operation: 'TABLE_OCCUPANCY_UPDATE'/);
 });
 
 test('acquire publica la revisión usada por el primer guardado de la mesa', () => {
