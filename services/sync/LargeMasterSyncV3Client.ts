@@ -52,7 +52,8 @@ export interface LargeMasterSyncV3StorageStats {
 }
 
 export interface LargeMasterSyncV3ClientOptions {
-  store: LargeMasterSyncV3Store;
+  /** Optional only for requestSync negotiation; persistence methods require it. */
+  store?: LargeMasterSyncV3Store;
   transport: LargeMasterSyncV3Transport;
   storageStats?: () => Promise<LargeMasterSyncV3StorageStats>;
   metric?: (metric: LargeMasterSyncV3Metric) => void;
@@ -197,6 +198,11 @@ export class LargeMasterSyncV3Client {
     this.requestTimeoutMs = options.requestTimeoutMs ?? 30_000;
   }
 
+  private requireStore(): LargeMasterSyncV3Store {
+    if (!this.options.store) throw new LargeMasterSyncV3Error('SYNC_V3_STORE_UNAVAILABLE');
+    return this.options.store;
+  }
+
   async requestSync(signal?: AbortSignal): Promise<RequestResult | { fallback: 'legacy' }> {
     const response = await this.requestWithRetry('/api/sync/v3/master-syncs', 'POST', signal);
     const body = this.responseObject(response);
@@ -298,7 +304,7 @@ export class LargeMasterSyncV3Client {
 
   async applyChunk(chunk: LargeMasterSyncV3Chunk): Promise<'APPLIED' | 'ALREADY_APPLIED'> {
     const started = performance.now();
-    const result = await this.options.store.applyChunk(chunk);
+    const result = await this.requireStore().applyChunk(chunk);
     const sqliteMs = performance.now() - started;
     this.metric({ event: 'chunk_applied', syncId: chunk.envelope.syncId, dataset: chunk.envelope.dataset,
       chunkIndex: chunk.envelope.chunkIndex, sqliteMs, commitMs: sqliteMs,
@@ -307,6 +313,7 @@ export class LargeMasterSyncV3Client {
   }
 
   async resumeSync(syncId: string, signal?: AbortSignal): Promise<LargeMasterSyncV3RuntimeVersion> {
+    const store = this.requireStore();
     const startedAt = performance.now();
     let manifest: LargeMasterSyncV3Manifest | null = null;
     for (let poll = 0; poll < this.maxManifestPolls; poll += 1) {
@@ -318,19 +325,19 @@ export class LargeMasterSyncV3Client {
       await sleep(result.retryAfterMs);
     }
     if (!manifest) throw new LargeMasterSyncV3Error('SYNC_V3_MANIFEST_POLL_EXHAUSTED', undefined, true);
-    const priorProgress = await this.options.store.readProgress(syncId);
+    const priorProgress = await store.readProgress(syncId);
     if (priorProgress && priorProgress.syncVersion !== manifest.syncVersion) {
       throw new LargeMasterSyncV3Error('SYNC_V3_RESUME_MANIFEST_MISMATCH');
     }
     if (priorProgress?.status === 'ACTIVE') {
-      const active = await this.options.store.getActiveRuntimeVersion();
+      const active = await store.getActiveRuntimeVersion();
       if (!active || active.syncId !== syncId || active.syncVersion !== manifest.syncVersion) {
         throw new LargeMasterSyncV3Error('SYNC_V3_ACTIVE_POINTER_MISMATCH');
       }
       return active;
     }
     if (!priorProgress) await this.assertStorageCapacity(manifest);
-    await this.options.store.prepare(manifest);
+    await store.prepare(manifest);
     if (priorProgress?.status === 'VALIDATED') {
       await this.validateSync(manifest);
       return this.activateSync(syncId);
@@ -340,7 +347,7 @@ export class LargeMasterSyncV3Client {
     let appliedChunks = 0;
     for (const dataset of this.declaredDatasets(manifest)) {
       const expected = manifest.datasets[dataset]!;
-      let progress = await this.options.store.readProgress(syncId);
+      let progress = await store.readProgress(syncId);
       const applied = new Set(progress?.chunks.filter(chunk => chunk.dataset === dataset).map(chunk => chunk.chunkIndex));
       for (let index = 0; index < expected.chunks; index += 1) {
         if (applied.has(index)) continue;
@@ -353,10 +360,10 @@ export class LargeMasterSyncV3Client {
           appliedRecords += chunk.recordCount;
           appliedChunks += 1;
         }
-        progress = await this.options.store.readProgress(syncId);
+        progress = await store.readProgress(syncId);
         this.metric({ event: 'chunk_progress', syncId, syncVersion: manifest.syncVersion, dataset,
           chunkIndex: index, progress: expected.chunks ? Number(progress?.datasets.find(item => item.dataset === dataset)?.appliedChunks || 0) / expected.chunks : 1,
-          sqliteFileSize: await this.options.store.getDatabaseSizeBytes() });
+          sqliteFileSize: await store.getDatabaseSizeBytes() });
       }
       await this.validateDataset(manifest, dataset);
     }
@@ -366,32 +373,34 @@ export class LargeMasterSyncV3Client {
     this.metric({ event: 'sync_activated', syncId, syncVersion: manifest.syncVersion, totalSyncMs,
       recordsPerSecond: totalSyncMs > 0 ? appliedRecords / (totalSyncMs / 1000) : 0,
       chunksPerSecond: totalSyncMs > 0 ? appliedChunks / (totalSyncMs / 1000) : 0,
-      pauseTimeDueToSales: totalPauseMs, sqliteFileSize: await this.options.store.getDatabaseSizeBytes(),
+      pauseTimeDueToSales: totalPauseMs, sqliteFileSize: await store.getDatabaseSizeBytes(),
       memoryBytes: this.memoryBytes() });
     return runtime;
   }
 
   async validateSync(manifest: LargeMasterSyncV3Manifest): Promise<void> {
-    const progress = await this.options.store.readProgress(manifest.syncId);
+    const store = this.requireStore();
+    const progress = await store.readProgress(manifest.syncId);
     const declared = this.declaredDatasets(manifest);
     if (!progress || progress.syncVersion !== manifest.syncVersion
       || progress.datasets.length !== declared.length
       || progress.datasets.some(dataset => dataset.status !== 'VALIDATED' || !declared.includes(dataset.dataset))) {
       throw new LargeMasterSyncV3Error('SYNC_V3_SYNC_INCOMPLETE');
     }
-    await this.options.store.validateStaging(manifest.syncId);
+    await store.validateStaging(manifest.syncId);
   }
 
   activateSync(syncId: string): Promise<LargeMasterSyncV3RuntimeVersion> {
-    return this.options.store.activate(syncId);
+    return this.requireStore().activate(syncId);
   }
 
   rollbackSync(): Promise<LargeMasterSyncV3RuntimeVersion> {
-    return this.options.store.rollback();
+    return this.requireStore().rollback();
   }
 
   private async validateDataset(manifest: LargeMasterSyncV3Manifest, dataset: LargeMasterSyncV3Dataset): Promise<void> {
-    const progress = await this.options.store.readProgress(manifest.syncId);
+    const store = this.requireStore();
+    const progress = await store.readProgress(manifest.syncId);
     const expected = manifest.datasets[dataset]!;
     const row = progress?.datasets.find(item => item.dataset === dataset);
     if (row?.status === 'VALIDATED') return;
@@ -404,7 +413,7 @@ export class LargeMasterSyncV3Client {
     if (!expected.checksum || checksum !== expected.checksum) {
       throw new LargeMasterSyncV3Error('SYNC_V3_DATASET_CHECKSUM_MISMATCH');
     }
-    await this.options.store.markDatasetValidated(manifest.syncId, dataset);
+    await store.markDatasetValidated(manifest.syncId, dataset);
   }
 
   private async assertStorageCapacity(manifest: LargeMasterSyncV3Manifest): Promise<void> {

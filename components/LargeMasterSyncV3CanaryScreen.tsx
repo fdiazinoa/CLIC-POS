@@ -52,6 +52,7 @@ const LargeMasterSyncV3CanaryScreen: React.FC = () => {
         bindingMode: 'MASTER',
         tenantId: identity.tenantId.trim(),
         erpBaseUrl,
+        persistCredentials: false,
       });
       const token = bound.syncToken || bound.sync_token || '';
       if (!token) throw new Error('El registro ERP no devolvió syncToken. No se inició V3.');
@@ -69,7 +70,7 @@ const LargeMasterSyncV3CanaryScreen: React.FC = () => {
   const run = async () => {
     setBusy(true);
     setProgress('');
-    setMessage('Solicitando configuración inicial con capability V3...');
+    setMessage('Negociando descarga V3 con el ERP...');
     try {
       if (!registeredIdentity || registeredIdentity !== canaryIdentityKey(identity)) {
         throw new Error('El syncToken no corresponde a la identidad actual. Registra esta terminal de nuevo.');
