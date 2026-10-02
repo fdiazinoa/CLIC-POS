@@ -477,9 +477,11 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
       return;
     }
     if (dataset === 'barcodes') {
+      const barcode = String(row.code ?? row.barcode ?? '').trim();
+      if (!barcode) throw new LargeMasterSyncV3Error('SYNC_V3_RECORD_INVALID', 'Falta code/barcode');
       await db.run(`INSERT INTO master_v3_barcodes(sync_version, barcode, article_id, variant_id)
         VALUES (?, ?, ?, ?) ON CONFLICT(sync_version, barcode, article_id, variant_id) DO NOTHING`,
-      [version, requiredId(row, 'code'), requiredId(row, 'articleId'), optionalText(row.variantId) || ''], false);
+      [version, barcode, requiredId(row, 'articleId'), optionalText(row.variantId) || ''], false);
       return;
     }
     throw new LargeMasterSyncV3Error('SYNC_V3_DATASET_UNSUPPORTED');
