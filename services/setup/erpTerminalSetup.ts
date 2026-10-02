@@ -1444,6 +1444,8 @@ export const bindTerminalFromErp = async (input: {
   tenantSlug?: string | null;
   tenantEmail?: string | null;
   erpBaseUrl: string;
+  /** Canary-only: keep returned tokens in memory without replacing operational credentials. */
+  persistCredentials?: boolean;
 }): Promise<RuntimeBindTerminalResponse> => {
   const resolvedContext = await resolveErpTerminalContext({
     tenantId: input.tenantId,
@@ -1738,10 +1740,10 @@ export const bindTerminalFromErp = async (input: {
     currentProfilePayload?.profile,
     targetTerminal
   );
-  if (runtimeAuth.deviceToken) {
+  if (input.persistCredentials !== false && runtimeAuth.deviceToken) {
     persistSyncDeviceToken(runtimeAuth.deviceToken, 'ERP_REGISTER', runtimeAuth.tokenExpiresAt);
   }
-  if (runtimeAuth.deviceToken || runtimeAuth.syncToken) {
+  if (input.persistCredentials !== false && (runtimeAuth.deviceToken || runtimeAuth.syncToken)) {
     saveTerminalCredentialsSync({
       terminalId: canonicalErpTerminalId,
       erpTerminalId: canonicalErpTerminalId,

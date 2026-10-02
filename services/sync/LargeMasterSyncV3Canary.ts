@@ -1,6 +1,5 @@
 import { Capacitor } from '@capacitor/core';
 import { dbAdapter } from '../db';
-import type { fetchInitialConfigFromErp, RuntimeInitialConfigResponse } from '../setup/erpTerminalSetup';
 import {
   LargeMasterSyncV3Client,
   type LargeMasterSyncV3HttpResponse,
@@ -83,21 +82,24 @@ export const createLargeMasterSyncV3CanaryTransport = (
 type CanaryDependencies = {
   enabled?: boolean;
   assertEmulator?: () => void;
-  fetchInitialConfig: typeof fetchInitialConfigFromErp;
   getStore: () => Promise<LargeMasterSyncV3Store | undefined>;
+  createNegotiator: (input: LargeMasterSyncV3CanaryInput,
+    onMetric?: (metric: LargeMasterSyncV3Metric) => void) => Pick<LargeMasterSyncV3Client, 'requestSync'>;
   createClient: (store: LargeMasterSyncV3Store, input: LargeMasterSyncV3CanaryInput,
     onMetric?: (metric: LargeMasterSyncV3Metric) => void) => Pick<LargeMasterSyncV3Client, 'requestSync' | 'resumeSync'>;
 };
 
 const defaultDependencies: CanaryDependencies = {
   assertEmulator: assertLargeMasterSyncV3CanaryEmulator,
-  fetchInitialConfig: async input => {
-    const { fetchInitialConfigFromErp } = await import('../setup/erpTerminalSetup');
-    return fetchInitialConfigFromErp(input);
-  },
   async getStore() {
     await dbAdapter.connect();
     return dbAdapter.masterSyncV3Store;
+  },
+  createNegotiator(input, onMetric) {
+    return new LargeMasterSyncV3Client({
+      transport: createLargeMasterSyncV3CanaryTransport(input),
+      metric: onMetric,
+    });
   },
   createClient(store, input, onMetric) {
     return new LargeMasterSyncV3Client({
@@ -119,23 +121,15 @@ export const runLargeMasterSyncV3Canary = async (
   if (!input.erpBaseUrl || !input.tenantId || !input.erpTerminalId || !input.posDeviceId || !input.syncToken.trim()) {
     throw new Error('Faltan URL ERP, tenant, terminal, device o syncToken para el canario V3.');
   }
-  const bootstrap: RuntimeInitialConfigResponse = await dependencies.fetchInitialConfig({
-    erpBaseUrl,
-    tenantId: input.tenantId,
-    erpTerminalId: input.erpTerminalId,
-    posDeviceId: input.posDeviceId,
-    canaryV3: true,
-  });
-  if (!bootstrap.success) throw new Error('El ERP rechazó la configuración inicial del canario.');
-  if (bootstrap.bootstrapProtocol !== 'v3' || bootstrap.masterSync?.protocol !== 'v3') {
-    return { status: 'legacy-fallback' };
-  }
+  // Negotiate before opening SQLite. Calling initial-config first can legally
+  // fall back to the legacy full catalog, which defeats this no-sales canary.
+  const normalizedInput = { ...input, erpBaseUrl };
+  const requested = await dependencies.createNegotiator(normalizedInput, onMetric).requestSync();
+  if ('fallback' in requested) return { status: 'legacy-fallback' };
   const store = await dependencies.getStore();
   if (!store) throw new Error('SYNC_V3_NATIVE_STORE_UNAVAILABLE');
-  const client = dependencies.createClient(store, { ...input, erpBaseUrl }, onMetric);
+  const client = dependencies.createClient(store, normalizedInput, onMetric);
   const incomplete = await store.findIncomplete();
-  const requested = await client.requestSync();
-  if ('fallback' in requested) return { status: 'legacy-fallback' };
   if (incomplete && (incomplete.syncId !== requested.syncId
     || incomplete.syncVersion !== requested.syncVersion)) {
     throw new Error('SYNC_V3_STAGING_CONFLICT: la descarga pendiente no coincide con la sesión vigente del ERP; no se borró ni reemplazó.');

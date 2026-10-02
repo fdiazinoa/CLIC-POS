@@ -25,7 +25,7 @@ test('native pairing downloads initial configuration through Capacitor HTTP', ()
   );
   assert.match(
     initialConfigFlow,
-    /headers:\s*buildDeviceHeaders\(input\.posDeviceId\)/,
+    /\.\.\.buildDeviceHeaders\(input\.posDeviceId\)/,
     'native pairing must preserve the device authorization headers'
   );
 });

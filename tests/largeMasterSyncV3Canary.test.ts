@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { TerminalConfigRequestCoordinator } from '../services/sync/TerminalConfigRequestCoordinator';
+import { LargeMasterSyncV3Client } from '../services/sync/LargeMasterSyncV3Client';
 import {
   assertLargeMasterSyncV3CanaryEmulator,
   buildLargeMasterSyncV3CanaryHeaders,
@@ -17,6 +19,11 @@ const identity: LargeMasterSyncV3CanaryInput = {
   posDeviceId: 'device-id',
   syncToken: 'secret-token',
 };
+
+const canaryScreenSource = readFileSync(
+  new URL('../components/LargeMasterSyncV3CanaryScreen.tsx', import.meta.url),
+  'utf8',
+);
 
 test('legacy initial-config keeps its request headers and payload unchanged; capability is opt-in', async () => {
   const requests: Array<{ url: string; headers: HeadersInit | undefined }> = [];
@@ -65,6 +72,10 @@ test('canary request authenticates with register token without exposing it in in
   });
 });
 
+test('canary registration keeps operational credentials isolated', () => {
+  assert.match(canaryScreenSource, /bindTerminalFromErp\(\{[\s\S]*persistCredentials:\s*false/);
+});
+
 test('raw V3 transport preserves checksum-sensitive JSON text instead of native reserialization', async () => {
   const raw = '{"schemaVersion":3, "records":[{"id":"a","price":1.00}]}';
   const reserialized = JSON.stringify(JSON.parse(raw));
@@ -97,8 +108,8 @@ test('flag OFF rejects before network or SQLite; missing token also fails closed
   const dependencies: Parameters<typeof runLargeMasterSyncV3Canary>[2] = {
     enabled: false,
     assertEmulator: () => undefined,
-    fetchInitialConfig: async () => { calls += 1; throw new Error('unexpected network'); },
     getStore: async () => { calls += 1; return undefined; },
+    createNegotiator: () => { calls += 1; throw new Error('unexpected negotiator'); },
     createClient: () => { calls += 1; throw new Error('unexpected client'); },
   };
   await assert.rejects(runLargeMasterSyncV3Canary(identity, undefined, dependencies), /SYNC_V3_CANARY_DISABLED/);
@@ -107,48 +118,69 @@ test('flag OFF rejects before network or SQLite; missing token also fails closed
   assert.equal(calls, 0);
 });
 
-test('legacy bootstrap is a no-sales fallback without V3 or legacy catalog download', async () => {
-  let receivedCanary = false;
+test('server fallback is a no-sales exit without requesting the legacy catalog', async () => {
+  let requests = 0;
   const result = await runLargeMasterSyncV3Canary(identity, undefined, {
     enabled: true,
     assertEmulator: () => undefined,
-    fetchInitialConfig: async input => {
-      receivedCanary = input.canaryV3 === true;
-      return { success: true, bootstrapProtocol: 'legacy' };
-    },
-    getStore: async () => { throw new Error('SQLite must not be touched'); },
-    createClient: () => { throw new Error('V3 must not be touched'); },
+    getStore: async () => { throw new Error('fallback must not open SQLite'); },
+    createNegotiator: () => ({
+      requestSync: async () => { requests += 1; return { fallback: 'legacy' }; },
+    }),
+    createClient: () => { throw new Error('fallback must not create a persistent client'); },
   });
-  assert.equal(receivedCanary, true);
   assert.deepEqual(result, { status: 'legacy-fallback' });
+  assert.equal(requests, 1);
 });
 
-test('V3 bootstrap requests and resumes with token; server fallback and errors fail closed', async () => {
+test('V3 negotiation does not require or open a persistence store', async () => {
+  const client = new LargeMasterSyncV3Client({
+    transport: {
+      request: async () => ({
+        status: 404,
+        headers: { 'content-type': 'application/json' },
+        text: JSON.stringify({ code: 'SYNC_V3_NOT_ENABLED', fallback: 'legacy' }),
+      }),
+    },
+  });
+  assert.deepEqual(await client.requestSync(), { fallback: 'legacy' });
+  await assert.rejects(client.resumeSync('unused'), /SYNC_V3_STORE_UNAVAILABLE/);
+});
+
+test('V3 negotiation requests and resumes with token; server fallback and errors fail closed', async () => {
   let requested = 0;
   let resumed = 0;
   const base: Parameters<typeof runLargeMasterSyncV3Canary>[2] = {
     enabled: true,
     assertEmulator: () => undefined,
-    fetchInitialConfig: async () => ({ success: true, bootstrapProtocol: 'v3', masterSync: { protocol: 'v3' } }),
     getStore: async () => ({ findIncomplete: async () => null }) as never,
-    createClient: () => ({
+    createNegotiator: () => ({
       requestSync: async () => { requested += 1; return { fallback: 'legacy' }; },
+    }),
+    createClient: () => ({
+      requestSync: async () => { throw new Error('persistent client must not negotiate'); },
       resumeSync: async () => { resumed += 1; throw new Error('unexpected resume'); },
     }),
   };
   assert.deepEqual(await runLargeMasterSyncV3Canary(identity, undefined, base), { status: 'legacy-fallback' });
   assert.equal(resumed, 0);
-  base.createClient = () => ({
+  base.createNegotiator = () => ({
     requestSync: async () => { requested += 1; return { syncId: 'sync-id', syncVersion: 1,
       schemaVersion: 3, status: 'READY', manifestUrl: '/manifest' }; },
+  });
+  base.createClient = () => ({
+    requestSync: async () => { throw new Error('persistent client must not negotiate'); },
     resumeSync: async syncId => { resumed += 1; return { syncId, syncVersion: 1 }; },
   });
   assert.deepEqual(await runLargeMasterSyncV3Canary(identity, undefined, base),
     { status: 'complete', syncId: 'sync-id', syncVersion: 1 });
   assert.equal(requested, 2);
   assert.equal(resumed, 1);
-  base.createClient = () => ({
+  base.createNegotiator = () => ({
     requestSync: async () => { throw new Error('network failure'); },
+  });
+  base.createClient = () => ({
+    requestSync: async () => { throw new Error('persistent client must not negotiate'); },
     resumeSync: async () => { throw new Error('unexpected resume'); },
   });
   await assert.rejects(runLargeMasterSyncV3Canary(identity, undefined, base), /network failure/);
@@ -159,11 +191,13 @@ test('canary resumes only the ERP-current incomplete SQLite session', async () =
   const result = await runLargeMasterSyncV3Canary(identity, undefined, {
     enabled: true,
     assertEmulator: () => undefined,
-    fetchInitialConfig: async () => ({ success: true, bootstrapProtocol: 'v3', masterSync: { protocol: 'v3' } }),
     getStore: async () => ({ findIncomplete: async () => ({ syncId: 'prior-sync-id', syncVersion: 7 }) }) as never,
-    createClient: () => ({
+    createNegotiator: () => ({
       requestSync: async () => { requests += 1; return { syncId: 'prior-sync-id', syncVersion: 7,
         schemaVersion: 3, status: 'READY', manifestUrl: '/manifest' }; },
+    }),
+    createClient: () => ({
+      requestSync: async () => { throw new Error('persistent client must not negotiate'); },
       resumeSync: async syncId => ({ syncId, syncVersion: 7 }),
     }),
   });
@@ -176,11 +210,13 @@ test('canary reports a cross-session staging conflict without activating or dele
   await assert.rejects(runLargeMasterSyncV3Canary(identity, undefined, {
     enabled: true,
     assertEmulator: () => undefined,
-    fetchInitialConfig: async () => ({ success: true, bootstrapProtocol: 'v3', masterSync: { protocol: 'v3' } }),
     getStore: async () => ({ findIncomplete: async () => ({ syncId: 'old-id', syncVersion: 6 }) }) as never,
-    createClient: () => ({
+    createNegotiator: () => ({
       requestSync: async () => ({ syncId: 'new-id', syncVersion: 7,
         schemaVersion: 3, status: 'READY', manifestUrl: '/manifest' }),
+    }),
+    createClient: () => ({
+      requestSync: async () => { throw new Error('persistent client must not negotiate'); },
       resumeSync: async () => { resumes += 1; throw new Error('must not resume'); },
     }),
   }), /SYNC_V3_STAGING_CONFLICT/);
