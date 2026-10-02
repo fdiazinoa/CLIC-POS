@@ -59,6 +59,11 @@ export interface LargeMasterSyncV3ClientOptions {
   maxRetries?: number;
   maxManifestPolls?: number;
   backoffMs?: (attempt: number) => number;
+  requestTimeoutMs?: number;
+  fault?: (
+    point: 'download' | 'hash' | 'parse',
+    context: { syncId: string; dataset: LargeMasterSyncV3Dataset; chunkIndex: number },
+  ) => void | Promise<void>;
 }
 
 type RequestResult = {
@@ -181,18 +186,21 @@ export class LargeMasterSyncV3Client {
   private readonly maxManifestPolls: number;
   private readonly backoffMs: (attempt: number) => number;
   private readonly storageStats: () => Promise<LargeMasterSyncV3StorageStats>;
+  private readonly requestTimeoutMs: number;
 
   constructor(private readonly options: LargeMasterSyncV3ClientOptions) {
     this.maxRetries = options.maxRetries ?? 3;
     this.maxManifestPolls = options.maxManifestPolls ?? 120;
     this.backoffMs = options.backoffMs ?? (attempt => Math.min(8000, 500 * 2 ** attempt));
     this.storageStats = options.storageStats ?? getNativeLargeMasterSyncV3StorageStats;
+    this.requestTimeoutMs = options.requestTimeoutMs ?? 30_000;
   }
 
   async requestSync(signal?: AbortSignal): Promise<RequestResult | { fallback: 'legacy' }> {
     const response = await this.requestWithRetry('/api/sync/v3/master-syncs', 'POST', signal);
-    const body = asObject(parseJson(response.text, 'SYNC_V3_REQUEST_INVALID'));
-    if (body.code === 'SYNC_V3_NOT_ENABLED' && body.fallback === 'legacy') return { fallback: 'legacy' };
+    const body = this.responseObject(response);
+    if (['SYNC_V3_NOT_ENABLED', 'SYNC_V3_CATEGORY_SCOPE_UNSUPPORTED'].includes(String(body.code))
+      && body.fallback === 'legacy') return { fallback: 'legacy' };
     if (![200, 202].includes(response.status)) throw this.httpError(response.status, body);
     const result: RequestResult = {
       syncId: String(body.syncId || ''),
@@ -209,11 +217,11 @@ export class LargeMasterSyncV3Client {
 
   async getManifest(syncId: string, signal?: AbortSignal): Promise<LargeMasterSyncV3Manifest | { generating: true; retryAfterMs: number }> {
     const response = await this.requestWithRetry(`/api/sync/v3/master-syncs/${syncId}/manifest`, 'GET', signal);
-    const body = asObject(parseJson(response.text, 'SYNC_V3_MANIFEST_INVALID'));
     if (response.status === 202) {
       const seconds = Number(header(response.headers, 'retry-after'));
       return { generating: true, retryAfterMs: Number.isFinite(seconds) ? Math.max(1000, seconds * 1000) : 2000 };
     }
+    const body = this.responseObject(response);
     if (response.status === 409 || body.status === 'FAILED') throw new LargeMasterSyncV3Error('SYNC_V3_FAILED');
     if (response.status !== 200) throw this.httpError(response.status, body);
     return validateLargeMasterSyncV3Manifest(body, syncId);
@@ -229,12 +237,13 @@ export class LargeMasterSyncV3Client {
     for (let attempt = 0; attempt <= this.maxRetries; attempt += 1) {
       const started = performance.now();
       try {
-        const response = await this.options.transport.request(
+        const response = await this.transportRequest(
           `/api/sync/v3/master-syncs/${manifest.syncId}/datasets/${dataset}/chunks/${chunkIndex}`,
-          { method: 'GET', signal },
+          'GET', signal,
         );
         const downloadMs = performance.now() - started;
-        if (response.status !== 200) throw this.httpError(response.status, asObject(parseJson(response.text || '{}', 'SYNC_V3_HTTP_ERROR')));
+        if (response.status !== 200) throw this.httpError(response.status, this.responseObject(response, false));
+        await this.options.fault?.('download', { syncId: manifest.syncId, dataset, chunkIndex });
         const hashStarted = performance.now();
         const checksum = await sha256Utf8(response.text);
         const hashMs = performance.now() - hashStarted;
@@ -243,10 +252,12 @@ export class LargeMasterSyncV3Client {
         if (!SHA256.test(expectedChecksum) || checksum !== expectedChecksum) {
           throw new LargeMasterSyncV3Error('SYNC_V3_CHECKSUM_MISMATCH', undefined, true);
         }
+        await this.options.fault?.('hash', { syncId: manifest.syncId, dataset, chunkIndex });
         const parseStarted = performance.now();
         const envelope = parseJson(response.text, 'SYNC_V3_CHUNK_JSON_INVALID') as LargeMasterSyncV3ChunkEnvelope;
         const parseMs = performance.now() - parseStarted;
         this.validateChunk(envelope, manifest, dataset, chunkIndex, expectedRecordCount);
+        await this.options.fault?.('parse', { syncId: manifest.syncId, dataset, chunkIndex });
         const rawBytes = encoder.encode(response.text).byteLength;
         this.metric({ event: 'chunk_downloaded', syncId: manifest.syncId, syncVersion: manifest.syncVersion,
           dataset, chunkIndex, downloadMs, hashMs, parseMs, records: envelope.records.length,
@@ -299,8 +310,23 @@ export class LargeMasterSyncV3Client {
       await sleep(result.retryAfterMs);
     }
     if (!manifest) throw new LargeMasterSyncV3Error('SYNC_V3_MANIFEST_POLL_EXHAUSTED', undefined, true);
-    await this.assertStorageCapacity(manifest);
+    const priorProgress = await this.options.store.readProgress(syncId);
+    if (priorProgress && priorProgress.syncVersion !== manifest.syncVersion) {
+      throw new LargeMasterSyncV3Error('SYNC_V3_RESUME_MANIFEST_MISMATCH');
+    }
+    if (priorProgress?.status === 'ACTIVE') {
+      const active = await this.options.store.getActiveRuntimeVersion();
+      if (!active || active.syncId !== syncId || active.syncVersion !== manifest.syncVersion) {
+        throw new LargeMasterSyncV3Error('SYNC_V3_ACTIVE_POINTER_MISMATCH');
+      }
+      return active;
+    }
+    if (!priorProgress) await this.assertStorageCapacity(manifest);
     await this.options.store.prepare(manifest);
+    if (priorProgress?.status === 'VALIDATED') {
+      await this.validateSync(manifest);
+      return this.activateSync(syncId);
+    }
     let totalPauseMs = 0;
     let appliedRecords = 0;
     let appliedChunks = 0;
@@ -356,6 +382,7 @@ export class LargeMasterSyncV3Client {
     const progress = await this.options.store.readProgress(manifest.syncId);
     const expected = manifest.datasets[dataset]!;
     const row = progress?.datasets.find(item => item.dataset === dataset);
+    if (row?.status === 'VALIDATED') return;
     if (!row || row.appliedCount !== expected.count || row.appliedChunks !== expected.chunks) {
       throw new LargeMasterSyncV3Error('SYNC_V3_DATASET_INCOMPLETE');
     }
@@ -383,7 +410,7 @@ export class LargeMasterSyncV3Client {
     let lastError: unknown;
     for (let attempt = 0; attempt <= this.maxRetries; attempt += 1) {
       try {
-        const response = await this.options.transport.request(path, { method, signal });
+        const response = await this.transportRequest(path, method, signal);
         if ([408, 425, 429, 500, 502, 503, 504].includes(response.status)) {
           throw new LargeMasterSyncV3Error('SYNC_V3_HTTP_TEMPORARY', String(response.status), true);
         }
@@ -400,6 +427,49 @@ export class LargeMasterSyncV3Client {
   private httpError(status: number, body: Record<string, unknown>): LargeMasterSyncV3Error {
     const code = String(body.code || `SYNC_V3_HTTP_${status}`);
     return new LargeMasterSyncV3Error(code, code, [408, 425, 429, 500, 502, 503, 504].includes(status));
+  }
+
+  private responseObject(response: LargeMasterSyncV3HttpResponse, strict = true): Record<string, unknown> {
+    const text = response.text.trim();
+    const contentType = header(response.headers, 'content-type').toLowerCase();
+    const looksJson = contentType.includes('json') || text.startsWith('{');
+    if (!looksJson) {
+      if (strict && response.status >= 200 && response.status < 300) {
+        throw new LargeMasterSyncV3Error('SYNC_V3_RESPONSE_NOT_JSON');
+      }
+      return {};
+    }
+    try {
+      return asObject(JSON.parse(text));
+    } catch {
+      if (strict) throw new LargeMasterSyncV3Error('SYNC_V3_RESPONSE_JSON_INVALID');
+      return {};
+    }
+  }
+
+  private async transportRequest(
+    path: string,
+    method: 'GET' | 'POST',
+    signal?: AbortSignal,
+  ): Promise<LargeMasterSyncV3HttpResponse> {
+    if (signal?.aborted) throw new DOMException('Request aborted', 'AbortError');
+    const controller = new AbortController();
+    let timedOut = false;
+    const forwardAbort = () => controller.abort();
+    signal?.addEventListener('abort', forwardAbort, { once: true });
+    const timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, this.requestTimeoutMs);
+    try {
+      return await this.options.transport.request(path, { method, signal: controller.signal });
+    } catch (error) {
+      if (timedOut) throw new LargeMasterSyncV3Error('SYNC_V3_TIMEOUT', undefined, true);
+      throw error;
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', forwardAbort);
+    }
   }
 
   private retryable(error: unknown): boolean {

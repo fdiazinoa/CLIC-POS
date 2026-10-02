@@ -107,7 +107,13 @@ try {
       return { changes: { changes: info.changes } };
     },
   };
-  const store = new LargeMasterSyncV3SqliteStore(() => connection);
+  let writeQueue: Promise<unknown> = Promise.resolve();
+  const writeLock = <T>(operation: () => Promise<T>): Promise<T> => {
+    const result = writeQueue.then(operation, operation);
+    writeQueue = result.then(() => undefined, () => undefined);
+    return result;
+  };
+  const store = new LargeMasterSyncV3SqliteStore(() => connection, writeLock);
   const metrics: LargeMasterSyncV3Metric[] = [];
   let peakRss = process.memoryUsage().rss;
   const started = performance.now();

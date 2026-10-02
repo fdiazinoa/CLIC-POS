@@ -15,6 +15,16 @@ type SQLiteConnection = {
   query(sql: string, values?: unknown[]): Promise<QueryResult>;
   run(sql: string, values?: unknown[], transaction?: boolean): Promise<unknown>;
 };
+export type LargeMasterSyncV3WriteLock = <T>(operation: () => Promise<T>) => Promise<T>;
+export type LargeMasterSyncV3SqliteFaultPoint =
+  | 'apply_after_records'
+  | 'apply_before_commit'
+  | 'dataset_before_validate'
+  | 'activation_after_pointer';
+export type LargeMasterSyncV3SqliteFaultHook = (
+  point: LargeMasterSyncV3SqliteFaultPoint,
+  context: Record<string, unknown>,
+) => void | Promise<void>;
 
 type RecordObject = Record<string, unknown>;
 const CHUNK_SUB_BATCH_SIZE = 250;
@@ -38,23 +48,38 @@ const rows = (result: QueryResult): Array<Record<string, unknown>> => Array.isAr
 const first = (result: QueryResult): Record<string, unknown> | null => rows(result)[0] || null;
 
 export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
-  private writeQueue: Promise<unknown> = Promise.resolve();
-
-  constructor(private readonly connection: () => SQLiteConnection) {}
+  constructor(
+    private readonly connection: () => SQLiteConnection,
+    private readonly writeLock: LargeMasterSyncV3WriteLock,
+    private readonly fault?: LargeMasterSyncV3SqliteFaultHook,
+  ) {}
 
   async prepare(manifest: LargeMasterSyncV3Manifest): Promise<void> {
-    await this.withWriteLock(async () => {
+    await this.writeLock(async () => {
       const db = this.connection();
       await db.execute('BEGIN IMMEDIATE TRANSACTION;', false);
       try {
         const existing = first(await db.query(
-          'SELECT sync_version, schema_version, manifest_json FROM sync_v3_sessions WHERE sync_id = ?',
+          'SELECT sync_version, schema_version, manifest_json, status FROM sync_v3_sessions WHERE sync_id = ?',
           [manifest.syncId],
         ));
         if (existing && (Number(existing.sync_version) !== manifest.syncVersion
           || Number(existing.schema_version) !== manifest.schemaVersion
           || String(existing.manifest_json) !== JSON.stringify(manifest))) {
           throw new LargeMasterSyncV3Error('SYNC_V3_RESUME_MANIFEST_MISMATCH');
+        }
+        if (existing?.status === 'ROLLED_BACK' || existing?.status === 'FAILED') {
+          throw new LargeMasterSyncV3Error('SYNC_V3_SESSION_NOT_RESUMABLE');
+        }
+        if (existing?.status === 'ACTIVE') {
+          const active = first(await db.query(`SELECT active_sync_id, active_version
+            FROM master_v3_state WHERE singleton = 1`));
+          if (String(active?.active_sync_id || '') !== manifest.syncId
+            || Number(active?.active_version) !== manifest.syncVersion) {
+            throw new LargeMasterSyncV3Error('SYNC_V3_ACTIVE_POINTER_MISMATCH');
+          }
+          await db.execute('COMMIT;', false);
+          return;
         }
         const timestamp = now();
         await db.run(`INSERT OR IGNORE INTO sync_v3_sessions
@@ -76,6 +101,13 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
             expected.chunks === 0 && expected.count === 0 ? 'COMPLETE' : 'PENDING',
             timestamp,
           ], false);
+          const stored = first(await db.query(`SELECT expected_count, expected_chunks, expected_checksum
+            FROM sync_v3_dataset_progress WHERE sync_id = ? AND dataset = ?`, [manifest.syncId, dataset]));
+          if (!stored || Number(stored.expected_count) !== expected.count
+            || Number(stored.expected_chunks) !== expected.chunks
+            || String(stored.expected_checksum || '') !== String(expected.checksum || '')) {
+            throw new LargeMasterSyncV3Error('SYNC_V3_RESUME_MANIFEST_MISMATCH');
+          }
         }
         await db.run(`UPDATE master_v3_state SET staging_version = ?, staging_sync_id = ?, updated_at = ?
           WHERE singleton = 1 AND (staging_sync_id IS NULL OR staging_sync_id = ?)`,
@@ -133,7 +165,7 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
   }
 
   async applyChunk(chunk: LargeMasterSyncV3Chunk): Promise<'APPLIED' | 'ALREADY_APPLIED'> {
-    return this.withWriteLock(async () => {
+    return this.writeLock(async () => {
       const db = this.connection();
       await db.execute('BEGIN IMMEDIATE TRANSACTION;', false);
       try {
@@ -165,10 +197,10 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
           for (const rawRecord of batch) {
             await this.upsertRecord(db, chunk.envelope.dataset, syncVersion, object(rawRecord));
           }
-          if (offset + CHUNK_SUB_BATCH_SIZE < chunk.envelope.records.length) {
-            await new Promise<void>(resolve => setTimeout(resolve, 0));
-          }
         }
+        await this.fault?.('apply_after_records', {
+          syncId: chunk.envelope.syncId, dataset: chunk.envelope.dataset, chunkIndex: chunk.envelope.chunkIndex,
+        });
         const timestamp = now();
         await db.run(`INSERT INTO sync_v3_chunks
           (sync_id, dataset, chunk_index, checksum, record_count, raw_bytes, status, applied_at)
@@ -184,6 +216,9 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
         ], false);
         await db.run('UPDATE sync_v3_sessions SET updated_at = ? WHERE sync_id = ?',
           [timestamp, chunk.envelope.syncId], false);
+        await this.fault?.('apply_before_commit', {
+          syncId: chunk.envelope.syncId, dataset: chunk.envelope.dataset, chunkIndex: chunk.envelope.chunkIndex,
+        });
         await db.execute('COMMIT;', false);
         return 'APPLIED';
       } catch (error) {
@@ -194,8 +229,15 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
   }
 
   async markDatasetValidated(syncId: string, dataset: LargeMasterSyncV3Dataset): Promise<void> {
-    await this.withWriteLock(async () => {
-      const result = await this.connection().run(`UPDATE sync_v3_dataset_progress SET status = 'VALIDATED',
+    await this.writeLock(async () => {
+      const db = this.connection();
+      const current = first(await db.query(`SELECT status, applied_count, expected_count, applied_chunks, expected_chunks
+        FROM sync_v3_dataset_progress WHERE sync_id = ? AND dataset = ?`, [syncId, dataset]));
+      if (current?.status === 'VALIDATED'
+        && Number(current.applied_count) === Number(current.expected_count)
+        && Number(current.applied_chunks) === Number(current.expected_chunks)) return;
+      await this.fault?.('dataset_before_validate', { syncId, dataset });
+      const result = await db.run(`UPDATE sync_v3_dataset_progress SET status = 'VALIDATED',
         updated_at = ? WHERE sync_id = ? AND dataset = ? AND status = 'COMPLETE'
         AND applied_count = expected_count AND applied_chunks = expected_chunks`, [now(), syncId, dataset]);
       const changes = Number((result as { changes?: { changes?: number } })?.changes?.changes ?? 0);
@@ -204,10 +246,10 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
   }
 
   async validateStaging(syncId: string): Promise<void> {
-    await this.withWriteLock(async () => {
+    await this.writeLock(async () => {
       const db = this.connection();
       const session = first(await db.query(
-        "SELECT sync_version FROM sync_v3_sessions WHERE sync_id = ? AND status = 'STAGING'", [syncId],
+        "SELECT sync_version, status FROM sync_v3_sessions WHERE sync_id = ? AND status IN ('STAGING','VALIDATED')", [syncId],
       ));
       if (!session) throw new LargeMasterSyncV3Error('SYNC_V3_SESSION_NOT_STAGING');
       const incomplete = first(await db.query(`SELECT dataset FROM sync_v3_dataset_progress
@@ -231,14 +273,21 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
       if (!quick || !Object.values(quick).some(value => String(value).toLowerCase() === 'ok')) {
         throw new LargeMasterSyncV3Error('SYNC_V3_QUICK_CHECK_FAILED');
       }
-      await db.run("UPDATE sync_v3_sessions SET status = 'VALIDATED', updated_at = ? WHERE sync_id = ?",
-        [now(), syncId]);
+      if (session.status !== 'VALIDATED') {
+        await db.run("UPDATE sync_v3_sessions SET status = 'VALIDATED', updated_at = ? WHERE sync_id = ?",
+          [now(), syncId]);
+      }
     });
   }
 
   async activate(syncId: string): Promise<LargeMasterSyncV3RuntimeVersion> {
-    return this.withWriteLock(async () => {
+    return this.writeLock(async () => {
       const db = this.connection();
+      const alreadyActive = first(await db.query(`SELECT s.sync_version FROM sync_v3_sessions s
+        JOIN master_v3_state state ON state.singleton = 1
+        WHERE s.sync_id = ? AND s.status = 'ACTIVE'
+        AND state.active_sync_id = s.sync_id AND state.active_version = s.sync_version`, [syncId]));
+      if (alreadyActive) return { syncId, syncVersion: Number(alreadyActive.sync_version) };
       await db.execute('BEGIN IMMEDIATE TRANSACTION;', false);
       try {
         const session = first(await db.query(
@@ -254,6 +303,7 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
           previous_version = active_version, previous_sync_id = active_sync_id,
           active_version = staging_version, active_sync_id = staging_sync_id,
           staging_version = NULL, staging_sync_id = NULL, updated_at = ? WHERE singleton = 1`, [timestamp], false);
+        await this.fault?.('activation_after_pointer', { syncId, syncVersion: Number(session.sync_version) });
         await db.run("UPDATE sync_v3_sessions SET status = 'ACTIVE', activated_at = ?, updated_at = ? WHERE sync_id = ?",
           [timestamp, timestamp, syncId], false);
         if (state?.active_sync_id) {
@@ -270,7 +320,7 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
   }
 
   async rollback(): Promise<LargeMasterSyncV3RuntimeVersion> {
-    return this.withWriteLock(async () => {
+    return this.writeLock(async () => {
       const db = this.connection();
       await db.execute('BEGIN IMMEDIATE TRANSACTION;', false);
       try {
@@ -353,7 +403,7 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
 
   async cleanupExpiredVersions(olderThanIso: string, maxVersions = 1): Promise<number> {
     const limit = Math.max(1, Math.min(5, Math.floor(maxVersions)));
-    return this.withWriteLock(async () => {
+    return this.writeLock(async () => {
       const db = this.connection();
       const candidates = rows(await db.query(`SELECT s.sync_id, s.sync_version
         FROM sync_v3_sessions s, master_v3_state state
@@ -435,9 +485,4 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
     throw new LargeMasterSyncV3Error('SYNC_V3_DATASET_UNSUPPORTED');
   }
 
-  private withWriteLock<T>(operation: () => Promise<T>): Promise<T> {
-    const result = this.writeQueue.then(operation, operation);
-    this.writeQueue = result.then(() => undefined, () => undefined);
-    return result;
-  }
 }

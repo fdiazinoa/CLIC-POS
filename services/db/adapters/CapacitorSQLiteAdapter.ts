@@ -50,6 +50,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
     public readonly adapterType = 'local';
     public readonly masterSyncV3Store = new LargeMasterSyncV3SqliteStore(
         () => this.ensureDb() as any,
+        operation => this.withWriteLock(operation),
     );
 
     async connect(): Promise<void> {

@@ -1,4 +1,4 @@
-import { isPosSaleActive, waitForPosSaleIdle } from '../../utils/posSaleActivity';
+import { POS_SALE_ACTIVITY_EVENT, isPosSaleActive, waitForPosSaleIdle } from '../../utils/posSaleActivity';
 
 export type LargeMasterSyncV3CriticalOperation = 'PAYMENT' | 'PRINT' | 'UI_CRITICAL';
 
@@ -30,15 +30,22 @@ export const runWithLargeMasterSyncV3CriticalOperation = async <T>(
 
 export const waitForLargeMasterSyncV3OperationalWindow = async (): Promise<number> => {
   const startedAt = performance.now();
-  await waitForPosSaleIdle();
-  if (activeOperations.size) {
+  while (isPosSaleActive() || activeOperations.size) {
+    await waitForPosSaleIdle();
+    if (!activeOperations.size && !isPosSaleActive()) break;
     await new Promise<void>(resolve => {
       const check = () => {
         if (activeOperations.size || isPosSaleActive()) return;
         listeners.delete(check);
+        if (typeof window !== 'undefined') {
+          window.removeEventListener(POS_SALE_ACTIVITY_EVENT, check);
+        }
         resolve();
       };
       listeners.add(check);
+      if (typeof window !== 'undefined') {
+        window.addEventListener(POS_SALE_ACTIVITY_EVENT, check);
+      }
       check();
     });
   }
