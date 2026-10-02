@@ -116,6 +116,65 @@ test('direct table mutation closes a verified 409 lock rejection without blockin
   }
 });
 
+for (const code of ['PARKED_TICKETS_BASE_REVISION_STALE', 'PARKED_TICKETS_BASE_REVISION_AHEAD']) {
+  test(`parked-ticket ${code} rejection closes the journal and permits a later acquire`, async () => {
+    const restore = installAndroid();
+    const store = new Store();
+    const journal = new LegacyMutationJournal(store);
+    await journal.initializeForStartup();
+    setNativeRequestTransportForTests((async () => ({ status: 409, data: { success: false, code } })) as any);
+    try {
+      await assert.rejects(dispatchLegacyLanMutation({
+        url: 'http://10.0.0.129:3001/api/mesas/parked-tickets',
+        method: 'PUT',
+        operation: 'PARKED_TICKETS_SYNC',
+        validateResponse: () => undefined,
+        journal,
+        authorityState: { revision: 7, terminalId: 'terminal-a' },
+      }), new RegExp(code));
+      assert.equal(journal.hasBlockingMutations(), false);
+      assert.equal([...store.rows.values()][0]?.classification, 'SAFE_PRE_SIDE_EFFECT');
+      await journal.begin({
+        authorityFingerprint: 'http://10.0.0.129:3001|terminal-a',
+        generation: 7,
+        method: 'POST',
+        url: 'http://10.0.0.129:3001/api/mesas/bloquear',
+        diagnosticRequestId: `acquire-after-${code}`,
+      });
+    } finally {
+      restore();
+    }
+  });
+}
+
+test('another parked-ticket 409 remains OUTCOME_UNKNOWN and blocks a later acquire', async () => {
+  const restore = installAndroid();
+  const store = new Store();
+  const journal = new LegacyMutationJournal(store);
+  await journal.initializeForStartup();
+  setNativeRequestTransportForTests((async () => ({ status: 409, data: { success: false, code: 'OTHER_CONFLICT' } })) as any);
+  try {
+    await assert.rejects(dispatchLegacyLanMutation({
+      url: 'http://10.0.0.129:3001/api/mesas/parked-tickets',
+      method: 'PUT',
+      operation: 'PARKED_TICKETS_SYNC',
+      validateResponse: () => undefined,
+      journal,
+      authorityState: { revision: 7, terminalId: 'terminal-a' },
+    }), /LEGACY_MUTATION_OUTCOME_UNKNOWN:409/);
+    assert.equal(journal.hasOutcomeUnknown(), true);
+    await assert.rejects(journal.begin({
+      authorityFingerprint: 'http://10.0.0.129:3001|terminal-a',
+      generation: 7,
+      method: 'POST',
+      url: 'http://10.0.0.129:3001/api/mesas/bloquear',
+      diagnosticRequestId: 'blocked-acquire',
+    }), /LEGACY_MUTATION_OUTCOME_UNKNOWN/);
+  } finally {
+    restore();
+  }
+});
+
 test('adapter closes a verified 409 table-lock rejection but leaves other conflicts ambiguous', async () => {
   const restore = installAndroid();
   const { adapter, journal, store } = await adapterFor();

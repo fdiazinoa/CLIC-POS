@@ -18,7 +18,11 @@ export const isSafeTableLockRejection = (
     return (path === '/api/mesas/bloquear' && code === 'TABLE_EDIT_LOCKED')
       || (path === '/api/mesas/desbloquear' && code === 'TABLE_EDIT_LOCK_OWNERSHIP_MISMATCH');
   }
-  return method.toUpperCase() === 'PUT'
-    && code === 'TABLE_EDIT_LOCK_REQUIRED'
-    && (path === '/api/mesas/parked-tickets' || /^\/api\/tables\/[^/]+$/.test(path));
+  if (method.toUpperCase() !== 'PUT') return false;
+  if (path === '/api/mesas/parked-tickets') {
+    return code === 'TABLE_EDIT_LOCK_REQUIRED'
+      || code === 'PARKED_TICKETS_BASE_REVISION_STALE'
+      || code === 'PARKED_TICKETS_BASE_REVISION_AHEAD';
+  }
+  return code === 'TABLE_EDIT_LOCK_REQUIRED' && /^\/api\/tables\/[^/]+$/.test(path);
 };
