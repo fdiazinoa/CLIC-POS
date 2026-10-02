@@ -24,7 +24,7 @@ export const updateTablesAfterAccountClose = (input: {
   closedTable: Table;
   closedOrderId?: string;
   remainingTickets?: ParkedTicket[];
-}): { tables: Table[]; targetTable: Table } => {
+}): { tables: Table[]; targetTable: Table; affectedTables: Table[] } => {
   const tableId = String(input.closedTable.id ?? '').trim();
   const closedOrderId = String(input.closedOrderId || '').trim();
   const remainingTickets = (input.remainingTickets || []).filter(ticket =>
@@ -56,6 +56,35 @@ export const updateTablesAfterAccountClose = (input: {
 
   const explicitMembership = nextTicket ? ticketMembershipIds(nextTicket) : new Set<string>();
   explicitMembership.add(tableId);
+  const closedMembership = new Set<string>([tableId]);
+  if (closedOrderId) {
+    input.tables.forEach(table => {
+      if (String(table.currentOrderId || '').trim() === closedOrderId) {
+        closedMembership.add(String(table.id));
+      }
+    });
+  }
+  let membershipExpanded = true;
+  while (membershipExpanded) {
+    membershipExpanded = false;
+    input.tables.forEach(table => {
+      const currentId = String(table.id);
+      const joinedIds = [table.joinedTableId, table.joinedSourceTableId]
+        .map(id => String(id || '').trim())
+        .filter(Boolean);
+      if (closedMembership.has(currentId)) {
+        joinedIds.forEach(joinedId => {
+          if (!closedMembership.has(joinedId)) {
+            closedMembership.add(joinedId);
+            membershipExpanded = true;
+          }
+        });
+      } else if (joinedIds.some(joinedId => closedMembership.has(joinedId))) {
+        closedMembership.add(currentId);
+        membershipExpanded = true;
+      }
+    });
+  }
   const primaryId = String(nextTicket?.primaryTableId || nextTicket?.tableId || '').trim();
   const primaryTable = input.tables.find(table => String(table.id) === primaryId);
   const primaryTableName = String(primaryTable?.nombre || primaryTable?.name || '').trim();
@@ -63,24 +92,40 @@ export const updateTablesAfterAccountClose = (input: {
   const foundTarget = input.tables.some(table => String(table.id) === tableId);
   const tables = input.tables.map(table => {
     const currentId = String(table.id);
-    if (currentId === tableId && !nextTicket) return targetTable;
-    if (!nextTicket || !explicitMembership.has(currentId)) return table;
-    const isSecondaryTable = isSharedAccount && currentId !== primaryId;
-    return {
-      ...(currentId === tableId ? targetTable : table),
-      status: 'OCCUPIED',
-      currentOrderId: nextTicket.id,
-      currentOrderTotal: currentId === primaryId ? ticketTotal(nextTicket) : 0,
-      timeSeated: table.timeSeated || nextTicket.timestamp,
-      joinedSourceTableId: isSharedAccount ? primaryId : undefined,
-      joinedSourceTableName: isSharedAccount ? primaryTableName : undefined,
-      joinedTableId: isSharedAccount
-        ? (isSecondaryTable ? primaryId : table.joinedTableId)
-        : undefined,
-      joinedTableName: isSharedAccount
-        ? (isSecondaryTable ? primaryTableName : table.joinedTableName)
-        : undefined,
-    } as Table;
+    if (nextTicket && explicitMembership.has(currentId)) {
+      const isSecondaryTable = isSharedAccount && currentId !== primaryId;
+      return {
+        ...(currentId === tableId ? targetTable : table),
+        status: 'OCCUPIED',
+        currentOrderId: nextTicket.id,
+        currentOrderTotal: currentId === primaryId ? ticketTotal(nextTicket) : 0,
+        timeSeated: table.timeSeated || nextTicket.timestamp,
+        joinedSourceTableId: isSharedAccount ? primaryId : undefined,
+        joinedSourceTableName: isSharedAccount ? primaryTableName : undefined,
+        joinedTableId: isSharedAccount
+          ? (isSecondaryTable ? primaryId : table.joinedTableId)
+          : undefined,
+        joinedTableName: isSharedAccount
+          ? (isSecondaryTable ? primaryTableName : table.joinedTableName)
+          : undefined,
+      } as Table;
+    }
+    if (!closedMembership.has(currentId)) return table;
+    return clearJoinedMembership({
+      ...table,
+      status: 'FREE',
+      currentOrderId: undefined,
+      currentOrderTotal: undefined,
+      timeSeated: undefined,
+      waiterId: undefined,
+      waiterName: undefined,
+      guests: undefined,
+      barTabId: undefined,
+      barTabName: undefined,
+    } as Table);
   });
-  return { tables: foundTarget ? tables : [...tables, targetTable], targetTable };
+  const nextTables = foundTarget ? tables : [...tables, targetTable];
+  const resolvedTarget = nextTables.find(table => String(table.id) === tableId) || targetTable;
+  const affectedTables = nextTables.filter((table, index) => table !== input.tables[index]);
+  return { tables: nextTables, targetTable: resolvedTarget, affectedTables };
 };

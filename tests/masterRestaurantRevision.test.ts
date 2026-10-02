@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { applyAuthoritativeMasterRestaurantSnapshot } from '../utils/masterRestaurantRevision';
+import {
+  applyAuthoritativeMasterRestaurantSnapshot,
+  mergeKnownMasterRestaurantRevision,
+} from '../utils/masterRestaurantRevision';
 
 test('ACK advances known only and an equal-known poll applies the authoritative snapshot once', async () => {
   let knownRevision = 807;
@@ -89,4 +92,13 @@ test('a SQLite failure keeps applied behind so the equal-known snapshot retries 
   });
   assert.equal(retry.appliedRevision, 807);
   assert.equal(publishes, 2);
+});
+
+test('completion of an older persistence never lowers a newer known revision', () => {
+  const revisionObservedWhilePersistenceWasPending = 809;
+  const completedSnapshotRevision = 807;
+  assert.equal(
+    mergeKnownMasterRestaurantRevision(revisionObservedWhilePersistenceWasPending, completedSnapshotRevision),
+    809,
+  );
 });

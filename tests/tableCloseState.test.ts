@@ -81,3 +81,56 @@ test('remaining joined membership updates only its explicit primary and secondar
   assert.equal(result.tables[1].joinedTableId, 'mesa-1');
   assert.deepEqual(result.tables[2], mesa3);
 });
+
+test('closing the final shared order frees every table that owned that order', () => {
+  const mesa1 = {
+    ...table('mesa-1', 'shared-order'),
+    joinedTableId: 'mesa-2',
+    joinedSourceTableId: 'mesa-1',
+  };
+  const mesa2 = {
+    ...table('mesa-2', 'shared-order'),
+    joinedTableId: 'mesa-1',
+    joinedSourceTableId: 'mesa-1',
+  };
+  const mesa3 = table('mesa-3', 'unrelated-order');
+  const result = updateTablesAfterAccountClose({
+    tables: [mesa1, mesa2, mesa3],
+    closedTable: mesa1,
+    closedOrderId: 'shared-order',
+    remainingTickets: [],
+  });
+  assert.deepEqual(result.tables.slice(0, 2).map(item => ({
+    id: item.id,
+    status: item.status,
+    currentOrderId: item.currentOrderId,
+    joinedTableId: item.joinedTableId,
+  })), [
+    { id: 'mesa-1', status: 'FREE', currentOrderId: undefined, joinedTableId: undefined },
+    { id: 'mesa-2', status: 'FREE', currentOrderId: undefined, joinedTableId: undefined },
+  ]);
+  assert.deepEqual(result.tables[2], mesa3);
+  assert.deepEqual(result.affectedTables.map(item => item.id), ['mesa-1', 'mesa-2']);
+});
+
+test('a remaining account on the primary table frees old shared members only', () => {
+  const mesa1 = table('mesa-1', 'shared-order');
+  const mesa2 = {
+    ...table('mesa-2', 'shared-order'),
+    joinedTableId: 'mesa-1',
+    joinedSourceTableId: 'mesa-1',
+  };
+  const mesa3 = table('mesa-3', 'unrelated-order');
+  const remaining = ticket('next-order', 'mesa-1');
+  const result = updateTablesAfterAccountClose({
+    tables: [mesa1, mesa2, mesa3],
+    closedTable: mesa1,
+    closedOrderId: 'shared-order',
+    remainingTickets: [remaining],
+  });
+  assert.equal(result.tables[0].currentOrderId, 'next-order');
+  assert.equal(result.tables[0].status, 'OCCUPIED');
+  assert.equal(result.tables[1].currentOrderId, undefined);
+  assert.equal(result.tables[1].status, 'FREE');
+  assert.deepEqual(result.tables[2], mesa3);
+});

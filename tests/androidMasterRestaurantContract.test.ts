@@ -396,6 +396,21 @@ test('los renders de la Master no reemplazan el estado operativo nativo', () => 
   assert.match(masterServerEffect, /lastAppliedMasterRestaurantRevisionRef\.current = applyResult\.appliedRevision/);
   assert.match(masterServerEffect, /revision <= lastAppliedMasterRestaurantRevisionRef\.current/);
   assert.match(masterServerEffect, /revision < masterRestaurantRevisionRef\.current/);
+  assert.match(masterServerEffect, /restaurantPersistenceQueueRef\.current\.run\(\(\) => Promise\.all/);
+  assert.match(masterServerEffect, /mergeKnownMasterRestaurantRevision\([\s\S]*masterRestaurantRevisionRef\.current,[\s\S]*applyResult\.knownRevision/);
+});
+
+test('el cierre de cuenta persiste solo mesas afectadas fuera del updater de React', () => {
+  const closeHandlerSource = appSource.slice(
+    appSource.indexOf('onTableOrderClosed={(table'),
+    appSource.indexOf('onOpenAgenda=', appSource.indexOf('onTableOrderClosed={(table')),
+  );
+  const updaterSource = closeHandlerSource.slice(
+    closeHandlerSource.indexOf('setTables(previousTables =>'),
+    closeHandlerSource.indexOf('restaurantPersistenceQueueRef.current.run'),
+  );
+  assert.doesNotMatch(updaterSource, /db\.save/);
+  assert.match(closeHandlerSource, /closeState\.affectedTables\.map\(affectedTable => db\.saveDocument\('tables', affectedTable\)\)/);
 });
 
 test('la Caja Master Android se anuncia y puede identificarse automáticamente en la red local', () => {

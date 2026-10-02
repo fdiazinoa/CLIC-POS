@@ -385,7 +385,11 @@ import {
 import { parkedTicketBelongsToTable } from './utils/parkedTicketTableMembership';
 import { assertParkedTicketsAcknowledged } from './utils/parkedTicketAck';
 import { assertFloorPlanAcknowledged } from './utils/floorPlanAck';
-import { applyAuthoritativeMasterRestaurantSnapshot } from './utils/masterRestaurantRevision';
+import {
+  applyAuthoritativeMasterRestaurantSnapshot,
+  mergeKnownMasterRestaurantRevision,
+} from './utils/masterRestaurantRevision';
+import { RestaurantPersistenceQueue } from './utils/restaurantPersistenceQueue';
 import { updateTablesAfterAccountClose } from './utils/tableCloseState';
 import {
   dispatchLegacyLanMutation,
@@ -4480,6 +4484,7 @@ const AppContent: React.FC = () => {
   const [activeCartDraftRestorePrompt, setActiveCartDraftRestorePrompt] = useState<ActiveCartDraft | null>(null);
   const masterRestaurantRevisionRef = useRef(0);
   const lastAppliedMasterRestaurantRevisionRef = useRef(0);
+  const restaurantPersistenceQueueRef = useRef(new RestaurantPersistenceQueue());
   const lastAppliedClientRestaurantRevisionRef = useRef(0);
   const lastAppliedClientTablesSnapshotVersionRef = useRef('');
   const lastAppliedClientTablesAuthorityRef = useRef('');
@@ -4768,15 +4773,18 @@ const AppContent: React.FC = () => {
               masterOperationalSnapshotRef.current.cashMovements,
             );
           },
-          persist: snapshot => Promise.all([
-            db.save('rooms', snapshot.rooms),
-            db.save('tables', snapshot.tables),
-            db.save('parkedTickets', snapshot.parkedTickets),
-            db.save('customers', snapshot.customers),
-            ...(snapshot.productsChanged ? [db.save('products', snapshot.products)] : []),
-          ]).then(() => undefined),
+          persist: snapshot => restaurantPersistenceQueueRef.current.run(() => Promise.all([
+              db.save('rooms', snapshot.rooms),
+              db.save('tables', snapshot.tables),
+              db.save('parkedTickets', snapshot.parkedTickets),
+              db.save('customers', snapshot.customers),
+              ...(snapshot.productsChanged ? [db.save('products', snapshot.products)] : []),
+            ]).then(() => undefined)),
         });
-        masterRestaurantRevisionRef.current = applyResult.knownRevision;
+        masterRestaurantRevisionRef.current = mergeKnownMasterRestaurantRevision(
+          masterRestaurantRevisionRef.current,
+          applyResult.knownRevision,
+        );
         if (!applyResult.applied) return;
         lastAppliedMasterRestaurantRevisionRef.current = applyResult.appliedRevision;
         customersCreatedByClients.forEach((customer: Customer) => {
@@ -13111,27 +13119,33 @@ const AppContent: React.FC = () => {
                   if (oldestOrderId) closedRestaurantOrderIdsRef.current.delete(oldestOrderId);
                 }
               }
-              const { targetTable: nextTable } = updateTablesAfterAccountClose({
-                tables: [table],
+              const closeState = updateTablesAfterAccountClose({
+                tables: masterOperationalSnapshotRef.current.tables,
                 closedTable: table,
                 closedOrderId,
                 remainingTickets,
               });
+              const nextTable = closeState.targetTable;
+              masterOperationalSnapshotRef.current = {
+                ...masterOperationalSnapshotRef.current,
+                tables: closeState.tables,
+              };
 
               // La mesa vacía también sigue el contrato LOCAL_COMMITTED: la UI y
               // el lock local cambian en esta misma tarea. SQLite, HTTP y la
               // liberación remota conservan su orden, pero nunca bloquean volver
               // al mapa ni la siguiente interacción del operador.
               setTables(previousTables => {
-                const nextState = updateTablesAfterAccountClose({
+                return updateTablesAfterAccountClose({
                   tables: previousTables,
                   closedTable: table,
                   closedOrderId,
                   remainingTickets,
                 }).tables;
-                void db.save('tables', nextState).catch(error => console.error('Failed to persist table release:', error));
-                return nextState;
               });
+              void restaurantPersistenceQueueRef.current.run(() => Promise.all(
+                closeState.affectedTables.map(affectedTable => db.saveDocument('tables', affectedTable)),
+              ).then(() => undefined)).catch(error => console.error('Failed to persist table release:', error));
               if (closedOrderId) {
                 void releaseActiveTableEditLock({ deferRemote: true });
               } else {

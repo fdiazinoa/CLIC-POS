@@ -4,6 +4,11 @@ export type MasterRestaurantRevisionResult = {
   applied: boolean;
 };
 
+export const mergeKnownMasterRestaurantRevision = (
+  currentRevision: number,
+  completedRevision: number,
+): number => Math.max(currentRevision, completedRevision);
+
 export const canApplyMasterRestaurantRevision = (input: {
   revision: number;
   knownRevision: number;
