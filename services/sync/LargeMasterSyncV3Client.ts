@@ -118,11 +118,12 @@ export const validateLargeMasterSyncV3Manifest = (input: unknown, expectedSyncId
   const sourceDatasets = asObject(manifest.datasets);
   const sourceKeys = Object.keys(sourceDatasets);
   if (sourceKeys.some(key => !(LARGE_MASTER_SYNC_V3_DATASETS as readonly string[]).includes(key))
-    || LARGE_MASTER_SYNC_V3_DATASETS.some(dataset => !(dataset in sourceDatasets))) {
+    || sourceKeys.length === 0) {
     throw new LargeMasterSyncV3Error('SYNC_V3_MANIFEST_DATASETS_INVALID');
   }
   const datasets: Partial<Record<LargeMasterSyncV3Dataset, LargeMasterSyncV3DatasetManifest>> = {};
   for (const dataset of LARGE_MASTER_SYNC_V3_DATASETS) {
+    if (!(dataset in sourceDatasets)) continue;
     const source = asObject(sourceDatasets[dataset]);
     const count = numeric(source.count, `${dataset}.count`);
     const chunks = numeric(source.chunks, `${dataset}.chunks`);
@@ -217,12 +218,12 @@ export class LargeMasterSyncV3Client {
 
   async getManifest(syncId: string, signal?: AbortSignal): Promise<LargeMasterSyncV3Manifest | { generating: true; retryAfterMs: number }> {
     const response = await this.requestWithRetry(`/api/sync/v3/master-syncs/${syncId}/manifest`, 'GET', signal);
-    if (response.status === 202) {
+    const body = this.responseObject(response);
+    if (response.status === 409 || body.status === 'FAILED') throw new LargeMasterSyncV3Error('SYNC_V3_FAILED');
+    if (response.status === 202 || body.status === 'GENERATING') {
       const seconds = Number(header(response.headers, 'retry-after'));
       return { generating: true, retryAfterMs: Number.isFinite(seconds) ? Math.max(1000, seconds * 1000) : 2000 };
     }
-    const body = this.responseObject(response);
-    if (response.status === 409 || body.status === 'FAILED') throw new LargeMasterSyncV3Error('SYNC_V3_FAILED');
     if (response.status !== 200) throw this.httpError(response.status, body);
     return validateLargeMasterSyncV3Manifest(body, syncId);
   }
@@ -330,7 +331,7 @@ export class LargeMasterSyncV3Client {
     let totalPauseMs = 0;
     let appliedRecords = 0;
     let appliedChunks = 0;
-    for (const dataset of LARGE_MASTER_SYNC_V3_DATASETS) {
+    for (const dataset of this.declaredDatasets(manifest)) {
       const expected = manifest.datasets[dataset]!;
       let progress = await this.options.store.readProgress(syncId);
       const applied = new Set(progress?.chunks.filter(chunk => chunk.dataset === dataset).map(chunk => chunk.chunkIndex));
@@ -363,8 +364,10 @@ export class LargeMasterSyncV3Client {
 
   async validateSync(manifest: LargeMasterSyncV3Manifest): Promise<void> {
     const progress = await this.options.store.readProgress(manifest.syncId);
+    const declared = this.declaredDatasets(manifest);
     if (!progress || progress.syncVersion !== manifest.syncVersion
-      || progress.datasets.some(dataset => dataset.status !== 'VALIDATED')) {
+      || progress.datasets.length !== declared.length
+      || progress.datasets.some(dataset => dataset.status !== 'VALIDATED' || !declared.includes(dataset.dataset))) {
       throw new LargeMasterSyncV3Error('SYNC_V3_SYNC_INCOMPLETE');
     }
     await this.options.store.validateStaging(manifest.syncId);
@@ -397,13 +400,17 @@ export class LargeMasterSyncV3Client {
 
   private async assertStorageCapacity(manifest: LargeMasterSyncV3Manifest): Promise<void> {
     const stats = await this.storageStats();
-    const logicalBytes = LARGE_MASTER_SYNC_V3_DATASETS.reduce(
+    const logicalBytes = this.declaredDatasets(manifest).reduce(
       (sum, dataset) => sum + Number(manifest.datasets[dataset]?.bytes || 0), 0,
     );
     const requiredBytes = Math.ceil(logicalBytes * 2.25) + 64 * 1024 * 1024;
     if (stats.availableBytes < requiredBytes) {
       throw new LargeMasterSyncV3Error('SYNC_V3_INSUFFICIENT_STORAGE');
     }
+  }
+
+  private declaredDatasets(manifest: LargeMasterSyncV3Manifest): LargeMasterSyncV3Dataset[] {
+    return LARGE_MASTER_SYNC_V3_DATASETS.filter(dataset => manifest.datasets[dataset] !== undefined);
   }
 
   private async requestWithRetry(path: string, method: 'GET' | 'POST', signal?: AbortSignal): Promise<LargeMasterSyncV3HttpResponse> {
