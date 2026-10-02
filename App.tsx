@@ -390,6 +390,7 @@ import {
   mergeKnownMasterRestaurantRevision,
 } from './utils/masterRestaurantRevision';
 import { RestaurantPersistenceQueue } from './utils/restaurantPersistenceQueue';
+import { canApplyMasterHttpRestaurantRevision } from './utils/masterHttpRestaurantRevision';
 import { updateTablesAfterAccountClose } from './utils/tableCloseState';
 import {
   dispatchLegacyLanMutation,
@@ -5775,6 +5776,11 @@ const AppContent: React.FC = () => {
         if (requestTimeout !== undefined) { window.clearTimeout(requestTimeout); requestTimeout = undefined; }
         assertCurrentAuthority();
         const responseRevision = Number(data?.revision || 0);
+        const masterHttpRevisionIsCurrent = () => isClientRuntime || canApplyMasterHttpRestaurantRevision({
+          responseRevision,
+          knownRevision: masterRestaurantRevisionRef.current,
+          appliedRevision: lastAppliedMasterRestaurantRevisionRef.current,
+        });
         const hasUnchangedClientRevision = isClientRuntime
           && Number.isFinite(responseRevision)
           && responseRevision > 0
@@ -5790,6 +5796,14 @@ const AppContent: React.FC = () => {
           pendingTableSync = await readPendingClientTableSync();
           assertCurrentAuthority();
           if (pendingTableSync) pendingClientTableSyncRef.current = pendingTableSync;
+        }
+        if (!masterHttpRevisionIsCurrent()) {
+          console.warn('[MASTER_TABLES_STALE_HTTP_SNAPSHOT]', {
+            responseRevision,
+            knownRevision: masterRestaurantRevisionRef.current,
+            appliedRevision: lastAppliedMasterRestaurantRevisionRef.current,
+          });
+          return { ok: true };
         }
         if (Number.isFinite(responseRevision) && responseRevision > masterRestaurantRevisionRef.current) {
           masterRestaurantRevisionRef.current = responseRevision;
@@ -5859,6 +5873,7 @@ const AppContent: React.FC = () => {
         if (Array.isArray(data)) {
           markClientMasterOnline();
           setTables(previousTables => {
+            if (!masterHttpRevisionIsCurrent()) return previousTables;
             if (!isClientRuntime && data.length === 0 && previousTables.length > 0) {
               console.warn('Se ignoró una respuesta vacía de mesas para preservar el layout local.');
               return previousTables;
@@ -5885,9 +5900,11 @@ const AppContent: React.FC = () => {
 
         // También en Master el snapshot remoto es autoritativo. Esto evita
         // restaurar una cuenta ya cobrada al regresar a la pantalla de mesas.
+        if (!masterHttpRevisionIsCurrent()) return { ok: true };
         if (hasAuthoritativeParkedTickets) setParkedTickets(nextParkedTickets);
 
         setTables(previousTables => {
+          if (!masterHttpRevisionIsCurrent()) return previousTables;
           if (!isClientRuntime && nextTables.length === 0 && previousTables.length > 0) {
             console.warn('Se ignoró una respuesta vacía de mesas para preservar el layout local.');
             return previousTables;
@@ -5897,11 +5914,12 @@ const AppContent: React.FC = () => {
 
         if (isClientRuntime) {
           setRooms(nextRooms);
-          setActiveRoomId(prev =>
-            prev && nextRooms.some((room: Room) => room.id === prev)
+          setActiveRoomId(prev => {
+            if (!masterHttpRevisionIsCurrent()) return prev;
+            return prev && nextRooms.some((room: Room) => room.id === prev)
               ? prev
-              : (nextRooms[0]?.id || '')
-          );
+              : (nextRooms[0]?.id || '');
+          });
           if (Number.isFinite(responseRevision) && responseRevision > 0) {
             lastAppliedClientRestaurantRevisionRef.current = responseRevision;
           }
@@ -5910,6 +5928,7 @@ const AppContent: React.FC = () => {
           lastAppliedClientTablesAuthorityRef.current = masterEndpoint;
         } else if (nextRooms.length > 0) {
           setRooms(previousRooms => {
+            if (!masterHttpRevisionIsCurrent()) return previousRooms;
             const localFloorPlan = locallySavedFloorPlanRef.current;
             if (!localFloorPlan || previousRooms.length === 0) return nextRooms;
 
@@ -5927,11 +5946,12 @@ const AppContent: React.FC = () => {
             incomingById.forEach(room => merged.push(room));
             return merged;
           });
-          setActiveRoomId(prev =>
-            prev && nextRooms.some((room: Room) => room.id === prev)
+          setActiveRoomId(prev => {
+            if (!masterHttpRevisionIsCurrent()) return prev;
+            return prev && nextRooms.some((room: Room) => room.id === prev)
               ? prev
-              : (nextRooms[0]?.id || '')
-          );
+              : (nextRooms[0]?.id || '');
+          });
         }
       }
       return { ok: true };
