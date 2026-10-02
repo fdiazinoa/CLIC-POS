@@ -168,6 +168,7 @@ import {
   canUseLocalOperationalTableStore,
   isClientTerminalMode,
   canPublishGlobalConfigMutation,
+  resolveMasterOperationalBaseUrl,
   resolveOperationalApiUrl,
   resolveValidatedOperationalApiUrl,
   createOperationalMasterResolver,
@@ -375,7 +376,12 @@ import {
 } from './utils/operationalMasterConfig';
 import { persistValidatedClientMasterTargetAsync, resolveClientMasterTerminalId } from './utils/clientMasterBinding';
 import { completeLegacyMutationAfterDurableAck, legacyMutationJournal } from './services/sync/LegacyMutationJournal';
-import { reconcileMasterParkedTicketOutcome, reconcileMasterRejectedTableMutations } from './services/sync/masterParkedTicketReconciliation';
+import {
+  reconcileLegacyClientTableConflictBeforeAuthorityAssertion,
+  reconcileMasterParkedTicketOutcome,
+  reconcileMasterRejectedTableMutations,
+  resolveColdBootstrapLegacyRecoveryGeneration,
+} from './services/sync/masterParkedTicketReconciliation';
 import { parkedTicketBelongsToTable } from './utils/parkedTicketTableMembership';
 import { assertParkedTicketsAcknowledged } from './utils/parkedTicketAck';
 import {
@@ -5601,6 +5607,13 @@ const AppContent: React.FC = () => {
     return localIps;
   };
   const discoverEligibleClientMasterEndpoint = async () => {
+    const authorityState = apiSyncAdapter.getOperationalAuthorityState();
+    await reconcileLegacyClientTableConflictBeforeAuthorityAssertion({
+      journal: legacyMutationJournal,
+      authorityBaseUrl: resolveMasterOperationalBaseUrl(),
+      terminalId: authorityState.terminalId || String(clientRoutingContextRef.current.getTerminal()?.id || ''),
+      generation: authorityState.revision,
+    });
     legacyMutationJournal.assertRemoteAuthorityAllowed();
     const localIps = clientLocalIpsRef.current || await hydrateClientLocalIps();
     if (localIps.length === 0) throw new Error('MASTER_LOCAL_IDENTITY_UNAVAILABLE');
@@ -7376,6 +7389,13 @@ const AppContent: React.FC = () => {
               let mutationJournalBlocksDiscovery = false;
               if (isOperationalClientBoot) {
                 try {
+                  const bootstrapAuthorityState = apiSyncAdapter.getOperationalAuthorityState();
+                  await reconcileLegacyClientTableConflictBeforeAuthorityAssertion({
+                    journal: legacyMutationJournal,
+                    authorityBaseUrl: resolveMasterOperationalBaseUrl(),
+                    terminalId: bootstrapAuthorityState.terminalId || String(effectivePairedTerminal.id || ''),
+                    generation: resolveColdBootstrapLegacyRecoveryGeneration(bootstrapAuthorityState),
+                  });
                   legacyMutationJournal.assertRemoteAuthorityAllowed();
                 } catch (journalError) {
                   mutationJournalBlocksDiscovery = true;

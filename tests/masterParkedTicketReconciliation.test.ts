@@ -6,8 +6,10 @@ import {
   type LegacyMutationJournalStore,
 } from '../services/sync/LegacyMutationJournal';
 import {
+  reconcileLegacyClientTableConflictBeforeAuthorityAssertion,
   reconcileMasterParkedTicketOutcome,
   reconcileMasterRejectedTableMutations,
+  resolveColdBootstrapLegacyRecoveryGeneration,
 } from '../services/sync/masterParkedTicketReconciliation';
 
 class Store implements LegacyMutationJournalStore {
@@ -151,6 +153,48 @@ test('an old client 409 table rejection is closed before a later table acquire',
     url: `${origin}/api/mesas/bloquear`,
     diagnosticRequestId: 'next-acquire',
   }));
+});
+
+test('client authority preflight recovers the physical legacy row before handoff assertion', async () => {
+  const store = new Store();
+  const entry = persistedLegacy409({ reconciliationContext: undefined });
+  store.rows.set(entry.id, entry);
+  const journal = new LegacyMutationJournal(store);
+  await journal.initializeForStartup();
+  assert.throws(() => journal.assertRemoteAuthorityAllowed(), /LEGACY_MUTATION_HANDOFF_BLOCKED/);
+  assert.equal(await reconcileLegacyClientTableConflictBeforeAuthorityAssertion({
+    journal,
+    authorityBaseUrl: `${origin}/api`,
+    terminalId,
+    generation,
+    nowMs: Date.parse(entry.dispatchedAt!) + 16_000,
+  }), 1);
+  assert.doesNotThrow(() => journal.assertRemoteAuthorityAllowed());
+  assert.equal(journal.getEntry(entry.id)?.classification, 'SAFE_PRE_SIDE_EFFECT');
+});
+
+test('cold bootstrap recovers generation 1 before assertion from a fresh generation 0 adapter state', async () => {
+  const store = new Store();
+  const entry = persistedLegacy409({ generation: 1, reconciliationContext: null as unknown as undefined });
+  store.rows.set(entry.id, entry);
+  const journal = new LegacyMutationJournal(store);
+  await journal.initializeForStartup();
+  const freshAuthorityState = { masterUrl: null, terminalId: null, revision: 0 };
+  assert.equal(resolveColdBootstrapLegacyRecoveryGeneration(freshAuthorityState), 1);
+  assert.equal(await reconcileLegacyClientTableConflictBeforeAuthorityAssertion({
+    journal,
+    authorityBaseUrl: origin,
+    terminalId,
+    generation: resolveColdBootstrapLegacyRecoveryGeneration(freshAuthorityState),
+    nowMs: Date.parse(entry.dispatchedAt!) + 16_000,
+  }), 1);
+  assert.doesNotThrow(() => journal.assertRemoteAuthorityAllowed());
+});
+
+test('non-fresh authority state never advances the recovery generation prospectively', () => {
+  assert.equal(resolveColdBootstrapLegacyRecoveryGeneration({ masterUrl: origin, terminalId: null, revision: 0 }), 0);
+  assert.equal(resolveColdBootstrapLegacyRecoveryGeneration({ masterUrl: null, terminalId, revision: 0 }), 0);
+  assert.equal(resolveColdBootstrapLegacyRecoveryGeneration({ masterUrl: null, terminalId: null, revision: 3 }), 3);
 });
 
 test('legacy recovery rejects ambiguous, unrelated, wrong identity, wrong generation and recent rows', async () => {

@@ -50,6 +50,41 @@ export const reconcileMasterRejectedTableMutations = async (input: {
   return reconciled;
 };
 
+export const reconcileLegacyClientTableConflictBeforeAuthorityAssertion = async (input: {
+  journal: LegacyMutationJournal;
+  authorityBaseUrl: string;
+  terminalId: string;
+  generation: number;
+  nowMs?: number;
+}): Promise<number> => {
+  if (!input.journal.hasOutcomeUnknown()) return 0;
+  const terminalId = String(input.terminalId || '').trim();
+  if (!terminalId || !input.authorityBaseUrl) return 0;
+  let authorityOrigin: string;
+  try {
+    authorityOrigin = new URL(input.authorityBaseUrl).origin;
+  } catch {
+    return 0;
+  }
+  return reconcileMasterRejectedTableMutations({
+    journal: input.journal,
+    authorityOrigin,
+    terminalId,
+    generation: input.generation,
+    nowMs: input.nowMs,
+  });
+};
+
+export const resolveColdBootstrapLegacyRecoveryGeneration = (authorityState: {
+  masterUrl: string | null;
+  terminalId: string | null;
+  revision: number;
+}): number => authorityState.revision === 0
+  && authorityState.masterUrl === null
+  && authorityState.terminalId === null
+    ? 1
+    : authorityState.revision;
+
 /** Reconcile only a single, old self-Master table write against the native authority. */
 export const reconcileMasterParkedTicketOutcome = async (input: {
   journal: LegacyMutationJournal;
