@@ -81,6 +81,7 @@ class AndroidPrinterBridge @JvmOverloads constructor(context: Context, webView: 
                     startMasterServer: true,
                     updateMasterServerConfig: true,
                     updateMasterParkedTickets: true,
+                    updateMasterFloorPlan: true,
                     stopMasterServer: true,
                     getMasterServerStatus: true,
                     getMasterRestaurantState: true,
@@ -211,6 +212,7 @@ class AndroidPrinterBridge @JvmOverloads constructor(context: Context, webView: 
                     startMasterServer: function (payload) { return call('startMasterServer', payload); },
                     updateMasterServerConfig: function (payload) { return call('updateMasterServerConfig', payload); },
                     updateMasterParkedTickets: function (payload) { return call('updateMasterParkedTickets', payload); },
+                    updateMasterFloorPlan: function (payload) { return call('updateMasterFloorPlan', payload); },
                     stopMasterServer: function (payload) { return call('stopMasterServer', payload); },
                     getMasterServerStatus: function (payload) { return call('getMasterServerStatus', payload); },
                     discoverMasterServers: function (payload) { return call('discoverMasterServers', payload); },
@@ -825,6 +827,7 @@ class AndroidPrinterBridge @JvmOverloads constructor(context: Context, webView: 
                     "startMasterServer" -> startMasterServer(payloadJson)
                     "updateMasterServerConfig" -> updateMasterServerConfig(payloadJson)
                     "updateMasterParkedTickets" -> updateMasterParkedTickets(payloadJson)
+                    "updateMasterFloorPlan" -> updateMasterFloorPlan(payloadJson)
                     "stopMasterServer" -> stopMasterServer(payloadJson)
                     "getMasterServerStatus" -> getMasterServerStatus(payloadJson)
                     "getMasterRestaurantState" -> getMasterRestaurantState(payloadJson)
@@ -876,6 +879,16 @@ class AndroidPrinterBridge @JvmOverloads constructor(context: Context, webView: 
             if (payloadJson.isNullOrBlank()) JSONObject() else JSONObject(payloadJson)
         }.getOrDefault(JSONObject())
         return ClicPOSMasterHttpServer.updateParkedTickets(payload).apply {
+            remove("_httpStatus")
+        }.toString()
+    }
+
+    @JavascriptInterface
+    fun updateMasterFloorPlan(payloadJson: String?): String {
+        val payload = runCatching {
+            if (payloadJson.isNullOrBlank()) JSONObject() else JSONObject(payloadJson)
+        }.getOrDefault(JSONObject())
+        return ClicPOSMasterHttpServer.replaceFloorPlan(payload).apply {
             remove("_httpStatus")
         }.toString()
     }

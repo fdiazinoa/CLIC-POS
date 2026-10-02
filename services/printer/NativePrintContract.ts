@@ -115,6 +115,7 @@ export interface NativePrinterBridge {
   startMasterServer?: (payload?: { port?: number; config?: unknown; users?: unknown[]; rooms?: unknown[]; tables?: unknown[]; parkedTickets?: unknown[]; catalogs?: unknown; restaurantRevision?: number }) => Promise<NativeKdsServerStatus> | NativeKdsServerStatus;
   updateMasterServerConfig?: (payload?: { config?: unknown; users?: unknown[]; rooms?: unknown[]; tables?: unknown[]; parkedTickets?: unknown[]; catalogs?: unknown; restaurantRevision?: number }) => Promise<NativeKdsServerStatus> | NativeKdsServerStatus;
   updateMasterParkedTickets?: (payload: { parkedTickets: unknown[]; baseRevision: number; tableId?: string; ownerId?: string; lockToken?: string }) => Promise<unknown> | unknown;
+  updateMasterFloorPlan?: (payload: { rooms: unknown[]; tables: unknown[] }) => Promise<unknown> | unknown;
   stopMasterServer?: (payload?: { port?: number }) => Promise<NativeKdsServerStatus> | NativeKdsServerStatus;
   getMasterServerStatus?: (payload?: { port?: number }) => Promise<NativeKdsServerStatus> | NativeKdsServerStatus;
   discoverMasterServers?: (payload?: { timeoutMs?: number }) => Promise<{ success?: boolean; masters?: Array<{ name?: string; host?: string; port?: number; url?: string; tenantId?: string; terminalId?: string; companyName?: string }> }>;

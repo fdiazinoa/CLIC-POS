@@ -80,6 +80,18 @@ test('Master closes an old ambiguous self-write only after exact native snapshot
   assert.equal(journal.getEntry(entry.id)?.callerAckReference, 'RECONCILED_NATIVE_MASTER_SNAPSHOT:42');
 });
 
+test('Master layout preflight can reconcile the single exact parked-ticket write without an active table', async () => {
+  const { journal, entry } = await fixture();
+  assert.equal(await reconcileMasterParkedTicketOutcome({
+    journal,
+    tickets: [ticket],
+    authorityOrigin: origin,
+    readNativeSnapshot: async () => ({ revision: 43, parkedTickets: [ticket] }),
+    nowMs: Date.parse(journal.getEntry(entry.id)!.dispatchedAt!) + 16_000,
+  }), 43);
+  assert.equal(journal.hasOutcomeUnknown(), false);
+});
+
 test('different items, a younger request, or a different operation stays blocked', async () => {
   const mismatch = await fixture();
   assert.equal(await mismatch.reconcile([{ ...ticket, items: [] }]), null);

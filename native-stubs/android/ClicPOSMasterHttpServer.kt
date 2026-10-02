@@ -1683,25 +1683,31 @@ object ClicPOSMasterHttpServer {
                     .toString())
                 return
             }
+        val result = replaceFloorPlan(payload)
+        val httpStatus = result.optInt("_httpStatus", 200)
+        result.remove("_httpStatus")
+        writeResponse(socket, httpStatus, result.toString())
+    }
+
+    @Synchronized
+    fun replaceFloorPlan(payload: JSONObject): JSONObject {
         val rooms = payload.optJSONArray("rooms")
         val tables = payload.optJSONArray("tables")
         if (rooms == null || tables == null) {
-            writeResponse(socket, 400, JSONObject()
+            return JSONObject()
                 .put("success", false)
                 .put("message", "rooms y tables son requeridos")
-                .toString())
-            return
+                .put("_httpStatus", 400)
         }
 
         val reconciledTables = reconcileTablesWithParkedTickets(tables, parkedTicketsSnapshot)
         applyClientRestaurantMutation(rooms = rooms, tables = reconciledTables)
-        writeResponse(socket, 200, JSONObject()
+        return JSONObject()
             .put("success", true)
             .put("rooms", JSONArray(roomsSnapshot.toString()))
             .put("tables", buildTablesWithEditLocks())
             .put("parkedTickets", JSONArray(parkedTicketsSnapshot.toString()))
             .put("revision", restaurantRevision.get())
-            .toString())
     }
 
     @Synchronized

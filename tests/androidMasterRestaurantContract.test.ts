@@ -124,8 +124,23 @@ test('acquire publica la revisión usada por el primer guardado de la mesa', () 
 test('la Master Android reemplaza el layout completo en una sola mutación persistida', () => {
   assert.match(serverSource, /method == "PUT" && path == "\/api\/mesas\/layout"/);
   assert.match(serverSource, /private fun handleFloorPlanReplace/);
+  assert.match(serverSource, /fun replaceFloorPlan\(payload: JSONObject\)/);
+  assert.match(serverSource, /val result = replaceFloorPlan\(payload\)/);
   assert.match(serverSource, /reconcileTablesWithParkedTickets\(tables, parkedTicketsSnapshot\)/);
   assert.match(serverSource, /applyClientRestaurantMutation\(rooms = rooms, tables = reconciledTables\)/);
+  assert.match(bridgeSource, /fun updateMasterFloorPlan/);
+  assert.match(bridgeSource, /ClicPOSMasterHttpServer\.replaceFloorPlan\(payload\)/);
+  assert.match(appSource, /typeof runtimeWindow\.AndroidPrinter\.updateMasterFloorPlan === 'function'[\s\S]*updateMasterFloorPlan: \(payload: unknown\) => call\('updateMasterFloorPlan', payload\)/);
+  assert.match(appSource, /typeof nativeBridge\?\.updateMasterFloorPlan === 'function'/);
+  assert.match(appSource, /reconcileMasterParkedTicketOutcome\([\s\S]*nativeBridge\.updateMasterFloorPlan/);
+  assert.match(appSource, /assertFloorPlanAcknowledged\([\s\S]*nativeResult\.rooms,[\s\S]*nativeResult\.tables/);
+  const floorPlanSync = appSource.slice(
+    appSource.indexOf('const syncFloorPlanToServer = async ('),
+    appSource.indexOf('const handleSaveFloorPlan = async ('),
+  );
+  assert.ok(floorPlanSync.indexOf('reconcileMasterParkedTicketOutcome({') < floorPlanSync.indexOf('nativeBridge.updateMasterFloorPlan({'));
+  assert.match(floorPlanSync, /legacyMutationJournal\.getBlockingEntries\(\)[\s\S]*entry\.operationCorrelationId[\s\S]*entry\.canonicalPath/);
+  assert.match(floorPlanSync, /LEGACY_MUTATION_OUTCOME_UNKNOWN:\$\{blockers/);
   assert.match(appSource, /resolveValidatedOperationalApiUrl\('\/api\/mesas\/layout'\)/);
   assert.doesNotMatch(appSource, /normalizedTablesInput\.length === 0 && existingDbTables\.length > 0/);
   assert.match(appSource, /window\.localStorage\.removeItem\(FLOOR_PLAN_STORAGE_KEY\)/);
@@ -347,7 +362,7 @@ test('el sondeo nativo no reemplaza el borrador mientras se edita el plano de me
   assert.match(appSource, /ensureMasterServer\(false\)/);
   assert.match(appSource, /const floorPlanSaved = await handleSaveFloorPlan\(rooms, tables\)/);
   assert.match(appSource, /if \(!floorPlanSaved\) return/);
-  assert.match(appSource, /La Master devolvió un plano incompleto/);
+  assert.match(appSource, /assertFloorPlanAcknowledged/);
 });
 
 test('los renders de la Master no reemplazan el estado operativo nativo', () => {

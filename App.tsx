@@ -384,6 +384,7 @@ import {
 } from './services/sync/masterParkedTicketReconciliation';
 import { parkedTicketBelongsToTable } from './utils/parkedTicketTableMembership';
 import { assertParkedTicketsAcknowledged } from './utils/parkedTicketAck';
+import { assertFloorPlanAcknowledged } from './utils/floorPlanAck';
 import {
   dispatchLegacyLanMutation,
   persistLegacyLanMutationCompletion,
@@ -2474,6 +2475,7 @@ const AppContent: React.FC = () => {
         'startMasterServer',
         'updateMasterServerConfig',
         'updateMasterParkedTickets',
+        'updateMasterFloorPlan',
         'stopMasterServer',
         'getMasterServerStatus',
         'getMasterRestaurantState',
@@ -2556,6 +2558,9 @@ const AppContent: React.FC = () => {
         startMasterServer: (payload: unknown) => call('startMasterServer', payload),
         updateMasterServerConfig: (payload: unknown) => call('updateMasterServerConfig', payload),
         updateMasterParkedTickets: (payload: unknown) => call('updateMasterParkedTickets', payload),
+        ...(typeof runtimeWindow.AndroidPrinter.updateMasterFloorPlan === 'function' ? {
+          updateMasterFloorPlan: (payload: unknown) => call('updateMasterFloorPlan', payload),
+        } : {}),
         stopMasterServer: (payload: unknown) => call('stopMasterServer', payload),
         getMasterServerStatus: (payload: unknown) => call('getMasterServerStatus', payload),
         getMasterRestaurantState: (payload: unknown) => call('getMasterRestaurantState', payload),
@@ -11071,6 +11076,57 @@ const AppContent: React.FC = () => {
       }
     };
 
+    const currentTerminal = getCurrentTerminal();
+    const servesAsNativeMaster = isNativeAndroidRuntime()
+      && isNativeStandaloneTerminalRuntime(currentTerminal);
+    const nativeBridge = (window as any).ClicPOSNativePrinter;
+    if (servesAsNativeMaster && typeof nativeBridge?.updateMasterFloorPlan === 'function') {
+      if (legacyMutationJournal.hasOutcomeUnknown()) {
+        const parkedTicketsUrl = await resolveValidatedOperationalApiUrl('/api/mesas/parked-tickets');
+        const reconciledRevision = typeof nativeBridge?.getMasterRestaurantState === 'function'
+          ? await reconcileMasterParkedTicketOutcome({
+              journal: legacyMutationJournal,
+              tickets: parkedTickets,
+              authorityOrigin: new URL(parkedTicketsUrl).origin,
+              readNativeSnapshot: async () => parseNativeBridgeJson(
+                await Promise.resolve(nativeBridge.getMasterRestaurantState({})),
+              ),
+            })
+          : null;
+        if (reconciledRevision !== null) {
+          masterRestaurantRevisionRef.current = Math.max(masterRestaurantRevisionRef.current, reconciledRevision);
+        }
+      }
+      if (legacyMutationJournal.hasOutcomeUnknown()) {
+        const blockers = legacyMutationJournal.getBlockingEntries().map(entry =>
+          `${entry.operationCorrelationId.split(':')[0]} ${entry.method} ${entry.canonicalPath}`
+        ).join(', ');
+        throw new Error(`LEGACY_MUTATION_OUTCOME_UNKNOWN:${blockers || 'UNKNOWN_BLOCKER'}`);
+      }
+
+      const nativeResult = parseNativeBridgeJson(await Promise.resolve(
+        nativeBridge.updateMasterFloorPlan({
+          rooms: normalizedRoomsPayload,
+          tables: normalizedTablesPayload,
+        }),
+      ));
+      if (nativeResult?.success !== true) {
+        throw new Error(nativeResult?.code || nativeResult?.message || 'NATIVE_MASTER_FLOOR_PLAN_FAILED');
+      }
+      assertFloorPlanAcknowledged(
+        normalizedRoomsPayload,
+        normalizedTablesPayload,
+        nativeResult.rooms,
+        nativeResult.tables,
+      );
+      const responseRevision = Number(nativeResult.revision);
+      if (!Number.isFinite(responseRevision) || responseRevision <= 0) {
+        throw new Error('NATIVE_MASTER_RESTAURANT_REVISION_REQUIRED');
+      }
+      masterRestaurantRevisionRef.current = Math.max(masterRestaurantRevisionRef.current, responseRevision);
+      return { rooms: nativeResult.rooms, tables: nativeResult.tables };
+    }
+
     // Android Master replaces the complete layout in one persisted mutation.
     // This avoids partial saves (rooms succeeded but tables failed, or vice versa)
     // and makes an intentionally empty table list authoritative.
@@ -11082,7 +11138,12 @@ const AppContent: React.FC = () => {
       operation: 'FLOOR_PLAN_REPLACE',
       validateResponse: data => {
         validateLegacySuccessResponse(data);
-        if (!Array.isArray(data.rooms) || !Array.isArray(data.tables)) throw new Error('LAYOUT_ACK_REQUIRED');
+        assertFloorPlanAcknowledged(
+          normalizedRoomsPayload,
+          normalizedTablesPayload,
+          data.rooms,
+          data.tables,
+        );
       },
     });
     if (atomicRes.response.status !== 404) {
@@ -11097,14 +11158,6 @@ const AppContent: React.FC = () => {
         }
         const confirmedRooms = Array.isArray(atomicResult.rooms) ? atomicResult.rooms : normalizedRoomsPayload;
         const confirmedTables = Array.isArray(atomicResult.tables) ? atomicResult.tables : normalizedTablesPayload;
-        const confirmedTableIds = new Set(confirmedTables.map((table: Table) => String(table.id)));
-        const missingTableIds = normalizedTablesPayload
-          .map(table => String(table.id))
-          .filter(tableId => !confirmedTableIds.has(tableId));
-        if (missingTableIds.length > 0) {
-          await atomicRes.markOutcomeUnknown();
-          throw new Error(`La Master devolvió un plano incompleto (${missingTableIds.length} mesas faltantes).`);
-        }
         await atomicRes.completeAfterDurableCommit('App:floor-plan-replace', () =>
           persistLegacyLanMutationCompletion(atomicRes.correlationId, 'App:floor-plan-replace', atomicRes.response.status)
         );
