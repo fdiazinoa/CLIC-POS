@@ -1931,6 +1931,11 @@ export interface Transaction {
   orderNumber?: string;
   tableDisplayLabel?: string;
   tableRoomLabel?: string;
+  restaurantOrderId?: string;
+  restaurantTableId?: string;
+  restaurantSettlementStatus?: 'PENDING' | 'CONFIRMED';
+  restaurantSettlementError?: string;
+  restaurantSettledAt?: string;
   marketplaceSourceChannel?: 'UBER_EATS';
   marketplaceSourceOrderId?: string;
   marketplaceSourceStoreId?: string;

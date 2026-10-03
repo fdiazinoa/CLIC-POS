@@ -219,6 +219,16 @@ object ClicPOSMasterHttpServer {
                         handleSyncAuth(client, body)
                     method == "GET" && path == "/api/sync/config" ->
                         handleSyncConfig(client, headers)
+                    // Compatibility for older APKs that sent this obsolete
+                    // request after every Z close. A Z report must never erase
+                    // operational or fiscal data; acknowledge it as a no-op so
+                    // those clients do not poison their mutation journal.
+                    method == "POST" && path.startsWith("/api/sync/reset/") ->
+                        writeResponse(client, 200, JSONObject()
+                            .put("success", true)
+                            .put("deprecated", true)
+                            .put("resetApplied", false)
+                            .toString())
                     method == "GET" && path.startsWith("/api/sync/collections/") && path.endsWith("/metadata") ->
                         handleSyncCollectionMetadata(client, path, headers)
                     method == "GET" && path.startsWith("/api/sync/collections/") && path.endsWith("/data") ->

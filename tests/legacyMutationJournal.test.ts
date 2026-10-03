@@ -74,6 +74,39 @@ test('restart promotes every open DISPATCHED row to OUTCOME_UNKNOWN before autho
   await assert.rejects(begin(restarted, 2), /OUTCOME_UNKNOWN/);
 });
 
+test('startup closes terminal reset maintenance rows without replaying them or weakening other blockers', async () => {
+  const store = new MemoryJournalStore();
+  const first = new LegacyMutationJournal(store);
+  await first.initializeForStartup();
+  const reset = await first.begin({
+    operationCorrelationId: 'resetTerminalData:terminal-a:reset-1',
+    authorityFingerprint: 'http://localhost:3001|terminal-a',
+    generation: 5,
+    method: 'POST',
+    url: 'http://localhost:3001/api/sync/reset/terminal-a',
+    diagnosticRequestId: 'reset-1',
+  });
+  await first.prepareDispatch(reset.id, 'http://localhost:3001|terminal-a', 5);
+
+  const table = await first.begin({
+    operationCorrelationId: 'PARKED_TICKETS_SYNC:table-1',
+    authorityFingerprint: 'http://localhost:3001|terminal-a',
+    generation: 5,
+    method: 'PUT',
+    url: 'http://localhost:3001/api/mesas/parked-tickets',
+    diagnosticRequestId: 'table-1',
+  });
+  await first.prepareDispatch(table.id, 'http://localhost:3001|terminal-a', 5);
+
+  const restarted = new LegacyMutationJournal(store);
+  await restarted.initializeForStartup();
+
+  assert.equal(store.rows.get(reset.id)?.state, 'CLOSED');
+  assert.equal(store.rows.get(reset.id)?.classification, 'NON_BLOCKING_MAINTENANCE');
+  assert.equal(store.rows.get(table.id)?.state, 'OUTCOME_UNKNOWN');
+  assert.deepEqual(restarted.getBlockingIds(), [table.id]);
+});
+
 test('generation or fingerprint change immediately before transport becomes ambiguous', async () => {
   const store = new MemoryJournalStore();
   const journal = new LegacyMutationJournal(store);
