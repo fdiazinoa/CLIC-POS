@@ -59,6 +59,16 @@ test('borrar la última línea usa el cierre explícito antes de persistir un ti
   assert.ok(genericPersistenceIndex > releaseIndex);
 });
 
+test('limpiar todas las líneas cierra la mesa sin publicar antes un carrito vacío', () => {
+  const source = readFileSync(new URL('../components/POSInterface.tsx', import.meta.url), 'utf8');
+  const start = source.indexOf('const handleClearFreshCartItems');
+  const end = source.indexOf('const syncConsignmentSettlement', start);
+  const clearSource = source.slice(start, end);
+
+  assert.match(clearSource, /if \(activeTable && dispatchedItems\.length === 0\) \{\s*await releaseActiveEmptyTable\(\{ silent: true, force: true \}\)/);
+  assert.doesNotMatch(clearSource.slice(0, clearSource.indexOf('if (activeTable && dispatchedItems.length === 0)')), /onUpdateCart\(dispatchedItems\)/);
+});
+
 test('la hidratación local y los snapshots remotos reparan cargos fantasma', () => {
   const source = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
 
