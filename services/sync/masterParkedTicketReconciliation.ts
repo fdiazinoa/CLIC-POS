@@ -17,7 +17,11 @@ type Snapshot = { revision?: number; parkedTickets?: unknown };
 // classification and must never be closed by this legacy-only recovery.
 const isProvenPreMutationTableConflict = (method: string, path: string): boolean =>
   (method === 'PUT' && (path === '/api/mesas/parked-tickets' || /^\/api\/tables\/[^/]+$/.test(path)))
-  || (method === 'POST' && (path === '/api/mesas/bloquear' || path === '/api/mesas/desbloquear'));
+  || (method === 'POST' && (
+    path === '/api/mesas/bloquear'
+    || path === '/api/mesas/desbloquear'
+    || path === '/api/mesas/liberar'
+  ));
 
 export const reconcileMasterRejectedTableMutations = async (input: {
   journal: LegacyMutationJournal;
@@ -35,11 +39,18 @@ export const reconcileMasterRejectedTableMutations = async (input: {
       || (typeof rawContractVersion === 'number'
         && Number.isFinite(rawContractVersion)
         && rawContractVersion < 2);
+    // Both 409 variants exposed by /api/mesas/liberar are decided before any
+    // restaurant mutation. Android 1.1.460 nevertheless persisted them as V2
+    // OUTCOME_UNKNOWN rows, so allow that exact endpoint to recover as well.
+    // The in-memory authority generation restarts with the WebView; the durable
+    // origin + terminal fingerprint remains the identity fence for this case.
+    const isKnownReleaseRejection = entry.method === 'POST'
+      && entry.canonicalPath === '/api/mesas/liberar';
     if (entry.state !== 'OUTCOME_UNKNOWN'
       || entry.httpStatus !== 409
       || entry.authorityFingerprint !== `${input.authorityOrigin}|${input.terminalId}`
-      || entry.generation !== input.generation
-      || !isLegacyContract
+      || (!isKnownReleaseRejection && entry.generation !== input.generation)
+      || (!isLegacyContract && !isKnownReleaseRejection)
       || !Number.isFinite(dispatchedAt)
       || (input.nowMs ?? Date.now()) - dispatchedAt < 15_000
       || !isProvenPreMutationTableConflict(entry.method, entry.canonicalPath)) continue;

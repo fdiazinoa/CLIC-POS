@@ -9732,6 +9732,16 @@ const AppContent: React.FC = () => {
         await persistMasterTickets();
         const nativeBridge = (window as any).ClicPOSNativePrinter;
         if (typeof nativeBridge?.updateMasterParkedTickets === 'function') {
+          if (legacyMutationJournal.hasOutcomeUnknown()) {
+            const authorityState = apiSyncAdapter.getOperationalAuthorityState();
+            const endpointUrl = await resolveValidatedOperationalApiUrl('/api/mesas/parked-tickets');
+            await reconcileMasterRejectedTableMutations({
+              journal: legacyMutationJournal,
+              authorityOrigin: new URL(endpointUrl).origin,
+              terminalId: authorityState.terminalId || '',
+              generation: authorityState.revision,
+            });
+          }
           const unrelatedBlockingMutation = legacyMutationJournal.getBlockingEntries().some(entry => (
             entry.state !== 'OUTCOME_UNKNOWN'
             || entry.method !== 'PUT'
