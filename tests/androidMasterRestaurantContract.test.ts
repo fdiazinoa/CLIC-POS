@@ -34,6 +34,16 @@ test('la Master Android expone el estado compartido de restaurante', () => {
   assert.match(serverSource, /\.put\("parkedTickets", JSONArray\(parkedTicketsSnapshot\.toString\(\)\)\)/);
 });
 
+test('la Master Android neutraliza el reset obsoleto de APK anteriores sin borrar datos', () => {
+  const routeStart = serverSource.indexOf('method == "POST" && path.startsWith("/api/sync/reset/")');
+  assert.notEqual(routeStart, -1);
+  const route = serverSource.slice(routeStart, routeStart + 600);
+  assert.match(route, /\.put\("success", true\)/);
+  assert.match(route, /\.put\("deprecated", true\)/);
+  assert.match(route, /\.put\("resetApplied", false\)/);
+  assert.doesNotMatch(route, /delete|clear|resetTerminalData/);
+});
+
 test('la Cliente sondea una versión ligera que incluye clientes y renovaciones de locks', () => {
   assert.match(serverSource, /path == "\/api\/mesas\/revision" ->\s*writeResponse\(client, 200, getRestaurantSnapshotVersion\(\)\.toString\(\)\)/);
   assert.match(serverSource, /private val restaurantSnapshotEpoch = UUID\.randomUUID\(\)\.toString\(\)/);

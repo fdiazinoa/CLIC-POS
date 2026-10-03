@@ -184,7 +184,12 @@ import {
 } from './utils/tableLayout';
 import { NativeLaunchContext, shouldRestoreNativeSession } from './utils/nativeSessionResume';
 import { markRestaurantLinesCommitted } from './utils/restaurantHotReversal';
-import { removeStaleChargedEmptyTickets } from './utils/tableTicketIntegrity';
+import {
+  collectClosedRestaurantOrderIds,
+  readClosedRestaurantOrderMarkers,
+  removeClosedRestaurantTickets,
+  removeStaleChargedEmptyTickets,
+} from './utils/tableTicketIntegrity';
 import { reconcileOpenCartFiscalData } from './utils/erpFiscalCatalogSync';
 import { resolveTerminalLoginLabel } from './utils/terminalLoginLabel';
 
@@ -2174,7 +2179,9 @@ const AppContent: React.FC = () => {
   const tableLockLifecycleVersionRef = useRef(0);
   const pendingTableLockReleasesRef = useRef<Map<string, PendingTableLockRelease>>(new Map());
   const lastTableInteractionAtRef = useRef(0);
-  const closedRestaurantOrderIdsRef = useRef<Set<string>>(new Set());
+  const closedRestaurantOrderIdsRef = useRef<Set<string>>(new Set(
+    readClosedRestaurantOrderMarkers().map(marker => marker.orderId),
+  ));
   /* original code */
   const [currentView, setCurrentView] = useState<ViewState>(() => {
     const isVisorMode = isCustomerDisplaySurface();
@@ -4624,8 +4631,8 @@ const AppContent: React.FC = () => {
         const rawState = await Promise.resolve(nativeBridge.getMasterRestaurantState({}));
         const state = parseNativeBridgeJson(rawState);
         const nextRooms = Array.isArray(state?.rooms) ? state.rooms : [];
-        const nextTables = Array.isArray(state?.tables) ? state.tables : [];
-        const revision = Number(state?.revision || 0);
+        let nextTables = Array.isArray(state?.tables) ? state.tables : [];
+        let revision = Number(state?.revision || 0);
         if (!Number.isFinite(revision)) return;
 
         // Un servidor nativo nuevo se inicializa una sola vez desde SQLite.
@@ -4654,7 +4661,7 @@ const AppContent: React.FC = () => {
         // posterior entregue otra cuadrícula (incluso si ya trae coordenadas).
         // Las mutaciones operativas solo se aceptan si conservan los UUID.
         const savedFloorPlan = readFloorPlanMirror();
-        const floorPlanSelection = savedFloorPlan
+        let floorPlanSelection = savedFloorPlan
           ? selectAuthoritativeFloorPlan({
               local: savedFloorPlan,
               incoming: { rooms: nextRooms, tables: nextTables },
@@ -4702,11 +4709,52 @@ const AppContent: React.FC = () => {
         // (locks, otra mesa, heartbeat). Mientras la Master guarda su mesa activa,
         // conservar ese borrador para que un snapshot anterior no borre la primera
         // digitación antes de que termine el PUT atómico.
-        const { tickets: nextParkedTickets, removedTicketIds: repairedRemoteTicketIds } =
-          removeStaleChargedEmptyTickets(remoteParkedTickets);
+        const staleTicketRepair = removeStaleChargedEmptyTickets(remoteParkedTickets);
+        const closedTicketRepair = removeClosedRestaurantTickets(
+          staleTicketRepair.tickets,
+          closedRestaurantOrderIdsRef.current,
+        );
+        let nextParkedTickets = closedTicketRepair.tickets;
+        const repairedRemoteTicketIds = [
+          ...staleTicketRepair.removedTicketIds,
+          ...closedTicketRepair.removedTicketIds,
+        ];
         if (repairedRemoteTicketIds.length > 0) {
           console.warn('[TABLE_TICKET_REPAIR] Removed stale charged empty tickets from native snapshot', {
             count: repairedRemoteTicketIds.length,
+          });
+        }
+        if (closedTicketRepair.removedTicketIds.length > 0) {
+          if (typeof nativeBridge?.updateMasterParkedTickets !== 'function') return;
+          const repairResult = parseNativeBridgeJson(await Promise.resolve(
+            nativeBridge.updateMasterParkedTickets({
+              parkedTickets: nextParkedTickets,
+              baseRevision: revision,
+            }),
+          ));
+          if (repairResult?.success !== true) {
+            console.warn('[TABLE_SETTLEMENT_REPAIR] Native tombstone repair will retry', {
+              code: repairResult?.code,
+              removedOrderIds: closedTicketRepair.removedTicketIds,
+            });
+            return;
+          }
+          revision = Number(repairResult.revision || revision);
+          nextParkedTickets = Array.isArray(repairResult.parkedTickets)
+            ? repairResult.parkedTickets
+            : nextParkedTickets;
+          nextTables = Array.isArray(repairResult.tables) ? repairResult.tables : nextTables;
+          floorPlanSelection = savedFloorPlan
+            ? selectAuthoritativeFloorPlan({
+                local: savedFloorPlan,
+                incoming: { rooms: nextRooms, tables: nextTables },
+                isClientTerminal: false,
+              })
+            : null;
+          masterRestaurantRevisionRef.current = Math.max(masterRestaurantRevisionRef.current, revision);
+          console.info('[TABLE_SETTLEMENT_REPAIR] Removed paid orders from native authority', {
+            removedOrderIds: closedTicketRepair.removedTicketIds,
+            revision,
           });
         }
         const selectedRooms = floorPlanSelection?.rooms || nextRooms;
@@ -5821,8 +5869,16 @@ const AppContent: React.FC = () => {
         const mergedRemoteParkedTickets = hasAuthoritativeParkedTickets
           ? mergePendingClientTableTickets(responseParkedTickets, pendingTableSync)
           : [];
-        const { tickets: nextParkedTickets, removedTicketIds: repairedRemoteTicketIds } =
-          removeStaleChargedEmptyTickets(mergedRemoteParkedTickets);
+        const staleTicketRepair = removeStaleChargedEmptyTickets(mergedRemoteParkedTickets);
+        const closedTicketRepair = removeClosedRestaurantTickets(
+          staleTicketRepair.tickets,
+          closedRestaurantOrderIdsRef.current,
+        );
+        const nextParkedTickets = closedTicketRepair.tickets;
+        const repairedRemoteTicketIds = [
+          ...staleTicketRepair.removedTicketIds,
+          ...closedTicketRepair.removedTicketIds,
+        ];
         if (repairedRemoteTicketIds.length > 0) {
           console.warn('[TABLE_TICKET_REPAIR] Removed stale charged empty tickets from table snapshot', {
             count: repairedRemoteTicketIds.length,
@@ -7257,6 +7313,17 @@ const AppContent: React.FC = () => {
               if (Array.isArray(txHistory) && txHistory.length > 0) {
                 console.log(`📦 Deferred load: transactionHistory=${txHistory.length}`);
               }
+              const durableClosedOrderIds = collectClosedRestaurantOrderIds([
+                ...(Array.isArray(activeTxns) ? activeTxns : []),
+                ...(Array.isArray(txHistory) ? txHistory : []),
+              ]);
+              durableClosedOrderIds.forEach(orderId => closedRestaurantOrderIdsRef.current.add(orderId));
+              if (durableClosedOrderIds.size > 0) {
+                setParkedTickets(previous => removeClosedRestaurantTickets(
+                  previous,
+                  closedRestaurantOrderIdsRef.current,
+                ).tickets);
+              }
             } catch (error) {
               console.info('ℹ️ Deferred hydration partial failure:', error);
             }
@@ -7301,8 +7368,16 @@ const AppContent: React.FC = () => {
           const mergedParkedTickets = canHydrateOperationalTicketsLocally
             ? mergeById(Array.isArray(data.parkedTickets) ? data.parkedTickets : [], mirroredParkedTickets)
             : [];
-          const { tickets: restoredParkedTickets, removedTicketIds: repairedStartupTicketIds } =
-            removeStaleChargedEmptyTickets(mergedParkedTickets);
+          const staleTicketRepair = removeStaleChargedEmptyTickets(mergedParkedTickets);
+          const closedTicketRepair = removeClosedRestaurantTickets(
+            staleTicketRepair.tickets,
+            closedRestaurantOrderIdsRef.current,
+          );
+          const restoredParkedTickets = closedTicketRepair.tickets;
+          const repairedStartupTicketIds = [
+            ...staleTicketRepair.removedTicketIds,
+            ...closedTicketRepair.removedTicketIds,
+          ];
           setParkedTickets(restoredParkedTickets);
           if (repairedStartupTicketIds.length > 0) {
             console.warn('[TABLE_TICKET_REPAIR] Removed stale charged empty tickets during startup', {
@@ -9278,8 +9353,16 @@ const AppContent: React.FC = () => {
         const mergedParkedTickets = canHydrateOperationalTicketsLocally
           ? mergeById(freshData.parkedTickets, mirroredParkedTickets)
           : [];
-        const { tickets: restoredParkedTickets, removedTicketIds: repairedBindingTicketIds } =
-          removeStaleChargedEmptyTickets(mergedParkedTickets);
+        const staleTicketRepair = removeStaleChargedEmptyTickets(mergedParkedTickets);
+        const closedTicketRepair = removeClosedRestaurantTickets(
+          staleTicketRepair.tickets,
+          closedRestaurantOrderIdsRef.current,
+        );
+        const restoredParkedTickets = closedTicketRepair.tickets;
+        const repairedBindingTicketIds = [
+          ...staleTicketRepair.removedTicketIds,
+          ...closedTicketRepair.removedTicketIds,
+        ];
         setParkedTickets(restoredParkedTickets);
         if (repairedBindingTicketIds.length > 0) {
           console.warn('[TABLE_TICKET_REPAIR] Removed stale charged empty tickets after terminal binding', {
@@ -12038,12 +12121,9 @@ const AppContent: React.FC = () => {
       await db.save('cashMovements', remainingCashMovements);
       await db.save('collections', remainingCollections);
 
-      // 8. Global Reset (bounded wait to avoid UI freeze)
-      console.log(`⚙️ Sending Global Reset for Terminal ${terminalId} to Master...`);
-      await Promise.race([
-        syncManager.resetTerminalData(terminalId),
-        new Promise(resolve => setTimeout(resolve, 8000))
-      ]);
+      // A Z close archives the selected fiscal period; it must never reset the
+      // Master sync store. Older builds called /api/sync/reset here, which is
+      // unsupported by Android Master and destructive on the server runtime.
     } catch (error) {
       if (!closeMembershipPersisted && reservedCloseTransactionIds.length > 0) {
         releaseClosingTransactionIds(reservedCloseTransactionIds);
