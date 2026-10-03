@@ -142,6 +142,23 @@ test('acquire publica la revisión usada por el primer guardado de la mesa', () 
   assert.match(invokeSource, /masterRestaurantRevisionRef\.current = Math\.max\(masterRestaurantRevisionRef\.current, revision\)/);
 });
 
+test('la Master autónoma reconcilia bloqueos heredados con la identidad del terminal local', () => {
+  const reconcileStart = appSource.indexOf('const reconcileRejectedTableMutationBlockers');
+  const invokeStart = appSource.indexOf('const invokeTableEditLock', reconcileStart);
+  const reconcileSource = appSource.slice(reconcileStart, invokeStart);
+  const invokeEnd = appSource.indexOf('const releaseActiveTableEditLock', invokeStart);
+  const invokeSource = appSource.slice(invokeStart, invokeEnd);
+
+  assert.match(
+    reconcileSource,
+    /authorityState\.terminalId \|\| String\(getCurrentTerminal\(\)\?\.id \|\| ''\)/,
+  );
+  assert.ok(
+    invokeSource.indexOf('await reconcileRejectedTableMutationBlockers()')
+      < invokeSource.indexOf('const nativeBridge'),
+  );
+});
+
 test('la Master Android reemplaza el layout completo en una sola mutación persistida', () => {
   assert.match(serverSource, /method == "PUT" && path == "\/api\/mesas\/layout"/);
   assert.match(serverSource, /private fun handleFloorPlanReplace/);

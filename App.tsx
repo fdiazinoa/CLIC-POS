@@ -6043,13 +6043,17 @@ const AppContent: React.FC = () => {
     if (!legacyMutationJournal.hasOutcomeUnknown()) return;
     const authorityState = apiSyncAdapter.getOperationalAuthorityState();
     const endpointUrl = await resolveValidatedOperationalApiUrl('/api/mesas/parked-tickets');
+    // A standalone Android Master does not populate the remote-authority
+    // terminal id. Its durable journal fingerprint still uses the local
+    // terminal id, so keep that identity fence instead of passing an empty id.
+    const terminalId = authorityState.terminalId || String(getCurrentTerminal()?.id || '');
     await reconcileMasterRejectedTableMutations({
       journal: legacyMutationJournal,
       authorityOrigin: new URL(endpointUrl).origin,
-      terminalId: authorityState.terminalId || '',
+      terminalId,
       generation: authorityState.revision,
     });
-  }, []);
+  }, [getCurrentTerminal]);
 
   const invokeTableEditLock = useCallback(async (
     action: 'acquire' | 'release',
@@ -6086,7 +6090,7 @@ const AppContent: React.FC = () => {
       await reconcileMasterRejectedTableMutations({
         journal: legacyMutationJournal,
         authorityOrigin: new URL(endpointUrl).origin,
-        terminalId: authorityState.terminalId || '',
+        terminalId: authorityState.terminalId || String(currentTerminal?.id || ''),
         generation: authorityState.revision,
       });
     }
@@ -9826,7 +9830,7 @@ const AppContent: React.FC = () => {
           await reconcileMasterRejectedTableMutations({
             journal: legacyMutationJournal,
             authorityOrigin: new URL(masterUrl).origin,
-            terminalId: authorityState.terminalId || '',
+            terminalId: authorityState.terminalId || String(getCurrentTerminal()?.id || ''),
             generation: authorityState.revision,
           });
         }
