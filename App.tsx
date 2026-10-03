@@ -386,6 +386,16 @@ import { parkedTicketBelongsToTable } from './utils/parkedTicketTableMembership'
 import { assertParkedTicketsAcknowledged } from './utils/parkedTicketAck';
 import { assertFloorPlanAcknowledged } from './utils/floorPlanAck';
 import {
+  applyAuthoritativeMasterRestaurantSnapshot,
+  mergeKnownMasterRestaurantRevision,
+} from './utils/masterRestaurantRevision';
+import { RestaurantPersistenceQueue } from './utils/restaurantPersistenceQueue';
+import {
+  canApplyMasterHttpRestaurantRevision,
+  canUseMasterSqliteRestaurantFallback,
+} from './utils/masterHttpRestaurantRevision';
+import { updateTablesAfterAccountClose } from './utils/tableCloseState';
+import {
   dispatchLegacyLanMutation,
   persistLegacyLanMutationCompletion,
   validateLegacyEntityResponse,
@@ -4477,6 +4487,8 @@ const AppContent: React.FC = () => {
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
   const [activeCartDraftRestorePrompt, setActiveCartDraftRestorePrompt] = useState<ActiveCartDraft | null>(null);
   const masterRestaurantRevisionRef = useRef(0);
+  const lastAppliedMasterRestaurantRevisionRef = useRef(0);
+  const restaurantPersistenceQueueRef = useRef(new RestaurantPersistenceQueue());
   const lastAppliedClientRestaurantRevisionRef = useRef(0);
   const lastAppliedClientTablesSnapshotVersionRef = useRef('');
   const lastAppliedClientTablesAuthorityRef = useRef('');
@@ -4589,12 +4601,16 @@ const AppContent: React.FC = () => {
         });
     };
 
+    const isMasterRestaurantReconcileFenced = () => currentViewRef.current === 'TABLE_DESIGNER'
+      || Boolean(activeTableEditLockRef.current)
+      || Boolean(pendingMasterTableSyncRef.current);
+
     const reconcileNativeRestaurantState = async () => {
       if (disposed || masterRestaurantPollInFlightRef.current) return;
       // El diseñador mantiene un borrador local hasta "Guardar y Volver".
       // No permitir que un snapshot nativo anterior reponga coordenadas mientras
       // el usuario está moviendo o agregando elementos del plano.
-      if (currentViewRef.current === 'TABLE_DESIGNER' || activeTableEditLockRef.current) return;
+      if (isMasterRestaurantReconcileFenced()) return;
       const nativeBridge = (window as any).ClicPOSNativePrinter;
       if (typeof nativeBridge?.getMasterRestaurantState !== 'function') return;
       if (!isNativeStandaloneTerminalRuntime(getCurrentTerminal())) return;
@@ -4628,7 +4644,11 @@ const AppContent: React.FC = () => {
           return;
         }
 
-        if (revision <= masterRestaurantRevisionRef.current) return;
+        const knownRevisionBeforePoll = masterRestaurantRevisionRef.current;
+        masterRestaurantRevisionRef.current = Math.max(knownRevisionBeforePoll, revision);
+        if (revision <= lastAppliedMasterRestaurantRevisionRef.current
+          || revision < knownRevisionBeforePoll) return;
+        if (isMasterRestaurantReconcileFenced()) return;
 
         // El plano diseñado de la Master conserva autoridad aunque un bootstrap
         // posterior entregue otra cuadrícula (incluso si ya trae coordenadas).
@@ -4682,12 +4702,8 @@ const AppContent: React.FC = () => {
         // (locks, otra mesa, heartbeat). Mientras la Master guarda su mesa activa,
         // conservar ese borrador para que un snapshot anterior no borre la primera
         // digitación antes de que termine el PUT atómico.
-        const mergedRemoteParkedTickets = mergePendingClientTableTickets(
-          remoteParkedTickets,
-          pendingMasterTableSyncRef.current,
-        );
         const { tickets: nextParkedTickets, removedTicketIds: repairedRemoteTicketIds } =
-          removeStaleChargedEmptyTickets(mergedRemoteParkedTickets);
+          removeStaleChargedEmptyTickets(remoteParkedTickets);
         if (repairedRemoteTicketIds.length > 0) {
           console.warn('[TABLE_TICKET_REPAIR] Removed stale charged empty tickets from native snapshot', {
             count: repairedRemoteTicketIds.length,
@@ -4715,39 +4731,66 @@ const AppContent: React.FC = () => {
             .filter(([productId, productionAreaId]: string[]) => Boolean(productId && productionAreaId)),
         );
         const routedCatalog = applyProductionAreaAssignments(products, routingAssignments);
-        masterRestaurantRevisionRef.current = revision;
-        if (hasDesignedFloorPlan(reconciledTables)) {
-          locallySavedFloorPlanRef.current = {
-            roomIds: new Set(selectedRooms.map((room: Room) => String(room.id))),
-            tableIds: new Set(reconciledTables.map((table: Table) => String(table.id))),
-          };
-          writeFloorPlanMirror(selectedRooms, reconciledTables, {
-            layoutSource: 'MASTER_RUNTIME',
-            layoutRevision: revision,
-            isDefaultSeed: false,
-          });
-        }
-        setRooms(selectedRooms);
-        setTables(reconciledTables);
-        setParkedTickets(nextParkedTickets);
-        setCustomers(nextCustomers);
-        if (routedCatalog.updatedProducts.length > 0) {
-          setProducts(routedCatalog.products);
-          window.dispatchEvent(new CustomEvent('productsUpdated'));
-        }
-        writeCriticalCollectionsMirror(
-          nextParkedTickets,
-          masterOperationalSnapshotRef.current.cashMovements,
+        if (isMasterRestaurantReconcileFenced()) return;
+        const authoritativeSnapshot = {
+          rooms: selectedRooms,
+          tables: reconciledTables,
+          parkedTickets: nextParkedTickets,
+          customers: nextCustomers,
+          products: routedCatalog.products,
+          productsChanged: routedCatalog.updatedProducts.length > 0,
+        };
+        const applyResult = await applyAuthoritativeMasterRestaurantSnapshot({
+          revision,
+          knownRevision: masterRestaurantRevisionRef.current,
+          appliedRevision: lastAppliedMasterRestaurantRevisionRef.current,
+          fenced: isMasterRestaurantReconcileFenced(),
+          snapshot: authoritativeSnapshot,
+          publish: snapshot => {
+            masterOperationalSnapshotRef.current = {
+              rooms: snapshot.rooms,
+              tables: snapshot.tables,
+              parkedTickets: snapshot.parkedTickets,
+              cashMovements: masterOperationalSnapshotRef.current.cashMovements,
+            };
+            if (hasDesignedFloorPlan(snapshot.tables)) {
+              locallySavedFloorPlanRef.current = {
+                roomIds: new Set(snapshot.rooms.map((room: Room) => String(room.id))),
+                tableIds: new Set(snapshot.tables.map((table: Table) => String(table.id))),
+              };
+              writeFloorPlanMirror(snapshot.rooms, snapshot.tables, {
+                layoutSource: 'MASTER_RUNTIME',
+                layoutRevision: revision,
+                isDefaultSeed: false,
+              });
+            }
+            setRooms(snapshot.rooms);
+            setTables(snapshot.tables);
+            setParkedTickets(snapshot.parkedTickets);
+            setCustomers(snapshot.customers);
+            if (snapshot.productsChanged) {
+              setProducts(snapshot.products);
+              window.dispatchEvent(new CustomEvent('productsUpdated'));
+            }
+            writeCriticalCollectionsMirror(
+              snapshot.parkedTickets,
+              masterOperationalSnapshotRef.current.cashMovements,
+            );
+          },
+          persist: snapshot => restaurantPersistenceQueueRef.current.run(() => Promise.all([
+              db.save('rooms', snapshot.rooms),
+              db.save('tables', snapshot.tables),
+              db.save('parkedTickets', snapshot.parkedTickets),
+              db.save('customers', snapshot.customers),
+              ...(snapshot.productsChanged ? [db.save('products', snapshot.products)] : []),
+            ]).then(() => undefined)),
+        });
+        masterRestaurantRevisionRef.current = mergeKnownMasterRestaurantRevision(
+          masterRestaurantRevisionRef.current,
+          applyResult.knownRevision,
         );
-        await Promise.all([
-          db.save('rooms', selectedRooms),
-          db.save('tables', reconciledTables),
-          db.save('parkedTickets', nextParkedTickets),
-          db.save('customers', nextCustomers),
-          ...(routedCatalog.updatedProducts.length > 0
-            ? [db.save('products', routedCatalog.products)]
-            : []),
-        ]);
+        if (!applyResult.applied) return;
+        lastAppliedMasterRestaurantRevisionRef.current = applyResult.appliedRevision;
         customersCreatedByClients.forEach((customer: Customer) => {
           queueCustomerMutation('UPSERT', customer).then(() => backgroundSyncManager.triggerSync()).catch(error => {
             console.warn('[MASTER_LAN] No se pudo colocar cliente nuevo en la cola ERP:', error);
@@ -4770,7 +4813,7 @@ const AppContent: React.FC = () => {
 
     const pollNativeRestaurantRevision = async () => {
       if (disposed || masterRestaurantPollInFlightRef.current) return;
-      if (currentViewRef.current === 'TABLE_DESIGNER' || activeTableEditLockRef.current) return;
+      if (isMasterRestaurantReconcileFenced()) return;
       const nativeBridge = (window as any).ClicPOSNativePrinter;
       if (typeof nativeBridge?.getMasterRestaurantRevision !== 'function') {
         await reconcileNativeRestaurantState();
@@ -4782,7 +4825,9 @@ const AppContent: React.FC = () => {
         const rawRevision = await Promise.resolve(nativeBridge.getMasterRestaurantRevision({}));
         const revisionPayload = parseNativeBridgeJson(rawRevision);
         const revision = Number(revisionPayload?.revision || 0);
-        if (!Number.isFinite(revision) || revision <= masterRestaurantRevisionRef.current) return;
+        if (!Number.isFinite(revision)
+          || revision <= lastAppliedMasterRestaurantRevisionRef.current
+          || revision < masterRestaurantRevisionRef.current) return;
         await reconcileNativeRestaurantState();
       } catch (error) {
         console.warn('[MASTER_LAN] Could not poll native restaurant revision:', error);
@@ -5734,6 +5779,11 @@ const AppContent: React.FC = () => {
         if (requestTimeout !== undefined) { window.clearTimeout(requestTimeout); requestTimeout = undefined; }
         assertCurrentAuthority();
         const responseRevision = Number(data?.revision || 0);
+        const masterHttpRevisionIsCurrent = () => isClientRuntime || canApplyMasterHttpRestaurantRevision({
+          responseRevision,
+          knownRevision: masterRestaurantRevisionRef.current,
+          appliedRevision: lastAppliedMasterRestaurantRevisionRef.current,
+        });
         const hasUnchangedClientRevision = isClientRuntime
           && Number.isFinite(responseRevision)
           && responseRevision > 0
@@ -5749,6 +5799,14 @@ const AppContent: React.FC = () => {
           pendingTableSync = await readPendingClientTableSync();
           assertCurrentAuthority();
           if (pendingTableSync) pendingClientTableSyncRef.current = pendingTableSync;
+        }
+        if (!masterHttpRevisionIsCurrent()) {
+          console.warn('[MASTER_TABLES_STALE_HTTP_SNAPSHOT]', {
+            responseRevision,
+            knownRevision: masterRestaurantRevisionRef.current,
+            appliedRevision: lastAppliedMasterRestaurantRevisionRef.current,
+          });
+          return { ok: true };
         }
         if (Number.isFinite(responseRevision) && responseRevision > masterRestaurantRevisionRef.current) {
           masterRestaurantRevisionRef.current = responseRevision;
@@ -5818,6 +5876,7 @@ const AppContent: React.FC = () => {
         if (Array.isArray(data)) {
           markClientMasterOnline();
           setTables(previousTables => {
+            if (!masterHttpRevisionIsCurrent()) return previousTables;
             if (!isClientRuntime && data.length === 0 && previousTables.length > 0) {
               console.warn('Se ignoró una respuesta vacía de mesas para preservar el layout local.');
               return previousTables;
@@ -5844,9 +5903,11 @@ const AppContent: React.FC = () => {
 
         // También en Master el snapshot remoto es autoritativo. Esto evita
         // restaurar una cuenta ya cobrada al regresar a la pantalla de mesas.
+        if (!masterHttpRevisionIsCurrent()) return { ok: true };
         if (hasAuthoritativeParkedTickets) setParkedTickets(nextParkedTickets);
 
         setTables(previousTables => {
+          if (!masterHttpRevisionIsCurrent()) return previousTables;
           if (!isClientRuntime && nextTables.length === 0 && previousTables.length > 0) {
             console.warn('Se ignoró una respuesta vacía de mesas para preservar el layout local.');
             return previousTables;
@@ -5856,11 +5917,12 @@ const AppContent: React.FC = () => {
 
         if (isClientRuntime) {
           setRooms(nextRooms);
-          setActiveRoomId(prev =>
-            prev && nextRooms.some((room: Room) => room.id === prev)
+          setActiveRoomId(prev => {
+            if (!masterHttpRevisionIsCurrent()) return prev;
+            return prev && nextRooms.some((room: Room) => room.id === prev)
               ? prev
-              : (nextRooms[0]?.id || '')
-          );
+              : (nextRooms[0]?.id || '');
+          });
           if (Number.isFinite(responseRevision) && responseRevision > 0) {
             lastAppliedClientRestaurantRevisionRef.current = responseRevision;
           }
@@ -5869,6 +5931,7 @@ const AppContent: React.FC = () => {
           lastAppliedClientTablesAuthorityRef.current = masterEndpoint;
         } else if (nextRooms.length > 0) {
           setRooms(previousRooms => {
+            if (!masterHttpRevisionIsCurrent()) return previousRooms;
             const localFloorPlan = locallySavedFloorPlanRef.current;
             if (!localFloorPlan || previousRooms.length === 0) return nextRooms;
 
@@ -5886,11 +5949,12 @@ const AppContent: React.FC = () => {
             incomingById.forEach(room => merged.push(room));
             return merged;
           });
-          setActiveRoomId(prev =>
-            prev && nextRooms.some((room: Room) => room.id === prev)
+          setActiveRoomId(prev => {
+            if (!masterHttpRevisionIsCurrent()) return prev;
+            return prev && nextRooms.some((room: Room) => room.id === prev)
               ? prev
-              : (nextRooms[0]?.id || '')
-          );
+              : (nextRooms[0]?.id || '');
+          });
         }
       }
       return { ok: true };
@@ -5905,14 +5969,25 @@ const AppContent: React.FC = () => {
         return { ok: false, error: e };
       }
       console.warn('Using local rooms/tables because this terminal owns its operational database.');
+      const nativeRestaurantAuthorityActive = isNativeAndroidRuntime()
+        && isNativeStandaloneTerminalRuntime(getCurrentTerminal())
+        && typeof (window as any).ClicPOSNativePrinter?.getMasterRestaurantState === 'function';
+      const masterSqliteFallbackIsAllowed = () => canUseMasterSqliteRestaurantFallback({
+        nativeAuthorityActive: nativeRestaurantAuthorityActive,
+        knownRevision: masterRestaurantRevisionRef.current,
+        appliedRevision: lastAppliedMasterRestaurantRevisionRef.current,
+      });
+      if (!masterSqliteFallbackIsAllowed()) return { ok: false, error: e };
       try {
         const [localRooms, localTables] = await Promise.all([
           db.get('rooms') as Promise<Room[]>,
           db.get('tables') as Promise<Table[]>
         ]);
+        if (!masterSqliteFallbackIsAllowed()) return { ok: false, error: e };
         const nextRooms = Array.isArray(localRooms) ? localRooms : [];
         const nextTables = Array.isArray(localTables) ? localTables : [];
         setTables(previousTables => {
+          if (!masterSqliteFallbackIsAllowed()) return previousTables;
           if (nextTables.length > 0) {
             return reconcileTablesWithParkedTickets(nextTables, parkedTickets);
           }
@@ -5920,19 +5995,23 @@ const AppContent: React.FC = () => {
           return reconcileTablesWithParkedTickets(persistedFloorPlanMirror?.tables || [], parkedTickets);
         });
         if (nextRooms.length > 0) {
-          setRooms(nextRooms);
-          setActiveRoomId(prev =>
-            prev && nextRooms.some((room: Room) => room.id === prev)
+          setRooms(previousRooms => masterSqliteFallbackIsAllowed() ? nextRooms : previousRooms);
+          setActiveRoomId(prev => {
+            if (!masterSqliteFallbackIsAllowed()) return prev;
+            return prev && nextRooms.some((room: Room) => room.id === prev)
               ? prev
-              : (nextRooms[0]?.id || '')
-          );
+              : (nextRooms[0]?.id || '');
+          });
         } else if (persistedFloorPlanMirror?.rooms?.length) {
-          setRooms(persistedFloorPlanMirror.rooms);
-          setActiveRoomId(prev =>
-            prev && persistedFloorPlanMirror.rooms.some(room => room.id === prev)
+          setRooms(previousRooms => masterSqliteFallbackIsAllowed()
+            ? persistedFloorPlanMirror.rooms
+            : previousRooms);
+          setActiveRoomId(prev => {
+            if (!masterSqliteFallbackIsAllowed()) return prev;
+            return prev && persistedFloorPlanMirror.rooms.some(room => room.id === prev)
               ? prev
-              : persistedFloorPlanMirror.rooms[0].id
-          );
+              : persistedFloorPlanMirror.rooms[0].id;
+          });
         }
       } catch (fallbackError) {
         console.error('Failed to load tables from local DB:', fallbackError);
@@ -13004,15 +13083,20 @@ const AppContent: React.FC = () => {
                 timeSeated: table.timeSeated || ticket.timestamp
               } as Table;
 
+              masterOperationalSnapshotRef.current = {
+                ...masterOperationalSnapshotRef.current,
+                tables: masterOperationalSnapshotRef.current.tables.some(item => item.id === updatedTable.id)
+                  ? masterOperationalSnapshotRef.current.tables.map(item => item.id === updatedTable.id ? updatedTable : item)
+                  : [...masterOperationalSnapshotRef.current.tables, updatedTable],
+              };
               setTables(prev => {
                 const nextTables = prev.some(t => t.id === updatedTable.id)
                   ? prev.map(t => t.id === updatedTable.id ? updatedTable : t)
                   : [...prev, updatedTable];
-                // El cierre de otra mesa puede seguir propagándose por React.
-                // Un snapshot viejo de parkedTickets no debe liberar mesas ajenas.
-                db.save('tables', nextTables).catch(error => console.error('Failed to persist table occupancy:', error));
                 return nextTables;
               });
+              void restaurantPersistenceQueueRef.current.run(() => db.saveDocument('tables', updatedTable))
+                .catch(error => console.error('Failed to persist table occupancy:', error));
 
               const servesAsNativeMaster = isNativeAndroidRuntime()
                 && isNativeStandaloneTerminalRuntime(getCurrentTerminal());
@@ -13071,6 +13155,9 @@ const AppContent: React.FC = () => {
             }}
             onTableOrderClosed={(table, _closedOrderId, remainingTickets = []) => {
               const closedOrderId = _closedOrderId ? String(_closedOrderId) : '';
+              const closedTicket = closedOrderId
+                ? masterOperationalSnapshotRef.current.parkedTickets.find(ticket => String(ticket.id) === closedOrderId)
+                : undefined;
               if (closedOrderId) {
                 closedRestaurantOrderIdsRef.current.add(closedOrderId);
                 if (closedRestaurantOrderIdsRef.current.size > 200) {
@@ -13078,48 +13165,35 @@ const AppContent: React.FC = () => {
                   if (oldestOrderId) closedRestaurantOrderIdsRef.current.delete(oldestOrderId);
                 }
               }
-              const tableId = String(table.id ?? '');
-              const effectiveRemainingTickets = (remainingTickets || []).filter(ticket => {
-                const isClosedOrder = closedOrderId && String(ticket.id) === closedOrderId;
-                return !isClosedOrder;
+              const closeState = updateTablesAfterAccountClose({
+                tables: masterOperationalSnapshotRef.current.tables,
+                closedTable: table,
+                closedOrderId,
+                closedTicket,
+                remainingTickets,
               });
-              const tableTickets = effectiveRemainingTickets.filter(ticket => parkedTicketBelongsToTable(ticket, tableId));
-              const nextTicket = tableTickets[0];
-              const remainingTotal = tableTickets.reduce((sum, ticket) => {
-                const itemsTotal = (ticket.items || []).reduce((itemSum, item) => itemSum + (Number(item.price || 0) * Number(item.quantity || 0)), 0);
-                return sum + Number(ticket.total ?? itemsTotal ?? 0);
-              }, 0);
-              const nextTable = nextTicket
-                ? ({
-                    ...table,
-                    status: 'OCCUPIED',
-                    currentOrderId: nextTicket.id,
-                    currentOrderTotal: remainingTotal,
-                    timeSeated: table.timeSeated || nextTicket.timestamp,
-                  } as Table)
-                : ({
-                    ...table,
-                    status: 'FREE',
-                    currentOrderId: undefined,
-                    currentOrderTotal: undefined,
-                    timeSeated: undefined,
-                    waiterId: undefined,
-                    waiterName: undefined,
-                    guests: undefined,
-                    barTabId: undefined,
-                    barTabName: undefined,
-                  } as Table);
-
-              const base = tables.some(t => t.id === nextTable.id)
-                ? tables.map(t => t.id === nextTable.id ? nextTable : t)
-                : [...tables, nextTable];
-              const reconciled = reconcileTablesWithParkedTickets(base, effectiveRemainingTickets);
+              const nextTable = closeState.targetTable;
+              masterOperationalSnapshotRef.current = {
+                ...masterOperationalSnapshotRef.current,
+                tables: closeState.tables,
+              };
 
               // La mesa vacía también sigue el contrato LOCAL_COMMITTED: la UI y
               // el lock local cambian en esta misma tarea. SQLite, HTTP y la
               // liberación remota conservan su orden, pero nunca bloquean volver
               // al mapa ni la siguiente interacción del operador.
-              setTables(reconciled);
+              setTables(previousTables => {
+                return updateTablesAfterAccountClose({
+                  tables: previousTables,
+                  closedTable: table,
+                  closedOrderId,
+                  closedTicket,
+                  remainingTickets,
+                }).tables;
+              });
+              void restaurantPersistenceQueueRef.current.run(() => Promise.all(
+                closeState.affectedTables.map(affectedTable => db.saveDocument('tables', affectedTable)),
+              ).then(() => undefined)).catch(error => console.error('Failed to persist table release:', error));
               if (closedOrderId) {
                 void releaseActiveTableEditLock({ deferRemote: true });
               } else {
@@ -13128,7 +13202,6 @@ const AppContent: React.FC = () => {
               window.setTimeout(() => {
                 void (async () => {
                   await clearActiveCartDraftStorage().catch((error) => console.warn('No se pudo limpiar borrador activo tras cerrar mesa:', error));
-                  await db.save('tables', reconciled).catch(error => console.error('Failed to persist table release:', error));
                   try {
                     const receipt = await dispatchLegacyLanMutation<any>({
                       url: await resolveValidatedOperationalApiUrl(`/api/tables/${encodeURIComponent(String(table.id))}`),

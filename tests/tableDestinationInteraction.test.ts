@@ -72,10 +72,14 @@ test('guardar la segunda mesa no libera la primera con tickets de un render ante
   const mesa4 = { id: 'mesa-4', status: 'OCCUPIED', currentOrderId: 'orden-4', currentOrderTotal: 20 };
   const mesa7 = { id: 'mesa-7', status: 'FREE', currentOrderId: undefined };
   let savedTables: any[] = [];
+  const persistedDocuments: any[] = [];
   const saveOrder = attribute('App', 'onTableOrderSaved', 'updatedTable', {
     setTables: (update: (previous: any[]) => any[]) => { savedTables = update([mesa4, mesa7]); },
-    db: { save: async () => {} },
+    masterOperationalSnapshotRef: { current: { tables: [mesa4, mesa7], parkedTickets: [], rooms: [], cashMovements: [] } },
+    restaurantPersistenceQueueRef: { current: { run: (operation: () => Promise<unknown>) => operation() } },
+    db: { saveDocument: async (_collection: string, document: any) => { persistedDocuments.push(document); } },
     console,
+    isNativeAndroidRuntime: () => false,
     isClientTerminalMode: () => true,
     parkedTickets: [],
   }) as (table: any, ticket: any) => Promise<void>;
@@ -83,6 +87,7 @@ test('guardar la segunda mesa no libera la primera con tickets de un render ante
   await saveOrder(mesa7, { id: 'orden-7', tableId: 'mesa-7', items: [{ id: 'item-7', price: 10, quantity: 1 }], total: 10, timestamp: 'now' });
   assert.deepEqual(savedTables.find(table => table.id === 'mesa-4'), mesa4);
   assert.equal(savedTables.find(table => table.id === 'mesa-7').currentOrderId, 'orden-7');
+  assert.deepEqual(persistedDocuments.map(document => document.id), ['mesa-7']);
 });
 
 test('real table branches own selectors and hydrated POS destinations without borrowing old traces', async () => {

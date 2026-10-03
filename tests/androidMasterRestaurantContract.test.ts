@@ -18,6 +18,7 @@ const pairingSource = readFileSync(new URL('../components/TerminalBindingScreen.
 const lanDiscoverySource = readFileSync(new URL('../utils/masterLanDiscovery.ts', import.meta.url), 'utf8');
 const scannerSource = readFileSync(new URL('../services/sync/NetworkScanner.ts', import.meta.url), 'utf8');
 const appSource = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
+const tableCloseStateSource = readFileSync(new URL('../utils/tableCloseState.ts', import.meta.url), 'utf8');
 const clientMasterBindingSource = readFileSync(new URL('../utils/clientMasterBinding.ts', import.meta.url), 'utf8');
 const kitchenDisplaySource = readFileSync(
   new URL('../components/kds/KitchenDisplay.tsx', import.meta.url),
@@ -45,6 +46,12 @@ test('la Cliente sondea una versión ligera que incluye clientes y renovaciones 
   assert.match(fetchTablesSource, /masterEndpoint === lastAppliedClientTablesAuthorityRef\.current\s+&& observedSnapshotVersion === lastAppliedClientTablesSnapshotVersionRef\.current/);
   assert.match(fetchTablesSource, /pendingClientTableSyncRef\.current \|\| await readPendingClientTableSync\(\)/);
   assert.match(fetchTablesSource, /observedSnapshotVersion === lastAppliedClientTablesSnapshotVersionRef\.current\)/);
+  assert.match(fetchTablesSource, /canApplyMasterHttpRestaurantRevision\(\{[\s\S]*lastAppliedMasterRestaurantRevisionRef\.current/);
+  assert.match(fetchTablesSource, /setTables\(previousTables => \{\s*if \(!masterHttpRevisionIsCurrent\(\)\) return previousTables;/);
+  assert.match(fetchTablesSource, /if \(!masterHttpRevisionIsCurrent\(\)\) return \{ ok: true \};\s*if \(hasAuthoritativeParkedTickets\)/);
+  assert.match(fetchTablesSource, /if \(!masterSqliteFallbackIsAllowed\(\)\) return \{ ok: false, error: e \};[\s\S]*await Promise\.all/);
+  assert.match(fetchTablesSource, /nativeRestaurantAuthorityActive = isNativeAndroidRuntime\(\)[\s\S]*getMasterRestaurantState === 'function'/);
+  assert.match(fetchTablesSource, /setTables\(previousTables => \{\s*if \(!masterSqliteFallbackIsAllowed\(\)\) return previousTables;/);
   assert.match(appSource, /void fetchTables\(true\)/);
 });
 
@@ -188,7 +195,7 @@ test('la Master conserva y libera de forma simétrica las mesas unidas', () => {
   assert.match(serverSource, /TABLE_RELEASE_ORDER_MISMATCH/);
   assert.match(serverSource, /TABLE_RELEASE_HAS_REMAINING_ACCOUNTS/);
   assert.match(serverSource, /ticket\.optString\("id"\) != expectedOrderId && ticketReferencesTable\(ticket, tableId\)/);
-  assert.match(appSource, /parkedTicketBelongsToTable\(ticket, tableId\)/);
+  assert.match(tableCloseStateSource, /parkedTicketBelongsToTable\(ticket, currentId\)/);
 });
 
 test('la WebView entrega el snapshot operativo al servidor nativo sin sobreescribir cambios clientes en el watchdog', () => {
@@ -391,7 +398,25 @@ test('los renders de la Master no reemplazan el estado operativo nativo', () => 
   assert.match(masterServerEffect, /masterRestaurantBootstrapRequestedRef\.current/);
   assert.match(masterServerEffect, /activeTableEditLockRef\.current/);
   assert.match(masterServerEffect, /Restored designed floor plan after rejecting ERP seed tables/);
-  assert.match(masterServerEffect, /writeFloorPlanMirror\(selectedRooms, reconciledTables/);
+  assert.match(masterServerEffect, /writeFloorPlanMirror\(snapshot\.rooms, snapshot\.tables/);
+  assert.match(masterServerEffect, /lastAppliedMasterRestaurantRevisionRef\.current = applyResult\.appliedRevision/);
+  assert.match(masterServerEffect, /revision <= lastAppliedMasterRestaurantRevisionRef\.current/);
+  assert.match(masterServerEffect, /revision < masterRestaurantRevisionRef\.current/);
+  assert.match(masterServerEffect, /restaurantPersistenceQueueRef\.current\.run\(\(\) => Promise\.all/);
+  assert.match(masterServerEffect, /mergeKnownMasterRestaurantRevision\([\s\S]*masterRestaurantRevisionRef\.current,[\s\S]*applyResult\.knownRevision/);
+});
+
+test('el cierre de cuenta persiste solo mesas afectadas fuera del updater de React', () => {
+  const closeHandlerSource = appSource.slice(
+    appSource.indexOf('onTableOrderClosed={(table'),
+    appSource.indexOf('onOpenAgenda=', appSource.indexOf('onTableOrderClosed={(table')),
+  );
+  const updaterSource = closeHandlerSource.slice(
+    closeHandlerSource.indexOf('setTables(previousTables =>'),
+    closeHandlerSource.indexOf('restaurantPersistenceQueueRef.current.run'),
+  );
+  assert.doesNotMatch(updaterSource, /db\.save/);
+  assert.match(closeHandlerSource, /closeState\.affectedTables\.map\(affectedTable => db\.saveDocument\('tables', affectedTable\)\)/);
 });
 
 test('la Caja Master Android se anuncia y puede identificarse automáticamente en la red local', () => {

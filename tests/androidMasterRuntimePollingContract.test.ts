@@ -17,7 +17,8 @@ test('el watchdog consulta solo la revisión antes de serializar el snapshot res
   assert.match(bridgeSource, /fun getMasterRestaurantRevision\(payloadJson: String\?\): String/);
   assert.match(appSource, /getMasterRestaurantRevision: \(payload: unknown\) => call\('getMasterRestaurantRevision', payload\)/);
   assert.match(appSource, /const pollNativeRestaurantRevision = async \(\) =>/);
-  assert.match(appSource, /revision <= masterRestaurantRevisionRef\.current/);
+  assert.match(appSource, /revision <= lastAppliedMasterRestaurantRevisionRef\.current/);
+  assert.match(appSource, /revision < masterRestaurantRevisionRef\.current/);
   assert.match(appSource, /await reconcileNativeRestaurantState\(\)/);
   assert.match(appSource, /setInterval\(\(\) => void pollNativeRestaurantRevision\(\), 1000\)/);
   assert.match(appSource, /ensureMasterServer\(false\)\.then\(\(\) => reconcileNativeRestaurantState\(\)\)/);
