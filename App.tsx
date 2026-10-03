@@ -13223,6 +13223,10 @@ const AppContent: React.FC = () => {
               window.setTimeout(() => {
                 void (async () => {
                   await clearActiveCartDraftStorage().catch((error) => console.warn('No se pudo limpiar borrador activo tras cerrar mesa:', error));
+                  // A closed order is released by /api/mesas/liberar after its
+                  // parked-ticket write. An additional table PUT races with
+                  // the active edit lock and can overwrite a newly opened order.
+                  if (closedOrderId) return;
                   try {
                     const receipt = await dispatchLegacyLanMutation<any>({
                       url: await resolveValidatedOperationalApiUrl(`/api/tables/${encodeURIComponent(String(table.id))}`),

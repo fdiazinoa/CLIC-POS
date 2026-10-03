@@ -1379,6 +1379,9 @@ object ClicPOSMasterHttpServer {
         return false
     }
 
+    private fun tableOrderId(table: JSONObject): String =
+        if (table.isNull("currentOrderId")) "" else table.optString("currentOrderId").trim()
+
     private fun parkedTicketTotal(ticket: JSONObject): Double {
         val explicitTotal = ticket.optDouble("total", Double.NaN)
         if (!explicitTotal.isNaN()) return explicitTotal
@@ -1516,7 +1519,7 @@ object ClicPOSMasterHttpServer {
         for (index in 0 until reconciled.length()) {
             val table = reconciled.optJSONObject(index) ?: continue
             val tableId = table.optString("id")
-            val currentOrderId = table.optString("currentOrderId")
+            val currentOrderId = tableOrderId(table)
             val orderTicket = activeByOrderId[currentOrderId]
             val orderTicketTableId = orderTicket?.optString("tableId").orEmpty()
             val joinedTableIds = orderTicket?.optJSONArray("joinedTableIds") ?: JSONArray()
@@ -1786,7 +1789,7 @@ object ClicPOSMasterHttpServer {
             val table = updatedTables.optJSONObject(index) ?: continue
             if (table.optString("id") != tableId) continue
             found = true
-            orderId = table.optString("currentOrderId").trim()
+            orderId = tableOrderId(table)
             if (orderId.isBlank()) {
                 orderId = "ORD-${System.currentTimeMillis()}"
                 table
@@ -1874,7 +1877,7 @@ object ClicPOSMasterHttpServer {
             val table = updatedTables.optJSONObject(index) ?: continue
             if (table.optString("id") != tableId) continue
             found = true
-            orderId = table.optString("currentOrderId").trim()
+            orderId = tableOrderId(table)
             if (orderId.isBlank()) {
                 writeResponse(socket, 200, JSONObject()
                     .put("success", true)

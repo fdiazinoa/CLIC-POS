@@ -5067,15 +5067,21 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          if (!authorized) return;
       }
 
-      onUpdateCart(dispatchedItems);
       setActiveCartItemId(null);
       setEditingItem(null);
 
-      if (activeTable) {
+      // When every line is removed, the table closure owns the cart change.
+      // Publishing an empty cart first can start a second ticket sync while
+      // the release is still in flight.
+      if (activeTable && dispatchedItems.length === 0) {
+         await releaseActiveEmptyTable({ silent: true, force: true });
+      } else {
+         onUpdateCart(dispatchedItems);
+      }
+
+      if (activeTable && dispatchedItems.length > 0) {
          const ticketId = activeTable.currentOrderId;
-         if (dispatchedItems.length === 0) {
-            await releaseActiveEmptyTable({ silent: true, force: true });
-         } else if (ticketId) {
+         if (ticketId) {
             const total = dispatchedItems.reduce((sum, i) => sum + (Number(i.price || 0) * Number(i.quantity || 0)), 0);
             const updatedTickets = (Array.isArray(parkedTickets) ? parkedTickets : []).map(p =>
                p.id === ticketId ? { ...p, items: dispatchedItems, total } : p
@@ -6628,6 +6634,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       const tableToRelease = activeTable;
       cancelTicketAutoSync();
+      let ticketSync: Promise<void> = Promise.resolve();
 
       if (tableToRelease.currentOrderId) {
          const releasedOrderId = String(tableToRelease.currentOrderId);
@@ -6640,12 +6647,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          parkedTicketsRef.current = remaining;
          // El journal local se escribe de forma síncrona dentro del callback;
          // SQLite/Outbox continúan en su cola sin bloquear el regreso al mapa.
-         void Promise.resolve(onUpdateParkedTicketsRef.current(remaining)).catch(() => {
-            setErrorToast('No se pudo confirmar con la Master. La liberación quedó pendiente localmente.');
-            window.setTimeout(() => setErrorToast(null), 3500);
-         });
+         try {
+            ticketSync = Promise.resolve(onUpdateParkedTicketsRef.current(remaining));
+         } catch (error) {
+            ticketSync = Promise.reject(error);
+         }
          void Promise.resolve(onTableOrderClosedRef.current?.(tableToRelease, tableToRelease.currentOrderId, remaining));
          if (remaining.some(ticket => parkedTicketBelongsToTable(ticket, releasedTableId))) {
+            void ticketSync.catch(() => {
+               setErrorToast('No se pudo confirmar con la Master. La liberación quedó pendiente localmente.');
+               window.setTimeout(() => setErrorToast(null), 3500);
+            });
             recordCheckoutDiagnostic('CART_CLEAR_REQUEST', { items: cart, tableId: activeTable?.id, orderId: activeTable?.currentOrderId, reason: 'POS_CLEAR_08' });
             onUpdateCart([]);
             onSelectCustomer(null);
@@ -6672,9 +6684,24 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
 
       void (async () => {
+         if (!tableToRelease.currentOrderId) return;
+         // The native parked-ticket write and the explicit table release both
+         // mutate the same restaurant revision. Complete the queued write
+         // before releasing; a failed write can still be resolved by the
+         // conditional release of this exact order.
+         try {
+            await ticketSync;
+         } catch (error) {
+            console.warn('No se pudo confirmar el ticket antes de liberar la mesa:', error);
+         }
          let releaseEndpoint: string;
          try { releaseEndpoint = await resolveValidatedOperationalApiUrl('/api/mesas/liberar'); }
-         catch (error) { console.warn('No se pudo validar la master para liberar mesa:', error); return; }
+         catch (error) {
+            console.warn('No se pudo validar la master para liberar mesa:', error);
+            setErrorToast('No se pudo confirmar con la Master. La liberación quedó pendiente localmente.');
+            window.setTimeout(() => setErrorToast(null), 3500);
+            return;
+         }
          try {
             const releaseRes = await dispatchLegacyLanMutation<any>({
                url: releaseEndpoint,
@@ -6695,6 +6722,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             );
          } catch (error) {
             console.warn('No se pudo confirmar la liberacion de mesa en servidor:', error);
+            setErrorToast('No se pudo confirmar con la Master. La liberación quedó pendiente localmente.');
+            window.setTimeout(() => setErrorToast(null), 3500);
          }
       })();
 
