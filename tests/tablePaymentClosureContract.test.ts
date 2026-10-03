@@ -46,6 +46,7 @@ test('liberar una cuenta vacía invalida cualquier flush antes de publicar el ci
   assert.ok(branch.indexOf('parkedTicketsRef.current = remaining') < branch.indexOf('onUpdateParkedTicketsRef.current(remaining)'));
   assert.match(branch, /parkedTicketBelongsToTable\(ticket, releasedTableId\)/);
   assert.match(branch, /expectedOrderId: String\(tableToRelease\.currentOrderId \|\| ''\)/);
+  assert.ok(branch.indexOf('await ticketSync') < branch.indexOf("resolveValidatedOperationalApiUrl('/api/mesas/liberar')"));
 });
 
 test('el cierre final elimina solo la orden cobrada desde el snapshot vivo', () => {

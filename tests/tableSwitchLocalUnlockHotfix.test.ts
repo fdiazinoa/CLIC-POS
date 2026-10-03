@@ -93,16 +93,20 @@ test('cerrar una mesa vacía actualiza y desbloquea localmente antes de persisti
   const closeEnd = appSource.indexOf('onOpenAgenda=', closeStart);
   const closeSource = appSource.slice(closeStart, closeEnd);
   assert.ok(closeStart >= 0 && closeEnd > closeStart);
-  assert.match(closeSource, /setTables\(reconciled\)/);
+  assert.match(closeSource, /setTables\(previousTables => \{/);
   assert.match(closeSource, /releaseActiveTableEditLock\(\{ deferRemote: true \}\)/);
-  assert.ok(closeSource.indexOf('setTables(reconciled)') < closeSource.indexOf("db.save('tables', reconciled)"));
+  assert.ok(closeSource.indexOf('setTables(previousTables => {') < closeSource.indexOf("db.saveDocument('tables', affectedTable)"));
   assert.ok(closeSource.indexOf('releaseActiveTableEditLock') < closeSource.indexOf('await clearActiveCartDraftStorage'));
   assert.match(closeSource, /window\.setTimeout\(\(\) => \{/);
+  assert.match(closeSource, /if \(closedOrderId\) return;\s*try \{\s*const receipt = await dispatchLegacyLanMutation/);
 
   const emptyReleaseStart = posSource.indexOf('const releaseActiveEmptyTable');
   const emptyReleaseEnd = posSource.indexOf('const handleParkCurrentTicket', emptyReleaseStart);
   const emptyReleaseSource = posSource.slice(emptyReleaseStart, emptyReleaseEnd);
-  assert.match(emptyReleaseSource, /void Promise\.resolve\(onUpdateParkedTicketsRef\.current\(remaining\)\)/);
+  assert.match(emptyReleaseSource, /ticketSync = Promise\.resolve\(onUpdateParkedTicketsRef\.current\(remaining\)\)/);
   assert.match(emptyReleaseSource, /void Promise\.resolve\(onTableOrderClosedRef\.current\?\.\(/);
   assert.doesNotMatch(emptyReleaseSource, /await Promise\.resolve\(onUpdateParkedTickets\(remaining\)\)/);
+  const syncBarrier = emptyReleaseSource.indexOf('await ticketSync');
+  const releaseMutation = emptyReleaseSource.indexOf('operation: \'POS_TABLE_RELEASE_EMPTY\'');
+  assert.ok(syncBarrier >= 0 && releaseMutation > syncBarrier);
 });
