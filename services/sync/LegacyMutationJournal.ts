@@ -9,6 +9,7 @@ export type LegacyMutationClassification =
     | 'RESPONSE_VALID'
     | 'SAFE_PRE_SIDE_EFFECT'
     | 'SAFE_IDEMPOTENT_REPLAY'
+    | 'NON_BLOCKING_MAINTENANCE'
     | 'OUTCOME_UNKNOWN'
     | 'NOT_DISPATCHED';
 
@@ -124,7 +125,36 @@ export class LegacyMutationJournal {
             this.entries.set(current.id, current);
         }
         this.healthy = true;
+        await this.reconcileNonBlockingMaintenanceMutations();
         await this.pruneClosedBestEffort();
+    }
+
+    /**
+     * Terminal reset is post-close housekeeping, not a sale/table mutation.
+     * Older APKs sent it to the Android Master even though that runtime does
+     * not expose /api/sync/reset. A 404/network failure consequently left a
+     * global OUTCOME_UNKNOWN fence that blocked every later table save.
+     *
+     * Never replay an old reset: a replay after new sales could erase newer
+     * buffers. Closing this exact maintenance row is safe because its outcome
+     * cannot change the already-durable Z report, sale, or restaurant state.
+     */
+    async reconcileNonBlockingMaintenanceMutations(): Promise<number> {
+        if (!this.healthy) return 0;
+        let reconciled = 0;
+        for (const entry of this.getBlockingEntries()) {
+            const isTerminalReset = entry.method === 'POST'
+                && /^\/api\/sync\/reset\/[^/?]+$/.test(entry.canonicalPath)
+                && entry.operationCorrelationId.startsWith('resetTerminalData:');
+            if (!isTerminalReset) continue;
+            await this.acknowledge(
+                entry.id,
+                'NON_BLOCKING_MAINTENANCE',
+                'TERMINAL_RESET_DOES_NOT_FENCE_OPERATIONS',
+            );
+            reconciled += 1;
+        }
+        return reconciled;
     }
 
     isHealthy(): boolean {
@@ -258,7 +288,7 @@ export class LegacyMutationJournal {
 
     async acknowledge(
         id: string,
-        classification: 'RESPONSE_VALID' | 'SAFE_PRE_SIDE_EFFECT' | 'SAFE_IDEMPOTENT_REPLAY' | 'NOT_DISPATCHED',
+        classification: 'RESPONSE_VALID' | 'SAFE_PRE_SIDE_EFFECT' | 'SAFE_IDEMPOTENT_REPLAY' | 'NON_BLOCKING_MAINTENANCE' | 'NOT_DISPATCHED',
         callerAckReference: string,
     ): Promise<void> {
         const entry = this.entries.get(id);

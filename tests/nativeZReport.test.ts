@@ -47,3 +47,12 @@ test("ordinary Z uses shared producer before series allocation and keeps recover
   );
   assert(block.includes("...nativeZContent"));
 });
+
+test("a Z close never resets or deletes Master operational data", () => {
+  const app = readFileSync(new URL("../App.tsx", import.meta.url), "utf8");
+  const start = app.indexOf("const handleZReport = async");
+  const end = app.indexOf("// --- VIEW RENDERING LOGIC ---", start);
+  const block = app.slice(start, end);
+  assert.doesNotMatch(block, /resetTerminalData\s*\(/);
+  assert.doesNotMatch(block, /Promise\.race/);
+});

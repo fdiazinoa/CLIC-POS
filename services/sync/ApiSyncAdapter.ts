@@ -158,7 +158,11 @@ type CircuitBreakerChannel = 'sales' | 'background';
 type OperationalSyncOperation = Exclude<SyncDiagnosticOperation, 'REGISTER_TERMINAL'>;
 type SyncTransportClass = 'LAN_AUTH' | 'LAN_LEGACY' | 'ERP_CLOUD';
 type MutationDispatchPolicy = 'DEFAULT' | 'LEGACY_NO_RETRY';
-type SyncRequestInit = RequestInit & { clicTransportClass?: SyncTransportClass };
+type SyncRequestInit = RequestInit & {
+    clicTransportClass?: SyncTransportClass;
+    /** Idempotent housekeeping must not create a global legacy mutation fence. */
+    clicMutationSemantics?: 'DEFAULT' | 'MAINTENANCE_NO_RETRY';
+};
 
 const ERP_TEMPORARILY_UNAVAILABLE_ERROR = 'ERP temporalmente no disponible';
 const ERP_SYNC_TOKEN_KEYS = [
@@ -727,6 +731,8 @@ export class ApiSyncAdapter {
         const effectiveMutationDispatch: MutationDispatchPolicy = transportClass === 'LAN_LEGACY'
             ? 'LEGACY_NO_RETRY'
             : mutationDispatch;
+        const journalLegacyMutation = effectiveMutationDispatch === 'LEGACY_NO_RETRY'
+            && options.clicMutationSemantics !== 'MAINTENANCE_NO_RETRY';
         const authorityFingerprint = this.currentAuthorityFingerprint(url);
         const headersSummary = this.summarizeFetchHeaders(headers);
         const bodySize = this.getBodySize(options.body);
@@ -788,7 +794,7 @@ export class ApiSyncAdapter {
         let legacyJournalId: string | null = null;
         let safelyRejectedTableLock = false;
         try {
-            if (effectiveMutationDispatch === 'LEGACY_NO_RETRY' && isMutatingRequest) {
+            if (journalLegacyMutation && isMutatingRequest) {
                 const journalEntry = await this.mutationJournal.begin({
                     operationCorrelationId: diagnosticRequestId,
                     authorityFingerprint,
@@ -864,7 +870,11 @@ export class ApiSyncAdapter {
 
             return response;
         } catch (error: any) {
-            if (legacyJournalId && !safelyRejectedTableLock) await this.mutationJournal.markOutcomeUnknown(legacyJournalId, null);
+            if (legacyJournalId && !safelyRejectedTableLock) {
+                const recordedStatus = this.mutationJournal.getEntry(legacyJournalId)?.httpStatus ?? null;
+                const errorStatus = Number.isFinite(Number(error?.httpStatus)) ? Number(error.httpStatus) : null;
+                await this.mutationJournal.markOutcomeUnknown(legacyJournalId, errorStatus ?? recordedStatus);
+            }
             if (!this.isOperationalAuthorityCurrent(authorityRevision, authoritySignal)) throw error;
             const isConnectionError = this.isRecoverableConnectionError(error);
             const isTimeout = error?.name === 'AbortError';
@@ -6603,6 +6613,7 @@ export class ApiSyncAdapter {
         try {
             const response = await this.fetchWithRetry(`${this.config.masterUrl}/api/sync/reset/${terminalId}`, {
                 method: 'POST',
+                clicMutationSemantics: 'MAINTENANCE_NO_RETRY',
                 headers: {
                     'Content-Type': 'application/json',
                     'X-Sync-Token': this.authToken || ''

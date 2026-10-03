@@ -81,6 +81,7 @@ import ModifierModal from './ModifierModal';
 import { productHasRestaurantConfiguration, resolveRestaurantProductConfig } from '../utils/restaurantProductConfig';
 import { shouldBlockTableMapForDirectSale } from '../utils/restaurantNavigation';
 import { isDirectSaleParkedTicket } from '../utils/directSaleParkedTickets';
+import { rememberClosedRestaurantOrder } from '../utils/tableTicketIntegrity';
 import { visorSync } from '../utils/visorSync';
 import { isCustomerDisplaySurface, maybeAutoLaunchCustomerDisplay } from '../utils/customerDisplay';
 import ProductQuickActions from './ProductQuickActions';
@@ -5703,6 +5704,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   orderNumber: saleOrderNumber,
                   tableDisplayLabel: activeTableContext.compactLabel || undefined,
                   tableRoomLabel: activeTableContext.roomLabel || undefined,
+                  restaurantOrderId: activeOrderId || undefined,
+                  restaurantTableId: activeTable?.id !== undefined ? String(activeTable.id) : undefined,
+                  restaurantSettlementStatus: activeOrderId ? 'PENDING' : undefined,
                   pendingBalance: creditAmount > 0 ? creditAmount : undefined,
                   dueDate: creditAmount > 0 ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() : undefined, // Default 30 days
                   ncf: finalNcf,
@@ -5811,6 +5815,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
                // --- CRITICAL: Ticket Closing Logic ---
                if (activeTable) {
+                  if (activeOrderId) {
+                     rememberClosedRestaurantOrder({
+                        orderId: activeOrderId,
+                        tableId: String(activeTable.id),
+                        transactionId: settledFinalTxn.id,
+                     });
+                  }
                   try {
                      const closedOrderId = String(activeTable.currentOrderId || '').trim();
                      const activeTableId = String(activeTable.id ?? '').trim();
@@ -5858,8 +5869,35 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            persistLegacyLanMutationCompletion(releaseRes.correlationId, `POSInterface:release:${activeTable.id}`, releaseRes.response.status)
                         );
                      }
+                     if (activeOrderId) {
+                        const confirmedSettlement: Transaction = {
+                           ...settledFinalTxn,
+                           restaurantSettlementStatus: 'CONFIRMED',
+                           restaurantSettlementError: undefined,
+                           restaurantSettledAt: new Date().toISOString(),
+                        };
+                        await db.saveDocument('transactions', confirmedSettlement).catch(() => undefined);
+                        await db.saveDocument('transactionHistory', {
+                           ...confirmedSettlement,
+                           syncStatus: confirmedSettlement.syncStatus || 'PENDING',
+                        } as any).catch(() => undefined);
+                        settledFinalTxn = confirmedSettlement;
+                     }
                   } catch (e) {
                      console.error("Failed to free table:", e);
+                     if (activeOrderId) {
+                        const pendingSettlement: Transaction = {
+                           ...settledFinalTxn,
+                           restaurantSettlementStatus: 'PENDING',
+                           restaurantSettlementError: e instanceof Error ? e.message : String(e),
+                        };
+                        await db.saveDocument('transactions', pendingSettlement).catch(() => undefined);
+                        await db.saveDocument('transactionHistory', {
+                           ...pendingSettlement,
+                           syncStatus: pendingSettlement.syncStatus || 'PENDING',
+                        } as any).catch(() => undefined);
+                        settledFinalTxn = pendingSettlement;
+                     }
                   }
                   // 3. Clear Active Table in UI
                   if (onClearActiveTable) onClearActiveTable();
