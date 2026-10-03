@@ -11,6 +11,8 @@ export const canApplyMasterHttpRestaurantRevision = (input: {
 };
 
 export const canUseMasterSqliteRestaurantFallback = (input: {
+  nativeAuthorityActive: boolean;
   knownRevision: number;
   appliedRevision: number;
-}): boolean => input.knownRevision === 0 && input.appliedRevision === 0;
+}): boolean => !input.nativeAuthorityActive
+  || (input.knownRevision === 0 && input.appliedRevision === 0);

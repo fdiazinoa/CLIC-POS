@@ -40,13 +40,26 @@ test('a delayed SQLite fallback cannot overwrite native revision 808', () => {
   const nativeTables = [{ id: 'mesa-2', order: 'native-808' }];
   const sqliteTables = [{ id: 'mesa-2', order: 'sqlite-stale' }];
   const deferredUpdater = (previous: typeof nativeTables) =>
-    canUseMasterSqliteRestaurantFallback({ knownRevision, appliedRevision })
+    canUseMasterSqliteRestaurantFallback({ nativeAuthorityActive: true, knownRevision, appliedRevision })
       ? sqliteTables
       : previous;
 
-  assert.equal(canUseMasterSqliteRestaurantFallback({ knownRevision, appliedRevision }), true);
+  assert.equal(canUseMasterSqliteRestaurantFallback({ nativeAuthorityActive: true, knownRevision, appliedRevision }), true);
   knownRevision = 808;
   appliedRevision = 808;
   assert.strictEqual(deferredUpdater(nativeTables), nativeTables);
-  assert.equal(canUseMasterSqliteRestaurantFallback({ knownRevision, appliedRevision }), false);
+  assert.equal(canUseMasterSqliteRestaurantFallback({ nativeAuthorityActive: true, knownRevision, appliedRevision }), false);
+});
+
+test('web and legacy Masters retain SQLite fallback after HTTP revisions advance', () => {
+  assert.equal(canUseMasterSqliteRestaurantFallback({
+    nativeAuthorityActive: false,
+    knownRevision: 808,
+    appliedRevision: 0,
+  }), true);
+  assert.equal(canUseMasterSqliteRestaurantFallback({
+    nativeAuthorityActive: true,
+    knownRevision: 808,
+    appliedRevision: 0,
+  }), false);
 });

@@ -5969,7 +5969,11 @@ const AppContent: React.FC = () => {
         return { ok: false, error: e };
       }
       console.warn('Using local rooms/tables because this terminal owns its operational database.');
+      const nativeRestaurantAuthorityActive = isNativeAndroidRuntime()
+        && isNativeStandaloneTerminalRuntime(getCurrentTerminal())
+        && typeof (window as any).ClicPOSNativePrinter?.getMasterRestaurantState === 'function';
       const masterSqliteFallbackIsAllowed = () => canUseMasterSqliteRestaurantFallback({
+        nativeAuthorityActive: nativeRestaurantAuthorityActive,
         knownRevision: masterRestaurantRevisionRef.current,
         appliedRevision: lastAppliedMasterRestaurantRevisionRef.current,
       });
