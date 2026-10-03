@@ -65,6 +65,13 @@ test('la Master Android permite abrir y liberar mesas desde una terminal cliente
   assert.match(serverSource, /applyClientRestaurantMutation\(tables = updatedTables, parkedTickets = updatedTickets\)/);
 });
 
+test('una orden JSON null se reconoce como mesa ya liberada, no como otra orden', () => {
+  assert.match(serverSource, /private fun tableOrderId\(table: JSONObject\): String =\s*if \(table\.isNull\("currentOrderId"\)\) "" else table\.optString\("currentOrderId"\)\.trim\(\)/);
+  const releaseSource = serverSource.slice(serverSource.indexOf('private fun handleReleaseTable'));
+  assert.match(releaseSource, /orderId = tableOrderId\(table\)\s+if \(orderId\.isBlank\(\)\) \{/);
+  assert.match(releaseSource, /\.put\("alreadyReleased", true\)/);
+});
+
 test('la Master conserva una cuenta abierta aunque todavía no tenga artículos', () => {
   const reconciliationSource = serverSource.slice(
     serverSource.indexOf('private fun reconcileTablesWithParkedTickets'),
