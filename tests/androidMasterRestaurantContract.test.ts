@@ -311,6 +311,20 @@ test('la Cliente usa transporte nativo para bloquear y abrir mesas en Android', 
   assert.doesNotMatch(openBlock, /requestJson<any>\(|fetch\(/);
 });
 
+test('la Master recupera el 409 de cierre antes de adquirir la mesa siguiente', () => {
+  const reconcileStart = appSource.indexOf('const reconcileRejectedTableMutationBlockers');
+  const invokeStart = appSource.indexOf('const invokeTableEditLock', reconcileStart);
+  const invokeEnd = appSource.indexOf('const releaseActiveTableEditLock', invokeStart);
+  const invokeSource = appSource.slice(invokeStart, invokeEnd);
+
+  assert.ok(reconcileStart >= 0 && invokeStart > reconcileStart && invokeEnd > invokeStart);
+  assert.match(invokeSource, /await reconcileRejectedTableMutationBlockers\(\)/);
+  assert.ok(
+    invokeSource.indexOf('await reconcileRejectedTableMutationBlockers()')
+      < invokeSource.indexOf("action === 'acquire'"),
+  );
+});
+
 test('la Master Android se reactiva al volver al primer plano y el cliente reintenta con espera', () => {
   const masterTargetPersistence = clientMasterBindingSource.slice(
     clientMasterBindingSource.indexOf('export const persistValidatedClientMasterTarget'),
