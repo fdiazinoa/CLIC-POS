@@ -5067,15 +5067,21 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          if (!authorized) return;
       }
 
-      onUpdateCart(dispatchedItems);
       setActiveCartItemId(null);
       setEditingItem(null);
 
-      if (activeTable) {
+      // When every line is removed, the table closure owns the cart change.
+      // Publishing an empty cart first can start a second ticket sync while
+      // the release is still in flight.
+      if (activeTable && dispatchedItems.length === 0) {
+         await releaseActiveEmptyTable({ silent: true, force: true });
+      } else {
+         onUpdateCart(dispatchedItems);
+      }
+
+      if (activeTable && dispatchedItems.length > 0) {
          const ticketId = activeTable.currentOrderId;
-         if (dispatchedItems.length === 0) {
-            await releaseActiveEmptyTable({ silent: true, force: true });
-         } else if (ticketId) {
+         if (ticketId) {
             const total = dispatchedItems.reduce((sum, i) => sum + (Number(i.price || 0) * Number(i.quantity || 0)), 0);
             const updatedTickets = (Array.isArray(parkedTickets) ? parkedTickets : []).map(p =>
                p.id === ticketId ? { ...p, items: dispatchedItems, total } : p
