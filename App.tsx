@@ -6039,10 +6039,30 @@ const AppContent: React.FC = () => {
     return sharedWork;
   };
 
+  const reconcileRejectedTableMutationBlockers = useCallback(async (): Promise<void> => {
+    if (!legacyMutationJournal.hasOutcomeUnknown()) return;
+    const authorityState = apiSyncAdapter.getOperationalAuthorityState();
+    const endpointUrl = await resolveValidatedOperationalApiUrl('/api/mesas/parked-tickets');
+    // A standalone Android Master does not populate the remote-authority
+    // terminal id. Its durable journal fingerprint still uses the local
+    // terminal id, so keep that identity fence instead of passing an empty id.
+    const terminalId = authorityState.terminalId || String(getCurrentTerminal()?.id || '');
+    await reconcileMasterRejectedTableMutations({
+      journal: legacyMutationJournal,
+      authorityOrigin: new URL(endpointUrl).origin,
+      terminalId,
+      generation: authorityState.revision,
+    });
+  }, [getCurrentTerminal]);
+
   const invokeTableEditLock = useCallback(async (
     action: 'acquire' | 'release',
     payload: Record<string, unknown>
   ): Promise<any> => {
+    // Android 1.1.460 could persist a proven pre-mutation release 409 as
+    // OUTCOME_UNKNOWN. Recover it before the next acquire so TABLE_OPEN is not
+    // rejected before the operator can enter the next table.
+    await reconcileRejectedTableMutationBlockers();
     const nativeBridge = (window as any).ClicPOSNativePrinter;
     const currentTerminal = getCurrentTerminal();
     const servesAsNativeMaster =
@@ -6070,7 +6090,7 @@ const AppContent: React.FC = () => {
       await reconcileMasterRejectedTableMutations({
         journal: legacyMutationJournal,
         authorityOrigin: new URL(endpointUrl).origin,
-        terminalId: authorityState.terminalId || '',
+        terminalId: authorityState.terminalId || String(currentTerminal?.id || ''),
         generation: authorityState.revision,
       });
     }
@@ -6098,7 +6118,7 @@ const AppContent: React.FC = () => {
       masterRestaurantRevisionRef.current = Math.max(masterRestaurantRevisionRef.current, revision);
     }
     return result;
-  }, [getCurrentTerminal]);
+  }, [getCurrentTerminal, reconcileRejectedTableMutationBlockers]);
 
   const releaseActiveTableEditLock = useCallback(async (
     options: {
@@ -9732,6 +9752,7 @@ const AppContent: React.FC = () => {
         await persistMasterTickets();
         const nativeBridge = (window as any).ClicPOSNativePrinter;
         if (typeof nativeBridge?.updateMasterParkedTickets === 'function') {
+          await reconcileRejectedTableMutationBlockers();
           const unrelatedBlockingMutation = legacyMutationJournal.getBlockingEntries().some(entry => (
             entry.state !== 'OUTCOME_UNKNOWN'
             || entry.method !== 'PUT'
@@ -9809,7 +9830,7 @@ const AppContent: React.FC = () => {
           await reconcileMasterRejectedTableMutations({
             journal: legacyMutationJournal,
             authorityOrigin: new URL(masterUrl).origin,
-            terminalId: authorityState.terminalId || '',
+            terminalId: authorityState.terminalId || String(getCurrentTerminal()?.id || ''),
             generation: authorityState.revision,
           });
         }

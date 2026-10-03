@@ -16,7 +16,11 @@ export const isSafeTableLockRejection = (
   }
   if (method.toUpperCase() === 'POST') {
     return (path === '/api/mesas/bloquear' && code === 'TABLE_EDIT_LOCKED')
-      || (path === '/api/mesas/desbloquear' && code === 'TABLE_EDIT_LOCK_OWNERSHIP_MISMATCH');
+      || (path === '/api/mesas/desbloquear' && code === 'TABLE_EDIT_LOCK_OWNERSHIP_MISMATCH')
+      || (path === '/api/mesas/liberar' && (
+        code === 'TABLE_RELEASE_ORDER_MISMATCH'
+        || code === 'TABLE_RELEASE_HAS_REMAINING_ACCOUNTS'
+      ));
   }
   if (method.toUpperCase() !== 'PUT') return false;
   if (path === '/api/mesas/parked-tickets') {

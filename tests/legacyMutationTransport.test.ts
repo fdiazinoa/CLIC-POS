@@ -66,10 +66,60 @@ test('only the Android Master table-lock rejection is provably pre-side-effect',
   assert.equal(isSafeTableLockRejection('http://10.0.0.129:3001/api/tables/table-7', 'PUT', 409, body), true);
   assert.equal(isSafeTableLockRejection('http://10.0.0.129:3001/api/mesas/bloquear', 'POST', 409, { success: false, code: 'TABLE_EDIT_LOCKED' }), true);
   assert.equal(isSafeTableLockRejection('http://10.0.0.129:3001/api/mesas/desbloquear', 'POST', 409, { success: false, code: 'TABLE_EDIT_LOCK_OWNERSHIP_MISMATCH' }), true);
+  assert.equal(isSafeTableLockRejection('http://10.0.0.129:3001/api/mesas/liberar', 'POST', 409, { success: false, code: 'TABLE_RELEASE_ORDER_MISMATCH' }), true);
+  assert.equal(isSafeTableLockRejection('http://10.0.0.129:3001/api/mesas/liberar', 'POST', 409, { success: false, code: 'TABLE_RELEASE_HAS_REMAINING_ACCOUNTS' }), true);
   assert.equal(isSafeTableLockRejection('http://10.0.0.129:3001/api/mesas/desbloquear', 'POST', 409, body), false);
   assert.equal(isSafeTableLockRejection('http://10.0.0.129:3001/api/tables/table-7', 'PUT', 409, { code: 'OTHER_CONFLICT' }), false);
   assert.equal(isSafeTableLockRejection('http://10.0.0.129:3001/api/sync/transactions', 'PUT', 409, body), false);
 });
+
+for (const code of ['TABLE_RELEASE_ORDER_MISMATCH', 'TABLE_RELEASE_HAS_REMAINING_ACCOUNTS']) {
+  test(`cobrar una mesa con ${code} no bloquea el guardado de la mesa siguiente`, async () => {
+    const restore = installAndroid();
+    const store = new Store();
+    const journal = new LegacyMutationJournal(store);
+    await journal.initializeForStartup();
+    let requestCount = 0;
+    setNativeRequestTransportForTests((async () => {
+      requestCount += 1;
+      if (requestCount === 1) return { status: 409, data: { success: false, code } };
+      return {
+        status: 200,
+        data: {
+          success: true,
+          parkedTickets: [{ id: 'order-next', tableId: 'table-next', items: [] }],
+        },
+      };
+    }) as any);
+    try {
+      await assert.rejects(dispatchLegacyLanMutation({
+        url: 'http://10.0.0.129:3001/api/mesas/liberar',
+        method: 'POST',
+        operation: 'POS_TABLE_RELEASE',
+        validateResponse: () => undefined,
+        journal,
+        authorityState: { revision: 7, terminalId: 'terminal-a' },
+      }), new RegExp(code));
+      assert.equal(journal.hasBlockingMutations(), false);
+
+      const nextSave = await dispatchLegacyLanMutation({
+        url: 'http://10.0.0.129:3001/api/mesas/parked-tickets',
+        method: 'PUT',
+        operation: 'PARKED_TICKETS_SYNC',
+        validateResponse: data => assert.deepEqual(data.parkedTickets, [
+          { id: 'order-next', tableId: 'table-next', items: [] },
+        ]),
+        journal,
+        authorityState: { revision: 7, terminalId: 'terminal-a' },
+      });
+      await nextSave.completeAfterDurableCommit('next-table-save', async () => undefined);
+      assert.equal(journal.hasBlockingMutations(), false);
+      assert.equal(requestCount, 2);
+    } finally {
+      restore();
+    }
+  });
+}
 
 test('a rejected table unlock does not poison the journal', async () => {
   const restore = installAndroid();

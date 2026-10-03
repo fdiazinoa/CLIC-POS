@@ -167,6 +167,38 @@ test('an old client 409 table rejection is closed before a later table acquire',
   }));
 });
 
+test('Android 1.1.460 recovers its persisted V2 table-release 409 before the next save', async () => {
+  const store = new Store();
+  const entry = persistedLegacy409({
+    id: 'android-1.1.460-release-409',
+    operationCorrelationId: 'POS_TABLE_RELEASE:closed-order',
+    generation: generation - 3,
+    method: 'POST',
+    canonicalPath: '/api/mesas/liberar',
+    reconciliationContext: { legacyMutationContractVersion: 2 },
+  });
+  store.rows.set(entry.id, entry);
+  const journal = new LegacyMutationJournal(store);
+  await journal.initializeForStartup();
+  assert.equal(await reconcileMasterRejectedTableMutations({
+    journal,
+    authorityOrigin: origin,
+    terminalId,
+    generation,
+    nowMs: Date.parse(entry.dispatchedAt!) + 16_000,
+  }), 1);
+  assert.equal(journal.hasBlockingMutations(), false);
+  assert.equal(journal.getEntry(entry.id)?.classification, 'SAFE_PRE_SIDE_EFFECT');
+  await assert.doesNotReject(journal.begin({
+    operationCorrelationId: 'PARKED_TICKETS_SYNC:next-table',
+    authorityFingerprint: `${origin}|${terminalId}`,
+    generation,
+    method: 'PUT',
+    url: `${origin}/api/mesas/parked-tickets`,
+    diagnosticRequestId: 'next-table-save',
+  }));
+});
+
 test('client authority preflight recovers the physical legacy row before handoff assertion', async () => {
   const store = new Store();
   const entry = persistedLegacy409({ reconciliationContext: undefined });
