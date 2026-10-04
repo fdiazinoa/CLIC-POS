@@ -1,10 +1,24 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
 import type { ParkedTicket } from '../types';
 import { commitRetiredTableAccountAfterAck } from '../utils/tableAccountRetirement';
 import { mergeParkedTicketsForTable } from '../server/tableTicketMerge';
 
 const ticket = (id: string): ParkedTicket => ({ id, tableId: 'mesa-7', name: id, items: [], timestamp: '2026-10-03T19:00:00Z' });
+
+test('poll Master y Cliente no publica source retirado mientras PUT está sin ACK', () => {
+  const app = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
+  const fetchTables = app.slice(app.indexOf('const fetchTables ='), app.indexOf('const handleUpdateParkedTickets'));
+  const update = app.slice(app.indexOf('const handleUpdateParkedTickets'), app.indexOf('const handleParkedOrderSplitFromMap'));
+  assert.equal((update.match(/speculativeRetirement: publishAfterAck/g) || []).length, 2);
+  assert.match(fetchTables, /pendingTableSync = isClientRuntime\s*\? pendingClientTableSyncRef\.current\s*: pendingMasterTableSyncRef\.current/);
+  assert.match(fetchTables, /if \(pendingTableSync\?\.speculativeRetirement\) \{[\s\S]*?return \{ ok: true \};/);
+  assert.ok(fetchTables.indexOf('if (pendingTableSync?.speculativeRetirement)') < fetchTables.indexOf('mergePendingClientTableTickets(responseParkedTickets, pendingTableSync)'));
+  assert.ok(fetchTables.indexOf('if (pendingTableSync?.speculativeRetirement)') < fetchTables.indexOf('if (hasUnchangedClientRevision && !pendingTableSync)'));
+  assert.match(update, /if \(!publishAfterAck\) \{\s*writePendingTableSyncMirror\(pendingSync\);[\s\S]*?setParkedTickets\(validTickets\);/);
+  assert.match(update, /if \(!publishAfterAck\) \{\s*if \(!changedTicketId\) writeCriticalCollectionsMirror\(validTickets, cashMovements\);[\s\S]*?setParkedTickets\(validTickets\);/);
+});
 
 test('retire espera ACK exacto y guardado durable antes de quitar origen de UI', async () => {
   const target = ticket('target');

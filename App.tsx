@@ -532,6 +532,8 @@ type PendingClientTableSync = {
   queuedAt: string;
   reason?: ParkedTicketSyncOptions['reason'];
   parkedTickets: ParkedTicket[];
+  /** Volatile fence only: never merge this speculative retirement into UI polling. */
+  speculativeRetirement?: boolean;
 };
 
 const parseNativeBridgeJson = (value: unknown): any => {
@@ -5863,6 +5865,13 @@ const AppContent: React.FC = () => {
           assertCurrentAuthority();
           if (pendingTableSync) pendingClientTableSyncRef.current = pendingTableSync;
         }
+        // A full transfer removes its source only after the exact Master ACK.
+        // Polling must not merge its in-flight tickets (or even a newer remote
+        // snapshot) into the map before that acknowledgement is handled.
+        if (pendingTableSync?.speculativeRetirement) {
+          if (isClientRuntime) markClientMasterOnline();
+          return { ok: true };
+        }
         if (!masterHttpRevisionIsCurrent()) {
           console.warn('[MASTER_TABLES_STALE_HTTP_SNAPSHOT]', {
             responseRevision,
@@ -9829,6 +9838,7 @@ const AppContent: React.FC = () => {
         queuedAt: new Date().toISOString(),
         reason: options.reason || 'explicit',
         parkedTickets: tableSyncTickets,
+        speculativeRetirement: publishAfterAck,
       };
       pendingClientTableSyncRef.current = pendingSync;
       if (!publishAfterAck) {
@@ -9954,6 +9964,7 @@ const AppContent: React.FC = () => {
           queuedAt: new Date().toISOString(),
           reason: options.reason || 'explicit',
           parkedTickets: masterTableSyncTickets,
+          speculativeRetirement: publishAfterAck,
         }
       : null;
     // Debe registrarse antes de cualquier await de persistencia: el poll nativo
