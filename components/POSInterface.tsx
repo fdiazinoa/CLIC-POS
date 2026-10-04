@@ -1372,8 +1372,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    );
    const activeTableAccount = activeTableAccounts[activeTableAccountIndex];
    const isActiveTableAccountSubtotalized = Boolean(
-      activeTableAccount?.items?.length
-      && activeTableAccount.items.every(item => Boolean(item.subtotalizedAt))
+      activeTableAccount?.items?.some(item => Boolean(item.subtotalizedAt))
    );
    const handleNavigateTableAccount = useCallback((direction: -1 | 1) => {
       if (activeTableAccounts.length < 2 || !onSelectTableAccount) return;
@@ -3320,6 +3319,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          const existingIdentityKey = String((i as any).cartIdentityKey || productLineIdentityKey(i, i.price));
          const existingConsignmentKey = i.consignmentLineId || '';
          return existingIdentityKey === lineIdentityKey
+            && !i.subtotalizedAt
             && Math.sign(Number(i.quantity || 0)) === Math.sign(quantity)
             && existingConsignmentKey === consignmentIdentityKey
             && (i.variantSku || '') === (variantSku || '')
@@ -3334,11 +3334,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          targetCartId = existing.cartId!;
          markInteractionStateUpdate(trace, (cart || []).length + 2);
          onUpdateCart(prev => {
-            const editableCart = hasSubtotalizedCart ? clearCartSubtotalization(prev) : prev;
             const updatedItem = {
                ...existing,
-               subtotalizedAt: undefined,
-               subtotalizedBy: undefined,
                quantity: existing.quantity + quantity,
                isReturnLine: existing.isReturnLine || quantity < 0,
                appliedTaxIds: effectiveTaxIds,
@@ -3346,7 +3343,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                production_area_id: resolveProductionAreaId(existing) || productionAreaId || undefined,
                ...consignmentPatch,
             };
-            return [updatedItem, ...editableCart.filter(i => i.cartId !== existing.cartId)];
+            return [updatedItem, ...prev.filter(i => i.cartId !== existing.cartId)];
          });
       } else {
          const newCartId = Math.random().toString(36).substr(2, 9);
@@ -3376,7 +3373,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             ...consignmentPatch,
          };
          markInteractionStateUpdate(trace, (cart || []).length + 2);
-         onUpdateCart(prev => [newItem, ...(hasSubtotalizedCart ? clearCartSubtotalization(prev) : prev)]);
+         onUpdateCart(prev => [newItem, ...prev]);
       }
 
       // SIDE EFFECT: Move outside the state update sequence to avoid React "rendering update" warning
@@ -3386,7 +3383,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          if (trace.stages.HANDLER_END === undefined) markInteractionStage(trace, 'HANDLER_END');
          if (activeAddTraceRef.current === trace) activeAddTraceRef.current = null;
       }
-   }, [activeTerminalConfig, authorizeSubtotalizedEdit, blockRecoveredUberOrderMutation, canAddItemToCart, cart, ensureSalesWithOpenZPermission, getProductPrice, hasSubtotalizedCart, onUpdateCart]);
+   }, [activeTerminalConfig, authorizeSubtotalizedEdit, blockRecoveredUberOrderMutation, canAddItemToCart, cart, ensureSalesWithOpenZPermission, getProductPrice, onUpdateCart]);
 
    const handleProductClick = useCallback((product: Product) => {
       if (Date.now() < suppressProductInputUntilMs) return;
@@ -8352,6 +8349,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         const isActiveCartItem = activeCartItemId === item.cartId;
                         const isReturnedToKds = isKdsReturnedCartItem(item);
                         const isSubtotalizedItem = Boolean(item.subtotalizedAt);
+                        const isNewAfterSubtotal = isActiveTableAccountSubtotalized && !isSubtotalizedItem;
                         const isDispatchedToKds = Boolean(item.dispatched);
                         const lockedMutationMessage = 'Este artículo ya fue enviado al KDS. Usa Devolver para cancelar la preparación.';
                         const lockedReturnTitle = isReturnedToKds ? 'Artículo ya devuelto en KDS' : 'Devolver en KDS';
@@ -8362,7 +8360,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                               <div
                                  key={item.cartId || `cart-m-${idx}`}
                                  onClick={() => toggleCartItemFocus(item.cartId)}
-                                 className={`bg-white rounded-2xl p-3 shadow-sm border flex gap-3 animate-in slide-in-from-right-2 transition-all cursor-pointer ${isActiveCartItem ? 'border-blue-200 ring-2 ring-blue-100 shadow-md' : 'border-gray-100 hover:border-slate-200'}`}
+                                 className={`rounded-2xl p-3 shadow-sm border flex gap-3 animate-in slide-in-from-right-2 transition-all cursor-pointer ${isActiveCartItem ? 'border-blue-200 ring-2 ring-blue-100 shadow-md' : isNewAfterSubtotal ? 'border-emerald-200 bg-emerald-50' : 'border-gray-100 bg-white hover:border-slate-200'}`}
                               >
                                  <div className="w-16 h-16 rounded-xl bg-gray-50 overflow-hidden shrink-0 border border-gray-100">
                                     {resolveProductImageSrc(item) ? <img src={resolveProductImageSrc(item)} className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-gray-300"><Grid size={24} /></div>}
@@ -8391,6 +8389,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                           {isSubtotalizedItem && (
                                              <span className="mt-1 inline-flex w-fit rounded-full bg-violet-50 px-2 py-0.5 text-[9px] font-black uppercase tracking-wide text-violet-700">
                                                 Subtotalizado
+                                             </span>
+                                          )}
+                                          {isNewAfterSubtotal && (
+                                             <span className="mt-1 inline-flex w-fit rounded-full bg-emerald-100 px-2 py-0.5 text-[9px] font-black uppercase tracking-wide text-emerald-800">
+                                                Nuevo desde subtotal
                                              </span>
                                           )}
                                        </div>
@@ -8494,7 +8497,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            <div
                               key={item.cartId || `cart-${idx}`}
                               onClick={() => toggleCartItemFocus(item.cartId)}
-                              className={`bg-white rounded-xl p-3 shadow-sm border group relative overflow-hidden transition-all hover:shadow-md cursor-pointer ${editingItem?.cartId === item.cartId || isActiveCartItem ? 'ring-2 ring-blue-100 border-blue-200 bg-blue-50/40' : 'border-gray-100 hover:border-slate-200'}`}
+                              className={`rounded-xl p-3 shadow-sm border group relative overflow-hidden transition-all hover:shadow-md cursor-pointer ${editingItem?.cartId === item.cartId || isActiveCartItem ? 'ring-2 ring-blue-100 border-blue-200 bg-blue-50/40' : isNewAfterSubtotal ? 'border-emerald-200 bg-emerald-50' : 'border-gray-100 bg-white hover:border-slate-200'}`}
                            >
                               {/* Discount Badge */}
                               {hasDiscount && (
@@ -8541,6 +8544,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                                    {isReturnedToKds ? 'KDS devuelto' : 'KDS enviado'}
                                                 </span>
                                              )}
+                                             {isSubtotalizedItem && <span className="mt-1 inline-flex w-fit rounded-full bg-violet-50 px-2 py-0.5 text-[9px] font-black uppercase tracking-wide text-violet-700">Subtotalizado</span>}
+                                             {isNewAfterSubtotal && <span className="mt-1 inline-flex w-fit rounded-full bg-emerald-100 px-2 py-0.5 text-[9px] font-black uppercase tracking-wide text-emerald-800">Nuevo desde subtotal</span>}
                                           </div>
                                           {/* Salesperson Badge */}
                                           {item.salespersonId && (

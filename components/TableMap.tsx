@@ -390,7 +390,7 @@ const getTicketSubtotalization = (ticket: ParkedTicket): {
     subtotalizedBy?: string;
 } => {
     const items = Array.isArray(ticket.items) ? ticket.items : [];
-    if (items.length === 0 || !items.every(item => Boolean(item.subtotalizedAt))) {
+    if (!items.some(item => Boolean(item.subtotalizedAt))) {
         return { isSubtotalized: false };
     }
     const referenceItem = items.find(item => Boolean(item.subtotalizedAt));
