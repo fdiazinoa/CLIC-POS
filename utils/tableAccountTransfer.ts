@@ -47,5 +47,33 @@ export const transferTableAccountItems = (
   const customerFor = (ticket: ParkedTicket) => customers.find(customer => String(customer.id) === String(ticket.customerId || ''));
   nextSource.total = buildTableAccountFiscalSummary(nextSource, table, config, terminalConfig, isTaxIncluded, terminalId, customerFor(source)).total;
   nextTarget.total = buildTableAccountFiscalSummary(nextTarget, table, config, terminalConfig, isTaxIncluded, terminalId, customerFor(target)).total;
+  if (remaining.length === 0) {
+    const legacyPayments = (source as ParkedTicket & { payments?: unknown[]; paidAmount?: number }).payments;
+    if (source.customerId || source.customerName || source.customerSnapshot || (Array.isArray(legacyPayments) && legacyPayments.length > 0)
+      || Number((source as ParkedTicket & { paidAmount?: number }).paidAmount || 0) > 0) {
+      throw new Error('La cuenta origen tiene cliente o pagos asociados; no se puede retirar automáticamente. Use el POS para reconciliarla.');
+    }
+    const sourcePrimary = String(source.primaryTableId || '').trim();
+    const targetPrimary = String(target.primaryTableId || '').trim();
+    if (sourcePrimary && targetPrimary && sourcePrimary !== targetPrimary) throw new Error('Las cuentas tienen mesas principales distintas; no se puede retirar la cuenta origen.');
+    const joinedTableIds = Array.from(new Set([
+      ...(source.joinedTableIds || []), ...(target.joinedTableIds || []),
+      source.tableId, target.tableId,
+    ].filter((id): id is string | number => id !== undefined && id !== null).map(String)));
+    if (joinedTableIds.length > 1) {
+      nextTarget.primaryTableId = sourcePrimary || targetPrimary || String(table.id);
+      nextTarget.joinedTableIds = joinedTableIds;
+    }
+    nextTarget.items = nextTarget.items.map(item => {
+      const transferred = moved.find(line => line.cartId === item.cartId);
+      return transferred ? { ...item, orderNumber: item.orderNumber || source.orderNumber, transferredFromTicketId: sourceId } : item;
+    });
+    const sourceFiscal = buildTableAccountFiscalSummary(source, table, config, terminalConfig, isTaxIncluded, terminalId, customerFor(source)).total;
+    const targetFiscal = buildTableAccountFiscalSummary(target, table, config, terminalConfig, isTaxIncluded, terminalId, customerFor(target)).total;
+    if (Math.abs(sourceFiscal + targetFiscal - nextTarget.total) > 0.01) {
+      throw new Error('La transferencia completa cambia el total fiscal de la mesa; no se retiró la cuenta origen. Reconcíliela en el POS.');
+    }
+    return tickets.filter(ticket => String(ticket.id) !== sourceId).map(ticket => String(ticket.id) === targetId ? nextTarget : ticket);
+  }
   return tickets.map(ticket => String(ticket.id) === sourceId ? nextSource : String(ticket.id) === targetId ? nextTarget : ticket);
 };

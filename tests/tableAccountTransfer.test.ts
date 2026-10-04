@@ -61,3 +61,37 @@ test('transferencia conserva el total promocionado del POS sin mutar líneas est
   assert.equal(next[1].items[0].price, 100);
   assert.equal(original[0].items[0].quantity, 2);
 });
+
+test('transferencia total retira origen vacío, conserva tercero, impuesto y trazabilidad de minuta', () => {
+  const source = { ...ticket('a', [{ ...item('line-a', 1), appliedTaxIds: ['tax-18'], dispatched: true, orderNumber: 'ORD-7' }]), orderNumber: 'ORD-7' };
+  const target = ticket('b', [{ ...item('line-b', 1), appliedTaxIds: ['tax-18'] }]);
+  const third = ticket('c', [item('line-c', 1)]);
+  const next = transfer([source, target, third], table, 'a', 'b', { 'line-a': 1 });
+  assert.deepEqual(next.map(row => row.id), ['b', 'c']);
+  assert.equal(next[0].total, 236);
+  assert.equal(next[0].items.length, 2);
+  assert.equal(next[0].items[1].dispatched, true);
+  assert.equal(next[0].items[1].orderNumber, 'ORD-7');
+  assert.equal(next[0].items[1].transferredFromTicketId, 'a');
+  assert.equal(next[1], third);
+  assert.equal(source.items.length, 1);
+});
+
+test('transferencia total conserva membresía de mesa unida en target antes de retirar source', () => {
+  const source = { ...ticket('a', [item('line-a', 1)]), primaryTableId: 'mesa-7', joinedTableIds: ['mesa-7', 'mesa-8'] };
+  const target = ticket('b', []);
+  const next = transfer([source, target], table, 'a', 'b', { 'line-a': 1 });
+  assert.equal(next.length, 1);
+  assert.equal(next[0].id, 'b');
+  assert.equal(next[0].primaryTableId, 'mesa-7');
+  assert.deepEqual(next[0].joinedTableIds, ['mesa-7', 'mesa-8']);
+});
+
+test('full-retire bloquea cliente/pagos y precuenta, y cuenta legacy ya vacía no se transfiere', () => {
+  const source = ticket('a', [item('line-a', 1)]);
+  const target = ticket('b', []);
+  assert.throws(() => transfer([{ ...source, customerId: 'customer-1' }, target], table, 'a', 'b', { 'line-a': 1 }), /cliente o pagos/);
+  assert.throws(() => transfer([{ ...source, payments: [{ amount: 100 }] } as any, target], table, 'a', 'b', { 'line-a': 1 }), /cliente o pagos/);
+  assert.throws(() => transfer([{ ...source, items: [{ ...source.items[0], subtotalizedAt: '2026-10-03T20:00:00Z' }] }, target], table, 'a', 'b', { 'line-a': 1 }), /pre-cuenta/);
+  assert.throws(() => transfer([ticket('a', []), target], table, 'a', 'b', {}), /Seleccione al menos/);
+});
