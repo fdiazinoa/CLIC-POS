@@ -817,17 +817,24 @@ const writeCriticalCollectionsMirror = (parkedTickets: ParkedTicket[], cashMovem
   }
 };
 
-const persistPendingClientTableSync = async (pending: PendingClientTableSync): Promise<void> => {
-  writePendingTableSyncMirror(pending);
-  await db.saveDocument('pendingClientTableSync' as any, pending);
-};
-
 const writePendingTableSyncMirror = (pending: PendingClientTableSync): void => {
   try {
     window.localStorage.setItem(PENDING_CLIENT_TABLE_SYNC_STORAGE_KEY, JSON.stringify(pending));
   } catch {
     // SQLite remains the durable fallback when localStorage is unavailable.
   }
+};
+
+// Preserve the order of PENDING/EMPTY writes even if an older SQLite write
+// completes after a newer table edit has already started.
+let pendingClientTableSyncWriteQueue: Promise<void> = Promise.resolve();
+const persistPendingClientTableSync = (pending: PendingClientTableSync): Promise<void> => {
+  writePendingTableSyncMirror(pending);
+  const write = pendingClientTableSyncWriteQueue
+    .catch(() => undefined)
+    .then(() => db.saveDocument('pendingClientTableSync' as any, pending));
+  pendingClientTableSyncWriteQueue = write.catch(() => undefined);
+  return write;
 };
 
 const readPendingClientTableSync = async (): Promise<PendingClientTableSync | null> => {
@@ -861,12 +868,7 @@ const clearPendingClientTableSync = async (): Promise<void> => {
     queuedAt: new Date().toISOString(),
     parkedTickets: [],
   };
-  try {
-    window.localStorage.setItem(PENDING_CLIENT_TABLE_SYNC_STORAGE_KEY, JSON.stringify(cleared));
-  } catch {
-    // ignore
-  }
-  await db.saveDocument('pendingClientTableSync' as any, cleared).catch(() => undefined);
+  await persistPendingClientTableSync(cleared).catch(() => undefined);
 };
 
 const mergeById = <T extends { id?: string }>(primary: T[], fallback: T[]): T[] => {
@@ -9734,13 +9736,6 @@ const AppContent: React.FC = () => {
       if (pendingClientTableSyncRef.current === pendingSync) {
         pendingClientTableSyncRef.current = null;
         await clearPendingClientTableSync();
-        const successor = pendingClientTableSyncRef.current;
-        if (successor) {
-          // EMPTY may have reached SQLite after the successor's pending write.
-          // Restore the newest pending record before deciding whether to apply B.
-          await persistPendingClientTableSync(successor);
-          if (successor.tableId === tableId || pendingClientTableSyncRef.current !== successor) return;
-        }
       }
       if (pendingMasterTableSyncRef.current === pendingSync) {
         pendingMasterTableSyncRef.current = null;

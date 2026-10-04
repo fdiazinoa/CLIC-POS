@@ -141,13 +141,12 @@ test('GET tardío de B no pisa una edición C que tomó la misma mesa durante el
   assert.equal(lastAck.current.get('A')?.[0]?.name, 'Cuenta original');
 });
 
-test('clearPending tardío no aplica snapshot B y restaura el pending C de la misma mesa', async () => {
+test('clearPending tardío no aplica snapshot B sobre pending C de la misma mesa', async () => {
   const optimisticC = ticket('one', 'A', 'Cuenta C');
   const pendingB = { tableId: 'A' };
   const pendingC = { tableId: 'A' };
   const pendingClient = { current: pendingB };
   const snapshot = { current: { parkedTickets: [ticket('one', 'A', 'Cuenta B')] } };
-  const restored: unknown[] = [];
   let resolveClear!: () => void;
   const deferredClear = new Promise<void>(resolve => { resolveClear = resolve; });
   let snapshotWrites = 0;
@@ -163,7 +162,6 @@ test('clearPending tardío no aplica snapshot B y restaura el pending C de la mi
     masterOperationalSnapshotRef: snapshot,
     reconcileRejectedTableTickets,
     clearPendingClientTableSync: () => deferredClear,
-    persistPendingClientTableSync: async (value: unknown) => { restored.push(value); },
     setParkedTickets: () => { snapshotWrites += 1; },
     writeCriticalCollectionsMirror: () => { snapshotWrites += 1; },
     db: { save: async () => { snapshotWrites += 1; } },
@@ -181,5 +179,75 @@ test('clearPending tardío no aplica snapshot B y restaura el pending C de la mi
   assert.equal(pendingClient.current, pendingC);
   assert.deepEqual(snapshot.current.parkedTickets, [optimisticC]);
   assert.equal(snapshotWrites, 0);
-  assert.deepEqual(restored, [pendingC]);
+});
+
+test('cola durable ordena EMPTY, C y D aunque la escritura C termine tarde', async () => {
+  let persistExpression: ts.Expression | undefined;
+  let clearExpression: ts.Expression | undefined;
+  const collect = (node: ts.Node) => {
+    if (ts.isVariableDeclaration(node) && node.name.getText(source) === 'persistPendingClientTableSync') persistExpression = node.initializer;
+    if (ts.isVariableDeclaration(node) && node.name.getText(source) === 'clearPendingClientTableSync') clearExpression = node.initializer;
+    ts.forEachChild(node, collect);
+  };
+  collect(source);
+  assert.ok(persistExpression && clearExpression);
+  const helpers = ts.transpileModule(`
+    let pendingClientTableSyncWriteQueue = Promise.resolve();
+    const persistPendingClientTableSync = ${persistExpression.getText(source)};
+    const clearPendingClientTableSync = ${clearExpression.getText(source)};
+  `, { fileName: 'pending.ts', compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
+  let resolveC!: () => void;
+  const delayedC = new Promise<void>(resolve => { resolveC = resolve; });
+  const durable: string[] = [];
+  const mirror: string[] = [];
+  const helpersRuntime = new Function('db', 'writePendingTableSyncMirror', `${helpers}; return { persistPendingClientTableSync, clearPendingClientTableSync };`)(
+    { saveDocument: async (_collection: string, pending: { status: string; tableId?: string; queuedAt?: string }) => {
+      const label = pending.tableId || pending.status;
+      if (label === 'C') await delayedC;
+      durable.push(label);
+    } },
+    (pending: { status: string; tableId?: string }) => { mirror.push(pending.tableId || pending.status); },
+  ) as { persistPendingClientTableSync: (pending: unknown) => Promise<void>; clearPendingClientTableSync: () => Promise<void> };
+  const empty = helpersRuntime.clearPendingClientTableSync();
+  const c = helpersRuntime.persistPendingClientTableSync({ id: 'current', status: 'PENDING', tableId: 'C' });
+  await empty;
+  await Promise.resolve();
+  const d = helpersRuntime.persistPendingClientTableSync({ id: 'current', status: 'PENDING', tableId: 'D' });
+  assert.deepEqual(durable, ['EMPTY'], 'C remains in flight');
+  resolveC();
+  await Promise.all([c, d]);
+  assert.deepEqual(durable, ['EMPTY', 'C', 'D']);
+  assert.deepEqual(mirror, ['EMPTY', 'C', 'D']);
+});
+
+test('ACK de D después de C deja EMPTY durable, sin resucitar C', async () => {
+  let persistExpression: ts.Expression | undefined;
+  let clearExpression: ts.Expression | undefined;
+  const collect = (node: ts.Node) => {
+    if (ts.isVariableDeclaration(node) && node.name.getText(source) === 'persistPendingClientTableSync') persistExpression = node.initializer;
+    if (ts.isVariableDeclaration(node) && node.name.getText(source) === 'clearPendingClientTableSync') clearExpression = node.initializer;
+    ts.forEachChild(node, collect);
+  };
+  collect(source);
+  assert.ok(persistExpression && clearExpression);
+  const helpers = ts.transpileModule(`
+    let pendingClientTableSyncWriteQueue = Promise.resolve();
+    const persistPendingClientTableSync = ${persistExpression.getText(source)};
+    const clearPendingClientTableSync = ${clearExpression.getText(source)};
+  `, { fileName: 'pending.ts', compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
+  let resolveC!: () => void;
+  const delayedC = new Promise<void>(resolve => { resolveC = resolve; });
+  const durable: string[] = [];
+  const helpersRuntime = new Function('db', 'writePendingTableSyncMirror', `${helpers}; return { persistPendingClientTableSync, clearPendingClientTableSync };`)(
+    { saveDocument: async (_collection: string, pending: { status: string; tableId?: string }) => {
+      if (pending.tableId === 'C') await delayedC;
+      durable.push(pending.tableId || pending.status);
+    } }, () => {},
+  ) as { persistPendingClientTableSync: (pending: unknown) => Promise<void>; clearPendingClientTableSync: () => Promise<void> };
+  const c = helpersRuntime.persistPendingClientTableSync({ id: 'current', status: 'PENDING', tableId: 'C' });
+  const d = helpersRuntime.persistPendingClientTableSync({ id: 'current', status: 'PENDING', tableId: 'D' });
+  const empty = helpersRuntime.clearPendingClientTableSync();
+  resolveC();
+  await Promise.all([c, d, empty]);
+  assert.deepEqual(durable, ['C', 'D', 'EMPTY']);
 });
