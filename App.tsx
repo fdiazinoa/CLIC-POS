@@ -9739,8 +9739,8 @@ const AppContent: React.FC = () => {
       // its older snapshot over a newer edit of the same table.
       if (pendingClientTableSyncRef.current !== pendingSync && pendingMasterTableSyncRef.current !== pendingSync) return;
       if (pendingClientTableSyncRef.current === pendingSync) {
-        pendingClientTableSyncRef.current = null;
         await clearPendingClientTableSync();
+        if (pendingClientTableSyncRef.current === pendingSync) pendingClientTableSyncRef.current = null;
       }
       if (pendingMasterTableSyncRef.current === pendingSync) {
         pendingMasterTableSyncRef.current = null;

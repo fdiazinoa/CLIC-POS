@@ -171,7 +171,7 @@ test('clearPending tardío no aplica snapshot B sobre pending C de la misma mesa
   const rejectedB = rollback(new Error('TABLE_EDIT_LOCK_REQUIRED'), pendingB, 'token-B');
   await Promise.resolve();
   await Promise.resolve();
-  assert.equal(pendingClient.current, null, 'B should be clearing before C takes over');
+  assert.equal(pendingClient.current, pendingB, 'B remains visible until its durable clear completes');
   pendingClient.current = pendingC;
   snapshot.current.parkedTickets = [optimisticC];
   resolveClear();
@@ -333,4 +333,69 @@ test('cierre y nuevo lock de la misma mesa invalidan baseline de la sesión ante
     pendingClientTableSyncRef: { current: { tableId: 'A' } }, pendingMasterTableSyncRef: { current: null },
   });
   assert.deepEqual(ref.current.get('A'), [first], 'pending rollback keeps its baseline');
+});
+
+test('B en clear durable impide que fresh acquire C convierta B rechazada en ACK', async () => {
+  const original = ticket('one', 'A', 'Cuenta original');
+  const rejectedB = ticket('one', 'A', 'Cuenta B rechazada');
+  const rejectedC = ticket('two', 'A', 'Cuenta C rechazada');
+  const lastAck = { current: new Map([['A', [original]]]) };
+  const pendingB = { tableId: 'A' };
+  const pendingC = { tableId: 'A' };
+  const pendingClient = { current: pendingB };
+  const snapshot = { current: { parkedTickets: [rejectedB] } };
+  let clearStarted!: () => void;
+  const clearEntered = new Promise<void>(resolve => { clearStarted = resolve; });
+  let resolveClear!: () => void;
+  const delayedClear = new Promise<void>(resolve => { resolveClear = resolve; });
+  let reads = 0;
+  const rollback = evaluate({
+    activeTableEditLockRef: { current: { tableId: 'A', token: 'token-C' } },
+    tableLockLifecycleVersionRef: { current: 0 },
+    rejectedTableSyncGenerationRef: { current: new Map<string, number>() },
+    lastAcknowledgedTableTicketsRef: lastAck,
+    pendingClientTableSyncRef: pendingClient, pendingMasterTableSyncRef: { current: null },
+    setActiveTableEditLock: () => {},
+    fetchAuthoritativeTableSnapshot: async () => {
+      reads += 1;
+      if (reads > 1) throw new Error('Master unavailable');
+      return { assertCurrentAuthority: () => {}, parkedTickets: [original] };
+    },
+    resolveValidatedOperationalApiUrl: async () => '', isClientTerminalMode: () => false,
+    parkedTicketReferencesTable: (row: { tableId: string }, tableId: string) => row.tableId === tableId,
+    masterOperationalSnapshotRef: snapshot, reconcileRejectedTableTickets,
+    clearPendingClientTableSync: () => { clearStarted(); return delayedClear; },
+    setParkedTickets: () => {}, writeCriticalCollectionsMirror: () => {}, cashMovements: [],
+    db: { save: async () => {} }, fetchTables: async () => {}, console: { warn: () => {} },
+  });
+  const rejectingB = rollback(new Error('TABLE_EDIT_LOCK_REQUIRED'), pendingB, 'token-B');
+  await clearEntered;
+  assert.equal(pendingClient.current, pendingB);
+
+  const guards: ts.IfStatement[] = [];
+  const collect = (node: ts.Node) => {
+    if (ts.isIfStatement(node) && (
+      node.expression.getText(source).includes('!reusableLock && pendingClientTableSyncRef.current')
+      || node.expression.getText(source).includes('!lastAcknowledgedTableTicketsRef.current.has(syncTableId)')
+    )) guards.push(node);
+    ts.forEachChild(node, collect);
+  };
+  collect(source);
+  assert.equal(guards.length, 3);
+  for (const guard of guards) {
+    const compiled = ts.transpileModule(guard.getText(source), {
+      fileName: 'guard.ts', compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
+    }).outputText;
+    new Function('reusableLock', 'syncTableId', 'tableId', 'lastAcknowledgedTableTicketsRef', 'pendingClientTableSyncRef', 'pendingMasterTableSyncRef', 'parkedTickets', 'parkedTicketReferencesTable', compiled)(
+      undefined, 'A', 'A', lastAck, pendingClient, { current: null }, [rejectedB],
+      (row: { tableId: string }, target: string) => row.tableId === target,
+    );
+  }
+  assert.deepEqual(lastAck.current.get('A'), [original]);
+  pendingClient.current = pendingC;
+  snapshot.current.parkedTickets = [rejectedB, rejectedC];
+  resolveClear();
+  await rejectingB;
+  await rollback(new Error('TABLE_EDIT_LOCK_REQUIRED'), pendingC, 'token-C');
+  assert.deepEqual(snapshot.current.parkedTickets, [original]);
 });
