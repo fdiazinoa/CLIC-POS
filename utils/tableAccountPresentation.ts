@@ -30,6 +30,17 @@ export interface TableAccountDisplayEntry {
   editName: string;
 }
 
+/** Keep the account position independent of which account happens to be active. */
+export const sortTableAccountsForDisplay = (tickets: ParkedTicket[]): ParkedTicket[] =>
+  [...tickets].sort((left, right) => {
+    const openedAt = (ticket: ParkedTicket) => {
+      const value = Date.parse(String(ticket.timestamp || ''));
+      return Number.isFinite(value) ? value : Number.MAX_SAFE_INTEGER;
+    };
+    const timeDelta = openedAt(left) - openedAt(right);
+    return timeDelta || String(left.id).localeCompare(String(right.id));
+  });
+
 const ticketTotal = (ticket: ParkedTicket): number => Number(
   ticket.total
   ?? (ticket.items || []).reduce(

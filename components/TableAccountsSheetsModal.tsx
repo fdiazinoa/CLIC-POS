@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowRightLeft, Check, CreditCard, Pencil, Plus, Printer, X } from 'lucide-react';
 import type { BusinessConfig, CartItem, Customer, ParkedTicket, Table, TerminalConfig } from '../types';
 import { buildTableAccountFiscalSummary, getPaymentFractionFiscalDifference } from '../utils/tableAccountFiscalSummary';
-import { buildTableAccountDisplayEntries, getTableAccountLabel, getTableOpenElapsedLabel, summarizeOpenTableAccounts } from '../utils/tableAccountPresentation';
+import { buildTableAccountDisplayEntries, getTableAccountLabel, getTableOpenElapsedLabel, sortTableAccountsForDisplay, summarizeOpenTableAccounts } from '../utils/tableAccountPresentation';
 import { isFullyPaidParkedTicket } from '../utils/paymentFractions';
 
 type Props = {
@@ -30,8 +30,8 @@ const TableAccountsSheetsModal: React.FC<Props> = ({
   table, tickets, currencySymbol, fiscalConfig, terminalTaxConfig, terminalId = 'T1', customers = EMPTY_CUSTOMERS, isTaxIncluded = false, onClose, onOpenAccount,
   onCreateAccount, onRenameAccount, onPrint, onTransfer,
 }) => {
-  const entries = useMemo(() => buildTableAccountDisplayEntries(tickets), [tickets]);
-  const openSheets = useMemo(() => tickets.filter(ticket => !isFullyPaidParkedTicket(ticket)), [tickets]);
+  const openSheets = useMemo(() => sortTableAccountsForDisplay(tickets.filter(ticket => !isFullyPaidParkedTicket(ticket))), [tickets]);
+  const entries = useMemo(() => buildTableAccountDisplayEntries(openSheets), [openSheets]);
   const fiscalByTicket = useMemo(() => {
     const byId = new Map<string, ReturnType<typeof buildTableAccountFiscalSummary>>();
     if (!fiscalConfig) return byId;
@@ -67,7 +67,7 @@ const TableAccountsSheetsModal: React.FC<Props> = ({
   const elapsedLabel = getTableOpenElapsedLabel(table.timeSeated, tickets.map(ticket => ticket.timestamp), now);
   const printableIds = openSheets.filter(ticket => ticket.items?.length).map(ticket => String(ticket.id));
   const transferableTickets = tickets.filter(ticket => !ticket.paymentFraction && ticket.items?.length);
-  const transferDestinations = tickets.filter(ticket => !ticket.paymentFraction && ticket.id !== transferSource);
+  const transferDestinations = openSheets.filter(ticket => !ticket.paymentFraction && ticket.id !== transferSource);
 
   const run = async (action: () => unknown | Promise<unknown>) => {
     if (busyRef.current) return;
@@ -102,7 +102,7 @@ const TableAccountsSheetsModal: React.FC<Props> = ({
           <div className="flex shrink-0 flex-wrap items-end gap-3 border-b border-blue-100 bg-blue-50 px-6 py-3">
             <div className="font-bold text-slate-800">Transferir artículos</div>
             <label className="text-sm font-semibold text-slate-700">Cuenta destino
-              <select value={transferTarget} disabled={busy} onChange={event => setTransferTarget(event.target.value)} className="ml-2 rounded-lg border border-blue-200 bg-white p-2 text-slate-900"><option value="">Seleccione cuenta</option>{transferDestinations.map(ticket => <option key={ticket.id} value={ticket.id}>{getTableAccountLabel(ticket, tickets.indexOf(ticket))}</option>)}</select>
+              <select value={transferTarget} disabled={busy} onChange={event => setTransferTarget(event.target.value)} className="ml-2 rounded-lg border border-blue-200 bg-white p-2 text-slate-900"><option value="">Seleccione cuenta</option>{transferDestinations.map(ticket => <option key={ticket.id} value={ticket.id}>{getTableAccountLabel(ticket, openSheets.indexOf(ticket))}</option>)}</select>
             </label>
             <button type="button" disabled={busy || !transferTarget || !Object.values(quantities).some(quantity => quantity > 0)} onClick={() => void run(async () => { await onTransfer(transferSource, transferTarget, quantities); setTransferSource(null); setTransferTarget(''); setQuantities({}); })} className="rounded-lg bg-blue-600 px-4 py-2 font-bold text-white disabled:opacity-50">Confirmar transferencia</button>
             <button type="button" disabled={busy} onClick={() => { if (busyRef.current) return; setTransferSource(null); setQuantities({}); }} className="rounded-lg bg-white px-4 py-2 font-bold text-slate-600 disabled:opacity-40">Cancelar</button>

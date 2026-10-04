@@ -61,6 +61,7 @@ import { couponService } from '../utils/couponService';
 import { resolveScannedCouponCode } from '../utils/couponScan';
 import { shouldRouteInvoiceScan } from '../utils/invoiceScan';
 import { parkedTicketBelongsToTable } from '../utils/parkedTicketTableMembership';
+import { sortTableAccountsForDisplay } from '../utils/tableAccountPresentation';
 import { calculateInventoryDeductions, resolveInventoryConsumptionMode, transferStockToCommitted } from '../utils/inventoryEngine';
 import { useSupervisorAuth } from '../hooks/useSupervisorAuth';
 import { calculateSalesCommission } from '../utils/userSalesPolicy';
@@ -120,7 +121,7 @@ import { persistStandaloneRefundTransaction, persistStandaloneSaleHistory } from
 import { resolveCustomerImageSrc, resolveProductImageSrc } from '../utils/entityImage';
 import { getWarehouseScopedNumber, resolveProductActiveWarehouseIds } from '../utils/masterIdentity';
 import { buildTransactionSettlementFields } from '../utils/paymentSettlement';
-import { isPaymentFractionPlanCurrent, retainCurrentPaymentFractionPlan } from '../utils/paymentFractions';
+import { isFullyPaidParkedTicket, isPaymentFractionPlanCurrent, retainCurrentPaymentFractionPlan } from '../utils/paymentFractions';
 import SplitTicketModal from './SplitTicketModal';
 import { getTerminalSnapshotSellers, resolveTerminalSellerName } from '../utils/terminalSnapshotSellers';
 import { productIdentityCandidates, productReferenceCandidates, resolveOperationalProductId } from '../utils/productReferences';
@@ -1351,20 +1352,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const activeTableAccounts = useMemo(() => {
       const tableId = String(activeTable?.id || '').trim();
       if (!tableId) return [];
-
-      const readAccountNumber = (ticket: ParkedTicket) => {
-         const label = `${ticket.name || ''} ${ticket.alias || ''}`;
-         const match = label.match(/cuenta\s+(\d+)/i);
-         return match ? Number(match[1]) : 1;
-      };
-
-      return (Array.isArray(parkedTickets) ? parkedTickets : [])
-         .filter(ticket => String(ticket.tableId || '').trim() === tableId)
-         .sort((left, right) => {
-            const numberDelta = readAccountNumber(left) - readAccountNumber(right);
-            if (numberDelta !== 0) return numberDelta;
-            return String(left.timestamp || '').localeCompare(String(right.timestamp || ''));
-         });
+      return sortTableAccountsForDisplay((Array.isArray(parkedTickets) ? parkedTickets : [])
+         .filter(ticket => parkedTicketBelongsToTable(ticket, tableId) && !isFullyPaidParkedTicket(ticket)));
    }, [activeTable?.id, parkedTickets]);
    const activeTableAccountIndex = Math.max(
       0,

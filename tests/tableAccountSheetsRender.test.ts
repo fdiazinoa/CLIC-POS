@@ -82,7 +82,25 @@ test('cuatro hojas legacy usan Cuenta 1–4 en cabeceras, acciones y selector si
   assert.doesNotMatch(html, /Mesa 11 - Cuenta 1 - Cuenta/);
   assert.equal(tickets[1].alias, 'Mesa 11 - Cuenta 1 - Cuenta 2/4');
   const sheetsSource = readFileSync(new URL('../components/TableAccountsSheetsModal.tsx', import.meta.url), 'utf8');
-  assert.match(sheetsSource, /transferDestinations\.map\(ticket => <option[^>]*>\{getTableAccountLabel\(ticket, tickets\.indexOf\(ticket\)\)\}/);
+  assert.match(sheetsSource, /transferDestinations\.map\(ticket => <option[^>]*>\{getTableAccountLabel\(ticket, openSheets\.indexOf\(ticket\)\)\}/);
+});
+
+test('las hojas mantienen el mismo orden aun si la cuenta activa llega primero del mapa', () => {
+  const rows = [
+    { id: 'first', alias: 'Ana', timestamp: '2026-10-03T19:00:00Z' },
+    { id: 'second', alias: 'Juan', timestamp: '2026-10-03T19:01:00Z' },
+    { id: 'third', alias: 'José', timestamp: '2026-10-03T19:02:00Z' },
+  ].map(row => ({ ...row, name: row.alias, tableId: 'mesa-7', total: 100,
+    items: [{ id: row.id, cartId: row.id, name: 'Agua', price: 100, quantity: 1 }],
+  })) as ParkedTicket[];
+  const html = renderToStaticMarkup(React.createElement(TableAccountsSheetsModal, {
+    table: { id: 'mesa-7', nombre: 'Mesa 7', currentOrderId: 'third' } as Table,
+    tickets: [rows[2], rows[0], rows[1]], currencySymbol: 'RD$',
+    onClose: () => {}, onOpenAccount: () => {}, onCreateAccount: () => {},
+    onRenameAccount: () => {}, onPrint: () => true, onTransfer: async () => {},
+  }));
+  assert.ok(html.indexOf('>Ana</h3>') < html.indexOf('>Juan</h3>'));
+  assert.ok(html.indexOf('>Juan</h3>') < html.indexOf('>José</h3>'));
 });
 
 test('pre-cuenta solicitada distingue solo artículos nuevos de la misma cuenta', () => {

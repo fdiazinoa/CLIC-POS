@@ -7,6 +7,7 @@ import {
   buildTableAccountDisplayEntries,
   getTableAccountLabel,
   renameTableAccountTicket,
+  sortTableAccountsForDisplay,
   summarizeOpenTableAccounts,
 } from '../utils/tableAccountPresentation';
 
@@ -18,6 +19,14 @@ const ticket = (overrides: Partial<ParkedTicket> = {}): ParkedTicket => ({
   timestamp: '2026-09-12T12:41:00.000Z',
   tableId: 'mesa-4',
   ...overrides,
+});
+
+test('el orden de las hojas no cambia al seleccionar otra cuenta ni renombrarla', () => {
+  const earliest = ticket({ id: 'juan', timestamp: '2026-09-12T12:40:00.000Z', alias: 'Juan', name: 'Mesa 4 - Juan' });
+  const next = ticket({ id: 'cuenta-1', timestamp: '2026-09-12T12:41:00.000Z', alias: 'Cuenta 4' });
+  const latest = ticket({ id: 'jose', timestamp: '2026-09-12T12:42:00.000Z', alias: 'JOSE', name: 'Mesa 4 - JOSE' });
+  assert.deepEqual(sortTableAccountsForDisplay([latest, next, earliest]).map(row => row.id), ['juan', 'cuenta-1', 'jose']);
+  assert.deepEqual(sortTableAccountsForDisplay([next, earliest, latest]).map(row => row.id), ['juan', 'cuenta-1', 'jose']);
 });
 
 test('muestra las tres cuotas de una cuenta fraccionada sin triplicar el total', () => {
