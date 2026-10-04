@@ -84,3 +84,49 @@ test('cuatro hojas legacy usan Cuenta 1–4 en cabeceras, acciones y selector si
   const sheetsSource = readFileSync(new URL('../components/TableAccountsSheetsModal.tsx', import.meta.url), 'utf8');
   assert.match(sheetsSource, /transferDestinations\.map\(ticket => <option[^>]*>\{getTableAccountLabel\(ticket, tickets\.indexOf\(ticket\)\)\}/);
 });
+
+test('pre-cuenta solicitada distingue solo artículos nuevos de la misma cuenta', () => {
+  const tickets = [{
+    id: 'printed', name: 'Cuenta 1', tableId: 'mesa-7', timestamp: '2026-10-03T19:00:00Z', total: 150,
+    items: [
+      { id: 'old', cartId: 'old', name: 'Artículo impreso', price: 100, quantity: 1, subtotalizedAt: '2026-10-03T19:10:00Z' },
+      { id: 'new', cartId: 'new', name: 'Artículo agregado', price: 50, quantity: 1 },
+    ],
+  }, {
+    id: 'plain', name: 'Cuenta 2', tableId: 'mesa-7', timestamp: '2026-10-03T19:00:00Z', total: 70,
+    items: [{ id: 'plain-item', cartId: 'plain-item', name: 'Otra cuenta', price: 70, quantity: 1 }],
+  }] as ParkedTicket[];
+  const render = () => renderToStaticMarkup(React.createElement(TableAccountsSheetsModal, {
+    table: { id: 'mesa-7', nombre: 'Mesa 7' } as Table,
+    tickets, currencySymbol: 'RD$', onClose: () => {}, onOpenAccount: () => {},
+    onCreateAccount: () => {}, onRenameAccount: () => {}, onPrint: () => true,
+    onTransfer: async () => {},
+  }));
+  for (const html of [render(), render()]) {
+    assert.equal((html.match(/Pre-cuenta solicitada/g) || []).length, 1);
+    assert.equal((html.match(/Nuevo desde subtotal/g) || []).length, 1);
+    assert.match(html, /Artículo impreso/);
+    assert.match(html, /Artículo agregado/);
+    assert.match(html, /border-emerald-200 bg-emerald-50[^>]*>[^<]*<div[^>]*>[^<]*<span[^>]*>1 × Artículo agregado/);
+    assert.doesNotMatch(html, /Otra cuenta<\/span><span[^>]*>Nuevo desde subtotal/);
+  }
+});
+
+test('cuenta nueva vacía conserva la acción de abrir POS y cada hoja muestra una sola fila total', () => {
+  const tickets = [{
+    id: 'empty', name: 'Cuenta 1', tableId: 'mesa-7', timestamp: '2026-10-03T19:00:00Z', total: 0, items: [],
+  }, {
+    id: 'filled', name: 'Cuenta 2', tableId: 'mesa-7', timestamp: '2026-10-03T19:00:00Z', total: 118,
+    items: [{ id: 'item', cartId: 'line-1', name: 'Artículo', price: 100, quantity: 1 }],
+  }] as ParkedTicket[];
+  const html = renderToStaticMarkup(React.createElement(TableAccountsSheetsModal, {
+    table: { id: 'mesa-7', nombre: 'Mesa 7' } as Table,
+    tickets, currencySymbol: 'RD$', onClose: () => {}, onOpenAccount: () => {},
+    onCreateAccount: () => {}, onRenameAccount: () => {}, onPrint: () => true,
+    onTransfer: async () => {},
+  }));
+  assert.equal((html.match(/>Total cuenta/g) || []).length, 2);
+  assert.match(html, /Abrir cuenta/);
+  assert.match(html, /Cobrar en POS/);
+  assert.doesNotMatch(html, /Subtotal neto|Total fiscal|Impuesto Ley/);
+});
