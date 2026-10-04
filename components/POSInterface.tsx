@@ -4894,10 +4894,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (!(await authorizeSubtotalizedEdit('Modificar artículo o cantidad de ticket subtotalizado'))) return;
 
       let newCart: CartItem[] = [];
+      let invalidatesPriorSubtotal = false;
 
       if (cartIdToDelete || updatedItem === null) {
          const targetCartId = cartIdToDelete || editingItem?.cartId;
          const originalItem = (cart || []).find(i => i.cartId === targetCartId);
+         invalidatesPriorSubtotal = Boolean(originalItem?.subtotalizedAt);
          const isHotRestaurantReversal = canReverseRestaurantDraftWithoutApproval(isRestaurantOrderContext, originalItem);
          if (isKitchenDispatchedCartItem(originalItem)) {
             alert(isKdsReturnedCartItem(originalItem)
@@ -4921,6 +4923,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       } else {
          // Update Check (Price Override / Discount)
          const originalItem = (cart || []).find(i => i.cartId === updatedItem.cartId);
+         invalidatesPriorSubtotal = Boolean(originalItem?.subtotalizedAt);
 
          if (!originalItem || !isValidCartQuantityTransition(originalItem.quantity, updatedItem.quantity)) {
             setErrorToast('La cantidad no puede llegar a cero ni cambiar una venta en devolución. Use Eliminar o el modo Devolución.');
@@ -4983,7 +4986,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          newCart = cart.map(item => item.cartId === updatedItem.cartId ? updatedItem : item);
       }
 
-      if (isSubtotalizedMutation) newCart = clearCartSubtotalization(newCart);
+      // Editing a line printed on the prior pre-check invalidates that proof.
+      // Changing a later line must preserve the marked lines and their history.
+      if (invalidatesPriorSubtotal) newCart = clearCartSubtotalization(newCart);
 
       // Borrar la última línea debe cerrar esta cuenta mediante el mismo flujo
       // explícito usado al salir de una mesa vacía. Persistir `items: []` sobre
