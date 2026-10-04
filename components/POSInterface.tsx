@@ -39,6 +39,7 @@ import {
 } from '../utils/creditRules';
 import TicketOptionsModal from './TicketOptionsModal';
 import CartItemOptionsModal from './CartItemOptionsModal';
+import TableSellerModal from './TableSellerModal';
 import { resetCompletedSaleDiscount } from '../utils/checkoutDiscountLifecycle';
 import { preserveCartItemCommercialFields, resolveCartItemEditCapabilities } from '../utils/cartItemEditPermissions';
 import ProductVariantSelector from './ProductVariantSelector';
@@ -9103,28 +9104,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             }
          }} onConfirm={handlePaymentConfirm} themeColor={config.themeColor} customer={effectiveSelectedCustomer} isDelinquent={isDelinquent} users={users} roles={roles} isMaster={isMaster} currentUser={currentUser} isRestaurantMode={isRestaurantMode} isInstallmentPayment={isIntermediateFractionPayment} />}
          {showLoyaltyModal && <LoyaltyScanModal onClose={() => setShowLoyaltyModal(false)} onScan={handleLoyaltyScan} />}
-         {showTableSellerModal && activeTable && (
-            <div className="fixed inset-0 z-[110] flex items-center justify-center bg-slate-950/60 p-4" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget && !assigningTableSeller) setShowTableSellerModal(false); }}>
-               <section role="dialog" aria-modal="true" aria-labelledby="table-seller-title" className="flex max-h-[85vh] w-full max-w-xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl">
-                  <div className="flex items-start justify-between gap-4 border-b border-slate-100 p-6">
-                     <div>
-                        <h2 id="table-seller-title" className="text-2xl font-black text-slate-900">Vendedor de {activeTable.nombre || activeTable.name}</h2>
-                        <p className="mt-1 text-sm text-slate-500">Se asigna a todas las cuentas abiertas de esta mesa. La cajera que cobra permanece igual.</p>
-                     </div>
-                     <button type="button" aria-label="Cerrar" disabled={assigningTableSeller} onClick={() => setShowTableSellerModal(false)} className="rounded-full bg-slate-100 p-2 text-slate-600 hover:bg-slate-200 disabled:opacity-40"><X size={20} /></button>
-                  </div>
-                  <div className="min-h-0 space-y-2 overflow-y-auto p-4">
-                     {users.filter(user => user.isActive !== false).sort((a, b) => a.name.localeCompare(b.name)).map(user => (
-                        <button key={user.id} type="button" disabled={assigningTableSeller} onClick={() => { void handleAssignTableSeller(String(user.id)); }} className={`flex w-full items-center gap-4 rounded-2xl border p-4 text-left transition-colors disabled:opacity-50 ${activeTableSellerId === String(user.id) ? 'border-blue-500 bg-blue-50' : 'border-slate-200 bg-white hover:bg-slate-50'}`}>
-                           <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-blue-100 font-black text-blue-700">{user.name.slice(0, 1).toUpperCase()}</span>
-                           <span className="min-w-0 flex-1 truncate font-bold text-slate-900">{user.name}</span>
-                           {activeTableSellerId === String(user.id) && <Check size={20} className="text-blue-600" />}
-                        </button>
-                     ))}
-                  </div>
-               </section>
-            </div>
-         )}
+         {showTableSellerModal && activeTable && <TableSellerModal
+            tableName={activeTable.nombre || activeTable.name || 'Mesa'}
+            users={users}
+            selectedSellerId={activeTableSellerId}
+            assigning={assigningTableSeller}
+            onSelect={sellerId => { void handleAssignTableSeller(sellerId); }}
+            onClose={() => setShowTableSellerModal(false)}
+         />}
          {editingItem && <CartItemOptionsModal
             item={editingItem}
             config={config}
