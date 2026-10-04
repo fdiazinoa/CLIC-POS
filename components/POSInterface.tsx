@@ -61,6 +61,7 @@ import { couponService } from '../utils/couponService';
 import { resolveScannedCouponCode } from '../utils/couponScan';
 import { shouldRouteInvoiceScan } from '../utils/invoiceScan';
 import { parkedTicketBelongsToTable } from '../utils/parkedTicketTableMembership';
+import { assignTableSeller, getTableSellerId, hasPaidTableFraction } from '../utils/tableSellerAssignment';
 import { sortTableAccountsForDisplay } from '../utils/tableAccountPresentation';
 import { calculateInventoryDeductions, resolveInventoryConsumptionMode, transferStockToCommitted } from '../utils/inventoryEngine';
 import { useSupervisorAuth } from '../hooks/useSupervisorAuth';
@@ -764,6 +765,7 @@ const buildCartDigest = (items: CartItem[] = []): string =>
             Number(item.price || 0),
             (item.modifiers || []).join('|'),
             item.orderNumber || '',
+            item.salespersonId || '',
             item.tableDisplayLabel || ''
          ].join(':')
       )
@@ -1371,6 +1373,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       activeTableAccounts.findIndex(ticket => String(ticket.id) === String(activeTable?.currentOrderId || ''))
    );
    const activeTableAccount = activeTableAccounts[activeTableAccountIndex];
+   const activeTableSellerId = activeTable ? getTableSellerId(parkedTickets, String(activeTable.id)) : undefined;
    const isActiveTableAccountSubtotalized = Boolean(
       activeTableAccount?.items?.some(item => Boolean(item.subtotalizedAt))
    );
@@ -2202,6 +2205,36 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [parkTicketAlias, setParkTicketAlias] = useState('');
    const [showGlobalDiscount, setShowGlobalDiscount] = useState(false);
    const [showCouponModal, setShowCouponModal] = useState(false);
+   const [showTableSellerModal, setShowTableSellerModal] = useState(false);
+   const [assigningTableSeller, setAssigningTableSeller] = useState(false);
+   const handleAssignTableSeller = async (sellerId: string) => {
+      if (!activeTable || assigningTableSeller) return;
+      const tableId = String(activeTable.id);
+      const seller = users.find(user => String(user.id) === sellerId && user.isActive !== false);
+      if (!seller) return;
+      const currentTickets = parkedTicketsRef.current;
+      if (hasPaidTableFraction(currentTickets, tableId) && getTableSellerId(currentTickets, tableId) !== sellerId) {
+         setErrorToast('La mesa ya tiene una cuenta parcialmente cobrada. No se puede cambiar su vendedor.');
+         return;
+      }
+      setAssigningTableSeller(true);
+      try {
+         await ticketAutoSyncFlushRef.current?.();
+         const nextTickets = assignTableSeller(parkedTicketsRef.current, tableId, sellerId);
+         if (!nextTickets.some(ticket => parkedTicketBelongsToTable(ticket, tableId))) {
+            throw new Error('La mesa no tiene una cuenta abierta para guardar el vendedor.');
+         }
+         await Promise.resolve(onUpdateParkedTicketsRef.current(nextTickets, { reason: 'explicit' }));
+         parkedTicketsRef.current = nextTickets;
+         onUpdateCart(previous => previous.map(item => ({ ...item, salespersonId: sellerId })));
+         setShowTableSellerModal(false);
+      } catch (error) {
+         console.error('[TABLE_SELLER] No se pudo asignar el vendedor:', error);
+         setErrorToast('No se pudo confirmar el vendedor de la mesa. Reintente sin cambiar de mesa.');
+      } finally {
+         setAssigningTableSeller(false);
+      }
+   };
    const [couponCode, setCouponCode] = useState('');
    const [redeemedCoupon, setRedeemedCoupon] = useState<RedeemedCouponRef | null>(null);
 
@@ -3347,6 +3380,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          const existingIdentityKey = String((i as any).cartIdentityKey || productLineIdentityKey(i, i.price));
          const existingConsignmentKey = i.consignmentLineId || '';
          return existingIdentityKey === lineIdentityKey
+            && (i.salespersonId || '') === (activeTableSellerId || '')
             && !i.subtotalizedAt
             && Math.sign(Number(i.quantity || 0)) === Math.sign(quantity)
             && existingConsignmentKey === consignmentIdentityKey
@@ -3379,6 +3413,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          const newItem = {
             ...product,
             cartId: newCartId,
+            salespersonId: activeTableSellerId,
             createdAt: new Date().toISOString(),
             quantity,
             isReturnLine: quantity < 0,
@@ -3411,7 +3446,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          if (trace.stages.HANDLER_END === undefined) markInteractionStage(trace, 'HANDLER_END');
          if (activeAddTraceRef.current === trace) activeAddTraceRef.current = null;
       }
-   }, [activeTerminalConfig, authorizeSubtotalizedEdit, blockRecoveredUberOrderMutation, canAddItemToCart, cart, ensureSalesWithOpenZPermission, getProductPrice, onUpdateCart]);
+   }, [activeTableSellerId, activeTerminalConfig, authorizeSubtotalizedEdit, blockRecoveredUberOrderMutation, canAddItemToCart, cart, ensureSalesWithOpenZPermission, getProductPrice, onUpdateCart]);
 
    const handleProductClick = useCallback((product: Product) => {
       if (Date.now() < suppressProductInputUntilMs) return;
@@ -3878,6 +3913,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       showParkedList ||
       showGlobalDiscount ||
       showCouponModal ||
+      showTableSellerModal ||
       editingItem ||
       selectedProductForVariants ||
       productForScale ||
@@ -4662,6 +4698,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          id: orderId,
          name: existing?.name || activeBarTabName || `Mesa: ${activeTableContext.compactLabel || activeTable.nombre || activeTable.name || orderId}`,
          alias: existing?.alias,
+         tableSellerId: existing?.tableSellerId || getTableSellerId(parkedTicketsRef.current, String(activeTable.id)),
          items: [...cart],
          total: cartTotal,
          discountAmount,
@@ -6020,6 +6057,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const newTickets: ParkedTicket[] = splitGroups.map((items, index) => ({
          id: `split-${now}-${index + 2}`,
          tableId: splitTableId,
+         tableSellerId: existingOriginal?.tableSellerId,
          primaryTableId: splitPrimaryTableId,
          joinedTableIds: splitJoinedTableIds,
          name: `${baseName} - Cuenta ${index + 2}/${splitCount}`,
@@ -6813,6 +6851,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          id: parkedTicketId,
          name: buildParkedTicketName(),
          alias: normalizedAlias,
+         tableSellerId: existingParked?.tableSellerId || (activeTable ? getTableSellerId(parkedTicketsRef.current, String(activeTable.id)) : undefined),
          items: [...ticketItems],
          total: resolvedTicketTotal,
          discountAmount,
@@ -6882,6 +6921,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          id: parkedTicketId,
          name: existingParked?.name || activeBarTabName || `Mesa: ${activeTableContext.compactLabel || tableName}`,
          alias: existingParked?.alias,
+         tableSellerId: existingParked?.tableSellerId || getTableSellerId(parkedTicketsRef.current, String(activeTable.id)),
          items: [...cart],
          total: cartTotal,
          discountAmount,
@@ -7791,6 +7831,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         >
                            <CreditCard size={20} />
                            <span>Tarjeta</span>
+                        </button>
+                        <button
+                           type="button"
+                           onClick={() => setShowTableSellerModal(true)}
+                           disabled={!activeTable || activeTableAccounts.length === 0}
+                           className="flex h-16 items-center justify-center gap-2 rounded-xl border border-blue-500 bg-blue-600 px-3 text-sm font-black uppercase tracking-wide text-white shadow-sm shadow-blue-600/25 transition-all hover:bg-blue-700 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
+                           title={activeTableSellerId ? `Vendedor: ${resolveSalespersonLabel(activeTableSellerId)}` : 'Asignar vendedor a la mesa'}
+                        >
+                           <UserCheck size={20} />
+                           <span>Vendedor</span>
                         </button>
                         {canParkDirectSale && (
                            <button
@@ -8945,6 +8995,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            <QrCode size={18} />
                            <span className="text-[9px] font-bold uppercase">Cupón</span>
                         </button>
+                        {isRestaurantMode && <button type="button" onClick={() => setShowTableSellerModal(true)} disabled={!activeTable || activeTableAccounts.length === 0} className="flex h-12 min-w-[58px] flex-col items-center justify-center gap-0.5 rounded-xl bg-blue-600 px-2 text-white shadow-sm shadow-blue-600/25 active:scale-95 disabled:opacity-40">
+                           <UserCheck size={18} />
+                           <span className="text-[9px] font-bold uppercase">Vendedor</span>
+                        </button>}
                         {canReceiveConsignments && (
                            <button onClick={() => {
                               setShowConsignmentModal(true);
@@ -9049,11 +9103,34 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             }
          }} onConfirm={handlePaymentConfirm} themeColor={config.themeColor} customer={effectiveSelectedCustomer} isDelinquent={isDelinquent} users={users} roles={roles} isMaster={isMaster} currentUser={currentUser} isRestaurantMode={isRestaurantMode} isInstallmentPayment={isIntermediateFractionPayment} />}
          {showLoyaltyModal && <LoyaltyScanModal onClose={() => setShowLoyaltyModal(false)} onScan={handleLoyaltyScan} />}
+         {showTableSellerModal && activeTable && (
+            <div className="fixed inset-0 z-[110] flex items-center justify-center bg-slate-950/60 p-4" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget && !assigningTableSeller) setShowTableSellerModal(false); }}>
+               <section role="dialog" aria-modal="true" aria-labelledby="table-seller-title" className="flex max-h-[85vh] w-full max-w-xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl">
+                  <div className="flex items-start justify-between gap-4 border-b border-slate-100 p-6">
+                     <div>
+                        <h2 id="table-seller-title" className="text-2xl font-black text-slate-900">Vendedor de {activeTable.nombre || activeTable.name}</h2>
+                        <p className="mt-1 text-sm text-slate-500">Se asigna a todas las cuentas abiertas de esta mesa. La cajera que cobra permanece igual.</p>
+                     </div>
+                     <button type="button" aria-label="Cerrar" disabled={assigningTableSeller} onClick={() => setShowTableSellerModal(false)} className="rounded-full bg-slate-100 p-2 text-slate-600 hover:bg-slate-200 disabled:opacity-40"><X size={20} /></button>
+                  </div>
+                  <div className="min-h-0 space-y-2 overflow-y-auto p-4">
+                     {users.filter(user => user.isActive !== false).sort((a, b) => a.name.localeCompare(b.name)).map(user => (
+                        <button key={user.id} type="button" disabled={assigningTableSeller} onClick={() => { void handleAssignTableSeller(String(user.id)); }} className={`flex w-full items-center gap-4 rounded-2xl border p-4 text-left transition-colors disabled:opacity-50 ${activeTableSellerId === String(user.id) ? 'border-blue-500 bg-blue-50' : 'border-slate-200 bg-white hover:bg-slate-50'}`}>
+                           <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-blue-100 font-black text-blue-700">{user.name.slice(0, 1).toUpperCase()}</span>
+                           <span className="min-w-0 flex-1 truncate font-bold text-slate-900">{user.name}</span>
+                           {activeTableSellerId === String(user.id) && <Check size={20} className="text-blue-600" />}
+                        </button>
+                     ))}
+                  </div>
+               </section>
+            </div>
+         )}
          {editingItem && <CartItemOptionsModal
             item={editingItem}
             config={config}
             users={users}
             salesUsers={salesUsers}
+            lockedSalespersonName={activeTableSellerId ? resolveSalespersonLabel(activeTableSellerId) : undefined}
             roles={roles}
             onClose={() => setEditingItem(null)}
             onUpdate={(updatedItem, cartIdToDelete) => {
