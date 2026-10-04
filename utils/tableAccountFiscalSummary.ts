@@ -21,8 +21,15 @@ export const buildTableAccountFiscalSummary = (
   // prices untouched; only the fiscal/printed representation uses processed items.
   const items = applyPromotions(ticket.items || [], config, terminalId, customer);
   const subtotal = round2(items.reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0), 0));
-  const discountTotal = round2(Math.min(subtotal, Math.max(0, Number(ticket.discountAmount || 0))));
-  const taxExempt = ticket.customerSnapshot?.isTaxExempt === true;
+  const discountValue = Number(ticket.discountValue);
+  const hasDiscountRule = ticket.discountValue != null && Number.isFinite(discountValue)
+    && (ticket.discountType === 'PERCENT' || ticket.discountType === 'FIXED');
+  const discountTotal = round2(Math.min(subtotal, Math.max(0, hasDiscountRule
+    ? ticket.discountType === 'PERCENT' ? subtotal * discountValue / 100 : discountValue
+    : Number(ticket.discountAmount || 0))));
+  // Checkout prefers the current customer record over the snapshot captured
+  // when the table was parked; only fall back when the customer is unavailable.
+  const taxExempt = customer ? customer.isTaxExempt === true : ticket.customerSnapshot?.isTaxExempt === true;
   const policy = resolveAppliedServiceTaxPolicy(config, terminalConfig, 'DINE_IN');
   const taxBreakdown = consolidateTaxBreakdownForDisplay(calculateTaxBreakdownFromItems(items, config, {
     discountAmount: discountTotal,
