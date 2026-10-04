@@ -3,6 +3,7 @@ import { Capacitor } from '@capacitor/core';
 import { Delete, Lock, Fingerprint, User as UserIcon } from 'lucide-react';
 import { User as UserType, TerminalConfig } from '../types';
 import { biometricService } from '../services/BiometricAuthService';
+import { isGeneratedAvatarPlaceholder } from '../utils/userPhoto';
 import './ModernLoginScreen.css';
 import {
   beginPosInteraction,
@@ -15,16 +16,6 @@ import {
 
 /** En WebView/Capacitor, enfocar un input numérico abre el teclado virtual y desplaza la UI; el PIN se sigue pudiendo digitar con teclado físico vía `keydown` global. */
 const suppressNativeSoftKeyboardForPin = Capacitor.isNativePlatform();
-
-const isGeneratedAvatarPlaceholder = (value: string): boolean => {
-  const normalized = value.trim().toLowerCase();
-  return (
-    normalized.includes('api.dicebear.com') ||
-    normalized.includes('/avataaars/') ||
-    normalized.includes('placeholder') ||
-    normalized.includes('placehold.co')
-  );
-};
 
 interface ModernLoginScreenProps {
   onLogin: (user: UserType, input?: { startedAt: number }) => void;
