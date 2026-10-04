@@ -2,8 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { readFileSync } from 'node:fs';
 import type { ParkedTicket, Table } from '../types';
 import TableAccountsSheetsModal from '../components/TableAccountsSheetsModal';
+import { getTableOpenElapsedLabel } from '../utils/tableAccountPresentation';
 
 test('una cuenta fraccionada renderiza una hoja y una sola minuta con cuotas dentro', () => {
   const ticket = {
@@ -26,4 +28,34 @@ test('una cuenta fraccionada renderiza una hoja y una sola minuta con cuotas den
   assert.match(html, /Pendiente/);
   assert.match(html, /aria-label="Imprimir pre-cuenta de Ana" disabled=""/);
   assert.match(html, /La pre-cuenta completa no representa el saldo pendiente/);
+});
+
+test('tiempo abierto usa fecha válida de cuenta si la mesa está corrupta y nunca muestra NaN', () => {
+  const now = Date.parse('2026-10-03T20:42:00Z');
+  assert.equal(getTableOpenElapsedLabel('Invalid Date', ['bad', '2026-10-03T20:00:00Z'], now), 'Abierta 0h 42m');
+  assert.equal(getTableOpenElapsedLabel('2026-10-03T20:10:00Z', ['2026-10-03T20:00:00Z'], now), 'Abierta 0h 32m');
+  assert.equal(getTableOpenElapsedLabel('bad', ['also bad', undefined], now), 'Tiempo no disponible');
+  const tickets = Array.from({ length: 4 }, (_, index) => ({
+    id: `ticket-${index}`, name: `Cuenta ${index + 1}`, tableId: 'mesa-11', timestamp: 'Invalid Date', total: 100,
+    items: [{ id: 'water', cartId: `line-${index}`, name: 'Agua', price: 100, quantity: 1 }],
+  })) as ParkedTicket[];
+  const html = renderToStaticMarkup(React.createElement(TableAccountsSheetsModal, {
+    table: { id: 'mesa-11', nombre: 'Mesa 11', timeSeated: 'Invalid Date' } as Table,
+    tickets, currencySymbol: 'RD$',
+    onClose: () => {}, onOpenAccount: () => {}, onCreateAccount: () => {},
+    onRenameAccount: () => {}, onPrint: () => true, onTransfer: async () => {},
+  }));
+  assert.equal((html.match(/<section\b/g) || []).length, 4);
+  assert.match(html, /Tiempo no disponible/);
+  assert.doesNotMatch(html, /NaN/);
+});
+
+test('cobrar y renombrar conservan contraste explícito sin cambiar la fila legacy', () => {
+  const css = readFileSync(new URL('../index.css', import.meta.url), 'utf8');
+  const sheets = readFileSync(new URL('../components/TableAccountsSheetsModal.tsx', import.meta.url), 'utf8');
+  assert.match(css, /\.table-account-action\s*\{\s*background-color:\s*#ffffff/);
+  assert.match(css, /\.table-account-action\.table-account-checkout\s*\{\s*background-color:\s*#2563eb;\s*color:\s*#ffffff/);
+  assert.match(css, /\.table-account-action\.table-account-checkout:active\s*\{\s*background-color:\s*#1d4ed8/);
+  assert.match(sheets, /className="table-account-action table-account-checkout[^"]*text-white/);
+  assert.match(sheets, /aria-label="Nombre del comensal"[^\n]*className="[^"]*bg-white[^"]*text-slate-900/);
 });

@@ -3,7 +3,7 @@ import { ArrowRightLeft, Check, CreditCard, Pencil, Plus, Printer, X } from 'luc
 import type { BusinessConfig, CartItem, Customer, ParkedTicket, Table, TerminalConfig } from '../types';
 import { formatTaxLineLabel } from '../utils/fiscalBreakdown';
 import { buildTableAccountFiscalSummary, getPaymentFractionFiscalDifference } from '../utils/tableAccountFiscalSummary';
-import { buildTableAccountDisplayEntries, summarizeOpenTableAccounts } from '../utils/tableAccountPresentation';
+import { buildTableAccountDisplayEntries, getTableAccountLabel, getTableOpenElapsedLabel, summarizeOpenTableAccounts } from '../utils/tableAccountPresentation';
 import { isFullyPaidParkedTicket } from '../utils/paymentFractions';
 
 type Props = {
@@ -16,7 +16,7 @@ type Props = {
   customers?: Customer[];
   isTaxIncluded?: boolean;
   onClose: () => void;
-  onOpenAccount: (ticket: ParkedTicket, inputTimeStamp?: number) => void;
+  onOpenAccount: (ticket: ParkedTicket, inputTimeStamp?: number) => void | Promise<void>;
   onCreateAccount: (name: string) => void | Promise<void>;
   onRenameAccount: (ticket: ParkedTicket, name: string, fractionIndex?: number) => void | Promise<void>;
   onPrint: (ticketIds: string[]) => Promise<boolean> | boolean;
@@ -65,9 +65,7 @@ const TableAccountsSheetsModal: React.FC<Props> = ({
     const timer = window.setInterval(() => setNow(Date.now()), 30_000);
     return () => window.clearInterval(timer);
   }, []);
-  const openedAt = table.timeSeated || tickets.map(ticket => ticket.timestamp).sort()[0];
-  const elapsed = openedAt ? Math.max(0, Math.floor((now - new Date(openedAt).getTime()) / 60000)) : 0;
-  const formatElapsed = `${Math.floor(elapsed / 60)}h ${String(elapsed % 60).padStart(2, '0')}m`;
+  const elapsedLabel = getTableOpenElapsedLabel(table.timeSeated, tickets.map(ticket => ticket.timestamp), now);
   const printableIds = openSheets.filter(ticket => ticket.items?.length).map(ticket => String(ticket.id));
   const transferableTickets = tickets.filter(ticket => !ticket.paymentFraction && ticket.items?.length);
   const transferDestinations = tickets.filter(ticket => !ticket.paymentFraction && ticket.id !== transferSource);
@@ -89,7 +87,7 @@ const TableAccountsSheetsModal: React.FC<Props> = ({
           <div>
             <p className="text-xs font-black uppercase tracking-[0.22em] text-blue-600">Cuentas de la mesa</p>
             <h2 className="text-3xl font-black text-slate-900">{table.nombre || table.name || 'Mesa'}</h2>
-            <p className="text-sm font-bold text-slate-500">Abierta {formatElapsed} · {summary.count} cuenta(s) pendiente(s) · {money(summary.total, currencySymbol)}</p>
+            <p className="text-sm font-bold text-slate-500">{elapsedLabel} · {summary.count} cuenta(s) pendiente(s) · {money(summary.total, currencySymbol)}</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <input aria-label="Nombre de nueva cuenta" value={newName} onChange={event => setNewName(event.target.value)} placeholder={`Cuenta ${tickets.length + 1}`} className="w-40 rounded-xl border border-sky-200 bg-white px-3 py-2 font-semibold text-slate-900" />
@@ -114,7 +112,7 @@ const TableAccountsSheetsModal: React.FC<Props> = ({
         <div className="overflow-auto p-5">
           <div className="grid min-w-0 grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
             {openSheets.map((ticket, index) => {
-              const label = String(ticket.alias || ticket.barTabName || ticket.name || `Cuenta ${index + 1}`);
+              const label = getTableAccountLabel(ticket, index);
               const pendingParts = ticket.paymentFraction?.parts.filter(part => part.status === 'PENDING') || [];
               const pendingAmount = pendingParts.reduce((sum, part) => sum + Number(part.amount || 0), 0);
               const fiscal = fiscalByTicket.get(String(ticket.id));
@@ -126,7 +124,7 @@ const TableAccountsSheetsModal: React.FC<Props> = ({
                 <section key={ticket.id} className="flex min-h-[510px] min-w-0 flex-col overflow-hidden rounded-[1.5rem] border border-sky-100 bg-white shadow-sm">
                   <div className="border-b border-sky-100 bg-sky-50 px-4 py-3">
                     <div className="flex items-center justify-between gap-2"><span className="text-xs font-black uppercase tracking-wider text-blue-600">Cuenta {index + 1}</span><button type="button" disabled={busy} aria-label={`Renombrar ${label}`} onClick={() => { setEditingKey(String(ticket.id)); setEditingName(label); }} className="rounded-lg p-1 text-blue-600 disabled:opacity-40"><Pencil size={17} /></button></div>
-                    {editingKey === String(ticket.id) ? <form onSubmit={event => { event.preventDefault(); void run(async () => { if (!editingName.trim()) return; await onRenameAccount(ticket, editingName.trim()); setEditingKey(null); }); }} className="mt-2 flex gap-1"><input autoFocus aria-label="Nombre del comensal" value={editingName} onChange={event => setEditingName(event.target.value)} className="min-w-0 flex-1 rounded-lg border border-blue-200 px-2 py-1 font-semibold" /><button type="submit" aria-label="Guardar nombre" className="rounded-lg bg-blue-600 p-2 text-white"><Check size={16} /></button></form> : <h3 className="truncate text-xl font-black text-slate-900">{label}</h3>}
+                    {editingKey === String(ticket.id) ? <form onSubmit={event => { event.preventDefault(); void run(async () => { if (!editingName.trim()) return; await onRenameAccount(ticket, editingName.trim()); setEditingKey(null); }); }} className="mt-2 flex gap-1"><input autoFocus aria-label="Nombre del comensal" value={editingName} onChange={event => setEditingName(event.target.value)} className="min-w-0 flex-1 rounded-lg border border-blue-200 bg-white px-2 py-1 font-semibold text-slate-900" /><button type="submit" aria-label="Guardar nombre" className="rounded-lg bg-blue-600 p-2 text-white"><Check size={16} /></button></form> : <h3 className="truncate text-xl font-black text-slate-900">{label}</h3>}
                     <p className="text-xs font-semibold text-slate-500">{ticket.items?.length || 0} líneas · {new Date(ticket.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
                     {fractionDifference > 0 && <p className="mt-1 text-xs font-bold text-red-700">Cuotas y total fiscal difieren en {money(fractionDifference, currencySymbol)}. Reconciliar en POS.</p>}
                   </div>
@@ -144,7 +142,7 @@ const TableAccountsSheetsModal: React.FC<Props> = ({
                     <div className="flex justify-between border-t border-slate-200 pt-2 text-base font-black text-slate-900"><span>Total fiscal</span><span>{money(fiscal?.total ?? Number(ticket.total || 0), currencySymbol)}</span></div>
                     {ticket.paymentFraction && <div className="flex justify-between text-sm font-bold text-blue-700"><span>Cuotas pendientes</span><span>{money(pendingAmount, currencySymbol)}</span></div>}
                   </div>
-                  <div className="grid grid-cols-2 gap-2 p-3"><button type="button" disabled={busy || !ticket.items?.length || fractionDifference > 0} onClick={event => { if (!busyRef.current) onOpenAccount(ticket, event.timeStamp); }} className="table-account-action col-span-2 flex items-center justify-center gap-2 rounded-xl bg-blue-600 py-2 font-black text-white disabled:opacity-50"><CreditCard size={17} /> Cobrar en POS</button>{fractionDifference > 0 && <button type="button" disabled={busy} onClick={event => { if (!busyRef.current) onOpenAccount(ticket, event.timeStamp); }} className="col-span-2 rounded-xl bg-amber-100 py-2 font-bold text-amber-900 disabled:opacity-50">Abrir en POS para reconciliar</button>}<button type="button" aria-label={`Imprimir pre-cuenta de ${label}`} disabled={busy || !ticket.items?.length || fractionDifference > 0 || hasPaidParts} onClick={() => void run(() => onPrint([String(ticket.id)]))} className="rounded-xl border border-blue-200 bg-blue-50 px-2 py-2 text-xs font-bold text-blue-700 disabled:opacity-50"><Printer size={15} className="mr-1 inline" />Pre-cuenta</button><button type="button" disabled={busy || !!ticket.paymentFraction || transferableTickets.length < 1 || transferDestinations.length < 1} title={ticket.paymentFraction ? 'No disponible para cuentas fraccionadas' : transferDestinations.length < 1 ? 'Cree otra cuenta para transferir' : 'Transferir artículos'} onClick={() => { if (busyRef.current) return; setTransferSource(String(ticket.id)); setTransferTarget(''); setQuantities({}); }} className="rounded-xl border border-slate-200 px-2 py-2 text-xs font-bold text-slate-700 disabled:opacity-50"><ArrowRightLeft size={15} className="mr-1 inline" />Transferir</button>{ticket.paymentFraction && <p className="col-span-2 text-xs font-semibold text-amber-700">Transferencia no disponible para cuotas fraccionadas.</p>}</div>
+                  <div className="grid grid-cols-2 gap-2 p-3"><button type="button" disabled={busy || !ticket.items?.length || fractionDifference > 0} onClick={event => { const inputTimeStamp = event.timeStamp; void run(() => onOpenAccount(ticket, inputTimeStamp)); }} className="table-account-action table-account-checkout col-span-2 flex items-center justify-center gap-2 rounded-xl bg-blue-600 py-2 font-black text-white disabled:opacity-50"><CreditCard size={17} /> Cobrar en POS</button>{fractionDifference > 0 && <button type="button" disabled={busy} onClick={event => { const inputTimeStamp = event.timeStamp; void run(() => onOpenAccount(ticket, inputTimeStamp)); }} className="col-span-2 rounded-xl bg-amber-100 py-2 font-bold text-amber-900 disabled:opacity-50">Abrir en POS para reconciliar</button>}<button type="button" aria-label={`Imprimir pre-cuenta de ${label}`} disabled={busy || !ticket.items?.length || fractionDifference > 0 || hasPaidParts} onClick={() => void run(() => onPrint([String(ticket.id)]))} className="rounded-xl border border-blue-200 bg-blue-50 px-2 py-2 text-xs font-bold text-blue-700 disabled:opacity-50"><Printer size={15} className="mr-1 inline" />Pre-cuenta</button><button type="button" disabled={busy || !!ticket.paymentFraction || transferableTickets.length < 1 || transferDestinations.length < 1} title={ticket.paymentFraction ? 'No disponible para cuentas fraccionadas' : transferDestinations.length < 1 ? 'Cree otra cuenta para transferir' : 'Transferir artículos'} onClick={() => { if (busyRef.current) return; setTransferSource(String(ticket.id)); setTransferTarget(''); setQuantities({}); }} className="rounded-xl border border-slate-200 px-2 py-2 text-xs font-bold text-slate-700 disabled:opacity-50"><ArrowRightLeft size={15} className="mr-1 inline" />Transferir</button>{ticket.paymentFraction && <p className="col-span-2 text-xs font-semibold text-amber-700">Transferencia no disponible para cuotas fraccionadas.</p>}</div>
                 </section>
               );
             })}

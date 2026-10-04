@@ -184,6 +184,17 @@ input[type='number'] {
   background-color: #f0f9ff;
 }
 
+/* Keep the legacy light account row above, but give the sheets checkout
+   action its own high-contrast surface on Android WebView. */
+.table-account-action.table-account-checkout {
+  background-color: #2563eb;
+  color: #ffffff;
+}
+
+.table-account-action.table-account-checkout:active {
+  background-color: #1d4ed8;
+}
+
 .clic-pos-device-shell[data-touch-optimized='true'] input:not([type='checkbox']):not([type='radio']),
 .clic-pos-device-shell[data-touch-optimized='true'] select,
 .clic-pos-device-shell[data-touch-optimized='true'] textarea {
