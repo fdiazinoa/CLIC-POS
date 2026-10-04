@@ -13,6 +13,7 @@ export const LARGE_MASTER_SYNC_V3_CANARY = import.meta.env?.VITE_LARGE_MASTER_SY
 
 export interface LargeMasterSyncV3CanaryInput {
   erpBaseUrl: string;
+  v3BaseUrl: string;
   tenantId: string;
   erpTerminalId: string;
   posDeviceId: string;
@@ -63,7 +64,7 @@ export const createLargeMasterSyncV3CanaryTransport = (
       throw new Error('SYNC_V3_CANARY_PATH_INVALID');
     }
     // V3 chunk checksums cover the exact JSON text; native HTTP may reserialize JSON data.
-    const response = await fetchImpl(`${validateLargeMasterSyncV3CanaryUrl(input.erpBaseUrl)}${path}`, {
+    const response = await fetchImpl(`${validateLargeMasterSyncV3CanaryUrl(input.v3BaseUrl)}${path}`, {
       method: init.method,
       headers: buildLargeMasterSyncV3CanaryHeaders(input),
       signal: init.signal,
@@ -117,13 +118,14 @@ export const runLargeMasterSyncV3Canary = async (
 ): Promise<LargeMasterSyncV3CanaryResult> => {
   if (!(dependencies.enabled ?? LARGE_MASTER_SYNC_V3_CANARY)) throw new Error('SYNC_V3_CANARY_DISABLED');
   (dependencies.assertEmulator ?? assertLargeMasterSyncV3CanaryEmulator)();
-  const erpBaseUrl = validateLargeMasterSyncV3CanaryUrl(input.erpBaseUrl);
-  if (!input.erpBaseUrl || !input.tenantId || !input.erpTerminalId || !input.posDeviceId || !input.syncToken.trim()) {
-    throw new Error('Faltan URL ERP, tenant, terminal, device o syncToken para el canario V3.');
+  if (!input.erpBaseUrl || !input.v3BaseUrl || !input.tenantId || !input.erpTerminalId || !input.posDeviceId || !input.syncToken.trim()) {
+    throw new Error('Faltan URL ERP, URL Sync V3, tenant, terminal, device o syncToken para el canario V3.');
   }
+  const erpBaseUrl = validateLargeMasterSyncV3CanaryUrl(input.erpBaseUrl);
+  const v3BaseUrl = validateLargeMasterSyncV3CanaryUrl(input.v3BaseUrl);
   // Negotiate before opening SQLite. Calling initial-config first can legally
   // fall back to the legacy full catalog, which defeats this no-sales canary.
-  const normalizedInput = { ...input, erpBaseUrl };
+  const normalizedInput = { ...input, erpBaseUrl, v3BaseUrl };
   const requested = await dependencies.createNegotiator(normalizedInput, onMetric).requestSync();
   if ('fallback' in requested) return { status: 'legacy-fallback' };
   const store = await dependencies.getStore();
