@@ -2184,6 +2184,7 @@ const AppContent: React.FC = () => {
   const tableLockLifecycleVersionRef = useRef(0);
   const tableLockHeartbeatInFlightRef = useRef<Promise<ActiveTableEditLock | null> | null>(null);
   const rejectedTableSyncGenerationRef = useRef<Map<string, number>>(new Map());
+  const lastAcknowledgedTableTicketsRef = useRef<Map<string, ParkedTicket[]>>(new Map());
   const pendingTableLockReleasesRef = useRef<Map<string, PendingTableLockRelease>>(new Map());
   const lastTableInteractionAtRef = useRef(0);
   const closedRestaurantOrderIdsRef = useRef<Set<string>>(new Set(
@@ -9695,20 +9696,23 @@ const AppContent: React.FC = () => {
     tickets: ParkedTicket[],
     options: ParkedTicketSyncOptions = { reason: 'explicit' },
   ) => {
-    const rollbackRejectedTableLock = async (error: unknown, pendingSync: PendingClientTableSync | null) => {
+    const rollbackRejectedTableLock = async (error: unknown, pendingSync: PendingClientTableSync | null, rejectedToken?: string) => {
       if (!/TABLE_EDIT_LOCK_REQUIRED/.test(String((error as { code?: string; message?: string })?.code || '') + String(error))) return;
       const tableId = String(pendingSync?.tableId || '').trim();
       if (!tableId) return;
       rejectedTableSyncGenerationRef.current.set(tableId, (rejectedTableSyncGenerationRef.current.get(tableId) || 0) + 1);
-      tableLockLifecycleVersionRef.current += 1;
-      activeTableEditLockRef.current = null;
-      setActiveTableEditLock(null);
+      const currentLock = activeTableEditLockRef.current;
+      if (currentLock?.tableId === tableId && currentLock.token === rejectedToken) {
+        tableLockLifecycleVersionRef.current += 1;
+        activeTableEditLockRef.current = null;
+        setActiveTableEditLock(null);
+      }
       // Another queued edit for this table supersedes this pending operation.
       // It will observe the generation change and reconcile after it aborts.
       const ownsClientPending = pendingClientTableSyncRef.current === pendingSync;
       const ownsMasterPending = pendingMasterTableSyncRef.current === pendingSync;
       if (!ownsClientPending && !ownsMasterPending) return;
-      let authoritativeTableTickets = (parkedTickets || []).filter(ticket => parkedTicketReferencesTable(ticket, tableId));
+      let authoritativeTableTickets: ParkedTicket[] | null = null;
       try {
         const authoritative = await fetchAuthoritativeTableSnapshot({
           resolveUrl: () => resolveValidatedOperationalApiUrl('/api/mesas'),
@@ -9717,8 +9721,14 @@ const AppContent: React.FC = () => {
         authoritative.assertCurrentAuthority();
         authoritativeTableTickets = authoritative.parkedTickets.filter(ticket => parkedTicketReferencesTable(ticket, tableId));
       } catch (readError) {
-        console.warn('[TABLE_SYNC] Master no disponible para reconciliar; restaurando solo la mesa previa:', readError);
+        authoritativeTableTickets = lastAcknowledgedTableTicketsRef.current.get(tableId) || null;
+        if (!authoritativeTableTickets) {
+          console.warn('[TABLE_SYNC] Master no disponible y no hay baseline confirmado; se conserva PENDING para reconciliar:', readError);
+          return;
+        }
+        console.warn('[TABLE_SYNC] Master no disponible; restaurando baseline confirmado de esta mesa:', readError);
       }
+      lastAcknowledgedTableTicketsRef.current.set(tableId, authoritativeTableTickets);
       const currentTickets = masterOperationalSnapshotRef.current.parkedTickets || [];
       const reconciledTickets = reconcileRejectedTableTickets(currentTickets, authoritativeTableTickets, tableId);
       if (pendingClientTableSyncRef.current === pendingSync) {
@@ -9760,6 +9770,9 @@ const AppContent: React.FC = () => {
       const editLock = activeTableEditLockRef.current;
       const syncTableId = String(editLock?.tableId || '');
       const syncGeneration = rejectedTableSyncGenerationRef.current.get(syncTableId) || 0;
+      if (syncTableId && pendingClientTableSyncRef.current?.tableId !== syncTableId) {
+        lastAcknowledgedTableTicketsRef.current.set(syncTableId, (parkedTickets || []).filter(ticket => parkedTicketReferencesTable(ticket, syncTableId)));
+      }
       const tableSyncTickets = scopeTicketsForTableSync(validTickets, editLock?.tableId);
       const pendingSync: PendingClientTableSync = {
         id: 'current',
@@ -9811,6 +9824,7 @@ const AppContent: React.FC = () => {
           throw new Error(result?.message || `Master respondió HTTP ${response.response.status}`);
         }
         const sharedTickets = Array.isArray(result?.parkedTickets) ? result.parkedTickets : validTickets;
+        if (syncTableId) lastAcknowledgedTableTicketsRef.current.set(syncTableId, sharedTickets.filter(ticket => parkedTicketReferencesTable(ticket, syncTableId)));
         const responseRevision = Number(result?.revision || 0);
         if (Number.isFinite(responseRevision) && responseRevision > masterRestaurantRevisionRef.current) {
           masterRestaurantRevisionRef.current = responseRevision;
@@ -9847,7 +9861,7 @@ const AppContent: React.FC = () => {
       if (options.reason === 'explicit' || options.reason === 'customer_assigned') {
         try { await queuedSync; }
         catch (error) {
-          try { await rollbackRejectedTableLock(error, pendingSync); }
+          try { await rollbackRejectedTableLock(error, pendingSync, editLock?.token); }
           catch (rollbackError) { console.error('[TABLE_SYNC] No se pudo reconciliar rechazo de lock:', rollbackError); }
           throw error;
         }
@@ -9862,6 +9876,9 @@ const AppContent: React.FC = () => {
     const masterEditLock = servesAsNativeMaster ? activeTableEditLockRef.current : null;
     const syncTableId = String(masterEditLock?.tableId || '');
     const syncGeneration = rejectedTableSyncGenerationRef.current.get(syncTableId) || 0;
+    if (syncTableId && pendingMasterTableSyncRef.current?.tableId !== syncTableId) {
+      lastAcknowledgedTableTicketsRef.current.set(syncTableId, (parkedTickets || []).filter(ticket => parkedTicketReferencesTable(ticket, syncTableId)));
+    }
     const masterTableSyncTickets = scopeTicketsForTableSync(validTickets, masterEditLock?.tableId);
     const masterPendingSync: PendingClientTableSync | null = masterEditLock?.tableId
       ? {
@@ -9947,6 +9964,7 @@ const AppContent: React.FC = () => {
           }
           masterRestaurantRevisionRef.current = Math.max(masterRestaurantRevisionRef.current, responseRevision);
           const sharedTickets = Array.isArray(result?.parkedTickets) ? result.parkedTickets : validTickets;
+          if (syncTableId) lastAcknowledgedTableTicketsRef.current.set(syncTableId, sharedTickets.filter(ticket => parkedTicketReferencesTable(ticket, syncTableId)));
           const newerPendingSync = pendingMasterTableSyncRef.current;
           const effectiveSharedTickets = newerPendingSync && newerPendingSync !== masterPendingSync
             ? mergePendingClientTableTickets(sharedTickets, newerPendingSync)
@@ -10046,6 +10064,7 @@ const AppContent: React.FC = () => {
           throw new Error(result?.message || `No se pudo confirmar la orden local (HTTP ${response.response.status})`);
         }
         const sharedTickets = Array.isArray(result?.parkedTickets) ? result.parkedTickets : validTickets;
+        if (syncTableId) lastAcknowledgedTableTicketsRef.current.set(syncTableId, sharedTickets.filter(ticket => parkedTicketReferencesTable(ticket, syncTableId)));
         const newerPendingSync = pendingMasterTableSyncRef.current;
         const effectiveSharedTickets = newerPendingSync && newerPendingSync !== masterPendingSync
           ? mergePendingClientTableTickets(sharedTickets, newerPendingSync)
@@ -10086,7 +10105,7 @@ const AppContent: React.FC = () => {
       if (options.reason === 'explicit' || options.reason === 'customer_assigned') {
         try { await queuedSync; }
         catch (error) {
-          try { await rollbackRejectedTableLock(error, masterPendingSync); }
+          try { await rollbackRejectedTableLock(error, masterPendingSync, masterEditLock?.token); }
           catch (rollbackError) { console.error('[TABLE_SYNC] No se pudo reconciliar rechazo de lock:', rollbackError); }
           throw error;
         }

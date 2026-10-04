@@ -154,7 +154,7 @@ test('catalog cards use browser rendering virtualization and lazy image decode',
 });
 
 test('table state is applied before deferred persistence and reconciliation', () => {
-  assert.match(appSource, /if \(!changedTicketId\) writeCriticalCollectionsMirror\(validTickets, cashMovements\);\s*setParkedTickets\(validTickets\)/);
+  assert.match(appSource, /if \(!changedTicketId\) writeCriticalCollectionsMirror\(validTickets, cashMovements\);\s*masterOperationalSnapshotRef\.current\.parkedTickets = validTickets;\s*setParkedTickets\(validTickets\)/);
   assert.match(appSource, /const persistMasterTickets = async/);
   assert.match(appSource, /setCurrentView\('TABLE_MAP'\);[\s\S]*window\.setTimeout\(\(\) =>/);
   assert.match(posSource, /handleDispatchCommand\('table_exit', \{ backgroundTableExit: true \}\)/);

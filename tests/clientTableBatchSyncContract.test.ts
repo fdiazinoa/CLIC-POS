@@ -62,15 +62,19 @@ test('un heartbeat tardío no puede volver a bloquear una mesa liberada', () => 
     appSource.indexOf('const acquireTableEditLock'),
   );
   const heartbeatSource = appSource.slice(
-    appSource.indexOf("if (!activeTableEditLock || (currentView !== 'POS'"),
+    appSource.indexOf('const heartbeat = window.setInterval', appSource.indexOf('const acquireTableEditLock')),
     appSource.indexOf('const retryClientMasterConnection'),
   );
 
   assert.match(releaseSource, /pendingTableLockReleasesRef\.current/);
   assert.match(releaseSource, /phase: 'PERSIST_PENDING'/);
   assert.match(releaseSource, /tableLockLifecycleVersionRef\.current \+= 1/);
-  assert.match(heartbeatSource, /lifecycleVersion !== tableLockLifecycleVersionRef\.current/);
-  assert.match(heartbeatSource, /currentLock\?\.token !== heartbeatToken/);
+  assert.match(releaseSource, /const heartbeatInFlight = tableLockHeartbeatInFlightRef\.current/);
+  assert.match(releaseSource, /const refreshedLock = await heartbeatInFlight\?\.catch/);
+  assert.match(releaseSource, /token: releaseLock\.token/);
+  assert.match(heartbeatSource, /if \(!lock \|\| tableLockHeartbeatInFlightRef\.current\) return/);
+  assert.match(heartbeatSource, /lifecycleVersion === tableLockLifecycleVersionRef\.current/);
+  assert.match(heartbeatSource, /currentLock\?\.token === lock\.token/);
 });
 
 test('la cola pendiente solo se limpia después de una confirmación exitosa de la Master', () => {
@@ -78,15 +82,17 @@ test('la cola pendiente solo se limpia después de una confirmación exitosa de 
     appSource.indexOf('const handleUpdateParkedTickets'),
     appSource.indexOf('const handleParkedOrderSplitFromMap'),
   );
-  assert.match(updateHandler, /if \(!changedTicketId\) writeCriticalCollectionsMirror\(validTickets, cashMovements\);\s*setParkedTickets\(validTickets\);/);
+  assert.match(updateHandler, /if \(!changedTicketId\) writeCriticalCollectionsMirror\(validTickets, cashMovements\);\s*masterOperationalSnapshotRef\.current\.parkedTickets = validTickets;\s*setParkedTickets\(validTickets\);/);
   assert.match(updateHandler, /if \(options\.deferRemote\) \{\s*window\.setTimeout\(\(\) => void persistLocal\(\), 0\);\s*return;/);
   assert.match(updateHandler, /requestAnimationFrame\(\(\) => window\.setTimeout\(resolve, 0\)\)/);
   assert.match(updateHandler, /if \(!response\.response\.ok \|\| result\?\.success === false\)/);
-  assert.match(updateHandler, /await clearPendingClientTableSync\(\)/);
+  const successfulClientSync = updateHandler.slice(updateHandler.indexOf('const syncOperation = async () =>'), updateHandler.indexOf('const queuedSync = parkedTicketSyncQueueRef.current'));
+  assert.match(successfulClientSync, /await clearPendingClientTableSync\(\)/);
   assert.ok(
-    updateHandler.indexOf('await clearPendingClientTableSync()')
-      > updateHandler.indexOf('if (!response.response.ok || result?.success === false)'),
+    successfulClientSync.indexOf('await clearPendingClientTableSync()')
+      > successfulClientSync.indexOf('if (!response.response.ok || result?.success === false)'),
   );
+  assert.match(updateHandler, /rollbackRejectedTableLock\(error, pendingSync, editLock\?\.token\)/);
 });
 
 test('Master y Cliente esperan la confirmación de la orden antes de abandonar la mesa', () => {
@@ -94,7 +100,8 @@ test('Master y Cliente esperan la confirmación de la orden antes de abandonar l
     appSource.indexOf('const handleUpdateParkedTickets'),
     appSource.indexOf('const handleParkedOrderSplitFromMap'),
   );
-  assert.equal((updateHandler.match(/if \(options\.reason === 'explicit' \|\| options\.reason === 'customer_assigned'\) \{\s*await queuedSync;/g) || []).length, 2);
+  assert.equal((updateHandler.match(/if \(options\.reason === 'explicit' \|\| options\.reason === 'customer_assigned'\) \{\s*try \{ await queuedSync; \}\s*catch \(error\) \{/g) || []).length, 2);
+  assert.equal((updateHandler.match(/catch \(rollbackError\) \{ console\.error\([^\n]+\); \}\s*throw error;/g) || []).length, 2);
 
   const backToMap = posSource.slice(
     posSource.indexOf('const handleBackToMap'),
