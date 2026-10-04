@@ -2,7 +2,6 @@ import type { BusinessConfig, Customer, ParkedTicket, Table, TerminalConfig } fr
 import { calculateTaxBreakdownFromItems, consolidateTaxBreakdownForDisplay } from './fiscalBreakdown';
 import { resolveAppliedServiceTaxPolicy } from './serviceTaxPolicy';
 import { shouldApplyRestaurantServiceCharge } from './orderServiceType';
-import { calculateRestaurantServiceCharge } from './businessVertical';
 import { applyPromotions } from './promotionEngine';
 
 const round2 = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
@@ -20,13 +19,13 @@ export const buildTableAccountFiscalSummary = (
   // POS checkout applies promotions to a derived cart. Keep parked line identity and
   // prices untouched; only the fiscal/printed representation uses processed items.
   const items = applyPromotions(ticket.items || [], config, terminalId, customer);
-  const subtotal = round2(items.reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0), 0));
+  const subtotal = items.reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0), 0);
   const discountValue = Number(ticket.discountValue);
   const hasDiscountRule = ticket.discountValue != null && Number.isFinite(discountValue)
     && (ticket.discountType === 'PERCENT' || ticket.discountType === 'FIXED');
-  const discountTotal = round2(Math.min(subtotal, Math.max(0, hasDiscountRule
-    ? ticket.discountType === 'PERCENT' ? subtotal * discountValue / 100 : discountValue
-    : Number(ticket.discountAmount || 0))));
+  const discountTotal = Math.min(subtotal, Math.max(0, hasDiscountRule
+    ? ticket.discountType === 'PERCENT' ? subtotal * (discountValue / 100) : discountValue
+    : Number(ticket.discountAmount || 0)));
   // Checkout prefers the current customer record over the snapshot captured
   // when the table was parked; only fall back when the customer is unavailable.
   const taxExempt = customer ? customer.isTaxExempt === true : ticket.customerSnapshot?.isTaxExempt === true;
@@ -39,7 +38,7 @@ export const buildTableAccountFiscalSummary = (
     taxExempt,
   }), config.taxes);
   const taxTotal = round2(taxBreakdown.reduce((sum, tax) => sum + tax.amount, 0));
-  const netSubtotal = round2(subtotal - discountTotal - (isTaxIncluded ? taxTotal : 0));
+  const netSubtotal = subtotal - discountTotal - (isTaxIncluded ? taxTotal : 0);
   const shouldApplyTip = shouldApplyRestaurantServiceCharge({
     isRestaurantMode: true,
     serviceType: 'DINE_IN',
@@ -52,7 +51,7 @@ export const buildTableAccountFiscalSummary = (
     ? Number(policy.legalTip?.percentage ?? config.tipsConfig?.serviceCharge?.percentage ?? 0)
     : 0;
   const serviceChargeAmount = shouldApplyTip
-    ? calculateRestaurantServiceCharge(subtotal, discountTotal, serviceChargeRate)
+    ? (subtotal - discountTotal) * (serviceChargeRate / 100)
     : 0;
   const total = round2(netSubtotal + taxTotal + serviceChargeAmount);
   return { items, subtotal, netSubtotal, discountTotal, taxBreakdown, taxTotal, serviceChargeAmount, serviceChargeRate, total, isTaxIncluded, taxExempt };

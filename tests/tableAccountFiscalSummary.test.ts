@@ -159,19 +159,76 @@ test('matriz POS: promoción → descuento porcentual/fijo → ITBIS → propina
     const posTax = scenario.exempt ? 0 : calculateTaxBreakdownFromItems(posCart, config, {
       discountAmount: posDiscount, isTaxIncluded: scenario.included, terminalConfig: terminal.config,
     }).reduce((sum, tax) => sum + tax.amount, 0);
-    const posTip = Math.round((gross - posDiscount) * 10) / 100;
+    const posTip = (gross - posDiscount) * 0.10;
     const posTotal = Math.round((gross - posDiscount + (scenario.included ? 0 : posTax) + posTip) * 100) / 100;
     const fiscal = buildTableAccountFiscalSummary(order, table, config, terminal.config, scenario.included, terminal.id, customer);
     assert.equal(fiscal.subtotal, gross, scenario.name);
     assert.equal(fiscal.discountTotal, posDiscount, scenario.name);
     assert.equal(fiscal.taxTotal, scenario.tax, scenario.name);
     assert.equal(fiscal.taxTotal, posTax, scenario.name);
-    assert.equal(fiscal.serviceChargeAmount, scenario.tip, scenario.name);
+    assert.ok(Math.abs(fiscal.serviceChargeAmount - scenario.tip) < 0.000001, scenario.name);
     assert.equal(fiscal.serviceChargeAmount, posTip, scenario.name);
     assert.equal(fiscal.total, scenario.total, scenario.name);
     assert.equal(fiscal.total, posTotal, scenario.name);
     assert.equal(order.items[0].price, 100, scenario.name);
   }
+});
+
+test('matriz de centavos sigue precisión POS hasta el total fiscal final', () => {
+  const values = [1.03, 2.37, 5.55, 9.99, 10.03, 10.05, 10.07, 11.11, 19.97, 20.01, 33.33, 99.99];
+  for (const [index, price] of values.entries()) {
+    const config = getInitialConfig(SubVertical.RESTAURANT);
+    if (index % 2 === 0 && price !== 10.03) config.promotions = [allPromotion()];
+    const order = ticket(1, price);
+    order.items[0].price = price;
+    order.discountType = index % 3 === 0 ? 'FIXED' : 'PERCENT';
+    order.discountValue = order.discountType === 'FIXED' ? 0.11 : 10;
+    order.discountAmount = 0; // no sustituye la regla persistida
+    const included = index % 2 === 1;
+    const terminal = config.terminals[0];
+    const posCart = applyPromotions(order.items, config, terminal.id);
+    const gross = posCart.reduce((sum, line) => sum + line.price * line.quantity, 0);
+    const discount = order.discountType === 'PERCENT' ? gross * (10 / 100) : Math.min(0.11, gross);
+    const tax = calculateTaxBreakdownFromItems(posCart, config, {
+      discountAmount: discount, isTaxIncluded: included, terminalConfig: terminal.config,
+    }).reduce((sum, line) => sum + line.amount, 0);
+    const tip = (gross - discount) * 0.10;
+    const posTotal = Math.round((gross - discount + (included ? 0 : tax) + tip + Number.EPSILON) * 100) / 100;
+    const fiscal = buildTableAccountFiscalSummary(order, table, config, terminal.config, included, terminal.id);
+    assert.equal(fiscal.subtotal, gross, `bruto ${price}`);
+    assert.equal(fiscal.discountTotal, discount, `descuento ${price}`);
+    assert.equal(fiscal.taxTotal, tax, `ITBIS ${price}`);
+    assert.equal(fiscal.serviceChargeAmount, tip, `propina ${price}`);
+    assert.equal(fiscal.total, posTotal, `total ${price}`);
+    if (price === 10.03) assert.equal(fiscal.total, 11.55);
+  }
+});
+
+test('cantidad fraccionaria y promoción conservan precisión POS hasta 15.66', () => {
+  const config = getInitialConfig(SubVertical.RESTAURANT);
+  config.promotions = [allPromotion()];
+  const terminal = config.terminals[0];
+  const order = ticket(4.295, 0);
+  order.items[0].price = 3.75;
+  order.discountType = 'PERCENT';
+  order.discountValue = 5;
+  order.discountAmount = 0.81;
+  const posCart = applyPromotions(order.items, config, terminal.id);
+  assert.equal(posCart[0].price, 3);
+  const gross = posCart.reduce((sum, line) => sum + line.price * line.quantity, 0);
+  const discount = gross * (5 / 100);
+  const tax = calculateTaxBreakdownFromItems(posCart, config, {
+    discountAmount: discount, isTaxIncluded: false, terminalConfig: terminal.config,
+  }).reduce((sum, line) => sum + line.amount, 0);
+  const tip = (gross - discount) * 0.10;
+  const posTotal = Math.round((gross - discount + tax + tip + Number.EPSILON) * 100) / 100;
+  const fiscal = buildTableAccountFiscalSummary(order, table, config, terminal.config, false, terminal.id);
+  assert.equal(posTotal, 15.66);
+  assert.equal(fiscal.subtotal, gross);
+  assert.equal(fiscal.discountTotal, discount);
+  assert.equal(fiscal.taxTotal, tax);
+  assert.equal(fiscal.serviceChargeAmount, tip);
+  assert.equal(fiscal.total, posTotal);
 });
 
 test('descuento legado sin regla conserva importe guardado', () => {
