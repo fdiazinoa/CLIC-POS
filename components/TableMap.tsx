@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useCallback, useRef, useEffect, useLayoutEffect } from 'react';
 import { freezeCount } from '../diagnostics/freezeCounters';
 import { getTableLatencyQaState, tableLatencyQaEnabled, tableLatencyQaMark } from '../diagnostics/tableLatencyQa';
-import { Room, Table, User as UserType, ParkedTicket, CartItem, RoleDefinition, Permission, BusinessConfig, TerminalConfig } from '../types';
+import { Room, Table, User as UserType, ParkedTicket, CartItem, RoleDefinition, Permission, BusinessConfig, Customer, TerminalConfig } from '../types';
 import {
     User,
     Lock,
@@ -92,6 +92,8 @@ interface TableMapProps {
     onTransferAccountItems?: (table: Table, sourceId: string, targetId: string, quantities: Record<string, number>) => Promise<void>;
     fiscalConfig?: BusinessConfig;
     terminalTaxConfig?: TerminalConfig;
+    accountTerminalId?: string;
+    accountCustomers?: Customer[];
     isTaxIncluded?: boolean;
     /** Restaurante: persiste división de cuenta desde el mapa (órdenes en espera) */
     onParkedOrderSplitResult?: (orderId: string, remainingItems: CartItem[], newTicketItems: CartItem[], extraNewTickets?: CartItem[][], splitCount?: number) => void | Promise<void>;
@@ -538,6 +540,8 @@ const TableMap: React.FC<TableMapProps> = ({
     onTransferAccountItems,
     fiscalConfig,
     terminalTaxConfig,
+    accountTerminalId,
+    accountCustomers,
     isTaxIncluded,
     onParkedOrderSplitResult,
     onOpenTableLayoutDesigner,
@@ -2427,6 +2431,8 @@ const TableMap: React.FC<TableMapProps> = ({
                         currencySymbol={currencySymbol}
                         fiscalConfig={fiscalConfig}
                         terminalTaxConfig={terminalTaxConfig}
+                        terminalId={accountTerminalId}
+                        customers={accountCustomers}
                         isTaxIncluded={isTaxIncluded}
                         onClose={() => closeTablePreview(selectedAccountTable, () => setSelectedAccountTable(null))}
                         onOpenAccount={(ticket, inputTimeStamp) => {

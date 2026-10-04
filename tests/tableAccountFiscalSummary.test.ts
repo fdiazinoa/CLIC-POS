@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { getInitialConfig } from '../constants';
-import { SubVertical, type ParkedTicket, type Table } from '../types';
+import { SubVertical, type ParkedTicket, type Promotion, type Table } from '../types';
 import { calculateTaxBreakdownFromItems } from '../utils/fiscalBreakdown';
 import { buildTableAccountFiscalSummary, getPaymentFractionFiscalDifference } from '../utils/tableAccountFiscalSummary';
+import { applyPromotions } from '../utils/promotionEngine';
 
 const table = { id: 'mesa-7', nombre: 'Mesa 7', guests: 2 } as Table;
 const ticket = (quantity: number, total: number): ParkedTicket => ({
@@ -64,4 +65,41 @@ test('bloquea cuotas que no reconcilian con total fiscal y tolera un centavo', (
   assert.equal(getPaymentFractionFiscalDifference(order, 256), 56);
   assert.equal(getPaymentFractionFiscalDifference(order, 200.01), 0);
   assert.equal(getPaymentFractionFiscalDifference(order, 200.02), 0.02);
+});
+
+const allPromotion = (): Promotion => ({
+  id: 'promo-all-20', name: '20% de descuento', type: 'DISCOUNT', targetType: 'ALL',
+  priority: 10, benefitValue: 20,
+} as Promotion);
+
+test('pre-cuenta usa promoción ALL del POS sin modificar la línea estacionada', () => {
+  const config = getInitialConfig(SubVertical.RESTAURANT);
+  config.promotions = [allPromotion()];
+  config.serviceTaxPolicies = { DINE_IN: { legalTip: { enabled: false, percentage: 0 } } };
+  const order = ticket(1, 100);
+  order.items[0].appliedTaxIds = [];
+  const before = JSON.stringify(order.items);
+  const fiscal = buildTableAccountFiscalSummary(order, table, config, config.terminals[0].config, false, config.terminals[0].id);
+  assert.equal(fiscal.items[0].price, 80);
+  assert.equal(fiscal.subtotal, 80);
+  assert.equal(fiscal.total, 80);
+  assert.equal(JSON.stringify(order.items), before);
+});
+
+test('promoción, descuento global e ITBIS coinciden con el carrito procesado del POS', () => {
+  const config = getInitialConfig(SubVertical.RESTAURANT);
+  config.promotions = [allPromotion()];
+  config.serviceTaxPolicies = { DINE_IN: { legalTip: { enabled: false, percentage: 0 } } };
+  const order = ticket(1, 100);
+  order.discountAmount = 10;
+  const processedCart = applyPromotions(order.items, config, config.terminals[0].id);
+  const posTax = calculateTaxBreakdownFromItems(processedCart, config, {
+    discountAmount: 10, isTaxIncluded: false, terminalConfig: config.terminals[0].config,
+  });
+  const fiscal = buildTableAccountFiscalSummary(order, table, config, config.terminals[0].config, false, config.terminals[0].id);
+  assert.equal(fiscal.subtotal, 80);
+  assert.equal(fiscal.discountTotal, 10);
+  assert.equal(fiscal.taxTotal, posTax.reduce((sum, tax) => sum + tax.amount, 0));
+  assert.equal(fiscal.taxTotal, 12.6);
+  assert.equal(fiscal.total, 82.6);
 });

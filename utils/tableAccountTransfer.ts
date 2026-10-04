@@ -1,4 +1,4 @@
-import type { BusinessConfig, CartItem, ParkedTicket, Table, TerminalConfig } from '../types';
+import type { BusinessConfig, CartItem, Customer, ParkedTicket, Table, TerminalConfig } from '../types';
 import { buildTableAccountFiscalSummary } from './tableAccountFiscalSummary';
 import { parkedTicketBelongsToTable } from './parkedTicketTableMembership';
 import { isFullyPaidParkedTicket } from './paymentFractions';
@@ -13,6 +13,8 @@ export const transferTableAccountItems = (
   config: BusinessConfig,
   terminalConfig: TerminalConfig | undefined,
   isTaxIncluded: boolean,
+  terminalId = 'T1',
+  customers: Customer[] = [],
 ): ParkedTicket[] => {
   if (!sourceId || !targetId || sourceId === targetId) throw new Error('Seleccione dos cuentas distintas de la mesa.');
   const source = tickets.find(ticket => String(ticket.id) === sourceId);
@@ -42,7 +44,8 @@ export const transferTableAccountItems = (
   const nextSource = { ...source, items: remaining };
   const nextTargetItems = [...target.items, ...moved];
   const nextTarget = { ...target, items: nextTargetItems };
-  nextSource.total = buildTableAccountFiscalSummary(nextSource, table, config, terminalConfig, isTaxIncluded).total;
-  nextTarget.total = buildTableAccountFiscalSummary(nextTarget, table, config, terminalConfig, isTaxIncluded).total;
+  const customerFor = (ticket: ParkedTicket) => customers.find(customer => String(customer.id) === String(ticket.customerId || ''));
+  nextSource.total = buildTableAccountFiscalSummary(nextSource, table, config, terminalConfig, isTaxIncluded, terminalId, customerFor(source)).total;
+  nextTarget.total = buildTableAccountFiscalSummary(nextTarget, table, config, terminalConfig, isTaxIncluded, terminalId, customerFor(target)).total;
   return tickets.map(ticket => String(ticket.id) === sourceId ? nextSource : String(ticket.id) === targetId ? nextTarget : ticket);
 };

@@ -132,6 +132,7 @@ import { calculateTransactionTaxSummary } from './utils/taxSummary';
 import { calculateTransactionFiscalSummary, freezeAuthoritativeLineFiscalAmounts } from './utils/fiscalBreakdown';
 import { buildTableAccountFiscalSummary, getPaymentFractionFiscalDifference } from './utils/tableAccountFiscalSummary';
 import { transferTableAccountItems } from './utils/tableAccountTransfer';
+import { fetchAuthoritativeTableSnapshot } from './utils/authoritativeTableSnapshot';
 import { isFullyPaidParkedTicket } from './utils/paymentFractions';
 import { resolveAppliedServiceTaxPolicy } from './utils/serviceTaxPolicy';
 import { shouldApplyRestaurantServiceCharge } from './utils/orderServiceType';
@@ -12975,6 +12976,8 @@ const AppContent: React.FC = () => {
                 currencySymbol={config.currencySymbol}
                 fiscalConfig={config}
                 terminalTaxConfig={getCurrentTerminal()?.config}
+                accountTerminalId={getCurrentTerminal()?.id || 'T1'}
+                accountCustomers={customers}
                 isTaxIncluded={Boolean(resolveKioskActiveTariff(config, getCurrentTerminal()?.config)?.taxIncluded)}
                 currentUser={currentUser!}
                 localTableLockOwnerId={String(deviceId || getCurrentTerminal()?.config?.currentDeviceId || '')}
@@ -12991,16 +12994,17 @@ const AppContent: React.FC = () => {
                   if (isClientTerminalMode() && pendingClientTableSyncRef.current) {
                     throw new Error('La mesa tiene cambios pendientes de confirmar en la Master.');
                   }
-                  const response = await fetch(await resolveValidatedOperationalApiUrl('/api/mesas'));
-                  if (!response.ok) throw new Error(`MASTER_TABLES_HTTP_${response.status}`);
-                  const snapshot = await response.json();
-                  if (!Array.isArray(snapshot?.parkedTickets)) throw new Error('MASTER_TABLES_MISSING_TICKETS');
+                  const snapshot = await fetchAuthoritativeTableSnapshot({
+                    resolveUrl: () => resolveValidatedOperationalApiUrl('/api/mesas'),
+                    captureAuthority: isClientTerminalMode() ? () => clientOperationalResolverRef.current!.captureAuthority() : undefined,
+                  });
                   const revision = Number(snapshot.revision || 0);
                   if (revision > 0 && revision < masterRestaurantRevisionRef.current) throw new Error('MASTER_TABLES_STALE_SNAPSHOT');
                   if (revision > masterRestaurantRevisionRef.current) masterRestaurantRevisionRef.current = revision;
                   const terminalConfig = getCurrentTerminal()?.config;
                   const isTaxIncluded = Boolean(resolveKioskActiveTariff(config, terminalConfig)?.taxIncluded);
-                  const nextTickets = transferTableAccountItems(snapshot.parkedTickets, table, sourceId, targetId, quantities, config, terminalConfig, isTaxIncluded);
+                  const nextTickets = transferTableAccountItems(snapshot.parkedTickets, table, sourceId, targetId, quantities, config, terminalConfig, isTaxIncluded, getCurrentTerminal()?.id || 'T1', customers);
+                  snapshot.assertCurrentAuthority();
                   await handleUpdateParkedTickets(nextTickets, { reason: 'explicit' });
                 }}
                 onPrintPrecheck={async (table, requestedTicketIds) => {
@@ -13014,10 +13018,10 @@ const AppContent: React.FC = () => {
                       alert('Hay cambios de mesa pendientes de confirmar en la Master. Espere la sincronización antes de imprimir.');
                       return false;
                     }
-                    const snapshotResponse = await fetch(await resolveValidatedOperationalApiUrl('/api/mesas'));
-                    if (!snapshotResponse.ok) throw new Error(`MASTER_TABLES_HTTP_${snapshotResponse.status}`);
-                    const snapshot = await snapshotResponse.json();
-                    if (!Array.isArray(snapshot?.parkedTickets)) throw new Error('MASTER_TABLES_MISSING_TICKETS');
+                    const snapshot = await fetchAuthoritativeTableSnapshot({
+                      resolveUrl: () => resolveValidatedOperationalApiUrl('/api/mesas'),
+                      captureAuthority: isClientTerminalMode() ? () => clientOperationalResolverRef.current!.captureAuthority() : undefined,
+                    });
                     const snapshotRevision = Number(snapshot.revision || 0);
                     if (snapshotRevision > 0 && snapshotRevision < masterRestaurantRevisionRef.current) throw new Error('MASTER_TABLES_STALE_SNAPSHOT');
                     if (snapshotRevision > masterRestaurantRevisionRef.current) masterRestaurantRevisionRef.current = snapshotRevision;
@@ -13036,7 +13040,7 @@ const AppContent: React.FC = () => {
                     }
                     const terminalConfig = getCurrentTerminal()?.config;
                     const isTaxIncluded = Boolean(resolveKioskActiveTariff(config, terminalConfig)?.taxIncluded);
-                    const fiscals = orders.map(order => order && buildTableAccountFiscalSummary(order, table, config, terminalConfig, isTaxIncluded));
+                    const fiscals = orders.map(order => order && buildTableAccountFiscalSummary(order, table, config, terminalConfig, isTaxIncluded, getCurrentTerminal()?.id || 'T1', customers.find(customer => String(customer.id) === String(order.customerId || ''))));
                     if (orders.some((order, index) => order && (
                       order.paymentFraction?.parts.some(part => part.status === 'PAID')
                       || getPaymentFractionFiscalDifference(order, fiscals[index]?.total ?? 0) > 0
@@ -13051,8 +13055,9 @@ const AppContent: React.FC = () => {
                       if (!order) continue;
                       const fiscal = fiscals[index]!;
                       try {
+                        snapshot.assertCurrentAuthority();
                         const printed = await printPrecuenta(config, {
-                          items: order.items,
+                          items: fiscal.items,
                           subtotal: fiscal.subtotal,
                           netSubtotal: fiscal.netSubtotal,
                           isTaxIncluded: fiscal.isTaxIncluded,
@@ -13070,6 +13075,7 @@ const AppContent: React.FC = () => {
                           tableDisplayLabel: order.tableDisplayLabel,
                           terminalId: getCurrentTerminal()?.id || 'T1',
                         });
+                        snapshot.assertCurrentAuthority();
                         if (!printed) { completed = false; break; }
                         printedIds.add(String(order.id));
                       } catch (error) { completed = false; uncertainError = error; break; }
@@ -13085,6 +13091,7 @@ const AppContent: React.FC = () => {
                         })),
                       } : ticket);
                       try {
+                        snapshot.assertCurrentAuthority();
                         await handleUpdateParkedTickets(nextTickets, { reason: 'explicit' });
                       } catch (error) {
                         console.error('La Master no confirmó las marcas de pre-cuenta:', error);

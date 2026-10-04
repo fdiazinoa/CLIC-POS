@@ -46,4 +46,6 @@ test('HTML y App usan las mismas líneas fiscales y lote sin repetir ticketId', 
   assert.match(app, /authoritativeTickets\.map\(ticket => printedIds\.has/);
   assert.match(app, /resolveValidatedOperationalApiUrl\('\/api\/mesas'\)/);
   assert.match(app, /masterRestaurantRevisionRef\.current/);
+  assert.match(app, /items: fiscal\.items/);
+  assert.match(app, /snapshot\.assertCurrentAuthority\(\)/);
 });

@@ -47,3 +47,17 @@ test('permite cuentas de una mesa unida sin perder la identidad de origen', () =
   assert.equal(next[0].items[0].quantity, 1);
   assert.equal(next[1].items[0].quantity, 1);
 });
+
+test('transferencia conserva el total promocionado del POS sin mutar líneas estacionadas', () => {
+  const promoConfig = getInitialConfig(SubVertical.RESTAURANT);
+  promoConfig.promotions = [{ id: 'all-20', name: '20%', type: 'DISCOUNT', priority: 10, targetType: 'ALL', benefitValue: 20 } as any];
+  promoConfig.serviceTaxPolicies = { DINE_IN: { legalTip: { enabled: false, percentage: 0 } } };
+  const original = [ticket('a', [item('line-a', 2)]), ticket('b', [])];
+  original[0].items[0].appliedTaxIds = [];
+  const next = transferTableAccountItems(original, table, 'a', 'b', { 'line-a': 1 }, promoConfig, promoConfig.terminals[0].config, false, promoConfig.terminals[0].id);
+  assert.equal(next[0].total, 80);
+  assert.equal(next[1].total, 80);
+  assert.equal(next[0].items[0].price, 100);
+  assert.equal(next[1].items[0].price, 100);
+  assert.equal(original[0].items[0].quantity, 2);
+});

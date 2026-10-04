@@ -1,8 +1,9 @@
-import type { BusinessConfig, ParkedTicket, Table, TerminalConfig } from '../types';
+import type { BusinessConfig, Customer, ParkedTicket, Table, TerminalConfig } from '../types';
 import { calculateTaxBreakdownFromItems, consolidateTaxBreakdownForDisplay } from './fiscalBreakdown';
 import { resolveAppliedServiceTaxPolicy } from './serviceTaxPolicy';
 import { shouldApplyRestaurantServiceCharge } from './orderServiceType';
 import { calculateRestaurantServiceCharge } from './businessVertical';
+import { applyPromotions } from './promotionEngine';
 
 const round2 = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
 
@@ -13,12 +14,17 @@ export const buildTableAccountFiscalSummary = (
   config: BusinessConfig,
   terminalConfig: TerminalConfig | undefined,
   isTaxIncluded: boolean,
+  terminalId = 'T1',
+  customer?: Customer,
 ) => {
-  const subtotal = round2((ticket.items || []).reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0), 0));
+  // POS checkout applies promotions to a derived cart. Keep parked line identity and
+  // prices untouched; only the fiscal/printed representation uses processed items.
+  const items = applyPromotions(ticket.items || [], config, terminalId, customer);
+  const subtotal = round2(items.reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0), 0));
   const discountTotal = round2(Math.min(subtotal, Math.max(0, Number(ticket.discountAmount || 0))));
   const taxExempt = ticket.customerSnapshot?.isTaxExempt === true;
   const policy = resolveAppliedServiceTaxPolicy(config, terminalConfig, 'DINE_IN');
-  const taxBreakdown = consolidateTaxBreakdownForDisplay(calculateTaxBreakdownFromItems(ticket.items || [], config, {
+  const taxBreakdown = consolidateTaxBreakdownForDisplay(calculateTaxBreakdownFromItems(items, config, {
     discountAmount: discountTotal,
     isTaxIncluded,
     terminalConfig,
@@ -42,7 +48,7 @@ export const buildTableAccountFiscalSummary = (
     ? calculateRestaurantServiceCharge(subtotal, discountTotal, serviceChargeRate)
     : 0;
   const total = round2(netSubtotal + taxTotal + serviceChargeAmount);
-  return { subtotal, netSubtotal, discountTotal, taxBreakdown, taxTotal, serviceChargeAmount, serviceChargeRate, total, isTaxIncluded, taxExempt };
+  return { items, subtotal, netSubtotal, discountTotal, taxBreakdown, taxTotal, serviceChargeAmount, serviceChargeRate, total, isTaxIncluded, taxExempt };
 };
 
 export const getPaymentFractionFiscalDifference = (ticket: ParkedTicket, fiscalTotal: number): number => {
