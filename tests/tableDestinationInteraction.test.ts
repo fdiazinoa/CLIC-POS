@@ -146,14 +146,15 @@ test('real table branches own selectors and hydrated POS destinations without bo
           completeAfterDurableCommit: async (_reference: string, persist: () => Promise<void>) => persist(),
         };
       };
-      for (const name of ['beginTableInteraction', 'expectLocalDestination', 'openPosTable']) bindings[name] = declaration('TableMap', name, bindings);
+      for (const name of ['beginTableInteraction', 'expectLocalDestination', 'openPosTable', 'requireFreshAccountLock']) bindings[name] = declaration('TableMap', name, bindings);
       const open = declaration('TableMap', 'handleTableAction', bindings);
       const commitLocal = (visible = true) => localCommitEffect({ ...bindings, ...state, visible })();
       return { state, refs, bindings, open, opened, cancelled, commitLocal };
     };
 
     for (const [target, table, overrides] of [
-      ['TABLE_ACCOUNTS', baseTable, { getTableTickets: () => [{ id: 'existing' }] }],
+      ['TABLE_ACCOUNTS', baseTable, { getTableTickets: () => [{ id: 'account-1' }, { id: 'account-2' }] }],
+      ['TABLE_ACCOUNTS', baseTable, { getTableTickets: () => [{ id: 'fractioned', paymentFraction: { parts: [{ index: 1, status: 'PENDING' }, { index: 2, status: 'PENDING' }] } }] }],
       ['BAR_TABS', { ...baseTable, shape: 'BAR' }, {}],
       ['TABLE_NOTICE', { ...baseTable, joinedTableName: 'Joined' }, {}],
       ['TABLE_PREVIEW', baseTable, { isRestaurantMode: false }],
@@ -186,7 +187,7 @@ test('real table branches own selectors and hydrated POS destinations without bo
     const locked = setup();
     const openingRef = { current: null as string | null };
     const selectNode = declaration('TableMap', 'handleNodeSelect', {
-      ...locked.bindings, openingTableIdRef: openingRef, transferSelection: null,
+      ...locked.bindings, openingTableIdRef: openingRef, subtotalPrintBusyRef: { current: false }, transferSelection: null,
       handleTableAction: () => assert.fail('locked node must not open'),
       handleTransferTableClick: () => false, setOpeningTableId() {},
     });
@@ -198,6 +199,7 @@ test('real table branches own selectors and hydrated POS destinations without bo
     assert.equal(locked.refs.openTraceRef.current, lockedTrace, 'single-flight guard remains unchanged');
     for (const [table, overrides, order] of [
       [{ ...baseTable, status: 'OCCUPIED', currentOrderId: 'existing' }, {}, 'existing'],
+      [baseTable, { getTableTickets: () => [{ id: 'single-account' }] }, 'single-account'],
       [baseTable, { onUpdateParkedTickets() {}, onUpdateTables() {} }, 'created-account'],
       [baseTable, { onOpenTable: async () => ({ ...baseTable, currentOrderId: 'opened-account' }) }, 'opened-account'],
       [baseTable, {}, 'http-account'],
@@ -209,13 +211,13 @@ test('real table branches own selectors and hydrated POS destinations without bo
       assert.equal(trace.status, 'pending');
     }
 
-    clear(); const flow = setup({ getTableTickets: () => [{ id: 'existing' }] });
+    clear(); const flow = setup({ getTableTickets: () => [{ id: 'account-1' }, { id: 'account-2' }] });
     const selectorTrace = flow.bindings.beginTableInteraction('map-node', clock);
     await flow.open(baseTable, selectorTrace); flow.commitLocal(); paint();
-    const selection = attribute('TableMap', 'onOpenTab', "beginTableInteraction('account-selection'", { ...flow.bindings, ...flow.state });
+    const selection = attribute('TableMap', 'onOpenAccount', "beginTableInteraction('account-selection'", { ...flow.bindings, ...flow.state });
     clock += 5000; // Operator decision time must not be charged to opening POS.
     const items = [{ id: 'item', quantity: 1, price: 100 }];
-    selection({ id: 'account-selected', items, timestamp: 'now' }, clock);
+    await selection({ id: 'account-selected', items, timestamp: 'now' }, clock);
     const selected = flow.opened[0];
     assert.notEqual(selected.trace, selectorTrace); assert.equal(selectorTrace.status, 'completed');
     assert.equal(selected.trace.startedAt, clock); assert.equal(selected.trace.metadata.source, 'account-selection');
@@ -231,6 +233,7 @@ test('real table branches own selectors and hydrated POS destinations without bo
       parkedTickets: [{ id: 'account-selected', tableId: baseTable.id, items }], transactions: [], customers: [],
       markRestaurantLinesCommitted: (value: unknown[]) => value,
       activeTableEditLockRef: { current: null }, setActiveTableEditLock() {},
+      setAccountItemActionRequest: (update: (current: null) => unknown) => update(null),
       setCart: (value: unknown) => { appState.cart = value; }, setSelectedCustomer() {},
       setActiveTable: (value: unknown) => { appState.activeTable = value; }, setCurrentView: (value: unknown) => { appState.view = value; },
     });
@@ -265,7 +268,7 @@ test('real table branches own selectors and hydrated POS destinations without bo
     assert.equal(report.destinations.TABLE_ACCOUNTS.completed, 1); assert.equal(report.destinations.POS_TABLE.completed, 1);
     assert.ok(report.destinations.POS_TABLE.inputToDestinationP95Ms! < 5000);
 
-    clear(); const abandoned = setup({ getTableTickets: () => [{}] });
+    clear(); const abandoned = setup({ getTableTickets: () => [{ id: 'account-1' }, { id: 'account-2' }] });
     const abandonedTrace = abandoned.bindings.beginTableInteraction('map-node', clock);
     await abandoned.open(baseTable, abandonedTrace); abandoned.commitLocal();
     const closePreview = declaration('TableMap', 'closeTablePreview', abandoned.bindings);

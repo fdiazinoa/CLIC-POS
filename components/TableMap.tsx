@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useCallback, useRef, useEffect, useLayoutEffect } from 'react';
 import { freezeCount } from '../diagnostics/freezeCounters';
 import { getTableLatencyQaState, tableLatencyQaEnabled, tableLatencyQaMark } from '../diagnostics/tableLatencyQa';
-import { Room, Table, User as UserType, ParkedTicket, CartItem, RoleDefinition, Permission } from '../types';
+import { Room, Table, User as UserType, ParkedTicket, CartItem, RoleDefinition, Permission, BusinessConfig, Customer, TerminalConfig } from '../types';
 import {
     User,
     Lock,
@@ -27,6 +27,7 @@ import {
 import { LazyMotion, domAnimation, m, AnimatePresence, useReducedMotion } from 'framer-motion';
 import { Capacitor } from '@capacitor/core';
 import TableOptionsModal from './TableOptionsModal';
+import TableAccountsSheetsModal, { type AccountItemActionRequest } from './TableAccountsSheetsModal';
 import SplitTicketModal from './SplitTicketModal';
 import TableMoveConfirmationModal from './TableMoveConfirmationModal';
 import { createPaymentFractionPlan, isFullyPaidParkedTicket } from '../utils/paymentFractions';
@@ -41,6 +42,7 @@ import {
 import { getRenderableFloorTables } from '../utils/tableLayout';
 import { parkedTicketBelongsToTable } from '../utils/parkedTicketTableMembership';
 import { hasPendingKdsDispatch } from '../utils/kdsPresentation';
+import { resolveCartItemEditCapabilities } from '../utils/cartItemEditPermissions';
 import { resolveValidatedOperationalApiUrl } from '../utils/masterOperationalApi';
 import { requestJson } from '../services/network/httpClient';
 import {
@@ -87,7 +89,14 @@ interface TableMapProps {
     onUpdateParkedTickets?: (tickets: ParkedTicket[]) => void | Promise<void>;
     canViewBusinessMetrics?: boolean;
     roles?: RoleDefinition[];
-    onPrintPrecheck?: (table: Table) => void;
+    onPrintPrecheck?: (table: Table, ticketIds?: string[]) => Promise<boolean> | boolean;
+    onTransferAccountItems?: (table: Table, sourceId: string, targetId: string, quantities: Record<string, number>) => Promise<void>;
+    onAccountItemActionRequested?: (request: AccountItemActionRequest) => void;
+    fiscalConfig?: BusinessConfig;
+    terminalTaxConfig?: TerminalConfig;
+    accountTerminalId?: string;
+    accountCustomers?: Customer[];
+    isTaxIncluded?: boolean;
     /** Restaurante: persiste división de cuenta desde el mapa (órdenes en espera) */
     onParkedOrderSplitResult?: (orderId: string, remainingItems: CartItem[], newTicketItems: CartItem[], extraNewTickets?: CartItem[][], splitCount?: number) => void | Promise<void>;
     /** Restaurante: abrir diseñador de plano de mesas */
@@ -140,7 +149,7 @@ interface ParkedOrderSummary {
     ticketCount: number;
 }
 
-type TableTransferMode = 'MOVE' | 'MERGE' | 'SPLIT' | 'FRACTION';
+type TableTransferMode = 'MOVE' | 'MERGE' | 'SPLIT' | 'FRACTION' | 'SUBTOTAL';
 
 interface TableTransferSelection {
     mode: TableTransferMode;
@@ -383,7 +392,7 @@ const getTicketSubtotalization = (ticket: ParkedTicket): {
     subtotalizedBy?: string;
 } => {
     const items = Array.isArray(ticket.items) ? ticket.items : [];
-    if (items.length === 0 || !items.every(item => Boolean(item.subtotalizedAt))) {
+    if (!items.some(item => Boolean(item.subtotalizedAt))) {
         return { isSubtotalized: false };
     }
     const referenceItem = items.find(item => Boolean(item.subtotalizedAt));
@@ -530,6 +539,13 @@ const TableMap: React.FC<TableMapProps> = ({
     canViewBusinessMetrics,
     roles = [],
     onPrintPrecheck,
+    onTransferAccountItems,
+    onAccountItemActionRequested,
+    fiscalConfig,
+    terminalTaxConfig,
+    accountTerminalId,
+    accountCustomers,
+    isTaxIncluded,
     onParkedOrderSplitResult,
     onOpenTableLayoutDesigner,
     onChangeRoom
@@ -547,7 +563,8 @@ const TableMap: React.FC<TableMapProps> = ({
     const [selectedAccountTable, setSelectedAccountTable] = useState<Table | null>(null);
     const [transferSelection, setTransferSelection] = useState<TableTransferSelection | null>(null);
     const [pendingTableMove, setPendingTableMove] = useState<PendingTableMove | null>(null);
-    const [subtotalPickOpen, setSubtotalPickOpen] = useState(false);
+    const subtotalPrintBusyRef = useRef(false);
+    const [subtotalPrintBusy, setSubtotalPrintBusy] = useState(false);
     const [fractionPickOpen, setFractionPickOpen] = useState(false);
     const [splitPickOpen, setSplitPickOpen] = useState(false);
     const [fractionTicketForModal, setFractionTicketForModal] = useState<ParkedTicket | null>(null);
@@ -1096,6 +1113,12 @@ const TableMap: React.FC<TableMapProps> = ({
         await Promise.resolve(onUpdateParkedTickets?.(nextTickets));
     }, [onUpdateParkedTickets, parkedTickets]);
 
+    const requireFreshAccountLock = useCallback(async (table: Table) => {
+        if (!onBeforeTableOpen) return;
+        const allowed = await onBeforeTableOpen(table);
+        if (allowed === false) throw new Error('No se pudo confirmar el bloqueo de la mesa en la Master. Reintente sin cambiar de mesa.');
+    }, [onBeforeTableOpen]);
+
     const stats = useMemo(() => {
         const total = smartTables.length;
         const occupied = smartTables.filter(model => model.smartStatus !== 'FREE').length;
@@ -1419,6 +1442,45 @@ const TableMap: React.FC<TableMapProps> = ({
     const handleTransferTableClick = useCallback((table: Table) => {
         if (!transferSelection) return false;
 
+        if (transferSelection.mode === 'SUBTOTAL') {
+            const primaryId = String(table.joinedSourceTableId || '').trim();
+            const operationalTable = primaryId ? safeTables.find(candidate => String(candidate.id) === primaryId) || table : table;
+            const tickets = getTableTickets(operationalTable).filter(ticket => ticket.items?.length);
+            if (tickets.length === 0) {
+                alert('Seleccione una mesa con artículos para imprimir la pre-cuenta.');
+                return true;
+            }
+            setTransferSelection(null);
+            if (tickets.length === 1) {
+                subtotalPrintBusyRef.current = true;
+                setSubtotalPrintBusy(true);
+                void Promise.resolve()
+                    .then(async () => {
+                        const allowed = await onBeforeTableOpen?.(operationalTable);
+                        if (allowed === false) return;
+                        try {
+                            await onPrintPrecheck?.(operationalTable, [String(tickets[0].id)]);
+                        } finally {
+                            await Promise.resolve(onTableOpenCancelled?.(operationalTable));
+                            await Promise.resolve(onRefreshTables?.());
+                        }
+                    })
+                    .catch(error => {
+                        console.error('No se pudo confirmar la pre-cuenta:', error);
+                        alert('No se pudo confirmar la pre-cuenta. Verifique antes de reintentar.');
+                    })
+                    .finally(() => { subtotalPrintBusyRef.current = false; setSubtotalPrintBusy(false); });
+            } else {
+                subtotalPrintBusyRef.current = true;
+                setSubtotalPrintBusy(true);
+                void Promise.resolve().then(() => onBeforeTableOpen?.(operationalTable)).then(allowed => {
+                    if (allowed !== false) setSelectedAccountTable(operationalTable);
+                }).catch(error => console.error('No se pudo abrir la selección de cuentas:', error))
+                    .finally(() => { subtotalPrintBusyRef.current = false; setSubtotalPrintBusy(false); });
+            }
+            return true;
+        }
+
         if (transferSelection.step === 'SOURCE') {
             const sourceTicket = resolveTicketForTable(table);
             if (!sourceTicket?.items?.length) {
@@ -1469,7 +1531,7 @@ const TableMap: React.FC<TableMapProps> = ({
 
         void completeTableTransfer(transferSelection.sourceTableId, table.id, transferSelection.mode);
         return true;
-    }, [completeTableTransfer, isTableMoveTargetOccupied, resolveTicketForTable, transferSelection]);
+    }, [completeTableTransfer, getTableTickets, isTableMoveTargetOccupied, onBeforeTableOpen, onPrintPrecheck, onRefreshTables, onTableOpenCancelled, resolveTicketForTable, safeTables, transferSelection]);
 
     const handleTableAction = useCallback((table: Table, trace: PosInteractionTrace) => observeDestinationAttempt(trace, async () => {
         const primaryTableId = String(table.joinedSourceTableId || '').trim();
@@ -1489,9 +1551,15 @@ const TableMap: React.FC<TableMapProps> = ({
         const tableTickets = getTableTickets(operationalTable);
         if (isRestaurantMode && operationalTable.shape !== 'BAR' && tableTickets.length > 0) {
             markInteractionStage(trace, 'ACCOUNT_RESOLVE_END');
-            tableLatencyQaMark('ACCOUNT_RESOLVE_END', { traceId: trace.id, destination: 'accounts' });
-            expectLocalDestination(trace, 'TABLE_ACCOUNTS', operationalTable);
-            setSelectedAccountTable(operationalTable);
+            const needsAccountSelection = tableTickets.length > 1 || tableTickets.some(ticket => (ticket.paymentFraction?.parts?.length || 0) > 1);
+            tableLatencyQaMark('ACCOUNT_RESOLVE_END', { traceId: trace.id, destination: needsAccountSelection ? 'accounts' : 'pos' });
+            if (needsAccountSelection) {
+                expectLocalDestination(trace, 'TABLE_ACCOUNTS', operationalTable);
+                setSelectedAccountTable(operationalTable);
+            } else {
+                const ticket = tableTickets[0];
+                openPosTable({ ...operationalTable, currentOrderId: ticket.id, currentOrderTotal: Number(ticket.total || 0) }, trace);
+            }
             return;
         }
         if (operationalTable.shape === 'BAR') {
@@ -1600,7 +1668,7 @@ const TableMap: React.FC<TableMapProps> = ({
             // React state is not synchronous: two taps delivered in the same
             // frame used to start two lock/open/navigation chains. The ref is
             // the authoritative single-flight guard for operator input.
-            if (openingTableIdRef.current) return;
+            if (openingTableIdRef.current || subtotalPrintBusyRef.current) return;
             if (model.isLocked) {
                 if (!transferSelection) finishInteraction(beginTableInteraction('map-node', inputTimeStamp), 'cancelled');
                 const editingOwner = model.table.editingLock?.userName || model.table.editingLock?.terminalId;
@@ -1802,7 +1870,13 @@ const TableMap: React.FC<TableMapProps> = ({
                 </button>
                 <button
                     type="button"
-                    onClick={() => setSubtotalPickOpen(true)}
+                    onClick={() => {
+                        if (occupiedForTools.length === 0) {
+                            alert('No hay mesas con cuenta abierta.');
+                            return;
+                        }
+                        setTransferSelection({ mode: 'SUBTOTAL', step: 'SOURCE' });
+                    }}
                     className={buttonClass}
                 >
                     <Sigma size={iconSize} className="opacity-95" />
@@ -1934,23 +2008,29 @@ const TableMap: React.FC<TableMapProps> = ({
                             className="absolute left-1/2 top-6 z-40 -translate-x-1/2 rounded-2xl border border-sky-200/25 bg-slate-950/78 px-5 py-3 text-center shadow-[0_18px_48px_rgba(2,6,23,0.62)] backdrop-blur-xl"
                         >
                             <p className="text-[10px] font-black uppercase tracking-[0.22em] text-sky-200">
-                                {transferSelection.mode === 'MERGE' ? 'Unir mesas' : transferSelection.mode === 'SPLIT' ? 'Dividir cuenta' : 'Mover mesa'}
+                                {transferSelection.mode === 'MERGE' ? 'Unir mesas' : transferSelection.mode === 'SPLIT' ? 'Dividir cuenta' : transferSelection.mode === 'SUBTOTAL' ? 'Subtotal / Pre-cuenta' : 'Mover mesa'}
                             </p>
                             <p className="mt-1 text-sm font-black text-white">
                                 {transferSelection.step === 'SOURCE'
-                                    ? (transferSelection.mode === 'SPLIT' ? 'Toque en el mapa la mesa que desea dividir' : 'Mesa a mover: toque la mesa origen')
+                                    ? (transferSelection.mode === 'SPLIT' ? 'Toque en el mapa la mesa que desea dividir' : transferSelection.mode === 'SUBTOTAL' ? 'Seleccione en el mapa la mesa para imprimir la pre-cuenta' : 'Mesa a mover: toque la mesa origen')
                                     : 'Mesa destino: toque la mesa que recibirá la cuenta'}
                             </p>
                             <button
                                 type="button"
                                 onClick={() => setTransferSelection(null)}
-                                className="mt-2 text-[11px] font-bold text-slate-300 underline decoration-white/20 underline-offset-4 hover:text-white"
+                                className="table-map-selection-cancel mt-2 rounded-lg px-4 py-1.5 text-xs font-bold"
                             >
                                 Cancelar
                             </button>
                         </m.div>
                     )}
                 </AnimatePresence>
+
+                {subtotalPrintBusy && (
+                    <div role="status" className="absolute left-1/2 top-6 z-40 -translate-x-1/2 rounded-2xl bg-slate-950/85 px-5 py-3 text-sm font-bold text-white shadow-xl">
+                        Confirmando mesa y pre-cuenta con la Master…
+                    </div>
+                )}
 
                 <AnimatePresence>
                     {tableNotice && (
@@ -2354,15 +2434,20 @@ const TableMap: React.FC<TableMapProps> = ({
                 )}
 
                 {selectedAccountTable && (
-                    <BarTabsModal
+                    <TableAccountsSheetsModal
                         table={selectedAccountTable}
                         tickets={getTableTickets(selectedAccountTable)}
                         currencySymbol={currencySymbol}
-                        allowCreate
-                        accountMode
-                        titleLabel="Cuentas de la mesa"
+                        fiscalConfig={fiscalConfig}
+                        terminalTaxConfig={terminalTaxConfig}
+                        terminalId={accountTerminalId}
+                        customers={accountCustomers}
+                        isTaxIncluded={isTaxIncluded}
+                        canAdjustQuantity={resolveCartItemEditCapabilities(currentRolePermissions).canEditQuantity}
+                        canRetireItem={resolveCartItemEditCapabilities(currentRolePermissions).canVoidItem}
                         onClose={() => closeTablePreview(selectedAccountTable, () => setSelectedAccountTable(null))}
-                        onOpenTab={(ticket, inputTimeStamp) => {
+                        onOpenAccount={async (ticket, inputTimeStamp, itemAction) => {
+                            await requireFreshAccountLock(selectedAccountTable);
                             const total = Number(ticket.total ?? (ticket.items || []).reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0), 0));
                             openPosTable({
                                 ...selectedAccountTable,
@@ -2371,12 +2456,26 @@ const TableMap: React.FC<TableMapProps> = ({
                                 currentOrderTotal: total,
                                 timeSeated: selectedAccountTable.timeSeated || ticket.timestamp
                             }, beginTableInteraction('account-selection', inputTimeStamp));
+                            if (itemAction) onAccountItemActionRequested?.(itemAction);
                             setSelectedAccountTable(null);
                         }}
-                        onCreateTab={(name) => {
-                            void createTableAccount(selectedAccountTable, name);
+                        onCreateAccount={async (name) => {
+                            await requireFreshAccountLock(selectedAccountTable);
+                            await createTableAccount(selectedAccountTable, name);
                         }}
-                        onRenameTab={(ticket, name, fractionIndex) => renameTableAccount(selectedAccountTable, ticket, name, fractionIndex)}
+                        onRenameAccount={async (ticket, name, fractionIndex) => {
+                            await requireFreshAccountLock(selectedAccountTable);
+                            await renameTableAccount(selectedAccountTable, ticket, name, fractionIndex);
+                        }}
+                        onPrint={async (ticketIds) => {
+                            await requireFreshAccountLock(selectedAccountTable);
+                            return onPrintPrecheck?.(selectedAccountTable, ticketIds) ?? false;
+                        }}
+                        onTransfer={async (sourceId, targetId, quantities) => {
+                            await requireFreshAccountLock(selectedAccountTable);
+                            if (!onTransferAccountItems) throw new Error('Transferencia no disponible en esta terminal.');
+                            await onTransferAccountItems(selectedAccountTable, sourceId, targetId, quantities);
+                        }}
                     />
                 )}
 
@@ -2432,48 +2531,6 @@ const TableMap: React.FC<TableMapProps> = ({
                             setSplitTicketForModal(null);
                         }}
                     />
-                )}
-
-                {isRestaurantMode && subtotalPickOpen && (
-                    <div
-                        className="fixed inset-0 z-[100] flex items-center justify-center bg-black/55 backdrop-blur-sm p-4"
-                        onClick={() => setSubtotalPickOpen(false)}
-                    >
-                        <div
-                            className="bg-slate-900 border border-white/15 rounded-2xl p-6 max-w-md w-full shadow-2xl"
-                            onClick={e => e.stopPropagation()}
-                        >
-                            <h3 className="text-lg font-black text-white mb-4">Subtotal / Pre-cuenta</h3>
-                            <p className="text-xs text-slate-400 mb-3">Mesa con cuenta abierta:</p>
-                            <div className="space-y-2 max-h-64 overflow-y-auto">
-                                {occupiedForTools.filter(t => t.currentOrderId).length === 0 && (
-                                    <p className="text-sm text-slate-500">No hay mesas con orden activa.</p>
-                                )}
-                                {occupiedForTools
-                                    .filter(t => t.currentOrderId)
-                                    .map(t => (
-                                        <button
-                                            key={t.id}
-                                            type="button"
-                                            onClick={() => {
-                                                if (onPrintPrecheck) onPrintPrecheck(t);
-                                                setSubtotalPickOpen(false);
-                                            }}
-                                            className="w-full text-left px-4 py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-semibold border border-white/10"
-                                        >
-                                            {getTableRoomLabel(t)}
-                                        </button>
-                                    ))}
-                            </div>
-                            <button
-                                type="button"
-                                onClick={() => setSubtotalPickOpen(false)}
-                                className="mt-4 w-full py-2 rounded-xl text-slate-400 hover:bg-white/5"
-                            >
-                                Cerrar
-                            </button>
-                        </div>
-                    </div>
                 )}
 
                 {isRestaurantMode && splitPickOpen && (

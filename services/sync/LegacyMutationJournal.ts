@@ -146,11 +146,21 @@ export class LegacyMutationJournal {
             const isTerminalReset = entry.method === 'POST'
                 && /^\/api\/sync\/reset\/[^/?]+$/.test(entry.canonicalPath)
                 && entry.operationCorrelationId.startsWith('resetTerminalData:');
-            if (!isTerminalReset) continue;
+            // A lock acquire/heartbeat changes only a 45-second lease, not a
+            // ticket or payment. Its unknown outcome is resolved by the next
+            // acquire (same owner/token) or an explicit 409 from another owner.
+            // Do not let this maintenance row fence an unrelated durable PUT.
+            const isUnknownLockAcquire = entry.state === 'OUTCOME_UNKNOWN'
+                && entry.method === 'POST'
+                && entry.canonicalPath === '/api/mesas/bloquear'
+                && entry.operationCorrelationId.startsWith('TABLE_LOCK_ACQUIRE:');
+            if (!isTerminalReset && !isUnknownLockAcquire) continue;
             await this.acknowledge(
                 entry.id,
                 'NON_BLOCKING_MAINTENANCE',
-                'TERMINAL_RESET_DOES_NOT_FENCE_OPERATIONS',
+                isUnknownLockAcquire
+                    ? 'TABLE_LOCK_ACQUIRE_IS_EPHEMERAL_LEASE'
+                    : 'TERMINAL_RESET_DOES_NOT_FENCE_OPERATIONS',
             );
             reconciled += 1;
         }

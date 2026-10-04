@@ -61,6 +61,7 @@ import { couponService } from '../utils/couponService';
 import { resolveScannedCouponCode } from '../utils/couponScan';
 import { shouldRouteInvoiceScan } from '../utils/invoiceScan';
 import { parkedTicketBelongsToTable } from '../utils/parkedTicketTableMembership';
+import { sortTableAccountsForDisplay } from '../utils/tableAccountPresentation';
 import { calculateInventoryDeductions, resolveInventoryConsumptionMode, transferStockToCommitted } from '../utils/inventoryEngine';
 import { useSupervisorAuth } from '../hooks/useSupervisorAuth';
 import { calculateSalesCommission } from '../utils/userSalesPolicy';
@@ -120,7 +121,7 @@ import { persistStandaloneRefundTransaction, persistStandaloneSaleHistory } from
 import { resolveCustomerImageSrc, resolveProductImageSrc } from '../utils/entityImage';
 import { getWarehouseScopedNumber, resolveProductActiveWarehouseIds } from '../utils/masterIdentity';
 import { buildTransactionSettlementFields } from '../utils/paymentSettlement';
-import { isPaymentFractionPlanCurrent, retainCurrentPaymentFractionPlan } from '../utils/paymentFractions';
+import { isFullyPaidParkedTicket, isPaymentFractionPlanCurrent, retainCurrentPaymentFractionPlan } from '../utils/paymentFractions';
 import SplitTicketModal from './SplitTicketModal';
 import { getTerminalSnapshotSellers, resolveTerminalSellerName } from '../utils/terminalSnapshotSellers';
 import { productIdentityCandidates, productReferenceCandidates, resolveOperationalProductId } from '../utils/productReferences';
@@ -198,6 +199,13 @@ const clearCartSubtotalization = (items: CartItem[]): CartItem[] => items.map(it
    return nextItem;
 });
 
+export type AccountItemActionRequest = {
+   requestId: string;
+   ticketId: string;
+   cartId: string;
+   action: 'ADJUST' | 'RETURN';
+};
+
 export interface POSInterfaceProps {
    config: BusinessConfig;
    currentUser: UserType;
@@ -244,6 +252,8 @@ export interface POSInterfaceProps {
    onUpdateConfig: (newConfig: BusinessConfig) => void;
    activeTerminalId: string;
    activeTable?: Table | null;
+   accountItemActionRequest?: AccountItemActionRequest | null;
+   onAccountItemActionHandled?: (requestId: string) => void;
    onClearActiveTable?: () => void;
    onUpdateActiveTableGuests?: (guests: number) => void;
    onKioskPay?: () => void;
@@ -1183,6 +1193,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    onUpdateConfig,
    activeTerminalId,
    activeTable,
+   accountItemActionRequest,
+   onAccountItemActionHandled,
    onClearActiveTable,
    onUpdateActiveTableGuests,
    onKioskPay,
@@ -1351,20 +1363,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const activeTableAccounts = useMemo(() => {
       const tableId = String(activeTable?.id || '').trim();
       if (!tableId) return [];
-
-      const readAccountNumber = (ticket: ParkedTicket) => {
-         const label = `${ticket.name || ''} ${ticket.alias || ''}`;
-         const match = label.match(/cuenta\s+(\d+)/i);
-         return match ? Number(match[1]) : 1;
-      };
-
-      return (Array.isArray(parkedTickets) ? parkedTickets : [])
-         .filter(ticket => String(ticket.tableId || '').trim() === tableId)
-         .sort((left, right) => {
-            const numberDelta = readAccountNumber(left) - readAccountNumber(right);
-            if (numberDelta !== 0) return numberDelta;
-            return String(left.timestamp || '').localeCompare(String(right.timestamp || ''));
-         });
+      return sortTableAccountsForDisplay((Array.isArray(parkedTickets) ? parkedTickets : [])
+         .filter(ticket => parkedTicketBelongsToTable(ticket, tableId) && !isFullyPaidParkedTicket(ticket)));
    }, [activeTable?.id, parkedTickets]);
    const activeTableAccountIndex = Math.max(
       0,
@@ -1372,8 +1372,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    );
    const activeTableAccount = activeTableAccounts[activeTableAccountIndex];
    const isActiveTableAccountSubtotalized = Boolean(
-      activeTableAccount?.items?.length
-      && activeTableAccount.items.every(item => Boolean(item.subtotalizedAt))
+      activeTableAccount?.items?.some(item => Boolean(item.subtotalizedAt))
    );
    const handleNavigateTableAccount = useCallback((direction: -1 | 1) => {
       if (activeTableAccounts.length < 2 || !onSelectTableAccount) return;
@@ -2312,6 +2311,34 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const [editingItem, setEditingItem] = useState<CartItem | null>(null);
    const [activeCartItemId, setActiveCartItemId] = useState<string | null>(null);
+   const handledAccountActionIdsRef = useRef<Set<string>>(new Set());
+   useEffect(() => {
+      const request = accountItemActionRequest;
+      if (!request || handledAccountActionIdsRef.current.has(request.requestId)) return;
+      // The map remains mounted behind the POS. Never act on its previous cart,
+      // even for a matching cartId, until the intended account is active.
+      if (String(activeTable?.currentOrderId || '') !== request.ticketId) return;
+      const item = cart.find(line => String(line.cartId || '') === request.cartId);
+      handledAccountActionIdsRef.current.add(request.requestId);
+      onAccountItemActionHandled?.(request.requestId);
+      if (!item) {
+         setErrorToast('El artículo cambió en la mesa. Vuelva a abrir la cuenta para actualizarla.');
+         return;
+      }
+      setActiveCartItemId(request.cartId);
+      if (request.action === 'ADJUST') {
+         // Keep all quantity, stock, subtotal, KDS and supervisor checks in the
+         // existing POS editor/updateCartItem path.
+         setEditingItem(item);
+      } else if (item.dispatched) {
+         // The focused ticket line exposes the existing KDS return control.
+         // Do not send a return merely because the operator opened this view.
+         setSuccessToast('Artículo seleccionado. Pulse Devolver en KDS para confirmar.');
+      } else {
+         // The existing editor offers a separately confirmed removal action.
+         setEditingItem(item);
+      }
+   }, [accountItemActionRequest, activeTable?.currentOrderId, cart, onAccountItemActionHandled]);
    const [selectedProductForVariants, setSelectedProductForVariants] = useState<Product | null>(null);
    const [productForScale, setProductForScale] = useState<Product | null>(null);
    const [showLoyaltyModal, setShowLoyaltyModal] = useState(false);
@@ -3320,6 +3347,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          const existingIdentityKey = String((i as any).cartIdentityKey || productLineIdentityKey(i, i.price));
          const existingConsignmentKey = i.consignmentLineId || '';
          return existingIdentityKey === lineIdentityKey
+            && !i.subtotalizedAt
             && Math.sign(Number(i.quantity || 0)) === Math.sign(quantity)
             && existingConsignmentKey === consignmentIdentityKey
             && (i.variantSku || '') === (variantSku || '')
@@ -3334,11 +3362,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          targetCartId = existing.cartId!;
          markInteractionStateUpdate(trace, (cart || []).length + 2);
          onUpdateCart(prev => {
-            const editableCart = hasSubtotalizedCart ? clearCartSubtotalization(prev) : prev;
             const updatedItem = {
                ...existing,
-               subtotalizedAt: undefined,
-               subtotalizedBy: undefined,
                quantity: existing.quantity + quantity,
                isReturnLine: existing.isReturnLine || quantity < 0,
                appliedTaxIds: effectiveTaxIds,
@@ -3346,7 +3371,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                production_area_id: resolveProductionAreaId(existing) || productionAreaId || undefined,
                ...consignmentPatch,
             };
-            return [updatedItem, ...editableCart.filter(i => i.cartId !== existing.cartId)];
+            return [updatedItem, ...prev.filter(i => i.cartId !== existing.cartId)];
          });
       } else {
          const newCartId = Math.random().toString(36).substr(2, 9);
@@ -3376,7 +3401,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             ...consignmentPatch,
          };
          markInteractionStateUpdate(trace, (cart || []).length + 2);
-         onUpdateCart(prev => [newItem, ...(hasSubtotalizedCart ? clearCartSubtotalization(prev) : prev)]);
+         onUpdateCart(prev => [newItem, ...prev]);
       }
 
       // SIDE EFFECT: Move outside the state update sequence to avoid React "rendering update" warning
@@ -3386,7 +3411,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          if (trace.stages.HANDLER_END === undefined) markInteractionStage(trace, 'HANDLER_END');
          if (activeAddTraceRef.current === trace) activeAddTraceRef.current = null;
       }
-   }, [activeTerminalConfig, authorizeSubtotalizedEdit, blockRecoveredUberOrderMutation, canAddItemToCart, cart, ensureSalesWithOpenZPermission, getProductPrice, hasSubtotalizedCart, onUpdateCart]);
+   }, [activeTerminalConfig, authorizeSubtotalizedEdit, blockRecoveredUberOrderMutation, canAddItemToCart, cart, ensureSalesWithOpenZPermission, getProductPrice, onUpdateCart]);
 
    const handleProductClick = useCallback((product: Product) => {
       if (Date.now() < suppressProductInputUntilMs) return;
@@ -4897,10 +4922,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (!(await authorizeSubtotalizedEdit('Modificar artículo o cantidad de ticket subtotalizado'))) return;
 
       let newCart: CartItem[] = [];
+      let invalidatesPriorSubtotal = false;
 
       if (cartIdToDelete || updatedItem === null) {
          const targetCartId = cartIdToDelete || editingItem?.cartId;
          const originalItem = (cart || []).find(i => i.cartId === targetCartId);
+         invalidatesPriorSubtotal = Boolean(originalItem?.subtotalizedAt);
          const isHotRestaurantReversal = canReverseRestaurantDraftWithoutApproval(isRestaurantOrderContext, originalItem);
          if (isKitchenDispatchedCartItem(originalItem)) {
             alert(isKdsReturnedCartItem(originalItem)
@@ -4924,6 +4951,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       } else {
          // Update Check (Price Override / Discount)
          const originalItem = (cart || []).find(i => i.cartId === updatedItem.cartId);
+         invalidatesPriorSubtotal = Boolean(originalItem?.subtotalizedAt);
 
          if (!originalItem || !isValidCartQuantityTransition(originalItem.quantity, updatedItem.quantity)) {
             setErrorToast('La cantidad no puede llegar a cero ni cambiar una venta en devolución. Use Eliminar o el modo Devolución.');
@@ -4986,7 +5014,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          newCart = cart.map(item => item.cartId === updatedItem.cartId ? updatedItem : item);
       }
 
-      if (isSubtotalizedMutation) newCart = clearCartSubtotalization(newCart);
+      // Editing a line printed on the prior pre-check invalidates that proof.
+      // Changing a later line must preserve the marked lines and their history.
+      if (invalidatesPriorSubtotal) newCart = clearCartSubtotalization(newCart);
 
       // Borrar la última línea debe cerrar esta cuenta mediante el mismo flujo
       // explícito usado al salir de una mesa vacía. Persistir `items: []` sobre
@@ -8352,6 +8382,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         const isActiveCartItem = activeCartItemId === item.cartId;
                         const isReturnedToKds = isKdsReturnedCartItem(item);
                         const isSubtotalizedItem = Boolean(item.subtotalizedAt);
+                        const isNewAfterSubtotal = isActiveTableAccountSubtotalized && !isSubtotalizedItem;
                         const isDispatchedToKds = Boolean(item.dispatched);
                         const lockedMutationMessage = 'Este artículo ya fue enviado al KDS. Usa Devolver para cancelar la preparación.';
                         const lockedReturnTitle = isReturnedToKds ? 'Artículo ya devuelto en KDS' : 'Devolver en KDS';
@@ -8362,7 +8393,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                               <div
                                  key={item.cartId || `cart-m-${idx}`}
                                  onClick={() => toggleCartItemFocus(item.cartId)}
-                                 className={`bg-white rounded-2xl p-3 shadow-sm border flex gap-3 animate-in slide-in-from-right-2 transition-all cursor-pointer ${isActiveCartItem ? 'border-blue-200 ring-2 ring-blue-100 shadow-md' : 'border-gray-100 hover:border-slate-200'}`}
+                                 className={`rounded-2xl p-3 shadow-sm border flex gap-3 animate-in slide-in-from-right-2 transition-all cursor-pointer ${isActiveCartItem ? 'border-blue-200 ring-2 ring-blue-100 shadow-md' : isNewAfterSubtotal ? 'border-emerald-200 bg-emerald-50' : 'border-gray-100 bg-white hover:border-slate-200'}`}
                               >
                                  <div className="w-16 h-16 rounded-xl bg-gray-50 overflow-hidden shrink-0 border border-gray-100">
                                     {resolveProductImageSrc(item) ? <img src={resolveProductImageSrc(item)} className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-gray-300"><Grid size={24} /></div>}
@@ -8494,7 +8525,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            <div
                               key={item.cartId || `cart-${idx}`}
                               onClick={() => toggleCartItemFocus(item.cartId)}
-                              className={`bg-white rounded-xl p-3 shadow-sm border group relative overflow-hidden transition-all hover:shadow-md cursor-pointer ${editingItem?.cartId === item.cartId || isActiveCartItem ? 'ring-2 ring-blue-100 border-blue-200 bg-blue-50/40' : 'border-gray-100 hover:border-slate-200'}`}
+                              className={`rounded-xl p-3 shadow-sm border group relative overflow-hidden transition-all hover:shadow-md cursor-pointer ${editingItem?.cartId === item.cartId || isActiveCartItem ? 'ring-2 ring-blue-100 border-blue-200 bg-blue-50/40' : isNewAfterSubtotal ? 'border-emerald-200 bg-emerald-50' : 'border-gray-100 bg-white hover:border-slate-200'}`}
                            >
                               {/* Discount Badge */}
                               {hasDiscount && (
@@ -8541,6 +8572,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                                    {isReturnedToKds ? 'KDS devuelto' : 'KDS enviado'}
                                                 </span>
                                              )}
+                                             {isSubtotalizedItem && <span className="mt-1 inline-flex w-fit rounded-full bg-violet-50 px-2 py-0.5 text-[9px] font-black uppercase tracking-wide text-violet-700">Subtotalizado</span>}
                                           </div>
                                           {/* Salesperson Badge */}
                                           {item.salespersonId && (

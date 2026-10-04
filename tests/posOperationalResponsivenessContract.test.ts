@@ -110,7 +110,9 @@ test('the table map stays mounted and rejects overlapping table opens', () => {
   assert.match(layoutSource, /tableMapHasMounted \|\| currentView === 'TABLE_MAP'/);
   assert.match(layoutSource, /<TableMapLifecycleBoundary visible=\{currentView === 'TABLE_MAP'\} closeTrace=\{tableMapCloseTraceRef.current\} onRequestClose=\{\(\) => handleCloseTableMap\(\)\}>/);
   assert.doesNotMatch(layoutSource, /currentView === 'TABLE_MAP' \? \(\s*<div[^>]*data-table-map-overlay/);
-  assert.match(tableMapSource, /if \(openingTableIdRef\.current\) return;/);
+  assert.match(tableMapSource, /if \(openingTableIdRef\.current \|\| subtotalPrintBusyRef\.current\) return;/);
+  assert.match(tableMapSource, /subtotalPrintBusyRef\.current = true/);
+  assert.match(tableMapSource, /subtotalPrintBusyRef\.current = false/);
   assert.match(tableMapSource, /openingTableIdRef\.current = String\(model\.table\.id\)/);
   assert.match(appSource, /setSuppressProductInputUntilMs\(Date\.now\(\) \+ 300\)/);
   assert.match(appSource, /suppressProductInputUntilMs=\{suppressProductInputUntilMs\}/);

@@ -852,10 +852,15 @@ export const buildEscPosSubtotalPayload = (
   params: {
     items: CartItem[];
     subtotal: number;
+    netSubtotal?: number;
+    isTaxIncluded?: boolean;
     discountTotal: number;
     discountType?: 'PERCENT' | 'FIXED';
     discountValue?: number;
     taxTotal: number;
+    taxBreakdown?: Array<{ name: string; rate: number; amount: number }>;
+    serviceChargeAmount?: number;
+    serviceChargeRate?: number;
     finalTotal: number;
     table?: Table | null;
     customerName?: string;
@@ -909,7 +914,15 @@ export const buildEscPosSubtotalPayload = (
       discountValue: params.discountValue,
     }), `-${formatMoney(config.currencySymbol || '$', params.discountTotal)}`, width);
   }
-  pushPair(chunks, 'IMPUESTOS', formatMoney(config.currencySymbol || '$', params.taxTotal), width);
+  if (typeof params.netSubtotal === 'number') {
+    pushPair(chunks, params.isTaxIncluded ? 'SUBTOTAL NETO' : 'SUBTOTAL GRAVABLE', formatMoney(config.currencySymbol || '$', params.netSubtotal), width);
+  }
+  for (const tax of params.taxBreakdown?.length ? params.taxBreakdown : [{ name: 'IMPUESTOS', rate: 0, amount: params.taxTotal }]) {
+    pushPair(chunks, tax.rate ? formatTaxLineLabel(tax) : tax.name, formatMoney(config.currencySymbol || '$', tax.amount), width);
+  }
+  if (Number(params.serviceChargeAmount || 0) > 0) {
+    pushPair(chunks, `Propina legal ${Number(params.serviceChargeRate || 0)}%`, formatMoney(config.currencySymbol || '$', Number(params.serviceChargeAmount)), width);
+  }
   chunks.push(bold(true));
   chunks.push(size(0x11));
   pushPair(chunks, 'TOTAL', formatMoney(config.currencySymbol || '$', params.finalTotal), width);
@@ -919,7 +932,7 @@ export const buildEscPosSubtotalPayload = (
   chunks.push(divider(width));
   chunks.push(align(1));
   pushTextLines(chunks, splitLines('Verifique su consumo antes de facturar.', width));
-  pushTextLines(chunks, splitLines('Propina legal no incluida.', width));
+  pushTextLines(chunks, splitLines(Number(params.serviceChargeAmount || 0) > 0 ? 'Propina legal incluida en el total.' : 'Propina legal no incluida.', width));
   chunks.push(align(0));
   finalizeReceipt(chunks);
 

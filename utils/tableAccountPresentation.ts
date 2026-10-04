@@ -1,6 +1,23 @@
 import type { ParkedTicket, PaymentFractionPart } from '../types';
 import { isFullyPaidParkedTicket, isPaymentFractionPlanCurrent } from './paymentFractions';
 
+export const getTableOpenElapsedLabel = (
+  tableOpenedAt: string | undefined,
+  ticketOpenedAt: Array<string | undefined>,
+  now: number,
+): string => {
+  const validTime = (value: string | undefined): number | null => {
+    const parsed = typeof value === 'string' && value.trim() ? Date.parse(value) : NaN;
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+  const tableTime = validTime(tableOpenedAt);
+  const ticketTimes = ticketOpenedAt.map(validTime).filter((time): time is number => time !== null);
+  const openedAt = tableTime ?? (ticketTimes.length ? Math.min(...ticketTimes) : null);
+  if (openedAt === null || !Number.isFinite(now)) return 'Tiempo no disponible';
+  const elapsed = Math.max(0, Math.floor((now - openedAt) / 60_000));
+  return `Abierta ${Math.floor(elapsed / 60)}h ${String(elapsed % 60).padStart(2, '0')}m`;
+};
+
 export interface TableAccountDisplayEntry {
   key: string;
   ticket: ParkedTicket;
@@ -13,6 +30,17 @@ export interface TableAccountDisplayEntry {
   editName: string;
 }
 
+/** Keep the account position independent of which account happens to be active. */
+export const sortTableAccountsForDisplay = (tickets: ParkedTicket[]): ParkedTicket[] =>
+  [...tickets].sort((left, right) => {
+    const openedAt = (ticket: ParkedTicket) => {
+      const value = Date.parse(String(ticket.timestamp || ''));
+      return Number.isFinite(value) ? value : Number.MAX_SAFE_INTEGER;
+    };
+    const timeDelta = openedAt(left) - openedAt(right);
+    return timeDelta || String(left.id).localeCompare(String(right.id));
+  });
+
 const ticketTotal = (ticket: ParkedTicket): number => Number(
   ticket.total
   ?? (ticket.items || []).reduce(
@@ -21,10 +49,22 @@ const ticketTotal = (ticket: ParkedTicket): number => Number(
   ),
 );
 
-export const getTableAccountLabel = (ticket: ParkedTicket, index: number): string => (
-  String(ticket.barTabName || ticket.alias || ticket.name || '').trim()
-  || `Cuenta ${index + 1}`
-);
+export const getTableAccountLabel = (ticket: ParkedTicket, index: number): string => {
+  const tablePrefix = String(ticket.tableDisplayLabel || '').trim();
+  const simplifyGenerated = (value: string): string | null => {
+    const generatedSequence = /^(?:Cuenta\s+\d+(?:\/\d+)?\s+-\s+)*Cuenta\s+(\d+)(?:\/\d+)?$/i;
+    const withoutTable = tablePrefix && value.startsWith(`${tablePrefix} - `)
+      ? value.slice(tablePrefix.length + 3)
+      : value.replace(/^(?:Mesa|Table)\s+[^-]+\s+-\s+/i, '');
+    const account = withoutTable.match(generatedSequence);
+    return account ? `Cuenta ${account[1]}` : null;
+  };
+  const explicit = String(ticket.alias || ticket.barTabName || '').trim();
+  if (explicit) return simplifyGenerated(explicit) || explicit;
+  const name = String(ticket.name || '').trim();
+  if (name) return simplifyGenerated(name) || name;
+  return name || `Cuenta ${index + 1}`;
+};
 
 export const buildTableAccountDisplayEntries = (
   tickets: ParkedTicket[],

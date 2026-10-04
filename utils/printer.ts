@@ -6,7 +6,7 @@ import { PrintRouterService } from '../services/printer/PrintRouterService';
 import { buildEscPosCashDrawerPayload, buildEscPosCashMovementReceiptPayload, buildEscPosComandaPayload, buildEscPosReservationPayload, buildEscPosSubtotalPayload, buildEscPosTicketPayload, buildEscPosVoucherPayload, shouldOpenDrawerForTransaction } from '../services/printer/EscPosFormatter';
 import { shouldSuppressBrowserPrintFallback } from '../services/printer/PrintRuntime';
 import { dbAdapter } from '../services/db';
-import { calculateTaxBreakdownFromItems, calculateTransactionFiscalSummary, consolidateTaxBreakdownForDisplay, formatTaxLineLabel, hasAuthoritativeZeroTax } from './fiscalBreakdown';
+import { calculateTaxBreakdownFromItems, calculateTransactionFiscalSummary, consolidateTaxBreakdownForDisplay, formatTaxLineLabel, hasAuthoritativeZeroTax, type FiscalTaxBreakdownLine } from './fiscalBreakdown';
 import { resolveLineDiscountPresentation } from './lineDiscountPresentation';
 import { buildPaymentReceiptPresentation, buildPaymentSettlementSummary } from './paymentSettlement';
 import { getTerminalSnapshotSellers, resolveTerminalSellerName } from './terminalSnapshotSellers';
@@ -929,10 +929,15 @@ const printPrecuentaInternal = async (
     params: {
         items: CartItem[];
         subtotal: number;
+        netSubtotal?: number;
+        isTaxIncluded?: boolean;
         discountTotal: number;
         discountType?: 'PERCENT' | 'FIXED';
         discountValue?: number;
         taxTotal: number;
+        taxBreakdown?: FiscalTaxBreakdownLine[];
+        serviceChargeAmount?: number;
+        serviceChargeRate?: number;
         finalTotal: number;
         table?: Table | null;
         customerName?: string;
@@ -1047,10 +1052,13 @@ const printPrecuentaInternal = async (
                     <span>${discountLabel}</span>
                     <span>-${currencySymbol}${params.discountTotal.toFixed(2)}</span>
                 </div>` : ''}
+                ${typeof params.netSubtotal === 'number' ? `<div class="total-row"><span>${params.isTaxIncluded ? 'SUBTOTAL NETO' : 'SUBTOTAL GRAVABLE'}</span><span>${currencySymbol}${params.netSubtotal.toFixed(2)}</span></div>` : ''}
+                ${(params.taxBreakdown?.length ? params.taxBreakdown : [{ name: 'Impuestos', rate: 0, amount: params.taxTotal }]).map(tax => `
                 <div class="total-row">
-                    <span>IMPUESTOS</span>
-                    <span>${currencySymbol}${params.taxTotal.toFixed(2)}</span>
-                </div>
+                    <span>${tax.rate ? formatTaxLineLabel(tax) : tax.name}</span>
+                    <span>${currencySymbol}${tax.amount.toFixed(2)}</span>
+                </div>`).join('')}
+                ${Number(params.serviceChargeAmount || 0) > 0 ? `<div class="total-row"><span>Propina legal (${Number(params.serviceChargeRate || 0)}%)</span><span>${currencySymbol}${Number(params.serviceChargeAmount).toFixed(2)}</span></div>` : ''}
                 
                 <div class="total-row total-final">
                     <span>TOTAL A PAGAR</span>
@@ -1061,7 +1069,7 @@ const printPrecuentaInternal = async (
             <div class="text-center" style="margin-top: 20px; font-size: 11px; margin-bottom: 20px;">
                 Verifique su consumo antes de emitir la factura.
                 <br/><br/>
-                Propina Legal no incluida.
+                ${Number(params.serviceChargeAmount || 0) > 0 ? 'Propina legal incluida en el total.' : 'Propina Legal no incluida.'}
             </div>
 
             <script>

@@ -50,7 +50,7 @@ test('la Master permite persistir comensales y clientes creados por una terminal
 });
 
 test('asignar un cliente persiste el ticket sin perder el lock ni la selección al volver al POS', () => {
-  assert.match(appSource, /currentView !== 'POS' && currentView !== 'CUSTOMERS'/);
+  assert.match(appSource, /if \(!\['TABLE_MAP', 'POS', 'CUSTOMERS'\]\.includes\(currentViewRef\.current\)\) return/);
   assert.match(appSource, /reason: 'customer_assigned'/);
   assert.match(appSource, /customerId: c\.id,[\s\S]*customerName: c\.name/);
   assert.match(appSource, /!activeTableEditLockRef\.current/);
@@ -71,7 +71,9 @@ test('la salida conserva las credenciales del lock, evita esperas y no duplica c
   const saveStart = appSource.indexOf('const handleUpdateParkedTickets');
   const saveEnd = appSource.indexOf('const handleParkedOrderSplitFromMap', saveStart);
   const saveSource = appSource.slice(saveStart, saveEnd);
-  assert.doesNotMatch(saveSource, /await fetchTables\(\)/);
+  const normalSync = saveSource.slice(saveSource.indexOf('const integrityCheckedTickets'));
+  assert.doesNotMatch(normalSync, /await fetchTables\(\)/);
+  assert.match(saveSource, /await fetchTables\(\)/); // Reconcile lock rejection only.
 
   const parkStart = posSource.indexOf('const handleParkCurrentTicket');
   const parkEnd = posSource.indexOf('const saveActiveTableOrderForMap', parkStart);

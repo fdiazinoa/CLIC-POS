@@ -34,13 +34,25 @@ test('la pre-cuenta se persiste y la mesa muestra estado subtotalizado', () => {
 });
 
 test('una mesa dividida distingue subtotal total y parcial por ticket', () => {
-  assert.match(mapSource, /items\.every\(item => Boolean\(item\.subtotalizedAt\)\)/);
+  assert.match(mapSource, /items\.some\(item => Boolean\(item\.subtotalizedAt\)\)/);
   assert.match(mapSource, /subtotalizedTicketCount: existing\.subtotalizedTicketCount \+ summary\.subtotalizedTicketCount/);
   assert.match(mapSource, /const isSubtotalized = ticketCount > 0 && subtotalizedTicketCount === ticketCount/);
   assert.match(mapSource, /const isPartiallySubtotalized = subtotalizedTicketCount > 0 && subtotalizedTicketCount < ticketCount/);
   assert.match(mapSource, /\{model\.subtotalizedTicketCount\}\/\{model\.ticketCount\}/);
   assert.match(mapSource, /model\.isPartiallySubtotalized \? \([\s\S]*h-8 w-8[\s\S]*rounded-full[\s\S]*from-violet-500 to-indigo-700/);
   assert.doesNotMatch(mapSource, /model\.isPartiallySubtotalized[\s\S]{0,180}absolute left-1\/2 top-1\.5/);
+});
+
+test('agregar después del subtotal conserva líneas previas y destaca solo las nuevas', () => {
+  assert.match(posSource, /&& !i\.subtotalizedAt/);
+  assert.match(posSource, /onUpdateCart\(prev => \[newItem, \.\.\.prev\]\)/);
+  assert.match(posSource, /isNewAfterSubtotal = isActiveTableAccountSubtotalized && !isSubtotalizedItem/);
+  assert.doesNotMatch(posSource, /Nuevo desde subtotal/);
+  assert.match(posSource, /isNewAfterSubtotal \? 'border-emerald-200 bg-emerald-50'/);
+  assert.match(posSource, /activeTableAccount\?\.items\?\.some\(item => Boolean\(item\.subtotalizedAt\)\)/);
+  assert.match(posSource, /invalidatesPriorSubtotal = Boolean\(originalItem\?\.subtotalizedAt\)/);
+  assert.match(posSource, /if \(invalidatesPriorSubtotal\) newCart = clearCartSubtotalization\(newCart\)/);
+  assert.doesNotMatch(posSource, /if \(isSubtotalizedMutation\) newCart = clearCartSubtotalization\(newCart\)/);
 });
 
 test('el selector identifica la cuenta subtotalizada con hora, usuario y monto', () => {

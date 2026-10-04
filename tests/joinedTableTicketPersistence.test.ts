@@ -3,6 +3,7 @@ import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
 import { createPaymentFractionPlan, retainCurrentPaymentFractionPlan } from '../utils/paymentFractions';
+import { findRetiredTableAccountSuccessor } from '../utils/tableAccountRetirement';
 
 // Exercise the actual three POS builders and App reconciliation, not a second
 // implementation of the save logic. No server, device or business data writes.
@@ -12,7 +13,7 @@ const marker = 'const reconcileTablesWithParkedTickets = useCallback(';
 const start = app.indexOf(marker) + marker.length;
 assert.ok(start >= marker.length);
 const end = app.indexOf('}, []);', start) + 1;
-const reconcile = Function(`${ts.transpile(`const reconcile = ${app.slice(start, end)};`)}; return reconcile;`)();
+const reconcile = Function('findRetiredTableAccountSuccessor', `${ts.transpile(`const reconcile = ${app.slice(start, end)};`)}; return reconcile;`)(findRetiredTableAccountSuccessor);
 
 function save(builder: string, ticket: any, activeTable: any, items: any[]) {
   const begin = pos.indexOf(`const ${builder}: ParkedTicket = {`);

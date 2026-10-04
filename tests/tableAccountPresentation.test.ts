@@ -5,7 +5,9 @@ import type { ParkedTicket } from '../types';
 import { createPaymentFractionPlan } from '../utils/paymentFractions';
 import {
   buildTableAccountDisplayEntries,
+  getTableAccountLabel,
   renameTableAccountTicket,
+  sortTableAccountsForDisplay,
   summarizeOpenTableAccounts,
 } from '../utils/tableAccountPresentation';
 
@@ -19,6 +21,14 @@ const ticket = (overrides: Partial<ParkedTicket> = {}): ParkedTicket => ({
   ...overrides,
 });
 
+test('el orden de las hojas no cambia al seleccionar otra cuenta ni renombrarla', () => {
+  const earliest = ticket({ id: 'juan', timestamp: '2026-09-12T12:40:00.000Z', alias: 'Juan', name: 'Mesa 4 - Juan' });
+  const next = ticket({ id: 'cuenta-1', timestamp: '2026-09-12T12:41:00.000Z', alias: 'Cuenta 4' });
+  const latest = ticket({ id: 'jose', timestamp: '2026-09-12T12:42:00.000Z', alias: 'JOSE', name: 'Mesa 4 - JOSE' });
+  assert.deepEqual(sortTableAccountsForDisplay([latest, next, earliest]).map(row => row.id), ['juan', 'cuenta-1', 'jose']);
+  assert.deepEqual(sortTableAccountsForDisplay([next, earliest, latest]).map(row => row.id), ['juan', 'cuenta-1', 'jose']);
+});
+
 test('muestra las tres cuotas de una cuenta fraccionada sin triplicar el total', () => {
   const entries = buildTableAccountDisplayEntries([
     ticket({ paymentFraction: createPaymentFractionPlan(23050, 3) }),
@@ -26,12 +36,26 @@ test('muestra las tres cuotas de una cuenta fraccionada sin triplicar el total',
 
   assert.equal(entries.length, 3);
   assert.deepEqual(entries.map(entry => entry.displayLabel), [
-    'Mesa 4 - Cuenta 1 · Cuota 1 de 3',
-    'Mesa 4 - Cuenta 1 · Cuota 2 de 3',
-    'Mesa 4 - Cuenta 1 · Cuota 3 de 3',
+    'Cuenta 1 · Cuota 1 de 3',
+    'Cuenta 1 · Cuota 2 de 3',
+    'Cuenta 1 · Cuota 3 de 3',
   ]);
   assert.deepEqual(entries.map(entry => entry.amount), [7683.34, 7683.33, 7683.33]);
   assert.deepEqual(summarizeOpenTableAccounts(entries), { count: 3, total: 23050 });
+});
+
+test('etiquetas legacy anidadas se simplifican sin cambiar nombre personalizado ni ID', () => {
+  const generated = ticket({ id: 'keep-this-id', name: 'Mesa 11 - Cuenta 1 - Cuenta 2/4', tableDisplayLabel: 'Mesa 11' });
+  assert.equal(getTableAccountLabel(generated, 1), 'Cuenta 2');
+  assert.equal(generated.id, 'keep-this-id');
+  assert.equal(generated.name, 'Mesa 11 - Cuenta 1 - Cuenta 2/4');
+  assert.equal(getTableAccountLabel(ticket({ alias: 'Familia Díaz', name: generated.name }), 1), 'Familia Díaz');
+  assert.equal(getTableAccountLabel(ticket({ name: 'Mesa 11 - Ana', tableDisplayLabel: 'Mesa 11' }), 1), 'Mesa 11 - Ana');
+  assert.equal(getTableAccountLabel(ticket({ alias: 'Mesa 11 - Cuenta 1 - Cuenta 2/4', name: generated.name }), 1), 'Cuenta 2');
+  assert.equal(getTableAccountLabel(ticket({ alias: 'Mesa 11 - Cuenta 1 - Cuenta 3/4', name: generated.name }), 2), 'Cuenta 3');
+  assert.equal(getTableAccountLabel(ticket({ alias: 'Mesa 11 - Cuenta 1 - Cuenta 4/4', name: generated.name }), 3), 'Cuenta 4');
+  assert.equal(getTableAccountLabel(ticket({ alias: 'Mesa 11 - Ana', name: generated.name }), 1), 'Mesa 11 - Ana');
+  assert.equal(getTableAccountLabel(ticket({ alias: 'Mesa 11 - Ana Cuenta 2', name: generated.name }), 1), 'Mesa 11 - Ana Cuenta 2');
 });
 
 test('omite del selector las cuotas cobradas sin eliminarlas del ticket persistido', () => {
