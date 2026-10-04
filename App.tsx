@@ -9728,17 +9728,28 @@ const AppContent: React.FC = () => {
         }
         console.warn('[TABLE_SYNC] Master no disponible; restaurando baseline confirmado de esta mesa:', readError);
       }
-      lastAcknowledgedTableTicketsRef.current.set(tableId, authoritativeTableTickets);
-      const currentTickets = masterOperationalSnapshotRef.current.parkedTickets || [];
-      const reconciledTickets = reconcileRejectedTableTickets(currentTickets, authoritativeTableTickets, tableId);
+      // The authoritative read may outlive this pending operation. Never apply
+      // its older snapshot over a newer edit of the same table.
+      if (pendingClientTableSyncRef.current !== pendingSync && pendingMasterTableSyncRef.current !== pendingSync) return;
       if (pendingClientTableSyncRef.current === pendingSync) {
         pendingClientTableSyncRef.current = null;
         await clearPendingClientTableSync();
+        const successor = pendingClientTableSyncRef.current;
+        if (successor) {
+          // EMPTY may have reached SQLite after the successor's pending write.
+          // Restore the newest pending record before deciding whether to apply B.
+          await persistPendingClientTableSync(successor);
+          if (successor.tableId === tableId || pendingClientTableSyncRef.current !== successor) return;
+        }
       }
       if (pendingMasterTableSyncRef.current === pendingSync) {
         pendingMasterTableSyncRef.current = null;
         writePendingTableSyncMirror({ id: 'current', status: 'EMPTY', queuedAt: new Date().toISOString(), parkedTickets: [] });
       }
+      if (pendingClientTableSyncRef.current?.tableId === tableId || pendingMasterTableSyncRef.current?.tableId === tableId) return;
+      lastAcknowledgedTableTicketsRef.current.set(tableId, authoritativeTableTickets);
+      const currentTickets = masterOperationalSnapshotRef.current.parkedTickets || [];
+      const reconciledTickets = reconcileRejectedTableTickets(currentTickets, authoritativeTableTickets, tableId);
       masterOperationalSnapshotRef.current.parkedTickets = reconciledTickets;
       setParkedTickets(reconciledTickets);
       writeCriticalCollectionsMirror(reconciledTickets, cashMovements);

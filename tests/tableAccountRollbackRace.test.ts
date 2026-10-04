@@ -100,3 +100,86 @@ test('sin GET ni baseline confirmado, conserva PENDING y no declara snapshot opt
   assert.equal(pendingClient.current, pending);
   assert.equal(localWrites, 0);
 });
+
+test('GET tardío de B no pisa una edición C que tomó la misma mesa durante el await', async () => {
+  const optimisticB = ticket('one', 'A', 'Cuenta B');
+  const optimisticC = ticket('one', 'A', 'Cuenta C');
+  const pendingB = { tableId: 'A' };
+  const pendingC = { tableId: 'A' };
+  const pendingClient = { current: pendingB };
+  const snapshot = { current: { parkedTickets: [optimisticB] } };
+  const lastAck = { current: new Map([['A', [ticket('one', 'A', 'Cuenta original')]]]) };
+  let resolveGet!: (value: unknown) => void;
+  const delayedGet = new Promise(resolve => { resolveGet = resolve; });
+  let localWrites = 0;
+  const rollback = evaluate({
+    activeTableEditLockRef: { current: { tableId: 'A', token: 'token-C' } },
+    tableLockLifecycleVersionRef: { current: 1 },
+    rejectedTableSyncGenerationRef: { current: new Map<string, number>() },
+    lastAcknowledgedTableTicketsRef: lastAck,
+    pendingClientTableSyncRef: pendingClient, pendingMasterTableSyncRef: { current: null },
+    fetchAuthoritativeTableSnapshot: () => delayedGet,
+    resolveValidatedOperationalApiUrl: async () => '', isClientTerminalMode: () => false,
+    parkedTicketReferencesTable: (row: { tableId: string }, tableId: string) => row.tableId === tableId,
+    masterOperationalSnapshotRef: snapshot,
+    reconcileRejectedTableTickets,
+    clearPendingClientTableSync: async () => { localWrites += 1; },
+    setParkedTickets: () => { localWrites += 1; },
+    writeCriticalCollectionsMirror: () => { localWrites += 1; },
+    db: { save: async () => { localWrites += 1; } },
+    fetchTables: async () => { localWrites += 1; },
+    console: { warn: () => {} },
+  });
+  const rejectedB = rollback(new Error('TABLE_EDIT_LOCK_REQUIRED'), pendingB, 'token-B');
+  pendingClient.current = pendingC;
+  snapshot.current.parkedTickets = [optimisticC];
+  resolveGet({ assertCurrentAuthority: () => {}, parkedTickets: [ticket('one', 'A', 'Cuenta original')] });
+  await rejectedB;
+  assert.equal(pendingClient.current, pendingC);
+  assert.deepEqual(snapshot.current.parkedTickets, [optimisticC]);
+  assert.equal(localWrites, 0);
+  assert.equal(lastAck.current.get('A')?.[0]?.name, 'Cuenta original');
+});
+
+test('clearPending tardío no aplica snapshot B y restaura el pending C de la misma mesa', async () => {
+  const optimisticC = ticket('one', 'A', 'Cuenta C');
+  const pendingB = { tableId: 'A' };
+  const pendingC = { tableId: 'A' };
+  const pendingClient = { current: pendingB };
+  const snapshot = { current: { parkedTickets: [ticket('one', 'A', 'Cuenta B')] } };
+  const restored: unknown[] = [];
+  let resolveClear!: () => void;
+  const deferredClear = new Promise<void>(resolve => { resolveClear = resolve; });
+  let snapshotWrites = 0;
+  const rollback = evaluate({
+    activeTableEditLockRef: { current: { tableId: 'A', token: 'token-C' } },
+    tableLockLifecycleVersionRef: { current: 1 },
+    rejectedTableSyncGenerationRef: { current: new Map<string, number>() },
+    lastAcknowledgedTableTicketsRef: { current: new Map([['A', [ticket('one', 'A', 'Cuenta original')]]]) },
+    pendingClientTableSyncRef: pendingClient, pendingMasterTableSyncRef: { current: null },
+    fetchAuthoritativeTableSnapshot: async () => ({ assertCurrentAuthority: () => {}, parkedTickets: [ticket('one', 'A', 'Cuenta original')] }),
+    resolveValidatedOperationalApiUrl: async () => '', isClientTerminalMode: () => false,
+    parkedTicketReferencesTable: (row: { tableId: string }, tableId: string) => row.tableId === tableId,
+    masterOperationalSnapshotRef: snapshot,
+    reconcileRejectedTableTickets,
+    clearPendingClientTableSync: () => deferredClear,
+    persistPendingClientTableSync: async (value: unknown) => { restored.push(value); },
+    setParkedTickets: () => { snapshotWrites += 1; },
+    writeCriticalCollectionsMirror: () => { snapshotWrites += 1; },
+    db: { save: async () => { snapshotWrites += 1; } },
+    fetchTables: async () => { snapshotWrites += 1; },
+    console: { warn: () => {} },
+  });
+  const rejectedB = rollback(new Error('TABLE_EDIT_LOCK_REQUIRED'), pendingB, 'token-B');
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(pendingClient.current, null, 'B should be clearing before C takes over');
+  pendingClient.current = pendingC;
+  snapshot.current.parkedTickets = [optimisticC];
+  resolveClear();
+  await rejectedB;
+  assert.equal(pendingClient.current, pendingC);
+  assert.deepEqual(snapshot.current.parkedTickets, [optimisticC]);
+  assert.equal(snapshotWrites, 0);
+  assert.deepEqual(restored, [pendingC]);
+});
