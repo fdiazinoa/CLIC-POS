@@ -14,6 +14,7 @@ import {
 
 const identity: LargeMasterSyncV3CanaryInput = {
   erpBaseUrl: 'https://erp.example.test',
+  v3BaseUrl: 'https://v3.example.test',
   tenantId: 'tenant-id',
   erpTerminalId: 'terminal-id',
   posDeviceId: 'device-id',
@@ -74,6 +75,8 @@ test('canary request authenticates with register token without exposing it in in
 
 test('canary registration keeps operational credentials isolated', () => {
   assert.match(canaryScreenSource, /bindTerminalFromErp\(\{[\s\S]*persistCredentials:\s*false/);
+  assert.match(canaryScreenSource, /erpBaseUrl,\s*\n\s*persistCredentials:\s*false/);
+  assert.match(canaryScreenSource, /\['v3BaseUrl', 'URL Sync V3 \(Railway\)'\]/);
 });
 
 test('raw V3 transport preserves checksum-sensitive JSON text instead of native reserialization', async () => {
@@ -82,7 +85,9 @@ test('raw V3 transport preserves checksum-sensitive JSON text instead of native 
   assert.notEqual(raw, reserialized);
   let headers: HeadersInit | undefined;
   let redirect: RequestRedirect | undefined;
-  const fetcher = (async (_url: string, init?: RequestInit) => {
+  let requestedUrl = '';
+  const fetcher = (async (url: string, init?: RequestInit) => {
+    requestedUrl = url;
     headers = init?.headers;
     redirect = init?.redirect;
     return new Response(raw, { status: 200, headers: { 'X-Sync-V3-Checksum': 'checksum' } });
@@ -90,16 +95,20 @@ test('raw V3 transport preserves checksum-sensitive JSON text instead of native 
   const response = await createLargeMasterSyncV3CanaryTransport(identity, fetcher)
     .request('/api/sync/v3/master-syncs/id/datasets/articles/chunks/0', { method: 'GET' });
   assert.equal(response.text, raw);
+  assert.equal(requestedUrl, 'https://v3.example.test/api/sync/v3/master-syncs/id/datasets/articles/chunks/0');
   assert.equal((headers as Record<string, string>)['X-Sync-Token'], 'secret-token');
   assert.equal(redirect, 'error');
   await assert.rejects(createLargeMasterSyncV3CanaryTransport(identity, fetcher)
     .request('https://evil.example.test/steal', { method: 'GET' }), /PATH_INVALID/);
 });
 
-test('canary validates ERP origin and fails closed without native emulator proof', () => {
+test('canary validates both origins and fails closed without native emulator proof', async () => {
   assert.equal(validateLargeMasterSyncV3CanaryUrl('https://erp.example.test/'), 'https://erp.example.test');
   assert.throws(() => validateLargeMasterSyncV3CanaryUrl('http://erp.example.test'), /HTTPS_REQUIRED/);
   assert.throws(() => validateLargeMasterSyncV3CanaryUrl('https://erp.example.test/other'), /BASE_URL_INVALID/);
+  await assert.rejects(createLargeMasterSyncV3CanaryTransport({ ...identity, v3BaseUrl: 'http://v3.example.test' },
+    (async () => { throw new Error('must not fetch'); }) as typeof fetch)
+    .request('/api/sync/v3/master-syncs', { method: 'POST' }), /HTTPS_REQUIRED/);
   assert.throws(() => assertLargeMasterSyncV3CanaryEmulator(), /EMULATOR_REQUIRED/);
 });
 
