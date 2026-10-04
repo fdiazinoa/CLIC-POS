@@ -39,16 +39,20 @@ const ticketTotal = (ticket: ParkedTicket): number => Number(
 );
 
 export const getTableAccountLabel = (ticket: ParkedTicket, index: number): string => {
-  const explicit = String(ticket.alias || ticket.barTabName || '').trim();
-  if (explicit) return explicit;
-  const name = String(ticket.name || '').trim();
-  const generatedTail = name.match(/(?:^| - )Cuenta\s+(\d+)(?:\/\d+)?$/i);
   const tablePrefix = String(ticket.tableDisplayLabel || '').trim();
-  if (generatedTail && (
-    generatedTail[0].trim() === name
-    || (tablePrefix && name.startsWith(`${tablePrefix} - `))
-    || /^(?:Mesa|Table)\s+[^-]+ - /i.test(name)
-  )) return `Cuenta ${generatedTail[1]}`;
+  const simplifyGenerated = (value: string): string | null => {
+    const generatedTail = value.match(/(?:^| - )Cuenta\s+(\d+)(?:\/\d+)?$/i);
+    if (generatedTail && (
+      generatedTail[0].trim() === value
+      || (tablePrefix && value.startsWith(`${tablePrefix} - `))
+      || /^(?:Mesa|Table)\s+[^-]+ - /i.test(value)
+    )) return `Cuenta ${generatedTail[1]}`;
+    return null;
+  };
+  const explicit = String(ticket.alias || ticket.barTabName || '').trim();
+  if (explicit) return simplifyGenerated(explicit) || explicit;
+  const name = String(ticket.name || '').trim();
+  if (name) return simplifyGenerated(name) || name;
   return name || `Cuenta ${index + 1}`;
 };
 

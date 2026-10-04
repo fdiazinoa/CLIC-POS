@@ -42,6 +42,10 @@ test('etiquetas legacy anidadas se simplifican sin cambiar nombre personalizado 
   assert.equal(generated.name, 'Mesa 11 - Cuenta 1 - Cuenta 2/4');
   assert.equal(getTableAccountLabel(ticket({ alias: 'Familia Díaz', name: generated.name }), 1), 'Familia Díaz');
   assert.equal(getTableAccountLabel(ticket({ name: 'Mesa 11 - Ana', tableDisplayLabel: 'Mesa 11' }), 1), 'Mesa 11 - Ana');
+  assert.equal(getTableAccountLabel(ticket({ alias: 'Mesa 11 - Cuenta 1 - Cuenta 2/4', name: generated.name }), 1), 'Cuenta 2');
+  assert.equal(getTableAccountLabel(ticket({ alias: 'Mesa 11 - Cuenta 1 - Cuenta 3/4', name: generated.name }), 2), 'Cuenta 3');
+  assert.equal(getTableAccountLabel(ticket({ alias: 'Mesa 11 - Cuenta 1 - Cuenta 4/4', name: generated.name }), 3), 'Cuenta 4');
+  assert.equal(getTableAccountLabel(ticket({ alias: 'Mesa 11 - Ana', name: generated.name }), 1), 'Mesa 11 - Ana');
 });
 
 test('omite del selector las cuotas cobradas sin eliminarlas del ticket persistido', () => {

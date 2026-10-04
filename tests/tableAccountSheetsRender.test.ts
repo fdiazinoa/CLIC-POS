@@ -59,3 +59,28 @@ test('cobrar y renombrar conservan contraste explícito sin cambiar la fila lega
   assert.match(sheets, /className="table-account-action table-account-checkout[^"]*text-white/);
   assert.match(sheets, /aria-label="Nombre del comensal"[^\n]*className="[^"]*bg-white[^"]*text-slate-900/);
 });
+
+test('cuatro hojas legacy usan Cuenta 1–4 en cabeceras, acciones y selector sin tocar alias persistido', () => {
+  const tickets = Array.from({ length: 4 }, (_, index) => ({
+    id: `split-${index + 1}`, tableId: 'mesa-11', tableDisplayLabel: 'Mesa 11',
+    name: `Mesa 11 - Cuenta 1 - Cuenta ${index + 1}/4`,
+    alias: index === 0 ? undefined : `Mesa 11 - Cuenta 1 - Cuenta ${index + 1}/4`,
+    timestamp: '2026-10-03T19:00:00Z', total: 100,
+    items: [{ id: 'water', cartId: `line-${index}`, name: 'Agua', price: 100, quantity: 1 }],
+  })) as ParkedTicket[];
+  const html = renderToStaticMarkup(React.createElement(TableAccountsSheetsModal, {
+    table: { id: 'mesa-11', nombre: 'Mesa 11' } as Table,
+    tickets, currencySymbol: 'RD$', onClose: () => {}, onOpenAccount: () => {},
+    onCreateAccount: () => {}, onRenameAccount: () => {}, onPrint: () => true,
+    onTransfer: async () => {},
+  }));
+  assert.equal((html.match(/<section\b/g) || []).length, 4);
+  for (let index = 1; index <= 4; index += 1) {
+    assert.match(html, new RegExp(`<h3[^>]*>Cuenta ${index}<\\/h3>`));
+    assert.match(html, new RegExp(`aria-label="Renombrar Cuenta ${index}"`));
+  }
+  assert.doesNotMatch(html, /Mesa 11 - Cuenta 1 - Cuenta/);
+  assert.equal(tickets[1].alias, 'Mesa 11 - Cuenta 1 - Cuenta 2/4');
+  const sheetsSource = readFileSync(new URL('../components/TableAccountsSheetsModal.tsx', import.meta.url), 'utf8');
+  assert.match(sheetsSource, /transferDestinations\.map\(ticket => <option[^>]*>\{getTableAccountLabel\(ticket, tickets\.indexOf\(ticket\)\)\}/);
+});
