@@ -101,7 +101,9 @@ test('Master y Cliente esperan la confirmación de la orden antes de abandonar l
     appSource.indexOf('const handleParkedOrderSplitFromMap'),
   );
   assert.equal((updateHandler.match(/if \(options\.reason === 'explicit' \|\| options\.reason === 'customer_assigned'\) \{\s*try \{ await queuedSync; \}\s*catch \(error\) \{/g) || []).length, 2);
-  assert.equal((updateHandler.match(/catch \(rollbackError\) \{ console\.error\([^\n]+\); \}\s*throw error;/g) || []).length, 2);
+  assert.match(updateHandler, /if \(publishAfterAck\) \{\s*if \(pendingClientTableSyncRef\.current === pendingSync\) pendingClientTableSyncRef\.current = null;/);
+  assert.match(updateHandler, /if \(publishAfterAck\) \{\s*if \(pendingMasterTableSyncRef\.current === masterPendingSync\) pendingMasterTableSyncRef\.current = null;/);
+  assert.equal((updateHandler.match(/else \{\s*try \{ await rollbackRejectedTableLock\(error, (?:pendingSync|masterPendingSync), (?:editLock|masterEditLock)\?\.token\); \}\s*catch \(rollbackError\) \{ console\.error\([^\n]+\); \}\s*\}\s*throw error;/g) || []).length, 2);
 
   const backToMap = posSource.slice(
     posSource.indexOf('const handleBackToMap'),
