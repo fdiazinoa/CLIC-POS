@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { ParkedTicket } from '../types';
 import { commitRetiredTableAccountAfterAck } from '../utils/tableAccountRetirement';
+import { mergeParkedTicketsForTable } from '../server/tableTicketMerge';
 
 const ticket = (id: string): ParkedTicket => ({ id, tableId: 'mesa-7', name: id, items: [], timestamp: '2026-10-03T19:00:00Z' });
 
@@ -101,4 +102,13 @@ test('ACK tardío rebasa edición de otra mesa durante SQLite antes de publicar'
   assert.equal(saves[1].find(row => row.id === 'other')?.name, 'Nueva edición');
   assert.equal(published.find(row => row.id === 'other')?.name, 'Nueva edición');
   assert.equal(published.some(row => row.id === 'source'), false);
+});
+
+test('wire Master/Cliente retira source de la mesa y preserva tercero y mesa unida', () => {
+  const source = { ...ticket('source'), joinedTableIds: ['mesa-7', 'mesa-8'] };
+  const target = { ...ticket('target'), joinedTableIds: ['mesa-7', 'mesa-8'] };
+  const third = { ...ticket('third'), tableId: 'mesa-9' };
+  const ack = mergeParkedTicketsForTable([source, third], [target], 'mesa-7');
+  assert.deepEqual(ack.map(row => row.id), ['third', 'target']);
+  assert.deepEqual(ack[1].joinedTableIds, ['mesa-7', 'mesa-8']);
 });
