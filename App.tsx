@@ -5724,6 +5724,7 @@ const AppContent: React.FC = () => {
   };
   const discoverEligibleClientMasterEndpoint = async () => {
     const authorityState = apiSyncAdapter.getOperationalAuthorityState();
+    await legacyMutationJournal.reconcileNonBlockingMaintenanceMutations();
     await reconcileLegacyClientTableConflictBeforeAuthorityAssertion({
       journal: legacyMutationJournal,
       authorityBaseUrl: resolveMasterOperationalBaseUrl(),
@@ -6132,6 +6133,8 @@ const AppContent: React.FC = () => {
   };
 
   const reconcileRejectedTableMutationBlockers = useCallback(async (): Promise<void> => {
+    if (!legacyMutationJournal.hasOutcomeUnknown()) return;
+    await legacyMutationJournal.reconcileNonBlockingMaintenanceMutations();
     if (!legacyMutationJournal.hasOutcomeUnknown()) return;
     const authorityState = apiSyncAdapter.getOperationalAuthorityState();
     const endpointUrl = await resolveValidatedOperationalApiUrl('/api/mesas/parked-tickets');
@@ -7651,6 +7654,7 @@ const AppContent: React.FC = () => {
               if (isOperationalClientBoot) {
                 try {
                   const bootstrapAuthorityState = apiSyncAdapter.getOperationalAuthorityState();
+                  await legacyMutationJournal.reconcileNonBlockingMaintenanceMutations();
                   await reconcileLegacyClientTableConflictBeforeAuthorityAssertion({
                     journal: legacyMutationJournal,
                     authorityBaseUrl: resolveMasterOperationalBaseUrl(),

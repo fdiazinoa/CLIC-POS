@@ -142,3 +142,36 @@ test('arranque frío reconcilia antes de autoridad con GET, release y GET en ori
   assert.deepEqual(requests, ['GET /api/mesas', 'POST /api/mesas/desbloquear', 'GET /api/mesas']);
   restarted.assertRemoteAuthorityAllowed();
 });
+
+test('restart cierra solo heartbeat de lock efímero y permite reconciliar PUT retiro separado', async () => {
+  const fixture = await makeJournal();
+  const retiredRow = fixture.store.rows.get(fixture.entry.id)!;
+  fixture.store.rows.set('heartbeat', {
+    ...retiredRow, id: 'heartbeat', operationCorrelationId: 'TABLE_LOCK_ACQUIRE:heartbeat',
+    method: 'POST', canonicalPath: '/api/mesas/bloquear', state: 'DISPATCHED',
+    classification: null, closedAt: null,
+  });
+  const restarted = await fixture.restart();
+  assert.equal(restarted.getEntry('heartbeat')?.classification, 'NON_BLOCKING_MAINTENANCE');
+  assert.equal(restarted.getEntry(fixture.entry.id)?.state, 'OUTCOME_UNKNOWN');
+  assert.equal(await reconcile(restarted, async () => ({ revision: 42, parkedTickets: [other, ...post] })), true);
+  restarted.assertRemoteAuthorityAllowed();
+});
+
+test('un heartbeat no autoriza cerrar una mutación ajena que también quedó incierta', async () => {
+  const fixture = await makeJournal();
+  const retiredRow = fixture.store.rows.get(fixture.entry.id)!;
+  fixture.store.rows.set('heartbeat', {
+    ...retiredRow, id: 'heartbeat', operationCorrelationId: 'TABLE_LOCK_ACQUIRE:heartbeat',
+    method: 'POST', canonicalPath: '/api/mesas/bloquear', state: 'DISPATCHED', closedAt: null,
+  });
+  fixture.store.rows.set('sale', {
+    ...retiredRow, id: 'sale', operationCorrelationId: 'SALE_POST:other',
+    method: 'POST', canonicalPath: '/api/sales', state: 'DISPATCHED', closedAt: null,
+  });
+  const restarted = await fixture.restart();
+  assert.equal(restarted.getEntry('heartbeat')?.classification, 'NON_BLOCKING_MAINTENANCE');
+  assert.equal(restarted.getEntry('sale')?.state, 'OUTCOME_UNKNOWN');
+  assert.equal(await reconcile(restarted, async () => ({ revision: 42, parkedTickets: [other, ...post] })), false);
+  assert.equal(restarted.hasOutcomeUnknown(), true);
+});
