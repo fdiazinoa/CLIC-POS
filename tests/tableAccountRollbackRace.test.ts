@@ -251,3 +251,86 @@ test('ACK de D después de C deja EMPTY durable, sin resucitar C', async () => {
   await Promise.all([c, d, empty]);
   assert.deepEqual(durable, ['C', 'D', 'EMPTY']);
 });
+
+test('B rechazada no se convierte en baseline cuando C arranca durante clear y también falla', async () => {
+  const original = ticket('one', 'A', 'Cuenta original');
+  const rejectedB = ticket('one', 'A', 'Cuenta B rechazada');
+  const rejectedC = ticket('two', 'A', 'Cuenta C rechazada');
+  const unrelated = ticket('other', 'Z', 'Otra mesa');
+  const lastAck = { current: new Map([['A', [original]]]) };
+  const seeds: ts.IfStatement[] = [];
+  const collectSeeds = (node: ts.Node) => {
+    if (ts.isIfStatement(node) && node.expression.getText(source).includes('!lastAcknowledgedTableTicketsRef.current.has(syncTableId)')) seeds.push(node);
+    ts.forEachChild(node, collectSeeds);
+  };
+  collectSeeds(source);
+  assert.equal(seeds.length, 2, 'client and native Master both guard the initial baseline');
+  for (const seed of seeds) {
+    const compiledSeed = ts.transpileModule(seed.getText(source), {
+      fileName: 'seed.ts', compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
+    }).outputText;
+    new Function('syncTableId', 'lastAcknowledgedTableTicketsRef', 'pendingClientTableSyncRef', 'pendingMasterTableSyncRef', 'parkedTickets', 'parkedTicketReferencesTable', compiledSeed)(
+      'A', lastAck, { current: null }, { current: null }, [rejectedB, unrelated],
+      (row: { tableId: string }, tableId: string) => row.tableId === tableId,
+    );
+  }
+  assert.deepEqual(lastAck.current.get('A'), [original], 'optimistic B never replaces ACK original');
+
+  const pendingC = { tableId: 'A' };
+  const snapshot = { current: { parkedTickets: [rejectedB, rejectedC, unrelated] } };
+  const rollback = evaluate({
+    activeTableEditLockRef: { current: { tableId: 'A', token: 'token-C' } },
+    tableLockLifecycleVersionRef: { current: 0 },
+    rejectedTableSyncGenerationRef: { current: new Map<string, number>() },
+    lastAcknowledgedTableTicketsRef: lastAck,
+    pendingClientTableSyncRef: { current: pendingC }, pendingMasterTableSyncRef: { current: null },
+    setActiveTableEditLock: () => {},
+    fetchAuthoritativeTableSnapshot: async () => { throw new Error('Master unavailable'); },
+    resolveValidatedOperationalApiUrl: async () => '', isClientTerminalMode: () => false,
+    parkedTicketReferencesTable: (row: { tableId: string }, tableId: string) => row.tableId === tableId,
+    masterOperationalSnapshotRef: snapshot,
+    reconcileRejectedTableTickets,
+    clearPendingClientTableSync: async () => {},
+    setParkedTickets: () => {}, writeCriticalCollectionsMirror: () => {}, cashMovements: [],
+    db: { save: async () => {} }, fetchTables: async () => {}, console: { warn: () => {} },
+  });
+  await rollback(new Error('TABLE_EDIT_LOCK_REQUIRED'), pendingC, 'token-C');
+  assert.deepEqual(snapshot.current.parkedTickets, [unrelated, original]);
+});
+
+test('cierre y nuevo lock de la misma mesa invalidan baseline de la sesión anterior', () => {
+  let freshLockGuard: ts.IfStatement | undefined;
+  let closeGuard: ts.IfStatement | undefined;
+  const collect = (node: ts.Node) => {
+    if (ts.isIfStatement(node) && node.expression.getText(source).includes('!reusableLock && pendingClientTableSyncRef.current')) freshLockGuard = node;
+    if (ts.isIfStatement(node) && node.thenStatement.getText(source).includes('remainingAcknowledged') && node.expression.getText(source) === 'closedOrderId') closeGuard = node;
+    ts.forEachChild(node, collect);
+  };
+  collect(source);
+  assert.ok(freshLockGuard && closeGuard);
+  const run = (statement: ts.IfStatement, bindings: Record<string, unknown>) => {
+    const compiled = ts.transpileModule(statement.getText(source), {
+      fileName: 'session.ts', compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
+    }).outputText;
+    new Function(...Object.keys(bindings), compiled)(...Object.values(bindings));
+  };
+  const first = ticket('old', 'A', 'Sesión anterior');
+  const second = ticket('other', 'A', 'Cuenta remanente');
+  const ref = { current: new Map([['A', [first, second]]]) };
+  run(closeGuard, { closedOrderId: 'old', table: { id: 'A' }, lastAcknowledgedTableTicketsRef: ref });
+  assert.deepEqual(ref.current.get('A'), [second]);
+  run(closeGuard, { closedOrderId: 'other', table: { id: 'A' }, lastAcknowledgedTableTicketsRef: ref });
+  assert.equal(ref.current.has('A'), false);
+  ref.current.set('A', [first]);
+  run(freshLockGuard, {
+    reusableLock: undefined, tableId: 'A', lastAcknowledgedTableTicketsRef: ref,
+    pendingClientTableSyncRef: { current: null }, pendingMasterTableSyncRef: { current: null },
+  });
+  assert.equal(ref.current.has('A'), false);
+  ref.current.set('A', [first]);
+  run(freshLockGuard, {
+    reusableLock: undefined, tableId: 'A', lastAcknowledgedTableTicketsRef: ref,
+    pendingClientTableSyncRef: { current: { tableId: 'A' } }, pendingMasterTableSyncRef: { current: null },
+  });
+  assert.deepEqual(ref.current.get('A'), [first], 'pending rollback keeps its baseline');
+});

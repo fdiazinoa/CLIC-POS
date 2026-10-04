@@ -6331,6 +6331,11 @@ const AppContent: React.FC = () => {
       if (!result?.success || !lock?.token) {
         throw new Error(result?.message || 'No se pudo bloquear la mesa.');
       }
+      // A fresh lock after a completed release can belong to a new use of the
+      // same physical table. Never reuse a previous session's rollback base.
+      if (!reusableLock && pendingClientTableSyncRef.current?.tableId !== tableId && pendingMasterTableSyncRef.current?.tableId !== tableId) {
+        lastAcknowledgedTableTicketsRef.current.delete(tableId);
+      }
       activeTableEditLockRef.current = lock as ActiveTableEditLock;
       // The map does not run the lock heartbeat. Avoid an extra full App
       // commit behind it; publish this state with the POS table hydration.
@@ -9776,7 +9781,7 @@ const AppContent: React.FC = () => {
       const editLock = activeTableEditLockRef.current;
       const syncTableId = String(editLock?.tableId || '');
       const syncGeneration = rejectedTableSyncGenerationRef.current.get(syncTableId) || 0;
-      if (syncTableId && pendingClientTableSyncRef.current?.tableId !== syncTableId) {
+      if (syncTableId && !lastAcknowledgedTableTicketsRef.current.has(syncTableId) && pendingClientTableSyncRef.current?.tableId !== syncTableId) {
         lastAcknowledgedTableTicketsRef.current.set(syncTableId, (parkedTickets || []).filter(ticket => parkedTicketReferencesTable(ticket, syncTableId)));
       }
       const tableSyncTickets = scopeTicketsForTableSync(validTickets, editLock?.tableId);
@@ -9882,7 +9887,7 @@ const AppContent: React.FC = () => {
     const masterEditLock = servesAsNativeMaster ? activeTableEditLockRef.current : null;
     const syncTableId = String(masterEditLock?.tableId || '');
     const syncGeneration = rejectedTableSyncGenerationRef.current.get(syncTableId) || 0;
-    if (syncTableId && pendingMasterTableSyncRef.current?.tableId !== syncTableId) {
+    if (syncTableId && !lastAcknowledgedTableTicketsRef.current.has(syncTableId) && pendingMasterTableSyncRef.current?.tableId !== syncTableId) {
       lastAcknowledgedTableTicketsRef.current.set(syncTableId, (parkedTickets || []).filter(ticket => parkedTicketReferencesTable(ticket, syncTableId)));
     }
     const masterTableSyncTickets = scopeTicketsForTableSync(validTickets, masterEditLock?.tableId);
@@ -13430,6 +13435,15 @@ const AppContent: React.FC = () => {
             }}
             onTableOrderClosed={(table, _closedOrderId, remainingTickets = []) => {
               const closedOrderId = _closedOrderId ? String(_closedOrderId) : '';
+              if (closedOrderId) {
+                const tableId = String(table.id);
+                const acknowledged = lastAcknowledgedTableTicketsRef.current.get(tableId);
+                if (acknowledged) {
+                  const remainingAcknowledged = acknowledged.filter(ticket => String(ticket.id) !== closedOrderId);
+                  if (remainingAcknowledged.length > 0) lastAcknowledgedTableTicketsRef.current.set(tableId, remainingAcknowledged);
+                  else lastAcknowledgedTableTicketsRef.current.delete(tableId);
+                }
+              }
               const closedTicket = closedOrderId
                 ? masterOperationalSnapshotRef.current.parkedTickets.find(ticket => String(ticket.id) === closedOrderId)
                 : undefined;
