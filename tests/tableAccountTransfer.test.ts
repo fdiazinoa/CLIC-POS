@@ -1,14 +1,20 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { CartItem, ParkedTicket } from '../types';
+import { getInitialConfig } from '../constants';
+import { SubVertical, type Table } from '../types';
 import { transferTableAccountItems } from '../utils/tableAccountTransfer';
 
 const item = (cartId: string, quantity: number): CartItem => ({ id: 'water', cartId, name: 'Agua', price: 100, quantity } as CartItem);
 const ticket = (id: string, items: CartItem[]): ParkedTicket => ({ id, name: id, tableId: 'mesa-7', timestamp: '2026-10-03T19:00:00Z', items, total: items.reduce((sum, line) => sum + line.price * line.quantity, 0) });
+const table = { id: 'mesa-7', nombre: 'Mesa 7' } as Table;
+const config = getInitialConfig(SubVertical.SUPERMARKET);
+const transfer = (tickets: ParkedTicket[], tableArg: Table, source: string, target: string, quantities: Record<string, number>) =>
+  transferTableAccountItems(tickets, tableArg, source, target, quantities, config, config.terminals[0].config, false);
 
 test('transfiere cantidad entre cuentas de una misma mesa sin duplicar unidades ni tocar terceros', () => {
   const original = [ticket('a', [item('line-a', 3)]), ticket('b', [item('line-b', 1)]), ticket('c', [item('line-c', 1)])];
-  const next = transferTableAccountItems(original, 'mesa-7', 'a', 'b', { 'line-a': 2 });
+  const next = transfer(original, table, 'a', 'b', { 'line-a': 2 });
   assert.equal(next[0].items[0].quantity, 1);
   assert.equal(next[0].total, 100);
   assert.equal(next[1].items.reduce((sum, line) => sum + line.quantity, 0), 3);
@@ -19,10 +25,25 @@ test('transfiere cantidad entre cuentas de una misma mesa sin duplicar unidades 
 
 test('rechaza mesa ajena, cuota pagada, precuenta y cantidad inválida', () => {
   const base = [ticket('a', [item('line-a', 2)]), ticket('b', [])];
-  assert.throws(() => transferTableAccountItems(base, 'mesa-8', 'a', 'b', { 'line-a': 1 }), /misma mesa/);
-  assert.throws(() => transferTableAccountItems(base, 'mesa-7', 'a', 'b', { 'line-a': 3 }), /Cantidad inválida/);
+  assert.throws(() => transfer(base, { ...table, id: 'mesa-8' }, 'a', 'b', { 'line-a': 1 }), /misma mesa/);
+  assert.throws(() => transfer(base, table, 'a', 'b', { 'line-a': 3 }), /Cantidad inválida/);
   const fraction = { ...base[0], paymentFraction: { originalTotal: 200, count: 2, createdAt: '', parts: [{ index: 1, amount: 100, status: 'PAID' as const }] } };
-  assert.throws(() => transferTableAccountItems([fraction, base[1]], 'mesa-7', 'a', 'b', { 'line-a': 1 }), /fraccionadas/);
+  assert.throws(() => transfer([fraction, base[1]], table, 'a', 'b', { 'line-a': 1 }), /fraccionadas/);
   const printed = { ...base[0], items: [{ ...base[0].items[0], subtotalizedAt: '2026-10-03T19:10:00Z' }] };
-  assert.throws(() => transferTableAccountItems([printed, base[1]], 'mesa-7', 'a', 'b', { 'line-a': 1 }), /pre-cuenta/);
+  assert.throws(() => transfer([printed, base[1]], table, 'a', 'b', { 'line-a': 1 }), /pre-cuenta/);
+});
+
+test('recalcula total fiscal de ambas cuentas con ITBIS tras transferir', () => {
+  const taxed = { ...item('taxed-line', 2), appliedTaxIds: ['tax-18'] };
+  const next = transfer([ticket('a', [taxed]), ticket('b', [])], table, 'a', 'b', { 'taxed-line': 1 });
+  assert.equal(next[0].total, 118);
+  assert.equal(next[1].total, 118);
+});
+
+test('permite cuentas de una mesa unida sin perder la identidad de origen', () => {
+  const source = { ...ticket('a', [item('line-a', 2)]), tableId: 'mesa-8', primaryTableId: 'mesa-7', joinedTableIds: ['mesa-7', 'mesa-8'] };
+  const next = transfer([source, ticket('b', [])], table, 'a', 'b', { 'line-a': 1 });
+  assert.equal(next[0].tableId, 'mesa-8');
+  assert.equal(next[0].items[0].quantity, 1);
+  assert.equal(next[1].items[0].quantity, 1);
 });

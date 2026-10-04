@@ -929,6 +929,8 @@ const printPrecuentaInternal = async (
     params: {
         items: CartItem[];
         subtotal: number;
+        netSubtotal?: number;
+        isTaxIncluded?: boolean;
         discountTotal: number;
         discountType?: 'PERCENT' | 'FIXED';
         discountValue?: number;
@@ -1050,6 +1052,7 @@ const printPrecuentaInternal = async (
                     <span>${discountLabel}</span>
                     <span>-${currencySymbol}${params.discountTotal.toFixed(2)}</span>
                 </div>` : ''}
+                ${typeof params.netSubtotal === 'number' ? `<div class="total-row"><span>${params.isTaxIncluded ? 'SUBTOTAL NETO' : 'SUBTOTAL GRAVABLE'}</span><span>${currencySymbol}${params.netSubtotal.toFixed(2)}</span></div>` : ''}
                 ${(params.taxBreakdown?.length ? params.taxBreakdown : [{ name: 'Impuestos', rate: 0, amount: params.taxTotal }]).map(tax => `
                 <div class="total-row">
                     <span>${tax.rate ? formatTaxLineLabel(tax) : tax.name}</span>

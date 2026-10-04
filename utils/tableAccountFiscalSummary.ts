@@ -16,14 +16,17 @@ export const buildTableAccountFiscalSummary = (
 ) => {
   const subtotal = round2((ticket.items || []).reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0), 0));
   const discountTotal = round2(Math.min(subtotal, Math.max(0, Number(ticket.discountAmount || 0))));
+  const taxExempt = ticket.customerSnapshot?.isTaxExempt === true;
   const policy = resolveAppliedServiceTaxPolicy(config, terminalConfig, 'DINE_IN');
   const taxBreakdown = consolidateTaxBreakdownForDisplay(calculateTaxBreakdownFromItems(ticket.items || [], config, {
     discountAmount: discountTotal,
     isTaxIncluded,
     terminalConfig,
     allowedTaxIds: policy.taxIds,
+    taxExempt,
   }), config.taxes);
   const taxTotal = round2(taxBreakdown.reduce((sum, tax) => sum + tax.amount, 0));
+  const netSubtotal = round2(subtotal - discountTotal - (isTaxIncluded ? taxTotal : 0));
   const shouldApplyTip = shouldApplyRestaurantServiceCharge({
     isRestaurantMode: true,
     serviceType: 'DINE_IN',
@@ -38,8 +41,8 @@ export const buildTableAccountFiscalSummary = (
   const serviceChargeAmount = shouldApplyTip
     ? calculateRestaurantServiceCharge(subtotal, discountTotal, serviceChargeRate)
     : 0;
-  const total = round2(subtotal - discountTotal + (isTaxIncluded ? 0 : taxTotal) + serviceChargeAmount);
-  return { subtotal, discountTotal, taxBreakdown, taxTotal, serviceChargeAmount, serviceChargeRate, total };
+  const total = round2(netSubtotal + taxTotal + serviceChargeAmount);
+  return { subtotal, netSubtotal, discountTotal, taxBreakdown, taxTotal, serviceChargeAmount, serviceChargeRate, total, isTaxIncluded, taxExempt };
 };
 
 export const getPaymentFractionFiscalDifference = (ticket: ParkedTicket, fiscalTotal: number): number => {

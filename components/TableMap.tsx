@@ -2,7 +2,6 @@ import React, { useState, useMemo, useCallback, useRef, useEffect, useLayoutEffe
 import { freezeCount } from '../diagnostics/freezeCounters';
 import { getTableLatencyQaState, tableLatencyQaEnabled, tableLatencyQaMark } from '../diagnostics/tableLatencyQa';
 import { Room, Table, User as UserType, ParkedTicket, CartItem, RoleDefinition, Permission, BusinessConfig, TerminalConfig } from '../types';
-import { transferTableAccountItems } from '../utils/tableAccountTransfer';
 import {
     User,
     Lock,
@@ -90,6 +89,7 @@ interface TableMapProps {
     canViewBusinessMetrics?: boolean;
     roles?: RoleDefinition[];
     onPrintPrecheck?: (table: Table, ticketIds?: string[]) => Promise<boolean> | boolean;
+    onTransferAccountItems?: (table: Table, sourceId: string, targetId: string, quantities: Record<string, number>) => Promise<void>;
     fiscalConfig?: BusinessConfig;
     terminalTaxConfig?: TerminalConfig;
     isTaxIncluded?: boolean;
@@ -535,6 +535,7 @@ const TableMap: React.FC<TableMapProps> = ({
     canViewBusinessMetrics,
     roles = [],
     onPrintPrecheck,
+    onTransferAccountItems,
     fiscalConfig,
     terminalTaxConfig,
     isTaxIncluded,
@@ -555,6 +556,8 @@ const TableMap: React.FC<TableMapProps> = ({
     const [selectedAccountTable, setSelectedAccountTable] = useState<Table | null>(null);
     const [transferSelection, setTransferSelection] = useState<TableTransferSelection | null>(null);
     const [pendingTableMove, setPendingTableMove] = useState<PendingTableMove | null>(null);
+    const subtotalPrintBusyRef = useRef(false);
+    const [subtotalPrintBusy, setSubtotalPrintBusy] = useState(false);
     const [fractionPickOpen, setFractionPickOpen] = useState(false);
     const [splitPickOpen, setSplitPickOpen] = useState(false);
     const [fractionTicketForModal, setFractionTicketForModal] = useState<ParkedTicket | null>(null);
@@ -1436,16 +1439,31 @@ const TableMap: React.FC<TableMapProps> = ({
             }
             setTransferSelection(null);
             if (tickets.length === 1) {
+                subtotalPrintBusyRef.current = true;
+                setSubtotalPrintBusy(true);
                 void Promise.resolve()
-                    .then(() => onPrintPrecheck?.(operationalTable, [String(tickets[0].id)]))
+                    .then(async () => {
+                        const allowed = await onBeforeTableOpen?.(operationalTable);
+                        if (allowed === false) return;
+                        try {
+                            await onPrintPrecheck?.(operationalTable, [String(tickets[0].id)]);
+                        } finally {
+                            await Promise.resolve(onTableOpenCancelled?.(operationalTable));
+                            await Promise.resolve(onRefreshTables?.());
+                        }
+                    })
                     .catch(error => {
                         console.error('No se pudo confirmar la pre-cuenta:', error);
                         alert('No se pudo confirmar la pre-cuenta. Verifique antes de reintentar.');
-                    });
+                    })
+                    .finally(() => { subtotalPrintBusyRef.current = false; setSubtotalPrintBusy(false); });
             } else {
-                void Promise.resolve(onBeforeTableOpen?.(operationalTable)).then(allowed => {
+                subtotalPrintBusyRef.current = true;
+                setSubtotalPrintBusy(true);
+                void Promise.resolve().then(() => onBeforeTableOpen?.(operationalTable)).then(allowed => {
                     if (allowed !== false) setSelectedAccountTable(operationalTable);
-                }).catch(error => console.error('No se pudo abrir la selección de cuentas:', error));
+                }).catch(error => console.error('No se pudo abrir la selección de cuentas:', error))
+                    .finally(() => { subtotalPrintBusyRef.current = false; setSubtotalPrintBusy(false); });
             }
             return true;
         }
@@ -1500,7 +1518,7 @@ const TableMap: React.FC<TableMapProps> = ({
 
         void completeTableTransfer(transferSelection.sourceTableId, table.id, transferSelection.mode);
         return true;
-    }, [completeTableTransfer, getTableTickets, isTableMoveTargetOccupied, onBeforeTableOpen, onPrintPrecheck, resolveTicketForTable, safeTables, transferSelection]);
+    }, [completeTableTransfer, getTableTickets, isTableMoveTargetOccupied, onBeforeTableOpen, onPrintPrecheck, onRefreshTables, onTableOpenCancelled, resolveTicketForTable, safeTables, transferSelection]);
 
     const handleTableAction = useCallback((table: Table, trace: PosInteractionTrace) => observeDestinationAttempt(trace, async () => {
         const primaryTableId = String(table.joinedSourceTableId || '').trim();
@@ -1637,7 +1655,7 @@ const TableMap: React.FC<TableMapProps> = ({
             // React state is not synchronous: two taps delivered in the same
             // frame used to start two lock/open/navigation chains. The ref is
             // the authoritative single-flight guard for operator input.
-            if (openingTableIdRef.current) return;
+            if (openingTableIdRef.current || subtotalPrintBusyRef.current) return;
             if (model.isLocked) {
                 if (!transferSelection) finishInteraction(beginTableInteraction('map-node', inputTimeStamp), 'cancelled');
                 const editingOwner = model.table.editingLock?.userName || model.table.editingLock?.terminalId;
@@ -1994,6 +2012,12 @@ const TableMap: React.FC<TableMapProps> = ({
                         </m.div>
                     )}
                 </AnimatePresence>
+
+                {subtotalPrintBusy && (
+                    <div role="status" className="absolute left-1/2 top-6 z-40 -translate-x-1/2 rounded-2xl bg-slate-950/85 px-5 py-3 text-sm font-bold text-white shadow-xl">
+                        Confirmando mesa y pre-cuenta con la Master…
+                    </div>
+                )}
 
                 <AnimatePresence>
                     {tableNotice && (
@@ -2420,8 +2444,8 @@ const TableMap: React.FC<TableMapProps> = ({
                         onRenameAccount={(ticket, name, fractionIndex) => renameTableAccount(selectedAccountTable, ticket, name, fractionIndex)}
                         onPrint={(ticketIds) => onPrintPrecheck?.(selectedAccountTable, ticketIds) ?? false}
                         onTransfer={async (sourceId, targetId, quantities) => {
-                            const nextTickets = transferTableAccountItems(parkedTickets || [], String(selectedAccountTable.id), sourceId, targetId, quantities);
-                            await Promise.resolve(onUpdateParkedTickets?.(nextTickets));
+                            if (!onTransferAccountItems) throw new Error('Transferencia no disponible en esta terminal.');
+                            await onTransferAccountItems(selectedAccountTable, sourceId, targetId, quantities);
                         }}
                     />
                 )}

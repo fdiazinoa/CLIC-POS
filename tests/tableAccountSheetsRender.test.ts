@@ -24,4 +24,6 @@ test('una cuenta fraccionada renderiza una hoja y una sola minuta con cuotas den
   assert.equal((html.match(/2 × Agua/g) || []).length, 1);
   assert.match(html, /Pagada/);
   assert.match(html, /Pendiente/);
+  assert.match(html, /aria-label="Imprimir pre-cuenta de Ana" disabled=""/);
+  assert.match(html, /La pre-cuenta completa no representa el saldo pendiente/);
 });

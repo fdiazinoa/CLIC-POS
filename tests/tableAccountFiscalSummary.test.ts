@@ -30,6 +30,18 @@ test('tarifa con impuesto incluido no vuelve a sumar ITBIS al total', () => {
   const fiscal = buildTableAccountFiscalSummary(ticket(1, 100), table, config, config.terminals[0].config, true);
   assert.equal(fiscal.total, 100);
   assert.ok(fiscal.taxTotal > 0);
+  assert.equal(fiscal.netSubtotal + fiscal.taxTotal, 100);
+});
+
+test('cliente exento conserva total bruto con tarifa incluida y elimina impuestos', () => {
+  const config = getInitialConfig(SubVertical.RESTAURANT);
+  config.serviceTaxPolicies = { DINE_IN: { legalTip: { enabled: false, percentage: 0 } } };
+  const order = ticket(1, 100);
+  order.customerSnapshot = { name: 'Exento', isTaxExempt: true };
+  const fiscal = buildTableAccountFiscalSummary(order, table, config, config.terminals[0].config, true);
+  assert.equal(fiscal.taxTotal, 0);
+  assert.equal(fiscal.netSubtotal, 100);
+  assert.equal(fiscal.total, 100);
 });
 
 test('muestra ITBIS e Impuesto Ley según impuestos del artículo', () => {
