@@ -92,18 +92,20 @@ const TableAccountsSheetsModal: React.FC<Props> = ({
   return (
     <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-900/45 p-3 backdrop-blur-sm" role="dialog" aria-modal="true" aria-busy={busy} aria-label={`Cuentas de ${table.nombre || table.name}`}>
       <div className="flex max-h-[94vh] w-full max-w-[1780px] flex-col overflow-hidden rounded-[2rem] border border-sky-100 bg-[#f4f9ff] shadow-2xl">
-        <header className="flex shrink-0 flex-wrap items-center justify-between gap-4 border-b border-sky-100 bg-white px-6 py-5">
-          <div>
+        <header className="grid shrink-0 grid-cols-1 items-center gap-4 border-b border-sky-100 bg-white px-6 py-5 sm:grid-cols-[minmax(220px,1fr)_auto] xl:grid-cols-[minmax(280px,29%)_minmax(180px,1fr)_auto]">
+          <div className="min-w-0">
             <p className="text-xs font-black uppercase tracking-[0.22em] text-blue-600">Cuentas de la mesa</p>
             <h2 className="text-3xl font-black text-slate-900">{table.nombre || table.name || 'Mesa'}</h2>
             <p className="text-sm font-bold text-slate-500">{elapsedLabel} · {summary.count} cuenta(s) pendiente(s)</p>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="justify-self-start sm:justify-self-end xl:justify-self-start">
             <div className="rounded-2xl border border-blue-200 bg-blue-50 px-4 py-2 text-right" aria-label={`Total de la mesa ${money(tableTotal, currencySymbol)}`}>
               <span className="block text-[10px] font-black uppercase tracking-widest text-blue-700">Total mesa</span>
               <strong className="block text-2xl font-black tabular-nums text-slate-900">{money(tableTotal, currencySymbol)}</strong>
               {Math.abs(tableTotal - summary.total) > 0.009 && <span className="block text-xs font-bold text-blue-700">Saldo pendiente {money(summary.total, currencySymbol)}</span>}
             </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-4 sm:col-span-2 sm:justify-end xl:col-span-1">
             <input aria-label="Nombre de nueva cuenta" value={newName} onChange={event => setNewName(event.target.value)} placeholder={`Cuenta ${tickets.length + 1}`} className="w-40 rounded-xl border border-sky-200 bg-white px-3 py-2 font-semibold text-slate-900" />
             <button type="button" disabled={busy} onClick={() => void run(async () => { await onCreateAccount(newName.trim() || `Cuenta ${tickets.length + 1}`); setNewName(''); })} className="flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 font-bold text-white disabled:opacity-50"><Plus size={18} /> Nueva cuenta</button>
             <button type="button" disabled={busy || printableIds.length === 0 || unsafeFractionIds.size > 0 || partiallyPaidIds.size > 0} onClick={() => void run(() => onPrint(printableIds))} className="flex items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-4 py-2 font-bold text-blue-700 disabled:opacity-50"><Printer size={18} /> Pre-cuenta todas</button>
