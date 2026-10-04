@@ -203,7 +203,7 @@ import { resolveTerminalLoginLabel } from './utils/terminalLoginLabel';
 import ModernLoginScreen from './components/ModernLoginScreen';
 import LoginScreen from './components/LoginScreen';
 import ErrorBoundary from './components/ErrorBoundary';
-import POSInterface from './components/POSInterface';
+import POSInterface, { type AccountItemActionRequest } from './components/POSInterface';
 import VerticalSelector from './components/VerticalSelector';
 import SetupWizard from './components/SetupWizard';
 import ActivationScreen from './components/ActivationScreen';
@@ -2192,6 +2192,7 @@ const AppContent: React.FC = () => {
   const { clearSecurityState, setSupervisorPinValidator } = useKioskSecurityContext();
   // --- GLOBAL STATE ---
   const [activeTable, setActiveTable] = useState<Table | null>(null); // New state for selected table context
+  const [accountItemActionRequest, setAccountItemActionRequest] = useState<AccountItemActionRequest | null>(null);
   const [activeTableEditLock, setActiveTableEditLock] = useState<ActiveTableEditLock | null>(null);
   const activeTableEditLockRef = useRef<ActiveTableEditLock | null>(null);
   const tableLockLifecycleVersionRef = useRef(0);
@@ -2211,6 +2212,15 @@ const AppContent: React.FC = () => {
     }
     return isVisorMode ? 'VISOR' : 'LOGIN';
   });
+  const previousAccountActionViewRef = useRef(currentView);
+  useEffect(() => {
+    const previousView = previousAccountActionViewRef.current;
+    previousAccountActionViewRef.current = currentView;
+    if ((previousView === 'POS' && currentView === 'TABLE_MAP')
+      || (currentView !== 'POS' && currentView !== 'TABLE_MAP')) {
+      setAccountItemActionRequest(null);
+    }
+  }, [currentView]);
   useEffect(() => {
     if (!tableLatencyQaEnabled || !window.__CLIC_TABLE_LATENCY_QA__) return;
     const controls = window.__CLIC_TABLE_LATENCY_QA__;
@@ -13238,6 +13248,10 @@ const AppContent: React.FC = () => {
                   // The lock ref is already authoritative. Batch the heartbeat
                   // state with the ticket so opening a table does not repaint
                   // the entire map while it is still the visible host.
+                  setAccountItemActionRequest(current => current
+                    && String(selectedTable.currentOrderId || '') === current.ticketId
+                    && nextCart.some(line => String(line.cartId || '') === current.cartId)
+                    ? current : null);
                   setActiveTableEditLock(activeTableEditLockRef.current);
                   setCart(nextCart);
                   setSelectedCustomer(nextSelectedCustomer);
@@ -13290,6 +13304,12 @@ const AppContent: React.FC = () => {
                 bloqueoMeseros={getCurrentTerminal()?.config?.operational?.bloqueo_meseros}
                 isRestaurantMode={isRestaurantTerminal(getCurrentTerminal())}
                 onOpenTable={openTableForService}
+                onAccountItemActionRequested={(request) => {
+                  setAccountItemActionRequest({
+                    ...request,
+                    requestId: uuidv4(),
+                  });
+                }}
                 canViewBusinessMetrics={canViewBusinessMetrics}
                 onTransferAccountItems={async (table, sourceId, targetId, quantities) => {
                   if (activeTableEditLockRef.current?.tableId !== String(table.id)) {
@@ -13544,6 +13564,7 @@ const AppContent: React.FC = () => {
             onOpenInventoryTracking={(productId) => handleViewChange('TRACKING', { productId })}
             onOpenAudit={() => handleViewChange('INVENTORY_AUDIT')}
             onOpenTableMap={async () => {
+              setAccountItemActionRequest(null);
               markWebviewProfileNavigation('SALES_TO_TABLES_STATE');
               const changeTrace = getLatestPosInteraction('CHANGE_TABLE');
               markInteractionStateUpdate(changeTrace, 3);
@@ -13735,6 +13756,10 @@ const AppContent: React.FC = () => {
             onOpenAgenda={() => setCurrentView('AGENDA')}
             onTransactionComplete={handleTransactionComplete}
             activeTable={activeTable}
+            accountItemActionRequest={currentView === 'POS' ? accountItemActionRequest : null}
+            onAccountItemActionHandled={(requestId) => {
+              setAccountItemActionRequest(current => current?.requestId === requestId ? null : current);
+            }}
             rooms={rooms}
             onClearActiveTable={() => setActiveTable(null)}
             onAddCustomer={handleAddCustomer}

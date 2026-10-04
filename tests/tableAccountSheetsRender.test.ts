@@ -28,6 +28,8 @@ test('una cuenta fraccionada renderiza una hoja y una sola minuta con cuotas den
   assert.match(html, /Pendiente/);
   assert.match(html, /aria-label="Imprimir pre-cuenta de Ana" disabled=""/);
   assert.match(html, /La pre-cuenta completa no representa el saldo pendiente/);
+  assert.match(html, /Total mesa<\/span><strong[^>]*>RD\$200\.00<\/strong>/);
+  assert.match(html, /Saldo pendiente RD\$100\.00/);
 });
 
 test('tiempo abierto usa fecha válida de cuenta si la mesa está corrupta y nunca muestra NaN', () => {
@@ -122,11 +124,12 @@ test('pre-cuenta solicitada distingue solo artículos nuevos de la misma cuenta'
   }));
   for (const html of [render(), render()]) {
     assert.equal((html.match(/Pre-cuenta solicitada/g) || []).length, 1);
-    assert.equal((html.match(/Nuevo desde subtotal/g) || []).length, 1);
+    assert.doesNotMatch(html, /Nuevo desde subtotal/);
     assert.match(html, /Artículo impreso/);
     assert.match(html, /Artículo agregado/);
     assert.match(html, /border-emerald-200 bg-emerald-50[^>]*>[^<]*<div[^>]*>[^<]*<span[^>]*>1 × Artículo agregado/);
-    assert.doesNotMatch(html, /Otra cuenta<\/span><span[^>]*>Nuevo desde subtotal/);
+    assert.match(html, /Total mesa/);
+    assert.match(html, /Maximizar/);
   }
 });
 

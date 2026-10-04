@@ -27,7 +27,7 @@ import {
 import { LazyMotion, domAnimation, m, AnimatePresence, useReducedMotion } from 'framer-motion';
 import { Capacitor } from '@capacitor/core';
 import TableOptionsModal from './TableOptionsModal';
-import TableAccountsSheetsModal from './TableAccountsSheetsModal';
+import TableAccountsSheetsModal, { type AccountItemActionRequest } from './TableAccountsSheetsModal';
 import SplitTicketModal from './SplitTicketModal';
 import TableMoveConfirmationModal from './TableMoveConfirmationModal';
 import { createPaymentFractionPlan, isFullyPaidParkedTicket } from '../utils/paymentFractions';
@@ -42,6 +42,7 @@ import {
 import { getRenderableFloorTables } from '../utils/tableLayout';
 import { parkedTicketBelongsToTable } from '../utils/parkedTicketTableMembership';
 import { hasPendingKdsDispatch } from '../utils/kdsPresentation';
+import { resolveCartItemEditCapabilities } from '../utils/cartItemEditPermissions';
 import { resolveValidatedOperationalApiUrl } from '../utils/masterOperationalApi';
 import { requestJson } from '../services/network/httpClient';
 import {
@@ -90,6 +91,7 @@ interface TableMapProps {
     roles?: RoleDefinition[];
     onPrintPrecheck?: (table: Table, ticketIds?: string[]) => Promise<boolean> | boolean;
     onTransferAccountItems?: (table: Table, sourceId: string, targetId: string, quantities: Record<string, number>) => Promise<void>;
+    onAccountItemActionRequested?: (request: AccountItemActionRequest) => void;
     fiscalConfig?: BusinessConfig;
     terminalTaxConfig?: TerminalConfig;
     accountTerminalId?: string;
@@ -538,6 +540,7 @@ const TableMap: React.FC<TableMapProps> = ({
     roles = [],
     onPrintPrecheck,
     onTransferAccountItems,
+    onAccountItemActionRequested,
     fiscalConfig,
     terminalTaxConfig,
     accountTerminalId,
@@ -2440,8 +2443,10 @@ const TableMap: React.FC<TableMapProps> = ({
                         terminalId={accountTerminalId}
                         customers={accountCustomers}
                         isTaxIncluded={isTaxIncluded}
+                        canAdjustQuantity={resolveCartItemEditCapabilities(currentRolePermissions).canEditQuantity}
+                        canRetireItem={resolveCartItemEditCapabilities(currentRolePermissions).canVoidItem}
                         onClose={() => closeTablePreview(selectedAccountTable, () => setSelectedAccountTable(null))}
-                        onOpenAccount={async (ticket, inputTimeStamp) => {
+                        onOpenAccount={async (ticket, inputTimeStamp, itemAction) => {
                             await requireFreshAccountLock(selectedAccountTable);
                             const total = Number(ticket.total ?? (ticket.items || []).reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0), 0));
                             openPosTable({
@@ -2451,6 +2456,7 @@ const TableMap: React.FC<TableMapProps> = ({
                                 currentOrderTotal: total,
                                 timeSeated: selectedAccountTable.timeSeated || ticket.timestamp
                             }, beginTableInteraction('account-selection', inputTimeStamp));
+                            if (itemAction) onAccountItemActionRequested?.(itemAction);
                             setSelectedAccountTable(null);
                         }}
                         onCreateAccount={async (name) => {

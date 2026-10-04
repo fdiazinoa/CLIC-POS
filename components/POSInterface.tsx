@@ -199,6 +199,13 @@ const clearCartSubtotalization = (items: CartItem[]): CartItem[] => items.map(it
    return nextItem;
 });
 
+export type AccountItemActionRequest = {
+   requestId: string;
+   ticketId: string;
+   cartId: string;
+   action: 'ADJUST' | 'RETURN';
+};
+
 export interface POSInterfaceProps {
    config: BusinessConfig;
    currentUser: UserType;
@@ -245,6 +252,8 @@ export interface POSInterfaceProps {
    onUpdateConfig: (newConfig: BusinessConfig) => void;
    activeTerminalId: string;
    activeTable?: Table | null;
+   accountItemActionRequest?: AccountItemActionRequest | null;
+   onAccountItemActionHandled?: (requestId: string) => void;
    onClearActiveTable?: () => void;
    onUpdateActiveTableGuests?: (guests: number) => void;
    onKioskPay?: () => void;
@@ -1184,6 +1193,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    onUpdateConfig,
    activeTerminalId,
    activeTable,
+   accountItemActionRequest,
+   onAccountItemActionHandled,
    onClearActiveTable,
    onUpdateActiveTableGuests,
    onKioskPay,
@@ -2300,6 +2311,34 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const [editingItem, setEditingItem] = useState<CartItem | null>(null);
    const [activeCartItemId, setActiveCartItemId] = useState<string | null>(null);
+   const handledAccountActionIdsRef = useRef<Set<string>>(new Set());
+   useEffect(() => {
+      const request = accountItemActionRequest;
+      if (!request || handledAccountActionIdsRef.current.has(request.requestId)) return;
+      // The map remains mounted behind the POS. Never act on its previous cart,
+      // even for a matching cartId, until the intended account is active.
+      if (String(activeTable?.currentOrderId || '') !== request.ticketId) return;
+      const item = cart.find(line => String(line.cartId || '') === request.cartId);
+      handledAccountActionIdsRef.current.add(request.requestId);
+      onAccountItemActionHandled?.(request.requestId);
+      if (!item) {
+         setErrorToast('El artículo cambió en la mesa. Vuelva a abrir la cuenta para actualizarla.');
+         return;
+      }
+      setActiveCartItemId(request.cartId);
+      if (request.action === 'ADJUST') {
+         // Keep all quantity, stock, subtotal, KDS and supervisor checks in the
+         // existing POS editor/updateCartItem path.
+         setEditingItem(item);
+      } else if (item.dispatched) {
+         // The focused ticket line exposes the existing KDS return control.
+         // Do not send a return merely because the operator opened this view.
+         setSuccessToast('Artículo seleccionado. Pulse Devolver en KDS para confirmar.');
+      } else {
+         // The existing editor offers a separately confirmed removal action.
+         setEditingItem(item);
+      }
+   }, [accountItemActionRequest, activeTable?.currentOrderId, cart, onAccountItemActionHandled]);
    const [selectedProductForVariants, setSelectedProductForVariants] = useState<Product | null>(null);
    const [productForScale, setProductForScale] = useState<Product | null>(null);
    const [showLoyaltyModal, setShowLoyaltyModal] = useState(false);
@@ -8385,11 +8424,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                                 Subtotalizado
                                              </span>
                                           )}
-                                          {isNewAfterSubtotal && (
-                                             <span className="mt-1 inline-flex w-fit rounded-full bg-emerald-100 px-2 py-0.5 text-[9px] font-black uppercase tracking-wide text-emerald-800">
-                                                Nuevo desde subtotal
-                                             </span>
-                                          )}
                                        </div>
                                        {item.salespersonId && (
                                           <div className="mt-1 flex items-center gap-1 text-[9px] text-gray-400 bg-gray-50 px-1.5 py-0.5 rounded-md w-fit">
@@ -8539,7 +8573,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                                 </span>
                                              )}
                                              {isSubtotalizedItem && <span className="mt-1 inline-flex w-fit rounded-full bg-violet-50 px-2 py-0.5 text-[9px] font-black uppercase tracking-wide text-violet-700">Subtotalizado</span>}
-                                             {isNewAfterSubtotal && <span className="mt-1 inline-flex w-fit rounded-full bg-emerald-100 px-2 py-0.5 text-[9px] font-black uppercase tracking-wide text-emerald-800">Nuevo desde subtotal</span>}
                                           </div>
                                           {/* Salesperson Badge */}
                                           {item.salespersonId && (

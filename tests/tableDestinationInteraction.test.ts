@@ -233,6 +233,7 @@ test('real table branches own selectors and hydrated POS destinations without bo
       parkedTickets: [{ id: 'account-selected', tableId: baseTable.id, items }], transactions: [], customers: [],
       markRestaurantLinesCommitted: (value: unknown[]) => value,
       activeTableEditLockRef: { current: null }, setActiveTableEditLock() {},
+      setAccountItemActionRequest: (update: (current: null) => unknown) => update(null),
       setCart: (value: unknown) => { appState.cart = value; }, setSelectedCustomer() {},
       setActiveTable: (value: unknown) => { appState.activeTable = value; }, setCurrentView: (value: unknown) => { appState.view = value; },
     });

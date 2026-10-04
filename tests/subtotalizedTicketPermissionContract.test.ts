@@ -47,7 +47,8 @@ test('agregar después del subtotal conserva líneas previas y destaca solo las 
   assert.match(posSource, /&& !i\.subtotalizedAt/);
   assert.match(posSource, /onUpdateCart\(prev => \[newItem, \.\.\.prev\]\)/);
   assert.match(posSource, /isNewAfterSubtotal = isActiveTableAccountSubtotalized && !isSubtotalizedItem/);
-  assert.match(posSource, /Nuevo desde subtotal/);
+  assert.doesNotMatch(posSource, /Nuevo desde subtotal/);
+  assert.match(posSource, /isNewAfterSubtotal \? 'border-emerald-200 bg-emerald-50'/);
   assert.match(posSource, /activeTableAccount\?\.items\?\.some\(item => Boolean\(item\.subtotalizedAt\)\)/);
   assert.match(posSource, /invalidatesPriorSubtotal = Boolean\(originalItem\?\.subtotalizedAt\)/);
   assert.match(posSource, /if \(invalidatesPriorSubtotal\) newCart = clearCartSubtotalization\(newCart\)/);
