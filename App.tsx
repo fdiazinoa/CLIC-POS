@@ -132,7 +132,7 @@ import { calculateTransactionTaxSummary } from './utils/taxSummary';
 import { calculateTransactionFiscalSummary, freezeAuthoritativeLineFiscalAmounts } from './utils/fiscalBreakdown';
 import { buildTableAccountFiscalSummary, getPaymentFractionFiscalDifference } from './utils/tableAccountFiscalSummary';
 import { transferTableAccountItems } from './utils/tableAccountTransfer';
-import { commitRetiredTableAccountAfterAck } from './utils/tableAccountRetirement';
+import { commitRetiredTableAccountAfterAck, findRetiredTableAccountSuccessor } from './utils/tableAccountRetirement';
 import { fetchAuthoritativeTableSnapshot } from './utils/authoritativeTableSnapshot';
 import { reconcileRejectedTableTickets } from './utils/tableAccountReconciliation';
 import { isFullyPaidParkedTicket } from './utils/paymentFractions';
@@ -389,8 +389,10 @@ import { persistValidatedClientMasterTargetAsync, resolveClientMasterTerminalId 
 import { completeLegacyMutationAfterDurableAck, legacyMutationJournal } from './services/sync/LegacyMutationJournal';
 import {
   reconcileLegacyClientTableConflictBeforeAuthorityAssertion,
+  reconcileClientRetiredAccountBeforeAuthorityAssertion,
   reconcileMasterParkedTicketOutcome,
   reconcileMasterRejectedTableMutations,
+  reconcileRetiredTableAccountOutcome,
   resolveColdBootstrapLegacyRecoveryGeneration,
 } from './services/sync/masterParkedTicketReconciliation';
 import { parkedTicketBelongsToTable } from './utils/parkedTicketTableMembership';
@@ -522,6 +524,7 @@ type ParkedTicketSyncOptions = {
   /** Full-account retirement is invisible locally until the Master ACKs it. */
   publishAfterAck?: boolean;
   retiredSourceId?: string;
+  retiredPreTableTickets?: ParkedTicket[];
   assertCurrentAuthority?: () => void;
 };
 
@@ -5585,7 +5588,11 @@ const AppContent: React.FC = () => {
           String((table as any).joinedSourceTableId || '') === tableId
         )
       );
+      const transferSuccessor = !orderTicket && table.currentOrderId
+        ? findRetiredTableAccountSuccessor(tickets, tableId, String(table.currentOrderId))
+        : undefined;
       const linkedTicket = (canLinkByOrder ? orderTicket : undefined)
+        || transferSuccessor
         || byTableId.get(tableId);
       if (!linkedTicket) {
         const hasStaleOccupancy =
@@ -5722,6 +5729,11 @@ const AppContent: React.FC = () => {
       authorityBaseUrl: resolveMasterOperationalBaseUrl(),
       terminalId: authorityState.terminalId || String(clientRoutingContextRef.current.getTerminal()?.id || ''),
       generation: authorityState.revision,
+    });
+    await reconcileClientRetiredAccountBeforeAuthorityAssertion({
+      journal: legacyMutationJournal,
+      authorityBaseUrl: resolveMasterOperationalBaseUrl(),
+      terminalId: authorityState.terminalId || String(clientRoutingContextRef.current.getTerminal()?.id || ''),
     });
     legacyMutationJournal.assertRemoteAuthorityAllowed();
     const localIps = clientLocalIpsRef.current || await hydrateClientLocalIps();
@@ -6133,6 +6145,52 @@ const AppContent: React.FC = () => {
       terminalId,
       generation: authorityState.revision,
     });
+    if (!legacyMutationJournal.hasOutcomeUnknown()) return;
+    const authorityFence = isClientTerminalMode()
+      ? clientOperationalResolverRef.current!.captureAuthority()
+      : () => true;
+    const reconciledRetirement = await reconcileRetiredTableAccountOutcome({
+      journal: legacyMutationJournal,
+      authorityOrigin: new URL(endpointUrl).origin,
+      terminalId,
+      readSnapshot: async () => {
+        const snapshot = await fetchAuthoritativeTableSnapshot({
+          resolveUrl: () => resolveValidatedOperationalApiUrl('/api/mesas'),
+          captureAuthority: () => authorityFence,
+        });
+        snapshot.assertCurrentAuthority();
+        return snapshot;
+      },
+      fenceOldLock: async lock => {
+        if (!authorityFence()) return false;
+        const currentLock = activeTableEditLockRef.current;
+        if (currentLock?.tableId === lock.tableId && currentLock.token === lock.token) {
+          tableLockLifecycleVersionRef.current += 1;
+          activeTableEditLockRef.current = null;
+          setActiveTableEditLock(null);
+        }
+        // Stop any renewal already in flight before invalidating the old
+        // token. New heartbeats cannot start after the local lock is cleared.
+        await tableLockHeartbeatInFlightRef.current?.catch(() => null);
+        const releaseUrl = await resolveValidatedOperationalApiUrl('/api/mesas/desbloquear');
+        if (!authorityFence() || new URL(releaseUrl).origin !== new URL(endpointUrl).origin) return false;
+        const controller = new AbortController();
+        const timeout = window.setTimeout(() => controller.abort(), 5_000);
+        try {
+          const response = await fetch(releaseUrl, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal,
+            body: JSON.stringify({ tableId: lock.tableId, ownerId: lock.ownerId, token: lock.token }),
+          });
+          if (!authorityFence()) return false;
+          const data = await response.json();
+          if (!authorityFence()) return false;
+          return (response.ok && data?.success === true)
+            || (response.status === 409 && data?.code === 'TABLE_EDIT_LOCK_OWNERSHIP_MISMATCH');
+        } catch { return false; }
+        finally { window.clearTimeout(timeout); }
+      },
+    });
+    if (reconciledRetirement) await fetchTables();
   }, [getCurrentTerminal]);
 
   const invokeTableEditLock = useCallback(async (
@@ -7598,6 +7656,11 @@ const AppContent: React.FC = () => {
                     authorityBaseUrl: resolveMasterOperationalBaseUrl(),
                     terminalId: bootstrapAuthorityState.terminalId || String(effectivePairedTerminal.id || ''),
                     generation: resolveColdBootstrapLegacyRecoveryGeneration(bootstrapAuthorityState),
+                  });
+                  await reconcileClientRetiredAccountBeforeAuthorityAssertion({
+                    journal: legacyMutationJournal,
+                    authorityBaseUrl: resolveMasterOperationalBaseUrl(),
+                    terminalId: bootstrapAuthorityState.terminalId || String(effectivePairedTerminal.id || ''),
                   });
                   legacyMutationJournal.assertRemoteAuthorityAllowed();
                 } catch (journalError) {
@@ -9724,6 +9787,10 @@ const AppContent: React.FC = () => {
     if (publishAfterAck && (!activeTableEditLockRef.current?.tableId || !options.retiredSourceId)) {
       throw new Error('TABLE_ACCOUNT_RETIRE_REQUIRES_TABLE_LOCK');
     }
+    if (publishAfterAck && (!activeTableEditLockRef.current?.ownerId || !activeTableEditLockRef.current?.token
+      || !options.retiredPreTableTickets?.some(ticket => String(ticket.id) === String(options.retiredSourceId)))) {
+      throw new Error('TABLE_ACCOUNT_RETIRE_PRESTATE_REQUIRED');
+    }
     const commitAcknowledgedTickets = async (acknowledged: unknown, expected: ParkedTicket[], tableId: string, assertPending: () => void, responseRevision?: number) => {
       options.assertCurrentAuthority?.();
       if (Number.isFinite(responseRevision) && Number(responseRevision) > 0 && Number(responseRevision) < masterRestaurantRevisionRef.current) {
@@ -9875,6 +9942,12 @@ const AppContent: React.FC = () => {
             baseRevision: masterRestaurantRevisionRef.current,
           }),
           operation: 'PARKED_TICKETS_SYNC',
+          reconciliationContext: publishAfterAck ? {
+            kind: 'TABLE_ACCOUNT_RETIRE_V1', tableId: syncTableId,
+            sourceId: options.retiredSourceId, expectedTableTickets: tableSyncTickets,
+            preTableTickets: options.retiredPreTableTickets,
+            lockOwnerId: editLock?.ownerId, lockToken: editLock?.token,
+          } : undefined,
           validateResponse: data => {
             validateLegacySuccessResponse(data);
             assertParkedTicketsAcknowledged(tableSyncTickets, data.parkedTickets, changedTicketId, editLock?.tableId);
@@ -9917,7 +9990,12 @@ const AppContent: React.FC = () => {
           );
         } catch (completionError) {
           if (!publishAfterAck) throw completionError;
-          console.warn('[TABLE_ACCOUNT_RETIRE] Master confirmó el retiro, pero el journal local aún requiere reconciliación:', completionError);
+          await response.markOutcomeUnknown();
+          try { await reconcileRejectedTableMutationBlockers(); }
+          catch (recoveryError) { console.warn('[TABLE_ACCOUNT_RETIRE] No se pudo reconciliar el ACK del journal:', recoveryError); }
+          if (legacyMutationJournal.hasOutcomeUnknown()) {
+            throw new Error('TABLE_ACCOUNT_RETIRE_JOURNAL_RECOVERY_REQUIRED: Master aplicó el traslado, pero el diario local requiere reconciliación. No repita la transferencia.');
+          }
         }
         void fetchTables().catch(error => {
           console.warn('[TABLE_SYNC] No se pudo refrescar el mapa después de guardar:', error);
@@ -10140,6 +10218,12 @@ const AppContent: React.FC = () => {
             } : {}),
           }),
           operation: 'MASTER_PARKED_TICKETS_SYNC',
+          reconciliationContext: publishAfterAck ? {
+            kind: 'TABLE_ACCOUNT_RETIRE_V1', tableId: syncTableId,
+            sourceId: options.retiredSourceId, expectedTableTickets: masterTableSyncTickets,
+            preTableTickets: options.retiredPreTableTickets,
+            lockOwnerId: masterEditLock?.ownerId, lockToken: masterEditLock?.token,
+          } : undefined,
           validateResponse: data => {
             validateLegacySuccessResponse(data);
             assertParkedTicketsAcknowledged(masterTableSyncTickets, data.parkedTickets, changedTicketId, masterEditLock?.tableId);
@@ -10189,7 +10273,12 @@ const AppContent: React.FC = () => {
           );
         } catch (completionError) {
           if (!publishAfterAck) throw completionError;
-          console.warn('[TABLE_ACCOUNT_RETIRE] Master confirmó el retiro, pero el journal local aún requiere reconciliación:', completionError);
+          await response.markOutcomeUnknown();
+          try { await reconcileRejectedTableMutationBlockers(); }
+          catch (recoveryError) { console.warn('[TABLE_ACCOUNT_RETIRE] No se pudo reconciliar el ACK del journal:', recoveryError); }
+          if (legacyMutationJournal.hasOutcomeUnknown()) {
+            throw new Error('TABLE_ACCOUNT_RETIRE_JOURNAL_RECOVERY_REQUIRED: Master aplicó el traslado, pero el diario local requiere reconciliación. No repita la transferencia.');
+          }
         }
       };
       const queuedSync = parkedTicketSyncQueueRef.current
@@ -13192,7 +13281,7 @@ const AppContent: React.FC = () => {
                   const sourceRetired = !nextTickets.some(ticket => String(ticket.id) === sourceId);
                   snapshot.assertCurrentAuthority();
                   try {
-                    await handleUpdateParkedTickets(nextTickets, { reason: 'explicit', publishAfterAck: sourceRetired, retiredSourceId: sourceRetired ? sourceId : undefined, assertCurrentAuthority: sourceRetired ? snapshot.assertCurrentAuthority : undefined });
+                    await handleUpdateParkedTickets(nextTickets, { reason: 'explicit', publishAfterAck: sourceRetired, retiredSourceId: sourceRetired ? sourceId : undefined, retiredPreTableTickets: sourceRetired ? scopeTicketsForTableSync(snapshot.parkedTickets, String(table.id)) : undefined, assertCurrentAuthority: sourceRetired ? snapshot.assertCurrentAuthority : undefined });
                   } catch (error) {
                     if (sourceRetired) {
                       void fetchTables().catch(refreshError => console.warn('[TABLE_ACCOUNT_RETIRE] No se pudo consultar Master tras resultado incierto:', refreshError));

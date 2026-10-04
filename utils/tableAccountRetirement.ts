@@ -1,6 +1,14 @@
 import type { ParkedTicket } from '../types';
 import { assertParkedTicketsAcknowledged } from './parkedTicketAck';
 import { reconcileRejectedTableTickets } from './tableAccountReconciliation';
+import { parkedTicketBelongsToTable } from './parkedTicketTableMembership';
+
+export const findRetiredTableAccountSuccessor = (
+  tickets: ParkedTicket[], tableId: string, retiredId: string,
+): ParkedTicket | undefined => tickets.find(ticket =>
+  parkedTicketBelongsToTable(ticket, tableId)
+  && ticket.items?.some(item => item.transferredFromTicketId === retiredId)
+);
 
 /** A retired source is published only after a complete Master ACK and durable local save. */
 export const commitRetiredTableAccountAfterAck = async (input: {
@@ -15,6 +23,9 @@ export const commitRetiredTableAccountAfterAck = async (input: {
 }): Promise<ParkedTicket[]> => {
   if (!input.sourceId || input.expected.some(ticket => String(ticket.id) === input.sourceId)) {
     throw new Error('TABLE_ACCOUNT_RETIRE_SOURCE_STILL_PRESENT');
+  }
+  if (Array.isArray(input.acknowledged) && input.acknowledged.some(ticket => String(ticket?.id) === input.sourceId)) {
+    throw new Error('PARKED_TICKETS_ACK_MISMATCH');
   }
   assertParkedTicketsAcknowledged(input.expected, input.acknowledged, '', input.tableId);
   const confirmed = input.acknowledged as ParkedTicket[];

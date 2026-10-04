@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import type { ParkedTicket } from '../types';
-import { commitRetiredTableAccountAfterAck } from '../utils/tableAccountRetirement';
+import { commitRetiredTableAccountAfterAck, findRetiredTableAccountSuccessor } from '../utils/tableAccountRetirement';
 import { mergeParkedTicketsForTable } from '../server/tableTicketMerge';
 
 const ticket = (id: string): ParkedTicket => ({ id, tableId: 'mesa-7', name: id, items: [], timestamp: '2026-10-03T19:00:00Z' });
@@ -18,6 +18,8 @@ test('poll Master y Cliente no publica source retirado mientras PUT está sin AC
   assert.ok(fetchTables.indexOf('if (pendingTableSync?.speculativeRetirement)') < fetchTables.indexOf('if (hasUnchangedClientRevision && !pendingTableSync)'));
   assert.match(update, /if \(!publishAfterAck\) \{\s*writePendingTableSyncMirror\(pendingSync\);[\s\S]*?setParkedTickets\(validTickets\);/);
   assert.match(update, /if \(!publishAfterAck\) \{\s*if \(!changedTicketId\) writeCriticalCollectionsMirror\(validTickets, cashMovements\);[\s\S]*?setParkedTickets\(validTickets\);/);
+  assert.equal((update.match(/await response\.markOutcomeUnknown\(\);\s*try \{ await reconcileRejectedTableMutationBlockers\(\); \}/g) || []).length, 2);
+  assert.equal((update.match(/if \(legacyMutationJournal\.hasOutcomeUnknown\(\)\) \{\s*throw new Error\('TABLE_ACCOUNT_RETIRE_JOURNAL_RECOVERY_REQUIRED/g) || []).length, 2);
 });
 
 test('retire espera ACK exacto y guardado durable antes de quitar origen de UI', async () => {
@@ -41,7 +43,7 @@ test('ACK faltante, rechazado o con source fantasma no guarda ni publica', async
   const effects: string[] = [];
   const input = { expected: [target], tableId: 'mesa-7', sourceId: 'source',
     persist: async () => { effects.push('save'); }, publish: () => { effects.push('publish'); } };
-  for (const acknowledged of [undefined, [target, ticket('source')], [], [{ ...target, total: 999 }]]) {
+  for (const acknowledged of [undefined, [target, ticket('source')], [target, { ...ticket('source'), tableId: 'mesa-9' }], [], [{ ...target, total: 999 }]]) {
     await assert.rejects(commitRetiredTableAccountAfterAck({ ...input, acknowledged }), /PARKED_TICKETS_ACK/);
   }
   await assert.rejects(commitRetiredTableAccountAfterAck({ ...input, expected: [ticket('source'), target], acknowledged: [target] }), /SOURCE_STILL_PRESENT/);
@@ -125,4 +127,15 @@ test('wire Master/Cliente retira source de la mesa y preserva tercero y mesa uni
   const ack = mergeParkedTicketsForTable([source, third], [target], 'mesa-7');
   assert.deepEqual(ack.map(row => row.id), ['third', 'target']);
   assert.deepEqual(ack[1].joinedTableIds, ['mesa-7', 'mesa-8']);
+});
+
+test('puntero de mesa retirada apunta al destino real aunque exista una tercera cuenta', () => {
+  const target = { ...ticket('target'), joinedTableIds: ['mesa-7', 'mesa-8'], items: [{ id: 'water', cartId: 'moved', name: 'Agua', price: 100, quantity: 1, transferredFromTicketId: 'source' }] } as ParkedTicket;
+  const third = { ...ticket('third'), items: [{ id: 'coffee', cartId: 'other', name: 'Café', price: 50, quantity: 1 }] } as ParkedTicket;
+  assert.equal(findRetiredTableAccountSuccessor([target, third], 'mesa-7', 'source')?.id, 'target');
+  assert.equal(findRetiredTableAccountSuccessor([target, third], 'mesa-8', 'source')?.id, 'target');
+  assert.equal(findRetiredTableAccountSuccessor([target, third], 'mesa-9', 'source'), undefined);
+  const native = readFileSync(new URL('../native-stubs/android/ClicPOSMasterHttpServer.kt', import.meta.url), 'utf8');
+  assert.match(native, /transferSuccessor = if \(orderTicket == null && currentOrderId\.isNotBlank\(\)\)/);
+  assert.match(native, /transferSuccessor \?: activeByTableId\[tableId\]/);
 });

@@ -1540,13 +1540,22 @@ object ClicPOSMasterHttpServer {
                     break
                 }
             }
+            val transferSuccessor = if (orderTicket == null && currentOrderId.isNotBlank()) {
+                (0 until tickets.length()).mapNotNull { tickets.optJSONObject(it) }.firstOrNull { candidate ->
+                    ticketReferencesTable(candidate, tableId) &&
+                        (0 until (candidate.optJSONArray("items")?.length() ?: 0)).any { itemIndex ->
+                            candidate.optJSONArray("items")?.optJSONObject(itemIndex)
+                                ?.optString("transferredFromTicketId") == currentOrderId
+                        }
+                }
+            } else null
             val ticket = if (
                 orderTicket != null &&
                 orderBelongsToTable
             ) {
                 orderTicket
             } else {
-                activeByTableId[tableId]
+                transferSuccessor ?: activeByTableId[tableId]
             }
             if (ticket == null) {
                 table
