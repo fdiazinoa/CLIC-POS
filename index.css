@@ -195,6 +195,20 @@ input[type='number'] {
   background-color: #1d4ed8;
 }
 
+/* The map selection banner sits on a dark surface; Android must not apply its
+   native pale button colors to the cancel action. */
+.table-map-selection-cancel {
+  -webkit-appearance: none;
+  appearance: none;
+  background-color: #2563eb;
+  border: 1px solid #93c5fd;
+  color: #ffffff;
+}
+
+.table-map-selection-cancel:active {
+  background-color: #1d4ed8;
+}
+
 .clic-pos-device-shell[data-touch-optimized='true'] input:not([type='checkbox']):not([type='radio']),
 .clic-pos-device-shell[data-touch-optimized='true'] select,
 .clic-pos-device-shell[data-touch-optimized='true'] textarea {

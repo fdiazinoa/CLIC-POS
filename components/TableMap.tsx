@@ -2015,7 +2015,7 @@ const TableMap: React.FC<TableMapProps> = ({
                             <button
                                 type="button"
                                 onClick={() => setTransferSelection(null)}
-                                className="mt-2 text-[11px] font-bold text-slate-300 underline decoration-white/20 underline-offset-4 hover:text-white"
+                                className="table-map-selection-cancel mt-2 rounded-lg px-4 py-1.5 text-xs font-bold"
                             >
                                 Cancelar
                             </button>

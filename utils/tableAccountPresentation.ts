@@ -41,13 +41,12 @@ const ticketTotal = (ticket: ParkedTicket): number => Number(
 export const getTableAccountLabel = (ticket: ParkedTicket, index: number): string => {
   const tablePrefix = String(ticket.tableDisplayLabel || '').trim();
   const simplifyGenerated = (value: string): string | null => {
-    const generatedTail = value.match(/(?:^| - )Cuenta\s+(\d+)(?:\/\d+)?$/i);
-    if (generatedTail && (
-      generatedTail[0].trim() === value
-      || (tablePrefix && value.startsWith(`${tablePrefix} - `))
-      || /^(?:Mesa|Table)\s+[^-]+ - /i.test(value)
-    )) return `Cuenta ${generatedTail[1]}`;
-    return null;
+    const generatedSequence = /^(?:Cuenta\s+\d+(?:\/\d+)?\s+-\s+)*Cuenta\s+(\d+)(?:\/\d+)?$/i;
+    const withoutTable = tablePrefix && value.startsWith(`${tablePrefix} - `)
+      ? value.slice(tablePrefix.length + 3)
+      : value.replace(/^(?:Mesa|Table)\s+[^-]+\s+-\s+/i, '');
+    const account = withoutTable.match(generatedSequence);
+    return account ? `Cuenta ${account[1]}` : null;
   };
   const explicit = String(ticket.alias || ticket.barTabName || '').trim();
   if (explicit) return simplifyGenerated(explicit) || explicit;

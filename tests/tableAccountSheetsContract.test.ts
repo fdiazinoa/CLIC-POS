@@ -4,6 +4,7 @@ import test from 'node:test';
 
 const map = readFileSync(new URL('../components/TableMap.tsx', import.meta.url), 'utf8');
 const sheets = readFileSync(new URL('../components/TableAccountsSheetsModal.tsx', import.meta.url), 'utf8');
+const css = readFileSync(new URL('../index.css', import.meta.url), 'utf8');
 
 test('subtotal conserva mapa visible y exige elegir mesa', () => {
   assert.match(map, /mode: 'SUBTOTAL', step: 'SOURCE'/);
@@ -13,6 +14,8 @@ test('subtotal conserva mapa visible y exige elegir mesa', () => {
   assert.match(map, /const allowed = await onBeforeTableOpen\?\.\(operationalTable\)/);
   assert.match(map, /await Promise\.resolve\(onTableOpenCancelled\?\.\(operationalTable\)\)/);
   assert.match(map, /subtotalPrintBusyRef\.current/);
+  assert.match(map, /className="table-map-selection-cancel[^"]*"/);
+  assert.match(css, /\.table-map-selection-cancel\s*\{[^}]*background-color:\s*#2563eb;[^}]*color:\s*#ffffff;/);
 });
 
 test('cuenta única normal abre POS, dividida o fraccionada muestra hojas', () => {
