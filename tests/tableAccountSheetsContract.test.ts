@@ -20,7 +20,7 @@ test('cuenta única normal abre POS, dividida o fraccionada muestra hojas', () =
   assert.match(map, /<TableAccountsSheetsModal/);
   assert.match(map, /openPosTable\(\{ \.\.\.operationalTable, currentOrderId: ticket\.id/);
   assert.match(map, /onBeforeTableOpen\(operationalTable\)/);
-  assert.match(map, /onOpenAccount=\{\(ticket, inputTimeStamp\) => \{/);
+  assert.match(map, /onOpenAccount=\{async \(ticket, inputTimeStamp\) => \{/);
   assert.match(map, /currentOrderId: ticket\.id,/);
 });
 

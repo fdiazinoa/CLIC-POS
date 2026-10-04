@@ -146,7 +146,7 @@ test('real table branches own selectors and hydrated POS destinations without bo
           completeAfterDurableCommit: async (_reference: string, persist: () => Promise<void>) => persist(),
         };
       };
-      for (const name of ['beginTableInteraction', 'expectLocalDestination', 'openPosTable']) bindings[name] = declaration('TableMap', name, bindings);
+      for (const name of ['beginTableInteraction', 'expectLocalDestination', 'openPosTable', 'requireFreshAccountLock']) bindings[name] = declaration('TableMap', name, bindings);
       const open = declaration('TableMap', 'handleTableAction', bindings);
       const commitLocal = (visible = true) => localCommitEffect({ ...bindings, ...state, visible })();
       return { state, refs, bindings, open, opened, cancelled, commitLocal };
@@ -217,7 +217,7 @@ test('real table branches own selectors and hydrated POS destinations without bo
     const selection = attribute('TableMap', 'onOpenAccount', "beginTableInteraction('account-selection'", { ...flow.bindings, ...flow.state });
     clock += 5000; // Operator decision time must not be charged to opening POS.
     const items = [{ id: 'item', quantity: 1, price: 100 }];
-    selection({ id: 'account-selected', items, timestamp: 'now' }, clock);
+    await selection({ id: 'account-selected', items, timestamp: 'now' }, clock);
     const selected = flow.opened[0];
     assert.notEqual(selected.trace, selectorTrace); assert.equal(selectorTrace.status, 'completed');
     assert.equal(selected.trace.startedAt, clock); assert.equal(selected.trace.metadata.source, 'account-selection');

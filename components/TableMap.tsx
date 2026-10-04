@@ -1110,6 +1110,12 @@ const TableMap: React.FC<TableMapProps> = ({
         await Promise.resolve(onUpdateParkedTickets?.(nextTickets));
     }, [onUpdateParkedTickets, parkedTickets]);
 
+    const requireFreshAccountLock = useCallback(async (table: Table) => {
+        if (!onBeforeTableOpen) return;
+        const allowed = await onBeforeTableOpen(table);
+        if (allowed === false) throw new Error('No se pudo confirmar el bloqueo de la mesa en la Master. Reintente sin cambiar de mesa.');
+    }, [onBeforeTableOpen]);
+
     const stats = useMemo(() => {
         const total = smartTables.length;
         const occupied = smartTables.filter(model => model.smartStatus !== 'FREE').length;
@@ -2435,7 +2441,8 @@ const TableMap: React.FC<TableMapProps> = ({
                         customers={accountCustomers}
                         isTaxIncluded={isTaxIncluded}
                         onClose={() => closeTablePreview(selectedAccountTable, () => setSelectedAccountTable(null))}
-                        onOpenAccount={(ticket, inputTimeStamp) => {
+                        onOpenAccount={async (ticket, inputTimeStamp) => {
+                            await requireFreshAccountLock(selectedAccountTable);
                             const total = Number(ticket.total ?? (ticket.items || []).reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0), 0));
                             openPosTable({
                                 ...selectedAccountTable,
@@ -2446,10 +2453,20 @@ const TableMap: React.FC<TableMapProps> = ({
                             }, beginTableInteraction('account-selection', inputTimeStamp));
                             setSelectedAccountTable(null);
                         }}
-                        onCreateAccount={(name) => createTableAccount(selectedAccountTable, name).then(() => undefined)}
-                        onRenameAccount={(ticket, name, fractionIndex) => renameTableAccount(selectedAccountTable, ticket, name, fractionIndex)}
-                        onPrint={(ticketIds) => onPrintPrecheck?.(selectedAccountTable, ticketIds) ?? false}
+                        onCreateAccount={async (name) => {
+                            await requireFreshAccountLock(selectedAccountTable);
+                            await createTableAccount(selectedAccountTable, name);
+                        }}
+                        onRenameAccount={async (ticket, name, fractionIndex) => {
+                            await requireFreshAccountLock(selectedAccountTable);
+                            await renameTableAccount(selectedAccountTable, ticket, name, fractionIndex);
+                        }}
+                        onPrint={async (ticketIds) => {
+                            await requireFreshAccountLock(selectedAccountTable);
+                            return onPrintPrecheck?.(selectedAccountTable, ticketIds) ?? false;
+                        }}
                         onTransfer={async (sourceId, targetId, quantities) => {
+                            await requireFreshAccountLock(selectedAccountTable);
                             if (!onTransferAccountItems) throw new Error('Transferencia no disponible en esta terminal.');
                             await onTransferAccountItems(selectedAccountTable, sourceId, targetId, quantities);
                         }}
