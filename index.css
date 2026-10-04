@@ -184,6 +184,15 @@ input[type='number'] {
   background-color: #f0f9ff;
 }
 
+/* Android WebView otherwise gives the new full-row item button a native gray fill. */
+.table-account-item-trigger {
+  -webkit-appearance: none;
+  appearance: none;
+  background-color: transparent;
+  border: 0;
+  -webkit-tap-highlight-color: transparent;
+}
+
 /* Keep the legacy light account row above, but give the sheets checkout
    action its own high-contrast surface on Android WebView. */
 .table-account-action.table-account-checkout {

@@ -58,6 +58,8 @@ test('cobrar y renombrar conservan contraste explícito sin cambiar la fila lega
   assert.match(css, /\.table-account-action\s*\{\s*background-color:\s*#ffffff/);
   assert.match(css, /\.table-account-action\.table-account-checkout\s*\{\s*background-color:\s*#2563eb;\s*color:\s*#ffffff/);
   assert.match(css, /\.table-account-action\.table-account-checkout:active\s*\{\s*background-color:\s*#1d4ed8/);
+  assert.match(css, /\.table-account-item-trigger\s*\{[^}]*-webkit-appearance:\s*none;[^}]*background-color:\s*transparent;[^}]*border:\s*0;/);
+  assert.match(sheets, /className=\{`table-account-item-trigger flex w-full items-start justify-between gap-3/);
   assert.match(sheets, /className="table-account-action table-account-checkout[^"]*text-white/);
   assert.match(sheets, /aria-label="Nombre del comensal"[^\n]*className="[^"]*bg-white[^"]*text-slate-900/);
 });
