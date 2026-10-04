@@ -390,6 +390,7 @@ import { completeLegacyMutationAfterDurableAck, legacyMutationJournal } from './
 import {
   reconcileLegacyClientTableConflictBeforeAuthorityAssertion,
   reconcileClientRetiredAccountBeforeAuthorityAssertion,
+  reconcileClientTableLockReleaseBeforeAuthorityAssertion,
   reconcileMasterParkedTicketOutcome,
   reconcileMasterRejectedTableMutations,
   reconcileRetiredTableAccountOutcome,
@@ -5725,6 +5726,11 @@ const AppContent: React.FC = () => {
   const discoverEligibleClientMasterEndpoint = async () => {
     const authorityState = apiSyncAdapter.getOperationalAuthorityState();
     await legacyMutationJournal.reconcileNonBlockingMaintenanceMutations();
+    await reconcileClientTableLockReleaseBeforeAuthorityAssertion({
+      journal: legacyMutationJournal,
+      authorityBaseUrl: resolveMasterOperationalBaseUrl(),
+      terminalId: authorityState.terminalId || String(clientRoutingContextRef.current.getTerminal()?.id || ''),
+    });
     await reconcileLegacyClientTableConflictBeforeAuthorityAssertion({
       journal: legacyMutationJournal,
       authorityBaseUrl: resolveMasterOperationalBaseUrl(),
@@ -6148,6 +6154,11 @@ const AppContent: React.FC = () => {
       terminalId,
       generation: authorityState.revision,
     });
+    await reconcileClientTableLockReleaseBeforeAuthorityAssertion({
+      journal: legacyMutationJournal,
+      authorityBaseUrl: endpointUrl,
+      terminalId,
+    });
     if (!legacyMutationJournal.hasOutcomeUnknown()) return;
     const authorityFence = isClientTerminalMode()
       ? clientOperationalResolverRef.current!.captureAuthority()
@@ -6242,6 +6253,12 @@ const AppContent: React.FC = () => {
       body: JSON.stringify(payload),
       timeoutMs: 5000,
       operation: `TABLE_LOCK_${action.toUpperCase()}`,
+      reconciliationContext: action === 'release' ? {
+        kind: 'TABLE_LOCK_RELEASE_V1',
+        tableId: String(payload.tableId || ''),
+        ownerId: String(payload.ownerId || ''),
+        token: String(payload.token || ''),
+      } : undefined,
       validateResponse: validateLegacySuccessResponse,
     });
     const result = response.data;
@@ -6324,6 +6341,10 @@ const AppContent: React.FC = () => {
           });
           return true;
         } catch (error) {
+          if (String(error).includes('TABLE_EDIT_LOCK_OWNERSHIP_MISMATCH')) {
+            // The old lease is no longer valid (another token owns the table).
+            return true;
+          }
           console.warn(`[TABLE_EDIT_LOCK] No se pudo confirmar liberación (intento ${attempt}/3):`, error);
           if (attempt < 3) {
             await new Promise<void>(resolve => window.setTimeout(resolve, attempt * 250));
@@ -7655,6 +7676,11 @@ const AppContent: React.FC = () => {
                 try {
                   const bootstrapAuthorityState = apiSyncAdapter.getOperationalAuthorityState();
                   await legacyMutationJournal.reconcileNonBlockingMaintenanceMutations();
+                  await reconcileClientTableLockReleaseBeforeAuthorityAssertion({
+                    journal: legacyMutationJournal,
+                    authorityBaseUrl: resolveMasterOperationalBaseUrl(),
+                    terminalId: bootstrapAuthorityState.terminalId || String(effectivePairedTerminal.id || ''),
+                  });
                   await reconcileLegacyClientTableConflictBeforeAuthorityAssertion({
                     journal: legacyMutationJournal,
                     authorityBaseUrl: resolveMasterOperationalBaseUrl(),

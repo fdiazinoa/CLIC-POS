@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
 import {
   LegacyMutationJournal, type LegacyMutationJournalEntry, type LegacyMutationJournalStore,
 } from '../services/sync/LegacyMutationJournal';
-import { reconcileClientRetiredAccountBeforeAuthorityAssertion, reconcileRetiredTableAccountOutcome } from '../services/sync/masterParkedTicketReconciliation';
+import { reconcileClientRetiredAccountBeforeAuthorityAssertion, reconcileClientTableLockReleaseBeforeAuthorityAssertion, reconcileRetiredTableAccountOutcome } from '../services/sync/masterParkedTicketReconciliation';
 
 class Store implements LegacyMutationJournalStore {
   rows = new Map<string, LegacyMutationJournalEntry>();
@@ -21,6 +22,14 @@ const targetAfter = { ...targetBefore, items: [{ id: 'water', quantity: 1, trans
 const other = { id: 'third', tableId: 'mesa-9', items: [], total: 0 };
 const pre = [source, targetBefore];
 const post = [targetAfter];
+
+test('liberación de lock guarda intención exacta y recupera antes de autoridad', () => {
+  const app = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
+  assert.match(app, /operation: `TABLE_LOCK_\$\{action\.toUpperCase\(\)\}`,[\s\S]*?reconciliationContext: action === 'release' \? \{[\s\S]*?kind: 'TABLE_LOCK_RELEASE_V1'/);
+  assert.match(app, /const discoverEligibleClientMasterEndpoint = async \(\) => \{[\s\S]*?reconcileClientTableLockReleaseBeforeAuthorityAssertion\([\s\S]*?legacyMutationJournal\.assertRemoteAuthorityAllowed\(\)/);
+  assert.match(app, /const reconcileRejectedTableMutationBlockers = useCallback[\s\S]*?reconcileClientTableLockReleaseBeforeAuthorityAssertion/);
+  assert.match(app, /if \(String\(error\)\.includes\('TABLE_EDIT_LOCK_OWNERSHIP_MISMATCH'\)\) \{[\s\S]*?return true;/);
+});
 
 const makeJournal = async () => {
   const store = new Store();
@@ -174,4 +183,69 @@ test('un heartbeat no autoriza cerrar una mutación ajena que también quedó in
   assert.equal(restarted.getEntry('sale')?.state, 'OUTCOME_UNKNOWN');
   assert.equal(await reconcile(restarted, async () => ({ revision: 42, parkedTickets: [other, ...post] })), false);
   assert.equal(restarted.hasOutcomeUnknown(), true);
+});
+
+const makeReleaseJournal = async () => {
+  const store = new Store();
+  const journal = new LegacyMutationJournal(store);
+  await journal.initializeForStartup();
+  const entry = await journal.begin({
+    operationCorrelationId: 'TABLE_LOCK_RELEASE:mesa-7',
+    authorityFingerprint: `${origin}|client-1`, generation: 7,
+    method: 'POST', url: `${origin}/api/mesas/desbloquear`, diagnosticRequestId: 'release-7',
+    reconciliationContext: { kind: 'TABLE_LOCK_RELEASE_V1', tableId: 'mesa-7', ownerId: 'device-1', token: 'old-token' },
+  });
+  await journal.prepareDispatch(entry.id, entry.authorityFingerprint, 7);
+  await journal.markOutcomeUnknown(entry.id, null);
+  return { store, journal, entry };
+};
+
+test('release timeout y restart reemite token exacto; success o 409 ajeno liberan journal', async () => {
+  for (const [status, data, classification] of [
+    [200, { success: true }, 'RESPONSE_VALID'],
+    [409, { success: false, code: 'TABLE_EDIT_LOCK_OWNERSHIP_MISMATCH' }, 'SAFE_PRE_SIDE_EFFECT'],
+  ] as const) {
+    const fixture = await makeReleaseJournal();
+    const restarted = new LegacyMutationJournal(fixture.store);
+    await restarted.initializeForStartup();
+    let calls = 0;
+    assert.equal(await reconcileClientTableLockReleaseBeforeAuthorityAssertion({
+      journal: restarted, authorityBaseUrl: origin, terminalId: 'client-1',
+      fetcher: (async (url: string | URL | Request, init?: RequestInit) => {
+        calls++;
+        assert.equal(String(url), `${origin}/api/mesas/desbloquear`);
+        assert.deepEqual(JSON.parse(String(init?.body)), { tableId: 'mesa-7', ownerId: 'device-1', token: 'old-token' });
+        return new Response(JSON.stringify(data), { status });
+      }) as typeof fetch,
+    }), true);
+    assert.equal(calls, 1);
+    assert.equal(restarted.getEntry(fixture.entry.id)?.classification, classification);
+    restarted.assertRemoteAuthorityAllowed();
+  }
+});
+
+test('release dudoso sigue bloqueado ante red/500/schema o otra mutación incierta', async () => {
+  for (const fetcher of [
+    async () => { throw new Error('timeout'); },
+    async () => new Response(JSON.stringify({ success: false }), { status: 500 }),
+    async () => new Response(JSON.stringify({ success: false, code: 'OTHER' }), { status: 409 }),
+    async () => new Response(JSON.stringify({}), { status: 200 }),
+  ]) {
+    const fixture = await makeReleaseJournal();
+    assert.equal(await reconcileClientTableLockReleaseBeforeAuthorityAssertion({
+      journal: fixture.journal, authorityBaseUrl: origin, terminalId: 'client-1', fetcher: fetcher as typeof fetch,
+    }), false);
+    assert.equal(fixture.journal.hasOutcomeUnknown(), true);
+  }
+  const unrelated = await makeReleaseJournal();
+  const releaseRow = unrelated.store.rows.get(unrelated.entry.id)!;
+  unrelated.store.rows.set('sale', { ...releaseRow, id: 'sale', operationCorrelationId: 'SALE_POST:other', method: 'POST', canonicalPath: '/api/sales', state: 'DISPATCHED', closedAt: null });
+  const restarted = new LegacyMutationJournal(unrelated.store);
+  await restarted.initializeForStartup();
+  assert.equal(await reconcileClientTableLockReleaseBeforeAuthorityAssertion({
+    journal: restarted, authorityBaseUrl: origin, terminalId: 'client-1',
+    fetcher: (async () => { throw new Error('Must not send'); }) as typeof fetch,
+  }), false);
+  assert.equal(restarted.getEntry('sale')?.state, 'OUTCOME_UNKNOWN');
+  assert.equal(restarted.getEntry(unrelated.entry.id)?.state, 'OUTCOME_UNKNOWN');
 });

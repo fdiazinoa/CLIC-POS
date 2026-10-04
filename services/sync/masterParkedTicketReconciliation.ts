@@ -126,6 +126,72 @@ export const reconcileClientRetiredAccountBeforeAuthorityAssertion = async (inpu
   }
 };
 
+/** Re-issuing the exact old unlock is safe: success or ownership mismatch
+ * proves its token cannot authorize a future table write. */
+export const reconcileUnknownTableLockRelease = async (input: {
+  journal: LegacyMutationJournal;
+  authorityOrigin: string;
+  terminalId: string;
+  release: (lock: { tableId: string; ownerId: string; token: string }) => Promise<'RELEASED' | 'OLD_TOKEN_INVALID' | null>;
+}): Promise<boolean> => {
+  if (!input.journal.isHealthy()) return false;
+  const blocking = input.journal.getBlockingEntries();
+  if (blocking.length !== 1) return false;
+  const entry = blocking[0];
+  const context = entry.reconciliationContext;
+  const lock = {
+    tableId: String(context?.tableId || '').trim(),
+    ownerId: String(context?.ownerId || '').trim(),
+    token: String(context?.token || '').trim(),
+  };
+  if (entry.state !== 'OUTCOME_UNKNOWN'
+    || entry.method !== 'POST'
+    || entry.canonicalPath !== '/api/mesas/desbloquear'
+    || !entry.operationCorrelationId.startsWith('TABLE_LOCK_RELEASE:')
+    || entry.authorityFingerprint !== `${input.authorityOrigin}|${input.terminalId}`
+    || context?.kind !== 'TABLE_LOCK_RELEASE_V1'
+    || !lock.tableId || !lock.ownerId || !lock.token) return false;
+  const result = await input.release(lock);
+  if (!result) return false;
+  await input.journal.acknowledge(entry.id,
+    result === 'RELEASED' ? 'RESPONSE_VALID' : 'SAFE_PRE_SIDE_EFFECT',
+    `RECONCILED_TABLE_LOCK_RELEASE:${result}:${lock.tableId}`);
+  return true;
+};
+
+export const reconcileClientTableLockReleaseBeforeAuthorityAssertion = async (input: {
+  journal: LegacyMutationJournal;
+  authorityBaseUrl: string | null;
+  terminalId: string;
+  fetcher?: typeof fetch;
+}): Promise<boolean> => {
+  if (!input.authorityBaseUrl || !input.terminalId || !input.journal.hasOutcomeUnknown()) return false;
+  let origin: string;
+  try { origin = new URL(input.authorityBaseUrl).origin; }
+  catch { return false; }
+  try {
+    return await reconcileUnknownTableLockRelease({
+      journal: input.journal, authorityOrigin: origin, terminalId: input.terminalId,
+      release: async lock => {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 5_000);
+        try {
+          const response = await (input.fetcher || fetch)(`${origin}/api/mesas/desbloquear`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(lock), signal: controller.signal,
+          });
+          const data = await response.json();
+          if (response.ok && data?.success === true) return 'RELEASED';
+          if (response.status === 409 && data?.code === 'TABLE_EDIT_LOCK_OWNERSHIP_MISMATCH') return 'OLD_TOKEN_INVALID';
+          return null;
+        } finally { clearTimeout(timeout); }
+      },
+    });
+  } catch {
+    return false;
+  }
+};
+
 // Older APKs could leave these proven pre-mutation table conflicts as
 // OUTCOME_UNKNOWN with no contract marker. V2 rows retain their exact server
 // classification and must never be closed by this legacy-only recovery.
