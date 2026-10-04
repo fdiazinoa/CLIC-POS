@@ -2304,6 +2304,8 @@ export interface ParkedTicket {
   id: string;
   name: string;
   alias?: string;
+  /** Vendedor/camarero de la mesa; compartido por todas sus cuentas abiertas. */
+  tableSellerId?: string;
   items: CartItem[];
   total?: number;
   discountAmount?: number;

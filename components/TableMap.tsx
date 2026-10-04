@@ -1081,6 +1081,7 @@ const TableMap: React.FC<TableMapProps> = ({
             id: `TABLE-${table.id}-ACCOUNT-${Date.now()}-${accountNumber}`,
             name: `${tableLabel} - ${accountName}`,
             alias: accountName,
+            tableSellerId: existingTickets.find(candidate => candidate.tableSellerId)?.tableSellerId,
             items: [],
             total: 0,
             timestamp,

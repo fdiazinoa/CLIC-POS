@@ -15,6 +15,7 @@ interface CartItemOptionsModalProps {
   config: BusinessConfig;
   users: UserType[];
   salesUsers?: TerminalSnapshotSeller[];
+  lockedSalespersonName?: string;
   roles?: RoleDefinition[];
   onClose: () => void;
   onUpdate: (updatedItem: CartItem | null, cartIdToDelete?: string) => void;
@@ -29,6 +30,7 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
   config,
   users,
   salesUsers: incomingSalesUsers = [],
+  lockedSalespersonName,
   roles = [],
   onClose,
   onUpdate,
@@ -127,7 +129,7 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
       quantity: nextQuantity,
       price: nextPrice,
       note,
-      salespersonId
+      salespersonId: lockedSalespersonName ? item.salespersonId : salespersonId
     };
 
     if (
@@ -367,7 +369,9 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
             <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest flex items-center gap-1.5 ml-1">
               <User size={12} /> Vendedor (Comisión)
             </label>
-            <div className="relative">
+            {lockedSalespersonName ? (
+              <div className="rounded-2xl bg-blue-50 p-4 font-bold text-blue-800">{lockedSalespersonName} · asignado a toda la mesa</div>
+            ) : <div className="relative">
               <select
                 value={salespersonId}
                 onChange={(e) => setSalespersonId(e.target.value)}
@@ -380,7 +384,7 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
               </select>
               <User className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={20} />
               <ChevronRight className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-300 rotate-90" size={18} />
-            </div>
+            </div>}
           </div>
 
           {/* 6. NOTES SECTION */}
