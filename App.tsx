@@ -132,6 +132,7 @@ import { calculateTransactionTaxSummary } from './utils/taxSummary';
 import { calculateTransactionFiscalSummary, freezeAuthoritativeLineFiscalAmounts } from './utils/fiscalBreakdown';
 import { buildTableAccountFiscalSummary, getPaymentFractionFiscalDifference } from './utils/tableAccountFiscalSummary';
 import { transferTableAccountItems } from './utils/tableAccountTransfer';
+import { commitRetiredTableAccountAfterAck } from './utils/tableAccountRetirement';
 import { fetchAuthoritativeTableSnapshot } from './utils/authoritativeTableSnapshot';
 import { reconcileRejectedTableTickets } from './utils/tableAccountReconciliation';
 import { isFullyPaidParkedTicket } from './utils/paymentFractions';
@@ -518,6 +519,10 @@ type ParkedTicketSyncOptions = {
   reason?: 'cart_changed' | 'debounced' | 'explicit' | 'customer_assigned';
   /** Persist only the active ticket while the operator is typing. */
   changedTicketId?: string;
+  /** Full-account retirement is invisible locally until the Master ACKs it. */
+  publishAfterAck?: boolean;
+  retiredSourceId?: string;
+  assertCurrentAuthority?: () => void;
 };
 
 type PendingClientTableSync = {
@@ -9703,6 +9708,38 @@ const AppContent: React.FC = () => {
     tickets: ParkedTicket[],
     options: ParkedTicketSyncOptions = { reason: 'explicit' },
   ) => {
+    const publishAfterAck = options.publishAfterAck === true;
+    if (publishAfterAck && (options.deferRemote || options.reason !== 'explicit' || options.changedTicketId)) {
+      throw new Error('TABLE_ACCOUNT_RETIRE_REQUIRES_EXPLICIT_ACK');
+    }
+    if (publishAfterAck && (!activeTableEditLockRef.current?.tableId || !options.retiredSourceId)) {
+      throw new Error('TABLE_ACCOUNT_RETIRE_REQUIRES_TABLE_LOCK');
+    }
+    const commitAcknowledgedTickets = async (acknowledged: unknown, expected: ParkedTicket[], tableId: string, assertPending: () => void, responseRevision?: number) => {
+      options.assertCurrentAuthority?.();
+      if (Number.isFinite(responseRevision) && Number(responseRevision) > 0 && Number(responseRevision) < masterRestaurantRevisionRef.current) {
+        throw new Error('MASTER_TABLES_STALE_SNAPSHOT');
+      }
+      await commitRetiredTableAccountAfterAck({
+        expected, acknowledged, tableId, sourceId: String(options.retiredSourceId || ''),
+        assertCurrent: () => {
+          assertPending();
+          options.assertCurrentAuthority?.();
+          if (Number.isFinite(responseRevision) && Number(responseRevision) > 0 && Number(responseRevision) < masterRestaurantRevisionRef.current) {
+            throw new Error('MASTER_TABLES_STALE_SNAPSHOT');
+          }
+        },
+        current: () => masterOperationalSnapshotRef.current.parkedTickets,
+        persist: rows => db.save('parkedTickets', rows),
+        publish: rows => {
+          writeCriticalCollectionsMirror(rows, cashMovements);
+          masterOperationalSnapshotRef.current.parkedTickets = rows;
+          masterOperationalSnapshotRef.current.tables = reconcileTablesWithParkedTickets(masterOperationalSnapshotRef.current.tables, rows);
+          setParkedTickets(rows);
+          setTables(previous => reconcileTablesWithParkedTickets(previous, rows));
+        },
+      });
+    };
     const rollbackRejectedTableLock = async (error: unknown, pendingSync: PendingClientTableSync | null, rejectedToken?: string) => {
       if (!/TABLE_EDIT_LOCK_REQUIRED/.test(String((error as { code?: string; message?: string })?.code || '') + String(error))) return;
       const tableId = String(pendingSync?.tableId || '').trim();
@@ -9794,11 +9831,13 @@ const AppContent: React.FC = () => {
         parkedTickets: tableSyncTickets,
       };
       pendingClientTableSyncRef.current = pendingSync;
-      writePendingTableSyncMirror(pendingSync);
-      if (!changedTicketId) writeCriticalCollectionsMirror(validTickets, cashMovements);
-      masterOperationalSnapshotRef.current.parkedTickets = validTickets;
-      setParkedTickets(validTickets);
-      const persistLocal = () => Promise.allSettled([
+      if (!publishAfterAck) {
+        writePendingTableSyncMirror(pendingSync);
+        if (!changedTicketId) writeCriticalCollectionsMirror(validTickets, cashMovements);
+        masterOperationalSnapshotRef.current.parkedTickets = validTickets;
+        setParkedTickets(validTickets);
+      }
+      const persistLocal = () => publishAfterAck ? Promise.resolve() : Promise.allSettled([
         persistTicketsLocally(),
         persistPendingClientTableSync(pendingSync),
       ]);
@@ -9813,6 +9852,7 @@ const AppContent: React.FC = () => {
         if (syncTableId && syncGeneration !== (rejectedTableSyncGenerationRef.current.get(syncTableId) || 0)) {
           throw new Error('TABLE_EDIT_LOCK_REQUIRED: la edición anterior fue rechazada por la Master.');
         }
+        if (publishAfterAck) options.assertCurrentAuthority?.();
         const response = await dispatchLegacyLanMutation<any>({
           url: await resolveValidatedOperationalApiUrl('/api/mesas/parked-tickets'),
           method: 'PUT',
@@ -9834,7 +9874,12 @@ const AppContent: React.FC = () => {
         if (!response.response.ok || result?.success === false) {
           throw new Error(result?.message || `Master respondió HTTP ${response.response.status}`);
         }
+        if (publishAfterAck && pendingClientTableSyncRef.current !== pendingSync) throw new Error('TABLE_ACCOUNT_RETIRE_SUPERSEDED');
+        if (publishAfterAck && !Array.isArray(result?.parkedTickets)) throw new Error('PARKED_TICKETS_ACK_REQUIRED');
         const sharedTickets = Array.isArray(result?.parkedTickets) ? result.parkedTickets : validTickets;
+        if (publishAfterAck) await commitAcknowledgedTickets(sharedTickets, tableSyncTickets, syncTableId, () => {
+          if (pendingClientTableSyncRef.current !== pendingSync) throw new Error('TABLE_ACCOUNT_RETIRE_SUPERSEDED');
+        }, Number(result?.revision));
         if (syncTableId) lastAcknowledgedTableTicketsRef.current.set(syncTableId, sharedTickets.filter(ticket => parkedTicketReferencesTable(ticket, syncTableId)));
         const responseRevision = Number(result?.revision || 0);
         if (Number.isFinite(responseRevision) && responseRevision > masterRestaurantRevisionRef.current) {
@@ -9845,7 +9890,7 @@ const AppContent: React.FC = () => {
           ? mergePendingClientTableTickets(sharedTickets, newerPendingSync)
           : sharedTickets;
         const canApplyAcknowledgedSnapshot =
-          pendingClientTableSyncRef.current === pendingSync
+          !publishAfterAck && pendingClientTableSyncRef.current === pendingSync
           && currentViewRef.current === 'TABLE_MAP'
           && !activeTableEditLockRef.current;
         if (canApplyAcknowledgedSnapshot) {
@@ -9854,11 +9899,16 @@ const AppContent: React.FC = () => {
         }
         if (pendingClientTableSyncRef.current === pendingSync) {
           pendingClientTableSyncRef.current = null;
-          await clearPendingClientTableSync();
+          if (!publishAfterAck) await clearPendingClientTableSync();
         }
-        await response.completeAfterDurableCommit(`App:parked-tickets:${changedTicketId || 'all'}`, () =>
-          persistLegacyLanMutationCompletion(response.correlationId, `App:parked-tickets:${changedTicketId || 'all'}`, response.response.status)
-        );
+        try {
+          await response.completeAfterDurableCommit(`App:parked-tickets:${changedTicketId || 'all'}`, () =>
+            persistLegacyLanMutationCompletion(response.correlationId, `App:parked-tickets:${changedTicketId || 'all'}`, response.response.status)
+          );
+        } catch (completionError) {
+          if (!publishAfterAck) throw completionError;
+          console.warn('[TABLE_ACCOUNT_RETIRE] Master confirmó el retiro, pero el journal local aún requiere reconciliación:', completionError);
+        }
         void fetchTables().catch(error => {
           console.warn('[TABLE_SYNC] No se pudo refrescar el mapa después de guardar:', error);
         });
@@ -9872,8 +9922,12 @@ const AppContent: React.FC = () => {
       if (options.reason === 'explicit' || options.reason === 'customer_assigned') {
         try { await queuedSync; }
         catch (error) {
-          try { await rollbackRejectedTableLock(error, pendingSync, editLock?.token); }
-          catch (rollbackError) { console.error('[TABLE_SYNC] No se pudo reconciliar rechazo de lock:', rollbackError); }
+          if (publishAfterAck) {
+            if (pendingClientTableSyncRef.current === pendingSync) pendingClientTableSyncRef.current = null;
+          } else {
+            try { await rollbackRejectedTableLock(error, pendingSync, editLock?.token); }
+            catch (rollbackError) { console.error('[TABLE_SYNC] No se pudo reconciliar rechazo de lock:', rollbackError); }
+          }
           throw error;
         }
       } else {
@@ -9884,6 +9938,7 @@ const AppContent: React.FC = () => {
     const servesAsNativeMaster =
       isNativeAndroidRuntime() &&
       isNativeStandaloneTerminalRuntime(getCurrentTerminal());
+    if (publishAfterAck && !servesAsNativeMaster) throw new Error('TABLE_ACCOUNT_RETIRE_MASTER_ACK_UNAVAILABLE');
     const masterEditLock = servesAsNativeMaster ? activeTableEditLockRef.current : null;
     const syncTableId = String(masterEditLock?.tableId || '');
     const syncGeneration = rejectedTableSyncGenerationRef.current.get(syncTableId) || 0;
@@ -9905,13 +9960,15 @@ const AppContent: React.FC = () => {
     // corre cada segundo y podría aplicar una revisión Cliente en ese intervalo.
     if (masterPendingSync) {
       pendingMasterTableSyncRef.current = masterPendingSync;
-      writePendingTableSyncMirror(masterPendingSync);
+      if (!publishAfterAck) writePendingTableSyncMirror(masterPendingSync);
     }
-    if (!changedTicketId) writeCriticalCollectionsMirror(validTickets, cashMovements);
-    masterOperationalSnapshotRef.current.parkedTickets = validTickets;
-    setParkedTickets(validTickets);
+    if (!publishAfterAck) {
+      if (!changedTicketId) writeCriticalCollectionsMirror(validTickets, cashMovements);
+      masterOperationalSnapshotRef.current.parkedTickets = validTickets;
+      setParkedTickets(validTickets);
+    }
     const persistMasterTickets = async () => {
-      await persistTicketsLocally();
+      if (!publishAfterAck) await persistTicketsLocally();
     };
 
     // La caja maestra Android también debe confirmar el cambio en el servidor
@@ -9926,6 +9983,7 @@ const AppContent: React.FC = () => {
         if (syncTableId && syncGeneration !== (rejectedTableSyncGenerationRef.current.get(syncTableId) || 0)) {
           throw new Error('TABLE_EDIT_LOCK_REQUIRED: la edición anterior fue rechazada por la Master.');
         }
+        if (publishAfterAck) options.assertCurrentAuthority?.();
         const nativeBridge = (window as any).ClicPOSNativePrinter;
         if (typeof nativeBridge?.updateMasterParkedTickets === 'function') {
           await reconcileRejectedTableMutationBlockers();
@@ -9969,19 +10027,24 @@ const AppContent: React.FC = () => {
             changedTicketId,
             masterEditLock?.tableId,
           );
+          if (publishAfterAck && pendingMasterTableSyncRef.current !== masterPendingSync) throw new Error('TABLE_ACCOUNT_RETIRE_SUPERSEDED');
+          if (publishAfterAck && !Array.isArray(result?.parkedTickets)) throw new Error('PARKED_TICKETS_ACK_REQUIRED');
           const responseRevision = Number(result?.revision || 0);
           if (!Number.isFinite(responseRevision) || responseRevision <= 0) {
             throw new Error('NATIVE_MASTER_RESTAURANT_REVISION_REQUIRED');
           }
           masterRestaurantRevisionRef.current = Math.max(masterRestaurantRevisionRef.current, responseRevision);
           const sharedTickets = Array.isArray(result?.parkedTickets) ? result.parkedTickets : validTickets;
+          if (publishAfterAck) await commitAcknowledgedTickets(sharedTickets, masterTableSyncTickets, syncTableId, () => {
+            if (pendingMasterTableSyncRef.current !== masterPendingSync) throw new Error('TABLE_ACCOUNT_RETIRE_SUPERSEDED');
+          }, responseRevision);
           if (syncTableId) lastAcknowledgedTableTicketsRef.current.set(syncTableId, sharedTickets.filter(ticket => parkedTicketReferencesTable(ticket, syncTableId)));
           const newerPendingSync = pendingMasterTableSyncRef.current;
           const effectiveSharedTickets = newerPendingSync && newerPendingSync !== masterPendingSync
             ? mergePendingClientTableTickets(sharedTickets, newerPendingSync)
             : sharedTickets;
           const canApplyAcknowledgedSnapshot =
-            pendingMasterTableSyncRef.current === masterPendingSync
+            !publishAfterAck && pendingMasterTableSyncRef.current === masterPendingSync
             && currentViewRef.current === 'TABLE_MAP'
             && !activeTableEditLockRef.current;
           if (canApplyAcknowledgedSnapshot) {
@@ -9992,7 +10055,7 @@ const AppContent: React.FC = () => {
           }
           if (pendingMasterTableSyncRef.current === masterPendingSync) {
             pendingMasterTableSyncRef.current = null;
-            writePendingTableSyncMirror({
+            if (!publishAfterAck) writePendingTableSyncMirror({
               id: 'current',
               status: 'EMPTY',
               queuedAt: new Date().toISOString(),
@@ -10025,6 +10088,7 @@ const AppContent: React.FC = () => {
               })
             : null;
           if (reconciledRevision !== null) {
+            if (publishAfterAck) throw new Error('TABLE_ACCOUNT_RETIRE_OUTCOME_UNKNOWN');
             masterRestaurantRevisionRef.current = Math.max(masterRestaurantRevisionRef.current, reconciledRevision);
             if (pendingMasterTableSyncRef.current === masterPendingSync) {
               pendingMasterTableSyncRef.current = null;
@@ -10074,14 +10138,19 @@ const AppContent: React.FC = () => {
         if (!response.response.ok || result?.success === false) {
           throw new Error(result?.message || `No se pudo confirmar la orden local (HTTP ${response.response.status})`);
         }
+        if (publishAfterAck && pendingMasterTableSyncRef.current !== masterPendingSync) throw new Error('TABLE_ACCOUNT_RETIRE_SUPERSEDED');
+        if (publishAfterAck && !Array.isArray(result?.parkedTickets)) throw new Error('PARKED_TICKETS_ACK_REQUIRED');
         const sharedTickets = Array.isArray(result?.parkedTickets) ? result.parkedTickets : validTickets;
+        if (publishAfterAck) await commitAcknowledgedTickets(sharedTickets, masterTableSyncTickets, syncTableId, () => {
+          if (pendingMasterTableSyncRef.current !== masterPendingSync) throw new Error('TABLE_ACCOUNT_RETIRE_SUPERSEDED');
+        }, Number(result?.revision));
         if (syncTableId) lastAcknowledgedTableTicketsRef.current.set(syncTableId, sharedTickets.filter(ticket => parkedTicketReferencesTable(ticket, syncTableId)));
         const newerPendingSync = pendingMasterTableSyncRef.current;
         const effectiveSharedTickets = newerPendingSync && newerPendingSync !== masterPendingSync
           ? mergePendingClientTableTickets(sharedTickets, newerPendingSync)
           : sharedTickets;
         const canApplyAcknowledgedSnapshot =
-          pendingMasterTableSyncRef.current === masterPendingSync
+          !publishAfterAck && pendingMasterTableSyncRef.current === masterPendingSync
           && currentViewRef.current === 'TABLE_MAP'
           && !activeTableEditLockRef.current;
         if (canApplyAcknowledgedSnapshot) {
@@ -10096,16 +10165,21 @@ const AppContent: React.FC = () => {
         }
         if (pendingMasterTableSyncRef.current === masterPendingSync) {
           pendingMasterTableSyncRef.current = null;
-          writePendingTableSyncMirror({
+          if (!publishAfterAck) writePendingTableSyncMirror({
             id: 'current',
             status: 'EMPTY',
             queuedAt: new Date().toISOString(),
             parkedTickets: [],
           });
         }
-        await response.completeAfterDurableCommit(`App:master-parked-tickets:${changedTicketId || 'all'}`, () =>
-          persistLegacyLanMutationCompletion(response.correlationId, `App:master-parked-tickets:${changedTicketId || 'all'}`, response.response.status)
-        );
+        try {
+          await response.completeAfterDurableCommit(`App:master-parked-tickets:${changedTicketId || 'all'}`, () =>
+            persistLegacyLanMutationCompletion(response.correlationId, `App:master-parked-tickets:${changedTicketId || 'all'}`, response.response.status)
+          );
+        } catch (completionError) {
+          if (!publishAfterAck) throw completionError;
+          console.warn('[TABLE_ACCOUNT_RETIRE] Master confirmó el retiro, pero el journal local aún requiere reconciliación:', completionError);
+        }
       };
       const queuedSync = parkedTicketSyncQueueRef.current
         .catch(() => undefined)
@@ -10116,8 +10190,12 @@ const AppContent: React.FC = () => {
       if (options.reason === 'explicit' || options.reason === 'customer_assigned') {
         try { await queuedSync; }
         catch (error) {
-          try { await rollbackRejectedTableLock(error, masterPendingSync, masterEditLock?.token); }
-          catch (rollbackError) { console.error('[TABLE_SYNC] No se pudo reconciliar rechazo de lock:', rollbackError); }
+          if (publishAfterAck) {
+            if (pendingMasterTableSyncRef.current === masterPendingSync) pendingMasterTableSyncRef.current = null;
+          } else {
+            try { await rollbackRejectedTableLock(error, masterPendingSync, masterEditLock?.token); }
+            catch (rollbackError) { console.error('[TABLE_SYNC] No se pudo reconciliar rechazo de lock:', rollbackError); }
+          }
           throw error;
         }
       } else {
@@ -13084,7 +13162,7 @@ const AppContent: React.FC = () => {
                 onOpenTable={openTableForService}
                 canViewBusinessMetrics={canViewBusinessMetrics}
                 onTransferAccountItems={async (table, sourceId, targetId, quantities) => {
-                  if (isClientTerminalMode() && activeTableEditLockRef.current?.tableId !== String(table.id)) {
+                  if (activeTableEditLockRef.current?.tableId !== String(table.id)) {
                     throw new Error('No hay bloqueo vigente de esta mesa en la Master. Abra de nuevo la mesa.');
                   }
                   if (isClientTerminalMode() && pendingClientTableSyncRef.current) {
@@ -13100,8 +13178,19 @@ const AppContent: React.FC = () => {
                   const terminalConfig = getCurrentTerminal()?.config;
                   const isTaxIncluded = Boolean(resolveKioskActiveTariff(config, terminalConfig)?.taxIncluded);
                   const nextTickets = transferTableAccountItems(snapshot.parkedTickets, table, sourceId, targetId, quantities, config, terminalConfig, isTaxIncluded, getCurrentTerminal()?.id || 'T1', customers);
+                  const sourceRetired = !nextTickets.some(ticket => String(ticket.id) === sourceId);
                   snapshot.assertCurrentAuthority();
-                  await handleUpdateParkedTickets(nextTickets, { reason: 'explicit' });
+                  try {
+                    await handleUpdateParkedTickets(nextTickets, { reason: 'explicit', publishAfterAck: sourceRetired, retiredSourceId: sourceRetired ? sourceId : undefined, assertCurrentAuthority: sourceRetired ? snapshot.assertCurrentAuthority : undefined });
+                  } catch (error) {
+                    if (sourceRetired) {
+                      void fetchTables().catch(refreshError => console.warn('[TABLE_ACCOUNT_RETIRE] No se pudo consultar Master tras resultado incierto:', refreshError));
+                      if (/OUTCOME_UNKNOWN/.test(String(error))) {
+                        throw new Error('La Master no confirmó si retiró la cuenta origen. Espere la actualización del mapa antes de reintentar.');
+                      }
+                    }
+                    throw error;
+                  }
                 }}
                 onPrintPrecheck={async (table, requestedTicketIds) => {
                   let temporaryLockAcquired = false;
