@@ -856,6 +856,9 @@ export const buildEscPosSubtotalPayload = (
     discountType?: 'PERCENT' | 'FIXED';
     discountValue?: number;
     taxTotal: number;
+    taxBreakdown?: Array<{ name: string; rate: number; amount: number }>;
+    serviceChargeAmount?: number;
+    serviceChargeRate?: number;
     finalTotal: number;
     table?: Table | null;
     customerName?: string;
@@ -909,7 +912,12 @@ export const buildEscPosSubtotalPayload = (
       discountValue: params.discountValue,
     }), `-${formatMoney(config.currencySymbol || '$', params.discountTotal)}`, width);
   }
-  pushPair(chunks, 'IMPUESTOS', formatMoney(config.currencySymbol || '$', params.taxTotal), width);
+  for (const tax of params.taxBreakdown?.length ? params.taxBreakdown : [{ name: 'IMPUESTOS', rate: 0, amount: params.taxTotal }]) {
+    pushPair(chunks, tax.rate ? formatTaxLineLabel(tax) : tax.name, formatMoney(config.currencySymbol || '$', tax.amount), width);
+  }
+  if (Number(params.serviceChargeAmount || 0) > 0) {
+    pushPair(chunks, `Propina legal ${Number(params.serviceChargeRate || 0)}%`, formatMoney(config.currencySymbol || '$', Number(params.serviceChargeAmount)), width);
+  }
   chunks.push(bold(true));
   chunks.push(size(0x11));
   pushPair(chunks, 'TOTAL', formatMoney(config.currencySymbol || '$', params.finalTotal), width);

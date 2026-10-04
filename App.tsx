@@ -130,6 +130,8 @@ import { buildZReportPaymentMethodSummary } from './utils/zReportPaymentSummary'
 import { applyPromotions, hasProductPromotion } from './utils/promotionEngine';
 import { calculateTransactionTaxSummary } from './utils/taxSummary';
 import { calculateTransactionFiscalSummary, freezeAuthoritativeLineFiscalAmounts } from './utils/fiscalBreakdown';
+import { buildTableAccountFiscalSummary, getPaymentFractionFiscalDifference } from './utils/tableAccountFiscalSummary';
+import { isFullyPaidParkedTicket } from './utils/paymentFractions';
 import { resolveAppliedServiceTaxPolicy } from './utils/serviceTaxPolicy';
 import { shouldApplyRestaurantServiceCharge } from './utils/orderServiceType';
 import { calculateRestaurantServiceCharge, isRestaurantBusiness } from './utils/businessVertical';
@@ -12970,6 +12972,9 @@ const AppContent: React.FC = () => {
                 }}
                 onUpdateParkedTickets={handleUpdateParkedTickets}
                 currencySymbol={config.currencySymbol}
+                fiscalConfig={config}
+                terminalTaxConfig={getCurrentTerminal()?.config}
+                isTaxIncluded={Boolean(resolveKioskActiveTariff(config, getCurrentTerminal()?.config)?.taxIncluded)}
                 currentUser={currentUser!}
                 localTableLockOwnerId={String(deviceId || getCurrentTerminal()?.config?.currentDeviceId || '')}
                 isAdmin={currentUser?.role === 'ADMIN'}
@@ -12978,50 +12983,84 @@ const AppContent: React.FC = () => {
                 isRestaurantMode={isRestaurantTerminal(getCurrentTerminal())}
                 onOpenTable={openTableForService}
                 canViewBusinessMetrics={canViewBusinessMetrics}
-                onPrintPrecheck={async (table) => {
-                  if (!table.currentOrderId) return;
+                onPrintPrecheck={async (table, requestedTicketIds) => {
+                  const openTableTickets = (parkedTickets || []).filter(ticket => parkedTicketReferencesTable(ticket, String(table.id)) && !isFullyPaidParkedTicket(ticket) && ticket.items?.length);
+                  if (!requestedTicketIds?.length && openTableTickets.length !== 1) {
+                    alert('Seleccione la cuenta concreta desde el mapa de mesas antes de imprimir la pre-cuenta.');
+                    return false;
+                  }
+                  const targetIds = Array.from(new Set((requestedTicketIds?.length ? requestedTicketIds : [openTableTickets[0]?.id]).filter(Boolean).map(String)));
+                  if (targetIds.length === 0) return false;
                   let temporaryLockAcquired = false;
                   if (isClientTerminalMode() && activeTableEditLockRef.current?.tableId !== String(table.id)) {
                     temporaryLockAcquired = await acquireTableEditLock(table);
-                    if (!temporaryLockAcquired) return;
+                    if (!temporaryLockAcquired) return false;
                   }
                   try {
-                    const order = (parkedTickets || []).find(p => p.id === table.currentOrderId);
-                    if (!order) {
-                      alert('No se encontró el pedido activo para esta mesa.');
-                      return;
+                    const orders = targetIds.map(id => (parkedTickets || []).find(ticket => String(ticket.id) === id));
+                    if (orders.some(order => !order || !parkedTicketReferencesTable(order, String(table.id)) || isFullyPaidParkedTicket(order) || !order.items?.length)) {
+                      alert('Una cuenta ya no pertenece a esta mesa o no tiene artículos. Actualice el mapa.');
+                      return false;
                     }
-                    // Pre-calculate totals for printPrecuenta
-                    const subtotal = order.items.reduce((sum, i) => sum + (i.price * i.quantity), 0);
-                    
-                    const printed = await printPrecuenta(config, {
-                      items: order.items,
-                      subtotal: subtotal,
-                      discountTotal: Number(order.discountAmount || 0),
-                      discountType: order.discountType,
-                      discountValue: order.discountValue,
-                      taxTotal: 0,      // Simplified for now
-                      finalTotal: order.total || subtotal,
-                      table: table,
-                      customerName: order.customerName,
-                      orderNumber: order.orderNumber,
-                      tableDisplayLabel: order.tableDisplayLabel,
-                      terminalId: getCurrentTerminal()?.id || 'T1'
-                    });
-                    if (printed) {
+                    const terminalConfig = getCurrentTerminal()?.config;
+                    const isTaxIncluded = Boolean(resolveKioskActiveTariff(config, terminalConfig)?.taxIncluded);
+                    const printedIds = new Set<string>();
+                    let completed = true;
+                    let uncertainError: unknown;
+                    for (const order of orders) {
+                      if (!order) continue;
+                      const fiscal = buildTableAccountFiscalSummary(order, table, config, terminalConfig, isTaxIncluded);
+                      if (getPaymentFractionFiscalDifference(order, fiscal.total) > 0) {
+                        completed = false;
+                        alert('Las cuotas de esta cuenta no coinciden con el total fiscal. Abra la cuenta en el POS para reconciliarla antes de imprimir.');
+                        break;
+                      }
+                      try {
+                        const printed = await printPrecuenta(config, {
+                          items: order.items,
+                          subtotal: fiscal.subtotal,
+                          discountTotal: fiscal.discountTotal,
+                          discountType: order.discountType,
+                          discountValue: order.discountValue,
+                          taxTotal: fiscal.taxTotal,
+                          taxBreakdown: fiscal.taxBreakdown,
+                          serviceChargeAmount: fiscal.serviceChargeAmount,
+                          serviceChargeRate: fiscal.serviceChargeRate,
+                          finalTotal: fiscal.total,
+                          table,
+                          customerName: order.alias || order.customerName,
+                          orderNumber: order.orderNumber,
+                          tableDisplayLabel: order.tableDisplayLabel,
+                          terminalId: getCurrentTerminal()?.id || 'T1',
+                        });
+                        if (!printed) { completed = false; break; }
+                        printedIds.add(String(order.id));
+                      } catch (error) { completed = false; uncertainError = error; break; }
+                    }
+                    if (printedIds.size > 0) {
                       const subtotalizedAt = new Date().toISOString();
-                      const subtotalizedItems = order.items.map(item => ({
-                        ...item,
-                        subtotalizedAt: item.subtotalizedAt || subtotalizedAt,
-                        subtotalizedBy: item.subtotalizedBy || currentUser?.name || currentUser?.id || 'POS'
-                      }));
-                      const nextTickets = parkedTickets.map(ticket =>
-                        String(ticket.id) === String(order.id)
-                          ? { ...ticket, items: subtotalizedItems }
-                          : ticket
-                      );
-                      await handleUpdateParkedTickets(nextTickets, { reason: 'explicit' });
+                      const nextTickets = (parkedTickets || []).map(ticket => printedIds.has(String(ticket.id)) ? {
+                        ...ticket,
+                        items: ticket.items.map(item => ({
+                          ...item,
+                          subtotalizedAt: item.subtotalizedAt || subtotalizedAt,
+                          subtotalizedBy: item.subtotalizedBy || currentUser?.name || currentUser?.id || 'POS',
+                        })),
+                      } : ticket);
+                      try {
+                        await handleUpdateParkedTickets(nextTickets, { reason: 'explicit' });
+                      } catch (error) {
+                        console.error('La Master no confirmó las marcas de pre-cuenta:', error);
+                        alert('La impresora aceptó una o más pre-cuentas, pero la Master no confirmó sus marcas. No reimprima hasta verificar las cuentas en la Master.');
+                        return false;
+                      }
                     }
+                    if (!completed) {
+                      alert(uncertainError
+                        ? 'Resultado de impresión incierto. Verifique la impresora antes de reintentar; las cuentas confirmadas quedaron marcadas.'
+                        : 'No se completó la impresión de todas las cuentas. Las confirmadas quedaron marcadas; verifique antes de reintentar.');
+                    }
+                    return completed;
                   } finally {
                     if (temporaryLockAcquired) await releaseActiveTableEditLock({ waitForPersistence: false });
                   }
