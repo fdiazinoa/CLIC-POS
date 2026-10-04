@@ -52,6 +52,9 @@ test('cuenta maximizada mantiene las reglas de edición en POS y despeja el enca
   assert.match(sheets, /Ajustar cantidad/);
   assert.match(sheets, /Devolver en cocina/);
   assert.match(sheets, /Retirar artículo/);
+  assert.match(sheets, /aria-expanded=\{itemSelected\}/);
+  assert.match(sheets, /setSelectedItemKey\(current => itemSelected && current === itemKey \? null : itemKey\)/);
+  assert.match(sheets, /\{itemSelected && <div className="mt-2 flex flex-wrap gap-2 pb-1">/);
   assert.match(sheets, /onOpenAccount\(ticket, inputTimeStamp, \{ ticketId: String\(ticket\.id\), cartId, action: 'ADJUST' \}\)/);
   assert.match(sheets, /onOpenAccount\(ticket, inputTimeStamp, \{ ticketId: String\(ticket\.id\), cartId, action: 'RETURN' \}\)/);
   assert.match(map, /openPosTable\([\s\S]*?beginTableInteraction\('account-selection', inputTimeStamp\)\);\s*if \(itemAction\) onAccountItemActionRequested\?\.\(itemAction\)/);

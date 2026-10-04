@@ -127,7 +127,8 @@ test('pre-cuenta solicitada distingue solo artículos nuevos de la misma cuenta'
     assert.doesNotMatch(html, /Nuevo desde subtotal/);
     assert.match(html, /Artículo impreso/);
     assert.match(html, /Artículo agregado/);
-    assert.match(html, /border-emerald-200 bg-emerald-50[^>]*>[^<]*<div[^>]*>[^<]*<span[^>]*>1 × Artículo agregado/);
+    assert.match(html, /border-emerald-200 bg-emerald-50[^>]*><button[^>]*aria-label="Acciones de Artículo agregado en Cuenta 1"[^>]*><span[^>]*><span[^>]*>1 × Artículo agregado/);
+    assert.doesNotMatch(html, />Ajustar cantidad<|>Retirar artículo</);
     assert.match(html, /Total mesa/);
     assert.match(html, /Maximizar/);
   }
