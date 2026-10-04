@@ -1,5 +1,9 @@
 # Large Master Sync V3 receiver (dark integration)
 
+## Canary routing
+
+The emulator-only canary registers its existing terminal identity through `URL ERP` to obtain a session-only sync token. It sends only `/api/sync/v3/master-syncs` requests to the separate `URL Sync V3 (Railway)` origin. This is a direct client request, not a proxy or redirect. The V3 origin defaults to `https://clic-erp-production.up.railway.app` and can be set at build time with `VITE_LARGE_MASTER_SYNC_V3_BASE_URL`. Both origins must be HTTPS (except loopback), and changing either URL invalidates the in-memory registration. Operational credentials are not persisted by the canary.
+
 The receiver is integrated with POS database bootstrap and foreground resume, but remains compile-time disabled through `LARGE_MASTER_SYNC_V3_RECEIVER_ENABLED = false` in `services/sync/LargeMasterSyncV3Lifecycle.ts`.
 
 While dark it performs no V3 HTTP request, adds no capability header, does not change legacy full/delta/config flows, and does not replace the React `products` or `productPrices` arrays. If a previously activated V3 database exists, the runtime pointer also stays unused while the guard is false; legacy remains authoritative.

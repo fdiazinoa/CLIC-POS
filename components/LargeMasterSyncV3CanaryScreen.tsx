@@ -14,6 +14,7 @@ const initialIdentity = (): LargeMasterSyncV3CanaryInput => {
   const credentials = readTerminalCredentialsSync();
   return {
     erpBaseUrl: localStorage.getItem('CLIC_ERP_BASE_URL') || '',
+    v3BaseUrl: import.meta.env.VITE_LARGE_MASTER_SYNC_V3_BASE_URL || 'https://clic-erp-production.up.railway.app',
     tenantId: credentials.erpTenantId || credentials.tenantId || '',
     erpTerminalId: credentials.erpTerminalId || '',
     posDeviceId: credentials.deviceId || '',
@@ -22,7 +23,8 @@ const initialIdentity = (): LargeMasterSyncV3CanaryInput => {
 };
 
 export const canaryIdentityKey = (input: LargeMasterSyncV3CanaryInput): string => (
-  [validateLargeMasterSyncV3CanaryUrl(input.erpBaseUrl), input.tenantId.trim(),
+  [validateLargeMasterSyncV3CanaryUrl(input.erpBaseUrl),
+    validateLargeMasterSyncV3CanaryUrl(input.v3BaseUrl), input.tenantId.trim(),
     input.erpTerminalId.trim(), input.posDeviceId.trim()].join('|')
 );
 
@@ -44,6 +46,7 @@ const LargeMasterSyncV3CanaryScreen: React.FC = () => {
     try {
       assertLargeMasterSyncV3CanaryEmulator();
       const erpBaseUrl = validateLargeMasterSyncV3CanaryUrl(identity.erpBaseUrl);
+      const v3BaseUrl = validateLargeMasterSyncV3CanaryUrl(identity.v3BaseUrl);
       const bound = await bindTerminalFromErp({
         currentConfig: getInitialConfig(SubVertical.SUPERMARKET),
         posDeviceId: identity.posDeviceId.trim(),
@@ -56,7 +59,7 @@ const LargeMasterSyncV3CanaryScreen: React.FC = () => {
       });
       const token = bound.syncToken || bound.sync_token || '';
       if (!token) throw new Error('El registro ERP no devolvió syncToken. No se inició V3.');
-      const registered = { ...identity, erpBaseUrl, erpTerminalId: bound.erp_terminal_id,
+      const registered = { ...identity, erpBaseUrl, v3BaseUrl, erpTerminalId: bound.erp_terminal_id,
         tenantId: bound.tenant_id, syncToken: token };
       setIdentity(registered);
       setRegisteredIdentity(canaryIdentityKey(registered));
@@ -94,6 +97,7 @@ const LargeMasterSyncV3CanaryScreen: React.FC = () => {
         <p className="text-amber-300">Modo de laboratorio: ventas, cobros y operación POS deshabilitados en esta compilación.</p>
         {([
           ['erpBaseUrl', 'URL ERP'],
+          ['v3BaseUrl', 'URL Sync V3 (Railway)'],
           ['tenantId', 'Tenant ID'],
           ['erpTerminalId', 'Terminal ERP ID'],
           ['posDeviceId', 'Device ID'],
