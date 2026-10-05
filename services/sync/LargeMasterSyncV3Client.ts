@@ -390,30 +390,33 @@ export class LargeMasterSyncV3Client {
           pending.set(index, task);
         }
       };
+      const applyNext = async (index: number): Promise<void> => {
+        const task = pending.get(index);
+        if (!task) throw failed ? firstError : abortError();
+        const downloaded = await task;
+        if ('error' in downloaded || failed) throw failed ? firstError : downloaded.error;
+        // Close the race where a sale/payment/print begins while the chunk is downloading or parsing.
+        totalPauseMs += await waitForLargeMasterSyncV3OperationalWindow(controller.signal);
+        if (failed) throw firstError;
+        const chunk = downloaded.chunk;
+        const result = await this.applyChunk(chunk);
+        if (failed || controller.signal.aborted) throw failed ? firstError : abortError();
+        if (result === 'APPLIED') {
+          appliedRecords += chunk.recordCount;
+          appliedChunks += 1;
+        }
+        progress = await store.readProgress(syncId);
+        this.metric({ event: 'chunk_progress', syncId, syncVersion: manifest.syncVersion, dataset,
+          chunkIndex: index, progress: expected.chunks ? Number(progress?.datasets.find(item => item.dataset === dataset)?.appliedChunks || 0) / expected.chunks : 1,
+          sqliteFileSize: await store.getDatabaseSizeBytes() });
+        // The current payload still occupies a slot until SQLite has applied it.
+        pending.delete(index);
+      };
       try {
         launch();
         for (const index of remaining) {
-          const task = pending.get(index);
-          if (!task) throw failed ? firstError : abortError();
-          const downloaded = await task;
-          pending.delete(index);
-          if ('error' in downloaded || failed) throw failed ? firstError : downloaded.error;
-          if (this.downloadConcurrency === 2) launch();
-          // Close the race where a sale/payment/print begins while the chunk is downloading or parsing.
-          totalPauseMs += await waitForLargeMasterSyncV3OperationalWindow(controller.signal);
-          if (failed) throw firstError;
-          const chunk = downloaded.chunk;
-          const result = await this.applyChunk(chunk);
-          if (failed || controller.signal.aborted) throw failed ? firstError : abortError();
-          if (result === 'APPLIED') {
-            appliedRecords += chunk.recordCount;
-            appliedChunks += 1;
-          }
-          progress = await store.readProgress(syncId);
-          this.metric({ event: 'chunk_progress', syncId, syncVersion: manifest.syncVersion, dataset,
-            chunkIndex: index, progress: expected.chunks ? Number(progress?.datasets.find(item => item.dataset === dataset)?.appliedChunks || 0) / expected.chunks : 1,
-            sqliteFileSize: await store.getDatabaseSizeBytes() });
-          if (this.downloadConcurrency === 1) launch();
+          await applyNext(index);
+          launch();
         }
       } finally {
         controller.abort();

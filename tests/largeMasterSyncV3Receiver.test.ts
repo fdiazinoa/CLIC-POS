@@ -643,6 +643,52 @@ test('opt-in prefetch downloads at most two chunks and applies SQLite chunks in 
   assert.deepEqual(applied, [0, 1, 2, 3, 4]);
 });
 
+test('blocked SQLite apply retains at most two completed chunk payloads', async () => {
+  const { store } = sqliteStore();
+  const { responses } = await manifestAndResponses({ articles: Array.from({ length: 3 }, (_, index) => [{
+    id: `A${index}`, taxable: false, taxIds: [], active: true,
+  }]) }, 186, SYNC_ID, ['articles']);
+  const completed = new Set<number>();
+  const applied = new Set<number>();
+  let peakRetained = 0;
+  const transport: LargeMasterSyncV3Transport = { async request(path) {
+    const index = Number(path.match(/\/chunks\/(\d+)$/)?.[1]);
+    if (Number.isInteger(index)) {
+      completed.add(index);
+      peakRetained = Math.max(peakRetained, completed.size - applied.size);
+    }
+    return responses.get(path)!;
+  } };
+  let releaseApply!: () => void;
+  const blockedApply = new Promise<void>(resolve => { releaseApply = resolve; });
+  let applying!: () => void;
+  const applyStarted = new Promise<void>(resolve => { applying = resolve; });
+  const originalApply = store.applyChunk.bind(store);
+  store.applyChunk = async chunk => {
+    if (chunk.envelope.chunkIndex === 0) {
+      applying();
+      await blockedApply;
+    }
+    const result = await originalApply(chunk);
+    applied.add(chunk.envelope.chunkIndex);
+    return result;
+  };
+  const client = new LargeMasterSyncV3Client({ store, transport, downloadConcurrency: 2,
+    storageStats: async () => ({ availableBytes: 1e9, totalBytes: 2e9 }), maxRetries: 0 });
+  const syncing = client.resumeSync(SYNC_ID);
+  try {
+    await applyStarted;
+    await new Promise(resolve => setTimeout(resolve, 5));
+    assert.deepEqual([...completed], [0, 1]);
+    assert.equal(peakRetained, 2);
+  } finally {
+    releaseApply();
+  }
+  await syncing;
+  assert.equal(peakRetained, 2);
+  assert.deepEqual([...applied], [0, 1, 2]);
+});
+
 test('default client remains sequential across downloads and SQLite applies', async () => {
   const { store } = sqliteStore();
   const { responses } = await manifestAndResponses({
