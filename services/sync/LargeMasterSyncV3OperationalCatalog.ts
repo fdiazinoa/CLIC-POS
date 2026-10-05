@@ -78,15 +78,25 @@ export class LargeMasterSyncV3OperationalCatalog {
     }
   }
 
-  private async adapt(sale: V3SaleArticle): Promise<V3OperationalProduct> {
+  private async adapt(sale: V3SaleArticle, support?: {
+    balance: { qtyOnHand: number; qtyReserved: number; qtyCommitted: number } | null;
+    variants: RecordObject[];
+  }): Promise<V3OperationalProduct> {
     const article = sale.article;
+    const sourceFlags = operationalFlags(article.operationalFlags);
+    if (!['PRODUCT', 'SERVICE'].includes(String(article.type))
+      || sourceFlags.usesLots || sourceFlags.usesSerial || sourceFlags.isWeighted
+      || (Array.isArray(article.recipeDetails) && article.recipeDetails.length)
+      || (Array.isArray(article.modifiers) && article.modifiers.length)) {
+      throw new LargeMasterSyncV3Error('SYNC_V3_ADVANCED_ARTICLE_CONTRACT_REQUIRED');
+    }
     const articleId = stringValue(article.id);
     const name = stringValue(article.name);
     if (!articleId || !name || sale.version.syncId !== this.ready.runtime.version.syncId
       || sale.version.syncVersion !== this.ready.runtime.version.syncVersion) {
       throw new LargeMasterSyncV3Error('SYNC_V3_ARTICLE_INVALID');
     }
-    const [balance, sourceVariants] = await Promise.all([
+    const [balance, sourceVariants] = support ? [support.balance, support.variants] : await Promise.all([
       this.ready.runtime.getInventoryBalance(articleId, this.warehouseId),
       this.ready.runtime.getOperationalVariants(articleId),
     ]);
@@ -153,7 +163,11 @@ export class LargeMasterSyncV3OperationalCatalog {
   async search(query: string, categoryId?: string | null, limit = 60): Promise<V3OperationalProduct[]> {
     await this.assertInventoryVersion();
     const sales = await this.saleCatalog.search(query, categoryId, limit);
-    const items = await Promise.all(sales.map(sale => this.adapt(sale)));
+    const supports = await this.ready.runtime.getOperationalSupports(sales.map(sale => stringValue(sale.article.id)), this.warehouseId);
+    const items = await Promise.all(sales.map(sale => this.adapt(sale, supports ? {
+      balance: supports.balances[stringValue(sale.article.id)] || null,
+      variants: supports.variants[stringValue(sale.article.id)] || [],
+    } : undefined)));
     await this.assertInventoryVersion();
     return items;
   }
@@ -166,12 +180,12 @@ export class LargeMasterSyncV3OperationalCatalog {
     return item;
   }
 
-  async findBarcode(barcode: string): Promise<{
+  async findBarcode(barcode: string, exactCode = false): Promise<{
     item: V3OperationalProduct;
     variant: ProductVariant | null;
   } | null> {
     await this.assertInventoryVersion();
-    const match = await this.saleCatalog.findBarcode(barcode);
+    const match = await this.saleCatalog.findBarcode(barcode, exactCode);
     if (!match) {
       await this.assertInventoryVersion();
       return null;

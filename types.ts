@@ -390,6 +390,8 @@ export interface InventoryAuditLog {
 }
 
 export interface InventoryLedgerEntry {
+  v3InventoryBaseline?: string;
+  v3Binding?: string;
   id: string;
   createdAt: string;
   warehouseId: string;
@@ -1491,6 +1493,8 @@ export interface RecipeDetail {
 
 /** Pinned source of a candidate V3 sale line; never inferred from legacy IDs. */
 export interface V3SaleAuthorityStamp {
+  binding?: string;
+  warehouseId?: string;
   syncId: string;
   syncVersion: number;
   tariffId: string;
@@ -1793,6 +1797,10 @@ export interface CartItem extends Product {
 }
 
 export interface Transaction {
+  v3CommitFingerprint?: string;
+  v3InventoryBaseline?: string;
+  v3Binding?: string;
+  v3WarehouseId?: string;
   // Identifiers
   id: string;
   globalSequence?: number;          // Global unique sequence number

@@ -121,6 +121,16 @@ export interface LargeMasterSyncV3Store {
   getOperationalVariants(runtime: LargeMasterSyncV3RuntimeVersion, articleId: string): Promise<Record<string, unknown>[]>;
   getPrices(runtime: LargeMasterSyncV3RuntimeVersion, articleIds: string[], tariffId: string): Promise<Array<{ articleId: string; tariffId: string; price: number }>>;
   findBarcode(runtime: LargeMasterSyncV3RuntimeVersion, barcode: string): Promise<{ articleId: string; variantId: string | null } | null>;
+  findOperationalCode?(runtime: LargeMasterSyncV3RuntimeVersion, code: string): Promise<{ articleId: string; variantId: string | null } | null>;
+  getOperationalOwner?(): Promise<{ syncId: string; syncVersion: number; binding: string } | null>;
+  setOperationalOwner?(runtime: LargeMasterSyncV3RuntimeVersion, binding: string): Promise<void>;
+  getLocalInventoryDelta?(baseline: string, itemId: string, warehouseId: string): Promise<number>;
+  assertCanRefresh?(): Promise<void>;
+  getLocalInventoryDeltas?(baseline: string, itemIds: string[], warehouseId: string): Promise<Record<string, number>>;
+  getOperationalSupports?(runtime: LargeMasterSyncV3RuntimeVersion, itemIds: string[], warehouseId: string): Promise<{
+    balances: Record<string, { qtyOnHand: number; qtyReserved: number; qtyCommitted: number }>;
+    variants: Record<string, Record<string, unknown>[]>;
+  }>;
   replaceInventorySnapshot(runtime: LargeMasterSyncV3RuntimeVersion, snapshot: LargeMasterSyncV3InventorySnapshot): Promise<void>;
   getInventorySnapshotVersion(runtime: LargeMasterSyncV3RuntimeVersion): Promise<{ version: number; cursor: string } | null>;
   getInventoryBalance(runtime: LargeMasterSyncV3RuntimeVersion, itemId: string, warehouseId: string): Promise<{

@@ -114,6 +114,7 @@ CREATE TABLE IF NOT EXISTS master_v3_barcodes (
   PRIMARY KEY (sync_version, barcode, article_id, variant_id),
   FOREIGN KEY (sync_version, article_id) REFERENCES master_v3_articles(sync_version, article_id)
 );
+CREATE INDEX IF NOT EXISTS idx_master_v3_variants_code ON master_v3_variants(sync_version, code);
 CREATE INDEX IF NOT EXISTS idx_master_v3_barcodes_lookup
 ON master_v3_barcodes(sync_version, barcode);
 
@@ -136,6 +137,13 @@ CREATE TABLE IF NOT EXISTS master_v3_inventory_state (
   inventory_version INTEGER NOT NULL CHECK (inventory_version >= 0),
   cursor TEXT NOT NULL,
   updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS master_v3_operational_owner (
+  singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+  sync_id TEXT NOT NULL,
+  sync_version INTEGER NOT NULL,
+  binding TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS master_v3_inventory_balances (

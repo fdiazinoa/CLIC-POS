@@ -13,6 +13,7 @@ import { applyMasterNumberToDocument, buildNumberedCustomerMutation } from '../.
 import { compactStoredTerminalCatalog } from '../../../utils/compactTerminalCatalogSnapshot';
 import { LARGE_MASTER_SYNC_V3_SCHEMA_SQL, ensureLargeMasterSyncV3ContractColumns } from '../LargeMasterSyncV3Schema';
 import { LargeMasterSyncV3SqliteStore } from '../LargeMasterSyncV3SqliteStore';
+import { V3_FINANCIAL_RETAINED_UPSERT_SQL } from '../LargeMasterSyncV3FinancialRetention';
 
 const DB_NAME = 'clic_pos_native';
 const DB_VERSION = 1;
@@ -34,7 +35,7 @@ const DOCUMENT_UPSERT_SQL = `
         ?
     )
     ON CONFLICT(collection_name, doc_id) DO UPDATE SET
-        data = excluded.data,
+        data = ${V3_FINANCIAL_RETAINED_UPSERT_SQL},
         updatedAt = excluded.updatedAt
 `;
 
@@ -122,16 +123,24 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         await this.withWriteLock(async () => {
             const db = this.ensureDb();
             const now = new Date().toISOString();
-            if (requireAbsent) {
-                for (const { collectionName, document } of documents) {
-                    const rows = await db.query('SELECT doc_id FROM documents WHERE collection_name = ? AND doc_id = ?', [collectionName, document.id]);
-                    if (rows.values?.length) throw new Error('RECOVERY_LOCAL_CONFLICT:' + collectionName + ':' + document.id);
-                }
-            }
+            const needsFinancialPrecondition = documents.some(row => row.document.v3InventoryBaseline
+              || row.requireAbsent || row.expectedDocument !== undefined || row.v3StockRequirements);
+            const assertAbsent = async () => {
+              for (const { collectionName, document } of documents) {
+                const rows = await db.query('SELECT doc_id FROM documents WHERE collection_name = ? AND doc_id = ?', [collectionName, document.id]);
+                if (rows.values?.length) throw new Error('RECOVERY_LOCAL_CONFLICT:' + collectionName + ':' + document.id);
+              }
+            };
+            // Preserve the established legacy executeSet path; V3/CAS checks must run after BEGIN.
+            if (requireAbsent && !needsFinancialPrecondition) await assertAbsent();
+            const precondition = async () => {
+              await this.assertV3FinancialBaseline(documents);
+              if (requireAbsent) await assertAbsent();
+            };
             await this.executeUnlocked([...replaceCollections.map(name => ({statement: 'DELETE FROM documents WHERE collection_name = ?', values: [name]})), ...documents.map(({ collectionName, document }) => ({
                 statement: DOCUMENT_UPSERT_SQL,
                 values: [collectionName, document.id, JSON.stringify(document), collectionName, document.id, collectionName, now],
-            }))]);
+            }))], needsFinancialPrecondition ? precondition : undefined);
         });
     }
 
@@ -311,7 +320,10 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             });
         }
 
-        await this.executeSetOrRun(statements);
+        const needsFinancialPrecondition = input.documents.some(row => row.document.v3InventoryBaseline
+          || row.requireAbsent || row.expectedDocument !== undefined || row.v3StockRequirements);
+        await this.withWriteLock(() => this.executeUnlocked(statements,
+          needsFinancialPrecondition ? () => this.assertV3FinancialBaseline(input.documents) : undefined));
     }
 
     async getMasterNumberRanges(): Promise<MasterNumberRangeRecord[]> {
@@ -518,6 +530,31 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             );
             CREATE INDEX IF NOT EXISTS idx_documents_collection_sort
             ON documents(collection_name, sort_order, updatedAt);
+            CREATE INDEX IF NOT EXISTS idx_documents_v3_inventory_baseline
+            ON documents(json_extract(data, '$.v3InventoryBaseline'), json_extract(data, '$.productId'), json_extract(data, '$.warehouseId'))
+            WHERE collection_name = 'inventoryLedger' AND json_extract(data, '$.v3InventoryBaseline') IS NOT NULL;
+            CREATE TRIGGER IF NOT EXISTS preserve_v3_inventory_delete BEFORE DELETE ON documents
+            WHEN OLD.collection_name IN ('inventoryLedger', 'transactions', 'transactionHistory') AND json_extract(OLD.data, '$.v3InventoryBaseline') IS NOT NULL
+            BEGIN SELECT RAISE(IGNORE); END;
+            CREATE TRIGGER IF NOT EXISTS preserve_v3_inventory_update BEFORE UPDATE OF data ON documents
+            WHEN OLD.collection_name = 'inventoryLedger' AND json_extract(OLD.data, '$.v3InventoryBaseline') IS NOT NULL
+            AND (json_extract(NEW.data, '$.v3InventoryBaseline') IS NOT json_extract(OLD.data, '$.v3InventoryBaseline')
+              OR json_extract(NEW.data, '$.productId') IS NOT json_extract(OLD.data, '$.productId')
+              OR json_extract(NEW.data, '$.warehouseId') IS NOT json_extract(OLD.data, '$.warehouseId')
+              OR json_extract(NEW.data, '$.qtyIn') IS NOT json_extract(OLD.data, '$.qtyIn')
+              OR json_extract(NEW.data, '$.qtyOut') IS NOT json_extract(OLD.data, '$.qtyOut'))
+            BEGIN SELECT RAISE(ABORT, 'SYNC_V3_INVENTORY_COVERAGE_REQUIRED'); END;
+            CREATE TRIGGER IF NOT EXISTS preserve_v3_financial_authority_update BEFORE UPDATE OF data ON documents
+            WHEN OLD.collection_name IN ('transactions','transactionHistory') AND json_extract(OLD.data, '$.v3InventoryBaseline') IS NOT NULL
+            AND (json_extract(NEW.data, '$.v3InventoryBaseline') IS NOT json_extract(OLD.data, '$.v3InventoryBaseline')
+              OR json_extract(NEW.data, '$.v3Binding') IS NOT json_extract(OLD.data, '$.v3Binding')
+              OR json_extract(NEW.data, '$.v3WarehouseId') IS NOT json_extract(OLD.data, '$.v3WarehouseId')
+              OR json_extract(NEW.data, '$.v3CommitFingerprint') IS NOT json_extract(OLD.data, '$.v3CommitFingerprint')
+              OR json_extract(NEW.data, '$.items') IS NOT json_extract(OLD.data, '$.items')
+              OR json_extract(NEW.data, '$.total') IS NOT json_extract(OLD.data, '$.total')
+              OR json_extract(NEW.data, '$.netAmount') IS NOT json_extract(OLD.data, '$.netAmount')
+              OR json_extract(NEW.data, '$.taxAmount') IS NOT json_extract(OLD.data, '$.taxAmount'))
+            BEGIN SELECT RAISE(ABORT, 'SYNC_V3_FINANCIAL_AUTHORITY_IMMUTABLE'); END;
             CREATE TABLE IF NOT EXISTS storage_meta (
                 key TEXT PRIMARY KEY NOT NULL,
                 value TEXT NOT NULL,
@@ -685,20 +722,63 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         await this.withWriteLock(() => this.executeUnlocked(statements));
     }
 
-    private async executeUnlocked(statements: Array<{ statement: string; values: any[] }>): Promise<void> {
+    private async assertV3FinancialBaseline(documents: DurableDocumentMutation[]): Promise<void> {
+        const demands = new Map<string, { baseline: string; productId: string; warehouseId: string; quantity: number }>();
+        for (const mutation of documents) {
+            const document = mutation.document as any;
+            if (mutation.requireAbsent || mutation.expectedDocument !== undefined) {
+              const stored = await this.ensureDb().query('SELECT data FROM documents WHERE collection_name = ? AND doc_id = ?', [mutation.collectionName, document.id]);
+              if (mutation.requireAbsent && stored.values?.length) throw new Error('SYNC_V3_DUPLICATE_COMMIT');
+              if (mutation.expectedDocument !== undefined && stored.values?.[0]?.data !== mutation.expectedDocument) {
+                throw new Error('SYNC_V3_CONCURRENT_FINANCIAL_UPDATE');
+              }
+            }
+            if (!document.v3InventoryBaseline) continue;
+            const [binding, syncId, syncVersion, inventoryVersion, cursor] = JSON.parse(document.v3InventoryBaseline);
+            const result = await this.ensureDb().query(`SELECT o.binding FROM master_v3_operational_owner o
+              JOIN master_v3_state s ON s.singleton = 1 JOIN master_v3_inventory_state i ON i.singleton = 1
+              WHERE o.singleton = 1 AND o.binding = ? AND o.sync_id = ? AND o.sync_version = ?
+              AND s.active_sync_id = o.sync_id AND s.active_version = o.sync_version
+              AND i.sync_id = o.sync_id AND i.sync_version = o.sync_version
+              AND i.inventory_version = ? AND i.cursor = ?`, [binding, syncId, syncVersion, inventoryVersion, cursor]);
+            if (!result.values?.length || document.v3Binding !== binding) throw new Error('SYNC_V3_RUNTIME_VERSION_CHANGED');
+            for (const requirement of mutation.v3StockRequirements || []) {
+              if (requirement.baseline !== document.v3InventoryBaseline || requirement.warehouseId !== document.v3WarehouseId
+                || !Number.isFinite(requirement.quantity) || requirement.quantity <= 0) throw new Error('SYNC_V3_MOVEMENT_AUTHORITY_INVALID');
+              const key = JSON.stringify([requirement.baseline, requirement.productId, requirement.warehouseId]);
+              const prior = demands.get(key);
+              demands.set(key, { ...requirement, quantity: requirement.quantity + (prior?.quantity || 0) });
+            }
+        }
+        // Both this read and every ledger write occur after BEGIN, under the shared native write queue.
+        for (const demand of demands.values()) {
+          const result = await this.ensureDb().query(`SELECT
+            COALESCE((SELECT qty_on_hand - qty_reserved - qty_committed FROM master_v3_inventory_balances
+              WHERE item_id = ? AND warehouse_id = ?), 0) + COALESCE((SELECT SUM(
+                COALESCE(json_extract(data, '$.qtyIn'), 0) - COALESCE(json_extract(data, '$.qtyOut'), 0))
+              FROM documents WHERE collection_name = 'inventoryLedger'
+                AND json_extract(data, '$.v3InventoryBaseline') = ?
+                AND json_extract(data, '$.productId') = ? AND json_extract(data, '$.warehouseId') = ?), 0) AS available`,
+            [demand.productId, demand.warehouseId, demand.baseline, demand.productId, demand.warehouseId]);
+          if (demand.quantity > Number(result.values?.[0]?.available || 0)) throw new Error('SYNC_V3_STOCK_INSUFFICIENT');
+        }
+    }
+
+    private async executeUnlocked(statements: Array<{ statement: string; values: any[] }>, precondition?: () => Promise<void>): Promise<void> {
         const db = this.ensureDb();
         const executable = statements.map((entry) => ({
             statement: entry.statement.trim(),
             values: entry.values,
         }));
 
-        if (typeof (db as any).executeSet === 'function') {
+        if (!precondition && typeof (db as any).executeSet === 'function') {
             await (db as any).executeSet(executable, true, 'no');
             return;
         }
 
         await db.execute('BEGIN TRANSACTION;', false);
         try {
+            await precondition?.();
             for (const entry of executable) {
                 await db.run(entry.statement, entry.values, false);
             }
