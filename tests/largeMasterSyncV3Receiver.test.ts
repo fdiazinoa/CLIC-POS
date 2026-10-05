@@ -213,6 +213,45 @@ test('operational catalog requires contract v2 authority and separate inventory'
   }), /SYNC_V3_OPERATIONAL_DATASETS_INCOMPLETE/);
 });
 
+test('separate inventory snapshot is atomic and fenced to the active V3 catalog', async () => {
+  const { sqlite, store } = sqliteStore();
+  const runtime = { syncId: SYNC_ID, syncVersion: 186, contractVersion: 2 };
+  sqlite.prepare(`UPDATE master_v3_state SET active_sync_id = ?, active_version = ? WHERE singleton = 1`)
+    .run(SYNC_ID, 186);
+  assert.equal(await store.getInventorySnapshotVersion(runtime), null);
+  await assert.rejects(() => store.getInventoryBalance(runtime, 'A', 'W'), /SYNC_V3_INVENTORY_NOT_READY/);
+
+  await store.replaceInventorySnapshot(runtime, { version: 5, cursor: 'cursor-5', balances: [] });
+  assert.deepEqual(await store.getInventorySnapshotVersion(runtime), { version: 5, cursor: 'cursor-5' });
+  assert.equal(await store.getInventoryBalance(runtime, 'A', 'W'), null);
+
+  const balance = { item_id: 'A', warehouse_id: 'W', qty_on_hand: 12,
+    qty_reserved: 2, qty_committed: 1, updated_at: '2026-10-05T00:00:00Z' };
+  await store.replaceInventorySnapshot(runtime, { version: 6, cursor: 'cursor-6', balances: [balance] });
+  assert.deepEqual(await store.getInventoryBalance(runtime, 'A', 'W'), {
+    qtyOnHand: 12, qtyReserved: 2, qtyCommitted: 1,
+  });
+  await assert.rejects(() => store.replaceInventorySnapshot(runtime, {
+    version: 5, cursor: 'cursor-5', balances: [],
+  }), /SYNC_V3_INVENTORY_STALE/);
+  await assert.rejects(() => store.replaceInventorySnapshot(runtime, {
+    version: 6, cursor: 'different-cursor', balances: [],
+  }), /SYNC_V3_INVENTORY_STALE/);
+  await assert.rejects(() => store.replaceInventorySnapshot(runtime, {
+    version: 7, cursor: 'cursor-7', balances: [balance, balance],
+  }));
+  assert.deepEqual(await store.getInventorySnapshotVersion(runtime), { version: 6, cursor: 'cursor-6' });
+  assert.equal(queryCount(sqlite, 'master_v3_inventory_balances'), 1);
+
+  sqlite.prepare('UPDATE master_v3_state SET active_version = 187 WHERE singleton = 1').run();
+  assert.equal(await store.getInventorySnapshotVersion(runtime), null);
+  await assert.rejects(() => store.getInventoryBalance(runtime, 'A', 'W'), /SYNC_V3_INVENTORY_NOT_READY/);
+  await assert.rejects(() => store.replaceInventorySnapshot(runtime, {
+    version: 8, cursor: 'cursor-8', balances: [],
+  }), /SYNC_V3_RUNTIME_VERSION_CHANGED/);
+  assert.equal(queryCount(sqlite, 'master_v3_inventory_balances'), 1);
+});
+
 test('operational download rejects v1 or incomplete manifest before SQLite access', async () => {
   const { manifest, responses } = await manifestAndResponses({ articles: [[{ id: 'A' }]] });
   let storeCalls = 0;

@@ -1,21 +1,7 @@
-import { LargeMasterSyncV3Error } from './LargeMasterSyncV3Types';
+import { LargeMasterSyncV3Error, type LargeMasterSyncV3InventorySnapshot } from './LargeMasterSyncV3Types';
 import { type LargeMasterSyncV3BoundIdentity,
   validatedLargeMasterSyncV3ErpSyncBase } from './LargeMasterSyncV3BoundTransport';
-
-export interface LargeMasterSyncV3InventoryBalance {
-  item_id: string;
-  warehouse_id: string;
-  qty_on_hand: number;
-  qty_reserved: number;
-  qty_committed: number;
-  updated_at: string;
-}
-
-export interface LargeMasterSyncV3InventorySnapshot {
-  version: number;
-  cursor: string;
-  balances: LargeMasterSyncV3InventoryBalance[];
-}
+export type { LargeMasterSyncV3InventoryBalance, LargeMasterSyncV3InventorySnapshot } from './LargeMasterSyncV3Types';
 
 const record = (value: unknown): Record<string, unknown> => value && typeof value === 'object'
   && !Array.isArray(value) ? value as Record<string, unknown> : {};

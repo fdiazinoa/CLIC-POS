@@ -86,6 +86,21 @@ export interface LargeMasterSyncV3RuntimeVersion {
   contractVersion?: number;
 }
 
+export interface LargeMasterSyncV3InventoryBalance {
+  item_id: string;
+  warehouse_id: string;
+  qty_on_hand: number;
+  qty_reserved: number;
+  qty_committed: number;
+  updated_at: string;
+}
+
+export interface LargeMasterSyncV3InventorySnapshot {
+  version: number;
+  cursor: string;
+  balances: LargeMasterSyncV3InventoryBalance[];
+}
+
 export interface LargeMasterSyncV3Store {
   prepare(manifest: LargeMasterSyncV3Manifest): Promise<void>;
   readProgress(syncId: string): Promise<LargeMasterSyncV3Progress | null>;
@@ -106,6 +121,11 @@ export interface LargeMasterSyncV3Store {
   getOperationalVariants(runtime: LargeMasterSyncV3RuntimeVersion, articleId: string): Promise<Record<string, unknown>[]>;
   getPrices(runtime: LargeMasterSyncV3RuntimeVersion, articleIds: string[], tariffId: string): Promise<Array<{ articleId: string; tariffId: string; price: number }>>;
   findBarcode(runtime: LargeMasterSyncV3RuntimeVersion, barcode: string): Promise<{ articleId: string; variantId: string | null } | null>;
+  replaceInventorySnapshot(runtime: LargeMasterSyncV3RuntimeVersion, snapshot: LargeMasterSyncV3InventorySnapshot): Promise<void>;
+  getInventorySnapshotVersion(runtime: LargeMasterSyncV3RuntimeVersion): Promise<{ version: number; cursor: string } | null>;
+  getInventoryBalance(runtime: LargeMasterSyncV3RuntimeVersion, itemId: string, warehouseId: string): Promise<{
+    qtyOnHand: number; qtyReserved: number; qtyCommitted: number;
+  } | null>;
   /** Explicit maintenance path; callers schedule it only while the POS is operationally idle. */
   cleanupExpiredVersions(olderThanIso: string, maxVersions?: number): Promise<number>;
 }
