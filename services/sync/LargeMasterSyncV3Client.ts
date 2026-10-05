@@ -60,6 +60,8 @@ export interface LargeMasterSyncV3ClientOptions {
   maxRetries?: number;
   /** Opt-in, bounded overlap of downloads within one dataset; SQLite applies remain serial. */
   downloadConcurrency?: 1 | 2;
+  /** Required for a POS sale catalog; laboratory sessions may remain v1. */
+  requireOperationalContract?: boolean;
   maxManifestPolls?: number;
   backoffMs?: (attempt: number) => number;
   requestTimeoutMs?: number;
@@ -291,7 +293,9 @@ export class LargeMasterSyncV3Client {
       return { generating: true, retryAfterMs: Number.isFinite(seconds) ? Math.max(1000, seconds * 1000) : 2000 };
     }
     if (response.status !== 200) throw this.httpError(response.status, body);
-    return validateLargeMasterSyncV3Manifest(body, syncId);
+    return this.options.requireOperationalContract
+      ? validateOperationalLargeMasterSyncV3Manifest(body, syncId)
+      : validateLargeMasterSyncV3Manifest(body, syncId);
   }
 
   async getChunk(

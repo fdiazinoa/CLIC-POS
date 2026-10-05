@@ -8,6 +8,8 @@ The receiver is integrated with POS database bootstrap and foreground resume, bu
 
 The contract-v2 receiver stores the added operational article, tariff, tax and variant records in SQLite and migrates existing canary databases additively. It rejects a contract-v1 session for operational reads and exposes bounded, version-fenced article queries. `LargeMasterSyncV3SaleCatalog` additionally pins one snapshot and effective tariff, resolves its active taxes, and refuses missing prices or inactive barcode variants. This is preparation only: the lifecycle guard remains off and the React POS still reads its legacy catalog. Do not build an operational V3 APK from this change alone.
 
+The download client now has `requireOperationalContract`, an explicit opt-in for future sale-capable sessions. With it, a contract-v1 or incomplete V2 manifest is rejected before storage-capacity checks, staging writes, or activation. Laboratory canaries keep their default compatibility mode; the operational ERP lifecycle must set this option when it is wired.
+
 While dark it performs no V3 HTTP request, adds no capability header, does not change legacy full/delta/config flows, and does not replace the React `products` or `productPrices` arrays. If a previously activated V3 database exists, the runtime pointer also stays unused while the guard is false; legacy remains authoritative.
 
 Enabling requires a separate reviewed change after schema, resume, checksum, storage, regression, physical Android 54k × 6 and performance gates pass. That later change must:

@@ -213,6 +213,33 @@ test('operational catalog requires contract v2 authority and separate inventory'
   }), /SYNC_V3_OPERATIONAL_DATASETS_INCOMPLETE/);
 });
 
+test('operational download rejects v1 or incomplete manifest before SQLite access', async () => {
+  const { manifest, responses } = await manifestAndResponses({ articles: [[{ id: 'A' }]] });
+  let storeCalls = 0;
+  const store = {
+    readProgress: async () => { storeCalls += 1; return null; },
+    prepare: async () => { storeCalls += 1; },
+  } as never;
+  const client = new LargeMasterSyncV3Client({
+    store, transport: new MapTransport(responses), requireOperationalContract: true,
+  });
+  await assert.rejects(() => client.resumeSync(SYNC_ID), /SYNC_V3_OPERATIONAL_CONTRACT_REQUIRED/);
+  assert.equal(storeCalls, 0);
+
+  responses.set(`/api/sync/v3/master-syncs/${SYNC_ID}/manifest`, {
+    status: 200, headers: {}, text: JSON.stringify({ ...manifest, contractVersion: 2,
+      datasets: { articles: manifest.datasets.articles },
+      authority: { catalog: 'V3_SNAPSHOT', prices: 'V3_SNAPSHOT', taxes: 'V3_SNAPSHOT',
+        inventory: 'SEPARATE_COLLECTION' },
+      supplementalCollections: [{ collection: 'productInventory', domain: 'inventory',
+        endpoint: '/api/sync/collections/productInventory/full',
+        consistency: 'EVENTUAL_AFTER_V3_ACTIVATION' }],
+    }),
+  });
+  await assert.rejects(() => client.resumeSync(SYNC_ID), /SYNC_V3_OPERATIONAL_DATASETS_INCOMPLETE/);
+  assert.equal(storeCalls, 0);
+});
+
 test('contract v2 retains operational records and fences the active SQLite version', async () => {
   const article = {
     id: 'A', sku: 'DEMO-001', name: 'Artículo demo', description: 'Artículo demo',
@@ -239,6 +266,7 @@ test('contract v2 retains operational records and fences the active SQLite versi
   });
   const { store, sqlite } = sqliteStore();
   const client = new LargeMasterSyncV3Client({ store, transport: new MapTransport(responses),
+    requireOperationalContract: true,
     storageStats: async () => ({ availableBytes: 1e9, totalBytes: 2e9 }) });
   assert.deepEqual(await client.resumeSync(SYNC_ID), {
     syncId: SYNC_ID, syncVersion: 186, contractVersion: 2,
