@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { build } from 'esbuild';
+import { build, transform } from 'esbuild';
 import { readFileSync } from 'node:fs';
-import { V3OperationalUIQueue } from '../components/v3OperationalUIQueue';
+import { V3OperationalUIQueue, V3OperationalUILifetime, authorizeV3UIContext, buildV3FrozenFiscalProviderTransaction } from '../components/v3OperationalUIQueue';
 
 test('queued candidate additions see the committed latest cart and recover after rejection', async () => {
   const queue = new V3OperationalUIQueue();
@@ -27,6 +27,176 @@ test('retired candidate context rejects pending work before cart mutation', asyn
   current = false;
   await assert.rejects(pending, /SYNC_V3_UI_CONTEXT_CHANGED/);
   assert.equal(writes, 0);
+});
+
+test('retiring POS during awaited authorization prevents cart writes, including subsequent remount', async () => {
+  const lifetime = new V3OperationalUILifetime();
+  const queue = new V3OperationalUIQueue();
+  const current = lifetime.capture();
+  let release!: (allowed: boolean) => void;
+  let started!: () => void;
+  const authorizing = new Promise<void>(resolve => { started = resolve; });
+  const authorization = new Promise<boolean>(resolve => { release = resolve; });
+  let writes = 0;
+  const task = queue.run(current, async () => {
+    if (await authorizeV3UIContext(current, () => { started(); return authorization; })) writes++;
+  });
+  await authorizing;
+  lifetime.retire();
+  lifetime.activate();
+  release(true);
+  await assert.rejects(task, /SYNC_V3_UI_CONTEXT_CHANGED/);
+  assert.equal(writes, 0);
+  await queue.run(lifetime.capture(), async () => { writes++; });
+  assert.equal(writes, 1);
+  const source = readFileSync(new URL('../components/POSInterface.tsx', import.meta.url), 'utf8');
+  assert.match(source, /return \(\) => \{ uiLifetime\.current\.retire\(\); addContext\.current = undefined;/);
+  assert.match(source, /await authorizeV3UIContext\(isCurrent, authorize\)/);
+});
+
+test('actual refund-only persistence branch preserves frozen V3 items and total while V2 keeps legacy overrides', async () => {
+  const source = readFileSync(new URL('../components/POSInterface.tsx', import.meta.url), 'utf8');
+  const start = source.indexOf('if (isRefundOnly) {', source.indexOf('let settledFinalTxn ='));
+  const end = source.indexOf('} else {', start);
+  assert.ok(start > 0 && end > start);
+  // Execute the production branch itself with a persistence spy, not a reimplemented helper.
+  const execute = new Function('fixture', `return (async () => {
+    const {isRefundOnly,v3Operational,settledFinalTxn,normalizedRefundItems,refundDocumentTotal,
+      finalNcf,finalNcfType,refundAuthorizedBy,defaultSalesWarehouseId,terminalId,sellableConditions,
+      persistStandaloneRefundTransaction}=fixture;
+    ${source.slice(start, end)}}
+  })();`);
+  const frozenLine = { id: 'P', cartId: 'line', quantity: 1, price: 118, netAmount: 100,
+    taxAmount: 18, totalAmount: 118, v3SaleAuthority: { tariffId: 'T', taxIncluded: true } };
+  const rawLine = { id: 'P', cartId: 'line', quantity: 1, price: 118 };
+  for (const v3Operational of [true, false]) {
+    let persisted: any;
+    await execute({ isRefundOnly: true, v3Operational,
+      settledFinalTxn: { id: 'refund', items: [frozenLine], total: 118, netAmount: 100, taxAmount: 18 },
+      normalizedRefundItems: [rawLine], refundDocumentTotal: 125,
+      finalNcf: 'NC', finalNcfType: 'B04', refundAuthorizedBy: undefined,
+      defaultSalesWarehouseId: 'W', terminalId: 'T1', sellableConditions: new Map(),
+      persistStandaloneRefundTransaction: async (document: any, options: any) => {
+        persisted = document;
+        assert.equal(options.warehouseId, 'W');
+        if (v3Operational) {
+          assert.equal(document.items[0].netAmount + document.items[0].taxAmount, document.total);
+          assert.strictEqual(document.items[0], frozenLine);
+        }
+      } });
+    assert.equal(persisted.total, v3Operational ? 118 : 125);
+    assert.strictEqual(persisted.items[0], v3Operational ? frozenLine : rawLine);
+  }
+});
+
+test('actual App fiscal callback preserves V3 frozen amounts, deduplicates calls and reconciles durable attempts', async () => {
+  const source = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
+  const start = source.indexOf('async (transaction: Transaction) => {', source.indexOf('const syncFiscalDocument ='));
+  const end = source.indexOf('}, [config, pollFiscalDocumentStatus, upsertFiscalTransaction]);', start);
+  assert.ok(start > 0 && end > start);
+  const compiled = await transform(`const callback=${source.slice(start, end + 1)};`, { loader: 'ts' });
+  const create = new Function('fixture', `const {LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED,v3FiscalInFlightRef,config,db,
+    getLargeMasterSyncV3OperationalSession,validateV3FrozenFiscalAmounts,validateV3FrozenLineFiscalAmounts,
+    getEffectiveFiscalComplianceConfig,getProviderEnvironment,getFiscalProviderConfig,getExistingFiscalProviderReference,
+    pollFiscalDocumentStatus,resolveFiscalProviderEstablishmentCode,resolveFiscalProviderCashierCode,
+    calculateTransactionFiscalSummary,buildV3FrozenFiscalProviderTransaction,upsertFiscalTransaction,issueFiscalDocument,
+    applyFiscalProviderResult,isDelegatedFiscalProvider,window}=fixture;
+    ${compiled.code} return callback;`);
+  const stamp = { binding: 'B', syncId: 'S', syncVersion: 2, inventoryVersion: 3, inventoryCursor: 'C', taxIncluded: true };
+  const original: any = { id: 'refund', terminalId: 'T', date: '2026-10-05', fiscalProvider: 'P', ncfType: 'E34',
+    ncf: 'E340000000001', total: 123, netAmount: 105, taxAmount: 18, serviceChargeAmount: 5,
+    items: [{ id: 'P', quantity: 1, netAmount: 100, taxAmount: 18, totalAmount: 118, appliedTaxIds: ['TX'], v3SaleAuthority: stamp }] };
+  let stored = structuredClone(original);
+  let issues = 0;
+  let polls = 0;
+  let release!: () => void;
+  let issued!: () => void;
+  const issueStarted = new Promise<void>(resolve => { issued = resolve; });
+  const issueWait = new Promise<void>(resolve => { release = resolve; });
+  const projected: any = { terminals: [], taxRate: 0, taxes: [{ id: 'TX', name: 'ITBIS', rate: 0.18 }] };
+  const fixture: any = {
+    LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED: true, v3FiscalInFlightRef: { current: new Map() },
+    config: { terminals: [], companyInfo: {}, taxRate: 0.99, taxes: [{ id: 'legacy', rate: 0.99 }] },
+    db: { getDocument: async () => structuredClone(stored) },
+    getLargeMasterSyncV3OperationalSession: async () => ({ binding: 'B', ready: { runtime: { version: { syncId: 'S', syncVersion: 2 } },
+      inventoryVersion: 3, inventoryCursor: 'C' }, assertCurrent: async () => {}, projectConfig: async () => projected }),
+    validateV3FrozenFiscalAmounts: (transaction: any) => assert.equal(transaction.netAmount + transaction.taxAmount, transaction.total),
+    validateV3FrozenLineFiscalAmounts: (_transaction: any, config: any) => assert.strictEqual(config, projected),
+    getEffectiveFiscalComplianceConfig: () => ({}), getProviderEnvironment: () => 'TEST', getFiscalProviderConfig: () => ({}),
+    getExistingFiscalProviderReference: (transaction: any) => transaction.fiscalReferenceId,
+    pollFiscalDocumentStatus: async (_transaction: any, _provider: any, _environment: any, reference: string) => { assert.equal(reference, 'REF'); polls++; },
+    resolveFiscalProviderEstablishmentCode: () => '1', resolveFiscalProviderCashierCode: () => '1',
+    calculateTransactionFiscalSummary: () => { throw new Error('legacy calculation forbidden'); },
+    buildV3FrozenFiscalProviderTransaction,
+    upsertFiscalTransaction: async (transaction: any) => { stored = structuredClone(transaction); },
+    issueFiscalDocument: async (input: any) => {
+      issues++;
+      assert.equal(input.taxRate, 0);
+      assert.equal(input.transaction.total, 123);
+      assert.equal(input.transaction.netAmount, 105);
+      assert.equal(input.transaction.taxAmount, 18);
+      assert.equal(input.transaction.items[0].totalAmount, 118);
+      assert.equal(input.transaction.taxBreakdown[0].amount, 18);
+      issued(); await issueWait;
+      return { success: true, pending: false, providerTransactionId: 'REF' };
+    },
+    applyFiscalProviderResult: (transaction: any, result: any) => ({ ...transaction, fiscalReferenceId: result.providerTransactionId }),
+    isDelegatedFiscalProvider: () => false, window: { setTimeout },
+  };
+  const callback = create(fixture);
+  const first = callback(original);
+  const second = callback(original);
+  await issueStarted;
+  release();
+  await Promise.all([first, second]);
+  assert.equal(issues, 1);
+  await callback(original);
+  assert.equal(issues, 1);
+  stored.fiscalSyncStatus = 'PENDING';
+  await callback(original);
+  assert.equal(polls, 1);
+  assert.equal(issues, 1);
+  stored = { ...structuredClone(original), fiscalProviderStatus: 'V3_ISSUE_REQUESTED', fiscalSyncStatus: 'PENDING' };
+  fixture.v3FiscalInFlightRef = { current: new Map() };
+  await create(fixture)(original);
+  assert.equal(issues, 1);
+  assert.equal(stored.fiscalSyncStatus, 'ERROR');
+  assert.equal(stored.fiscalSyncError, 'SYNC_V3_FISCAL_RECONCILIATION_REQUIRED');
+  assert.equal(stored.ncf, original.ncf);
+  await create({ ...fixture, LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED: false,
+    calculateTransactionFiscalSummary: () => ({ subtotal: 7, taxTotal: 1, taxBreakdown: [] }),
+    db: { getDocument: async () => { throw new Error('V2 must retain its existing source path'); } },
+    issueFiscalDocument: async (input: any) => {
+      assert.equal(input.taxRate, 0.99);
+      assert.equal(input.transaction.netAmount, 7);
+      assert.equal(input.transaction.taxAmount, 1);
+      return { success: true };
+    } })(original);
+});
+
+test('candidate startup does not force a competing legacy master activation when its React catalog is empty', async () => {
+  const source = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
+  const start = source.indexOf('// Auto-heal catalog/config drift on startup.');
+  const end = source.indexOf("markBootStage('CATALOG_READY');", start);
+  const branch = source.slice(start, end);
+  assert.match(branch, /if \(!LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED && hasEmptyCatalog\)/);
+  const condition = branch.slice(branch.indexOf('if (!LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED && hasEmptyCatalog)'), branch.indexOf('} else if'));
+  assert.match(condition, /await syncManager\.forcePullAll\(\)/);
+  const fullRepair = source.slice(source.indexOf('if (\n              !LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED'), start);
+  assert.match(fullRepair, /forceFiscalCatalogFullPull\(\)/);
+  assert.match(fullRepair, /localStorage\.setItem\(fiscalCatalogRepairKey, fiscalCatalogRepairRevision\)/);
+  const compiled = await transform(`const execute=async()=>{${branch}};`, { loader: 'ts' });
+  const run = new Function('fixture', `const {LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED,readAppProducts,
+    effectivePairedTerminal,syncManager,console}=fixture; ${compiled.code} return execute();`);
+  let pulls = 0;
+  const fixture = { LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED: true,
+    readAppProducts: async () => [], effectivePairedTerminal: { id: 'T', config: {} },
+    syncManager: { forcePullAll: async () => { pulls++; throw new Error('offline'); } },
+    console: { warn: () => {}, error: () => {} } };
+  await run(fixture);
+  assert.equal(pulls, 0, 'offline candidate keeps its existing singleton-owned source');
+  await run({ ...fixture, LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED: false });
+  assert.equal(pulls, 1, 'V2 retains its legacy empty-catalog repair');
 });
 
 test('POS boundary keeps pinned catalog across config updates and retains cart cache on inventory events', () => {

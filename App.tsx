@@ -3,7 +3,9 @@ import LargeMasterSyncV3CanaryScreen from './components/LargeMasterSyncV3CanaryS
 import { LARGE_MASTER_SYNC_V3_CANARY } from './services/sync/LargeMasterSyncV3Canary';
 import { LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED } from './services/sync/LargeMasterSyncV3Authority';
 import LargeMasterSyncV3OperationalPOS from './components/LargeMasterSyncV3OperationalPOS';
-import { persistV3FinancialTransaction } from './services/sync/LargeMasterSyncV3FinancialCommit';
+import { persistV3FinancialTransaction, validateV3FrozenFiscalAmounts } from './services/sync/LargeMasterSyncV3FinancialCommit';
+import { validateV3FrozenLineFiscalAmounts } from './services/sync/LargeMasterSyncV3LineSource';
+import { buildV3FrozenFiscalProviderTransaction } from './components/v3OperationalUIQueue';
 import { getLargeMasterSyncV3OperationalSession } from './services/sync/LargeMasterSyncV3OperationalSession';
 import AutomaticRecoveryDialog from './components/AutomaticRecoveryDialog';
 import type { RecoveryCloseInput } from './services/recovery/RecoveryCloseController';
@@ -7859,7 +7861,8 @@ const AppContent: React.FC = () => {
               ? `clic_pos_fiscal_catalog_full_revision:${fiscalCatalogTerminalId}`
               : null;
             if (
-              fiscalCatalogRepairKey
+              !LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED
+              && fiscalCatalogRepairKey
               && resolveSyncTarget().kind === 'ERP_ACTIVE'
               && localStorage.getItem(fiscalCatalogRepairKey) !== fiscalCatalogRepairRevision
             ) {
@@ -7907,14 +7910,14 @@ const AppContent: React.FC = () => {
                 terminalAllowedCategories.length >= 2 &&
                 (matchedAllowedCategoriesCount === 0 || allowedCoverageRatio < 0.5);
 
-              if (hasEmptyCatalog) {
+              if (!LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED && hasEmptyCatalog) {
                 console.warn(
                   `⚠️ Empty catalog detected on ${effectivePairedTerminal.id}. ` +
                   `localProducts=${localCount}, sellableCategories=${sellableCategories.size}, allowedCategories=${terminalAllowedCategories.length}, matchedAllowed=${matchedAllowedCategoriesCount}. ` +
                   `Running forcePullAll...`
                 );
                 await syncManager.forcePullAll();
-              } else if (hasCategoryMismatch) {
+              } else if (!LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED && hasCategoryMismatch) {
                 console.warn(
                   `⚠️ Catalog category drift detected on ${effectivePairedTerminal.id}; keeping incremental sync. ` +
                   `localProducts=${localCount}, sellableCategories=${sellableCategories.size}, allowedCategories=${terminalAllowedCategories.length}, matchedAllowed=${matchedAllowedCategoriesCount}.`
@@ -11080,7 +11083,12 @@ const AppContent: React.FC = () => {
     }
   }, [config.companyInfo, upsertFiscalTransaction]);
 
+  const v3FiscalInFlightRef = useRef(new Map<string, Promise<void>>());
   const syncFiscalDocument = useCallback(async (transaction: Transaction) => {
+    const candidate = LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED;
+    const pending = candidate ? v3FiscalInFlightRef.current.get(transaction.id) : undefined;
+    if (pending) return pending;
+    const perform = async () => {
     const providerId = transaction.fiscalProvider;
     const documentCode = transaction.ncfType;
     const electronicNcf = transaction.electronicNcf || transaction.ncf;
@@ -11090,8 +11098,26 @@ const AppContent: React.FC = () => {
     if (!electronicNcf) return;
 
     try {
-      const terminalConfig = config.terminals?.find((terminal) => terminal.id === transaction.terminalId)?.config;
-      const fiscalCompliance = getEffectiveFiscalComplianceConfig(config, terminalConfig);
+      let fiscalConfig = config;
+      if (candidate) {
+        const stored = await db.getDocument('transactions', transaction.id) as Transaction | null;
+        if (!stored) throw new Error('SYNC_V3_COMMITTED_TRANSACTION_REQUIRED');
+        transaction = stored;
+        if (transaction.fiscalSyncStatus === 'SYNCED') return;
+        const session = await getLargeMasterSyncV3OperationalSession();
+        await session.assertCurrent();
+        const stamp = transaction.items[0]?.v3SaleAuthority;
+        if (!stamp || stamp.binding !== session.binding || stamp.syncId !== session.ready.runtime.version.syncId
+          || stamp.syncVersion !== session.ready.runtime.version.syncVersion
+          || stamp.inventoryVersion !== session.ready.inventoryVersion || stamp.inventoryCursor !== session.ready.inventoryCursor) {
+          throw new Error('SYNC_V3_CART_MIXED_VERSION');
+        }
+        fiscalConfig = await session.projectConfig(config);
+        validateV3FrozenFiscalAmounts(transaction);
+        validateV3FrozenLineFiscalAmounts(transaction, fiscalConfig);
+      }
+      const terminalConfig = fiscalConfig.terminals?.find((terminal) => terminal.id === transaction.terminalId)?.config;
+      const fiscalCompliance = getEffectiveFiscalComplianceConfig(fiscalConfig, terminalConfig);
       const environment = getProviderEnvironment(fiscalCompliance, providerId);
       const providerConfig = getFiscalProviderConfig(fiscalCompliance, providerId);
       const existingReference = getExistingFiscalProviderReference(transaction);
@@ -11107,26 +11133,33 @@ const AppContent: React.FC = () => {
         );
         return;
       }
+      if (candidate && transaction.fiscalProviderStatus === 'V3_ISSUE_REQUESTED') {
+        await upsertFiscalTransaction({ ...transaction, fiscalSyncStatus: 'ERROR',
+          fiscalSyncError: 'SYNC_V3_FISCAL_RECONCILIATION_REQUIRED',
+          fiscalResponseMessage: 'Existe un intento fiscal sin referencia confirmada. Requiere reconciliación antes de emitir de nuevo.' });
+        return;
+      }
       const establishmentCode = resolveFiscalProviderEstablishmentCode(providerConfig, fiscalCompliance, terminalConfig, config);
       const cashierCode = resolveFiscalProviderCashierCode(providerConfig, fiscalCompliance, terminalConfig, config);
-      const fiscalSummary = calculateTransactionFiscalSummary(transaction, config, { terminalConfig });
+      const fiscalSummary = candidate ? undefined : calculateTransactionFiscalSummary(transaction, config, { terminalConfig });
       const baseTransaction: Transaction = {
-        ...transaction,
-        taxAmount: fiscalSummary.taxTotal,
-        netAmount: fiscalSummary.subtotal,
-        taxBreakdown: fiscalSummary.taxBreakdown,
+        ...(candidate ? buildV3FrozenFiscalProviderTransaction(transaction, fiscalConfig) : {
+          ...transaction, taxAmount: fiscalSummary!.taxTotal, netAmount: fiscalSummary!.subtotal,
+          taxBreakdown: fiscalSummary!.taxBreakdown }),
+        ...(candidate ? { fiscalProviderStatus: 'V3_ISSUE_REQUESTED' } : {}),
         fiscalSyncStatus: 'PENDING',
         fiscalSyncError: undefined
       };
 
       await upsertFiscalTransaction(baseTransaction);
+      if (candidate) transaction = baseTransaction;
 
       const result = await issueFiscalDocument({
         providerId,
         environment,
         companyInfo: config.companyInfo,
         transaction: baseTransaction,
-        taxRate: config.taxRate,
+        taxRate: fiscalConfig.taxRate,
         sequenceExpiryDate: new Date(new Date(baseTransaction.date).getFullYear(), 11, 31).toISOString(),
         credentialKey: providerConfig.credentialKey,
         tipoIngreso: providerConfig.tipoIngreso,
@@ -11151,6 +11184,9 @@ const AppContent: React.FC = () => {
         fiscalSyncError: result.success || result.pending ? undefined : result.message,
         fiscalSyncedAt: result.success && !result.pending ? new Date().toISOString() : baseTransaction.fiscalSyncedAt
       };
+      if (candidate && finalStatus !== 'SYNCED' && !getExistingFiscalProviderReference(finalizedTransaction)) {
+        finalizedTransaction.fiscalProviderStatus = 'V3_ISSUE_REQUESTED';
+      }
 
       await upsertFiscalTransaction(finalizedTransaction);
 
@@ -11182,6 +11218,14 @@ const AppContent: React.FC = () => {
       };
       await upsertFiscalTransaction(failedTransaction);
     }
+    };
+    const operation = perform();
+    if (candidate) {
+      const transactionId = transaction.id;
+      v3FiscalInFlightRef.current.set(transactionId, operation);
+      void operation.finally(() => v3FiscalInFlightRef.current.delete(transactionId)).catch(console.error);
+    }
+    return operation;
   }, [config, pollFiscalDocumentStatus, upsertFiscalTransaction]);
 
   const retryFiscalDocument = useCallback(async (transaction: Transaction): Promise<string> => {

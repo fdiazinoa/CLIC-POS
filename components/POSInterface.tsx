@@ -122,7 +122,7 @@ import {
 import { formatCurrency } from '../utils/format';
 import { persistStandaloneRefundTransaction, persistStandaloneSaleHistory } from '../services/localRefundPersistence';
 import { setLargeMasterSyncV3CriticalOperation } from '../services/sync/LargeMasterSyncV3OperationGate';
-import { V3OperationalUIQueue } from './v3OperationalUIQueue';
+import { V3OperationalUIQueue, V3OperationalUILifetime, assertV3UIContext, authorizeV3UIContext } from './v3OperationalUIQueue';
 import { resolveCustomerImageSrc, resolveProductImageSrc } from '../utils/entityImage';
 import { getWarehouseScopedNumber, resolveProductActiveWarehouseIds } from '../utils/masterIdentity';
 import { buildTransactionSettlementFields } from '../utils/paymentSettlement';
@@ -3367,8 +3367,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const scanQueue = useRef(new V3OperationalUIQueue());
    const addContext = useRef(v3Operational);
    addContext.current = v3Operational;
+   const uiLifetime = useRef(new V3OperationalUILifetime());
+   useLayoutEffect(() => {
+      addContext.current = v3Operational;
+      uiLifetime.current.activate();
+      return () => { uiLifetime.current.retire(); addContext.current = undefined; };
+   }, []);
 
    const performAddToCart = useCallback(async (product: Product, quantity: number = 1, priceOverride?: number, modifiers?: string[], trackingData?: any[], selectedVariant?: ProductVariant, variantInfo?: string, note?: string, restaurantConfig?: CartItem['restaurantConfig'], consignmentPatch?: Pick<CartItem, 'consignmentId' | 'consignmentDocumentNo' | 'consignmentLineId'>) => {
+      const mounted = uiLifetime.current.capture();
+      const isCurrent = () => mounted() && addContext.current === v3Operational;
       const trace = activeAddTraceRef.current || beginPosInteraction('ADD_TICKET_ITEM', { source: 'programmatic', productId: product.id });
       activeAddTraceRef.current = trace;
       expectInteractionRender(trace, 'POS_INTERACTION_VIEW');
@@ -3378,11 +3386,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             throw new Error('SYNC_V3_ADVANCED_ARTICLE_CONTRACT_REQUIRED');
          }
          await v3Operational.validate([...latestAddCart.current, { ...product, quantity, cartId: 'candidate-validation' } as CartItem]);
-         if (addContext.current !== v3Operational) throw new Error('SYNC_V3_UI_CONTEXT_CHANGED');
+         assertV3UIContext(isCurrent);
       }
       if (blockRecoveredUberOrderMutation('agregar artículos adicionales')) return;
-      if (!(await authorizeSubtotalizedEdit('Agregar artículo a ticket subtotalizado'))) return;
-      if (v3Operational && addContext.current !== v3Operational) throw new Error('SYNC_V3_UI_CONTEXT_CHANGED');
+      const authorize = () => authorizeSubtotalizedEdit('Agregar artículo a ticket subtotalizado');
+      if (!(v3Operational ? await authorizeV3UIContext(isCurrent, authorize) : await authorize())) return;
       if (quantity > 0 && !ensureSalesWithOpenZPermission()) return;
       if (!canAddItemToCart(product, quantity, { skipStockValidation: Boolean(consignmentPatch?.consignmentLineId) })) return;
 
@@ -3434,6 +3442,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       });
 
       let targetCartId: string;
+      if (v3Operational) assertV3UIContext(isCurrent);
 
       if (existing && !usesSerial && !existing.dispatched) {
          targetCartId = existing.cartId!;
@@ -3500,7 +3509,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const addToCart = useCallback((...args: Parameters<typeof performAddToCart>) => {
       if (!v3Operational) return performAddToCart(...args);
       const context = v3Operational;
-      return addQueue.current.run(() => addContext.current === context, () => performAddToCart(...args))
+      const mounted = uiLifetime.current.capture();
+      return addQueue.current.run(() => mounted() && addContext.current === context, () => performAddToCart(...args))
          .catch((error: any) => { setErrorToast(`V3: ${error.message || error}`); return false; });
    }, [performAddToCart, v3Operational]);
 
@@ -3829,13 +3839,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const resolveSubmittedCode = useCallback(async (raw: string) => {
       const context = v3Operational;
+      const mounted = uiLifetime.current.capture();
       const resolveAndAdd = async () => {
          const match = context ? await context.resolveCode(raw) : findProductByAnyCode(raw);
+         if (context) assertV3UIContext(() => mounted() && addContext.current === context);
          const added = match ? await addToCart(match.product, (isReturnMode ? -1 : 1) * match.quantity,
             match.price, match.modifiers, undefined, match.selectedVariant, match.variantInfo) : false;
          return { match, added };
       };
-      return context ? scanQueue.current.run(() => addContext.current === context, resolveAndAdd) : resolveAndAdd();
+      return context ? scanQueue.current.run(() => mounted() && addContext.current === context, resolveAndAdd) : resolveAndAdd();
    }, [v3Operational, findProductByAnyCode, addToCart, isReturnMode]);
 
    const handleSearchKeyDown = useCallback(async (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -3972,8 +3984,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const processBarcode = useCallback((...args: Parameters<typeof performBarcode>) => {
       const context = v3Operational;
+      const mounted = uiLifetime.current.capture();
       const operation = context
-         ? scanQueue.current.run(() => addContext.current === context, () => performBarcode(...args))
+         ? scanQueue.current.run(() => mounted() && addContext.current === context, () => performBarcode(...args))
          : performBarcode(...args);
       return operation.catch((error: any) => {
          const message = `V3: ${error.message || error}`;
@@ -5954,8 +5967,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   await persistStandaloneRefundTransaction(
                      {
                         ...settledFinalTxn,
-                        items: normalizedRefundItems,
-                        total: refundDocumentTotal,
+                        ...(v3Operational ? {} : { items: normalizedRefundItems, total: refundDocumentTotal }),
                         status: 'REFUNDED',
                         ncf: finalNcf,
                         ncfType: finalNcfType,
