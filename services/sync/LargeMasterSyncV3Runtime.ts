@@ -49,4 +49,12 @@ export class LargeMasterSyncV3Runtime {
   findBarcode(barcode: string) {
     return this.store.findBarcode(this.version, barcode);
   }
+
+  getInventoryBalance(itemId: string, warehouseId: string) {
+    return this.store.getInventoryBalance(this.version, itemId, warehouseId);
+  }
+
+  getInventorySnapshotVersion() {
+    return this.store.getInventorySnapshotVersion(this.version);
+  }
 }
