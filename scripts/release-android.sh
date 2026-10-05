@@ -13,8 +13,10 @@ SOURCE_REF="${1:-origin/develop}"
 # direct Gradle release builds strict, but make the canonical release protocol
 # explicitly opt in to the cleartext LAN transport required by the product.
 LAN_HTTP_ENABLED="${CLIC_POS_RELEASE_LAN_HTTP_ENABLED:-true}"
-V3_CANARY_ENABLED="${VITE_LARGE_MASTER_SYNC_V3_CANARY:-false}"
-SIGNED_V3_CANARY_OPT_IN="${CLIC_POS_SIGNED_V3_CANARY:-false}"
+V3_CANARY_ENABLED="${VITE_LARGE_MASTER_SYNC_V3_CANARY-false}"
+SIGNED_V3_CANARY_OPT_IN="${CLIC_POS_SIGNED_V3_CANARY-false}"
+V3_CANDIDATE_ENABLED="${VITE_LARGE_MASTER_SYNC_V3_CANDIDATE-false}"
+SIGNED_V3_CANDIDATE_OPT_IN="${CLIC_POS_SIGNED_V3_CANDIDATE-false}"
 
 fail() {
   echo "ERROR: $*" >&2
@@ -25,8 +27,34 @@ for canary_flag in "${V3_CANARY_ENABLED}" "${SIGNED_V3_CANARY_OPT_IN}"; do
   [[ "${canary_flag}" == "true" || "${canary_flag}" == "false" ]] \
     || fail "Las banderas del canario firmado deben ser true o false."
 done
+for candidate_flag in "${V3_CANDIDATE_ENABLED}" "${SIGNED_V3_CANDIDATE_OPT_IN}"; do
+  [[ "${candidate_flag}" == "true" || "${candidate_flag}" == "false" ]] \
+    || fail "Las banderas del candidato firmado deben ser true o false."
+done
+if [[ "${V3_CANDIDATE_ENABLED}" != "${SIGNED_V3_CANDIDATE_OPT_IN}" ]]; then
+  fail "El candidato V3 firmado requiere VITE_LARGE_MASTER_SYNC_V3_CANDIDATE y CLIC_POS_SIGNED_V3_CANDIDATE coincidentes."
+fi
+if [[ "${V3_CANARY_ENABLED}" == "true" && "${V3_CANDIDATE_ENABLED}" == "true" ]]; then
+  fail "El candidato V3 operativo no puede combinarse con el canario de laboratorio."
+fi
 if [[ "${V3_CANARY_ENABLED}" != "${SIGNED_V3_CANARY_OPT_IN}" ]]; then
   fail "El canario V3 firmado requiere VITE_LARGE_MASTER_SYNC_V3_CANARY=true y CLIC_POS_SIGNED_V3_CANARY=true simultáneamente."
+fi
+if [[ "${V3_CANDIDATE_ENABLED}" == "true" ]] && {
+  [[ "${CLIC_POS_DIAGNOSTICS-false}" != "false" ]] ||
+  [[ "${CLIC_POS_WEBVIEW_PROFILE-false}" != "false" ]] ||
+  [[ "${CLIC_POS_TABLE_LATENCY_QA-false}" != "false" ]];
+}; then
+  fail "El candidato V3 firmado no puede combinarse con otros modos diagnósticos."
+fi
+# Explicit false overrides Vite dotenv files as well as caller environment.
+export VITE_LARGE_MASTER_SYNC_V3_CANARY="${V3_CANARY_ENABLED}"
+export VITE_LARGE_MASTER_SYNC_V3_CANDIDATE="${V3_CANDIDATE_ENABLED}"
+export CLIC_POS_SIGNED_V3_CANARY="${SIGNED_V3_CANARY_OPT_IN}"
+export CLIC_POS_SIGNED_V3_CANDIDATE="${SIGNED_V3_CANDIDATE_OPT_IN}"
+NONPROMOTABLE=false
+if [[ "${V3_CANARY_ENABLED}" == "true" || "${V3_CANDIDATE_ENABLED}" == "true" ]]; then
+  NONPROMOTABLE=true
 fi
 if [[ "${V3_CANARY_ENABLED}" == "true" ]] && {
   [[ "${CLIC_POS_DIAGNOSTICS:-false}" == "true" ]] ||
@@ -266,7 +294,7 @@ fi
 
 if [[ "${SOURCE_VERSION_CODE}" == "${NEXT_VERSION_CODE}" && -n "${SOURCE_VERSION_NAME}" ]]; then
   VERSION_NAME="${SOURCE_VERSION_NAME}"
-elif [[ "${LATEST_RELEASE_VERSION_NAME}" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)(-(diagnostic|profile|canary))*$ ]]; then
+elif [[ "${LATEST_RELEASE_VERSION_NAME}" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)(-(diagnostic|profile|canary|v3-candidate))*$ ]]; then
   VERSION_NAME="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.$((BASH_REMATCH[3] + 1))"
 elif [[ "${SOURCE_VERSION_NAME}" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
   VERSION_NAME="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.$((BASH_REMATCH[3] + 1))"
@@ -284,12 +312,16 @@ fi
 if [[ "${V3_CANARY_ENABLED}" == "true" ]]; then
   ARTIFACT_VERSION_NAME="${VERSION_NAME}-canary"
 fi
+if [[ "${V3_CANDIDATE_ENABLED:-false}" == "true" ]]; then
+  ARTIFACT_VERSION_NAME="${VERSION_NAME}-v3-candidate"
+fi
 
 info "Fuente del release: ${SOURCE_REF} (${SOURCE_COMMIT_SHORT})"
 info "VersionCode siguiente: ${NEXT_VERSION_CODE}"
 info "VersionName siguiente: ${VERSION_NAME}"
 info "HTTP LAN Master/Cliente: ${LAN_HTTP_ENABLED}"
 info "Canario V3 firmado, sin ventas: ${V3_CANARY_ENABLED}"
+info "Candidato V3 operativo no promovible: ${V3_CANDIDATE_ENABLED}"
 info "Worktree de firma: ${CANONICAL_BUILD_WORKTREE}"
 
 # Build in the canonical checkout; signing material stays in its original location.
@@ -361,6 +393,24 @@ ACTUAL_VERSION_NAME="$(extract_version_name_from_metadata "${METADATA_SRC}")"
 [[ "${ACTUAL_VERSION_NAME}" == "${NEXT_VERSION_CODE}|${ARTIFACT_VERSION_NAME}" ]] \
   || fail "El metadata Android no coincide con la identidad del APK esperado: ${ARTIFACT_VERSION_NAME}"
 
+# Preserve actual Gradle identity and attach validated mode provenance.
+node --input-type=module - "${METADATA_SRC}" "${SOURCE_COMMIT}" <<'NODE'
+import fs from 'node:fs';
+const [file, sourceCommit] = process.argv.slice(2);
+const metadata = JSON.parse(fs.readFileSync(file, 'utf8'));
+const operationalV3Candidate = process.env.VITE_LARGE_MASTER_SYNC_V3_CANDIDATE === 'true';
+const signedV3Canary = process.env.VITE_LARGE_MASTER_SYNC_V3_CANARY === 'true';
+Object.assign(metadata, {
+  sourceCommit, operationalV3Candidate, signedV3Canary,
+  signedV3CandidateOptIn: process.env.CLIC_POS_SIGNED_V3_CANDIDATE === 'true',
+  signedV3CanaryOptIn: process.env.CLIC_POS_SIGNED_V3_CANARY === 'true',
+  nonpromotable: operationalV3Candidate || signedV3Canary,
+  canaryNonPromotable: signedV3Canary, salesEnabled: !signedV3Canary,
+  buildMode: operationalV3Candidate ? 'operational-v3-candidate' : signedV3Canary ? 'laboratory-v3-canary' : 'normal-v2',
+});
+fs.writeFileSync(file, `${JSON.stringify(metadata, null, 2)}\n`);
+NODE
+
 info "Verificando política HTTP LAN del manifiesto"
 verify_apk_network_policy "${AAPT}" "${APK_SRC}" "${LAN_HTTP_ENABLED}"
 
@@ -392,6 +442,10 @@ webviewProfileQa=${CLIC_POS_WEBVIEW_PROFILE:-false}
 signedV3Canary=${V3_CANARY_ENABLED}
 signedV3CanaryOptIn=${SIGNED_V3_CANARY_OPT_IN}
 canaryNonPromotable=${V3_CANARY_ENABLED}
+operationalV3Candidate=${V3_CANDIDATE_ENABLED}
+signedV3CandidateOptIn=${SIGNED_V3_CANDIDATE_OPT_IN}
+nonpromotable=${NONPROMOTABLE}
+buildMode=$([[ "${V3_CANDIDATE_ENABLED}" == "true" ]] && echo operational-v3-candidate || { [[ "${V3_CANARY_ENABLED}" == "true" ]] && echo laboratory-v3-canary || echo normal-v2; })
 salesEnabled=$([[ "${V3_CANARY_ENABLED}" == "true" ]] && echo false || echo true)
 sourceRef=${SOURCE_REF}
 sourceBranch=${SOURCE_BRANCH}

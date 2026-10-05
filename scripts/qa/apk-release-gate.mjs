@@ -89,6 +89,16 @@ const numericRule = (metrics, budgets, metric, budget, compare) => {
 
 export function validatePromotionEvidence(baseline, evidence) {
   if (evidence?.schemaVersion !== 1) fail('La evidencia debe usar schemaVersion 1');
+  // Reject candidate provenance even if a caller rewrites the version as normal.
+  for (const field of ['operationalV3Candidate', 'nonpromotable', 'canaryNonPromotable',
+    'signedV3Canary', 'signedV3CanaryOptIn', 'signedV3CandidateOptIn']) {
+    if (evidence[field] !== undefined && evidence[field] !== false && evidence[field] !== 'false') {
+      fail(`Artefacto no promovible: ${field}`);
+    }
+  }
+  if (evidence.buildMode !== undefined && evidence.buildMode !== 'normal-v2') {
+    fail('Modo de artefacto no promovible');
+  }
   if (!/^[0-9a-f]{40}$/i.test(evidence.sourceCommit || '')) fail('sourceCommit debe ser un SHA completo');
   if (!/^\d+\.\d+\.\d+$/.test(evidence.versionName || '')) fail('versionName inválido en evidencia');
   if (!Number.isSafeInteger(evidence.versionCode) || evidence.versionCode < baseline.versionCode) {
