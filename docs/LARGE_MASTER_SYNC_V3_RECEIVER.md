@@ -10,6 +10,8 @@ The contract-v2 receiver stores the added operational article, tariff, tax and v
 
 The download client now has `requireOperationalContract`, an explicit opt-in for future sale-capable sessions. With it, a contract-v1 or incomplete V2 manifest is rejected before storage-capacity checks, staging writes, or activation. Laboratory canaries keep their default compatibility mode; the operational ERP lifecycle must set this option when it is wired.
 
+`LargeMasterSyncV3BoundTransport` prepares a direct, raw-byte V3 client from the already paired ERP terminal's token, tenant and device identity. It never registers, reauthenticates, changes pairing, follows redirects or accepts legacy collection paths. A change of identity or token during a download stops it. `LargeMasterSyncV3Inventory` fetches and validates only the separate `productInventory/full` collection; an empty balance list is valid. Neither module is yet called from the production lifecycle, and inventory is not yet persisted or joined to article reads. Therefore this preparation does **not** enable sale use.
+
 While dark it performs no V3 HTTP request, adds no capability header, does not change legacy full/delta/config flows, and does not replace the React `products` or `productPrices` arrays. If a previously activated V3 database exists, the runtime pointer also stays unused while the guard is false; legacy remains authoritative.
 
 Enabling requires a separate reviewed change after schema, resume, checksum, storage, regression, physical Android 54k × 6 and performance gates pass. That later change must:
