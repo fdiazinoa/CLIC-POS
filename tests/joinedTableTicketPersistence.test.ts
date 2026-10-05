@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import ts from 'typescript';
 import { createPaymentFractionPlan, retainCurrentPaymentFractionPlan } from '../utils/paymentFractions';
 import { findRetiredTableAccountSuccessor } from '../utils/tableAccountRetirement';
+import { getTableSellerId } from '../utils/tableSellerAssignment';
 
 // Exercise the actual three POS builders and App reconciliation, not a second
 // implementation of the save logic. No server, device or business data writes.
@@ -24,6 +25,7 @@ function save(builder: string, ticket: any, activeTable: any, items: any[]) {
     orderId: ticket.id, parkedTicketId: ticket.id,
     cart: items, ticketItems: items, cartTotal: 150, ticketTotal: 150,
     resolvedTicketTotal: 150, retainCurrentPaymentFractionPlan,
+    getTableSellerId, parkedTicketsRef: { current: [ticket] },
     discountAmount: 0, globalDiscount: { type: 'PERCENT', value: 0 },
     selectedCustomer: null, activeBarTabName: null, activeBarTabId: null,
     activeTableContext: { compactLabel: activeTable.name, roomLabel: 'QA' },
