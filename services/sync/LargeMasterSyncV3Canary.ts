@@ -107,6 +107,7 @@ const defaultDependencies: CanaryDependencies = {
       store,
       transport: createLargeMasterSyncV3CanaryTransport(input),
       metric: onMetric,
+      downloadConcurrency: 2,
     });
   },
 };
