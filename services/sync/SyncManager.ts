@@ -6,6 +6,9 @@
  */
 
 import { syncErpPaymentMethods } from './PaymentMethodsSync';
+import { assertLegacyMasterPullAllowed, isLargeMasterSyncV3ReplacedCollection,
+    usesLargeMasterSyncV3Authority } from './LargeMasterSyncV3Authority';
+import { prepareLargeMasterSyncV3Candidate } from './LargeMasterSyncV3Candidate';
 import { freezeCount, freezePhase } from '../../diagnostics/freezeCounters';
 import { fetchAndReadWithTimeout } from '../network/fetchAndReadWithTimeout';
 import { db } from '../../utils/db';
@@ -2363,12 +2366,13 @@ class SyncManager {
                 await waitForBackgroundSyncWindow();
             }
             this.recordSnapshotDiagnostics('manifest', manifest.snapshot_meta);
+            const v3Authority = usesLargeMasterSyncV3Authority(syncPolicy.resolve().kind);
 
             const changedMasterScopes: TerminalManifestMasterScope[] = (['items', 'customers', 'suppliers', 'sellers', 'users', 'pos_users', 'roles', 'pos_roles', 'purchase_orders', 'transfers'] as TerminalManifestMasterScope[])
-                .filter((scope) => manifest.changed?.[scope]);
+                .filter((scope) => manifest.changed?.[scope] && !(v3Authority && scope === 'items'));
             const changedBlocks = Array.isArray(manifest.changed_blocks) ? manifest.changed_blocks : [];
-            const inventoryChanged = Boolean(manifest.changed.inventory) || changedBlocks.includes('inventory');
-            const productPricesChanged = Boolean(manifest.changed.product_prices) || changedBlocks.includes('product_prices');
+            const inventoryChanged = !v3Authority && (Boolean(manifest.changed.inventory) || changedBlocks.includes('inventory'));
+            const productPricesChanged = !v3Authority && (Boolean(manifest.changed.product_prices) || changedBlocks.includes('product_prices'));
             const remoteInventoryVersion = this.normalizeVersionToken(manifest.inventory_version);
             const remotePriceVersion = this.normalizeVersionToken(manifest.price_version);
             const inventoryVersionComparable = Boolean(localInventoryVersion && remoteInventoryVersion);
@@ -2387,8 +2391,8 @@ class SyncManager {
                 (manifest as any).full_bootstrap_required
             );
             const terminalChanged = Boolean(manifest.changed.terminal);
-            const bootstrapInventoryOnStartup = Boolean(forceFullBootstrap || !storedCursorMap.inventory);
-            const bootstrapProductPricesOnStartup = Boolean(forceFullBootstrap || !storedCursorMap.product_prices);
+            const bootstrapInventoryOnStartup = !v3Authority && Boolean(forceFullBootstrap || !storedCursorMap.inventory);
+            const bootstrapProductPricesOnStartup = !v3Authority && Boolean(forceFullBootstrap || !storedCursorMap.product_prices);
             const inventorySyncSkippedByVersion = Boolean(!bootstrapInventoryOnStartup && inventoryVersionMatch === true);
             const priceSyncSkippedByVersion = Boolean(!bootstrapProductPricesOnStartup && priceVersionMatch === true);
             const inventoryVersionMiss = Boolean(remoteInventoryVersion && localInventoryVersion && remoteInventoryVersion !== localInventoryVersion);
@@ -2668,6 +2672,15 @@ class SyncManager {
                 markStartupCompleted: true,
                 deferDuringSale: true,
             });
+            if (usesLargeMasterSyncV3Authority(syncPolicy.resolve().kind)) {
+                const v3BaseUrl = import.meta.env.VITE_LARGE_MASTER_SYNC_V3_BASE_URL;
+                if (!v3BaseUrl) throw new Error('SYNC_V3_BASE_URL_REQUIRED');
+                await prepareLargeMasterSyncV3Candidate(dbAdapter.masterSyncV3Store, v3BaseUrl);
+                // Download readiness is not sale readiness. The candidate must
+                // wait for the complete V3 operational POS read boundary.
+                this.setSyncPhase('V3_CANDIDATE_MASTER_READY_SALES_BLOCKED');
+                return;
+            }
             this.markReadyToSell('P0_P1_READY');
         } catch (error) {
             this.readyToSellState.failedOperations += 1;
@@ -2681,6 +2694,7 @@ class SyncManager {
         if (!apiSyncAdapter.isErpActiveOperationalTarget()) {
             return 0;
         }
+        if (usesLargeMasterSyncV3Authority(syncPolicy.resolve().kind)) return 0;
 
         const [rawProducts, rawWarehouses, rawStocks] = await Promise.all([
             db.get('products'),
@@ -3364,6 +3378,10 @@ class SyncManager {
         }
 
         const protectLocalCatalog = protectsLocalCatalogFromCloud();
+        const v3Authority = usesLargeMasterSyncV3Authority(syncPolicy.resolve().kind);
+        if (v3Authority && options?.requireCatalogDelta) {
+            throw new Error('SYNC_V3_LEGACY_CATALOG_DELTA_FORBIDDEN');
+        }
 
         const snapshotTerminalId = context.localTerminalId || context.terminalId;
         const cachedSnapshot = baseConfig.terminalSnapshots?.[snapshotTerminalId] || null;
@@ -3371,7 +3389,7 @@ class SyncManager {
         const cachedCatalogItems = cachedSnapshot?.masters?.items;
         let hasCompleteCachedCatalog = Array.isArray(cachedCatalogItems);
         const catalogItems: Record<string, string> = {};
-        if (currentCatalogCursor && Array.isArray(cachedCatalogItems) && cachedCatalogItems.length > 0) {
+        if (!v3Authority && currentCatalogCursor && Array.isArray(cachedCatalogItems) && cachedCatalogItems.length > 0) {
             const cachedIds = new Set(cachedCatalogItems.map((item) => String(item?.id || '').trim()).filter(Boolean));
             for (const item of cachedCatalogItems) {
                 const id = String(item?.id || '').trim();
@@ -3393,11 +3411,12 @@ class SyncManager {
         }
         const currentTerminalCursorMap = this.readStoredTerminalCursorMap(snapshotTerminalId);
         const requestedMasterScopes = Array.isArray(options?.masterScopes)
-            ? Array.from(new Set(options.masterScopes.filter(Boolean)))
-            : null;
+            ? Array.from(new Set(options.masterScopes.filter(scope => Boolean(scope) && !(v3Authority && scope === 'items'))))
+            : v3Authority ? [] : null;
         const requestedBlockScopes = Array.isArray(options?.blockScopes)
-            ? Array.from(new Set(options.blockScopes.filter(Boolean)))
-            : null;
+            ? Array.from(new Set(options.blockScopes.filter(scope => Boolean(scope)
+                && !(v3Authority && (scope === 'inventory' || scope === 'product_prices')))))
+            : v3Authority ? [] : null;
         const requestedResolvedScopes = Array.isArray(options?.resolvedScopes)
             ? Array.from(new Set(options.resolvedScopes.filter(Boolean)))
             : null;
@@ -3651,13 +3670,15 @@ class SyncManager {
         try {
             const applyStartedAt = posCatalogDebugNow();
             if (!protectLocalCatalog) {
-                if (catalogDelta) {
-                    await this.applyCatalogDelta(catalogDelta);
-                } else {
-                    await this.applySnapshotProducts(snapshot, {
-                        authoritativeFull: Boolean(payload && nextCatalogCursor && requestedMasterScopes?.includes('items')),
-                        cachedSnapshot,
-                    });
+                if (!v3Authority) {
+                    if (catalogDelta) {
+                        await this.applyCatalogDelta(catalogDelta);
+                    } else {
+                        await this.applySnapshotProducts(snapshot, {
+                            authoritativeFull: Boolean(payload && nextCatalogCursor && requestedMasterScopes?.includes('items')),
+                            cachedSnapshot,
+                        });
+                    }
                 }
                 const structuredMasterData = await this.refreshTerminalStructuredMasterData(snapshot, catalogDelta, {
                     terminalIds: [
@@ -3697,7 +3718,7 @@ class SyncManager {
                 ? configAfterStructuredMasterDataRaw as BusinessConfig
                 : baseConfig;
 
-        const configSnapshot = catalogDelta
+        const configSnapshot = catalogDelta && !v3Authority
             ? mergeCatalogDeltaIntoSnapshot(cachedSnapshot!, snapshot, catalogDelta)
             : snapshot;
         const applied = applyTerminalConfigSnapshot(configForTerminalSnapshot, {
@@ -3708,8 +3729,14 @@ class SyncManager {
             cachedSnapshot,
         });
 
-        const localProducts = ((await db.get('products')) as Product[]) || [];
-        const nextConfig = this.reconcileCatalogProductIds(applied.config, localProducts);
+        const localProducts = v3Authority ? [] : ((await db.get('products')) as Product[]) || [];
+        const nextConfig = v3Authority ? applied.config : this.reconcileCatalogProductIds(applied.config, localProducts);
+        if (v3Authority) {
+            // Terminal identity, documents and permissions still come from the
+            // existing config contract, but its tariff/tax copies are not V3.
+            nextConfig.tariffs = configForTerminalSnapshot.tariffs;
+            nextConfig.taxes = configForTerminalSnapshot.taxes;
+        }
         const nextRuntimeWarehouses = this.resolveRuntimeWarehousesFromConfig(nextConfig, applied.terminalId);
         const operationalDocumentState = extractTerminalOperationalDocumentState(nextConfig, applied.terminalId);
         const changed =
@@ -3749,7 +3776,7 @@ class SyncManager {
         localStorage.setItem('CLIC_POS_TERMINAL_ID', applied.terminalId);
         let nextTerminalCursorMap = { ...currentTerminalCursorMap };
 
-        if (!protectLocalCatalog && requestedBlockScopes?.includes('inventory')) {
+        if (!protectLocalCatalog && !v3Authority && requestedBlockScopes?.includes('inventory')) {
             const inventoryPayload = await this.fetchTerminalInventoryBlock(
                 context,
                 currentTerminalCursorMap.inventory || null,
@@ -3783,7 +3810,7 @@ class SyncManager {
             });
         }
 
-        if (!protectLocalCatalog && requestedBlockScopes?.includes('product_prices')) {
+        if (!protectLocalCatalog && !v3Authority && requestedBlockScopes?.includes('product_prices')) {
             const productPricesPayload = await this.fetchTerminalProductPricesBlock(
                 context,
                 currentTerminalCursorMap.product_prices || null,
@@ -3845,7 +3872,7 @@ class SyncManager {
 
         // Advance only after the catalog and terminal snapshot were saved successfully.
         // A partial SQLite failure must replay the same delta on the next sync.
-        if (nextCatalogCursor && !protectLocalCatalog && options?.persist !== false) {
+        if (nextCatalogCursor && !protectLocalCatalog && !v3Authority && options?.persist !== false) {
             this.persistCatalogCursor(snapshotTerminalId, nextCatalogCursor);
         }
 
@@ -6121,6 +6148,7 @@ class SyncManager {
         await waitForBackgroundSyncWindow();
         if (this.isDisabled) return 0;
         const target = syncPolicy.resolve();
+        assertLegacyMasterPullAllowed(collection, target.kind);
         if (target.kind === 'POS_CLOUD_STAGING') {
             logSkippedNonMasterPull(collection, target.kind, 'POS_CLOUD_STAGING_PULL_BLOCKED');
             return 0;
@@ -6636,6 +6664,9 @@ class SyncManager {
         let catalogs: SyncableCollection[] = target.kind === 'ERP_ACTIVE'
             ? defaultCatalogs.filter(isErpMasterPullCollection)
             : defaultCatalogs;
+        if (usesLargeMasterSyncV3Authority(target.kind)) {
+            catalogs = catalogs.filter(collection => !isLargeMasterSyncV3ReplacedCollection(collection));
+        }
         if (target.kind === 'POS_MASTER' && !isMaster) {
             const androidMasterCollections = new Set<SyncableCollection>([
                 ...POS_MASTER_OPERATIONAL_CATALOGS,
@@ -6904,9 +6935,12 @@ class SyncManager {
             'receptions',
             ...(permissionService.shouldShowGlobalSales() ? ['transactions' as SyncableCollection] : [])
         ];
-        const collections = target.kind === 'ERP_ACTIVE'
+        let collections = target.kind === 'ERP_ACTIVE'
             ? defaultCollections.filter(isErpMasterPullCollection)
             : defaultCollections;
+        if (usesLargeMasterSyncV3Authority(target.kind)) {
+            collections = collections.filter(collection => !isLargeMasterSyncV3ReplacedCollection(collection));
+        }
         const updatesAvailable: string[] = [];
 
         for (const collection of collections) {
@@ -6978,6 +7012,7 @@ class SyncManager {
      */
     async forceFiscalCatalogFullPull(): Promise<{ taxes: number; products: number }> {
         const target = syncPolicy.resolve();
+        assertLegacyMasterPullAllowed('products', target.kind);
         if (target.kind !== 'ERP_ACTIVE' || !target.canPullMasters) {
             throw new Error('FULL_FISCAL_CATALOG_REQUIRES_ERP_ACTIVE');
         }
@@ -7157,6 +7192,10 @@ class SyncManager {
                 'terminalFiscalConfig',
             ].includes(module.id))
             : [...baseModules];
+        const v3Authority = usesLargeMasterSyncV3Authority(target.kind);
+        if (v3Authority) {
+            modules = modules.filter(module => !isLargeMasterSyncV3ReplacedCollection(module.id));
+        }
 
         if (permissionService.isMasterTerminal() && target.kind !== 'ERP_ACTIVE') {
             modules.push(
@@ -7175,29 +7214,35 @@ class SyncManager {
         window.dispatchEvent(new CustomEvent('syncStart', { detail: { modules } }));
 
         if (target.kind === 'ERP_ACTIVE') {
-            window.dispatchEvent(new CustomEvent('syncProgress', {
-                detail: { id: 'taxes', status: 'PROCESSING', message: 'Descargando maestro fiscal FULL...' },
-            }));
-            window.dispatchEvent(new CustomEvent('syncProgress', {
-                detail: { id: 'products', status: 'PROCESSING', message: 'Esperando maestro fiscal...' },
-            }));
-            try {
-                const result = await this.forceFiscalCatalogFullPull();
+            if (v3Authority) {
+                const v3BaseUrl = import.meta.env.VITE_LARGE_MASTER_SYNC_V3_BASE_URL;
+                if (!v3BaseUrl) throw new Error('SYNC_V3_BASE_URL_REQUIRED');
+                await prepareLargeMasterSyncV3Candidate(dbAdapter.masterSyncV3Store, v3BaseUrl);
+            } else {
                 window.dispatchEvent(new CustomEvent('syncProgress', {
-                    detail: { id: 'taxes', status: 'SUCCESS', message: 'Maestro fiscal aplicado', count: result.taxes },
+                    detail: { id: 'taxes', status: 'PROCESSING', message: 'Descargando maestro fiscal FULL...' },
                 }));
                 window.dispatchEvent(new CustomEvent('syncProgress', {
-                    detail: { id: 'products', status: 'SUCCESS', message: 'Catálogo fiscal aplicado', count: result.products },
+                    detail: { id: 'products', status: 'PROCESSING', message: 'Esperando maestro fiscal...' },
                 }));
-            } catch (error: any) {
-                for (const id of ['taxes', 'products']) {
+                try {
+                    const result = await this.forceFiscalCatalogFullPull();
                     window.dispatchEvent(new CustomEvent('syncProgress', {
-                        detail: { id, status: 'ERROR', message: error?.message || 'Error en sincronización fiscal FULL' },
+                        detail: { id: 'taxes', status: 'SUCCESS', message: 'Maestro fiscal aplicado', count: result.taxes },
                     }));
+                    window.dispatchEvent(new CustomEvent('syncProgress', {
+                        detail: { id: 'products', status: 'SUCCESS', message: 'Catálogo fiscal aplicado', count: result.products },
+                    }));
+                } catch (error: any) {
+                    for (const id of ['taxes', 'products']) {
+                        window.dispatchEvent(new CustomEvent('syncProgress', {
+                            detail: { id, status: 'ERROR', message: error?.message || 'Error en sincronización fiscal FULL' },
+                        }));
+                    }
+                    throw error;
                 }
-                throw error;
+                modules = modules.filter((module) => !['taxes', 'products'].includes(module.id));
             }
-            modules = modules.filter((module) => !['taxes', 'products'].includes(module.id));
         }
 
         for (const module of modules) {

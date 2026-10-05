@@ -1,4 +1,5 @@
 import { assertLargeMasterSyncV3CanaryEmulator } from './LargeMasterSyncV3Canary';
+import { LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED } from './LargeMasterSyncV3Authority';
 import { createLargeMasterSyncV3BoundClient,
   readLargeMasterSyncV3BoundIdentity } from './LargeMasterSyncV3BoundTransport';
 import type { LargeMasterSyncV3Client, LargeMasterSyncV3Metric } from './LargeMasterSyncV3Client';
@@ -9,8 +10,7 @@ import { LargeMasterSyncV3Error, type LargeMasterSyncV3InventorySnapshot,
   type LargeMasterSyncV3RuntimeVersion, type LargeMasterSyncV3Store } from './LargeMasterSyncV3Types';
 
 /** Explicit candidate entry point. The production V2 APK never invokes it. */
-export const LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED =
-  import.meta.env?.VITE_LARGE_MASTER_SYNC_V3_CANDIDATE === 'true';
+export { LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED } from './LargeMasterSyncV3Authority';
 
 type CandidateClient = Pick<LargeMasterSyncV3Client, 'requestSync' | 'resumeSync'>;
 type CandidateDependencies = {

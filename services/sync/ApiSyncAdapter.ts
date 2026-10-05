@@ -1,4 +1,5 @@
 import { isSyncFeatureEnabled } from './SyncFeatureFlags';
+import { assertLegacyMasterPullAllowed } from './LargeMasterSyncV3Authority';
 import { originalProvenance } from '../recovery/RecoveryRuntime';
 import { isRecoveredOperation } from '../recovery/PendingOperationsRecovery';
 import { readErpPaymentMethodsSnapshot } from '../../utils/erpPaymentMethods';
@@ -3900,6 +3901,7 @@ export class ApiSyncAdapter {
      * Pull latest changes from Master (called by Slave terminals)
      */
     async pull(collection: string, sinceVersion?: number): Promise<any[]> {
+        assertLegacyMasterPullAllowed(collection, resolveSyncTarget().kind);
         const operationalTarget = this.resolveOperationalTarget('PULL_MASTERS');
         if (operationalTarget && !operationalTarget.useLocalTarget) {
             if (!isErpMasterPullCollection(collection)) {
@@ -4427,6 +4429,7 @@ export class ApiSyncAdapter {
      * versions, timestamps, cursors or HTTP caches.
      */
     async pullFullSnapshot(collection: 'taxes' | 'products'): Promise<PullDeltaResult> {
+        assertLegacyMasterPullAllowed(collection, resolveSyncTarget().kind);
         if (!isErpMasterPullCollection(collection)) {
             throw new Error(`FULL_MASTER_COLLECTION_NOT_SUPPORTED:${collection}`);
         }
@@ -4627,6 +4630,7 @@ export class ApiSyncAdapter {
 
     async pullDelta(collection: string, sinceVersion?: number, options?: PullDeltaOptions): Promise<PullDeltaResult> {
         const routedTarget = resolveSyncTarget();
+        assertLegacyMasterPullAllowed(collection, routedTarget.kind);
         if (routedTarget.kind === 'POS_CLOUD_STAGING') {
             logSkippedNonMasterPull(collection, 'PULL_MASTERS', 'POS_CLOUD_STAGING_PULL_BLOCKED');
             return this.buildEmptyDeltaResult(sinceVersion);
