@@ -611,6 +611,265 @@ test('operation gate rechecks after parse before opening the sqlite transaction'
   }
 });
 
+test('opt-in prefetch downloads at most two chunks and applies SQLite chunks in order', async () => {
+  const { store } = sqliteStore();
+  const { responses } = await manifestAndResponses({ articles: Array.from({ length: 5 }, (_, index) => [{
+    id: `A${index}`, taxable: false, taxIds: [], active: true,
+  }]) }, 186, SYNC_ID, ['articles']);
+  const started: number[] = [];
+  const applied: number[] = [];
+  let inFlight = 0;
+  let peak = 0;
+  const transport: LargeMasterSyncV3Transport = { async request(path) {
+    const index = Number(path.match(/\/chunks\/(\d+)$/)?.[1]);
+    if (Number.isInteger(index)) {
+      started.push(index);
+      peak = Math.max(peak, ++inFlight);
+      await new Promise(resolve => setTimeout(resolve, index === 0 ? 20 : 1));
+      inFlight -= 1;
+    }
+    return responses.get(path)!;
+  } };
+  const originalApplyChunk = store.applyChunk.bind(store);
+  store.applyChunk = async (chunk: Parameters<typeof store.applyChunk>[0]) => {
+    applied.push(chunk.envelope.chunkIndex);
+    return originalApplyChunk(chunk);
+  };
+  const client = new LargeMasterSyncV3Client({ store, transport, downloadConcurrency: 2,
+    storageStats: async () => ({ availableBytes: 1e9, totalBytes: 2e9 }), maxRetries: 0 });
+  await client.resumeSync(SYNC_ID);
+  assert.equal(peak, 2);
+  assert.deepEqual(started, [0, 1, 2, 3, 4]);
+  assert.deepEqual(applied, [0, 1, 2, 3, 4]);
+});
+
+test('default client remains sequential across downloads and SQLite applies', async () => {
+  const { store } = sqliteStore();
+  const { responses } = await manifestAndResponses({
+    taxes: [[{ id: 'T1', active: true }]],
+    articles: [[{ id: 'A0', taxable: false, taxIds: [], active: true }],
+      [{ id: 'A1', taxable: false, taxIds: [], active: true }]],
+  }, 186, SYNC_ID, ['taxes', 'articles']);
+  const events: string[] = [];
+  const transport: LargeMasterSyncV3Transport = { async request(path) {
+    if (path.includes('/chunks/')) events.push(`fetch:${path.match(/\/datasets\/([^/]+)\/chunks\/(\d+)$/)?.slice(1).join(':')}`);
+    return responses.get(path)!;
+  } };
+  const originalApply = store.applyChunk.bind(store);
+  store.applyChunk = async chunk => {
+    events.push(`apply:${chunk.envelope.dataset}:${chunk.envelope.chunkIndex}`);
+    return originalApply(chunk);
+  };
+  const originalValidate = store.markDatasetValidated.bind(store);
+  store.markDatasetValidated = async (syncId, dataset) => {
+    events.push(`validated:${dataset}`);
+    return originalValidate(syncId, dataset);
+  };
+  const client = new LargeMasterSyncV3Client({ store, transport,
+    storageStats: async () => ({ availableBytes: 1e9, totalBytes: 2e9 }), maxRetries: 0 });
+  await client.resumeSync(SYNC_ID);
+  assert.deepEqual(events, [
+    'fetch:taxes:0', 'apply:taxes:0', 'validated:taxes',
+    'fetch:articles:0', 'apply:articles:0', 'fetch:articles:1', 'apply:articles:1',
+    'validated:articles',
+  ]);
+});
+
+test('opt-in prefetch waits for dataset validation before starting the next dataset', async () => {
+  const { store } = sqliteStore();
+  const { responses } = await manifestAndResponses({
+    taxes: [[{ id: 'T1', active: true }], [{ id: 'T2', active: true }]],
+    articles: [[{ id: 'A0', taxable: false, taxIds: [], active: true }]],
+  }, 186, SYNC_ID, ['taxes', 'articles']);
+  const events: string[] = [];
+  const transport: LargeMasterSyncV3Transport = { async request(path) {
+    if (path.includes('/chunks/')) events.push(path.includes('/datasets/articles/') ? 'fetch:articles' : 'fetch:taxes');
+    return responses.get(path)!;
+  } };
+  const originalValidate = store.markDatasetValidated.bind(store);
+  store.markDatasetValidated = async (syncId, dataset) => {
+    events.push(`validated:${dataset}`);
+    return originalValidate(syncId, dataset);
+  };
+  const client = new LargeMasterSyncV3Client({ store, transport, downloadConcurrency: 2,
+    storageStats: async () => ({ availableBytes: 1e9, totalBytes: 2e9 }), maxRetries: 0 });
+  await client.resumeSync(SYNC_ID);
+  assert.ok(events.indexOf('validated:taxes') < events.indexOf('fetch:articles'));
+  assert.deepEqual(events.filter(event => event === 'fetch:taxes').length, 2);
+});
+
+test('prefetched failure aborts the current download, leaves staging intact, and resumes', async () => {
+  const { store } = sqliteStore();
+  const { responses } = await manifestAndResponses({ articles: Array.from({ length: 3 }, (_, index) => [{
+    id: `A${index}`, taxable: false, taxIds: [], active: true,
+  }]) }, 186, SYNC_ID, ['articles']);
+  let currentAborted = false;
+  const transport: LargeMasterSyncV3Transport = { async request(path, init) {
+    if (path.endsWith('/chunks/0')) {
+      await new Promise<void>((resolve, reject) => {
+        const abort = () => { currentAborted = true; reject(new DOMException('aborted', 'AbortError')); };
+        if (init.signal?.aborted) abort();
+        else init.signal?.addEventListener('abort', abort, { once: true });
+      });
+    }
+    if (path.endsWith('/chunks/1')) throw new Error('SPECULATIVE_DOWNLOAD_FAILED');
+    return responses.get(path)!;
+  } };
+  const client = new LargeMasterSyncV3Client({ store, transport, downloadConcurrency: 2,
+    storageStats: async () => ({ availableBytes: 1e9, totalBytes: 2e9 }), maxRetries: 0 });
+  await assert.rejects(() => client.resumeSync(SYNC_ID), /SPECULATIVE_DOWNLOAD_FAILED/);
+  assert.equal(currentAborted, true);
+  assert.equal((await store.readProgress(SYNC_ID))?.chunks.length, 0);
+  assert.equal(await store.getActiveRuntimeVersion(), null);
+  const resumed = new LargeMasterSyncV3Client({ store, transport: new MapTransport(responses), downloadConcurrency: 2,
+    maxRetries: 0 });
+  await resumed.resumeSync(SYNC_ID);
+  assert.equal((await store.readProgress(SYNC_ID))?.chunks.length, 3);
+});
+
+test('current chunk failure drains prefetched work without applying a later chunk', async () => {
+  const { store } = sqliteStore();
+  const { responses } = await manifestAndResponses({ articles: Array.from({ length: 2 }, (_, index) => [{
+    id: `A${index}`, taxable: false, taxIds: [], active: true,
+  }]) }, 186, SYNC_ID, ['articles']);
+  let prefetchedAborted = false;
+  let prefetchedStarted!: () => void;
+  const prefetchedStart = new Promise<void>(resolve => { prefetchedStarted = resolve; });
+  const transport: LargeMasterSyncV3Transport = { async request(path, init) {
+    if (path.endsWith('/chunks/0')) {
+      await prefetchedStart;
+      throw new Error('CURRENT_DOWNLOAD_FAILED');
+    }
+    if (path.endsWith('/chunks/1')) {
+      prefetchedStarted();
+      await new Promise<void>((resolve, reject) => {
+        const abort = () => { prefetchedAborted = true; reject(new DOMException('aborted', 'AbortError')); };
+        if (init.signal?.aborted) abort();
+        else init.signal?.addEventListener('abort', abort, { once: true });
+      });
+    }
+    return responses.get(path)!;
+  } };
+  const client = new LargeMasterSyncV3Client({ store, transport, downloadConcurrency: 2,
+    storageStats: async () => ({ availableBytes: 1e9, totalBytes: 2e9 }), maxRetries: 0 });
+  await assert.rejects(() => client.resumeSync(SYNC_ID), /CURRENT_DOWNLOAD_FAILED/);
+  assert.equal(prefetchedAborted, true);
+  assert.equal((await store.readProgress(SYNC_ID))?.chunks.length, 0);
+});
+
+test('abort during prefetch persists only applied chunks and restart resumes the first gap', async () => {
+  const { store } = sqliteStore();
+  const { responses } = await manifestAndResponses({ articles: Array.from({ length: 3 }, (_, index) => [{
+    id: `A${index}`, taxable: false, taxIds: [], active: true,
+  }]) }, 186, SYNC_ID, ['articles']);
+  const abortController = new AbortController();
+  const transport: LargeMasterSyncV3Transport = { async request(path, init) {
+    if (path.includes('/chunks/') && !path.endsWith('/chunks/0')) {
+      await new Promise<void>((resolve, reject) => {
+        const abort = () => reject(new DOMException('aborted', 'AbortError'));
+        if (init.signal?.aborted) abort();
+        else init.signal?.addEventListener('abort', abort, { once: true });
+      });
+    }
+    return responses.get(path)!;
+  } };
+  const client = new LargeMasterSyncV3Client({ store, transport, downloadConcurrency: 2,
+    storageStats: async () => ({ availableBytes: 1e9, totalBytes: 2e9 }), maxRetries: 0,
+    metric: metric => { if (metric.event === 'chunk_progress' && metric.chunkIndex === 0) abortController.abort(); },
+  });
+  await assert.rejects(() => client.resumeSync(SYNC_ID, abortController.signal), /AbortError|aborted/);
+  assert.deepEqual((await store.readProgress(SYNC_ID))?.chunks.map(chunk => chunk.chunkIndex), [0]);
+  const resumeTransport = new MapTransport(responses);
+  const resumed = new LargeMasterSyncV3Client({ store, transport: resumeTransport, downloadConcurrency: 2,
+    maxRetries: 0 });
+  await resumed.resumeSync(SYNC_ID);
+  assert.deepEqual(resumeTransport.requests.filter(path => path.includes('/chunks/')).map(path => Number(path.match(/\/chunks\/(\d+)$/)?.[1])), [1, 2]);
+});
+
+test('prefetch does not start behind a closed operation gate and abort removes its waiter', async () => {
+  const previousWindow = globalThis.window;
+  const eventTarget = new EventTarget();
+  let saleListeners = 0;
+  Object.assign(eventTarget, { setTimeout, clearTimeout });
+  const add = eventTarget.addEventListener.bind(eventTarget);
+  const remove = eventTarget.removeEventListener.bind(eventTarget);
+  eventTarget.addEventListener = ((type: string, listener: EventListenerOrEventListenerObject) => {
+    if (type === 'clicpos:sale-activity-changed') saleListeners += 1;
+    add(type, listener);
+  }) as typeof eventTarget.addEventListener;
+  eventTarget.removeEventListener = ((type: string, listener: EventListenerOrEventListenerObject) => {
+    if (type === 'clicpos:sale-activity-changed') saleListeners -= 1;
+    remove(type, listener);
+  }) as typeof eventTarget.removeEventListener;
+  Object.defineProperty(globalThis, 'window', { value: eventTarget, configurable: true, writable: true });
+  try {
+    resetLargeMasterSyncV3OperationGateForTests();
+    setPosSaleActivity({ active: true, cartCount: 1 });
+    const { store } = sqliteStore();
+    const { responses } = await manifestAndResponses({ articles: [[{
+      id: 'A0', taxable: false, taxIds: [], active: true,
+    }], [{ id: 'A1', taxable: false, taxIds: [], active: true }]] }, 186, SYNC_ID, ['articles']);
+    const transport = new MapTransport(responses);
+    const controller = new AbortController();
+    const client = new LargeMasterSyncV3Client({ store, transport, downloadConcurrency: 2,
+      storageStats: async () => ({ availableBytes: 1e9, totalBytes: 2e9 }), maxRetries: 0 });
+    const syncing = client.resumeSync(SYNC_ID, controller.signal);
+    await new Promise(resolve => setTimeout(resolve, 5));
+    assert.deepEqual(transport.requests.filter(path => path.includes('/chunks/')), []);
+    assert.equal(saleListeners, 2);
+    controller.abort();
+    await assert.rejects(() => syncing, /AbortError|aborted/);
+    assert.equal(saleListeners, 0);
+    assert.equal((await store.readProgress(SYNC_ID))?.chunks.length, 0);
+  } finally {
+    resetLargeMasterSyncV3OperationGateForTests();
+    setPosSaleActivity({ active: false });
+    Object.defineProperty(globalThis, 'window', { value: previousWindow, configurable: true, writable: true });
+  }
+});
+
+test('prefetch stops launching new chunks while a sale holds the operational gate', async () => {
+  const previousWindow = globalThis.window;
+  const eventTarget = new EventTarget();
+  Object.assign(eventTarget, { setTimeout, clearTimeout,
+    addEventListener: eventTarget.addEventListener.bind(eventTarget),
+    removeEventListener: eventTarget.removeEventListener.bind(eventTarget),
+    dispatchEvent: eventTarget.dispatchEvent.bind(eventTarget),
+  });
+  Object.defineProperty(globalThis, 'window', { value: eventTarget, configurable: true, writable: true });
+  try {
+    resetLargeMasterSyncV3OperationGateForTests();
+    const { store } = sqliteStore();
+    const { responses } = await manifestAndResponses({ articles: Array.from({ length: 3 }, (_, index) => [{
+      id: `A${index}`, taxable: false, taxIds: [], active: true,
+    }]) }, 186, SYNC_ID, ['articles']);
+    let parsed!: () => void;
+    const parseReached = new Promise<void>(resolve => { parsed = resolve; });
+    const transport = new MapTransport(responses);
+    const client = new LargeMasterSyncV3Client({ store, transport, downloadConcurrency: 2,
+      storageStats: async () => ({ availableBytes: 1e9, totalBytes: 2e9 }), maxRetries: 0,
+      fault: (point, context) => {
+        if (point === 'parse' && context.chunkIndex === 0) {
+          setPosSaleActivity({ active: true, cartCount: 1 });
+          parsed();
+        }
+      },
+    });
+    const syncing = client.resumeSync(SYNC_ID);
+    await parseReached;
+    await new Promise(resolve => setTimeout(resolve, 5));
+    assert.equal(transport.requests.some(path => path.endsWith('/chunks/2')), false);
+    assert.equal((await store.readProgress(SYNC_ID))?.chunks.length, 0);
+    setPosSaleActivity({ active: false });
+    await syncing;
+    assert.equal(transport.requests.some(path => path.endsWith('/chunks/2')), true);
+  } finally {
+    resetLargeMasterSyncV3OperationGateForTests();
+    setPosSaleActivity({ active: false });
+    Object.defineProperty(globalThis, 'window', { value: previousWindow, configurable: true, writable: true });
+  }
+});
+
 test('dark lifecycle is wired but cannot load runtime or start network work', async () => {
   resetLargeMasterSyncV3LifecycleForTests();
   assert.deepEqual(await bootstrapLargeMasterSyncV3Lifecycle(undefined), { enabled: false, runtime: null });

@@ -1,4 +1,4 @@
-import { POS_SALE_ACTIVITY_EVENT, isPosSaleActive, waitForPosSaleIdle } from '../../utils/posSaleActivity';
+import { POS_SALE_ACTIVITY_EVENT, isPosSaleActive } from '../../utils/posSaleActivity';
 
 export type LargeMasterSyncV3CriticalOperation = 'PAYMENT' | 'PRINT';
 
@@ -28,27 +28,36 @@ export const runWithLargeMasterSyncV3CriticalOperation = async <T>(
   }
 };
 
-export const waitForLargeMasterSyncV3OperationalWindow = async (): Promise<number> => {
+export const waitForLargeMasterSyncV3OperationalWindow = async (signal?: AbortSignal): Promise<number> => {
   const startedAt = performance.now();
+  const abortError = () => new DOMException('Request aborted', 'AbortError');
   while (isPosSaleActive() || activeOperations.size) {
-    await waitForPosSaleIdle();
-    if (!activeOperations.size && !isPosSaleActive()) break;
-    await new Promise<void>(resolve => {
+    if (signal?.aborted) throw abortError();
+    await new Promise<void>((resolve, reject) => {
+      const cleanup = () => {
+        listeners.delete(check);
+        if (typeof window !== 'undefined') window.removeEventListener(POS_SALE_ACTIVITY_EVENT, check);
+        signal?.removeEventListener('abort', abort);
+      };
       const check = () => {
         if (activeOperations.size || isPosSaleActive()) return;
-        listeners.delete(check);
-        if (typeof window !== 'undefined') {
-          window.removeEventListener(POS_SALE_ACTIVITY_EVENT, check);
-        }
+        cleanup();
         resolve();
+      };
+      const abort = () => {
+        cleanup();
+        reject(abortError());
       };
       listeners.add(check);
       if (typeof window !== 'undefined') {
         window.addEventListener(POS_SALE_ACTIVITY_EVENT, check);
       }
+      signal?.addEventListener('abort', abort, { once: true });
+      if (signal?.aborted) abort();
       check();
     });
   }
+  if (signal?.aborted) throw abortError();
   return performance.now() - startedAt;
 };
 

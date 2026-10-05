@@ -58,6 +58,8 @@ export interface LargeMasterSyncV3ClientOptions {
   storageStats?: () => Promise<LargeMasterSyncV3StorageStats>;
   metric?: (metric: LargeMasterSyncV3Metric) => void;
   maxRetries?: number;
+  /** Opt-in, bounded overlap of downloads within one dataset; SQLite applies remain serial. */
+  downloadConcurrency?: 1 | 2;
   maxManifestPolls?: number;
   backoffMs?: (attempt: number) => number;
   requestTimeoutMs?: number;
@@ -79,6 +81,17 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
 const SHA256 = /^[0-9a-f]{64}$/i;
 const encoder = new TextEncoder();
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+const abortError = () => new DOMException('Request aborted', 'AbortError');
+const sleepWithSignal = (ms: number, signal?: AbortSignal): Promise<void> => {
+  if (signal?.aborted) return Promise.reject(abortError());
+  return new Promise<void>((resolve, reject) => {
+    const done = () => { clearTimeout(timer); signal?.removeEventListener('abort', abort); resolve(); };
+    const abort = () => { clearTimeout(timer); signal?.removeEventListener('abort', abort); reject(abortError()); };
+    const timer = setTimeout(done, ms);
+    signal?.addEventListener('abort', abort, { once: true });
+    if (signal?.aborted) abort();
+  });
+};
 const asObject = (value: unknown): Record<string, unknown> => value && typeof value === 'object' && !Array.isArray(value)
   ? value as Record<string, unknown> : {};
 const header = (headers: Record<string, string>, name: string): string => {
@@ -189,6 +202,7 @@ export class LargeMasterSyncV3Client {
   private readonly backoffMs: (attempt: number) => number;
   private readonly storageStats: () => Promise<LargeMasterSyncV3StorageStats>;
   private readonly requestTimeoutMs: number;
+  private readonly downloadConcurrency: 1 | 2;
 
   constructor(private readonly options: LargeMasterSyncV3ClientOptions) {
     this.maxRetries = options.maxRetries ?? 3;
@@ -196,6 +210,7 @@ export class LargeMasterSyncV3Client {
     this.backoffMs = options.backoffMs ?? (attempt => Math.min(8000, 500 * 2 ** attempt));
     this.storageStats = options.storageStats ?? getNativeLargeMasterSyncV3StorageStats;
     this.requestTimeoutMs = options.requestTimeoutMs ?? 30_000;
+    this.downloadConcurrency = options.downloadConcurrency === 2 ? 2 : 1;
   }
 
   private requireStore(): LargeMasterSyncV3Store {
@@ -279,8 +294,9 @@ export class LargeMasterSyncV3Client {
         return { envelope, checksum, recordCount: expectedRecordCount, rawBytes, rawText: response.text };
       } catch (error) {
         lastError = error;
+        if (signal?.aborted) throw abortError();
         if (!this.retryable(error) || attempt === this.maxRetries) throw error;
-        await sleep(this.backoffMs(attempt));
+        await sleepWithSignal(this.backoffMs(attempt), signal);
       }
     }
     throw lastError;
@@ -349,24 +365,65 @@ export class LargeMasterSyncV3Client {
       const expected = manifest.datasets[dataset]!;
       let progress = await store.readProgress(syncId);
       const applied = new Set(progress?.chunks.filter(chunk => chunk.dataset === dataset).map(chunk => chunk.chunkIndex));
-      for (let index = 0; index < expected.chunks; index += 1) {
-        if (applied.has(index)) continue;
-        totalPauseMs += await waitForLargeMasterSyncV3OperationalWindow();
-        const chunk = await this.getChunk(manifest, dataset, index, signal);
-        // Close the race where a sale/payment/print begins while the chunk is downloading or parsing.
-        totalPauseMs += await waitForLargeMasterSyncV3OperationalWindow();
-        const result = await this.applyChunk(chunk);
-        if (result === 'APPLIED') {
-          appliedRecords += chunk.recordCount;
-          appliedChunks += 1;
+      const remaining = Array.from({ length: expected.chunks }, (_, index) => index).filter(index => !applied.has(index));
+      const controller = new AbortController();
+      const forwardAbort = () => controller.abort();
+      signal?.addEventListener('abort', forwardAbort, { once: true });
+      if (signal?.aborted) controller.abort();
+      type DownloadResult = { chunk: LargeMasterSyncV3Chunk; error?: never } | { chunk?: never; error: unknown };
+      const pending = new Map<number, Promise<DownloadResult>>();
+      let next = 0;
+      let failed = false;
+      let firstError: unknown;
+      const launch = () => {
+        while (pending.size < this.downloadConcurrency && next < remaining.length
+          && !controller.signal.aborted && !failed) {
+          const index = remaining[next++];
+          const task: Promise<DownloadResult> = (async () => {
+            totalPauseMs += await waitForLargeMasterSyncV3OperationalWindow(controller.signal);
+            return this.getChunk(manifest, dataset, index, controller.signal);
+          })().then(chunk => ({ chunk }), error => {
+            if (!failed) { failed = true; firstError = error; }
+            controller.abort();
+            return { error };
+          });
+          pending.set(index, task);
         }
-        progress = await store.readProgress(syncId);
-        this.metric({ event: 'chunk_progress', syncId, syncVersion: manifest.syncVersion, dataset,
-          chunkIndex: index, progress: expected.chunks ? Number(progress?.datasets.find(item => item.dataset === dataset)?.appliedChunks || 0) / expected.chunks : 1,
-          sqliteFileSize: await store.getDatabaseSizeBytes() });
+      };
+      try {
+        launch();
+        for (const index of remaining) {
+          const task = pending.get(index);
+          if (!task) throw failed ? firstError : abortError();
+          const downloaded = await task;
+          pending.delete(index);
+          if ('error' in downloaded || failed) throw failed ? firstError : downloaded.error;
+          if (this.downloadConcurrency === 2) launch();
+          // Close the race where a sale/payment/print begins while the chunk is downloading or parsing.
+          totalPauseMs += await waitForLargeMasterSyncV3OperationalWindow(controller.signal);
+          if (failed) throw firstError;
+          const chunk = downloaded.chunk;
+          const result = await this.applyChunk(chunk);
+          if (failed || controller.signal.aborted) throw failed ? firstError : abortError();
+          if (result === 'APPLIED') {
+            appliedRecords += chunk.recordCount;
+            appliedChunks += 1;
+          }
+          progress = await store.readProgress(syncId);
+          this.metric({ event: 'chunk_progress', syncId, syncVersion: manifest.syncVersion, dataset,
+            chunkIndex: index, progress: expected.chunks ? Number(progress?.datasets.find(item => item.dataset === dataset)?.appliedChunks || 0) / expected.chunks : 1,
+            sqliteFileSize: await store.getDatabaseSizeBytes() });
+          if (this.downloadConcurrency === 1) launch();
+        }
+      } finally {
+        controller.abort();
+        await Promise.all(pending.values());
+        signal?.removeEventListener('abort', forwardAbort);
       }
+      if (signal?.aborted) throw abortError();
       await this.validateDataset(manifest, dataset);
     }
+    if (signal?.aborted) throw abortError();
     await this.validateSync(manifest);
     const runtime = await this.activateSync(syncId);
     const totalSyncMs = performance.now() - startedAt;
