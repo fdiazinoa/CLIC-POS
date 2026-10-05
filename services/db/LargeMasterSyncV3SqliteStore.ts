@@ -48,6 +48,21 @@ const finiteNumber = (value: unknown, key: string): number => {
 const now = () => new Date().toISOString();
 const rows = (result: QueryResult): Array<Record<string, unknown>> => Array.isArray(result.values) ? result.values : [];
 const first = (result: QueryResult): Record<string, unknown> | null => rows(result)[0] || null;
+const operationalRecord = (row: RecordObject): RecordObject => {
+  if (typeof row.record_json !== 'string') throw new LargeMasterSyncV3Error('SYNC_V3_OPERATIONAL_RECORD_MISSING');
+  try {
+    const parsed: unknown = JSON.parse(row.record_json);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new LargeMasterSyncV3Error('SYNC_V3_OPERATIONAL_RECORD_INVALID');
+    }
+    return parsed as RecordObject;
+  } catch {
+    throw new LargeMasterSyncV3Error('SYNC_V3_OPERATIONAL_RECORD_INVALID');
+  }
+};
+const requireOperationalVersion = (runtime: LargeMasterSyncV3RuntimeVersion): void => {
+  if ((runtime.contractVersion || 1) < 2) throw new LargeMasterSyncV3Error('SYNC_V3_OPERATIONAL_CONTRACT_REQUIRED');
+};
 
 export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
   constructor(
@@ -62,11 +77,12 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
       await db.execute('BEGIN IMMEDIATE TRANSACTION;', false);
       try {
         const existing = first(await db.query(
-          'SELECT sync_version, schema_version, manifest_json, status FROM sync_v3_sessions WHERE sync_id = ?',
+          'SELECT sync_version, schema_version, contract_version, manifest_json, status FROM sync_v3_sessions WHERE sync_id = ?',
           [manifest.syncId],
         ));
         if (existing && (Number(existing.sync_version) !== manifest.syncVersion
           || Number(existing.schema_version) !== manifest.schemaVersion
+          || Number(existing.contract_version) !== Number(manifest.contractVersion || 1)
           || String(existing.manifest_json) !== JSON.stringify(manifest))) {
           throw new LargeMasterSyncV3Error('SYNC_V3_RESUME_MANIFEST_MISMATCH');
         }
@@ -85,9 +101,10 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
         }
         const timestamp = now();
         await db.run(`INSERT OR IGNORE INTO sync_v3_sessions
-          (sync_id, sync_version, schema_version, status, manifest_json, created_at, updated_at)
-          VALUES (?, ?, 3, 'STAGING', ?, ?, ?)`,
-        [manifest.syncId, manifest.syncVersion, JSON.stringify(manifest), manifest.createdAt, timestamp], false);
+          (sync_id, sync_version, schema_version, contract_version, status, manifest_json, created_at, updated_at)
+          VALUES (?, ?, 3, ?, 'STAGING', ?, ?, ?)`,
+        [manifest.syncId, manifest.syncVersion, manifest.contractVersion || 1,
+          JSON.stringify(manifest), manifest.createdAt, timestamp], false);
         for (const dataset of LARGE_MASTER_SYNC_V3_DATASETS) {
           const expected = manifest.datasets[dataset];
           if (!expected) continue;
@@ -172,7 +189,7 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
       await db.execute('BEGIN IMMEDIATE TRANSACTION;', false);
       try {
         const session = first(await db.query(
-          "SELECT sync_version, status FROM sync_v3_sessions WHERE sync_id = ? AND status = 'STAGING'",
+          "SELECT sync_version, contract_version, status FROM sync_v3_sessions WHERE sync_id = ? AND status = 'STAGING'",
           [chunk.envelope.syncId],
         ));
         if (!session) throw new LargeMasterSyncV3Error('SYNC_V3_SESSION_NOT_STAGING');
@@ -202,7 +219,7 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
         for (let offset = 0; offset < chunk.envelope.records.length; offset += CHUNK_SUB_BATCH_SIZE) {
           const batch = chunk.envelope.records.slice(offset, offset + CHUNK_SUB_BATCH_SIZE);
           await this.executeRecordBatch(db, batch.map(rawRecord =>
-            this.recordStatement(chunk.envelope.dataset, syncVersion, object(rawRecord))));
+            this.recordStatement(chunk.envelope.dataset, syncVersion, Number(session.contract_version || 1), object(rawRecord))));
         }
         await this.fault?.('apply_after_records', {
           syncId: chunk.envelope.syncId, dataset: chunk.envelope.dataset, chunkIndex: chunk.envelope.chunkIndex,
@@ -288,12 +305,14 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
         throw new LargeMasterSyncV3Error('SYNC_V3_ARTICLE_TAX_REFERENCE_INVALID');
       }
       const orphanTax = first(await db.query(`SELECT a.article_id FROM master_v3_articles a
+        JOIN sync_v3_sessions s ON s.sync_id = ? AND s.sync_version = a.sync_version
         JOIN json_each(a.tax_ids_json) tax_ref
         LEFT JOIN master_v3_taxes tax ON tax.sync_version = a.sync_version
           AND tax.tax_id = CAST(tax_ref.value AS TEXT)
+          AND (s.contract_version < 2 OR tax.active = 1)
         WHERE a.sync_version = ? AND (
           typeof(tax_ref.value) != 'text' OR trim(CAST(tax_ref.value AS TEXT)) = '' OR tax.tax_id IS NULL
-        ) LIMIT 1`, [syncVersion]));
+        ) LIMIT 1`, [syncId, syncVersion]));
       if (orphanTax) {
         throw new LargeMasterSyncV3Error('SYNC_V3_ARTICLE_TAX_REFERENCE_INVALID');
       }
@@ -321,15 +340,17 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
   async activate(syncId: string): Promise<LargeMasterSyncV3RuntimeVersion> {
     return this.writeLock(async () => {
       const db = this.connection();
-      const alreadyActive = first(await db.query(`SELECT s.sync_version FROM sync_v3_sessions s
+      const alreadyActive = first(await db.query(`SELECT s.sync_version, s.contract_version FROM sync_v3_sessions s
         JOIN master_v3_state state ON state.singleton = 1
         WHERE s.sync_id = ? AND s.status = 'ACTIVE'
         AND state.active_sync_id = s.sync_id AND state.active_version = s.sync_version`, [syncId]));
-      if (alreadyActive) return { syncId, syncVersion: Number(alreadyActive.sync_version) };
+      if (alreadyActive) return { syncId, syncVersion: Number(alreadyActive.sync_version),
+        ...(Number(alreadyActive.contract_version) >= 2
+          ? { contractVersion: Number(alreadyActive.contract_version) } : {}) };
       await db.execute('BEGIN IMMEDIATE TRANSACTION;', false);
       try {
         const session = first(await db.query(
-          "SELECT sync_version FROM sync_v3_sessions WHERE sync_id = ? AND status = 'VALIDATED'", [syncId],
+          "SELECT sync_version, contract_version FROM sync_v3_sessions WHERE sync_id = ? AND status = 'VALIDATED'", [syncId],
         ));
         const state = first(await db.query('SELECT * FROM master_v3_state WHERE singleton = 1'));
         if (!session || String(state?.staging_sync_id || '') !== syncId
@@ -349,7 +370,8 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
             [timestamp, state.active_sync_id], false);
         }
         await db.execute('COMMIT;', false);
-        return { syncId, syncVersion: Number(session.sync_version) };
+        return { syncId, syncVersion: Number(session.sync_version),
+          ...(Number(session.contract_version) >= 2 ? { contractVersion: Number(session.contract_version) } : {}) };
       } catch (error) {
         await db.execute('ROLLBACK;', false).catch(() => undefined);
         throw error;
@@ -377,8 +399,13 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
           await db.run("UPDATE sync_v3_sessions SET status = 'ROLLED_BACK', updated_at = ? WHERE sync_id = ?",
             [timestamp, state.active_sync_id], false);
         }
+        const restored = first(await db.query(
+          'SELECT contract_version FROM sync_v3_sessions WHERE sync_id = ?', [state.previous_sync_id],
+        ));
         await db.execute('COMMIT;', false);
-        return { syncId: String(state.previous_sync_id), syncVersion: Number(state.previous_version) };
+        return { syncId: String(state.previous_sync_id), syncVersion: Number(state.previous_version),
+          ...(Number(restored?.contract_version) >= 2
+            ? { contractVersion: Number(restored?.contract_version) } : {}) };
       } catch (error) {
         await db.execute('ROLLBACK;', false).catch(() => undefined);
         throw error;
@@ -387,11 +414,13 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
   }
 
   async getActiveRuntimeVersion(): Promise<LargeMasterSyncV3RuntimeVersion | null> {
-    const state = first(await this.connection().query(
-      'SELECT active_sync_id, active_version FROM master_v3_state WHERE singleton = 1',
-    ));
+    const state = first(await this.connection().query(`SELECT state.active_sync_id, state.active_version,
+      session.contract_version FROM master_v3_state state
+      LEFT JOIN sync_v3_sessions session ON session.sync_id = state.active_sync_id
+      WHERE state.singleton = 1`));
     return state?.active_sync_id && state.active_version != null
-      ? { syncId: String(state.active_sync_id), syncVersion: Number(state.active_version) } : null;
+      ? { syncId: String(state.active_sync_id), syncVersion: Number(state.active_version),
+        ...(Number(state.contract_version) >= 2 ? { contractVersion: Number(state.contract_version) } : {}) } : null;
   }
 
   async listArticlesPage(runtime: LargeMasterSyncV3RuntimeVersion, afterArticleId: string | null, limit: number): Promise<Record<string, unknown>[]> {
@@ -402,6 +431,50 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
       FROM master_v3_articles a WHERE a.sync_version = ?
       AND a.article_id > COALESCE(?, '') ORDER BY a.article_id LIMIT ?`,
     [runtime.syncVersion, afterArticleId, safeLimit]));
+  }
+
+  async searchOperationalArticles(runtime: LargeMasterSyncV3RuntimeVersion, query: string, categoryId: string | null = null, limit = 60): Promise<Record<string, unknown>[]> {
+    requireOperationalVersion(runtime);
+    const normalizedQuery = query.trim().toLowerCase().slice(0, 120);
+    const safeLimit = Math.max(1, Math.min(100, Math.floor(limit)));
+    const result = await this.connection().query(`SELECT record_json FROM master_v3_articles
+      WHERE sync_version = ? AND active = 1 AND sellable = 1 AND record_json IS NOT NULL
+      AND (? IS NULL OR category_id = ?)
+      AND (? = '' OR instr(lower(coalesce(sku, '')), ?) > 0
+        OR instr(lower(coalesce(description, '')), ?) > 0)
+      ORDER BY article_id LIMIT ?`, [runtime.syncVersion, categoryId, categoryId,
+      normalizedQuery, normalizedQuery, normalizedQuery, safeLimit]);
+    return rows(result).map(operationalRecord);
+  }
+
+  async getOperationalArticle(runtime: LargeMasterSyncV3RuntimeVersion, articleId: string): Promise<Record<string, unknown> | null> {
+    requireOperationalVersion(runtime);
+    const row = first(await this.connection().query(`SELECT record_json FROM master_v3_articles
+      WHERE sync_version = ? AND article_id = ? AND active = 1 AND sellable = 1`,
+    [runtime.syncVersion, articleId]));
+    return row ? operationalRecord(row) : null;
+  }
+
+  async getOperationalTariffs(runtime: LargeMasterSyncV3RuntimeVersion): Promise<Record<string, unknown>[]> {
+    requireOperationalVersion(runtime);
+    const result = await this.connection().query(`SELECT record_json FROM master_v3_tariffs
+      WHERE sync_version = ? AND active = 1 ORDER BY tariff_id`, [runtime.syncVersion]);
+    return rows(result).map(operationalRecord);
+  }
+
+  async getOperationalTaxes(runtime: LargeMasterSyncV3RuntimeVersion): Promise<Record<string, unknown>[]> {
+    requireOperationalVersion(runtime);
+    const result = await this.connection().query(`SELECT record_json FROM master_v3_taxes
+      WHERE sync_version = ? AND active = 1 ORDER BY tax_id`, [runtime.syncVersion]);
+    return rows(result).map(operationalRecord);
+  }
+
+  async getOperationalVariants(runtime: LargeMasterSyncV3RuntimeVersion, articleId: string): Promise<Record<string, unknown>[]> {
+    requireOperationalVersion(runtime);
+    const result = await this.connection().query(`SELECT record_json FROM master_v3_variants
+      WHERE sync_version = ? AND article_id = ? AND active = 1 ORDER BY variant_id`,
+    [runtime.syncVersion, articleId]);
+    return rows(result).map(operationalRecord);
   }
 
   async getPrices(runtime: LargeMasterSyncV3RuntimeVersion, articleIds: string[], tariffId: string): Promise<Array<{ articleId: string; tariffId: string; price: number }>> {
@@ -481,43 +554,76 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
     for (const entry of statements) await db.run(entry.statement, entry.values, false);
   }
 
-  private recordStatement(dataset: LargeMasterSyncV3Dataset, version: number, row: RecordObject): SQLiteStatement {
+  private recordStatement(dataset: LargeMasterSyncV3Dataset, version: number, contractVersion: number, row: RecordObject): SQLiteStatement {
+    const recordJson = contractVersion >= 2 ? JSON.stringify(row) : null;
     if (dataset === 'articles') {
       const taxIds = Array.isArray(row.taxIds) ? row.taxIds.map(String) : [];
+      if (contractVersion >= 2 && (typeof row.active !== 'boolean'
+        || typeof row.sellable !== 'boolean' || typeof row.inventoriable !== 'boolean'
+        || typeof row.taxable !== 'boolean' || !Array.isArray(row.taxIds)
+        || (row.active && row.sellable && (typeof row.name !== 'string' || !row.name.trim())))) {
+        throw new LargeMasterSyncV3Error('SYNC_V3_OPERATIONAL_ARTICLE_INVALID');
+      }
       return { statement: `INSERT INTO master_v3_articles
-        (sync_version, article_id, sku, description, article_type, uom, taxable, tax_ids_json, family_id, category_id, active)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (sync_version, article_id, sku, description, article_type, uom, taxable, tax_ids_json,
+         family_id, category_id, active, sellable, record_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(sync_version, article_id) DO UPDATE SET sku=excluded.sku, description=excluded.description,
         article_type=excluded.article_type, uom=excluded.uom, taxable=excluded.taxable,
-        tax_ids_json=excluded.tax_ids_json, family_id=excluded.family_id, category_id=excluded.category_id, active=excluded.active`,
-      values: [version, requiredId(row, 'id'), optionalText(row.sku), optionalText(row.description), optionalText(row.type),
+        tax_ids_json=excluded.tax_ids_json, family_id=excluded.family_id, category_id=excluded.category_id,
+        active=excluded.active, sellable=excluded.sellable, record_json=excluded.record_json`,
+      values: [version, requiredId(row, 'id'), optionalText(row.sku), optionalText(row.name || row.description), optionalText(row.type),
         optionalText(row.uom), row.taxable === true ? 1 : 0, JSON.stringify(taxIds), optionalText(row.familyId),
-        optionalText(row.categoryId), booleanInt(row.active)] };
+        optionalText(row.categoryId), booleanInt(row.active), booleanInt(row.sellable), recordJson] };
     }
     if (dataset === 'prices') {
+      if (contractVersion >= 2 && (typeof row.price !== 'number'
+        || !Number.isFinite(row.price) || row.price < 0)) {
+        throw new LargeMasterSyncV3Error('SYNC_V3_OPERATIONAL_PRICE_INVALID');
+      }
       return { statement: `INSERT INTO master_v3_prices(sync_version, article_id, tariff_id, price) VALUES (?, ?, ?, ?)
         ON CONFLICT(sync_version, article_id, tariff_id) DO UPDATE SET price=excluded.price`,
       values: [version, requiredId(row, 'articleId'), requiredId(row, 'tariffId'), finiteNumber(row.price, 'price')] };
     }
     if (dataset === 'tariffs') {
-      return { statement: `INSERT INTO master_v3_tariffs(sync_version, tariff_id, code, name, currency, active)
-        VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(sync_version, tariff_id) DO UPDATE SET
-        code=excluded.code, name=excluded.name, currency=excluded.currency, active=excluded.active`,
-      values: [version, requiredId(row, 'id'), optionalText(row.code), optionalText(row.name), optionalText(row.currency), booleanInt(row.active)] };
+      if (contractVersion >= 2 && (typeof row.taxIncluded !== 'boolean'
+        || typeof row.active !== 'boolean'
+        || (row.active && (typeof row.name !== 'string' || !row.name.trim())))) {
+        throw new LargeMasterSyncV3Error('SYNC_V3_OPERATIONAL_TARIFF_INVALID');
+      }
+      return { statement: `INSERT INTO master_v3_tariffs(sync_version, tariff_id, code, name, currency, active, record_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(sync_version, tariff_id) DO UPDATE SET
+        code=excluded.code, name=excluded.name, currency=excluded.currency,
+        active=excluded.active, record_json=excluded.record_json`,
+      values: [version, requiredId(row, 'id'), optionalText(row.code), optionalText(row.name),
+        optionalText(row.currency), booleanInt(row.active), recordJson] };
     }
     if (dataset === 'taxes') {
-      return { statement: `INSERT INTO master_v3_taxes(sync_version, tax_id, code, name, rate, active)
-        VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(sync_version, tax_id) DO UPDATE SET
-        code=excluded.code, name=excluded.name, rate=excluded.rate, active=excluded.active`,
+      if (contractVersion >= 2 && (typeof row.active !== 'boolean'
+        || (row.active && (typeof row.name !== 'string' || !row.name.trim()
+          || typeof row.rate !== 'number' || !Number.isFinite(row.rate)
+          || row.rate < 0 || row.rate > 1)))) {
+        throw new LargeMasterSyncV3Error('SYNC_V3_OPERATIONAL_TAX_INVALID');
+      }
+      return { statement: `INSERT INTO master_v3_taxes(sync_version, tax_id, code, name, rate, active, record_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(sync_version, tax_id) DO UPDATE SET
+        code=excluded.code, name=excluded.name, rate=excluded.rate,
+        active=excluded.active, record_json=excluded.record_json`,
       values: [version, requiredId(row, 'id'), optionalText(row.code), optionalText(row.name),
-        row.rate == null ? null : finiteNumber(row.rate, 'rate'), booleanInt(row.active)] };
+        row.rate == null ? null : finiteNumber(row.rate, 'rate'), booleanInt(row.active), recordJson] };
     }
     if (dataset === 'variants') {
-      return { statement: `INSERT INTO master_v3_variants(sync_version, article_id, variant_id, code, description, active)
-        VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(sync_version, article_id, variant_id) DO UPDATE SET
-        code=excluded.code, description=excluded.description, active=excluded.active`,
+      if (contractVersion >= 2 && (typeof row.active !== 'boolean'
+        || !Array.isArray(row.barcodes) || !row.attributeValues
+        || typeof row.attributeValues !== 'object' || Array.isArray(row.attributeValues))) {
+        throw new LargeMasterSyncV3Error('SYNC_V3_OPERATIONAL_VARIANT_INVALID');
+      }
+      return { statement: `INSERT INTO master_v3_variants(sync_version, article_id, variant_id, code, description, active, record_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(sync_version, article_id, variant_id) DO UPDATE SET
+        code=excluded.code, description=excluded.description,
+        active=excluded.active, record_json=excluded.record_json`,
       values: [version, requiredId(row, 'articleId'), requiredId(row, 'id'), optionalText(row.code),
-        optionalText(row.description), booleanInt(row.active)] };
+        optionalText(row.description), booleanInt(row.active), recordJson] };
     }
     if (dataset === 'barcodes') {
       const barcode = String(row.code ?? row.barcode ?? '').trim();

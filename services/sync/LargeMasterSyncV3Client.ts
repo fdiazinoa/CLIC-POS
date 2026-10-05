@@ -129,6 +129,34 @@ export const validateLargeMasterSyncV3Manifest = (input: unknown, expectedSyncId
     || !Number.isSafeInteger(manifest.syncVersion) || Number(manifest.syncVersion) < 0) {
     throw new LargeMasterSyncV3Error('SYNC_V3_MANIFEST_INVALID');
   }
+  const contractVersion = manifest.contractVersion === undefined
+    ? undefined : numeric(manifest.contractVersion, 'contractVersion');
+  if (contractVersion !== undefined && contractVersion < 1) {
+    throw new LargeMasterSyncV3Error('SYNC_V3_CONTRACT_INVALID');
+  }
+  let authority: LargeMasterSyncV3Manifest['authority'];
+  let supplementalCollections: LargeMasterSyncV3Manifest['supplementalCollections'];
+  if (contractVersion !== undefined && contractVersion >= 2) {
+    const declaredAuthority = asObject(manifest.authority);
+    if (declaredAuthority.catalog !== 'V3_SNAPSHOT'
+      || declaredAuthority.prices !== 'V3_SNAPSHOT'
+      || declaredAuthority.taxes !== 'V3_SNAPSHOT'
+      || declaredAuthority.inventory !== 'SEPARATE_COLLECTION') {
+      throw new LargeMasterSyncV3Error('SYNC_V3_CONTRACT_INVALID');
+    }
+    const declaredSupplemental = manifest.supplementalCollections;
+    if (!Array.isArray(declaredSupplemental) || declaredSupplemental.length !== 1) {
+      throw new LargeMasterSyncV3Error('SYNC_V3_CONTRACT_INVALID');
+    }
+    const inventory = asObject(declaredSupplemental[0]);
+    if (inventory.collection !== 'productInventory' || inventory.domain !== 'inventory'
+      || inventory.endpoint !== '/api/sync/collections/productInventory/full'
+      || inventory.consistency !== 'EVENTUAL_AFTER_V3_ACTIVATION') {
+      throw new LargeMasterSyncV3Error('SYNC_V3_CONTRACT_INVALID');
+    }
+    authority = declaredAuthority as LargeMasterSyncV3Manifest['authority'];
+    supplementalCollections = [inventory as NonNullable<LargeMasterSyncV3Manifest['supplementalCollections']>[number]];
+  }
   const sourceDatasets = asObject(manifest.datasets);
   const sourceKeys = Object.keys(sourceDatasets);
   if (sourceKeys.some(key => !(LARGE_MASTER_SYNC_V3_DATASETS as readonly string[]).includes(key))
@@ -153,11 +181,28 @@ export const validateLargeMasterSyncV3Manifest = (input: unknown, expectedSyncId
     syncId,
     syncVersion: Number(manifest.syncVersion),
     schemaVersion: 3,
+    ...(contractVersion === undefined ? {} : { contractVersion }),
     type: 'FULL',
     status: 'READY',
     createdAt: String(manifest.createdAt || ''),
     datasets,
+    ...(authority ? { authority, supplementalCollections } : {}),
   };
+};
+
+/** Never make a legacy laboratory snapshot authoritative for POS sales. */
+export const validateOperationalLargeMasterSyncV3Manifest = (
+  input: unknown,
+  expectedSyncId?: string,
+): LargeMasterSyncV3Manifest => {
+  const manifest = validateLargeMasterSyncV3Manifest(input, expectedSyncId);
+  if ((manifest.contractVersion || 1) < 2) {
+    throw new LargeMasterSyncV3Error('SYNC_V3_OPERATIONAL_CONTRACT_REQUIRED');
+  }
+  if (LARGE_MASTER_SYNC_V3_DATASETS.some(dataset => manifest.datasets[dataset] === undefined)) {
+    throw new LargeMasterSyncV3Error('SYNC_V3_OPERATIONAL_DATASETS_INCOMPLETE');
+  }
+  return manifest;
 };
 
 export const getNativeLargeMasterSyncV3StorageStats = async (): Promise<LargeMasterSyncV3StorageStats> => {

@@ -23,10 +23,24 @@ export interface LargeMasterSyncV3Manifest {
   syncId: string;
   syncVersion: number;
   schemaVersion: 3;
+  /** Absent on immutable laboratory sessions created before the POS catalog contract. */
+  contractVersion?: number;
   type: 'FULL';
   status: 'READY';
   createdAt: string;
   datasets: Partial<Record<LargeMasterSyncV3Dataset, LargeMasterSyncV3DatasetManifest>>;
+  authority?: {
+    catalog: 'V3_SNAPSHOT';
+    prices: 'V3_SNAPSHOT';
+    taxes: 'V3_SNAPSHOT';
+    inventory: 'SEPARATE_COLLECTION';
+  };
+  supplementalCollections?: Array<{
+    collection: 'productInventory';
+    domain: 'inventory';
+    endpoint: '/api/sync/collections/productInventory/full';
+    consistency: 'EVENTUAL_AFTER_V3_ACTIVATION';
+  }>;
 }
 
 export interface LargeMasterSyncV3ChunkEnvelope {
@@ -69,6 +83,7 @@ export interface LargeMasterSyncV3Progress {
 export interface LargeMasterSyncV3RuntimeVersion {
   syncId: string;
   syncVersion: number;
+  contractVersion?: number;
 }
 
 export interface LargeMasterSyncV3Store {
@@ -84,6 +99,11 @@ export interface LargeMasterSyncV3Store {
   getPragmaSnapshot(): Promise<Record<string, string | number | null>>;
   getDatabaseSizeBytes(): Promise<number>;
   listArticlesPage(runtime: LargeMasterSyncV3RuntimeVersion, afterArticleId: string | null, limit: number): Promise<Record<string, unknown>[]>;
+  searchOperationalArticles(runtime: LargeMasterSyncV3RuntimeVersion, query: string, categoryId?: string | null, limit?: number): Promise<Record<string, unknown>[]>;
+  getOperationalArticle(runtime: LargeMasterSyncV3RuntimeVersion, articleId: string): Promise<Record<string, unknown> | null>;
+  getOperationalTariffs(runtime: LargeMasterSyncV3RuntimeVersion): Promise<Record<string, unknown>[]>;
+  getOperationalTaxes(runtime: LargeMasterSyncV3RuntimeVersion): Promise<Record<string, unknown>[]>;
+  getOperationalVariants(runtime: LargeMasterSyncV3RuntimeVersion, articleId: string): Promise<Record<string, unknown>[]>;
   getPrices(runtime: LargeMasterSyncV3RuntimeVersion, articleIds: string[], tariffId: string): Promise<Array<{ articleId: string; tariffId: string; price: number }>>;
   findBarcode(runtime: LargeMasterSyncV3RuntimeVersion, barcode: string): Promise<{ articleId: string; variantId: string | null } | null>;
   /** Explicit maintenance path; callers schedule it only while the POS is operationally idle. */

@@ -22,6 +22,26 @@ export class LargeMasterSyncV3Runtime {
     return this.store.listArticlesPage(this.version, afterArticleId, limit);
   }
 
+  searchOperationalArticles(query: string, categoryId?: string | null, limit = 60): Promise<Record<string, unknown>[]> {
+    return this.store.searchOperationalArticles(this.version, query, categoryId, limit);
+  }
+
+  getOperationalArticle(articleId: string): Promise<Record<string, unknown> | null> {
+    return this.store.getOperationalArticle(this.version, articleId);
+  }
+
+  getOperationalTariffs(): Promise<Record<string, unknown>[]> {
+    return this.store.getOperationalTariffs(this.version);
+  }
+
+  getOperationalTaxes(): Promise<Record<string, unknown>[]> {
+    return this.store.getOperationalTaxes(this.version);
+  }
+
+  getOperationalVariants(articleId: string): Promise<Record<string, unknown>[]> {
+    return this.store.getOperationalVariants(this.version, articleId);
+  }
+
   getPrices(articleIds: string[], tariffId: string) {
     return this.store.getPrices(this.version, articleIds, tariffId);
   }
