@@ -55,5 +55,7 @@ test('el cierre no incrementa dos veces la secuencia y difiere el recálculo del
   assert.doesNotMatch(completion, /pushCatalog\('internalSequences'\)/);
   assert.ok(deferredRefresh > 0);
   assert.ok(recalculate > deferredRefresh);
-  assert.match(completion, /db\.get\('products'\)/);
+  assert.match(completion, /readAppProducts\(\)/);
+  const readBoundary = source.slice(source.indexOf('const readAppProducts ='), source.indexOf('const MemoizedTableMap ='));
+  assert.match(readBoundary, /LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED\s*\? Promise\.resolve\(\[\]\)\s*: db\.get\('products'\)/);
 });

@@ -1,6 +1,10 @@
 import RecoveryCloseDialog from './components/RecoveryCloseDialog';
 import LargeMasterSyncV3CanaryScreen from './components/LargeMasterSyncV3CanaryScreen';
 import { LARGE_MASTER_SYNC_V3_CANARY } from './services/sync/LargeMasterSyncV3Canary';
+import { LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED } from './services/sync/LargeMasterSyncV3Authority';
+import LargeMasterSyncV3OperationalPOS from './components/LargeMasterSyncV3OperationalPOS';
+import { persistV3FinancialTransaction } from './services/sync/LargeMasterSyncV3FinancialCommit';
+import { getLargeMasterSyncV3OperationalSession } from './services/sync/LargeMasterSyncV3OperationalSession';
 import AutomaticRecoveryDialog from './components/AutomaticRecoveryDialog';
 import type { RecoveryCloseInput } from './services/recovery/RecoveryCloseController';
 import { originalProvenance } from './services/recovery/RecoveryRuntime';
@@ -129,7 +133,7 @@ import { buildCloseTaxSummary } from './utils/closeReceiptSummary';
 import { buildZReportPaymentMethodSummary } from './utils/zReportPaymentSummary';
 import { applyPromotions, hasProductPromotion } from './utils/promotionEngine';
 import { calculateTransactionTaxSummary } from './utils/taxSummary';
-import { calculateTransactionFiscalSummary, freezeAuthoritativeLineFiscalAmounts } from './utils/fiscalBreakdown';
+import { calculateLineFiscalValuesForTransaction, calculateTransactionFiscalSummary, freezeAuthoritativeLineFiscalAmounts } from './utils/fiscalBreakdown';
 import { buildTableAccountFiscalSummary, getPaymentFractionFiscalDifference } from './utils/tableAccountFiscalSummary';
 import { transferTableAccountItems } from './utils/tableAccountTransfer';
 import { commitRetiredTableAccountAfterAck, findRetiredTableAccountSuccessor } from './utils/tableAccountRetirement';
@@ -1600,7 +1604,7 @@ const hydrateNativeCatalogFromDb = async (
 
   try {
     const [dbProducts, dbWarehouses, dbProductStocks] = await Promise.all([
-      db.get('products') as Promise<Product[]>,
+      readAppProducts() as Promise<Product[]>,
       db.get('warehouses') as Promise<Warehouse[]>,
       db.get('productStocks') as Promise<ProductStock[]>,
     ]);
@@ -2001,7 +2005,9 @@ type PersistentPOSHostProps = React.ComponentProps<typeof POSInterface> & {
   tableDestination?: { trace: PosInteractionTrace; tableId: string; orderId: string; cart: CartItem[] } | null;
   onInteractive?: () => void;
 };
-const MemoizedPOSInterface = React.memo(POSInterface);
+const MemoizedPOSInterface = React.memo(LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED ? LargeMasterSyncV3OperationalPOS : POSInterface);
+const readAppProducts = (): Promise<Product[]> => LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED
+  ? Promise.resolve([]) : db.get('products') as Promise<Product[]>;
 const MemoizedTableMap = React.memo(TableMap);
 
 /** Keeps TableMap data fresh without rerendering it for unrelated POS state. */
@@ -2713,7 +2719,7 @@ const AppContent: React.FC = () => {
           setConfig(refreshedConfig);
         }
 
-        const refreshedProducts = await db.get('products') as Product[];
+        const refreshedProducts = await readAppProducts() as Product[];
         if (Array.isArray(refreshedProducts)) {
           setProducts(refreshedProducts);
         }
@@ -2753,7 +2759,7 @@ const AppContent: React.FC = () => {
           setConfig(refreshedConfigRaw as BusinessConfig);
         }
 
-        const refreshedProducts = await db.get('products') as Product[];
+        const refreshedProducts = await readAppProducts() as Product[];
         if (Array.isArray(refreshedProducts)) {
           setProducts(refreshedProducts);
         }
@@ -7005,7 +7011,8 @@ const AppContent: React.FC = () => {
       try {
         console.log('⏳ Calling db.init()...');
         const data = await Promise.race([
-          db.init(),
+          db.init(undefined, LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED
+            ? { skipCollections: ['products', 'productPrices', 'taxes'] } : undefined),
           new Promise<never>((_, reject) => {
             window.setTimeout(() => {
               reject(new Error('Timeout inicializando base local (IndexedDB). Si persiste, cierra otras pestañas de CLIC POS y reintenta.'));
@@ -7878,7 +7885,7 @@ const AppContent: React.FC = () => {
               const normalizeCategory = (value: any) =>
                 typeof value === 'string' ? value.trim().toLowerCase() : '';
 
-              const localProducts = await db.get('products') as Product[];
+              const localProducts = await readAppProducts() as Product[];
               const localCount = Array.isArray(localProducts) ? localProducts.length : 0;
               const sellableCategories = new Set(
                 (localProducts || [])
@@ -7924,7 +7931,7 @@ const AppContent: React.FC = () => {
             try {
               const [dbConfig, dbProducts, dbUsers, dbRoles, dbSequences] = await Promise.all([
                 db.get('config') as Promise<any>,
-                db.get('products') as Promise<Product[]>,
+                readAppProducts() as Promise<Product[]>,
                 db.get('users') as Promise<User[]>,
                 db.get('roles') as Promise<RoleDefinition[]>,
                 db.get('internalSequences') as Promise<any[]>
@@ -8094,7 +8101,7 @@ const AppContent: React.FC = () => {
                     await db.recalculateProductStock(productId, warehouseId);
                   }
                 }
-                const updatedProducts = await db.get('products') as Product[];
+                const updatedProducts = await readAppProducts() as Product[];
                 setProducts(updatedProducts);
               });
             }
@@ -8169,7 +8176,7 @@ const AppContent: React.FC = () => {
         }
 
         // Refresh products
-        const syncedProducts = await db.get('products') as Product[];
+        const syncedProducts = await readAppProducts() as Product[];
         if (syncedProducts && syncedProducts.length > 0 && syncedProducts.length !== products.length) {
           console.log(`🔄 Refreshing products list after sync: ${syncedProducts.length} products found`);
           setProducts(syncedProducts);
@@ -8279,7 +8286,7 @@ const AppContent: React.FC = () => {
       }
 
       if (pendingCatalogRefresh.products) {
-        const freshProducts = await db.get('products') as Product[];
+        const freshProducts = await readAppProducts() as Product[];
         if (Array.isArray(freshProducts) && freshProducts.length > 0) {
           freezeCount('CATALOG_STATE_APPLY_COUNT', freshProducts.length);
           setProducts(freshProducts);
@@ -8343,6 +8350,7 @@ const AppContent: React.FC = () => {
       await waitForBackgroundSyncWindow();
       const startedAt = posCatalogDebugNow();
       const collection = event.type.replace('Updated', '');
+      if (LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED && ['products', 'productPrices', 'taxes'].includes(collection)) return;
       console.log(`🔔 App: Sync update received for ${collection}. Refreshing state...`);
 
       const freshData = await db.get(collection as any);
@@ -8408,10 +8416,11 @@ const AppContent: React.FC = () => {
     };
 
     const applyFiscalCatalogRefresh = async () => {
+      if (LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED) return;
       await waitForBackgroundSyncWindow();
       const [freshTaxes, freshProducts] = await Promise.all([
         db.get('taxes' as any) as Promise<TaxDefinition[]>,
-        db.get('products') as Promise<Product[]>,
+        readAppProducts() as Promise<Product[]>,
       ]);
       if (!Array.isArray(freshTaxes) || !Array.isArray(freshProducts) || freshProducts.length === 0) {
         throw new Error('FISCAL_CATALOG_REFRESH_INCOMPLETE');
@@ -8557,7 +8566,7 @@ const AppContent: React.FC = () => {
           .filter(Boolean);
 
         if (terminalAllowedCategories.length >= 2) {
-          const localProducts = await db.get('products') as Product[];
+          const localProducts = await readAppProducts() as Product[];
           const localCount = Array.isArray(localProducts) ? localProducts.length : 0;
           const sellableCategories = new Set(
             (localProducts || [])
@@ -8580,7 +8589,7 @@ const AppContent: React.FC = () => {
               `Forcing products pull...`
             );
             await syncManager.pullCatalog('products', true);
-            const refreshedProducts = await db.get('products') as Product[];
+            const refreshedProducts = await readAppProducts() as Product[];
             if (Array.isArray(refreshedProducts)) {
               setProducts(refreshedProducts);
             }
@@ -9674,10 +9683,10 @@ const AppContent: React.FC = () => {
         setCustomers([]);
         setTransactions([]);
         setProductStocks([]);
-        const starterProducts = await db.get('products') as Product[];
+        const starterProducts = await readAppProducts() as Product[];
         setProducts(Array.isArray(starterProducts) ? starterProducts : []);
       } else if (productSeedPackId) {
-        const starterProducts = await db.get('products') as Product[];
+        const starterProducts = await readAppProducts() as Product[];
         setProducts(Array.isArray(starterProducts) ? starterProducts : []);
       }
 
@@ -11261,6 +11270,22 @@ const AppContent: React.FC = () => {
   }, [syncFiscalDocument]);
 
   const handleTransactionComplete = async (txn: Transaction) => {
+    if (LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED) {
+      const terminal = (config.terminals || []).find(row => row.config?.currentDeviceId === deviceId);
+      const warehouseId = terminal?.config.inventoryScope?.defaultSalesWarehouseId;
+      if (!terminal || !warehouseId) throw new Error('SYNC_V3_CONFIGURED_WAREHOUSE_REQUIRED');
+      const result = await persistV3FinancialTransaction({ ...txn, terminalId: terminal.id,
+        terminalName: terminal.config.terminalName || terminal.id }, config, warehouseId,
+        { refund: txn.documentType === 'REFUND' });
+      setTransactions(previous => [...previous.filter(row => row.id !== result.transaction.id), result.transaction]);
+      if (result.transaction.customerId && result.transaction.pendingBalance) {
+        const updated = await db.getDocument('customers', result.transaction.customerId) as Customer | null;
+        if (updated) setCustomers(previous => previous.map(row => row.id === updated.id ? updated : row));
+      }
+      syncFiscalDocument(result.transaction).catch(console.error);
+      backgroundSyncManager.triggerSync().catch(console.error);
+      return;
+    }
     // Cover checkout paths that construct a transaction without transactionService.
     if (txn.customerId) {
       const customer = await db.getDocument('customers', txn.customerId) as Customer | null;
@@ -11399,7 +11424,7 @@ const AppContent: React.FC = () => {
           await db.recalculateProductStock(pId, wId);
         }
 
-        const refreshedProducts = await db.get('products') as Product[];
+        const refreshedProducts = await readAppProducts() as Product[];
         if (Array.isArray(refreshedProducts) && refreshedProducts.length > 0) {
           setProducts(refreshedProducts);
         } else {
@@ -12595,7 +12620,7 @@ const AppContent: React.FC = () => {
   ): Promise<Transaction | null> => {
     console.log("🔄 Procesando Devolución Integral:", { originalTx, items: itemsToRefund.length, reason });
 
-    const normalizedRefundItems = (itemsToRefund || [])
+    let normalizedRefundItems = (itemsToRefund || [])
       .map(item => ({
         ...item,
         quantity: Math.abs(Number(item.quantity || 0))
@@ -12622,14 +12647,43 @@ const AppContent: React.FC = () => {
       return null;
     }
 
+    let refundConfig = config;
+    if (LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED) {
+      const session = await getLargeMasterSyncV3OperationalSession();
+      refundConfig = await session.projectConfig(config);
+      const stamp = normalizedRefundItems[0]?.v3SaleAuthority;
+      await session.validate(refundConfig, normalizedRefundItems, stamp?.tariffId || '', stamp?.warehouseId || '', 'REFUND');
+    }
+
     // 1. Calculations
-    const refundSummary = calculateTransactionTaxSummary(
+    const currentTerminal = getCurrentTerminal();
+    const refundTaxIncluded = LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED
+      ? normalizedRefundItems[0].v3SaleAuthority!.taxIncluded : Boolean(originalTx.isTaxIncluded);
+    const v3RefundFiscal = LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED
+      ? calculateLineFiscalValuesForTransaction(normalizedRefundItems, refundConfig, {
+        isTaxIncluded: refundTaxIncluded, terminalConfig: currentTerminal?.config,
+        taxExempt: originalTx.customerSnapshot?.isTaxExempt === true,
+        allowedTaxIds: originalTx.serviceTaxPolicySnapshot?.taxIds,
+      }) : [];
+    const sumRefundFiscal = (key: 'netAmount' | 'taxAmount' | 'totalAmount') =>
+      Math.round(v3RefundFiscal.reduce((sum, row) => sum + row[key], 0) * 100) / 100;
+    const refundSummary = LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED
+      ? { netAmount: sumRefundFiscal('netAmount'), taxAmount: sumRefundFiscal('taxAmount'), total: sumRefundFiscal('totalAmount') }
+      : calculateTransactionTaxSummary(
       itemsToRefund,
-      config.taxes || [],
-      Boolean(originalTx.isTaxIncluded),
-      config.taxRate || 0
+      refundConfig.taxes || [],
+      refundTaxIncluded,
+      refundConfig.taxRate || 0
     );
     const refundTotal = refundSummary.total;
+    if (LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED) {
+      normalizedRefundItems = freezeAuthoritativeLineFiscalAmounts(normalizedRefundItems, refundConfig, {
+        isTaxIncluded: refundTaxIncluded, terminalConfig: currentTerminal?.config,
+        taxExempt: originalTx.customerSnapshot?.isTaxExempt === true,
+        transactionNetAmount: refundSummary.netAmount, transactionTaxAmount: refundSummary.taxAmount,
+        transactionTotal: refundTotal,
+      });
+    }
 
     // Check if full refund
     const totalOriginalQty = Array.from(refundAvailability.remaining.values()).reduce((acc, quantity) => acc + quantity, 0);
@@ -12648,7 +12702,6 @@ const AppContent: React.FC = () => {
     const resolvedCustomerName = originalTx.customerName || matchedCustomer?.name;
 
     // 2. Resolución fiscal para la nota de crédito
-    const currentTerminal = getCurrentTerminal();
     const currentTerminalId = currentTerminal?.id || config.terminals?.[0]?.id || 't1';
     const fiscalCompliance = getEffectiveFiscalComplianceConfig(config, currentTerminal?.config);
     const preparedAuthority = options.erpRefundAuthority;
@@ -12727,6 +12780,8 @@ const AppContent: React.FC = () => {
       status: 'REFUNDED',
       customerId: resolvedCustomerId,
       customerName: resolvedCustomerName,
+      ...(LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED ? { customerSnapshot: originalTx.customerSnapshot,
+        serviceType: originalTx.serviceType, serviceTaxPolicySnapshot: originalTx.serviceTaxPolicySnapshot } : {}),
       ncf: creditNoteNcf || undefined,
       ncfType: creditNoteNcf ? creditNoteFiscalType : undefined,
       legacyNcf: creditNoteNcf && !creditNoteFiscalType.startsWith('E') ? creditNoteNcf : undefined,
@@ -12744,7 +12799,7 @@ const AppContent: React.FC = () => {
       erpRefundSource: originalTx.erpRefundSource,
       erpRefundPreparation: options.erpRefundPreparation,
       refundReason: reason,
-      isTaxIncluded: originalTx.isTaxIncluded,
+      isTaxIncluded: refundTaxIncluded,
       syncStatus: 'PENDING'
     };
 
@@ -12767,12 +12822,14 @@ const AppContent: React.FC = () => {
           status: newStatus as any
         },
         persistOriginal: !originalTx.erpRefundSource,
+        adjustCustomerBalance: LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED,
+        skipWalletDeposit: options.skipWalletDeposit,
         conditions
       }
     );
 
     // 6. Financial Update (Customer Account & Wallet)
-    if (resolvedCustomerId) {
+    if (resolvedCustomerId && !LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED) {
       const customer = customers.find(c => c.id === resolvedCustomerId);
       if (customer) {
         let remainingRefund = refundTotal;
@@ -12815,7 +12872,7 @@ const AppContent: React.FC = () => {
     try {
       const [persistedTransactions, freshProducts] = await Promise.all([
         db.get('transactions') as Promise<Transaction[]>,
-        db.get('products') as Promise<Product[]>
+        readAppProducts() as Promise<Product[]>
       ]);
 
       if (Array.isArray(persistedTransactions)) {
@@ -14287,7 +14344,7 @@ const AppContent: React.FC = () => {
               }
 
               // 3. Refresh Products State
-              const refreshedProducts = await db.get('products') as Product[] || [];
+              const refreshedProducts = await readAppProducts() as Product[] || [];
               setProducts(refreshedProducts);
 
               if (permissionService.isMasterTerminal()) {
@@ -14912,7 +14969,7 @@ const AppContent: React.FC = () => {
               });
 
               const [freshProducts, freshSuppliers, freshOrders, freshTransfers, freshWarehouses] = await Promise.all([
-                db.get('products') as Promise<Product[]>,
+                readAppProducts() as Promise<Product[]>,
                 db.get('suppliers') as Promise<Supplier[]>,
                 db.get('purchaseOrders') as Promise<PurchaseOrder[]>,
                 db.get('transfers') as Promise<StockTransfer[]>,
@@ -14965,7 +15022,7 @@ const AppContent: React.FC = () => {
             terminalId={getCurrentTerminal()?.id || 'LOCAL'}
             onProcessed={async () => {
               const [freshProducts, freshOrders, freshTransfers, freshReceptions, freshStocks] = await Promise.all([
-                db.get('products') as Promise<Product[]>,
+                readAppProducts() as Promise<Product[]>,
                 db.get('purchaseOrders') as Promise<PurchaseOrder[]>,
                 db.get('transfers') as Promise<StockTransfer[]>,
                 db.get('receptions') as Promise<Reception[]>,
@@ -15179,7 +15236,7 @@ const AppContent: React.FC = () => {
       } else if (syncTarget.canPullMasters) {
         await syncManager.pullCatalog('products', true);
       }
-      const freshProducts = await db.get('products') as Product[];
+      const freshProducts = await readAppProducts() as Product[];
       if (Array.isArray(freshProducts) && freshProducts.length > 0) {
         setProducts(freshProducts);
       } else {

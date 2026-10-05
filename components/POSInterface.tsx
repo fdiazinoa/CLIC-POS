@@ -113,6 +113,7 @@ import {
 import {
    buildTransactionCustomerSnapshot,
    calculateTaxBreakdownFromItems,
+   calculateLineFiscalValuesForTransaction,
    consolidateTaxBreakdownForDisplay,
    formatTaxLineLabel,
    freezeAuthoritativeLineFiscalAmounts,
@@ -120,6 +121,8 @@ import {
 } from '../utils/fiscalBreakdown';
 import { formatCurrency } from '../utils/format';
 import { persistStandaloneRefundTransaction, persistStandaloneSaleHistory } from '../services/localRefundPersistence';
+import { setLargeMasterSyncV3CriticalOperation } from '../services/sync/LargeMasterSyncV3OperationGate';
+import { V3OperationalUIQueue } from './v3OperationalUIQueue';
 import { resolveCustomerImageSrc, resolveProductImageSrc } from '../utils/entityImage';
 import { getWarehouseScopedNumber, resolveProductActiveWarehouseIds } from '../utils/masterIdentity';
 import { buildTransactionSettlementFields } from '../utils/paymentSettlement';
@@ -208,7 +211,17 @@ export type AccountItemActionRequest = {
    action: 'ADJUST' | 'RETURN';
 };
 
+export interface V3OperationalPOSBoundary {
+   tariffId: string;
+   search(query: string, categoryId?: string | null): Promise<void>;
+   resolveCode(code: string): Promise<import('../services/sync/LargeMasterSyncV3OperationalSession').V3CodeMatch | null>;
+   validate(lines: CartItem[]): Promise<void>;
+   changeTariff(tariffId: string): void;
+}
+
 export interface POSInterfaceProps {
+   v3Operational?: V3OperationalPOSBoundary;
+   catalogSearchProducts?: Product[];
    config: BusinessConfig;
    currentUser: UserType;
    roles: RoleDefinition[];
@@ -1205,6 +1218,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    rooms = [],
    productPrices: externalProductPrices = EMPTY_PRODUCT_PRICES,
    suppressProductInputUntilMs = 0,
+   v3Operational,
+   catalogSearchProducts,
 }) => {
    freezeCount('POS_RENDER_COUNT');
    markRenderStart('POS_INTERACTION_VIEW');
@@ -1239,7 +1254,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const lastProductTouchAtRef = useRef(0);
    const quickActionOpenedAtRef = useRef(0);
    const [productPrices, setProductPrices] = useState<ProductPrice[]>(externalProductPrices);
-   const catalogProducts = products;
+   const catalogProducts = catalogSearchProducts ?? products;
 
    useEffect(() => {
       freezeCount('EFFECT_PRODUCT_PRICES');
@@ -1550,11 +1565,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    );
    const productById = useMemo(() => {
       const index = new Map<string, Product>();
-      for (const product of catalogProducts || []) {
+      for (const product of products || []) {
          if (product?.id) index.set(product.id, product);
       }
       return index;
-   }, [catalogProducts]);
+   }, [products]);
    const marketplaceProductLookup = useMemo(() => {
       const byReference = new Map<string, Product>();
       const byName = new Map<string, Product>();
@@ -2038,21 +2053,26 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    }, [config.tariffs, activeTerminalConfig]);
 
    const [activeTariffId, setActiveTariffId] = useState<string>(() => {
-      return activeTerminalConfig?.pricing?.defaultTariffId || allowedTariffs[0]?.id || config.tariffs[0]?.id || '';
+      return v3Operational?.tariffId ?? (activeTerminalConfig?.pricing?.defaultTariffId || allowedTariffs[0]?.id || config.tariffs[0]?.id || '');
    });
    const desiredTariffId = useMemo(
       () => activeTerminalConfig?.pricing?.defaultTariffId || allowedTariffs[0]?.id || config.tariffs[0]?.id || '',
       [activeTerminalConfig?.pricing?.defaultTariffId, allowedTariffs, config.tariffs]
    );
+   const changeActiveTariff = useCallback((id: string) => {
+      try { v3Operational?.changeTariff(id); setActiveTariffId(id); }
+      catch (error: any) { setErrorToast(`V3: ${error.message || error}`); }
+   }, [v3Operational]);
 
    useEffect(() => {
+      if (v3Operational) { setActiveTariffId(v3Operational.tariffId); return; }
       if (!desiredTariffId) return;
 
       const isCurrentAllowed = allowedTariffs.some((tariff) => tariff.id === activeTariffId);
       if (!activeTariffId || !isCurrentAllowed) {
          setActiveTariffId(desiredTariffId);
       }
-   }, [activeTariffId, allowedTariffs, desiredTariffId]);
+   }, [activeTariffId, allowedTariffs, desiredTariffId, v3Operational]);
 
    const productPriceIndex = useMemo(() => {
       const index = new Map<string, number>();
@@ -2189,6 +2209,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       markInteractionStage(trace, 'HANDLER_END');
    }, []);
    const [categoryFilter, setCategoryFilter] = useState('ALL');
+   useEffect(() => {
+      if (!v3Operational) return;
+      void v3Operational.search(catalogSearchQuery, categoryFilter === 'ALL' ? null : categoryFilter)
+         .catch(error => setErrorToast(`V3: ${error.message || error}`));
+   }, [v3Operational, catalogSearchQuery, categoryFilter]);
    const [mobileView, setMobileView] = useState<'PRODUCTS' | 'TICKET'>('PRODUCTS');
    const returnToTicketView = useCallback(() => {
       setRightSidebarTab('CART');
@@ -2803,6 +2828,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    }, [activeTerminalId, config, loadUberPendingOrders, persistUberConfirmationState, showShortErrorToast]);
 
    const handleRecoverReservation = useCallback((reservation: Reservation) => {
+      if (v3Operational) { setErrorToast('SYNC_V3_RESERVATION_CONTRACT_REQUIRED'); return; }
       const hydratedItems = (reservation.items || []).map((item, idx) => ({
          ...item,
          cartId: `RSV-${reservation.id}-${idx}-${Date.now()}`
@@ -2815,7 +2841,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       setOrderServiceType('DINE_IN');
       closeRecoverReservationModal();
       setSuccessToast(`Reserva ${reservation.code} cargada`);
-   }, [customers, onSelectCustomer, onUpdateCart, closeRecoverReservationModal]);
+   }, [customers, onSelectCustomer, onUpdateCart, closeRecoverReservationModal, v3Operational]);
 
    const handleRecoverUberOrder = useCallback(async (order: UberEatsPendingOrder) => {
       const existingTransaction = findUberTransactionByOrderId(order.uberOrderId);
@@ -3145,7 +3171,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       return Number.isFinite(price) && price >= 0;
    }, []);
 
-   const productHasActiveTariff = useCallback((p: Product) => getTariffPrice(p) !== null || productHasBasePrice(p), [getTariffPrice, productHasBasePrice]);
+   const productHasActiveTariff = useCallback((p: Product) => p.v3SaleAuthority
+      ? p.v3SaleAuthority.tariffId === activeTariffId && getTariffPrice(p) !== null
+      : getTariffPrice(p) !== null || productHasBasePrice(p), [activeTariffId, getTariffPrice, productHasBasePrice]);
 
    const getProductPrice = useCallback((p: Product) => {
       const tariffPrice = getTariffPrice(p);
@@ -3316,7 +3344,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          // If negative stock is not allowed by the product nor the terminal, check availability.
          if (!productAllowsNegative && !terminalAllowsNegative) {
             const currentStock = getScopedProductStock(product);
-            const committedQty = committedByProduct[product.id] || 0;
+            const committedQty = product.v3SaleAuthority ? 0 : committedByProduct[product.id] || 0;
             const availableStock = Math.max(0, currentStock - committedQty);
             const inCartQty = cartQuantityByProduct[product.id] || 0;
             const totalRequested = inCartQty + quantityToAdd;
@@ -3333,14 +3361,28 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    }, [activeTerminalConfig, cartInventoryDemandByProduct, cartQuantityByProduct, committedByProduct, config.features?.stockTracking, getScopedProductStock, getTerminalWarehouseName, productById, productHasActiveTariff, productMatchesTerminalWarehouse, products, warehouses]);
 
    const [lastAddedCartId, setLastAddedCartId] = useState<string | null>(null);
+   const latestAddCart = useRef(cart);
+   latestAddCart.current = cart;
+   const addQueue = useRef(new V3OperationalUIQueue());
+   const scanQueue = useRef(new V3OperationalUIQueue());
+   const addContext = useRef(v3Operational);
+   addContext.current = v3Operational;
 
-   const addToCart = useCallback(async (product: Product, quantity: number = 1, priceOverride?: number, modifiers?: string[], trackingData?: any[], selectedVariant?: ProductVariant, variantInfo?: string, note?: string, restaurantConfig?: CartItem['restaurantConfig'], consignmentPatch?: Pick<CartItem, 'consignmentId' | 'consignmentDocumentNo' | 'consignmentLineId'>) => {
+   const performAddToCart = useCallback(async (product: Product, quantity: number = 1, priceOverride?: number, modifiers?: string[], trackingData?: any[], selectedVariant?: ProductVariant, variantInfo?: string, note?: string, restaurantConfig?: CartItem['restaurantConfig'], consignmentPatch?: Pick<CartItem, 'consignmentId' | 'consignmentDocumentNo' | 'consignmentLineId'>) => {
       const trace = activeAddTraceRef.current || beginPosInteraction('ADD_TICKET_ITEM', { source: 'programmatic', productId: product.id });
       activeAddTraceRef.current = trace;
       expectInteractionRender(trace, 'POS_INTERACTION_VIEW');
       try {
+      if (v3Operational) {
+         if (modifiers?.length || restaurantConfig || trackingData?.length || consignmentPatch) {
+            throw new Error('SYNC_V3_ADVANCED_ARTICLE_CONTRACT_REQUIRED');
+         }
+         await v3Operational.validate([...latestAddCart.current, { ...product, quantity, cartId: 'candidate-validation' } as CartItem]);
+         if (addContext.current !== v3Operational) throw new Error('SYNC_V3_UI_CONTEXT_CHANGED');
+      }
       if (blockRecoveredUberOrderMutation('agregar artículos adicionales')) return;
       if (!(await authorizeSubtotalizedEdit('Agregar artículo a ticket subtotalizado'))) return;
+      if (v3Operational && addContext.current !== v3Operational) throw new Error('SYNC_V3_UI_CONTEXT_CHANGED');
       if (quantity > 0 && !ensureSalesWithOpenZPermission()) return;
       if (!canAddItemToCart(product, quantity, { skipStockValidation: Boolean(consignmentPatch?.consignmentLineId) })) return;
 
@@ -3375,7 +3417,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       // We look for existing item in the stable 'cart' prop/state instead of inside the setter
       // to avoid using setter for logic that triggers side effects.
-      const existing = (cart || []).find(i => {
+      const existing = (v3Operational ? latestAddCart.current : cart || []).find(i => {
          const iMods = buildModifierSignature(i.modifiers);
          const existingTaxSignature = resolveEffectiveTaxIds(i.appliedTaxIds, activeTerminalConfig, i.taxable).slice().sort().join('|');
          const existingIdentityKey = String((i as any).cartIdentityKey || productLineIdentityKey(i, i.price));
@@ -3396,8 +3438,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (existing && !usesSerial && !existing.dispatched) {
          targetCartId = existing.cartId!;
          markInteractionStateUpdate(trace, (cart || []).length + 2);
-         onUpdateCart(prev => {
-            const updatedItem = {
+         const updatedItem = {
                ...existing,
                quantity: existing.quantity + quantity,
                isReturnLine: existing.isReturnLine || quantity < 0,
@@ -3406,6 +3447,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                production_area_id: resolveProductionAreaId(existing) || productionAreaId || undefined,
                ...consignmentPatch,
             };
+         if (v3Operational) latestAddCart.current = [updatedItem, ...latestAddCart.current.filter(i => i.cartId !== existing.cartId)];
+         onUpdateCart(prev => {
             return [updatedItem, ...prev.filter(i => i.cartId !== existing.cartId)];
          });
       } else {
@@ -3437,17 +3480,29 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             ...consignmentPatch,
          };
          markInteractionStateUpdate(trace, (cart || []).length + 2);
+         if (v3Operational) latestAddCart.current = [newItem, ...latestAddCart.current];
          onUpdateCart(prev => [newItem, ...prev]);
       }
 
       // SIDE EFFECT: Move outside the state update sequence to avoid React "rendering update" warning
       setLastAddedCartId(targetCartId);
       markInteractionStage(trace, 'HANDLER_END');
+      return true;
+      } catch (error: any) {
+         if (!v3Operational) throw error;
+         setErrorToast(`V3: ${error.message || error}`);
+         return false;
       } finally {
          if (trace.stages.HANDLER_END === undefined) markInteractionStage(trace, 'HANDLER_END');
          if (activeAddTraceRef.current === trace) activeAddTraceRef.current = null;
       }
-   }, [activeTableSellerId, activeTerminalConfig, authorizeSubtotalizedEdit, blockRecoveredUberOrderMutation, canAddItemToCart, cart, ensureSalesWithOpenZPermission, getProductPrice, onUpdateCart]);
+   }, [activeTableSellerId, activeTerminalConfig, authorizeSubtotalizedEdit, blockRecoveredUberOrderMutation, canAddItemToCart, cart, ensureSalesWithOpenZPermission, getProductPrice, onUpdateCart, v3Operational]);
+   const addToCart = useCallback((...args: Parameters<typeof performAddToCart>) => {
+      if (!v3Operational) return performAddToCart(...args);
+      const context = v3Operational;
+      return addQueue.current.run(() => addContext.current === context, () => performAddToCart(...args))
+         .catch((error: any) => { setErrorToast(`V3: ${error.message || error}`); return false; });
+   }, [performAddToCart, v3Operational]);
 
    const handleProductClick = useCallback((product: Product) => {
       if (Date.now() < suppressProductInputUntilMs) return;
@@ -3772,14 +3827,26 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       return true;
    }, [config.coupons]);
 
-   const handleSearchKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+   const resolveSubmittedCode = useCallback(async (raw: string) => {
+      const context = v3Operational;
+      const resolveAndAdd = async () => {
+         const match = context ? await context.resolveCode(raw) : findProductByAnyCode(raw);
+         const added = match ? await addToCart(match.product, (isReturnMode ? -1 : 1) * match.quantity,
+            match.price, match.modifiers, undefined, match.selectedVariant, match.variantInfo) : false;
+         return { match, added };
+      };
+      return context ? scanQueue.current.run(() => addContext.current === context, resolveAndAdd) : resolveAndAdd();
+   }, [v3Operational, findProductByAnyCode, addToCart, isReturnMode]);
+
+   const handleSearchKeyDown = useCallback(async (e: React.KeyboardEvent<HTMLInputElement>) => {
+      try {
       if (e.key === 'Enter') {
          const rawValue = e.currentTarget.value || searchTerm || '';
          if (routeScannedCoupon(rawValue)) return;
 
-         const match = findProductByAnyCode(rawValue);
+         const { match, added } = await resolveSubmittedCode(rawValue);
          if (match) {
-            addToCart(match.product, (isReturnMode ? -1 : 1) * match.quantity, match.price, match.modifiers, undefined, match.selectedVariant, match.variantInfo);
+            if (v3Operational && !added) return;
             setSearchTerm('');
             setErrorToast(null);
             // Ensure focus stays on search bar
@@ -3795,10 +3862,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             }
          }
       }
-   }, [searchTerm, routeScannedCoupon, findProductByAnyCode, addToCart, isReturnMode]);
+      } catch (error: any) { setErrorToast(`V3: ${error.message || error}`); }
+   }, [searchTerm, routeScannedCoupon, resolveSubmittedCode, v3Operational]);
 
    // --- BARCODE SCANNER LOGIC ---
-   const processBarcode = useCallback((
+   const performBarcode = useCallback(async (
       code: string,
       context: { onReservationRecovered?: () => void } = {},
    ) => {
@@ -3839,6 +3907,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (config.scaleLabelConfig?.isEnabled) {
          const scaleItem = parseScaleBarcode(trimmed, config.scaleLabelConfig);
          if (scaleItem) {
+            if (v3Operational) throw new Error('SYNC_V3_SCALE_CONTRACT_REQUIRED');
             const product = productCodeIndex.get(scaleItem.plu)?.product;
 
             if (product) {
@@ -3867,14 +3936,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       // 2. Normal Barcode Search. Use the memoized code index instead of scanning
       // the whole catalog on every hardware scan.
-      const match = findProductByAnyCode(trimmed);
+      const match = v3Operational ? await v3Operational.resolveCode(trimmed) : findProductByAnyCode(trimmed);
       if (match) {
          setSearchTerm('');
          const hasConfiguredVariant = Boolean(match.selectedVariant || match.modifiers?.length);
          if (!hasConfiguredVariant && ((match.product.variants || []).length > 0 || (match.product.attributes || []).length > 0)) {
             handleProductClick(match.product);
          } else {
-            addToCart(match.product, (isReturnMode ? -1 : 1) * match.quantity, match.price, match.modifiers, undefined, match.selectedVariant, match.variantInfo);
+            const added = await addToCart(match.product, (isReturnMode ? -1 : 1) * match.quantity, match.price, match.modifiers, undefined, match.selectedVariant, match.variantInfo);
+            if (v3Operational && !added) return { success: false, message: 'V3: artículo rechazado' };
          }
          setErrorToast(`Producto agregado: ${match.product.name}`);
          setTimeout(() => setErrorToast(null), 1500);
@@ -3898,7 +3968,19 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          if (trace.stages.HANDLER_END === undefined) markInteractionStage(trace, 'HANDLER_END');
          if (activeAddTraceRef.current === trace) activeAddTraceRef.current = null;
       }
-   }, [activeReservationByScanCode, addToCart, config.scaleLabelConfig, handleProductClick, getProductPrice, handleRecoverReservation, findProductByAnyCode, productCodeIndex, routeScannedCoupon, onOpenInvoiceActions, isReturnMode]);
+   }, [activeReservationByScanCode, addToCart, config.scaleLabelConfig, handleProductClick, getProductPrice, handleRecoverReservation, findProductByAnyCode, productCodeIndex, routeScannedCoupon, onOpenInvoiceActions, isReturnMode, v3Operational]);
+
+   const processBarcode = useCallback((...args: Parameters<typeof performBarcode>) => {
+      const context = v3Operational;
+      const operation = context
+         ? scanQueue.current.run(() => addContext.current === context, () => performBarcode(...args))
+         : performBarcode(...args);
+      return operation.catch((error: any) => {
+         const message = `V3: ${error.message || error}`;
+         setErrorToast(message);
+         return { success: false, message };
+      });
+   }, [performBarcode, v3Operational]);
 
    const isAnyModalOpen = !!(
       showSafetyGate ||
@@ -3942,7 +4024,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          if (document.querySelector('[data-table-map-persistent-host][aria-modal="true"]')) return;
          const barcode = (event as CustomEvent<{ barcode?: string }>).detail?.barcode;
          if (!barcode) return;
-         processBarcode(barcode);
+         void processBarcode(barcode).catch(error => setErrorToast(`V3: ${error.message || error}`));
       };
 
       window.addEventListener('barcodeScanned', handleCentralBarcodeScan as EventListener);
@@ -4384,16 +4466,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    submitProductTextSearchRef.current = submitProductTextSearch;
 
-   const handleRetailSearchSubmit = useCallback((rawTerm?: string) => {
+   const handleRetailSearchSubmit = useCallback(async (rawTerm?: string) => {
+      try {
       const trimmed = (rawTerm ?? searchTerm ?? '').trim();
       if (!trimmed) {
          retailSearchInputRef.current?.focus();
          return;
       }
 
-      const match = findProductByAnyCode(trimmed);
+      const { match, added } = await resolveSubmittedCode(trimmed);
       if (match) {
-         addToCart(match.product, (isReturnMode ? -1 : 1) * match.quantity, match.price, match.modifiers, undefined, match.selectedVariant, match.variantInfo);
+         if (v3Operational && !added) return;
          setSearchTerm('');
          setErrorToast(null);
          retailSearchInputRef.current?.focus();
@@ -4410,7 +4493,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
 
       retailSearchInputRef.current?.focus();
-   }, [searchTerm, findProductByAnyCode, addToCart, isReturnMode, filteredProducts, submitProductTextSearch]);
+      } catch (error: any) { setErrorToast(`V3: ${error.message || error}`); }
+   }, [searchTerm, resolveSubmittedCode, filteredProducts, submitProductTextSearch, v3Operational]);
 
    const categoryOptions = useMemo(() => {
       const allowedCategoryOptions = Array.from(effectiveAllowedCategorySet)
@@ -5273,6 +5357,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       };
 
       try {
+         if (v3Operational) await v3Operational.validate(processedCart);
          const invalidQuantityItem = processedCart.find(item => !isValidCartQuantity(item.quantity));
          if (invalidQuantityItem) {
             alert(`La cantidad de "${invalidQuantityItem.name}" no es válida. Elimine la línea y agréguela nuevamente.`);
@@ -5513,20 +5598,34 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                const returnItems = processedCart.filter(i => i.quantity < 0);
 
                // Calculate totals for each part
-               const saleTotal = rawSaleItems.reduce((acc, i) => acc + (i.price * i.quantity), 0);
-               const normalizedSplitRefundItems = returnItems.map(item => ({ ...item, quantity: Math.abs(item.quantity) }));
-               const returnTotal = normalizedSplitRefundItems.reduce((acc, i) => acc + (i.price * i.quantity), 0);
+               let saleTotal = rawSaleItems.reduce((acc, i) => acc + (i.price * i.quantity), 0);
+               let normalizedSplitRefundItems = returnItems.map(item => ({ ...item, quantity: Math.abs(item.quantity) }));
+               let returnTotal = normalizedSplitRefundItems.reduce((acc, i) => acc + (i.price * i.quantity), 0);
+               const v3FiscalOptions = { isTaxIncluded, terminalConfig: activeTerminalConfig,
+                  taxExempt: isSelectedCustomerTaxExempt, allowedTaxIds: appliedServiceTaxPolicy.taxIds };
+               const v3SaleFiscal = v3Operational ? calculateLineFiscalValuesForTransaction(rawSaleItems, config, v3FiscalOptions) : [];
+               const v3RefundFiscal = v3Operational ? calculateLineFiscalValuesForTransaction(normalizedSplitRefundItems, config, v3FiscalOptions) : [];
+               const sumFiscal = (rows: typeof v3SaleFiscal, key: 'netAmount' | 'taxAmount' | 'totalAmount') =>
+                  Math.round(rows.reduce((sum, row) => sum + row[key], 0) * 100) / 100;
+               if (v3Operational) {
+                  saleTotal = sumFiscal(v3SaleFiscal, 'totalAmount') + cartTip;
+                  returnTotal = sumFiscal(v3RefundFiscal, 'totalAmount');
+                  normalizedSplitRefundItems = freezeAuthoritativeLineFiscalAmounts(normalizedSplitRefundItems, config, {
+                     ...v3FiscalOptions, transactionNetAmount: sumFiscal(v3RefundFiscal, 'netAmount'),
+                     transactionTaxAmount: sumFiscal(v3RefundFiscal, 'taxAmount'), transactionTotal: returnTotal,
+                  });
+               }
                const saleTaxBreakdown = calculateTaxBreakdownFromItems(rawSaleItems, config, {
                   isTaxIncluded,
                   terminalConfig: activeTerminalConfig,
                   taxExempt: isSelectedCustomerTaxExempt,
                   allowedTaxIds: appliedServiceTaxPolicy.taxIds,
                });
-               const saleTaxAmount = Math.round((
+               const saleTaxAmount = v3Operational ? sumFiscal(v3SaleFiscal, 'taxAmount') : Math.round((
                   saleTaxBreakdown.reduce((sum, tax) => sum + Number(tax.amount || 0), 0)
                   + Number.EPSILON
                ) * 100) / 100;
-               const saleNetAmount = isTaxIncluded
+               const saleNetAmount = v3Operational ? sumFiscal(v3SaleFiscal, 'netAmount') + cartTip : isTaxIncluded
                   ? Math.round(((saleTotal - saleTaxAmount) + Number.EPSILON) * 100) / 100
                   : saleTotal;
                const saleItems = freezeAuthoritativeLineFiscalAmounts(rawSaleItems, config, {
@@ -5561,6 +5660,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         seriesId: assignedSequenceId,
                         items: saleItems,
                         total: saleTotal,
+                        ...(v3Operational ? { isTaxIncluded } : {}),
                         payments: salePayments,
                         ...getConsignmentTicketFields(saleItems),
                         consignmentSyncStatus: saleItems.some(item => item.consignmentId) ? 'PENDING' : undefined,
@@ -5596,17 +5696,20 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         seriesId: refundSeriesId,
                         items: normalizedSplitRefundItems,
                         total: returnTotal,
+                        ...(v3Operational ? { netAmount: sumFiscal(v3RefundFiscal, 'netAmount'),
+                           taxAmount: sumFiscal(v3RefundFiscal, 'taxAmount'), isTaxIncluded } : {}),
                         userId: currentUser.id,
                         userName: currentUser.name,
                         terminalId: terminalId,
                         customerId: customerForCheckout?.id,
                         customerName: customerForCheckout?.name,
                         status: 'COMPLETED',
+                        ...(v3Operational ? { customerSnapshot: checkoutCustomerSnapshot } : {}),
                         ncf: refundNcf,
                         ncfType: refundNcf ? 'B04' : undefined,
                         walletDepositAmount: walletDepositAmount > 0 ? walletDepositAmount : undefined,
                         walletPaymentAmount: walletPaymentAmount > 0 ? walletPaymentAmount : undefined,
-                        serviceChargeAmount: cartTip,
+                        serviceChargeAmount: v3Operational ? 0 : cartTip,
                         serviceType: effectiveOrderServiceType,
                         serviceTaxPolicySnapshot: appliedServiceTaxPolicy,
                         voluntaryTipAmount: voluntaryTip,
@@ -5618,10 +5721,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   };
 
                if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android') {
-                  const durableSplitSaleCommit = isSyncFeatureEnabled('sqlite_outbox_v2');
+                  const durableSplitSaleCommit = isSyncFeatureEnabled('sqlite_outbox_v2') || Boolean(v3Operational);
                   const result = await withTimeout(
                      transactionService.createSplitTransaction(splitPayload, {
                         deferDurableSalePersistence: durableSplitSaleCommit,
+                        deferV3RefundPersistence: Boolean(v3Operational),
+                        v3FinancialContext: v3Operational ? { config,
+                           warehouseId: defaultSalesWarehouseId!,
+                           terminalName: activeTerminalConfig?.terminalName || terminalId } : undefined,
                      }),
                      25000,
                      'TIMEOUT_SPLIT_LOCAL'
@@ -5642,7 +5749,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      }
                   }
 
-                  if (result.refund) {
+                  if (result.refund && v3Operational) {
+                     await Promise.resolve(onTransactionComplete(result.refund));
+                  }
+                  if (result.refund && !v3Operational) {
                      await persistStandaloneRefundTransaction(
                         {
                            ...result.refund,
@@ -5728,12 +5838,21 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                const contextualDocumentItems = !isRefundOnly
                   ? applyOrderContextToItems(rawDocumentItems, saleOrderNumber)
                   : rawDocumentItems;
-               const documentTotal = isRefundOnly ? refundDocumentTotal : cartTotal;
-               const taxAmount = cartTax;
+               const v3RefundFiscal = isRefundOnly && v3Operational
+                  ? calculateLineFiscalValuesForTransaction(contextualDocumentItems, config, {
+                     isTaxIncluded, terminalConfig: activeTerminalConfig, taxExempt: isSelectedCustomerTaxExempt,
+                     allowedTaxIds: appliedServiceTaxPolicy.taxIds,
+                  }) : [];
+               const documentTotal = v3RefundFiscal.length
+                  ? Math.round(v3RefundFiscal.reduce((sum, row) => sum + row.totalAmount, 0) * 100) / 100
+                  : isRefundOnly ? refundDocumentTotal : cartTotal;
+               const taxAmount = v3RefundFiscal.length
+                  ? Math.round(v3RefundFiscal.reduce((sum, row) => sum + row.taxAmount, 0) * 100) / 100
+                  : cartTax;
                const netAmount = Math.round(((documentTotal - taxAmount) + Number.EPSILON) * 100) / 100;
-               const documentItems = !isRefundOnly
+               const documentItems = !isRefundOnly || v3Operational
                   ? freezeAuthoritativeLineFiscalAmounts(contextualDocumentItems, config, {
-                     discountAmount,
+                     discountAmount: isRefundOnly ? 0 : discountAmount,
                      isTaxIncluded,
                      terminalConfig: activeTerminalConfig,
                      transactionNetAmount: netAmount,
@@ -5804,7 +5923,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      : activeRecoveredReservation ? reservationBalanceDue : undefined,
                   walletDepositAmount: walletDepositAmount > 0 ? walletDepositAmount : undefined,
                   walletPaymentAmount: walletPaymentAmount > 0 ? walletPaymentAmount : undefined,
-                  serviceChargeAmount: cartTip,
+                  serviceChargeAmount: isRefundOnly && v3Operational ? 0 : cartTip,
                   serviceType: effectiveOrderServiceType,
                   serviceTaxPolicySnapshot: appliedServiceTaxPolicy,
                   voluntaryTipAmount: voluntaryTip,
@@ -5819,7 +5938,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   observations: uberRecoveredOrder
                      ? `Uber Eats ${uberRecoveredOrder.code} / ${uberRecoveredOrder.sourceOrderId}`
                      : undefined
-               }, { deferDurablePersistence: !isRefundOnly }), 25000, 'TIMEOUT_CREATE_TRANSACTION');
+               }, { deferDurablePersistence: !isRefundOnly || Boolean(v3Operational) }), 25000, 'TIMEOUT_CREATE_TRANSACTION');
 
                // Ensure seriesId is preserved (Backend might not return it in the root object)
                const finalTxn = {
@@ -6091,6 +6210,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    };
 
    const proceedToCheckout = (trace: PosInteractionTrace) => observeDestinationAttempt(trace, async () => {
+      if (v3Operational) {
+         try { await v3Operational.validate(cart); }
+         catch (error: any) { setErrorToast(`V3: ${error.message || error}`); return; }
+      }
       if (isOrderTakerMode) {
          try {
             await handleSendAndExit();
@@ -6152,6 +6275,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       markInteractionStateUpdate(trace, 2);
       markInteractionStage(trace, 'HANDLER_END');
    });
+
+   const beforeV3PaymentEffects = v3Operational ? async () => {
+      setLargeMasterSyncV3CriticalOperation('PAYMENT', true);
+      try { await v3Operational.validate(cart); }
+      catch (error) { setLargeMasterSyncV3CriticalOperation('PAYMENT', false); throw error; }
+      return () => setLargeMasterSyncV3CriticalOperation('PAYMENT', false);
+   } : undefined;
 
    const startCheckoutInteraction = (inputTimeStamp?: number) => {
       const trace = beginDestinationInteraction('CHECKOUT_OPEN', inputTimeStamp, checkoutTraceRef.current);
@@ -7223,7 +7353,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             <p className="text-xs text-gray-500">{currentUser.name} · {terminalDisplayLabel}</p>
             <label className="block text-xs font-bold text-purple-700">
                Tarifa
-               <select aria-label="Tarifa activa" value={activeTariffId} disabled={!canChangeTariff} onChange={(event) => setActiveTariffId(event.target.value)} className="mt-1 w-full rounded-xl border border-purple-100 bg-purple-50 px-3 text-sm text-purple-900 disabled:opacity-75">
+               <select aria-label="Tarifa activa" value={activeTariffId} disabled={!canChangeTariff} onChange={(event) => changeActiveTariff(event.target.value)} className="mt-1 w-full rounded-xl border border-purple-100 bg-purple-50 px-3 text-sm text-purple-900 disabled:opacity-75">
                   {allowedTariffs.map(tariff => <option key={tariff.id} value={tariff.id}>{tariff.name}</option>)}
                </select>
             </label>
@@ -7471,7 +7601,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      newConfig.terminals[terminalIndex].config.documentAssignments!['TRANSFER'] || 'TRANSFER';
 
                   onUpdateConfig(newConfig);
-                  setActiveTariffId(mobileConfig.tariffId);
+                  changeActiveTariff(mobileConfig.tariffId);
                   setCategoryFilter(mobileConfig.categoryId === 'ALL' ? 'ALL' : canonicalizeCategory(mobileConfig.categoryId));
                }
 
@@ -7595,7 +7725,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                        key={tariff.id}
                                        type="button"
                                        onClick={() => {
-                                          setActiveTariffId(tariff.id);
+                                          changeActiveTariff(tariff.id);
                                           setShowTariffSelector(false);
                                        }}
                                        className={`w-full flex items-center justify-between gap-3 rounded-xl px-3 py-2.5 text-left transition-all ${isSelected ? 'bg-purple-50 text-purple-900 border border-purple-200' : 'bg-white text-gray-700 hover:bg-gray-50 border border-transparent'}`}
@@ -9102,7 +9232,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                setReturnToTableMapAfterPayment(false);
                onOpenTableMap();
             }
-         }} onConfirm={handlePaymentConfirm} themeColor={config.themeColor} customer={effectiveSelectedCustomer} isDelinquent={isDelinquent} users={users} roles={roles} isMaster={isMaster} currentUser={currentUser} isRestaurantMode={isRestaurantMode} isInstallmentPayment={isIntermediateFractionPayment} />}
+         }} beforePaymentEffects={beforeV3PaymentEffects} onConfirm={handlePaymentConfirm} themeColor={config.themeColor} customer={effectiveSelectedCustomer} isDelinquent={isDelinquent} users={users} roles={roles} isMaster={isMaster} currentUser={currentUser} isRestaurantMode={isRestaurantMode} isInstallmentPayment={isIntermediateFractionPayment} />}
          {showLoyaltyModal && <LoyaltyScanModal onClose={() => setShowLoyaltyModal(false)} onScan={handleLoyaltyScan} />}
          {showTableSellerModal && activeTable && <TableSellerModal
             tableName={activeTable.nombre || activeTable.name || 'Mesa'}
