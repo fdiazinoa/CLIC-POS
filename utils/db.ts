@@ -620,7 +620,7 @@ const withFiscalIssueLock = <T>(operation: () => Promise<T>): Promise<T> => {
 };
 
 export const db = {
-  init: async (terminalId?: string) => {
+  init: async (terminalId?: string, options: { skipCollections?: readonly string[] } = {}) => {
     if (initPromise) {
       console.log('♻️ Reusing existing DB Init');
       return initPromise;
@@ -684,6 +684,7 @@ export const db = {
     ]);
 
     const isDeferredHeavyCollection = (key: string) => {
+      if (options.skipCollections?.includes(key)) return true;
       if (['transactions', 'transactionHistory'].includes(key)) return true;
       if (isNativeAndroidRuntime && !ANDROID_BOOTSTRAP_COLLECTIONS.has(key)) {
         return true;
@@ -800,6 +801,7 @@ export const db = {
           const allowFullDemoSeed = shouldSeedFullDemoData();
           console.log(`🌱 First run detected - seeding ${allowFullDemoSeed ? 'full demo' : 'core bootstrap'} data...`);
           for (const [key, value] of Object.entries(SEED_DATA)) {
+            if (options.skipCollections?.includes(key)) continue;
             if (!allowFullDemoSeed && !FIRST_RUN_BOOTSTRAP_COLLECTIONS.has(key)) continue;
             if (!shouldCheckSeedForCollection(key, value)) continue;
             try {

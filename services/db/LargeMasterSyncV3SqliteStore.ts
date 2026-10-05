@@ -9,6 +9,7 @@ import {
   type LargeMasterSyncV3RuntimeVersion,
   type LargeMasterSyncV3Store,
 } from '../sync/LargeMasterSyncV3Types';
+import { isLargeMasterSyncV3OperationalWindowHeld, reserveLargeMasterSyncV3BaselineMutation } from '../sync/LargeMasterSyncV3OperationGate';
 
 type QueryResult = { values?: Array<Record<string, unknown>> };
 type SQLiteStatement = { statement: string; values: unknown[] };
@@ -72,11 +73,115 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
     private readonly fault?: LargeMasterSyncV3SqliteFaultHook,
   ) {}
 
+  private assertOperationalWindow(): void {
+    if (isLargeMasterSyncV3OperationalWindowHeld()) throw new LargeMasterSyncV3Error('SYNC_V3_OPERATIONAL_WINDOW_HELD');
+  }
+
+  private async withBaselineMutation<T>(operation: () => Promise<T>): Promise<T> {
+    const release = reserveLargeMasterSyncV3BaselineMutation();
+    try { return await operation(); } finally { release(); }
+  }
+
+  private async assertUnmovedBaseline(requireOperationalWindow = true): Promise<void> {
+    if (requireOperationalWindow) this.assertOperationalWindow();
+    const exists = first(await this.connection().query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'documents'"));
+    if (!exists) { if (requireOperationalWindow) this.assertOperationalWindow(); return; }
+    const moved = first(await this.connection().query(`SELECT doc_id FROM documents
+      WHERE collection_name = 'inventoryLedger' AND json_extract(data, '$.v3InventoryBaseline') IS NOT NULL LIMIT 1`));
+    if (moved) throw new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_COVERAGE_REQUIRED');
+    if (requireOperationalWindow) this.assertOperationalWindow();
+  }
+
+  async assertCanRefresh(): Promise<void> { await this.assertUnmovedBaseline(); }
+
+  async getOperationalOwner(): Promise<{ syncId: string; syncVersion: number; binding: string } | null> {
+    const row = first(await this.connection().query('SELECT sync_id, sync_version, binding FROM master_v3_operational_owner WHERE singleton = 1'));
+    return row ? { syncId: String(row.sync_id), syncVersion: Number(row.sync_version), binding: String(row.binding) } : null;
+  }
+
+  async setOperationalOwner(runtime: LargeMasterSyncV3RuntimeVersion, binding: string): Promise<void> {
+    await this.writeLock(() => this.withBaselineMutation(async () => {
+      const db = this.connection();
+      await db.execute('BEGIN IMMEDIATE TRANSACTION;', false);
+      try {
+        await this.assertUnmovedBaseline();
+        const active = await this.getActiveRuntimeVersion();
+        if (active?.syncId !== runtime.syncId || active.syncVersion !== runtime.syncVersion || !binding) {
+          throw new LargeMasterSyncV3Error('SYNC_V3_RUNTIME_VERSION_CHANGED');
+        }
+        this.assertOperationalWindow();
+        await db.run(`INSERT INTO master_v3_operational_owner(singleton, sync_id, sync_version, binding)
+          VALUES (1, ?, ?, ?) ON CONFLICT(singleton) DO UPDATE SET sync_id=excluded.sync_id,
+          sync_version=excluded.sync_version, binding=excluded.binding`, [runtime.syncId, runtime.syncVersion, binding], false);
+        this.assertOperationalWindow();
+        await db.execute('COMMIT;', false);
+      } catch (error) {
+        await db.execute('ROLLBACK;', false).catch(() => undefined);
+        throw error;
+      }
+    }));
+  }
+
+  async getLocalInventoryDelta(baseline: string, itemId: string, warehouseId: string): Promise<number> {
+    const row = first(await this.connection().query(`SELECT COALESCE(SUM(
+      COALESCE(json_extract(data, '$.qtyIn'), 0) - COALESCE(json_extract(data, '$.qtyOut'), 0)), 0) AS delta
+      FROM documents WHERE collection_name = 'inventoryLedger'
+      AND json_extract(data, '$.v3InventoryBaseline') = ?
+      AND json_extract(data, '$.productId') = ? AND json_extract(data, '$.warehouseId') = ?`, [baseline, itemId, warehouseId]));
+    return Number(row?.delta || 0);
+  }
+
+  async getLocalInventoryDeltas(baseline: string, itemIds: string[], warehouseId: string): Promise<Record<string, number>> {
+    if (!itemIds.length) return {};
+    if (itemIds.length > 100) throw new LargeMasterSyncV3Error('SYNC_V3_QUERY_LIMIT');
+    const result = await this.connection().query(`SELECT json_extract(data, '$.productId') AS item_id,
+      SUM(COALESCE(json_extract(data, '$.qtyIn'), 0) - COALESCE(json_extract(data, '$.qtyOut'), 0)) AS delta
+      FROM documents WHERE collection_name = 'inventoryLedger'
+      AND json_extract(data, '$.v3InventoryBaseline') = ? AND json_extract(data, '$.warehouseId') = ?
+      AND json_extract(data, '$.productId') IN (${itemIds.map(() => '?').join(',')})
+      GROUP BY json_extract(data, '$.productId')`, [baseline, warehouseId, ...itemIds]);
+    return Object.fromEntries(rows(result).map(row => [String(row.item_id), Number(row.delta)]));
+  }
+
+  async getOperationalSupports(runtime: LargeMasterSyncV3RuntimeVersion, itemIds: string[], warehouseId: string) {
+    requireOperationalVersion(runtime);
+    if (!itemIds.length) return { balances: {}, variants: {} };
+    if (itemIds.length > 100) throw new LargeMasterSyncV3Error('SYNC_V3_QUERY_LIMIT');
+    const placeholders = itemIds.map(() => '?').join(',');
+    const [balanceRows, variantRows] = await Promise.all([
+      this.connection().query(`SELECT item_id, qty_on_hand, qty_reserved, qty_committed FROM master_v3_inventory_balances
+        WHERE warehouse_id = ? AND item_id IN (${placeholders})`, [warehouseId, ...itemIds]),
+      this.connection().query(`SELECT article_id, record_json FROM master_v3_variants WHERE sync_version = ?
+        AND article_id IN (${placeholders}) AND active = 1 ORDER BY variant_id`, [runtime.syncVersion, ...itemIds]),
+    ]);
+    const variants: Record<string, Record<string, unknown>[]> = {};
+    rows(variantRows).forEach(row => (variants[String(row.article_id)] ||= []).push(operationalRecord(row)));
+    return { variants, balances: Object.fromEntries(rows(balanceRows).map(row => [String(row.item_id), {
+      qtyOnHand: Number(row.qty_on_hand), qtyReserved: Number(row.qty_reserved), qtyCommitted: Number(row.qty_committed),
+    }])) };
+  }
+
+  async findOperationalCode(runtime: LargeMasterSyncV3RuntimeVersion, code: string): Promise<{ articleId: string; variantId: string | null } | null> {
+    requireOperationalVersion(runtime);
+    const barcode = await this.findBarcode(runtime, code);
+    if (barcode) return barcode;
+    const article = rows(await this.connection().query(`SELECT article_id FROM master_v3_articles
+      WHERE sync_version = ? AND (article_id = ? OR sku = ?) AND active = 1 AND sellable = 1 LIMIT 2`, [runtime.syncVersion, code, code]));
+    if (article.length > 1) throw new LargeMasterSyncV3Error('SYNC_V3_CODE_AMBIGUOUS');
+    if (article[0]) return { articleId: String(article[0].article_id), variantId: null };
+    const variant = rows(await this.connection().query(`SELECT article_id, variant_id FROM master_v3_variants
+      WHERE sync_version = ? AND code = ? AND active = 1 LIMIT 2`, [runtime.syncVersion, code]));
+    if (variant.length > 1) throw new LargeMasterSyncV3Error('SYNC_V3_CODE_AMBIGUOUS');
+    return variant[0] ? { articleId: String(variant[0].article_id), variantId: String(variant[0].variant_id) } : null;
+  }
+
   async prepare(manifest: LargeMasterSyncV3Manifest): Promise<void> {
     await this.writeLock(async () => {
       const db = this.connection();
       await db.execute('BEGIN IMMEDIATE TRANSACTION;', false);
       try {
+        // Staging metadata does not replace the active baseline; the client separately waits before chunk apply.
+        await this.assertUnmovedBaseline(false);
         const existing = first(await db.query(
           'SELECT sync_version, schema_version, contract_version, manifest_json, status FROM sync_v3_sessions WHERE sync_id = ?',
           [manifest.syncId],
@@ -339,7 +444,8 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
   }
 
   async activate(syncId: string): Promise<LargeMasterSyncV3RuntimeVersion> {
-    return this.writeLock(async () => {
+    return this.writeLock(() => this.withBaselineMutation(async () => {
+      this.assertOperationalWindow();
       const db = this.connection();
       const alreadyActive = first(await db.query(`SELECT s.sync_version, s.contract_version FROM sync_v3_sessions s
         JOIN master_v3_state state ON state.singleton = 1
@@ -350,6 +456,7 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
           ? { contractVersion: Number(alreadyActive.contract_version) } : {}) };
       await db.execute('BEGIN IMMEDIATE TRANSACTION;', false);
       try {
+        await this.assertUnmovedBaseline();
         const session = first(await db.query(
           "SELECT sync_version, contract_version FROM sync_v3_sessions WHERE sync_id = ? AND status = 'VALIDATED'", [syncId],
         ));
@@ -359,6 +466,7 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
           throw new LargeMasterSyncV3Error('SYNC_V3_ACTIVATION_PRECONDITION_FAILED');
         }
         const timestamp = now();
+        this.assertOperationalWindow();
         await db.run(`UPDATE master_v3_state SET
           previous_version = active_version, previous_sync_id = active_sync_id,
           active_version = staging_version, active_sync_id = staging_sync_id,
@@ -370,6 +478,7 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
           await db.run("UPDATE sync_v3_sessions SET status = 'ROLLED_BACK', updated_at = ? WHERE sync_id = ? AND status = 'ACTIVE'",
             [timestamp, state.active_sync_id], false);
         }
+        this.assertOperationalWindow();
         await db.execute('COMMIT;', false);
         return { syncId, syncVersion: Number(session.sync_version),
           ...(Number(session.contract_version) >= 2 ? { contractVersion: Number(session.contract_version) } : {}) };
@@ -377,19 +486,21 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
         await db.execute('ROLLBACK;', false).catch(() => undefined);
         throw error;
       }
-    });
+    }));
   }
 
   async rollback(): Promise<LargeMasterSyncV3RuntimeVersion> {
-    return this.writeLock(async () => {
+    return this.writeLock(() => this.withBaselineMutation(async () => {
       const db = this.connection();
       await db.execute('BEGIN IMMEDIATE TRANSACTION;', false);
       try {
+        await this.assertUnmovedBaseline();
         const state = first(await db.query('SELECT * FROM master_v3_state WHERE singleton = 1'));
         if (!state?.previous_sync_id || state.previous_version == null) {
           throw new LargeMasterSyncV3Error('SYNC_V3_PREVIOUS_VERSION_UNAVAILABLE');
         }
         const timestamp = now();
+        this.assertOperationalWindow();
         await db.run(`UPDATE master_v3_state SET
           active_version = previous_version, active_sync_id = previous_sync_id,
           previous_version = active_version, previous_sync_id = active_sync_id,
@@ -403,6 +514,7 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
         const restored = first(await db.query(
           'SELECT contract_version FROM sync_v3_sessions WHERE sync_id = ?', [state.previous_sync_id],
         ));
+        this.assertOperationalWindow();
         await db.execute('COMMIT;', false);
         return { syncId: String(state.previous_sync_id), syncVersion: Number(state.previous_version),
           ...(Number(restored?.contract_version) >= 2
@@ -411,7 +523,7 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
         await db.execute('ROLLBACK;', false).catch(() => undefined);
         throw error;
       }
-    });
+    }));
   }
 
   async getActiveRuntimeVersion(): Promise<LargeMasterSyncV3RuntimeVersion | null> {
@@ -504,10 +616,11 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
       || !Array.isArray(snapshot.balances)) {
       throw new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_INVALID');
     }
-    return this.writeLock(async () => {
+    return this.writeLock(() => this.withBaselineMutation(async () => {
       const db = this.connection();
       await db.execute('BEGIN IMMEDIATE TRANSACTION;', false);
       try {
+        await this.assertUnmovedBaseline();
         const active = first(await db.query(`SELECT active_sync_id, active_version
           FROM master_v3_state WHERE singleton = 1`));
         if (String(active?.active_sync_id || '') !== runtime.syncId
@@ -523,6 +636,7 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
               && snapshot.cursor !== String(previous.cursor)))) {
           throw new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_STALE');
         }
+        this.assertOperationalWindow();
         await db.run('DELETE FROM master_v3_inventory_balances', [], false);
         for (let offset = 0; offset < snapshot.balances.length; offset += CHUNK_SUB_BATCH_SIZE) {
           const statements = snapshot.balances.slice(offset, offset + CHUNK_SUB_BATCH_SIZE).map(balance => {
@@ -547,12 +661,13 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
           sync_version=excluded.sync_version, inventory_version=excluded.inventory_version,
           cursor=excluded.cursor, updated_at=excluded.updated_at`,
         [runtime.syncId, runtime.syncVersion, snapshot.version, snapshot.cursor, now()], false);
+        this.assertOperationalWindow();
         await db.execute('COMMIT;', false);
       } catch (error) {
         await db.execute('ROLLBACK;', false).catch(() => undefined);
         throw error;
       }
-    });
+    }));
   }
 
   async getInventorySnapshotVersion(runtime: LargeMasterSyncV3RuntimeVersion): Promise<{ version: number; cursor: string } | null> {

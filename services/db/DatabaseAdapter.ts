@@ -12,6 +12,10 @@ export type DurableOutboxStatus =
 export interface DurableDocumentMutation {
     collectionName: string;
     document: { id: string; [key: string]: any };
+    requireAbsent?: boolean;
+    expectedDocument?: string;
+    /** Verified V3 sale demand; checked against scoped baseline + ledger inside the write transaction. */
+    v3StockRequirements?: Array<{ baseline: string; productId: string; warehouseId: string; quantity: number }>;
 }
 
 export interface DurableOutboxEventInput {

@@ -1,4 +1,5 @@
-import { CartItem, Transaction } from '../types';
+import { BusinessConfig, CartItem, Transaction } from '../types';
+import { isV3FinancialDocument, persistV3FinancialTransaction } from './sync/LargeMasterSyncV3FinancialCommit';
 import { db } from '../utils/db';
 import { getRemainingRefundQuantities, hasRefundableItems } from '../utils/refundAvailability';
 
@@ -10,6 +11,8 @@ interface PersistRefundOptions {
   originalTransaction?: Transaction | null;
   conditions?: Map<string, RefundCondition>;
   persistOriginal?: boolean;
+  adjustCustomerBalance?: boolean;
+  skipWalletDeposit?: boolean;
 }
 
 const emitCollectionUpdate = (collection: 'transactions' | 'products' | 'productStocks') => {
@@ -51,6 +54,30 @@ export async function persistStandaloneRefundTransaction(
     affectedNCF: refundTransaction.affectedNCF || originalTransaction?.ncf,
     syncStatus: 'PENDING'
   };
+
+  if (isV3FinancialDocument(persistedRefund)) {
+    const config = await db.getDocument('config', 'current') as BusinessConfig | null;
+    if (!config) throw new Error('SYNC_V3_CONFIG_REQUIRED');
+    const updatedOriginal = originalTransaction && options.persistOriginal !== false ? {
+      ...originalTransaction, status: originalTransaction.status,
+      relatedTransactions: Array.from(new Set([...(originalTransaction.relatedTransactions || []), persistedRefund.id])),
+      syncStatus: 'PENDING' as const,
+    } : undefined;
+    const expectedOriginal = updatedOriginal
+      ? await db.getDocument('transactions', updatedOriginal.id) as Transaction | null : null;
+    const expectedOriginalHistory = updatedOriginal
+      ? await db.getDocument('transactionHistory', updatedOriginal.id) as Transaction | null : null;
+    if (updatedOriginal && !expectedOriginal) throw new Error('SYNC_V3_REFUND_ORIGINAL_CHANGED');
+    const result = await persistV3FinancialTransaction(persistedRefund, config, options.warehouseId,
+      { refund: true, conditions: options.conditions, original: updatedOriginal,
+        expectedOriginal: expectedOriginal || undefined, expectedOriginalHistory,
+        adjustCustomerBalance: options.adjustCustomerBalance, skipWalletDeposit: options.skipWalletDeposit });
+    if (result.created) {
+      emitCollectionUpdate('transactions');
+      import('./sync/BackgroundSyncManager').then(module => { void module.backgroundSyncManager.triggerSync().catch(console.error); });
+    }
+    return { refund: result.transaction, updatedOriginal };
+  }
 
   await db.saveDocument('transactions', persistedRefund);
   await db.saveDocument('transactionHistory', persistedRefund as any);

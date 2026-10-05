@@ -5,7 +5,7 @@ import type { LargeMasterSyncV3CandidateReady } from '../services/sync/LargeMast
 import type { LargeMasterSyncV3Runtime } from '../services/sync/LargeMasterSyncV3Runtime';
 
 const article = {
-  id: 'A', sku: 'SKU-A', name: 'Agua', category: 'Bebidas', active: true,
+  id: 'A', type: 'PRODUCT', sku: 'SKU-A', name: 'Agua', category: 'Bebidas', active: true,
   sellable: true, inventoriable: true, taxable: true, taxIds: ['TX'],
   operationalFlags: { trackInventory: true }, activeWarehouseIds: ['W'],
 };
@@ -44,6 +44,15 @@ const fixture = (options: {
     async getOperationalVariants() {
       return [{ id: 'V1', sku: 'SKU-A-RED', active: true, price: 130,
         barcodes: ['7460001'], attributeValues: { color: 'Rojo' } }];
+    },
+    async getOperationalSupports(itemIds: string[], warehouseId: string) {
+      const balances: Record<string, unknown> = {};
+      const variants: Record<string, unknown[]> = {};
+      for (const id of itemIds) {
+        balances[id] = await this.getInventoryBalance(id, warehouseId);
+        variants[id] = await this.getOperationalVariants();
+      }
+      return { balances, variants };
     },
     async findBarcode() { return { articleId: 'A', variantId: 'V1' }; },
   } as unknown as LargeMasterSyncV3Runtime;

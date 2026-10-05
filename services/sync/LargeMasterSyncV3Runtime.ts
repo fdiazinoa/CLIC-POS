@@ -50,11 +50,20 @@ export class LargeMasterSyncV3Runtime {
     return this.store.findBarcode(this.version, barcode);
   }
 
+  findOperationalCode(code: string) {
+    if (!this.store.findOperationalCode) throw new Error('SYNC_V3_EXACT_CODE_UNAVAILABLE');
+    return this.store.findOperationalCode(this.version, code);
+  }
+
   getInventoryBalance(itemId: string, warehouseId: string) {
     return this.store.getInventoryBalance(this.version, itemId, warehouseId);
   }
 
   getInventorySnapshotVersion() {
     return this.store.getInventorySnapshotVersion(this.version);
+  }
+
+  getOperationalSupports(itemIds: string[], warehouseId: string) {
+    return this.store.getOperationalSupports?.(this.version, itemIds, warehouseId);
   }
 }

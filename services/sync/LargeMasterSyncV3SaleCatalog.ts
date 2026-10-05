@@ -89,8 +89,8 @@ export class LargeMasterSyncV3SaleCatalog {
     return (await this.priceArticles([article]))[0] || null;
   }
 
-  async findBarcode(barcode: string): Promise<{ saleArticle: V3SaleArticle; variant: RecordObject | null } | null> {
-    const match = await this.runtime.findBarcode(id(barcode));
+  async findBarcode(barcode: string, exactCode = false): Promise<{ saleArticle: V3SaleArticle; variant: RecordObject | null } | null> {
+    const match = exactCode ? await this.runtime.findOperationalCode(id(barcode)) : await this.runtime.findBarcode(id(barcode));
     if (!match) return null;
     const saleArticle = await this.get(match.articleId);
     if (!saleArticle) return null;

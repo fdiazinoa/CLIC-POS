@@ -69,6 +69,7 @@ interface PaymentModalProps {
    config?: BusinessConfig;
    onClose: () => void;
    onConfirm: (payments: PaymentEntry[], voluntaryTip?: number) => Promise<Transaction | null>;
+   beforePaymentEffects?: () => Promise<() => void>;
    themeColor: string;
    customer?: Customer | null;
    isDelinquent?: boolean;
@@ -245,7 +246,7 @@ type GatewayProgressOverlayState = {
 
 import SupervisorAuthModal from './SupervisorAuthModal';
 
-const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, total, items, taxAmount = 0, currencySymbol, config, onClose, onConfirm, themeColor, customer, isDelinquent, users, isMaster, currentUser, roles, isRestaurantMode, isInstallmentPayment = false }) => {
+const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, total, items, taxAmount = 0, currencySymbol, config, onClose, onConfirm, beforePaymentEffects, themeColor, customer, isDelinquent, users, isMaster, currentUser, roles, isRestaurantMode, isInstallmentPayment = false }) => {
    markRenderStart('PAYMENT_MODAL');
    useLayoutEffect(() => markRenderEnd('PAYMENT_MODAL'));
    const openingDestinationMounted = useRef(false);
@@ -894,7 +895,9 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, total,
       setSuccessNotice(null);
       setIsFinalizing(true);
       markInteractionStateUpdate(trace, 3);
+      let releasePaymentFence: (() => void) | undefined;
       try {
+         if (beforePaymentEffects) releasePaymentFence = await beforePaymentEffects();
          let paymentsToConfirm = payments;
 
          // UX: If cashier typed an amount but didn't press "Agregar",
@@ -1079,6 +1082,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, total,
          setFinalizeError(message ? `Error al finalizar: ${message}` : 'Ocurrió un error al finalizar. Intente nuevamente.');
          setGatewayProgress(null);
       } finally {
+         releasePaymentFence?.();
          setIsFinalizing(false);
          if (trace.stages.HANDLER_END === undefined) markInteractionStage(trace, 'HANDLER_END');
       }

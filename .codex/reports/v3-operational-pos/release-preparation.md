@@ -1,0 +1,41 @@
+# V3 operational POS — RELEASE preparation / PENDING, build BLOCKED
+
+Role/session: RELEASE `/root/v3_operational_release`; task `v3-operational-pos`; date 2026-10-05. Base inspected `dc92365733b774203d282db23e6306ac05accb2f`; branch `feature/sync-v3-operational-pos`; source worktree `/Users/felixdiaz/.codex/worktrees/v3-canary-routing/CLIC-POS`. The sole developer is implementing the independently approved analysis and build-safety amendment. No frozen candidate SHA exists. This report is preparatory, not CODE/BUILD/INTERNAL/PRODUCTION approval.
+
+## Instructions and observed evidence
+
+Read fully: `AGENTS.md`, `WORKFLOW.md`, `.codex/agents/release.md`, `docs/APK_RELEASE_CHECKLIST.md`, `docs/AGENT_RELEASE_PROTOCOL.md`, `docs/APK_RELEASE_CONSTITUTION.md`, and `/Users/felixdiaz/.codex/skills/clic-pos-apk-installation/SKILL.md`; also the task analysis and plan-amendment-build-safety. Role instructions are delegated to this independent session; native client role selection is not assumed. No Gradle, build, dependency installation, release-gate execution, version change, device installation/restart, sale, payment, stock mutation or promotion occurred.
+
+Canonical signed build worktree: `/Users/felixdiaz/.gemini/antigravity/playground/tensor-planetoid/_worktrees/CLIC-POS/CLIC-POS-mobile-sqlite`. Read-only `git status --short` shows exactly `M android/app/build.gradle`. HEAD is `30491c3dc6e04bc3ec0407f2b6094923b779fd75`. Its entire tracked diff is the prior generated version change `1479 / 1.1.479` to `1480 / 1.1.480`; no other tracked changes were observed. Signing secrets were neither read nor copied.
+
+Canonical `output-metadata.json` and `release-report-1.1.480-canary.txt` identify package `com.clicpos.app`, code1480, actual packaged version `1.1.480-canary`, source30491c3, LAN enabled/manifest verified, packaged assets verified, prebuild recorded true, promotion false, laboratory canary true, sales false. These are historical declarations, not an independently repeated signature/assets/gate certification. `git merge-base --is-ancestor 30491c3dc6e04bc3ec0407f2b6094923b779fd75 dc92365733b774203d282db23e6306ac05accb2f` returned exit0.
+
+Read-only helper `install_clic_pos_apk.sh list` found exactly one authorized Android device `127.0.0.1:6555`, Pixel_C / motion_phone_arm64. `dumpsys package com.clicpos.app` confirms installed code1480 / `1.1.480-canary`; `getprop ro.kernel.qemu` returns1. Binding/SQLite ownership, transaction behavior and complete fiscal/ERP cycle are not certified by these package checks. The same emulator remains the only authorized target; no unlink/reset/clear/uninstall/downgrade is permitted.
+
+## Exact blockers before any candidate build
+
+1. Implementation is uncommitted and changing; no frozen reviewed SHA, independent REVIEW PASS, QA PASS, SYNC PASS, PERFORMANCE PASS or device evidence exists. Full V2 parity is not established. Source build/testing must run on exact frozen source with Node22 (e.g. `npx --yes --package=node@22` orchestration), not the host Node24 by inference.
+2. Canonical worktree is dirty. The signed release script correctly refuses this state. Do not bypass `--require-clean`, force checkout/reset, overwrite another author's work, or treat an explained diff as a clean worktree.
+3. At the inspected base the script/Gradle know only laboratory CANARY and paired `CLIC_POS_SIGNED_V3_CANARY`; sales-enabled operational-candidate classification is missing. The approved build-safety amendment must be implemented, committed and independently tested first. Current normal metadata would incorrectly describe an operational build as promotable V2.
+4. Ensure explicit shell booleans exported to the Vite subprocess: `VITE_LARGE_MASTER_SYNC_V3_CANDIDATE` and `VITE_LARGE_MASTER_SYNC_V3_CANARY` must be the validated values, even when false. Otherwise ignored `.env`/`.env.production` can enable candidate JS while Gradle/report classify normal V2. Match native signed opt-ins; reject ambiguous/orphaned/simultaneous modes and diagnostic combinations. A dotenv or inherited-environment bypass must have a regression test.
+5. Exact packaged operational suffix, expected filename, Android metadata and report must agree. Required report evidence includes operationalV3Candidate=true, paired opt-in=true, nonpromotable=true, salesEnabled=true, exact source plus assets hashes/signature/LAN/prebuild. Laboratory sales-disabled metadata and normal V2 defaults must remain intact. The next-version parser must understand the operational suffix without resetting numeric version chronology. Version1480 is already consumed; compute the next value across all canonical/history metadata at build time, never reuse or downgrade1480.
+6. Promotion must reject operational/nonpromotable evidence even if its versionName is forged back to a normal numeric string; reject malformed/inconsistent mode metadata fail-closed. Do not reduce golden baseline, required tests/topologies or budgets. Actual suffix is a second safety boundary, not the only one.
+7. The productInventory contract lacks scoped movement inclusion/coverage acknowledgments. The approved frozen inventory overlay candidate is not unrestricted refresh parity. Recipe/kit/tracking/modifier/reservation semantics and full cycle/refund/Z/outbox behavior remain required independent validation/ERP blockers as the analyst describes. Zero inventory does not authorize fabricated balances or negative-stock policy changes.
+
+## Safe alignment procedure (proposal only; not executed)
+
+After frozen source gates and build authorization, re-inspect canonical HEAD/status/diff and metadata; stop if anything differs from the exact prior version-only hunk. Preserve the full version patch and previous reports/assets/metadata/APK in the durable release history or another explicitly identified recoverable evidence location, including hashes. Then formalize the explained generated version state on a technical build-only branch with a small version commit **or** apply only the validated inverse version hunk after preserving its exact patch and recording why. Do not use broad checkout/reset/clean; do not touch signing files, outputs, SQLite or identity. A technical build-only commit does not become the functional source of truth and must not be merged as an unrelated feature. Independently verify canonical tracked status is empty. Existing metadata retains code1480 as the monotonic floor even if the tracked build file returns to1479.
+
+Execute only the frozen candidate's canonical script from a clean source checkout containing latest `origin/develop` and all required fixes, after fresh ancestry validation of the previous APK source. Let that script align the clean signed checkout to the exact selected source. Run npm ci, canonical prebuild and build with explicit operational flags and `CLIC_POS_RELEASE_LAN_HTTP_ENABLED=true`; only after prebuild succeeds may it calculate/apply the new version and invoke a single Gradle release build. Do not compile intermediate/historical PRs or a second local APK from this source worktree. Independently verify actual signature CN=CLIC POS, package, code/name/suffix, SHA256, source identity, LAN manifest and asset hashes against the durable report.
+
+Installation remains a later separately authorized gate on the same serial using the skill inspect helper then `adb install -r`, preserving binding/local database. Report exact artifact manifest and observed startup/state/full-cycle evidence; stop rollout on failure. Physical topologies/peripherals and internal deployment/testing requirements cannot be inferred from emulator success. No Cloud-Admin upload/publication or production promotion is authorized here.
+
+## Gate disposition
+
+- Preparatory read-only audit: completed.
+- Candidate code/review/QA/sync/performance: PENDING.
+- Signed build: BLOCKED (no frozen approved SHA; canonical dirty; artifact-mode amendment not yet reviewed).
+- Installation/internal testing: PENDING, not performed.
+- Production release/promote: BLOCKED and outside this candidate's authority; operational artifact must remain explicitly nonpromotable.
+
+Root notified of canonical dirty hunk and dotenv classification risk. This report authorizes no functional change, version bump, build, installation or release.

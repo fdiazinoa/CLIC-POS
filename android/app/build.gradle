@@ -13,8 +13,26 @@ def webviewProfileQa = System.getenv('CLIC_POS_WEBVIEW_PROFILE') == 'true'
 def tableLatencyQa = System.getenv('CLIC_POS_TABLE_LATENCY_QA') == 'true'
 def v3Canary = System.getenv('VITE_LARGE_MASTER_SYNC_V3_CANARY') == 'true'
 def signedV3CanaryOptIn = System.getenv('CLIC_POS_SIGNED_V3_CANARY') == 'true'
+def v3Candidate = System.getenv('VITE_LARGE_MASTER_SYNC_V3_CANDIDATE') == 'true'
+def signedV3CandidateOptIn = System.getenv('CLIC_POS_SIGNED_V3_CANDIDATE') == 'true'
 
 if (gradle.startParameter.taskNames.any { it.toLowerCase().contains('release') }) {
+    ['VITE_LARGE_MASTER_SYNC_V3_CANARY', 'CLIC_POS_SIGNED_V3_CANARY',
+     'VITE_LARGE_MASTER_SYNC_V3_CANDIDATE', 'CLIC_POS_SIGNED_V3_CANDIDATE'].each { name ->
+        def value = System.getenv(name) == null ? 'false' : System.getenv(name)
+        if (!(value in ['true', 'false'])) throw new GradleException("${name} debe ser true o false.")
+    }
+    if (v3Candidate != signedV3CandidateOptIn) {
+        throw new GradleException('El release candidato V3 requiere ambas banderas coincidentes.')
+    }
+    if (v3Candidate && v3Canary) {
+        throw new GradleException('El candidato operativo V3 no puede combinarse con el canario de laboratorio.')
+    }
+    if (v3Candidate && ['CLIC_POS_DIAGNOSTICS', 'CLIC_POS_WEBVIEW_PROFILE', 'CLIC_POS_TABLE_LATENCY_QA'].any {
+        System.getenv(it) != null && System.getenv(it) != 'false'
+    }) {
+        throw new GradleException('El release candidato V3 no se puede combinar con otros modos diagnósticos.')
+    }
     if (v3Canary != signedV3CanaryOptIn) {
         throw new GradleException('El release canario V3 requiere ambas banderas explícitas; un release normal requiere ambas apagadas.')
     }
@@ -67,6 +85,7 @@ android {
     buildTypes {
         release {
             if (v3Canary && signedV3CanaryOptIn) versionNameSuffix '-canary'
+            if (v3Candidate && signedV3CandidateOptIn) versionNameSuffix '-v3-candidate'
             if (diagnosticBuild) versionNameSuffix '-diagnostic'
             if (webviewProfileQa) versionNameSuffix '-profile'
             if (tableLatencyQa) versionNameSuffix '-tableqa'
