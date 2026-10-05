@@ -6,7 +6,7 @@ The emulator-only canary registers its existing terminal identity through `URL E
 
 The receiver is integrated with POS database bootstrap and foreground resume, but remains compile-time disabled through `LARGE_MASTER_SYNC_V3_RECEIVER_ENABLED = false` in `services/sync/LargeMasterSyncV3Lifecycle.ts`.
 
-The contract-v2 receiver stores the added operational article, tariff, tax and variant records in SQLite and migrates existing canary databases additively. It rejects a contract-v1 session for operational reads and exposes bounded, version-fenced article queries. This is preparation only: the lifecycle guard remains off and the React POS still reads its legacy catalog. Do not build an operational V3 APK from this change alone.
+The contract-v2 receiver stores the added operational article, tariff, tax and variant records in SQLite and migrates existing canary databases additively. It rejects a contract-v1 session for operational reads and exposes bounded, version-fenced article queries. `LargeMasterSyncV3SaleCatalog` additionally pins one snapshot and effective tariff, resolves its active taxes, and refuses missing prices or inactive barcode variants. This is preparation only: the lifecycle guard remains off and the React POS still reads its legacy catalog. Do not build an operational V3 APK from this change alone.
 
 While dark it performs no V3 HTTP request, adds no capability header, does not change legacy full/delta/config flows, and does not replace the React `products` or `productPrices` arrays. If a previously activated V3 database exists, the runtime pointer also stays unused while the guard is false; legacy remains authoritative.
 
