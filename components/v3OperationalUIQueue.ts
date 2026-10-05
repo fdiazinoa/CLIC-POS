@@ -1,18 +1,25 @@
 import type { BusinessConfig, Transaction } from '../types';
+import { calculateLineFiscalValuesForTransaction, resolveEffectiveTaxes } from '../utils/fiscalBreakdown';
+import { resolveAppliedServiceTaxPolicy } from '../utils/serviceTaxPolicy';
 
 /** Provider projection uses persisted line amounts, including refund/discount rounding. */
 export const buildV3FrozenFiscalProviderTransaction = (transaction: Transaction, config: BusinessConfig): Transaction => {
-  const taxes = new Map((config.taxes || []).map(tax => [tax.id, tax]));
+  const terminal = config.terminals?.find(row => row.id === transaction.terminalId)?.config;
+  const policy = transaction.serviceTaxPolicySnapshot || transaction.service_tax_policy_snapshot
+    || resolveAppliedServiceTaxPolicy(config, terminal, transaction.serviceType || 'DINE_IN');
+  const taxExempt = transaction.customerSnapshot?.isTaxExempt === true;
+  const calculated = calculateLineFiscalValuesForTransaction(transaction.items, config, {
+    discountAmount: transaction.discountAmount || 0,
+    isTaxIncluded: transaction.items[0]?.v3SaleAuthority?.taxIncluded === true,
+    terminalConfig: terminal, taxExempt, allowedTaxIds: policy.taxIds,
+  });
   const breakdown = new Map<string, any>();
-  for (const line of transaction.items) {
+  for (const [index, line] of transaction.items.entries()) {
     if (![line.netAmount, line.taxAmount, line.totalAmount].every(value => typeof value === 'number' && Number.isFinite(value))) {
       throw new Error('SYNC_V3_FROZEN_FISCAL_INVALID');
     }
-    const lineTaxes = (line.appliedTaxIds || []).map(id => {
-      const tax = taxes.get(id);
-      if (!tax) throw new Error('SYNC_V3_TAX_UNAVAILABLE');
-      return tax;
-    }).filter(tax => tax.rate > 0);
+    const lineTaxes = taxExempt ? [] : resolveEffectiveTaxes(line, config, terminal, 0, 'Impuesto', policy.taxIds)
+      .filter(tax => tax.rate > 0);
     const rate = lineTaxes.reduce((sum, tax) => sum + tax.rate, 0);
     if (line.taxAmount && !rate) throw new Error('SYNC_V3_FROZEN_FISCAL_INVALID');
     for (const tax of lineTaxes) {
@@ -21,8 +28,10 @@ export const buildV3FrozenFiscalProviderTransaction = (transaction: Transaction,
       const row = breakdown.get(tax.id) || { id: tax.id, name: tax.name, rate: tax.rate,
         amount: 0, taxableBase: 0, total: 0, lineCount: 0 };
       row.amount += amount;
-      row.taxableBase += Number(line.netAmount);
-      row.total += Number(line.netAmount) + amount;
+      // Header residuals frozen into the last line include non-taxed service charges.
+      // Use the fiscal base before that residual, preserving the frozen tax amount.
+      row.taxableBase += calculated[index].netAmount;
+      row.total += calculated[index].netAmount + amount;
       row.lineCount++;
       breakdown.set(tax.id, row);
     }
