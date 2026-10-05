@@ -39,8 +39,8 @@ android {
         buildConfigField "boolean", "WEBVIEW_PROFILE_QA", webviewProfileQa ? "true" : "false"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1476
-        versionName "1.1.476"
+        versionCode 1479
+        versionName "1.1.479"
         manifestPlaceholders = [
                 usesCleartextTraffic: "true",
                 diagnosticProfileable: System.getenv("CLIC_POS_DIAGNOSTICS") == "true" ? "true" : "false",
