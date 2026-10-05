@@ -22,6 +22,7 @@ function save(builder: string, ticket: any, activeTable: any, items: any[]) {
   const finish = pos.indexOf('\n      };', begin) + 9;
   const context = {
     existing: ticket, existingParked: ticket, activeTable,
+    parkedTicketsRef: { current: [ticket] }, getTableSellerId,
     orderId: ticket.id, parkedTicketId: ticket.id,
     cart: items, ticketItems: items, cartTotal: 150, ticketTotal: 150,
     resolvedTicketTotal: 150, retainCurrentPaymentFractionPlan,
