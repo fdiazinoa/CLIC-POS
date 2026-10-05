@@ -67,8 +67,10 @@ test('adapts a pinned V3 article, tariff, tax, variant and separate warehouse ba
   assert.equal(item.taxes[0].rate, 0.18);
   assert.equal(item.product.variants[0].price, 130);
   assert.deepEqual(item.authority, {
-    syncId: 'S1', syncVersion: 10, tariffId: 'T1', inventoryVersion: 4, inventoryCursor: 'C4',
+    syncId: 'S1', syncVersion: 10, tariffId: 'T1', taxIncluded: true,
+    inventoryVersion: 4, inventoryCursor: 'C4',
   });
+  assert.strictEqual(item.product.v3SaleAuthority, item.authority);
   assert.deepEqual(calls, ['prices:T1', 'inventory:A:W']);
   const barcode = await catalog.findBarcode('7460001');
   assert.equal(barcode?.variant?.id, 'V1');
