@@ -1,4 +1,5 @@
-import type { Product, ProductOperationalFlags, ProductVariant, TaxDefinition } from '../../types';
+import type { Product, ProductOperationalFlags, ProductVariant, TaxDefinition,
+  V3SaleAuthorityStamp } from '../../types';
 import type { LargeMasterSyncV3CandidateReady } from './LargeMasterSyncV3Candidate';
 import { LargeMasterSyncV3SaleCatalog, type V3SaleArticle } from './LargeMasterSyncV3SaleCatalog';
 import { LargeMasterSyncV3Error } from './LargeMasterSyncV3Types';
@@ -41,13 +42,7 @@ const operationalFlags = (value: unknown): ProductOperationalFlags => {
 export interface V3OperationalProduct {
   product: Product;
   taxes: TaxDefinition[];
-  authority: Readonly<{
-    syncId: string;
-    syncVersion: number;
-    tariffId: string;
-    inventoryVersion: number;
-    inventoryCursor: string;
-  }>;
+  authority: Readonly<V3SaleAuthorityStamp>;
 }
 
 /**
@@ -112,6 +107,14 @@ export class LargeMasterSyncV3OperationalCatalog {
       type: taxType(row.type),
     }));
     const flags = operationalFlags(article.operationalFlags);
+    const authority: Readonly<V3SaleAuthorityStamp> = Object.freeze({
+      syncId: sale.version.syncId,
+      syncVersion: sale.version.syncVersion,
+      tariffId: this.saleCatalog.tariffId,
+      taxIncluded: sale.tariff.taxIncluded === true,
+      inventoryVersion: this.ready.inventoryVersion,
+      inventoryCursor: this.ready.inventoryCursor,
+    });
     const product: Product = {
       id: articleId,
       sku: optionalString(article.sku),
@@ -126,6 +129,7 @@ export class LargeMasterSyncV3OperationalCatalog {
       type: article.type === 'SERVICE' ? 'SERVICE' : 'PRODUCT',
       is_active: true,
       is_sellable: true,
+      v3SaleAuthority: authority,
       isInventoriable: booleanValue(article.inventoriable),
       taxable: booleanValue(article.taxable),
       appliedTaxIds: taxes.map(tax => tax.id),
@@ -143,13 +147,7 @@ export class LargeMasterSyncV3OperationalCatalog {
       variants,
       tariffs: [{ tariffId: this.saleCatalog.tariffId, price: sale.price }],
     };
-    return { product, taxes, authority: Object.freeze({
-      syncId: sale.version.syncId,
-      syncVersion: sale.version.syncVersion,
-      tariffId: this.saleCatalog.tariffId,
-      inventoryVersion: this.ready.inventoryVersion,
-      inventoryCursor: this.ready.inventoryCursor,
-    }) };
+    return { product, taxes, authority };
   }
 
   async search(query: string, categoryId?: string | null, limit = 60): Promise<V3OperationalProduct[]> {

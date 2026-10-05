@@ -1489,6 +1489,16 @@ export interface RecipeDetail {
   cost?: number; // Calculated dynamic cost
 }
 
+/** Pinned source of a candidate V3 sale line; never inferred from legacy IDs. */
+export interface V3SaleAuthorityStamp {
+  syncId: string;
+  syncVersion: number;
+  tariffId: string;
+  taxIncluded: boolean;
+  inventoryVersion: number;
+  inventoryCursor: string;
+}
+
 export interface Product {
   id: string;
   sku?: string;
@@ -1520,6 +1530,7 @@ export interface Product {
   cost?: number;
   is_active?: boolean;
   is_sellable?: boolean;
+  v3SaleAuthority?: V3SaleAuthorityStamp;
   theoreticalCost?: number; // New calculated cost
   type?: ProductType;
   isInventoriable?: boolean;
