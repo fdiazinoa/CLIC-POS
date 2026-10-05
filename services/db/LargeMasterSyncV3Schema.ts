@@ -128,6 +128,25 @@ CREATE TABLE IF NOT EXISTS master_v3_prices (
 );
 CREATE INDEX IF NOT EXISTS idx_master_v3_prices_tariff_article
 ON master_v3_prices(sync_version, tariff_id, article_id);
+
+CREATE TABLE IF NOT EXISTS master_v3_inventory_state (
+  singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+  sync_id TEXT NOT NULL,
+  sync_version INTEGER NOT NULL,
+  inventory_version INTEGER NOT NULL CHECK (inventory_version >= 0),
+  cursor TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS master_v3_inventory_balances (
+  item_id TEXT NOT NULL,
+  warehouse_id TEXT NOT NULL,
+  qty_on_hand REAL NOT NULL,
+  qty_reserved REAL NOT NULL,
+  qty_committed REAL NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (item_id, warehouse_id)
+);
 `;
 
 const CONTRACT_V2_COLUMNS = [
