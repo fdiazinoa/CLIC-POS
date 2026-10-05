@@ -10,6 +10,7 @@ import {
   LargeMasterSyncV3Client,
   sha256Utf8,
   validateLargeMasterSyncV3Manifest,
+  validateOperationalLargeMasterSyncV3Manifest,
   type LargeMasterSyncV3HttpResponse,
   type LargeMasterSyncV3Transport,
 } from '../services/sync/LargeMasterSyncV3Client';
@@ -181,6 +182,85 @@ test('rejects unsupported schemas, empty manifests, corrupt bytes and mismatched
     assert.throws(() => client.validateChunk(invalid, manifest, 'articles', 0, 1), /SYNC_V3_CHUNK_ENVELOPE_MISMATCH/);
   }
   assert.throws(() => client.validateChunk(valid, manifest, 'articles', 0, 2), /SYNC_V3_CHUNK_ENVELOPE_MISMATCH/);
+});
+
+test('operational catalog requires contract v2 authority and separate inventory', async () => {
+  const { manifest } = await manifestAndResponses({ articles: [[{ id: 'A', taxable: true, taxIds: [], active: true }]] });
+  assert.throws(() => validateOperationalLargeMasterSyncV3Manifest(manifest),
+    /SYNC_V3_OPERATIONAL_CONTRACT_REQUIRED/);
+  const operational = {
+    ...manifest,
+    contractVersion: 2,
+    authority: {
+      catalog: 'V3_SNAPSHOT', prices: 'V3_SNAPSHOT', taxes: 'V3_SNAPSHOT',
+      inventory: 'SEPARATE_COLLECTION',
+    },
+    supplementalCollections: [{
+      collection: 'productInventory', domain: 'inventory',
+      endpoint: '/api/sync/collections/productInventory/full',
+      consistency: 'EVENTUAL_AFTER_V3_ACTIVATION',
+    }],
+  };
+  assert.equal(validateOperationalLargeMasterSyncV3Manifest(operational).contractVersion, 2);
+  assert.throws(() => validateOperationalLargeMasterSyncV3Manifest({
+    ...operational, authority: { ...operational.authority, prices: 'LEGACY' },
+  }), /SYNC_V3_CONTRACT_INVALID/);
+  assert.throws(() => validateOperationalLargeMasterSyncV3Manifest({
+    ...operational, supplementalCollections: [],
+  }), /SYNC_V3_CONTRACT_INVALID/);
+  assert.throws(() => validateOperationalLargeMasterSyncV3Manifest({
+    ...operational, datasets: { articles: manifest.datasets.articles },
+  }), /SYNC_V3_OPERATIONAL_DATASETS_INCOMPLETE/);
+});
+
+test('contract v2 retains operational records and fences the active SQLite version', async () => {
+  const article = {
+    id: 'A', sku: 'DEMO-001', name: 'Artículo demo', description: 'Artículo demo',
+    category: 'Bebidas', categoryId: 'CAT', posCategoryId: 'CAT', active: true,
+    sellable: true, inventoriable: true, taxable: true, taxIds: ['TX'],
+    operationalFlags: { trackInventory: true },
+  };
+  const { manifest, responses } = await manifestAndResponses({
+    articles: [[article]],
+    prices: [[{ articleId: 'A', tariffId: 'T1', price: 125.5 }]],
+    tariffs: [[{ id: 'T1', code: 'DET', name: 'Detalle', currency: 'DOP', taxIncluded: true, active: true }]],
+    taxes: [[{ id: 'TX', code: 'ITBIS18', name: 'ITBIS 18%', rate: 0.18, active: true }]],
+  });
+  const operational = {
+    ...manifest,
+    contractVersion: 2,
+    authority: { catalog: 'V3_SNAPSHOT', prices: 'V3_SNAPSHOT', taxes: 'V3_SNAPSHOT',
+      inventory: 'SEPARATE_COLLECTION' },
+    supplementalCollections: [{ collection: 'productInventory', domain: 'inventory',
+      endpoint: '/api/sync/collections/productInventory/full', consistency: 'EVENTUAL_AFTER_V3_ACTIVATION' }],
+  };
+  responses.set(`/api/sync/v3/master-syncs/${SYNC_ID}/manifest`, {
+    status: 200, headers: {}, text: JSON.stringify(operational),
+  });
+  const { store, sqlite } = sqliteStore();
+  const client = new LargeMasterSyncV3Client({ store, transport: new MapTransport(responses),
+    storageStats: async () => ({ availableBytes: 1e9, totalBytes: 2e9 }) });
+  assert.deepEqual(await client.resumeSync(SYNC_ID), {
+    syncId: SYNC_ID, syncVersion: 186, contractVersion: 2,
+  });
+  assert.deepEqual(await store.getActiveRuntimeVersion(), {
+    syncId: SYNC_ID, syncVersion: 186, contractVersion: 2,
+  });
+  const stored = sqlite.prepare('SELECT sellable, record_json FROM master_v3_articles WHERE sync_version = 186').get() as {
+    sellable: number; record_json: string;
+  };
+  assert.equal(stored.sellable, 1);
+  assert.deepEqual(JSON.parse(stored.record_json), article);
+  assert.equal((sqlite.prepare('SELECT contract_version FROM sync_v3_sessions WHERE sync_id = ?')
+    .get(SYNC_ID) as { contract_version: number }).contract_version, 2);
+  const runtime = await LargeMasterSyncV3Runtime.open(store);
+  assert.ok(runtime);
+  assert.deepEqual(await runtime.searchOperationalArticles('demo'), [article]);
+  assert.deepEqual(await runtime.searchOperationalArticles('demo', 'OTHER'), []);
+  assert.deepEqual(await runtime.getOperationalArticle('A'), article);
+  assert.equal((await runtime.getOperationalTariffs())[0].taxIncluded, true);
+  assert.equal((await runtime.getOperationalTaxes())[0].rate, 0.18);
+  assert.deepEqual(await runtime.getOperationalVariants('A'), []);
 });
 
 test('treats the disabled V3 response as a non-fatal legacy fallback', async () => {

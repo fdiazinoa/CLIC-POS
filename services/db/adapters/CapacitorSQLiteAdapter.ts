@@ -11,7 +11,7 @@ import type {
 import { DURABLE_OUTBOX_SCHEMA_SQL } from '../../sync/DurableOutboxSchema';
 import { applyMasterNumberToDocument, buildNumberedCustomerMutation } from '../../sync/masterNumberRangeContract';
 import { compactStoredTerminalCatalog } from '../../../utils/compactTerminalCatalogSnapshot';
-import { LARGE_MASTER_SYNC_V3_SCHEMA_SQL } from '../LargeMasterSyncV3Schema';
+import { LARGE_MASTER_SYNC_V3_SCHEMA_SQL, ensureLargeMasterSyncV3ContractColumns } from '../LargeMasterSyncV3Schema';
 import { LargeMasterSyncV3SqliteStore } from '../LargeMasterSyncV3SqliteStore';
 
 const DB_NAME = 'clic_pos_native';
@@ -558,6 +558,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             ${DURABLE_OUTBOX_SCHEMA_SQL}
             ${LARGE_MASTER_SYNC_V3_SCHEMA_SQL}
         `);
+        await ensureLargeMasterSyncV3ContractColumns(db);
         await this.migrateLegacyCollectionsBlobTable();
     }
 

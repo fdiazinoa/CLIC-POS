@@ -3,6 +3,7 @@ CREATE TABLE IF NOT EXISTS sync_v3_sessions (
   sync_id TEXT PRIMARY KEY NOT NULL,
   sync_version INTEGER NOT NULL,
   schema_version INTEGER NOT NULL CHECK (schema_version = 3),
+  contract_version INTEGER NOT NULL DEFAULT 1 CHECK (contract_version >= 1),
   status TEXT NOT NULL CHECK (status IN ('STAGING','VALIDATED','ACTIVE','FAILED','ROLLED_BACK')),
   manifest_json TEXT NOT NULL,
   created_at TEXT NOT NULL,
@@ -64,6 +65,8 @@ CREATE TABLE IF NOT EXISTS master_v3_articles (
   family_id TEXT,
   category_id TEXT,
   active INTEGER NOT NULL,
+  sellable INTEGER NOT NULL DEFAULT 1,
+  record_json TEXT,
   PRIMARY KEY (sync_version, article_id)
 );
 CREATE INDEX IF NOT EXISTS idx_master_v3_articles_version_sku
@@ -76,6 +79,7 @@ CREATE TABLE IF NOT EXISTS master_v3_tariffs (
   name TEXT,
   currency TEXT,
   active INTEGER NOT NULL,
+  record_json TEXT,
   PRIMARY KEY (sync_version, tariff_id)
 );
 
@@ -86,6 +90,7 @@ CREATE TABLE IF NOT EXISTS master_v3_taxes (
   name TEXT,
   rate REAL,
   active INTEGER NOT NULL,
+  record_json TEXT,
   PRIMARY KEY (sync_version, tax_id)
 );
 
@@ -96,6 +101,7 @@ CREATE TABLE IF NOT EXISTS master_v3_variants (
   code TEXT,
   description TEXT,
   active INTEGER NOT NULL,
+  record_json TEXT,
   PRIMARY KEY (sync_version, article_id, variant_id),
   FOREIGN KEY (sync_version, article_id) REFERENCES master_v3_articles(sync_version, article_id)
 );
@@ -123,3 +129,24 @@ CREATE TABLE IF NOT EXISTS master_v3_prices (
 CREATE INDEX IF NOT EXISTS idx_master_v3_prices_tariff_article
 ON master_v3_prices(sync_version, tariff_id, article_id);
 `;
+
+const CONTRACT_V2_COLUMNS = [
+  ['sync_v3_sessions', 'contract_version', 'INTEGER NOT NULL DEFAULT 1'],
+  ['master_v3_articles', 'sellable', 'INTEGER NOT NULL DEFAULT 1'],
+  ['master_v3_articles', 'record_json', 'TEXT'],
+  ['master_v3_tariffs', 'record_json', 'TEXT'],
+  ['master_v3_taxes', 'record_json', 'TEXT'],
+  ['master_v3_variants', 'record_json', 'TEXT'],
+] as const;
+
+/** Additive and idempotent: upgrades the already-activated emulator database in place. */
+export const ensureLargeMasterSyncV3ContractColumns = async (db: {
+  query(sql: string): Promise<{ values?: Array<Record<string, unknown>> }>;
+  execute(sql: string): Promise<unknown>;
+}): Promise<void> => {
+  for (const [table, column, definition] of CONTRACT_V2_COLUMNS) {
+    const info = await db.query(`PRAGMA table_info(${table});`);
+    if (info.values?.some(row => String(row.name) === column)) continue;
+    await db.execute(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition};`);
+  }
+};
