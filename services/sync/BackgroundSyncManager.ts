@@ -928,6 +928,7 @@ class BackgroundSyncManager {
                 const toPruneIds: string[] = [];
 
                 data.forEach(item => {
+                    if (item.v3InventoryBaseline) return;
                     const itemDate = this.resolveItemDate(item);
                     const isOld = !!itemDate && itemDate < cutoff;
                     const isSynced = [

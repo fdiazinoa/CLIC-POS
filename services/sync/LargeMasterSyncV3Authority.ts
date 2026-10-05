@@ -1,12 +1,13 @@
 import type { CloudChannel } from './SyncProfile';
 import { LargeMasterSyncV3Error } from './LargeMasterSyncV3Types';
 
-/** Deliberately dark until the complete POS sale-read boundary is wired. */
-export const LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED = false as boolean;
+/** Build-only opt-in; the production V2 build stays unchanged. */
+export const LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED =
+  import.meta.env?.VITE_LARGE_MASTER_SYNC_V3_CANDIDATE === 'true';
 
 /** Legacy collection endpoints replaced by contract-v2 V3 datasets. */
 const V3_REPLACED_ERP_MASTERS = new Set([
-  'products', 'items', 'priceLists', 'productPrices', 'taxes',
+  'products', 'items', 'priceLists', 'productPrices', 'taxes', 'productStocks',
 ]);
 
 export const usesLargeMasterSyncV3Authority = (

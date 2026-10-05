@@ -55,6 +55,7 @@ export const prepareLargeMasterSyncV3Candidate = async (
   if (!dependencies.enabled) throw new LargeMasterSyncV3Error('SYNC_V3_CANDIDATE_DISABLED');
   dependencies.assertEmulator();
   if (!store) throw new LargeMasterSyncV3Error('SYNC_V3_NATIVE_STORE_UNAVAILABLE');
+  await store.assertCanRefresh?.();
   const client = dependencies.createClient(store, v3BaseUrl, metric);
   const requested = await client.requestSync(signal);
   if ('fallback' in requested) throw new LargeMasterSyncV3Error('SYNC_V3_LEGACY_FALLBACK_REJECTED');

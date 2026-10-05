@@ -1,6 +1,6 @@
 import { withOriginal } from './recovery/OriginalCapture';
 import { recordCheckoutDiagnostic } from './CheckoutDiagnostics';
-import { Customer, Transaction, DocumentType, DocumentSeries } from '../types';
+import { BusinessConfig, Customer, Transaction, DocumentType, DocumentSeries } from '../types';
 import { db } from '../utils/db';
 import { normalizeTransactionForSync } from './sync/sourceIdentity';
 import { isSyncFeatureEnabled } from './sync/SyncFeatureFlags';
@@ -12,6 +12,9 @@ import {
 } from '../utils/documentSeriesIdentity';
 import { normalizeDocumentSeries } from '../utils/terminalConfigSnapshot';
 import { withCustomerNumberSnapshot } from './sync/customerIdentityContract';
+import { isV3FinancialDocument, persistV3FinancialBatch, validateV3FrozenFiscalAmounts } from './sync/LargeMasterSyncV3FinancialCommit';
+import { getLargeMasterSyncV3OperationalSession } from './sync/LargeMasterSyncV3OperationalSession';
+import { validateV3FrozenLineFiscalAmounts } from './sync/LargeMasterSyncV3LineSource';
 
 const EPSILON = 0.01;
 
@@ -378,6 +381,20 @@ class TransactionService {
         if (!data.seriesId) {
             throw new Error('seriesId is required');
         }
+        validateV3FrozenFiscalAmounts(data);
+        if (isV3FinancialDocument(data) && options.deferDurablePersistence !== true) {
+            throw new Error('SYNC_V3_ATOMIC_COMMIT_REQUIRED');
+        }
+        if (isV3FinancialDocument(data)) {
+            const config = await db.getDocument('config', 'current') as BusinessConfig | null;
+            if (!config) throw new Error('SYNC_V3_CONFIG_REQUIRED');
+            const session = await getLargeMasterSyncV3OperationalSession();
+            const stamp = data.items![0].v3SaleAuthority!;
+            const projected = await session.projectConfig(config);
+            await session.validate(projected, data.items!, stamp.tariffId,
+                stamp.warehouseId || '', data.documentType === 'REFUND' ? 'REFUND' : 'SALE');
+            validateV3FrozenLineFiscalAmounts(data as Transaction, projected);
+        }
 
         if (data.customerId) {
             const customer = await db.getDocument('customers', data.customerId) as Customer | null;
@@ -505,7 +522,10 @@ class TransactionService {
         recordCheckoutDiagnostic('TRANSACTION_CREATED', { items: normalizedTransaction.items, total: normalizedTransaction.total, transactionId: normalizedTransaction.id, displayId: normalizedTransaction.displayId, payments: normalizedTransaction.payments, terminalId: normalizedTransaction.terminalId });
 
         const deferToFinancialCommit = options.deferDurablePersistence === true
-            && isSyncFeatureEnabled('sqlite_outbox_v2');
+            && (isSyncFeatureEnabled('sqlite_outbox_v2') || isV3FinancialDocument(data));
+        if (isV3FinancialDocument(data) && !deferToFinancialCommit) {
+            throw new Error('SYNC_V3_ATOMIC_COMMIT_REQUIRED');
+        }
         if (!deferToFinancialCommit) {
             // Legacy persistence remains unchanged while POS-2A is dark.
             await db.saveDocument('transactions', normalizedTransaction);
@@ -748,13 +768,26 @@ class TransactionService {
             walletDeposit?: { customerId: string, amount: number },
             walletPayment?: { customerId: string, amount: number }
         },
-        options: { deferDurableSalePersistence?: boolean } = {},
+        options: { deferDurableSalePersistence?: boolean; deferV3RefundPersistence?: boolean;
+            v3FinancialContext?: { config: BusinessConfig; warehouseId: string; terminalName: string } } = {},
     ): Promise<{ sale?: Transaction, refund?: Transaction }> {
         const results: { sale?: Transaction, refund?: Transaction } = {};
+        const v3 = isV3FinancialDocument(data.saleTransaction || {}) || isV3FinancialDocument(data.refundTransaction || {});
+        if (v3) {
+            if (!options.v3FinancialContext || !data.saleTransaction || !data.refundTransaction
+                || !isV3FinancialDocument(data.saleTransaction) || !isV3FinancialDocument(data.refundTransaction)) {
+                throw new Error('SYNC_V3_ATOMIC_COMMIT_REQUIRED');
+            }
+            // Check both fiscal sources before allocating either document sequence.
+            validateV3FrozenFiscalAmounts(data.saleTransaction);
+            validateV3FrozenFiscalAmounts(data.refundTransaction);
+        }
 
         // 1. Process Refund (Credit Note B04) first to "free up" balance or apply to wallet
         if (data.refundTransaction) {
-            results.refund = await this.createTransaction(data.refundTransaction);
+            results.refund = await this.createTransaction(data.refundTransaction, {
+                deferDurablePersistence: options.deferV3RefundPersistence === true,
+            });
         }
 
         // 2. Process Sale (Invoice B01/B02)
@@ -771,12 +804,27 @@ class TransactionService {
             });
         }
 
+        if (v3 && results.sale && results.refund) {
+            const context = options.v3FinancialContext!;
+            results.sale.terminalName = context.terminalName;
+            results.refund.terminalName = context.terminalName;
+            results.refund.status = 'REFUNDED';
+            results.refund.refundReason = 'Devolución en transacción mixta';
+            const committed = await persistV3FinancialBatch([
+                { transaction: results.refund, options: { refund: true } },
+                { transaction: results.sale },
+            ], context.config, context.warehouseId);
+            results.refund = committed[0].transaction;
+            results.sale = committed[1].transaction;
+            return results;
+        }
+
         // 3. Update Wallet if applicable
-        if (data.walletDeposit) {
+        if (data.walletDeposit && !options.deferV3RefundPersistence) {
             await this.updateWalletBalance(data.walletDeposit.customerId, data.walletDeposit.amount, 'DEPOSIT', results.refund?.displayId);
         }
 
-        if (data.walletPayment) {
+        if (data.walletPayment && !options.deferV3RefundPersistence) {
             await this.updateWalletBalance(data.walletPayment.customerId, -data.walletPayment.amount, 'PAYMENT', results.sale?.displayId);
         }
 

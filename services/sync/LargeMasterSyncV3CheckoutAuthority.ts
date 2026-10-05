@@ -7,7 +7,8 @@ const sameAuthority = (left: V3SaleAuthorityStamp, right: V3SaleAuthorityStamp):
   && left.tariffId === right.tariffId
   && left.taxIncluded === right.taxIncluded
   && left.inventoryVersion === right.inventoryVersion
-  && left.inventoryCursor === right.inventoryCursor;
+  && left.inventoryCursor === right.inventoryCursor
+  && left.binding === right.binding && left.warehouseId === right.warehouseId;
 
 /**
  * Fiscal input for a V3 checkout. Legacy tax tables and global taxRate are
