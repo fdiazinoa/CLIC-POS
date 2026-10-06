@@ -1,3 +1,4 @@
+import { mergeTerminalPosOptions } from './terminalPosOptions';
 import {
   BusinessConfig,
   Campaign,
@@ -2805,6 +2806,30 @@ export const applyTerminalConfigSnapshot = (
       ...fallbackLan,
     },
   };
+
+  // Apply validated, terminal-scoped preferences after legacy normalization.
+  // Strip these keys from the shallow fallback so omissions retain local state.
+  const preferences = mergeTerminalPosOptions(existingTerminal || {
+    ...DEFAULT_TERMINAL_CONFIG, startWithAgenda: false,
+    operational: { ...DEFAULT_TERMINAL_CONFIG.operational, expandTicket: false, showGlobalSales: false, orderNumbers: { enabled: false } },
+  },
+    effectiveResolved, resolvedConfigBlock, resolvedProfile, resolvedProfileConfig,
+    resolvedTerminal, resolvedTerminalConfig, incomingRaw,
+    incomingTerminalConfig, fallbackProfile, asObject(fallbackProfile.config),
+    fallbackTerminal, fallbackTerminalConfig, effectiveFallbackConfig);
+  for (const key of ['expandTicket', 'bloqueo_meseros', 'showGlobalSales',
+    'recibir_consignaciones', 'receiveConsignments', 'receive_consignments', 'descargar_consignaciones',
+    'reservationPolicy', 'deliveryAlerts', 'orderNumbers']) {
+    if (preferences.operational[key] !== undefined) (nextTerminalConfig.operational as any)[key] = preferences.operational[key];
+    else delete (nextTerminalConfig.operational as any)[key];
+  }
+  for (const key of ['requirePinForVoid', 'requireManagerForVoid', 'requirePinForDiscount',
+    'requireManagerForDiscount', 'requireManagerForRefunds', 'allowBiometrics', 'biometricEnabled', 'clerkCanSeeOtherSales']) {
+    if (preferences.security[key] !== undefined) (nextTerminalConfig.security as any)[key] = preferences.security[key];
+    else delete (nextTerminalConfig.security as any)[key];
+  }
+  nextTerminalConfig.ux = preferences.ux as TerminalConfig['ux'];
+  if (preferences.startWithAgenda !== undefined) nextTerminalConfig.startWithAgenda = preferences.startWithAgenda;
 
   if (nextTerminalConfig.workflow?.session?.allowPartialXReport === false && nextTerminalConfig.documentAssignments) {
     const prunedAssignments = { ...nextTerminalConfig.documentAssignments };

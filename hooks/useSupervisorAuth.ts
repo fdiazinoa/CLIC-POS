@@ -1,9 +1,11 @@
+import { requiresTerminalPolicyPin } from '../utils/terminalAuthorizationPolicy';
 import { useState, useCallback } from 'react';
-import { BusinessConfig, User, Permission, AuditLogEntry, RoleDefinition } from '../types';
+import { BusinessConfig, User, Permission, AuditLogEntry, RoleDefinition, TerminalConfig } from '../types';
 import { canGrantDiscountPercent } from '../utils/userSalesPolicy';
 
 interface UseSupervisorAuthProps {
     config: BusinessConfig;
+    terminalSecurity?: TerminalConfig['security'];
     currentUser: User | null;
     roles: RoleDefinition[];
     onUpdateConfig: (newConfig: BusinessConfig) => void;
@@ -22,7 +24,7 @@ interface RequestApprovalParams {
     };
 }
 
-export const useSupervisorAuth = ({ config, currentUser, roles, onUpdateConfig }: UseSupervisorAuthProps) => {
+export const useSupervisorAuth = ({ config, currentUser, roles, onUpdateConfig, terminalSecurity }: UseSupervisorAuthProps) => {
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [pendingRequest, setPendingRequest] = useState<{
         resolve: (value: boolean) => void;
@@ -47,7 +49,7 @@ export const useSupervisorAuth = ({ config, currentUser, roles, onUpdateConfig }
                     }
                 }
 
-                if (hasPermission && withinLimits) {
+                if (hasPermission && withinLimits && !requiresTerminalPolicyPin(terminalSecurity, params.permission)) {
                     // Log self-authorization
                     logAction(currentUser!, currentUser!, params);
                     params.onAuthorized?.(currentUser!);
@@ -60,7 +62,7 @@ export const useSupervisorAuth = ({ config, currentUser, roles, onUpdateConfig }
             setPendingRequest({ resolve, params });
             setIsModalOpen(true);
         });
-    }, [config, currentUser, roles]);
+    }, [config, currentUser, roles, terminalSecurity]);
 
     const handleAuthorize = (supervisor: User) => {
         if (pendingRequest) {

@@ -1,3 +1,4 @@
+import { canSeeOtherTerminalSales, matchesSalesTerminal } from '../utils/terminalSalesVisibility';
 
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
@@ -1886,6 +1887,10 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
       if (!initialSelectedId) handledInitialSelectionRef.current = null;
    }, [initialSelectedId]);
 
+   const salesVisibilityTerminal = config.terminals?.find(t => t.id === activeTerminalId);
+   const canSeeGlobalSales = canSeeOtherTerminalSales(salesVisibilityTerminal?.config);
+   const salesTerminalAliases = resolveTerminalAliases(salesVisibilityTerminal);
+
    // --- SMART SEARCH LOGIC ---
    const filteredTransactions = useMemo(() => {
       // Merge current transactions (props) with history
@@ -1961,6 +1966,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
 
       let data = Array.from(businessMap.values())
          .filter(isValidTicketRecord)
+         .filter(tx => canSeeGlobalSales || matchesSalesTerminal(tx.terminalId, salesTerminalAliases))
          .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()); // Newest first
 
       // 1. Apply Search Term / Predictive Tag
@@ -2056,7 +2062,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
       }
 
       return data;
-   }, [transactions, historyTransactions, searchTerm, filterDateStart, filterDateEnd, filterTerminal, filterCashier, filterCustomer, filterNcfType, filterPaymentMethod, filterReviewOnly, reviewFlags, terminalAliasesByValue]);
+   }, [canSeeGlobalSales, activeTerminalId, config.terminals, transactions, historyTransactions, searchTerm, filterDateStart, filterDateEnd, filterTerminal, filterCashier, filterCustomer, filterNcfType, filterPaymentMethod, filterReviewOnly, reviewFlags, terminalAliasesByValue]);
 
    // --- KPI CALCULATIONS ---
    const kpis = useMemo(() => {
@@ -2083,7 +2089,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
       , [filteredTransactions, selectedTxId]);
 
    // --- SUPERVISOR AUTH ---
-   const { requestApproval, supervisorModalProps } = useSupervisorAuth({ config, currentUser, roles, onUpdateConfig });
+   const { requestApproval, supervisorModalProps } = useSupervisorAuth({ config, currentUser, roles, onUpdateConfig, terminalSecurity: config.terminals?.find(t => t.id === activeTerminalId)?.config.security });
 
    const requireCurrentUser = (): User => {
       if (!currentUser) throw new Error('Debes iniciar sesión para realizar esta acción.');
@@ -2203,6 +2209,10 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
          const transaction = match.transaction || normalizeErpRefundSourceTransaction(
             await apiSyncAdapter.getRefundSource(match.sourceId)
          );
+         if (!canSeeGlobalSales && !matchesSalesTerminal(transaction.terminalId, salesTerminalAliases)) {
+            setErpSearchError('Esta terminal solo puede consultar sus propias ventas.');
+            return;
+         }
          if (!transaction.erpRefundSource?.refundable) {
             setErpSearchError(
                transaction.erpRefundSource?.eligibilityMessage
@@ -2237,7 +2247,8 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
       setErpSearchError(null);
       setErpMatches([]);
       try {
-         const matches = normalizeErpRefundSearchResponse(await apiSyncAdapter.searchRefundSources(reference));
+         const matches = normalizeErpRefundSearchResponse(await apiSyncAdapter.searchRefundSources(reference))
+            .filter(match => canSeeGlobalSales || matchesSalesTerminal(match.terminalId, salesTerminalAliases));
          if (matches.length === 0) {
             setErpSearchError('ERP no encontró una factura con esa referencia.');
             return;
@@ -2919,7 +2930,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
 
          {/* Detail Drawer */}
          <TicketDetailDrawer
-            tx={transactions.find(t => t.id === selectedTxId) || historyTransactions.find(t => t.id === selectedTxId) || null}
+            tx={selectedTx}
             config={config}
             onClose={() => setSelectedTxId(null)}
             onPrint={(tx) => { void handlePrintTransaction(tx); }}

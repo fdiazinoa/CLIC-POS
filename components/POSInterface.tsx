@@ -89,7 +89,6 @@ import { visorSync } from '../utils/visorSync';
 import { isCustomerDisplaySurface, maybeAutoLaunchCustomerDisplay } from '../utils/customerDisplay';
 import ProductQuickActions from './ProductQuickActions';
 import ActionGrid from './ActionGrid';
-import SupervisorAuthModal from './SupervisorAuthModal';
 import VirtualKeyboard from './VirtualKeyboard';
 import NumericKeypad from './NumericKeypad';
 import SafetyGateModal from './SafetyGateModal';
@@ -2452,7 +2451,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       type: 'B02', hasNCF: false, localBuffer: null, isUsingPool: false
    });
 
-   const [showSupervisorAuth, setShowSupervisorAuth] = useState(false);
    const [refundAuthorizedBy, setRefundAuthorizedBy] = useState<{ id: string, name: string } | null>(null);
    const [status, setStatus] = useState<{ isConnected: boolean, currentNCF: string, remaining: number, expiryDate: string, batteryLevel: number } | null>(null);
 
@@ -2583,6 +2581,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    // --- SUPERVISOR AUTH ---
    const { requestApproval, supervisorModalProps } = useSupervisorAuth({
+      terminalSecurity: activeTerminalConfig?.security,
       config,
       currentUser,
       roles,
@@ -4000,7 +3999,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       showDiscountModal ||
       showParkAliasModal ||
       showConsignmentModal ||
-      showSupervisorAuth ||
+      supervisorModalProps.isOpen ||
       productionRoutingPrompt ||
       showServiceTypeDialog ||
       showPaymentModal ||
@@ -5073,7 +5072,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          }
 
          // Void Line Check
-         if (!isSubtotalizedMutation && !isHotRestaurantReversal) {
+         if ((!isSubtotalizedMutation && !isHotRestaurantReversal) || activeTerminalConfig?.security?.requirePinForVoid) {
             const authorized = await requestApproval({
                permission: 'POS_VOID_ITEM',
                actionDescription: 'Eliminar artículo del carrito',
@@ -5107,8 +5106,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          }
 
          if (
-            !isSubtotalizedMutation
-            && requiresRestaurantReductionApproval(isRestaurantOrderContext, originalItem, Number(updatedItem.quantity))
+            (!isSubtotalizedMutation
+              && requiresRestaurantReductionApproval(isRestaurantOrderContext, originalItem, Number(updatedItem.quantity)))
+            || (activeTerminalConfig?.security?.requirePinForVoid === true
+              && Math.abs(Number(updatedItem.quantity)) < Math.abs(Number(originalItem.quantity)))
          ) {
             const authorized = await requestApproval({
                permission: 'POS_VOID_ITEM',
@@ -5221,7 +5222,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       if (!await clicConfirm(`${confirmMessage}\n\n¿Continuar?`)) return;
 
-      if (!allFreshItemsAreHotRestaurantDrafts) {
+      if (!allFreshItemsAreHotRestaurantDrafts || activeTerminalConfig?.security?.requirePinForVoid) {
          const authorized = await requestApproval({
             permission: 'POS_VOID_ITEM',
             actionDescription: 'Limpiar artículos nuevos del ticket',
@@ -7225,7 +7226,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    };
 
    // --- ACTION GRID HANDLER ---
-   const handleGridAction = (action: string) => {
+   const handleGridAction = async (action: string) => {
       switch (action) {
          case 'DISCOUNT':
             if (blockRecoveredUberOrderMutation('aplicar descuentos')) return;
@@ -7247,13 +7248,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          case 'RETURN':
             if (blockRecoveredUberOrderMutation('mezclar devoluciones con este pedido')) return;
             if (!isReturnMode) {
-               const hasPermission = (currentUser as any).permissions?.includes('CAN_REFUND') ||
-                  ['ADMIN', 'MANAGER'].includes(currentUser.role);
-               if (!hasPermission) {
-                  setShowSupervisorAuth(true);
-                  return;
-               }
-               setRefundAuthorizedBy({ id: currentUser.id, name: currentUser.name });
+               const authorized = await requestApproval({
+                  permission: 'CAN_REFUND',
+                  actionDescription: 'Iniciar devolución',
+                  onAuthorized: approver => setRefundAuthorizedBy({ id: approver.id, name: approver.name }),
+               });
+               if (!authorized) return;
             }
             if (isReturnMode) setRefundAuthorizedBy(null);
             setIsReturnMode(!isReturnMode);
@@ -7429,17 +7429,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             spellCheck={false}
             aria-label="Lector de códigos"
             style={{ position: 'absolute', width: 1, height: 1, padding: 0, border: 0, opacity: 0, pointerEvents: 'none', outline: 'none' }}
-         />
-         <SupervisorAuthModal
-            isOpen={showSupervisorAuth}
-            onClose={() => setShowSupervisorAuth(false)}
-            users={users}
-            requiredPermission="CAN_REFUND"
-            onSuccess={(supervisor) => {
-               console.log("Authorized by:", supervisor.name);
-               setRefundAuthorizedBy({ id: supervisor.id, name: supervisor.name });
-               setIsReturnMode(true);
-            }}
          />
          {productionRoutingPrompt && (
             <ProductionRoutingAssignmentModal

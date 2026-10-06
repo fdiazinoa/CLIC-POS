@@ -770,6 +770,15 @@ const assertConfigPushV2ConfigPersisted = async (expectedValue: unknown): Promis
             throw new Error(`CONFIG_PUSH_V2_CONFIG_PERSISTENCE_MISMATCH:${key}`);
         }
     }
+    // Verify terminal preferences too: a storage adapter may silently drop fields.
+    for (const terminal of expected.terminals as any[] || []) {
+        const saved = (persisted.terminals as any[]).find(row => row.id === terminal.id);
+        for (const key of ['operational', 'security', 'ux', 'startWithAgenda']) {
+            if (JSON.stringify(terminal.config?.[key]) !== JSON.stringify(saved?.config?.[key])) {
+                throw new Error(`CONFIG_PUSH_V2_CONFIG_PERSISTENCE_MISMATCH:${key}`);
+            }
+        }
+    }
     return persisted;
 };
 

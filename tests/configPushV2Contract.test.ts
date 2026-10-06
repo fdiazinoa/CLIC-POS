@@ -841,3 +841,85 @@ test('CONFIG_PUSH_V2 incorpora nuevos rangos maestros sin retroceder un cursor c
         dbAdapter.upsertMasterNumberRanges = originalUpsert;
     }
 });
+
+test('terminal preferences push persists UX, agenda and partial policies without changing B or order counter', async () => {
+    const { config, localTerminalId } = resetHarness();
+    const a = config.terminals[0].config;
+    a.operational.orderNumbers = { enabled: true, nextNumber: 81, prefix: 'A', padding: 4 };
+    a.operational.reservationPolicy = { validityDays: 14, printCopies: 3, requireAdvance: true, minimumAdvancePercent: 35 };
+    config.terminals.push({ id: 'B', config: clone(a) });
+    const b = clone(config.terminals.find(row => row.id === 'B'));
+    collections.set('config', clone(config));
+    const { result, acks } = await runEvent({
+        id: 'terminal-options', scopes: ['terminal_config'], versions: { terminal_config: 40 },
+        domains: { terminal_config: { terminal: { terminal_id: terminalId, config: {
+            ux: { showProductImages: false, viewMode: 'RETAIL' }, startWithAgenda: true,
+            operational: { orderNumbers: { enabled: false, nextNumber: 1 }, reservationPolicy: { requireAdvance: false }, deliveryAlerts: { isDeliveryTerminal: false, autoOpenUberEatsModal: true } },
+            security: { requirePinForVoid: false, requireManagerForVoid: true },
+        } } } },
+    });
+    assert.equal(result?.applied, 1);
+    assert.equal(acks[0].status, 'APPLIED');
+    const persisted = clone(collections.get('config')) as any;
+    const terminal = persisted.terminals.find((row: any) => row.id === localTerminalId).config;
+    assert.equal(terminal.ux.showProductImages, false);
+    assert.equal(terminal.ux.viewMode, 'RETAIL');
+    assert.equal(terminal.startWithAgenda, true);
+    assert.deepEqual(terminal.operational.orderNumbers, { enabled: false, nextNumber: 81, prefix: 'A', padding: 4 });
+    assert.equal(terminal.operational.reservationPolicy.minimumAdvancePercent, 35);
+    assert.equal(terminal.operational.deliveryAlerts.autoOpenUberEatsModal, false);
+    assert.equal(terminal.security.requirePinForVoid, false);
+    assert.deepEqual(persisted.terminals.find((row: any) => row.id === 'B'), b);
+});
+
+test('silent preference persistence loss fails without advancing version or ACK APPLIED', async () => {
+    resetHarness();
+    (db as any).save = async (collection: string, value: unknown) => {
+        const saved = clone(value) as any;
+        if (collection === 'config') saved.terminals[0].config.ux.showProductImages = true;
+        collections.set(collection, saved);
+    };
+    const { result, acks } = await runEvent({
+        id: 'silent-preference-loss', scopes: ['terminal_config'], versions: { terminal_config: 41 },
+        domains: { terminal_config: { terminal: { terminal_id: terminalId, config: { ux: { showProductImages: false } } } } },
+    });
+    assert.equal(result?.applied, 0);
+    assert.equal(acks[0].status, 'FAILED');
+    assert.deepEqual(lifecycle.getConfigPushV2Diagnostics().domainVersions, {});
+});
+
+test('snapshot for another terminal cannot change local preferences', async () => {
+    const { config } = resetHarness();
+    const { result, acks } = await runEvent({
+        id: 'wrong-preference-terminal', scopes: ['terminal_config'], versions: { terminal_config: 42 },
+        snapshotResponses: [Response.json({
+            status: 'success', terminal_id: 'OTHER-TERMINAL', snapshot_id: 'snapshot-wrong-preference-terminal',
+            version_hash: 'hash-wrong-preference-terminal', versions: { terminal_config: 42 }, scopes: ['terminal_config'],
+            domains: { terminal_config: { terminal: { terminal_id: 'OTHER-TERMINAL', config: { ux: { showProductImages: false } } } } },
+        })],
+    });
+    assert.equal(result?.applied, 0);
+    assert.equal(acks[0].status, 'FAILED');
+    assert.deepEqual(collections.get('config'), clone(config));
+});
+
+test('repeated preference hash does not reapply or roll back an advanced local order counter', async () => {
+    const { config } = resetHarness();
+    config.terminals[0].config.operational.orderNumbers = { enabled: false, nextNumber: 50, prefix: 'A', padding: 3 };
+    collections.set('config', clone(config));
+    const input = {
+        id: 'repeat-preferences', scopes: ['terminal_config'], versions: { terminal_config: 43 },
+        domains: { terminal_config: { terminal: { terminal_id: terminalId, config: {
+            ux: { showProductImages: false }, operational: { orderNumbers: { enabled: true, nextNumber: 1 } },
+        } } } },
+    };
+    const first = await runEvent(input);
+    assert.equal(first.acks[0].status, 'APPLIED');
+    const persisted = clone(collections.get('config')) as any;
+    persisted.terminals[0].config.operational.orderNumbers.nextNumber = 52;
+    collections.set('config', persisted);
+    const second = await runEvent(input);
+    assert.equal(second.acks[0].status, 'APPLIED');
+    assert.equal(second.snapshotUrls.length, 0);
+    assert.equal((collections.get('config') as any).terminals[0].config.operational.orderNumbers.nextNumber, 52);
+});

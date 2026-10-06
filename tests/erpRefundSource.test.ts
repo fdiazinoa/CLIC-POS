@@ -7,6 +7,7 @@ import {
   normalizeErpRefundSourceTransaction,
   validateErpRefundItems,
 } from '../services/refunds/erpRefundSource';
+import { matchesSalesTerminal } from '../utils/terminalSalesVisibility';
 import { buildErpCreditNotePayload } from '../services/sync/erpOutboundPayloads';
 
 const sourceFixture = () => ({
@@ -127,4 +128,26 @@ test('accepts only the exact document and B04 authority sealed by ERP', () => {
     documentAuthority: { seriesId: 'refund-series', seriesNumber: 7, displayId: 'NC000007' },
     fiscalAuthority: { ncfType: 'B04', ncf: 'B0400000007', reservationId: 'different' },
   }, expected), /REFUND_FISCAL_AUTHORITY_INVALID/);
+});
+
+
+test('terminal visibility accepts own ERP summaries without lines and hides foreign or unidentified summaries', () => {
+  const matches = normalizeErpRefundSearchResponse({ matches: [
+    { sourceId: 'own', terminal_id: 'ERP-A', reference: 'A-1', total: 100 },
+    { sourceId: 'foreign', originalTerminalId: 'ERP-B', reference: 'B-1', total: 200 },
+    { sourceId: 'unknown', terminalName: 'A', reference: 'unknown-1', total: 300 },
+  ] });
+  assert.ok(matches.every(match => match.transaction === undefined));
+  assert.deepEqual(matches.filter(match => matchesSalesTerminal(match.terminalId, ['local-a', 'erp-a'])).map(match => match.sourceId), ['own']);
+  assert.equal(matches[1].terminalId, 'ERP-B');
+  assert.equal(matches[2].terminalId, undefined);
+});
+
+test('ERP search retains terminal identity from full originals and summary aliases', () => {
+  const [full] = normalizeErpRefundSearchResponse({ matches: [sourceFixture()] });
+  assert.equal(full.terminalId, full.transaction?.terminalId);
+  for (const key of ['originalTerminalId', 'original_terminal_id', 'terminalId', 'terminal_id', 'sourceTerminalId', 'source_terminal_id']) {
+    const [summary] = normalizeErpRefundSearchResponse({ matches: [{ sourceId: 'summary', [key]: 'terminal-a' }] });
+    assert.equal(summary.terminalId, 'terminal-a', key);
+  }
 });
