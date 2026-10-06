@@ -52,7 +52,7 @@ test('pre-Gradle packaged origin proof executes against matched JavaScript asset
     ['true', `const downloadOrigin=${JSON.stringify(origin)};`, 0],
     ['true', 'const missingOrigin = undefined;', 1],
     ['false', 'const missingOrigin = undefined;', 0],
-  ]) {
+  ] as const) {
     const virtual = producer.replace("import fs from 'node:fs';", `const fs = {
       readdirSync: () => [{name:'runtime.js',isDirectory:()=>false}],
       readFileSync: () => Buffer.from(${JSON.stringify(content)}),
