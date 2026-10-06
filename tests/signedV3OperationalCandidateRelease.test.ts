@@ -7,13 +7,70 @@ import { validatePromotionEvidence } from '../scripts/qa/apk-release-gate.mjs';
 const script = readFileSync(new URL('../scripts/release-android.sh', import.meta.url), 'utf8');
 const gradle = readFileSync(new URL('../android/app/build.gradle', import.meta.url), 'utf8');
 const policy = script.slice(script.indexOf('V3_CANARY_ENABLED='), script.indexOf('info() {'));
-const runPolicy = (extra: Record<string, string> = {}) => spawnSync('bash', ['-c', `set -eu\n${policy}\nprintf '%s|%s' "$VITE_LARGE_MASTER_SYNC_V3_CANARY" "$VITE_LARGE_MASTER_SYNC_V3_CANDIDATE"`], {
+const runPolicy = (extra: Record<string, string | undefined> = {}) => spawnSync('bash', ['-c', `set -eu\n${policy}\nprintf '%s|%s' "$VITE_LARGE_MASTER_SYNC_V3_CANARY" "$VITE_LARGE_MASTER_SYNC_V3_CANDIDATE"`], {
   encoding: 'utf8', env: { ...process.env, LAN_HTTP_ENABLED: 'true',
     VITE_LARGE_MASTER_SYNC_V3_CANARY: 'false', CLIC_POS_SIGNED_V3_CANARY: 'false',
     VITE_LARGE_MASTER_SYNC_V3_CANDIDATE: 'false', CLIC_POS_SIGNED_V3_CANDIDATE: 'false',
+    VITE_LARGE_MASTER_SYNC_V3_BASE_URL: '',
     CLIC_POS_DIAGNOSTICS: 'false', CLIC_POS_WEBVIEW_PROFILE: 'false', CLIC_POS_TABLE_LATENCY_QA: 'false', ...extra },
 });
-const candidate = { VITE_LARGE_MASTER_SYNC_V3_CANDIDATE: 'true', CLIC_POS_SIGNED_V3_CANDIDATE: 'true' };
+const origin = 'https://clic-erp-production.up.railway.app';
+const candidate = { VITE_LARGE_MASTER_SYNC_V3_CANDIDATE: 'true', CLIC_POS_SIGNED_V3_CANDIDATE: 'true',
+  VITE_LARGE_MASTER_SYNC_V3_BASE_URL: origin };
+
+test('operational V3 origin fails closed before canonical mutations without leaking rejected values', () => {
+  for (const value of [undefined, '', '   ', 'undefined', 'not-a-url', 'ftp://example.com', 'http://example.com',
+    'https://user:secret@example.com', `${origin}/api/sync`, `${origin}/?token=secret`, `${origin}/#secret`]) {
+    const result = runPolicy({ ...candidate, VITE_LARGE_MASTER_SYNC_V3_BASE_URL: value });
+    assert.equal(result.status, 1, value);
+    assert.ok(!value || !result.stderr.includes(value), 'must not print invalid caller URL');
+  }
+  const validation = script.indexOf('const value = process.env.VITE_LARGE_MASTER_SYNC_V3_BASE_URL;');
+  for (const mutation of ['git -C "${CANONICAL_BUILD_WORKTREE}" checkout', 'update_gradle_version "', 'sync_release_artifacts "', './gradlew assembleRelease']) {
+    assert.ok(validation < script.indexOf(mutation), mutation);
+  }
+  const normalized = spawnSync('bash', ['-c', `set -eu\n${policy}\nprintf '%s' "$VITE_LARGE_MASTER_SYNC_V3_BASE_URL"`], {
+    encoding: 'utf8', env: { ...process.env, ...candidate, LAN_HTTP_ENABLED: 'true',
+      VITE_LARGE_MASTER_SYNC_V3_BASE_URL: `  ${origin.toUpperCase()}/  `,
+      VITE_LARGE_MASTER_SYNC_V3_CANARY: 'false', CLIC_POS_SIGNED_V3_CANARY: 'false',
+      CLIC_POS_DIAGNOSTICS: 'false', CLIC_POS_WEBVIEW_PROFILE: 'false', CLIC_POS_TABLE_LATENCY_QA: 'false' },
+  });
+  assert.equal(normalized.status, 0, normalized.stderr);
+  assert.equal(normalized.stdout, origin);
+  for (const url of ['http://localhost:3001/', 'http://127.0.0.1:3001/', 'http://[::1]:3001/']) {
+    assert.equal(runPolicy({ ...candidate, VITE_LARGE_MASTER_SYNC_V3_BASE_URL: url }).status, 0);
+  }
+  assert.equal(runPolicy().status, 0, 'V2 requires no V3 URL');
+  assert.equal(runPolicy({ VITE_LARGE_MASTER_SYNC_V3_BASE_URL: undefined }).status, 0);
+});
+
+test('pre-Gradle packaged origin proof executes against matched JavaScript assets', () => {
+  const start = script.indexOf("import fs from 'node:fs';", script.indexOf('ASSET_REPORT='));
+  const producer = script.slice(start, script.indexOf('\nNODE', start));
+  assert.ok(script.indexOf('downloadOriginAssets.length') < script.indexOf('./gradlew assembleRelease'));
+  for (const [operational, content, expected] of [
+    ['true', `const downloadOrigin=${JSON.stringify(origin)};`, 0],
+    ['true', 'const missingOrigin = undefined;', 1],
+    ['false', 'const missingOrigin = undefined;', 0],
+  ] as const) {
+    const virtual = producer.replace("import fs from 'node:fs';", `const fs = {
+      readdirSync: () => [{name:'runtime.js',isDirectory:()=>false}],
+      readFileSync: () => Buffer.from(${JSON.stringify(content)}),
+      mkdirSync:()=>{}, writeFileSync:(_file,value)=>console.log(value)
+    };`);
+    const result = spawnSync(process.execPath, ['--input-type=module', '-', '/virtual', '/report.json', 'source-sha'], {
+      input: virtual, encoding: 'utf8', env: { ...process.env,
+        VITE_LARGE_MASTER_SYNC_V3_CANDIDATE: operational, VITE_LARGE_MASTER_SYNC_V3_BASE_URL: origin },
+    });
+    assert.equal(result.status, expected, result.stderr);
+    if (expected === 0) {
+      const report = JSON.parse(result.stdout.slice(0, result.stdout.indexOf('\nAssets verificados:')));
+      assert.equal(report.downloadOrigin, operational === 'true' ? origin : null);
+      assert.deepEqual(report.downloadOriginAssets, operational === 'true' ? ['runtime.js'] : []);
+      assert.equal(report.downloadOriginVerified, operational === 'true' ? true : null);
+    }
+  }
+});
 
 test('paired operational candidate flags accept explicit modes and export false defaults', () => {
   assert.equal(runPolicy().stdout, 'false|false');
@@ -69,6 +126,7 @@ test('generated Android mode metadata retains candidate provenance and lab sales
   ] as const) {
     const result = spawnSync(process.execPath, ['--input-type=module', '-', 'unused', 'source-sha'], { input: producer, encoding: 'utf8', env: { ...process.env,
       VITE_LARGE_MASTER_SYNC_V3_CANARY: canary, CLIC_POS_SIGNED_V3_CANARY: canary,
+      VITE_LARGE_MASTER_SYNC_V3_BASE_URL: origin,
       VITE_LARGE_MASTER_SYNC_V3_CANDIDATE: operational, CLIC_POS_SIGNED_V3_CANDIDATE: operational } });
     assert.equal(result.status, 0, result.stderr);
     const metadata = JSON.parse(result.stdout);
@@ -77,6 +135,7 @@ test('generated Android mode metadata retains candidate provenance and lab sales
     assert.equal(metadata.nonpromotable, canary === 'true' || operational === 'true');
     assert.equal(metadata.operationalV3Candidate, operational === 'true');
     assert.equal(metadata.sourceCommit, 'source-sha');
+    assert.equal(metadata.downloadOrigin, operational === 'true' ? origin : null);
   }
 });
 
