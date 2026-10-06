@@ -10961,7 +10961,7 @@ const AppContent: React.FC = () => {
     const terminalId = transaction.terminalId || (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId)?.id || 'T1';
     const fiscalCodeChanged = currentFiscalCode !== correction.fiscalCode || !currentNcf.startsWith(correction.fiscalCode);
     const nextNcf = fiscalCodeChanged
-      ? await db.getNextNCF(correction.fiscalCode, terminalId, 50)
+      ? await db.getNextNCF(correction.fiscalCode, terminalId, 50, config.terminals?.find(t => t.id === terminalId)?.config)
       : currentNcf || undefined;
 
     if (!nextNcf) {
@@ -12806,14 +12806,21 @@ const AppContent: React.FC = () => {
       : fiscalCompliance.mode;
     const creditNoteFiscalType = preparedFiscalAuthority?.ncfType || resolveCreditNoteFiscalCode(creditNoteFiscalMode);
     let creditNoteNcf: string | undefined;
+    if (creditNoteFiscalMode !== 'NONE' &&
+        !(preparedFiscalAuthority
+          ? await db.validatePreparedFiscalAuthority(creditNoteFiscalType, currentTerminalId, preparedFiscalAuthority.ncf, currentTerminal?.config)
+          : await db.canRequestMoreNCF(creditNoteFiscalType, currentTerminalId, currentTerminal?.config))) {
+      alert(`No hay comprobantes ${creditNoteFiscalType} habilitados y disponibles para esta terminal.`);
+      return null;
+    }
     if (preparedFiscalAuthority) {
       creditNoteNcf = preparedFiscalAuthority.ncf;
-      await db.reconcilePreparedNCF(preparedFiscalAuthority.ncfType, currentTerminalId, preparedFiscalAuthority.ncf);
+      await db.reconcilePreparedNCF(preparedFiscalAuthority.ncfType, currentTerminalId, preparedFiscalAuthority.ncf, currentTerminal?.config);
     } else if (!originalTx.erpRefundSource && creditNoteFiscalMode !== 'NONE') {
-      try {
-        creditNoteNcf = await db.getNextNCF(creditNoteFiscalType, currentTerminalId) || undefined;
-      } catch (e) {
-        console.warn(`No se pudo generar NCF ${creditNoteFiscalType}:`, e);
+      creditNoteNcf = await db.getNextNCF(creditNoteFiscalType, currentTerminalId, 1, currentTerminal?.config) || undefined;
+      if (!creditNoteNcf) {
+        alert(`No se pudo reservar el comprobante ${creditNoteFiscalType}. La devolución fue bloqueada.`);
+        return null;
       }
     }
 

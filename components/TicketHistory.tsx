@@ -1,3 +1,5 @@
+import { db } from '../utils/db';
+import { getEffectiveFiscalComplianceConfig, resolveCreditNoteFiscalCode } from '../utils/fiscal/fiscalHelpers';
 import { canSeeOtherTerminalSales, matchesSalesTerminal } from '../utils/terminalSalesVisibility';
 
 import React, { useState, useMemo, useEffect, useRef } from 'react';
@@ -2273,6 +2275,15 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
       reason: string,
       requestMode: RefundRequestMode = 'STANDARD'
    ) => {
+      const terminalConfig = config.terminals?.find(t => t.id === activeTerminalId)?.config;
+      const fiscalMode = getEffectiveFiscalComplianceConfig(config, terminalConfig).mode;
+      if (fiscalMode !== 'NONE') {
+         const creditType = resolveCreditNoteFiscalCode(fiscalMode);
+         if (!await db.canRequestMoreNCF(creditType, activeTerminalId, terminalConfig)) {
+            alert(`No hay comprobantes ${creditType} habilitados y disponibles para esta terminal.`);
+            return;
+         }
+      }
       let refundOptions: RefundProcessingOptions | undefined;
       let refundPreparationResult: unknown;
 

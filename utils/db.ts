@@ -2,7 +2,7 @@ import {
   BusinessConfig, Product, User, Customer, Transaction,
   Warehouse, StockTransfer, CashMovement, InventoryLedgerEntry, LedgerConcept,
   RoleDefinition, ParkedTicket, PurchaseOrder, PurchaseOrderItem, Supplier, Watchlist,
-  NCFType, FiscalDocumentCode, FiscalRangeDGII, FiscalAllocation, LocalFiscalBuffer, DocumentSeries,
+  TerminalConfig, NCFType, FiscalDocumentCode, FiscalRangeDGII, FiscalAllocation, LocalFiscalBuffer, DocumentSeries,
   Campaign, Coupon, ZReport, XReport, Reception, ProductStock, InventoryTracking, Reservation, InventoryCommitment, PaymentMethodDefinition, CartItem,
   ProductPrice
 } from '../types';
@@ -574,6 +574,23 @@ const hasTerminalFiscalAllocation = (
   );
 };
 
+// Fiscal authority comes from the terminal contract, never the global auxiliary pool.
+const resolveFiscalTerminalPolicy = async (
+  terminalId: string | undefined, allocations: FiscalAllocation[], context?: TerminalConfig
+) => {
+  let terminalConfig = context;
+  if (!terminalConfig) {
+    const stored = await dbAdapter.getCollection<BusinessConfig>('config');
+    const business = (Array.isArray(stored) ? stored[0] : stored) as BusinessConfig | undefined;
+    terminalConfig = business?.terminals?.find(terminal => terminal.id === terminalId || terminal.config?.erpTerminalId === terminalId)?.config;
+  }
+  const authorityId = terminalConfig?.erpTerminalId || terminalId;
+  const managed = Boolean(terminalConfig?.erpTerminalId ||
+    Array.isArray(terminalConfig?.fiscal?.fiscalAllocations) || allocations.some(allocation =>
+      normalizeSequenceKey(allocation.terminalId) === normalizeSequenceKey(authorityId)));
+  return { authorityId, managed, enabled: terminalConfig?.fiscal?.mode === 'LEGACY_B' || terminalConfig?.fiscal?.enabled !== false };
+};
+
 const hasValidFiscalAllocationPointer = (allocation: FiscalAllocation): boolean => {
   const next = Number(allocation.nextNumber);
   const start = Number(allocation.reservedStart);
@@ -594,7 +611,8 @@ const getFiscalRangeForEmission = (
 
   if (normalizedRangeId) {
     const matchById = (ranges || []).find((range) => normalizeSequenceKey(range.id) === normalizedRangeId);
-    if (matchById) return matchById;
+    if (matchById && normalizeSequenceKey(matchById.type) === normalizedType) return matchById;
+    return null;
   }
 
   if (normalizedPrefix) {
@@ -1341,37 +1359,59 @@ export const db = {
     };
   },
 
-  canRequestMoreNCF: async (type: FiscalDocumentCode, terminalId?: string): Promise<boolean> => {
+  validatePreparedFiscalAuthority: async (type: FiscalDocumentCode, terminalId: string, ncf: string, context?: TerminalConfig): Promise<boolean> => {
+    const allocations = await dbAdapter.getCollection<FiscalAllocation>('fiscalAllocations') || [];
+    const policy = await resolveFiscalTerminalPolicy(terminalId, allocations, context);
+    if (!policy.enabled || (policy.managed && !policy.authorityId)) return false;
+    const allocation = getTerminalFiscalAllocation(allocations, policy.authorityId, type);
+    if (!allocation) return !policy.managed;
+    const raw = allocations.find(candidate => candidate.id === allocation.id);
+    const prefix = allocation.prefix || type;
+    const suffix = ncf.startsWith(prefix) ? ncf.slice(prefix.length) : '';
+    const number = /^\d+$/.test(suffix) ? Number(suffix) : NaN;
+    return Boolean(raw && hasValidFiscalAllocationPointer(raw) &&
+      (allocation.status === 'ACTIVE' || allocation.status === 'EXHAUSTED') &&
+      number >= allocation.reservedStart && number <= allocation.reservedEnd);
+  },
+
+  canRequestMoreNCF: async (type: FiscalDocumentCode, terminalId?: string, context?: TerminalConfig): Promise<boolean> => {
     const [ranges, allocations] = await Promise.all([
       dbAdapter.getCollection<FiscalRangeDGII>('fiscalRanges'),
       dbAdapter.getCollection<FiscalAllocation>('fiscalAllocations'),
     ]);
 
-    const allocation = getTerminalFiscalAllocation(allocations || [], terminalId, type as any);
+    const policy = await resolveFiscalTerminalPolicy(terminalId, allocations || [], context);
+    if (!policy.enabled || (policy.managed && !policy.authorityId)) return false;
+    const allocation = getTerminalFiscalAllocation(allocations || [], policy.authorityId, type as any);
     if (allocation) {
+      if (allocation.fiscalRangeId && !getFiscalRangeForEmission(ranges || [], type, allocation)) return false;
       const rawAllocation = (allocations || []).find((candidate) => candidate.id === allocation.id);
       if (!rawAllocation || !hasValidFiscalAllocationPointer(rawAllocation)) return false;
       return allocation.status === 'ACTIVE' && allocation.nextNumber <= allocation.reservedEnd;
     }
-    if (hasTerminalFiscalAllocation(allocations || [], terminalId, type)) return false;
+    if (policy.managed || hasTerminalFiscalAllocation(allocations || [], terminalId, type)) return false;
 
     const range = ranges?.find((r: FiscalRangeDGII) => r.type === type && r.isActive);
     if (!range) return false;
     return range.currentGlobal < range.endNumber;
   },
 
-  requestFiscalBatch: async (terminalId: string, type: FiscalDocumentCode, _batchSize: number): Promise<LocalFiscalBuffer | null> => {
+  requestFiscalBatch: async (terminalId: string, type: FiscalDocumentCode, _batchSize: number, context?: TerminalConfig): Promise<LocalFiscalBuffer | null> => {
     const [ranges, rawAllocations] = await Promise.all([
       dbAdapter.getCollection<FiscalRangeDGII>('fiscalRanges'),
       dbAdapter.getCollection<FiscalAllocation>('fiscalAllocations'),
     ]);
     const allocations = rawAllocations || [];
+    const policy = await resolveFiscalTerminalPolicy(terminalId, allocations, context);
+    if (!policy.enabled || (policy.managed && !policy.authorityId)) return null;
+    terminalId = policy.authorityId || terminalId;
     const allocation = getTerminalFiscalAllocation(allocations, terminalId, type as any);
-    if (!allocation && hasTerminalFiscalAllocation(allocations, terminalId, type)) return null;
+    if (!allocation && (policy.managed || hasTerminalFiscalAllocation(allocations, terminalId, type))) return null;
     const range = getFiscalRangeForEmission(ranges || [], type as any, allocation);
     const effectiveBatchSize = FISCAL_ISSUE_BATCH_SIZE;
 
     if (allocation) {
+      if (allocation.fiscalRangeId && !range) return null;
       const allocationIndex = allocations.findIndex((candidate) => candidate.id === allocation.id);
       if (allocationIndex === -1) return null;
       if (!hasValidFiscalAllocationPointer(allocations[allocationIndex])) return null;
@@ -1459,15 +1499,18 @@ export const db = {
     return localBuffer;
   },
 
-  getNextNCF: (type: FiscalDocumentCode, terminalId: string, _customBatchSize?: number): Promise<string | null> => withFiscalIssueLock(async () => {
+  getNextNCF: (type: FiscalDocumentCode, terminalId: string, _customBatchSize?: number, context?: TerminalConfig): Promise<string | null> => withFiscalIssueLock(async () => {
+    const allocations = await dbAdapter.getCollection<FiscalAllocation>('fiscalAllocations') || [];
+    const policy = await resolveFiscalTerminalPolicy(terminalId, allocations, context);
+    if (!policy.enabled || (policy.managed && !policy.authorityId)) return null;
+    terminalId = policy.authorityId || terminalId;
     let buffers = await dbAdapter.getCollection<LocalFiscalBuffer>('localFiscalBuffer') || [];
     let buffer = (buffers || []).find((b: LocalFiscalBuffer) =>
       b.type === type && (!terminalId || !b.terminalId || normalizeSequenceKey(b.terminalId) === normalizeSequenceKey(terminalId))
     );
 
-    const allocations = await dbAdapter.getCollection<FiscalAllocation>('fiscalAllocations') || [];
     const activeAllocation = getTerminalFiscalAllocation(allocations, terminalId, type as any);
-    if (!activeAllocation && hasTerminalFiscalAllocation(allocations, terminalId, type)) return null;
+    if (!activeAllocation && (policy.managed || hasTerminalFiscalAllocation(allocations, terminalId, type))) return null;
     if (activeAllocation) {
       const rawAllocation = allocations.find((candidate) => candidate.id === activeAllocation.id);
       if (!rawAllocation || !hasValidFiscalAllocationPointer(rawAllocation)) return null;
@@ -1480,6 +1523,7 @@ export const db = {
       const bufferCurrentNumber = Number(buffer.currentNumber || 0);
       const bufferStartNumber = Number(buffer.startNumber || buffer.currentNumber || 0);
       const hasDifferentAllocation =
+        !buffer.terminalId || normalizeSequenceKey(buffer.terminalId) !== normalizeSequenceKey(terminalId) ||
         buffer.allocationId !== activeAllocation.id ||
         Boolean(buffer.fiscalRangeId && activeAllocation.fiscalRangeId && buffer.fiscalRangeId !== activeAllocation.fiscalRangeId);
       const isOutsideAllocation =
@@ -1509,7 +1553,7 @@ export const db = {
     }
 
     if (!buffer || buffer.currentNumber > buffer.endNumber) {
-      buffer = await db.requestFiscalBatch(terminalId, type, FISCAL_ISSUE_BATCH_SIZE) as LocalFiscalBuffer;
+      buffer = await db.requestFiscalBatch(terminalId, type, FISCAL_ISSUE_BATCH_SIZE, context) as LocalFiscalBuffer;
       if (!buffer) return null;
       // Refresh buffers after request
       buffers = await dbAdapter.getCollection<LocalFiscalBuffer>('localFiscalBuffer') || [];
@@ -1532,8 +1576,10 @@ export const db = {
     return ncf;
   }),
 
-  reconcilePreparedNCF: (type: FiscalDocumentCode, terminalId: string, ncf: string): Promise<void> => withFiscalIssueLock(async () => {
+  reconcilePreparedNCF: (type: FiscalDocumentCode, terminalId: string, ncf: string, context?: TerminalConfig): Promise<void> => withFiscalIssueLock(async () => {
     const allocations = await dbAdapter.getCollection<FiscalAllocation>('fiscalAllocations') || [];
+    const policy = await resolveFiscalTerminalPolicy(terminalId, allocations, context);
+    terminalId = policy.authorityId || terminalId;
     const buffers = await dbAdapter.getCollection<LocalFiscalBuffer>('localFiscalBuffer') || [];
     const reconciled = reconcilePreparedFiscalCollections(allocations, buffers, type, terminalId, ncf);
     if (reconciled.allocations !== allocations) await dbAdapter.saveCollection('fiscalAllocations', reconciled.allocations);

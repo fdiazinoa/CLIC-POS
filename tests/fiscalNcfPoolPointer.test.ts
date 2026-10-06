@@ -255,5 +255,41 @@ test('checkout does not abandon an in-flight NCF reservation with an eight-secon
   const checkoutSource = readFileSync(new URL('../components/POSInterface.tsx', import.meta.url), 'utf8');
   assert.doesNotMatch(checkoutSource, /TIMEOUT_GET_NCF/);
   assert.doesNotMatch(checkoutSource, /withTimeout\s*\(\s*db\.getNextNCF/);
-  assert.equal((checkoutSource.match(/await db\.getNextNCF\(/g) || []).length, 3);
+  assert.equal((checkoutSource.match(/await db\.getNextNCF\(/g) || []).length, 2);
+});
+
+
+test('managed terminal cannot consume global B04 when only B02 is assigned', async () => {
+  await withFiscalCollections({
+    fiscalRanges: [{ id: 'b04-global', type: 'B04', prefix: 'B04', startNumber: 1, endNumber: 100, currentGlobal: 2, isActive: true }],
+    fiscalAllocations: [{ id: 'a-b02', terminalId, ncfType: 'B02', reservedStart: 10, reservedEnd: 20, nextNumber: 10, status: 'ACTIVE' }],
+  }, async ({ collection }) => {
+    const before = ['fiscalRanges', 'fiscalAllocations', 'localFiscalBuffer'].map(collection);
+    assert.equal(await db.canRequestMoreNCF('B04', terminalId), false);
+    assert.equal(await db.requestFiscalBatch(terminalId, 'B04', 1), null);
+    assert.equal(await db.getNextNCF('B04', terminalId), null);
+    assert.deepEqual(['fiscalRanges', 'fiscalAllocations', 'localFiscalBuffer'].map(collection), before);
+  });
+});
+
+test('explicit empty authority and disabled terminal never fall back to global pool', async () => {
+  await withFiscalCollections({ fiscalRanges: [{ id: 'global', type: 'B04', prefix: 'B04', startNumber: 1, endNumber: 100, currentGlobal: 2, isActive: true }] }, async ({ collection }) => {
+    for (const fiscal of [{ fiscalAllocations: [] }, { enabled: false }]) {
+      const context = { erpTerminalId: terminalId, fiscal } as any;
+      assert.equal(await db.canRequestMoreNCF('B04', terminalId, context), false);
+      assert.equal(await db.getNextNCF('B04', terminalId, 1, context), null);
+    }
+    assert.equal(collection('fiscalRanges')[0].currentGlobal, 2);
+  });
+});
+
+test('canonical ERP identity emits assigned B04 and prepared reservation preserves authority', async () => {
+  await withFiscalCollections({ fiscalRanges: [], fiscalAllocations: [{ id: 'a-b04', terminalId, ncfType: 'B04', prefix: 'B04', reservedStart: 4001, reservedEnd: 4002, nextNumber: 4001, status: 'ACTIVE' }] }, async ({ collection }) => {
+    const context = { erpTerminalId: terminalId, fiscal: { enabled: true } } as any;
+    assert.equal(await db.getNextNCF('B04', 'local-id', 1, context), 'B0400004001');
+    assert.equal(await db.getNextNCF('B04', 'local-id', 1, context), 'B0400004002');
+    assert.equal(await db.validatePreparedFiscalAuthority('B04', 'local-id', 'B0400004002', context), true);
+    assert.equal(await db.validatePreparedFiscalAuthority('B04', 'local-id', 'B0400004003', context), false);
+    assert.equal(collection('fiscalAllocations')[0].nextNumber, 4003);
+  });
 });
