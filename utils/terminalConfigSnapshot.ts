@@ -1787,6 +1787,7 @@ export interface ApplyTerminalConfigSnapshotOptions {
   bindingMode?: 'MASTER' | 'SLAVE';
   incomingSnapshot?: TerminalConfigSnapshot | null;
   cachedSnapshot?: TerminalConfigSnapshot | null;
+  preserveOmittedOperationalScopes?: boolean;
 }
 
 export interface ApplyTerminalConfigSnapshotResult {
@@ -2374,6 +2375,11 @@ export const applyTerminalConfigSnapshot = (
     .filter(Boolean) as Season[];
 
   const terminalTemplate = resolveTerminalTemplate(nextConfig, terminalId);
+  const existingTerminal = baseConfig.terminals?.find(terminal => terminal.id === terminalId)?.config;
+  const preservePricing = options.preserveOmittedOperationalScopes && existingTerminal
+    && !Object.prototype.hasOwnProperty.call(incomingResolved, 'pricing');
+  const preserveInventory = options.preserveOmittedOperationalScopes && existingTerminal
+    && !Object.prototype.hasOwnProperty.call(incomingResolved, 'inventory');
   const terminalTerminalId =
     asString(resolvedIdentity.terminal_id) ||
     asString(resolvedIdentity.id) ||
@@ -2653,7 +2659,7 @@ export const applyTerminalConfigSnapshot = (
       fiscalRanges: effectiveFiscalRanges,
       fiscalAllocations: effectiveFiscalAllocations,
     },
-    pricing: {
+    pricing: preservePricing ? cloneDeep(existingTerminal.pricing) : {
       ...terminalTemplate.pricing,
       defaultTariffId: effectiveDefaultTariffId,
       allowedTariffIds: effectiveAllowedTariffIds,
@@ -2674,7 +2680,7 @@ export const applyTerminalConfigSnapshot = (
       Object.keys(effectiveDocumentAssignments).length > 0
         ? effectiveDocumentAssignments
         : terminalTemplate.documentAssignments,
-    inventoryScope: {
+    inventoryScope: preserveInventory ? cloneDeep(existingTerminal.inventoryScope) : {
       ...terminalTemplate.inventoryScope,
       defaultSalesWarehouseId: effectiveDefaultWarehouseId,
       visibleWarehouseIds: effectiveAllowedWarehouseIds,
@@ -2728,6 +2734,10 @@ export const applyTerminalConfigSnapshot = (
     })(),
     workflow: {
       ...terminalTemplate.workflow,
+      ...(options.preserveOmittedOperationalScopes && typeof asObject(asObject(incomingFallbackConfig.workflow).inventory).allowNegativeStock === 'boolean'
+        ? { inventory: { ...terminalTemplate.workflow.inventory,
+          allowNegativeStock: asObject(asObject(incomingFallbackConfig.workflow).inventory).allowNegativeStock } }
+        : {}),
       session: mergeWorkflowSessionFromErpConfig(
         terminalTemplate.workflow?.session || DEFAULT_TERMINAL_CONFIG.workflow.session,
         fallbackSession,
@@ -2803,7 +2813,7 @@ export const applyTerminalConfigSnapshot = (
     ];
   }
 
-  nextConfig.tariffs = effectiveTariffs;
+  nextConfig.tariffs = preservePricing ? cloneDeep(baseConfig.tariffs) : effectiveTariffs;
   nextConfig.taxes = effectiveTaxes;
   if (businessServicePoliciesSource !== undefined) {
     nextConfig.serviceTaxPolicies = businessServiceTaxPolicies || {};
@@ -2904,7 +2914,7 @@ export const applyTerminalConfigSnapshot = (
       // Storage is best-effort in Android WebView.
     }
   }
-  nextConfig.inventoryScope = {
+  nextConfig.inventoryScope = preserveInventory ? cloneDeep(baseConfig.inventoryScope) : {
     ...(nextConfig.inventoryScope || {}),
     defaultSalesWarehouseId: effectiveDefaultWarehouseId,
     visibleWarehouseIds: effectiveAllowedWarehouseIds,
