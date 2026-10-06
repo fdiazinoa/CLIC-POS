@@ -1,4 +1,7 @@
 import CheckoutTrackingSettings from './CheckoutTrackingSettings';
+import { LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED } from '../services/sync/LargeMasterSyncV3Authority';
+import { resolveSyncTarget } from '../services/sync/SyncProfile';
+import { useV3CatalogBrowser } from '../services/sync/LargeMasterSyncV3CatalogRead';
 
 import React, { useEffect, useState } from 'react';
 import {
@@ -47,6 +50,7 @@ const AgendaManager = React.lazy(() => import('./AgendaManager'));
 const SpacesManager = React.lazy(() => import('./SpacesManager'));
 const WarehouseManager = React.lazy(() => import('./WarehouseManager'));
 const CatalogManager = React.lazy(() => import('./CatalogManager'));
+const LargeMasterSyncV3CatalogManager = React.lazy(() => import('./LargeMasterSyncV3CatalogManager'));
 const TerminalSettings = React.lazy(() => import('./TerminalSettings'));
 const HardwareSettings = React.lazy(() => import('./HardwareSettings'));
 const CurrencySettings = React.lazy(() => import('./CurrencySettings'));
@@ -436,6 +440,11 @@ const Settings: React.FC<SettingsProps> = (props) => {
         );
 
       case 'CATALOG':
+        if (useV3CatalogBrowser(LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED, resolveSyncTarget().kind)) {
+          if (!hasPermission('CATALOG_VIEW') && !hasPermission('CATALOG_MANAGE')) return <p role="alert">Sin permiso para consultar productos.</p>;
+          return <LargeMasterSyncV3CatalogManager config={props.config} warehouses={props.warehouses}
+            terminalId={props.terminalId} onClose={() => setCurrentView('HOME')} />;
+        }
         return (
           <CatalogManager
             products={props.products}

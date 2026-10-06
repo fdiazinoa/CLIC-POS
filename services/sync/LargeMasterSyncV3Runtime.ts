@@ -1,6 +1,7 @@
 import type {
   LargeMasterSyncV3RuntimeVersion,
   LargeMasterSyncV3Store,
+  V3CatalogPageRequest,
 } from './LargeMasterSyncV3Types';
 
 /**
@@ -20,6 +21,11 @@ export class LargeMasterSyncV3Runtime {
 
   listArticlesPage(afterArticleId: string | null, limit = 100): Promise<Record<string, unknown>[]> {
     return this.store.listArticlesPage(this.version, afterArticleId, limit);
+  }
+
+  readAdministrativeCatalogPage(request: V3CatalogPageRequest) {
+    if (!this.store.readAdministrativeCatalogPage) throw new Error('SYNC_V3_CATALOG_READ_UNAVAILABLE');
+    return this.store.readAdministrativeCatalogPage(this.version, request);
   }
 
   searchOperationalArticles(query: string, categoryId?: string | null, limit = 60): Promise<Record<string, unknown>[]> {

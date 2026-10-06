@@ -8,6 +8,7 @@ import {
   type LargeMasterSyncV3Progress,
   type LargeMasterSyncV3RuntimeVersion,
   type LargeMasterSyncV3Store,
+  type V3CatalogPageRequest, type V3CatalogPage,
 } from '../sync/LargeMasterSyncV3Types';
 import { isLargeMasterSyncV3OperationalWindowHeld, reserveLargeMasterSyncV3BaselineMutation } from '../sync/LargeMasterSyncV3OperationGate';
 
@@ -546,6 +547,49 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
     [runtime.syncVersion, afterArticleId, safeLimit]));
   }
 
+  /** Four bounded SELECTs (three for an empty page); no legacy records or record_json. */
+  async readAdministrativeCatalogPage(runtime: LargeMasterSyncV3RuntimeVersion, request: V3CatalogPageRequest): Promise<V3CatalogPage> {
+    requireOperationalVersion(runtime);
+    const limit = Number.isFinite(request.limit) ? Math.max(1, Math.min(100, Math.floor(request.limit!))) : 25;
+    const query = (request.query || '').trim().toLowerCase().slice(0, 120);
+    const none = request.category === 'NONE' ? 1 : 0;
+    // category_id is raw ERP article.categoryId, not a POS classification label. ALL has no category predicate.
+    const predicate = `a.sync_version = ? AND (? = 0 OR trim(coalesce(a.category_id, '')) = '')
+      AND (? = '' OR instr(lower(coalesce(a.description, '')), ?) > 0 OR instr(lower(coalesce(a.sku, '')), ?) > 0
+        OR EXISTS (SELECT 1 FROM master_v3_barcodes c WHERE c.sync_version = a.sync_version
+          AND c.article_id = a.article_id AND instr(lower(c.barcode), ?) > 0))`;
+    const bindings = [runtime.syncVersion, none, query, query, query, query];
+    const db = this.connection();
+    const global = first(await db.query(`SELECT COUNT(*) AS total,
+      EXISTS(SELECT 1 FROM master_v3_tariffs WHERE sync_version = ? AND tariff_id = ? AND active = 1) AS validTariff
+      FROM master_v3_articles WHERE sync_version = ?`, [runtime.syncVersion, request.tariffId, runtime.syncVersion]));
+    if (!global?.validTariff) throw new LargeMasterSyncV3Error('SYNC_V3_TARIFF_UNAVAILABLE');
+    const counts = first(await db.query(`SELECT COUNT(*) AS filteredTotal,
+      coalesce(SUM(CASE WHEN a.article_id > coalesce(?, '') THEN 1 ELSE 0 END), 0) AS remaining
+      FROM master_v3_articles a WHERE ${predicate}`, [request.afterId ?? null, ...bindings]));
+    const page = rows(await db.query(`SELECT a.article_id AS id, a.description AS name, a.sku,
+      a.category_id AS categoryId, a.article_type AS type, a.active, a.sellable, p.price,
+      CASE WHEN b.item_id IS NULL THEN NULL ELSE b.qty_on_hand - b.qty_reserved - b.qty_committed END AS balance
+      FROM master_v3_articles a LEFT JOIN master_v3_prices p ON p.sync_version = a.sync_version
+        AND p.article_id = a.article_id AND p.tariff_id = ?
+      LEFT JOIN master_v3_inventory_balances b ON b.item_id = a.article_id AND b.warehouse_id = ?
+        AND EXISTS(SELECT 1 FROM master_v3_inventory_state i WHERE i.singleton = 1 AND i.sync_id = ?
+          AND i.sync_version = ? AND i.inventory_version = ? AND i.cursor = ?)
+      WHERE ${predicate} AND a.article_id > coalesce(?, '') ORDER BY a.article_id LIMIT ?`,
+    [request.tariffId, request.warehouseId, runtime.syncId, runtime.syncVersion, request.inventoryVersion,
+      request.inventoryCursor, ...bindings, request.afterId ?? null, limit]));
+    const codes = page.length ? rows(await db.query(`SELECT article_id AS id, MIN(barcode) AS barcode
+      FROM master_v3_barcodes WHERE sync_version = ? AND article_id IN (${page.map(() => '?').join(',')})
+      GROUP BY article_id LIMIT 100`, [runtime.syncVersion, ...page.map(row => row.id)])) : [];
+    const barcodes = new Map(codes.map(row => [String(row.id), String(row.barcode)]));
+    return { total: Number(global.total), filteredTotal: Number(counts?.filteredTotal || 0),
+      nextCursor: Number(counts?.remaining || 0) > page.length && page.length ? String(page.at(-1)!.id) : null,
+      rows: page.map(row => ({ id: String(row.id), name: String(row.name || row.id), sku: row.sku == null ? null : String(row.sku),
+        barcode: barcodes.get(String(row.id)) ?? null, categoryId: row.categoryId == null ? null : String(row.categoryId),
+        type: row.type == null ? null : String(row.type), active: Number(row.active) === 1, sellable: Number(row.sellable) === 1,
+        price: row.price == null ? null : Number(row.price), balance: row.balance == null ? null : Number(row.balance) })) };
+  }
+
   async searchOperationalArticles(runtime: LargeMasterSyncV3RuntimeVersion, query: string, categoryId: string | null = null, limit = 60): Promise<Record<string, unknown>[]> {
     requireOperationalVersion(runtime);
     const normalizedQuery = query.trim().toLowerCase().slice(0, 120);
@@ -566,6 +610,15 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
       WHERE sync_version = ? AND article_id = ? AND active = 1 AND sellable = 1`,
     [runtime.syncVersion, articleId]));
     return row ? operationalRecord(row) : null;
+  }
+
+  async getAdministrativeTariff(runtime: LargeMasterSyncV3RuntimeVersion, tariffId: string): Promise<{ taxIncluded: boolean }> {
+    requireOperationalVersion(runtime);
+    const row = first(await this.connection().query(`SELECT record_json FROM master_v3_tariffs
+      WHERE sync_version = ? AND tariff_id = ? AND active = 1 LIMIT 1`, [runtime.syncVersion, tariffId]));
+    const tariff = row ? operationalRecord(row) : null;
+    if (typeof tariff?.taxIncluded !== 'boolean') throw new LargeMasterSyncV3Error('SYNC_V3_TARIFF_UNAVAILABLE');
+    return { taxIncluded: tariff.taxIncluded };
   }
 
   async getOperationalTariffs(runtime: LargeMasterSyncV3RuntimeVersion): Promise<Record<string, unknown>[]> {

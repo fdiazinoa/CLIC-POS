@@ -102,6 +102,7 @@ export interface LargeMasterSyncV3InventorySnapshot {
 }
 
 export interface LargeMasterSyncV3Store {
+  readAdministrativeCatalogPage?(runtime: LargeMasterSyncV3RuntimeVersion, request: V3CatalogPageRequest): Promise<V3CatalogPage>;
   prepare(manifest: LargeMasterSyncV3Manifest): Promise<void>;
   readProgress(syncId: string): Promise<LargeMasterSyncV3Progress | null>;
   findIncomplete(): Promise<LargeMasterSyncV3Progress | null>;
@@ -117,6 +118,7 @@ export interface LargeMasterSyncV3Store {
   searchOperationalArticles(runtime: LargeMasterSyncV3RuntimeVersion, query: string, categoryId?: string | null, limit?: number): Promise<Record<string, unknown>[]>;
   getOperationalArticle(runtime: LargeMasterSyncV3RuntimeVersion, articleId: string): Promise<Record<string, unknown> | null>;
   getOperationalTariffs(runtime: LargeMasterSyncV3RuntimeVersion): Promise<Record<string, unknown>[]>;
+  getAdministrativeTariff?(runtime: LargeMasterSyncV3RuntimeVersion, tariffId: string): Promise<{ taxIncluded: boolean }>;
   getOperationalTaxes(runtime: LargeMasterSyncV3RuntimeVersion): Promise<Record<string, unknown>[]>;
   getOperationalVariants(runtime: LargeMasterSyncV3RuntimeVersion, articleId: string): Promise<Record<string, unknown>[]>;
   getPrices(runtime: LargeMasterSyncV3RuntimeVersion, articleIds: string[], tariffId: string): Promise<Array<{ articleId: string; tariffId: string; price: number }>>;
@@ -139,6 +141,17 @@ export interface LargeMasterSyncV3Store {
   /** Explicit maintenance path; callers schedule it only while the POS is operationally idle. */
   cleanupExpiredVersions(olderThanIso: string, maxVersions?: number): Promise<number>;
 }
+
+/** Administrative display only; never a sale/cart Product or availability authority. */
+export interface V3CatalogArticle {
+  id: string; name: string; sku: string | null; barcode: string | null; categoryId: string | null;
+  active: boolean; sellable: boolean; type: string | null; price: number | null; balance: number | null;
+}
+export interface V3CatalogPageRequest {
+  query?: string; category?: 'ALL' | 'NONE'; afterId?: string | null; limit?: number;
+  tariffId: string; warehouseId: string; inventoryVersion: number; inventoryCursor: string;
+}
+export interface V3CatalogPage { rows: V3CatalogArticle[]; total: number; filteredTotal: number; nextCursor: string | null }
 
 export class LargeMasterSyncV3Error extends Error {
   constructor(public readonly code: string, message = code, public readonly retryable = false) {
