@@ -102,7 +102,8 @@ test('stale asynchronous catalog completions cannot activate a new pricing conte
 });
 test('error recovery uses existing settings callback and authority guards remain wired', () => {
   const source = readFileSync(new URL('../components/LargeMasterSyncV3OperationalPOS.tsx', import.meta.url), 'utf8');
-  assert.match(source, /props\.onOpenSettings\('SYNC'\)/);
+  assert.match(source, /props\.onOpenSettings\(\)/);
+  assert.doesNotMatch(source, /props\.onOpenSettings\(['"]/);
   assert.match(source, /reconcileV3TariffSelection\(selection, authority, props\.cart\.length > 0\)/);
   assert.match(source, /isV3TariffContextCurrent\(wantedContextKey, latestContextKey\.current/);
   assert.match(source, /latestContextKey\.current !== wantedContextKey/);
@@ -167,13 +168,18 @@ test('actual component reconciles corrected pricing, retains manual tariff and f
         builder.onLoad({ filter: /.*/, namespace: 'fixture' }, args => ({ contents: mocks[args.path], loader: 'js' }));
       } }] });
     const component = (await import(`data:text/javascript;base64,${Buffer.from(bundled.outputFiles[0].text).toString('base64')}`)).default;
-    let props: any = { activeTerminalId: terminalId, config: base(), cart: [], onOpenSettings: () => {} };
+    const settingsCalls: unknown[][] = [];
+    let props: any = { activeTerminalId: terminalId, config: base(), cart: [],
+      onOpenSettings: (...args: unknown[]) => settingsCalls.push(args) };
     props.config.terminals[0].config.inventoryScope = { defaultSalesWarehouseId: 'W' };
     let node: any;
     const render = () => { cursor = 0; dirty = false; effects = []; node = component(props); effects.forEach(fn => fn()); };
     const settle = async () => { for (let n = 0; n < 12; n++) { await Promise.resolve(); if (dirty) render(); } };
     render(); await settle();
     assert.equal(node.props.role, 'alert');
+    const recoveryButton = node.props.children.find((child: any) => child.type === 'button');
+    recoveryButton.props.onClick();
+    assert.deepEqual(settingsCalls, [[]], 'recovery opens HOME without deep-linking past permission-locked cards');
     assert.ok(requests.includes('VILLA'));
     props = { ...props, config: structuredClone(props.config) };
     props.config.terminals[0].config.pricing = { defaultTariffId: duarte, allowedTariffIds: ids };

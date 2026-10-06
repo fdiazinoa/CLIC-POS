@@ -164,8 +164,8 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps> = props => {
 
   if (authorityError || error) return <div role="alert" className="p-6 text-red-700">
     <p>Candidato V3 detenido: {authorityError || error}</p>
-    <button type="button" onClick={() => props.onOpenSettings('SYNC')} className="mt-4 rounded bg-blue-600 px-4 py-2 text-white">
-      Abrir ajustes de sincronización
+    <button type="button" onClick={() => props.onOpenSettings()} className="mt-4 rounded bg-blue-600 px-4 py-2 text-white">
+      Abrir ajustes
     </button>
   </div>;
   if (!projected || !boundary) return <div role="status" className="p-6">Preparando catálogo V3 e inventario del dispositivo vinculado…</div>;
