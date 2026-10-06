@@ -556,9 +556,9 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
     // category_id is raw ERP article.categoryId, not a POS classification label. ALL has no category predicate.
     const predicate = `a.sync_version = ? AND (? = 0 OR trim(coalesce(a.category_id, '')) = '')
       AND (? = '' OR instr(lower(coalesce(a.description, '')), ?) > 0 OR instr(lower(coalesce(a.sku, '')), ?) > 0
-        OR EXISTS (SELECT 1 FROM master_v3_barcodes c WHERE c.sync_version = a.sync_version
-          AND c.article_id = a.article_id AND instr(lower(c.barcode), ?) > 0))`;
-    const bindings = [runtime.syncVersion, none, query, query, query, query];
+        OR a.article_id IN (SELECT c.article_id FROM master_v3_barcodes c
+          WHERE c.sync_version = ? AND instr(lower(c.barcode), ?) > 0))`;
+    const bindings = [runtime.syncVersion, none, query, query, query, runtime.syncVersion, query];
     const db = this.connection();
     const global = first(await db.query(`SELECT COUNT(*) AS total,
       EXISTS(SELECT 1 FROM master_v3_tariffs WHERE sync_version = ? AND tariff_id = ? AND active = 1) AS validTariff

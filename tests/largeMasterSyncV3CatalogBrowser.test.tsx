@@ -76,10 +76,43 @@ test('literal searches and scoped barcode EXISTS share filtered count, NONE incl
     await assert.rejects(f.store.readAdministrativeCatalogPage(version,{...f.request,tariffId:'missing'}),{code:'SYNC_V3_TARIFF_UNAVAILABLE'});
   }finally{f.sql.close();}
 });
-test('53000 native rows still return only 100 through four SELECTs, with SQL runtime counts',async()=>{
-  const f=fixture(53000);try {const page=await f.store.readAdministrativeCatalogPage(version,{...f.request,limit:500});
-    assert.equal(page.total,53000);assert.equal(page.rows.length,100);assert.equal(f.queries.length,4);
-    assert.ok(f.queries.every(row=>row.length<=100));assert.equal(f.writes(),0);
+test('53000 articles and 53000 native codes use uncorrelated actual COUNT/PAGE plans and bounded transfers',async()=>{
+  const f=fixture(53000);try {
+    f.sql.exec('DELETE FROM master_v3_barcodes WHERE sync_version=2;BEGIN');
+    const insert=f.sql.prepare('INSERT INTO master_v3_barcodes(sync_version,barcode,article_id) VALUES(2,?,?)');
+    for(let i=0;i<53000;i++)insert.run(`BAR-${i}`,`P${String(i).padStart(6,'0')}`);
+    f.sql.exec('COMMIT');
+    for(const [query,expected] of [['absent-code',0],['BAR-',53000]] as const){
+      const start=f.queries.length;
+      const page=await f.store.readAdministrativeCatalogPage(version,{...f.request,query,limit:500});
+      assert.equal(page.total,53000);assert.equal(page.filteredTotal,expected);assert.equal(page.rows.length,Math.min(expected,100));
+      assert.equal(f.queries.length-start,expected?4:3);assert.equal(page.nextCursor,expected?'P000099':null);
+      for(const generated of f.queries.slice(start).filter(row=>row.sql.includes('AS filteredTotal')||row.sql.includes('SELECT a.article_id AS id'))){
+        const plan=f.sql.prepare('EXPLAIN QUERY PLAN '+generated.sql).all(...generated.params as any[]);
+        assert.ok(!plan.some(row=>String(row.detail).includes('CORRELATED')));
+        assert.match(generated.sql,/c.sync_version = \? AND instr/);
+        const inner=generated.sql.slice(generated.sql.indexOf('SELECT c.article_id'),generated.sql.indexOf('instr(lower(c.barcode)')+30);
+        assert.doesNotMatch(inner,/a\.(?:sync_version|article_id)/);
+      }
+    }
+    assert.ok(f.queries.every(row=>row.length<=100));
+    assert.ok(f.queries.every(row=>Buffer.byteLength(JSON.stringify(row))<65536));assert.equal(f.writes(),0);
+  }finally{f.sql.close();}
+});
+test('shared generated membership predicate preserves aliases/version/literal/category/cursor semantics',async()=>{
+  const f=fixture();try {
+    const cases=['','absent','product','REF','CODE-','code-unique','OLD-code','%','_','%_',"'","' OR 1=1 --"];
+    for(const query of cases)for(const category of ['ALL','NONE'] as const)for(const afterId of [null,'P000025']){
+      const normalized=query.trim().toLowerCase();
+      const expected=Array.from({length:260},(_,i)=>({id:`P${String(i).padStart(6,'0')}`,name:i===0?'Literal %_ product':`Product ${i}`,sku:`REF${i}`,none:i%3!==2}))
+        .filter(row=>(category==='ALL'||row.none)&&(!normalized||row.name.toLowerCase().includes(normalized)
+          ||row.sku.toLowerCase().includes(normalized)||(row.id==='P000000'&&['CODE-unique','CODE-second'].some(code=>code.toLowerCase().includes(normalized)))));
+      const remaining=expected.filter(row=>row.id>(afterId||''));
+      const result=await f.store.readAdministrativeCatalogPage(version,{...f.request,query,category,afterId,limit:25});
+      assert.equal(result.filteredTotal,expected.length);assert.deepEqual(result.rows.map(row=>row.id),remaining.slice(0,25).map(row=>row.id));
+      assert.equal(result.nextCursor,remaining.length>25?remaining[24].id:null);
+    }
+    assert.equal(f.writes(),0);
   }finally{f.sql.close();}
 });
 test('cached reader validates native tariff even with empty legacy tariffs; batches exact-baseline delta and fences owner',async()=>{
