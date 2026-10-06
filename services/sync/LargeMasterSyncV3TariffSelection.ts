@@ -19,7 +19,8 @@ export const reconcileV3TariffSelection = (
   const changed = previous && v3TariffContextKey(previous) !== v3TariffContextKey(current);
   if (hasCart && changed) throw new Error('SYNC_V3_CART_CONTEXT_CHANGED');
   const keepSelection = previous && previous.terminalId === current.terminalId
-    && previous.defaultTariffId === current.defaultTariffId && current.allowedTariffIds.includes(previous.tariffId);
+    && previous.warehouseId === current.warehouseId && current.allowedTariffIds.includes(previous.tariffId)
+    && (previous.defaultTariffId === current.defaultTariffId || previous.tariffId !== previous.defaultTariffId);
   return { ...current, tariffId: keepSelection ? previous.tariffId : current.defaultTariffId };
 };
 

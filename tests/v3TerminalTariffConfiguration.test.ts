@@ -84,6 +84,15 @@ test('manual permitted selection survives an unchanged default and unrelated con
   assert.equal(reconcileV3TariffSelection(previous, { ...context }, false).tariffId, mayorista);
   assert.equal(reconcileV3TariffSelection(previous, { ...context, allowedTariffIds: [...ids].reverse() }, true).tariffId, mayorista);
 });
+test('authorized manual selection survives a new configured default on an empty cart', () => {
+  const third = 'NEW_DEFAULT';
+  const previous = { ...context, tariffId: mayorista };
+  const updated = { ...context, defaultTariffId: third, allowedTariffIds: [...ids, third] };
+  assert.equal(reconcileV3TariffSelection(previous, updated, false).tariffId, mayorista);
+  assert.equal(reconcileV3TariffSelection({ ...context, tariffId: duarte }, updated, false).tariffId, third);
+  assert.throws(() => reconcileV3TariffSelection(previous, updated, true), /SYNC_V3_CART_CONTEXT_CHANGED/);
+  assert.equal(reconcileV3TariffSelection(previous, { ...updated, warehouseId: 'OTHER' }, false).tariffId, third);
+});
 test('revoked selected tariff resets only an empty cart; terminal/warehouse changes block live cart', () => {
   const previous = { ...context, tariffId: mayorista };
   assert.equal(reconcileV3TariffSelection(previous, { ...context, allowedTariffIds: [duarte] }, false).tariffId, duarte);
