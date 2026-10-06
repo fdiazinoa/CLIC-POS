@@ -3,6 +3,12 @@ import assert from 'node:assert/strict';
 import { prepareLargeMasterSyncV3Candidate } from '../services/sync/LargeMasterSyncV3Candidate';
 import type { LargeMasterSyncV3Runtime } from '../services/sync/LargeMasterSyncV3Runtime';
 import type { LargeMasterSyncV3InventorySnapshot, LargeMasterSyncV3Store } from '../services/sync/LargeMasterSyncV3Types';
+import { resetLargeMasterSyncV3OperationGateForTests, reserveLargeMasterSyncV3BaselineMutation,
+  setLargeMasterSyncV3CriticalOperation, waitForLargeMasterSyncV3OperationalWindow } from '../services/sync/LargeMasterSyncV3OperationGate';
+import { markPosInteractionActivity, POS_SALE_ACTIVITY_EVENT, setPosSaleActivity } from '../utils/posSaleActivity';
+import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
+import { LARGE_MASTER_SYNC_V3_SCHEMA_SQL } from '../services/db/LargeMasterSyncV3Schema';
+import { LargeMasterSyncV3SqliteStore } from '../services/db/LargeMasterSyncV3SqliteStore';
 
 const syncId = '00000000-0000-4000-8000-000000000001';
 
@@ -64,7 +70,7 @@ test('candidate prepares one V3 catalog and separate empty inventory before expo
     undefined, undefined, dependencies), {
     runtime, inventoryVersion: 5, inventoryCursor: 'inventory-5',
   });
-  assert.deepEqual(calls, ['assertEmulator', 'createClient', 'requestSync', 'findIncomplete',
+  assert.deepEqual(calls, ['assertEmulator', 'waitForWindow', 'createClient', 'requestSync', 'findIncomplete',
     'resumeSync', 'fetchInventory', 'waitForWindow', 'replaceInventory', 'readInventory', 'openRuntime']);
 });
 
@@ -76,7 +82,7 @@ test('candidate rejects ERP legacy fallback without opening the store', async ()
   });
   await assert.rejects(() => prepareLargeMasterSyncV3Candidate(store, 'https://railway.example.test',
     undefined, undefined, dependencies), /SYNC_V3_LEGACY_FALLBACK_REJECTED/);
-  assert.deepEqual(calls, ['assertEmulator']);
+  assert.deepEqual(calls, ['assertEmulator', 'waitForWindow']);
 });
 
 test('candidate preserves incompatible staging and never loads legacy masters', async () => {
@@ -85,7 +91,7 @@ test('candidate preserves incompatible staging and never loads legacy masters', 
     syncVersion: 185, status: 'STAGING', datasets: [], chunks: [] });
   await assert.rejects(() => prepareLargeMasterSyncV3Candidate(store, 'https://railway.example.test',
     undefined, undefined, dependencies), /SYNC_V3_STAGING_CONFLICT/);
-  assert.deepEqual(calls, ['assertEmulator', 'createClient', 'requestSync']);
+  assert.deepEqual(calls, ['assertEmulator', 'waitForWindow', 'createClient', 'requestSync']);
 });
 
 test('candidate does not report ready if inventory fetch or persistence fails', async () => {
@@ -124,4 +130,182 @@ test('candidate rejects a changed active version after inventory is saved', asyn
   } as LargeMasterSyncV3Runtime);
   await assert.rejects(() => prepareLargeMasterSyncV3Candidate(store, 'https://railway.example.test',
     undefined, undefined, dependencies), /SYNC_V3_RUNTIME_VERSION_CHANGED/);
+});
+
+const realGateFixture = () => {
+  const f = fixture();
+  f.store.assertCanRefresh = async () => { f.calls.push('assertCanRefresh'); };
+  f.dependencies.waitForOperationalWindow = async signal => {
+    f.calls.push('waitForWindow');
+    return waitForLargeMasterSyncV3OperationalWindow(signal);
+  };
+  return f;
+};
+const turn = async () => { for (let index = 0; index < 12; index++) await Promise.resolve(); };
+
+test('manual confirmation interaction waits for the real activity event before preflight/network and cleans listeners', async t => {
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  const target = new EventTarget();
+  const listeners = new Set<EventListenerOrEventListenerObject>();
+  const timers = new Map<number, () => void>();
+  let nextTimer = 0;
+  let now = Date.now() - 10_000;
+  t.mock.method(Date, 'now', () => now);
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: {
+    addEventListener: (name: string, listener: EventListenerOrEventListenerObject) => {
+      if (name === POS_SALE_ACTIVITY_EVENT) listeners.add(listener);
+      target.addEventListener(name, listener);
+    },
+    removeEventListener: (name: string, listener: EventListenerOrEventListenerObject) => {
+      listeners.delete(listener); target.removeEventListener(name, listener);
+    },
+    dispatchEvent: (event: Event) => target.dispatchEvent(event),
+    setTimeout: (callback: () => void) => { timers.set(++nextTimer, callback); return nextTimer; },
+    clearTimeout: (id: number) => { timers.delete(id); },
+  } });
+  try {
+    markPosInteractionActivity(5000);
+    const f = realGateFixture();
+    const pending = prepareLargeMasterSyncV3Candidate(f.store, 'https://railway.example.test', undefined, undefined, f.dependencies);
+    await turn();
+    assert.deepEqual(f.calls, ['assertEmulator', 'waitForWindow']);
+    assert.equal(listeners.size, 1);
+    now += 5025;
+    for (const callback of timers.values()) callback();
+    timers.clear();
+    await pending;
+    assert.deepEqual(f.calls, ['assertEmulator', 'waitForWindow', 'assertCanRefresh', 'createClient',
+      'requestSync', 'findIncomplete', 'resumeSync', 'fetchInventory', 'waitForWindow',
+      'replaceInventory', 'readInventory', 'openRuntime']);
+    assert.equal(listeners.size, 0);
+  } finally {
+    now += 6000; setPosSaleActivity({ active: false });
+    resetLargeMasterSyncV3OperationGateForTests();
+    if (previousWindow) Object.defineProperty(globalThis, 'window', previousWindow);
+    else Reflect.deleteProperty(globalThis, 'window');
+    t.mock.restoreAll();
+  }
+});
+
+for (const held of ['nested payment/print', 'cart', 'baseline reservation']) {
+  test(`initial candidate wait preserves ${held} until the final release`, async () => {
+    const f = realGateFixture();
+    let release = () => undefined;
+    if (held === 'nested payment/print') {
+      setLargeMasterSyncV3CriticalOperation('PAYMENT', true);
+      setLargeMasterSyncV3CriticalOperation('PAYMENT', true);
+      setLargeMasterSyncV3CriticalOperation('PRINT', true);
+    } else if (held === 'cart') setPosSaleActivity({ active: true, cartCount: 1 });
+    else release = reserveLargeMasterSyncV3BaselineMutation();
+    const pending = prepareLargeMasterSyncV3Candidate(f.store, 'https://railway.example.test', undefined, undefined, f.dependencies);
+    try {
+      await turn();
+      assert.deepEqual(f.calls, ['assertEmulator', 'waitForWindow']);
+      if (held === 'nested payment/print') {
+        setLargeMasterSyncV3CriticalOperation('PAYMENT', false);
+        setLargeMasterSyncV3CriticalOperation('PRINT', false);
+        await turn();
+        assert.deepEqual(f.calls, ['assertEmulator', 'waitForWindow']);
+        setLargeMasterSyncV3CriticalOperation('PAYMENT', false);
+      } else if (held === 'cart') {
+        setPosSaleActivity({ active: false });
+        resetLargeMasterSyncV3OperationGateForTests(); // Notify the real listener in the Node environment without window.
+      } else release();
+      await pending;
+      assert.equal(f.calls.filter(call => call === 'requestSync').length, 1);
+      assert.equal(f.calls.filter(call => call === 'waitForWindow').length, 2);
+    } finally {
+      release(); setPosSaleActivity({ active: false }); resetLargeMasterSyncV3OperationGateForTests();
+      await pending.catch(() => undefined);
+    }
+  });
+}
+
+for (const timing of ['before', 'during', 'at release']) {
+  test(`abort ${timing} initial real gate wait creates no client/session/store mutations and removes abort listener`, async () => {
+    const controller = new AbortController();
+    const f = realGateFixture();
+    const tracked = new Set<EventListenerOrEventListenerObject>();
+    const add = controller.signal.addEventListener.bind(controller.signal);
+    const remove = controller.signal.removeEventListener.bind(controller.signal);
+    controller.signal.addEventListener = (name, listener, options) => {
+      if (listener) tracked.add(listener); add(name, listener, options);
+    };
+    controller.signal.removeEventListener = (name, listener, options) => {
+      if (listener) tracked.delete(listener); remove(name, listener, options);
+    };
+    if (timing !== 'before') setLargeMasterSyncV3CriticalOperation('PAYMENT', true);
+    else controller.abort();
+    const pending = prepareLargeMasterSyncV3Candidate(f.store, 'https://railway.example.test', undefined, controller.signal, f.dependencies);
+    const rejected = assert.rejects(pending, { name: 'AbortError' });
+    try {
+      await turn();
+      if (timing === 'at release') setLargeMasterSyncV3CriticalOperation('PAYMENT', false);
+      controller.abort();
+      await rejected;
+      assert.deepEqual(f.calls, ['assertEmulator', 'waitForWindow']);
+      assert.equal(tracked.size, 0);
+    } finally { resetLargeMasterSyncV3OperationGateForTests(); await rejected; }
+  });
+}
+
+test('real SQLite preflight still rejects an acknowledged V3 inventory movement before any network request', async () => {
+  const sql = new DatabaseSync(':memory:');
+  sql.exec(LARGE_MASTER_SYNC_V3_SCHEMA_SQL);
+  sql.exec(`CREATE TABLE documents(collection_name TEXT, doc_id TEXT, data TEXT);
+    UPDATE master_v3_state SET active_sync_id='S', active_version=2 WHERE singleton=1;
+    INSERT INTO documents VALUES('inventoryLedger','movement','{"v3InventoryBaseline":"baseline","syncStatus":"APPLIED_ERP"}');`);
+  const store = new LargeMasterSyncV3SqliteStore(() => ({
+    query: async (query, values = []) => ({ values: sql.prepare(query).all(...values as SQLInputValue[]) }),
+    run: async (query, values = []) => { sql.prepare(query).run(...values as SQLInputValue[]); },
+    execute: async query => { sql.exec(query); },
+  }), async operation => operation());
+  const f = realGateFixture();
+  try {
+    await assert.rejects(prepareLargeMasterSyncV3Candidate(store, 'https://railway.example.test', undefined, undefined, f.dependencies),
+      /SYNC_V3_INVENTORY_COVERAGE_REQUIRED/);
+    assert.deepEqual(f.calls, ['assertEmulator', 'waitForWindow']);
+    assert.equal(sql.prepare('SELECT COUNT(*) AS count FROM documents').get()?.count, 1);
+  } finally { sql.close(); }
+});
+
+test('activity reintroduced after the initial wait remains rejected by the real store preflight', async () => {
+  const sql = new DatabaseSync(':memory:');
+  sql.exec(LARGE_MASTER_SYNC_V3_SCHEMA_SQL);
+  const store = new LargeMasterSyncV3SqliteStore(() => ({
+    query: async (query, values = []) => ({ values: sql.prepare(query).all(...values as SQLInputValue[]) }),
+    run: async () => undefined, execute: async () => undefined,
+  }), async operation => operation());
+  const f = realGateFixture();
+  const wait = f.dependencies.waitForOperationalWindow;
+  f.dependencies.waitForOperationalWindow = async signal => {
+    const duration = await wait(signal);
+    setLargeMasterSyncV3CriticalOperation('PRINT', true);
+    return duration;
+  };
+  try {
+    await assert.rejects(prepareLargeMasterSyncV3Candidate(store, 'https://railway.example.test', undefined, undefined, f.dependencies), /OPERATIONAL_WINDOW_HELD/);
+    assert.deepEqual(f.calls, ['assertEmulator', 'waitForWindow']);
+  } finally { resetLargeMasterSyncV3OperationGateForTests(); sql.close(); }
+});
+
+test('second real wait still blocks inventory writes after preparation and abort never exposes ready', async () => {
+  const f = realGateFixture();
+  const controller = new AbortController();
+  const fetch = f.dependencies.fetchInventory;
+  f.dependencies.fetchInventory = async signal => {
+    assert.equal(signal, controller.signal);
+    const inventory = await fetch(signal);
+    setLargeMasterSyncV3CriticalOperation('PRINT', true);
+    return inventory;
+  };
+  const pending = prepareLargeMasterSyncV3Candidate(f.store, 'https://railway.example.test', undefined, controller.signal, f.dependencies);
+  const rejected = assert.rejects(pending, { name: 'AbortError' });
+  try {
+    await turn();
+    assert.equal(f.calls.filter(call => call === 'waitForWindow').length, 2);
+    assert.equal(f.calls.includes('replaceInventory'), false);
+    controller.abort(); await rejected;
+    assert.equal(f.calls.includes('openRuntime'), false);
+  } finally { controller.abort(); resetLargeMasterSyncV3OperationGateForTests(); await rejected; }
 });
