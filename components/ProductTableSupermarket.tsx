@@ -53,12 +53,12 @@ const ProductTableSupermarket: React.FC<ProductTableSupermarketProps> = ({
             style={containerStyle}
         >
             <table className="supermarket-ticket-table w-full text-left border-collapse table-fixed">
-                <thead className="bg-gray-50 sticky top-0 z-10 text-[11px] uppercase text-gray-400 font-black tracking-[0.18em] shadow-sm">
+                <thead className="bg-gray-50 sticky top-0 z-10 text-[13px] uppercase text-gray-700 font-black tracking-[0.18em] shadow-sm">
                     <tr>
-                        <th className="px-2 py-2 text-center w-16 text-gray-600">Cant</th>
+                        <th className="px-2 py-2 text-center w-24 text-gray-700">Cantidad</th>
                         <th className="px-3 py-2 w-auto">Descripción</th>
-                        <th className="supermarket-money px-4 py-3 text-right">Precio<span className="block text-[9px] tracking-normal font-medium normal-case">Unitario</span></th>
-                        <th className="supermarket-money px-4 py-3 text-right">ITBIS<span className="block text-[9px] tracking-normal font-medium normal-case">{taxIncluded ? 'Incluido · línea' : 'Por línea'}</span></th>
+                        <th className="supermarket-money px-4 py-3 text-right">Precio<span className="block text-[13px] tracking-normal font-medium normal-case">Unitario</span></th>
+                        <th className="supermarket-money px-4 py-3 text-right">ITBIS<span className="block text-[13px] tracking-normal font-medium normal-case">{taxIncluded ? 'Incluido · línea' : 'Por línea'}</span></th>
                         <th className="supermarket-money px-4 py-3 text-right text-gray-800">Total</th>
                     </tr>
                 </thead>
@@ -68,7 +68,7 @@ const ProductTableSupermarket: React.FC<ProductTableSupermarketProps> = ({
                         const taxAmount = item.price * item.quantity * (config.taxRate || 0.18);
                         const total = item.price * item.quantity;
                         const hasDiscount = item.originalPrice && item.price < item.originalPrice;
-                        const displayCode = item.barcode || item.variantSku || item.sku || item.id;
+                        const displayCode = item.variantSku || item.sku || item.barcode || item.id;
                         const isReturn = item.quantity < 0;
 
                         return (
@@ -107,7 +107,7 @@ const ProductTableSupermarket: React.FC<ProductTableSupermarketProps> = ({
                                                 </span>
                                             )}
                                         </div>
-                                        {displayCode && <span className="supermarket-code mt-1 block break-all text-xs text-slate-500 font-mono">{displayCode}</span>}
+                                        {displayCode && <span className="supermarket-code mt-1 block break-all text-sm text-slate-700 font-mono font-semibold">SKU / Ref.: {displayCode}</span>}
                                         {hasDiscount && (
                                             <span className="text-[11px] text-red-500 font-bold leading-none mt-1">
                                                 Desc. Aplicado
