@@ -1,3 +1,4 @@
+import { canSeeOtherTerminalSales } from '../../utils/terminalSalesVisibility';
 /**
  * Permission Service
  * 
@@ -63,7 +64,7 @@ class PermissionService {
      */
     shouldShowGlobalSales(): boolean {
         const terminal = this.getCurrentTerminal();
-        return terminal?.config.operational?.showGlobalSales === true || this.isMasterTerminal();
+        return canSeeOtherTerminalSales(terminal?.config);
     }
 
     /**

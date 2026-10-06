@@ -12,6 +12,7 @@ export interface ErpRefundSourceMatch {
   date: string;
   total: number;
   terminalName?: string;
+  terminalId?: string;
   refundable: boolean;
   eligibilityCode?: string;
   eligibilityMessage?: string;
@@ -168,6 +169,7 @@ export const normalizeErpRefundSearchResponse = (payload: unknown): ErpRefundSou
       date: text(first(source, 'date', 'transactionDate', 'transaction_date')),
       total: finite(first(source, 'total', 'grandTotal', 'grand_total')),
       terminalName: text(first(source, 'terminalName', 'terminal_name')) || undefined,
+      terminalId: transaction?.terminalId || text(first(source, 'originalTerminalId', 'original_terminal_id', 'terminalId', 'terminal_id', 'sourceTerminalId', 'source_terminal_id')) || undefined,
       refundable: transaction?.erpRefundSource?.refundable ?? eligibility.refundable,
       eligibilityCode: transaction?.erpRefundSource?.eligibilityCode ?? eligibility.code,
       eligibilityMessage: transaction?.erpRefundSource?.eligibilityMessage ?? eligibility.message,
