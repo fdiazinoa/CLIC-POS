@@ -10,6 +10,7 @@ import { assertLegacyMasterPullAllowed, isLargeMasterSyncV3ReplacedCollection,
     usesLargeMasterSyncV3Authority } from './LargeMasterSyncV3Authority';
 import { getLargeMasterSyncV3OperationalSession } from './LargeMasterSyncV3OperationalSession';
 import { assertLargeMasterSyncV3ConfigPayload, largeMasterSyncV3DownloadOrigin } from './LargeMasterSyncV3DownloadOrigin';
+import { assertOperationalTerminalConfig, readOperationalTerminalBinding } from './OperationalTerminalConfig';
 import { freezeCount, freezePhase } from '../../diagnostics/freezeCounters';
 import { fetchAndReadWithTimeout } from '../network/fetchAndReadWithTimeout';
 import { db } from '../../utils/db';
@@ -3352,6 +3353,7 @@ class SyncManager {
             supplementalMode?: 'inline' | 'background' | 'skip';
             deferDuringSale?: boolean;
             validatedMasterBaseUrl?: string;
+            requireOperationalTerminalConfig?: boolean;
         }
     ): Promise<BusinessConfig | null> {
         freezeCount('CONFIG_APPLY_COUNT');
@@ -3381,6 +3383,18 @@ class SyncManager {
         const context = this.getActiveTerminalContext(baseConfig);
         if (!context.terminalId) {
             return null;
+        }
+
+        const refreshAuthority = options?.requireOperationalTerminalConfig
+            ? JSON.stringify([context, readOperationalTerminalBinding()]) : null;
+        const assertRefreshAuthorityCurrent = async () => {
+            const currentConfig = await db.get('config') as unknown as BusinessConfig | null;
+            const currentAuthority = JSON.stringify([this.getActiveTerminalContext(currentConfig),
+                readOperationalTerminalBinding()]);
+            if (currentAuthority !== refreshAuthority) throw new Error('ERP_TERMINAL_CONFIG_BINDING_CHANGED');
+        };
+        if (options?.requireOperationalTerminalConfig && snapshotOverride !== undefined) {
+            throw new Error('ERP_FRESH_TERMINAL_CONFIG_REQUIRED');
         }
 
         const protectLocalCatalog = protectsLocalCatalogFromCloud();
@@ -3448,7 +3462,7 @@ class SyncManager {
             context.tenantId &&
             endpointCandidates.length > 0
         );
-        const allowPendingFallback = !options?.forceRemoteFetch
+        const allowPendingFallback = !options?.requireOperationalTerminalConfig && !options?.forceRemoteFetch
             && !usesLargeMasterSyncV3Authority(syncPolicy.resolve().kind);
         const requestTimeoutMs = Number.isFinite(options?.requestTimeoutMs)
             ? Math.max(1_000, Number(options?.requestTimeoutMs))
@@ -3532,7 +3546,7 @@ class SyncManager {
                         requestedBlockScopes,
                         requestedResolvedScopes,
                     });
-                    const catalogAuthHeaders = buildTerminalSyncAuthHeaders();
+                    const catalogAuthHeaders = options?.requireOperationalTerminalConfig ? {} : buildTerminalSyncAuthHeaders();
                     const sendCatalogState = Boolean(catalogAuthHeaders['X-Sync-Token']
                         && currentCatalogCursor && hasCompleteCachedCatalog
                         && !options?.forceFullCatalog && requestedMasterScopes?.includes('items'));
@@ -3561,6 +3575,10 @@ class SyncManager {
                     }, remainingRequestMs ?? 15_000);
                     const responseContentType = result.contentType;
                     payload = result.payload;
+                    if (options?.requireOperationalTerminalConfig) assertOperationalTerminalConfig(payload, {
+                        tenantId: context.tenantId!, terminalId: context.terminalId!, posDeviceId: context.posDeviceId,
+                    });
+                    if (options?.requireOperationalTerminalConfig) await assertRefreshAuthorityCurrent();
                     if (v3Authority) assertLargeMasterSyncV3ConfigPayload(payload, {
                         tenantId: context.tenantId!, erpTerminalId: context.terminalId!,
                         posDeviceId: context.posDeviceId || undefined,
@@ -3635,6 +3653,7 @@ class SyncManager {
 
                     break;
                 } catch (remoteSnapshotError) {
+                    if (options?.requireOperationalTerminalConfig) snapshot = null;
                     lastFetchError = remoteSnapshotError;
                     posCatalogDebugLog('refreshTerminalResolvedConfig: fetch failed', {
                         allowPendingFallback,
@@ -3668,6 +3687,7 @@ class SyncManager {
         }
 
         if (!snapshot) {
+            if (options?.requireOperationalTerminalConfig) throw new Error('ERP_FRESH_TERMINAL_CONFIG_REQUIRED');
             return null;
         }
 
@@ -3678,6 +3698,13 @@ class SyncManager {
 
         if (options?.deferDuringSale) {
             await waitForBackgroundSyncWindow();
+        }
+
+        if (options?.requireOperationalTerminalConfig) {
+            assertOperationalTerminalConfig(snapshot, {
+                tenantId: context.tenantId!, terminalId: context.terminalId!, posDeviceId: context.posDeviceId,
+            });
+            await assertRefreshAuthorityCurrent();
         }
 
         // Numeric master ranges are independent from the generic document collections.
@@ -3738,12 +3765,14 @@ class SyncManager {
         const configSnapshot = catalogDelta && !v3Authority
             ? mergeCatalogDeltaIntoSnapshot(cachedSnapshot!, snapshot, catalogDelta)
             : snapshot;
+        if (options?.requireOperationalTerminalConfig) await assertRefreshAuthorityCurrent();
         const applied = applyTerminalConfigSnapshot(configForTerminalSnapshot, {
             terminalId: snapshotTerminalId,
             posDeviceId: context.posDeviceId || undefined,
             bindingMode: context.bindingMode,
             incomingSnapshot: configSnapshot,
             cachedSnapshot,
+            preserveOmittedOperationalScopes: v3Authority,
         });
 
         const localProducts = v3Authority ? [] : ((await db.get('products')) as Product[]) || [];
@@ -3761,6 +3790,7 @@ class SyncManager {
             JSON.stringify(this.sanitizeConfig(nextConfig));
 
         if (options?.persist !== false && changed) {
+            if (options?.requireOperationalTerminalConfig) await assertRefreshAuthorityCurrent();
             await db.save('config', nextConfig);
         }
 
@@ -3781,6 +3811,8 @@ class SyncManager {
             operationalDocumentState.fiscalAllocations,
             operationalDocumentState.terminalId,
         );
+
+        if (options?.requireOperationalTerminalConfig) await assertRefreshAuthorityCurrent();
 
         if (snapshot && this.getPendingTerminalSnapshot(context.terminalId, snapshotTerminalId)) {
             this.clearPendingTerminalSnapshot();
@@ -7272,8 +7304,10 @@ class SyncManager {
 
                 if (module.id === 'config') {
                     // Special handling for config object
-                    this.syncVersions.set('config', 0);
-                    localStorage.setItem('sync_version_config', '0');
+                    if (target.kind !== 'ERP_ACTIVE') {
+                        this.syncVersions.set('config', 0);
+                        localStorage.setItem('sync_version_config', '0');
+                    }
                     await this.pullConfig(true);
                     count = 1; // Config is a single object, not a collection of items
                 } else {
@@ -7324,6 +7358,18 @@ class SyncManager {
 
         // Master already owns source-of-truth config locally; skip unless explicitly forced.
         if (!force && permissionService.isMasterTerminal()) return;
+
+        if (syncPolicy.resolve().kind === 'ERP_ACTIVE') {
+            const refreshed = await this.refreshTerminalResolvedConfig(undefined, {
+                forceRemoteFetch: true,
+                requireOperationalTerminalConfig: true,
+                masterScopes: [], blockScopes: [],
+                resolvedScopes: ['identity', 'terminal', 'device_role', 'role', 'pricing', 'inventory', 'documents', 'catalog'],
+                supplementalMode: 'skip',
+            });
+            if (!refreshed) throw new Error('ERP_FRESH_TERMINAL_CONFIG_REQUIRED');
+            return;
+        }
 
         try {
             const localVersion = this.syncVersions.get('config') || 0;
