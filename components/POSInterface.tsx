@@ -30,7 +30,7 @@ import {
    OrderServiceType, CashMovement
 } from '../types';
 import { hasProductPromotion } from '../utils/promotionEngine';
-import { getDefaultFiscalProvider, getEffectiveFiscalComplianceConfig, getFiscalReserveAlert, isTerminalFiscalReceiptRequired, mapElectronicFiscalCodeToLegacy, resolveSaleFiscalCode } from '../utils/fiscal/fiscalHelpers';
+import { getDefaultFiscalProvider, getEffectiveFiscalComplianceConfig, getFiscalReserveAlert, isTerminalFiscalReceiptRequired, mapElectronicFiscalCodeToLegacy, resolveSaleFiscalCode, resolveCreditNoteFiscalCode } from '../utils/fiscal/fiscalHelpers';
 import UnifiedPaymentModal from './PaymentModal';
 import {
    evaluateCreditSupervisorGate,
@@ -5526,45 +5526,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             }
          }
 
-         let finalNcf: string | undefined;
-         let finalNcfType: FiscalDocumentCode | undefined;
-         markInteractionStage(paymentTrace, 'SQL_START');
-
-         if (
-            !isOrderTakerMode
-            && isFiscalModeDisabledForCheckout
-            && isTerminalFiscalReceiptRequired(activeTerminalConfig)
-         ) {
-            alert(
-               'CRÍTICO: La terminal está configurada para emitir comprobantes fiscales, pero el modo fiscal efectivo está deshabilitado.\n\n' +
-               'La venta fue bloqueada para evitar una factura sin NCF. Sincronice la configuración o contacte a soporte.'
-            );
-            return null;
-         }
-
-         if (isFiscalModeDisabledForCheckout) {
-            finalNcf = undefined;
-            finalNcfType = undefined;
-         } else if (isRefundOnly) {
-            try {
-               // NCF allocation mutates the durable pointer. A Promise.race timeout
-               // cannot cancel it and would allow a second checkout to race it.
-               finalNcf = await db.getNextNCF('B04', terminalId, activeTerminalConfig?.fiscal?.typeConfigs?.['B04']?.batchSize || 50);
-               finalNcfType = finalNcf ? 'B04' : undefined;
-            } catch (refundNcfError) {
-               console.warn('No se pudo generar NCF B04 para devolución:', refundNcfError);
-            }
-         } else {
-            finalNcf = await db.getNextNCF(fiscalStatus.type, terminalId, activeTerminalConfig?.fiscal?.typeConfigs?.[fiscalStatus.type]?.batchSize || 100);
-
-            if (!finalNcf) {
-               alert(`CRÍTICO: No hay NCF de ${fiscalStatus.type === 'B01' || fiscalStatus.type === 'E31' ? 'Crédito Fiscal' : 'Consumo'} disponible. Pool DGII agotado.`);
-               return null;
-            }
-
-            finalNcfType = fiscalStatus.type;
-         }
-
          const reservationAdvance = activeRecoveredReservation && !uberRecoveredOrder
             ? Math.min(activeRecoveredReservation.balancePaid || 0, cartTotal)
             : 0;
@@ -5603,6 +5564,57 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                }
                return null;
             }
+         }
+
+         const refundFiscalType = resolveCreditNoteFiscalCode(fiscalCompliance.mode);
+         let reservedRefundNcf: string | undefined;
+         if (hasReturns && !isFiscalModeDisabledForCheckout) {
+            if (!await db.canRequestMoreNCF(refundFiscalType, terminalId, activeTerminalConfig)) {
+               alert(`No hay comprobantes ${refundFiscalType} habilitados y disponibles para esta terminal.`);
+               return null;
+            }
+            if (hasSales && !await db.canRequestMoreNCF(fiscalStatus.type, terminalId, activeTerminalConfig)) {
+               alert('No hay comprobantes de venta disponibles para esta terminal.');
+               return null;
+            }
+            reservedRefundNcf = await db.getNextNCF(refundFiscalType, terminalId, 1, activeTerminalConfig) || undefined;
+            if (!reservedRefundNcf) {
+               alert(`No se pudo reservar el comprobante ${refundFiscalType}. La devolución fue bloqueada.`);
+               return null;
+            }
+         }
+
+         let finalNcf: string | undefined;
+         let finalNcfType: FiscalDocumentCode | undefined;
+         markInteractionStage(paymentTrace, 'SQL_START');
+
+         if (
+            !isOrderTakerMode
+            && isFiscalModeDisabledForCheckout
+            && isTerminalFiscalReceiptRequired(activeTerminalConfig)
+         ) {
+            alert(
+               'CRÍTICO: La terminal está configurada para emitir comprobantes fiscales, pero el modo fiscal efectivo está deshabilitado.\n\n' +
+               'La venta fue bloqueada para evitar una factura sin NCF. Sincronice la configuración o contacte a soporte.'
+            );
+            return null;
+         }
+
+         if (isFiscalModeDisabledForCheckout) {
+            finalNcf = undefined;
+            finalNcfType = undefined;
+         } else if (isRefundOnly) {
+            finalNcf = reservedRefundNcf;
+            finalNcfType = refundFiscalType;
+         } else {
+            finalNcf = await db.getNextNCF(fiscalStatus.type, terminalId, activeTerminalConfig?.fiscal?.typeConfigs?.[fiscalStatus.type]?.batchSize || 100, activeTerminalConfig);
+
+            if (!finalNcf) {
+               alert(`CRÍTICO: No hay NCF de ${fiscalStatus.type === 'B01' || fiscalStatus.type === 'E31' ? 'Crédito Fiscal' : 'Consumo'} disponible. Pool DGII agotado.`);
+               return null;
+            }
+
+            finalNcfType = fiscalStatus.type;
          }
 
          try {
@@ -5658,15 +5670,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                // Prepare wallet operations
                const walletDepositAmount = payments.filter(p => p.method === 'ADVANCE').reduce((acc, p) => acc + p.amount, 0);
                const walletPaymentAmount = payments.filter(p => p.method === 'WALLET').reduce((acc, p) => acc + p.amount, 0);
-               let refundNcf: string | undefined;
-
-               if (!isFiscalModeDisabledForCheckout && Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android') {
-                  try {
-                     refundNcf = await db.getNextNCF('B04', terminalId, activeTerminalConfig?.fiscal?.typeConfigs?.['B04']?.batchSize || 50);
-                  } catch (refundNcfError) {
-                     console.warn('No se pudo generar NCF B04 para devolución mixta:', refundNcfError);
-                  }
-               }
+               const refundNcf = reservedRefundNcf;
 
                const splitPayload: Parameters<typeof transactionService.createSplitTransaction>[0] = {
                      saleTransaction: {
@@ -5720,7 +5724,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         status: 'COMPLETED',
                         ...(v3Operational ? { customerSnapshot: checkoutCustomerSnapshot } : {}),
                         ncf: refundNcf,
-                        ncfType: refundNcf ? 'B04' : undefined,
+                        ncfType: refundNcf ? refundFiscalType : undefined,
                         walletDepositAmount: walletDepositAmount > 0 ? walletDepositAmount : undefined,
                         walletPaymentAmount: walletPaymentAmount > 0 ? walletPaymentAmount : undefined,
                         serviceChargeAmount: v3Operational ? 0 : cartTip,
@@ -5773,7 +5777,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            items: normalizedSplitRefundItems,
                            total: returnTotal,
                            ncf: refundNcf,
-                           ncfType: refundNcf ? 'B04' : undefined,
+                           ncfType: refundNcf ? refundFiscalType : undefined,
                            status: 'REFUNDED',
                            refundReason: 'Devolución en transacción mixta',
                            authorizedById: refundAuthorizedBy?.id,

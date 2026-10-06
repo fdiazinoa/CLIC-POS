@@ -46,7 +46,7 @@ test('supermarket description separates code and highlights existing variant; mo
   assert.ok(source.indexOf('>ITBIS<') < source.indexOf('>Total</th>'));
   assert.match(source, /supermarket-code mt-1 block/);
   assert.match(source, /item\.variantInfo &&/);
-  assert.match(source, /item\.sku \|\| item\.id/);
+  assert.match(source, /item\.variantSku \|\| item\.sku \|\| item\.barcode \|\| item\.id/);
   // This is a presentation-only change: preserve the existing calculation.
   assert.match(source, /const taxAmount = item\.price \* item\.quantity \* \(config\.taxRate \|\| 0\.18\)/);
   assert.match(source, /const total = item\.price \* item\.quantity/);

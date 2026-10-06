@@ -255,5 +255,77 @@ test('checkout does not abandon an in-flight NCF reservation with an eight-secon
   const checkoutSource = readFileSync(new URL('../components/POSInterface.tsx', import.meta.url), 'utf8');
   assert.doesNotMatch(checkoutSource, /TIMEOUT_GET_NCF/);
   assert.doesNotMatch(checkoutSource, /withTimeout\s*\(\s*db\.getNextNCF/);
-  assert.equal((checkoutSource.match(/await db\.getNextNCF\(/g) || []).length, 3);
+  assert.equal((checkoutSource.match(/await db\.getNextNCF\(/g) || []).length, 2);
+});
+
+
+test('managed terminal cannot consume global B04 when only B02 is assigned', async () => {
+  await withFiscalCollections({
+    fiscalRanges: [{ id: 'b04-global', type: 'B04', prefix: 'B04', startNumber: 1, endNumber: 100, currentGlobal: 2, isActive: true }],
+    fiscalAllocations: [{ id: 'a-b02', terminalId, ncfType: 'B02', reservedStart: 10, reservedEnd: 20, nextNumber: 10, status: 'ACTIVE' }],
+  }, async ({ collection }) => {
+    const before = ['fiscalRanges', 'fiscalAllocations', 'localFiscalBuffer'].map(collection);
+    assert.equal(await db.canRequestMoreNCF('B04', terminalId), false);
+    assert.equal(await db.requestFiscalBatch(terminalId, 'B04', 1), null);
+    assert.equal(await db.getNextNCF('B04', terminalId), null);
+    assert.deepEqual(['fiscalRanges', 'fiscalAllocations', 'localFiscalBuffer'].map(collection), before);
+  });
+});
+
+test('explicit empty authority and disabled terminal never fall back to global pool', async () => {
+  await withFiscalCollections({ fiscalRanges: [{ id: 'global', type: 'B04', prefix: 'B04', startNumber: 1, endNumber: 100, currentGlobal: 2, isActive: true }] }, async ({ collection }) => {
+    for (const fiscal of [{ fiscalAllocations: [] }, { enabled: false }]) {
+      const context = { erpTerminalId: terminalId, fiscal } as any;
+      assert.equal(await db.canRequestMoreNCF('B04', terminalId, context), false);
+      assert.equal(await db.getNextNCF('B04', terminalId, 1, context), null);
+    }
+    assert.equal(collection('fiscalRanges')[0].currentGlobal, 2);
+  });
+});
+
+test('canonical ERP identity emits assigned B04 and prepared reservation preserves authority', async () => {
+  await withFiscalCollections({ fiscalRanges: [], fiscalAllocations: [{ id: 'a-b04', terminalId, ncfType: 'B04', prefix: 'B04', reservedStart: 4001, reservedEnd: 4002, nextNumber: 4001, status: 'ACTIVE' }] }, async ({ collection }) => {
+    const context = { erpTerminalId: terminalId, fiscal: { enabled: true } } as any;
+    assert.equal(await db.getNextNCF('B04', 'local-id', 1, context), 'B0400004001');
+    assert.equal(await db.getNextNCF('B04', 'local-id', 1, context), 'B0400004002');
+    assert.equal(await db.validatePreparedFiscalAuthority('B04', 'local-id', 'B0400004002', context), true);
+    assert.equal(await db.validatePreparedFiscalAuthority('B04', 'local-id', 'B0400004003', context), false);
+    assert.equal(collection('fiscalAllocations')[0].nextNumber, 4003);
+  });
+});
+
+
+test('matching managed buffer cannot issue from a removed, inactive, wrong-type or changed-prefix lot', async () => {
+  const validRange = { id: 'assigned-lot', type: 'B02', prefix: 'B02', startNumber: 1, endNumber: 100, currentGlobal: 2, isActive: true };
+  for (const ranges of [[], [{ ...validRange, isActive: false }], [{ ...validRange, type: 'B04' }], [{ ...validRange, prefix: 'WRONG' }]]) {
+    await withFiscalCollections({
+      fiscalRanges: ranges,
+      fiscalAllocations: [{ id: 'allocation', terminalId, fiscalRangeId: 'assigned-lot', ncfType: 'B02', prefix: 'B02', reservedStart: 10, reservedEnd: 20, nextNumber: 10, status: 'ACTIVE' }],
+      localFiscalBuffer: [{ id: 'B02', type: 'B02', terminalId, allocationId: 'allocation', fiscalRangeId: 'assigned-lot', prefix: 'B02', startNumber: 10, currentNumber: 10, endNumber: 10 }],
+    }, async ({ collection }) => {
+      const before = ['fiscalRanges', 'fiscalAllocations', 'localFiscalBuffer'].map(collection);
+      const originalSave = dbAdapter.saveCollection;
+      let writes = 0;
+      try {
+        dbAdapter.saveCollection = async (...args) => { writes++; return originalSave.apply(dbAdapter, args); };
+        assert.equal(await db.canRequestMoreNCF('B02', terminalId), false);
+        assert.equal(await db.validatePreparedFiscalAuthority('B02', terminalId, 'B0200000010'), false);
+        assert.equal(await db.getNextNCF('B02', terminalId), null);
+        assert.equal(await db.requestFiscalBatch(terminalId, 'B02', 1), null);
+        assert.equal(writes, 0);
+        assert.deepEqual(['fiscalRanges', 'fiscalAllocations', 'localFiscalBuffer'].map(collection), before);
+      } finally { dbAdapter.saveCollection = originalSave; }
+    });
+  }
+});
+
+
+test('checkout rejects recovered-reservation returns and invalid credit before any fiscal reservation', () => {
+  const source = readFileSync(new URL('../components/POSInterface.tsx', import.meta.url), 'utf8');
+  const refundReservation = source.indexOf('reservedRefundNcf = await db.getNextNCF');
+  const saleReservation = source.indexOf('finalNcf = await db.getNextNCF');
+  const reservationRejection = source.indexOf('if (activeRecoveredReservation && hasReturns)');
+  const creditRejection = source.indexOf("if (creditGate && !hasCreditOverrideApproval)");
+  assert.ok(reservationRejection > 0 && reservationRejection < refundReservation && reservationRejection < saleReservation);
+  assert.ok(creditRejection > 0 && creditRejection < refundReservation && creditRejection < saleReservation);
 });
