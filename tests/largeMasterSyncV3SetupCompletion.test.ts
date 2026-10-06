@@ -57,7 +57,7 @@ test('catalog/inventory persistence and owner verification finish before setup c
   assert.equal(finish, 1);
   assert.equal(result.metadata?.syncToken, config.metadata?.syncToken);
   assert.equal((result as any).rooms, (config as any).rooms);
-  assert.deepEqual(f.calls.filter(name => name !== 'assertCurrent'), ['requestSync', 'staging',
+  assert.deepEqual(f.calls.filter(name => name !== 'assertCurrent'), ['operationalWindow', 'requestSync', 'staging',
     'manifestChunksActivate', 'inventoryRailway', 'operationalWindow', 'persistInventory',
     'readInventory', 'runtime', 'owner', 'projectConfig', 'persistProjection']);
 });
