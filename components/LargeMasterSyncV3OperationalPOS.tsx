@@ -132,10 +132,10 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps> = props => {
       assertContext();
       if (latestProps.current.cart.length) throw new Error('SYNC_V3_TARIFF_CHANGE_CART_NOT_EMPTY');
       if (!authority.allowedTariffIds.includes(id) || !projected.tariffs.some(row => row.id === id)) throw new Error('SYNC_V3_TARIFF_UNAVAILABLE');
-      if (id === tariffId) return;
+      if (id === tariffId) { setSelection({ ...authority, tariffId: id, mode: 'manual' }); return; }
       ++contextSequence.current;
       latestContextKey.current = '';
-      setSelection({ ...authority, tariffId: id });
+      setSelection({ ...authority, tariffId: id, mode: 'manual' });
     },
   }; }, [session, projected, tariffId, warehouseId, remember, loadedContextKey, wantedContextKey, authorityError]);
 

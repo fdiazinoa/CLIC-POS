@@ -4,7 +4,7 @@ export interface V3TariffContext {
   defaultTariffId: string;
   allowedTariffIds: string[];
 }
-export interface V3TariffSelection extends V3TariffContext { tariffId: string }
+export interface V3TariffSelection extends V3TariffContext { tariffId: string; mode: 'manual' | 'default' }
 
 export const v3TariffContextKey = (context: V3TariffContext): string => JSON.stringify([
   context.terminalId, context.warehouseId, context.defaultTariffId, [...context.allowedTariffIds].sort(),
@@ -20,8 +20,9 @@ export const reconcileV3TariffSelection = (
   if (hasCart && changed) throw new Error('SYNC_V3_CART_CONTEXT_CHANGED');
   const keepSelection = previous && previous.terminalId === current.terminalId
     && previous.warehouseId === current.warehouseId && current.allowedTariffIds.includes(previous.tariffId)
-    && (previous.defaultTariffId === current.defaultTariffId || previous.tariffId !== previous.defaultTariffId);
-  return { ...current, tariffId: keepSelection ? previous.tariffId : current.defaultTariffId };
+    && (previous.defaultTariffId === current.defaultTariffId || previous.mode === 'manual');
+  return { ...current, tariffId: keepSelection ? previous.tariffId : current.defaultTariffId,
+    mode: keepSelection ? previous.mode : 'default' };
 };
 
 export const isV3TariffContextCurrent = (expectedKey: string, latestKey: string, sequence: number, latestSequence: number): boolean =>

@@ -74,31 +74,42 @@ test('both TerminalSelector bootstrap callers explicitly opt into V3 partial sco
 
 const context = { terminalId, warehouseId: 'W', defaultTariffId: duarte, allowedTariffIds: ids };
 test('same-terminal corrected default reconciles an empty cart, never a live cart', () => {
-  const previous = { ...context, defaultTariffId: 'VILLA', allowedTariffIds: ['VILLA', ...ids], tariffId: 'VILLA' };
+  const previous = { ...context, defaultTariffId: 'VILLA', allowedTariffIds: ['VILLA', ...ids], tariffId: 'VILLA', mode: 'default' as const };
   assert.equal(reconcileV3TariffSelection(previous, context, false).tariffId, duarte);
   assert.throws(() => reconcileV3TariffSelection(previous, context, true), /SYNC_V3_CART_CONTEXT_CHANGED/);
   assert.equal(previous.tariffId, 'VILLA');
 });
 test('manual permitted selection survives an unchanged default and unrelated config updates', () => {
-  const previous = { ...context, tariffId: mayorista };
+  const previous = { ...context, tariffId: mayorista, mode: 'manual' as const };
   assert.equal(reconcileV3TariffSelection(previous, { ...context }, false).tariffId, mayorista);
   assert.equal(reconcileV3TariffSelection(previous, { ...context, allowedTariffIds: [...ids].reverse() }, true).tariffId, mayorista);
 });
 test('authorized manual selection survives a new configured default on an empty cart', () => {
   const third = 'NEW_DEFAULT';
-  const previous = { ...context, tariffId: mayorista };
+  const previous = { ...context, tariffId: mayorista, mode: 'manual' as const };
   const updated = { ...context, defaultTariffId: third, allowedTariffIds: [...ids, third] };
   assert.equal(reconcileV3TariffSelection(previous, updated, false).tariffId, mayorista);
-  assert.equal(reconcileV3TariffSelection({ ...context, tariffId: duarte }, updated, false).tariffId, third);
+  assert.equal(reconcileV3TariffSelection({ ...context, tariffId: duarte, mode: 'default' }, updated, false).tariffId, third);
   assert.throws(() => reconcileV3TariffSelection(previous, updated, true), /SYNC_V3_CART_CONTEXT_CHANGED/);
   assert.equal(reconcileV3TariffSelection(previous, { ...updated, warehouseId: 'OTHER' }, false).tariffId, third);
 });
 test('revoked selected tariff resets only an empty cart; terminal/warehouse changes block live cart', () => {
-  const previous = { ...context, tariffId: mayorista };
+  const previous = { ...context, tariffId: mayorista, mode: 'manual' as const };
   assert.equal(reconcileV3TariffSelection(previous, { ...context, allowedTariffIds: [duarte] }, false).tariffId, duarte);
   for (const change of [{ ...context, allowedTariffIds: [duarte] }, { ...context, terminalId: 'OTHER' }, { ...context, warehouseId: 'W2' }]) {
     assert.throws(() => reconcileV3TariffSelection(previous, change, true), /SYNC_V3_CART_CONTEXT_CHANGED/);
   }
+});
+test('manual selection intent survives two default changes even when it temporarily equals the default', () => {
+  const previous = { ...context, tariffId: mayorista, mode: 'manual' as const };
+  const first = reconcileV3TariffSelection(previous, { ...context, defaultTariffId: mayorista }, false);
+  assert.equal(first.mode, 'manual');
+  const second = reconcileV3TariffSelection(first, context, false);
+  assert.equal(second.tariffId, mayorista);
+  assert.equal(second.mode, 'manual');
+  const revoked = reconcileV3TariffSelection(second, { ...context, allowedTariffIds: [duarte] }, false);
+  assert.equal(revoked.tariffId, duarte);
+  assert.equal(revoked.mode, 'default');
 });
 test('stale asynchronous catalog completions cannot activate a new pricing context', async () => {
   const old = v3TariffContextKey({ ...context, defaultTariffId: 'VILLA' });
@@ -197,6 +208,12 @@ test('actual component reconciles corrected pricing, retains manual tariff and f
     node.props.v3Operational.changeTariff(mayorista);
     render(); await settle();
     assert.equal(node.props.v3Operational.tariffId, mayorista);
+    for (const newDefault of [mayorista, duarte]) {
+      props = { ...props, config: structuredClone(props.config) };
+      props.config.terminals[0].config.pricing.defaultTariffId = newDefault;
+      render(); await settle();
+      assert.equal(node.props.v3Operational.tariffId, mayorista, 'actual component preserves manual provenance across two defaults');
+    }
     props = { ...props, config: { ...props.config, name: 'Unrelated update' } };
     render(); await settle();
     assert.equal(node.props.v3Operational.tariffId, mayorista);
