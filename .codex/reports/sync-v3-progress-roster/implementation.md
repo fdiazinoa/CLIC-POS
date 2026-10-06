@@ -14,7 +14,7 @@ No roster/auth/PIN/permissions/filter/seed changes. Independent diagnosis of emp
 
 ## Developer technical checks (not independent gates)
 
-Node22; final source checks in external dossier `/private/tmp/clicpos-v3-progress-roster.qHV0qw`:
+Node22; initial candidate checks preserved in external dossier `/private/tmp/clicpos-v3-progress-roster.qHV0qw`:
 
 - `developer-checks-final.log`: 164 tests PASS, 0 failures, 0 skipped; full V3 tests plus executable React component/coordinator fixtures, startup security/role/user policy regressions. Lint: 0 errors, 38 warnings. Log SHA256 `ea18c42b9b163ce7d24948f8d6cf306860185332425bbe997692866e6f2c2d58`.
 - `developer-build-both-final.log`: both web builds pass (`tsc -b && vite build`), candidate OFF and candidate ON / canary OFF / explicit Railway download origin. Existing bundle-size warnings retained. SHA256 `161755e61db7a45eeb29da6863a3d0ee9a041ca20ef34c80b0350c9dfc34ae36`.
@@ -24,3 +24,11 @@ Node22; final source checks in external dossier `/private/tmp/clicpos-v3-progres
 ## Pending independent validation
 
 Independent code review, QA/workflow/catalogue, sync/offline and device/performance gates remain pending. No performance PASS/p95 claim, APK generation/install, Gradle/Capacitor sync, Android version change, operational DB/ERP writes, push or PR was performed by this developer task. Canonical signed worktree and principal user changes were left untouched. Rollback is candidate flag OFF or focused commit revert through authorized workflow; no data reset or downgrade.
+
+## Independent review repair
+
+Independent `code-review-08a85f7.md` rejected candidate `08a85f745e30ba2c6460ee65c35cbad84265601c` for one P2: explicit refresh captured the old reporter before deferred preparation created its generation, losing final verified/failure updates. That failed review and original logs are preserved; this report does not supersede the reviewer decision with self-approval.
+
+The repair retains the refresh outer shared flight while verifying the previous cache, reserves it before reentrant callbacks, and resolves completion/failure reporter after that actual awaited flight has begun its generation. Updates cannot borrow a newer flight or a different binding scope. No additional preparations, store/network/progress reads, timers, retries or authorization changes. Executable fixture covers cached get → healthy/refreshed assertCurrent rejection, concurrent two refresh/one ordinary caller, correct latest verified/failed state, two opens total and five existing assertions in both cases.
+
+Post-repair Node22 developer checks: `developer-refresh-repair-targeted.log` 12 PASS/0 skipped; `developer-refresh-repair-checks-final.log` 165 PASS/0 failed/0 skipped, lint 0 errors/38 warnings, SHA256 `ba665c4db7d31cb28519054d9662d580e023209e0196219bcd62cbd201470a39`. Both web builds PASS in `developer-refresh-repair-builds-final.log`, SHA256 `8b076cfc00f97387e23cc20d869ee2cce4688296d03ad628471d7daf88334db2`, preserving candidate OFF and candidate ON/canary OFF/explicit Railway flags. All independent gates remain pending for the newly frozen repair commit.

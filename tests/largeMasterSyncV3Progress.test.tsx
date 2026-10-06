@@ -135,6 +135,38 @@ test('reentrant subscription and late replay share the reserved preparation', as
   stop(); stopLate();
 });
 
+test('cached explicit refresh reports its own verified/failure generation for concurrent callers', async () => {
+  for (const rejectCurrent of [false, true]) {
+    let opens = 0; let checks = 0;
+    const get = createLargeMasterSyncV3SessionCoordinator(async (refresh, metric) => {
+      opens++;
+      metric?.({ event: 'chunk_progress', syncId: refresh ? 'refreshed' : 'cached', syncVersion: opens,
+        appliedChunks: 10, totalChunks: 10 });
+      return { ...session, assertCurrent: async () => { checks++;
+        if (refresh && rejectCurrent) throw new Error('refreshed assertCurrent failed');
+      } };
+    });
+    await get();
+    assert.equal(get.progress.getLatest().phase, 'verified');
+    const outcomes = await Promise.allSettled([get(true), get(true), get()]);
+    assert.equal(opens, 2, 'refresh and ordinary callers share exactly one new preparation');
+    assert.equal(checks, 5, 'cached verification plus the same existing per-caller assertions');
+    const latest = get.progress.getLatest();
+    assert.equal(latest.syncId, 'refreshed');
+    if (rejectCurrent) {
+      assert.ok(outcomes.every(row => row.status === 'rejected'));
+      assert.equal(latest.failed, true);
+      assert.equal(latest.phase, 'owner');
+      assert.doesNotMatch(html(get.progress), /Terminal lista|animate-pulse/);
+    } else {
+      assert.ok(outcomes.every(row => row.status === 'fulfilled'));
+      assert.equal(latest.failed, undefined);
+      assert.equal(latest.phase, 'verified');
+      assert.match(html(get.progress), /Catálogo existente verificado/);
+    }
+  }
+});
+
 test('config/current failures never finish and preserve prior roster/role references', async () => {
   const users = [{ id: 'fixture' }]; const roles = [{ id: 'role' }];
   const config = { users, roles } as unknown as BusinessConfig;
