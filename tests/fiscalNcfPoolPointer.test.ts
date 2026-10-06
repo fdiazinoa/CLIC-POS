@@ -293,3 +293,39 @@ test('canonical ERP identity emits assigned B04 and prepared reservation preserv
     assert.equal(collection('fiscalAllocations')[0].nextNumber, 4003);
   });
 });
+
+
+test('matching managed buffer cannot issue from a removed, inactive, wrong-type or changed-prefix lot', async () => {
+  const validRange = { id: 'assigned-lot', type: 'B02', prefix: 'B02', startNumber: 1, endNumber: 100, currentGlobal: 2, isActive: true };
+  for (const ranges of [[], [{ ...validRange, isActive: false }], [{ ...validRange, type: 'B04' }], [{ ...validRange, prefix: 'WRONG' }]]) {
+    await withFiscalCollections({
+      fiscalRanges: ranges,
+      fiscalAllocations: [{ id: 'allocation', terminalId, fiscalRangeId: 'assigned-lot', ncfType: 'B02', prefix: 'B02', reservedStart: 10, reservedEnd: 20, nextNumber: 10, status: 'ACTIVE' }],
+      localFiscalBuffer: [{ id: 'B02', type: 'B02', terminalId, allocationId: 'allocation', fiscalRangeId: 'assigned-lot', prefix: 'B02', startNumber: 10, currentNumber: 10, endNumber: 10 }],
+    }, async ({ collection }) => {
+      const before = ['fiscalRanges', 'fiscalAllocations', 'localFiscalBuffer'].map(collection);
+      const originalSave = dbAdapter.saveCollection;
+      let writes = 0;
+      try {
+        dbAdapter.saveCollection = async (...args) => { writes++; return originalSave.apply(dbAdapter, args); };
+        assert.equal(await db.canRequestMoreNCF('B02', terminalId), false);
+        assert.equal(await db.validatePreparedFiscalAuthority('B02', terminalId, 'B0200000010'), false);
+        assert.equal(await db.getNextNCF('B02', terminalId), null);
+        assert.equal(await db.requestFiscalBatch(terminalId, 'B02', 1), null);
+        assert.equal(writes, 0);
+        assert.deepEqual(['fiscalRanges', 'fiscalAllocations', 'localFiscalBuffer'].map(collection), before);
+      } finally { dbAdapter.saveCollection = originalSave; }
+    });
+  }
+});
+
+
+test('checkout rejects recovered-reservation returns and invalid credit before any fiscal reservation', () => {
+  const source = readFileSync(new URL('../components/POSInterface.tsx', import.meta.url), 'utf8');
+  const refundReservation = source.indexOf('reservedRefundNcf = await db.getNextNCF');
+  const saleReservation = source.indexOf('finalNcf = await db.getNextNCF');
+  const reservationRejection = source.indexOf('if (activeRecoveredReservation && hasReturns)');
+  const creditRejection = source.indexOf("if (creditGate && !hasCreditOverrideApproval)");
+  assert.ok(reservationRejection > 0 && reservationRejection < refundReservation && reservationRejection < saleReservation);
+  assert.ok(creditRejection > 0 && creditRejection < refundReservation && creditRejection < saleReservation);
+});

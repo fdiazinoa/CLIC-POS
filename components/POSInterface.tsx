@@ -5526,6 +5526,46 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             }
          }
 
+         const reservationAdvance = activeRecoveredReservation && !uberRecoveredOrder
+            ? Math.min(activeRecoveredReservation.balancePaid || 0, cartTotal)
+            : 0;
+         const reservationAdvancePayment: PaymentEntry = {
+            id: `ADV-${Date.now()}`,
+            method: 'ADVANCE',
+            amount: reservationAdvance,
+            timestamp: new Date()
+         };
+         const paymentsForTransaction = reservationAdvance > 0
+            ? [...payments, reservationAdvancePayment]
+            : payments;
+         const creditAmount = sumCreditPaymentsBase(paymentsForTransaction);
+         const hasCreditOverrideApproval = paymentsForTransaction.some(
+            (payment) => paymentEntryIsCxCCredit(payment) && payment.creditOverrideApproved
+         );
+
+         if (activeRecoveredReservation && hasReturns) {
+            alert('La recuperación de reserva no admite líneas de devolución. Finalice la reserva y procese devoluciones por separado.');
+            return null;
+         }
+
+         if (creditAmount > 0) {
+            const creditGate = evaluateCreditSupervisorGate(customerForCheckout, 0, creditAmount);
+            if (creditGate?.reason === 'NO_CUSTOMER') {
+               alert('No se puede guardar un ticket con pago pendiente a crédito sin un cliente asociado.');
+               onOpenCustomers();
+               return null;
+            }
+
+            if (creditGate && !hasCreditOverrideApproval) {
+               if (creditGate.reason === 'NO_LIMIT') {
+                  alert('El cliente no tiene un límite de crédito configurado. Solicite autorización para guardar este ticket.');
+               } else {
+                  alert(`El cliente excede su límite de crédito (${baseCurrency.symbol}${creditGate.limit.toFixed(2)}). No se guardó el ticket.`);
+               }
+               return null;
+            }
+         }
+
          const refundFiscalType = resolveCreditNoteFiscalCode(fiscalCompliance.mode);
          let reservedRefundNcf: string | undefined;
          if (hasReturns && !isFiscalModeDisabledForCheckout) {
@@ -5575,46 +5615,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             }
 
             finalNcfType = fiscalStatus.type;
-         }
-
-         const reservationAdvance = activeRecoveredReservation && !uberRecoveredOrder
-            ? Math.min(activeRecoveredReservation.balancePaid || 0, cartTotal)
-            : 0;
-         const reservationAdvancePayment: PaymentEntry = {
-            id: `ADV-${Date.now()}`,
-            method: 'ADVANCE',
-            amount: reservationAdvance,
-            timestamp: new Date()
-         };
-         const paymentsForTransaction = reservationAdvance > 0
-            ? [...payments, reservationAdvancePayment]
-            : payments;
-         const creditAmount = sumCreditPaymentsBase(paymentsForTransaction);
-         const hasCreditOverrideApproval = paymentsForTransaction.some(
-            (payment) => paymentEntryIsCxCCredit(payment) && payment.creditOverrideApproved
-         );
-
-         if (activeRecoveredReservation && hasReturns) {
-            alert('La recuperación de reserva no admite líneas de devolución. Finalice la reserva y procese devoluciones por separado.');
-            return null;
-         }
-
-         if (creditAmount > 0) {
-            const creditGate = evaluateCreditSupervisorGate(customerForCheckout, 0, creditAmount);
-            if (creditGate?.reason === 'NO_CUSTOMER') {
-               alert('No se puede guardar un ticket con pago pendiente a crédito sin un cliente asociado.');
-               onOpenCustomers();
-               return null;
-            }
-
-            if (creditGate && !hasCreditOverrideApproval) {
-               if (creditGate.reason === 'NO_LIMIT') {
-                  alert('El cliente no tiene un límite de crédito configurado. Solicite autorización para guardar este ticket.');
-               } else {
-                  alert(`El cliente excede su límite de crédito (${baseCurrency.symbol}${creditGate.limit.toFixed(2)}). No se guardó el ticket.`);
-               }
-               return null;
-            }
          }
 
          try {

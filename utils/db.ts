@@ -628,6 +628,17 @@ const getFiscalRangeForEmission = (
   ) || null;
 };
 
+const hasValidAllocatedFiscalRange = (
+  ranges: FiscalRangeDGII[], allocation: FiscalAllocation, type: FiscalDocumentCode
+): boolean => {
+  // Older standalone allocations may carry their own prefix without a lot ID.
+  if (!allocation.fiscalRangeId) return true;
+  const range = getFiscalRangeForEmission(ranges, type, allocation);
+  return Boolean(range && range.isActive &&
+    normalizeSequenceKey(range.type) === normalizeSequenceKey(type) &&
+    (!allocation.prefix || normalizeSequenceKey(range.prefix) === normalizeSequenceKey(allocation.prefix)));
+};
+
 // Fiscal collections are persisted as whole arrays. Serialize NCF issuance across
 // all types so two checkout attempts cannot reserve or overwrite the same pointer.
 let fiscalIssueQueue: Promise<void> = Promise.resolve();
@@ -1365,6 +1376,8 @@ export const db = {
     if (!policy.enabled || (policy.managed && !policy.authorityId)) return false;
     const allocation = getTerminalFiscalAllocation(allocations, policy.authorityId, type);
     if (!allocation) return !policy.managed;
+    const ranges = await dbAdapter.getCollection<FiscalRangeDGII>('fiscalRanges') || [];
+    if (!hasValidAllocatedFiscalRange(ranges, allocation, type)) return false;
     const raw = allocations.find(candidate => candidate.id === allocation.id);
     const prefix = allocation.prefix || type;
     const suffix = ncf.startsWith(prefix) ? ncf.slice(prefix.length) : '';
@@ -1384,7 +1397,7 @@ export const db = {
     if (!policy.enabled || (policy.managed && !policy.authorityId)) return false;
     const allocation = getTerminalFiscalAllocation(allocations || [], policy.authorityId, type as any);
     if (allocation) {
-      if (allocation.fiscalRangeId && !getFiscalRangeForEmission(ranges || [], type, allocation)) return false;
+      if (!hasValidAllocatedFiscalRange(ranges || [], allocation, type)) return false;
       const rawAllocation = (allocations || []).find((candidate) => candidate.id === allocation.id);
       if (!rawAllocation || !hasValidFiscalAllocationPointer(rawAllocation)) return false;
       return allocation.status === 'ACTIVE' && allocation.nextNumber <= allocation.reservedEnd;
@@ -1411,7 +1424,7 @@ export const db = {
     const effectiveBatchSize = FISCAL_ISSUE_BATCH_SIZE;
 
     if (allocation) {
-      if (allocation.fiscalRangeId && !range) return null;
+      if (!hasValidAllocatedFiscalRange(ranges || [], allocation, type)) return null;
       const allocationIndex = allocations.findIndex((candidate) => candidate.id === allocation.id);
       if (allocationIndex === -1) return null;
       if (!hasValidFiscalAllocationPointer(allocations[allocationIndex])) return null;
@@ -1512,6 +1525,13 @@ export const db = {
     const activeAllocation = getTerminalFiscalAllocation(allocations, terminalId, type as any);
     if (!activeAllocation && (policy.managed || hasTerminalFiscalAllocation(allocations, terminalId, type))) return null;
     if (activeAllocation) {
+      const ranges = await dbAdapter.getCollection<FiscalRangeDGII>('fiscalRanges') || [];
+      if (!hasValidAllocatedFiscalRange(ranges, activeAllocation, type)) return null;
+      if (buffer) {
+        const range = getFiscalRangeForEmission(ranges, type, activeAllocation);
+        const prefix = range?.prefix || activeAllocation.prefix || type;
+        if (normalizeSequenceKey(buffer.prefix) !== normalizeSequenceKey(prefix)) return null;
+      }
       const rawAllocation = allocations.find((candidate) => candidate.id === activeAllocation.id);
       if (!rawAllocation || !hasValidFiscalAllocationPointer(rawAllocation)) return null;
     }
