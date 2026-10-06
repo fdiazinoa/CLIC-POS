@@ -13,6 +13,7 @@ import type { DurableDocumentMutation } from '../db/DatabaseAdapter';
 import { validateV3PinnedLineSource } from './LargeMasterSyncV3LineSource';
 import { largeMasterSyncV3DownloadOrigin } from './LargeMasterSyncV3DownloadOrigin';
 import { createLargeMasterSyncV3SessionCoordinator } from './LargeMasterSyncV3SetupCompletion';
+import type { LargeMasterSyncV3Metric } from './LargeMasterSyncV3Client';
 
 export const v3BindingKey = (identity: LargeMasterSyncV3BoundIdentity, v3BaseUrl: string): string =>
   JSON.stringify([identity.tenantId, identity.terminalId, identity.deviceId,
@@ -34,7 +35,8 @@ export class LargeMasterSyncV3OperationalSession {
     private readonly identity: LargeMasterSyncV3BoundIdentity,
   ) {}
 
-  static async open(refresh = false): Promise<LargeMasterSyncV3OperationalSession> {
+  static async open(refresh = false, metric?: (metric: LargeMasterSyncV3Metric) => void): Promise<LargeMasterSyncV3OperationalSession> {
+    const observe = (event: LargeMasterSyncV3Metric) => { try { metric?.(event); } catch { /* Observer only. */ } };
     if (!LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED || LARGE_MASTER_SYNC_V3_CANARY) {
       throw new LargeMasterSyncV3Error('SYNC_V3_OPERATIONAL_BUILD_REQUIRED');
     }
@@ -57,11 +59,14 @@ export class LargeMasterSyncV3OperationalSession {
       if (inventory) ready = { runtime, inventoryVersion: inventory.version, inventoryCursor: inventory.cursor };
     }
     if (!ready) {
-      ready = await prepareLargeMasterSyncV3Candidate(store, v3BaseUrl);
+      ready = await prepareLargeMasterSyncV3Candidate(store, v3BaseUrl, observe);
       if (v3BindingKey(readLargeMasterSyncV3BoundIdentity(), v3BaseUrl) !== binding) {
         throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
       }
+      observe({ event: 'setup_phase', phase: 'owner' });
       await store.setOperationalOwner(ready.runtime.version, binding);
+    } else {
+      observe({ event: 'setup_phase', phase: 'cached' });
     }
     return new LargeMasterSyncV3OperationalSession(ready, binding, store, v3BaseUrl, identity);
   }
@@ -185,5 +190,6 @@ export class LargeMasterSyncV3OperationalSession {
 }
 
 export const getLargeMasterSyncV3OperationalSession = createLargeMasterSyncV3SessionCoordinator(
-  refresh => LargeMasterSyncV3OperationalSession.open(refresh),
+  (refresh, metric) => LargeMasterSyncV3OperationalSession.open(refresh, metric),
+  () => v3BindingKey(readLargeMasterSyncV3BoundIdentity(), largeMasterSyncV3DownloadOrigin()),
 );
