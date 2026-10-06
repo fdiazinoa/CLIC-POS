@@ -53,11 +53,13 @@ export const prepareLargeMasterSyncV3Candidate = async (
   signal?: AbortSignal,
   dependencies: CandidateDependencies = defaultDependencies,
 ): Promise<LargeMasterSyncV3CandidateReady> => {
+  const phase = (phase: string) => { try { metric?.({ event: 'setup_phase', phase }); } catch { /* Observer only. */ } };
   if (!dependencies.enabled) throw new LargeMasterSyncV3Error('SYNC_V3_CANDIDATE_DISABLED');
   dependencies.assertEmulator();
   if (!store) throw new LargeMasterSyncV3Error('SYNC_V3_NATIVE_STORE_UNAVAILABLE');
   await store.assertCanRefresh?.();
   const client = dependencies.createClient(store, v3BaseUrl, metric);
+  phase('negotiation');
   const requested = await client.requestSync(signal);
   if ('fallback' in requested) throw new LargeMasterSyncV3Error('SYNC_V3_LEGACY_FALLBACK_REJECTED');
   const incomplete = await store.findIncomplete();
@@ -70,13 +72,17 @@ export const prepareLargeMasterSyncV3Candidate = async (
     || (version.contractVersion || 1) < 2) {
     throw new LargeMasterSyncV3Error('SYNC_V3_OPERATIONAL_CONTRACT_REQUIRED');
   }
+  phase('inventory_download');
   const inventory = await dependencies.fetchInventory(signal);
   await dependencies.waitForOperationalWindow(signal);
+  phase('inventory_save');
   await store.replaceInventorySnapshot(version, inventory);
+  phase('inventory_readback');
   const saved = await store.getInventorySnapshotVersion(version);
   if (!saved || saved.version !== inventory.version || saved.cursor !== inventory.cursor) {
     throw new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_NOT_READY');
   }
+  phase('runtime');
   const runtime = await dependencies.openRuntime(store);
   if (!runtime || runtime.version.syncId !== version.syncId
     || runtime.version.syncVersion !== version.syncVersion

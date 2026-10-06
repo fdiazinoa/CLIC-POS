@@ -1,4 +1,6 @@
 import type { BusinessConfig } from '../../types';
+import type { LargeMasterSyncV3Metric } from './LargeMasterSyncV3Client';
+import { createV3Progress, type V3Progress } from './LargeMasterSyncV3Progress';
 
 export interface V3SetupSession {
   assertCurrent(): Promise<void>;
@@ -21,28 +23,59 @@ export const completeLargeMasterSyncV3Setup = async (
 
 /** Shared setup/startup preparation; cached sessions are verified on every use. */
 export const createLargeMasterSyncV3SessionCoordinator = <T extends V3SetupSession>(
-  open: (refresh: boolean) => Promise<T>,
-): ((refresh?: boolean) => Promise<T>) => {
+  open: (refresh: boolean, metric?: (metric: LargeMasterSyncV3Metric) => void) => Promise<T>,
+  scope?: () => string,
+): ((refresh?: boolean) => Promise<T>) & { progress: V3Progress } => {
   let opening: Promise<T> | undefined;
   let refreshing: Promise<T> | undefined;
-  return async (refresh = false) => {
+  const progress = createV3Progress();
+  let reporter = progress.begin();
+  let observedScope: string | undefined;
+  const prepare = (refresh: boolean) => {
+    // Reserve the flight before publishing: even a reentrant observer must share it.
+    let attempt: ReturnType<V3Progress['begin']>;
+    const pending = Promise.resolve().then(() => open(refresh, attempt.metric))
+      .catch(error => { attempt.fail(); throw error; });
+    // A refresh already owns its outer shared flight while it verifies the cache.
+    if (!refresh) opening = pending;
+    reporter = progress.begin();
+    attempt = reporter;
+    return pending;
+  };
+  const get = async (refresh = false) => {
+    const currentScope = scope?.();
+    if (currentScope !== observedScope) {
+      observedScope = currentScope;
+      // Observation identity changes do not create/refresh a session or bypass assertCurrent.
+      reporter = progress.begin();
+    }
     if (refresh && !refreshing) {
-      refreshing = (async () => {
-        if (opening) await (await opening).assertCurrent();
-        return open(true);
-      })();
+      const previous = opening;
+      refreshing = Promise.resolve().then(async () => {
+        if (previous) await (await previous).assertCurrent();
+        return prepare(true);
+      });
       opening = refreshing;
       void refreshing.finally(() => { refreshing = undefined; }).catch(() => undefined);
     }
-    if (!opening) opening = open(false);
+    if (!opening) opening = prepare(false);
     const pending = opening;
+    let pendingReporter = reporter;
     try {
       const session = await pending;
+      // Deferred refresh preparation creates its generation only after cache verification.
+      // Resolve that owner after the shared flight, never borrow a newer unrelated flight.
+      if (opening === pending && observedScope === currentScope) pendingReporter = reporter;
+      pendingReporter.phase('owner');
       await session.assertCurrent();
+      pendingReporter.phase('verified');
       return session;
     } catch (error) {
+      if (opening === pending && observedScope === currentScope) pendingReporter = reporter;
+      pendingReporter.fail();
       if (opening === pending) opening = undefined;
       throw error;
     }
   };
+  return Object.assign(get, { progress });
 };

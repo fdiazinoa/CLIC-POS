@@ -37,6 +37,9 @@ export interface LargeMasterSyncV3Metric {
   rawBytes?: number;
   retryCount?: number;
   progress?: number;
+  appliedChunks?: number;
+  totalChunks?: number;
+  phase?: string;
   sqliteFileSize?: number;
   memoryBytes?: number;
   totalSyncMs?: number;
@@ -381,6 +384,7 @@ export class LargeMasterSyncV3Client {
     const store = this.requireStore();
     const startedAt = performance.now();
     let manifest: LargeMasterSyncV3Manifest | null = null;
+    this.metric({ event: 'setup_phase', phase: 'manifest', syncId });
     for (let poll = 0; poll < this.maxManifestPolls; poll += 1) {
       const result = await this.getManifest(syncId, signal);
       if (!('generating' in result)) {
@@ -391,9 +395,21 @@ export class LargeMasterSyncV3Client {
     }
     if (!manifest) throw new LargeMasterSyncV3Error('SYNC_V3_MANIFEST_POLL_EXHAUSTED', undefined, true);
     const priorProgress = await store.readProgress(syncId);
+    const declared = this.declaredDatasets(manifest);
+    const declaredSet = new Set(declared);
+    const totalChunks = declared.reduce((sum, key) => sum + manifest.datasets[key]!.chunks, 0);
+    const catalogProgress = (progress: typeof priorProgress, dataset?: LargeMasterSyncV3Dataset,
+      chunkIndex?: number, sqliteFileSize?: number) => {
+      const persistedChunks = (progress?.datasets || []).reduce((sum, row) => sum
+        + (declaredSet.has(row.dataset) ? row.appliedChunks : 0), 0);
+      this.metric({ event: 'chunk_progress', syncId, syncVersion: manifest!.syncVersion, dataset,
+        appliedChunks: persistedChunks, totalChunks, chunkIndex, sqliteFileSize,
+        progress: totalChunks ? persistedChunks / totalChunks : undefined });
+    };
     if (priorProgress && priorProgress.syncVersion !== manifest.syncVersion) {
       throw new LargeMasterSyncV3Error('SYNC_V3_RESUME_MANIFEST_MISMATCH');
     }
+    catalogProgress(priorProgress);
     if (priorProgress?.status === 'ACTIVE') {
       const active = await store.getActiveRuntimeVersion();
       if (!active || active.syncId !== syncId || active.syncVersion !== manifest.syncVersion) {
@@ -404,15 +420,18 @@ export class LargeMasterSyncV3Client {
     if (!priorProgress) await this.assertStorageCapacity(manifest);
     await store.prepare(manifest);
     if (priorProgress?.status === 'VALIDATED') {
+      this.metric({ event: 'setup_phase', phase: 'validation', syncId });
       await this.validateSync(manifest);
+      this.metric({ event: 'setup_phase', phase: 'activation', syncId });
       return this.activateSync(syncId);
     }
     let totalPauseMs = 0;
     let appliedRecords = 0;
     let appliedChunks = 0;
-    for (const dataset of this.declaredDatasets(manifest)) {
+    for (const dataset of declared) {
       const expected = manifest.datasets[dataset]!;
       let progress = await store.readProgress(syncId);
+      catalogProgress(progress, dataset);
       const applied = new Set(progress?.chunks.filter(chunk => chunk.dataset === dataset).map(chunk => chunk.chunkIndex));
       const remaining = Array.from({ length: expected.chunks }, (_, index) => index).filter(index => !applied.has(index));
       const controller = new AbortController();
@@ -455,9 +474,7 @@ export class LargeMasterSyncV3Client {
           appliedChunks += 1;
         }
         progress = await store.readProgress(syncId);
-        this.metric({ event: 'chunk_progress', syncId, syncVersion: manifest.syncVersion, dataset,
-          chunkIndex: index, progress: expected.chunks ? Number(progress?.datasets.find(item => item.dataset === dataset)?.appliedChunks || 0) / expected.chunks : 1,
-          sqliteFileSize: await store.getDatabaseSizeBytes() });
+        catalogProgress(progress, dataset, index, await store.getDatabaseSizeBytes());
         // The current payload still occupies a slot until SQLite has applied it.
         pending.delete(index);
       };
@@ -473,10 +490,13 @@ export class LargeMasterSyncV3Client {
         signal?.removeEventListener('abort', forwardAbort);
       }
       if (signal?.aborted) throw abortError();
+      this.metric({ event: 'setup_phase', phase: 'validation', syncId, dataset });
       await this.validateDataset(manifest, dataset);
     }
     if (signal?.aborted) throw abortError();
+    this.metric({ event: 'setup_phase', phase: 'validation', syncId });
     await this.validateSync(manifest);
+    this.metric({ event: 'setup_phase', phase: 'activation', syncId });
     const runtime = await this.activateSync(syncId);
     const totalSyncMs = performance.now() - startedAt;
     this.metric({ event: 'sync_activated', syncId, syncVersion: manifest.syncVersion, totalSyncMs,
@@ -612,7 +632,7 @@ export class LargeMasterSyncV3Client {
   }
 
   private metric(metric: LargeMasterSyncV3Metric): void {
-    this.options.metric?.(metric);
+    try { this.options.metric?.(metric); } catch { /* Observers cannot interrupt persistence. */ }
   }
 
   private memoryBytes(): number | undefined {

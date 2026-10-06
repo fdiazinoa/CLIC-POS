@@ -5,6 +5,18 @@ import type { LargeMasterSyncV3Runtime } from '../services/sync/LargeMasterSyncV
 import type { LargeMasterSyncV3InventorySnapshot, LargeMasterSyncV3Store } from '../services/sync/LargeMasterSyncV3Types';
 
 const syncId = '00000000-0000-4000-8000-000000000001';
+
+test('observing candidate phases adds zero store/network/runtime work and observer exceptions stay isolated', async () => {
+  const phases: string[] = [];
+  const first = fixture(); const second = fixture();
+  await prepareLargeMasterSyncV3Candidate(first.store, 'https://railway.example.test', undefined, undefined, first.dependencies);
+  await prepareLargeMasterSyncV3Candidate(second.store, 'https://railway.example.test', metric => {
+    if (metric.phase) phases.push(metric.phase);
+    throw new Error('observation only');
+  }, undefined, second.dependencies);
+  assert.deepEqual(second.calls, first.calls);
+  assert.deepEqual(phases, ['negotiation', 'inventory_download', 'inventory_save', 'inventory_readback', 'runtime']);
+});
 const version = { syncId, syncVersion: 186, contractVersion: 2 };
 const inventory: LargeMasterSyncV3InventorySnapshot = { version: 5, cursor: 'inventory-5', balances: [] };
 

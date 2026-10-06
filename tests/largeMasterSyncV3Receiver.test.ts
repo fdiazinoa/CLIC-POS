@@ -33,8 +33,59 @@ import {
 } from '../services/sync/LargeMasterSyncV3OperationGate';
 import { setPosSaleActivity } from '../utils/posSaleActivity';
 import { readFileSync } from 'node:fs';
+import type { LargeMasterSyncV3Metric } from '../services/sync/LargeMasterSyncV3Client';
 
 const SYNC_ID = '00000000-0000-4000-8000-000000000001';
+
+test('zero-chunk client publishes indeterminate baseline, survives throwing observers and resumes ACTIVE', async () => {
+  const { store } = sqliteStore();
+  const { responses } = await manifestAndResponses({}, 186, SYNC_ID, ['taxes', 'articles']);
+  const metrics: LargeMasterSyncV3Metric[] = [];
+  const client = new LargeMasterSyncV3Client({ store, transport: { request: async path => responses.get(path)! },
+    storageStats: async () => ({ availableBytes: 1e9, totalBytes: 2e9 }),
+    metric: metric => { metrics.push(metric); throw new Error('observer'); } });
+  await client.resumeSync(SYNC_ID); await client.resumeSync(SYNC_ID);
+  const rows = metrics.filter(row => row.event === 'chunk_progress');
+  assert.ok(rows.length >= 2);
+  for (const row of rows) { assert.equal(row.appliedChunks, 0); assert.equal(row.totalChunks, 0);
+    assert.equal(row.progress, undefined); }
+});
+
+test('global catalog baseline counts persisted datasets, resume/duplicate/downloads do not double count; observers add zero work', async () => {
+  const run = async (observed: boolean) => {
+    const { store, connection } = sqliteStore();
+    const { manifest, responses } = await manifestAndResponses({
+      taxes: Array.from({ length: 3 }, (_, index) => [{ id: `T${index}`, active: true }]),
+      articles: Array.from({ length: 7 }, (_, index) => [{ id: `A${index}`, taxable: false, taxIds: [], active: true }]),
+    }, 186, SYNC_ID, ['taxes', 'articles']);
+    const metrics: LargeMasterSyncV3Metric[] = [];
+    let network = 0; let queries = 0;
+    const original = connection.query.bind(connection);
+    connection.query = async (...args) => { queries++; return original(...args); };
+    const client = new LargeMasterSyncV3Client({ store,
+      transport: { request: async path => { network++; return responses.get(path)!; } },
+      storageStats: async () => ({ availableBytes: 1e9, totalBytes: 2e9 }),
+      metric: observed ? metric => { metrics.push(metric); } : undefined,
+    });
+    await store.prepare(manifest);
+    for (let index = 0; index < 3; index++) {
+      const chunk = await client.getChunk(manifest, 'taxes', index);
+      await client.applyChunk(chunk); await client.applyChunk(chunk);
+    }
+    const beforeResume = metrics.filter(row => row.event === 'chunk_progress');
+    assert.equal(beforeResume.length, 0);
+    await client.resumeSync(SYNC_ID);
+    await client.resumeSync(SYNC_ID);
+    if (observed) {
+      const progress = metrics.filter(row => row.event === 'chunk_progress');
+      assert.equal(progress[0].totalChunks, 10); assert.equal(progress[0].appliedChunks, 3);
+      assert.equal(progress[0].progress, 0.3);
+      assert.deepEqual(progress.map(row => row.appliedChunks), [3, 3, 3, 4, 5, 6, 7, 8, 9, 10, 10]);
+    }
+    return { network, queries };
+  };
+  assert.deepEqual(await run(true), await run(false));
+});
 const queryCount = (sqlite: Database.Database, table: string): number =>
   Number((sqlite.prepare(`SELECT COUNT(*) count FROM ${table}`).get() as { count: number }).count);
 

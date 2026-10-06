@@ -9,6 +9,8 @@ import { buildV3FrozenFiscalProviderTransaction } from './components/v3Operation
 import { getLargeMasterSyncV3OperationalSession } from './services/sync/LargeMasterSyncV3OperationalSession';
 import { assertLargeMasterSyncV3SetupContract, largeMasterSyncV3DownloadOrigin } from './services/sync/LargeMasterSyncV3DownloadOrigin';
 import { completeLargeMasterSyncV3Setup } from './services/sync/LargeMasterSyncV3SetupCompletion';
+import { createV3Progress, type V3Progress } from './services/sync/LargeMasterSyncV3Progress';
+import LargeMasterSyncV3SetupProgress from './components/LargeMasterSyncV3SetupProgress';
 import { forwardedSetupCredentialSource, isolateCandidateSetupConfig,
   resolveSetupRegisterCredentials } from './services/sync/LargeMasterSyncV3SetupCredentials';
 import AutomaticRecoveryDialog from './components/AutomaticRecoveryDialog';
@@ -2265,6 +2267,9 @@ const AppContent: React.FC = () => {
   const requestCloseTableMapRef = useRef<() => void>(() => {});
   const [scanTargetTicketId, setScanTargetTicketId] = useState<string | null>(null); // NEW: Auto-select ticket from scan
   const [restoringHistory, setRestoringHistory] = useState(false);
+  const [v3SetupProgress, setV3SetupProgress] = useState<V3Progress | null>(null);
+  const v3ProgressCleanupRef = useRef<(() => void) | null>(null);
+  useEffect(() => () => { v3ProgressCleanupRef.current?.(); }, []);
   useLayoutEffect(() => markRenderEnd('APP_VIEW'));
   useLayoutEffect(() => {
     const previousView = lastProfiledViewRef.current;
@@ -8718,6 +8723,18 @@ const AppContent: React.FC = () => {
       if (origin !== largeMasterSyncV3DownloadOrigin()) throw new Error('SYNC_V3_SETUP_ORIGIN_CHANGED');
     }
     setRestoringHistory(true);
+    v3ProgressCleanupRef.current?.();
+    const attemptProgress = candidateV3Setup ? createV3Progress() : null;
+    const attemptReporter = attemptProgress?.begin();
+    setV3SetupProgress(attemptProgress);
+    // Attach before initialize can open the shared session; replay is kept outside App state.
+    const initialProgress = getLargeMasterSyncV3OperationalSession.progress.getLatest();
+    const unsubscribeProgress = attemptReporter ? getLargeMasterSyncV3OperationalSession.progress.subscribe(() => {
+      const latest = getLargeMasterSyncV3OperationalSession.progress.getLatest();
+      if (latest !== initialProgress) attemptReporter.update(latest);
+    }) : () => undefined;
+    const cleanupProgress = () => { unsubscribeProgress(); attemptReporter?.close(); };
+    v3ProgressCleanupRef.current = cleanupProgress;
     setTerminalBindingDiagnosticStatus('BINDING');
     setCatalogDiagnosticStatus('IDLE');
     let preserveTerminalBindingAfterRegister = false;
@@ -9338,6 +9355,7 @@ const AppContent: React.FC = () => {
           source: 'STORED',
         },
       } : undefined);
+      if (candidateV3Setup) attemptReporter?.phase('config');
       if (isErpDirectBinding) {
         try {
           setupResult.progress?.({
@@ -9389,7 +9407,9 @@ const AppContent: React.FC = () => {
         setCatalogDiagnosticStatus('SYNCING');
         setupResult.progress?.({ stepId: 'sync', message: 'Validando catálogo V3 e inventario operativo...' });
         updatedConfig = await completeLargeMasterSyncV3Setup(updatedConfig,
-          getLargeMasterSyncV3OperationalSession, projected => db.save('config', projected));
+          async () => { const session = await getLargeMasterSyncV3OperationalSession();
+            attemptReporter?.phase('config'); return session; }, projected => db.save('config', projected));
+        attemptReporter?.phase('config');
       } else if (shouldFullPullOnPairing) {
         setupResult.progress?.({
           stepId: 'sync',
@@ -9570,6 +9590,7 @@ const AppContent: React.FC = () => {
         persistSetupErpBaseUrls(resolvedErpBaseUrl);
       }
       if (candidateV3Setup) await (await getLargeMasterSyncV3OperationalSession()).assertCurrent();
+      attemptReporter?.phase('ready');
       setupResult.progress?.({
         stepId: 'finish',
         message: 'Terminal lista. Finalizando activación...',
@@ -9618,6 +9639,7 @@ const AppContent: React.FC = () => {
       setCurrentView('LOGIN');
     } catch (error) {
       console.error('❌ Failed to take terminal control:', error);
+      attemptReporter?.fail();
       const errorMessage = error instanceof Error ? error.message : String(error || '');
       const canResumeExistingTerminalOffline = Boolean(
         preserveTerminalBindingAfterRegister
@@ -9687,6 +9709,9 @@ const AppContent: React.FC = () => {
       }
       throw error instanceof Error ? error : new Error('No se pudo tomar control de la terminal. Revisa conexión y vuelve a intentar.');
     } finally {
+      unsubscribeProgress();
+      attemptReporter?.close();
+      if (v3ProgressCleanupRef.current === cleanupProgress) v3ProgressCleanupRef.current = null;
       setRestoringHistory(false);
     }
   };
@@ -12645,7 +12670,9 @@ const AppContent: React.FC = () => {
     );
   }
 
-  if (!isDataLoaded || restoringHistory) {
+  const loadingV3Progress = v3SetupProgress || (!isDataLoaded && LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED
+    && resolveSyncTarget().kind === 'ERP_ACTIVE' ? getLargeMasterSyncV3OperationalSession.progress : null);
+  if (!isDataLoaded || restoringHistory || v3SetupProgress?.getSnapshot().failed) {
     if (initialConnError && !restoringHistory) {
       return (
         <div className="h-screen w-screen flex flex-col items-center justify-center bg-slate-900 text-white p-8 text-center">
@@ -12654,6 +12681,7 @@ const AppContent: React.FC = () => {
           </div>
           <h2 className="text-xl font-bold mb-2">Error de Inicialización</h2>
           <p className="text-slate-400 mb-6 max-w-md">{initialConnError}</p>
+          {loadingV3Progress && <LargeMasterSyncV3SetupProgress progress={loadingV3Progress} />}
           <button
             onClick={() => window.location.reload()}
             className="px-6 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg font-medium transition-colors"
@@ -12665,10 +12693,15 @@ const AppContent: React.FC = () => {
     }
     return (
       <div className="h-screen w-screen flex flex-col items-center justify-center bg-slate-900 text-white">
+        {loadingV3Progress ? <>
+          <LargeMasterSyncV3SetupProgress progress={loadingV3Progress} />
+          {v3SetupProgress?.getSnapshot().failed && <button className="mt-6" onClick={() => setV3SetupProgress(null)}>Volver a vinculación</button>}
+        </> : <>
         <div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4"></div>
         <p className="font-bold tracking-widest uppercase text-xs">
           {restoringHistory ? 'Restaurando Historial desde Maestra...' : 'Cargando CLIC POS OS...'}
         </p>
+        </>}
       </div>
     );
   }
