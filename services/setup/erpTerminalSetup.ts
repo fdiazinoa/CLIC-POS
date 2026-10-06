@@ -21,6 +21,8 @@ import {
   VARIANT_PROMOTIONS_CAPABILITY,
 } from '../../utils/syncCapabilities';
 import { isDeviceExplicitlyAuthorizedByBootstrap } from '../../utils/terminalAuthorizationGuard';
+import { assertLargeMasterSyncV3Bootstrap, largeMasterSyncV3DownloadOrigin } from '../sync/LargeMasterSyncV3DownloadOrigin';
+import { isolateCandidateSetupConfig } from '../sync/LargeMasterSyncV3SetupCredentials';
 
 export interface RuntimeTerminalCard {
   id: string;
@@ -99,6 +101,7 @@ export interface RuntimeInitialConfigResponse {
   success: boolean;
   bootstrapProtocol?: 'v3' | 'legacy';
   masterSync?: Record<string, unknown>;
+  downloadOrigin?: string;
   tenant_id?: string;
   terminal_id?: string;
   erp_terminal_id?: string;
@@ -1820,12 +1823,29 @@ export const fetchInitialConfigFromErp = async (input: {
   erpTerminalId: string;
   posDeviceId: string;
   canaryV3?: boolean;
+  candidateV3?: boolean;
+  downloadOrigin?: string;
 }): Promise<RuntimeInitialConfigResponse> => {
   let payload: Record<string, any>;
   let configVersion: string | null = null;
   let etag: string | null = null;
 
-  if (getNetworkEngine() === 'capacitor-http') {
+  const downloadOrigin = input.candidateV3 ? largeMasterSyncV3DownloadOrigin(input.downloadOrigin) : undefined;
+  if (input.candidateV3) {
+    const query = new URLSearchParams({ tenant_id: input.tenantId, device_id: input.posDeviceId });
+    const response = await requestJson<Record<string, any>>({
+      url: `${downloadOrigin}/api/setup/initial-config/${encodeURIComponent(input.erpTerminalId)}?${query}`,
+      headers: { Accept: 'application/json', ...buildDeviceHeaders(input.posDeviceId),
+        'X-POS-Capabilities': 'largeMasterSyncV3' },
+      timeoutMs: REQUEST_TIMEOUT_MS,
+      rejectRedirects: true,
+    });
+    if (!response.ok) throw new Error(`SYNC_V3_SETUP_HTTP_ERROR: ${response.status}`);
+    payload = asObject(response.data);
+    assertLargeMasterSyncV3Bootstrap(payload, input, downloadOrigin!);
+    payload = isolateCandidateSetupConfig(payload);
+    configVersion = asString(payload.config_version || payload.configVersion) || null;
+  } else if (getNetworkEngine() === 'capacitor-http') {
     const query = new URLSearchParams({
       tenant_id: input.tenantId,
       device_id: input.posDeviceId,
@@ -1921,7 +1941,7 @@ export const fetchInitialConfigFromErp = async (input: {
   };
   const businessRooms = Array.isArray(payloadBusinessConfig.rooms) ? payloadBusinessConfig.rooms : [];
   const businessTables = Array.isArray(payloadBusinessConfig.tables) ? payloadBusinessConfig.tables : [];
-  const runtimeAuth = extractRuntimeAuthPayload(payload, terminalConfig);
+  const runtimeAuth = input.candidateV3 ? extractRuntimeAuthPayload() : extractRuntimeAuthPayload(payload, terminalConfig);
 
   return {
     success:
@@ -1930,6 +1950,7 @@ export const fetchInitialConfigFromErp = async (input: {
     ...(payload?.bootstrapProtocol === 'v3' ? {
       bootstrapProtocol: 'v3' as const,
       masterSync: asObject(payload?.masterSync),
+      ...(downloadOrigin ? { downloadOrigin } : {}),
     } : {}),
     tenant_id: asString(terminalConfig.tenant_id) || input.tenantId,
     terminal_id: asString(terminalConfig.terminal_id) || input.erpTerminalId,

@@ -1,4 +1,9 @@
 import { resolveStoredErpTenantIdentity } from './tenantIdentityStorage';
+import { usesLargeMasterSyncV3Authority } from '../services/sync/LargeMasterSyncV3Authority';
+import { syncPolicy } from '../services/sync/SyncProfile';
+import { fetchLargeMasterSyncV3ConfigSnapshot } from '../services/sync/LargeMasterSyncV3ConfigDownload';
+import { assertLargeMasterSyncV3ConfigWriteDestinations, assertLargeMasterSyncV3IncomingConfigMasters
+} from '../services/sync/LargeMasterSyncV3ConfigPayload';
 import { normalizeErpSyncApiBase, resolveErpSyncApiBase } from './erpBaseUrl';
 import { extractErpRegisterAuth, resolveNormalizedRegisterDeviceToken } from '../services/sync/erpRegisterResponse';
 import {
@@ -486,14 +491,9 @@ const fetchConfigSnapshotV2 = async (input: {
     if (input.currentVersionHash) searchParams.set('current_version', input.currentVersionHash);
     searchParams.set('scopes', input.scopes.map(toConfigPushV2WireScope).join(','));
 
-    const endpoint = `${baseUrl}/terminals/${encodeURIComponent(input.terminalId)}/config-snapshots/${encodeURIComponent(input.snapshotId)}?${searchParams.toString()}`;
-    const response = await fetch(endpoint, {
-        method: 'GET',
-        headers: {
-            'Content-Type': 'application/json',
-            ...buildDeviceHeaders(input.deviceId),
-        },
-    });
+    const path = `/terminals/${encodeURIComponent(input.terminalId)}/config-snapshots/${encodeURIComponent(input.snapshotId)}?${searchParams.toString()}`;
+    const response = await fetchLargeMasterSyncV3ConfigSnapshot(path, baseUrl,
+        buildDeviceHeaders(input.deviceId), usesLargeMasterSyncV3Authority(syncPolicy.resolve().kind));
 
     if (response.status === 304) {
         return { status: 304, size: 0 };
@@ -1187,6 +1187,15 @@ const processConfigPushV2Event = async (
                 tenantId: boundTenantId,
                 terminalId,
             });
+
+            const authorityChannel = syncPolicy.resolve().kind;
+            if (usesLargeMasterSyncV3Authority(authorityChannel)) {
+                assertLargeMasterSyncV3IncomingConfigMasters(snapshotPayload, authorityChannel);
+                const prospectiveWrites = await Promise.all(staleScopes.map(scope =>
+                    buildConfigPushV2DomainWrites(scope, normalizeConfigPushV2Domains(snapshotPayload.domains)[scope])));
+                assertLargeMasterSyncV3ConfigWriteDestinations(
+                    prospectiveWrites.flat().map(write => write.collection), authorityChannel);
+            }
 
             configPushV2Log('config_snapshot_downloaded', {
                 event_id: eventId,

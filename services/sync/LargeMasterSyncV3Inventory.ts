@@ -1,6 +1,7 @@
 import { LargeMasterSyncV3Error, type LargeMasterSyncV3InventorySnapshot } from './LargeMasterSyncV3Types';
 import { type LargeMasterSyncV3BoundIdentity,
   validatedLargeMasterSyncV3ErpSyncBase } from './LargeMasterSyncV3BoundTransport';
+import { largeMasterSyncV3DownloadOrigin } from './LargeMasterSyncV3DownloadOrigin';
 export type { LargeMasterSyncV3InventoryBalance, LargeMasterSyncV3InventorySnapshot } from './LargeMasterSyncV3Types';
 
 const record = (value: unknown): Record<string, unknown> => value && typeof value === 'object'
@@ -43,9 +44,12 @@ export const fetchLargeMasterSyncV3Inventory = async (
   readBoundIdentity: () => LargeMasterSyncV3BoundIdentity,
   fetchImpl: typeof fetch = fetch,
   signal?: AbortSignal,
+  downloadOrigin?: string,
 ): Promise<LargeMasterSyncV3InventorySnapshot> => {
   const identity = readBoundIdentity();
-  const baseUrl = validatedLargeMasterSyncV3ErpSyncBase(identity.erpSyncBaseUrl);
+  const identityBase = validatedLargeMasterSyncV3ErpSyncBase(identity.erpSyncBaseUrl);
+  const baseUrl = downloadOrigin === undefined ? identityBase
+    : `${largeMasterSyncV3DownloadOrigin(downloadOrigin)}/api/sync`;
   if (!identity.syncToken || !identity.tenantId || !identity.terminalId || !identity.deviceId) {
     throw new LargeMasterSyncV3Error('SYNC_V3_ERP_BINDING_REQUIRED');
   }
@@ -68,7 +72,7 @@ export const fetchLargeMasterSyncV3Inventory = async (
   let payload: unknown;
   try { payload = await response.json(); } catch { throw new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_INVALID'); }
   const current = readBoundIdentity();
-  if (validatedLargeMasterSyncV3ErpSyncBase(current.erpSyncBaseUrl) !== baseUrl
+  if (validatedLargeMasterSyncV3ErpSyncBase(current.erpSyncBaseUrl) !== identityBase
     || current.tenantId !== identity.tenantId || current.terminalId !== identity.terminalId
     || current.deviceId !== identity.deviceId || current.syncToken !== identity.syncToken) {
     throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');

@@ -7,6 +7,10 @@ import { persistV3FinancialTransaction, validateV3FrozenFiscalAmounts } from './
 import { validateV3FrozenLineFiscalAmounts } from './services/sync/LargeMasterSyncV3LineSource';
 import { buildV3FrozenFiscalProviderTransaction } from './components/v3OperationalUIQueue';
 import { getLargeMasterSyncV3OperationalSession } from './services/sync/LargeMasterSyncV3OperationalSession';
+import { assertLargeMasterSyncV3SetupContract, largeMasterSyncV3DownloadOrigin } from './services/sync/LargeMasterSyncV3DownloadOrigin';
+import { completeLargeMasterSyncV3Setup } from './services/sync/LargeMasterSyncV3SetupCompletion';
+import { forwardedSetupCredentialSource, isolateCandidateSetupConfig,
+  resolveSetupRegisterCredentials } from './services/sync/LargeMasterSyncV3SetupCredentials';
 import AutomaticRecoveryDialog from './components/AutomaticRecoveryDialog';
 import type { RecoveryCloseInput } from './services/recovery/RecoveryCloseController';
 import { originalProvenance } from './services/recovery/RecoveryRuntime';
@@ -427,7 +431,6 @@ import { markSyncDeviceTokenInvalid, persistSyncDeviceToken } from './services/s
 import {
   extractErpRegisterAuth,
   resolveIncomingSyncProfileFromRegister,
-  resolveNormalizedRegisterDeviceToken,
   resolveRegisterErpTerminalId,
   resolveRegisterTerminalCode,
 } from './services/sync/erpRegisterResponse';
@@ -8674,6 +8677,9 @@ const AppContent: React.FC = () => {
       boundUsers?: User[];
       masterIp?: string;
       snapshotItems?: Product[];
+      bootstrapProtocol?: 'v3' | 'legacy';
+      masterSync?: Record<string, unknown>;
+      downloadOrigin?: string;
       rooms?: Room[];
       tables?: Table[];
       deviceToken?: string;
@@ -8704,6 +8710,13 @@ const AppContent: React.FC = () => {
     },
     options?: { forceTakeover?: boolean }
   ) => {
+    const incomingSetup = typeof pairingContext === 'object' && pairingContext !== null ? pairingContext : undefined;
+    const candidateV3Setup = LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED && Boolean(incomingSetup?.erpBaseUrl)
+      && !incomingSetup?.masterIp && !['CLIENT', 'ORDER_TAKER'].includes(getStoredTerminalSetupMode() || '');
+    if (candidateV3Setup) {
+      const origin = assertLargeMasterSyncV3SetupContract(incomingSetup!);
+      if (origin !== largeMasterSyncV3DownloadOrigin()) throw new Error('SYNC_V3_SETUP_ORIGIN_CHANGED');
+    }
     setRestoringHistory(true);
     setTerminalBindingDiagnosticStatus('BINDING');
     setCatalogDiagnosticStatus('IDLE');
@@ -8717,7 +8730,9 @@ const AppContent: React.FC = () => {
     const previousInitialTerminalConfig = localStorage.getItem('initial_terminal_config');
     const previousCatalogDiagnosticStatus = localStorage.getItem(CATALOG_SYNC_STATUS_KEY);
     try {
-      const setupResult = typeof pairingContext === 'object' && pairingContext !== null ? pairingContext : undefined;
+      const setupResult = incomingSetup && candidateV3Setup
+        ? { ...incomingSetup, boundConfig: isolateCandidateSetupConfig(incomingSetup.boundConfig) }
+        : typeof pairingContext === 'object' && pairingContext !== null ? pairingContext : undefined;
       const storedSetupMode = getStoredTerminalSetupMode();
       const resolvedMasterIp = typeof pairingContext === 'string' ? pairingContext : setupResult?.masterIp;
       const isLocalClientBinding = Boolean(resolvedMasterIp)
@@ -8817,8 +8832,8 @@ const AppContent: React.FC = () => {
         stepId: 'apply',
         message: 'Guardando configuración de terminal y permisos locales...',
       });
-      const setupRegisterAuth = extractErpRegisterAuth(
-        setupResult,
+      const { registerAuth: setupRegisterAuth, normalizedDeviceToken } = resolveSetupRegisterCredentials(
+        candidateV3Setup, candidateV3Setup ? forwardedSetupCredentialSource(setupResult) : setupResult,
         (setupResult as any)?.initialConfigData,
         (setupResult as any)?.terminal_config,
         setupResult.boundConfig?.metadata,
@@ -8828,11 +8843,6 @@ const AppContent: React.FC = () => {
         setupResult?.profile,
       );
       logRegisterResponseAuth(setupRegisterAuth);
-      const normalizedDeviceToken = resolveNormalizedRegisterDeviceToken(
-        setupResult,
-        (setupResult as any)?.initialConfigData,
-        setupRegisterAuth,
-      );
       const effectiveDeviceToken =
         normalizedDeviceToken
         || setupRegisterAuth.deviceToken
@@ -8926,7 +8936,7 @@ const AppContent: React.FC = () => {
           ...(setupRegisterAuth.tokenExpiresAt ? { tokenExpiresAt: setupRegisterAuth.tokenExpiresAt } : {}),
         },
       };
-      const updatedConfig = clearDuplicateDeviceAssignments(configWithAuthMetadata, deviceId, {
+      let updatedConfig = clearDuplicateDeviceAssignments(configWithAuthMetadata, deviceId, {
         activeTerminalId: terminalId,
         bindingTerminalId: setupResult?.erpTerminalId || terminalId,
         bindingLocalTerminalId: resolvedOperationalTerminalId,
@@ -9375,7 +9385,12 @@ const AppContent: React.FC = () => {
       // an empty ticket while the LAN catalog refresh is still in flight.
       const shouldPersistSetupSnapshotItems = Array.isArray(setupResult?.snapshotItems)
         && setupResult.snapshotItems.length > 0;
-      if (shouldFullPullOnPairing) {
+      if (candidateV3Setup) {
+        setCatalogDiagnosticStatus('SYNCING');
+        setupResult.progress?.({ stepId: 'sync', message: 'Validando catálogo V3 e inventario operativo...' });
+        updatedConfig = await completeLargeMasterSyncV3Setup(updatedConfig,
+          getLargeMasterSyncV3OperationalSession, projected => db.save('config', projected));
+      } else if (shouldFullPullOnPairing) {
         setupResult.progress?.({
           stepId: 'sync',
           message: 'Preparando maestros locales recibidos...',
@@ -9438,7 +9453,8 @@ const AppContent: React.FC = () => {
         refreshedOperationalDocumentState.terminalId,
       );
 
-      const freshData = await db.init();
+      const freshData = await db.init(undefined, candidateV3Setup
+        ? { skipCollections: ['products', 'productPrices', 'taxes', 'productStocks'] } : undefined);
       const hydratedConfigFromDb = resolvePersistedBusinessConfig(await db.get('config') as unknown) || postSyncConfig;
       const preservedSyncAuth = hydratedConfigFromDb.metadata?.syncAuth || updatedConfig.metadata?.syncAuth;
       const hydratedConfig: BusinessConfig = {
@@ -9474,7 +9490,7 @@ const AppContent: React.FC = () => {
       if (Array.isArray(freshData.transactions)) setTransactions(freshData.transactions);
       if (Array.isArray(freshData.products)) setProducts(freshData.products);
       if (Array.isArray(freshData.warehouses)) setWarehouses(freshData.warehouses);
-      await hydrateNativeCatalogFromDb(
+      if (!candidateV3Setup) await hydrateNativeCatalogFromDb(
         { setProducts, setWarehouses, setProductStocks },
         'terminal-binding',
       );
@@ -9553,6 +9569,7 @@ const AppContent: React.FC = () => {
       if (resolvedErpBaseUrl) {
         persistSetupErpBaseUrls(resolvedErpBaseUrl);
       }
+      if (candidateV3Setup) await (await getLargeMasterSyncV3OperationalSession()).assertCurrent();
       setupResult.progress?.({
         stepId: 'finish',
         message: 'Terminal lista. Finalizando activación...',
@@ -9604,6 +9621,7 @@ const AppContent: React.FC = () => {
       const errorMessage = error instanceof Error ? error.message : String(error || '');
       const canResumeExistingTerminalOffline = Boolean(
         preserveTerminalBindingAfterRegister
+        && !candidateV3Setup
         && !readClientBindingRecovery()
         && previousActiveTerminalId
         && isDataLoaded
@@ -9624,7 +9642,7 @@ const AppContent: React.FC = () => {
 
       if (preserveTerminalBindingAfterRegister) {
         const pendingRecovery = readClientBindingRecovery();
-        if (pendingRecovery) {
+        if (candidateV3Setup || pendingRecovery) {
           localStorage.setItem(TERMINAL_SETUP_PENDING_KEY, '1');
           localStorage.setItem(TERMINAL_BINDING_STATUS_KEY, 'BINDING_RESTORE_PENDING');
           setTerminalBindingDiagnosticStatus('BINDING_RESTORE_PENDING');

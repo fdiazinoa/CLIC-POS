@@ -31,6 +31,9 @@ import {
 import { reconcileClientBindingMutation } from '../services/setup/clientBindingMutation';
 
 interface PairingResult {
+  bootstrapProtocol?: 'v3' | 'legacy';
+  masterSync?: Record<string, unknown>;
+  downloadOrigin?: string;
   tenantId?: string;
   erpTerminalId?: string;
   erpBaseUrl?: string;
@@ -41,6 +44,8 @@ interface PairingResult {
   boundUsers?: UserType[];
   masterIp?: string;
   snapshotItems?: Product[];
+  rooms?: any[];
+  tables?: any[];
   deviceToken?: string;
   terminalToken?: string;
   activationToken?: string;
@@ -667,6 +672,9 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
               onMasterIpChange={setMasterIp}
               onBack={() => setStep('AUTH')}
               onBound={async ({
+                bootstrapProtocol,
+                masterSync,
+                downloadOrigin,
                 terminalId,
                 tenantId,
                 erpTerminalId,
@@ -678,6 +686,8 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
                 users,
                 masterIp: resolvedMasterIp,
                 snapshotItems,
+                rooms,
+                tables,
                 snapshotMeta,
                 syncProfile,
                 syncPermissions,
@@ -693,6 +703,9 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
                 recoveryState
               }) => {
                 await onPair(terminalId, {
+                  bootstrapProtocol,
+                  masterSync,
+                  downloadOrigin,
                   tenantId,
                   erpTerminalId,
                   erpBaseUrl,
@@ -703,6 +716,8 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
                   boundUsers: users,
                   masterIp: resolvedMasterIp,
                   snapshotItems,
+                  rooms,
+                  tables,
                   snapshotMeta,
                   syncProfile,
                   syncPermissions,

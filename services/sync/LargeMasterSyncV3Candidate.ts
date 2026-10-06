@@ -6,6 +6,7 @@ import type { LargeMasterSyncV3Client, LargeMasterSyncV3Metric } from './LargeMa
 import { fetchLargeMasterSyncV3Inventory } from './LargeMasterSyncV3Inventory';
 import { waitForLargeMasterSyncV3OperationalWindow } from './LargeMasterSyncV3OperationGate';
 import { LargeMasterSyncV3Runtime } from './LargeMasterSyncV3Runtime';
+import { largeMasterSyncV3DownloadOrigin } from './LargeMasterSyncV3DownloadOrigin';
 import { LargeMasterSyncV3Error, type LargeMasterSyncV3InventorySnapshot,
   type LargeMasterSyncV3RuntimeVersion, type LargeMasterSyncV3Store } from './LargeMasterSyncV3Types';
 
@@ -29,7 +30,7 @@ const defaultDependencies: CandidateDependencies = {
   createClient: (store, v3BaseUrl, metric) =>
     createLargeMasterSyncV3BoundClient(store, v3BaseUrl, { metric }),
   fetchInventory: signal => fetchLargeMasterSyncV3Inventory(
-    readLargeMasterSyncV3BoundIdentity, fetch, signal),
+    readLargeMasterSyncV3BoundIdentity, fetch, signal, largeMasterSyncV3DownloadOrigin()),
   waitForOperationalWindow: waitForLargeMasterSyncV3OperationalWindow,
   openRuntime: LargeMasterSyncV3Runtime.open,
 };

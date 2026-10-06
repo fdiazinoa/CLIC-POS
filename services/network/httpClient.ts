@@ -10,6 +10,7 @@ export interface RequestJsonInput {
     timeoutMs?: number;
     diagnosticContext?: Record<string, unknown>;
     signal?: AbortSignal;
+    rejectRedirects?: boolean;
 }
 
 export interface RequestJsonResult<T = unknown> {
@@ -227,6 +228,7 @@ export async function requestJson<T = unknown>(input: RequestJsonInput): Promise
                 data: normalizeBodyForNative(input.body, headersSummary.contentType),
                 connectTimeout: timeoutMs,
                 readTimeout: timeoutMs,
+                ...(input.rejectRedirects ? { disableRedirects: true } : {}),
             });
             let nativeAbort: (() => void) | null = null;
             const response = input.signal
@@ -285,6 +287,7 @@ export async function requestJson<T = unknown>(input: RequestJsonInput): Promise
             credentials: 'omit',
             cache: 'no-store',
             signal: controller.signal,
+            ...(input.rejectRedirects ? { redirect: 'error' as const } : {}),
         });
         const text = await response.text();
         clearTimeout(timeout);

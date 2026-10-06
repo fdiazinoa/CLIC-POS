@@ -8,7 +8,8 @@
 import { syncErpPaymentMethods } from './PaymentMethodsSync';
 import { assertLegacyMasterPullAllowed, isLargeMasterSyncV3ReplacedCollection,
     usesLargeMasterSyncV3Authority } from './LargeMasterSyncV3Authority';
-import { prepareLargeMasterSyncV3Candidate } from './LargeMasterSyncV3Candidate';
+import { getLargeMasterSyncV3OperationalSession } from './LargeMasterSyncV3OperationalSession';
+import { assertLargeMasterSyncV3ConfigPayload, largeMasterSyncV3DownloadOrigin } from './LargeMasterSyncV3DownloadOrigin';
 import { freezeCount, freezePhase } from '../../diagnostics/freezeCounters';
 import { fetchAndReadWithTimeout } from '../network/fetchAndReadWithTimeout';
 import { db } from '../../utils/db';
@@ -791,6 +792,11 @@ class SyncManager {
                 mode: 'validated-master-authority',
                 includeErpBaseUrl: false,
             }];
+        }
+
+        if (usesLargeMasterSyncV3Authority(syncPolicy.resolve().kind)) {
+            return [{ baseUrl: `${largeMasterSyncV3DownloadOrigin()}/api/sync`,
+                mode: 'explicit-v3-download', includeErpBaseUrl: false }];
         }
 
         if (!useAbsoluteEndpoint) {
@@ -1909,6 +1915,7 @@ class SyncManager {
             return await fetch(endpoint, {
                 headers,
                 signal: controller.signal,
+                ...(usesLargeMasterSyncV3Authority(syncPolicy.resolve().kind) ? { redirect: 'error' as const } : {}),
             });
         } finally {
             window.clearTimeout(timeoutId);
@@ -2673,9 +2680,8 @@ class SyncManager {
                 deferDuringSale: true,
             });
             if (usesLargeMasterSyncV3Authority(syncPolicy.resolve().kind)) {
-                const v3BaseUrl = import.meta.env.VITE_LARGE_MASTER_SYNC_V3_BASE_URL;
-                if (!v3BaseUrl) throw new Error('SYNC_V3_BASE_URL_REQUIRED');
-                await prepareLargeMasterSyncV3Candidate(dbAdapter.masterSyncV3Store, v3BaseUrl);
+                const session = await getLargeMasterSyncV3OperationalSession();
+                await session.assertCurrent();
                 // Download readiness is not sale readiness. The candidate must
                 // wait for the complete V3 operational POS read boundary.
                 this.setSyncPhase('V3_CANDIDATE_MASTER_READY_SALES_BLOCKED');
@@ -3442,7 +3448,8 @@ class SyncManager {
             context.tenantId &&
             endpointCandidates.length > 0
         );
-        const allowPendingFallback = !options?.forceRemoteFetch;
+        const allowPendingFallback = !options?.forceRemoteFetch
+            && !usesLargeMasterSyncV3Authority(syncPolicy.resolve().kind);
         const requestTimeoutMs = Number.isFinite(options?.requestTimeoutMs)
             ? Math.max(1_000, Number(options?.requestTimeoutMs))
             : null;
@@ -3530,6 +3537,7 @@ class SyncManager {
                         && currentCatalogCursor && hasCompleteCachedCatalog
                         && !options?.forceFullCatalog && requestedMasterScopes?.includes('items'));
                     const result = await fetchAndReadWithTimeout(endpoint, {
+                        ...(usesLargeMasterSyncV3Authority(syncPolicy.resolve().kind) ? { redirect: 'error' as const } : {}),
                         method: sendCatalogState ? 'POST' : 'GET',
                         headers: {
                             Accept: 'application/json',
@@ -3553,6 +3561,10 @@ class SyncManager {
                     }, remainingRequestMs ?? 15_000);
                     const responseContentType = result.contentType;
                     payload = result.payload;
+                    if (v3Authority) assertLargeMasterSyncV3ConfigPayload(payload, {
+                        tenantId: context.tenantId!, erpTerminalId: context.terminalId!,
+                        posDeviceId: context.posDeviceId || undefined,
+                    }, { masterScopes: requestedMasterScopes, resolvedScopes: requestedResolvedScopes });
                     const configSnapshotMeta = payload?.snapshot_meta && typeof payload.snapshot_meta === 'object' && !Array.isArray(payload.snapshot_meta)
                         ? payload.snapshot_meta as Record<string, any>
                         : payload?.cache && typeof payload.cache === 'object' && !Array.isArray(payload.cache)
@@ -3658,6 +3670,11 @@ class SyncManager {
         if (!snapshot) {
             return null;
         }
+
+        if (v3Authority) assertLargeMasterSyncV3ConfigPayload(snapshot as Record<string, any>, {
+            tenantId: context.tenantId!, erpTerminalId: context.terminalId!,
+            posDeviceId: context.posDeviceId || undefined,
+        }, { masterScopes: requestedMasterScopes, resolvedScopes: requestedResolvedScopes });
 
         if (options?.deferDuringSale) {
             await waitForBackgroundSyncWindow();
@@ -7215,9 +7232,8 @@ class SyncManager {
 
         if (target.kind === 'ERP_ACTIVE') {
             if (v3Authority) {
-                const v3BaseUrl = import.meta.env.VITE_LARGE_MASTER_SYNC_V3_BASE_URL;
-                if (!v3BaseUrl) throw new Error('SYNC_V3_BASE_URL_REQUIRED');
-                await prepareLargeMasterSyncV3Candidate(dbAdapter.masterSyncV3Store, v3BaseUrl);
+                const session = await getLargeMasterSyncV3OperationalSession(true);
+                await session.assertCurrent();
             } else {
                 window.dispatchEvent(new CustomEvent('syncProgress', {
                     detail: { id: 'taxes', status: 'PROCESSING', message: 'Descargando maestro fiscal FULL...' },

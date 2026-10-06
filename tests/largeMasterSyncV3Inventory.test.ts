@@ -47,3 +47,21 @@ test('inventory response is rejected if the device binding changes in flight', a
   await assert.rejects(fetchLargeMasterSyncV3Inventory(() => current, fetcher),
     /SYNC_V3_BINDING_CHANGED/);
 });
+
+test('candidate inventory download uses Railway while original auth binding and headers stay intact', async () => {
+  const initial = structuredClone(binding);
+  let calls = 0;
+  const fetcher = (async (url: string, init?: RequestInit) => {
+    calls++;
+    assert.equal(url, 'https://railway.example.test/api/sync/collections/productInventory/full');
+    assert.equal((init?.headers as Record<string, string>)['X-Sync-Token'], binding.syncToken);
+    assert.equal((init?.headers as Record<string, string>)['X-Tenant-Id'], binding.tenantId);
+    assert.equal((init?.headers as Record<string, string>)['X-Terminal-Id'], binding.terminalId);
+    assert.equal((init?.headers as Record<string, string>)['X-Device-Id'], binding.deviceId);
+    assert.equal(init?.redirect, 'error');
+    return Response.json(empty);
+  }) as typeof fetch;
+  await fetchLargeMasterSyncV3Inventory(() => binding, fetcher, undefined, 'https://railway.example.test');
+  assert.equal(calls, 1);
+  assert.deepEqual(binding, initial);
+});

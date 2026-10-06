@@ -11,6 +11,8 @@ import { LargeMasterSyncV3Error, type LargeMasterSyncV3Store } from './LargeMast
 import { requiresV3SaleAvailability, type V3FinancialIntent } from './LargeMasterSyncV3RefundAuthority';
 import type { DurableDocumentMutation } from '../db/DatabaseAdapter';
 import { validateV3PinnedLineSource } from './LargeMasterSyncV3LineSource';
+import { largeMasterSyncV3DownloadOrigin } from './LargeMasterSyncV3DownloadOrigin';
+import { createLargeMasterSyncV3SessionCoordinator } from './LargeMasterSyncV3SetupCompletion';
 
 export const v3BindingKey = (identity: LargeMasterSyncV3BoundIdentity, v3BaseUrl: string): string =>
   JSON.stringify([identity.tenantId, identity.terminalId, identity.deviceId,
@@ -32,13 +34,12 @@ export class LargeMasterSyncV3OperationalSession {
     private readonly identity: LargeMasterSyncV3BoundIdentity,
   ) {}
 
-  static async open(): Promise<LargeMasterSyncV3OperationalSession> {
+  static async open(refresh = false): Promise<LargeMasterSyncV3OperationalSession> {
     if (!LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED || LARGE_MASTER_SYNC_V3_CANARY) {
       throw new LargeMasterSyncV3Error('SYNC_V3_OPERATIONAL_BUILD_REQUIRED');
     }
     assertLargeMasterSyncV3CanaryEmulator();
-    const v3BaseUrl = import.meta.env.VITE_LARGE_MASTER_SYNC_V3_BASE_URL;
-    if (!v3BaseUrl) throw new LargeMasterSyncV3Error('SYNC_V3_BASE_URL_REQUIRED');
+    const v3BaseUrl = largeMasterSyncV3DownloadOrigin();
     const identity = readLargeMasterSyncV3BoundIdentity();
     const binding = v3BindingKey(identity, v3BaseUrl);
     await dbAdapter.connect();
@@ -50,7 +51,7 @@ export class LargeMasterSyncV3OperationalSession {
     const runtime = await LargeMasterSyncV3Runtime.open(store);
     const owner = await store.getOperationalOwner();
     if (owner && owner.binding !== binding) throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
-    if (runtime && (runtime.version.contractVersion || 1) >= 2 && owner?.binding === binding
+    if (!refresh && runtime && (runtime.version.contractVersion || 1) >= 2 && owner?.binding === binding
       && owner.syncId === runtime.version.syncId && owner.syncVersion === runtime.version.syncVersion) {
       const inventory = await runtime.getInventorySnapshotVersion();
       if (inventory) ready = { runtime, inventoryVersion: inventory.version, inventoryCursor: inventory.cursor };
@@ -73,9 +74,11 @@ export class LargeMasterSyncV3OperationalSession {
     }
     const active = await this.store.getActiveRuntimeVersion();
     const inventory = await this.ready.runtime.getInventorySnapshotVersion();
+    const owner = await this.store.getOperationalOwner!();
     if (active?.syncId !== this.ready.runtime.version.syncId
       || active.syncVersion !== this.ready.runtime.version.syncVersion
-      || inventory?.version !== this.ready.inventoryVersion || inventory.cursor !== this.ready.inventoryCursor) {
+      || inventory?.version !== this.ready.inventoryVersion || inventory.cursor !== this.ready.inventoryCursor
+      || owner?.binding !== this.binding || owner.syncId !== active.syncId || owner.syncVersion !== active.syncVersion) {
       throw new LargeMasterSyncV3Error('SYNC_V3_RUNTIME_VERSION_CHANGED');
     }
   }
@@ -181,8 +184,6 @@ export class LargeMasterSyncV3OperationalSession {
   }
 }
 
-let opening: Promise<LargeMasterSyncV3OperationalSession> | undefined;
-export const getLargeMasterSyncV3OperationalSession = (): Promise<LargeMasterSyncV3OperationalSession> => {
-  if (!opening) opening = LargeMasterSyncV3OperationalSession.open().catch(error => { opening = undefined; throw error; });
-  return opening;
-};
+export const getLargeMasterSyncV3OperationalSession = createLargeMasterSyncV3SessionCoordinator(
+  refresh => LargeMasterSyncV3OperationalSession.open(refresh),
+);
