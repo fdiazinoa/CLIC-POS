@@ -52,6 +52,27 @@ export VITE_LARGE_MASTER_SYNC_V3_CANARY="${V3_CANARY_ENABLED}"
 export VITE_LARGE_MASTER_SYNC_V3_CANDIDATE="${V3_CANDIDATE_ENABLED}"
 export CLIC_POS_SIGNED_V3_CANARY="${SIGNED_V3_CANARY_OPT_IN}"
 export CLIC_POS_SIGNED_V3_CANDIDATE="${SIGNED_V3_CANDIDATE_OPT_IN}"
+# Validate the explicit caller value before touching the signing worktree. Vite
+# dotenv fallback is not acceptable provenance for an operational V3 candidate.
+V3_DOWNLOAD_ORIGIN=""
+if [[ "${V3_CANDIDATE_ENABLED}" == "true" ]]; then
+  V3_DOWNLOAD_ORIGIN="$(node --input-type=module <<'NODE'
+const value = process.env.VITE_LARGE_MASTER_SYNC_V3_BASE_URL;
+try {
+  if (!value?.trim()) throw new Error();
+  const url = new URL(value.trim());
+  const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
+  if ((url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback))
+    || url.username || url.password || url.search || url.hash || url.pathname !== '/') throw new Error();
+  process.stdout.write(url.origin);
+} catch {
+  console.error('ERROR: El candidato V3 requiere VITE_LARGE_MASTER_SYNC_V3_BASE_URL con un origen válido explícito.');
+  process.exit(1);
+}
+NODE
+  )" || exit 1
+  export VITE_LARGE_MASTER_SYNC_V3_BASE_URL="${V3_DOWNLOAD_ORIGIN}"
+fi
 NONPROMOTABLE=false
 if [[ "${V3_CANARY_ENABLED}" == "true" || "${V3_CANDIDATE_ENABLED}" == "true" ]]; then
   NONPROMOTABLE=true
@@ -358,6 +379,9 @@ const [root, report, sourceCommit] = process.argv.slice(2);
 const dist = path.join(root, 'dist');
 const packaged = path.join(root, 'android/app/src/main/assets/public');
 const hashes = {};
+const operationalV3Candidate = process.env.VITE_LARGE_MASTER_SYNC_V3_CANDIDATE === 'true';
+const downloadOrigin = operationalV3Candidate ? process.env.VITE_LARGE_MASTER_SYNC_V3_BASE_URL : null;
+const downloadOriginAssets = [];
 const walk = (dir, relative = '') => {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     const name = path.join(relative, entry.name);
@@ -367,13 +391,19 @@ const walk = (dir, relative = '') => {
       const copy = fs.readFileSync(path.join(packaged, name));
       if (!original.equals(copy)) throw new Error(`Asset distinto: ${name}`);
       hashes[name] = crypto.createHash('sha256').update(copy).digest('hex');
+      if (operationalV3Candidate && name.endsWith('.js') && downloadOrigin
+        && copy.toString('utf8').includes(JSON.stringify(downloadOrigin))) downloadOriginAssets.push(name);
     }
   }
 };
 walk(dist);
 if (!Object.keys(hashes).length) throw new Error('dist está vacío');
+if (operationalV3Candidate && !downloadOriginAssets.length) {
+  throw new Error('El origen V3 validado no está presente en los assets JavaScript empaquetados');
+}
 fs.mkdirSync(path.dirname(report), { recursive: true });
-fs.writeFileSync(report, JSON.stringify({ sourceCommit, assetsVerified: true, hashes }, null, 2));
+fs.writeFileSync(report, JSON.stringify({ sourceCommit, assetsVerified: true, hashes,
+  downloadOrigin, downloadOriginAssets, downloadOriginVerified: operationalV3Candidate ? true : null }, null, 2));
 console.log(`Assets verificados: ${Object.keys(hashes).length}`);
 NODE
 
@@ -402,6 +432,7 @@ const operationalV3Candidate = process.env.VITE_LARGE_MASTER_SYNC_V3_CANDIDATE =
 const signedV3Canary = process.env.VITE_LARGE_MASTER_SYNC_V3_CANARY === 'true';
 Object.assign(metadata, {
   sourceCommit, operationalV3Candidate, signedV3Canary,
+  downloadOrigin: operationalV3Candidate ? process.env.VITE_LARGE_MASTER_SYNC_V3_BASE_URL : null,
   signedV3CandidateOptIn: process.env.CLIC_POS_SIGNED_V3_CANDIDATE === 'true',
   signedV3CanaryOptIn: process.env.CLIC_POS_SIGNED_V3_CANARY === 'true',
   nonpromotable: operationalV3Candidate || signedV3Canary,
@@ -443,6 +474,8 @@ signedV3Canary=${V3_CANARY_ENABLED}
 signedV3CanaryOptIn=${SIGNED_V3_CANARY_OPT_IN}
 canaryNonPromotable=${V3_CANARY_ENABLED}
 operationalV3Candidate=${V3_CANDIDATE_ENABLED}
+downloadOrigin=${V3_DOWNLOAD_ORIGIN}
+downloadOriginVerified=$([[ "${V3_CANDIDATE_ENABLED}" == "true" ]] && echo true || echo not-applicable)
 signedV3CandidateOptIn=${SIGNED_V3_CANDIDATE_OPT_IN}
 nonpromotable=${NONPROMOTABLE}
 buildMode=$([[ "${V3_CANDIDATE_ENABLED}" == "true" ]] && echo operational-v3-candidate || { [[ "${V3_CANARY_ENABLED}" == "true" ]] && echo laboratory-v3-canary || echo normal-v2; })

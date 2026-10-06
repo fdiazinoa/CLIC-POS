@@ -105,6 +105,13 @@ Ejemplos:
 ./scripts/release-android.sh fix/sync-full-replace-soft-delete
 ```
 
+Para un candidato operativo V3 firmado, declarar explícitamente
+`VITE_LARGE_MASTER_SYNC_V3_BASE_URL=https://clic-erp-production.up.railway.app`
+junto a las dos banderas de candidato. El protocolo rechaza valores ausentes o
+inválidos antes de tocar la worktree firmada; normaliza el origen y comprueba su
+presencia en los JavaScript empaquetados antes de Gradle. Metadata, reporte y
+hashes de assets conservan esa procedencia; no sustituyen QA nativa ni `promote`.
+
 El script:
 
 - verifica que la worktree canónica esté limpia
