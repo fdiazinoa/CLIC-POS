@@ -249,6 +249,17 @@ for (const timing of ['before', 'during', 'at release']) {
   });
 }
 
+test('abort after the idle gate resolved but before candidate continuation prevents all preparation', async () => {
+  const controller = new AbortController();
+  const f = realGateFixture();
+  // With no holds the real async gate returns a resolved promise. Candidate's await still yields.
+  const pending = prepareLargeMasterSyncV3Candidate(f.store, 'https://railway.example.test', undefined,
+    controller.signal, f.dependencies);
+  controller.abort();
+  await assert.rejects(pending, { name: 'AbortError' });
+  assert.deepEqual(f.calls, ['assertEmulator', 'waitForWindow']);
+});
+
 test('real SQLite preflight still rejects an acknowledged V3 inventory movement before any network request', async () => {
   const sql = new DatabaseSync(':memory:');
   sql.exec(LARGE_MASTER_SYNC_V3_SCHEMA_SQL);
