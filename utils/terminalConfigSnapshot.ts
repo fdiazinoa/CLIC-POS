@@ -1821,6 +1821,24 @@ export const applyTerminalConfigSnapshot = (
   const mergedSnapshot = mergeTerminalConfigSnapshots(cached, incoming);
   const incomingResolved = asObject(incoming?.resolved);
   const incomingFallbackConfig = asObject(incoming?.config);
+  // Only the fresh terminal response may grant V3 pricing authority. An
+  // explicit resolved scope wins even when malformed; never borrow the cache.
+  let incomingV3Pricing: { default_tariff_id: string; allowed_tariff_ids: string[]; tariffs?: unknown } | undefined;
+  if (options.preserveOmittedOperationalScopes) {
+    const has = (record: Record<string, any>, key: string) => Object.prototype.hasOwnProperty.call(record, key);
+    const raw = has(incomingResolved, 'pricing') ? incomingResolved.pricing
+      : has(incomingFallbackConfig, 'pricing') ? incomingFallbackConfig.pricing : undefined;
+    if (has(incomingResolved, 'pricing') || has(incomingFallbackConfig, 'pricing')) {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('SYNC_V3_TERMINAL_PRICING_INVALID');
+      const defaultId = has(raw, 'default_tariff_id') ? raw.default_tariff_id : raw.defaultTariffId;
+      const allowed = has(raw, 'allowed_tariff_ids') ? raw.allowed_tariff_ids : raw.allowedTariffIds;
+      if (typeof defaultId !== 'string' || !defaultId.trim() || defaultId !== defaultId.trim()
+        || !Array.isArray(allowed) || !allowed.length
+        || allowed.some(id => typeof id !== 'string' || !id.trim() || id !== id.trim())
+        || !allowed.includes(defaultId)) throw new Error('SYNC_V3_TERMINAL_PRICING_INVALID');
+      incomingV3Pricing = { default_tariff_id: defaultId, allowed_tariff_ids: [...new Set(allowed)] as string[], tariffs: raw.tariffs };
+    }
+  }
   const cachedResolved = asObject(cached?.resolved);
   const hasResolutionError = Boolean(incoming?.resolution_error != null);
   const hasIncomingResolved = Object.keys(incomingResolved).length > 0;
@@ -1856,7 +1874,7 @@ export const applyTerminalConfigSnapshot = (
     ...asObject(effectiveResolved.identity),
     ...asObject(effectiveResolved.terminal),
   } as Record<string, any>;
-  const resolvedPricing = asObject(effectiveResolved.pricing);
+  const resolvedPricing = incomingV3Pricing || asObject(effectiveResolved.pricing);
   const resolvedInventory = asObject(effectiveResolved.inventory);
   const resolvedDocuments = asObject(effectiveResolved.documents);
   const resolvedTerminalFiscalConfig = asObject(
@@ -2377,8 +2395,7 @@ export const applyTerminalConfigSnapshot = (
 
   const terminalTemplate = resolveTerminalTemplate(nextConfig, terminalId);
   const existingTerminal = baseConfig.terminals?.find(terminal => terminal.id === terminalId)?.config;
-  const preservePricing = options.preserveOmittedOperationalScopes && existingTerminal
-    && !Object.prototype.hasOwnProperty.call(incomingResolved, 'pricing');
+  const preservePricing = options.preserveOmittedOperationalScopes && !incomingV3Pricing;
   const preserveInventory = options.preserveOmittedOperationalScopes && existingTerminal
     && !Object.prototype.hasOwnProperty.call(incomingResolved, 'inventory');
   const terminalTerminalId =
@@ -2422,11 +2439,11 @@ export const applyTerminalConfigSnapshot = (
     .map((value) => resolveTariffId(value, effectiveTariffs))
     .filter(Boolean);
   const effectiveAllowedTariffIds =
-    allowedTariffIds.length > 0
+    incomingV3Pricing ? incomingV3Pricing.allowed_tariff_ids : allowedTariffIds.length > 0
       ? allowedTariffIds
       : effectiveTariffs.map((tariff) => tariff.id);
   const effectiveDefaultTariffId =
-    resolveTariffId(asString(resolvedPricing.default_tariff_id), effectiveTariffs) ||
+    incomingV3Pricing?.default_tariff_id || resolveTariffId(asString(resolvedPricing.default_tariff_id), effectiveTariffs) ||
     effectiveAllowedTariffIds[0] ||
     effectiveTariffs[0]?.id ||
     '';
@@ -2660,7 +2677,7 @@ export const applyTerminalConfigSnapshot = (
       fiscalRanges: effectiveFiscalRanges,
       fiscalAllocations: effectiveFiscalAllocations,
     },
-    pricing: preservePricing ? cloneOptionalOperationalScope(existingTerminal.pricing) : {
+    pricing: preservePricing ? cloneOptionalOperationalScope(existingTerminal?.pricing) : {
       ...terminalTemplate.pricing,
       defaultTariffId: effectiveDefaultTariffId,
       allowedTariffIds: effectiveAllowedTariffIds,

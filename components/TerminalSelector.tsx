@@ -1372,6 +1372,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
               posDeviceId: deviceId,
               bindingMode,
               incomingSnapshot: snapshot,
+              preserveOmittedOperationalScopes: candidateV3,
             }
           );
 
@@ -1421,6 +1422,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
               posDeviceId: deviceId,
               bindingMode,
               incomingSnapshot: snapshot,
+              preserveOmittedOperationalScopes: candidateV3,
             }
           );
 

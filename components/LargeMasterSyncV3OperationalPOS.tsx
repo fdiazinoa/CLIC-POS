@@ -3,6 +3,8 @@ import POSInterface, { type POSInterfaceProps, type V3OperationalPOSBoundary } f
 import type { BusinessConfig, Product } from '../types';
 import { getLargeMasterSyncV3OperationalSession, type LargeMasterSyncV3OperationalSession } from '../services/sync/LargeMasterSyncV3OperationalSession';
 import type { LargeMasterSyncV3OperationalCatalog } from '../services/sync/LargeMasterSyncV3OperationalCatalog';
+import { reconcileV3TariffSelection, v3TariffContextKey, isV3TariffContextCurrent,
+  type V3TariffSelection } from '../services/sync/LargeMasterSyncV3TariffSelection';
 
 /** Real POS, with a bounded native read boundary; never mounts a legacy fallback. */
 const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps> = props => {
@@ -20,14 +22,24 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps> = props => {
   latestProps.current = props;
   const terminal = props.config.terminals.find(row => row.id === props.activeTerminalId);
   const warehouseId = terminal?.config.inventoryScope?.defaultSalesWarehouseId || '';
-  const [tariffId, setTariffId] = useState(terminal?.config.pricing?.defaultTariffId || '');
-  const previousScope = useRef({ terminalId: props.activeTerminalId, warehouseId });
+  const authority = { terminalId: props.activeTerminalId || '', warehouseId,
+    defaultTariffId: terminal?.config.pricing?.defaultTariffId || '',
+    allowedTariffIds: terminal?.config.pricing?.allowedTariffIds || [] };
+  const authorityKey = v3TariffContextKey(authority);
+  const [selection, setSelection] = useState<V3TariffSelection>();
+  let reconciled: V3TariffSelection | undefined;
+  let authorityError = '';
+  try { reconciled = reconcileV3TariffSelection(selection, authority, props.cart.length > 0); }
+  catch (reason) { authorityError = String((reason as Error).message || reason); }
+  const tariffId = reconciled?.tariffId || '';
+  const wantedContextKey = JSON.stringify([authorityKey, tariffId]);
+  const latestContextKey = useRef(wantedContextKey);
+  latestContextKey.current = authorityError ? '' : wantedContextKey;
+  const [loadedContextKey, setLoadedContextKey] = useState('');
 
   useEffect(() => {
-    if (previousScope.current.terminalId !== props.activeTerminalId) {
-      setTariffId(terminal?.config.pricing?.defaultTariffId || '');
-    }
-  }, [props.activeTerminalId, terminal?.config.pricing?.defaultTariffId]);
+    if (!authorityError && reconciled && JSON.stringify(selection) !== JSON.stringify(reconciled)) setSelection(reconciled);
+  }, [authorityKey, tariffId, authorityError, selection]);
 
   useEffect(() => {
     let current = true;
@@ -37,21 +49,21 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps> = props => {
     setError('');
     ++querySequence.current;
     void (async () => {
-      if (latestProps.current.cart.length && (previousScope.current.terminalId !== props.activeTerminalId
-        || previousScope.current.warehouseId !== warehouseId)) throw new Error('SYNC_V3_CART_CONTEXT_CHANGED');
-      previousScope.current = { terminalId: props.activeTerminalId, warehouseId };
+      if (authorityError) throw new Error(authorityError);
       if (!warehouseId || !tariffId) throw new Error('SYNC_V3_CONFIGURED_TARIFF_WAREHOUSE_REQUIRED');
       const ready = await getLargeMasterSyncV3OperationalSession();
       const [config, source] = await Promise.all([ready.projectConfig(latestProps.current.config), ready.catalog(tariffId, warehouseId)]);
-      if (!current || context !== contextSequence.current) return;
+      if (!current || !isV3TariffContextCurrent(wantedContextKey, latestContextKey.current, context, contextSequence.current)) return;
+      if (!config.tariffs.some(row => row.id === tariffId)) throw new Error('SYNC_V3_TARIFF_UNAVAILABLE');
       catalog.current = source;
       setSession(ready);
       setProjected(config);
       setVisible([]);
       setCache([]);
-    })().catch(reason => { if (current) setError(String(reason.message || reason)); });
+      setLoadedContextKey(wantedContextKey);
+    })().catch(reason => { if (current && latestContextKey.current === wantedContextKey) setError(String(reason.message || reason)); });
     return () => { current = false; ++contextSequence.current; ++querySequence.current; };
-  }, [props.activeTerminalId, warehouseId, tariffId]);
+  }, [props.activeTerminalId, warehouseId, tariffId, authorityKey, authorityError]);
 
   const effectiveConfig = useMemo(() => projected ? { ...props.config,
     tariffs: projected.tariffs, taxes: projected.taxes, taxRate: projected.taxRate } : undefined,
@@ -67,11 +79,12 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps> = props => {
   }, []);
 
   const boundary = useMemo<V3OperationalPOSBoundary | undefined>(() => {
-    if (!session || !projected || !catalog.current) return undefined;
+    if (!session || !projected || !catalog.current || loadedContextKey !== wantedContextKey || authorityError) return undefined;
     const pinnedSource = catalog.current;
     const pinnedContext = contextSequence.current;
     const assertContext = () => {
       if (pinnedContext !== contextSequence.current || pinnedSource !== catalog.current) throw new Error('SYNC_V3_UI_CONTEXT_CHANGED');
+      if (latestContextKey.current !== wantedContextKey) throw new Error('SYNC_V3_UI_CONTEXT_CHANGED');
     };
     return {
     tariffId,
@@ -86,6 +99,7 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps> = props => {
       const items = await source.search(query, categoryId, 60);
       const rows = await session.withStocks(items.map(item => item.product), warehouseId);
       if (sequence !== querySequence.current || context !== contextSequence.current) return;
+      assertContext();
       remember(rows);
       setVisible(rows);
     },
@@ -102,6 +116,7 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps> = props => {
       if (!match) return null;
       const product = await session.withStock(match.item.product, warehouseId);
       if (context !== contextSequence.current || source !== catalog.current) throw new Error('SYNC_V3_UI_CONTEXT_CHANGED');
+      assertContext();
       remember([product]);
       return { product, quantity, price: match.variant?.price ?? product.price,
         modifiers: [], selectedVariant: match.variant || undefined,
@@ -114,22 +129,25 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps> = props => {
       assertContext();
     },
     changeTariff: id => {
+      assertContext();
       if (latestProps.current.cart.length) throw new Error('SYNC_V3_TARIFF_CHANGE_CART_NOT_EMPTY');
-      if (!projected.tariffs.some(row => row.id === id)) throw new Error('SYNC_V3_TARIFF_UNAVAILABLE');
+      if (!authority.allowedTariffIds.includes(id) || !projected.tariffs.some(row => row.id === id)) throw new Error('SYNC_V3_TARIFF_UNAVAILABLE');
       if (id === tariffId) return;
       ++contextSequence.current;
-      setTariffId(id);
+      latestContextKey.current = '';
+      setSelection({ ...authority, tariffId: id });
     },
-  }; }, [session, projected, tariffId, warehouseId, remember]);
+  }; }, [session, projected, tariffId, warehouseId, remember, loadedContextKey, wantedContextKey, authorityError]);
 
   useEffect(() => {
     if (!boundary || !props.cart.length) return;
     let current = true;
+    const expectedContext = wantedContextKey;
     void Promise.all([...new Set(props.cart.map(row => row.id))].map(async id => {
       const item = await catalog.current!.get(id);
       return item ? session!.withStock(item.product, warehouseId) : null;
-    })).then(rows => { if (current) remember(rows.filter((row): row is Product => row !== null)); })
-      .catch(reason => { if (current) setError(String(reason.message || reason)); });
+    })).then(rows => { if (current && latestContextKey.current === expectedContext) remember(rows.filter((row): row is Product => row !== null)); })
+      .catch(reason => { if (current && latestContextKey.current === expectedContext) setError(String(reason.message || reason)); });
     return () => { current = false; };
   }, [boundary, props.cart, remember, session, warehouseId, inventoryRevision]);
 
@@ -138,13 +156,18 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps> = props => {
       ++querySequence.current;
       setInventoryRevision(previous => previous + 1);
       if (boundary) void boundary.search(lastQuery.current.query, lastQuery.current.categoryId)
-        .catch(reason => setError(String(reason.message || reason)));
+        .catch(reason => { if (latestContextKey.current === wantedContextKey) setError(String(reason.message || reason)); });
     };
     window.addEventListener('v3InventoryUpdated', refresh);
     return () => window.removeEventListener('v3InventoryUpdated', refresh);
   }, [boundary]);
 
-  if (error) return <div role="alert" className="p-6 text-red-700">Candidato V3 detenido: {error}</div>;
+  if (authorityError || error) return <div role="alert" className="p-6 text-red-700">
+    <p>Candidato V3 detenido: {authorityError || error}</p>
+    <button type="button" onClick={() => props.onOpenSettings('SYNC')} className="mt-4 rounded bg-blue-600 px-4 py-2 text-white">
+      Abrir ajustes de sincronización
+    </button>
+  </div>;
   if (!projected || !boundary) return <div role="status" className="p-6">Preparando catálogo V3 e inventario del dispositivo vinculado…</div>;
   return <POSInterface {...props} config={effectiveConfig!} products={cache} productPrices={[]}
     v3Operational={boundary} catalogSearchProducts={visible}

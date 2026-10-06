@@ -71,9 +71,8 @@ test('explicit operational authority overrides stale defaults; omission is not e
   assert.equal(result.config.terminals[0].config.pricing.defaultTariffId, 'DUARTE');
   assert.deepEqual(result.config.terminals[0].config.pricing.allowedTariffIds, ['DUARTE', 'WHOLESALE']);
   assert.equal(result.config.terminals[0].config.inventoryScope?.defaultSalesWarehouseId, 'W');
-  const explicitEmpty = applyTerminalConfigSnapshot(config(), { terminalId, preserveOmittedOperationalScopes: true,
-    incomingSnapshot: { terminal_id: terminalId, resolved: { pricing: {} } } as any });
-  assert.equal(explicitEmpty.config.terminals[0].config.pricing.defaultTariffId, 'VILLA');
+  assert.throws(() => applyTerminalConfigSnapshot(config(), { terminalId, preserveOmittedOperationalScopes: true,
+    incomingSnapshot: { terminal_id: terminalId, resolved: { pricing: {} } } as any }), /SYNC_V3_TERMINAL_PRICING_INVALID/);
 });
 test('V2 default behavior continues to infer global pricing for omitted scopes', () => {
   const result = applyTerminalConfigSnapshot(config(), { terminalId,
