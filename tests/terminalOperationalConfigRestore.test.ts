@@ -81,6 +81,28 @@ test('V2 default behavior continues to infer global pricing for omitted scopes',
   assert.equal(result.config.terminals[0].config.pricing.defaultTariffId, 'VILLA');
 });
 
+for (const missingPricing of [false, true]) {
+  test(`V3 initial partial snapshot preserves absent optional scopes without synthetic defaults (pricing absent=${missingPricing})`, () => {
+    const base = getInitialConfig('Supermercado' as any);
+    const id = base.terminals[0].id;
+    delete base.terminals[0].config.inventoryScope;
+    delete base.inventoryScope;
+    if (missingPricing) {
+      delete (base.terminals[0].config as any).pricing;
+      delete (base as any).tariffs;
+    }
+    const before = structuredClone(base);
+    const result = applyTerminalConfigSnapshot(base, { terminalId: id,
+      incomingSnapshot: { terminal_id: id, resolved: { identity: { id }, role: {} } } as any,
+      preserveOmittedOperationalScopes: true });
+    assert.equal(result.config.terminals[0].config.inventoryScope, undefined);
+    assert.equal(result.config.inventoryScope, undefined);
+    assert.deepEqual(result.config.terminals[0].config.pricing, before.terminals[0].config.pricing);
+    assert.deepEqual(result.config.tariffs, before.tariffs);
+    assert.deepEqual(base, before);
+  });
+}
+
 for (const [incoming, previous, expected] of [[false, true, false], [true, false, true], [undefined, true, true], ['false', true, true]]) {
   test(`V3 operational policy boolean ${String(incoming)} preserves unrelated inventory workflow`, () => {
     const base = config(); base.terminals[0].config.workflow.inventory.allowNegativeStock = previous as boolean;
