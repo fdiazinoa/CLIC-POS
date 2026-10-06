@@ -35,5 +35,7 @@ test('both collection and terminal-manifest legacy routes enforce candidate auth
   assert.match(manager, /if \(!v3Authority\) \{[\s\S]*?this\.applySnapshotProducts/);
   assert.match(manager, /!v3Authority && requestedBlockScopes\?\.includes\('product_prices'\)/);
   assert.match(manager, /!v3Authority && requestedBlockScopes\?\.includes\('inventory'\)/);
-  assert.match(manager, /await prepareLargeMasterSyncV3Candidate\(dbAdapter\.masterSyncV3Store, v3BaseUrl\)/);
+  assert.match(manager, /await getLargeMasterSyncV3OperationalSession\(\)/);
+  assert.match(manager, /await getLargeMasterSyncV3OperationalSession\(true\)/);
+  assert.match(manager, /await session\.assertCurrent\(\)/);
 });

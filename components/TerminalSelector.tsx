@@ -1,4 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED } from '../services/sync/LargeMasterSyncV3Authority';
+import { largeMasterSyncV3DownloadOrigin } from '../services/sync/LargeMasterSyncV3DownloadOrigin';
 import { requestTerminalDeviceAuthorization, isDeviceRequestApproved, type DeviceRequestReceipt } from '../services/setup/terminalDeviceRequests';
 import { Capacitor } from '@capacitor/core';
 import {
@@ -156,6 +158,9 @@ interface BindTerminalResponse {
 }
 
 interface InitialConfigResponse {
+  bootstrapProtocol?: 'v3' | 'legacy';
+  masterSync?: Record<string, unknown>;
+  downloadOrigin?: string;
   success: boolean;
   tenant_id?: string;
   terminal_id?: string;
@@ -207,6 +212,9 @@ interface InitialConfigResponse {
 }
 
 interface BoundTerminalPayload {
+  bootstrapProtocol?: 'v3' | 'legacy';
+  masterSync?: Record<string, unknown>;
+  downloadOrigin?: string;
   terminalId: string;
   erpTerminalId?: string;
   terminalCode?: string;
@@ -1114,6 +1122,8 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
 
     try {
       let data: BindTerminalResponse | null = null;
+      const candidateV3 = LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED && expectsErpDirect && bindingMode === 'MASTER';
+      const downloadOrigin = candidateV3 ? largeMasterSyncV3DownloadOrigin() : undefined;
 
       if (expectsErpDirect && !erpBaseUrl) {
         throw new Error('No encontramos la URL base del ERP para completar la vinculación.');
@@ -1339,6 +1349,8 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
             tenantId: data.tenant_id || tenantId,
             erpTerminalId: erpTerminalIdForConfig,
             posDeviceId: deviceId,
+            candidateV3,
+            downloadOrigin,
           });
 
           const snapshot = extractTerminalConfigSnapshot(erpInitialConfigData);
@@ -1386,6 +1398,8 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
             tenantId: data.tenant_id || tenantId,
             erpTerminalId: initialConfigTerminalRef,
             posDeviceId: deviceId,
+            candidateV3,
+            downloadOrigin,
           });
 
           const snapshot = extractTerminalConfigSnapshot(erpInitialConfigData);
@@ -1515,7 +1529,8 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           initialConfigData.syncPermissions ||
           initialConfigData.sync_permissions ||
           syncProfile.syncPermissions;
-        const registerAuth = extractErpRegisterAuth(data, initialConfigData, initialConfigData.terminal_config);
+        const registerAuth = candidateV3 ? extractErpRegisterAuth(data)
+          : extractErpRegisterAuth(data, initialConfigData, initialConfigData.terminal_config);
         logRegisterResponseAuth(registerAuth);
         const normalizedDeviceToken = resolveNormalizedRegisterDeviceToken(
           data,
@@ -1595,6 +1610,9 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
         }
 
         await onBound({
+          bootstrapProtocol: initialConfigData.bootstrapProtocol,
+          masterSync: initialConfigData.masterSync,
+          downloadOrigin: initialConfigData.downloadOrigin,
           terminalId: resolvedTerminalId,
           erpTerminalId: resolvedErpTerminalId,
           terminalCode: resolvedTerminalCode,
