@@ -19,7 +19,7 @@ const candidate = { VITE_LARGE_MASTER_SYNC_V3_CANDIDATE: 'true', CLIC_POS_SIGNED
   VITE_LARGE_MASTER_SYNC_V3_BASE_URL: origin };
 
 test('operational V3 origin fails closed before canonical mutations without leaking rejected values', () => {
-  for (const value of [undefined, '', 'undefined', 'not-a-url', 'ftp://example.com', 'http://example.com',
+  for (const value of [undefined, '', '   ', 'undefined', 'not-a-url', 'ftp://example.com', 'http://example.com',
     'https://user:secret@example.com', `${origin}/api/sync`, `${origin}/?token=secret`, `${origin}/#secret`]) {
     const result = runPolicy({ ...candidate, VITE_LARGE_MASTER_SYNC_V3_BASE_URL: value });
     assert.equal(result.status, 1, value);
