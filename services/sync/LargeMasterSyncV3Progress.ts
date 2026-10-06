@@ -16,8 +16,12 @@ export const createV3Progress = () => {
   let snapshot: V3ProgressSnapshot = { phase: 'negotiation' };
   let latest = snapshot;
   let generation = 0;
-  const listeners = new Set<() => void>();
-  const notify = (listener: () => void) => { try { listener(); } catch { /* Observation cannot fail setup. */ } };
+  type Subscription = { listener: () => void; active: boolean };
+  const listeners = new Set<Subscription>();
+  const notify = (subscription: Subscription) => {
+    if (!subscription.active) return;
+    try { subscription.listener(); } catch { /* Observation cannot fail setup. */ }
+  };
   const publish = (next: V3ProgressSnapshot) => {
     latest = next;
     if (next.phase === snapshot.phase && next.dataset === snapshot.dataset && next.percent === snapshot.percent
@@ -29,8 +33,11 @@ export const createV3Progress = () => {
   return {
     getSnapshot: () => latest,
     getLatest: () => latest,
-    subscribe: (listener: () => void) => { listeners.add(listener); notify(listener);
-      return () => { listeners.delete(listener); }; },
+    subscribe: (listener: () => void) => {
+      const subscription = { listener, active: true };
+      listeners.add(subscription); notify(subscription);
+      return () => { subscription.active = false; listeners.delete(subscription); };
+    },
     begin: () => {
       const current = ++generation;
       publish({ phase: 'negotiation' });

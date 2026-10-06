@@ -167,6 +167,51 @@ test('cached explicit refresh reports its own verified/failure generation for co
   }
 });
 
+test('same-publication cleanup fences the removed registration even when its callback is resubscribed', () => {
+  for (const resubscribe of [false, true]) {
+    const progress = createV3Progress(); const attempt = progress.begin();
+    let armed = false; let rendered = 0; let renderedPhase = '';
+    let stopB = () => undefined;
+    const listenerB = () => { rendered++; renderedPhase = html(progress); };
+    const stopA = progress.subscribe(() => {
+      if (!armed) return;
+      armed = false; stopB();
+      if (resubscribe) stopB = progress.subscribe(listenerB);
+    });
+    stopB = progress.subscribe(listenerB);
+    rendered = 0; armed = true;
+    attempt.phase('inventory_save');
+    assert.equal(rendered, resubscribe ? 1 : 0,
+      'removed registration never runs; replacement receives only its immediate replay');
+    if (resubscribe) assert.match(renderedPhase, /Guardando inventario/);
+    attempt.phase('inventory_readback');
+    assert.equal(rendered, resubscribe ? 2 : 0, 'only the replacement observes subsequent publications');
+    stopA(); stopB();
+    attempt.phase('ready');
+    assert.equal(rendered, resubscribe ? 2 : 0, 'cleanup leaves no active listeners');
+  }
+});
+
+test('coordinator publication cleanup suppresses removed UI observer without changing preparation work', async () => {
+  let opens = 0; let checks = 0; let callbacksAfterStop = 0; let armed = false;
+  const get = createLargeMasterSyncV3SessionCoordinator(async (_refresh, metric) => {
+    opens++; metric?.({ event: 'setup_phase', phase: 'inventory_save' });
+    return { ...session, assertCurrent: async () => { checks++; } };
+  });
+  let stopB = () => undefined;
+  const stopA = get.progress.subscribe(() => {
+    if (armed) { armed = false; stopB(); }
+  });
+  stopB = get.progress.subscribe(() => { if (!armed) callbacksAfterStop++; html(get.progress); });
+  callbacksAfterStop = 0; armed = true;
+  await get();
+  assert.equal(callbacksAfterStop, 0);
+  assert.equal(opens, 1); assert.equal(checks, 1);
+  stopA(); stopB();
+  await get();
+  assert.equal(callbacksAfterStop, 0); assert.equal(opens, 1); assert.equal(checks, 2);
+});
+
 test('config/current failures never finish and preserve prior roster/role references', async () => {
   const users = [{ id: 'fixture' }]; const roles = [{ id: 'role' }];
   const config = { users, roles } as unknown as BusinessConfig;
