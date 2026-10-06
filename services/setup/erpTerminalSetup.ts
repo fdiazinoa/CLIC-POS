@@ -22,6 +22,7 @@ import {
 } from '../../utils/syncCapabilities';
 import { isDeviceExplicitlyAuthorizedByBootstrap } from '../../utils/terminalAuthorizationGuard';
 import { assertLargeMasterSyncV3Bootstrap, largeMasterSyncV3DownloadOrigin } from '../sync/LargeMasterSyncV3DownloadOrigin';
+import { isolateCandidateSetupConfig } from '../sync/LargeMasterSyncV3SetupCredentials';
 
 export interface RuntimeTerminalCard {
   id: string;
@@ -1842,6 +1843,7 @@ export const fetchInitialConfigFromErp = async (input: {
     if (!response.ok) throw new Error(`SYNC_V3_SETUP_HTTP_ERROR: ${response.status}`);
     payload = asObject(response.data);
     assertLargeMasterSyncV3Bootstrap(payload, input, downloadOrigin!);
+    payload = isolateCandidateSetupConfig(payload);
     configVersion = asString(payload.config_version || payload.configVersion) || null;
   } else if (getNetworkEngine() === 'capacitor-http') {
     const query = new URLSearchParams({

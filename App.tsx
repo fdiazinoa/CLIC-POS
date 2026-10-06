@@ -9,6 +9,8 @@ import { buildV3FrozenFiscalProviderTransaction } from './components/v3Operation
 import { getLargeMasterSyncV3OperationalSession } from './services/sync/LargeMasterSyncV3OperationalSession';
 import { assertLargeMasterSyncV3SetupContract, largeMasterSyncV3DownloadOrigin } from './services/sync/LargeMasterSyncV3DownloadOrigin';
 import { completeLargeMasterSyncV3Setup } from './services/sync/LargeMasterSyncV3SetupCompletion';
+import { forwardedSetupCredentialSource, isolateCandidateSetupConfig,
+  resolveSetupRegisterCredentials } from './services/sync/LargeMasterSyncV3SetupCredentials';
 import AutomaticRecoveryDialog from './components/AutomaticRecoveryDialog';
 import type { RecoveryCloseInput } from './services/recovery/RecoveryCloseController';
 import { originalProvenance } from './services/recovery/RecoveryRuntime';
@@ -429,7 +431,6 @@ import { markSyncDeviceTokenInvalid, persistSyncDeviceToken } from './services/s
 import {
   extractErpRegisterAuth,
   resolveIncomingSyncProfileFromRegister,
-  resolveNormalizedRegisterDeviceToken,
   resolveRegisterErpTerminalId,
   resolveRegisterTerminalCode,
 } from './services/sync/erpRegisterResponse';
@@ -8729,7 +8730,9 @@ const AppContent: React.FC = () => {
     const previousInitialTerminalConfig = localStorage.getItem('initial_terminal_config');
     const previousCatalogDiagnosticStatus = localStorage.getItem(CATALOG_SYNC_STATUS_KEY);
     try {
-      const setupResult = typeof pairingContext === 'object' && pairingContext !== null ? pairingContext : undefined;
+      const setupResult = incomingSetup && candidateV3Setup
+        ? { ...incomingSetup, boundConfig: isolateCandidateSetupConfig(incomingSetup.boundConfig) }
+        : typeof pairingContext === 'object' && pairingContext !== null ? pairingContext : undefined;
       const storedSetupMode = getStoredTerminalSetupMode();
       const resolvedMasterIp = typeof pairingContext === 'string' ? pairingContext : setupResult?.masterIp;
       const isLocalClientBinding = Boolean(resolvedMasterIp)
@@ -8829,8 +8832,8 @@ const AppContent: React.FC = () => {
         stepId: 'apply',
         message: 'Guardando configuración de terminal y permisos locales...',
       });
-      const setupRegisterAuth = extractErpRegisterAuth(
-        setupResult,
+      const { registerAuth: setupRegisterAuth, normalizedDeviceToken } = resolveSetupRegisterCredentials(
+        candidateV3Setup, candidateV3Setup ? forwardedSetupCredentialSource(setupResult) : setupResult,
         (setupResult as any)?.initialConfigData,
         (setupResult as any)?.terminal_config,
         setupResult.boundConfig?.metadata,
@@ -8840,11 +8843,6 @@ const AppContent: React.FC = () => {
         setupResult?.profile,
       );
       logRegisterResponseAuth(setupRegisterAuth);
-      const normalizedDeviceToken = resolveNormalizedRegisterDeviceToken(
-        setupResult,
-        (setupResult as any)?.initialConfigData,
-        setupRegisterAuth,
-      );
       const effectiveDeviceToken =
         normalizedDeviceToken
         || setupRegisterAuth.deviceToken

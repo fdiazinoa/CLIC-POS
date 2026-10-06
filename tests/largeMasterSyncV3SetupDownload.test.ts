@@ -11,6 +11,7 @@ Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: {
   removeItem: (key: string) => { storageWrites++; storage.delete(key); },
 } });
 const { fetchInitialConfigFromErp } = await import('../services/setup/erpTerminalSetup');
+const { extractErpRegisterAuth } = await import('../services/sync/erpRegisterResponse');
 
 const origin = 'https://clic-erp-production.up.railway.app';
 const input = { erpBaseUrl: 'https://clic-erp.clicsuite.com', tenantId: 'tenant-a',
@@ -187,4 +188,30 @@ test('native flag OFF keeps the auth-domain legacy GET and existing header contr
   assert.equal(calls[0].headers['X-POS-Capabilities'], undefined);
   assert.equal(calls[0].disableRedirects, undefined);
   assert.equal(result.items?.[0].id, 'legacy');
+});
+
+test('native and web candidate download strip nested POS credentials before handoff without credential writes', async () => {
+  for (const native of [false, true]) {
+    Capacitor.isNativePlatform = () => native;
+    Capacitor.getPlatform = () => native ? 'android' : 'web';
+    const payload = bootstrap();
+    Object.assign(payload.terminal_config.config, { deviceToken: 'malicious-download',
+      auth: { activationToken: 'malicious-auth' },
+      fiscal: { provider: { apiKey: 'legitimate-provider-key' } } });
+    Object.assign(payload.terminal_config, { metadata: { auth: { deviceToken: 'malicious-metadata' },
+      syncAuth: { syncToken: 'malicious-sync' } } });
+    const before = [...storage];
+    const writesBefore = storageWrites;
+    globalThis.fetch = (async () => Response.json(payload)) as typeof fetch;
+    setNativeRequestTransportForTests(async options => ({ status: 200, data: payload, headers: {}, url: options.url }));
+    const result = await fetchInitialConfigFromErp(input);
+    const auth = extractErpRegisterAuth(result, result.terminal_config);
+    assert.equal(auth.deviceToken, undefined);
+    assert.equal(auth.syncToken, undefined);
+    assert.equal(auth.activationToken, undefined);
+    assert.equal(result.terminal_config?.config.fiscal.provider.apiKey, 'legitimate-provider-key');
+    assert.deepEqual([...storage], before);
+    assert.equal(storageWrites, writesBefore);
+    assert.equal((payload.terminal_config.config as any).deviceToken, 'malicious-download');
+  }
 });

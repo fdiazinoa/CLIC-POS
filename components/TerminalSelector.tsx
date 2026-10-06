@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED } from '../services/sync/LargeMasterSyncV3Authority';
 import { largeMasterSyncV3DownloadOrigin } from '../services/sync/LargeMasterSyncV3DownloadOrigin';
+import { resolveSetupRegisterCredentials } from '../services/sync/LargeMasterSyncV3SetupCredentials';
 import { requestTerminalDeviceAuthorization, isDeviceRequestApproved, type DeviceRequestReceipt } from '../services/setup/terminalDeviceRequests';
 import { Capacitor } from '@capacitor/core';
 import {
@@ -30,7 +31,6 @@ import { markSyncDeviceTokenInvalid, persistSyncDeviceToken } from '../services/
 import { persistMasterNumberRangesFromSnapshot } from '../services/sync/MasterNumberRangeService';
 import {
   extractErpRegisterAuth,
-  resolveNormalizedRegisterDeviceToken,
   resolveRegisterErpTerminalId,
   resolveRegisterTerminalCode,
 } from '../services/sync/erpRegisterResponse';
@@ -1529,14 +1529,9 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           initialConfigData.syncPermissions ||
           initialConfigData.sync_permissions ||
           syncProfile.syncPermissions;
-        const registerAuth = candidateV3 ? extractErpRegisterAuth(data)
-          : extractErpRegisterAuth(data, initialConfigData, initialConfigData.terminal_config);
+        const { registerAuth, normalizedDeviceToken } = resolveSetupRegisterCredentials(candidateV3,
+          data, initialConfigData, initialConfigData.terminal_config);
         logRegisterResponseAuth(registerAuth);
-        const normalizedDeviceToken = resolveNormalizedRegisterDeviceToken(
-          data,
-          initialConfigData,
-          registerAuth,
-        );
         if (normalizedDeviceToken) {
           persistSyncDeviceToken(normalizedDeviceToken, 'ERP_REGISTER', registerAuth.tokenExpiresAt);
         }
