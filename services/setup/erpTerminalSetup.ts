@@ -1,4 +1,5 @@
 import { BusinessConfig, DeviceProfile, Product, TerminalConfig } from '../../types';
+import { DEFAULT_TERMINAL_CONFIG } from '../../constants';
 import { getDefaultRoleConfig, resolveDeviceRoleValue } from '../../utils/deviceRoleHelpers';
 import {
   extractErpRegisterAuth,
@@ -1205,6 +1206,34 @@ const createTerminalTemplate = (currentConfig: BusinessConfig, terminalId: strin
   }
 
   const nextTemplate = cloneDeep(template);
+  if (!existing) {
+    // A newly materialized ERP terminal must not inherit another box's policies
+    // or order cursor. Keep the surrounding hardware/runtime template intact.
+    const operational = asObject(nextTemplate.operational);
+    const defaults = asObject(DEFAULT_TERMINAL_CONFIG.operational);
+    for (const key of ['expandTicket', 'bloqueo_meseros', 'showGlobalSales',
+      'recibir_consignaciones', 'receiveConsignments', 'receive_consignments', 'descargar_consignaciones',
+      'reservationPolicy', 'deliveryAlerts', 'orderNumbers']) {
+      delete operational[key];
+      if (defaults[key] !== undefined) operational[key] = cloneDeep(defaults[key]);
+    }
+    operational.expandTicket = false;
+    operational.showGlobalSales = false;
+    operational.orderNumbers = { enabled: false };
+    nextTemplate.operational = operational as TerminalConfig['operational'];
+    const security = asObject(nextTemplate.security);
+    const securityDefaults = asObject(DEFAULT_TERMINAL_CONFIG.security);
+    for (const key of ['requirePinForVoid', 'requireManagerForVoid', 'requirePinForDiscount',
+      'requireManagerForDiscount', 'requireManagerForRefunds', 'allowBiometrics', 'biometricEnabled', 'clerkCanSeeOtherSales']) {
+      delete security[key];
+      if (securityDefaults[key] !== undefined) security[key] = securityDefaults[key];
+    }
+    nextTemplate.security = security as TerminalConfig['security'];
+    nextTemplate.ux = { ...nextTemplate.ux,
+      showProductImages: DEFAULT_TERMINAL_CONFIG.ux.showProductImages,
+      viewMode: DEFAULT_TERMINAL_CONFIG.ux.viewMode };
+    nextTemplate.startWithAgenda = false;
+  }
   const deviceBindingToken = asString(nextTemplate.deviceBindingToken) || `token-${terminalId}`;
 
   nextTemplate.deviceBindingToken = deviceBindingToken;
@@ -1928,6 +1957,9 @@ export const fetchInitialConfigFromErp = async (input: {
   const payloadOperational = asObject(payload?.operational);
   const terminalConfig: Record<string, any> = {
     ...asObject(payload?.terminal_config),
+    ...(payload?.ux !== undefined ? { ux: payload.ux } : {}),
+    ...(payload?.security !== undefined ? { security: payload.security } : {}),
+    ...(payload?.startWithAgenda !== undefined ? { startWithAgenda: payload.startWithAgenda } : {}),
     ...(Object.keys(payloadBusinessConfig).length > 0 ? { business_config: payloadBusinessConfig } : {}),
     ...(Object.keys(payloadOperational).length > 0 ? { operational: payloadOperational } : {}),
     ...(payload?.vertical_negocio !== undefined ? { vertical_negocio: payload.vertical_negocio } : {}),

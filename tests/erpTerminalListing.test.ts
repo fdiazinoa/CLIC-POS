@@ -11,11 +11,47 @@ Object.defineProperty(globalThis, 'localStorage', {
   },
 });
 
-const { getInitialConfig } = await import('../constants');
+const { getInitialConfig, DEFAULT_TERMINAL_CONFIG } = await import('../constants');
 const {
   materializeErpTerminalCards,
   prioritizeMappedErpTenantContext,
 } = await import('../services/setup/erpTerminalSetup');
+
+test('new ERP terminal uses its own preference defaults while existing terminal retains policy and counter', () => {
+  const currentConfig = structuredClone(getInitialConfig('Supermercado' as any));
+  currentConfig.terminals = [currentConfig.terminals[0]];
+  const existing = currentConfig.terminals[0];
+  existing.config.erpTerminalId = 'ERP-A';
+  existing.config.ux.showProductImages = false;
+  existing.config.ux.viewMode = 'RETAIL';
+  existing.config.startWithAgenda = true;
+  existing.config.operational.expandTicket = true;
+  existing.config.operational.showGlobalSales = true;
+  existing.config.operational.orderNumbers = { enabled: true, nextNumber: 109, prefix: 'A', padding: 4 };
+  existing.config.operational.reservationPolicy = { validityDays: 30, printCopies: 4, requireAdvance: true, minimumAdvancePercent: 50 };
+  existing.config.security.requirePinForVoid = false;
+  (existing.config.security as any).requireManagerForVoid = false;
+  const before = structuredClone(existing.config);
+  const cards = materializeErpTerminalCards({ currentConfig, posDeviceId: 'DEV-NEW', terminals: [
+    { id: 'ERP-A', terminal_code: 'POS-A' }, { id: 'ERP-B', terminal_code: 'POS-B' },
+  ] });
+  const a = cards.find(card => card.erpTerminalId === 'ERP-A')!.config;
+  const b = cards.find(card => card.erpTerminalId === 'ERP-B')!.config;
+  assert.deepEqual(a.operational.orderNumbers, before.operational.orderNumbers);
+  assert.equal(a.ux.showProductImages, false);
+  assert.equal(a.security.requirePinForVoid, false);
+  assert.equal(b.ux.showProductImages, true);
+  assert.equal(b.ux.viewMode, 'VISUAL');
+  assert.equal(b.startWithAgenda, false);
+  assert.equal(b.operational.expandTicket, false);
+  assert.equal(b.operational.showGlobalSales, false);
+  assert.deepEqual(b.operational.orderNumbers, { enabled: false });
+  assert.deepEqual(b.operational.reservationPolicy, DEFAULT_TERMINAL_CONFIG.operational.reservationPolicy);
+  assert.equal(b.security.requirePinForVoid, DEFAULT_TERMINAL_CONFIG.security.requirePinForVoid);
+  assert.equal((b.security as any).requireManagerForVoid, undefined);
+  assert.deepEqual(b.hardware, before.hardware);
+  assert.deepEqual(existing.config, before);
+});
 
 test('keeps occupied ERP terminals visible with their own operational codes', () => {
   const currentConfig = getInitialConfig('Supermercado' as any);
@@ -236,4 +272,28 @@ test('keeps Mast-01 and Slav-01 visible when ERP reuses POS-001 across terminal 
   assert.equal(terminals[1].config.deviceProfile?.formFactor, 'TABLET');
   assert.equal(terminals[1].config.deviceProfile?.touchOptimized, true);
   assert.equal(terminals[0].occupied, true);
+});
+
+test('initial ERP bootstrap carries root and nested UX/agenda into terminal snapshot application', async () => {
+  const { fetchInitialConfigFromErp } = await import('../services/setup/erpTerminalSetup');
+  const { terminalConfigRequestCoordinator } = await import('../services/sync/TerminalConfigRequestCoordinator');
+  const { applyTerminalConfigSnapshot } = await import('../utils/terminalConfigSnapshot');
+  const originalRequest = terminalConfigRequestCoordinator.request;
+  try {
+    for (const root of [true, false]) {
+      const preferences = { ux: { showProductImages: false, viewMode: 'RETAIL' }, startWithAgenda: true };
+      const payload = root
+        ? { terminal_config: { terminal_id: 'ERP-A', config: {} }, ...preferences }
+        : { terminal_config: { terminal_id: 'ERP-A', config: preferences } };
+      (terminalConfigRequestCoordinator as any).request = async () => ({ payload, configVersion: 'bootstrap-1', etag: null, unchanged: false });
+      const result = await fetchInitialConfigFromErp({ erpBaseUrl: 'https://erp.example.test', tenantId: 'tenant-test', erpTerminalId: 'ERP-A', posDeviceId: 'DEV-A' });
+      const config = structuredClone(getInitialConfig('Supermercado' as any));
+      const applied = applyTerminalConfigSnapshot(config, { terminalId: config.terminals[0].id, incomingSnapshot: result.terminal_config as any });
+      assert.equal(applied.config.terminals[0].config.ux.showProductImages, false);
+      assert.equal(applied.config.terminals[0].config.ux.viewMode, 'RETAIL');
+      assert.equal(applied.config.terminals[0].config.startWithAgenda, true);
+    }
+  } finally {
+    terminalConfigRequestCoordinator.request = originalRequest;
+  }
 });

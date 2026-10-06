@@ -718,6 +718,7 @@ export interface TerminalConfig {
     requireManagerForRefunds: boolean;
     autoLogoutMinutes: number;
     reduceSyncAfterMinutes?: number;
+    clerkCanSeeOtherSales?: boolean;
     allowBiometrics?: boolean; // NEW: Biometric Auth Toggle
   };
   pricing: {
