@@ -1,3 +1,4 @@
+import { applyLocalUserProfiles, LOCAL_USER_PROFILE_CHANGED } from './utils/localUserProfiles';
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { Capacitor } from '@capacitor/core';
@@ -799,7 +800,15 @@ const AppContent: React.FC = () => {
   };
 
   // --- DATA STORES ---
-  const [users, setUsers] = useState<User[]>([]);
+  const [users, setRawUsers] = useState<User[]>([]);
+  const setUsers: React.Dispatch<React.SetStateAction<User[]>> = useCallback((value) => {
+    setRawUsers(previous => applyLocalUserProfiles(typeof value === 'function' ? value(previous) : value));
+  }, []);
+  useEffect(() => {
+    const refreshProfiles = () => setUsers(previous => previous);
+    window.addEventListener(LOCAL_USER_PROFILE_CHANGED, refreshProfiles);
+    return () => window.removeEventListener(LOCAL_USER_PROFILE_CHANGED, refreshProfiles);
+  }, [setUsers]);
   const [roles, setRoles] = useState<RoleDefinition[]>(DEFAULT_ROLES);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
