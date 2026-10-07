@@ -24,7 +24,7 @@ const fixture = (failure?: string) => {
     getInventorySnapshotVersion: async () => { boundary('readInventory'); return inventory; },
   } as unknown as LargeMasterSyncV3Store;
   const dependencies: NonNullable<Parameters<typeof prepareLargeMasterSyncV3Candidate>[4]> = {
-    enabled: true, assertEmulator: () => undefined,
+    enabled: true, assertPlatform: () => undefined,
     createClient: () => ({
       requestSync: async () => { boundary('requestSync'); return { ...version, schemaVersion: 3,
         status: 'READY', manifestUrl: '/manifest' }; },

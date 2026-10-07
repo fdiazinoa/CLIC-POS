@@ -1,4 +1,4 @@
-import { assertLargeMasterSyncV3CanaryEmulator } from './LargeMasterSyncV3Canary';
+import { assertLargeMasterSyncV3NativeAndroid } from './LargeMasterSyncV3Platform';
 import { LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED } from './LargeMasterSyncV3Authority';
 import { createLargeMasterSyncV3BoundClient,
   readLargeMasterSyncV3BoundIdentity } from './LargeMasterSyncV3BoundTransport';
@@ -16,7 +16,7 @@ export { LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED } from './LargeMasterSyncV3Autho
 type CandidateClient = Pick<LargeMasterSyncV3Client, 'requestSync' | 'resumeSync'>;
 type CandidateDependencies = {
   enabled: boolean;
-  assertEmulator: () => void;
+  assertPlatform: () => void;
   createClient: (store: LargeMasterSyncV3Store, v3BaseUrl: string,
     metric?: (metric: LargeMasterSyncV3Metric) => void) => CandidateClient;
   fetchInventory: (signal?: AbortSignal) => Promise<LargeMasterSyncV3InventorySnapshot>;
@@ -26,7 +26,7 @@ type CandidateDependencies = {
 
 const defaultDependencies: CandidateDependencies = {
   enabled: LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED,
-  assertEmulator: assertLargeMasterSyncV3CanaryEmulator,
+  assertPlatform: assertLargeMasterSyncV3NativeAndroid,
   createClient: (store, v3BaseUrl, metric) =>
     createLargeMasterSyncV3BoundClient(store, v3BaseUrl, { metric }),
   fetchInventory: signal => fetchLargeMasterSyncV3Inventory(
@@ -55,7 +55,7 @@ export const prepareLargeMasterSyncV3Candidate = async (
 ): Promise<LargeMasterSyncV3CandidateReady> => {
   const phase = (phase: string) => { try { metric?.({ event: 'setup_phase', phase }); } catch { /* Observer only. */ } };
   if (!dependencies.enabled) throw new LargeMasterSyncV3Error('SYNC_V3_CANDIDATE_DISABLED');
-  dependencies.assertEmulator();
+  dependencies.assertPlatform();
   if (!store) throw new LargeMasterSyncV3Error('SYNC_V3_NATIVE_STORE_UNAVAILABLE');
   await dependencies.waitForOperationalWindow(signal);
   if (signal?.aborted) throw new DOMException('Request aborted', 'AbortError');

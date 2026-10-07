@@ -1,7 +1,8 @@
+import { assertLargeMasterSyncV3NativeAndroid } from './LargeMasterSyncV3Platform';
 import type { BusinessConfig, CartItem, Product, ProductVariant, TaxDefinition, V3SaleAuthorityStamp } from '../../types';
 import { dbAdapter } from '../db';
 import { LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED } from './LargeMasterSyncV3Authority';
-import { LARGE_MASTER_SYNC_V3_CANARY, assertLargeMasterSyncV3CanaryEmulator, validateLargeMasterSyncV3CanaryUrl } from './LargeMasterSyncV3Canary';
+import { LARGE_MASTER_SYNC_V3_CANARY, validateLargeMasterSyncV3CanaryUrl } from './LargeMasterSyncV3Canary';
 import { readLargeMasterSyncV3BoundIdentity, type LargeMasterSyncV3BoundIdentity } from './LargeMasterSyncV3BoundTransport';
 import { prepareLargeMasterSyncV3Candidate, type LargeMasterSyncV3CandidateReady } from './LargeMasterSyncV3Candidate';
 import { LargeMasterSyncV3Runtime } from './LargeMasterSyncV3Runtime';
@@ -40,7 +41,7 @@ export class LargeMasterSyncV3OperationalSession {
     if (!LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED || LARGE_MASTER_SYNC_V3_CANARY) {
       throw new LargeMasterSyncV3Error('SYNC_V3_OPERATIONAL_BUILD_REQUIRED');
     }
-    assertLargeMasterSyncV3CanaryEmulator();
+    assertLargeMasterSyncV3NativeAndroid();
     const v3BaseUrl = largeMasterSyncV3DownloadOrigin();
     const identity = readLargeMasterSyncV3BoundIdentity();
     const binding = v3BindingKey(identity, v3BaseUrl);
@@ -72,7 +73,7 @@ export class LargeMasterSyncV3OperationalSession {
   }
 
   async assertCurrent(): Promise<void> {
-    assertLargeMasterSyncV3CanaryEmulator();
+    assertLargeMasterSyncV3NativeAndroid();
     const current = readLargeMasterSyncV3BoundIdentity();
     if (v3BindingKey(current, this.v3BaseUrl) !== this.binding || current.syncToken !== this.identity.syncToken) {
       throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
