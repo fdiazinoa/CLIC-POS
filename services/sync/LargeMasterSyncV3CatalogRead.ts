@@ -73,7 +73,7 @@ export class LargeMasterSyncV3CatalogRead {
       || configured(this.getContext(), after).key !== this.scope.key) throw new LargeMasterSyncV3Error('SYNC_V3_CATALOG_CONTEXT_CHANGED');
   }
 
-  async page(request: Pick<V3CatalogPageRequest, 'query' | 'category' | 'afterId' | 'limit'>) {
+  async page(request: Pick<V3CatalogPageRequest, 'query' | 'category' | 'afterId' | 'limit' | 'departmentId' | 'sectionId' | 'familyId' | 'brandId' | 'categoryId'>) {
     await this.assertCurrent();
     const result = await this.runtime.readAdministrativeCatalogPage({ ...request, ...this.scope,
       inventoryVersion: this.inventory.version, inventoryCursor: this.inventory.cursor });
@@ -84,6 +84,7 @@ export class LargeMasterSyncV3CatalogRead {
       result.rows.map(row => row.id), this.scope.warehouseId) : {};
     await this.assertCurrent();
     return { ...result, rows: result.rows.map(row => ({ ...row,
+      stock: row.stock == null ? null : row.stock + (deltas[row.id] || 0),
       balance: row.balance === null ? null : row.balance + (deltas[row.id] || 0) })) };
   }
 }

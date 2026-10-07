@@ -147,10 +147,12 @@ export interface LargeMasterSyncV3Store {
 /** Administrative display only; never a sale/cart Product or availability authority. */
 export interface V3CatalogArticle {
   id: string; name: string; sku: string | null; barcode: string | null; categoryId: string | null;
-  active: boolean; sellable: boolean; type: string | null; price: number | null; balance: number | null;
+  active: boolean; sellable: boolean; type: string | null; price: number | null; balance: number | null; stock?: number | null;
 }
 export interface V3CatalogPageRequest {
-  query?: string; category?: 'ALL' | 'NONE'; afterId?: string | null; limit?: number;
+  query?: string; category?: 'ALL' | 'NONE';
+  departmentId?: string; sectionId?: string; familyId?: string; brandId?: string; categoryId?: string;
+  afterId?: string | null; limit?: number;
   tariffId: string; warehouseId: string; inventoryVersion: number; inventoryCursor: string;
 }
 export interface V3CatalogPage { rows: V3CatalogArticle[]; total: number; filteredTotal: number; nextCursor: string | null }

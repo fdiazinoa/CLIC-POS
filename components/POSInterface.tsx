@@ -2173,6 +2173,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [productForModifiers, setProductForModifiers] = useState<Product | null>(null);
    const [isReturnMode, setIsReturnMode] = useState(false);
    const [errorToast, setErrorToast] = useState<string | null>(null);
+   useEffect(() => {
+      if (!errorToast) return;
+      // Cover async V3 failures as well as handlers with their own short timer.
+      const timer = window.setTimeout(() => setErrorToast(null), 4500);
+      return () => window.clearTimeout(timer);
+   }, [errorToast]);
 
    const ensureSalesWithOpenZPermission = useCallback((): boolean => {
       const sessionStartDate = terminalTransactions[0]?.date;
@@ -7461,7 +7467,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-[100] animate-in slide-in-from-bottom-5 fade-in duration-300">
                <div className="bg-red-600 text-white px-6 py-4 rounded-2xl shadow-2xl flex items-center gap-3 font-bold border-2 border-red-400">
                   <AlertTriangle size={24} className="animate-pulse" />
-                  <span>{errorToast}</span>
+                  <span role="alert">{errorToast}</span>
+                  <button
+                     type="button"
+                     aria-label="Cerrar aviso"
+                     onClick={() => setErrorToast(null)}
+                     className="shrink-0 rounded-lg p-2 hover:bg-white/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-white"
+                  >
+                     <X size={20} />
+                  </button>
                </div>
             </div>
          )}

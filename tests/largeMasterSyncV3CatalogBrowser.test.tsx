@@ -172,7 +172,7 @@ test('real view and rendered component distinguish loading/error/zero/filtered/u
     const render=(state:any)=>renderToStaticMarkup(<V3CatalogPageView state={state}/>);
     assert.match(render({status:'loading'}),/role="status"/);assert.match(render({status:'error',error:'disk'}),/role="alert"/);
     assert.doesNotMatch(render({status:'error',error:'disk'}),/Todos \(0\)/);
-    assert.match(render({status:'ready',page}),/Sin precio/);assert.match(render({status:'ready',page}),/Desconocido/);
+    assert.match(render({status:'ready',page}),/Sin precio/);assert.doesNotMatch(render({status:'ready',page}),/Desconocido/);assert.match(render({status:'ready',page}),/<td>0<\/td>/);
     assert.match(render({status:'ready',page:{...page,total:0,rows:[]}}),/está vacío/);
     assert.match(render({status:'ready',page:{...page,filteredTotal:0,rows:[]}}),/Sin resultados/);
     const view=createV3CatalogView();let release!:(value:typeof page)=>void;
@@ -186,4 +186,26 @@ test('real view and rendered component distinguish loading/error/zero/filtered/u
     for(const kind of ['LAN','LOCAL','ERP_CLIENT','UNBOUND'])assert.equal(useV3CatalogBrowser(true,kind),false);
     assert.equal(useV3CatalogBrowser(true,'ERP_ACTIVE'),true);
   }finally{f.sql.close();}
+});
+
+
+test('classification filters combine in SQLite before count and keyset page, preserving warehouse stock', async () => {
+  const f=fixture();
+  try {
+    f.sql.prepare("UPDATE master_v3_articles SET family_id=?,category_id=?,record_json=? WHERE sync_version=2 AND article_id=?")
+      .run('F','C',JSON.stringify({departmentId:'D',sectionId:'S',brandId:'B'}),'P000000');
+    f.sql.prepare("UPDATE master_v3_inventory_balances SET qty_on_hand=12,qty_reserved=3,qty_committed=2 WHERE item_id='P000000' AND warehouse_id='W'").run();
+    const filters={departmentId:'D',sectionId:'S',familyId:'F',brandId:'B',categoryId:'C'};
+    for(const key of Object.keys(filters) as Array<keyof typeof filters>) {
+      const page=await f.store.readAdministrativeCatalogPage(version,{...f.request,[key]:filters[key]});
+      assert.equal(page.filteredTotal,1); assert.equal(page.rows[0].id,'P000000');
+    }
+    const page=await f.store.readAdministrativeCatalogPage(version,{...f.request,...filters});
+    assert.equal(page.filteredTotal,1); assert.equal(page.rows[0].stock,12); assert.equal(page.rows[0].balance,7);
+    const empty=await f.store.readAdministrativeCatalogPage(version,{...f.request,...filters,brandId:'missing'});
+    assert.equal(empty.filteredTotal,0); assert.equal(empty.rows.length,0);
+    const reader=await LargeMasterSyncV3CatalogRead.open(()=>f.context,f.deps);
+    assert.equal((await reader.page({...filters})).rows[0].stock,14);
+    assert.equal(f.writes(),0);
+  } finally {f.sql.close();}
 });
