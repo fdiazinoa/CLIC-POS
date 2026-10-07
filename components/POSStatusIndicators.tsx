@@ -33,5 +33,5 @@ export function TicketStatusControls({ status, children, className = '', ...attr
 }
 
 export function TicketTotalStatusRow({ status, children, className = '' }: { status?: React.ReactNode; children: React.ReactNode; className?: string }) {
-  return <div className={`${className} ${status ? 'supermarket-total-status-row' : ''}`}>{status}{children}</div>;
+  return <div className={`${className} ${status ? 'supermarket-total-status-row' : ''}`}>{children}{status}</div>;
 }
