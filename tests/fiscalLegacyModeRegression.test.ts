@@ -5,6 +5,7 @@ import test from 'node:test';
 import { DEFAULT_TERMINAL_CONFIG } from '../constants';
 import {
   getEffectiveFiscalComplianceConfig,
+  getFiscalComplianceConfig,
   isTerminalFiscalReceiptRequired,
   resolveTerminalFiscalMode,
 } from '../utils/fiscal/fiscalHelpers';
@@ -203,4 +204,29 @@ test('el modo NONE explícito continúa deshabilitando comprobantes fiscales', (
 test('el checkout contiene un fail-safe contra facturas fiscales sin NCF', () => {
   assert.match(posSource, /isTerminalFiscalReceiptRequired\(activeTerminalConfig\)/);
   assert.match(posSource, /La venta fue bloqueada para evitar una factura sin NCF/);
+});
+
+
+test('Caja 6 preserves explicit ECF with an unconfigured provider without enabling issuance', () => {
+  const terminal = buildLegacyTerminalConfig();
+  terminal.erpSnapshot.fiscalMode = 'ECF';
+  terminal.erpSnapshot.fiscal_mode = 'ECF';
+  terminal.erpSnapshot.config.fiscal.mode = 'ECF';
+  terminal.erpSnapshot.config.fiscal.fiscalMode = 'ECF';
+  const business = buildBusinessConfig(terminal);
+  business.fiscalCompliance.mode = 'NONE';
+  const effective = getEffectiveFiscalComplianceConfig(business, terminal);
+  assert.equal(effective.mode, 'ECF');
+  assert.equal(effective.defaultProvider, 'NONE');
+  assert.deepEqual(effective.providers, getFiscalComplianceConfig(business).providers);
+});
+
+test('ECF with disabled provider keeps policy but does not enable or select that provider', () => {
+  const terminal = buildLegacyTerminalConfig();
+  terminal.erpSnapshot = { fiscalMode: 'ECF' } as any;
+  terminal.fiscal.providerId = 'POLARIS';
+  terminal.fiscal.enabled = false;
+  const effective = getEffectiveFiscalComplianceConfig(buildBusinessConfig(terminal), terminal);
+  assert.equal(effective.mode, 'ECF');
+  assert.equal(effective.defaultProvider, 'NONE');
 });
