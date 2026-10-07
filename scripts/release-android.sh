@@ -17,6 +17,7 @@ V3_CANARY_ENABLED="${VITE_LARGE_MASTER_SYNC_V3_CANARY-false}"
 SIGNED_V3_CANARY_OPT_IN="${CLIC_POS_SIGNED_V3_CANARY-false}"
 V3_CANDIDATE_ENABLED="${VITE_LARGE_MASTER_SYNC_V3_CANDIDATE-false}"
 SIGNED_V3_CANDIDATE_OPT_IN="${CLIC_POS_SIGNED_V3_CANDIDATE-false}"
+PLAIN_VERSION_NAME="${CLIC_POS_RELEASE_PLAIN_VERSION_NAME-false}"
 
 fail() {
   echo "ERROR: $*" >&2
@@ -47,6 +48,12 @@ if [[ "${V3_CANDIDATE_ENABLED}" == "true" ]] && {
 }; then
   fail "El candidato V3 firmado no puede combinarse con otros modos diagnósticos."
 fi
+[[ "${PLAIN_VERSION_NAME}" == "true" || "${PLAIN_VERSION_NAME}" == "false" ]] \
+  || fail "CLIC_POS_RELEASE_PLAIN_VERSION_NAME debe ser true o false."
+if [[ "${PLAIN_VERSION_NAME}" == "true" && "${V3_CANDIDATE_ENABLED}" != "true" ]]; then
+  fail "El nombre sin sufijos requiere el modo operativo V3 explícito; no cambia la política de promoción."
+fi
+export CLIC_POS_RELEASE_PLAIN_VERSION_NAME="${PLAIN_VERSION_NAME}"
 # Explicit false overrides Vite dotenv files as well as caller environment.
 export VITE_LARGE_MASTER_SYNC_V3_CANARY="${V3_CANARY_ENABLED}"
 export VITE_LARGE_MASTER_SYNC_V3_CANDIDATE="${V3_CANDIDATE_ENABLED}"
@@ -333,7 +340,7 @@ fi
 if [[ "${V3_CANARY_ENABLED}" == "true" ]]; then
   ARTIFACT_VERSION_NAME="${VERSION_NAME}-canary"
 fi
-if [[ "${V3_CANDIDATE_ENABLED:-false}" == "true" ]]; then
+if [[ "${V3_CANDIDATE_ENABLED:-false}" == "true" && "${PLAIN_VERSION_NAME:-false}" != "true" ]]; then
   ARTIFACT_VERSION_NAME="${VERSION_NAME}-v3-candidate"
 fi
 
@@ -432,6 +439,7 @@ const operationalV3Candidate = process.env.VITE_LARGE_MASTER_SYNC_V3_CANDIDATE =
 const signedV3Canary = process.env.VITE_LARGE_MASTER_SYNC_V3_CANARY === 'true';
 Object.assign(metadata, {
   sourceCommit, operationalV3Candidate, signedV3Canary,
+  plainVersionName: process.env.CLIC_POS_RELEASE_PLAIN_VERSION_NAME === 'true',
   downloadOrigin: operationalV3Candidate ? process.env.VITE_LARGE_MASTER_SYNC_V3_BASE_URL : null,
   signedV3CandidateOptIn: process.env.CLIC_POS_SIGNED_V3_CANDIDATE === 'true',
   signedV3CanaryOptIn: process.env.CLIC_POS_SIGNED_V3_CANARY === 'true',
@@ -474,6 +482,7 @@ signedV3Canary=${V3_CANARY_ENABLED}
 signedV3CanaryOptIn=${SIGNED_V3_CANARY_OPT_IN}
 canaryNonPromotable=${V3_CANARY_ENABLED}
 operationalV3Candidate=${V3_CANDIDATE_ENABLED}
+plainVersionName=${PLAIN_VERSION_NAME}
 downloadOrigin=${V3_DOWNLOAD_ORIGIN}
 downloadOriginVerified=$([[ "${V3_CANDIDATE_ENABLED}" == "true" ]] && echo true || echo not-applicable)
 signedV3CandidateOptIn=${SIGNED_V3_CANDIDATE_OPT_IN}

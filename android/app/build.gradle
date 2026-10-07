@@ -15,12 +15,17 @@ def v3Canary = System.getenv('VITE_LARGE_MASTER_SYNC_V3_CANARY') == 'true'
 def signedV3CanaryOptIn = System.getenv('CLIC_POS_SIGNED_V3_CANARY') == 'true'
 def v3Candidate = System.getenv('VITE_LARGE_MASTER_SYNC_V3_CANDIDATE') == 'true'
 def signedV3CandidateOptIn = System.getenv('CLIC_POS_SIGNED_V3_CANDIDATE') == 'true'
+def plainVersionName = System.getenv('CLIC_POS_RELEASE_PLAIN_VERSION_NAME') == 'true'
 
 if (gradle.startParameter.taskNames.any { it.toLowerCase().contains('release') }) {
     ['VITE_LARGE_MASTER_SYNC_V3_CANARY', 'CLIC_POS_SIGNED_V3_CANARY',
-     'VITE_LARGE_MASTER_SYNC_V3_CANDIDATE', 'CLIC_POS_SIGNED_V3_CANDIDATE'].each { name ->
+     'VITE_LARGE_MASTER_SYNC_V3_CANDIDATE', 'CLIC_POS_SIGNED_V3_CANDIDATE',
+     'CLIC_POS_RELEASE_PLAIN_VERSION_NAME'].each { name ->
         def value = System.getenv(name) == null ? 'false' : System.getenv(name)
         if (!(value in ['true', 'false'])) throw new GradleException("${name} debe ser true o false.")
+    }
+    if (plainVersionName && !v3Candidate) {
+        throw new GradleException('El nombre sin sufijos requiere el modo operativo V3 explícito; no cambia la política de promoción.')
     }
     if (v3Candidate != signedV3CandidateOptIn) {
         throw new GradleException('El release candidato V3 requiere ambas banderas coincidentes.')
@@ -85,7 +90,7 @@ android {
     buildTypes {
         release {
             if (v3Canary && signedV3CanaryOptIn) versionNameSuffix '-canary'
-            if (v3Candidate && signedV3CandidateOptIn) versionNameSuffix '-v3-candidate'
+            if (v3Candidate && signedV3CandidateOptIn && !plainVersionName) versionNameSuffix '-v3-candidate'
             if (diagnosticBuild) versionNameSuffix '-diagnostic'
             if (webviewProfileQa) versionNameSuffix '-profile'
             if (tableLatencyQa) versionNameSuffix '-tableqa'

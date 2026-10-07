@@ -164,3 +164,21 @@ El script:
 3. Subir **una** versión coherente (`versionCode` / `versionName`).
 4. Ejecutar el flujo de compilación (paso 6).
 5. Verificar APK, firma (paso 7) y que `build.gradle` + `output-metadata.json` reflejan la misma versión.
+
+### Nombre de versión sin sufijos en modo operativo V3
+
+`CLIC_POS_RELEASE_PLAIN_VERSION_NAME=true` omite únicamente el sufijo de nombre
+`-v3-candidate` cuando ambas banderas operativas V3 están explícitamente activadas.
+El valor por defecto es `false`; valores distintos de `true`/`false` se rechazan.
+No cambia la autoridad de sincronización, el origen V3 explícito, las puertas de
+QA ni la política de promoción: metadata y reporte conservan el modo operativo
+V3 y `nonpromotable=true`. Un nombre normal no acredita promoción a producción.
+
+```bash
+CLIC_POS_RELEASE_LAN_HTTP_ENABLED=true \
+VITE_LARGE_MASTER_SYNC_V3_CANDIDATE=true \
+CLIC_POS_SIGNED_V3_CANDIDATE=true \
+CLIC_POS_RELEASE_PLAIN_VERSION_NAME=true \
+VITE_LARGE_MASTER_SYNC_V3_BASE_URL=https://clic-erp-production.up.railway.app \
+./scripts/release-android.sh <commit-fuente>
+```
