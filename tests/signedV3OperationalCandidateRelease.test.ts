@@ -99,7 +99,7 @@ test('actual packaged candidate identity matches canonical filename and advances
   assert.match(gradle, /if \(v3Candidate && v3Canary\)/);
   assert.match(gradle, /v3Candidate && \['CLIC_POS_DIAGNOSTICS', 'CLIC_POS_WEBVIEW_PROFILE', 'CLIC_POS_TABLE_LATENCY_QA'\]\.any/);
   assert.match(gradle, /value in \['true', 'false'\]/);
-  assert.match(gradle, /if \(v3Candidate && signedV3CandidateOptIn\) versionNameSuffix '-v3-candidate'/);
+  assert.match(gradle, /if \(v3Candidate && signedV3CandidateOptIn && !plainVersionName\) versionNameSuffix '-v3-candidate'/);
   const start = script.indexOf('if [[ "${SOURCE_VERSION_CODE}" == "${NEXT_VERSION_CODE}"');
   const end = script.indexOf('info "Fuente del release:', start);
   const result = spawnSync('bash', ['-c', `set -eu\n${script.slice(start, end)}\nprintf '%s|%s' "$VERSION_NAME" "$ARTIFACT_VERSION_NAME"`], {
