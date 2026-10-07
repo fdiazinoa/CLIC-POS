@@ -7967,16 +7967,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            <UserCheck size={20} />
                            <span>Vendedor</span>
                         </button>
-                        {canParkDirectSale && (
-                           <button
-                              type="button"
-                              onClick={() => handleGridAction('SAVE')}
-                              className="flex h-16 items-center justify-center gap-2 rounded-xl border border-orange-400 bg-orange-500 px-3 text-sm font-black uppercase tracking-wide text-white shadow-sm shadow-orange-500/25 transition-all hover:bg-orange-600 active:scale-95"
-                           >
-                              <Save size={20} />
-                              <span>Guardar</span>
-                           </button>
-                        )}
                         </div>
                      </div>
 
@@ -8311,6 +8301,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   )}
 
                   <TicketStatusControls className="ml-auto flex shrink-0 items-center justify-end gap-1" status={isRetailMode ? <FiscalStatusBadge compact visible={!isOrderTakerMode && !isFiscalModeDisabled} allowed={canCheckoutWithFiscalPolicy} status={fiscalStatus} /> : undefined}>
+                     {canParkDirectSale && (
+                        <button
+                           type="button"
+                           onClick={() => handleGridAction('SAVE')}
+                           aria-label="Guardar ticket"
+                           title="Guardar ticket"
+                           className="flex h-12 w-12 shrink-0 items-center justify-center rounded-[1.05rem] border border-orange-400 bg-orange-500 text-white shadow-sm shadow-orange-500/25 transition-all hover:bg-orange-600 active:scale-95"
+                        >
+                           <Save size={20} />
+                        </button>
+                     )}
                      {cart.length > 0 && (
                         <button
                            onClick={handleClearFreshCartItems}
