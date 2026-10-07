@@ -8199,7 +8199,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
             {/* DESKTOP: marca + mesa/comensales bajo el logo; retail: busqueda al centro; botones carrito/acciones alineados a la derecha (como APK 1.0.300) */}
             <div className={`pos-ticket-heading ${isMobile ? 'hidden' : 'flex'} px-5 py-3 border-b border-gray-100 bg-gray-50/50 flex-col gap-3 shrink-0 flex-none ${activeTable ? 'border-l-4 border-l-blue-500' : ''}`} >
-               <div data-testid="desktop-ticket-toolbar" className={`flex w-full items-center justify-between gap-1 ${isRetailMode ? 'supermarket-ticket-toolbar' : ''}`}>
+               <div data-testid="desktop-ticket-toolbar" className={`flex w-full flex-wrap items-center justify-between gap-1 ${isRetailMode ? 'supermarket-ticket-toolbar' : ''}`}>
                   <div className="flex min-w-0 shrink-0 items-center justify-start">
                      {renderTicketBrand(!isRetailMode)}
                   </div>

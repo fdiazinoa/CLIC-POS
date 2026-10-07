@@ -38,3 +38,8 @@ test('Guardar permanece condicionado en toolbar desktop y conserva el handler; c
   assert.match(toolbar, /flex h-12 w-12 shrink-0/);
   assert.ok(posSource.slice(0, gridStart).includes("onClick={() => handleGridAction('SAVE')}"));
 });
+
+
+test('desktop toolbar wraps intact controls below branding rather than overflowing narrow sidebar', () => {
+  assert.match(posSource, /data-testid="desktop-ticket-toolbar" className=\{`flex w-full flex-wrap items-center/);
+});
