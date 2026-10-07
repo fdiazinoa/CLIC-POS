@@ -39,7 +39,7 @@ const fixture = () => {
   const runtime = { version } as LargeMasterSyncV3Runtime;
   const dependencies: NonNullable<Parameters<typeof prepareLargeMasterSyncV3Candidate>[4]> = {
     enabled: true,
-    assertEmulator: () => { calls.push('assertEmulator'); },
+    assertPlatform: () => { calls.push('assertPlatform'); },
     createClient: () => {
       calls.push('createClient');
       return {
@@ -70,7 +70,7 @@ test('candidate prepares one V3 catalog and separate empty inventory before expo
     undefined, undefined, dependencies), {
     runtime, inventoryVersion: 5, inventoryCursor: 'inventory-5',
   });
-  assert.deepEqual(calls, ['assertEmulator', 'waitForWindow', 'createClient', 'requestSync', 'findIncomplete',
+  assert.deepEqual(calls, ['assertPlatform', 'waitForWindow', 'createClient', 'requestSync', 'findIncomplete',
     'resumeSync', 'fetchInventory', 'waitForWindow', 'replaceInventory', 'readInventory', 'openRuntime']);
 });
 
@@ -82,7 +82,7 @@ test('candidate rejects ERP legacy fallback without opening the store', async ()
   });
   await assert.rejects(() => prepareLargeMasterSyncV3Candidate(store, 'https://railway.example.test',
     undefined, undefined, dependencies), /SYNC_V3_LEGACY_FALLBACK_REJECTED/);
-  assert.deepEqual(calls, ['assertEmulator', 'waitForWindow']);
+  assert.deepEqual(calls, ['assertPlatform', 'waitForWindow']);
 });
 
 test('candidate preserves incompatible staging and never loads legacy masters', async () => {
@@ -91,7 +91,7 @@ test('candidate preserves incompatible staging and never loads legacy masters', 
     syncVersion: 185, status: 'STAGING', datasets: [], chunks: [] });
   await assert.rejects(() => prepareLargeMasterSyncV3Candidate(store, 'https://railway.example.test',
     undefined, undefined, dependencies), /SYNC_V3_STAGING_CONFLICT/);
-  assert.deepEqual(calls, ['assertEmulator', 'waitForWindow', 'createClient', 'requestSync']);
+  assert.deepEqual(calls, ['assertPlatform', 'waitForWindow', 'createClient', 'requestSync']);
 });
 
 test('candidate does not report ready if inventory fetch or persistence fails', async () => {
@@ -168,13 +168,13 @@ test('manual confirmation interaction waits for the real activity event before p
     const f = realGateFixture();
     const pending = prepareLargeMasterSyncV3Candidate(f.store, 'https://railway.example.test', undefined, undefined, f.dependencies);
     await turn();
-    assert.deepEqual(f.calls, ['assertEmulator', 'waitForWindow']);
+    assert.deepEqual(f.calls, ['assertPlatform', 'waitForWindow']);
     assert.equal(listeners.size, 1);
     now += 5025;
     for (const callback of timers.values()) callback();
     timers.clear();
     await pending;
-    assert.deepEqual(f.calls, ['assertEmulator', 'waitForWindow', 'assertCanRefresh', 'createClient',
+    assert.deepEqual(f.calls, ['assertPlatform', 'waitForWindow', 'assertCanRefresh', 'createClient',
       'requestSync', 'findIncomplete', 'resumeSync', 'fetchInventory', 'waitForWindow',
       'replaceInventory', 'readInventory', 'openRuntime']);
     assert.equal(listeners.size, 0);
@@ -200,12 +200,12 @@ for (const held of ['nested payment/print', 'cart', 'baseline reservation']) {
     const pending = prepareLargeMasterSyncV3Candidate(f.store, 'https://railway.example.test', undefined, undefined, f.dependencies);
     try {
       await turn();
-      assert.deepEqual(f.calls, ['assertEmulator', 'waitForWindow']);
+      assert.deepEqual(f.calls, ['assertPlatform', 'waitForWindow']);
       if (held === 'nested payment/print') {
         setLargeMasterSyncV3CriticalOperation('PAYMENT', false);
         setLargeMasterSyncV3CriticalOperation('PRINT', false);
         await turn();
-        assert.deepEqual(f.calls, ['assertEmulator', 'waitForWindow']);
+        assert.deepEqual(f.calls, ['assertPlatform', 'waitForWindow']);
         setLargeMasterSyncV3CriticalOperation('PAYMENT', false);
       } else if (held === 'cart') {
         setPosSaleActivity({ active: false });
@@ -243,7 +243,7 @@ for (const timing of ['before', 'during', 'at release']) {
       if (timing === 'at release') setLargeMasterSyncV3CriticalOperation('PAYMENT', false);
       controller.abort();
       await rejected;
-      assert.deepEqual(f.calls, ['assertEmulator', 'waitForWindow']);
+      assert.deepEqual(f.calls, ['assertPlatform', 'waitForWindow']);
       assert.equal(tracked.size, 0);
     } finally { resetLargeMasterSyncV3OperationGateForTests(); await rejected; }
   });
@@ -257,7 +257,7 @@ test('abort after the idle gate resolved but before candidate continuation preve
     controller.signal, f.dependencies);
   controller.abort();
   await assert.rejects(pending, { name: 'AbortError' });
-  assert.deepEqual(f.calls, ['assertEmulator', 'waitForWindow']);
+  assert.deepEqual(f.calls, ['assertPlatform', 'waitForWindow']);
 });
 
 test('real SQLite preflight still rejects an acknowledged V3 inventory movement before any network request', async () => {
@@ -275,7 +275,7 @@ test('real SQLite preflight still rejects an acknowledged V3 inventory movement 
   try {
     await assert.rejects(prepareLargeMasterSyncV3Candidate(store, 'https://railway.example.test', undefined, undefined, f.dependencies),
       /SYNC_V3_INVENTORY_COVERAGE_REQUIRED/);
-    assert.deepEqual(f.calls, ['assertEmulator', 'waitForWindow']);
+    assert.deepEqual(f.calls, ['assertPlatform', 'waitForWindow']);
     assert.equal(sql.prepare('SELECT COUNT(*) AS count FROM documents').get()?.count, 1);
   } finally { sql.close(); }
 });
@@ -296,7 +296,7 @@ test('activity reintroduced after the initial wait remains rejected by the real 
   };
   try {
     await assert.rejects(prepareLargeMasterSyncV3Candidate(store, 'https://railway.example.test', undefined, undefined, f.dependencies), /OPERATIONAL_WINDOW_HELD/);
-    assert.deepEqual(f.calls, ['assertEmulator', 'waitForWindow']);
+    assert.deepEqual(f.calls, ['assertPlatform', 'waitForWindow']);
   } finally { resetLargeMasterSyncV3OperationGateForTests(); sql.close(); }
 });
 
