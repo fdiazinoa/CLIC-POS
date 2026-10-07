@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { User, RoleDefinition, Shift, TimeRecord, ZReportModule } from '../types';
 import { AVAILABLE_PERMISSIONS } from '../constants';
+import LocalUserProfileModal from './LocalUserProfileModal';
 import { biometricService } from '../services/BiometricAuthService';
 import { resolveTeamHubTabs, TeamHubMode, TeamHubTab } from '../utils/teamHubAccess';
 import { normalizeSalesPercent } from '../utils/userSalesPolicy';
@@ -138,6 +139,8 @@ const TeamHub: React.FC<TeamHubProps> = ({
    // Roles State
    const [editingRole, setEditingRole] = useState<RoleDefinition | null>(null);
    const [roleSaveStatus, setRoleSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
+
+   const [localProfileUser, setLocalProfileUser] = useState<User | null>(null);
 
    // Users Management State
    const [isUserModalOpen, setIsUserModalOpen] = useState(false);
@@ -404,6 +407,8 @@ const TeamHub: React.FC<TeamHubProps> = ({
    return (
       <div className="h-screen w-full bg-gray-100 flex flex-col overflow-hidden animate-in fade-in">
 
+         {localProfileUser && <LocalUserProfileModal user={localProfileUser} onClose={() => setLocalProfileUser(null)} />}
+
          {/* Header Tabs */}
          <div className="bg-white border-b border-gray-200 px-4 md:px-6 pt-4 md:pt-5 pb-0 shrink-0">
             <div className="mb-2 flex items-center gap-3">
@@ -568,6 +573,9 @@ const TeamHub: React.FC<TeamHubProps> = ({
                                     </div>
                                  )}
                               </div>
+                              <button onClick={() => setLocalProfileUser(user)} className="mb-3 w-full py-3 text-indigo-700 bg-indigo-50 rounded-xl font-bold text-sm flex items-center justify-center gap-2">
+                                 <Fingerprint size={18} /> Foto y huella local
+                              </button>
                               <div className="flex items-center gap-2 text-xs text-gray-400 font-mono bg-gray-50 p-2 rounded-lg">
                                  <Lock size={12} /><span>PIN: ••••</span>
                               </div>
