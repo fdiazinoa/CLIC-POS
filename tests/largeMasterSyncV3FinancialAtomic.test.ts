@@ -210,7 +210,18 @@ test('real batch builder preserves enabled sale/payment events in same commit an
     const sale = { ...module.transaction('sale'), customerId: undefined,
       payments: [{ id: 'payment', method: 'CASH', amount: 118, timestamp: '2026-10-05T00:00:00Z' }] };
     const entries = [{ transaction: refund, options: { refund: true } }, { transaction: sale }];
-    await module.persistV3FinancialBatch(entries, {} as BusinessConfig, 'W');
+    // Older Android WebViews expose secure getRandomValues but no randomUUID.
+    const originalUuid = Object.getOwnPropertyDescriptor(globalThis.crypto, 'randomUUID');
+    Object.defineProperty(globalThis.crypto, 'randomUUID', { value: undefined, configurable: true });
+    try {
+      await module.persistV3FinancialBatch(entries, {} as BusinessConfig, 'W');
+    } finally {
+      if (originalUuid) Object.defineProperty(globalThis.crypto, 'randomUUID', originalUuid);
+      else delete (globalThis.crypto as Partial<Crypto>).randomUUID;
+    }
+    const eventIds = f.sql.prepare('SELECT event_id FROM sync_outbox_v2').all();
+    assert.equal(new Set(eventIds.map(row => row.event_id)).size, 2);
+    for (const row of eventIds) assert.match(String(row.event_id), /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
     const events = f.sql.prepare('SELECT event_type FROM sync_outbox_v2 ORDER BY local_sequence').all();
     assert.deepEqual(events.map(row => row.event_type), ['SALE_POSTED', 'PAYMENT_POSTED']);
     f.sql.prepare("DELETE FROM documents WHERE collection_name='transactions' AND doc_id='refund'").run();
