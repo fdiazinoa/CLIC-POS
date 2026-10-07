@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import React from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { SyncStatusBadge } from '../components/POSStatusIndicators';
 
 const storage = new Map<string, string>();
 Object.defineProperty(globalThis, 'localStorage', {
@@ -119,7 +122,14 @@ test('blocked Z reports remain visible in the synchronization indicators', () =>
 
   assert.match(backgroundSource, /blockedCount \+= data\.filter/);
   assert.match(backgroundSource, /'BLOCKED_FUNCTIONAL', 'ERROR', 'FAILED_FINAL'/);
-  assert.match(posSource, /`Bloqueado · \$\{syncState\.blockedCount\}`/);
+  assert.match(posSource, /<SyncStatusBadge online=\{navigator.onLine\} state=\{syncState\}/);
+  const blockedIndicator = renderToStaticMarkup(React.createElement(SyncStatusBadge, {
+    online: true,
+    state: { blockedCount: 2, pendingCount: 3, hasError: false },
+  }));
+  assert.match(blockedIndicator, /role="status"/);
+  assert.match(blockedIndicator, />Bloqueado · 2</);
+  assert.doesNotMatch(blockedIndicator, />Online · 3</);
   assert.match(settingsSource, /documento\(s\) bloqueado\(s\)/);
 });
 
