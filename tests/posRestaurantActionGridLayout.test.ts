@@ -20,8 +20,8 @@ test('la botonera completa elimina encabezados visuales y conserva grupos accesi
   assert.doesNotMatch(restaurantActionGrid, />\s*Caja\s*<\/div>/);
 });
 
-test('las doce acciones usan botones, texto e iconos ampliados', () => {
-  assert.equal(restaurantActionGrid.match(/flex h-16 items-center/g)?.length, 12);
-  assert.equal(restaurantActionGrid.match(/size=\{20\}/g)?.length, 12);
-  assert.equal(restaurantActionGrid.match(/px-3 text-sm font-black/g)?.length, 12);
+test('las trece acciones usan botones, texto e iconos ampliados', () => {
+  assert.equal(restaurantActionGrid.match(/flex h-16 items-center/g)?.length, 13);
+  assert.equal(restaurantActionGrid.match(/size=\{20\}/g)?.length, 13);
+  assert.equal(restaurantActionGrid.match(/px-3 text-sm font-black/g)?.length, 13);
 });
