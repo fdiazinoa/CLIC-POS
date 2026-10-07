@@ -1,3 +1,4 @@
+import type { V3CategoryFilter } from './LargeMasterSyncV3Categories';
 import type { Product, ProductOperationalFlags, ProductVariant, TaxDefinition,
   V3SaleAuthorityStamp } from '../../types';
 import type { LargeMasterSyncV3CandidateReady } from './LargeMasterSyncV3Candidate';
@@ -160,7 +161,9 @@ export class LargeMasterSyncV3OperationalCatalog {
     return { product, taxes, authority };
   }
 
-  async search(query: string, categoryId?: string | null, limit = 60): Promise<V3OperationalProduct[]> {
+  categories() { return this.saleCatalog.categories(); }
+
+  async search(query: string, categoryId?: V3CategoryFilter, limit = 60): Promise<V3OperationalProduct[]> {
     await this.assertInventoryVersion();
     const sales = await this.saleCatalog.search(query, categoryId, limit);
     const supports = await this.ready.runtime.getOperationalSupports(sales.map(sale => stringValue(sale.article.id)), this.warehouseId);
