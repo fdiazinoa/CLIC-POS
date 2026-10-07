@@ -1,3 +1,5 @@
+import { normalizeV3CategoryKey } from '../sync/LargeMasterSyncV3Categories';
+
 export const LARGE_MASTER_SYNC_V3_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS sync_v3_sessions (
   sync_id TEXT PRIMARY KEY NOT NULL,
@@ -67,6 +69,8 @@ CREATE TABLE IF NOT EXISTS master_v3_articles (
   active INTEGER NOT NULL,
   sellable INTEGER NOT NULL DEFAULT 1,
   record_json TEXT,
+  pos_category_key TEXT,
+  pos_category_label TEXT,
   PRIMARY KEY (sync_version, article_id)
 );
 CREATE INDEX IF NOT EXISTS idx_master_v3_articles_version_sku
@@ -161,6 +165,8 @@ const CONTRACT_V2_COLUMNS = [
   ['sync_v3_sessions', 'contract_version', 'INTEGER NOT NULL DEFAULT 1'],
   ['master_v3_articles', 'sellable', 'INTEGER NOT NULL DEFAULT 1'],
   ['master_v3_articles', 'record_json', 'TEXT'],
+  ['master_v3_articles', 'pos_category_key', 'TEXT'],
+  ['master_v3_articles', 'pos_category_label', 'TEXT'],
   ['master_v3_tariffs', 'record_json', 'TEXT'],
   ['master_v3_taxes', 'record_json', 'TEXT'],
   ['master_v3_variants', 'record_json', 'TEXT'],
@@ -175,5 +181,54 @@ export const ensureLargeMasterSyncV3ContractColumns = async (db: {
     const info = await db.query(`PRAGMA table_info(${table});`);
     if (info.values?.some(row => String(row.name) === column)) continue;
     await db.execute(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition};`);
+  }
+  await db.execute(`CREATE INDEX IF NOT EXISTS idx_master_v3_articles_pos_category
+    ON master_v3_articles(sync_version, pos_category_key, active, sellable, article_id);`);
+};
+
+export const V3_CATEGORY_BACKFILL_BATCH_SIZE = 250;
+type CategoryMigrationConnection = {
+  query(sql: string, values?: unknown[]): Promise<{ values?: Array<Record<string, unknown>> }>;
+  execute(sql: string, transaction?: boolean): Promise<unknown>;
+  run(sql: string, values?: unknown[], transaction?: boolean): Promise<unknown>;
+  executeSet?(set: Array<{ statement: string; values: unknown[] }>, transaction?: boolean, returnMode?: string): Promise<unknown>;
+};
+
+/** Caller holds the adapter write lock before it exposes the initialized DB.
+ * NULL is resumable pending work; empty key marks a completed unclassified/invalid row.
+ * Each bounded batch commits independently. Source JSON, IDs and financial state never change.
+ */
+export const backfillLargeMasterSyncV3Categories = async (db: CategoryMigrationConnection): Promise<void> => {
+  let cursor: [unknown, unknown] | undefined;
+  while (true) {
+    await db.execute('BEGIN IMMEDIATE TRANSACTION;', false);
+    try {
+      const batch = (await db.query(`SELECT sync_version, article_id, record_json
+        FROM master_v3_articles WHERE pos_category_key IS NULL
+        ${cursor ? 'AND (sync_version, article_id) > (?, ?)' : ''}
+        ORDER BY sync_version, article_id LIMIT ?`, [...(cursor || []), V3_CATEGORY_BACKFILL_BATCH_SIZE])).values || [];
+      if (!batch.length) { await db.execute('COMMIT;', false); return; }
+      const updates = batch.map(row => {
+        let label = '';
+        try {
+          const record: unknown = typeof row.record_json === 'string' ? JSON.parse(row.record_json) : null;
+          if (record && typeof record === 'object' && !Array.isArray(record)) {
+            const category = (record as Record<string, unknown>).category;
+            label = typeof category === 'string' ? category.trim() : '';
+          }
+        } catch { /* Preserve invalid JSON for the operational reader to reject as before. */ }
+        return { statement: `UPDATE master_v3_articles SET pos_category_key = ?, pos_category_label = ?
+          WHERE sync_version = ? AND article_id = ? AND pos_category_key IS NULL`,
+        values: [normalizeV3CategoryKey(label), label, row.sync_version, row.article_id] };
+      });
+      if (db.executeSet) await db.executeSet(updates, false, 'no');
+      else for (const update of updates) await db.run(update.statement, update.values, false);
+      await db.execute('COMMIT;', false);
+      const last = batch[batch.length - 1];
+      cursor = [last.sync_version, last.article_id];
+    } catch (error) {
+      await db.execute('ROLLBACK;', false).catch(() => undefined);
+      throw error;
+    }
   }
 };

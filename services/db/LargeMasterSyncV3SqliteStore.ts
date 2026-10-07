@@ -1,3 +1,4 @@
+import { normalizeV3CategoryKey, type V3CategoryFilter, type V3OperationalCategory } from '../sync/LargeMasterSyncV3Categories';
 import {
   LARGE_MASTER_SYNC_V3_DATASETS,
   LargeMasterSyncV3Error,
@@ -583,23 +584,40 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
       GROUP BY article_id LIMIT 100`, [runtime.syncVersion, ...page.map(row => row.id)])) : [];
     const barcodes = new Map(codes.map(row => [String(row.id), String(row.barcode)]));
     return { total: Number(global.total), filteredTotal: Number(counts?.filteredTotal || 0),
-      nextCursor: Number(counts?.remaining || 0) > page.length && page.length ? String(page.at(-1)!.id) : null,
+      nextCursor: Number(counts?.remaining || 0) > page.length && page.length ? String(page[page.length - 1].id) : null,
       rows: page.map(row => ({ id: String(row.id), name: String(row.name || row.id), sku: row.sku == null ? null : String(row.sku),
         barcode: barcodes.get(String(row.id)) ?? null, categoryId: row.categoryId == null ? null : String(row.categoryId),
         type: row.type == null ? null : String(row.type), active: Number(row.active) === 1, sellable: Number(row.sellable) === 1,
         price: row.price == null ? null : Number(row.price), balance: row.balance == null ? null : Number(row.balance) })) };
   }
 
-  async searchOperationalArticles(runtime: LargeMasterSyncV3RuntimeVersion, query: string, categoryId: string | null = null, limit = 60): Promise<Record<string, unknown>[]> {
+  async getOperationalCategories(runtime: LargeMasterSyncV3RuntimeVersion, tariffId: string): Promise<V3OperationalCategory[]> {
+    requireOperationalVersion(runtime);
+    // Only category metadata crosses the bridge, irrespective of article count.
+    const result = await this.connection().query(`SELECT a.pos_category_key AS category_key,
+      MIN(a.pos_category_label) AS label FROM master_v3_articles a INDEXED BY idx_master_v3_articles_pos_category
+      WHERE a.sync_version = ? AND a.active = 1 AND a.sellable = 1 AND a.pos_category_key <> ''
+      AND EXISTS (SELECT 1 FROM master_v3_prices p WHERE p.sync_version = a.sync_version
+        AND p.article_id = a.article_id AND p.tariff_id = ? AND p.price >= 0)
+      GROUP BY a.pos_category_key ORDER BY a.pos_category_key`, [runtime.syncVersion, tariffId]);
+    return rows(result).map(row => ({ key: String(row.category_key), label: String(row.label) }));
+  }
+
+  async searchOperationalArticles(runtime: LargeMasterSyncV3RuntimeVersion, query: string, categoryId: V3CategoryFilter = null, limit = 60): Promise<Record<string, unknown>[]> {
     requireOperationalVersion(runtime);
     const normalizedQuery = query.trim().toLowerCase().slice(0, 120);
     const safeLimit = Math.max(1, Math.min(100, Math.floor(limit)));
+    const categoryKeys = categoryId == null ? [] : [...new Set((typeof categoryId === 'string'
+      ? [categoryId] : categoryId).map(normalizeV3CategoryKey).filter(Boolean))];
+    // Use a separate SQL shape for category selection so SQLite can seek the projection index.
+    const predicate = categoryId == null ? '' : categoryKeys.length
+      ? `AND pos_category_key IN (${categoryKeys.map(() => '?').join(',')})` : 'AND 0';
     const result = await this.connection().query(`SELECT record_json FROM master_v3_articles
       WHERE sync_version = ? AND active = 1 AND sellable = 1 AND record_json IS NOT NULL
-      AND (? IS NULL OR category_id = ?)
+      ${predicate}
       AND (? = '' OR instr(lower(coalesce(sku, '')), ?) > 0
         OR instr(lower(coalesce(description, '')), ?) > 0)
-      ORDER BY article_id LIMIT ?`, [runtime.syncVersion, categoryId, categoryId,
+      ORDER BY article_id LIMIT ?`, [runtime.syncVersion, ...categoryKeys,
       normalizedQuery, normalizedQuery, normalizedQuery, safeLimit]);
     return rows(result).map(operationalRecord);
   }
@@ -820,15 +838,17 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
       }
       return { statement: `INSERT INTO master_v3_articles
         (sync_version, article_id, sku, description, article_type, uom, taxable, tax_ids_json,
-         family_id, category_id, active, sellable, record_json)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         family_id, category_id, active, sellable, record_json, pos_category_key, pos_category_label)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(sync_version, article_id) DO UPDATE SET sku=excluded.sku, description=excluded.description,
         article_type=excluded.article_type, uom=excluded.uom, taxable=excluded.taxable,
         tax_ids_json=excluded.tax_ids_json, family_id=excluded.family_id, category_id=excluded.category_id,
-        active=excluded.active, sellable=excluded.sellable, record_json=excluded.record_json`,
+        active=excluded.active, sellable=excluded.sellable, record_json=excluded.record_json,
+        pos_category_key=excluded.pos_category_key, pos_category_label=excluded.pos_category_label`,
       values: [version, requiredId(row, 'id'), optionalText(row.sku), optionalText(row.name || row.description), optionalText(row.type),
         optionalText(row.uom), row.taxable === true ? 1 : 0, JSON.stringify(taxIds), optionalText(row.familyId),
-        optionalText(row.categoryId), booleanInt(row.active), booleanInt(row.sellable), recordJson] };
+        optionalText(row.categoryId), booleanInt(row.active), booleanInt(row.sellable), recordJson,
+        normalizeV3CategoryKey(row.category), typeof row.category === 'string' ? row.category.trim() : ''] };
     }
     if (dataset === 'prices') {
       if (contractVersion >= 2 && (typeof row.price !== 'number'

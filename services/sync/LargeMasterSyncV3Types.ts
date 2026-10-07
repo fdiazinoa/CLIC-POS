@@ -1,3 +1,4 @@
+import type { V3CategoryFilter, V3OperationalCategory } from './LargeMasterSyncV3Categories';
 export const LARGE_MASTER_SYNC_V3_SCHEMA_VERSION = 3 as const;
 
 export const LARGE_MASTER_SYNC_V3_DATASETS = [
@@ -115,7 +116,8 @@ export interface LargeMasterSyncV3Store {
   getPragmaSnapshot(): Promise<Record<string, string | number | null>>;
   getDatabaseSizeBytes(): Promise<number>;
   listArticlesPage(runtime: LargeMasterSyncV3RuntimeVersion, afterArticleId: string | null, limit: number): Promise<Record<string, unknown>[]>;
-  searchOperationalArticles(runtime: LargeMasterSyncV3RuntimeVersion, query: string, categoryId?: string | null, limit?: number): Promise<Record<string, unknown>[]>;
+  searchOperationalArticles(runtime: LargeMasterSyncV3RuntimeVersion, query: string, categoryId?: V3CategoryFilter, limit?: number): Promise<Record<string, unknown>[]>;
+  getOperationalCategories?(runtime: LargeMasterSyncV3RuntimeVersion, tariffId: string): Promise<V3OperationalCategory[]>;
   getOperationalArticle(runtime: LargeMasterSyncV3RuntimeVersion, articleId: string): Promise<Record<string, unknown> | null>;
   getOperationalTariffs(runtime: LargeMasterSyncV3RuntimeVersion): Promise<Record<string, unknown>[]>;
   getAdministrativeTariff?(runtime: LargeMasterSyncV3RuntimeVersion, tariffId: string): Promise<{ taxIncluded: boolean }>;

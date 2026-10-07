@@ -374,6 +374,9 @@ test('contract v2 retains operational records and fences the active SQLite versi
   const runtime = await LargeMasterSyncV3Runtime.open(store);
   assert.ok(runtime);
   assert.deepEqual(await runtime.searchOperationalArticles('demo'), [article]);
+  assert.deepEqual(await runtime.searchOperationalArticles('', ' BEBIDAS '), [article]);
+  assert.deepEqual(sqlite.prepare('SELECT category_id, pos_category_key, pos_category_label FROM master_v3_articles WHERE sync_version = 186').get(),
+    { category_id: 'CAT', pos_category_key: 'bebidas', pos_category_label: 'Bebidas' });
   assert.deepEqual(await runtime.searchOperationalArticles('demo', 'OTHER'), []);
   assert.deepEqual(await runtime.getOperationalArticle('A'), article);
   assert.equal((await runtime.getOperationalTariffs())[0].taxIncluded, true);

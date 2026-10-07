@@ -1,3 +1,4 @@
+import type { V3OperationalCategory } from '../services/sync/LargeMasterSyncV3Categories';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import POSInterface, { type POSInterfaceProps, type V3OperationalPOSBoundary } from './POSInterface';
 import type { BusinessConfig, Product } from '../types';
@@ -12,11 +13,12 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps> = props => {
   const [projected, setProjected] = useState<BusinessConfig>();
   const [visible, setVisible] = useState<Product[]>([]);
   const [cache, setCache] = useState<Product[]>([]);
+  const [categories, setCategories] = useState<V3OperationalCategory[]>([]);
   const [error, setError] = useState('');
   const catalog = useRef<LargeMasterSyncV3OperationalCatalog>();
   const querySequence = useRef(0);
   const contextSequence = useRef(0);
-  const lastQuery = useRef<{ query: string; categoryId: string | null }>({ query: '', categoryId: null });
+  const lastQuery = useRef<{ query: string; categoryId: string | null; categoryKeys?: readonly string[] }>({ query: '', categoryId: null });
   const [inventoryRevision, setInventoryRevision] = useState(0);
   const latestProps = useRef(props);
   latestProps.current = props;
@@ -53,9 +55,11 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps> = props => {
       if (!warehouseId || !tariffId) throw new Error('SYNC_V3_CONFIGURED_TARIFF_WAREHOUSE_REQUIRED');
       const ready = await getLargeMasterSyncV3OperationalSession();
       const [config, source] = await Promise.all([ready.projectConfig(latestProps.current.config), ready.catalog(tariffId, warehouseId)]);
+      const categoryMetadata = await source.categories();
       if (!current || !isV3TariffContextCurrent(wantedContextKey, latestContextKey.current, context, contextSequence.current)) return;
       if (!config.tariffs.some(row => row.id === tariffId)) throw new Error('SYNC_V3_TARIFF_UNAVAILABLE');
       catalog.current = source;
+      setCategories(categoryMetadata);
       setSession(ready);
       setProjected(config);
       setVisible([]);
@@ -88,15 +92,16 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps> = props => {
     };
     return {
     tariffId,
-    search: async (query, categoryId) => {
+    categories,
+    search: async (query, categoryId, categoryKeys) => {
       assertContext();
       const sequence = ++querySequence.current;
       const context = contextSequence.current;
       const source = catalog.current;
       if (!source) throw new Error('SYNC_V3_UI_CONTEXT_CHANGED');
-      lastQuery.current = { query, categoryId };
+      lastQuery.current = { query, categoryId, categoryKeys };
       await session.assertCurrent();
-      const items = await source.search(query, categoryId, 60);
+      const items = await source.search(query, query.trim() ? null : (categoryKeys || categoryId), 60);
       const rows = await session.withStocks(items.map(item => item.product), warehouseId);
       if (sequence !== querySequence.current || context !== contextSequence.current) return;
       assertContext();
@@ -137,7 +142,7 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps> = props => {
       latestContextKey.current = '';
       setSelection({ ...authority, tariffId: id, mode: 'manual' });
     },
-  }; }, [session, projected, tariffId, warehouseId, remember, loadedContextKey, wantedContextKey, authorityError]);
+  }; }, [session, projected, tariffId, warehouseId, categories, remember, loadedContextKey, wantedContextKey, authorityError]);
 
   useEffect(() => {
     if (!boundary || !props.cart.length) return;
@@ -155,7 +160,7 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps> = props => {
     const refresh = () => {
       ++querySequence.current;
       setInventoryRevision(previous => previous + 1);
-      if (boundary) void boundary.search(lastQuery.current.query, lastQuery.current.categoryId)
+      if (boundary) void boundary.search(lastQuery.current.query, lastQuery.current.categoryId, lastQuery.current.categoryKeys)
         .catch(reason => { if (latestContextKey.current === wantedContextKey) setError(String(reason.message || reason)); });
     };
     window.addEventListener('v3InventoryUpdated', refresh);

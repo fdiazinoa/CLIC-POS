@@ -1,3 +1,4 @@
+import type { V3CategoryFilter } from './LargeMasterSyncV3Categories';
 import type {
   LargeMasterSyncV3RuntimeVersion,
   LargeMasterSyncV3Store,
@@ -28,8 +29,13 @@ export class LargeMasterSyncV3Runtime {
     return this.store.readAdministrativeCatalogPage(this.version, request);
   }
 
-  searchOperationalArticles(query: string, categoryId?: string | null, limit = 60): Promise<Record<string, unknown>[]> {
+  searchOperationalArticles(query: string, categoryId?: V3CategoryFilter, limit = 60): Promise<Record<string, unknown>[]> {
     return this.store.searchOperationalArticles(this.version, query, categoryId, limit);
+  }
+
+  getOperationalCategories(tariffId: string) {
+    if (!this.store.getOperationalCategories) throw new Error('SYNC_V3_CATEGORY_READ_UNAVAILABLE');
+    return this.store.getOperationalCategories(this.version, tariffId);
   }
 
   getOperationalArticle(articleId: string): Promise<Record<string, unknown> | null> {

@@ -50,12 +50,12 @@ export default function LargeMasterSyncV3CatalogManager(props: {
   }, [query]);
   useEffect(() => {
     view.cancel();
-    if (query !== debouncedQuery || (!reader.current && cursors.at(-1) !== null)) return;
+    if (query !== debouncedQuery || (!reader.current && (cursors[cursors.length - 1] ?? null) !== null)) return;
     void view.load(async () => {
         if (!reader.current) reader.current = LargeMasterSyncV3CatalogRead.open(() => ({ config: latest.current.config,
           terminalId: latest.current.terminalId || '', warehouses: latest.current.warehouses }));
         const current = await reader.current;
-        return current.page({ query: debouncedQuery, category, afterId: cursors.at(-1), limit: 25 });
+        return current.page({ query: debouncedQuery, category, afterId: (cursors[cursors.length - 1] ?? null), limit: 25 });
     });
     return () => { view.cancel(); };
   }, [query, debouncedQuery, category, cursors, contextKey, view]);

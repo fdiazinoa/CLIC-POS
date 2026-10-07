@@ -1,3 +1,4 @@
+import { resolveV3CategoryAliases, type V3OperationalCategory } from '../services/sync/LargeMasterSyncV3Categories';
 import { recordCheckoutDiagnostic, setCheckoutCaptureContext } from '../services/CheckoutDiagnostics';
 import { freezeCount, freezePhase } from '../diagnostics/freezeCounters';
 import { markWebviewProfileNavigation } from '../diagnostics/webviewProfileMarks';
@@ -213,7 +214,8 @@ export type AccountItemActionRequest = {
 
 export interface V3OperationalPOSBoundary {
    tariffId: string;
-   search(query: string, categoryId?: string | null): Promise<void>;
+   categories?: readonly V3OperationalCategory[];
+   search(query: string, categoryId?: string | null, categoryKeys?: readonly string[]): Promise<void>;
    resolveCode(code: string): Promise<import('../services/sync/LargeMasterSyncV3OperationalSession').V3CodeMatch | null>;
    validate(lines: CartItem[]): Promise<void>;
    changeTariff(tariffId: string): void;
@@ -1803,7 +1805,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             .map((category) => canonicalizeCategory(category))
             .filter(Boolean)
       );
-      if (configuredCategories.size === 0) return configuredCategories;
+      if (configuredCategories.size === 0 || v3Operational) return configuredCategories;
 
       const localSellableCategories = new Set(
          (catalogProducts || [])
@@ -1814,7 +1816,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       const matchedCategories = Array.from(configuredCategories).filter((category) => localSellableCategories.has(category));
       return matchedCategories.length > 0 ? configuredCategories : new Set<string>();
-   }, [activeTerminalConfig?.catalog?.allowedCategories, canonicalizeCategory, catalogProducts]);
+   }, [activeTerminalConfig?.catalog?.allowedCategories, canonicalizeCategory, catalogProducts, v3Operational]);
 
    const isRetailMode = isRetailViewMode(
       activeTerminalConfig?.ux?.viewMode ||
@@ -2211,9 +2213,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [categoryFilter, setCategoryFilter] = useState('ALL');
    useEffect(() => {
       if (!v3Operational) return;
-      void v3Operational.search(catalogSearchQuery, categoryFilter === 'ALL' ? null : categoryFilter)
+      void v3Operational.search(catalogSearchQuery, categoryFilter === 'ALL' ? null : categoryFilter,
+         categoryFilter === 'ALL' ? undefined : resolveV3CategoryAliases(categoryFilter, categoryLookup.aliasToCanonical))
          .catch(error => setErrorToast(`V3: ${error.message || error}`));
-   }, [v3Operational, catalogSearchQuery, categoryFilter]);
+   }, [v3Operational, catalogSearchQuery, categoryFilter, categoryLookup.aliasToCanonical]);
    const [mobileView, setMobileView] = useState<'PRODUCTS' | 'TICKET'>('PRODUCTS');
    const returnToTicketView = useCallback(() => {
       setRightSidebarTab('CART');
@@ -4533,7 +4536,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       });
 
       const availableCategoryMap = new Map<string, string>();
-      for (const entry of availableProducts) {
+      if (v3Operational) {
+         for (const category of v3Operational.categories || []) {
+            const key = canonicalizeCategory(category.key);
+            if (!key || (effectiveAllowedCategorySet.size > 0 && !effectiveAllowedCategorySet.has(key))) continue;
+            if (categoryLookup.presentationByCanonical.get(key)?.isActive === false) continue;
+            availableCategoryMap.set(key, displayCategory(category.label));
+         }
+      }
+      for (const entry of v3Operational ? [] : availableProducts) {
          const normalizedCategory = entry.normalizedCategory;
          const rawCategory = entry.displayCategory;
          if (!rawCategory || availableCategoryMap.has(normalizedCategory)) continue;
@@ -4565,7 +4576,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
 
       return [{ id: 'ALL', label: 'Todas', sortOrder: -1, isActive: true }, ...Array.from(dedupedCategoryOptions.values())];
-   }, [canonicalizeCategory, displayCategory, effectiveAllowedCategorySet, salesCatalogProductEntries, categoryLookup.presentationByCanonical]);
+   }, [canonicalizeCategory, displayCategory, effectiveAllowedCategorySet, salesCatalogProductEntries, categoryLookup.presentationByCanonical, v3Operational]);
 
    const categoryOptionIds = useMemo(() => categoryOptions.map((option) => option.id), [categoryOptions]);
 
@@ -7956,16 +7967,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            <UserCheck size={20} />
                            <span>Vendedor</span>
                         </button>
-                        {canParkDirectSale && (
-                           <button
-                              type="button"
-                              onClick={() => handleGridAction('SAVE')}
-                              className="flex h-16 items-center justify-center gap-2 rounded-xl border border-orange-400 bg-orange-500 px-3 text-sm font-black uppercase tracking-wide text-white shadow-sm shadow-orange-500/25 transition-all hover:bg-orange-600 active:scale-95"
-                           >
-                              <Save size={20} />
-                              <span>Guardar</span>
-                           </button>
-                        )}
                         </div>
                      </div>
 
@@ -8198,7 +8199,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
             {/* DESKTOP: marca + mesa/comensales bajo el logo; retail: busqueda al centro; botones carrito/acciones alineados a la derecha (como APK 1.0.300) */}
             <div className={`pos-ticket-heading ${isMobile ? 'hidden' : 'flex'} px-5 py-3 border-b border-gray-100 bg-gray-50/50 flex-col gap-3 shrink-0 flex-none ${activeTable ? 'border-l-4 border-l-blue-500' : ''}`} >
-               <div data-testid="desktop-ticket-toolbar" className={`flex w-full items-center justify-between gap-1 ${isRetailMode ? 'supermarket-ticket-toolbar' : ''}`}>
+               <div data-testid="desktop-ticket-toolbar" className={`flex w-full flex-wrap items-center justify-between gap-1 ${isRetailMode ? 'supermarket-ticket-toolbar' : ''}`}>
                   <div className="flex min-w-0 shrink-0 items-center justify-start">
                      {renderTicketBrand(!isRetailMode)}
                   </div>
@@ -8300,6 +8301,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   )}
 
                   <TicketStatusControls className="ml-auto flex shrink-0 items-center justify-end gap-1" status={isRetailMode ? <FiscalStatusBadge compact visible={!isOrderTakerMode && !isFiscalModeDisabled} allowed={canCheckoutWithFiscalPolicy} status={fiscalStatus} /> : undefined}>
+                     {canParkDirectSale && (
+                        <button
+                           type="button"
+                           onClick={() => handleGridAction('SAVE')}
+                           aria-label="Guardar ticket"
+                           title="Guardar ticket"
+                           className="flex h-12 w-12 shrink-0 items-center justify-center rounded-[1.05rem] border border-orange-400 bg-orange-500 text-white shadow-sm shadow-orange-500/25 transition-all hover:bg-orange-600 active:scale-95"
+                        >
+                           <Save size={20} />
+                        </button>
+                     )}
                      {cart.length > 0 && (
                         <button
                            onClick={handleClearFreshCartItems}
