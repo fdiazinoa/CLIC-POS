@@ -548,18 +548,31 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
     [runtime.syncVersion, afterArticleId, safeLimit]));
   }
 
-  /** Four bounded SELECTs (three for an empty page); no legacy records or record_json. */
+  /** Four bounded SELECTs (three for an empty page); never transfers full records or legacy data. */
   async readAdministrativeCatalogPage(runtime: LargeMasterSyncV3RuntimeVersion, request: V3CatalogPageRequest): Promise<V3CatalogPage> {
     requireOperationalVersion(runtime);
     const limit = Number.isFinite(request.limit) ? Math.max(1, Math.min(100, Math.floor(request.limit!))) : 25;
     const query = (request.query || '').trim().toLowerCase().slice(0, 120);
     const none = request.category === 'NONE' ? 1 : 0;
     // category_id is raw ERP article.categoryId, not a POS classification label. ALL has no category predicate.
-    const predicate = `a.sync_version = ? AND (? = 0 OR trim(coalesce(a.category_id, '')) = '')
+    let predicate = `a.sync_version = ? AND (? = 0 OR trim(coalesce(a.category_id, '')) = '')
       AND (? = '' OR instr(lower(coalesce(a.description, '')), ?) > 0 OR instr(lower(coalesce(a.sku, '')), ?) > 0
         OR a.article_id IN (SELECT c.article_id FROM master_v3_barcodes c
           WHERE c.sync_version = ? AND instr(lower(c.barcode), ?) > 0))`;
     const bindings = [runtime.syncVersion, none, query, query, query, runtime.syncVersion, query];
+    const classificationColumns = {
+      departmentId: "json_extract(CASE WHEN json_valid(a.record_json) THEN a.record_json ELSE '{}' END, '$.departmentId')",
+      sectionId: "json_extract(CASE WHEN json_valid(a.record_json) THEN a.record_json ELSE '{}' END, '$.sectionId')",
+      familyId: 'a.family_id',
+      brandId: "json_extract(CASE WHEN json_valid(a.record_json) THEN a.record_json ELSE '{}' END, '$.brandId')",
+      categoryId: 'a.category_id',
+    } as const;
+    for (const key of Object.keys(classificationColumns) as Array<keyof typeof classificationColumns>) {
+      const value = request[key]?.trim();
+      if (!value) continue;
+      predicate += ` AND ${classificationColumns[key]} = ?`;
+      bindings.push(value);
+    }
     const db = this.connection();
     const global = first(await db.query(`SELECT COUNT(*) AS total,
       EXISTS(SELECT 1 FROM master_v3_tariffs WHERE sync_version = ? AND tariff_id = ? AND active = 1) AS validTariff
@@ -569,7 +582,7 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
       coalesce(SUM(CASE WHEN a.article_id > coalesce(?, '') THEN 1 ELSE 0 END), 0) AS remaining
       FROM master_v3_articles a WHERE ${predicate}`, [request.afterId ?? null, ...bindings]));
     const page = rows(await db.query(`SELECT a.article_id AS id, a.description AS name, a.sku,
-      a.category_id AS categoryId, a.article_type AS type, a.active, a.sellable, p.price,
+      a.category_id AS categoryId, a.article_type AS type, a.active, a.sellable, p.price, b.qty_on_hand AS stock,
       CASE WHEN b.item_id IS NULL THEN NULL ELSE b.qty_on_hand - b.qty_reserved - b.qty_committed END AS balance
       FROM master_v3_articles a LEFT JOIN master_v3_prices p ON p.sync_version = a.sync_version
         AND p.article_id = a.article_id AND p.tariff_id = ?
@@ -588,7 +601,8 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
       rows: page.map(row => ({ id: String(row.id), name: String(row.name || row.id), sku: row.sku == null ? null : String(row.sku),
         barcode: barcodes.get(String(row.id)) ?? null, categoryId: row.categoryId == null ? null : String(row.categoryId),
         type: row.type == null ? null : String(row.type), active: Number(row.active) === 1, sellable: Number(row.sellable) === 1,
-        price: row.price == null ? null : Number(row.price), balance: row.balance == null ? null : Number(row.balance) })) };
+        price: row.price == null ? null : Number(row.price), balance: row.balance == null ? null : Number(row.balance),
+        stock: row.stock == null ? null : Number(row.stock) })) };
   }
 
   async getOperationalCategories(runtime: LargeMasterSyncV3RuntimeVersion, tariffId: string): Promise<V3OperationalCategory[]> {
