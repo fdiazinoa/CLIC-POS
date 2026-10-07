@@ -15,9 +15,9 @@ import {
    ArrowRightLeft, Globe, DollarSign, Split,
    ChevronDown, Check, AlertCircle, Layers,
    ShoppingBag, ScanBarcode, ArrowRight, Clock, Camera, AlertTriangle, BrushCleaning,
-   MessageSquare, PlayCircle, Download, Lock, ArrowUpRight, Landmark,
+   MessageSquare, PlayCircle, Download, Lock, ArrowUpRight,
    UserCheck, StickyNote, Inbox, Printer, QrCode, Box, Package, MapPin,
-   Cloud, RefreshCw, CloudOff, Layout, ChefHat, Building2, ClipboardCheck, Undo2
+   RefreshCw, Layout, ChefHat, Building2, ClipboardCheck, Undo2
 
 
 } from 'lucide-react';
@@ -77,6 +77,7 @@ import { syncManager } from '../services/sync/SyncManager';
 import { isSyncFeatureEnabled } from '../services/sync/SyncFeatureFlags';
 import ProductTableSupermarket from './ProductTableSupermarket';
 import SupermarketTicketSummary from './SupermarketTicketSummary';
+import { FiscalStatusBadge, SyncStatusBadge, TicketStatusControls, TicketTotalStatusRow } from './POSStatusIndicators';
 import BarcodeScannerModal from './BarcodeScannerModal';
 import { printCashMovementReceipt, printComanda, printPrecuenta } from '../utils/printer';
 import { canStepCartQuantity, isValidCartQuantity, isValidCartQuantityTransition } from '../utils/cartQuantity';
@@ -7668,31 +7669,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   </div>
                </div>
 
-               <div className="pos-catalog-sync flex h-9 md:h-auto items-center gap-2 px-2.5 md:px-4 py-1.5 md:py-2 rounded-xl md:rounded-2xl bg-gray-50 border border-gray-100 shadow-inner shrink-0">
-                  {!navigator.onLine ? (
-                     <CloudOff size={18} className="text-red-500" />
-                  ) : (
-                     <Cloud size={18} className={syncState.hasError || syncState.pendingCount > 0 || syncState.blockedCount > 0 ? 'text-amber-500' : 'text-emerald-500'} />
-                  )}
-                  <div className="flex flex-col leading-none">
-                     <span className="text-[9px] font-black text-gray-400 uppercase tracking-widest hidden md:block">Sincronización</span>
-                     <span className={`text-[10px] font-bold ${
-                        !navigator.onLine
-                              ? 'text-red-600'
-                              : syncState.hasError || syncState.pendingCount > 0 || syncState.blockedCount > 0
-                                 ? 'text-amber-600'
-                                 : 'text-emerald-600'
-                     }`}>
-                        {!navigator.onLine
-                              ? 'Offline'
-                              : syncState.blockedCount > 0
-                                 ? `Bloqueado · ${syncState.blockedCount}`
-                                 : syncState.pendingCount > 0
-                                 ? `Online · ${syncState.pendingCount}`
-                                 : 'Online'}
-                     </span>
-                  </div>
-               </div>
+               <SyncStatusBadge online={navigator.onLine} state={syncState} className="pos-catalog-sync h-9 md:h-auto shrink-0" />
 
 
                <div className="w-full md:flex-1 flex flex-nowrap items-center gap-2 md:gap-3 md:min-w-0">
@@ -8132,7 +8109,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   </div>
                </div>
 
-               <div
+               <TicketStatusControls
+                  status={isRetailMode ? <FiscalStatusBadge compact visible={!isOrderTakerMode && !isFiscalModeDisabled} allowed={canCheckoutWithFiscalPolicy} status={fiscalStatus} /> : undefined}
                   data-testid="mobile-sidebar-tabs"
                   className="flex items-center justify-end gap-2"
                   aria-label="Vista del ticket"
@@ -8181,7 +8159,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      </span>
                   </button>
                   {!isKioskMode && <OrderServiceTypeButton value={effectiveOrderServiceType} onClick={() => handleGridAction('TAKEOUT')} />}
-               </div>
+               </TicketStatusControls>
 
                {/* CUSTOMER PILL (MOBILE) */}
                {
@@ -8220,7 +8198,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
             {/* DESKTOP: marca + mesa/comensales bajo el logo; retail: busqueda al centro; botones carrito/acciones alineados a la derecha (como APK 1.0.300) */}
             <div className={`pos-ticket-heading ${isMobile ? 'hidden' : 'flex'} px-5 py-3 border-b border-gray-100 bg-gray-50/50 flex-col gap-3 shrink-0 flex-none ${activeTable ? 'border-l-4 border-l-blue-500' : ''}`} >
-               <div data-testid="desktop-ticket-toolbar" className="flex w-full items-center justify-between gap-1">
+               <div data-testid="desktop-ticket-toolbar" className={`flex w-full items-center justify-between gap-1 ${isRetailMode ? 'supermarket-ticket-toolbar' : ''}`}>
                   <div className="flex min-w-0 shrink-0 items-center justify-start">
                      {renderTicketBrand(!isRetailMode)}
                   </div>
@@ -8321,7 +8299,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      </div>
                   )}
 
-                  <div className="ml-auto flex shrink-0 items-center justify-end gap-1">
+                  <TicketStatusControls className="ml-auto flex shrink-0 items-center justify-end gap-1" status={isRetailMode ? <FiscalStatusBadge compact visible={!isOrderTakerMode && !isFiscalModeDisabled} allowed={canCheckoutWithFiscalPolicy} status={fiscalStatus} /> : undefined}>
                      {cart.length > 0 && (
                         <button
                            onClick={handleClearFreshCartItems}
@@ -8389,7 +8367,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         </span>
                      </button>
                      {!isKioskMode && <OrderServiceTypeButton value={effectiveOrderServiceType} onClick={() => handleGridAction('TAKEOUT')} />}
-                  </div>
+                  </TicketStatusControls>
                </div>
 
                {activeTable && (
@@ -8511,12 +8489,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   </div>
                )}
 
-               {!isOrderTakerMode && !isFiscalModeDisabled && (
-                  <div className={`mt-1 flex items-center gap-2 px-3 py-1.5 rounded-lg border text-[10px] font-bold uppercase ${canCheckoutWithFiscalPolicy ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : 'bg-red-50 text-red-600 border-red-100'}`}>
-                     <Landmark size={12} />
-                     <span>Status Fiscal: {`${fiscalStatus.type} ${fiscalStatus.hasNCF ? (fiscalStatus.isTerminalBlock ? 'Bloque Terminal' : (fiscalStatus.isUsingPool ? 'Reservado en Pool' : 'Lote Global Activo')) : 'Agotado'}`}</span>
-                  </div>
-               )}
+               {!isRetailMode && <FiscalStatusBadge visible={!isOrderTakerMode && !isFiscalModeDisabled} allowed={canCheckoutWithFiscalPolicy} status={fiscalStatus} />}
             </div >
 
             {/* --- CART ITEMS LIST & TAB VIEWS --- */}
@@ -8914,6 +8887,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            total={cartTotal}
                            units={cart.reduce((acc, item) => acc + item.quantity, 0)}
                            points={pointsEarned}
+                           status={<SyncStatusBadge online={navigator.onLine} state={syncState} />}
                         />
                         <div className="supermarket-checkout">
                            <ActionGrid
@@ -9188,11 +9162,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         {discountAmount > 0 && <span className="text-[10px] font-bold text-red-500 uppercase block">Desc: -{baseCurrency.symbol}{discountAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>}
                      </div>
                   </div>
-                  <div className="flex items-center gap-4">
-                     <div className="flex-1">
+                  <div className={`flex items-center gap-4 ${isRetailMode ? 'supermarket-mobile-checkout' : ''}`}>
+                     <TicketTotalStatusRow className="flex-1 min-w-0" status={isRetailMode ? <SyncStatusBadge online={navigator.onLine} state={syncState} /> : undefined}>
+                        <div className="min-w-0">
                         <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest block leading-none mb-1">Total</span>
                         <span className="text-3xl font-black text-gray-900 tracking-tighter leading-none">{baseCurrency.symbol}{cartTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                     </div>
+                        </div>
+                     </TicketTotalStatusRow>
                      <button
                         onClick={async (event) => {
                            if (cart.length > 0 && canCheckoutWithFiscalPolicy) {
