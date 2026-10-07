@@ -5610,7 +5610,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             finalNcf = await db.getNextNCF(fiscalStatus.type, terminalId, activeTerminalConfig?.fiscal?.typeConfigs?.[fiscalStatus.type]?.batchSize || 100, activeTerminalConfig);
 
             if (!finalNcf) {
-               alert(`CRÍTICO: No hay NCF de ${fiscalStatus.type === 'B01' || fiscalStatus.type === 'E31' ? 'Crédito Fiscal' : 'Consumo'} disponible. Pool DGII agotado.`);
+               alert(`CRÍTICO: No hay NCF de ${fiscalStatus.type === 'B01' || fiscalStatus.type === 'E31' ? 'Crédito Fiscal' : 'Consumo'} disponible para esta terminal. Verifique en ERP la asignación y la secuencia fiscal.`);
                return null;
             }
 
@@ -7281,6 +7281,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             }
             break;
          case 'SETTINGS': if (onOpenSettings) onOpenSettings(); break;
+         case 'HISTORY': onOpenHistory(); break;
          case 'ATTENDANCE': onOpenAttendance(); break;
          case 'TRACKING':
             setShowParkedList(false);

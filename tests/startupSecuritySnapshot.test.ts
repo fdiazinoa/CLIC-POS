@@ -22,7 +22,7 @@ test('one forced security snapshot returns updated config and roster without for
     assert.equal(options.requestTimeoutMs, 8000);
     assert.equal(options.supplementalMode, 'skip');
     assert.deepEqual(Array.from(options.masterScopes), ['pos_users', 'users', 'pos_roles', 'roles']);
-    assert.deepEqual(Array.from(options.resolvedScopes), ['identity', 'role']);
+    assert.deepEqual(Array.from(options.resolvedScopes), ['identity', 'role', 'documents']);
     return config;
   });
   const result = await instance.refreshErpStartupSecurity({ terminals: [] });
@@ -136,4 +136,86 @@ test('existing local users keep immediate offline login without another blocking
     syncManager: { refreshErpPosUserRoster: async () => { throw new Error('must not request network'); } },
   });
   assert.equal(await execute(), users);
+});
+
+// Exercise the real startup method with the captured, sanitized ERP documents shape,
+// then the same production snapshot normalization/rehydration used by its refresh.
+test('startup documents refresh repairs stale empty assignments without global fallback or pointer rewind', async () => {
+  const { dbAdapter } = await import('../services/db');
+  const { db } = await import('../utils/db');
+  const { DEFAULT_TERMINAL_CONFIG } = await import('../constants');
+  const { applyTerminalConfigSnapshot, extractTerminalOperationalDocumentState } = await import('../utils/terminalConfigSnapshot');
+  const wire = JSON.parse(readFileSync(new URL('./fixtures/startup-fiscal-documents.json', import.meta.url), 'utf8'));
+  const terminalId = wire.terminal_id;
+  const foreignAllocation = { id: 'other-terminal-b02', terminalId: 'other-terminal', ncfType: 'B02', prefix: 'B02', reservedStart: 6000, reservedEnd: 6100, nextNumber: 6001, status: 'ACTIVE' };
+  let config: any = {
+    fiscalCompliance: { mode: 'LEGACY_B' },
+    terminals: [{ id: terminalId, config: { ...structuredClone(DEFAULT_TERMINAL_CONFIG), erpTerminalId: terminalId,
+      fiscal: { ...structuredClone(DEFAULT_TERMINAL_CONFIG.fiscal), mode: 'LEGACY_B', enabled: true, fiscalAllocations: [] } } }],
+  };
+  let cachedSnapshot: any = { ...wire, resolved: { documents: { fiscal_allocations: [] } } };
+  const records = new Map<string, any>([
+    ['config', config], ['fiscalAllocations', [foreignAllocation]], ['localFiscalBuffer', []],
+    ['fiscalRanges', wire.resolved.documents.fiscal_ranges.map((row: any) => ({ id: row.id, type: row.ncf_type, prefix: row.prefix, startNumber: row.start_number, endNumber: row.end_number, currentGlobal: row.next_number - 1, isActive: true }))],
+  ]);
+  const originalGet = dbAdapter.getCollection;
+  const originalSave = dbAdapter.saveCollection;
+  let historyReads = 0;
+  try {
+    (dbAdapter as any).getCollection = async (key: string) => {
+      if (key === 'transactions' || key === 'transactionHistory') historyReads++;
+      return structuredClone(records.get(key) || []);
+    };
+    (dbAdapter as any).saveCollection = async (key: string, value: any) => { records.set(key, structuredClone(value)); };
+    const terminalConfig = () => config.terminals[0].config;
+    assert.equal(await db.getNextNCF('B02', terminalId, 1, terminalConfig()), null);
+    let delivered = wire;
+    let calls = 0;
+    const instance = subject('ERP_ACTIVE', [{ id: 'authorized' }], async (_: unknown, options: any) => {
+      calls++;
+      assert.equal(options.forceRemoteFetch, true);
+      assert.equal(options.requestTimeoutMs, 8000);
+      assert.equal(options.deferDuringSale, true);
+      assert.ok(Array.from(options.resolvedScopes).includes('documents'));
+      const applied = applyTerminalConfigSnapshot(options.baseConfig, {
+        terminalId, incomingSnapshot: delivered, cachedSnapshot, preserveOmittedOperationalScopes: true,
+      });
+      config = applied.config;
+      records.set('config', structuredClone(config));
+      const state = extractTerminalOperationalDocumentState(config, applied.terminalId);
+      await db.rehydrateOperationalDocumentState(state.documentSeries, state.fiscalRanges, state.fiscalAllocations, state.terminalId);
+      cachedSnapshot = delivered;
+      return config;
+    });
+    await instance.refreshErpStartupSecurity(config, { deferDuringSale: true });
+    assert.equal(calls, 1);
+    assert.equal(terminalConfig().fiscal.fiscalAllocations.length, 3);
+    assert.equal(await db.getNextNCF('B02', terminalId, 1, terminalConfig()), 'B0200000004');
+    assert.equal(records.get('fiscalAllocations').find((row: any) => row.ncfType === 'B02' && row.terminalId === terminalId).nextNumber, 5);
+    assert.equal(records.get('fiscalRanges').find((row: any) => row.type === 'B02').currentGlobal, 3);
+    assert.deepEqual(records.get('fiscalAllocations').find((row: any) => row.terminalId === 'other-terminal'), foreignAllocation);
+    assert.equal(await db.getNextNCF('B04', terminalId, 1, terminalConfig()), null);
+    // Re-delivery after restart must use persisted pointers rather than stale ERP next4.
+    await instance.refreshErpStartupSecurity(config, { deferDuringSale: true });
+    assert.equal(await db.getNextNCF('B02', terminalId, 1, terminalConfig()), 'B0200000005');
+    instance.refreshTerminalResolvedConfig = async () => { throw new Error('offline'); };
+    await assert.rejects(instance.refreshErpStartupSecurity(config), /offline/);
+    assert.equal(await db.getNextNCF('B02', terminalId, 1, terminalConfig()), 'B0200000006');
+    // Explicit revocation through the same snapshot apply path remains authoritative.
+    const revoked = applyTerminalConfigSnapshot(config, {
+      terminalId, incomingSnapshot: { ...wire, resolved: { documents: { fiscal_allocations: [] } } }, cachedSnapshot,
+      preserveOmittedOperationalScopes: true,
+    });
+    config = revoked.config;
+    const state = extractTerminalOperationalDocumentState(config, revoked.terminalId);
+    await db.rehydrateOperationalDocumentState(state.documentSeries, state.fiscalRanges, state.fiscalAllocations, state.terminalId);
+    const beforeDenial = structuredClone([...records]);
+    assert.equal(await db.getNextNCF('B02', terminalId, 1, terminalConfig()), null);
+    assert.equal(await db.getNextNCF('B04', terminalId, 1, terminalConfig()), null);
+    assert.deepEqual([...records], beforeDenial);
+    assert.equal(historyReads, 0);
+  } finally {
+    dbAdapter.getCollection = originalGet;
+    dbAdapter.saveCollection = originalSave;
+  }
 });

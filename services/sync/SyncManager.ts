@@ -1270,7 +1270,8 @@ class SyncManager {
             forceFullCatalog: needsFullRoster,
             requestTimeoutMs: 8_000,
             masterScopes: ['pos_users', 'users', 'pos_roles', 'roles'],
-            resolvedScopes: ['identity', 'role'],
+            // Refresh terminal fiscal assignments even when V3 keeps catalog recovery separate.
+            resolvedScopes: ['identity', 'role', 'documents'],
             supplementalMode: 'skip',
             deferDuringSale: options?.deferDuringSale,
         });
