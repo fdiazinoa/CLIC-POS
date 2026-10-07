@@ -1,0 +1,81 @@
+{
+  "terminal_id": "47f14fc0-e808-4d9a-a906-21df1d6c5294",
+  "fiscal_mode": "LEGACY_B",
+  "resolved": {
+    "documents": {
+      "fiscal_ranges": [
+        {
+          "id": "74bc524d-98c9-4911-9f72-7423f59718ad",
+          "ncf_type": "B01",
+          "prefix": "B01",
+          "start_number": 1,
+          "end_number": 1000,
+          "next_number": 2,
+          "terminal_id": null
+        },
+        {
+          "id": "f44724f3-08aa-4118-9ce1-c92577e67d68",
+          "ncf_type": "B02",
+          "prefix": "B02",
+          "start_number": 1,
+          "end_number": 5000,
+          "next_number": 4,
+          "terminal_id": null
+        },
+        {
+          "id": "a9e94f31-7227-41b3-9750-7aa3bb481916",
+          "ncf_type": "B14",
+          "prefix": "B14",
+          "start_number": 1,
+          "end_number": 500,
+          "next_number": 2,
+          "terminal_id": null
+        },
+        {
+          "id": "75cb1628-3108-48ea-95a0-ecb74f51b2ba",
+          "ncf_type": "B15",
+          "prefix": "B15",
+          "start_number": 1,
+          "end_number": 500,
+          "next_number": 2,
+          "terminal_id": null
+        }
+      ],
+      "fiscal_allocations": [
+        {
+          "id": "0c0f3a88-0ba8-4a6b-b39c-0fec2646aeb7",
+          "terminal_id": "47f14fc0-e808-4d9a-a906-21df1d6c5294",
+          "fiscal_range_id": "a9e94f31-7227-41b3-9750-7aa3bb481916",
+          "ncf_type": "B14",
+          "prefix": "B14",
+          "reserved_start": 2,
+          "reserved_end": 500,
+          "next_number": 2,
+          "status": "ACTIVE"
+        },
+        {
+          "id": "7bd20cca-badd-4789-b8d2-bff5cf12fbef",
+          "terminal_id": "47f14fc0-e808-4d9a-a906-21df1d6c5294",
+          "fiscal_range_id": "f44724f3-08aa-4118-9ce1-c92577e67d68",
+          "ncf_type": "B02",
+          "prefix": "B02",
+          "reserved_start": 2,
+          "reserved_end": 5000,
+          "next_number": 4,
+          "status": "ACTIVE"
+        },
+        {
+          "id": "42e9c186-e558-42d9-9a63-f368bc240b33",
+          "terminal_id": "47f14fc0-e808-4d9a-a906-21df1d6c5294",
+          "fiscal_range_id": "74bc524d-98c9-4911-9f72-7423f59718ad",
+          "ncf_type": "B01",
+          "prefix": "B01",
+          "reserved_start": 2,
+          "reserved_end": 1000,
+          "next_number": 2,
+          "status": "ACTIVE"
+        }
+      ]
+    }
+  }
+}
