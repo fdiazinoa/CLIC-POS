@@ -1,4 +1,5 @@
 import React from 'react';
+import { TicketTotalStatusRow } from './POSStatusIndicators';
 
 interface Props {
   symbol: string;
@@ -8,9 +9,10 @@ interface Props {
   total: number;
   units: number;
   points: number;
+  status?: React.ReactNode;
 }
 
-export default function SupermarketTicketSummary({ symbol, subtotal, discount, tax, total, units, points }: Props) {
+export default function SupermarketTicketSummary({ symbol, subtotal, discount, tax, total, units, points, status }: Props) {
   const money = (value: number) => symbol + value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   return <section className="supermarket-footer-summary" aria-label="Resumen del ticket">
     <div className="flex flex-wrap gap-2 mb-3">
@@ -25,9 +27,11 @@ export default function SupermarketTicketSummary({ symbol, subtotal, discount, t
       {discount > 0 && <div className="text-red-600"><dt>Descuento</dt><dd className="text-sm font-bold tabular-nums">-{money(discount)}</dd></div>}
       <div><dt>Impuestos</dt><dd className="text-sm font-bold text-slate-700 tabular-nums">{money(tax)}</dd></div>
     </dl>
-    <div className="border-t border-slate-200 mt-3 pt-3">
+    <TicketTotalStatusRow className="border-t border-slate-200 mt-3 pt-3" status={status}>
+      <div className="min-w-0">
       <p className="text-xs text-slate-500 font-bold uppercase tracking-wider">Total a pagar</p>
       <p className="supermarket-payable font-black text-slate-900 tabular-nums mt-1">{money(total)}</p>
-    </div>
+      </div>
+    </TicketTotalStatusRow>
   </section>;
 }
