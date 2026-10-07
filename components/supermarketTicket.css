@@ -24,8 +24,8 @@
 .supermarket-status-controls { min-width: 0; max-width: 100%; flex-wrap: wrap; }
 .supermarket-fiscal-status { max-width: 15rem; min-width: 0; overflow-wrap: anywhere; }
 .supermarket-total-status-row { display: flex; align-items: flex-end; justify-content: space-between; flex-wrap: wrap; gap: .75rem; }
-.supermarket-total-status-row > [role="status"] { flex: 0 1 auto; max-width: 100%; }
-.supermarket-total-status-row > div:last-child { margin-left: auto; text-align: right; overflow-wrap: anywhere; }
+.supermarket-total-status-row > :first-child { min-width: 0; max-width: 100%; text-align: left; overflow-wrap: anywhere; }
+.supermarket-total-status-row > [role="status"] { flex: 0 1 auto; max-width: 100%; margin-left: auto; }
 .supermarket-mobile-checkout { flex-wrap: wrap; }
 .supermarket-mobile-checkout > .supermarket-total-status-row { flex-basis: 100%; }
 @media (max-width: 599px) {
