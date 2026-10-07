@@ -7281,6 +7281,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             }
             break;
          case 'SETTINGS': if (onOpenSettings) onOpenSettings(); break;
+         case 'HISTORY': onOpenHistory(); break;
          case 'ATTENDANCE': onOpenAttendance(); break;
          case 'TRACKING':
             setShowParkedList(false);
