@@ -1,3 +1,4 @@
+import { createUuid } from '../../utils/uuid';
 import type { BusinessConfig, CartItem, Customer, InventoryLedgerEntry, Transaction, Wallet } from '../../types';
 import type { DurableDocumentMutation, DurableOutboxEventInput } from '../db/DatabaseAdapter';
 import { dbAdapter } from '../db';
@@ -175,10 +176,10 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
     if (isSyncFeatureEnabled('sqlite_outbox_v2') && !options.refund) {
       const paymentIntentIds = (document.payments || []).map((payment: any) => payment.paymentIntentId).filter(Boolean);
       const paymentPosted = buildPaymentPostedPayload(document, { paymentIntentIds });
-      events.push({ eventId: crypto.randomUUID(), eventType: 'SALE_POSTED', aggregateType: 'TRANSACTION',
+      events.push({ eventId: createUuid(), eventType: 'SALE_POSTED', aggregateType: 'TRANSACTION',
           aggregateId: document.id, schemaVersion: 1,
           payload: buildSalePostedPayload(document, { inventoryMovementIds: ledger.map(row => row.id), paymentIntentIds }), createdAt: document.date });
-      if (paymentPosted) events.push({ eventId: crypto.randomUUID(), eventType: 'PAYMENT_POSTED',
+      if (paymentPosted) events.push({ eventId: createUuid(), eventType: 'PAYMENT_POSTED',
           aggregateType: 'TRANSACTION', aggregateId: document.id, schemaVersion: 1, payload: paymentPosted, createdAt: document.date });
       intentIds.push(...paymentIntentIds);
     }
