@@ -59,10 +59,11 @@ firmada y la instalación requieren las puertas del protocolo de release.
 ## Validación
 
 - `npm run build`.
-- `npx tsx --test tests/*.test.ts`.
+- `npx tsx --test tests/zebraWeight.test.ts tests/nativeBarcodeSubscription.test.ts tests/weightReadGuard.test.ts tests/globalBarcodeCapture.test.ts`.
+- Suite operacional y selector del workflow; puerta `qa:release-gate` en fuente limpia.
 - `npx cap sync android` y `./gradlew :app:compileDebugJavaWithJavac` (compilación,
   sin empaquetado ni firma).
-- ESLint no es ejecutable en esta base: falta `eslint.config.*`.
+- `npm run lint` (configuración disponible en develop; warnings registrados en evidencia).
 
 QA física pendiente para el APK candidato:
 
