@@ -1,3 +1,4 @@
+import { subscribeLargeMasterSyncV3CatalogUpdates } from '../services/sync/LargeMasterSyncV3CatalogUpdates';
 import type { V3OperationalCategory } from '../services/sync/LargeMasterSyncV3Categories';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import POSInterface, { type POSInterfaceProps, type V3OperationalPOSBoundary } from './POSInterface';
@@ -20,6 +21,11 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps> = props => {
   const contextSequence = useRef(0);
   const lastQuery = useRef<{ query: string; categoryId: string | null; categoryKeys?: readonly string[] }>({ query: '', categoryId: null });
   const [inventoryRevision, setInventoryRevision] = useState(0);
+  const [catalogRevision, setCatalogRevision] = useState(0);
+  useEffect(() => subscribeLargeMasterSyncV3CatalogUpdates(() => {
+    ++contextSequence.current; ++querySequence.current; catalog.current = undefined;
+    setCatalogRevision(previous => previous + 1);
+  }, true), []);
   const latestProps = useRef(props);
   latestProps.current = props;
   const terminal = props.config.terminals.find(row => row.id === props.activeTerminalId);
@@ -67,7 +73,7 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps> = props => {
       setLoadedContextKey(wantedContextKey);
     })().catch(reason => { if (current && latestContextKey.current === wantedContextKey) setError(String(reason.message || reason)); });
     return () => { current = false; ++contextSequence.current; ++querySequence.current; };
-  }, [props.activeTerminalId, warehouseId, tariffId, authorityKey, authorityError]);
+  }, [props.activeTerminalId, warehouseId, tariffId, authorityKey, authorityError, catalogRevision]);
 
   const effectiveConfig = useMemo(() => projected ? { ...props.config,
     tariffs: projected.tariffs, taxes: projected.taxes, taxRate: projected.taxRate } : undefined,

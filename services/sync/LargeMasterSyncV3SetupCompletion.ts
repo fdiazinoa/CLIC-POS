@@ -52,7 +52,18 @@ export const createLargeMasterSyncV3SessionCoordinator = <T extends V3SetupSessi
     if (refresh && !refreshing) {
       const previous = opening;
       refreshing = Promise.resolve().then(async () => {
-        if (previous) await (await previous).assertCurrent();
+        if (previous) {
+          const prior = await previous;
+          try { await prior.assertCurrent(); }
+          catch (error) {
+            if ((error as { code?: string })?.code !== 'SYNC_V3_RUNTIME_VERSION_CHANGED') throw error;
+            if (scope?.() !== currentScope) throw error;
+            // A prior refresh may have activated SQLite before projection persistence failed.
+            const persisted = await open(false);
+            await persisted.assertCurrent();
+            if (scope?.() !== currentScope) throw error;
+          }
+        }
         return prepare(true);
       });
       opening = refreshing;
