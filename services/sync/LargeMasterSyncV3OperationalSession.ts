@@ -192,5 +192,6 @@ export class LargeMasterSyncV3OperationalSession {
 
 export const getLargeMasterSyncV3OperationalSession = createLargeMasterSyncV3SessionCoordinator(
   (refresh, metric) => LargeMasterSyncV3OperationalSession.open(refresh, metric),
-  () => v3BindingKey(readLargeMasterSyncV3BoundIdentity(), largeMasterSyncV3DownloadOrigin()),
+  () => { const identity = readLargeMasterSyncV3BoundIdentity();
+    return JSON.stringify([v3BindingKey(identity, largeMasterSyncV3DownloadOrigin()), identity.syncToken]); },
 );
