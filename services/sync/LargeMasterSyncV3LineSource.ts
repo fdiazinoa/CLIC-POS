@@ -16,6 +16,7 @@ export const validateV3PinnedLineSource = (line: CartItem, product: Product, aut
       || line.measurementUnit !== product.measurementUnit || line.purchaseUnit !== product.purchaseUnit
       || line.conversionFactor !== product.conversionFactor
       || line.operationalFlags?.integersOnly !== product.operationalFlags?.integersOnly
+      || line.operationalFlags?.trackInventory !== product.operationalFlags?.trackInventory
       || line.variantId || line.variantSku || line.variants?.length
       || line.recipeDetails?.length || line.modifiers?.length) {
       throw new LargeMasterSyncV3Error('SYNC_V3_ARTICLE_SOURCE_CHANGED');

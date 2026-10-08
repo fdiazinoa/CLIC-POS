@@ -14,12 +14,12 @@ async function callback(name: string, dependencies: Record<string, unknown>) {
   return new Function(...Object.keys(scope), `${js.code}; return ${name};`)(...Object.values(scope));
 }
 
-test('actual click/preflight opens scale with stock below one kg; confirmation demand remains fractional', async () => {
+test('actual click opens admitted untracked scale; existing tracked stock callback retains fractional demand checks', async () => {
   let stock = 0.5;
   const cartQuantityByProduct: Record<string, number> = {};
   const errors: string[] = [];
   const product = { id: 'BAL', type: 'PRODUCT', name: 'BAL-001', measurementUnit: 'Kilogramo', purchaseUnit: 'kg',
-    conversionFactor: 1, operationalFlags: { isWeighted: true, integersOnly: false, trackInventory: true },
+    conversionFactor: 1, operationalFlags: { isWeighted: true, integersOnly: false, trackInventory: false },
     v3SaleAuthority: { syncId: 'S', syncVersion: 85 }, variants: [], attributes: [] };
   const canAdd = await callback('canAddItemToCart', {
     setErrorToast: (error: string) => errors.push(error), setTimeout: () => 0,
@@ -40,11 +40,15 @@ test('actual click/preflight opens scale with stock below one kg; confirmation d
   click(product);
   assert.strictEqual(modal, product);
   assert.equal(added, 0);
+  stock = 0;
   assert.equal(canAdd(product, 0.25), true);
+  const legacyTracked = { ...product, v3SaleAuthority: undefined, operationalFlags: { ...product.operationalFlags, trackInventory: true } };
+  stock = 0.5;
+  assert.equal(canAdd(legacyTracked, 0.25), true);
   stock = 0.2;
-  assert.equal(canAdd(product, 0.25), false);
+  assert.equal(canAdd(legacyTracked, 0.25), false);
   stock = 0.5; cartQuantityByProduct.BAL = 0.375;
-  assert.equal(canAdd(product, 0.25), false);
-  assert.equal(canAdd(product, 0.125), true);
+  assert.equal(canAdd(legacyTracked, 0.25), false);
+  assert.equal(canAdd(legacyTracked, 0.125), true);
   assert.equal(errors.length, 2);
 });

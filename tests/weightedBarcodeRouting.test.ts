@@ -34,7 +34,7 @@ test('V3 weighted preflight does not demand one kilogram and mobile/card share c
 });
 
 test('V3 classification requires validated flags and units; names/services cannot imply weight', () => {
-  const product = { type: 'PRODUCT', name: 'BAL-001', operationalFlags: { isWeighted: true, integersOnly: false },
+  const product = { type: 'PRODUCT', name: 'BAL-001', operationalFlags: { isWeighted: true, integersOnly: false, trackInventory: false },
     measurementUnit: 'Kilogramo', purchaseUnit: 'KG', conversionFactor: 1, v3SaleAuthority: {} };
   assert.equal(isWeightedProduct(product), true);
   for (const patch of [{ type: 'SERVICE' }, { measurementUnit: 'kilograms' }, { conversionFactor: 0 },

@@ -1,3 +1,4 @@
+import { isValidScaleWeight } from '../utils/cartQuantity';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -40,4 +41,14 @@ test('scale modal wires product/disconnect/manual/unmount cancellation and block
   assert.match(source, /if \(!isCurrent\(\)\) return/);
   assert.match(source, /if \(initialReadAllowed\(\)\) void handleReadScale\(\)/);
   assert.doesNotMatch(source, /Math.random/);
+});
+
+test('scale confirm uses the same finite positive quantity threshold for manual and USB weights', () => {
+  for (const weight of [0, -0.125, NaN, Infinity, -Infinity, 0.000001, 0.0000005])
+    assert.equal(isValidScaleWeight(weight), false);
+  for (const weight of [0.125, 0.25, 1.234567]) assert.equal(isValidScaleWeight(weight), true);
+  const source = readFileSync(new URL('../components/ScaleModal.tsx', import.meta.url), 'utf8');
+  assert.match(source, /const canConfirmWeight = !isReading && isValidScaleWeight\(numericWeight\)/);
+  assert.match(source, /if \(canConfirmWeight\) onConfirm\(numericWeight\)/);
+  assert.match(source, /disabled=\{!canConfirmWeight\}/);
 });

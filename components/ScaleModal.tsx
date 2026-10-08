@@ -1,3 +1,4 @@
+import { isValidScaleWeight } from '../utils/cartQuantity';
 
 import React, { useState, useEffect, useRef } from 'react';
 import { readZebraWeight, isZebraEnabled, listenZebraConnection, zebraSettingEvent } from '../services/ZebraScanner';
@@ -101,6 +102,7 @@ const ScaleModal: React.FC<ScaleModalProps> = ({ product, currencySymbol, onConf
 
   const numericWeight = parseFloat(weight) || 0;
   const totalPrice = numericWeight * product.price;
+  const canConfirmWeight = !isReading && isValidScaleWeight(numericWeight);
 
   return (
     <div role="dialog" aria-modal="true" aria-label="Balanza Digital" className="fixed inset-0 z-[80] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in duration-200">
@@ -183,8 +185,8 @@ const ScaleModal: React.FC<ScaleModalProps> = ({ product, currencySymbol, onConf
               </button>
               
               <button 
-                 onClick={() => onConfirm(numericWeight)}
-                 disabled={isReading || !Number.isFinite(numericWeight) || numericWeight <= 0}
+                 onClick={() => { if (canConfirmWeight) onConfirm(numericWeight); }}
+                 disabled={!canConfirmWeight}
                  className="flex-[2] bg-blue-600 text-white rounded-xl font-bold flex flex-col items-center justify-center gap-1 active:scale-95 transition-all shadow-lg hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                  <Check size={32} />

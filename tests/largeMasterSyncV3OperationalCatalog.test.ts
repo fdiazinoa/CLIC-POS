@@ -118,7 +118,7 @@ test('rejects a result if the independent inventory snapshot changes mid-read', 
 });
 
 const weightedArticle = { ...article, name: 'BAL-001', measurementUnit: 'Kilogramo', purchaseUnit: 'kg',
-  conversionFactor: 1, operationalFlags: { trackInventory: true, isWeighted: true, integersOnly: false } };
+  conversionFactor: 1, operationalFlags: { trackInventory: false, isWeighted: true, integersOnly: false } };
 
 test('weighted V3 product uses effective price, fractional kilograms, pinned taxes and warehouse stock', async () => {
   const { ready } = fixture({ article: weightedArticle, variants: [] });
@@ -127,6 +127,8 @@ test('weighted V3 product uses effective price, fractional kilograms, pinned tax
   assert.equal(item.product.name, 'BAL-001');
   assert.equal(item.product.price, 125.5);
   assert.equal(item.product.operationalFlags.isWeighted, true);
+  assert.equal(item.product.operationalFlags.trackInventory, false);
+  assert.equal(item.product.isInventoriable, true);
   assert.equal(item.product.stockBalances.W, 5);
   assert.equal((await catalog.get('A'))?.product.measurementUnit, 'Kilogramo');
   const line = { ...item.product, cartId: 'weighted', quantity: 0.25 } as CartItem;
@@ -142,25 +144,31 @@ test('weighted V3 product uses effective price, fractional kilograms, pinned tax
     { measurementUnit: 'lb' }, { purchaseUnit: 'gr' }, { conversionFactor: 1000 },
     { operationalFlags: { ...line.operationalFlags, isWeighted: false } },
     { operationalFlags: { ...line.operationalFlags, integersOnly: true } },
+    { operationalFlags: { ...line.operationalFlags, trackInventory: true } },
+    { operationalFlags: { ...line.operationalFlags, trackInventory: undefined } },
     { operationalFlags: { ...line.operationalFlags, usesLots: true } },
     { operationalFlags: { ...line.operationalFlags, usesSerial: true } },
     { variantId: 'foreign' }, { recipeDetails: [{}] }, { modifiers: ['extra'] },
   ]) assert.throws(() => validateV3PinnedLineSource({ ...line, ...patch } as unknown as CartItem, item.product, item.authority), /ARTICLE_SOURCE_CHANGED/);
   assert.throws(() => validateV3PinnedLineSource(line,
     { ...item.product, operationalFlags: { ...item.product.operationalFlags, isWeighted: false } }, item.authority), /ARTICLE_SOURCE_CHANGED/);
+  assert.throws(() => validateV3PinnedLineSource(line,
+    { ...item.product, operationalFlags: { ...item.product.operationalFlags, trackInventory: true } }, item.authority), /ARTICLE_SOURCE_CHANGED/);
   assert.throws(() => buildLargeMasterSyncV3CheckoutFiscalInput(fiscal.config,
     [{ ...line, v3SaleAuthority: { ...item.authority, syncVersion: 11 } }], item.authority, item.taxes), /MIXED_VERSION/);
 });
 
 test('weighted contract rejects unsupported or ambiguous source semantics and advanced features', async () => {
   const changes = [
+    ...[true, undefined, null, 0, 'false'].map(trackInventory => ({ operationalFlags: {
+      isWeighted: true, integersOnly: false, trackInventory, allowNegativeStock: true } })),
     { type: 'SERVICE' }, { measurementUnit: undefined }, { measurementUnit: 'lb' },
     { purchaseUnit: 'gr' }, { conversionFactor: undefined }, { conversionFactor: 0 }, { conversionFactor: 1000 },
     { operationalFlags: { isWeighted: true } },
     { operationalFlags: { isWeighted: true, integersOnly: true } },
     { operationalFlags: { isWeighted: 'true', integersOnly: false } },
-    { operationalFlags: { isWeighted: true, integersOnly: false, usesLots: true } },
-    { operationalFlags: { isWeighted: true, integersOnly: false, usesSerial: true } },
+    { operationalFlags: { isWeighted: true, integersOnly: false, trackInventory: false, usesLots: true } },
+    { operationalFlags: { isWeighted: true, integersOnly: false, trackInventory: false, usesSerial: true } },
     { recipeDetails: [{}] }, { modifiers: [{}] }, { availableModifiers: [{}] },
     { restaurant: { comboGroups: [{}] } }, { fractionRule: {} }, { attributes: [{}] },
   ];

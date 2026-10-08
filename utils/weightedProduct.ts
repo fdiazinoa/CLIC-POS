@@ -13,8 +13,8 @@ export function hasV3KilogramContract(product: {
   type?: unknown; measurementUnit?: unknown; purchaseUnit?: unknown; conversionFactor?: unknown;
   operationalFlags?: unknown;
 }): boolean {
-  const flags = product.operationalFlags as { isWeighted?: unknown; integersOnly?: unknown; usesLots?: unknown; usesSerial?: unknown } | undefined;
-  return product.type === 'PRODUCT' && flags?.isWeighted === true && flags.integersOnly === false
+  const flags = product.operationalFlags as { isWeighted?: unknown; integersOnly?: unknown; trackInventory?: unknown; usesLots?: unknown; usesSerial?: unknown } | undefined;
+  return product.type === 'PRODUCT' && flags?.isWeighted === true && flags.integersOnly === false && flags.trackInventory === false
     && (flags.usesLots === undefined || flags.usesLots === false)
     && (flags.usesSerial === undefined || flags.usesSerial === false)
     && isKilogram(product.measurementUnit) && isKilogram(product.purchaseUnit)
