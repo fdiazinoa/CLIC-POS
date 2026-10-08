@@ -77,3 +77,23 @@ QA física pendiente para el APK candidato:
 8. Verificar que los códigos no agregan productos con un modal de pago o peso abierto.
 9. Ejecutar las puertas de release, firma, persistencia y canario del proyecto antes
    de promover un APK; no considerar esta compilación una validación física.
+
+## Nueva Balanza y configuración local
+
+En **Hardware → Balanzas → Nueva Balanza**, elige **Zebra MP7000 · USB SNAPI**.
+El formulario muestra USB automático; no requiere puerto COM, baud rate ni protocolo
+serie. **Activar en esta terminal** activa y guarda la integración local inmediatamente.
+Seleccionar el modelo o cancelar no cambia la integración. Solo se permite aplicar
+la acción en el APK Android de la terminal activa, cuya identidad debe estar disponible.
+
+La tarjeta Zebra aparece desde el mismo estado local que el panel de activación,
+incluso si se activó en una versión anterior. **Configurar** muestra su conexión USB;
+**Eliminar / desactivar** detiene la integración local. Solo hay una integración
+MP7000 por terminal. Una activación guardada no demuestra conexión física: usa
+**Probar peso real** y verifica el permiso USB.
+
+La configuración Zebra no se agrega a `config.scales` ni se sincroniza a otras cajas.
+**Guardar configuración** mantiene el flujo de las balanzas serie y demás dispositivos;
+no activa ni desactiva Zebra. Elegir Zebra al editar una balanza serie activa una
+integración local independiente y conserva el registro serie anterior. Para crear
+otra balanza serie desde la tarjeta Zebra, cierra el formulario y usa **Nueva Balanza**.
