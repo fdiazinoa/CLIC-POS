@@ -630,14 +630,11 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, currentUser, roles,
         void (async () => {
             try {
                 await waitForBackgroundSyncWindow();
-                await syncTriggerCoordinator.request({ reason: 'MANUAL' });
-                await yieldBackgroundSyncChunk();
-                if (syncManager.isUsingConfigPushV2Primary()) {
-                    await syncManager.syncTerminalManifestInBackground(undefined, { reason: 'manual_sync' });
-                } else {
-                    // Legacy/POS master modes preserve their existing catalog flow.
-                    await syncManager.syncAllCatalogs();
+                if (!syncManager.isUsingConfigPushV2Primary()) {
+                    await syncTriggerCoordinator.request({ reason: 'MANUAL' });
                 }
+                await yieldBackgroundSyncChunk();
+                await syncManager.manualSyncAll();
 
                 setLastSyncTime(new Date());
                 setSyncFeedback({

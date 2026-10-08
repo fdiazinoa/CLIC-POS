@@ -8,6 +8,9 @@
 import { syncErpPaymentMethods } from './PaymentMethodsSync';
 import { assertLegacyMasterPullAllowed, isLargeMasterSyncV3ReplacedCollection,
     usesLargeMasterSyncV3Authority } from './LargeMasterSyncV3Authority';
+import { persistLargeMasterSyncV3ConfigPushCatalog } from './LargeMasterSyncV3ConfigPush';
+import { readLargeMasterSyncV3BoundIdentity } from './LargeMasterSyncV3BoundTransport';
+import { LargeMasterSyncV3Error } from './LargeMasterSyncV3Types';
 import { getLargeMasterSyncV3OperationalSession } from './LargeMasterSyncV3OperationalSession';
 import { assertLargeMasterSyncV3ConfigPayload, largeMasterSyncV3DownloadOrigin } from './LargeMasterSyncV3DownloadOrigin';
 import { assertOperationalTerminalConfig, readOperationalTerminalBinding } from './OperationalTerminalConfig';
@@ -375,6 +378,65 @@ interface TerminalProductPricesPayload {
 }
 
 class SyncManager {
+    private manualCatalogSync: { binding: string; promise: Promise<void> } | null = null;
+    private v3CatalogRefresh: { binding: string; promise: Promise<void> } | null = null;
+
+    private refreshV3Catalog(): Promise<void> {
+        const binding = JSON.stringify(readLargeMasterSyncV3BoundIdentity());
+        const assertBinding = () => {
+            if (JSON.stringify(readLargeMasterSyncV3BoundIdentity()) !== binding) {
+                throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
+            }
+        };
+        if (this.v3CatalogRefresh) {
+            if (this.v3CatalogRefresh.binding !== binding) return Promise.reject(new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED'));
+            return this.v3CatalogRefresh.promise;
+        }
+        const promise = Promise.resolve().then(async () => {
+            await persistLargeMasterSyncV3ConfigPushCatalog(assertBinding);
+            assertBinding();
+            window.dispatchEvent(new CustomEvent('v3CatalogUpdated'));
+            window.dispatchEvent(new CustomEvent('configUpdated'));
+        });
+        this.v3CatalogRefresh = { binding, promise };
+        void promise.finally(() => {
+            if (this.v3CatalogRefresh?.promise === promise) this.v3CatalogRefresh = null;
+        }).catch(() => undefined);
+        return promise;
+    }
+
+    /** Explicit operator refresh includes V3 even when ERP outbox has no events. */
+    manualSyncAll(): Promise<void> {
+        const v3Authority = usesLargeMasterSyncV3Authority(syncPolicy.resolve().kind);
+        const binding = v3Authority ? JSON.stringify(readLargeMasterSyncV3BoundIdentity()) : '';
+        const assertBinding = () => {
+            if (v3Authority && JSON.stringify(readLargeMasterSyncV3BoundIdentity()) !== binding) throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
+        };
+        if (this.manualCatalogSync) {
+            if (this.manualCatalogSync.binding !== binding) return Promise.reject(new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED'));
+            return this.manualCatalogSync.promise;
+        }
+        const promise = Promise.resolve().then(async () => {
+            if (this.isUsingConfigPushV2Primary()) {
+                await syncTriggerCoordinator.request({ reason: 'MANUAL' });
+                assertBinding();
+                await this.syncTerminalManifestInBackground(undefined, { reason: 'manual_sync', throwOnError: v3Authority });
+                if (v3Authority) {
+                    assertBinding();
+                    await this.refreshV3Catalog();
+                }
+            } else {
+                assertBinding();
+                await this.syncAllCatalogs({ refreshV3: true });
+            }
+        });
+        this.manualCatalogSync = { binding, promise };
+        void promise.finally(() => {
+            if (this.manualCatalogSync?.promise === promise) this.manualCatalogSync = null;
+        }).catch(() => undefined);
+        return promise;
+    }
+
     private autoSyncInterval: any = null;
     private imageSyncInterval: any = null;
     private syncVersions: Map<string, number> = new Map();
@@ -3123,6 +3185,7 @@ class SyncManager {
         baseConfig?: BusinessConfig | null,
         options?: {
             bootstrapBlocks?: boolean;
+            throwOnError?: boolean;
             reason?: 'startup' | 'connection_restored' | 'app_resumed' | 'manual_sync' | 'force_sync' | 'periodic_manifest' | 'realtime';
         }
     ): Promise<BusinessConfig | null> {
@@ -3160,6 +3223,7 @@ class SyncManager {
                 duration_ms: Date.now() - startedAt,
             });
             console.warn('⚠️ SyncManager: background manifest sync failed:', error);
+            if (options?.throwOnError) throw error;
             return null;
         }
     }
@@ -6652,7 +6716,7 @@ class SyncManager {
     /**
      * Sync all catalogs (Master: push, Slave: pull)
      */
-    async syncAllCatalogs(): Promise<SyncStatus[]> {
+    async syncAllCatalogs(options: { refreshV3?: boolean } = {}): Promise<SyncStatus[]> {
         if (this.isDisabled) return [];
 
         // Catalogs: Master PUSHES, Slaves PULL
@@ -6715,6 +6779,7 @@ class SyncManager {
             ? defaultCatalogs.filter(isErpMasterPullCollection)
             : defaultCatalogs;
         if (usesLargeMasterSyncV3Authority(target.kind)) {
+            if (options.refreshV3) await this.refreshV3Catalog();
             catalogs = catalogs.filter(collection => !isLargeMasterSyncV3ReplacedCollection(collection));
         }
         if (target.kind === 'POS_MASTER' && !isMaster) {
