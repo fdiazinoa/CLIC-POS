@@ -220,6 +220,26 @@ const stripFiscalSecrets = (value: unknown): any => {
   }, {});
 };
 
+const fiscalProviderKeys = ['providerId', 'provider_id', 'provider'] as const;
+const ownFiscalValue = (source: Record<string, any>, keys: readonly string[]): unknown => {
+  const key = keys.find((entry) => Object.prototype.hasOwnProperty.call(source, entry));
+  return key === undefined ? undefined : source[key];
+};
+
+/** ERP emits a fiscal block inside its document-series wrapper. Select one
+ * authoritative incoming record; never combine providers with credentials
+ * from another record or use cached config to fill an omitted fiscal scope. */
+const incomingFiscalProviderConfig = (
+  snapshot: TerminalConfigSnapshot | null, terminalId: string,
+): Record<string, any> => {
+  if (!snapshot || (snapshot.terminal_id && snapshot.terminal_id !== terminalId)) return {};
+  const resolved = snapshot.resolution_error != null ? {} : asObject(snapshot.resolved);
+  const wrapper = asObject(resolved.terminalFiscalConfig || resolved.terminal_fiscal_config);
+  return [wrapper, asObject(wrapper.fiscal), asObject(resolved.fiscal), asObject(asObject(snapshot.config).fiscal)]
+    .find((source) => fiscalProviderKeys.some((key) => Object.prototype.hasOwnProperty.call(source, key))
+      || source.enabled === false) || {};
+};
+
 export const sanitizeFiscalConfigSecrets = <T>(value: T): T =>
   stripFiscalSecrets(value) as T;
 
@@ -2293,23 +2313,13 @@ export const applyTerminalConfigSnapshot = (
     ]
   );
   const isNoFiscalMode = fiscalModeFromSnapshot === 'NONE';
-  const hasResolvedFiscalProvider = [
-    'providerId',
-    'provider_id',
-    'provider',
-  ].some((key) => Object.prototype.hasOwnProperty.call(resolvedTerminalFiscalConfig, key));
+  const fiscalProviderConfig = incomingFiscalProviderConfig(incoming, terminalId);
+  const hasResolvedFiscalProvider = fiscalProviderKeys.some((key) => Object.prototype.hasOwnProperty.call(fiscalProviderConfig, key));
   const resolvedFiscalProviderId = hasResolvedFiscalProvider
-    ? normalizeFiscalProviderId(
-      resolvedTerminalFiscalConfig.providerId
-      ?? resolvedTerminalFiscalConfig.provider_id
-      ?? resolvedTerminalFiscalConfig.provider
-    )
+    ? normalizeFiscalProviderId(ownFiscalValue(fiscalProviderConfig, fiscalProviderKeys))
     : undefined;
-  const resolvedFiscalEnvironmentValue = Number(
-    resolvedTerminalFiscalConfig.environment
-    ?? resolvedTerminalFiscalConfig.ambiente
-    ?? 0
-  );
+  const resolvedFiscalEnabled = typeof fiscalProviderConfig.enabled === 'boolean' ? fiscalProviderConfig.enabled : undefined;
+  const resolvedFiscalEnvironmentValue = Number(ownFiscalValue(fiscalProviderConfig, ['environment', 'ambiente']) ?? 0);
   const resolvedFiscalEnvironment = (
     resolvedFiscalEnvironmentValue === 0
     || resolvedFiscalEnvironmentValue === 1
@@ -2318,14 +2328,8 @@ export const applyTerminalConfigSnapshot = (
   ) ? resolvedFiscalEnvironmentValue : 0;
   const resolvedFiscalDeliveryMode = resolvedFiscalProviderId === 'MSELLER'
     ? 'DELEGATED_ERP'
-    : normalizeFiscalProviderDeliveryMode(
-      resolvedTerminalFiscalConfig.deliveryMode
-      ?? resolvedTerminalFiscalConfig.delivery_mode
-    );
-  const resolvedFiscalCredentialKeyRaw = asString(
-    resolvedTerminalFiscalConfig.credentialKey
-    ?? resolvedTerminalFiscalConfig.credential_key
-  );
+    : normalizeFiscalProviderDeliveryMode(ownFiscalValue(fiscalProviderConfig, ['deliveryMode', 'delivery_mode']));
+  const resolvedFiscalCredentialKeyRaw = asString(ownFiscalValue(fiscalProviderConfig, ['credentialKey', 'credential_key']));
   const resolvedFiscalCredentialKey = resolvedFiscalProviderId === 'MSELLER'
     ? resolvedFiscalCredentialKeyRaw || undefined
     : resolvedFiscalCredentialKeyRaw.replace(/[^A-Za-z0-9]/g, '').toUpperCase() || undefined;
@@ -2396,6 +2400,20 @@ export const applyTerminalConfigSnapshot = (
 
   const terminalTemplate = resolveTerminalTemplate(nextConfig, terminalId);
   const existingTerminal = baseConfig.terminals?.find(terminal => terminal.id === terminalId)?.config;
+  const localFiscalTemplate: TerminalConfig['fiscal'] = existingTerminal?.fiscal || DEFAULT_TERMINAL_CONFIG.fiscal;
+  const providerChanged = hasResolvedFiscalProvider
+    && normalizeFiscalProviderId(localFiscalTemplate.providerId) !== resolvedFiscalProviderId;
+  const providerMetadataKeys = new Set([
+    'providerid', 'provider', 'environment', 'ambiente', 'deliverymode', 'fiscaldeliverymode', 'providermode',
+    'apibaseurl', 'baseurl', 'testurl', 'issueurl', 'statusurl', 'credentialkey',
+    'establishmentcode', 'digifactestablishmentcode', 'sucursalcode', 'branchcode', 'digifactbranchcode', 'branchid',
+    'branchname', 'sucursalname', 'cashiercode', 'digifactcashiercode', 'poscode', 'pointofsalecode', 'terminalcode', 'caja', 'cajacode',
+    'tipoingreso', 'modificationcode', 'unitcodegoods', 'unitcodeservices',
+  ]);
+  const fiscalTemplate = providerChanged
+    ? Object.fromEntries(Object.entries(localFiscalTemplate).filter(([key]) =>
+      !providerMetadataKeys.has(key.replace(/[^A-Za-z0-9]/g, '').toLowerCase())))
+    : localFiscalTemplate;
   const preservePricing = options.preserveOmittedOperationalScopes && !incomingV3Pricing;
   const preserveInventory = options.preserveOmittedOperationalScopes && existingTerminal
     && !Object.prototype.hasOwnProperty.call(incomingResolved, 'inventory');
@@ -2644,22 +2662,22 @@ export const applyTerminalConfigSnapshot = (
         deviceRoleDefaults.defaultRoute,
     },
     fiscal: {
-      ...(stripFiscalSecrets(terminalTemplate.fiscal) as TerminalConfig['fiscal']),
+      ...(stripFiscalSecrets(fiscalTemplate) as TerminalConfig['fiscal']),
       enabled:
         isNoFiscalMode
           ? false
           : fiscalModeFromSnapshot === 'LEGACY_B'
             ? true
-            : resolvedFiscalProviderId && resolvedFiscalProviderId !== 'NONE'
+            : resolvedFiscalEnabled ?? (resolvedFiscalProviderId && resolvedFiscalProviderId !== 'NONE'
               ? true
-              : terminalTemplate.fiscal.enabled,
+              : localFiscalTemplate.enabled),
       providerId:
         isNoFiscalMode
           ? 'NONE'
           : fiscalModeFromSnapshot === 'LEGACY_B'
             ? undefined
-            : resolvedFiscalProviderId || terminalTemplate.fiscal.providerId,
-      ...(resolvedFiscalProviderId && resolvedFiscalProviderId !== 'NONE' ? {
+            : resolvedFiscalProviderId || localFiscalTemplate.providerId,
+      ...(hasResolvedFiscalProvider ? {
         environment: resolvedFiscalEnvironment,
         deliveryMode: resolvedFiscalDeliveryMode,
         credentialKey: resolvedFiscalCredentialKey,
@@ -2674,7 +2692,7 @@ export const applyTerminalConfigSnapshot = (
           ? undefined
           :
         asString(resolvedDocuments.default_fiscal_range_id) ||
-        terminalTemplate.fiscal.defaultFiscalRangeId,
+        localFiscalTemplate.defaultFiscalRangeId,
       fiscalRanges: effectiveFiscalRanges,
       fiscalAllocations: effectiveFiscalAllocations,
     },
