@@ -1,3 +1,4 @@
+import { isWeightedProduct } from '../utils/weightedProduct';
 import { resolveV3CategoryAliases, type V3OperationalCategory } from '../services/sync/LargeMasterSyncV3Categories';
 import { recordCheckoutDiagnostic, setCheckoutCaptureContext } from '../services/CheckoutDiagnostics';
 import { freezeCount, freezePhase } from '../diagnostics/freezeCounters';
@@ -3532,8 +3533,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          return;
       }
 
-      const productName = product.name || '';
-      const isWeighted = product.type === 'SERVICE' || productName.toLowerCase().includes('(peso)');
+      const isWeighted = isWeightedProduct(product);
       const hasVariants = (product.variants || []).length > 0 || (product.attributes || []).length > 0;
       const hasRestaurantConfig = productHasRestaurantConfiguration(product) || Boolean(
          (product.availableModifiers || []).length > 0
@@ -3960,6 +3960,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const match = v3Operational ? await v3Operational.resolveCode(trimmed) : findProductByAnyCode(trimmed);
       if (match) {
          setSearchTerm('');
+         if (isWeightedProduct(match.product)) {
+            handleProductClick(match.product);
+            return { success: true, message: `${match.product.name}: ingrese o lea el peso` };
+         }
          const hasConfiguredVariant = Boolean(match.selectedVariant || match.modifiers?.length);
          if (!hasConfiguredVariant && ((match.product.variants || []).length > 0 || (match.product.attributes || []).length > 0)) {
             handleProductClick(match.product);
@@ -9272,7 +9276,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             canVoidItem={cartItemEditCapabilities.canVoidItem && !editingItem.dispatched}
          />}
          {selectedProductForVariants && <ProductVariantSelector product={selectedProductForVariants} productSalesPrice={getProductPrice(selectedProductForVariants)} currencySymbol={baseCurrency.symbol} onClose={() => setSelectedProductForVariants(null)} onConfirm={(p, m, pr, selectedVariant, variantInfo) => { addToCart(p, 1, pr, m, undefined, selectedVariant, variantInfo); setSelectedProductForVariants(null); }} />}
-         {productForScale && <ScaleModal product={productForScale} currencySymbol={baseCurrency.symbol} onClose={() => setProductForScale(null)} onConfirm={(w) => { addToCart(productForScale, w); setProductForScale(null); }} />}
+         {productForScale && <ScaleModal product={productForScale} currencySymbol={baseCurrency.symbol} onClose={() => setProductForScale(null)} onConfirm={(w) => { addToCart(productForScale, isReturnMode ? -w : w); setProductForScale(null); }} />}
          {
             showGlobalDiscount && <GlobalDiscountModal currentSubtotal={cartSubtotal} currencySymbol={baseCurrency.symbol} initialValue={globalDiscount.value.toString()} initialType={globalDiscount.type} themeColor={config.themeColor} onClose={() => setShowGlobalDiscount(false)} onConfirm={async (val, type) => {
                const numVal = parseFloat(val) || 0;
