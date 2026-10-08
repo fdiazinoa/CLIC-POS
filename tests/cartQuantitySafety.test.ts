@@ -1,3 +1,4 @@
+import { canonicalWeightQuantity, createWeightPresentation } from '../utils/scaleWeight';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
@@ -35,5 +36,19 @@ test('la validación rechaza cantidades vacías o inválidas antes del cobro', (
   assert.match(posSource, /!isValidCartQuantityTransition\(originalItem\.quantity, updatedItem\.quantity\)/);
   assert.match(posSource, /processedCart\.find\(item => !isValidCartQuantity\(item\.quantity\)\)/);
   assert.match(posSource, /item\.isReturnLine !== true/);
-  assert.match(posSource, /disabled=\{isDispatchedToKds \|\| !canStepCartQuantity\(item\.quantity, -1\)\}/);
+  assert.match(posSource, /disabled=\{isDispatchedToKds \|\| !canStepCartQuantity\(item\.quantity, -canonicalWeightQuantity\(item, 1\)\)\}/);
+});
+
+test('visible weight steps validate canonical quantity boundaries while legacy unit steps stay unchanged', () => {
+  const weighted = { weightPresentation: createWeightPresentation('S', 'lb', 'kg') };
+  const step = canonicalWeightQuantity(weighted, 1);
+  assert.equal(step, 0.45359237);
+  assert.equal(canStepCartQuantity(step, -step), false);
+  assert.equal(canStepCartQuantity(step * 2, -step), true);
+  assert.equal(canStepCartQuantity(-step, step), false);
+  assert.equal(canStepCartQuantity(-step, -step), true);
+  assert.equal(canonicalWeightQuantity({}, 1), 1);
+  const decrementGuard = /disabled=\{isDispatchedToKds \|\| !canStepCartQuantity\(item\.quantity, -canonicalWeightQuantity\(item, 1\)\)\}/g;
+  assert.equal(posSource.match(decrementGuard)?.length, 2); // mobile and desktop use the same canonical step
+  assert.equal(posSource.match(/quantity: item\.quantity - canonicalWeightQuantity\(item, 1\)/g)?.length, 2);
 });
