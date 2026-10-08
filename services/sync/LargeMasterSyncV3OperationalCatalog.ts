@@ -1,3 +1,4 @@
+import { hasV3KilogramContract } from '../../utils/weightedProduct';
 import type { V3CategoryFilter } from './LargeMasterSyncV3Categories';
 import type { Product, ProductOperationalFlags, ProductVariant, TaxDefinition,
   V3SaleAuthorityStamp } from '../../types';
@@ -85,8 +86,13 @@ export class LargeMasterSyncV3OperationalCatalog {
   }): Promise<V3OperationalProduct> {
     const article = sale.article;
     const sourceFlags = operationalFlags(article.operationalFlags);
+    const rawFlags = article.operationalFlags as RecordObject | undefined;
+    if (rawFlags?.isWeighted !== undefined && typeof rawFlags.isWeighted !== 'boolean') {
+      throw new LargeMasterSyncV3Error('SYNC_V3_ADVANCED_ARTICLE_CONTRACT_REQUIRED');
+    }
     if (!['PRODUCT', 'SERVICE'].includes(String(article.type))
-      || sourceFlags.usesLots || sourceFlags.usesSerial || sourceFlags.isWeighted
+      || sourceFlags.usesLots || sourceFlags.usesSerial
+      || (sourceFlags.isWeighted && !hasV3KilogramContract(article))
       || (Array.isArray(article.recipeDetails) && article.recipeDetails.length)
       || (Array.isArray(article.modifiers) && article.modifiers.length)) {
       throw new LargeMasterSyncV3Error('SYNC_V3_ADVANCED_ARTICLE_CONTRACT_REQUIRED');
@@ -101,6 +107,9 @@ export class LargeMasterSyncV3OperationalCatalog {
       this.ready.runtime.getInventoryBalance(articleId, this.warehouseId),
       this.ready.runtime.getOperationalVariants(articleId),
     ]);
+    if (sourceFlags.isWeighted && sourceVariants.length > 0) {
+      throw new LargeMasterSyncV3Error('SYNC_V3_ADVANCED_ARTICLE_CONTRACT_REQUIRED');
+    }
     const variants: ProductVariant[] = sourceVariants.filter(row => row.active === true).map(row => ({
       id: stringValue(row.id),
       sku: stringValue(row.sku),

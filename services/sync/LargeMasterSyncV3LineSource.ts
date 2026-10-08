@@ -1,3 +1,4 @@
+import { hasV3KilogramContract } from '../../utils/weightedProduct';
 import type { BusinessConfig, CartItem, Product, Transaction, V3SaleAuthorityStamp } from '../../types';
 import { calculateLineFiscalValuesForTransaction, freezeAuthoritativeLineFiscalAmounts } from '../../utils/fiscalBreakdown';
 import { resolveAppliedServiceTaxPolicy } from '../../utils/serviceTaxPolicy';
@@ -9,6 +10,16 @@ export const validateV3PinnedLineSource = (line: CartItem, product: Product, aut
     || line.taxable !== product.taxable || line.v3SaleAuthority?.taxIncluded !== authority.taxIncluded
     || JSON.stringify(line.appliedTaxIds) !== JSON.stringify(product.appliedTaxIds)) {
     throw new LargeMasterSyncV3Error('SYNC_V3_ARTICLE_SOURCE_CHANGED');
+  }
+  if (line.operationalFlags?.isWeighted || product.operationalFlags?.isWeighted) {
+    if (!hasV3KilogramContract(line) || !hasV3KilogramContract(product)
+      || line.measurementUnit !== product.measurementUnit || line.purchaseUnit !== product.purchaseUnit
+      || line.conversionFactor !== product.conversionFactor
+      || line.operationalFlags?.integersOnly !== product.operationalFlags?.integersOnly
+      || line.variantId || line.variantSku || line.variants?.length
+      || line.recipeDetails?.length || line.modifiers?.length) {
+      throw new LargeMasterSyncV3Error('SYNC_V3_ARTICLE_SOURCE_CHANGED');
+    }
   }
   if (line.variantId || line.variantSku) {
     const matches = (product.variants || []).filter(variant => line.variantId

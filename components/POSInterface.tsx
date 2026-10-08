@@ -1,4 +1,4 @@
-import { isWeightedProduct } from '../utils/weightedProduct';
+import { isWeightedProduct, assertWeightedCodeInput } from '../utils/weightedProduct';
 import { resolveV3CategoryAliases, type V3OperationalCategory } from '../services/sync/LargeMasterSyncV3Categories';
 import { recordCheckoutDiagnostic, setCheckoutCaptureContext } from '../services/CheckoutDiagnostics';
 import { freezeCount, freezePhase } from '../diagnostics/freezeCounters';
@@ -902,7 +902,7 @@ const ProductGridCard = React.memo(({
 }: ProductGridCardProps) => {
    freezeCount('CATALOG_CARD_RENDER_COUNT');
    const productName = product.name || '';
-   const isWeighted = product.type === 'SERVICE' || productName.toLowerCase().includes('(peso)');
+   const isWeighted = isWeightedProduct(product);
    const hasVariants = (product.variants || []).length > 0 || (product.attributes || []).length > 0;
    const isCompactMobileCard = isMobile && !usesExpandedCatalog;
    const warehouseSaleBlocked = isProductWarehouseBlockedForSale(product);
@@ -3545,13 +3545,22 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const requiresConfigurationBeforeAdd = isWeighted || hasVariants || hasRestaurantConfig;
 
       if (!isReturnMode && !ensureSalesWithOpenZPermission()) return;
-      if (requiresConfigurationBeforeAdd && !canAddItemToCart(product)) return;
+      if (requiresConfigurationBeforeAdd && !canAddItemToCart(product, v3Operational && isWeighted ? 0 : 1)) return;
 
       if (isWeighted) setProductForScale(product);
       else if (hasVariants) setSelectedProductForVariants(product);
       else if (hasRestaurantConfig) setProductForModifiers(product);
       else addToCart(product, isReturnMode ? -1 : 1);
-   }, [isMobile, defaultSalesWarehouseId, ensureSalesWithOpenZPermission, canAddItemToCart, addToCart, isReturnMode, suppressProductInputUntilMs]);
+   }, [isMobile, defaultSalesWarehouseId, ensureSalesWithOpenZPermission, canAddItemToCart, addToCart, isReturnMode, suppressProductInputUntilMs, v3Operational]);
+
+   // A V3 mobile selection resumes only after the new warehouse/tariff has rendered.
+   // Context replacement unmounts this component and discards its pending selection.
+   useEffect(() => {
+      if (!v3Operational || !pendingProductToAdd || !defaultSalesWarehouseId || showMobileConfigModal) return;
+      const pending = pendingProductToAdd;
+      setPendingProductToAdd(null);
+      handleProductClick(pending);
+   }, [v3Operational, pendingProductToAdd, defaultSalesWarehouseId, showMobileConfigModal, handleProductClick]);
 
    const handleSearchConsignments = useCallback(async () => {
       setIsSearchingConsignments(true);
@@ -3852,12 +3861,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const resolveAndAdd = async () => {
          const match = context ? await context.resolveCode(raw) : findProductByAnyCode(raw);
          if (context) assertV3UIContext(() => mounted() && addContext.current === context);
+         if (match && isWeightedProduct(match.product)) {
+            assertWeightedCodeInput(match.product, raw);
+            handleProductClick(match.product);
+            return { match, added: true };
+         }
          const added = match ? await addToCart(match.product, (isReturnMode ? -1 : 1) * match.quantity,
             match.price, match.modifiers, undefined, match.selectedVariant, match.variantInfo) : false;
          return { match, added };
       };
       return context ? scanQueue.current.run(() => mounted() && addContext.current === context, resolveAndAdd) : resolveAndAdd();
-   }, [v3Operational, findProductByAnyCode, addToCart, isReturnMode]);
+   }, [v3Operational, findProductByAnyCode, addToCart, isReturnMode, handleProductClick]);
 
    const handleSearchKeyDown = useCallback(async (e: React.KeyboardEvent<HTMLInputElement>) => {
       try {
@@ -3961,6 +3975,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (match) {
          setSearchTerm('');
          if (isWeightedProduct(match.product)) {
+            assertWeightedCodeInput(match.product, trimmed);
             handleProductClick(match.product);
             return { success: true, message: `${match.product.name}: ingrese o lea el peso` };
          }
@@ -7642,12 +7657,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                }
 
                // Proceed to add product
-               if (pendingProductToAdd) {
+               if (pendingProductToAdd && !v3Operational) {
                   // Small delay to allow config update to propagate
                   setTimeout(() => {
                      // Re-check add to cart logic with new config
-                     const pendingName = pendingProductToAdd.name || '';
-                     const isWeighted = pendingProductToAdd.type === 'SERVICE' || pendingName.toLowerCase().includes('(peso)');
+                     const isWeighted = isWeightedProduct(pendingProductToAdd);
                      const hasVariants = pendingProductToAdd.attributes && pendingProductToAdd.attributes.length > 0;
 
                      if (isWeighted) setProductForScale(pendingProductToAdd);
