@@ -159,6 +159,7 @@ type ConfigPushV2Payload = {
 };
 
 type ConfigPushV2State = {
+    bindingKey?: string;
     versionHash: string | null;
     domainVersions: Record<string, number>;
     appliedAt?: string | null;
@@ -318,11 +319,20 @@ const getSyncCapabilities = (): string[] => (
     ]
 );
 
+const configPushV2BindingKey = (): string | undefined => {
+    if (!usesLargeMasterSyncV3Authority(syncPolicy.resolve().kind)) return undefined;
+    const binding = getStoredErpSyncBinding();
+    return JSON.stringify([binding.tenantId, binding.terminalId, binding.terminalUuid,
+        resolveLocalDeviceId(), getSyncApiBase()]);
+};
+
 const readConfigPushV2State = (): ConfigPushV2State => {
     try {
         const raw = localStorage.getItem(CONFIG_PUSH_V2_STATE_KEY);
         if (!raw) return { versionHash: null, domainVersions: {} };
         const parsed = JSON.parse(raw);
+        const bindingKey = configPushV2BindingKey();
+        if (bindingKey && parsed?.bindingKey !== bindingKey) return { versionHash: null, domainVersions: {} };
         const domainVersions = parsed?.domainVersions && typeof parsed.domainVersions === 'object'
             ? Object.entries(parsed.domainVersions).reduce<Record<string, number>>((acc, [key, value]) => {
                 const normalizedKey = key === 'config'
@@ -347,6 +357,7 @@ const readConfigPushV2State = (): ConfigPushV2State => {
 
 const writeConfigPushV2State = (state: ConfigPushV2State) => {
     localStorage.setItem(CONFIG_PUSH_V2_STATE_KEY, JSON.stringify({
+        bindingKey: configPushV2BindingKey(),
         versionHash: state.versionHash || null,
         domainVersions: state.domainVersions || {},
         appliedAt: state.appliedAt || null,
@@ -503,7 +514,7 @@ const fetchConfigSnapshotV2 = async (input: {
     const payload = text ? JSON.parse(text) : {};
     const size = text.length;
 
-    if (response.status === 503) {
+    if ((![401, 403].includes(response.status) && ['SYNC_SNAPSHOT_NOT_READY', 'SYNC_SNAPSHOT_BUILDING'].includes(payload?.code)) || response.status === 503) {
         const retryAfterMs = getRetryAfterMs(response, payload) || 500;
         const error = buildRetryableConfigPushV2Error(payload?.code || 'SYNC_SNAPSHOT_BUILDING', retryAfterMs);
         error.status = response.status;
@@ -785,11 +796,12 @@ const assertConfigPushV2ConfigPersisted = async (expectedValue: unknown): Promis
 const applyConfigPushV2Domain = async (
     scope: string,
     domainPayload: unknown,
-    rollbackJournal: ConfigPushV2RollbackJournal
+    rollbackJournal: ConfigPushV2RollbackJournal,
+    assertBinding: () => void,
 ): Promise<string[]> => {
     const writes = await buildConfigPushV2DomainWrites(scope, domainPayload);
     const containsMasterNumberRanges = extractMasterNumberRanges(domainPayload).length > 0;
-    if (writes.length === 0 && !containsMasterNumberRanges) {
+    if (writes.length === 0 && !containsMasterNumberRanges && !(usesLargeMasterSyncV3Authority(syncPolicy.resolve().kind) && ['catalog', 'prices'].includes(scope))) {
         throw new Error(`Dominio ${scope} no contiene colecciones aplicables`);
     }
 
@@ -802,6 +814,7 @@ const applyConfigPushV2Domain = async (
             const { preserveLocalCatalog } = await import('../services/sync/preserveLocalCatalog');
             write.value = await preserveLocalCatalog(write.collection, write.value);
         }
+        assertBinding();
         await db.save(write.collection as any, write.value);
         if (write.collection === 'config') {
             await assertConfigPushV2ConfigPersisted(write.value);
@@ -817,6 +830,7 @@ const applyConfigPushV2Domain = async (
 const applyConfigPushV2DomainsAtomically = async (
     scopes: string[],
     domains: Record<string, unknown>,
+    assertBinding: () => void,
 ): Promise<string[]> => {
     if (!dbAdapter.saveDocumentsAtomically) {
         throw new Error('CONFIG_PUSH_V2_ATOMIC_STORAGE_UNAVAILABLE');
@@ -831,7 +845,7 @@ const applyConfigPushV2DomainsAtomically = async (
     for (const scope of orderedScopes) {
         const domainWrites = await buildConfigPushV2DomainWrites(scope, domains[scope]);
         const hasRanges = extractMasterNumberRanges(domains[scope]).length > 0;
-        if (domainWrites.length === 0 && !hasRanges) {
+        if (domainWrites.length === 0 && !hasRanges && !(usesLargeMasterSyncV3Authority(syncPolicy.resolve().kind) && ['catalog', 'prices'].includes(scope))) {
             throw new Error(`Dominio ${scope} no contiene colecciones aplicables`);
         }
         domainWrites.forEach((write) => writes.set(write.collection, write.value));
@@ -877,6 +891,7 @@ const applyConfigPushV2DomainsAtomically = async (
         });
     });
     const replaceCollections = Array.from(writes.keys());
+    assertBinding();
     await dbAdapter.saveDocumentsAtomically(documents, false, replaceCollections);
     if (writes.has('config')) await assertConfigPushV2ConfigPersisted(writes.get('config'));
     return replaceCollections;
@@ -952,6 +967,22 @@ const processConfigPushV2Event = async (
     }
 
     const startedAt = Date.now();
+    const v3Authority = usesLargeMasterSyncV3Authority(syncPolicy.resolve().kind);
+    const eventBindingKey = configPushV2BindingKey();
+    const eventAuth = v3Authority ? JSON.stringify(buildDeviceHeaders(params.deviceId)) : '';
+    const assertBinding = () => {
+        if (eventBindingKey !== configPushV2BindingKey() || (v3Authority &&
+            eventAuth !== JSON.stringify(buildDeviceHeaders(params.deviceId)))) throw new Error('CONFIG_PUSH_V2_BINDING_CHANGED');
+    };
+    const ackApplied = async (id: string) => {
+        assertBinding();
+        try { await ackErpOutboxEvent(id, 'APPLIED'); }
+        catch (error) {
+            assertBinding();
+            throw buildRetryableConfigPushV2Error(compactErrorDetail(error), 500);
+        }
+        assertBinding();
+    };
     const payload = asObject<ConfigPushV2Payload>(event.payload);
     const eventId = normalizeOptional(event.id || null);
     const snapshotId = normalizeOptional(payload.snapshot_id || null);
@@ -996,6 +1027,11 @@ const processConfigPushV2Event = async (
     setConfigPushV2InFlight(eventId, snapshotId, versionHash, scopes, attempts, null);
 
     if (state.versionHash === versionHash) {
+        if (v3Authority && scopes.some(scope => ['catalog', 'prices'].includes(scope))) {
+            const { getLargeMasterSyncV3OperationalSession } = await import('../services/sync/LargeMasterSyncV3OperationalSession');
+            await (await getLargeMasterSyncV3OperationalSession()).assertCurrent();
+            assertBinding();
+        }
         configPushV2Log('CONFIG_PUSH_V2_ALREADY_APPLIED', {
             outbox_id: eventId,
             event_type: 'CONFIG_PUSH_V2',
@@ -1010,7 +1046,7 @@ const processConfigPushV2Event = async (
             scopes,
             duration_ms: Date.now() - startedAt,
         });
-        await ackErpOutboxEvent(eventId, 'APPLIED');
+        await ackApplied(eventId);
         clearConfigPushV2InFlight();
         configPushV2Log('config_push_v2_acknowledged', {
             event_id: eventId,
@@ -1046,7 +1082,7 @@ const processConfigPushV2Event = async (
     });
     // A catalog-only version bump can use the existing projected item delta.
     // Keep the fiscal/catalog atomic snapshot path whenever fiscal also changed.
-    const catalogOnlyChange = staleScopesBase.length === 1
+    const catalogOnlyChange = !v3Authority && staleScopesBase.length === 1
         && staleScopesBase[0] === 'catalog'
         && scopes.every((scope) => scope === 'catalog' || scope === 'fiscal')
         && getConfigPushV2LocalVersion(state, 'catalog') > 0
@@ -1081,7 +1117,7 @@ const processConfigPushV2Event = async (
                 inFlight: readConfigPushV2State().inFlight,
             });
             syncMetrics.markApplyFinished();
-            await ackErpOutboxEvent(eventId, 'APPLIED');
+            await ackApplied(eventId);
             clearConfigPushV2InFlight();
             configPushV2Log('config_push_v2_catalog_delta_applied', {
                 event_id: eventId,
@@ -1100,6 +1136,11 @@ const processConfigPushV2Event = async (
         }
     }
     if (staleScopes.length === 0) {
+        if (v3Authority && scopes.some(scope => ['catalog', 'prices'].includes(scope))) {
+            const { getLargeMasterSyncV3OperationalSession } = await import('../services/sync/LargeMasterSyncV3OperationalSession');
+            await (await getLargeMasterSyncV3OperationalSession()).assertCurrent();
+            assertBinding();
+        }
         configPushV2Log('CONFIG_PUSH_V2_ALREADY_APPLIED', {
             outbox_id: eventId,
             event_type: 'CONFIG_PUSH_V2',
@@ -1116,7 +1157,7 @@ const processConfigPushV2Event = async (
             appliedAt: new Date().toISOString(),
             inFlight: readConfigPushV2State().inFlight,
         });
-        await ackErpOutboxEvent(eventId, 'APPLIED');
+        await ackApplied(eventId);
         clearConfigPushV2InFlight();
         configPushV2Log('config_push_v2_acknowledged', {
             event_id: eventId,
@@ -1159,6 +1200,11 @@ const processConfigPushV2Event = async (
                 deviceId: params.deviceId,
             });
 
+            assertBinding();
+            if (result.status === 304 && v3Authority && staleScopesBase.some(scope =>
+                ['catalog', 'prices'].includes(scope))) {
+                throw buildRetryableConfigPushV2Error('SYNC_SNAPSHOT_NOT_READY', 500);
+            }
             if (result.status === 304) {
                 configPushV2Log('CONFIG_PUSH_V2_ALREADY_APPLIED', {
                     outbox_id: eventId,
@@ -1167,7 +1213,7 @@ const processConfigPushV2Event = async (
                     scopes: staleScopes,
                     status: 'APPLIED',
                 });
-                await ackErpOutboxEvent(eventId, 'APPLIED');
+                await ackApplied(eventId);
                 clearConfigPushV2InFlight();
                 configPushV2Log('config_push_v2_acknowledged', {
                     event_id: eventId,
@@ -1197,6 +1243,7 @@ const processConfigPushV2Event = async (
                 terminalId,
             });
 
+            assertBinding();
             const authorityChannel = syncPolicy.resolve().kind;
             if (usesLargeMasterSyncV3Authority(authorityChannel)) {
                 assertLargeMasterSyncV3IncomingConfigMasters(snapshotPayload, authorityChannel);
@@ -1221,11 +1268,13 @@ const processConfigPushV2Event = async (
             let touchedCollections: string[] = [];
             const rollbackJournal: ConfigPushV2RollbackJournal = new Map();
             try {
+                assertBinding();
                 if (couplesFiscalCatalog) {
-                    touchedCollections = await applyConfigPushV2DomainsAtomically(staleScopes, domains);
+                    touchedCollections = await applyConfigPushV2DomainsAtomically(staleScopes, domains, assertBinding);
                 } else {
                     for (const scope of staleScopes) {
-                        touchedCollections.push(...await applyConfigPushV2Domain(scope, domains[scope], rollbackJournal));
+                        assertBinding();
+                        touchedCollections.push(...await applyConfigPushV2Domain(scope, domains[scope], rollbackJournal, assertBinding));
                     }
                 }
                 for (const scope of staleScopes) {
@@ -1239,6 +1288,11 @@ const processConfigPushV2Event = async (
                         count: touchedForScope.length,
                     });
                 }
+                if (v3Authority && staleScopesBase.some(scope => ['catalog', 'prices'].includes(scope))) {
+                    const { persistLargeMasterSyncV3ConfigPushCatalog } = await import('../services/sync/LargeMasterSyncV3ConfigPush');
+                    await persistLargeMasterSyncV3ConfigPushCatalog(assertBinding);
+                }
+                assertBinding();
                 // Do not activate a range from an event whose later domain fails.
                 // The independent monotonic range transaction runs only after all
                 // ordinary domain writes have been validated successfully.
@@ -1249,6 +1303,7 @@ const processConfigPushV2Event = async (
                     );
                 }
             } catch (error) {
+                assertBinding();
                 if (!couplesFiscalCatalog) {
                     await rollbackConfigPushV2Collections(rollbackJournal);
                 }
@@ -1264,6 +1319,7 @@ const processConfigPushV2Event = async (
                 throw error;
             }
 
+            assertBinding();
             writeConfigPushV2State({
                 versionHash,
                 domainVersions: {
@@ -1280,9 +1336,12 @@ const processConfigPushV2Event = async (
                 scopes: staleScopes,
                 domain_versions: nextDomainVersions,
             });
+            if (v3Authority && staleScopesBase.some(scope => ['catalog', 'prices'].includes(scope))) {
+                window.dispatchEvent(new CustomEvent('v3CatalogUpdated'));
+            }
             await dispatchConfigPushV2CollectionUpdates(touchedCollections);
             syncMetrics.markApplyFinished();
-            await ackErpOutboxEvent(eventId, 'APPLIED');
+            await ackApplied(eventId);
             clearConfigPushV2InFlight();
             configPushV2Log('config_push_v2_acknowledged', {
                 event_id: eventId,
@@ -1307,7 +1366,10 @@ const processConfigPushV2Event = async (
                 Math.max(requestError.retryAfterMs || 500, 500 * (2 ** Math.max(0, attempt - 1)))
             );
             const code = requestError.code || compactErrorDetail(error);
+            assertBinding();
             setConfigPushV2InFlight(eventId, snapshotId, versionHash, staleScopes, attempt, code);
+            // An ambiguous ACK must not reapply an already persisted catalog in this cycle.
+            if (requestError.retryable && readConfigPushV2State().versionHash === versionHash) return 'RETRY';
 
             if (requestError.retryable || requestError.status === 503 || requestError.status === 0) {
                 configPushV2Log(requestError.status === 503 ? 'config_snapshot_building' : 'config_push_v2_retry_scheduled', {
@@ -2857,7 +2919,7 @@ export const processErpSyncOutbox = async (
 	                        error: compactErrorDetail(error),
 	                    });
 	                }
-	                if (error?.retryable) {
+	                if (error?.retryable || error?.message === 'CONFIG_PUSH_V2_BINDING_CHANGED' || error?.code === 'SYNC_V3_RUNTIME_VERSION_CHANGED') {
 	                    continue;
 	                }
 	                await ackErpOutboxEvent(event.id, 'FAILED', error?.message || 'Error procesando evento ERP outbox');

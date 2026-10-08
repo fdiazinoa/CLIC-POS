@@ -11,6 +11,9 @@ const auth = 'https://clic-erp.clicsuite.com/api/sync';
 const terminalId = '9ffc6771-7845-4976-afd3-20cebc3cc6e8';
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value));
 const savedFetch = globalThis.fetch;
+const savedWarn = console.warn;
+test.before(() => { console.warn = (...args) => savedWarn(String(args[0]), (args[1] as any)?.code || ''); });
+test.after(() => { console.warn = savedWarn; });
 test.afterEach(() => { globalThis.fetch = savedFetch; });
 
 test('configuration GET alone selects validated download authority; V2 and auth headers unchanged', async () => {
@@ -59,10 +62,14 @@ async function fixture(candidate = true, channel = 'ERP_ACTIVE') {
   const localTerminalId = config.terminals[0].id;
   const collections = new Map<string, unknown>([['config', clone(config)]]);
   const saves: string[] = [];
+  let refreshes = 0;
+  let ackResponse = () => Response.json({status:"success"});
+  let refresh: () => Promise<void> = async () => {};
+  let saveBarrier: () => Promise<void> = async () => {};
   let atomic = 0;
   let ranges = 0;
   const db = { get: async (name: string) => clone(collections.get(name) ?? []),
-    save: async (name: string, value: unknown) => { saves.push(name); collections.set(name, clone(value)); } };
+    save: async (name: string, value: unknown) => { await saveBarrier(); saves.push(name); collections.set(name, clone(value)); } };
   const adapter = { saveDocumentsAtomically: async (documents: any[], _silent: boolean, replace: string[]) => {
     atomic++;
     for (const name of replace) {
@@ -72,16 +79,19 @@ async function fixture(candidate = true, channel = 'ERP_ACTIVE') {
   } };
   Object.assign(globalThis, { localStorage: storage, sessionStorage: storage,
     CustomEvent: class { constructor(public type: string, public options?: unknown) {} },
-    window: { localStorage: storage, setTimeout, clearTimeout, dispatchEvent: () => true },
-    __v3ConfigFixture: { db, adapter, ranges: () => { ranges++; } } });
+    window: { localStorage: storage, setTimeout: (callback: () => void, _delay: number) => setTimeout(callback, 0), clearTimeout, dispatchEvent: () => true },
+    __v3ConfigFixture: { db, adapter, refresh: async () => { refreshes++; await refresh(); }, ranges: () => { ranges++; } } });
   for (const [key, value] of Object.entries({ CLIC_ERP_BASE_URL: 'https://clic-erp.clicsuite.com',
     CLIC_POS_DEVICE_ID: 'device', clic_tenant_id: 'tenant', clic_erp_sync_tenant_id: 'tenant',
     clic_erp_sync_terminal_id: terminalId, clic_erp_sync_local_terminal_id: localTerminalId, active_terminal_id: localTerminalId,
     clic_pos_config_push_v2_state: JSON.stringify({ versionHash: null, domainVersions: {}, inFlight: null }) })) storage.setItem(key, value);
   const mocks: Record<string, string> = {
     './db': 'export const db=globalThis.__v3ConfigFixture.db;',
+    '../../utils/db': 'export const db=globalThis.__v3ConfigFixture.db;',
     '../services/db': 'export const dbAdapter=globalThis.__v3ConfigFixture.adapter;',
     '../db': 'export const dbAdapter=globalThis.__v3ConfigFixture.adapter;',
+    './LargeMasterSyncV3OperationalSession': 'export const getLargeMasterSyncV3OperationalSession=async(refresh)=>{if(refresh) await globalThis.__v3ConfigFixture.refresh();return {assertCurrent:async()=>{},projectConfig:async x=>x}};',
+    '../services/sync/LargeMasterSyncV3OperationalSession': 'export const getLargeMasterSyncV3OperationalSession=async(refresh)=>{if(refresh) await globalThis.__v3ConfigFixture.refresh();return {assertCurrent:async()=>{},projectConfig:async x=>x}};',
     '../services/sync/SyncManager': 'export const syncManager={refreshTerminalResolvedConfig:async()=>{throw Error("Unexpected catalog fallback")}};',
     '../services/sync/ProductImageCacheService': 'export const productImageCacheService={normalizeIncomingProducts:async x=>x};',
     '../services/sync/MasterNumberRangeService': 'export const persistMasterNumberRangesFromSnapshot=async()=>globalThis.__v3ConfigFixture.ranges();',
@@ -112,13 +122,16 @@ async function fixture(candidate = true, channel = 'ERP_ACTIVE') {
       if (String(url).includes('/outbox/pull')) return Response.json({ status: 'success', events: [event], count: 1 });
       if (String(url).includes('/config-snapshots/')) return snapshotResponse?.() ?? Response.json({ status: 'success', snapshot_id: 'snapshot',
         version_hash: 'hash', tenant_id: 'tenant', terminal_id: terminalId, versions, scopes, domains, ...overrides });
-      if (String(url).includes('/outbox/ack')) { acks.push(JSON.parse(String(init?.body))); return Response.json({ status: 'success' }); }
+      if (String(url).includes('/outbox/ack')) { acks.push(JSON.parse(String(init?.body))); return ackResponse(); }
       throw Error('Unexpected route');
     }) as typeof fetch;
     const result = await lifecycle.triggerErpSyncOutbox('manual_sync');
     return { result, acks, calls, state: lifecycle.getConfigPushV2Diagnostics() };
   }
-  return { run, config, collections, saves, atomic: () => atomic, ranges: () => ranges, storage, values };
+  return { run, config, collections, saves, atomic: () => atomic, ranges: () => ranges, storage, values, refreshes: () => refreshes,
+    onAck: (callback: () => Response) => { ackResponse = callback; },
+    onRefresh: (callback: () => Promise<void>) => { refresh = callback; },
+    onSave: (callback: () => Promise<void>) => { saveBarrier = callback; } };
 }
 
 test('real candidate lifecycle fails before ALL sequential/atomic writes, ranges and version activation', async () => {
@@ -238,6 +251,7 @@ test('candidate 304 and already-applied events retain original no-payload protoc
   for (const cached of [false, true]) {
     const f = await fixture();
     if (cached) f.storage.setItem('clic_pos_config_push_v2_state', JSON.stringify({
+      bindingKey: JSON.stringify(['tenant', terminalId, null, 'device', auth]),
       versionHash: 'hash', domainVersions: { inventory: 1 }, inFlight: null }));
     const { result, calls, acks } = await f.run(['inventory'], {}, {}, () => new Response(null, { status: 304 }));
     assert.equal(result.applied, 1);
@@ -247,4 +261,133 @@ test('candidate 304 and already-applied events retain original no-payload protoc
     assert.equal(f.ranges(), 0);
     assert.equal(calls.filter(call => call.url.includes('/config-snapshots/')).length, cached ? 0 : 1);
   }
+});
+
+
+test('V3 catalog changes refresh shared session before projection persistence and ACK, duplicates do not refresh', async () => {
+  const f = await fixture();
+  let release!: () => void;
+  const barrier = new Promise<void>(resolve => { release = resolve; });
+  f.onRefresh(() => barrier);
+  const operation = f.run(['catalog'], { catalog: { users: [] }, fiscal: {} });
+  while (!f.refreshes()) await new Promise(resolve => setTimeout(resolve, 1));
+  assert.equal(JSON.parse(f.storage.getItem('clic_pos_config_push_v2_state')!).versionHash, null);
+  release();
+  const first = await operation;
+  assert.equal(first.result.applied, 1);
+  assert.equal(first.acks[0].status, 'APPLIED');
+  assert.equal(f.refreshes(), 1);
+  assert(first.calls.every(call => !/products|master_scopes=items/.test(call.url)));
+  const duplicate = await f.run(['catalog'], { catalog: {}, fiscal: {} });
+  assert.equal(duplicate.result.applied, 1);
+  assert.equal(f.refreshes(), 1);
+});
+
+test('V3 projection save failure retains checkpoint and retries without APPLIED', async () => {
+  const f = await fixture();
+  f.onSave(async () => { throw new Error('DISK_WRITE_FAILED'); });
+  const failed = await f.run(['catalog'], { catalog: {}, fiscal: {} });
+  assert.equal(failed.result.applied, 0);
+  assert.deepEqual(failed.acks, []);
+  assert.equal(failed.state.versionHash, null);
+  assert(failed.state.inFlight);
+  f.onSave(async () => {});
+  const recovered = await f.run(['catalog'], { catalog: {}, fiscal: {} });
+  assert.equal(recovered.result.applied, 1);
+});
+
+test('known pending snapshot codes retry 202/409 without FAILED ACK and preserve inFlight on exhaustion', async () => {
+  const f = await fixture();
+  for (const status of [202, 409]) {
+    const pending = await f.run(['catalog'], {}, {}, () => Response.json({code: 'SYNC_SNAPSHOT_NOT_READY'}, {status}));
+    assert.equal(pending.result.applied, 0);
+    assert.deepEqual(pending.acks, []);
+    assert.equal(pending.calls.filter(call => call.url.includes('/config-snapshots/')).length, 3);
+    assert(pending.state.inFlight);
+    assert.equal(f.refreshes(), 0);
+  }
+  const ready = await f.run(['catalog'], {catalog: {}, fiscal: {}});
+  assert.equal(ready.result.applied, 1);
+});
+
+test('unscoped success cannot suppress V3 catalog application and binding change cannot ACK new scope', async () => {
+  const f = await fixture();
+  f.storage.setItem('clic_pos_config_push_v2_state', JSON.stringify({versionHash:'hash', domainVersions:{catalog:1,fiscal:1}}));
+  const first = await f.run(['catalog'], {catalog:{}, fiscal:{}});
+  assert.equal(f.refreshes(), 1);
+  assert.equal(first.result.applied, 1);
+  f.storage.setItem('clic_erp_sync_tenant_id', 'another-tenant');
+  const other = await f.run(['catalog'], {catalog:{}, fiscal:{}}, {tenant_id:'another-tenant'});
+  assert.equal(f.refreshes(), 2);
+  assert.equal(other.result.applied, 1);
+  f.storage.setItem('clic_pos_config_push_v2_state', JSON.stringify({}));
+  f.onRefresh(async () => { f.storage.setItem('clic_erp_sync_terminal_id', '00000000-0000-4000-8000-000000000001'); });
+  const switched = await f.run(['catalog'], {catalog:{}, fiscal:{}}, {tenant_id:'another-tenant'});
+  assert.equal(switched.result.applied, 0);
+  assert.deepEqual(switched.acks, []);
+});
+
+test('304 never acknowledges an unpersisted V3 catalog', async () => {
+  const f = await fixture();
+  const result = await f.run(['catalog'], {}, {}, () => new Response(null, {status:304}));
+  assert.equal(result.result.applied, 0);
+  assert.deepEqual(result.acks, []);
+  assert.equal(result.state.versionHash, null);
+  assert.equal(f.refreshes(), 0);
+});
+
+
+test('projection commit barrier holds APPLIED and scoped checkpoint until persisted readback', async () => {
+  const f = await fixture();
+  (f.collections.get('config') as any).terminals[0].config.scales = [{id:'scale',brand:'ZEBRA',model:'MP7000',port:'USB'}];
+  const scales = clone((f.collections.get('config') as any).terminals[0].config.scales);
+  let release!: () => void; let saving = false;
+  const barrier = new Promise<void>(resolve => { release = resolve; });
+  f.onSave(async () => { saving = true; await barrier; });
+  const operation = f.run(['catalog'], {catalog:{}, fiscal:{}});
+  while (!saving) await new Promise(resolve => setTimeout(resolve, 1));
+  assert.equal(f.refreshes(), 1);
+  assert.equal(JSON.parse(f.storage.getItem('clic_pos_config_push_v2_state')!).versionHash, null);
+  release();
+  const result = await operation;
+  assert.equal(result.result.applied, 1);
+  assert.equal(result.acks[0].status, 'APPLIED');
+  assert.deepEqual((f.collections.get('config') as any).terminals[0].config.scales, scales);
+});
+
+
+test('lost ACK retains persisted V3 checkpoint and retry does not reapply catalog', async () => {
+  const f = await fixture();
+  f.onAck(() => Response.json({code:'TEMPORARY_FAILURE'}, {status:503}));
+  const first = await f.run(['catalog'], {catalog:{},fiscal:{}});
+  assert.equal(first.result.applied, 0);
+  assert.equal(first.state.versionHash, 'hash');
+  assert.equal(f.refreshes(), 1);
+  assert(first.acks.every(ack => ack.status === 'APPLIED'));
+  f.onAck(() => Response.json({status:'success'}));
+  const second = await f.run(['catalog'], {catalog:{},fiscal:{}});
+  assert.equal(second.result.applied, 1);
+  assert.equal(f.refreshes(), 1);
+});
+
+test('partial native readiness failure remains retryable before projection and can resume', async () => {
+  const f = await fixture(); let failures = 1;
+  f.onRefresh(async () => { if (failures-- > 0) throw Object.assign(new Error('readback'), {code:'SYNC_V3_INVENTORY_NOT_READY'}); });
+  const result = await f.run(['catalog'], {catalog:{},fiscal:{}});
+  assert.equal(result.result.applied, 1);
+  assert.equal(f.refreshes(), 2);
+  assert.deepEqual(result.acks.map(ack => ack.status), ['APPLIED']);
+});
+
+
+test('binding switch during ACK never clears the new scope checkpoint', async () => {
+  const f = await fixture();
+  f.onAck(() => {
+    f.storage.setItem('clic_erp_sync_tenant_id', 'switched-company');
+    f.storage.setItem('clic_pos_config_push_v2_state', JSON.stringify({versionHash:'new-scope',domainVersions:{}}));
+    return Response.json({status:'success'});
+  });
+  const result = await f.run(['catalog'], {catalog:{},fiscal:{}});
+  assert.equal(result.result.applied, 0);
+  assert.equal(JSON.parse(f.storage.getItem('clic_pos_config_push_v2_state')!).versionHash, 'new-scope');
 });

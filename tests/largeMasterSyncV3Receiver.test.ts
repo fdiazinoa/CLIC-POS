@@ -1122,3 +1122,34 @@ test('dark lifecycle is wired but cannot load runtime or start network work', as
   assert.deepEqual(await bootstrapLargeMasterSyncV3Lifecycle(undefined), { enabled: false, runtime: null });
   assert.equal(getLargeMasterSyncV3Runtime(), null);
 });
+
+test('BAL-001 V3 chunks retain weighted metadata, authoritative price/tax after reopening native store', async () => {
+  const article = {id:'88e70db0-9f96-41f1-8fbc-d2ef42c10811', sku:'BAL-001', name:'Balanza fixture',
+    type:'PRODUCT', active:true, sellable:true, inventoriable:true, taxable:true, taxIds:['TX'],
+    operationalFlags:{isWeighted:true, trackInventory:true}, unit:'KG', saleUnit:'KG', conversionFactor:1};
+  const {store, sqlite} = sqliteStore();
+  const {manifest, responses} = await manifestAndResponses({articles:[[article]],
+    tariffs:[[{id:'T',name:'General',active:true,taxIncluded:false}]],
+    taxes:[[{id:'TX',name:'ITBIS',type:'SALES',rate:0.18,active:true}]],
+    prices:[[{articleId:article.id,tariffId:'T',price:125.5}]]});
+  responses.set(`/api/sync/v3/master-syncs/${SYNC_ID}/manifest`, {status:200,headers:{},text:JSON.stringify({
+    ...manifest, contractVersion:2,authority:{catalog:'V3_SNAPSHOT',prices:'V3_SNAPSHOT',taxes:'V3_SNAPSHOT',inventory:'SEPARATE_COLLECTION'},
+    supplementalCollections:[{collection:'productInventory',domain:'inventory',endpoint:'/api/sync/collections/productInventory/full',consistency:'EVENTUAL_AFTER_V3_ACTIVATION'}]})});
+  const transport = new MapTransport(responses);
+  const client = new LargeMasterSyncV3Client({store,transport,requireOperationalContract:true,
+    storageStats:async()=>({availableBytes:1e9,totalBytes:2e9})});
+  const version = await client.resumeSync(SYNC_ID);
+  await store.replaceInventorySnapshot(version,{version:1,cursor:'C',balances:[]});
+  const reopened = new LargeMasterSyncV3SqliteStore(()=>({
+    execute:async(sql:string)=>{sqlite.exec(sql);},
+    query:async(sql:string,values:unknown[]=[])=>({values:sqlite.prepare(sql).all(...values) as Record<string,unknown>[]}),
+    run:async(sql:string,values:unknown[]=[])=>({changes:{changes:sqlite.prepare(sql).run(...values).changes}}),
+  }),serialWriteLock());
+  const runtime = await LargeMasterSyncV3Runtime.open(reopened);
+  assert(runtime);
+  assert.deepEqual(await runtime.getOperationalArticle(article.id), article);
+  assert.equal((await runtime.getPrices([article.id],'T'))[0].price,125.5);
+  assert.equal((await runtime.getOperationalTaxes())[0].rate,0.18);
+  assert(transport.requests.every(path=>path.startsWith('/api/sync/v3/')));
+  sqlite.close();
+});

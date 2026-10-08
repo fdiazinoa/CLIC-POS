@@ -103,3 +103,34 @@ test('cache never returns a stale session on changed binding/token/runtime/inven
   await get();
   assert.equal(preparations, 2);
 });
+
+
+test('refresh recovers only durable runtime change and shares the retry flight', async () => {
+  let runtime = 1; const opens: boolean[] = [];
+  const get = createLargeMasterSyncV3SessionCoordinator(async refresh => {
+    opens.push(refresh); const version = runtime;
+    return { assertCurrent: async () => {
+      if (version !== runtime) throw Object.assign(new Error('runtime'), {code:'SYNC_V3_RUNTIME_VERSION_CHANGED'});
+    }, projectConfig: async (config: BusinessConfig) => config };
+  }, () => 'bound-token');
+  await get(); runtime = 2;
+  await Promise.all([get(true), get(true), get()]);
+  assert.deepEqual(opens, [false, false, true]);
+});
+
+test('refresh never recovers binding/token errors or changes identity during runtime recovery', async () => {
+  for (const mode of ['binding', 'scope']) {
+    const opens: boolean[] = []; let stale = false; let scope = 'A';
+    const get = createLargeMasterSyncV3SessionCoordinator(async refresh => {
+      opens.push(refresh);
+      if (opens.length === 2 && mode === 'scope') scope = 'B';
+      return { assertCurrent: async () => {
+        if (stale && opens.length === 1) throw Object.assign(new Error('stale'), {
+          code: mode === 'binding' ? 'SYNC_V3_BINDING_CHANGED' : 'SYNC_V3_RUNTIME_VERSION_CHANGED'});
+      }, projectConfig: async (config: BusinessConfig) => config };
+    }, () => scope);
+    await get(); stale = true;
+    await assert.rejects(get(true), /stale/);
+    assert.deepEqual(opens, mode === 'binding' ? [false] : [false, false]);
+  }
+});

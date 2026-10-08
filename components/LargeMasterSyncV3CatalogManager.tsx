@@ -1,3 +1,4 @@
+import { subscribeLargeMasterSyncV3CatalogUpdates } from '../services/sync/LargeMasterSyncV3CatalogUpdates';
 import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { BusinessConfig, Warehouse } from '../types';
 import { LargeMasterSyncV3CatalogRead } from '../services/sync/LargeMasterSyncV3CatalogRead';
@@ -47,6 +48,14 @@ export default function LargeMasterSyncV3CatalogManager(props: {
   const contextKey = JSON.stringify([props.terminalId, terminal?.config.currentDeviceId, terminal?.config.erpTerminalId,
     terminal?.config.pricing?.defaultTariffId, terminal?.config.inventoryScope?.defaultSalesWarehouseId,
     props.warehouses]);
+  const [catalogRevision, setCatalogRevision] = useState(0);
+  useEffect(() => {
+    const refresh = () => {
+      view.cancel(); reader.current = undefined;
+      setCursors([null]); setCatalogRevision(previous => previous + 1);
+    };
+    return subscribeLargeMasterSyncV3CatalogUpdates(refresh);
+  }, [view]);
   const oldContext = useRef(contextKey);
   const reader = useRef<Promise<LargeMasterSyncV3CatalogRead>>();
   useEffect(() => {
@@ -70,7 +79,7 @@ export default function LargeMasterSyncV3CatalogManager(props: {
         return current.page({ query: debouncedQuery, category, ...filters, afterId: (cursors[cursors.length - 1] ?? null), limit: 25 });
     });
     return () => { view.cancel(); };
-  }, [query, debouncedQuery, category, filters, cursors, contextKey, view]);
+  }, [query, debouncedQuery, category, filters, cursors, contextKey, catalogRevision, view]);
   // A changed context must not paint the old page while effects reset its cursor/reader.
   const visible = oldContext.current === contextKey ? state : { status: 'loading' as const };
   return <section className="h-full overflow-auto bg-white p-6 text-slate-900">
