@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { KG_PER_LB, convertWeight, convertUnitPrice, createWeightPresentation, displayWeightPrice,
@@ -71,4 +72,12 @@ test('snapshot corruption fails closed for display, pinning, restore and merge',
   assert.equal(hasV3KilogramContract(pounds), true);
   assert.equal(hasV3KilogramContract({ ...pounds, purchaseUnit: 'kg' }), false);
   assert.equal(hasV3KilogramContract({ ...pounds, operationalFlags: { ...pounds.operationalFlags, trackInventory: true } }), false);
+});
+
+test('stale default requires explicit modal selection and original price uses captured display unit', () => {
+  const modal = readFileSync(new URL('../components/ScaleModal.tsx', import.meta.url), 'utf8');
+  assert.match(modal, /useState\(defaultScaleId \|\| ''\)/);
+  assert.doesNotMatch(modal, /scales.length === 1 \? scales\[0\].id/);
+  const pos = readFileSync(new URL('../components/POSInterface.tsx', import.meta.url), 'utf8');
+  assert.match(pos, /displayWeightPrice\(item, item.originalPrice!\)/);
 });

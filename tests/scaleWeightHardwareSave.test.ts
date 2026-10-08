@@ -12,7 +12,7 @@ test('actual Zebra save preserves enabled on unit edit, activates only explicit 
     const previous = { zebraUnit: 'kg', defaultScaleId: 'prior' };
     const dependencies = {
       editingScale: { id: 'local-zebra-mp7000', displayUnit: 'lb' }, zebraBusy: false, editingZebra: true,
-      editingLocalZebra: scenario === 'edit', zebraLocalAllowed: true, selectedTerminalId: 'T', editingScaleDefault: true,
+      editingLocalZebra: scenario === 'edit', defaultScaleId: 'prior', setDefaultScaleId: () => {}, zebraLocalAllowed: true, selectedTerminalId: 'T', editingScaleDefault: true,
       readLocalScalePreference: () => previous,
       saveLocalScalePreference: (_terminal: string, preference: any) => { if (scenario === 'storage-failure') throw Error('disk failed'); writes.push(preference); },
       applyZebra: async (enabled: boolean) => { activations.push(enabled); return scenario !== 'activation-failure'; },

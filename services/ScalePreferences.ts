@@ -6,15 +6,15 @@ import { isZebraEnabled, zebraSettingEvent } from './ZebraScanner';
 export type ResolvedScale = { id: string; name: string; displayUnit: ScaleWeightUnit; driver: 'ZEBRA' | 'MANUAL' };
 export const LOCAL_ZEBRA_ID = 'local-zebra-mp7000';
 export const scalePreferencesEvent = 'clic:scale-preferences-changed';
-export const scaleScopeKey = (tenantId: string, companyId: string, terminalId: string, deviceId: string): string => {
-  if (!tenantId || !companyId || !terminalId || !deviceId) throw new Error('Falta identidad de empresa, terminal o dispositivo para configurar la balanza.');
-  return `clic_scale_units:${JSON.stringify([tenantId, companyId, terminalId, deviceId])}`;
+export const scaleScopeKey = (tenantId: string, companyId: string, terminalId: string, deviceId: string, boundTerminalId = terminalId): string => {
+  if (!tenantId || !companyId || !terminalId || !deviceId || !boundTerminalId) throw new Error('Falta identidad de empresa, terminal o dispositivo para configurar la balanza.');
+  return `clic_scale_units:${JSON.stringify([tenantId, companyId, terminalId, deviceId, boundTerminalId])}`;
 };
 export function currentScaleScope(terminalId: string): string {
   const credentials = readTerminalCredentialsSync();
-  return scaleScopeKey(credentials.erpTenantId || credentials.tenantId || '', credentials.companyId || '', terminalId, resolveLocalDeviceId());
+  return scaleScopeKey(credentials.erpTenantId || credentials.tenantId || '', credentials.companyId || '', terminalId, resolveLocalDeviceId(), credentials.erpTerminalId || credentials.terminalId || '');
 }
-type Preference = { zebraUnit?: ScaleWeightUnit; defaultScaleId?: string };
+type Preference = { zebraUnit?: ScaleWeightUnit; defaultScaleId?: string | null };
 export function readLocalScalePreference(terminalId: string): Preference {
   let key: string;
   try { key = currentScaleScope(terminalId); } catch { return {}; }
@@ -24,14 +24,14 @@ export function readLocalScalePreference(terminalId: string): Preference {
   try { value = JSON.parse(raw); } catch { throw new Error('Configuración de balanza dañada; vuelve a guardarla.'); }
   if (!value || typeof value !== 'object' || Array.isArray(value)
     || (value.zebraUnit !== undefined && value.zebraUnit !== 'kg' && value.zebraUnit !== 'lb')
-    || (value.defaultScaleId !== undefined && typeof value.defaultScaleId !== 'string')) {
+    || (value.defaultScaleId !== undefined && value.defaultScaleId !== null && typeof value.defaultScaleId !== 'string')) {
     throw new Error('Configuración de unidad de balanza inválida; vuelve a guardarla.');
   }
   return value;
 }
 export function saveLocalScalePreference(terminalId: string, preference: Preference): void {
   if ((preference.zebraUnit !== undefined && preference.zebraUnit !== 'kg' && preference.zebraUnit !== 'lb')
-    || (preference.defaultScaleId !== undefined && typeof preference.defaultScaleId !== 'string')) throw new Error('Preferencia de balanza inválida.');
+    || (preference.defaultScaleId !== undefined && preference.defaultScaleId !== null && typeof preference.defaultScaleId !== 'string')) throw new Error('Preferencia de balanza inválida.');
   const credentials = readTerminalCredentialsSync();
   if ((credentials.erpTerminalId || credentials.terminalId) !== terminalId) throw new Error('Solo puedes configurar la balanza local de esta terminal.');
   const key = currentScaleScope(terminalId);
@@ -47,7 +47,7 @@ export function saveLocalScalePreference(terminalId: string, preference: Prefere
   }
   window.dispatchEvent(new Event(scalePreferencesEvent));
 }
-export function resolveSaleScales(config: BusinessConfig, terminalId: string): { scales: ResolvedScale[]; defaultScaleId?: string; scope: string } {
+export function resolveSaleScales(config: BusinessConfig, terminalId: string): { scales: ResolvedScale[]; defaultScaleId?: string; scope: string; boundTerminalId: string } {
   const hardware = config.terminals?.find(row => row.id === terminalId)?.config.hardware;
   const local = readLocalScalePreference(terminalId);
   const credentials = readTerminalCredentialsSync();
@@ -60,16 +60,45 @@ export function resolveSaleScales(config: BusinessConfig, terminalId: string): {
     });
   if (terminalId === localTerminalId && isZebraEnabled()) scales.push({ id: LOCAL_ZEBRA_ID, name: 'Zebra MP7000', displayUnit: local.zebraUnit || 'kg', driver: 'ZEBRA' });
   if (!scales.length) scales.push({ id: 'manual', name: 'Entrada manual', displayUnit: 'kg', driver: 'MANUAL' });
-  const preferred = local.defaultScaleId || hardware?.defaultScaleId;
-  const defaultScaleId = scales.some(scale => scale.id === preferred) ? preferred : !preferred && scales.length === 1 ? scales[0].id : undefined;
+  const preferred = local.defaultScaleId !== undefined ? local.defaultScaleId : hardware?.defaultScaleId;
+  const explicitDefault = local.defaultScaleId !== undefined || hardware?.defaultScaleId !== undefined;
+  const defaultScaleId = typeof preferred === 'string' && scales.some(scale => scale.id === preferred) ? preferred
+    : !explicitDefault && scales.length === 1 ? scales[0].id : undefined;
   let scope = '';
   try { scope = currentScaleScope(terminalId); } catch { scope = terminalId; }
-  return { scales, defaultScaleId, scope };
+  return { scales, defaultScaleId, scope, boundTerminalId: localTerminalId || '' };
 }
 export const scaleChangeEvents = [scalePreferencesEvent, zebraSettingEvent];
 
 export function assertCurrentScaleContext(captured: ReturnType<typeof resolveSaleScales>, config: BusinessConfig, terminalId: string): void {
+  const credentials = readTerminalCredentialsSync();
+  if (captured.boundTerminalId && (captured.boundTerminalId !== terminalId
+    || (credentials.erpTerminalId || credentials.terminalId) !== captured.boundTerminalId)) {
+    throw new Error('La identidad de la terminal cambió. Selecciona el artículo nuevamente.');
+  }
   if (JSON.stringify(resolveSaleScales(config, terminalId)) !== JSON.stringify(captured)) {
     throw new Error('La configuración o identidad de la balanza cambió. Selecciona el artículo nuevamente.');
+  }
+}
+
+/** Keep one effective local default while shared hardware configuration is saved. */
+export async function persistScaleConfigurationDefault(terminalId: string, defaultScaleId: string | undefined,
+  saveConfig: () => Promise<void>): Promise<void> {
+  const credentials = readTerminalCredentialsSync();
+  if ((credentials.erpTerminalId || credentials.terminalId) !== terminalId) { await saveConfig(); return; }
+  const key = currentScaleScope(terminalId);
+  const previousRaw = localStorage.getItem(key);
+  const previous = readLocalScalePreference(terminalId);
+  saveLocalScalePreference(terminalId, { ...previous, defaultScaleId: defaultScaleId || null });
+  try {
+    await saveConfig();
+    if (currentScaleScope(terminalId) !== key) throw new Error('La identidad cambió mientras se guardaba la balanza.');
+  } catch (error) {
+    try {
+      if (previousRaw === null) localStorage.removeItem(key); else localStorage.setItem(key, previousRaw);
+      if (localStorage.getItem(key) !== previousRaw) throw new Error('readback');
+      window.dispatchEvent(new Event(scalePreferencesEvent));
+    } catch { throw new Error('Falló guardar hardware y restaurar la balanza predeterminada; verifica la configuración.'); }
+    throw error;
   }
 }

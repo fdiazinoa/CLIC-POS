@@ -1,4 +1,4 @@
-import { readLocalScalePreference, saveLocalScalePreference } from '../services/ScalePreferences';
+import { readLocalScalePreference, saveLocalScalePreference, persistScaleConfigurationDefault, resolveSaleScales } from '../services/ScalePreferences';
 
 import React, { useState, useMemo, useEffect } from 'react';
 import { Capacitor } from '@capacitor/core';
@@ -301,7 +301,10 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
 
    const selectedTerminalId = terminalId || permissionService.getTerminalId() || '';
    const [editingScaleDefault, setEditingScaleDefault] = useState(false);
-   const [defaultScaleId, setDefaultScaleId] = useState(globalConfig.terminals?.find(t => t.id === (terminalId || permissionService.getTerminalId()))?.config.hardware?.defaultScaleId);
+   const [defaultScaleId, setDefaultScaleId] = useState<string | undefined>(() => {
+      try { return resolveSaleScales(globalConfig, selectedTerminalId).defaultScaleId; }
+      catch { return globalConfig.terminals?.find(t => t.id === selectedTerminalId)?.config.hardware?.defaultScaleId; }
+   });
    const getZebraScope = () => ({ platform: Capacitor.getPlatform(), selectedTerminalId, localTerminalId: permissionService.getTerminalId() });
    const zebraLocalAllowed = canConfigureLocalZebra(getZebraScope());
    useEffect(() => {
@@ -329,7 +332,7 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
       setEditingZebra(true);
       setEditingLocalZebra(true);
       setZebraMessage('');
-      setEditingScaleDefault(preference.defaultScaleId === 'local-zebra-mp7000');
+      setEditingScaleDefault(defaultScaleId === 'local-zebra-mp7000');
       setEditingScale({ displayUnit: preference.zebraUnit || 'kg', id: 'local-zebra-mp7000', name: 'Zebra MP7000', technology: 'DIRECT', isEnabled: zebraEnabled });
    };
    const normalizedTestBarcode = testBarcode.replace(/\D/g, '');
@@ -464,7 +467,7 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
       }
 
       try {
-         await onUpdateConfig(newConfig);
+         await persistScaleConfigurationDefault(selectedTerminalId, defaultScaleId, async () => { await onUpdateConfig(newConfig); });
          setHardwareSaveFeedback({ success: true, message: 'Configuración de hardware guardada correctamente.' });
       } catch (error) {
          const message = error instanceof Error ? error.message : 'No se pudo guardar la configuración de hardware.';
@@ -767,13 +770,14 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
          if (!zebraLocalAllowed) { setZebraMessage('Solo puedes configurar la balanza de esta terminal.'); return; }
          try {
             const previous = readLocalScalePreference(selectedTerminalId);
-            saveLocalScalePreference(selectedTerminalId, { zebraUnit: editingScale.displayUnit || 'kg',
-              defaultScaleId: editingScaleDefault ? editingScale.id : previous.defaultScaleId === editingScale.id ? undefined : previous.defaultScaleId });
+            const nextDefault = editingScaleDefault ? editingScale.id : defaultScaleId === editingScale.id ? null : defaultScaleId || null;
+            saveLocalScalePreference(selectedTerminalId, { zebraUnit: editingScale.displayUnit || 'kg', defaultScaleId: nextDefault });
             if (!editingLocalZebra && !(await applyZebra(true))) {
                try { saveLocalScalePreference(selectedTerminalId, previous); }
                catch { setZebraMessage('Falló activar Zebra y restaurar la unidad previa. Verifica la configuración local.'); }
                return;
             }
+            setDefaultScaleId(nextDefault || undefined);
             setEditingScale(null);
          } catch (error) { setZebraMessage(error instanceof Error ? error.message : 'No se pudo guardar la unidad.'); }
          return;

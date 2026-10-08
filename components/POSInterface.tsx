@@ -8630,7 +8630,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                        <div className="flex flex-col mt-0.5">
                                           <div className="flex items-center gap-2">
                                              <span className="text-xs font-black text-blue-600">{baseCurrency.symbol}{displayWeightPrice(item).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: item.weightPresentation ? 8 : 2 })}{item.weightPresentation ? `/${item.weightPresentation.displayUnit}` : ''}</span>
-                                             {hasDiscount && <span className="text-[10px] text-red-500 font-bold line-through">{baseCurrency.symbol}{item.originalPrice?.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>}
+                                             {hasDiscount && <span className="text-[10px] text-red-500 font-bold line-through">{baseCurrency.symbol}{displayWeightPrice(item, item.originalPrice!).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: item.weightPresentation ? 8 : 2 })}</span>}
                                           </div>
                                           <span className="text-[9px] font-bold text-gray-500 uppercase tracking-tighter">{lineTaxSummary}</span>
                                           {item.consignmentDocumentNo && (
