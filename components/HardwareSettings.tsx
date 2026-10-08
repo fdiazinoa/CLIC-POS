@@ -1,5 +1,7 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
+import { Capacitor } from '@capacitor/core';
+import { isZebraEnabled, setZebraEnabled, readZebraWeight, zebraSettingEvent } from '../services/ZebraScanner';
 import {
    Printer, ScanBarcode, Bluetooth, RefreshCw, CheckCircle,
    X, Zap, Settings as SettingsIcon, Usb, Network, Plus,
@@ -11,6 +13,8 @@ import {
    Coffee, Truck
 } from 'lucide-react';
 import { BusinessConfig, Product, CustomerDisplayConfig, ScaleDevice, ScaleTech, PrinterDevice, ConnectionType, ScaleLabelConfig, FingerprintReaderConfig, FingerprintDriver, FingerprintDiscoveredDevice } from '../types';
+import { SCALE_PRESETS, ZEBRA_USB_CONFIG, applyScalePreset, applyLocalZebraSetting, canConfigureLocalZebra, type ScalePreset } from '../utils/scalePresets';
+import { permissionService } from '../services/sync/PermissionService';
 import { parseScaleBarcodeDetailed } from '../utils/barcodeParser';
 import { nativePrintBridge } from '../services/printer/NativePrintBridge';
 import { buildEscPosHardwareTestPayload } from '../services/printer/EscPosFormatter';
@@ -22,16 +26,6 @@ import {
    resetCustomerDisplayAutoLaunch,
 } from '../utils/customerDisplay';
 import { inferMediaType, isValidRemoteMediaUrl } from '../utils/media';
-
-// Perfiles predefinidos de balanzas populares
-const SCALE_PRESETS = [
-   { id: 'CAS_PD2', brand: 'CAS', model: 'PD-II / ER', baud: 9600, data: 7, parity: 'Even', protocol: 'NCI', icon: '⚖️' },
-   { id: 'TOLEDO_8217', brand: 'Toledo', model: 'Mettler 8217', baud: 9600, data: 7, parity: 'Even', protocol: 'Standard', icon: '⚖️' },
-   { id: 'DIBAL_G310', brand: 'Dibal', model: 'G-310 / G-325', baud: 9600, data: 8, parity: 'None', protocol: 'Protocolo T', icon: '⚖️' },
-   { id: 'BIZERBA', brand: 'Bizerba', model: 'SC-II / BC-II', baud: 9600, data: 8, parity: 'None', protocol: 'Dialog 06', icon: '⚖️' },
-   { id: 'ISHIDA', brand: 'Ishida', model: 'Uni-7 / Uni-5', baud: 9600, data: 8, parity: 'None', protocol: 'Standard', icon: '⚖️' },
-   { id: 'MANUAL', brand: 'Genérica', model: 'Configuración Manual', baud: 9600, data: 8, parity: 'None', protocol: 'NCI', icon: '⚙️' },
-];
 
 const DEFAULT_DISPLAY_CONFIG: CustomerDisplayConfig = {
    isEnabled: true,
@@ -110,11 +104,16 @@ interface HardwareSettingsProps {
 type HardwareTab = 'PERIPHERALS' | 'SCALES' | 'DISPLAY' | 'CASHDRO' | 'LABELS' | 'FINGERPRINT';
 
 const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfig, products, onUpdateConfig, onClose, terminalId }) => {
+   const [zebraEnabled, setZebra] = useState(isZebraEnabled);
+   const [zebraMessage, setZebraMessage] = useState('');
+   const [zebraBusy, setZebraBusy] = useState(false);
    const [activeTab, setActiveTab] = useState<HardwareTab>('PERIPHERALS');
 
    // -- Local State synced with Config --
    const [scales, setScales] = useState<ScaleDevice[]>(globalConfig.scales || []);
    const [printers, setPrinters] = useState<PrinterDevice[]>(globalConfig.availablePrinters || []);
+   const [editingZebra, setEditingZebra] = useState(false);
+   const [editingLocalZebra, setEditingLocalZebra] = useState(false);
    const [editingScale, setEditingScale] = useState<ScaleDevice | null>(null);
 
    // -- Discovery State --
@@ -300,6 +299,32 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
    const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
 
    const selectedTerminalId = terminalId || globalConfig.terminals?.[0]?.id || 'T1';
+   const getZebraScope = () => ({ platform: Capacitor.getPlatform(), selectedTerminalId, localTerminalId: permissionService.getTerminalId() });
+   const zebraLocalAllowed = canConfigureLocalZebra(getZebraScope());
+   useEffect(() => {
+      const refresh = () => setZebra(isZebraEnabled());
+      window.addEventListener(zebraSettingEvent, refresh);
+      return () => window.removeEventListener(zebraSettingEvent, refresh);
+   }, []);
+   const applyZebra = async (enabled: boolean): Promise<boolean> => {
+      if (zebraBusy) return false;
+      setZebraBusy(true);
+      setZebraMessage('');
+      try {
+         await applyLocalZebraSetting(getZebraScope(), enabled, setZebraEnabled);
+         setZebraMessage(enabled ? 'Integración local activada. La conexión se verifica con Probar peso real y el permiso USB de Android.' : 'Integración local desactivada.');
+         return true;
+      } catch (error) {
+         setZebraMessage(error instanceof Error ? error.message : 'No se pudo aplicar la configuración local.');
+         return false;
+      } finally { setZebra(isZebraEnabled()); setZebraBusy(false); }
+   };
+   const editLocalZebra = () => {
+      setEditingZebra(true);
+      setEditingLocalZebra(true);
+      setZebraMessage('');
+      setEditingScale({ id: 'local-zebra-mp7000', name: 'Zebra MP7000', technology: 'DIRECT', isEnabled: zebraEnabled });
+   };
    const normalizedTestBarcode = testBarcode.replace(/\D/g, '');
    const buildScalePreviewSegments = () => {
       const totalLength = Math.max(1, scaleLabelConfig.structure.totalLength || 13);
@@ -324,6 +349,9 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
    // --- ACTIONS ---
 
    const createNewScale = () => {
+      setEditingZebra(false);
+      setEditingLocalZebra(false);
+      setZebraMessage('');
       setEditingScale({
          id: `scale_${Date.now()}`,
          name: 'Nueva Balanza',
@@ -338,18 +366,11 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
       });
    };
 
-   const handleApplyPreset = (preset: typeof SCALE_PRESETS[0]) => {
-      if (!editingScale) return;
-      setEditingScale({
-         ...editingScale,
-         name: preset.id === 'MANUAL' ? editingScale.name : `${preset.brand} ${preset.model}`,
-         directConfig: {
-            port: editingScale.directConfig?.port || 'COM1',
-            baudRate: preset.baud,
-            dataBits: preset.data,
-            protocol: preset.protocol
-         }
-      });
+   const handleApplyPreset = (preset: ScalePreset) => {
+      if (!editingScale || editingLocalZebra || zebraBusy) return;
+      const draft = applyScalePreset(editingScale, preset);
+      setEditingScale(draft.scale);
+      setEditingZebra(draft.driver === 'ZEBRA_USB');
    };
 
    const handleDeleteScale = async (id: string) => {
@@ -730,8 +751,12 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
       );
    };
 
-   const handleSaveScale = () => {
-      if (!editingScale) return;
+   const handleSaveScale = async () => {
+      if (!editingScale || zebraBusy) return;
+      if (editingZebra) {
+         if (await applyZebra(true)) setEditingScale(null);
+         return;
+      }
       const newScales = scales.some(s => s.id === editingScale.id)
          ? scales.map(s => s.id === editingScale.id ? editingScale : s)
          : [...scales, editingScale];
@@ -1462,11 +1487,41 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
                         <div><h3 className="text-xl font-black text-slate-800 flex items-center gap-3"><Scale className="text-blue-600" /> Gestión de Balanzas</h3><p className="text-xs text-slate-400 font-medium">Configura dispositivos de pesaje por serie o USB.</p></div>
                         <button onClick={createNewScale} className="px-6 py-3 bg-blue-600 text-white rounded-2xl font-black shadow-xl shadow-blue-500/20 active:scale-95 transition-all flex items-center gap-2"><Plus size={24} /> Nueva Balanza</button>
                      </div>
+                     <div className="p-5 border rounded-2xl bg-blue-50 space-y-3">
+                        <h4 className="font-bold">Zebra MP7000 · USB SNAPI</h4>
+                        <p className="text-sm">Configuración local de esta terminal. Aplicar Zebra activa USB inmediatamente; Guardar configuración conserva los demás dispositivos.</p>
+                        {!zebraLocalAllowed && <p role="status" className="text-sm text-amber-800">Disponible solo en el APK Android de la terminal activa. Abre Hardware en ese POS para configurar su USB.</p>}
+                        <label className="flex items-center gap-2">
+                           <input type="checkbox" checked={zebraEnabled && zebraLocalAllowed} disabled={!zebraLocalAllowed || zebraBusy} onChange={e => { void applyZebra(e.target.checked); }} /> Activar Zebra MP7000 en esta terminal
+                        </label>
+                        <button type="button" disabled={!zebraLocalAllowed || !zebraEnabled || zebraBusy} className="px-4 py-2 bg-blue-600 text-white rounded-xl disabled:opacity-50" onClick={async () => {
+                           if (!canConfigureLocalZebra(getZebraScope()) || zebraBusy) return;
+                           setZebraBusy(true);
+                           try { setZebraMessage(`Peso estable: ${(await readZebraWeight()).toFixed(3)} kg`); }
+                           catch (error) { setZebraMessage(error instanceof Error ? error.message : 'No se pudo leer'); }
+                           finally { setZebraBusy(false); }
+                        }}>Probar peso real</button>
+                        <p role="status" className="text-sm">{zebraMessage}</p>
+                     </div>
                      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        {zebraEnabled && zebraLocalAllowed && (
+                           <div className="p-8 bg-white border-2 border-blue-200 rounded-[2.5rem] space-y-3">
+                              <Usb size={32} className="text-blue-600" />
+                              <h4 className="font-black text-slate-800 text-lg">Zebra MP7000</h4>
+                              <p className="text-xs font-bold text-blue-600">USB automático · SNAPI · Solo esta terminal</p>
+                              <p className="text-xs text-slate-500">Activada; conexión pendiente de verificar con peso real.</p>
+                              <div className="flex gap-3">
+                                 <button type="button" disabled={zebraBusy} onClick={editLocalZebra} className="text-blue-600 font-bold">Configurar</button>
+                                 <button type="button" disabled={zebraBusy} onClick={async () => {
+                                    if (await clicConfirm('¿Desactivar y quitar Zebra MP7000 de esta terminal?')) await applyZebra(false);
+                                 }} className="text-red-600 font-bold">Eliminar / desactivar</button>
+                              </div>
+                           </div>
+                        )}
                         {scales.map(scale => (
                            <div key={scale.id} className="p-8 bg-white border-2 border-slate-100 rounded-[2.5rem] relative group hover:border-blue-400 hover:shadow-xl transition-all">
                               <div className="absolute top-6 right-6 opacity-0 group-hover:opacity-100 flex gap-2 transition-opacity">
-                                 <button onClick={() => setEditingScale(scale)} className="p-2.5 bg-slate-50 rounded-xl text-blue-600 hover:bg-blue-50"><SettingsIcon size={18} /></button>
+                                 <button onClick={() => { setEditingZebra(false); setEditingLocalZebra(false); setEditingScale(scale); }} className="p-2.5 bg-slate-50 rounded-xl text-blue-600 hover:bg-blue-50"><SettingsIcon size={18} /></button>
                                  <button onClick={() => handleDeleteScale(scale.id)} className="p-2.5 bg-slate-50 rounded-xl text-red-500 hover:bg-red-50"><Trash2 size={18} /></button>
                               </div>
                               <div className="w-14 h-14 bg-slate-50 rounded-2xl flex items-center justify-center text-blue-500 mb-6 group-hover:bg-blue-600 group-hover:text-white transition-all shadow-inner"><Scale size={32} /></div>
@@ -1474,7 +1529,7 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
                               <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{scale.technology === 'DIRECT' ? 'SERIAL/COM' : 'ETIQUETADO'}</span>
                            </div>
                         ))}
-                        {scales.length === 0 && (
+                        {scales.length === 0 && !(zebraEnabled && zebraLocalAllowed) && (
                            <div className="col-span-full py-20 border-2 border-dashed border-slate-200 rounded-[3rem] text-center text-slate-400">
                               <Scale size={64} className="mx-auto mb-4 opacity-10" />
                               <p className="text-sm font-bold uppercase tracking-widest">No hay balanzas registradas</p>
@@ -1620,7 +1675,7 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
          </div>
 
          {editingScale && (
-            <div className="fixed inset-0 z-[130] bg-black/70 backdrop-blur-md flex items-center justify-center p-4">
+            <div role="dialog" aria-modal="true" aria-label="Parámetros de Balanza" className="fixed inset-0 z-[130] bg-black/70 backdrop-blur-md flex items-center justify-center p-4">
                <div className="bg-white rounded-[3rem] w-full max-w-2xl shadow-2xl overflow-hidden animate-in zoom-in-95 flex flex-col max-h-[90vh]">
                   <div className="p-8 border-b border-slate-50 flex justify-between items-center shrink-0">
                      <div className="flex items-center gap-4">
@@ -1630,7 +1685,7 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
                            <p className="text-xs text-slate-400 font-bold uppercase tracking-widest mt-1">Configuración del Puerto RS-232 / USB</p>
                         </div>
                      </div>
-                     <button onClick={() => setEditingScale(null)} className="p-2 hover:bg-slate-100 rounded-full"><X size={24} /></button>
+                     <button disabled={zebraBusy} onClick={() => setEditingScale(null)} className="p-2 hover:bg-slate-100 rounded-full"><X size={24} /></button>
                   </div>
 
                   <div className="flex-1 overflow-y-auto p-8 space-y-8 custom-scrollbar">
@@ -1641,6 +1696,7 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
                            {SCALE_PRESETS.map(preset => (
                               <button
                                  key={preset.id}
+                                 disabled={editingLocalZebra || zebraBusy}
                                  onClick={() => handleApplyPreset(preset)}
                                  className="p-4 rounded-2xl border-2 border-slate-100 hover:border-blue-400 bg-white hover:shadow-lg transition-all text-left flex flex-col gap-2 group"
                               >
@@ -1657,6 +1713,7 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
                      <div className="h-px bg-slate-100"></div>
 
                      <section className="space-y-6">
+                        {!editingZebra && (<>
                         <div>
                            <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 ml-1">Alias del Dispositivo</label>
                            <input
@@ -1721,12 +1778,24 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
                               </button>
                            </div>
                         </div>
+                        </>)}
+                        {editingZebra && (
+                           <div className="p-6 rounded-2xl bg-blue-50 space-y-3">
+                              <h4 className="font-black text-blue-900">Zebra MP7000 · USB automático</h4>
+                              <p className="text-sm">Detección {ZEBRA_USB_CONFIG.connection} automática ({ZEBRA_USB_CONFIG.port}) · {ZEBRA_USB_CONFIG.protocol}.</p>
+                              <p className="text-sm">Conecta el MP7000 al puerto USB host, configúralo en SNAPI y acepta el permiso USB de Android.</p>
+                              <p className="text-sm font-bold">Aplicar activa y guarda Zebra solo en esta terminal. Cancelar conserva su configuración actual.</p>
+                              {editingLocalZebra && <p className="text-sm">Para una balanza serie, cierra este registro y elige Nueva Balanza.</p>}
+                              {!zebraLocalAllowed && <p role="alert" className="text-sm text-amber-800">Solo disponible en el APK Android de la terminal activa.</p>}
+                              <p role="status" className="text-sm">{zebraMessage}</p>
+                           </div>
+                        )}
                      </section>
                   </div>
 
                   <div className="p-8 bg-gray-50 border-t flex gap-4 shrink-0">
-                     <button onClick={() => setEditingScale(null)} className="flex-1 py-4 font-black text-slate-400 hover:bg-white rounded-2xl border border-transparent hover:border-slate-200 transition-all">Cancelar</button>
-                     <button onClick={handleSaveScale} className="flex-[2] py-4 bg-blue-600 text-white rounded-[1.5rem] font-black text-lg shadow-xl shadow-blue-200 active:scale-95 transition-all">Aplicar Configuración</button>
+                     <button disabled={zebraBusy} onClick={() => setEditingScale(null)} className="flex-1 py-4 font-black text-slate-400 hover:bg-white rounded-2xl border border-transparent hover:border-slate-200 transition-all">Cancelar</button>
+                     <button disabled={zebraBusy || (editingZebra && !zebraLocalAllowed)} onClick={() => void handleSaveScale()} className="flex-[2] py-4 bg-blue-600 text-white rounded-[1.5rem] font-black text-lg shadow-xl shadow-blue-200 active:scale-95 transition-all">{zebraBusy ? 'Aplicando…' : editingZebra ? 'Activar en esta terminal' : 'Aplicar Configuración'}</button>
                   </div>
                </div>
             </div>

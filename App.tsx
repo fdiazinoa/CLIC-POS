@@ -1,3 +1,4 @@
+import { applyLocalUserProfiles, LOCAL_USER_PROFILE_CHANGED } from './utils/localUserProfiles';
 import RecoveryCloseDialog from './components/RecoveryCloseDialog';
 import LargeMasterSyncV3CanaryScreen from './components/LargeMasterSyncV3CanaryScreen';
 import { LARGE_MASTER_SYNC_V3_CANARY } from './services/sync/LargeMasterSyncV3Canary';
@@ -2407,7 +2408,15 @@ const AppContent: React.FC = () => {
     return () => window.removeEventListener('pos:resume-recovered-close', open);
   }, []);
 
-  const [users, setUsers] = useState<User[]>([]);
+  const [users, setRawUsers] = useState<User[]>([]);
+  const setUsers: React.Dispatch<React.SetStateAction<User[]>> = useCallback((value) => {
+    setRawUsers(previous => applyLocalUserProfiles(typeof value === 'function' ? value(previous) : value));
+  }, []);
+  useEffect(() => {
+    const refreshProfiles = () => setUsers(previous => previous);
+    window.addEventListener(LOCAL_USER_PROFILE_CHANGED, refreshProfiles);
+    return () => window.removeEventListener(LOCAL_USER_PROFILE_CHANGED, refreshProfiles);
+  }, [setUsers]);
 
   // --- SECURITY BOOTSTRAP STATE ---
   const [isSecurityLoaded, setIsSecurityLoaded] = useState(false);
@@ -6644,6 +6653,7 @@ const AppContent: React.FC = () => {
     || currentView === 'KIOSK_WELCOME';
 
   useBarcodeScanner({
+    nativeOwner: true,
     enabled: scannerEnabledViews,
     onScan: (barcode) => {
       if (currentView === 'KIOSK_WELCOME') {

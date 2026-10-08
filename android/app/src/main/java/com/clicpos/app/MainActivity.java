@@ -54,6 +54,7 @@ public class MainActivity extends BridgeActivity {
                 + " savedState=" + (savedInstanceState != null)
                 + " launchedFromHistory=" + launchedFromHistory);
         if (BuildConfig.POS_DIAGNOSTICS) registerPlugin(PosDiagnosticSink.class);
+        registerPlugin(ZebraScannerPlugin.class);
         super.onCreate(savedInstanceState);
         // Capacitor sets its own debugging policy while building the bridge.
         if (BuildConfig.WEBVIEW_PROFILE_QA) WebView.setWebContentsDebuggingEnabled(true);

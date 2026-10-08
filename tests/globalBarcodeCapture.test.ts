@@ -300,7 +300,9 @@ test('POS marks manual inputs and quiet receiver, blocks modal capture and prese
     assert.equal(pos.match(/data-barcode-scanner-target="true"/g)?.length, 3);
     assert.match(pos, /data-pos-scanner-enabled=\{!isAnyModalOpen/);
     assert.match(pos, /attachSalesScannerFocus\(window, \(\) => salesScannerReceiverRef\.current\)/);
-    const process = pos.slice(pos.indexOf('const processBarcode ='), pos.indexOf('const isAnyModalOpen'));
+    const process = pos.slice(pos.indexOf('const performBarcode ='), pos.indexOf('const processBarcode ='));
+    const wrapper = pos.slice(pos.indexOf('const processBarcode ='), pos.indexOf('const isAnyModalOpen'));
+    assert.match(wrapper, /performBarcode\(\.\.\.args\)/);
     assert.match(process, /setSearchTerm\(''\)/);
     assert.ok(process.indexOf("setSearchTerm('')") < process.indexOf('routeScannedCoupon(trimmed)'));
     assert.match(process, /setErrorToast\('Código no encontrado'\)/);

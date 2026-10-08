@@ -75,7 +75,9 @@ test('search reference and aliases normalize JSON/DGII input for local ambiguity
 
 test('POS keeps coupon precedence and delegates invoice actions to the secured TicketHistory flow', () => {
   const pos = readFileSync(new URL('../components/POSInterface.tsx', import.meta.url), 'utf8');
-  const process = pos.slice(pos.indexOf('const processBarcode ='), pos.indexOf('const isAnyModalOpen'));
+  const process = pos.slice(pos.indexOf('const performBarcode ='), pos.indexOf('const processBarcode ='));
+  const wrapper = pos.slice(pos.indexOf('const processBarcode ='), pos.indexOf('const isAnyModalOpen'));
+  assert.match(wrapper, /performBarcode\(\.\.\.args\)/);
   assert.ok(process.indexOf('routeScannedCoupon(trimmed)') < process.indexOf('shouldRouteInvoiceScan(trimmed)'));
   assert.ok(process.indexOf('findProductByAnyCode(trimmed)') < process.indexOf('shouldRouteInvoiceScan(trimmed)'));
   assert.match(process, /activeReservationByScanCode\.get/);
@@ -101,7 +103,9 @@ test('POS keeps coupon precedence and delegates invoice actions to the secured T
 
 test('camera reservation recovery closes the scanner once without changing product routing', () => {
   const source = readFileSync(new URL('../components/POSInterface.tsx', import.meta.url), 'utf8');
-  const process = source.slice(source.indexOf('const processBarcode ='), source.indexOf('const isAnyModalOpen'));
+  const process = source.slice(source.indexOf('const performBarcode ='), source.indexOf('const processBarcode ='));
+  const wrapper = source.slice(source.indexOf('const processBarcode ='), source.indexOf('const isAnyModalOpen'));
+  assert.match(wrapper, /performBarcode\(\.\.\.args\)/);
   const reservation = process.slice(process.indexOf("data.type === 'RESERVATION_NOTE'"), process.indexOf("data.type === 'INVOICE_RETURN'"));
   assert.equal((reservation.match(/handleRecoverReservation\(found\)/g) || []).length, 1);
   assert.equal((reservation.match(/context\.onReservationRecovered\?\.\(\)/g) || []).length, 1);

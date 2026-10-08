@@ -1,3 +1,4 @@
+import { applyLocalUserProfiles } from './localUserProfiles';
 import {
   BusinessConfig, Product, User, Customer, Transaction,
   Warehouse, StockTransfer, CashMovement, InventoryLedgerEntry, LedgerConcept,
@@ -1182,7 +1183,8 @@ export const db = {
   },
 
   get: async (collection: keyof typeof SEED_DATA, queryParams?: Record<string, string>) => {
-    return await dbAdapter.getCollection(collection as string, queryParams);
+    const records = await dbAdapter.getCollection(collection as string, queryParams);
+    return collection === 'users' ? applyLocalUserProfiles(records as User[]) : records;
   },
 
   save: async (collection: keyof typeof SEED_DATA, payload: any) => {

@@ -667,7 +667,10 @@ export const getEffectiveFiscalComplianceConfig = (
   if (terminalProvider.id === 'NONE' || terminalProvider.enabled === false) {
     return {
       ...base,
-      mode: 'NONE',
+      // A missing/disabled e-CF provider describes readiness, not the fiscal
+      // policy selected in ERP. Keep explicit ECF visible without enabling
+      // issuance or borrowing a provider from another configuration.
+      mode: resolveTerminalFiscalMode(terminalConfig) === 'ECF' ? 'ECF' : 'NONE',
       defaultProvider: 'NONE'
     };
   }
