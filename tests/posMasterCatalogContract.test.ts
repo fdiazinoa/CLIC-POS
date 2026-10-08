@@ -48,8 +48,8 @@ test('client catalog batches bypass per-call debounce so production and promotio
     'utf8',
   );
   const syncAllCatalogsSource = syncManagerSource.slice(
-    syncManagerSource.indexOf('async syncAllCatalogs()'),
-    syncManagerSource.indexOf('async syncAllCatalogs()') + 10_000,
+    syncManagerSource.indexOf('async syncAllCatalogs('),
+    syncManagerSource.indexOf('async syncAllCatalogs(') + 10_000,
   );
 
   assert.match(

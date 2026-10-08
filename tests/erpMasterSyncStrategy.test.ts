@@ -74,7 +74,9 @@ test('startup, reconnect, manifest and manual fallbacks remain available', () =>
     assert.match(appSource, /requestConditionalTerminalConfig\('connection_restored'\)/);
     assert.match(appSource, /MANIFEST_REFRESH_INTERVAL_MS = 15 \* 60 \* 1000/);
     assert.match(syncSettingsSource, /syncTriggerCoordinator\.request\(\{ reason: 'MANUAL' \}\)/);
-    assert.match(syncStatusSource, /syncTriggerCoordinator\.request\(\{ reason: 'MANUAL' \}\)/);
+    assert.match(syncStatusSource, /syncManager\.manualSyncAll\(\)/);
+    assert.match(syncSettingsSource, /syncManager\.manualSyncAll\(\)/);
+    assert.match(syncManagerSource, /manualSyncAll\(\)[\s\S]*?syncTriggerCoordinator\.request\(\{ reason: 'MANUAL' \}\)/);
 });
 
 test('ERP-declared unsupported collections are disabled for the runtime session', () => {

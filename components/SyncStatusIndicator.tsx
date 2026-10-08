@@ -9,7 +9,6 @@ import React, { useState, useEffect } from 'react';
 import { RefreshCw, CheckCircle2, AlertCircle, Clock } from 'lucide-react';
 import { syncManager } from '../services/sync/SyncManager';
 import { permissionService } from '../services/sync/PermissionService';
-import { syncTriggerCoordinator } from '../services/sync/SyncTriggerCoordinator';
 
 interface SyncStatusProps {
     onSync?: () => void;
@@ -39,12 +38,7 @@ const SyncStatusIndicator: React.FC<SyncStatusProps> = ({ onSync, compact = fals
     const handleSync = async () => {
         setIsSyncing(true);
         try {
-            if (syncManager.isUsingConfigPushV2Primary()) {
-                await syncTriggerCoordinator.request({ reason: 'MANUAL' });
-                await syncManager.syncTerminalManifestInBackground(undefined, { reason: 'manual_sync' });
-            } else {
-                await syncManager.syncAllCatalogs();
-            }
+            await syncManager.manualSyncAll();
             setLastSyncTime(new Date());
             await loadStatus();
             if (onSync) onSync();
