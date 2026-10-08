@@ -13,8 +13,6 @@
     <uses-feature android:name="android.hardware.camera.any" android:required="false" />
     <uses-feature android:name="android.hardware.usb.host" android:required="false" />
 
-    <uses-feature android:name="android.hardware.usb.host" android:required="false" />
-
     <application
         tools:replace="android:allowBackup"
         android:allowBackup="false"

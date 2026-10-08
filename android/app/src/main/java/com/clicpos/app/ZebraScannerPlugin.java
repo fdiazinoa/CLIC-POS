@@ -16,19 +16,41 @@ import java.util.concurrent.Executors;
 
 /** USB SNAPI only. Started explicitly by the terminal's hardware setting. */
 @CapacitorPlugin(name = "ZebraScanner")
-public class ZebraScannerPlugin extends Plugin implements IDcsSdkApiDelegate {
+public class ZebraScannerPlugin extends Plugin {
     private SDKHandler sdk;
     private volatile int scannerId = -1;
     private volatile boolean enabled;
+    private volatile boolean destroyed;
+    private volatile long generation;
+    private final Object stateLock = new Object();
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
+
+    private boolean enqueue(Runnable task) {
+        synchronized (stateLock) {
+            if (destroyed) return false;
+            try { worker.execute(task); return true; }
+            catch (java.util.concurrent.RejectedExecutionException ignored) { return false; }
+        }
+    }
+
+    private void onMainThread(Runnable task) throws Exception {
+        java.util.concurrent.FutureTask<Void> future = new java.util.concurrent.FutureTask<>(task, null);
+        getActivity().runOnUiThread(future);
+        future.get();
+    }
 
     @PluginMethod
     public void start(PluginCall call) {
-        getActivity().runOnUiThread(() -> {
+        if (destroyed) { call.reject("Lector cerrado"); return; }
+        if (!enqueue(() -> {
             try {
-                if (sdk == null) {
+                if (destroyed) { call.reject("Lector cerrado"); return; }
+                if (enabled) { call.resolve(); return; }
+                final long epoch;
+                synchronized (stateLock) { epoch = ++generation; enabled = true; }
+                onMainThread(() -> {
                     sdk = new SDKHandler(getActivity(), true, false);
-                    sdk.dcssdkSetDelegate(this);
+                    sdk.dcssdkSetDelegate(new SessionDelegate(epoch));
                     sdk.dcssdkSetOperationalMode(DCSSDKDefs.DCSSDK_MODE.DCSSDK_OPMODE_SNAPI);
                     sdk.dcssdkSubsribeForEvents(
                         DCSSDKDefs.DCSSDK_EVENT.DCSSDK_EVENT_SCANNER_APPEARANCE.value |
@@ -36,44 +58,48 @@ public class ZebraScannerPlugin extends Plugin implements IDcsSdkApiDelegate {
                         DCSSDKDefs.DCSSDK_EVENT.DCSSDK_EVENT_SESSION_ESTABLISHMENT.value |
                         DCSSDKDefs.DCSSDK_EVENT.DCSSDK_EVENT_SESSION_TERMINATION.value |
                         DCSSDKDefs.DCSSDK_EVENT.DCSSDK_EVENT_BARCODE.value);
-                }
-                enabled = true;
-                sdk.dcssdkEnableAvailableScannersDetection(true);
-                worker.execute(() -> {
-                    try {
-                        for (DCSScannerInfo info : sdk.dcssdkGetAvailableScannersList()) connect(info);
-                        call.resolve();
-                    } catch (Exception e) { call.reject("No se pudo conectar el lector Zebra", e); }
+                    sdk.dcssdkEnableAvailableScannersDetection(true);
                 });
-            } catch (Exception e) { call.reject("No se pudo iniciar el SDK Zebra", e); }
-        });
+                for (DCSScannerInfo info : sdk.dcssdkGetAvailableScannersList()) connect(info, epoch);
+                call.resolve();
+            } catch (Exception e) {
+                try { closeSession(); } catch (Exception ignored) {}
+                call.reject("No se pudo iniciar el SDK Zebra", e);
+            }
+        })) call.reject("Lector cerrado");
     }
 
-    private void connect(DCSScannerInfo info) {
-        if (enabled && scannerId < 0) sdk.dcssdkEstablishCommunicationSession(info.getScannerID());
+    private void connect(DCSScannerInfo info, long epoch) {
+        if (!destroyed && enabled && generation == epoch && scannerId < 0)
+            sdk.dcssdkEstablishCommunicationSession(info.getScannerID());
+    }
+
+    private void closeSession() throws Exception {
+        synchronized (stateLock) { enabled = false; generation++; scannerId = -1; }
+        SDKHandler closing = sdk;
+        sdk = null;
+        if (closing != null) onMainThread(() -> {
+            closing.dcssdkEnableAvailableScannersDetection(false);
+            closing.dcssdkClose();
+        });
+        JSObject event = new JSObject(); event.put("connected", false);
+        notifyListeners("connection", event);
     }
 
     @PluginMethod
     public void stop(PluginCall call) {
-        enabled = false;
-        worker.execute(() -> {
-            try {
-                if (sdk != null) {
-                    sdk.dcssdkEnableAvailableScannersDetection(false);
-                    for (DCSScannerInfo info : sdk.dcssdkGetActiveScannersList())
-                        sdk.dcssdkTerminateCommunicationSession(info.getScannerID());
-                }
-                scannerId = -1;
-                call.resolve();
-            } catch (Exception e) { call.reject("No se pudo desconectar el lector", e); }
-        });
+        if (destroyed) { call.reject("Lector cerrado"); return; }
+        if (!enqueue(() -> {
+            try { closeSession(); call.resolve(); }
+            catch (Exception e) { call.reject("No se pudo desconectar el lector", e); }
+        })) call.reject("Lector cerrado");
     }
 
     @PluginMethod
     public void readWeight(PluginCall call) {
-        worker.execute(() -> {
+        if (!enqueue(() -> {
             int id = scannerId;
-            if (!enabled || id < 0) { call.reject("MP7000 desconectado o sin permiso USB"); return; }
+            if (destroyed || !enabled || id < 0) { call.reject("MP7000 desconectado o sin permiso USB"); return; }
             try {
                 StringBuilder output = new StringBuilder();
                 DCSSDKDefs.DCSSDK_RESULT result = sdk.dcssdkExecuteCommandOpCodeInXMLForScanner(
@@ -93,44 +119,58 @@ public class ZebraScannerPlugin extends Plugin implements IDcsSdkApiDelegate {
                 }
                 call.resolve(reading);
             } catch (Exception e) { call.reject(e.getMessage(), e); }
-        });
+        })) call.reject("Lector cerrado");
     }
 
-    @Override public void dcssdkEventScannerAppeared(DCSScannerInfo info) {
-        if (enabled) worker.execute(() -> connect(info));
-    }
-    @Override public void dcssdkEventCommunicationSessionEstablished(DCSScannerInfo info) {
-        if (!enabled) return;
-        scannerId = info.getScannerID();
-        JSObject event = new JSObject();
-        event.put("connected", true);
-        event.put("model", info.getScannerModel());
-        notifyListeners("connection", event);
-    }
-    @Override public void dcssdkEventCommunicationSessionTerminated(int id) {
-        if (scannerId != id) return;
-        scannerId = -1;
-        JSObject event = new JSObject(); event.put("connected", false);
-        notifyListeners("connection", event);
-    }
-    @Override public void dcssdkEventScannerDisappeared(int id) { dcssdkEventCommunicationSessionTerminated(id); }
-    @Override public void dcssdkEventBarcode(byte[] data, int type, int id) {
-        if (!enabled || id != scannerId) return;
-        JSObject event = new JSObject();
-        event.put("barcode", new String(data, StandardCharsets.UTF_8));
-        notifyListeners("barcode", event);
+    /** A new delegate per SDK session rejects callbacks from previous enable cycles. */
+    private final class SessionDelegate implements IDcsSdkApiDelegate {
+        private final long epoch;
+        SessionDelegate(long epoch) { this.epoch = epoch; }
+        private boolean current() { return !destroyed && enabled && generation == epoch; }
+        @Override public void dcssdkEventScannerAppeared(DCSScannerInfo info) {
+            if (current()) enqueue(() -> connect(info, epoch));
+        }
+        @Override public void dcssdkEventCommunicationSessionEstablished(DCSScannerInfo info) {
+            synchronized (stateLock) {
+                if (!current()) return;
+                scannerId = info.getScannerID();
+                JSObject event = new JSObject(); event.put("connected", true);
+                event.put("model", info.getScannerModel());
+                notifyListeners("connection", event);
+            }
+        }
+        @Override public void dcssdkEventCommunicationSessionTerminated(int id) {
+            synchronized (stateLock) {
+                if (!current() || scannerId != id) return;
+                scannerId = -1;
+                JSObject event = new JSObject(); event.put("connected", false);
+                notifyListeners("connection", event);
+            }
+        }
+        @Override public void dcssdkEventScannerDisappeared(int id) { dcssdkEventCommunicationSessionTerminated(id); }
+        @Override public void dcssdkEventBarcode(byte[] data, int type, int id) {
+            synchronized (stateLock) {
+                if (!current() || id != scannerId) return;
+                JSObject event = new JSObject();
+                event.put("barcode", new String(data, StandardCharsets.UTF_8));
+                notifyListeners("barcode", event);
+            }
+        }
+        @Override public void dcssdkEventImage(byte[] data, int id) {}
+        @Override public void dcssdkEventVideo(byte[] data, int id) {}
+        @Override public void dcssdkEventBinaryData(byte[] data, int id) {}
+        @Override public void dcssdkEventFirmwareUpdate(FirmwareUpdateEvent event) {}
+        @Override public void dcssdkEventAuxScannerAppeared(DCSScannerInfo parent, DCSScannerInfo aux) {}
+        @Override public void dcssdkEventConfigurationUpdate(ConfigurationUpdateEvent event) {}
     }
     @Override protected void handleOnDestroy() {
-        enabled = false;
-        worker.execute(() -> getActivity().runOnUiThread(() -> {
-            if (sdk != null) sdk.dcssdkClose();
-        }));
-        worker.shutdown();
+        synchronized (stateLock) {
+            if (destroyed) return;
+            destroyed = true; enabled = false; generation++; scannerId = -1;
+            worker.execute(() -> {
+                try { closeSession(); } catch (Exception ignored) {}
+            });
+            worker.shutdown();
+        }
     }
-    @Override public void dcssdkEventImage(byte[] data, int id) {}
-    @Override public void dcssdkEventVideo(byte[] data, int id) {}
-    @Override public void dcssdkEventBinaryData(byte[] data, int id) {}
-    @Override public void dcssdkEventFirmwareUpdate(FirmwareUpdateEvent event) {}
-    @Override public void dcssdkEventAuxScannerAppeared(DCSScannerInfo parent, DCSScannerInfo aux) {}
-    @Override public void dcssdkEventConfigurationUpdate(ConfigurationUpdateEvent event) {}
 }
