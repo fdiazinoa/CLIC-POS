@@ -6653,6 +6653,7 @@ const AppContent: React.FC = () => {
     || currentView === 'KIOSK_WELCOME';
 
   useBarcodeScanner({
+    nativeOwner: true,
     enabled: scannerEnabledViews,
     onScan: (barcode) => {
       if (currentView === 'KIOSK_WELCOME') {

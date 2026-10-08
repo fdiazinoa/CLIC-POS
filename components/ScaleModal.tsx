@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { readZebraWeight, isZebraEnabled, listenZebraConnection, zebraSettingEvent } from '../services/ZebraScanner';
+import { createWeightReadGuard } from '../utils/weightReadGuard';
 import { Scale, Check, X, RefreshCw, Calculator } from 'lucide-react';
 import { Product } from '../types';
 
@@ -17,14 +18,19 @@ const ScaleModal: React.FC<ScaleModalProps> = ({ product, currencySymbol, onConf
   const [isStable, setIsStable] = useState(false);
 
   const [error, setError] = useState('');
-  const request = useRef(0);
+  const request = useRef(createWeightReadGuard());
 
   useEffect(() => {
-    if (isZebraEnabled()) void handleReadScale();
+    request.current.invalidate();
+    setWeight('0.000');
+    setIsStable(false);
+    setIsReading(false);
+    setError('');
+    const initialReadAllowed = request.current.begin();
     let disposed = false;
     let remove: (() => void) | undefined;
     const invalidate = () => {
-      request.current++;
+      request.current.invalidate();
       setWeight('0.000');
       setIsReading(false);
       setIsStable(false);
@@ -34,38 +40,41 @@ const ScaleModal: React.FC<ScaleModalProps> = ({ product, currencySymbol, onConf
       void listenZebraConnection(connected => { if (!disposed && !connected) invalidate(); })
         .then(handle => {
           if (disposed) void handle.remove();
-          else remove = () => { void handle.remove(); };
-        }).catch(() => {});
+          else {
+            remove = () => { void handle.remove(); };
+            if (initialReadAllowed()) void handleReadScale();
+          }
+        }).catch(() => { if (!disposed) setError('No se pudo observar la conexión USB. Ingresa el peso manualmente.'); });
     }
     window.addEventListener(zebraSettingEvent, invalidate);
     return () => {
       disposed = true;
-      request.current++;
+      request.current.invalidate();
       remove?.();
       window.removeEventListener(zebraSettingEvent, invalidate);
     };
-  }, []);
+  }, [product.id]);
 
   const handleReadScale = async () => {
-    const current = ++request.current;
+    const isCurrent = request.current.begin();
     setWeight('0.000');
     setIsReading(true);
     setIsStable(false);
     setError('');
     try {
       const kg = await readZebraWeight();
-      if (request.current !== current) return;
+      if (!isCurrent()) return;
       setWeight(kg.toFixed(6).replace(/0+$/, '').replace(/\.$/, '.000'));
       setIsStable(true);
     } catch (reason) {
-      if (request.current === current) setError(reason instanceof Error ? reason.message : 'No se pudo leer la báscula');
+      if (isCurrent()) setError(reason instanceof Error ? reason.message : 'No se pudo leer la báscula');
     } finally {
-      if (request.current === current) setIsReading(false);
+      if (isCurrent()) setIsReading(false);
     }
   };
 
   const handleManualInput = (val: string) => {
-    request.current++;
+    request.current.invalidate();
     setIsReading(false);
     setIsStable(false);
     setError('');
@@ -94,7 +103,7 @@ const ScaleModal: React.FC<ScaleModalProps> = ({ product, currencySymbol, onConf
   const totalPrice = numericWeight * product.price;
 
   return (
-    <div className="fixed inset-0 z-[80] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in duration-200">
+    <div role="dialog" aria-modal="true" aria-label="Balanza Digital" className="fixed inset-0 z-[80] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in duration-200">
       <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden flex flex-col">
         
         {/* Header */}

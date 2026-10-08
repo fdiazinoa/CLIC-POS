@@ -14,6 +14,15 @@ const blocked = (doc: Document) => Boolean(
     doc.querySelector('[role="dialog"], dialog[open], [aria-modal="true"]')
 );
 
+/** Native scans share the HID route, modal and editable-field boundary. */
+export function canReceiveNativeBarcode(doc: Document): boolean {
+    const el = doc.activeElement as HTMLElement | null;
+    return doc.visibilityState === 'visible' && !blocked(doc) && (
+        !isEditable(el) || (el?.dataset?.barcodeScannerTarget === 'true' &&
+            !(el as HTMLInputElement).readOnly && !(el as HTMLInputElement).disabled)
+    );
+}
+
 export const SALES_SCANNER_HOST_VISIBILITY = 'pos:scanner-host-visibility';
 
 /** Emitted by the retained owner after committing its inert/visible boundary. */
