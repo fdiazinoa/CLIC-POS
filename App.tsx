@@ -921,6 +921,7 @@ const AppContent: React.FC = () => {
 
   useKioskMode(getCurrentDeviceRole() === DeviceRole.SELF_CHECKOUT);
   useBarcodeScanner({
+    receiveNative: currentView !== 'POS',
     enabled: currentView === 'POS' || currentView === 'HISTORY',
     onScan: (barcode) => {
       window.dispatchEvent(new CustomEvent('barcodeScanned', { detail: { barcode } }));
