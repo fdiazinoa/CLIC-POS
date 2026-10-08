@@ -3,6 +3,7 @@
 # Built application files
 *.apk
 *.aar
+!app/libs/barcode_scanner_library_v2.6.29.0-release.aar
 *.ap_
 *.aab
 
