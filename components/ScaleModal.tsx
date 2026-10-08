@@ -1,10 +1,10 @@
-import { convertWeight, convertUnitPrice, createWeightPresentation, weightUnit, formatWeightNumber, validCanonicalScaleWeight } from '../utils/scaleWeight';
+import { convertWeight, convertUnitPrice, createWeightPresentation, formatWeightNumber, validCanonicalScaleWeight, resolveScaleWeightContract } from '../utils/scaleWeight';
 import { scaleChangeEvents, type ResolvedScale } from '../services/ScalePreferences';
 import type { WeightPresentation } from '../types';
 import { isValidScaleWeight } from '../utils/cartQuantity';
 
 import React, { useState, useEffect, useRef } from 'react';
-import { readZebraWeight, isZebraEnabled, listenZebraConnection, zebraSettingEvent } from '../services/ZebraScanner';
+import { readZebraWeight, isZebraEnabled, listenZebraConnection } from '../services/ZebraScanner';
 import { createWeightReadGuard } from '../utils/weightReadGuard';
 import { Scale, Check, X, RefreshCw, Calculator } from 'lucide-react';
 import { Product } from '../types';
@@ -12,7 +12,7 @@ import { Product } from '../types';
 interface ScaleModalProps {
   product: Product;
   currencySymbol: string;
-  onConfirm: (weight: number, snapshot: Readonly<WeightPresentation>) => void;
+  onConfirm: (weight: number, snapshot?: Readonly<WeightPresentation>) => void;
   scales?: ResolvedScale[];
   defaultScaleId?: string;
   onClose: () => void;
@@ -21,8 +21,8 @@ interface ScaleModalProps {
 const ScaleModal: React.FC<ScaleModalProps> = ({ product, currencySymbol, onConfirm, onClose, scales = [{ id: 'manual', name: 'Entrada manual', displayUnit: 'kg', driver: 'MANUAL' }], defaultScaleId }) => {
   const [scaleId, setScaleId] = useState(defaultScaleId || '');
   const selectedScale = scales.find(scale => scale.id === scaleId);
-  const displayUnit = selectedScale?.displayUnit || 'kg';
-  const canonicalUnit = weightUnit(product.measurementUnit) || 'kg';
+  const weightContract = resolveScaleWeightContract(product, selectedScale?.displayUnit || 'kg');
+  const { displayUnit, canonicalUnit } = weightContract;
   const nativeKg = useRef<number | null>(null);
   const [weight, setWeight] = useState<string>('0.000');
   const [isReading, setIsReading] = useState(false);
@@ -123,7 +123,7 @@ const ScaleModal: React.FC<ScaleModalProps> = ({ product, currencySymbol, onConf
     : convertWeight(numericWeight, displayUnit, canonicalUnit);
   const unitPrice = convertUnitPrice(product.price, canonicalUnit, displayUnit);
   const totalPrice = canonicalQuantity * product.price;
-  const canConfirmWeight = Boolean(selectedScale) && !isReading && isValidScaleWeight(canonicalQuantity)
+  const canConfirmWeight = Boolean(selectedScale) && weightContract.allowed && !isReading && isValidScaleWeight(canonicalQuantity)
     && (nativeKg.current !== null || validCanonicalScaleWeight(numericWeight, displayUnit, canonicalUnit));
 
   return (
@@ -152,6 +152,8 @@ const ScaleModal: React.FC<ScaleModalProps> = ({ product, currencySymbol, onConf
             {scales.map(scale => <option key={scale.id} value={scale.id}>{scale.name} ({scale.displayUnit})</option>)}
           </select>
         </label>
+        {weightContract.legacyFallback && <p className="px-4 pt-3 text-xs text-gray-500">Entrada heredada en kg. Configure kg o lb en el artículo para usar conversión.</p>}
+        {!weightContract.allowed && <p role="alert" className="px-4 pt-3 text-sm text-red-600">La unidad del artículo V3 no permite pesar. Revisa su configuración en el ERP.</p>}
         {/* Digital Display */}
         <div className="p-8 bg-gray-900 text-green-400 font-mono flex flex-col items-end justify-center relative border-y-4 border-gray-700 h-40">
            {isReading && (
@@ -213,7 +215,7 @@ const ScaleModal: React.FC<ScaleModalProps> = ({ product, currencySymbol, onConf
               </button>
               
               <button 
-                 onClick={() => { if (canConfirmWeight && selectedScale) onConfirm(canonicalQuantity, createWeightPresentation(selectedScale.id, displayUnit, canonicalUnit)); }}
+                 onClick={() => { if (canConfirmWeight && selectedScale) onConfirm(canonicalQuantity, weightContract.capturePresentation ? createWeightPresentation(selectedScale.id, displayUnit, canonicalUnit) : undefined); }}
                  disabled={!canConfirmWeight}
                  className="flex-[2] bg-blue-600 text-white rounded-xl font-bold flex flex-col items-center justify-center gap-1 active:scale-95 transition-all shadow-lg hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
               >

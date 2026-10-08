@@ -48,7 +48,7 @@ test('scale confirm uses the same finite positive quantity threshold for manual 
     assert.equal(isValidScaleWeight(weight), false);
   for (const weight of [0.125, 0.25, 1.234567]) assert.equal(isValidScaleWeight(weight), true);
   const source = readFileSync(new URL('../components/ScaleModal.tsx', import.meta.url), 'utf8');
-  assert.match(source, /const canConfirmWeight = Boolean\(selectedScale\) && !isReading && isValidScaleWeight\(canonicalQuantity\)/);
-  assert.match(source, /if \(canConfirmWeight && selectedScale\) onConfirm\(canonicalQuantity, createWeightPresentation/);
+  assert.match(source, /const canConfirmWeight = Boolean\(selectedScale\) && weightContract.allowed && !isReading && isValidScaleWeight\(canonicalQuantity\)/);
+  assert.match(source, /if \(canConfirmWeight && selectedScale\) onConfirm\(canonicalQuantity, weightContract.capturePresentation \? createWeightPresentation/);
   assert.match(source, /disabled=\{!canConfirmWeight\}/);
 });

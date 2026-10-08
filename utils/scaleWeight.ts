@@ -7,6 +7,14 @@ export const weightUnit = (value: unknown): ScaleWeightUnit | null => {
   const unit = value.trim().toLowerCase();
   return ['kg', 'kilogramo'].includes(unit) ? 'kg' : ['lb', 'libra'].includes(unit) ? 'lb' : null;
 };
+/** Unknown legacy units retain the historical kg interaction without inventing a source conversion. */
+export function resolveScaleWeightContract(product: { measurementUnit?: unknown; v3SaleAuthority?: unknown }, configuredUnit: ScaleWeightUnit) {
+  const canonical = weightUnit(product.measurementUnit);
+  return canonical ? { canonicalUnit: canonical, displayUnit: configuredUnit, capturePresentation: true, allowed: true, legacyFallback: false }
+    : { canonicalUnit: 'kg' as const, displayUnit: 'kg' as const, capturePresentation: false,
+      allowed: !product.v3SaleAuthority, legacyFallback: !product.v3SaleAuthority };
+}
+
 const kilograms = (unit: ScaleWeightUnit): number => {
   if (unit !== 'kg' && unit !== 'lb') throw new Error('Unidad de peso inválida.');
   return unit === 'lb' ? KG_PER_LB : 1;
