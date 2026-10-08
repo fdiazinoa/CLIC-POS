@@ -1,5 +1,7 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
+import { Capacitor } from '@capacitor/core';
+import { isZebraEnabled, setZebraEnabled, readZebraWeight } from '../services/ZebraScanner';
 import {
    Printer, ScanBarcode, Bluetooth, RefreshCw, CheckCircle,
    X, Zap, Settings as SettingsIcon, Usb, Network, Plus,
@@ -54,6 +56,9 @@ interface HardwareSettingsProps {
 type HardwareTab = 'PERIPHERALS' | 'SCALES' | 'DISPLAY' | 'CASHDRO' | 'LABELS';
 
 const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfig, products, onUpdateConfig, onClose, terminalId }) => {
+   const [zebraEnabled, setZebra] = useState(isZebraEnabled);
+   const [zebraMessage, setZebraMessage] = useState('');
+   const [zebraBusy, setZebraBusy] = useState(false);
    const [activeTab, setActiveTab] = useState<HardwareTab>('PERIPHERALS');
 
    // -- Local State synced with Config --
@@ -654,6 +659,31 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
                         <div><h3 className="text-xl font-black text-slate-800 flex items-center gap-3"><Scale className="text-blue-600" /> Gestión de Balanzas</h3><p className="text-xs text-slate-400 font-medium">Configura dispositivos de pesaje por serie o USB.</p></div>
                         <button onClick={createNewScale} className="px-6 py-3 bg-blue-600 text-white rounded-2xl font-black shadow-xl shadow-blue-500/20 active:scale-95 transition-all flex items-center gap-2"><Plus size={24} /> Nueva Balanza</button>
                      </div>
+                     {Capacitor.getPlatform() === 'android' && (
+                        <div className="p-5 border rounded-2xl bg-blue-50 space-y-3">
+                           <h4 className="font-bold">Zebra MP7000 · USB SNAPI</h4>
+                           <p className="text-sm">Escáner y peso directo. Configuración local de esta terminal; acepta el permiso USB de Android.</p>
+                           <label className="flex items-center gap-2">
+                              <input type="checkbox" checked={zebraEnabled} disabled={zebraBusy} onChange={async e => {
+                                 const enabled = e.target.checked;
+                                 setZebraBusy(true);
+                                 setZebraMessage('');
+                                 try {
+                                    await setZebraEnabled(enabled);
+                                    setZebraMessage(enabled ? 'Integración activada. Prueba el peso para verificar la conexión.' : 'Integración desactivada');
+                                 } catch (error) { setZebraMessage(error instanceof Error ? error.message : 'Error de conexión'); }
+                                 finally { setZebra(isZebraEnabled()); setZebraBusy(false); }
+                              }} /> Activar Zebra MP7000
+                           </label>
+                           <button type="button" disabled={!zebraEnabled || zebraBusy} className="px-4 py-2 bg-blue-600 text-white rounded-xl disabled:opacity-50" onClick={async () => {
+                              setZebraBusy(true);
+                              try { setZebraMessage(`Peso estable: ${(await readZebraWeight()).toFixed(3)} kg`); }
+                              catch (error) { setZebraMessage(error instanceof Error ? error.message : 'No se pudo leer'); }
+                              finally { setZebraBusy(false); }
+                           }}>Probar peso real</button>
+                           <p role="status" className="text-sm">{zebraMessage}</p>
+                        </div>
+                     )}
                      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                         {scales.map(scale => (
                            <div key={scale.id} className="p-8 bg-white border-2 border-slate-100 rounded-[2.5rem] relative group hover:border-blue-400 hover:shadow-xl transition-all">

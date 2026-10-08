@@ -214,6 +214,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    // Managed globally in App.tsx (if currentView !== 'POS').
    // However, when in POS view, we need local scanning for Returns/etc.
    useBarcodeScanner({
+      // Native scans use processBarcode below, which also respects open modals.
+      receiveNative: false,
       onScan: (code) => {
          // 1. Try JSON/Smart QR first
          const trimmed = code.trim();

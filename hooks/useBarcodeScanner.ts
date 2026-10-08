@@ -1,8 +1,10 @@
 import { useEffect, useRef } from 'react';
+import { isZebraEnabled, listenZebraBarcode, startZebra, zebraSettingEvent } from '../services/ZebraScanner';
 
 interface BarcodeScannerOptions {
     onScan: (barcode: string) => void;
     enabled?: boolean;
+    receiveNative?: boolean;
     prefixTimeout?: number; // Time threshold to detect scanner vs human (< 50ms)
     idleTimeout?: number;   // Time threshold to clear buffer if no key (> 100ms)
 }
@@ -23,8 +25,10 @@ const detectTicketPattern = (code: string): string | null => {
     // 3. DGII URL (extract NCF or TrackId)
     if (code.includes('dgii.gov.do')) {
         // Try to extract NCF param
-        const urlParams = new URL(code).searchParams;
-        return urlParams.get('ncf') || urlParams.get('trackId') || null;
+        try {
+            const urlParams = new URL(code).searchParams;
+            return urlParams.get('ncf') || urlParams.get('trackId') || null;
+        } catch { return null; }
     }
 
     // 4. UUID fallback (if scanning raw ID)
@@ -37,12 +41,45 @@ export const useBarcodeScanner = ({
     onScan,
     onTicketScan,
     enabled = true,
+    receiveNative = true,
     prefixTimeout = 50,
     idleTimeout = 200
 }: BarcodeScannerOptions & { onTicketScan?: (ticketId: string) => void }) => {
     const buffer = useRef<string>('');
     const lastKeyTime = useRef<number>(0);
     const idleTimer = useRef<NodeJS.Timeout | null>(null);
+    const onScanRef = useRef(onScan);
+    const onTicketScanRef = useRef(onTicketScan);
+
+    useEffect(() => {
+        onScanRef.current = onScan;
+        onTicketScanRef.current = onTicketScan;
+    }, [onScan, onTicketScan]);
+
+    useEffect(() => {
+        if (!enabled || !receiveNative) return;
+        let disposed = false;
+        let remove: (() => void) | undefined;
+        const start = () => {
+            if (isZebraEnabled()) void startZebra().catch(error => console.warn('[Zebra]', error));
+        };
+        void listenZebraBarcode(barcode => {
+            if (disposed) return;
+            const ticketId = detectTicketPattern(barcode);
+            if (ticketId && onTicketScanRef.current) onTicketScanRef.current(ticketId);
+            else onScanRef.current(barcode);
+        }).then(handle => {
+            if (disposed) void handle.remove();
+            else remove = () => { void handle.remove(); };
+            if (!disposed) start();
+        }).catch(() => { /* Native plugin is absent on web and older APKs. */ });
+        window.addEventListener(zebraSettingEvent, start);
+        return () => {
+            disposed = true;
+            remove?.();
+            window.removeEventListener(zebraSettingEvent, start);
+        };
+    }, [enabled, receiveNative]);
 
     useEffect(() => {
         if (!enabled) return;

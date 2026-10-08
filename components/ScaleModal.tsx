@@ -1,5 +1,6 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import { readZebraWeight, isZebraEnabled, listenZebraConnection, zebraSettingEvent } from '../services/ZebraScanner';
 import { Scale, Check, X, RefreshCw, Calculator } from 'lucide-react';
 import { Product } from '../types';
 
@@ -15,26 +16,59 @@ const ScaleModal: React.FC<ScaleModalProps> = ({ product, currencySymbol, onConf
   const [isReading, setIsReading] = useState(false);
   const [isStable, setIsStable] = useState(false);
 
-  // Simulate initial read
+  const [error, setError] = useState('');
+  const request = useRef(0);
+
   useEffect(() => {
-    handleReadScale();
+    if (isZebraEnabled()) void handleReadScale();
+    let disposed = false;
+    let remove: (() => void) | undefined;
+    const invalidate = () => {
+      request.current++;
+      setWeight('0.000');
+      setIsReading(false);
+      setIsStable(false);
+      setError('Báscula desconectada o desactivada. Vuelve a leer o ingresa el peso manualmente.');
+    };
+    if (isZebraEnabled()) {
+      void listenZebraConnection(connected => { if (!disposed && !connected) invalidate(); })
+        .then(handle => {
+          if (disposed) void handle.remove();
+          else remove = () => { void handle.remove(); };
+        }).catch(() => {});
+    }
+    window.addEventListener(zebraSettingEvent, invalidate);
+    return () => {
+      disposed = true;
+      request.current++;
+      remove?.();
+      window.removeEventListener(zebraSettingEvent, invalidate);
+    };
   }, []);
 
-  const handleReadScale = () => {
+  const handleReadScale = async () => {
+    const current = ++request.current;
+    setWeight('0.000');
     setIsReading(true);
     setIsStable(false);
-    
-    // Simulate scale settling delay
-    setTimeout(() => {
-      // Random weight between 0.5 and 2.5 kg
-      const randomWeight = (Math.random() * 2 + 0.5).toFixed(3);
-      setWeight(randomWeight);
-      setIsReading(false);
+    setError('');
+    try {
+      const kg = await readZebraWeight();
+      if (request.current !== current) return;
+      setWeight(kg.toFixed(6).replace(/0+$/, '').replace(/\.$/, '.000'));
       setIsStable(true);
-    }, 1500);
+    } catch (reason) {
+      if (request.current === current) setError(reason instanceof Error ? reason.message : 'No se pudo leer la báscula');
+    } finally {
+      if (request.current === current) setIsReading(false);
+    }
   };
 
   const handleManualInput = (val: string) => {
+    request.current++;
+    setIsReading(false);
+    setIsStable(false);
+    setError('');
     // Basic numpad logic
     if (val === 'BACK') {
       setWeight(prev => prev.length > 1 ? prev.slice(0, -1) : '0');
@@ -111,6 +145,8 @@ const ScaleModal: React.FC<ScaleModalProps> = ({ product, currencySymbol, onConf
            </div>
         </div>
 
+        {error && <p role="alert" className="px-4 pt-3 text-sm text-red-600">{error}</p>}
+        {!isStable && !isReading && <p className="px-4 pt-3 text-xs text-gray-500">Peso ingresado manualmente (kg)</p>}
         {/* Controls */}
         <div className="p-4 flex gap-4">
            {/* Numpad for manual override */}
@@ -139,7 +175,7 @@ const ScaleModal: React.FC<ScaleModalProps> = ({ product, currencySymbol, onConf
               
               <button 
                  onClick={() => onConfirm(numericWeight)}
-                 disabled={numericWeight <= 0}
+                 disabled={isReading || !Number.isFinite(numericWeight) || numericWeight <= 0}
                  className="flex-[2] bg-blue-600 text-white rounded-xl font-bold flex flex-col items-center justify-center gap-1 active:scale-95 transition-all shadow-lg hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                  <Check size={32} />
