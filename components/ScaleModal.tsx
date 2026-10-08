@@ -1,3 +1,6 @@
+import { convertWeight, convertUnitPrice, createWeightPresentation, weightUnit, formatWeightNumber, validCanonicalScaleWeight } from '../utils/scaleWeight';
+import { scaleChangeEvents, type ResolvedScale } from '../services/ScalePreferences';
+import type { WeightPresentation } from '../types';
 import { isValidScaleWeight } from '../utils/cartQuantity';
 
 import React, { useState, useEffect, useRef } from 'react';
@@ -9,11 +12,18 @@ import { Product } from '../types';
 interface ScaleModalProps {
   product: Product;
   currencySymbol: string;
-  onConfirm: (weight: number) => void;
+  onConfirm: (weight: number, snapshot: Readonly<WeightPresentation>) => void;
+  scales?: ResolvedScale[];
+  defaultScaleId?: string;
   onClose: () => void;
 }
 
-const ScaleModal: React.FC<ScaleModalProps> = ({ product, currencySymbol, onConfirm, onClose }) => {
+const ScaleModal: React.FC<ScaleModalProps> = ({ product, currencySymbol, onConfirm, onClose, scales = [{ id: 'manual', name: 'Entrada manual', displayUnit: 'kg', driver: 'MANUAL' }], defaultScaleId }) => {
+  const [scaleId, setScaleId] = useState(defaultScaleId || '');
+  const selectedScale = scales.find(scale => scale.id === scaleId);
+  const displayUnit = selectedScale?.displayUnit || 'kg';
+  const canonicalUnit = weightUnit(product.measurementUnit) || 'kg';
+  const nativeKg = useRef<number | null>(null);
   const [weight, setWeight] = useState<string>('0.000');
   const [isReading, setIsReading] = useState(false);
   const [isStable, setIsStable] = useState(false);
@@ -22,6 +32,7 @@ const ScaleModal: React.FC<ScaleModalProps> = ({ product, currencySymbol, onConf
   const request = useRef(createWeightReadGuard());
 
   useEffect(() => {
+    nativeKg.current = null;
     request.current.invalidate();
     setWeight('0.000');
     setIsStable(false);
@@ -31,13 +42,14 @@ const ScaleModal: React.FC<ScaleModalProps> = ({ product, currencySymbol, onConf
     let disposed = false;
     let remove: (() => void) | undefined;
     const invalidate = () => {
+      nativeKg.current = null;
       request.current.invalidate();
       setWeight('0.000');
       setIsReading(false);
       setIsStable(false);
       setError('Báscula desconectada o desactivada. Vuelve a leer o ingresa el peso manualmente.');
     };
-    if (isZebraEnabled()) {
+    if (selectedScale?.driver === 'ZEBRA' && isZebraEnabled()) {
       void listenZebraConnection(connected => { if (!disposed && !connected) invalidate(); })
         .then(handle => {
           if (disposed) void handle.remove();
@@ -47,16 +59,20 @@ const ScaleModal: React.FC<ScaleModalProps> = ({ product, currencySymbol, onConf
           }
         }).catch(() => { if (!disposed) setError('No se pudo observar la conexión USB. Ingresa el peso manualmente.'); });
     }
-    window.addEventListener(zebraSettingEvent, invalidate);
+    const configurationChanged = () => { invalidate(); onClose(); };
+    for (const event of scaleChangeEvents) window.addEventListener(event, configurationChanged);
     return () => {
       disposed = true;
+      nativeKg.current = null;
       request.current.invalidate();
       remove?.();
-      window.removeEventListener(zebraSettingEvent, invalidate);
+      for (const event of scaleChangeEvents) window.removeEventListener(event, configurationChanged);
     };
-  }, [product.id]);
+  }, [product.id, scaleId, displayUnit]);
 
   const handleReadScale = async () => {
+    if (selectedScale?.driver !== 'ZEBRA') return;
+    nativeKg.current = null;
     const isCurrent = request.current.begin();
     setWeight('0.000');
     setIsReading(true);
@@ -65,7 +81,8 @@ const ScaleModal: React.FC<ScaleModalProps> = ({ product, currencySymbol, onConf
     try {
       const kg = await readZebraWeight();
       if (!isCurrent()) return;
-      setWeight(kg.toFixed(6).replace(/0+$/, '').replace(/\.$/, '.000'));
+      nativeKg.current = kg;
+      setWeight(formatWeightNumber(convertWeight(kg, 'kg', displayUnit)));
       setIsStable(true);
     } catch (reason) {
       if (isCurrent()) setError(reason instanceof Error ? reason.message : 'No se pudo leer la báscula');
@@ -75,6 +92,7 @@ const ScaleModal: React.FC<ScaleModalProps> = ({ product, currencySymbol, onConf
   };
 
   const handleManualInput = (val: string) => {
+    nativeKg.current = null;
     request.current.invalidate();
     setIsReading(false);
     setIsStable(false);
@@ -101,8 +119,12 @@ const ScaleModal: React.FC<ScaleModalProps> = ({ product, currencySymbol, onConf
   };
 
   const numericWeight = parseFloat(weight) || 0;
-  const totalPrice = numericWeight * product.price;
-  const canConfirmWeight = !isReading && isValidScaleWeight(numericWeight);
+  const canonicalQuantity = nativeKg.current !== null ? convertWeight(nativeKg.current, 'kg', canonicalUnit)
+    : convertWeight(numericWeight, displayUnit, canonicalUnit);
+  const unitPrice = convertUnitPrice(product.price, canonicalUnit, displayUnit);
+  const totalPrice = canonicalQuantity * product.price;
+  const canConfirmWeight = Boolean(selectedScale) && !isReading && isValidScaleWeight(canonicalQuantity)
+    && (nativeKg.current !== null || validCanonicalScaleWeight(numericWeight, displayUnit, canonicalUnit));
 
   return (
     <div role="dialog" aria-modal="true" aria-label="Balanza Digital" className="fixed inset-0 z-[80] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in duration-200">
@@ -124,6 +146,12 @@ const ScaleModal: React.FC<ScaleModalProps> = ({ product, currencySymbol, onConf
            </button>
         </div>
 
+        <label className="px-4 pt-3">Balanza
+          <select aria-label="Balanza seleccionada" value={scaleId} onChange={e => setScaleId(e.target.value)}>
+            <option value="" disabled>Seleccione una balanza</option>
+            {scales.map(scale => <option key={scale.id} value={scale.id}>{scale.name} ({scale.displayUnit})</option>)}
+          </select>
+        </label>
         {/* Digital Display */}
         <div className="p-8 bg-gray-900 text-green-400 font-mono flex flex-col items-end justify-center relative border-y-4 border-gray-700 h-40">
            {isReading && (
@@ -140,7 +168,7 @@ const ScaleModal: React.FC<ScaleModalProps> = ({ product, currencySymbol, onConf
            )}
            
            <div className="text-6xl font-black tracking-tighter">
-              {weight}<span className="text-2xl text-gray-500 ml-2">kg</span>
+              {weight}<span className="text-2xl text-gray-500 ml-2">{displayUnit}</span>
            </div>
         </div>
 
@@ -148,7 +176,7 @@ const ScaleModal: React.FC<ScaleModalProps> = ({ product, currencySymbol, onConf
         <div className="grid grid-cols-2 gap-4 p-4 bg-blue-50 border-b border-blue-100">
            <div className="bg-white p-3 rounded-xl border border-blue-100">
               <span className="text-xs font-bold text-gray-400 uppercase">Precio Unitario</span>
-              <div className="text-xl font-bold text-gray-800">{currencySymbol}{product.price.toFixed(2)}/kg</div>
+              <div className="text-xl font-bold text-gray-800">{currencySymbol}{formatWeightNumber(unitPrice)}/{displayUnit}</div>
            </div>
            <div className="bg-white p-3 rounded-xl border border-blue-100">
               <span className="text-xs font-bold text-gray-400 uppercase">Total Calculado</span>
@@ -157,7 +185,7 @@ const ScaleModal: React.FC<ScaleModalProps> = ({ product, currencySymbol, onConf
         </div>
 
         {error && <p role="alert" className="px-4 pt-3 text-sm text-red-600">{error}</p>}
-        {!isStable && !isReading && <p className="px-4 pt-3 text-xs text-gray-500">Peso ingresado manualmente (kg)</p>}
+        {!isStable && !isReading && <p className="px-4 pt-3 text-xs text-gray-500">Peso ingresado manualmente ({displayUnit})</p>}
         {/* Controls */}
         <div className="p-4 flex gap-4">
            {/* Numpad for manual override */}
@@ -177,7 +205,7 @@ const ScaleModal: React.FC<ScaleModalProps> = ({ product, currencySymbol, onConf
            <div className="flex flex-col gap-3 w-1/3">
               <button 
                  onClick={handleReadScale}
-                 disabled={isReading}
+                 disabled={isReading || selectedScale?.driver !== 'ZEBRA'}
                  className="flex-1 bg-gray-800 text-white rounded-xl font-bold flex flex-col items-center justify-center gap-1 active:scale-95 transition-all shadow-md"
               >
                  <RefreshCw size={24} className={isReading ? 'animate-spin' : ''} />
@@ -185,7 +213,7 @@ const ScaleModal: React.FC<ScaleModalProps> = ({ product, currencySymbol, onConf
               </button>
               
               <button 
-                 onClick={() => { if (canConfirmWeight) onConfirm(numericWeight); }}
+                 onClick={() => { if (canConfirmWeight && selectedScale) onConfirm(canonicalQuantity, createWeightPresentation(selectedScale.id, displayUnit, canonicalUnit)); }}
                  disabled={!canConfirmWeight}
                  className="flex-[2] bg-blue-600 text-white rounded-xl font-bold flex flex-col items-center justify-center gap-1 active:scale-95 transition-all shadow-lg hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
               >

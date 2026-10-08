@@ -35,6 +35,7 @@ test('actual click opens admitted untracked scale; existing tracked stock callba
     suppressProductInputUntilMs: 0, isMobile: false, defaultSalesWarehouseId: 'W',
     isWeightedProduct, productHasRestaurantConfiguration: () => false, isReturnMode: false,
     ensureSalesWithOpenZPermission: () => true, canAddItemToCart: canAdd, v3Operational: {},
+    config: {}, activeTerminalId: 'T', resolveSaleScales: () => ({ scales: [], scope: 'scope' }), setSaleScaleContext: () => {}, setErrorToast: () => {},
     setProductForScale: (value: unknown) => { modal = value; }, addToCart: () => { ++added; },
   });
   click(product);

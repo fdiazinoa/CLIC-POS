@@ -1,3 +1,4 @@
+import { weightLineLabel, displayWeightQuantity } from '../utils/scaleWeight';
 import { db } from '../utils/db';
 import { getEffectiveFiscalComplianceConfig, resolveCreditNoteFiscalCode } from '../utils/fiscal/fiscalHelpers';
 import { canSeeOtherTerminalSales, matchesSalesTerminal } from '../utils/terminalSalesVisibility';
@@ -957,7 +958,7 @@ const TicketDetailDrawer: React.FC<{
                         <div key={i} className="flex justify-between items-center py-2 border-b border-gray-50 last:border-0">
                            <div className="flex-1">
                               <p className="text-sm font-bold text-gray-800">{item.name}</p>
-                              <p className="text-xs text-gray-400 font-medium">{item.quantity} x {config.currencySymbol}{item.price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+                              <p className="text-xs text-gray-400 font-medium">{weightLineLabel(item, config.currencySymbol)}</p>
                            </div>
                            <p className="text-sm font-black text-gray-900">{config.currencySymbol}{(item.price * item.quantity).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
                         </div>
@@ -2992,7 +2993,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
                         {giftReceiptTx.items.map((item, i) => (
                            <div key={i} className="flex justify-between">
                               <span>{item.name}</span>
-                              <span className="font-bold">x{item.quantity}</span>
+                              <span className="font-bold">{displayWeightQuantity(item)} {item.weightPresentation?.displayUnit || ""}</span>
                            </div>
                         ))}
                      </div>

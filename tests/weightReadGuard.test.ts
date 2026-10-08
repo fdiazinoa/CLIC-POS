@@ -35,7 +35,7 @@ test('reread accepts only the latest reply, even when replies arrive out of orde
 test('scale modal wires product/disconnect/manual/unmount cancellation and blocks other scans', () => {
   const source = readFileSync(new URL('../components/ScaleModal.tsx', import.meta.url), 'utf8');
   assert.match(source, /role="dialog" aria-modal="true"/);
-  assert.match(source, /\}, \[product.id\]\)/);
+  assert.match(source, /\}, \[product.id, scaleId, displayUnit\]\)/);
   assert.equal(source.match(/request.current.invalidate\(\)/g)?.length, 4);
   assert.match(source, /listenZebraConnection\(connected => \{ if \(!disposed && !connected\) invalidate\(\)/);
   assert.match(source, /if \(!isCurrent\(\)\) return/);
@@ -48,7 +48,7 @@ test('scale confirm uses the same finite positive quantity threshold for manual 
     assert.equal(isValidScaleWeight(weight), false);
   for (const weight of [0.125, 0.25, 1.234567]) assert.equal(isValidScaleWeight(weight), true);
   const source = readFileSync(new URL('../components/ScaleModal.tsx', import.meta.url), 'utf8');
-  assert.match(source, /const canConfirmWeight = !isReading && isValidScaleWeight\(numericWeight\)/);
-  assert.match(source, /if \(canConfirmWeight\) onConfirm\(numericWeight\)/);
+  assert.match(source, /const canConfirmWeight = Boolean\(selectedScale\) && !isReading && isValidScaleWeight\(canonicalQuantity\)/);
+  assert.match(source, /if \(canConfirmWeight && selectedScale\) onConfirm\(canonicalQuantity, createWeightPresentation/);
   assert.match(source, /disabled=\{!canConfirmWeight\}/);
 });

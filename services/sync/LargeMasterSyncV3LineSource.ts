@@ -1,3 +1,4 @@
+import { validWeightPresentation } from '../../utils/scaleWeight';
 import { hasV3KilogramContract } from '../../utils/weightedProduct';
 import type { BusinessConfig, CartItem, Product, Transaction, V3SaleAuthorityStamp } from '../../types';
 import { calculateLineFiscalValuesForTransaction, freezeAuthoritativeLineFiscalAmounts } from '../../utils/fiscalBreakdown';
@@ -9,6 +10,9 @@ export const validateV3PinnedLineSource = (line: CartItem, product: Product, aut
   if (line.id !== product.id || line.type !== product.type || line.isInventoriable !== product.isInventoriable
     || line.taxable !== product.taxable || line.v3SaleAuthority?.taxIncluded !== authority.taxIncluded
     || JSON.stringify(line.appliedTaxIds) !== JSON.stringify(product.appliedTaxIds)) {
+    throw new LargeMasterSyncV3Error('SYNC_V3_ARTICLE_SOURCE_CHANGED');
+  }
+  if (!validWeightPresentation(line.weightPresentation, product.measurementUnit)) {
     throw new LargeMasterSyncV3Error('SYNC_V3_ARTICLE_SOURCE_CHANGED');
   }
   if (line.operationalFlags?.isWeighted || product.operationalFlags?.isWeighted) {

@@ -14,7 +14,7 @@ test('normal weighted barcode opens scale and returns before adding a default un
   const source = readFileSync(new URL('../components/POSInterface.tsx', import.meta.url), 'utf8');
   const click = source.slice(source.indexOf('const handleProductClick ='), source.indexOf('const handleSearchConsignments ='));
   assert.match(click, /const isWeighted = isWeightedProduct\(product\)/);
-  assert.match(click, /if \(isWeighted\) setProductForScale\(product\)/);
+  assert.match(click, /if \(isWeighted\) \{[\s\S]*resolveSaleScales\(config, activeTerminalId\)[\s\S]*setProductForScale\(product\)/);
   const scan = source.slice(source.indexOf('const performBarcode ='), source.indexOf('const processBarcode ='));
   const normal = scan.slice(scan.indexOf('// 2. Normal Barcode Search'));
   assert.match(normal, /if \(isWeightedProduct\(match.product\)\) \{\s*assertWeightedCodeInput\(match.product, trimmed\);\s*handleProductClick\(match.product\);\s*return \{ success: true,[\s\S]*?\};\s*\}\s*const hasConfiguredVariant/);
@@ -22,7 +22,7 @@ test('normal weighted barcode opens scale and returns before adding a default un
   assert.ok(scan.indexOf('routeScannedCoupon(trimmed)') < scan.indexOf('// 2. Normal Barcode Search'));
   assert.ok(scan.indexOf('// 1. Try Scale Parser') < scan.indexOf('// 2. Normal Barcode Search'));
   assert.ok(normal.indexOf('await addToCart(') < normal.indexOf('shouldRouteInvoiceScan(trimmed)'));
-  assert.match(source, /addToCart\(productForScale, isReturnMode \? -w : w\)/);
+  assert.match(source, /addToCart\(\{ \.\.\.productForScale, weightPresentation \} as CartItem, isReturnMode \? -w : w\)/);
 });
 
 test('V3 weighted preflight does not demand one kilogram and mobile/card share classification', () => {

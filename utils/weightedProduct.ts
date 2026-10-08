@@ -1,12 +1,10 @@
+import { weightUnit } from './scaleWeight';
 /** Explicit weighted flags also support ERP products without a display-name convention. */
 export function isWeightedProduct(product: { type?: string; name?: string; measurementUnit?: unknown; purchaseUnit?: unknown; conversionFactor?: unknown; operationalFlags?: { isWeighted?: boolean }; v3SaleAuthority?: unknown }): boolean {
   if (product.v3SaleAuthority) return hasV3KilogramContract(product);
   return product.operationalFlags?.isWeighted === true || product.type === 'SERVICE'
     || (product.name || '').toLowerCase().includes('(peso)');
 }
-
-const isKilogram = (value: unknown): boolean => typeof value === 'string'
-  && ['kg', 'kilogramo'].includes(value.trim().toLowerCase());
 
 /** ScaleModal supplies kilograms; V3 requires explicit compatible stock and sales units. */
 export function hasV3KilogramContract(product: {
@@ -17,7 +15,7 @@ export function hasV3KilogramContract(product: {
   return product.type === 'PRODUCT' && flags?.isWeighted === true && flags.integersOnly === false && flags.trackInventory === false
     && (flags.usesLots === undefined || flags.usesLots === false)
     && (flags.usesSerial === undefined || flags.usesSerial === false)
-    && isKilogram(product.measurementUnit) && isKilogram(product.purchaseUnit)
+    && weightUnit(product.measurementUnit) !== null && weightUnit(product.measurementUnit) === weightUnit(product.purchaseUnit)
     && product.conversionFactor === 1 && !hasUnsupportedWeightedConfiguration(product);
 }
 

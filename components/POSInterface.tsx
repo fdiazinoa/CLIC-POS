@@ -1,3 +1,5 @@
+import { resolveSaleScales, assertCurrentScaleContext } from '../services/ScalePreferences';
+import { sameWeightPresentation, displayWeightQuantity, displayWeightPrice, canonicalWeightQuantity, weightLineLabel } from '../utils/scaleWeight';
 import { isWeightedProduct, assertWeightedCodeInput } from '../utils/weightedProduct';
 import { resolveV3CategoryAliases, type V3OperationalCategory } from '../services/sync/LargeMasterSyncV3Categories';
 import { recordCheckoutDiagnostic, setCheckoutCaptureContext } from '../services/CheckoutDiagnostics';
@@ -2409,6 +2411,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
    }, [accountItemActionRequest, activeTable?.currentOrderId, cart, onAccountItemActionHandled]);
    const [selectedProductForVariants, setSelectedProductForVariants] = useState<Product | null>(null);
+   const [saleScaleContext, setSaleScaleContext] = useState<ReturnType<typeof resolveSaleScales> | null>(null);
    const [productForScale, setProductForScale] = useState<Product | null>(null);
    const [showLoyaltyModal, setShowLoyaltyModal] = useState(false);
 
@@ -3448,7 +3451,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             && (i.variantSku || '') === (variantSku || '')
             && iMods === modifiersString
             && i.price === finalPrice
-            && existingTaxSignature === taxSignature;
+            && existingTaxSignature === taxSignature
+            && sameWeightPresentation(i.weightPresentation, (product as CartItem).weightPresentation);
       });
 
       let targetCartId: string;
@@ -3547,11 +3551,24 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (!isReturnMode && !ensureSalesWithOpenZPermission()) return;
       if (requiresConfigurationBeforeAdd && !canAddItemToCart(product, v3Operational && isWeighted ? 0 : 1)) return;
 
-      if (isWeighted) setProductForScale(product);
+      if (isWeighted) {
+         try { setSaleScaleContext(resolveSaleScales(config, activeTerminalId)); }
+         catch (error) { setErrorToast(error instanceof Error ? error.message : 'Configuración de balanza inválida.'); return; }
+         setProductForScale(product);
+      }
       else if (hasVariants) setSelectedProductForVariants(product);
       else if (hasRestaurantConfig) setProductForModifiers(product);
       else addToCart(product, isReturnMode ? -1 : 1);
-   }, [isMobile, defaultSalesWarehouseId, ensureSalesWithOpenZPermission, canAddItemToCart, addToCart, isReturnMode, suppressProductInputUntilMs, v3Operational]);
+   }, [isMobile, defaultSalesWarehouseId, ensureSalesWithOpenZPermission, canAddItemToCart, addToCart, isReturnMode, suppressProductInputUntilMs, v3Operational, config, activeTerminalId]);
+
+   useEffect(() => {
+      if (!productForScale || !saleScaleContext) return;
+      try {
+         if (JSON.stringify(resolveSaleScales(config, activeTerminalId)) !== JSON.stringify(saleScaleContext)) {
+            setProductForScale(null); setErrorToast('La configuración de balanza cambió. Seleccione el artículo nuevamente.');
+         }
+      } catch (error) { setProductForScale(null); setErrorToast(error instanceof Error ? error.message : 'Configuración de balanza inválida.'); }
+   }, [config, activeTerminalId, productForScale, saleScaleContext]);
 
    // A V3 mobile selection resumes only after the new warehouse/tariff has rendered.
    // Context replacement unmounts this component and discards its pending selection.
@@ -5124,6 +5141,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          const originalItem = (cart || []).find(i => i.cartId === updatedItem.cartId);
          invalidatesPriorSubtotal = Boolean(originalItem?.subtotalizedAt);
 
+         if (originalItem && !sameWeightPresentation(originalItem.weightPresentation, updatedItem.weightPresentation)) {
+            setErrorToast('La unidad capturada de esta línea no puede cambiarse.'); return;
+         }
          if (!originalItem || !isValidCartQuantityTransition(originalItem.quantity, updatedItem.quantity)) {
             setErrorToast('La cantidad no puede llegar a cero ni cambiar una venta en devolución. Use Eliminar o el modo Devolución.');
             window.setTimeout(() => setErrorToast(null), 4000);
@@ -7664,7 +7684,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      const isWeighted = isWeightedProduct(pendingProductToAdd);
                      const hasVariants = pendingProductToAdd.attributes && pendingProductToAdd.attributes.length > 0;
 
-                     if (isWeighted) setProductForScale(pendingProductToAdd);
+                     if (isWeighted) handleProductClick(pendingProductToAdd);
                      else if (hasVariants) setSelectedProductForVariants(pendingProductToAdd);
                      else addToCart(pendingProductToAdd);
 
@@ -8609,7 +8629,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                        </div>
                                        <div className="flex flex-col mt-0.5">
                                           <div className="flex items-center gap-2">
-                                             <span className="text-xs font-black text-blue-600">{baseCurrency.symbol}{(item.price || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                             <span className="text-xs font-black text-blue-600">{baseCurrency.symbol}{displayWeightPrice(item).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: item.weightPresentation ? 8 : 2 })}{item.weightPresentation ? `/${item.weightPresentation.displayUnit}` : ''}</span>
                                              {hasDiscount && <span className="text-[10px] text-red-500 font-bold line-through">{baseCurrency.symbol}{item.originalPrice?.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>}
                                           </div>
                                           <span className="text-[9px] font-bold text-gray-500 uppercase tracking-tighter">{lineTaxSummary}</span>
@@ -8639,7 +8659,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                     {!isActiveCartItem ? (
                                        <div className="mt-2 flex items-center justify-between">
                                           <div className="rounded-full bg-slate-50 px-2.5 py-1 text-[10px] font-black text-slate-600 shadow-sm">
-                                             {item.quantity} ud
+                                             {displayWeightQuantity(item)} {item.weightPresentation?.displayUnit || 'ud'}
                                           </div>
                                           <span className="font-black text-gray-900 text-sm">{baseCurrency.symbol}{lineNet.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                                        </div>
@@ -8655,14 +8675,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                                          alert(lockedMutationMessage);
                                                          return;
                                                       }
-                                                      updateCartItem({ ...item, cartId: item.cartId, quantity: item.quantity - 1 });
+                                                      updateCartItem({ ...item, cartId: item.cartId, quantity: item.quantity - canonicalWeightQuantity(item, 1) });
                                                    }}
-                                                   disabled={isDispatchedToKds || !canStepCartQuantity(item.quantity, -1)}
+                                                   disabled={isDispatchedToKds || !canStepCartQuantity(item.quantity, -canonicalWeightQuantity(item, 1))}
                                                    className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700 shadow-sm transition-all hover:border-red-200 hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40"
                                                 >
                                                    <Minus size={13} strokeWidth={3} />
                                                 </button>
-                                                <span className="min-w-[20px] text-center text-xs font-black text-slate-800">{item.quantity}</span>
+                                                <span className="min-w-[20px] text-center text-xs font-black text-slate-800">{displayWeightQuantity(item)} {item.weightPresentation?.displayUnit || ''}</span>
                                                 <button
                                                    type="button"
                                                    onClick={(e) => {
@@ -8671,9 +8691,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                                          alert('Para agregar más cantidad a un artículo ya enviado al KDS, agrega una línea nueva desde el catálogo.');
                                                          return;
                                                       }
-                                                      updateCartItem({ ...item, cartId: item.cartId, quantity: item.quantity + 1 });
+                                                      updateCartItem({ ...item, cartId: item.cartId, quantity: item.quantity + canonicalWeightQuantity(item, 1) });
                                                    }}
-                                                   disabled={isDispatchedToKds || !canStepCartQuantity(item.quantity, 1)}
+                                                   disabled={isDispatchedToKds || !canStepCartQuantity(item.quantity, canonicalWeightQuantity(item, 1))}
                                                    className="flex h-7 w-7 items-center justify-center rounded-lg bg-blue-600 text-white shadow-sm transition-all hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-40"
                                                 >
                                                    <Plus size={13} strokeWidth={3} />
@@ -8760,7 +8780,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                        <div className="flex flex-col">
                                           <div className="flex flex-col">
                                              <div className="flex items-center gap-1 text-sm font-bold leading-snug text-slate-700">
-                                                <span>{item.quantity} × {baseCurrency.symbol}{item.price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                                <span>{weightLineLabel(item, baseCurrency.symbol)}</span>
                                                 {item.modifiers && item.modifiers.length > 0 && <span className="text-blue-600 font-bold ml-1">+{item.modifiers.length} mod</span>}
                                              </div>
                                              <div className="mt-0.5 text-[11px] font-semibold leading-snug text-slate-500">
@@ -8797,9 +8817,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                                       alert(lockedMutationMessage);
                                                       return;
                                                    }
-                                                   updateCartItem({ ...item, quantity: item.quantity - 1 });
+                                                   updateCartItem({ ...item, quantity: item.quantity - canonicalWeightQuantity(item, 1) });
                                                 }}
-                                                disabled={isDispatchedToKds || !canStepCartQuantity(item.quantity, -1)}
+                                                disabled={isDispatchedToKds || !canStepCartQuantity(item.quantity, -canonicalWeightQuantity(item, 1))}
                                                 className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700 shadow-sm transition-colors hover:border-red-200 hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40"
                                                 title="Restar cantidad"
                                              >
@@ -8813,9 +8833,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                                       alert('Para agregar más cantidad a un artículo ya enviado al KDS, agrega una línea nueva desde el catálogo.');
                                                       return;
                                                    }
-                                                   updateCartItem({ ...item, quantity: item.quantity + 1 });
+                                                   updateCartItem({ ...item, quantity: item.quantity + canonicalWeightQuantity(item, 1) });
                                                 }}
-                                                disabled={isDispatchedToKds || !canStepCartQuantity(item.quantity, 1)}
+                                                disabled={isDispatchedToKds || !canStepCartQuantity(item.quantity, canonicalWeightQuantity(item, 1))}
                                                 className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-600 text-white shadow-sm transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-40"
                                                 title="Sumar cantidad"
                                              >
@@ -9290,7 +9310,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             canVoidItem={cartItemEditCapabilities.canVoidItem && !editingItem.dispatched}
          />}
          {selectedProductForVariants && <ProductVariantSelector product={selectedProductForVariants} productSalesPrice={getProductPrice(selectedProductForVariants)} currencySymbol={baseCurrency.symbol} onClose={() => setSelectedProductForVariants(null)} onConfirm={(p, m, pr, selectedVariant, variantInfo) => { addToCart(p, 1, pr, m, undefined, selectedVariant, variantInfo); setSelectedProductForVariants(null); }} />}
-         {productForScale && <ScaleModal product={productForScale} currencySymbol={baseCurrency.symbol} onClose={() => setProductForScale(null)} onConfirm={(w) => { addToCart(productForScale, isReturnMode ? -w : w); setProductForScale(null); }} />}
+         {productForScale && saleScaleContext && <ScaleModal key={JSON.stringify(saleScaleContext)}
+            scales={saleScaleContext.scales} defaultScaleId={saleScaleContext.defaultScaleId}
+            product={productForScale} currencySymbol={baseCurrency.symbol} onClose={() => setProductForScale(null)}
+            onConfirm={(w, weightPresentation) => {
+               try { assertCurrentScaleContext(saleScaleContext, config, activeTerminalId); }
+               catch (error) { setErrorToast(error instanceof Error ? error.message : 'La balanza cambió.'); setProductForScale(null); return; }
+               addToCart({ ...productForScale, weightPresentation } as CartItem, isReturnMode ? -w : w); setProductForScale(null); }} />}
          {
             showGlobalDiscount && <GlobalDiscountModal currentSubtotal={cartSubtotal} currencySymbol={baseCurrency.symbol} initialValue={globalDiscount.value.toString()} initialType={globalDiscount.type} themeColor={config.themeColor} onClose={() => setShowGlobalDiscount(false)} onConfirm={async (val, type) => {
                const numVal = parseFloat(val) || 0;

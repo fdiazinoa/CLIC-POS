@@ -1,3 +1,4 @@
+import { readLocalScalePreference, saveLocalScalePreference } from '../services/ScalePreferences';
 
 import React, { useState, useMemo, useEffect } from 'react';
 import { Capacitor } from '@capacitor/core';
@@ -110,7 +111,7 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
    const [activeTab, setActiveTab] = useState<HardwareTab>('PERIPHERALS');
 
    // -- Local State synced with Config --
-   const [scales, setScales] = useState<ScaleDevice[]>(globalConfig.scales || []);
+   const [scales, setScales] = useState<ScaleDevice[]>(globalConfig.terminals?.find(t => t.id === (terminalId || permissionService.getTerminalId()))?.config.hardware?.scales || globalConfig.scales || []);
    const [printers, setPrinters] = useState<PrinterDevice[]>(globalConfig.availablePrinters || []);
    const [editingZebra, setEditingZebra] = useState(false);
    const [editingLocalZebra, setEditingLocalZebra] = useState(false);
@@ -298,7 +299,9 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
    const [testBarcode, setTestBarcode] = useState('');
    const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
 
-   const selectedTerminalId = terminalId || globalConfig.terminals?.[0]?.id || 'T1';
+   const selectedTerminalId = terminalId || permissionService.getTerminalId() || '';
+   const [editingScaleDefault, setEditingScaleDefault] = useState(false);
+   const [defaultScaleId, setDefaultScaleId] = useState(globalConfig.terminals?.find(t => t.id === (terminalId || permissionService.getTerminalId()))?.config.hardware?.defaultScaleId);
    const getZebraScope = () => ({ platform: Capacitor.getPlatform(), selectedTerminalId, localTerminalId: permissionService.getTerminalId() });
    const zebraLocalAllowed = canConfigureLocalZebra(getZebraScope());
    useEffect(() => {
@@ -320,10 +323,14 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
       } finally { setZebra(isZebraEnabled()); setZebraBusy(false); }
    };
    const editLocalZebra = () => {
+      let preference;
+      try { preference = readLocalScalePreference(selectedTerminalId); }
+      catch (error) { setZebraMessage(error instanceof Error ? error.message : 'Preferencia de balanza inválida.'); return; }
       setEditingZebra(true);
       setEditingLocalZebra(true);
       setZebraMessage('');
-      setEditingScale({ id: 'local-zebra-mp7000', name: 'Zebra MP7000', technology: 'DIRECT', isEnabled: zebraEnabled });
+      setEditingScaleDefault(preference.defaultScaleId === 'local-zebra-mp7000');
+      setEditingScale({ displayUnit: preference.zebraUnit || 'kg', id: 'local-zebra-mp7000', name: 'Zebra MP7000', technology: 'DIRECT', isEnabled: zebraEnabled });
    };
    const normalizedTestBarcode = testBarcode.replace(/\D/g, '');
    const buildScalePreviewSegments = () => {
@@ -349,6 +356,7 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
    // --- ACTIONS ---
 
    const createNewScale = () => {
+      setEditingScaleDefault(false);
       setEditingZebra(false);
       setEditingLocalZebra(false);
       setZebraMessage('');
@@ -429,7 +437,7 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
       setIsSavingHardware(true);
       setHardwareSaveFeedback(null);
       const normalizedDisplayConfig = normalizeCustomerDisplayConfig(displayConfig);
-      const newConfig = { ...globalConfig, scales, availablePrinters: printers, scaleLabelConfig };
+      const newConfig = { ...globalConfig, availablePrinters: printers, scaleLabelConfig };
       if (newConfig.terminals) {
          // Update the specific terminal config
          newConfig.terminals = newConfig.terminals.map(t => {
@@ -440,6 +448,7 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
                      ...t.config,
                      hardware: {
                         ...t.config.hardware,
+                        scales, defaultScaleId,
                         customerDisplay: normalizedDisplayConfig,
                         fingerprintReader
                      },
@@ -753,14 +762,29 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
 
    const handleSaveScale = async () => {
       if (!editingScale || zebraBusy) return;
+      if (editingScale.displayUnit !== undefined && editingScale.displayUnit !== 'kg' && editingScale.displayUnit !== 'lb') { setZebraMessage('Unidad de balanza inválida.'); return; }
       if (editingZebra) {
-         if (await applyZebra(true)) setEditingScale(null);
+         if (!zebraLocalAllowed) { setZebraMessage('Solo puedes configurar la balanza de esta terminal.'); return; }
+         try {
+            const previous = readLocalScalePreference(selectedTerminalId);
+            saveLocalScalePreference(selectedTerminalId, { zebraUnit: editingScale.displayUnit || 'kg',
+              defaultScaleId: editingScaleDefault ? editingScale.id : previous.defaultScaleId === editingScale.id ? undefined : previous.defaultScaleId });
+            if (!editingLocalZebra && !(await applyZebra(true))) {
+               try { saveLocalScalePreference(selectedTerminalId, previous); }
+               catch { setZebraMessage('Falló activar Zebra y restaurar la unidad previa. Verifica la configuración local.'); }
+               return;
+            }
+            setEditingScale(null);
+         } catch (error) { setZebraMessage(error instanceof Error ? error.message : 'No se pudo guardar la unidad.'); }
          return;
       }
       const newScales = scales.some(s => s.id === editingScale.id)
          ? scales.map(s => s.id === editingScale.id ? editingScale : s)
          : [...scales, editingScale];
 
+      if (!selectedTerminalId || !globalConfig.terminals?.some(t => t.id === selectedTerminalId)) { setZebraMessage('Selecciona una terminal válida.'); return; }
+      if (editingScaleDefault) setDefaultScaleId(editingScale.id);
+      else if (defaultScaleId === editingScale.id) setDefaultScaleId(undefined);
       setScales(newScales);
       setEditingScale(null);
    };
@@ -1521,7 +1545,7 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
                         {scales.map(scale => (
                            <div key={scale.id} className="p-8 bg-white border-2 border-slate-100 rounded-[2.5rem] relative group hover:border-blue-400 hover:shadow-xl transition-all">
                               <div className="absolute top-6 right-6 opacity-0 group-hover:opacity-100 flex gap-2 transition-opacity">
-                                 <button onClick={() => { setEditingZebra(false); setEditingLocalZebra(false); setEditingScale(scale); }} className="p-2.5 bg-slate-50 rounded-xl text-blue-600 hover:bg-blue-50"><SettingsIcon size={18} /></button>
+                                 <button onClick={() => { setEditingZebra(false); setEditingLocalZebra(false); setEditingScaleDefault(defaultScaleId === scale.id); setEditingScale(scale); }} className="p-2.5 bg-slate-50 rounded-xl text-blue-600 hover:bg-blue-50"><SettingsIcon size={18} /></button>
                                  <button onClick={() => handleDeleteScale(scale.id)} className="p-2.5 bg-slate-50 rounded-xl text-red-500 hover:bg-red-50"><Trash2 size={18} /></button>
                               </div>
                               <div className="w-14 h-14 bg-slate-50 rounded-2xl flex items-center justify-center text-blue-500 mb-6 group-hover:bg-blue-600 group-hover:text-white transition-all shadow-inner"><Scale size={32} /></div>
@@ -1713,6 +1737,13 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
                      <div className="h-px bg-slate-100"></div>
 
                      <section className="space-y-6">
+                        {(editingZebra || editingScale.technology === 'DIRECT') && <div className="mb-4">
+                           <label>Unidad predeterminada</label>
+                           <select value={editingScale.displayUnit || 'kg'} onChange={e => setEditingScale({ ...editingScale, displayUnit: e.target.value as 'kg' | 'lb' })}>
+                              <option value="kg">Kilogramos (kg)</option><option value="lb">Libras (lb)</option>
+                           </select>
+                           <label><input type="checkbox" checked={editingScaleDefault} onChange={e => setEditingScaleDefault(e.target.checked)} /> Usar como balanza predeterminada</label>
+                        </div>}
                         {!editingZebra && (<>
                         <div>
                            <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 ml-1">Alias del Dispositivo</label>
