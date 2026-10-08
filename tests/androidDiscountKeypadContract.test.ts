@@ -1,3 +1,4 @@
+import { displayWeightPrice, canonicalWeightPrice, createWeightPresentation } from '../utils/scaleWeight';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
@@ -23,5 +24,19 @@ test('los descuentos Android usan el teclado numérico embebido y excluyen Latin
 
 test('los límites del teclado coinciden con el tipo de descuento', () => {
   assert.match(globalDiscountSource, /type === 'PERCENT' \? 100 : currentSubtotal/);
-  assert.match(lineDiscountSource, /discountType === 'PERCENT' \? 100 : adjustmentBasePrice/);
+  assert.match(lineDiscountSource, /discountType === 'PERCENT' \? 100 : displayWeightPrice\(item, adjustmentBasePrice\)/);
+});
+
+test('fixed weighted discount limits convert display money back to the permitted canonical price', () => {
+  for (const [canonicalUnit, displayUnit] of [['kg', 'lb'], ['lb', 'kg']] as const) {
+    const item = { price: 1, weightPresentation: createWeightPresentation('S', displayUnit, canonicalUnit) };
+    const limit = displayWeightPrice(item, item.price);
+    assert.equal(canonicalWeightPrice(item, limit), item.price);
+    assert.equal(Math.max(0, item.price - canonicalWeightPrice(item, limit)), 0);
+    assert.equal(canonicalWeightPrice(item, limit / 2), 0.5);
+  }
+  assert.equal(displayWeightPrice({ price: 10 }, 10), 10); // unchanged legacy fixed limit
+  assert.match(lineDiscountSource, /adjustmentBasePrice - canonicalWeightPrice\(item, val\)/);
+  assert.match(lineDiscountSource, /canApplyDiscount \|\| canOverridePrice \? price : item.price/);
+  assert.match(lineDiscountSource, /canApplyDiscount \|\| canOverridePrice/);
 });
