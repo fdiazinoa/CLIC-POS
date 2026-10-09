@@ -1,3 +1,4 @@
+import { formatQuantity, terminalQuantityPresentation } from '../utils/quantityPresentation';
 import React, { useState, useMemo } from 'react';
 import { Search, Package, Calendar, User, ArrowRight, Clock, X, Hash, Box, Trash2, Landmark, CreditCard, Printer } from 'lucide-react';
 import { Reception, BusinessConfig, Supplier, PurchaseOrder, Product } from '../types';
@@ -7,6 +8,7 @@ import LabelPrintModal from './LabelPrintModal';
 interface ReceptionHistoryProps {
     receptions: Reception[];
     config: BusinessConfig;
+    terminalId?: string;
     suppliers: Supplier[];
     purchaseOrders: PurchaseOrder[];
     products?: Product[];
@@ -14,7 +16,7 @@ interface ReceptionHistoryProps {
     onDeleteOrder?: (id: string) => void;
 }
 
-const ReceptionHistory: React.FC<ReceptionHistoryProps> = ({ receptions, config, suppliers, purchaseOrders, products = [], onDeleteReception, onDeleteOrder }) => {
+const ReceptionHistory: React.FC<ReceptionHistoryProps> = ({ receptions, config, terminalId, suppliers, purchaseOrders, products = [], onDeleteReception, onDeleteOrder }) => {
     const [search, setSearch] = useState('');
     const [selectedReception, setSelectedReception] = useState<Reception | null>(null);
     const [isLabelModalOpen, setIsLabelModalOpen] = useState(false);
@@ -226,7 +228,7 @@ const ReceptionHistory: React.FC<ReceptionHistoryProps> = ({ receptions, config,
                                             </td>
                                             <td className="py-4 text-center">
                                                 <span className="px-3 py-1 bg-green-50 text-green-700 rounded-lg font-black text-sm">
-                                                    {item.quantityReceived}
+                                                    {formatQuantity(item.quantityReceived, terminalQuantityPresentation(config, terminalId).purchaseDecimals)}
                                                 </span>
                                             </td>
                                             <td className="py-4 text-right font-mono text-gray-600">

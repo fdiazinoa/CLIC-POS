@@ -1,3 +1,4 @@
+import { formatQuantity, terminalQuantityPresentation } from '../utils/quantityPresentation';
 import { printCurrentPage } from '../services/printer/BrowserPrint';
 
 import React, { useState, useMemo } from 'react';
@@ -16,6 +17,7 @@ interface SourcingIntelligenceProps {
     suppliers: Supplier[];
     products: Product[];
     config: BusinessConfig;
+    terminalId?: string;
     onBack: () => void;
 }
 
@@ -27,6 +29,7 @@ const SourcingIntelligence: React.FC<SourcingIntelligenceProps> = ({
     suppliers,
     products,
     config,
+    terminalId,
     onBack
 }) => {
     const [activeTab, setActiveTab] = useState<SourcingTab>('SUMMARY');
@@ -272,10 +275,10 @@ const SourcingIntelligence: React.FC<SourcingIntelligenceProps> = ({
                                                         {po.items.map((item, iIdx) => (
                                                             <tr key={iIdx} className="border-b border-slate-50 last:border-0">
                                                                 <td className="px-6 py-4 font-bold text-slate-700 text-sm">{item.productName}</td>
-                                                                <td className="px-6 py-4 text-center font-mono font-bold text-slate-600">{item.quantityOrdered}</td>
+                                                                <td className="px-6 py-4 text-center font-mono font-bold text-slate-600">{formatQuantity(item.quantityOrdered, terminalQuantityPresentation(config, terminalId).purchaseDecimals)}</td>
                                                                 <td className="px-6 py-4 text-center">
                                                                     <span className={`font-mono font-bold ${item.quantityReceived < item.quantityOrdered ? 'text-rose-500' : 'text-emerald-500'}`}>
-                                                                        {item.quantityReceived}
+                                                                        {formatQuantity(item.quantityReceived, terminalQuantityPresentation(config, terminalId).purchaseDecimals)}
                                                                     </span>
                                                                 </td>
                                                                 <td className="px-6 py-4 text-right font-mono text-slate-600">{config.currencySymbol}{item.cost.toLocaleString()}</td>
@@ -306,7 +309,7 @@ const SourcingIntelligence: React.FC<SourcingIntelligenceProps> = ({
                                                             </div>
                                                             <div className="text-right">
                                                                 <p className="text-[10px] font-black text-emerald-600 uppercase tracking-widest">
-                                                                    {r.items.reduce((acc, i) => acc + i.quantityReceived, 0)} Unidades Entradas
+                                                                    {formatQuantity(r.items.reduce((acc, i) => acc + i.quantityReceived, 0), terminalQuantityPresentation(config, terminalId).purchaseDecimals)} Unidades Entradas
                                                                 </p>
                                                             </div>
                                                         </div>

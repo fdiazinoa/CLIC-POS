@@ -793,6 +793,7 @@ export interface TerminalConfig {
     fingerprintReader?: FingerprintReaderConfig;
   };
   operational: {
+    quantityPresentation?: { salesDecimals?: number; purchaseDecimals?: number };
     vertical_negocio: VerticalType;
     usa_mesas: boolean;
     pantalla_inicio: 'VENTA_DIRECTA' | 'MAPA_MESAS';

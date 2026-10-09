@@ -1,3 +1,4 @@
+import { formatQuantity } from '../utils/quantityPresentation';
 import React, { useState, useEffect, useRef } from 'react';
 import { ShoppingCart, Monitor, MonitorPlay, Zap } from 'lucide-react';
 import { visorSync, VisorState } from '../utils/visorSync';
@@ -119,7 +120,7 @@ const CustomerVisor: React.FC = () => {
                         Su Pedido
                     </h3>
                     <span className="bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-sm font-bold">
-                        {cart.reduce((s, i) => s + i.quantity, 0)} items
+                        {formatQuantity(cart.reduce((s, i) => s + i.quantity, 0), state.salesQuantityDecimals)} items
                     </span>
                 </div>
 
@@ -152,7 +153,7 @@ const CustomerVisor: React.FC = () => {
                                             <div className="flex flex-col gap-1">
                                                 <div className="flex items-center gap-2">
                                                     <span className="text-slate-600 text-sm font-semibold">
-                                                        {item.quantity}X {currencySymbol}{item.price.toFixed(2)}
+                                                        {formatQuantity(item.quantity, state.salesQuantityDecimals)}X {currencySymbol}{item.price.toFixed(2)}
                                                     </span>
                                                     {hasDiscount && (
                                                         <span className="bg-red-100 text-red-600 px-2 py-0.5 rounded-md text-xs font-bold">

@@ -1,3 +1,4 @@
+import { formatQuantity, terminalQuantityPresentation } from '../utils/quantityPresentation';
 
 import React, { useState, useMemo, useEffect } from 'react';
 import {
@@ -35,6 +36,7 @@ interface SupplyChainManagerProps {
    receptions: Reception[];
    supplierProductPrices: any[];
    config: BusinessConfig;
+   terminalId?: string;
    onClose: () => void;
    onCreateOrder: (order: PurchaseOrder) => void;
    onUpdateOrder: (order: PurchaseOrder) => void;
@@ -57,6 +59,7 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
    receptions,
    supplierProductPrices,
    config,
+   terminalId,
    onClose,
    onCreateOrder,
    onUpdateOrder,
@@ -424,6 +427,7 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
       if (!isCreatingOrder) {
          return (
             <PurchaseOrderList
+               terminalId={terminalId}
                purchaseOrders={safeOrders}
                suppliers={safeSuppliers}
                config={config}
@@ -948,7 +952,7 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
                               <div>
                                  <h4 className="font-bold text-gray-800 text-lg">{item.productName}</h4>
                                  {item.variantInfo && <p className="text-[10px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded-md font-bold inline-block mb-1">{item.variantInfo}</p>}
-                                 <p className="text-sm text-gray-500">Solicitado: <strong className="text-gray-900">{item.quantityOrdered}</strong></p>
+                                 <p className="text-sm text-gray-500">Solicitado: <strong className="text-gray-900">{formatQuantity(item.quantityOrdered, terminalQuantityPresentation(config, terminalId).purchaseDecimals)}</strong></p>
                               </div>
                               {isComplete && <div className="bg-green-500 text-white p-1 rounded-full"><Check size={16} /></div>}
                            </div>
@@ -1089,6 +1093,7 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
                </button>
             </div>
             <ReceptionHistory
+               terminalId={terminalId}
                receptions={safeReceptions}
                config={config}
                suppliers={safeSuppliers}

@@ -1,6 +1,6 @@
 import { readLocalScalePreference, saveLocalScalePreference, persistScaleConfigurationDefault, resolveSaleScales } from '../services/ScalePreferences';
 
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { Capacitor } from '@capacitor/core';
 import { isZebraEnabled, setZebraEnabled, readZebraWeight, zebraSettingEvent } from '../services/ZebraScanner';
 import {
@@ -26,7 +26,7 @@ import {
    normalizeCustomerDisplayConnectionType,
    resetCustomerDisplayAutoLaunch,
 } from '../utils/customerDisplay';
-import { inferMediaType, isValidRemoteMediaUrl } from '../utils/media';
+import { createRemoteAd } from '../utils/media';
 
 const DEFAULT_DISPLAY_CONFIG: CustomerDisplayConfig = {
    isEnabled: true,
@@ -100,11 +100,12 @@ interface HardwareSettingsProps {
    onUpdateConfig: (cfg: BusinessConfig) => void | Promise<void>;
    onClose: () => void;
    terminalId?: string;
+   isReadOnly?: boolean;
 }
 
 type HardwareTab = 'PERIPHERALS' | 'SCALES' | 'DISPLAY' | 'CASHDRO' | 'LABELS' | 'FINGERPRINT';
 
-const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfig, products, onUpdateConfig, onClose, terminalId }) => {
+const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfig, products, onUpdateConfig, onClose, terminalId, isReadOnly = false }) => {
    const [zebraEnabled, setZebra] = useState(isZebraEnabled);
    const [zebraMessage, setZebraMessage] = useState('');
    const [zebraBusy, setZebraBusy] = useState(false);
@@ -132,11 +133,8 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
 
    // -- Customer Display State --
    const currentTerminalConfig = useMemo(() => {
-      // If terminalId is provided, look it up. Otherwise fallback to first terminal or default.
-      if (terminalId) {
-         return globalConfig.terminals?.find(t => t.id === terminalId) || globalConfig.terminals?.[0];
-      }
-      return globalConfig.terminals?.[0];
+      const selectedId = terminalId || permissionService.getTerminalId();
+      return globalConfig.terminals?.find(t => t.id === selectedId);
    }, [globalConfig.terminals, terminalId]);
 
    const [displayConfig, setDisplayConfig] = useState<CustomerDisplayConfig>(
@@ -300,6 +298,15 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
    const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
 
    const selectedTerminalId = terminalId || permissionService.getTerminalId() || '';
+   const adContext = useRef({ signature: '', active: true });
+   const adContextSignature = () => JSON.stringify({
+      terminalId: selectedTerminalId, permissionTerminalId: permissionService.getTerminalId(),
+      binding: currentTerminalConfig?.config?.erpBinding, deviceId: currentTerminalConfig?.config?.currentDeviceId,
+      isReadOnly, valid: Boolean(currentTerminalConfig),
+   });
+   adContext.current.signature = adContextSignature();
+   useEffect(() => { adContext.current.active = true; return () => { adContext.current.active = false; }; }, []);
+
    const [editingScaleDefault, setEditingScaleDefault] = useState(false);
    const [defaultScaleId, setDefaultScaleId] = useState<string | undefined>(() => {
       try { return resolveSaleScales(globalConfig, selectedTerminalId).defaultScaleId; }
@@ -435,7 +442,7 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
    };
 
    const handleSaveAllHardware = async () => {
-      if (isSavingHardware) return;
+      if (isSavingHardware || isReadOnly || !currentTerminalConfig) return;
 
       setIsSavingHardware(true);
       setHardwareSaveFeedback(null);
@@ -1028,21 +1035,23 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
       setManualTestResult(result);
    };
 
-   const addAd = async (e: React.MouseEvent) => {
+   const addAd = async (e: React.MouseEvent, type: 'IMAGE' | 'VIDEO') => {
       e.preventDefault();
       e.stopPropagation();
-      const url = await clicPrompt("Introduce la URL de la imagen o video publicitario (JPG/PNG/MP4/WebM):");
-      if (url && isValidRemoteMediaUrl(url.trim())) {
-         const type = inferMediaType(url);
-         const posterUrl = type === 'VIDEO'
-            ? (await clicPrompt('URL del póster del video (opcional):') || '').trim() || undefined
-            : undefined;
-         setDisplayConfig(prev => ({
-            ...prev,
-            ads: [...(prev.ads || []), { id: `ad_${Date.now()}`, type, url: url.trim(), posterUrl, active: true }]
-         }));
-      } else if (url) {
-         alert("Por favor introduce una URL válida");
+      if (isReadOnly || !currentTerminalConfig) return;
+      const context = adContextSignature();
+      const contextCurrent = () => adContext.current.active && adContext.current.signature === context && adContextSignature() === context;
+      const url = await clicPrompt(type === 'VIDEO'
+         ? 'URL directa del video (MP4/WebM); no enlace a una página de YouTube:'
+         : 'URL de la imagen publicitaria (JPG/PNG):');
+      if (!url || !contextCurrent()) return;
+      const posterUrl = type === 'VIDEO' ? await clicPrompt('URL del póster del video (opcional):') : undefined;
+      if (posterUrl === null || !contextCurrent()) return;
+      try {
+         const ad = createRemoteAd(url, type, posterUrl || undefined);
+         setDisplayConfig(prev => ({ ...prev, ads: [...(prev.ads || []), ad] }));
+      } catch (reason) {
+         alert(reason instanceof Error ? reason.message : 'Introduce una URL válida');
       }
    };
 
@@ -1193,12 +1202,16 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
                         <h3 className="font-bold text-gray-800 text-sm uppercase">Anuncios Publicitarios</h3>
                         <p className="text-[10px] text-gray-400 uppercase font-bold mt-0.5">Rotación automática en modo inactivo</p>
                      </div>
-                     <button
-                        onClick={addAd}
-                        className="p-3 bg-blue-600 text-white rounded-xl hover:bg-blue-700 shadow-lg shadow-blue-200 active:scale-90 transition-all"
-                     >
-                        <Plus size={20} />
-                     </button>
+                     <div className="flex flex-wrap gap-2">
+                        <button onClick={e => void addAd(e, 'IMAGE')} disabled={isReadOnly} aria-label="Agregar imagen"
+                           className="p-3 bg-blue-600 text-white rounded-xl hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2">
+                           <Plus size={20} /> Agregar imagen
+                        </button>
+                        <button onClick={e => void addAd(e, 'VIDEO')} disabled={isReadOnly} aria-label="Agregar video"
+                           className="p-3 bg-blue-600 text-white rounded-xl hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2">
+                           <Plus size={20} /> Agregar video
+                        </button>
+                     </div>
                   </div>
 
                   <div className="grid grid-cols-2 gap-4">

@@ -1,3 +1,4 @@
+import { operationalQuantityPresentation } from '../utils/quantityPresentation';
 
 import React from 'react';
 import {
@@ -49,6 +50,7 @@ const Toggle = ({ label, description, checked, onChange, icon: Icon, disabled }:
 );
 
 const SettingsOperational: React.FC<SettingsOperationalProps> = ({ config, onUpdate, isReadOnly }) => {
+    const presentation = operationalQuantityPresentation(config);
     const operational = config.operational || {
         vertical_negocio: 'RETAIL',
         usa_mesas: false,
@@ -147,6 +149,21 @@ const SettingsOperational: React.FC<SettingsOperationalProps> = ({ config, onUpd
 
     return (
         <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <section className="bg-white p-6 rounded-2xl border border-gray-200" aria-label="Presentación de cantidades">
+                <h3 className="font-bold text-gray-800">Decimales de cantidad</h3>
+                <p className="text-sm text-gray-500 mb-4">Sólo visualización; no modifica peso, cálculo ni datos.</p>
+                <div className="flex flex-wrap gap-4">
+                    {(['salesDecimals', 'purchaseDecimals'] as const).map(key => <label key={key} className="flex flex-col gap-2">
+                        {key === 'salesDecimals' ? 'Ventas' : 'Compras'}
+                        <select aria-label={key === 'salesDecimals' ? 'Decimales de cantidad en ventas' : 'Decimales de cantidad en compras'}
+                            value={presentation[key]} disabled={isReadOnly}
+                            onChange={event => onUpdate('operational', 'quantityPresentation', { ...presentation, [key]: Number(event.target.value) })}
+                            className="border rounded-lg p-2">
+                            {[0, 1, 2, 3, 4, 5, 6].map(value => <option key={value} value={value}>{value}</option>)}
+                        </select>
+                    </label>)}
+                </div>
+            </section>
             {isReadOnly && (
                 <div className="flex items-start gap-4 p-5 rounded-[2rem] border border-amber-200 bg-amber-50 text-amber-800">
                     <Info className="mt-0.5 shrink-0" size={18} />

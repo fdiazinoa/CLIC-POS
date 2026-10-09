@@ -1,3 +1,4 @@
+import { quantityDecimals } from './quantityPresentation';
 import { CartItem, CustomerDisplayAd } from '../types';
 
 export interface VisorCartItem {
@@ -22,6 +23,7 @@ export interface VisorState {
     welcomeMessage?: string;
     ads?: CustomerDisplayAd[];
     currencySymbol: string;
+    salesQuantityDecimals?: number;
 }
 
 export type VisorStateInput = Omit<VisorState, 'cart'> & {
@@ -84,6 +86,7 @@ const stripStateForVisor = (state: VisorStateInput): VisorState => ({
             active: Boolean(ad.active),
         }))
         : undefined,
+    salesQuantityDecimals: quantityDecimals(state.salesQuantityDecimals),
     currencySymbol: state.currencySymbol || '$',
 });
 
