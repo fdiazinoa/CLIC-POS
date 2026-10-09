@@ -1,3 +1,4 @@
+import { formatQuantity } from '../utils/quantityPresentation';
 import React from 'react';
 import { TicketTotalStatusRow } from './POSStatusIndicators';
 
@@ -8,16 +9,17 @@ interface Props {
   tax: number;
   total: number;
   units: number;
+  quantityDecimals?: number;
   points: number;
   status?: React.ReactNode;
 }
 
-export default function SupermarketTicketSummary({ symbol, subtotal, discount, tax, total, units, points, status }: Props) {
+export default function SupermarketTicketSummary({ symbol, subtotal, discount, tax, total, units, points, status, quantityDecimals = 3 }: Props) {
   const money = (value: number) => symbol + value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   return <section className="supermarket-footer-summary" aria-label="Resumen del ticket">
     <div className="flex flex-wrap gap-2 mb-3">
       <div className="rounded-lg bg-blue-100 px-3 py-2 text-blue-900">
-        <span className="text-xl font-black tabular-nums">{units}</span>
+        <span className="text-xl font-black tabular-nums">{formatQuantity(units, quantityDecimals)}</span>
         <span className="ml-2 text-xs font-bold">{units === 1 ? 'unidad' : 'unidades'}</span>
       </div>
       {points > 0 && <div className="rounded-lg bg-purple-100 px-3 py-2 text-purple-800 text-sm font-bold">Ganarás <strong className="text-lg tabular-nums">{points}</strong> puntos</div>}

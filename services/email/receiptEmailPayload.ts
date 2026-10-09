@@ -1,3 +1,4 @@
+import { terminalQuantityPresentation } from '../../utils/quantityPresentation';
 import { weightLineLabel } from '../../utils/scaleWeight';
 import type { BusinessConfig, CartItem, Transaction, User } from '../../types';
 import { FISCAL_DOCUMENT_LABELS, getFiscalCodeFromNcf } from '../../utils/fiscal/fiscalHelpers';
@@ -137,7 +138,7 @@ export const buildReceiptEmailPayload = (
       itemDiscountAmount,
       itemDiscountRate: normalizeDiscountPercentage(item.discountRate, discount.discountPercentage),
       itemTaxAmount: Number(item.taxAmount || 0),
-      options: [...resolveReceiptItemOptions(item), ...(item.weightPresentation ? [weightLineLabel(item, config?.currencySymbol || "")] : [])],
+      options: [...resolveReceiptItemOptions(item), ...(item.weightPresentation ? [weightLineLabel(item, config?.currencySymbol || "", item.price, terminalQuantityPresentation(config || { terminals: [] }, transaction.terminalId).salesDecimals)] : [])],
       sellerName: sellerName || undefined,
     };
   });

@@ -1,3 +1,4 @@
+import { formatQuantity } from '../utils/quantityPresentation';
 import { displayWeightQuantity, displayWeightPrice, canonicalWeightQuantity, canonicalWeightPrice, formatWeightNumber } from '../utils/scaleWeight';
 
 import React, { useState, useMemo } from 'react';
@@ -12,6 +13,7 @@ import { Capacitor } from '@capacitor/core';
 import NumericKeypad from './NumericKeypad';
 
 interface CartItemOptionsModalProps {
+  quantityDecimals?: number;
   item: CartItem;
   config: BusinessConfig;
   users: UserType[];
@@ -28,6 +30,7 @@ interface CartItemOptionsModalProps {
 
 const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
   item,
+  quantityDecimals = 3,
   config,
   users,
   salesUsers: incomingSalesUsers = [],
@@ -252,7 +255,7 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
             </button>
 
             <div className="text-center">
-              <span className="block text-4xl font-black text-gray-900 leading-none mb-1">{formatWeightNumber(displayWeightQuantity({ ...item, quantity }))} {item.weightPresentation?.displayUnit || ''}</span>
+              <span className="block text-4xl font-black text-gray-900 leading-none mb-1">{formatQuantity(displayWeightQuantity({ ...item, quantity }), quantityDecimals)} {item.weightPresentation?.displayUnit || ''}</span>
               <span className="text-[10px] uppercase font-black text-gray-300 tracking-[0.2em]">Cantidad</span>
             </div>
 

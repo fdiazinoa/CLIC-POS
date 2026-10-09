@@ -1,3 +1,4 @@
+import { formatQuantity, terminalQuantityPresentation } from '../utils/quantityPresentation';
 import { resolveSaleScales, assertCurrentScaleContext } from '../services/ScalePreferences';
 import { sameWeightPresentation, displayWeightQuantity, displayWeightPrice, canonicalWeightQuantity, weightLineLabel } from '../utils/scaleWeight';
 import { isWeightedProduct, assertWeightedCodeInput } from '../utils/weightedProduct';
@@ -1366,6 +1367,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    }, []);
 
    const activeTerminal = (config.terminals || []).find(t => t.id === activeTerminalId) || (config.terminals || [])[0];
+   const quantityPresentation = terminalQuantityPresentation(config, activeTerminalId);
    const activeTerminalConfig = activeTerminal?.config;
    const terminalId = activeTerminal?.id || 'T1';
    const activeTerminalConfigRaw = useMemo<Record<string, unknown>>(
@@ -5072,9 +5074,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          total: cartTotal,
          welcomeMessage: displayConfig?.welcomeMessage || '¡Bienvenidos!',
          ads: (displayConfig?.ads || []).filter(ad => ad.active),
-         currencySymbol: baseCurrency.symbol
+         currencySymbol: baseCurrency.symbol,
+         salesQuantityDecimals: quantityPresentation.salesDecimals
       });
-   }, [processedCart, cartSubtotal, cartTax, discountAmount, cartTotal, activeTerminalConfig, baseCurrency]);
+   }, [processedCart, cartSubtotal, cartTax, discountAmount, cartTotal, activeTerminalConfig, baseCurrency, quantityPresentation.salesDecimals]);
 
    useEffect(() => {
       const isVisorMode = isCustomerDisplaySurface();
@@ -8178,7 +8181,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      type="button"
                      data-testid="mobile-cart-tab-button"
                      onClick={() => setRightSidebarTab('CART')}
-                     aria-label={`Abrir carrito${cartQuantity > 0 ? ` con ${cartQuantity} artículos` : ''}`}
+                     aria-label={`Abrir carrito${cartQuantity > 0 ? ` con ${formatQuantity(cartQuantity, quantityPresentation.salesDecimals)} artículos` : ''}`}
                      aria-pressed={rightSidebarTab === 'CART'}
                      className={`group relative flex h-12 w-12 shrink-0 items-center justify-center rounded-[1.05rem] border transition-all duration-200 ${
                         rightSidebarTab === 'CART'
@@ -8191,7 +8194,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      </span>
                      {cartQuantity > 0 && (
                         <span className="absolute -right-1.5 -top-1.5 inline-flex min-w-7 items-center justify-center rounded-full border border-white bg-white px-2 py-1 text-[10px] font-black leading-none text-red-700 shadow-md">
-                           {cartQuantity}
+                           {formatQuantity(cartQuantity, quantityPresentation.salesDecimals)}
                         </span>
                      )}
                   </button>
@@ -8387,8 +8390,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      )}
                      <button
                         onClick={() => setRightSidebarTab('CART')}
-                        aria-label={`Abrir carrito${cartQuantity > 0 ? ` con ${cartQuantity} artículos` : ''}`}
-                        title={`Carrito${cartQuantity > 0 ? ` (${cartQuantity})` : ''}`}
+                        aria-label={`Abrir carrito${cartQuantity > 0 ? ` con ${formatQuantity(cartQuantity, quantityPresentation.salesDecimals)} artículos` : ''}`}
+                        title={`Carrito${cartQuantity > 0 ? ` (${formatQuantity(cartQuantity, quantityPresentation.salesDecimals)})` : ''}`}
                         className={`group relative flex h-12 w-12 shrink-0 items-center justify-center rounded-[1.05rem] border transition-all duration-200 ${
                            rightSidebarTab === 'CART'
                               ? 'border-red-200 bg-gradient-to-br from-red-50 via-rose-50 to-red-100 text-red-700 shadow-[0_14px_30px_rgba(248,113,113,0.18)]'
@@ -8406,7 +8409,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         </span>
                         {cartQuantity > 0 && (
                            <span className="absolute -right-1.5 -top-1.5 inline-flex min-w-7 items-center justify-center rounded-full border border-white bg-white px-2 py-1 text-[10px] font-black leading-none text-red-700 shadow-md">
-                              {cartQuantity}
+                              {formatQuantity(cartQuantity, quantityPresentation.salesDecimals)}
                            </span>
                         )}
                      </button>
@@ -8659,7 +8662,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                     {!isActiveCartItem ? (
                                        <div className="mt-2 flex items-center justify-between">
                                           <div className="rounded-full bg-slate-50 px-2.5 py-1 text-[10px] font-black text-slate-600 shadow-sm">
-                                             {displayWeightQuantity(item)} {item.weightPresentation?.displayUnit || 'ud'}
+                                             {formatQuantity(displayWeightQuantity(item), quantityPresentation.salesDecimals)} {item.weightPresentation?.displayUnit || 'ud'}
                                           </div>
                                           <span className="font-black text-gray-900 text-sm">{baseCurrency.symbol}{lineNet.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                                        </div>
@@ -8682,7 +8685,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                                 >
                                                    <Minus size={13} strokeWidth={3} />
                                                 </button>
-                                                <span className="min-w-[20px] text-center text-xs font-black text-slate-800">{displayWeightQuantity(item)} {item.weightPresentation?.displayUnit || ''}</span>
+                                                <span className="min-w-[20px] text-center text-xs font-black text-slate-800">{formatQuantity(displayWeightQuantity(item), quantityPresentation.salesDecimals)} {item.weightPresentation?.displayUnit || ''}</span>
                                                 <button
                                                    type="button"
                                                    onClick={(e) => {
@@ -8780,7 +8783,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                        <div className="flex flex-col">
                                           <div className="flex flex-col">
                                              <div className="flex items-center gap-1 text-sm font-bold leading-snug text-slate-700">
-                                                <span>{weightLineLabel(item, baseCurrency.symbol)}</span>
+                                                <span>{weightLineLabel(item, baseCurrency.symbol, item.price, quantityPresentation.salesDecimals)}</span>
                                                 {item.modifiers && item.modifiers.length > 0 && <span className="text-blue-600 font-bold ml-1">+{item.modifiers.length} mod</span>}
                                              </div>
                                              <div className="mt-0.5 text-[11px] font-semibold leading-snug text-slate-500">
@@ -8944,6 +8947,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            />
                         </div>
                         <SupermarketTicketSummary
+                           quantityDecimals={quantityPresentation.salesDecimals}
                            symbol={baseCurrency.symbol}
                            subtotal={cartSubtotal}
                            discount={discountAmount}
@@ -9290,6 +9294,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          />}
          {editingItem && <CartItemOptionsModal
             item={editingItem}
+            quantityDecimals={quantityPresentation.salesDecimals}
             config={config}
             users={users}
             salesUsers={salesUsers}

@@ -18,7 +18,7 @@ const pick = (source: Record<string, any>, keys: string[]) => {
 export const terminalPosOptionsPatch = (input: unknown): Record<string, any> => {
   const config = record(input);
   const operational = { ...record(config.businessConfig), ...record(config.business_config), ...record(config.operational) };
-  for (const key of ['reservationPolicy', 'deliveryAlerts', 'orderNumbers']) {
+  for (const key of ['reservationPolicy', 'deliveryAlerts', 'orderNumbers', 'quantityPresentation']) {
     const sections = [record(config.businessConfig)[key], record(config.business_config)[key], record(config.operational)[key]];
     if (sections.some(value => Object.keys(record(value)).length)) operational[key] = Object.assign({}, ...sections.map(record));
   }
@@ -52,6 +52,13 @@ export const terminalPosOptionsPatch = (input: unknown): Record<string, any> => 
   if (Object.keys(delivery).length) op.deliveryAlerts = delivery;
   const orders = pick(record(operational.orderNumbers), ['enabled']);
   if (Object.keys(orders).length) op.orderNumbers = orders;
+  const quantities = record(operational.quantityPresentation);
+  const presentation: Record<string, number> = {};
+  for (const key of ['salesDecimals', 'purchaseDecimals']) {
+    const value = quantities[key];
+    if (typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 6) presentation[key] = value;
+  }
+  if (Object.keys(presentation).length) op.quantityPresentation = presentation;
   const ux = pick(record(config.ux), ['showProductImages']);
   if (config.ux?.viewMode === 'VISUAL' || config.ux?.viewMode === 'RETAIL') ux.viewMode = config.ux.viewMode;
   const agenda = boolean(config.startWithAgenda);
@@ -63,7 +70,7 @@ export const mergeTerminalPosOptions = (local: unknown, ...sources: unknown[]): 
   const result = { operational: { ...record(base.operational) }, security: { ...record(base.security) }, ux: { ...record(base.ux) }, startWithAgenda: base.startWithAgenda };
   for (const source of sources) {
     const patch = terminalPosOptionsPatch(source);
-    for (const key of ['reservationPolicy', 'deliveryAlerts', 'orderNumbers']) {
+    for (const key of ['reservationPolicy', 'deliveryAlerts', 'orderNumbers', 'quantityPresentation']) {
       if (patch.operational[key]) patch.operational[key] = { ...record(result.operational[key]), ...patch.operational[key] };
     }
     Object.assign(result.operational, patch.operational);

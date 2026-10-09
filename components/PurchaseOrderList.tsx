@@ -1,3 +1,4 @@
+import { formatQuantity, terminalQuantityPresentation } from '../utils/quantityPresentation';
 import React, { useState, useMemo } from 'react';
 import { Search, Plus, FileText, Calendar, ArrowRight, Mail, Clock, Check, Trash2 } from 'lucide-react';
 import { PurchaseOrder, Supplier, BusinessConfig } from '../types';
@@ -7,6 +8,7 @@ interface PurchaseOrderListProps {
     purchaseOrders: PurchaseOrder[];
     suppliers: Supplier[];
     config: BusinessConfig;
+    terminalId?: string;
     onNewOrder: () => void;
     onViewDetail: (orderId: string) => void;
     onSendEmail: (order: PurchaseOrder) => void;
@@ -17,6 +19,7 @@ const PurchaseOrderList: React.FC<PurchaseOrderListProps> = ({
     purchaseOrders,
     suppliers,
     config,
+    terminalId,
     onNewOrder,
     onViewDetail,
     onSendEmail,
@@ -134,6 +137,10 @@ const PurchaseOrderList: React.FC<PurchaseOrderListProps> = ({
                                             <p className="text-gray-800 font-black">{config.currencySymbol}{(po.totalCost || 0).toLocaleString()}</p>
                                         </div>
 
+                                        <div className="text-xs text-gray-600" aria-label="Cantidades del pedido">
+                                            <p>Pedida: {formatQuantity(totalOrdered, terminalQuantityPresentation(config, terminalId).purchaseDecimals)}</p>
+                                            <p>Recibida: {formatQuantity(totalReceived, terminalQuantityPresentation(config, terminalId).purchaseDecimals)}</p>
+                                        </div>
                                         <div className="min-w-[100px] flex justify-center md:justify-start">
                                             {getStatusBadge(po.status, progress)}
                                         </div>

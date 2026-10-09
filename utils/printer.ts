@@ -1,3 +1,4 @@
+import { formatQuantity, terminalQuantityPresentation } from './quantityPresentation';
 import { weightLineLabel, displayWeightQuantity } from './scaleWeight';
 import { trackCheckoutPrint } from '../services/CheckoutPrintTracking';
 import { notifyBrowserPrint } from '../services/printer/BrowserPrint';
@@ -471,7 +472,7 @@ const printTicketInternal = async (transaction: Transaction, config: BusinessCon
                             <td style="width: 70%;">
                                 <span class="item-name">${item.name}</span>
                                 <span class="item-meta">
-                                    ${weightLineLabel(item, currencySymbol, lineDiscount.hasDiscount ? lineDiscount.originalUnitPrice : lineDiscount.finalUnitPrice)}
+                                    ${weightLineLabel(item, currencySymbol, lineDiscount.hasDiscount ? lineDiscount.originalUnitPrice : lineDiscount.finalUnitPrice, terminalQuantityPresentation(config, transaction.terminalId).salesDecimals)}
                                     ${lineDiscount.hasDiscount ? `<br/><strong>Descuento artículo (${lineDiscount.discountPercentageLabel}): -${currencySymbol}${lineDiscount.discountAmount.toFixed(2)}</strong>` : ''}
                                     ${lineDiscount.hasDiscount ? `<br/><strong>Precio final: ${currencySymbol}${lineDiscount.finalLineTotal.toFixed(2)}</strong>` : ''}
                                     ${variantText ? `<br/>${escapeHtml(variantText)}` : ''}
@@ -828,7 +829,7 @@ const printReservationInternal = async (
                         <tr>
                             <td style="width: 70%;">
                                 <span class="item-name">${item.name}</span>
-                                <span class="item-meta">${weightLineLabel(item, currencySymbol)}</span>
+                                <span class="item-meta">${weightLineLabel(item, currencySymbol, item.price, terminalQuantityPresentation(config, reservation.terminalId).salesDecimals)}</span>
                             </td>
                             <td class="text-right font-bold">
                                 ${currencySymbol}${(item.price * item.quantity).toFixed(2)}
@@ -1029,7 +1030,7 @@ const printPrecuentaInternal = async (
                             <td style="width: 70%;">
                                 <span class="item-name">${item.name}</span>
                                 <span class="item-meta">
-                                    ${weightLineLabel(item, currencySymbol)}
+                                    ${weightLineLabel(item, currencySymbol, item.price, terminalQuantityPresentation(config, params.terminalId).salesDecimals)}
                                     ${item.modifiers && item.modifiers.length > 0 ? `<br/>Op: ${item.modifiers.join(', ')}` : ''}
                                 </span>
                             </td>
@@ -1209,7 +1210,7 @@ const printComandaInternal = async (
                 <tbody>
                     ${kitchenItems.map(item => `
                         <tr>
-                            <td class="qty-cell">${displayWeightQuantity(item)} ${item.weightPresentation?.displayUnit || ""}</td>
+                            <td class="qty-cell">${formatQuantity(displayWeightQuantity(item))} ${item.weightPresentation?.displayUnit || ""}</td>
                             <td>
                                 <span class="item-name">${item.name}</span>
                                 <span class="item-time">Digitado: ${formatClock(resolveEntryTime(item))}</span>
