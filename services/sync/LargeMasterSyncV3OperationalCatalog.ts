@@ -107,6 +107,9 @@ export class LargeMasterSyncV3OperationalCatalog {
       this.ready.runtime.getInventoryBalance(articleId, this.warehouseId),
       this.ready.runtime.getOperationalVariants(articleId),
     ]);
+    if (booleanValue(article.inventoriable) && sourceFlags.trackInventory && !balance) {
+      throw new LargeMasterSyncV3Error('SYNC_V3_ARTICLE_INVENTORY_COVERAGE_REQUIRED');
+    }
     if (sourceFlags.isWeighted && sourceVariants.length > 0) {
       throw new LargeMasterSyncV3Error('SYNC_V3_ADVANCED_ARTICLE_CONTRACT_REQUIRED');
     }
@@ -128,6 +131,8 @@ export class LargeMasterSyncV3OperationalCatalog {
     }));
     const flags = operationalFlags(article.operationalFlags);
     const authority: Readonly<V3SaleAuthorityStamp> = Object.freeze({
+      ...(this.ready.inventorySyncId ? { inventorySyncId: this.ready.inventorySyncId,
+        inventorySyncVersion: this.ready.inventorySyncVersion } : {}),
       syncId: sale.version.syncId,
       syncVersion: sale.version.syncVersion,
       tariffId: this.saleCatalog.tariffId,
@@ -176,12 +181,15 @@ export class LargeMasterSyncV3OperationalCatalog {
     await this.assertInventoryVersion();
     const sales = await this.saleCatalog.search(query, categoryId, limit);
     const supports = await this.ready.runtime.getOperationalSupports(sales.map(sale => stringValue(sale.article.id)), this.warehouseId);
-    const items = await Promise.all(sales.map(sale => this.adapt(sale, supports ? {
+    const items = await Promise.all(sales.map(async sale => { try { return await this.adapt(sale, supports ? {
       balance: supports.balances[stringValue(sale.article.id)] || null,
       variants: supports.variants[stringValue(sale.article.id)] || [],
-    } : undefined)));
+    } : undefined); } catch(error) {
+      if(error instanceof LargeMasterSyncV3Error && error.code === 'SYNC_V3_ARTICLE_INVENTORY_COVERAGE_REQUIRED') return null;
+      throw error;
+    }}));
     await this.assertInventoryVersion();
-    return items;
+    return items.filter((item): item is V3OperationalProduct => item !== null);
   }
 
   async get(articleId: string): Promise<V3OperationalProduct | null> {

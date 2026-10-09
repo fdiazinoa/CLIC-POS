@@ -1,3 +1,4 @@
+import { claimV3DirectTicket, readV3DirectWaitingTickets, updateV3DirectTicket } from '../services/sync/LargeMasterSyncV3DirectTicketSource';
 import { assertWeightedCodeInput } from '../utils/weightedProduct';
 import { subscribeLargeMasterSyncV3CatalogUpdates } from '../services/sync/LargeMasterSyncV3CatalogUpdates';
 import type { V3OperationalCategory } from '../services/sync/LargeMasterSyncV3Categories';
@@ -135,12 +136,15 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps> = props => {
         modifiers: [], selectedVariant: match.variant || undefined,
         variantInfo: match.variant ? Object.entries(match.variant.attributeValues || {}).map(([key, value]) => `${key}: ${value}`).join(' · ') : undefined };
     },
-    validate: async lines => {
+    validate: async (lines, reference) => {
       assertContext();
       await session.validate({ ...latestProps.current.config, tariffs: projected.tariffs,
-        taxes: projected.taxes, taxRate: projected.taxRate }, lines, tariffId, warehouseId);
+        taxes: projected.taxes, taxRate: projected.taxRate }, lines, tariffId, warehouseId, 'SALE', undefined, reference);
       assertContext();
     },
+    restoreRetainedTicket: async id => { assertContext(); const ticket = await claimV3DirectTicket(id); assertContext(); return ticket; },
+    updateRetainedTicket: async (id,ticket) => { assertContext(); await updateV3DirectTicket(id,ticket); assertContext(); },
+    waitingTickets: async tickets => { assertContext(); const result = await readV3DirectWaitingTickets(tickets); assertContext(); return result; },
     changeTariff: id => {
       assertContext();
       if (latestProps.current.cart.length) throw new Error('SYNC_V3_TARIFF_CHANGE_CART_NOT_EMPTY');

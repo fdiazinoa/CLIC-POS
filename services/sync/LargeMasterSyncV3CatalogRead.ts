@@ -35,7 +35,7 @@ export class LargeMasterSyncV3CatalogRead {
     private readonly getContext: () => V3CatalogContext, private readonly runtime: LargeMasterSyncV3Runtime,
     private readonly identity: LargeMasterSyncV3BoundIdentity, private readonly origin: string,
     private readonly binding: string, private readonly scope: ReturnType<typeof configured>,
-    private readonly inventory: { version: number; cursor: string }, private readonly taxIncluded: boolean) {}
+    private readonly inventory: { version: number; cursor: string; syncId?: string; syncVersion?: number }, private readonly taxIncluded: boolean) {}
 
   static async open(getContext: () => V3CatalogContext, dependencies = defaults()): Promise<LargeMasterSyncV3CatalogRead> {
     if (!dependencies.enabled) throw new LargeMasterSyncV3Error('SYNC_V3_CANDIDATE_DISABLED');
@@ -49,7 +49,7 @@ export class LargeMasterSyncV3CatalogRead {
     const inventory = await runtime.getInventorySnapshotVersion();
     if (!inventory) throw new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_NOT_READY');
     const tariff = await store.getAdministrativeTariff(runtime.version, scope.tariffId);
-    const reader = new LargeMasterSyncV3CatalogRead(dependencies, getContext, runtime, identity, origin, binding, scope, inventory, tariff.taxIncluded);
+    const reader = new LargeMasterSyncV3CatalogRead(dependencies, getContext, runtime, identity, origin, binding, scope, { ...inventory, ...await store.getInventoryAuthority?.() }, tariff.taxIncluded);
     await reader.assertCurrent();
     return reader;
   }
@@ -60,13 +60,14 @@ export class LargeMasterSyncV3CatalogRead {
       || v3BindingKey(current, this.origin) !== this.binding || configured(this.getContext(), current).key !== this.scope.key)
       throw new LargeMasterSyncV3Error('SYNC_V3_CATALOG_CONTEXT_CHANGED');
     const store = this.dependencies.store!;
-    const [active, owner, inventory] = await Promise.all([store.getActiveRuntimeVersion(), store.getOperationalOwner!(),
-      this.runtime.getInventorySnapshotVersion()]);
+    const [active, owner, inventory, anchor] = await Promise.all([store.getActiveRuntimeVersion(), store.getOperationalOwner!(),
+      this.runtime.getInventorySnapshotVersion(),store.getInventoryAuthority?.()]);
     const version = this.runtime.version;
     if (active?.syncId !== version.syncId || active.syncVersion !== version.syncVersion
       || (active.contractVersion || 1) < 2 || owner?.binding !== this.binding || owner.syncId !== version.syncId
       || owner.syncVersion !== version.syncVersion || inventory?.version !== this.inventory.version
-      || inventory.cursor !== this.inventory.cursor) throw new LargeMasterSyncV3Error('SYNC_V3_CATALOG_VERSION_CHANGED');
+      || inventory.cursor !== this.inventory.cursor
+      || this.inventory.syncId && (!anchor || anchor.syncId !== this.inventory.syncId || anchor.syncVersion !== this.inventory.syncVersion)) throw new LargeMasterSyncV3Error('SYNC_V3_CATALOG_VERSION_CHANGED');
     // Configuration/identity can change while native promises are pending.
     const after = this.dependencies.readIdentity();
     if (after.syncToken !== this.identity.syncToken || v3BindingKey(after, this.dependencies.downloadOrigin()) !== this.binding
@@ -78,7 +79,8 @@ export class LargeMasterSyncV3CatalogRead {
     const result = await this.runtime.readAdministrativeCatalogPage({ ...request, ...this.scope,
       inventoryVersion: this.inventory.version, inventoryCursor: this.inventory.cursor });
     const deltas = result.rows.length ? await this.dependencies.store!.getLocalInventoryDeltas!(
-      v3InventoryBaselineKey(this.binding, { ...this.runtime.version, inventoryVersion: this.inventory.version,
+      v3InventoryBaselineKey(this.binding, { ...this.runtime.version,
+        ...(this.inventory.syncId ? { inventorySyncId: this.inventory.syncId, inventorySyncVersion: this.inventory.syncVersion } : {}), inventoryVersion: this.inventory.version,
         inventoryCursor: this.inventory.cursor, tariffId: this.scope.tariffId, warehouseId: this.scope.warehouseId,
         taxIncluded: this.taxIncluded }),
       result.rows.map(row => row.id), this.scope.warehouseId) : {};

@@ -36,6 +36,8 @@ const defaultDependencies: CandidateDependencies = {
 };
 
 export interface LargeMasterSyncV3CandidateReady {
+  inventorySyncId?: string;
+  inventorySyncVersion?: number;
   runtime: LargeMasterSyncV3Runtime;
   inventoryVersion: number;
   inventoryCursor: string;
@@ -92,4 +94,43 @@ export const prepareLargeMasterSyncV3Candidate = async (
     throw new LargeMasterSyncV3Error('SYNC_V3_RUNTIME_VERSION_CHANGED');
   }
   return { runtime, inventoryVersion: saved.version, inventoryCursor: saved.cursor };
+};
+
+/** Existing stock remains authoritative. This route never requests/replaces inventory. */
+export const prepareLargeMasterSyncV3CatalogOnly = async (
+  store: LargeMasterSyncV3Store, v3BaseUrl: string, binding: string,
+  metric?: (metric: LargeMasterSyncV3Metric) => void,
+  dependencies: CandidateDependencies = defaultDependencies,
+): Promise<LargeMasterSyncV3CandidateReady> => {
+  if (!dependencies.enabled) throw new LargeMasterSyncV3Error('SYNC_V3_CANDIDATE_DISABLED');
+  dependencies.assertPlatform();
+  await dependencies.waitForOperationalWindow();
+  const [expectedCatalog, owner, inventory] = await Promise.all([
+    store.getActiveRuntimeVersion(), store.getOperationalOwner?.(), store.getInventoryAuthority?.(),
+  ]);
+  if (!expectedCatalog || !owner || owner.binding !== binding || owner.syncId !== expectedCatalog.syncId
+    || owner.syncVersion !== expectedCatalog.syncVersion || !inventory || !store.prepareCatalogOnly || !store.activateCatalogOnly) {
+    throw new LargeMasterSyncV3Error('SYNC_V3_STOCK_AUTHORITY_INVALID');
+  }
+  const transition = { expectedCatalog, binding, inventory };
+  const scopedStore = new Proxy(store, { get(target, key) {
+    if (key === 'prepare') return (manifest: Parameters<LargeMasterSyncV3Store['prepare']>[0]) => target.prepareCatalogOnly!(manifest, transition);
+    if (key === 'activate') return (syncId: string) => target.activateCatalogOnly!(syncId, transition);
+    const value = Reflect.get(target, key);
+    return typeof value === 'function' ? value.bind(target) : value;
+  } });
+  const client = dependencies.createClient(scopedStore, v3BaseUrl, metric);
+  const requested = await client.requestSync();
+  if ('fallback' in requested) throw new LargeMasterSyncV3Error('SYNC_V3_LEGACY_FALLBACK_REJECTED');
+  const version = await client.resumeSync(requested.syncId);
+  await store.activateCatalogOnly(requested.syncId, transition);
+  const runtime = await dependencies.openRuntime(store);
+  const receipt = await store.getCatalogReceipt?.(version, binding);
+  if (!runtime || runtime.version.syncId !== version.syncId || runtime.version.syncVersion !== version.syncVersion
+    || !receipt || receipt.syncId !== inventory.syncId || receipt.syncVersion !== inventory.syncVersion
+    || receipt.version !== inventory.version || receipt.cursor !== inventory.cursor) {
+    throw new LargeMasterSyncV3Error('SYNC_V3_CATALOG_TRANSITION_CHANGED');
+  }
+  return { runtime, inventoryVersion: inventory.version, inventoryCursor: inventory.cursor,
+    inventorySyncId: inventory.syncId, inventorySyncVersion: inventory.syncVersion };
 };

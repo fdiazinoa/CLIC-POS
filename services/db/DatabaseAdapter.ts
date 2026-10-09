@@ -15,6 +15,8 @@ export interface DurableDocumentMutation {
     requireAbsent?: boolean;
     expectedDocument?: string;
     /** Verified V3 sale demand; checked against scoped baseline + ledger inside the write transaction. */
+    v3CurrentCatalog?: { syncId: string; syncVersion: number; binding: string };
+    v3ExpectedRetainedDocument?: { collection: string; id: string; expected: string };
     v3StockRequirements?: Array<{ baseline: string; productId: string; warehouseId: string; quantity: number }>;
 }
 
@@ -104,6 +106,7 @@ export interface DatabaseAdapter {
     blockMasterNumberRange?(rangeId: string, reason: string): Promise<void>;
 
     /** Strict all-or-nothing local publication; never falls back to a second storage backend. */
+    isV3TicketClosed?(id: string): Promise<boolean>;
     saveDocumentsAtomically?(documents: DurableDocumentMutation[], requireAbsent?: boolean, replaceCollections?: string[]): Promise<void>;
 
     // Stats

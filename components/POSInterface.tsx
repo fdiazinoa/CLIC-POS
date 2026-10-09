@@ -221,7 +221,10 @@ export interface V3OperationalPOSBoundary {
    categories?: readonly V3OperationalCategory[];
    search(query: string, categoryId?: string | null, categoryKeys?: readonly string[]): Promise<void>;
    resolveCode(code: string): Promise<import('../services/sync/LargeMasterSyncV3OperationalSession').V3CodeMatch | null>;
-   validate(lines: CartItem[]): Promise<void>;
+   validate(lines: CartItem[], reference?: import('../services/sync/LargeMasterSyncV3RetainedCheckout').V3RetainedReference): Promise<void>;
+   restoreRetainedTicket?(id: string): Promise<ParkedTicket | null>;
+   updateRetainedTicket?(id: string, ticket?: ParkedTicket): Promise<void>;
+   waitingTickets?(tickets: ParkedTicket[]): Promise<ParkedTicket[]>;
    changeTariff(tariffId: string): void;
 }
 
@@ -1241,6 +1244,23 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    // propague parkedTickets de vuelta como prop. Mantener el último snapshot
    // evita que una pulsación posterior reconstruya la orden con datos viejos.
    const parkedTicketsRef = useRef<ParkedTicket[]>(parkedTickets);
+   const [activeDirectV3TicketId, setActiveDirectV3TicketId] = useState<string>();
+   const [v3WaitingTickets, setV3WaitingTickets] = useState<ParkedTicket[]>([]);
+   useEffect(() => {
+      let current = true;
+      if (v3Operational?.waitingTickets) void v3Operational.waitingTickets(parkedTickets).then(rows => { if (current) setV3WaitingTickets(rows); })
+        .catch(error => { console.warn('V3 waiting source read failed', error); });
+      else setV3WaitingTickets([]);
+      return () => { current = false; };
+   }, [v3Operational, parkedTickets]);
+   const previousV3CartCount = useRef(cart.length);
+   useEffect(() => {
+      if (previousV3CartCount.current > 0 && cart.length === 0) {
+         if (activeDirectV3TicketId) void v3Operational?.updateRetainedTicket?.(activeDirectV3TicketId).catch(error => console.warn('V3 retained cancel pending', error));
+         setActiveDirectV3TicketId(undefined);
+      }
+      previousV3CartCount.current = cart.length;
+   }, [cart.length, activeDirectV3TicketId, v3Operational]);
    const onUpdateParkedTicketsRef = useRef(onUpdateParkedTickets);
    const onTableOrderSavedRef = useRef(onTableOrderSaved);
    const onTableOrderClosedRef = useRef(onTableOrderClosed);
@@ -2510,8 +2530,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [selectedPromoProduct, setSelectedPromoProduct] = useState<Product | null>(null);
 
    const directSaleParkedTickets = useMemo(
-      () => (Array.isArray(parkedTickets) ? parkedTickets : []).filter(isDirectSaleParkedTicket),
-      [parkedTickets]
+      () => (v3Operational ? v3WaitingTickets : (Array.isArray(parkedTickets) ? parkedTickets : [])).filter(isDirectSaleParkedTicket).filter(ticket => ticket.id !== activeDirectV3TicketId),
+      [parkedTickets, v3WaitingTickets, v3Operational, activeDirectV3TicketId]
    );
 
    const buildParkedTicketName = useCallback(() => {
@@ -2602,11 +2622,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          permission: 'POS_EDIT_SUBTOTALIZED_TICKET',
          actionDescription,
          context: {
-            ticketId: activeTable?.currentOrderId,
+            ticketId: activeTable?.currentOrderId || activeDirectV3TicketId,
             reason: 'Modificación posterior a la impresión del subtotal'
          }
       });
-   }, [activeTable?.currentOrderId, hasSubtotalizedCart, requestApproval]);
+   }, [activeTable?.currentOrderId, activeDirectV3TicketId, hasSubtotalizedCart, requestApproval]);
 
    // Credit Control (CxC) - Simple Check
    const isDelinquent = useMemo(() => {
@@ -3388,7 +3408,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          if (modifiers?.length || restaurantConfig || trackingData?.length || consignmentPatch) {
             throw new Error('SYNC_V3_ADVANCED_ARTICLE_CONTRACT_REQUIRED');
          }
-         await v3Operational.validate([...latestAddCart.current, { ...product, quantity, cartId: 'candidate-validation' } as CartItem]);
+         await v3Operational.validate([...latestAddCart.current, { ...product, quantity, cartId: 'candidate-validation' } as CartItem], { ticketId: activeTable?.currentOrderId || activeDirectV3TicketId, claimId: activeDirectV3TicketId, tableId: activeTable?.id === undefined ? undefined : String(activeTable.id) });
          assertV3UIContext(isCurrent);
       }
       if (blockRecoveredUberOrderMutation('agregar artículos adicionales')) return;
@@ -3509,7 +3529,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          if (trace.stages.HANDLER_END === undefined) markInteractionStage(trace, 'HANDLER_END');
          if (activeAddTraceRef.current === trace) activeAddTraceRef.current = null;
       }
-   }, [activeTableSellerId, activeTerminalConfig, authorizeSubtotalizedEdit, blockRecoveredUberOrderMutation, canAddItemToCart, cart, ensureSalesWithOpenZPermission, getProductPrice, onUpdateCart, v3Operational]);
+   }, [activeTable?.currentOrderId, activeTable?.id, activeDirectV3TicketId, activeTableSellerId, activeTerminalConfig, authorizeSubtotalizedEdit, blockRecoveredUberOrderMutation, canAddItemToCart, cart, ensureSalesWithOpenZPermission, getProductPrice, onUpdateCart, v3Operational]);
    const addToCart = useCallback((...args: Parameters<typeof performAddToCart>) => {
       if (!v3Operational) return performAddToCart(...args);
       const context = v3Operational;
@@ -4709,7 +4729,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       : Math.max(0, cartTotal - reservationAdvanceApplied);
    const activeParkedTicket = activeTable?.currentOrderId
       ? parkedTickets.find(ticket => ticket.id === activeTable.currentOrderId)
-      : undefined;
+      : parkedTickets.find(ticket => ticket.id === activeDirectV3TicketId);
    const activePaymentFraction = activeParkedTicket?.paymentFraction;
    const isCurrentPaymentFraction = isPaymentFractionPlanCurrent(activePaymentFraction, cartTotal);
    const nextPaymentFractionPart = isCurrentPaymentFraction
@@ -5095,7 +5115,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                actionDescription: 'Rebajar cantidad de artículo guardado en mesa',
                context: {
                   itemId: updatedItem.cartId,
-                  ticketId: activeTable?.currentOrderId,
+                  ticketId: activeTable?.currentOrderId || activeDirectV3TicketId,
                   originalValue: originalItem.quantity,
                   newValue: updatedItem.quantity,
                }
@@ -5166,7 +5186,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             permission: 'POS_VOID_SUBTOTALIZED_TICKET',
             actionDescription: 'Eliminar ticket subtotalizado',
             context: {
-               ticketId: activeTable?.currentOrderId,
+               ticketId: activeTable?.currentOrderId || activeDirectV3TicketId,
                reason: 'Eliminación completa posterior a la impresión del subtotal'
             }
          });
@@ -5206,7 +5226,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             permission: 'POS_VOID_ITEM',
             actionDescription: 'Limpiar artículos nuevos del ticket',
             context: {
-               ticketId: activeTable?.currentOrderId,
+               ticketId: activeTable?.currentOrderId || activeDirectV3TicketId,
                reason: `Limpiar ${freshItems.length} artículo(s) nuevo(s); mantener ${dispatchedItems.length} enviado(s) a cocina`,
             }
          });
@@ -5351,7 +5371,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       try {
          await assertCheckoutFiscalAuthority();
-         if (v3Operational) await v3Operational.validate(processedCart);
+         if (v3Operational) await v3Operational.validate(processedCart, { ticketId: activeTable?.currentOrderId || activeDirectV3TicketId, claimId: activeDirectV3TicketId, tableId: activeTable?.id === undefined ? undefined : String(activeTable.id) });
          const invalidQuantityItem = processedCart.find(item => !isValidCartQuantity(item.quantity));
          if (invalidQuantityItem) {
             alert(`La cantidad de "${invalidQuantityItem.name}" no es válida. Elimine la línea y agréguela nuevamente.`);
@@ -5658,6 +5678,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         seriesId: assignedSequenceId,
                         items: saleItems,
                         total: saleTotal,
+                        restaurantOrderId: activeOrderId || undefined,
+                        v3RestoredTicketId: activeDirectV3TicketId,
+                        restaurantTableId: activeTable?.id === undefined ? undefined : String(activeTable.id),
                         ...(v3Operational ? { isTaxIncluded } : {}),
                         payments: salePayments,
                         ...getConsignmentTicketFields(saleItems),
@@ -5890,6 +5913,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   tableDisplayLabel: activeTableContext.compactLabel || undefined,
                   tableRoomLabel: activeTableContext.roomLabel || undefined,
                   restaurantOrderId: activeOrderId || undefined,
+                  v3RestoredTicketId: activeDirectV3TicketId,
                   restaurantTableId: activeTable?.id !== undefined ? String(activeTable.id) : undefined,
                   restaurantSettlementStatus: activeOrderId ? 'PENDING' : undefined,
                   pendingBalance: creditAmount > 0 ? creditAmount : undefined,
@@ -6208,7 +6232,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const proceedToCheckout = (trace: PosInteractionTrace) => observeDestinationAttempt(trace, async () => {
       if (v3Operational) {
-         try { await v3Operational.validate(cart); }
+         try { await v3Operational.validate(cart, { ticketId: activeTable?.currentOrderId || activeDirectV3TicketId, claimId: activeDirectV3TicketId, tableId: activeTable?.id === undefined ? undefined : String(activeTable.id) }); }
          catch (error: any) { setErrorToast(`V3: ${error.message || error}`); return; }
       }
       if (isOrderTakerMode) {
@@ -6293,7 +6317,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       await assertCheckoutFiscalAuthority();
       if (!v3Operational) return () => {};
       setLargeMasterSyncV3CriticalOperation('PAYMENT', true);
-      try { await v3Operational.validate(cart); }
+      try { await v3Operational.validate(cart, { ticketId: activeTable?.currentOrderId || activeDirectV3TicketId, claimId: activeDirectV3TicketId, tableId: activeTable?.id === undefined ? undefined : String(activeTable.id) }); }
       catch (error) { setLargeMasterSyncV3CriticalOperation('PAYMENT', false); throw error; }
       return () => setLargeMasterSyncV3CriticalOperation('PAYMENT', false);
    };
@@ -6987,7 +7011,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (blockRecoveredUberOrderMutation('guardarlo como ticket en espera')) return;
       const ticketItems = cartOverride || cart;
       if (ticketItems.length === 0) return;
-      const parkedTicketId = activeTable?.currentOrderId || `P-${Date.now()}`;
+      const parkedTicketId = activeTable?.currentOrderId || activeDirectV3TicketId || `P-${Date.now()}`;
       const existingParked = (Array.isArray(parkedTickets) ? parkedTickets : []).find((ticket) => ticket.id === parkedTicketId);
       const normalizedAlias = aliasInput === undefined
          ? existingParked?.alias
@@ -7032,6 +7056,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const updatedTickets = [...(Array.isArray(parkedTickets) ? parkedTickets : []).filter(p => p.id !== newParked.id), newParked];
       cancelTicketAutoSync();
       try {
+         if (activeDirectV3TicketId) await v3Operational?.updateRetainedTicket?.(activeDirectV3TicketId,newParked);
          await Promise.resolve(onUpdateParkedTickets(updatedTickets, { reason: 'explicit' }));
       } catch (error) {
          const syncErrorCode = error instanceof Error ? error.message.slice(0, 80) : 'ERROR_DESCONOCIDO';
@@ -7197,12 +7222,18 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       markInteractionStage(trace, 'HANDLER_END');
    };
 
-   const handleRestoreTicket = (parked: ParkedTicket) => {
+   const handleRestoreTicket = async (parked: ParkedTicket) => {
       const directTicket = canParkDirectSale
          ? directSaleParkedTickets.find(ticket => ticket.id === parked.id)
          : undefined;
       if (!directTicket || !isDirectSaleParkedTicket(directTicket)) return;
-      onUpdateCart(markRestaurantLinesCommitted(directTicket.items, directTicket.timestamp));
+      let restored = directTicket;
+      let retained = false;
+      try {
+         const claimed = await v3Operational?.restoreRetainedTicket?.(directTicket.id);
+         if (claimed) { restored = claimed; retained = true; setActiveDirectV3TicketId(claimed.id); }
+      } catch (error) { setErrorToast(error instanceof Error ? error.message : String(error)); return; }
+      onUpdateCart(markRestaurantLinesCommitted(restored.items, restored.timestamp));
       setOrderServiceType(directTicket.serviceType || 'DINE_IN');
       if (directTicket.customerId) {
          const found = (customers || []).find(c => c.id === directTicket.customerId);

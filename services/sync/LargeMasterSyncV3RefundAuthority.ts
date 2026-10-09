@@ -1,3 +1,4 @@
+import { v3StockSource } from './LargeMasterSyncV3StockAuthority';
 import type { Transaction } from '../../types';
 import type { DurableDocumentMutation } from '../db/DatabaseAdapter';
 import { LargeMasterSyncV3Error } from './LargeMasterSyncV3Types';
@@ -40,8 +41,8 @@ export const buildV3RefundOriginalMutations = (
   if (!Array.isArray(baseline) || baseline.length !== 5 || baseline[0] !== expected.v3Binding
     || !expected.items.length || expected.items.some(line => !line.v3SaleAuthority
       || line.v3SaleAuthority.binding !== baseline[0]
-      || line.v3SaleAuthority.syncId !== baseline[1]
-      || line.v3SaleAuthority.syncVersion !== baseline[2]
+      || v3StockSource(line.v3SaleAuthority).syncId !== baseline[1]
+      || v3StockSource(line.v3SaleAuthority).syncVersion !== baseline[2]
       || line.v3SaleAuthority.inventoryVersion !== baseline[3]
       || line.v3SaleAuthority.inventoryCursor !== baseline[4])) {
     throw new LargeMasterSyncV3Error('SYNC_V3_REFUND_ORIGINAL_AUTHORITY_INVALID');

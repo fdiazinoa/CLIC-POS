@@ -102,7 +102,14 @@ export interface LargeMasterSyncV3InventorySnapshot {
   balances: LargeMasterSyncV3InventoryBalance[];
 }
 
+export interface LargeMasterSyncV3InventoryAuthority extends LargeMasterSyncV3RuntimeVersion { version: number; cursor: string }
+export interface LargeMasterSyncV3CatalogTransition { binding: string; expectedCatalog: LargeMasterSyncV3RuntimeVersion; inventory: LargeMasterSyncV3InventoryAuthority }
+
 export interface LargeMasterSyncV3Store {
+  getInventoryAuthority?(): Promise<LargeMasterSyncV3InventoryAuthority | null>;
+  prepareCatalogOnly?(manifest: LargeMasterSyncV3Manifest, transition: LargeMasterSyncV3CatalogTransition): Promise<void>;
+  activateCatalogOnly?(syncId: string, transition: LargeMasterSyncV3CatalogTransition): Promise<LargeMasterSyncV3RuntimeVersion>;
+  getCatalogReceipt?(runtime: LargeMasterSyncV3RuntimeVersion, binding: string): Promise<LargeMasterSyncV3InventoryAuthority | null>;
   readAdministrativeCatalogPage?(runtime: LargeMasterSyncV3RuntimeVersion, request: V3CatalogPageRequest): Promise<V3CatalogPage>;
   prepare(manifest: LargeMasterSyncV3Manifest): Promise<void>;
   readProgress(syncId: string): Promise<LargeMasterSyncV3Progress | null>;

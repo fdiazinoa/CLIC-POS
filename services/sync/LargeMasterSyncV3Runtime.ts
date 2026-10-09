@@ -20,6 +20,10 @@ export class LargeMasterSyncV3Runtime {
     return version ? new LargeMasterSyncV3Runtime(store, Object.freeze({ ...version })) : null;
   }
 
+  static retained(store: LargeMasterSyncV3Store, version: LargeMasterSyncV3RuntimeVersion): LargeMasterSyncV3Runtime {
+    return new LargeMasterSyncV3Runtime(store, Object.freeze({ ...version }));
+  }
+
   listArticlesPage(afterArticleId: string | null, limit = 100): Promise<Record<string, unknown>[]> {
     return this.store.listArticlesPage(this.version, afterArticleId, limit);
   }
