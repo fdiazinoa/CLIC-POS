@@ -59,4 +59,3 @@ test('actual sale modal uses configured default only, no selector, stale or ambi
     }
   } finally { delete (globalThis as any).__legacyScaleReact; }
 });
-
