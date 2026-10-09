@@ -1,3 +1,5 @@
+import { v3StockSource } from './LargeMasterSyncV3StockAuthority';
+import { isVerifiedV3RetainedContext, type V3RetainedContext } from './LargeMasterSyncV3RetainedCheckout';
 import { createUuid } from '../../utils/uuid';
 import type { BusinessConfig, CartItem, Customer, InventoryLedgerEntry, Transaction, Wallet } from '../../types';
 import type { DurableDocumentMutation, DurableOutboxEventInput } from '../db/DatabaseAdapter';
@@ -16,13 +18,17 @@ export const isV3FinancialDocument = (transaction: Partial<Transaction>): boolea
   (transaction.items || []).some(line => Boolean(line.v3SaleAuthority));
 
 /** This path never reconstructs fiscal totals from legacy taxes or 18%. */
-export const validateV3FrozenFiscalAmounts = (transaction: Partial<Transaction>): void => {
+export const validateV3FrozenFiscalAmounts = (transaction: Partial<Transaction>, retained?: V3RetainedContext): void => {
   if (!isV3FinancialDocument(transaction)) return;
   const lines = transaction.items || [];
   const stamp = lines[0]?.v3SaleAuthority;
   if (!stamp || typeof stamp.taxIncluded !== 'boolean'
     || (transaction.isTaxIncluded !== undefined && transaction.isTaxIncluded !== stamp.taxIncluded)
-    || !lines.every(line => line.v3SaleAuthority && JSON.stringify(line.v3SaleAuthority) === JSON.stringify(stamp))
+    || !lines.every(line => line.v3SaleAuthority && (JSON.stringify(line.v3SaleAuthority) === JSON.stringify(stamp) || isVerifiedV3RetainedContext(retained)
+      && line.v3SaleAuthority.binding === stamp.binding && line.v3SaleAuthority.warehouseId === stamp.warehouseId
+      && line.v3SaleAuthority.tariffId === stamp.tariffId && line.v3SaleAuthority.taxIncluded === stamp.taxIncluded
+      && JSON.stringify(v3StockSource(line.v3SaleAuthority)) === JSON.stringify(v3StockSource(stamp))
+      && line.v3SaleAuthority.inventoryVersion === stamp.inventoryVersion && line.v3SaleAuthority.inventoryCursor === stamp.inventoryCursor))
     || ![transaction.netAmount, transaction.taxAmount, transaction.total].every(value => typeof value === 'number' && Number.isFinite(value))
     || Number(transaction.netAmount) < 0 || Number(transaction.taxAmount) < 0
     || Math.abs(Number(transaction.netAmount) + Number(transaction.taxAmount) - Math.abs(Number(transaction.total))) > 0.02) {
@@ -115,13 +121,22 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
     const { transaction, options = {} } = entries[index];
     const stamp = transaction.items[0]?.v3SaleAuthority;
     const authoritativeLines: CartItem[] = [];
-    await session.validate(projected, transaction.items, stamp?.tariffId || '', warehouseId,
+    const retained = await session.validate(projected, transaction.items, stamp?.tariffId || '', warehouseId,
       options.refund ? 'REFUND' : 'SALE', (line, source) => {
         authoritativeLines.push({ ...line, type: source.type, isInventoriable: source.isInventoriable,
           taxable: source.taxable, appliedTaxIds: [...(source.appliedTaxIds || [])],
           v3SaleAuthority: { ...line.v3SaleAuthority! } });
-      });
-    validateV3FrozenFiscalAmounts(transaction);
+      }, { ticketId: transaction.restaurantOrderId, tableId: transaction.restaurantTableId, claimId: transaction.v3RestoredTicketId,
+        originalTransactionId: options.expectedOriginal?.id || transaction.originalTransactionId });
+    if (retained && retained.collection !== 'transactions') {
+      documents.push({ collectionName: 'v3TicketSettlements', document: { id: retained.id, transactionId: transaction.id, binding: session.binding },
+        requireAbsent: true, v3ExpectedRetainedDocument: { collection: retained.collection, id: retained.id, expected: retained.expected } });
+    }
+    if (retained?.collection === 'v3RestoredTicketSources') {
+      documents.push({ collectionName: retained.collection, document: { ...JSON.parse(retained.expected), state: 'SETTLED' },
+        expectedDocument: retained.expected, v3ExpectedRetainedDocument: { collection: retained.collection, id: retained.id, expected: retained.expected } });
+    }
+    validateV3FrozenFiscalAmounts(transaction, retained);
     validateV3FrozenLineFiscalAmounts(transaction, projected);
     if (authoritativeLines.length !== transaction.items.length) throw new LargeMasterSyncV3Error('SYNC_V3_ARTICLE_SOURCE_CHANGED');
     const ledger = buildV3InventoryLedger({ ...transaction, items: authoritativeLines }, warehouseId, session.binding, options.refund, options.conditions);
@@ -144,8 +159,10 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
     }
     documents.push(
       { collectionName: 'transactions', document: document as any, requireAbsent: true,
+        ...(retained ? { v3ExpectedRetainedDocument: { collection: retained.collection, id: retained.id, expected: retained.expected } } : {}),
         v3StockRequirements: await session.stockRequirements(projected, transaction.items, warehouseId, options.refund ? 'REFUND' : 'SALE') },
-      { collectionName: 'transactionHistory', document: document as any, requireAbsent: true },
+      { collectionName: 'transactionHistory', document: document as any, requireAbsent: true,
+        ...(retained ? { v3ExpectedRetainedDocument: { collection: retained.collection, id: retained.id, expected: retained.expected } } : {}) },
       ...ledger.map(document => ({ collectionName: 'inventoryLedger', document, requireAbsent: true })),
     );
     if (walletDelta) {
@@ -174,8 +191,12 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
       if (!options.expectedOriginal) {
         throw new LargeMasterSyncV3Error('SYNC_V3_REFUND_ORIGINAL_CHANGED');
       }
-      documents.push(...buildV3RefundOriginalMutations(options.expectedOriginal, options.original,
-        transaction.id, options.expectedOriginalHistory || null));
+      const originalMutations = buildV3RefundOriginalMutations(options.expectedOriginal, options.original,
+        transaction.id, options.expectedOriginalHistory || null);
+      for (const mutation of originalMutations) if (mutation.document.v3InventoryBaseline) {
+        mutation.v3ExpectedRetainedDocument = {collection:'transactions',id:options.expectedOriginal.id,expected:JSON.stringify(options.expectedOriginal)};
+      }
+      documents.push(...originalMutations);
     }
     if (isSyncFeatureEnabled('sqlite_outbox_v2') && !options.refund) {
       const paymentIntentIds = (document.payments || []).map((payment: any) => payment.paymentIntentId).filter(Boolean);
@@ -188,6 +209,9 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
       intentIds.push(...paymentIntentIds);
     }
     results.push({ transaction: document, created: true });
+    }
+    for (const mutation of documents) {
+      if (mutation.document.v3InventoryBaseline) mutation.v3CurrentCatalog = { ...session.ready.runtime.version, binding: session.binding };
     }
     await session.assertCurrent();
     for (const { transaction } of entries) {

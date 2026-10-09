@@ -1,8 +1,9 @@
+import { isV3CatalogHint } from './services/sync/LargeMasterSyncV3ManifestCheckpoint';
 import { applyLocalUserProfiles, LOCAL_USER_PROFILE_CHANGED } from './utils/localUserProfiles';
 import RecoveryCloseDialog from './components/RecoveryCloseDialog';
 import LargeMasterSyncV3CanaryScreen from './components/LargeMasterSyncV3CanaryScreen';
 import { LARGE_MASTER_SYNC_V3_CANARY } from './services/sync/LargeMasterSyncV3Canary';
-import { LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED } from './services/sync/LargeMasterSyncV3Authority';
+import { LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED, usesLargeMasterSyncV3Authority } from './services/sync/LargeMasterSyncV3Authority';
 import LargeMasterSyncV3OperationalPOS from './components/LargeMasterSyncV3OperationalPOS';
 import { persistV3FinancialTransaction, validateV3FrozenFiscalAmounts } from './services/sync/LargeMasterSyncV3FinancialCommit';
 import { validateV3FrozenLineFiscalAmounts } from './services/sync/LargeMasterSyncV3LineSource';
@@ -382,7 +383,7 @@ import {
   type PosApkUpdateAvailable
 } from './services/version/posApkUpdateService';
 import {
-  loadSyncProfile,
+  loadSyncProfile, syncPolicy,
   isPosOnlyCloudStagingTarget,
   isPosMasterClientProfile,
   resolveSyncTarget,
@@ -4155,6 +4156,12 @@ const AppContent: React.FC = () => {
             ? 'manual_sync'
             : 'periodic';
         authenticatedRequestSucceeded = await triggerErpSyncOutbox(triggerReason) !== null;
+        if (usesLargeMasterSyncV3Authority(syncPolicy.resolve().kind)
+          && (!reasons.includes('REALTIME_HINT') || isV3CatalogHint(collections, domainVersions, imageOnly))) {
+          await syncManager.syncTerminalManifestInBackground(undefined, {
+            reason: reasons.includes('REALTIME_HINT') ? 'force_sync' : 'periodic_manifest', throwOnError: true,
+          });
+        }
 
         if (reasons.includes('REALTIME_HINT')) {
           if (syncManager.isUsingConfigPushV2Primary() && !imageOnly) {
@@ -4245,6 +4252,9 @@ const AppContent: React.FC = () => {
             if (deferred) console.info('[SYNC_DEFERRED_FOR_UI]', { source: 'periodic_outbox' });
             if (!disposed && navigator.onLine) {
               await triggerErpSyncOutbox('periodic');
+              if (usesLargeMasterSyncV3Authority(syncPolicy.resolve().kind)) {
+                await syncManager.syncTerminalManifestInBackground(undefined, { reason: 'periodic_manifest', throwOnError: true });
+              }
               outboxPollFailures = 0;
             }
           } catch (error) {
@@ -11160,13 +11170,11 @@ const AppContent: React.FC = () => {
         const session = await getLargeMasterSyncV3OperationalSession();
         await session.assertCurrent();
         const stamp = transaction.items[0]?.v3SaleAuthority;
-        if (!stamp || stamp.binding !== session.binding || stamp.syncId !== session.ready.runtime.version.syncId
-          || stamp.syncVersion !== session.ready.runtime.version.syncVersion
-          || stamp.inventoryVersion !== session.ready.inventoryVersion || stamp.inventoryCursor !== session.ready.inventoryCursor) {
-          throw new Error('SYNC_V3_CART_MIXED_VERSION');
-        }
+        if (!stamp) throw new Error('SYNC_V3_CART_LEGACY_LINE');
         fiscalConfig = await session.projectConfig(config);
-        validateV3FrozenFiscalAmounts(transaction);
+        const retained = await session.validate(fiscalConfig, transaction.items, stamp.tariffId, stamp.warehouseId || '',
+          'REFUND', undefined, { originalTransactionId: transaction.id });
+        validateV3FrozenFiscalAmounts(transaction, retained);
         validateV3FrozenLineFiscalAmounts(transaction, fiscalConfig);
       }
       const terminalConfig = fiscalConfig.terminals?.find((terminal) => terminal.id === transaction.terminalId)?.config;
@@ -12764,7 +12772,7 @@ const AppContent: React.FC = () => {
       const session = await getLargeMasterSyncV3OperationalSession();
       refundConfig = await session.projectConfig(config);
       const stamp = normalizedRefundItems[0]?.v3SaleAuthority;
-      await session.validate(refundConfig, normalizedRefundItems, stamp?.tariffId || '', stamp?.warehouseId || '', 'REFUND');
+      await session.validate(refundConfig, normalizedRefundItems, stamp?.tariffId || '', stamp?.warehouseId || '', 'REFUND', undefined, { originalTransactionId: originalTx.id });
     }
 
     // 1. Calculations

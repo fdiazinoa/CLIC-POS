@@ -1,10 +1,14 @@
+import { db } from '../../utils/db';
+import { readV3RetainedCheckout, assertV3RetainedLine, type V3RetainedContext, type V3RetainedReference } from './LargeMasterSyncV3RetainedCheckout';
+import { v3StockSource, sameV3StockAuthority } from './LargeMasterSyncV3StockAuthority';
 import { assertLargeMasterSyncV3NativeAndroid } from './LargeMasterSyncV3Platform';
 import type { BusinessConfig, CartItem, Product, ProductVariant, TaxDefinition, V3SaleAuthorityStamp } from '../../types';
 import { dbAdapter } from '../db';
 import { LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED } from './LargeMasterSyncV3Authority';
 import { LARGE_MASTER_SYNC_V3_CANARY, validateLargeMasterSyncV3CanaryUrl } from './LargeMasterSyncV3Canary';
+import { readOperationalTerminalBinding } from './OperationalTerminalConfig';
 import { readLargeMasterSyncV3BoundIdentity, type LargeMasterSyncV3BoundIdentity } from './LargeMasterSyncV3BoundTransport';
-import { prepareLargeMasterSyncV3Candidate, type LargeMasterSyncV3CandidateReady } from './LargeMasterSyncV3Candidate';
+import { prepareLargeMasterSyncV3Candidate, prepareLargeMasterSyncV3CatalogOnly, type LargeMasterSyncV3CandidateReady } from './LargeMasterSyncV3Candidate';
 import { LargeMasterSyncV3Runtime } from './LargeMasterSyncV3Runtime';
 import { LargeMasterSyncV3OperationalCatalog } from './LargeMasterSyncV3OperationalCatalog';
 import { buildLargeMasterSyncV3CheckoutFiscalInput } from './LargeMasterSyncV3CheckoutAuthority';
@@ -21,7 +25,7 @@ export const v3BindingKey = (identity: LargeMasterSyncV3BoundIdentity, v3BaseUrl
     identity.erpSyncBaseUrl, validateLargeMasterSyncV3CanaryUrl(v3BaseUrl)]);
 
 export const v3InventoryBaselineKey = (binding: string, stamp: V3SaleAuthorityStamp): string =>
-  JSON.stringify([binding, stamp.syncId, stamp.syncVersion, stamp.inventoryVersion, stamp.inventoryCursor]);
+  JSON.stringify([binding, v3StockSource(stamp).syncId, v3StockSource(stamp).syncVersion, stamp.inventoryVersion, stamp.inventoryCursor]);
 
 export type V3CodeMatch = { product: Product; quantity: number; price: number; modifiers: string[];
   selectedVariant?: ProductVariant; variantInfo?: string };
@@ -45,7 +49,22 @@ export class LargeMasterSyncV3OperationalSession {
     const v3BaseUrl = largeMasterSyncV3DownloadOrigin();
     const identity = readLargeMasterSyncV3BoundIdentity();
     const binding = v3BindingKey(identity, v3BaseUrl);
+    const credentialGuard = readOperationalTerminalBinding();
     await dbAdapter.connect();
+    const configScope = (config: BusinessConfig) => {
+      const terminal=config?.terminals?.find(row => row.config?.currentDeviceId === identity.deviceId
+        && (row.config.erpTerminalId || row.id) === identity.terminalId);
+      return JSON.stringify([terminal?.config.erpBinding?.companyId,terminal?.config.inventoryScope,
+        terminal?.config.pricing,terminal?.config.fiscal]);
+    };
+    const expectedScope=configScope(await db.get('config') as unknown as BusinessConfig);
+    const assertIdentity = async () => {
+      const currentScope=configScope(await db.get('config') as unknown as BusinessConfig);
+      if(JSON.stringify(readLargeMasterSyncV3BoundIdentity()) !== JSON.stringify(identity)
+        || largeMasterSyncV3DownloadOrigin() !== v3BaseUrl || readOperationalTerminalBinding() !== credentialGuard
+        || currentScope !== expectedScope) throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
+    };
+    await assertIdentity();
     const store = dbAdapter.masterSyncV3Store;
     if (!store?.getOperationalOwner || !store.setOperationalOwner || !store.getLocalInventoryDelta) {
       throw new LargeMasterSyncV3Error('SYNC_V3_NATIVE_STORE_UNAVAILABLE');
@@ -57,15 +76,21 @@ export class LargeMasterSyncV3OperationalSession {
     if (!refresh && runtime && (runtime.version.contractVersion || 1) >= 2 && owner?.binding === binding
       && owner.syncId === runtime.version.syncId && owner.syncVersion === runtime.version.syncVersion) {
       const inventory = await runtime.getInventorySnapshotVersion();
-      if (inventory) ready = { runtime, inventoryVersion: inventory.version, inventoryCursor: inventory.cursor };
+      if (inventory) {
+        const anchor = await store.getInventoryAuthority?.();
+        ready = { runtime, inventoryVersion: inventory.version, inventoryCursor: inventory.cursor,
+          ...(anchor && (anchor.syncId !== runtime.version.syncId || anchor.syncVersion !== runtime.version.syncVersion)
+            ? { inventorySyncId: anchor.syncId, inventorySyncVersion: anchor.syncVersion } : {}) };
+      }
     }
     if (!ready) {
-      ready = await prepareLargeMasterSyncV3Candidate(store, v3BaseUrl, observe);
-      if (v3BindingKey(readLargeMasterSyncV3BoundIdentity(), v3BaseUrl) !== binding) {
-        throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
-      }
+      const anchor = await store.getInventoryAuthority?.();
+      const catalogOnly = Boolean(refresh && runtime && owner?.binding === binding && anchor);
+      ready = catalogOnly ? await prepareLargeMasterSyncV3CatalogOnly(store, v3BaseUrl, binding, observe, undefined, assertIdentity)
+        : await prepareLargeMasterSyncV3Candidate(store, v3BaseUrl, observe);
+      await assertIdentity();
       observe({ event: 'setup_phase', phase: 'owner' });
-      await store.setOperationalOwner(ready.runtime.version, binding);
+      if (!catalogOnly) await store.setOperationalOwner(ready.runtime.version, binding);
     } else {
       observe({ event: 'setup_phase', phase: 'cached' });
     }
@@ -133,22 +158,47 @@ export class LargeMasterSyncV3OperationalSession {
   }
 
   async validate(config: BusinessConfig, lines: CartItem[], tariffId: string, warehouseId: string,
-    intent: V3FinancialIntent = 'SALE', onValidatedSource?: (line: CartItem, source: Product) => void): Promise<void> {
+    intent: V3FinancialIntent = 'SALE', onValidatedSource?: (line: CartItem, source: Product) => void, reference?: V3RetainedReference): Promise<V3RetainedContext | undefined> {
     await this.assertCurrent();
     if (!lines.length) throw new LargeMasterSyncV3Error('SYNC_V3_CART_EMPTY');
     const authority = lines[0].v3SaleAuthority;
     if (!authority || authority.binding !== this.binding || authority.warehouseId !== warehouseId
-      || authority.tariffId !== tariffId || authority.syncId !== this.ready.runtime.version.syncId
-      || authority.syncVersion !== this.ready.runtime.version.syncVersion
-      || authority.inventoryVersion !== this.ready.inventoryVersion || authority.inventoryCursor !== this.ready.inventoryCursor) {
-      throw new LargeMasterSyncV3Error('SYNC_V3_CART_MIXED_VERSION');
-    }
-    buildLargeMasterSyncV3CheckoutFiscalInput(config, lines, authority, config.taxes || []);
-    const catalog = await this.catalog(tariffId, warehouseId);
+      || authority.tariffId !== tariffId || authority.inventoryVersion !== this.ready.inventoryVersion
+      || authority.inventoryCursor !== this.ready.inventoryCursor) throw new LargeMasterSyncV3Error('SYNC_V3_CART_MIXED_VERSION');
+    const retained = await readV3RetainedCheckout(reference, intent === 'REFUND');
+    const anchor = await this.store.getInventoryAuthority?.() || { syncId: this.ready.inventorySyncId || this.ready.runtime.version.syncId,
+      syncVersion: this.ready.inventorySyncVersion ?? this.ready.runtime.version.syncVersion,
+      version: this.ready.inventoryVersion, cursor: this.ready.inventoryCursor };
+    const currentCatalog = await this.catalog(tariffId, warehouseId);
+    const sourceCatalogs = new Map<string, LargeMasterSyncV3OperationalCatalog>();
+    const sourceFor = async (line: CartItem) => {
+      const stamp = line.v3SaleAuthority;
+      if (!stamp || stamp.binding !== this.binding || stamp.warehouseId !== warehouseId || stamp.tariffId !== tariffId
+        || stamp.taxIncluded !== authority.taxIncluded || !sameV3StockAuthority(stamp, anchor)) {
+        throw new LargeMasterSyncV3Error('SYNC_V3_CART_MIXED_VERSION');
+      }
+      if (stamp.syncId === this.ready.runtime.version.syncId && stamp.syncVersion === this.ready.runtime.version.syncVersion) {
+        return currentCatalog.get(line.id);
+      }
+      assertV3RetainedLine(line, retained);
+      const receipt = await this.store.getCatalogReceipt?.({ syncId: stamp.syncId, syncVersion: stamp.syncVersion }, this.binding);
+      if (!receipt || !sameV3StockAuthority(stamp, receipt)) throw new LargeMasterSyncV3Error('SYNC_V3_RETAINED_OWNER_REQUIRED');
+      const key = JSON.stringify([stamp.syncId, stamp.syncVersion]);
+      if (!sourceCatalogs.has(key)) sourceCatalogs.set(key, await LargeMasterSyncV3OperationalCatalog.open({
+        runtime: LargeMasterSyncV3Runtime.retained(this.store, { syncId: stamp.syncId, syncVersion: stamp.syncVersion, contractVersion: 2 }),
+        inventoryVersion: anchor.version, inventoryCursor: anchor.cursor,
+        inventorySyncId: anchor.syncId, inventorySyncVersion: anchor.syncVersion }, tariffId, warehouseId));
+      return sourceCatalogs.get(key)!.get(line.id);
+    };
+    // Only an independently read retained account permits mixed source generations.
+    const fiscalLines = retained ? lines.map(line => ({ ...line, v3SaleAuthority: authority })) : lines;
+    buildLargeMasterSyncV3CheckoutFiscalInput(config, fiscalLines, authority, config.taxes || []);
     const demand = new Map<string, number>();
     for (const line of lines) demand.set(line.id, (demand.get(line.id) || 0) + Math.max(0, line.quantity));
     for (const line of lines) {
-      const source = await catalog.get(line.id);
+      const source = await sourceFor(line);
+      const current = await currentCatalog.get(line.id);
+      if (intent === 'SALE' && !current) throw new LargeMasterSyncV3Error('SYNC_V3_ARTICLE_UNAVAILABLE');
       if (!source || source.product.appliedTaxIds?.join('|') !== line.appliedTaxIds?.join('|')) {
         throw new LargeMasterSyncV3Error('SYNC_V3_ARTICLE_UNAVAILABLE');
       }
@@ -166,6 +216,7 @@ export class LargeMasterSyncV3OperationalSession {
       }
     }
     await this.assertCurrent();
+    return retained;
   }
 
   async stockRequirements(config: BusinessConfig, lines: CartItem[], warehouseId: string,

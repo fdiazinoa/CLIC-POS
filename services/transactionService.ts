@@ -382,7 +382,7 @@ class TransactionService {
             throw new Error('seriesId is required');
         }
         await db.assertFiscalTransactionAuthority(data);
-        validateV3FrozenFiscalAmounts(data);
+
         if (isV3FinancialDocument(data) && options.deferDurablePersistence !== true) {
             throw new Error('SYNC_V3_ATOMIC_COMMIT_REQUIRED');
         }
@@ -392,8 +392,10 @@ class TransactionService {
             const session = await getLargeMasterSyncV3OperationalSession();
             const stamp = data.items![0].v3SaleAuthority!;
             const projected = await session.projectConfig(config);
-            await session.validate(projected, data.items!, stamp.tariffId,
-                stamp.warehouseId || '', data.documentType === 'REFUND' ? 'REFUND' : 'SALE');
+            const retained = await session.validate(projected, data.items!, stamp.tariffId,
+                stamp.warehouseId || '', data.documentType === 'REFUND' ? 'REFUND' : 'SALE', undefined,
+                { ticketId: data.restaurantOrderId, tableId: data.restaurantTableId, claimId: data.v3RestoredTicketId, originalTransactionId: data.originalTransactionId });
+            validateV3FrozenFiscalAmounts(data, retained);
             validateV3FrozenLineFiscalAmounts(data as Transaction, projected);
         }
 
@@ -780,8 +782,15 @@ class TransactionService {
                 throw new Error('SYNC_V3_ATOMIC_COMMIT_REQUIRED');
             }
             // Check both fiscal sources before allocating either document sequence.
-            validateV3FrozenFiscalAmounts(data.saleTransaction);
-            validateV3FrozenFiscalAmounts(data.refundTransaction);
+            const session = await getLargeMasterSyncV3OperationalSession();
+            const projected = await session.projectConfig(options.v3FinancialContext.config);
+            for (const source of [data.saleTransaction, data.refundTransaction]) {
+              const stamp = source.items![0].v3SaleAuthority!;
+              const retained = await session.validate(projected, source.items!, stamp.tariffId, stamp.warehouseId || '',
+                source.documentType === 'REFUND' ? 'REFUND' : 'SALE', undefined,
+                { ticketId: source.restaurantOrderId, tableId: source.restaurantTableId, claimId: source.v3RestoredTicketId, originalTransactionId: source.originalTransactionId });
+              validateV3FrozenFiscalAmounts(source, retained);
+            }
         }
 
         // 1. Process Refund (Credit Note B04) first to "free up" balance or apply to wallet

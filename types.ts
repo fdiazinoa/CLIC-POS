@@ -1496,6 +1496,8 @@ export interface RecipeDetail {
 
 /** Pinned source of a candidate V3 sale line; never inferred from legacy IDs. */
 export interface V3SaleAuthorityStamp {
+  inventorySyncId?: string;
+  inventorySyncVersion?: number;
   binding?: string;
   warehouseId?: string;
   syncId: string;
@@ -1801,6 +1803,7 @@ export interface CartItem extends Product {
 }
 
 export interface Transaction {
+  v3RestoredTicketId?: string;
   v3CommitFingerprint?: string;
   v3InventoryBaseline?: string;
   v3Binding?: string;

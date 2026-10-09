@@ -1,3 +1,4 @@
+import { v3RetainedLineFingerprint } from '../../sync/LargeMasterSyncV3StockAuthority';
 import { SYNC_MONITOR_PAGE_SQL, syncMonitorPageParams, decodeSyncMonitorPage, type SyncMonitorPageRequest } from '../SyncMonitorPage';
 import { Capacitor } from '@capacitor/core';
 import type {
@@ -725,26 +726,115 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         await this.withWriteLock(() => this.executeUnlocked(statements));
     }
 
+    async isV3TicketClosed(id: string): Promise<boolean> {
+      const result=await this.ensureDb().query(`SELECT doc_id FROM documents WHERE
+        (collection_name='v3TicketSettlements' AND doc_id=?) OR
+        (collection_name IN ('transactions','transactionHistory') AND json_extract(data,'$.restaurantOrderId')=?
+          AND COALESCE(json_extract(data,'$.type'),'SALE') != 'REFUND') LIMIT 1`,[id,id]);
+      return Boolean(result.values?.length);
+    }
+
     private async assertV3FinancialBaseline(documents: DurableDocumentMutation[]): Promise<void> {
+        const retainedSources = new Map<string,{document:any;lines:Map<string,any[]>}>();
+        const reads = new Map<string, Promise<any>>();
+        const read = (sql: string, values: any[]) => {
+          const key = JSON.stringify([sql, values]);
+          if (!reads.has(key)) reads.set(key, this.ensureDb().query(sql, values));
+          return reads.get(key)!;
+        };
         const demands = new Map<string, { baseline: string; productId: string; warehouseId: string; quantity: number }>();
         for (const mutation of documents) {
             const document = mutation.document as any;
             if (mutation.requireAbsent || mutation.expectedDocument !== undefined) {
-              const stored = await this.ensureDb().query('SELECT data FROM documents WHERE collection_name = ? AND doc_id = ?', [mutation.collectionName, document.id]);
+              const stored = await read('SELECT data FROM documents WHERE collection_name = ? AND doc_id = ?', [mutation.collectionName, document.id]);
               if (mutation.requireAbsent && stored.values?.length) throw new Error('SYNC_V3_DUPLICATE_COMMIT');
               if (mutation.expectedDocument !== undefined && stored.values?.[0]?.data !== mutation.expectedDocument) {
                 throw new Error('SYNC_V3_CONCURRENT_FINANCIAL_UPDATE');
               }
             }
+            if (mutation.v3ExpectedRetainedDocument) {
+              const expected = mutation.v3ExpectedRetainedDocument;
+              if(expected.collection === 'transactions' && document.id !== expected.id
+                && (document.type !== 'REFUND' || document.originalTransactionId !== expected.id)) {
+                throw new Error('SYNC_V3_RETAINED_SOURCE_REQUIRED');
+              }
+              const stored = await read('SELECT data FROM documents WHERE collection_name = ? AND doc_id = ?', [expected.collection, expected.id]);
+              if (stored.values?.[0]?.data !== expected.expected) throw new Error('SYNC_V3_RETAINED_TICKET_CHANGED');
+              if (expected.collection !== 'transactions') {
+                const closed = await read(`SELECT doc_id FROM documents WHERE
+                  (collection_name='v3TicketSettlements' AND doc_id=?) OR
+                  (collection_name IN ('transactions','transactionHistory') AND json_extract(data,'$.restaurantOrderId')=?
+                    AND COALESCE(json_extract(data,'$.type'),'SALE') != 'REFUND') LIMIT 1`,[expected.id,expected.id]);
+                if(closed.values?.length) throw new Error('SYNC_V3_RETAINED_TICKET_CHANGED');
+              }
+            }
             if (!document.v3InventoryBaseline) continue;
             const [binding, syncId, syncVersion, inventoryVersion, cursor] = JSON.parse(document.v3InventoryBaseline);
-            const result = await this.ensureDb().query(`SELECT o.binding FROM master_v3_operational_owner o
+            const current = mutation.v3CurrentCatalog || { syncId, syncVersion, binding };
+            if (current.binding !== binding) throw new Error('SYNC_V3_MOVEMENT_AUTHORITY_INVALID');
+            const result = await read(`SELECT o.binding FROM master_v3_operational_owner o
               JOIN master_v3_state s ON s.singleton = 1 JOIN master_v3_inventory_state i ON i.singleton = 1
               WHERE o.singleton = 1 AND o.binding = ? AND o.sync_id = ? AND o.sync_version = ?
               AND s.active_sync_id = o.sync_id AND s.active_version = o.sync_version
-              AND i.sync_id = o.sync_id AND i.sync_version = o.sync_version
-              AND i.inventory_version = ? AND i.cursor = ?`, [binding, syncId, syncVersion, inventoryVersion, cursor]);
+              AND i.sync_id = ? AND i.sync_version = ?
+              AND i.inventory_version = ? AND i.cursor = ?`, [binding, current.syncId, current.syncVersion, syncId, syncVersion, inventoryVersion, cursor]);
             if (!result.values?.length || document.v3Binding !== binding) throw new Error('SYNC_V3_RUNTIME_VERSION_CHANGED');
+            if (current.syncId !== syncId || current.syncVersion !== syncVersion) {
+              const receipt = await read(`SELECT sync_id FROM master_v3_catalog_owners WHERE sync_id = ? AND sync_version = ?
+                AND binding = ? AND inventory_sync_id = ? AND inventory_sync_version = ? AND inventory_version = ? AND inventory_cursor = ?`,
+                [current.syncId, current.syncVersion, binding, syncId, syncVersion, inventoryVersion, cursor]);
+              if (!receipt.values?.length) throw new Error('SYNC_V3_STOCK_AUTHORITY_INVALID');
+            }
+            for (const line of document.items || []) {
+              if (mutation.requireAbsent && mutation.collectionName === 'transactions'
+                && (current.syncId !== syncId || current.syncVersion !== syncVersion)
+                && line.isInventoriable && line.operationalFlags?.trackInventory !== false && line.type !== 'SERVICE') {
+                const coverage = await read('SELECT item_id FROM master_v3_inventory_balances WHERE item_id=? AND warehouse_id=?', [line.id,document.v3WarehouseId]);
+                if (!coverage.values?.length) throw new Error('SYNC_V3_INVENTORY_COVERAGE_REQUIRED');
+              }
+              const stamp = line.v3SaleAuthority;
+              if (!stamp || stamp.binding !== binding || stamp.warehouseId !== document.v3WarehouseId) throw new Error('SYNC_V3_MOVEMENT_AUTHORITY_INVALID');
+              const explicit = stamp.inventorySyncId !== undefined || stamp.inventorySyncVersion !== undefined;
+              if (explicit && (!stamp.inventorySyncId || !Number.isSafeInteger(stamp.inventorySyncVersion))) throw new Error('SYNC_V3_STOCK_AUTHORITY_INVALID');
+              if ((stamp.inventorySyncId || stamp.syncId) !== syncId || (stamp.inventorySyncVersion ?? stamp.syncVersion) !== syncVersion
+                || stamp.inventoryVersion !== inventoryVersion || stamp.inventoryCursor !== cursor) throw new Error('SYNC_V3_STOCK_AUTHORITY_INVALID');
+              if (stamp.syncId !== current.syncId || stamp.syncVersion !== current.syncVersion) {
+                const context = mutation.v3ExpectedRetainedDocument || (mutation.expectedDocument && mutation.collectionName === 'transactions'
+                  ? { collection: 'transactions', id: document.id, expected: mutation.expectedDocument } : undefined);
+                if (!context || !['parkedTickets','transactions','v3RestoredTicketSources'].includes(context.collection)
+                  || context.collection !== 'transactions' && document.restaurantOrderId !== context.id
+                  || context.collection === 'transactions' && document.id !== context.id && document.originalTransactionId !== context.id) {
+                  throw new Error('SYNC_V3_RETAINED_SOURCE_REQUIRED');
+                }
+                const stored = await read('SELECT data FROM documents WHERE collection_name = ? AND doc_id = ?', [context.collection, context.id]);
+                if (stored.values?.[0]?.data !== context.expected) throw new Error('SYNC_V3_RETAINED_TICKET_CHANGED');
+                const sourceKey=JSON.stringify([context.collection,context.id,context.expected]);
+                if(!retainedSources.has(sourceKey)) {
+                  const document=JSON.parse(context.expected); const lines=new Map<string,any[]>();
+                  for(const source of document.items || []) {
+                    const key=JSON.stringify([source.cartId,source.id]);lines.set(key,[...(lines.get(key)||[]),source]);
+                  }
+                  retainedSources.set(sourceKey,{document,lines});
+                }
+                const source=retainedSources.get(sourceKey)!;
+                if (context.collection === 'v3RestoredTicketSources' && !['PENDING','PARKED'].includes(source.document.state)) throw new Error('SYNC_V3_RETAINED_TICKET_CHANGED');
+                const sources = source.lines.get(JSON.stringify([line.cartId,line.id])) || [];
+                if (sources.length !== 1 || v3RetainedLineFingerprint(sources[0]) !== v3RetainedLineFingerprint(line)) {
+                  throw new Error('SYNC_V3_RETAINED_LINE_CHANGED');
+                }
+                if (context.collection !== 'transactions') {
+                  const closed = await read(`SELECT doc_id FROM documents WHERE
+                    (collection_name='v3TicketSettlements' AND doc_id=?) OR
+                    (collection_name IN ('transactions','transactionHistory') AND json_extract(data,'$.restaurantOrderId')=?
+                      AND COALESCE(json_extract(data,'$.type'),'SALE') != 'REFUND') LIMIT 1`, [context.id,context.id]);
+                  if (closed.values?.length) throw new Error('SYNC_V3_RETAINED_TICKET_CHANGED');
+                }
+                const receipt = await read(`SELECT sync_id FROM master_v3_catalog_owners WHERE sync_id = ? AND sync_version = ?
+                  AND binding = ? AND inventory_sync_id = ? AND inventory_sync_version = ? AND inventory_version = ? AND inventory_cursor = ?`,
+                  [stamp.syncId, stamp.syncVersion, binding, syncId, syncVersion, inventoryVersion, cursor]);
+                if (!receipt.values?.length) throw new Error('SYNC_V3_RETAINED_OWNER_REQUIRED');
+              }
+            }
             for (const requirement of mutation.v3StockRequirements || []) {
               if (requirement.baseline !== document.v3InventoryBaseline || requirement.warehouseId !== document.v3WarehouseId
                 || !Number.isFinite(requirement.quantity) || requirement.quantity <= 0) throw new Error('SYNC_V3_MOVEMENT_AUTHORITY_INVALID');
@@ -755,7 +845,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         }
         // Both this read and every ledger write occur after BEGIN, under the shared native write queue.
         for (const demand of demands.values()) {
-          const result = await this.ensureDb().query(`SELECT
+          const result = await read(`SELECT
             COALESCE((SELECT qty_on_hand - qty_reserved - qty_committed FROM master_v3_inventory_balances
               WHERE item_id = ? AND warehouse_id = ?), 0) + COALESCE((SELECT SUM(
                 COALESCE(json_extract(data, '$.qtyIn'), 0) - COALESCE(json_extract(data, '$.qtyOut'), 0))

@@ -1,3 +1,4 @@
+import { v3StockSource } from './LargeMasterSyncV3StockAuthority';
 import type { BusinessConfig, CartItem, TaxDefinition, V3SaleAuthorityStamp } from '../../types';
 import { LargeMasterSyncV3Error } from './LargeMasterSyncV3Types';
 
@@ -6,6 +7,7 @@ const sameAuthority = (left: V3SaleAuthorityStamp, right: V3SaleAuthorityStamp):
   && left.syncVersion === right.syncVersion
   && left.tariffId === right.tariffId
   && left.taxIncluded === right.taxIncluded
+  && JSON.stringify(v3StockSource(left)) === JSON.stringify(v3StockSource(right))
   && left.inventoryVersion === right.inventoryVersion
   && left.inventoryCursor === right.inventoryCursor
   && left.binding === right.binding && left.warehouseId === right.warehouseId;

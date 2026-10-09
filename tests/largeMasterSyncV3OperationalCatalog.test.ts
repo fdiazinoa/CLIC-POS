@@ -181,3 +181,17 @@ test('weighted contract rejects unsupported or ambiguous source semantics and ad
   const catalog = await LargeMasterSyncV3OperationalCatalog.open(ready, 'T1', 'W');
   await assert.rejects(catalog.get('A'), /ADVANCED_ARTICLE_CONTRACT_REQUIRED/);
 });
+
+test('raw inventoriable tracked article without anchor coverage is unavailable without hiding covered search results',async()=>{
+ const {ready}=fixture(); const runtime=ready.runtime as any;
+ const originalBalance=runtime.getInventoryBalance.bind(runtime);
+ runtime.searchOperationalArticles=async()=>[article,{...article,id:'NEW',sku:'NEW',name:'Nuevo'}];
+ runtime.getOperationalArticle=async(id:string)=>({...article,id});
+ runtime.getPrices=async(ids:string[])=>ids.map(id=>({articleId:id,tariffId:'T1',price:85}));
+ runtime.getInventoryBalance=async(id:string,warehouse:string)=>id==='NEW'?null:originalBalance(id,warehouse);
+ runtime.findBarcode=async()=>({articleId:'NEW'});
+ const catalog=await LargeMasterSyncV3OperationalCatalog.open(ready,'T1','W');
+ assert.deepEqual((await catalog.search('')).map(row=>row.product.id),['A']);
+ await assert.rejects(catalog.get('NEW'),/ARTICLE_INVENTORY_COVERAGE_REQUIRED/);
+ await assert.rejects(catalog.findBarcode('NEW'),/ARTICLE_INVENTORY_COVERAGE_REQUIRED/);
+});

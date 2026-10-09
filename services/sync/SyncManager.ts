@@ -5,6 +5,7 @@
  * Manages catalog distribution (Master → Slaves) and operational data collection (Slaves → Master).
  */
 
+import { v3ManifestFingerprint, needsV3ManifestRefresh, type V3ManifestCheckpoint } from './LargeMasterSyncV3ManifestCheckpoint';
 import { syncErpPaymentMethods } from './PaymentMethodsSync';
 import { assertLegacyMasterPullAllowed, isLargeMasterSyncV3ReplacedCollection,
     usesLargeMasterSyncV3Authority } from './LargeMasterSyncV3Authority';
@@ -421,10 +422,7 @@ class SyncManager {
                 await syncTriggerCoordinator.request({ reason: 'MANUAL' });
                 assertBinding();
                 await this.syncTerminalManifestInBackground(undefined, { reason: 'manual_sync', throwOnError: v3Authority });
-                if (v3Authority) {
-                    assertBinding();
-                    await this.refreshV3Catalog();
-                }
+                assertBinding();
             } else {
                 assertBinding();
                 await this.syncAllCatalogs({ refreshV3: true });
@@ -2370,6 +2368,7 @@ class SyncManager {
         options?: {
             skipIfStartupCompleted?: boolean;
             markStartupCompleted?: boolean;
+            explicitV3Refresh?: boolean;
             bootstrapBlocks?: boolean;
             deferDuringSale?: boolean;
         }
@@ -2429,15 +2428,75 @@ class SyncManager {
             const storedCursorMap = this.readStoredTerminalCursorMap(localTerminalId);
             const localInventoryVersion = this.readStoredInventoryVersion(localTerminalId);
             const localPriceVersion = this.readStoredPriceVersion(localTerminalId);
+            const v3Authority = usesLargeMasterSyncV3Authority(syncPolicy.resolve().kind);
+            const boundIdentity = v3Authority ? readLargeMasterSyncV3BoundIdentity() : null;
+            if (boundIdentity && (boundIdentity.terminalId !== context.terminalId
+                || boundIdentity.tenantId !== context.tenantId || boundIdentity.deviceId !== context.posDeviceId)) {
+                throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
+            }
+            const credentialGuard = v3Authority ? readOperationalTerminalBinding() : null;
+            const downloadOrigin = v3Authority ? largeMasterSyncV3DownloadOrigin() : null;
+            const assertManifestBinding = () => {
+                if (v3Authority && (readOperationalTerminalBinding() !== credentialGuard
+                    || JSON.stringify(readLargeMasterSyncV3BoundIdentity()) !== JSON.stringify(boundIdentity)
+                    || largeMasterSyncV3DownloadOrigin() !== downloadOrigin)) {
+                    throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
+                }
+            };
             const manifest = await this.fetchTerminalManifest(context, storedCursorMap);
+            assertManifestBinding();
             if (!manifest?.cursor_map || !manifest.changed) {
+                if (v3Authority && options?.explicitV3Refresh) throw new LargeMasterSyncV3Error('SYNC_SNAPSHOT_NOT_READY', undefined, true);
                 return null;
             }
             if (options?.deferDuringSale) {
                 await waitForBackgroundSyncWindow();
             }
             this.recordSnapshotDiagnostics('manifest', manifest.snapshot_meta);
-            const v3Authority = usesLargeMasterSyncV3Authority(syncPolicy.resolve().kind);
+            let v3RefreshedConfig: BusinessConfig | null = null;
+            let pendingV3Checkpoint: { key: string; value: V3ManifestCheckpoint } | null = null;
+            const persistV3Checkpoint = () => {
+                assertManifestBinding();
+                if (pendingV3Checkpoint) localStorage.setItem(pendingV3Checkpoint.key, JSON.stringify(pendingV3Checkpoint.value));
+            };
+            if (v3Authority && boundIdentity) {
+                const fingerprint = v3ManifestFingerprint(manifest);
+                const hint = Boolean(manifest.changed.items || manifest.changed.product_prices
+                    || manifest.changed_blocks?.some(scope => scope === 'items' || scope === 'product_prices'));
+                if (fingerprint || hint || options?.explicitV3Refresh) {
+                    const config = baseConfig || await db.get('config') as unknown as BusinessConfig;
+                    const terminal = config?.terminals?.find(row => row.id === localTerminalId
+                        || row.config?.erpTerminalId === boundIdentity.terminalId);
+                    const companyId = terminal?.config?.erpBinding?.companyId
+                        || readOperationalCatalogBindingProof()?.companyId || null;
+                    const bindingParts = [companyId, boundIdentity.tenantId, boundIdentity.terminalId,
+                        boundIdentity.deviceId, boundIdentity.erpSyncBaseUrl, downloadOrigin];
+                    const markerKey = `clic_v3_applied_manifest_${localTerminalId}`;
+                    let checkpoint: V3ManifestCheckpoint | null = null;
+                    try { checkpoint = JSON.parse(localStorage.getItem(markerKey) || 'null'); } catch { /* Unknown marker retries. */ }
+                    const session = await getLargeMasterSyncV3OperationalSession(false);
+                    await session.assertCurrent();
+                    const stockAuthority = JSON.stringify([session.ready.inventorySyncId || session.ready.runtime.version.syncId,
+                      session.ready.inventorySyncVersion ?? session.ready.runtime.version.syncVersion, session.ready.inventoryVersion, session.ready.inventoryCursor]);
+                    const binding = JSON.stringify([...bindingParts, stockAuthority]);
+                    assertManifestBinding();
+                    if (!companyId) throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
+                    if (needsV3ManifestRefresh(fingerprint, hint || Boolean(options?.explicitV3Refresh), checkpoint, binding, { ...session.ready.runtime.version, stockAuthority })) {
+                        await this.refreshV3Catalog();
+                        const applied = await getLargeMasterSyncV3OperationalSession(false);
+                        await applied.assertCurrent();
+                        const appliedStock = JSON.stringify([applied.ready.inventorySyncId || applied.ready.runtime.version.syncId,
+                          applied.ready.inventorySyncVersion ?? applied.ready.runtime.version.syncVersion, applied.ready.inventoryVersion, applied.ready.inventoryCursor]);
+                        if (appliedStock !== stockAuthority) throw new LargeMasterSyncV3Error('SYNC_V3_STOCK_AUTHORITY_INVALID');
+                        v3RefreshedConfig = await db.get('config') as unknown as BusinessConfig;
+                        assertManifestBinding();
+                        if (companyId && fingerprint) {
+                            pendingV3Checkpoint = { key: markerKey, value: { binding, fingerprint, stockAuthority,
+                                syncId: applied.ready.runtime.version.syncId, syncVersion: applied.ready.runtime.version.syncVersion } };
+                        }
+                    }
+                }
+            }
 
             const changedMasterScopes: TerminalManifestMasterScope[] = (['items', 'customers', 'suppliers', 'sellers', 'users', 'pos_users', 'roles', 'pos_roles', 'purchase_orders', 'transfers'] as TerminalManifestMasterScope[])
                 .filter((scope) => manifest.changed?.[scope] && !(v3Authority && scope === 'items'));
@@ -2573,11 +2632,12 @@ class SyncManager {
             this.publishSyncHealthUpdate();
 
             if (!requiresDocumentSeriesConfigFetch && !requiresCatalogConfigFetch && !terminalChanged && changedMasterScopes.length === 0 && (!inventoryChanged || inventorySyncSkippedByVersion) && !bootstrapInventoryOnStartup && (!productPricesChanged || priceSyncSkippedByVersion) && !bootstrapProductPricesOnStartup) {
+                persistV3Checkpoint();
                 this.persistTerminalCursorMap(localTerminalId, manifest.cursor_map);
                 if (options?.markStartupCompleted) {
                     this.markStartupManifestSyncCompleted(localTerminalId);
                 }
-                return null;
+                return v3RefreshedConfig;
             }
 
             const shouldRefreshTerminalConfig = terminalChanged || changedMasterScopes.length > 0 || requiresDocumentSeriesConfigFetch || requiresCatalogConfigFetch;
@@ -2597,7 +2657,7 @@ class SyncManager {
                 : Promise.resolve<BusinessConfig | null>(null);
 
             const shouldRunInventoryTask = (inventoryChanged || bootstrapInventoryOnStartup || inventoryVersionMiss) && !inventorySyncSkippedByVersion;
-            const shouldRunProductPricesTask = (productPricesChanged || bootstrapProductPricesOnStartup || priceVersionMiss) && !priceSyncSkippedByVersion;
+            const shouldRunProductPricesTask = !v3Authority && (productPricesChanged || bootstrapProductPricesOnStartup || priceVersionMiss) && !priceSyncSkippedByVersion;
             const inventoryTask = shouldRunInventoryTask
                 ? this.fetchTerminalInventoryBlock(context, storedCursorMap.inventory || null)
                 : Promise.resolve<TerminalInventoryPayload | null>(null);
@@ -2720,16 +2780,18 @@ class SyncManager {
                 });
             }
 
-            if (!refreshedConfig && (!inventoryChanged || inventorySyncSkippedByVersion) && (!productPricesChanged || priceSyncSkippedByVersion) && !bootstrapInventoryOnStartup && !bootstrapProductPricesOnStartup) {
+            if (!refreshedConfig && !v3RefreshedConfig && (!inventoryChanged || inventorySyncSkippedByVersion) && (!productPricesChanged || priceSyncSkippedByVersion) && !bootstrapInventoryOnStartup && !bootstrapProductPricesOnStartup) {
                 return null;
             }
 
+            persistV3Checkpoint();
             this.persistTerminalCursorMap(localTerminalId, manifest.cursor_map);
             if (options?.markStartupCompleted) {
                 this.markStartupManifestSyncCompleted(localTerminalId);
             }
 
-            return refreshedConfig;
+            assertManifestBinding();
+            return refreshedConfig || v3RefreshedConfig;
         } finally {
             this.terminalManifestSyncInFlight = false;
         }
@@ -3181,6 +3243,7 @@ class SyncManager {
         return nextPriceDocs.size;
     }
 
+    private backgroundManifestFlight: {binding:string;promise:Promise<BusinessConfig|null>} | null = null;
     async syncTerminalManifestInBackground(
         baseConfig?: BusinessConfig | null,
         options?: {
@@ -3189,16 +3252,22 @@ class SyncManager {
             reason?: 'startup' | 'connection_restored' | 'app_resumed' | 'manual_sync' | 'force_sync' | 'periodic_manifest' | 'realtime';
         }
     ): Promise<BusinessConfig | null> {
+        const binding = usesLargeMasterSyncV3Authority(syncPolicy.resolve().kind) ? JSON.stringify(readLargeMasterSyncV3BoundIdentity()) : '';
+        if (this.backgroundManifestFlight) {
+            if(this.backgroundManifestFlight.binding !== binding) throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
+            return this.backgroundManifestFlight.promise;
+        }
         const startedAt = Date.now();
         const reason = options?.reason || 'periodic_manifest';
         const isExplicitRefresh = reason === 'manual_sync' || reason === 'force_sync';
         if (!isExplicitRefresh && startedAt - this.lastBackgroundTerminalManifestSyncAt < 60_000) {
             return null;
         }
-        try {
+        const promise = Promise.resolve().then(async () => { try {
             const result = await this.reconcileTerminalManifest(baseConfig ?? null, {
                 skipIfStartupCompleted: false,
                 markStartupCompleted: false,
+                explicitV3Refresh: isExplicitRefresh,
                 bootstrapBlocks: Boolean(options?.bootstrapBlocks),
                 deferDuringSale: true,
             });
@@ -3225,7 +3294,10 @@ class SyncManager {
             console.warn('⚠️ SyncManager: background manifest sync failed:', error);
             if (options?.throwOnError) throw error;
             return null;
-        }
+        }});
+        this.backgroundManifestFlight = {binding,promise};
+        void promise.finally(() => { if(this.backgroundManifestFlight?.promise === promise) this.backgroundManifestFlight=null; }).catch(()=>undefined);
+        return promise;
     }
 
     private async deleteSnapshotProducts(itemsToDelete: unknown[]): Promise<number> {

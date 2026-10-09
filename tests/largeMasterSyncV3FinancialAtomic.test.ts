@@ -148,7 +148,7 @@ async function financialModule(f: ReturnType<typeof fixture>, durable = false) {
           throw new Error('FISCAL_TERMINAL_AUTHORITY_REQUIRED');
         }
       } },
-    session: { binding: 'binding', assertCurrent: async () => {}, projectConfig: async (config: any) => ({ ...config,
+    session: { binding: 'binding', ready: { runtime: { version: { syncId: 'S', syncVersion: 2 } } }, assertCurrent: async () => {}, projectConfig: async (config: any) => ({ ...config,
       terminals: [], taxes: [{ id: 'TX', name: 'ITBIS', rate: 0.18, type: 'VAT' }] }),
       validate: async (_config: any, items: any[], _tariff: string, _warehouse: string, _intent: string, validated: any) => {
         for (const line of items) validated?.(line, line);

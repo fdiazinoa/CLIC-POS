@@ -58,7 +58,7 @@ async function fixture(v3=true, primary=true, kind='ERP_ACTIVE') {
     compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
   const instance=new Constructor();Object.assign(instance,{isDisabled:false,syncVersions:new Map(),lastBackgroundTerminalManifestSyncAt:0,
     isUsingConfigPushV2Primary:()=>primary,purgeSyncedHistoricalData:async()=>{},pullCatalog:async(name:string)=>{calls.push('legacy:'+name);},
-    reconcileTerminalManifest:async()=>{calls.push('manifest');return manifest();},refreshErpPaymentMethods:async()=>{}});
+    reconcileTerminalManifest:async(_config:any,options:any)=>{calls.push('manifest');const result=await manifest();if(v3&&kind==='ERP_ACTIVE'&&options.explicitV3Refresh)await instance.refreshV3Catalog();return result;},refreshErpPaymentMethods:async()=>{}});
   return {instance,calls,events,helper,config:()=>config,identity:()=>identity,change:(patch:Partial<typeof identity>)=>{identity={...identity,...patch};},
     onSave:(callback:typeof save)=>{save=callback;},onPrepare:(callback:typeof prepare)=>{prepare=callback;},
     onCoordinator:(callback:typeof reconcile)=>{reconcile=callback;},onManifest:(callback:typeof manifest)=>{manifest=callback;},
