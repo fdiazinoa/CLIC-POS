@@ -138,13 +138,17 @@ const refreshMethod = source.slice(source.indexOf('    async refreshTerminalReso
 function refreshFixture(response: unknown = snapshot(), kind = 'ERP_ACTIVE', fetchError?: string) {
   const writes: string[] = [], events: string[] = [], endpoints: string[] = [];
   let local = config(); let active = terminalId; let credentials = { syncToken: 'fixture-token' };
+  let companyId = 'company';
+  local.terminals[0].config.erpBinding = { terminalId, tenantId: identity.tenantId, deviceId: identity.posDeviceId, companyId } as any;
+  local.terminals[0].config.catalog.allowedCategories = ['Alimentos'];
   let target = { kind, baseUrl: 'https://original.example.test', terminalId };
   const storage = new Map<string, string>();
   const deps = {
     freezeCount() {}, freezePhase() {}, protectsLocalCatalogFromCloud: () => false,
     usesLargeMasterSyncV3Authority: () => kind === 'ERP_ACTIVE',
     syncPolicy: { resolve: () => target },
-    readOperationalTerminalBinding: () => JSON.stringify([target, credentials]),
+    readOperationalTerminalBinding: () => JSON.stringify([target, credentials, companyId]),
+    readOperationalCatalogBindingProof: () => ({ terminalId, tenantId: identity.tenantId, deviceId: identity.posDeviceId, companyId }),
     db: { get: async (collection: string) => collection === 'config' ? local : [],
       save: async (collection: string, value: any) => { writes.push(collection); if (collection === 'config') local = value; },
       rehydrateOperationalDocumentState: async () => { writes.push('documents'); } },
@@ -176,6 +180,7 @@ function refreshFixture(response: unknown = snapshot(), kind = 'ERP_ACTIVE', fet
     sanitizeConfig: (value: any) => value, resolveRuntimeWarehousesFromConfig: () => [],
   });
   return { instance, writes, events, endpoints, getConfig: () => local, changeIdentity: () => { active = 'foreign'; },
+    changeCompany: () => { companyId = 'other'; },
     changeToken: () => { credentials = { syncToken: 'rotated-fixture-token' }; },
     changeTarget: () => { target = { ...target, baseUrl: 'https://different.example.test' }; },
     duringFetch: (callback: () => void) => { mutateDuringFetch = callback; } };
@@ -197,9 +202,9 @@ for (const invalid of [null, { config: {} }, { ...snapshot(), tenant_id: 'foreig
     assert.deepEqual(f.writes, []); assert.deepEqual(f.events, []);
   });
 }
-for (const mutation of ['identity', 'token', 'target']) {
+for (const mutation of ['identity', 'token', 'target', 'company']) {
   test(`queued scope ${mutation} change during fetch rejects before any diagnostics or writes`, async () => {
-    const f = refreshFixture(); f.duringFetch(mutation === 'identity' ? f.changeIdentity : mutation === 'token' ? f.changeToken : f.changeTarget);
+    const f = refreshFixture(); f.duringFetch(mutation === 'identity' ? f.changeIdentity : mutation === 'token' ? f.changeToken : mutation === 'company' ? f.changeCompany : f.changeTarget);
     await assert.rejects(f.instance.refreshTerminalResolvedConfig(undefined, options), /BINDING_CHANGED/);
     assert.deepEqual(f.writes, []); assert.deepEqual(f.events, []);
   });
@@ -281,4 +286,18 @@ test('ERP restore config failure leaves version unchanged and emits ERROR rather
   await instance.forcePullAll();
   assert.equal(versions.get('config'), 17); assert.equal(stored.get('sync_version_config'), '17');
   assert.deepEqual(events.filter(event => event.id === 'config').map(event => event.status), ['PROCESSING', 'ERROR']);
+});
+
+test('actual V3 queued operational refresh preserves omitted categories using captured current-company proof', async () => {
+  const f = refreshFixture();
+  await f.instance.refreshTerminalResolvedConfig(undefined, options);
+  assert.deepEqual(Array.from(f.getConfig().terminals[0].config.catalog.allowedCategories), ['Alimentos']);
+  assert.equal(f.getConfig().terminals[0].config.pricing.defaultTariffId, 'DUARTE');
+});
+test('current company changes during structured master await reject before config apply/save', async () => {
+  const f = refreshFixture(); const before = structuredClone(f.getConfig());
+  f.instance.refreshTerminalStructuredMasterData = async () => { f.changeCompany(); return {}; };
+  await assert.rejects(f.instance.refreshTerminalResolvedConfig(undefined, options), /BINDING_CHANGED/);
+  assert.deepEqual(f.getConfig(), before); assert.equal(f.writes.includes('config'), false);
+  assert.deepEqual(f.events, []);
 });

@@ -1810,6 +1810,7 @@ export interface ApplyTerminalConfigSnapshotOptions {
   incomingSnapshot?: TerminalConfigSnapshot | null;
   cachedSnapshot?: TerminalConfigSnapshot | null;
   preserveOmittedOperationalScopes?: boolean;
+  catalogBindingProof?: { terminalId: string; tenantId: string; companyId: string; deviceId: string };
 }
 
 export interface ApplyTerminalConfigSnapshotResult {
@@ -2439,12 +2440,54 @@ export const applyTerminalConfigSnapshot = (
       return asString(data.name || data.nombre || data.label || data.id || data.code || item);
     })
     .filter(Boolean);
-  const effectiveAllowedCategories =
-    allowedCategories.length > 0
-      ? allowedCategories
-      : productGroups
-        .map((group) => asString(group.name || group.code || group.id))
-        .filter(Boolean);
+  const restrictionKeys = ['allowed_categories', 'allowedCategories', 'categories', 'product_categories', 'productCategories'];
+  const freshCatalogs = [asObject(incomingResolved.catalog), asObject(incomingFallbackConfig.catalog)];
+  const explicitCatalog = freshCatalogs.find(catalog => restrictionKeys.some(key => Object.prototype.hasOwnProperty.call(catalog, key)));
+  const explicitKey = explicitCatalog && restrictionKeys.find(key => Object.prototype.hasOwnProperty.call(explicitCatalog, key));
+  if (options.preserveOmittedOperationalScopes && explicitCatalog && explicitKey) {
+    const raw = explicitCatalog[explicitKey];
+    if (!Array.isArray(raw) || raw.some(item => {
+      if (typeof item === 'string') return !item.trim();
+      const data = asObject(item);
+      const value = data.name || data.nombre || data.label || data.id || data.code;
+      return typeof value !== 'string' || !value.trim();
+    })) throw new Error('SYNC_V3_TERMINAL_CATALOG_INVALID');
+  }
+  const explicitCategories = explicitCatalog && explicitKey ? asArray<any>(explicitCatalog[explicitKey]).map(item => {
+    const data = asObject(item);
+    return asString(data.name || data.nombre || data.label || data.id || data.code || item);
+  }).filter(Boolean) : [];
+  const freshGroupsPresent = freshCatalogs.some(catalog => ['product_groups', 'productGroups', 'groups']
+    .some(key => Object.prototype.hasOwnProperty.call(catalog, key)))
+    || Object.prototype.hasOwnProperty.call(incomingFallbackConfig, 'productGroups');
+  const binding = existingTerminal?.erpBinding;
+  const freshIdentities = [incomingRaw, asObject(incomingResolved.identity), asObject(incomingResolved.terminal)];
+  const identityKeys = [['terminal_id', 'terminalId', 'erp_terminal_id'], ['tenant_id', 'tenantId'],
+    ['company_id', 'companyId'], ['device_id', 'deviceId']] as const;
+  const expected = [binding?.terminalId, binding?.tenantId, binding?.companyId, binding?.deviceId];
+  const exactExistingBinding = expected.every(value => typeof value === 'string' && value.trim().length > 0);
+  const freshConflict = freshIdentities.some(record => identityKeys.some((keys, index) => keys.some(key =>
+    Object.prototype.hasOwnProperty.call(record, key) && record[key] !== expected[index]))
+    || record !== incomingRaw && Object.prototype.hasOwnProperty.call(record, 'id') && record.id !== expected[0]);
+  const freshComplete = identityKeys.every((keys, index) => freshIdentities.some(record => keys.some(key => record[key] === expected[index])));
+  const proof = options.catalogBindingProof;
+  const trustedProof = proof && [proof.terminalId, proof.tenantId, proof.companyId, proof.deviceId]
+    .every((value, index) => value === expected[index]);
+  const preserveCatalog = options.preserveOmittedOperationalScopes && exactExistingBinding && !freshConflict
+    && (freshComplete || trustedProof) && !explicitCatalog && !freshGroupsPresent;
+  const freshGroupCatalog = freshCatalogs.find(catalog => ['product_groups', 'productGroups', 'groups']
+    .some(key => Object.prototype.hasOwnProperty.call(catalog, key)));
+  const freshGroupKey = freshGroupCatalog && ['product_groups', 'productGroups', 'groups']
+    .find(key => Object.prototype.hasOwnProperty.call(freshGroupCatalog, key));
+  const freshGroupCategories = asArray(freshGroupCatalog && freshGroupKey
+    ? freshGroupCatalog[freshGroupKey] : incomingFallbackConfig.productGroups)
+    .map((item, index) => normalizeProductGroupFromErpPayload(item, index))
+    .filter(Boolean).map(group => asString(group!.name || group!.code || group!.id)).filter(Boolean);
+  const effectiveAllowedCategories = options.preserveOmittedOperationalScopes
+    ? explicitCatalog ? explicitCategories : freshGroupsPresent ? freshGroupCategories
+      : preserveCatalog ? [...(existingTerminal?.catalog?.allowedCategories || [])] : []
+    : allowedCategories.length > 0 ? allowedCategories
+      : productGroups.map(group => asString(group.name || group.code || group.id)).filter(Boolean);
   const effectivePosCategories = effectiveAllowedCategories
     .map((name, index) => ({
       id: name,

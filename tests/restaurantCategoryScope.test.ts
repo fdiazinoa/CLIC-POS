@@ -73,3 +73,25 @@ test('explicit unrestricted configuration preserves compatibility and inactive p
   const inactive=render({allowed:['Alimentos'],products,config:{posCategories:[{id:'food-category',name:'Alimentos',isActive:false}]}});
   assert.deepEqual(inactive.products,[]);assert.deepEqual(inactive.options.map((c:any)=>c.id),['ALL']);
 });
+
+test('actual V3 snapshot refresh projection feeds restricted consumers across omitted/full/unrestricted frames', async () => {
+  const { getInitialConfig } = await import('../constants');
+  const { applyTerminalConfigSnapshot } = await import('../utils/terminalConfigSnapshot');
+  const render = await actualConsumers();
+  let config = getInitialConfig('Restaurante' as any);
+  config.terminals = [{ id: 'local', config: structuredClone(config.terminals[0].config) }];
+  const proof = { terminalId: 'terminal', tenantId: 'tenant', companyId: 'company', deviceId: 'device' };
+  config.terminals[0].config.erpBinding = proof as any;
+  config.terminals[0].config.catalog.allowedCategories = ['Alimentos'];
+  const v3 = { categories: [{ key: 'bebidas', label: 'Bebidas' }, { key: 'alimentos', label: 'Alimentos' }] };
+  for (const incoming of [{ resolved: {} }, { resolved: { catalog: { allowed_categories: ['Alimentos'] } } }, { resolved: {} }]) {
+    config = applyTerminalConfigSnapshot(config, { terminalId: 'local', incomingSnapshot: { ...incoming, terminal_id: proof.terminalId, tenant_id: proof.tenantId, device_id: proof.deviceId } as any,
+      preserveOmittedOperationalScopes: true, catalogBindingProof: proof }).config;
+    const output = render({ allowed: config.terminals[0].config.catalog.allowedCategories, products: [drink, food], v3 });
+    assert.deepEqual(output.products.map((product: any) => product.id), ['food']);
+    assert.deepEqual(output.options.map((category: any) => category.id), ['ALL', 'alimentos']);
+  }
+  config = applyTerminalConfigSnapshot(config, { terminalId: 'local', incomingSnapshot: { resolved: { catalog: { allowed_categories: [] } } } as any,
+    preserveOmittedOperationalScopes: true, catalogBindingProof: proof }).config;
+  assert.deepEqual(render({ allowed: config.terminals[0].config.catalog.allowedCategories, products: [drink, food], v3 }).products.map((product: any) => product.id), ['drink', 'food']);
+});
