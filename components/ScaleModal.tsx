@@ -19,7 +19,7 @@ interface ScaleModalProps {
 }
 
 const ScaleModal: React.FC<ScaleModalProps> = ({ product, currencySymbol, onConfirm, onClose, scales = [{ id: 'manual', name: 'Entrada manual', displayUnit: 'kg', driver: 'MANUAL' }], defaultScaleId }) => {
-  const [scaleId, setScaleId] = useState(defaultScaleId || '');
+  const scaleId = defaultScaleId || '';
   const selectedScale = scales.find(scale => scale.id === scaleId);
   const weightContract = resolveScaleWeightContract(product, selectedScale?.displayUnit || 'kg');
   const { displayUnit, canonicalUnit } = weightContract;
@@ -146,12 +146,10 @@ const ScaleModal: React.FC<ScaleModalProps> = ({ product, currencySymbol, onConf
            </button>
         </div>
 
-        <label className="px-4 pt-3">Balanza
-          <select aria-label="Balanza seleccionada" value={scaleId} onChange={e => setScaleId(e.target.value)}>
-            <option value="" disabled>Seleccione una balanza</option>
-            {scales.map(scale => <option key={scale.id} value={scale.id}>{scale.name} ({scale.displayUnit})</option>)}
-          </select>
-        </label>
+        <div className="px-4 pt-3" aria-label="Balanza configurada">
+          {selectedScale ? <p>Balanza: {selectedScale.name} ({displayUnit})</p>
+            : <p role="alert">Configure la balanza predeterminada en Ajustes → Hardware → Balanzas.</p>}
+        </div>
         {weightContract.legacyFallback && <p className="px-4 pt-3 text-xs text-gray-500">Entrada heredada en kg. Configure kg o lb en el artículo para usar conversión.</p>}
         {!weightContract.allowed && <p role="alert" className="px-4 pt-3 text-sm text-red-600">La unidad del artículo V3 no permite pesar. Revisa su configuración en el ERP.</p>}
         {/* Digital Display */}
