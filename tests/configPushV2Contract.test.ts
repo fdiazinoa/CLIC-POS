@@ -97,6 +97,8 @@ const runEvent = async (input: {
     versions: Record<string, number>;
     domains?: Record<string, unknown>;
     snapshotResponses?: Response[];
+    observe?: (acks: Array<Record<string, unknown>>) => void;
+    onAck?: (body: Record<string, unknown>) => void;
 }) => {
     const event = makeEvent(input.id, input.scopes, input.versions);
     let outboxServed = false;
@@ -126,11 +128,13 @@ const runEvent = async (input: {
         if (url.includes('/outbox/ack')) {
             const body = JSON.parse(String(init?.body || '{}'));
             acks.push(body);
+            input.onAck?.(body);
             return Response.json({ status: 'success', outbox_id: body.outbox_id, applied_status: body.status });
         }
         throw new Error(`Unexpected request: ${url}`);
     }) as typeof fetch;
 
+    input.observe?.(acks);
     const result = await lifecycle.triggerErpSyncOutbox('manual_sync');
     return { result, acks, snapshotUrls };
 };
@@ -568,14 +572,22 @@ test('applies prices + terminal_config + loyalty atomically and ACKs APPLIED', a
     assert.deepEqual(state.domainVersions, { prices: 2, terminal_config: 3, loyalty: 4 });
 });
 
-test('CONFIG_PUSH_V2 applies fiscal and catalog together before ACK APPLIED', async () => {
+test('CONFIG_PUSH_V2 acopla fiscal y catálogo y confirma después del commit local', async () => {
     resetHarness();
     localStorage.setItem('clic_pos_config_push_v2_state', JSON.stringify({
         versionHash: 'previous-fiscal-hash', domainVersions: { catalog: 11, fiscal: 7 }, inFlight: null,
     }));
     const originalAtomicSave = dbAdapter.saveDocumentsAtomically;
     const committedCollections: string[][] = [];
+    const before = clone([...collections]);
+    let release!: () => void; let entered!: () => void;
+    const barrier = new Promise<void>(resolve => { release = resolve; });
+    const committing = new Promise<void>(resolve => { entered = resolve; });
+    let observedAcks: Array<Record<string, unknown>> = [];
+    let atAck: any;
     (dbAdapter as any).saveDocumentsAtomically = async (documents: any[], _requireAbsent: boolean, replaceCollections: string[]) => {
+        entered();
+        await barrier;
         committedCollections.push([...replaceCollections]);
         const grouped = new Map<string, any[]>();
         for (const document of documents) {
@@ -589,7 +601,9 @@ test('CONFIG_PUSH_V2 applies fiscal and catalog together before ACK APPLIED', as
         }
     };
     try {
-        const { result, acks, snapshotUrls } = await runEvent({
+        const operation = runEvent({
+            observe: acks => { observedAcks = acks; },
+            onAck: body => { if (body.status === 'APPLIED') atAck = { data: clone([...collections]), state: lifecycle.getConfigPushV2Diagnostics() }; },
             id: 'fiscal-catalog-coupled',
             scopes: ['catalog'],
             versions: { catalog: 12, fiscal: 8 },
@@ -598,9 +612,19 @@ test('CONFIG_PUSH_V2 applies fiscal and catalog together before ACK APPLIED', as
                 catalog: { products: [{ id: 'shirt-a', sku: 'REF-0001', name: 'CAMISA A', precio_venta: 100.57, taxable: true, tax_id: taxId }] },
             },
         });
+        await committing;
+        assert.deepEqual(observedAcks, []);
+        assert.deepEqual([...collections], before);
+        assert.deepEqual(lifecycle.getConfigPushV2Diagnostics().domainVersions, { catalog: 11, fiscal: 7 });
+        assert.equal(lifecycle.getConfigPushV2Diagnostics().versionHash, 'previous-fiscal-hash');
+        release();
+        const { result, acks, snapshotUrls } = await operation;
         assert.equal(result?.applied, 1);
         assert.equal(acks[0].status, 'APPLIED');
         assert.match(snapshotUrls[0], /scopes=catalog%2Cfiscal/);
+        assert.deepEqual(atAck.data, [...collections]);
+        assert.deepEqual(atAck.state.domainVersions, { catalog: 12, fiscal: 8 });
+        assert.ok(committedCollections[0].includes('config'));
         assert.equal(committedCollections.length, 1);
         assert.ok(committedCollections[0].includes('taxes'));
         assert.ok(committedCollections[0].includes('products'));
@@ -609,6 +633,7 @@ test('CONFIG_PUSH_V2 applies fiscal and catalog together before ACK APPLIED', as
         assert.equal(shirt.price, 100.57);
         assert.deepEqual(shirt.appliedTaxIds, [taxId]);
     } finally {
+        release();
         (dbAdapter as any).saveDocumentsAtomically = originalAtomicSave;
     }
 });
@@ -922,4 +947,23 @@ test('repeated preference hash does not reapply or roll back an advanced local o
     assert.equal(second.acks[0].status, 'APPLIED');
     assert.equal(second.snapshotUrls.length, 0);
     assert.equal((collections.get('config') as any).terminals[0].config.operational.orderNumbers.nextNumber, 52);
+});
+
+test('CONFIG_PUSH_V2 rejected fiscal/catalog commit cannot acknowledge or activate versions', async () => {
+    resetHarness();
+    localStorage.setItem('clic_pos_config_push_v2_state', JSON.stringify({ versionHash: 'old', domainVersions: { catalog: 11, fiscal: 7 }, inFlight: null }));
+    const before = clone([...collections]);
+    const original = dbAdapter.saveDocumentsAtomically;
+    let attempts = 0;
+    (dbAdapter as any).saveDocumentsAtomically = async () => { attempts++; throw new Error('DISK_WRITE_FAILED'); };
+    try {
+        const { result, acks } = await runEvent({ id: 'rejected-commit', scopes: ['catalog'], versions: { catalog: 12, fiscal: 8 }, domains: { catalog: { products: [{ id: 'product', name: 'Product' }] }, fiscal: { taxes: [] } } });
+        assert.equal(attempts, 1);
+        assert.equal(result?.applied, 0);
+        assert.equal(result?.failed, 1);
+        assert.equal(acks.some(ack => ack.status === 'APPLIED'), false);
+        assert.deepEqual([...collections], before);
+        assert.deepEqual(lifecycle.getConfigPushV2Diagnostics().domainVersions, { catalog: 11, fiscal: 7 });
+        assert.equal(lifecycle.getConfigPushV2Diagnostics().versionHash, 'old');
+    } finally { (dbAdapter as any).saveDocumentsAtomically = original; }
 });

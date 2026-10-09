@@ -1,3 +1,4 @@
+import { removeClosedRestaurantTickets } from '../utils/tableTicketIntegrity';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
@@ -105,6 +106,8 @@ function setup(transport: (...args: any[]) => Promise<any>, timers?: { setTimeou
   const appliedAuthority = { current: 'http://10.0.0.101:3001' };
   const pendingSync = { current: null as any };
   let tableUpdates = 0;
+  const closedOrderIds = { current: new Set<string>() };
+  let publishedTickets: any[] = []; let reconciledTickets: any[] = [];
   const deps: Record<string, any> = {
     isClientTerminalMode: () => true, clientRoutingContextRef: context,
     clientOperationalResolverRef: { current: resolver },
@@ -124,10 +127,11 @@ function setup(transport: (...args: any[]) => Promise<any>, timers?: { setTimeou
     masterRestaurantRevisionRef: { current: 1 },
     removeStaleChargedEmptyTickets: (tickets: any[]) => ({ tickets, removedTicketIds: [] }),
     mergePendingClientTableTickets: (tickets: any[]) => tickets,
-    reconcileTablesWithParkedTickets: (tables: any[]) => tables,
+    removeClosedRestaurantTickets, closedRestaurantOrderIdsRef: closedOrderIds,
+    reconcileTablesWithParkedTickets: (tables: any[], tickets: any[]) => { reconciledTickets = tickets; return tables; },
     parkedTickets: [], locallySavedFloorPlanRef: { current: null },
     setTables: (update: any) => { tableUpdates++; update([]); },
-    setRooms: () => {}, setActiveRoomId: (update: any) => update(''), setParkedTickets: () => {},
+    setRooms: () => {}, setActiveRoomId: (update: any) => update(''), setParkedTickets: (tickets: any[]) => { publishedTickets = tickets; },
     useCallback: (callback: any) => callback,
   };
   const declarations = ['publishClientMasterState', 'markClientMasterOnline', 'recordClientMasterFailure',
@@ -136,6 +140,7 @@ function setup(transport: (...args: any[]) => Promise<any>, timers?: { setTimeou
   const javascript = ts.transpileModule(declarations, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText;
   const handlers = new Function(...Object.keys(deps), `${javascript}; return { fetchTables, retryClientMasterConnection, recordClientMasterFailure };`)(...Object.values(deps));
   return { ...handlers, context, statuses, diagnostics, failureCount, resolver,
+    closedOrderIds, publishedTickets: () => publishedTickets, reconciledTickets: () => reconciledTickets,
     appliedVersion, appliedAuthority, pendingSync, tableUpdates: () => tableUpdates,
     discoveries: () => discoveries, change: (value: Partial<OperationalMasterContract>) => { active = { ...active, ...value }; } };
 }
@@ -325,4 +330,17 @@ test('poll and focus lifecycle effects include boot readiness with no added idle
   assert.match(poll, /\[config\.vertical, config\.terminals, deviceId, currentView, isDataLoaded\]/);
   assert.match(poll, /if \(!isDataLoaded \|\| !isClientTerminalMode\(\)/);
   assert.match(poll, /\[currentView, isDataLoaded\]/);
+});
+
+ test('actual App full snapshot excludes closed orders before publishing and table reconciliation', async () => {
+  const fixture = setup(async () => ({ ...response(), json: async () => ({ revision: 2, tables: [], parkedTickets: [
+    { id: 'closed-order', items: [{ id: 'item' }] }, { id: 'open-order', items: [] },
+    { id: 'linked-ticket', barTabId: 'closed-order', items: [] },
+  ] }) }));
+  fixture.context.current.ready = true;
+  fixture.closedOrderIds.current.add('closed-order');
+  assert.equal((await fixture.fetchTables(true)).ok, true);
+  assert.deepEqual(fixture.publishedTickets().map(ticket => ticket.id), ['open-order']);
+  assert.deepEqual(fixture.reconciledTickets().map(ticket => ticket.id), ['open-order']);
+  assert.equal(fixture.tableUpdates(), 1);
 });
