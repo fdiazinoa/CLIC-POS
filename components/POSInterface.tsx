@@ -4128,99 +4128,30 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             return;
          }
 
-         const [buffers, allocations, ranges] = await Promise.all([
-            db.get('localFiscalBuffer'),
-            db.get('fiscalAllocations'),
-            db.get('fiscalRanges'),
-         ]);
-         if (cancelled) return;
-
-         const localBuffer: any = (Array.isArray(buffers) ? buffers : []).find((buffer: any) =>
-            buffer?.type === type &&
-            (!buffer?.terminalId || buffer?.terminalId === terminalId)
-         );
-         const activeAllocation: any = (Array.isArray(allocations) ? allocations : []).find((allocation: any) =>
-            allocation?.ncfType === type &&
-            allocation?.terminalId === terminalId &&
-            (
-               allocation?.status === 'ACTIVE' ||
-               (
-                  allocation?.status === 'EXHAUSTED' &&
-                  Number(allocation?.nextNumber) <= Number(allocation?.reservedEnd)
-               )
-            )
-         );
-         const allocationRange: any = (Array.isArray(ranges) ? ranges : []).find((range: any) =>
-            (activeAllocation?.fiscalRangeId && range?.id === activeAllocation.fiscalRangeId)
-            || (!activeAllocation?.fiscalRangeId && range?.type === type && range?.isActive)
-         );
-         let fiscalRemaining = 0;
-         let fiscalTotal = 0;
-
-         const allocationNextNumber = activeAllocation
-            ? Math.max(
-               Number(activeAllocation.reservedStart || 0),
-               Number(activeAllocation.nextNumber || activeAllocation.reservedStart || 0)
-            )
-            : 0;
-         const localBufferCurrent = Number(localBuffer?.currentNumber || 0);
-         const localBufferIsAligned =
-            Boolean(localBuffer) &&
-            (
-               !activeAllocation ||
-               (
-                  localBufferCurrent >= allocationNextNumber &&
-                  Number(localBuffer?.endNumber || 0) <= Number(activeAllocation.reservedEnd || 0)
-               )
-            );
-
-         if (localBufferIsAligned && localBuffer && Number(localBuffer.currentNumber) <= Number(localBuffer.endNumber)) {
-            const current = Number(localBuffer.currentNumber);
-            const blockStart = Number(activeAllocation?.reservedStart || localBuffer.startNumber || current);
-            const blockEnd = Number(activeAllocation?.reservedEnd || localBuffer.endNumber || current);
-            const remaining = Math.max(0, blockEnd - current + 1);
-            const total = Math.max(0, blockEnd - blockStart + 1);
-            fiscalRemaining = remaining;
-            fiscalTotal = total;
-
-            setStatus({
-               isConnected: true,
-               currentNCF: `${localBuffer.prefix}${current.toString().padStart(8, '0')}`,
-               remaining,
-               expiryDate: localBuffer.expiryDate,
-               batteryLevel: 100
-            });
-         } else if (activeAllocation && Number(activeAllocation.nextNumber) <= Number(activeAllocation.reservedEnd)) {
-            const current = Number(activeAllocation.nextNumber);
-            const remaining = Math.max(0, Number(activeAllocation.reservedEnd) - current + 1);
-            const total = Math.max(0, Number(activeAllocation.reservedEnd) - Number(activeAllocation.reservedStart) + 1);
-            const prefix = String(allocationRange?.prefix || type);
-            fiscalRemaining = remaining;
-            fiscalTotal = total;
-
-            setStatus({
-               isConnected: true,
-               currentNCF: `${prefix}${current.toString().padStart(8, '0')}`,
-               remaining,
-               expiryDate: String(allocationRange?.expiryDate || ''),
-               batteryLevel: 100
-            });
+         try {
+            const canIssue = await db.canRequestMoreNCF(type, terminalId, activeTerminalConfig);
+            const allocations = await db.get('fiscalAllocations');
+            const authorityId = activeTerminalConfig?.erpTerminalId || terminalId;
+            const allocation: any = (Array.isArray(allocations) ? allocations : []).find((entry: any) =>
+               entry.terminalId === authorityId && entry.ncfType === type && entry.status === 'ACTIVE');
+            if (cancelled) return;
+            const remaining = canIssue && allocation ? allocation.reservedEnd - allocation.nextNumber + 1 : 0;
+            const total = canIssue && allocation ? allocation.reservedEnd - allocation.reservedStart + 1 : 0;
+            if (canIssue && allocation) {
+               const ranges = await db.get('fiscalRanges');
+               if (cancelled) return;
+               const range: any = (Array.isArray(ranges) ? ranges : []).find((entry: any) => entry.id === allocation.fiscalRangeId);
+               setStatus({ isConnected: true, currentNCF: `${range.prefix}${allocation.nextNumber.toString().padStart(8, '0')}`,
+                  remaining, expiryDate: range.expiryDate, batteryLevel: 100 });
+            } else setStatus(null);
+            setFiscalStatus({ type, hasNCF: canIssue, localBuffer: canIssue ? allocation : null,
+               isUsingPool: false, isTerminalBlock: Boolean(allocation), remaining, total });
+         } catch (error) {
+            if (cancelled) return;
+            console.error('No se pudo validar la asignación fiscal de la terminal', error);
+            setStatus(null);
+            setFiscalStatus({ type, hasNCF: false, localBuffer: null, isUsingPool: false, isTerminalBlock: false, remaining: 0, total: 0 });
          }
-
-         const hasLocal = Boolean(localBuffer && Number(localBuffer.currentNumber) <= Number(localBuffer.endNumber));
-         const allocationCanIssue = Boolean(activeAllocation && Number(activeAllocation.nextNumber) <= Number(activeAllocation.reservedEnd));
-         const rangeCanIssue = Boolean(
-            !activeAllocation &&
-            (Array.isArray(ranges) ? ranges : []).some((range: any) =>
-               range?.type === type &&
-               range?.isActive &&
-               Number(range?.currentGlobal || 0) < Number(range?.endNumber || 0)
-            )
-         );
-         const canRequest = allocationCanIssue || rangeCanIssue;
-         const hasNCF = hasLocal || canRequest;
-         const isTerminalBlock = Boolean(activeAllocation || localBuffer?.allocationId);
-         setFiscalStatus({ type, hasNCF, localBuffer: localBuffer || activeAllocation || null, isUsingPool: !hasLocal && canRequest, isTerminalBlock, remaining: fiscalRemaining, total: fiscalTotal });
       };
       checkFiscalStatus();
       return () => {
@@ -5419,6 +5350,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       };
 
       try {
+         await assertCheckoutFiscalAuthority();
          if (v3Operational) await v3Operational.validate(processedCart);
          const invalidQuantityItem = processedCart.find(item => !isValidCartQuantity(item.quantity));
          if (invalidQuantityItem) {
@@ -6341,12 +6273,30 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       markInteractionStage(trace, 'HANDLER_END');
    });
 
-   const beforeV3PaymentEffects = v3Operational ? async () => {
+   const assertCheckoutFiscalAuthority = async () => {
+      if (isOrderTakerMode) return;
+      if (isFiscalModeDisabled) {
+         if (isTerminalFiscalReceiptRequired(activeTerminalConfig)) throw new Error('La terminal exige comprobantes fiscales. Sincronice su configuración.');
+         return;
+      }
+      const types = new Set<FiscalDocumentCode>();
+      if (processedCart.some(item => item.quantity > 0)) types.add(requiredSaleFiscalType);
+      if (processedCart.some(item => item.quantity < 0)) types.add(resolveCreditNoteFiscalCode(fiscalCompliance.mode));
+      for (const type of types) {
+         if (!await db.canRequestMoreNCF(type, terminalId, activeTerminalConfig)) {
+            throw new Error(`No hay un lote fiscal ${type} vigente, descargado y asignado a esta terminal. La facturación está bloqueada.`);
+         }
+      }
+   };
+
+   const beforeV3PaymentEffects = async () => {
+      await assertCheckoutFiscalAuthority();
+      if (!v3Operational) return () => {};
       setLargeMasterSyncV3CriticalOperation('PAYMENT', true);
       try { await v3Operational.validate(cart); }
       catch (error) { setLargeMasterSyncV3CriticalOperation('PAYMENT', false); throw error; }
       return () => setLargeMasterSyncV3CriticalOperation('PAYMENT', false);
-   } : undefined;
+   };
 
    const startCheckoutInteraction = (inputTimeStamp?: number) => {
       const trace = beginDestinationInteraction('CHECKOUT_OPEN', inputTimeStamp, checkoutTraceRef.current);
@@ -6367,6 +6317,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             }
          }
          if (!await canProceedWithOperationalSession()) return;
+         try { await assertCheckoutFiscalAuthority(); } catch (error) { alert(error instanceof Error ? error.message : String(error)); return; }
          return proceedToCheckout(trace);
       });
    };
@@ -9270,7 +9221,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                setReturnToTableMapAfterPayment(false);
                onOpenTableMap();
             }
-         }} beforePaymentEffects={beforeV3PaymentEffects} onConfirm={handlePaymentConfirm} themeColor={config.themeColor} customer={effectiveSelectedCustomer} isDelinquent={isDelinquent} users={users} roles={roles} isMaster={isMaster} currentUser={currentUser} isRestaurantMode={isRestaurantMode} isInstallmentPayment={isIntermediateFractionPayment} />}
+         }} beforePaymentEffects={beforeV3PaymentEffects} validatePaymentAuthority={assertCheckoutFiscalAuthority} onConfirm={handlePaymentConfirm} themeColor={config.themeColor} customer={effectiveSelectedCustomer} isDelinquent={isDelinquent} users={users} roles={roles} isMaster={isMaster} currentUser={currentUser} isRestaurantMode={isRestaurantMode} isInstallmentPayment={isIntermediateFractionPayment} />}
          {showLoyaltyModal && <LoyaltyScanModal onClose={() => setShowLoyaltyModal(false)} onScan={handleLoyaltyScan} />}
          {showTableSellerModal && activeTable && <TableSellerModal
             tableName={activeTable.nombre || activeTable.name || 'Mesa'}

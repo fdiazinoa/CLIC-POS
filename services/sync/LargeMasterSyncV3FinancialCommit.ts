@@ -95,6 +95,10 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
         || stored.v3CommitFingerprint !== identities[index])) throw new LargeMasterSyncV3Error('SYNC_V3_DUPLICATE_TRANSACTION_MISMATCH');
       return existing.map(transaction => ({ transaction: transaction!, created: false }));
     }
+    for (const { transaction } of entries) {
+      await db.assertFiscalTransactionAuthority(transaction,
+        config.terminals?.find(terminal => terminal.id === transaction.terminalId || terminal.config?.erpTerminalId === transaction.terminalId)?.config);
+    }
     const projected = await session.projectConfig(config);
     const documents: DurableDocumentMutation[] = [];
     const events: DurableOutboxEventInput[] = [];
@@ -186,6 +190,10 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
     results.push({ transaction: document, created: true });
     }
     await session.assertCurrent();
+    for (const { transaction } of entries) {
+      await db.assertFiscalTransactionAuthority(transaction,
+        config.terminals?.find(terminal => terminal.id === transaction.terminalId || terminal.config?.erpTerminalId === transaction.terminalId)?.config);
+    }
     if (events.length) {
       await durableOutboxRepository.commitFinancialTransaction({ documents, outboxEvent: events[0],
         additionalOutboxEvents: events.slice(1), paymentIntentIds: intentIds });
