@@ -63,3 +63,14 @@ test('malformed fresh V3 restrictions fail closed before publication; valid name
  }
  assert.deepEqual(apply({ ...identity, resolved: { catalog: { allowed_categories: [{ name: 'Alimentos' }, { id: 'food-id' }] } } }), ['Alimentos', 'food-id']);
 });
+
+test('fresh group aliases reject malformed grants rather than invent group IDs or unrestricted access', () => {
+ for (const scope of ['catalog', 'config']) for (const key of scope === 'catalog' ? ['product_groups', 'productGroups', 'groups'] : ['productGroups']) {
+  const incoming = (value: unknown) => scope === 'catalog' ? { ...identity, resolved: { catalog: { [key]: value } } } : { ...identity, config: { [key]: value } };
+  for (const value of [null, 'bad', {}, [{}], [1], [{ name: '' }]]) assert.throws(() => apply(incoming(value), true), /SYNC_V3_TERMINAL_CATALOG_INVALID/);
+  assert.deepEqual(apply(incoming([]), true), []);
+  for (const value of [{ id: 'food-id' }, { code: 'FOOD' }, { name: 'Alimentos' }, { nombre: 'Alimentos' }]) {
+   assert.deepEqual(apply(incoming([value]), true), [Object.values(value)[0]]);
+  }
+ }
+});

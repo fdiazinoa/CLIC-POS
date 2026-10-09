@@ -2479,10 +2479,18 @@ export const applyTerminalConfigSnapshot = (
     .some(key => Object.prototype.hasOwnProperty.call(catalog, key)));
   const freshGroupKey = freshGroupCatalog && ['product_groups', 'productGroups', 'groups']
     .find(key => Object.prototype.hasOwnProperty.call(freshGroupCatalog, key));
-  const freshGroupCategories = asArray(freshGroupCatalog && freshGroupKey
-    ? freshGroupCatalog[freshGroupKey] : incomingFallbackConfig.productGroups)
-    .map((item, index) => normalizeProductGroupFromErpPayload(item, index))
-    .filter(Boolean).map(group => asString(group!.name || group!.code || group!.id)).filter(Boolean);
+  const rawFreshGroups = freshGroupCatalog && freshGroupKey
+    ? freshGroupCatalog[freshGroupKey] : incomingFallbackConfig.productGroups;
+  const freshGroupLabel = (item: unknown) => {
+    const data = asObject(item);
+    return data.name || data.nombre || data.code || data.id || data.groupId || data.group_id;
+  };
+  if (options.preserveOmittedOperationalScopes && freshGroupsPresent
+    && (!Array.isArray(rawFreshGroups) || rawFreshGroups.some(item => {
+      const label = freshGroupLabel(item);
+      return typeof label !== 'string' || !label.trim();
+    }))) throw new Error('SYNC_V3_TERMINAL_CATALOG_INVALID');
+  const freshGroupCategories = asArray(rawFreshGroups).map(item => asString(freshGroupLabel(item))).filter(Boolean);
   const effectiveAllowedCategories = options.preserveOmittedOperationalScopes
     ? explicitCatalog ? explicitCategories : freshGroupsPresent ? freshGroupCategories
       : preserveCatalog ? [...(existingTerminal?.catalog?.allowedCategories || [])] : []
