@@ -19,10 +19,10 @@ function fixture() {
   sql.exec('CREATE TABLE documents(collection_name TEXT,doc_id TEXT,data TEXT,sort_order INTEGER,updatedAt TEXT,PRIMARY KEY(collection_name,doc_id));');
   sql.exec(LARGE_MASTER_SYNC_V3_SCHEMA_SQL);
   const bridge = { query: async (query: string, values: any[] = []) => ({ values: sql.prepare(query).all(...values) }),
-    run: async (query: string, values: any[] = []) => sql.prepare(query).run(...values), execute: async (query: string) => { sql.exec(query); } };
+    run: async (query: string, values: any[] = []) => { const result=sql.prepare(query).run(...values);if(query.includes('UPDATE master_v3_operational_owner SET sync_id'))lastActivationWrite();return result; }, execute: async (query: string) => { sql.exec(query); } };
   let tail: Promise<unknown> = Promise.resolve();
   const lock = <T>(operation: () => Promise<T>): Promise<T> => { const next = tail.then(operation); tail = next.catch(() => {}); return next; };
-  let fail = false;
+  let fail = false; let lastActivationWrite:()=>void=()=>{};
   const store = new LargeMasterSyncV3SqliteStore(() => bridge, lock, point => { if (fail && point === 'activation_after_pointer') throw Error('disk fault'); });
   const adapter = new CapacitorSQLiteAdapter(); Object.assign(adapter, { db: bridge, isReady: true });
   const article = { id: 'P', name: 'Agua', type: 'PRODUCT', inventoriable: true, uom: 'UN', taxable: true, taxIds: ['TX'],
@@ -42,9 +42,9 @@ function fixture() {
   sql.exec("UPDATE sync_v3_sessions SET status='ACTIVE' WHERE sync_id='S'; UPDATE master_v3_state SET active_sync_id='S',active_version=47,staging_sync_id=NULL,staging_version=NULL WHERE singleton=1; INSERT INTO master_v3_operational_owner VALUES(1,'S',47,'binding'); INSERT INTO master_v3_inventory_state VALUES(1,'S',47,4,'C','now'); INSERT INTO master_v3_inventory_balances VALUES('P','W',100,0,0,'now');");
   const read = (collection: string) => sql.prepare('SELECT data FROM documents WHERE collection_name=? ORDER BY doc_id').all(collection).map(row => String(row.data));
   const insert = (collection: string, document: any) => sql.prepare('INSERT OR REPLACE INTO documents(collection_name,doc_id,data) VALUES(?,?,?)').run(collection, document.id, JSON.stringify(document));
-  const transition = async () => ({ binding: 'binding', expectedCatalog: (await store.getActiveRuntimeVersion())!, inventory: (await store.getInventoryAuthority())! });
+  const transition = async () => ({ assertIdentity:()=>{}, binding: 'binding', expectedCatalog: (await store.getActiveRuntimeVersion())!, inventory: (await store.getInventoryAuthority())! });
   const stock = async () => 100 + await store.getLocalInventoryDelta(baseline, 'P', 'W');
-  return { sql, store, adapter, stage, insert, read, transition, stock, fail: (value: boolean) => { fail = value; } };
+  return { sql, store, adapter, stage, insert, read, transition, stock, onLastActivationWrite:(callback:()=>void)=>{lastActivationWrite=callback;}, fail: (value: boolean) => { fail = value; } };
 }
 function financial(id: string, quantity: number, version = 47, sourceId = 'S'): DurableDocumentMutation[] {
   const scope = { v3Binding: 'binding', v3WarehouseId: 'W', v3InventoryBaseline: baseline };
@@ -259,5 +259,71 @@ test('historical refund requires actual original transaction CAS and preserves i
   await f.adapter.saveDocumentsAtomically(documents);assert.equal(await f.stock(),101);
   assert.equal(JSON.parse(f.read('transactions').find(value=>JSON.parse(value).id==='refund')!).items[0].price,70);
   assert.deepEqual(JSON.parse(f.read('transactions').find(value=>JSON.parse(value).id==='original')!),original);
+ }finally{f.sql.close();}
+});
+
+for(const field of ['token','terminal','company','warehouse','origin'])test(`live ${field} drift at last native activation await rolls back catalog and receipts`,async()=>{
+ const f=fixture();try{
+  f.stage('N',102);const transition=await f.transition();let identity='expected';
+  f.onLastActivationWrite(()=>{identity='changed-'+field;});
+  const beforeAnchor=JSON.stringify(await f.store.getInventoryAuthority());
+  await assert.rejects(f.store.activateCatalogOnly('N',{...transition,assertIdentity:()=>{
+   if(identity!=='expected')throw Error('SYNC_V3_BINDING_CHANGED');
+  }}),/BINDING_CHANGED/);
+  assert.equal((await f.store.getOperationalOwner())?.syncId,'S');
+  assert.equal((await f.store.getActiveRuntimeVersion())?.syncId,'S');
+  assert.equal(f.sql.prepare('SELECT COUNT(*) AS count FROM master_v3_catalog_owners').get()?.count,0);
+  assert.equal(JSON.stringify(await f.store.getInventoryAuthority()),beforeAnchor);
+ }finally{f.sql.close();}
+});
+
+test('all-current retained claim rejects closure racing native CAS with zero effects',async()=>{
+ const f=fixture();try{
+  f.stage('N',102);await f.store.activateCatalogOnly('N',await f.transition());
+  const line={...oldLine,v3SaleAuthority:{...stamp,syncId:'N',syncVersion:102,inventorySyncId:'S',inventorySyncVersion:47}};
+  const claim={id:'direct',items:[line],state:'PENDING',v3Binding:'binding',v3WarehouseId:'W',v3InventoryBaseline:baseline,restaurantOrderId:'direct'};
+  f.insert('v3RestoredTicketSources',claim);assert.equal(await f.adapter.isV3TicketClosed('direct'),false);
+  f.insert('transactions',{id:'pre-upgrade-closure',type:'SALE',restaurantOrderId:'direct'});
+  const before=f.read('v3RestoredTicketSources');const next={...claim,state:'PARKED'};
+  await assert.rejects(f.adapter.saveDocumentsAtomically([{collectionName:'v3RestoredTicketSources',document:next,
+   expectedDocument:JSON.stringify(claim),v3CurrentCatalog:{syncId:'N',syncVersion:102,binding:'binding'},
+   v3ExpectedRetainedDocument:{collection:'v3RestoredTicketSources',id:'direct',expected:JSON.stringify(claim)}}]),/RETAINED_TICKET_CHANGED/);
+  assert.deepEqual(f.read('v3RestoredTicketSources'),before);assert.deepEqual(f.read('inventoryLedger'),[]);assert.equal(await f.stock(),100);
+ }finally{f.sql.close();}
+});
+
+for(const drift of ['none','syncToken','tenantId','company','warehouse','origin'])test(`actual Session→Candidate→native live fence ${drift}`,async()=>{
+ const f=fixture();try{
+  f.stage('N',102);
+  const identity={tenantId:'tenant',terminalId:'terminal',deviceId:'device',syncToken:'token',erpSyncBaseUrl:'https://erp.test/api/sync'};
+  const origin='https://download.test';const binding=JSON.stringify([identity.tenantId,identity.terminalId,identity.deviceId,identity.erpSyncBaseUrl,origin]);
+  f.sql.prepare('UPDATE master_v3_operational_owner SET binding=?').run(binding);
+  const state:any={identity,origin,config:{terminals:[{id:'local',config:{currentDeviceId:'device',erpTerminalId:'terminal',erpBinding:{companyId:'company'},inventoryScope:{defaultSalesWarehouseId:'W'}}}]}};
+  const adapter=Object.create(f.adapter);adapter.masterSyncV3Store=f.store;adapter.connect=async()=>{};
+  Object.assign(globalThis,{__sessionFence:{state,adapter,db:{get:async()=>state.config}}});
+  f.onLastActivationWrite(()=>{
+   if(drift==='syncToken'||drift==='tenantId')state.identity={...state.identity,[drift]:'changed'};
+   if(drift==='company')state.config.terminals[0].config.erpBinding.companyId='foreign';
+   if(drift==='warehouse')state.config.terminals[0].config.inventoryScope.defaultSalesWarehouseId='foreign';
+   if(drift==='origin')state.origin='https://foreign.test';
+  });
+  const mocks:Record<string,string>={
+   '../../utils/db':'export const db=globalThis.__sessionFence.db;','../db':'export const dbAdapter=globalThis.__sessionFence.adapter;',
+   './LargeMasterSyncV3Authority':'export const LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED=true;',
+   './LargeMasterSyncV3CanaryFacade':'export const LARGE_MASTER_SYNC_V3_CANARY=false;export const validateLargeMasterSyncV3CanaryUrl=value=>value;',
+   './OperationalTerminalConfig':'export const readOperationalTerminalBinding=()=>"credentials";',
+   './LargeMasterSyncV3Platform':'export const assertLargeMasterSyncV3NativeAndroid=()=>{};',
+   './LargeMasterSyncV3DownloadOrigin':'export const largeMasterSyncV3DownloadOrigin=()=>globalThis.__sessionFence.state.origin;',
+   './LargeMasterSyncV3BoundTransport':`export const readLargeMasterSyncV3BoundIdentity=()=>({...globalThis.__sessionFence.state.identity});export const validatedLargeMasterSyncV3ErpSyncBase=value=>value;
+    export const createLargeMasterSyncV3BoundClient=store=>({requestSync:async()=>({syncId:'N'}),resumeSync:async id=>store.activate(id)});`,
+  };
+  const bundled=await build({entryPoints:[new URL('../services/sync/LargeMasterSyncV3OperationalSession.ts',import.meta.url).pathname],bundle:true,write:false,format:'esm',platform:'node',plugins:[{name:'fence-io',setup(b){
+   b.onResolve({filter:/.*/},a=>mocks[a.path]?{path:a.path,namespace:'fixture'}:undefined);b.onLoad({filter:/.*/,namespace:'fixture'},a=>({contents:mocks[a.path],loader:'js'}));}}]});
+  const helper=await import('data:text/javascript;base64,'+Buffer.from(bundled.outputFiles[0].text+'\n//'+drift).toString('base64'));
+  if(drift==='none'){const session=await helper.LargeMasterSyncV3OperationalSession.open(true);assert.equal(session.ready.runtime.version.syncId,'N');}
+  else{await assert.rejects(helper.LargeMasterSyncV3OperationalSession.open(true),/BINDING_CHANGED/);
+   assert.equal((await f.store.getOperationalOwner())?.syncId,'S');assert.equal((await f.store.getActiveRuntimeVersion())?.syncId,'S');
+   assert.equal(f.sql.prepare('SELECT COUNT(*) AS count FROM master_v3_catalog_owners').get()?.count,0);
+  }
  }finally{f.sql.close();}
 });

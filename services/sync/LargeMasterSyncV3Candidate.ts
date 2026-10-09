@@ -101,6 +101,7 @@ export const prepareLargeMasterSyncV3CatalogOnly = async (
   store: LargeMasterSyncV3Store, v3BaseUrl: string, binding: string,
   metric?: (metric: LargeMasterSyncV3Metric) => void,
   dependencies: CandidateDependencies = defaultDependencies,
+  assertIdentity?: () => void | Promise<void>,
 ): Promise<LargeMasterSyncV3CandidateReady> => {
   if (!dependencies.enabled) throw new LargeMasterSyncV3Error('SYNC_V3_CANDIDATE_DISABLED');
   dependencies.assertPlatform();
@@ -112,7 +113,9 @@ export const prepareLargeMasterSyncV3CatalogOnly = async (
     || owner.syncVersion !== expectedCatalog.syncVersion || !inventory || !store.prepareCatalogOnly || !store.activateCatalogOnly) {
     throw new LargeMasterSyncV3Error('SYNC_V3_STOCK_AUTHORITY_INVALID');
   }
-  const transition = { expectedCatalog, binding, inventory };
+  if (!assertIdentity) throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
+  await assertIdentity();
+  const transition = { expectedCatalog, binding, inventory, assertIdentity };
   const scopedStore = new Proxy(store, { get(target, key) {
     if (key === 'prepare') return (manifest: Parameters<LargeMasterSyncV3Store['prepare']>[0]) => target.prepareCatalogOnly!(manifest, transition);
     if (key === 'activate') return (syncId: string) => target.activateCatalogOnly!(syncId, transition);

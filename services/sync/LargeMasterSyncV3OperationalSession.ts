@@ -1,3 +1,4 @@
+import { db } from '../../utils/db';
 import { readV3RetainedCheckout, assertV3RetainedLine, type V3RetainedContext, type V3RetainedReference } from './LargeMasterSyncV3RetainedCheckout';
 import { v3StockSource, sameV3StockAuthority } from './LargeMasterSyncV3StockAuthority';
 import { assertLargeMasterSyncV3NativeAndroid } from './LargeMasterSyncV3Platform';
@@ -5,6 +6,7 @@ import type { BusinessConfig, CartItem, Product, ProductVariant, TaxDefinition, 
 import { dbAdapter } from '../db';
 import { LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED } from './LargeMasterSyncV3Authority';
 import { LARGE_MASTER_SYNC_V3_CANARY, validateLargeMasterSyncV3CanaryUrl } from './LargeMasterSyncV3Canary';
+import { readOperationalTerminalBinding } from './OperationalTerminalConfig';
 import { readLargeMasterSyncV3BoundIdentity, type LargeMasterSyncV3BoundIdentity } from './LargeMasterSyncV3BoundTransport';
 import { prepareLargeMasterSyncV3Candidate, prepareLargeMasterSyncV3CatalogOnly, type LargeMasterSyncV3CandidateReady } from './LargeMasterSyncV3Candidate';
 import { LargeMasterSyncV3Runtime } from './LargeMasterSyncV3Runtime';
@@ -47,7 +49,22 @@ export class LargeMasterSyncV3OperationalSession {
     const v3BaseUrl = largeMasterSyncV3DownloadOrigin();
     const identity = readLargeMasterSyncV3BoundIdentity();
     const binding = v3BindingKey(identity, v3BaseUrl);
+    const credentialGuard = readOperationalTerminalBinding();
     await dbAdapter.connect();
+    const configScope = (config: BusinessConfig) => {
+      const terminal=config?.terminals?.find(row => row.config?.currentDeviceId === identity.deviceId
+        && (row.config.erpTerminalId || row.id) === identity.terminalId);
+      return JSON.stringify([terminal?.config.erpBinding?.companyId,terminal?.config.inventoryScope,
+        terminal?.config.pricing,terminal?.config.fiscal]);
+    };
+    const expectedScope=configScope(await db.get('config') as unknown as BusinessConfig);
+    const assertIdentity = async () => {
+      const currentScope=configScope(await db.get('config') as unknown as BusinessConfig);
+      if(JSON.stringify(readLargeMasterSyncV3BoundIdentity()) !== JSON.stringify(identity)
+        || largeMasterSyncV3DownloadOrigin() !== v3BaseUrl || readOperationalTerminalBinding() !== credentialGuard
+        || currentScope !== expectedScope) throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
+    };
+    await assertIdentity();
     const store = dbAdapter.masterSyncV3Store;
     if (!store?.getOperationalOwner || !store.setOperationalOwner || !store.getLocalInventoryDelta) {
       throw new LargeMasterSyncV3Error('SYNC_V3_NATIVE_STORE_UNAVAILABLE');
@@ -69,11 +86,9 @@ export class LargeMasterSyncV3OperationalSession {
     if (!ready) {
       const anchor = await store.getInventoryAuthority?.();
       const catalogOnly = Boolean(refresh && runtime && owner?.binding === binding && anchor);
-      ready = catalogOnly ? await prepareLargeMasterSyncV3CatalogOnly(store, v3BaseUrl, binding, observe)
+      ready = catalogOnly ? await prepareLargeMasterSyncV3CatalogOnly(store, v3BaseUrl, binding, observe, undefined, assertIdentity)
         : await prepareLargeMasterSyncV3Candidate(store, v3BaseUrl, observe);
-      if (v3BindingKey(readLargeMasterSyncV3BoundIdentity(), v3BaseUrl) !== binding) {
-        throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
-      }
+      await assertIdentity();
       observe({ event: 'setup_phase', phase: 'owner' });
       if (!catalogOnly) await store.setOperationalOwner(ready.runtime.version, binding);
     } else {

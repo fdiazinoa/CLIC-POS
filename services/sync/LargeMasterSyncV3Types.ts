@@ -103,7 +103,7 @@ export interface LargeMasterSyncV3InventorySnapshot {
 }
 
 export interface LargeMasterSyncV3InventoryAuthority extends LargeMasterSyncV3RuntimeVersion { version: number; cursor: string }
-export interface LargeMasterSyncV3CatalogTransition { binding: string; expectedCatalog: LargeMasterSyncV3RuntimeVersion; inventory: LargeMasterSyncV3InventoryAuthority }
+export interface LargeMasterSyncV3CatalogTransition { binding: string; expectedCatalog: LargeMasterSyncV3RuntimeVersion; inventory: LargeMasterSyncV3InventoryAuthority; assertIdentity?: () => void | Promise<void> }
 
 export interface LargeMasterSyncV3Store {
   getInventoryAuthority?(): Promise<LargeMasterSyncV3InventoryAuthority | null>;

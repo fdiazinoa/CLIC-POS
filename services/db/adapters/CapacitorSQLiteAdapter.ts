@@ -754,8 +754,19 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             }
             if (mutation.v3ExpectedRetainedDocument) {
               const expected = mutation.v3ExpectedRetainedDocument;
+              if(expected.collection === 'transactions' && document.id !== expected.id
+                && (document.type !== 'REFUND' || document.originalTransactionId !== expected.id)) {
+                throw new Error('SYNC_V3_RETAINED_SOURCE_REQUIRED');
+              }
               const stored = await read('SELECT data FROM documents WHERE collection_name = ? AND doc_id = ?', [expected.collection, expected.id]);
               if (stored.values?.[0]?.data !== expected.expected) throw new Error('SYNC_V3_RETAINED_TICKET_CHANGED');
+              if (expected.collection !== 'transactions') {
+                const closed = await read(`SELECT doc_id FROM documents WHERE
+                  (collection_name='v3TicketSettlements' AND doc_id=?) OR
+                  (collection_name IN ('transactions','transactionHistory') AND json_extract(data,'$.restaurantOrderId')=?
+                    AND COALESCE(json_extract(data,'$.type'),'SALE') != 'REFUND') LIMIT 1`,[expected.id,expected.id]);
+                if(closed.values?.length) throw new Error('SYNC_V3_RETAINED_TICKET_CHANGED');
+              }
             }
             if (!document.v3InventoryBaseline) continue;
             const [binding, syncId, syncVersion, inventoryVersion, cursor] = JSON.parse(document.v3InventoryBaseline);
