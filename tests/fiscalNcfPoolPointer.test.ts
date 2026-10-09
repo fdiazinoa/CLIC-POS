@@ -363,7 +363,7 @@ for (const [label, patch] of Object.entries({
   });
 }
 for (const [label, patch] of Object.entries({ 'inactive': { isActive: false }, 'expired': { expiryDate: '2000-01-01' },
-  'missing expiry': { expiryDate: '' }, 'invalid date': { expiryDate: '2099-02-30' }, 'invalid lot bound': { startNumber: 100.5 },
+  'invalid nonblank expiry': { expiryDate: 'not-a-date' }, 'invalid date': { expiryDate: '2099-02-30' }, 'invalid lot bound': { startNumber: 100.5 },
   'foreign prefix': { prefix: 'B04' } })) {
   test(`strict authority blocks ${label} lot`, async () => {
     await withFiscalCollections({ fiscalRanges: [{ ...authorizedRange, ...patch }], fiscalAllocations: [authorizedAllocation] }, async ({ collection }) => {
@@ -418,4 +418,23 @@ test('persisted explicit assignment revocation blocks stale DB authority even be
     assert.equal(await db.requestFiscalBatch(terminalId, 'B02', 1), null);
     assert.equal(await db.validatePreparedFiscalAuthority('B02', terminalId, 'B0200000100'), false);
   });
+});
+
+test('deployed ERP may omit lot expiry without losing exact active terminal authority', async () => {
+  const { expiryDate: _omittedExpiry, ...downloadedLot } = authorizedRange;
+  await withFiscalCollections({ fiscalRanges: [downloadedLot], fiscalAllocations: [authorizedAllocation] }, async ({ collection }) => {
+    assert.equal(await db.canRequestMoreNCF('B02', terminalId), true);
+    assert.equal(await db.getNextNCF('B02', terminalId), 'B0200000100');
+    assert.equal(await db.getNextNCF('B02', terminalId), 'B0200000101');
+    assert.equal(await db.validatePreparedFiscalAuthority('B02', terminalId, 'B0200000101'), true);
+    assert.equal(Object.hasOwn(collection('fiscalRanges')[0], 'expiryDate'), false, 'never invent an expiry');
+  });
+});
+
+test('unspecified empty or null expiry preserves assigned-lot wire compatibility without a fabricated date', async () => {
+  for (const expiryDate of ['', null]) {
+    await withFiscalCollections({ fiscalRanges: [{ ...authorizedRange, expiryDate }], fiscalAllocations: [authorizedAllocation] }, async () => {
+      assert.equal(await db.getNextNCF('B02', terminalId), 'B0200000100');
+    });
+  }
 });

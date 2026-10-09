@@ -870,6 +870,9 @@ const normalizeFiscalRange = (raw: unknown, _index: number): FiscalRangeDGII | n
     endNumber < startNumber
   ) return null;
 
+  const expiryKeys = ['expiryDate', 'expiry_date', 'expirationDate', 'expiration_date', 'validUntil', 'valid_until',
+    'validTo', 'valid_to', 'expiresAt', 'expires_at', 'fecha_vencimiento'];
+  const expiryKey = expiryKeys.find(key => Object.prototype.hasOwnProperty.call(data, key));
   return {
     id,
     type,
@@ -881,12 +884,12 @@ const normalizeFiscalRange = (raw: unknown, _index: number): FiscalRangeDGII | n
       data.lastNumber, data.last_number, data.lastUsedNumber, data.last_used_number,
       data.usedUntil, data.used_until, data.consumedUntil, data.consumed_until
     )),
-    expiryDate: asString(
-      data.expiryDate || data.expiry_date || data.expirationDate || data.expiration_date ||
-      data.validUntil || data.valid_until || data.validTo || data.valid_to ||
-      data.expiresAt || data.expires_at || data.fecha_vencimiento
-    ) || '',
-    isActive: asBoolean(data.isActive ?? data.is_active, false),
+    ...(expiryKey ? { expiryDate: data[expiryKey] == null ? '' :
+      typeof data[expiryKey] === 'string' ? asString(data[expiryKey]) : 'INVALID_FISCAL_EXPIRY' } : {}),
+    // This deployed collection omits activity flags; an ACTIVE terminal allocation
+    // still remains mandatory. An explicit activity/status revocation wins.
+    isActive: (!Object.prototype.hasOwnProperty.call(data, 'status') || asString(data.status).toUpperCase() === 'ACTIVE') &&
+      asBoolean(data.isActive ?? data.is_active, data.isActive == null && data.is_active == null),
   };
 };
 

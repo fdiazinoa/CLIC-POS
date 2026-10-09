@@ -139,8 +139,15 @@ async function financialModule(f: ReturnType<typeof fixture>, durable = false) {
   const stamp = { binding: 'binding', warehouseId: 'W', syncId: 'S', syncVersion: 2, tariffId: 'T',
     taxIncluded: true, inventoryVersion: 4, inventoryCursor: 'C' };
   const globals = globalThis as any;
-  globals.__v3FinancialFixture = { adapter: f.adapter, durable,
-    db: { getDocument: (name: string, id: string) => f.adapter.getDocument(name, id), get: (name: string) => f.adapter.getCollection(name) },
+  globals.__v3FinancialFixture = { adapter: f.adapter, durable, fiscalAuthorityAllowed: true, fiscalAuthorityChecks: 0, denyAtFiscalCheck: Infinity,
+    db: { getDocument: (name: string, id: string) => f.adapter.getDocument(name, id), get: (name: string) => f.adapter.getCollection(name),
+      assertFiscalTransactionAuthority: async () => {
+        const boundary = globals.__v3FinancialFixture;
+        boundary.fiscalAuthorityChecks++;
+        if (!boundary.fiscalAuthorityAllowed || boundary.fiscalAuthorityChecks >= boundary.denyAtFiscalCheck) {
+          throw new Error('FISCAL_TERMINAL_AUTHORITY_REQUIRED');
+        }
+      } },
     session: { binding: 'binding', assertCurrent: async () => {}, projectConfig: async (config: any) => ({ ...config,
       terminals: [], taxes: [{ id: 'TX', name: 'ITBIS', rate: 0.18, type: 'VAT' }] }),
       validate: async (_config: any, items: any[], _tariff: string, _warehouse: string, _intent: string, validated: any) => {
@@ -271,4 +278,25 @@ test('native decimal stock keeps kilogram fractions and rejects actual demand ab
     await assert.rejects(insufficient.adapter.saveDocumentsAtomically(sale('quarter', 0.25)), /STOCK_INSUFFICIENT/);
     assert.equal(insufficient.rows('inventoryLedger').length, 0);
   } finally { insufficient.sql.close(); }
+});
+
+test('fiscal authority denial before preparation or final atomic commit publishes no financial effects', async () => {
+  for (const denyAtFiscalCheck of [1, 2]) {
+    const f = fixture();
+    try {
+      const module = await financialModule(f, true);
+      (globalThis as any).__v3FinancialFixture.denyAtFiscalCheck = denyAtFiscalCheck;
+      const transaction = { ...module.transaction(`fiscal-denied-${denyAtFiscalCheck}`), ncfType: 'B02', ncf: 'B0200000100',
+        walletPaymentAmount: 20, pendingBalance: 10, payments: [{ id: 'payment', method: 'CASH', amount: 118 }] };
+      await f.adapter.saveDocument('customers', { id: 'customer', currentDebt: 2 });
+      await f.adapter.saveDocument('wallets', { id: 'wallet-customer', customerId: 'customer', balance: 50,
+        status: 'ACTIVE', currency: 'DOP', lastActivity: transaction.date, transactions: [] });
+      await assert.rejects(module.persistV3FinancialTransaction(transaction, {} as BusinessConfig, 'W'), /FISCAL_TERMINAL_AUTHORITY_REQUIRED/);
+      for (const collection of ['transactions', 'transactionHistory', 'inventoryLedger', 'wallet_transactions']) assert.equal(f.rows(collection).length, 0);
+      assert.equal(f.rows('customers')[0].currentDebt, 2);
+      assert.equal(f.rows('wallets')[0].balance, 50);
+      assert.equal(f.sql.prepare('SELECT COUNT(*) AS n FROM sync_outbox_v2').get()?.n, 0);
+      assert.equal((globalThis as any).__v3FinancialFixture.fiscalAuthorityChecks, denyAtFiscalCheck);
+    } finally { f.sql.close(); }
+  }
 });

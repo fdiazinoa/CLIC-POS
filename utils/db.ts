@@ -632,14 +632,19 @@ const hasValidAllocatedFiscalRange = (
       normalizeSequenceKey(allocation.metadata.sourceTerminalId) !== normalizeSequenceKey(allocation.terminalId))) return false;
   const range = getFiscalRangeForEmission(ranges, type, allocation);
   if (!range || !range.isActive || !hasValidFiscalAllocationPointer(allocation)) return false;
-  const date = String(range.expiryDate || '');
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
-  if (!match) return false;
-  const expiry = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
-  if (expiry.getFullYear() !== Number(match[1]) || expiry.getMonth() !== Number(match[2]) - 1 ||
-      expiry.getDate() !== Number(match[3])) return false;
-  const today = new Date(); today.setHours(0, 0, 0, 0);
-  return expiry >= today && Number.isSafeInteger(range.startNumber) && Number.isSafeInteger(range.endNumber) &&
+  // The deployed ERP lot contract omits expiry. Never synthesize a date;
+  // an explicitly supplied nonblank invalid/expired date remains a denial.
+  const suppliedExpiry = String(range.expiryDate ?? '').trim();
+  if (suppliedExpiry) {
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(suppliedExpiry);
+    if (!match) return false;
+    const expiry = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+    if (expiry.getFullYear() !== Number(match[1]) || expiry.getMonth() !== Number(match[2]) - 1 ||
+        expiry.getDate() !== Number(match[3])) return false;
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    if (expiry < today) return false;
+  }
+  return Number.isSafeInteger(range.startNumber) && Number.isSafeInteger(range.endNumber) &&
     range.startNumber > 0 && range.endNumber >= range.startNumber &&
     allocation.reservedStart >= range.startNumber && allocation.reservedEnd <= range.endNumber &&
     normalizeSequenceKey(range.type) === normalizeSequenceKey(type) &&
@@ -1558,7 +1563,7 @@ export const db = {
       const isOutsideAllocation =
         !Number.isSafeInteger(bufferCurrentNumber) || !Number.isSafeInteger(bufferStartNumber) ||
         !Number.isSafeInteger(buffer.endNumber) || bufferCurrentNumber < bufferStartNumber ||
-        buffer.expiryDate !== getFiscalRangeForEmission(rangesForBuffer, type, activeAllocation)?.expiryDate ||
+        buffer.expiryDate !== (getFiscalRangeForEmission(rangesForBuffer, type, activeAllocation)?.expiryDate || '') ||
         bufferStartNumber < activeAllocation.reservedStart ||
         Number(buffer.endNumber || 0) > activeAllocation.reservedEnd;
       const isBehindErpPointer = bufferCurrentNumber < allocationNextNumber;
