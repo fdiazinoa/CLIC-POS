@@ -1,3 +1,4 @@
+import { weightLineLabel } from '../../utils/scaleWeight';
 import type { BusinessConfig, CartItem, Transaction, User } from '../../types';
 import { FISCAL_DOCUMENT_LABELS, getFiscalCodeFromNcf } from '../../utils/fiscal/fiscalHelpers';
 import { resolveLineDiscountPresentation } from '../../utils/lineDiscountPresentation';
@@ -136,7 +137,7 @@ export const buildReceiptEmailPayload = (
       itemDiscountAmount,
       itemDiscountRate: normalizeDiscountPercentage(item.discountRate, discount.discountPercentage),
       itemTaxAmount: Number(item.taxAmount || 0),
-      options: resolveReceiptItemOptions(item),
+      options: [...resolveReceiptItemOptions(item), ...(item.weightPresentation ? [weightLineLabel(item, config?.currencySymbol || "")] : [])],
       sellerName: sellerName || undefined,
     };
   });

@@ -1,3 +1,4 @@
+import { displayWeightQuantity, displayWeightPrice, canonicalWeightQuantity, canonicalWeightPrice, formatWeightNumber } from '../utils/scaleWeight';
 
 import React, { useState, useMemo } from 'react';
 import {
@@ -42,7 +43,7 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
   const EPSILON = 0.01;
   const [quantity, setQuantity] = useState(item.quantity);
   const [price, setPrice] = useState(item.price);
-  const [priceInputValue, setPriceInputValue] = useState(String(item.price ?? 0));
+  const [priceInputValue, setPriceInputValue] = useState(String(displayWeightPrice(item)));
   const [note, setNote] = useState(item.note || '');
   const [salespersonId, setSalespersonId] = useState(item.salespersonId || '');
 
@@ -74,16 +75,16 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
   }, [incomingSalesUsers, users, roles]);
 
   const handleQuantityChange = (delta: number) => {
-    if (!canStepCartQuantity(quantity, delta)) return;
-    const newQty = quantity + delta;
-    setQuantity(parseFloat(newQty.toFixed(3)));
+    if (!canStepCartQuantity(quantity, canonicalWeightQuantity(item, delta))) return;
+    const newQty = quantity + canonicalWeightQuantity(item, delta);
+    setQuantity(item.weightPresentation ? newQty : parseFloat(newQty.toFixed(3)));
   };
 
   const applyDiscount = (rawValue: string, type: 'PERCENT' | 'FIXED') => {
     const val = parseFloat(rawValue);
     if (isNaN(val) || val <= 0) {
       setPrice(adjustmentBasePrice);
-      setPriceInputValue(String(adjustmentBasePrice));
+      setPriceInputValue(String(displayWeightPrice(item, adjustmentBasePrice)));
       return;
     }
 
@@ -91,11 +92,11 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
     if (type === 'PERCENT') {
       newPrice = adjustmentBasePrice - (adjustmentBasePrice * (val / 100));
     } else {
-      newPrice = Math.max(0, adjustmentBasePrice - val);
+      newPrice = Math.max(0, adjustmentBasePrice - canonicalWeightPrice(item, val));
     }
     const normalizedPrice = parseFloat(newPrice.toFixed(2));
     setPrice(normalizedPrice);
-    setPriceInputValue(String(normalizedPrice));
+    setPriceInputValue(String(displayWeightPrice(item, normalizedPrice)));
   };
 
   const handleDiscountValueChange = (nextValue: string) => {
@@ -112,7 +113,7 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
     setPriceInputValue(rawValue);
     setReplacePriceOnNextKey(false);
     const val = parseFloat(rawValue);
-    setPrice(!isNaN(val) && val >= 0 ? val : 0);
+    setPrice(!isNaN(val) && val >= 0 ? (rawValue === String(displayWeightPrice(item)) ? item.price : canonicalWeightPrice(item, val)) : 0);
     setDiscountValue('');
   };
 
@@ -229,7 +230,7 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
           <div>
             <h3 className="font-black text-lg text-gray-900 leading-tight mb-0.5">{item.name}</h3>
             <p className="text-sm text-gray-400 font-bold">
-              {config.currencySymbol}{adjustmentBasePrice.toFixed(2)} / unidad
+              {config.currencySymbol}{item.weightPresentation ? formatWeightNumber(displayWeightPrice(item, adjustmentBasePrice)) : adjustmentBasePrice.toFixed(2)} / {item.weightPresentation?.displayUnit || 'unidad'}
             </p>
           </div>
           <button onClick={onClose} className="p-2.5 bg-gray-50 rounded-full hover:bg-gray-100 text-gray-400 transition-colors">
@@ -251,7 +252,7 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
             </button>
 
             <div className="text-center">
-              <span className="block text-4xl font-black text-gray-900 leading-none mb-1">{quantity}</span>
+              <span className="block text-4xl font-black text-gray-900 leading-none mb-1">{formatWeightNumber(displayWeightQuantity({ ...item, quantity }))} {item.weightPresentation?.displayUnit || ''}</span>
               <span className="text-[10px] uppercase font-black text-gray-300 tracking-[0.2em]">Cantidad</span>
             </div>
 
@@ -355,7 +356,7 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
                       : discountValue}
                     onChange={activeNumericField === 'PRICE' ? handlePriceValueChange : handleDiscountValueChange}
                     maxValue={activeNumericField === 'DISCOUNT'
-                      ? (discountType === 'PERCENT' ? 100 : adjustmentBasePrice)
+                      ? (discountType === 'PERCENT' ? 100 : displayWeightPrice(item, adjustmentBasePrice))
                       : undefined}
                   />
                 </div>

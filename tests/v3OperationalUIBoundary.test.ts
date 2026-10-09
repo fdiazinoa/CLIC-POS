@@ -246,7 +246,7 @@ test('candidate startup does not force a competing legacy master activation when
 
 test('POS boundary keeps pinned catalog across config updates and retains cart cache on inventory events', () => {
   const source = readFileSync(new URL('../components/LargeMasterSyncV3OperationalPOS.tsx', import.meta.url), 'utf8');
-  assert.match(source, /\}, \[props\.activeTerminalId, warehouseId, tariffId, authorityKey, authorityError\]\)/);
+  assert.match(source, /\}, \[props\.activeTerminalId, warehouseId, tariffId, authorityKey, authorityError, catalogRevision\]\)/);
   assert.match(source, /const effectiveConfig = useMemo/);
   assert.match(source, /sequence !== querySequence\.current \|\| context !== contextSequence\.current/);
   assert.match(source, /pinnedContext !== contextSequence\.current/);

@@ -17,3 +17,6 @@ export const canStepCartQuantity = (quantity: unknown, delta: number): boolean =
   const current = Number(quantity);
   return isValidCartQuantityTransition(current, current + delta);
 };
+
+/** Scale readings represent a positive sale weight before return sign is applied. */
+export const isValidScaleWeight = (weight: number): boolean => weight > 0 && isValidCartQuantity(weight);

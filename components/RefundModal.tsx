@@ -1,3 +1,4 @@
+import { displayWeightQuantity, displayWeightPrice, canonicalWeightQuantity, formatWeightNumber } from '../utils/scaleWeight';
 import React, { useState, useEffect } from 'react';
 import { X, RotateCcw, AlertTriangle, Check, Archive, Trash2, ListChecks } from 'lucide-react';
 import { Transaction, CartItem } from '../types';
@@ -81,7 +82,7 @@ export const RefundModal: React.FC<RefundModalProps> = ({
     const handleQtyChange = (cartId: string, max: number, delta: number) => {
         if (isGatewayRefundMode) return;
         const current = refundQuantities.get(cartId) || 0;
-        const next = Math.max(0, Math.min(max, current + delta));
+        const next = Math.max(0, Math.min(max, current + canonicalWeightQuantity(transaction.items.find(item => item.cartId === cartId)!, delta)));
 
         const newMap = new Map(refundQuantities);
         if (next === 0) {
@@ -183,12 +184,12 @@ export const RefundModal: React.FC<RefundModalProps> = ({
                                     <tr key={item.cartId} className={`group ${isSelected ? 'bg-red-50/30' : ''}`}>
                                         <td className="py-3 pl-2">
                                             <p className="text-sm font-bold text-gray-800">{item.name}</p>
-                                            <p className="text-xs text-gray-400">{currencySymbol}{item.price.toFixed(2)} c/u</p>
+                                            <p className="text-xs text-gray-400">{currencySymbol}{item.weightPresentation ? formatWeightNumber(displayWeightPrice(item)) : item.price.toFixed(2)}/{item.weightPresentation?.displayUnit || 'unidad'}</p>
                                         </td>
                                         <td className="py-3 text-center text-sm font-medium text-gray-500">
-                                            {item.quantity}
+                                            {displayWeightQuantity(item)} {item.weightPresentation?.displayUnit || ''}
                                             {maxRefundQty < item.quantity && (
-                                                <p className="text-[10px] font-bold text-amber-600">Disponible: {maxRefundQty}</p>
+                                                <p className="text-[10px] font-bold text-amber-600">Disponible: {formatWeightNumber(displayWeightQuantity({ ...item, quantity: maxRefundQty }))} {item.weightPresentation?.displayUnit || ''}</p>
                                             )}
                                         </td>
                                         <td className="py-3">
@@ -207,7 +208,7 @@ export const RefundModal: React.FC<RefundModalProps> = ({
                                                     -
                                                 </button>
                                                 <span className={`w-6 text-center font-bold ${returnQty > 0 ? 'text-red-600' : 'text-gray-300'}`}>
-                                                    {returnQty}
+                                                    {formatWeightNumber(displayWeightQuantity({ ...item, quantity: returnQty }))} {item.weightPresentation?.displayUnit || ''}
                                                 </span>
                                                 <button
                                                     onClick={() => handleQtyChange(item.cartId, maxRefundQty, 1)}

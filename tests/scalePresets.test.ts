@@ -73,11 +73,17 @@ test('storage or native rejection propagates to the UI action without false succ
 
 test('Hardware form keeps explicit local Apply separate from global save and removes setting listener', () => {
   const source = readFileSync(new URL('../components/HardwareSettings.tsx', import.meta.url), 'utf8');
-  const saveAll = source.slice(source.indexOf('const handleSaveAllHardware ='), source.indexOf('const handleSaveAllHardware =') + 2200);
-  assert.match(saveAll, /const newConfig = \{ \.\.\.globalConfig, scales, availablePrinters: printers, scaleLabelConfig \}/);
+  const saveAllStart = source.indexOf('const handleSaveAllHardware =');
+  const saveAll = source.slice(saveAllStart, source.indexOf('\n   const ', saveAllStart + 1));
+  assert.match(saveAll, /const newConfig = \{ \.\.\.globalConfig, availablePrinters: printers, scaleLabelConfig \}/);
   assert.doesNotMatch(saveAll, /setZebraEnabled|applyZebra|applyLocalZebraSetting/);
+  assert.match(saveAll, /if \(t.id === selectedTerminalId\)[\s\S]*hardware: \{[\s\S]*scales, defaultScaleId,/);
+  assert.match(saveAll, /persistScaleConfigurationDefault\(selectedTerminalId, defaultScaleId, async \(\) => \{ await onUpdateConfig\(newConfig\); \}\)/);
+  assert.doesNotMatch(saveAll, /globalConfig, scales/);
   const saveScale = source.slice(source.indexOf('const handleSaveScale ='), source.indexOf('const handleStartDiscovery ='));
-  assert.match(saveScale, /if \(editingZebra\) \{\s*if \(await applyZebra\(true\)\) setEditingScale\(null\);\s*return;/);
+  assert.match(saveScale, /if \(editingZebra\) \{[\s\S]*if \(!zebraLocalAllowed\)[\s\S]*if \(!editingLocalZebra && !\(await applyZebra\(true\)\)\)/);
+  assert.match(saveScale, /saveLocalScalePreference\(selectedTerminalId, previous\)/); // failed explicit activation restores preference
+  assert.match(source, /const selectedTerminalId = terminalId \|\| permissionService.getTerminalId\(\) \|\| ''/);
   assert.match(source, /permissionService.getTerminalId\(\)/);
   assert.match(source, /window.removeEventListener\(zebraSettingEvent, refresh\)/);
   assert.match(source, /\{!editingZebra && \(<>[\s\S]*Baud Rate[\s\S]*<\/>\)\}/);

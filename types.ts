@@ -789,6 +789,7 @@ export interface TerminalConfig {
     printerAssignments?: Record<string, string>; // Roles: TICKET, LABEL, KITCHEN, LOGISTICS
     customerDisplay?: CustomerDisplayConfig;
     scales?: ScaleDevice[];
+    defaultScaleId?: string;
     fingerprintReader?: FingerprintReaderConfig;
   };
   operational: {
@@ -1738,6 +1739,7 @@ export interface Table {
  * - Next sale will use new price
  */
 export interface CartItem extends Product {
+  weightPresentation?: WeightPresentation;
   quantity: number;
   cartId: string;
   isReturnLine?: boolean;
@@ -2626,7 +2628,16 @@ export interface CustomerDisplayConfig {
   ads: CustomerDisplayAd[];
 }
 
+export type ScaleWeightUnit = 'kg' | 'lb';
+export interface WeightPresentation {
+  readonly scaleId: string;
+  readonly displayUnit: ScaleWeightUnit;
+  readonly canonicalUnit: ScaleWeightUnit;
+  readonly conversionVersion: 1;
+}
+
 export interface ScaleDevice {
+  displayUnit?: ScaleWeightUnit;
   id: string;
   name: string;
   isEnabled: boolean;

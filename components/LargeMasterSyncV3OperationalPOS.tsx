@@ -1,3 +1,4 @@
+import { assertWeightedCodeInput } from '../utils/weightedProduct';
 import { subscribeLargeMasterSyncV3CatalogUpdates } from '../services/sync/LargeMasterSyncV3CatalogUpdates';
 import type { V3OperationalCategory } from '../services/sync/LargeMasterSyncV3Categories';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -128,6 +129,7 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps> = props => {
       const product = await session.withStock(match.item.product, warehouseId);
       if (context !== contextSequence.current || source !== catalog.current) throw new Error('SYNC_V3_UI_CONTEXT_CHANGED');
       assertContext();
+      assertWeightedCodeInput(product, raw);
       remember([product]);
       return { product, quantity, price: match.variant?.price ?? product.price,
         modifiers: [], selectedVariant: match.variant || undefined,

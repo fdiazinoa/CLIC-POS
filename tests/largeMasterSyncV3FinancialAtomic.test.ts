@@ -253,3 +253,22 @@ test('V3 fiscal source rejects missing totals/mixed tax-inclusion before commit;
     assert.equal(module.buildV3InventoryLedger(transaction, 'W', 'binding', true)[0].qtyIn, 1);
   } finally { f.sql.close(); }
 });
+
+test('native decimal stock keeps kilogram fractions and rejects actual demand above remaining stock', async () => {
+  const f = fixture(0.5);
+  try {
+    await f.adapter.saveDocumentsAtomically(sale('weighted-quarter', 0.25));
+    assert.equal(f.rows('inventoryLedger')[0].qtyOut, 0.25);
+    const reopened = new CapacitorSQLiteAdapter();
+    Object.assign(reopened, { db: (f.adapter as any).db, isReady: true });
+    await assert.rejects(reopened.saveDocumentsAtomically(sale('too-heavy', 0.3)), /STOCK_INSUFFICIENT/);
+    await reopened.saveDocumentsAtomically(sale('weighted-eighth', 0.125));
+    assert.deepEqual(f.rows('inventoryLedger').map(row => row.qtyOut).sort(), [0.125, 0.25]);
+    assert.equal(f.rows('transactions').length, 2);
+  } finally { f.sql.close(); }
+  const insufficient = fixture(0.2);
+  try {
+    await assert.rejects(insufficient.adapter.saveDocumentsAtomically(sale('quarter', 0.25)), /STOCK_INSUFFICIENT/);
+    assert.equal(insufficient.rows('inventoryLedger').length, 0);
+  } finally { insufficient.sql.close(); }
+});
