@@ -1804,24 +1804,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const trackInventory = product.operationalFlags?.trackInventory ?? config.features?.stockTracking ?? false;
       return Boolean(trackInventory && getScopedProductStock(product) <= 0);
    }, [config.features?.stockTracking, getScopedProductStock]);
-   const effectiveAllowedCategorySet = useMemo(() => {
-      const configuredCategories = new Set(
-         (activeTerminalConfig?.catalog?.allowedCategories || [])
-            .map((category) => canonicalizeCategory(category))
-            .filter(Boolean)
-      );
-      if (configuredCategories.size === 0 || v3Operational) return configuredCategories;
-
-      const localSellableCategories = new Set(
-         (catalogProducts || [])
-            .filter((product) => product && product.is_sellable !== false)
-            .map((product) => canonicalizeCategory(product.category))
-            .filter(Boolean)
-      );
-
-      const matchedCategories = Array.from(configuredCategories).filter((category) => localSellableCategories.has(category));
-      return matchedCategories.length > 0 ? configuredCategories : new Set<string>();
-   }, [activeTerminalConfig?.catalog?.allowedCategories, canonicalizeCategory, catalogProducts, v3Operational]);
+   // Terminal scope is configuration authority, even before matching catalog chunks arrive.
+   const effectiveAllowedCategorySet = useMemo(() => new Set(
+      (activeTerminalConfig?.catalog?.allowedCategories || [])
+         .map((category) => canonicalizeCategory(category))
+         .filter(Boolean)
+   ), [activeTerminalConfig?.catalog?.allowedCategories, canonicalizeCategory]);
 
    const isRetailMode = isRetailViewMode(
       activeTerminalConfig?.ux?.viewMode ||

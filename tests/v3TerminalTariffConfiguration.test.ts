@@ -166,7 +166,7 @@ test('actual component reconciles corrected pricing, retains manual tariff and f
     catalog: async (id: string) => {
       requests.push(id);
       if (!ids.includes(id)) throw new Error('SYNC_V3_TARIFF_UNAVAILABLE');
-      return { search: async () => [], get: async () => null };
+      return { search: async () => [], get: async () => null, categories: async () => [] };
     },
     assertCurrent: async () => {}, withStocks: async (rows: any) => rows,
   } };
@@ -235,10 +235,10 @@ test('actual component reconciles corrected pricing, retains manual tariff and f
     props.config.terminals[0].config.pricing = { defaultTariffId: mayorista, allowedTariffIds: ids };
     render(); await settle();
     assert.ok(pending.has(mayorista));
-    pending.get(duarte)!({ search: async () => [], get: async () => null });
+    pending.get(duarte)!({ search: async () => [], get: async () => null, categories: async () => [] });
     await settle();
     assert.equal(node.props.role, 'status', 'old catalog completion cannot activate or repaint');
-    pending.get(mayorista)!({ search: async () => [], get: async () => null });
+    pending.get(mayorista)!({ search: async () => [], get: async () => null, categories: async () => [] });
     await settle();
     assert.equal(node.props.v3Operational.tariffId, mayorista);
   } finally { globals.window = originalWindow; delete globals.__v3TariffHarness; }

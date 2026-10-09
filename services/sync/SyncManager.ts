@@ -13,7 +13,7 @@ import { readLargeMasterSyncV3BoundIdentity } from './LargeMasterSyncV3BoundTran
 import { LargeMasterSyncV3Error } from './LargeMasterSyncV3Types';
 import { getLargeMasterSyncV3OperationalSession } from './LargeMasterSyncV3OperationalSession';
 import { assertLargeMasterSyncV3ConfigPayload, largeMasterSyncV3DownloadOrigin } from './LargeMasterSyncV3DownloadOrigin';
-import { assertOperationalTerminalConfig, readOperationalTerminalBinding } from './OperationalTerminalConfig';
+import { assertOperationalTerminalConfig, readOperationalCatalogBindingProof, readOperationalTerminalBinding } from './OperationalTerminalConfig';
 import { freezeCount, freezePhase } from '../../diagnostics/freezeCounters';
 import { fetchAndReadWithTimeout } from '../network/fetchAndReadWithTimeout';
 import { db } from '../../utils/db';
@@ -3450,6 +3450,7 @@ class SyncManager {
             return null;
         }
 
+        const catalogBindingProof = options?.requireOperationalTerminalConfig ? readOperationalCatalogBindingProof() : undefined;
         const refreshAuthority = options?.requireOperationalTerminalConfig
             ? JSON.stringify([context, readOperationalTerminalBinding()]) : null;
         const assertRefreshAuthorityCurrent = async () => {
@@ -3838,6 +3839,9 @@ class SyncManager {
             incomingSnapshot: configSnapshot,
             cachedSnapshot,
             preserveOmittedOperationalScopes: v3Authority,
+            catalogBindingProof: catalogBindingProof && catalogBindingProof.terminalId === context.terminalId
+                && catalogBindingProof.tenantId === context.tenantId && catalogBindingProof.deviceId === context.posDeviceId
+                ? catalogBindingProof : undefined,
         });
 
         const localProducts = v3Authority ? [] : ((await db.get('products')) as Product[]) || [];
