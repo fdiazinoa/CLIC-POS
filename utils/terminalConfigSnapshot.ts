@@ -1914,7 +1914,9 @@ export const applyTerminalConfigSnapshot = (
     ...asObject(effectiveResolved.terminal),
   } as Record<string, any>;
   const incomingCompanyId = asString(resolvedIdentity.company_id || resolvedIdentity.companyId);
-  const configuredCompanyId = baseConfig.terminals?.find(terminal => terminal.id === terminalId)?.config?.erpBinding?.companyId;
+  const configuredFiscalTerminal = baseConfig.terminals?.find(terminal => terminal.id === terminalId)?.config;
+  const canonicalFiscalTerminalId = configuredFiscalTerminal?.erpTerminalId || terminalId;
+  const configuredCompanyId = configuredFiscalTerminal?.erpBinding?.companyId;
   if (incomingCompanyId && configuredCompanyId && incomingCompanyId !== configuredCompanyId) {
     throw new Error('FISCAL_TERMINAL_COMPANY_MISMATCH');
   }
@@ -2374,7 +2376,7 @@ export const applyTerminalConfigSnapshot = (
     'fiscalAllocationsByTenant',
     'fiscal_allocations_by_tenant'
   ])
-    .map((item, index) => normalizeFiscalAllocation(item, index, terminalId))
+    .map((item, index) => normalizeFiscalAllocation(item, index, canonicalFiscalTerminalId))
     .filter((allocation) => {
       if (!allocation) return false;
       const sourceCompany = allocation.metadata?.companyId || allocation.metadata?.company_id || allocation.metadata?.sourceCompanyId;

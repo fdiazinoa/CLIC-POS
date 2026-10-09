@@ -131,3 +131,38 @@ test('fresh assignment revocation beats an older differently named cached alias'
   });
   assert.deepEqual(result.config.terminals[0].config.fiscal.fiscalAllocations, []);
 });
+
+test('verified local alias retains canonical ERP allocation through snapshot, rehydrate, issuance and revocation', async () => {
+  const local = 'local-terminal';
+  const base = config(); base.terminals[0].id = local;
+  const incoming = { terminal_id: terminalId, company_id: 'company-a', fiscalMode: 'LEGACY_B',
+    resolved: { documents: { fiscal_allocations: [allocation], fiscal_ranges: [lot] } } } as any;
+  const result = applyTerminalConfigSnapshot(base, { terminalId: local, incomingSnapshot: incoming });
+  const fiscal = result.config.terminals[0].config.fiscal;
+  assert.equal(fiscal.fiscalAllocations.length, 1);
+  assert.equal(fiscal.fiscalAllocations[0].terminalId, terminalId);
+  assert.equal(fiscal.fiscalAllocations[0].metadata.sourceTerminalId, terminalId);
+  const get = dbAdapter.getCollection; const save = dbAdapter.saveCollection;
+  const collections = new Map<string, any[]>([['config', [result.config]], ['fiscalRanges', []], ['fiscalAllocations', []], ['localFiscalBuffer', []]]);
+  try {
+    (dbAdapter as any).getCollection = async (key: string) => structuredClone(collections.get(key) || []);
+    (dbAdapter as any).saveCollection = async (key: string, data: any[]) => { collections.set(key, structuredClone(data)); };
+    await db.rehydrateOperationalDocumentState([], fiscal.fiscalRanges, fiscal.fiscalAllocations, local);
+    assert.equal(collections.get('fiscalAllocations')?.[0].terminalId, terminalId);
+    assert.equal(await db.getNextNCF('B02', local), 'B0200000100');
+    assert.equal(await db.getNextNCF('B02', local), 'B0200000101');
+    assert.equal(await db.validatePreparedFiscalAuthority('B02', local, 'B0200000101'), true);
+    await db.rehydrateOperationalDocumentState([], [], [], local);
+    assert.equal(await db.getNextNCF('B02', local), null);
+    assert.deepEqual(collections.get('fiscalAllocations'), []);
+    assert.deepEqual(collections.get('localFiscalBuffer'), []);
+  } finally { dbAdapter.getCollection = get; dbAdapter.saveCollection = save; }
+});
+test('a local alias never grants an allocation belonging to a different canonical ERP terminal', () => {
+  const base = config(); base.terminals[0].id = 'local-terminal';
+  const result = applyTerminalConfigSnapshot(base, { terminalId: 'local-terminal', incomingSnapshot: {
+    terminal_id: terminalId, company_id: 'company-a', fiscalMode: 'LEGACY_B',
+    resolved: { documents: { fiscal_allocations: [{ ...allocation, terminalId: 'foreign-erp-terminal' }], fiscal_ranges: [lot] } },
+  } as any });
+  assert.deepEqual(result.config.terminals[0].config.fiscal.fiscalAllocations, []);
+});

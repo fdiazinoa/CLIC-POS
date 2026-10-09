@@ -1644,6 +1644,9 @@ export const db = {
 
     if (terminalId) {
       const existingAllocations = await dbAdapter.getCollection<FiscalAllocation>('fiscalAllocations') || [];
+      // Resolve only a persisted local-to-ERP mapping; never infer it from incoming rows.
+      const policy = await resolveFiscalTerminalPolicy(terminalId, existingAllocations);
+      terminalId = policy.authorityId || terminalId;
       const allocationMerge = mergeFiscalAllocationsState(existingAllocations, fiscalAllocations, terminalId);
       await dbAdapter.saveCollection('fiscalAllocations', allocationMerge.mergedAllocations);
       allocationMerge.bufferTypesToReset.forEach((type) => bufferTypesToReset.add(type));
