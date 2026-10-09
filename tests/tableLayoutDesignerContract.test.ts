@@ -14,8 +14,8 @@ test('las adiciones rápidas del diseñador parten siempre del plano más recien
 });
 
 test('ediciones y eliminaciones tampoco sobrescriben actualizaciones concurrentes', () => {
-  assert.match(designerSource, /onUpdateTables\(currentTables => \([\s\S]*?currentTables\.map/);
-  assert.match(designerSource, /onUpdateTables\(currentTables => currentTables\.filter/);
+  assert.match(designerSource, /onUpdateTables\(currentTables => \{[\s\S]*?applyDesignerGeometry\(currentTables/);
+  assert.match(designerSource, /onUpdateTables\(currentTables => uniqueDesignerTable\(currentTables, id, currentRoomId\) \? currentTables\.filter/);
 });
 
 test('el estilo normal o con cuatro sillas se persiste dentro del salón', () => {

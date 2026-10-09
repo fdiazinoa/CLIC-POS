@@ -4,6 +4,7 @@ import {
 } from 'lucide-react';
 import { Table, Room, TableShape, ParkedTicket } from '../types';
 import { findAvailableTablePosition, getRenderableFloorTables } from '../utils/tableLayout';
+import { uniqueDesignerTable, designerGeometry, applyDesignerGeometry } from '../utils/tableDesignerGeometry';
 
 interface TableLayoutDesignerProps {
     rooms: Room[];
@@ -98,6 +99,8 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
     const canvasRef = useRef<HTMLDivElement>(null);
     const dragStateRef = useRef<{
         tableId: string;
+        roomId: string;
+        captureTarget: HTMLDivElement;
         pointerId: number;
         offsetX: number;
         offsetY: number;
@@ -154,6 +157,20 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
         () => renderableTables.filter(t => t.roomId === currentRoomId),
         [renderableTables, currentRoomId]
     );
+
+    const designerContext = useRef({ tables, currentRoomId, rooms, renderableTables });
+    designerContext.current = { tables, currentRoomId, rooms, renderableTables };
+    const cancelDrag = () => {
+        const drag = dragStateRef.current;
+        dragStateRef.current = null;
+        if (drag?.captureTarget.hasPointerCapture?.(drag.pointerId)) drag.captureTarget.releasePointerCapture(drag.pointerId);
+    };
+    useEffect(() => {
+        const drag = dragStateRef.current;
+        if (drag && (drag.roomId !== currentRoomId || !currentRoom || !uniqueDesignerTable(tables, drag.tableId, drag.roomId)
+            || !currentRoomTables.some(table => table.id === drag.tableId))) cancelDrag();
+    }, [currentRoomId, tables, rooms, currentRoomTables]);
+    useEffect(() => () => cancelDrag(), []);
 
     useEffect(() => {
         const host = canvasHostRef.current;
@@ -233,36 +250,42 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
         setSelectedTableId(newTableId);
     };
 
-    // Pointer Dragging Logic (desktop + touch)
+    // Rendered geometry determines the pointer offset; original rows determine ownership.
     const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>, tableId: string) => {
         e.stopPropagation();
-        const table = tables.find(t => t.id === tableId && t.roomId === currentRoomId);
-        if (!table || !canvasRef.current) return;
-
-        const canvasRect = canvasRef.current.getBoundingClientRect();
-
+        cancelDrag();
+        const context = designerContext.current;
+        const raw = uniqueDesignerTable(context.tables, tableId, context.currentRoomId);
+        const geometry = designerGeometry(context.renderableTables.find(table => table.id === tableId && table.roomId === context.currentRoomId));
+        if (!raw || !geometry || !context.rooms.some(room => room.id === context.currentRoomId) || !canvasRef.current) return;
+        const rect = canvasRef.current.getBoundingClientRect();
+        if (![e.clientX, e.clientY, e.pointerId, rect.left, rect.top].every(Number.isFinite)) return;
+        const offsetX = e.clientX - rect.left - geometry.posX;
+        const offsetY = e.clientY - rect.top - geometry.posY;
+        if (![offsetX, offsetY].every(Number.isFinite)) return;
         setSelectedTableId(tableId);
         dragStateRef.current = {
-            tableId,
-            pointerId: e.pointerId,
-            offsetX: e.clientX - canvasRect.left - table.posX,
-            offsetY: e.clientY - canvasRect.top - table.posY
+            tableId, roomId: context.currentRoomId, pointerId: e.pointerId, captureTarget: e.currentTarget,
+            offsetX, offsetY,
         };
-
-        if (e.currentTarget.setPointerCapture) {
-            e.currentTarget.setPointerCapture(e.pointerId);
-        }
+        e.currentTarget.setPointerCapture?.(e.pointerId);
     };
 
-    // Update Table Prop
+    // Functional updates preserve orders/locks changed while a pointer event is queued.
     const updateTable = (id: string, updates: Partial<Table>) => {
-        onUpdateTables(currentTables => (
-            currentTables.map(t => t.id === id ? { ...t, ...updates } : t)
-        ));
+        const roomId = designerContext.current.currentRoomId;
+        onUpdateTables(currentTables => {
+            const context = designerContext.current;
+            if (context.currentRoomId !== roomId || !context.rooms.some(room => room.id === roomId)
+                || !uniqueDesignerTable(currentTables, id, roomId)) return currentTables;
+            const visible = currentTables === context.tables ? context.renderableTables : getRenderableFloorTables(currentTables);
+            const geometry = designerGeometry(visible.find(table => table.id === id && table.roomId === roomId));
+            return geometry ? applyDesignerGeometry(currentTables, id, roomId, geometry, updates) : currentTables;
+        });
     };
 
     const deleteTable = async (id: string) => {
-        const table = tables.find(candidate => String(candidate.id) === String(id));
+        const table = uniqueDesignerTable(tables, id, currentRoomId);
         if (!table) return;
         const hasAssociatedOrders = Boolean(
             table.currentOrderId
@@ -277,44 +300,39 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
             return;
         }
         if (!await clicConfirm(`¿Eliminar ${getTableLabel(table)} del layout?`)) return;
-        onUpdateTables(currentTables => currentTables.filter(t => t.id !== id));
+        onUpdateTables(currentTables => uniqueDesignerTable(currentTables, id, currentRoomId) ? currentTables.filter(t => t.id !== id) : currentTables);
         setSelectedTableId(null);
     };
 
     const handleCanvasPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-        const dragState = dragStateRef.current;
-        if (!dragState || dragState.pointerId !== e.pointerId || !canvasRef.current) return;
-
+        const drag = dragStateRef.current;
+        const context = designerContext.current;
+        if (!drag || drag.pointerId !== e.pointerId || !canvasRef.current) return;
+        if (drag.roomId !== context.currentRoomId || !context.rooms.some(room => room.id === drag.roomId)
+            || !uniqueDesignerTable(context.tables, drag.tableId, drag.roomId)) { cancelDrag(); return; }
+        const rect = canvasRef.current.getBoundingClientRect();
+        if (![e.clientX, e.clientY, rect.left, rect.top, canvasSize.width, canvasSize.height].every(Number.isFinite)
+            || canvasSize.width <= 0 || canvasSize.height <= 0) { cancelDrag(); return; }
         e.preventDefault();
-        const canvasRect = canvasRef.current.getBoundingClientRect();
-        const draggedTable = tables.find(t => t.id === dragState.tableId);
-        if (!draggedTable) return;
-
-        let newX = snapToGrid(e.clientX - canvasRect.left - dragState.offsetX);
-        let newY = snapToGrid(e.clientY - canvasRect.top - dragState.offsetY);
-
-        const maxX = Math.max(0, canvasSize.width - draggedTable.width);
-        const maxY = Math.max(0, canvasSize.height - draggedTable.height);
-
-        if (newX < 0) newX = 0;
-        if (newY < 0) newY = 0;
-        if (newX > maxX) newX = maxX;
-        if (newY > maxY) newY = maxY;
-
-        updateTable(dragState.tableId, { posX: newX, posY: newY });
+        onUpdateTables(currentTables => {
+            const latest = designerContext.current;
+            if (dragStateRef.current !== drag || latest.currentRoomId !== drag.roomId
+                || !latest.rooms.some(room => room.id === drag.roomId) || !uniqueDesignerTable(currentTables, drag.tableId, drag.roomId)) return currentTables;
+            const visible = currentTables === latest.tables ? latest.renderableTables : getRenderableFloorTables(currentTables);
+            const geometry = designerGeometry(visible.find(table => table.id === drag.tableId && table.roomId === drag.roomId));
+            if (!geometry) return currentTables;
+            const posX = Math.max(0, Math.min(Math.max(0, canvasSize.width - geometry.width), snapToGrid(e.clientX - rect.left - drag.offsetX)));
+            const posY = Math.max(0, Math.min(Math.max(0, canvasSize.height - geometry.height), snapToGrid(e.clientY - rect.top - drag.offsetY)));
+            return applyDesignerGeometry(currentTables, drag.tableId, drag.roomId, geometry, { posX, posY });
+        });
     };
 
     const handleCanvasPointerEnd = (e: React.PointerEvent<HTMLDivElement>) => {
-        const dragState = dragStateRef.current;
-        if (!dragState || dragState.pointerId !== e.pointerId) return;
-
-        dragStateRef.current = null;
-        if (e.currentTarget.hasPointerCapture?.(e.pointerId)) {
-            e.currentTarget.releasePointerCapture(e.pointerId);
-        }
+        if (dragStateRef.current?.pointerId === e.pointerId) cancelDrag();
     };
 
-    const selectedTable = tables.find(t => t.id === selectedTableId);
+    const selectedRaw = selectedTableId ? uniqueDesignerTable(tables, selectedTableId, currentRoomId) : undefined;
+    const selectedTable = selectedRaw ? currentRoomTables.find(table => table.id === selectedTableId) : undefined;
 
     return (
         <div className="flex flex-col h-full min-h-[calc(100vh-1px)] bg-slate-950 overflow-hidden">
