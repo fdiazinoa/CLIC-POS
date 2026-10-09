@@ -325,6 +325,8 @@ test('unscoped success cannot suppress V3 catalog application and binding change
   const switched = await f.run(['catalog'], {catalog:{}, fiscal:{}}, {tenant_id:'another-tenant'});
   assert.equal(switched.result.applied, 0);
   assert.deepEqual(switched.acks, []);
+  assert.equal(switched.state.versionHash, null);
+  assert.deepEqual(switched.state.domainVersions, {});
 });
 
 test('304 never acknowledges an unpersisted V3 catalog', async () => {

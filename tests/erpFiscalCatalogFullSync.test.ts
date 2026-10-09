@@ -81,10 +81,5 @@ test('impuestos se descargan antes que productos y ambos se publican atómicamen
   assert.match(source, /\[SYNC_FISCAL_PRODUCT_APPLIED\]/);
 });
 
-test('CONFIG_PUSH_V2 acopla fiscal y catálogo y confirma después del commit local', () => {
-  const source = fs.readFileSync(path.join(root, 'utils/erpSyncLifecycle.ts'), 'utf8');
-  assert.match(source, /Array\.from\(new Set\(\[\.\.\.staleScopesBase, 'fiscal', 'catalog'\]\)\)/);
-  const atomicApply = source.indexOf('applyConfigPushV2DomainsAtomically(staleScopes, domains)');
-  const acknowledge = source.indexOf("ackErpOutboxEvent(eventId, 'APPLIED')", atomicApply);
-  assert.ok(atomicApply > 0 && acknowledge > atomicApply);
-});
+// CONFIG_PUSH_V2 commit/ACK ordering is exercised through the real public consumer
+// in configPushV2Contract.test.ts, including deferred and rejected commits.
