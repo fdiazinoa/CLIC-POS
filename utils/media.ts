@@ -3,7 +3,8 @@ import { MediaAsset, MediaType } from '../types';
 const VIDEO_EXTENSION_RE = /\.(mp4|webm|ogg|mov|m4v)(?:$|[?#])/i;
 
 export const inferMediaType = (url: string, explicitType?: string): MediaType => {
-  if (String(explicitType || '').toUpperCase() === 'VIDEO') return 'VIDEO';
+  const type = String(explicitType || '').toUpperCase();
+  if (type === 'VIDEO' || type === 'IMAGE') return type;
   return VIDEO_EXTENSION_RE.test(String(url || '').trim()) ? 'VIDEO' : 'IMAGE';
 };
 
@@ -30,4 +31,12 @@ export const normalizeMediaAsset = (raw: Partial<MediaAsset>, index = 0): MediaA
     sortOrder: Number.isFinite(Number(raw.sortOrder)) ? Number(raw.sortOrder) : index,
     active: raw.active !== false,
   };
+};
+
+/** Explicit URL editor path; no upload/provider API implied. */
+export const createRemoteAd = (url: string, type: MediaType, posterUrl?: string, id = `ad_${Date.now()}`): MediaAsset & { active: boolean } => {
+  const trimmed = url.trim();
+  const poster = posterUrl?.trim() || undefined;
+  if (!isValidRemoteMediaUrl(trimmed) || (poster && !isValidRemoteMediaUrl(poster))) throw new Error('Introduce una URL HTTP/HTTPS válida.');
+  return { id, type: inferMediaType(trimmed, type), url: trimmed, posterUrl: type === 'VIDEO' ? poster : undefined, active: true };
 };

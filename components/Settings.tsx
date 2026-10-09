@@ -821,6 +821,7 @@ const Settings: React.FC<SettingsProps> = (props) => {
           if (selectedCategory === 'SOURCING') {
             return (
               <SourcingIntelligence
+                terminalId={props.terminalId}
                 purchaseOrders={props.purchaseOrders || []}
                 receptions={props.receptions || []}
                 suppliers={props.suppliers || []}

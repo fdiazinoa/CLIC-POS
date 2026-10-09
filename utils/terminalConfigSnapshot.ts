@@ -2837,7 +2837,7 @@ export const applyTerminalConfigSnapshot = (
     fallbackTerminal, fallbackTerminalConfig, effectiveFallbackConfig);
   for (const key of ['expandTicket', 'bloqueo_meseros', 'showGlobalSales',
     'recibir_consignaciones', 'receiveConsignments', 'receive_consignments', 'descargar_consignaciones',
-    'reservationPolicy', 'deliveryAlerts', 'orderNumbers']) {
+    'reservationPolicy', 'deliveryAlerts', 'orderNumbers', 'quantityPresentation']) {
     if (preferences.operational[key] !== undefined) (nextTerminalConfig.operational as any)[key] = preferences.operational[key];
     else delete (nextTerminalConfig.operational as any)[key];
   }

@@ -14277,6 +14277,7 @@ const AppContent: React.FC = () => {
       case 'SUPPLY_CHAIN':
         return (
           <SupplyChainManager
+            terminalId={getCurrentTerminal()?.id}
             products={products}
             suppliers={suppliers}
             purchaseOrders={purchaseOrders}

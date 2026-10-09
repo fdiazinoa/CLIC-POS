@@ -30,12 +30,12 @@ test('real editor no-op preserves canonical price/quantity and permitted display
     for (const child of Array.isArray(node) ? node : node.props?.children || []) { const match = find(child, predicate); if (match) return match; }
   };
   try {
-    for (const canonicalUnit of ['kg', 'lb'] as const) for (const displayUnit of ['kg', 'lb'] as const) {
+    for (const canonicalUnit of ['kg', 'lb'] as const) for (const displayUnit of ['kg', 'lb'] as const) for (const quantityDecimals of [0, 3, 6]) {
       values = [];
       const item = { id: 'P', cartId: 'L', name: 'BAL', price: 1.23456789, originalPrice: 1.23456789, quantity: 0.125,
         weightPresentation: createWeightPresentation('scale', displayUnit, canonicalUnit) };
       let saved: any;
-      const props = { item, config: { currencySymbol: '$' }, users: [], roles: [], onClose() {}, onUpdate(value: any) { saved = value; },
+      const props = { item, quantityDecimals, config: { currencySymbol: '$' }, users: [], roles: [], onClose() {}, onUpdate(value: any) { saved = value; },
         canApplyDiscount: true, canOverridePrice: true, canEditQuantity: true, canVoidItem: true };
       const render = () => { cursor = 0; return component(props); };
       let tree = render();

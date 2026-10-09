@@ -1,3 +1,4 @@
+import { formatQuantity } from './quantityPresentation';
 import type { CartItem, ScaleWeightUnit, WeightPresentation } from '../types';
 import { isValidScaleWeight } from './cartQuantity';
 
@@ -50,6 +51,6 @@ export const validCanonicalScaleWeight = (value: number, from: ScaleWeightUnit, 
   isValidScaleWeight(value) && isValidScaleWeight(convertWeight(value, from, canonical));
 export const formatWeightNumber = (value: number): string => Number(value.toPrecision(12)).toString();
 export const weightLineLabel = (item: Pick<CartItem, 'quantity' | 'price' | 'weightPresentation'>,
-  currency: string, price = item.price): string => item.weightPresentation
-  ? `${formatWeightNumber(displayWeightQuantity(item))} ${item.weightPresentation.displayUnit} x ${currency}${formatWeightNumber(displayWeightPrice(item, price))}/${item.weightPresentation.displayUnit}`
-  : `${item.quantity} x ${currency}${price.toFixed(2)}`;
+  currency: string, price = item.price, quantityPrecision: number = 3): string => item.weightPresentation
+  ? `${formatQuantity(displayWeightQuantity(item), quantityPrecision)} ${item.weightPresentation.displayUnit} x ${currency}${formatWeightNumber(displayWeightPrice(item, price))}/${item.weightPresentation.displayUnit}`
+  : `${formatQuantity(item.quantity, quantityPrecision)} x ${currency}${price.toFixed(2)}`;

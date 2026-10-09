@@ -1,4 +1,5 @@
-import { weightLineLabel, displayWeightQuantity, formatWeightNumber } from '../../utils/scaleWeight';
+import { formatQuantity, terminalQuantityPresentation } from '../../utils/quantityPresentation';
+import { weightLineLabel, displayWeightQuantity } from '../../utils/scaleWeight';
 import { BusinessConfig, CartItem, CashMovement, Reservation, Table, Transaction, ZReport } from '../../types';
 import { findTaxByIdentifier } from '../../utils/taxIdentity';
 import { buildPaymentReceiptPresentation, buildPaymentSettlementSummary } from '../../utils/paymentSettlement';
@@ -520,7 +521,7 @@ export const buildEscPosTicketPayload = (
     const discount = resolveLineDiscountPresentation(item);
     const displayedUnitPrice = discount.hasDiscount ? discount.originalUnitPrice : discount.finalUnitPrice;
     const displayedLineTotal = discount.hasDiscount ? discount.originalLineTotal : discount.finalLineTotal;
-    const qtyText = item.weightPresentation ? weightLineLabel(item, config.currencySymbol || '$', displayedUnitPrice) : `${Number(item.quantity || 0).toFixed(item.quantity % 1 === 0 ? 0 : 3)} x ${formatMoney(config.currencySymbol || '$', displayedUnitPrice)}`;
+    const qtyText = item.weightPresentation ? weightLineLabel(item, config.currencySymbol || '$', displayedUnitPrice, terminalQuantityPresentation(config, transaction.terminalId).salesDecimals) : `${formatQuantity(item.quantity, terminalQuantityPresentation(config, transaction.terminalId).salesDecimals)} x ${formatMoney(config.currencySymbol || '$', displayedUnitPrice)}`;
     const lineTotal = formatMoney(config.currencySymbol || '$', displayedLineTotal);
     pushPair(chunks, qtyText, lineTotal, width);
     if (discount.hasDiscount) {
@@ -737,7 +738,7 @@ export const buildEscPosComandaPayload = (data: EscPosKitchenOrderData): string 
     if (index > 0) chunks.push(divider(width));
     chunks.push(bold(true));
     chunks.push(size(0x10));
-    pushTextLines(chunks, splitLines(`${item.weightPresentation ? `${formatWeightNumber(displayWeightQuantity(item))} ${item.weightPresentation.displayUnit}` : Number(item.quantity || 0).toFixed(item.quantity % 1 === 0 ? 0 : 3)} x ${item.name || 'Articulo'}`, width));
+    pushTextLines(chunks, splitLines(`${item.weightPresentation ? `${formatQuantity(displayWeightQuantity(item))} ${item.weightPresentation.displayUnit}` : formatQuantity(item.quantity)} x ${item.name || 'Articulo'}`, width));
     chunks.push(size(0x00));
     chunks.push(bold(false));
     pushTextLines(chunks, splitLines(`Digitado: ${formatKitchenEntryTime(item)}`, width));
@@ -814,7 +815,7 @@ export const buildEscPosReservationPayload = (reservation: Reservation, config: 
     pushTextLines(chunks, splitLines(item.name || 'Articulo', width));
     pushPair(
       chunks,
-      item.weightPresentation ? weightLineLabel(item, config.currencySymbol || '$') : `${Number(item.quantity || 0).toFixed(item.quantity % 1 === 0 ? 0 : 3)} x ${formatMoney(config.currencySymbol || '$', item.price)}`,
+      item.weightPresentation ? weightLineLabel(item, config.currencySymbol || '$', item.price, terminalQuantityPresentation(config, reservation.terminalId).salesDecimals) : `${formatQuantity(item.quantity, terminalQuantityPresentation(config, reservation.terminalId).salesDecimals)} x ${formatMoney(config.currencySymbol || '$', item.price)}`,
       formatMoney(config.currencySymbol || '$', item.price * item.quantity),
       width
     );
@@ -897,7 +898,7 @@ export const buildEscPosSubtotalPayload = (
     pushTextLines(chunks, splitLines(item.name || 'Articulo', width));
     pushPair(
       chunks,
-      item.weightPresentation ? weightLineLabel(item, config.currencySymbol || '$') : `${Number(item.quantity || 0).toFixed(item.quantity % 1 === 0 ? 0 : 3)} x ${formatMoney(config.currencySymbol || '$', Number(item.price || 0))}`,
+      item.weightPresentation ? weightLineLabel(item, config.currencySymbol || '$', item.price, terminalQuantityPresentation(config, params.terminalId).salesDecimals) : `${formatQuantity(item.quantity, terminalQuantityPresentation(config, params.terminalId).salesDecimals)} x ${formatMoney(config.currencySymbol || '$', Number(item.price || 0))}`,
       formatMoney(config.currencySymbol || '$', Number(item.price || 0) * Number(item.quantity || 0)),
       width
     );

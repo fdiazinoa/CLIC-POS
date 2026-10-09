@@ -237,7 +237,7 @@ test('el Presentation del visor omite bootstrap y bloqueadores del POS', () => {
   const blockerIndices = [
     ['autorización de terminal', appSource.indexOf('if (terminalAuthorizationBlock) {')],
     ['licencia', appSource.indexOf('if (licenseError) {')],
-    ['carga inicial', appSource.indexOf('if (!isDataLoaded || restoringHistory) {')],
+    ['carga inicial', appSource.indexOf('if (!isDataLoaded || restoringHistory || v3SetupProgress?.getSnapshot().failed) {')],
     ['datos', appSource.indexOf('if (!isDataLoaded) {')],
     ['seguridad', appSource.indexOf('if (!isSecurityLoaded) {')],
   ] as const;
