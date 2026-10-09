@@ -3,6 +3,8 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { createContext, Script } from 'node:vm';
 import ts from 'typescript';
+import { db as fiscalDb } from '../utils/db';
+import { dbAdapter } from '../services/db';
 
 // Execute the production effect unchanged. Model React dependency comparison;
 // mock only collection reads and state setters, never fiscal allocation logic.
@@ -30,7 +32,16 @@ const harness = () => {
   const context = createContext({
     requiredSaleFiscalType: 'B02', terminalId, isFiscalModeDisabled: false, isOrderTakerMode: false,
     activeTerminalConfig: { fiscal: { fiscalAllocations: [], fiscalRanges: [] } },
-    db: { get: async (name: string) => { reads++; return structuredClone(collections[name]); } },
+    db: {
+      get: async (name: string) => { reads++; return structuredClone(collections[name]); },
+      canRequestMoreNCF: async (...args: Parameters<typeof fiscalDb.canRequestMoreNCF>) => {
+        const original = dbAdapter.getCollection;
+        try {
+          (dbAdapter as any).getCollection = async (name: string) => { reads++; return structuredClone(collections[name] || []); };
+          return await fiscalDb.canRequestMoreNCF(...args);
+        } finally { dbAdapter.getCollection = original; }
+      },
+    },
     setStatus: (status: unknown) => { displayedStatus = status; },
     setFiscalStatus: (status: unknown) => { fiscalStatus = status; },
     useEffect: (callback: () => (() => void), dependencies: unknown[]) => {
@@ -72,9 +83,9 @@ test('advancing an available assignment refreshes next number and remaining coun
   assert.equal(h.fiscal.hasNCF, true); assert.equal(h.display.currentNCF, 'B0200003109'); assert.equal(h.fiscal.remaining, 1892);
 });
 
-test('range availability arriving without a terminal allocation refreshes the pool status', async () => {
+test('a downloaded global range without terminal allocation remains blocked', async () => {
   const h = harness(); await h.render(); const state = configuredState(); state.fiscalAllocations = [];
-  h.update(state); await h.render(); assert.equal(h.fiscal.hasNCF, true); assert.equal(h.fiscal.isUsingPool, true);
+  h.update(state); await h.render(); assert.equal(h.fiscal.hasNCF, false); assert.equal(h.fiscal.isUsingPool, false);
 });
 
 test('unrelated terminal configuration changes do not reread fiscal collections', async () => {

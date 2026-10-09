@@ -27,8 +27,21 @@ test('trusted stable binding permits partial omission but unknown or switched id
  assert.deepEqual(apply({ resolved: {} }, true), ['Alimentos']);
  assert.deepEqual(apply({ resolved: {} }), []);
  assert.deepEqual(apply({ resolved: {} }, false, true, { resolved: { catalog: { allowed_categories: ['Cache'] } } }), []);
- assert.deepEqual(apply({ ...identity, company_id: 'other', resolved: {} }, true, true, { resolved: { catalog: { allowed_categories: ['Cache'] } } }), []);
- for (const key of Object.keys(identity)) assert.deepEqual(apply({ ...identity, [key]: 'other', resolved: {} }, true), []);
+ // Fiscal authority now rejects an explicit foreign company before publishing any scope.
+ // Changing the active company requires rebinding; a cached category must not mask that rejection.
+ const assertForeignCompanyRejected = (cached?: any) => {
+  const config = base(); const before = structuredClone(config);
+  assert.throws(() => applyTerminalConfigSnapshot(config, { terminalId: 'local',
+   incomingSnapshot: { ...identity, company_id: 'other', resolved: {} } as any, cachedSnapshot: cached,
+   preserveOmittedOperationalScopes: true, catalogBindingProof: proof }),
+   { message: 'FISCAL_TERMINAL_COMPANY_MISMATCH' });
+  assert.deepEqual(config, before, 'foreign company rejection must leave the input configuration unchanged');
+ };
+ assertForeignCompanyRejected({ resolved: { catalog: { allowed_categories: ['Cache'] } } });
+ for (const key of Object.keys(identity)) {
+  if (key === 'company_id') assertForeignCompanyRejected();
+  else assert.deepEqual(apply({ ...identity, [key]: 'other', resolved: {} }, true), []);
+ }
  assert.deepEqual(apply({ ...identity, resolved: { identity: { id: 'other' } } }, true), []);
  const config = base(); delete config.terminals[0].config.erpBinding.companyId;
  assert.deepEqual(applyTerminalConfigSnapshot(config, { terminalId: 'local', incomingSnapshot: { resolved: {} } as any,

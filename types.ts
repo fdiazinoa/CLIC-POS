@@ -270,7 +270,7 @@ export interface FiscalRangeDGII {
   startNumber: number;
   endNumber: number;
   currentGlobal: number; // Último entregado a cualquier terminal
-  expiryDate: string;
+  expiryDate?: string; // ERP lot downloads may omit expiry; validate it when supplied.
   isActive: boolean;
 }
 

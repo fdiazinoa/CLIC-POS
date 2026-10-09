@@ -70,6 +70,7 @@ interface PaymentModalProps {
    onClose: () => void;
    onConfirm: (payments: PaymentEntry[], voluntaryTip?: number) => Promise<Transaction | null>;
    beforePaymentEffects?: () => Promise<() => void>;
+   validatePaymentAuthority?: () => Promise<void>;
    themeColor: string;
    customer?: Customer | null;
    isDelinquent?: boolean;
@@ -246,7 +247,7 @@ type GatewayProgressOverlayState = {
 
 import SupervisorAuthModal from './SupervisorAuthModal';
 
-const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, total, items, taxAmount = 0, currencySymbol, config, onClose, onConfirm, beforePaymentEffects, themeColor, customer, isDelinquent, users, isMaster, currentUser, roles, isRestaurantMode, isInstallmentPayment = false }) => {
+const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, total, items, taxAmount = 0, currencySymbol, config, onClose, onConfirm, beforePaymentEffects, validatePaymentAuthority, themeColor, customer, isDelinquent, users, isMaster, currentUser, roles, isRestaurantMode, isInstallmentPayment = false }) => {
    markRenderStart('PAYMENT_MODAL');
    useLayoutEffect(() => markRenderEnd('PAYMENT_MODAL'));
    const openingDestinationMounted = useRef(false);
@@ -614,6 +615,8 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, total,
             : amountInBase / Number(payment.exchangeRate || selectedCurrency.rate || 1)
       );
       const proportionalTax = calculateGatewayTaxAmount(amountInBase);
+      // Recheck authority immediately before each provider intent, including split payments.
+      if (validatePaymentAuthority) await validatePaymentAuthority();
       const orderNumber = createAzulOrderNumber();
       const intent = await paymentIntentService.create({
          paymentId: payment.id,

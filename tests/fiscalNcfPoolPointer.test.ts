@@ -14,6 +14,7 @@ const nonFiscalTickets = Array.from({ length: 6_000 }, (_, index) => ({
 
 type FiscalFixture = {
   fiscalRanges: Record<string, unknown>[];
+  config?: any[];
   fiscalAllocations?: object[];
   localFiscalBuffer?: Record<string, unknown>[];
 };
@@ -29,6 +30,7 @@ const withFiscalCollections = async (
   const originalSave = dbAdapter.saveCollection;
   const collections = new Map<string, any[]>([
     ['fiscalRanges', structuredClone(fixture.fiscalRanges)],
+    ['config', structuredClone(fixture.config || [])],
     ['fiscalAllocations', structuredClone(fixture.fiscalAllocations || [])],
     ['localFiscalBuffer', structuredClone(fixture.localFiscalBuffer || [])],
     ['transactions', nonFiscalTickets],
@@ -75,18 +77,18 @@ test('terminal allocation emits first and second B02 consecutively without scann
   });
 });
 
-test('legacy range without terminal allocation uses its persisted currentGlobal pointer for consecutive NCFs', async () => {
+test('global legacy range cannot authorize a terminal without its own assignment', async () => {
   await withFiscalCollections({
     fiscalRanges: [{
       id: 'legacy-range', type: 'B02', prefix: 'B02', startNumber: 1,
       endNumber: 5_000, currentGlobal: 4_200, expiryDate: '2027-12-31', isActive: true,
     }],
   }, async ({ collection, historyReads }) => {
-    assert.equal(await db.getNextNCF('B02', terminalId), 'B0200004201');
-    assert.equal(await db.getNextNCF('B02', terminalId), 'B0200004202');
+    assert.equal(await db.getNextNCF('B02', terminalId), null);
+    assert.equal(await db.getNextNCF('B02', terminalId), null);
     assert.equal(historyReads(), 0, 'legacy pool issuance must not rescan historical tickets');
-    assert.equal(collection('fiscalRanges')[0].currentGlobal, 4_202);
-    assert.equal(collection('localFiscalBuffer')[0].currentNumber, 4_203);
+    assert.equal(collection('fiscalRanges')[0].currentGlobal, 4_200);
+    assert.deepEqual(collection('localFiscalBuffer'), []);
   });
 });
 
@@ -284,12 +286,12 @@ test('explicit empty authority and disabled terminal never fall back to global p
 });
 
 test('canonical ERP identity emits assigned B04 and prepared reservation preserves authority', async () => {
-  await withFiscalCollections({ fiscalRanges: [], fiscalAllocations: [{ id: 'a-b04', terminalId, ncfType: 'B04', prefix: 'B04', reservedStart: 4001, reservedEnd: 4002, nextNumber: 4001, status: 'ACTIVE' }] }, async ({ collection }) => {
+  await withFiscalCollections({ fiscalRanges: [{ id: 'range-b04', type: 'B04', prefix: 'B04', startNumber: 4001, endNumber: 4002, expiryDate: '2027-12-31', isActive: true }], fiscalAllocations: [{ id: 'a-b04', terminalId, fiscalRangeId: 'range-b04', ncfType: 'B04', prefix: 'B04', reservedStart: 4001, reservedEnd: 4002, nextNumber: 4001, status: 'ACTIVE' }] }, async ({ collection }) => {
     const context = { erpTerminalId: terminalId, fiscal: { enabled: true } } as any;
-    assert.equal(await db.getNextNCF('B04', 'local-id', 1, context), 'B0400004001');
-    assert.equal(await db.getNextNCF('B04', 'local-id', 1, context), 'B0400004002');
-    assert.equal(await db.validatePreparedFiscalAuthority('B04', 'local-id', 'B0400004002', context), true);
-    assert.equal(await db.validatePreparedFiscalAuthority('B04', 'local-id', 'B0400004003', context), false);
+    assert.equal(await db.getNextNCF('B04', terminalId, 1, context), 'B0400004001');
+    assert.equal(await db.getNextNCF('B04', terminalId, 1, context), 'B0400004002');
+    assert.equal(await db.validatePreparedFiscalAuthority('B04', terminalId, 'B0400004002', context), true);
+    assert.equal(await db.validatePreparedFiscalAuthority('B04', terminalId, 'B0400004003', context), false);
     assert.equal(collection('fiscalAllocations')[0].nextNumber, 4003);
   });
 });
@@ -328,4 +330,111 @@ test('checkout rejects recovered-reservation returns and invalid credit before a
   const creditRejection = source.indexOf("if (creditGate && !hasCreditOverrideApproval)");
   assert.ok(reservationRejection > 0 && reservationRejection < refundReservation && reservationRejection < saleReservation);
   assert.ok(creditRejection > 0 && creditRejection < refundReservation && creditRejection < saleReservation);
+});
+
+const authorizedRange = { id: 'strict-lot', type: 'B02', prefix: 'B02', startNumber: 100, endNumber: 200,
+  currentGlobal: 99, expiryDate: '2099-12-31', isActive: true };
+const authorizedAllocation = { id: 'strict-allocation', terminalId, fiscalRangeId: 'strict-lot', ncfType: 'B02',
+  reservedStart: 100, reservedEnd: 110, nextNumber: 100, status: 'ACTIVE' };
+
+for (const [label, patch] of Object.entries({
+  'missing identity': { terminalId: '' }, 'foreign terminal': { terminalId: 'other-terminal' },
+  'missing allocation id': { id: '' }, 'missing lot': { fiscalRangeId: '' },
+  'unknown lot': { fiscalRangeId: 'foreign-lot' }, 'unknown status': { status: 'UNKNOWN' },
+  'legacy status': { status: 'LEGACY' }, 'paused status': { status: 'PAUSED' },
+  'released status': { status: 'RELEASED' }, 'revoked timestamp': { releasedAt: '2026-01-01' },
+  'missing fiscal type': { ncfType: '' }, 'invalid pointer': { nextNumber: 0 },
+  'fractional pointer': { nextNumber: 100.5 }, 'NaN pointer': { nextNumber: 'bad' },
+  'pointer past bound': { nextNumber: 112 }, 'start outside lot': { reservedStart: 99, nextNumber: 100 },
+  'end outside lot': { reservedEnd: 201 },
+  'foreign source provenance': { metadata: { sourceTerminalId: 'other-terminal' } },
+  'foreign company provenance': { metadata: { companyId: 'other-company' } },
+})) {
+  test(`strict authority blocks ${label} without writes or historical reads`, async () => {
+    await withFiscalCollections({ fiscalRanges: [authorizedRange], fiscalAllocations: [{ ...authorizedAllocation, ...patch }] }, async ({ collection, historyReads }) => {
+      const before = ['fiscalRanges', 'fiscalAllocations', 'localFiscalBuffer'].map(collection);
+      assert.equal(await db.canRequestMoreNCF('B02', terminalId), false);
+      assert.equal(await db.getNextNCF('B02', terminalId), null);
+      assert.equal(await db.requestFiscalBatch(terminalId, 'B02', 100), null);
+      assert.equal(await db.validatePreparedFiscalAuthority('B02', terminalId, 'B0200000100'), false);
+      assert.deepEqual(['fiscalRanges', 'fiscalAllocations', 'localFiscalBuffer'].map(collection), before);
+      assert.equal(historyReads(), 0);
+    });
+  });
+}
+for (const [label, patch] of Object.entries({ 'inactive': { isActive: false }, 'expired': { expiryDate: '2000-01-01' },
+  'invalid nonblank expiry': { expiryDate: 'not-a-date' }, 'invalid date': { expiryDate: '2099-02-30' }, 'invalid lot bound': { startNumber: 100.5 },
+  'foreign prefix': { prefix: 'B04' } })) {
+  test(`strict authority blocks ${label} lot`, async () => {
+    await withFiscalCollections({ fiscalRanges: [{ ...authorizedRange, ...patch }], fiscalAllocations: [authorizedAllocation] }, async ({ collection }) => {
+      const before = ['fiscalRanges', 'fiscalAllocations', 'localFiscalBuffer'].map(collection);
+      assert.equal(await db.canRequestMoreNCF('B02', terminalId), false);
+      assert.equal(await db.getNextNCF('B02', terminalId), null);
+      assert.equal(await db.validatePreparedFiscalAuthority('B02', terminalId, 'B0200000100'), false);
+      assert.deepEqual(['fiscalRanges', 'fiscalAllocations', 'localFiscalBuffer'].map(collection), before);
+    });
+  });
+}
+test('missing caller identity cannot borrow any assigned terminal or buffer', async () => {
+  await withFiscalCollections({ fiscalRanges: [authorizedRange], fiscalAllocations: [authorizedAllocation],
+    localFiscalBuffer: [{ type: 'B02', prefix: 'B02', currentNumber: 100, endNumber: 100 }] }, async () => {
+    assert.equal(await db.canRequestMoreNCF('B02'), false);
+    assert.equal(await db.getNextNCF('B02', ''), null);
+    assert.equal(await db.getNextNCF('B02', 'foreign', 1, { erpTerminalId: terminalId } as any), null);
+  });
+});
+test('explicit revocation persists across reads and cannot be restored by a global lot or historical ticket', async () => {
+  await withFiscalCollections({ fiscalRanges: [authorizedRange], fiscalAllocations: [authorizedAllocation] }, async ({ collection }) => {
+    assert.equal(await db.getNextNCF('B02', terminalId), 'B0200000100');
+    assert.equal(await db.validatePreparedFiscalAuthority('B02', terminalId, 'B0200000100'), true);
+    await db.rehydrateOperationalDocumentState([], [], [], terminalId);
+    assert.equal(await db.getNextNCF('B02', terminalId), null);
+    assert.equal(await db.validatePreparedFiscalAuthority('B02', terminalId, 'B0200000100'), false);
+    await assert.rejects(db.reconcilePreparedNCF('B02', terminalId, 'B0200000100'), /FISCAL_TERMINAL_AUTHORITY_REQUIRED/);
+    assert.deepEqual(collection('fiscalAllocations'), []);
+    assert.deepEqual(collection('localFiscalBuffer'), []);
+  });
+});
+test('direct simultaneous batch requests reserve different consecutive numbers', async () => {
+  await withFiscalCollections({ fiscalRanges: [authorizedRange], fiscalAllocations: [authorizedAllocation] }, async () => {
+    const [a, b] = await Promise.all([db.requestFiscalBatch(terminalId, 'B02', 100), db.requestFiscalBatch(terminalId, 'B02', 100)]);
+    assert.equal(a?.currentNumber, 100); assert.equal(b?.currentNumber, 101);
+  });
+});
+test('company-scoped assigned lot works only for the current persisted terminal company', async () => {
+  await withFiscalCollections({ fiscalRanges: [authorizedRange], fiscalAllocations: [{ ...authorizedAllocation, metadata: { companyId: 'company-a' } }],
+    config: [{ terminals: [{ id: 'local-terminal', config: { erpTerminalId: terminalId, erpBinding: { companyId: 'company-a' }, fiscal: { enabled: true } } }] }] }, async () => {
+    assert.equal(await db.getNextNCF('B02', 'local-terminal'), 'B0200000100');
+    assert.equal(await db.getNextNCF('B02', 'other-terminal', 1, { erpTerminalId: terminalId } as any), null);
+  });
+});
+
+test('persisted explicit assignment revocation blocks stale DB authority even before collection rehydration', async () => {
+  await withFiscalCollections({ fiscalRanges: [authorizedRange], fiscalAllocations: [authorizedAllocation],
+    config: [{ terminals: [{ id: terminalId, config: { erpTerminalId: terminalId,
+      fiscal: { enabled: true, fiscalAllocations: [], fiscalRanges: [authorizedRange] } } }] }] }, async () => {
+    assert.equal(await db.canRequestMoreNCF('B02', terminalId), false);
+    assert.equal(await db.getNextNCF('B02', terminalId), null);
+    assert.equal(await db.requestFiscalBatch(terminalId, 'B02', 1), null);
+    assert.equal(await db.validatePreparedFiscalAuthority('B02', terminalId, 'B0200000100'), false);
+  });
+});
+
+test('deployed ERP may omit lot expiry without losing exact active terminal authority', async () => {
+  const { expiryDate: _omittedExpiry, ...downloadedLot } = authorizedRange;
+  await withFiscalCollections({ fiscalRanges: [downloadedLot], fiscalAllocations: [authorizedAllocation] }, async ({ collection }) => {
+    assert.equal(await db.canRequestMoreNCF('B02', terminalId), true);
+    assert.equal(await db.getNextNCF('B02', terminalId), 'B0200000100');
+    assert.equal(await db.getNextNCF('B02', terminalId), 'B0200000101');
+    assert.equal(await db.validatePreparedFiscalAuthority('B02', terminalId, 'B0200000101'), true);
+    assert.equal(Object.hasOwn(collection('fiscalRanges')[0], 'expiryDate'), false, 'never invent an expiry');
+  });
+});
+
+test('unspecified empty or null expiry preserves assigned-lot wire compatibility without a fabricated date', async () => {
+  for (const expiryDate of ['', null]) {
+    await withFiscalCollections({ fiscalRanges: [{ ...authorizedRange, expiryDate }], fiscalAllocations: [authorizedAllocation] }, async () => {
+      assert.equal(await db.getNextNCF('B02', terminalId), 'B0200000100');
+    });
+  }
 });

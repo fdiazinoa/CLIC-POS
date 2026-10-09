@@ -824,11 +824,13 @@ export const normalizeDocumentSeries = (raw: unknown, index: number): DocumentSe
   });
 };
 
-const normalizeFiscalRange = (raw: unknown, index: number): FiscalRangeDGII | null => {
+const normalizeFiscalRange = (raw: unknown, _index: number): FiscalRangeDGII | null => {
   const data = asObject(raw);
-  const id = asString(data.id || data.range_id || data.uid || `fiscal-range-${index + 1}`);
+  const id = asString(data.id || data.range_id || data.uid);
   if (!id) return null;
-  const type = normalizeNcfType(data.type || data.ncfType || data.ncf_type || data.documentType || data.document_type || data.code || data.fiscal_type || data.receipt_type || 'B02');
+  const rawType = asString(data.type || data.ncfType || data.ncf_type || data.documentType || data.document_type || data.code || data.fiscal_type || data.receipt_type).toUpperCase();
+  if (!['B01', 'B02', 'B04', 'B14', 'B15', 'E31', 'E32', 'E34', 'E44', 'E45'].includes(rawType)) return null;
+  const type = rawType as FiscalDocumentCode;
   const prefix = asString(data.prefix || data.seriesPrefix || data.series_prefix || data.ncfPrefix || data.ncf_prefix || type) || type;
   const isDemoFiscalValue = (value: unknown) => {
     const text = asString(value).toUpperCase();
@@ -841,7 +843,8 @@ const normalizeFiscalRange = (raw: unknown, index: number): FiscalRangeDGII | nu
       if (!text) continue;
       const numericText = text.startsWith(prefix.toUpperCase())
         ? text.slice(prefix.length)
-        : text.replace(/\D/g, '');
+        : text;
+      if (!/^\d+$/.test(numericText)) return 0;
       const parsed = Number(numericText);
       if (Number.isFinite(parsed) && parsed > 0) return parsed;
     }
@@ -867,6 +870,9 @@ const normalizeFiscalRange = (raw: unknown, index: number): FiscalRangeDGII | nu
     endNumber < startNumber
   ) return null;
 
+  const expiryKeys = ['expiryDate', 'expiry_date', 'expirationDate', 'expiration_date', 'validUntil', 'valid_until',
+    'validTo', 'valid_to', 'expiresAt', 'expires_at', 'fecha_vencimiento'];
+  const expiryKey = expiryKeys.find(key => Object.prototype.hasOwnProperty.call(data, key));
   return {
     id,
     type,
@@ -878,34 +884,38 @@ const normalizeFiscalRange = (raw: unknown, index: number): FiscalRangeDGII | nu
       data.lastNumber, data.last_number, data.lastUsedNumber, data.last_used_number,
       data.usedUntil, data.used_until, data.consumedUntil, data.consumed_until
     )),
-    expiryDate: asString(
-      data.expiryDate || data.expiry_date || data.expirationDate || data.expiration_date ||
-      data.validUntil || data.valid_until || data.validTo || data.valid_to ||
-      data.expiresAt || data.expires_at || data.fecha_vencimiento
-    ) || '2030-12-31',
-    isActive: asBoolean(data.isActive ?? data.is_active, true),
+    ...(expiryKey ? { expiryDate: data[expiryKey] == null ? '' :
+      typeof data[expiryKey] === 'string' ? asString(data[expiryKey]) : 'INVALID_FISCAL_EXPIRY' } : {}),
+    // This deployed collection omits activity flags; an ACTIVE terminal allocation
+    // still remains mandatory. An explicit activity/status revocation wins.
+    isActive: (!Object.prototype.hasOwnProperty.call(data, 'status') || asString(data.status).toUpperCase() === 'ACTIVE') &&
+      asBoolean(data.isActive ?? data.is_active, data.isActive == null && data.is_active == null),
   };
 };
 
-const normalizeFiscalAllocation = (raw: unknown, index: number, terminalId: string): FiscalAllocation | null => {
+const normalizeFiscalAllocation = (raw: unknown, _index: number, terminalId: string): FiscalAllocation | null => {
   const data = asObject(raw);
-  const id = asString(data.id || data.allocation_id || data.uid || `fiscal-alloc-${index + 1}`);
+  const id = asString(data.id || data.allocation_id || data.uid);
   if (!id) return null;
   const sourceTerminalId = asString(data.terminalId ?? data.terminal_id);
   const metadata = asObject(data.metadata);
+  if (!sourceTerminalId || !terminalId || sourceTerminalId !== terminalId ||
+      (metadata.sourceTerminalId && metadata.sourceTerminalId !== sourceTerminalId) ||
+      !['B01', 'B02', 'B04', 'B14', 'B15', 'E31', 'E32', 'E34', 'E44', 'E45'].includes(asString(data.ncfType || data.ncf_type).toUpperCase())) return null;
 
   return {
     id,
-    terminalId: terminalId || sourceTerminalId,
+    terminalId: sourceTerminalId,
     fiscalRangeId: asString(data.fiscalRangeId ?? data.fiscal_range_id),
-    ncfType: normalizeNcfType(data.ncfType || data.ncf_type || 'B02'),
+    ncfType: normalizeNcfType(data.ncfType || data.ncf_type),
     reservedStart: asNumber(data.reservedStart ?? data.reserved_start, 0),
     reservedEnd: asNumber(data.reservedEnd ?? data.reserved_end, 0),
     nextNumber: asNumber(data.nextNumber ?? data.next_number, 0),
-    status: (asString(data.status) || 'ACTIVE') as FiscalAllocation['status'],
+    status: (asString(data.status) || 'CONFLICTED') as FiscalAllocation['status'],
     releasedAt: asString(data.releasedAt ?? data.released_at) || null,
     metadata: {
       ...metadata,
+      ...(data.companyId || data.company_id ? { companyId: asString(data.companyId || data.company_id) } : {}),
       sourceTerminalId: sourceTerminalId || metadata.sourceTerminalId || null,
     },
   };
@@ -1336,6 +1346,16 @@ const firstArrayFromSources = (sources: Array<Record<string, any>>, keys: string
   for (const source of sources) {
     const found = firstResolvedArray(source, keys);
     if (found.length > 0) return found;
+  }
+  return [];
+};
+
+// Fiscal revocation is authoritative even when the first supplied collection is empty.
+const firstFiscalAuthorityRows = (sources: Array<Record<string, any>>, keys: string[]): any[] => {
+  for (const source of sources) {
+    for (const key of keys) {
+      if (Object.prototype.hasOwnProperty.call(source, key)) return asCollectionArray(source[key]);
+    }
   }
   return [];
 };
@@ -1896,6 +1916,13 @@ export const applyTerminalConfigSnapshot = (
     ...asObject(effectiveResolved.identity),
     ...asObject(effectiveResolved.terminal),
   } as Record<string, any>;
+  const incomingCompanyId = asString(resolvedIdentity.company_id || resolvedIdentity.companyId);
+  const configuredFiscalTerminal = baseConfig.terminals?.find(terminal => terminal.id === terminalId)?.config;
+  const canonicalFiscalTerminalId = configuredFiscalTerminal?.erpTerminalId || terminalId;
+  const configuredCompanyId = configuredFiscalTerminal?.erpBinding?.companyId;
+  if (incomingCompanyId && configuredCompanyId && incomingCompanyId !== configuredCompanyId) {
+    throw new Error('FISCAL_TERMINAL_COMPANY_MISMATCH');
+  }
   const resolvedPricing = incomingV3Pricing || asObject(effectiveResolved.pricing);
   const resolvedInventory = asObject(effectiveResolved.inventory);
   const resolvedDocuments = asObject(effectiveResolved.documents);
@@ -1908,7 +1935,8 @@ export const applyTerminalConfigSnapshot = (
   const hasIncomingFiscalAllocations =
     Object.prototype.hasOwnProperty.call(resolvedDocuments, 'fiscal_allocations') ||
     Object.prototype.hasOwnProperty.call(resolvedDocuments, 'fiscalAllocations') ||
-    Object.prototype.hasOwnProperty.call(resolvedDocuments, 'fiscalAllocationsByTenant');
+    Object.prototype.hasOwnProperty.call(resolvedDocuments, 'fiscalAllocationsByTenant') ||
+    Object.prototype.hasOwnProperty.call(resolvedDocuments, 'fiscal_allocations_by_tenant');
 
   const fallbackOperational = asObject(effectiveFallbackConfig.operational);
   const fallbackDeviceRole = asObject(effectiveFallbackConfig.deviceRole);
@@ -2279,7 +2307,15 @@ export const applyTerminalConfigSnapshot = (
       checkedSource: 'terminal_config.resolved.documents.document_series',
     });
   }
-  const rawFiscalRangeRows = firstArrayFromSources([
+  const fiscalRangeKeys = ['fiscal_ranges', 'fiscalRanges', 'fiscalRangesByTenant', 'fiscal_ranges_by_tenant',
+    'ncf_ranges', 'ncfRanges', 'fiscal_lots', 'fiscalLots', 'receipt_lots', 'receiptLots'];
+  const hasIncomingFiscalRanges = [resolvedDocuments, fallbackDocuments, fallbackFiscal, effectiveFallbackConfig]
+    .some(source => fiscalRangeKeys.some(key => Object.prototype.hasOwnProperty.call(source, key)));
+  const rawFiscalRangeRows = firstFiscalAuthorityRows([
+    asObject(incomingResolved.documents),
+    asObject(incomingFallbackConfig.documents),
+    asObject(incomingFallbackConfig.fiscal),
+    incomingFallbackConfig,
     resolvedDocuments,
     fallbackDocuments,
     fallbackFiscal,
@@ -2337,14 +2373,19 @@ export const applyTerminalConfigSnapshot = (
   const fiscalRanges = (isNoFiscalMode ? [] : rawFiscalRangeRows)
     .map((item, index) => normalizeFiscalRange(item, index))
     .filter(Boolean) as FiscalRangeDGII[];
-  const fiscalAllocations = firstResolvedArray(resolvedDocuments, [
+  const fiscalAllocations = firstFiscalAuthorityRows([asObject(incomingResolved.documents), resolvedDocuments], [
     'fiscal_allocations',
     'fiscalAllocations',
     'fiscalAllocationsByTenant',
     'fiscal_allocations_by_tenant'
   ])
-    .map((item, index) => normalizeFiscalAllocation(item, index, terminalId))
-    .filter(Boolean) as FiscalAllocation[];
+    .map((item, index) => normalizeFiscalAllocation(item, index, canonicalFiscalTerminalId))
+    .filter((allocation) => {
+      if (!allocation) return false;
+      const sourceCompany = allocation.metadata?.companyId || allocation.metadata?.company_id || allocation.metadata?.sourceCompanyId;
+      const expectedCompany = incomingCompanyId || configuredCompanyId;
+      return !sourceCompany || Boolean(expectedCompany && sourceCompany === expectedCompany);
+    }) as FiscalAllocation[];
   const hasIncomingLoyaltyConfig =
     Object.prototype.hasOwnProperty.call(resolvedLoyalty, 'config') ||
     Object.keys(fallbackLoyalty).length > 0;
@@ -2621,7 +2662,7 @@ export const applyTerminalConfigSnapshot = (
   );
   const effectiveFiscalRanges = isNoFiscalMode
     ? []
-    : fiscalRanges.length > 0 ? fiscalRanges : terminalTemplate.fiscal.fiscalRanges || [];
+    : hasIncomingFiscalRanges ? fiscalRanges : terminalTemplate.fiscal.fiscalRanges || [];
   const effectiveFiscalAllocations = hasIncomingFiscalAllocations
     ? (isNoFiscalMode ? [] : fiscalAllocations)
     : isNoFiscalMode ? [] : terminalTemplate.fiscal.fiscalAllocations || [];

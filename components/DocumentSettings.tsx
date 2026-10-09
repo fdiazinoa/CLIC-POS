@@ -286,45 +286,6 @@ const pickRicherConfig = (primary?: BusinessConfig | null, secondary?: BusinessC
    return score(right) > score(left) ? right : left;
 };
 
-const buildRecoveredFiscalRanges = (transactions: Transaction[]): FiscalRangeDGII[] => {
-   const maxUsedByType: Record<FiscalDocumentCode, number> = {
-      B01: 0,
-      B02: 0,
-      B04: 0,
-      B14: 0,
-      B15: 0,
-      E31: 0,
-      E32: 0,
-      E34: 0,
-      E44: 0,
-      E45: 0
-   };
-
-   for (const tx of Array.isArray(transactions) ? transactions : []) {
-      if (!tx?.ncfType || !NCF_TYPES.includes(tx.ncfType)) continue;
-      const ncf = String(tx.ncf || '').trim().toUpperCase();
-      const numericPart = ncf.startsWith(tx.ncfType) ? ncf.slice(tx.ncfType.length) : '';
-      const num = Number(numericPart);
-      if (Number.isFinite(num) && num > maxUsedByType[tx.ncfType]) {
-         maxUsedByType[tx.ncfType] = num;
-      }
-   }
-
-   return NCF_TYPES.map((type) => {
-      const maxUsed = maxUsedByType[type] || 0;
-      return {
-         id: `fr-recovered-${type}`,
-         type,
-         prefix: type,
-         startNumber: 1,
-         endNumber: Math.max(10000, maxUsed + 1000),
-         currentGlobal: maxUsed,
-         expiryDate: '2030-12-31',
-         isActive: true
-      };
-   });
-};
-
 const FISCAL_CREDENTIAL_SOURCE_LABELS: Record<'env' | 'sqlite' | 'supabase', string> = {
    env: 'ENV',
    sqlite: 'SQLite',
@@ -424,39 +385,7 @@ const normalizeFiscalRangeRecord = (raw: any, index: number): FiscalRangeDGII | 
    };
 };
 
-const buildFiscalRangesFromAllocations = (allocations: FiscalAllocation[], buffers: LocalFiscalBuffer[]): FiscalRangeDGII[] => {
-   return (allocations || [])
-      .map((allocation, index) => {
-         const buffer = buffers.find(item =>
-            item.fiscalRangeId === allocation.fiscalRangeId ||
-            item.allocationId === allocation.id ||
-            item.type === allocation.ncfType
-         );
-         const prefix = normalizeKey(allocation.prefix || buffer?.prefix || allocation.ncfType);
-         const startNumber = Math.max(1, Number(allocation.reservedStart || buffer?.startNumber || 0));
-         const endNumber = Math.max(startNumber, Number(allocation.reservedEnd || buffer?.endNumber || startNumber));
-         if (
-            !prefix ||
-            !allocation.ncfType ||
-            isDemoFiscalValue(prefix) ||
-            isDemoFiscalValue(allocation.id) ||
-            isDemoFiscalValue(allocation.fiscalRangeId) ||
-            isDemoFiscalValue(buffer?.id) ||
-            endNumber < startNumber
-         ) return null;
-         return {
-            id: allocation.fiscalRangeId || `fr-allocation-${allocation.id || index}`,
-            type: allocation.ncfType,
-            prefix,
-            startNumber,
-            endNumber,
-            currentGlobal: Math.max(startNumber - 1, Number(allocation.nextNumber || buffer?.currentNumber || startNumber) - 1),
-            expiryDate: buffer?.expiryDate || '2030-12-31',
-            isActive: ['ACTIVE', 'LEGACY'].includes(allocation.status)
-         } as FiscalRangeDGII;
-      })
-      .filter(Boolean) as FiscalRangeDGII[];
-};
+
 
 const formatFiscalDate = (value: string): string => {
    const date = new Date(value);
@@ -554,26 +483,11 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
             const ranges = rawRangeList
                .map((range, index) => normalizeFiscalRangeRecord(range, index))
                .filter(Boolean) as FiscalRangeDGII[];
-            const rangesFromAllocations = buildFiscalRangesFromAllocations(allocations, buffers);
             setFiscalAllocations(allocations);
             setLocalFiscalBuffers(buffers);
             setActiveTerminalId(localStorage.getItem('active_terminal_id') || '');
-            if (ranges.length > 0) {
-               setFiscalRanges(ranges);
-            } else if (rangesFromAllocations.length > 0) {
-               setFiscalRanges(rangesFromAllocations);
-               await db.save('fiscalRanges', rangesFromAllocations);
-               console.warn('🛠️ DocumentSettings: fiscalRanges no tenía autorizaciones válidas. Se reconstruyó desde fiscalAllocations/localFiscalBuffer.');
-            } else if (rawRangeList.length > 0) {
-               setFiscalRanges([]);
-               await db.save('fiscalRanges', []);
-               console.warn('🧹 DocumentSettings: se eliminaron rangos DGII demo/placeholder inválidos. No se regeneraron autorizaciones ficticias.');
-            } else {
-               const recoveredRanges = buildRecoveredFiscalRanges(transactionsList);
-               setFiscalRanges(recoveredRanges);
-               await db.save('fiscalRanges', recoveredRanges);
-               console.warn('🛠️ DocumentSettings: fiscalRanges estaba vacío. Se regeneraron rangos base por tipo NCF.');
-            }
+            // Only downloaded lots may appear as authorizations; history and buffers are not authority.
+            setFiscalRanges(ranges);
          } catch (error) {
             console.error('❌ DocumentSettings: Failed to load data:', error);
             setSeriesList([]);

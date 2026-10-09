@@ -11367,6 +11367,12 @@ const AppContent: React.FC = () => {
   }, [syncFiscalDocument]);
 
   const handleTransactionComplete = async (txn: Transaction) => {
+    const fiscalTerminal = (config.terminals || []).find(terminal => terminal.config?.currentDeviceId === deviceId);
+    if ((txn.ncf || txn.ncfType) && (!fiscalTerminal ||
+        (txn.terminalId && txn.terminalId !== fiscalTerminal.id && txn.terminalId !== fiscalTerminal.config?.erpTerminalId))) {
+      throw new Error('FISCAL_TERMINAL_IDENTITY_REQUIRED');
+    }
+    await db.assertFiscalTransactionAuthority({ ...txn, terminalId: fiscalTerminal?.id || txn.terminalId }, fiscalTerminal?.config);
     if (LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED) {
       const terminal = (config.terminals || []).find(row => row.config?.currentDeviceId === deviceId);
       const warehouseId = terminal?.config.inventoryScope?.defaultSalesWarehouseId;
@@ -11450,6 +11456,7 @@ const AppContent: React.FC = () => {
       ledgerEntriesForCommit.push(...ledgerEntries);
     }
 
+    await db.assertFiscalTransactionAuthority(txn, currentTerminal?.config);
     if (durableEnabled) {
       const createdAt = new Date().toISOString();
       const paymentIntentIds = (txn.payments || [])

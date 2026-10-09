@@ -381,6 +381,7 @@ class TransactionService {
         if (!data.seriesId) {
             throw new Error('seriesId is required');
         }
+        await db.assertFiscalTransactionAuthority(data);
         validateV3FrozenFiscalAmounts(data);
         if (isV3FinancialDocument(data) && options.deferDurablePersistence !== true) {
             throw new Error('SYNC_V3_ATOMIC_COMMIT_REQUIRED');
@@ -527,7 +528,7 @@ class TransactionService {
             throw new Error('SYNC_V3_ATOMIC_COMMIT_REQUIRED');
         }
         if (!deferToFinancialCommit) {
-            // Legacy persistence remains unchanged while POS-2A is dark.
+            await db.assertFiscalTransactionAuthority(normalizedTransaction);
             await db.saveDocument('transactions', normalizedTransaction);
             recordCheckoutDiagnostic('LEGACY_PERSIST_OK', { items: normalizedTransaction.items, total: normalizedTransaction.total, transactionId: normalizedTransaction.id, displayId: normalizedTransaction.displayId });
             try {
