@@ -1347,6 +1347,16 @@ const firstArrayFromSources = (sources: Array<Record<string, any>>, keys: string
   return [];
 };
 
+// Fiscal revocation is authoritative even when the first supplied collection is empty.
+const firstFiscalAuthorityRows = (sources: Array<Record<string, any>>, keys: string[]): any[] => {
+  for (const source of sources) {
+    for (const key of keys) {
+      if (Object.prototype.hasOwnProperty.call(source, key)) return asCollectionArray(source[key]);
+    }
+  }
+  return [];
+};
+
 const normalizeFiscalText = (value: unknown): string => {
   if (typeof value === 'boolean') return value ? 'TRUE' : 'FALSE';
   if (typeof value === 'number' && Number.isFinite(value)) return String(value);
@@ -2296,7 +2306,11 @@ export const applyTerminalConfigSnapshot = (
     'ncf_ranges', 'ncfRanges', 'fiscal_lots', 'fiscalLots', 'receipt_lots', 'receiptLots'];
   const hasIncomingFiscalRanges = [resolvedDocuments, fallbackDocuments, fallbackFiscal, effectiveFallbackConfig]
     .some(source => fiscalRangeKeys.some(key => Object.prototype.hasOwnProperty.call(source, key)));
-  const rawFiscalRangeRows = firstArrayFromSources([
+  const rawFiscalRangeRows = firstFiscalAuthorityRows([
+    asObject(incomingResolved.documents),
+    asObject(incomingFallbackConfig.documents),
+    asObject(incomingFallbackConfig.fiscal),
+    incomingFallbackConfig,
     resolvedDocuments,
     fallbackDocuments,
     fallbackFiscal,
@@ -2354,7 +2368,7 @@ export const applyTerminalConfigSnapshot = (
   const fiscalRanges = (isNoFiscalMode ? [] : rawFiscalRangeRows)
     .map((item, index) => normalizeFiscalRange(item, index))
     .filter(Boolean) as FiscalRangeDGII[];
-  const fiscalAllocations = firstResolvedArray(resolvedDocuments, [
+  const fiscalAllocations = firstFiscalAuthorityRows([asObject(incomingResolved.documents), resolvedDocuments], [
     'fiscal_allocations',
     'fiscalAllocations',
     'fiscalAllocationsByTenant',

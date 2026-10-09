@@ -113,3 +113,21 @@ test('production checkout guard blocks sales and refunds before non-V3 payment e
     assert.equal(typeof await context.before(), 'function');
   } finally { dbAdapter.getCollection = get; dbAdapter.saveCollection = save; }
 });
+
+test('empty fiscal lots override fallback configuration and cached aliases without reviving old authority', () => {
+  for (const key of ['fiscal_ranges', 'fiscalRanges', 'fiscal_lots', 'fiscalRangesByTenant']) {
+    const result = applyTerminalConfigSnapshot(config(), { terminalId,
+      cachedSnapshot: { terminal_id: terminalId, resolved: { documents: { fiscal_ranges: [lot], fiscal_allocations: [allocation] } } } as any,
+      incomingSnapshot: { terminal_id: terminalId, fiscalMode: 'LEGACY_B', resolved: { documents: { [key]: [] } },
+        config: { documents: { fiscal_ranges: [lot] } } } as any,
+    });
+    assert.deepEqual(result.config.terminals[0].config.fiscal.fiscalRanges, []);
+  }
+});
+test('fresh assignment revocation beats an older differently named cached alias', () => {
+  const result = applyTerminalConfigSnapshot(config(), { terminalId,
+    cachedSnapshot: { terminal_id: terminalId, resolved: { documents: { fiscal_allocations: [allocation] } } } as any,
+    incomingSnapshot: { terminal_id: terminalId, fiscalMode: 'LEGACY_B', resolved: { documents: { fiscalAllocations: [] } } } as any,
+  });
+  assert.deepEqual(result.config.terminals[0].config.fiscal.fiscalAllocations, []);
+});
