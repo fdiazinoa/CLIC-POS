@@ -190,16 +190,12 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps> = props => {
     </button>
   </div>;
   if (!projected || !boundary) return <div role="status" className="p-6">Preparando catálogo V3 e inventario del dispositivo vinculado…</div>;
-  return <>
-    {articleDiagnostics.length > 0 && <div role="status" className="p-2 text-amber-900 bg-amber-50">
-      Artículos no disponibles: {articleDiagnostics.map(row => `${row.sku || row.articleId} (${row.code}): ${row.reason}`).join(' · ')}
-    </div>}
-    <POSInterface {...props} config={effectiveConfig!} products={cache} productPrices={[]}
+  return <POSInterface {...props} config={effectiveConfig!} products={cache} productPrices={[]}
     v3Operational={boundary} catalogSearchProducts={visible}
+    catalogArticleDiagnostics={articleDiagnostics}
     onUpdateProducts={() => { throw new Error('SYNC_V3_LOCAL_CATALOG_EDIT_UNSUPPORTED'); }}
     onUpdateConfig={next => props.onUpdateConfig({ ...next, taxes: props.config.taxes,
-      tariffs: props.config.tariffs, taxRate: props.config.taxRate })} />
-  </>;
+      tariffs: props.config.tariffs, taxRate: props.config.taxRate })} />;
 };
 
 export default LargeMasterSyncV3OperationalPOS;
