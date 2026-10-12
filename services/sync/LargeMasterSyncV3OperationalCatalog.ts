@@ -1,3 +1,4 @@
+import { weightUnit } from '../../utils/scaleWeight';
 import { hasV3KilogramContract } from '../../utils/weightedProduct';
 import type { V3CategoryFilter } from './LargeMasterSyncV3Categories';
 import type { Product, ProductOperationalFlags, ProductVariant, TaxDefinition,
@@ -40,6 +41,12 @@ const operationalFlags = (value: unknown): ProductOperationalFlags => {
     usesSerial: booleanValue(source.usesSerial),
   };
 };
+
+export interface V3ArticleDiagnostic { articleId: string; sku: string; code: string; reason: string }
+
+class UnsupportedArticleError extends LargeMasterSyncV3Error {
+  constructor(readonly reason: string) { super('SYNC_V3_ADVANCED_ARTICLE_CONTRACT_REQUIRED', 'SYNC_V3_ADVANCED_ARTICLE_CONTRACT_REQUIRED: ' + reason); }
+}
 
 export interface V3OperationalProduct {
   product: Product;
@@ -88,14 +95,18 @@ export class LargeMasterSyncV3OperationalCatalog {
     const sourceFlags = operationalFlags(article.operationalFlags);
     const rawFlags = article.operationalFlags as RecordObject | undefined;
     if (rawFlags?.isWeighted !== undefined && typeof rawFlags.isWeighted !== 'boolean') {
-      throw new LargeMasterSyncV3Error('SYNC_V3_ADVANCED_ARTICLE_CONTRACT_REQUIRED');
+      throw new UnsupportedArticleError('Indicador de peso inválido');
     }
-    if (!['PRODUCT', 'SERVICE'].includes(String(article.type))
-      || sourceFlags.usesLots || sourceFlags.usesSerial
-      || (sourceFlags.isWeighted && !hasV3KilogramContract(article))
-      || (Array.isArray(article.recipeDetails) && article.recipeDetails.length)
-      || (Array.isArray(article.modifiers) && article.modifiers.length)) {
-      throw new LargeMasterSyncV3Error('SYNC_V3_ADVANCED_ARTICLE_CONTRACT_REQUIRED');
+    if (!['PRODUCT', 'SERVICE'].includes(String(article.type))) throw new UnsupportedArticleError('Tipo de artículo no soportado');
+    if (sourceFlags.usesLots || sourceFlags.usesSerial) throw new UnsupportedArticleError('Lotes o series no soportados');
+    if (sourceFlags.isWeighted && !hasV3KilogramContract(article)) {
+      const reasons = [sourceFlags.trackInventory && 'control de stock', sourceFlags.integersOnly !== false && 'cantidades enteras',
+        (!weightUnit(article.measurementUnit) || weightUnit(article.measurementUnit) !== weightUnit(article.purchaseUnit)) && 'unidades de peso incompatibles',
+        article.conversionFactor !== 1 && 'factor de conversión'].filter(Boolean);
+      throw new UnsupportedArticleError('Contrato de peso: ' + (reasons.join(', ') || 'configuración avanzada no soportada'));
+    }
+    if ((Array.isArray(article.recipeDetails) && article.recipeDetails.length) || (Array.isArray(article.modifiers) && article.modifiers.length)) {
+      throw new UnsupportedArticleError('Receta o modificadores no soportados');
     }
     const articleId = stringValue(article.id);
     const name = stringValue(article.name);
@@ -111,7 +122,7 @@ export class LargeMasterSyncV3OperationalCatalog {
       throw new LargeMasterSyncV3Error('SYNC_V3_ARTICLE_INVENTORY_COVERAGE_REQUIRED');
     }
     if (sourceFlags.isWeighted && sourceVariants.length > 0) {
-      throw new LargeMasterSyncV3Error('SYNC_V3_ADVANCED_ARTICLE_CONTRACT_REQUIRED');
+      throw new UnsupportedArticleError('Variantes de artículo pesado no soportadas');
     }
     const variants: ProductVariant[] = sourceVariants.filter(row => row.active === true).map(row => ({
       id: stringValue(row.id),
@@ -177,18 +188,24 @@ export class LargeMasterSyncV3OperationalCatalog {
 
   categories() { return this.saleCatalog.categories(); }
 
-  async search(query: string, categoryId?: V3CategoryFilter, limit = 60): Promise<V3OperationalProduct[]> {
+  async search(query: string, categoryId?: V3CategoryFilter, limit = 60, onDiagnostics?: (diagnostics: V3ArticleDiagnostic[]) => void): Promise<V3OperationalProduct[]> {
     await this.assertInventoryVersion();
     const sales = await this.saleCatalog.search(query, categoryId, limit);
     const supports = await this.ready.runtime.getOperationalSupports(sales.map(sale => stringValue(sale.article.id)), this.warehouseId);
+    const diagnostics: V3ArticleDiagnostic[] = [];
     const items = await Promise.all(sales.map(async sale => { try { return await this.adapt(sale, supports ? {
       balance: supports.balances[stringValue(sale.article.id)] || null,
       variants: supports.variants[stringValue(sale.article.id)] || [],
     } : undefined); } catch(error) {
+      if (error instanceof UnsupportedArticleError) {
+        if (diagnostics.length < 10) diagnostics.push({ articleId: stringValue(sale.article.id), sku: stringValue(sale.article.sku), code: error.code, reason: error.reason });
+        return null;
+      }
       if(error instanceof LargeMasterSyncV3Error && error.code === 'SYNC_V3_ARTICLE_INVENTORY_COVERAGE_REQUIRED') return null;
       throw error;
     }}));
     await this.assertInventoryVersion();
+    onDiagnostics?.(diagnostics);
     return items.filter((item): item is V3OperationalProduct => item !== null);
   }
 

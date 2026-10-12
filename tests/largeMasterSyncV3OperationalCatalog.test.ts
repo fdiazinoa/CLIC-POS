@@ -175,7 +175,11 @@ test('weighted contract rejects unsupported or ambiguous source semantics and ad
   for (const patch of changes) {
     const { ready } = fixture({ article: { ...weightedArticle, ...patch }, variants: [] });
     const catalog = await LargeMasterSyncV3OperationalCatalog.open(ready, 'T1', 'W');
-    await assert.rejects(catalog.search('BAL-001'), /ADVANCED_ARTICLE_CONTRACT_REQUIRED/, JSON.stringify(patch));
+    let diagnostics: any[] = [];
+    assert.deepEqual(await catalog.search('BAL-001', undefined, 60, rows => { diagnostics = rows; }), [], JSON.stringify(patch));
+    assert.equal(diagnostics[0].code, 'SYNC_V3_ADVANCED_ARTICLE_CONTRACT_REQUIRED');
+    assert.ok(diagnostics[0].reason);
+    await assert.rejects(catalog.get('A'), /ADVANCED_ARTICLE_CONTRACT_REQUIRED/, JSON.stringify(patch));
   }
   const { ready } = fixture({ article: weightedArticle });
   const catalog = await LargeMasterSyncV3OperationalCatalog.open(ready, 'T1', 'W');
@@ -194,4 +198,22 @@ test('raw inventoriable tracked article without anchor coverage is unavailable w
  assert.deepEqual((await catalog.search('')).map(row=>row.product.id),['A']);
  await assert.rejects(catalog.get('NEW'),/ARTICLE_INVENTORY_COVERAGE_REQUIRED/);
  await assert.rejects(catalog.findBarcode('NEW'),/ARTICLE_INVENTORY_COVERAGE_REQUIRED/);
+});
+
+
+test('healthy + unsupported page keeps healthy results, bounded diagnostics reset per query; direct lookup stays closed', async () => {
+  const { ready, calls } = fixture({ variants: [] }); const runtime = ready.runtime as any;
+  const unsupported = { ...weightedArticle, id: 'BAD', sku: 'ARR-001', measurementUnit: 'UND', purchaseUnit: 'UND' };
+  runtime.searchOperationalArticles = async () => [article, unsupported];
+  runtime.getPrices = async (ids: string[]) => ids.map(id => ({ articleId: id, tariffId: 'T1', price: 85 }));
+  runtime.getOperationalArticle = async () => unsupported;
+  runtime.findBarcode = async () => ({ articleId: 'BAD' });
+  const catalog = await LargeMasterSyncV3OperationalCatalog.open(ready, 'T1', 'W'); let warnings: any[] = [];
+  assert.deepEqual((await catalog.search('', undefined, 60, rows => { warnings = rows; })).map(row => row.product.id), ['A']);
+  assert.equal(warnings[0].sku, 'ARR-001'); assert.match(warnings[0].reason, /unidades/);
+  await assert.rejects(catalog.get('BAD'), /ADVANCED_ARTICLE_CONTRACT_REQUIRED/);
+  await assert.rejects(catalog.findBarcode('BAD'), /ADVANCED_ARTICLE_CONTRACT_REQUIRED/);
+  runtime.searchOperationalArticles = async () => [article];
+  await catalog.search('', undefined, 60, rows => { warnings = rows; }); assert.deepEqual(warnings, []);
+  assert.ok(calls.length < 12);
 });
