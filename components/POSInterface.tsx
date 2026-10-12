@@ -1,3 +1,5 @@
+import V3CatalogArticleWarning from './V3CatalogArticleWarning';
+import type { V3ArticleDiagnostic } from '../services/sync/LargeMasterSyncV3OperationalCatalog';
 import { formatQuantity, terminalQuantityPresentation } from '../utils/quantityPresentation';
 import { resolveSaleScales, assertCurrentScaleContext } from '../services/ScalePreferences';
 import { sameWeightPresentation, displayWeightQuantity, displayWeightPrice, canonicalWeightQuantity, weightLineLabel } from '../utils/scaleWeight';
@@ -231,6 +233,7 @@ export interface V3OperationalPOSBoundary {
 export interface POSInterfaceProps {
    v3Operational?: V3OperationalPOSBoundary;
    catalogSearchProducts?: Product[];
+   catalogArticleDiagnostics?: V3ArticleDiagnostic[];
    config: BusinessConfig;
    currentUser: UserType;
    roles: RoleDefinition[];
@@ -1229,6 +1232,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    suppressProductInputUntilMs = 0,
    v3Operational,
    catalogSearchProducts,
+   catalogArticleDiagnostics,
 }) => {
    freezeCount('POS_RENDER_COUNT');
    markRenderStart('POS_INTERACTION_VIEW');
@@ -7818,6 +7822,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   </button>
                </div>
             </header>
+            <V3CatalogArticleWarning diagnostics={catalogArticleDiagnostics || []} />
 
             {isMobile && !isKioskMode && (
                <MobilePosNavigation

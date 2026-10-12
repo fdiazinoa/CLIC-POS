@@ -6,7 +6,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import POSInterface, { type POSInterfaceProps, type V3OperationalPOSBoundary } from './POSInterface';
 import type { BusinessConfig, Product } from '../types';
 import { getLargeMasterSyncV3OperationalSession, type LargeMasterSyncV3OperationalSession } from '../services/sync/LargeMasterSyncV3OperationalSession';
-import type { LargeMasterSyncV3OperationalCatalog } from '../services/sync/LargeMasterSyncV3OperationalCatalog';
+import type { LargeMasterSyncV3OperationalCatalog, V3ArticleDiagnostic } from '../services/sync/LargeMasterSyncV3OperationalCatalog';
 import { reconcileV3TariffSelection, v3TariffContextKey, isV3TariffContextCurrent,
   type V3TariffSelection } from '../services/sync/LargeMasterSyncV3TariffSelection';
 
@@ -18,6 +18,7 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps> = props => {
   const [cache, setCache] = useState<Product[]>([]);
   const [categories, setCategories] = useState<V3OperationalCategory[]>([]);
   const [error, setError] = useState('');
+  const [articleDiagnostics, setArticleDiagnostics] = useState<V3ArticleDiagnostic[]>([]);
   const catalog = useRef<LargeMasterSyncV3OperationalCatalog>();
   const querySequence = useRef(0);
   const contextSequence = useRef(0);
@@ -57,6 +58,7 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps> = props => {
     catalog.current = undefined;
     setProjected(undefined);
     setError('');
+    setArticleDiagnostics([]);
     ++querySequence.current;
     void (async () => {
       if (authorityError) throw new Error(authorityError);
@@ -109,12 +111,14 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps> = props => {
       if (!source) throw new Error('SYNC_V3_UI_CONTEXT_CHANGED');
       lastQuery.current = { query, categoryId, categoryKeys };
       await session.assertCurrent();
-      const items = await source.search(query, query.trim() ? null : (categoryKeys || categoryId), 60);
+      let diagnostics: V3ArticleDiagnostic[] = [];
+      const items = await source.search(query, query.trim() ? null : (categoryKeys || categoryId), 60, rows => { diagnostics = rows; });
       const rows = await session.withStocks(items.map(item => item.product), warehouseId);
       if (sequence !== querySequence.current || context !== contextSequence.current) return;
       assertContext();
       remember(rows);
       setVisible(rows);
+      setArticleDiagnostics(diagnostics);
     },
     resolveCode: async raw => {
       assertContext();
@@ -188,6 +192,7 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps> = props => {
   if (!projected || !boundary) return <div role="status" className="p-6">Preparando catálogo V3 e inventario del dispositivo vinculado…</div>;
   return <POSInterface {...props} config={effectiveConfig!} products={cache} productPrices={[]}
     v3Operational={boundary} catalogSearchProducts={visible}
+    catalogArticleDiagnostics={articleDiagnostics}
     onUpdateProducts={() => { throw new Error('SYNC_V3_LOCAL_CATALOG_EDIT_UNSUPPORTED'); }}
     onUpdateConfig={next => props.onUpdateConfig({ ...next, taxes: props.config.taxes,
       tariffs: props.config.tariffs, taxRate: props.config.taxRate })} />;

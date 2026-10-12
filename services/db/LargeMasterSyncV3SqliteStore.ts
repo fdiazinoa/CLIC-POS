@@ -28,7 +28,9 @@ export type LargeMasterSyncV3SqliteFaultPoint =
   | 'apply_after_records'
   | 'apply_before_commit'
   | 'dataset_before_validate'
-  | 'activation_after_pointer';
+  | 'activation_after_pointer'
+  | 'activation_after_inventory'
+  | 'activation_after_owner';
 export type LargeMasterSyncV3SqliteFaultHook = (
   point: LargeMasterSyncV3SqliteFaultPoint,
   context: Record<string, unknown>,
@@ -209,6 +211,56 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
         JSON.stringify([inventory.syncId, inventory.syncVersion, inventory.version, inventory.cursor])) {
       throw new LargeMasterSyncV3Error('SYNC_V3_STOCK_AUTHORITY_INVALID');
     }
+  }
+
+  /** New units need a fresh ERP inventory baseline, never a relabeled old balance. */
+  async assertCanReplaceUnusedBaseline(transition: LargeMasterSyncV3CatalogTransition): Promise<void> {
+    await this.assertCatalogTransition(transition);
+    await this.assertUnusedSourcesAfterWrites();
+    await this.assertCatalogTransition(transition);
+  }
+
+  private async assertUnusedSourcesAfterWrites(): Promise<void> {
+    try { await this.assertUnmovedBaseline(); }
+    catch (error) {
+      if (error instanceof LargeMasterSyncV3Error && error.code === 'SYNC_V3_INVENTORY_COVERAGE_REQUIRED') {
+        throw new LargeMasterSyncV3Error('SYNC_V3_BASELINE_MIGRATION_REQUIRED');
+      }
+      throw error;
+    }
+    const db = this.connection();
+    const table = first(await db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='documents'"));
+    if (!table) return;
+    // Parse every retained business source, including nested refund/history records. Malformed state denies repair.
+    let after = '';
+    while (true) {
+      const batch = rows(await db.query(`SELECT collection_name, doc_id, data FROM documents
+        WHERE collection_name IN ('parkedTickets','v3RestoredTicketSources','transactions','transactionHistory')
+        AND collection_name || ':' || doc_id > ? ORDER BY collection_name || ':' || doc_id LIMIT 250`, [after]));
+      for (const row of batch) {
+        let source: unknown;
+        try { source = JSON.parse(String(row.data)); } catch { throw new LargeMasterSyncV3Error('SYNC_V3_BASELINE_MIGRATION_REQUIRED'); }
+        if (!source || typeof source !== 'object' || Array.isArray(source)) throw new LargeMasterSyncV3Error('SYNC_V3_BASELINE_MIGRATION_REQUIRED');
+        const pending: unknown[] = [source];
+        while (pending.length) {
+          const value = pending.pop();
+          if (!value || typeof value !== 'object') continue;
+          if (Array.isArray(value)) { pending.push(...value); continue; }
+          const record = value as RecordObject;
+          if ('v3SaleAuthority' in record || 'v3InventoryBaseline' in record || 'v3Binding' in record) {
+            throw new LargeMasterSyncV3Error('SYNC_V3_BASELINE_MIGRATION_REQUIRED');
+          }
+          pending.push(...Object.values(record));
+        }
+      }
+      if (batch.length < 250) break;
+      const last = batch[batch.length - 1]; after = String(last.collection_name) + ':' + String(last.doc_id);
+    }
+  }
+
+  async activateUnusedBaseline(syncId: string, snapshot: LargeMasterSyncV3InventorySnapshot,
+    transition: LargeMasterSyncV3CatalogTransition): Promise<LargeMasterSyncV3RuntimeVersion> {
+    return this.activateInternal(syncId, transition, snapshot);
   }
 
   async prepareCatalogOnly(manifest: LargeMasterSyncV3Manifest, transition: LargeMasterSyncV3CatalogTransition): Promise<void> {
@@ -490,7 +542,7 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
     return this.activateInternal(syncId, transition);
   }
   async activate(syncId: string): Promise<LargeMasterSyncV3RuntimeVersion> { return this.activateInternal(syncId); }
-  private async activateInternal(syncId: string, transition?: LargeMasterSyncV3CatalogTransition): Promise<LargeMasterSyncV3RuntimeVersion> {
+  private async activateInternal(syncId: string, transition?: LargeMasterSyncV3CatalogTransition, freshInventory?: LargeMasterSyncV3InventorySnapshot): Promise<LargeMasterSyncV3RuntimeVersion> {
     return this.writeLock(() => this.withBaselineMutation(async () => {
       this.assertOperationalWindow();
       const db = this.connection();
@@ -498,6 +550,7 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
         JOIN master_v3_state state ON state.singleton = 1
         WHERE s.sync_id = ? AND s.status = 'ACTIVE'
         AND state.active_sync_id = s.sync_id AND state.active_version = s.sync_version`, [syncId]));
+      if (alreadyActive && freshInventory) throw new LargeMasterSyncV3Error('SYNC_V3_ACTIVATION_PRECONDITION_FAILED');
       if (alreadyActive && transition && syncId === transition.inventory.syncId
         && Number(alreadyActive.sync_version) === transition.inventory.syncVersion
         && !await this.getCatalogReceipt({syncId,syncVersion:Number(alreadyActive.sync_version)},transition.binding)) {
@@ -533,6 +586,10 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
       try {
         if (transition) await this.assertCatalogTransition(transition);
         else await this.assertUnmovedBaseline();
+        if (freshInventory) {
+          if (!transition) throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
+          await this.assertCanReplaceUnusedBaseline(transition);
+        }
         const session = first(await db.query(
           "SELECT sync_version, contract_version FROM sync_v3_sessions WHERE sync_id = ? AND status = 'VALIDATED'", [syncId],
         ));
@@ -541,7 +598,11 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
           || Number(state?.staging_version) !== Number(session.sync_version)) {
           throw new LargeMasterSyncV3Error('SYNC_V3_ACTIVATION_PRECONDITION_FAILED');
         }
-        if (transition) {
+        if (freshInventory && (Number(session.contract_version) < 2 || first(await db.query(
+          'SELECT sync_id FROM master_v3_catalog_owners WHERE sync_id=? AND sync_version=?', [syncId, Number(session.sync_version)])))) {
+          throw new LargeMasterSyncV3Error('SYNC_V3_ACTIVATION_PRECONDITION_FAILED');
+        }
+        if (transition && !freshInventory) {
           const previous = transition.expectedCatalog.syncVersion;
           const next = Number(session.sync_version);
           for (const [dataset, semantics] of [['taxes', v3TaxSemantics], ['tariffs', v3TariffSemantics], ['variants', v3VariantSemantics]] as const) {
@@ -594,12 +655,29 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
           await db.run("UPDATE sync_v3_sessions SET status = 'ROLLED_BACK', updated_at = ? WHERE sync_id = ? AND status = 'ACTIVE'",
             [timestamp, state.active_sync_id], false);
         }
+        if (freshInventory) {
+          await this.writeInventorySnapshot(db, { syncId, syncVersion: Number(session.sync_version), contractVersion: Number(session.contract_version) }, freshInventory);
+          await this.fault?.('activation_after_inventory', { syncId });
+        }
         if (transition) {
           await db.run(`UPDATE master_v3_operational_owner SET sync_id = ?, sync_version = ? WHERE singleton = 1`,
             [syncId, Number(session.sync_version)], false);
         }
+        await this.fault?.('activation_after_owner', { syncId });
         this.assertOperationalWindow();
         await transition?.assertIdentity?.();
+        if (freshInventory) {
+          await this.assertUnusedSourcesAfterWrites();
+          const [active, owner, anchor] = await Promise.all([this.getActiveRuntimeVersion(), this.getOperationalOwner(), this.getInventoryAuthority()]);
+          if (active?.syncId !== syncId || active.syncVersion !== Number(session.sync_version)
+            || owner?.syncId !== syncId || owner.syncVersion !== active.syncVersion || owner.binding !== transition!.binding
+            || anchor?.syncId !== syncId || anchor.syncVersion !== active.syncVersion
+            || anchor.version !== freshInventory.version || anchor.cursor !== freshInventory.cursor) {
+            throw new LargeMasterSyncV3Error('SYNC_V3_CATALOG_TRANSITION_CHANGED');
+          }
+          await transition!.assertIdentity!();
+          this.assertOperationalWindow();
+        }
         await db.execute('COMMIT;', false);
         return { syncId, syncVersion: Number(session.sync_version),
           ...(Number(session.contract_version) >= 2 ? { contractVersion: Number(session.contract_version) } : {}) };
@@ -818,6 +896,38 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
     return row ? { articleId: String(row.article_id), variantId: String(row.variant_id || '') || null } : null;
   }
 
+  private async writeInventorySnapshot(db: SQLiteConnection, runtime: LargeMasterSyncV3RuntimeVersion,
+    snapshot: LargeMasterSyncV3InventorySnapshot): Promise<void> {
+    requireOperationalVersion(runtime);
+    if (!Number.isSafeInteger(snapshot.version) || snapshot.version < 0 || typeof snapshot.cursor !== 'string'
+      || !snapshot.cursor.trim() || !Array.isArray(snapshot.balances)) throw new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_INVALID');
+    this.assertOperationalWindow();
+    await db.run('DELETE FROM master_v3_inventory_balances', [], false);
+    for (let offset = 0; offset < snapshot.balances.length; offset += CHUNK_SUB_BATCH_SIZE) {
+      const statements = snapshot.balances.slice(offset, offset + CHUNK_SUB_BATCH_SIZE).map(balance => {
+        if (!balance || typeof balance.item_id !== 'string' || !balance.item_id.trim()
+          || typeof balance.warehouse_id !== 'string' || !balance.warehouse_id.trim()
+          || typeof balance.updated_at !== 'string' || !balance.updated_at.trim()
+          || ![balance.qty_on_hand, balance.qty_reserved, balance.qty_committed]
+            .every(value => typeof value === 'number' && Number.isFinite(value))) {
+          throw new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_INVALID');
+        }
+        return { statement: `INSERT INTO master_v3_inventory_balances
+          (item_id, warehouse_id, qty_on_hand, qty_reserved, qty_committed, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?)`, values: [balance.item_id, balance.warehouse_id,
+          balance.qty_on_hand, balance.qty_reserved, balance.qty_committed, balance.updated_at] };
+      });
+      await this.executeRecordBatch(db, statements);
+    }
+    await db.run(`INSERT INTO master_v3_inventory_state
+      (singleton, sync_id, sync_version, inventory_version, cursor, updated_at)
+      VALUES (1, ?, ?, ?, ?, ?)
+      ON CONFLICT(singleton) DO UPDATE SET sync_id=excluded.sync_id,
+      sync_version=excluded.sync_version, inventory_version=excluded.inventory_version,
+      cursor=excluded.cursor, updated_at=excluded.updated_at`,
+    [runtime.syncId, runtime.syncVersion, snapshot.version, snapshot.cursor, now()], false);
+  }
+
   async replaceInventorySnapshot(runtime: LargeMasterSyncV3RuntimeVersion, snapshot: LargeMasterSyncV3InventorySnapshot): Promise<void> {
     requireOperationalVersion(runtime);
     if (!Number.isSafeInteger(snapshot.version) || snapshot.version < 0
@@ -845,31 +955,7 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
               && snapshot.cursor !== String(previous.cursor)))) {
           throw new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_STALE');
         }
-        this.assertOperationalWindow();
-        await db.run('DELETE FROM master_v3_inventory_balances', [], false);
-        for (let offset = 0; offset < snapshot.balances.length; offset += CHUNK_SUB_BATCH_SIZE) {
-          const statements = snapshot.balances.slice(offset, offset + CHUNK_SUB_BATCH_SIZE).map(balance => {
-            if (!balance || typeof balance.item_id !== 'string' || !balance.item_id.trim()
-              || typeof balance.warehouse_id !== 'string' || !balance.warehouse_id.trim()
-              || typeof balance.updated_at !== 'string' || !balance.updated_at.trim()
-              || ![balance.qty_on_hand, balance.qty_reserved, balance.qty_committed]
-                .every(value => typeof value === 'number' && Number.isFinite(value))) {
-              throw new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_INVALID');
-            }
-            return { statement: `INSERT INTO master_v3_inventory_balances
-              (item_id, warehouse_id, qty_on_hand, qty_reserved, qty_committed, updated_at)
-              VALUES (?, ?, ?, ?, ?, ?)`, values: [balance.item_id, balance.warehouse_id,
-              balance.qty_on_hand, balance.qty_reserved, balance.qty_committed, balance.updated_at] };
-          });
-          await this.executeRecordBatch(db, statements);
-        }
-        await db.run(`INSERT INTO master_v3_inventory_state
-          (singleton, sync_id, sync_version, inventory_version, cursor, updated_at)
-          VALUES (1, ?, ?, ?, ?, ?)
-          ON CONFLICT(singleton) DO UPDATE SET sync_id=excluded.sync_id,
-          sync_version=excluded.sync_version, inventory_version=excluded.inventory_version,
-          cursor=excluded.cursor, updated_at=excluded.updated_at`,
-        [runtime.syncId, runtime.syncVersion, snapshot.version, snapshot.cursor, now()], false);
+        await this.writeInventorySnapshot(db, runtime, snapshot);
         this.assertOperationalWindow();
         await db.execute('COMMIT;', false);
       } catch (error) {
