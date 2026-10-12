@@ -123,9 +123,14 @@ export const prepareLargeMasterSyncV3CatalogOnly = async (
     return typeof value === 'function' ? value.bind(target) : value;
   } });
   const client = dependencies.createClient(scopedStore, v3BaseUrl, metric);
-  const requested = await client.requestSync();
+  // Interrupted refreshes retain their manifest/chunks. Resume them before negotiating another session.
+  const incomplete = await store.findIncomplete();
+  const requested = incomplete || await client.requestSync();
   if ('fallback' in requested) throw new LargeMasterSyncV3Error('SYNC_V3_LEGACY_FALLBACK_REJECTED');
   const version = await client.resumeSync(requested.syncId);
+  if (version.syncId !== requested.syncId || version.syncVersion !== requested.syncVersion) {
+    throw new LargeMasterSyncV3Error('SYNC_V3_STAGING_CONFLICT');
+  }
   await store.activateCatalogOnly(requested.syncId, transition);
   const runtime = await dependencies.openRuntime(store);
   const receipt = await store.getCatalogReceipt?.(version, binding);
@@ -136,4 +141,61 @@ export const prepareLargeMasterSyncV3CatalogOnly = async (
   }
   return { runtime, inventoryVersion: inventory.version, inventoryCursor: inventory.cursor,
     inventorySyncId: inventory.syncId, inventorySyncVersion: inventory.syncVersion };
+};
+
+/** Resume validated staging after semantic rejection; publish all native authorities together. */
+export const prepareLargeMasterSyncV3UnusedBaseline = async (
+  store: LargeMasterSyncV3Store, v3BaseUrl: string,
+  transition: import('./LargeMasterSyncV3Types').LargeMasterSyncV3CatalogTransition,
+  metric?: (metric: LargeMasterSyncV3Metric) => void,
+  dependencies: CandidateDependencies = defaultDependencies,
+): Promise<LargeMasterSyncV3CandidateReady> => {
+  if (!dependencies.enabled) throw new LargeMasterSyncV3Error('SYNC_V3_CANDIDATE_DISABLED');
+  dependencies.assertPlatform();
+  if (!store.assertCanReplaceUnusedBaseline || !store.activateUnusedBaseline) {
+    throw new LargeMasterSyncV3Error('SYNC_V3_NATIVE_STORE_UNAVAILABLE');
+  }
+  await dependencies.waitForOperationalWindow();
+  await store.assertCanReplaceUnusedBaseline(transition);
+  const staged = await store.findIncomplete();
+  if (!staged || staged.status !== 'VALIDATED'
+    || staged.syncId === transition.expectedCatalog.syncId) {
+    throw new LargeMasterSyncV3Error('SYNC_V3_STAGING_CONFLICT');
+  }
+  const scopedStore = new Proxy(store, { get(target, key) {
+    if (key === 'prepare') return (manifest: Parameters<LargeMasterSyncV3Store['prepare']>[0]) => {
+      if (manifest.syncId !== staged.syncId || manifest.syncVersion !== staged.syncVersion || (manifest.contractVersion || 1) < 2) {
+        throw new LargeMasterSyncV3Error('SYNC_V3_STAGING_CONFLICT');
+      }
+      return target.prepareCatalogOnly!(manifest, transition);
+    };
+    if (key === 'activate') return async (syncId: string) => {
+      const progress = await target.readProgress(syncId);
+      if (syncId !== staged.syncId || progress?.syncVersion !== staged.syncVersion || progress.status !== 'VALIDATED') {
+        throw new LargeMasterSyncV3Error('SYNC_V3_ACTIVATION_PRECONDITION_FAILED');
+      }
+      await target.assertCanReplaceUnusedBaseline!(transition);
+      return { syncId, syncVersion: staged.syncVersion, contractVersion: 2 };
+    };
+    const value = Reflect.get(target, key);
+    return typeof value === 'function' ? value.bind(target) : value;
+  } });
+  // No second negotiation/session; the persisted validated chunks are the only candidate.
+  const version = await dependencies.createClient(scopedStore, v3BaseUrl, metric).resumeSync(staged.syncId);
+  if (version.syncId !== staged.syncId || version.syncVersion !== staged.syncVersion || (version.contractVersion || 1) < 2) {
+    throw new LargeMasterSyncV3Error('SYNC_V3_OPERATIONAL_CONTRACT_REQUIRED');
+  }
+  const inventory = await dependencies.fetchInventory();
+  await dependencies.waitForOperationalWindow();
+  await store.activateUnusedBaseline(staged.syncId, inventory, transition);
+  const [runtime, saved, owner] = await Promise.all([
+    dependencies.openRuntime(store), store.getInventorySnapshotVersion(version), store.getOperationalOwner?.(),
+  ]);
+  if (!runtime || runtime.version.syncId !== version.syncId || runtime.version.syncVersion !== version.syncVersion
+    || saved?.version !== inventory.version || saved.cursor !== inventory.cursor || owner?.binding !== transition.binding
+    || owner.syncId !== version.syncId || owner.syncVersion !== version.syncVersion) {
+    throw new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_NOT_READY');
+  }
+  await transition.assertIdentity?.();
+  return { runtime, inventoryVersion: saved.version, inventoryCursor: saved.cursor };
 };

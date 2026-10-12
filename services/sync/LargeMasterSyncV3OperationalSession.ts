@@ -8,7 +8,7 @@ import { LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED } from './LargeMasterSyncV3Autho
 import { LARGE_MASTER_SYNC_V3_CANARY, validateLargeMasterSyncV3CanaryUrl } from './LargeMasterSyncV3Canary';
 import { readOperationalTerminalBinding } from './OperationalTerminalConfig';
 import { readLargeMasterSyncV3BoundIdentity, type LargeMasterSyncV3BoundIdentity } from './LargeMasterSyncV3BoundTransport';
-import { prepareLargeMasterSyncV3Candidate, prepareLargeMasterSyncV3CatalogOnly, type LargeMasterSyncV3CandidateReady } from './LargeMasterSyncV3Candidate';
+import { prepareLargeMasterSyncV3Candidate, prepareLargeMasterSyncV3CatalogOnly, prepareLargeMasterSyncV3UnusedBaseline, type LargeMasterSyncV3CandidateReady } from './LargeMasterSyncV3Candidate';
 import { LargeMasterSyncV3Runtime } from './LargeMasterSyncV3Runtime';
 import { LargeMasterSyncV3OperationalCatalog } from './LargeMasterSyncV3OperationalCatalog';
 import { buildLargeMasterSyncV3CheckoutFiscalInput } from './LargeMasterSyncV3CheckoutAuthority';
@@ -86,8 +86,14 @@ export class LargeMasterSyncV3OperationalSession {
     if (!ready) {
       const anchor = await store.getInventoryAuthority?.();
       const catalogOnly = Boolean(refresh && runtime && owner?.binding === binding && anchor);
-      ready = catalogOnly ? await prepareLargeMasterSyncV3CatalogOnly(store, v3BaseUrl, binding, observe, undefined, assertIdentity)
-        : await prepareLargeMasterSyncV3Candidate(store, v3BaseUrl, observe);
+      if (catalogOnly) {
+        try { ready = await prepareLargeMasterSyncV3CatalogOnly(store, v3BaseUrl, binding, observe, undefined, assertIdentity); }
+        catch (error) {
+          if (!(error instanceof LargeMasterSyncV3Error) || error.code !== 'SYNC_V3_CATALOG_SEMANTICS_CHANGED') throw error;
+          ready = await prepareLargeMasterSyncV3UnusedBaseline(store, v3BaseUrl,
+            { expectedCatalog: runtime!.version, inventory: anchor!, binding, assertIdentity }, observe);
+        }
+      } else ready = await prepareLargeMasterSyncV3Candidate(store, v3BaseUrl, observe);
       await assertIdentity();
       observe({ event: 'setup_phase', phase: 'owner' });
       if (!catalogOnly) await store.setOperationalOwner(ready.runtime.version, binding);

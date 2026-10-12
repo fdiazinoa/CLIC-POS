@@ -107,6 +107,8 @@ export interface LargeMasterSyncV3CatalogTransition { binding: string; expectedC
 
 export interface LargeMasterSyncV3Store {
   getInventoryAuthority?(): Promise<LargeMasterSyncV3InventoryAuthority | null>;
+  assertCanReplaceUnusedBaseline?(transition: LargeMasterSyncV3CatalogTransition): Promise<void>;
+  activateUnusedBaseline?(syncId: string, snapshot: LargeMasterSyncV3InventorySnapshot, transition: LargeMasterSyncV3CatalogTransition): Promise<LargeMasterSyncV3RuntimeVersion>;
   prepareCatalogOnly?(manifest: LargeMasterSyncV3Manifest, transition: LargeMasterSyncV3CatalogTransition): Promise<void>;
   activateCatalogOnly?(syncId: string, transition: LargeMasterSyncV3CatalogTransition): Promise<LargeMasterSyncV3RuntimeVersion>;
   getCatalogReceipt?(runtime: LargeMasterSyncV3RuntimeVersion, binding: string): Promise<LargeMasterSyncV3InventoryAuthority | null>;
