@@ -1,4 +1,4 @@
-import { buildPosCategoryIdentity } from '../utils/posCategoryIdentity';
+import { buildPosCategoryIdentity, reconcileBoundV3PosCategories } from '../utils/posCategoryIdentity';
 import V3CatalogArticleWarning from './V3CatalogArticleWarning';
 import type { V3ArticleDiagnostic } from '../services/sync/LargeMasterSyncV3OperationalCatalog';
 import { formatQuantity, terminalQuantityPresentation } from '../utils/quantityPresentation';
@@ -1658,14 +1658,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       return typeof value === 'string' ? value.trim().toLowerCase() : '';
    }, []);
    const categoryLookup = useMemo(() => {
-      const identity = buildPosCategoryIdentity(config.posCategories || [], config.families || []);
+      const posCategories = reconcileBoundV3PosCategories(config.posCategories || [], v3Operational?.categories);
+      const identity = buildPosCategoryIdentity(posCategories, config.families || []);
       const aliasToCanonical = identity.aliasToCanonical;
       const canonicalToDisplay = new Map<string, string>();
       const presentationByCanonical = new Map<string, { color?: string; sortOrder: number; isActive: boolean }>();
 
       const categoryPresentationSources = [
          ...(config.families || []),
-         ...(config.posCategories || []),
+         ...posCategories,
       ];
       for (const [index, category] of categoryPresentationSources.entries()) {
          const canonical = identity.canonicalize(category.id || category.code || category.name);
@@ -1681,7 +1682,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
 
       return { aliasToCanonical, canonicalToDisplay, presentationByCanonical, identity };
-   }, [config.families, config.posCategories, normalizeScopeKey]);
+   }, [config.families, config.posCategories, normalizeScopeKey, v3Operational?.categories]);
    const canonicalizeCategory = useCallback((value: unknown) => {
       const normalized = normalizeScopeKey(value);
       return categoryLookup.identity.canonicalize(normalized);

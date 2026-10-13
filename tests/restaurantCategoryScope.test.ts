@@ -1,4 +1,4 @@
-import { buildPosCategoryIdentity } from '../utils/posCategoryIdentity';
+import { buildPosCategoryIdentity, reconcileBoundV3PosCategories } from '../utils/posCategoryIdentity';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -18,9 +18,9 @@ async function actualConsumers() {
   return (input:any)=>{
     let selected=input.categoryFilter||'ALL';
     const dependencies={ config:{families:[],posCategories:[],...input.config},activeTerminalConfig:{catalog:{allowedCategories:input.allowed}},catalogProducts:input.products,
-      products:input.products,v3Operational:input.v3,categoryFilter:selected,catalogSearchQuery:input.search||'',isRetailMode:false,
+      products:input.products,v3Operational:input.v3,categoryFilter:selected,catalogSearchQuery:input.search||'',isRetailMode:input.isRetailMode||false,
       useMemo:(fn:any)=>fn(),useCallback:(fn:any)=>fn,useEffect:(fn:any)=>fn(),setCategoryFilter:(next:string)=>{selected=next;},
-      buildPosCategoryIdentity,resolveClassificationColor,resolveClassificationSortOrder,resolveClassificationActive,normalizeSearchToken:(v:any)=>String(v||'').trim().toLowerCase(),
+      buildPosCategoryIdentity,reconcileBoundV3PosCategories,resolveClassificationColor,resolveClassificationSortOrder,resolveClassificationActive,normalizeSearchToken:(v:any)=>String(v||'').trim().toLowerCase(),
       freezeCount(){},tableLatencyQaMark(){},searchFilterTraceRef:{current:null},markInteractionStage(){},
     };
     const result=new Function(...Object.keys(dependencies),`${js};return renderConsumers();`)(...Object.values(dependencies));return {...result,selected};
@@ -122,4 +122,29 @@ test('unrestricted V3 category buttons with missing configured metadata select s
  assert.deepEqual(output.products.map((p:any)=>p.id),['2135']);
  assert.deepEqual(output.options.map((c:any)=>[c.id,c.label]),[['ALL','Todas'],['bound-erp-category','Todos1']]);
  assert.equal(output.selected,'bound-erp-category');
+});
+
+test('actual Sales consumers reconcile bound Bebidas UUID in Restaurante and Supermercado after hydration/reopen', async () => {
+ const render=await actualConsumers();
+ const id='58b57216-a283-42d0-8da7-de60560a5d0b';
+ const config={posCategories:[{id:'Bebidas',name:'Bebidas',color:'#123456',isActive:true}]};
+ const prices:Record<string,number>={'182':275,'183':150,'184':140,'395':260,'396':210,'397':110,'BEB-003':85};
+ const products=Object.entries(prices).map(([sku,price])=>({id:sku,sku,name:'Agua',category:'Bebidas',posCategoryId:id,price,taxIds:['ITBIS18','SERVICE10'],stock:-3}));
+ const before=JSON.stringify({config,products});
+ for(const isRetailMode of [false,true]) {
+  const input={allowed:['Bebidas'],products,config,isRetailMode,search:'Agua'};
+  assert.deepEqual(render({...input,v3:{categories:[]}}).products,[]);
+  for(const categoryFilter of ['ALL',id,'Bebidas']) {
+   for(const v3 of [{categories:[{key:id,label:'Bebidas'}]},JSON.parse(JSON.stringify({categories:[{key:id,label:'Bebidas'}]}))]) {
+    const output=render({...input,v3,categoryFilter});
+    assert.deepEqual(output.allowed,[id]);
+    assert.deepEqual(output.products,products);
+    assert.deepEqual(output.options.map((c:any)=>[c.id,c.label,c.color]),[['ALL','Todas',undefined],[id,'Bebidas','#123456']]);
+   }
+  }
+  const foreign=render({...input,v3:{categories:[{key:'other-company',label:'Bebidas'}]}});
+  assert.deepEqual(foreign.products,[]);
+  assert.deepEqual(render({...input,v3:{categories:[{key:id,label:'Bebidas'},{key:'ambiguous',label:'Bebidas'}]}}).products,[]);
+ }
+ assert.equal(JSON.stringify({config,products}),before);
 });
