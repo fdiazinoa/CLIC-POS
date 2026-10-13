@@ -167,3 +167,39 @@ test('rename migration indexes actual POS identity, never raw categoryId or fore
   assert.deepEqual(protectedData(f.db),before);
  }finally{f.db.close();}
 });
+
+test('each disjoint search arm filters before top K, preserves global order and uses the partial legacy index',async()=>{
+ const f=fixture();try {
+  const before=protectedData(f.db);
+  const insert=f.db.prepare(`INSERT INTO master_v3_articles(sync_version,article_id,sku,description,taxable,tax_ids_json,active,sellable,record_json) VALUES(2,?,?,?,0,'[]',1,1,?)`);
+  f.db.exec('BEGIN');
+  for(let n=0;n<12000;n++) {
+   const id=`S${String(n).padStart(5,'0')}`;
+   const record={id,sku:n>=11900?'late-match':id,category:n%2?'Todos1':'TD-01',
+    ...(n%3===0?{}:{posCategoryId:n%3===1?'a':'b'})};
+   insert.run(id,record.sku,'Product',JSON.stringify(record));
+  }
+  f.db.exec('COMMIT');
+  await ensureLargeMasterSyncV3ContractColumns(f.bridge);
+  await ensureLargeMasterSyncV3ContractColumns(f.bridge);
+  await backfillLargeMasterSyncV3Categories(f.bridge);
+  const filter={ids:['a','b'],aliases:['Todos1','TD-01']};
+  for(const query of ['', 'late-match'])for(const limit of [1,60,100]){
+   const actual=await f.store.searchOperationalArticles(version,query,filter,limit);
+   const expected=f.db.prepare(`SELECT record_json FROM master_v3_articles WHERE sync_version=2 AND active=1 AND sellable=1
+    AND record_json IS NOT NULL AND (pos_category_id IN ('a','b') OR (coalesce(pos_category_id,'')='' AND pos_category_key IN ('todos1','td-01')))
+    AND (?='' OR instr(lower(coalesce(sku,'')),?)>0 OR instr(lower(coalesce(description,'')),?)>0)
+    ORDER BY article_id LIMIT ?`).all(query,query,query,limit) as any[];
+   assert.deepEqual(actual.map(row=>row.id),expected.map(row=>JSON.parse(row.record_json).id));
+   assert.equal(actual.length,limit);
+  }
+  const query=f.queries.filter(q=>q.sql.includes('UNION ALL SELECT')).at(-1)!;
+  assert.equal((query.sql.match(/LIMIT \?/g)||[]).length,3,'both arms bounded before the final merge');
+  const explain=f.db.prepare(`EXPLAIN QUERY PLAN ${query.sql}`).all(...query.params as any[]) as any[];
+  assert.ok(explain.some(row=>String(row.detail).includes('idx_master_v3_articles_pos_category_legacy')));
+  assert.ok(explain.some(row=>String(row.detail).includes('idx_master_v3_articles_pos_identity')));
+  const index=f.db.prepare("SELECT sql FROM sqlite_master WHERE name='idx_master_v3_articles_pos_category_legacy'").get() as any;
+  assert.match(index.sql,/WHERE coalesce\(pos_category_id, ''\) = ''/);
+  assert.deepEqual(protectedData(f.db),before);
+ }finally{f.db.close();}
+});

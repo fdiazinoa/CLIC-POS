@@ -192,6 +192,9 @@ export const ensureLargeMasterSyncV3ContractColumns = async (db: {
   }
   await db.execute(`CREATE INDEX IF NOT EXISTS idx_master_v3_articles_pos_identity
     ON master_v3_articles(sync_version, pos_category_id, active, sellable, article_id);`);
+  await db.execute(`CREATE INDEX IF NOT EXISTS idx_master_v3_articles_pos_category_legacy
+    ON master_v3_articles(sync_version, pos_category_key, active, sellable, article_id)
+    WHERE coalesce(pos_category_id, '') = '';`);
   await db.execute(`CREATE INDEX IF NOT EXISTS idx_master_v3_articles_pos_category
     ON master_v3_articles(sync_version, pos_category_key, active, sellable, article_id);`);
 };

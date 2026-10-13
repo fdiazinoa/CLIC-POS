@@ -831,17 +831,36 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
     const placeholders = categoryKeys.map(() => '?').join(',');
     const identityPlaceholders = identityKeys.length ? identityKeys.map(() => '?').join(',') : "NULL";
     const selected = categoryId != null;
-    // Two index seeks: explicit POS identity wins; declared label aliases only serve legacy rows without it.
-    const source = !selected ? 'master_v3_articles' : categoryKeys.length ? `(SELECT * FROM master_v3_articles INDEXED BY idx_master_v3_articles_pos_identity
-      WHERE sync_version = ? AND pos_category_id IN (${identityPlaceholders}) AND active = 1 AND sellable = 1
-      UNION ALL SELECT * FROM master_v3_articles INDEXED BY idx_master_v3_articles_pos_category
-      WHERE sync_version = ? AND pos_category_key IN (${placeholders}) AND coalesce(pos_category_id, '') = '' AND active = 1 AND sellable = 1)` : '(SELECT * FROM master_v3_articles WHERE 0)';
-    const result = await this.connection().query(`SELECT record_json FROM ${source}
-      WHERE sync_version = ? AND active = 1 AND sellable = 1 AND record_json IS NOT NULL
-      AND (? = '' OR instr(lower(coalesce(sku, '')), ?) > 0
-        OR instr(lower(coalesce(description, '')), ?) > 0)
-      ORDER BY article_id LIMIT ?`, [...(selected && categoryKeys.length ? [runtime.syncVersion, ...identityKeys, runtime.syncVersion, ...categoryKeys] : []), runtime.syncVersion,
-      normalizedQuery, normalizedQuery, normalizedQuery, safeLimit]);
+    const matchesSearch = `record_json IS NOT NULL AND (? = '' OR instr(lower(coalesce(sku, '')), ?) > 0
+      OR instr(lower(coalesce(description, '')), ?) > 0)`;
+    const searchValues = [normalizedQuery, normalizedQuery, normalizedQuery];
+    let statement: string;
+    let parameters: unknown[];
+    if (!selected) {
+      statement = `SELECT record_json FROM master_v3_articles
+        WHERE sync_version = ? AND active = 1 AND sellable = 1 AND ${matchesSearch}
+        ORDER BY article_id LIMIT ?`;
+      parameters = [runtime.syncVersion, ...searchValues, safeLimit];
+    } else if (!categoryKeys.length) {
+      statement = 'SELECT record_json FROM master_v3_articles WHERE 0';
+      parameters = [];
+    } else {
+      // Arms are disjoint. Their local top K contain the exact global top K;
+      // search predicates run before each LIMIT so later matching SKUs are never lost.
+      statement = `SELECT record_json FROM (
+        SELECT article_id, record_json FROM (
+          SELECT article_id, record_json FROM master_v3_articles INDEXED BY idx_master_v3_articles_pos_identity
+          WHERE sync_version = ? AND pos_category_id IN (${identityPlaceholders}) AND active = 1 AND sellable = 1
+          AND ${matchesSearch} ORDER BY article_id LIMIT ?)
+        UNION ALL SELECT article_id, record_json FROM (
+          SELECT article_id, record_json FROM master_v3_articles INDEXED BY idx_master_v3_articles_pos_category_legacy
+          WHERE sync_version = ? AND pos_category_key IN (${placeholders}) AND coalesce(pos_category_id, '') = ''
+          AND active = 1 AND sellable = 1 AND ${matchesSearch} ORDER BY article_id LIMIT ?)
+        ) ORDER BY article_id LIMIT ?`;
+      parameters = [runtime.syncVersion, ...identityKeys, ...searchValues, safeLimit,
+        runtime.syncVersion, ...categoryKeys, ...searchValues, safeLimit, safeLimit];
+    }
+    const result = await this.connection().query(statement, parameters);
     return rows(result).map(operationalRecord);
   }
 
