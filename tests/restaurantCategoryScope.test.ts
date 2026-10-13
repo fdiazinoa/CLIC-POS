@@ -1,3 +1,4 @@
+import { buildPosCategoryIdentity } from '../utils/posCategoryIdentity';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -19,7 +20,7 @@ async function actualConsumers() {
     const dependencies={ config:{families:[],posCategories:[],...input.config},activeTerminalConfig:{catalog:{allowedCategories:input.allowed}},catalogProducts:input.products,
       products:input.products,v3Operational:input.v3,categoryFilter:selected,catalogSearchQuery:input.search||'',isRetailMode:false,
       useMemo:(fn:any)=>fn(),useCallback:(fn:any)=>fn,useEffect:(fn:any)=>fn(),setCategoryFilter:(next:string)=>{selected=next;},
-      resolveClassificationColor,resolveClassificationSortOrder,resolveClassificationActive,normalizeSearchToken:(v:any)=>String(v||'').trim().toLowerCase(),
+      buildPosCategoryIdentity,resolveClassificationColor,resolveClassificationSortOrder,resolveClassificationActive,normalizeSearchToken:(v:any)=>String(v||'').trim().toLowerCase(),
       freezeCount(){},tableLatencyQaMark(){},searchFilterTraceRef:{current:null},markInteractionStage(){},
     };
     const result=new Function(...Object.keys(dependencies),`${js};return renderConsumers();`)(...Object.values(dependencies));return {...result,selected};

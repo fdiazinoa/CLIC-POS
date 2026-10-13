@@ -77,6 +77,7 @@ CREATE TABLE IF NOT EXISTS master_v3_articles (
   record_json TEXT,
   pos_category_key TEXT,
   pos_category_label TEXT,
+  pos_category_id TEXT,
   PRIMARY KEY (sync_version, article_id)
 );
 CREATE INDEX IF NOT EXISTS idx_master_v3_articles_version_sku
@@ -173,6 +174,7 @@ const CONTRACT_V2_COLUMNS = [
   ['master_v3_articles', 'record_json', 'TEXT'],
   ['master_v3_articles', 'pos_category_key', 'TEXT'],
   ['master_v3_articles', 'pos_category_label', 'TEXT'],
+  ['master_v3_articles', 'pos_category_id', 'TEXT'],
   ['master_v3_tariffs', 'record_json', 'TEXT'],
   ['master_v3_taxes', 'record_json', 'TEXT'],
   ['master_v3_variants', 'record_json', 'TEXT'],
@@ -188,6 +190,8 @@ export const ensureLargeMasterSyncV3ContractColumns = async (db: {
     if (info.values?.some(row => String(row.name) === column)) continue;
     await db.execute(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition};`);
   }
+  await db.execute(`CREATE INDEX IF NOT EXISTS idx_master_v3_articles_pos_identity
+    ON master_v3_articles(sync_version, pos_category_id, active, sellable, article_id);`);
   await db.execute(`CREATE INDEX IF NOT EXISTS idx_master_v3_articles_pos_category
     ON master_v3_articles(sync_version, pos_category_key, active, sellable, article_id);`);
 };
@@ -210,22 +214,24 @@ export const backfillLargeMasterSyncV3Categories = async (db: CategoryMigrationC
     await db.execute('BEGIN IMMEDIATE TRANSACTION;', false);
     try {
       const batch = (await db.query(`SELECT sync_version, article_id, record_json
-        FROM master_v3_articles WHERE pos_category_key IS NULL
+        FROM master_v3_articles WHERE (pos_category_key IS NULL OR pos_category_id IS NULL)
         ${cursor ? 'AND (sync_version, article_id) > (?, ?)' : ''}
         ORDER BY sync_version, article_id LIMIT ?`, [...(cursor || []), V3_CATEGORY_BACKFILL_BATCH_SIZE])).values || [];
       if (!batch.length) { await db.execute('COMMIT;', false); return; }
       const updates = batch.map(row => {
         let label = '';
+        let identity = '';
         try {
           const record: unknown = typeof row.record_json === 'string' ? JSON.parse(row.record_json) : null;
           if (record && typeof record === 'object' && !Array.isArray(record)) {
             const category = (record as Record<string, unknown>).category;
             label = typeof category === 'string' ? category.trim() : '';
+            identity = normalizeV3CategoryKey((record as Record<string, unknown>).posCategoryId);
           }
         } catch { /* Preserve invalid JSON for the operational reader to reject as before. */ }
-        return { statement: `UPDATE master_v3_articles SET pos_category_key = ?, pos_category_label = ?
-          WHERE sync_version = ? AND article_id = ? AND pos_category_key IS NULL`,
-        values: [normalizeV3CategoryKey(label), label, row.sync_version, row.article_id] };
+        return { statement: `UPDATE master_v3_articles SET pos_category_key = ?, pos_category_label = ?, pos_category_id = ?
+          WHERE sync_version = ? AND article_id = ? AND (pos_category_key IS NULL OR pos_category_id IS NULL)`,
+        values: [normalizeV3CategoryKey(label), label, identity, row.sync_version, row.article_id] };
       });
       if (db.executeSet) await db.executeSet(updates, false, 'no');
       else for (const update of updates) await db.run(update.statement, update.values, false);

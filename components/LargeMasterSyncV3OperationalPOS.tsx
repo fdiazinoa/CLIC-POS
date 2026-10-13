@@ -22,7 +22,7 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps> = props => {
   const catalog = useRef<LargeMasterSyncV3OperationalCatalog>();
   const querySequence = useRef(0);
   const contextSequence = useRef(0);
-  const lastQuery = useRef<{ query: string; categoryId: string | null; categoryKeys?: readonly string[] }>({ query: '', categoryId: null });
+  const lastQuery = useRef<{ query: string; categoryId: string | null; categoryKeys?: { ids: readonly string[]; aliases: readonly string[] } }>({ query: '', categoryId: null });
   const [inventoryRevision, setInventoryRevision] = useState(0);
   const [catalogRevision, setCatalogRevision] = useState(0);
   useEffect(() => subscribeLargeMasterSyncV3CatalogUpdates(() => {

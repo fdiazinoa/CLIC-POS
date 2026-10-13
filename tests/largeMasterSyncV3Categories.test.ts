@@ -129,3 +129,31 @@ test('older WebView without Array.at reads administrative pages forward/back and
     assert.doesNotMatch(readFileSync(new URL('../components/LargeMasterSyncV3CatalogManager.tsx',import.meta.url),'utf8'),/\.at\(/);
   }finally{if(at)Object.defineProperty(Array.prototype,'at',at);f.db.close();}
 });
+
+test('rename migration indexes actual POS identity, never raw categoryId or foreign equal label, before bounded LIMIT',async()=>{
+ const f=fixture();try {
+  const before=protectedData(f.db);
+  const insert=f.db.prepare(`INSERT INTO master_v3_articles(sync_version,article_id,sku,description,taxable,tax_ids_json,category_id,active,sellable,record_json) VALUES(2,?,?,?,0,'[]','unrelated-raw-category',1,1,?)`);
+  f.db.exec('BEGIN');
+  for(let n=0;n<10000;n++) {
+   const id=`R${String(n).padStart(5,'0')}`;
+   insert.run(id,id,'Rename product',JSON.stringify({id,sku:id,category:n<9900?'Todos1':'Todos',posCategoryId:n<9900?'foreign':'authorized'}));
+  }
+  insert.run('legacy','2135','Legacy product',JSON.stringify({id:'legacy',sku:'2135',category:'Todos1'}));
+  f.db.exec('COMMIT');
+  await ensureLargeMasterSyncV3ContractColumns(f.bridge);
+  await backfillLargeMasterSyncV3Categories(f.bridge);
+  const filter={ids:['authorized'],aliases:['authorized','Todos1','TD-01']};
+  const selected=await f.store.searchOperationalArticles(version,'',filter);
+  assert.equal(selected.length,60);
+  assert.ok(selected.every(row=>row.posCategoryId==='authorized'||row.id==='legacy'));
+  assert.equal((await f.store.searchOperationalArticles(version,'2135',filter))[0].id,'legacy');
+  const query=f.queries.filter(q=>q.sql.includes('SELECT record_json FROM (')).at(-1)!;
+  const explain=f.db.prepare(`EXPLAIN QUERY PLAN ${query.sql}`).all(...query.params as any[]) as any[];
+  assert.ok(explain.some(row=>String(row.detail).includes('idx_master_v3_articles_pos_identity')));
+  assert.ok(explain.some(row=>String(row.detail).includes('idx_master_v3_articles_pos_category')));
+  await backfillLargeMasterSyncV3Categories(f.bridge);
+  assert.equal((await f.store.searchOperationalArticles(version,'',filter)).length,60);
+  assert.deepEqual(protectedData(f.db),before);
+ }finally{f.db.close();}
+});

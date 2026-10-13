@@ -3,7 +3,7 @@ export const normalizeV3CategoryKey = (value: unknown): string =>
   typeof value === 'string' ? value.trim().toLowerCase() : '';
 
 export interface V3OperationalCategory { key: string; label: string }
-export type V3CategoryFilter = string | readonly string[] | null;
+export type V3CategoryFilter = string | readonly string[] | { ids: readonly string[]; aliases: readonly string[] } | null;
 
 /** Only aliases declared by the current POS configuration are equivalent. */
 export const resolveV3CategoryAliases = (

@@ -1,3 +1,4 @@
+import { normalizeCategoryOption } from './categoryOptions';
 import { mergeTerminalPosOptions } from './terminalPosOptions';
 import {
   BusinessConfig,
@@ -2537,12 +2538,21 @@ export const applyTerminalConfigSnapshot = (
       : preserveCatalog ? [...(existingTerminal?.catalog?.allowedCategories || [])] : []
     : allowedCategories.length > 0 ? allowedCategories
       : productGroups.map(group => asString(group.name || group.code || group.id)).filter(Boolean);
-  const effectivePosCategories = effectiveAllowedCategories
-    .map((name, index) => ({
-      id: name,
-      name,
-      code: name || `POS-CAT-${index + 1}`,
-    }));
+  const categorySource = explicitCatalog && explicitKey ? asArray(explicitCatalog[explicitKey])
+    : freshGroupsPresent ? asArray(rawFreshGroups) : preserveCatalog ? nextConfig.posCategories || [] : [];
+  const effectiveCategoryRows = explicitCatalog || freshGroupsPresent ? categorySource
+    : effectiveAllowedCategories.map(name => {
+      const matches = categorySource.filter(raw => {
+        const normalized = normalizeCategoryOption(raw);
+        return normalized && [normalized.id, normalized.name, asString(asObject(raw).code)].includes(name);
+      });
+      return matches.length === 1 ? matches[0] : name;
+    });
+  const effectivePosCategories = effectiveCategoryRows.map(raw => {
+    const option = normalizeCategoryOption(raw);
+    return option ? { ...asObject(raw), id: option.id, name: option.name,
+      code: asString(asObject(raw).code) || option.id } : null;
+  }).filter((item): item is NonNullable<typeof item> => item !== null);
 
   const effectiveTariffs = tariffs.length > 0 ? tariffs : nextConfig.tariffs || INITIAL_TARIFFS;
   const effectiveTaxes = taxes.length > 0 ? taxes : nextConfig.taxes || INITIAL_TAXES;
@@ -3090,13 +3100,15 @@ export const applyTerminalConfigSnapshot = (
   }
 
   if (effectivePosCategories.length > 0) {
-    const existingByName = new Map(
+    const existingById = new Map(
       (nextConfig.posCategories || [])
         .filter(Boolean)
-        .map((item) => [asString(item.name).toLowerCase(), item])
+        .map((item) => [asString(item.id).toLowerCase(), item])
     );
     nextConfig.posCategories = effectivePosCategories.map((item) => {
-      const existing = existingByName.get(item.name.toLowerCase());
+      const sameNameLegacy = (nextConfig.posCategories || []).filter(old =>
+        old.name.toLowerCase() === item.name.toLowerCase() && old.id === old.name);
+      const existing = existingById.get(item.id.toLowerCase()) || (sameNameLegacy.length === 1 ? sameNameLegacy[0] : undefined);
       return existing ? { ...existing, ...item } : item;
     });
   }
