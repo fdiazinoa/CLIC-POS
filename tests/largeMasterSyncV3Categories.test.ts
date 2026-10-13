@@ -1,3 +1,4 @@
+import { buildPosCategoryIdentity } from '../utils/posCategoryIdentity';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
@@ -128,4 +129,77 @@ test('older WebView without Array.at reads administrative pages forward/back and
     // SSR does not run effects; source assertion complements the real browser effect test.
     assert.doesNotMatch(readFileSync(new URL('../components/LargeMasterSyncV3CatalogManager.tsx',import.meta.url),'utf8'),/\.at\(/);
   }finally{if(at)Object.defineProperty(Array.prototype,'at',at);f.db.close();}
+});
+
+test('rename migration indexes actual POS identity, never raw categoryId or foreign equal label, before bounded LIMIT',async()=>{
+ const f=fixture();try {
+  const before=protectedData(f.db);
+  const insert=f.db.prepare(`INSERT INTO master_v3_articles(sync_version,article_id,sku,description,taxable,tax_ids_json,category_id,active,sellable,record_json) VALUES(2,?,?,?,0,'[]','unrelated-raw-category',1,1,?)`);
+  f.db.exec('BEGIN');
+  for(let n=0;n<10000;n++) {
+   const id=`R${String(n).padStart(5,'0')}`;
+   insert.run(id,id,'Rename product',JSON.stringify({id,sku:id,category:n<9900?'Todos1':'Todos',posCategoryId:n<9900?'foreign':'authorized'}));
+  }
+  insert.run('legacy','2135','Legacy product',JSON.stringify({id:'legacy',sku:'2135',category:'Todos1'}));
+  f.db.exec('COMMIT');
+  await ensureLargeMasterSyncV3ContractColumns(f.bridge);
+  await backfillLargeMasterSyncV3Categories(f.bridge);
+  // Existing fixture has tariff-bearing legacy rows; make the stable ID category visible too.
+  f.db.prepare('INSERT INTO master_v3_prices VALUES(2,?,?,10)').run('R09900','T');
+  const activeKeys=(await f.store.getOperationalCategories(version,'T')).map(category=>category.key);
+  assert.ok(activeKeys.includes('authorized'));
+  const unrestricted=buildPosCategoryIdentity([]);
+  const unrestrictedSelection=unrestricted.selectionFilter('authorized',activeKeys);
+  assert.deepEqual(unrestrictedSelection.ids,['authorized']);
+  assert.equal((await f.store.searchOperationalArticles(version,'',unrestrictedSelection)).length,60);
+  const filter={ids:['authorized'],aliases:['authorized','Todos1','TD-01']};
+  assert.deepEqual(await f.store.searchOperationalArticles(version,'',{ids:[],aliases:[]}),[]);
+  const selected=await f.store.searchOperationalArticles(version,'',filter);
+  assert.equal(selected.length,60);
+  assert.ok(selected.every(row=>row.posCategoryId==='authorized'||row.id==='legacy'));
+  assert.equal((await f.store.searchOperationalArticles(version,'2135',filter))[0].id,'legacy');
+  const query=f.queries.filter(q=>q.sql.includes('SELECT record_json FROM (')).at(-1)!;
+  const explain=f.db.prepare(`EXPLAIN QUERY PLAN ${query.sql}`).all(...query.params as any[]) as any[];
+  assert.ok(explain.some(row=>String(row.detail).includes('idx_master_v3_articles_pos_identity')));
+  assert.ok(explain.some(row=>String(row.detail).includes('idx_master_v3_articles_pos_category')));
+  await backfillLargeMasterSyncV3Categories(f.bridge);
+  assert.equal((await f.store.searchOperationalArticles(version,'',filter)).length,60);
+  assert.deepEqual(protectedData(f.db),before);
+ }finally{f.db.close();}
+});
+
+test('each disjoint search arm filters before top K, preserves global order and uses the partial legacy index',async()=>{
+ const f=fixture();try {
+  const before=protectedData(f.db);
+  const insert=f.db.prepare(`INSERT INTO master_v3_articles(sync_version,article_id,sku,description,taxable,tax_ids_json,active,sellable,record_json) VALUES(2,?,?,?,0,'[]',1,1,?)`);
+  f.db.exec('BEGIN');
+  for(let n=0;n<12000;n++) {
+   const id=`S${String(n).padStart(5,'0')}`;
+   const record={id,sku:n>=11900?'late-match':id,category:n%2?'Todos1':'TD-01',
+    ...(n%3===0?{}:{posCategoryId:n%3===1?'a':'b'})};
+   insert.run(id,record.sku,'Product',JSON.stringify(record));
+  }
+  f.db.exec('COMMIT');
+  await ensureLargeMasterSyncV3ContractColumns(f.bridge);
+  await ensureLargeMasterSyncV3ContractColumns(f.bridge);
+  await backfillLargeMasterSyncV3Categories(f.bridge);
+  const filter={ids:['a','b'],aliases:['Todos1','TD-01']};
+  for(const query of ['', 'late-match'])for(const limit of [1,60,100]){
+   const actual=await f.store.searchOperationalArticles(version,query,filter,limit);
+   const expected=f.db.prepare(`SELECT record_json FROM master_v3_articles WHERE sync_version=2 AND active=1 AND sellable=1
+    AND record_json IS NOT NULL AND (pos_category_id IN ('a','b') OR (coalesce(pos_category_id,'')='' AND pos_category_key IN ('todos1','td-01')))
+    AND (?='' OR instr(lower(coalesce(sku,'')),?)>0 OR instr(lower(coalesce(description,'')),?)>0)
+    ORDER BY article_id LIMIT ?`).all(query,query,query,limit) as any[];
+   assert.deepEqual(actual.map(row=>row.id),expected.map(row=>JSON.parse(row.record_json).id));
+   assert.equal(actual.length,limit);
+  }
+  const query=f.queries.filter(q=>q.sql.includes('UNION ALL SELECT')).at(-1)!;
+  assert.equal((query.sql.match(/LIMIT \?/g)||[]).length,3,'both arms bounded before the final merge');
+  const explain=f.db.prepare(`EXPLAIN QUERY PLAN ${query.sql}`).all(...query.params as any[]) as any[];
+  assert.ok(explain.some(row=>String(row.detail).includes('idx_master_v3_articles_pos_category_legacy')));
+  assert.ok(explain.some(row=>String(row.detail).includes('idx_master_v3_articles_pos_identity')));
+  const index=f.db.prepare("SELECT sql FROM sqlite_master WHERE name='idx_master_v3_articles_pos_category_legacy'").get() as any;
+  assert.match(index.sql,/WHERE coalesce\(pos_category_id, ''\) = ''/);
+  assert.deepEqual(protectedData(f.db),before);
+ }finally{f.db.close();}
 });

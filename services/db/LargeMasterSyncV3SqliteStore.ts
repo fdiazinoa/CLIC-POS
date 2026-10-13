@@ -810,12 +810,12 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
   async getOperationalCategories(runtime: LargeMasterSyncV3RuntimeVersion, tariffId: string): Promise<V3OperationalCategory[]> {
     requireOperationalVersion(runtime);
     // Only category metadata crosses the bridge, irrespective of article count.
-    const result = await this.connection().query(`SELECT a.pos_category_key AS category_key,
+    const result = await this.connection().query(`SELECT CASE WHEN a.pos_category_id <> '' THEN a.pos_category_id ELSE a.pos_category_key END AS category_key,
       MIN(a.pos_category_label) AS label FROM master_v3_articles a INDEXED BY idx_master_v3_articles_pos_category
-      WHERE a.sync_version = ? AND a.active = 1 AND a.sellable = 1 AND a.pos_category_key <> ''
+      WHERE a.sync_version = ? AND a.active = 1 AND a.sellable = 1 AND (a.pos_category_id <> '' OR a.pos_category_key <> '')
       AND EXISTS (SELECT 1 FROM master_v3_prices p WHERE p.sync_version = a.sync_version
         AND p.article_id = a.article_id AND p.tariff_id = ? AND p.price >= 0)
-      GROUP BY a.pos_category_key ORDER BY a.pos_category_key`, [runtime.syncVersion, tariffId]);
+      GROUP BY category_key ORDER BY category_key`, [runtime.syncVersion, tariffId]);
     return rows(result).map(row => ({ key: String(row.category_key), label: String(row.label) }));
   }
 
@@ -823,18 +823,44 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
     requireOperationalVersion(runtime);
     const normalizedQuery = query.trim().toLowerCase().slice(0, 120);
     const safeLimit = Math.max(1, Math.min(100, Math.floor(limit)));
-    const categoryKeys = categoryId == null ? [] : [...new Set((typeof categoryId === 'string'
-      ? [categoryId] : categoryId).map(normalizeV3CategoryKey).filter(Boolean))];
-    // Use a separate SQL shape for category selection so SQLite can seek the projection index.
-    const predicate = categoryId == null ? '' : categoryKeys.length
-      ? `AND pos_category_key IN (${categoryKeys.map(() => '?').join(',')})` : 'AND 0';
-    const result = await this.connection().query(`SELECT record_json FROM master_v3_articles
-      WHERE sync_version = ? AND active = 1 AND sellable = 1 AND record_json IS NOT NULL
-      ${predicate}
-      AND (? = '' OR instr(lower(coalesce(sku, '')), ?) > 0
-        OR instr(lower(coalesce(description, '')), ?) > 0)
-      ORDER BY article_id LIMIT ?`, [runtime.syncVersion, ...categoryKeys,
-      normalizedQuery, normalizedQuery, normalizedQuery, safeLimit]);
+    const structured = categoryId != null && typeof categoryId === 'object' && !Array.isArray(categoryId)
+      ? categoryId as { ids: readonly string[]; aliases: readonly string[] } : null;
+    const raw = categoryId == null ? [] : typeof categoryId === 'string' ? [categoryId] : structured ? structured.aliases : categoryId as readonly string[];
+    const categoryKeys = [...new Set(raw.map(normalizeV3CategoryKey).filter(Boolean))];
+    const identityKeys = structured ? [...new Set(structured.ids.map(normalizeV3CategoryKey).filter(Boolean))] : categoryKeys;
+    const placeholders = categoryKeys.map(() => '?').join(',');
+    const identityPlaceholders = identityKeys.length ? identityKeys.map(() => '?').join(',') : "NULL";
+    const selected = categoryId != null;
+    const matchesSearch = `record_json IS NOT NULL AND (? = '' OR instr(lower(coalesce(sku, '')), ?) > 0
+      OR instr(lower(coalesce(description, '')), ?) > 0)`;
+    const searchValues = [normalizedQuery, normalizedQuery, normalizedQuery];
+    let statement: string;
+    let parameters: unknown[];
+    if (!selected) {
+      statement = `SELECT record_json FROM master_v3_articles
+        WHERE sync_version = ? AND active = 1 AND sellable = 1 AND ${matchesSearch}
+        ORDER BY article_id LIMIT ?`;
+      parameters = [runtime.syncVersion, ...searchValues, safeLimit];
+    } else if (!categoryKeys.length) {
+      statement = 'SELECT record_json FROM master_v3_articles WHERE 0';
+      parameters = [];
+    } else {
+      // Arms are disjoint. Their local top K contain the exact global top K;
+      // search predicates run before each LIMIT so later matching SKUs are never lost.
+      statement = `SELECT record_json FROM (
+        SELECT article_id, record_json FROM (
+          SELECT article_id, record_json FROM master_v3_articles INDEXED BY idx_master_v3_articles_pos_identity
+          WHERE sync_version = ? AND pos_category_id IN (${identityPlaceholders}) AND active = 1 AND sellable = 1
+          AND ${matchesSearch} ORDER BY article_id LIMIT ?)
+        UNION ALL SELECT article_id, record_json FROM (
+          SELECT article_id, record_json FROM master_v3_articles INDEXED BY idx_master_v3_articles_pos_category_legacy
+          WHERE sync_version = ? AND pos_category_key IN (${placeholders}) AND coalesce(pos_category_id, '') = ''
+          AND active = 1 AND sellable = 1 AND ${matchesSearch} ORDER BY article_id LIMIT ?)
+        ) ORDER BY article_id LIMIT ?`;
+      parameters = [runtime.syncVersion, ...identityKeys, ...searchValues, safeLimit,
+        runtime.syncVersion, ...categoryKeys, ...searchValues, safeLimit, safeLimit];
+    }
+    const result = await this.connection().query(statement, parameters);
     return rows(result).map(operationalRecord);
   }
 
@@ -1080,17 +1106,17 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
       }
       return { statement: `INSERT INTO master_v3_articles
         (sync_version, article_id, sku, description, article_type, uom, taxable, tax_ids_json,
-         family_id, category_id, active, sellable, record_json, pos_category_key, pos_category_label)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         family_id, category_id, active, sellable, record_json, pos_category_key, pos_category_label, pos_category_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(sync_version, article_id) DO UPDATE SET sku=excluded.sku, description=excluded.description,
         article_type=excluded.article_type, uom=excluded.uom, taxable=excluded.taxable,
         tax_ids_json=excluded.tax_ids_json, family_id=excluded.family_id, category_id=excluded.category_id,
         active=excluded.active, sellable=excluded.sellable, record_json=excluded.record_json,
-        pos_category_key=excluded.pos_category_key, pos_category_label=excluded.pos_category_label`,
+        pos_category_key=excluded.pos_category_key, pos_category_label=excluded.pos_category_label, pos_category_id=excluded.pos_category_id`,
       values: [version, requiredId(row, 'id'), optionalText(row.sku), optionalText(row.name || row.description), optionalText(row.type),
         optionalText(row.uom), row.taxable === true ? 1 : 0, JSON.stringify(taxIds), optionalText(row.familyId),
         optionalText(row.categoryId), booleanInt(row.active), booleanInt(row.sellable), recordJson,
-        normalizeV3CategoryKey(row.category), typeof row.category === 'string' ? row.category.trim() : ''] };
+        normalizeV3CategoryKey(row.category), typeof row.category === 'string' ? row.category.trim() : '', normalizeV3CategoryKey(row.posCategoryId)] };
     }
     if (dataset === 'prices') {
       if (contractVersion >= 2 && (typeof row.price !== 'number'
