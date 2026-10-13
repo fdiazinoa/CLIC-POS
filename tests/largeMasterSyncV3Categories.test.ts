@@ -144,6 +144,7 @@ test('rename migration indexes actual POS identity, never raw categoryId or fore
   await ensureLargeMasterSyncV3ContractColumns(f.bridge);
   await backfillLargeMasterSyncV3Categories(f.bridge);
   const filter={ids:['authorized'],aliases:['authorized','Todos1','TD-01']};
+  assert.deepEqual(await f.store.searchOperationalArticles(version,'',{ids:[],aliases:[]}),[]);
   const selected=await f.store.searchOperationalArticles(version,'',filter);
   assert.equal(selected.length,60);
   assert.ok(selected.every(row=>row.posCategoryId==='authorized'||row.id==='legacy'));

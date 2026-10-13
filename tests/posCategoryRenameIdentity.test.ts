@@ -32,3 +32,25 @@ test('colliding names/codes never merge explicit identities; unrelated families 
 });
 
 test('family names cannot shadow authoritative POS category aliases',()=>{ const x=buildPosCategoryIdentity([{id:'pos',name:'Todos1',code:'TD-01'}],[{id:'family',name:'Todos1',code:'TD-01'}]); assert.equal(x.canonicalize('Todos1'),'pos'); assert.equal(x.canonicalize('TD-01'),'pos'); });
+
+test('ambiguous restriction stays nonempty and cannot authorize identical invalid product sentinel or spoofed prefix',()=>{
+ const x=buildPosCategoryIdentity([{id:'a',name:'Same',code:'X'},{id:'b',name:'Same',code:'X'}]);
+ const allowed=new Set([x.canonicalize('Same')]);
+ assert.equal(allowed.size,1);
+ assert.deepEqual(x.selectionFilter('Same'),{ids:[],aliases:[]});
+ assert.equal(x.isProductAllowed({category:'ambiguous:same'},allowed),false);
+ assert.equal(x.isProductAllowed({category:'Same'},allowed),false);
+ assert.equal(x.isProductAllowed({posCategoryId:'foreign',category:'Same'},new Set(['unmapped:foreign'])),false);
+ assert.equal(x.isProductAllowed({posCategoryId:'foreign',category:'Same'},new Set()),true);
+ assert.equal(x.isProductAllowed({posCategoryId:'foreign',category:'Same'},new Set(['a'])),false);
+ assert.equal(x.isProductAllowed({posCategoryId:'a',category:'Same'},new Set(['a'])),true);
+});
+
+test('explicit unrestricted terminals retain bound products even before category metadata hydrates',()=>{
+ for(const categories of [[],[{id:'synthetic',name:'Synthetic'}]]){
+  const x=buildPosCategoryIdentity(categories);
+  const p={posCategoryId:'bound-erp-category',category:'Todos'};
+  assert.equal(x.isProductAllowed(p,new Set()),true);
+  assert.equal(x.isProductAllowed(p,new Set(['unknown'])),false);
+ }
+});

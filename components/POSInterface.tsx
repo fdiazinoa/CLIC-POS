@@ -5,7 +5,7 @@ import { formatQuantity, terminalQuantityPresentation } from '../utils/quantityP
 import { resolveSaleScales, assertCurrentScaleContext } from '../services/ScalePreferences';
 import { sameWeightPresentation, displayWeightQuantity, displayWeightPrice, canonicalWeightQuantity, weightLineLabel } from '../utils/scaleWeight';
 import { isWeightedProduct, assertWeightedCodeInput } from '../utils/weightedProduct';
-import { resolveV3CategoryAliases, type V3OperationalCategory } from '../services/sync/LargeMasterSyncV3Categories';
+import { type V3OperationalCategory } from '../services/sync/LargeMasterSyncV3Categories';
 import { recordCheckoutDiagnostic, setCheckoutCaptureContext } from '../services/CheckoutDiagnostics';
 import { freezeCount, freezePhase } from '../diagnostics/freezeCounters';
 import { markWebviewProfileNavigation } from '../diagnostics/webviewProfileMarks';
@@ -2235,7 +2235,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    useEffect(() => {
       if (!v3Operational) return;
       void v3Operational.search(catalogSearchQuery, categoryFilter === 'ALL' ? null : categoryFilter,
-         categoryFilter === 'ALL' ? undefined : { ids: [canonicalizeCategory(categoryFilter)], aliases: resolveV3CategoryAliases(categoryFilter, categoryLookup.aliasToCanonical) })
+         categoryFilter === 'ALL' ? undefined : categoryLookup.identity.selectionFilter(categoryFilter))
          .catch(error => setErrorToast(`V3: ${error.message || error}`));
    }, [v3Operational, catalogSearchQuery, categoryFilter, categoryLookup.aliasToCanonical]);
    const [mobileView, setMobileView] = useState<'PRODUCTS' | 'TICKET'>('PRODUCTS');
@@ -4270,7 +4270,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
          return {
             product,
-            displayCategory: displayCategory(categoryLookup.identity.productCategory(product)),
+            displayCategory: categoryLookup.canonicalToDisplay.has(categoryLookup.identity.productCategory(product))
+               ? displayCategory(categoryLookup.identity.productCategory(product)) : product.category || '',
             hasActiveTariff: productHasActiveTariff(product),
             hasErpWarehouse: resolveProductActiveWarehouseIds(product, warehouses).length > 0,
             isSellable: product.is_sellable !== false,
@@ -4317,7 +4318,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             || entry.searchText.includes(normalizedSearch);
 
          const matchCat = Boolean(normalizedSearch) || normalizedCategoryFilter === 'ALL' || entry.normalizedCategory === normalizedCategoryFilter;
-         const matchAllowedCat = effectiveAllowedCategorySet.size === 0 || effectiveAllowedCategorySet.has(entry.normalizedCategory);
+         const matchAllowedCat = categoryLookup.identity.isProductAllowed(entry.product, effectiveAllowedCategorySet);
          const categoryIsVisible = categoryLookup.presentationByCanonical.get(entry.normalizedCategory)?.isActive !== false;
 
          // La grilla no debe quedar vacía mientras llegan bloques de stock/precios; el bloqueo duro ocurre al agregar al carrito.
@@ -4450,7 +4451,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
       const textMatch = normalizedTextSearch
          ? salesCatalogProductEntries.find((entry) => {
-            const allowedCategory = effectiveAllowedCategorySet.size === 0 || effectiveAllowedCategorySet.has(entry.normalizedCategory);
+            const allowedCategory = categoryLookup.identity.isProductAllowed(entry.product, effectiveAllowedCategorySet);
             const categoryIsVisible = categoryLookup.presentationByCanonical.get(entry.normalizedCategory)?.isActive !== false;
             return entry.searchText.includes(normalizedTextSearch) && allowedCategory && categoryIsVisible && entry.isSellable && entry.hasActiveTariff;
          })
@@ -4512,10 +4513,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          })
          .filter((category) => category.id && category.label && category.isActive);
       const availableProducts = salesCatalogProductEntries.filter((entry) => {
-         if (!entry.isSellable || !entry.hasActiveTariff) return false;
+         if (!entry.isSellable || !entry.hasActiveTariff || !categoryLookup.identity.isProductAllowed(entry.product, effectiveAllowedCategorySet)) return false;
          if (categoryLookup.presentationByCanonical.get(entry.normalizedCategory)?.isActive === false) return false;
          if (effectiveAllowedCategorySet.size > 0) {
-            if (!effectiveAllowedCategorySet.has(entry.normalizedCategory)) return false;
+            if (!categoryLookup.identity.isProductAllowed(entry.product, effectiveAllowedCategorySet)) return false;
          }
          return true;
       });
@@ -4526,7 +4527,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             const key = canonicalizeCategory(category.key);
             if (!key || (effectiveAllowedCategorySet.size > 0 && !effectiveAllowedCategorySet.has(key))) continue;
             if (categoryLookup.presentationByCanonical.get(key)?.isActive === false) continue;
-            availableCategoryMap.set(key, displayCategory(key));
+            availableCategoryMap.set(key, categoryLookup.canonicalToDisplay.has(key) ? displayCategory(key) : category.label);
          }
       }
       for (const entry of v3Operational ? [] : availableProducts) {

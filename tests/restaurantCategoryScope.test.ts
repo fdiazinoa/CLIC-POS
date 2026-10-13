@@ -13,7 +13,7 @@ async function actualConsumers() {
   const scope=between('const effectiveAllowedCategorySet =','const isRetailMode =');
   const filter=between('const filteredProducts =','// Keep the complete result set searchable.');
   const options=between('const categoryOptions =','// --- PROMOTION ENGINE INTEGRATION ---');
-  const body=`${lookup}\n${scope}\nconst salesCatalogProductEntries=products.map(product=>({product, normalizedCategory:canonicalizeCategory(product.category), displayCategory:displayCategory(product.category), isSellable:product.is_sellable!==false,hasActiveTariff:product.hasActiveTariff!==false,searchText:String(product.name||'').trim().toLowerCase()}));const sortedSalesCatalogProductEntries=salesCatalogProductEntries;${filter}\n${options}\nreturn {allowed:[...effectiveAllowedCategorySet], products:filteredProducts, options:categoryOptions};`;
+  const body=`${lookup}\n${scope}\nconst salesCatalogProductEntries=products.map(product=>({product, normalizedCategory:categoryLookup.identity.productCategory(product), displayCategory:displayCategory(product.category), isSellable:product.is_sellable!==false,hasActiveTariff:product.hasActiveTariff!==false,searchText:String(product.name||'').trim().toLowerCase()}));const sortedSalesCatalogProductEntries=salesCatalogProductEntries;${filter}\n${options}\nreturn {allowed:[...effectiveAllowedCategorySet], products:filteredProducts, options:categoryOptions};`;
   const js=(await transform(`function renderConsumers(){${body}}`,{loader:'ts',target:'es2022'})).code;
   return (input:any)=>{
     let selected=input.categoryFilter||'ALL';
@@ -95,4 +95,21 @@ test('actual V3 snapshot refresh projection feeds restricted consumers across om
   config = applyTerminalConfigSnapshot(config, { terminalId: 'local', incomingSnapshot: { resolved: { catalog: { allowed_categories: [] } } } as any,
     preserveOmittedOperationalScopes: true, catalogBindingProof: proof }).config;
   assert.deepEqual(render({ allowed: config.terminals[0].config.catalog.allowedCategories, products: [drink, food], v3 }).products.map((product: any) => product.id), ['drink', 'food']);
+});
+
+test('actual POS predicates deny ambiguous grants and foreign matching labels while unrestricted remains visible',async()=>{
+ const render=await actualConsumers();
+ const config={posCategories:[{id:'a',name:'Same',code:'X'},{id:'b',name:'Same',code:'X'}]};
+ const foreign={id:'foreign',name:'Foreign',posCategoryId:'foreign-category',category:'Same'};
+ const legacy={id:'legacy',name:'Legacy',category:'Same'};
+ const spoof={id:'spoof',name:'Spoof',category:'ambiguous:same'};
+ for(const categoryFilter of ['ALL','Same']){
+  const denied=render({allowed:['Same'],products:[foreign,legacy,spoof],config,categoryFilter});
+  assert.deepEqual(denied.products,[]);
+  assert.equal(denied.allowed.length,1);
+ }
+ assert.deepEqual(render({allowed:['a'],products:[foreign],config,search:'Foreign'}).products,[]);
+ assert.deepEqual(render({allowed:[],products:[foreign],config:{posCategories:[]}}).products.map((p:any)=>p.id),['foreign']);
+ const renamed={id:'2135',name:'Palette',posCategoryId:'a',category:'Old'};
+ assert.deepEqual(render({allowed:['a'],products:[renamed],config,categoryFilter:'a'}).products.map((p:any)=>p.id),['2135']);
 });
