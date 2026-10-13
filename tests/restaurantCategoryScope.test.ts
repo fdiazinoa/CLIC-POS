@@ -113,3 +113,13 @@ test('actual POS predicates deny ambiguous grants and foreign matching labels wh
  const renamed={id:'2135',name:'Palette',posCategoryId:'a',category:'Old'};
  assert.deepEqual(render({allowed:['a'],products:[renamed],config,categoryFilter:'a'}).products.map((p:any)=>p.id),['2135']);
 });
+
+test('unrestricted V3 category buttons with missing configured metadata select stable-ID products',async()=>{
+ const render=await actualConsumers();
+ const product={id:'2135',name:'Palette',category:'Todos',posCategoryId:'bound-erp-category'};
+ const output=render({allowed:[],products:[product],config:{posCategories:[]},
+  v3:{categories:[{key:'bound-erp-category',label:'Todos1'}]},categoryFilter:'bound-erp-category'});
+ assert.deepEqual(output.products.map((p:any)=>p.id),['2135']);
+ assert.deepEqual(output.options.map((c:any)=>[c.id,c.label]),[['ALL','Todas'],['bound-erp-category','Todos1']]);
+ assert.equal(output.selected,'bound-erp-category');
+});

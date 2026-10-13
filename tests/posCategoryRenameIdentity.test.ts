@@ -54,3 +54,10 @@ test('explicit unrestricted terminals retain bound products even before category
   assert.equal(x.isProductAllowed(p,new Set(['unknown'])),false);
  }
 });
+
+test('trusted active V3 category keys extend unrestricted query selection only, never category permissions',()=>{
+ const x=buildPosCategoryIdentity([]);
+ assert.deepEqual(x.selectionFilter('bound-erp-category',['bound-erp-category']),{ids:['bound-erp-category'],aliases:['bound-erp-category']});
+ assert.equal(x.isProductAllowed({posCategoryId:'bound-erp-category',category:'Todos'},new Set(['Todos'])),false);
+ assert.deepEqual(x.selectionFilter('bound-erp-category').ids,[]);
+});

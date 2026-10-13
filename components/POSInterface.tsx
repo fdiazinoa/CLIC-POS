@@ -2235,7 +2235,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    useEffect(() => {
       if (!v3Operational) return;
       void v3Operational.search(catalogSearchQuery, categoryFilter === 'ALL' ? null : categoryFilter,
-         categoryFilter === 'ALL' ? undefined : categoryLookup.identity.selectionFilter(categoryFilter))
+         categoryFilter === 'ALL' ? undefined : categoryLookup.identity.selectionFilter(categoryFilter, effectiveAllowedCategorySet.size === 0
+            ? (v3Operational.categories || []).map(category => category.key) : []))
          .catch(error => setErrorToast(`V3: ${error.message || error}`));
    }, [v3Operational, catalogSearchQuery, categoryFilter, categoryLookup.aliasToCanonical]);
    const [mobileView, setMobileView] = useState<'PRODUCTS' | 'TICKET'>('PRODUCTS');

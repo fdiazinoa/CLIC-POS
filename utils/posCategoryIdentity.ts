@@ -26,11 +26,11 @@ export function buildPosCategoryIdentity(categories: readonly Partial<Classifica
     const id = categoryIdentityKey(product.posCategoryId);
     return id || canonicalize(product.category);
   };
-  const selectionFilter = (selected: string) => {
+  const selectionFilter = (selected: string, unrestrictedActiveCategoryKeys: readonly string[] = []) => {
     const key = categoryIdentityKey(selected);
     if (ambiguous.has(key) && !identities.has(key)) return { ids: [], aliases: [] };
     const canonical = canonicalize(key);
-    return { ids: identities.has(canonical) ? [canonical] : [],
+    return { ids: identities.has(canonical) || unrestrictedActiveCategoryKeys.some(value => categoryIdentityKey(value) === canonical) ? [canonical] : [],
       aliases: [...new Set([canonical, ...Array.from(aliasToCanonical).filter(([, id]) => id === canonical).map(([alias]) => alias)])].filter(Boolean) };
   };
   const isProductAllowed = (product: { posCategoryId?: string; category?: string }, allowed: ReadonlySet<string>) => {

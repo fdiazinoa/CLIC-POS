@@ -1,3 +1,4 @@
+import { buildPosCategoryIdentity } from '../utils/posCategoryIdentity';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
@@ -143,6 +144,14 @@ test('rename migration indexes actual POS identity, never raw categoryId or fore
   f.db.exec('COMMIT');
   await ensureLargeMasterSyncV3ContractColumns(f.bridge);
   await backfillLargeMasterSyncV3Categories(f.bridge);
+  // Existing fixture has tariff-bearing legacy rows; make the stable ID category visible too.
+  f.db.prepare('INSERT INTO master_v3_prices VALUES(2,?,?,10)').run('R09900','T');
+  const activeKeys=(await f.store.getOperationalCategories(version,'T')).map(category=>category.key);
+  assert.ok(activeKeys.includes('authorized'));
+  const unrestricted=buildPosCategoryIdentity([]);
+  const unrestrictedSelection=unrestricted.selectionFilter('authorized',activeKeys);
+  assert.deepEqual(unrestrictedSelection.ids,['authorized']);
+  assert.equal((await f.store.searchOperationalArticles(version,'',unrestrictedSelection)).length,60);
   const filter={ids:['authorized'],aliases:['authorized','Todos1','TD-01']};
   assert.deepEqual(await f.store.searchOperationalArticles(version,'',{ids:[],aliases:[]}),[]);
   const selected=await f.store.searchOperationalArticles(version,'',filter);
