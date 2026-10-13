@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import Database from 'better-sqlite3';
-import { LARGE_MASTER_SYNC_V3_SCHEMA_SQL } from '../services/db/LargeMasterSyncV3Schema';
+import { LARGE_MASTER_SYNC_V3_SCHEMA_SQL, ensureLargeMasterSyncV3ContractColumns } from '../services/db/LargeMasterSyncV3Schema';
 import {
   LargeMasterSyncV3SqliteStore,
   type LargeMasterSyncV3SqliteFaultHook,
@@ -354,7 +354,10 @@ test('contract v2 retains operational records and fences the active SQLite versi
   responses.set(`/api/sync/v3/master-syncs/${SYNC_ID}/manifest`, {
     status: 200, headers: {}, text: JSON.stringify(operational),
   });
-  const { store, sqlite } = sqliteStore();
+  const { store, sqlite, connection } = sqliteStore();
+  // Native startup initializes these query indexes before opening the operational runtime.
+  await ensureLargeMasterSyncV3ContractColumns(connection);
+  assert.ok(sqlite.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_master_v3_articles_pos_category_legacy'").get());
   const client = new LargeMasterSyncV3Client({ store, transport: new MapTransport(responses),
     requireOperationalContract: true,
     storageStats: async () => ({ availableBytes: 1e9, totalBytes: 2e9 }) });
@@ -374,9 +377,10 @@ test('contract v2 retains operational records and fences the active SQLite versi
   const runtime = await LargeMasterSyncV3Runtime.open(store);
   assert.ok(runtime);
   assert.deepEqual(await runtime.searchOperationalArticles('demo'), [article]);
-  assert.deepEqual(await runtime.searchOperationalArticles('', ' BEBIDAS '), [article]);
-  assert.deepEqual(sqlite.prepare('SELECT category_id, pos_category_key, pos_category_label FROM master_v3_articles WHERE sync_version = 186').get(),
-    { category_id: 'CAT', pos_category_key: 'bebidas', pos_category_label: 'Bebidas' });
+  assert.deepEqual(await runtime.searchOperationalArticles('', ' CAT '), [article]);
+  assert.deepEqual(await runtime.searchOperationalArticles('', ' BEBIDAS '), []);
+  assert.deepEqual(sqlite.prepare('SELECT category_id, pos_category_id, pos_category_key, pos_category_label FROM master_v3_articles WHERE sync_version = 186').get(),
+    { category_id: 'CAT', pos_category_id: 'cat', pos_category_key: 'bebidas', pos_category_label: 'Bebidas' });
   assert.deepEqual(await runtime.searchOperationalArticles('demo', 'OTHER'), []);
   assert.deepEqual(await runtime.getOperationalArticle('A'), article);
   assert.equal((await runtime.getOperationalTariffs())[0].taxIncluded, true);
