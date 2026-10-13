@@ -142,7 +142,7 @@ test('matriz POS: promoción → descuento porcentual/fijo → ITBIS → propina
   const terminal = config.terminals[0];
   const cases = [
     { name: 'porcentaje excluido con propina', type: 'PERCENT' as const, value: 10, included: false, exempt: false, discount: 8, tax: 12.96, tip: 7.2, total: 92.16 },
-    { name: 'fijo incluido con propina', type: 'FIXED' as const, value: 10, included: true, exempt: false, discount: 10, tax: 10.68, tip: 7, total: 77 },
+    { name: 'fijo incluido con propina', type: 'FIXED' as const, value: 10, included: true, exempt: false, discount: 10, tax: 10.68, tip: 70 / 1.18 * 0.1, total: 75.93 },
     { name: 'porcentaje excluido cliente exento', type: 'PERCENT' as const, value: 10, included: false, exempt: true, discount: 8, tax: 0, tip: 7.2, total: 79.2 },
   ];
   for (const scenario of cases) {
@@ -159,7 +159,7 @@ test('matriz POS: promoción → descuento porcentual/fijo → ITBIS → propina
     const posTax = scenario.exempt ? 0 : calculateTaxBreakdownFromItems(posCart, config, {
       discountAmount: posDiscount, isTaxIncluded: scenario.included, terminalConfig: terminal.config,
     }).reduce((sum, tax) => sum + tax.amount, 0);
-    const posTip = (gross - posDiscount) * 0.10;
+    const posTip = (gross - posDiscount) / (scenario.included && !scenario.exempt ? 1.18 : 1) * 0.10;
     const posTotal = Math.round((gross - posDiscount + (scenario.included ? 0 : posTax) + posTip) * 100) / 100;
     const fiscal = buildTableAccountFiscalSummary(order, table, config, terminal.config, scenario.included, terminal.id, customer);
     assert.equal(fiscal.subtotal, gross, scenario.name);
@@ -192,7 +192,7 @@ test('matriz de centavos sigue precisión POS hasta el total fiscal final', () =
     const tax = calculateTaxBreakdownFromItems(posCart, config, {
       discountAmount: discount, isTaxIncluded: included, terminalConfig: terminal.config,
     }).reduce((sum, line) => sum + line.amount, 0);
-    const tip = (gross - discount) * 0.10;
+    const tip = (gross - discount) / (included ? 1.18 : 1) * 0.10;
     const posTotal = Math.round((gross - discount + (included ? 0 : tax) + tip + Number.EPSILON) * 100) / 100;
     const fiscal = buildTableAccountFiscalSummary(order, table, config, terminal.config, included, terminal.id);
     assert.equal(fiscal.subtotal, gross, `bruto ${price}`);

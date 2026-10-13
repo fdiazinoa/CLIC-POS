@@ -1,5 +1,5 @@
 import { CartItem, TaxDefinition } from '../types';
-import { findTaxByIdentifier } from './taxIdentity';
+import { resolveEffectiveTaxes } from './fiscalBreakdown';
 
 const round2 = (value: number): number =>
   Math.round((value + Number.EPSILON) * 100) / 100;
@@ -38,10 +38,8 @@ export const calculateTransactionTaxSummary = (
     const itemTaxRate = item.taxable === false
       ? 0
       : hasExplicitItemTaxes
-        ? itemTaxIds.reduce((sum, taxId) => {
-          const tax = findTaxByIdentifier(safeTaxes, taxId);
-          return sum + (tax?.rate || 0);
-        }, 0)
+        ? resolveEffectiveTaxes(item, { taxes: safeTaxes, taxRate: normalizedDefaultTaxRate })
+          .reduce((sum, tax) => sum + tax.rate, 0)
         : normalizedDefaultTaxRate;
 
     let lineNet = lineGross;

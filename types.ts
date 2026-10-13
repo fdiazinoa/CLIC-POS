@@ -1873,7 +1873,7 @@ export interface Transaction {
   // Accounting
   taxAmount?: number;               // Total tax amount
   netAmount?: number;               // Net amount (before tax)
-  taxBreakdown?: any[];             // Fiscal tax lines persisted for provider retries
+  taxBreakdown?: Array<{ id: string; name: string; rate: number; amount: number; taxableBase: number; total: number; lineCount: number; type?: TaxDefinition['type']; fiscalAdditionalTaxCode?: '001' }>; // Frozen fiscal classification
   discountAmount?: number;
   discountType?: 'PERCENT' | 'FIXED';
   discountValue?: number;

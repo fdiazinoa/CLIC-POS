@@ -143,7 +143,7 @@ import { buildCloseTaxSummary } from './utils/closeReceiptSummary';
 import { buildZReportPaymentMethodSummary } from './utils/zReportPaymentSummary';
 import { applyPromotions, hasProductPromotion } from './utils/promotionEngine';
 import { calculateTransactionTaxSummary } from './utils/taxSummary';
-import { calculateLineFiscalValuesForTransaction, calculateTransactionFiscalSummary, freezeAuthoritativeLineFiscalAmounts } from './utils/fiscalBreakdown';
+import { calculateLineFiscalValuesForTransaction, calculateTransactionFiscalSummary, calculateUncoveredServiceChargeBase, freezeAuthoritativeLineFiscalAmounts } from './utils/fiscalBreakdown';
 import { buildTableAccountFiscalSummary, getPaymentFractionFiscalDifference } from './utils/tableAccountFiscalSummary';
 import { transferTableAccountItems } from './utils/tableAccountTransfer';
 import { commitRetiredTableAccountAfterAck, findRetiredTableAccountSuccessor } from './utils/tableAccountRetirement';
@@ -152,7 +152,7 @@ import { reconcileRejectedTableTickets } from './utils/tableAccountReconciliatio
 import { isFullyPaidParkedTicket } from './utils/paymentFractions';
 import { resolveAppliedServiceTaxPolicy } from './utils/serviceTaxPolicy';
 import { shouldApplyRestaurantServiceCharge } from './utils/orderServiceType';
-import { calculateRestaurantServiceCharge, isRestaurantBusiness } from './utils/businessVertical';
+import { isRestaurantBusiness } from './utils/businessVertical';
 import { resolveRestaurantProductConfig } from './utils/restaurantProductConfig';
 import { resolveKdsBaseUrl } from './utils/kdsRouting';
 import { resolveProductionOutputTargets } from './utils/productionOutputMode';
@@ -1973,11 +1973,9 @@ const buildKioskPaymentTotals = (
   const serviceChargeRate = shouldApplyServiceCharge
     ? Math.max(0, Number(serviceTaxPolicySnapshot?.legalTip?.percentage ?? config.tipsConfig?.serviceCharge?.percentage) || 0)
     : 0;
-  const serviceChargeAmount = calculateRestaurantServiceCharge(
-    summary.grossLineTotal,
-    summary.discountAmount,
-    serviceChargeRate,
-  );
+  const serviceChargeAmount = calculateUncoveredServiceChargeBase(cart, config, {
+    discountAmount: safeDiscountAmount, isTaxIncluded, terminalConfig, allowedTaxIds: serviceTaxPolicySnapshot?.taxIds,
+  }) * serviceChargeRate / 100;
   const total = roundMoney(summary.total + serviceChargeAmount);
 
   return {

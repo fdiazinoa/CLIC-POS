@@ -42,6 +42,8 @@ export interface FiscalTaxBreakdownLine {
   id: string;
   name: string;
   rate: number;
+  type?: TaxDefinition['type'];
+  fiscalAdditionalTaxCode?: '001';
   amount: number;
   taxableBase: number;
   total: number;
@@ -127,7 +129,7 @@ interface TaxBreakdownOptions {
   absoluteLineValues?: boolean;
   multiplier?: number;
   taxExempt?: boolean;
-  /** Undefined preserves product taxes; [] explicitly applies no taxes. */
+  /** Service policy applies only to legacy lines without an explicit article tax assignment. */
   allowedTaxIds?: string[];
 }
 
@@ -269,17 +271,20 @@ export const resolveEffectiveTaxes = (
       ? (item as TaxableLineItem).tax_ids
       : undefined;
   const hasExplicitItemTaxIds = Array.isArray(rawItemTaxIds);
-  const resolvedTaxes = resolveEffectiveTaxIds(
+  const effectiveIds = resolveEffectiveTaxIds(
     rawItemTaxIds,
     terminalConfig,
     (item as TaxableLineItem).taxable,
-  )
-    .map((taxId) => findTaxByIdentifier(config.taxes || [], taxId))
-    .filter(Boolean) as TaxDefinition[];
+  );
+  const resolvedTaxes = effectiveIds.map((taxId) => {
+    const tax = findTaxByIdentifier(config.taxes || [], taxId);
+    if (!tax && hasExplicitItemTaxIds) throw new Error(`FISCAL_ARTICLE_TAX_NOT_FOUND:${taxId}`);
+    return tax;
+  }).filter(Boolean) as TaxDefinition[];
   const normalizedAllowedTaxIds = allowedTaxIds === undefined
     ? undefined
     : normalizeTaxIds(allowedTaxIds);
-  const allowedTaxes = normalizedAllowedTaxIds === undefined
+  const allowedTaxes = hasExplicitItemTaxIds || normalizedAllowedTaxIds === undefined
     ? resolvedTaxes
     : resolvedTaxes.filter((tax) => normalizedAllowedTaxIds.some((identifier) => (
       findTaxByIdentifier(config.taxes || [], identifier)?.id === tax.id
@@ -317,6 +322,29 @@ export const resolveEffectiveTaxes = (
   }
 
   return [];
+};
+
+/** Fiscal classification comes from the definition, never its display name or internal code. */
+export const fiscalTaxClassification = (tax: TaxDefinition): Pick<FiscalTaxBreakdownLine, 'type' | 'fiscalAdditionalTaxCode'> => ({
+  type: tax.type,
+  ...(tax.type === 'SERVICE_CHARGE' && Math.abs(tax.rate - 0.1) < EPSILON
+    ? { fiscalAdditionalTaxCode: '001' as const } : {}),
+});
+
+/** Header tip covers only net discounted lines without an assigned service charge. */
+export const calculateUncoveredServiceChargeBase = (
+  items: TaxableLineItem[], config: BusinessConfig, options: TaxBreakdownOptions = {},
+): number => {
+  const gross = items.reduce((sum, item) => sum + Math.abs(toNumber(item.price) * toNumber(item.quantity)), 0);
+  return items.reduce((sum, item) => {
+    const taxes = options.taxExempt ? [] : resolveEffectiveTaxes(item, config, options.terminalConfig,
+      options.fallbackTaxRate, options.fallbackTaxName, options.allowedTaxIds);
+    if (taxes.some(tax => tax.type === 'SERVICE_CHARGE' && tax.rate > 0)) return sum;
+    const lineGross = Math.abs(toNumber(item.price) * toNumber(item.quantity));
+    const base = Math.max(0, lineGross - Math.max(0, toNumber(options.discountAmount)) * (gross ? lineGross / gross : 0));
+    const rate = taxes.reduce((total, tax) => total + Math.max(0, tax.rate), 0);
+    return sum + (options.isTaxIncluded ? base / (1 + rate) : base);
+  }, 0);
 };
 
 export const calculateTaxBreakdownFromItems = (
@@ -369,6 +397,7 @@ export const calculateTaxBreakdownFromItems = (
         id: tax.id,
         name: tax.name,
         rate: Math.max(0, toNumber(tax.rate)),
+        ...fiscalTaxClassification(tax),
         amount: 0,
         taxableBase: 0,
         total: 0,

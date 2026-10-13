@@ -1,5 +1,5 @@
 import type { BusinessConfig, Transaction } from '../types';
-import { calculateLineFiscalValuesForTransaction, resolveEffectiveTaxes } from '../utils/fiscalBreakdown';
+import { calculateLineFiscalValuesForTransaction, resolveEffectiveTaxes, fiscalTaxClassification } from '../utils/fiscalBreakdown';
 import { resolveAppliedServiceTaxPolicy } from '../utils/serviceTaxPolicy';
 
 /** Provider projection uses persisted line amounts, including refund/discount rounding. */
@@ -20,18 +20,24 @@ export const buildV3FrozenFiscalProviderTransaction = (transaction: Transaction,
     }
     const lineTaxes = taxExempt ? [] : resolveEffectiveTaxes(line, config, terminal, 0, 'Impuesto', policy.taxIds)
       .filter(tax => tax.rate > 0);
+    if (lineTaxes.some(tax => tax.type === 'OTHER' || (tax.type === 'SERVICE_CHARGE' && Math.abs(tax.rate - 0.1) > 0.0001))) {
+      throw new Error('SYNC_V3_FISCAL_TAX_CLASSIFICATION_REQUIRED');
+    }
+    if (Math.abs(Math.abs(Number(line.taxAmount)) - calculated[index].taxAmount) > 0.02) {
+      throw new Error('SYNC_V3_FROZEN_FISCAL_TAX_MISMATCH');
+    }
     const rate = lineTaxes.reduce((sum, tax) => sum + tax.rate, 0);
     if (line.taxAmount && !rate) throw new Error('SYNC_V3_FROZEN_FISCAL_INVALID');
     for (const tax of lineTaxes) {
       const amount = Number(line.taxAmount) * tax.rate / rate;
       if (!amount) continue;
       const row = breakdown.get(tax.id) || { id: tax.id, name: tax.name, rate: tax.rate,
-        amount: 0, taxableBase: 0, total: 0, lineCount: 0 };
+        ...fiscalTaxClassification(tax), amount: 0, taxableBase: 0, total: 0, lineCount: 0 };
       row.amount += amount;
       // Header residuals frozen into the last line include non-taxed service charges.
       // Use the fiscal base before that residual, preserving the frozen tax amount.
-      row.taxableBase += calculated[index].netAmount;
-      row.total += calculated[index].netAmount + amount;
+      row.taxableBase += calculated[index].netAmount * (Number(line.taxAmount) < 0 ? -1 : 1);
+      row.total += calculated[index].netAmount * (Number(line.taxAmount) < 0 ? -1 : 1) + amount;
       row.lineCount++;
       breakdown.set(tax.id, row);
     }

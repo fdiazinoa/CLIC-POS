@@ -1,0 +1,13 @@
+# Article fiscal tax projection
+
+Branch fix/fiscal-article-tax-projection; base origin/develop 29fb51f5decb7b9a5555c2fb0df1753a9678cb7a, explicitly authorized by the user. Isolated worktree preserves the conflicted principal checkout. Coordinator /root; functional author /root/pos_article_tax_developer; independent reviewer /root/erp_inventory_fiscal_reviewer; independent QA /root/article_tax_independent_qa.
+
+The user requires all explicitly assigned article taxes in both Restaurant and Supermarket modes. Explicit assignments override service-policy filtering; customer exemption and taxable=false remain authoritative. Freeze type and explicit legal-service fiscal code for ERP/MSeller. Missing IDs, incomplete historical snapshots and unsupported classification reject explicitly instead of dropping taxes or rewriting documents.
+
+Assigned legal service must not be charged again through the header policy. Mixed-line baskets apply the header charge only to the remaining discounted net base. Future tax-included header-only base100 plus VAT18 plus service10 totals128, replacing the former gross-base charge129.80. Persisted documents retain their amounts and snapshots.
+
+G1 amendment approved independently before implementation. Author delivery IMPLEMENTATION COMPLETED, functional manifest SHA256 b400fab0e1768086fe94b5a566128cbebe504a7227bf5520c69140998cbb1058. Author ran53 focused tests, build and lint; these are not independent gate approvals. Baseline boundary test mock lacked the real session.validate method; the fixture now has an async spy and assertion while retaining all deferred/persistence tests.
+
+Evidence outside the repository: /Users/felixdiaz/.codex/reports/mykon-global-coverage/pos-article-tax-freeze.json and pos-article-tax-developer.md. Independent review/QA results will supersede this preliminary status. ERP companion PR2238 preserves future immutable source line assignments and constructs the corresponding MSeller payload. Inventory recovery is separate POS PR872.
+
+No new sale/payment/close/refund or fiscal emission, no tax-definition reclassification, database reset, APK build or installation by this task. User-installed emulator version1.1.510/1510 was observed through ADB127.0.0.1:6555 and does not contain this candidate. Existing Caja6 tax10 is classified VAT; changing its type in a used V3 baseline requires an explicit migration strategy because the catalog semantic guard must remain intact. Physical candidate sync/performance, actual provider validation/receipt and production release remain pending; local fixture results do not establish portal visibility.
