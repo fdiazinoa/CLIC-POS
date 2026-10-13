@@ -8,7 +8,7 @@ import { LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED } from './LargeMasterSyncV3Autho
 import { LARGE_MASTER_SYNC_V3_CANARY, validateLargeMasterSyncV3CanaryUrl } from './LargeMasterSyncV3Canary';
 import { readOperationalTerminalBinding } from './OperationalTerminalConfig';
 import { readLargeMasterSyncV3BoundIdentity, type LargeMasterSyncV3BoundIdentity } from './LargeMasterSyncV3BoundTransport';
-import { prepareLargeMasterSyncV3Candidate, prepareLargeMasterSyncV3CatalogOnly, prepareLargeMasterSyncV3UnusedBaseline, type LargeMasterSyncV3CandidateReady } from './LargeMasterSyncV3Candidate';
+import { prepareLargeMasterSyncV3Candidate, prepareLargeMasterSyncV3CatalogOnly, prepareLargeMasterSyncV3UnusedBaseline, repairLargeMasterSyncV3EmptyInventory, type LargeMasterSyncV3CandidateReady } from './LargeMasterSyncV3Candidate';
 import { LargeMasterSyncV3Runtime } from './LargeMasterSyncV3Runtime';
 import { LargeMasterSyncV3OperationalCatalog } from './LargeMasterSyncV3OperationalCatalog';
 import { buildLargeMasterSyncV3CheckoutFiscalInput } from './LargeMasterSyncV3CheckoutAuthority';
@@ -57,7 +57,12 @@ export class LargeMasterSyncV3OperationalSession {
       return JSON.stringify([terminal?.config.erpBinding?.companyId,terminal?.config.inventoryScope,
         terminal?.config.pricing,terminal?.config.fiscal]);
     };
-    const expectedScope=configScope(await db.get('config') as unknown as BusinessConfig);
+    const initialConfig = await db.get('config') as unknown as BusinessConfig;
+    const expectedScope=configScope(initialConfig);
+    const boundTerminal = initialConfig.terminals?.find(row => row.config?.currentDeviceId === identity.deviceId
+      && (row.config.erpTerminalId || row.id) === identity.terminalId);
+    const salesWarehouseId = boundTerminal?.config.inventoryScope?.defaultSalesWarehouseId || '';
+    const warehouseIds = [...new Set([salesWarehouseId, ...(boundTerminal?.config.inventoryScope?.visibleWarehouseIds || [])].filter(Boolean))];
     const assertIdentity = async () => {
       const currentScope=configScope(await db.get('config') as unknown as BusinessConfig);
       if(JSON.stringify(readLargeMasterSyncV3BoundIdentity()) !== JSON.stringify(identity)
@@ -100,6 +105,7 @@ export class LargeMasterSyncV3OperationalSession {
     } else {
       observe({ event: 'setup_phase', phase: 'cached' });
     }
+    if (refresh) ready = await repairLargeMasterSyncV3EmptyInventory(store, ready, binding, salesWarehouseId, warehouseIds, assertIdentity);
     return new LargeMasterSyncV3OperationalSession(ready, binding, store, v3BaseUrl, identity);
   }
 

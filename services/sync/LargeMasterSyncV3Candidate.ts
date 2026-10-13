@@ -199,3 +199,35 @@ export const prepareLargeMasterSyncV3UnusedBaseline = async (
   await transition.assertIdentity?.();
   return { runtime, inventoryVersion: saved.version, inventoryCursor: saved.cursor };
 };
+
+/** Explicit normal-sync recovery; healthy/used authorities are never replaced. */
+export const repairLargeMasterSyncV3EmptyInventory = async (
+  store: LargeMasterSyncV3Store, ready: LargeMasterSyncV3CandidateReady, binding: string,
+  salesWarehouseId: string, warehouseIds: string[], assertIdentity: () => void | Promise<void>,
+  dependencies: CandidateDependencies = defaultDependencies,
+): Promise<LargeMasterSyncV3CandidateReady> => {
+  if (!store.readInventoryCoverageStatus || !store.repairEmptyUnusedInventoryBaseline
+    || !store.assertCanReplaceUnusedBaseline || !store.getInventoryAuthority) {
+    throw new LargeMasterSyncV3Error('SYNC_V3_NATIVE_STORE_UNAVAILABLE');
+  }
+  await assertIdentity();
+  const status = await store.readInventoryCoverageStatus(ready.runtime.version, salesWarehouseId);
+  if (status === 'COMPLETE') return ready;
+  if (status !== 'EMPTY') throw new LargeMasterSyncV3Error('SYNC_V3_BASELINE_MIGRATION_REQUIRED');
+  const inventory = await store.getInventoryAuthority();
+  if (!inventory) throw new LargeMasterSyncV3Error('SYNC_V3_STOCK_AUTHORITY_INVALID');
+  const transition = { expectedCatalog: ready.runtime.version, binding, inventory, assertIdentity };
+  await store.assertCanReplaceUnusedBaseline(transition);
+  const snapshot = await dependencies.fetchInventory();
+  await dependencies.waitForOperationalWindow();
+  await assertIdentity();
+  if (!snapshot.balances.length) throw new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_NOT_READY');
+  await store.repairEmptyUnusedInventoryBaseline(transition, snapshot, warehouseIds, salesWarehouseId);
+  const saved = await store.getInventorySnapshotVersion(ready.runtime.version);
+  if (saved?.version !== snapshot.version || saved.cursor !== snapshot.cursor) {
+    throw new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_NOT_READY');
+  }
+  await assertIdentity();
+  // Current catalog is now the exact authority of the repaired unused baseline.
+  return { runtime: ready.runtime, inventoryVersion: saved.version, inventoryCursor: saved.cursor };
+};
