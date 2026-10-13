@@ -42,10 +42,7 @@ test('solo un artículo legacy sin campo de impuestos hereda el valor de la term
 
 test('un id desconocido no se convierte silenciosamente en el impuesto local', () => {
   const staleTaxId = 'foreign-company-tax';
-  assert.deepEqual(
-    calculateTaxBreakdownFromItems([item([staleTaxId], { taxable: true })], config, { terminalConfig }),
-    [],
-  );
+  assert.throws(() => calculateTaxBreakdownFromItems([item([staleTaxId], { taxable: true })], config, { terminalConfig }), /FISCAL_ARTICLE_TAX_NOT_FOUND/);
 });
 
 test('taxable false prevalece incluso para un registro legacy sin appliedTaxIds', () => {

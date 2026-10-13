@@ -44,7 +44,7 @@ test('la terminal tiene prioridad sobre la política general y se congela su ori
   assert.deepEqual(policy.legalTip, { enabled: true, percentage: 5 });
 });
 
-test('la lista de servicio filtra impuestos sin convertir un artículo exento en gravado', () => {
+test('los impuestos asignados al artículo prevalecen sobre la lista de servicio sin gravar exentos', () => {
   const config = getInitialConfig(SubVertical.SUPERMARKET);
   const terminal = config.terminals[0].config;
   const taxed = calculateTaxBreakdownFromItems([
@@ -54,7 +54,7 @@ test('la lista de servicio filtra impuestos sin convertir un artículo exento en
     { price: 100, quantity: 1, appliedTaxIds: ['tax-exempt'] },
   ], config, { terminalConfig: terminal, allowedTaxIds: ['tax-18'] });
 
-  assert.deepEqual(taxed.map((line) => line.id), ['tax-18']);
+  assert.deepEqual(taxed.map((line) => line.id).sort(), ['tax-18', 'tax-propina'].sort());
   assert.deepEqual(exempt, []);
 });
 

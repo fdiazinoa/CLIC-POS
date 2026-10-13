@@ -1,5 +1,5 @@
 import type { BusinessConfig, Customer, ParkedTicket, Table, TerminalConfig } from '../types';
-import { calculateTaxBreakdownFromItems, consolidateTaxBreakdownForDisplay } from './fiscalBreakdown';
+import { calculateTaxBreakdownFromItems, calculateUncoveredServiceChargeBase, consolidateTaxBreakdownForDisplay } from './fiscalBreakdown';
 import { resolveAppliedServiceTaxPolicy } from './serviceTaxPolicy';
 import { shouldApplyRestaurantServiceCharge } from './orderServiceType';
 import { applyPromotions } from './promotionEngine';
@@ -51,7 +51,7 @@ export const buildTableAccountFiscalSummary = (
     ? Number(policy.legalTip?.percentage ?? config.tipsConfig?.serviceCharge?.percentage ?? 0)
     : 0;
   const serviceChargeAmount = shouldApplyTip
-    ? (subtotal - discountTotal) * (serviceChargeRate / 100)
+    ? calculateUncoveredServiceChargeBase(items, config, { discountAmount: discountTotal, isTaxIncluded, terminalConfig, allowedTaxIds: policy.taxIds, taxExempt }) * (serviceChargeRate / 100)
     : 0;
   const total = round2(netSubtotal + taxTotal + serviceChargeAmount);
   return { items, subtotal, netSubtotal, discountTotal, taxBreakdown, taxTotal, serviceChargeAmount, serviceChargeRate, total, isTaxIncluded, taxExempt };

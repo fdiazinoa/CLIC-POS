@@ -121,6 +121,7 @@ import {
 import {
    buildTransactionCustomerSnapshot,
    calculateTaxBreakdownFromItems,
+   calculateUncoveredServiceChargeBase,
    calculateLineFiscalValuesForTransaction,
    consolidateTaxBreakdownForDisplay,
    formatTaxLineLabel,
@@ -4683,7 +4684,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const nextLegalTipRate = shouldApplyServiceCharge
          ? Number(appliedServiceTaxPolicy.legalTip?.percentage ?? serviceCharge?.percentage ?? 0) / 100
          : 0;
-      const nextCartTip = (grossLineTotal - discountAmount) * nextLegalTipRate;
+      const nextCartTip = calculateUncoveredServiceChargeBase(processedCart, config, {
+         discountAmount, isTaxIncluded, terminalConfig: activeTerminalConfig,
+         taxExempt: isSelectedCustomerTaxExempt, allowedTaxIds: appliedServiceTaxPolicy.taxIds,
+      }) * nextLegalTipRate;
 
       let nextCartTotalWithoutTip = 0;
       let nextNetSubtotal = 0;
@@ -4703,7 +4707,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          netSubtotal: nextNetSubtotal,
          cartTotal: nextCartTotalWithoutTip + nextCartTip,
       };
-   }, [cartTax, discountAmount, grossLineTotal, isTaxIncluded, serviceCharge?.percentage, shouldApplyServiceCharge, appliedServiceTaxPolicy.legalTip?.percentage]);
+   }, [cartTax, discountAmount, grossLineTotal, isTaxIncluded, serviceCharge?.percentage, shouldApplyServiceCharge, appliedServiceTaxPolicy.legalTip?.percentage, processedCart, config, activeTerminalConfig, isSelectedCustomerTaxExempt, appliedServiceTaxPolicy.taxIds]);
 
    // Alias for compatibility if needed, though netSubtotal is what we usually display as "Subtotal"
    const cartSubtotal = grossLineTotal; // This represents the sum of list prices

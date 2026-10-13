@@ -1,7 +1,7 @@
 import { validWeightPresentation } from '../../utils/scaleWeight';
 import { hasV3KilogramContract } from '../../utils/weightedProduct';
 import type { BusinessConfig, CartItem, Product, Transaction, V3SaleAuthorityStamp } from '../../types';
-import { calculateLineFiscalValuesForTransaction, freezeAuthoritativeLineFiscalAmounts } from '../../utils/fiscalBreakdown';
+import { calculateLineFiscalValuesForTransaction, calculateUncoveredServiceChargeBase, freezeAuthoritativeLineFiscalAmounts } from '../../utils/fiscalBreakdown';
 import { resolveAppliedServiceTaxPolicy } from '../../utils/serviceTaxPolicy';
 import { LargeMasterSyncV3Error } from './LargeMasterSyncV3Types';
 
@@ -46,9 +46,9 @@ export const validateV3FrozenLineFiscalAmounts = (transaction: Transaction, conf
     allowedTaxIds: policy.taxIds };
   const calculated = calculateLineFiscalValuesForTransaction(transaction.items, config, options);
   const charge = Number(transaction.serviceChargeAmount || 0);
-  const gross = transaction.items.reduce((sum, line) => sum + Math.abs(line.price * line.quantity), 0);
+  const uncoveredBase = calculateUncoveredServiceChargeBase(transaction.items, config, options);
   const maximumCharge = policy.legalTip?.enabled === true
-    ? round(Math.max(0, gross - options.discountAmount) * Number(policy.legalTip.percentage || 0) / 100) : 0;
+    ? round(uncoveredBase * Number(policy.legalTip.percentage || 0) / 100) : 0;
   const expectedNet = round(calculated.reduce((sum, row) => sum + row.netAmount, 0) + charge);
   const expectedTax = round(calculated.reduce((sum, row) => sum + row.taxAmount, 0));
   const expectedTotal = round(expectedNet + expectedTax);

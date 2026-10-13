@@ -7,7 +7,7 @@ import { freezeAuthoritativeLineFiscalAmounts } from '../utils/fiscalBreakdown';
 import { validateV3FrozenLineFiscalAmounts } from '../services/sync/LargeMasterSyncV3LineSource';
 import type { BusinessConfig, CartItem, Transaction } from '../types';
 
-test('real V3 freeze and source validation project tip, effective tax subset and exemption without changing frozen amounts', () => {
+test('real V3 freeze and source validation project tip, explicit article taxes and exemption without changing frozen amounts', () => {
   const stamp = { binding: 'B', warehouseId: 'W', tariffId: 'T', syncId: 'S', syncVersion: 2,
     inventoryVersion: 3, inventoryCursor: 'C', taxIncluded: true };
   const config = { terminals: [], taxRate: 0, taxes: [
@@ -17,7 +17,7 @@ test('real V3 freeze and source validation project tip, effective tax subset and
   for (const exempt of [false, true]) {
     const policy = { serviceType: 'DINE_IN', source: 'POS', taxIds: ['TX'], legalTip: { enabled: true, percentage: 10 } } as const;
     const raw = { id: 'P', cartId: 'line', name: 'Product', price: exempt ? 100 : 118,
-      quantity: 1, taxable: true, appliedTaxIds: ['TX', 'OTHER'], v3SaleAuthority: stamp } as CartItem;
+      quantity: 1, taxable: true, appliedTaxIds: ['TX'], v3SaleAuthority: stamp } as CartItem;
     const transaction = { id: 'T', terminalId: 'T1', serviceType: 'DINE_IN', serviceChargeAmount: 5,
       serviceTaxPolicySnapshot: { ...policy, taxIds: [...policy.taxIds] },
       customerSnapshot: { isTaxExempt: exempt }, netAmount: 105, taxAmount: exempt ? 0 : 18,
@@ -33,7 +33,7 @@ test('real V3 freeze and source validation project tip, effective tax subset and
     assert.equal(projection.total, transaction.total);
     if (exempt) assert.deepEqual(projection.taxBreakdown, []);
     else {
-      assert.deepEqual(projection.taxBreakdown, [{ id: 'TX', name: 'ITBIS', rate: 0.18,
+      assert.deepEqual(projection.taxBreakdown, [{ id: 'TX', name: 'ITBIS', rate: 0.18, type: 'VAT',
         amount: 18, taxableBase: 100, total: 118, lineCount: 1 }]);
       // The frozen snapshot remains authoritative even if presentation policy later changes.
       assert.deepEqual(buildV3FrozenFiscalProviderTransaction(transaction, { ...config,
@@ -153,6 +153,7 @@ test('actual App fiscal callback preserves V3 frozen amounts, deduplicates calls
   validateV3FrozenLineFiscalAmounts(original, projected);
   let stored = structuredClone(original);
   let issues = 0;
+  let validations = 0;
   let polls = 0;
   let release!: () => void;
   let issued!: () => void;
@@ -163,7 +164,8 @@ test('actual App fiscal callback preserves V3 frozen amounts, deduplicates calls
     config: { terminals: [], companyInfo: {}, taxRate: 0.99, taxes: [{ id: 'legacy', rate: 0.99 }] },
     db: { getDocument: async () => structuredClone(stored) },
     getLargeMasterSyncV3OperationalSession: async () => ({ binding: 'B', ready: { runtime: { version: { syncId: 'S', syncVersion: 2 } },
-      inventoryVersion: 3, inventoryCursor: 'C' }, assertCurrent: async () => {}, projectConfig: async () => projected }),
+      inventoryVersion: 3, inventoryCursor: 'C' }, assertCurrent: async () => {}, projectConfig: async () => projected,
+      validate: async (config: any, items: any[]) => { assert.strictEqual(config, projected); validations++; return items; } }),
     validateV3FrozenFiscalAmounts: (transaction: any) => assert.equal(transaction.netAmount + transaction.taxAmount, transaction.total),
     validateV3FrozenLineFiscalAmounts,
     getEffectiveFiscalComplianceConfig: () => ({}), getProviderEnvironment: () => 'TEST', getFiscalProviderConfig: () => ({}),
@@ -195,6 +197,7 @@ test('actual App fiscal callback preserves V3 frozen amounts, deduplicates calls
   release();
   await Promise.all([first, second]);
   assert.equal(issues, 1);
+  assert.equal(validations, 1);
   await callback(original);
   assert.equal(issues, 1);
   stored.fiscalSyncStatus = 'PENDING';
