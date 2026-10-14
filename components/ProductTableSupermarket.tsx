@@ -94,6 +94,7 @@ const ProductTableSupermarket: React.FC<ProductTableSupermarketProps> = ({
                                                 Desc. Aplicado
                                             </span>
                                         )}
+                                        {item.articleFormat && <span className="text-[10px] text-blue-600">{item.articleFormat.name} · {item.articleFormat.factor} base · {item.baseQuantity} unidades</span>}
                                     </div>
                                 </td>
 

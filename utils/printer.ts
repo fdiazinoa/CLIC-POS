@@ -1,3 +1,4 @@
+import { articleFormatTicketHTML } from '../services/articleFormats/ticket';
 import { Transaction, BusinessConfig, Reservation } from '../types';
 import { PrintRouterService } from '../services/printer/PrintRouterService';
 import { buildEscPosReservationPayload, buildEscPosTicketPayload } from '../services/printer/EscPosFormatter';
@@ -267,6 +268,7 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
                         <tr>
                             <td style="width: 70%;">
                                 <span class="item-name">${item.name}</span>
+                                ${item.articleFormat ? `<span class="item-meta">${articleFormatTicketHTML(item)}</span>` : ''}
                                 <span class="item-meta">
                                     ${item.quantity} x ${currencySymbol}${item.price.toFixed(2)}
                                     ${hasDiscount ? `<span style="text-decoration: line-through; color: #999; margin-left: 5px;">${currencySymbol}${originalPrice.toFixed(2)}</span>` : ''}
@@ -535,6 +537,7 @@ export const printReservation = async (reservation: Reservation, config: Busines
                         <tr>
                             <td style="width: 70%;">
                                 <span class="item-name">${item.name}</span>
+                                ${item.articleFormat ? `<span class="item-meta">${articleFormatTicketHTML(item)}</span>` : ''}
                                 <span class="item-meta">${item.quantity} x ${currencySymbol}${item.price.toFixed(2)}</span>
                             </td>
                             <td class="text-right font-bold">

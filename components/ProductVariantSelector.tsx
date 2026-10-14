@@ -2,6 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { X, ShoppingCart, Check, AlertCircle, Layers } from 'lucide-react';
 import { Product } from '../types';
+import { selectedVariantId } from '../services/articleFormats/cart';
 
 // Mapeo de colores en español para visualización CSS
 const COLOR_MAP: Record<string, string> = {
@@ -40,7 +41,7 @@ interface ProductVariantSelectorProps {
    product: Product | null;
    currencySymbol: string;
    onClose: () => void;
-   onConfirm: (product: Product, selectedModifiers: string[], finalPrice: number) => void;
+   onConfirm: (product: Product, selectedModifiers: string[], finalPrice: number, variantSku?: string) => void;
 }
 
 const ProductVariantSelector: React.FC<ProductVariantSelectorProps> = ({
@@ -109,7 +110,8 @@ const ProductVariantSelector: React.FC<ProductVariantSelectorProps> = ({
       if (!allSelected) return;
 
       const modifiersList = Object.values(selections).map((opt: VariantOption) => opt.label);
-      onConfirm(product, modifiersList, calculateTotal());
+      const variantSku = selectedVariantId(product,Object.fromEntries(Object.entries(selections).map(([key,value]) => [key,value.label])));
+      onConfirm(product, modifiersList, calculateTotal(), variantSku);
    };
 
    if (!product) return null;

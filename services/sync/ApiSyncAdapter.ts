@@ -1,3 +1,5 @@
+import { assertLegacyFormatPayload, assertLegacyFormatCollection } from '../articleFormats/activation';
+import { ArticleFormatError } from '../articleFormats/domain';
 import { Product } from '../../types';
 
 /**
@@ -342,6 +344,7 @@ class ApiSyncAdapter {
         action: SyncChange['action'] = 'BULK_UPDATE',
         mode: 'UPSERT' | 'FULL_REPLACE' = 'UPSERT'
     ): Promise<void> {
+        if (collection === 'transactions' || collection === 'transactionHistory') items.forEach(assertLegacyFormatPayload);
         if (!this.config) {
             throw new Error('Sync configuration missing in ApiSyncAdapter. Ensure SyncManager is initialized.');
         }
@@ -447,6 +450,7 @@ class ApiSyncAdapter {
             }
 
             console.log(`📥 ApiSyncAdapter: Pulled ${data.items.length} items from ${collection} (v${data.version})`);
+            assertLegacyFormatCollection(collection,data.items);
             return data.items;
 
         } catch (error) {
@@ -490,7 +494,9 @@ class ApiSyncAdapter {
                 throw new Error(`Delta pull failed: ${response.statusText}`);
             }
 
-            return await response.json();
+            const data = await response.json();
+            assertLegacyFormatCollection(collection,data.items);
+            return data;
         } catch (error) {
             console.error(`❌ ApiSyncAdapter: Error pulling delta for ${collection}:`, error);
             throw error;
@@ -714,6 +720,7 @@ class ApiSyncAdapter {
      * Push a single transaction to Master
      */
     async pushTransaction(transaction: any): Promise<void> {
+        assertLegacyFormatPayload(transaction);
         try {
             await this.ensurePushReady();
             const response = await this.fetchWithRetry(`${this.config.masterUrl}/api/sync/transactions`, {
@@ -884,9 +891,11 @@ class ApiSyncAdapter {
             }
 
             const data = await response.json();
+            assertLegacyFormatCollection('transactions',data.items);
             return data.items || [];
         } catch (error) {
             console.error('❌ ApiSyncAdapter: Error pulling pending transactions:', error);
+            if (error instanceof ArticleFormatError) throw error;
             return [];
         }
     }
@@ -1017,9 +1026,12 @@ class ApiSyncAdapter {
             }
 
             const data = await response.json();
+            assertLegacyFormatCollection('transactions',data.data?.transactions);
+            assertLegacyFormatCollection('transactionHistory',data.data?.transactionHistory);
             return data.data;
         } catch (error) {
             console.error('❌ ApiSyncAdapter: Error pulling history:', error);
+            if (error instanceof ArticleFormatError) throw error;
             return null;
         }
     }

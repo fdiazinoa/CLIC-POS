@@ -1,3 +1,4 @@
+import { assertFormatsPostingClosed } from './articleFormats/activation';
 import { Transaction, DocumentType } from '../types';
 import { db } from '../utils/db';
 
@@ -194,6 +195,7 @@ class TransactionService {
     async createTransaction(
         data: Partial<Transaction>
     ): Promise<Transaction> {
+        assertFormatsPostingClosed(data.items || []);
         // Validate required fields
         if (!data.documentType) {
             throw new Error('documentType is required');

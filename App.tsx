@@ -1,3 +1,4 @@
+import { assertFormatsPostingClosed } from './services/articleFormats/activation';
 import { applyLocalUserProfiles, LOCAL_USER_PROFILE_CHANGED } from './utils/localUserProfiles';
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
@@ -2649,6 +2650,7 @@ const AppContent: React.FC = () => {
   }, [customers, transactions]);
 
   const handleTransactionComplete = async (txn: Transaction) => {
+    assertFormatsPostingClosed(txn.items || []);
     // Get current terminal ID before persisting.
     const currentTerminal = (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId);
     const terminalId = currentTerminal?.id || 'T1';
@@ -3225,6 +3227,7 @@ const AppContent: React.FC = () => {
     conditions: Map<string, 'SELLABLE' | 'DAMAGED'>,
     reason: string
   ) => {
+    assertFormatsPostingClosed(itemsToRefund || []);
     console.log("🔄 Procesando Devolución Integral:", { originalTx, items: itemsToRefund.length, reason });
 
     const normalizedRefundItems = (itemsToRefund || [])

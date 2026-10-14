@@ -2,6 +2,7 @@
 import { Product, Season, Supplier, InventoryLedgerEntry, Warehouse, StockTransfer, CartItem } from '../types';
 import { db } from './db';
 import { getConversionFactor } from './units';
+import { inventoryQuantity } from '../services/articleFormats/domain';
 
 // ... existing code ...
 
@@ -69,7 +70,7 @@ export async function processInventoryDeduction(
     const entries: InventoryLedgerEntry[] = [];
 
     // 1. Calculate flat list of deductions (handling recipes/yields)
-    const deductions = await calculateInventoryDeductions(item, item.quantity, allProducts);
+    const deductions = await calculateInventoryDeductions(item, inventoryQuantity(item), allProducts);
 
     // 2. Consolidate deductions by Product ID (in case multiple sub-recipes use same ingredient)
     const consolidated = moveByProductId(deductions);
@@ -199,7 +200,7 @@ export async function transferStockToCommitted(
     const aggregated: Record<string, number> = {};
 
     for (const item of reservationItems) {
-        const deductions = await calculateInventoryDeductions(item, item.quantity, allProducts);
+        const deductions = await calculateInventoryDeductions(item, inventoryQuantity(item), allProducts);
         for (const d of deductions) {
             aggregated[d.productId] = (aggregated[d.productId] || 0) + d.quantityToDeduct;
         }
