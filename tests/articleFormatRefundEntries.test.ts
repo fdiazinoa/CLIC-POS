@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
-import { assertOriginalSaleForFormatReturn, legacyMergeCandidate, addFormatLine } from '../services/articleFormats/cart';
-import { toBaseQuantity, freezeLine } from '../services/articleFormats/domain';
+import { assertOriginalSaleForFormatReturn, legacyMergeCandidate, addFormatLine, skuForFormatVariant, formatVariantForSku, baseCodeFormat } from '../services/articleFormats/cart';
+import { toBaseQuantity, freezeLine, resolveFormatBarcode, formatPrice } from '../services/articleFormats/domain';
 import { formatsEnabled, ARTICLE_FORMATS_READINESS } from '../services/articleFormats/activation';
 import type { Product, CartItem } from '../types';
 import type { ArticleFormat } from '../services/articleFormats/contract';
@@ -111,4 +111,21 @@ test('historical snapshots require original sale even after formats disappear or
 test('runtime activation is still closed with company flag and terminal capability set',() => {
   assert.equal(formatsEnabled({featureFlags:{ARTICLE_FORMATS:true}},{capabilities:{article_formats:1}}),false);
   assert.ok(Object.values(ARTICLE_FORMATS_READINESS).every(value => value === false));
+});
+
+test('actual variant confirmation and both scanner paths preserve ERP_ID while resolving the POS SKU price',() => {
+ const p=product(),erpId='erp-variant-red',sku='red-SKU';p.articleFormatVariantSkus={[erpId]:sku};
+ p.variants=[{sku,barcode:['legacy-variant-code'],attributeValues:{Color:'Red'},price:7}];
+ const unit={...box,id:'red-unit',variantId:erpId,name:'Unidad',factor:1,is_base:true};
+ const caseFormat={...box,variantId:erpId,barcode:'7501234567893'};
+ p.article_formats!.formats=[unit,caseFormat];
+ const f=fixture(false,true);
+ const bindings={...f.common,skuForFormatVariant,formatVariantForSku,baseCodeFormat,resolveFormatBarcode,formatPrice,products:[p]};
+ productionHandler('handleVariantConfirm',bindings)(p,['Red'],99,erpId);
+ const selection=f.effects.find(e=>e.name==='formats')!.value as {variantId:string;basePrice:number};
+ assert.equal(selection.variantId,erpId);assert.equal(selection.basePrice,7);
+ const scan=productionHandler('findProductByAnyCode',bindings);
+ assert.equal(scan('7501234567893').format.variantId,erpId);assert.equal(scan('7501234567893').price,168);
+ assert.equal(scan('legacy-variant-code').format.variantId,erpId);assert.equal(scan('legacy-variant-code').price,7);
+ const cart=addFormatLine([],p,caseFormat,1,168,'format-line');assert.equal(cart[0].variantSku,sku);assert.equal(cart[0].articleFormat!.variantId,erpId);
 });
