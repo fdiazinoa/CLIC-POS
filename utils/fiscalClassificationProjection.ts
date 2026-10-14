@@ -3,9 +3,21 @@ import { sha256Utf8 } from '../services/sync/LargeMasterSyncV3Client';
 import { authorizeV3TaxClassification } from '../services/sync/LargeMasterSyncV3TaxClassification';
 
 export const MSELLER_UNSUPPORTED_VAT_ERROR = 'MSeller: tasa de ITBIS no soportada; requiere clasificación fiscal explícita (no sumar propina al ITBIS).';
+const hasExtendedProviderProof = (tx: Transaction): boolean => ['fiscalResponseCode', 'fiscalSignedXml'].some(key =>
+  String((tx as Transaction & Record<string, unknown>)[key] ?? '').trim().length > 0);
+
+const assertClassificationFinancialSource = (tx: Transaction): void => {
+  if (![tx.netAmount, tx.taxAmount, tx.total].every(value => typeof value === 'number' && Number.isFinite(value) && value >= 0)
+    || tx.total <= 0 || !tx.taxBreakdown?.length
+    || tx.taxBreakdown.some(row => ![row.rate, row.amount, row.taxableBase, row.total].every(value =>
+      typeof value === 'number' && Number.isFinite(value) && value >= 0) || row.rate > 1)
+    || Math.abs(tx.taxBreakdown.reduce((sum,row) => sum + row.amount,0) - tx.taxAmount!) > 0.005
+    || Math.abs(tx.netAmount! + tx.taxAmount! - tx.total) > 0.005) throw new Error('FISCAL_CLASSIFICATION_SOURCE_INVALID');
+};
+
 /** Exact deterministic local/ERP totals rejection, never a generic transport error or NOT_FOUND. */
 export const canProjectFiscalClassification = (tx: Transaction): boolean => tx.fiscalProvider === 'MSELLER'
-  && !tx.fiscalClassificationAttemptedAt && tx.fiscalSyncStatus === 'ERROR' && tx.fiscalSyncError === MSELLER_UNSUPPORTED_VAT_ERROR
+  && !hasExtendedProviderProof(tx) && !tx.fiscalClassificationAttemptedAt && tx.fiscalSyncStatus === 'ERROR' && tx.fiscalSyncError === MSELLER_UNSUPPORTED_VAT_ERROR
   && tx.fiscalResponseMessage === MSELLER_UNSUPPORTED_VAT_ERROR
   && tx.fiscalProviderStatus === 'V3_ISSUE_REQUESTED'
   && !tx.fiscalReferenceId && !tx.fiscalCertifiedNcf && !tx.fiscalSyncedAt && !tx.fiscalQrUrl && !tx.fiscalSecurityCode
@@ -22,6 +34,7 @@ export const createFiscalClassificationProjection = async (tx: Transaction, taxe
   reason: string, binding: string): Promise<FiscalClassificationProjection> => {
   if (!canProjectFiscalClassification(tx) || !actorId || !reason.trim() || !binding
     || tx.items.some(line => line.v3SaleAuthority?.binding !== binding)) throw new Error('FISCAL_CLASSIFICATION_CORRECTION_DENIED');
+  assertClassificationFinancialSource(tx);
   const before = tx.taxBreakdown;
   if (!before?.length || new Set(before.map(row => row.id)).size !== before.length) throw new Error('FISCAL_CLASSIFICATION_SOURCE_INVALID');
   const after = before.map(row => {
@@ -48,7 +61,8 @@ export const createFiscalClassificationProjection = async (tx: Transaction, taxe
 export const applyFiscalClassificationProjection = async (tx: Transaction): Promise<Transaction> => {
   const projection = tx.fiscalClassificationProjection;
   if (!projection) return tx;
-  if (tx.fiscalProvider !== 'MSELLER' || tx.fiscalProviderStatus !== 'V3_ISSUE_REQUESTED'
+  assertClassificationFinancialSource(tx);
+  if (hasExtendedProviderProof(tx) || tx.fiscalProvider !== 'MSELLER' || tx.fiscalProviderStatus !== 'V3_ISSUE_REQUESTED'
     || tx.fiscalReferenceId || tx.fiscalCertifiedNcf || tx.fiscalSyncedAt || tx.fiscalQrUrl || tx.fiscalSecurityCode
     || projection.version !== 1 || projection.sourceChecksum !== await fiscalClassificationChecksum(tx)
     || tx.items.some(line => line.v3SaleAuthority?.binding !== projection.binding)

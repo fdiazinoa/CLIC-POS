@@ -35,7 +35,7 @@ for (const patch of [{fiscalSyncStatus:'SYNCED'},{fiscalSyncStatus:'PENDING'},{f
 test('scope, stale financial source and tampered audit deny',async()=>{
   const tx=fixture();await assert.rejects(()=>createFiscalClassificationProjection(tx,taxes,'U','Reason','other'),/DENIED/);
   const projection=await createFiscalClassificationProjection(tx,taxes,'U','Reason','B');
-  await assert.rejects(()=>applyFiscalClassificationProjection({...tx,total:109,fiscalClassificationProjection:projection}),/STALE/);
+  await assert.rejects(()=>applyFiscalClassificationProjection({...tx,total:109,netAmount:85.2,fiscalClassificationProjection:projection}),/STALE/);
   projection.after[1].amount=9;
   await assert.rejects(()=>applyFiscalClassificationProjection({...tx,fiscalClassificationProjection:projection}),/SOURCE_INVALID/);
 });
@@ -88,4 +88,22 @@ test('actual App retry commits one-shot CAS before mock issue; timeout/restart/c
   await assert.rejects(()=>retry(JSON.parse(JSON.stringify(read()))),/RECONCILIATION/);assert.equal(issues,1);
   assert.deepEqual(read().payments,tx.payments);assert.equal(read().taxBreakdown[1].type,'VAT');assert.equal(read().ncf,tx.ncf);
  }finally{sql.close();}
+});
+
+for(const field of ['netAmount','taxAmount','total']) for(const value of [NaN,Infinity,undefined,-1]) test(`classification rejects malformed ${field}=${String(value)} before attempt`,async()=>{
+ const tx=fixture();(tx as any)[field]=value;
+ await assert.rejects(()=>createFiscalClassificationProjection(tx,taxes,'U','Reason','B'),/SOURCE_INVALID/);
+ assert.equal(tx.fiscalClassificationAttemptedAt,undefined);
+ const valid=fixture();const projection=await createFiscalClassificationProjection(valid,taxes,'U','Reason','B');
+ await assert.rejects(()=>applyFiscalClassificationProjection({...tx,fiscalClassificationProjection:projection}),/SOURCE_INVALID/);
+});
+for(const field of ['fiscalResponseCode','fiscalSignedXml']) test(`contradictory ${field} proof dominates unsupported error for correction, wire and consumption`,async()=>{
+ const tx=fixture();const projection=await createFiscalClassificationProjection(tx,taxes,'U','Reason','B');
+ const proved={...tx,[field]:field==='fiscalResponseCode'?'1':'<signed>proof</signed>',fiscalClassificationProjection:projection};
+ assert.equal(canProjectFiscalClassification(proved),false);
+ await assert.rejects(()=>createFiscalClassificationProjection(proved,taxes,'U','Reason','B'),/DENIED/);
+ await assert.rejects(()=>applyFiscalClassificationProjection(proved),/STALE/);
+ const {consumeFiscalClassificationAttempt}=await import('../utils/fiscalClassificationProjection');
+ await assert.rejects(()=>consumeFiscalClassificationAttempt(proved),/RECONCILIATION/);
+ for(const value of [null,undefined,'','  ']) assert.equal(canProjectFiscalClassification({...tx,[field]:value}),true);
 });
