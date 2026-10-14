@@ -1,7 +1,7 @@
 import ArticleFormatSelector from './ArticleFormatSelector';
 import { formatsEnabled, assertFormatsPostingClosed } from '../services/articleFormats/activation';
 import { inventoryQuantity, resizeLine, resolveFormatBarcode, formatPrice, toBaseQuantity } from '../services/articleFormats/domain';
-import { addFormatLine, formatStockDemand, legacyMergeCandidate, routeQuickFormat, baseCodeFormat } from '../services/articleFormats/cart';
+import { addFormatLine, formatStockDemand, legacyMergeCandidate, routeQuickFormat, baseCodeFormat, assertOriginalSaleForFormatReturn } from '../services/articleFormats/cart';
 import type { ArticleFormat } from '../services/articleFormats/contract';
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { Capacitor } from '@capacitor/core';
@@ -805,7 +805,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const [lastAddedCartId, setLastAddedCartId] = useState<string | null>(null);
 
+   const rejectFormatQuickReturn = useCallback((product: Product, returnMode = isReturnMode): boolean => {
+      try { assertOriginalSaleForFormatReturn(product,returnMode); return false; }
+      catch { setErrorToast('Selecciona el ticket original para devolver esta presentación.'); return true; }
+   }, [isReturnMode]);
+
    const addToCart = useCallback((product: Product, quantity: number = 1, priceOverride?: number, modifiers?: string[], trackingData?: any[]) => {
+      if (rejectFormatQuickReturn(product,isReturnMode || quantity < 0)) return;
       if (!canAddItemToCart(product, quantity)) return;
 
       // TRACEABILITY INTERCEPTION
@@ -847,9 +853,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       // SIDE EFFECT: Move outside the state update sequence to avoid React "rendering update" warning
       setLastAddedCartId(targetCartId);
-   }, [canAddItemToCart, getProductPrice, onUpdateCart, cart]); // Added cart to dependencies
+   }, [canAddItemToCart, getProductPrice, onUpdateCart, cart, rejectFormatQuickReturn, isReturnMode]);
 
    const addSelectedFormat = (product: Product, format: ArticleFormat, price: number, quantity = 1, modifiers: string[] = []) => {
+      if (rejectFormatQuickReturn(product,isReturnMode || quantity < 0)) { setFormatSelection(null); return; }
       if (!articleFormatsEnabled) { setErrorToast('Presentaciones pendientes de habilitación'); return; }
       try {
          const baseRequested = toBaseQuantity(quantity,format.factor);
@@ -861,6 +868,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    };
 
    const handleProductClick = useCallback((product: Product) => {
+      if (rejectFormatQuickReturn(product)) return;
       // MOBILE INTERCEPTION
       if (isMobile && !defaultSalesWarehouseId) {
          setPendingProductToAdd(product);
@@ -876,7 +884,18 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       else if (hasVariants) setSelectedProductForVariants(product);
       else if (articleFormatsEnabled && product.article_formats?.formats.length && !isReturnMode) setFormatSelection({product,variantId:null,basePrice:(product.tariffs || []).find(t => t.tariffId === activeTariffId)?.price ?? product.price,modifiers:[]});
       else addToCart(product, isReturnMode ? -1 : 1);
-   }, [isMobile, defaultSalesWarehouseId, canAddItemToCart, addToCart, isReturnMode, articleFormatsEnabled, activeTariffId]);
+   }, [isMobile, defaultSalesWarehouseId, canAddItemToCart, addToCart, isReturnMode, articleFormatsEnabled, activeTariffId, rejectFormatQuickReturn]);
+
+   const handleVariantConfirm = (product: Product, modifiers: string[], price: number, variantSku?: string) => {
+      if (rejectFormatQuickReturn(product)) { setSelectedProductForVariants(null); return; }
+      if (articleFormatsEnabled && product.article_formats?.formats.length) {
+         if (!variantSku) { setErrorToast('Selecciona una variante válida para esta presentación.'); return; }
+         setFormatSelection({product,variantId:variantSku,
+            basePrice:(product.tariffs || []).find(t => t.tariffId === activeTariffId)?.price ?? product.variants.find(v => v.sku === variantSku)?.price ?? price,
+            modifiers});
+      } else addToCart(product,isReturnMode ? -1 : 1,price,modifiers);
+      setSelectedProductForVariants(null);
+   };
 
    // --- SEARCH LOGIC (Auto-Add Variantes) ---
    const findProductByAnyCode = useCallback((code: string) => {
@@ -3216,7 +3235,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          {showLoyaltyModal && <LoyaltyScanModal onClose={() => setShowLoyaltyModal(false)} onScan={handleLoyaltyScan} />}
          {editingItem && <CartItemOptionsModal item={editingItem} config={config} users={users} roles={roles} onClose={() => setEditingItem(null)} onUpdate={updateCartItem} canApplyDiscount={true} canVoidItem={true} />}
          {formatSelection?.product.article_formats && <ArticleFormatSelector itemName={formatSelection.product.name} dto={formatSelection.product.article_formats} variantId={formatSelection.variantId} tariffId={activeTariffId} baseTariffPrice={formatSelection.basePrice} stockBase={(formatSelection.product.stockBalances?.[defaultSalesWarehouseId] ?? formatSelection.product.stock ?? 0) - (committedByProduct[formatSelection.product.id] || 0) - formatStockDemand(cart,formatSelection.product.id)} currencySymbol={baseCurrency.symbol} onClose={() => setFormatSelection(null)} onSelect={(format,price) => addSelectedFormat(formatSelection.product,format,price,1,formatSelection.modifiers)} />}
-         {selectedProductForVariants && <ProductVariantSelector product={selectedProductForVariants} currencySymbol={baseCurrency.symbol} onClose={() => setSelectedProductForVariants(null)} onConfirm={(p, m, pr, variantSku) => { if (articleFormatsEnabled && p.article_formats?.formats.length) { if (!variantSku) { setErrorToast("Selecciona una variante válida para esta presentación."); return; } setFormatSelection({product:p,variantId:variantSku,basePrice:(p.tariffs || []).find(t => t.tariffId === activeTariffId)?.price ?? p.variants.find(v => v.sku === variantSku)?.price ?? pr,modifiers:m}); } else addToCart(p, 1, pr, m); setSelectedProductForVariants(null); }} />}
+         {selectedProductForVariants && <ProductVariantSelector product={selectedProductForVariants} currencySymbol={baseCurrency.symbol} onClose={() => setSelectedProductForVariants(null)} onConfirm={handleVariantConfirm} />}
          {productForScale && <ScaleModal product={productForScale} currencySymbol={baseCurrency.symbol} onClose={() => setProductForScale(null)} onConfirm={(w) => { addToCart(productForScale, w); setProductForScale(null); }} />}
          {
             showGlobalDiscount && <GlobalDiscountModal currentSubtotal={cartSubtotal} currencySymbol={baseCurrency.symbol} initialValue={globalDiscount.value.toString()} initialType={globalDiscount.type} themeColor={config.themeColor} onClose={() => setShowGlobalDiscount(false)} onConfirm={async (val, type) => {

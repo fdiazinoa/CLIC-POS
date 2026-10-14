@@ -43,6 +43,15 @@ export function routeQuickFormat(format: ArticleFormat | undefined, isReturnMode
   return true;
 }
 
+/** A master flag changing must not turn a formatted return into an anonymous legacy unit. */
+export function assertOriginalSaleForFormatReturn(
+  product: { article_formats?: ArticleFormatsDTO; articleFormat?: unknown }, isReturnMode: boolean
+): void {
+  if (isReturnMode && (product.article_formats?.formats.length || product.articleFormat !== undefined)) {
+    throw new ArticleFormatError('ARTICLE_FORMAT_ORIGINAL_SALE_REQUIRED');
+  }
+}
+
 /** Parent/variant legacy codes mean base units; negotiated masters must authorize that format. */
 export function baseCodeFormat(dto: ArticleFormatsDTO | undefined, variantId: string | null): ArticleFormat | undefined {
   if (!dto?.formats.length) return undefined;
