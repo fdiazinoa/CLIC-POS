@@ -211,3 +211,40 @@ for(const stale of ['transactions','transactionHistory'])test(`S2/S1 stale ${sta
   assert.deepEqual(f.read('transactionHistory'),stale==='transactionHistory'?altered:input.history);
  }finally{f.sql.close();}
 });
+
+test('prepare rejects a sealed E31 with E32 NCF instead of changing the existing sequence',async()=>{
+ const input=await fixture();
+ for(const document of [input.current,input.history]){
+  document.ncfType='E31';const fingerprint=JSON.parse(document.v3CommitFingerprint),sealed=JSON.parse(fingerprint[0]);sealed.ncfType='E31';
+  fingerprint[0]=JSON.stringify(sealed);document.v3CommitFingerprint=JSON.stringify(fingerprint);
+ }
+ await assert.rejects(()=>prepareFiscalPresubmitEvidenceRepair(input),/REPAIR_DENIED/);
+});
+test('native raw repair CAS rejects a sealed E31/E32 prefix mismatch despite valid old financial source',async()=>{
+ const input=await fixture(),plan=await prepareFiscalPresubmitEvidenceRepair(input),f=sqlite(input);
+ try{
+  const invalid={...input.current,ncfType:'E31'};
+  f.sql.prepare('UPDATE documents SET data=? WHERE collection_name=\'transactions\'').run(JSON.stringify(invalid));
+  const mutation={...plan.mutations[0],expectedDocument:JSON.stringify(invalid),document:{...plan.mutations[0].document,ncfType:'E31'}};
+  await assert.rejects(()=>f.adapter.saveDocumentsAtomically([mutation]),/METADATA_MUTATION_DENIED/);
+  assert.deepEqual(f.read('transactions'),invalid);assert.deepEqual(f.read('transactionHistory'),input.history);
+ }finally{f.sql.close();}
+});
+for(const fiscalCode of ['E31','E32'])for(const originalNcf of ['E3200000505','E320000000505'])test(`correct ${fiscalCode} prefix preserves ${originalNcf.replace('E32',fiscalCode)} formatting`,async()=>{
+ const ncf=originalNcf.replace('E32',fiscalCode);
+ const input=await fixture();input.target.ncf=ncf;
+ for(const document of [input.current,input.history]){
+  document.ncf=ncf;document.electronicNcf=ncf;document.ncfType=fiscalCode;
+  const fingerprint=JSON.parse(document.v3CommitFingerprint),sealed=JSON.parse(fingerprint[0]);sealed.ncf=ncf;sealed.electronicNcf=ncf;sealed.ncfType=fiscalCode;
+  fingerprint[0]=JSON.stringify(sealed);document.v3CommitFingerprint=JSON.stringify(fingerprint);
+ }
+ const financial=JSON.parse(input.archives.financialText);financial.ncf=ncf;financial.electronicNcf=ncf;
+ const provider=JSON.parse(input.archives.providerText);provider.ncf=ncf;
+ input.archives.financialText=JSON.stringify(financial);input.archives.providerText=JSON.stringify(provider);
+ input.archives.financialSha256=await sha256Utf8(input.archives.financialText);input.archives.providerSha256=await sha256Utf8(input.archives.providerText);
+ const plan=await prepareFiscalPresubmitEvidenceRepair(input),f=sqlite(input);
+ try{
+  await executeApprovedFiscalPresubmitEvidenceRepair(plan,f.adapter,async()=>input.scope,{approved:true,operationId:plan.operationId});
+  assert.equal(f.read('transactions').ncf,ncf);assert.equal(f.read('transactionHistory').electronicNcf,ncf);
+ }finally{f.sql.close();}
+});

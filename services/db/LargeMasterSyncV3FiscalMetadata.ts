@@ -35,7 +35,7 @@ export async function validateV3FiscalMetadataMutation(mutation: DurableDocument
     const audit = next.fiscalPreSubmitRecoveryAudit, oldAudit = previous.fiscalPreSubmitRecoveryAudit || [];
     const entry = audit?.[audit.length-1];
     if (previous.fiscalProvider !== 'MSELLER' || !['E31','E32'].includes(String(previous.ncfType))
-      || !previous.ncf || previous.ncf !== previous.electronicNcf
+      || !previous.ncf || previous.ncf !== previous.electronicNcf || !previous.ncf.startsWith(String(previous.ncfType))
       || previous.fiscalSyncStatus !== 'ERROR' || previous.fiscalProviderStatus !== 'V3_ISSUE_REQUESTED'
       || previous.fiscalSyncError !== 'SYNC_V3_FISCAL_RECONCILIATION_REQUIRED'
       || previous.fiscalResponseMessage !== 'Existe un intento fiscal sin referencia confirmada. Requiere reconciliación antes de emitir de nuevo.'

@@ -48,6 +48,7 @@ export async function prepareFiscalPresubmitEvidenceRepair(input: FiscalEvidence
   for(const document of [current,history]) {
     require(document.id === target.id && document.displayId === target.displayId && document.terminalId === target.terminalId
       && document.v3Binding === scope.binding && document.ncf === target.ncf && document.electronicNcf === target.ncf
+      && ['E31','E32'].includes(String(document.ncfType)) && document.ncf.startsWith(String(document.ncfType))
       && document.fiscalProvider === 'MSELLER' && document.fiscalSyncStatus === 'ERROR' && document.fiscalProviderStatus === 'V3_ISSUE_REQUESTED'
       && !document.fiscalClassificationProjection && !document.fiscalClassificationAttemptedAt
       && ['fiscalReferenceId','fiscalCertifiedNcf','fiscalSyncedAt','fiscalQrUrl','fiscalSecurityCode','fiscalResponseCode','fiscalSignedXml','fiscalQrCode']
