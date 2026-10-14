@@ -11,6 +11,7 @@ export const V3_FINANCIAL_MUTABLE_FIELDS = [
 /** These append-only fields are writable only through native typed CAS, never ordinary ACK publication. */
 export const V3_FINANCIAL_CAS_PROTECTED_FIELDS = [
   'fiscalClassificationProjection', 'fiscalClassificationAttemptedAt', 'fiscalPreSubmitRecoveryAudit',
+  'fiscalSubmissionScope', 'fiscalLookupApproval', 'fiscalStatusProof',
 ] as const;
 
 const transientSyncFields = ['syncStartedAt', 'syncRetryAfter', 'syncBlockedReason', 'syncBlockedAt', '_forceSyncReplay'];
@@ -31,7 +32,9 @@ export const V3_FINANCIAL_RETAINED_UPSERT_SQL = `CASE WHEN documents.collection_
     ELSE documents.data END, (SELECT json_group_object(key, json(CASE type
     WHEN 'text' THEN json_quote(value) WHEN 'null' THEN 'null' WHEN 'true' THEN 'true'
     WHEN 'false' THEN 'false' ELSE value END)) FROM json_each(excluded.data)
-    WHERE key IN (${mutableKeysSql}))),
+    WHERE key IN (${mutableKeysSql}) AND NOT (COALESCE(json_extract(documents.data,'$.fiscalSyncStatus'),'')='SYNCED'
+      AND key IN ('fiscalSyncStatus','fiscalSyncError','fiscalSyncedAt','fiscalReferenceId','fiscalCertifiedNcf','fiscalProviderStatus',
+        'fiscalQrUrl','fiscalSecurityCode','fiscalResponseMessage','fiscalResponseCode','fiscalSignedXml','fiscalQrCode')))),
     '$.relatedTransactions', json((SELECT json_group_array(value) FROM (
       SELECT value FROM json_each(documents.data, '$.relatedTransactions')
       UNION SELECT value FROM json_each(excluded.data, '$.relatedTransactions')))))

@@ -1,3 +1,4 @@
+import { fiscalStatusSourceChecksum, validFiscalScope, verifyFiscalStatusProof } from '../fiscal/FiscalStatusProof';
 import { sha256Utf8 } from '../sync/LargeMasterSyncV3Client';
 import type { DurableDocumentMutation } from './DatabaseAdapter';
 import type { Transaction } from '../../types';
@@ -18,6 +19,33 @@ export async function validateV3FiscalMetadataMutation(mutation: DurableDocument
   const next = mutation.document as Transaction & Record<string,any>;
   if (previous.id !== next.id || previous.v3Binding !== mutation.v3CurrentCatalog!.binding) denied();
   const operation = mutation.v3FiscalMetadataOperation;
+  if (operation === 'FISCAL_SUBMISSION_SCOPE_APPEND' || operation === 'FISCAL_LOOKUP_APPROVAL_APPEND') {
+    const field = operation === 'FISCAL_SUBMISSION_SCOPE_APPEND' ? 'fiscalSubmissionScope' : 'fiscalLookupApproval';
+    const scope = next[field];
+    if (operation === 'FISCAL_SUBMISSION_SCOPE_APPEND' && (previous.fiscalClassificationAttemptedAt || previous.fiscalLookupApproval
+      || previous.fiscalReferenceId || previous.fiscalCertifiedNcf || previous.fiscalSyncError)) denied();
+    if (operation === 'FISCAL_LOOKUP_APPROVAL_APPEND' && !(previous.fiscalProviderStatus==='V3_ISSUE_REQUESTED'
+      || previous.fiscalClassificationAttemptedAt || previous.fiscalReferenceId || previous.fiscalCertifiedNcf)) denied();
+    if (mutation.collectionName !== 'transactions' || previous[field] || !scope || !validFiscalScope(scope,previous)
+      || scope.basis !== (operation === 'FISCAL_SUBMISSION_SCOPE_APPEND' ? 'PERSISTED_SUBMISSION_INTENT' : 'EXPLICIT_AUTHORIZED_LOOKUP')
+      || scope.sourceChecksum !== await fiscalStatusSourceChecksum(previous) || previous.fiscalSyncStatus === 'SYNCED'
+      || !equal(without(previous,[field]),without(next,[field]))) denied();
+    return;
+  }
+  if (operation === 'FISCAL_STATUS_RECONCILE') {
+    const canonicalSource = mutation.collectionName === 'transactionHistory'
+      ? JSON.parse(mutation.v3ExpectedRetainedDocument?.expected || '{}') : previous;
+    const scope = canonicalSource.fiscalSubmissionScope || canonicalSource.fiscalLookupApproval;
+    const allowed = ['fiscalSyncStatus','fiscalSyncError','fiscalProviderStatus','fiscalReferenceId','fiscalCertifiedNcf',
+      'fiscalResponseMessage','fiscalSyncedAt','fiscalStatusProof'];
+    if (previous.fiscalSyncStatus === 'SYNCED' || !scope || next.fiscalSyncStatus !== 'SYNCED' || next.fiscalSyncError !== undefined
+      || next.fiscalReferenceId !== next.fiscalStatusProof?.providerReceipt.internalTrackId
+      || next.fiscalCertifiedNcf !== next.fiscalStatusProof?.providerReceipt.returnedNcf
+      || next.fiscalProviderStatus !== next.fiscalStatusProof?.providerReceipt.status
+      || next.fiscalSyncedAt !== next.fiscalStatusProof?.observedAt || !equal(without(previous,allowed),without(next,allowed))
+      || !await verifyFiscalStatusProof(next.fiscalStatusProof,scope,previous)) denied();
+    return;
+  }
   if (operation === 'CLASSIFICATION_PROJECTION_APPEND') {
     if (previous.fiscalClassificationProjection || !canProjectFiscalClassification(previous)
       || !next.fiscalClassificationProjection || !equal(without(previous,['fiscalClassificationProjection']),without(next,['fiscalClassificationProjection']))) denied();

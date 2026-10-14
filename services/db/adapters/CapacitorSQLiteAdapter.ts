@@ -1,3 +1,4 @@
+import { getEffectiveFiscalComplianceConfig, getProviderEnvironment } from '../../../utils/fiscal/fiscalHelpers';
 import { validateV3FiscalMetadataMutation } from '../LargeMasterSyncV3FiscalMetadata';
 import { v3RetainedLineFingerprint } from '../../sync/LargeMasterSyncV3StockAuthority';
 import { SYNC_MONITOR_PAGE_SQL, syncMonitorPageParams, decodeSyncMonitorPage, type SyncMonitorPageRequest } from '../SyncMonitorPage';
@@ -121,6 +122,16 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         await this.upsertStoredDocuments(collectionName, [doc]);
     }
 
+    async getFiscalStatusCandidates(binding: string, afterId: string, limit: number): Promise<string[]> {
+      const result = await this.ensureDb().query(`SELECT doc_id FROM documents WHERE collection_name='transactions'
+        AND doc_id>? AND json_extract(data,'$.v3Binding')=? AND json_extract(data,'$.fiscalProvider')='MSELLER'
+        AND json_extract(data,'$.fiscalSyncStatus') IN ('PENDING','ERROR')
+        AND (json_type(data,'$.fiscalSubmissionScope')='object' OR json_type(data,'$.fiscalLookupApproval')='object')
+        AND (json_extract(data,'$.fiscalProviderStatus')='V3_ISSUE_REQUESTED' OR json_extract(data,'$.fiscalClassificationAttemptedAt') IS NOT NULL
+          OR json_extract(data,'$.fiscalReferenceId') IS NOT NULL OR json_extract(data,'$.fiscalCertifiedNcf') IS NOT NULL) ORDER BY doc_id LIMIT ?`,[afterId,binding,Math.min(10,Math.max(1,limit))]);
+      return (result.values || []).map(row=>String(row.doc_id));
+    }
+
     async saveDocumentsAtomically(documents: DurableDocumentMutation[], requireAbsent = false, replaceCollections: string[] = []): Promise<void> {
         if (!documents.length && !replaceCollections.length) return;
         await this.withWriteLock(async () => {
@@ -135,6 +146,18 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
                 await this.assertV3FinancialBaseline(documents);
                 for (const mutation of documents) {
                   await validateV3FiscalMetadataMutation(mutation);
+                  if (['FISCAL_SUBMISSION_SCOPE_APPEND','FISCAL_LOOKUP_APPROVAL_APPEND','FISCAL_STATUS_RECONCILE'].includes(mutation.v3FiscalMetadataOperation!)) {
+                    const canonical = mutation.collectionName === 'transactionHistory' ? JSON.parse(mutation.v3ExpectedRetainedDocument?.expected || '{}') : mutation.document;
+                    const scope = canonical.fiscalSubmissionScope || canonical.fiscalLookupApproval;
+                    const configRows = await db.query("SELECT data FROM documents WHERE collection_name='config' AND doc_id='current'");
+                    const config = JSON.parse(String(configRows.values?.[0]?.data || '{}'));
+                    const terminals = (config.terminals || []).filter((terminal: any) => terminal.id === scope?.terminalId);
+                    const binding = terminals[0]?.config?.erpBinding;
+                    if (terminals.length !== 1 || binding?.tenantId !== scope?.tenantId || binding?.companyId !== scope?.companyId
+                      || terminals[0]?.config?.currentDeviceId !== scope?.deviceId || (!scope?.storeId || binding?.storeId !== scope.storeId)
+                      || String(config.companyInfo?.rnc || '').replace(/\D/g,'') !== scope?.issuerRnc
+                      || getProviderEnvironment(getEffectiveFiscalComplianceConfig(config,terminals[0]?.config),'MSELLER') !== scope?.environment) throw new Error('SYNC_V3_FISCAL_METADATA_MUTATION_DENIED');
+                  }
                   if (mutation.v3FiscalMetadataOperation === 'PRESUBMIT_EVIDENCE_REPAIR') {
                     const audit = mutation.document.fiscalPreSubmitRecoveryAudit?.at(-1);
                     const configRows = await db.query("SELECT data FROM documents WHERE collection_name='config' AND doc_id='current'");

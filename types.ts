@@ -1901,6 +1901,9 @@ export interface Transaction {
   fiscalCorrectionAudit?: FiscalCorrectionAuditEntry[];
   fiscalClassificationProjection?: FiscalClassificationProjection;
   fiscalClassificationAttemptedAt?: string;
+  fiscalSubmissionScope?: import('./services/fiscal/FiscalStatusProof').FiscalStatusScope;
+  fiscalLookupApproval?: import('./services/fiscal/FiscalStatusProof').FiscalStatusScope;
+  fiscalStatusProof?: import('./services/fiscal/FiscalStatusProof').FiscalStatusProof;
   affectedNCF?: string;             // NCF de la factura afectada (para Notas de Crédito B04)
   affectedInvoiceNumber?: string;   // No. de factura afectada (displayId para búsquedas)
   affectedInvoiceDate?: string;
