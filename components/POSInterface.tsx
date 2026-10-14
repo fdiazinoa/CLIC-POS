@@ -1,7 +1,7 @@
 import ArticleFormatSelector from './ArticleFormatSelector';
 import { formatsEnabled, assertFormatsPostingClosed } from '../services/articleFormats/activation';
 import { inventoryQuantity, resizeLine, resolveFormatBarcode, formatPrice, toBaseQuantity } from '../services/articleFormats/domain';
-import { addFormatLine, formatStockDemand } from '../services/articleFormats/cart';
+import { addFormatLine, formatStockDemand, legacyMergeCandidate, routeQuickFormat, baseCodeFormat } from '../services/articleFormats/cart';
 import type { ArticleFormat } from '../services/articleFormats/contract';
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { Capacitor } from '@capacitor/core';
@@ -817,14 +817,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
 
       const finalPrice = priceOverride || getProductPrice(product);
-      const modifiersString = modifiers ? modifiers.sort().join('|') : '';
 
       // We look for existing item in the stable 'cart' prop/state instead of inside the setter
       // to avoid using setter for logic that triggers side effects.
-      const existing = (cart || []).find(i => {
-         const iMods = i.modifiers ? i.modifiers.sort().join('|') : '';
-         return i.id === product.id && iMods === modifiersString && i.price === finalPrice;
-      });
+      const existing = legacyMergeCandidate(cart || [],product.id,finalPrice,modifiers);
 
       let targetCartId: string;
 
@@ -860,6 +856,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          if (!canAddItemToCart(product, baseRequested)) return;
          onUpdateCart(previous => addFormatLine(previous,product,format,quantity,price,crypto.randomUUID(),modifiers));
          setFormatSelection(null);
+         setErrorToast(null);
       } catch (error) { setErrorToast(error instanceof Error ? error.message : 'Presentación no válida'); }
    };
 
@@ -877,7 +874,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const hasVariants = product.attributes && product.attributes.length > 0;
       if (isWeighted) setProductForScale(product);
       else if (hasVariants) setSelectedProductForVariants(product);
-      else if (articleFormatsEnabled && product.article_formats && !isReturnMode) setFormatSelection({product,variantId:null,basePrice:(product.tariffs || []).find(t => t.tariffId === activeTariffId)?.price ?? product.price,modifiers:[]});
+      else if (articleFormatsEnabled && product.article_formats?.formats.length && !isReturnMode) setFormatSelection({product,variantId:null,basePrice:(product.tariffs || []).find(t => t.tariffId === activeTariffId)?.price ?? product.price,modifiers:[]});
       else addToCart(product, isReturnMode ? -1 : 1);
    }, [isMobile, defaultSalesWarehouseId, canAddItemToCart, addToCart, isReturnMode, articleFormatsEnabled, activeTariffId]);
 
@@ -913,6 +910,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                if (v.sku === searchCode || (v.barcode && v.barcode.includes(searchCode))) {
                   // Map attribute values to a simple list of modifiers
                   const modifiersList = Object.entries(v.attributeValues || {}).map(([_, val]) => val);
+                  const format = articleFormatsEnabled ? baseCodeFormat(p.article_formats,v.sku) : undefined;
+                  if (format) return {product:p,quantity,price:formatPrice(format,activeTariffId,(p.tariffs || []).find(t => t.tariffId === activeTariffId)?.price ?? v.price ?? p.price),modifiers:modifiersList,format};
                   return { product: p, quantity, price: v.price || getProductPrice(p), modifiers: modifiersList };
                }
             }
@@ -920,6 +919,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
          // B. Check Parent (ID, SKU, or Barcode)
          if (p.id === searchCode || p.barcode === searchCode) {
+            const format = articleFormatsEnabled ? baseCodeFormat(p.article_formats,null) : undefined;
+            if (format) return {product:p,quantity,price:formatPrice(format,activeTariffId,(p.tariffs || []).find(t => t.tariffId === activeTariffId)?.price ?? p.price),modifiers:[],format};
             return { product: p, quantity, price: getProductPrice(p), modifiers: [] };
          }
       }
@@ -928,12 +929,21 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const handleSearchKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
       if (e.key === 'Enter') {
-         const match = findProductByAnyCode(searchTerm || '');
+         let match: ReturnType<typeof findProductByAnyCode>;
+         try { match = findProductByAnyCode(searchTerm || ''); }
+         catch { setErrorToast('Código de presentación ambiguo o no válido.'); return; }
          if (match) {
-            if ('format' in match && match.format && !isReturnMode) addSelectedFormat(match.product,match.format,match.price,match.quantity,match.modifiers);
-            else addToCart(match.product, (isReturnMode ? -1 : 1) * match.quantity, match.price, match.modifiers);
+            let handled = false;
+            try {
+               handled = routeQuickFormat('format' in match ? match.format : undefined,isReturnMode,
+                  format => addSelectedFormat(match.product,format,match.price,match.quantity,match.modifiers));
+               if (!handled) addToCart(match.product, (isReturnMode ? -1 : 1) * match.quantity, match.price, match.modifiers);
+            } catch {
+               setErrorToast('Selecciona el ticket original para devolver esta presentación.');
+               return;
+            }
             setSearchTerm('');
-            setErrorToast(null);
+            if (!handled) setErrorToast(null);
             // Ensure focus stays on search bar
             searchInputRef.current?.focus();
          } else if (searchTerm && searchTerm.trim()) {
@@ -1009,8 +1019,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (articleFormatsEnabled) {
          try {
             const match = findProductByAnyCode(trimmed);
-            if (match && 'format' in match && match.format) { addSelectedFormat(match.product,match.format,match.price,match.quantity); return; }
-         } catch (error) { setErrorToast(error instanceof Error ? error.message : 'Código no válido'); return; }
+            if (match && routeQuickFormat('format' in match ? match.format : undefined,isReturnMode,
+               format => addSelectedFormat(match.product,format,match.price,match.quantity))) return;
+         } catch {
+            setErrorToast(isReturnMode ? 'Selecciona el ticket original para devolver esta presentación.' : 'Presentación no válida.');
+            return;
+         }
       }
 
       // 2. Normal Barcode Search
@@ -1020,7 +1034,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          setErrorToast(`Producto agregado: ${product.name}`);
          setTimeout(() => setErrorToast(null), 1500);
       }
-   }, [config, products, handleProductClick, getProductPrice, canAddItemToCart, transactions, reservations, handleRecoverReservation, articleFormatsEnabled, findProductByAnyCode]);
+   }, [config, products, handleProductClick, getProductPrice, canAddItemToCart, transactions, reservations, handleRecoverReservation, articleFormatsEnabled, findProductByAnyCode, isReturnMode]);
 
    const isAnyModalOpen = !!(
       showPaymentModal ||
@@ -3202,7 +3216,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          {showLoyaltyModal && <LoyaltyScanModal onClose={() => setShowLoyaltyModal(false)} onScan={handleLoyaltyScan} />}
          {editingItem && <CartItemOptionsModal item={editingItem} config={config} users={users} roles={roles} onClose={() => setEditingItem(null)} onUpdate={updateCartItem} canApplyDiscount={true} canVoidItem={true} />}
          {formatSelection?.product.article_formats && <ArticleFormatSelector itemName={formatSelection.product.name} dto={formatSelection.product.article_formats} variantId={formatSelection.variantId} tariffId={activeTariffId} baseTariffPrice={formatSelection.basePrice} stockBase={(formatSelection.product.stockBalances?.[defaultSalesWarehouseId] ?? formatSelection.product.stock ?? 0) - (committedByProduct[formatSelection.product.id] || 0) - formatStockDemand(cart,formatSelection.product.id)} currencySymbol={baseCurrency.symbol} onClose={() => setFormatSelection(null)} onSelect={(format,price) => addSelectedFormat(formatSelection.product,format,price,1,formatSelection.modifiers)} />}
-         {selectedProductForVariants && <ProductVariantSelector product={selectedProductForVariants} currencySymbol={baseCurrency.symbol} onClose={() => setSelectedProductForVariants(null)} onConfirm={(p, m, pr, variantSku) => { if (articleFormatsEnabled && p.article_formats && variantSku) setFormatSelection({product:p,variantId:variantSku,basePrice:(p.tariffs || []).find(t => t.tariffId === activeTariffId)?.price ?? pr,modifiers:m}); else addToCart(p, 1, pr, m); setSelectedProductForVariants(null); }} />}
+         {selectedProductForVariants && <ProductVariantSelector product={selectedProductForVariants} currencySymbol={baseCurrency.symbol} onClose={() => setSelectedProductForVariants(null)} onConfirm={(p, m, pr, variantSku) => { if (articleFormatsEnabled && p.article_formats?.formats.length) { if (!variantSku) { setErrorToast("Selecciona una variante válida para esta presentación."); return; } setFormatSelection({product:p,variantId:variantSku,basePrice:(p.tariffs || []).find(t => t.tariffId === activeTariffId)?.price ?? p.variants.find(v => v.sku === variantSku)?.price ?? pr,modifiers:m}); } else addToCart(p, 1, pr, m); setSelectedProductForVariants(null); }} />}
          {productForScale && <ScaleModal product={productForScale} currencySymbol={baseCurrency.symbol} onClose={() => setProductForScale(null)} onConfirm={(w) => { addToCart(productForScale, w); setProductForScale(null); }} />}
          {
             showGlobalDiscount && <GlobalDiscountModal currentSubtotal={cartSubtotal} currencySymbol={baseCurrency.symbol} initialValue={globalDiscount.value.toString()} initialType={globalDiscount.type} themeColor={config.themeColor} onClose={() => setShowGlobalDiscount(false)} onConfirm={async (val, type) => {

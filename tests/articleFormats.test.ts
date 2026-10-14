@@ -12,7 +12,7 @@ import { toBaseQuantity, availability, formatPrice, freezeLine, inventoryQuantit
 import { formatsEnabled, formatsNegotiated, assertLegacyFormatPayload, assertFormatsPostingClosed } from '../services/articleFormats/activation';
 import { consumeArticleFormatPages, drainArticleFormatEvents, type ArticleFormatEventTransport } from '../services/articleFormats/sync';
 import { syncArticleFormatMasters } from '../services/articleFormats/master';
-import { addFormatLine, selectedVariantId } from '../services/articleFormats/cart';
+import { addFormatLine, selectedVariantId, legacyMergeCandidate, routeQuickFormat, baseCodeFormat } from '../services/articleFormats/cart';
 import { articleFormatTicketLabel, articleFormatTicketHTML } from '../services/articleFormats/ticket';
 import ArticleFormatSelector from '../components/ArticleFormatSelector';
 import { applyPromotions } from '../utils/promotionEngine';
@@ -340,4 +340,36 @@ test('legacy collection full/delta/history reads reject the entire mixed batch b
   await assert.rejects(apiSyncAdapter.pullDelta('transactionHistory',1),/UNSUPPORTED/);
   adapter.isOnline=true;await assert.rejects(apiSyncAdapter.pullHistory('fixture'),/UNSUPPORTED/);
   adapter.isOnline=true;await assert.rejects(apiSyncAdapter.pullPendingTransactions(),/UNSUPPORTED/);
+});
+
+
+test('legacy merge never changes box snapshot/base when unit uses the same SKU, price and modifiers',() => {
+  const box={...line(),price:10,modifiers:['fixture']};
+  assert.equal(legacyMergeCandidate([box],box.id,10,['fixture']),undefined);
+  assert.equal(box.quantity,2);assert.equal(box.baseQuantity,48);
+  const unit={...product(),cartId:'legacy-unit',price:10,quantity:1,modifiers:['fixture']};
+  assert.equal(legacyMergeCandidate([box,unit],box.id,10,['fixture'])?.cartId,'legacy-unit');
+});
+
+test('quick Enter/scanner format sale preserves identity; return rejects before sale or legacy fallback',() => {
+  const box=format('box',24);let cart: import('../types').CartItem[]=[];let legacyCalls=0;
+  const quickEntry=(selected: ArticleFormat|undefined,returnMode: boolean) => {
+    if (!routeQuickFormat(selected,returnMode,f => {cart=addFormatLine(cart,product(),f,2,240,'stable-scan-line');})) legacyCalls++;
+  };
+  quickEntry(box,false);assert.equal(cart[0].articleFormat?.id,'box');assert.equal(cart[0].baseQuantity,48);
+  assert.throws(() => quickEntry(box,true),/ORIGINAL_SALE_REQUIRED/);
+  assert.equal(cart.length,1);assert.equal(cart[0].quantity,2);assert.equal(legacyCalls,0);
+  quickEntry(undefined,true);assert.equal(legacyCalls,1);
+});
+
+
+test('parent/variant codes resolve authorized base format and never bypass allow_sale; empty masters remain Unit legacy',() => {
+  assert.equal(baseCodeFormat(dto(),null)?.id,'unit');
+  assert.equal(baseCodeFormat(undefined,null),undefined);
+  assert.equal(baseCodeFormat({...dto(),formats:[]},null),undefined);
+  const value=dto();value.formats[0].allow_sale=false;
+  assert.throws(() => baseCodeFormat(value,null),/NOT_SELLABLE/);
+  const variants={...dto(),formats:[format('red-unit',1,'red-SKU'),format('blue-unit',1,'blue-SKU')]};
+  assert.equal(baseCodeFormat(variants,'blue-SKU')?.id,'blue-unit');
+  assert.throws(() => baseCodeFormat(variants,'unknown'),/NOT_SELLABLE/);
 });

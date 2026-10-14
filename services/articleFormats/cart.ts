@@ -1,5 +1,5 @@
 import type { CartItem, Product } from '../../types';
-import type { ArticleFormat } from './contract';
+import type { ArticleFormat, ArticleFormatsDTO } from './contract';
 import { ArticleFormatError, addQuantities, freezeLine, inventoryQuantity, resizeLine } from './domain';
 
 export function addFormatLine(cart: CartItem[], product: Product, format: ArticleFormat, quantity: number,
@@ -25,4 +25,28 @@ export function selectedVariantId(product: Product, selections: Record<string,st
 
 export function formatStockDemand(cart: CartItem[], itemId: string): number {
   return cart.filter(item => item.id === itemId).reduce((sum,item) => addQuantities(sum,inventoryQuantity(item)),0);
+}
+
+/** Legacy unit entry must never merge into a historical format line, even at the same price. */
+export function legacyMergeCandidate(cart: CartItem[], productId: string, price: number, modifiers: string[] = []): CartItem | undefined {
+  const key = [...modifiers].sort().join('|');
+  return cart.find(item => !item.articleFormat && item.id === productId && item.price === price
+    && [...(item.modifiers || [])].sort().join('|') === key);
+}
+
+/** Shared by Enter and scanner. A format refund must originate in the original sale line. */
+export function routeQuickFormat(format: ArticleFormat | undefined, isReturnMode: boolean,
+  onSale: (format: ArticleFormat) => void): boolean {
+  if (!format) return false;
+  if (isReturnMode) throw new ArticleFormatError('ARTICLE_FORMAT_ORIGINAL_SALE_REQUIRED');
+  onSale(format);
+  return true;
+}
+
+/** Parent/variant legacy codes mean base units; negotiated masters must authorize that format. */
+export function baseCodeFormat(dto: ArticleFormatsDTO | undefined, variantId: string | null): ArticleFormat | undefined {
+  if (!dto?.formats.length) return undefined;
+  const format = dto.formats.find(format => format.variantId === variantId && format.is_base);
+  if (!format || !format.active || !format.allow_sale) throw new ArticleFormatError('ARTICLE_FORMAT_NOT_SELLABLE');
+  return format;
 }
