@@ -1,3 +1,6 @@
+import { syncArticleFormatMasters } from '../articleFormats/master';
+import type { ArticleFormatMasterTransport } from '../articleFormats/sync';
+import type { ArticleFormatStore } from '../articleFormats/store';
 /**
  * Sync Manager
  * 
@@ -821,6 +824,14 @@ class SyncManager {
 
     getIsInternalSyncing() {
         return this.isInternalSyncing;
+    }
+
+    /** Optional future ERP paginated producer. Not registered in legacy bootstrap/setup. */
+    async pullArticleFormats(store: ArticleFormatStore, transport: ArticleFormatMasterTransport, products: Product[]): Promise<Product[]> {
+        const hydrated = await syncArticleFormatMasters(store,transport,products);
+        // Formats stay in normalized SQLite revisions; consumers hydrate them for sales views.
+        // Do not copy the complete format catalog into initial-config or collections.
+        return hydrated;
     }
 
     async pullCatalog(collection: SyncableCollection, force: boolean = false): Promise<number> {

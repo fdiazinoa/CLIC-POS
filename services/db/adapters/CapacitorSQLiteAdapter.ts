@@ -1,5 +1,7 @@
 import { Capacitor } from '@capacitor/core';
 import type { DatabaseAdapter } from '../DatabaseAdapter';
+import { ARTICLE_FORMATS_SCHEMA } from '../../articleFormats/schema';
+import type { FormatSQL } from '../../articleFormats/store';
 
 const DB_NAME = 'clic_pos_native';
 const DB_VERSION = 1;
@@ -235,6 +237,20 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         return this.db;
     }
 
+    /** Uses executeSet's native atomic transaction; never holds a JS transaction across awaits. */
+    articleFormatSQL(): FormatSQL {
+        return {
+            executeSchema: async sql => { await this.ensureDb().execute(sql); },
+            executeAtomic: async statements => {
+                await this.ensureDb().executeSet(statements.map(s => ({ statement: s.statement, values: s.values || [] })), true);
+            },
+            query: async <T>(sql: string, values: (string | number | null)[]) => {
+                const result = await this.ensureDb().query(sql, values);
+                return (result.values || []) as T[];
+            }
+        };
+    }
+
     private async initSchema(): Promise<void> {
         const db = this.ensureDb();
         await db.execute(`
@@ -255,6 +271,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             );
             CREATE INDEX IF NOT EXISTS idx_sync_queue_status_created_at
             ON sync_queue(status, createdAt);
+            ${ARTICLE_FORMATS_SCHEMA}
         `);
     }
 
