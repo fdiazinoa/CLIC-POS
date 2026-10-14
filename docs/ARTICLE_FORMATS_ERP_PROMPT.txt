@@ -1,0 +1,34 @@
+Completa el contrato ERP ↔ CLIC-POS para formatos comerciales, sin rehacer el módulo de formatos que ya está integrado en ERP.
+
+Fuente ERP: origin/clean-erp. Actualiza esa rama y crea una rama por tarea desde ella, respetando AGENTS.md y el workflow del ERP. POS usa main como fuente; no mezcles sus ramas ni modifiques CLIC-POS desde esta tarea.
+
+Contexto verificado el 14 de octubre de 2026:
+- ERP PRs #2247, #2248 y #2249 están fusionados. #2248 documenta instalación/publicación y activación administrativa del módulo ERP. No volver a instalar esas migraciones ni cambiar flags de empresas por esa evidencia.
+- docs/article-formats-pos-contract.md en clean-erp todavía dice que el serializer no está conectado al transporte de maestros y que falta el ingreso versionado POS.
+- server/services/articleFormatsPosContract.js prepara serializeArticleFormatsForPos. Los productores largeMasterSyncV3.js, largeMasterSyncV3Repository.js, largeMasterSyncV3Runtime.js y largeMasterSyncV3Routes.js no lo llaman.
+- posEventApplier.js sigue llamando assertLegacyPosArticleFormatPayload para SALE_POSTED y SALES_CREDIT_NOTE_POSTED. Esa protección debe conservarse.
+- POS PR #890 ya está fusionado y tiene DTO, SQLite aditivo, snapshots, consumidor y diario preparados. La activación del POS está cerrada. El diario aún no integra atómicamente venta/pagos/secuencias/stock/Outbox; que ERP esté listo no basta para activar APK.
+
+Inspecciona primero el código actual. Si alguno de estos pendientes ya fue resuelto, cita sus archivos, commit, contrato y pruebas en vez de duplicarlo.
+
+Implementa los pendientes reales:
+1. Conecta el serializer al productor paginado de artículos/variantes mediante la revisión/cursor/ACK reales. Conserva nombres exactos del DTO, revisiones históricas e invalidación. No metas formatos completos en initial-config ni cambies provisionamiento innecesariamente.
+2. Obtén terminal, tenant, empresa, tienda, almacén, permisos, capability y tarifas de la identidad autenticada. No tomes scope/tariffIds del cliente como autoridad. Conserva aislamiento/RLS y acceso administrativo/operativo ya validados.
+3. Publica un contrato POS→ERP versionado para venta y devolución/anulación, con envelope y respuesta ACK exactos. Define cómo se negocia sobre los transportes existentes; no declares endpoints/eventos hipotéticos como existentes. El evento local FormatLocalEvent del POS es un puerto interno, no un esquema de red pactado.
+4. Valida snapshot schemaVersion/id/variantId/name/abbreviation/factor/barcode, revisión/contexto/tarifa, cantidad y precio comerciales, cantidad base, costo base, impuestos, descuentos y promociones. Convierte exactamente una vez, con decimal seguro y rechazo de pérdida de precisión. No recalcules historia ni eventos offline con el factor/precio actual del maestro.
+5. Inbox durable: mismo ID y contenido es replay sin efectos; mismo ID con contenido distinto se rechaza. IDs de evento y línea estables. Documento fiscal, pagos, inventario/COGS y estado Inbox/ACK deben tener una frontera transaccional recuperable. ACK después del commit; respuesta perdida no duplica efectos.
+6. Devoluciones parciales/anulaciones deben referenciar venta y línea originales. Usa factor/precio/costo históricos y protege el acumulado en PostgreSQL frente a concurrencia y retries. Define la política autenticada de retorno físico; el POS no impone RESTOCK/DAMAGED/NO_RETURN por sí solo. No crear SKUs ni saldos por formato.
+7. Mantén el handler legacy y POS_ARTICLE_FORMATS_UNSUPPORTED. Terminales sin negociación completa no reciben ni envían formatos. Flag empresa ARTICLE_FORMATS=true y capability article_formats=1 son necesarios, pero no sustituyen readiness integral. Define también recuperación de eventos previamente comprometidos si después se apaga el flag, sin convertirlos en legacy.
+
+Pruebas requeridas en tenant sintético y PostgreSQL real/local:
+- 137 base → 137 unidades / 22 packs6 / 5 cajas24; 2 cajas → 48 base.
+- Tarifa específica/fallback y precio0; impuestos, descuentos, promoción y COGS.
+- Variantes/barcodes y scope/tarifas ajenos rechazados.
+- Maestro24→12 conserva historia y eventos pendientes24; devolución .5Caja24 → 12 base; exceso acumulado y concurrencia rechazados.
+- Duplicados/conflictos, devolución antes de venta, cortes antes/después de commit y ACK, reinicio/reconexión y conciliación entre Inbox, documentos y movimientos base.
+- Flag apagado, capability ausente, terminal legacy y permisos insuficientes.
+- Lint/build y regresiones operativas existentes.
+
+Entrega código, pruebas, revisión independiente y el contrato exacto consumible por POS (nombres/versiones/rutas realmente implementadas, paginación/revisiones/ACK, autorización, errores y compatibilidad). Documenta lo que falta en POS para negociar y activar. No afirmar E2E APK con mocks.
+
+No desplegar a producción, aplicar migraciones remotas, activar empresas/capabilities ni instalar APK sin autorización específica. Mantén el PR en borrador si faltan gates. La activación POS seguirá cerrada hasta completar y validar toda la integración.

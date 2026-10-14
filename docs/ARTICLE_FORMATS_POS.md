@@ -1,8 +1,12 @@
 # Presentaciones comerciales en POS: implementación preparada, activación cerrada
 
-Tarea `POS-2026-0001`. Base POS: `origin/main` (`d5c9180`). No se usa `develop` ni se importa código del ERP.
+Tarea original `POS-2026-0001`. Base original POS: `origin/main` (`d5c9180`). El PR #890 está fusionado; la continuación autorizada corrige devoluciones desde grilla/variantes partiendo de `origin/main` (`29bb3236`). No se usa `develop` ni se importa código del ERP.
 
 Referencia: [contrato ERP](https://github.com/fdiazinoa/CLIC-ERP/blob/feature/inventory-article-formats/docs/article-formats-pos-contract.md), [PR ERP 2247](https://github.com/fdiazinoa/CLIC-ERP/pull/2247). Consultado el 14 de octubre de 2026: el PR figura fusionado, pero eso **no demuestra despliegue**. Su serializer sigue sin productor de maestros y el ingreso legacy rechaza snapshots. Este cambio no los conecta ni cambia ese rechazo.
+
+Actualización de coordinación: ERP usa `origin/clean-erp`. Su [PR #2248](https://github.com/fdiazinoa/CLIC-ERP/pull/2248) documenta instalación, publicación y activación del módulo ERP; [#2249](https://github.com/fdiazinoa/CLIC-ERP/pull/2249) ordena la pestaña de formatos. Se verificó el código de `clean-erp`: el contrato POS sigue indicando transporte pendiente, los productores V3 no llaman al serializer y `posEventApplier` conserva el rechazo legacy para venta/devolución. La integración del módulo ERP no habilita el POS por sí sola. [Prompt de pendientes para copiar al ERP](ARTICLE_FORMATS_ERP_PROMPT.txt).
+
+Devoluciones rápidas: grilla, confirmación de variante, selector previamente abierto y entrada directa exigen ticket/línea original cuando hay formatos o snapshot histórico, incluso si cambió el flag. Se bloquea antes de stock, carrito o apertura de otros selectores. Un artículo legacy sin formatos continúa con cantidad de devolución `-1`; su variante ya no agrega accidentalmente una venta positiva. Las pruebas ejecutan los callbacks TSX de producción y los props realmente enlazados con efectos aislados; no se presentan como React/APK E2E.
 
 ## Código entregado
 
