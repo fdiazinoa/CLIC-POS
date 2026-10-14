@@ -3,7 +3,7 @@ import { sha256Utf8 } from '../services/sync/LargeMasterSyncV3Client';
 import { authorizeV3TaxClassification } from '../services/sync/LargeMasterSyncV3TaxClassification';
 
 export const MSELLER_UNSUPPORTED_VAT_ERROR = 'MSeller: tasa de ITBIS no soportada; requiere clasificación fiscal explícita (no sumar propina al ITBIS).';
-const hasExtendedProviderProof = (tx: Transaction): boolean => ['fiscalResponseCode', 'fiscalSignedXml'].some(key =>
+const hasExtendedProviderProof = (tx: Transaction): boolean => ['fiscalResponseCode', 'fiscalSignedXml', 'fiscalQrCode'].some(key =>
   String((tx as Transaction & Record<string, unknown>)[key] ?? '').trim().length > 0);
 
 const assertClassificationFinancialSource = (tx: Transaction): void => {

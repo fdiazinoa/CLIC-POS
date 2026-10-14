@@ -10974,7 +10974,7 @@ const AppContent: React.FC = () => {
         correction.reason, stamp?.binding || '');
       const corrected = { ...original, fiscalClassificationProjection: projection };
       await session.assertCurrent();
-      await dbAdapter.saveDocumentsAtomically([{ collectionName: 'transactions', document: corrected,
+      await dbAdapter.saveDocumentsAtomically([{ collectionName: 'transactions', document: corrected, v3FiscalMetadataOperation: 'CLASSIFICATION_PROJECTION_APPEND',
         expectedDocument: JSON.stringify(original), v3CurrentCatalog: { syncId: session.ready.runtime.version.syncId,
           syncVersion: session.ready.runtime.version.syncVersion, binding: stamp!.binding! } }]);
       setTransactions(previous => previous.map(row => row.id === corrected.id ? corrected : row));
@@ -11327,7 +11327,7 @@ const AppContent: React.FC = () => {
       const consumed = await consumeFiscalClassificationAttempt(original);
       const session = await getLargeMasterSyncV3OperationalSession();
       await session.assertCurrent();
-      await dbAdapter.saveDocumentsAtomically([{ collectionName: 'transactions', document: consumed,
+      await dbAdapter.saveDocumentsAtomically([{ collectionName: 'transactions', document: consumed, v3FiscalMetadataOperation: 'CLASSIFICATION_ATTEMPT_CONSUME',
         expectedDocument: JSON.stringify(original), v3CurrentCatalog: { syncId: session.ready.runtime.version.syncId,
           syncVersion: session.ready.runtime.version.syncVersion, binding: session.binding } }]);
       transaction = consumed;

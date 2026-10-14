@@ -14,6 +14,8 @@ export interface DurableDocumentMutation {
     document: { id: string; [key: string]: any };
     requireAbsent?: boolean;
     expectedDocument?: string;
+    /** Native CAS-only append path; remote ACK retained-upsert cannot modify these fields. */
+    v3FiscalMetadataOperation?: 'CLASSIFICATION_PROJECTION_APPEND' | 'CLASSIFICATION_ATTEMPT_CONSUME' | 'PRESUBMIT_EVIDENCE_REPAIR';
     /** Verified V3 sale demand; checked against scoped baseline + ledger inside the write transaction. */
     v3CurrentCatalog?: { syncId: string; syncVersion: number; binding: string };
     v3ExpectedRetainedDocument?: { collection: string; id: string; expected: string };
@@ -76,6 +78,8 @@ export interface DatabaseAdapter {
     connect(): Promise<void>;
     disconnect(): Promise<void>;
     readonly adapterType: 'local' | 'network';
+    /** Present only on native adapters supporting the typed fiscal metadata CAS protocol. */
+    readonly supportsV3FiscalMetadataCAS?: boolean;
     /** Android-only, dark V3 staging store. Its presence does not announce a network capability. */
     readonly masterSyncV3Store?: LargeMasterSyncV3Store;
 

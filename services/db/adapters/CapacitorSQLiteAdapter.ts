@@ -1,3 +1,4 @@
+import { validateV3FiscalMetadataMutation } from '../LargeMasterSyncV3FiscalMetadata';
 import { v3RetainedLineFingerprint } from '../../sync/LargeMasterSyncV3StockAuthority';
 import { SYNC_MONITOR_PAGE_SQL, syncMonitorPageParams, decodeSyncMonitorPage, type SyncMonitorPageRequest } from '../SyncMonitorPage';
 import { Capacitor } from '@capacitor/core';
@@ -45,6 +46,7 @@ type SQLiteConnectionInstance = InstanceType<SQLiteBridgeModule['SQLiteConnectio
 type SQLiteDBConnectionInstance = InstanceType<SQLiteBridgeModule['SQLiteDBConnection']>;
 
 export class CapacitorSQLiteAdapter implements DatabaseAdapter {
+    readonly supportsV3FiscalMetadataCAS = true;
     private sqliteConnection: SQLiteConnectionInstance | null = null;
     private db: SQLiteDBConnectionInstance | null = null;
     private isReady = false;
@@ -124,6 +126,37 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         await this.withWriteLock(async () => {
             const db = this.ensureDb();
             const now = new Date().toISOString();
+            if (documents.some(row => row.v3FiscalMetadataOperation)) {
+              if (requireAbsent || replaceCollections.length || documents.some(row => !row.v3FiscalMetadataOperation)) {
+                throw new Error('SYNC_V3_FISCAL_METADATA_MUTATION_DENIED');
+              }
+              await db.execute('BEGIN TRANSACTION;', false);
+              try {
+                await this.assertV3FinancialBaseline(documents);
+                for (const mutation of documents) {
+                  await validateV3FiscalMetadataMutation(mutation);
+                  if (mutation.v3FiscalMetadataOperation === 'PRESUBMIT_EVIDENCE_REPAIR') {
+                    const audit = mutation.document.fiscalPreSubmitRecoveryAudit?.at(-1);
+                    const configRows = await db.query("SELECT data FROM documents WHERE collection_name='config' AND doc_id='current'");
+                    const config = JSON.parse(String(configRows.values?.[0]?.data || '{}'));
+                    const terminals = (config.terminals || []).filter((terminal: any) => terminal.id === audit?.scope?.terminalId);
+                    const binding = terminals[0]?.config?.erpBinding;
+                    if (terminals.length !== 1 || binding?.tenantId !== audit.scope.tenantId || binding?.companyId !== audit.scope.companyId) {
+                      throw new Error('SYNC_V3_FISCAL_METADATA_MUTATION_DENIED');
+                    }
+                  }
+                  await db.run('UPDATE documents SET data=?,updatedAt=? WHERE collection_name=? AND doc_id=? AND data=?',
+                    [JSON.stringify(mutation.document),now,mutation.collectionName,mutation.document.id,mutation.expectedDocument],false);
+                  const updated = await db.query('SELECT changes() AS changed');
+                  if (Number(updated.values?.[0]?.changed) !== 1) throw new Error('SYNC_V3_CONCURRENT_FINANCIAL_UPDATE');
+                }
+                await db.execute('COMMIT;', false);
+              } catch(error) {
+                await db.execute('ROLLBACK;',false).catch(()=>undefined);
+                throw error;
+              }
+              return;
+            }
             const needsFinancialPrecondition = documents.some(row => row.document.v3InventoryBaseline
               || row.requireAbsent || row.expectedDocument !== undefined || row.v3StockRequirements);
             const assertAbsent = async () => {
