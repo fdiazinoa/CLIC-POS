@@ -1,3 +1,4 @@
+import { assertLegacyFormatPayload } from '../services/articleFormats/activation';
 import { getStoredTenantIdentity } from './cloudMasterRegistry';
 import { DEFAULT_ERP_SYNC_API_URL, normalizeCloudUrl } from './cloudDefaults';
 import { v5 as uuidv5 } from 'uuid';
@@ -1171,6 +1172,7 @@ export const processErpSyncOutbox = async (
 };
 
 export const postSalePostedToErp = async (transaction: SalePostedInput): Promise<SyncInboxResponse | null> => {
+    assertLegacyFormatPayload(transaction);
     if (!isConfigured() || !transaction?.id) return null;
 
     const identity = getStoredTenantIdentity();

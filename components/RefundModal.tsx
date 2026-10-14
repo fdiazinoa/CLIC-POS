@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { X, RotateCcw, AlertTriangle, Check, Archive, Trash2 } from 'lucide-react';
 import { Transaction, CartItem } from '../types';
+import { refundLine } from '../services/articleFormats/domain';
 
 interface RefundModalProps {
     isOpen: boolean;
@@ -78,9 +79,8 @@ export const RefundModal: React.FC<RefundModalProps> = ({
 
         const itemsToRefund = transaction.items
             .filter(item => (refundQuantities.get(item.cartId) || 0) > 0)
-            .map(item => ({
-                ...item,
-                quantity: refundQuantities.get(item.cartId) || 0
+            .map(item => item.articleFormat ? refundLine(item,refundQuantities.get(item.cartId) || 0,0) : ({
+                ...item, quantity: refundQuantities.get(item.cartId) || 0
             }));
 
         onConfirm(transaction, itemsToRefund, itemConditions, reason || 'Devolución General');
@@ -139,6 +139,7 @@ export const RefundModal: React.FC<RefundModalProps> = ({
                                     <tr key={item.cartId} className={`group ${isSelected ? 'bg-red-50/30' : ''}`}>
                                         <td className="py-3 pl-2">
                                             <p className="text-sm font-bold text-gray-800">{item.name}</p>
+                                            {item.articleFormat && <p className="text-xs">{item.articleFormat.name} · {item.articleFormat.factor} unidades base</p>}
                                             <p className="text-xs text-gray-400">{currencySymbol}{item.price.toFixed(2)} c/u</p>
                                         </td>
                                         <td className="py-3 text-center text-sm font-medium text-gray-500">
@@ -153,9 +154,15 @@ export const RefundModal: React.FC<RefundModalProps> = ({
                                                 >
                                                     -
                                                 </button>
-                                                <span className={`w-6 text-center font-bold ${returnQty > 0 ? 'text-red-600' : 'text-gray-300'}`}>
+                                                {item.articleFormat ? <input aria-label={`Cantidad a devolver ${item.name}`} type="number" min="0" max={item.quantity} step="0.0001" value={returnQty} className="w-20 border rounded text-center" onChange={e => {
+                                                    const quantity = Number(e.target.value);
+                                                    try {
+                                                        if (quantity !== 0) refundLine(item,quantity,0);
+                                                        if (quantity >= 0 && quantity <= item.quantity) setRefundQuantities(previous => { const next = new Map(previous); if (quantity === 0) next.delete(item.cartId); else next.set(item.cartId,quantity); return next; });
+                                                    } catch { /* Invalid precision stays out of state. DB enforces the cumulative limit. */ }
+                                                }} /> : <span className={`w-6 text-center font-bold ${returnQty > 0 ? 'text-red-600' : 'text-gray-300'}`}>
                                                     {returnQty}
-                                                </span>
+                                                </span>}
                                                 <button
                                                     onClick={() => handleQtyChange(item.cartId, item.quantity, 1)}
                                                     className={`w-7 h-7 flex items-center justify-center rounded-lg border transition-colors ${returnQty < item.quantity ? 'border-gray-200 text-gray-600 hover:bg-gray-100' : 'border-gray-100 text-gray-300'}`}

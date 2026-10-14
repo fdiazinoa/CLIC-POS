@@ -1,3 +1,4 @@
+import { assertLegacyFormatPayload } from '../../articleFormats/activation';
 import { DatabaseAdapter } from '../DatabaseAdapter';
 
 export class NetworkAdapter implements DatabaseAdapter {
@@ -131,6 +132,7 @@ export class NetworkAdapter implements DatabaseAdapter {
     }
 
     async saveCollection<T>(collectionName: string, data: T[]): Promise<void> {
+        if (collectionName === 'transactions' || collectionName === 'transactionHistory') (data || []).forEach(assertLegacyFormatPayload);
         if (!collectionName) {
             console.warn('⚠️ NetworkAdapter: saveCollection called with undefined collectionName');
             return;
@@ -218,6 +220,7 @@ export class NetworkAdapter implements DatabaseAdapter {
     }
 
     async saveDocument<T extends { id: string }>(collectionName: string, doc: T): Promise<void> {
+        if (collectionName === 'transactions' || collectionName === 'transactionHistory') assertLegacyFormatPayload(doc);
         if (!doc.id) {
             console.error(`❌ NetworkAdapter: Attempted to save document to ${collectionName} without ID.`, doc);
             return;

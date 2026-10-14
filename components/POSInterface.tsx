@@ -1,3 +1,8 @@
+import ArticleFormatSelector from './ArticleFormatSelector';
+import { formatsEnabled, assertFormatsPostingClosed } from '../services/articleFormats/activation';
+import { inventoryQuantity, resizeLine, resolveFormatBarcode, formatPrice, toBaseQuantity } from '../services/articleFormats/domain';
+import { addFormatLine, formatStockDemand } from '../services/articleFormats/cart';
+import type { ArticleFormat } from '../services/articleFormats/contract';
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { Capacitor } from '@capacitor/core';
 import {
@@ -429,6 +434,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    }, [activeTable, transactions, onUpdateCart, cart.length]);
 
    const [editingItem, setEditingItem] = useState<CartItem | null>(null);
+   const [formatSelection, setFormatSelection] = useState<{product: Product; variantId: string | null; basePrice: number; modifiers: string[]} | null>(null);
+   const articleFormatsEnabled = formatsEnabled(config, activeTerminalConfig);
    const [selectedProductForVariants, setSelectedProductForVariants] = useState<Product | null>(null);
    const [productForScale, setProductForScale] = useState<Product | null>(null);
    const [showLoyaltyModal, setShowLoyaltyModal] = useState(false);
@@ -782,7 +789,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             const currentStock = product.stockBalances?.[defaultSalesWarehouseId] ?? product.stock ?? 0;
             const committedQty = committedByProduct[product.id] || 0;
             const availableStock = Math.max(0, currentStock - committedQty);
-            const inCartQty = cart.filter(item => item.id === product.id).reduce((sum, item) => sum + item.quantity, 0);
+            const inCartQty = cart.filter(item => item.id === product.id).reduce((sum, item) => sum + inventoryQuantity(item), 0);
             const totalRequested = inCartQty + quantityToAdd;
 
             if (totalRequested > availableStock) {
@@ -846,6 +853,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       setLastAddedCartId(targetCartId);
    }, [canAddItemToCart, getProductPrice, onUpdateCart, cart]); // Added cart to dependencies
 
+   const addSelectedFormat = (product: Product, format: ArticleFormat, price: number, quantity = 1, modifiers: string[] = []) => {
+      if (!articleFormatsEnabled) { setErrorToast('Presentaciones pendientes de habilitación'); return; }
+      try {
+         const baseRequested = toBaseQuantity(quantity,format.factor);
+         if (!canAddItemToCart(product, baseRequested)) return;
+         onUpdateCart(previous => addFormatLine(previous,product,format,quantity,price,crypto.randomUUID(),modifiers));
+         setFormatSelection(null);
+      } catch (error) { setErrorToast(error instanceof Error ? error.message : 'Presentación no válida'); }
+   };
+
    const handleProductClick = useCallback((product: Product) => {
       // MOBILE INTERCEPTION
       if (isMobile && !defaultSalesWarehouseId) {
@@ -860,8 +877,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const hasVariants = product.attributes && product.attributes.length > 0;
       if (isWeighted) setProductForScale(product);
       else if (hasVariants) setSelectedProductForVariants(product);
+      else if (articleFormatsEnabled && product.article_formats && !isReturnMode) setFormatSelection({product,variantId:null,basePrice:(product.tariffs || []).find(t => t.tariffId === activeTariffId)?.price ?? product.price,modifiers:[]});
       else addToCart(product, isReturnMode ? -1 : 1);
-   }, [isMobile, defaultSalesWarehouseId, canAddItemToCart, addToCart, isReturnMode]);
+   }, [isMobile, defaultSalesWarehouseId, canAddItemToCart, addToCart, isReturnMode, articleFormatsEnabled, activeTariffId]);
 
    // --- SEARCH LOGIC (Auto-Add Variantes) ---
    const findProductByAnyCode = useCallback((code: string) => {
@@ -878,6 +896,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
 
       if (!searchCode) return null;
+      if (articleFormatsEnabled) {
+         const resolved = resolveFormatBarcode(products,searchCode);
+         if (resolved) {
+            const product = products.find(p => p.id === resolved.itemId)!;
+            const variant = product.variants?.find(v => v.sku === resolved.variantId);
+            const basePrice = (product.tariffs || []).find(t => t.tariffId === activeTariffId)?.price ?? variant?.price ?? product.price;
+            return {product,quantity,price:formatPrice(resolved.format,activeTariffId,basePrice),modifiers:[],format:resolved.format};
+         }
+      }
 
       for (const p of products) {
          // A. Check Variants (SKU or Barcode)
@@ -897,13 +924,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          }
       }
       return null;
-   }, [products, getProductPrice]);
+   }, [products, getProductPrice, articleFormatsEnabled, activeTariffId]);
 
    const handleSearchKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
       if (e.key === 'Enter') {
          const match = findProductByAnyCode(searchTerm || '');
          if (match) {
-            addToCart(match.product, (isReturnMode ? -1 : 1) * match.quantity, match.price, match.modifiers);
+            if ('format' in match && match.format && !isReturnMode) addSelectedFormat(match.product,match.format,match.price,match.quantity,match.modifiers);
+            else addToCart(match.product, (isReturnMode ? -1 : 1) * match.quantity, match.price, match.modifiers);
             setSearchTerm('');
             setErrorToast(null);
             // Ensure focus stays on search bar
@@ -978,6 +1006,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          }
       }
 
+      if (articleFormatsEnabled) {
+         try {
+            const match = findProductByAnyCode(trimmed);
+            if (match && 'format' in match && match.format) { addSelectedFormat(match.product,match.format,match.price,match.quantity); return; }
+         } catch (error) { setErrorToast(error instanceof Error ? error.message : 'Código no válido'); return; }
+      }
+
       // 2. Normal Barcode Search
       const product = (products || []).find(p => p.barcode === trimmed);
       if (product) {
@@ -985,7 +1020,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          setErrorToast(`Producto agregado: ${product.name}`);
          setTimeout(() => setErrorToast(null), 1500);
       }
-   }, [config, products, handleProductClick, getProductPrice, canAddItemToCart, transactions, reservations, handleRecoverReservation]);
+   }, [config, products, handleProductClick, getProductPrice, canAddItemToCart, transactions, reservations, handleRecoverReservation, articleFormatsEnabled, findProductByAnyCode]);
 
    const isAnyModalOpen = !!(
       showPaymentModal ||
@@ -1395,6 +1430,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             const diff = updatedItem.quantity - originalItem.quantity;
             if (!canAddItemToCart(updatedItem, diff)) return;
          }
+         updatedItem = resizeLine(updatedItem,updatedItem.quantity);
          newCart = cart.map(item => item.cartId === updatedItem.cartId ? updatedItem : item);
       }
 
@@ -1441,6 +1477,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       };
 
       try {
+         assertFormatsPostingClosed(processedCart);
          const terminalId = activeTerminalId || 't1';
          const hasReturns = processedCart.some(i => i.quantity < 0);
          const hasSales = processedCart.some(i => i.quantity > 0);
@@ -2033,6 +2070,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    };
 
    const handleProcessReturn = async (originalTransaction: Transaction, itemsToReturn: { itemId: string, quantity: number }[]) => {
+      assertFormatsPostingClosed(originalTransaction.items || []);
       // 1. Calculate Refund Totals
       let refundTotal = 0;
       const returnItems: CartItem[] = [];
@@ -2771,6 +2809,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                           <h4 className="font-bold text-gray-800 text-sm leading-tight line-clamp-1">{item.name}</h4>
                                           <button onClick={() => updateCartItem(null, item.cartId)} className="p-1 text-gray-300 hover:text-red-500"><Trash2 size={16} /></button>
                                        </div>
+                                       {item.articleFormat && <p className="text-xs text-blue-600">{item.articleFormat.name} · {item.articleFormat.factor} base · {item.baseQuantity} unidades</p>}
                                        <div className="flex flex-col mt-0.5">
                                           <div className="flex items-center gap-2">
                                              <span className="text-xs font-black text-blue-600">{baseCurrency.symbol}{(item.price || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
@@ -2827,6 +2866,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                           {hasDiscount && <p className="text-[10px] text-gray-400 line-through">{baseCurrency.symbol}{(item.originalPrice! * item.quantity).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>}
                                        </div>
                                     </div>
+                                    {item.articleFormat && <p className="text-xs text-blue-600">{item.articleFormat.name} · {item.articleFormat.factor} base · {item.baseQuantity} unidades</p>}
 
                                     <div className="flex items-center justify-between">
                                        <div className="flex flex-col">
@@ -3161,7 +3201,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          {showPaymentModal && <UnifiedPaymentModal total={amountDueNow} items={cart} currencySymbol={baseCurrency.symbol} config={config} onClose={() => setShowPaymentModal(false)} onConfirm={handlePaymentConfirm} themeColor={config.themeColor} customer={selectedCustomer} isDelinquent={isDelinquent} users={users} roles={roles} isMaster={isMaster} currentUser={currentUser} />}
          {showLoyaltyModal && <LoyaltyScanModal onClose={() => setShowLoyaltyModal(false)} onScan={handleLoyaltyScan} />}
          {editingItem && <CartItemOptionsModal item={editingItem} config={config} users={users} roles={roles} onClose={() => setEditingItem(null)} onUpdate={updateCartItem} canApplyDiscount={true} canVoidItem={true} />}
-         {selectedProductForVariants && <ProductVariantSelector product={selectedProductForVariants} currencySymbol={baseCurrency.symbol} onClose={() => setSelectedProductForVariants(null)} onConfirm={(p, m, pr) => { addToCart(p, 1, pr, m); setSelectedProductForVariants(null); }} />}
+         {formatSelection?.product.article_formats && <ArticleFormatSelector itemName={formatSelection.product.name} dto={formatSelection.product.article_formats} variantId={formatSelection.variantId} tariffId={activeTariffId} baseTariffPrice={formatSelection.basePrice} stockBase={(formatSelection.product.stockBalances?.[defaultSalesWarehouseId] ?? formatSelection.product.stock ?? 0) - (committedByProduct[formatSelection.product.id] || 0) - formatStockDemand(cart,formatSelection.product.id)} currencySymbol={baseCurrency.symbol} onClose={() => setFormatSelection(null)} onSelect={(format,price) => addSelectedFormat(formatSelection.product,format,price,1,formatSelection.modifiers)} />}
+         {selectedProductForVariants && <ProductVariantSelector product={selectedProductForVariants} currencySymbol={baseCurrency.symbol} onClose={() => setSelectedProductForVariants(null)} onConfirm={(p, m, pr, variantSku) => { if (articleFormatsEnabled && p.article_formats && variantSku) setFormatSelection({product:p,variantId:variantSku,basePrice:(p.tariffs || []).find(t => t.tariffId === activeTariffId)?.price ?? pr,modifiers:m}); else addToCart(p, 1, pr, m); setSelectedProductForVariants(null); }} />}
          {productForScale && <ScaleModal product={productForScale} currencySymbol={baseCurrency.symbol} onClose={() => setProductForScale(null)} onConfirm={(w) => { addToCart(productForScale, w); setProductForScale(null); }} />}
          {
             showGlobalDiscount && <GlobalDiscountModal currentSubtotal={cartSubtotal} currencySymbol={baseCurrency.symbol} initialValue={globalDiscount.value.toString()} initialType={globalDiscount.type} themeColor={config.themeColor} onClose={() => setShowGlobalDiscount(false)} onConfirm={async (val, type) => {

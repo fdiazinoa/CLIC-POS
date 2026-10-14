@@ -1,3 +1,4 @@
+import { assertLegacyFormatPayload } from '../articleFormats/activation';
 import { Product } from '../../types';
 
 /**
@@ -342,6 +343,7 @@ class ApiSyncAdapter {
         action: SyncChange['action'] = 'BULK_UPDATE',
         mode: 'UPSERT' | 'FULL_REPLACE' = 'UPSERT'
     ): Promise<void> {
+        if (collection === 'transactions' || collection === 'transactionHistory') items.forEach(assertLegacyFormatPayload);
         if (!this.config) {
             throw new Error('Sync configuration missing in ApiSyncAdapter. Ensure SyncManager is initialized.');
         }
@@ -714,6 +716,7 @@ class ApiSyncAdapter {
      * Push a single transaction to Master
      */
     async pushTransaction(transaction: any): Promise<void> {
+        assertLegacyFormatPayload(transaction);
         try {
             await this.ensurePushReady();
             const response = await this.fetchWithRetry(`${this.config.masterUrl}/api/sync/transactions`, {

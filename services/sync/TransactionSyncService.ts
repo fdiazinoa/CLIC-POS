@@ -9,6 +9,7 @@ import { dbAdapter } from '../db';
 import { apiSyncAdapter } from './ApiSyncAdapter';
 import { permissionService } from './PermissionService';
 import { Transaction } from '../../types';
+import { assertLegacyFormatPayload } from '../articleFormats/activation';
 
 class TransactionSyncService {
     /**
@@ -40,6 +41,7 @@ class TransactionSyncService {
 
         try {
             const transactions = await apiSyncAdapter.pullPendingTransactions();
+            transactions.forEach(assertLegacyFormatPayload);
 
             if (transactions.length > 0) {
                 console.log(`📥 TransactionSync: Pulled ${transactions.length} pending transactions`);
@@ -60,6 +62,7 @@ class TransactionSyncService {
         transaction: Transaction,
         onSave: (txn: Transaction) => Promise<void>
     ): Promise<void> {
+        assertLegacyFormatPayload(transaction);
         try {
             // Save transaction
             await onSave(transaction);

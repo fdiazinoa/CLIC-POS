@@ -1,3 +1,4 @@
+import { articleFormatTicketLabel } from '../articleFormats/ticket';
 import { BusinessConfig, Reservation, Transaction, ZReport } from '../../types';
 
 export interface EscPosLabelRecord {
@@ -319,6 +320,7 @@ export const buildEscPosTicketPayload = (
   chunks.push(divider(width));
   transaction.items.forEach(item => {
     pushTextLines(chunks, splitLines(item.name || 'Articulo', width));
+    if (item.articleFormat) pushTextLines(chunks, splitLines(articleFormatTicketLabel(item), width));
     const qtyText = `${Number(item.quantity || 0).toFixed(item.quantity % 1 === 0 ? 0 : 3)} x ${formatMoney(config.currencySymbol || '$', item.price)}`;
     const lineTotal = formatMoney(config.currencySymbol || '$', item.price * item.quantity);
     pushPair(chunks, qtyText, lineTotal, width);
@@ -405,6 +407,7 @@ export const buildEscPosReservationPayload = (reservation: Reservation, config: 
   chunks.push(divider(width));
   reservation.items.forEach(item => {
     pushTextLines(chunks, splitLines(item.name || 'Articulo', width));
+    if (item.articleFormat) pushTextLines(chunks, splitLines(articleFormatTicketLabel(item), width));
     pushPair(
       chunks,
       `${Number(item.quantity || 0).toFixed(item.quantity % 1 === 0 ? 0 : 3)} x ${formatMoney(config.currencySymbol || '$', item.price)}`,
