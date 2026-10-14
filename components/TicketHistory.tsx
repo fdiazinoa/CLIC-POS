@@ -1,3 +1,4 @@
+import { canProjectFiscalClassification } from '../utils/fiscalClassificationProjection';
 import { formatQuantity, terminalQuantityPresentation } from '../utils/quantityPresentation';
 import { weightLineLabel, displayWeightQuantity } from '../utils/scaleWeight';
 import { db } from '../utils/db';
@@ -851,7 +852,8 @@ const TicketDetailDrawer: React.FC<{
             fiscalCode: correctionFiscalCode,
             customerId: correctionCustomerId || undefined,
             reason,
-            recalculateTaxes: shouldRecalculateTaxes
+            recalculateTaxes: canProjectFiscalClassification(tx) ? false : shouldRecalculateTaxes,
+            classificationOnly: canProjectFiscalClassification(tx)
          });
          setIsCorrectionOpen(false);
          setRetryFeedback('Corrección aplicada. Reintenta el envío fiscal.');
@@ -1376,7 +1378,7 @@ const TicketDetailDrawer: React.FC<{
                               value={correctionFiscalCode}
                               onChange={(event) => setCorrectionFiscalCode(event.target.value as 'E31' | 'E32')}
                               className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-800"
-                              disabled={isCorrectingFiscal}
+                              disabled={isCorrectingFiscal || canProjectFiscalClassification(tx)}
                            >
                               <option value="E32">{FISCAL_DOCUMENT_LABELS.E32}</option>
                               <option value="E31">{FISCAL_DOCUMENT_LABELS.E31}</option>
@@ -1391,7 +1393,7 @@ const TicketDetailDrawer: React.FC<{
                               value={correctionCustomerId}
                               onChange={(event) => setCorrectionCustomerId(event.target.value)}
                               className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-800"
-                              disabled={isCorrectingFiscal}
+                              disabled={isCorrectingFiscal || canProjectFiscalClassification(tx)}
                            >
                               <option value="">Consumidor final / sin cliente</option>
                               {sortedCustomers.map(customer => (
@@ -1410,9 +1412,9 @@ const TicketDetailDrawer: React.FC<{
                               type="checkbox"
                               checked={shouldRecalculateTaxes}
                               onChange={(event) => setShouldRecalculateTaxes(event.target.checked)}
-                              disabled={isCorrectingFiscal}
+                              disabled={isCorrectingFiscal || canProjectFiscalClassification(tx)}
                            />
-                           Recalcular totales fiscales e impuestos
+                           {canProjectFiscalClassification(tx) ? 'Corregir clasificación fiscal; conservar importes y comprobante' : 'Recalcular totales fiscales e impuestos'}
                         </label>
 
                         <div>

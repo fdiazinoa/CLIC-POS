@@ -327,3 +327,33 @@ for(const drift of ['none','syncToken','tenantId','company','warehouse','origin'
   }
  }finally{f.sql.close();}
 });
+
+for(const fault of [false,true]) test(`explicit VAT10→service catalog on used baseline atomic audit, rollback=${fault}`,async()=>{
+ const f=fixture();try{
+  const changeTax=(version:number,type:string)=>f.sql.prepare('UPDATE master_v3_taxes SET rate=.1,record_json=? WHERE sync_version=?').run(
+   JSON.stringify({id:'TX',name:'10%',type,rate:.1,active:true}),version);
+  changeTax(47,'VAT');
+  await f.adapter.saveDocumentsAtomically(financial('used',1));
+  f.insert('parkedTickets',{id:'retained',items:[oldLine]});
+  f.insert('outbox',{id:'pending',status:'PENDING',lease:'owner'});
+  const beforeAnchor=JSON.stringify(await f.store.getInventoryAuthority()),beforeLedger=f.read('inventoryLedger'),beforeSales=f.read('transactions');
+  f.stage('N',102);changeTax(102,'SERVICE_CHARGE');f.fail(fault);
+  if(fault){
+   await assert.rejects(f.store.activateCatalogOnly('N',await f.transition()),/disk fault/);
+   assert.equal((await f.store.getActiveRuntimeVersion())?.syncId,'S');
+   assert.equal(f.sql.prepare('SELECT COUNT(*) AS count FROM master_v3_tax_classification_audit').get()?.count,0);
+   f.fail(false);
+  }
+  const transition=await f.transition();await f.store.activateCatalogOnly('N',transition);
+  const audit=f.sql.prepare('SELECT * FROM master_v3_tax_classification_audit').all();
+  assert.equal(audit.length,1);assert.equal(audit[0].binding,'binding');assert.equal(audit[0].previous_sync_id,'S');
+  assert.deepEqual(JSON.parse(String(audit[0].before_fingerprint)),['TX','VAT',.1,true]);
+  assert.deepEqual(JSON.parse(String(audit[0].after_fingerprint)),['TX','SERVICE_CHARGE',.1,true]);
+  await f.store.activateCatalogOnly('N',transition);
+  assert.equal(f.sql.prepare('SELECT COUNT(*) AS count FROM master_v3_tax_classification_audit').get()?.count,1);
+  assert.equal(JSON.stringify(await f.store.getInventoryAuthority()),beforeAnchor);assert.equal(await f.stock(),99);
+  assert.deepEqual(f.read('inventoryLedger'),beforeLedger);assert.deepEqual(f.read('transactions'),beforeSales);
+  assert.equal(JSON.parse(f.read('outbox')[0]).lease,'owner');assert.equal(JSON.parse(f.read('parkedTickets')[0]).items[0].price,70);
+  assert.equal(JSON.parse(String(f.sql.prepare('SELECT record_json FROM master_v3_taxes WHERE sync_version=47').get()?.record_json)).type,'VAT');
+ }finally{f.sql.close();}
+});

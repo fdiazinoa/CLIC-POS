@@ -1,3 +1,4 @@
+import { authorizeV3TaxClassification } from '../sync/LargeMasterSyncV3TaxClassification';
 import { v3ArticleSemantics, v3TaxSemantics, v3TariffSemantics, v3VariantSemantics } from '../sync/LargeMasterSyncV3StockAuthority';
 import type { LargeMasterSyncV3InventoryAuthority, LargeMasterSyncV3CatalogTransition } from '../sync/LargeMasterSyncV3Types';
 import { normalizeV3CategoryKey, type V3CategoryFilter, type V3OperationalCategory } from '../sync/LargeMasterSyncV3Categories';
@@ -610,6 +611,13 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
               JOIN master_v3_articles fresh ON fresh.article_id = old.article_id WHERE old.sync_version = ${previous} AND fresh.sync_version = ${next})` : '';
             const oldRows = rows(await db.query(`SELECT record_json FROM master_v3_${dataset} WHERE sync_version = ?${predicate}`, [previous])).map(operationalRecord);
             const newRows = rows(await db.query(`SELECT record_json FROM master_v3_${dataset} WHERE sync_version = ?${predicate}`, [next])).map(operationalRecord);
+            if (dataset === 'taxes') {
+              const changes = authorizeV3TaxClassification(oldRows, newRows);
+              for (const change of changes) await db.run(`INSERT INTO master_v3_tax_classification_audit
+                VALUES(?,?,?,?,?,?,?,?,?)`, [syncId,next,transition.binding,transition.expectedCatalog.syncId,previous,
+                change.id,change.before,change.after,now()],false);
+              continue;
+            }
             const normalize = (records: RecordObject[]) => records.map(semantics).sort();
             if (JSON.stringify(normalize(oldRows)) !== JSON.stringify(normalize(newRows))) {
               throw new LargeMasterSyncV3Error('SYNC_V3_CATALOG_SEMANTICS_CHANGED');

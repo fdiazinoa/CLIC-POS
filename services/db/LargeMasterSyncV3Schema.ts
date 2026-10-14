@@ -1,6 +1,12 @@
 import { normalizeV3CategoryKey } from '../sync/LargeMasterSyncV3Categories';
 
 export const LARGE_MASTER_SYNC_V3_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS master_v3_tax_classification_audit (
+  sync_id TEXT NOT NULL, sync_version INTEGER NOT NULL, binding TEXT NOT NULL,
+  previous_sync_id TEXT NOT NULL, previous_sync_version INTEGER NOT NULL,
+  tax_id TEXT NOT NULL, before_fingerprint TEXT NOT NULL, after_fingerprint TEXT NOT NULL,
+  created_at TEXT NOT NULL, PRIMARY KEY(sync_id, sync_version, tax_id)
+);
 CREATE TABLE IF NOT EXISTS master_v3_catalog_owners (
   sync_id TEXT NOT NULL, sync_version INTEGER NOT NULL, binding TEXT NOT NULL,
   inventory_sync_id TEXT NOT NULL, inventory_sync_version INTEGER NOT NULL,

@@ -1,3 +1,4 @@
+import { applyFiscalClassificationProjection } from '../../utils/fiscalClassificationProjection';
 import { Capacitor, CapacitorHttp } from '@capacitor/core';
 import { CompanyInfo, FiscalProviderDeliveryMode, FiscalProviderId, Transaction } from '../../types';
 import { buildMasterUrlFromHost, resolveMasterEndpointFromCloud } from '../../utils/cloudMasterRegistry';
@@ -1277,6 +1278,7 @@ const issueFiscalDocumentOnce = async (
         throw new Error('Solo se pueden emitir documentos electrónicos con esta ruta.');
     }
 
+    if (input.providerId === 'MSELLER') input = { ...input, transaction: await applyFiscalClassificationProjection(input.transaction) };
     const isMSeller = input.providerId === 'MSELLER';
     const localCredential = isMSeller
         ? null

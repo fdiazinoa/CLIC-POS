@@ -1,3 +1,4 @@
+import { createFiscalClassificationProjection, canProjectFiscalClassification, consumeFiscalClassificationAttempt } from './utils/fiscalClassificationProjection';
 import { isV3CatalogHint } from './services/sync/LargeMasterSyncV3ManifestCheckpoint';
 import { applyLocalUserProfiles, LOCAL_USER_PROFILE_CHANGED } from './utils/localUserProfiles';
 import RecoveryCloseDialog from './components/RecoveryCloseDialog';
@@ -10957,6 +10958,31 @@ const AppContent: React.FC = () => {
     if (!canRetryFiscalTransaction(transaction)) {
       throw new Error('Solo se pueden corregir e-CF pendientes o con error.');
     }
+    if (correction.classificationOnly) {
+      if (correction.fiscalCode !== transaction.ncfType || correction.customerId !== transaction.customerId) {
+        throw new Error('La corrección de clasificación conserva cliente y comprobante.');
+      }
+      const session = await getLargeMasterSyncV3OperationalSession();
+      await session.assertCurrent();
+      const projected = await session.projectConfig(config);
+      const original = await db.getDocument('transactions', transaction.id) as Transaction | null;
+      if (!original || JSON.stringify(original) !== JSON.stringify(transaction) || !dbAdapter.saveDocumentsAtomically) {
+        throw new Error('FISCAL_CLASSIFICATION_STALE');
+      }
+      const stamp = original.items[0]?.v3SaleAuthority;
+      const projection = await createFiscalClassificationProjection(original, projected.taxes || [], currentUser?.id || '',
+        correction.reason, stamp?.binding || '');
+      const corrected = { ...original, fiscalClassificationProjection: projection };
+      await session.assertCurrent();
+      await dbAdapter.saveDocumentsAtomically([{ collectionName: 'transactions', document: corrected,
+        expectedDocument: JSON.stringify(original), v3CurrentCatalog: { syncId: session.ready.runtime.version.syncId,
+          syncVersion: session.ready.runtime.version.syncVersion, binding: stamp!.binding! } }]);
+      setTransactions(previous => previous.map(row => row.id === corrected.id ? corrected : row));
+      return corrected;
+    }
+    if (transaction.fiscalClassificationProjection || canProjectFiscalClassification(transaction)) {
+      throw new Error('Este documento requiere corrección explícita de clasificación sin recalcular importes.');
+    }
     if (correction.fiscalCode !== 'E31' && correction.fiscalCode !== 'E32') {
       throw new Error('Por ahora la corrección fiscal permite E31 o E32.');
     }
@@ -11145,11 +11171,12 @@ const AppContent: React.FC = () => {
   }, [config.companyInfo, upsertFiscalTransaction]);
 
   const v3FiscalInFlightRef = useRef(new Map<string, Promise<void>>());
-  const syncFiscalDocument = useCallback(async (transaction: Transaction) => {
+  const syncFiscalDocument = useCallback(async (transaction: Transaction, explicitClassificationRetry = false) => {
     const candidate = LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED;
     const pending = candidate ? v3FiscalInFlightRef.current.get(transaction.id) : undefined;
     if (pending) return pending;
     const perform = async () => {
+    if (transaction.fiscalClassificationProjection && !explicitClassificationRetry) return;
     const providerId = transaction.fiscalProvider;
     const documentCode = transaction.ncfType;
     const electronicNcf = transaction.electronicNcf || transaction.ncf;
@@ -11164,6 +11191,7 @@ const AppContent: React.FC = () => {
         const stored = await db.getDocument('transactions', transaction.id) as Transaction | null;
         if (!stored) throw new Error('SYNC_V3_COMMITTED_TRANSACTION_REQUIRED');
         transaction = stored;
+        if (transaction.fiscalClassificationProjection && !explicitClassificationRetry) return;
         if (transaction.fiscalSyncStatus === 'SYNCED') return;
         const session = await getLargeMasterSyncV3OperationalSession();
         await session.assertCurrent();
@@ -11171,7 +11199,7 @@ const AppContent: React.FC = () => {
         if (!stamp) throw new Error('SYNC_V3_CART_LEGACY_LINE');
         fiscalConfig = await session.projectConfig(config);
         const retained = await session.validate(fiscalConfig, transaction.items, stamp.tariffId, stamp.warehouseId || '',
-          'REFUND', undefined, { originalTransactionId: transaction.id });
+          'REFUND', undefined, { originalTransactionId: transaction.id }, true);
         validateV3FrozenFiscalAmounts(transaction, retained);
         validateV3FrozenLineFiscalAmounts(transaction, fiscalConfig);
       }
@@ -11192,7 +11220,7 @@ const AppContent: React.FC = () => {
         );
         return;
       }
-      if (candidate && transaction.fiscalProviderStatus === 'V3_ISSUE_REQUESTED') {
+      if (candidate && transaction.fiscalProviderStatus === 'V3_ISSUE_REQUESTED' && !(transaction.fiscalClassificationProjection && transaction.fiscalClassificationAttemptedAt && explicitClassificationRetry)) {
         await upsertFiscalTransaction({ ...transaction, fiscalSyncStatus: 'ERROR',
           fiscalSyncError: 'SYNC_V3_FISCAL_RECONCILIATION_REQUIRED',
           fiscalResponseMessage: 'Existe un intento fiscal sin referencia confirmada. Requiere reconciliación antes de emitir de nuevo.' });
@@ -11202,7 +11230,7 @@ const AppContent: React.FC = () => {
       const cashierCode = resolveFiscalProviderCashierCode(providerConfig, fiscalCompliance, terminalConfig, config);
       const fiscalSummary = candidate ? undefined : calculateTransactionFiscalSummary(transaction, config, { terminalConfig });
       const baseTransaction: Transaction = {
-        ...(candidate ? buildV3FrozenFiscalProviderTransaction(transaction, fiscalConfig) : {
+        ...(candidate ? (transaction.fiscalClassificationProjection ? transaction : buildV3FrozenFiscalProviderTransaction(transaction, fiscalConfig)) : {
           ...transaction, taxAmount: fiscalSummary!.taxTotal, netAmount: fiscalSummary!.subtotal,
           taxBreakdown: fiscalSummary!.taxBreakdown }),
         ...(candidate ? { fiscalProviderStatus: 'V3_ISSUE_REQUESTED' } : {}),
@@ -11293,6 +11321,18 @@ const AppContent: React.FC = () => {
       throw new Error('Solo se pueden reintentar documentos electrónicos pendientes o con error.');
     }
 
+    if (transaction.fiscalClassificationProjection) {
+      const original = await db.getDocument('transactions', transaction.id) as Transaction | null;
+      if (!original || !dbAdapter.saveDocumentsAtomically) throw new Error('FISCAL_CLASSIFICATION_STALE');
+      const consumed = await consumeFiscalClassificationAttempt(original);
+      const session = await getLargeMasterSyncV3OperationalSession();
+      await session.assertCurrent();
+      await dbAdapter.saveDocumentsAtomically([{ collectionName: 'transactions', document: consumed,
+        expectedDocument: JSON.stringify(original), v3CurrentCatalog: { syncId: session.ready.runtime.version.syncId,
+          syncVersion: session.ready.runtime.version.syncVersion, binding: session.binding } }]);
+      transaction = consumed;
+    }
+
     const terminalConfig = config.terminals?.find((terminal) => terminal.id === transaction.terminalId)?.config;
     const fiscalCompliance = getEffectiveFiscalComplianceConfig(config, terminalConfig);
     const environment = getProviderEnvironment(fiscalCompliance, providerId);
@@ -11325,7 +11365,7 @@ const AppContent: React.FC = () => {
       return 'Consulta de estado fiscal iniciada.';
     }
 
-    await syncFiscalDocument(retryingTransaction);
+    await syncFiscalDocument(retryingTransaction, Boolean(transaction.fiscalClassificationProjection));
     return 'Reintento de envío fiscal iniciado.';
   }, [config, pollFiscalDocumentStatus, syncFiscalDocument, upsertFiscalTransaction]);
 
@@ -11340,6 +11380,7 @@ const AppContent: React.FC = () => {
       const pendingMSeller = storedTransactions.filter((candidate) =>
         candidate.fiscalProvider === 'MSELLER'
         && candidate.fiscalSyncStatus === 'PENDING'
+        && !candidate.fiscalClassificationProjection
         && String(candidate.ncfType || '').startsWith('E')
         && !fiscalRecoveryInFlightRef.current.has(candidate.id)
       );

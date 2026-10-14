@@ -1,3 +1,4 @@
+import { v3TaxSemantics } from './LargeMasterSyncV3StockAuthority';
 import { db } from '../../utils/db';
 import { readV3RetainedCheckout, assertV3RetainedLine, type V3RetainedContext, type V3RetainedReference } from './LargeMasterSyncV3RetainedCheckout';
 import { v3StockSource, sameV3StockAuthority } from './LargeMasterSyncV3StockAuthority';
@@ -136,7 +137,7 @@ export class LargeMasterSyncV3OperationalSession {
         throw new LargeMasterSyncV3Error('SYNC_V3_TAX_INVALID');
       }
       return { id: String(row.id), code: typeof row.code === 'string' ? row.code : undefined,
-        name: String(row.name), rate: row.rate, type: type as TaxDefinition['type'] };
+        name: String(row.name), rate: row.rate, active: row.active !== false, type: type as TaxDefinition['type'] };
     });
     return { ...config, taxes, taxRate: 0, tariffs: tariffs.map(row => {
       if (typeof row.taxIncluded !== 'boolean') throw new LargeMasterSyncV3Error('SYNC_V3_TARIFF_UNAVAILABLE');
@@ -164,7 +165,7 @@ export class LargeMasterSyncV3OperationalSession {
   }
 
   async validate(config: BusinessConfig, lines: CartItem[], tariffId: string, warehouseId: string,
-    intent: V3FinancialIntent = 'SALE', onValidatedSource?: (line: CartItem, source: Product) => void, reference?: V3RetainedReference): Promise<V3RetainedContext | undefined> {
+    intent: V3FinancialIntent = 'SALE', onValidatedSource?: (line: CartItem, source: Product) => void, reference?: V3RetainedReference, fiscalDeliveryOnly = false): Promise<V3RetainedContext | undefined> {
     await this.assertCurrent();
     if (!lines.length) throw new LargeMasterSyncV3Error('SYNC_V3_CART_EMPTY');
     const authority = lines[0].v3SaleAuthority;
@@ -177,6 +178,8 @@ export class LargeMasterSyncV3OperationalSession {
       version: this.ready.inventoryVersion, cursor: this.ready.inventoryCursor };
     const currentCatalog = await this.catalog(tariffId, warehouseId);
     const sourceCatalogs = new Map<string, LargeMasterSyncV3OperationalCatalog>();
+    const currentTaxes = await this.ready.runtime.getOperationalTaxes();
+    const sourceTaxes = new Map<string, Promise<Record<string, unknown>[]>>();
     const sourceFor = async (line: CartItem) => {
       const stamp = line.v3SaleAuthority;
       if (!stamp || stamp.binding !== this.binding || stamp.warehouseId !== warehouseId || stamp.tariffId !== tariffId
@@ -187,6 +190,19 @@ export class LargeMasterSyncV3OperationalSession {
         return currentCatalog.get(line.id);
       }
       assertV3RetainedLine(line, retained);
+      // Delivery of an already committed invoice is distinct from a new sale/refund checkout.
+      if (!fiscalDeliveryOnly) {
+        const epoch = JSON.stringify([stamp.syncId,stamp.syncVersion]);
+        if (!sourceTaxes.has(epoch)) sourceTaxes.set(epoch,this.store.getOperationalTaxes({ syncId: stamp.syncId, syncVersion: stamp.syncVersion, contractVersion: 2 }));
+        const oldTaxes = await sourceTaxes.get(epoch)!;
+        const newTaxes = currentTaxes;
+        for (const id of line.appliedTaxIds || []) {
+          const old = oldTaxes.filter(row => row.id === id), current = newTaxes.filter(row => row.id === id);
+          if (old.length !== 1 || current.length !== 1 || v3TaxSemantics(old[0]) !== v3TaxSemantics(current[0])) {
+            throw new LargeMasterSyncV3Error('SYNC_V3_RETAINED_TAX_CLASSIFICATION_CHANGED');
+          }
+        }
+      }
       const receipt = await this.store.getCatalogReceipt?.({ syncId: stamp.syncId, syncVersion: stamp.syncVersion }, this.binding);
       if (!receipt || !sameV3StockAuthority(stamp, receipt)) throw new LargeMasterSyncV3Error('SYNC_V3_RETAINED_OWNER_REQUIRED');
       const key = JSON.stringify([stamp.syncId, stamp.syncVersion]);
