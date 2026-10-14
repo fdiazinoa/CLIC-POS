@@ -65,8 +65,8 @@ WHEN NOT EXISTS (SELECT 1 FROM article_format_returns WHERE tenant_id=NEW.tenant
 BEGIN
  SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM article_format_sale_lines WHERE tenant_id=NEW.tenant_id AND company_id=NEW.company_id
  AND event_id=NEW.sale_event_id AND line_id=NEW.sale_line_id AND snapshot=NEW.snapshot)
- THEN RAISE(ABORT,'ARTICLE_FORMAT_ORIGINAL_LINE_MISSING_OR_CHANGED') END;
- SELECT CASE WHEN NEW.returned_base + COALESCE((SELECT SUM(returned_base) FROM article_format_returns
+ THEN RAISE(ABORT,'ARTICLE_FORMAT_ORIGINAL_LINE_MISSING_OR_CHANGED')
+ WHEN NEW.returned_base + COALESCE((SELECT SUM(returned_base) FROM article_format_returns
  WHERE tenant_id=NEW.tenant_id AND company_id=NEW.company_id AND sale_event_id=NEW.sale_event_id AND sale_line_id=NEW.sale_line_id),0)
  > (SELECT sold_base FROM article_format_sale_lines WHERE tenant_id=NEW.tenant_id AND company_id=NEW.company_id
  AND event_id=NEW.sale_event_id AND line_id=NEW.sale_line_id)

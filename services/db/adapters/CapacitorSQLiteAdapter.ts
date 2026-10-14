@@ -240,7 +240,10 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
     /** Uses executeSet's native atomic transaction; never holds a JS transaction across awaits. */
     articleFormatSQL(): FormatSQL {
         return {
-            executeSchema: async sql => { await this.ensureDb().execute(sql); },
+            executeSchema: async sql => {
+                await this.ensureDb().execute('PRAGMA foreign_keys = ON;', false);
+                await this.ensureDb().execute(sql);
+            },
             executeAtomic: async statements => {
                 await this.ensureDb().executeSet(statements.map(s => ({ statement: s.statement, values: s.values || [] })), true);
             },
@@ -253,8 +256,9 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
 
     private async initSchema(): Promise<void> {
         const db = this.ensureDb();
+        // SQLite ignores this PRAGMA inside BEGIN; enforce it before native schema transaction.
+        await db.execute('PRAGMA foreign_keys = ON;', false);
         await db.execute(`
-            PRAGMA foreign_keys = ON;
             CREATE TABLE IF NOT EXISTS collections (
                 key TEXT PRIMARY KEY NOT NULL,
                 value TEXT NOT NULL,

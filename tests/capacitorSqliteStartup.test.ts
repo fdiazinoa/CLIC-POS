@@ -36,7 +36,8 @@ function fixture(t: TestContext, schema?: () => Promise<void>, open?: () => Prom
                 await open?.();
                 db = new SQLite(file);
             },
-            execute: async (sql: string) => {
+            execute: async (sql: string, transaction = true) => {
+                if (!transaction) { db!.exec(sql); return; }
                 calls.schemas++;
                 // Emulate the native plugin holding a transaction during schema work.
                 db!.exec('BEGIN');
