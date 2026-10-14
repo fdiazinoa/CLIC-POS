@@ -351,6 +351,7 @@ export interface NCFConfig {
 }
 
 export interface TerminalConfig {
+  capabilities?: { article_formats?: number };
   currentDeviceId?: string;
   lastPairingDate?: string;
   isBlocked?: boolean;
@@ -662,6 +663,7 @@ export interface ClassificationItem {
 }
 
 export interface BusinessConfig {
+  featureFlags?: { ARTICLE_FORMATS?: boolean };
   vertical: VerticalType;
   subVertical: SubVertical;
   currencySymbol: string;
@@ -865,6 +867,7 @@ export interface RecipeDetail {
 }
 
 export interface Product {
+  article_formats?: import('./services/articleFormats/contract').ArticleFormatsDTO;
   id: string;
   name: string;
   price: number;
@@ -1010,6 +1013,8 @@ export interface Table {
  * - Next sale will use new price
  */
 export interface CartItem extends Product {
+  articleFormat?: import('./services/articleFormats/contract').ArticleFormatSnapshot;
+  baseQuantity?: number;
   quantity: number;
   cartId: string;
   modifiers?: string[];
