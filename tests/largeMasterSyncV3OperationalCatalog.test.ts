@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { build } from 'esbuild';
 import assert from 'node:assert/strict';
 import { LargeMasterSyncV3OperationalCatalog } from '../services/sync/LargeMasterSyncV3OperationalCatalog';
 import type { LargeMasterSyncV3CandidateReady } from '../services/sync/LargeMasterSyncV3Candidate';
@@ -186,7 +187,7 @@ test('weighted contract rejects unsupported or ambiguous source semantics and ad
   await assert.rejects(catalog.get('A'), /ADVANCED_ARTICLE_CONTRACT_REQUIRED/);
 });
 
-test('raw inventoriable tracked article without anchor coverage is unavailable without hiding covered search results',async()=>{
+test('articles without balances remain searchable and resolvable with zero availability',async()=>{
  const {ready}=fixture(); const runtime=ready.runtime as any;
  const originalBalance=runtime.getInventoryBalance.bind(runtime);
  runtime.searchOperationalArticles=async()=>[article,{...article,id:'NEW',sku:'NEW',name:'Nuevo'}];
@@ -195,9 +196,53 @@ test('raw inventoriable tracked article without anchor coverage is unavailable w
  runtime.getInventoryBalance=async(id:string,warehouse:string)=>id==='NEW'?null:originalBalance(id,warehouse);
  runtime.findBarcode=async()=>({articleId:'NEW'});
  const catalog=await LargeMasterSyncV3OperationalCatalog.open(ready,'T1','W');
- assert.deepEqual((await catalog.search('')).map(row=>row.product.id),['A']);
- await assert.rejects(catalog.get('NEW'),/ARTICLE_INVENTORY_COVERAGE_REQUIRED/);
- await assert.rejects(catalog.findBarcode('NEW'),/ARTICLE_INVENTORY_COVERAGE_REQUIRED/);
+ const results = await catalog.search('');
+ assert.deepEqual(results.map(row=>row.product.id),['A','NEW']);
+ assert.equal(results[1].product.stock,0);
+ assert.deepEqual(results[1].product.stockBalances,{W:0});
+ assert.equal(results[1].product.price,85);
+ assert.equal(results[1].product.operationalFlags?.allowNegativeStock,false);
+ assert.equal((await catalog.get('NEW'))?.product.stock,0);
+ assert.equal((await catalog.findBarcode('NEW'))?.item.product.stock,0);
+});
+
+test('zero-balance sale validation obeys product or terminal negative-stock settings, never a spoofed cart flag', async () => {
+  const bundle = await build({
+    entryPoints: [new URL('../services/sync/LargeMasterSyncV3OperationalSession.ts', import.meta.url).pathname],
+    bundle: true, write: false, format: 'esm', platform: 'node', define: { 'import.meta.env': '{}' },
+    plugins: [{ name: 'stock-rule-read-only-io', setup(builder) {
+      builder.onResolve({ filter: /^(\.\.\/db|\.\.\/\.\.\/utils\/db)$/ }, args => ({ path: args.path, namespace: 'stock-fixture' }));
+      builder.onLoad({ filter: /.*/, namespace: 'stock-fixture' }, args => ({
+        contents: args.path === '../db' ? 'export const dbAdapter={};' : 'export const db={};', loader: 'js',
+      }));
+    } }],
+  });
+  const { LargeMasterSyncV3OperationalSession } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`);
+  for (const [productNegative, terminalNegative, spoofCart] of [
+    [false, false, false], [true, false, false], [false, true, false], [false, false, true],
+  ]) {
+    const { ready } = fixture({ article: { ...article,
+      operationalFlags: { trackInventory: true, allowNegativeStock: productNegative } } });
+    (ready.runtime as any).getInventoryBalance = async () => null;
+    const session = new LargeMasterSyncV3OperationalSession(ready, 'bound-terminal',
+      { getLocalInventoryDelta: async () => 0 }, 'https://example.invalid', { deviceId: 'device' });
+    session.assertCurrent = async () => {};
+    const catalog = await session.catalog('T1', 'W');
+    const product = await session.withStock((await catalog.get('A')).product, 'W');
+    assert.equal(product.stock, 0);
+    const line = { ...product, cartId: 'line', quantity: 1,
+      operationalFlags: { ...product.operationalFlags, allowNegativeStock: spoofCart || productNegative } };
+    const config = { taxes: [{ id: 'TX', name: 'ITBIS', type: 'VAT', rate: 0.18 }],
+      terminals: [{ id: 'terminal', config: { currentDeviceId: 'device', workflow: {
+        inventory: { allowNegativeStock: terminalNegative } } } }] };
+    if (productNegative || terminalNegative) {
+      await session.validate(config, [line], 'T1', 'W');
+      assert.deepEqual(await session.stockRequirements(config, [line], 'W', 'SALE'), []);
+    } else {
+      await assert.rejects(session.validate(config, [line], 'T1', 'W'), /STOCK_INSUFFICIENT/);
+      assert.equal((await session.stockRequirements(config, [line], 'W', 'SALE')).length, 1);
+    }
+  }
 });
 
 
