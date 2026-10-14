@@ -48,6 +48,7 @@ import {
 import TicketOptionsModal from './TicketOptionsModal';
 import CartItemOptionsModal from './CartItemOptionsModal';
 import TableSellerModal from './TableSellerModal';
+import SalesOperatorIdentity from './SalesOperatorIdentity';
 import { resetCompletedSaleDiscount } from '../utils/checkoutDiscountLifecycle';
 import { preserveCartItemCommercialFields, resolveCartItemEditCapabilities } from '../utils/cartItemEditPermissions';
 import ProductVariantSelector from './ProductVariantSelector';
@@ -4594,14 +4595,19 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       setActiveCartItemId((current) => (current === cartId ? null : cartId));
    }, []);
 
-   const renderTicketBrand = useCallback((compact = false) => (
-      <div className={`inline-flex flex-col items-center ${compact ? 'gap-1.5' : 'gap-2.5'}`}>
+   const operatorTerminal = config.terminals?.find(terminal => terminal.id === activeTerminalId);
+   const operatorTerminalLabel = operatorTerminal
+      ? String(operatorTerminal.config.terminalName || operatorTerminal.config.stationNumber || 'Caja sin nombre')
+      : 'Caja no disponible';
+   const renderTicketBrand = (compact = false) => (
+      <div className="inline-flex min-w-0 flex-wrap items-center gap-2">
          <div className={`inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-950 shadow-sm ${compact ? 'px-2.5 py-1.5' : 'px-4 py-2.5'}`}>
             <span className={`font-black uppercase tracking-[0.22em] text-slate-100 ${compact ? 'text-[0.72rem]' : 'text-[0.8rem]'}`}>CLIC</span>
             <span className={`font-black uppercase tracking-[0.22em] text-sky-400 ${compact ? 'text-[0.72rem]' : 'text-[0.8rem]'}`}>POS</span>
          </div>
+         <SalesOperatorIdentity user={currentUser} terminalLabel={operatorTerminalLabel} compact={compact} />
       </div>
-   ), []);
+   );
    const cartQuantity = useMemo(
       () => processedCart.reduce((sum, item) => sum + Math.abs(Number(item.quantity || 0)), 0),
       [processedCart]
@@ -8094,10 +8100,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
             {/* MOBILE HEADER */}
             < div className={`${isMobile ? 'flex' : 'hidden'} px-4 py-3 border-b border-gray-100 bg-white flex-col gap-3 shrink-0`} >
-               <div className="flex justify-between items-start">
-                  <div className="flex items-center gap-3">
+               <div className="flex flex-wrap justify-between items-start gap-2">
+                  <div className="flex min-w-0 flex-wrap items-center gap-3">
                      {renderTicketBrand(true)}
-                     <button onClick={() => setMobileView('PRODUCTS')} className="h-10 w-10 -ml-2 rounded-xl bg-blue-50 text-blue-600 hover:bg-blue-100 transition-colors flex items-center justify-center">
+                     <button onClick={() => setMobileView('PRODUCTS')} className="h-10 w-10 shrink-0 -ml-2 rounded-xl bg-blue-50 text-blue-600 hover:bg-blue-100 transition-colors flex items-center justify-center">
                         <ArrowLeft size={24} />
                      </button>
                      <h2 className="min-w-0 max-w-[180px] truncate font-black text-gray-800 text-base leading-tight">
@@ -8108,7 +8114,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         ) : 'Ticket Actual'}
                      </h2>
                   </div>
-                  <div className="flex gap-1">
+                  <div className="flex shrink-0 gap-1">
                      {cart.length > 0 && (
                         <button
                            onClick={handleClearFreshCartItems}
@@ -8235,7 +8241,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             {/* DESKTOP: marca + mesa/comensales bajo el logo; retail: busqueda al centro; botones carrito/acciones alineados a la derecha (como APK 1.0.300) */}
             <div className={`pos-ticket-heading ${isMobile ? 'hidden' : 'flex'} px-5 py-3 border-b border-gray-100 bg-gray-50/50 flex-col gap-3 shrink-0 flex-none ${activeTable ? 'border-l-4 border-l-blue-500' : ''}`} >
                <div data-testid="desktop-ticket-toolbar" className={`flex w-full flex-wrap items-center justify-between gap-1 ${isRetailMode ? 'supermarket-ticket-toolbar' : ''}`}>
-                  <div className="flex min-w-0 shrink-0 items-center justify-start">
+                  <div className="flex min-w-0 max-w-full items-center justify-start">
                      {renderTicketBrand(!isRetailMode)}
                   </div>
 
