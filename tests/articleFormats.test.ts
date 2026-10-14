@@ -323,3 +323,21 @@ test('legacy network adapters reject imported format events before fetch and seq
   await assert.rejects(transactionService.createTransaction({items:[line()]}),/NOT_NEGOTIATED/);
   assert.equal(fetches,0);
 });
+
+
+test('legacy collection full/delta/history reads reject the entire mixed batch before returning',async t => {
+  const {apiSyncAdapter}=await import('../services/sync/ApiSyncAdapter');
+  const legacy={id:'fixture-legacy',items:[{id:'fixture-item',quantity:1,price:10}]};
+  const formatted={id:'fixture-format',items:[line()]};
+  const adapter=apiSyncAdapter as unknown as {config:unknown;authToken:string|null;isOnline:boolean;fetchWithRetry:unknown;ensureAuthenticated:unknown};
+  const prior={config:adapter.config,authToken:adapter.authToken,isOnline:adapter.isOnline};
+  Object.assign(adapter,{config:{masterUrl:'https://fixture.invalid',terminalId:'fixture'},authToken:'synthetic-test-token',isOnline:true});
+  t.after(() => Object.assign(adapter,prior));
+  t.mock.method(apiSyncAdapter as never,'fetchWithRetry' as never,(async () => ({ok:true,status:200,json:async () => ({items:[legacy,formatted],version:2,isFullDownload:true,data:{transactions:[legacy,formatted]}})})) as never);
+  t.mock.method(apiSyncAdapter as never,'ensureAuthenticated' as never,(async () => {}) as never);
+  await assert.rejects(apiSyncAdapter.pull('transactions'),/UNSUPPORTED/);
+  await assert.rejects(apiSyncAdapter.pullDelta('transactions',1),/UNSUPPORTED/);
+  await assert.rejects(apiSyncAdapter.pullDelta('transactionHistory',1),/UNSUPPORTED/);
+  adapter.isOnline=true;await assert.rejects(apiSyncAdapter.pullHistory('fixture'),/UNSUPPORTED/);
+  adapter.isOnline=true;await assert.rejects(apiSyncAdapter.pullPendingTransactions(),/UNSUPPORTED/);
+});

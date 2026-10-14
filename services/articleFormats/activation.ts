@@ -46,3 +46,8 @@ export function assertLegacyFormatPayload(value: unknown): void {
 export function assertFormatsPostingClosed(lines: { articleFormat?: unknown }[]): void {
   if (lines.some(line => line.articleFormat !== undefined)) throw new ArticleFormatError('POS_ARTICLE_FORMATS_NOT_NEGOTIATED');
 }
+
+export function assertLegacyFormatCollection(collection: string, documents: unknown): void {
+  if (collection !== 'transactions' && collection !== 'transactionHistory') return;
+  if (Array.isArray(documents)) documents.forEach(assertLegacyFormatPayload);
+}

@@ -1,4 +1,5 @@
-import { assertLegacyFormatPayload } from '../articleFormats/activation';
+import { assertLegacyFormatPayload, assertLegacyFormatCollection } from '../articleFormats/activation';
+import { ArticleFormatError } from '../articleFormats/domain';
 import { Product } from '../../types';
 
 /**
@@ -449,6 +450,7 @@ class ApiSyncAdapter {
             }
 
             console.log(`📥 ApiSyncAdapter: Pulled ${data.items.length} items from ${collection} (v${data.version})`);
+            assertLegacyFormatCollection(collection,data.items);
             return data.items;
 
         } catch (error) {
@@ -492,7 +494,9 @@ class ApiSyncAdapter {
                 throw new Error(`Delta pull failed: ${response.statusText}`);
             }
 
-            return await response.json();
+            const data = await response.json();
+            assertLegacyFormatCollection(collection,data.items);
+            return data;
         } catch (error) {
             console.error(`❌ ApiSyncAdapter: Error pulling delta for ${collection}:`, error);
             throw error;
@@ -887,9 +891,11 @@ class ApiSyncAdapter {
             }
 
             const data = await response.json();
+            assertLegacyFormatCollection('transactions',data.items);
             return data.items || [];
         } catch (error) {
             console.error('❌ ApiSyncAdapter: Error pulling pending transactions:', error);
+            if (error instanceof ArticleFormatError) throw error;
             return [];
         }
     }
@@ -1020,9 +1026,12 @@ class ApiSyncAdapter {
             }
 
             const data = await response.json();
+            assertLegacyFormatCollection('transactions',data.data?.transactions);
+            assertLegacyFormatCollection('transactionHistory',data.data?.transactionHistory);
             return data.data;
         } catch (error) {
             console.error('❌ ApiSyncAdapter: Error pulling history:', error);
+            if (error instanceof ArticleFormatError) throw error;
             return null;
         }
     }

@@ -51,6 +51,8 @@ No borrar tablas ni snapshots para hacer rollback. Si se retira la UI se conserv
 
 ## Pruebas y límites de evidencia
 
+Las regresiones nativas compilan los métodos Java del parser instalado de @capacitor-community/sqlite con JDK 21 y ejecutan cada sentencia resultante sobre SQLite. El trigger de devoluciones usa un solo SELECT CASE compatible con ese parser; foreign_keys se habilita fuera de BEGIN. Se prueban recepciones legacy de lote completo/delta/historia antes de devolver documentos al consumidor.
+
 Ejecutar `npm run test:article-formats`, `npx tsx --test tests/*.test.ts`, `npm run harness:test`, `npm run build` y `npm run lint`.
 
 Los fixtures usan artículos, terminal y empresa sintéticos. Cubren cantidades/decimales/precios cero/tarifas, variantes/barcodes, snapshots, migración con venta pendiente, revisiones/duplicados/ACK, devoluciones parciales y acumuladas/concurrentes, fallo transaccional, reinicio SQLite offline, respuesta perdida/replay, aislamiento y rechazo legacy. Se reutilizan motor de inventario/COGS, promociones y cálculo fiscal/ticket ESC-POS reales.

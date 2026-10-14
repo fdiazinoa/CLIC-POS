@@ -1,4 +1,5 @@
-import { assertLegacyFormatPayload } from '../../articleFormats/activation';
+import { assertLegacyFormatPayload, assertLegacyFormatCollection } from '../../articleFormats/activation';
+import { ArticleFormatError } from '../../articleFormats/domain';
 import { DatabaseAdapter } from '../DatabaseAdapter';
 
 export class NetworkAdapter implements DatabaseAdapter {
@@ -124,9 +125,12 @@ export class NetworkAdapter implements DatabaseAdapter {
                 if (res.status === 404) return [];
                 throw new Error(`Failed to fetch ${collectionName}: ${res.statusText}`);
             }
-            return await res.json();
+            const data = await res.json();
+            assertLegacyFormatCollection(collectionName,data);
+            return data;
         } catch (error) {
             console.error(`Error fetching collection ${collectionName} from ${url}:`, error);
+            if (error instanceof ArticleFormatError) throw error;
             return [];
         }
     }
@@ -263,6 +267,7 @@ export class NetworkAdapter implements DatabaseAdapter {
     }
 
     async bulkUpsert<T extends { id: string }>(collectionName: string, docs: T[]): Promise<void> {
+        assertLegacyFormatCollection(collectionName,docs);
         for (const doc of docs || []) {
             await this.saveDocument(collectionName, doc);
         }
@@ -299,8 +304,11 @@ export class NetworkAdapter implements DatabaseAdapter {
                 headers: { 'Connection': 'keep-alive' }
             });
             if (!res.ok) return null;
-            return await res.json();
+            const data = await res.json();
+            assertLegacyFormatCollection(collectionName,[data]);
+            return data;
         } catch (error) {
+            if (error instanceof ArticleFormatError) throw error;
             return null;
         }
     }
