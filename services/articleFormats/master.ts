@@ -24,3 +24,21 @@ export async function hydrateArticleFormatMasters(store: ArticleFormatStore, pro
     return {...product,article_formats:dto};
   }));
 }
+
+/** The V3 adapter owns the active snapshot; ERP IDs are never inferred from SKUs. */
+export async function hydrateNetworkFormatMasters(store: import('./posting').NetworkMasterPort, products: Product[]): Promise<Product[]> {
+  if (products.length > 1000) throw new ArticleFormatError('ARTICLE_FORMAT_HYDRATION_PAGE_TOO_LARGE');
+  const revision = await store.getActiveRevision();
+  if (!revision) throw new ArticleFormatError('POS_FORMAT_REVISION_INCOMPLETE');
+  return Promise.all(products.map(async product => {
+    const master = await store.getPolicy(product.id, revision.syncId, revision.revision);
+    if (!master) return { ...product, article_formats: undefined, articleFormatVariantSkus: undefined };
+    const mapping = master.policy.variant_skus;
+    for (const id of master.policy.variant_ids) {
+      if (typeof mapping[id] !== 'string' || product.variants.filter(v => v.sku === mapping[id]).length !== 1) {
+        throw new ArticleFormatError('ARTICLE_FORMAT_VARIANT_MAPPING_MISSING');
+      }
+    }
+    return { ...product, article_formats: master.dto, articleFormatVariantSkus: { ...mapping } };
+  }));
+}

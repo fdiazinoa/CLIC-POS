@@ -1,4 +1,7 @@
-import { syncArticleFormatMasters } from '../articleFormats/master';
+import { openArticleFormatsRuntime } from '../articleFormats/runtime';
+import type { FormatTransport } from '../articleFormats/wire';
+import type { FormatSQL } from '../articleFormats/store';
+import { hydrateNetworkFormatMasters, syncArticleFormatMasters } from '../articleFormats/master';
 import type { ArticleFormatMasterTransport } from '../articleFormats/sync';
 import type { ArticleFormatStore } from '../articleFormats/store';
 /**
@@ -832,6 +835,14 @@ class SyncManager {
         // Formats stay in normalized SQLite revisions; consumers hydrate them for sales views.
         // Do not copy the complete format catalog into initial-config or collections.
         return hydrated;
+    }
+
+    /** Network-v1 port. Closed readiness rejects before any ERP negotiation. */
+    async pullNetworkArticleFormats(sql: FormatSQL, transport: FormatTransport, config: { featureFlags?: { ARTICLE_FORMATS?: boolean } },
+        terminal: { id: string; capabilities?: { article_formats?: number } }, products: Product[]): Promise<Product[]> {
+        const runtime = await openArticleFormatsRuntime(sql, transport, config, terminal);
+        await runtime.masters.download();
+        return hydrateNetworkFormatMasters(runtime.masters, products);
     }
 
     async pullCatalog(collection: SyncableCollection, force: boolean = false): Promise<number> {

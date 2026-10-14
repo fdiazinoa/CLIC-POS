@@ -885,6 +885,8 @@ export interface Product {
   images: string[];
   attributes: ProductAttribute[];
   variants: ProductVariant[];
+  /** Authenticated ERP_ID → POS SKU bridge from a complete formats revision. */
+  articleFormatVariantSkus?: Record<string, string | null>;
   tariffs: TariffPrice[];
   stockBalances?: Record<string, number>;
   activeInWarehouses?: string[];

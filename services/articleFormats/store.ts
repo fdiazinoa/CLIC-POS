@@ -5,6 +5,8 @@ import { ARTICLE_FORMATS_SCHEMA } from './schema';
 export interface FormatStatement { statement: string; values?: (string | number | null)[] }
 export interface FormatSQL {
   executeSchema(sql: string): Promise<void>;
+  /** Serializes reads/planning and commit with legacy collection writers. */
+  runExclusive?<T>(work: (sql: FormatSQL) => Promise<T>): Promise<T>;
   /** Must be one atomic native/SQLite transaction, not interleavable JS BEGIN/RUN/COMMIT. */
   executeAtomic(statements: FormatStatement[]): Promise<void>;
   query<T>(sql: string, values: (string | number | null)[]): Promise<T[]>;
@@ -137,7 +139,7 @@ export class ArticleFormatStore {
   }
 
   async pendingEvents(): Promise<FormatLocalEvent[]> {
-    const rows = await this.sql.query<{content:string}>('SELECT content FROM article_format_outbox WHERE tenant_id=? AND company_id=? AND state=? ORDER BY rowid',[...scopeValues(this.scope),'PENDING']);
+    const rows = await this.sql.query<{content:string}>(`SELECT content FROM article_format_outbox WHERE tenant_id=? AND company_id=? AND state=? AND json_extract(content,'$.schema_version') IS NULL ORDER BY rowid`,[...scopeValues(this.scope),'PENDING']);
     return rows.map(row => JSON.parse(row.content));
   }
   async ackEvent(event: FormatLocalEvent): Promise<void> {

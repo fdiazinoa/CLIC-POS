@@ -9,8 +9,9 @@ export interface ArticleFormatReadiness {
   negotiated: boolean;
 }
 
-// The referenced ERP serializer has no producer and the legacy ingress rejects snapshots.
-// Change this only with implemented adapters and independent real ERP/offline gate evidence.
+// The network v1 adapters are implemented, but rollout and integral readiness remain closed.
+// ERP v1 cannot bind the physical return policy across local commit and first admission.
+// Change only after fixing that contract and independent ERP/SQLite/offline evidence.
 export const ARTICLE_FORMATS_READINESS: Readonly<ArticleFormatReadiness> = Object.freeze({
   authenticatedScope: false, paginatedMasterTransport: false, versionedSaleEvent: false,
   versionedRefundEvent: false, atomicLocalPosting: false, negotiated: false
@@ -29,9 +30,19 @@ export function formatsEnabled(config: { featureFlags?: { ARTICLE_FORMATS?: bool
   return formatsNegotiated(config, terminal, ARTICLE_FORMATS_READINESS);
 }
 
+/** Documents owned by the formats journal must never enter any legacy operational queue. */
+export function isFormatOwnedDocument(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false;
+  const doc = value as Record<string, any>;
+  return Boolean(doc.articleFormatEventId || doc.articleFormatWire || doc.articleFormat || doc.article_format
+    || doc.metadata?.article_format || doc.workflow?.article_format
+    || ['items','lines'].some(key => Array.isArray(doc[key]) && doc[key].some(isFormatOwnedDocument)));
+}
+
 /** Guard before any LAN/ERP side effect, even if old pending documents are imported. */
 export function assertLegacyFormatPayload(value: unknown): void {
   if (!value || typeof value !== 'object') return;
+  if (isFormatOwnedDocument(value)) throw new ArticleFormatError('POS_ARTICLE_FORMATS_UNSUPPORTED');
   const container = value as Record<string, unknown>;
   for (const key of ['items', 'lines']) {
     const lines = container[key];
@@ -48,6 +59,6 @@ export function assertFormatsPostingClosed(lines: { articleFormat?: unknown }[])
 }
 
 export function assertLegacyFormatCollection(collection: string, documents: unknown): void {
-  if (collection !== 'transactions' && collection !== 'transactionHistory') return;
+  if (!['transactions','transactionHistory','inventoryLedger','payments','cashMovements'].includes(collection)) return;
   if (Array.isArray(documents)) documents.forEach(assertLegacyFormatPayload);
 }
