@@ -44,6 +44,7 @@ import { useKioskMode } from './hooks/useKioskMode';
 import { useBarcodeScanner } from './hooks/useBarcodeScanner';
 import { db } from './utils/db'; // Import Local DB
 import { dbAdapter } from './services/db'; // Import Adapter for Healthcheck
+import { retryDatabaseStartup } from './services/db/StartupRetry';
 import { syncManager } from './services/sync/SyncManager';
 import { apiSyncAdapter } from './services/sync/ApiSyncAdapter';
 import { backgroundSyncManager } from './services/sync/BackgroundSyncManager';
@@ -283,6 +284,17 @@ const AppContent: React.FC = () => {
   const [deviceId, setDeviceId] = useState<string>('');
   const [isDataLoaded, setIsDataLoaded] = useState<boolean>(false);
   const [initialConnError, setInitialConnError] = useState<string | null>(null);
+  const [isRetryingStartup, setIsRetryingStartup] = useState(false);
+  const retryStartup = async () => {
+    if (isRetryingStartup) return;
+    setIsRetryingStartup(true);
+    try {
+      await retryDatabaseStartup(dbAdapter, () => window.location.reload());
+    } catch (error) {
+      setInitialConnError(error instanceof Error ? error.message : 'No se pudo cerrar la base local para reintentar.');
+      setIsRetryingStartup(false);
+    }
+  };
   const [failedMasterIp, setFailedMasterIp] = useState<string>('');
   const initLoadStartedRef = useRef(false);
   const forceSyncHandledRef = useRef(false);
@@ -3187,10 +3199,11 @@ const AppContent: React.FC = () => {
           <h2 className="text-xl font-bold mb-2">Error de Inicialización</h2>
           <p className="text-slate-400 mb-6 max-w-md">{initialConnError}</p>
           <button
-            onClick={() => window.location.reload()}
+            onClick={() => void retryStartup()}
+            disabled={isRetryingStartup}
             className="px-6 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg font-medium transition-colors"
           >
-            Reintentar
+            {isRetryingStartup ? 'Esperando base local...' : 'Reintentar'}
           </button>
         </div>
       );
@@ -4577,10 +4590,11 @@ const AppContent: React.FC = () => {
           <h1 className="text-2xl font-bold mb-2">Error de Inicialización</h1>
           <p className="text-lg bg-white p-4 rounded shadow border border-red-200">{initialConnError}</p>
           <button
-            onClick={() => window.location.reload()}
+            onClick={() => void retryStartup()}
+            disabled={isRetryingStartup}
             className="mt-6 px-6 py-2 bg-red-600 text-white rounded hover:bg-red-700 transition-colors"
           >
-            Reintentar
+            {isRetryingStartup ? 'Esperando base local...' : 'Reintentar'}
           </button>
         </div>
       );
