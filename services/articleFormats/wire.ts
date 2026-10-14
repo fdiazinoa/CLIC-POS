@@ -121,12 +121,15 @@ export async function hashText(text:string):Promise<string>{
   return Array.from(new Uint8Array(digest),v=>v.toString(16).padStart(2,'0')).join('');
 }
 export async function wireHash(event:WireEvent):Promise<string>{return hashText(postgresJSON(event));}
-export function validateACK(value:any,event:WireEvent,hash:string):FormatACK {
+export function validateACK(value:any,event:WireEvent,hash:string,physicalPolicy?:PhysicalReturn):FormatACK {
   requireFormat(value?.schema_version===1 && value.eventId===event.event_id && value.applied===true && value.disposition==='APPLIED'
     &&value.inventory_quantity_unit==='BASE'&&value.content_hash===hash&&typeof value.document_code==='string'&&value.document_code.length>0
     && typeof value.committed_at==='string'&&Number.isFinite(Date.parse(value.committed_at)),'POS_FORMAT_ACK_INVALID');
   uuid(value.inbox_id);uuid(value.document_id);
   for(const key of ['inventory_movement_ids','accounting_entry_ids']){requireFormat(Array.isArray(value[key]));value[key].forEach(uuid);requireFormat(new Set(value[key]).size===value[key].length);}
+  const expectedMovements=event.event_type==='ARTICLE_FORMAT_SALE_V1'?event.lines.length
+    :physicalPolicy===undefined?undefined:physicalPolicy==='RESTOCK'?event.lines.length:0;
+  requireFormat(expectedMovements===undefined||value.inventory_movement_ids.length===expectedMovements,'POS_FORMAT_ACK_PHYSICAL_EFFECT_MISMATCH');
   requireFormat(value.accounting_entry_ids.length>0,'POS_FORMAT_ACK_INVALID');
   if(value.payment_entry_id!==null)uuid(value.payment_entry_id);
   requireFormat(event.payments.length===0?value.payment_entry_id===null:value.payment_entry_id!==null,'POS_FORMAT_ACK_INVALID');

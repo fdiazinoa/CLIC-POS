@@ -1,4 +1,4 @@
-import { snapshot } from './domain';
+import { ArticleFormatError, snapshot } from './domain';
 import { ARTICLE_FORMATS_SCHEMA } from './schema';
 import { canonicalContent, type FormatSQL, type FormatStatement } from './store';
 import type { ArticleFormatsDTO } from './contract';
@@ -15,6 +15,11 @@ export interface NetworkMasterPort {
 export interface LocalPostingOptions {seriesId:string;userId:string;userName:string}
 interface SavedWire { content:string;content_hash:string;context:string;policies:string;ack:string|null;attempts:number;next_attempt:number }
 function deepFreeze<T>(v:T):T {if(v&&typeof v==='object'){Object.values(v).forEach(deepFreeze);Object.freeze(v);}return v;}
+function timeValue(time:string) {
+ const m=/^(\d\d):(\d\d)(?::(\d\d)(?:\.(\d+))?)?$/.exec(time);
+ requireFormat(m && Number(m[1])<24&&Number(m[2])<60&&Number(m[3]||0)<60,'POS_FORMAT_PROMOTION_FORBIDDEN');
+ return new Money(m[1]).mul(3600).plus(new Money(m[2]).mul(60)).plus(`${m[3]||'0'}.${m[4]||'0'}`);
+}
 const amount=(n:InstanceType<typeof Money>)=>n.toFixed(2);
 const assertSame=(a:unknown,b:unknown,code='POS_FORMAT_SOURCE_MISMATCH')=>requireFormat(canonicalContent(a)===canonicalContent(b),code);
 
@@ -33,17 +38,17 @@ export function saleWireLine(dto:ArticleFormatsDTO,policy:NetworkLinePolicy,inpu
  let promotionRate=new Money(0);
  if(input.promotionId){
   const promo=policy.promotions.find(p=>p.id===input.promotionId);
-  const local=new Date(Date.parse(input.occurredAt)-4*3600000),day=local.toISOString().slice(0,10),time=local.toISOString().slice(11,23);
+  const local=new Date(Date.parse(input.occurredAt)-4*3600000),day=local.toISOString().slice(0,10),time=local.toISOString().slice(11,19)+(input.occurredAt.match(/\.(\d+)(?:Z|[+-]\d\d:\d\d)$/)?.[1]?'.'+input.occurredAt.match(/\.(\d+)(?:Z|[+-]\d\d:\d\d)$/)![1]:'');
   const weekday=['D','L','M','X','J','V','S'][local.getUTCDay()];
   requireFormat(promo?.type==='DISCOUNT'&&promo.is_active===true&&(!promo.start_date||day>=String(promo.start_date).slice(0,10))
    &&(!promo.end_date||day<=String(promo.end_date).slice(0,10))&&Array.isArray(promo.terminal_ids)&&(promo.terminal_ids.length===0||promo.terminal_ids.includes(input.terminalId))
    &&(!Array.isArray(promo.schedule_days_of_week)||promo.schedule_days_of_week.length===0||promo.schedule_days_of_week.includes(weekday))
-   &&time>=String(promo.schedule_start_time||'00:00:00')&&time<=String(promo.schedule_end_time||'23:59:59.999999'),'POS_FORMAT_PROMOTION_FORBIDDEN');
+   &&timeValue(time).gte(timeValue(String(promo.schedule_start_time||'00:00:00')))&&timeValue(time).lte(timeValue(String(promo.schedule_end_time||'23:59:59.999999'))),'POS_FORMAT_PROMOTION_FORBIDDEN');
   promotionRate=decimal(String(promo.benefit_value),4);requireFormat(promotionRate.lte(100),'POS_FORMAT_PROMOTION_FORBIDDEN');
  }
  const gross=quantity.mul(price).toDecimalPlaces(2),promoDiscount=gross.mul(promotionRate).div(100).toDecimalPlaces(2);
  const discount=promoDiscount.plus(gross.minus(promoDiscount).mul(rate).div(100).toDecimalPlaces(2));
- const taxRate=decimal(policy.tax_rate,6);requireFormat(taxRate.lte(1),'POS_FORMAT_TAX_PROFILE_UNSUPPORTED');
+ const taxRate=decimal(policy.tax_rate,50);requireFormat(taxRate.lte(1),'POS_FORMAT_TAX_PROFILE_UNSUPPORTED');
  const after=gross.minus(discount),net=base.tax_included?after.div(new Money(1).plus(taxRate)).toDecimalPlaces(2):after;
  const tax=base.tax_included?after.minus(net):net.mul(taxRate).toDecimalPlaces(2);
  return {line_id:input.lineId,item_id:dto.item_id,variant_id:input.variantId,article_format:{...snapshot(f),barcode:f.barcode||''},
@@ -164,7 +169,7 @@ export class ArticleFormatPosting {
     const base=decimal(l.base_quantity,4,true),delta=sale?base.negated():this.context.return_policy==='RESTOCK'?base:new Money(0);
     const balance=new Money(String(stock.quantity)).plus(delta);
     requireFormat(balance.dp()<=4&&balance.abs().lte('99999999999.9999'),'POS_FORMAT_PRECISION_INVALID');
-    requireFormat(product.operationalFlags?.allowNegativeStock===true||balance.gte(stock.qtyCommitted||0),'POS_FORMAT_INSUFFICIENT_STOCK');
+    requireFormat(!sale||product.operationalFlags?.allowNegativeStock===true||balance.gte(stock.qtyCommitted||0),'POS_FORMAT_INSUFFICIENT_STOCK');
     stock.quantity=balance.toNumber();stock.qtyPhysical=stock.quantity;stock.qtyAvailable=balance.minus(stock.qtyCommitted||0).toNumber();stock.updatedAt=event.occurred_at;
     product.stockBalances={...product.stockBalances,[this.context.scope.warehouseId]:stock.quantity};
     product.stock=Object.values(product.stockBalances).reduce((n:number,v:number)=>n+v,0);product.updatedAt=event.occurred_at;
@@ -229,9 +234,12 @@ export class ArticleFormatPosting {
   return rows.map(r=>({event:validateWireEvent(JSON.parse(r.content)),hash:r.content_hash,context:JSON.parse(r.context),attempts:r.attempts}));
  }
  async acknowledge(event:WireEvent,ack:unknown){
-  const hash=await wireHash(event),validated=validateACK(ack,event,hash);
+  event=validateWireEvent(event);const candidateACK=structuredClone(ack);
+  const hash=await wireHash(event);
   return this.sql.runExclusive!(async sql=>{
    const row=await this.saved(sql,event.event_id);requireFormat(row&&row.content===canonicalContent(event)&&row.content_hash===hash,'POS_FORMAT_ACK_CONFLICT');
+   const savedContext:NetworkContext=JSON.parse(row.context);
+   const validated=validateACK(candidateACK,event,hash,savedContext.return_policy);
    if(row.ack){assertSame(JSON.parse(row.ack),validated,'POS_FORMAT_ACK_CONFLICT');return;}
    const statements:FormatStatement[]=[{statement:'INSERT INTO article_format_wire_write_scope VALUES(1)'},{statement:'UPDATE article_format_wire_events SET ack=?,last_error=NULL WHERE tenant_id=? AND company_id=? AND event_id=?',values:[canonicalContent(validated),...this.scope(),event.event_id]},
     {statement:"UPDATE article_format_outbox SET state='ACKED' WHERE tenant_id=? AND company_id=? AND event_id=?",values:[...this.scope(),event.event_id]}];
@@ -266,7 +274,7 @@ export function drainFormatWireEvents(store:ArticleFormatPosting,transport:Forma
     await store.acknowledge(pending.event,ack);
    }catch(error){
     await store.failed(pending.event.event_id,error instanceof Error?error.message:'POS_FORMAT_RETRY_LATER',
-     !(error instanceof FormatHTTPError)||error.retryable,pending.attempts);
+     error instanceof FormatHTTPError?error.retryable:!(error instanceof ArticleFormatError&&error.code==='POS_FORMAT_ACK_PHYSICAL_EFFECT_MISMATCH'),pending.attempts);
    }
   }
  })().finally(()=>drains.delete(store));drains.set(store,work);return work;

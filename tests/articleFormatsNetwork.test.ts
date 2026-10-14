@@ -133,11 +133,56 @@ test('physical DAMAGED and NO_RETURN from negotiated ERP context do not return s
   assert.equal(collection(db,'productStocks')[0].quantity,89);assert.equal(collection(db,'inventoryLedger').at(-1).reversedCOGS,'0.00');db.close();
  }
 });
-test('LEGACY_B consumes assigned terminal fiscal buffer in same transaction and rolls back on failure',async()=>{
- const db=new SQLite(':memory:');db.pragma('foreign_keys=ON');seedCollections(db);const e=sale();e.fiscal={mode:'LEGACY_B',ncf_type:'B02',ncf:'B0200000001'};
- db.prepare('INSERT INTO collections VALUES(?,?,?)').run('localFiscalBuffer',JSON.stringify([{id:'B02',type:'B02',prefix:'B02',currentNumber:1,endNumber:10,expiryDate:'2027-01-01',terminalId:context.scope.terminalId}]),'fixture');
- await assert.rejects(new ArticleFormatPosting(sqlitePort(db,{before:13}),context,masters).post(e,opts),/injected/);
- assert.equal(collection(db,'localFiscalBuffer')[0].currentNumber,1);
- await new ArticleFormatPosting(sqlitePort(db),context,masters).post(e,opts);
- assert.equal(collection(db,'localFiscalBuffer')[0].currentNumber,2);db.close();
+
+test('LEGACY_B consumes assigned buffer atomically; every fiscal write/commit boundary rolls back',async()=>{
+ for(let before=0;before<=15;before++){
+  const db=new SQLite(':memory:');db.pragma('foreign_keys=ON');seedCollections(db);const e=sale();e.fiscal={mode:'LEGACY_B',ncf_type:'B02',ncf:'B0200000001'};
+  db.prepare('INSERT INTO collections VALUES(?,?,?)').run('localFiscalBuffer',JSON.stringify([{id:'B02',type:'B02',prefix:'B02',currentNumber:1,endNumber:10,expiryDate:'2027-01-01',terminalId:context.scope.terminalId}]),'fixture');
+  const original=JSON.stringify(db.prepare('SELECT * FROM collections ORDER BY key').all());
+  await assert.rejects(new ArticleFormatPosting(sqlitePort(db,{before}),context,masters).post(e,opts),/injected/);
+  assert.equal(JSON.stringify(db.prepare('SELECT * FROM collections ORDER BY key').all()),original);
+  assert.equal((db.prepare('SELECT COUNT(*) n FROM article_format_outbox').get() as {n:number}).n,0);
+  await new ArticleFormatPosting(sqlitePort(db),context,masters).post(e,opts);
+  assert.equal(collection(db,'localFiscalBuffer')[0].currentNumber,2);db.close();
+ }
+});
+test('every ACK write/commit boundary keeps document, journal and Outbox pending together',async()=>{
+ for(let before=0;before<=6;before++){
+  const db=new SQLite(':memory:');db.pragma('foreign_keys=ON');seedCollections(db);const e=sale();
+  await new ArticleFormatPosting(sqlitePort(db),context,masters).post(e,opts);
+  const receipt=await ack(e),original=JSON.stringify(db.prepare('SELECT * FROM collections ORDER BY key').all());
+  await assert.rejects(new ArticleFormatPosting(sqlitePort(db,{before}),context,masters).acknowledge(e,receipt),/injected/);
+  assert.equal(JSON.stringify(db.prepare('SELECT * FROM collections ORDER BY key').all()),original);
+  assert.equal((db.prepare('SELECT state FROM article_format_outbox').get() as {state:string}).state,'PENDING');
+  assert.equal((db.prepare('SELECT ack FROM article_format_wire_events').get() as {ack:string|null}).ack,null);
+  assert.equal((db.prepare('SELECT COUNT(*) n FROM article_format_wire_write_scope').get() as {n:number}).n,0);db.close();
+ }
+});
+test('ACK with missing expected SALE/RESTOCK inventory effect remains pending',async t=>{
+ const db=new SQLite(':memory:');t.after(()=>db.close());seedCollections(db);const e=sale(),store=new ArticleFormatPosting(sqlitePort(db),context,masters);
+ await store.post(e,opts);await assert.rejects(store.acknowledge(e,{...await ack(e),inventory_movement_ids:[]}),/PHYSICAL_EFFECT_MISMATCH/);
+ await store.acknowledge(e,await ack(e));const l=returnWireLine(e.lines[0],[],'0.5',id(60));
+ const r:WireEvent={...e,event_id:id(61),transaction_id:id(62),event_type:'ARTICLE_FORMAT_RETURN_V1',source_event_id:e.event_id,lines:[l],payments:[{payment_id:id(63),method:'cash',amount:'540.00'}],totals:wireTotals([l])};delete r.master;
+ await store.post(r,{...opts,seriesId:id(10)});
+ await assert.rejects(store.acknowledge(r,{...await ack(r),inventory_movement_ids:[]}),/PHYSICAL_EFFECT_MISMATCH/);
+ assert.equal((await store.pending())[0].event.event_id,r.event_id);
+});
+test('refund with no physical debit does not impose negative-stock sale permission',async t=>{
+ const db=new SQLite(':memory:');t.after(()=>db.close());seedCollections(db);const e=sale(),port=sqlitePort(db),store=new ArticleFormatPosting(port,context,masters);
+ await store.post(e,opts);await store.acknowledge(e,await ack(e));
+ // Authorized writer changes commitment, emulating a later reservation.
+ const stocks=collection(db,'productStocks');stocks[0].qtyCommitted=100;
+ await port.executeAtomic([{statement:'INSERT INTO article_format_wire_write_scope VALUES(1)'},{statement:'UPDATE collections SET value=? WHERE key=?',values:[JSON.stringify(stocks),'productStocks']},{statement:'DELETE FROM article_format_wire_write_scope'}]);
+ for(const [i,return_policy] of (['DAMAGED','NO_RETURN','RESTOCK'] as const).entries()){
+  const l=returnWireLine(e.lines[0],[],'0.1',id(70+i)),r:WireEvent={...e,event_id:id(80+i),transaction_id:id(90+i),event_type:'ARTICLE_FORMAT_RETURN_V1',source_event_id:e.event_id,lines:[l],payments:[{payment_id:id(100+i),method:'cash',amount:'108.00'}],totals:wireTotals([l])};delete r.master;
+  await new ArticleFormatPosting(port,{...context,return_policy},masters).post(r,{...opts,seriesId:id(10)});
+ }
+ assert.equal(collection(db,'productStocks')[0].quantity,91.4);
+});
+test('tax policy preserves seven decimal places and inclusive promotion end time',()=>{
+ const input={lineId:id(14),formatId:'case',variantId:null,tariffId:id(6),quantity:'2',occurredAt:'2026-10-14T17:00:00.000-04:00',terminalId:id(4)};
+ const taxed={...policy,tax_rate:'0.1234567'};assert.equal(saleWireLine(dto,taxed,input).tax_amount,'266.67');
+ const promo={...policy,promotions:[{id:id(110),type:'DISCOUNT',is_active:true,terminal_ids:[id(4)],benefit_value:'10',schedule_end_time:'17:00:00'}]};
+ assert.equal(saleWireLine(dto,promo,{...input,promotionId:id(110)}).discount_amount,'216.00');
+ assert.throws(()=>saleWireLine(dto,promo,{...input,occurredAt:'2026-10-14T17:00:00.001-04:00',promotionId:id(110)}),/PROMOTION_FORBIDDEN/);
 });

@@ -128,7 +128,7 @@ export class ArticleFormatNetworkMaster {
   }
   private validatePolicy(dto:ArticleFormatsDTO,p:NetworkLinePolicy):NetworkLinePolicy {
     requireFormat(p&&p.item_id===dto.item_id&&p.warehouse_id===this.context.scope.warehouseId,'POS_FORMAT_POLICY_SCOPE_MISMATCH');
-    decimal(p.base_unit_cost,6);decimal(p.tax_rate,6);requireFormat(new Money(p.tax_rate).lte(1),'POS_FORMAT_POLICY_INVALID');
+    decimal(p.base_unit_cost,6);decimal(p.tax_rate,50);requireFormat(new Money(p.tax_rate).lte(1),'POS_FORMAT_POLICY_INVALID');
     requireFormat(decimal(p.max_discount_rate,4).lte(100),'POS_FORMAT_POLICY_INVALID');
     requireFormat(Array.isArray(p.variant_ids)&&new Set(p.variant_ids).size===p.variant_ids.length
       &&p.variant_ids.every(id=>typeof id==='string'&&id.length>0)&&p.variant_skus&&typeof p.variant_skus==='object','POS_FORMAT_POLICY_INVALID');
