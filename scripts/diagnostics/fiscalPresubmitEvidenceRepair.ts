@@ -73,7 +73,9 @@ export async function prepareFiscalPresubmitEvidenceRepair(input: FiscalEvidence
     ...summary,guardProof};
   const mutations=[['transactions',current],['transactionHistory',history]].map(([collection,document])=>{
     const original=document as Document;
-    return {collectionName:collection as string,v3FiscalMetadataOperation:'PRESUBMIT_EVIDENCE_REPAIR' as const,v3CurrentCatalog:input.currentCatalog,expectedDocument:JSON.stringify(original),document:{...original,
+    return {collectionName:collection as string,v3FiscalMetadataOperation:'PRESUBMIT_EVIDENCE_REPAIR' as const,v3CurrentCatalog:input.currentCatalog,
+      ...(collection === 'transactionHistory' ? {v3ExpectedRetainedDocument:{collection:'transactions',id:current.id,expected:JSON.stringify(current)}} : {}),
+      expectedDocument:JSON.stringify(original),document:{...original,
       fiscalSyncError:MSELLER_UNSUPPORTED_VAT_ERROR,fiscalResponseMessage:MSELLER_UNSUPPORTED_VAT_ERROR,
       fiscalPreSubmitRecoveryAudit:[...(original.fiscalPreSubmitRecoveryAudit||[]),audit]}};
   });

@@ -80,7 +80,8 @@ test('used native baseline projection/attempt/audit survive actual file close/re
  const {mkdtempSync,rmSync}=await import('node:fs'),{tmpdir}=await import('node:os'),{join}=await import('node:path');
  const {createFiscalClassificationProjection,consumeFiscalClassificationAttempt}=await import('../utils/fiscalClassificationProjection');
  const directory=mkdtempSync(join(tmpdir(),'clic-cas-protected-')),path=join(directory,'native.db');
- const input=await fixture(),plan=await prepareFiscalPresubmitEvidenceRepair(input),f=sqlite(input,path);
+ const input=await fixture(),f=sqlite(input,path);advanceCatalog(f,input);
+ const plan=await prepareFiscalPresubmitEvidenceRepair(input);
  let persisted:any;
  try{
   await executeApprovedFiscalPresubmitEvidenceRepair(plan,f.adapter,async()=>input.scope,{approved:true,operationId:plan.operationId});
@@ -177,5 +178,36 @@ for(const change of [{fiscalProvider:'DIGIFACT'},{ncfType:'E34'},{electronicNcf:
   const mutation={...plan.mutations[0],expectedDocument:JSON.stringify(invalid),document:{...plan.mutations[0].document,...change}};
   await assert.rejects(()=>f.adapter.saveDocumentsAtomically([mutation]),/METADATA_MUTATION_DENIED/);
   assert.deepEqual(f.read('transactions'),invalid);assert.deepEqual(f.read('transactionHistory'),input.history);
+ }finally{f.sql.close();}
+});
+
+function advanceCatalog(f:ReturnType<typeof sqlite>,input:FiscalEvidenceRepairInput){
+ input.currentCatalog={syncId:'S2',syncVersion:2,binding:input.scope.binding};
+ f.sql.exec("UPDATE master_v3_operational_owner SET sync_id='S2',sync_version=2;UPDATE master_v3_state SET active_sync_id='S2',active_version=2;");
+ for(const [id,version] of [['S',1],['S2',2]] as const) f.sql.prepare('INSERT INTO master_v3_catalog_owners VALUES(?,?,?,?,?,?,?)').run(id,version,input.scope.binding,'S',1,1,'C');
+}
+test('S2 active catalog/S1 retained financial source permits both repair copies atomically with explicit canonical history context',async()=>{
+ const input=await fixture(),f=sqlite(input);advanceCatalog(f,input);
+ try{
+  const plan=await prepareFiscalPresubmitEvidenceRepair(input);
+  assert.deepEqual(plan.mutations[1].v3ExpectedRetainedDocument,{collection:'transactions',id:input.current.id,expected:JSON.stringify(input.current)});
+  await executeApprovedFiscalPresubmitEvidenceRepair(plan,f.adapter,async()=>input.scope,{approved:true,operationId:plan.operationId});
+  for(const name of ['transactions','transactionHistory']){
+   const read=f.read(name);assert.equal(read.fiscalSyncError,MSELLER_UNSUPPORTED_VAT_ERROR);assert.equal(read.fiscalPreSubmitRecoveryAudit.length,1);
+   assert.deepEqual(read.items,input.current.items);assert.equal(read.v3CommitFingerprint,input.current.v3CommitFingerprint);
+  }
+  assert.equal(f.sql.prepare('SELECT sync_id FROM master_v3_inventory_state').get()?.sync_id,'S');
+  assert.equal(f.sql.prepare('SELECT sync_id FROM master_v3_operational_owner').get()?.sync_id,'S2');
+ }finally{f.sql.close();}
+});
+for(const stale of ['transactions','transactionHistory'])test(`S2/S1 stale ${stale} refuses complete repair with both copies unchanged`,async()=>{
+ const input=await fixture(),f=sqlite(input);advanceCatalog(f,input);
+ try{
+  const plan=await prepareFiscalPresubmitEvidenceRepair(input);
+  const altered={...(stale==='transactions'?input.current:input.history),fiscalResponseMessage:'changed after preparation'};
+  f.sql.prepare('UPDATE documents SET data=? WHERE collection_name=?').run(JSON.stringify(altered),stale);
+  await assert.rejects(()=>executeApprovedFiscalPresubmitEvidenceRepair(plan,f.adapter,async()=>input.scope,{approved:true,operationId:plan.operationId}),/CONCURRENT_FINANCIAL_UPDATE|RETAINED_TICKET_CHANGED/);
+  assert.deepEqual(f.read('transactions'),stale==='transactions'?altered:input.current);
+  assert.deepEqual(f.read('transactionHistory'),stale==='transactionHistory'?altered:input.history);
  }finally{f.sql.close();}
 });
