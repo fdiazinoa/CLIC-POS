@@ -111,3 +111,33 @@ for(const field of ['fiscalResponseCode','fiscalSignedXml','fiscalQrCode']) test
  await assert.rejects(()=>consumeFiscalClassificationAttempt(proved),/RECONCILIATION/);
  for(const value of [null,undefined,'','  ']) assert.equal(canProjectFiscalClassification({...tx,[field]:value}),true);
 });
+
+test('older Android WebView without structuredClone creates isolated fiscal audit and wire rows without changing the financial source',async()=>{
+ const descriptor=Object.getOwnPropertyDescriptor(globalThis,'structuredClone');
+ assert.equal(Reflect.deleteProperty(globalThis,'structuredClone'),true);
+ try{
+  const tx=fixture(),original=JSON.stringify(tx);
+  const projection=await createFiscalClassificationProjection(tx,taxes,'U','Clasificar servicio legal','B');
+  assert.notStrictEqual(projection.before,tx.taxBreakdown);assert.notStrictEqual(projection.after,tx.taxBreakdown);
+  assert.notStrictEqual(projection.before,projection.after);
+  for(let index=0;index<tx.taxBreakdown!.length;index++){
+   assert.notStrictEqual(projection.before[index],tx.taxBreakdown![index]);
+   assert.notStrictEqual(projection.after[index],tx.taxBreakdown![index]);
+   assert.notStrictEqual(projection.before[index],projection.after[index]);
+  }
+  const corrected={...tx,fiscalClassificationProjection:projection},beforeProjection=JSON.stringify(projection);
+  const wire=await applyFiscalClassificationProjection(corrected);
+  assert.notStrictEqual(wire.taxBreakdown,projection.after);assert.notStrictEqual(wire.taxBreakdown,projection.before);
+  for(let index=0;index<wire.taxBreakdown!.length;index++)assert.notStrictEqual(wire.taxBreakdown![index],projection.after[index]);
+  assert.equal(wire.taxBreakdown![1].type,'SERVICE_CHARGE');assert.equal(wire.taxBreakdown![1].fiscalAdditionalTaxCode,'001');
+  assert.equal(wire.netAmount,85);assert.equal(wire.taxAmount,23.8);assert.equal(wire.total,108.8);
+  assert.equal(wire.ncf,tx.ncf);assert.strictEqual(wire.payments,tx.payments);assert.strictEqual(wire.items,tx.items);
+  wire.taxBreakdown![0].amount=999;wire.taxBreakdown![1].name='wire-only';wire.taxBreakdown!.push({...wire.taxBreakdown![0]});
+  assert.equal(JSON.stringify(projection),beforeProjection);assert.equal(JSON.stringify(tx),original);
+  projection.before[0].name='audit-only';projection.after[1].amount=999;
+  assert.equal(JSON.stringify(tx),original);
+ }finally{
+  if(descriptor)Object.defineProperty(globalThis,'structuredClone',descriptor);
+  else Reflect.deleteProperty(globalThis,'structuredClone');
+ }
+});

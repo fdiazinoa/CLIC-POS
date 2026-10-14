@@ -54,7 +54,7 @@ export const createFiscalClassificationProjection = async (tx: Transaction, taxe
     return existing;
   }
   return { version: 1, sourceChecksum: await fiscalClassificationChecksum(tx), binding, correctedAt: new Date().toISOString(),
-    correctedById: actorId, reason: reason.trim(), before: structuredClone(before), after };
+    correctedById: actorId, reason: reason.trim(), before: before.map(row => ({ ...row })), after };
 };
 
 /** Returns only a wire copy; financial and provider history is never rewritten. */
@@ -73,7 +73,7 @@ export const applyFiscalClassificationProjection = async (tx: Transaction): Prom
     const { type: _newType, fiscalAdditionalTaxCode: _newCode, ...next } = row;
     return JSON.stringify(old) !== JSON.stringify(next);
   })) throw new Error('FISCAL_CLASSIFICATION_SOURCE_INVALID');
-  return { ...tx, taxBreakdown: structuredClone(projection.after) };
+  return { ...tx, taxBreakdown: projection.after.map(row => ({ ...row })) };
 };
 
 /** Durable one-shot consumption must commit by CAS before any issue request. */
