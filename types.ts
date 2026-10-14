@@ -460,6 +460,7 @@ export interface TaxDefinition {
   name: string;
   rate: number;
   type: 'VAT' | 'SERVICE_CHARGE' | 'EXEMPT' | 'OTHER';
+  active?: boolean;
 }
 
 export interface CompanyInfo {
