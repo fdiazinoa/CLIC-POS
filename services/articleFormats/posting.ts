@@ -228,7 +228,7 @@ export class ArticleFormatPosting {
   });
  }
  private async document(sql:FormatSQL,id:string){const row=(await sql.query<{value:string}>('SELECT value FROM collections WHERE key=?',['transactionHistory']))[0];return row&&JSON.parse(row.value).find(t=>t.id===id);}
- async pending(now=Date.now()):Promise<{event:WireEvent;hash:string;context:NetworkContext;attempts:number}[]>{
+ async pending(now=Number.MAX_SAFE_INTEGER):Promise<{event:WireEvent;hash:string;context:NetworkContext;attempts:number}[]>{
   const rows=await this.sql.query<SavedWire>(`SELECT o.content,w.content_hash,w.context,w.attempts FROM article_format_wire_events w
    JOIN article_format_outbox o USING(tenant_id,company_id,event_id) WHERE w.tenant_id=? AND w.company_id=? AND o.state='PENDING' AND w.next_attempt<=? ORDER BY w.rowid`,[...this.scope(),now]);
   return rows.map(r=>({event:validateWireEvent(JSON.parse(r.content)),hash:r.content_hash,context:JSON.parse(r.context),attempts:r.attempts}));
@@ -265,7 +265,7 @@ const drains=new WeakMap<ArticleFormatPosting,Promise<void>>();
 export function drainFormatWireEvents(store:ArticleFormatPosting,transport:FormatTransport):Promise<void>{
  const running=drains.get(store);if(running)return running;
  const work=(async()=>{
-  for(const pending of await store.pending()){
+  for(const pending of await store.pending(Date.now())){
    try{
     // ERP admits durable receipt recovery even when new admission is closed.
     // Do not require re-negotiation here: it would strand already applied returns.
