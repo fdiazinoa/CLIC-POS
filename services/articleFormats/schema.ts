@@ -80,3 +80,23 @@ CREATE TABLE IF NOT EXISTS article_format_base_movements (
   FOREIGN KEY(tenant_id,company_id,event_id) REFERENCES article_format_outbox(tenant_id,company_id,event_id)
 );
 `;
+
+export const ARTICLE_FORMAT_WIRE_SCHEMA = `
+CREATE TABLE IF NOT EXISTS article_format_wire_events (
+ tenant_id TEXT NOT NULL,company_id TEXT NOT NULL,event_id TEXT NOT NULL,transaction_id TEXT NOT NULL,
+ content_hash TEXT NOT NULL,context TEXT NOT NULL,policies TEXT NOT NULL,ack TEXT,
+ attempts INTEGER NOT NULL DEFAULT 0,next_attempt INTEGER NOT NULL DEFAULT 0,last_error TEXT,
+ PRIMARY KEY(tenant_id,company_id,event_id),UNIQUE(tenant_id,company_id,transaction_id),
+ FOREIGN KEY(tenant_id,company_id,event_id) REFERENCES article_format_outbox(tenant_id,company_id,event_id)
+);
+
+CREATE TABLE IF NOT EXISTS article_format_wire_write_scope (id INTEGER PRIMARY KEY CHECK(id=1));
+CREATE TRIGGER IF NOT EXISTS article_format_wire_legacy_insert BEFORE INSERT ON collections
+WHEN NEW.key IN ('transactions','transactionHistory','payments','internalSequences','globalSequenceCounter','inventoryLedger','productStocks','products','localFiscalBuffer')
+ AND EXISTS (SELECT 1 FROM article_format_wire_events) AND NOT EXISTS (SELECT 1 FROM article_format_wire_write_scope)
+BEGIN SELECT RAISE(ABORT,'POS_FORMAT_LEGACY_WRITER_FORBIDDEN'); END;
+CREATE TRIGGER IF NOT EXISTS article_format_wire_legacy_update BEFORE UPDATE ON collections
+WHEN NEW.key IN ('transactions','transactionHistory','payments','internalSequences','globalSequenceCounter','inventoryLedger','productStocks','products','localFiscalBuffer')
+ AND EXISTS (SELECT 1 FROM article_format_wire_events) AND NOT EXISTS (SELECT 1 FROM article_format_wire_write_scope)
+BEGIN SELECT RAISE(ABORT,'POS_FORMAT_LEGACY_WRITER_FORBIDDEN'); END;
+`;
