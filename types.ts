@@ -1899,6 +1899,8 @@ export interface Transaction {
   fiscalSecurityCode?: string;
   fiscalResponseMessage?: string;
   fiscalCorrectionAudit?: FiscalCorrectionAuditEntry[];
+  fiscalClassificationProjection?: FiscalClassificationProjection;
+  fiscalClassificationAttemptedAt?: string;
   affectedNCF?: string;             // NCF de la factura afectada (para Notas de Crédito B04)
   affectedInvoiceNumber?: string;   // No. de factura afectada (displayId para búsquedas)
   affectedInvoiceDate?: string;
@@ -2006,11 +2008,23 @@ export interface FiscalCorrectionAuditEntry {
   next: FiscalDocumentCorrectionSnapshot;
 }
 
+export interface FiscalClassificationProjection {
+  version: 1;
+  sourceChecksum: string;
+  binding: string;
+  correctedAt: string;
+  correctedById: string;
+  reason: string;
+  before: NonNullable<Transaction['taxBreakdown']>;
+  after: NonNullable<Transaction['taxBreakdown']>;
+}
+
 export interface FiscalDocumentCorrectionInput {
   fiscalCode: FiscalDocumentCode;
   customerId?: string;
   reason: string;
   recalculateTaxes: boolean;
+  classificationOnly?: boolean;
 }
 
 export type ViewState =
