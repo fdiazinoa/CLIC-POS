@@ -141,6 +141,19 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
               if (requireAbsent || replaceCollections.length || documents.some(row => !row.v3FiscalMetadataOperation)) {
                 throw new Error('SYNC_V3_FISCAL_METADATA_MUTATION_DENIED');
               }
+              if (documents.some(row => row.v3FiscalMetadataOperation === 'FISCAL_STATUS_RECONCILE')) {
+                const transaction = documents.find(row => row.collectionName === 'transactions');
+                const history = documents.find(row => row.collectionName === 'transactionHistory');
+                if (documents.length !== 2 || !transaction || !history
+                  || documents.some(row => row.v3FiscalMetadataOperation !== 'FISCAL_STATUS_RECONCILE')
+                  || transaction.document.id !== history.document.id
+                  || JSON.stringify(transaction.document.fiscalStatusProof) !== JSON.stringify(history.document.fiscalStatusProof)
+                  || history.v3ExpectedRetainedDocument?.collection !== 'transactions'
+                  || history.v3ExpectedRetainedDocument.id !== transaction.document.id
+                  || history.v3ExpectedRetainedDocument.expected !== transaction.expectedDocument) {
+                  throw new Error('SYNC_V3_FISCAL_METADATA_MUTATION_DENIED');
+                }
+              }
               await db.execute('BEGIN TRANSACTION;', false);
               try {
                 await this.assertV3FinancialBaseline(documents);

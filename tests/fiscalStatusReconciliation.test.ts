@@ -200,3 +200,45 @@ test('missing recorded store or wrong returned store cannot establish acceptance
  const f=await fixture();assert.equal(await verifyFiscalStatusProof(f.proof,{...f.scope,storeId:undefined} as any,f.tx),false);
  assert.equal(await verifyFiscalStatusProof({...f.proof,scope:{...f.proof.scope,storeId:'foreign'}},f.scope,f.tx),false);
 });
+
+test('actual App durable callback prepends missing React rows, updates existing rows, and legacy history failure warns without dropping publication',async()=>{
+ const {transform}=await import('esbuild');const source=readFileSync(new URL('../App.tsx',import.meta.url),'utf8');
+ const publish=source.slice(source.indexOf('const publishFiscalTransaction ='),source.indexOf('const loadFiscalStatusContext ='));
+ const upsert=source.slice(source.indexOf('const upsertFiscalTransaction ='),source.indexOf('const correctFiscalDocument ='));
+ const code=(await transform(publish+upsert,{loader:'ts'})).code;
+ const create=new Function('f',`const {setTransactions,window,db,dbAdapter,LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED,getLargeMasterSyncV3OperationalSession,console}=f;const useCallback=(fn)=>fn;${code}return upsertFiscalTransaction;`);
+ let rows:any[]=[{id:'existing',total:1}],stored:any=null,warnings=0,events=0,saves:string[]=[];
+ const db={getDocument:async()=>stored,saveDocument:async(collection:string,row:any)=>{
+  saves.push(collection);if(collection==='transactionHistory')throw Error('legacy mirror unavailable');stored=row;
+ }};
+ const callback=create({setTransactions:(update:any)=>{rows=update(rows);},window:{dispatchEvent:()=>{events++;}},db,dbAdapter:{},
+  LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED:false,getLargeMasterSyncV3OperationalSession:()=>{throw Error('legacy must not open V3');},console:{warn:()=>{warnings++;}}});
+ const next={id:'missing',fiscalSyncStatus:'ERROR',total:108.8};await callback(next);
+ assert.deepEqual(saves,['transactions','transactionHistory']);assert.equal(warnings,1);assert.equal(events,1);assert.deepEqual(rows,[next,{id:'existing',total:1}]);
+ await callback({...next,fiscalResponseMessage:'updated'});assert.equal(rows.length,2);assert.equal((rows[0] as any).fiscalResponseMessage,'updated');
+ const before=rows;db.saveDocument=async()=>{throw Error('primary write failed');};await assert.rejects(()=>callback({...next,fiscalResponseMessage:'must not publish'}));assert.strictEqual(rows,before);assert.equal(events,2);
+});
+
+test('actual App component consultation props are absent for legacy and retain GET callback for V3',async()=>{
+ const source=readFileSync(new URL('../App.tsx',import.meta.url),'utf8');
+ const expressions=[...source.matchAll(/onConsultFiscalStatus=\{([^}]+)\}/g)].map(match=>match[1]);assert.equal(expressions.length,2);
+ const callback=()=>{};for(const expression of expressions){
+  const evaluate=new Function('LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED','consultFiscalStatus',`return (${expression});`);
+  assert.equal(evaluate(false,callback),undefined);assert.strictEqual(evaluate(true,callback),callback);
+ }
+});
+
+for(const shape of ['single','mixedId','mixedOperation','differentProof','missingRetained','wrongRetained'] as const)test(`native status reconciliation rejects ${shape} batch before either write`,async()=>{
+ const f=await native();try{
+  let mutations:any[]=[];f.deps.commit=async(value:any)=>{mutations=value;};f.deps.publish=()=>{};await f.worker.consult('27');
+  assert.equal(mutations.length,2);const beforeTx=f.read('transactions'),beforeHistory=f.read('transactionHistory');
+  if(shape==='single')mutations=mutations.slice(0,1);
+  if(shape==='mixedId')mutations[1].document={...mutations[1].document,id:'other'};
+  if(shape==='mixedOperation')mutations[1].v3FiscalMetadataOperation='FISCAL_LOOKUP_APPROVAL_APPEND';
+  if(shape==='differentProof')mutations[1].document={...mutations[1].document,fiscalStatusProof:{...mutations[1].document.fiscalStatusProof,observedAt:'different'}};
+  if(shape==='missingRetained')delete mutations[1].v3ExpectedRetainedDocument;
+  if(shape==='wrongRetained')mutations[1].v3ExpectedRetainedDocument={...mutations[1].v3ExpectedRetainedDocument,expected:'{}'};
+  await assert.rejects(()=>f.adapter.saveDocumentsAtomically(mutations),/FISCAL_METADATA_MUTATION_DENIED/);
+  assert.deepEqual(f.read('transactions'),beforeTx);assert.deepEqual(f.read('transactionHistory'),beforeHistory);
+ }finally{f.sql.close();}
+});

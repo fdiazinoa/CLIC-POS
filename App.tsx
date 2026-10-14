@@ -10944,7 +10944,9 @@ const AppContent: React.FC = () => {
   }, [customers, transactions]);
 
   const publishFiscalTransaction = useCallback((transaction: Transaction) => {
-    setTransactions(previous => previous.map(row => row.id === transaction.id ? transaction : row));
+    setTransactions(previous => previous.some(row => row.id === transaction.id)
+      ? previous.map(row => row.id === transaction.id ? transaction : row)
+      : [transaction, ...previous]);
     window.dispatchEvent(new Event('transactionsUpdated'));
   }, []);
 
@@ -11017,7 +11019,11 @@ const AppContent: React.FC = () => {
       ]);
     } else {
       await db.saveDocument('transactions',nextTransaction);
-      await db.saveDocument('transactionHistory',nextTransaction);
+      try {
+        await db.saveDocument('transactionHistory',nextTransaction);
+      } catch (error) {
+        console.warn('[Fiscal] No se pudo actualizar el espejo del historial',error);
+      }
     }
     const stored = await db.getDocument('transactions',nextTransaction.id) as Transaction;
     if (stored) publishFiscalTransaction(stored);
@@ -14340,7 +14346,7 @@ const AppContent: React.FC = () => {
             }}
             onClose={() => setCurrentView('POS')}
             onRetryFiscalDocument={retryFiscalDocument}
-            onConsultFiscalStatus={consultFiscalStatus}
+            onConsultFiscalStatus={LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED ? consultFiscalStatus : undefined}
           />
         );
 
@@ -14384,7 +14390,7 @@ const AppContent: React.FC = () => {
               }
             }}
             onRetryFiscalDocument={retryFiscalDocument}
-            onConsultFiscalStatus={consultFiscalStatus}
+            onConsultFiscalStatus={LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED ? consultFiscalStatus : undefined}
             onCorrectFiscalDocument={correctFiscalDocument}
           />
         );
