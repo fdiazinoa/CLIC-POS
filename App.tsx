@@ -1,3 +1,7 @@
+import { attachFiscalStatusLifecycle } from './services/fiscal/FiscalStatusLifecycle';
+import { FiscalStatusReconciler } from './services/fiscal/FiscalStatusReconciler';
+import { fiscalStatusSourceChecksum, type FiscalStatusScope } from './services/fiscal/FiscalStatusProof';
+import { getScopedFiscalDocumentStatus } from './services/fiscal/FiscalScopedStatusTransport';
 import { createFiscalClassificationProjection, canProjectFiscalClassification, consumeFiscalClassificationAttempt } from './utils/fiscalClassificationProjection';
 import { isV3CatalogHint } from './services/sync/LargeMasterSyncV3ManifestCheckpoint';
 import { applyLocalUserProfiles, LOCAL_USER_PROFILE_CHANGED } from './utils/localUserProfiles';
@@ -2376,6 +2380,7 @@ const AppContent: React.FC = () => {
   // --- SECURITY & DEVICE HANDSHAKE ---
   const [deviceId, setDeviceId] = useState<string>('');
   const [isDataLoaded, setIsDataLoaded] = useState<boolean>(false);
+  const [fiscalHistoryHydrated,setFiscalHistoryHydrated]=useState(false);
   const [initialConnError, setInitialConnError] = useState<string | null>(null);
   const [failedMasterIp, setFailedMasterIp] = useState<string>('');
   const initLoadStartedRef = useRef(false);
@@ -7475,6 +7480,7 @@ const AppContent: React.FC = () => {
                 ...(Array.isArray(activeTxns) ? activeTxns : []),
                 ...(Array.isArray(txHistory) ? txHistory : []),
               ]);
+              setFiscalHistoryHydrated(true);
               durableClosedOrderIds.forEach(orderId => closedRestaurantOrderIdsRef.current.add(orderId));
               if (durableClosedOrderIds.size > 0) {
                 setParkedTickets(previous => removeClosedRestaurantTickets(
@@ -10937,19 +10943,85 @@ const AppContent: React.FC = () => {
     };
   }, [customers, transactions]);
 
-  const upsertFiscalTransaction = useCallback(async (nextTransaction: Transaction) => {
-    setTransactions(prev => {
-      const exists = prev.some(tx => tx.id === nextTransaction.id);
-      if (exists) return prev.map(tx => tx.id === nextTransaction.id ? nextTransaction : tx);
-      return [nextTransaction, ...prev];
-    });
-    await db.saveDocument('transactions', nextTransaction);
-    try {
-      await db.saveDocument('transactionHistory', nextTransaction);
-    } catch (historyMirrorError) {
-      console.warn('⚠️ Fiscal history mirror update skipped:', historyMirrorError);
-    }
+  const publishFiscalTransaction = useCallback((transaction: Transaction) => {
+    setTransactions(previous => previous.map(row => row.id === transaction.id ? transaction : row));
+    window.dispatchEvent(new Event('transactionsUpdated'));
   }, []);
+
+  const loadFiscalStatusContext = useCallback(async () => {
+    const session = await getLargeMasterSyncV3OperationalSession();
+    await session.assertCurrent();
+    const persisted = resolvePersistedBusinessConfig(await db.get('config') as unknown);
+    if (!persisted || !dbAdapter.supportsV3FiscalMetadataCAS) throw new Error('FISCAL_STATUS_NATIVE_REQUIRED');
+    const identity = JSON.parse(session.binding);
+    const matches = (persisted.terminals || []).filter(terminal => terminal.id === identity[1] && terminal.config?.currentDeviceId === identity[2]);
+    const terminal = matches[0], binding = terminal?.config?.erpBinding;
+    if (matches.length !== 1 || binding?.tenantId !== identity[0] || !binding?.companyId || !binding?.storeId) throw new Error('FISCAL_STATUS_SCOPE_CHANGED');
+    const effective = getEffectiveFiscalComplianceConfig(persisted,terminal.config);
+    const environment = getProviderEnvironment(effective,'MSELLER');
+    return { scope: { providerId:'MSELLER' as const,environment,issuerRnc:String(persisted.companyInfo?.rnc || '').replace(/\D/g,''),
+      tenantId:binding.tenantId,companyId:binding.companyId,terminalId:terminal.id,deviceId:identity[2],storeId:binding.storeId,binding:session.binding },
+      catalog:{...session.ready.runtime.version,binding:session.binding},assertCurrent:async()=> {
+        await session.assertCurrent();
+        const fresh = resolvePersistedBusinessConfig(await db.get('config') as unknown);
+        const current = fresh?.terminals?.filter(row=>row.id===terminal.id && row.config?.currentDeviceId===identity[2]);
+        if (current?.length!==1 || current[0].config?.erpBinding?.tenantId!==binding.tenantId
+          || current[0].config?.erpBinding?.companyId!==binding.companyId || current[0].config?.erpBinding?.storeId!==binding.storeId
+          || String(fresh?.companyInfo?.rnc || '').replace(/\D/g,'')!==String(persisted.companyInfo?.rnc || '').replace(/\D/g,'')
+          || getProviderEnvironment(getEffectiveFiscalComplianceConfig(fresh,current[0].config),'MSELLER')!==environment) throw new Error('FISCAL_STATUS_SCOPE_CHANGED');
+      } };
+  }, []);
+  const fiscalStatusWorker = useMemo(() => new FiscalStatusReconciler({
+    context:loadFiscalStatusContext,
+    pair:async id => {
+      const [transaction,history] = await Promise.all([db.getDocument('transactions',id),db.getDocument('transactionHistory',id)]);
+      if (!transaction || !history) throw new Error('FISCAL_STATUS_SOURCE_REQUIRED');
+      return {transaction:transaction as Transaction,history:history as Transaction};
+    },
+    candidates:async(binding,after,limit)=> {
+      if (!dbAdapter.getFiscalStatusCandidates) throw new Error('FISCAL_STATUS_NATIVE_REQUIRED');
+      return dbAdapter.getFiscalStatusCandidates(binding,after,limit);
+    },
+    commit:async mutations=> {
+      if (!dbAdapter.saveDocumentsAtomically) throw new Error('FISCAL_STATUS_NATIVE_REQUIRED');
+      await dbAdapter.saveDocumentsAtomically(mutations);
+    },get:getScopedFiscalDocumentStatus,publish:publishFiscalTransaction,
+  }),[loadFiscalStatusContext,publishFiscalTransaction]);
+  const consultFiscalStatus = useCallback(async(transaction:Transaction):Promise<string>=> {
+    const stored = await db.getDocument('transactions',transaction.id) as Transaction | null;
+    if (!stored) throw new Error('FISCAL_STATUS_SOURCE_REQUIRED');
+    let approvedEnvironment: number | undefined;
+    if (!stored.fiscalSubmissionScope && !stored.fiscalLookupApproval) {
+      const context = await loadFiscalStatusContext();
+      const labels = ['TesteCF','Certificación','Producción'];
+      if (!window.confirm(`¿Consultar ${stored.ncf || stored.electronicNcf} en ${labels[context.scope.environment]} (${context.scope.environment})? Esta autorización sólo consulta el estado; no envía una factura.`)) {
+        return 'Consulta cancelada. No se modificó la evidencia fiscal.';
+      }
+      approvedEnvironment = context.scope.environment;
+    }
+    return fiscalStatusWorker.consult(transaction.id,true,currentUser?.id,approvedEnvironment);
+  },[fiscalStatusWorker,currentUser?.id,loadFiscalStatusContext]);
+
+  const upsertFiscalTransaction = useCallback(async (nextTransaction: Transaction) => {
+    const current = await db.getDocument('transactions',nextTransaction.id) as Transaction | null;
+    if (current?.fiscalSyncStatus === 'SYNCED') { publishFiscalTransaction(current); return; }
+    if (LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED && current?.v3InventoryBaseline) {
+      const history = await db.getDocument('transactionHistory',nextTransaction.id) as Transaction | null;
+      if (!history || !dbAdapter.saveDocumentsAtomically) throw new Error('FISCAL_STATUS_SOURCE_REQUIRED');
+      const session = await getLargeMasterSyncV3OperationalSession();await session.assertCurrent();
+      const catalog = { ...session.ready.runtime.version,binding:session.binding };
+      await dbAdapter.saveDocumentsAtomically([
+        {collectionName:'transactions',document:nextTransaction,expectedDocument:JSON.stringify(current),v3CurrentCatalog:catalog},
+        {collectionName:'transactionHistory',document:{...history,...nextTransaction},expectedDocument:JSON.stringify(history),v3CurrentCatalog:catalog,
+          v3ExpectedRetainedDocument:{collection:'transactions',id:current.id,expected:JSON.stringify(current)}},
+      ]);
+    } else {
+      await db.saveDocument('transactions',nextTransaction);
+      await db.saveDocument('transactionHistory',nextTransaction);
+    }
+    const stored = await db.getDocument('transactions',nextTransaction.id) as Transaction;
+    if (stored) publishFiscalTransaction(stored);
+  }, [publishFiscalTransaction]);
 
   const correctFiscalDocument = useCallback(async (
     transaction: Transaction,
@@ -11106,6 +11178,10 @@ const AppContent: React.FC = () => {
     deliveryMode?: 'LOCAL_DIRECT' | 'DELEGATED_ERP',
     attempt = 1
   ) => {
+    if (LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED && providerId === 'MSELLER') {
+      await fiscalStatusWorker.consult(transaction.id);
+      return;
+    }
     try {
       const result = await getFiscalDocumentStatus(
         providerId,
@@ -11168,7 +11244,7 @@ const AppContent: React.FC = () => {
         ).catch(console.error);
       }, 5000);
     }
-  }, [config.companyInfo, upsertFiscalTransaction]);
+  }, [config.companyInfo, upsertFiscalTransaction, fiscalStatusWorker]);
 
   const v3FiscalInFlightRef = useRef(new Map<string, Promise<void>>());
   const syncFiscalDocument = useCallback(async (transaction: Transaction, explicitClassificationRetry = false) => {
@@ -11229,7 +11305,8 @@ const AppContent: React.FC = () => {
       const establishmentCode = resolveFiscalProviderEstablishmentCode(providerConfig, fiscalCompliance, terminalConfig, config);
       const cashierCode = resolveFiscalProviderCashierCode(providerConfig, fiscalCompliance, terminalConfig, config);
       const fiscalSummary = candidate ? undefined : calculateTransactionFiscalSummary(transaction, config, { terminalConfig });
-      const baseTransaction: Transaction = {
+      const captureFirstSubmission = candidate && transaction.fiscalProviderStatus !== 'V3_ISSUE_REQUESTED' && !transaction.fiscalClassificationAttemptedAt;
+      let baseTransaction: Transaction = {
         ...(candidate ? (transaction.fiscalClassificationProjection ? transaction : buildV3FrozenFiscalProviderTransaction(transaction, fiscalConfig)) : {
           ...transaction, taxAmount: fiscalSummary!.taxTotal, netAmount: fiscalSummary!.subtotal,
           taxBreakdown: fiscalSummary!.taxBreakdown }),
@@ -11240,6 +11317,25 @@ const AppContent: React.FC = () => {
 
       await upsertFiscalTransaction(baseTransaction);
       if (candidate) transaction = baseTransaction;
+
+      if (captureFirstSubmission && providerId === 'MSELLER' && !baseTransaction.fiscalSubmissionScope) {
+        const context = await loadFiscalStatusContext();
+        if (context.scope.issuerRnc !== String(config.companyInfo?.rnc || '').replace(/\D/g,'')) throw new Error('FISCAL_SUBMISSION_SCOPE_CHANGED');
+        const source = await db.getDocument('transactions',transaction.id) as Transaction;
+        const scope: FiscalStatusScope = { ...context.scope,basis:'PERSISTED_SUBMISSION_INTENT',environment,
+          sourceChecksum:await fiscalStatusSourceChecksum(source),capturedAt:new Date().toISOString() };
+        await context.assertCurrent();
+        await dbAdapter.saveDocumentsAtomically!([{ collectionName:'transactions',document:{...source,fiscalSubmissionScope:scope},
+          expectedDocument:JSON.stringify(source),v3CurrentCatalog:context.catalog,v3FiscalMetadataOperation:'FISCAL_SUBMISSION_SCOPE_APPEND' }]);
+        baseTransaction = { ...baseTransaction,fiscalSubmissionScope:scope };transaction=baseTransaction;
+      }
+
+      const recordedScope = baseTransaction.fiscalSubmissionScope || baseTransaction.fiscalLookupApproval;
+      if (candidate && providerId === 'MSELLER' && recordedScope) {
+        const currentContext = await loadFiscalStatusContext();await currentContext.assertCurrent();
+        if (recordedScope.environment !== environment || recordedScope.issuerRnc !== String(config.companyInfo?.rnc || '').replace(/\D/g,'') || Object.keys(currentContext.scope).some(key =>
+          (recordedScope as any)[key] !== (currentContext.scope as any)[key])) throw new Error('FISCAL_SUBMISSION_SCOPE_CHANGED');
+      }
 
       const result = await issueFiscalDocument({
         providerId,
@@ -11313,7 +11409,7 @@ const AppContent: React.FC = () => {
       void operation.finally(() => v3FiscalInFlightRef.current.delete(transactionId)).catch(console.error);
     }
     return operation;
-  }, [config, pollFiscalDocumentStatus, upsertFiscalTransaction]);
+  }, [config, pollFiscalDocumentStatus, upsertFiscalTransaction, loadFiscalStatusContext]);
 
   const retryFiscalDocument = useCallback(async (transaction: Transaction): Promise<string> => {
     if (LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED) {
@@ -11387,6 +11483,7 @@ const AppContent: React.FC = () => {
 
     const resumePendingDelegatedFiscalDocuments = async () => {
       if (disposed || !navigator.onLine) return;
+      if (LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED) return;
       const storedTransactions = await db.get('transactions') as Transaction[] || [];
       const pendingMSeller = storedTransactions.filter((candidate) =>
         candidate.fiscalProvider === 'MSELLER'
@@ -11422,7 +11519,19 @@ const AppContent: React.FC = () => {
       disposed = true;
       window.removeEventListener('online', handleFiscalOnline);
     };
-  }, [syncFiscalDocument]);
+  }, [syncFiscalDocument,fiscalStatusWorker,isDataLoaded,fiscalHistoryHydrated,isSecurityLoaded]);
+
+  const fiscalStatusLifecycleKey=JSON.stringify((config.terminals || []).filter(terminal=>terminal.config?.currentDeviceId===deviceId)
+    .map(terminal=>[terminal.id,terminal.config?.currentDeviceId,terminal.config?.erpBinding?.tenantId,terminal.config?.erpBinding?.companyId,
+      terminal.config?.erpBinding?.storeId,getProviderEnvironment(getEffectiveFiscalComplianceConfig(config,terminal.config),'MSELLER')]));
+  useEffect(() => {
+    if (!LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED) return;
+    return attachFiscalStatusLifecycle(fiscalStatusWorker,{
+      hydrated:isDataLoaded&&fiscalHistoryHydrated&&isSecurityLoaded,
+      online:()=>navigator.onLine,addOnline:listener=>window.addEventListener('online',listener),removeOnline:listener=>window.removeEventListener('online',listener),
+      syncTime:backgroundSyncManager.getState().lastSyncTime,subscribe:listener=>backgroundSyncManager.subscribe(listener),
+    });
+  }, [fiscalStatusWorker,isDataLoaded,fiscalHistoryHydrated,isSecurityLoaded,deviceId,config.companyInfo.rnc,fiscalStatusLifecycleKey]);
 
   const handleTransactionComplete = async (txn: Transaction) => {
     const fiscalTerminal = (config.terminals || []).find(terminal => terminal.config?.currentDeviceId === deviceId);
@@ -14231,6 +14340,7 @@ const AppContent: React.FC = () => {
             }}
             onClose={() => setCurrentView('POS')}
             onRetryFiscalDocument={retryFiscalDocument}
+            onConsultFiscalStatus={consultFiscalStatus}
           />
         );
 
@@ -14274,6 +14384,7 @@ const AppContent: React.FC = () => {
               }
             }}
             onRetryFiscalDocument={retryFiscalDocument}
+            onConsultFiscalStatus={consultFiscalStatus}
             onCorrectFiscalDocument={correctFiscalDocument}
           />
         );

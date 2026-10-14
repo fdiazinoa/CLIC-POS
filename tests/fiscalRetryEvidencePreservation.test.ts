@@ -40,7 +40,7 @@ test('missing fresh persisted transaction refuses stale UI without writes',async
 for(const error of [MSELLER_UNSUPPORTED_VAT_ERROR,'Unknown timeout','SYNC_V3_FISCAL_RECONCILIATION_REQUIRED']) test(`actual sync early unresolved guard preserves ${error} despite invalid config/source`,async()=>{
  const original={...tx(),fiscalSyncError:error,fiscalResponseMessage:error};let stored=structuredClone(original),writes=0,issues=0,validations=0;
  const source=readFileSync(new URL('../App.tsx',import.meta.url),'utf8');const start=source.indexOf('async (transaction: Transaction,',source.indexOf('const syncFiscalDocument ='));
- const end=source.indexOf('}, [config, pollFiscalDocumentStatus, upsertFiscalTransaction]);',start);
+ const end=source.indexOf('}, [config, pollFiscalDocumentStatus, upsertFiscalTransaction, loadFiscalStatusContext]);',start);
  const code=(await transform(`const callback=${source.slice(start,end+1)};`,{loader:'ts'})).code;
  const create=new Function('f',`const {LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED,v3FiscalInFlightRef,config,db,getLargeMasterSyncV3OperationalSession,getExistingFiscalProviderReference,upsertFiscalTransaction,issueFiscalDocument}=f;${code}return callback;`);
  const sync=create({LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED:true,v3FiscalInFlightRef:{current:new Map()},config:{},db:{getDocument:async()=>structuredClone(stored)},

@@ -56,6 +56,7 @@ interface CustomerManagementProps {
    rooms: any[];
    users: User[];
    onRetryFiscalDocument?: (transaction: Transaction) => Promise<string>;
+   onConsultFiscalStatus?: (transaction: Transaction) => Promise<string>;
 }
 
 const CustomerManagement: React.FC<CustomerManagementProps> = ({
@@ -72,7 +73,8 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
    onUpdateCollections,
    rooms,
    users,
-   onRetryFiscalDocument
+   onRetryFiscalDocument,
+   onConsultFiscalStatus
 }) => {
    const [searchTerm, setSearchTerm] = useState('');
    const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
@@ -862,6 +864,14 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
       setRetryingFiscalTransactionId(null);
       setFiscalRetryFeedback(null);
    }, [selectedTransactionId]);
+
+   const handleConsultFiscal = useCallback(async(transaction:Transaction)=>{
+      if (!onConsultFiscalStatus) return;
+      setRetryingFiscalTransactionId(transaction.id);setFiscalRetryFeedback(null);
+      try { setFiscalRetryFeedback(await onConsultFiscalStatus(transaction)); }
+      catch(error:any){ setFiscalRetryFeedback(error?.message || 'Consulta fiscal pendiente.'); }
+      finally { setRetryingFiscalTransactionId(null); }
+   },[onConsultFiscalStatus]);
 
    const handleRetryFiscal = useCallback(async (transaction: Transaction) => {
       if (!onRetryFiscalDocument) return;
@@ -2018,6 +2028,7 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
             const terminalConfig = config.terminals?.find(t => t.id === tx.terminalId)?.config;
             const fiscalSummary = calculateTransactionFiscalSummary(tx, config, { terminalConfig });
             const displayTaxBreakdown = consolidateTaxBreakdownForDisplay(fiscalSummary.taxBreakdown, config.taxes);
+            const canConsultFiscal=Boolean(onConsultFiscalStatus&&tx.fiscalProvider==='MSELLER'&&String(tx.ncfType || '').startsWith('E'));
             const canRetryFiscal = canRetryFiscalTransaction(tx) && Boolean(onRetryFiscalDocument);
             const retryActionLabel = getFiscalRetryActionLabel(tx) || 'Reintentar envío';
             const transactionCustomerName = String(
@@ -2180,16 +2191,18 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                                        {tx.fiscalResponseMessage}
                                     </p>
                                  )}
-                                 {canRetryFiscal && (
+                                 {(canConsultFiscal || canRetryFiscal) && (
                                     <div className="mt-3 flex flex-wrap items-center gap-3">
-                                       <button
+                                       {canConsultFiscal && <button onClick={()=>handleConsultFiscal(tx)} disabled={retryingFiscalTransactionId===tx.id}
+                                          className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-[11px] font-black text-slate-700 disabled:opacity-60">Consultar estado</button>}
+                                       {canRetryFiscal && <button
                                           onClick={() => handleRetryFiscal(tx)}
                                           disabled={retryingFiscalTransactionId === tx.id}
                                           className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-[11px] font-black text-slate-700 hover:bg-slate-50 disabled:opacity-60"
                                        >
                                           <ArrowRightLeft size={12} />
                                           {retryingFiscalTransactionId === tx.id ? 'Procesando...' : retryActionLabel}
-                                       </button>
+                                       </button>}
                                        {fiscalRetryFeedback && (
                                           <p className="text-[11px] font-bold text-slate-500">{fiscalRetryFeedback}</p>
                                        )}

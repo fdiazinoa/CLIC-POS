@@ -93,6 +93,7 @@ interface TicketHistoryProps {
    initialSelectedId?: string | null; // NEW: For Smart Scan
    onInitialSelectionHandled?: () => void;
    onRetryFiscalDocument?: (transaction: Transaction) => Promise<string>;
+   onConsultFiscalStatus?: (transaction: Transaction) => Promise<string>;
    customers?: Customer[];
    onCorrectFiscalDocument?: (transaction: Transaction, correction: FiscalDocumentCorrectionInput) => Promise<Transaction>;
    onRefundTransaction: (
@@ -686,6 +687,7 @@ const TicketDetailDrawer: React.FC<{
    onRequestRefund: (tx: Transaction) => void;
    onRequestAzulRefund: (tx: Transaction) => void;
    onRetryFiscalDocument?: (tx: Transaction) => Promise<string>;
+   onConsultFiscalStatus?: (tx: Transaction) => Promise<string>;
    customers?: Customer[];
    onCorrectFiscalDocument?: (tx: Transaction, correction: FiscalDocumentCorrectionInput) => Promise<Transaction>;
    reviewFlags: InvoiceReviewFlag[];
@@ -698,8 +700,9 @@ const TicketDetailDrawer: React.FC<{
    themeText: string;
    themeBg: string;
    users: User[];
-}> = ({ tx, config, onClose, onPrint, onRequestRefund, onRequestAzulRefund, onRetryFiscalDocument, customers = [], onCorrectFiscalDocument, reviewFlags, onSendEmail, onFlagForReview, themeText, themeBg, users }) => {
+}> = ({ tx, config, onClose, onPrint, onRequestRefund, onRequestAzulRefund, onRetryFiscalDocument, onConsultFiscalStatus, customers = [], onCorrectFiscalDocument, reviewFlags, onSendEmail, onFlagForReview, themeText, themeBg, users }) => {
    const [isRetryingFiscal, setIsRetryingFiscal] = useState(false);
+   const [isConsultingFiscal,setIsConsultingFiscal]=useState(false);
    const [retryFeedback, setRetryFeedback] = useState<string | null>(null);
    const [isCorrectionOpen, setIsCorrectionOpen] = useState(false);
    const [correctionFiscalCode, setCorrectionFiscalCode] = useState<'E31' | 'E32'>('E32');
@@ -734,6 +737,7 @@ const TicketDetailDrawer: React.FC<{
    const displayTaxBreakdown = consolidateTaxBreakdownForDisplay(fiscalSummary.taxBreakdown, config.taxes);
    const historyDiscountTotal = resolveHistoryDiscountTotal(tx);
    const historyTerminalName = resolveHistoryTerminalName(tx, config.terminals || []);
+   const canConsultFiscal = Boolean(onConsultFiscalStatus && tx.fiscalProvider === 'MSELLER' && String(tx.ncfType || '').startsWith('E'));
    const canRetryFiscal = canRetryFiscalTransaction(tx) && Boolean(onRetryFiscalDocument);
    const retryActionLabel = getFiscalRetryActionLabel(tx) || 'Reintentar envío';
    const canRequestAzulRefund = !isRefundDoc && tx.status !== 'REFUNDED' && canOfferAzulRefundAction(tx, config);
@@ -805,6 +809,14 @@ const TicketDetailDrawer: React.FC<{
       } finally {
          setIsSavingReview(false);
       }
+   };
+
+   const handleConsultFiscal = async () => {
+      if (!onConsultFiscalStatus) return;
+      setIsConsultingFiscal(true);setRetryFeedback(null);
+      try { setRetryFeedback(await onConsultFiscalStatus(tx)); }
+      catch(error:any) { setRetryFeedback(error?.message || 'Consulta fiscal pendiente.'); }
+      finally { setIsConsultingFiscal(false); }
    };
 
    const handleRetryFiscal = async () => {
@@ -1054,8 +1066,14 @@ const TicketDetailDrawer: React.FC<{
                               {tx.fiscalResponseMessage}
                            </p>
                         )}
-                        {(canRetryFiscal || canCorrectFiscal) && (
+                        {(canConsultFiscal || canRetryFiscal || canCorrectFiscal) && (
                            <div className="mt-3 flex flex-wrap items-center gap-3">
+                              {canConsultFiscal && (
+                                 <button onClick={handleConsultFiscal} disabled={isConsultingFiscal}
+                                    className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-[11px] font-black text-slate-700 disabled:opacity-60">
+                                    <RotateCcw size={12} />{isConsultingFiscal ? 'Consultando...' : 'Consultar estado'}
+                                 </button>
+                              )}
                               {canRetryFiscal && (
                                  <button
                                     onClick={handleRetryFiscal}
@@ -1459,7 +1477,7 @@ const TicketDetailDrawer: React.FC<{
    );
 };
 
-const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, currentUser, onUpdateConfig, users, roles, onClose, activeTerminalId, onRefundTransaction, initialSelectedId, onInitialSelectionHandled, onRetryFiscalDocument, customers = [], onCorrectFiscalDocument }) => {
+const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, currentUser, onUpdateConfig, users, roles, onClose, activeTerminalId, onRefundTransaction, initialSelectedId, onInitialSelectionHandled, onRetryFiscalDocument, onConsultFiscalStatus, customers = [], onCorrectFiscalDocument }) => {
    const [searchTerm, setSearchTerm] = useState('');
    const [expandedId, setExpandedId] = useState<string | null>(null);
    const [showFilters, setShowFilters] = useState(false);
@@ -2965,6 +2983,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
                setIsRefundModalOpen(true);
             }}
             onRetryFiscalDocument={onRetryFiscalDocument}
+            onConsultFiscalStatus={onConsultFiscalStatus}
             customers={customers}
             reviewFlags={reviewFlags}
             onSendEmail={handleSendInvoiceEmail}
