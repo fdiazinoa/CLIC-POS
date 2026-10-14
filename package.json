@@ -22,7 +22,7 @@
     "start:dev": "concurrently \"npm run server\" \"npm run dev\" \"npm run kds\"",
     "start:mobile": "USE_HTTPS=true npm run start:dev",
     "start": "npm run start:dev",
-    "test:article-formats": "tsx --test tests/articleFormats.test.ts tests/articleFormatsAndroid.test.ts"
+    "test:article-formats": "tsx --test tests/articleFormats.test.ts tests/articleFormatsAndroid.test.ts tests/articleFormatRefundEntries.test.ts"
   },
   "dependencies": {
     "@capacitor-community/sqlite": "^8.0.0",
