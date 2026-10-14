@@ -10974,7 +10974,7 @@ const AppContent: React.FC = () => {
         correction.reason, stamp?.binding || '');
       const corrected = { ...original, fiscalClassificationProjection: projection };
       await session.assertCurrent();
-      await dbAdapter.saveDocumentsAtomically([{ collectionName: 'transactions', document: corrected,
+      await dbAdapter.saveDocumentsAtomically([{ collectionName: 'transactions', document: corrected, v3FiscalMetadataOperation: 'CLASSIFICATION_PROJECTION_APPEND',
         expectedDocument: JSON.stringify(original), v3CurrentCatalog: { syncId: session.ready.runtime.version.syncId,
           syncVersion: session.ready.runtime.version.syncVersion, binding: stamp!.binding! } }]);
       setTransactions(previous => previous.map(row => row.id === corrected.id ? corrected : row));
@@ -11193,6 +11193,9 @@ const AppContent: React.FC = () => {
         transaction = stored;
         if (transaction.fiscalClassificationProjection && !explicitClassificationRetry) return;
         if (transaction.fiscalSyncStatus === 'SYNCED') return;
+        // Keep deterministic pre-submit evidence and unresolved attempts intact, even if config validation fails.
+        if (transaction.fiscalProviderStatus === 'V3_ISSUE_REQUESTED' && !getExistingFiscalProviderReference(transaction)
+          && !(transaction.fiscalClassificationProjection && transaction.fiscalClassificationAttemptedAt && explicitClassificationRetry)) return;
         const session = await getLargeMasterSyncV3OperationalSession();
         await session.assertCurrent();
         const stamp = transaction.items[0]?.v3SaleAuthority;
@@ -11221,9 +11224,6 @@ const AppContent: React.FC = () => {
         return;
       }
       if (candidate && transaction.fiscalProviderStatus === 'V3_ISSUE_REQUESTED' && !(transaction.fiscalClassificationProjection && transaction.fiscalClassificationAttemptedAt && explicitClassificationRetry)) {
-        await upsertFiscalTransaction({ ...transaction, fiscalSyncStatus: 'ERROR',
-          fiscalSyncError: 'SYNC_V3_FISCAL_RECONCILIATION_REQUIRED',
-          fiscalResponseMessage: 'Existe un intento fiscal sin referencia confirmada. Requiere reconciliación antes de emitir de nuevo.' });
         return;
       }
       const establishmentCode = resolveFiscalProviderEstablishmentCode(providerConfig, fiscalCompliance, terminalConfig, config);
@@ -11316,18 +11316,29 @@ const AppContent: React.FC = () => {
   }, [config, pollFiscalDocumentStatus, upsertFiscalTransaction]);
 
   const retryFiscalDocument = useCallback(async (transaction: Transaction): Promise<string> => {
+    if (LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED) {
+      const stored = await db.getDocument('transactions', transaction.id) as Transaction | null;
+      if (!stored) throw new Error('SYNC_V3_COMMITTED_TRANSACTION_REQUIRED');
+      transaction = stored;
+      if (transaction.fiscalProviderStatus === 'V3_ISSUE_REQUESTED' && !getExistingFiscalProviderReference(transaction)
+        && !transaction.fiscalClassificationProjection) {
+        throw new Error(canProjectFiscalClassification(transaction)
+          ? 'Corrige primero la clasificación fiscal del artículo; se conservó el rechazo previo sin reenviar.'
+          : 'Existe un intento fiscal sin referencia confirmada. Requiere reconciliación antes de emitir de nuevo.');
+      }
+    }
     const providerId = transaction.fiscalProvider;
     if (!canRetryFiscalTransaction(transaction) || !providerId || providerId === 'NONE') {
       throw new Error('Solo se pueden reintentar documentos electrónicos pendientes o con error.');
     }
 
-    if (transaction.fiscalClassificationProjection) {
+    if (transaction.fiscalClassificationProjection && !getExistingFiscalProviderReference(transaction)) {
       const original = await db.getDocument('transactions', transaction.id) as Transaction | null;
       if (!original || !dbAdapter.saveDocumentsAtomically) throw new Error('FISCAL_CLASSIFICATION_STALE');
       const consumed = await consumeFiscalClassificationAttempt(original);
       const session = await getLargeMasterSyncV3OperationalSession();
       await session.assertCurrent();
-      await dbAdapter.saveDocumentsAtomically([{ collectionName: 'transactions', document: consumed,
+      await dbAdapter.saveDocumentsAtomically([{ collectionName: 'transactions', document: consumed, v3FiscalMetadataOperation: 'CLASSIFICATION_ATTEMPT_CONSUME',
         expectedDocument: JSON.stringify(original), v3CurrentCatalog: { syncId: session.ready.runtime.version.syncId,
           syncVersion: session.ready.runtime.version.syncVersion, binding: session.binding } }]);
       transaction = consumed;
@@ -11350,11 +11361,11 @@ const AppContent: React.FC = () => {
         : `Reintentando envío del e-CF a ${providerLabel}...`
     };
 
-    await upsertFiscalTransaction(retryingTransaction);
+    if (!LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED) await upsertFiscalTransaction(retryingTransaction);
 
     if (shouldPollExistingAttempt && existingReference) {
       await pollFiscalDocumentStatus(
-        retryingTransaction,
+        LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED ? transaction : retryingTransaction,
         providerId,
         environment,
         existingReference,
@@ -11365,7 +11376,7 @@ const AppContent: React.FC = () => {
       return 'Consulta de estado fiscal iniciada.';
     }
 
-    await syncFiscalDocument(retryingTransaction, Boolean(transaction.fiscalClassificationProjection));
+    await syncFiscalDocument(LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED ? transaction : retryingTransaction, Boolean(transaction.fiscalClassificationProjection));
     return 'Reintento de envío fiscal iniciado.';
   }, [config, pollFiscalDocumentStatus, syncFiscalDocument, upsertFiscalTransaction]);
 

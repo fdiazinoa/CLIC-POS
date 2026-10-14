@@ -206,10 +206,10 @@ test('actual App fiscal callback preserves V3 frozen amounts, deduplicates calls
   assert.equal(issues, 1);
   stored = { ...structuredClone(original), fiscalProviderStatus: 'V3_ISSUE_REQUESTED', fiscalSyncStatus: 'PENDING' };
   fixture.v3FiscalInFlightRef = { current: new Map() };
+  const unresolved = structuredClone(stored);
   await create(fixture)(original);
   assert.equal(issues, 1);
-  assert.equal(stored.fiscalSyncStatus, 'ERROR');
-  assert.equal(stored.fiscalSyncError, 'SYNC_V3_FISCAL_RECONCILIATION_REQUIRED');
+  assert.deepEqual(stored, unresolved);
   assert.equal(stored.ncf, original.ncf);
   await create({ ...fixture, LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED: false,
     calculateTransactionFiscalSummary: () => ({ subtotal: 7, taxTotal: 1, taxBreakdown: [] }),

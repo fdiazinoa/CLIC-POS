@@ -68,17 +68,21 @@ test('actual App retry commits one-shot CAS before mock issue; timeout/restart/c
  const {readFileSync}=await import('node:fs');const {transform}=await import('esbuild');
  const {consumeFiscalClassificationAttempt}=await import('../utils/fiscalClassificationProjection');
  const sql=new DatabaseSync(':memory:');sql.exec('CREATE TABLE documents(collection_name TEXT,doc_id TEXT,data TEXT,sort_order INTEGER,updatedAt TEXT,PRIMARY KEY(collection_name,doc_id));');
+ const {LARGE_MASTER_SYNC_V3_SCHEMA_SQL}=await import('../services/db/LargeMasterSyncV3Schema');sql.exec(LARGE_MASTER_SYNC_V3_SCHEMA_SQL);
+ sql.exec("INSERT INTO master_v3_operational_owner VALUES(1,'S',1,'B');UPDATE master_v3_state SET active_sync_id='S',active_version=1;INSERT INTO master_v3_inventory_state VALUES(1,'S',1,1,'C','now');");
  const bridge={query:async(q:string,v:any[]=[])=>({values:sql.prepare(q).all(...v)}),run:async(q:string,v:any[]=[])=>sql.prepare(q).run(...v),execute:async(q:string)=>{sql.exec(q);}};
  const adapter=new CapacitorSQLiteAdapter();Object.assign(adapter,{db:bridge,isReady:true});
- let tx=fixture();tx.fiscalClassificationProjection=await createFiscalClassificationProjection(tx,taxes,'U','Reason','B');
+ let tx=fixture();Object.assign(tx,{v3Binding:'B',v3WarehouseId:'W',v3InventoryBaseline:JSON.stringify(['B','S',1,1,'C'])});
+ Object.assign(tx.items[0].v3SaleAuthority!,{syncId:'S',syncVersion:1,inventoryVersion:1,inventoryCursor:'C',warehouseId:'W',tariffId:'T',taxIncluded:false});
+ tx.fiscalClassificationProjection=await createFiscalClassificationProjection(tx,taxes,'U','Reason','B');
  await adapter.saveDocument('transactions',tx);
  const read=()=>JSON.parse(String(sql.prepare('SELECT data FROM documents WHERE doc_id=?').get('505')?.data));
  const source=readFileSync(new URL('../App.tsx',import.meta.url),'utf8');const start=source.indexOf('async (transaction: Transaction): Promise<string> => {',source.indexOf('const retryFiscalDocument ='));
  const end=source.indexOf('}, [config, pollFiscalDocumentStatus, syncFiscalDocument, upsertFiscalTransaction]);',start);assert.ok(start>0&&end>start);
  const compiled=await transform(`const callback=${source.slice(start,end+1)};`,{loader:'ts'});
- const create=new Function('f',`const {canRetryFiscalTransaction,config,getEffectiveFiscalComplianceConfig,getProviderEnvironment,getFiscalProviderConfig,getExistingFiscalProviderReference,getFiscalProviderLabel,db,dbAdapter,consumeFiscalClassificationAttempt,getLargeMasterSyncV3OperationalSession,upsertFiscalTransaction,pollFiscalDocumentStatus,syncFiscalDocument}=f;${compiled.code}return callback;`);
+ const create=new Function('f',`const {LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED,canProjectFiscalClassification,canRetryFiscalTransaction,config,getEffectiveFiscalComplianceConfig,getProviderEnvironment,getFiscalProviderConfig,getExistingFiscalProviderReference,getFiscalProviderLabel,db,dbAdapter,consumeFiscalClassificationAttempt,getLargeMasterSyncV3OperationalSession,upsertFiscalTransaction,pollFiscalDocumentStatus,syncFiscalDocument}=f;${compiled.code}return callback;`);
  let issues=0;
- const retry=create({canRetryFiscalTransaction:()=>true,config:{terminals:[]},getEffectiveFiscalComplianceConfig:()=>({}),getProviderEnvironment:()=>0,
+ const retry=create({LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED:true,canProjectFiscalClassification,canRetryFiscalTransaction:()=>true,config:{terminals:[]},getEffectiveFiscalComplianceConfig:()=>({}),getProviderEnvironment:()=>0,
   getFiscalProviderConfig:()=>({}),getExistingFiscalProviderReference:()=>undefined,getFiscalProviderLabel:()=> 'MSeller',db:{getDocument:async()=>read()},dbAdapter:adapter,
   consumeFiscalClassificationAttempt,getLargeMasterSyncV3OperationalSession:async()=>({assertCurrent:async()=>{},ready:{runtime:{version:{syncId:'S',syncVersion:1}}},binding:'B'}),
   upsertFiscalTransaction:async(next:any)=>adapter.saveDocument('transactions',next),pollFiscalDocumentStatus:async()=>{throw Error('unexpected poll');},
@@ -97,7 +101,7 @@ for(const field of ['netAmount','taxAmount','total']) for(const value of [NaN,In
  const valid=fixture();const projection=await createFiscalClassificationProjection(valid,taxes,'U','Reason','B');
  await assert.rejects(()=>applyFiscalClassificationProjection({...tx,fiscalClassificationProjection:projection}),/SOURCE_INVALID/);
 });
-for(const field of ['fiscalResponseCode','fiscalSignedXml']) test(`contradictory ${field} proof dominates unsupported error for correction, wire and consumption`,async()=>{
+for(const field of ['fiscalResponseCode','fiscalSignedXml','fiscalQrCode']) test(`contradictory ${field} proof dominates unsupported error for correction, wire and consumption`,async()=>{
  const tx=fixture();const projection=await createFiscalClassificationProjection(tx,taxes,'U','Reason','B');
  const proved={...tx,[field]:field==='fiscalResponseCode'?'1':'<signed>proof</signed>',fiscalClassificationProjection:projection};
  assert.equal(canProjectFiscalClassification(proved),false);

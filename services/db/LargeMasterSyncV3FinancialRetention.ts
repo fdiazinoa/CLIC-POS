@@ -8,6 +8,11 @@ export const V3_FINANCIAL_MUTABLE_FIELDS = [
   'zReportId', 'closedAt', 'closedBy', 'closingId',
 ] as const;
 
+/** These append-only fields are writable only through native typed CAS, never ordinary ACK publication. */
+export const V3_FINANCIAL_CAS_PROTECTED_FIELDS = [
+  'fiscalClassificationProjection', 'fiscalClassificationAttemptedAt', 'fiscalPreSubmitRecoveryAudit',
+] as const;
+
 const transientSyncFields = ['syncStartedAt', 'syncRetryAfter', 'syncBlockedReason', 'syncBlockedAt', '_forceSyncReplay'];
 const mutableKeysSql = V3_FINANCIAL_MUTABLE_FIELDS.map(key => `'${key}'`).join(',');
 // BackgroundSyncManager clears fields with delete/undefined. Only a complete local

@@ -12,7 +12,7 @@ import { getLargeMasterSyncV3OperationalSession, v3InventoryBaselineKey } from '
 import { LargeMasterSyncV3Error } from './LargeMasterSyncV3Types';
 import { buildV3RefundOriginalMutations } from './LargeMasterSyncV3RefundAuthority';
 import { validateV3FrozenLineFiscalAmounts } from './LargeMasterSyncV3LineSource';
-import { V3_FINANCIAL_MUTABLE_FIELDS } from '../db/LargeMasterSyncV3FinancialRetention';
+import { V3_FINANCIAL_MUTABLE_FIELDS, V3_FINANCIAL_CAS_PROTECTED_FIELDS } from '../db/LargeMasterSyncV3FinancialRetention';
 
 export const isV3FinancialDocument = (transaction: Partial<Transaction>): boolean =>
   (transaction.items || []).some(line => Boolean(line.v3SaleAuthority));
@@ -66,7 +66,7 @@ export const buildV3InventoryLedger = (transaction: Transaction, warehouseId: st
 const financialIdentity = (transaction: Transaction): string => {
   const canonical = (value: any): any => Array.isArray(value) ? value.map(canonical)
     : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort()
-      .filter(key => ![...V3_FINANCIAL_MUTABLE_FIELDS, 'relatedTransactions', 'syncStatus', 'syncError', 'cloudSyncStatus', 'cloudSyncError', 'cloudSyncedAt',
+      .filter(key => ![...V3_FINANCIAL_MUTABLE_FIELDS, ...V3_FINANCIAL_CAS_PROTECTED_FIELDS, 'relatedTransactions', 'syncStatus', 'syncError', 'cloudSyncStatus', 'cloudSyncError', 'cloudSyncedAt',
         'updatedAt', 'status', 'v3InventoryBaseline', 'v3Binding', 'v3WarehouseId', 'v3CommitFingerprint', 'fiscalStatus',
         'fiscalResponseMessage', 'fiscalResponseCode', 'fiscalSignedXml', 'fiscalQrCode'].includes(key))
       .map(key => [key, canonical(value[key])])) : value;
