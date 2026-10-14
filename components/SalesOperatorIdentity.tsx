@@ -18,12 +18,12 @@ const SalesOperatorIdentity: React.FC<{
   const photo = typeof user.photo === 'string' ? user.photo.trim() : '';
   return (
     <div data-testid="sales-operator-identity" className="flex min-w-0 items-center gap-2">
-      <div className={`flex shrink-0 items-center justify-center overflow-hidden rounded-full bg-slate-200 font-bold text-slate-700 ${compact ? 'h-8 w-8 text-xs' : 'h-10 w-10 text-sm'}`}>
+      <div className={`flex shrink-0 items-center justify-center overflow-hidden rounded-full bg-slate-200 font-bold text-slate-700 ${compact ? 'h-10 w-10 text-sm' : 'h-12 w-12 text-base'}`}>
         <OperatorPhoto key={JSON.stringify([user.id, photo])} photo={photo} name={user.name} />
       </div>
       <div className={`min-w-0 ${compact ? 'max-w-[110px]' : 'max-w-[160px]'}`}>
-        <div title={user.name} className="truncate text-xs font-bold text-slate-800">{user.name}</div>
-        <div title={terminalLabel} className="truncate text-[11px] text-slate-500">{terminalLabel}</div>
+        <div title={user.name} className={`truncate font-bold text-slate-800 ${compact ? 'text-[13px]' : 'text-sm'}`}>{user.name}</div>
+        <div title={terminalLabel} className={`truncate text-slate-500 ${compact ? 'text-xs' : 'text-[13px]'}`}>{terminalLabel}</div>
       </div>
     </div>
   );
