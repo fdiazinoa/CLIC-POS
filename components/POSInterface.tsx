@@ -4601,10 +4601,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       : 'Caja no disponible';
    const renderTicketBrand = (compact = false) => (
       <div className="inline-flex min-w-0 flex-wrap items-center gap-2">
-         <div className={`inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-950 shadow-sm ${compact ? 'px-2.5 py-1.5' : 'px-4 py-2.5'}`}>
-            <span className={`font-black uppercase tracking-[0.22em] text-slate-100 ${compact ? 'text-[0.72rem]' : 'text-[0.8rem]'}`}>CLIC</span>
-            <span className={`font-black uppercase tracking-[0.22em] text-sky-400 ${compact ? 'text-[0.72rem]' : 'text-[0.8rem]'}`}>POS</span>
-         </div>
          <SalesOperatorIdentity user={currentUser} terminalLabel={operatorTerminalLabel} compact={compact} />
       </div>
    );
@@ -8238,7 +8234,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                }
             </div >
 
-            {/* DESKTOP: marca + mesa/comensales bajo el logo; retail: busqueda al centro; botones carrito/acciones alineados a la derecha (como APK 1.0.300) */}
+            {/* DESKTOP: operador + mesa/comensales; retail: busqueda al centro; botones carrito/acciones alineados a la derecha (como APK 1.0.300) */}
             <div className={`pos-ticket-heading ${isMobile ? 'hidden' : 'flex'} px-5 py-3 border-b border-gray-100 bg-gray-50/50 flex-col gap-3 shrink-0 flex-none ${activeTable ? 'border-l-4 border-l-blue-500' : ''}`} >
                <div data-testid="desktop-ticket-toolbar" className={`flex w-full flex-wrap items-center justify-between gap-1 ${isRetailMode ? 'supermarket-ticket-toolbar' : ''}`}>
                   <div className="flex min-w-0 max-w-full items-center justify-start">

@@ -5,6 +5,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import { build } from 'esbuild';
+import ts from 'typescript';
 import SalesOperatorIdentity from '../components/SalesOperatorIdentity';
 
 const source = readFileSync(new URL('../components/POSInterface.tsx', import.meta.url), 'utf8');
@@ -53,4 +54,20 @@ test('actual photo fallback is isolated by user/photo key, recovering after erro
     const updated=render('u','photo-b'); assert.notEqual(updated.key,first.key); assert.equal(updated.node.type,'img');
     first.node.props.onError(); assert.equal(render('u','photo-b').node.type,'img');
   } finally {delete (globalThis as any).__operatorReact;}
+});
+
+
+test('actual Sales heading removes only its logo and keeps enlarged operator identity in both sizes', () => {
+  const heading = source.slice(source.indexOf('   const renderTicketBrand ='), source.indexOf('   const cartQuantity', source.indexOf('   const renderTicketBrand =')));
+  const createHeading = ts.transpileModule(heading + '\nrenderTicketBrand;', {compilerOptions: {jsx: ts.JsxEmit.React, target: ts.ScriptTarget.ES2022}}).outputText;
+  const user = {id:'u',name:'Yuli Pérez',photo:'https://example.com/photo.jpg'};
+  const render = runInNewContext(createHeading, {React, SalesOperatorIdentity, currentUser:user, operatorTerminalLabel:'Caja 6'});
+  for (const compact of [false,true]) {
+    const html = renderToStaticMarkup(render(compact));
+    assert.doesNotMatch(html, />CLIC<|>POS<|tracking-\[0\.22em\]/);
+    assert.match(html, /Yuli Pérez/); assert.match(html, /Caja 6/); assert.match(html, /Foto de Yuli Pérez/);
+    assert.match(html, compact ? /h-10 w-10/ : /h-12 w-12/);
+    assert.match(html, compact ? /text-\[13px\]/ : /text-sm/);
+    assert.match(html, /min-w-0/); assert.match(html, /flex-wrap/);
+  }
 });
