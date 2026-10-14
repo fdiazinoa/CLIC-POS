@@ -1,7 +1,7 @@
 import ArticleFormatSelector from './ArticleFormatSelector';
 import { formatsEnabled, assertFormatsPostingClosed } from '../services/articleFormats/activation';
 import { inventoryQuantity, resizeLine, resolveFormatBarcode, formatPrice, toBaseQuantity } from '../services/articleFormats/domain';
-import { addFormatLine, formatStockDemand, legacyMergeCandidate, routeQuickFormat, baseCodeFormat, assertOriginalSaleForFormatReturn } from '../services/articleFormats/cart';
+import { addFormatLine, formatStockDemand, legacyMergeCandidate, routeQuickFormat, baseCodeFormat, skuForFormatVariant, formatVariantForSku, assertOriginalSaleForFormatReturn } from '../services/articleFormats/cart';
 import type { ArticleFormat } from '../services/articleFormats/contract';
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { Capacitor } from '@capacitor/core';
@@ -891,7 +891,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (articleFormatsEnabled && product.article_formats?.formats.length) {
          if (!variantSku) { setErrorToast('Selecciona una variante válida para esta presentación.'); return; }
          setFormatSelection({product,variantId:variantSku,
-            basePrice:(product.tariffs || []).find(t => t.tariffId === activeTariffId)?.price ?? product.variants.find(v => v.sku === variantSku)?.price ?? price,
+            basePrice:(product.tariffs || []).find(t => t.tariffId === activeTariffId)?.price ?? product.variants.find(v => v.sku === skuForFormatVariant(product,variantSku))?.price ?? price,
             modifiers});
       } else addToCart(product,isReturnMode ? -1 : 1,price,modifiers);
       setSelectedProductForVariants(null);
@@ -916,7 +916,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          const resolved = resolveFormatBarcode(products,searchCode);
          if (resolved) {
             const product = products.find(p => p.id === resolved.itemId)!;
-            const variant = product.variants?.find(v => v.sku === resolved.variantId);
+            const variant = product.variants?.find(v => v.sku === skuForFormatVariant(product,resolved.variantId));
             const basePrice = (product.tariffs || []).find(t => t.tariffId === activeTariffId)?.price ?? variant?.price ?? product.price;
             return {product,quantity,price:formatPrice(resolved.format,activeTariffId,basePrice),modifiers:[],format:resolved.format};
          }
@@ -929,7 +929,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                if (v.sku === searchCode || (v.barcode && v.barcode.includes(searchCode))) {
                   // Map attribute values to a simple list of modifiers
                   const modifiersList = Object.entries(v.attributeValues || {}).map(([_, val]) => val);
-                  const format = articleFormatsEnabled ? baseCodeFormat(p.article_formats,v.sku) : undefined;
+                  const format = articleFormatsEnabled ? baseCodeFormat(p.article_formats,formatVariantForSku(p,v.sku)) : undefined;
                   if (format) return {product:p,quantity,price:formatPrice(format,activeTariffId,(p.tariffs || []).find(t => t.tariffId === activeTariffId)?.price ?? v.price ?? p.price),modifiers:modifiersList,format};
                   return { product: p, quantity, price: v.price || getProductPrice(p), modifiers: modifiersList };
                }

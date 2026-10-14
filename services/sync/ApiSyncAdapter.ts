@@ -344,7 +344,7 @@ class ApiSyncAdapter {
         action: SyncChange['action'] = 'BULK_UPDATE',
         mode: 'UPSERT' | 'FULL_REPLACE' = 'UPSERT'
     ): Promise<void> {
-        if (collection === 'transactions' || collection === 'transactionHistory') items.forEach(assertLegacyFormatPayload);
+        assertLegacyFormatCollection(collection, items);
         if (!this.config) {
             throw new Error('Sync configuration missing in ApiSyncAdapter. Ensure SyncManager is initialized.');
         }
@@ -754,6 +754,7 @@ class ApiSyncAdapter {
      * Push a single inventory movement to Master
      */
     async pushInventoryMovement(movement: any): Promise<void> {
+        assertLegacyFormatPayload(movement);
         try {
             await this.ensurePushReady();
             const response = await this.fetchWithRetry(`${this.config.masterUrl}/api/sync/inventory/movements`, {

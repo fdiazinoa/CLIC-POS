@@ -16,6 +16,12 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
     private isReady = false;
     private connectPromise: Promise<void> | null = null;
     private disconnectPromise: Promise<void> | null = null;
+    private writes: Promise<unknown> = Promise.resolve();
+    private serializeWrite<T>(work: () => Promise<T>): Promise<T> {
+        const next = this.writes.then(work, work);
+        this.writes = next.catch(() => undefined);
+        return next;
+    }
     public readonly adapterType = 'local';
 
     connect(): Promise<void> {
@@ -76,6 +82,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         const connecting = this.connectPromise;
         this.disconnectPromise = (async () => {
             await connecting?.catch(() => undefined);
+            await this.writes;
             await this.closeRegisteredConnection();
         })().finally(() => {
             this.disconnectPromise = null;
@@ -106,11 +113,14 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
     }
 
     async saveCollection<T>(collectionName: string, data: T[]): Promise<void> {
+        return this.serializeWrite(async () => {
         const docs = this.toStoredDocuments(collectionName, data);
         await this.writeStoredDocuments(collectionName, docs);
+        });
     }
 
     async saveDocument<T extends { id: string }>(collectionName: string, doc: T): Promise<void> {
+        return this.serializeWrite(async () => {
         const docs = await this.readStoredDocuments(collectionName);
         const nextDocs = Array.isArray(docs) ? [...docs] : [];
         const index = nextDocs.findIndex((item: T) => item.id === doc.id);
@@ -122,9 +132,11 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         }
 
         await this.writeStoredDocuments(collectionName, nextDocs);
+        });
     }
 
     async bulkUpsert<T extends { id: string }>(collectionName: string, docs: T[]): Promise<void> {
+        return this.serializeWrite(async () => {
         if (!docs || docs.length === 0) return;
 
         const storedDocs = await this.readStoredDocuments(collectionName);
@@ -139,9 +151,11 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         });
 
         await this.writeStoredDocuments(collectionName, Array.from(docMap.values()));
+        });
     }
 
     async bulkUpdateProducts(productIds: string[], updates: any, _userId?: string, _userName?: string): Promise<void> {
+        return this.serializeWrite(async () => {
         const products = await this.getCollection<any>('products') || [];
         if (!Array.isArray(products)) return;
 
@@ -168,7 +182,8 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             return next;
         });
 
-        await this.saveCollection('products', updatedProducts);
+        await this.writeStoredDocuments('products', updatedProducts);
+        });
     }
 
     async getDocument<T>(collectionName: string, id: string): Promise<T | null> {
@@ -178,11 +193,13 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
     }
 
     async deleteDocument(collectionName: string, id: string): Promise<void> {
+        return this.serializeWrite(async () => {
         const docs = await this.readStoredDocuments(collectionName);
         if (!Array.isArray(docs)) return;
 
         const nextDocs = docs.filter((doc: any) => doc?.id !== id);
         await this.writeStoredDocuments(collectionName, nextDocs);
+        });
     }
 
     async executeSQL(query: string, params: any[] = []): Promise<any> {
@@ -208,7 +225,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             ];
         }
 
-        return db.run(normalized, params);
+        return this.serializeWrite(() => db.run(normalized, params));
     }
 
     async getStats(): Promise<{ type: string; size: number; tables: number }> {
@@ -239,7 +256,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
 
     /** Uses executeSet's native atomic transaction; never holds a JS transaction across awaits. */
     articleFormatSQL(): FormatSQL {
-        return {
+        const direct: FormatSQL = {
             executeSchema: async sql => {
                 await this.ensureDb().execute('PRAGMA foreign_keys = ON;', false);
                 await this.ensureDb().execute(sql);
@@ -251,6 +268,12 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
                 const result = await this.ensureDb().query(sql, values);
                 return (result.values || []) as T[];
             }
+        };
+        return {
+            ...direct,
+            executeSchema: sql => this.serializeWrite(() => direct.executeSchema(sql)),
+            executeAtomic: statements => this.serializeWrite(() => direct.executeAtomic(statements)),
+            runExclusive: work => this.serializeWrite(() => work(direct))
         };
     }
 

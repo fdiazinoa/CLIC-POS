@@ -1,3 +1,4 @@
+import { isFormatOwnedDocument } from '../articleFormats/activation';
 import { db } from '../../utils/db';
 import { dbAdapter } from '../db';
 import { apiSyncAdapter } from './ApiSyncAdapter';
@@ -200,6 +201,7 @@ class BackgroundSyncManager {
 
         // Filter pending items and sort by date (FIFO)
         const isSyncPending = (item: T): boolean => {
+            if (isFormatOwnedDocument(item)) return false;
             const status = item.syncStatus;
             if (status === 'BLOCKED_FUNCTIONAL') return false;
             if (status === 'PENDING' || status === 'ERROR' || status === 'SYNCING') return true;

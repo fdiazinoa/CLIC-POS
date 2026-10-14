@@ -6,8 +6,9 @@ export function addFormatLine(cart: CartItem[], product: Product, format: Articl
   price: number, lineId: string, modifiers: string[] = []): CartItem[] {
   if (!format.active || !format.allow_sale || !product.article_formats?.formats.some(f => f.id === format.id && f.variantId === format.variantId)) throw new ArticleFormatError('ARTICLE_FORMAT_NOT_SELLABLE');
   if (quantity <= 0) throw new ArticleFormatError('ARTICLE_FORMAT_INVALID_QUANTITY');
-  if (format.variantId !== null && !product.variants.some(variant => variant.sku === format.variantId)) throw new ArticleFormatError('ARTICLE_FORMAT_VARIANT_NOT_FOUND');
-  const frozen = freezeLine({ ...product,cartId:lineId,quantity,price,originalPrice:price,modifiers:[...modifiers],variantSku:format.variantId || undefined },format);
+  const variantSku = format.variantId === null ? undefined : product.articleFormatVariantSkus ? product.articleFormatVariantSkus[format.variantId] : format.variantId;
+  if (format.variantId !== null && (typeof variantSku !== 'string' || product.variants.filter(variant => variant.sku === variantSku).length !== 1)) throw new ArticleFormatError('ARTICLE_FORMAT_VARIANT_NOT_FOUND');
+  const frozen = freezeLine({ ...product,cartId:lineId,quantity,price,originalPrice:price,modifiers:[...modifiers],variantSku:variantSku || undefined },format);
   const existing = cart.find(item => item.id === product.id && item.price === price
     && item.articleFormat?.id === format.id && item.articleFormat?.variantId === format.variantId
     && item.articleFormat?.factor === format.factor && JSON.stringify(item.articleFormat) === JSON.stringify(frozen.articleFormat)
@@ -20,7 +21,11 @@ export function selectedVariantId(product: Product, selections: Record<string,st
     const value = variant.attributeValues[attribute.id] ?? variant.attributeValues[attribute.name];
     return value !== undefined && selections[attribute.id] === value;
   }));
-  return matches.length === 1 ? matches[0].sku : undefined;
+  if (matches.length !== 1) return undefined;
+  if (!product.articleFormatVariantSkus) return matches[0].sku;
+  const ids = Object.entries(product.articleFormatVariantSkus).filter(([,sku]) => sku === matches[0].sku);
+  if (ids.length !== 1) throw new ArticleFormatError('ARTICLE_FORMAT_VARIANT_MAPPING_MISSING');
+  return ids[0][0];
 }
 
 export function formatStockDemand(cart: CartItem[], itemId: string): number {
@@ -58,4 +63,18 @@ export function baseCodeFormat(dto: ArticleFormatsDTO | undefined, variantId: st
   const format = dto.formats.find(format => format.variantId === variantId && format.is_base);
   if (!format || !format.active || !format.allow_sale) throw new ArticleFormatError('ARTICLE_FORMAT_NOT_SELLABLE');
   return format;
+}
+
+export function skuForFormatVariant(product: Pick<Product,'articleFormatVariantSkus'>, erpId:string|null):string|undefined {
+  if (erpId===null) return undefined;
+  if (!product.articleFormatVariantSkus) return erpId;
+  const sku=product.articleFormatVariantSkus[erpId];
+  if (typeof sku!=='string') throw new ArticleFormatError('ARTICLE_FORMAT_VARIANT_MAPPING_MISSING');
+  return sku;
+}
+export function formatVariantForSku(product: Pick<Product,'articleFormatVariantSkus'>, sku:string):string {
+  if (!product.articleFormatVariantSkus) return sku;
+  const matches=Object.entries(product.articleFormatVariantSkus).filter(([,value])=>value===sku);
+  if (matches.length!==1) throw new ArticleFormatError('ARTICLE_FORMAT_VARIANT_MAPPING_MISSING');
+  return matches[0][0];
 }
