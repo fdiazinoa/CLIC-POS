@@ -15,7 +15,7 @@ export interface DurableDocumentMutation {
     requireAbsent?: boolean;
     expectedDocument?: string;
     /** Native CAS-only append path; remote ACK retained-upsert cannot modify these fields. */
-    v3FiscalMetadataOperation?: 'CLASSIFICATION_PROJECTION_APPEND' | 'CLASSIFICATION_ATTEMPT_CONSUME' | 'PRESUBMIT_EVIDENCE_REPAIR';
+    v3FiscalMetadataOperation?: 'CLASSIFICATION_PROJECTION_APPEND' | 'CLASSIFICATION_ATTEMPT_CONSUME' | 'PRESUBMIT_EVIDENCE_REPAIR' | 'FISCAL_SUBMISSION_SCOPE_APPEND' | 'FISCAL_LOOKUP_APPROVAL_APPEND' | 'FISCAL_STATUS_RECONCILE';
     /** Verified V3 sale demand; checked against scoped baseline + ledger inside the write transaction. */
     v3CurrentCatalog?: { syncId: string; syncVersion: number; binding: string };
     v3ExpectedRetainedDocument?: { collection: string; id: string; expected: string };
@@ -82,6 +82,8 @@ export interface DatabaseAdapter {
     readonly supportsV3FiscalMetadataCAS?: boolean;
     /** Android-only, dark V3 staging store. Its presence does not announce a network capability. */
     readonly masterSyncV3Store?: LargeMasterSyncV3Store;
+
+    getFiscalStatusCandidates?(binding: string, afterId: string, limit: number): Promise<string[]>;
 
     getSyncMonitorPage?(request: SyncMonitorPageRequest): Promise<SyncMonitorPage>;
 

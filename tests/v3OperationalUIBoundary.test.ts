@@ -130,7 +130,7 @@ test('actual refund-only persistence branch preserves frozen V3 items and total 
 test('actual App fiscal callback preserves V3 frozen amounts, deduplicates calls and reconciles durable attempts', async () => {
   const source = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
   const start = source.indexOf('async (transaction: Transaction,', source.indexOf('const syncFiscalDocument ='));
-  const end = source.indexOf('}, [config, pollFiscalDocumentStatus, upsertFiscalTransaction]);', start);
+  const end = source.indexOf('}, [config, pollFiscalDocumentStatus, upsertFiscalTransaction, loadFiscalStatusContext]);', start);
   assert.ok(start > 0 && end > start);
   const compiled = await transform(`const callback=${source.slice(start, end + 1)};`, { loader: 'ts' });
   const create = new Function('fixture', `const {LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED,v3FiscalInFlightRef,config,db,

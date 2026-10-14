@@ -1,0 +1,42 @@
+{
+  "transaction": {
+    "id": "TXN-proof-fixture",
+    "terminalId": "Caja6",
+    "electronicNcf": "E3200000506",
+    "ncfType": "E32",
+    "customerSnapshot": {
+      "name": "Fixture",
+      "taxId": "001"
+    },
+    "items": [
+      {
+        "id": "item-1",
+        "quantity": 1,
+        "taxRate": 0.18
+      }
+    ],
+    "payments": [
+      {
+        "method": "CASH",
+        "amount": 108.8
+      }
+    ],
+    "netAmount": 85,
+    "taxAmount": 23.8,
+    "total": 108.8,
+    "taxBreakdown": [
+      {
+        "type": "VAT",
+        "rate": 0.18,
+        "amount": 15.3
+      }
+    ],
+    "serviceChargeAmount": 8.5,
+    "serviceTaxPolicySnapshot": {
+      "rate": 0.1,
+      "enabled": true
+    },
+    "date": "2026-10-13T00:00:00Z"
+  },
+  "expectedChecksum": "4bfc57e252e1a20ddd05018dba6792a3367143fb087f1362fcb7223cd9e20f45"
+}
