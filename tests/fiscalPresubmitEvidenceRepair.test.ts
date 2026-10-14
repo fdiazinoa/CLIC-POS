@@ -230,7 +230,7 @@ test('native raw repair CAS rejects a sealed E31/E32 prefix mismatch despite val
   assert.deepEqual(f.read('transactions'),invalid);assert.deepEqual(f.read('transactionHistory'),input.history);
  }finally{f.sql.close();}
 });
-for(const fiscalCode of ['E31','E32'])for(const originalNcf of ['E3200000505','E320000000505'])test(`correct ${fiscalCode} prefix preserves ${originalNcf.replace('E32',fiscalCode)} formatting`,async()=>{
+for(const fiscalCode of ['E31','E32'] as const)for(const originalNcf of ['E3200000505','E320000000505'])test(`correct ${fiscalCode} prefix preserves ${originalNcf.replace('E32',fiscalCode)} formatting`,async()=>{
  const ncf=originalNcf.replace('E32',fiscalCode);
  const input=await fixture();input.target.ncf=ncf;
  for(const document of [input.current,input.history]){
