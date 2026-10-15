@@ -1,3 +1,5 @@
+import { assertLegacyFormatPayload, assertLegacyFormatCollection } from '../articleFormats/activation';
+import { ArticleFormatError } from '../articleFormats/domain';
 import { isSyncFeatureEnabled } from './SyncFeatureFlags';
 import { assertLegacyMasterPullAllowed } from './LargeMasterSyncV3Authority';
 import { originalProvenance } from '../recovery/RecoveryRuntime';
@@ -309,7 +311,7 @@ const isValidIsoTimestampCursor = (value: unknown): value is string => {
     return /^\d{4}-\d{2}-\d{2}T/.test(trimmed);
 };
 
-const readArrayPayload = (payload: any, collection?: string): any[] => {
+const readUncheckedArrayPayload = (payload: any, collection?: string): any[] => {
     const collectionKeys: Record<string, string[]> = {
         products: ['products', 'items'],
         items: ['items', 'products'],
@@ -323,6 +325,12 @@ const readArrayPayload = (payload: any, collection?: string): any[] => {
     if (Array.isArray(payload?.data)) return payload.data;
     if (Array.isArray(payload?.records)) return payload.records;
     return [];
+};
+
+const readArrayPayload = (payload: any, collection?: string): any[] => {
+    const items = readUncheckedArrayPayload(payload, collection);
+    assertLegacyFormatCollection(collection || '', items);
+    return items;
 };
 
 const normalizePullDeltaPayload = (collection: string, payload: any): PullDeltaResult => ({
@@ -3763,6 +3771,7 @@ export class ApiSyncAdapter {
         mode: 'UPSERT' | 'FULL_REPLACE' = 'UPSERT',
         operationCorrelationId = this.createOperationCorrelationId(`push:${collection}`),
     ): Promise<any> {
+        assertLegacyFormatCollection(collection, items);
         const normalizedItems = Array.isArray(items) ? items : [];
         if (normalizedItems.length === 0) {
             console.warn(`[POS_CLOUD_STAGING] push skipped collection=${collection}: no items to stage`);
@@ -4047,6 +4056,7 @@ export class ApiSyncAdapter {
                 const data = await response.json();
                 return readArrayPayload(data, collection);
             } catch (error) {
+                if (error instanceof ArticleFormatError) throw error;
                 console.error(`❌ ApiSyncAdapter: Error pulling ${collection} from ERP target:`, error);
                 if (!this.isBlockingOperationalAuthError(error)) {
                     this.logOptionalMasterUnavailable({
@@ -4093,6 +4103,7 @@ export class ApiSyncAdapter {
             try {
                 await this.authenticate();
             } catch (error) {
+                if (error instanceof ArticleFormatError) throw error;
                 console.warn('Auto-authentication failed during pull:', error);
                 throw new Error('Authentication failed. Please check connection to Master.');
             }
@@ -4188,10 +4199,12 @@ export class ApiSyncAdapter {
             }
 
             const items = readArrayPayload(data, collection);
+            assertLegacyFormatCollection(collection, items);
             console.log(`📥 ApiSyncAdapter: Pulled ${items.length} items from ${collection} (v${data.version})`);
             return items;
 
         } catch (error) {
+            if (error instanceof ArticleFormatError) throw error;
             console.error(`❌ ApiSyncAdapter: Error pulling ${collection}:`, error);
             reportSyncErrorDiagnostic({
                 operation: 'PULL_MASTERS',
@@ -4904,6 +4917,7 @@ export class ApiSyncAdapter {
 
                 return normalizePullDeltaPayload(collection, await response.json());
             } catch (error) {
+                if (error instanceof ArticleFormatError) throw error;
                 console.error(`❌ ApiSyncAdapter: Error pulling ERP delta for ${collection}:`, error);
                 if (!this.isBlockingOperationalAuthError(error)) {
                     this.logOptionalMasterUnavailable({
@@ -5018,6 +5032,7 @@ export class ApiSyncAdapter {
 
             return normalizePullDeltaPayload(collection, await response.json());
         } catch (error) {
+            if (error instanceof ArticleFormatError) throw error;
             console.error(`❌ ApiSyncAdapter: Error pulling delta for ${collection}:`, error);
             reportSyncErrorDiagnostic({
                 operation: 'PULL_MASTERS',
@@ -5080,6 +5095,7 @@ export class ApiSyncAdapter {
                 serverTime: data.serverTime
             };
         } catch (error) {
+            if (error instanceof ArticleFormatError) throw error;
             console.error('❌ ApiSyncAdapter: Error pulling product image manifest:', error);
             this.isOnline = false;
             throw error;
@@ -5123,6 +5139,7 @@ export class ApiSyncAdapter {
             const data = await response.json();
             return Array.isArray(data.items) ? data.items : [];
         } catch (error) {
+            if (error instanceof ArticleFormatError) throw error;
             console.error('❌ ApiSyncAdapter: Error pulling product images:', error);
             this.isOnline = false;
             throw error;
@@ -5248,6 +5265,7 @@ export class ApiSyncAdapter {
                     fullSyncVersion: metadata.fullSyncVersion
                 };
             } catch (error) {
+                if (error instanceof ArticleFormatError) throw error;
                 if (this.isRecoverableMetadataTimeout(error)) {
                     console.warn('[SYNC_METADATA_TIMEOUT_SUPPRESSED]', {
                         collection,
@@ -5294,6 +5312,7 @@ export class ApiSyncAdapter {
             try {
                 await this.authenticate();
             } catch (error) {
+                if (error instanceof ArticleFormatError) throw error;
                 return null; // Return null if cannot authenticate to avoid UI noise
             }
         }
@@ -5339,6 +5358,7 @@ export class ApiSyncAdapter {
             };
 
         } catch (error) {
+            if (error instanceof ArticleFormatError) throw error;
             console.error(`❌ ApiSyncAdapter: Error getting metadata for ${collection}:`, error);
             reportSyncErrorDiagnostic({
                 operation: collection === 'config' ? 'PULL_CONFIG' : 'PULL_MASTERS',
@@ -5372,6 +5392,7 @@ export class ApiSyncAdapter {
             try {
                 await this.authenticate();
             } catch (error) {
+                if (error instanceof ArticleFormatError) throw error;
                 return [];
             }
         }
@@ -5398,6 +5419,7 @@ export class ApiSyncAdapter {
             const data = await response.json();
             return data.terminals || [];
         } catch (error) {
+            if (error instanceof ArticleFormatError) throw error;
             console.error('Error fetching terminals:', error);
             return [];
         }
@@ -5557,6 +5579,7 @@ export class ApiSyncAdapter {
     }
 
     async pushTransaction(transaction: any): Promise<any> {
+        assertLegacyFormatPayload(transaction);
         if (isRecoveredOperation(transaction)) throw new Error('RECOVERED_OPERATION_NO_REPLAY');
         try {
             const normalizedTransaction = buildErpSalePayload(transaction);
@@ -5779,6 +5802,7 @@ export class ApiSyncAdapter {
      * Push a single inventory movement to Master
      */
     async pushInventoryMovement(movement: any): Promise<any> {
+        assertLegacyFormatPayload(movement);
         try {
             const payload = buildErpInventoryLedgerPayload(movement);
             const documentId = String(payload.source_inventory_movement_id || payload.id);
@@ -6125,9 +6149,12 @@ export class ApiSyncAdapter {
             }
 
             const data = await response.json();
+            assertLegacyFormatCollection('transactions',data.items);
             return data.items || [];
         } catch (error) {
+            if (error instanceof ArticleFormatError) throw error;
             console.error('❌ ApiSyncAdapter: Error pulling pending transactions:', error);
+            if (error instanceof ArticleFormatError) throw error;
             return [];
         }
     }
@@ -6168,6 +6195,7 @@ export class ApiSyncAdapter {
                 }
             });
         } catch (error) {
+            if (error instanceof ArticleFormatError) throw error;
             console.error('❌ ApiSyncAdapter: Error acknowledging pending transactions:', error);
         }
     }
@@ -6191,6 +6219,7 @@ export class ApiSyncAdapter {
             const data = await response.json();
             return data.items || [];
         } catch (error) {
+            if (error instanceof ArticleFormatError) throw error;
             console.error('❌ ApiSyncAdapter: Error pulling pending inventory movements:', error);
             return [];
         }
@@ -6232,6 +6261,7 @@ export class ApiSyncAdapter {
                 }
             });
         } catch (error) {
+            if (error instanceof ArticleFormatError) throw error;
             console.error('❌ ApiSyncAdapter: Error acknowledging pending inventory movements:', error);
         }
     }
@@ -6279,6 +6309,7 @@ export class ApiSyncAdapter {
                 }
             });
         } catch (error) {
+            if (error instanceof ArticleFormatError) throw error;
             console.error('❌ ApiSyncAdapter: Error reporting sync error:', error);
         }
     }
@@ -6299,9 +6330,13 @@ export class ApiSyncAdapter {
             }
 
             const data = await response.json();
+            assertLegacyFormatCollection('transactions',data.data?.transactions);
+            assertLegacyFormatCollection('transactionHistory',data.data?.transactionHistory);
             return data.data;
         } catch (error) {
+            if (error instanceof ArticleFormatError) throw error;
             console.error('❌ ApiSyncAdapter: Error pulling history:', error);
+            if (error instanceof ArticleFormatError) throw error;
             return null;
         }
     }

@@ -1,3 +1,4 @@
+import { isFormatOwnedDocument } from '../articleFormats/activation';
 import { isRecoveredOperation } from '../recovery/PendingOperationsRecovery';
 import { db } from '../../utils/db';
 import { dbAdapter } from '../db';
@@ -572,7 +573,7 @@ class BackgroundSyncManager {
 
         // Filter pending items and sort by date (FIFO)
         const pending = data.filter(item =>
-            !isRecoveredOperation(item) && (this.shouldSyncItem(collectionName, item) || (collectionName === 'transactions' && item._forceSyncReplay === true)) &&
+            !isFormatOwnedDocument(item) && !isRecoveredOperation(item) && (this.shouldSyncItem(collectionName, item) || (collectionName === 'transactions' && item._forceSyncReplay === true)) &&
             this.isOperationalSyncPending(item, collectionName)
         );
 

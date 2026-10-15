@@ -2,6 +2,7 @@ import { BusinessConfig, CartItem, Transaction } from '../types';
 import { isV3FinancialDocument, persistV3FinancialTransaction } from './sync/LargeMasterSyncV3FinancialCommit';
 import { db } from '../utils/db';
 import { getRemainingRefundQuantities, hasRefundableItems } from '../utils/refundAvailability';
+import { assertFormatsPostingClosed } from './articleFormats/activation';
 
 type RefundCondition = 'SELLABLE' | 'DAMAGED';
 
@@ -33,6 +34,7 @@ export async function persistStandaloneRefundTransaction(
   refundTransaction: Transaction,
   options: PersistRefundOptions
 ): Promise<{ refund: Transaction; updatedOriginal?: Transaction }> {
+  assertFormatsPostingClosed(refundTransaction.items || []);
   const normalizedItems = normalizeRefundItems(refundTransaction.items || []);
   const refundTotal = Math.abs(
     Number(refundTransaction.total || normalizedItems.reduce((acc, item) => acc + ((item.price || 0) * item.quantity), 0))

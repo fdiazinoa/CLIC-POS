@@ -1,3 +1,4 @@
+import { articleFormatTicketLabel } from '../articleFormats/ticket';
 import { formatQuantity, terminalQuantityPresentation } from '../../utils/quantityPresentation';
 import { weightLineLabel, displayWeightQuantity } from '../../utils/scaleWeight';
 import { BusinessConfig, CartItem, CashMovement, Reservation, Table, Transaction, ZReport } from '../../types';
@@ -518,6 +519,7 @@ export const buildEscPosTicketPayload = (
   chunks.push(divider(width));
   transaction.items.forEach(item => {
     pushTextLines(chunks, splitLines(item.name || 'Articulo', width));
+    if (item.articleFormat) pushTextLines(chunks, splitLines(articleFormatTicketLabel(item), width));
     const discount = resolveLineDiscountPresentation(item);
     const displayedUnitPrice = discount.hasDiscount ? discount.originalUnitPrice : discount.finalUnitPrice;
     const displayedLineTotal = discount.hasDiscount ? discount.originalLineTotal : discount.finalLineTotal;
@@ -813,6 +815,7 @@ export const buildEscPosReservationPayload = (reservation: Reservation, config: 
   chunks.push(divider(width));
   reservation.items.forEach(item => {
     pushTextLines(chunks, splitLines(item.name || 'Articulo', width));
+    if (item.articleFormat) pushTextLines(chunks, splitLines(articleFormatTicketLabel(item), width));
     pushPair(
       chunks,
       item.weightPresentation ? weightLineLabel(item, config.currencySymbol || '$', item.price, terminalQuantityPresentation(config, reservation.terminalId).salesDecimals) : `${formatQuantity(item.quantity, terminalQuantityPresentation(config, reservation.terminalId).salesDecimals)} x ${formatMoney(config.currencySymbol || '$', item.price)}`,

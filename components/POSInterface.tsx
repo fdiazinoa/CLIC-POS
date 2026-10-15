@@ -1,3 +1,8 @@
+import ArticleFormatSelector from './ArticleFormatSelector';
+import { formatsEnabled, assertFormatsPostingClosed } from '../services/articleFormats/activation';
+import { inventoryQuantity, resizeLine, resolveFormatBarcode, formatPrice, toBaseQuantity } from '../services/articleFormats/domain';
+import { addFormatLine, formatStockDemand, routeQuickFormat, baseCodeFormat, skuForFormatVariant, formatVariantForSku, assertOriginalSaleForFormatReturn } from '../services/articleFormats/cart';
+import type { ArticleFormat } from '../services/articleFormats/contract';
 import { buildPosCategoryIdentity, reconcileBoundV3PosCategories } from '../utils/posCategoryIdentity';
 import V3CatalogArticleWarning from './V3CatalogArticleWarning';
 import type { V3ArticleDiagnostic } from '../services/sync/LargeMasterSyncV3OperationalCatalog';
@@ -2397,6 +2402,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    ]);
 
    const [editingItem, setEditingItem] = useState<CartItem | null>(null);
+   const [formatSelection, setFormatSelection] = useState<{product: Product; variantId: string | null; basePrice: number; modifiers: string[]} | null>(null);
+   const articleFormatsEnabled = formatsEnabled(config, { capabilities: activeTerminalConfig?.articleFormatCapabilities });
    const [activeCartItemId, setActiveCartItemId] = useState<string | null>(null);
    const handledAccountActionIdsRef = useRef<Set<string>>(new Set());
    useEffect(() => {
@@ -3275,7 +3282,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const demand: Record<string, number> = {};
 
       for (const cartItem of items || []) {
-         const quantity = Number(cartItem.quantity || 0);
+         const quantity = inventoryQuantity(cartItem);
          if (quantity <= 0) continue;
 
          const deductions = calculateInventoryDeductions(cartItem, quantity, products);
@@ -3296,7 +3303,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const quantities: Record<string, number> = {};
       for (const item of cart || []) {
          if (!item?.id) continue;
-         quantities[item.id] = (quantities[item.id] || 0) + Number(item.quantity || 0);
+         quantities[item.id] = (quantities[item.id] || 0) + inventoryQuantity(item);
       }
       return quantities;
    }, [cart]);
@@ -3403,7 +3410,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       return () => { uiLifetime.current.retire(); addContext.current = undefined; };
    }, []);
 
+   const rejectFormatQuickReturn = useCallback((product: Product, returnMode = isReturnMode): boolean => {
+      try { assertOriginalSaleForFormatReturn(product,returnMode); return false; }
+      catch { setErrorToast('Selecciona el ticket original para devolver esta presentación.'); return true; }
+   }, [isReturnMode]);
+
    const performAddToCart = useCallback(async (product: Product, quantity: number = 1, priceOverride?: number, modifiers?: string[], trackingData?: any[], selectedVariant?: ProductVariant, variantInfo?: string, note?: string, restaurantConfig?: CartItem['restaurantConfig'], consignmentPatch?: Pick<CartItem, 'consignmentId' | 'consignmentDocumentNo' | 'consignmentLineId'>) => {
+      if (rejectFormatQuickReturn(product,isReturnMode || quantity < 0)) return false;
       const mounted = uiLifetime.current.capture();
       const isCurrent = () => mounted() && addContext.current === v3Operational;
       const trace = activeAddTraceRef.current || beginPosInteraction('ADD_TICKET_ITEM', { source: 'programmatic', productId: product.id });
@@ -3459,7 +3472,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          const existingTaxSignature = resolveEffectiveTaxIds(i.appliedTaxIds, activeTerminalConfig, i.taxable).slice().sort().join('|');
          const existingIdentityKey = String((i as any).cartIdentityKey || productLineIdentityKey(i, i.price));
          const existingConsignmentKey = i.consignmentLineId || '';
-         return existingIdentityKey === lineIdentityKey
+         return !i.articleFormat && existingIdentityKey === lineIdentityKey
             && (i.salespersonId || '') === (activeTableSellerId || '')
             && !i.subtotalizedAt
             && Math.sign(Number(i.quantity || 0)) === Math.sign(quantity)
@@ -3535,16 +3548,48 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          if (trace.stages.HANDLER_END === undefined) markInteractionStage(trace, 'HANDLER_END');
          if (activeAddTraceRef.current === trace) activeAddTraceRef.current = null;
       }
-   }, [activeTable?.currentOrderId, activeTable?.id, activeDirectV3TicketId, activeTableSellerId, activeTerminalConfig, authorizeSubtotalizedEdit, blockRecoveredUberOrderMutation, canAddItemToCart, cart, ensureSalesWithOpenZPermission, getProductPrice, onUpdateCart, v3Operational]);
+   }, [activeTable?.currentOrderId, activeTable?.id, activeDirectV3TicketId, activeTableSellerId, activeTerminalConfig, authorizeSubtotalizedEdit, blockRecoveredUberOrderMutation, canAddItemToCart, cart, ensureSalesWithOpenZPermission, getProductPrice, onUpdateCart, v3Operational, rejectFormatQuickReturn, isReturnMode]);
    const addToCart = useCallback((...args: Parameters<typeof performAddToCart>) => {
+      if (rejectFormatQuickReturn(args[0],isReturnMode || Number(args[1] ?? 1) < 0)) return Promise.resolve(false);
       if (!v3Operational) return performAddToCart(...args);
       const context = v3Operational;
       const mounted = uiLifetime.current.capture();
       return addQueue.current.run(() => mounted() && addContext.current === context, () => performAddToCart(...args))
          .catch((error: any) => { setErrorToast(`V3: ${error.message || error}`); return false; });
-   }, [performAddToCart, v3Operational]);
+   }, [performAddToCart, v3Operational, rejectFormatQuickReturn, isReturnMode]);
+
+   const addSelectedFormat = useCallback(async (product: Product, format: ArticleFormat, price: number, quantity = 1, modifiers: string[] = []) => {
+      if (rejectFormatQuickReturn(product,isReturnMode || quantity < 0)) { setFormatSelection(null); return false; }
+      if (!articleFormatsEnabled) { setErrorToast('Presentaciones pendientes de habilitación'); return false; }
+      const context = v3Operational;
+      const mounted = uiLifetime.current.capture();
+      const isCurrent = () => mounted() && addContext.current === context;
+      const operation = async () => {
+         try {
+            if (blockRecoveredUberOrderMutation('agregar artículos adicionales')) return false;
+            const authorize = () => authorizeSubtotalizedEdit('Agregar presentación a ticket subtotalizado');
+            if (!(context ? await authorizeV3UIContext(isCurrent,authorize) : await authorize())) return false;
+            if (!ensureSalesWithOpenZPermission()) return false;
+            if (!canAddItemToCart(product,toBaseQuantity(quantity,format.factor))) return false;
+            const selectedProduct = { ...product, appliedTaxIds: resolveEffectiveTaxIds(product.appliedTaxIds,activeTerminalConfig,product.taxable) };
+            const previous = latestAddCart.current;
+            const next = addFormatLine(previous,selectedProduct,format,quantity,price,crypto.randomUUID(),modifiers);
+            if (context) {
+               await context.validate(next,{ticketId:activeTable?.currentOrderId || activeDirectV3TicketId,claimId:activeDirectV3TicketId,tableId:activeTable?.id === undefined ? undefined : String(activeTable.id)});
+               assertV3UIContext(isCurrent);
+            }
+            latestAddCart.current = next;
+            onUpdateCart(next);
+            setFormatSelection(null);
+            setErrorToast(null);
+            return true;
+         } catch (error) { setErrorToast(error instanceof Error ? error.message : 'Presentación no válida'); return false; }
+      };
+      return context ? addQueue.current.run(isCurrent,operation) : operation();
+   },[rejectFormatQuickReturn,isReturnMode,articleFormatsEnabled,v3Operational,blockRecoveredUberOrderMutation,authorizeSubtotalizedEdit,ensureSalesWithOpenZPermission,canAddItemToCart,activeTerminalConfig,activeTable?.currentOrderId,activeTable?.id,activeDirectV3TicketId,onUpdateCart]);
 
    const handleProductClick = useCallback((product: Product) => {
+      if (rejectFormatQuickReturn(product)) return;
       if (Date.now() < suppressProductInputUntilMs) return;
       // MOBILE INTERCEPTION
       if (isMobile && !defaultSalesWarehouseId) {
@@ -3574,8 +3619,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
       else if (hasVariants) setSelectedProductForVariants(product);
       else if (hasRestaurantConfig) setProductForModifiers(product);
+      else if (articleFormatsEnabled && product.article_formats?.formats.length && !isReturnMode) setFormatSelection({product,variantId:null,basePrice:getProductPrice(product),modifiers:[]});
       else addToCart(product, isReturnMode ? -1 : 1);
-   }, [isMobile, defaultSalesWarehouseId, ensureSalesWithOpenZPermission, canAddItemToCart, addToCart, isReturnMode, suppressProductInputUntilMs, v3Operational, config, activeTerminalId]);
+   }, [isMobile, defaultSalesWarehouseId, ensureSalesWithOpenZPermission, canAddItemToCart, addToCart, isReturnMode, suppressProductInputUntilMs, v3Operational, config, activeTerminalId, rejectFormatQuickReturn, articleFormatsEnabled, getProductPrice]);
 
    useEffect(() => {
       if (!productForScale || !saleScaleContext) return;
@@ -3811,6 +3857,18 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       setShowPromoSheet(true);
    }, []);
 
+   const handleVariantConfirm = (product: Product, modifiers: string[], price: number, selectedVariant?: ProductVariant, variantInfo?: string) => {
+      if (rejectFormatQuickReturn(product)) { setSelectedProductForVariants(null); return; }
+      if (articleFormatsEnabled && product.article_formats?.formats.length) {
+         try {
+            if (!selectedVariant?.sku) throw new Error('Selecciona una variante válida para esta presentación.');
+            const variantId = formatVariantForSku(product,selectedVariant.sku);
+            setFormatSelection({product,variantId,basePrice:(product.tariffs || []).find(t => t.tariffId === activeTariffId)?.price ?? selectedVariant.price ?? price,modifiers});
+         } catch (error) { setErrorToast(error instanceof Error ? error.message : 'Variante no válida'); return; }
+      } else { void addToCart(product,isReturnMode ? -1 : 1,price,modifiers,undefined,selectedVariant,variantInfo); }
+      setSelectedProductForVariants(null);
+   };
+
    // --- SEARCH LOGIC (Auto-Add Variantes) ---
    const findProductByAnyCode = useCallback((code: string) => {
       let quantity = 1;
@@ -3826,9 +3884,21 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
 
       if (!searchCode) return null;
+      if (articleFormatsEnabled) {
+         const resolved = resolveFormatBarcode(products,searchCode);
+         if (resolved) {
+            const product = products.find(p => p.id === resolved.itemId)!;
+            const variant = product.variants?.find(v => v.sku === skuForFormatVariant(product,resolved.variantId));
+            const basePrice = (product.tariffs || []).find(t => t.tariffId === activeTariffId)?.price ?? variant?.price ?? product.price;
+            return {product,quantity,price:formatPrice(resolved.format,activeTariffId,basePrice),modifiers:[],format:resolved.format,selectedVariant:variant,variantInfo:undefined};
+         }
+      }
 
       const indexedMatch = productCodeIndex.get(searchCode);
       if (indexedMatch) {
+         const variantId = articleFormatsEnabled && indexedMatch.selectedVariant?.sku ? formatVariantForSku(indexedMatch.product,indexedMatch.selectedVariant.sku) : null;
+         const format = articleFormatsEnabled ? baseCodeFormat(indexedMatch.product.article_formats,variantId) : undefined;
+         if (format) return {...indexedMatch,quantity,price:formatPrice(format,activeTariffId,(indexedMatch.product.tariffs || []).find(t => t.tariffId === activeTariffId)?.price ?? indexedMatch.price),format};
          return {
             product: indexedMatch.product,
             quantity,
@@ -3849,6 +3919,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   const variantInfo = Object.entries(v.attributeValues || {})
                      .map(([key, value]) => `${key}: ${value}`)
                      .join(' · ');
+                  const format = articleFormatsEnabled ? baseCodeFormat(p.article_formats,formatVariantForSku(p,v.sku)) : undefined;
+                  if (format) return {product:p,quantity,price:formatPrice(format,activeTariffId,(p.tariffs || []).find(t => t.tariffId === activeTariffId)?.price ?? resolveVariantSalesPrice(v,getProductPrice(p))),modifiers:modifiersList,selectedVariant:v,variantInfo,format};
                   return { product: p, quantity, price: resolveVariantSalesPrice(v, getProductPrice(p)), modifiers: modifiersList, selectedVariant: v, variantInfo };
                }
             }
@@ -3867,12 +3939,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
          // B. Check Parent (ID, SKU, Barcode, item_code, code)
          if (rootCodeCandidates.includes(searchCode) && productHasActiveTariff(p)) {
+            const format = articleFormatsEnabled ? baseCodeFormat(p.article_formats,null) : undefined;
+            if (format) return {product:p,quantity,price:formatPrice(format,activeTariffId,getProductPrice(p)),modifiers:[],selectedVariant:undefined,variantInfo:undefined,format};
             return { product: p, quantity, price: getProductPrice(p), modifiers: [] };
          }
       }
 
       return null;
-   }, [getProductPrice, productCodeIndex, productHasActiveTariff, products]);
+   }, [getProductPrice, productCodeIndex, productHasActiveTariff, products, articleFormatsEnabled, activeTariffId]);
 
    const submitProductTextSearchRef = useRef<((rawValue: string, focusTarget?: React.RefObject<HTMLInputElement>) => boolean) | null>(null);
 
@@ -3892,8 +3966,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const context = v3Operational;
       const mounted = uiLifetime.current.capture();
       const resolveAndAdd = async () => {
-         const match = context ? await context.resolveCode(raw) : findProductByAnyCode(raw);
+         const match: {product: Product; quantity: number; price: number; modifiers: string[]; selectedVariant?: ProductVariant; variantInfo?: string; format?: ArticleFormat} | null = context ? await context.resolveCode(raw) : findProductByAnyCode(raw);
          if (context) assertV3UIContext(() => mounted() && addContext.current === context);
+         if (match && 'format' in match && match.format) {
+            routeQuickFormat(match.format,isReturnMode,() => {});
+            const added = await addSelectedFormat(match.product,match.format,match.price,match.quantity,match.modifiers);
+            return {match,added};
+         }
          if (match && isWeightedProduct(match.product)) {
             assertWeightedCodeInput(match.product, raw);
             handleProductClick(match.product);
@@ -3904,7 +3983,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          return { match, added };
       };
       return context ? scanQueue.current.run(() => mounted() && addContext.current === context, resolveAndAdd) : resolveAndAdd();
-   }, [v3Operational, findProductByAnyCode, addToCart, isReturnMode, handleProductClick]);
+   }, [v3Operational, findProductByAnyCode, addToCart, isReturnMode, handleProductClick, addSelectedFormat]);
 
    const handleSearchKeyDown = useCallback(async (e: React.KeyboardEvent<HTMLInputElement>) => {
       try {
@@ -3916,7 +3995,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          if (match) {
             if (v3Operational && !added) return;
             setSearchTerm('');
-            setErrorToast(null);
+            if (added) setErrorToast(null);
             // Ensure focus stays on search bar
             searchInputRef.current?.focus();
          } else {
@@ -4004,8 +4083,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       // 2. Normal Barcode Search. Use the memoized code index instead of scanning
       // the whole catalog on every hardware scan.
-      const match = v3Operational ? await v3Operational.resolveCode(trimmed) : findProductByAnyCode(trimmed);
+      const match: {product: Product; quantity: number; price: number; modifiers: string[]; selectedVariant?: ProductVariant; variantInfo?: string; format?: ArticleFormat} | null = v3Operational ? await v3Operational.resolveCode(trimmed) : findProductByAnyCode(trimmed);
       if (match) {
+         if ('format' in match && match.format) {
+            routeQuickFormat(match.format,isReturnMode,() => {});
+            const added = await addSelectedFormat(match.product,match.format,match.price,match.quantity,match.modifiers);
+            return {success:added,message:added ? `Producto agregado: ${match.product.name}` : 'Presentación rechazada'};
+         }
          setSearchTerm('');
          if (isWeightedProduct(match.product)) {
             assertWeightedCodeInput(match.product, trimmed);
@@ -4041,7 +4125,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          if (trace.stages.HANDLER_END === undefined) markInteractionStage(trace, 'HANDLER_END');
          if (activeAddTraceRef.current === trace) activeAddTraceRef.current = null;
       }
-   }, [activeReservationByScanCode, addToCart, config.scaleLabelConfig, handleProductClick, getProductPrice, handleRecoverReservation, findProductByAnyCode, productCodeIndex, routeScannedCoupon, onOpenInvoiceActions, isReturnMode, v3Operational]);
+   }, [activeReservationByScanCode, addToCart, config.scaleLabelConfig, handleProductClick, getProductPrice, handleRecoverReservation, findProductByAnyCode, productCodeIndex, routeScannedCoupon, onOpenInvoiceActions, isReturnMode, v3Operational, addSelectedFormat]);
 
    const processBarcode = useCallback((...args: Parameters<typeof performBarcode>) => {
       const context = v3Operational;
@@ -4057,6 +4141,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    }, [performBarcode, v3Operational]);
 
    const isAnyModalOpen = !!(
+      formatSelection ||
       showSafetyGate ||
       showDiscountModal ||
       showParkAliasModal ||
@@ -5134,9 +5219,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             if (!authorized) return;
          }
 
-         // Stock Check (Quantity Increase)
+         updatedItem = resizeLine(updatedItem,updatedItem.quantity);
+         // Stock Check (Quantity Increase), in historical base units for formats.
          if (originalItem && updatedItem.quantity > originalItem.quantity) {
-            const diff = updatedItem.quantity - originalItem.quantity;
+            const diff = inventoryQuantity(updatedItem) - inventoryQuantity(originalItem);
             if (!canAddItemToCart(updatedItem, diff)) return;
          }
          const requestedLineDiscountPercent = updatedItem.adjustmentSource === 'MANUAL_DISCOUNT'
@@ -5381,6 +5467,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       };
 
       try {
+         assertFormatsPostingClosed(processedCart);
          await assertCheckoutFiscalAuthority();
          if (v3Operational) await v3Operational.validate(processedCart, { ticketId: activeTable?.currentOrderId || activeDirectV3TicketId, claimId: activeDirectV3TicketId, tableId: activeTable?.id === undefined ? undefined : String(activeTable.id) });
          const invalidQuantityItem = processedCart.find(item => !isValidCartQuantity(item.quantity));
@@ -8612,6 +8699,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                        <div className="flex justify-between items-start">
                                           <h4 className="font-bold text-gray-800 text-sm leading-tight line-clamp-1">{item.name}</h4>
                                        </div>
+                                       {item.articleFormat && <p className="text-xs text-blue-600">{item.articleFormat.name} · {item.articleFormat.factor} base · {item.baseQuantity} unidades</p>}
                                        <div className="flex flex-col mt-0.5">
                                           <div className="flex items-center gap-2">
                                              <span className="text-xs font-black text-blue-600">{baseCurrency.symbol}{displayWeightPrice(item).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: item.weightPresentation ? 8 : 2 })}{item.weightPresentation ? `/${item.weightPresentation.displayUnit}` : ''}</span>
@@ -8760,6 +8848,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                           {hasDiscount && <p className="text-[10px] text-gray-400 line-through">{baseCurrency.symbol}{(item.originalPrice! * item.quantity).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>}
                                        </div>
                                     </div>
+                                    {item.articleFormat && <p className="text-xs text-blue-600">{item.articleFormat.name} · {item.articleFormat.factor} base · {item.baseQuantity} unidades</p>}
 
                                     <div className="flex items-center justify-between">
                                        <div className="flex flex-col">
@@ -9296,7 +9385,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             canEditQuantity={cartItemEditCapabilities.canEditQuantity && !editingItem.dispatched}
             canVoidItem={cartItemEditCapabilities.canVoidItem && !editingItem.dispatched}
          />}
-         {selectedProductForVariants && <ProductVariantSelector product={selectedProductForVariants} productSalesPrice={getProductPrice(selectedProductForVariants)} currencySymbol={baseCurrency.symbol} onClose={() => setSelectedProductForVariants(null)} onConfirm={(p, m, pr, selectedVariant, variantInfo) => { addToCart(p, 1, pr, m, undefined, selectedVariant, variantInfo); setSelectedProductForVariants(null); }} />}
+         {formatSelection?.product.article_formats && <ArticleFormatSelector itemName={formatSelection.product.name} dto={formatSelection.product.article_formats} variantId={formatSelection.variantId} tariffId={activeTariffId} baseTariffPrice={formatSelection.basePrice} stockBase={getScopedProductStock(formatSelection.product) - (committedByProduct[formatSelection.product.id] || 0) - formatStockDemand(cart,formatSelection.product.id)} currencySymbol={baseCurrency.symbol} onClose={() => setFormatSelection(null)} onSelect={(format,price) => { void addSelectedFormat(formatSelection.product,format,price,1,formatSelection.modifiers); }} />}
+         {selectedProductForVariants && <ProductVariantSelector product={selectedProductForVariants} productSalesPrice={getProductPrice(selectedProductForVariants)} currencySymbol={baseCurrency.symbol} onClose={() => setSelectedProductForVariants(null)} onConfirm={handleVariantConfirm} />}
          {productForScale && saleScaleContext && <ScaleModal key={JSON.stringify(saleScaleContext)}
             scales={saleScaleContext.scales} defaultScaleId={saleScaleContext.defaultScaleId}
             product={productForScale} currencySymbol={baseCurrency.symbol} onClose={() => setProductForScale(null)}

@@ -1,3 +1,4 @@
+import { isFormatOwnedDocument } from '../articleFormats/activation';
 import { db } from '../../utils/db';
 import { dbAdapter } from '../db';
 import { buildMasterUrlFromHost } from '../../utils/cloudMasterRegistry';
@@ -509,7 +510,7 @@ class NetworkSyncService {
 
         const transactions = await dbAdapter.getCollection('transactions') || [];
         // Optimization: Only push last 20 to avoid huge payloads, server handles dedup
-        const recent = transactions.slice(-20);
+        const recent = transactions.filter(item => !isFormatOwnedDocument(item)).slice(-20);
 
         if (recent.length === 0) return;
 
@@ -544,7 +545,7 @@ class NetworkSyncService {
 
         // CRITICAL FIX: Push ALL pending movements, not just last 50
         // This ensures cross-terminal sync works correctly
-        const pending = ledger.filter((m: any) => m.syncStatus === 'PENDING');
+        const pending = ledger.filter((m: any) => !isFormatOwnedDocument(m) && m.syncStatus === 'PENDING');
 
         if (pending.length === 0) return;
 

@@ -1,3 +1,4 @@
+import { assertFormatsPostingClosed } from './services/articleFormats/activation';
 import { attachFiscalStatusLifecycle } from './services/fiscal/FiscalStatusLifecycle';
 import { FiscalStatusReconciler } from './services/fiscal/FiscalStatusReconciler';
 import { fiscalStatusSourceChecksum, type FiscalStatusScope } from './services/fiscal/FiscalStatusProof';
@@ -11552,6 +11553,7 @@ const AppContent: React.FC = () => {
   }, [fiscalStatusWorker,isDataLoaded,fiscalHistoryHydrated,isSecurityLoaded,deviceId,config.companyInfo.rnc,fiscalStatusLifecycleKey]);
 
   const handleTransactionComplete = async (txn: Transaction) => {
+    assertFormatsPostingClosed(txn.items || []);
     const fiscalTerminal = (config.terminals || []).find(terminal => terminal.config?.currentDeviceId === deviceId);
     if ((txn.ncf || txn.ncfType) && (!fiscalTerminal ||
         (txn.terminalId && txn.terminalId !== fiscalTerminal.id && txn.terminalId !== fiscalTerminal.config?.erpTerminalId))) {
@@ -12916,6 +12918,8 @@ const AppContent: React.FC = () => {
     reason: string,
     options: RefundProcessingOptions = {}
   ): Promise<Transaction | null> => {
+    assertFormatsPostingClosed(itemsToRefund || []);
+    assertFormatsPostingClosed(originalTx.items || []);
     console.log("🔄 Procesando Devolución Integral:", { originalTx, items: itemsToRefund.length, reason });
 
     let normalizedRefundItems = (itemsToRefund || [])

@@ -739,7 +739,7 @@ export const applyPromotions = (cart: CartItem[], config: BusinessConfig, termin
 
                         // If this is the target item, apply discount
                         // Using 'id' as unique identifier for the line item (assuming 1 line per product)
-                        if (item.id === targetItem.id) {
+                        if (item.articleFormat || targetItem.articleFormat ? item.cartId === targetItem.cartId : item.id === targetItem.id) {
                             newPrice = promotionBasePrice * (1 - applicablePromo.benefitValue / 100);
                         }
                     }

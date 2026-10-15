@@ -1,3 +1,9 @@
+import { openArticleFormatsRuntime } from '../articleFormats/runtime';
+import type { FormatTransport } from '../articleFormats/wire';
+import type { FormatSQL } from '../articleFormats/store';
+import { hydrateNetworkFormatMasters, syncArticleFormatMasters } from '../articleFormats/master';
+import type { ArticleFormatMasterTransport } from '../articleFormats/sync';
+import type { ArticleFormatStore } from '../articleFormats/store';
 /**
  * Sync Manager
  * 
@@ -6325,6 +6331,17 @@ class SyncManager {
             productionAreaCount: productionAreas.length,
             productCount: products.length,
         };
+    }
+
+    async pullArticleFormats(store: ArticleFormatStore, transport: ArticleFormatMasterTransport, products: Product[]): Promise<Product[]> {
+        return syncArticleFormatMasters(store, transport, products);
+    }
+
+    async pullNetworkArticleFormats(sql: FormatSQL, transport: FormatTransport, config: { featureFlags?: { ARTICLE_FORMATS?: boolean } },
+        terminal: { id: string; capabilities?: { article_formats?: number } }, products: Product[]): Promise<Product[]> {
+        const runtime = await openArticleFormatsRuntime(sql, transport, config, terminal);
+        await runtime.masters.download();
+        return hydrateNetworkFormatMasters(runtime.masters, products);
     }
 
     async pullCatalog(
