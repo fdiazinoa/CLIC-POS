@@ -44,6 +44,7 @@ type PublishedEndpointState = {
     fingerprint: string;
     lastPublishedAt: number;
     abortController: AbortController | null;
+    inFlight: Promise<CloudMasterEndpoint | null> | null;
     endpoint: CloudMasterEndpoint | null;
 };
 
@@ -90,6 +91,8 @@ const safeJson = async (response: Response) => {
 
 let cachedRuntimeAppVersion: { appVersion: string | null; appVersionCode: number | null } | undefined;
 const publishedStateByTerminal = new Map<string, PublishedEndpointState>();
+type PublishPreparation = { fingerprint?: string; promise: Promise<CloudMasterEndpoint | null> };
+const latestPreparationByTerminal = new Map<string, PublishPreparation>();
 
 const readRuntimeDeviceInfo = async (): Promise<RuntimeDeviceInfo | null> => {
     try {
@@ -129,12 +132,22 @@ const resolveRuntimeDeviceInfo = async () => {
     return cachedRuntimeAppVersion;
 };
 
+// The Android bridge reports addresses, not URLs or hostnames. Never advertise loopback.
+const normalizeNativeIpv4 = (value: unknown): string => {
+    if (typeof value !== 'string') return '';
+    const ip = value.trim();
+    const parts = ip.split('.');
+    if (parts.length !== 4 || parts.some(part => !/^\d{1,3}$/.test(part) || Number(part) > 255 || String(Number(part)) !== part)) return '';
+    if (Number(parts[0]) === 0 || Number(parts[0]) === 127 || Number(parts[0]) >= 224) return '';
+    return ip;
+};
+
 const resolveRuntimeNetworkInfo = async (): Promise<RuntimeNetworkInfo> => {
     const deviceInfo = await readRuntimeDeviceInfo();
     const localIps = dedupeStrings([
-        normalizeMasterHost(deviceInfo?.localIp || ''),
+        normalizeNativeIpv4(deviceInfo?.localIp),
         ...(Array.isArray(deviceInfo?.localIps)
-            ? deviceInfo.localIps.map((value) => normalizeMasterHost(value))
+            ? deviceInfo.localIps.map(normalizeNativeIpv4)
             : []),
     ]).filter((value) => value && value !== 'localhost' && value !== '127.0.0.1');
 
@@ -147,11 +160,14 @@ const resolveRuntimeNetworkInfo = async (): Promise<RuntimeNetworkInfo> => {
 const fetchWithTimeout = async (input: RequestInfo | URL, init: RequestInit = {}, timeoutMs = 3500) => {
     const controller = typeof AbortController === 'function' ? new AbortController() : null;
     const upstreamSignal = init.signal;
-    const abortFromUpstream = () => controller?.abort();
+    let rejectAbort: ((reason: Error) => void) | undefined;
+    const abortError = () => Object.assign(new Error('Request aborted'), { name: 'AbortError' });
+    const abortFromUpstream = () => { controller?.abort(); rejectAbort?.(abortError()); };
+    const abortPromise = new Promise<never>((_, reject) => { rejectAbort = reject; });
 
     if (upstreamSignal && controller) {
         if (upstreamSignal.aborted) {
-            controller.abort();
+            throw abortError();
         } else {
             upstreamSignal.addEventListener('abort', abortFromUpstream, { once: true });
         }
@@ -172,6 +188,7 @@ const fetchWithTimeout = async (input: RequestInfo | URL, init: RequestInit = {}
                 ...(controller ? { signal: controller.signal } : {}),
             }),
             timeoutPromise,
+            abortPromise,
         ]) as Response;
     } finally {
         if (upstreamSignal && controller) {
@@ -347,12 +364,14 @@ const callDirectRpc = async (
     includeRepresentation = false,
     signal?: AbortSignal
 ): Promise<CloudMasterEndpoint | null> => {
+    if (signal?.aborted) return null;
     const { supabaseUrl } = getCloudConfig();
     const profiledHeaders = await buildDirectRpcHeaders(includeRepresentation);
     const publicHeaders = await buildPublicRpcHeaders(includeRepresentation);
     if (!supabaseUrl || (!profiledHeaders && !publicHeaders)) return null;
 
     for (const rpcName of rpcCandidates) {
+        if (signal?.aborted) return null;
         const headers = rpcName.startsWith('clic_') ? publicHeaders : profiledHeaders;
         if (!headers) continue;
 
@@ -364,6 +383,7 @@ const callDirectRpc = async (
                 signal,
             }, 5000);
 
+            if (signal?.aborted) return null;
             if (!response.ok) {
                 if ([401, 403, 404].includes(response.status)) {
                     continue;
@@ -375,9 +395,11 @@ const callDirectRpc = async (
             }
 
             const data = await safeJson(response);
+            if (signal?.aborted) return null;
             if (Array.isArray(data) && data.length > 0) return normalizeEndpointRecord(data[0]);
             if (data && typeof data === 'object') return normalizeEndpointRecord(data as Record<string, any>);
         } catch (error) {
+            if (signal?.aborted) return null;
             console.warn(`[cloudMasterRegistry] direct RPC ${rpcName} threw:`, error);
         }
     }
@@ -391,9 +413,8 @@ const getLocalCloudRegistryCandidates = (path: string, query = '') => {
     const normalizedPath = path.startsWith('/') ? path : `/${path}`;
     const suffix = query ? `${normalizedPath}?${query}` : normalizedPath;
     if (isNativeAndroidRuntime()) {
-        // Capacitor's https://localhost is the asset origin, not the HTTP
-        // server on port 3001. Do not probe it using TLS or relative /api URLs.
-        return [`http://127.0.0.1:3001${suffix}`, `http://localhost:3001${suffix}`];
+        // Kotlin exposes neither Node network discovery nor the Cloud registry proxy.
+        return [];
     }
     const candidates = [
         suffix,
@@ -409,6 +430,7 @@ const getLocalCloudRegistryCandidates = (path: string, query = '') => {
 };
 
 const resolveLocalIpv4Addresses = async (): Promise<string[]> => {
+    if (isNativeAndroidRuntime()) return (await resolveRuntimeNetworkInfo()).localIps || [];
     for (const url of getLocalNetworkCandidates()) {
         try {
             const response = await fetchWithTimeout(url, {}, 2500);
@@ -482,31 +504,26 @@ export const resolveMasterEndpointFromCloud = async (
     return null;
 };
 
-export const publishMasterEndpointToCloud = async (payload: {
-    deviceId: string;
-    terminalId: string;
-    terminalName?: string;
-    isPrimary?: boolean;
-}): Promise<CloudMasterEndpoint | null> => {
-    // Only an operational primary may author the tenant's Master endpoint.
-    if (payload.isPrimary !== true) return null;
+type PublishPayload = {
+    deviceId: string; terminalId: string; terminalName?: string; isPrimary?: boolean;
+};
 
-    const identity = getStoredTenantIdentity();
-    if (!identity.tenantId && !identity.tenantSlug && !identity.tenantEmail) {
-        return null;
-    }
-
-    const protocol = window.location.protocol.replace(':', '') || 'http';
+const publishPreparedEndpoint = async (
+    payload: PublishPayload,
+    identity: TenantIdentity,
+    preparation: PublishPreparation,
+    publishStateKey: string,
+): Promise<CloudMasterEndpoint | null> => {
+    const protocol = isNativeAndroidRuntime() ? 'http' : window.location.protocol.replace(':', '') || 'http';
     const port = 3001;
     const runtimeDeviceInfo = await resolveRuntimeDeviceInfo();
     const runtimeNetworkInfo = await resolveRuntimeNetworkInfo();
-    const discoveredLocalIps = await resolveLocalIpv4Addresses();
+    const discoveredLocalIps = isNativeAndroidRuntime() ? runtimeNetworkInfo.localIps || [] : await resolveLocalIpv4Addresses();
     const localIps = discoveredLocalIps.length > 0
         ? discoveredLocalIps
         : runtimeNetworkInfo.localIps || [];
     const localIp = localIps[0] || runtimeNetworkInfo.localIp || null;
     const endpointUrl = localIp ? `${protocol}://${localIp}:${port}` : null;
-    const publishStateKey = buildPublishedStateKey(identity, payload);
     const fingerprint = stablePublishFingerprint({
         endpointUrl,
         localIp,
@@ -517,26 +534,39 @@ export const publishMasterEndpointToCloud = async (payload: {
         terminalId: payload.terminalId,
         terminalName: payload.terminalName || payload.terminalId,
     });
+    preparation.fingerprint = fingerprint;
+    const latestPreparation = latestPreparationByTerminal.get(publishStateKey);
+    if (latestPreparation !== preparation) {
+        const endpoint = await latestPreparation?.promise;
+        return latestPreparation?.fingerprint === fingerprint ? endpoint || null : null;
+    }
+    if (isNativeAndroidRuntime() && !localIp) {
+        publishedStateByTerminal.get(publishStateKey)?.abortController?.abort();
+        return null;
+    }
     const existingState = publishedStateByTerminal.get(publishStateKey);
 
-    // Diff check: si el estado publicado sigue siendo el mismo, no volvemos a escribir en cloud.
-    if (existingState && existingState.fingerprint === fingerprint) {
-        return existingState.endpoint;
+    if (existingState?.fingerprint === fingerprint && !existingState.abortController?.signal.aborted) {
+        if (existingState.inFlight) return existingState.inFlight;
+        if (existingState.endpoint) return existingState.endpoint;
     }
 
-    // IP en vuelo: si cambia mientras una publicación sigue corriendo, abortamos la anterior.
-    if (existingState?.abortController && existingState.localIp !== localIp) {
-        existingState.abortController.abort();
-    }
-
-    const publishController = typeof AbortController === 'function' ? new AbortController() : null;
-    publishedStateByTerminal.set(publishStateKey, {
-        localIp,
-        fingerprint,
-        lastPublishedAt: existingState?.lastPublishedAt || 0,
-        abortController: publishController,
-        endpoint: existingState?.endpoint || null,
-    });
+    existingState?.abortController?.abort();
+    const publishController = new AbortController();
+    const state: PublishedEndpointState = {
+        localIp, fingerprint, lastPublishedAt: 0,
+        abortController: publishController, endpoint: null, inFlight: null,
+    };
+    publishedStateByTerminal.set(publishStateKey, state);
+    const ownsAttempt = () => publishedStateByTerminal.get(publishStateKey) === state
+        && !publishController.signal.aborted;
+    const confirm = (endpoint: CloudMasterEndpoint): CloudMasterEndpoint | null => {
+        if (!ownsAttempt()) return null;
+        persistMasterEndpoint(endpoint);
+        state.endpoint = endpoint;
+        state.lastPublishedAt = Date.now();
+        return endpoint;
+    };
 
     const nextRpcPayload = {
         ...buildRpcPayload(identity),
@@ -555,85 +585,71 @@ export const publishMasterEndpointToCloud = async (payload: {
         p_app_version_code: runtimeDeviceInfo.appVersionCode,
     };
 
-    if (localIp) {
-        const directEndpoint =
-            await callDirectRpc(DIRECT_PUBLISH_RPC_CANDIDATES, nextRpcPayload, true, publishController?.signal)
-            || await callDirectRpc(DIRECT_PUBLISH_RPC_CANDIDATES, {
-                ...nextRpcPayload,
-                p_app_version: undefined,
-                p_app_version_code: undefined,
-            }, true, publishController?.signal);
-
-        if (directEndpoint) {
-            persistMasterEndpoint(directEndpoint);
-            publishedStateByTerminal.set(publishStateKey, {
-                localIp,
-                fingerprint,
-                lastPublishedAt: Date.now(),
-                abortController: null,
-                endpoint: directEndpoint,
-            });
-            return directEndpoint;
-        }
-    } else {
-        console.warn('[cloudMasterRegistry] publish skipped: no se pudo resolver IP LAN del dispositivo.');
-    }
-
-    const fallbackBody = JSON.stringify({
-        ...identity,
-        ...payload,
-        protocol,
-        port,
-        hostname: window.location.hostname,
-        localIp,
-        localIps,
-        appVersion: runtimeDeviceInfo.appVersion,
-        appVersionCode: runtimeDeviceInfo.appVersionCode,
-    });
-
-    const forwardedHeaders = await buildForwardedCloudHeaders();
-
-    for (const url of getLocalCloudRegistryCandidates('/api/cloud/master-endpoint/publish')) {
-        try {
-            const response = await fetchWithTimeout(url, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    ...forwardedHeaders,
-                },
-                body: fallbackBody,
-                signal: publishController?.signal,
-            }, 4000);
-
-            if (!response.ok) continue;
-
-            const result = await response.json();
-            const endpoint = normalizeEndpointRecord(result?.endpoint as Record<string, any> | undefined);
-            if (!endpoint) continue;
-
-            persistMasterEndpoint(endpoint);
-            publishedStateByTerminal.set(publishStateKey, {
-                localIp,
-                fingerprint,
-                lastPublishedAt: Date.now(),
-                abortController: null,
-                endpoint,
-            });
-            return endpoint;
-        } catch (error) {
-            if (error instanceof Error && error.name === 'AbortError') {
-                return existingState?.endpoint || null;
+    const publish = async (): Promise<CloudMasterEndpoint | null> => {
+        if (localIp) {
+            let directEndpoint = await callDirectRpc(DIRECT_PUBLISH_RPC_CANDIDATES, nextRpcPayload, true, publishController.signal);
+            if (!ownsAttempt()) return null;
+            if (!directEndpoint) {
+                directEndpoint = await callDirectRpc(DIRECT_PUBLISH_RPC_CANDIDATES, {
+                    ...nextRpcPayload, p_app_version: undefined, p_app_version_code: undefined,
+                }, true, publishController.signal);
             }
-            console.warn('[cloudMasterRegistry] publish fallback failed:', url, error);
+            if (!ownsAttempt()) return null;
+            if (directEndpoint) return confirm(directEndpoint);
         }
-    }
 
-    publishedStateByTerminal.set(publishStateKey, {
-        localIp,
-        fingerprint,
-        lastPublishedAt: existingState?.lastPublishedAt || 0,
-        abortController: null,
-        endpoint: existingState?.endpoint || null,
+        const candidates = getLocalCloudRegistryCandidates('/api/cloud/master-endpoint/publish');
+        if (!candidates.length || !ownsAttempt()) return null;
+        const fallbackBody = JSON.stringify({
+            ...identity, ...payload, protocol, port, hostname: window.location.hostname,
+            localIp, localIps, appVersion: runtimeDeviceInfo.appVersion,
+            appVersionCode: runtimeDeviceInfo.appVersionCode,
+        });
+        const forwardedHeaders = await buildForwardedCloudHeaders();
+        for (const url of candidates) {
+            if (!ownsAttempt()) return null;
+            try {
+                const response = await fetchWithTimeout(url, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json', ...forwardedHeaders },
+                    body: fallbackBody, signal: publishController.signal,
+                }, 4000);
+                if (!ownsAttempt()) return null;
+                if (!response.ok) continue;
+                const result = await response.json();
+                if (!ownsAttempt()) return null;
+                const endpoint = normalizeEndpointRecord(result?.endpoint);
+                if (endpoint) return confirm(endpoint);
+            } catch (error) {
+                if (!ownsAttempt()) return null;
+                console.warn('[cloudMasterRegistry] publish fallback failed:', url, error);
+            }
+        }
+        return null;
+    };
+    state.inFlight = publish().catch(error => {
+        if (ownsAttempt()) console.warn('[cloudMasterRegistry] publish failed:', error);
+        return null;
+    }).finally(() => {
+        // An old completion must not release ownership of a newer publication.
+        if (publishedStateByTerminal.get(publishStateKey) === state) {
+            state.inFlight = null;
+            state.abortController = null;
+        }
     });
-    return null;
+    return state.inFlight;
+};
+
+export const publishMasterEndpointToCloud = (payload: PublishPayload): Promise<CloudMasterEndpoint | null> => {
+    // Reserve invocation order before asynchronous device discovery can finish out of order.
+    if (payload.isPrimary !== true) return Promise.resolve(null);
+    const identity = getStoredTenantIdentity();
+    if (!identity.tenantId && !identity.tenantSlug && !identity.tenantEmail) return Promise.resolve(null);
+    const key = buildPublishedStateKey(identity, payload);
+    const preparation: PublishPreparation = { promise: Promise.resolve(null) };
+    latestPreparationByTerminal.set(key, preparation);
+    preparation.promise = publishPreparedEndpoint(payload, identity, preparation, key).catch(error => {
+        console.warn('[cloudMasterRegistry] endpoint preparation failed:', error);
+        return null;
+    });
+    return preparation.promise;
 };
