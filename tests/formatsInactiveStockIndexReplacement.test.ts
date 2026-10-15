@@ -79,3 +79,29 @@ test('wrong same-name legacy index is retained and migration fails closed before
   await assert.rejects(migrate(f),/LEGACY_INDEX_INVALID/);assert.deepEqual(indexes(f.db),prior);assert.deepEqual(rows(f.db),before);assert.equal((f.adapter as any).isReady,false);
  }finally{f.db.close();}
 });
+
+
+for(const [label,from,to] of [
+ ['predicate whitespace',"'inventoryLedger'","'inventory Ledger'"],
+ ['JSON path whitespace',"'$.v3InventoryBaseline'","'$.v3Inventory Baseline'"],
+ ['literal case',"'inventoryLedger'","'InventoryLedger'"],
+ ['escaped quote',"'inventoryLedger'","'inventory''Ledger'"],
+])for(const target of [cover,old])test(`${target} exact literal identity rejects ${label} and preserves old schema/data`,async()=>{
+ const f=await nativeFixture();try{
+  await migrate(f);seed(f);const coverSQL=(f.db.prepare("SELECT sql FROM sqlite_master WHERE name=?").get(cover) as {sql:string}).sql;
+  originalInventoryIndex(f.db);
+  if(target===old)f.db.exec(`DROP INDEX ${old}`);
+  f.db.exec((target===cover?coverSQL:legacyInventoryIndexSQL).replaceAll(from,to));
+  const prior=indexes(f.db),before=rows(f.db);
+  await assert.rejects(migrate(f),target===cover?/COVER_INDEX_INVALID/:/LEGACY_INDEX_INVALID/);
+  assert.deepEqual(indexes(f.db),prior);assert.deepEqual(rows(f.db),before);assert.equal((f.adapter as any).isReady,false);
+ }finally{f.db.close();}
+});
+
+test('known native DDL admits formatting outside literals without changing identity',async()=>{
+ const f=await nativeFixture();try{
+  await migrate(f);const coverSQL=(f.db.prepare("SELECT sql FROM sqlite_master WHERE name=?").get(cover) as {sql:string}).sql;
+  originalInventoryIndex(f.db);f.db.exec(coverSQL.replace(/\n\s+/g,' ').replaceAll("json_extract(data, '","json_extract(data,'"));
+  const before=rows(f.db);await migrate(f);assert.deepEqual(indexes(f.db).map((r:any)=>r.name),[cover]);assert.deepEqual(rows(f.db),before);
+ }finally{f.db.close();}
+});

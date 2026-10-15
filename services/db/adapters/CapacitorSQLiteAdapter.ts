@@ -38,7 +38,12 @@ const INVENTORY_COVER_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_documents_v3_i
 const INVENTORY_LEGACY_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_documents_v3_inventory_baseline
  ON documents(json_extract(data, '$.v3InventoryBaseline'), json_extract(data, '$.productId'), json_extract(data, '$.warehouseId'))
  WHERE collection_name = 'inventoryLedger' AND json_extract(data, '$.v3InventoryBaseline') IS NOT NULL;`;
-const normalizedIndexSQL=(sql:string)=>sql.replace(/IF NOT EXISTS\s+/i,'').replace(/\s+/g,'').replace(/;$/,'');
+// Compare conservative SQL tokens: formatting outside quotes may vary; literals and escaped quotes must remain exact.
+const normalizedIndexSQL=(sql:string)=>{
+    const tokens=sql.trim().replace(/;$/,'').match(/'(?:''|[^'])*'|"(?:""|[^"])*"|[A-Za-z_][A-Za-z_0-9]*|[0-9]+|[^\s]/g) || [];
+    if(tokens[0]==='CREATE'&&tokens[1]==='INDEX'&&tokens.slice(2,5).join(' ')==='IF NOT EXISTS')tokens.splice(2,3);
+    return JSON.stringify(tokens);
+};
 
 const DB_NAME = 'clic_pos_native';
 const DB_VERSION = 1;
