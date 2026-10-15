@@ -31,3 +31,26 @@
 @media (max-width: 599px) {
   .supermarket-fiscal-status { max-width: 100%; flex: 1 1 100%; }
 }
+
+/* Retail desktop owns these dimensions; shared/mobile/restaurant identity stays unchanged. */
+.supermarket-ticket-heading { padding-top: .625rem; padding-bottom: .625rem; gap: .625rem; }
+.supermarket-ticket-toolbar { gap: .625rem; }
+.supermarket-ticket-operator { flex: 0 1 240px; }
+.supermarket-ticket-search { flex: 1 1 280px; margin-left: auto; }
+.supermarket-ticket-actions { margin-left: 0; }
+.supermarket-summary-breakdown { display: grid; grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr)); column-gap: 2rem; row-gap: .75rem; }
+.supermarket-summary-breakdown > div { min-width: 0; }
+.supermarket-summary-breakdown dd { margin-top: .25rem; overflow-wrap: anywhere; }
+@media (min-width: 1200px) {
+  .supermarket-ticket-operator { flex-basis: 260px; }
+  .supermarket-ticket-operator [data-testid="sales-operator-identity"] { gap: 0; }
+  .supermarket-ticket-operator [data-testid="sales-operator-identity"] > :first-child { width: 3.5rem; height: 3.5rem; font-size: 1.125rem; }
+  .supermarket-ticket-operator [data-testid="sales-operator-identity"] > :last-child { max-width: 180px; margin-left: .75rem; }
+  .supermarket-ticket-operator [data-testid="sales-operator-identity"] > :last-child > :first-child { font-size: 1rem; }
+  .supermarket-ticket-operator [data-testid="sales-operator-identity"] > :last-child > :last-child { font-size: .875rem; }
+}
+@media (max-width: 1199px) {
+  .supermarket-ticket-operator { flex: 1 1 200px; }
+  .supermarket-ticket-actions { order: 1; margin-left: auto; }
+  .supermarket-ticket-search { order: 2; flex-basis: 100%; }
+}

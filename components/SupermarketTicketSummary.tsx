@@ -24,10 +24,10 @@ export default function SupermarketTicketSummary({ symbol, subtotal, discount, t
       </div>
       {points > 0 && <div className="rounded-lg bg-purple-100 px-3 py-2 text-purple-800 text-sm font-bold">Ganarás <strong className="text-lg tabular-nums">{points}</strong> puntos</div>}
     </div>
-    <dl className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-slate-500">
-      <div><dt>Subtotal</dt><dd className="text-sm font-bold text-slate-700 tabular-nums">{money(subtotal)}</dd></div>
-      {discount > 0 && <div className="text-red-600"><dt>Descuento</dt><dd className="text-sm font-bold tabular-nums">-{money(discount)}</dd></div>}
-      <div><dt>Impuestos</dt><dd className="text-sm font-bold text-slate-700 tabular-nums">{money(tax)}</dd></div>
+    <dl className="supermarket-summary-breakdown text-xs text-slate-600">
+      <div><dt className="font-bold">Subtotal</dt><dd className="text-sm font-bold text-slate-700 tabular-nums">{money(subtotal)}</dd></div>
+      {discount > 0 && <div className="text-red-600"><dt className="font-bold">Descuento</dt><dd className="text-sm font-bold tabular-nums">-{money(discount)}</dd></div>}
+      <div><dt className="font-bold">Impuestos</dt><dd className="text-sm font-bold text-slate-700 tabular-nums">{money(tax)}</dd></div>
     </dl>
     <TicketTotalStatusRow className="border-t border-slate-200 mt-3 pt-3" status={status}>
       <div className="min-w-0">
