@@ -34,7 +34,7 @@ test('original ERP v1 HTTP/PostgreSQL17 + POS SQLite: masters, atomic posting an
  assert.equal(query(`select count(*)::int n from private.pos_format_events where terminal_id='${f.terminalId}'`)[0].n,0);
  const folder=mkdtempSync(join(tmpdir(),'clic-formats-pos-erp-'));t.after(()=>rmSync(folder,{recursive:true,force:true}));
  let db=new SQLite(join(folder,'pos.sqlite'));t.after(()=>{if(db.open)db.close();});
- const transport=createFormatTransport(f.baseUrl,f);
+ const transport=createFormatTransport(f.baseUrl,f,fetch,15000,{negotiateReturnContextV1:true});
  let runtime=await prepareArticleFormatsAdapters(sqlitePort(db),transport,f.terminalId);
  const ctx=runtime.context;seedCollections(db,ctx,f.itemId);
  const collection=(name:string)=>JSON.parse((db.prepare('SELECT value FROM collections WHERE key=?').get(name) as {value:string}).value);
@@ -105,7 +105,7 @@ test('original ERP v1 HTTP/PostgreSQL17 + POS SQLite: masters, atomic posting an
   const reversal=(source:WireEvent,quantity:string,type:'ARTICLE_FORMAT_RETURN_V1'|'ARTICLE_FORMAT_VOID_V1'):WireEvent=>{
    const line=returnWireLine(source.lines[0],[],quantity,randomUUID()),totals=wireTotals([line]);
    return {schema_version:1,event_id:randomUUID(),transaction_id:randomUUID(),event_type:type,occurred_at:new Date().toISOString(),
-    source_event_id:source.event_id,fiscal:{mode:'NONE'},lines:[line],payments:[{payment_id:randomUUID(),method:'cash',amount:totals.total_amount}],totals};
+    source_event_id:source.event_id,return_context:structuredClone(ctx.return_context!),fiscal:{mode:'NONE'},lines:[line],payments:[{payment_id:randomUUID(),method:'cash',amount:totals.total_amount}],totals};
   };
   const voidEvent=reversal(packSale,'1','ARTICLE_FORMAT_VOID_V1');
   await runtime.posting.post(voidEvent,returnOptions);await runtime.posting.post(voidEvent,returnOptions);await runtime.drain();
