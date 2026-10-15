@@ -1,3 +1,4 @@
+import {originalInventoryIndex} from './formatsInactiveStockIndexFixture';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import SQLite from 'better-sqlite3';
@@ -25,7 +26,7 @@ const arithmeticCases=[
 ];
 for(const c of arithmeticCases)test(`index preserves original quantity and exact availability decisions: ${c.name}`,async()=>{
  const old=await nativeFixture(),candidate=await nativeFixture();try{
-  old.db.exec(`DROP INDEX ${indexName}`);seed(old.db,c.rows);seed(candidate.db,c.rows);
+  originalInventoryIndex(old.db);seed(old.db,c.rows);seed(candidate.db,c.rows);
   const expected=(old.db.prepare(originalSQL).get(...values) as any).delta;
   const actual=await candidate.adapter.masterSyncV3Store.getLocalInventoryDelta(...values as [string,string,string]);
   assert.equal(actual,expected,'changed raw SQLite SUM result');
@@ -37,7 +38,7 @@ for(const c of arithmeticCases)test(`index preserves original quantity and exact
 test('actual native migration installs one durable planner-selected covering expression index on existing file, idempotently',async t=>{
  const dir=mkdtempSync(join(tmpdir(),'clic-stock-index-migrate-'));const file=join(dir,'pos.sqlite');let opened:SQLite.Database|undefined;
  try{
-  let f=await nativeFixture(new SQLite(file));opened=f.db;f.db.exec(`DROP INDEX ${indexName}`);seed(f.db,Array.from({length:100},()=>({qtyIn:1,qtyOut:0})));
+  let f=await nativeFixture(new SQLite(file));opened=f.db;originalInventoryIndex(f.db);seed(f.db,Array.from({length:100},()=>({qtyIn:1,qtyOut:0})));
   const before=f.db.prepare('SELECT * FROM documents ORDER BY collection_name,doc_id').all();
   await (f.adapter as any).initSchema();
   assert.deepEqual(f.db.prepare('SELECT * FROM documents ORDER BY collection_name,doc_id').all(),before);
@@ -96,17 +97,17 @@ test('index and rows survive committed-but-lost response followed by file reopen
  }finally{if(opened?.open)opened.close();rmSync(dir,{recursive:true,force:true});}
 });
 
-for(const point of ['before','during-expression','after-commit-response'] as const)test(`real migration failure ${point} preserves old rows/index, rejects readiness and reopens safely`,async()=>{
+for(const point of ['before','during-expression','after-create-response'] as const)test(`real migration failure ${point} preserves old rows/index, rejects readiness and reopens safely`,async()=>{
  const dir=mkdtempSync(join(tmpdir(),'clic-stock-index-failure-'));const file=join(dir,'pos.sqlite');let opened:SQLite.Database|undefined;
  try{
-  let f=await nativeFixture(new SQLite(file));opened=f.db;f.db.exec(`DROP INDEX ${indexName}`);seed(f.db,[{qtyIn:1.234567,qtyOut:0}]);
+  let f=await nativeFixture(new SQLite(file));opened=f.db;originalInventoryIndex(f.db);seed(f.db,[{qtyIn:1.234567,qtyOut:0}]);
   const before=f.db.prepare('SELECT * FROM documents ORDER BY collection_name,doc_id').all(),bridge=(f.adapter as any).db,execute=bridge.execute.bind(bridge);
   if(point==='during-expression')f.db.function('json_extract',{deterministic:true},(text:unknown,path:unknown)=>{if(path==='$.qtyIn'||path==='$.qtyOut')throw Error('injected-index-expression');const object=JSON.parse(String(text));return object[String(path).slice(2)] ?? null;});
   else bridge.execute=async(sql:string,transaction?:boolean)=>{if(!sql.includes(`CREATE INDEX IF NOT EXISTS ${indexName}`))return execute(sql,transaction);if(point==='before')throw Error('injected-before-index');await execute(sql,transaction);throw Error('injected-index-commit-response');};
   await assert.rejects((f.adapter as any).initSchema(),/injected-index-expression|injected-before-index|injected-index-commit-response/);
   assert.equal((f.adapter as any).isReady,false);assert.deepEqual(f.db.prepare('SELECT * FROM documents ORDER BY collection_name,doc_id').all(),before);
   assert.ok(f.db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_documents_v3_inventory_baseline'").get());
-  if(point!=='after-commit-response')assert.equal(f.db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name=?").get(indexName),undefined);
+  assert.equal(f.db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name=?").get(indexName),undefined);
   f.db.close();f=await nativeFixture(new SQLite(file),false);opened=f.db;await (f.adapter as any).initSchema();assert.equal(await f.adapter.masterSyncV3Store.getLocalInventoryDelta(...values as [string,string,string]),1.234567);
   assert.deepEqual(f.db.prepare('SELECT * FROM documents ORDER BY collection_name,doc_id').all(),before);
  }finally{if(opened?.open)opened.close();rmSync(dir,{recursive:true,force:true});}
@@ -115,7 +116,7 @@ for(const point of ['before','during-expression','after-commit-response'] as con
 test('failed CREATE INDEX statement itself is atomic without relying on a surrounding schema transaction',async()=>{
  const f=await nativeFixture();try{
   const sql=(f.db.prepare("SELECT sql FROM sqlite_master WHERE type='index' AND name=?").get(indexName) as {sql:string}).sql;
-  f.db.exec(`DROP INDEX ${indexName}`);seed(f.db,[{qtyIn:1.234567,qtyOut:0},{qtyIn:2.345678,qtyOut:0}]);
+  originalInventoryIndex(f.db);seed(f.db,[{qtyIn:1.234567,qtyOut:0},{qtyIn:2.345678,qtyOut:0}]);
   const before=f.db.prepare('SELECT * FROM documents ORDER BY collection_name,doc_id').all();
   let quantities=0;f.db.function('json_extract',{deterministic:true},(text:unknown,path:unknown)=>{
    if((path==='$.qtyIn'||path==='$.qtyOut')&&++quantities>=3)throw Error('injected-mid-index-statement');

@@ -1,3 +1,4 @@
+import {originalInventoryIndex} from './formatsInactiveStockIndexFixture';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import SQLite from 'better-sqlite3';
@@ -33,7 +34,7 @@ const examples=[
 ];
 for(const [i,e] of examples.entries())test(`review counterexample${i+1}: raw single/batch/Session and actual native transaction match original71e decision`,async t=>{
  const old=await nativeFixture(),f=await nativeFixture();try{
-  old.db.exec(`DROP INDEX ${cover}`);for(const x of [old,f]){x.db.prepare('UPDATE master_v3_inventory_balances SET qty_on_hand=0,qty_reserved=0,qty_committed=0').run();add(x,e.input,'review');}
+  originalInventoryIndex(old.db);for(const x of [old,f]){x.db.prepare('UPDATE master_v3_inventory_balances SET qty_on_hand=0,qty_reserved=0,qty_committed=0').run();add(x,e.input,'review');}
   const key=baseline(f),expected=(old.db.prepare(originalSum).get(key,id(7),id(5)) as any).delta;assert.equal(expected,e.raw);
   assert.equal(await f.adapter.masterSyncV3Store.getLocalInventoryDelta(key,id(7),id(5)),expected);
   assert.deepEqual(await f.adapter.masterSyncV3Store.getLocalInventoryDeltas(key,[id(7),id(8),id(7)],id(5)),{[id(7)]:expected});
@@ -47,7 +48,7 @@ for(const [i,e] of examples.entries())test(`review counterexample${i+1}: raw sin
 
 test('128 deterministic permutations across2items/2warehouses preserve raw arithmetic and exact native/Session decisions',async()=>{
  const old=await nativeFixture(),f=await nativeFixture();try{
-  old.db.exec(`DROP INDEX ${cover}`);const s=await session(f);let random=0x12345678;
+  originalInventoryIndex(old.db);const s=await session(f);let random=0x12345678;
   const vectors=[[1,-3,16],[7,-12,10],[3,-4,2],[5,-2,3]];
   for(const x of [old,f])for(const item of [id(7),id(8)])for(const warehouse of [id(5),id(6)])x.db.prepare('INSERT OR REPLACE INTO master_v3_inventory_balances VALUES(?,?,?,?,?,?)').run(item,warehouse,0,0,0,'fixture');
   for(let n=0;n<128;n++){
@@ -66,7 +67,7 @@ test('128 deterministic permutations across2items/2warehouses preserve raw arith
 
 test('batch100x100 uses one correlated aggregate statement, per-item rowid order, sparse keys and genuine zero retention',async()=>{
  const old=await nativeFixture(),f=await nativeFixture();try{
-  old.db.exec(`DROP INDEX ${cover}`);const key=baseline(f),items=Array.from({length:100},(_,i)=>id(1000+i));
+  originalInventoryIndex(old.db);const key=baseline(f),items=Array.from({length:100},(_,i)=>id(1000+i));
   for(let i=0;i<100;i++)for(const x of [old,f])add(x,Array.from({length:20},()=>examples[i%2].input).flat(),`batch-${i}`,key,items[i]);
   const before=f.fault.queries,result=await f.adapter.masterSyncV3Store.getLocalInventoryDeltas(key,items,id(5));assert.equal(f.fault.queries-before,2);
   for(let i=0;i<100;i++)assert.equal(result[items[i]],(old.db.prepare(originalSum).get(key,items[i],id(5)) as any).delta);
@@ -80,7 +81,7 @@ test('batch100x100 uses one correlated aggregate statement, per-item rowid order
 for(const hasState of [true,false])for(const hasCover of [true,false])test(`historical state${hasState}/cover${hasCover} preserves ordered single/batch/native sums and durable schema recovery`,async()=>{
  const f=await nativeFixture();try{
   f.db.prepare('UPDATE master_v3_inventory_balances SET qty_on_hand=0,qty_reserved=0,qty_committed=0').run();add(f,examples[0].input,'combination');
-  if(!hasState)f.db.exec('DROP TABLE article_format_inventory_state');if(!hasCover)f.db.exec(`DROP INDEX ${cover}`);
+  if(!hasState)f.db.exec('DROP TABLE article_format_inventory_state');if(!hasCover)originalInventoryIndex(f.db);
   const key=baseline(f);assert.equal(await f.adapter.masterSyncV3Store.getLocalInventoryDelta(key,id(7),id(5)),0.000014);
   assert.deepEqual(await f.adapter.masterSyncV3Store.getLocalInventoryDeltas(key,[id(7),id(7),id(8)],id(5)),{[id(7)]:0.000014});assert.equal(await outcome(f,0.000014),'ACCEPTED');
   await (f.adapter as any).initSchema();const before=f.fault.queries;assert.equal(await f.adapter.masterSyncV3Store.getLocalInventoryDelta(key,id(7),id(5)),0.000014);assert.equal(f.fault.queries-before,1);
@@ -89,7 +90,7 @@ for(const hasState of [true,false])for(const hasCover of [true,false])test(`hist
 
 test('active selected state with missing cover still enforces global scope/cell/authorization and mixed-writer blockers',async()=>{
  const f=await inventoryFixture();try{
-  await f.posting.post(nativeSale(),options);await f.reservations(id(1000));const captured=await f.journal.captureFixture(),mock=await receiptTransport(captured);await f.journal.commitFixture(captured,await mock.download());f.db.exec(`DROP INDEX ${cover}`);
+  await f.posting.post(nativeSale(),options);await f.reservations(id(1000));const captured=await f.journal.captureFixture(),mock=await receiptTransport(captured);await f.journal.commitFixture(captured,await mock.download());originalInventoryIndex(f.db);
   assert.equal((await f.adapter.masterSyncV3Store.getOperationalStockProjection(f.baseline(),[id(7)],id(5))).quantities[id(7)],89);
   const selected=await f.sql.runFinancial!(tx=>readV3Base4Stock(async(sql,values)=>{assert.equal(sql.includes('delta_scaled'),false,'selected authority must not evaluate legacy aggregate');return tx.query(sql,values);},f.baseline(),id(7),id(5)));assert.equal(selected.available.toFixed(4),'89.0000');
   await assert.rejects(f.adapter.masterSyncV3Store.getLocalInventoryDelta(f.baseline(),id(999),id(5)),/STOCK_BASELINE_MISSING/);
@@ -129,7 +130,7 @@ test('correlated batch rejects truncated/duplicate/missing-field transport rows 
 test('BASE4 exact-integer operand contract is unchanged with cover present or historically absent',async()=>{
  for(const hasCover of [true,false]){
   const f=await nativeFixture();try{
-   if(!hasCover)f.db.exec(`DROP INDEX ${cover}`);const key=baseline(f);add(f,[0.1,-0.2,0.3],'base4');
+   if(!hasCover)originalInventoryIndex(f.db);const key=baseline(f);add(f,[0.1,-0.2,0.3],'base4');
    assert.equal((await f.sql.runFinancial!(tx=>readV3Base4Stock(tx.query,key,id(7),id(5)))).available.toFixed(4),'137.2000');
    add(f,[0.000001],'base4-invalid');await assert.rejects(f.sql.runFinancial!(tx=>readV3Base4Stock(tx.query,key,id(7),id(5))),/PRECISION_INVALID/);
   }finally{f.db.close();}
@@ -139,7 +140,7 @@ test('BASE4 exact-integer operand contract is unchanged with cover present or hi
 test('BASE4 integer overflow acceptance remains unchanged with20000 alternating large valid operands',async()=>{
  for(const hasCover of [true,false])for(const sign of [1,-1]){
   const f=await nativeFixture();try{
-   if(!hasCover)f.db.exec(`DROP INDEX ${cover}`);const key=baseline(f);
+   if(!hasCover)originalInventoryIndex(f.db);const key=baseline(f);
    add(f,Array.from({length:20000},(_,i)=>sign*(i%2===0?1:-1)*99999999999.9999),'base4-cancellation');
    add(f,[0,-0],'base4-zero');
    assert.equal((await f.sql.runFinancial!(tx=>readV3Base4Stock(tx.query,key,id(7),id(5)))).available.toFixed(4),'137.0000');
@@ -157,7 +158,7 @@ test('BASE4 integer overflow acceptance remains unchanged with20000 alternating 
 test('BASE4 preserves actual original-order overflow and invalid operand type rejection',async()=>{
  for(const hasCover of [true,false])for(const invalidType of [false,true]){
   const f=await nativeFixture();try{
-   if(!hasCover)f.db.exec(`DROP INDEX ${cover}`);const key=baseline(f);
+   if(!hasCover)originalInventoryIndex(f.db);const key=baseline(f);
    if(invalidType)f.db.prepare('INSERT INTO documents VALUES(?,?,?,?,?)').run('inventoryLedger','invalid-type',JSON.stringify({productId:id(7),warehouseId:id(5),v3InventoryBaseline:key,qtyIn:'0.1',qtyOut:0}),0,'fixture');
    else add(f,Array(10000).fill(99999999999.9999),'genuine-overflow');
    await assert.rejects(f.sql.runFinancial!(tx=>readV3Base4Stock(tx.query,key,id(7),id(5))),invalidType?/PRECISION_INVALID/:/integer overflow/);

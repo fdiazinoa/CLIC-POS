@@ -4,9 +4,17 @@ Base de esta tarea: `937edd448ce1aec59a6a4ecdb3c39658dfa01f39`.
 La referencia de performance original sigue siendo `71e8043c4c92b403bcc57c539af868b28f208a1c`;
 el merge937 no sustituye esa referencia ni borra el fallo de659.
 
-La migración nativa añade únicamente `idx_documents_v3_inventory_delta_cover`,
+La migración nativa instala `idx_documents_v3_inventory_delta_cover`,
 un índice parcial con identidad V3/artículo/warehouse y la expresión histórica
-`COALESCE(qtyIn,0)-COALESCE(qtyOut,0)`. El índice anterior se conserva.
+`COALESCE(qtyIn,0)-COALESCE(qtyOut,0)`. En una transacción nativa tracked separada
+de la creación general del esquema, crea el covering, valida sqlite_master,
+index_list e index_xinfo y retira únicamente el índice redundante
+`idx_documents_v3_inventory_baseline`. Valida también la identidad del índice
+anterior antes de retirarlo; un nombre existente con otra definición falla cerrado.
+Las instalaciones limpias crean sólo covering y los reinicios no recrean el anterior.
+Cada execute interno usa transaction=false; CREATE/validación/DROP comparten
+BEGIN/COMMIT bajo la cola existente. Un fallo o respuesta COMMIT perdida rechaza
+el arranque sin declarar ready; el reopen verifica el resultado durable idempotente.
 SQLite mantiene sus entradas dentro de las transacciones existentes. Los cuatro
 lectores de cantidades ordenan las filas por rowid antes de SUM: single y batch
 del store, precondición financiera ordinaria y acumulado entero BASE4. Esto conserva
@@ -27,6 +35,14 @@ grandes con cancelación, null/missing y entradas repetidas; comprueba resultado
 binario exacto y decisiones de disponibilidad, sin redondear código productivo.
 También demuestra atomicidad de un CREATE INDEX fallido sin transacción envolvente.
 
+`tests/formatsInactiveStockIndexReplacement.test.ts` verifica reemplazo desde
+old-only, ambos, cover-only y ausencia de índices, con snapshots completos de
+tablas y datos financieros, reapertura e idempotencia. Inyecta fallos antes/después
+de CREATE/DROP, validación y COMMIT, incluida respuesta perdida tras commit;
+comprueba transacciones tracked sin execute anidado y que índices con nombre
+correcto pero identidad incorrecta no permitan retirar el anterior. Los oráculos
+históricos crean explícitamente el índice original antes de retirar covering.
+
 `tests/formatsInactiveStockOrderedSum.test.ts` conserva los dos contraejemplos
 de revisión, 128 permutaciones, decisiones nativas reales y proyecciones de sesión,
 batch sparse/dedupe de 100 IDs en una sentencia (más su lectura de autoridad),
@@ -38,7 +54,7 @@ locales usan SQL histórico sin el nuevo índice; la revisión independiente con
 sus ejecuciones del código original71e. No sustituyen esa evidencia independiente.
 
 ```sh
-./node_modules/.bin/tsx --test tests/formatsInactiveStockIndex.test.ts tests/formatsInactiveStockOrderedSum.test.ts tests/articleFormatsInventorySingleRead.test.ts
+./node_modules/.bin/tsx --test tests/formatsInactiveStockIndexReplacement.test.ts tests/formatsInactiveStockIndex.test.ts tests/formatsInactiveStockOrderedSum.test.ts tests/articleFormatsInventorySingleRead.test.ts
 ```
 
 Estas verificaciones no son PERFORMANCE PASS ni prueba Android/plugin/WebView.
@@ -54,9 +70,21 @@ El motor host corroborado en esta corrección es SQLite3.51.2; la mención inici
 a3.51.3 en el reporte externo de459 era una errata, conservada transparentemente.
 
 Mientras exista el índice covering deben mantenerse los cuatro lectores ordenados.
-Revertir únicamente el código a937 conservando ese índice reintroduce cambios de
-decisiones de venta y desbordamientos intermedios. Su retirada requiere una futura
-migración explícita, autorizada y validada; esta tarea no ejecuta esa migración.
-No se autoriza DROP de índices existentes, rebuild de DB operativa, APK, instalación,
+Volver al código ordenado976 puede recrear el índice anterior y añade ese coste
+de arranque. Volver al código no ordenado937 conservando covering reintroduce
+cambios de decisiones de venta y desbordamientos, incluso si se recrea además el
+índice anterior: el planner puede elegir covering. Retirar covering requiere otra
+migración explícita, autorizada y validada. Esta enmienda autoriza exclusivamente
+retirar el índice anterior verificado en fixtures locales; no ejecuta DDL sobre
+ninguna DB operativa. No se autoriza rebuild de DB operativa, APK, instalación,
 ERP/SQL remoto, flags reales, merge ni despliegue. Los gates requeridos, incluido
 dispositivo cuando no haya entorno autorizado, conservan su estado pendiente/bloqueado.
+
+La sustitución es un experimento condicionado:976 mejoró lecturas, pero falló
+costes de enroll/rollback; esa evidencia permanece. BASE4 ahora puede ordenar con
+TEMP B-tree en lugar de recorrer el índice anterior; la exploración escasa n10
+mostró riesgo de+8.03%. La validación independiente debe medir0/1/100/20000filas
+BASE4 y recursos del sort, además de lecturas/escrituras100×3 frente a71e y937,
+con976 adicional, migración10k/100k y almacenamiento. Se conserva el umbral5%;
+no hay aprobación de performance ni inferencia de hardware desde estas pruebas.
+DROP libera páginas reutilizables y no reduce por sí solo el archivo; no se usa VACUUM.

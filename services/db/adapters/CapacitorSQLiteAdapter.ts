@@ -31,6 +31,15 @@ import { LARGE_MASTER_SYNC_V3_SCHEMA_SQL, ensureLargeMasterSyncV3ContractColumns
 import { LargeMasterSyncV3SqliteStore } from '../LargeMasterSyncV3SqliteStore';
 import { V3_FINANCIAL_RETAINED_UPSERT_SQL } from '../LargeMasterSyncV3FinancialRetention';
 
+const INVENTORY_COVER_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_documents_v3_inventory_delta_cover
+            ON documents(json_extract(data, '$.v3InventoryBaseline'), json_extract(data, '$.productId'), json_extract(data, '$.warehouseId'),
+              COALESCE(json_extract(data, '$.qtyIn'), 0) - COALESCE(json_extract(data, '$.qtyOut'), 0))
+            WHERE collection_name = 'inventoryLedger' AND json_extract(data, '$.v3InventoryBaseline') IS NOT NULL;`;
+const INVENTORY_LEGACY_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_documents_v3_inventory_baseline
+ ON documents(json_extract(data, '$.v3InventoryBaseline'), json_extract(data, '$.productId'), json_extract(data, '$.warehouseId'))
+ WHERE collection_name = 'inventoryLedger' AND json_extract(data, '$.v3InventoryBaseline') IS NOT NULL;`;
+const normalizedIndexSQL=(sql:string)=>sql.replace(/IF NOT EXISTS\s+/i,'').replace(/\s+/g,'').replace(/;$/,'');
+
 const DB_NAME = 'clic_pos_native';
 const DB_VERSION = 1;
 const DOCUMENT_READ_BATCH_SIZE = 15;
@@ -827,13 +836,6 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             );
             CREATE INDEX IF NOT EXISTS idx_documents_collection_sort
             ON documents(collection_name, sort_order, updatedAt);
-            CREATE INDEX IF NOT EXISTS idx_documents_v3_inventory_baseline
-            ON documents(json_extract(data, '$.v3InventoryBaseline'), json_extract(data, '$.productId'), json_extract(data, '$.warehouseId'))
-            WHERE collection_name = 'inventoryLedger' AND json_extract(data, '$.v3InventoryBaseline') IS NOT NULL;
-            CREATE INDEX IF NOT EXISTS idx_documents_v3_inventory_delta_cover
-            ON documents(json_extract(data, '$.v3InventoryBaseline'), json_extract(data, '$.productId'), json_extract(data, '$.warehouseId'),
-              COALESCE(json_extract(data, '$.qtyIn'), 0) - COALESCE(json_extract(data, '$.qtyOut'), 0))
-            WHERE collection_name = 'inventoryLedger' AND json_extract(data, '$.v3InventoryBaseline') IS NOT NULL;
             CREATE TRIGGER IF NOT EXISTS preserve_v3_inventory_delete BEFORE DELETE ON documents
             WHEN OLD.collection_name IN ('inventoryLedger', 'transactions', 'transactionHistory') AND json_extract(OLD.data, '$.v3InventoryBaseline') IS NOT NULL
             BEGIN SELECT RAISE(IGNORE); END;
@@ -898,11 +900,37 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             ${ARTICLE_FORMATS_SCHEMA}
             ${NATIVE_FISCAL_RECEIPTS_SCHEMA}
         `);
+        await this.replaceInventoryDeltaIndex();
         await this.withWriteLock(async () => {
             await ensureLargeMasterSyncV3ContractColumns(db);
             await backfillLargeMasterSyncV3Categories(db);
         });
         await this.migrateLegacyCollectionsBlobTable();
+    }
+
+    /** Validate the replacement before retiring only its redundant prefix, in one tracked transaction. */
+    private async replaceInventoryDeltaIndex():Promise<void> {
+        await this.withWriteLock(()=>this.withNativeTransaction(async()=>{
+            const db=this.ensureDb();
+            await db.execute(INVENTORY_COVER_INDEX_SQL,false);
+            const list=(await db.query("PRAGMA index_list('documents')")).values || [];
+            const validate=async(name:'idx_documents_v3_inventory_delta_cover'|'idx_documents_v3_inventory_baseline',sql:string,count:number,optional=false)=>{
+                const schema=(await db.query('SELECT type,tbl_name,sql FROM sqlite_master WHERE name=?',[name])).values || [];
+                if(optional&&schema.length===0)return;
+                const keys=(await db.query(`PRAGMA index_xinfo('${name}')`)).values || [];
+                const entry=list.filter(row=>row.name===name);
+                if(schema.length!==1||schema[0].type!=='index'||schema[0].tbl_name!=='documents'
+                    ||typeof schema[0].sql!=='string'||normalizedIndexSQL(schema[0].sql)!==normalizedIndexSQL(sql)
+                    ||entry.length!==1||entry[0].unique!==0||entry[0].partial!==1||entry[0].origin!=='c'
+                    ||keys.length!==count+1||keys.some((row,i)=>row.seqno!==i||row.cid!==(i<count?-2:-1)
+                        ||row.name!==null||row.desc!==0||row.coll!=='BINARY'||row.key!==(i<count?1:0))) {
+                    throw Error(name==='idx_documents_v3_inventory_delta_cover'?'NATIVE_INVENTORY_COVER_INDEX_INVALID':'NATIVE_INVENTORY_LEGACY_INDEX_INVALID');
+                }
+            };
+            await validate('idx_documents_v3_inventory_delta_cover',INVENTORY_COVER_INDEX_SQL,4);
+            await validate('idx_documents_v3_inventory_baseline',INVENTORY_LEGACY_INDEX_SQL,3,true);
+            await db.execute('DROP INDEX IF EXISTS idx_documents_v3_inventory_baseline;',false);
+        }));
     }
 
     private async readStoredDocuments(collectionName: string): Promise<any[]> {
