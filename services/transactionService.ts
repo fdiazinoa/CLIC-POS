@@ -401,7 +401,7 @@ class TransactionService {
             const projected = await session.projectConfig(config);
             const retained = await session.validate(projected, data.items!, stamp.tariffId,
                 stamp.warehouseId || '', data.documentType === 'REFUND' ? 'REFUND' : 'SALE', undefined,
-                { ticketId: data.restaurantOrderId, tableId: data.restaurantTableId, claimId: data.v3RestoredTicketId, originalTransactionId: data.originalTransactionId });
+                { ticketId: data.restaurantOrderId, tableId: data.restaurantTableId, claimId: data.v3RestoredTicketId, originalTransactionId: data.originalTransactionId, reservationId: data.v3ReservationClaimId ? data.reservationId : undefined, reservationClaimId:data.v3ReservationClaimId });
             validateV3FrozenFiscalAmounts(data, retained);
             validateV3FrozenLineFiscalAmounts(data as Transaction, projected);
         }
@@ -419,7 +419,7 @@ class TransactionService {
 
         // Generate IDs
         const { globalSequence, displayId, seriesNumber } =
-            await this.generateTransactionId(data.documentType, resolvedSeriesId);
+            data.v3ReservationClaimId ? {globalSequence:undefined,displayId:undefined,seriesNumber:undefined} : await this.generateTransactionId(data.documentType, resolvedSeriesId);
         const normalizedFiscalAmounts = await normalizeFiscalAmounts(data);
 
         // Create transaction object
@@ -473,6 +473,7 @@ class TransactionService {
             relatedTransactions: data.relatedTransactions,
             originalTransactionId: data.originalTransactionId,
             refundReason: data.refundReason,
+            v3ReservationClaimId:data.v3ReservationClaimId,
             reservationId: data.reservationId,
             reservationCode: data.reservationCode,
             priorAdvancePaid: data.priorAdvancePaid,

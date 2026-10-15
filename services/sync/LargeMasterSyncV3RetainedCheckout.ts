@@ -1,5 +1,6 @@
 import { v3RetainedLineFingerprint } from './LargeMasterSyncV3StockAuthority';
-import type { CartItem, ParkedTicket, Transaction } from '../../types';
+import { assertV3ReservationSource, reservationClaimId } from './LargeMasterSyncV3ReservationAuthority';
+import type { CartItem, ParkedTicket, Transaction, Reservation } from '../../types';
 import { db } from '../../utils/db';
 import { dbAdapter } from '../db';
 
@@ -9,15 +10,31 @@ export const isV3RetainedTicketClosed = async (id:string): Promise<boolean> => {
 };
 import { LargeMasterSyncV3Error } from './LargeMasterSyncV3Types';
 
-export type V3RetainedReference = { ticketId?: string; claimId?: string; tableId?: string; originalTransactionId?: string };
-export type V3RetainedContext = { collection: 'parkedTickets' | 'transactions' | 'v3RestoredTicketSources'; id: string;
-  expected: string; items: CartItem[] };
+export type V3RetainedReference = { ticketId?: string; claimId?: string; tableId?: string; originalTransactionId?: string; reservationId?: string; reservationClaimId?: string };
+export type V3RetainedContext = { collection: 'parkedTickets' | 'transactions' | 'v3RestoredTicketSources' | 'reservations'; id: string;
+  expected: string; items: CartItem[]; reservation?: Reservation };
 const verified = new WeakSet<object>();
 export const isVerifiedV3RetainedContext = (context: V3RetainedContext | undefined): boolean => Boolean(context && verified.has(context));
 
 /** A caller supplies an account ID, never authority. Read actual durable source on every validation. */
 export const readV3RetainedCheckout = async (reference: V3RetainedReference | undefined,
   refund = false): Promise<V3RetainedContext | undefined> => {
+  if (!refund && reference?.reservationId) {
+    const source = await db.getDocument('reservations', reference.reservationId) as Reservation | null;
+    if (!source) throw new LargeMasterSyncV3Error('SYNC_V3_RESERVATION_SOURCE_REQUIRED');
+    assertV3ReservationSource(source);
+    const claimId = reservationClaimId(source.id);
+    if (await isV3RetainedTicketClosed(claimId)) throw new LargeMasterSyncV3Error('SYNC_V3_RESERVATION_NOT_ACTIVE');
+    let context: V3RetainedContext = {collection:'reservations',id:source.id,expected:JSON.stringify(source),items:source.items,reservation:source};
+    if (reference.reservationClaimId) {
+      if (reference.reservationClaimId !== claimId) throw new LargeMasterSyncV3Error('SYNC_V3_RESERVATION_SCOPE_CHANGED');
+      const claim = await db.getDocument('v3RestoredTicketSources' as any,claimId) as any;
+      if (!claim || claim.state !== 'PENDING' || claim.sourceCollection !== 'reservations' || claim.sourceId !== source.id
+        || claim.sourceExpected !== JSON.stringify(source)) throw new LargeMasterSyncV3Error('SYNC_V3_RESERVATION_SOURCE_CHANGED');
+      context = {...context,collection:'v3RestoredTicketSources',id:claimId,expected:JSON.stringify(claim)};
+    }
+    verified.add(context); return context;
+  }
   const id = refund ? reference?.originalTransactionId : reference?.ticketId;
   if (!id) return undefined;
   const collection = refund ? 'transactions' : reference?.claimId ? 'v3RestoredTicketSources' : 'parkedTickets';

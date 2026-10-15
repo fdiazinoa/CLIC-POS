@@ -304,7 +304,7 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
     let after = '';
     while (true) {
       const batch = rows(await db.query(`SELECT collection_name, doc_id, data FROM documents
-        WHERE collection_name IN ('parkedTickets','v3RestoredTicketSources','transactions','transactionHistory')
+        WHERE collection_name IN ('parkedTickets','v3RestoredTicketSources','reservations','transactions','transactionHistory')
         AND collection_name || ':' || doc_id > ? ORDER BY collection_name || ':' || doc_id LIMIT 250`, [after]));
       for (const row of batch) {
         let source: unknown;
@@ -1126,7 +1126,7 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
       const db = this.connection();
       const hasDocuments = first(await db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='documents'"));
       const financialReferences = hasDocuments ? `AND NOT EXISTS (SELECT 1 FROM documents d, json_each(d.data, '$.items') line
-          WHERE d.collection_name IN ('parkedTickets','v3RestoredTicketSources','transactions','transactionHistory')
+          WHERE d.collection_name IN ('parkedTickets','v3RestoredTicketSources','reservations','transactions','transactionHistory')
           AND (d.collection_name != 'v3RestoredTicketSources' OR json_extract(d.data,'$.state') IN ('PENDING','PARKED'))
           AND json_extract(line.value, '$.v3SaleAuthority.syncVersion') = s.sync_version)` : '';
       const candidates = rows(await db.query(`SELECT s.sync_id, s.sync_version

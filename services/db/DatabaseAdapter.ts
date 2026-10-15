@@ -18,6 +18,8 @@ export interface DurableDocumentMutation {
     v3FiscalMetadataOperation?: 'CLASSIFICATION_PROJECTION_APPEND' | 'CLASSIFICATION_ATTEMPT_CONSUME' | 'PRESUBMIT_EVIDENCE_REPAIR' | 'FISCAL_SUBMISSION_SCOPE_APPEND' | 'FISCAL_LOOKUP_APPROVAL_APPEND' | 'FISCAL_STATUS_RECONCILE';
     /** Verified V3 sale demand; checked against scoped baseline + ledger inside the write transaction. */
     v3CurrentCatalog?: { syncId: string; syncVersion: number; binding: string };
+    /** Narrow native CAS disposition for an already expired local stamped reservation. */
+    v3ReservationExpiration?: true;
     v3ExpectedRetainedDocument?: { collection: string; id: string; expected: string };
     v3StockRequirements?: Array<{ baseline: string; productId: string; warehouseId: string; quantity: number; quantityScale?: 4 }>;
 }

@@ -14,6 +14,7 @@ export type PaymentIntentStatus =
 export interface PaymentIntentHandle {
     intentId: string;
     idempotencyKey: string;
+    status?: PaymentIntentStatus; providerReference?: string; authorizationCode?: string; responseCode?: string;
 }
 
 const createId = (): string => {
@@ -39,6 +40,7 @@ export class PaymentIntentService {
         integrationId?: string;
         amount: number;
         currencyCode: string;
+        retainedOperation?: boolean;
     }): Promise<PaymentIntentHandle | null> {
         if (!this.isEnabled()) return null;
         const intentId = createId();
@@ -54,7 +56,7 @@ export class PaymentIntentService {
                 Number(input.amount || 0), clean(input.currencyCode) || 'DOP', now, now]
         );
         const result = await this.database.executeSQL!(
-            'SELECT intent_id, idempotency_key FROM payment_intents_v2 WHERE idempotency_key = ? LIMIT 1',
+            'SELECT * FROM payment_intents_v2 WHERE idempotency_key = ? LIMIT 1',
             [idempotencyKey]
         );
         const columns = result?.[0]?.columns || [];
@@ -63,10 +65,26 @@ export class PaymentIntentService {
             acc[column] = values[index];
             return acc;
         }, {});
-        return { intentId: String(row.intent_id || intentId), idempotencyKey: String(row.idempotency_key || idempotencyKey) };
+        if (input.retainedOperation && (row.provider !== clean(input.provider) || String(row.integration_id || '') !== clean(input.integrationId)
+          || Number(row.amount) !== input.amount || row.currency_code !== clean(input.currencyCode)
+          || !['CREATED','AUTHORIZED'].includes(row.status))) throw new Error('PAYMENT_INTENT_RECONCILIATION_REQUIRED');
+        return { ...(input.retainedOperation ? {status:row.status,providerReference:row.provider_reference,
+            authorizationCode:row.authorization_code,responseCode:row.response_code} : {}), intentId: String(row.intent_id || intentId), idempotencyKey: String(row.idempotency_key || idempotencyKey) };
     }
 
-    async markAuthorizing(intentId: string): Promise<void> {
+    async markAuthorizing(intentId: string, retainedOperation = false): Promise<void> {
+        if (retainedOperation) {
+            if (!this.isEnabled()) throw new Error('PAYMENT_INTENT_NATIVE_REQUIRED');
+            const result = await this.database.executeSQL!(`UPDATE payment_intents_v2 SET status='AUTHORIZING',updated_at=? WHERE intent_id=? AND status='CREATED'
+              AND EXISTS (SELECT 1 FROM documents c JOIN documents r ON r.collection_name='reservations'
+                AND r.doc_id=json_extract(c.data,'$.sourceId') WHERE c.collection_name='v3RestoredTicketSources'
+                AND json_extract(c.data,'$.sourceCollection')='reservations' AND json_extract(c.data,'$.state')='PENDING'
+                AND substr(payment_intents_v2.payment_id,1,length(c.doc_id)+9)=c.doc_id || ':payment:'
+                AND r.data=json_extract(c.data,'$.sourceExpected') AND json_extract(r.data,'$.status')='ACTIVE'
+                AND julianday(json_extract(r.data,'$.expiryDate'))>julianday('now'))`,[new Date().toISOString(),intentId]);
+            if (Number(result?.changes?.changes) !== 1) throw new Error('PAYMENT_INTENT_RECONCILIATION_REQUIRED');
+            return;
+        }
         await this.update(intentId, 'AUTHORIZING');
     }
 

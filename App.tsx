@@ -11569,6 +11569,7 @@ const AppContent: React.FC = () => {
       const result = await persistV3FinancialTransaction({ ...txn, terminalId: terminal.id,
         terminalName: terminal.config.terminalName || terminal.id }, config, warehouseId,
         { refund: txn.documentType === 'REFUND' });
+      if (txn.v3ReservationClaimId) Object.assign(txn,result.transaction); // Return committed numbering to the existing receipt caller.
       setTransactions(previous => [...previous.filter(row => row.id !== result.transaction.id), result.transaction]);
       if (result.transaction.customerId && result.transaction.pendingBalance) {
         const updated = await db.getDocument('customers', result.transaction.customerId) as Customer | null;

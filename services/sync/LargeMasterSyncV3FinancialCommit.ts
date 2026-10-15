@@ -1,3 +1,6 @@
+import { planReservationCommitmentRelease } from './LargeMasterSyncV3ReservationCommitments';
+import { assertV3ReservationInvoice } from './LargeMasterSyncV3ReservationAuthority';
+import { planFinancialNumbers } from '../db/FinancialNumberReservation';
 import { v3StockSource } from './LargeMasterSyncV3StockAuthority';
 import { isVerifiedV3RetainedContext, type V3RetainedContext } from './LargeMasterSyncV3RetainedCheckout';
 import { createUuid } from '../../utils/uuid';
@@ -70,7 +73,8 @@ const financialIdentity = (transaction: Transaction): string => {
         'updatedAt', 'status', 'v3InventoryBaseline', 'v3Binding', 'v3WarehouseId', 'v3CommitFingerprint', 'fiscalStatus',
         'fiscalResponseMessage', 'fiscalResponseCode', 'fiscalSignedXml', 'fiscalQrCode'].includes(key))
       .map(key => [key, canonical(value[key])])) : value;
-  return JSON.stringify(canonical(transaction));
+  const input = transaction.v3ReservationClaimId ? JSON.parse(JSON.stringify({...transaction,globalSequence:undefined,displayId:undefined,seriesNumber:undefined})) : transaction;
+  return JSON.stringify(canonical(input));
 };
 
 export type V3FinancialOptions = { refund?: boolean; conditions?: Map<string, 'SELLABLE' | 'DAMAGED'>; original?: Transaction;
@@ -118,7 +122,7 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
       else documents.push(mutation);
     };
     for (let index = 0; index < entries.length; index++) {
-    const { transaction, options = {} } = entries[index];
+    let { transaction, options = {} } = entries[index];
     const stamp = transaction.items[0]?.v3SaleAuthority;
     const authoritativeLines: CartItem[] = [];
     const retained = await session.validate(projected, transaction.items, stamp?.tariffId || '', warehouseId,
@@ -127,7 +131,7 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
           taxable: source.taxable, appliedTaxIds: [...(source.appliedTaxIds || [])],
           v3SaleAuthority: { ...line.v3SaleAuthority! } });
       }, { ticketId: transaction.restaurantOrderId, tableId: transaction.restaurantTableId, claimId: transaction.v3RestoredTicketId,
-        originalTransactionId: options.expectedOriginal?.id || transaction.originalTransactionId });
+        originalTransactionId: options.expectedOriginal?.id || transaction.originalTransactionId, reservationId: transaction.v3ReservationClaimId ? transaction.reservationId : undefined, reservationClaimId:transaction.v3ReservationClaimId });
     if (retained && retained.collection !== 'transactions') {
       documents.push({ collectionName: 'v3TicketSettlements', document: { id: retained.id, transactionId: transaction.id, binding: session.binding },
         requireAbsent: true, v3ExpectedRetainedDocument: { collection: retained.collection, id: retained.id, expected: retained.expected } });
@@ -135,6 +139,23 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
     if (retained?.collection === 'v3RestoredTicketSources') {
       documents.push({ collectionName: retained.collection, document: { ...JSON.parse(retained.expected), state: 'SETTLED' },
         expectedDocument: retained.expected, v3ExpectedRetainedDocument: { collection: retained.collection, id: retained.id, expected: retained.expected } });
+    }
+    if (transaction.v3ReservationClaimId) {
+      const reservation = retained?.reservation;
+      if (!reservation || retained.collection !== 'v3RestoredTicketSources') throw new LargeMasterSyncV3Error('SYNC_V3_RESERVATION_SOURCE_REQUIRED');
+      assertV3ReservationInvoice(reservation,transaction);
+      const claim = JSON.parse(retained.expected);
+      if (claim.invoiceDate !== transaction.date || !claim.saleEventId || !claim.paymentEventId) throw new LargeMasterSyncV3Error('SYNC_V3_RESERVATION_SOURCE_CHANGED');
+      documents.push({collectionName:'reservations',document:{...reservation,status:'INVOICED',invoicedTransactionId:transaction.id,
+        invoicedAt:transaction.date,updatedAt:transaction.date},expectedDocument:JSON.stringify(reservation),
+        v3ExpectedRetainedDocument:{collection:retained.collection,id:retained.id,expected:retained.expected}});
+      documents.push(...await planReservationCommitmentRelease(reservation,(collection,id)=>db.getDocument(collection as any,id),transaction.date));
+      const series = await db.getDocument('internalSequences',transaction.seriesId!) as any;
+      const counter = await db.getDocument('globalSequenceCounter' as any,'value') as any;
+      const issuance = planFinancialNumbers({seriesId:transaction.seriesId,documentType:transaction.documentType,global:true},series,counter);
+      transaction = {...transaction,globalSequence:issuance.result.globalSequence,displayId:issuance.result.displayId,seriesNumber:issuance.result.seriesNumber};
+      documents.push({collectionName:'internalSequences',document:issuance.series!,expectedDocument:JSON.stringify(series)},
+        {collectionName:'globalSequenceCounter',document:issuance.counter!,...(counter ? {expectedDocument:JSON.stringify(counter)} : {requireAbsent:true})});
     }
     validateV3FrozenFiscalAmounts(transaction, retained);
     validateV3FrozenLineFiscalAmounts(transaction, projected);
@@ -200,11 +221,15 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
     }
     if (isSyncFeatureEnabled('sqlite_outbox_v2') && !options.refund) {
       const paymentIntentIds = (document.payments || []).map((payment: any) => payment.paymentIntentId).filter(Boolean);
-      const paymentPosted = buildPaymentPostedPayload(document, { paymentIntentIds });
-      events.push({ eventId: createUuid(), eventType: 'SALE_POSTED', aggregateType: 'TRANSACTION',
+      const claim = retained?.reservation ? JSON.parse(retained.expected) : undefined;
+      // ADVANCE records a prior application in SALE_POSTED; PAYMENT_POSTED represents only newly received settlement.
+      const newPayments = claim ? document.payments.filter(payment=>payment.method !== 'ADVANCE') : document.payments;
+      const paymentPosted = buildPaymentPostedPayload(claim ? {...document,payments:newPayments,
+        settlementAppliedBase:newPayments.reduce((sum,payment)=>sum+Number(payment.amountApplied ?? payment.appliedAmount ?? payment.amount),0)} : document, { paymentIntentIds });
+      events.push({ eventId: claim?.saleEventId || createUuid(), eventType: 'SALE_POSTED', aggregateType: 'TRANSACTION',
           aggregateId: document.id, schemaVersion: 1,
           payload: buildSalePostedPayload(document, { inventoryMovementIds: ledger.map(row => row.id), paymentIntentIds }), createdAt: document.date });
-      if (paymentPosted) events.push({ eventId: createUuid(), eventType: 'PAYMENT_POSTED',
+      if (paymentPosted) events.push({ eventId: claim?.paymentEventId || createUuid(), eventType: 'PAYMENT_POSTED',
           aggregateType: 'TRANSACTION', aggregateId: document.id, schemaVersion: 1, payload: paymentPosted, createdAt: document.date });
       intentIds.push(...paymentIntentIds);
     }
