@@ -4618,6 +4618,8 @@ const AppContent: React.FC = () => {
       if (disposed) return;
       const nativeBridge = (window as any).ClicPOSNativePrinter;
       const currentTerminal = getCurrentTerminal();
+      // Device/config hydration reruns this effect; never publish or stop a server with unresolved identity.
+      if (!currentTerminal?.id) return;
       const shouldServeAsMaster = isNativeStandaloneTerminalRuntime(currentTerminal);
 
       if (!shouldServeAsMaster) {
