@@ -35,6 +35,14 @@ antiguas. Los sellos V3 comerciales históricos permanecen
 separados. Sin baseline seleccionado el camino V3/legacy conserva su aritmética
 anterior (incluida precisión seis decimales); el selector añade una consulta acotada
 a scopes activos, con índice parcial, sin parsear originales ni recorrer catálogo.
+En lecturas single del store/sesión, la detección durable global y el SUM legacy se
+combinan en una sola consulta: CASE ejecuta el SUM scalar solamente sin ningún
+baseline seleccionado. La selección activa continúa por todos los controles de
+scope/autorización/reservas/celdas. No hay caché ni filtro de item/warehouse para
+inferir ausencia de selección; el batch mantiene su flujo anterior. Stores
+históricos sin tabla de estado usan fallback únicamente ante ese error exacto;
+los otros errores se propagan. El conteo de una consulta no acredita por sí solo
+el gate performance ni cambia sus umbrales.
 
 ## Límites de activación y reservas
 
@@ -96,7 +104,7 @@ bloqueadas de forma independiente no cumple ese contrato de propiedad.
 Con Node22 y dependencias del lockfile instaladas:
 
 ```sh
-./node_modules/.bin/tsx --test tests/articleFormatsInventory.test.ts
+./node_modules/.bin/tsx --test tests/articleFormatsInventory.test.ts tests/articleFormatsInventorySingleRead.test.ts
 ./node_modules/.bin/tsx --test tests/productStockPolicy.test.ts tests/largeMasterSyncV3RefundAuthority.test.ts tests/largeMasterSyncV3OperationalCatalog.test.ts tests/largeMasterSyncV3CheckoutAuthority.test.ts tests/largeMasterSyncV3FinancialAtomic.test.ts
 ```
 

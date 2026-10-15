@@ -131,14 +131,32 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
   }
 
   async getLocalInventoryDelta(baseline: string, itemId: string, warehouseId: string): Promise<number> {
+    const delta=await this.singleInventoryDeltaUnlessSelected(baseline,itemId,warehouseId);
+    if(delta!==undefined)return delta;
     const selected=await this.reconciledAdjustments(baseline,[itemId],warehouseId);
-    if(selected)return selected[itemId];
-    const row = first(await this.connection().query(`SELECT COALESCE(SUM(
-      COALESCE(json_extract(data, '$.qtyIn'), 0) - COALESCE(json_extract(data, '$.qtyOut'), 0)), 0) AS delta
+    if(!selected)throw new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_NOT_READY');
+    return selected[itemId];
+  }
+
+  /** One durable single-item read while OFF. NULL is reserved for any selected baseline, never for missing legacy rows. */
+  private async singleInventoryDeltaUnlessSelected(baseline:string,itemId:string,warehouseId:string):Promise<number|undefined> {
+    const legacy=`SELECT COALESCE(SUM(
+      COALESCE(json_extract(data, '$.qtyIn'), 0) - COALESCE(json_extract(data, '$.qtyOut'), 0)), 0)
       FROM documents WHERE collection_name = 'inventoryLedger'
       AND json_extract(data, '$.v3InventoryBaseline') = ?
-      AND json_extract(data, '$.productId') = ? AND json_extract(data, '$.warehouseId') = ?`, [baseline, itemId, warehouseId]));
-    return Number(row?.delta || 0);
+      AND json_extract(data, '$.productId') = ? AND json_extract(data, '$.warehouseId') = ?`;
+    let row:Record<string,unknown>|null;
+    try {
+      row=first(await this.connection().query(`SELECT CASE WHEN EXISTS(
+        SELECT 1 FROM article_format_inventory_state WHERE baseline_id IS NOT NULL
+      ) THEN NULL ELSE (${legacy}) END AS delta`,[baseline,itemId,warehouseId]));
+    } catch(error) {
+      if(!(error instanceof Error&&/^no such table: (?:main\.)?article_format_inventory_state$/.test(error.message)))throw error;
+      // Historical isolated stores can lack the additive table. No cache: every later call probes durable state again.
+      row=first(await this.connection().query(`SELECT (${legacy}) AS delta`,[baseline,itemId,warehouseId]));
+    }
+    if(!row||!Object.hasOwn(row,'delta'))throw new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_NOT_READY');
+    return row.delta===null?undefined:Number(row.delta || 0);
   }
 
   async getLocalInventoryDeltas(baseline: string, itemIds: string[], warehouseId: string): Promise<Record<string, number>> {
@@ -152,9 +170,14 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
   async getOperationalStockProjection(baseline:string,itemIds:string[],warehouseId:string):Promise<{mode:'RECONCILED_AVAILABLE'|'LEGACY_DELTA';quantities:Record<string,number>}> {
     if(itemIds.length>100)throw new LargeMasterSyncV3Error('SYNC_V3_QUERY_LIMIT');
     if(!itemIds.length)return {mode:'LEGACY_DELTA',quantities:{}};
+    if(itemIds.length===1){
+      const delta=await this.singleInventoryDeltaUnlessSelected(baseline,itemIds[0],warehouseId);
+      if(delta!==undefined)return {mode:'LEGACY_DELTA',quantities:{[itemIds[0]]:delta}};
+    }
     const query=async<T>(sql:string,values:(string|number|null)[])=>rows(await this.connection().query(sql,values)) as T[];
     const selected=await readReconciledInventory(query,baseline,itemIds,warehouseId);
     if(selected)return {mode:'RECONCILED_AVAILABLE',quantities:Object.fromEntries(Object.entries(selected).map(([id,stock])=>[id,stock.available.toNumber()]))};
+    if(itemIds.length===1)throw new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_NOT_READY');
     return {mode:'LEGACY_DELTA',quantities:await this.legacyInventoryDeltas(baseline,itemIds,warehouseId)};
   }
 
