@@ -237,6 +237,9 @@ input[type='number'] {
 /* Short landscape tablets: reserve vertical space for readable products.
    Desktop and portrait keep the existing two-row category/action layouts. */
 @media (orientation: landscape) and (min-width: 900px) and (max-height: 760px) {
+  .clic-pos-tablet-shell[data-pos-layout="restaurant"] .pos-ticket-catalog-hidden-operator {
+    display: flex;
+  }
   .clic-pos-tablet-shell[data-pos-layout="restaurant"] .pos-catalog-header {
     display: none;
     flex-wrap: nowrap;
