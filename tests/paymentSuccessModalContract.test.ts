@@ -17,7 +17,7 @@ test('table checkout keeps the completed-sale modal mounted until the cashier cl
 
   assert.match(
     paymentHandler,
-    /setReturnToTableMapAfterPayment\(true\);\s*}\s*return txn;/,
+    /setReturnToTableMapAfterPayment\(true\);\s*}\s*return activeV3Reservation \? settledFinalTxn : txn;/,
     'successful table checkout must defer navigation until after the success screen'
   );
   assert.doesNotMatch(

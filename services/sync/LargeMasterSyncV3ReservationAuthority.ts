@@ -10,9 +10,9 @@ export const reservationAdvanceId = (id: string): string => `RSV-ADVANCE-${encod
 const fail = (code: string): never => { throw new LargeMasterSyncV3Error(code); };
 const cents = (value: number): number => Math.round((value + Number.EPSILON) * 100);
 
-export function assertV3ReservationSource(reservation: Reservation, binding?: string, warehouseId?: string, expiredDisposition = false): void {
+export function assertV3ReservationSource(reservation: Reservation, binding?: string, warehouseId?: string, expiredDisposition = false, asOf = Date.now()): void {
   if (!reservation || reservation.sourceChannel || reservation.status !== 'ACTIVE' || reservation.invoicedTransactionId
-    || !Number.isFinite(Date.parse(reservation.expiryDate)) || (!expiredDisposition && Date.parse(reservation.expiryDate) <= Date.now()) || expiredDisposition && Date.parse(reservation.expiryDate) > Date.now()) fail('SYNC_V3_RESERVATION_NOT_ACTIVE');
+    || !Number.isFinite(Date.parse(reservation.expiryDate)) || (!expiredDisposition && Date.parse(reservation.expiryDate) <= asOf) || expiredDisposition && Date.parse(reservation.expiryDate) > asOf) fail('SYNC_V3_RESERVATION_NOT_ACTIVE');
   if (!Number.isFinite(Date.parse(reservation.createdAt)) || !reservation.id || !reservation.customerId || !reservation.customerName || !reservation.terminalId || !reservation.warehouseId
     || !Number.isFinite(reservation.total) || reservation.total <= 0 || !Number.isFinite(reservation.balancePaid)
     || reservation.balancePaid < 0 || cents(reservation.balancePaid) > cents(reservation.total)
@@ -74,8 +74,8 @@ export function reservationAdvancePayment(source: Reservation): PaymentEntry | n
     timestamp: new Date(source.createdAt), source_transaction_id: source.id } : null;
 }
 
-export function assertV3ReservationInvoice(source: Reservation, transaction: Transaction): void {
-  assertV3ReservationSource(source, transaction.v3Binding || transaction.items[0]?.v3SaleAuthority?.binding, transaction.v3WarehouseId);
+export function assertV3ReservationInvoice(source: Reservation, transaction: Transaction, asOf = Date.now()): void {
+  assertV3ReservationSource(source, transaction.v3Binding || transaction.items[0]?.v3SaleAuthority?.binding, transaction.v3WarehouseId,false,asOf);
   assertV3ReservationLines(source, transaction.items);
   if (transaction.id !== reservationInvoiceId(source.id) || transaction.v3ReservationClaimId !== reservationClaimId(source.id)
     || transaction.reservationId !== source.id || transaction.reservationCode !== source.code || transaction.customerId !== source.customerId

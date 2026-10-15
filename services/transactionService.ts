@@ -529,6 +529,9 @@ class TransactionService {
         };
 
         const normalizedTransaction = normalizeTransactionForSync(transaction);
+        // A reservation's commercial/fiscal lines are already frozen and validated against
+        // its durable source. Generic sync normalization must not reinterpret that snapshot.
+        if (data.v3ReservationClaimId) normalizedTransaction.items = transaction.items;
         if (isSyncFeatureEnabled('pending_operations_recovery')) withOriginal(normalizedTransaction, transaction, data);
         recordCheckoutDiagnostic('TRANSACTION_CREATED', { items: normalizedTransaction.items, total: normalizedTransaction.total, transactionId: normalizedTransaction.id, displayId: normalizedTransaction.displayId, payments: normalizedTransaction.payments, terminalId: normalizedTransaction.terminalId });
 

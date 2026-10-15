@@ -47,7 +47,7 @@ import {
 } from '../types';
 import { hasProductPromotion } from '../utils/promotionEngine';
 import { getDefaultFiscalProvider, getEffectiveFiscalComplianceConfig, getFiscalReserveAlert, isTerminalFiscalReceiptRequired, mapElectronicFiscalCodeToLegacy, resolveSaleFiscalCode, resolveCreditNoteFiscalCode } from '../utils/fiscal/fiscalHelpers';
-import UnifiedPaymentModal from './PaymentModal';
+import UnifiedPaymentModal, {type PaymentEffectsFence} from './PaymentModal';
 import {
    evaluateCreditSupervisorGate,
    paymentEntryIsCxCCredit,
@@ -235,6 +235,7 @@ export interface V3OperationalPOSBoundary {
    search(query: string, categoryId?: string | null, categoryKeys?: { ids: readonly string[]; aliases: readonly string[] }): Promise<void>;
    resolveCode(code: string): Promise<import('../services/sync/LargeMasterSyncV3OperationalSession').V3CodeMatch | null>;
    validate(lines: CartItem[], reference?: import('../services/sync/LargeMasterSyncV3RetainedCheckout').V3RetainedReference): Promise<void>;
+   completedReservation?(source: Reservation,lines: CartItem[],customerId?: string): Promise<Transaction | null>;
    expireReservation?(id: string): Promise<boolean>;
    restoreReservation?(id: string): Promise<V3RecoveredReservation>;
    restoreRetainedTicket?(id: string): Promise<ParkedTicket | null>;
@@ -5508,6 +5509,19 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    }, []);
 
 
+   const completedReservationForReceipt = async (): Promise<Transaction | null> => {
+      if (!activeV3Reservation || !v3Operational?.completedReservation) return null;
+      return v3Operational.completedReservation(activeV3Reservation.reservation,cart,selectedCustomer?.id);
+   };
+
+   const clearCompletedReservationCart = () => {
+      onUpdateCart([]);
+      resetCompletedSaleDiscount(setGlobalDiscount);
+      setRedeemedCoupon(null); setCouponCode(''); onSelectCustomer(null);
+      setIsReturnMode(false); setRefundAuthorizedBy(null);
+      setActiveRecoveredReservation(null); setActiveV3Reservation(null); setOrderServiceType('DINE_IN');
+   };
+
    const handlePaymentConfirm = async (payments: PaymentEntry[], voluntaryTip?: number): Promise<Transaction | null> => {
       recordCheckoutDiagnostic('CHECKOUT_CONFIRM', { items: processedCart, expectedItemCount: cart.length, total: cartTotal, payments, tableId: activeTable?.id, orderId: activeTable?.currentOrderId, terminalId: activeTerminalId });
       if (paymentFinalizationInFlightRef.current) {
@@ -5531,6 +5545,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       };
 
       try {
+         const completed = await completedReservationForReceipt();
+         if (completed) { clearCompletedReservationCart(); return completed; }
          assertFormatsPostingClosed(processedCart);
          await assertCheckoutFiscalAuthority();
          if (v3Operational) await v3Operational.validate(processedCart, { ticketId: activeTable?.currentOrderId || activeDirectV3TicketId, claimId: activeDirectV3TicketId, reservationId:activeV3Reservation?.reservation.id,reservationClaimId:activeV3Reservation?.claimId, tableId: activeTable?.id === undefined ? undefined : String(activeTable.id) });
@@ -6295,7 +6311,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                if (activeTable && onOpenTableMap) {
                   setReturnToTableMapAfterPayment(true);
                }
-               return txn;
+               return activeV3Reservation ? settledFinalTxn : txn;
             }
          } catch (error: any) {
             console.error('Split Transaction Error:', error);
@@ -6478,7 +6494,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
    };
 
-   const beforeV3PaymentEffects = async () => {
+   const beforeV3PaymentEffects = async (): Promise<PaymentEffectsFence> => {
+      const completed = await completedReservationForReceipt();
+      if (completed) return Object.assign(() => {},{completedTransaction:completed});
       await assertCheckoutFiscalAuthority();
       if (hasV3ReservationCart && !activeV3Reservation) throw new Error('La referencia de la reserva aún no está validada.');
       if (activeV3Reservation && selectedCustomer?.id !== activeV3Reservation.reservation.customerId) throw new Error('El cliente de la reserva no puede cambiarse.');

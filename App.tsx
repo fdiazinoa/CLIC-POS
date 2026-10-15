@@ -11,7 +11,7 @@ import LargeMasterSyncV3CanaryScreen from './components/LargeMasterSyncV3CanaryS
 import { LARGE_MASTER_SYNC_V3_CANARY } from './services/sync/LargeMasterSyncV3Canary';
 import { LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED, usesLargeMasterSyncV3Authority } from './services/sync/LargeMasterSyncV3Authority';
 import LargeMasterSyncV3OperationalPOS from './components/LargeMasterSyncV3OperationalPOS';
-import { persistV3FinancialTransaction, validateV3FrozenFiscalAmounts } from './services/sync/LargeMasterSyncV3FinancialCommit';
+import { persistV3FinancialTransaction, validateV3FrozenFiscalAmounts,readV3CompletedReservation } from './services/sync/LargeMasterSyncV3FinancialCommit';
 import { validateV3FrozenLineFiscalAmounts } from './services/sync/LargeMasterSyncV3LineSource';
 import { buildV3FrozenFiscalProviderTransaction } from './components/v3OperationalUIQueue';
 import { getLargeMasterSyncV3OperationalSession } from './services/sync/LargeMasterSyncV3OperationalSession';
@@ -11566,9 +11566,17 @@ const AppContent: React.FC = () => {
       const terminal = (config.terminals || []).find(row => row.config?.currentDeviceId === deviceId);
       const warehouseId = terminal?.config.inventoryScope?.defaultSalesWarehouseId;
       if (!terminal || !warehouseId) throw new Error('SYNC_V3_CONFIGURED_WAREHOUSE_REQUIRED');
-      const result = await persistV3FinancialTransaction({ ...txn, terminalId: terminal.id,
+      let result;
+      try { result = await persistV3FinancialTransaction({ ...txn, terminalId: terminal.id,
         terminalName: terminal.config.terminalName || terminal.id }, config, warehouseId,
         { refund: txn.documentType === 'REFUND' });
+      } catch (error) {
+        if (!txn.v3ReservationClaimId || !txn.reservationId) throw error;
+        const completed = await readV3CompletedReservation({reservationId:txn.reservationId,claimId:txn.v3ReservationClaimId,
+          candidate:{...txn,terminalId:terminal.id,terminalName:terminal.config.terminalName || terminal.id}});
+        if (!completed) throw error;
+        result = {transaction:completed,created:false};
+      }
       if (txn.v3ReservationClaimId) Object.assign(txn,result.transaction); // Return committed numbering to the existing receipt caller.
       setTransactions(previous => [...previous.filter(row => row.id !== result.transaction.id), result.transaction]);
       if (result.transaction.customerId && result.transaction.pendingBalance) {
