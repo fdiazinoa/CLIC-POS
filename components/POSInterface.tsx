@@ -8318,15 +8318,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             </div >
 
             {/* DESKTOP: operador + mesa/comensales; retail: busqueda al centro; botones carrito/acciones alineados a la derecha (como APK 1.0.300) */}
-            <div className={`pos-ticket-heading ${isMobile ? 'hidden' : 'flex'} px-5 py-3 border-b border-gray-100 bg-gray-50/50 flex-col gap-3 shrink-0 flex-none ${activeTable ? 'border-l-4 border-l-blue-500' : ''}`} >
+            <div className={`pos-ticket-heading ${isRetailMode ? 'supermarket-ticket-heading' : ''} ${isMobile ? 'hidden' : 'flex'} px-5 py-3 border-b border-gray-100 bg-gray-50/50 flex-col gap-3 shrink-0 flex-none ${activeTable ? 'border-l-4 border-l-blue-500' : ''}`} >
                <div data-testid="desktop-ticket-toolbar" className={`flex w-full flex-wrap items-center justify-between gap-1 ${isRetailMode ? 'supermarket-ticket-toolbar' : ''}`}>
-                  <div className="flex min-w-0 max-w-full items-center justify-start">
+                  <div className={`flex min-w-0 max-w-full items-center justify-start ${isRetailMode ? 'supermarket-ticket-operator' : ''}`}>
                      {renderTicketBrand(!isRetailMode)}
                   </div>
 
                   {/* RETAIL MODE SEARCH BAR */}
                   {isRetailMode && (
-                     <div className="relative min-w-0 max-w-xl flex-1 group">
+                     <div className="supermarket-ticket-search relative min-w-0 flex-1 group">
                         <button
                            type="button"
                            onClick={() => handleRetailSearchSubmit()}
@@ -8420,7 +8420,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      </div>
                   )}
 
-                  <TicketStatusControls className="ml-auto flex shrink-0 items-center justify-end gap-1" status={isRetailMode ? <FiscalStatusBadge compact visible={!isOrderTakerMode && !isFiscalModeDisabled} allowed={canCheckoutWithFiscalPolicy} status={fiscalStatus} /> : undefined}>
+                  <TicketStatusControls className={`ml-auto flex shrink-0 items-center justify-end gap-1 ${isRetailMode ? 'supermarket-ticket-actions' : ''}`} status={isRetailMode ? <FiscalStatusBadge compact visible={!isOrderTakerMode && !isFiscalModeDisabled} allowed={canCheckoutWithFiscalPolicy} status={fiscalStatus} /> : undefined}>
                      {canParkDirectSale && (
                         <button
                            type="button"

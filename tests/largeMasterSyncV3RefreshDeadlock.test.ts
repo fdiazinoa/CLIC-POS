@@ -162,8 +162,8 @@ async function invoiceCase(track:boolean,negative:boolean,opening:number,missing
  }finally{f.db.close();delete (globalThis as any).__refresh;}
 }
 
-test('production financial builder with real Session invoices sparse-zero negative policy and replays one ledger/payment event',async()=>{
- const f=await fixture();const previousWindow=(globalThis as any).window;try{
+test('production financial builder with real Session reserves and invoices without structuredClone, replaying one ledger/payment event',async()=>{
+ const f=await fixture();const previousWindow=(globalThis as any).window,cloneDescriptor=Object.getOwnPropertyDescriptor(globalThis,'structuredClone');try{
   f.db.prepare('DELETE FROM master_v3_inventory_balances').run();const {LargeMasterSyncV3OperationalSession:Session}=await sessionModule(f);
   (globalThis as any).__refresh.patch={operationalFlags:{trackInventory:true,allowNegativeStock:true}};const session=await Session.open(true),item=await session.withStock((await (await session.catalog(tariff,warehouse)).get(product)).product,warehouse);
   (globalThis as any).__invoice={adapter:f.adapter,session};(globalThis as any).window={dispatchEvent:()=>{}};
@@ -177,9 +177,12 @@ test('production financial builder with real Session invoices sparse-zero negati
   };
   const compiled=await build({entryPoints:[new URL('../services/sync/LargeMasterSyncV3FinancialCommit.ts',import.meta.url).pathname],bundle:true,write:false,platform:'node',format:'esm',plugins:[{name:'synthetic-invoice-ports',setup(b){b.onResolve({filter:/.*/},a=>modules[a.path]?{path:a.path,namespace:'invoice'}:undefined);b.onLoad({filter:/.*/,namespace:'invoice'},a=>({contents:modules[a.path],loader:'js'}));}}]});
   const module=await import('data:text/javascript;base64,'+Buffer.from(compiled.outputFiles[0].text).toString('base64'));
-  const invoice={id:id(900),documentType:'TICKET',displayId:'SYNTHETIC-900',date:'2026-10-15T00:00:00Z',terminalId:id(4),status:'COMPLETED',total:45,netAmount:45,taxAmount:0,userId:id(25),userName:'Synthetic',items:[{...item,cartId:'synthetic-full-invoice',quantity:1,netAmount:45,taxAmount:0,totalAmount:45}],payments:[{id:id(901),method:'CASH',amount:45,timestamp:'2026-10-15T00:00:00Z'}]};
+  Object.defineProperty(globalThis,'structuredClone',{value:undefined,configurable:true,writable:true});
+  const numbering=await f.adapter.reserveFinancialNumbers({seriesId:id(9),documentType:'TICKET',global:true});assert.equal(numbering.seriesNumber,1);assert.equal(numbering.globalSequence,1);
+  const invoice={id:id(900),documentType:'TICKET',displayId:numbering.displayId,date:'2026-10-15T00:00:00Z',terminalId:id(4),status:'COMPLETED',total:45,netAmount:45,taxAmount:0,userId:id(25),userName:'Synthetic',items:[{...item,cartId:'synthetic-full-invoice',quantity:1,netAmount:45,taxAmount:0,totalAmount:45}],payments:[{id:id(901),method:'CASH',amount:45,timestamp:'2026-10-15T00:00:00Z'}]};
   const result=await module.persistV3FinancialTransaction(invoice,f.config,warehouse);assert.equal(result.created,true);assert.equal((await module.persistV3FinancialTransaction(invoice,f.config,warehouse)).created,false);
   assert.equal(f.documents('inventoryLedger').length,1);assert.equal(f.documents('inventoryLedger')[0].qtyOut,1);assert.equal(f.documents('transactions')[0].payments.length,1);assert.equal(f.documents('transactionHistory').length,1);
   assert.deepEqual((f.db.prepare('SELECT event_type FROM sync_outbox_v2 ORDER BY local_sequence').all() as any[]).map(r=>r.event_type),['SALE_POSTED','PAYMENT_POSTED']);
- }finally{f.db.close();delete (globalThis as any).__refresh;delete (globalThis as any).__invoice;(globalThis as any).window=previousWindow;}
+  assert.equal(f.documents('transactions')[0].displayId,'TCK-000001');assert.equal(f.documents('internalSequences')[0].nextNumber,2);
+ }finally{if(cloneDescriptor)Object.defineProperty(globalThis,'structuredClone',cloneDescriptor);else delete (globalThis as any).structuredClone;f.db.close();delete (globalThis as any).__refresh;delete (globalThis as any).__invoice;(globalThis as any).window=previousWindow;}
 });

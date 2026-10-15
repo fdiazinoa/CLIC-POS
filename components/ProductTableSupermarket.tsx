@@ -19,8 +19,7 @@ const ProductTableSupermarket: React.FC<ProductTableSupermarketProps> = ({
     currencySymbol,
     lastAddedCartId,
     onEditItem,
-    containerStyle,
-    taxIncluded = false
+    containerStyle
 }) => {
     const [highlightedId, setHighlightedId] = useState<string | null>(null);
     const containerRef = useRef<HTMLDivElement>(null);
@@ -57,9 +56,9 @@ const ProductTableSupermarket: React.FC<ProductTableSupermarketProps> = ({
                     <tr>
                         <th className="px-2 py-2 text-center w-24 text-gray-700">Cantidad</th>
                         <th className="px-3 py-2 w-auto">Descripción</th>
-                        <th className="supermarket-money px-4 py-3 text-right">Precio<span className="block text-[13px] tracking-normal font-medium normal-case">Unitario</span></th>
-                        <th className="supermarket-money px-4 py-3 text-right">ITBIS<span className="block text-[13px] tracking-normal font-medium normal-case">{taxIncluded ? 'Incluido · línea' : 'Por línea'}</span></th>
-                        <th className="supermarket-money px-4 py-3 text-right text-gray-800">Total</th>
+                        <th className="supermarket-money px-3 py-2 text-right">Precio</th>
+                        <th className="supermarket-money px-3 py-2 text-right">ITBIS</th>
+                        <th className="supermarket-money px-3 py-2 text-right text-gray-800">Total</th>
                     </tr>
                 </thead>
                 <tbody className="text-sm divide-y divide-gray-50">
