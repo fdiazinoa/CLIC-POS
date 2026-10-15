@@ -206,7 +206,7 @@ test('articles without balances remain searchable and resolvable with zero avail
  assert.equal((await catalog.findBarcode('NEW'))?.item.product.stock,0);
 });
 
-test('zero-balance sale validation obeys product or terminal negative-stock settings, never a spoofed cart flag', async () => {
+test('zero-balance sale validation obeys product-only negative-stock policy, never terminal or spoofed cart flags', async () => {
   const bundle = await build({
     entryPoints: [new URL('../services/sync/LargeMasterSyncV3OperationalSession.ts', import.meta.url).pathname],
     bundle: true, write: false, format: 'esm', platform: 'node', define: { 'import.meta.env': '{}' },
@@ -235,7 +235,7 @@ test('zero-balance sale validation obeys product or terminal negative-stock sett
     const config = { taxes: [{ id: 'TX', name: 'ITBIS', type: 'VAT', rate: 0.18 }],
       terminals: [{ id: 'terminal', config: { currentDeviceId: 'device', workflow: {
         inventory: { allowNegativeStock: terminalNegative } } } }] };
-    if (productNegative || terminalNegative) {
+    if (productNegative) {
       await session.validate(config, [line], 'T1', 'W');
       assert.deepEqual(await session.stockRequirements(config, [line], 'W', 'SALE'), []);
     } else {

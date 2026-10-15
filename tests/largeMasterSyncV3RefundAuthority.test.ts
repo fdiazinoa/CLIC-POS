@@ -47,6 +47,6 @@ test('a sold-out tracked item may be refunded but still requires sale availabili
   assert.equal(requiresV3SaleAvailability('REFUND', true, false, false), false);
   assert.equal(requiresV3SaleAvailability('SALE', true, false, false), true);
   assert.equal(requiresV3SaleAvailability('SALE', true, true, false), false);
-  assert.equal(requiresV3SaleAvailability('SALE', true, false, true), false);
+  assert.equal(requiresV3SaleAvailability('SALE', true, false, true), true);
   assert.equal(requiresV3SaleAvailability('SALE', false, false, false), false);
 });

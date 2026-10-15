@@ -1,3 +1,4 @@
+import {requiresProductStockAvailability} from '../utils/productStockPolicy';
 import ArticleFormatSelector from './ArticleFormatSelector';
 import { formatsEnabled, assertFormatsPostingClosed } from '../services/articleFormats/activation';
 import { inventoryQuantity, resizeLine, resolveFormatBarcode, formatPrice, toBaseQuantity } from '../services/articleFormats/domain';
@@ -3337,8 +3338,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
 
       // 2. Stock validation
-      const trackInventory = product.operationalFlags?.trackInventory ?? config.features?.stockTracking ?? false;
-      if (trackInventory && !options?.skipStockValidation) {
+      if (!options?.skipStockValidation) {
          const consumptionMode = resolveInventoryConsumptionMode(product);
          if (consumptionMode === 'COMPONENTS' && quantityToAdd > 0) {
             const componentDeductions = calculateInventoryDeductions(product, quantityToAdd, products);
@@ -3355,10 +3355,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   return false;
                }
 
+               if (!requiresProductStockAvailability(component)) continue;
                const currentStock = getScopedProductStock(component);
-               const componentAllowsNegative = component.operationalFlags?.allowNegativeStock ?? false;
-               const terminalAllowsNegative = activeTerminalConfig?.workflow?.inventory?.allowNegativeStock ?? false;
-               if (componentAllowsNegative || terminalAllowsNegative) continue;
+               if (!Number.isFinite(currentStock)) { setErrorToast('Inventario no disponible para validar el componente.'); return false; }
                const committedQty = committedByProduct[componentId] || 0;
                const inCartQty = cartInventoryDemandByProduct[componentId] || 0;
                const availableStock = Math.max(0, currentStock - committedQty);
@@ -3374,12 +3373,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             return true;
          }
 
-         const productAllowsNegative = product.operationalFlags?.allowNegativeStock ?? false;
-         const terminalAllowsNegative = activeTerminalConfig?.workflow?.inventory?.allowNegativeStock ?? false;
-
-         // If negative stock is not allowed by the product nor the terminal, check availability.
-         if (!productAllowsNegative && !terminalAllowsNegative) {
+         if (requiresProductStockAvailability(product)) {
             const currentStock = getScopedProductStock(product);
+            if (!Number.isFinite(currentStock)) { setErrorToast('Inventario no disponible para validar el artículo.'); return false; }
             const committedQty = product.v3SaleAuthority ? 0 : committedByProduct[product.id] || 0;
             const availableStock = Math.max(0, currentStock - committedQty);
             const inCartQty = cartQuantityByProduct[product.id] || 0;
