@@ -6023,6 +6023,7 @@ export class ApiSyncAdapter {
      * Push a single cash movement to Master
      */
     async pushCashMovement(movement: any): Promise<any> {
+        assertLegacyFormatPayload(movement);
         if (isRecoveredOperation(movement)) throw new Error('RECOVERED_OPERATION_NO_REPLAY');
         try {
             const normalizedMovement = buildErpCashMovementPayload(movement);
@@ -6154,7 +6155,6 @@ export class ApiSyncAdapter {
         } catch (error) {
             if (error instanceof ArticleFormatError) throw error;
             console.error('❌ ApiSyncAdapter: Error pulling pending transactions:', error);
-            if (error instanceof ArticleFormatError) throw error;
             return [];
         }
     }
@@ -6217,6 +6217,7 @@ export class ApiSyncAdapter {
             }
 
             const data = await response.json();
+            assertLegacyFormatCollection('inventoryLedger',data.items);
             return data.items || [];
         } catch (error) {
             if (error instanceof ArticleFormatError) throw error;
@@ -6332,11 +6333,13 @@ export class ApiSyncAdapter {
             const data = await response.json();
             assertLegacyFormatCollection('transactions',data.data?.transactions);
             assertLegacyFormatCollection('transactionHistory',data.data?.transactionHistory);
+            assertLegacyFormatCollection('inventoryLedger',data.data?.inventoryLedger);
+            assertLegacyFormatCollection('cashMovements',data.data?.cashMovements);
+            assertLegacyFormatCollection('payments',data.data?.payments);
             return data.data;
         } catch (error) {
             if (error instanceof ArticleFormatError) throw error;
             console.error('❌ ApiSyncAdapter: Error pulling history:', error);
-            if (error instanceof ArticleFormatError) throw error;
             return null;
         }
     }

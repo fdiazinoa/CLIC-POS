@@ -631,6 +631,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
     articleFormatSQL(): FormatSQL {
         const direct: FormatSQL = {
             storageLayout: 'DOCUMENTS',
+            financialPostingReadiness: 'NATIVE_UNPROVEN',
             executeSchema: async sql => {
                 await this.ensureDb().execute('PRAGMA foreign_keys = ON;', false);
                 await this.ensureDb().execute(sql);

@@ -37,15 +37,21 @@ function setup(db=new SQLite(':memory:'), seed=true) {
   query:async(sql:string,values:any[]=[])=>({values:db.prepare(sql).all(...values)}),
   executeSet:async(statements:{statement:string;values:any[]}[])=>{
    control.count=statements.length;
-   db.transaction(()=>{statements.forEach((s,i)=>{if(control.before===i)throw Error('injected:'+i);db.prepare(s.statement).run(...s.values);});if(control.before===statements.length)throw Error('injected:beforeCommit');})();
+   db.transaction(()=>{statements.forEach((s,i)=>{if(control.before===i)throw Error('injected:'+i);db.prepare(s.statement).run(...(s.values||[]));});if(control.before===statements.length)throw Error('injected:beforeCommit');})();
    if(control.afterCommit)throw Error('injected:afterCommit');
   }};
  const adapter=new CapacitorSQLiteAdapter();Object.assign(adapter,{db:bridge});
- return {db,adapter,bridge,control,sql:adapter.articleFormatSQL()};
+ let queue=Promise.resolve();
+ const direct={storageLayout:'DOCUMENTS' as const,financialPostingReadiness:'ISOLATED_SQLITE' as const,
+  executeSchema:async(sql:string)=>bridge.execute(sql),query:async<T>(sql:string,values:any[])=> (await bridge.query(sql,values)).values as T[],
+  executeAtomic:async(statements:any[])=>bridge.executeSet(statements)};
+ const exclusive=<T>(work:(sql:typeof direct)=>Promise<T>):Promise<T>=>{const pending=queue.then(()=>work(direct));queue=pending.then(()=>undefined,()=>undefined);return pending;};
+ const sql={...direct,executeAtomic:(statements:any[])=>exclusive(port=>port.executeAtomic(statements)),runExclusive:exclusive};
+ return {db,adapter,bridge,control,sql,nativeSQL:adapter.articleFormatSQL()};
 }
 const read=(db:SQLite.Database,name:string)=> (db.prepare('SELECT data FROM documents WHERE collection_name=? ORDER BY sort_order,doc_id').all(name) as {data:string}[]).map(r=>JSON.parse(r.data));
 const state=(db:SQLite.Database)=>({docs:db.prepare('SELECT * FROM documents ORDER BY collection_name,doc_id').all(),outbox:db.prepare('SELECT * FROM article_format_outbox').all(),wire:db.prepare('SELECT * FROM article_format_wire_events').all(),movements:db.prepare('SELECT * FROM article_format_base_movements').all(),scope:db.prepare('SELECT * FROM article_format_wire_write_scope').all()});
-test('native documents reconcile stock, finance, bound return and selective ACK without parallel collections',async t=>{
+test('isolated exclusive SQLite document batch reconciles stock, finance, bound return and selective ACK',async t=>{
  const f=setup();t.after(()=>f.db.close());const posting=new ArticleFormatPosting(f.sql,context,masters);await posting.migrate();const e=sale();
  const untouched=read(f.db,'inventoryLedger')[0];
  await posting.post(e,opts);await posting.post(e,opts);
@@ -70,7 +76,7 @@ test('native documents reconcile stock, finance, bound return and selective ACK 
  f.db.prepare('INSERT INTO documents VALUES(?,?,?,?,?)').run('transactions','legacy','{"id":"legacy"}',99,'fixture');
  assert.throws(()=>f.db.prepare("DELETE FROM documents WHERE collection_name='transactions' AND doc_id=?").run(e.transaction_id),/LEGACY_WRITER_FORBIDDEN/);
 });
-test('native executeSet rollback at every document/journal write and uncertain commit preserves stable IDs',async t=>{
+test('isolated exclusive SQLite rollback at every document/journal write and uncertain commit preserves stable IDs',async t=>{
  const reference=setup();const refPosting=new ArticleFormatPosting(reference.sql,context,masters);await refPosting.migrate();await refPosting.post(sale(),opts);const count=reference.control.count;reference.db.close();
  for(let i=0;i<=count;i++){
   const f=setup();const posting=new ArticleFormatPosting(f.sql,context,masters);await posting.migrate();const before=state(f.db);f.control.before=i;
@@ -80,32 +86,36 @@ test('native executeSet rollback at every document/journal write and uncertain c
  await assert.rejects(posting.post(sale(),opts),/afterCommit/);f.control.afterCommit=false;
  const committed=state(f.db);await posting.post(sale(),opts);assert.deepEqual(state(f.db),committed);
 });
-test('normalized V3 ownership rejects unproven format stock posting before any write',async t=>{
+test('isolated document fixture rejects normalized V3 ownership before any write',async t=>{
  const f=setup();t.after(()=>f.db.close());const posting=new ArticleFormatPosting(f.sql,context,masters);await posting.migrate();
  f.db.exec("CREATE TABLE master_v3_operational_owner(singleton INTEGER PRIMARY KEY,owner TEXT);INSERT INTO master_v3_operational_owner VALUES(1,'V3')");
  const before=state(f.db);await assert.rejects(posting.post(sale(),opts),/V3_POSTING_NOT_READY/);assert.deepEqual(state(f.db),before);
 });
 
-test('actual Android parser accepts native document guards and shared writer lock prevents interleaving',async t=>{
+test('actual native API rejects every NEW format financial event before master/stock/sequence effects',async t=>{
  const f=setup();t.after(()=>f.db.close());
  for(const statement of androidSQLiteStatements(articleFormatWireSchema('DOCUMENTS'),t))f.db.exec(statement);
- const posting=new ArticleFormatPosting(f.sql,context,masters);await posting.migrate();
- let release!:()=>void,signal!:()=>void;
- const held=new Promise<void>(resolve=>release=resolve),started=new Promise<void>(resolve=>signal=resolve);
- const query=f.bridge.query;
- f.bridge.query=async(sql,values=[])=>{if(sql.includes('SELECT doc_id,data')&&values[0]==='transactions'){signal();await held;}return query(sql,values);};
- const salePromise=posting.post(sale(),opts);await started;
- const legacy=f.adapter.saveDocument('config',{id:'current',company:'synthetic'});
- await new Promise(resolve=>setImmediate(resolve));
- assert.equal(f.db.prepare("SELECT doc_id FROM documents WHERE collection_name='config'").get(),undefined);
- release();await salePromise;await legacy;
- assert.equal(read(f.db,'config')[0].company,'synthetic');assert.equal(read(f.db,'transactions').length,1);
+ let reads=0;const posting=new ArticleFormatPosting(f.nativeSQL,context,{getActiveRevision:async()=>{reads++;return revision;},getPolicy:async()=>{reads++;return {dto,policy};}});
+ await posting.migrate();const before=state(f.db),event=sale();
+ const staleStock=read(f.db,'productStocks')[0],staleSequence=read(f.db,'internalSequences')[0];
+ for(const eventType of ['ARTICLE_FORMAT_SALE_V1','ARTICLE_FORMAT_RETURN_V1','ARTICLE_FORMAT_VOID_V1'] as const){
+  const next:WireEvent={...event,event_type:eventType};
+  if(eventType!=='ARTICLE_FORMAT_SALE_V1'){
+   delete next.master;Object.assign(next,{source_event_id:id(99),return_context:structuredClone(context.return_context!),lines:event.lines.map(l=>({...l,source_line_id:id(98)}))});
+  }
+  await assert.rejects(posting.post(next,opts),/NATIVE_POSTING_NOT_READY/);
+ }
+ assert.equal(reads,0);assert.deepEqual(state(f.db),before);
+ await f.adapter.saveDocument('productStocks',staleStock);await f.adapter.saveDocument('internalSequences',staleSequence);
+ assert.equal(read(f.db,'productStocks')[0].quantity,137);assert.equal(read(f.db,'internalSequences')[0].nextNumber,1);
+ assert.equal(state(f.db).outbox.length,0);
+ assert.equal(f.db.prepare("SELECT name FROM sqlite_master WHERE name='collections'").get(),undefined);
 });
-test('native documents survive file reopen and lost ACK replay without reapplying stock or IDs',async t=>{
+test('native recovery retains existing document event across reopen and ACK replay while new posting stays blocked',async t=>{
  const dir=mkdtempSync(join(tmpdir(),'clic-formats-documents-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));const file=join(dir,'native.sqlite');
  let f=setup(new SQLite(file));let posting=new ArticleFormatPosting(f.sql,context,masters);await posting.migrate();const event=sale();await posting.post(event,opts);
  const pending=await posting.pending();f.db.close();
- f=setup(new SQLite(file),false);t.after(()=>f.db.close());posting=new ArticleFormatPosting(f.sql,context,masters);await posting.migrate();
+ f=setup(new SQLite(file),false);t.after(()=>f.db.close());posting=new ArticleFormatPosting(f.nativeSQL,context,masters);await posting.migrate();
  assert.deepEqual(await posting.pending(),pending);await posting.post(event,opts);
  assert.equal(read(f.db,'productStocks')[0].quantity,89);assert.equal(read(f.db,'payments').length,1);
  const originalContent=f.db.prepare('SELECT content FROM article_format_outbox').get();

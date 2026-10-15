@@ -6,6 +6,8 @@ export interface FormatStatement { statement: string; values?: (string | number 
 export interface FormatSQL {
   /** Native develop uses canonical document rows; omitted only by legacy isolated fixtures. */
   readonly storageLayout?: 'DOCUMENTS';
+  /** Native writers do not yet share the complete financial read/mutate/commit boundary. */
+  readonly financialPostingReadiness?: 'NATIVE_UNPROVEN' | 'ISOLATED_SQLITE';
   executeSchema(sql: string): Promise<void>;
   /** Serializes reads/planning and commit with legacy collection writers. */
   runExclusive?<T>(work: (sql: FormatSQL) => Promise<T>): Promise<T>;

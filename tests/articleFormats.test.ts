@@ -375,3 +375,24 @@ test('parent/variant codes resolve authorized base format and never bypass allow
   assert.equal(baseCodeFormat(variants,'blue-SKU')?.id,'blue-unit');
   assert.throws(() => baseCodeFormat(variants,'unknown'),/NOT_SELLABLE/);
 });
+
+
+test('legacy pending inventory and every historical financial batch reject format rows before returning any item',async t=>{
+ const {apiSyncAdapter}=await import('../services/sync/ApiSyncAdapter');
+ const adapter=apiSyncAdapter as unknown as {config:unknown;authToken:string|null;isOnline:boolean};
+ const prior={config:adapter.config,authToken:adapter.authToken,isOnline:adapter.isOnline};
+ Object.assign(adapter,{config:{masterUrl:'https://fixture.invalid',terminalId:'fixture'},authToken:'synthetic-test-token',isOnline:true});
+ t.after(()=>Object.assign(adapter,prior));
+ t.mock.method(apiSyncAdapter as never,'ensureAuthenticated' as never,(async()=>{}) as never);
+ let payload:any;
+ t.mock.method(apiSyncAdapter as never,'fetchWithRetry' as never,(async()=>({ok:true,status:200,json:async()=>payload})) as never);
+ const legacy={id:'legacy',qtyIn:1,qtyOut:0},formatted={id:'format',articleFormatEventId:'stable-format-event',qtyIn:1,qtyOut:0};
+ payload={items:[legacy,formatted]};await assert.rejects(apiSyncAdapter.pullPendingInventoryMovements(),/UNSUPPORTED/);
+ for(const collection of ['transactions','transactionHistory','inventoryLedger','cashMovements','payments']){
+  payload={data:{[collection]:[legacy,formatted]}};
+  await assert.rejects(apiSyncAdapter.pullHistory('fixture'),/UNSUPPORTED/,collection);
+ }
+ payload={items:[legacy]};assert.deepEqual(await apiSyncAdapter.pullPendingInventoryMovements(),[legacy]);
+ payload={data:{inventoryLedger:[legacy],cashMovements:[legacy],payments:[legacy]}};
+ assert.deepEqual(await apiSyncAdapter.pullHistory('fixture'),payload.data);
+});

@@ -95,6 +95,8 @@ export class ArticleFormatPosting {
   return this.sql.runExclusive!(async sql=>{
    const previous=await this.saved(sql,event.event_id);
    if(previous){requireFormat(previous.content===content&&previous.content_hash===hash,'POS_FORMAT_IDENTITY_CONFLICT');return this.document(sql,event.transaction_id);}
+   // Existing pending events may recover; no new native sale/return/void can bypass closed financial readiness.
+   requireFormat(sql.storageLayout!=='DOCUMENTS' || sql.financialPostingReadiness==='ISOLATED_SQLITE','POS_FORMAT_NATIVE_POSTING_NOT_READY');
    const sale=event.event_type==='ARTICLE_FORMAT_SALE_V1',isVoid=event.event_type==='ARTICLE_FORMAT_VOID_V1';
    const policies:Record<string,NetworkLinePolicy & {cogs_amount?:string}>={};const priorCosts:Record<string,string>={};let original:WireEvent|undefined;
    let returns:WireEvent[]=[];
