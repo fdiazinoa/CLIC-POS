@@ -1,3 +1,4 @@
+import {ensureInventoryPoolIndex} from './inventoryPoolIndex';
 import type {FormatSQL,FormatStatement} from './store';
 import {canonicalContent} from './store';
 import {Money,requireFormat,validateContext,validateWireEvent,wireHash,type NetworkContext,type WireEvent,type FormatTransport} from './wire';
@@ -72,11 +73,11 @@ export async function installInventoryFixtureBinding(sql:FormatSQL,input:Invento
  const scope=key(input.scope);fail(typeof input.authorization==='string'&&input.authorization.length>0);
  for(const value of Object.values(input.reservationAuthority?.quantities || {}))fail(signedBase4(value).gte(0));
  fail(sql.runFinancial,'POS_FORMAT_ATOMIC_STORAGE_REQUIRED');
- await sql.runFinancial!(async tx=>tx.executeAtomic([
+ await sql.runFinancial!(async tx=>{await ensureInventoryPoolIndex(tx);await tx.executeAtomic([
   {statement:'INSERT OR IGNORE INTO article_format_inventory_state(scope_key,generation) VALUES(?,?)',values:[scope,generation()]},
   {statement:'INSERT INTO article_format_inventory_binding VALUES(1,?,?,?) ON CONFLICT(singleton) DO UPDATE SET scope_key=excluded.scope_key,authorization=excluded.authorization,reservations=excluded.reservations',
    values:[scope,input.authorization,input.reservationAuthority?canonicalContent(input.reservationAuthority):null]}
- ]));
+ ]);});
 }
 export class ArticleFormatInventoryJournal {
  constructor(private readonly sql:FormatSQL){fail(sql.runFinancial,'POS_FORMAT_ATOMIC_STORAGE_REQUIRED');}
