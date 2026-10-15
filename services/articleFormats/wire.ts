@@ -17,6 +17,7 @@ export interface NetworkContext {
   scope: {tenantId:string;companyId:string;storeId:string;terminalId:string;warehouseId:string};
   tariff_ids: string[]; return_policy: PhysicalReturn|null;
   return_context_contract_version?:1;return_context_required?:true;return_context_supported?:boolean;return_context?:ReturnContext|null; event_types: typeof FORMAT_EVENT_TYPES[number][];
+  inventory_reconciliation?:{schema_version:1;supported:boolean;capability:'article_formats_inventory_reconciliation';readiness_required:true;baselines_url:string;balance_grain?:'ITEM_LOCAL_AGGREGATE';quantity_scale?:4};
   events_url: string; master_sessions_url: string;
 }
 export interface FormatTransport { request(path:string, body?:unknown):Promise<any> }
@@ -80,6 +81,12 @@ export function validateContext(ctx:any):NetworkContext {
         &&FORMAT_EVENT_TYPES.every(t=>ctx.event_types.includes(t)),'POS_FORMAT_RETURN_CONTEXT_INVALID');
     }else requireFormat(ctx.return_context===null&&ctx.return_policy===null&&ctx.event_types.length===1,'POS_FORMAT_NEGOTIATION_INVALID');
   }else requireFormat(['RESTOCK','DAMAGED','NO_RETURN'].includes(ctx.return_policy),'POS_FORMAT_NEGOTIATION_INVALID');
+  if(ctx.inventory_reconciliation!==undefined){
+    const r=ctx.inventory_reconciliation;
+    requireFormat(r?.schema_version===1&&typeof r.supported==='boolean'&&r.capability==='article_formats_inventory_reconciliation'
+      &&r.readiness_required===true&&r.baselines_url==='/api/sync/article-formats/v1/inventory-baselines'
+      &&(!r.supported||r.balance_grain==='ITEM_LOCAL_AGGREGATE'&&r.quantity_scale===4),'POS_FORMAT_INVENTORY_NEGOTIATION_INVALID');
+  }
   return structuredClone(ctx);
 }
 /** Checks before any new local posting. Historical Outbox replay does not call this. */
@@ -187,7 +194,7 @@ export class FormatHTTPError extends Error {
 }
 /** Only explicitly supplied ERP credentials; never derives scope from request bodies. */
 export function createFormatTransport(baseURL:string,credentials:{syncToken:string;terminalId:string;tenantId:string;deviceToken:string;deviceId:string},
-  fetcher:typeof fetch=fetch,timeoutMs=15000,options:{negotiateReturnContextV1?:boolean}={}):FormatTransport {
+  fetcher:typeof fetch=fetch,timeoutMs=15000,options:{negotiateReturnContextV1?:boolean;fixtureInventoryReconciliationV1?:boolean}={}):FormatTransport {
   const origin=new URL(baseURL);
   requireFormat(origin.protocol==='https:' || origin.protocol==='http:'&&['localhost','127.0.0.1','[::1]'].includes(origin.hostname),'POS_FORMAT_TRANSPORT_INSECURE');
   return {async request(path,body){
@@ -197,7 +204,7 @@ export function createFormatTransport(baseURL:string,credentials:{syncToken:stri
       const response=await fetcher(new URL(path,origin),{method:body===undefined?'GET':'POST',signal:controller.signal,redirect:'error',headers:{
         'Authorization':`Bearer ${credentials.syncToken}`,'x-sync-token':credentials.syncToken,'x-terminal-id':credentials.terminalId,
         'x-tenant-id':credentials.tenantId,'x-device-token':credentials.deviceToken,'x-device-id':credentials.deviceId,
-        'x-article-formats-contract':'1',...(options.negotiateReturnContextV1&&path==='/api/sync/article-formats/v1/negotiate'?{'x-article-formats-return-context':'1'}:{}),'x-pos-capabilities':'largeMasterSyncV3','Content-Type':'application/json'
+        'x-article-formats-contract':'1',...(options.fixtureInventoryReconciliationV1&&/^\/api\/sync\/article-formats\/v1\/(?:negotiate$|inventory-baselines(?:\/|$)|inventory-receipts\/)/.test(path)?{'x-article-formats-inventory-reconciliation':'1'}:{}),...(options.negotiateReturnContextV1&&path==='/api/sync/article-formats/v1/negotiate'?{'x-article-formats-return-context':'1'}:{}),'x-pos-capabilities':'largeMasterSyncV3','Content-Type':'application/json'
       },...(body===undefined?{}:{body:JSON.stringify(body)})});
       const text=await response.text();let result:any;try{result=JSON.parse(text);}catch{throw new FormatHTTPError(response.status,'POS_FORMAT_RESPONSE_INVALID',true);}
       if(response.status===202)throw new FormatHTTPError(202,'POS_FORMAT_SESSION_NOT_READY',true);

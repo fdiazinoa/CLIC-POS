@@ -1,3 +1,4 @@
+import {FORMAT_INVENTORY_SCHEMA} from './inventorySchema';
 import { FORMAT_ACK_METADATA_FIELDS } from '../db/ArticleFormatFinancialRetention';
 /** Additive tables only. Existing collections/sync_queue and pending legacy sales stay intact. */
 export const ARTICLE_FORMATS_SCHEMA = `
@@ -80,7 +81,7 @@ CREATE TABLE IF NOT EXISTS article_format_base_movements (
   PRIMARY KEY(tenant_id,company_id,event_id,line_id),
   FOREIGN KEY(tenant_id,company_id,event_id) REFERENCES article_format_outbox(tenant_id,company_id,event_id)
 );
-`;
+`+FORMAT_INVENTORY_SCHEMA;
 
 export const ARTICLE_FORMAT_WIRE_SCHEMA = `
 CREATE TABLE IF NOT EXISTS article_format_wire_events (
@@ -111,6 +112,7 @@ DROP TRIGGER IF EXISTS article_format_document_insert;
 DROP TRIGGER IF EXISTS article_format_document_update;
 DROP TRIGGER IF EXISTS article_format_document_delete;
 CREATE INDEX IF NOT EXISTS article_format_outbox_source ON article_format_outbox(tenant_id,company_id,json_extract(content,'$.source_event_id'));
+CREATE INDEX IF NOT EXISTS article_format_inventory_document_pool ON documents(json_extract(data,'$.warehouseId'),json_extract(data,'$.productId')) WHERE collection_name='inventoryLedger';
 CREATE INDEX IF NOT EXISTS article_format_fiscal_buffer_scope ON documents(json_extract(data,'$.type'),json_extract(data,'$.terminalId')) WHERE collection_name='localFiscalBuffer';
 CREATE TRIGGER IF NOT EXISTS article_format_document_insert BEFORE INSERT ON documents
 WHEN json_extract(NEW.data,'$.articleFormatEventId') IS NOT NULL

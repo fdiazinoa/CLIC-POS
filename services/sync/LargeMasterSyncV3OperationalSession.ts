@@ -1,3 +1,4 @@
+import {requiresProductStockAvailability} from '../../utils/productStockPolicy';
 import { v3TaxSemantics } from './LargeMasterSyncV3StockAuthority';
 import { db } from '../../utils/db';
 import { readV3RetainedCheckout, assertV3RetainedLine, type V3RetainedContext, type V3RetainedReference } from './LargeMasterSyncV3RetainedCheckout';
@@ -148,20 +149,39 @@ export class LargeMasterSyncV3OperationalSession {
   async withStock(product: Product, warehouseId: string): Promise<Product> {
     const stamp = product.v3SaleAuthority;
     if (!stamp) throw new LargeMasterSyncV3Error('SYNC_V3_CART_LEGACY_LINE');
-    const delta = await this.store.getLocalInventoryDelta!(v3InventoryBaselineKey(this.binding, stamp), product.id, warehouseId);
-    return { ...product, v3SaleAuthority: { ...stamp, binding: this.binding, warehouseId }, stock: product.stock + delta,
-      stockBalances: { ...product.stockBalances, [warehouseId]: (product.stockBalances?.[warehouseId] || 0) + delta } };
+    if(product.type==='SERVICE'||product.isInventoriable!==true||!requiresProductStockAvailability(product))return {...product,v3SaleAuthority:{...stamp,binding:this.binding,warehouseId}};
+    const baseline=v3InventoryBaselineKey(this.binding,stamp);
+    if(!this.store.getOperationalStockProjection&&!Number.isFinite(product.stock))throw new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_NOT_READY');
+    const projection=this.store.getOperationalStockProjection ? await this.store.getOperationalStockProjection(baseline,[product.id],warehouseId)
+      : {mode:'LEGACY_DELTA' as const,quantities:{[product.id]:await this.store.getLocalInventoryDelta!(baseline,product.id,warehouseId)}};
+    if(projection.mode==='RECONCILED_AVAILABLE'&&!Object.hasOwn(projection.quantities,product.id))throw new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_NOT_READY');
+    const value=projection.quantities[product.id] ?? 0;
+    if(!Number.isFinite(value)||projection.mode==='LEGACY_DELTA'&&!Number.isFinite(product.stock))throw new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_NOT_READY');
+    return { ...product, v3SaleAuthority: { ...stamp, binding: this.binding, warehouseId },
+      stock:projection.mode==='RECONCILED_AVAILABLE'?value:product.stock+value,
+      stockBalances:{...product.stockBalances,[warehouseId]:projection.mode==='RECONCILED_AVAILABLE'?value:(product.stockBalances?.[warehouseId] || 0)+value} };
   }
 
   async withStocks(products: Product[], warehouseId: string): Promise<Product[]> {
     if (!products.length) return [];
     const stamp = products[0].v3SaleAuthority;
-    if (!stamp || !this.store.getLocalInventoryDeltas) throw new LargeMasterSyncV3Error('SYNC_V3_NATIVE_STORE_UNAVAILABLE');
-    const deltas = await this.store.getLocalInventoryDeltas(v3InventoryBaselineKey(this.binding, stamp), products.map(row => row.id), warehouseId);
-    return products.map(product => ({ ...product,
-      v3SaleAuthority: { ...product.v3SaleAuthority!, binding: this.binding, warehouseId },
-      stock: product.stock + (deltas[product.id] || 0),
-      stockBalances: { ...product.stockBalances, [warehouseId]: (product.stockBalances?.[warehouseId] || 0) + (deltas[product.id] || 0) } }));
+    if (!stamp) throw new LargeMasterSyncV3Error('SYNC_V3_NATIVE_STORE_UNAVAILABLE');
+    const checked=products.filter(p=>p.type!=='SERVICE'&&p.isInventoriable===true&&requiresProductStockAvailability(p));
+    if(checked.length&&!this.store.getOperationalStockProjection&&(!this.store.getLocalInventoryDeltas||checked.some(p=>!Number.isFinite(p.stock))))throw new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_NOT_READY');
+    const baseline=v3InventoryBaselineKey(this.binding,stamp);
+    const projection=checked.length ? this.store.getOperationalStockProjection
+      ? await this.store.getOperationalStockProjection(baseline,checked.map(p=>p.id),warehouseId)
+      : {mode:'LEGACY_DELTA' as const,quantities:await this.store.getLocalInventoryDeltas!(baseline,checked.map(p=>p.id),warehouseId)}
+      : {mode:'LEGACY_DELTA' as const,quantities:{}};
+    if(projection.mode==='RECONCILED_AVAILABLE'&&checked.some(p=>!Object.hasOwn(projection.quantities,p.id)))throw new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_NOT_READY');
+    if(Object.values(projection.quantities).some(d=>!Number.isFinite(d))||projection.mode==='LEGACY_DELTA'&&checked.some(p=>!Number.isFinite(p.stock)))throw new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_NOT_READY');
+    return products.map(product => {
+      const value=projection.quantities[product.id] ?? 0;
+      const absolute=projection.mode==='RECONCILED_AVAILABLE'&&Object.hasOwn(projection.quantities,product.id);
+      return {...product,v3SaleAuthority:{...product.v3SaleAuthority!,binding:this.binding,warehouseId},
+        stock:absolute?value:product.stock+value,
+        stockBalances:{...product.stockBalances,[warehouseId]:absolute?value:(product.stockBalances?.[warehouseId] || 0)+value}};
+    });
   }
 
   async validate(config: BusinessConfig, lines: CartItem[], tariffId: string, warehouseId: string,
@@ -227,14 +247,11 @@ export class LargeMasterSyncV3OperationalSession {
       validateV3PinnedLineSource(line, source.product, source.authority);
       onValidatedSource?.(line, source.product);
       if (!source.product.activeInWarehouses?.includes(warehouseId)) throw new LargeMasterSyncV3Error('SYNC_V3_WAREHOUSE_UNAVAILABLE');
-      const stock = await this.withStock(source.product, warehouseId);
-      const terminal = config.terminals.find(row => row.config?.currentDeviceId === this.identity.deviceId);
       if (source.product.type !== 'SERVICE' && source.product.isInventoriable === true
         && requiresV3SaleAvailability(intent, source.product.operationalFlags?.trackInventory === true,
-        source.product.operationalFlags?.allowNegativeStock === true,
-        terminal?.config.workflow?.inventory?.allowNegativeStock === true)
-        && (demand.get(line.id) || 0) > stock.stock) {
-        throw new LargeMasterSyncV3Error('SYNC_V3_STOCK_INSUFFICIENT');
+        source.product.operationalFlags?.allowNegativeStock === true)) {
+        const stock=await this.withStock(source.product,warehouseId);
+        if((demand.get(line.id) || 0)>stock.stock)throw new LargeMasterSyncV3Error('SYNC_V3_STOCK_INSUFFICIENT');
       }
     }
     await this.assertCurrent();
@@ -245,7 +262,6 @@ export class LargeMasterSyncV3OperationalSession {
     intent: V3FinancialIntent): Promise<NonNullable<DurableDocumentMutation['v3StockRequirements']>> {
     if (intent === 'REFUND') return [];
     const catalog = await this.catalog(lines[0].v3SaleAuthority!.tariffId, warehouseId);
-    const terminal = config.terminals.find(row => row.config?.currentDeviceId === this.identity.deviceId);
     const demands = new Map<string, number>();
     for (const line of lines) {
       if (line.quantity <= 0) throw new LargeMasterSyncV3Error('SYNC_V3_LINE_INVALID');
@@ -253,8 +269,7 @@ export class LargeMasterSyncV3OperationalSession {
       if (!source) throw new LargeMasterSyncV3Error('SYNC_V3_ARTICLE_UNAVAILABLE');
       if (source.product.type !== 'SERVICE' && source.product.isInventoriable === true && requiresV3SaleAvailability(intent,
         source.product.operationalFlags?.trackInventory === true,
-        source.product.operationalFlags?.allowNegativeStock === true,
-        terminal?.config.workflow?.inventory?.allowNegativeStock === true)) {
+        source.product.operationalFlags?.allowNegativeStock === true)) {
         demands.set(line.id, (demands.get(line.id) || 0) + line.quantity);
       }
     }

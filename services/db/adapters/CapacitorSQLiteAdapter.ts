@@ -1,3 +1,4 @@
+import {assertNoReconciledOrdinaryWriter} from '../../articleFormats/inventoryJournal';
 import {readV3Base4Stock,base4} from '../V3Base4Stock';
 import {Money} from '../../articleFormats/wire';
 import {NATIVE_FISCAL_RECEIPTS_SCHEMA,planNativeFiscalReceipt} from '../NativeFiscalReservation';
@@ -89,6 +90,7 @@ export const NATIVE_V3_METHOD_CONCURRENCY = {
     findOperationalCode: 'read',
     getOperationalOwner: 'read',
     setOperationalOwner: 'write',
+    getOperationalStockProjection: 'read',
     getLocalInventoryDelta: 'read',
     assertCanRefresh: 'read',
     getLocalInventoryDeltas: 'read',
@@ -1056,9 +1058,13 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
           if (!reads.has(key)) reads.set(key, this.ensureDb().query(sql, values));
           return reads.get(key)!;
         };
-        const demands = new Map<string, { baseline: string; productId: string; warehouseId: string; quantity: number; quantityScale?:4; exactQuantity?:string }>();
+        const demands = new Map<string, { baseline: string; productId: string; warehouseId: string; quantity: number; quantityScale?:4; exactQuantity?:string; nonFormatWriter?:boolean }>();
         for (const mutation of documents) {
             const document = mutation.document as any;
+            if(mutation.collectionName==='inventoryLedger'&&!document.articleFormatEventId
+              &&(Number(document.qtyIn || 0)!==0||Number(document.qtyOut || 0)!==0)) {
+              await assertNoReconciledOrdinaryWriter(async<T>(sql:string,values:(string|number|null)[])=>(await read(sql,values)).values as T[] || [],document.warehouseId);
+            }
             if (mutation.requireAbsent || mutation.expectedDocument !== undefined) {
               const stored = await read('SELECT data FROM documents WHERE collection_name = ? AND doc_id = ?', [mutation.collectionName, document.id]);
               if (mutation.requireAbsent && stored.values?.length) throw new Error('SYNC_V3_DUPLICATE_COMMIT');
@@ -1165,11 +1171,12 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
                 const exact=new Money(exactQuantity);
                 if(exact.dp()>4 || exact.abs().gt('99999999999.9999'))throw new Error('POS_FORMAT_PRECISION_INVALID');
               }
-              demands.set(key, { ...requirement, quantity: requirement.quantity + (prior?.quantity || 0),quantityScale,exactQuantity });
+              demands.set(key, { ...requirement, quantity: requirement.quantity + (prior?.quantity || 0),quantityScale,exactQuantity,nonFormatWriter:!document.articleFormatEventId||prior?.nonFormatWriter });
             }
         }
         // Both this read and every ledger write occur after BEGIN, under the shared native write queue.
         for (const demand of demands.values()) {
+          if(demand.nonFormatWriter)await assertNoReconciledOrdinaryWriter(async<T>(sql:string,values:(string|number|null)[])=>(await read(sql,values)).values as T[] || [],demand.warehouseId);
           if(demand.quantityScale===4){
             const stock=await readV3Base4Stock(async<T>(sql:string,values:(string|number|null)[])=>(await read(sql,values)).values as T[] || [],demand.baseline,demand.productId,demand.warehouseId);
             if(new Money(demand.exactQuantity!).gt(stock.available))throw new Error('SYNC_V3_STOCK_INSUFFICIENT');

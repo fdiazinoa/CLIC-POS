@@ -1,3 +1,4 @@
+import {requiresProductStockAvailability} from '../../utils/productStockPolicy';
 import { v3StockSource } from './LargeMasterSyncV3StockAuthority';
 import type { Transaction } from '../../types';
 import type { DurableDocumentMutation } from '../db/DatabaseAdapter';
@@ -7,8 +8,8 @@ export type V3FinancialIntent = 'SALE' | 'REFUND';
 
 /** Positive refund document quantities replenish stock; they are not sale demand. */
 export const requiresV3SaleAvailability = (intent: V3FinancialIntent, trackInventory: boolean,
-  productAllowsNegative: boolean, terminalAllowsNegative: boolean): boolean =>
-  intent === 'SALE' && trackInventory && !productAllowsNegative && !terminalAllowsNegative;
+  productAllowsNegative: boolean, _terminalAllowsNegative?: boolean): boolean =>
+  intent === 'SALE' && requiresProductStockAvailability({operationalFlags:{trackInventory,allowNegativeStock:productAllowsNegative}});
 
 const sourceIdentity = (transaction: Transaction): string => {
   const canonical = (value: any): any => Array.isArray(value) ? value.map(canonical)
