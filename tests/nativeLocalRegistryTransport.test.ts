@@ -14,10 +14,10 @@ function candidates(nativeAndroid: boolean, protocol: string, hostname: string) 
   });
 }
 
-test('native Android probes the actual HTTP service without TLS or Capacitor asset fallbacks', () => {
+test('native Android omits unsupported Node network and Cloud proxy routes', () => {
   const result = candidates(true, 'https:', 'localhost');
-  assert.deepEqual(Array.from(result.network()), ['http://127.0.0.1:3001/api/network', 'http://localhost:3001/api/network']);
-  assert.deepEqual(Array.from(result.registry('/api/cloud/resolve', 'test=1')), ['http://127.0.0.1:3001/api/cloud/resolve?test=1', 'http://localhost:3001/api/cloud/resolve?test=1']);
+  assert.deepEqual(Array.from(result.network()), []);
+  assert.deepEqual(Array.from(result.registry('/api/cloud/resolve', 'test=1')), []);
 });
 
 test('HTTPS and HTTP browsers retain their original protocol and relative proxy candidates', () => {
