@@ -1,0 +1,21 @@
+Completa en CLIC-ERP el contrato de conciliación de inventario entre ARTICLE_FORMAT_* y el baseline de stock que descarga CLIC-POS, manteniendo formatos y activación cerrados.
+
+Base funcional: PR #2251, fix/sync-format-return-context, contrato docs/ARTICLE_FORMATS_POS_NETWORK_V1.md. Inspecciona primero lo existente y respeta AGENTS/WORKFLOW; no dupliques módulos. No modifiques el repositorio POS.
+
+Problema demostrado: el ACK de evento contiene inventory_movement_ids y committed_at, pero no prueba si un baseline/cursor de inventario concreto ya incluye ese efecto. terminal-inventory-coverage-v2 sólo completa item×warehouse con saldo0. El manifestV3 declara inventario separado y consistencia eventual. Por tanto, siPOS conserva un delta local ya incluido en el siguiente baseline, lo descuenta dosveces; si lo elimina sólo porACK y el baseline es viejo, pierde el descuento. SyncId/revisión comercial no equivalen a baseline físico.
+
+Implementa una extensión aditiva y versionada, sin cambiar los envelopes ARTICLE_FORMAT_SALE_V1/RETURN_V1/VOID_V1 ni el replay de ACK históricos:
+- Define en el contrato cómo se identifica de forma inequívoca el baseline/corte exacto de inventario y su scope autenticado tenant/company/store/terminal/device/warehouse/local. Documenta el mecanismo de consistencia de balances y cobertura: mismo corte transaccional, snapshot materializado o solución equivalente probada; no basta comparar timestamps.
+- Proporciona prueba autenticada de cuáles efectos de formatos están incluidos en ese baseline: event_id, line_id, item_id, variant_id ERP_ID, warehouse/local, movement_id, delta_base firmado como string decimal con escala acordada y vínculo al contenido original. Usa la metadata ya almacenada pos_article_formats_event/line yarticle_format_movement_key; no inventes correspondencias con SALE_POSTED legacy.
+- Define resultados explícitos para evento no incluido, desconocido, scope ajeno y retornos/VOID sin efecto físico según políticaERP. RESTOCK tiene el delta autorizado; las demás políticas no deben generar stock ficticio. Especifica exhaustividad, páginas/cursor/checksum y comportamiento ante fuente incompleta: nunca producir recibo parcial como completo.
+- El recibo debe permitir quePOS cambie baseline yabsorba sólo los deltas ya incluidos en un único commit SQLite. Un recibo de inclusión NO sustituye ACK financiero: OutboxsinACKválido conserva payload/IDs/return_context originales pendientes para replay. POS_FORMAT_RETURN_CONTEXT_CONFLICT sigue sin renegociación/reemplazo ni fallbacklegacy.
+- Mantén legacycontrato2 y terminales sinformatos compatibles. Admisión/capabilities/readiness/grants continúan cerrados. Documenta versionado de esta extensión y readiness de reconciliación necesario para futura negociación. No añadas campos retroactivos inventados al ACKAPPLIED histórico.
+
+Pruebas PostgreSQLreal aislado+HTTP, con evidencia yrevisión independiente:
+1. Baseline137, venta2Caja24=-48: disponible89 antes/después deACK ybaseline nuevo, sin terminar41/137 porabsorción incorrecta.
+2. Devolución0.5Caja24 RESTOCK=+12; políticas noRESTOCK con efecto0; VOID, variantes yalmacenes separados.
+3. ACKperdido, replay idéntico, eventoAPPLIED con baselineviejo, baseline posterior conACKaúnpendiente, duplicados yconflictos de contenido.
+4. Concurrencia entre apply yconstrucción debaseline, otros terminales, snapshotcacheviejo, páginas truncadas/duplicadas, cambios de scope yautorización.
+5. CambioCaja24→Caja12 conservaefectoshistóricos48/12. Ausenciadecoverage no se convierte en permiso niéxito.
+
+Entrega código ypruebas, contrato actualizado, revisión independiente yPRenborrador. Expón límites reales e indica exactamente el nuevo endpoint/campos ycómoPOS valida el recibo. No afirmar integración completa usando únicamente mocks. NO fusionar, desplegar, aplicarSQLremoto, activarflags/capabilities/readiness/grants ni instalarAPK. Si se usaSQL, sólo PostgreSQLlocal aislado sintético duranteesta tarea.

@@ -1,3 +1,4 @@
+import { resolveFiscalTerminalPolicyFromConfig,hasValidFiscalAllocationPointer,getFiscalRangeForEmission,hasValidAllocatedFiscalRange,isAllocationAllowedByPolicy } from './fiscalBufferAuthority';
 import { applyLocalUserProfiles } from './localUserProfiles';
 import {
   BusinessConfig, Product, User, Customer, Transaction,
@@ -562,108 +563,11 @@ const getTerminalFiscalAllocation = (
 
 // Fiscal authority comes from the terminal contract, never the global auxiliary pool.
 const resolveFiscalTerminalPolicy = async (
-  terminalId: string | undefined, allocations: FiscalAllocation[], context?: TerminalConfig
+  terminalId:string|undefined,allocations:FiscalAllocation[],context?:TerminalConfig
 ) => {
-  const stored = await dbAdapter.getCollection<BusinessConfig>('config');
-  const business = (Array.isArray(stored) ? stored[0] : stored) as BusinessConfig | undefined;
-  const terminal = business?.terminals?.find(candidate => candidate.id === terminalId || candidate.config?.erpTerminalId === terminalId);
-  const terminalConfig = terminal?.config || context;
-  const authorityId = terminalConfig?.erpTerminalId || terminalId;
-  const identityMatches = Boolean(terminalId && authorityId && (authorityId === terminalId ||
-    (terminal && terminal.id === terminalId && terminal.config?.erpTerminalId === authorityId)));
-  const companyId = terminalConfig?.erpBinding?.companyId;
-  const assignedRangeIds = Array.isArray(terminalConfig?.fiscal?.fiscalRanges)
-    ? new Set(terminalConfig.fiscal.fiscalRanges.map(range => range.id)) : null;
-  const configuredAllocations = Array.isArray(terminalConfig?.fiscal?.fiscalAllocations)
-    ? terminalConfig.fiscal.fiscalAllocations : null;
-  const foreignCompany = [...allocations, ...(configuredAllocations || [])].some(allocation => {
-    if (normalizeSequenceKey(allocation.terminalId) !== normalizeSequenceKey(authorityId)) return false;
-    const sourceCompany = allocation.metadata?.companyId || allocation.metadata?.company_id || allocation.metadata?.sourceCompanyId;
-    return sourceCompany && (!companyId || normalizeSequenceKey(sourceCompany) !== normalizeSequenceKey(companyId));
-  });
-  return { authorityId, managed: true, assignedRangeIds, configuredAllocations, enabled: identityMatches && !foreignCompany &&
-    terminalConfig?.fiscal?.mode !== 'NONE' &&
-    (terminalConfig?.fiscal?.mode === 'LEGACY_B' || terminalConfig?.fiscal?.enabled !== false) };
-
-};
-
-const hasValidFiscalAllocationPointer = (allocation: FiscalAllocation): boolean => {
-  const next = Number(allocation.nextNumber);
-  const start = Number(allocation.reservedStart);
-  const end = Number(allocation.reservedEnd);
-  return Number.isSafeInteger(next) && Number.isSafeInteger(start) &&
-    Number.isSafeInteger(end) && start > 0 && end >= start &&
-    next >= start && next <= end + 1;
-};
-
-const getFiscalRangeForEmission = (
-  ranges: FiscalRangeDGII[],
-  type: FiscalDocumentCode,
-  allocation?: FiscalAllocation | null
-): FiscalRangeDGII | null => {
-  const normalizedType = normalizeSequenceKey(type);
-  const normalizedRangeId = normalizeSequenceKey(allocation?.fiscalRangeId || '');
-  const normalizedPrefix = normalizeSequenceKey(allocation?.prefix || '');
-
-  if (normalizedRangeId) {
-    const matchById = (ranges || []).find((range) => normalizeSequenceKey(range.id) === normalizedRangeId);
-    if (matchById && normalizeSequenceKey(matchById.type) === normalizedType) return matchById;
-    return null;
-  }
-
-  if (normalizedPrefix) {
-    const matchByPrefix = (ranges || []).find((range) =>
-      normalizeSequenceKey(range.prefix) === normalizedPrefix &&
-      normalizeSequenceKey(range.type) === normalizedType
-    );
-    if (matchByPrefix) return matchByPrefix;
-  }
-
-  return (ranges || []).find((range) =>
-    normalizeSequenceKey(range.type) === normalizedType && Boolean(range.isActive)
-  ) || null;
-};
-
-const hasValidAllocatedFiscalRange = (
-  ranges: FiscalRangeDGII[], allocation: FiscalAllocation, type: FiscalDocumentCode
-): boolean => {
-  if (!allocation.id || !allocation.fiscalRangeId || !allocation.terminalId) return false;
-  if (allocation.releasedAt || (allocation.metadata?.sourceTerminalId &&
-      normalizeSequenceKey(allocation.metadata.sourceTerminalId) !== normalizeSequenceKey(allocation.terminalId))) return false;
-  const range = getFiscalRangeForEmission(ranges, type, allocation);
-  if (!range || !range.isActive || !hasValidFiscalAllocationPointer(allocation)) return false;
-  // The deployed ERP lot contract omits expiry. Never synthesize a date;
-  // an explicitly supplied nonblank invalid/expired date remains a denial.
-  const suppliedExpiry = String(range.expiryDate ?? '').trim();
-  if (suppliedExpiry) {
-    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(suppliedExpiry);
-    if (!match) return false;
-    const expiry = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
-    if (expiry.getFullYear() !== Number(match[1]) || expiry.getMonth() !== Number(match[2]) - 1 ||
-        expiry.getDate() !== Number(match[3])) return false;
-    const today = new Date(); today.setHours(0, 0, 0, 0);
-    if (expiry < today) return false;
-  }
-  return Number.isSafeInteger(range.startNumber) && Number.isSafeInteger(range.endNumber) &&
-    range.startNumber > 0 && range.endNumber >= range.startNumber &&
-    allocation.reservedStart >= range.startNumber && allocation.reservedEnd <= range.endNumber &&
-    normalizeSequenceKey(range.type) === normalizeSequenceKey(type) &&
-    normalizeSequenceKey(range.prefix) === normalizeSequenceKey(allocation.prefix || type);
-
-};
-
-const isAllocationAllowedByPolicy = (
-  allocation: FiscalAllocation, policy: Awaited<ReturnType<typeof resolveFiscalTerminalPolicy>>, prepared = false
-): boolean => {
-  if (policy.assignedRangeIds && !policy.assignedRangeIds.has(allocation.fiscalRangeId)) return false;
-  if (!policy.configuredAllocations) return true;
-  return policy.configuredAllocations.some(source => source.id === allocation.id &&
-    normalizeSequenceKey(source.terminalId) === normalizeSequenceKey(policy.authorityId) &&
-    source.fiscalRangeId === allocation.fiscalRangeId && source.ncfType === allocation.ncfType &&
-    Number(source.reservedStart) === allocation.reservedStart && Number(source.reservedEnd) === allocation.reservedEnd &&
-    hasValidFiscalAllocationPointer(source) && !source.releasedAt &&
-    (source.status === 'ACTIVE' || (prepared && source.status === 'EXHAUSTED')) &&
-    (!source.prefix || normalizeSequenceKey(source.prefix) === normalizeSequenceKey(allocation.prefix || allocation.ncfType)));
+  const stored=await dbAdapter.getCollection<BusinessConfig>('config');
+  const business=(Array.isArray(stored)?stored[0]:stored) as BusinessConfig|undefined;
+  return resolveFiscalTerminalPolicyFromConfig(business,terminalId,allocations,context);
 };
 
 const reserveFiscalBatch = async (terminalId: string, type: FiscalDocumentCode, context?: TerminalConfig): Promise<LocalFiscalBuffer | null> => {
@@ -1596,6 +1500,19 @@ export const db = {
     // A snapshot may revoke the lot while reserving. Never return a number from that stale authority.
     if (!await db.validatePreparedFiscalAuthority(type, terminalId, ncf, context)) return null;
 
+    if(dbAdapter.reserveFinancialNumbers && type.startsWith('B')){
+      const authority=[['config','current'],['localFiscalBuffer',buffer.id],['fiscalAllocations',buffer.allocationId],['fiscalRanges',buffer.fiscalRangeId]];
+      const expected:string[]=[];
+      for(const [collection,id] of authority){
+        if(!id || !dbAdapter.executeSQL) throw new Error('NATIVE_FISCAL_AUTHORITY_CONFLICT');
+        const rows=await dbAdapter.executeSQL('SELECT data FROM documents WHERE collection_name=? AND doc_id=?',[collection,id]);
+        const raw=rows[0]?.values?.[0]?.[0];
+        if(typeof raw!=='string') throw new Error('NATIVE_FISCAL_AUTHORITY_CONFLICT');
+        expected.push(raw);
+      }
+      return (await dbAdapter.reserveFinancialNumbers({global:false,fiscal:{terminalId,type,ncf,
+        expectedConfig:expected[0],expectedBuffer:expected[1],expectedAllocation:expected[2],expectedRange:expected[3]}})).ncf || null;
+    }
     buffer.currentNumber += 1;
     await dbAdapter.saveCollection('localFiscalBuffer', buffers);
     return ncf;
@@ -1670,7 +1587,21 @@ export const db = {
     }
   }),
 
+  reserveSeriesNumbers: async (seriesId:string,documentType:string) => {
+    if(!dbAdapter.reserveFinancialNumbers) return undefined;
+    return dbAdapter.reserveFinancialNumbers({seriesId,documentType,global:false});
+  },
+
+  reserveTransactionNumbers: async (seriesId:string, documentType:string) => {
+    if (!dbAdapter.reserveFinancialNumbers) return undefined;
+    return dbAdapter.reserveFinancialNumbers({seriesId,documentType,global:true});
+  },
+
   getNextSequenceNumber: async (sequenceId: string): Promise<string | null> => {
+    if (dbAdapter.reserveFinancialNumbers) {
+      try { return (await dbAdapter.reserveFinancialNumbers({seriesId:sequenceId,global:false})).displayId || null; }
+      catch(error) { if(error instanceof Error && error.message==='POS_FORMAT_SERIES_FORBIDDEN') return null; throw error; }
+    }
     const sequences = await dbAdapter.getCollection<DocumentSeries>('internalSequences') || [];
     const seq = (sequences || []).find((s: DocumentSeries) => s.id === sequenceId);
 
@@ -2000,6 +1931,7 @@ export const db = {
   },
 
   getNextGlobalSequence: async (): Promise<number> => {
+    if (dbAdapter.reserveFinancialNumbers) return (await dbAdapter.reserveFinancialNumbers({global:true})).globalSequence!;
     const counter = await dbAdapter.getCollection('globalSequenceCounter') || 0;
     const next = (typeof counter === 'number' ? counter : 0) + 1;
     await dbAdapter.saveCollection('globalSequenceCounter', next as any);
@@ -2007,6 +1939,7 @@ export const db = {
   },
 
   getNextSeriesNumber: async (seriesId: string): Promise<number> => {
+    if (dbAdapter.reserveFinancialNumbers) return (await dbAdapter.reserveFinancialNumbers({seriesId,global:false})).seriesNumber!;
     const sequences = await dbAdapter.getCollection<DocumentSeries>('internalSequences') || [];
     const series = (sequences || []).find((s: DocumentSeries) => s.id === seriesId);
     if (!series) throw new Error(`Series ${seriesId} not found`);

@@ -57,6 +57,8 @@ export class ArticleFormatNetworkMaster {
   constructor(private readonly sql:FormatSQL, negotiated:NetworkContext, private readonly transport:FormatTransport) {
     this.context=freezeJSON(validateContext(negotiated));
   }
+  /** Rebind local authenticated policy reads to the financial transaction; no transport is used by these reads. */
+  forSQL(sql:FormatSQL):ArticleFormatNetworkMaster { return new ArticleFormatNetworkMaster(sql,this.context,this.transport); }
   migrate():Promise<void>{return this.sql.executeSchema(ARTICLE_FORMAT_NETWORK_SCHEMA);}
   private scope():[string,string,string]{return [this.context.scope.tenantId,this.context.scope.companyId,this.context.scope.terminalId];}
   private values(syncId:string):(string|number|null)[]{return [...this.scope(),syncId];}

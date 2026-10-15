@@ -13056,11 +13056,12 @@ const AppContent: React.FC = () => {
         setInternalSequences(updatedSequences);
       }
     } else if (refundSeries) {
+      const reserved=await db.reserveSeriesNumbers(refundSeries.id,'REFUND');
       refundSeriesId = refundSeries.id;
-      refundSeriesNumber = refundSeries.nextNumber;
-      displayId = `${refundSeries.prefix}${refundSeriesNumber.toString().padStart(refundSeries.padding, '0')}`;
-      const updatedSequences = sequences.map(s => s.id === refundSeries.id ? { ...s, nextNumber: s.nextNumber + 1 } : s);
-      await db.save('internalSequences', updatedSequences);
+      refundSeriesNumber = reserved?.seriesNumber ?? refundSeries.nextNumber;
+      displayId = reserved?.displayId ?? `${refundSeries.prefix}${refundSeriesNumber.toString().padStart(refundSeries.padding, '0')}`;
+      const updatedSequences = sequences.map(s => s.id === refundSeries.id ? (reserved?.series as DocumentSeries || { ...s, nextNumber: s.nextNumber + 1 }) : s);
+      if(!reserved) await db.save('internalSequences', updatedSequences);
       setInternalSequences(updatedSequences);
     }
 
