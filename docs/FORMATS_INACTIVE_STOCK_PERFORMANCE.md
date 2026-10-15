@@ -53,7 +53,10 @@ la corrección posterior requiere nueva revisión, QA y medición independientes
 El motor host corroborado en esta corrección es SQLite3.51.2; la mención inicial
 a3.51.3 en el reporte externo de459 era una errata, conservada transparentemente.
 
-La retirada de código deja un índice aditivo inocuo; no elimina datos ni historial.
+Mientras exista el índice covering deben mantenerse los cuatro lectores ordenados.
+Revertir únicamente el código a937 conservando ese índice reintroduce cambios de
+decisiones de venta y desbordamientos intermedios. Su retirada requiere una futura
+migración explícita, autorizada y validada; esta tarea no ejecuta esa migración.
 No se autoriza DROP de índices existentes, rebuild de DB operativa, APK, instalación,
 ERP/SQL remoto, flags reales, merge ni despliegue. Los gates requeridos, incluido
 dispositivo cuando no haya entorno autorizado, conservan su estado pendiente/bloqueado.
