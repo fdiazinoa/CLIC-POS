@@ -1,3 +1,4 @@
+import type {BusinessConfig} from '../../types';
 import type { V3CategoryFilter, V3OperationalCategory } from './LargeMasterSyncV3Categories';
 export const LARGE_MASTER_SYNC_V3_SCHEMA_VERSION = 3 as const;
 
@@ -103,7 +104,8 @@ export interface LargeMasterSyncV3InventorySnapshot {
 }
 
 export interface LargeMasterSyncV3InventoryAuthority extends LargeMasterSyncV3RuntimeVersion { version: number; cursor: string }
-export interface LargeMasterSyncV3CatalogTransition { binding: string; expectedCatalog: LargeMasterSyncV3RuntimeVersion; inventory: LargeMasterSyncV3InventoryAuthority; assertIdentity?: () => void | Promise<void> }
+export interface LargeMasterSyncV3IdentityReadContext { readonly readConfig: () => Promise<BusinessConfig> }
+export interface LargeMasterSyncV3CatalogTransition { binding: string; expectedCatalog: LargeMasterSyncV3RuntimeVersion; inventory: LargeMasterSyncV3InventoryAuthority; assertIdentity?: (context?: LargeMasterSyncV3IdentityReadContext) => void | Promise<void> }
 
 export interface LargeMasterSyncV3Store {
   getInventoryAuthority?(): Promise<LargeMasterSyncV3InventoryAuthority | null>;

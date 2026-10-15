@@ -1,7 +1,7 @@
 import {readReconciledInventory} from '../articleFormats/inventoryJournal';
 import { authorizeV3TaxClassification } from '../sync/LargeMasterSyncV3TaxClassification';
 import { v3ArticleSemantics, v3TaxSemantics, v3TariffSemantics, v3VariantSemantics } from '../sync/LargeMasterSyncV3StockAuthority';
-import type { LargeMasterSyncV3InventoryAuthority, LargeMasterSyncV3CatalogTransition } from '../sync/LargeMasterSyncV3Types';
+import type { LargeMasterSyncV3InventoryAuthority, LargeMasterSyncV3CatalogTransition, LargeMasterSyncV3IdentityReadContext } from '../sync/LargeMasterSyncV3Types';
 import { normalizeV3CategoryKey, type V3CategoryFilter, type V3OperationalCategory } from '../sync/LargeMasterSyncV3Categories';
 import {
   LARGE_MASTER_SYNC_V3_DATASETS,
@@ -79,6 +79,7 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
     private readonly connection: () => SQLiteConnection,
     private readonly writeLock: LargeMasterSyncV3WriteLock,
     private readonly fault?: LargeMasterSyncV3SqliteFaultHook,
+    private readonly readOwnedConfig?: LargeMasterSyncV3IdentityReadContext['readConfig'],
   ) {}
 
   private assertOperationalWindow(): void {
@@ -248,9 +249,23 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
       version: Number(row.inventory_version), cursor: String(row.inventory_cursor), contractVersion: 2 } : null;
   }
 
+  /** The callback may read config only while this owner awaits it; retained contexts are revoked. */
+  private async assertTransitionIdentity(transition?:LargeMasterSyncV3CatalogTransition):Promise<void> {
+    if(!transition?.assertIdentity)return;
+    if(!this.readOwnedConfig){await transition.assertIdentity();return;}
+    let active=true;
+    const context:LargeMasterSyncV3IdentityReadContext=Object.freeze({readConfig:async()=>{
+      if(!active)throw new LargeMasterSyncV3Error('SYNC_V3_IDENTITY_READ_CONTEXT_EXPIRED');
+      const config=await this.readOwnedConfig!();
+      if(!active)throw new LargeMasterSyncV3Error('SYNC_V3_IDENTITY_READ_CONTEXT_EXPIRED');
+      return config;
+    }});
+    try{await transition.assertIdentity(context);}finally{active=false;}
+  }
+
   private async assertCatalogTransition(transition: LargeMasterSyncV3CatalogTransition): Promise<void> {
     if (!transition.assertIdentity) throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
-    await transition.assertIdentity();
+    await this.assertTransitionIdentity(transition);
     this.assertOperationalWindow();
     const [active, owner, inventory] = await Promise.all([this.getActiveRuntimeVersion(), this.getOperationalOwner(), this.getInventoryAuthority()]);
     if (!active || active.syncId !== transition.expectedCatalog.syncId || active.syncVersion !== transition.expectedCatalog.syncVersion
@@ -349,7 +364,7 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
             || Number(active?.active_version) !== manifest.syncVersion) {
             throw new LargeMasterSyncV3Error('SYNC_V3_ACTIVE_POINTER_MISMATCH');
           }
-          await transition?.assertIdentity?.();
+          await this.assertTransitionIdentity(transition);
           await db.execute('COMMIT;', false);
           return;
         }
@@ -389,7 +404,7 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
         if (String(state?.staging_sync_id || '') !== manifest.syncId) {
           throw new LargeMasterSyncV3Error('SYNC_V3_STAGING_CONFLICT');
         }
-        await transition?.assertIdentity?.();
+        await this.assertTransitionIdentity(transition);
         await db.execute('COMMIT;', false);
       } catch (error) {
         await db.execute('ROLLBACK;', false).catch(() => undefined);
@@ -615,13 +630,13 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
           if(collision) throw new LargeMasterSyncV3Error('SYNC_V3_RETAINED_OWNER_REQUIRED');
           await db.run('INSERT INTO master_v3_catalog_owners VALUES(?,?,?,?,?,?,?)',[syncId,Number(alreadyActive.sync_version),transition.binding,
             transition.inventory.syncId,transition.inventory.syncVersion,transition.inventory.version,transition.inventory.cursor],false);
-          await transition.assertIdentity?.();
+          await this.assertTransitionIdentity(transition);
           await db.execute('COMMIT;',false);
         } catch(error) { await db.execute('ROLLBACK;',false); throw error; }
       }
       if (alreadyActive && transition) {
         if (!transition.assertIdentity) throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
-        await transition.assertIdentity();
+        await this.assertTransitionIdentity(transition);
         const [owner, inventory, receipt] = await Promise.all([this.getOperationalOwner(), this.getInventoryAuthority(),
           this.getCatalogReceipt({ syncId, syncVersion: Number(alreadyActive.sync_version) }, transition.binding)]);
         if (owner?.binding !== transition.binding || owner.syncId !== syncId || owner.syncVersion !== Number(alreadyActive.sync_version)
@@ -631,7 +646,7 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
           JSON.stringify([receipt.syncId, receipt.syncVersion, receipt.version, receipt.cursor])) {
           throw new LargeMasterSyncV3Error('SYNC_V3_CATALOG_TRANSITION_CHANGED');
         }
-        await transition.assertIdentity();
+        await this.assertTransitionIdentity(transition);
       }
       if (alreadyActive) return { syncId, syncVersion: Number(alreadyActive.sync_version),
         ...(Number(alreadyActive.contract_version) >= 2
@@ -726,7 +741,7 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
         }
         await this.fault?.('activation_after_owner', { syncId });
         this.assertOperationalWindow();
-        await transition?.assertIdentity?.();
+        await this.assertTransitionIdentity(transition);
         if (freshInventory) {
           await this.assertUnusedSourcesAfterWrites();
           const [active, owner, anchor] = await Promise.all([this.getActiveRuntimeVersion(), this.getOperationalOwner(), this.getInventoryAuthority()]);
@@ -736,7 +751,7 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
             || anchor.version !== freshInventory.version || anchor.cursor !== freshInventory.cursor) {
             throw new LargeMasterSyncV3Error('SYNC_V3_CATALOG_TRANSITION_CHANGED');
           }
-          await transition!.assertIdentity!();
+          await this.assertTransitionIdentity(transition);
           this.assertOperationalWindow();
         }
         await db.execute('COMMIT;', false);

@@ -11,7 +11,7 @@ import { ARTICLE_FORMATS_SCHEMA } from '../../articleFormats/schema';
 import type { FormatSQL,FormatStatement } from '../../articleFormats/store';
 import { getEffectiveFiscalComplianceConfig, getProviderEnvironment } from '../../../utils/fiscal/fiscalHelpers';
 import { validateV3FiscalMetadataMutation } from '../LargeMasterSyncV3FiscalMetadata';
-import { v3RetainedLineFingerprint } from '../../sync/LargeMasterSyncV3StockAuthority';
+import { v3ArticleSemantics, v3RetainedLineFingerprint } from '../../sync/LargeMasterSyncV3StockAuthority';
 import { SYNC_MONITOR_PAGE_SQL, syncMonitorPageParams, decodeSyncMonitorPage, type SyncMonitorPageRequest } from '../SyncMonitorPage';
 import { Capacitor } from '@capacitor/core';
 import type {
@@ -115,7 +115,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
     public readonly masterSyncV3Store = this.serializedMasterStore();
 
     private serializedMasterStore():LargeMasterSyncV3SqliteStore {
-        const store=new LargeMasterSyncV3SqliteStore(()=>this.ensureDb() as any,operation=>this.withWriteLock(operation));
+        const store=new LargeMasterSyncV3SqliteStore(()=>this.ensureDb() as any,operation=>this.withWriteLock(operation),undefined,()=>this.readConfigOwned());
 
         return new Proxy(store,{get:(target,key)=>{
             const value=Reflect.get(target,key);
@@ -218,6 +218,15 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
     async getCollection<T>(collectionName: string, _queryParams?: Record<string, string>): Promise<T[] | any> {
         const docs = await this.withWriteLock(() => this.readStoredDocuments(collectionName));
         return this.fromStoredDocuments(collectionName, docs);
+    }
+
+    /** Same decoder, compaction and current-document selection as getCollection, under an existing owner. */
+    private async readConfigOwned():Promise<import('../../../types').BusinessConfig> {
+        const docs=await this.readStoredDocuments('config');
+        if(!docs.some(doc=>doc&&typeof doc==='object'&&!Array.isArray(doc)&&doc.id!=='_db_initialized'&&doc.id!=='config_metadata')){
+            throw new Error('SYNC_V3_BINDING_CHANGED');
+        }
+        return this.fromStoredDocuments('config',docs);
     }
 
     async saveCollection<T>(collectionName: string, data: T[]): Promise<void> {
@@ -1065,6 +1074,29 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         });
     }
 
+    /** Missing cells remain zero only for an anchored, unchanged base product with current canonical permission. */
+    private async assertKnownSparseNegativeArticle(
+        read:(sql:string,values:any[])=>Promise<{values?:any[]}>,line:any,warehouseId:string,inventoryVersion:number,
+        current:{syncId:string;syncVersion:number;binding:string},
+    ):Promise<void> {
+        const denied=()=>new Error('SYNC_V3_INVENTORY_COVERAGE_REQUIRED');
+        const stamp=line.v3SaleAuthority;
+        if(stamp?.syncId!==current.syncId||stamp.syncVersion!==current.syncVersion||line.variantId||line.variantSku)throw denied();
+        const records=(await read('SELECT sync_version,record_json FROM master_v3_articles WHERE article_id=? AND sync_version IN (?,?)',
+            [line.id,inventoryVersion,current.syncVersion])).values || [];
+        const anchored=records.filter(r=>r.sync_version===inventoryVersion),selected=records.filter(r=>r.sync_version===current.syncVersion);
+        if(anchored.length!==1||selected.length!==1)throw denied();
+        let original:any,source:any;
+        try{original=JSON.parse(anchored[0].record_json);source=JSON.parse(selected[0].record_json);}catch{throw denied();}
+        if(!original||!source||Array.isArray(original)||Array.isArray(source)||original.id!==line.id||source.id!==line.id
+            ||source.type!=='PRODUCT'||source.inventoriable!==true||source.active===false||source.sellable===false
+            ||source.operationalFlags?.trackInventory!==true||source.operationalFlags?.allowNegativeStock!==true
+            ||['isWeighted','usesLots','usesSerial'].some(flag=>source.operationalFlags?.[flag]===true)
+            ||!Array.isArray(original.activeWarehouseIds)||!original.activeWarehouseIds.includes(warehouseId)
+            ||!Array.isArray(source.activeWarehouseIds)||!source.activeWarehouseIds.includes(warehouseId)
+            ||v3ArticleSemantics(original)!==v3ArticleSemantics(source))throw denied();
+    }
+
     private async assertV3FinancialBaseline(documents: DurableDocumentMutation[]): Promise<void> {
         const retainedSources = new Map<string,{document:any;lines:Map<string,any[]>}>();
         const reads = new Map<string, Promise<any>>();
@@ -1125,7 +1157,9 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
                 && (current.syncId !== syncId || current.syncVersion !== syncVersion)
                 && line.isInventoriable && line.operationalFlags?.trackInventory !== false && line.type !== 'SERVICE') {
                 const coverage = await read('SELECT item_id FROM master_v3_inventory_balances WHERE item_id=? AND warehouse_id=?', [line.id,document.v3WarehouseId]);
-                if (!coverage.values?.length) throw new Error('SYNC_V3_INVENTORY_COVERAGE_REQUIRED');
+                if (!coverage.values?.length) {
+                  await this.assertKnownSparseNegativeArticle(read,line,document.v3WarehouseId,syncVersion,current);
+                }
               }
               const stamp = line.v3SaleAuthority;
               if (!stamp || stamp.binding !== binding || stamp.warehouseId !== document.v3WarehouseId) throw new Error('SYNC_V3_MOVEMENT_AUTHORITY_INVALID');

@@ -7,7 +7,7 @@ import { fetchLargeMasterSyncV3Inventory } from './LargeMasterSyncV3Inventory';
 import { waitForLargeMasterSyncV3OperationalWindow } from './LargeMasterSyncV3OperationGate';
 import { LargeMasterSyncV3Runtime } from './LargeMasterSyncV3Runtime';
 import { largeMasterSyncV3DownloadOrigin } from './LargeMasterSyncV3DownloadOrigin';
-import { LargeMasterSyncV3Error, type LargeMasterSyncV3InventorySnapshot,
+import { LargeMasterSyncV3Error, type LargeMasterSyncV3InventorySnapshot, type LargeMasterSyncV3IdentityReadContext,
   type LargeMasterSyncV3RuntimeVersion, type LargeMasterSyncV3Store } from './LargeMasterSyncV3Types';
 
 /** Explicit candidate entry point. The production V2 APK never invokes it. */
@@ -101,7 +101,7 @@ export const prepareLargeMasterSyncV3CatalogOnly = async (
   store: LargeMasterSyncV3Store, v3BaseUrl: string, binding: string,
   metric?: (metric: LargeMasterSyncV3Metric) => void,
   dependencies: CandidateDependencies = defaultDependencies,
-  assertIdentity?: () => void | Promise<void>,
+  assertIdentity?: (context?: LargeMasterSyncV3IdentityReadContext) => void | Promise<void>,
 ): Promise<LargeMasterSyncV3CandidateReady> => {
   if (!dependencies.enabled) throw new LargeMasterSyncV3Error('SYNC_V3_CANDIDATE_DISABLED');
   dependencies.assertPlatform();
