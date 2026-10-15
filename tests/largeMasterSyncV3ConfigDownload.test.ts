@@ -393,3 +393,53 @@ test('binding switch during ACK never clears the new scope checkpoint', async ()
   assert.equal(result.result.applied, 0);
   assert.equal(JSON.parse(f.storage.getItem('clic_pos_config_push_v2_state')!).versionHash, 'new-scope');
 });
+
+test('actual CONFIG_PUSH_V2 never ACKs APPLIED until empty native coverage repair commits and reads back', async () => {
+  const { DatabaseSync } = await import('node:sqlite');
+  const { LARGE_MASTER_SYNC_V3_SCHEMA_SQL } = await import('../services/db/LargeMasterSyncV3Schema');
+  const { LargeMasterSyncV3SqliteStore } = await import('../services/db/LargeMasterSyncV3SqliteStore');
+  const { LargeMasterSyncV3Runtime } = await import('../services/sync/LargeMasterSyncV3Runtime');
+  const { repairLargeMasterSyncV3EmptyInventory } = await import('../services/sync/LargeMasterSyncV3Candidate');
+  const sql = new DatabaseSync(':memory:');
+  try {
+    sql.exec(LARGE_MASTER_SYNC_V3_SCHEMA_SQL);
+    sql.exec(`UPDATE master_v3_state SET active_sync_id='S',active_version=309 WHERE singleton=1;
+      INSERT INTO sync_v3_sessions(sync_id,sync_version,schema_version,contract_version,status,manifest_json,created_at,updated_at)
+      VALUES('S',309,3,2,'ACTIVE','{}','2020','2020');
+      INSERT INTO master_v3_operational_owner VALUES(1,'S',309,'binding');
+      INSERT INTO master_v3_inventory_state VALUES(1,'S',309,0,'empty','2020');
+      INSERT INTO master_v3_articles(sync_version,article_id,sku,description,article_type,uom,taxable,tax_ids_json,active,sellable,record_json)
+      VALUES(309,'P','2135','MYKON','PRODUCT','UN',0,'[]',1,1,'{"id":"P","inventoriable":true,"operationalFlags":{"trackInventory":true}}');`);
+    let remoteReady = false; let failCommit = false;
+    const bridge = { query: async (q: string, p: any[] = []) => ({ values: sql.prepare(q).all(...p) }),
+      run: async (q: string, p: any[] = []) => sql.prepare(q).run(...p), execute: async (q: string) => { sql.exec(q); } };
+    const store = new LargeMasterSyncV3SqliteStore(() => bridge, async operation => operation(), point => {
+      if (failCommit && point === 'inventory_repair_after_receipt') throw Error('native disk fault');
+    });
+    const f = await fixture();
+    f.onRefresh(async () => {
+      const inventory = (await store.getInventoryAuthority())!;
+      await repairLargeMasterSyncV3EmptyInventory(store, { runtime: (await LargeMasterSyncV3Runtime.open(store))!,
+        inventoryVersion: inventory.version, inventoryCursor: inventory.cursor }, 'binding', 'W', ['W'], () => {}, {
+        enabled: true, assertPlatform: () => {}, createClient: () => { throw Error('legacy download forbidden'); },
+        fetchInventory: async () => ({ version: 1, cursor: 'coverage', balances: remoteReady ? [{ item_id: 'P', warehouse_id: 'W',
+          qty_on_hand: 0, qty_reserved: 0, qty_committed: 0, updated_at: '1970-01-01T00:00:00.000Z' }] : [] }),
+        waitForOperationalWindow: async () => 0, openRuntime: LargeMasterSyncV3Runtime.open,
+      });
+    });
+    const pending = await f.run(['catalog'], { catalog: {}, fiscal: {} });
+    assert.equal(pending.result.applied, 0); assert.deepEqual(pending.acks, []);
+    assert.equal(pending.state.versionHash, null); assert(pending.state.inFlight);
+    assert.equal((await store.getInventoryAuthority())?.cursor, 'empty');
+    remoteReady = true; failCommit = true;
+    const rollback = await f.run(['catalog'], { catalog: {}, fiscal: {} });
+    assert.equal(rollback.result.applied, 0); assert.deepEqual(rollback.acks, []);
+    assert.equal(rollback.state.versionHash, null); assert.equal((await store.getInventoryAuthority())?.cursor, 'empty');
+    assert.equal(sql.prepare('SELECT COUNT(*) AS n FROM master_v3_inventory_balances').get()?.n, 0);
+    failCommit = false;
+    const applied = await f.run(['catalog'], { catalog: {}, fiscal: {} });
+    assert.equal((await store.getInventorySnapshotVersion({ syncId: 'S', syncVersion: 309, contractVersion: 2 }))?.cursor, 'coverage');
+    assert.equal((await store.getCatalogReceipt({ syncId: 'S', syncVersion: 309, contractVersion: 2 }, 'binding'))?.cursor, 'coverage');
+    assert.equal(applied.result.applied, 1); assert.equal(applied.acks[0].status, 'APPLIED');
+  } finally { sql.close(); }
+});

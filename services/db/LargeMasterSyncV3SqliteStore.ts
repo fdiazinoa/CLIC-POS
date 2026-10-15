@@ -26,6 +26,8 @@ type SQLiteConnection = {
 };
 export type LargeMasterSyncV3WriteLock = <T>(operation: () => Promise<T>) => Promise<T>;
 export type LargeMasterSyncV3SqliteFaultPoint =
+  | 'inventory_repair_after_baseline'
+  | 'inventory_repair_after_receipt'
   | 'apply_after_records'
   | 'apply_before_commit'
   | 'dataset_before_validate'
@@ -186,6 +188,109 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
     const row = first(await this.connection().query('SELECT * FROM master_v3_inventory_state WHERE singleton = 1'));
     return row ? { syncId: String(row.sync_id), syncVersion: Number(row.sync_version), contractVersion: 2,
       version: Number(row.inventory_version), cursor: String(row.cursor) } : null;
+  }
+
+  async readInventoryCoverageStatus(runtime: LargeMasterSyncV3RuntimeVersion, warehouseId: string): Promise<'COMPLETE' | 'EMPTY' | 'PARTIAL'> {
+    requireOperationalVersion(runtime);
+    if (!warehouseId?.trim()) throw new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_INVALID');
+    const active = await this.getActiveRuntimeVersion();
+    if (active?.syncId !== runtime.syncId || active.syncVersion !== runtime.syncVersion) {
+      throw new LargeMasterSyncV3Error('SYNC_V3_RUNTIME_VERSION_CHANGED');
+    }
+    const db = this.connection();
+    const missing = first(await db.query(`SELECT a.article_id FROM master_v3_articles a
+      WHERE a.sync_version = ? AND a.active = 1 AND a.sellable = 1
+      AND json_extract(a.record_json, '$.inventoriable') = 1
+      AND json_extract(a.record_json, '$.operationalFlags.trackInventory') = 1
+      AND NOT EXISTS (SELECT 1 FROM master_v3_inventory_balances b
+        WHERE b.item_id = a.article_id AND b.warehouse_id = ?) LIMIT 1`, [runtime.syncVersion, warehouseId]));
+    if (!missing) return 'COMPLETE';
+    const existing = first(await db.query('SELECT item_id FROM master_v3_inventory_balances LIMIT 1'));
+    return existing ? 'PARTIAL' : 'EMPTY';
+  }
+
+  /** Recovery is allowed only for a wholly empty, never-used baseline. */
+  async repairEmptyUnusedInventoryBaseline(transition: LargeMasterSyncV3CatalogTransition,
+    snapshot: LargeMasterSyncV3InventorySnapshot, warehouseIds: string[], salesWarehouseId: string): Promise<void> {
+    if (!Number.isSafeInteger(snapshot.version) || snapshot.version < 0 || !snapshot.cursor?.trim()
+      || !Array.isArray(snapshot.balances)) throw new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_INVALID');
+    await this.assertCanReplaceUnusedBaseline(transition);
+    const permitted = new Set(warehouseIds.filter(id => typeof id === 'string' && id.trim()));
+    if (!permitted.has(salesWarehouseId) || !snapshot.balances.length) {
+      throw new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_NOT_READY');
+    }
+    return this.writeLock(() => this.withBaselineMutation(async () => {
+      const db = this.connection();
+      await db.execute('BEGIN IMMEDIATE TRANSACTION;', false);
+      try {
+        await this.assertCanReplaceUnusedBaseline(transition);
+        if (first(await db.query('SELECT item_id FROM master_v3_inventory_balances LIMIT 1'))) {
+          throw new LargeMasterSyncV3Error('SYNC_V3_BASELINE_MIGRATION_REQUIRED');
+        }
+        if (snapshot.version < transition.inventory.version || snapshot.version === transition.inventory.version
+          && snapshot.cursor !== transition.inventory.cursor) throw new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_STALE');
+        const collision = first(await db.query('SELECT binding FROM master_v3_catalog_owners WHERE sync_id=? AND sync_version=?',
+          [transition.expectedCatalog.syncId, transition.expectedCatalog.syncVersion]));
+        if (collision && collision.binding !== transition.binding) throw new LargeMasterSyncV3Error('SYNC_V3_RETAINED_OWNER_REQUIRED');
+        const seen = new Set<string>();
+        const projected: LargeMasterSyncV3InventorySnapshot['balances'] = [];
+        for (let offset = 0; offset < snapshot.balances.length; offset += CHUNK_SUB_BATCH_SIZE) {
+          const batch = snapshot.balances.slice(offset, offset + CHUNK_SUB_BATCH_SIZE);
+          for (const row of batch) {
+            if (!row || typeof row.item_id !== 'string' || !row.item_id.trim()
+              || typeof row.warehouse_id !== 'string' || !row.warehouse_id.trim()
+              || typeof row.updated_at !== 'string' || !row.updated_at.trim()
+              || ![row.qty_on_hand, row.qty_reserved, row.qty_committed].every(value => typeof value === 'number' && Number.isFinite(value))) {
+              throw new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_INVALID');
+            }
+          }
+          const ids = [...new Set(batch.map(row => row.item_id))];
+          const catalog = new Set(rows(await db.query(`SELECT article_id FROM master_v3_articles
+            WHERE sync_version=? AND article_id IN (${ids.map(() => '?').join(',')})`,
+          [transition.expectedCatalog.syncVersion, ...ids])).map(row => String(row.article_id)));
+          for (const balance of batch) {
+            const key = JSON.stringify([balance.item_id, balance.warehouse_id]);
+            if (seen.has(key)) throw new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_INVALID');
+            seen.add(key);
+            // Supplemental inventory may include legitimate ERP records outside this V3 catalog scope.
+            // Validate all rows, but only persist the authorized projection; retain the origin receipt.
+            if (catalog.has(balance.item_id) && permitted.has(balance.warehouse_id)) projected.push(balance);
+          }
+        }
+        if (!projected.length) throw new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_NOT_READY');
+        await this.writeInventorySnapshot(db, transition.expectedCatalog, { ...snapshot, balances: projected });
+        await this.fault?.('inventory_repair_after_baseline', { syncId: transition.expectedCatalog.syncId });
+        await db.run(`INSERT INTO master_v3_catalog_owners
+          (sync_id, sync_version, binding, inventory_sync_id, inventory_sync_version, inventory_version, inventory_cursor)
+          VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(sync_id, sync_version) DO UPDATE SET
+          inventory_sync_id=excluded.inventory_sync_id, inventory_sync_version=excluded.inventory_sync_version,
+          inventory_version=excluded.inventory_version, inventory_cursor=excluded.inventory_cursor`,
+        [transition.expectedCatalog.syncId, transition.expectedCatalog.syncVersion, transition.binding,
+          transition.expectedCatalog.syncId, transition.expectedCatalog.syncVersion, snapshot.version, snapshot.cursor], false);
+        await this.fault?.('inventory_repair_after_receipt', { syncId: transition.expectedCatalog.syncId });
+        await this.assertUnusedSourcesAfterWrites();
+        await transition.assertIdentity?.();
+        this.assertOperationalWindow();
+        const [active, owner, inventory, receipt] = await Promise.all([this.getActiveRuntimeVersion(), this.getOperationalOwner(),
+          this.getInventoryAuthority(), this.getCatalogReceipt(transition.expectedCatalog, transition.binding)]);
+        if (active?.syncId !== transition.expectedCatalog.syncId || active.syncVersion !== transition.expectedCatalog.syncVersion
+          || owner?.syncId !== active.syncId || owner.syncVersion !== active.syncVersion || owner.binding !== transition.binding
+          || inventory?.syncId !== active.syncId || inventory.syncVersion !== active.syncVersion
+          || inventory.version !== snapshot.version || inventory.cursor !== snapshot.cursor
+          || !receipt || JSON.stringify([receipt.syncId, receipt.syncVersion, receipt.version, receipt.cursor])
+            !== JSON.stringify([inventory.syncId, inventory.syncVersion, inventory.version, inventory.cursor])) {
+          throw new LargeMasterSyncV3Error('SYNC_V3_CATALOG_TRANSITION_CHANGED');
+        }
+        if (await this.readInventoryCoverageStatus(transition.expectedCatalog, salesWarehouseId) !== 'COMPLETE') {
+          throw new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_NOT_READY');
+        }
+        await transition.assertIdentity?.();
+        await db.execute('COMMIT;', false);
+      } catch (error) {
+        await db.execute('ROLLBACK;', false).catch(() => undefined);
+        throw error;
+      }
+    }));
   }
 
   async getCatalogReceipt(runtime: LargeMasterSyncV3RuntimeVersion, binding: string): Promise<LargeMasterSyncV3InventoryAuthority | null> {
