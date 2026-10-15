@@ -416,7 +416,14 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
 
     async deleteDocument(collectionName: string, id: string): Promise<void> {
         const db = this.ensureDb();
-        await this.withWriteLock(() => db.run('DELETE FROM documents WHERE collection_name = ? AND doc_id = ?', [collectionName, id]));
+        if(collectionName==='globalSequenceCounter') throw new Error('NATIVE_FINANCIAL_COUNTER_DELETE_FORBIDDEN');
+        await this.withWriteLock(async()=>{
+            if(collectionName==='internalSequences') {
+                await db.run("UPDATE documents SET data=json_set(data,'$.active',json('false')),updatedAt=? WHERE collection_name=? AND doc_id=?",[new Date().toISOString(),collectionName,id]);
+                return;
+            }
+            await db.run('DELETE FROM documents WHERE collection_name = ? AND doc_id = ?', [collectionName, id]);
+        });
     }
 
     async executeSQL(query: string, params: any[] = []): Promise<any> {

@@ -308,3 +308,12 @@ test('authoritative series removal revokes eligibility but retains issued counte
  await f.adapter.saveCollection('localFiscalBuffer',[buffer]);const next=nativeSale(40);next.fiscal=event.fiscal;
  await assert.rejects(f.posting.post(next,options),/NUMBER_ALREADY_ISSUED/);assert.equal(f.documents('nativeFiscalReservations').length,1);
 });
+
+test('actual generic delete cannot erase issued series or global counter before re-add',async t=>{
+ const f=await nativeFixture();t.after(()=>f.db.close());await f.adapter.reserveFinancialNumbers({seriesId:id(9),global:true});
+ await f.adapter.deleteDocument('internalSequences',id(9));await assert.rejects(f.adapter.reserveFinancialNumbers({seriesId:id(9),global:false}),/SERIES_FORBIDDEN/);
+ await assert.rejects(f.adapter.deleteDocument('globalSequenceCounter','value'),/COUNTER_DELETE_FORBIDDEN/);
+ await f.adapter.saveDocument('internalSequences',{id:id(9),documentType:'TICKET',prefix:'TCK-',nextNumber:1,active:true});
+ await f.adapter.saveCollection('globalSequenceCounter',0 as any);
+ const reserved=await f.adapter.reserveFinancialNumbers({seriesId:id(9),global:true});assert.equal(reserved.seriesNumber,2);assert.equal(reserved.globalSequence,2);
+});
