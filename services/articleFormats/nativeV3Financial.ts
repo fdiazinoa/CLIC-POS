@@ -1,6 +1,7 @@
+import {readV3Base4Stock} from '../db/V3Base4Stock';
 import type {BusinessConfig} from '../../types';
 import type { FormatSQL } from './store';
-import { Money, requireFormat, type NetworkContext, type WireEvent } from './wire';
+import { requireFormat, type NetworkContext, type WireEvent } from './wire';
 import type { FormatLocalDocuments } from './localDocuments';
 
 export interface NativeFormatAuthority {
@@ -66,15 +67,9 @@ export async function readNativeFinancialDocuments(sql:FormatSQL,local:FormatLoc
   const raw=historical || JSON.parse(article[0].record_json);
   const variants=await sql.query<{record_json:string}>(`SELECT record_json FROM master_v3_variants WHERE sync_version=? AND article_id=? AND active=1`,[authority.syncVersion,itemId]);
   data.products.push({...raw,isInventoriable:historical ? raw.isInventoriable : raw.inventoriable,variants:historical ? raw.variants : variants.map(v=>JSON.parse(v.record_json))});
-  const balances=await sql.query<any>(`SELECT b.qty_on_hand,b.qty_committed,b.qty_reserved,
-   COALESCE((SELECT SUM(COALESCE(json_extract(d.data,'$.qtyIn'),0)-COALESCE(json_extract(d.data,'$.qtyOut'),0))
-    FROM documents d WHERE collection_name='inventoryLedger' AND json_extract(d.data,'$.v3InventoryBaseline')=?
-    AND json_extract(d.data,'$.productId')=? AND json_extract(d.data,'$.warehouseId')=?),0) AS delta
-   FROM master_v3_inventory_balances b WHERE b.item_id=? AND b.warehouse_id=?`,[authority.baseline,itemId,authority.warehouseId,itemId,authority.warehouseId]);
-  requireFormat(balances.length===1,'POS_FORMAT_STOCK_BASELINE_MISSING');
-  const b=balances[0];
+  const stock=await readV3Base4Stock(sql.query,authority.baseline,itemId,authority.warehouseId);
   data.productStocks.push({productId:itemId,warehouseId:authority.warehouseId,
-   quantity:new Money(String(b.qty_on_hand)).plus(String(b.delta)).toNumber(),qtyCommitted:new Money(String(b.qty_committed)).plus(String(b.qty_reserved)).toNumber()});
+   quantity:stock.physical.toNumber(),qtyCommitted:stock.committed.plus(stock.reserved).toNumber()});
  }
  return data;
 }

@@ -166,7 +166,7 @@ export class ArticleFormatPosting {
      requireFormat(buffer&&data.fiscalAllocations.length===1&&data.fiscalRanges.length===1,'POS_FORMAT_FISCAL_ALLOCATION_REQUIRED');
      fiscalReceipt=await planNativeFiscalReceipt(sql.query,authority.configuration,buffer,fiscal.ncf,{eventId:event.event_id,transactionId:event.transaction_id,requireIssuer:true,occurredAt:event.occurred_at});
      Object.assign(buffer,validateFiscalBufferReservation({business:authority.configuration,terminalId:this.context.scope.terminalId,
-      type:fiscal.ncf_type as any,ncf:fiscal.ncf,buffer,allocation:data.fiscalAllocations[0],range:data.fiscalRanges[0]}));
+      type:fiscal.ncf_type as any,ncf:fiscal.ncf,requireLegacyBMode:true,buffer,allocation:data.fiscalAllocations[0],range:data.fiscalRanges[0]}));
     }else{
     requireFormat(buffer && buffer.terminalId===this.context.scope.terminalId && Number.isSafeInteger(buffer.currentNumber)
      &&buffer.currentNumber>0&&buffer.currentNumber<=buffer.endNumber&&buffer.prefix===fiscal.ncf_type
@@ -257,7 +257,7 @@ export class ArticleFormatPosting {
     financialMutations.push({collectionName:'transactions',document:transaction,requireAbsent:true,v3CurrentCatalog:current,
      ...(original ? {v3ExpectedRetainedDocument:{collection:'transactions',id:original.transaction_id,expected:sourceExpected!}} : {}),
      v3StockRequirements:sale ? event.lines.filter(l=>data.products.find(p=>p.id===l.item_id)?.operationalFlags?.allowNegativeStock!==true)
-      .map(l=>({baseline:authority.baseline,productId:l.item_id,warehouseId:authority.warehouseId,quantity:Number(l.base_quantity)})) : []},
+      .map(l=>({baseline:authority.baseline,productId:l.item_id,warehouseId:authority.warehouseId,quantity:Number(l.base_quantity),quantityScale:4 as const})) : []},
      {collectionName:'transactionHistory',document:transaction,requireAbsent:true,v3CurrentCatalog:current,
       ...(original ? {v3ExpectedRetainedDocument:{collection:'transactions',id:original.transaction_id,expected:sourceExpected!}} : {})},
      ...payments.map(document=>({collectionName:'payments',document,requireAbsent:true})));

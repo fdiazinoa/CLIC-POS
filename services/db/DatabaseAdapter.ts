@@ -19,7 +19,7 @@ export interface DurableDocumentMutation {
     /** Verified V3 sale demand; checked against scoped baseline + ledger inside the write transaction. */
     v3CurrentCatalog?: { syncId: string; syncVersion: number; binding: string };
     v3ExpectedRetainedDocument?: { collection: string; id: string; expected: string };
-    v3StockRequirements?: Array<{ baseline: string; productId: string; warehouseId: string; quantity: number }>;
+    v3StockRequirements?: Array<{ baseline: string; productId: string; warehouseId: string; quantity: number; quantityScale?: 4 }>;
 }
 
 export interface DurableOutboxEventInput {

@@ -1500,7 +1500,7 @@ export const db = {
     // A snapshot may revoke the lot while reserving. Never return a number from that stale authority.
     if (!await db.validatePreparedFiscalAuthority(type, terminalId, ncf, context)) return null;
 
-    if(dbAdapter.reserveFinancialNumbers && type.startsWith('B') && policy.mode==='LEGACY_B'){
+    if(dbAdapter.reserveFinancialNumbers && type.startsWith('B')){
       const authority=[['config','current'],['localFiscalBuffer',buffer.id],['fiscalAllocations',buffer.allocationId],['fiscalRanges',buffer.fiscalRangeId]];
       const expected:string[]=[];
       for(const [collection,id] of authority){

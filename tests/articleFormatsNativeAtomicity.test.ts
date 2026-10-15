@@ -317,3 +317,49 @@ test('actual generic delete cannot erase issued series or global counter before 
  await f.adapter.saveCollection('globalSequenceCounter',0 as any);
  const reserved=await f.adapter.reserveFinancialNumbers({seriesId:id(9),global:true});assert.equal(reserved.seriesNumber,2);assert.equal(reserved.globalSequence,2);
 });
+async function unitSale(n:number,quantity:string):Promise<WireEvent>{
+ const {dto,policy}=await import('./articleFormatsNativeFixture');const {saleWireLine}=await import('../services/articleFormats/posting');const e=nativeSale(n,quantity);
+ e.lines=[saleWireLine(dto,policy,{lineId:id(n+2),formatId:'unit',variantId:null,tariffId:id(6),quantity,occurredAt:e.occurred_at,terminalId:id(4)})];e.totals=wireTotals(e.lines);
+ e.payments=Number(e.totals.total_amount)>0?[{payment_id:id(n+3),method:'cash',amount:e.totals.total_amount}]:[];return e;
+}
+test('BASE4 native availability and returned projections preserve exact tenths without aggregate rounding',async t=>{
+ const {readV3Base4Stock}=await import('../services/db/V3Base4Stock');
+ for(const baseline of [0.3,0.6]){
+  const f=await nativeFixture();f.db.prepare('UPDATE master_v3_inventory_balances SET qty_on_hand=?').run(baseline);
+  const first=await unitSale(12,'0.1'),second=await unitSale(30,'0.2');await f.posting.post(first,options);await f.posting.post(second,options);await f.posting.acknowledge(first,await nativeACK(first));
+  const returnedLine=returnWireLine(first.lines[0],[],'0.1',id(42));const r:WireEvent={...first,event_id:id(40),transaction_id:id(41),event_type:'ARTICLE_FORMAT_RETURN_V1',return_context:structuredClone(context.return_context!),source_event_id:first.event_id,lines:[returnedLine],payments:[{payment_id:id(43),method:'cash',amount:wireTotals([returnedLine]).total_amount}],totals:wireTotals([returnedLine])};delete r.master;
+  await f.posting.post(r,{...options,seriesId:id(10)});
+  const key=f.documents('inventoryLedger')[0].v3InventoryBaseline;const stock=await readV3Base4Stock(f.sql.query,key,id(7),id(5));assert.equal(stock.available.toFixed(),baseline===0.3?'0.1':'0.4');
+  assert.equal(f.documents('transactions').length,3);f.db.close();
+ }
+});
+test('BASE4 aggregate demands and near-zero quantities never admit one ten-thousandth excess or round old precision',async t=>{
+ const f=await nativeFixture();t.after(()=>f.db.close());f.db.prepare('UPDATE master_v3_inventory_balances SET qty_on_hand=0.3').run();const a=await unitSale(12,'0.1'),b=await unitSale(30,'0.2');
+ const merged={...a,lines:[...a.lines,...b.lines],totals:wireTotals([...a.lines,...b.lines]),payments:[{payment_id:id(15),method:'cash' as const,amount:'13.50'}]};await f.posting.post(merged,options);
+ const before=f.state();await assert.rejects(f.posting.post(await unitSale(50,'0.0001'),options),/INSUFFICIENT_STOCK/);assert.deepEqual(f.state(),before);
+ const tiny=await nativeFixture();try {tiny.db.prepare('UPDATE master_v3_inventory_balances SET qty_on_hand=0.0003').run();await tiny.posting.post(await unitSale(12,'0.0001'),options);await tiny.posting.post(await unitSale(30,'0.0002'),options);await assert.rejects(tiny.posting.post(await unitSale(50,'0.0001'),options),/INSUFFICIENT_STOCK/);}finally{tiny.db.close();}
+ const precise=await nativeFixture();try{precise.db.prepare('UPDATE master_v3_inventory_balances SET qty_on_hand=0.30001').run();await assert.rejects(precise.posting.post(await unitSale(12,'0.1'),options),/PRECISION_INVALID/);}finally{precise.db.close();}
+ const old=await nativeFixture();try{const owner=old.db.prepare('SELECT binding FROM master_v3_operational_owner').get() as any;const key=JSON.stringify([owner.binding,id(60),32,4,'inventory-cursor']);await old.adapter.saveDocument('inventoryLedger',{id:'old-six-decimal',productId:id(7),warehouseId:id(5),qtyIn:0,qtyOut:0.00001,v3InventoryBaseline:key});const state=old.state();await assert.rejects(old.posting.post(await unitSale(12,'0.1'),options),/PRECISION_INVALID/);assert.deepEqual(old.state(),state);}finally{old.db.close();}
+});
+test('queued captured native handles cannot read or write an uncertain transaction after rollback fails',async t=>{
+ const f=await nativeFixture();t.after(()=>f.db.close());await f.adapter.saveDocument('customers',{id:'untouched'});const entered=barrier(),release=barrier();let paused=false;
+ f.fault.beforeRun=async(sql)=>{if(!paused&&sql.includes('INSERT INTO article_format_outbox')){paused=true;entered.release();await release.promise;}};
+ const bridge=(f.adapter as any).db;bridge.rollbackTransaction=async()=>{throw Error('disconnected-rollback');};const post=f.posting.post(nativeSale(),options);await entered.promise;
+ const read=f.adapter.executeSQL('SELECT COUNT(*) n FROM article_format_wire_write_scope');const remove=f.adapter.deleteDocument('customers','untouched');const outcomes=Promise.allSettled([read,remove]);f.fault.failWrite=f.fault.writes;release.release();
+ await assert.rejects(post,/CONNECTION_UNCERTAIN/);for(const result of await outcomes){assert.equal(result.status,'rejected');if(result.status==='rejected')assert.match(String(result.reason),/CONNECTION_UNCERTAIN/);}
+ await assert.rejects(f.adapter.getDocument('customers','untouched'),/CONNECTION_UNCERTAIN/);assert.equal((f.db.prepare("SELECT COUNT(*) n FROM documents WHERE collection_name='customers' AND doc_id='untouched'").get() as {n:number}).n,1);f.db.exec('ROLLBACK');
+});
+test('all previously permitted B modes use native receipts; NONE/disabled policy and existing E path stay unchanged',async t=>{
+ const {seedNativeFiscal}=await import('./articleFormatsNativeFixture');const {dbAdapter}=await import('../services/db');const {db}=await import('../utils/db');
+ const names=['getCollection','saveCollection','getDocument','executeSQL','reserveFinancialNumbers'] as const;const originals=new Map(names.map(n=>[n,(dbAdapter as any)[n]]));t.after(()=>{for(const n of names){if(originals.get(n))(dbAdapter as any)[n]=originals.get(n);else delete (dbAdapter as any)[n];}});
+ for(const [mode,enabled,permitted] of [[undefined,true,true],[undefined,false,false],['LEGACY_B',true,true],['LEGACY_B',false,true],['ECF',true,true],['ECF',false,false],['NONE',true,false]] as const){
+  const f=await nativeFixture();seedNativeFiscal(f);const cfg=f.documents('config')[0];cfg.terminals[0].config.fiscal.mode=mode;cfg.terminals[0].config.fiscal.enabled=enabled;await f.adapter.saveDocument('config',cfg);
+  for(const n of names)(dbAdapter as any)[n]=(f.adapter as any)[n].bind(f.adapter);
+  assert.equal(await db.getNextNCF('B02',id(4)),permitted?'B0200000002':null,String(mode)+' enabled='+enabled);assert.equal(f.documents('nativeFiscalReservations').length,permitted?1:0);
+  f.db.close();
+ }
+ const e=await nativeFixture();try{const seeded=seedNativeFiscal(e);const cfg=e.documents('config')[0];cfg.terminals[0].config.fiscal.mode='ECF';const range={...seeded.range,type:'E31',prefix:'E31'},allocation={...seeded.allocation,ncfType:'E31',prefix:'E31'};cfg.terminals[0].config.fiscal.fiscalRanges=[range];cfg.terminals[0].config.fiscal.fiscalAllocations=[allocation];await e.adapter.saveDocument('config',cfg);await e.adapter.saveDocument('fiscalRanges',range);await e.adapter.saveDocument('fiscalAllocations',allocation);await e.adapter.saveCollection('localFiscalBuffer',[]);await e.adapter.saveDocument('localFiscalBuffer',{...seeded.buffer,id:'E31',type:'E31',prefix:'E31'});
+  for(const n of names)(dbAdapter as any)[n]=(e.adapter as any)[n].bind(e.adapter);
+  assert.equal(await db.getNextNCF('E31',id(4)),'E3100000002');assert.equal(e.documents('nativeFiscalReservations').length,0,'existing E path is unchanged');
+ }finally{e.db.close();}
+});

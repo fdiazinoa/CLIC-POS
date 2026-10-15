@@ -1,3 +1,5 @@
+import {readV3Base4Stock,base4} from '../V3Base4Stock';
+import {Money} from '../../articleFormats/wire';
 import {NATIVE_FISCAL_RECEIPTS_SCHEMA,planNativeFiscalReceipt} from '../NativeFiscalReservation';
 import type {LargeMasterSyncV3Store} from '../../sync/LargeMasterSyncV3Types';
 import {validateFiscalBufferReservation} from '../../../utils/fiscalBufferAuthority';
@@ -1054,7 +1056,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
           if (!reads.has(key)) reads.set(key, this.ensureDb().query(sql, values));
           return reads.get(key)!;
         };
-        const demands = new Map<string, { baseline: string; productId: string; warehouseId: string; quantity: number }>();
+        const demands = new Map<string, { baseline: string; productId: string; warehouseId: string; quantity: number; quantityScale?:4; exactQuantity?:string }>();
         for (const mutation of documents) {
             const document = mutation.document as any;
             if (mutation.requireAbsent || mutation.expectedDocument !== undefined) {
@@ -1153,14 +1155,26 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             }
             for (const requirement of mutation.v3StockRequirements || []) {
               if (requirement.baseline !== document.v3InventoryBaseline || requirement.warehouseId !== document.v3WarehouseId
-                || !Number.isFinite(requirement.quantity) || requirement.quantity <= 0) throw new Error('SYNC_V3_MOVEMENT_AUTHORITY_INVALID');
+                || !Number.isFinite(requirement.quantity) || requirement.quantity <= 0 || (requirement.quantityScale!==undefined && requirement.quantityScale!==4)) throw new Error('SYNC_V3_MOVEMENT_AUTHORITY_INVALID');
               const key = JSON.stringify([requirement.baseline, requirement.productId, requirement.warehouseId]);
               const prior = demands.get(key);
-              demands.set(key, { ...requirement, quantity: requirement.quantity + (prior?.quantity || 0) });
+              const exactQuantity=new Money(String(requirement.quantity)).plus(prior?.exactQuantity || String(prior?.quantity || 0)).toFixed();
+              const quantityScale=requirement.quantityScale || prior?.quantityScale;
+              if(quantityScale===4){
+                base4(requirement.quantity);
+                const exact=new Money(exactQuantity);
+                if(exact.dp()>4 || exact.abs().gt('99999999999.9999'))throw new Error('POS_FORMAT_PRECISION_INVALID');
+              }
+              demands.set(key, { ...requirement, quantity: requirement.quantity + (prior?.quantity || 0),quantityScale,exactQuantity });
             }
         }
         // Both this read and every ledger write occur after BEGIN, under the shared native write queue.
         for (const demand of demands.values()) {
+          if(demand.quantityScale===4){
+            const stock=await readV3Base4Stock(async<T>(sql:string,values:(string|number|null)[])=>(await read(sql,values)).values as T[] || [],demand.baseline,demand.productId,demand.warehouseId);
+            if(new Money(demand.exactQuantity!).gt(stock.available))throw new Error('SYNC_V3_STOCK_INSUFFICIENT');
+            continue;
+          }
           const result = await read(`SELECT
             COALESCE((SELECT qty_on_hand - qty_reserved - qty_committed FROM master_v3_inventory_balances
               WHERE item_id = ? AND warehouse_id = ?), 0) + COALESCE((SELECT SUM(
@@ -1199,7 +1213,11 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
     }
 
     private withWriteLock<T>(operation: () => Promise<T>): Promise<T> {
-        const result = this.writeQueue.then(operation, operation);
+        const guarded=()=>{
+            if(this.financialConnectionError)throw this.financialConnectionError;
+            return operation();
+        };
+        const result = this.writeQueue.then(guarded, guarded);
         this.writeQueue = result.then(() => undefined, () => undefined);
         return result;
     }

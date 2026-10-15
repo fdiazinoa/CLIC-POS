@@ -104,11 +104,12 @@ export const isAllocationAllowedByPolicy = (
 
 
 export function validateFiscalBufferReservation(input:{business:BusinessConfig;terminalId:string;type:FiscalDocumentCode;
- buffer:LocalFiscalBuffer;allocation:FiscalAllocation;range:FiscalRangeDGII;ncf:string}):LocalFiscalBuffer {
+ buffer:LocalFiscalBuffer;allocation:FiscalAllocation;range:FiscalRangeDGII;ncf:string;requireLegacyBMode?:boolean}):LocalFiscalBuffer {
  const {business,terminalId,type,buffer,allocation,range,ncf}=input;
  const policy=resolveFiscalTerminalPolicyFromConfig(business,terminalId,[allocation]);
  const terminal=business.terminals?.find(t=>t.id===terminalId || t.config?.erpTerminalId===terminalId);
- const valid=policy.enabled && terminal?.config?.fiscal?.mode==='LEGACY_B'
+ const valid=policy.enabled && /^B(?:01|02|04|14|15)$/.test(type)
+  && (!input.requireLegacyBMode || terminal?.config?.fiscal?.mode==='LEGACY_B')
   && isAllocationAllowedByPolicy(allocation,policy,true) && hasValidAllocatedFiscalRange([range],allocation,type)
   && ['ACTIVE','EXHAUSTED'].includes(allocation.status) && !allocation.releasedAt
   && normalizeSequenceKey(allocation.terminalId)===normalizeSequenceKey(policy.authorityId)
