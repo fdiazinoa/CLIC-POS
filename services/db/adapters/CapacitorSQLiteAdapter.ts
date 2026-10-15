@@ -1,3 +1,8 @@
+import {NATIVE_FISCAL_RECEIPTS_SCHEMA,planNativeFiscalReceipt} from '../NativeFiscalReservation';
+import type {LargeMasterSyncV3Store} from '../../sync/LargeMasterSyncV3Types';
+import {validateFiscalBufferReservation} from '../../../utils/fiscalBufferAuthority';
+import { ARTICLE_FORMAT_RETAINED_UPSERT_SQL } from '../ArticleFormatFinancialRetention';
+import { planFinancialNumbers, FINANCIAL_COUNTER_UPSERT_SQL } from '../FinancialNumberReservation';
 import { ARTICLE_FORMATS_SCHEMA } from '../../articleFormats/schema';
 import type { FormatSQL } from '../../articleFormats/store';
 import { getEffectiveFiscalComplianceConfig, getProviderEnvironment } from '../../../utils/fiscal/fiscalHelpers';
@@ -9,6 +14,8 @@ import type {
     DatabaseAdapter,
     DurableDocumentMutation,
     FinancialCommitInput,
+    FinancialNumberReservation,
+    FinancialNumberResult,
     MasterNumberRangeRecord,
     NumberedMasterCommitInput,
     NumberedMasterCommitResult,
@@ -40,7 +47,7 @@ const DOCUMENT_UPSERT_SQL = `
         ?
     )
     ON CONFLICT(collection_name, doc_id) DO UPDATE SET
-        data = ${V3_FINANCIAL_RETAINED_UPSERT_SQL},
+        data = ${FINANCIAL_COUNTER_UPSERT_SQL.replace('__FINANCIAL_DOCUMENT__', ARTICLE_FORMAT_RETAINED_UPSERT_SQL.replace('__V3_FINANCIAL_DOCUMENT__',V3_FINANCIAL_RETAINED_UPSERT_SQL))},
         updatedAt = excluded.updatedAt
 `;
 
@@ -48,19 +55,72 @@ type SQLiteBridgeModule = typeof import('@capacitor-community/sqlite');
 type SQLiteConnectionInstance = InstanceType<SQLiteBridgeModule['SQLiteConnection']>;
 type SQLiteDBConnectionInstance = InstanceType<SQLiteBridgeModule['SQLiteDBConnection']>;
 
+export const NATIVE_V3_METHOD_CONCURRENCY = {
+    getInventoryAuthority: 'read',
+    assertCanReplaceUnusedBaseline: 'read',
+    activateUnusedBaseline: 'write',
+    prepareCatalogOnly: 'write',
+    activateCatalogOnly: 'write',
+    getCatalogReceipt: 'read',
+    readAdministrativeCatalogPage: 'read',
+    prepare: 'write',
+    readProgress: 'read',
+    findIncomplete: 'read',
+    applyChunk: 'write',
+    markDatasetValidated: 'write',
+    validateStaging: 'write',
+    activate: 'write',
+    rollback: 'write',
+    getActiveRuntimeVersion: 'read',
+    getPragmaSnapshot: 'read',
+    getDatabaseSizeBytes: 'read',
+    listArticlesPage: 'read',
+    searchOperationalArticles: 'read',
+    getOperationalCategories: 'read',
+    getOperationalArticle: 'read',
+    getOperationalTariffs: 'read',
+    getAdministrativeTariff: 'read',
+    getOperationalTaxes: 'read',
+    getOperationalVariants: 'read',
+    getPrices: 'read',
+    findBarcode: 'read',
+    findOperationalCode: 'read',
+    getOperationalOwner: 'read',
+    setOperationalOwner: 'write',
+    getLocalInventoryDelta: 'read',
+    assertCanRefresh: 'read',
+    getLocalInventoryDeltas: 'read',
+    getOperationalSupports: 'read',
+    replaceInventorySnapshot: 'write',
+    getInventorySnapshotVersion: 'read',
+    getInventoryBalance: 'read',
+    cleanupExpiredVersions: 'write',
+} satisfies Record<keyof LargeMasterSyncV3Store,'read'|'write'>;
+
 export class CapacitorSQLiteAdapter implements DatabaseAdapter {
     readonly supportsV3FiscalMetadataCAS = true;
     private sqliteConnection: SQLiteConnectionInstance | null = null;
     private db: SQLiteDBConnectionInstance | null = null;
     private isReady = false;
+    private financialConnectionError:Error|null=null;
     private connectPromise: Promise<void> | null = null;
     private disconnectPromise: Promise<void> | null = null;
     private writeQueue: Promise<unknown> = Promise.resolve();
     public readonly adapterType = 'local';
-    public readonly masterSyncV3Store = new LargeMasterSyncV3SqliteStore(
-        () => this.ensureDb() as any,
-        operation => this.withWriteLock(operation),
-    );
+    public readonly masterSyncV3Store = this.serializedMasterStore();
+
+    private serializedMasterStore():LargeMasterSyncV3SqliteStore {
+        const store=new LargeMasterSyncV3SqliteStore(()=>this.ensureDb() as any,operation=>this.withWriteLock(operation));
+
+        return new Proxy(store,{get:(target,key)=>{
+            const value=Reflect.get(target,key);
+            if(typeof value!=='function') return value;
+            // Internal calls retain the raw target and explicit connection. Public observers wait for committed state.
+            const mode=NATIVE_V3_METHOD_CONCURRENCY[key as keyof typeof NATIVE_V3_METHOD_CONCURRENCY];
+            if(!mode) throw new Error('NATIVE_MASTER_STORE_METHOD_UNCLASSIFIED:'+String(key));
+            return mode==='write' ? value.bind(target) : (...args:any[])=>this.withWriteLock(()=>value.apply(target,args));
+        }});
+    }
 
     connect(): Promise<void> {
         if (this.disconnectPromise) return this.disconnectPromise.then(() => this.connect());
@@ -140,17 +200,18 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         }
 
         this.db = null;
+        this.financialConnectionError = null;
         this.sqliteConnection = null;
         this.isReady = false;
     }
 
     async getSyncMonitorPage(request: SyncMonitorPageRequest) {
-        const result = await this.ensureDb().query(SYNC_MONITOR_PAGE_SQL, syncMonitorPageParams(request));
+        const result = await this.withWriteLock(() => this.ensureDb().query(SYNC_MONITOR_PAGE_SQL, syncMonitorPageParams(request)));
         return decodeSyncMonitorPage(result.values?.[0]);
     }
 
     async getCollection<T>(collectionName: string, _queryParams?: Record<string, string>): Promise<T[] | any> {
-        const docs = await this.readStoredDocuments(collectionName);
+        const docs = await this.withWriteLock(() => this.readStoredDocuments(collectionName));
         return this.fromStoredDocuments(collectionName, docs);
     }
 
@@ -164,6 +225,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
     }
 
     async getFiscalStatusCandidates(binding: string, afterId: string, limit: number): Promise<string[]> {
+        return this.withWriteLock(async()=>{
       const result = await this.ensureDb().query(`SELECT doc_id FROM documents WHERE collection_name='transactions'
         AND doc_id>? AND json_extract(data,'$.v3Binding')=? AND json_extract(data,'$.fiscalProvider')='MSELLER'
         AND json_extract(data,'$.fiscalSyncStatus') IN ('PENDING','ERROR')
@@ -171,6 +233,8 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         AND (json_extract(data,'$.fiscalProviderStatus')='V3_ISSUE_REQUESTED' OR json_extract(data,'$.fiscalClassificationAttemptedAt') IS NOT NULL
           OR json_extract(data,'$.fiscalReferenceId') IS NOT NULL OR json_extract(data,'$.fiscalCertifiedNcf') IS NOT NULL) ORDER BY doc_id LIMIT ?`,[afterId,binding,Math.min(10,Math.max(1,limit))]);
       return (result.values || []).map(row=>String(row.doc_id));
+
+        });
     }
 
     async saveDocumentsAtomically(documents: DurableDocumentMutation[], requireAbsent = false, replaceCollections: string[] = []): Promise<void> {
@@ -248,7 +312,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
               await this.assertV3FinancialBaseline(documents);
               if (requireAbsent) await assertAbsent();
             };
-            await this.executeUnlocked([...replaceCollections.map(name => ({statement: 'DELETE FROM documents WHERE collection_name = ?', values: [name]})), ...documents.map(({ collectionName, document }) => ({
+            await this.executeUnlocked([...replaceCollections.flatMap(name => this.collectionReplacementStatements(name,documents.filter(d=>d.collectionName===name).map(d=>d.document.id),now)), ...documents.map(({ collectionName, document }) => ({
                 statement: DOCUMENT_UPSERT_SQL,
                 values: [collectionName, document.id, JSON.stringify(document), collectionName, document.id, collectionName, now],
             }))], needsFinancialPrecondition ? precondition : undefined);
@@ -328,7 +392,11 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         await this.bulkUpsert('products', updatedProducts);
     }
 
-    async getDocument<T>(collectionName: string, id: string): Promise<T | null> {
+    getDocument<T>(collectionName:string,id:string):Promise<T|null> {
+        return this.withWriteLock(()=>this.getDocumentUnlocked<T>(collectionName,id));
+    }
+
+    private async getDocumentUnlocked<T>(collectionName: string, id: string): Promise<T | null> {
         const db = this.ensureDb();
         const result = await db.query(
             'SELECT data FROM documents WHERE collection_name = ? AND doc_id = ? LIMIT 1',
@@ -357,7 +425,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         const isReadQuery = /^(SELECT|PRAGMA|WITH)\b/i.test(normalized);
 
         if (isReadQuery) {
-            const result = await db.query(normalized, params);
+            const result = await this.withWriteLock(() => db.query(normalized, params));
             const rows = Array.isArray(result?.values) ? result.values : [];
             if (rows.length === 0) return [];
 
@@ -438,6 +506,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
     }
 
     async getMasterNumberRanges(): Promise<MasterNumberRangeRecord[]> {
+        return this.withWriteLock(async()=>{
         const result = await this.ensureDb().query(`SELECT
             range_id, entity_type, prefix, start_number, end_number, next_number,
             last_issued_number, padding, status, updated_at, last_reported_number,
@@ -459,6 +528,8 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             blockedReason: row.blocked_reason == null ? null : String(row.blocked_reason),
             terminalId: row.terminal_id == null ? null : String(row.terminal_id),
         }));
+
+        });
     }
 
     async upsertMasterNumberRanges(ranges: MasterNumberRangeRecord[]): Promise<void> {
@@ -521,7 +592,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         const db = this.ensureDb();
         await db.execute('BEGIN IMMEDIATE TRANSACTION;', false);
         try {
-            const existing = await this.getDocument<any>(input.collectionName, input.document.id);
+            const existing = await this.getDocumentUnlocked<any>(input.collectionName, input.document.id);
             if (existing) {
                 await db.execute('COMMIT;', false);
                 return {
@@ -602,6 +673,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
     }
 
     async getStats(): Promise<{ type: string; size: number; tables: number }> {
+        return this.withWriteLock(async()=>{
         const db = this.ensureDb();
         const tablesResult = await db.query(
             "SELECT count(*) as count FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
@@ -618,34 +690,115 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             size: pageCount * pageSize,
             tables
         };
+
+        });
     }
 
     private ensureDb(): SQLiteDBConnectionInstance {
+        if(this.financialConnectionError) throw this.financialConnectionError;
         if (!this.db) {
             throw new Error('Capacitor SQLite database not initialized');
         }
         return this.db;
     }
 
-    /** Share the native legacy/V3 writer lock across format reads, planning and atomic commit. */
-    articleFormatSQL(): FormatSQL {
+    /** Existing operational port retains the new-posting guard until the independent native proof gate. */
+    articleFormatSQL(): FormatSQL { return this.createArticleFormatSQL(false); }
+
+    /** Internal typed V3 bridge. Presence is storage support, never integral or network admission readiness. */
+    articleFormatFinancialSQL(): FormatSQL { return this.createArticleFormatSQL(true); }
+
+    private createArticleFormatSQL(financial: boolean): FormatSQL {
         const direct: FormatSQL = {
             storageLayout: 'DOCUMENTS',
-            financialPostingReadiness: 'NATIVE_UNPROVEN',
+            financialPostingReadiness: financial ? 'NATIVE_V3_TRANSACTION' : 'NATIVE_UNPROVEN',
             executeSchema: async sql => {
                 await this.ensureDb().execute('PRAGMA foreign_keys = ON;', false);
                 await this.ensureDb().execute(sql);
             },
-            executeAtomic: statements => this.executeUnlocked(statements.map(s => ({statement: s.statement, values: s.values || []}))),
-            query: async <T>(sql: string, values: (string | number | null)[]) =>
-                (await this.ensureDb().query(sql, values)).values as T[] || [],
+            executeAtomic: statements => this.executeUnlocked(statements.map(s => ({statement:s.statement,values:s.values || []}))),
+            query: async <T>(sql:string,values:(string|number|null)[]) => (await this.ensureDb().query(sql,values)).values as T[] || [],
         };
-        return {
+        const port: FormatSQL = {
             ...direct,
             executeSchema: sql => this.withWriteLock(() => direct.executeSchema(sql)),
             executeAtomic: statements => this.withWriteLock(() => direct.executeAtomic(statements)),
+            query: (sql,values) => this.withWriteLock(() => direct.query(sql,values)),
             runExclusive: work => this.withWriteLock(() => work(direct)),
         };
+        port.runFinancial = work => this.withWriteLock(() => this.withNativeTransaction(async () => {
+            const db=this.ensureDb();
+            const scoped:FormatSQL={...direct,
+                executeSchema:async()=>{throw Error('POS_FORMAT_SCHEMA_INSIDE_FINANCIAL_TRANSACTION');},
+                executeAtomic:async statements=>{for(const entry of statements) await db.run(entry.statement,entry.values || [],false);},
+                assertFinancialDocuments:documents=>this.assertV3FinancialBaseline(documents),
+            };
+            return work(scoped);
+        }));
+        return port;
+    }
+
+    /** Android's tracked beginTransaction uses SQLiteDatabase.beginTransaction (EXCLUSIVE), before any read. */
+    private async withNativeTransaction<T>(work:()=>Promise<T>):Promise<T> {
+        const db=this.ensureDb();
+        let commitAttempted=false;
+        try {
+            await db.beginTransaction();
+            const result=await work();
+            commitAttempted=true;
+            await db.commitTransaction();
+            return result;
+        } catch(error) {
+            // A native response can be lost after BEGIN or COMMIT. Inspect the tracked transaction, never compensate.
+            let active:boolean;
+            try {
+                active=Boolean((await db.isTransactionActive()).result);
+                if(active) await db.rollbackTransaction();
+            } catch(rollbackError) {
+                this.financialConnectionError=new Error('NATIVE_FINANCIAL_CONNECTION_UNCERTAIN',{cause:{error,rollbackError}});
+                throw this.financialConnectionError;
+            }
+            if(commitAttempted&&!active) throw new Error('NATIVE_FINANCIAL_COMMIT_UNCERTAIN',{cause:error});
+            throw error;
+        }
+    }
+
+    async reserveFinancialNumbers(input:FinancialNumberReservation):Promise<FinancialNumberResult> {
+        input=structuredClone(input);
+        return this.withWriteLock(()=>this.withNativeTransaction(async()=>{
+            const db=this.ensureDb();
+            const read=async(collection:string,id:string)=>{
+                const rows=await db.query('SELECT data FROM documents WHERE collection_name=? AND doc_id=?',[collection,id]);
+                return rows.values?.[0]?.data ? JSON.parse(String(rows.values[0].data)) : undefined;
+            };
+            let fiscalBuffer:any;
+            let fiscalReceipt:Awaited<ReturnType<typeof planNativeFiscalReceipt>>;
+            if(input.fiscal){
+                const f=input.fiscal;
+                const expected=[['config',f.expectedConfig],['localFiscalBuffer',f.expectedBuffer],['fiscalAllocations',f.expectedAllocation],['fiscalRanges',f.expectedRange]];
+                const actual:any[]=[];
+                for(const [collection,raw] of expected){
+                    const document=JSON.parse(raw);
+                    const rows=await db.query('SELECT data FROM documents WHERE collection_name=? AND doc_id=?',[collection,document.id]);
+                    if(rows.values?.[0]?.data!==raw) throw new Error('NATIVE_FISCAL_AUTHORITY_CONFLICT');
+                    actual.push(document);
+                }
+                fiscalBuffer=validateFiscalBufferReservation({business:actual[0],buffer:actual[1],allocation:actual[2],range:actual[3],terminalId:f.terminalId,type:f.type,ncf:f.ncf});
+                fiscalReceipt=await planNativeFiscalReceipt(async<T>(sql:string,values:(string|number|null)[])=>(await db.query(sql,values)).values as T[] || [],actual[0],actual[1],f.ncf,{requireIssuer:false});
+            }
+            const plan=planFinancialNumbers(input,input.seriesId ? await read('internalSequences',input.seriesId) : undefined,
+                input.global ? await read('globalSequenceCounter','value') : undefined);
+            const now=new Date().toISOString();
+            if(fiscalReceipt){
+                await db.run('INSERT INTO article_format_wire_write_scope VALUES(1)',[],false);
+                await db.run(fiscalReceipt.statement.statement,fiscalReceipt.statement.values || [],false);
+            }
+            for(const [collection,document] of [['internalSequences',plan.series],['globalSequenceCounter',plan.counter],['localFiscalBuffer',fiscalBuffer]] as const){
+                if(document) await db.run(DOCUMENT_UPSERT_SQL,[collection,document.id,JSON.stringify(document),collection,document.id,collection,now],false);
+            }
+            if(fiscalReceipt)await db.run('DELETE FROM article_format_wire_write_scope WHERE id=1',[],false);
+            return {...plan.result,...(input.fiscal ? {ncf:input.fiscal.ncf} : {})};
+        }));
     }
 
     private async initSchema(): Promise<void> {
@@ -727,6 +880,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             ${DURABLE_OUTBOX_SCHEMA_SQL}
             ${LARGE_MASTER_SYNC_V3_SCHEMA_SQL}
             ${ARTICLE_FORMATS_SCHEMA}
+            ${NATIVE_FISCAL_RECEIPTS_SCHEMA}
         `);
         await this.withWriteLock(async () => {
             await ensureLargeMasterSyncV3ContractColumns(db);
@@ -789,15 +943,31 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         return docs;
     }
 
+    private collectionReplacementStatements(name:string,ids:string[],now:string):Array<{statement:string;values:any[]}> {
+        const placeholders=ids.map(()=>'?').join(',');
+        const statements:Array<{statement:string;values:any[]}>=[];
+        if(name==='internalSequences') statements.push({
+            statement:`UPDATE documents SET data=json_set(data,'$.active',json('false')),updatedAt=?
+                WHERE collection_name='internalSequences' ${ids.length ? `AND doc_id NOT IN (${placeholders})` : ''}`,
+            values:[now,...ids],
+        });
+        // Preserve issued counters; omitting a series revokes its eligibility without erasing its high-water mark.
+        // Buffers included in a replacement retain their live row so same-epoch stale saves cannot rewind them.
+        const preserveIncomingBuffer=name==='localFiscalBuffer'&&ids.length>0;
+        statements.push({statement:`DELETE FROM documents WHERE collection_name=?
+            AND collection_name NOT IN ('internalSequences','globalSequenceCounter')
+            ${preserveIncomingBuffer ? `AND doc_id NOT IN (${placeholders})` : ''}`,
+            values:[name,...(preserveIncomingBuffer ? ids : [])]});
+        return statements;
+    }
+
     private async replaceStoredDocuments(collectionName: string, docs: any[]): Promise<void> {
         const db = this.ensureDb();
         const now = new Date().toISOString();
+        const rows=this.toDocumentRows(collectionName,docs);
         const statements = [
-            {
-                statement: 'DELETE FROM documents WHERE collection_name = ?',
-                values: [collectionName],
-            },
-            ...this.toDocumentRows(collectionName, docs).map((row, index) => ({
+            ...this.collectionReplacementStatements(collectionName,rows.map(row=>row.docId),now),
+            ...rows.map((row) => ({
                 statement: DOCUMENT_UPSERT_SQL,
                 values: [
                     collectionName,
@@ -859,11 +1029,14 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
     }
 
     async isV3TicketClosed(id: string): Promise<boolean> {
+        return this.withWriteLock(async()=>{
       const result=await this.ensureDb().query(`SELECT doc_id FROM documents WHERE
         (collection_name='v3TicketSettlements' AND doc_id=?) OR
         (collection_name IN ('transactions','transactionHistory') AND json_extract(data,'$.restaurantOrderId')=?
           AND COALESCE(json_extract(data,'$.type'),'SALE') != 'REFUND') LIMIT 1`,[id,id]);
       return Boolean(result.values?.length);
+
+        });
     }
 
     private async assertV3FinancialBaseline(documents: DurableDocumentMutation[]): Promise<void> {
@@ -950,8 +1123,12 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
                 }
                 const source=retainedSources.get(sourceKey)!;
                 if (context.collection === 'v3RestoredTicketSources' && !['PENDING','PARKED'].includes(source.document.state)) throw new Error('SYNC_V3_RETAINED_TICKET_CHANGED');
-                const sources = source.lines.get(JSON.stringify([line.cartId,line.id])) || [];
-                if (sources.length !== 1 || v3RetainedLineFingerprint(sources[0]) !== v3RetainedLineFingerprint(line)) {
+                const formatSourceLine = document.articleFormatEventId && line.formatWireLine?.source_line_id;
+                const sourceLineId = formatSourceLine || line.cartId;
+                const sources = source.lines.get(JSON.stringify([sourceLineId,line.id])) || [];
+                if (formatSourceLine && (source.document.articleFormatEventId !== document.articleFormatWire?.source_event_id
+                  || JSON.stringify(sources[0]?.articleFormat) !== JSON.stringify(line.articleFormat))) throw new Error('SYNC_V3_RETAINED_LINE_CHANGED');
+                if (sources.length !== 1 || v3RetainedLineFingerprint(sources[0]) !== v3RetainedLineFingerprint(formatSourceLine ? {...line,cartId:sourceLineId} : line)) {
                   throw new Error('SYNC_V3_RETAINED_LINE_CHANGED');
                 }
                 if (context.collection !== 'transactions') {

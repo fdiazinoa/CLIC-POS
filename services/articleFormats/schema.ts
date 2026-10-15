@@ -1,3 +1,4 @@
+import { FORMAT_ACK_METADATA_FIELDS } from '../db/ArticleFormatFinancialRetention';
 /** Additive tables only. Existing collections/sync_queue and pending legacy sales stay intact. */
 export const ARTICLE_FORMATS_SCHEMA = `
 CREATE TABLE IF NOT EXISTS article_format_master_pages (
@@ -106,17 +107,34 @@ export function articleFormatWireSchema(layout?: 'DOCUMENTS'): string {
  if (layout !== 'DOCUMENTS') return ARTICLE_FORMAT_WIRE_SCHEMA;
  const tables = ARTICLE_FORMAT_WIRE_SCHEMA.slice(0, ARTICLE_FORMAT_WIRE_SCHEMA.indexOf('CREATE TRIGGER'));
  return tables + `
+DROP TRIGGER IF EXISTS article_format_document_insert;
+DROP TRIGGER IF EXISTS article_format_document_update;
+DROP TRIGGER IF EXISTS article_format_document_delete;
+CREATE INDEX IF NOT EXISTS article_format_outbox_source ON article_format_outbox(tenant_id,company_id,json_extract(content,'$.source_event_id'));
+CREATE INDEX IF NOT EXISTS article_format_fiscal_buffer_scope ON documents(json_extract(data,'$.type'),json_extract(data,'$.terminalId')) WHERE collection_name='localFiscalBuffer';
 CREATE TRIGGER IF NOT EXISTS article_format_document_insert BEFORE INSERT ON documents
 WHEN json_extract(NEW.data,'$.articleFormatEventId') IS NOT NULL
+ AND NOT EXISTS (SELECT 1 FROM documents d WHERE d.collection_name=NEW.collection_name AND d.doc_id=NEW.doc_id
+  AND json_extract(d.data,'$.v3InventoryBaseline') IS NOT NULL
+  AND json_extract(d.data,'$.articleFormatEventId')=json_extract(NEW.data,'$.articleFormatEventId'))
  AND NOT EXISTS (SELECT 1 FROM article_format_wire_write_scope)
 BEGIN SELECT RAISE(ABORT,'POS_FORMAT_LEGACY_WRITER_FORBIDDEN'); END;
 CREATE TRIGGER IF NOT EXISTS article_format_document_update BEFORE UPDATE ON documents
 WHEN (json_extract(NEW.data,'$.articleFormatEventId') IS NOT NULL OR json_extract(OLD.data,'$.articleFormatEventId') IS NOT NULL)
+ AND (json_extract(OLD.data,'$.v3InventoryBaseline') IS NULL OR EXISTS (
+   SELECT 1 FROM json_each(OLD.data) original WHERE original.key NOT IN (${FORMAT_ACK_METADATA_FIELDS.map(k=>`'${k}'`).join(',')})
+   AND NOT EXISTS(SELECT 1 FROM json_each(NEW.data) incoming WHERE incoming.key=original.key AND incoming.type=original.type AND incoming.value IS original.value))
+  OR EXISTS(SELECT 1 FROM json_each(NEW.data) incoming WHERE incoming.key NOT IN (${FORMAT_ACK_METADATA_FIELDS.map(k=>`'${k}'`).join(',')})
+   AND NOT EXISTS(SELECT 1 FROM json_each(OLD.data) original WHERE incoming.key=original.key AND incoming.type=original.type AND incoming.value IS original.value)))
  AND NOT EXISTS (SELECT 1 FROM article_format_wire_write_scope)
 BEGIN SELECT RAISE(ABORT,'POS_FORMAT_LEGACY_WRITER_FORBIDDEN'); END;
 CREATE TRIGGER IF NOT EXISTS article_format_document_delete BEFORE DELETE ON documents
 WHEN json_extract(OLD.data,'$.articleFormatEventId') IS NOT NULL
+ AND json_extract(OLD.data,'$.v3InventoryBaseline') IS NULL
  AND NOT EXISTS (SELECT 1 FROM article_format_wire_write_scope)
 BEGIN SELECT RAISE(ABORT,'POS_FORMAT_LEGACY_WRITER_FORBIDDEN'); END;
+CREATE TRIGGER IF NOT EXISTS article_format_native_document_retain BEFORE DELETE ON documents
+WHEN json_extract(OLD.data,'$.articleFormatEventId') IS NOT NULL AND json_extract(OLD.data,'$.v3InventoryBaseline') IS NOT NULL
+BEGIN SELECT RAISE(IGNORE); END;
 `;
 }

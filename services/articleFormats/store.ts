@@ -7,7 +7,11 @@ export interface FormatSQL {
   /** Native develop uses canonical document rows; omitted only by legacy isolated fixtures. */
   readonly storageLayout?: 'DOCUMENTS';
   /** Native writers do not yet share the complete financial read/mutate/commit boundary. */
-  readonly financialPostingReadiness?: 'NATIVE_UNPROVEN' | 'ISOLATED_SQLITE';
+  readonly financialPostingReadiness?: 'NATIVE_UNPROVEN' | 'ISOLATED_SQLITE' | 'NATIVE_V3_TRANSACTION';
+  /** Authoritative planning reads and writes share one tracked native transaction. Internal support, not network readiness. */
+  runFinancial?<T>(work: (sql: FormatSQL) => Promise<T>): Promise<T>;
+  /** Existing native V3 financial preconditions, executed on the scoped transaction connection. */
+  assertFinancialDocuments?(documents: import('../db/DatabaseAdapter').DurableDocumentMutation[]): Promise<void>;
   executeSchema(sql: string): Promise<void>;
   /** Serializes reads/planning and commit with legacy collection writers. */
   runExclusive?<T>(work: (sql: FormatSQL) => Promise<T>): Promise<T>;
