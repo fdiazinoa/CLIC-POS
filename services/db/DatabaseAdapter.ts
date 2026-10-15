@@ -19,7 +19,7 @@ export interface DurableDocumentMutation {
     /** Verified V3 sale demand; checked against scoped baseline + ledger inside the write transaction. */
     v3CurrentCatalog?: { syncId: string; syncVersion: number; binding: string };
     v3ExpectedRetainedDocument?: { collection: string; id: string; expected: string };
-    v3StockRequirements?: Array<{ baseline: string; productId: string; warehouseId: string; quantity: number }>;
+    v3StockRequirements?: Array<{ baseline: string; productId: string; warehouseId: string; quantity: number; quantityScale?: 4 }>;
 }
 
 export interface DurableOutboxEventInput {
@@ -74,6 +74,21 @@ export interface NumberedMasterCommitResult {
     code: string;
 }
 
+export interface FinancialNumberReservation {
+    seriesId?: string;
+    documentType?: string;
+    global: boolean;
+    fiscal?: {terminalId:string;type:import('../../types').FiscalDocumentCode;ncf:string;
+        expectedConfig:string;expectedBuffer:string;expectedAllocation:string;expectedRange:string};
+}
+export interface FinancialNumberResult {
+    ncf?: string;
+    globalSequence?: number;
+    seriesNumber?: number;
+    displayId?: string;
+    series?: { id: string; [key: string]: any };
+}
+
 export interface DatabaseAdapter {
     connect(): Promise<void>;
     disconnect(): Promise<void>;
@@ -86,6 +101,9 @@ export interface DatabaseAdapter {
     getFiscalStatusCandidates?(binding: string, afterId: string, limit: number): Promise<string[]>;
 
     getSyncMonitorPage?(request: SyncMonitorPageRequest): Promise<SyncMonitorPage>;
+
+    /** Shared native transaction for global and document-series issuance. Never broadcasts inside SQL. */
+    reserveFinancialNumbers?(input: FinancialNumberReservation): Promise<FinancialNumberResult>;
 
     // Generic CRUD
     getCollection<T>(collectionName: string, queryParams?: Record<string, string>): Promise<T[]>;

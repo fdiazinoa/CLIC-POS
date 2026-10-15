@@ -40,6 +40,7 @@ function setup(db=new SQLite(':memory:'), seed=true) {
    db.transaction(()=>{statements.forEach((s,i)=>{if(control.before===i)throw Error('injected:'+i);db.prepare(s.statement).run(...(s.values||[]));});if(control.before===statements.length)throw Error('injected:beforeCommit');})();
    if(control.afterCommit)throw Error('injected:afterCommit');
   }};
+ Object.assign(bridge,{run:async(sql:string,values:any[]=[])=>db.prepare(sql).run(...values),beginTransaction:async()=>{db.exec('BEGIN IMMEDIATE');},commitTransaction:async()=>{db.exec('COMMIT');},rollbackTransaction:async()=>{db.exec('ROLLBACK');},isTransactionActive:async()=>({result:db.inTransaction})});
  const adapter=new CapacitorSQLiteAdapter();Object.assign(adapter,{db:bridge});
  let queue=Promise.resolve();
  const direct={storageLayout:'DOCUMENTS' as const,financialPostingReadiness:'ISOLATED_SQLITE' as const,

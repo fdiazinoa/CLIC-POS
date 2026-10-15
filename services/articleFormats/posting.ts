@@ -1,3 +1,8 @@
+import {NATIVE_FISCAL_RECEIPTS_SCHEMA,planNativeFiscalReceipt} from '../db/NativeFiscalReservation';
+import {validateFiscalBufferReservation} from '../../utils/fiscalBufferAuthority';
+import { planFinancialNumbers } from '../db/FinancialNumberReservation';
+import { readNativeFormatAuthority, readNativeFinancialDocuments } from './nativeV3Financial';
+import type { DurableDocumentMutation } from '../db/DatabaseAdapter';
 import { FormatLocalDocuments } from './localDocuments';
 import { articleFormatWireSchema } from './schema';
 import { ArticleFormatError, snapshot } from './domain';
@@ -11,6 +16,7 @@ import { AMOUNTS, Money, authorizedReturnContext, decimal, requireFormat, valida
 import { ARTICLE_FORMAT_WIRE_SCHEMA } from './schema';
 export { ARTICLE_FORMAT_WIRE_SCHEMA } from './schema';
 export interface NetworkMasterPort {
+ forSQL?(sql:FormatSQL):NetworkMasterPort;
  getActiveRevision():Promise<NetworkMasterRevision|undefined>;
  getPolicy(itemId:string,syncId?:string,revision?:number):Promise<{dto:ArticleFormatsDTO;policy:NetworkLinePolicy}|undefined>;
 }
@@ -82,7 +88,7 @@ export class ArticleFormatPosting {
  constructor(private readonly sql:FormatSQL,context:NetworkContext,private readonly masters:NetworkMasterPort){
   this.context=deepFreeze(validateContext(context));requireFormat(sql.runExclusive,'POS_FORMAT_ATOMIC_STORAGE_REQUIRED');
  }
- migrate(){return this.sql.executeSchema((this.sql.storageLayout==='DOCUMENTS'?'':'CREATE TABLE IF NOT EXISTS collections(key TEXT PRIMARY KEY NOT NULL,value TEXT NOT NULL,updatedAt TEXT NOT NULL);')+ARTICLE_FORMATS_SCHEMA+articleFormatWireSchema(this.sql.storageLayout));}
+ migrate(){return this.sql.executeSchema((this.sql.storageLayout==='DOCUMENTS'?'':'CREATE TABLE IF NOT EXISTS collections(key TEXT PRIMARY KEY NOT NULL,value TEXT NOT NULL,updatedAt TEXT NOT NULL);')+ARTICLE_FORMATS_SCHEMA+articleFormatWireSchema(this.sql.storageLayout)+(this.sql.storageLayout==='DOCUMENTS'?NATIVE_FISCAL_RECEIPTS_SCHEMA:''));}
  private scope(){return [this.context.scope.tenantId,this.context.scope.companyId];}
  private async saved(sql:FormatSQL,eventId:string):Promise<SavedWire|undefined>{
   return (await sql.query<SavedWire>(`SELECT o.content,w.content_hash,w.context,w.policies,w.ack,w.attempts,w.next_attempt FROM article_format_wire_events w
@@ -92,20 +98,22 @@ export class ArticleFormatPosting {
   options=structuredClone(options);
   requireFormat(options.userId && options.userName && options.seriesId,'POS_FORMAT_LOCAL_ACTOR_REQUIRED');
   const event=validateWireEvent(input),content=canonicalContent(event),hash=await wireHash(event);
-  return this.sql.runExclusive!(async sql=>{
+  return (this.sql.runFinancial || this.sql.runExclusive)!(async sql=>{
    const previous=await this.saved(sql,event.event_id);
    if(previous){requireFormat(previous.content===content&&previous.content_hash===hash,'POS_FORMAT_IDENTITY_CONFLICT');return this.document(sql,event.transaction_id);}
    // Existing pending events may recover; no new native sale/return/void can bypass closed financial readiness.
-   requireFormat(sql.storageLayout!=='DOCUMENTS' || sql.financialPostingReadiness==='ISOLATED_SQLITE','POS_FORMAT_NATIVE_POSTING_NOT_READY');
+   requireFormat(sql.storageLayout!=='DOCUMENTS' || ['ISOLATED_SQLITE','NATIVE_V3_TRANSACTION'].includes(sql.financialPostingReadiness || ''),'POS_FORMAT_NATIVE_POSTING_NOT_READY');
+   const native=sql.financialPostingReadiness==='NATIVE_V3_TRANSACTION';
+   const masters=this.masters.forSQL?.(sql) || this.masters;
    const sale=event.event_type==='ARTICLE_FORMAT_SALE_V1',isVoid=event.event_type==='ARTICLE_FORMAT_VOID_V1';
    const policies:Record<string,NetworkLinePolicy & {cogs_amount?:string}>={};const priorCosts:Record<string,string>={};let original:WireEvent|undefined;
    let returns:WireEvent[]=[];
    if(sale){
-    const revision=await this.masters.getActiveRevision();requireFormat(revision,'POS_FORMAT_REVISION_INCOMPLETE');
+    const revision=await masters.getActiveRevision();requireFormat(revision,'POS_FORMAT_REVISION_INCOMPLETE');
     assertSame(event.master,{sync_id:revision.syncId,revision:revision.revision},'POS_FORMAT_REVISION_INCOMPLETE');
     assertSame(revision.context,this.context,'POS_FORMAT_NEGOTIATION_CHANGED');
     for(const l of event.lines){
-     const master=await this.masters.getPolicy(l.item_id,revision.syncId,revision.revision);requireFormat(master,'POS_FORMAT_MASTER_MISSING');
+     const master=await masters.getPolicy(l.item_id,revision.syncId,revision.revision);requireFormat(master,'POS_FORMAT_MASTER_MISSING');
      policies[l.line_id]=master.policy;
      requireFormat(master.policy.warehouse_id===this.context.scope.warehouseId && this.context.tariff_ids.includes(l.tariff_id),'POS_FORMAT_SCOPE_FORBIDDEN');
      assertSame(l,saleWireLine(master.dto,master.policy,{lineId:l.line_id,formatId:l.article_format.id,variantId:l.variant_id,tariffId:l.tariff_id,
@@ -138,7 +146,7 @@ export class ArticleFormatPosting {
    const local = new FormatLocalDocuments(sql);
    // Normalized V3 stock ownership must not be bypassed by a legacy document projection.
    // Readiness stays closed until the normalized financial posting adapter is proven.
-   if (sql.storageLayout === 'DOCUMENTS') {
+   if (sql.storageLayout === 'DOCUMENTS' && !native) {
     const table = await sql.query('SELECT name FROM sqlite_master WHERE type=? AND name=?', ['table','master_v3_operational_owner']);
     if (table.length) {
      const owners = await sql.query('SELECT * FROM master_v3_operational_owner', []);
@@ -148,31 +156,43 @@ export class ArticleFormatPosting {
    const collection = (name:string) => local.read(name);
    const names=['transactions','transactionHistory','payments','internalSequences','globalSequenceCounter','inventoryLedger','productStocks','products'];
    if(event.fiscal.mode==='LEGACY_B')names.push('localFiscalBuffer');
-   const values=await Promise.all(names.map(collection));const data=Object.fromEntries(names.map((n,i)=>[n,values[i]]));
+   const authority=native ? await readNativeFormatAuthority(sql,this.context) : undefined;
+   const data=authority ? await readNativeFinancialDocuments(sql,local,event,options.seriesId,authority,original)
+    : Object.fromEntries(await Promise.all(names.map(async n=>[n,await collection(n)])));
+   let fiscalReceipt:Awaited<ReturnType<typeof planNativeFiscalReceipt>>;
    if(event.fiscal.mode==='LEGACY_B'){
     const fiscal=event.fiscal,buffer=data.localFiscalBuffer.find(b=>b.type===fiscal.ncf_type);
+    if(authority){
+     requireFormat(buffer&&data.fiscalAllocations.length===1&&data.fiscalRanges.length===1,'POS_FORMAT_FISCAL_ALLOCATION_REQUIRED');
+     fiscalReceipt=await planNativeFiscalReceipt(sql.query,authority.configuration,buffer,fiscal.ncf,{eventId:event.event_id,transactionId:event.transaction_id,requireIssuer:true,occurredAt:event.occurred_at});
+     Object.assign(buffer,validateFiscalBufferReservation({business:authority.configuration,terminalId:this.context.scope.terminalId,
+      type:fiscal.ncf_type as any,ncf:fiscal.ncf,requireLegacyBMode:true,buffer,allocation:data.fiscalAllocations[0],range:data.fiscalRanges[0]}));
+    }else{
     requireFormat(buffer && buffer.terminalId===this.context.scope.terminalId && Number.isSafeInteger(buffer.currentNumber)
      &&buffer.currentNumber>0&&buffer.currentNumber<=buffer.endNumber&&buffer.prefix===fiscal.ncf_type
      &&typeof buffer.expiryDate==='string'&&event.occurred_at.slice(0,10)<=buffer.expiryDate.slice(0,10)
      &&`${buffer.prefix}${String(buffer.currentNumber).padStart(8,'0')}`===fiscal.ncf,'POS_FORMAT_FISCAL_ALLOCATION_REQUIRED');
     buffer.currentNumber++;
+    }
    }
    const series=data.internalSequences.find(s=>s.id===options.seriesId);
    requireFormat(series && series.active!==false && (series.documentType===(sale?'TICKET':'REFUND')||series.type===(sale?'TICKET':'REFUND')),'POS_FORMAT_SERIES_FORBIDDEN');
    requireFormat(!series.terminalId||series.terminalId===this.context.scope.terminalId,'POS_FORMAT_SERIES_FORBIDDEN');
-   const next=series.nextNumber??1;requireFormat(Number.isSafeInteger(next)&&next>0&&(!series.maxNumber||next<=series.maxNumber),'POS_FORMAT_SEQUENCE_EXHAUSTED');
-   const global=data.globalSequenceCounter.find(x=>x.id==='value')||{id:'value',count:0};
-   requireFormat(Number.isSafeInteger(global.count)&&global.count>=0&&global.count<Number.MAX_SAFE_INTEGER,'POS_FORMAT_SEQUENCE_EXHAUSTED');
-   global.count++;data.globalSequenceCounter=[global];series.nextNumber=next+1;
-   const displayId=`${series.prefix||''}${String(next).padStart(series.padding||6,'0')}`;
+   const issuance=planFinancialNumbers({seriesId:options.seriesId,documentType:sale?'TICKET':'REFUND',global:true},series,
+    data.globalSequenceCounter.find(x=>x.id==='value'));
+   const next=issuance.result.seriesNumber!,global=issuance.counter,displayId=issuance.result.displayId!;
+   data.globalSequenceCounter=[global];Object.assign(series,issuance.series);
    requireFormat(!event.display_id||event.display_id===displayId,'POS_FORMAT_DISPLAY_ID_CONFLICT');
    requireFormat(!data.transactions.some(t=>t.id===event.transaction_id)&&!data.transactionHistory.some(t=>t.id===event.transaction_id),'POS_FORMAT_IDENTITY_CONFLICT');
    const multiplier=sale?1:-1;
    const statements:FormatStatement[]=[{statement:'INSERT INTO article_format_wire_write_scope VALUES(1)'},{statement:'INSERT INTO article_format_outbox(tenant_id,company_id,event_id,terminal_id,kind,content) VALUES(?,?,?,?,?,?)',
     values:[...this.scope(),event.event_id,this.context.scope.terminalId,sale?'SALE':isVoid?'VOID':'REFUND',content]}];
+   if(fiscalReceipt)statements.push(fiscalReceipt.statement);
    const items=[];
+   const financialMutations:DurableDocumentMutation[]=[];
+   const sourceExpected=original ? JSON.stringify(data.transactions.find(t=>t.id===original.transaction_id)) : undefined;
    for(const l of event.lines){
-    const product=data.products.find(p=>p.id===l.item_id),policy=policies[l.line_id];
+    const product=native&&original ? structuredClone(data.transactions.find(t=>t.id===original.transaction_id)?.items.find((p:any)=>p.cartId===l.source_line_id)) : data.products.find(p=>p.id===l.item_id),policy=policies[l.line_id];
     requireFormat(product && product.isInventoriable!==false&&product.operationalFlags?.trackInventory!==false
      &&!product.operationalFlags?.usesLots&&!product.operationalFlags?.usesSerial&&!product.operationalFlags?.usesSerialNumbers
      &&!product.recipeDetails?.length&&['PRODUCT','PRODUCTO_TERMINADO','',undefined].includes(product.type),'POS_FORMAT_ITEM_PROFILE_UNSUPPORTED');
@@ -205,25 +225,45 @@ export class ArticleFormatPosting {
     statements.push({statement:'INSERT INTO article_format_base_movements VALUES(?,?,?,?,?,?,?,?,?)',values:[...this.scope(),event.event_id,l.line_id,l.item_id,JSON.stringify(l.variant_id),this.context.scope.warehouseId,delta.mul(10000).toNumber(),l.base_unit_cost]});
     const ledgerId=l.line_id;
     requireFormat(!data.inventoryLedger.some(m=>m.id===ledgerId),'POS_FORMAT_IDENTITY_CONFLICT');
-    data.inventoryLedger.push({id:ledgerId,productId:l.item_id,warehouseId:this.context.scope.warehouseId,variantId:sku,erpVariantId:l.variant_id,
+    const ledger={id:ledgerId,productId:l.item_id,warehouseId:this.context.scope.warehouseId,variantId:sku,erpVariantId:l.variant_id,
      concept:sale?'SALE':isVoid?'VOID':'REFUND',documentRef:displayId,createdAt:event.occurred_at,qtyIn:delta.gt(0)?delta.toNumber():0,
      qtyOut:delta.lt(0)?delta.negated().toNumber():0,unitCost:Number(l.base_unit_cost),baseUnitCost:l.base_unit_cost,balanceQty:stock.quantity,
      balanceAvgCost:product.cost||0,cogsAmount:cogs.toFixed(2),reversedCOGS:sale?null:event.return_context?.return_policy==='RESTOCK'?cogs.toFixed(2):'0.00',terminalId:this.context.scope.terminalId,syncStatus:'PENDING',articleFormatEventId:event.event_id,articleFormatLineId:l.line_id,
-     articleFormatSnapshot:l.article_format,physicalReturn:sale?null:event.return_context!.return_policy});
+     articleFormatSnapshot:l.article_format,physicalReturn:sale?null:event.return_context!.return_policy,
+     ...(authority ? {v3InventoryBaseline:authority.baseline,v3Binding:authority.binding,v3WarehouseId:authority.warehouseId} : {})};
+    data.inventoryLedger.push(ledger);
+    if(authority) financialMutations.push({collectionName:'inventoryLedger',document:ledger,requireAbsent:true});
     items.push({...product,cartId:l.line_id,quantity:new Money(l.commercial_quantity).mul(multiplier).toNumber(),price:Number(l.commercial_unit_price),
-     variantSku:sku,articleFormat:l.article_format,baseQuantity:base.mul(multiplier).toNumber(),formatWireLine:l,formatPolicy:policy});
+     variantSku:sku,...(authority ? {v3SaleAuthority: original ? product.v3SaleAuthority : {
+      binding:authority.binding,syncId:authority.syncId,syncVersion:authority.syncVersion,inventorySyncId:authority.inventorySyncId,
+      inventorySyncVersion:authority.inventorySyncVersion,inventoryVersion:authority.inventoryVersion,inventoryCursor:authority.inventoryCursor,
+      warehouseId:authority.warehouseId,tariffId:l.tariff_id,taxIncluded:policy.base_prices.find(p=>p.tariff_id===l.tariff_id&&p.variant_id===l.variant_id)?.tax_included===true}} : {}),articleFormat:l.article_format,baseQuantity:base.mul(multiplier).toNumber(),formatWireLine:l,formatPolicy:policy});
    }
    const payments=event.payments.map(p=>({id:p.payment_id,transactionId:event.transaction_id,amount:new Money(p.amount).mul(multiplier).toNumber(),method:p.method,
-    articleFormatEventId:event.event_id,wirePayment:p}));
+    articleFormatEventId:event.event_id,wirePayment:p,...(authority ? {v3InventoryBaseline:authority.baseline,v3Binding:authority.binding,v3WarehouseId:authority.warehouseId} : {})}));
    for(const p of payments)requireFormat(!data.payments.some(old=>old.id===p.id),'POS_FORMAT_IDENTITY_CONFLICT');
    data.payments.push(...payments);
    const transaction={id:event.transaction_id,date:event.occurred_at,displayId,globalSequence:global.count,seriesNumber:next,seriesId:options.seriesId,
-    documentType:sale?'TICKET':'REFUND',items,payments,total:new Money(event.totals.total_amount).mul(multiplier).toNumber(),
+    documentType:sale?'TICKET':'REFUND',type:sale?'SALE':'REFUND',items,payments,total:new Money(event.totals.total_amount).mul(multiplier).toNumber(),
     netAmount:new Money(event.totals.net_amount).mul(multiplier).toNumber(),taxAmount:new Money(event.totals.tax_amount).mul(multiplier).toNumber(),
     discountAmount:new Money(event.totals.discount_amount).mul(multiplier).toNumber(),status:'COMPLETED',terminalId:this.context.scope.terminalId,
     userId:options.userId,userName:options.userName,customerId:event.customer_id,originalTransactionId:original?.transaction_id,
-    ...(event.fiscal.mode==='LEGACY_B'?{ncf:event.fiscal.ncf,ncfType:event.fiscal.ncf_type}:{}),
-    cloudSyncStatus:'PENDING',articleFormatEventId:event.event_id,articleFormatWire:event};
+    ...(event.fiscal.mode==='LEGACY_B'?{ncf:event.fiscal.ncf,ncfType:event.fiscal.ncf_type,...(fiscalReceipt?{fiscalIssuerRnc:fiscalReceipt.issuerRnc}:{} )}:{}),
+    cloudSyncStatus:'PENDING',articleFormatEventId:event.event_id,articleFormatWire:event,
+    ...(authority ? {v3Binding:authority.binding,v3WarehouseId:authority.warehouseId,v3InventoryBaseline:authority.baseline,
+     v3CommitFingerprint:hash,articleFormatMasterRevision:original ? undefined : event.master} : {})};
+   if(authority){
+    const current={binding:authority.binding,syncId:authority.syncId,syncVersion:authority.syncVersion};
+    financialMutations.push({collectionName:'transactions',document:transaction,requireAbsent:true,v3CurrentCatalog:current,
+     ...(original ? {v3ExpectedRetainedDocument:{collection:'transactions',id:original.transaction_id,expected:sourceExpected!}} : {}),
+     v3StockRequirements:sale ? event.lines.filter(l=>data.products.find(p=>p.id===l.item_id)?.operationalFlags?.allowNegativeStock!==true)
+      .map(l=>({baseline:authority.baseline,productId:l.item_id,warehouseId:authority.warehouseId,quantity:Number(l.base_quantity),quantityScale:4 as const})) : []},
+     {collectionName:'transactionHistory',document:transaction,requireAbsent:true,v3CurrentCatalog:current,
+      ...(original ? {v3ExpectedRetainedDocument:{collection:'transactions',id:original.transaction_id,expected:sourceExpected!}} : {})},
+     ...payments.map(document=>({collectionName:'payments',document,requireAbsent:true})));
+    requireFormat(sql.assertFinancialDocuments,'POS_FORMAT_ATOMIC_STORAGE_REQUIRED');
+    await sql.assertFinancialDocuments(financialMutations);
+   }
    if(original){
     const allReturns=[...returns,event].flatMap(r=>r.lines);
     const complete=original.lines.every(l=>allReturns.filter(r=>r.source_line_id===l.line_id)
@@ -234,14 +274,14 @@ export class ArticleFormatPosting {
     }
    }
    data.transactions.push(transaction);data.transactionHistory.push(transaction);
-   for(const name of names)statements.push(...local.writes(name,data[name],event.occurred_at));
+   for(const name of names.filter(n=>!native || !['productStocks','products'].includes(n)))statements.push(...local.writes(name,data[name],event.occurred_at));
    statements.push({statement:'INSERT INTO article_format_wire_events(tenant_id,company_id,event_id,transaction_id,content_hash,context,policies) VALUES(?,?,?,?,?,?,?)',
     values:[...this.scope(),event.event_id,event.transaction_id,hash,canonicalContent(this.context),canonicalContent(policies)]});
    statements.push({statement:'DELETE FROM article_format_wire_write_scope WHERE id=1'});
    await sql.executeAtomic(statements);return transaction;
   });
  }
- private async document(sql:FormatSQL,id:string){return (await new FormatLocalDocuments(sql).read('transactionHistory')).find(t=>t.id===id);}
+ private async document(sql:FormatSQL,id:string){return (await new FormatLocalDocuments(sql).read('transactionHistory',[id])).find(t=>t.id===id);}
  async pending(now=Number.MAX_SAFE_INTEGER):Promise<{event:WireEvent;hash:string;context:NetworkContext;attempts:number}[]>{
   const rows=await this.sql.query<SavedWire>(`SELECT o.content,w.content_hash,w.context,w.attempts FROM article_format_wire_events w
    JOIN article_format_outbox o USING(tenant_id,company_id,event_id) WHERE w.tenant_id=? AND w.company_id=? AND o.state='PENDING' AND w.next_attempt<=? ORDER BY w.rowid`,[...this.scope(),now]);
@@ -250,7 +290,7 @@ export class ArticleFormatPosting {
  async acknowledge(event:WireEvent,ack:unknown){
   event=validateWireEvent(event);const candidateACK=structuredClone(ack);
   const hash=await wireHash(event);
-  return this.sql.runExclusive!(async sql=>{
+  return (this.sql.runFinancial || this.sql.runExclusive)!(async sql=>{
    const row=await this.saved(sql,event.event_id);requireFormat(row&&row.content===canonicalContent(event)&&row.content_hash===hash,'POS_FORMAT_ACK_CONFLICT');
    const savedContext:NetworkContext=JSON.parse(row.context);
    const validated=validateACK(candidateACK,event,hash,savedContext.return_policy||undefined);
@@ -258,7 +298,7 @@ export class ArticleFormatPosting {
    const statements:FormatStatement[]=[{statement:'INSERT INTO article_format_wire_write_scope VALUES(1)'},{statement:'UPDATE article_format_wire_events SET ack=?,last_error=NULL WHERE tenant_id=? AND company_id=? AND event_id=?',values:[canonicalContent(validated),...this.scope(),event.event_id]},
     {statement:"UPDATE article_format_outbox SET state='ACKED' WHERE tenant_id=? AND company_id=? AND event_id=?",values:[...this.scope(),event.event_id]}];
    for(const name of ['transactions','transactionHistory']){
-    const local = new FormatLocalDocuments(sql), docs = await local.read(name);
+    const local = new FormatLocalDocuments(sql), docs = await local.read(name,[event.transaction_id]);
     const doc=docs.find(t=>t.id===event.transaction_id);
     requireFormat(doc?.articleFormatEventId===event.event_id,'POS_FORMAT_LOCAL_DOCUMENT_MISSING');
     doc.cloudSyncStatus='SYNCED';doc.cloudSyncedAt=validated.committed_at;doc.articleFormatACK=validated;

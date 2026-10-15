@@ -329,7 +329,12 @@ class TransactionService {
         displayId: string;
         seriesNumber: number;
     }> {
-        // Get the series configuration
+        const reserved = await db.reserveTransactionNumbers(seriesId, documentType);
+        if (reserved) {
+            enqueueSequenceBroadcast(seriesId, reserved.series);
+            return {globalSequence:reserved.globalSequence!,displayId:reserved.displayId!,seriesNumber:reserved.seriesNumber!};
+        }
+        // Web adapters retain their established behavior.
         const series = await db.get('internalSequences') as any[] || [];
         const seriesConfig = (series || []).find(s => s.id === seriesId);
 

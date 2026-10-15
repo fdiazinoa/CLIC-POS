@@ -6,7 +6,7 @@ export class FormatLocalDocuments {
  private readonly originals = new Map<string, Map<string, string>>();
  private readonly ids = new WeakMap<object, string>();
  constructor(private readonly sql: FormatSQL) {}
- async read(name: string): Promise<any[]> {
+ async read(name: string, ids?: string[]): Promise<any[]> {
   if (this.sql.storageLayout !== 'DOCUMENTS') {
    const rows = await this.sql.query<{value: string}>('SELECT value FROM collections WHERE key=?', [name]);
    const docs = rows[0] ? JSON.parse(rows[0].value) : [];
@@ -14,7 +14,7 @@ export class FormatLocalDocuments {
    return docs;
   }
   const rows = await this.sql.query<{doc_id: string; data: string}>(
-   'SELECT doc_id,data FROM documents WHERE collection_name=? ORDER BY sort_order,doc_id', [name]);
+   `SELECT doc_id,data FROM documents WHERE collection_name=? ${ids ? `AND doc_id IN (${ids.map(()=>'?').join(',') || 'NULL'})` : ''} ORDER BY sort_order,doc_id`, [name,...(ids || [])]);
   const originals = new Map<string, string>();
   this.originals.set(name, originals);
   return rows.map(row => {

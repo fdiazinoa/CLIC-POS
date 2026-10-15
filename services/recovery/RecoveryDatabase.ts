@@ -133,6 +133,16 @@ export function recoveryDatabase(
   };
   const proxy = new Proxy(base, {
     get(target, key) {
+      if (key === "articleFormatFinancialSQL" && typeof (target as any)[key] === "function") {
+        return () => {
+          if (enabled()) throw new Error("RECOVERY_FORMAT_FINANCIAL_CAPTURE_NOT_READY");
+          return (target as any)[key]();
+        };
+      }
+      if (key === "reserveFinancialNumbers" && target.reserveFinancialNumbers) {
+        return (input: import('../db/DatabaseAdapter').FinancialNumberReservation) =>
+          exclusive(() => target.reserveFinancialNumbers!(input));
+      }
       if (
         key === "saveDocument" ||
         key === "bulkUpsert" ||
