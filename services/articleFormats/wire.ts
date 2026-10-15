@@ -4,11 +4,19 @@ import type { ArticleFormatSnapshot } from './contract';
 
 export const FORMAT_EVENT_TYPES = ['ARTICLE_FORMAT_SALE_V1','ARTICLE_FORMAT_RETURN_V1','ARTICLE_FORMAT_VOID_V1'] as const;
 export type PhysicalReturn = 'RESTOCK'|'DAMAGED'|'NO_RETURN';
+/** Server-issued authorization. Never compute its fingerprint or replace it on retry. */
+export interface ReturnContext {
+  schema_version:1;id:string;grant_revision:number;fingerprint:string;return_policy:PhysicalReturn;
+}
+export interface ReturnAuthorization extends ReturnContext {
+  admission_grant_revision:number;admission_fingerprint:string;recovery_id:string|null;
+}
 export interface NetworkContext {
   contract: 'ARTICLE_FORMATS'; schema_version: 1; ingress_version: 1; master_contract_version: 3;
   profile: 'DOP_SETTLED_REALTIME_V1'; variant_identity: 'ERP_ID'; grant_revision: number;
   scope: {tenantId:string;companyId:string;storeId:string;terminalId:string;warehouseId:string};
-  tariff_ids: string[]; return_policy: PhysicalReturn; event_types: typeof FORMAT_EVENT_TYPES[number][];
+  tariff_ids: string[]; return_policy: PhysicalReturn|null;
+  return_context_contract_version?:1;return_context_required?:true;return_context_supported?:boolean;return_context?:ReturnContext|null; event_types: typeof FORMAT_EVENT_TYPES[number][];
   events_url: string; master_sessions_url: string;
 }
 export interface FormatTransport { request(path:string, body?:unknown):Promise<any> }
@@ -20,14 +28,14 @@ export interface WireLine extends WireAmounts {
 }
 export interface WireEvent {
   schema_version:1;event_id:string;transaction_id:string;event_type:typeof FORMAT_EVENT_TYPES[number];occurred_at:string;
-  master?:{sync_id:string;revision:number};source_event_id?:string;customer_id?:string;display_id?:string;
+  master?:{sync_id:string;revision:number};source_event_id?:string;return_context?:ReturnContext;customer_id?:string;display_id?:string;
   fiscal:{mode:'NONE'}|{mode:'LEGACY_B';ncf_type:string;ncf:string};lines:WireLine[];
   payments:{payment_id:string;method:'cash'|'card'|'transfer';amount:string}[];totals:WireAmounts;
 }
 export interface FormatACK {
   schema_version:1;eventId:string;applied:true;disposition:'APPLIED';inbox_id:string;document_id:string;document_code:string;
   inventory_movement_ids:string[];accounting_entry_ids:string[];payment_entry_id:string|null;
-  inventory_quantity_unit:'BASE';content_hash:string;committed_at:string;
+  inventory_quantity_unit:'BASE';content_hash:string;committed_at:string;return_authorization?:ReturnAuthorization;
 }
 export const Money = Decimal.clone({precision:50,rounding:Decimal.ROUND_HALF_UP});
 export function requireFormat(condition:unknown, code='POS_FORMAT_EVENT_INVALID'):asserts condition {
@@ -42,32 +50,57 @@ export function decimal(value:unknown,scale:number,positive=false):Decimal {
   requireFormat(n.dp()<=scale && n.lte('99999999999.9999') && (positive?n.gt(0):n.gte(0)),'POS_FORMAT_PRECISION_INVALID');
   return n;
 }
-function fields(value:any, names:string[]) {
-  requireFormat(value && typeof value==='object' && !Array.isArray(value) && Object.keys(value).every(k=>names.includes(k)),'POS_FORMAT_FIELD_UNSUPPORTED');
+function fields(value:any, names:string[], code='POS_FORMAT_FIELD_UNSUPPORTED') {
+  requireFormat(value && typeof value==='object' && !Array.isArray(value) && Object.keys(value).every(k=>names.includes(k)),code);
 }
+export function validateReturnContext(value:any):ReturnContext {
+  fields(value,['schema_version','id','grant_revision','fingerprint','return_policy']);
+  requireFormat(value.schema_version===1 && Number.isSafeInteger(value.grant_revision)&&value.grant_revision>0
+    &&typeof value.fingerprint==='string'&&/^[a-f0-9]{64}$/.test(value.fingerprint)
+    &&['RESTOCK','DAMAGED','NO_RETURN'].includes(value.return_policy),'POS_FORMAT_RETURN_CONTEXT_INVALID');
+  uuid(value.id);return structuredClone(value);
+}
+/** Legacy negotiation remains usable for sales/history, never authorizes a new RETURN/VOID. */
 export function validateContext(ctx:any):NetworkContext {
   requireFormat(ctx?.contract==='ARTICLE_FORMATS' && ctx.schema_version===1 && ctx.ingress_version===1 && ctx.master_contract_version===3
     && ctx.profile==='DOP_SETTLED_REALTIME_V1' && ctx.variant_identity==='ERP_ID' && Number.isSafeInteger(ctx.grant_revision) && ctx.grant_revision>0,'POS_FORMAT_NEGOTIATION_INVALID');
   for(const key of ['tenantId','companyId','storeId','terminalId','warehouseId']) uuid(ctx.scope?.[key]);
   requireFormat(Array.isArray(ctx.tariff_ids) && ctx.tariff_ids.length>0 && new Set(ctx.tariff_ids).size===ctx.tariff_ids.length);
   ctx.tariff_ids.forEach(uuid);
-  requireFormat(['RESTOCK','DAMAGED','NO_RETURN'].includes(ctx.return_policy) && Array.isArray(ctx.event_types)
-    && FORMAT_EVENT_TYPES.every(t=>ctx.event_types.includes(t)) && ctx.events_url==='/api/sync/article-formats/v1/events'
-    && ctx.master_sessions_url==='/api/sync/v3/master-syncs','POS_FORMAT_NEGOTIATION_INVALID');
+  requireFormat(Array.isArray(ctx.event_types)&&new Set(ctx.event_types).size===ctx.event_types.length
+    &&ctx.event_types.includes(FORMAT_EVENT_TYPES[0])&&ctx.event_types.every(t=>FORMAT_EVENT_TYPES.includes(t))
+    &&ctx.events_url==='/api/sync/article-formats/v1/events'&&ctx.master_sessions_url==='/api/sync/v3/master-syncs','POS_FORMAT_NEGOTIATION_INVALID');
+  const extension=['return_context_contract_version','return_context_required','return_context_supported','return_context'].some(k=>k in ctx);
+  if(extension){
+    requireFormat(ctx.return_context_contract_version===1&&ctx.return_context_required===true
+      &&typeof ctx.return_context_supported==='boolean','POS_FORMAT_RETURN_CONTEXT_VERSION_UNSUPPORTED');
+    if(ctx.return_context_supported){
+      const rc=validateReturnContext(ctx.return_context);
+      requireFormat(rc.grant_revision===ctx.grant_revision&&rc.return_policy===ctx.return_policy
+        &&FORMAT_EVENT_TYPES.every(t=>ctx.event_types.includes(t)),'POS_FORMAT_RETURN_CONTEXT_INVALID');
+    }else requireFormat(ctx.return_context===null&&ctx.return_policy===null&&ctx.event_types.length===1,'POS_FORMAT_NEGOTIATION_INVALID');
+  }else requireFormat(['RESTOCK','DAMAGED','NO_RETURN'].includes(ctx.return_policy),'POS_FORMAT_NEGOTIATION_INVALID');
   return structuredClone(ctx);
+}
+/** Checks before any new local posting. Historical Outbox replay does not call this. */
+export function authorizedReturnContext(ctx:NetworkContext):ReturnContext {
+  requireFormat(ctx.return_context_contract_version===1&&ctx.return_context_required===true
+    &&ctx.return_context_supported===true&&FORMAT_EVENT_TYPES.every(t=>ctx.event_types.includes(t)),
+    'POS_FORMAT_RETURN_CONTEXT_REQUIRED');
+  return validateReturnContext(ctx.return_context);
 }
 /** Exact ERP wire schema; the internal FormatLocalEvent is deliberately not accepted. */
 export function validateWireEvent(input:unknown):WireEvent {
   const e=input as WireEvent;
   requireFormat(new TextEncoder().encode(JSON.stringify(e)).length<=2097152,'POS_FORMAT_EVENT_TOO_LARGE');
-  fields(e,['schema_version','event_id','event_type','transaction_id','occurred_at','master','source_event_id','customer_id','display_id','fiscal','lines','payments','totals']);
+  fields(e,['schema_version','event_id','event_type','transaction_id','occurred_at','master','source_event_id','return_context','customer_id','display_id','fiscal','lines','payments','totals']);
   requireFormat(e.schema_version===1 && FORMAT_EVENT_TYPES.includes(e.event_type));uuid(e.event_id);uuid(e.transaction_id);
   requireFormat(typeof e.occurred_at==='string' && /^\d{4}-\d\d-\d\dT.*(?:Z|[+-]\d\d:\d\d)$/.test(e.occurred_at) && Number.isFinite(Date.parse(e.occurred_at)));
   if(e.customer_id!==undefined)uuid(e.customer_id);
   if(e.display_id!==undefined)requireFormat(typeof e.display_id==='string' && e.display_id.length<=100);
   const sale=e.event_type===FORMAT_EVENT_TYPES[0];
-  if(sale){fields(e.master,['sync_id','revision']);uuid(e.master.sync_id);requireFormat(Number.isSafeInteger(e.master.revision)&&e.master.revision>0 && e.source_event_id===undefined);}
-  else {uuid(e.source_event_id);requireFormat(e.master===undefined);}
+  if(sale){fields(e.master,['sync_id','revision']);uuid(e.master.sync_id);requireFormat(Number.isSafeInteger(e.master.revision)&&e.master.revision>0 && e.source_event_id===undefined && e.return_context===undefined);}
+  else {uuid(e.source_event_id);requireFormat(e.master===undefined);if(e.return_context!==undefined)validateReturnContext(e.return_context);}
   fields(e.fiscal,['mode','ncf_type','ncf']);
   requireFormat(e.fiscal.mode==='NONE'||e.fiscal.mode==='LEGACY_B','POS_FORMAT_FISCAL_UNSUPPORTED');
   if(e.fiscal.mode==='NONE')requireFormat(!('ncf' in e.fiscal)&&!('ncf_type' in e.fiscal));
@@ -128,11 +161,25 @@ export function validateACK(value:any,event:WireEvent,hash:string,physicalPolicy
   uuid(value.inbox_id);uuid(value.document_id);
   for(const key of ['inventory_movement_ids','accounting_entry_ids']){requireFormat(Array.isArray(value[key]));value[key].forEach(uuid);requireFormat(new Set(value[key]).size===value[key].length);}
   const expectedMovements=event.event_type==='ARTICLE_FORMAT_SALE_V1'?event.lines.length
+    :event.return_context?event.return_context.return_policy==='RESTOCK'?event.lines.length:0
     :physicalPolicy===undefined?undefined:physicalPolicy==='RESTOCK'?event.lines.length:0;
   requireFormat(expectedMovements===undefined||value.inventory_movement_ids.length===expectedMovements,'POS_FORMAT_ACK_PHYSICAL_EFFECT_MISMATCH');
   requireFormat(value.accounting_entry_ids.length>0,'POS_FORMAT_ACK_INVALID');
   if(value.payment_entry_id!==null)uuid(value.payment_entry_id);
   requireFormat(event.payments.length===0?value.payment_entry_id===null:value.payment_entry_id!==null,'POS_FORMAT_ACK_INVALID');
+  if(event.return_context){
+    const original=validateReturnContext(event.return_context),auth=value.return_authorization;
+    requireFormat(auth&&typeof auth==='object'&&!Array.isArray(auth),'POS_FORMAT_ACK_RETURN_AUTHORIZATION_INVALID');
+    fields(auth,['schema_version','id','grant_revision','fingerprint','return_policy','admission_grant_revision','admission_fingerprint','recovery_id'],'POS_FORMAT_ACK_RETURN_AUTHORIZATION_INVALID');
+    requireFormat(Object.entries(original).every(([k,v])=>auth[k]===v),'POS_FORMAT_ACK_RETURN_AUTHORIZATION_INVALID');
+    requireFormat(Number.isSafeInteger(auth.admission_grant_revision)&&auth.admission_grant_revision>0
+      &&typeof auth.admission_fingerprint==='string'&&/^[a-f0-9]{64}$/.test(auth.admission_fingerprint),
+      'POS_FORMAT_ACK_RETURN_AUTHORIZATION_INVALID');
+    if(auth.recovery_id!==null){try{uuid(auth.recovery_id);}catch{requireFormat(false,'POS_FORMAT_ACK_RETURN_AUTHORIZATION_INVALID');}}
+    else requireFormat(auth.admission_grant_revision===original.grant_revision&&auth.admission_fingerprint===original.fingerprint,
+      'POS_FORMAT_ACK_RETURN_AUTHORIZATION_INVALID');
+  }
+  // An old APPLIED event without context keeps its historical ACK, without fabricated authorization.
   return structuredClone(value);
 }
 export class FormatHTTPError extends Error {
@@ -140,7 +187,7 @@ export class FormatHTTPError extends Error {
 }
 /** Only explicitly supplied ERP credentials; never derives scope from request bodies. */
 export function createFormatTransport(baseURL:string,credentials:{syncToken:string;terminalId:string;tenantId:string;deviceToken:string;deviceId:string},
-  fetcher:typeof fetch=fetch,timeoutMs=15000):FormatTransport {
+  fetcher:typeof fetch=fetch,timeoutMs=15000,options:{negotiateReturnContextV1?:boolean}={}):FormatTransport {
   const origin=new URL(baseURL);
   requireFormat(origin.protocol==='https:' || origin.protocol==='http:'&&['localhost','127.0.0.1','[::1]'].includes(origin.hostname),'POS_FORMAT_TRANSPORT_INSECURE');
   return {async request(path,body){
@@ -150,7 +197,7 @@ export function createFormatTransport(baseURL:string,credentials:{syncToken:stri
       const response=await fetcher(new URL(path,origin),{method:body===undefined?'GET':'POST',signal:controller.signal,redirect:'error',headers:{
         'Authorization':`Bearer ${credentials.syncToken}`,'x-sync-token':credentials.syncToken,'x-terminal-id':credentials.terminalId,
         'x-tenant-id':credentials.tenantId,'x-device-token':credentials.deviceToken,'x-device-id':credentials.deviceId,
-        'x-article-formats-contract':'1','x-pos-capabilities':'largeMasterSyncV3','Content-Type':'application/json'
+        'x-article-formats-contract':'1',...(options.negotiateReturnContextV1&&path==='/api/sync/article-formats/v1/negotiate'?{'x-article-formats-return-context':'1'}:{}),'x-pos-capabilities':'largeMasterSyncV3','Content-Type':'application/json'
       },...(body===undefined?{}:{body:JSON.stringify(body)})});
       const text=await response.text();let result:any;try{result=JSON.parse(text);}catch{throw new FormatHTTPError(response.status,'POS_FORMAT_RESPONSE_INVALID',true);}
       if(response.status===202)throw new FormatHTTPError(202,'POS_FORMAT_SESSION_NOT_READY',true);

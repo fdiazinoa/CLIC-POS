@@ -3,7 +3,7 @@ import { ARTICLE_FORMATS_SCHEMA } from './schema';
 import { canonicalContent, type FormatSQL, type FormatStatement } from './store';
 import type { ArticleFormatsDTO } from './contract';
 import type { NetworkLinePolicy, NetworkMasterRevision } from './networkMaster';
-import { AMOUNTS, Money, decimal, requireFormat, validateContext, validateWireEvent, wireHash, validateACK,
+import { AMOUNTS, Money, authorizedReturnContext, decimal, requireFormat, validateContext, validateWireEvent, wireHash, validateACK,
   type NetworkContext, type WireLine, type WireEvent, type FormatACK, type FormatTransport, FormatHTTPError } from './wire';
 
 import { ARTICLE_FORMAT_WIRE_SCHEMA } from './schema';
@@ -108,6 +108,9 @@ export class ArticleFormatPosting {
       quantity:l.commercial_quantity,discountRate:l.discount_rate,promotionId:l.promotion_id,occurredAt:event.occurred_at,terminalId:this.context.scope.terminalId}),'POS_FORMAT_PRICE_OR_HISTORY_MISMATCH');
     }
    }else{
+    const authorization=authorizedReturnContext(this.context);
+    requireFormat(event.return_context,'POS_FORMAT_RETURN_CONTEXT_REQUIRED');
+    assertSame(event.return_context,authorization,'POS_FORMAT_RETURN_CONTEXT_CONFLICT');
     const source=await this.saved(sql,event.source_event_id!);requireFormat(source?.ack,'POS_FORMAT_SOURCE_NOT_CONFIRMED');
     original=validateWireEvent(JSON.parse(source.content));requireFormat(original.event_type==='ARTICLE_FORMAT_SALE_V1');
     const sourceCtx:NetworkContext=JSON.parse(source.context);requireFormat(sourceCtx.scope.warehouseId===this.context.scope.warehouseId && sourceCtx.scope.terminalId===this.context.scope.terminalId && sourceCtx.scope.storeId===this.context.scope.storeId,'POS_FORMAT_SOURCE_FORBIDDEN');
@@ -166,7 +169,7 @@ export class ArticleFormatPosting {
     requireFormat(l.variant_id===null||typeof sku==='string'&&product.variants?.filter(v=>v.sku===sku).length===1,'POS_FORMAT_VARIANT_MAPPING_MISSING');
     const stock=data.productStocks.find(s=>s.productId===l.item_id&&s.warehouseId===this.context.scope.warehouseId);
     requireFormat(stock,'POS_FORMAT_STOCK_BASELINE_MISSING');
-    const base=decimal(l.base_quantity,4,true),delta=sale?base.negated():this.context.return_policy==='RESTOCK'?base:new Money(0);
+    const base=decimal(l.base_quantity,4,true),delta=sale?base.negated():event.return_context?.return_policy==='RESTOCK'?base:new Money(0);
     const balance=new Money(String(stock.quantity)).plus(delta);
     requireFormat(balance.dp()<=4&&balance.abs().lte('99999999999.9999'),'POS_FORMAT_PRECISION_INVALID');
     requireFormat(!sale||product.operationalFlags?.allowNegativeStock===true||balance.gte(stock.qtyCommitted||0),'POS_FORMAT_INSUFFICIENT_STOCK');
@@ -187,15 +190,15 @@ export class ArticleFormatPosting {
     policies[l.line_id]={...policy,cogs_amount:cogs.toFixed(2)};
     const frozen=canonicalContent(l.article_format),scaled=base.mul(10000).toNumber();requireFormat(Number.isSafeInteger(scaled),'POS_FORMAT_PRECISION_INVALID');
     if(sale)statements.push({statement:'INSERT INTO article_format_sale_lines VALUES(?,?,?,?,?,?,?,?)',values:[...this.scope(),event.event_id,l.line_id,l.item_id,frozen,scaled,canonicalContent(l)]});
-    else statements.push({statement:'INSERT INTO article_format_returns VALUES(?,?,?,?,?,?,?,?,?)',values:[...this.scope(),event.event_id,l.line_id,event.source_event_id!,l.source_line_id!,frozen,scaled,this.context.return_policy]});
+    else statements.push({statement:'INSERT INTO article_format_returns VALUES(?,?,?,?,?,?,?,?,?)',values:[...this.scope(),event.event_id,l.line_id,event.source_event_id!,l.source_line_id!,frozen,scaled,event.return_context!.return_policy]});
     statements.push({statement:'INSERT INTO article_format_base_movements VALUES(?,?,?,?,?,?,?,?,?)',values:[...this.scope(),event.event_id,l.line_id,l.item_id,JSON.stringify(l.variant_id),this.context.scope.warehouseId,delta.mul(10000).toNumber(),l.base_unit_cost]});
     const ledgerId=l.line_id;
     requireFormat(!data.inventoryLedger.some(m=>m.id===ledgerId),'POS_FORMAT_IDENTITY_CONFLICT');
     data.inventoryLedger.push({id:ledgerId,productId:l.item_id,warehouseId:this.context.scope.warehouseId,variantId:sku,erpVariantId:l.variant_id,
      concept:sale?'SALE':isVoid?'VOID':'REFUND',documentRef:displayId,createdAt:event.occurred_at,qtyIn:delta.gt(0)?delta.toNumber():0,
      qtyOut:delta.lt(0)?delta.negated().toNumber():0,unitCost:Number(l.base_unit_cost),baseUnitCost:l.base_unit_cost,balanceQty:stock.quantity,
-     balanceAvgCost:product.cost||0,cogsAmount:cogs.toFixed(2),reversedCOGS:sale?null:this.context.return_policy==='RESTOCK'?cogs.toFixed(2):'0.00',terminalId:this.context.scope.terminalId,syncStatus:'PENDING',articleFormatEventId:event.event_id,articleFormatLineId:l.line_id,
-     articleFormatSnapshot:l.article_format,physicalReturn:sale?null:this.context.return_policy});
+     balanceAvgCost:product.cost||0,cogsAmount:cogs.toFixed(2),reversedCOGS:sale?null:event.return_context?.return_policy==='RESTOCK'?cogs.toFixed(2):'0.00',terminalId:this.context.scope.terminalId,syncStatus:'PENDING',articleFormatEventId:event.event_id,articleFormatLineId:l.line_id,
+     articleFormatSnapshot:l.article_format,physicalReturn:sale?null:event.return_context!.return_policy});
     items.push({...product,cartId:l.line_id,quantity:new Money(l.commercial_quantity).mul(multiplier).toNumber(),price:Number(l.commercial_unit_price),
      variantSku:sku,articleFormat:l.article_format,baseQuantity:base.mul(multiplier).toNumber(),formatWireLine:l,formatPolicy:policy});
    }
@@ -239,7 +242,7 @@ export class ArticleFormatPosting {
   return this.sql.runExclusive!(async sql=>{
    const row=await this.saved(sql,event.event_id);requireFormat(row&&row.content===canonicalContent(event)&&row.content_hash===hash,'POS_FORMAT_ACK_CONFLICT');
    const savedContext:NetworkContext=JSON.parse(row.context);
-   const validated=validateACK(candidateACK,event,hash,savedContext.return_policy);
+   const validated=validateACK(candidateACK,event,hash,savedContext.return_policy||undefined);
    if(row.ack){assertSame(JSON.parse(row.ack),validated,'POS_FORMAT_ACK_CONFLICT');return;}
    const statements:FormatStatement[]=[{statement:'INSERT INTO article_format_wire_write_scope VALUES(1)'},{statement:'UPDATE article_format_wire_events SET ack=?,last_error=NULL WHERE tenant_id=? AND company_id=? AND event_id=?',values:[canonicalContent(validated),...this.scope(),event.event_id]},
     {statement:"UPDATE article_format_outbox SET state='ACKED' WHERE tenant_id=? AND company_id=? AND event_id=?",values:[...this.scope(),event.event_id]}];
@@ -269,12 +272,12 @@ export function drainFormatWireEvents(store:ArticleFormatPosting,transport:Forma
    try{
     // ERP admits durable receipt recovery even when new admission is closed.
     // Do not require re-negotiation here: it would strand already applied returns.
-    // Physical-policy binding remains an explicit readiness blocker for contract v1.
+    // RETURN/VOID carry their original server context; never negotiate or patch a retry.
     const ack=await transport.request(pending.context.events_url,pending.event);
     await store.acknowledge(pending.event,ack);
    }catch(error){
     await store.failed(pending.event.event_id,error instanceof Error?error.message:'POS_FORMAT_RETRY_LATER',
-     error instanceof FormatHTTPError?error.retryable:!(error instanceof ArticleFormatError&&error.code==='POS_FORMAT_ACK_PHYSICAL_EFFECT_MISMATCH'),pending.attempts);
+     error instanceof FormatHTTPError?error.retryable&&!['POS_FORMAT_RETURN_CONTEXT_CONFLICT','POS_FORMAT_RETURN_CONTEXT_REQUIRED','POS_FORMAT_RETURN_CONTEXT_INVALID','POS_FORMAT_RETURN_CONTEXT_FORBIDDEN'].includes(error.code):!(error instanceof ArticleFormatError&&['POS_FORMAT_ACK_PHYSICAL_EFFECT_MISMATCH','POS_FORMAT_ACK_RETURN_AUTHORIZATION_INVALID','POS_FORMAT_RETURN_CONTEXT_REQUIRED','POS_FORMAT_RETURN_CONTEXT_INVALID','POS_FORMAT_RETURN_CONTEXT_CONFLICT'].includes(error.code)),pending.attempts);
    }
   }
  })().finally(()=>drains.delete(store));drains.set(store,work);return work;

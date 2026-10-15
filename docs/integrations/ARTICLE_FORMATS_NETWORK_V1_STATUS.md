@@ -1,5 +1,7 @@
 # Formatos comerciales: contrato ERP v1, activación cerrada
 
+**Actualización RETURN/VOID:** la [extensión return_context v1](ARTICLE_FORMATS_RETURN_CONTEXT_V1.md) del ERP PR2251 sustituye el tratamiento de retornos de este documento. El bloqueo de política descrito abajo es histórico del contrato2250; no se presenta como un defecto vigente del contrato2251. La activación y validación operativa siguen cerradas.
+
 Fuente POS: origin/main 29bb3236 (incluye PR #890); rama feature/pos-article-formats-network-v1. Se conserva además el fix de devoluciones rápidas/grilla/variantes del PR #891, sin mezclar develop.
 
 Fuente ERP consultada, sin modificar su repositorio: [PR #2250](https://github.com/fdiazinoa/CLIC-ERP/pull/2250), commit `4c456440bd9b3b87455747dad254f1e3a51bd8d1`, `docs/ARTICLE_FORMATS_POS_NETWORK_V1.md`. Consultar código no demuestra SQL aplicado en Supabase ni endpoints desplegados. Las pruebas utilizan exclusivamente sus rutas/productor/RPC originales en un servidor HTTP loopback con PostgreSQL17 privado y fixtures sintéticos.

@@ -4,7 +4,7 @@ import SQLite from 'better-sqlite3';
 import {mkdtempSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import { context, id, seedCollections, sqlitePort } from './articleFormatsNetworkFixture';
+import { context, contextForPolicy, id, seedCollections, sqlitePort } from './articleFormatsNetworkFixture';
 import { ArticleFormatPosting, saleWireLine, returnWireLine, wireTotals, ARTICLE_FORMAT_WIRE_SCHEMA, drainFormatWireEvents } from '../services/articleFormats/posting';
 import { availability } from '../services/articleFormats/domain';
 import { wireHash, validateWireEvent, postgresJSON, validateACK, type WireEvent, type FormatACK, FormatHTTPError } from '../services/articleFormats/wire';
@@ -20,7 +20,7 @@ function sale():WireEvent{
  const l=saleWireLine(dto,policy,{lineId:id(14),formatId:'case',variantId:null,tariffId:id(6),quantity:'2',occurredAt:'2026-10-14T12:00:00-04:00',terminalId:id(4)});
  return {schema_version:1,event_id:id(12),transaction_id:id(13),event_type:'ARTICLE_FORMAT_SALE_V1',occurred_at:'2026-10-14T12:00:00-04:00',master:{sync_id:id(11),revision:1},fiscal:{mode:'NONE'},lines:[l],payments:[{payment_id:id(15),method:'cash',amount:'2160.00'}],totals:wireTotals([l])};
 }
-async function ack(e:WireEvent):Promise<FormatACK>{return {schema_version:1,eventId:e.event_id,applied:true,disposition:'APPLIED',inbox_id:id(20),document_id:id(21),document_code:'F-1',inventory_movement_ids:[id(22)],accounting_entry_ids:[id(23)],payment_entry_id:id(24),inventory_quantity_unit:'BASE',content_hash:await wireHash(e),committed_at:'2026-10-14T17:00:00Z'};}
+async function ack(e:WireEvent):Promise<FormatACK>{return {schema_version:1,eventId:e.event_id,applied:true,disposition:'APPLIED',inbox_id:id(20),document_id:id(21),document_code:'F-1',inventory_movement_ids:[id(22)],accounting_entry_ids:[id(23)],payment_entry_id:id(24),inventory_quantity_unit:'BASE',content_hash:await wireHash(e),committed_at:'2026-10-14T17:00:00Z',...(e.return_context?{return_authorization:{...e.return_context,admission_grant_revision:e.return_context.grant_revision,admission_fingerprint:e.return_context.fingerprint,recovery_id:null}}:{})};}
 const opts={seriesId:id(9),userId:id(25),userName:'Synthetic'};
 const collection=(db:SQLite.Database,name:string)=>JSON.parse((db.prepare('SELECT value FROM collections WHERE key=?').get(name) as {value:string}).value);
 test('real SQLite reconciles sale/payments/sequences/ledger/outbox once and snapshots survive 24→12',async t=>{
@@ -35,7 +35,7 @@ test('real SQLite reconciles sale/payments/sequences/ledger/outbox once and snap
  await assert.rejects(store.post({...e,occurred_at:'2026-10-14T13:00:00-04:00'},opts),/IDENTITY_CONFLICT/);
  await store.acknowledge(e,await ack(e));
  const l=returnWireLine(e.lines[0],[],'0.5',id(30));
- const r:WireEvent={...e,event_id:id(31),transaction_id:id(32),event_type:'ARTICLE_FORMAT_RETURN_V1',source_event_id:e.event_id,lines:[l],payments:[{payment_id:id(33),method:'cash',amount:'540.00'}],totals:wireTotals([l])};delete r.master;
+ const r:WireEvent={...e,event_id:id(31),transaction_id:id(32),event_type:'ARTICLE_FORMAT_RETURN_V1',return_context:structuredClone(context.return_context!),source_event_id:e.event_id,lines:[l],payments:[{payment_id:id(33),method:'cash',amount:'540.00'}],totals:wireTotals([l])};delete r.master;
  // The new master changes to 12, but returns consult the original durable source.
  const changed={...masters,getPolicy:async()=>({dto:{...dto,formats:dto.formats.map(f=>f.id==='case'?{...f,factor:12}:f)},policy})};
  const returnStore=new ArticleFormatPosting(sqlitePort(db),context,changed);
@@ -109,7 +109,7 @@ test('return faults between each write and commit roll back payments, source cap
  for(let boundary=0;boundary<=14;boundary++){
   const db=new SQLite(':memory:');db.pragma('foreign_keys=ON');seedCollections(db);const e=sale();
   const store=new ArticleFormatPosting(sqlitePort(db),context,masters);await store.post(e,opts);await store.acknowledge(e,await ack(e));
-  const l=returnWireLine(e.lines[0],[],'0.5',id(40));const r:WireEvent={...e,event_id:id(41),transaction_id:id(42),event_type:'ARTICLE_FORMAT_RETURN_V1',source_event_id:e.event_id,
+  const l=returnWireLine(e.lines[0],[],'0.5',id(40));const r:WireEvent={...e,event_id:id(41),transaction_id:id(42),event_type:'ARTICLE_FORMAT_RETURN_V1',return_context:structuredClone(context.return_context!),source_event_id:e.event_id,
    lines:[l],payments:[{payment_id:id(43),method:'cash',amount:'540.00'}],totals:wireTotals([l])};delete r.master;
   const before=JSON.stringify(db.prepare('SELECT * FROM collections ORDER BY key').all());
   await assert.rejects(new ArticleFormatPosting(sqlitePort(db,{before:boundary}),context,masters).post(r,{...opts,seriesId:id(10)}),/injected/);
@@ -127,9 +127,10 @@ test('physical DAMAGED and NO_RETURN from negotiated ERP context do not return s
  for(const return_policy of ['DAMAGED','NO_RETURN'] as const){
   const db=new SQLite(':memory:');db.pragma('foreign_keys=ON');seedCollections(db);const e=sale();
   const store=new ArticleFormatPosting(sqlitePort(db),context,masters);await store.post(e,opts);await store.acknowledge(e,await ack(e));
-  const l=returnWireLine(e.lines[0],[],'0.5',id(50)),r:WireEvent={...e,event_id:id(51),transaction_id:id(52),event_type:'ARTICLE_FORMAT_RETURN_V1',source_event_id:e.event_id,
+  const l=returnWireLine(e.lines[0],[],'0.5',id(50)),r:WireEvent={...e,event_id:id(51),transaction_id:id(52),event_type:'ARTICLE_FORMAT_RETURN_V1',return_context:structuredClone(context.return_context!),source_event_id:e.event_id,
    lines:[l],payments:[{payment_id:id(53),method:'cash',amount:'540.00'}],totals:wireTotals([l])};delete r.master;
-  await new ArticleFormatPosting(sqlitePort(db),{...context,return_policy},masters).post(r,{...opts,seriesId:id(10)});
+  r.return_context=contextForPolicy(return_policy).return_context!;
+  await new ArticleFormatPosting(sqlitePort(db),contextForPolicy(return_policy),masters).post(r,{...opts,seriesId:id(10)});
   assert.equal(collection(db,'productStocks')[0].quantity,89);assert.equal(collection(db,'inventoryLedger').at(-1).reversedCOGS,'0.00');db.close();
  }
 });
@@ -162,7 +163,7 @@ test('ACK with missing expected SALE/RESTOCK inventory effect remains pending',a
  const db=new SQLite(':memory:');t.after(()=>db.close());seedCollections(db);const e=sale(),store=new ArticleFormatPosting(sqlitePort(db),context,masters);
  await store.post(e,opts);await assert.rejects(store.acknowledge(e,{...await ack(e),inventory_movement_ids:[]}),/PHYSICAL_EFFECT_MISMATCH/);
  await store.acknowledge(e,await ack(e));const l=returnWireLine(e.lines[0],[],'0.5',id(60));
- const r:WireEvent={...e,event_id:id(61),transaction_id:id(62),event_type:'ARTICLE_FORMAT_RETURN_V1',source_event_id:e.event_id,lines:[l],payments:[{payment_id:id(63),method:'cash',amount:'540.00'}],totals:wireTotals([l])};delete r.master;
+ const r:WireEvent={...e,event_id:id(61),transaction_id:id(62),event_type:'ARTICLE_FORMAT_RETURN_V1',return_context:structuredClone(context.return_context!),source_event_id:e.event_id,lines:[l],payments:[{payment_id:id(63),method:'cash',amount:'540.00'}],totals:wireTotals([l])};delete r.master;
  await store.post(r,{...opts,seriesId:id(10)});
  await assert.rejects(store.acknowledge(r,{...await ack(r),inventory_movement_ids:[]}),/PHYSICAL_EFFECT_MISMATCH/);
  assert.equal((await store.pending())[0].event.event_id,r.event_id);
@@ -174,8 +175,9 @@ test('refund with no physical debit does not impose negative-stock sale permissi
  const stocks=collection(db,'productStocks');stocks[0].qtyCommitted=100;
  await port.executeAtomic([{statement:'INSERT INTO article_format_wire_write_scope VALUES(1)'},{statement:'UPDATE collections SET value=? WHERE key=?',values:[JSON.stringify(stocks),'productStocks']},{statement:'DELETE FROM article_format_wire_write_scope'}]);
  for(const [i,return_policy] of (['DAMAGED','NO_RETURN','RESTOCK'] as const).entries()){
-  const l=returnWireLine(e.lines[0],[],'0.1',id(70+i)),r:WireEvent={...e,event_id:id(80+i),transaction_id:id(90+i),event_type:'ARTICLE_FORMAT_RETURN_V1',source_event_id:e.event_id,lines:[l],payments:[{payment_id:id(100+i),method:'cash',amount:'108.00'}],totals:wireTotals([l])};delete r.master;
-  await new ArticleFormatPosting(port,{...context,return_policy},masters).post(r,{...opts,seriesId:id(10)});
+  const l=returnWireLine(e.lines[0],[],'0.1',id(70+i)),r:WireEvent={...e,event_id:id(80+i),transaction_id:id(90+i),event_type:'ARTICLE_FORMAT_RETURN_V1',return_context:structuredClone(context.return_context!),source_event_id:e.event_id,lines:[l],payments:[{payment_id:id(100+i),method:'cash',amount:'108.00'}],totals:wireTotals([l])};delete r.master;
+  r.return_context=contextForPolicy(return_policy).return_context!;
+  await new ArticleFormatPosting(port,contextForPolicy(return_policy),masters).post(r,{...opts,seriesId:id(10)});
  }
  assert.equal(collection(db,'productStocks')[0].quantity,91.4);
 });
@@ -185,4 +187,80 @@ test('tax policy preserves seven decimal places and inclusive promotion end time
  const promo={...policy,promotions:[{id:id(110),type:'DISCOUNT',is_active:true,terminal_ids:[id(4)],benefit_value:'10',schedule_end_time:'17:00:00'}]};
  assert.equal(saleWireLine(dto,promo,{...input,promotionId:id(110)}).discount_amount,'216.00');
  assert.throws(()=>saleWireLine(dto,promo,{...input,occurredAt:'2026-10-14T17:00:00.001-04:00',promotionId:id(110)}),/PROMOTION_FORBIDDEN/);
+});
+
+test('new RETURN/VOID need exact negotiated context; sale-only and old servers cannot authorize them',async t=>{
+ const {validateContext}=await import('../services/articleFormats/wire');
+ const old={...context};delete old.return_context;delete old.return_context_supported;delete old.return_context_required;delete old.return_context_contract_version;
+ const saleOnly={...context,return_policy:null,return_context:null,return_context_supported:false,event_types:['ARTICLE_FORMAT_SALE_V1' as const]};
+ assert.equal(validateContext(saleOnly).return_policy,null);
+ for(const ctx of [old,saleOnly,context]){
+  const db=new SQLite(':memory:');seedCollections(db);const store=new ArticleFormatPosting(sqlitePort(db),ctx,{...masters,getActiveRevision:async()=>({...revision,context:ctx})});
+  const e=sale();await store.post(e,opts);await store.acknowledge(e,await ack(e));
+  const l=returnWireLine(e.lines[0],[],'0.5',id(300));const r:WireEvent={...e,event_id:id(301),transaction_id:id(302),event_type:'ARTICLE_FORMAT_RETURN_V1',source_event_id:e.event_id,lines:[l],payments:[{payment_id:id(303),method:'cash',amount:'540.00'}],totals:wireTotals([l])};delete r.master;
+  await assert.rejects(store.post(r,{...opts,seriesId:id(10)}),/RETURN_CONTEXT_REQUIRED/);
+  r.return_context={...context.return_context!,id:id(304)};
+  await assert.rejects(store.post(r,{...opts,seriesId:id(10)}),/RETURN_CONTEXT_(REQUIRED|CONFLICT)/);
+  assert.equal(collection(db,'productStocks')[0].quantity,89);assert.equal(collection(db,'transactions').length,1);db.close();
+ }
+ const withContext={...sale(),return_context:context.return_context!};assert.throws(()=>validateWireEvent(withContext),/EVENT_INVALID/);
+});
+test('context is durable with stock and original Outbox across crash, reopen, conflict and explicit recovery',async t=>{
+ const folder=mkdtempSync(join(tmpdir(),'clic-return-context-'));t.after(()=>rmSync(folder,{recursive:true,force:true}));const path=join(folder,'pos.sqlite');
+ let db=new SQLite(path);seedCollections(db);let store=new ArticleFormatPosting(sqlitePort(db),context,masters);const e=sale();await store.post(e,opts);await store.acknowledge(e,await ack(e));
+ const l=returnWireLine(e.lines[0],[],'0.5',id(310)),r:WireEvent={...e,event_id:id(311),transaction_id:id(312),event_type:'ARTICLE_FORMAT_RETURN_V1',source_event_id:e.event_id,
+  return_context:structuredClone(context.return_context!),lines:[l],payments:[{payment_id:id(313),method:'cash',amount:'540.00'}],totals:wireTotals([l])};delete r.master;
+ await assert.rejects(new ArticleFormatPosting(sqlitePort(db,{afterCommit:true}),context,masters).post(r,{...opts,seriesId:id(10)}),/afterCommit/);
+ const stored=db.prepare('SELECT content FROM article_format_outbox WHERE event_id=?').get(r.event_id) as {content:string};
+ assert.deepEqual(JSON.parse(stored.content).return_context,context.return_context);assert.equal(collection(db,'productStocks')[0].quantity,101);
+ db.close();db=new SQLite(path);t.after(()=>db.close());
+ // Even a new negotiation with another policy never replaces the original pending envelope.
+ store=new ArticleFormatPosting(sqlitePort(db),contextForPolicy('DAMAGED'),masters);const requests:unknown[]=[];
+ const transport={request:async(path:string,body:unknown)=>{assert.equal(path,context.events_url);requests.push(structuredClone(body));throw new FormatHTTPError(409,'POS_FORMAT_RETURN_CONTEXT_CONFLICT',true);}};
+ await drainFormatWireEvents(store,transport);await drainFormatWireEvents(store,transport);
+ assert.equal(requests.length,1);assert.deepEqual(requests[0],r);assert.equal((await store.pending())[0].event.return_context!.return_policy,'RESTOCK');
+ assert.equal((db.prepare('SELECT content FROM article_format_outbox WHERE event_id=?').get(r.event_id) as {content:string}).content,stored.content);
+ assert.equal((db.prepare('SELECT ack FROM article_format_wire_events WHERE event_id=?').get(r.event_id) as {ack:null}).ack,null);
+ assert.equal(collection(db,'productStocks')[0].quantity,101);
+ const recovery=await ack(r);recovery.return_authorization={...r.return_context!,admission_grant_revision:3,admission_fingerprint:'b'.repeat(64),recovery_id:id(314)};
+ await store.retryHeld();await drainFormatWireEvents(store,{request:async(path,body)=>{assert.equal(path,context.events_url);assert.deepEqual(body,r);return recovery;}});
+ assert.equal((await store.pending()).length,0);assert.equal(collection(db,'productStocks')[0].quantity,101);
+});
+test('ACK must echo original authorization and explicit recovery, before persisting confirmation',async t=>{
+ const db=new SQLite(':memory:');t.after(()=>db.close());seedCollections(db);const store=new ArticleFormatPosting(sqlitePort(db),context,masters),e=sale();await store.post(e,opts);await store.acknowledge(e,await ack(e));
+ const l=returnWireLine(e.lines[0],[],'0.5',id(320)),r:WireEvent={...e,event_id:id(321),transaction_id:id(322),event_type:'ARTICLE_FORMAT_RETURN_V1',return_context:context.return_context!,source_event_id:e.event_id,
+  lines:[l],payments:[{payment_id:id(323),method:'cash',amount:'540.00'}],totals:wireTotals([l])};delete r.master;await store.post(r,{...opts,seriesId:id(10)});
+ const good=await ack(r),auth=good.return_authorization!;
+ const bads=[undefined,{...auth,id:id(324)},{...auth,grant_revision:2},{...auth,fingerprint:'c'.repeat(64)},{...auth,return_policy:'DAMAGED'},
+  {...auth,schema_version:2},{...auth,admission_grant_revision:3},{...auth,admission_fingerprint:'d'.repeat(64)},
+  {...auth,recovery_id:undefined},{...auth,recovery_id:'invalid'},{...auth,extra:'unsupported'}];
+ for(const bad of bads){
+  await assert.rejects(store.acknowledge(r,{...good,return_authorization:bad}),/ACK_RETURN_AUTHORIZATION_INVALID/);
+  assert.equal((db.prepare('SELECT state FROM article_format_outbox WHERE event_id=?').get(r.event_id) as {state:string}).state,'PENDING');
+ }
+ await store.acknowledge(r,good);assert.equal((await store.pending()).length,0);
+});
+test('old APPLIED return without context recovers historical ACK without adding a context or authorization',async t=>{
+ const db=new SQLite(':memory:');t.after(()=>db.close());seedCollections(db);const port=sqlitePort(db),store=new ArticleFormatPosting(port,context,masters),e=sale();await store.post(e,opts);await store.acknowledge(e,await ack(e));
+ const l=returnWireLine(e.lines[0],[],'0.5',id(330)),r:WireEvent={...e,event_id:id(331),transaction_id:id(332),event_type:'ARTICLE_FORMAT_RETURN_V1',return_context:context.return_context!,source_event_id:e.event_id,
+  lines:[l],payments:[{payment_id:id(333),method:'cash',amount:'540.00'}],totals:wireTotals([l])};delete r.master;await store.post(r,{...opts,seriesId:id(10)});
+ // Restore an unbound historic row as inherited data, not by the new posting path.
+ delete r.return_context;const {canonicalContent}=await import('../services/articleFormats/store');
+ await port.executeAtomic([{statement:'UPDATE article_format_outbox SET content=? WHERE event_id=?',values:[canonicalContent(r),r.event_id]},
+  {statement:'UPDATE article_format_wire_events SET content_hash=? WHERE event_id=?',values:[await wireHash(r),r.event_id]}]);
+ const oldACK=await ack(r);assert.equal(oldACK.return_authorization,undefined);
+ await drainFormatWireEvents(store,{request:async(path,body)=>{assert.equal(path,context.events_url);assert.deepEqual(body,r);return oldACK;}});
+ assert.equal((await store.pending()).length,0);
+ const row=db.prepare('SELECT content FROM article_format_outbox WHERE event_id=?').get(r.event_id) as {content:string};assert.equal(JSON.parse(row.content).return_context,undefined);
+ const saved=db.prepare('SELECT ack FROM article_format_wire_events WHERE event_id=?').get(r.event_id) as {ack:string};assert.equal(JSON.parse(saved.ack).return_authorization,undefined);
+});
+test('return-context opt-in header is sent only on negotiation and never in front of historical replay',async()=>{
+ const {createFormatTransport}=await import('../services/articleFormats/wire');const calls:{url:string;headers:Headers}[]=[];
+ const fetcher=(async(url:any,init:any)=>{calls.push({url:String(url),headers:new Headers(init.headers)});return new Response('{}',{status:200});}) as typeof fetch;
+ const credentials={syncToken:'synthetic-token',terminalId:id(4),tenantId:id(1),deviceToken:'synthetic-device',deviceId:'synthetic'};
+ const transport=createFormatTransport('http://127.0.0.1:12345',credentials,fetcher,1000,{negotiateReturnContextV1:true});
+ await transport.request('/api/sync/article-formats/v1/negotiate',{});await transport.request(context.events_url,sale());await transport.request(context.master_sessions_url,{});
+ assert.deepEqual(calls.map(c=>c.headers.get('x-article-formats-return-context')),['1',null,null]);
+ await createFormatTransport('http://127.0.0.1:12345',credentials,fetcher).request('/api/sync/article-formats/v1/negotiate',{});
+ assert.equal(calls.at(-1)!.headers.get('x-article-formats-return-context'),null);
 });

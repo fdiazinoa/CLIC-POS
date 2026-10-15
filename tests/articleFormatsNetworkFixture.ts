@@ -6,7 +6,11 @@ import type { NetworkContext } from '../services/articleFormats/wire';
 export const id=(n:number)=>`00000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
 export const context:NetworkContext={contract:'ARTICLE_FORMATS',schema_version:1,ingress_version:1,master_contract_version:3,profile:'DOP_SETTLED_REALTIME_V1',variant_identity:'ERP_ID',grant_revision:1,
  scope:{tenantId:id(1),companyId:id(2),storeId:id(3),terminalId:id(4),warehouseId:id(5)},tariff_ids:[id(6)],return_policy:'RESTOCK',
+ return_context_contract_version:1,return_context_required:true,return_context_supported:true,return_context:{schema_version:1,id:id(200),grant_revision:1,fingerprint:'a'.repeat(64),return_policy:'RESTOCK'},
  event_types:['ARTICLE_FORMAT_SALE_V1','ARTICLE_FORMAT_RETURN_V1','ARTICLE_FORMAT_VOID_V1'],events_url:'/api/sync/article-formats/v1/events',master_sessions_url:'/api/sync/v3/master-syncs'};
+export function contextForPolicy(return_policy: 'RESTOCK'|'DAMAGED'|'NO_RETURN'):NetworkContext {
+ return {...structuredClone(context),return_policy,return_context:{...context.return_context!,return_policy}};
+}
 export function sqlitePort(db:SQLite.Database,fault?:{before?:number;afterCommit?:boolean}):FormatSQL {
  let queue=Promise.resolve();
  const direct:FormatSQL={executeSchema:async sql=>{db.pragma('foreign_keys=ON');db.exec(sql);},query:async<T>(sql:string,values:(string|number|null)[])=>db.prepare(sql).all(...values) as T[],

@@ -10,8 +10,8 @@ export interface ArticleFormatReadiness {
 }
 
 // The network v1 adapters are implemented, but rollout and integral readiness remain closed.
-// ERP v1 cannot bind the physical return policy across local commit and first admission.
-// Change only after fixing that contract and independent ERP/SQLite/offline evidence.
+// Return-context v1 binds physical authorization; rollout still requires independent
+// integral ERP/SQLite/native/offline evidence. This task does not open readiness.
 export const ARTICLE_FORMATS_READINESS: Readonly<ArticleFormatReadiness> = Object.freeze({
   authenticatedScope: false, paginatedMasterTransport: false, versionedSaleEvent: false,
   versionedRefundEvent: false, atomicLocalPosting: false, negotiated: false

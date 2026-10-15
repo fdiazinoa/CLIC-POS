@@ -351,7 +351,7 @@ export interface NCFConfig {
 }
 
 export interface TerminalConfig {
-  capabilities?: { article_formats?: number };
+  capabilities?: { article_formats?: number; article_formats_return_context?: number };
   currentDeviceId?: string;
   lastPairingDate?: string;
   isBlocked?: boolean;
