@@ -48,9 +48,12 @@ test('actual native migration installs one durable planner-selected covering exp
   bridge.query=async(sql:string,params:any[])=>{if(sql.includes('SELECT CASE WHEN EXISTS('))recorded={sql,values:params};return query(sql,params);};
   assert.equal(await f.adapter.masterSyncV3Store.getLocalInventoryDelta(...values as [string,string,string]),100);assert.ok(recorded);
   const plan=f.db.prepare('EXPLAIN QUERY PLAN '+recorded.sql).all(...recorded.values) as {detail:string}[];
-  assert.ok(plan.some(p=>p.detail.includes(indexName)),'planner did not choose the proposed index');
+  assert.ok(plan.some(p=>p.detail.includes(indexName)),'ordered query did not use the covering expression index');
+  assert.ok(plan.some(p=>p.detail.includes('USE TEMP B-TREE FOR ORDER BY')),'matching operands were not ordered before aggregation');
   t.diagnostic(JSON.stringify({engine:f.db.prepare('SELECT sqlite_version() version').get(),indexSQL:index.sql,plan}));
-  const vm=f.db.prepare('EXPLAIN '+recorded.sql).all(...recorded.values) as {opcode:string;p4:string}[];
+  const vm=f.db.prepare('EXPLAIN '+recorded.sql).all(...recorded.values) as {addr:number;opcode:string;p4:string}[];
+  assert.ok(vm.some(op=>op.opcode==='IdxRowid'));assert.ok(vm.some(op=>op.opcode==='SorterSort'));
+  assert.ok(vm.find(op=>op.opcode==='AggStep'&&String(op.p4).includes('sum'))!.addr>vm.find(op=>op.opcode==='SorterSort')!.addr,'SUM must consume the ordered coroutine');
   assert.equal(vm.some(op=>op.opcode==='Function'&&String(op.p4).includes('json_extract')),false,'aggregate still decodes JSON operands rather than stored expression');
   await (f.adapter as any).initSchema();assert.deepEqual(f.db.prepare('SELECT * FROM documents ORDER BY collection_name,doc_id').all(),before);
   assert.equal((f.db.prepare("SELECT count(*) n FROM sqlite_master WHERE type='index' AND name=?").get(indexName) as any).n,1);

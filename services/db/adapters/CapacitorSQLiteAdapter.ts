@@ -1,3 +1,4 @@
+import {orderedInventoryDeltaInput,isMissingInventoryCoverIndex} from '../OrderedInventoryDelta';
 import {assertNoReconciledOrdinaryWriter} from '../../articleFormats/inventoryJournal';
 import {readV3Base4Stock,base4} from '../V3Base4Stock';
 import {Money} from '../../articleFormats/wire';
@@ -1186,14 +1187,14 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             if(new Money(demand.exactQuantity!).gt(stock.available))throw new Error('SYNC_V3_STOCK_INSUFFICIENT');
             continue;
           }
-          const result = await read(`SELECT
+          const statement=(cover:boolean)=>`SELECT
             COALESCE((SELECT qty_on_hand - qty_reserved - qty_committed FROM master_v3_inventory_balances
-              WHERE item_id = ? AND warehouse_id = ?), 0) + COALESCE((SELECT SUM(
-                COALESCE(json_extract(data, '$.qtyIn'), 0) - COALESCE(json_extract(data, '$.qtyOut'), 0))
-              FROM documents WHERE collection_name = 'inventoryLedger'
-                AND json_extract(data, '$.v3InventoryBaseline') = ?
-                AND json_extract(data, '$.productId') = ? AND json_extract(data, '$.warehouseId') = ?), 0) AS available`,
-            [demand.productId, demand.warehouseId, demand.baseline, demand.productId, demand.warehouseId]);
+              WHERE item_id = ? AND warehouse_id = ?), 0) + COALESCE((SELECT SUM(delta) FROM (
+              ${orderedInventoryDeltaInput(cover)})), 0) AS available`;
+          const values=[demand.productId,demand.warehouseId,demand.baseline,demand.productId,demand.warehouseId];
+          let result:any;
+          try{result=await read(statement(true),values);}
+          catch(error){if(!isMissingInventoryCoverIndex(error))throw error;result=await read(statement(false),values);}
           if (demand.quantity > Number(result.values?.[0]?.available || 0)) throw new Error('SYNC_V3_STOCK_INSUFFICIENT');
         }
     }

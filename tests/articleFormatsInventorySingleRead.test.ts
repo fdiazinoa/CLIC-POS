@@ -37,7 +37,8 @@ test('combined query is lazy under any selected baseline, without item/scope/war
   bridge.query=async(sql:string,values:any[])=>{recorded={sql,values};return query(sql,values);};
   await f.adapter.masterSyncV3Store.getLocalInventoryDelta(f.baseline(),id(7),id(5));assert.ok(recorded);
   const db=new SQLite(':memory:');try{
-   db.exec('CREATE TABLE documents(collection_name TEXT,data TEXT);CREATE TABLE article_format_inventory_state(scope_key TEXT,baseline_id TEXT);');
+   db.exec('CREATE TABLE documents(collection_name TEXT,data TEXT);CREATE TABLE article_format_inventory_state(scope_key TEXT,baseline_id TEXT);CREATE INDEX idx_documents_v3_inventory_delta_cover ON documents(collection_name);');
+   // This isolated CASE oracle only needs the named hint to compile; JSON operands remain deliberately invalid and must never execute.
    // The item/warehouse/binding below are unrelated. ANY selected baseline must suppress the legacy scalar SUM.
    db.prepare('INSERT INTO article_format_inventory_state VALUES(?,?)').run(JSON.stringify({warehouse_id:id(999)}),id(1000));
    db.prepare('INSERT INTO documents VALUES(?,?)').run('inventoryLedger','malformed JSON would throw if scanned');

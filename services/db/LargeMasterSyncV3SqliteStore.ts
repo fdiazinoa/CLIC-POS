@@ -1,3 +1,4 @@
+import {orderedInventoryDeltaInput,isMissingInventoryCoverIndex} from './OrderedInventoryDelta';
 import {readReconciledInventory} from '../articleFormats/inventoryJournal';
 import { authorizeV3TaxClassification } from '../sync/LargeMasterSyncV3TaxClassification';
 import { v3ArticleSemantics, v3TaxSemantics, v3TariffSemantics, v3VariantSemantics } from '../sync/LargeMasterSyncV3StockAuthority';
@@ -140,20 +141,19 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
 
   /** One durable single-item read while OFF. NULL is reserved for any selected baseline, never for missing legacy rows. */
   private async singleInventoryDeltaUnlessSelected(baseline:string,itemId:string,warehouseId:string):Promise<number|undefined> {
-    const legacy=`SELECT COALESCE(SUM(
-      COALESCE(json_extract(data, '$.qtyIn'), 0) - COALESCE(json_extract(data, '$.qtyOut'), 0)), 0)
-      FROM documents WHERE collection_name = 'inventoryLedger'
-      AND json_extract(data, '$.v3InventoryBaseline') = ?
-      AND json_extract(data, '$.productId') = ? AND json_extract(data, '$.warehouseId') = ?`;
-    let row:Record<string,unknown>|null;
-    try {
-      row=first(await this.connection().query(`SELECT CASE WHEN EXISTS(
-        SELECT 1 FROM article_format_inventory_state WHERE baseline_id IS NOT NULL
-      ) THEN NULL ELSE (${legacy}) END AS delta`,[baseline,itemId,warehouseId]));
-    } catch(error) {
-      if(!(error instanceof Error&&/^no such table: (?:main\.)?article_format_inventory_state$/.test(error.message)))throw error;
-      // Historical isolated stores can lack the additive table. No cache: every later call probes durable state again.
-      row=first(await this.connection().query(`SELECT (${legacy}) AS delta`,[baseline,itemId,warehouseId]));
+    let row:Record<string,unknown>|null,cover=true,hasState=true;
+    for(;;){
+      const legacy=`SELECT COALESCE(SUM(delta),0) FROM (${orderedInventoryDeltaInput(cover)})`;
+      try {
+        row=first(await this.connection().query(hasState?`SELECT CASE WHEN EXISTS(
+          SELECT 1 FROM article_format_inventory_state WHERE baseline_id IS NOT NULL
+        ) THEN NULL ELSE (${legacy}) END AS delta`:`SELECT (${legacy}) AS delta`,[baseline,itemId,warehouseId]));
+        break;
+      } catch(error) {
+        if(cover&&isMissingInventoryCoverIndex(error)){cover=false;continue;}
+        if(hasState&&error instanceof Error&&/^no such table: (?:main\.)?article_format_inventory_state$/.test(error.message)){hasState=false;continue;}
+        throw error;
+      }
     }
     if(!row||!Object.hasOwn(row,'delta'))throw new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_NOT_READY');
     return row.delta===null?undefined:Number(row.delta || 0);
@@ -182,13 +182,18 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
   }
 
   private async legacyInventoryDeltas(baseline:string,itemIds:string[],warehouseId:string):Promise<Record<string,number>> {
-    const result = await this.connection().query(`SELECT json_extract(data, '$.productId') AS item_id,
-      SUM(COALESCE(json_extract(data, '$.qtyIn'), 0) - COALESCE(json_extract(data, '$.qtyOut'), 0)) AS delta
-      FROM documents WHERE collection_name = 'inventoryLedger'
-      AND json_extract(data, '$.v3InventoryBaseline') = ? AND json_extract(data, '$.warehouseId') = ?
-      AND json_extract(data, '$.productId') IN (${itemIds.map(() => '?').join(',')})
-      GROUP BY json_extract(data, '$.productId')`, [baseline, warehouseId, ...itemIds]);
-    return Object.fromEntries(rows(result).map(row => [String(row.item_id), Number(row.delta)]));
+    const ids=[...new Set(itemIds)];
+    const statement=(cover:boolean)=>`WITH requested(item_id) AS (VALUES ${ids.map(()=>'(?)').join(',')})
+      SELECT requested.item_id,(SELECT SUM(delta) FROM (${orderedInventoryDeltaInput(cover,'requested.item_id')})) AS delta FROM requested`;
+    const values=[...ids,baseline,warehouseId];
+    let result:QueryResult;
+    try{result=await this.connection().query(statement(true),values);}
+    catch(error){if(!isMissingInventoryCoverIndex(error))throw error;result=await this.connection().query(statement(false),values);}
+    const found=rows(result);
+    if(found.length!==ids.length||new Set(found.map(r=>r.item_id)).size!==ids.length
+      ||found.some(r=>!ids.includes(String(r.item_id))||!Object.hasOwn(r,'delta')))throw new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_NOT_READY');
+    // SUM without COALESCE distinguishes absent cells (NULL) from real zero-valued movements.
+    return Object.fromEntries(found.filter(r=>r.delta!==null).map(r=>[String(r.item_id),Number(r.delta)]));
   }
 
   private async reconciledAdjustments(baseline:string,itemIds:string[],warehouseId:string):Promise<Record<string,number>|undefined> {

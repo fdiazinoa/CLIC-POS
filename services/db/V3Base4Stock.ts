@@ -25,7 +25,7 @@ export async function readV3Base4Stock(query:Query,baseline:string,itemId:string
  const rows=await query<any>(`SELECT
   COALESCE(MAX(CASE WHEN ${validOperands} THEN 0 ELSE 1 END),0) AS invalid_operand,
   COALESCE(SUM(CASE WHEN ${validOperands} THEN CAST(ROUND(${qtyIn}*10000) AS INTEGER)-CAST(ROUND(${qtyOut}*10000) AS INTEGER) ELSE 0 END),0) AS delta_scaled
-  FROM documents WHERE ${predicate}`,[baseline,itemId,warehouseId]);
+  FROM (SELECT data FROM documents WHERE ${predicate} ORDER BY documents.rowid)`,[baseline,itemId,warehouseId]);
  const row=rows[0];
  requireFormat(row&&Number(row.invalid_operand)===0&&Number.isSafeInteger(row.delta_scaled),'POS_FORMAT_PRECISION_INVALID');
  const physical=onHand.plus(new Money(row.delta_scaled).div(10000));
