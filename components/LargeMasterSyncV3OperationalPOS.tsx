@@ -1,3 +1,4 @@
+import {claimV3Reservation,expireV3Reservation} from '../services/sync/LargeMasterSyncV3ReservationRecovery';
 import { claimV3DirectTicket, readV3DirectWaitingTickets, updateV3DirectTicket } from '../services/sync/LargeMasterSyncV3DirectTicketSource';
 import { assertWeightedCodeInput } from '../utils/weightedProduct';
 import { subscribeLargeMasterSyncV3CatalogUpdates } from '../services/sync/LargeMasterSyncV3CatalogUpdates';
@@ -146,6 +147,8 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps> = props => {
         taxes: projected.taxes, taxRate: projected.taxRate }, lines, tariffId, warehouseId, 'SALE', undefined, reference);
       assertContext();
     },
+    expireReservation: async id => { assertContext(); const expired = await expireV3Reservation(id); assertContext(); return expired; },
+    restoreReservation: async id => { assertContext(); const recovery = await claimV3Reservation(id,warehouseId); assertContext(); remember(recovery.products); return recovery; },
     restoreRetainedTicket: async id => { assertContext(); const ticket = await claimV3DirectTicket(id); assertContext(); return ticket; },
     updateRetainedTicket: async (id,ticket) => { assertContext(); await updateV3DirectTicket(id,ticket); assertContext(); },
     waitingTickets: async tickets => { assertContext(); const result = await readV3DirectWaitingTickets(tickets); assertContext(); return result; },

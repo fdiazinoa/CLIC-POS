@@ -69,6 +69,8 @@ interface PaymentModalProps {
    config?: BusinessConfig;
    onClose: () => void;
    onConfirm: (payments: PaymentEntry[], voluntaryTip?: number) => Promise<Transaction | null>;
+   paymentOperationId?: string;
+   paymentOperationDate?: string;
    beforePaymentEffects?: () => Promise<() => void>;
    validatePaymentAuthority?: () => Promise<void>;
    themeColor: string;
@@ -247,7 +249,7 @@ type GatewayProgressOverlayState = {
 
 import SupervisorAuthModal from './SupervisorAuthModal';
 
-const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, total, items, taxAmount = 0, currencySymbol, config, onClose, onConfirm, beforePaymentEffects, validatePaymentAuthority, themeColor, customer, isDelinquent, users, isMaster, currentUser, roles, isRestaurantMode, isInstallmentPayment = false }) => {
+const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, total, items, taxAmount = 0, currencySymbol, config, onClose, onConfirm, paymentOperationId, paymentOperationDate, beforePaymentEffects, validatePaymentAuthority, themeColor, customer, isDelinquent, users, isMaster, currentUser, roles, isRestaurantMode, isInstallmentPayment = false }) => {
    markRenderStart('PAYMENT_MODAL');
    useLayoutEffect(() => markRenderEnd('PAYMENT_MODAL'));
    const openingDestinationMounted = useRef(false);
@@ -564,14 +566,14 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, total,
       valInSelectedCurrency: number,
       amountInBase: number
    ): PaymentEntry => ({
-      id: createPaymentId(),
+      id: paymentOperationId ? `${paymentOperationId}:payment:${payments.length}` : createPaymentId(),
       method: getMethodRuntimeType(method),
       methodId: method.id,
       methodLabel: method.label,
       methodIcon: method.iconName,
       creditOverrideApproved: getMethodRuntimeType(method) === 'CREDIT' && canBypassCreditLimit ? true : undefined,
       amount: roundToTwo(amountInBase),
-      timestamp: new Date(),
+      timestamp: paymentOperationDate ? new Date(paymentOperationDate) : new Date(),
       currencyCode: selectedCurrency.code,
       amountOriginal: roundToTwo(valInSelectedCurrency),
       exchangeRate: selectedCurrency.rate,
@@ -624,8 +626,12 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, total,
          integrationId: integration.id,
          amount: amountInBase,
          currencyCode: payment.currencyCode || baseCurrency.code,
+         retainedOperation: Boolean(paymentOperationId),
       });
-      if (intent) await paymentIntentService.markAuthorizing(intent.intentId);
+      // An intent alone does not retain the full provider receipt/order payload. The original approved
+      // PaymentEntry can retry in this modal; a reconstructed entry after restart requires reconciliation.
+      if (paymentOperationId && intent?.status === 'AUTHORIZED') throw new Error('PAYMENT_INTENT_RECONCILIATION_REQUIRED');
+      if (intent) await paymentIntentService.markAuthorizing(intent.intentId,Boolean(paymentOperationId));
 
       setIsProcessingGateway(true);
       setFinalizeError(null);

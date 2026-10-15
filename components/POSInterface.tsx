@@ -1,3 +1,5 @@
+import {reservationInvoiceId,reservationAdvancePayment,validateV3ReservationPricing,assertV3ReservationLines} from '../services/sync/LargeMasterSyncV3ReservationAuthority';
+import type {V3RecoveredReservation} from '../services/sync/LargeMasterSyncV3ReservationRecovery';
 import {requiresProductStockAvailability} from '../utils/productStockPolicy';
 import ArticleFormatSelector from './ArticleFormatSelector';
 import { formatsEnabled, assertFormatsPostingClosed } from '../services/articleFormats/activation';
@@ -233,6 +235,8 @@ export interface V3OperationalPOSBoundary {
    search(query: string, categoryId?: string | null, categoryKeys?: { ids: readonly string[]; aliases: readonly string[] }): Promise<void>;
    resolveCode(code: string): Promise<import('../services/sync/LargeMasterSyncV3OperationalSession').V3CodeMatch | null>;
    validate(lines: CartItem[], reference?: import('../services/sync/LargeMasterSyncV3RetainedCheckout').V3RetainedReference): Promise<void>;
+   expireReservation?(id: string): Promise<boolean>;
+   restoreReservation?(id: string): Promise<V3RecoveredReservation>;
    restoreRetainedTicket?(id: string): Promise<ParkedTicket | null>;
    updateRetainedTicket?(id: string, ticket?: ParkedTicket): Promise<void>;
    waitingTickets?(tickets: ParkedTicket[]): Promise<ParkedTicket[]>;
@@ -2606,6 +2610,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [reservationSearchTerm, setReservationSearchTerm] = useState<string>('');
    const [reservationCustomerFilterId, setReservationCustomerFilterId] = useState<string | null>(null);
    const [activeRecoveredReservation, setActiveRecoveredReservation] = useState<Reservation | null>(null);
+   const [activeV3Reservation, setActiveV3Reservation] = useState<V3RecoveredReservation | null>(null);
+   const hasV3ReservationCart = cart.some(line=>Boolean(line.v3ReservationId));
    const [uberPendingOrders, setUberPendingOrders] = useState<UberEatsPendingOrder[]>([]);
    const [isLoadingUberPendingOrders, setIsLoadingUberPendingOrders] = useState(false);
    const [uberPendingOrdersError, setUberPendingOrdersError] = useState<string | null>(null);
@@ -2680,7 +2686,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          return;
       }
 
+      let released = 0;
       for (const reservation of expired) {
+         if (reservation.items.some(line=>line.v3SaleAuthority)) {
+            try {
+               if (!v3Operational?.expireReservation) throw new Error('SYNC_V3_RESERVATION_EXPIRY_NATIVE_REQUIRED');
+               if (await v3Operational.expireReservation(reservation.id)) released++;
+            } catch (error: any) { setErrorToast(`La reserva ${reservation.code} conserva su estado pendiente: ${error.message || error}`); }
+            continue;
+         }
          const warehouseId = reservation.warehouseId || defaultSalesWarehouseId || 'wh_central';
          await transferStockToCommitted(reservation.items || [], warehouseId, products, 'RELEASE');
          await db.saveDocument('reservations', {
@@ -2689,14 +2703,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             expiredAt: new Date().toISOString(),
             updatedAt: new Date().toISOString()
          });
+         released++;
       }
 
       const refreshed = await db.get('reservations') as Reservation[] || [];
       setReservations((refreshed || []).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()));
       await reloadCommitments();
-      setErrorToast(`${expired.length} reserva(s) vencida(s). Stock comprometido liberado.`);
+      if (released) setErrorToast(`${released} reserva(s) vencida(s). Stock comprometido liberado.`);
       setTimeout(() => setErrorToast(null), 4000);
-   }, [defaultSalesWarehouseId, products, reloadCommitments]);
+   }, [defaultSalesWarehouseId, products, reloadCommitments,v3Operational]);
 
    useEffect(() => {
       reloadReservations().catch(console.error);
@@ -2738,10 +2753,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    }, []);
 
    const blockRecoveredUberOrderMutation = useCallback((actionLabel: string) => {
+      if (activeV3Reservation || hasV3ReservationCart) { showShortErrorToast('La reserva recuperada conserva sus líneas y su anticipo. Factúrela sin editarla.'); return true; }
       if (!isUberRecoveredReservation(activeRecoveredReservation)) return false;
       showShortErrorToast(`El pedido Uber Eats recuperado no permite ${actionLabel}. Factúralo directamente para mantener la trazabilidad.`);
       return true;
-   }, [activeRecoveredReservation, showShortErrorToast]);
+   }, [activeRecoveredReservation, activeV3Reservation,hasV3ReservationCart, showShortErrorToast]);
 
    const loadUberPendingOrders = useCallback(async (
       options?: { silent?: boolean }
@@ -2864,21 +2880,55 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
    }, [activeTerminalId, config, loadUberPendingOrders, persistUberConfirmationState, showShortErrorToast]);
 
-   const handleRecoverReservation = useCallback((reservation: Reservation) => {
-      if (v3Operational) { setErrorToast('SYNC_V3_RESERVATION_CONTRACT_REQUIRED'); return; }
-      const hydratedItems = (reservation.items || []).map((item, idx) => ({
-         ...item,
-         cartId: `RSV-${reservation.id}-${idx}-${Date.now()}`
-      }));
-
+   const handleRecoverReservation = useCallback(async (reservation: Reservation) => {
+      if (v3Operational) {
+         const mounted = uiLifetime.current.capture();
+         const context = v3Operational;
+         try {
+            if (!context.restoreReservation) throw new Error('SYNC_V3_RESERVATION_CONTRACT_REQUIRED');
+            if (cart.length || activeTable || activeDirectV3TicketId) throw new Error('Vacíe el ticket actual antes de recuperar la reserva.');
+            const recovery = await scanQueue.current.run(() => mounted() && addContext.current === context,
+               () => context.restoreReservation!(reservation.id));
+            assertV3UIContext(() => mounted() && addContext.current === context);
+            const recoveredItems = recovery.reservation.items.map(line=>({...line,v3ReservationId:recovery.reservation.id}));
+            latestAddCart.current = recoveredItems;
+            onUpdateCart(recoveredItems);
+            onSelectCustomer(recovery.customer);
+            setActiveRecoveredReservation(recovery.reservation);
+            setActiveV3Reservation(recovery);
+            setGlobalDiscount({type:recovery.pricing.discountType,value:recovery.pricing.discountValue});
+            setOrderServiceType(recovery.pricing.serviceType);
+            closeRecoverReservationModal();
+            setSuccessToast(`Reserva ${recovery.reservation.code} cargada`);
+         } catch (error: any) { setErrorToast(`No se pudo recuperar la reserva: ${error.message || error}`); }
+         return;
+      }
+      const hydratedItems = (reservation.items || []).map((item, idx) => ({...item,cartId:`RSV-${reservation.id}-${idx}-${Date.now()}`}));
       onUpdateCart(hydratedItems);
-      const customer = customers.find(c => c.id === reservation.customerId) || null;
-      onSelectCustomer(customer);
+      onSelectCustomer(customers.find(c => c.id === reservation.customerId) || null);
       setActiveRecoveredReservation(reservation);
       setOrderServiceType('DINE_IN');
       closeRecoverReservationModal();
       setSuccessToast(`Reserva ${reservation.code} cargada`);
-   }, [customers, onSelectCustomer, onUpdateCart, closeRecoverReservationModal, v3Operational]);
+   }, [customers,onSelectCustomer,onUpdateCart,closeRecoverReservationModal,v3Operational,cart.length,activeTable,activeDirectV3TicketId]);
+
+   // Settings/navigation can remount the POS while the cart remains in App. Resolve the durable claim again.
+   useEffect(() => {
+      if (!v3Operational?.restoreReservation || activeV3Reservation || !hasV3ReservationCart) return;
+      let current = true;
+      const ids = new Set(cart.map(line=>line.v3ReservationId));
+      if (ids.size !== 1 || ids.has(undefined)) { setErrorToast('El ticket no coincide con una única reserva original.'); return; }
+      void v3Operational.restoreReservation([...ids][0]!).then(recovery=>{
+         if (!current) return;
+         assertV3ReservationLines(recovery.reservation,cart);
+         onSelectCustomer(recovery.customer);
+         setActiveRecoveredReservation(recovery.reservation);
+         setActiveV3Reservation(recovery);
+         setGlobalDiscount({type:recovery.pricing.discountType,value:recovery.pricing.discountValue});
+         setOrderServiceType(recovery.pricing.serviceType);
+      }).catch((error:any)=>{ if(current) setErrorToast(`No se pudo restaurar la reserva: ${error.message || error}`); });
+      return () => { current = false; };
+   },[v3Operational,activeV3Reservation,hasV3ReservationCart,cart,onSelectCustomer]);
 
    const handleRecoverUberOrder = useCallback(async (order: UberEatsPendingOrder) => {
       const existingTransaction = findUberTransactionByOrderId(order.uberOrderId);
@@ -3423,7 +3473,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          if (modifiers?.length || restaurantConfig || trackingData?.length || consignmentPatch) {
             throw new Error('SYNC_V3_ADVANCED_ARTICLE_CONTRACT_REQUIRED');
          }
-         await v3Operational.validate([...latestAddCart.current, { ...product, quantity, cartId: 'candidate-validation' } as CartItem], { ticketId: activeTable?.currentOrderId || activeDirectV3TicketId, claimId: activeDirectV3TicketId, tableId: activeTable?.id === undefined ? undefined : String(activeTable.id) });
+         await v3Operational.validate([...latestAddCart.current, { ...product, quantity, cartId: 'candidate-validation' } as CartItem], { ticketId: activeTable?.currentOrderId || activeDirectV3TicketId, claimId: activeDirectV3TicketId, reservationId:activeV3Reservation?.reservation.id,reservationClaimId:activeV3Reservation?.claimId, tableId: activeTable?.id === undefined ? undefined : String(activeTable.id) });
          assertV3UIContext(isCurrent);
       }
       if (blockRecoveredUberOrderMutation('agregar artículos adicionales')) return;
@@ -3571,7 +3621,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             const previous = latestAddCart.current;
             const next = addFormatLine(previous,selectedProduct,format,quantity,price,crypto.randomUUID(),modifiers);
             if (context) {
-               await context.validate(next,{ticketId:activeTable?.currentOrderId || activeDirectV3TicketId,claimId:activeDirectV3TicketId,tableId:activeTable?.id === undefined ? undefined : String(activeTable.id)});
+               await context.validate(next,{ticketId:activeTable?.currentOrderId || activeDirectV3TicketId,claimId:activeDirectV3TicketId,reservationId:activeV3Reservation?.reservation.id,reservationClaimId:activeV3Reservation?.claimId,tableId:activeTable?.id === undefined ? undefined : String(activeTable.id)});
                assertV3UIContext(isCurrent);
             }
             latestAddCart.current = next;
@@ -4660,8 +4710,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    // --- PROMOTION ENGINE INTEGRATION ---
    const processedCart = useMemo(() => {
-      return applyPromotions(cart, config, activeTerminalId, selectedCustomer || undefined);
-   }, [cart, config, activeTerminalId, selectedCustomer]);
+      return activeV3Reservation ? cart : applyPromotions(cart, config, activeTerminalId, selectedCustomer || undefined);
+   }, [cart, config, activeTerminalId, selectedCustomer,activeV3Reservation]);
 
    useEffect(() => {
       if (!activeCartItemId) return;
@@ -4693,7 +4743,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       () => cart.some(item => !isKitchenDispatchedCartItem(item)),
       [cart]
    );
-   const isTaxIncluded = activeTariff?.taxIncluded || false;
+   const isTaxIncluded = activeV3Reservation?.pricing.isTaxIncluded ?? (activeTariff?.taxIncluded || false);
    const grossLineTotal = useMemo(
       () => processedCart.reduce((sum, item) => sum + (item.price * item.quantity), 0),
       [processedCart]
@@ -4716,6 +4766,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    );
 
    const taxBreakdown = useMemo(() => {
+      if (activeV3Reservation?.pricing.taxBreakdown) return activeV3Reservation.pricing.taxBreakdown;
       if (isSelectedCustomerTaxExempt) return [];
       return calculateTaxBreakdownFromItems(processedCart, config, {
          discountAmount,
@@ -4724,14 +4775,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          taxExempt: isSelectedCustomerTaxExempt,
          allowedTaxIds: appliedServiceTaxPolicy.taxIds,
       });
-   }, [processedCart, config, discountAmount, isTaxIncluded, activeTerminalConfig, isSelectedCustomerTaxExempt, appliedServiceTaxPolicy.taxIds]);
+   }, [processedCart, config, discountAmount, isTaxIncluded, activeTerminalConfig, isSelectedCustomerTaxExempt, appliedServiceTaxPolicy.taxIds,activeV3Reservation]);
 
    const displayTaxBreakdown = useMemo(
       () => consolidateTaxBreakdownForDisplay(taxBreakdown, config.taxes),
       [taxBreakdown, config.taxes]
    );
 
-   const cartTax = displayTaxBreakdown.reduce((sum, t) => sum + t.amount, 0);
+   const cartTax = activeV3Reservation?.pricing.taxAmount ?? displayTaxBreakdown.reduce((sum, t) => sum + t.amount, 0);
    const primaryTaxLabel = useMemo(() => {
       if (displayTaxBreakdown.length === 1) {
          return formatTaxLineLabel(displayTaxBreakdown[0]);
@@ -4765,6 +4816,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       netSubtotal,
       cartTotal,
    } = useMemo(() => {
+      if (activeV3Reservation) {
+         const snapshot = activeV3Reservation.pricing;
+         return {legalTipRate:0,cartTip:snapshot.serviceChargeAmount,cartTotalWithoutTip:snapshot.total-snapshot.serviceChargeAmount,
+            netSubtotal:snapshot.netAmount,cartTotal:snapshot.total};
+      }
       const nextLegalTipRate = shouldApplyServiceCharge
          ? Number(appliedServiceTaxPolicy.legalTip?.percentage ?? serviceCharge?.percentage ?? 0) / 100
          : 0;
@@ -4791,7 +4847,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          netSubtotal: nextNetSubtotal,
          cartTotal: nextCartTotalWithoutTip + nextCartTip,
       };
-   }, [cartTax, discountAmount, grossLineTotal, isTaxIncluded, serviceCharge?.percentage, shouldApplyServiceCharge, appliedServiceTaxPolicy.legalTip?.percentage, processedCart, config, activeTerminalConfig, isSelectedCustomerTaxExempt, appliedServiceTaxPolicy.taxIds]);
+   }, [cartTax, discountAmount, grossLineTotal, isTaxIncluded, serviceCharge?.percentage, shouldApplyServiceCharge, appliedServiceTaxPolicy.legalTip?.percentage, processedCart, config, activeTerminalConfig, isSelectedCustomerTaxExempt, appliedServiceTaxPolicy.taxIds,activeV3Reservation]);
 
    // Alias for compatibility if needed, though netSubtotal is what we usually display as "Subtotal"
    const cartSubtotal = grossLineTotal; // This represents the sum of list prices
@@ -4814,7 +4870,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const reservationAdvanceApplied = activeRecoveredReservation
       ? (isRecoveredUberOrder
          ? Math.min(activeRecoveredReservation.prepaidPayment?.amount || activeRecoveredReservation.balancePaid || 0, cartTotal)
-         : Math.min(activeRecoveredReservation.balancePaid || 0, cartTotal))
+         : activeV3Reservation ? activeRecoveredReservation.balancePaid : Math.min(activeRecoveredReservation.balancePaid || 0, cartTotal))
       : 0;
    const reservationBalanceDue = isRecoveredUberOrder
       ? 0
@@ -5001,6 +5057,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    ]);
 
    const handleCreateReservation = async () => {
+      if (activeV3Reservation) { setErrorToast('La reserva recuperada sólo puede facturarse sin editar.'); return; }
       if (cart.length === 0) {
          alert('No hay artículos en el ticket para reservar.');
          return;
@@ -5064,9 +5121,18 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          createdById: editableRecoveredReservation?.createdById || currentUser.id,
          createdByName: editableRecoveredReservation?.createdByName || currentUser.name,
          createdAt: editableRecoveredReservation?.createdAt || now.toISOString(),
-         updatedAt: now.toISOString()
+         updatedAt: now.toISOString(),
+         ...(v3Operational ? {v3Snapshot:{binding:reservationItems[0].v3SaleAuthority!.binding,total:cartTotal,
+            netAmount:Math.round((cartTotal-cartTax)*100)/100,taxAmount:cartTax,discountAmount,discountType:globalDiscount.type,
+            discountValue:globalDiscount.value,isTaxIncluded,serviceChargeAmount:cartTip,serviceType:effectiveOrderServiceType,
+            serviceTaxPolicySnapshot:appliedServiceTaxPolicy,taxBreakdown,customerSnapshot:buildTransactionCustomerSnapshot(customer)}} : {})
       };
 
+      if (v3Operational) {
+         assertFormatsPostingClosed(reservationItems);
+         await v3Operational.validate(reservationItems);
+         validateV3ReservationPricing(reservation,config);
+      }
       await db.saveDocument('reservations', reservation);
       if (editableRecoveredReservation) {
          const previousWarehouseId = editableRecoveredReservation.warehouseId || defaultSalesWarehouseId || 'wh_central';
@@ -5086,6 +5152,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       onUpdateCart([]);
       onSelectCustomer(null);
       setActiveRecoveredReservation(null);
+      setActiveV3Reservation(null);
       setSuccessToast(`Reserva ${reservation.code} ${isEditingRecoveredReservation ? 'actualizada' : 'creada'}`);
    };
 
@@ -5128,6 +5195,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    useEffect(() => {
       if (cart.length === 0 && activeRecoveredReservation) {
          setActiveRecoveredReservation(null);
+      setActiveV3Reservation(null);
       }
    }, [cart.length, activeRecoveredReservation]);
 
@@ -5465,7 +5533,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       try {
          assertFormatsPostingClosed(processedCart);
          await assertCheckoutFiscalAuthority();
-         if (v3Operational) await v3Operational.validate(processedCart, { ticketId: activeTable?.currentOrderId || activeDirectV3TicketId, claimId: activeDirectV3TicketId, tableId: activeTable?.id === undefined ? undefined : String(activeTable.id) });
+         if (v3Operational) await v3Operational.validate(processedCart, { ticketId: activeTable?.currentOrderId || activeDirectV3TicketId, claimId: activeDirectV3TicketId, reservationId:activeV3Reservation?.reservation.id,reservationClaimId:activeV3Reservation?.claimId, tableId: activeTable?.id === undefined ? undefined : String(activeTable.id) });
          const invalidQuantityItem = processedCart.find(item => !isValidCartQuantity(item.quantity));
          if (invalidQuantityItem) {
             alert(`La cantidad de "${invalidQuantityItem.name}" no es válida. Elimine la línea y agréguela nuevamente.`);
@@ -5621,16 +5689,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          }
 
          const reservationAdvance = activeRecoveredReservation && !uberRecoveredOrder
-            ? Math.min(activeRecoveredReservation.balancePaid || 0, cartTotal)
+            ? activeV3Reservation ? activeRecoveredReservation.balancePaid : Math.min(activeRecoveredReservation.balancePaid || 0, cartTotal)
             : 0;
-         const reservationAdvancePayment: PaymentEntry = {
+         const reservationAdvanceEntry: PaymentEntry = activeV3Reservation ? reservationAdvancePayment(activeV3Reservation.reservation)! : {
             id: `ADV-${Date.now()}`,
             method: 'ADVANCE',
             amount: reservationAdvance,
             timestamp: new Date()
          };
          const paymentsForTransaction = reservationAdvance > 0
-            ? [...payments, reservationAdvancePayment]
+            ? [...payments, reservationAdvanceEntry]
             : payments;
          const creditAmount = sumCreditPaymentsBase(paymentsForTransaction);
          const hasCreditOverrideApproval = paymentsForTransaction.some(
@@ -5985,11 +6053,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   : {};
 
                const txn = await withTimeout(transactionService.createTransaction({
+                  ...(activeV3Reservation ? {id:reservationInvoiceId(activeV3Reservation.reservation.id),v3ReservationClaimId:activeV3Reservation.claimId} : {}),
                   documentType: hasReturns ? 'REFUND' : 'TICKET',
                   seriesId: hasReturns
                      ? (activeTerminalConfig?.documentAssignments?.['REFUND'] || 'REFUND-GENERIC')
                      : assignedSequenceId,
-                  date: new Date().toISOString(),
+                  date:activeV3Reservation?.invoiceDate || new Date().toISOString(),
                   items: documentItems,
                   total: documentTotal,
                   payments: paymentsForTransaction,
@@ -6025,7 +6094,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   discountType: globalDiscount.type,
                   discountValue: globalDiscount.value,
                   ...(isRefundOnly ? {} : couponSyncFields),
-                  customerSnapshot: checkoutCustomerSnapshot || (activeRecoveredReservation ? {
+                  customerSnapshot: activeV3Reservation?.pricing.customerSnapshot || checkoutCustomerSnapshot || (activeRecoveredReservation ? {
                      name: activeRecoveredReservation.customerName
                   } : undefined),
                   isTaxIncluded: isTaxIncluded,
@@ -6093,7 +6162,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   commitAppliedCoupon(settledFinalTxn);
                }
 
-               if (activeRecoveredReservation && !uberRecoveredOrder) {
+               if (activeRecoveredReservation && !uberRecoveredOrder && !activeV3Reservation) {
                   const warehouseId = activeRecoveredReservation.warehouseId || defaultSalesWarehouseId || 'wh_central';
                   await withTimeout(
                      transferStockToCommitted(activeRecoveredReservation.items || [], warehouseId, products, 'RELEASE'),
@@ -6218,6 +6287,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                setIsReturnMode(false);
                setRefundAuthorizedBy(null);
                setActiveRecoveredReservation(null);
+      setActiveV3Reservation(null);
                setOrderServiceType('DINE_IN');
                // Keep the payment modal mounted so it can show the completed-sale
                // actions. Returning to TABLE_MAP here unmounted it before
@@ -6325,8 +6395,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    };
 
    const proceedToCheckout = (trace: PosInteractionTrace) => observeDestinationAttempt(trace, async () => {
+      if (hasV3ReservationCart && !activeV3Reservation) { setErrorToast('La referencia de la reserva aún no está validada.'); return; }
       if (v3Operational) {
-         try { await v3Operational.validate(cart, { ticketId: activeTable?.currentOrderId || activeDirectV3TicketId, claimId: activeDirectV3TicketId, tableId: activeTable?.id === undefined ? undefined : String(activeTable.id) }); }
+         try { await v3Operational.validate(cart, { ticketId: activeTable?.currentOrderId || activeDirectV3TicketId, claimId: activeDirectV3TicketId, reservationId:activeV3Reservation?.reservation.id,reservationClaimId:activeV3Reservation?.claimId, tableId: activeTable?.id === undefined ? undefined : String(activeTable.id) }); }
          catch (error: any) { setErrorToast(`V3: ${error.message || error}`); return; }
       }
       if (isOrderTakerMode) {
@@ -6409,9 +6480,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const beforeV3PaymentEffects = async () => {
       await assertCheckoutFiscalAuthority();
+      if (hasV3ReservationCart && !activeV3Reservation) throw new Error('La referencia de la reserva aún no está validada.');
+      if (activeV3Reservation && selectedCustomer?.id !== activeV3Reservation.reservation.customerId) throw new Error('El cliente de la reserva no puede cambiarse.');
       if (!v3Operational) return () => {};
       setLargeMasterSyncV3CriticalOperation('PAYMENT', true);
-      try { await v3Operational.validate(cart, { ticketId: activeTable?.currentOrderId || activeDirectV3TicketId, claimId: activeDirectV3TicketId, tableId: activeTable?.id === undefined ? undefined : String(activeTable.id) }); }
+      try { await v3Operational.validate(cart, { ticketId: activeTable?.currentOrderId || activeDirectV3TicketId, claimId: activeDirectV3TicketId, reservationId:activeV3Reservation?.reservation.id,reservationClaimId:activeV3Reservation?.claimId, tableId: activeTable?.id === undefined ? undefined : String(activeTable.id) }); }
       catch (error) { setLargeMasterSyncV3CriticalOperation('PAYMENT', false); throw error; }
       return () => setLargeMasterSyncV3CriticalOperation('PAYMENT', false);
    };
@@ -7033,6 +7106,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             onUpdateCart([]);
             onSelectCustomer(null);
             setActiveRecoveredReservation(null);
+      setActiveV3Reservation(null);
             if (onClearActiveTable) onClearActiveTable();
             if (!options.silent) {
                setSuccessToast(tableToRelease.shape === 'BAR'
@@ -7049,6 +7123,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       onUpdateCart([]);
       onSelectCustomer(null);
       setActiveRecoveredReservation(null);
+      setActiveV3Reservation(null);
       if (onClearActiveTable) onClearActiveTable();
       if (!options.silent) {
          setSuccessToast('Mesa liberada (sin productos)');
@@ -7172,6 +7247,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       onUpdateCart([]); onSelectCustomer(null);
       setActiveRecoveredReservation(null);
+      setActiveV3Reservation(null);
       setErrorToast(activeTable ? "Mesa Guardada" : "Ticket Guardado");
       setTimeout(() => setErrorToast(null), 2000);
       if (!activeTable) returnToTicketView();
@@ -7237,6 +7313,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       onUpdateCart([]);
       onSelectCustomer(null);
       setActiveRecoveredReservation(null);
+      setActiveV3Reservation(null);
       if (onClearActiveTable) onClearActiveTable();
    };
 
@@ -7335,6 +7412,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
       onUpdateParkedTickets(parkedTickets.filter(p => p.id !== directTicket.id));
       setActiveRecoveredReservation(null);
+      setActiveV3Reservation(null);
       setShowParkedList(false);
       returnToTicketView();
    };
@@ -9349,7 +9427,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                setReturnToTableMapAfterPayment(false);
                onOpenTableMap();
             }
-         }} beforePaymentEffects={beforeV3PaymentEffects} validatePaymentAuthority={assertCheckoutFiscalAuthority} onConfirm={handlePaymentConfirm} themeColor={config.themeColor} customer={effectiveSelectedCustomer} isDelinquent={isDelinquent} users={users} roles={roles} isMaster={isMaster} currentUser={currentUser} isRestaurantMode={isRestaurantMode} isInstallmentPayment={isIntermediateFractionPayment} />}
+         }} paymentOperationId={activeV3Reservation?.claimId} paymentOperationDate={activeV3Reservation?.invoiceDate} beforePaymentEffects={beforeV3PaymentEffects} validatePaymentAuthority={assertCheckoutFiscalAuthority} onConfirm={handlePaymentConfirm} themeColor={config.themeColor} customer={effectiveSelectedCustomer} isDelinquent={isDelinquent} users={users} roles={roles} isMaster={isMaster} currentUser={currentUser} isRestaurantMode={isRestaurantMode} isInstallmentPayment={isIntermediateFractionPayment} />}
          {showLoyaltyModal && <LoyaltyScanModal onClose={() => setShowLoyaltyModal(false)} onScan={handleLoyaltyScan} />}
          {showTableSellerModal && activeTable && <TableSellerModal
             tableName={activeTable.nombre || activeTable.name || 'Mesa'}
