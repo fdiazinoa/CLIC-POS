@@ -638,6 +638,7 @@ export interface NCFConfig {
 }
 
 export interface TerminalConfig {
+  articleFormatCapabilities?: { article_formats?: number; article_formats_return_context?: number };
   currentDeviceId?: string;
   lastPairingDate?: string;
   isBlocked?: boolean;
@@ -1235,6 +1236,7 @@ export interface ClassificationItem {
 }
 
 export interface BusinessConfig {
+  featureFlags?: { ARTICLE_FORMATS?: boolean };
   vertical: VerticalType;
   business_config?: {
     vertical_negocio?: VerticalType;
@@ -1510,6 +1512,7 @@ export interface V3SaleAuthorityStamp {
 }
 
 export interface Product {
+  article_formats?: import('./services/articleFormats/contract').ArticleFormatsDTO;
   id: string;
   sku?: string;
   external_code?: string;
@@ -1550,6 +1553,8 @@ export interface Product {
   media?: MediaAsset[];
   attributes: ProductAttribute[];
   variants: ProductVariant[];
+  /** Authenticated ERP_ID → POS SKU bridge from a complete formats revision. */
+  articleFormatVariantSkus?: Record<string, string | null>;
   tariffs: TariffPrice[];
   stockBalances?: Record<string, number>;
   activeInWarehouses?: string[];
@@ -1744,6 +1749,8 @@ export interface Table {
  */
 export interface CartItem extends Product {
   weightPresentation?: WeightPresentation;
+  articleFormat?: import('./services/articleFormats/contract').ArticleFormatSnapshot;
+  baseQuantity?: number;
   quantity: number;
   cartId: string;
   isReturnLine?: boolean;

@@ -26,7 +26,11 @@
     "start:dev": "concurrently \"npm run server\" \"npm run dev\" \"npm run kds\"",
     "start:mobile": "USE_HTTPS=true npm run start:dev",
     "start": "npm run start:dev",
-    "test:catalog-sync": "tsx --test tests/catalogEditAuthorization.test.ts tests/catalogEditPersistence.test.ts tests/catalogEditQueue.test.ts tests/catalogConflictPermissions.test.ts tests/catalogSnapshotFence.test.ts tests/catalogSnapshotPreservationContract.test.ts tests/catalogMultiTerminalRoundTrip.test.ts tests/catalogLocalChanges.test.ts tests/catalogReleaseFlag.test.ts tests/categoryOptions.test.ts tests/configPushV2Contract.test.ts tests/configPushV2Outbox.test.ts tests/productEditorLayout.test.ts tests/productTaxSnapshot.test.ts tests/taxIdentity.test.ts && node tests/runAutomaticCatalogSaves.mjs"
+    "test:catalog-sync": "tsx --test tests/catalogEditAuthorization.test.ts tests/catalogEditPersistence.test.ts tests/catalogEditQueue.test.ts tests/catalogConflictPermissions.test.ts tests/catalogSnapshotFence.test.ts tests/catalogSnapshotPreservationContract.test.ts tests/catalogMultiTerminalRoundTrip.test.ts tests/catalogLocalChanges.test.ts tests/catalogReleaseFlag.test.ts tests/categoryOptions.test.ts tests/configPushV2Contract.test.ts tests/configPushV2Outbox.test.ts tests/productEditorLayout.test.ts tests/productTaxSnapshot.test.ts tests/taxIdentity.test.ts && node tests/runAutomaticCatalogSaves.mjs",
+    "test:article-formats": "tsx --test tests/articleFormats.test.ts tests/articleFormatsAndroid.test.ts tests/articleFormatRefundEntries.test.ts tests/articleFormatsDocuments.test.ts",
+    "test:article-formats:network": "tsx --test tests/articleFormatsNetwork.test.ts tests/articleFormatsNetworkMaster.test.ts",
+    "test:article-formats:erp-local": "tsx --test tests/articleFormatsERPIntegration.test.ts",
+    "test:article-formats:return-context:erp-local": "tsx --test tests/articleFormatsReturnContextERP.test.ts"
   },
   "dependencies": {
     "@capacitor-community/sqlite": "^8.0.0",
@@ -42,6 +46,7 @@
     "@types/uuid": "^10.0.0",
     "better-sqlite3": "^12.6.2",
     "date-fns": "^4.1.0",
+    "decimal.js": "10.6.0",
     "framer-motion": "^11.18.2",
     "html5-qrcode": "2.3.8",
     "lucide-react": "^0.562.0",
