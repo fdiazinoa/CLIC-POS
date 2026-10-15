@@ -829,6 +829,10 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             CREATE INDEX IF NOT EXISTS idx_documents_v3_inventory_baseline
             ON documents(json_extract(data, '$.v3InventoryBaseline'), json_extract(data, '$.productId'), json_extract(data, '$.warehouseId'))
             WHERE collection_name = 'inventoryLedger' AND json_extract(data, '$.v3InventoryBaseline') IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS idx_documents_v3_inventory_delta_cover
+            ON documents(json_extract(data, '$.v3InventoryBaseline'), json_extract(data, '$.productId'), json_extract(data, '$.warehouseId'),
+              COALESCE(json_extract(data, '$.qtyIn'), 0) - COALESCE(json_extract(data, '$.qtyOut'), 0))
+            WHERE collection_name = 'inventoryLedger' AND json_extract(data, '$.v3InventoryBaseline') IS NOT NULL;
             CREATE TRIGGER IF NOT EXISTS preserve_v3_inventory_delete BEFORE DELETE ON documents
             WHEN OLD.collection_name IN ('inventoryLedger', 'transactions', 'transactionHistory') AND json_extract(OLD.data, '$.v3InventoryBaseline') IS NOT NULL
             BEGIN SELECT RAISE(IGNORE); END;
