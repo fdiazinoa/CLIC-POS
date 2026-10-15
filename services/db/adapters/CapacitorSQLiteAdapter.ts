@@ -1,3 +1,5 @@
+import { ARTICLE_FORMATS_SCHEMA } from '../../articleFormats/schema';
+import type { FormatSQL } from '../../articleFormats/store';
 import { getEffectiveFiscalComplianceConfig, getProviderEnvironment } from '../../../utils/fiscal/fiscalHelpers';
 import { validateV3FiscalMetadataMutation } from '../LargeMasterSyncV3FiscalMetadata';
 import { v3RetainedLineFingerprint } from '../../sync/LargeMasterSyncV3StockAuthority';
@@ -625,10 +627,30 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         return this.db;
     }
 
+    /** Share the native legacy/V3 writer lock across format reads, planning and atomic commit. */
+    articleFormatSQL(): FormatSQL {
+        const direct: FormatSQL = {
+            storageLayout: 'DOCUMENTS',
+            executeSchema: async sql => {
+                await this.ensureDb().execute('PRAGMA foreign_keys = ON;', false);
+                await this.ensureDb().execute(sql);
+            },
+            executeAtomic: statements => this.executeUnlocked(statements.map(s => ({statement: s.statement, values: s.values || []}))),
+            query: async <T>(sql: string, values: (string | number | null)[]) =>
+                (await this.ensureDb().query(sql, values)).values as T[] || [],
+        };
+        return {
+            ...direct,
+            executeSchema: sql => this.withWriteLock(() => direct.executeSchema(sql)),
+            executeAtomic: statements => this.withWriteLock(() => direct.executeAtomic(statements)),
+            runExclusive: work => this.withWriteLock(() => work(direct)),
+        };
+    }
+
     private async initSchema(): Promise<void> {
         const db = this.ensureDb();
+        await db.execute('PRAGMA foreign_keys = ON;', false);
         await db.execute(`
-            PRAGMA foreign_keys = ON;
             CREATE TABLE IF NOT EXISTS documents (
                 collection_name TEXT NOT NULL,
                 doc_id TEXT NOT NULL,
@@ -703,6 +725,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             ON master_number_ranges(entity_type, status, start_number, range_id);
             ${DURABLE_OUTBOX_SCHEMA_SQL}
             ${LARGE_MASTER_SYNC_V3_SCHEMA_SQL}
+            ${ARTICLE_FORMATS_SCHEMA}
         `);
         await this.withWriteLock(async () => {
             await ensureLargeMasterSyncV3ContractColumns(db);
