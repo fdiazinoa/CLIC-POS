@@ -198,7 +198,7 @@ export class LargeMasterSyncV3OperationalSession {
       version: this.ready.inventoryVersion, cursor: this.ready.inventoryCursor };
     const currentCatalog = await this.catalog(tariffId, warehouseId);
     const sourceCatalogs = new Map<string, LargeMasterSyncV3OperationalCatalog>();
-    const currentTaxes = await this.ready.runtime.getOperationalTaxes();
+    let currentTaxes: Promise<Record<string, unknown>[]> | undefined;
     const sourceTaxes = new Map<string, Promise<Record<string, unknown>[]>>();
     const sourceFor = async (line: CartItem) => {
       const stamp = line.v3SaleAuthority;
@@ -215,7 +215,7 @@ export class LargeMasterSyncV3OperationalSession {
         const epoch = JSON.stringify([stamp.syncId,stamp.syncVersion]);
         if (!sourceTaxes.has(epoch)) sourceTaxes.set(epoch,this.store.getOperationalTaxes({ syncId: stamp.syncId, syncVersion: stamp.syncVersion, contractVersion: 2 }));
         const oldTaxes = await sourceTaxes.get(epoch)!;
-        const newTaxes = currentTaxes;
+        const newTaxes = await (currentTaxes ??= this.ready.runtime.getOperationalTaxes());
         for (const id of line.appliedTaxIds || []) {
           const old = oldTaxes.filter(row => row.id === id), current = newTaxes.filter(row => row.id === id);
           if (old.length !== 1 || current.length !== 1 || v3TaxSemantics(old[0]) !== v3TaxSemantics(current[0])) {
@@ -238,8 +238,11 @@ export class LargeMasterSyncV3OperationalSession {
     const demand = new Map<string, number>();
     for (const line of lines) demand.set(line.id, (demand.get(line.id) || 0) + Math.max(0, line.quantity));
     for (const line of lines) {
+      const stamp = line.v3SaleAuthority;
+      const currentGeneration = stamp?.syncId === this.ready.runtime.version.syncId
+        && stamp.syncVersion === this.ready.runtime.version.syncVersion;
       const source = await sourceFor(line);
-      const current = await currentCatalog.get(line.id);
+      const current = currentGeneration ? source : await currentCatalog.get(line.id);
       if (intent === 'SALE' && !current) throw new LargeMasterSyncV3Error('SYNC_V3_ARTICLE_UNAVAILABLE');
       if (!source || source.product.appliedTaxIds?.join('|') !== line.appliedTaxIds?.join('|')) {
         throw new LargeMasterSyncV3Error('SYNC_V3_ARTICLE_UNAVAILABLE');

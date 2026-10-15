@@ -97,7 +97,7 @@ async function sessionModule(f:Awaited<ReturnType<typeof fixture>>){
   await assertIdentity();const transition={...await f.transition(),binding,assertIdentity};await store.prepareCatalogOnly(manifest,transition);f.stage(33,g.__refresh.patch || {});await store.activateCatalogOnly(newId,transition);
   return {runtime:await LargeMasterSyncV3Runtime.open(store),inventoryVersion:4,inventoryCursor:'inventory-cursor',inventorySyncId:oldId,inventorySyncVersion:32};
  };
- sessionBundle ||= build({entryPoints:[new URL('../services/sync/LargeMasterSyncV3OperationalSession.ts',import.meta.url).pathname],bundle:true,write:false,platform:'node',format:'esm',define:{'import.meta.env':'{}'},plugins:[{name:'native-refresh-environment',setup(b){b.onResolve({filter:/^(\.\.\/db|\.\.\/\.\.\/utils\/db|\.\/LargeMasterSyncV3(?:Platform|Authority|Candidate|BoundTransport|DownloadOrigin)|\.\/OperationalTerminalConfig)$/},a=>({path:a.path,namespace:'refresh'}));b.onLoad({filter:/.*/,namespace:'refresh'},a=>({loader:'js',contents:a.path==='../db'?'export const dbAdapter=new Proxy({}, {get:(_t,k)=>{const a=globalThis.__refresh.adapter;return typeof a[k]==="function"?a[k].bind(a):a[k];}});':a.path==='../../utils/db'?'export const db={get:()=>globalThis.__refresh.adapter.getCollection("config")};':a.path.endsWith('Platform')?'export const assertLargeMasterSyncV3NativeAndroid=()=>{};':a.path.endsWith('Authority')?'export const LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED=true;':a.path.endsWith('Candidate')?'export const prepareLargeMasterSyncV3CatalogOnly=(...a)=>globalThis.__refresh.refresh(...a);export const prepareLargeMasterSyncV3Candidate=()=>{throw Error("unexpected fresh download")};export const prepareLargeMasterSyncV3UnusedBaseline=()=>{throw Error("unexpected baseline replacement")};':a.path.endsWith('BoundTransport')?'export const readLargeMasterSyncV3BoundIdentity=()=>globalThis.__refresh.identity;':a.path.endsWith('DownloadOrigin')?'export const largeMasterSyncV3DownloadOrigin=()=>globalThis.__refresh.origin;':'export const readOperationalTerminalBinding=()=>globalThis.__refresh.guard;'}));}}]}).then(r=>import('data:text/javascript;base64,'+Buffer.from(r.outputFiles[0].text).toString('base64')));
+ sessionBundle ||= build({entryPoints:[new URL('../services/sync/LargeMasterSyncV3OperationalSession.ts',import.meta.url).pathname],bundle:true,write:false,platform:'node',format:'esm',define:{'import.meta.env':'{}'},plugins:[{name:'native-refresh-environment',setup(b){b.onResolve({filter:/^(\.\.\/db|\.\.\/\.\.\/utils\/db|\.\/LargeMasterSyncV3(?:Platform|Authority|Candidate|BoundTransport|DownloadOrigin)|\.\/OperationalTerminalConfig)$/},a=>({path:a.path,namespace:'refresh'}));b.onLoad({filter:/.*/,namespace:'refresh'},a=>({loader:'js',contents:a.path==='../db'?'export const dbAdapter=new Proxy({}, {get:(_t,k)=>{const a=globalThis.__refresh.adapter;return typeof a[k]==="function"?a[k].bind(a):a[k];}});':a.path==='../../utils/db'?'export const db={get:()=>globalThis.__refresh.adapter.getCollection("config"),getDocument:(...a)=>globalThis.__refresh.adapter.getDocument(...a)};':a.path.endsWith('Platform')?'export const assertLargeMasterSyncV3NativeAndroid=()=>{};':a.path.endsWith('Authority')?'export const LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED=true;':a.path.endsWith('Candidate')?'export const prepareLargeMasterSyncV3CatalogOnly=(...a)=>globalThis.__refresh.refresh(...a);export const prepareLargeMasterSyncV3Candidate=()=>{throw Error("unexpected fresh download")};export const prepareLargeMasterSyncV3UnusedBaseline=()=>{throw Error("unexpected baseline replacement")};':a.path.endsWith('BoundTransport')?'export const readLargeMasterSyncV3BoundIdentity=()=>globalThis.__refresh.identity;':a.path.endsWith('DownloadOrigin')?'export const largeMasterSyncV3DownloadOrigin=()=>globalThis.__refresh.origin;':'export const readOperationalTerminalBinding=()=>globalThis.__refresh.guard;'}));}}]}).then(r=>import('data:text/javascript;base64,'+Buffer.from(r.outputFiles[0].text).toString('base64')));
  return sessionBundle;
 }
 
@@ -185,4 +185,60 @@ test('production financial builder with real Session reserves and invoices witho
   assert.deepEqual((f.db.prepare('SELECT event_type FROM sync_outbox_v2 ORDER BY local_sequence').all() as any[]).map(r=>r.event_type),['SALE_POSTED','PAYMENT_POSTED']);
   assert.equal(f.documents('transactions')[0].displayId,'TCK-000001');assert.equal(f.documents('internalSequences')[0].nextNumber,2);
  }finally{if(cloneDescriptor)Object.defineProperty(globalThis,'structuredClone',cloneDescriptor);else delete (globalThis as any).structuredClone;f.db.close();delete (globalThis as any).__refresh;delete (globalThis as any).__invoice;(globalThis as any).window=previousWindow;}
+});
+
+// Same native/Session fixture as the invoice guards: count bridge work, never timing or UI latency.
+for(const negative of [true,false])test(`current-generation validation reuses only each line's source (negative=${negative})`,async()=>{
+ for(const duplicate of [true,false])for(const prior of [0,10,50,100]){
+  const f=await fixture(undefined,true,negative);try{
+   await f.store.prepareCatalogOnly(manifest,await f.transition());f.stage();await f.store.activateCatalogOnly(newId,await f.transition());
+   if(!duplicate)for(let n=1;n<=prior;n++){
+    const next=id(1000+n),row=f.db.prepare('SELECT * FROM master_v3_articles WHERE sync_version=33 AND article_id=?').get(product) as any;row.article_id=next;row.record_json=JSON.stringify({...JSON.parse(row.record_json),id:next});const keys=Object.keys(row);f.db.prepare(`INSERT INTO master_v3_articles(${keys.join(',')}) VALUES(${keys.map(()=>'?').join(',')})`).run(...keys.map(k=>row[k]));f.db.prepare('INSERT INTO master_v3_prices VALUES(33,?,?,45)').run(next,tariff);f.db.prepare('INSERT INTO master_v3_inventory_balances VALUES(?,?,137,0,0,?)').run(next,warehouse,'fixture');
+   }
+   const {LargeMasterSyncV3OperationalSession:Session}=await sessionModule(f),session=await Session.open(false),config=await session.projectConfig(f.config),catalog=await session.catalog(tariff,warehouse),lines:any[]=[];
+   for(let n=0;n<=prior;n++)lines.push({...await session.withStock((await catalog.get(duplicate||n===0?product:id(1000+n))).product,warehouse),quantity:1,cartId:'count-'+n});
+   const commands:{method:string;sql:string}[]=[];
+   for(const method of ['query','run','execute']){const original=f.bridge[method].bind(f.bridge);f.bridge[method]=async(...args:any[])=>{commands.push({method,sql:args[0]});return original(...args);};}
+   const sources:any[]=[];await session.validate(config,lines,tariff,warehouse,'SALE',(_line:any,source:any)=>{sources.push(source);source.name='callback-local';});
+   assert.equal(commands.length,13+(negative?6:7)*lines.length,`prior=${prior}, duplicate=${duplicate}`);assert.equal(commands.filter(c=>c.method!=='query').length,0);assert.equal(commands.filter(c=>c.sql.includes('master_v3_taxes')).length,1);
+   assert.equal(sources.length,lines.length);assert.equal(new Set(sources).size,lines.length,'callback mutation cannot leak into the next line');assert.equal((await catalog.get(product)).product.name,'Synthetic');assert.equal(f.db.inTransaction,false);
+  }finally{f.db.close();delete (globalThis as any).__refresh;}
+ }
+});
+
+for(const problem of ['missing-stamp','stale-stamp','owner-drift','cursor-drift','token-drift','canonical-false'] as const)test(`per-line reuse keeps ${problem} rejection and final authority fence`,async()=>{
+ const f=await fixture(undefined,true,false);try{
+  const {LargeMasterSyncV3OperationalSession:Session}=await sessionModule(f),session=await Session.open(false),config=await session.projectConfig(f.config),line={...await session.withStock((await(await session.catalog(tariff,warehouse)).get(product)).product,warehouse),quantity:1,cartId:'guard',operationalFlags:{trackInventory:true,allowNegativeStock:true}};
+  if(problem==='missing-stamp')delete line.v3SaleAuthority;
+  if(problem==='stale-stamp')line.v3SaleAuthority={...line.v3SaleAuthority,syncId:newId,syncVersion:33};
+  if(problem==='canonical-false')line.quantity=138;
+  let callbacks=0;await assert.rejects(session.validate(config,[line],tariff,warehouse,'SALE',()=>{callbacks++;if(problem==='owner-drift')f.db.prepare("UPDATE master_v3_operational_owner SET binding='foreign'").run();if(problem==='cursor-drift')f.db.prepare("UPDATE master_v3_inventory_state SET cursor='foreign'").run();if(problem==='token-drift')(globalThis as any).__refresh.identity={...(globalThis as any).__refresh.identity,syncToken:'changed'};}));
+  if(problem.endsWith('drift'))assert.equal(callbacks,1,'drift injected after source validation must reach and fail the final fence');
+  assert.equal(f.documents('transactions').length,0);assert.equal(f.documents('inventoryLedger').length,0);
+ }finally{f.db.close();delete (globalThis as any).__refresh;}
+});
+
+for(const scenario of ['retained','tax-changed','receipt-missing','current-missing','delivery'] as const)test(`retained generation keeps independent current/source reads and lazy taxes: ${scenario}`,async()=>{
+ const f=await fixture();try{
+  const tax=id(77);f.db.prepare('INSERT INTO master_v3_taxes(sync_version,tax_id,active,rate,record_json) VALUES(32,?,1,.18,?)').run(tax,JSON.stringify({id:tax,name:'ITBIS',type:'VAT',rate:.18,active:true}));
+  const article=JSON.parse((f.db.prepare('SELECT record_json FROM master_v3_articles WHERE sync_version=32').get() as any).record_json);article.taxable=true;article.taxIds=[tax];f.db.prepare('UPDATE master_v3_articles SET taxable=1,tax_ids_json=?,record_json=? WHERE sync_version=32').run(JSON.stringify([tax]),JSON.stringify(article));
+  await f.store.activateCatalogOnly(oldId,await f.transition());
+  const {LargeMasterSyncV3OperationalSession:Session}=await sessionModule(f),previous=await Session.open(false),old=await previous.withStock((await(await previous.catalog(tariff,warehouse)).get(product)).product,warehouse),lines=[{...old,quantity:1,cartId:'retained-a'},{...old,quantity:1,cartId:'retained-b'}];
+  await f.adapter.saveCollection('parkedTickets',[{id:'retained-cart',items:lines}]);const retainedBefore=f.documents('parkedTickets');
+  await f.store.prepareCatalogOnly(manifest,await f.transition());f.stage();f.db.prepare('UPDATE master_v3_prices SET price=85 WHERE sync_version=33').run();await f.store.activateCatalogOnly(newId,await f.transition());
+  const session=await Session.open(false),config=await session.projectConfig(f.config);
+  if(scenario==='tax-changed'||scenario==='delivery')f.db.prepare("UPDATE master_v3_taxes SET record_json=json_set(record_json,'$.type','SERVICE_CHARGE') WHERE sync_version=33").run();
+  if(scenario==='receipt-missing')f.db.prepare('DELETE FROM master_v3_catalog_owners WHERE sync_version=32').run();
+  if(scenario==='current-missing')f.db.prepare('UPDATE master_v3_articles SET active=0 WHERE sync_version=33').run();
+  const reads:{sql:string;values:any[]}[]=[],query=f.bridge.query.bind(f.bridge);f.bridge.query=async(sql:string,values:any[])=>{reads.push({sql,values});return query(sql,values);};
+  const seen:number[]=[],run=()=>session.validate(config,lines,tariff,warehouse,'SALE',(_line:any,source:any)=>seen.push(source.price),{ticketId:'retained-cart'},scenario==='delivery');
+  if(scenario==='tax-changed')await assert.rejects(run(),/RETAINED_TAX_CLASSIFICATION_CHANGED/);
+  else if(scenario==='receipt-missing')await assert.rejects(run(),/RETAINED_OWNER_REQUIRED/);
+  else if(scenario==='current-missing')await assert.rejects(run(),/ARTICLE_UNAVAILABLE/);
+  else{
+   await run();assert.deepEqual(seen,[45,45]);const taxReads=reads.filter(r=>r.sql.includes('master_v3_taxes'));assert.equal(taxReads.length,scenario==='delivery'?2:4,'current comparison promise is lazy and reused across retained lines only');
+   const articles=reads.filter(r=>r.sql.includes('FROM master_v3_articles')&&r.sql.includes('article_id'));assert.equal(articles.filter(r=>r.values.includes(32)).length,2);assert.equal(articles.filter(r=>r.values.includes(33)).length,2);
+  }
+  assert.deepEqual(f.documents('parkedTickets'),retainedBefore);assert.equal(f.documents('transactions').length,0);
+ }finally{f.db.close();delete (globalThis as any).__refresh;}
 });

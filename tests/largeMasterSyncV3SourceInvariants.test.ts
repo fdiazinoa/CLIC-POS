@@ -26,6 +26,10 @@ const sale = (): Transaction => ({ id: 'sale', total: 118, netAmount: 100, taxAm
 function sqliteFixture() {
   const sql = new DatabaseSync(':memory:');
   const bridge = {
+    beginTransaction: async () => { sql.exec('BEGIN IMMEDIATE;'); },
+    commitTransaction: async () => { sql.exec('COMMIT;'); },
+    rollbackTransaction: async () => { sql.exec('ROLLBACK;'); },
+    isTransactionActive: async () => ({ result: sql.isTransaction }),
     query: async (query: string, values: any[] = []) => ({ values: sql.prepare(query).all(...values) }),
     execute: async (query: string) => { sql.exec(query); },
     run: async (query: string, values: any[] = []) => sql.prepare(query).run(...values),
