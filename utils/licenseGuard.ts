@@ -237,7 +237,6 @@ const fetchLicenseStatusFromErp = async (
             cache: 'no-store',
             headers: {
                 Accept: 'application/json',
-                'Cache-Control': 'no-cache',
             },
         },
         timeoutMs

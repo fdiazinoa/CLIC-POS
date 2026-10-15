@@ -1,3 +1,5 @@
+import { ARTICLE_FORMATS_SCHEMA } from '../../articleFormats/schema';
+import type { FormatSQL } from '../../articleFormats/store';
 import { getEffectiveFiscalComplianceConfig, getProviderEnvironment } from '../../../utils/fiscal/fiscalHelpers';
 import { validateV3FiscalMetadataMutation } from '../LargeMasterSyncV3FiscalMetadata';
 import { v3RetainedLineFingerprint } from '../../sync/LargeMasterSyncV3StockAuthority';
@@ -51,6 +53,8 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
     private sqliteConnection: SQLiteConnectionInstance | null = null;
     private db: SQLiteDBConnectionInstance | null = null;
     private isReady = false;
+    private connectPromise: Promise<void> | null = null;
+    private disconnectPromise: Promise<void> | null = null;
     private writeQueue: Promise<unknown> = Promise.resolve();
     public readonly adapterType = 'local';
     public readonly masterSyncV3Store = new LargeMasterSyncV3SqliteStore(
@@ -58,44 +62,81 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         operation => this.withWriteLock(operation),
     );
 
-    async connect(): Promise<void> {
-        if (this.isReady) return;
+    connect(): Promise<void> {
+        if (this.disconnectPromise) return this.disconnectPromise.then(() => this.connect());
+        if (this.isReady) return Promise.resolve();
+        if (this.connectPromise) return this.connectPromise;
+
+        // A caller's timeout does not cancel native open/schema work. All callers,
+        // including startup retries, must await that same operation.
+        this.connectPromise = this.connectOnce().finally(() => {
+            this.connectPromise = null;
+        });
+        return this.connectPromise;
+    }
+
+    private loadSQLiteBridge(): Promise<SQLiteBridgeModule> {
+        return import('@capacitor-community/sqlite');
+    }
+
+    private async connectOnce(): Promise<void> {
 
         if (!Capacitor.isNativePlatform() || Capacitor.getPlatform() !== 'android') {
             throw new Error('CapacitorSQLiteAdapter is only available on Android native runtime.');
         }
 
-        const { CapacitorSQLite, SQLiteConnection } = await import('@capacitor-community/sqlite');
+        // If cleanup failed, retain and close that manager before replacing it.
+        if (this.sqliteConnection) await this.closeRegisteredConnection();
+
+        const { CapacitorSQLite, SQLiteConnection } = await this.loadSQLiteBridge();
         this.sqliteConnection = new SQLiteConnection(CapacitorSQLite);
 
-        const consistency = await this.sqliteConnection.checkConnectionsConsistency().catch(() => ({ result: false }));
-        const hasConnection = await this.sqliteConnection.isConnection(DB_NAME, false).catch(() => ({ result: false }));
+        try {
+            const consistency = await this.sqliteConnection.checkConnectionsConsistency();
+            const hasConnection = await this.sqliteConnection.isConnection(DB_NAME, false);
 
-        if (consistency.result && hasConnection.result) {
-            this.db = await this.sqliteConnection.retrieveConnection(DB_NAME, false);
-        } else {
-            this.db = await this.sqliteConnection.createConnection(DB_NAME, false, 'no-encryption', DB_VERSION, false);
+            if (consistency.result && hasConnection.result) {
+                this.db = await this.sqliteConnection.retrieveConnection(DB_NAME, false);
+            } else {
+                this.db = await this.sqliteConnection.createConnection(DB_NAME, false, 'no-encryption', DB_VERSION, false);
+            }
+
+            if (!(await this.db.isDBOpen()).result) await this.db.open();
+            await this.initSchema();
+            this.isReady = true;
+            console.log('[CapacitorSQLiteAdapter] Connected');
+        } catch (error) {
+            // Release the registered handle after a failed open or migration,
+            // before a later retry creates another manager for the same file.
+            await this.closeRegisteredConnection().catch(cleanupError => {
+                console.warn('[CapacitorSQLiteAdapter] startup cleanup failed:', cleanupError);
+            });
+            throw error;
         }
-
-        await this.db.open();
-        await this.initSchema();
-        this.isReady = true;
-        console.log('[CapacitorSQLiteAdapter] Connected');
     }
 
-    async disconnect(): Promise<void> {
-        if (!this.db || !this.sqliteConnection) return;
+    disconnect(): Promise<void> {
+        if (this.disconnectPromise) return this.disconnectPromise;
+        const connecting = this.connectPromise;
+        this.disconnectPromise = (async () => {
+            await connecting?.catch(() => undefined);
+            await this.closeRegisteredConnection();
+        })().finally(() => {
+            this.disconnectPromise = null;
+        });
+        return this.disconnectPromise;
+    }
 
-        try {
-            await this.db.close();
-        } catch (error) {
-            console.warn('[CapacitorSQLiteAdapter] close() failed:', error);
-        }
-
-        try {
+    private async closeRegisteredConnection(): Promise<void> {
+        this.isReady = false;
+        // End a failed schema transaction on the native thread before closing.
+        // Retain the handle on cleanup failure so retry cannot abandon its lock.
+        if (this.db && this.sqliteConnection) {
+            if ((await this.db.isDBOpen()).result && (await this.db.isTransactionActive()).result) {
+                await this.db.rollbackTransaction();
+            }
+            // closeConnection also closes an open database; never delete/reset it.
             await this.sqliteConnection.closeConnection(DB_NAME, false);
-        } catch (error) {
-            console.warn('[CapacitorSQLiteAdapter] closeConnection() failed:', error);
         }
 
         this.db = null;
@@ -586,10 +627,31 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         return this.db;
     }
 
+    /** Share the native legacy/V3 writer lock across format reads, planning and atomic commit. */
+    articleFormatSQL(): FormatSQL {
+        const direct: FormatSQL = {
+            storageLayout: 'DOCUMENTS',
+            financialPostingReadiness: 'NATIVE_UNPROVEN',
+            executeSchema: async sql => {
+                await this.ensureDb().execute('PRAGMA foreign_keys = ON;', false);
+                await this.ensureDb().execute(sql);
+            },
+            executeAtomic: statements => this.executeUnlocked(statements.map(s => ({statement: s.statement, values: s.values || []}))),
+            query: async <T>(sql: string, values: (string | number | null)[]) =>
+                (await this.ensureDb().query(sql, values)).values as T[] || [],
+        };
+        return {
+            ...direct,
+            executeSchema: sql => this.withWriteLock(() => direct.executeSchema(sql)),
+            executeAtomic: statements => this.withWriteLock(() => direct.executeAtomic(statements)),
+            runExclusive: work => this.withWriteLock(() => work(direct)),
+        };
+    }
+
     private async initSchema(): Promise<void> {
         const db = this.ensureDb();
+        await db.execute('PRAGMA foreign_keys = ON;', false);
         await db.execute(`
-            PRAGMA foreign_keys = ON;
             CREATE TABLE IF NOT EXISTS documents (
                 collection_name TEXT NOT NULL,
                 doc_id TEXT NOT NULL,
@@ -664,6 +726,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             ON master_number_ranges(entity_type, status, start_number, range_id);
             ${DURABLE_OUTBOX_SCHEMA_SQL}
             ${LARGE_MASTER_SYNC_V3_SCHEMA_SQL}
+            ${ARTICLE_FORMATS_SCHEMA}
         `);
         await this.withWriteLock(async () => {
             await ensureLargeMasterSyncV3ContractColumns(db);

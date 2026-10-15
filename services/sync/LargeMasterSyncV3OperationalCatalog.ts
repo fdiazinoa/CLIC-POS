@@ -118,9 +118,8 @@ export class LargeMasterSyncV3OperationalCatalog {
       this.ready.runtime.getInventoryBalance(articleId, this.warehouseId),
       this.ready.runtime.getOperationalVariants(articleId),
     ]);
-    if (booleanValue(article.inventoriable) && sourceFlags.trackInventory && !balance) {
-      throw new LargeMasterSyncV3Error('SYNC_V3_ARTICLE_INVENTORY_COVERAGE_REQUIRED');
-    }
+    // Missing balances are zero availability, not a catalog visibility rule.
+    // Sale validation enforces the authoritative negative-stock settings.
     if (sourceFlags.isWeighted && sourceVariants.length > 0) {
       throw new UnsupportedArticleError('Variantes de artículo pesado no soportadas');
     }
@@ -201,7 +200,6 @@ export class LargeMasterSyncV3OperationalCatalog {
         if (diagnostics.length < 10) diagnostics.push({ articleId: stringValue(sale.article.id), sku: stringValue(sale.article.sku), code: error.code, reason: error.reason });
         return null;
       }
-      if(error instanceof LargeMasterSyncV3Error && error.code === 'SYNC_V3_ARTICLE_INVENTORY_COVERAGE_REQUIRED') return null;
       throw error;
     }}));
     await this.assertInventoryVersion();

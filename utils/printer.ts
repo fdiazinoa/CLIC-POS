@@ -1,3 +1,4 @@
+import { articleFormatTicketHTML } from '../services/articleFormats/ticket';
 import { formatQuantity, terminalQuantityPresentation } from './quantityPresentation';
 import { weightLineLabel, displayWeightQuantity } from './scaleWeight';
 import { trackCheckoutPrint } from '../services/CheckoutPrintTracking';
@@ -471,6 +472,7 @@ const printTicketInternal = async (transaction: Transaction, config: BusinessCon
                         <tr>
                             <td style="width: 70%;">
                                 <span class="item-name">${item.name}</span>
+                                ${item.articleFormat ? `<span class="item-meta">${articleFormatTicketHTML(item)}</span>` : ''}
                                 <span class="item-meta">
                                     ${weightLineLabel(item, currencySymbol, lineDiscount.hasDiscount ? lineDiscount.originalUnitPrice : lineDiscount.finalUnitPrice, terminalQuantityPresentation(config, transaction.terminalId).salesDecimals)}
                                     ${lineDiscount.hasDiscount ? `<br/><strong>Descuento artículo (${lineDiscount.discountPercentageLabel}): -${currencySymbol}${lineDiscount.discountAmount.toFixed(2)}</strong>` : ''}
@@ -829,6 +831,7 @@ const printReservationInternal = async (
                         <tr>
                             <td style="width: 70%;">
                                 <span class="item-name">${item.name}</span>
+                                ${item.articleFormat ? `<span class="item-meta">${articleFormatTicketHTML(item)}</span>` : ''}
                                 <span class="item-meta">${weightLineLabel(item, currencySymbol, item.price, terminalQuantityPresentation(config, reservation.terminalId).salesDecimals)}</span>
                             </td>
                             <td class="text-right font-bold">

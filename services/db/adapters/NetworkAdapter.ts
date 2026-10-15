@@ -1,3 +1,5 @@
+import { assertLegacyFormatPayload, assertLegacyFormatCollection } from '../../articleFormats/activation';
+import { ArticleFormatError } from '../../articleFormats/domain';
 import { DatabaseAdapter } from '../DatabaseAdapter';
 import { buildMasterUrlFromHost } from '../../../utils/cloudMasterRegistry';
 
@@ -136,14 +138,18 @@ export class NetworkAdapter implements DatabaseAdapter {
                 if (res.status === 404) return [];
                 throw new Error(`Failed to fetch ${collectionName}: ${res.statusText}`);
             }
-            return await res.json();
+            const data = await res.json();
+            assertLegacyFormatCollection(collectionName,data);
+            return data;
         } catch (error) {
             console.error(`Error fetching collection ${collectionName} from ${url}:`, error);
+            if (error instanceof ArticleFormatError) throw error;
             return [];
         }
     }
 
     async saveCollection<T>(collectionName: string, data: T[]): Promise<void> {
+        if (collectionName === 'transactions' || collectionName === 'transactionHistory') (data || []).forEach(assertLegacyFormatPayload);
         this.rejectUnjournaledMutation(`saveCollection:${collectionName}`);
         if (!collectionName) {
             console.warn('⚠️ NetworkAdapter: saveCollection called with undefined collectionName');
@@ -232,6 +238,7 @@ export class NetworkAdapter implements DatabaseAdapter {
     }
 
     async saveDocument<T extends { id: string }>(collectionName: string, doc: T): Promise<void> {
+        if (collectionName === 'transactions' || collectionName === 'transactionHistory') assertLegacyFormatPayload(doc);
         this.rejectUnjournaledMutation(`saveDocument:${collectionName}:${doc?.id || ''}`);
         if (!doc.id) {
             console.error(`❌ NetworkAdapter: Attempted to save document to ${collectionName} without ID.`, doc);
@@ -275,6 +282,7 @@ export class NetworkAdapter implements DatabaseAdapter {
     }
 
     async bulkUpsert<T extends { id: string }>(collectionName: string, docs: T[]): Promise<void> {
+        assertLegacyFormatCollection(collectionName,docs);
         this.rejectUnjournaledMutation(`bulkUpsert:${collectionName}:${docs.length}`);
         for (const doc of docs || []) {
             await this.saveDocument(collectionName, doc);
@@ -313,8 +321,11 @@ export class NetworkAdapter implements DatabaseAdapter {
                 headers: { 'Connection': 'keep-alive' }
             });
             if (!res.ok) return null;
-            return await res.json();
+            const data = await res.json();
+            assertLegacyFormatCollection(collectionName,[data]);
+            return data;
         } catch (error) {
+            if (error instanceof ArticleFormatError) throw error;
             return null;
         }
     }

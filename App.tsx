@@ -1,3 +1,4 @@
+import { assertFormatsPostingClosed } from './services/articleFormats/activation';
 import { attachFiscalStatusLifecycle } from './services/fiscal/FiscalStatusLifecycle';
 import { FiscalStatusReconciler } from './services/fiscal/FiscalStatusReconciler';
 import { fiscalStatusSourceChecksum, type FiscalStatusScope } from './services/fiscal/FiscalStatusProof';
@@ -113,6 +114,7 @@ import { useKioskMode } from './hooks/useKioskMode';
 import { useBarcodeScanner } from './hooks/useBarcodeScanner';
 import { notifySalesScannerHostVisibility } from './utils/globalBarcodeCapture';
 import { db } from './utils/db'; // Import Local DB
+import { retryDatabaseStartup } from './services/db/StartupRetry';
 import { dbAdapter } from './services/db'; // Import Adapter for Healthcheck
 import { bootstrapLargeMasterSyncV3Lifecycle } from './services/sync/LargeMasterSyncV3Lifecycle';
 import { syncManager } from './services/sync/SyncManager';
@@ -2382,6 +2384,17 @@ const AppContent: React.FC = () => {
   const [isDataLoaded, setIsDataLoaded] = useState<boolean>(false);
   const [fiscalHistoryHydrated,setFiscalHistoryHydrated]=useState(false);
   const [initialConnError, setInitialConnError] = useState<string | null>(null);
+  const [isRetryingStartup, setIsRetryingStartup] = useState(false);
+  const retryStartup = async () => {
+    if (isRetryingStartup) return;
+    setIsRetryingStartup(true);
+    try {
+      await retryDatabaseStartup(dbAdapter, () => window.location.reload());
+    } catch (error) {
+      setInitialConnError(error instanceof Error ? error.message : 'No se pudo cerrar la base local para reintentar.');
+      setIsRetryingStartup(false);
+    }
+  };
   const [failedMasterIp, setFailedMasterIp] = useState<string>('');
   const initLoadStartedRef = useRef(false);
   const forceSyncHandledRef = useRef(false);
@@ -4605,6 +4618,8 @@ const AppContent: React.FC = () => {
       if (disposed) return;
       const nativeBridge = (window as any).ClicPOSNativePrinter;
       const currentTerminal = getCurrentTerminal();
+      // Device/config hydration reruns this effect; never publish or stop a server with unresolved identity.
+      if (!currentTerminal?.id) return;
       const shouldServeAsMaster = isNativeStandaloneTerminalRuntime(currentTerminal);
 
       if (!shouldServeAsMaster) {
@@ -11540,6 +11555,7 @@ const AppContent: React.FC = () => {
   }, [fiscalStatusWorker,isDataLoaded,fiscalHistoryHydrated,isSecurityLoaded,deviceId,config.companyInfo.rnc,fiscalStatusLifecycleKey]);
 
   const handleTransactionComplete = async (txn: Transaction) => {
+    assertFormatsPostingClosed(txn.items || []);
     const fiscalTerminal = (config.terminals || []).find(terminal => terminal.config?.currentDeviceId === deviceId);
     if ((txn.ncf || txn.ncfType) && (!fiscalTerminal ||
         (txn.terminalId && txn.terminalId !== fiscalTerminal.id && txn.terminalId !== fiscalTerminal.config?.erpTerminalId))) {
@@ -12873,10 +12889,11 @@ const AppContent: React.FC = () => {
           <p className="text-slate-400 mb-6 max-w-md">{initialConnError}</p>
           {loadingV3Progress && <LargeMasterSyncV3SetupProgress progress={loadingV3Progress} />}
           <button
-            onClick={() => window.location.reload()}
+            onClick={() => void retryStartup()}
+            disabled={isRetryingStartup}
             className="px-6 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg font-medium transition-colors"
           >
-            Reintentar
+            {isRetryingStartup ? 'Esperando base local...' : 'Reintentar'}
           </button>
         </div>
       );
@@ -12903,6 +12920,8 @@ const AppContent: React.FC = () => {
     reason: string,
     options: RefundProcessingOptions = {}
   ): Promise<Transaction | null> => {
+    assertFormatsPostingClosed(itemsToRefund || []);
+    assertFormatsPostingClosed(originalTx.items || []);
     console.log("🔄 Procesando Devolución Integral:", { originalTx, items: itemsToRefund.length, reason });
 
     let normalizedRefundItems = (itemsToRefund || [])
@@ -15473,10 +15492,11 @@ const AppContent: React.FC = () => {
           <h1 className="text-2xl font-bold mb-2">Error de Inicialización</h1>
           <p className="text-lg bg-white p-4 rounded shadow border border-red-200">{initialConnError}</p>
           <button
-            onClick={() => window.location.reload()}
+            onClick={() => void retryStartup()}
+            disabled={isRetryingStartup}
             className="mt-6 px-6 py-2 bg-red-600 text-white rounded hover:bg-red-700 transition-colors"
           >
-            Reintentar
+            {isRetryingStartup ? 'Esperando base local...' : 'Reintentar'}
           </button>
         </div>
       );

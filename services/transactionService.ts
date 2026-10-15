@@ -1,6 +1,7 @@
 import { withOriginal } from './recovery/OriginalCapture';
 import { recordCheckoutDiagnostic } from './CheckoutDiagnostics';
 import { BusinessConfig, Customer, Transaction, DocumentType, DocumentSeries } from '../types';
+import { assertFormatsPostingClosed } from './articleFormats/activation';
 import { db } from '../utils/db';
 import { normalizeTransactionForSync } from './sync/sourceIdentity';
 import { isSyncFeatureEnabled } from './sync/SyncFeatureFlags';
@@ -374,6 +375,7 @@ class TransactionService {
         options: { deferDurablePersistence?: boolean } = {},
     ): Promise<Transaction> {
         recordCheckoutDiagnostic('TRANSACTION_CREATE_INPUT', { items: data.items, total: data.total, transactionId: data.id, payments: data.payments, terminalId: data.terminalId });
+        assertFormatsPostingClosed(data.items || []);
         // Validate required fields
         if (!data.documentType) {
             throw new Error('documentType is required');
@@ -774,6 +776,8 @@ class TransactionService {
         options: { deferDurableSalePersistence?: boolean; deferV3RefundPersistence?: boolean;
             v3FinancialContext?: { config: BusinessConfig; warehouseId: string; terminalName: string } } = {},
     ): Promise<{ sale?: Transaction, refund?: Transaction }> {
+        assertFormatsPostingClosed(data.saleTransaction?.items || []);
+        assertFormatsPostingClosed(data.refundTransaction?.items || []);
         const results: { sale?: Transaction, refund?: Transaction } = {};
         const v3 = isV3FinancialDocument(data.saleTransaction || {}) || isV3FinancialDocument(data.refundTransaction || {});
         if (v3) {
