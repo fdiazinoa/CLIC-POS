@@ -793,7 +793,8 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
     }
 
     async reserveFinancialNumbers(input:FinancialNumberReservation):Promise<FinancialNumberResult> {
-        input=structuredClone(input);
+        // Reservation fields are primitives; fiscal contains only primitive/serialized snapshot fields.
+        input={...input,...(input.fiscal?{fiscal:{...input.fiscal}}:{})};
         return this.withWriteLock(()=>this.withNativeTransaction(async()=>{
             const db=this.ensureDb();
             const read=async(collection:string,id:string)=>{
