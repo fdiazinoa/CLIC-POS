@@ -1,3 +1,4 @@
+import {reconcileInventoryPoolIndex,isInventoryPoolDDL} from '../../articleFormats/inventoryPoolIndex';
 import {assertNoReconciledOrdinaryWriter} from '../../articleFormats/inventoryJournal';
 import {readV3Base4Stock,base4} from '../V3Base4Stock';
 import {Money} from '../../articleFormats/wire';
@@ -7,7 +8,7 @@ import {validateFiscalBufferReservation} from '../../../utils/fiscalBufferAuthor
 import { ARTICLE_FORMAT_RETAINED_UPSERT_SQL } from '../ArticleFormatFinancialRetention';
 import { planFinancialNumbers, FINANCIAL_COUNTER_UPSERT_SQL } from '../FinancialNumberReservation';
 import { ARTICLE_FORMATS_SCHEMA } from '../../articleFormats/schema';
-import type { FormatSQL } from '../../articleFormats/store';
+import type { FormatSQL,FormatStatement } from '../../articleFormats/store';
 import { getEffectiveFiscalComplianceConfig, getProviderEnvironment } from '../../../utils/fiscal/fiscalHelpers';
 import { validateV3FiscalMetadataMutation } from '../LargeMasterSyncV3FiscalMetadata';
 import { v3RetainedLineFingerprint } from '../../sync/LargeMasterSyncV3StockAuthority';
@@ -738,15 +739,23 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             runExclusive: work => this.withWriteLock(() => work(direct)),
         };
         port.runFinancial = work => this.withWriteLock(() => this.withNativeTransaction(async () => {
-            const db=this.ensureDb();
             const scoped:FormatSQL={...direct,
                 executeSchema:async()=>{throw Error('POS_FORMAT_SCHEMA_INSIDE_FINANCIAL_TRANSACTION');},
-                executeAtomic:async statements=>{for(const entry of statements) await db.run(entry.statement,entry.values || [],false);},
+                executeAtomic:statements=>this.executeArticleFormatOwned(statements),
                 assertFinancialDocuments:documents=>this.assertV3FinancialBaseline(documents),
             };
             return work(scoped);
         }));
         return port;
+    }
+
+    /** Only the two authorized pool-index statements need native execute DDL on this owned transaction. */
+    private async executeArticleFormatOwned(statements:FormatStatement[]):Promise<void> {
+        const db=this.ensureDb();
+        for(const entry of statements){
+            if(isInventoryPoolDDL(entry))await db.execute(entry.statement,false);
+            else await db.run(entry.statement,entry.values || [],false);
+        }
     }
 
     /** Android's tracked beginTransaction uses SQLiteDatabase.beginTransaction (EXCLUSIVE), before any read. */
@@ -893,6 +902,12 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             ${ARTICLE_FORMATS_SCHEMA}
             ${NATIVE_FISCAL_RECEIPTS_SCHEMA}
         `);
+        await this.withWriteLock(()=>this.withNativeTransaction(()=>reconcileInventoryPoolIndex({
+            storageLayout:'DOCUMENTS',
+            query:async<T>(sql:string,values:(string|number|null)[])=>(await db.query(sql,values)).values as T[] || [],
+            executeAtomic:statements=>this.executeArticleFormatOwned(statements),
+            executeSchema:async()=>{throw Error('POS_FORMAT_SCHEMA_INSIDE_FINANCIAL_TRANSACTION');},
+        },false)));
         await this.withWriteLock(async () => {
             await ensureLargeMasterSyncV3ContractColumns(db);
             await backfillLargeMasterSyncV3Categories(db);

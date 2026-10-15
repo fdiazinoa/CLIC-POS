@@ -1,3 +1,4 @@
+import {reconcileInventoryPoolIndex} from './inventoryPoolIndex';
 import {planInventoryOriginal} from './inventoryJournal';
 import {NATIVE_FISCAL_RECEIPTS_SCHEMA,planNativeFiscalReceipt} from '../db/NativeFiscalReservation';
 import {validateFiscalBufferReservation} from '../../utils/fiscalBufferAuthority';
@@ -89,7 +90,7 @@ export class ArticleFormatPosting {
  constructor(private readonly sql:FormatSQL,context:NetworkContext,private readonly masters:NetworkMasterPort){
   this.context=deepFreeze(validateContext(context));requireFormat(sql.runExclusive,'POS_FORMAT_ATOMIC_STORAGE_REQUIRED');
  }
- migrate(){return this.sql.executeSchema((this.sql.storageLayout==='DOCUMENTS'?'':'CREATE TABLE IF NOT EXISTS collections(key TEXT PRIMARY KEY NOT NULL,value TEXT NOT NULL,updatedAt TEXT NOT NULL);')+ARTICLE_FORMATS_SCHEMA+articleFormatWireSchema(this.sql.storageLayout)+(this.sql.storageLayout==='DOCUMENTS'?NATIVE_FISCAL_RECEIPTS_SCHEMA:''));}
+ async migrate(){await this.sql.executeSchema((this.sql.storageLayout==='DOCUMENTS'?'':'CREATE TABLE IF NOT EXISTS collections(key TEXT PRIMARY KEY NOT NULL,value TEXT NOT NULL,updatedAt TEXT NOT NULL);')+ARTICLE_FORMATS_SCHEMA+articleFormatWireSchema(this.sql.storageLayout)+(this.sql.storageLayout==='DOCUMENTS'?NATIVE_FISCAL_RECEIPTS_SCHEMA:''));if(this.sql.storageLayout==='DOCUMENTS'){requireFormat(this.sql.runFinancial,'POS_FORMAT_ATOMIC_STORAGE_REQUIRED');await this.sql.runFinancial!(tx=>reconcileInventoryPoolIndex(tx,true));}}
  private scope(){return [this.context.scope.tenantId,this.context.scope.companyId];}
  private async saved(sql:FormatSQL,eventId:string):Promise<SavedWire|undefined>{
   return (await sql.query<SavedWire>(`SELECT o.content,w.content_hash,w.context,w.policies,w.ack,w.attempts,w.next_attempt FROM article_format_wire_events w
