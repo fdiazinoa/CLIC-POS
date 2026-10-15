@@ -1,3 +1,4 @@
+import {planInventoryOriginal} from './inventoryJournal';
 import {NATIVE_FISCAL_RECEIPTS_SCHEMA,planNativeFiscalReceipt} from '../db/NativeFiscalReservation';
 import {validateFiscalBufferReservation} from '../../utils/fiscalBufferAuthority';
 import { planFinancialNumbers } from '../db/FinancialNumberReservation';
@@ -277,6 +278,7 @@ export class ArticleFormatPosting {
    for(const name of names.filter(n=>!native || !['productStocks','products'].includes(n)))statements.push(...local.writes(name,data[name],event.occurred_at));
    statements.push({statement:'INSERT INTO article_format_wire_events(tenant_id,company_id,event_id,transaction_id,content_hash,context,policies) VALUES(?,?,?,?,?,?,?)',
     values:[...this.scope(),event.event_id,event.transaction_id,hash,canonicalContent(this.context),canonicalContent(policies)]});
+   statements.push(...await planInventoryOriginal(sql,event,this.context,hash));
    statements.push({statement:'DELETE FROM article_format_wire_write_scope WHERE id=1'});
    await sql.executeAtomic(statements);return transaction;
   });

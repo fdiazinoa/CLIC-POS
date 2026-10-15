@@ -1,3 +1,4 @@
+import {readReconciledInventory} from '../articleFormats/inventoryJournal';
 import { authorizeV3TaxClassification } from '../sync/LargeMasterSyncV3TaxClassification';
 import { v3ArticleSemantics, v3TaxSemantics, v3TariffSemantics, v3VariantSemantics } from '../sync/LargeMasterSyncV3StockAuthority';
 import type { LargeMasterSyncV3InventoryAuthority, LargeMasterSyncV3CatalogTransition } from '../sync/LargeMasterSyncV3Types';
@@ -130,6 +131,8 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
   }
 
   async getLocalInventoryDelta(baseline: string, itemId: string, warehouseId: string): Promise<number> {
+    const selected=await this.reconciledAdjustments(baseline,[itemId],warehouseId);
+    if(selected)return selected[itemId];
     const row = first(await this.connection().query(`SELECT COALESCE(SUM(
       COALESCE(json_extract(data, '$.qtyIn'), 0) - COALESCE(json_extract(data, '$.qtyOut'), 0)), 0) AS delta
       FROM documents WHERE collection_name = 'inventoryLedger'
@@ -141,6 +144,8 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
   async getLocalInventoryDeltas(baseline: string, itemIds: string[], warehouseId: string): Promise<Record<string, number>> {
     if (!itemIds.length) return {};
     if (itemIds.length > 100) throw new LargeMasterSyncV3Error('SYNC_V3_QUERY_LIMIT');
+    const selected=await this.reconciledAdjustments(baseline,itemIds,warehouseId);
+    if(selected)return selected;
     const result = await this.connection().query(`SELECT json_extract(data, '$.productId') AS item_id,
       SUM(COALESCE(json_extract(data, '$.qtyIn'), 0) - COALESCE(json_extract(data, '$.qtyOut'), 0)) AS delta
       FROM documents WHERE collection_name = 'inventoryLedger'
@@ -148,6 +153,18 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
       AND json_extract(data, '$.productId') IN (${itemIds.map(() => '?').join(',')})
       GROUP BY json_extract(data, '$.productId')`, [baseline, warehouseId, ...itemIds]);
     return Object.fromEntries(rows(result).map(row => [String(row.item_id), Number(row.delta)]));
+  }
+
+  private async reconciledAdjustments(baseline:string,itemIds:string[],warehouseId:string):Promise<Record<string,number>|undefined> {
+    const query=async<T>(sql:string,values:(string|number|null)[])=>rows(await this.connection().query(sql,values)) as T[];
+    const selected=await readReconciledInventory(query,baseline,itemIds,warehouseId);
+    if(!selected)return undefined;
+    const originals=await query<any>(`SELECT item_id,qty_on_hand FROM master_v3_inventory_balances WHERE warehouse_id=? AND item_id IN (${itemIds.map(()=>'?').join(',')})`,[warehouseId,...itemIds]);
+    return Object.fromEntries(itemIds.map(id=>{
+      const original=originals.filter(r=>r.item_id===id);
+      if(original.length!==1)throw new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_NOT_READY');
+      return [id,selected[id].physical.minus(String(original[0].qty_on_hand)).toNumber()];
+    }));
   }
 
   async getOperationalSupports(runtime: LargeMasterSyncV3RuntimeVersion, itemIds: string[], warehouseId: string) {

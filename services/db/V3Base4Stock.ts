@@ -1,3 +1,4 @@
+import {readReconciledInventory} from '../articleFormats/inventoryJournal';
 import {Money,requireFormat} from '../articleFormats/wire';
 
 type Query=<T>(sql:string,values:(string|number|null)[])=>Promise<T[]>;
@@ -11,6 +12,8 @@ export function base4(value:unknown):InstanceType<typeof Money> {
 
 /** Exact BASE4 stock authority. Validate each stored operand before integer scaling; never round a historical aggregate. */
 export async function readV3Base4Stock(query:Query,baseline:string,itemId:string,warehouseId:string) {
+ const selected=await readReconciledInventory(query,baseline,[itemId],warehouseId);
+ if(selected)return selected[itemId];
  const qtyIn="COALESCE(json_extract(data,'$.qtyIn'),0)",qtyOut="COALESCE(json_extract(data,'$.qtyOut'),0)";
  const valid=(field:string,path:string)=>`(COALESCE(json_type(data,'$.${path}'),'null') IN ('integer','real','null')
   AND ${field}=${field} AND ABS(${field})<=99999999999.9999 AND ${field}>=0 AND ${field}=ROUND(${field},4))`;
