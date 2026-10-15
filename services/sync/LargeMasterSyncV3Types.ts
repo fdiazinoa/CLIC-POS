@@ -137,6 +137,10 @@ export interface LargeMasterSyncV3Store {
   findOperationalCode?(runtime: LargeMasterSyncV3RuntimeVersion, code: string): Promise<{ articleId: string; variantId: string | null } | null>;
   getOperationalOwner?(): Promise<{ syncId: string; syncVersion: number; binding: string } | null>;
   setOperationalOwner?(runtime: LargeMasterSyncV3RuntimeVersion, binding: string): Promise<void>;
+  /** Native-owned atomic projection: absolute reconciled availability avoids cancelling a stale floating V3 balance. */
+  getOperationalStockProjection?(baseline:string,itemIds:string[],warehouseId:string):Promise<{
+    mode:'RECONCILED_AVAILABLE'|'LEGACY_DELTA';quantities:Record<string,number>;
+  }>;
   getLocalInventoryDelta?(baseline: string, itemId: string, warehouseId: string): Promise<number>;
   assertCanRefresh?(): Promise<void>;
   getLocalInventoryDeltas?(baseline: string, itemIds: string[], warehouseId: string): Promise<Record<string, number>>;

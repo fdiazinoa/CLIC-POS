@@ -14,9 +14,9 @@ export async function inventoryFixture(...args:Parameters<typeof nativeFixture>)
  return {...f,journal,baseline,reservations};
 }
 export type InventoryCapture=Awaited<ReturnType<ArticleFormatInventoryJournal['captureFixture']>>;
-export async function receiptTransport(capture:InventoryCapture,opts:{baselineId?:string;receiptId?:string;ordinal?:string;physical?:string;statuses?:Record<string,InventoryEventResult['status']>;extraBalances?:InventoryBalance[];mutate?:(path:string,result:any)=>any}={}){
+export async function receiptTransport(capture:InventoryCapture,opts:{baselineId?:string;receiptId?:string;ordinal?:string;physical?:string;committed?:string;statuses?:Record<string,InventoryEventResult['status']>;extraBalances?:InventoryBalance[];mutate?:(path:string,result:any)=>any}={}){
  const baselineId=opts.baselineId || id(1000),receiptId=opts.receiptId || id(2000);
- const balances:InventoryBalance[]=[{kind:'BALANCE',item_id:id(7),warehouse_id:scope.warehouse_id,local_id:scope.local_id,qty_physical:opts.physical || '89.0000',qty_committed:'0.0000'},...(opts.extraBalances || [])];
+ const balances:InventoryBalance[]=[{kind:'BALANCE',item_id:id(7),warehouse_id:scope.warehouse_id,local_id:scope.local_id,qty_physical:opts.physical || '89.0000',qty_committed:opts.committed || '0.0000'},...(opts.extraBalances || [])];
  const results:InventoryEventResult[]=await Promise.all(capture.originals.map(async(o:JournalOriginal)=>{
   const status=opts.statuses?.[o.event.event_id] || 'INCLUDED',canonical_original=postgresJSON(o.event);
   return {kind:'EVENT',event_id:o.event.event_id,canonical_original,content_hash:await hashText(canonical_original),status,

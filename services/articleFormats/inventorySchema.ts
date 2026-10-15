@@ -23,11 +23,13 @@ CREATE TABLE IF NOT EXISTS article_format_inventory_balances (
 CREATE TABLE IF NOT EXISTS article_format_inventory_absorptions (
  scope_key TEXT NOT NULL,event_id TEXT NOT NULL,receipt_id TEXT NOT NULL,baseline_id TEXT NOT NULL,evidence TEXT NOT NULL,
  PRIMARY KEY(scope_key,event_id));
+CREATE TABLE IF NOT EXISTS article_format_inventory_authorities (
+ receipt_id TEXT PRIMARY KEY,scope_key TEXT NOT NULL,baseline_id TEXT NOT NULL,context_token TEXT NOT NULL,authorization TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS article_format_inventory_history (
  receipt_id TEXT PRIMARY KEY,scope_key TEXT NOT NULL,baseline_id TEXT NOT NULL,ordinal TEXT NOT NULL,manifest TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS article_format_inventory_staging (
  receipt_id TEXT NOT NULL,page_index INTEGER NOT NULL,content TEXT NOT NULL,PRIMARY KEY(receipt_id,page_index));
-`+['originals','effects','links','absorptions','history'].map(name=>`
+`+['originals','effects','links','absorptions','authorities','history'].map(name=>`
 CREATE TRIGGER IF NOT EXISTS article_format_inventory_${name}_immutable_update BEFORE UPDATE ON article_format_inventory_${name}
 BEGIN SELECT RAISE(ABORT,'POS_FORMAT_INVENTORY_IMMUTABLE'); END;
 CREATE TRIGGER IF NOT EXISTS article_format_inventory_${name}_immutable_delete BEFORE DELETE ON article_format_inventory_${name}

@@ -11,7 +11,7 @@ import {inventoryReceiptRequest,validateInventoryRows,validateManifest,signedBas
 import {readV3Base4Stock} from '../services/db/V3Base4Stock';
 import {returnWireLine,wireTotals} from '../services/articleFormats/posting';
 import {createFormatTransport,hashText,type WireEvent} from '../services/articleFormats/wire';
-const activeState=(f:Awaited<ReturnType<typeof inventoryFixture>>)=>Object.fromEntries(['article_format_inventory_state','article_format_inventory_originals','article_format_inventory_effects','article_format_inventory_links','article_format_inventory_balances','article_format_inventory_absorptions','article_format_inventory_history','article_format_outbox','article_format_wire_events'].map(t=>[t,f.db.prepare(`SELECT * FROM ${t} ORDER BY rowid`).all()]));
+const activeState=(f:Awaited<ReturnType<typeof inventoryFixture>>)=>Object.fromEntries(['article_format_inventory_state','article_format_inventory_originals','article_format_inventory_effects','article_format_inventory_links','article_format_inventory_balances','article_format_inventory_absorptions','article_format_inventory_authorities','article_format_inventory_history','article_format_outbox','article_format_wire_events'].map(t=>[t,f.db.prepare(`SELECT * FROM ${t} ORDER BY rowid`).all()]));
 const physical=async(f:Awaited<ReturnType<typeof inventoryFixture>>)=>(await readReconciledPhysicalInventory(f.sql.query,f.baseline(),[id(7)],id(5)))![id(7)].physical.toFixed(4);
 async function prepare(f:Awaited<ReturnType<typeof inventoryFixture>>,opts:Parameters<typeof receiptTransport>[1]={}){const capture=await f.journal.captureFixture(),mock=await receiptTransport(capture,opts);return {capture,mock,downloaded:await mock.download()};}
 for(const ackFirst of [true,false])test(`real native SQLite:137-48=89, financial ACK ${ackFirst?'before':'after'} inclusion, two cuts and replay`,async()=>{
@@ -66,7 +66,7 @@ for(const status of ['UNKNOWN','NOT_INCLUDED'] as const)test(`${status} retains 
 
 test('all write boundaries rollback on durable SQLite file and ambiguous COMMIT reopens exact state',async()=>{
  const dir=mkdtempSync(join(tmpdir(),'clic-inventory-'));try{
-  for(let failure=0;failure<5;failure++){
+  for(let failure=0;failure<6;failure++){
    const file=join(dir,`${failure}.sqlite`);let f=await inventoryFixture(new SQLite(file));await f.posting.post(nativeSale(),options);const p=await prepare(f);const before=activeState(f);
    f.fault.writes=0;f.fault.failWrite=failure;
    await assert.rejects(f.journal.commitFixture(p.capture,p.downloaded),/injected-write/);assert.deepEqual(activeState(f),before);
@@ -236,4 +236,113 @@ test('format OFF performs one bounded active-scope lookup and never parses journ
  const f=await inventoryFixture();try{let queries:string[]=[];const query=async<T>(sql:string,values:(string|number|null)[])=>{queries.push(sql);return f.sql.query<T>(sql,values);};
   assert.equal(await readReconciledPhysicalInventory(query,f.baseline(),[id(7)],id(5)),undefined);assert.equal(queries.length,1);assert.ok(queries[0].includes('WHERE baseline_id IS NOT NULL'));
  }finally{f.db.close();}
+});
+
+test('actual V3 catalog/session single and batch use selected availability across reservation and V3 balance refresh',async()=>{
+ const {LargeMasterSyncV3Runtime}=await import('../services/sync/LargeMasterSyncV3Runtime');
+ const {LargeMasterSyncV3OperationalCatalog}=await import('../services/sync/LargeMasterSyncV3OperationalCatalog');
+ const {build}=await import('esbuild');
+ const bundle=await build({entryPoints:[new URL('../services/sync/LargeMasterSyncV3OperationalSession.ts',import.meta.url).pathname],bundle:true,write:false,format:'esm',platform:'node',define:{'import.meta.env':'{}'},plugins:[{name:'inventory-session-isolated-io',setup(builder){builder.onResolve({filter:/^(\.\.\/db|\.\.\/\.\.\/utils\/db)$/},args=>({path:args.path,namespace:'inventory-session-fixture'}));builder.onLoad({filter:/.*/,namespace:'inventory-session-fixture'},args=>({contents:args.path==='../db'?'export const dbAdapter={};':'export const db={};',loader:'js'}));}}]});
+ const {LargeMasterSyncV3OperationalSession:Session}=await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`);
+ const f=await inventoryFixture();try{
+  await f.posting.post(nativeSale(),options);
+  f.db.prepare('UPDATE master_v3_inventory_balances SET qty_reserved=10,qty_committed=20').run();
+  f.db.prepare('INSERT INTO master_v3_tariffs(sync_version,tariff_id,active,record_json) VALUES(?,?,?,?)').run(32,id(6),1,JSON.stringify({id:id(6),active:true,taxIncluded:false}));
+  f.db.prepare('INSERT INTO master_v3_prices VALUES(?,?,?,?)').run(32,id(7),id(6),45);
+  f.db.prepare("UPDATE master_v3_articles SET record_json=json_set(record_json,'$.activeWarehouseIds',json(?)) WHERE article_id=?").run(JSON.stringify([id(5)]),id(7));
+  const runtime=LargeMasterSyncV3Runtime.retained(f.adapter.masterSyncV3Store,{syncId:id(60),syncVersion:32,contractVersion:2});
+  const ready={runtime,inventoryVersion:4,inventoryCursor:'inventory-cursor'};
+  const session=new Session(ready,JSON.parse(f.baseline())[0],f.adapter.masterSyncV3Store,'https://erp.invalid',{deviceId:id(50)});
+  const assertReaders=async(expected:number)=>{
+   const catalog=await LargeMasterSyncV3OperationalCatalog.open(ready,id(6),id(5));
+   const source=await catalog.get(id(7));assert.ok(source);
+   const single=await session.withStock(source.product,id(5));
+   const batchSource=(await catalog.search('')).find(row=>row.product.id===id(7));assert.ok(batchSource);
+   const batch=await session.withStocks([batchSource.product],id(5));
+   assert.equal(single.stock,expected);assert.equal(single.stockBalances[id(5)],expected);assert.equal(batch[0].stock,expected);assert.equal(batch[0].stockBalances[id(5)],expected);
+   const native=await f.sql.runFinancial!(tx=>readV3Base4Stock(tx.query,f.baseline(),id(7),id(5)));assert.equal(native.available.toNumber(),expected);
+   if(expected===0.2){session.assertCurrent=async()=>{};await session.validate({taxes:[],terminals:f.documents('config')[0].terminals},[{...single,cartId:'fractional',quantity:0.2}],id(6),id(5));}
+  };
+  await f.reservations(id(1000),{[id(7)]:'5.0000'});const p=await prepare(f);await f.journal.commitFixture(p.capture,p.downloaded);await assertReaders(84);
+  // Both stale dimensions change in a later V3 projection; physical authority and selected reservations stay coherent.
+  f.db.prepare('UPDATE master_v3_inventory_balances SET qty_on_hand=999,qty_reserved=90,qty_committed=100').run();await assertReaders(84);
+  await f.reservations(id(1001),{[id(7)]:'8.0000'});const q=await prepare(f,{baselineId:id(1001),receiptId:id(2001),ordinal:'9007199254740994',committed:'2.0000'});
+  await f.journal.commitFixture(q.capture,q.downloaded);await assertReaders(79);
+  // Absolute selected availability must not travel through 0.3 + (-0.1), nor validate an unrelated old six-decimal baseline as BASE4.
+  for(const [index,oldOnHand] of [0.3,0.300001].entries()){
+   f.db.prepare('UPDATE master_v3_inventory_balances SET qty_on_hand=?,qty_reserved=0,qty_committed=0').run(oldOnHand);
+   const baselineId=id(1002+index);await f.reservations(baselineId,{[id(7)]:'0.0000'});
+   const fractional=await prepare(f,{baselineId,receiptId:id(2002+index),ordinal:String(9007199254740995n+BigInt(index)),physical:'0.2000'});
+   await f.journal.commitFixture(fractional.capture,fractional.downloaded);await assertReaders(0.2);
+  }
+  const {NATIVE_V3_METHOD_CONCURRENCY}=await import('../services/db/adapters/CapacitorSQLiteAdapter');assert.equal(NATIVE_V3_METHOD_CONCURRENCY.getOperationalStockProjection,'read');
+  await assert.rejects(f.adapter.masterSyncV3Store.getOperationalStockProjection(f.baseline(),[id(999)],id(5)),/STOCK_BASELINE_MISSING/);
+ }finally{f.db.close();}
+});
+
+for(const drift of ['grant','fingerprint','fixture-authorization'] as const)test(`postcommit ${drift} drift rejects selected readers and replay until fresh higher-ordinal receipt`,async()=>{
+ const f=await inventoryFixture();try{
+  await f.posting.post(nativeSale(),options);await f.reservations(id(1000));const p=await prepare(f);await f.journal.commitFixture(p.capture,p.downloaded);
+  const originals=f.db.prepare('SELECT * FROM article_format_inventory_originals').all();const historical=f.db.prepare('SELECT * FROM article_format_inventory_history').all();
+  if(drift==='grant')f.db.prepare("UPDATE article_format_network_sessions SET context=json_set(context,'$.grant_revision',2)").run();
+  else if(drift==='fingerprint')f.db.prepare("UPDATE article_format_network_sessions SET context=json_set(context,'$.return_context.fingerprint',?)").run('b'.repeat(64));
+  else await installInventoryFixtureBinding(f.sql,{scope,authorization:'new-synthetic-authorization',reservationAuthority:{baseline_id:id(1000),quantities:{[id(7)]:'0.0000'}}});
+  await assert.rejects(f.sql.runFinancial!(tx=>readV3Base4Stock(tx.query,f.baseline(),id(7),id(5))),/AUTHORITY_CHANGED/);
+  await assert.rejects(f.adapter.masterSyncV3Store.getLocalInventoryDelta(f.baseline(),id(7),id(5)),/AUTHORITY_CHANGED/);
+  await assert.rejects(f.adapter.masterSyncV3Store.getLocalInventoryDeltas(f.baseline(),[id(7)],id(5)),/AUTHORITY_CHANGED/);
+  await assert.rejects(f.journal.commitFixture(p.capture,p.downloaded),/CONTEXT_CHANGED/);
+  const current=await f.journal.captureFixture();
+  // Even a caller with a current capture cannot relabel an old exact baseline as freshly authorized.
+  await assert.rejects(f.journal.commitFixture({...p.capture,b:current.b,contextToken:current.contextToken},p.downloaded),/AUTHORITY_CHANGED/);
+  const mock=await receiptTransport(current,{baselineId:id(1001),receiptId:id(2001),ordinal:'9007199254740994'});await f.journal.commitFixture(current,await mock.download());
+  // Reservation attestation changes independently; retaining the new auth identity does not invalidate selection.
+  await installInventoryFixtureBinding(f.sql,{scope,authorization:current.b.authorization,reservationAuthority:{baseline_id:id(1001),quantities:{[id(7)]:'5.0000'}}});
+  const restored=await f.sql.runFinancial!(tx=>readV3Base4Stock(tx.query,f.baseline(),id(7),id(5)));assert.equal(restored.available.toNumber(),84);
+  assert.deepEqual(f.db.prepare('SELECT * FROM article_format_inventory_originals').all(),originals);
+  assert.deepEqual(f.db.prepare('SELECT * FROM article_format_inventory_history LIMIT 1').all(),historical);
+ }finally{f.db.close();}
+});
+
+test('heartbeat-only metadata stays valid after selection and reservation-only fixture installation preserves authorization',async()=>{
+ const f=await inventoryFixture();try{
+  await f.posting.post(nativeSale(),options);const p=await prepare(f);await f.journal.commitFixture(p.capture,p.downloaded);
+  await f.reservations(id(1000),{[id(7)]:'5.0000'});const c=f.documents('config')[0];c.terminals[0].lastHeartbeatAt='2026-10-15T23:59:00Z';c.terminals[0].lastSeenAt='2026-10-15T23:59:00Z';
+  f.db.prepare("UPDATE documents SET data=? WHERE collection_name='config'").run(JSON.stringify(c));
+  assert.equal((await f.sql.runFinancial!(tx=>readV3Base4Stock(tx.query,f.baseline(),id(7),id(5)))).available.toNumber(),84);
+  assert.equal((await f.journal.commitFixture(p.capture,p.downloaded)).replayed,true);
+ }finally{f.db.close();}
+});
+
+test('ordinary native demands and physical ledger writers fail closed before commit only when a selected warehouse overlaps',async()=>{
+ const f=await inventoryFixture();try{
+  const ordinary=(warehouseId=id(5),quantity=50,quantityScale?:4)=>{const baseline=f.baseline(),[binding]=JSON.parse(baseline);return [{collectionName:'transactions',document:{id:id(200),v3InventoryBaseline:baseline,v3Binding:binding,v3WarehouseId:warehouseId,items:[]},v3StockRequirements:[{baseline,productId:id(7),warehouseId,quantity,quantityScale}]}];};
+  // The channel-absent ordinary path retains six decimal quantities.
+  await f.sql.runFinancial!(tx=>tx.assertFinancialDocuments!(ordinary(id(5),0.000001)));
+  await f.posting.post(nativeSale(),options);await f.reservations(id(1000));const p=await prepare(f,{physical:'20.0000'});await f.journal.commitFixture(p.capture,p.downloaded);
+  const before=activeState(f);
+  for(const scale of [undefined,4] as const)await assert.rejects(f.sql.runFinancial!(async tx=>{await tx.assertFinancialDocuments!(ordinary(id(5),50,scale));await tx.executeAtomic([{statement:"INSERT INTO documents VALUES('transactions',?,'{}',0,'fixture')",values:[id(200)]}]);}),/UNSUPPORTED_WRITER/);
+  // No quantity requirement (e.g. article checkbox exemption) can sneak a nonformat physical delta into this pool.
+  await assert.rejects(f.sql.runFinancial!(tx=>tx.assertFinancialDocuments!([{collectionName:'inventoryLedger',document:{id:id(201),productId:id(7),warehouseId:id(5),qtyIn:0,qtyOut:1}}])),/UNSUPPORTED_WRITER/);
+  await f.sql.runFinancial!(tx=>tx.assertFinancialDocuments!([{collectionName:'inventoryLedger',document:{id:id(202),productId:id(7),warehouseId:id(99),qtyIn:0,qtyOut:0.000001}}]));
+  assert.deepEqual(activeState(f),before);
+  // Format BASE4 preconditions still enforce selected20 exactly rather than taking a legacy shortage path.
+  await assert.rejects(f.posting.post(nativeSale(300,'1'),options),/INSUFFICIENT_STOCK/);
+ }finally{f.db.close();}
+});
+
+test('first-candidate database upgrades add authorization evidence without replacing old state/history; fresh receipt required',async()=>{
+ const {FORMAT_INVENTORY_SCHEMA}=await import('../services/articleFormats/inventorySchema');const {canonicalContent}=await import('../services/articleFormats/store');
+ const dir=mkdtempSync(join(tmpdir(),'clic-inventory-authority-upgrade-'));const file=join(dir,'previous.sqlite');
+ try{
+  let f=await inventoryFixture(new SQLite(file));await f.posting.post(nativeSale(),options);const p=await prepare(f);await f.journal.commitFixture(p.capture,p.downloaded);
+  const saved=activeState(f),oldTables=Object.keys(saved).filter(t=>t!=='article_format_inventory_authorities');
+  // Reproduce exactly the additive table set of the first candidate, whose active state has no authorization proof.
+  f.db.exec('DROP TABLE article_format_inventory_authorities');f.db.close();
+  f=await inventoryFixture(new SQLite(file),false);await f.journal.migrate();
+  for(const table of oldTables)assert.equal(canonicalContent(f.db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()),canonicalContent(saved[table]));
+  await assert.rejects(f.sql.runFinancial!(tx=>readReconciledPhysicalInventory(tx.query,f.baseline(),[id(7)],id(5))),/AUTHORITY_UNPROVEN/);
+  await assert.rejects(f.journal.commitFixture(p.capture,p.downloaded),/AUTHORITY_UNPROVEN/);
+  const fresh=await prepare(f,{baselineId:id(1001),receiptId:id(2001),ordinal:'9007199254740994'});await f.journal.commitFixture(fresh.capture,fresh.downloaded);assert.equal(await physical(f),'89.0000');
+  assert.equal((f.db.prepare('SELECT count(*) n FROM article_format_inventory_history').get() as any).n,2);f.db.close();
+ }finally{rmSync(dir,{recursive:true,force:true});}
 });

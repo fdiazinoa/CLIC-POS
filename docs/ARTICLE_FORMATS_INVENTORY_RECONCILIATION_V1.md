@@ -29,7 +29,9 @@ No hay un baseline por variante. Las celdas son artículo/warehouse/local y los
 efectos conservan ERP_ID de variante. La autoridad física seleccionada es baseline
 más journal no absorbido. El ledger histórico sigue disponible para auditoría y
 no se suma de nuevo. Native preconditions, lectura financiera y consulta operacional
-single/batch usan la misma selección; los sellos V3 comerciales históricos permanecen
+single/batch usan la misma selección. La proyección de sesión recibe disponibilidad
+absoluta seleccionada, sin cancelar cantidades binarias ni restar reservas V3
+antiguas. Los sellos V3 comerciales históricos permanecen
 separados. Sin baseline seleccionado el camino V3/legacy conserva su aritmética
 anterior (incluida precisión seis decimales); el selector añade una consulta acotada
 a scopes activos, con índice parcial, sin parsear originales ni recorrer catálogo.
@@ -66,6 +68,28 @@ filas (balances+eventos); aplica un techo de128MiB al texto de páginas recibido
 para acotar recursos de la representación duplicada. Un exceso, fuente incompleta,
 page/hash/count faltante o cambio de contexto no permite reemplazo parcial.
 No hay purga de historial ni modificación de límites ERP.
+
+Cada selección persiste contexto nativo estable y autorización explícita en
+`article_format_inventory_authorities`, inmutable por receipt. Los lectores y el
+replay comparan esa identidad con la actual; cambios de grant/fingerprint/binding
+invalidan la selección hasta un nuevo recibo completo con ordinal superior.
+Actualizar únicamente reservas independientes para el mismo baseline no cambia
+esa identidad; heartbeat/lastSeen se excluyen expresamente. La nueva tabla es una
+migración aditiva: un baseline de la primera versión sin evidencia de autorización
+permanece guardado, pero su lectura/replay se bloquea hasta conciliación nueva;
+no se reconstruye la autorización histórica a partir del contexto actual.
+
+El escritor nativo ordinario no tiene prueba de inclusión en el canal sólo-formatos.
+Una demanda o movimiento físico no-format que solape un warehouse seleccionado se
+rechaza antes del commit (`POS_FORMAT_INVENTORY_UNSUPPORTED_WRITER`), incluso cuando
+su política de artículo no exige cantidad. El camino legacy de seis decimales queda
+disponible únicamente sin solapamiento con autoridad seleccionada.
+
+Las funciones raw de lectura multi-query requieren que el caller conserve propiedad
+de toda la lectura bajo la cola nativa compartida o `runFinancial`. Los métodos
+públicos del store, incluida `getOperationalStockProjection`, están clasificados
+`read` en el proxy nativo y protegen la operación completa. Una secuencia de queries
+bloqueadas de forma independiente no cumple ese contrato de propiedad.
 
 ## Pruebas y evidencia separada
 

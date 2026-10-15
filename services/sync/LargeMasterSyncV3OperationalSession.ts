@@ -150,11 +150,16 @@ export class LargeMasterSyncV3OperationalSession {
     const stamp = product.v3SaleAuthority;
     if (!stamp) throw new LargeMasterSyncV3Error('SYNC_V3_CART_LEGACY_LINE');
     if(product.type==='SERVICE'||product.isInventoriable!==true||!requiresProductStockAvailability(product))return {...product,v3SaleAuthority:{...stamp,binding:this.binding,warehouseId}};
-    if(!Number.isFinite(product.stock))throw new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_NOT_READY');
-    const delta = await this.store.getLocalInventoryDelta!(v3InventoryBaselineKey(this.binding, stamp), product.id, warehouseId);
-    if(!Number.isFinite(delta))throw new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_NOT_READY');
-    return { ...product, v3SaleAuthority: { ...stamp, binding: this.binding, warehouseId }, stock: product.stock + delta,
-      stockBalances: { ...product.stockBalances, [warehouseId]: (product.stockBalances?.[warehouseId] || 0) + delta } };
+    const baseline=v3InventoryBaselineKey(this.binding,stamp);
+    if(!this.store.getOperationalStockProjection&&!Number.isFinite(product.stock))throw new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_NOT_READY');
+    const projection=this.store.getOperationalStockProjection ? await this.store.getOperationalStockProjection(baseline,[product.id],warehouseId)
+      : {mode:'LEGACY_DELTA' as const,quantities:{[product.id]:await this.store.getLocalInventoryDelta!(baseline,product.id,warehouseId)}};
+    if(projection.mode==='RECONCILED_AVAILABLE'&&!Object.hasOwn(projection.quantities,product.id))throw new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_NOT_READY');
+    const value=projection.quantities[product.id] ?? 0;
+    if(!Number.isFinite(value)||projection.mode==='LEGACY_DELTA'&&!Number.isFinite(product.stock))throw new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_NOT_READY');
+    return { ...product, v3SaleAuthority: { ...stamp, binding: this.binding, warehouseId },
+      stock:projection.mode==='RECONCILED_AVAILABLE'?value:product.stock+value,
+      stockBalances:{...product.stockBalances,[warehouseId]:projection.mode==='RECONCILED_AVAILABLE'?value:(product.stockBalances?.[warehouseId] || 0)+value} };
   }
 
   async withStocks(products: Product[], warehouseId: string): Promise<Product[]> {
@@ -162,13 +167,21 @@ export class LargeMasterSyncV3OperationalSession {
     const stamp = products[0].v3SaleAuthority;
     if (!stamp) throw new LargeMasterSyncV3Error('SYNC_V3_NATIVE_STORE_UNAVAILABLE');
     const checked=products.filter(p=>p.type!=='SERVICE'&&p.isInventoriable===true&&requiresProductStockAvailability(p));
-    if(checked.length&&(!this.store.getLocalInventoryDeltas||checked.some(p=>!Number.isFinite(p.stock))))throw new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_NOT_READY');
-    const deltas = checked.length ? await this.store.getLocalInventoryDeltas(v3InventoryBaselineKey(this.binding, stamp), checked.map(row => row.id), warehouseId) : {};
-    if(Object.values(deltas).some(d=>!Number.isFinite(d)))throw new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_NOT_READY');
-    return products.map(product => ({ ...product,
-      v3SaleAuthority: { ...product.v3SaleAuthority!, binding: this.binding, warehouseId },
-      stock: product.stock + (deltas[product.id] || 0),
-      stockBalances: { ...product.stockBalances, [warehouseId]: (product.stockBalances?.[warehouseId] || 0) + (deltas[product.id] || 0) } }));
+    if(checked.length&&!this.store.getOperationalStockProjection&&(!this.store.getLocalInventoryDeltas||checked.some(p=>!Number.isFinite(p.stock))))throw new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_NOT_READY');
+    const baseline=v3InventoryBaselineKey(this.binding,stamp);
+    const projection=checked.length ? this.store.getOperationalStockProjection
+      ? await this.store.getOperationalStockProjection(baseline,checked.map(p=>p.id),warehouseId)
+      : {mode:'LEGACY_DELTA' as const,quantities:await this.store.getLocalInventoryDeltas!(baseline,checked.map(p=>p.id),warehouseId)}
+      : {mode:'LEGACY_DELTA' as const,quantities:{}};
+    if(projection.mode==='RECONCILED_AVAILABLE'&&checked.some(p=>!Object.hasOwn(projection.quantities,p.id)))throw new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_NOT_READY');
+    if(Object.values(projection.quantities).some(d=>!Number.isFinite(d))||projection.mode==='LEGACY_DELTA'&&checked.some(p=>!Number.isFinite(p.stock)))throw new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_NOT_READY');
+    return products.map(product => {
+      const value=projection.quantities[product.id] ?? 0;
+      const absolute=projection.mode==='RECONCILED_AVAILABLE'&&Object.hasOwn(projection.quantities,product.id);
+      return {...product,v3SaleAuthority:{...product.v3SaleAuthority!,binding:this.binding,warehouseId},
+        stock:absolute?value:product.stock+value,
+        stockBalances:{...product.stockBalances,[warehouseId]:absolute?value:(product.stockBalances?.[warehouseId] || 0)+value}};
+    });
   }
 
   async validate(config: BusinessConfig, lines: CartItem[], tariffId: string, warehouseId: string,

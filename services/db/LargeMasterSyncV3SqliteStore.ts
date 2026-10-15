@@ -146,6 +146,19 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
     if (itemIds.length > 100) throw new LargeMasterSyncV3Error('SYNC_V3_QUERY_LIMIT');
     const selected=await this.reconciledAdjustments(baseline,itemIds,warehouseId);
     if(selected)return selected;
+    return this.legacyInventoryDeltas(baseline,itemIds,warehouseId);
+  }
+
+  async getOperationalStockProjection(baseline:string,itemIds:string[],warehouseId:string):Promise<{mode:'RECONCILED_AVAILABLE'|'LEGACY_DELTA';quantities:Record<string,number>}> {
+    if(itemIds.length>100)throw new LargeMasterSyncV3Error('SYNC_V3_QUERY_LIMIT');
+    if(!itemIds.length)return {mode:'LEGACY_DELTA',quantities:{}};
+    const query=async<T>(sql:string,values:(string|number|null)[])=>rows(await this.connection().query(sql,values)) as T[];
+    const selected=await readReconciledInventory(query,baseline,itemIds,warehouseId);
+    if(selected)return {mode:'RECONCILED_AVAILABLE',quantities:Object.fromEntries(Object.entries(selected).map(([id,stock])=>[id,stock.available.toNumber()]))};
+    return {mode:'LEGACY_DELTA',quantities:await this.legacyInventoryDeltas(baseline,itemIds,warehouseId)};
+  }
+
+  private async legacyInventoryDeltas(baseline:string,itemIds:string[],warehouseId:string):Promise<Record<string,number>> {
     const result = await this.connection().query(`SELECT json_extract(data, '$.productId') AS item_id,
       SUM(COALESCE(json_extract(data, '$.qtyIn'), 0) - COALESCE(json_extract(data, '$.qtyOut'), 0)) AS delta
       FROM documents WHERE collection_name = 'inventoryLedger'
@@ -159,11 +172,11 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
     const query=async<T>(sql:string,values:(string|number|null)[])=>rows(await this.connection().query(sql,values)) as T[];
     const selected=await readReconciledInventory(query,baseline,itemIds,warehouseId);
     if(!selected)return undefined;
-    const originals=await query<any>(`SELECT item_id,qty_on_hand FROM master_v3_inventory_balances WHERE warehouse_id=? AND item_id IN (${itemIds.map(()=>'?').join(',')})`,[warehouseId,...itemIds]);
+    const originals=await query<any>(`SELECT item_id,qty_on_hand,qty_reserved,qty_committed FROM master_v3_inventory_balances WHERE warehouse_id=? AND item_id IN (${itemIds.map(()=>'?').join(',')})`,[warehouseId,...itemIds]);
     return Object.fromEntries(itemIds.map(id=>{
       const original=originals.filter(r=>r.item_id===id);
       if(original.length!==1)throw new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_NOT_READY');
-      return [id,selected[id].physical.minus(String(original[0].qty_on_hand)).toNumber()];
+      return [id,selected[id].available.minus(String(original[0].qty_on_hand)).plus(String(original[0].qty_reserved)).plus(String(original[0].qty_committed)).toNumber()];
     }));
   }
 

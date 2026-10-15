@@ -43,6 +43,13 @@ async function currentNativeContext(query:InventoryQuery,scope:InventoryScope){
 interface Binding {scope_key:string;authorization:string;reservations:string|null}
 interface State {scope_key:string;generation:string;baseline_id:string|null;ordinal:string|null;receipt_id:string|null;checksum:string|null;manifest:string|null}
 async function binding(sql:FormatSQL){return (await sql.query<Binding>('SELECT * FROM article_format_inventory_binding WHERE singleton=1',[]))[0];}
+async function assertSelectedAuthority(query:InventoryQuery,state:State,b:Binding,contextToken:string){
+ const rows=await query<{scope_key:string;baseline_id:string;context_token:string;authorization:string}>(
+  'SELECT scope_key,baseline_id,context_token,authorization FROM article_format_inventory_authorities WHERE receipt_id=?',[state.receipt_id]);
+ fail(rows.length===1,'POS_FORMAT_INVENTORY_AUTHORITY_UNPROVEN');const selected=rows[0];
+ fail(selected.scope_key===b.scope_key&&selected.baseline_id===state.baseline_id&&selected.context_token===contextToken
+  &&selected.authorization===b.authorization,'POS_FORMAT_INVENTORY_AUTHORITY_CHANGED');
+}
 export async function planInventoryOriginal(sql:FormatSQL,event:WireEvent,context:NetworkContext,hash:string):Promise<FormatStatement[]>{
  const b=await binding(sql);if(b)matchContext(JSON.parse(b.scope_key),context);
  const values=[context.scope.tenantId,context.scope.companyId,event.event_id];
@@ -144,8 +151,9 @@ export class ArticleFormatInventoryJournal {
   const validated=await validateInventoryRows(m,downloaded.pages,capture.originals);
   fail(same(validated.balances,downloaded.balances)&&same(validated.results,downloaded.results));
   return this.sql.runFinancial!(async tx=>{
-   const current=await this.capture(tx);fail(same(current.b,capture.b)&&current.contextToken===capture.contextToken,'POS_FORMAT_INVENTORY_CONTEXT_CHANGED');
-   if(current.state.baseline_id===m.baseline_id){fail(current.state.manifest===canonicalContent(m),'POS_FORMAT_INVENTORY_REPLAY_CONFLICT');return {replayed:true,manifest:m};}
+   const current=await this.capture(tx);fail(current.b.scope_key===capture.b.scope_key&&current.b.authorization===capture.b.authorization
+    &&current.contextToken===capture.contextToken,'POS_FORMAT_INVENTORY_CONTEXT_CHANGED');
+   if(current.state.baseline_id===m.baseline_id){await assertSelectedAuthority(tx.query,current.state,current.b,current.contextToken);fail(current.state.manifest===canonicalContent(m),'POS_FORMAT_INVENTORY_REPLAY_CONFLICT');return {replayed:true,manifest:m};}
    fail(current.state.generation===capture.state.generation&&same(current.originals,capture.originals),'POS_FORMAT_INVENTORY_GENERATION_CHANGED');
    fail(!current.state.ordinal||BigInt(m.ordinal)>BigInt(current.state.ordinal),'POS_FORMAT_INVENTORY_ORDINAL_STALE');
    const statements:FormatStatement[]=[{statement:'DELETE FROM article_format_inventory_balances WHERE scope_key=?',values:[current.b.scope_key]}];
@@ -153,7 +161,8 @@ export class ArticleFormatInventoryJournal {
     [current.b.scope_key,cell.item_id,cell.warehouse_id,cell.local_id,cell.qty_physical,cell.qty_committed]));
    for(const result of downloaded.results)if(result.status==='INCLUDED'||result.status==='NO_PHYSICAL_EFFECT')statements.push(insert('article_format_inventory_absorptions','scope_key,event_id,receipt_id,baseline_id,evidence',
     [current.b.scope_key,result.event_id,m.receipt_id,m.baseline_id,canonicalContent(result)]));
-   statements.push(insert('article_format_inventory_history','receipt_id,scope_key,baseline_id,ordinal,manifest',[m.receipt_id,current.b.scope_key,m.baseline_id,m.ordinal,canonicalContent(m)]),
+   statements.push(insert('article_format_inventory_authorities','receipt_id,scope_key,baseline_id,context_token,authorization',
+    [m.receipt_id,current.b.scope_key,m.baseline_id,current.contextToken,current.b.authorization]),insert('article_format_inventory_history','receipt_id,scope_key,baseline_id,ordinal,manifest',[m.receipt_id,current.b.scope_key,m.baseline_id,m.ordinal,canonicalContent(m)]),
     {statement:'UPDATE article_format_inventory_state SET generation=?,baseline_id=?,ordinal=?,receipt_id=?,checksum=?,manifest=? WHERE scope_key=?',
      values:[generation(),m.baseline_id,m.ordinal,m.receipt_id,m.checksum,canonicalContent(m),current.b.scope_key]});
    await tx.executeAtomic(statements);return {replayed:false,manifest:m};
@@ -175,7 +184,17 @@ export async function assertNoUnrepresentedEffects(query:InventoryQuery,scope:In
    AND e.delta_base=printf('%.4f',COALESCE(json_extract(d.data,'$.qtyIn'),0)-COALESCE(json_extract(d.data,'$.qtyOut'),0))) LIMIT 1`,[...params,key(scope)]);
  fail(!rows.length,'POS_FORMAT_INVENTORY_UNREPRESENTED_EFFECTS');
 }
-/** Batch authority used by native and UI readers. Undefined means this channel has never selected a baseline. */
+/** Ordinary writers have no physical inclusion proof in this format-only channel.
+ * Run before native commit, including stock-exempt writers that still emit physical ledger rows. */
+export async function assertNoReconciledOrdinaryWriter(query:InventoryQuery,warehouseId:string){
+ let states:{scope_key:string}[];
+ try{states=await query<{scope_key:string}>(`SELECT scope_key FROM article_format_inventory_state WHERE baseline_id IS NOT NULL
+  AND json_extract(scope_key,'$.warehouse_id')=? LIMIT 1`,[warehouseId]);}
+ catch(error){if(error instanceof Error&&/no such table: (?:main\.)?article_format_inventory_state(?:$|\s)/.test(error.message))return;throw error;}
+ fail(!states.length,'POS_FORMAT_INVENTORY_UNSUPPORTED_WRITER');
+}
+/** Raw multi-query helper: callers must own the whole read under the native shared lock or runFinancial transaction.
+ * Public native store proxies and financial readers provide that ownership; independently locked queries do not. */
 export async function readReconciledPhysicalInventory(query:InventoryQuery,baseline:string,itemIds:string[],warehouseId:string){
  let states:State[];
  try{states=await query<State>('SELECT * FROM article_format_inventory_state WHERE baseline_id IS NOT NULL',[]);}
@@ -185,7 +204,7 @@ export async function readReconciledPhysicalInventory(query:InventoryQuery,basel
  const state=states.find(s=>s.scope_key===b.scope_key);fail(state,'POS_FORMAT_INVENTORY_SCOPE_FORBIDDEN');const scope=inventoryScope(JSON.parse(b.scope_key));
  let identity:any;try{identity=JSON.parse(JSON.parse(baseline)[0]);}catch{fail(false,'POS_FORMAT_INVENTORY_SCOPE_FORBIDDEN');}
  fail(identity?.[0]===scope.tenant_id&&identity?.[1]===scope.terminal_id&&identity?.[2]===scope.device_id&&warehouseId===scope.warehouse_id,'POS_FORMAT_INVENTORY_SCOPE_FORBIDDEN');
- await currentNativeContext(query,scope);
+ await assertSelectedAuthority(query,state,b,await currentNativeContext(query,scope));
  await assertNoUnrepresentedEffects(query,scope,itemIds);
  fail(itemIds.length<=100,'POS_FORMAT_INVENTORY_QUERY_LIMIT');if(!itemIds.length)return {};
  const placeholders=itemIds.map(()=>'?').join(',');
