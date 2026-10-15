@@ -14,7 +14,7 @@ import { prepareLargeMasterSyncV3Candidate, prepareLargeMasterSyncV3CatalogOnly,
 import { LargeMasterSyncV3Runtime } from './LargeMasterSyncV3Runtime';
 import { LargeMasterSyncV3OperationalCatalog } from './LargeMasterSyncV3OperationalCatalog';
 import { buildLargeMasterSyncV3CheckoutFiscalInput } from './LargeMasterSyncV3CheckoutAuthority';
-import { LargeMasterSyncV3Error, type LargeMasterSyncV3Store } from './LargeMasterSyncV3Types';
+import { LargeMasterSyncV3Error, type LargeMasterSyncV3Store, type LargeMasterSyncV3IdentityReadContext } from './LargeMasterSyncV3Types';
 import { requiresV3SaleAvailability, type V3FinancialIntent } from './LargeMasterSyncV3RefundAuthority';
 import type { DurableDocumentMutation } from '../db/DatabaseAdapter';
 import { validateV3PinnedLineSource } from './LargeMasterSyncV3LineSource';
@@ -60,8 +60,8 @@ export class LargeMasterSyncV3OperationalSession {
         terminal?.config.pricing,terminal?.config.fiscal]);
     };
     const expectedScope=configScope(await db.get('config') as unknown as BusinessConfig);
-    const assertIdentity = async () => {
-      const currentScope=configScope(await db.get('config') as unknown as BusinessConfig);
+    const assertIdentity = async (owned?: LargeMasterSyncV3IdentityReadContext) => {
+      const currentScope=configScope(owned ? await owned.readConfig() : await db.get('config') as unknown as BusinessConfig);
       if(JSON.stringify(readLargeMasterSyncV3BoundIdentity()) !== JSON.stringify(identity)
         || largeMasterSyncV3DownloadOrigin() !== v3BaseUrl || readOperationalTerminalBinding() !== credentialGuard
         || currentScope !== expectedScope) throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
