@@ -86,6 +86,34 @@ test('consulta la licencia sin cookies y conserva una suspensión explícita', a
   assert.equal(result.reason, 'SUSPENDED');
 });
 
+test('consulta y reintenta licencia con caché desactivada sin cabeceras que requieren preflight', async () => {
+  resetRuntime();
+  const requests: { url: string; init: RequestInit }[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    requests.push({ url: String(input), init: init ?? {} });
+    return Response.json(cachedLicense(requests.length === 1
+      ? { tenantId: '54c8df05-d28c-40ea-9ad4-38f37412acac' }
+      : {}));
+  }) as typeof fetch;
+
+  const result = await checkLicenseStatus(tenantId, deviceId);
+
+  assert.equal(result.isValid, true);
+  assert.equal(requests.length, 2);
+  assert.equal(new URL(requests[0].url).searchParams.has('_licenseCheck'), false);
+  assert.equal(new URL(requests[1].url).searchParams.has('_licenseCheck'), true);
+  for (const { url, init } of requests) {
+    assert.equal(new URL(url).pathname, '/api/license/status');
+    assert.equal(init.method, 'GET');
+    assert.equal(init.credentials, 'omit');
+    assert.equal(init.cache, 'no-store');
+    const headers = new Headers(init.headers);
+    assert.equal(headers.get('Accept'), 'application/json');
+    assert.equal(headers.has('Cache-Control'), false);
+    assert.deepEqual([...headers.keys()], ['accept']);
+  }
+});
+
 test('omite branchId durante la primera activación cuando aún no existe una sucursal UUID', async () => {
   resetRuntime();
   let requestedUrl = '';
