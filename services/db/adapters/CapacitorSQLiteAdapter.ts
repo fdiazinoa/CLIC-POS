@@ -1,3 +1,4 @@
+import {assertV3ReservationSource,assertV3ReservationLines,assertV3ReservationInvoice,reservationClaimId} from '../../sync/LargeMasterSyncV3ReservationAuthority';
 import {reconcileInventoryPoolIndex,isInventoryPoolDDL} from '../../articleFormats/inventoryPoolIndex';
 import {assertNoReconciledOrdinaryWriter} from '../../articleFormats/inventoryJournal';
 import {readV3Base4Stock,base4} from '../V3Base4Stock';
@@ -1128,6 +1129,29 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
               }
               const stored = await read('SELECT data FROM documents WHERE collection_name = ? AND doc_id = ?', [expected.collection, expected.id]);
               if (stored.values?.[0]?.data !== expected.expected) throw new Error('SYNC_V3_RETAINED_TICKET_CHANGED');
+              const retained = JSON.parse(expected.expected);
+              const reservation = expected.collection === 'reservations' ? retained : retained.sourceCollection === 'reservations'
+                ? JSON.parse(retained.sourceExpected) : undefined;
+              if (reservation) {
+                assertV3ReservationSource(reservation,document.v3Binding,document.v3WarehouseId,mutation.v3ReservationExpiration === true);
+                if (mutation.v3ReservationExpiration) {
+                  if (mutation.collectionName === 'reservations' ? document.status !== 'EXPIRED' || document.id !== reservation.id
+                    : mutation.collectionName !== 'v3RestoredTicketSources' || document.state !== 'CANCELLED' || document.cancelReason !== 'EXPIRED'
+                      || document.id !== reservationClaimId(reservation.id)) throw new Error('SYNC_V3_RESERVATION_EXPIRY_INVALID');
+                  const prefix = reservationClaimId(reservation.id)+':payment:';
+                  const active = await read("SELECT intent_id FROM payment_intents_v2 WHERE substr(payment_id,1,?)=? AND status IN ('AUTHORIZING','AUTHORIZED','UNKNOWN','RECONCILIATION_REQUIRED') LIMIT 1",[prefix.length,prefix]);
+                  if (active.values?.length) throw new Error('SYNC_V3_RESERVATION_PAYMENT_RECONCILIATION_REQUIRED');
+                }
+                const original = await read('SELECT data FROM documents WHERE collection_name = ? AND doc_id = ?', ['reservations',reservation.id]);
+                if (original.values?.[0]?.data !== JSON.stringify(reservation)) throw new Error('SYNC_V3_RESERVATION_SOURCE_CHANGED');
+                if (expected.collection !== 'reservations' && (retained.id !== reservationClaimId(reservation.id) || retained.state !== 'PENDING'
+                  || retained.sourceId !== reservation.id)) throw new Error('SYNC_V3_RESERVATION_SOURCE_CHANGED');
+                if (document.items?.length && ['transactions','transactionHistory','v3RestoredTicketSources'].includes(mutation.collectionName)) {
+                  assertV3ReservationLines(reservation,document.items);
+                  if (mutation.collectionName === 'transactions' || mutation.collectionName === 'transactionHistory') assertV3ReservationInvoice(reservation,document);
+                }
+              }
+
               if (expected.collection !== 'transactions') {
                 const closed = await read(`SELECT doc_id FROM documents WHERE
                   (collection_name='v3TicketSettlements' AND doc_id=?) OR
@@ -1171,8 +1195,10 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
               if (stamp.syncId !== current.syncId || stamp.syncVersion !== current.syncVersion) {
                 const context = mutation.v3ExpectedRetainedDocument || (mutation.expectedDocument && mutation.collectionName === 'transactions'
                   ? { collection: 'transactions', id: document.id, expected: mutation.expectedDocument } : undefined);
-                if (!context || !['parkedTickets','transactions','v3RestoredTicketSources'].includes(context.collection)
-                  || context.collection !== 'transactions' && document.restaurantOrderId !== context.id
+                if (!context || !['parkedTickets','transactions','v3RestoredTicketSources','reservations'].includes(context.collection)
+                  || context.collection === 'reservations' && document.sourceId !== context.id && document.reservationId !== context.id
+                  || context.collection === 'v3RestoredTicketSources' && context.id.startsWith('reservation:') && document.id !== context.id && document.v3ReservationClaimId !== context.id
+                  || !['transactions','reservations'].includes(context.collection) && !context.id.startsWith('reservation:') && document.restaurantOrderId !== context.id
                   || context.collection === 'transactions' && document.id !== context.id && document.originalTransactionId !== context.id) {
                   throw new Error('SYNC_V3_RETAINED_SOURCE_REQUIRED');
                 }

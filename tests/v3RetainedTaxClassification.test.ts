@@ -14,7 +14,7 @@ for(const intent of ['SALE','REFUND']) for(const changed of [true,false]) test(`
   './LargeMasterSyncV3OperationalCatalog':`export class LargeMasterSyncV3OperationalCatalog{static async open(){return{get:async()=>globalThis.__retainedTaxFixture.source}}}`,
   './LargeMasterSyncV3Runtime':`export class LargeMasterSyncV3Runtime{static retained(){return {}}}`,
   './LargeMasterSyncV3CheckoutAuthority':'export const buildLargeMasterSyncV3CheckoutFiscalInput=()=>{};',
-  './LargeMasterSyncV3LineSource':'export const validateV3PinnedLineSource=()=>{};',
+  './LargeMasterSyncV3LineSource':'export const validateV3PinnedLineSource=()=>{};export const validateV3FrozenLineFiscalAmounts=()=>{throw new Error("Unexpected reservation fiscal validation in retained-tax fixture")};',
   '../../utils/db':'export const db={};','../db':'export const dbAdapter={};',
   './LargeMasterSyncV3Authority':'export const LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED=true;export const assertLegacyMasterPullAllowed=()=>{};export const usesLargeMasterSyncV3Authority=()=>true;',
   './LargeMasterSyncV3Canary':'export const LARGE_MASTER_SYNC_V3_CANARY=false;export const validateLargeMasterSyncV3CanaryUrl=x=>x;',

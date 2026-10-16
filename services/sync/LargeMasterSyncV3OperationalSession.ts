@@ -1,3 +1,4 @@
+import { assertV3ReservationSource, assertV3ReservationLines, validateV3ReservationPricing } from './LargeMasterSyncV3ReservationAuthority';
 import {requiresProductStockAvailability} from '../../utils/productStockPolicy';
 import { v3TaxSemantics } from './LargeMasterSyncV3StockAuthority';
 import { db } from '../../utils/db';
@@ -193,6 +194,7 @@ export class LargeMasterSyncV3OperationalSession {
       || authority.tariffId !== tariffId || authority.inventoryVersion !== this.ready.inventoryVersion
       || authority.inventoryCursor !== this.ready.inventoryCursor) throw new LargeMasterSyncV3Error('SYNC_V3_CART_MIXED_VERSION');
     const retained = await readV3RetainedCheckout(reference, intent === 'REFUND');
+    if (retained?.reservation) { assertV3ReservationSource(retained.reservation,this.binding,warehouseId); assertV3ReservationLines(retained.reservation,lines); validateV3ReservationPricing(retained.reservation,config); }
     const anchor = await this.store.getInventoryAuthority?.() || { syncId: this.ready.inventorySyncId || this.ready.runtime.version.syncId,
       syncVersion: this.ready.inventorySyncVersion ?? this.ready.runtime.version.syncVersion,
       version: this.ready.inventoryVersion, cursor: this.ready.inventoryCursor };

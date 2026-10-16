@@ -1748,6 +1748,8 @@ export interface Table {
  * - Next sale will use new price
  */
 export interface CartItem extends Product {
+  /** Local recovery reference only; original reservation snapshots remain unchanged. */
+  v3ReservationId?: string;
   weightPresentation?: WeightPresentation;
   articleFormat?: import('./services/articleFormats/contract').ArticleFormatSnapshot;
   baseQuantity?: number;
@@ -1811,6 +1813,7 @@ export interface CartItem extends Product {
 }
 
 export interface Transaction {
+  v3ReservationClaimId?: string;
   v3RestoredTicketId?: string;
   v3CommitFingerprint?: string;
   v3InventoryBaseline?: string;
@@ -2408,6 +2411,13 @@ export interface PaymentFractionPlan {
 export type ReservationStatus = 'ACTIVE' | 'INVOICED' | 'EXPIRED' | 'CANCELLED';
 
 export interface Reservation {
+  v3Snapshot?: {
+    binding: string; total: number; netAmount: number; taxAmount: number;
+    discountAmount: number; discountType: 'PERCENT' | 'FIXED'; discountValue: number;
+    isTaxIncluded: boolean; serviceChargeAmount: number; serviceType: OrderServiceType;
+    serviceTaxPolicySnapshot?: Transaction['serviceTaxPolicySnapshot'];
+    taxBreakdown?: Transaction['taxBreakdown']; customerSnapshot?: Transaction['customerSnapshot'];
+  };
   id: string;
   code: string;
   qrPayload: string;

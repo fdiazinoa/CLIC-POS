@@ -60,6 +60,8 @@ import { sendReceiptEmailViaErp } from '../services/email/receiptEmailService';
 import { buildReceiptEmailPayload } from '../services/email/receiptEmailPayload';
 import { setLargeMasterSyncV3CriticalOperation } from '../services/sync/LargeMasterSyncV3OperationGate';
 
+export type PaymentEffectsFence = (() => void) & {completedTransaction?: Transaction};
+
 interface PaymentModalProps {
    openingTrace?: PosInteractionTrace | null;
    total: number;
@@ -69,7 +71,9 @@ interface PaymentModalProps {
    config?: BusinessConfig;
    onClose: () => void;
    onConfirm: (payments: PaymentEntry[], voluntaryTip?: number) => Promise<Transaction | null>;
-   beforePaymentEffects?: () => Promise<() => void>;
+   paymentOperationId?: string;
+   paymentOperationDate?: string;
+   beforePaymentEffects?: () => Promise<PaymentEffectsFence>;
    validatePaymentAuthority?: () => Promise<void>;
    themeColor: string;
    customer?: Customer | null;
@@ -247,7 +251,7 @@ type GatewayProgressOverlayState = {
 
 import SupervisorAuthModal from './SupervisorAuthModal';
 
-const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, total, items, taxAmount = 0, currencySymbol, config, onClose, onConfirm, beforePaymentEffects, validatePaymentAuthority, themeColor, customer, isDelinquent, users, isMaster, currentUser, roles, isRestaurantMode, isInstallmentPayment = false }) => {
+const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, total, items, taxAmount = 0, currencySymbol, config, onClose, onConfirm, paymentOperationId, paymentOperationDate, beforePaymentEffects, validatePaymentAuthority, themeColor, customer, isDelinquent, users, isMaster, currentUser, roles, isRestaurantMode, isInstallmentPayment = false }) => {
    markRenderStart('PAYMENT_MODAL');
    useLayoutEffect(() => markRenderEnd('PAYMENT_MODAL'));
    const openingDestinationMounted = useRef(false);
@@ -564,14 +568,14 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, total,
       valInSelectedCurrency: number,
       amountInBase: number
    ): PaymentEntry => ({
-      id: createPaymentId(),
+      id: paymentOperationId ? `${paymentOperationId}:payment:${payments.length}` : createPaymentId(),
       method: getMethodRuntimeType(method),
       methodId: method.id,
       methodLabel: method.label,
       methodIcon: method.iconName,
       creditOverrideApproved: getMethodRuntimeType(method) === 'CREDIT' && canBypassCreditLimit ? true : undefined,
       amount: roundToTwo(amountInBase),
-      timestamp: new Date(),
+      timestamp: paymentOperationDate ? new Date(paymentOperationDate) : new Date(),
       currencyCode: selectedCurrency.code,
       amountOriginal: roundToTwo(valInSelectedCurrency),
       exchangeRate: selectedCurrency.rate,
@@ -624,8 +628,12 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, total,
          integrationId: integration.id,
          amount: amountInBase,
          currencyCode: payment.currencyCode || baseCurrency.code,
+         retainedOperation: Boolean(paymentOperationId),
       });
-      if (intent) await paymentIntentService.markAuthorizing(intent.intentId);
+      // An intent alone does not retain the full provider receipt/order payload. The original approved
+      // PaymentEntry can retry in this modal; a reconstructed entry after restart requires reconciliation.
+      if (paymentOperationId && intent?.status === 'AUTHORIZED') throw new Error('PAYMENT_INTENT_RECONCILIATION_REQUIRED');
+      if (intent) await paymentIntentService.markAuthorizing(intent.intentId,Boolean(paymentOperationId));
 
       setIsProcessingGateway(true);
       setFinalizeError(null);
@@ -880,12 +888,12 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, total,
    const handleFinalize = async () => {
       recordCheckoutDiagnostic('PAYMENT_MODAL_CONFIRM', { items, total, payments });
       if (isFinalizing || isProcessingGateway) return;
-      if (!canFinalize) {
+      if (!canFinalize && !paymentOperationId) {
          alert("Monto insuficiente");
          return;
       }
 
-      if (isCreditActionBlocked) {
+      if (isCreditActionBlocked && !paymentOperationId) {
          setFinalizeError('Límite de crédito excedido. Requiere autorización.');
          setShowSupervisorModal(true);
          return;
@@ -898,10 +906,14 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, total,
       setSuccessNotice(null);
       setIsFinalizing(true);
       markInteractionStateUpdate(trace, 3);
-      let releasePaymentFence: (() => void) | undefined;
+      let releasePaymentFence: PaymentEffectsFence | undefined;
       try {
          if (beforePaymentEffects) releasePaymentFence = await beforePaymentEffects();
-         let paymentsToConfirm = payments;
+         const completed = releasePaymentFence?.completedTransaction;
+         let paymentsToConfirm = completed?.payments || payments;
+         if (!completed && !canFinalize) { alert('Monto insuficiente'); return; }
+         if (!completed && isCreditActionBlocked) { setFinalizeError('Límite de crédito excedido. Requiere autorización.'); setShowSupervisorModal(true); return; }
+         if (!completed) {
 
          // UX: If cashier typed an amount but didn't press "Agregar",
          // auto-create the payment entry so "Finalizar Venta" still works.
@@ -984,13 +996,14 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, total,
             () => authorizePendingGatewayPayments(paymentsToConfirm),
          );
          setPayments(paymentsToConfirm);
+         }
 
          let slowProcessTimer: number | undefined;
          try {
             slowProcessTimer = window.setTimeout(() => {
                setFinalizeError('El cobro está tardando más de lo esperado, espere unos segundos...');
             }, 15000);
-            const txn = await onConfirm(paymentsToConfirm, voluntaryTip);
+            const txn = await onConfirm(paymentsToConfirm, completed?.voluntaryTipAmount ?? voluntaryTip);
             recordCheckoutDiagnostic('PAYMENT_RESULT', { items: txn?.items, total: txn?.total, transactionId: txn?.id, displayId: txn?.displayId, status: txn ? 'RETURNED' : 'NO_TRANSACTION' });
 
             if (txn) {
@@ -1494,8 +1507,8 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, total,
                   </div>
                   <button
                      onClick={handleFinalize}
-                     disabled={!canFinalize || isFinalizing || isProcessingGateway}
-                     className={`w-full py-3 rounded-xl md:rounded-2xl font-black text-sm md:text-base text-white transition-all shadow-lg ${!canFinalize || isFinalizing || isProcessingGateway ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : `${isRefund ? 'bg-rose-600 hover:bg-rose-700' : `${themeBgClass} hover:brightness-110`}`}`}
+                     disabled={(!canFinalize && !paymentOperationId) || isFinalizing || isProcessingGateway}
+                     className={`w-full py-3 rounded-xl md:rounded-2xl font-black text-sm md:text-base text-white transition-all shadow-lg ${(!canFinalize && !paymentOperationId) || isFinalizing || isProcessingGateway ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : `${isRefund ? 'bg-rose-600 hover:bg-rose-700' : `${themeBgClass} hover:brightness-110`}`}`}
                   >
                      {isProcessingGateway
                         ? 'PROCESANDO TARJETA...'
