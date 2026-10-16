@@ -86,6 +86,9 @@ test('production checkout guard blocks sales and refunds before non-V3 payment e
   const start = source.indexOf('   const assertCheckoutFiscalAuthority =');
   const end = source.indexOf('   const startCheckoutInteraction =', start);
   assert.ok(start > 0 && end > start);
+  const receiptStart = source.indexOf('   const completedReservationForReceipt =');
+  const receiptEnd = source.indexOf('   const clearCompletedReservationCart =', receiptStart);
+  assert.ok(receiptStart > 0 && receiptEnd > receiptStart);
   const get = dbAdapter.getCollection; const save = dbAdapter.saveCollection;
   let writes = 0; let fences = 0;
   try {
@@ -97,9 +100,10 @@ test('production checkout guard blocks sales and refunds before non-V3 payment e
       fiscalCompliance: { mode: 'LEGACY_B' },
       isTerminalFiscalReceiptRequired: (terminal: any) => terminal?.fiscal?.mode !== 'NONE',
       resolveCreditNoteFiscalCode: () => 'B04', v3Operational: null, cart: [],
+      activeV3Reservation: null, hasV3ReservationCart: false, selectedCustomer: undefined,
       setLargeMasterSyncV3CriticalOperation: () => { fences++; },
     });
-    new Script(ts.transpileModule(source.slice(start, end) + '\nglobalThis.before = beforeV3PaymentEffects;',
+    new Script(ts.transpileModule(source.slice(receiptStart, receiptEnd) + source.slice(start, end) + '\nglobalThis.before = beforeV3PaymentEffects;',
       { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText).runInContext(context);
     for (const quantities of [[1], [-1], [1, -1]]) {
       context.processedCart = quantities.map(quantity => ({ quantity }));
