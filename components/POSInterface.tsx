@@ -7529,6 +7529,43 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       </div>
    );
 
+   const renderDesktopTicketFooterActions = () => !isMobile && (!isRetailMode || cart.length > 0) && (
+      <div data-testid="desktop-ticket-footer-actions" className="flex items-center justify-end gap-2">
+         {!isRetailMode && (
+            <button
+               type="button"
+               aria-pressed={rightSidebarTab === 'ACTIONS'}
+               onClick={() => setRightSidebarTab(tab => tab === 'ACTIONS' ? 'CART' : 'ACTIONS')}
+               className="flex min-h-12 flex-1 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-xs font-black text-slate-700 hover:bg-slate-50"
+            >
+               {rightSidebarTab === 'ACTIONS' ? <ShoppingBag size={18} /> : <Layers size={18} />}
+               <span>{rightSidebarTab === 'ACTIONS' ? 'Ver ticket' : 'Opciones'}</span>
+            </button>
+         )}
+         {cart.length > 0 && (
+            <button
+               onClick={handleClearFreshCartItems}
+               disabled={!hasClearableFreshItems}
+               aria-label="Borrar artículos nuevos del ticket"
+               title={hasClearableFreshItems ? 'Borrar artículos nuevos' : 'No hay artículos nuevos para borrar'}
+               className={`group flex h-12 w-12 shrink-0 items-center justify-center rounded-[1.05rem] border transition-all duration-200 ${
+                  hasClearableFreshItems
+                     ? 'border-rose-200 bg-white text-rose-500 hover:border-rose-300 hover:bg-rose-50 hover:text-rose-700'
+                     : 'cursor-not-allowed border-slate-200 bg-slate-50 text-slate-300'
+               }`}
+            >
+               <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border transition-all ${
+                  hasClearableFreshItems
+                     ? 'border-rose-100 bg-rose-50 text-rose-500 group-hover:border-rose-200 group-hover:bg-white group-hover:text-rose-700'
+                     : 'border-slate-100 bg-white text-slate-300'
+               }`}>
+                  <Trash2 size={18} strokeWidth={2.3} />
+               </span>
+            </button>
+         )}
+      </div>
+   );
+
    return (
       <div
          ref={posRootRef}
@@ -8317,12 +8354,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                }
             </div >
 
-            {/* DESKTOP: operador + mesa/comensales; retail: busqueda al centro; botones carrito/acciones alineados a la derecha (como APK 1.0.300) */}
+            {/* Desktop catalog already owns its operator identity; full retail keeps its sole identity here. */}
             <div className={`pos-ticket-heading ${isRetailMode ? 'supermarket-ticket-heading' : ''} ${isMobile ? 'hidden' : 'flex'} px-5 py-3 border-b border-gray-100 bg-gray-50/50 flex-col gap-3 shrink-0 flex-none ${activeTable ? 'border-l-4 border-l-blue-500' : ''}`} >
                <div data-testid="desktop-ticket-toolbar" className={`flex w-full flex-wrap items-center justify-between gap-1 ${isRetailMode ? 'supermarket-ticket-toolbar' : ''}`}>
-                  <div className={`flex min-w-0 max-w-full items-center justify-start ${isRetailMode ? 'supermarket-ticket-operator' : ''}`}>
-                     {renderTicketBrand(!isRetailMode)}
-                  </div>
+                  {(isRetailMode || (isTabletProfile && isRestaurantMode)) && (
+                     <div className={`flex min-w-0 max-w-full items-center justify-start ${isRetailMode ? 'supermarket-ticket-operator' : 'pos-ticket-catalog-hidden-operator hidden'}`}>
+                        {renderTicketBrand(!isRetailMode)}
+                     </div>
+                  )}
 
                   {/* RETAIL MODE SEARCH BAR */}
                   {isRetailMode && (
@@ -8421,83 +8460,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   )}
 
                   <TicketStatusControls className={`ml-auto flex shrink-0 items-center justify-end gap-1 ${isRetailMode ? 'supermarket-ticket-actions' : ''}`} status={isRetailMode ? <FiscalStatusBadge compact visible={!isOrderTakerMode && !isFiscalModeDisabled} allowed={canCheckoutWithFiscalPolicy} status={fiscalStatus} /> : undefined}>
-                     {canParkDirectSale && (
-                        <button
-                           type="button"
-                           onClick={() => handleGridAction('SAVE')}
-                           aria-label="Guardar ticket"
-                           title="Guardar ticket"
-                           className="flex h-12 w-12 shrink-0 items-center justify-center rounded-[1.05rem] border border-orange-400 bg-orange-500 text-white shadow-sm shadow-orange-500/25 transition-all hover:bg-orange-600 active:scale-95"
-                        >
-                           <Save size={20} />
-                        </button>
-                     )}
-                     {cart.length > 0 && (
-                        <button
-                           onClick={handleClearFreshCartItems}
-                           disabled={!hasClearableFreshItems}
-                           aria-label="Borrar artículos nuevos del ticket"
-                           title={hasClearableFreshItems ? 'Borrar artículos nuevos' : 'No hay artículos nuevos para borrar'}
-                           className={`group flex h-12 w-12 shrink-0 items-center justify-center rounded-[1.05rem] border transition-all duration-200 ${
-                              hasClearableFreshItems
-                                 ? 'border-rose-200 bg-white text-rose-500 hover:border-rose-300 hover:bg-rose-50 hover:text-rose-700'
-                                 : 'cursor-not-allowed border-slate-200 bg-slate-50 text-slate-300'
-                           }`}
-                        >
-                           <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border transition-all ${
-                              hasClearableFreshItems
-                                 ? 'border-rose-100 bg-rose-50 text-rose-500 group-hover:border-rose-200 group-hover:bg-white group-hover:text-rose-700'
-                                 : 'border-slate-100 bg-white text-slate-300'
-                           }`}>
-                              <Trash2 size={18} strokeWidth={2.3} />
-                           </span>
-                        </button>
-                     )}
-                     <button
-                        onClick={() => setRightSidebarTab('CART')}
-                        aria-label={`Abrir carrito${cartQuantity > 0 ? ` con ${formatQuantity(cartQuantity, quantityPresentation.salesDecimals)} artículos` : ''}`}
-                        title={`Carrito${cartQuantity > 0 ? ` (${formatQuantity(cartQuantity, quantityPresentation.salesDecimals)})` : ''}`}
-                        className={`group relative flex h-12 w-12 shrink-0 items-center justify-center rounded-[1.05rem] border transition-all duration-200 ${
-                           rightSidebarTab === 'CART'
-                              ? 'border-red-200 bg-gradient-to-br from-red-50 via-rose-50 to-red-100 text-red-700 shadow-[0_14px_30px_rgba(248,113,113,0.18)]'
-                              : 'border-slate-200 bg-white text-slate-500 hover:border-red-200 hover:bg-red-50/70 hover:text-red-600'
-                        }`}
-                     >
-                        <span
-                           className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border transition-all ${
-                              rightSidebarTab === 'CART'
-                                 ? 'border-red-200/80 bg-white/90 text-red-600 shadow-sm'
-                                 : 'border-red-100 bg-red-50 text-red-500 group-hover:border-red-200 group-hover:bg-white group-hover:text-red-600'
-                           }`}
-                        >
-                           <ShoppingBag size={18} strokeWidth={2.3} />
-                        </span>
-                        {cartQuantity > 0 && (
-                           <span className="absolute -right-1.5 -top-1.5 inline-flex min-w-7 items-center justify-center rounded-full border border-white bg-white px-2 py-1 text-[10px] font-black leading-none text-red-700 shadow-md">
-                              {formatQuantity(cartQuantity, quantityPresentation.salesDecimals)}
-                           </span>
-                        )}
-                     </button>
-                     <button
-                        onClick={() => setRightSidebarTab('ACTIONS')}
-                        aria-label="Abrir acciones rápidas"
-                        title="Acciones"
-                        className={`group flex h-12 w-12 shrink-0 items-center justify-center rounded-[1.05rem] border transition-all duration-200 ${
-                           rightSidebarTab === 'ACTIONS'
-                              ? 'border-blue-200 bg-gradient-to-br from-blue-50 via-sky-50 to-blue-100 text-blue-700 shadow-[0_14px_30px_rgba(59,130,246,0.18)]'
-                              : 'border-slate-200 bg-white text-slate-500 hover:border-blue-200 hover:bg-blue-50/70 hover:text-blue-600'
-                        }`}
-                     >
-                        <span
-                           className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border transition-all ${
-                              rightSidebarTab === 'ACTIONS'
-                                 ? 'border-blue-200/80 bg-white/90 text-blue-600 shadow-sm'
-                                 : 'border-blue-100 bg-blue-50 text-blue-500 group-hover:border-blue-200 group-hover:bg-white group-hover:text-blue-600'
-                           }`}
-                        >
-                           <Layers size={18} strokeWidth={2.3} />
-                        </span>
-                     </button>
                      {!isKioskMode && <OrderServiceTypeButton value={effectiveOrderServiceType} onClick={() => handleGridAction('TAKEOUT')} />}
                   </TicketStatusControls>
                </div>
@@ -9025,6 +8987,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            status={<SyncStatusBadge online={navigator.onLine} state={syncState} />}
                         />
                         <div className="supermarket-checkout">
+                           {renderDesktopTicketFooterActions()}
                            <ActionGrid
                               actionRegion="ticket"
                               orientation="horizontal"
@@ -9072,6 +9035,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
 
 
+                        {renderDesktopTicketFooterActions()}
                         {/* --- CONDITIONAL FOOTER --- */}
                         {(rightSidebarTab === 'CART' || isMobile) && (isKioskMode ? (
                            <div className="mt-auto pt-6 space-y-6">
