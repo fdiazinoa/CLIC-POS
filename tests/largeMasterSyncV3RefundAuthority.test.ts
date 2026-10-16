@@ -71,3 +71,14 @@ test('archived refund mutates only history and requires durable zReportId',()=>{
  assert.equal(mutations.length,1);assert.equal(mutations[0].collectionName,'transactionHistory');assert.equal(mutations[0].document.zReportId,'Z');
  assert.throws(()=>buildV3RefundOriginalMutations(original(),after,'refund',original(),'transactionHistory'),/ORIGINAL_CHANGED/);
 });
+
+test('void/cancelled/fully refunded originals cannot regain refund authority despite stale captured completed status',async()=>{
+ const {assertRefundOriginalState}=await import('../services/sync/LargeMasterSyncV3RefundAuthority');
+ const captured=original();
+ for(const status of ['VOIDED','CANCELLED','REFUNDED','PENDING']){
+  const fresh={...captured,status} as any;
+  assert.throws(()=>assertRefundOriginalState(fresh),/NOT_REFUNDABLE/);
+  assert.throws(()=>buildV3RefundOriginalMutations(fresh,{...captured,status:'PARTIAL_REFUND',relatedTransactions:['old-refund','new']},'new',fresh),/NOT_REFUNDABLE/);
+ }
+ assert.doesNotThrow(()=>assertRefundOriginalState({...captured,status:'PARTIAL_REFUND'}));
+});

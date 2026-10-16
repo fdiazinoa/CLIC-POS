@@ -22,6 +22,9 @@ export const refundFinancialSourceIdentity = (transaction: Transaction): string 
     : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key,canonical(value[key])])) : value;
   return JSON.stringify(canonical(Object.fromEntries(Object.entries(transaction).filter(([key])=>!mutable.has(key)))));
 };
+export const assertRefundOriginalState=(source:Transaction):void=>{
+  if(!['COMPLETED','PARTIAL_REFUND'].includes(source.status)) throw new LargeMasterSyncV3Error('SYNC_V3_REFUND_ORIGINAL_NOT_REFUNDABLE');
+};
 export const assertRefundFinancialSource = (expected: Transaction, captured: Transaction): void => {
   if (refundFinancialSourceIdentity(expected) !== refundFinancialSourceIdentity(captured)) throw new LargeMasterSyncV3Error('SYNC_V3_REFUND_ORIGINAL_CHANGED');
 };
@@ -32,6 +35,8 @@ export const buildV3RefundOriginalMutations = (
   expectedHistory: Transaction | null,
   originalCollection: 'transactions' | 'transactionHistory' = 'transactions',
 ): DurableDocumentMutation[] => {
+  assertRefundOriginalState(expected);
+  if(expectedHistory)assertRefundOriginalState(expectedHistory);
   const expectedLinks = [...new Set([...(expected.relatedTransactions || []), refundId])].sort();
   const intendedLinks = [...new Set(intended.relatedTransactions || [])].sort();
   if (!refundId || !expected.v3Binding || !expected.v3InventoryBaseline

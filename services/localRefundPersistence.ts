@@ -1,4 +1,4 @@
-import { assertRefundFinancialSource } from './sync/LargeMasterSyncV3RefundAuthority';
+import { assertRefundFinancialSource,assertRefundOriginalState } from './sync/LargeMasterSyncV3RefundAuthority';
 import { BusinessConfig, CartItem, Transaction } from '../types';
 import { isV3FinancialDocument, persistV3FinancialTransaction } from './sync/LargeMasterSyncV3FinancialCommit';
 import { db } from '../utils/db';
@@ -38,6 +38,8 @@ export async function readRefundOriginal(captured: Transaction): Promise<Transac
  const history=await db.getDocument('transactionHistory',captured.id) as Transaction | null;
  const current=active || (history?.zReportId ? history : null);
  if (!current || (current as Transaction & {type?:string}).type==='REFUND' || current.documentType==='REFUND') throw Error('SYNC_V3_REFUND_ORIGINAL_CHANGED');
+ assertRefundOriginalState(current);
+ if(history&&active)assertRefundOriginalState(history);
  assertRefundFinancialSource(current,captured);
  if (history && active) assertRefundFinancialSource(active,history);
  return current;

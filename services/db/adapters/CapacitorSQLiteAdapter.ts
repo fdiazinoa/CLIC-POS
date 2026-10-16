@@ -1131,6 +1131,8 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
               const stored = await read('SELECT data FROM documents WHERE collection_name = ? AND doc_id = ?', [expected.collection, expected.id]);
               if (stored.values?.[0]?.data !== expected.expected) throw new Error('SYNC_V3_RETAINED_TICKET_CHANGED');
               const retained = JSON.parse(expected.expected);
+              if(['transactions','transactionHistory'].includes(expected.collection)&&document.id!==expected.id&&document.originalTransactionId===expected.id
+                && !['COMPLETED','PARTIAL_REFUND'].includes(retained.status)) throw Error('SYNC_V3_REFUND_ORIGINAL_NOT_REFUNDABLE');
               if(expected.collection==='transactionHistory' && !retained.zReportId) throw Error('SYNC_V3_RETAINED_SOURCE_REQUIRED');
               const reservation = expected.collection === 'reservations' ? retained : retained.sourceCollection === 'reservations'
                 ? JSON.parse(retained.sourceExpected) : undefined;
