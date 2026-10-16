@@ -6411,6 +6411,18 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    };
 
    const proceedToCheckout = (trace: PosInteractionTrace) => observeDestinationAttempt(trace, async () => {
+      try {
+         const completed = await completedReservationForReceipt();
+         if (completed) {
+            setReturnToTableMapAfterPayment(false);
+            expectInteractionDestination(trace, 'PAYMENT_MODAL');
+            paymentModalTraceRef.current = trace;
+            setShowPaymentModal(true);
+            markInteractionStateUpdate(trace, 2);
+            markInteractionStage(trace, 'HANDLER_END');
+            return;
+         }
+      } catch (error: any) { setErrorToast(`V3: ${error.message || error}`); return; }
       if (hasV3ReservationCart && !activeV3Reservation) { setErrorToast('La referencia de la reserva aún no está validada.'); return; }
       if (v3Operational) {
          try { await v3Operational.validate(cart, { ticketId: activeTable?.currentOrderId || activeDirectV3TicketId, claimId: activeDirectV3TicketId, reservationId:activeV3Reservation?.reservation.id,reservationClaimId:activeV3Reservation?.claimId, tableId: activeTable?.id === undefined ? undefined : String(activeTable.id) }); }

@@ -1,4 +1,5 @@
 import {planReservationCommitmentRelease} from './LargeMasterSyncV3ReservationCommitments';
+import {readV3CompletedReservation} from './LargeMasterSyncV3FinancialCommit';
 import { createUuid } from '../../utils/uuid';
 import type { Customer, Product, Reservation } from '../../types';
 import { db } from '../../utils/db';
@@ -43,6 +44,27 @@ export async function claimV3Reservation(id: string, warehouseId: string) {
 }
 
 export type V3RecoveredReservation = Awaited<ReturnType<typeof claimV3Reservation>>;
+
+/** Reattach an existing cart after navigation, including verified receipt-only completion.
+ * ACTIVE claiming remains separate: a settled reference can never authorize another sale. */
+export async function restoreV3ReservationReference(id: string, warehouseId: string): Promise<V3RecoveredReservation> {
+  const claimId = reservationClaimId(id);
+  const claim = await db.getDocument('v3RestoredTicketSources' as any,claimId) as any;
+  if (claim?.state !== 'SETTLED') return claimV3Reservation(id,warehouseId);
+  let source: Reservation;
+  try { source = JSON.parse(claim.sourceExpected); }
+  catch { throw new LargeMasterSyncV3Error('SYNC_V3_RESERVATION_COMPLETION_CONFLICT'); }
+  const completed = await readV3CompletedReservation({reservationId:id,claimId,expectedSource:source});
+  if (!completed || source.warehouseId !== warehouseId) throw new LargeMasterSyncV3Error('SYNC_V3_RESERVATION_COMPLETION_CONFLICT');
+  const pricing: NonNullable<Reservation['v3Snapshot']> = {
+    binding:completed.v3Binding!,total:completed.total,netAmount:completed.netAmount!,taxAmount:completed.taxAmount!,
+    discountAmount:completed.discountAmount || 0,discountType:completed.discountType || 'FIXED',discountValue:completed.discountValue || 0,
+    isTaxIncluded:completed.isTaxIncluded ?? source.items[0].v3SaleAuthority!.taxIncluded,
+    serviceChargeAmount:completed.serviceChargeAmount || 0,serviceType:completed.serviceType || 'DINE_IN',customerSnapshot:completed.customerSnapshot,
+  };
+  const customer = {...completed.customerSnapshot,id:source.customerId,name:source.customerName} as Customer;
+  return {reservation:source,claimId,pricing,customer,products:source.items,invoiceDate:completed.date};
+}
 
 
 /** Expiry uses the same durable source CAS and native queue as invoice settlement. */

@@ -21,7 +21,7 @@ async function modules(f:any,durable=true) {
  const globals=globalThis as any;
  globals.__reservation={adapter:f.adapter,identity:{tenantId:id(1),terminalId:id(4),deviceId:id(50),erpSyncBaseUrl:'https://erp.invalid',syncToken:'synthetic'},session:undefined,durable,db:{get:(n:string)=>f.adapter.getCollection(n),getDocument:(...a:any[])=>f.adapter.getDocument(...a),save:(...a:any[])=>f.adapter.saveCollection(...a),saveDocument:(...a:any[])=>f.adapter.saveDocument(...a),assertFiscalTransactionAuthority:async()=>{}}};
  globals.window={dispatchEvent:()=>{}};
- bundle ||= build({stdin:{contents:`export {LargeMasterSyncV3OperationalSession as Session} from './services/sync/LargeMasterSyncV3OperationalSession';export {claimV3Reservation,expireV3Reservation} from './services/sync/LargeMasterSyncV3ReservationRecovery';export {persistV3FinancialTransaction,readV3CompletedReservation} from './services/sync/LargeMasterSyncV3FinancialCommit';export {transactionService} from './services/transactionService';export {transferStockToCommitted} from './utils/inventoryEngine';`,resolveDir:process.cwd(),loader:'ts'},bundle:true,write:false,format:'esm',platform:'node',define:{'import.meta.env':'{}'},plugins:[{name:'native-reservation-environment',setup(b){
+ bundle ||= build({stdin:{contents:`export {LargeMasterSyncV3OperationalSession as Session} from './services/sync/LargeMasterSyncV3OperationalSession';export {claimV3Reservation,expireV3Reservation,restoreV3ReservationReference} from './services/sync/LargeMasterSyncV3ReservationRecovery';export {persistV3FinancialTransaction,readV3CompletedReservation} from './services/sync/LargeMasterSyncV3FinancialCommit';export {transactionService} from './services/transactionService';export {transferStockToCommitted} from './utils/inventoryEngine';`,resolveDir:process.cwd(),loader:'ts'},bundle:true,write:false,format:'esm',platform:'node',define:{'import.meta.env':'{}'},plugins:[{name:'native-reservation-environment',setup(b){
  const ports:Record<string,string>={
  './db':'export const db={adjustCommittedStock:(...a)=>globalThis.__reservation.adjustCommittedStock(...a)};',
  '../db':'export const dbAdapter=new Proxy({}, {get:(_t,k)=>{const a=globalThis.__reservation.adapter;return typeof a[k]==="function"?a[k].bind(a):a[k];}});',
@@ -304,7 +304,7 @@ function actualCallback(file:string,name:string,bindings:Record<string,any>){
  return new Function(...Object.keys(bindings),js+'return handler;')(...Object.values(bindings));
 }
 
-for(const durable of [false,true])for(const ambiguity of ['none','commit-response','publication'] as const)test(`actual PaymentModal→POS→App→native commit→receipt/retry ${ambiguity}, Outbox=${durable}`,async()=>{
+for(const durable of [false,true])for(const ambiguity of ['none','commit-response','publication','close-reopen','settings-remount'] as const)test(`actual PaymentModal→POS→App→native commit→receipt/retry ${ambiguity}, Outbox=${durable}`,async()=>{
  const f=await fixture(undefined,true,300,durable);try{
   const prepared=await f.invoice(),recovery=prepared.recovery,source=recovery.reservation,customer=f.documents('customers')[0],messages:any[]=[],trace={stages:{} as Record<string,number>},ui:any={receipt:null,success:false,providerCalls:0};
   const no=()=>{},mark=(t:any,k:string)=>{if(t)t.stages[k]=1;};
@@ -314,11 +314,11 @@ for(const durable of [false,true])for(const ambiguity of ['none','commit-respons
   const log={error:(...args:any[])=>messages.push(args.map(a=>a instanceof Error?a.message:a)),warn:no,log:no};
   const app=actualCallback('App.tsx','handleTransactionComplete',{assertFormatsPostingClosed,config:f.config,deviceId:id(50),db,LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED:true,
    persistV3FinancialTransaction:f.persistV3FinancialTransaction,readV3CompletedReservation:f.readV3CompletedReservation,
-   setTransactions:()=>{if(ambiguity==='publication'&&!ui.publicationFailed){ui.publicationFailed=true;throw Error('injected-ui-publication');}},
+   setTransactions:()=>{if(['publication','close-reopen','settings-remount'].includes(ambiguity)&&!ui.publicationFailed){ui.publicationFailed=true;throw Error('injected-ui-publication');}},
    setCustomers:no,syncFiscalDocument:async()=>{},backgroundSyncManager:{triggerSync:async()=>{}},console:log});
-  const context={validate:(lines:any[],ref:any)=>f.session.validate(f.config,lines,tariff,warehouse,'SALE',undefined,ref),
+  const context={restoreReservation:(id:string)=>f.restoreV3ReservationReference(id,warehouse),validate:(lines:any[],ref:any)=>f.session.validate(f.config,lines,tariff,warehouse,'SALE',undefined,ref),
    completedReservation:(r:any,lines:any[],customerId?:string)=>f.readV3CompletedReservation({reservationId:r.id,claimId:reservationClaimId(r.id),expectedSource:r,lines,customerId})};
-  const shared:Record<string,any>={activeV3Reservation:recovery,v3Operational:context,activeRecoveredReservation:source,cart:source.items,processedCart:source.items,cartTotal:1000,cartTax:0,cartTip:0,
+  const shared:Record<string,any>={activeV3Reservation:recovery,v3Operational:context,activeRecoveredReservation:source,cart:source.items.map((line:any)=>({...line,v3ReservationId:source.id})),processedCart:source.items,cartTotal:1000,cartTax:0,cartTip:0,
    activeTerminalId:id(4),activeTerminalConfig:f.config.terminals[0].config,activeTable:undefined,activeDirectV3TicketId:undefined,activeTableContext:{},activeParkedTicket:undefined,
    selectedCustomer:customer,effectiveSelectedCustomer:customer,hasV3ReservationCart:true,config:f.config,products:recovery.products,currentUser:{id:id(25),name:'Synthetic'},baseCurrency:{code:'DOP',symbol:'$'},
    isOrderTakerMode:false,hasSubtotalizedCart:false,isSelectedCustomerTaxExempt:false,refundAuthorizedBy:null,redeemedCoupon:null,isTaxIncluded:false,discountAmount:0,
@@ -355,12 +355,50 @@ for(const durable of [false,true])for(const ambiguity of ['none','commit-respons
    modal.canFinalize=true;modal.isCreditActionBlocked=true;await finalize();assert.equal(ui.providerCalls,0);assert.deepEqual(snapshot(f),before);modal.isCreditActionBlocked=false;
   }
   await finalize();
-  if(ambiguity==='publication'){
+  if(['publication','close-reopen','settings-remount'].includes(ambiguity)){
    assert.equal(ui.receipt,null,JSON.stringify(messages));assert.equal(f.documents('reservations')[0].status,'INVOICED');const committed=snapshot(f),firstProviders=ui.providerCalls;
    // Real final button remains reachable for a reservation completion check with no newly entered payment.
    modal.canFinalize=false;modal.payments=[];
    const text=readFileSync('components/PaymentModal.tsx','utf8'),ast=ts.createSourceFile('PaymentModal.tsx',text,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);let disabled:ts.Expression|undefined;
    function visit(node:ts.Node){if(ts.isJsxOpeningElement(node)&&node.tagName.getText(ast)==='button'&&node.attributes.properties.some(a=>ts.isJsxAttribute(a)&&a.name.getText(ast)==='onClick'&&a.initializer?.getText(ast)==='{handleFinalize}')){const attr=node.attributes.properties.find(a=>ts.isJsxAttribute(a)&&a.name.getText(ast)==='disabled') as ts.JsxAttribute;disabled=(attr.initializer as ts.JsxExpression).expression;}ts.forEachChild(node,visit);}visit(ast);assert.ok(disabled);assert.equal(new Function('canFinalize','paymentOperationId','isFinalizing','isProcessingGateway','return '+disabled.getText(ast))(false,recovery.claimId,false,false),false);
+   if(ambiguity!=='publication'){
+    const text=readFileSync('components/POSInterface.tsx','utf8'),ast=ts.createSourceFile('POSInterface.tsx',text,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
+    let close:ts.Expression|undefined,effect:ts.Expression|undefined;
+    function find(node:ts.Node){
+     if(ts.isJsxSelfClosingElement(node)&&node.tagName.getText(ast)==='UnifiedPaymentModal'){
+      const attr=node.attributes.properties.find(a=>ts.isJsxAttribute(a)&&a.name.getText(ast)==='onClose') as ts.JsxAttribute;
+      close=(attr.initializer as ts.JsxExpression).expression;
+     }
+     if(ts.isCallExpression(node)&&node.expression.getText(ast)==='useEffect'&&node.arguments[0]?.getText(ast).includes('ids.size !== 1'))effect=node.arguments[0];
+     ts.forEachChild(node,find);
+    }find(ast);assert.ok(close);assert.ok(effect);
+    const execute=(arrow:ts.Expression,bindings:Record<string,any>)=>new Function(...Object.keys(bindings),ts.transpileModule('const run='+arrow.getText(ast)+';',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText+'return run;')(...Object.values(bindings))();
+    execute(close,{recordCheckoutDiagnostic:no,setShowPaymentModal:(v:boolean)=>ui.modalOpen=v,returnToTableMapAfterPayment:false,onOpenTableMap:undefined,setReturnToTableMapAfterPayment:no,finishInteraction:no,paymentModalTraceRef:{current:null}});
+    assert.equal(ui.modalOpen,false);
+    if(ambiguity==='settings-remount'){
+     shared.activeV3Reservation=undefined;shared.activeRecoveredReservation=undefined;
+     let invalidPublished=false;
+     await assert.rejects(new Promise<void>((resolve,reject)=>execute(effect,{...shared,assertV3ReservationLines,
+      cart:shared.cart.map((line:any)=>({...line,quantity:line.quantity+1})),
+      setActiveV3Reservation:()=>{invalidPublished=true;resolve();},setActiveRecoveredReservation:()=>{invalidPublished=true;},
+      onSelectCustomer:()=>{invalidPublished=true;},setErrorToast:(message:string)=>reject(Error(message))})),/RESERVATION_LINES_CHANGED/);
+     assert.equal(invalidPublished,false);assert.deepEqual(snapshot(f),committed);
+     await new Promise<void>((resolve,reject)=>execute(effect,{...shared,assertV3ReservationLines,
+      setActiveV3Reservation:(value:any)=>{shared.activeV3Reservation=value;resolve();},
+      setActiveRecoveredReservation:(value:any)=>shared.activeRecoveredReservation=value,
+      onSelectCustomer:(value:any)=>shared.selectedCustomer=value,setErrorToast:(message:string)=>reject(Error(message))}));
+     assert.equal(shared.activeV3Reservation.claimId,recovery.claimId);assert.equal(shared.activeV3Reservation.reservation.status,'ACTIVE');
+     assert.equal(shared.activeV3Reservation.reservation.total,1000);assert.equal(shared.selectedCustomer.id,source.customerId);
+    }
+    Object.assign(shared,{observeDestinationAttempt:(_t:any,work:any)=>work(),setErrorToast:(message:string)=>messages.push(message),
+     expectInteractionDestination:no,paymentModalTraceRef:{current:null},setShowPaymentModal:(v:boolean)=>ui.modalOpen=v,markInteractionStateUpdate:no,
+     startCheckoutInteraction:()=>trace,validateTerminalDocument:()=>({isValid:true}),terminalId:id(4),canProceedWithOperationalSession:async()=>{await f.session.assertCurrent();return true;}});
+    shared.completedReservationForReceipt=actualCallback('components/POSInterface.tsx','completedReservationForReceipt',shared);
+    shared.proceedToCheckout=actualCallback('components/POSInterface.tsx','proceedToCheckout',shared);
+    await actualCallback('components/POSInterface.tsx','requestCheckout',shared)(1,true);assert.equal(ui.modalOpen,true,JSON.stringify(messages));
+    modal.beforePaymentEffects=actualCallback('components/POSInterface.tsx','beforeV3PaymentEffects',shared);
+    modal.onConfirm=actualCallback('components/POSInterface.tsx','handlePaymentConfirm',shared);
+   }
    await finalize();assert.deepEqual(snapshot(f),committed);assert.equal(ui.providerCalls,firstProviders);
   }
   assert.ok(ui.receipt,JSON.stringify(messages));assert.equal(ui.success,true);assert.equal(ui.receipt.displayId,'TCK-000001');assert.equal(ui.receipt.seriesNumber,1);assert.equal(ui.receipt.globalSequence,1);
@@ -394,6 +432,6 @@ for(const attack of ['claim','history','number','source','content'] as const)tes
   if(attack==='number'){const d=f.documents('transactions')[0];d.globalSequence=2;f.put('transactions',d);}
   if(attack==='source'){const d=f.documents('reservations')[0];d.balancePaid=301;f.put('reservations',d);}
   if(attack==='content'){const d=f.documents('transactions')[0];d.payments[0].amount=699;f.put('transactions',d);}
-  const before=snapshot(f);await assert.rejects(f.readV3CompletedReservation(request));assert.deepEqual(snapshot(f),before);
+  const before=snapshot(f);await assert.rejects(f.readV3CompletedReservation(request));await assert.rejects(f.restoreV3ReservationReference(reservationId,warehouse));assert.deepEqual(snapshot(f),before);
  }finally{f.db.close();}
 });
