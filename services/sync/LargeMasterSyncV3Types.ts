@@ -162,11 +162,12 @@ export interface LargeMasterSyncV3Store {
 /** Administrative display only; never a sale/cart Product or availability authority. */
 export interface V3CatalogArticle {
   id: string; name: string; sku: string | null; barcode: string | null; categoryId: string | null;
+  departmentId?: string | null; sectionId?: string | null; familyId?: string | null; brandId?: string | null; posCategoryId?: string | null;
   active: boolean; sellable: boolean; type: string | null; price: number | null; balance: number | null; stock?: number | null;
 }
 export interface V3CatalogPageRequest {
   query?: string; category?: 'ALL' | 'NONE';
-  departmentId?: string; sectionId?: string; familyId?: string; brandId?: string; categoryId?: string;
+  departmentId?: string; sectionId?: string; familyId?: string; brandId?: string; categoryId?: string; posCategoryId?: string;
   afterId?: string | null; limit?: number;
   tariffId: string; warehouseId: string; inventoryVersion: number; inventoryCursor: string;
 }
