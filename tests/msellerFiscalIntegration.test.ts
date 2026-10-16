@@ -44,6 +44,10 @@ Object.defineProperty(globalThis, 'window', {
   },
 });
 
+const issuance=(code:string,sequence:number)=>({schemaVersion:1,source:'POS_FISCAL_RESERVATION_V1',ncf:code+String(sequence).padStart(10,'0'),ncfType:code,sequence,
+ fiscalRangeId:'original-range-'+code,fiscalAllocationId:'original-allocation-'+code,prefix:code,rangeStart:1,rangeEnd:9999999999,allocationStart:1,allocationEnd:9999999999,
+ expiryDate:'2099-12-31',issuerRnc:'101010101',tenantId:'tenant',companyId:'company',terminalId:'terminal-mseller',capturedAt:'2026-10-16T00:00:00Z'} as any);
+
 const buildBusinessConfig = () => ({
   companyInfo: { name: 'Comercio QA', rnc: '101010101' },
   fiscalCompliance: {
@@ -214,7 +218,7 @@ test('emite E31/E32/E34 exclusivamente al ERP y nunca envía credenciales MSelle
   const originalFetch = globalThis.fetch;
 
   try {
-    for (const documentCode of ['E31', 'E32', 'E34'] as const) {
+    for (const documentCode of ['E31', 'E32', 'E34', 'E44', 'E45'] as const) {
       await t.test(documentCode, async () => {
         let requestUrl = '';
         let requestBody = '';
@@ -248,6 +252,7 @@ test('emite E31/E32/E34 exclusivamente al ERP y nunca envía credenciales MSelle
             userName: 'QA',
             status: 'COMPLETED',
             ncfType: documentCode,
+            ncf: `${documentCode}0000000001`, fiscalIssuance:issuance(documentCode,1),
             electronicNcf: `${documentCode}0000000001`,
           } as any,
           credentialKey: 'MSELLERQA001',
@@ -258,6 +263,8 @@ test('emite E31/E32/E34 exclusivamente al ERP y nunca envía credenciales MSelle
         assert.equal(requestUrl, 'https://erp.example.test/api/fiscal/documents/issue');
         assert.doesNotMatch(requestUrl, /mseller\.app|127\.0\.0\.1|10\.0\.2\.2/);
         const parsedBody = JSON.parse(requestBody);
+        assert.equal(parsedBody.options.fiscalRangeId,'original-range-'+documentCode);
+        assert.deepEqual(parsedBody.options.fiscalIssuance,issuance(documentCode,1));
         assert.equal(parsedBody.authToken, undefined);
         assert.equal(parsedBody.options.apiBaseUrl, undefined);
         assert.equal(parsedBody.options.testUrl, undefined);
@@ -355,6 +362,7 @@ test('dos emisiones concurrentes de la misma venta comparten un solo POST', asyn
         userName: 'QA',
         status: 'COMPLETED' as const,
         ncfType: 'E31' as const,
+        ncf:'E310000000077',fiscalIssuance:issuance('E31',77),
         electronicNcf: 'E310000000077',
       },
       deliveryMode: 'DELEGATED_ERP' as const,
@@ -399,6 +407,7 @@ test('sin ERP configurado, MSeller queda sin ruta y nunca cae al backend fiscal 
         userName: 'QA',
         status: 'COMPLETED',
         ncfType: 'E31',
+        ncf:'E310000000099',fiscalIssuance:issuance('E31',99),
         electronicNcf: 'E310000000099',
       } as any,
       deliveryMode: 'DELEGATED_ERP',

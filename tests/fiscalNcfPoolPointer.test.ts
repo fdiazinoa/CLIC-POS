@@ -257,7 +257,7 @@ test('checkout does not abandon an in-flight NCF reservation with an eight-secon
   const checkoutSource = readFileSync(new URL('../components/POSInterface.tsx', import.meta.url), 'utf8');
   assert.doesNotMatch(checkoutSource, /TIMEOUT_GET_NCF/);
   assert.doesNotMatch(checkoutSource, /withTimeout\s*\(\s*db\.getNextNCF/);
-  assert.equal((checkoutSource.match(/await db\.getNextNCF\(/g) || []).length, 2);
+  assert.equal((checkoutSource.match(/await db\.reserveFiscalNumber\(/g) || []).length, 2);
 });
 
 
@@ -324,8 +324,8 @@ test('matching managed buffer cannot issue from a removed, inactive, wrong-type 
 
 test('checkout rejects recovered-reservation returns and invalid credit before any fiscal reservation', () => {
   const source = readFileSync(new URL('../components/POSInterface.tsx', import.meta.url), 'utf8');
-  const refundReservation = source.indexOf('reservedRefundNcf = await db.getNextNCF');
-  const saleReservation = source.indexOf('finalNcf = await db.getNextNCF');
+  const refundReservation = source.indexOf('await db.reserveFiscalNumber(refundFiscalType');
+  const saleReservation = source.indexOf('await db.reserveFiscalNumber(fiscalStatus.type');
   const reservationRejection = source.indexOf('if (activeRecoveredReservation && hasReturns)');
   const creditRejection = source.indexOf("if (creditGate && !hasCreditOverrideApproval)");
   assert.ok(reservationRejection > 0 && reservationRejection < refundReservation && reservationRejection < saleReservation);

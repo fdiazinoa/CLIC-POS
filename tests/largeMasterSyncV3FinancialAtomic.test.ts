@@ -300,3 +300,31 @@ test('fiscal authority denial before preparation or final atomic commit publishe
     } finally { f.sql.close(); }
   }
 });
+
+test('two sequential partial refunds retain archived original and never create a ticket settlement; stale CAS rolls back ledger',async()=>{
+ const f=fixture();try{
+  const module=await financialModule(f,false);
+  const original={...module.transaction('source'),...scope,zReportId:'Z',status:'COMPLETED',relatedTransactions:[],customerId:undefined};
+  await f.adapter.saveDocument('transactionHistory',original);
+  const globals=globalThis as any;
+  globals.__v3FinancialFixture.session.validate=async(_config:any,items:any[],_tariff:any,_warehouse:any,_intent:any,validated:any)=>{
+   for(const line of items)validated?.(line,line);
+   const source=await f.adapter.getDocument('transactionHistory','source') as any;
+   return {collection:'transactionHistory',id:'source',expected:JSON.stringify(source),items:source.items};
+  };
+  const refund=(name:string)=>({...module.transaction(name,true),type:'REFUND',...scope,customerId:undefined,originalTransactionId:'source',items:[{...original.items[0],quantity:0.5,netAmount:50,taxAmount:9,totalAmount:59}],total:59,netAmount:50,taxAmount:9});
+  for(const name of ['partial-1','partial-2']){
+   const before=await f.adapter.getDocument('transactionHistory','source') as any;
+   const intended={...before,status:name==='partial-1'?'PARTIAL_REFUND':'REFUNDED',relatedTransactions:[...before.relatedTransactions,name]};
+   await module.persistV3FinancialTransaction(refund(name),{} as BusinessConfig,'W',{refund:true,original:intended,expectedOriginal:before,expectedOriginalHistory:before,originalCollection:'transactionHistory'});
+   assert.equal(await f.adapter.getDocument('transactions','source'),null);
+  }
+  const stored=await f.adapter.getDocument('transactionHistory','source') as any;
+  assert.equal(stored.zReportId,'Z');assert.deepEqual(stored.relatedTransactions,['partial-1','partial-2']);
+  assert.equal(f.rows('v3TicketSettlements').length,0);assert.equal(f.rows('inventoryLedger').length,2);
+  assert.equal(f.rows('inventoryLedger').reduce((sum:number,row:any)=>sum+row.qtyIn,0),1);
+  const stale={...stored,total:999};
+  await assert.rejects(()=>module.persistV3FinancialTransaction(refund('stale'),{} as BusinessConfig,'W',{refund:true,original:{...stale,relatedTransactions:[...stale.relatedTransactions,'stale']},expectedOriginal:stale,expectedOriginalHistory:stale,originalCollection:'transactionHistory'}));
+  assert.equal(f.rows('inventoryLedger').length,2);assert.equal(await f.adapter.getDocument('transactions','stale'),null);
+ }finally{f.sql.close();}
+});
