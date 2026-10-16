@@ -27,16 +27,14 @@ test('las doce acciones conservan dos filas sin Guardar condicional', () => {
 });
 
 
-test('Guardar permanece condicionado en toolbar desktop y conserva el handler; compact/mobile no se retiran', () => {
+test('Guardar remains permission-gated in the lower quick actions panel and mobile header', () => {
   assert.doesNotMatch(restaurantActionGrid, /handleGridAction\('SAVE'\)/);
-  const toolbarStart = posSource.indexOf('<TicketStatusControls className="ml-auto');
-  const toolbar = posSource.slice(toolbarStart, posSource.indexOf('</TicketStatusControls>', toolbarStart));
-  assert.match(toolbar, /canParkDirectSale &&/);
-  assert.match(toolbar, /onClick=\{\(\) => handleGridAction\('SAVE'\)\}/);
-  assert.match(toolbar, /aria-label="Guardar ticket"/);
-  assert.match(toolbar, /title="Guardar ticket"/);
-  assert.match(toolbar, /flex h-12 w-12 shrink-0/);
-  assert.ok(posSource.slice(0, gridStart).includes("onClick={() => handleGridAction('SAVE')}"));
+  const panel = posSource.slice(posSource.indexOf('   const renderQuickActionsPanel ='), posSource.indexOf('   const renderDesktopTicketFooterActions ='));
+  assert.match(panel, /<ActionGrid[\s\S]*?allowSave=\{canParkDirectSale\}/);
+  assert.match(panel, /handleGridAction\(action\)/);
+  const mobile = posSource.slice(posSource.indexOf('{/* MOBILE HEADER */}'), posSource.indexOf('{/* CUSTOMER PILL (MOBILE) */}'));
+  assert.match(mobile, /canParkDirectSale &&/);
+  assert.match(mobile, /onClick=\{openParkAliasModal\}/);
 });
 
 
