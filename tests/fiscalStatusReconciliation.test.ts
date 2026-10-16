@@ -4,6 +4,7 @@ import {DatabaseSync} from 'node:sqlite';
 import {readFileSync} from 'node:fs';
 import {FiscalStatusReconciler,type FiscalStatusDependencies} from '../services/fiscal/FiscalStatusReconciler';
 import {fiscalStatusSourceChecksum,verifyFiscalStatusProof,type FiscalStatusScope,type FiscalStatusProof} from '../services/fiscal/FiscalStatusProof';
+import {attachFiscalStatusLifecycle} from '../services/fiscal/FiscalStatusLifecycle';
 import {getScopedFiscalDocumentStatus} from '../services/fiscal/FiscalScopedStatusTransport';
 import {LARGE_MASTER_SYNC_V3_SCHEMA_SQL} from '../services/db/LargeMasterSyncV3Schema';
 import {CapacitorSQLiteAdapter} from '../services/db/adapters/CapacitorSQLiteAdapter';
@@ -141,16 +142,40 @@ test('native device drift at commit refuses both status copies even when outside
  }finally{f.sql.close();}
 });
 
+const settle = () => new Promise<void>(resolve => setImmediate(resolve));
+function lifecycleClock() {
+ let now=100000,serial=0;
+ const timers=new Map<number,{at:number;listener:()=>void}>();
+ return {
+  now:()=>now, count:()=>timers.size,
+  setTimer:(listener:()=>void,delay:number)=>{const id=++serial;timers.set(id,{at:now+delay,listener});return id as any;},
+  clearTimer:(id:any)=>{timers.delete(id);},
+  async advance(ms:number){now+=ms;for(const[id,timer]of [...timers])if(timer.at<=now){timers.delete(id);timer.listener();}await settle();},
+ };
+}
+function lifecycleHarness(worker:Pick<FiscalStatusReconciler,'runAutomatic'|'dispose'>,clock=lifecycleClock()) {
+ let online=true;
+ const onlineListeners=new Set<()=>void>(),transactionListeners=new Set<()=>void>();
+ let sync:((state:any)=>void)|undefined;
+ const options={hydrated:true,online:()=>online,addOnline:(listener:()=>void)=>{onlineListeners.add(listener);},removeOnline:(listener:()=>void)=>{onlineListeners.delete(listener);},
+  addTransactionsUpdated:(listener:()=>void)=>{transactionListeners.add(listener);},removeTransactionsUpdated:(listener:()=>void)=>{transactionListeners.delete(listener);},
+  syncTime:null,subscribe:(listener:(state:any)=>void)=>{sync=listener;return()=>{sync=undefined;};},setTimer:clock.setTimer,clearTimer:clock.clearTimer};
+ return{clock,options,attach:()=>attachFiscalStatusLifecycle(worker,options),transaction:()=>{for(const listener of transactionListeners)listener();},
+  connection:(value:boolean)=>{online=value;for(const listener of onlineListeners)listener();},
+  synced:(timestamp:string)=>sync?.({lastSyncTime:timestamp,isSyncing:false,hasError:false}),
+  listeners:()=>onlineListeners.size+transactionListeners.size+(sync?1:0)};
+}
 test('actual hydration/online/successful-sync lifecycle registers only ready state, coalesces timestamp events and disposes',async()=>{
  const {attachFiscalStatusLifecycle}=await import('../services/fiscal/FiscalStatusLifecycle');let runs=0,disposes=0,online=true;
  let onOnline:(()=>void)|undefined,onSync:((state:any)=>void)|undefined;
  const worker={runAutomatic:async()=>{runs++;},dispose:()=>{disposes++;}};
- const options={hydrated:false,online:()=>online,addOnline:(listener:()=>void)=>{onOnline=listener;},removeOnline:()=>{onOnline=undefined;},syncTime:null,
+ const clock=lifecycleClock();
+ const options={setTimer:clock.setTimer,clearTimer:clock.clearTimer,hydrated:false,online:()=>online,addOnline:(listener:()=>void)=>{onOnline=listener;},removeOnline:()=>{onOnline=undefined;},syncTime:null,
   subscribe:(listener:(state:any)=>void)=>{onSync=listener;return()=>{onSync=undefined;};}};
  attachFiscalStatusLifecycle(worker,options)();assert.equal(runs,0);assert.equal(onOnline,undefined);
- const cleanup=attachFiscalStatusLifecycle(worker,{...options,hydrated:true});assert.equal(runs,1);
+ const cleanup=attachFiscalStatusLifecycle(worker,{...options,hydrated:true});assert.equal(runs,1);await settle();
  onSync!({lastSyncTime:'successful',isSyncing:false,hasError:false});assert.equal(runs,2);
- onSync!({lastSyncTime:'successful',isSyncing:false,hasError:false});onSync!({lastSyncTime:'failed',isSyncing:false,hasError:true});assert.equal(runs,2);
+ onSync!({lastSyncTime:'successful',isSyncing:false,hasError:false});onSync!({lastSyncTime:'failed',isSyncing:false,hasError:true});assert.equal(runs,2);await settle();
  online=false;onOnline!();assert.equal(runs,2);online=true;onOnline!();assert.equal(runs,3);
  cleanup();assert.equal(disposes,1);assert.equal(onSync,undefined);assert.equal(onOnline,undefined);
 });
@@ -241,4 +266,97 @@ for(const shape of ['single','mixedId','mixedOperation','differentProof','missin
   await assert.rejects(()=>f.adapter.saveDocumentsAtomically(mutations),/FISCAL_METADATA_MUTATION_DENIED/);
   assert.deepEqual(f.read('transactions'),beforeTx);assert.deepEqual(f.read('transactionHistory'),beforeHistory);
  }finally{f.sql.close();}
+});
+
+
+test('persisted no-reference pending reaches strict acceptance in both real SQLite copies automatically at 60s',async()=>{
+ const f=await native(),h=lifecycleHarness(f.worker);f.deps.now=h.clock.now;
+ let gets=0;
+ f.deps.get=async()=>++gets===1?{...f.proof,decision:'PENDING',providerReceipt:{...f.proof.providerReceipt,status:'Pendiente',pending:true,success:false}} as any:f.proof;
+ const original=f.read('transactions'),outbox=f.read('outbox');assert.equal(original.fiscalReferenceId,undefined);
+ const cleanup=h.attach();try{
+  await f.worker.runAutomatic();await settle();assert.equal(gets,1);assert.equal(f.read('transactions').fiscalSyncStatus,'PENDING');assert.equal(h.clock.count(),1);
+  await h.clock.advance(59999);assert.equal(gets,1);
+  await h.clock.advance(1);await f.worker.runAutomatic();await settle();assert.equal(gets,2);
+  for(const collection of ['transactions','transactionHistory']){
+   const row=f.read(collection);assert.equal(row.fiscalSyncStatus,'SYNCED');assert.equal(row.fiscalReferenceId,'actual-track27');
+   for(const key of ['ncf','items','payments','total','v3CommitFingerprint'])assert.deepEqual(row[key],original[key]);
+  }
+  assert.deepEqual(f.read('outbox'),outbox);assert.equal(f.counts().publishes,1);
+ }finally{cleanup();assert.equal(h.clock.count(),0);f.sql.close();}
+});
+
+test('persisted transaction notification wakes without ERP ACK; bursts coalesce, max one timer, offline resumes',async()=>{
+ let runs=0,release:(()=>void)|undefined;
+ const h=lifecycleHarness({runAutomatic:async()=>{runs++;await new Promise<void>(resolve=>{release=resolve;});},dispose:()=>{}});
+ const cleanup=h.attach();try{
+  assert.equal(runs,1);for(let i=0;i<100;i++){h.transaction();h.synced(String(i));h.connection(true);}assert.equal(runs,1);assert.equal(h.clock.count(),0);
+  release!();await settle();assert.equal(h.clock.count(),1);
+  h.transaction();assert.equal(runs,2);assert.equal(h.clock.count(),0);release!();await settle();
+  h.connection(false);await h.clock.advance(60000);assert.equal(runs,2);assert.equal(h.clock.count(),1);
+  h.connection(true);assert.equal(runs,3);release!();await settle();assert.equal(h.clock.count(),1);
+ }finally{cleanup();assert.equal(h.listeners(),0);assert.equal(h.clock.count(),0);}
+ await h.clock.advance(60000);h.transaction();h.connection(true);assert.equal(runs,3);
+});
+
+test('restart while offline retains SQLite pending and reopens automatic GET-only reconciliation',async()=>{
+ const f=await native(),h=lifecycleHarness(f.worker);f.deps.now=h.clock.now;
+ h.connection(false);const before=f.read('transactions');let cleanup=h.attach();await settle();assert.equal(f.counts().gets,0);
+ await h.clock.advance(60000);assert.deepEqual(f.read('transactions'),before);cleanup();
+ const reopened=new FiscalStatusReconciler(f.deps),second=lifecycleHarness(reopened,h.clock);second.connection(false);cleanup=second.attach();
+ try{await settle();assert.equal(f.counts().gets,0);second.connection(true);await reopened.runAutomatic();await settle();assert.equal(f.read('transactions').fiscalSyncStatus,'SYNCED');assert.equal(f.counts().gets,1);}
+ finally{cleanup();f.sql.close();}
+});
+
+test('scope cleanup during GET prevents stale writes, reattached worker retains next bounded wake',async()=>{
+ const f=await native(),h=lifecycleHarness(f.worker);f.deps.now=h.clock.now;
+ let release:(()=>void)|undefined,gets=0,started:(()=>void)|undefined;
+ const enteringGet=new Promise<void>(resolve=>{started=resolve;});
+ f.deps.get=async()=>{gets++;if(gets===1){started!();await new Promise<void>(resolve=>{release=resolve;});}return f.proof;};
+ let cleanup=h.attach();await enteringGet;assert.equal(gets,1);cleanup();assert.equal(h.clock.count(),0);
+ cleanup=h.attach();release!();await f.worker.runAutomatic();await settle();
+ try{
+  assert.equal(f.counts().publishes,0);assert.equal(f.read('transactions').fiscalSyncStatus,'PENDING');assert.equal(h.clock.count(),1);
+  await h.clock.advance(60000);await f.worker.runAutomatic();await settle();assert.equal(gets,2);assert.equal(f.read('transactions').fiscalSyncStatus,'SYNCED');
+ }finally{cleanup();f.sql.close();}
+});
+
+test('automatic continuation never authorizes lookup for unknown attempts lacking persisted scope',async()=>{
+ const f=await native();const tx=f.read('transactions');delete tx.fiscalSubmissionScope;
+ f.sql.prepare("UPDATE documents SET data=? WHERE collection_name='transactions'").run(JSON.stringify(tx));
+ const h=lifecycleHarness(f.worker);f.deps.now=h.clock.now;const cleanup=h.attach();
+ try{await f.worker.runAutomatic();await settle();await h.clock.advance(60000);await f.worker.runAutomatic();h.transaction();await f.worker.runAutomatic();await settle();assert.equal(f.counts().gets,0);assert.deepEqual(f.read('transactions'),tx);assert.equal(f.counts().publishes,0);}
+ finally{cleanup();f.sql.close();}
+});
+
+
+test('real SQLite candidate cursor gives 26 pending documents fair 10/10/6 bounded passes',async()=>{
+ const f=await native();
+ for(let i=0;i<25;i++){
+  const row={...f.tx,id:'row'+String(i).padStart(2,'0')};row.fiscalSubmissionScope={...f.scope,sourceChecksum:await fiscalStatusSourceChecksum(row)};
+  for(const collection of ['transactions','transactionHistory'])f.sql.prepare('INSERT INTO documents(collection_name,doc_id,data) VALUES(?,?,?)').run(collection,row.id,JSON.stringify(row));
+ }
+ f.deps.candidates=(binding,after,limit)=>f.adapter.getFiscalStatusCandidates(binding,after,limit);
+ f.deps.pair=async id=>{
+  const read=(collection:string)=>JSON.parse(String(f.sql.prepare('SELECT data FROM documents WHERE collection_name=? AND doc_id=?').get(collection,id)?.data));
+  return{transaction:read('transactions'),history:read('transactionHistory')};
+ };
+ const visited:string[]=[];f.deps.get=async tx=>{visited.push(tx.id);return{...f.proof,decision:'PENDING'} as any;};
+ const h=lifecycleHarness(f.worker);f.deps.now=h.clock.now;const cleanup=h.attach();
+ try{
+  await f.worker.runAutomatic();await settle();assert.equal(visited.length,10);
+  await h.clock.advance(60000);await f.worker.runAutomatic();await settle();assert.equal(visited.length,20);
+  await h.clock.advance(60000);await f.worker.runAutomatic();await settle();assert.equal(visited.length,26);assert.equal(new Set(visited).size,26);
+  assert.equal(f.counts().publishes,0);assert.equal(h.clock.count(),1);
+ }finally{cleanup();f.sql.close();}
+});
+
+test('timed-out status read retains all SQLite evidence and next scheduled pass accepts',async()=>{
+ const f=await native(),h=lifecycleHarness(f.worker);f.deps.now=h.clock.now;let gets=0;
+ const tx=f.read('transactions'),history=f.read('transactionHistory'),outbox=f.read('outbox');
+ f.deps.get=async()=>{if(++gets===1)throw Error('status timeout');return f.proof;};const cleanup=h.attach();
+ try{
+  await f.worker.runAutomatic();await settle();assert.deepEqual(f.read('transactions'),tx);assert.deepEqual(f.read('transactionHistory'),history);assert.deepEqual(f.read('outbox'),outbox);
+  await h.clock.advance(60000);await f.worker.runAutomatic();await settle();assert.equal(gets,2);assert.equal(f.read('transactions').fiscalSyncStatus,'SYNCED');
+ }finally{cleanup();f.sql.close();}
 });
