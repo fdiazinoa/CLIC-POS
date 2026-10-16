@@ -1,4 +1,4 @@
-import { assertRefundFinancialSource,assertRefundOriginalState } from './sync/LargeMasterSyncV3RefundAuthority';
+import { assertRefundFinancialSource,assertRefundOriginalState,assertRefundCommercialVersion } from './sync/LargeMasterSyncV3RefundAuthority';
 import { BusinessConfig, CartItem, Transaction } from '../types';
 import { isV3FinancialDocument, persistV3FinancialTransaction } from './sync/LargeMasterSyncV3FinancialCommit';
 import { db } from '../utils/db';
@@ -11,6 +11,7 @@ interface PersistRefundOptions {
   warehouseId: string;
   terminalId?: string;
   originalTransaction?: Transaction | null;
+  originalSource?: Transaction | null;
   conditions?: Map<string, RefundCondition>;
   persistOriginal?: boolean;
   adjustCustomerBalance?: boolean;
@@ -41,6 +42,7 @@ export async function readRefundOriginal(captured: Transaction): Promise<Transac
  assertRefundOriginalState(current);
  if(history&&active)assertRefundOriginalState(history);
  assertRefundFinancialSource(current,captured);
+ assertRefundCommercialVersion(current,captured);
  if (history && active) assertRefundFinancialSource(active,history);
  return current;
 }
@@ -80,10 +82,13 @@ export async function persistStandaloneRefundTransaction(
     const originalCollection = activeOriginal ? 'transactions' as const : 'transactionHistory' as const;
     const expectedOriginal = activeOriginal || (expectedOriginalHistory?.zReportId ? expectedOriginalHistory : null);
     if (originalTransaction && !expectedOriginal) throw new Error('SYNC_V3_REFUND_ORIGINAL_CHANGED');
-    if (originalTransaction && expectedOriginal) assertRefundFinancialSource(expectedOriginal,originalTransaction);
+    if (originalTransaction && expectedOriginal) {
+      assertRefundFinancialSource(expectedOriginal,originalTransaction);
+      assertRefundCommercialVersion(expectedOriginal,options.originalSource || originalTransaction);
+    }
     const updatedOriginal = expectedOriginal && options.persistOriginal !== false ? {
       ...expectedOriginal, status: originalTransaction!.status,
-      relatedTransactions: Array.from(new Set([...(expectedOriginal.relatedTransactions || []), persistedRefund.id])),
+      relatedTransactions: Array.from(new Set([...(originalTransaction!.relatedTransactions || []), persistedRefund.id])),
       syncStatus: 'PENDING' as const,
     } : undefined;
     const result = await persistV3FinancialTransaction(persistedRefund, config, options.warehouseId,

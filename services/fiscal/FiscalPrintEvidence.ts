@@ -43,6 +43,16 @@ export const resolveFiscalPrintDisplay=async(tx:Transaction):Promise<FiscalPrint
  const scope=tx.fiscalPrintScope||tx.fiscalSubmissionScope||tx.fiscalLookupApproval;
  if(!proof||!scope||!['ACCEPTED','PENDING'].includes(proof.decision)||!await verifyFiscalStatusProof(proof,scope,tx,false))return;
  const display=validateDgiiPrintEvidence(proof,tx);
- if(display){display.dgiiAccepted=await verifyFiscalStatusProof(proof,scope,tx) || Boolean(tx.fiscalStatusProof&&await verifyFiscalStatusProof(tx.fiscalStatusProof,scope,tx));verified.add(display);}
+ if(display){display.dgiiAccepted=await verifyFiscalStatusProof(proof,scope,tx) || Boolean(tx.fiscalStatusProof&&await verifyFiscalStatusProof(tx.fiscalStatusProof,scope,tx));verified.add(Object.freeze(display));}
  return display;
+};
+
+/** Acceptance verification is independent of RI availability. A plain SYNCED flag is never sufficient. */
+export interface VerifiedFiscalAcceptance {schemaVersion:1;dgiiAccepted:true}
+const accepted=new WeakSet<object>();
+export const isVerifiedFiscalAcceptance=(value:VerifiedFiscalAcceptance|undefined):value is VerifiedFiscalAcceptance=>Boolean(value&&accepted.has(value));
+export const resolveFiscalAcceptance=async(tx:Transaction):Promise<VerifiedFiscalAcceptance|undefined>=>{
+ const scope=tx.fiscalSubmissionScope||tx.fiscalLookupApproval||tx.fiscalPrintScope;
+ if(!scope||!tx.fiscalStatusProof||!await verifyFiscalStatusProof(tx.fiscalStatusProof,scope,tx))return;
+ const evidence:VerifiedFiscalAcceptance={schemaVersion:1,dgiiAccepted:true};accepted.add(Object.freeze(evidence));return evidence;
 };

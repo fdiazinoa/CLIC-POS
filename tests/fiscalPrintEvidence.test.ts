@@ -49,3 +49,36 @@ test('general QR uses frozen Dominican civil date across UTC midnight and exact 
  assert.equal(fiscalCivilDate(f.tx.date),'15-10-2026');assert.ok(await resolveFiscalPrintDisplay(f.tx));
  f.proof.providerReceipt.printEvidence.qrUrl=f.proof.providerReceipt.printEvidence.qrUrl.replace('FechaEmision=15','FechaEmision=16');assert.equal(validateDgiiPrintEvidence(f.proof,f.tx),undefined);
 });
+
+test('email accepts only verified acceptance state; stale SYNCED plus signed PENDING remains unaccepted',async()=>{
+ const f=await fixture();f.tx.fiscalSyncStatus='SYNCED';let display=await resolveFiscalPrintDisplay(f.tx);assert.ok(display);
+ let email:any=buildReceiptEmailPayload(f.tx,'fixture@example.invalid',undefined,'RD$',[],display);
+ assert.equal(email.fiscalValidated,false);assert.equal(email.fiscalPrintEvidence.dgiiAccepted,false);
+ f.proof.source='ERP_SCOPED_PROVIDER_GET';f.proof.decision='ACCEPTED';f.proof.providerReceipt.status='DGIIAceptado';f.proof.providerReceipt.pending=false;
+ display=await resolveFiscalPrintDisplay(f.tx);email=buildReceiptEmailPayload(f.tx,'fixture@example.invalid',undefined,'RD$',[],display);
+ assert.equal(email.fiscalValidated,true);assert.equal(email.fiscalPrintEvidence.dgiiAccepted,true);
+});
+
+test('verified accepted proof without RI still validates email; unsigned sync status never does',async()=>{
+ const {resolveFiscalAcceptance}=await import('../services/fiscal/FiscalPrintEvidence');
+ const f=await fixture();f.proof.source='ERP_SCOPED_PROVIDER_GET';f.proof.decision='ACCEPTED';f.proof.providerReceipt.status='DGIIAceptado';f.proof.providerReceipt.pending=false;
+ delete f.proof.providerReceipt.printEvidence;f.tx.fiscalStatusProof=f.proof;delete f.tx.fiscalPrintProof;
+ assert.equal(await resolveFiscalPrintDisplay(f.tx),undefined);const acceptance=await resolveFiscalAcceptance(f.tx);assert.ok(acceptance);
+ const email:any=buildReceiptEmailPayload(f.tx,'fixture@example.invalid',undefined,'RD$',[],undefined,acceptance);
+ assert.equal(email.fiscalValidated,true);assert.equal(email.fiscalPrintEvidence,undefined);
+ const forged:any=buildReceiptEmailPayload(f.tx,'fixture@example.invalid',undefined,'RD$',[],undefined,{...acceptance});assert.equal(forged.fiscalValidated,false);
+});
+
+test('actual TicketHistory email refreshes archived persisted proof after approval instead of mailing selected stale snapshot',async()=>{
+ const {readFileSync}=await import('node:fs'),{transform}=await import('esbuild');
+ const source=readFileSync(new URL('../components/TicketHistory.tsx',import.meta.url),'utf8');
+ const segment=source.slice(source.indexOf('   const handleSendInvoiceEmail ='),source.indexOf('   const handleFlagInvoiceForReview ='));
+ const code=(await transform(segment,{loader:'ts'})).code;
+ const f=await fixture(),stale={...f.tx};delete stale.fiscalPrintProof;let sent:any;const reads:string[]=[];
+ const {resolveFiscalAcceptance}=await import('../services/fiscal/FiscalPrintEvidence');
+ const call=new Function('f',`const {requireCurrentUser,requestApproval,db,config,users,sendReceiptEmailViaErp,buildReceiptEmailPayload,resolveFiscalPrintDisplay,resolveFiscalAcceptance,recordInvoiceAuditEvent}=f;${code};return handleSendInvoiceEmail;`)({
+  requireCurrentUser:()=>({id:'actor'}),requestApproval:async()=>true,db:{getDocument:async(collection:string)=>{reads.push(collection);return collection==='transactionHistory'?{...f.tx,zReportId:'Z'}:null;}},config:{currencySymbol:'RD$'},users:[],
+  sendReceiptEmailViaErp:async(payload:any)=>{sent=payload;return{success:true};},buildReceiptEmailPayload,resolveFiscalPrintDisplay,resolveFiscalAcceptance,recordInvoiceAuditEvent:async()=>{},
+ });
+ await call(stale,'fixture@example.invalid');assert.deepEqual(reads,['transactions','transactionHistory']);assert.equal(sent.fiscalPrintEvidence.qrUrl,f.proof.providerReceipt.printEvidence.qrUrl);assert.equal(sent.fiscalValidated,false);
+});

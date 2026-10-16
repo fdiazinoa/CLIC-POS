@@ -13,6 +13,7 @@ interface SupervisorModalProps {
     roles: RoleDefinition[];
     users: User[];
     requestedDiscountPercent?: number;
+    overlayZIndex?: number;
 }
 
 const SupervisorModal: React.FC<SupervisorModalProps> = ({
@@ -24,7 +25,8 @@ const SupervisorModal: React.FC<SupervisorModalProps> = ({
     config,
     roles,
     users,
-    requestedDiscountPercent
+    requestedDiscountPercent,
+    overlayZIndex = 100
 }) => {
     const [pin, setPin] = useState('');
     const [error, setError] = useState<string | null>(null);
@@ -88,7 +90,7 @@ const SupervisorModal: React.FC<SupervisorModalProps> = ({
     };
 
     return (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+        <div style={{zIndex:overlayZIndex}} className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
             <div className="bg-white rounded-3xl shadow-2xl w-full max-w-sm overflow-hidden animate-in zoom-in-95 duration-200">
                 {/* Header */}
                 <div className="bg-slate-900 p-6 text-center relative">

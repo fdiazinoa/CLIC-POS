@@ -1,4 +1,4 @@
-import {isVerifiedFiscalPrintDisplay,type FiscalPrintDisplay} from '../fiscal/FiscalPrintEvidence';
+import {isVerifiedFiscalPrintDisplay,type FiscalPrintDisplay,isVerifiedFiscalAcceptance,type VerifiedFiscalAcceptance} from '../fiscal/FiscalPrintEvidence';
 import { terminalQuantityPresentation } from '../../utils/quantityPresentation';
 import { weightLineLabel } from '../../utils/scaleWeight';
 import type { BusinessConfig, CartItem, Transaction, User } from '../../types';
@@ -118,6 +118,7 @@ export const buildReceiptEmailPayload = (
   currencySymbol: string,
   users: User[] = [],
   fiscalPrint?: FiscalPrintDisplay,
+  fiscalAcceptance?: VerifiedFiscalAcceptance,
 ): ReceiptEmailPayload => {
   const baseCurrencyCode = String(
     config?.currencies?.find(currency => currency.isBase)?.code || 'DOP',
@@ -158,8 +159,8 @@ export const buildReceiptEmailPayload = (
     fiscalMode: transaction.fiscalMode,
     fiscalStatus: transaction.fiscalSyncStatus,
     fiscalReferenceId: transaction.fiscalReferenceId,
-    fiscalPrintEvidence: isVerifiedFiscalPrintDisplay(fiscalPrint) ? {schemaVersion:1,qrUrl:fiscalPrint.qrUrl,securityCode:fiscalPrint.securityCode,signedAt:fiscalPrint.signedAt,certifiedNcf:fiscalPrint.certifiedNcf} : undefined,
-    fiscalValidated: fiscalCode?.startsWith('E') && transaction.fiscalSyncStatus === 'SYNCED',
+    fiscalPrintEvidence: isVerifiedFiscalPrintDisplay(fiscalPrint) ? {schemaVersion:1,qrUrl:fiscalPrint.qrUrl,securityCode:fiscalPrint.securityCode,signedAt:fiscalPrint.signedAt,certifiedNcf:fiscalPrint.certifiedNcf,dgiiAccepted:fiscalPrint.dgiiAccepted} : undefined,
+    fiscalValidated: Boolean(fiscalCode?.startsWith('E') && (isVerifiedFiscalAcceptance(fiscalAcceptance) || isVerifiedFiscalPrintDisplay(fiscalPrint) && fiscalPrint.dgiiAccepted)),
     date: transaction.date,
     cashierName: transaction.userName,
     customerName: transaction.customerSnapshot?.name || transaction.customerName,

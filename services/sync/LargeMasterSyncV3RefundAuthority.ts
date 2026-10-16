@@ -25,6 +25,11 @@ export const refundFinancialSourceIdentity = (transaction: Transaction): string 
 export const assertRefundOriginalState=(source:Transaction):void=>{
   if(!['COMPLETED','PARTIAL_REFUND'].includes(source.status)) throw new LargeMasterSyncV3Error('SYNC_V3_REFUND_ORIGINAL_NOT_REFUNDABLE');
 };
+/** Commercial version is independent of mutable fiscal metadata. Never rebase a refund onto another refund. */
+export const assertRefundCommercialVersion=(fresh:Transaction,captured:Transaction):void=>{
+  const links=(row:Transaction)=>JSON.stringify([...new Set(row.relatedTransactions || [])].sort());
+  if(fresh.status!==captured.status || links(fresh)!==links(captured)) throw new LargeMasterSyncV3Error('SYNC_V3_REFUND_ORIGINAL_CHANGED');
+};
 export const assertRefundFinancialSource = (expected: Transaction, captured: Transaction): void => {
   if (refundFinancialSourceIdentity(expected) !== refundFinancialSourceIdentity(captured)) throw new LargeMasterSyncV3Error('SYNC_V3_REFUND_ORIGINAL_CHANGED');
 };

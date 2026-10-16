@@ -13142,6 +13142,7 @@ const AppContent: React.FC = () => {
       {
         warehouseId: defaultWarehouseId,
         terminalId: currentTerminalId,
+        originalSource: originalTx,
         originalTransaction: {
           ...originalTx,
           ...(LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED ? {} : {customerId:resolvedCustomerId,customerName:resolvedCustomerName}),

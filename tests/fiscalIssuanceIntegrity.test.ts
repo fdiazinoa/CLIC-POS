@@ -49,3 +49,18 @@ test('new canonical E cannot reuse immutable historical short E identity',async(
   assert.deepEqual(f.documents('transactionHistory'),[old]);assert.equal(f.documents('nativeFiscalReservations').length,0);
  }finally{f.db.close();}
 });
+
+test('historical E alias guards use expression indexes rather than full history scans',async()=>{
+ const f=await electronicNative();try{
+  const {planNativeFiscalReceipt}=await import('../services/db/NativeFiscalReservation');
+  const statements:string[]=[];
+  await planNativeFiscalReceipt(async<T>(sql:string,values:(string|number|null)[])=>{
+   if(sql.includes('INDEXED BY idx_documents_fiscal_history_')){
+    statements.push(sql);const plan=f.db.prepare('EXPLAIN QUERY PLAN '+sql).all(...values) as any[];
+    assert.ok(plan.some(row=>String(row.detail).includes('USING INDEX idx_documents_fiscal_history_')),JSON.stringify(plan));
+   }
+   return f.db.prepare(sql).all(...values) as T[];
+  },f.config as any,f.buffer as any,f.input.fiscal.ncf,{requireIssuer:false});
+  assert.equal(statements.length,5);assert.ok(statements.every(sql=>!sql.includes('CAST')&&!sql.includes('substr')));
+ }finally{f.db.close();}
+});

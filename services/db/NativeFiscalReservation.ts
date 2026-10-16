@@ -54,11 +54,13 @@ export async function planNativeFiscalReceipt(query:Query,business:BusinessConfi
   if(rows.length)throw new Error('NATIVE_FISCAL_HISTORICAL_COLLISION');
  }
  if(ncf.startsWith('E')) {
-  // Old short E records retain their exact bytes; numeric identity still prevents a new duplicate claim.
-  for(const field of NATIVE_FISCAL_HISTORY_FIELDS) {
-   const rows=await query(`SELECT doc_id FROM documents WHERE collection_name IN ('transactions','transactionHistory')
-    AND substr(UPPER(TRIM(json_extract(data,'$.${field}'))),1,3)=?
-    AND CAST(substr(TRIM(json_extract(data,'$.${field}')),4) AS INTEGER)=? LIMIT 1`,[ncf.slice(0,3),Number(ncf.slice(3))]);
+  // Historical representations keep their original bytes. Exact aliases use the existing expression indexes.
+  const sequence=String(Number(ncf.slice(3)));
+  const aliases=[...new Set(Array.from({length:10},(_,index)=>ncf.slice(0,3)+sequence.padStart(index+1,'0')))];
+  for(const [index,field] of NATIVE_FISCAL_HISTORY_FIELDS.entries()) {
+   const rows=await query(`SELECT doc_id FROM documents INDEXED BY idx_documents_fiscal_history_${index} WHERE collection_name IN ('transactions','transactionHistory')
+    AND json_extract(data,'$.${field}') IS NOT NULL
+    AND UPPER(TRIM(json_extract(data,'$.${field}'))) IN (${aliases.map(()=>'?').join(',')}) LIMIT 1`,aliases);
    if(rows.length)throw Error('NATIVE_FISCAL_HISTORICAL_COLLISION');
   }
  }

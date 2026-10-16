@@ -1,4 +1,4 @@
-import {resolveFiscalPrintDisplay} from '../services/fiscal/FiscalPrintEvidence';
+import {resolveFiscalPrintDisplay,resolveFiscalAcceptance} from '../services/fiscal/FiscalPrintEvidence';
 import { recordCheckoutDiagnostic } from '../services/CheckoutDiagnostics';
 import { allowsDefaultPaymentMethods } from '../utils/erpPaymentMethods';
 
@@ -200,7 +200,7 @@ const sendReceiptEmailRequest = async (
    currencySymbol: string,
    users: User[],
 ): Promise<{ success: boolean; message?: string }> => {
-   return sendReceiptEmailViaErp(buildReceiptEmailPayload(transaction, email, config, currencySymbol, users,await resolveFiscalPrintDisplay(transaction)));
+   return sendReceiptEmailViaErp(buildReceiptEmailPayload(transaction, email, config, currencySymbol, users,await resolveFiscalPrintDisplay(transaction),await resolveFiscalAcceptance(transaction)));
 };
 
 const roundPaymentAmountByMethod = (
