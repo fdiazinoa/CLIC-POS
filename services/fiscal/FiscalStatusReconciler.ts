@@ -1,3 +1,4 @@
+import {resolveFiscalPrintDisplay} from './FiscalPrintEvidence';
 import type { Transaction } from '../../types';
 import type { DurableDocumentMutation } from '../db/DatabaseAdapter';
 import { fiscalStatusSourceChecksum,verifyFiscalStatusProof,type FiscalStatusScope,type FiscalStatusProof } from './FiscalStatusProof';
@@ -34,7 +35,7 @@ export class FiscalStatusReconciler {
       this.cooldown.set(key,(this.deps.now||Date.now)());await context.assertCurrent();
       if(generation!==this.generation)throw Error('FISCAL_STATUS_SCOPE_CHANGED');
       let pair=await this.deps.pair(id),tx=pair.transaction;
-      if(tx.fiscalSyncStatus==='SYNCED')return 'Estado fiscal confirmado.';
+      if(tx.fiscalSyncStatus==='SYNCED'&&await resolveFiscalPrintDisplay(tx))return 'Estado fiscal confirmado.';
       if(!attempted(tx)||tx.terminalId!==context.scope.terminalId||(tx as any).v3Binding!==context.scope.binding)throw Error('FISCAL_STATUS_ATTEMPT_REQUIRED');
       const checksum=await fiscalStatusSourceChecksum(tx);
       let scope=tx.fiscalSubmissionScope||tx.fiscalLookupApproval;
@@ -48,22 +49,39 @@ export class FiscalStatusReconciler {
       if(scope.sourceChecksum!==checksum||Object.keys(context.scope).some(key=>(scope as any)[key]!==(context.scope as any)[key]))throw Error('FISCAL_STATUS_SCOPE_CHANGED');
       const proof=await this.deps.get(tx,scope);
       await context.assertCurrent();if(generation!==this.generation)throw Error('FISCAL_STATUS_SCOPE_CHANGED');
-      if(!await verifyFiscalStatusProof(proof,scope,tx))return 'Estado aún no confirmado; se conservó la evidencia fiscal.';
+      const accepted=await verifyFiscalStatusProof(proof,scope,tx);
+      const display=await resolveFiscalPrintDisplay({...tx,fiscalPrintProof:proof});
+      if(!accepted&&!display)return 'Estado aún no confirmado; se conservó la evidencia fiscal.';
       const fresh=await this.deps.pair(id);
-      if(fresh.transaction.fiscalSyncStatus==='SYNCED')return 'Estado fiscal confirmado.';
+      if(fresh.transaction.fiscalSyncStatus==='SYNCED'&&!display)return 'Estado fiscal confirmado.';
       if(!same(fresh.transaction,tx)||!same(fresh.history,pair.history))throw Error('FISCAL_STATUS_SOURCE_CHANGED');
-      const fields={fiscalSyncStatus:'SYNCED' as const,fiscalSyncError:undefined,fiscalProviderStatus:proof.providerReceipt.status,
+      const fields=fresh.transaction.fiscalSyncStatus==='SYNCED'||!accepted ? {} : {fiscalSyncStatus:'SYNCED' as const,fiscalSyncError:undefined,fiscalProviderStatus:proof.providerReceipt.status,
         fiscalReferenceId:proof.providerReceipt.internalTrackId,fiscalCertifiedNcf:proof.providerReceipt.returnedNcf,
         fiscalResponseMessage:'Estado fiscal aceptado confirmado con el proveedor.',fiscalSyncedAt:proof.observedAt,fiscalStatusProof:proof};
+      const printOnly=fresh.transaction.fiscalSyncStatus==='SYNCED'||!accepted;
       const mutations=([['transactions',fresh.transaction],['transactionHistory',fresh.history]] as const).map(([collectionName,original])=>({
         collectionName,document:{...original,...fields},expectedDocument:JSON.stringify(original),v3CurrentCatalog:context.catalog,
         v3FiscalMetadataOperation:'FISCAL_STATUS_RECONCILE' as const,
         ...(collectionName==='transactionHistory'?{v3ExpectedRetainedDocument:{collection:'transactions',id:tx.id,expected:JSON.stringify(tx)}}:{})}));
-      await context.assertCurrent();await this.deps.commit(mutations);await context.assertCurrent();
-      if(generation===this.generation)this.deps.publish(mutations[0].document);
-      return 'Estado fiscal aceptado y actualizado.';
+      await context.assertCurrent();if(!printOnly)await this.deps.commit(mutations);
+      if(display)await this.appendPrintEvidence(id,proof);
+      await context.assertCurrent();
+      if(generation===this.generation&&!display)this.deps.publish(mutations[0].document);
+      return accepted ? 'Estado fiscal aceptado y actualizado.' : 'Evidencia de firma disponible; aceptación fiscal pendiente.';
     });
     this.inflight.set(key,operation);void operation.finally(()=>this.inflight.delete(key)).catch(()=>{});return operation;
+  }
+  async appendPrintEvidence(id:string,proof:FiscalStatusProof):Promise<void>{
+    const context=await this.deps.context();await context.assertCurrent();
+    const pair=await this.deps.pair(id);
+    const display=await resolveFiscalPrintDisplay({...pair.transaction,fiscalPrintProof:proof});
+    if(!display)return;
+    const fields={fiscalPrintProof:proof,fiscalPrintScope:pair.transaction.fiscalPrintScope||pair.transaction.fiscalSubmissionScope||pair.transaction.fiscalLookupApproval,fiscalQrUrl:display.qrUrl,fiscalSecurityCode:display.securityCode,fiscalSignedAt:display.signedAt};
+    const mutations=([['transactions',pair.transaction],['transactionHistory',pair.history]] as const).map(([collectionName,original])=>({
+      collectionName,document:{...original,...fields},expectedDocument:JSON.stringify(original),v3CurrentCatalog:context.catalog,
+      v3FiscalMetadataOperation:'FISCAL_PRINT_EVIDENCE_APPEND' as const,
+      ...(collectionName==='transactionHistory'?{v3ExpectedRetainedDocument:{collection:'transactions',id,expected:JSON.stringify(pair.transaction)}}:{})}));
+    await context.assertCurrent();await this.deps.commit(mutations);this.deps.publish(mutations[0].document);
   }
   runAutomatic():Promise<void>{
     if(this.jobs)return this.jobs;

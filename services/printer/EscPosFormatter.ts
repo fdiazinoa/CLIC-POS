@@ -1,3 +1,4 @@
+import {isVerifiedFiscalPrintDisplay,type FiscalPrintDisplay} from '../fiscal/FiscalPrintEvidence';
 import { articleFormatTicketLabel } from '../articleFormats/ticket';
 import { formatQuantity, terminalQuantityPresentation } from '../../utils/quantityPresentation';
 import { weightLineLabel, displayWeightQuantity } from '../../utils/scaleWeight';
@@ -441,7 +442,8 @@ const buildReceiptHeader = (chunks: Uint8Array[], config: BusinessConfig, title:
 export const buildEscPosTicketPayload = (
   transaction: Transaction,
   config: BusinessConfig,
-  users: Array<{ id: string; name: string }> = []
+  users: Array<{ id: string; name: string }> = [],
+  fiscalPrint?: FiscalPrintDisplay,
 ): string | null => {
   if (!transaction?.items?.length) return null;
 
@@ -657,6 +659,14 @@ export const buildEscPosTicketPayload = (
   }
 
   chunks.push(divider(width));
+  if(isVerifiedFiscalPrintDisplay(fiscalPrint)) {
+    chunks.push(align(1));pushTextLines(chunks,splitLines('COMPROBANTE ELECTRONICO FIRMADO',width));
+    pushTextLines(chunks,splitLines(fiscalPrint.certifiedNcf,width));pushQrCode(chunks,fiscalPrint.qrUrl);
+    pushTextLines(chunks,splitLines(`Codigo de seguridad: ${fiscalPrint.securityCode}`,width));
+    pushTextLines(chunks,splitLines(`Fecha firma: ${fiscalPrint.signedAt}`,width));
+    pushTextLines(chunks,splitLines(fiscalPrint.dgiiAccepted?'DGII: Aceptado':'DGII: Pendiente de confirmacion',width));
+    chunks.push(align(0));chunks.push(divider(width));
+  } else if(transaction.ncfType?.startsWith('E')) pushTextLines(chunks,splitLines('Representacion fiscal firmada aun no disponible.',width));
   const footerLines = (config.receiptConfig?.footerMessage || 'Gracias por su compra.\nVuelva pronto.')
     .split('\n')
     .map(line => line.trim())

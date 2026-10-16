@@ -1,6 +1,6 @@
 import { formatQuantity } from '../utils/quantityPresentation';
 import { displayWeightQuantity, displayWeightPrice, canonicalWeightQuantity, formatWeightNumber } from '../utils/scaleWeight';
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { X, RotateCcw, AlertTriangle, Check, Archive, Trash2, ListChecks } from 'lucide-react';
 import { Transaction, CartItem } from '../types';
 import { refundLine } from '../services/articleFormats/domain';
@@ -17,7 +17,7 @@ interface RefundModalProps {
         refundItems: CartItem[],
         conditions: Map<string, 'SELLABLE' | 'DAMAGED'>,
         reason: string
-    ) => void;
+    ) => Promise<unknown> | void;
     quantityDecimals?: number;
     currencySymbol: string;
     mode?: RefundModalMode;
@@ -36,6 +36,9 @@ export const RefundModal: React.FC<RefundModalProps> = ({
 }) => {
     const [refundQuantities, setRefundQuantities] = useState<Map<string, number>>(new Map());
     const [itemConditions, setItemConditions] = useState<Map<string, 'SELLABLE' | 'DAMAGED'>>(new Map());
+    const submittingRef = useRef(false);
+    const [submitting,setSubmitting] = useState(false);
+    const [submitError,setSubmitError] = useState('');
     const [reason, setReason] = useState('Devolución de Cliente');
 
     useEffect(() => {
@@ -114,8 +117,10 @@ export const RefundModal: React.FC<RefundModalProps> = ({
         (refundQuantities.get(item.cartId) || 0) === getMaxRefundQuantity(item)
     );
 
-    const handleConfirm = () => {
-        if (refundQuantities.size === 0) return;
+    const handleConfirm = async () => {
+        if (submittingRef.current || refundQuantities.size === 0) return;
+        submittingRef.current=true; setSubmitting(true); setSubmitError('');
+        try {
 
         const itemsToRefund = transaction.items
             .filter(item => (refundQuantities.get(item.cartId) || 0) > 0)
@@ -123,12 +128,14 @@ export const RefundModal: React.FC<RefundModalProps> = ({
                 ...item, quantity: refundQuantities.get(item.cartId) || 0
             }));
 
-        onConfirm(transaction, itemsToRefund, itemConditions, reason || 'Devolución General');
+        await onConfirm(transaction, itemsToRefund, itemConditions, reason || 'Devolución General');
+        } catch(error) { setSubmitError(error instanceof Error ? error.message : 'No se pudo completar la devolución.'); }
+        finally { submittingRef.current=false; setSubmitting(false); }
     };
 
     return (
         <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
-            <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+            <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => { if (!submittingRef.current) onClose(); }} />
 
             <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl relative flex flex-col max-h-[90vh] animate-in fade-in zoom-in-95 duration-200">
 
@@ -146,7 +153,7 @@ export const RefundModal: React.FC<RefundModalProps> = ({
                             )}
                         </div>
                     </div>
-                    <button onClick={onClose} className="p-2 hover:bg-gray-200 rounded-full text-gray-400 hover:text-gray-600 transition-colors">
+                    <button disabled={submitting} onClick={() => { if (!submittingRef.current) onClose(); }} className="p-2 hover:bg-gray-200 rounded-full text-gray-400 hover:text-gray-600 transition-colors">
                         <X size={20} />
                     </button>
                 </div>
@@ -166,7 +173,7 @@ export const RefundModal: React.FC<RefundModalProps> = ({
                         </div>
                     </div>
 
-                    <table className="w-full text-left border-collapse">
+                    <fieldset disabled={submitting}><table className="w-full text-left border-collapse">
                         <thead>
                             <tr className="text-xs font-bold text-gray-400 uppercase border-b border-gray-100">
                                 <th className="pb-3 pl-2">Producto</th>
@@ -267,14 +274,14 @@ export const RefundModal: React.FC<RefundModalProps> = ({
                                 );
                             })}
                         </tbody>
-                    </table>
+                    </table></fieldset>
 
                     {!isGatewayRefundMode && (
                         <div className="mt-4 flex items-center justify-between gap-3">
                             <button
                                 type="button"
                                 onClick={selectAll}
-                                disabled={!hasAvailableBalance}
+                                disabled={submitting || !hasAvailableBalance}
                                 className="inline-flex items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-black text-blue-700 transition-colors hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
                             >
                                 <ListChecks size={17} /> Seleccionar todos
@@ -289,7 +296,7 @@ export const RefundModal: React.FC<RefundModalProps> = ({
                         <label className="block text-xs font-bold text-gray-500 uppercase mb-2">Motivo de la Devolución</label>
                         <input
                             type="text"
-                            value={reason}
+                            disabled={submitting} value={reason}
                             onChange={(e) => setReason(e.target.value)}
                             placeholder="Ej: Producto defectuoso, cambio de opinión..."
                             className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all"
@@ -298,6 +305,7 @@ export const RefundModal: React.FC<RefundModalProps> = ({
 
                 </div>
 
+                {submitError && <p role="alert" className="px-6 text-red-600">{submitError}</p>}
                 {/* Footer */}
                 <div className="p-6 border-t border-gray-100 bg-gray-50 rounded-b-2xl flex justify-between items-center">
                     <div>
@@ -314,14 +322,14 @@ export const RefundModal: React.FC<RefundModalProps> = ({
 
                     <div className="flex gap-3">
                         <button
-                            onClick={onClose}
+                            disabled={submitting} onClick={() => { if (!submittingRef.current) onClose(); }}
                             className="px-5 py-2.5 rounded-xl border border-gray-200 text-gray-600 font-bold hover:bg-gray-100 transition-colors"
                         >
                             Cancelar
                         </button>
                         <button
                             onClick={handleConfirm}
-                            disabled={refundQuantities.size === 0}
+                            disabled={submitting || refundQuantities.size === 0}
                             className={`
                  px-6 py-2.5 rounded-xl font-bold text-white flex items-center gap-2 shadow-lg transition-all
                  ${refundQuantities.size === 0
@@ -329,7 +337,7 @@ export const RefundModal: React.FC<RefundModalProps> = ({
                                     : 'bg-red-600 hover:bg-red-700 active:scale-[0.98] shadow-red-500/30'}
                `}
                         >
-                            <Check size={18} /> {isGatewayRefundMode ? 'Confirmar Refund AZUL' : 'Confirmar Devolución'}
+                            <Check size={18} /> {submitting ? 'Procesando devolución…' : isGatewayRefundMode ? 'Confirmar Refund AZUL' : 'Confirmar Devolución'}
                         </button>
                     </div>
                 </div>

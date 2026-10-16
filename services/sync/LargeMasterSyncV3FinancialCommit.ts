@@ -78,7 +78,7 @@ const financialIdentity = (transaction: Transaction): string => {
 };
 
 export type V3FinancialOptions = { refund?: boolean; conditions?: Map<string, 'SELLABLE' | 'DAMAGED'>; original?: Transaction;
-    expectedOriginal?: Transaction; expectedOriginalHistory?: Transaction | null;
+    expectedOriginal?: Transaction; expectedOriginalHistory?: Transaction | null; originalCollection?: 'transactions' | 'transactionHistory';
     adjustCustomerBalance?: boolean; skipWalletDeposit?: boolean };
 type FinancialEntry = { transaction: Transaction; options?: V3FinancialOptions };
 type FinancialResult = { transaction: Transaction; created: boolean };
@@ -132,7 +132,7 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
           v3SaleAuthority: { ...line.v3SaleAuthority! } });
       }, { ticketId: transaction.restaurantOrderId, tableId: transaction.restaurantTableId, claimId: transaction.v3RestoredTicketId,
         originalTransactionId: options.expectedOriginal?.id || transaction.originalTransactionId, reservationId: transaction.v3ReservationClaimId ? transaction.reservationId : undefined, reservationClaimId:transaction.v3ReservationClaimId });
-    if (retained && retained.collection !== 'transactions') {
+    if (!options.refund && retained && retained.collection !== 'transactions' && retained.collection !== 'transactionHistory') {
       documents.push({ collectionName: 'v3TicketSettlements', document: { id: retained.id, transactionId: transaction.id, binding: session.binding },
         requireAbsent: true, v3ExpectedRetainedDocument: { collection: retained.collection, id: retained.id, expected: retained.expected } });
     }
@@ -213,9 +213,9 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
         throw new LargeMasterSyncV3Error('SYNC_V3_REFUND_ORIGINAL_CHANGED');
       }
       const originalMutations = buildV3RefundOriginalMutations(options.expectedOriginal, options.original,
-        transaction.id, options.expectedOriginalHistory || null);
+        transaction.id, options.expectedOriginalHistory || null, options.originalCollection);
       for (const mutation of originalMutations) if (mutation.document.v3InventoryBaseline) {
-        mutation.v3ExpectedRetainedDocument = {collection:'transactions',id:options.expectedOriginal.id,expected:JSON.stringify(options.expectedOriginal)};
+        mutation.v3ExpectedRetainedDocument = {collection:options.originalCollection || 'transactions',id:options.expectedOriginal.id,expected:JSON.stringify(options.expectedOriginal)};
       }
       documents.push(...originalMutations);
     }

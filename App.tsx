@@ -303,6 +303,7 @@ import { ThemeProvider } from './components/ThemeContext';
 import { transactionSyncService } from './services/sync/TransactionSyncService';
 import {
   collectClosedTransactionIds,
+  selectPendingSessionTransactions,
   partitionTransactionsByClosedMembership,
   persistInboundTransactionsIfOpen,
   isTransactionReservedForClose,
@@ -317,7 +318,7 @@ import { printLabelsFromTemplate } from './utils/labelPrinter';
 import { printComanda, printIntegratedPaymentArtifacts, printPrecuenta, printTicket } from './utils/printer';
 import { offlinePrintQueueService } from './services/printer/OfflinePrintQueueService';
 import { nativePrintBridge } from './services/printer/NativePrintBridge';
-import { persistStandaloneRefundTransaction } from './services/localRefundPersistence';
+import { readRefundOriginal, persistStandaloneRefundTransaction } from './services/localRefundPersistence';
 import { checkLicenseStatus, clearTenantIdentity, resolveTenantId } from './utils/licenseGuard';
 import {
   buildMasterUrlCandidates,
@@ -4533,6 +4534,10 @@ const AppContent: React.FC = () => {
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
   const [cashMovements, setCashMovements] = useState<CashMovement[]>([]);
   const [zReports, setZReports] = useState<ZReport[]>([]);
+  const [closedHistoryIds,setClosedHistoryIds] = useState<Set<string>>(()=>new Set());
+  const durableClosedMembershipIds=useMemo(()=>new Set([...closedHistoryIds,...collectClosedTransactionIds([],zReports)]),[closedHistoryIds,zReports]);
+  const closedFiscalPublicationIds=useRef(new Set<string>());
+  closedFiscalPublicationIds.current=durableClosedMembershipIds;
   const [xReports, setXReports] = useState<XReport[]>([]);
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
@@ -5518,24 +5523,8 @@ const AppContent: React.FC = () => {
 
   const getPendingTransactionsForTerminal = (terminalId: string) => {
     const terminalAliases = getTerminalReferenceKeys(terminalId);
-    const isDefaultTerminal = terminalAliases.has('t1');
-    const latestCloseTs = getLatestZCloseTimestamp(terminalId);
-
-    const pending = transactions.filter(t => {
-      const belongsToTerminal = terminalReferenceMatches(terminalAliases, isDefaultTerminal, t.terminalId, t.source_terminal_id);
-      if (!belongsToTerminal) return false;
-      if (t.zReportId) return false;
-      if (isRecoveredOperation(t)) return true;
-
-      // Relaxed timestamp check: only filter out if it's significantly before the last close
-      // to account for clock drift between terminals.
-      const txTime = new Date(t.date).getTime();
-      const DRIFT_TOLERANCE_MS = 1000 * 60 * 5; // 5 minutes tolerance
-      if (!Number.isFinite(txTime)) return latestCloseTs <= 0;
-      return latestCloseTs <= 0 || txTime > (latestCloseTs - DRIFT_TOLERANCE_MS);
-    });
-
-    return pending.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    return selectPendingSessionTransactions(transactions,terminalAliases,
+      durableClosedMembershipIds);
   };
 
   const getPendingCashMovementsForTerminal = (terminalId: string) => {
@@ -7474,6 +7463,7 @@ const AppContent: React.FC = () => {
                 Array.isArray(txHistory) ? txHistory : [],
                 Array.isArray(persistedZReports) ? persistedZReports : [],
               );
+              setClosedHistoryIds(closedTransactionIds);
               const hydrated = partitionTransactionsByClosedMembership(
                 Array.isArray(activeTxns) ? activeTxns : [],
                 closedTransactionIds,
@@ -10960,7 +10950,9 @@ const AppContent: React.FC = () => {
   }, [customers, transactions]);
 
   const publishFiscalTransaction = useCallback((transaction: Transaction) => {
-    setTransactions(previous => previous.some(row => row.id === transaction.id)
+    setTransactions(previous => transaction.zReportId || closedFiscalPublicationIds.current.has(transaction.id) || isTransactionReservedForClose(transaction.id)
+      ? previous.filter(row=>row.id!==transaction.id)
+      : previous.some(row => row.id === transaction.id)
       ? previous.map(row => row.id === transaction.id ? transaction : row)
       : [transaction, ...previous]);
     window.dispatchEvent(new Event('transactionsUpdated'));
@@ -11022,6 +11014,8 @@ const AppContent: React.FC = () => {
 
   const upsertFiscalTransaction = useCallback(async (nextTransaction: Transaction) => {
     const current = await db.getDocument('transactions',nextTransaction.id) as Transaction | null;
+    if(current?.zReportId || closedFiscalPublicationIds.current.has(nextTransaction.id) || isTransactionReservedForClose(nextTransaction.id)) { publishFiscalTransaction(nextTransaction); return; }
+    if(!current && nextTransaction.v3InventoryBaseline) throw Error('FISCAL_STATUS_ARCHIVED_RECONCILIATION_REQUIRED');
     if (current?.fiscalSyncStatus === 'SYNCED') { publishFiscalTransaction(current); return; }
     if (LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED && current?.v3InventoryBaseline) {
       const history = await db.getDocument('transactionHistory',nextTransaction.id) as Transaction | null;
@@ -11098,9 +11092,9 @@ const AppContent: React.FC = () => {
     const currentNcf = transaction.electronicNcf || transaction.ncf || '';
     const terminalId = transaction.terminalId || (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId)?.id || 'T1';
     const fiscalCodeChanged = currentFiscalCode !== correction.fiscalCode || !currentNcf.startsWith(correction.fiscalCode);
-    const nextNcf = fiscalCodeChanged
-      ? await db.getNextNCF(correction.fiscalCode, terminalId, 50, config.terminals?.find(t => t.id === terminalId)?.config)
-      : currentNcf || undefined;
+    const correctionReservation = fiscalCodeChanged
+      ? await db.reserveFiscalNumber(correction.fiscalCode,terminalId,1,config.terminals?.find(t=>t.id===terminalId)?.config) : null;
+    const nextNcf = correctionReservation?.ncf || (fiscalCodeChanged ? undefined : currentNcf || undefined);
 
     if (!nextNcf) {
       throw new Error(`No hay secuencia local disponible para ${correction.fiscalCode}.`);
@@ -11120,6 +11114,7 @@ const AppContent: React.FC = () => {
       terminalId,
       ncfType: correction.fiscalCode,
       ncf: nextNcf,
+      fiscalIssuance: correctionReservation?.fiscalIssuance || transaction.fiscalIssuance,
       electronicNcf: nextNcf,
       legacyNcf: undefined,
       customerId: selectedCustomer?.id,
@@ -11147,6 +11142,7 @@ const AppContent: React.FC = () => {
           old: {
             fiscalCode: currentFiscalCode,
             ncf: currentNcf || transaction.legacyNcf,
+            fiscalIssuance: transaction.fiscalIssuance,
             customerId: transaction.customerId,
             customerName: transaction.customerName,
             customerTaxId: transaction.customerSnapshot?.taxId,
@@ -11159,6 +11155,7 @@ const AppContent: React.FC = () => {
           next: {
             fiscalCode: correction.fiscalCode,
             ncf: nextNcf,
+            fiscalIssuance: correctionReservation?.fiscalIssuance || transaction.fiscalIssuance,
             customerId: selectedCustomer?.id,
             customerName: selectedCustomer?.name || (correction.fiscalCode === 'E32' ? 'Consumidor final' : transaction.customerName),
             customerTaxId: selectedCustomer?.taxId,
@@ -11214,6 +11211,7 @@ const AppContent: React.FC = () => {
         deliveryMode
       );
 
+      if(LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED && result.printEvidenceProof) await fiscalStatusWorker.appendPrintEvidence(transaction.id,result.printEvidenceProof);
       const finalStatus = result.pending ? 'PENDING' : result.success ? 'SYNCED' : 'ERROR';
       const refreshedTransaction: Transaction = {
         ...applyFiscalProviderResult(transaction, result),
@@ -11365,7 +11363,7 @@ const AppContent: React.FC = () => {
         companyInfo: config.companyInfo,
         transaction: baseTransaction,
         taxRate: fiscalConfig.taxRate,
-        sequenceExpiryDate: new Date(new Date(baseTransaction.date).getFullYear(), 11, 31).toISOString(),
+        sequenceExpiryDate: baseTransaction.fiscalIssuance?.expiryDate || undefined,
         credentialKey: providerConfig.credentialKey,
         tipoIngreso: providerConfig.tipoIngreso,
         modificationCode: providerConfig.modificationCode,
@@ -11382,6 +11380,7 @@ const AppContent: React.FC = () => {
         cashierCode
       });
 
+      if(candidate && result.printEvidenceProof) await fiscalStatusWorker.appendPrintEvidence(baseTransaction.id,result.printEvidenceProof);
       const finalStatus = result.pending ? 'PENDING' : result.success ? 'SYNCED' : 'ERROR';
       const finalizedTransaction: Transaction = {
         ...applyFiscalProviderResult(baseTransaction, result),
@@ -12932,6 +12931,7 @@ const AppContent: React.FC = () => {
     reason: string,
     options: RefundProcessingOptions = {}
   ): Promise<Transaction | null> => {
+    originalTx = await readRefundOriginal(originalTx);
     assertFormatsPostingClosed(itemsToRefund || []);
     assertFormatsPostingClosed(originalTx.items || []);
     console.log("🔄 Procesando Devolución Integral:", { originalTx, items: itemsToRefund.length, reason });
@@ -12948,14 +12948,14 @@ const AppContent: React.FC = () => {
       return null;
     }
 
-    const persistedTransactionsForValidation = await db.get('transactions') as Transaction[];
+    const [persistedTransactionsForValidation,archivedRefundsForValidation] = await Promise.all([db.get('transactions'),db.get('transactionHistory')]) as [Transaction[],Transaction[]];
     const refundAvailability = originalTx.erpRefundSource
       ? validateErpRefundItems(originalTx, normalizedRefundItems)
       : validateRefundItems(
         originalTx,
         normalizedRefundItems,
         Array.isArray(persistedTransactionsForValidation)
-          ? [...transactions, ...persistedTransactionsForValidation]
+          ? [...transactions, ...persistedTransactionsForValidation,...(archivedRefundsForValidation || [])]
           : transactions
       );
     if ('message' in refundAvailability) {
@@ -13014,8 +13014,8 @@ const AppContent: React.FC = () => {
         normalizeText(c.name) !== '' &&
         normalizeText(c.name) === normalizeText(originalTx.customerName)
       );
-    const resolvedCustomerId = originalTx.customerId || matchedCustomer?.id;
-    const resolvedCustomerName = originalTx.customerName || matchedCustomer?.name;
+    const resolvedCustomerId = originalTx.customerId || (LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED ? undefined : matchedCustomer?.id);
+    const resolvedCustomerName = originalTx.customerName || (LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED ? undefined : matchedCustomer?.name);
 
     // 2. Resolución fiscal para la nota de crédito
     const currentTerminalId = currentTerminal?.id || config.terminals?.[0]?.id || 't1';
@@ -13026,6 +13026,7 @@ const AppContent: React.FC = () => {
       ? (preparedFiscalAuthority ? 'LEGACY_B' : 'NONE')
       : fiscalCompliance.mode;
     const creditNoteFiscalType = preparedFiscalAuthority?.ncfType || resolveCreditNoteFiscalCode(creditNoteFiscalMode);
+    let creditNoteIssuance: Transaction['fiscalIssuance'];
     let creditNoteNcf: string | undefined;
     if (creditNoteFiscalMode !== 'NONE' &&
         !(preparedFiscalAuthority
@@ -13038,7 +13039,8 @@ const AppContent: React.FC = () => {
       creditNoteNcf = preparedFiscalAuthority.ncf;
       await db.reconcilePreparedNCF(preparedFiscalAuthority.ncfType, currentTerminalId, preparedFiscalAuthority.ncf, currentTerminal?.config);
     } else if (!originalTx.erpRefundSource && creditNoteFiscalMode !== 'NONE') {
-      creditNoteNcf = await db.getNextNCF(creditNoteFiscalType, currentTerminalId, 1, currentTerminal?.config) || undefined;
+      const reservation=await db.reserveFiscalNumber(creditNoteFiscalType,currentTerminalId,1,currentTerminal?.config);
+      creditNoteNcf=reservation?.ncf; creditNoteIssuance=reservation?.fiscalIssuance;
       if (!creditNoteNcf) {
         alert(`No se pudo reservar el comprobante ${creditNoteFiscalType}. La devolución fue bloqueada.`);
         return null;
@@ -13107,6 +13109,7 @@ const AppContent: React.FC = () => {
       ...(LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED ? { customerSnapshot: originalTx.customerSnapshot,
         serviceType: originalTx.serviceType, serviceTaxPolicySnapshot: originalTx.serviceTaxPolicySnapshot } : {}),
       ncf: creditNoteNcf || undefined,
+      fiscalIssuance: creditNoteIssuance,
       ncfType: creditNoteNcf ? creditNoteFiscalType : undefined,
       legacyNcf: creditNoteNcf && !creditNoteFiscalType.startsWith('E') ? creditNoteNcf : undefined,
       electronicNcf: creditNoteNcf && creditNoteFiscalType.startsWith('E') ? creditNoteNcf : undefined,
@@ -13141,8 +13144,7 @@ const AppContent: React.FC = () => {
         terminalId: currentTerminalId,
         originalTransaction: {
           ...originalTx,
-          customerId: resolvedCustomerId,
-          customerName: resolvedCustomerName,
+          ...(LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED ? {} : {customerId:resolvedCustomerId,customerName:resolvedCustomerName}),
           status: newStatus as any
         },
         persistOriginal: !originalTx.erpRefundSource,
@@ -13208,8 +13210,7 @@ const AppContent: React.FC = () => {
       } else {
         const updatedOriginalTx = refundPersistenceResult.updatedOriginal || (originalTx.erpRefundSource ? null : {
           ...originalTx,
-          customerId: resolvedCustomerId,
-          customerName: resolvedCustomerName,
+          ...(LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED ? {} : {customerId:resolvedCustomerId,customerName:resolvedCustomerName}),
           status: newStatus as any,
           relatedTransactions: [...(originalTx.relatedTransactions || []), creditNote.id],
           updatedAt: new Date().toISOString(),
@@ -13920,6 +13921,7 @@ const AppContent: React.FC = () => {
             cart={cart}
             transactions={transactions}
             zReports={zReports}
+            closedHistoryIds={durableClosedMembershipIds}
             onUpdateCart={setCart}
             selectedCustomer={selectedCustomer}
             onSelectCustomer={setSelectedCustomer}

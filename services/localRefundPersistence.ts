@@ -1,3 +1,4 @@
+import { assertRefundFinancialSource } from './sync/LargeMasterSyncV3RefundAuthority';
 import { BusinessConfig, CartItem, Transaction } from '../types';
 import { isV3FinancialDocument, persistV3FinancialTransaction } from './sync/LargeMasterSyncV3FinancialCommit';
 import { db } from '../utils/db';
@@ -30,6 +31,18 @@ const normalizeRefundItems = (items: CartItem[]): CartItem[] => {
     .filter(item => item.quantity > 0);
 };
 
+/** Fresh authorization before numbering or provider effects. Missing archived membership never grants authority. */
+export async function readRefundOriginal(captured: Transaction): Promise<Transaction> {
+ if (captured.erpRefundSource || !isV3FinancialDocument(captured)) return captured;
+ const active=await db.getDocument('transactions',captured.id) as Transaction | null;
+ const history=await db.getDocument('transactionHistory',captured.id) as Transaction | null;
+ const current=active || (history?.zReportId ? history : null);
+ if (!current || (current as Transaction & {type?:string}).type==='REFUND' || current.documentType==='REFUND') throw Error('SYNC_V3_REFUND_ORIGINAL_CHANGED');
+ assertRefundFinancialSource(current,captured);
+ if (history && active) assertRefundFinancialSource(active,history);
+ return current;
+}
+
 export async function persistStandaloneRefundTransaction(
   refundTransaction: Transaction,
   options: PersistRefundOptions
@@ -60,19 +73,20 @@ export async function persistStandaloneRefundTransaction(
   if (isV3FinancialDocument(persistedRefund)) {
     const config = await db.getDocument('config', 'current') as BusinessConfig | null;
     if (!config) throw new Error('SYNC_V3_CONFIG_REQUIRED');
-    const updatedOriginal = originalTransaction && options.persistOriginal !== false ? {
-      ...originalTransaction, status: originalTransaction.status,
-      relatedTransactions: Array.from(new Set([...(originalTransaction.relatedTransactions || []), persistedRefund.id])),
+    const activeOriginal = originalTransaction ? await db.getDocument('transactions', originalTransaction.id) as Transaction | null : null;
+    const expectedOriginalHistory = originalTransaction ? await db.getDocument('transactionHistory', originalTransaction.id) as Transaction | null : null;
+    const originalCollection = activeOriginal ? 'transactions' as const : 'transactionHistory' as const;
+    const expectedOriginal = activeOriginal || (expectedOriginalHistory?.zReportId ? expectedOriginalHistory : null);
+    if (originalTransaction && !expectedOriginal) throw new Error('SYNC_V3_REFUND_ORIGINAL_CHANGED');
+    if (originalTransaction && expectedOriginal) assertRefundFinancialSource(expectedOriginal,originalTransaction);
+    const updatedOriginal = expectedOriginal && options.persistOriginal !== false ? {
+      ...expectedOriginal, status: originalTransaction!.status,
+      relatedTransactions: Array.from(new Set([...(expectedOriginal.relatedTransactions || []), persistedRefund.id])),
       syncStatus: 'PENDING' as const,
     } : undefined;
-    const expectedOriginal = updatedOriginal
-      ? await db.getDocument('transactions', updatedOriginal.id) as Transaction | null : null;
-    const expectedOriginalHistory = updatedOriginal
-      ? await db.getDocument('transactionHistory', updatedOriginal.id) as Transaction | null : null;
-    if (updatedOriginal && !expectedOriginal) throw new Error('SYNC_V3_REFUND_ORIGINAL_CHANGED');
     const result = await persistV3FinancialTransaction(persistedRefund, config, options.warehouseId,
       { refund: true, conditions: options.conditions, original: updatedOriginal,
-        expectedOriginal: expectedOriginal || undefined, expectedOriginalHistory,
+        expectedOriginal: expectedOriginal || undefined, expectedOriginalHistory, originalCollection,
         adjustCustomerBalance: options.adjustCustomerBalance, skipWalletDeposit: options.skipWalletDeposit });
     if (result.created) {
       emitCollectionUpdate('transactions');

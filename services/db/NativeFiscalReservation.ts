@@ -43,8 +43,8 @@ export async function planNativeFiscalReceipt(query:Query,business:BusinessConfi
  const issuerRnc=fiscalIssuerRnc(business);
  if(!issuerRnc&&options.requireIssuer)throw new Error('NATIVE_FISCAL_ISSUER_UNPROVEN');
  ncf=ncf.trim().toUpperCase();
- if(!/^B(?:01|02|04|14|15)\d{8}$/.test(ncf))throw new Error('NATIVE_FISCAL_NUMBER_INVALID');
- const id=JSON.stringify(issuerRnc?['DOMINICAN_LEGACY_B',issuerRnc,ncf]:['UNATTRIBUTED_NCF_CLAIM_V1',ncf]);
+ if(!/^(?:B(?:01|02|04|14|15)\d{8}|E(?:31|32|34|44|45)\d{10})$/.test(ncf))throw new Error('NATIVE_FISCAL_NUMBER_INVALID');
+ const id=JSON.stringify(issuerRnc?[ncf.startsWith('B')?'DOMINICAN_LEGACY_B':'DOMINICAN_ECF_V1',issuerRnc,ncf]:['UNATTRIBUTED_NCF_CLAIM_V1',ncf]);
  const existing=await query(`SELECT doc_id FROM documents WHERE collection_name='nativeFiscalReservations'
   AND json_extract(data,'$.ncf')=? ${issuerRnc?"AND (json_extract(data,'$.issuerRnc') IS NULL OR json_extract(data,'$.issuerRnc')=?)":''} LIMIT 1`,issuerRnc?[ncf,issuerRnc]:[ncf]);
  if(existing.length)throw new Error('NATIVE_FISCAL_NUMBER_ALREADY_ISSUED');
@@ -52,6 +52,15 @@ export async function planNativeFiscalReceipt(query:Query,business:BusinessConfi
  for(const field of NATIVE_FISCAL_HISTORY_FIELDS){
   const rows=await query(fiscalHistoricalCollisionQuery(field,Boolean(issuerRnc)),issuerRnc?[ncf,issuerRnc,ncf]:[ncf]);
   if(rows.length)throw new Error('NATIVE_FISCAL_HISTORICAL_COLLISION');
+ }
+ if(ncf.startsWith('E')) {
+  // Old short E records retain their exact bytes; numeric identity still prevents a new duplicate claim.
+  for(const field of NATIVE_FISCAL_HISTORY_FIELDS) {
+   const rows=await query(`SELECT doc_id FROM documents WHERE collection_name IN ('transactions','transactionHistory')
+    AND substr(UPPER(TRIM(json_extract(data,'$.${field}'))),1,3)=?
+    AND CAST(substr(TRIM(json_extract(data,'$.${field}')),4) AS INTEGER)=? LIMIT 1`,[ncf.slice(0,3),Number(ncf.slice(3))]);
+   if(rows.length)throw Error('NATIVE_FISCAL_HISTORICAL_COLLISION');
+  }
  }
  const terminal=business.terminals?.find(t=>t.id===buffer.terminalId || t.config?.erpTerminalId===buffer.terminalId);
  const receipt={id,issuerRnc:issuerRnc || null,identityStatus:issuerRnc?'PROVEN_ISSUER_RNC':'UNATTRIBUTED_LEGACY',ncf,

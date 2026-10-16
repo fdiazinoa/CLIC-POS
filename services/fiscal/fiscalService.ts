@@ -1,3 +1,4 @@
+import {assertFiscalIssuance} from '../../utils/fiscalIssuance';
 import { applyFiscalClassificationProjection } from '../../utils/fiscalClassificationProjection';
 import { Capacitor, CapacitorHttp } from '@capacitor/core';
 import { CompanyInfo, FiscalProviderDeliveryMode, FiscalProviderId, Transaction } from '../../types';
@@ -29,7 +30,8 @@ export interface FiscalIssueResponse {
     success: boolean;
     providerId: FiscalProviderId;
     environment: number;
-    documentCode: 'E31' | 'E32' | 'E34';
+    documentCode: 'E31' | 'E32' | 'E34' | 'E44' | 'E45';
+    printEvidenceProof?: import('./FiscalStatusProof').FiscalStatusProof;
     providerTransactionId?: string;
     providerReference?: string;
     eNCF?: string;
@@ -48,6 +50,7 @@ export interface FiscalIssueResponse {
 }
 
 export interface FiscalStatusResponse {
+    printEvidenceProof?: import('./FiscalStatusProof').FiscalStatusProof;
     success: boolean;
     providerId: FiscalProviderId;
     environment: number;
@@ -1295,6 +1298,8 @@ const issueFiscalDocumentOnce = async (
         return issueDirectDigifactDocument(input, localCredential.record.authToken);
     }
 
+    assertFiscalIssuance(input.transaction);
+    if(isMSeller&&input.transaction.ncfType!=='E32'&&!input.transaction.fiscalIssuance?.fiscalRangeId) throw new Error('FISCAL_ORIGINAL_RANGE_AUTHORITY_REQUIRED');
     const { response, payload } = await requestFiscalJson<FiscalIssueResponse>(
         '/documents/issue',
         {
@@ -1312,6 +1317,9 @@ const issueFiscalDocumentOnce = async (
                 companyInfo: input.companyInfo,
                 transaction: input.transaction,
                 options: {
+                    fiscalRangeId: input.transaction.fiscalIssuance?.fiscalRangeId,
+                    fiscalAllocationId: input.transaction.fiscalIssuance?.fiscalAllocationId,
+                    fiscalIssuance: input.transaction.fiscalIssuance,
                     taxRate: input.taxRate,
                     sequenceExpiryDate: input.sequenceExpiryDate,
                     credentialKey: input.credentialKey,

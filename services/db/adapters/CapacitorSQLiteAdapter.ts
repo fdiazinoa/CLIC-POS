@@ -261,13 +261,14 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
               if (requireAbsent || replaceCollections.length || documents.some(row => !row.v3FiscalMetadataOperation)) {
                 throw new Error('SYNC_V3_FISCAL_METADATA_MUTATION_DENIED');
               }
-              if (documents.some(row => row.v3FiscalMetadataOperation === 'FISCAL_STATUS_RECONCILE')) {
+              if (documents.some(row => ['FISCAL_STATUS_RECONCILE','FISCAL_PRINT_EVIDENCE_APPEND'].includes(row.v3FiscalMetadataOperation!))) {
                 const transaction = documents.find(row => row.collectionName === 'transactions');
                 const history = documents.find(row => row.collectionName === 'transactionHistory');
                 if (documents.length !== 2 || !transaction || !history
-                  || documents.some(row => row.v3FiscalMetadataOperation !== 'FISCAL_STATUS_RECONCILE')
+                  || documents.some(row => row.v3FiscalMetadataOperation !== documents[0].v3FiscalMetadataOperation)
                   || transaction.document.id !== history.document.id
                   || JSON.stringify(transaction.document.fiscalStatusProof) !== JSON.stringify(history.document.fiscalStatusProof)
+                  || JSON.stringify(transaction.document.fiscalPrintProof) !== JSON.stringify(history.document.fiscalPrintProof)
                   || history.v3ExpectedRetainedDocument?.collection !== 'transactions'
                   || history.v3ExpectedRetainedDocument.id !== transaction.document.id
                   || history.v3ExpectedRetainedDocument.expected !== transaction.expectedDocument) {
@@ -279,7 +280,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
                 await this.assertV3FinancialBaseline(documents);
                 for (const mutation of documents) {
                   await validateV3FiscalMetadataMutation(mutation);
-                  if (['FISCAL_SUBMISSION_SCOPE_APPEND','FISCAL_LOOKUP_APPROVAL_APPEND','FISCAL_STATUS_RECONCILE'].includes(mutation.v3FiscalMetadataOperation!)) {
+                  if (['FISCAL_SUBMISSION_SCOPE_APPEND','FISCAL_LOOKUP_APPROVAL_APPEND','FISCAL_STATUS_RECONCILE','FISCAL_PRINT_EVIDENCE_APPEND'].includes(mutation.v3FiscalMetadataOperation!)) {
                     const canonical = mutation.collectionName === 'transactionHistory' ? JSON.parse(mutation.v3ExpectedRetainedDocument?.expected || '{}') : mutation.document;
                     const scope = canonical.fiscalSubmissionScope || canonical.fiscalLookupApproval;
                     const configRows = await db.query("SELECT data FROM documents WHERE collection_name='config' AND doc_id='current'");
@@ -1123,13 +1124,14 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             }
             if (mutation.v3ExpectedRetainedDocument) {
               const expected = mutation.v3ExpectedRetainedDocument;
-              if(expected.collection === 'transactions' && document.id !== expected.id
+              if(['transactions','transactionHistory'].includes(expected.collection) && document.id !== expected.id
                 && (document.type !== 'REFUND' || document.originalTransactionId !== expected.id)) {
                 throw new Error('SYNC_V3_RETAINED_SOURCE_REQUIRED');
               }
               const stored = await read('SELECT data FROM documents WHERE collection_name = ? AND doc_id = ?', [expected.collection, expected.id]);
               if (stored.values?.[0]?.data !== expected.expected) throw new Error('SYNC_V3_RETAINED_TICKET_CHANGED');
               const retained = JSON.parse(expected.expected);
+              if(expected.collection==='transactionHistory' && !retained.zReportId) throw Error('SYNC_V3_RETAINED_SOURCE_REQUIRED');
               const reservation = expected.collection === 'reservations' ? retained : retained.sourceCollection === 'reservations'
                 ? JSON.parse(retained.sourceExpected) : undefined;
               if (reservation) {
@@ -1152,7 +1154,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
                 }
               }
 
-              if (expected.collection !== 'transactions') {
+              if (!['transactions','transactionHistory'].includes(expected.collection)) {
                 const closed = await read(`SELECT doc_id FROM documents WHERE
                   (collection_name='v3TicketSettlements' AND doc_id=?) OR
                   (collection_name IN ('transactions','transactionHistory') AND json_extract(data,'$.restaurantOrderId')=?
@@ -1195,11 +1197,11 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
               if (stamp.syncId !== current.syncId || stamp.syncVersion !== current.syncVersion) {
                 const context = mutation.v3ExpectedRetainedDocument || (mutation.expectedDocument && mutation.collectionName === 'transactions'
                   ? { collection: 'transactions', id: document.id, expected: mutation.expectedDocument } : undefined);
-                if (!context || !['parkedTickets','transactions','v3RestoredTicketSources','reservations'].includes(context.collection)
+                if (!context || !['parkedTickets','transactions','transactionHistory','v3RestoredTicketSources','reservations'].includes(context.collection)
                   || context.collection === 'reservations' && document.sourceId !== context.id && document.reservationId !== context.id
                   || context.collection === 'v3RestoredTicketSources' && context.id.startsWith('reservation:') && document.id !== context.id && document.v3ReservationClaimId !== context.id
-                  || !['transactions','reservations'].includes(context.collection) && !context.id.startsWith('reservation:') && document.restaurantOrderId !== context.id
-                  || context.collection === 'transactions' && document.id !== context.id && document.originalTransactionId !== context.id) {
+                  || !['transactions','transactionHistory','reservations'].includes(context.collection) && !context.id.startsWith('reservation:') && document.restaurantOrderId !== context.id
+                  || ['transactions','transactionHistory'].includes(context.collection) && document.id !== context.id && document.originalTransactionId !== context.id) {
                   throw new Error('SYNC_V3_RETAINED_SOURCE_REQUIRED');
                 }
                 const stored = await read('SELECT data FROM documents WHERE collection_name = ? AND doc_id = ?', [context.collection, context.id]);
@@ -1222,7 +1224,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
                 if (sources.length !== 1 || v3RetainedLineFingerprint(sources[0]) !== v3RetainedLineFingerprint(formatSourceLine ? {...line,cartId:sourceLineId} : line)) {
                   throw new Error('SYNC_V3_RETAINED_LINE_CHANGED');
                 }
-                if (context.collection !== 'transactions') {
+                if (!['transactions','transactionHistory'].includes(context.collection)) {
                   const closed = await read(`SELECT doc_id FROM documents WHERE
                     (collection_name='v3TicketSettlements' AND doc_id=?) OR
                     (collection_name IN ('transactions','transactionHistory') AND json_extract(data,'$.restaurantOrderId')=?
