@@ -1,3 +1,5 @@
+import {resolveFiscalPrintDisplay,resolveFiscalAcceptance} from '../services/fiscal/FiscalPrintEvidence';
+import {readRefundOriginal} from '../services/localRefundPersistence';
 import { canProjectFiscalClassification } from '../utils/fiscalClassificationProjection';
 import { formatQuantity, terminalQuantityPresentation } from '../utils/quantityPresentation';
 import { weightLineLabel, displayWeightQuantity } from '../utils/scaleWeight';
@@ -1649,6 +1651,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
    };
 
    const handlePrintTransaction = async (transaction: Transaction) => {
+      transaction=await db.getDocument('transactions',transaction.id) as Transaction || await db.getDocument('transactionHistory',transaction.id) as Transaction || transaction;
       const gatewayPayments = (transaction.payments || []).filter((payment: any) =>
          payment?.gatewayProvider && (payment?.gatewayReceiptMerchant || payment?.gatewayReceiptClient)
       );
@@ -2131,8 +2134,9 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
       });
       if (!approved) throw new Error('La acción no fue autorizada.');
 
+      transaction=await db.getDocument('transactions',transaction.id) as Transaction || await db.getDocument('transactionHistory',transaction.id) as Transaction || transaction;
       const result = await sendReceiptEmailViaErp(
-         buildReceiptEmailPayload(transaction, email, config, config.currencySymbol || 'RD$', users),
+         buildReceiptEmailPayload(transaction, email, config, config.currencySymbol || 'RD$', users,await resolveFiscalPrintDisplay(transaction),await resolveFiscalAcceptance(transaction)),
       );
       try {
          await recordInvoiceAuditEvent({
@@ -2297,6 +2301,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
       reason: string,
       requestMode: RefundRequestMode = 'STANDARD'
    ) => {
+      originalTx = await readRefundOriginal(originalTx);
       const terminalConfig = config.terminals?.find(t => t.id === activeTerminalId)?.config;
       const fiscalMode = getEffectiveFiscalComplianceConfig(config, terminalConfig).mode;
       if (fiscalMode !== 'NONE') {
@@ -2625,7 +2630,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
             setIsRefundModalOpen(false);
             setRefundTx(null);
             setRefundRequestMode('STANDARD');
-         }
+         } else { throw error; }
       } finally {
          setGatewayProgress(null);
       }
@@ -2665,13 +2670,13 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
          const conditions = new Map<string, 'SELLABLE' | 'DAMAGED'>();
          itemsToRefund.forEach(i => conditions.set(i.cartId, 'SELLABLE'));
 
-         await executeRefundFlow(
+         try { await executeRefundFlow(
             transaction,
             itemsToRefund,
             conditions,
             REASONS.find(r => r.id === returnReason)?.label || 'Devolución',
             refundRequestMode
-         );
+         ); } catch(error) { alert(error instanceof Error ? error.message : 'No se pudo completar la devolución.'); return; }
          setReturnModeId(null);
          setSelectedItemsQty(new Map());
       }
@@ -3045,7 +3050,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
             remainingQuantities={refundRemainingQuantities}
          />
 
-         <SupervisorModal {...supervisorModalProps} users={users} />
+         <SupervisorModal {...supervisorModalProps} users={users} overlayZIndex={170} />
       </div>
    );
 };

@@ -11,7 +11,7 @@ export const isV3RetainedTicketClosed = async (id:string): Promise<boolean> => {
 import { LargeMasterSyncV3Error } from './LargeMasterSyncV3Types';
 
 export type V3RetainedReference = { ticketId?: string; claimId?: string; tableId?: string; originalTransactionId?: string; reservationId?: string; reservationClaimId?: string };
-export type V3RetainedContext = { collection: 'parkedTickets' | 'transactions' | 'v3RestoredTicketSources' | 'reservations'; id: string;
+export type V3RetainedContext = { collection: 'parkedTickets' | 'transactions' | 'transactionHistory' | 'v3RestoredTicketSources' | 'reservations'; id: string;
   expected: string; items: CartItem[]; reservation?: Reservation };
 const verified = new WeakSet<object>();
 export const isVerifiedV3RetainedContext = (context: V3RetainedContext | undefined): boolean => Boolean(context && verified.has(context));
@@ -37,8 +37,12 @@ export const readV3RetainedCheckout = async (reference: V3RetainedReference | un
   }
   const id = refund ? reference?.originalTransactionId : reference?.ticketId;
   if (!id) return undefined;
-  const collection = refund ? 'transactions' : reference?.claimId ? 'v3RestoredTicketSources' : 'parkedTickets';
-  const stored = await db.getDocument(collection as any, id) as ParkedTicket | Transaction | null;
+  let collection: V3RetainedContext['collection'] = refund ? 'transactions' : reference?.claimId ? 'v3RestoredTicketSources' : 'parkedTickets';
+  let stored = await db.getDocument(collection as any, id) as ParkedTicket | Transaction | null;
+  if (refund && !stored) {
+    const history = await db.getDocument('transactionHistory',id) as Transaction | null;
+    if (history?.zReportId) { stored=history; collection='transactionHistory'; }
+  }
   if (!stored || !Array.isArray(stored.items) || !stored.items.length) throw new LargeMasterSyncV3Error('SYNC_V3_RETAINED_SOURCE_REQUIRED');
   if (!refund) {
     const ticket = stored as ParkedTicket;

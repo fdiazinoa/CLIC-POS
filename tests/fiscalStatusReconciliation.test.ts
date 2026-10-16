@@ -231,7 +231,7 @@ test('actual App durable callback prepends missing React rows, updates existing 
  const publish=source.slice(source.indexOf('const publishFiscalTransaction ='),source.indexOf('const loadFiscalStatusContext ='));
  const upsert=source.slice(source.indexOf('const upsertFiscalTransaction ='),source.indexOf('const correctFiscalDocument ='));
  const code=(await transform(publish+upsert,{loader:'ts'})).code;
- const create=new Function('f',`const {setTransactions,window,db,dbAdapter,LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED,getLargeMasterSyncV3OperationalSession,console}=f;const useCallback=(fn)=>fn;${code}return upsertFiscalTransaction;`);
+ const create=new Function('f',`const {setTransactions,window,db,dbAdapter,LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED,getLargeMasterSyncV3OperationalSession,console,closedFiscalPublicationIds={current:new Set()},isTransactionReservedForClose=()=>false}=f;const useCallback=(fn)=>fn;${code}return upsertFiscalTransaction;`);
  let rows:any[]=[{id:'existing',total:1}],stored:any=null,warnings=0,events=0,saves:string[]=[];
  const db={getDocument:async()=>stored,saveDocument:async(collection:string,row:any)=>{
   saves.push(collection);if(collection==='transactionHistory')throw Error('legacy mirror unavailable');stored=row;
@@ -359,4 +359,46 @@ test('timed-out status read retains all SQLite evidence and next scheduled pass 
   await f.worker.runAutomatic();await settle();assert.deepEqual(f.read('transactions'),tx);assert.deepEqual(f.read('transactionHistory'),history);assert.deepEqual(f.read('outbox'),outbox);
   await h.clock.advance(60000);await f.worker.runAutomatic();await settle();assert.equal(gets,2);assert.equal(f.read('transactions').fiscalSyncStatus,'SYNCED');
  }finally{cleanup();f.sql.close();}
+});
+
+test('native signed pending proof atomically enriches both mirrors without acceptance; scope is retained for history-only reprint',async()=>{
+ const f=await native();try{
+  f.proof.source='ERP_SCOPED_PROVIDER_ISSUE';f.proof.decision='PENDING';f.proof.providerReceipt.pending=true;f.proof.providerReceipt.status='Validado';
+  f.proof.providerReceipt.printEvidence={schemaVersion:1,qrUrl:'https://fc.dgii.gov.do/testecf/consultatimbrefc?RNCEmisor=130090752&ENCF=E320000000506&MontoTotal=108.80&CodigoSeguridad=NVrTbH',securityCode:'NVrTbH',signedAt:'13-10-2026 18:00:00'};
+  const before=f.read('transactions'),historyBefore=f.read('transactionHistory'),outbox=f.read('outbox');f.deps.publish=()=>{};
+  await f.worker.appendPrintEvidence('27',f.proof);
+  const tx=f.read('transactions'),history=f.read('transactionHistory');
+  assert.equal(tx.fiscalSyncStatus,'PENDING');assert.equal(history.fiscalSyncStatus,'PENDING');
+  assert.equal(history.fiscalSubmissionScope,undefined);assert.deepEqual(history.fiscalPrintScope,f.scope);
+  const {resolveFiscalPrintDisplay}=await import('../services/fiscal/FiscalPrintEvidence');
+  assert.ok(await resolveFiscalPrintDisplay({...history,zReportId:'Z'}));
+  for(const key of ['items','payments','ncf','electronicNcf','total','v3CommitFingerprint']){assert.deepEqual(tx[key],before[key]);assert.deepEqual(history[key],historyBefore[key]);}
+  assert.deepEqual(f.read('outbox'),outbox);
+  await f.adapter.saveDocument('transactions',{...tx,fiscalPrintProof:null,fiscalPrintScope:null,fiscalSignedAt:null,syncStatus:'APPLIED_ERP'});
+  assert.deepEqual(f.read('transactions').fiscalPrintProof,f.proof);assert.equal(f.read('transactions').fiscalSignedAt,'13-10-2026 18:00:00');
+ }finally{f.sql.close();}
+});
+
+test('print enrichment native failure on second mirror rolls back both and preserves Outbox',async()=>{
+ const f=await native();try{
+  f.proof.providerReceipt.printEvidence={schemaVersion:1,qrUrl:'https://fc.dgii.gov.do/testecf/consultatimbrefc?RNCEmisor=130090752&ENCF=E320000000506&MontoTotal=108.80&CodigoSeguridad=NVrTbH',securityCode:'NVrTbH',signedAt:'13-10-2026 18:00:00'};
+  const before=[f.read('transactions'),f.read('transactionHistory'),f.read('outbox')];
+  f.sql.exec(`CREATE TRIGGER fail_print_history BEFORE UPDATE ON documents WHEN NEW.collection_name='transactionHistory' BEGIN SELECT RAISE(ABORT,'injected-print-write'); END;`);
+  await assert.rejects(()=>f.worker.appendPrintEvidence('27',f.proof),/injected-print-write/);
+  assert.deepEqual([f.read('transactions'),f.read('transactionHistory'),f.read('outbox')],before);
+ }finally{f.sql.close();}
+});
+
+test('actual late fiscal callback never writes or republishes durable closed sale into active storage',async()=>{
+ const {transform}=await import('esbuild'),source=readFileSync(new URL('../App.tsx',import.meta.url),'utf8');
+ const publish=source.slice(source.indexOf('const publishFiscalTransaction ='),source.indexOf('const loadFiscalStatusContext ='));
+ const upsert=source.slice(source.indexOf('const upsertFiscalTransaction ='),source.indexOf('const correctFiscalDocument ='));
+ const code=(await transform(publish+upsert,{loader:'ts'})).code;
+ const create=new Function('f',`const {setTransactions,window,db,dbAdapter,LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED,getLargeMasterSyncV3OperationalSession,console,closedFiscalPublicationIds,isTransactionReservedForClose}=f;const useCallback=(fn)=>fn;${code}return upsertFiscalTransaction;`);
+ let rows:any[]=[{id:'closed'}],writes=0;
+ const callback=create({setTransactions:(update:any)=>{rows=update(rows);},window:{dispatchEvent:()=>{}},db:{getDocument:async()=>null,saveDocument:async()=>{writes++;}},dbAdapter:{},
+  LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED:true,getLargeMasterSyncV3OperationalSession:()=>{throw Error('must not issue');},console,
+  closedFiscalPublicationIds:{current:new Set(['closed'])},isTransactionReservedForClose:()=>false});
+ await callback({id:'closed',v3InventoryBaseline:'source',fiscalSyncStatus:'SYNCED'});assert.deepEqual(rows,[]);assert.equal(writes,0);
+ await assert.rejects(()=>callback({id:'unknown-missing',v3InventoryBaseline:'source'}),/ARCHIVED_RECONCILIATION_REQUIRED/);assert.equal(writes,0);
 });

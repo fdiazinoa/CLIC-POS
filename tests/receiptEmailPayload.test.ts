@@ -92,7 +92,7 @@ test('construye el contrato detallado para el ticket visual del ERP', () => {
   const line = payload.cart[0] as Record<string, unknown>;
 
   assert.equal(payload.fiscalDocumentLabel, 'e-CF Credito Fiscal');
-  assert.equal(payload.fiscalValidated, true);
+  assert.equal(payload.fiscalValidated, false, 'legacy SYNCED alone is not scoped provider acceptance proof');
   assert.equal(payload.cashierName, 'Ana P.');
   assert.equal(payload.discountValue, 5);
   assert.equal(line.sellerName, 'Ana P.');

@@ -455,6 +455,7 @@ class TransactionService {
             couponCode: data.couponCode,
             coupons: data.coupons,
             ncf: data.ncf,
+            fiscalIssuance: data.fiscalIssuance,
             ncfType: data.ncfType,
             legacyNcf: data.legacyNcf,
             electronicNcf: data.electronicNcf,

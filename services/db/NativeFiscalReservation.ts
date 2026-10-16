@@ -43,8 +43,8 @@ export async function planNativeFiscalReceipt(query:Query,business:BusinessConfi
  const issuerRnc=fiscalIssuerRnc(business);
  if(!issuerRnc&&options.requireIssuer)throw new Error('NATIVE_FISCAL_ISSUER_UNPROVEN');
  ncf=ncf.trim().toUpperCase();
- if(!/^B(?:01|02|04|14|15)\d{8}$/.test(ncf))throw new Error('NATIVE_FISCAL_NUMBER_INVALID');
- const id=JSON.stringify(issuerRnc?['DOMINICAN_LEGACY_B',issuerRnc,ncf]:['UNATTRIBUTED_NCF_CLAIM_V1',ncf]);
+ if(!/^(?:B(?:01|02|04|14|15)\d{8}|E(?:31|32|34|44|45)\d{10})$/.test(ncf))throw new Error('NATIVE_FISCAL_NUMBER_INVALID');
+ const id=JSON.stringify(issuerRnc?[ncf.startsWith('B')?'DOMINICAN_LEGACY_B':'DOMINICAN_ECF_V1',issuerRnc,ncf]:['UNATTRIBUTED_NCF_CLAIM_V1',ncf]);
  const existing=await query(`SELECT doc_id FROM documents WHERE collection_name='nativeFiscalReservations'
   AND json_extract(data,'$.ncf')=? ${issuerRnc?"AND (json_extract(data,'$.issuerRnc') IS NULL OR json_extract(data,'$.issuerRnc')=?)":''} LIMIT 1`,issuerRnc?[ncf,issuerRnc]:[ncf]);
  if(existing.length)throw new Error('NATIVE_FISCAL_NUMBER_ALREADY_ISSUED');
@@ -52,6 +52,17 @@ export async function planNativeFiscalReceipt(query:Query,business:BusinessConfi
  for(const field of NATIVE_FISCAL_HISTORY_FIELDS){
   const rows=await query(fiscalHistoricalCollisionQuery(field,Boolean(issuerRnc)),issuerRnc?[ncf,issuerRnc,ncf]:[ncf]);
   if(rows.length)throw new Error('NATIVE_FISCAL_HISTORICAL_COLLISION');
+ }
+ if(ncf.startsWith('E')) {
+  // Historical representations keep their original bytes. Exact aliases use the existing expression indexes.
+  const sequence=String(Number(ncf.slice(3)));
+  const aliases=[...new Set(Array.from({length:10},(_,index)=>ncf.slice(0,3)+sequence.padStart(index+1,'0')))];
+  for(const [index,field] of NATIVE_FISCAL_HISTORY_FIELDS.entries()) {
+   const rows=await query(`SELECT doc_id FROM documents INDEXED BY idx_documents_fiscal_history_${index} WHERE collection_name IN ('transactions','transactionHistory')
+    AND json_extract(data,'$.${field}') IS NOT NULL
+    AND UPPER(TRIM(json_extract(data,'$.${field}'))) IN (${aliases.map(()=>'?').join(',')}) LIMIT 1`,aliases);
+   if(rows.length)throw Error('NATIVE_FISCAL_HISTORICAL_COLLISION');
+  }
  }
  const terminal=business.terminals?.find(t=>t.id===buffer.terminalId || t.config?.erpTerminalId===buffer.terminalId);
  const receipt={id,issuerRnc:issuerRnc || null,identityStatus:issuerRnc?'PROVEN_ISSUER_RNC':'UNATTRIBUTED_LEGACY',ncf,

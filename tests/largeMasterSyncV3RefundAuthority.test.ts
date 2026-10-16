@@ -19,7 +19,7 @@ test('refund update uses the separate original snapshot for transaction and hist
   const mutations = buildV3RefundOriginalMutations(before, after, 'refund', history);
   assert.equal(mutations[0].expectedDocument, JSON.stringify(before));
   assert.equal(mutations[1].expectedDocument, JSON.stringify(history));
-  assert.equal(mutations[0].document, after);
+  assert.deepEqual(mutations[0].document, after);
   assert.equal(before.relatedTransactions?.includes('refund'), false);
   assert.notEqual(mutations[0].expectedDocument, JSON.stringify(mutations[0].document));
 });
@@ -49,4 +49,36 @@ test('a sold-out tracked item may be refunded but still requires sale availabili
   assert.equal(requiresV3SaleAvailability('SALE', true, true, false), false);
   assert.equal(requiresV3SaleAvailability('SALE', true, false, true), true);
   assert.equal(requiresV3SaleAvailability('SALE', false, false, false), false);
+});
+
+test('root fiscal metadata may differ between captured, active and history; financial nested metadata may not',()=>{
+ const captured=original(),active={...captured,fiscalSubmissionScope:{real:'scope'},fiscalSyncStatus:'SYNCED'} as any;
+ const history={...captured,zReportId:'Z',fiscalProviderStatus:'PENDING'} as any;
+ const after={...captured,status:'PARTIAL_REFUND' as const,relatedTransactions:['old-refund','refund']};
+ const mutations=buildV3RefundOriginalMutations(active,after,'refund',history);
+ assert.deepEqual(mutations[0].document.fiscalSubmissionScope,active.fiscalSubmissionScope);
+ assert.equal(mutations[0].document.fiscalSyncStatus,'SYNCED');assert.equal(mutations[1].document.zReportId,'Z');
+ assert.equal(mutations[1].document.fiscalProviderStatus,'PENDING');
+ for(const patch of [{total:119},{customerId:'other'},{ncf:'E340000000001'},
+  {items:[{...captured.items[0],status:'changed'}]}, {payments:[{amount:118,status:'changed'}]}]) {
+   assert.throws(()=>buildV3RefundOriginalMutations(active,{...after,...patch} as any,'refund',history),/ORIGINAL_CHANGED/);
+ }
+});
+test('archived refund mutates only history and requires durable zReportId',()=>{
+ const history={...original(),zReportId:'Z',fiscalProviderStatus:'PENDING'} as any;
+ const after={...history,status:'PARTIAL_REFUND' as const,relatedTransactions:['old-refund','refund']};
+ const mutations=buildV3RefundOriginalMutations(history,after,'refund',history,'transactionHistory');
+ assert.equal(mutations.length,1);assert.equal(mutations[0].collectionName,'transactionHistory');assert.equal(mutations[0].document.zReportId,'Z');
+ assert.throws(()=>buildV3RefundOriginalMutations(original(),after,'refund',original(),'transactionHistory'),/ORIGINAL_CHANGED/);
+});
+
+test('void/cancelled/fully refunded originals cannot regain refund authority despite stale captured completed status',async()=>{
+ const {assertRefundOriginalState}=await import('../services/sync/LargeMasterSyncV3RefundAuthority');
+ const captured=original();
+ for(const status of ['VOIDED','CANCELLED','REFUNDED','PENDING']){
+  const fresh={...captured,status} as any;
+  assert.throws(()=>assertRefundOriginalState(fresh),/NOT_REFUNDABLE/);
+  assert.throws(()=>buildV3RefundOriginalMutations(fresh,{...captured,status:'PARTIAL_REFUND',relatedTransactions:['old-refund','new']},'new',fresh),/NOT_REFUNDABLE/);
+ }
+ assert.doesNotThrow(()=>assertRefundOriginalState({...captured,status:'PARTIAL_REFUND'}));
 });

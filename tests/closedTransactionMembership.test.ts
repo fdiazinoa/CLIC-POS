@@ -224,3 +224,14 @@ test('last-document cutoff is isolated by terminal and document prefix', async (
   assert.deepEqual(result.removedClosed.map(item => item.id), [cajaOneClosed.id]);
   assert.deepEqual(result.transactions.map(item => item.id), [cajaOneOpen.id, cajaTwo.id, creditNote.id]);
 });
+
+test('session selector honors explicit membership before timestamps and preserves genuinely open prior-day fiscal pending',async()=>{
+ const {selectPendingSessionTransactions,reserveClosingTransactionIds,releaseClosingTransactionIds}=await import('../services/sync/ClosedTransactionMembership');
+ const rows=[{id:'closed',date:'2026-10-01',terminalId:'T',fiscalSyncStatus:'PENDING'},
+  {id:'old-open',date:'2026-10-01',terminalId:'alias',fiscalSyncStatus:'ERROR'},
+  {id:'new',date:'2026-10-16',terminalId:'T'},{id:'foreign',date:'2026-10-16',terminalId:'other'},
+  {id:'closing',date:'2026-10-01',terminalId:'T'}] as any;
+ reserveClosingTransactionIds(['closing']);try{
+  assert.deepEqual(selectPendingSessionTransactions(rows,['T','alias'],new Set(['closed'])).map(row=>row.id),['old-open','new']);
+ }finally{releaseClosingTransactionIds(['closing']);}
+});

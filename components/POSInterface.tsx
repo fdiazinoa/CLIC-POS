@@ -1,3 +1,4 @@
+import {collectClosedTransactionIds,selectPendingSessionTransactions} from '../services/sync/ClosedTransactionMembership';
 import {reservationInvoiceId,reservationAdvancePayment,validateV3ReservationPricing,assertV3ReservationLines} from '../services/sync/LargeMasterSyncV3ReservationAuthority';
 import type {V3RecoveredReservation} from '../services/sync/LargeMasterSyncV3ReservationRecovery';
 import {requiresProductStockAvailability} from '../utils/productStockPolicy';
@@ -259,6 +260,7 @@ export interface POSInterfaceProps {
    cart: CartItem[];
    transactions: Transaction[];
    zReports: ZReport[];
+   closedHistoryIds?: ReadonlySet<string>;
    onUpdateCart: React.Dispatch<React.SetStateAction<CartItem[]>>;
    selectedCustomer: Customer | null;
    onSelectCustomer: (customer: Customer | null) => void;
@@ -1208,6 +1210,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    cart,
    transactions,
    zReports,
+   closedHistoryIds,
    onUpdateCart,
    selectedCustomer,
    onSelectCustomer,
@@ -2154,30 +2157,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             .map(value => normalize(value))
             .filter(Boolean)
       );
-      const isDefaultTerminal = terminalAliases.has('t1');
-      const matchesTerminal = (...values: Array<string | null | undefined>) => {
-         const normalizedValues = values.map(value => normalize(value)).filter(Boolean);
-         return normalizedValues.some(value => terminalAliases.has(value)) || (isDefaultTerminal && normalizedValues.length === 0);
-      };
-
-      const latestCloseTs = (zReports || [])
-         .filter(r => matchesTerminal(r.terminalId, (r as any).source_terminal_id))
-         .map(r => new Date(r.closedAt).getTime())
-         .filter((value) => Number.isFinite(value))
-         .reduce((max, value) => value > max ? value : max, 0);
-
-      return transactions
-         .filter(t => {
-            const belongsToTerminal = matchesTerminal(t.terminalId, (t as any).source_terminal_id);
-            if (!belongsToTerminal) return false;
-            if (t.zReportId) return false;
-
-            const txTime = new Date(t.date).getTime();
-            if (!Number.isFinite(txTime)) return latestCloseTs <= 0;
-            return latestCloseTs <= 0 || txTime > latestCloseTs;
-         })
-         .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-   }, [activeTerminalConfig, transactions, terminalId, zReports]);
+      return selectPendingSessionTransactions(transactions,terminalAliases,
+         closedHistoryIds || collectClosedTransactionIds([],zReports));
+   }, [activeTerminalConfig, transactions, terminalId, zReports, closedHistoryIds]);
 
    const canProceedWithOperationalSession = useCallback(async (): Promise<boolean> => {
       // Una terminal de toma de pedidos no factura ni administra jornadas fiscales.
@@ -5746,6 +5728,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
          const refundFiscalType = resolveCreditNoteFiscalCode(fiscalCompliance.mode);
          let reservedRefundNcf: string | undefined;
+         let refundIssuance: Transaction['fiscalIssuance'];
+         let finalIssuance: Transaction['fiscalIssuance'];
          if (hasReturns && !isFiscalModeDisabledForCheckout) {
             if (!await db.canRequestMoreNCF(refundFiscalType, terminalId, activeTerminalConfig)) {
                alert(`No hay comprobantes ${refundFiscalType} habilitados y disponibles para esta terminal.`);
@@ -5755,7 +5739,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                alert('No hay comprobantes de venta disponibles para esta terminal.');
                return null;
             }
-            reservedRefundNcf = await db.getNextNCF(refundFiscalType, terminalId, 1, activeTerminalConfig) || undefined;
+            const reservation=await db.reserveFiscalNumber(refundFiscalType,terminalId,1,activeTerminalConfig);
+            reservedRefundNcf=reservation?.ncf; refundIssuance=reservation?.fiscalIssuance;
             if (!reservedRefundNcf) {
                alert(`No se pudo reservar el comprobante ${refundFiscalType}. La devolución fue bloqueada.`);
                return null;
@@ -5782,10 +5767,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             finalNcf = undefined;
             finalNcfType = undefined;
          } else if (isRefundOnly) {
-            finalNcf = reservedRefundNcf;
+            finalNcf = reservedRefundNcf; finalIssuance=refundIssuance;
             finalNcfType = refundFiscalType;
          } else {
-            finalNcf = await db.getNextNCF(fiscalStatus.type, terminalId, activeTerminalConfig?.fiscal?.typeConfigs?.[fiscalStatus.type]?.batchSize || 100, activeTerminalConfig);
+            const reservation=await db.reserveFiscalNumber(fiscalStatus.type,terminalId,1,activeTerminalConfig);
+            finalNcf=reservation?.ncf; finalIssuance=reservation?.fiscalIssuance;
 
             if (!finalNcf) {
                alert(`CRÍTICO: No hay NCF de ${fiscalStatus.type === 'B01' || fiscalStatus.type === 'E31' ? 'Crédito Fiscal' : 'Consumo'} disponible para esta terminal. Verifique en ERP la asignación y la secuencia fiscal.`);
@@ -5875,7 +5861,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         status: creditAmount > 0 ? 'PENDING' : 'COMPLETED',
                         customerId: customerForCheckout?.id,
                         customerName: customerForCheckout?.name,
-                        ncf: finalNcf,
+                        ncf: finalNcf, fiscalIssuance:finalIssuance,
                         ncfType: finalNcfType,
                         legacyNcf: finalNcfType?.startsWith('E') ? undefined : finalNcf,
                         electronicNcf: finalNcfType?.startsWith('E') ? finalNcf : undefined,
@@ -5904,7 +5890,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         customerName: customerForCheckout?.name,
                         status: 'COMPLETED',
                         ...(v3Operational ? { customerSnapshot: checkoutCustomerSnapshot } : {}),
-                        ncf: refundNcf,
+                        ncf: refundNcf, fiscalIssuance:refundIssuance,
                         ncfType: refundNcf ? refundFiscalType : undefined,
                         walletDepositAmount: walletDepositAmount > 0 ? walletDepositAmount : undefined,
                         walletPaymentAmount: walletPaymentAmount > 0 ? walletPaymentAmount : undefined,
@@ -5957,7 +5943,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            ...result.refund,
                            items: normalizedSplitRefundItems,
                            total: returnTotal,
-                           ncf: refundNcf,
+                           ncf: refundNcf, fiscalIssuance:refundIssuance,
                            ncfType: refundNcf ? refundFiscalType : undefined,
                            status: 'REFUNDED',
                            refundReason: 'Devolución en transacción mixta',
@@ -6097,7 +6083,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   restaurantSettlementStatus: activeOrderId ? 'PENDING' : undefined,
                   pendingBalance: creditAmount > 0 ? creditAmount : undefined,
                   dueDate: creditAmount > 0 ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() : undefined, // Default 30 days
-                  ncf: finalNcf,
+                  ncf: finalNcf, fiscalIssuance:finalIssuance,
                   ncfType: finalNcfType,
                   legacyNcf: finalNcfType?.startsWith('E') ? undefined : finalNcf,
                   electronicNcf: finalNcfType?.startsWith('E') ? finalNcf : undefined,
@@ -6157,7 +6143,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         ...settledFinalTxn,
                         ...(v3Operational ? {} : { items: normalizedRefundItems, total: refundDocumentTotal }),
                         status: 'REFUNDED',
-                        ncf: finalNcf,
+                        ncf: finalNcf, fiscalIssuance:finalIssuance,
                         ncfType: finalNcfType,
                         refundReason: 'Devolución POS',
                         authorizedById: refundAuthorizedBy?.id,

@@ -1,3 +1,4 @@
+import {formatFiscalNumber} from './fiscalNumber';
 import type {BusinessConfig,FiscalAllocation,FiscalDocumentCode,FiscalRangeDGII,LocalFiscalBuffer,TerminalConfig} from '../types';
 const normalizeSequenceKey=(value:unknown)=>String(value || '').trim().toUpperCase();
 /** Shared pure policy: native format and ordinary fiscal issuance must authorize the same scope and lot. */
@@ -108,8 +109,8 @@ export function validateFiscalBufferReservation(input:{business:BusinessConfig;t
  const {business,terminalId,type,buffer,allocation,range,ncf}=input;
  const policy=resolveFiscalTerminalPolicyFromConfig(business,terminalId,[allocation]);
  const terminal=business.terminals?.find(t=>t.id===terminalId || t.config?.erpTerminalId===terminalId);
- const valid=policy.enabled && /^B(?:01|02|04|14|15)$/.test(type)
-  && (!input.requireLegacyBMode || terminal?.config?.fiscal?.mode==='LEGACY_B')
+ const valid=policy.enabled && /^(?:B(?:01|02|04|14|15)|E(?:31|32|34|44|45))$/.test(type)
+  && (!input.requireLegacyBMode || type.startsWith('B') && terminal?.config?.fiscal?.mode==='LEGACY_B')
   && isAllocationAllowedByPolicy(allocation,policy,true) && hasValidAllocatedFiscalRange([range],allocation,type)
   && ['ACTIVE','EXHAUSTED'].includes(allocation.status) && !allocation.releasedAt
   && normalizeSequenceKey(allocation.terminalId)===normalizeSequenceKey(policy.authorityId)
@@ -121,7 +122,7 @@ export function validateFiscalBufferReservation(input:{business:BusinessConfig;t
   && buffer.startNumber!>=allocation.reservedStart && buffer.endNumber<=allocation.reservedEnd
   && buffer.currentNumber>=buffer.startNumber! && buffer.currentNumber<=buffer.endNumber
   && buffer.currentNumber<allocation.nextNumber
-  && `${buffer.prefix}${String(buffer.currentNumber).padStart(8,'0')}`===ncf;
+  && formatFiscalNumber(type,buffer.prefix,buffer.currentNumber)===ncf;
  if(!valid) throw new Error('POS_FORMAT_FISCAL_ALLOCATION_REQUIRED');
  return {...buffer,currentNumber:buffer.currentNumber+1};
 }

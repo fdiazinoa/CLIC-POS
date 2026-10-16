@@ -226,3 +226,18 @@ export const persistInboundTransactionsIfOpen = async (
     closedIds: closedAfter,
   };
 };
+
+/** Session membership is explicit; dates and provider/sync states cannot close an operation. */
+export const selectPendingSessionTransactions = (
+  rows: Transaction[], terminalAliases: Iterable<string>, closedIds: ReadonlySet<string>,
+): Transaction[] => {
+  const aliases=new Set([...terminalAliases].map(value=>normalizeId(value).toLowerCase()).filter(Boolean));
+  return rows.filter(row=>{
+    const refs=[row.terminalId,row.source_terminal_id].map(value=>normalizeId(value).toLowerCase()).filter(Boolean);
+    const belongs=refs.length ? refs.some(value=>aliases.has(value)) : aliases.has('t1');
+    return belongs && !row.zReportId && !closedIds.has(row.id) && !isTransactionReservedForClose(row.id);
+  }).sort((a,b)=>{
+    const first=Date.parse(a.date),second=Date.parse(b.date);
+    return (Number.isFinite(first)?first:0)-(Number.isFinite(second)?second:0);
+  });
+};

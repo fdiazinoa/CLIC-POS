@@ -1,3 +1,4 @@
+import {resolveFiscalPrintDisplay} from '../fiscal/FiscalPrintEvidence';
 import { fiscalStatusSourceChecksum, validFiscalScope, verifyFiscalStatusProof } from '../fiscal/FiscalStatusProof';
 import { sha256Utf8 } from '../sync/LargeMasterSyncV3Client';
 import type { DurableDocumentMutation } from './DatabaseAdapter';
@@ -30,6 +31,15 @@ export async function validateV3FiscalMetadataMutation(mutation: DurableDocument
       || scope.basis !== (operation === 'FISCAL_SUBMISSION_SCOPE_APPEND' ? 'PERSISTED_SUBMISSION_INTENT' : 'EXPLICIT_AUTHORIZED_LOOKUP')
       || scope.sourceChecksum !== await fiscalStatusSourceChecksum(previous) || previous.fiscalSyncStatus === 'SYNCED'
       || !equal(without(previous,[field]),without(next,[field]))) denied();
+    return;
+  }
+  if (operation === 'FISCAL_PRINT_EVIDENCE_APPEND') {
+    const canonicalSource=mutation.collectionName==='transactionHistory'
+      ? JSON.parse(mutation.v3ExpectedRetainedDocument?.expected || '{}') : previous;
+    const allowed=['fiscalPrintProof','fiscalPrintScope','fiscalQrUrl','fiscalSecurityCode','fiscalSignedAt'];
+    const display=await resolveFiscalPrintDisplay({...previous,fiscalSubmissionScope:canonicalSource.fiscalSubmissionScope,fiscalLookupApproval:canonicalSource.fiscalLookupApproval,fiscalPrintProof:next.fiscalPrintProof,fiscalPrintScope:next.fiscalPrintScope});
+    if (!display || !equal(next.fiscalPrintScope,canonicalSource.fiscalPrintScope||canonicalSource.fiscalSubmissionScope||canonicalSource.fiscalLookupApproval) || !equal(without(previous,allowed),without(next,allowed))
+      || next.fiscalQrUrl!==display.qrUrl||next.fiscalSecurityCode!==display.securityCode||next.fiscalSignedAt!==display.signedAt) denied();
     return;
   }
   if (operation === 'FISCAL_STATUS_RECONCILE') {

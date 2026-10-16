@@ -349,7 +349,7 @@ test('queued captured native handles cannot read or write an uncertain transacti
  await assert.rejects(post,/CONNECTION_UNCERTAIN/);for(const result of await outcomes){assert.equal(result.status,'rejected');if(result.status==='rejected')assert.match(String(result.reason),/CONNECTION_UNCERTAIN/);}
  await assert.rejects(f.adapter.getDocument('customers','untouched'),/CONNECTION_UNCERTAIN/);assert.equal((f.db.prepare("SELECT COUNT(*) n FROM documents WHERE collection_name='customers' AND doc_id='untouched'").get() as {n:number}).n,1);f.db.exec('ROLLBACK');
 });
-test('all previously permitted B modes use native receipts; NONE/disabled policy and existing E path stay unchanged',async t=>{
+test('previously permitted B modes retain receipts; NONE/disabled stays denied; ordinary E uses canonical native reservation',async t=>{
  const {seedNativeFiscal}=await import('./articleFormatsNativeFixture');const {dbAdapter}=await import('../services/db');const {db}=await import('../utils/db');
  const names=['getCollection','saveCollection','getDocument','executeSQL','reserveFinancialNumbers'] as const;const originals=new Map(names.map(n=>[n,(dbAdapter as any)[n]]));t.after(()=>{for(const n of names){if(originals.get(n))(dbAdapter as any)[n]=originals.get(n);else delete (dbAdapter as any)[n];}});
  for(const [mode,enabled,permitted] of [[undefined,true,true],[undefined,false,false],['LEGACY_B',true,true],['LEGACY_B',false,true],['ECF',true,true],['ECF',false,false],['NONE',true,false]] as const){
@@ -360,6 +360,6 @@ test('all previously permitted B modes use native receipts; NONE/disabled policy
  }
  const e=await nativeFixture();try{const seeded=seedNativeFiscal(e);const cfg=e.documents('config')[0];cfg.terminals[0].config.fiscal.mode='ECF';const range={...seeded.range,type:'E31',prefix:'E31'},allocation={...seeded.allocation,ncfType:'E31',prefix:'E31'};cfg.terminals[0].config.fiscal.fiscalRanges=[range];cfg.terminals[0].config.fiscal.fiscalAllocations=[allocation];await e.adapter.saveDocument('config',cfg);await e.adapter.saveDocument('fiscalRanges',range);await e.adapter.saveDocument('fiscalAllocations',allocation);await e.adapter.saveCollection('localFiscalBuffer',[]);await e.adapter.saveDocument('localFiscalBuffer',{...seeded.buffer,id:'E31',type:'E31',prefix:'E31'});
   for(const n of names)(dbAdapter as any)[n]=(e.adapter as any)[n].bind(e.adapter);
-  assert.equal(await db.getNextNCF('E31',id(4)),'E3100000002');assert.equal(e.documents('nativeFiscalReservations').length,0,'existing E path is unchanged');
+  assert.equal(await db.getNextNCF('E31',id(4)),'E310000000002');assert.equal(e.documents('nativeFiscalReservations').length,1,'ordinary E now has the same native CAS claim while format profile stays B-only');
  }finally{e.db.close();}
 });

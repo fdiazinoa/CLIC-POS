@@ -9,13 +9,13 @@ export interface FiscalStatusScope {
   approvedById?: string;
 }
 export interface FiscalStatusProof {
-  schemaVersion: 1; source: 'ERP_SCOPED_PROVIDER_GET';
+  schemaVersion: 1; source: 'ERP_SCOPED_PROVIDER_GET' | 'ERP_SCOPED_PROVIDER_ISSUE';
   scope: { tenantId: string; companyId: string; terminalId: string; deviceId: string; storeId: string };
   document: { erpDocumentId: string; sourceTransactionId: string; ncf: string; ncfType: string; sourceChecksum: string; total: number };
   issuer: { rnc: string; providerId: 'MSELLER'; environment: number; credentialCompanyId: string; credentialAccountRnc: string };
   environmentBasis: FiscalStatusScope['basis'] | 'HISTORICAL_SOURCE'; historicalEnvironment: number | null;
   lookup: { requestedNcf: string };
-  providerReceipt: { returnedNcf: string; internalTrackId: string; status: string; success: boolean | null; pending: boolean | null; invoiceTotal: number | null };
+  providerReceipt: { returnedNcf: string; internalTrackId: string; status: string; success: boolean | null; pending: boolean | null; invoiceTotal: number | null; printEvidence?: import('./FiscalPrintEvidence').FiscalPrintEvidence };
   decision: 'ACCEPTED' | 'PENDING' | 'REJECTED' | 'HELD'; observedAt: string;
 }
 const canonical = (value: any): any => Array.isArray(value) ? value.map(canonical)
@@ -28,7 +28,7 @@ export const fiscalStatusSourceChecksum = (tx: Transaction): Promise<string> => 
 ])));
 export const fiscalNcfIdentity = (value: unknown): string | undefined => {
   if (typeof value !== 'string') return undefined;
-  const match=/^(E31|E32|E34)([0-9]{1,10})$/.exec(value);
+  const match=/^(E31|E32|E34|E44|E45)([0-9]{1,10})$/.exec(value);
   if (!match || /^0+$/.test(match[2])) return undefined;
   return match[1]+':'+match[2].replace(/^0+/,'');
 };
@@ -46,10 +46,10 @@ export const validFiscalScope = (scope: FiscalStatusScope, tx: Transaction): boo
     && /^[a-f0-9]{64}$/.test(scope.sourceChecksum)&&Number.isFinite(Date.parse(scope.capturedAt))
     && (scope.basis!=='EXPLICIT_AUTHORIZED_LOOKUP'||Boolean(scope.approvedById));
 };
-export async function verifyFiscalStatusProof(proof: FiscalStatusProof, scope: FiscalStatusScope, tx: Transaction): Promise<boolean> {
+export async function verifyFiscalStatusProof(proof: FiscalStatusProof, scope: FiscalStatusScope, tx: Transaction, requireAccepted=true): Promise<boolean> {
   if (!proof || !validFiscalScope(scope,tx) || scope.sourceChecksum!==await fiscalStatusSourceChecksum(tx)) return false;
   const p=proof;
-  return p.schemaVersion===1&&p.source==='ERP_SCOPED_PROVIDER_GET'&&p.decision==='ACCEPTED'
+  return p.schemaVersion===1&&(p.source==='ERP_SCOPED_PROVIDER_GET'||!requireAccepted&&p.source==='ERP_SCOPED_PROVIDER_ISSUE')&&(!requireAccepted||p.decision==='ACCEPTED')
     && p.scope?.tenantId===scope.tenantId&&p.scope.companyId===scope.companyId&&p.scope.terminalId===scope.terminalId&&p.scope.deviceId===scope.deviceId
     && p.scope.storeId===scope.storeId
     && p.issuer?.providerId==='MSELLER'&&p.issuer.rnc===scope.issuerRnc&&p.issuer.credentialAccountRnc===scope.issuerRnc
@@ -60,7 +60,7 @@ export async function verifyFiscalStatusProof(proof: FiscalStatusProof, scope: F
     && p.document.ncfType===tx.ncfType&&sameFiscalNcf(p.document.ncf,tx.electronicNcf||tx.ncf)
     && sameFiscalNcf(p.lookup?.requestedNcf,tx.electronicNcf||tx.ncf)
     && sameFiscalNcf(p.providerReceipt?.returnedNcf,tx.electronicNcf||tx.ncf)&&Boolean(p.providerReceipt.internalTrackId?.trim())
-    && acceptedFiscalStatus(p.providerReceipt.status)&&p.providerReceipt.success!==false&&p.providerReceipt.pending!==true
+    && (!requireAccepted||acceptedFiscalStatus(p.providerReceipt.status)&&p.providerReceipt.success!==false&&p.providerReceipt.pending!==true)
     && typeof p.document.total==='number'&&Number.isFinite(p.document.total)&&Math.abs(p.document.total-tx.total)<0.005
     && typeof p.providerReceipt.invoiceTotal==='number'&&Number.isFinite(p.providerReceipt.invoiceTotal)&&Math.abs(p.providerReceipt.invoiceTotal-tx.total)<0.005
     && Number.isFinite(Date.parse(p.observedAt));

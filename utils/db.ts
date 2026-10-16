@@ -1,10 +1,12 @@
+import {snapshotFiscalIssuance,assertFiscalIssuance} from './fiscalIssuance';
+import {fiscalSequencePadding as getFiscalSequencePadding,formatFiscalNumber} from './fiscalNumber';
 import { resolveFiscalTerminalPolicyFromConfig,hasValidFiscalAllocationPointer,getFiscalRangeForEmission,hasValidAllocatedFiscalRange,isAllocationAllowedByPolicy } from './fiscalBufferAuthority';
 import { applyLocalUserProfiles } from './localUserProfiles';
 import {
   BusinessConfig, Product, User, Customer, Transaction,
   Warehouse, StockTransfer, CashMovement, InventoryLedgerEntry, LedgerConcept,
   RoleDefinition, ParkedTicket, PurchaseOrder, PurchaseOrderItem, Supplier, Watchlist,
-  TerminalConfig, NCFType, FiscalDocumentCode, FiscalRangeDGII, FiscalAllocation, LocalFiscalBuffer, DocumentSeries,
+  TerminalConfig, NCFType, FiscalDocumentCode, FiscalRangeDGII, FiscalAllocation, LocalFiscalBuffer, DocumentSeries, FiscalIssuanceSnapshot,
   Campaign, Coupon, ZReport, XReport, Reception, ProductStock, InventoryTracking, Reservation, InventoryCommitment, PaymentMethodDefinition, CartItem,
   ProductPrice
 } from '../types';
@@ -24,7 +26,6 @@ import { completeLegacyMutationAfterDurableAck } from '../services/sync/LegacyMu
 const DB_KEY = 'clic_pos_db_v1';
 let initPromise: Promise<any> | null = null;
 const INVENTORY_CLOSE_LOCK_MESSAGE = 'Acción denegada: El inventario a esta fecha ya ha sido cerrado y auditado.';
-const getFiscalSequencePadding = (_type: FiscalDocumentCode): number => 8;
 // Fiscal allocations already belong to one terminal; reserving local batches creates visible NCF gaps if buffers are reset by sync.
 const FISCAL_ISSUE_BATCH_SIZE = 1;
 const ALLOW_FULL_DEMO_SEED_STORAGE_KEY = 'clic_pos_allow_demo_seed';
@@ -1373,6 +1374,7 @@ export const db = {
   },
 
   assertFiscalTransactionAuthority: async (transaction: Partial<Transaction>, context?: TerminalConfig): Promise<void> => {
+    assertFiscalIssuance(transaction);
     if (transaction.ncf || transaction.ncfType) {
       if (!transaction.ncf || !transaction.ncfType || !transaction.terminalId ||
           !await db.validatePreparedFiscalAuthority(transaction.ncfType, transaction.terminalId, transaction.ncf, context)) {
@@ -1429,7 +1431,7 @@ export const db = {
   requestFiscalBatch: (terminalId: string, type: FiscalDocumentCode, _batchSize: number, context?: TerminalConfig): Promise<LocalFiscalBuffer | null> =>
     withFiscalIssueLock(() => reserveFiscalBatch(terminalId, type, context)),
 
-  getNextNCF: (type: FiscalDocumentCode, terminalId: string, _customBatchSize?: number, context?: TerminalConfig): Promise<string | null> => withFiscalIssueLock(async () => {
+  reserveFiscalNumber: (type: FiscalDocumentCode, terminalId: string, _customBatchSize?: number, context?: TerminalConfig): Promise<{ncf:string;fiscalIssuance:FiscalIssuanceSnapshot} | null> => withFiscalIssueLock(async () => {
     const allocations = await dbAdapter.getCollection<FiscalAllocation>('fiscalAllocations') || [];
     const policy = await resolveFiscalTerminalPolicy(terminalId, allocations, context);
     if (!policy.enabled || !terminalId?.trim() || !policy.authorityId?.trim()) return null;
@@ -1494,13 +1496,17 @@ export const db = {
       return null;
     }
 
-    const ncf = `${buffer.prefix}${buffer.currentNumber.toString().padStart(getFiscalSequencePadding(type), '0')}`;
+    const ncf = formatFiscalNumber(type,buffer.prefix,buffer.currentNumber);
 
     if (buffer.currentNumber > buffer.endNumber) return null;
     // A snapshot may revoke the lot while reserving. Never return a number from that stale authority.
     if (!await db.validatePreparedFiscalAuthority(type, terminalId, ncf, context)) return null;
 
-    if(dbAdapter.reserveFinancialNumbers && type.startsWith('B')){
+    const business = ((await dbAdapter.getCollection<BusinessConfig>('config')) || [])[0] || {} as BusinessConfig;
+    const frozenRange = (await dbAdapter.getCollection<FiscalRangeDGII>('fiscalRanges') || []).find(row=>row.id===buffer!.fiscalRangeId);
+    if (!frozenRange || !activeAllocation || buffer.allocationId!==activeAllocation.id) throw Error('FISCAL_ISSUANCE_AUTHORITY_REQUIRED');
+    let fiscalIssuance = snapshotFiscalIssuance(business,frozenRange,activeAllocation,buffer,ncf);
+    if(dbAdapter.reserveFinancialNumbers){
       const authority=[['config','current'],['localFiscalBuffer',buffer.id],['fiscalAllocations',buffer.allocationId],['fiscalRanges',buffer.fiscalRangeId]];
       const expected:string[]=[];
       for(const [collection,id] of authority){
@@ -1510,13 +1516,18 @@ export const db = {
         if(typeof raw!=='string') throw new Error('NATIVE_FISCAL_AUTHORITY_CONFLICT');
         expected.push(raw);
       }
-      return (await dbAdapter.reserveFinancialNumbers({global:false,fiscal:{terminalId,type,ncf,
-        expectedConfig:expected[0],expectedBuffer:expected[1],expectedAllocation:expected[2],expectedRange:expected[3]}})).ncf || null;
+      fiscalIssuance=snapshotFiscalIssuance(JSON.parse(expected[0]),JSON.parse(expected[3]),JSON.parse(expected[2]),JSON.parse(expected[1]),ncf);
+      await dbAdapter.reserveFinancialNumbers({global:false,fiscal:{terminalId,type,ncf,
+        expectedConfig:expected[0],expectedBuffer:expected[1],expectedAllocation:expected[2],expectedRange:expected[3]}});
+      return {ncf,fiscalIssuance};
     }
     buffer.currentNumber += 1;
     await dbAdapter.saveCollection('localFiscalBuffer', buffers);
-    return ncf;
+    return {ncf,fiscalIssuance};
   }),
+
+  getNextNCF: async (type: FiscalDocumentCode, terminalId: string, batch?: number, context?: TerminalConfig): Promise<string|null> =>
+    (await db.reserveFiscalNumber(type,terminalId,batch,context))?.ncf || null,
 
   reconcilePreparedNCF: (type: FiscalDocumentCode, terminalId: string, ncf: string, context?: TerminalConfig): Promise<void> => withFiscalIssueLock(async () => {
     const allocations = await dbAdapter.getCollection<FiscalAllocation>('fiscalAllocations') || [];

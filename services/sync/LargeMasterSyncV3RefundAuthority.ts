@@ -11,29 +11,46 @@ export const requiresV3SaleAvailability = (intent: V3FinancialIntent, trackInven
   productAllowsNegative: boolean, _terminalAllowsNegative?: boolean): boolean =>
   intent === 'SALE' && requiresProductStockAvailability({operationalFlags:{trackInventory,allowNegativeStock:productAllowsNegative}});
 
-const sourceIdentity = (transaction: Transaction): string => {
+/** Only root transport/status metadata is mutable. Nested line/customer/payment status remains financial identity. */
+export const refundFinancialSourceIdentity = (transaction: Transaction): string => {
+  const mutable = new Set(['status','updatedAt','syncStatus','syncError','cloudSyncStatus','cloudSyncError','cloudSyncedAt',
+    'relatedTransactions','zReportId','syncStartedAt','syncRetryAfter','syncBlockedReason','syncBlockedAt','_forceSyncReplay',
+    'fiscalResponseCode','fiscalSignedXml','fiscalQrCode','fiscalStatus','fiscalPreSubmitRecoveryAudit','fiscalSyncStatus','fiscalSyncError','fiscalSyncedAt','fiscalReferenceId',
+    'fiscalResponseMessage','fiscalProviderStatus','fiscalCertifiedNcf','fiscalStatusProof','fiscalSubmissionScope',
+    'fiscalLookupApproval','fiscalPrintScope','fiscalPrintProof','fiscalClassificationProjection','fiscalClassificationAttemptedAt','fiscalQrUrl','fiscalSecurityCode','fiscalSignedAt']);
   const canonical = (value: any): any => Array.isArray(value) ? value.map(canonical)
-    : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort()
-      .filter(key => !['status', 'updatedAt', 'syncStatus', 'syncError', 'cloudSyncStatus',
-        'cloudSyncError', 'cloudSyncedAt', 'relatedTransactions'].includes(key))
-      .map(key => [key, canonical(value[key])])) : value;
-  return JSON.stringify(canonical(transaction));
+    : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key,canonical(value[key])])) : value;
+  return JSON.stringify(canonical(Object.fromEntries(Object.entries(transaction).filter(([key])=>!mutable.has(key)))));
+};
+export const assertRefundOriginalState=(source:Transaction):void=>{
+  if(!['COMPLETED','PARTIAL_REFUND'].includes(source.status)) throw new LargeMasterSyncV3Error('SYNC_V3_REFUND_ORIGINAL_NOT_REFUNDABLE');
+};
+/** Commercial version is independent of mutable fiscal metadata. Never rebase a refund onto another refund. */
+export const assertRefundCommercialVersion=(fresh:Transaction,captured:Transaction):void=>{
+  const links=(row:Transaction)=>JSON.stringify([...new Set(row.relatedTransactions || [])].sort());
+  if(fresh.status!==captured.status || links(fresh)!==links(captured)) throw new LargeMasterSyncV3Error('SYNC_V3_REFUND_ORIGINAL_CHANGED');
+};
+export const assertRefundFinancialSource = (expected: Transaction, captured: Transaction): void => {
+  if (refundFinancialSourceIdentity(expected) !== refundFinancialSourceIdentity(captured)) throw new LargeMasterSyncV3Error('SYNC_V3_REFUND_ORIGINAL_CHANGED');
 };
 
 /** Keep the expected stored snapshot distinct from the intended refund update. */
 export const buildV3RefundOriginalMutations = (
   expected: Transaction, intended: Transaction, refundId: string,
   expectedHistory: Transaction | null,
+  originalCollection: 'transactions' | 'transactionHistory' = 'transactions',
 ): DurableDocumentMutation[] => {
+  assertRefundOriginalState(expected);
+  if(expectedHistory)assertRefundOriginalState(expectedHistory);
   const expectedLinks = [...new Set([...(expected.relatedTransactions || []), refundId])].sort();
   const intendedLinks = [...new Set(intended.relatedTransactions || [])].sort();
   if (!refundId || !expected.v3Binding || !expected.v3InventoryBaseline
     || expected.v3Binding !== intended.v3Binding
     || expected.v3InventoryBaseline !== intended.v3InventoryBaseline
-    || sourceIdentity(expected) !== sourceIdentity(intended)
+    || refundFinancialSourceIdentity(expected) !== refundFinancialSourceIdentity(intended)
     || (expectedHistory !== null && (expectedHistory.id !== expected.id
       || expectedHistory.v3InventoryBaseline !== expected.v3InventoryBaseline
-      || sourceIdentity(expectedHistory) !== sourceIdentity(expected)))
+      || refundFinancialSourceIdentity(expectedHistory) !== refundFinancialSourceIdentity(expected)))
     || JSON.stringify(expectedLinks) !== JSON.stringify(intendedLinks)
     || ![expected.status, 'PARTIAL_REFUND', 'REFUNDED'].includes(intended.status)) {
     throw new LargeMasterSyncV3Error('SYNC_V3_REFUND_ORIGINAL_CHANGED');
@@ -48,9 +65,14 @@ export const buildV3RefundOriginalMutations = (
       || line.v3SaleAuthority.inventoryCursor !== baseline[4])) {
     throw new LargeMasterSyncV3Error('SYNC_V3_REFUND_ORIGINAL_AUTHORITY_INVALID');
   }
+  const patch = {status:intended.status,relatedTransactions:intended.relatedTransactions,syncStatus:intended.syncStatus};
+  if (originalCollection === 'transactionHistory') {
+    if (!expected.zReportId || !expectedHistory) throw new LargeMasterSyncV3Error('SYNC_V3_REFUND_ORIGINAL_CHANGED');
+    return [{collectionName:'transactionHistory',document:{...expectedHistory,...patch},expectedDocument:JSON.stringify(expectedHistory)}];
+  }
   return [
-    { collectionName: 'transactions', document: intended, expectedDocument: JSON.stringify(expected) },
-    { collectionName: 'transactionHistory', document: intended,
-      ...(expectedHistory ? { expectedDocument: JSON.stringify(expectedHistory) } : { requireAbsent: true }) },
+    {collectionName:'transactions',document:{...expected,...patch},expectedDocument:JSON.stringify(expected)},
+    {collectionName:'transactionHistory',document:{...(expectedHistory || expected),...patch},
+      ...(expectedHistory ? {expectedDocument:JSON.stringify(expectedHistory)} : {requireAbsent:true})},
   ];
 };

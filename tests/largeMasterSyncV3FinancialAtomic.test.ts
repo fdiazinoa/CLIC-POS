@@ -160,13 +160,15 @@ async function financialModule(f: ReturnType<typeof fixture>, durable = false) {
   const modules: Record<string, string> = {
     '../db': 'export const dbAdapter=globalThis.__v3FinancialFixture.adapter;',
     '../../utils/db': 'export const db=globalThis.__v3FinancialFixture.db;',
+    '../utils/db': 'export const db=globalThis.__v3FinancialFixture.db;',
+    './sync/BackgroundSyncManager': 'export const backgroundSyncManager={triggerSync:async()=>{}};',
     './SyncFeatureFlags': 'export const isSyncFeatureEnabled=()=>globalThis.__v3FinancialFixture.durable;',
     './DurableOutboxRepository': 'export const durableOutboxRepository={commitFinancialTransaction:input=>globalThis.__v3FinancialFixture.adapter.commitFinancialTransaction(input)};',
     '../CheckoutDiagnostics': 'export const recordCheckoutDiagnostic=()=>{};',
     './LargeMasterSyncV3OperationalSession': `export const getLargeMasterSyncV3OperationalSession=async()=>globalThis.__v3FinancialFixture.session;
       export const v3InventoryBaselineKey=(binding,stamp)=>JSON.stringify([binding,stamp.syncId,stamp.syncVersion,stamp.inventoryVersion,stamp.inventoryCursor]);`,
   };
-  const result = await build({ entryPoints: [new URL('../services/sync/LargeMasterSyncV3FinancialCommit.ts', import.meta.url).pathname],
+  const result = await build({ stdin:{contents:`export * from ${JSON.stringify(new URL('../services/sync/LargeMasterSyncV3FinancialCommit.ts',import.meta.url).pathname)};export {persistStandaloneRefundTransaction} from ${JSON.stringify(new URL('../services/localRefundPersistence.ts',import.meta.url).pathname)};`,resolveDir:new URL('..',import.meta.url).pathname,loader:'ts'},
     bundle: true, write: false, format: 'esm', platform: 'node', plugins: [{ name: 'v3-financial-boundaries', setup(builder) {
       builder.onResolve({ filter: /.*/ }, args => modules[args.path] ? { path: args.path, namespace: 'v3-test' } : undefined);
       builder.onLoad({ filter: /.*/, namespace: 'v3-test' }, args => ({ contents: modules[args.path], loader: 'js' }));
@@ -299,4 +301,74 @@ test('fiscal authority denial before preparation or final atomic commit publishe
       assert.equal((globalThis as any).__v3FinancialFixture.fiscalAuthorityChecks, denyAtFiscalCheck);
     } finally { f.sql.close(); }
   }
+});
+
+test('two sequential partial refunds retain archived original and never create a ticket settlement; stale CAS rolls back ledger',async()=>{
+ const f=fixture();try{
+  const module=await financialModule(f,false);
+  const original={...module.transaction('source'),...scope,zReportId:'Z',status:'COMPLETED',relatedTransactions:[],customerId:undefined};
+  await f.adapter.saveDocument('transactionHistory',original);
+  const globals=globalThis as any;
+  globals.__v3FinancialFixture.session.validate=async(_config:any,items:any[],_tariff:any,_warehouse:any,_intent:any,validated:any)=>{
+   for(const line of items)validated?.(line,line);
+   const source=await f.adapter.getDocument('transactionHistory','source') as any;
+   return {collection:'transactionHistory',id:'source',expected:JSON.stringify(source),items:source.items};
+  };
+  const refund=(name:string)=>({...module.transaction(name,true),type:'REFUND',...scope,customerId:undefined,originalTransactionId:'source',items:[{...original.items[0],quantity:0.5,netAmount:50,taxAmount:9,totalAmount:59}],total:59,netAmount:50,taxAmount:9});
+  for(const name of ['partial-1','partial-2']){
+   const before=await f.adapter.getDocument('transactionHistory','source') as any;
+   const intended={...before,status:name==='partial-1'?'PARTIAL_REFUND':'REFUNDED',relatedTransactions:[...before.relatedTransactions,name]};
+   await module.persistV3FinancialTransaction(refund(name),{} as BusinessConfig,'W',{refund:true,original:intended,expectedOriginal:before,expectedOriginalHistory:before,originalCollection:'transactionHistory'});
+   assert.equal(await f.adapter.getDocument('transactions','source'),null);
+  }
+  const stored=await f.adapter.getDocument('transactionHistory','source') as any;
+  assert.equal(stored.zReportId,'Z');assert.deepEqual(stored.relatedTransactions,['partial-1','partial-2']);
+  assert.equal(f.rows('v3TicketSettlements').length,0);assert.equal(f.rows('inventoryLedger').length,2);
+  assert.equal(f.rows('inventoryLedger').reduce((sum:number,row:any)=>sum+row.qtyIn,0),1);
+  const stale={...stored,total:999};
+  await assert.rejects(()=>module.persistV3FinancialTransaction(refund('stale'),{} as BusinessConfig,'W',{refund:true,original:{...stale,relatedTransactions:[...stale.relatedTransactions,'stale']},expectedOriginal:stale,expectedOriginalHistory:stale,originalCollection:'transactionHistory'}));
+  assert.equal(f.rows('inventoryLedger').length,2);assert.equal(await f.adapter.getDocument('transactions','stale'),null);
+ }finally{f.sql.close();}
+});
+
+test('actual refund helper lost ACK replays exact canonical receipt without writes; conflicting content and newer stale commands reject; archived receipt stays archived',async()=>{
+ const f=fixture();try{
+  const module=await financialModule(f,false);
+  const original={...module.transaction('source'),...scope,customerId:undefined,customerName:undefined,total:1180,netAmount:1000,taxAmount:180,
+   relatedTransactions:[],items:[{...module.transaction('source').items[0],quantity:10,netAmount:1000,taxAmount:180,totalAmount:1180}]};
+  await f.adapter.saveDocument('config',{id:'current'});
+  await f.adapter.saveDocument('transactions',original);await f.adapter.saveDocument('transactionHistory',original);
+  const refund={...module.transaction('own-refund',true),type:'REFUND',...scope,customerId:undefined,customerName:undefined,
+   originalTransactionId:'source',total:472,netAmount:400,taxAmount:72,items:[{...original.items[0],quantity:4,netAmount:400,taxAmount:72,totalAmount:472}]};
+  const options={warehouseId:'W',originalSource:original,originalTransaction:{...original,status:'PARTIAL_REFUND'},conditions:new Map([[original.items[0].cartId,'SELLABLE']])};
+  const commit=f.adapter.saveDocumentsAtomically.bind(f.adapter);let writes=0;
+  f.adapter.saveDocumentsAtomically=async(...args:Parameters<typeof commit>)=>{writes++;await commit(...args);throw Error('simulated-lost-commit-ACK');};
+  await assert.rejects(()=>module.persistStandaloneRefundTransaction(refund,options),/lost-commit-ACK/);
+  f.adapter.saveDocumentsAtomically=async(...args:Parameters<typeof commit>)=>{writes++;return commit(...args);};
+  const snapshot=()=>JSON.stringify(f.sql.prepare('SELECT * FROM documents ORDER BY collection_name,doc_id').all());
+  const committed=snapshot(),writesAfter=writes;
+  const results=await Promise.all([module.persistStandaloneRefundTransaction(refund,options),module.persistStandaloneRefundTransaction(refund,options)]);
+  assert.equal(results[0].refund.id,'own-refund');assert.equal(results[1].refund.id,'own-refund');assert.equal(snapshot(),committed);assert.equal(writes,writesAfter);
+  assert.equal(f.rows('inventoryLedger').length,1);assert.equal(f.rows('inventoryLedger')[0].qtyIn,4);
+  for(const [candidate,changedOptions] of [
+   [{...refund,total:473},options],
+   [{...refund,customerId:'different-customer'},options],
+   [{...refund,items:[{...refund.items[0],quantity:5}]},options],
+   [refund,{...options,warehouseId:'other'}],
+   [refund,{...options,conditions:new Map([[original.items[0].cartId,'DAMAGED']])}],
+  ] as any[])await assert.rejects(()=>module.persistStandaloneRefundTransaction(candidate,changedOptions),/DUPLICATE_TRANSACTION_MISMATCH/);
+  await assert.rejects(()=>module.persistStandaloneRefundTransaction({...refund,id:'different-stale-command',total:944,netAmount:800,taxAmount:144,items:[{...refund.items[0],quantity:8,netAmount:800,taxAmount:144,totalAmount:944}]},options),/ORIGINAL_CHANGED/);
+  assert.equal(snapshot(),committed);assert.equal(writes,writesAfter);
+  for(const id of ['source','own-refund']){
+   const row=await f.adapter.getDocument('transactionHistory',id) as any;
+   await commit([{collectionName:'transactionHistory',document:{...row,zReportId:'Z'},expectedDocument:JSON.stringify(row)}]);
+   f.sql.prepare("DELETE FROM documents WHERE collection_name='transactions' AND doc_id=?").run(id);
+  }
+  const archived=snapshot();const replay=await module.persistStandaloneRefundTransaction(refund,options);
+  assert.equal(replay.refund.zReportId,'Z');assert.equal(snapshot(),archived);assert.equal(writes,writesAfter);assert.equal(f.rows('transactions').length,0);
+  assert.equal(f.rows('inventoryLedger').length,1);assert.equal(f.rows('v3TicketSettlements').length,0);
+  const orphan={...replay.refund};delete orphan.zReportId;
+  f.sql.prepare("UPDATE documents SET data=? WHERE collection_name='transactionHistory' AND doc_id='own-refund'").run(JSON.stringify(orphan));
+  const orphanState=snapshot();await assert.rejects(()=>module.persistStandaloneRefundTransaction(refund,options),/DUPLICATE_TRANSACTION_MISMATCH/);assert.equal(snapshot(),orphanState);assert.equal(writes,writesAfter);
+ }finally{f.sql.close();}
 });

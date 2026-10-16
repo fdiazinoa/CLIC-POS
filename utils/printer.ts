@@ -1,3 +1,4 @@
+import {resolveFiscalPrintDisplay} from '../services/fiscal/FiscalPrintEvidence';
 import { articleFormatTicketHTML } from '../services/articleFormats/ticket';
 import { formatQuantity, terminalQuantityPresentation } from './quantityPresentation';
 import { weightLineLabel, displayWeightQuantity } from './scaleWeight';
@@ -246,6 +247,11 @@ export const buildTicketTaxPresentationHtml = (
 };
 
 const printTicketInternal = async (transaction: Transaction, config: BusinessConfig): Promise<boolean> => {
+    const persisted=await dbAdapter.getDocument<Transaction>('transactions',transaction.id) || await dbAdapter.getDocument<Transaction>('transactionHistory',transaction.id);
+    if(persisted)transaction=persisted;
+    const fiscalPrint=await resolveFiscalPrintDisplay(transaction);
+    const escapeFiscal=(value:string)=>value.replace(/[&<>"']/g,character=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[character]!));
+    const scriptJson=(value:string)=>JSON.stringify(value).replace(/</g,'\\u003c').replace(/\u2028/g,'\\u2028').replace(/\u2029/g,'\\u2029');
     const { companyInfo, currencySymbol, receiptConfig, currencies } = config;
     const users = ((await dbAdapter.getCollection('users')) || []) as any[];
     const salesUsers = getTerminalSnapshotSellers(config, transaction.terminalId);
@@ -588,6 +594,7 @@ const printTicketInternal = async (transaction: Transaction, config: BusinessCon
                 </div>
             ` : ''}
 
+            ${fiscalPrint ? `<div class="divider"></div><div style="text-align:center"><b>COMPROBANTE ELECTRÓNICO FIRMADO</b><div>${escapeFiscal(fiscalPrint.certifiedNcf)}</div><div id="fiscal-qrcode"></div><div>Código de seguridad: ${escapeFiscal(fiscalPrint.securityCode)}</div><div>Fecha firma: ${escapeFiscal(fiscalPrint.signedAt)}</div><div>Estado DGII: ${fiscalPrint.dgiiAccepted?'Aceptado':'Pendiente de confirmación'}</div></div>` : transaction.ncfType?.startsWith('E') ? '<div>Representación fiscal firmada aún no disponible.</div>' : ''}
             <div class="footer">
                 ${receiptConfig?.footerMessage ? `<div style="margin-bottom: 8px;">${receiptConfig.footerMessage}</div>` : ''}
                 <div>¡Gracias por su compra!</div>
@@ -608,10 +615,11 @@ const printTicketInternal = async (transaction: Transaction, config: BusinessCon
             
             <script>
                 window.onload = function() {
+                    ${fiscalPrint ? `try { new QRCode(document.getElementById("fiscal-qrcode"),{text:${scriptJson(fiscalPrint.qrUrl)},width:140,height:140,correctLevel:QRCode.CorrectLevel.M}); } catch(error) { document.getElementById("fiscal-qrcode").textContent="QR fiscal no disponible"; }` : ''}
                     ${receiptConfig?.showQr ? `
                     try {
                         new QRCode(document.getElementById("qrcode"), {
-                            text: "${qrPayload}",
+                            text: ${scriptJson(qrPayload)},
                             width: 100,
                             height: 100,
                             colorDark : "#000000",
@@ -638,7 +646,7 @@ const printTicketInternal = async (transaction: Transaction, config: BusinessCon
         ''
     );
 
-    const escPosBase64 = buildEscPosTicketPayload(transaction, config, salesUsers.length > 0 ? salesUsers : users);
+    const escPosBase64 = buildEscPosTicketPayload(transaction, config, salesUsers.length > 0 ? salesUsers : users, fiscalPrint);
     let printedSilently = false;
 
     if (escPosBase64) {

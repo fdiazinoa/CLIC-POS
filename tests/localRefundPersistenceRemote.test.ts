@@ -88,3 +88,22 @@ test('advances local fiscal state to the B04 reserved by ERP without moving back
   assert.equal(second.allocations[0].nextNumber, 8);
   assert.equal(second.buffers[0].currentNumber, 8);
 });
+
+test('fresh partial refund during approval cannot silently rebase captured commercial version or write a second refund',async()=>{
+ const {nativeFixture}=await import('./articleFormatsNativeFixture');
+ const {readRefundOriginal}=await import('../services/localRefundPersistence');
+ const f=await nativeFixture();const get=db.getDocument;
+ try{
+  const binding=(f.db.prepare('SELECT binding FROM master_v3_operational_owner').get() as any).binding;
+  const original:any={id:'source',status:'COMPLETED',items:[{...item,quantity:10,v3SaleAuthority:{binding}}],relatedTransactions:[],v3Binding:binding,v3InventoryBaseline:'baseline',total:1000};
+  const fresh={...original,status:'PARTIAL_REFUND',relatedTransactions:['already-refunded-4']};
+  for(const collection of ['transactions','transactionHistory'])f.db.prepare('INSERT INTO documents VALUES(?,?,?,?,?)').run(collection,'source',JSON.stringify(fresh),0,'now');
+  f.db.prepare('INSERT INTO documents VALUES(?,?,?,?,?)').run('transactions','already-refunded-4',JSON.stringify({id:'already-refunded-4',documentType:'REFUND',originalTransactionId:'source',items:[{...item,quantity:4}],total:400}),0,'now');
+  f.db.prepare('INSERT INTO documents VALUES(?,?,?,?,?)').run('inventoryLedger','first-refund-ledger',JSON.stringify({id:'first-refund-ledger',qtyIn:4,qtyOut:0}),0,'now');
+  const before=f.state();db.getDocument=(async(name:string,id:string)=>name==='config'?{id:'current'}:f.adapter.getDocument(name,id)) as any;
+  await assert.rejects(()=>readRefundOriginal(original),/ORIGINAL_CHANGED/);
+  await assert.rejects(()=>persistStandaloneRefundTransaction({...original,id:'second-refund-8',documentType:'REFUND',total:800,items:[{...original.items[0],quantity:8}]} as any,
+   {warehouseId:'W',originalSource:original,originalTransaction:{...original,status:'PARTIAL_REFUND'}}),/ORIGINAL_CHANGED/);
+  assert.deepEqual(f.state(),before);assert.equal(f.documents('inventoryLedger').length,1);assert.equal(f.documents('inventoryLedger')[0].qtyIn,4);
+ }finally{db.getDocument=get;f.db.close();}
+});

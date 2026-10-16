@@ -19,7 +19,7 @@ import {
 const router = express.Router();
 
 const SUPPORTED_PROVIDER_IDS: FiscalProviderId[] = ['POLARIS', 'DIGIFACT'];
-const SUPPORTED_DOCUMENT_CODES: ElectronicDocumentCode[] = ['E31', 'E32', 'E34'];
+const SUPPORTED_DOCUMENT_CODES: ElectronicDocumentCode[] = ['E31', 'E32', 'E34', 'E44', 'E45'];
 
 const normalizeProviderId = (value: unknown): FiscalProviderId => {
     const normalized = String(value || 'POLARIS').trim().toUpperCase() as FiscalProviderId;

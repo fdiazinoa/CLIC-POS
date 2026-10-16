@@ -263,6 +263,17 @@ export interface FiscalComplianceConfig {
   reserveAlert?: FiscalReserveAlertConfig;
 }
 
+/** Frozen at the exact local number reservation; never reconstructed from current defaults on retry. */
+export interface FiscalIssuanceSnapshot {
+ schemaVersion: 1;
+ source: 'POS_FISCAL_RESERVATION_V1';
+ ncf: string; ncfType: FiscalDocumentCode; sequence: number;
+ fiscalRangeId: string; fiscalAllocationId: string; prefix: string;
+ rangeStart: number; rangeEnd: number; allocationStart: number; allocationEnd: number;
+ expiryDate: string | null; issuerRnc: string | null;
+ tenantId: string | null; companyId: string | null; terminalId: string; capturedAt: string;
+}
+
 export interface FiscalRangeDGII {
   id: string;
   type: FiscalDocumentCode;
@@ -1905,6 +1916,8 @@ export interface Transaction {
   fiscalReferenceId?: string;
   fiscalCertifiedNcf?: string;
   fiscalProviderStatus?: string;
+  fiscalIssuance?: FiscalIssuanceSnapshot;
+  fiscalSignedAt?: string;
   fiscalQrUrl?: string;
   fiscalSecurityCode?: string;
   fiscalResponseMessage?: string;
@@ -1913,6 +1926,8 @@ export interface Transaction {
   fiscalClassificationAttemptedAt?: string;
   fiscalSubmissionScope?: import('./services/fiscal/FiscalStatusProof').FiscalStatusScope;
   fiscalLookupApproval?: import('./services/fiscal/FiscalStatusProof').FiscalStatusScope;
+  fiscalPrintScope?: import('./services/fiscal/FiscalStatusProof').FiscalStatusScope;
+  fiscalPrintProof?: import('./services/fiscal/FiscalStatusProof').FiscalStatusProof;
   fiscalStatusProof?: import('./services/fiscal/FiscalStatusProof').FiscalStatusProof;
   affectedNCF?: string;             // NCF de la factura afectada (para Notas de Crédito B04)
   affectedInvoiceNumber?: string;   // No. de factura afectada (displayId para búsquedas)
@@ -1999,6 +2014,7 @@ export interface Transaction {
 }
 
 export interface FiscalDocumentCorrectionSnapshot {
+  fiscalIssuance?: FiscalIssuanceSnapshot;
   fiscalCode?: FiscalDocumentCode | null;
   ncf?: string;
   customerId?: string;
