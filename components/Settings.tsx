@@ -130,6 +130,7 @@ interface SettingsProps {
   onAdjustStock: (adjustments: { productId: string; quantity: number }[]) => void;
   onOpenFinance?: (initialCashMovementType?: 'IN' | 'OUT' | 'X_REPORT') => void;
   onOpenZReport: () => void;
+  onOpenHistory?: () => void;
   onOpenSupplyChain: () => void;
   onOpenFranchise: () => void;
   onOpenTableDesigner: () => void;
@@ -1059,6 +1060,9 @@ const Settings: React.FC<SettingsProps> = (props) => {
                   <SettingsCard icon={ShoppingBag} label="Tipo de servicio" description="En local, Para llevar y Delivery" color="bg-violet-600" onClick={() => setCurrentView('SERVICE_TYPES')} locked={!hasPermission('SETTINGS_TAXES')} />
                   <SettingsCard icon={ListChecks} label="Cierre X" description="Arqueo parcial sin limpiar ventas" color="bg-blue-700" onClick={() => props.onOpenFinance ? props.onOpenFinance('X_REPORT') : props.onOpenZReport()} locked={!hasPermission('POS_CLOSE_X')} />
                   <SettingsCard icon={Lock} label="Cierre de Caja" description="Corte Z y Auditoría Fiscal" color="bg-slate-900" onClick={props.onOpenZReport} locked={!hasPermission('POS_CLOSE_Z')} />
+                  <SettingsCard icon={History} label="Historial de facturas" description="Consultar facturas realizadas y su estado fiscal" color="bg-cyan-700" onClick={() => {
+                    if (!isOrderTakerMode && hasPermission('SETTINGS_ACCESS')) props.onOpenHistory?.();
+                  }} locked={!hasPermission('SETTINGS_ACCESS') || !props.onOpenHistory} />
                   <SettingsCard icon={FileText} label="Documentos" description="Series, NCF, Prefijos" color="bg-blue-400" onClick={() => setCurrentView('DOCUMENTS')} locked={!hasPermission('SETTINGS_TAXES')} />
                 </div>
               </section>

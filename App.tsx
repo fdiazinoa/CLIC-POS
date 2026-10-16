@@ -2232,6 +2232,7 @@ const AppContent: React.FC = () => {
     }
     return isVisorMode ? 'VISOR' : 'LOGIN';
   });
+  const historyReturnViewRef = useRef<'POS' | 'SETTINGS' | 'SETTINGS_SYNC'>('POS');
   const previousAccountActionViewRef = useRef(currentView);
   useEffect(() => {
     const previousView = previousAccountActionViewRef.current;
@@ -11550,6 +11551,8 @@ const AppContent: React.FC = () => {
     return attachFiscalStatusLifecycle(fiscalStatusWorker,{
       hydrated:isDataLoaded&&fiscalHistoryHydrated&&isSecurityLoaded,
       online:()=>navigator.onLine,addOnline:listener=>window.addEventListener('online',listener),removeOnline:listener=>window.removeEventListener('online',listener),
+      addTransactionsUpdated:listener=>window.addEventListener('transactionsUpdated',listener),
+      removeTransactionsUpdated:listener=>window.removeEventListener('transactionsUpdated',listener),
       syncTime:backgroundSyncManager.getState().lastSyncTime,subscribe:listener=>backgroundSyncManager.subscribe(listener),
     });
   }, [fiscalStatusWorker,isDataLoaded,fiscalHistoryHydrated,isSecurityLoaded,deviceId,config.companyInfo.rnc,fiscalStatusLifecycleKey]);
@@ -13931,8 +13934,9 @@ const AppContent: React.FC = () => {
             }}
             onOpenAttendance={() => setCurrentView('ATTENDANCE')}
             onOpenCustomers={() => setCurrentView('CUSTOMERS')}
-            onOpenHistory={() => setCurrentView('HISTORY')}
+            onOpenHistory={() => { historyReturnViewRef.current = 'POS'; setCurrentView('HISTORY'); }}
             onOpenInvoiceActions={(scanValue) => {
+              historyReturnViewRef.current = 'POS';
               setScanTargetTicketId(scanValue);
               setCurrentView('HISTORY');
             }}
@@ -14225,6 +14229,14 @@ const AppContent: React.FC = () => {
             }}
             onOpenFinance={handleOpenFinanceFromPos}
             onOpenZReport={() => { void handleOpenZReport(); }}
+            onOpenHistory={() => {
+              const role = roles.find(row => row.id === currentUser?.role);
+              if (getCurrentDeviceRole() === DeviceRole.ORDER_TAKER ||
+                  (!isAdminMode && (!currentUser || !role?.permissions.some(permission => permission === 'ALL' || permission === 'SETTINGS_ACCESS')))) return;
+              historyReturnViewRef.current = 'SETTINGS';
+              setScanTargetTicketId(null);
+              setCurrentView('HISTORY');
+            }}
             onOpenSupplyChain={() => setCurrentView('SUPPLY_CHAIN')}
             onOpenFranchise={() => setCurrentView('FRANCHISE_DASHBOARD')}
             onOpenTableDesigner={() => {
@@ -14297,6 +14309,14 @@ const AppContent: React.FC = () => {
             }}
             onOpenFinance={handleOpenFinanceFromPos}
             onOpenZReport={() => { void handleOpenZReport(); }}
+            onOpenHistory={() => {
+              const role = roles.find(row => row.id === currentUser?.role);
+              if (getCurrentDeviceRole() === DeviceRole.ORDER_TAKER ||
+                  (!isAdminMode && (!currentUser || !role?.permissions.some(permission => permission === 'ALL' || permission === 'SETTINGS_ACCESS')))) return;
+              historyReturnViewRef.current = 'SETTINGS_SYNC';
+              setScanTargetTicketId(null);
+              setCurrentView('HISTORY');
+            }}
             onOpenSupplyChain={() => setCurrentView('SUPPLY_CHAIN')}
             onOpenFranchise={() => setCurrentView('FRANCHISE_DASHBOARD')}
             onOpenTableDesigner={() => {
@@ -14394,7 +14414,9 @@ const AppContent: React.FC = () => {
             onUpdateConfig={handleConfigUpdate}
             onClose={() => {
               setScanTargetTicketId(null); // Clear selection on close
-              setCurrentView('POS');
+              const returnView = historyReturnViewRef.current;
+              historyReturnViewRef.current = 'POS';
+              setCurrentView(returnView);
             }}
             onRefundTransaction={async (tx, items, conditions, reason, options) => {
               // Direct call support
