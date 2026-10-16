@@ -1,6 +1,6 @@
 import { assertRefundFinancialSource,assertRefundOriginalState,assertRefundCommercialVersion } from './sync/LargeMasterSyncV3RefundAuthority';
 import { BusinessConfig, CartItem, Transaction } from '../types';
-import { isV3FinancialDocument, persistV3FinancialTransaction } from './sync/LargeMasterSyncV3FinancialCommit';
+import { isV3FinancialDocument, persistV3FinancialTransaction, readV3CommittedRefundReplay } from './sync/LargeMasterSyncV3FinancialCommit';
 import { db } from '../utils/db';
 import { getRemainingRefundQuantities, hasRefundableItems } from '../utils/refundAvailability';
 import { assertFormatsPostingClosed } from './articleFormats/activation';
@@ -75,6 +75,11 @@ export async function persistStandaloneRefundTransaction(
   };
 
   if (isV3FinancialDocument(persistedRefund)) {
+    const replayOriginal=originalTransaction&&options.persistOriginal!==false ? {...originalTransaction,
+      relatedTransactions:Array.from(new Set([...(originalTransaction.relatedTransactions || []),persistedRefund.id])),syncStatus:'PENDING' as const} : undefined;
+    const committed=await readV3CommittedRefundReplay(persistedRefund,options.warehouseId,{refund:true,conditions:options.conditions,
+      original:replayOriginal,adjustCustomerBalance:options.adjustCustomerBalance,skipWalletDeposit:options.skipWalletDeposit});
+    if(committed)return {refund:committed};
     const config = await db.getDocument('config', 'current') as BusinessConfig | null;
     if (!config) throw new Error('SYNC_V3_CONFIG_REQUIRED');
     const activeOriginal = originalTransaction ? await db.getDocument('transactions', originalTransaction.id) as Transaction | null : null;

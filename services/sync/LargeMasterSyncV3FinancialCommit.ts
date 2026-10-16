@@ -82,6 +82,25 @@ export type V3FinancialOptions = { refund?: boolean; conditions?: Map<string, 'S
     adjustCustomerBalance?: boolean; skipWalletDeposit?: boolean };
 type FinancialEntry = { transaction: Transaction; options?: V3FinancialOptions };
 type FinancialResult = { transaction: Transaction; created: boolean };
+const financialOperationIdentity=(transaction:Transaction,warehouseId:string,options:V3FinancialOptions):string=>JSON.stringify([
+  financialIdentity(transaction),warehouseId,options.refund===true,[...(options.conditions || new Map()).entries()].sort(),
+  options.adjustCustomerBalance===true,options.skipWalletDeposit===true,options.original?financialIdentity(options.original):null,
+]);
+const assertFinancialReplay=(stored:Transaction|null,transaction:Transaction,identity:string):void=>{
+  if(!stored||financialIdentity(stored)!==financialIdentity(transaction)||stored.v3CommitFingerprint!==identity)
+    throw new LargeMasterSyncV3Error('SYNC_V3_DUPLICATE_TRANSACTION_MISMATCH');
+};
+/** A committed receipt is checked with the same canonical identity as the financial writer, never by ID alone. */
+export const readV3CommittedRefundReplay=async(transaction:Transaction,warehouseId:string,options:V3FinancialOptions):Promise<Transaction|null>=>{
+  const [active,history]=await Promise.all([db.getDocument('transactions',transaction.id),db.getDocument('transactionHistory',transaction.id)]) as [Transaction|null,Transaction|null];
+  if(!active&&!history)return null;
+  const session=await getLargeMasterSyncV3OperationalSession();await session.assertCurrent();
+  const identity=financialOperationIdentity(transaction,warehouseId,options);
+  if(!options.refund||!history||!active&&!history.zReportId||history.v3Binding!==session.binding||active&&active.v3Binding!==session.binding)
+    throw new LargeMasterSyncV3Error('SYNC_V3_DUPLICATE_TRANSACTION_MISMATCH');
+  assertFinancialReplay(history,transaction,identity);if(active)assertFinancialReplay(active,transaction,identity);
+  return history.zReportId?history:active!;
+};
 const commits = new Map<string, { identity: string; promise: Promise<FinancialResult[]> }>();
 
 /** Prepare every document before one native transaction; no split publication can precede its companion. */
@@ -89,9 +108,7 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
   if (!entries.length || new Set(entries.map(entry => entry.transaction.id)).size !== entries.length) {
     return Promise.reject(new LargeMasterSyncV3Error('SYNC_V3_DUPLICATE_TRANSACTION_MISMATCH'));
   }
-  const identities = entries.map(({ transaction, options = {} }) => JSON.stringify([financialIdentity(transaction), warehouseId, options.refund === true,
-    [...(options.conditions || new Map()).entries()].sort(), options.adjustCustomerBalance === true, options.skipWalletDeposit === true,
-    options.original ? financialIdentity(options.original) : null]));
+  const identities = entries.map(({transaction,options={}})=>financialOperationIdentity(transaction,warehouseId,options));
   const identity = JSON.stringify([entries.map(entry => entry.transaction.id), identities]);
   const pending = entries.map(entry => commits.get(entry.transaction.id)).find(Boolean);
   if (pending) return pending.identity === identity ? pending.promise
@@ -101,8 +118,7 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
     await session.assertCurrent();
     const existing = await Promise.all(entries.map(entry => db.getDocument('transactions', entry.transaction.id) as Promise<Transaction | null>));
     if (existing.some(Boolean)) {
-      if (existing.some((stored, index) => !stored || financialIdentity(stored) !== financialIdentity(entries[index].transaction)
-        || stored.v3CommitFingerprint !== identities[index])) throw new LargeMasterSyncV3Error('SYNC_V3_DUPLICATE_TRANSACTION_MISMATCH');
+      existing.forEach((stored,index)=>assertFinancialReplay(stored,entries[index].transaction,identities[index]));
       return existing.map(transaction => ({ transaction: transaction!, created: false }));
     }
     for (const { transaction } of entries) {
