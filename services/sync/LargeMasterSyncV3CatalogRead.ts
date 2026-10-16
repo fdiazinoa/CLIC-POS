@@ -74,7 +74,7 @@ export class LargeMasterSyncV3CatalogRead {
       || configured(this.getContext(), after).key !== this.scope.key) throw new LargeMasterSyncV3Error('SYNC_V3_CATALOG_CONTEXT_CHANGED');
   }
 
-  async page(request: Pick<V3CatalogPageRequest, 'query' | 'category' | 'afterId' | 'limit' | 'departmentId' | 'sectionId' | 'familyId' | 'brandId' | 'categoryId'>) {
+  async page(request: Pick<V3CatalogPageRequest, 'query' | 'category' | 'afterId' | 'limit' | 'departmentId' | 'sectionId' | 'familyId' | 'brandId' | 'categoryId' | 'posCategoryId'>) {
     await this.assertCurrent();
     const result = await this.runtime.readAdministrativeCatalogPage({ ...request, ...this.scope,
       inventoryVersion: this.inventory.version, inventoryCursor: this.inventory.cursor });

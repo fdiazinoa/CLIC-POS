@@ -844,9 +844,10 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
       familyId: 'a.family_id',
       brandId: "json_extract(CASE WHEN json_valid(a.record_json) THEN a.record_json ELSE '{}' END, '$.brandId')",
       categoryId: 'a.category_id',
+      posCategoryId: 'a.pos_category_id',
     } as const;
     for (const key of Object.keys(classificationColumns) as Array<keyof typeof classificationColumns>) {
-      const value = request[key]?.trim();
+      const value = key === 'posCategoryId' ? normalizeV3CategoryKey(request[key]) : request[key]?.trim();
       if (!value) continue;
       predicate += ` AND ${classificationColumns[key]} = ?`;
       bindings.push(value);
@@ -860,7 +861,10 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
       coalesce(SUM(CASE WHEN a.article_id > coalesce(?, '') THEN 1 ELSE 0 END), 0) AS remaining
       FROM master_v3_articles a WHERE ${predicate}`, [request.afterId ?? null, ...bindings]));
     const page = rows(await db.query(`SELECT a.article_id AS id, a.description AS name, a.sku,
-      a.category_id AS categoryId, a.article_type AS type, a.active, a.sellable, p.price, b.qty_on_hand AS stock,
+      a.category_id AS categoryId, a.pos_category_id AS posCategoryId, a.family_id AS familyId,
+      ${classificationColumns.departmentId} AS departmentId, ${classificationColumns.sectionId} AS sectionId,
+      ${classificationColumns.brandId} AS brandId,
+      a.article_type AS type, a.active, a.sellable, p.price, b.qty_on_hand AS stock,
       CASE WHEN b.item_id IS NULL THEN NULL ELSE b.qty_on_hand - b.qty_reserved - b.qty_committed END AS balance
       FROM master_v3_articles a LEFT JOIN master_v3_prices p ON p.sync_version = a.sync_version
         AND p.article_id = a.article_id AND p.tariff_id = ?
@@ -878,6 +882,9 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
       nextCursor: Number(counts?.remaining || 0) > page.length && page.length ? String(page[page.length - 1].id) : null,
       rows: page.map(row => ({ id: String(row.id), name: String(row.name || row.id), sku: row.sku == null ? null : String(row.sku),
         barcode: barcodes.get(String(row.id)) ?? null, categoryId: row.categoryId == null ? null : String(row.categoryId),
+        departmentId: row.departmentId == null ? null : String(row.departmentId), sectionId: row.sectionId == null ? null : String(row.sectionId),
+        familyId: row.familyId == null ? null : String(row.familyId), brandId: row.brandId == null ? null : String(row.brandId),
+        posCategoryId: row.posCategoryId == null ? null : String(row.posCategoryId),
         type: row.type == null ? null : String(row.type), active: Number(row.active) === 1, sellable: Number(row.sellable) === 1,
         price: row.price == null ? null : Number(row.price), balance: row.balance == null ? null : Number(row.balance),
         stock: row.stock == null ? null : Number(row.stock) })) };

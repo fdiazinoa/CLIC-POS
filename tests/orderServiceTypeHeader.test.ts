@@ -20,13 +20,14 @@ test('compact header button shows each current service and opens the existing se
   }
 });
 
-test('service is last after Actions in both responsive headers, with no ticket strip or action-grid duplicate', () => {
+test('desktop keeps only service while mobile retains its action order, without action-grid duplicate', () => {
   const source = readFileSync(new URL('../components/POSInterface.tsx', import.meta.url), 'utf8');
   const mobile = source.slice(source.indexOf('data-testid="mobile-sidebar-tabs"'), source.indexOf('{/* CUSTOMER PILL (MOBILE) */}'));
   const desktop = source.slice(source.indexOf('data-testid="desktop-ticket-toolbar"'), source.indexOf('{shouldApplyServiceCharge &&'));
   for (const header of [mobile, desktop]) {
     assert.equal((header.match(/<OrderServiceTypeButton /g) || []).length, 1);
-    assert.ok(header.indexOf('<OrderServiceTypeButton ') > header.indexOf('aria-label="Abrir acciones rápidas"'));
+    if (header === mobile) assert.ok(header.indexOf('<OrderServiceTypeButton ') > header.indexOf('aria-label="Abrir acciones rápidas"'));
+    else assert.doesNotMatch(header, /aria-label="(?:Guardar ticket|Abrir acciones rápidas|Abrir carrito|Borrar artículos nuevos del ticket)/);
     assert.match(header, /!isKioskMode && <OrderServiceTypeButton/);
     assert.match(header, /value=\{effectiveOrderServiceType\}/);
   }

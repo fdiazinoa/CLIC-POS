@@ -53,10 +53,11 @@ function fixture(size = 260) {
     hook:(callback?:()=>void)=>{hook=callback;}};
 }
 
+// Counts include inventory snapshot + anchor reads and both owner/context fences in the current baseline.
 test('real SQLite keyset pages all 260 including inactive/unpriced/advanced; bridge never returns 101',async()=>{
   const f=fixture();try {let afterId:string|null=null;const ids:string[]=[];
     do {const start=f.queries.length;const page=await f.store.readAdministrativeCatalogPage(version,{...f.request,afterId,limit:100});
-      assert.equal(page.total,260);assert.equal(page.filteredTotal,260);assert.equal(f.queries.length-start,4);
+      assert.equal(page.total,260);assert.equal(page.filteredTotal,260);assert.equal(f.queries.length-start,6);
       ids.push(...page.rows.map(row=>row.id));afterId=page.nextCursor;
       if(ids.length===100){assert.equal(page.rows[0].active,false);assert.equal(page.rows[0].sellable,false);
         assert.equal(page.rows[0].type,'KIT');assert.equal(page.rows[0].price,0);assert.equal(page.rows[0].balance,0);
@@ -86,7 +87,7 @@ test('53000 articles and 53000 native codes use uncorrelated actual COUNT/PAGE p
       const start=f.queries.length;
       const page=await f.store.readAdministrativeCatalogPage(version,{...f.request,query,limit:500});
       assert.equal(page.total,53000);assert.equal(page.filteredTotal,expected);assert.equal(page.rows.length,Math.min(expected,100));
-      assert.equal(f.queries.length-start,expected?4:3);assert.equal(page.nextCursor,expected?'P000099':null);
+      assert.equal(f.queries.length-start,expected?6:5);assert.equal(page.nextCursor,expected?'P000099':null);
       for(const generated of f.queries.slice(start).filter(row=>row.sql.includes('AS filteredTotal')||row.sql.includes('SELECT a.article_id AS id'))){
         const plan=f.sql.prepare('EXPLAIN QUERY PLAN '+generated.sql).all(...generated.params as any[]);
         assert.ok(!plan.some(row=>String(row.detail).includes('CORRELATED')));
@@ -116,11 +117,11 @@ test('shared generated membership predicate preserves aliases/version/literal/ca
   }finally{f.sql.close();}
 });
 test('cached reader validates native tariff even with empty legacy tariffs; batches exact-baseline delta and fences owner',async()=>{
-  const f=fixture();try {const reader=await LargeMasterSyncV3CatalogRead.open(()=>f.context,f.deps);assert.equal(f.queries.length,6);
-    const start=f.queries.length;const page=await reader.page({limit:25});assert.equal(f.queries.length-start,11);
+  const f=fixture();try {const reader=await LargeMasterSyncV3CatalogRead.open(()=>f.context,f.deps);assert.equal(f.queries.length,8);
+    const start=f.queries.length;const page=await reader.page({limit:25});assert.equal(f.queries.length-start,15);
     assert.equal(page.rows[0].balance,2);assert.equal(page.rows[1].balance,null);assert.equal(f.writes(),0);
     const emptyStart=f.queries.length;assert.equal((await reader.page({query:'absent'})).rows.length,0);
-    assert.equal(f.queries.length-emptyStart,9);
+    assert.equal(f.queries.length-emptyStart,13);
     f.sql.exec("UPDATE master_v3_operational_owner SET binding='foreign'");
     await assert.rejects(reader.page({}),{code:'SYNC_V3_CATALOG_VERSION_CHANGED'});
   }finally{f.sql.close();}
@@ -208,4 +209,24 @@ test('classification filters combine in SQLite before count and keyset page, pre
     assert.equal((await reader.page({...filters})).rows[0].stock,14);
     assert.equal(f.writes(),0);
   } finally {f.sql.close();}
+});
+
+test('five administrative IDs remain distinct from SKU/ERP category and filter before bounded count/keyset',async()=>{
+ const f=fixture();try{
+  const filters={departmentId:'DEPT-ID',sectionId:'SECTION-ID',familyId:'FAMILY-ID',brandId:'BRAND-ID',posCategoryId:'pos-id'};
+  const update=f.sql.prepare('UPDATE master_v3_articles SET description=?,family_id=?,category_id=?,pos_category_id=?,record_json=? WHERE sync_version=2 AND article_id=?');
+  for(let n=0;n<65;n++)update.run('Agua Dasani',filters.familyId,'ERP-CATEGORY',filters.posCategoryId,JSON.stringify({departmentId:filters.departmentId,sectionId:filters.sectionId,brandId:filters.brandId}),`P${String(n).padStart(6,'0')}`);
+  for(const key of Object.keys(filters) as Array<keyof typeof filters>){const page=await f.store.readAdministrativeCatalogPage(version,{...f.request,[key]:filters[key],limit:25});assert.equal(page.filteredTotal,65);assert.equal(page.rows.length,25);}
+  const ids:string[]=[];let afterId:string|null=null;do{
+   const page=await f.store.readAdministrativeCatalogPage(version,{...f.request,...filters,query:'agua',afterId,limit:25});assert.equal(page.total,260);assert.equal(page.filteredTotal,65);assert.ok(page.rows.length<=25);
+   assert.ok(page.rows.every(row=>row.id!==row.sku&&row.name==='Agua Dasani'&&row.categoryId==='ERP-CATEGORY'&&Object.entries(filters).every(([key,value])=>(row as any)[key]===value)));ids.push(...page.rows.map(row=>row.id));afterId=page.nextCursor;
+  }while(afterId);assert.equal(new Set(ids).size,65);
+  assert.equal((await f.store.readAdministrativeCatalogPage(version,{...f.request,...filters,posCategoryId:'  POS-ID  '})).filteredTotal,65);
+  assert.equal((await f.store.readAdministrativeCatalogPage(version,{...f.request,categoryId:'ERP-CATEGORY'})).filteredTotal,65);
+  assert.equal((await f.store.readAdministrativeCatalogPage(version,{...f.request,categoryId:'pos-id'})).filteredTotal,0);
+  assert.equal((await f.store.readAdministrativeCatalogPage(version,{...f.request,posCategoryId:'ERP-CATEGORY'})).filteredTotal,0);
+  assert.equal((await f.store.readAdministrativeCatalogPage(version,{...f.request,...filters,departmentId:'dept-id'})).filteredTotal,0,'D/S/F/B IDs retain exact case');
+  const reader=await LargeMasterSyncV3CatalogRead.open(()=>f.context,f.deps);assert.equal((await reader.page({posCategoryId:'pos-id'})).filteredTotal,65);
+  assert.equal((await reader.page({posCategoryId:'REF0'})).filteredTotal,0);assert.equal(f.writes(),0);assert.ok(f.queries.every(row=>row.length<=100));
+ }finally{f.sql.close();}
 });
