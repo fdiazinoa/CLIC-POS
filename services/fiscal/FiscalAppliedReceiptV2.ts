@@ -6,22 +6,26 @@ import {sha256Utf8} from '../sync/LargeMasterSyncV3Client';
 import {captureFiscalBoundContext} from './FiscalBoundContext';
 import {buildSalePostedSummary} from '../sync/SalePostedContract';
 export const APPLIED_PROFILE='POS_V3_DIRECT_STOCK_PER_DOCUMENT_DOP_V1';
+export const TAX_SERVICE_APPLIED_PROFILE='POS_V3_DIRECT_STOCK_PER_DOCUMENT_DOP_TAX_SERVICE_V1';
+export type AppliedProfile=typeof APPLIED_PROFILE|typeof TAX_SERVICE_APPLIED_PROFILE;
+export type AppliedTaxServiceFinancial={netAmount:number;taxAmount:number;vatAmount:number;serviceChargeAmount:number;taxBreakdown:NonNullable<Transaction['taxBreakdown']>;serviceType:'DINE_IN';serviceTaxPolicySnapshot:NonNullable<Transaction['serviceTaxPolicySnapshot']>};
 export const APPLIED_SOURCE='ERP_POS_APPLIED_RECEIPT_V2';
 export const OBSERVATION_ALGORITHM='SHA256_CANONICAL_JSON_APPLIED_OBSERVATION_V2';
 const SALE_ALGORITHM='SHA256_CANONICAL_JSON_FISCAL_SOURCE_PROJECTION_V1';
 const PAYMENT_ALGORITHM='SHA256_CANONICAL_JSON_PAYMENT_SOURCE_PROJECTION_V1';
 export type FiscalOutboxAnchor={event_id:string;event_type:string;aggregate_type:string;aggregate_id:string;schema_version:number;payload_json:string};
 export type FiscalAppliedAnchors={sale:FiscalOutboxAnchor;payment:FiscalOutboxAnchor|null};
-export type AppliedReceiptV2={schemaVersion:2;source:typeof APPLIED_SOURCE;decision:'READY';code:'FISCAL_APPLIED_RECEIPT_READY';profile:typeof APPLIED_PROFILE;
+type AppliedReceiptCommon={schemaVersion:2;source:typeof APPLIED_SOURCE;decision:'READY';code:'FISCAL_APPLIED_RECEIPT_READY';profile:AppliedProfile;
  scope:Record<'tenantId'|'companyId'|'storeId'|'terminalId'|'deviceId',string>;sourceDocument:{transactionId:string;eventId:string;eventType:'SALE_POSTED';inboxId:string;checksum:string;checksumAlgorithm:typeof SALE_ALGORITHM};
  document:{erpDocumentId:string;ncf:string;ncfType:'E31'|'E32'|'E44'|'E45';sourceSignedTotal:number;currency:'DOP'};fiscalIssuance:NonNullable<Transaction['fiscalIssuance']>;
  issuer:{rnc:string;providerId:'MSELLER';environment:number;credentialCompanyId:string;credentialAccountRnc:string};environmentBasis:'HISTORICAL_SOURCE';historicalEnvironment:number;
  posAuthority:{v3Binding:string;v3WarehouseId:string;v3InventoryBaseline:string;v3CommitFingerprint:string;lines:Array<{itemId:string;cartId:string;v3SaleAuthority:any}>};
  erpApplicationPlan:{schemaVersion:1;source:'ERP_PRE_APPLICATION_PLAN_V1';id:string;digest:string;capturedAt:string;costAndLocationBasis:'ERP_CAPTURED_BEFORE_NEW_APPLICATION';policy:'PER_DOCUMENT'};
- materialization:{profile:typeof APPLIED_PROFILE;lineIds:string[];movementIds:string[];journalEntryIds:string[];journalLineIds:string[];inventoryLocalId:string;warehouseId:string};
+ materialization:{profile:AppliedProfile;lineIds:string[];movementIds:string[];journalEntryIds:string[];journalLineIds:string[];inventoryLocalId:string;warehouseId:string};
  settlement:{mode:'NONE'|'CASH';sourcePayment:null|{eventId:string;eventType:'PAYMENT_POSTED';inboxId:string;checksum:string;checksumAlgorithm:typeof PAYMENT_ALGORITHM};erpReceiptId:string|null;accountingEntryId:string|null;planId:string|null};
  observation:{algorithm:typeof OBSERVATION_ALGORITHM;digest:string};observedAt:string};
-export type AppliedReceiptExpectation={schemaVersion:2;source:typeof APPLIED_SOURCE;profile:typeof APPLIED_PROFILE;sourceTransactionId:string;sourceEventId:string;sourceEventType:'SALE_POSTED';sourcePaymentEventId:string|null;sourceChecksum:string;observation:AppliedReceiptV2['observation']};
+export type AppliedReceiptV2=AppliedReceiptCommon&({profile:typeof APPLIED_PROFILE;financial?:never}|{profile:typeof TAX_SERVICE_APPLIED_PROFILE;financial:AppliedTaxServiceFinancial});
+export type AppliedReceiptExpectation={schemaVersion:2;source:typeof APPLIED_SOURCE;profile:AppliedProfile;sourceTransactionId:string;sourceEventId:string;sourceEventType:'SALE_POSTED';sourcePaymentEventId:string|null;sourceChecksum:string;observation:AppliedReceiptV2['observation']};
 export type PreparedAppliedReceipt={receipt:AppliedReceiptV2;expectation:AppliedReceiptExpectation;anchors:FiscalAppliedAnchors;originalTransaction:Transaction};
 const fail=(code='FISCAL_V3_RECEIPT_UNAVAILABLE'):never=>{throw Error(code);};
 const need=(condition:unknown,code?:string)=>{if(!condition)fail(code);};
@@ -65,6 +69,27 @@ export function assertFiscalOriginalMirror(mirror:any,original:Transaction):void
  need(financialIdentity(mirror)===financialIdentity(original)&&stamps.every(k=>mirror[k]===original[k])&&same(mirror.items.map((i:any)=>i.v3SaleAuthority),original.items.map(i=>i.v3SaleAuthority)),'FISCAL_V3_ORIGINAL_REQUEST_MISMATCH');
 }
 const declarations=(records:any[],keys:string[],expected:any)=>{for(const r of records)for(const k of keys)if(r?.[k]!==undefined&&r[k]!==null&&r[k]!=='')need(r[k]===expected,'FISCAL_APPLIED_SCOPE_MISMATCH');};
+/** Matches ERP c348 tax/service eligibility; selecting this profile never falls back to exento. */
+const hasTaxServiceSource=(payload:any)=>[payload,payload?.transaction,payload?.summary].some(o=>o&&Object.entries(o).some(([k,v])=>/taxBreakdown|tax_breakdown|taxAmount|tax_amount|serviceType|service_type|serviceTaxPolicy|service_tax_policy|serviceCharge|service_charge/.test(k)&&!empty(v)));
+function validateTaxServiceFinancial(tx:any,summary:any):AppliedTaxServiceFinancial{
+ const code='FISCAL_V3_TAX_SERVICE_CONTRACT_REQUIRED',rows=tx.taxBreakdown,policy=tx.serviceTaxPolicySnapshot;
+ need(tx.ncfType==='E32'&&tx.serviceType==='DINE_IN'&&tx.isTaxIncluded===false&&tx.serviceChargeAmount===0&&Array.isArray(rows)&&rows.length===2,code);
+ need(same(summary.tax_breakdown,rows)&&summary.service_type===tx.serviceType&&summary.service_charge_amount===0&&same(summary.service_tax_policy_snapshot,policy),code);
+ need(object(policy)&&policy.serviceType==='DINE_IN'&&['POS','TERMINAL','LEGACY'].includes(policy.source)&&policy.legalTip?.enabled===false&&empty(policy.legalTip?.percentage)&&same(policy.taxIds,rows.map((t:any)=>t.id)),code);
+ for(const [camel,snake,value]of [['netAmount','net_amount',tx.netAmount],['taxAmount','tax_amount',tx.taxAmount],['total','total_amount',tx.total]])for(const record of [tx,summary])for(const key of [camel,snake])if(record[key]!==undefined)need(cents(record[key])===cents(value),code);
+ const [vat,service]=rows;need(vat.type==='VAT'&&vat.rate===0.18&&empty(vat.fiscalAdditionalTaxCode)&&service.type==='SERVICE_CHARGE'&&service.rate===0.1&&service.fiscalAdditionalTaxCode==='001',code);
+ need(typeof vat.id==='string'&&vat.id.length>0&&typeof service.id==='string'&&service.id.length>0&&vat.id!==service.id,code);
+ const net=cents(tx.netAmount);need(net>0&&cents(tx.taxAmount)===cents(vat.amount)+cents(service.amount)&&cents(tx.total)===net+cents(tx.taxAmount),code);
+ for(const row of rows)need(cents(row.taxableBase)===net&&cents(row.amount)===Math.round(net*row.rate)&&cents(row.total)===net+cents(row.amount)&&row.lineCount===1,code);
+ need(Array.isArray(tx.items)&&tx.items.length===1&&cents(tx.items[0].netAmount)===net&&cents(tx.items[0].taxAmount)===cents(tx.taxAmount)&&cents(tx.items[0].totalAmount)===cents(tx.total)&&tx.items[0].taxRate===0.28,code);
+ const line=tx.items[0];
+ for(const [camel,snake,value]of [['netAmount','net_amount',tx.netAmount],['taxAmount','tax_amount',tx.taxAmount],['totalAmount','total_amount',tx.total]])for(const key of [camel,snake])if(line[key]!==undefined)need(cents(line[key])===cents(value),code);
+ for(const key of ['taxRate','tax_rate'])if(line[key]!==undefined)need(line[key]===0.28,code);
+ for(const key of ['unitPrice','unit_price'])if(line[key]!==undefined)need(cents(line[key])===cents(line.price),code);
+ if(line.qty!==undefined)need(line.qty===line.quantity,code);
+ for(const [camel,snake,value]of [['taxBreakdown','tax_breakdown',rows],['serviceType','service_type',tx.serviceType],['serviceTaxPolicySnapshot','service_tax_policy_snapshot',policy],['serviceChargeAmount','service_charge_amount',0]])for(const record of [tx,summary])for(const key of [camel,snake])if(record[key]!==undefined)need(same(record[key],value),code);
+ return {netAmount:net/100,taxAmount:tx.taxAmount,vatAmount:vat.amount,serviceChargeAmount:service.amount,taxBreakdown:rows,serviceType:tx.serviceType,serviceTaxPolicySnapshot:policy};
+}
 /** Validates the narrow ERP profile without pruning a Product or creating missing historical authority. */
 export async function validateFiscalOriginal(anchors:FiscalAppliedAnchors,scope:AppliedReceiptV2['scope']){
  exact(anchors,['sale','payment']);const sale=parseAnchor(anchors.sale,anchors.sale.aggregate_id,'SALE_POSTED'),tx=sale.transaction as any,summary=sale.summary;
@@ -87,54 +112,57 @@ export async function validateFiscalOriginal(anchors:FiscalAppliedAnchors,scope:
  }
  need(environments.length&&environments.every(v=>Number.isInteger(v)&&[0,1,2].includes(v)&&v===environments[0]),'FISCAL_APPLIED_HISTORICAL_ENVIRONMENT_REQUIRED');
  const currencies=[tx.currency,tx.settlementCurrencyCode,tx.settlement_currency_code].filter(v=>!empty(v));need(currencies.length&&currencies.every(v=>v==='DOP'),'FISCAL_V3_ORIGINAL_CURRENCY_REQUIRED');declarations([summary],['currency','currency_code','settlement_currency_code'],'DOP');
+ const taxService=hasTaxServiceSource(sale),profile:AppliedProfile=taxService?TAX_SERVICE_APPLIED_PROFILE:APPLIED_PROFILE;
  for(const o of [sale,tx,summary]){
   for(const [key,value] of Object.entries(o)){
    if(/archiv|deleted|post.?z/i.test(key))need(empty(value),'FISCAL_APPLIED_ARCHIVED_SOURCE_HELD');
-   if(/coupon|loyalty|wallet|consignment|reservation|refund|restaurant|marketplace|tracking|recipe|kit|serviceType|service_type|serviceCharge|service_charge|voluntaryTip|voluntary_tip|salesCommission|sales_commission|dueDate|due_date/i.test(key))need(empty(value),'FISCAL_V3_ADVANCED_CONTRACT_REQUIRED');
+   if(!(taxService&&['serviceType','service_type','serviceTaxPolicySnapshot','service_tax_policy_snapshot'].includes(key))&&/coupon|loyalty|wallet|consignment|reservation|refund|restaurant|marketplace|tracking|recipe|kit|serviceType|service_type|serviceCharge|service_charge|voluntaryTip|voluntary_tip|salesCommission|sales_commission|dueDate|due_date/i.test(key))need(empty(value),'FISCAL_V3_ADVANCED_CONTRACT_REQUIRED');
   }
   if(o.status!==undefined)need(['COMPLETED','PAID','PENDING'].includes(o.status));
   for(const k of ['customerId','customer_id','customerName','customer_name','customer_code','customerCode','discountAmount','discount_amount','discountValue','discount_value'])need(empty(o[k]),'FISCAL_V3_ADVANCED_CONTRACT_REQUIRED');
   need(!object(o.customer)||!Object.keys(o.customer).length);need(o.internal_non_fiscal!==true&&o.internalNonFiscal!==true);
-  for(const k of ['taxBreakdown','tax_breakdown'])need(o[k]==null||Array.isArray(o[k])&&!o[k].length);
+  for(const k of ['taxBreakdown','tax_breakdown'])need(o[k]==null||Array.isArray(o[k])&&(taxService||!o[k].length));
   for(const k of ['exchangeRate','settlementExchangeRate','settlement_exchange_rate'])if(o[k]!=null)need(o[k]===1);
  }
  need(empty(tx.customerSnapshot?.name)&&empty(tx.customerSnapshot?.customer_code)&&empty(tx.customerSnapshot?.customerCode));assertFiscalOriginalMirror(tx,tx);
- const total=cents(tx.total);need(total>0&&cents(tx.netAmount)===total&&cents(tx.taxAmount)===0&&cents(summary.total)===total&&cents(summary.net_amount)===total&&cents(summary.tax_amount)===0);
+ const total=cents(tx.total),financial=taxService?validateTaxServiceFinancial(tx,summary):null;need(total>0&&cents(tx.netAmount)===(financial?cents(financial.netAmount):total)&&cents(tx.taxAmount)===(financial?cents(financial.taxAmount):0)&&cents(summary.total)===total&&cents(summary.net_amount)===cents(tx.netAmount)&&cents(summary.tax_amount)===cents(tx.taxAmount));
  let binding:any;try{binding=JSON.parse(tx.v3Binding);}catch{fail('FISCAL_V3_BINDING_MISMATCH');}
  need(Array.isArray(binding)&&binding.length===5&&binding[0]===scope.tenantId&&binding[1]===scope.terminalId&&binding[2]===scope.deviceId&&JSON.stringify(binding)===tx.v3Binding,'FISCAL_V3_BINDING_MISMATCH');safeUrl(binding[3]);safeUrl(binding[4],true);
  need(uuid(tx.v3WarehouseId)&&Array.isArray(tx.items)&&tx.items.length>0&&tx.items.length<=100&&Array.isArray(tx.payments));
  const seen=new Set();let sum=0;
  for(const item of tx.items){
   need(uuid(item.id)&&typeof item.cartId==='string'&&item.cartId.length>0&&!seen.has(item.cartId)&&Number.isSafeInteger(item.quantity)&&item.quantity>0&&item.quantity<=100000);seen.add(item.cartId);
-  need(item.type==='PRODUCT'&&item.is_active===true&&item.is_sellable===true&&item.isInventoriable===true&&item.taxable===false&&Array.isArray(item.appliedTaxIds)&&!item.appliedTaxIds.length,'FISCAL_V3_ADVANCED_CONTRACT_REQUIRED');
+  need(item.type==='PRODUCT'&&item.is_active===true&&item.is_sellable===true&&item.isInventoriable===true&&item.taxable===taxService&&Array.isArray(item.appliedTaxIds)&&(taxService?same(item.appliedTaxIds,tx.taxBreakdown.map((t:any)=>t.id)):!item.appliedTaxIds.length),'FISCAL_V3_ADVANCED_CONTRACT_REQUIRED');
   for(const k of ['variants','attributes','trackingData','recipeDetails','modifiers','selectedModifiers'])need(empty(item[k]));
   for(const [k,v] of Object.entries(item))if(/consignment|reservation|variantId|variantSku|appliedPromotion|articleFormat|discount|serviceCharge|service_charge/i.test(k))need(empty(v));
   const flags=item.operationalFlags||{};need(!flags.isWeighted&&!flags.usesLots&&!flags.usesSerial&&!flags.promptPrice);
   const amount=cents(item.price)*item.quantity;need(cents(item.price)>0&&Number.isSafeInteger(amount));sum+=amount;
-  for(const k of ['netAmount','totalAmount'])if(item[k]!==undefined)need(cents(item[k])===amount);for(const k of ['taxAmount','taxRate'])if(item[k]!==undefined)need(item[k]===0);if(item.originalPrice!==undefined)need(item.originalPrice===item.price);
+  for(const k of ['netAmount','totalAmount'])if(item[k]!==undefined)need(cents(item[k])===(taxService&&k==='totalAmount'?total:amount));for(const k of ['taxAmount','taxRate'])if(item[k]!==undefined)need(item[k]===(financial?(k==='taxAmount'?financial.taxAmount:0.28):0));if(item.originalPrice!==undefined)need(item.originalPrice===item.price);
   const stamp=item.v3SaleAuthority;exact(stamp,['syncId','syncVersion','tariffId','taxIncluded','inventoryVersion','inventoryCursor','binding','warehouseId'],['inventorySyncId','inventorySyncVersion']);
   need(bounded(stamp.syncId)&&Number.isSafeInteger(stamp.syncVersion)&&stamp.syncVersion>0&&bounded(stamp.tariffId)&&stamp.taxIncluded===false&&Number.isSafeInteger(stamp.inventoryVersion)&&stamp.inventoryVersion>=0&&typeof stamp.inventoryCursor==='string'&&stamp.inventoryCursor.length<=4096&&stamp.binding===tx.v3Binding&&stamp.warehouseId===tx.v3WarehouseId,'FISCAL_V3_STAMP_INVALID');
   const stock=stamp.inventorySyncId!==undefined||stamp.inventorySyncVersion!==undefined;if(stock)need(bounded(stamp.inventorySyncId)&&Number.isSafeInteger(stamp.inventorySyncVersion)&&stamp.inventorySyncVersion>0,'FISCAL_V3_STOCK_ANCHOR_INVALID');
   need(tx.v3InventoryBaseline===JSON.stringify([tx.v3Binding,stock?stamp.inventorySyncId:stamp.syncId,stock?stamp.inventorySyncVersion:stamp.syncVersion,stamp.inventoryVersion,stamp.inventoryCursor]),'FISCAL_V3_BASELINE_MISMATCH');
   need(typeof item.name==='string'&&item.name.length<=1024&&Array.isArray(item.tariffs)&&item.tariffs.length===1&&item.tariffs[0].tariffId===stamp.tariffId&&item.tariffs[0].price===item.price);
  }
- need(sum===total&&financialOperationIdentity(tx,tx.v3WarehouseId,{})===tx.v3CommitFingerprint,'FISCAL_V3_COMMIT_FINGERPRINT_MISMATCH');
+ need(sum===(financial?cents(financial.netAmount):total)&&financialOperationIdentity(tx,tx.v3WarehouseId,{})===tx.v3CommitFingerprint,'FISCAL_V3_COMMIT_FINGERPRINT_MISMATCH');
  need(instant(tx.date)&&sale.timezone==='America/Santo_Domingo');declarations([sale,summary],['occurred_at','occurredAt'],tx.date);
  need(!(['E31','E44','E45'].includes(tx.ncfType)||tx.ncfType==='E32'&&total>=25000000)||/^(?:\d{9}|\d{11})$/.test(String(tx.customerSnapshot?.taxId||'').replace(/[\s-]/g,'')),'FISCAL_BUYER_REQUIRED');
+ if(taxService)need(tx.items.length===1&&tx.payments.length===1,'FISCAL_V3_TAX_SERVICE_CONTRACT_REQUIRED');
  const cash=tx.payments.length>0;need(cash?tx.payments.length===1&&anchors.payment!==null:anchors.payment===null,'FISCAL_V3_PAYMENT_SOURCE_REQUIRED');
  let payment:any=null;if(cash){const p=tx.payments[0];need(p.method==='CASH'&&cents(p.amount)===total);for(const k of ['change','changeAmount','change_amount','changeBase'])need(empty(p[k]));for(const k of ['currency','currencyCode','currency_code'])if(p[k]!==undefined)need(p[k]==='DOP');for(const k of ['exchangeRate','exchange_rate'])if(p[k]!==undefined)need(p[k]===1);for(const k of ['appliedAmount','applied_amount','functionalAmount','functional_amount','amountOriginal','originalAmount'])if(p[k]!==undefined)need(cents(p[k])===total);
   payment=parseAnchor(anchors.payment!,tx.id,'PAYMENT_POSTED');noSecrets(payment);for(const key of scopeKeys){const snake=key.replace(/[A-Z]/g,x=>'_'+x.toLowerCase());declarations([payment,payment.summary],[key,snake],scope[key]);need(payment[key]===scope[key]||payment[snake]===scope[key]);}
   need(same(payment.summary,buildSalePostedSummary(tx))&&same(payment.payments,tx.payments)&&payment.occurred_at===sale.occurred_at&&same(payment.paymentIntentIds??null,sale.paymentIntentIds??null),'FISCAL_V3_PAYMENT_SOURCE_MISMATCH');
  }
- return{transaction:tx as Transaction,environment:environments[0] as number,checksum:await fiscalStatusSourceChecksum(tx),paymentChecksum:payment?await paymentSourceChecksum(payment):null,
+ return{profile,financial,transaction:tx as Transaction,environment:environments[0] as number,checksum:await fiscalStatusSourceChecksum(tx),paymentChecksum:payment?await paymentSourceChecksum(payment):null,
   authority:{...Object.fromEntries(stamps.map(k=>[k,tx[k]])),lines:tx.items.map((i:any)=>({itemId:i.id,cartId:i.cartId,v3SaleAuthority:i.v3SaleAuthority}))}};
 }
 export async function validateAppliedReceiptV2(value:unknown,anchors:FiscalAppliedAnchors,scope:AppliedReceiptV2['scope'],mirror?:Transaction):Promise<PreparedAppliedReceipt>{
  const r=value as AppliedReceiptV2;
- exact(r,['schemaVersion','source','decision','code','profile','scope','sourceDocument','document','fiscalIssuance','issuer','environmentBasis','historicalEnvironment','posAuthority','erpApplicationPlan','materialization','settlement','observation','observedAt']);
- need(r.schemaVersion===2&&r.source===APPLIED_SOURCE&&r.decision==='READY'&&r.code==='FISCAL_APPLIED_RECEIPT_READY'&&r.profile===APPLIED_PROFILE);
+ exact(r,['schemaVersion','source','decision','code','profile','scope','sourceDocument','document','fiscalIssuance','issuer','environmentBasis','historicalEnvironment','posAuthority','erpApplicationPlan','materialization','settlement','observation','observedAt',...(r?.profile===TAX_SERVICE_APPLIED_PROFILE?['financial']:[])]);
+ need(r.schemaVersion===2&&r.source===APPLIED_SOURCE&&r.decision==='READY'&&r.code==='FISCAL_APPLIED_RECEIPT_READY'&&[APPLIED_PROFILE,TAX_SERVICE_APPLIED_PROFILE].includes(r.profile));
  exact(r.scope,[...scopeKeys]);need(scopeKeys.every(k=>r.scope[k]===scope[k])&&scopeKeys.filter(k=>k!=='deviceId').every(k=>uuid(r.scope[k]))&&typeof r.scope.deviceId==='string'&&r.scope.deviceId.length>0);
  const source=await validateFiscalOriginal(anchors,scope),tx=source.transaction;if(mirror)assertFiscalOriginalMirror(mirror,tx);
+ need(r.profile===source.profile);if(r.profile===TAX_SERVICE_APPLIED_PROFILE){exact(r.financial,['netAmount','taxAmount','vatAmount','serviceChargeAmount','taxBreakdown','serviceType','serviceTaxPolicySnapshot']);need(same(r.financial,source.financial),'FISCAL_V3_TAX_SERVICE_CONTRACT_REQUIRED');}
  exact(r.sourceDocument,['transactionId','eventId','eventType','inboxId','checksum','checksumAlgorithm']);
  need(r.sourceDocument.transactionId===tx.id&&r.sourceDocument.eventId===anchors.sale.event_id&&r.sourceDocument.eventType==='SALE_POSTED'&&uuid(r.sourceDocument.inboxId)&&r.sourceDocument.checksum===source.checksum&&r.sourceDocument.checksumAlgorithm===SALE_ALGORITHM);
  exact(r.document,['erpDocumentId','ncf','ncfType','sourceSignedTotal','currency']);need(uuid(r.document.erpDocumentId)&&r.document.ncf===tx.ncf&&r.document.ncfType===tx.ncfType&&r.document.sourceSignedTotal===tx.total&&r.document.currency==='DOP');
@@ -146,7 +174,7 @@ export async function validateAppliedReceiptV2(value:unknown,anchors:FiscalAppli
  exact(r.erpApplicationPlan,['schemaVersion','source','id','digest','capturedAt','costAndLocationBasis','policy']);const plan=r.erpApplicationPlan;
  need(plan.schemaVersion===1&&plan.source==='ERP_PRE_APPLICATION_PLAN_V1'&&uuid(plan.id)&&digest(plan.digest)&&instant(plan.capturedAt)&&plan.costAndLocationBasis==='ERP_CAPTURED_BEFORE_NEW_APPLICATION'&&plan.policy==='PER_DOCUMENT');
  exact(r.materialization,['profile','lineIds','movementIds','journalEntryIds','journalLineIds','inventoryLocalId','warehouseId']);const m=r.materialization;
- need(m.profile===APPLIED_PROFILE&&uuid(m.inventoryLocalId)&&m.warehouseId===tx.v3WarehouseId);
+ need(m.profile===source.profile&&uuid(m.inventoryLocalId)&&m.warehouseId===tx.v3WarehouseId);
  // 4096 is a local transport memory cap; no invented fixed journal/COGS cardinality.
  for(const list of [m.lineIds,m.movementIds,m.journalEntryIds,m.journalLineIds])need(Array.isArray(list)&&list.length>0&&list.length<=4096&&list.every(uuid)&&new Set(list).size===list.length);
  exact(r.settlement,['mode','sourcePayment','erpReceiptId','accountingEntryId','planId']);const s=r.settlement;
@@ -154,7 +182,7 @@ export async function validateAppliedReceiptV2(value:unknown,anchors:FiscalAppli
  else{need(s.mode==='CASH');exact(s.sourcePayment,['eventId','eventType','inboxId','checksum','checksumAlgorithm']);
   need(s.sourcePayment!.eventId===anchors.payment.event_id&&s.sourcePayment!.eventType==='PAYMENT_POSTED'&&uuid(s.sourcePayment!.inboxId)&&s.sourcePayment!.checksum===source.paymentChecksum&&s.sourcePayment!.checksumAlgorithm===PAYMENT_ALGORITHM&&uuid(s.erpReceiptId)&&uuid(s.accountingEntryId)&&uuid(s.planId));}
  exact(r.observation,['algorithm','digest']);need(r.observation.algorithm===OBSERVATION_ALGORITHM&&digest(r.observation.digest)&&instant(r.observedAt));
- const expectation:AppliedReceiptExpectation={schemaVersion:2,source:APPLIED_SOURCE,profile:APPLIED_PROFILE,sourceTransactionId:tx.id,sourceEventId:anchors.sale.event_id,sourceEventType:'SALE_POSTED',sourcePaymentEventId:anchors.payment?.event_id||null,sourceChecksum:source.checksum,observation:r.observation};
+ const expectation:AppliedReceiptExpectation={schemaVersion:2,source:APPLIED_SOURCE,profile:source.profile,sourceTransactionId:tx.id,sourceEventId:anchors.sale.event_id,sourceEventType:'SALE_POSTED',sourcePaymentEventId:anchors.payment?.event_id||null,sourceChecksum:source.checksum,observation:r.observation};
  return JSON.parse(JSON.stringify({receipt:r,expectation,anchors,originalTransaction:tx}));
 }
 export type AppliedReadinessDependencies={pair:(id:string)=>Promise<{transaction:Transaction|null;history:Transaction|null}>;rows:(id:string)=>Promise<FiscalOutboxAnchor[]>;context:()=>ReturnType<typeof captureFiscalBoundContext>;catalog:()=>Promise<{binding:string}>;fetchImpl:typeof fetch;timeoutMs?:number};
