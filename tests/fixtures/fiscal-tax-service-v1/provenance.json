@@ -1,0 +1,44 @@
+{
+  "posRevision": "7f51ce3546a8cd522c40ef530484a26a191c44f9",
+  "vectors": [
+    "e32-352-original",
+    "conflict-tax-classification",
+    "conflict-service-type",
+    "conflict-tip-reclassification",
+    "conflict-total",
+    "conflict-binding"
+  ],
+  "primarySourceHashes": {
+    "services/sync/LargeMasterSyncV3Canary.ts": "9761a505a94909322bb55fd836e24c69d3bbd848237287612f744e11c0ad8c17",
+    "services/sync/LargeMasterSyncV3Client.ts": "b12a9d91e6e01652a385f5ea6672849c4ef6bb554cdeacc5c79f6dd289f001c8",
+    "services/sync/LargeMasterSyncV3OperationalCatalog.ts": "5706668f5b9a11cc5a6b13956872c064657e7e951c888c7df5d0b1b6017bbc6d",
+    "services/sync/SalePostedContract.ts": "8d76b4e577d2a788711348c7d5bd6598d4a446cfbdf765e9119b1596ee9ca0d2",
+    "services/sync/customerIdentityContract.ts": "76d37bae0d42425b0d03009fc59a7207e6eeaba69ca3e1f800b99e6334bcf21d",
+    "services/sync/LargeMasterSyncV3FinancialCommit.ts": "7f3870abd461219762d729d6404aadfd6854eee30fbff2a14b5623e6b8d2571a",
+    "services/db/LargeMasterSyncV3FinancialRetention.ts": "f4c60116c52b1f6e55849f25e5b957f04cca917d8dad144260bae39e4f442383",
+    "utils/fiscalBreakdown.ts": "6f417042ef248733084349965b67234ff6c3003e310f3aa934379930001d2e1f",
+    "utils/serviceTaxPolicy.ts": "f7587571e36eb2dfe603b5c5371f1eca611ee582b9952d48238591b4eba5e2a4"
+  },
+  "bundledPosSourceHashes": {
+    "services/db/LargeMasterSyncV3FinancialRetention.ts": "f4c60116c52b1f6e55849f25e5b957f04cca917d8dad144260bae39e4f442383",
+    "services/sync/LargeMasterSyncV3Canary.ts": "9761a505a94909322bb55fd836e24c69d3bbd848237287612f744e11c0ad8c17",
+    "services/sync/LargeMasterSyncV3OperationalCatalog.ts": "5706668f5b9a11cc5a6b13956872c064657e7e951c888c7df5d0b1b6017bbc6d",
+    "services/sync/LargeMasterSyncV3Types.ts": "8de6465fd32beef70bc8b51a9742936fbfe349ee8dedf9ce1b2459f7c923deac",
+    "services/sync/SalePostedContract.ts": "8d76b4e577d2a788711348c7d5bd6598d4a446cfbdf765e9119b1596ee9ca0d2",
+    "services/sync/customerIdentityContract.ts": "76d37bae0d42425b0d03009fc59a7207e6eeaba69ca3e1f800b99e6334bcf21d",
+    "utils/cartQuantity.ts": "3668dce8c6fb56965e0cfa27a2c604fc86b37eb2d8c5e27f0d03bd03eb4aecd7",
+    "utils/fiscalBreakdown.ts": "6f417042ef248733084349965b67234ff6c3003e310f3aa934379930001d2e1f",
+    "utils/quantityPresentation.ts": "bdd508094d5caf21d783a52ed75495840579210b5972064c6ac4de71d51eefea",
+    "utils/scaleWeight.ts": "fcaa345871533564487b94f9f4c5dfb0181cd2f7aa0c7d1e564eef5b5991a874",
+    "utils/serviceTaxPolicy.ts": "f7587571e36eb2dfe603b5c5371f1eca611ee582b9952d48238591b4eba5e2a4",
+    "utils/taxIdentity.ts": "3d634163276c6fd9079763a3961f68a8462e9252ebf20ea9a70de5b3577cc7ce",
+    "utils/weightedProduct.ts": "eaddbd1de2eeaca1303b3923f414f4dec21aa63725544d0aa2e004b76df849fc"
+  },
+  "fingerprintImplementation": "Direct real exported financialOperationIdentity from FinancialRetention.ts",
+  "stubs": [
+    "diagnostic recorder no-op (no financial behavior)",
+    "SaleCatalog class unused by direct real adapt() call; synthetic catalog data injected",
+    "Canary Capacitor/db/client modules stubbed; not called by REAL validateLargeMasterSyncV3CanaryUrl"
+  ],
+  "limits": "Real pure adapter/serializer/fingerprint code only. No native commit/outbox/SQLite CAS, no service/device/sandbox, no POS changes."
+}
