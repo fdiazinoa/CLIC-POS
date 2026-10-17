@@ -155,7 +155,7 @@ export class LargeMasterSyncV3OperationalSession {
     if(!this.store.getOperationalStockProjection&&!Number.isFinite(product.stock))throw new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_NOT_READY');
     const projection=this.store.getOperationalStockProjection ? await this.store.getOperationalStockProjection(baseline,[product.id],warehouseId)
       : {mode:'LEGACY_DELTA' as const,quantities:{[product.id]:await this.store.getLocalInventoryDelta!(baseline,product.id,warehouseId)}};
-    if(projection.mode==='RECONCILED_AVAILABLE'&&!Object.hasOwn(projection.quantities,product.id))throw new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_NOT_READY');
+    if(projection.mode==='RECONCILED_AVAILABLE'&&!Object.prototype.hasOwnProperty.call(projection.quantities,product.id))throw new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_NOT_READY');
     const value=projection.quantities[product.id] ?? 0;
     if(!Number.isFinite(value)||projection.mode==='LEGACY_DELTA'&&!Number.isFinite(product.stock))throw new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_NOT_READY');
     return { ...product, v3SaleAuthority: { ...stamp, binding: this.binding, warehouseId },
@@ -174,11 +174,11 @@ export class LargeMasterSyncV3OperationalSession {
       ? await this.store.getOperationalStockProjection(baseline,checked.map(p=>p.id),warehouseId)
       : {mode:'LEGACY_DELTA' as const,quantities:await this.store.getLocalInventoryDeltas!(baseline,checked.map(p=>p.id),warehouseId)}
       : {mode:'LEGACY_DELTA' as const,quantities:{}};
-    if(projection.mode==='RECONCILED_AVAILABLE'&&checked.some(p=>!Object.hasOwn(projection.quantities,p.id)))throw new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_NOT_READY');
+    if(projection.mode==='RECONCILED_AVAILABLE'&&checked.some(p=>!Object.prototype.hasOwnProperty.call(projection.quantities,p.id)))throw new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_NOT_READY');
     if(Object.values(projection.quantities).some(d=>!Number.isFinite(d))||projection.mode==='LEGACY_DELTA'&&checked.some(p=>!Number.isFinite(p.stock)))throw new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_NOT_READY');
     return products.map(product => {
       const value=projection.quantities[product.id] ?? 0;
-      const absolute=projection.mode==='RECONCILED_AVAILABLE'&&Object.hasOwn(projection.quantities,product.id);
+      const absolute=projection.mode==='RECONCILED_AVAILABLE'&&Object.prototype.hasOwnProperty.call(projection.quantities,product.id);
       return {...product,v3SaleAuthority:{...product.v3SaleAuthority!,binding:this.binding,warehouseId},
         stock:absolute?value:product.stock+value,
         stockBalances:{...product.stockBalances,[warehouseId]:absolute?value:(product.stockBalances?.[warehouseId] || 0)+value}};

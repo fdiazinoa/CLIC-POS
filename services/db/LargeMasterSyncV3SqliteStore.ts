@@ -156,7 +156,7 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
       // Historical isolated stores can lack the additive table. No cache: every later call probes durable state again.
       row=first(await this.connection().query(`SELECT (${legacy}) AS delta`,[baseline,itemId,warehouseId]));
     }
-    if(!row||!Object.hasOwn(row,'delta'))throw new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_NOT_READY');
+    if(!row||!Object.prototype.hasOwnProperty.call(row,'delta'))throw new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_NOT_READY');
     return row.delta===null?undefined:Number(row.delta || 0);
   }
 
