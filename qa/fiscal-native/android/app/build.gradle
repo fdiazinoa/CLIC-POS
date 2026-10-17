@@ -1,0 +1,12 @@
+apply plugin: 'com.android.application'
+android {
+ namespace 'com.clicpos.fiscalqa'
+ compileSdk 36
+ defaultConfig { applicationId 'com.clicpos.fiscalqa'; minSdk 24; targetSdk 36; versionCode 1; versionName '0.0.1-laboratory' }
+ buildTypes { debug { debuggable true } }
+ sourceSets { main { assets.srcDirs = [providers.gradleProperty('fiscalQaAssetsDir').getOrElse('/tmp/clic-pos-fiscalqa-assets')] } }
+ compileOptions { sourceCompatibility JavaVersion.VERSION_21; targetCompatibility JavaVersion.VERSION_21 }
+}
+dependencies { implementation project(':capacitor-android'); implementation project(':capacitor-community-sqlite') }
+
+gradle.taskGraph.whenReady { graph -> if (graph.allTasks.any { it.name.toLowerCase().contains('release') }) throw new GradleException('QA laboratory prohibits release tasks') }
