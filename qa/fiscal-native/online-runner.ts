@@ -1,6 +1,6 @@
 /* Explicit online laboratory: its own Android UID/SQLite/context; never App/bootstrap. */
 import input from 'lab-only-input';
-import {assertLabRequest,LAB_ERP_ORIGIN} from './network-policy';
+import {assertLabRequest,assertLabInput,LAB_ERP_ORIGIN} from './network-policy';
 import {Capacitor} from '@capacitor/core';
 import {CapacitorSQLite,SQLiteConnection} from '@capacitor-community/sqlite';
 import {CapacitorSQLiteAdapter} from '../../services/db/adapters/CapacitorSQLiteAdapter';
@@ -38,7 +38,7 @@ async function request(url:any,init:any={}){
 async function json(path:string,method='GET',body?:any){const response=await request(origin+path,{method,headers:{...context().headers,'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{})});const value=await response.json();assert(response.ok,'LAB_HTTP_'+response.status+'_'+JSON.stringify(value));return value;}
 async function preflight(){
  assert(Capacitor.isNativePlatform()&&Capacitor.getPlatform()==='android','REAL_ANDROID_REQUIRED');
- assert(input.connection.port===18765&&input.connection.provider==='FAKE','FAKE_ONLY');
+ assert(input.connection.port===18765&&input.connection.provider==='FAKE','FAKE_ONLY');assertLabInput(input);
  const headers=context().headers;for(const [key,value]of Object.entries(headers))assert(input.connection.headers[key.toLowerCase()]===value,'LAB_INPUT_HEADER_SCOPE_CONFLICT');assert(master.tenantId===scope.tenantId&&master.companyId===scope.companyId&&master.terminalId===scope.terminalId&&master.ncfType==='E32'&&master.prefix==='E32','LAB_MASTER_SCOPE_CONFLICT');
  report.capabilities={fetch:typeof fetch,abortController:typeof AbortController,textEncoder:typeof TextEncoder,textDecoder:typeof TextDecoder,crypto:typeof crypto.subtle?.digest,hasOwn:typeof (Object as any).hasOwn};
  for(const key of ['fetch','abortController','textEncoder','textDecoder','crypto'])assert(report.capabilities[key]==='function','LAB_RUNTIME_'+key);
