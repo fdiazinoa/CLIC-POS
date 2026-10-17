@@ -1,11 +1,14 @@
+import {readLargeMasterSyncV3BoundIdentity,validatedLargeMasterSyncV3ErpSyncBase} from './LargeMasterSyncV3BoundTransport';
 import type {TerminalAuthEvidenceStore,TerminalAuthEnvelope,TerminalAuthRecord} from '../db/TerminalAuthEvidenceStore';
 import {validateBindingAuthEvidenceV1,validateTerminalAuthEnvelope,type BindingAuthScope} from './BindingAuthEvidenceV1';
 import {captureTerminalSessionSnapshot,projectTerminalAuthEnvelope,verifyTerminalAuthProjection,type TerminalSessionSnapshot,type TerminalSessionObservation} from './TerminalCredentialStore';
 const held=():never=>{throw Error('SYNC_BINDING_EVIDENCE_HELD');};
 export type BindingAuthAttempt={snapshot:TerminalSessionSnapshot;record:TerminalAuthRecord|null;scope:BindingAuthScope;assertCurrent:()=>void;store:TerminalAuthEvidenceStore|null};
-export type BindingAuthPersistencePorts={store:()=>Promise<TerminalAuthEvidenceStore|null>;capture:typeof captureTerminalSessionSnapshot;project:typeof projectTerminalAuthEnvelope;verifyProjection:typeof verifyTerminalAuthProjection};
+export type BindingAuthReadContext={scope:BindingAuthScope;sessionToken:string;configFingerprint:string};
+export type BindingAuthPersistencePorts={readContext:()=>BindingAuthReadContext;store:()=>Promise<TerminalAuthEvidenceStore|null>;capture:typeof captureTerminalSessionSnapshot;project:typeof projectTerminalAuthEnvelope;verifyProjection:typeof verifyTerminalAuthProjection};
 const nativeStore=async():Promise<TerminalAuthEvidenceStore|null>=>{const {Capacitor}=await import('@capacitor/core');if(!Capacitor.isNativePlatform()||Capacitor.getPlatform()!=='android')return null;const {dbAdapter}=await import('../db');await dbAdapter.connect();return dbAdapter.terminalAuthEvidenceStore||null;};
-export const bindingAuthPersistencePorts:BindingAuthPersistencePorts={store:nativeStore,capture:captureTerminalSessionSnapshot,project:projectTerminalAuthEnvelope,verifyProjection:verifyTerminalAuthProjection};
+const readBoundContext=():BindingAuthReadContext=>{const identity=readLargeMasterSyncV3BoundIdentity(),c=captureTerminalSessionSnapshot().credentials;return {scope:{origin:new URL(validatedLargeMasterSyncV3ErpSyncBase(identity.erpSyncBaseUrl)).origin,tenantId:identity.tenantId,terminalId:identity.terminalId,deviceId:identity.deviceId,companyId:c.companyId!,storeId:c.storeId!},sessionToken:identity.syncToken,configFingerprint:JSON.stringify([localStorage.getItem('initial_terminal_config'),localStorage.getItem('clic_sync_profile')])};};
+export const bindingAuthPersistencePorts:BindingAuthPersistencePorts={readContext:readBoundContext,store:nativeStore,capture:captureTerminalSessionSnapshot,project:projectTerminalAuthEnvelope,verifyProjection:verifyTerminalAuthProjection};
 /** No remote requests. Rehydrates only exact known before/after projections; unrelated edits remain HOLD. */
 export async function recoverBindingAuthEvidence(ports:BindingAuthPersistencePorts=bindingAuthPersistencePorts):Promise<TerminalAuthRecord|null>{
  const store=await ports.store();if(!store)return null;const record=await store.read();if(!record)return null;
@@ -33,8 +36,14 @@ export async function persistBindingAuthResponse(attempt:BindingAuthAttempt|null
 }
 /** Returns only a whole verified association, never a proof attached to unrelated legacy credentials. */
 export async function readCurrentBindingAuthEvidence(ports:BindingAuthPersistencePorts=bindingAuthPersistencePorts):Promise<TerminalAuthEnvelope|null>{
- const store=await ports.store();if(!store)return null;const record=await store.read();if(!record)return null;await validateTerminalAuthEnvelope(record.envelope);
- if(ports.capture().document!==record.envelope.credentials)held();await ports.verifyProjection(record.envelope.credentials);return JSON.parse(JSON.stringify(record.envelope));
+ const store=await ports.store();if(!store)return null;const record=await store.read();if(!record)return null;const context=ports.readContext(),contextPin=JSON.stringify(context);await validateTerminalAuthEnvelope(record.envelope);
+ const e=record.envelope;
+ if((['origin','tenantId','companyId','storeId','terminalId','deviceId'] as const).some(k=>context.scope[k]!==e.scope[k])||context.sessionToken!==e.session.token||ports.capture().document!==e.credentials)held();
+ await ports.verifyProjection(e.credentials);
+ if((await store.read())?.raw!==record.raw||ports.capture().document!==e.credentials||JSON.stringify(ports.readContext())!==contextPin)held();
+ await ports.verifyProjection(e.credentials);
+ if((await store.read())?.raw!==record.raw||ports.capture().document!==e.credentials||JSON.stringify(ports.readContext())!==contextPin)held();
+ return JSON.parse(JSON.stringify(e));
 }
 
 /** Captures the existing normal AUTH caller's context before its request, without inventing missing authority. */
