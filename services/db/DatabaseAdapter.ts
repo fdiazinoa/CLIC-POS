@@ -97,6 +97,8 @@ export interface DatabaseAdapter {
     readonly adapterType: 'local' | 'network';
     /** Present only on native adapters supporting the typed fiscal metadata CAS protocol. */
     readonly supportsV3FiscalMetadataCAS?: boolean;
+    /** Readonly, all-status exact original SALE/PAYMENT rows for prepared fiscal readiness. */
+    getFiscalAppliedSourceRows?(transactionId:string):Promise<import('../fiscal/FiscalAppliedReceiptV2').FiscalOutboxAnchor[]>;
     /** Android-only, dark V3 staging store. Its presence does not announce a network capability. */
     readonly masterSyncV3Store?: LargeMasterSyncV3Store;
 

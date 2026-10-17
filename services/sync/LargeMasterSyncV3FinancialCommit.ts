@@ -1,3 +1,4 @@
+export type {V3FinancialOptions} from '../db/LargeMasterSyncV3FinancialRetention';
 import { planReservationCommitmentRelease } from './LargeMasterSyncV3ReservationCommitments';
 import { assertV3ReservationInvoice,assertV3ReservationLines,reservationClaimId,reservationInvoiceId } from './LargeMasterSyncV3ReservationAuthority';
 import { planFinancialNumbers } from '../db/FinancialNumberReservation';
@@ -15,7 +16,7 @@ import { getLargeMasterSyncV3OperationalSession, v3InventoryBaselineKey } from '
 import { LargeMasterSyncV3Error } from './LargeMasterSyncV3Types';
 import { buildV3RefundOriginalMutations } from './LargeMasterSyncV3RefundAuthority';
 import { validateV3FrozenLineFiscalAmounts } from './LargeMasterSyncV3LineSource';
-import { V3_FINANCIAL_MUTABLE_FIELDS, V3_FINANCIAL_CAS_PROTECTED_FIELDS } from '../db/LargeMasterSyncV3FinancialRetention';
+import { financialIdentity,financialOperationIdentity,type V3FinancialOptions } from '../db/LargeMasterSyncV3FinancialRetention';
 
 export const isV3FinancialDocument = (transaction: Partial<Transaction>): boolean =>
   (transaction.items || []).some(line => Boolean(line.v3SaleAuthority));
@@ -66,26 +67,8 @@ export const buildV3InventoryLedger = (transaction: Transaction, warehouseId: st
   });
 };
 
-const financialIdentity = (transaction: Transaction): string => {
-  const canonical = (value: any): any => Array.isArray(value) ? value.map(canonical)
-    : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort()
-      .filter(key => ![...V3_FINANCIAL_MUTABLE_FIELDS, ...V3_FINANCIAL_CAS_PROTECTED_FIELDS, 'relatedTransactions', 'syncStatus', 'syncError', 'cloudSyncStatus', 'cloudSyncError', 'cloudSyncedAt',
-        'updatedAt', 'status', 'v3InventoryBaseline', 'v3Binding', 'v3WarehouseId', 'v3CommitFingerprint', 'fiscalStatus',
-        'fiscalResponseMessage', 'fiscalResponseCode', 'fiscalSignedXml', 'fiscalQrCode'].includes(key))
-      .map(key => [key, canonical(value[key])])) : value;
-  const input = transaction.v3ReservationClaimId ? JSON.parse(JSON.stringify({...transaction,globalSequence:undefined,displayId:undefined,seriesNumber:undefined})) : transaction;
-  return JSON.stringify(canonical(input));
-};
-
-export type V3FinancialOptions = { refund?: boolean; conditions?: Map<string, 'SELLABLE' | 'DAMAGED'>; original?: Transaction;
-    expectedOriginal?: Transaction; expectedOriginalHistory?: Transaction | null; originalCollection?: 'transactions' | 'transactionHistory';
-    adjustCustomerBalance?: boolean; skipWalletDeposit?: boolean };
 type FinancialEntry = { transaction: Transaction; options?: V3FinancialOptions };
 type FinancialResult = { transaction: Transaction; created: boolean };
-const financialOperationIdentity=(transaction:Transaction,warehouseId:string,options:V3FinancialOptions):string=>JSON.stringify([
-  financialIdentity(transaction),warehouseId,options.refund===true,[...(options.conditions || new Map()).entries()].sort(),
-  options.adjustCustomerBalance===true,options.skipWalletDeposit===true,options.original?financialIdentity(options.original):null,
-]);
 const assertFinancialReplay=(stored:Transaction|null,transaction:Transaction,identity:string):void=>{
   if(!stored||financialIdentity(stored)!==financialIdentity(transaction)||stored.v3CommitFingerprint!==identity)
     throw new LargeMasterSyncV3Error('SYNC_V3_DUPLICATE_TRANSACTION_MISMATCH');

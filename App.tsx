@@ -11282,7 +11282,7 @@ const AppContent: React.FC = () => {
     if (!electronicNcf) return;
 
     if (providerId === 'MSELLER') {
-      // ERP2259 has no authoritative client APPLIED receipt. Hold before attempt/projection markers.
+      // Prepared applied-receipt v2 remains unwired. Hold before attempt/projection markers.
       const stored = await db.getDocument('transactions',transaction.id) as Transaction | null;
       if (!stored || stored.zReportId) throw Error('FISCAL_STATUS_ARCHIVED_RECONCILIATION_REQUIRED');
       if (stored.fiscalProvider !== 'MSELLER') throw Error('FISCAL_SUBMISSION_SCOPE_CHANGED');

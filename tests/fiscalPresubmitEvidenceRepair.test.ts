@@ -140,14 +140,9 @@ for(const operation of ['CLASSIFICATION_PROJECTION_APPEND','CLASSIFICATION_ATTEM
 });
 
 test('actual immutable financial identity excludes CAS metadata without exposing them to ACK mutable whitelist',async()=>{
- const {V3_FINANCIAL_MUTABLE_FIELDS,V3_FINANCIAL_CAS_PROTECTED_FIELDS}=await import('../services/db/LargeMasterSyncV3FinancialRetention');
- const {readFileSync}=await import('node:fs'),{transform}=await import('esbuild');
- const source=readFileSync(new URL('../services/sync/LargeMasterSyncV3FinancialCommit.ts',import.meta.url),'utf8');
- const start=source.indexOf('const financialIdentity ='),end=source.indexOf('\nexport type V3FinancialOptions',start);
- const code=(await transform(source.slice(start,end),{loader:'ts'})).code;
- const identity=new Function('V3_FINANCIAL_MUTABLE_FIELDS','V3_FINANCIAL_CAS_PROTECTED_FIELDS',code+'return financialIdentity;')(V3_FINANCIAL_MUTABLE_FIELDS,V3_FINANCIAL_CAS_PROTECTED_FIELDS);
+ const {V3_FINANCIAL_MUTABLE_FIELDS,V3_FINANCIAL_CAS_PROTECTED_FIELDS,financialIdentity:identity}=await import('../services/db/LargeMasterSyncV3FinancialRetention');
  const input=await fixture();const base=identity(input.current);
- assert.equal(identity({...input.current,fiscalClassificationProjection:{audit:'protected'},fiscalClassificationAttemptedAt:'once',fiscalPreSubmitRecoveryAudit:[{audit:'protected'}]}),base);
+ assert.equal(identity({...input.current,fiscalClassificationProjection:{audit:'protected'},fiscalClassificationAttemptedAt:'once',fiscalPreSubmitRecoveryAudit:[{audit:'protected'}]} as any),base);
  assert.notEqual(identity({...input.current,total:109}),base);
  for(const field of V3_FINANCIAL_CAS_PROTECTED_FIELDS) assert.equal((V3_FINANCIAL_MUTABLE_FIELDS as readonly string[]).includes(field),false);
 });

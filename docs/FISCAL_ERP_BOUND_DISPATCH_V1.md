@@ -1,3 +1,5 @@
+> Historical PR913 record. The ERP v2 receipt contract and prepared consumer now exist in the later draft source; see [FISCAL_APPLIED_RECEIPT_V2.md](FISCAL_APPLIED_RECEIPT_V2.md). Statements below about the formerly missing endpoint describe the earlier inspected ERP SHA. Production issuance remains deliberately disconnected; no deployment or operational approval is implied.
+
 # POS ↔ ERP fiscal boundary v1 (prepared; issuance held)
 
 Reference ERP: draft PR [2259](https://github.com/fdiazinoa/CLIC-ERP/pull/2259), `feature/fiscal-pos-v1`, inspected SHA `03fae7c380954d15596b0dd0435db50e4e252e63`. POS base is `705b8f5c39fe94dae1f30c13bff204c63d099d27` (PR912). This is code and isolated-fixture evidence, not a deployed or MSeller sandbox integration.

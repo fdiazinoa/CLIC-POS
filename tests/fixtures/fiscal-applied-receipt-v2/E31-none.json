@@ -1,0 +1,1121 @@
+{
+  "fixtureOnly": true,
+  "provenance": "Synthetic fiscally complete source with full Product; synthetic materialized snapshot, separate from real PostgreSQL writer evidence",
+  "mode": "none",
+  "type": "E31",
+  "method": "GET",
+  "url": "/api/fiscal/v2/documents/applied-receipt?sourceTransactionId=QA-V3-E31-NONE-LAB&sourceEventId=11111111-0000-4000-8000-000000000001&sourceEventType=SALE_POSTED&sourceChecksum=d0069cf80a70f78e0bec26c2667ad930907396d31628df5e9b738ef6eb4ee00f&ncf=E310000001021&environment=0",
+  "headers": {
+    "authorization": "Bearer synthetic-sync-token",
+    "x-sync-token": "synthetic-sync-token",
+    "x-terminal-id": "11111111-1111-4111-8111-111111111111",
+    "x-device-id": "mock-device-v1",
+    "x-device-token": "synthetic-device-token",
+    "x-tenant-id": "22222222-2222-4222-8222-222222222222"
+  },
+  "originalSource": {
+    "tenant_id": "22222222-2222-4222-8222-222222222222",
+    "company_id": "44444444-4444-4444-8444-444444444444",
+    "store_id": "33333333-3333-4333-8333-333333333333",
+    "terminal_id": "11111111-1111-4111-8111-111111111111",
+    "device_id": "mock-device-v1",
+    "timezone": "America/Santo_Domingo",
+    "transaction": {
+      "id": "QA-V3-E31-NONE-LAB",
+      "documentType": "TICKET",
+      "status": "COMPLETED",
+      "terminalId": "11111111-1111-4111-8111-111111111111",
+      "date": "2026-10-16T03:30:00.000Z",
+      "ncf": "E310000001021",
+      "electronicNcf": "E310000001021",
+      "ncfType": "E31",
+      "fiscalMode": "ECF",
+      "fiscalProvider": "MSELLER",
+      "fiscalIssuance": {
+        "schemaVersion": 1,
+        "source": "POS_FISCAL_RESERVATION_V1",
+        "ncf": "E310000001021",
+        "ncfType": "E31",
+        "sequence": 1021,
+        "fiscalRangeId": "55555555-5555-4555-8555-555555555555",
+        "fiscalAllocationId": "66666666-6666-4666-8666-666666666666",
+        "prefix": "E31",
+        "rangeStart": 1,
+        "rangeEnd": 9999999999,
+        "allocationStart": 1001,
+        "allocationEnd": 2000,
+        "expiryDate": "2027-12-31",
+        "issuerRnc": "130090752",
+        "tenantId": "22222222-2222-4222-8222-222222222222",
+        "companyId": "44444444-4444-4444-8444-444444444444",
+        "terminalId": "11111111-1111-4111-8111-111111111111",
+        "capturedAt": "2026-10-16T03:30:00.000Z"
+      },
+      "settlementCurrencyCode": "DOP",
+      "total": 100,
+      "netAmount": 100,
+      "taxAmount": 0,
+      "discountAmount": 0,
+      "pendingBalance": 100,
+      "customerSnapshot": {
+        "taxId": "131000000"
+      },
+      "items": [
+        {
+          "id": "77777777-7777-4777-8777-777777777777",
+          "sku": "QA-FULL-PRODUCT",
+          "externalCode": "QA-EXT",
+          "name": "QA full adapter product",
+          "description": "Synthetic catalog input; actual adapter output",
+          "price": 100,
+          "category": "QA category",
+          "posCategoryId": "qa-category",
+          "familyId": "qa-family",
+          "posSortOrder": 3,
+          "type": "PRODUCT",
+          "is_active": true,
+          "is_sellable": true,
+          "v3SaleAuthority": {
+            "inventorySyncId": "aaaaaaaa-0000-4000-8000-000000000006",
+            "inventorySyncVersion": 6,
+            "syncId": "aaaaaaaa-0000-4000-8000-000000000007",
+            "syncVersion": 7,
+            "tariffId": "qa-tariff",
+            "taxIncluded": false,
+            "inventoryVersion": 42,
+            "inventoryCursor": "qa-stock-cursor-42",
+            "binding": "[\"22222222-2222-4222-8222-222222222222\",\"11111111-1111-4111-8111-111111111111\",\"mock-device-v1\",\"https://erp.fixture.invalid/api/sync\",\"https://erp.fixture.invalid\"]",
+            "warehouseId": "88888888-8888-4888-8888-888888888888"
+          },
+          "isInventoriable": true,
+          "taxable": false,
+          "appliedTaxIds": [],
+          "operationalFlags": {
+            "isWeighted": false,
+            "trackInventory": true,
+            "autoPrintLabel": false,
+            "promptPrice": false,
+            "integersOnly": true,
+            "ageRestricted": false,
+            "allowNegativeStock": false,
+            "excludeFromPromotions": false,
+            "excludeFromLoyalty": false,
+            "usesLots": false,
+            "usesSerial": false
+          },
+          "stock": 8,
+          "stockBalances": {
+            "88888888-8888-4888-8888-888888888888": 8
+          },
+          "measurementUnit": "UND",
+          "purchaseUnit": "UND",
+          "conversionFactor": 1,
+          "activeInWarehouses": [
+            "88888888-8888-4888-8888-888888888888"
+          ],
+          "images": [],
+          "attributes": [],
+          "variants": [],
+          "tariffs": [
+            {
+              "tariffId": "qa-tariff",
+              "price": 100
+            }
+          ],
+          "cartId": "qa-cart-1",
+          "quantity": 1,
+          "netAmount": 100,
+          "taxAmount": 0,
+          "totalAmount": 100
+        }
+      ],
+      "payments": [],
+      "fiscalEnvironment": 0,
+      "syncStatus": "PENDING",
+      "v3Binding": "[\"22222222-2222-4222-8222-222222222222\",\"11111111-1111-4111-8111-111111111111\",\"mock-device-v1\",\"https://erp.fixture.invalid/api/sync\",\"https://erp.fixture.invalid\"]",
+      "v3WarehouseId": "88888888-8888-4888-8888-888888888888",
+      "v3InventoryBaseline": "[\"[\\\"22222222-2222-4222-8222-222222222222\\\",\\\"11111111-1111-4111-8111-111111111111\\\",\\\"mock-device-v1\\\",\\\"https://erp.fixture.invalid/api/sync\\\",\\\"https://erp.fixture.invalid\\\"]\",\"aaaaaaaa-0000-4000-8000-000000000006\",6,42,\"qa-stock-cursor-42\"]",
+      "v3CommitFingerprint": "[\"{\\\"customerSnapshot\\\":{\\\"taxId\\\":\\\"131000000\\\"},\\\"date\\\":\\\"2026-10-16T03:30:00.000Z\\\",\\\"discountAmount\\\":0,\\\"documentType\\\":\\\"TICKET\\\",\\\"electronicNcf\\\":\\\"E310000001021\\\",\\\"fiscalEnvironment\\\":0,\\\"fiscalIssuance\\\":{\\\"allocationEnd\\\":2000,\\\"allocationStart\\\":1001,\\\"capturedAt\\\":\\\"2026-10-16T03:30:00.000Z\\\",\\\"companyId\\\":\\\"44444444-4444-4444-8444-444444444444\\\",\\\"expiryDate\\\":\\\"2027-12-31\\\",\\\"fiscalAllocationId\\\":\\\"66666666-6666-4666-8666-666666666666\\\",\\\"fiscalRangeId\\\":\\\"55555555-5555-4555-8555-555555555555\\\",\\\"issuerRnc\\\":\\\"130090752\\\",\\\"ncf\\\":\\\"E310000001021\\\",\\\"ncfType\\\":\\\"E31\\\",\\\"prefix\\\":\\\"E31\\\",\\\"rangeEnd\\\":9999999999,\\\"rangeStart\\\":1,\\\"schemaVersion\\\":1,\\\"sequence\\\":1021,\\\"source\\\":\\\"POS_FISCAL_RESERVATION_V1\\\",\\\"tenantId\\\":\\\"22222222-2222-4222-8222-222222222222\\\",\\\"terminalId\\\":\\\"11111111-1111-4111-8111-111111111111\\\"},\\\"fiscalMode\\\":\\\"ECF\\\",\\\"fiscalProvider\\\":\\\"MSELLER\\\",\\\"id\\\":\\\"QA-V3-E31-NONE-LAB\\\",\\\"items\\\":[{\\\"activeInWarehouses\\\":[\\\"88888888-8888-4888-8888-888888888888\\\"],\\\"appliedTaxIds\\\":[],\\\"attributes\\\":[],\\\"cartId\\\":\\\"qa-cart-1\\\",\\\"category\\\":\\\"QA category\\\",\\\"conversionFactor\\\":1,\\\"description\\\":\\\"Synthetic catalog input; actual adapter output\\\",\\\"externalCode\\\":\\\"QA-EXT\\\",\\\"familyId\\\":\\\"qa-family\\\",\\\"id\\\":\\\"77777777-7777-4777-8777-777777777777\\\",\\\"images\\\":[],\\\"isInventoriable\\\":true,\\\"is_active\\\":true,\\\"is_sellable\\\":true,\\\"measurementUnit\\\":\\\"UND\\\",\\\"name\\\":\\\"QA full adapter product\\\",\\\"netAmount\\\":100,\\\"operationalFlags\\\":{\\\"ageRestricted\\\":false,\\\"allowNegativeStock\\\":false,\\\"autoPrintLabel\\\":false,\\\"excludeFromLoyalty\\\":false,\\\"excludeFromPromotions\\\":false,\\\"integersOnly\\\":true,\\\"isWeighted\\\":false,\\\"promptPrice\\\":false,\\\"trackInventory\\\":true,\\\"usesLots\\\":false,\\\"usesSerial\\\":false},\\\"posCategoryId\\\":\\\"qa-category\\\",\\\"posSortOrder\\\":3,\\\"price\\\":100,\\\"purchaseUnit\\\":\\\"UND\\\",\\\"quantity\\\":1,\\\"sku\\\":\\\"QA-FULL-PRODUCT\\\",\\\"stock\\\":8,\\\"stockBalances\\\":{\\\"88888888-8888-4888-8888-888888888888\\\":8},\\\"tariffs\\\":[{\\\"price\\\":100,\\\"tariffId\\\":\\\"qa-tariff\\\"}],\\\"taxAmount\\\":0,\\\"taxable\\\":false,\\\"totalAmount\\\":100,\\\"type\\\":\\\"PRODUCT\\\",\\\"v3SaleAuthority\\\":{\\\"binding\\\":\\\"[\\\\\\\"22222222-2222-4222-8222-222222222222\\\\\\\",\\\\\\\"11111111-1111-4111-8111-111111111111\\\\\\\",\\\\\\\"mock-device-v1\\\\\\\",\\\\\\\"https://erp.fixture.invalid/api/sync\\\\\\\",\\\\\\\"https://erp.fixture.invalid\\\\\\\"]\\\",\\\"inventoryCursor\\\":\\\"qa-stock-cursor-42\\\",\\\"inventorySyncId\\\":\\\"aaaaaaaa-0000-4000-8000-000000000006\\\",\\\"inventorySyncVersion\\\":6,\\\"inventoryVersion\\\":42,\\\"syncId\\\":\\\"aaaaaaaa-0000-4000-8000-000000000007\\\",\\\"syncVersion\\\":7,\\\"tariffId\\\":\\\"qa-tariff\\\",\\\"taxIncluded\\\":false,\\\"warehouseId\\\":\\\"88888888-8888-4888-8888-888888888888\\\"},\\\"variants\\\":[]}],\\\"ncf\\\":\\\"E310000001021\\\",\\\"ncfType\\\":\\\"E31\\\",\\\"netAmount\\\":100,\\\"payments\\\":[],\\\"pendingBalance\\\":100,\\\"settlementCurrencyCode\\\":\\\"DOP\\\",\\\"taxAmount\\\":0,\\\"terminalId\\\":\\\"11111111-1111-4111-8111-111111111111\\\",\\\"total\\\":100}\",\"88888888-8888-4888-8888-888888888888\",false,[],false,false,null]"
+    },
+    "summary": {
+      "transaction_id": "QA-V3-E31-NONE-LAB",
+      "display_id": "QA-V3-E31-NONE-LAB",
+      "document_type": "TICKET",
+      "status": "COMPLETED",
+      "total": 100,
+      "tax_amount": 0,
+      "net_amount": 100,
+      "discount_amount": 0,
+      "item_count": 1,
+      "payment_count": 0,
+      "customer_tax_id": "131000000",
+      "ncf": "E310000001021",
+      "ncf_type": "E31",
+      "pending_balance": 100,
+      "wallet_payment_amount": 0,
+      "wallet_deposit_amount": 0,
+      "loyalty_points_used": 0,
+      "coupon_codes": [],
+      "fiscal_issuance": {
+        "schemaVersion": 1,
+        "source": "POS_FISCAL_RESERVATION_V1",
+        "ncf": "E310000001021",
+        "ncfType": "E31",
+        "sequence": 1021,
+        "fiscalRangeId": "55555555-5555-4555-8555-555555555555",
+        "fiscalAllocationId": "66666666-6666-4666-8666-666666666666",
+        "prefix": "E31",
+        "rangeStart": 1,
+        "rangeEnd": 9999999999,
+        "allocationStart": 1001,
+        "allocationEnd": 2000,
+        "expiryDate": "2027-12-31",
+        "issuerRnc": "130090752",
+        "tenantId": "22222222-2222-4222-8222-222222222222",
+        "companyId": "44444444-4444-4444-8444-444444444444",
+        "terminalId": "11111111-1111-4111-8111-111111111111",
+        "capturedAt": "2026-10-16T03:30:00.000Z"
+      },
+      "fiscal_range_id": "55555555-5555-4555-8555-555555555555",
+      "fiscal_allocation_id": "66666666-6666-4666-8666-666666666666",
+      "fiscal_mode": "ECF",
+      "fiscal_provider": "MSELLER",
+      "electronic_ncf": "E310000001021"
+    },
+    "occurred_at": "2026-10-16T03:30:00.000Z"
+  },
+  "materializedSnapshot": {
+    "guardReady": true,
+    "sources": [
+      {
+        "id": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        "event_id": "11111111-0000-4000-8000-000000000001",
+        "event_type": "SALE_POSTED",
+        "status": "APPLIED",
+        "tenant_id": "22222222-2222-4222-8222-222222222222",
+        "store_id": "33333333-3333-4333-8333-333333333333",
+        "terminal_id": "11111111-1111-4111-8111-111111111111",
+        "payload": {
+          "tenant_id": "22222222-2222-4222-8222-222222222222",
+          "company_id": "44444444-4444-4444-8444-444444444444",
+          "store_id": "33333333-3333-4333-8333-333333333333",
+          "terminal_id": "11111111-1111-4111-8111-111111111111",
+          "device_id": "mock-device-v1",
+          "timezone": "America/Santo_Domingo",
+          "transaction": {
+            "id": "QA-V3-E31-NONE-LAB",
+            "documentType": "TICKET",
+            "status": "COMPLETED",
+            "terminalId": "11111111-1111-4111-8111-111111111111",
+            "date": "2026-10-16T03:30:00.000Z",
+            "ncf": "E310000001021",
+            "electronicNcf": "E310000001021",
+            "ncfType": "E31",
+            "fiscalMode": "ECF",
+            "fiscalProvider": "MSELLER",
+            "fiscalIssuance": {
+              "schemaVersion": 1,
+              "source": "POS_FISCAL_RESERVATION_V1",
+              "ncf": "E310000001021",
+              "ncfType": "E31",
+              "sequence": 1021,
+              "fiscalRangeId": "55555555-5555-4555-8555-555555555555",
+              "fiscalAllocationId": "66666666-6666-4666-8666-666666666666",
+              "prefix": "E31",
+              "rangeStart": 1,
+              "rangeEnd": 9999999999,
+              "allocationStart": 1001,
+              "allocationEnd": 2000,
+              "expiryDate": "2027-12-31",
+              "issuerRnc": "130090752",
+              "tenantId": "22222222-2222-4222-8222-222222222222",
+              "companyId": "44444444-4444-4444-8444-444444444444",
+              "terminalId": "11111111-1111-4111-8111-111111111111",
+              "capturedAt": "2026-10-16T03:30:00.000Z"
+            },
+            "settlementCurrencyCode": "DOP",
+            "total": 100,
+            "netAmount": 100,
+            "taxAmount": 0,
+            "discountAmount": 0,
+            "pendingBalance": 100,
+            "customerSnapshot": {
+              "taxId": "131000000"
+            },
+            "items": [
+              {
+                "id": "77777777-7777-4777-8777-777777777777",
+                "sku": "QA-FULL-PRODUCT",
+                "externalCode": "QA-EXT",
+                "name": "QA full adapter product",
+                "description": "Synthetic catalog input; actual adapter output",
+                "price": 100,
+                "category": "QA category",
+                "posCategoryId": "qa-category",
+                "familyId": "qa-family",
+                "posSortOrder": 3,
+                "type": "PRODUCT",
+                "is_active": true,
+                "is_sellable": true,
+                "v3SaleAuthority": {
+                  "inventorySyncId": "aaaaaaaa-0000-4000-8000-000000000006",
+                  "inventorySyncVersion": 6,
+                  "syncId": "aaaaaaaa-0000-4000-8000-000000000007",
+                  "syncVersion": 7,
+                  "tariffId": "qa-tariff",
+                  "taxIncluded": false,
+                  "inventoryVersion": 42,
+                  "inventoryCursor": "qa-stock-cursor-42",
+                  "binding": "[\"22222222-2222-4222-8222-222222222222\",\"11111111-1111-4111-8111-111111111111\",\"mock-device-v1\",\"https://erp.fixture.invalid/api/sync\",\"https://erp.fixture.invalid\"]",
+                  "warehouseId": "88888888-8888-4888-8888-888888888888"
+                },
+                "isInventoriable": true,
+                "taxable": false,
+                "appliedTaxIds": [],
+                "operationalFlags": {
+                  "isWeighted": false,
+                  "trackInventory": true,
+                  "autoPrintLabel": false,
+                  "promptPrice": false,
+                  "integersOnly": true,
+                  "ageRestricted": false,
+                  "allowNegativeStock": false,
+                  "excludeFromPromotions": false,
+                  "excludeFromLoyalty": false,
+                  "usesLots": false,
+                  "usesSerial": false
+                },
+                "stock": 8,
+                "stockBalances": {
+                  "88888888-8888-4888-8888-888888888888": 8
+                },
+                "measurementUnit": "UND",
+                "purchaseUnit": "UND",
+                "conversionFactor": 1,
+                "activeInWarehouses": [
+                  "88888888-8888-4888-8888-888888888888"
+                ],
+                "images": [],
+                "attributes": [],
+                "variants": [],
+                "tariffs": [
+                  {
+                    "tariffId": "qa-tariff",
+                    "price": 100
+                  }
+                ],
+                "cartId": "qa-cart-1",
+                "quantity": 1,
+                "netAmount": 100,
+                "taxAmount": 0,
+                "totalAmount": 100
+              }
+            ],
+            "payments": [],
+            "fiscalEnvironment": 0,
+            "syncStatus": "PENDING",
+            "v3Binding": "[\"22222222-2222-4222-8222-222222222222\",\"11111111-1111-4111-8111-111111111111\",\"mock-device-v1\",\"https://erp.fixture.invalid/api/sync\",\"https://erp.fixture.invalid\"]",
+            "v3WarehouseId": "88888888-8888-4888-8888-888888888888",
+            "v3InventoryBaseline": "[\"[\\\"22222222-2222-4222-8222-222222222222\\\",\\\"11111111-1111-4111-8111-111111111111\\\",\\\"mock-device-v1\\\",\\\"https://erp.fixture.invalid/api/sync\\\",\\\"https://erp.fixture.invalid\\\"]\",\"aaaaaaaa-0000-4000-8000-000000000006\",6,42,\"qa-stock-cursor-42\"]",
+            "v3CommitFingerprint": "[\"{\\\"customerSnapshot\\\":{\\\"taxId\\\":\\\"131000000\\\"},\\\"date\\\":\\\"2026-10-16T03:30:00.000Z\\\",\\\"discountAmount\\\":0,\\\"documentType\\\":\\\"TICKET\\\",\\\"electronicNcf\\\":\\\"E310000001021\\\",\\\"fiscalEnvironment\\\":0,\\\"fiscalIssuance\\\":{\\\"allocationEnd\\\":2000,\\\"allocationStart\\\":1001,\\\"capturedAt\\\":\\\"2026-10-16T03:30:00.000Z\\\",\\\"companyId\\\":\\\"44444444-4444-4444-8444-444444444444\\\",\\\"expiryDate\\\":\\\"2027-12-31\\\",\\\"fiscalAllocationId\\\":\\\"66666666-6666-4666-8666-666666666666\\\",\\\"fiscalRangeId\\\":\\\"55555555-5555-4555-8555-555555555555\\\",\\\"issuerRnc\\\":\\\"130090752\\\",\\\"ncf\\\":\\\"E310000001021\\\",\\\"ncfType\\\":\\\"E31\\\",\\\"prefix\\\":\\\"E31\\\",\\\"rangeEnd\\\":9999999999,\\\"rangeStart\\\":1,\\\"schemaVersion\\\":1,\\\"sequence\\\":1021,\\\"source\\\":\\\"POS_FISCAL_RESERVATION_V1\\\",\\\"tenantId\\\":\\\"22222222-2222-4222-8222-222222222222\\\",\\\"terminalId\\\":\\\"11111111-1111-4111-8111-111111111111\\\"},\\\"fiscalMode\\\":\\\"ECF\\\",\\\"fiscalProvider\\\":\\\"MSELLER\\\",\\\"id\\\":\\\"QA-V3-E31-NONE-LAB\\\",\\\"items\\\":[{\\\"activeInWarehouses\\\":[\\\"88888888-8888-4888-8888-888888888888\\\"],\\\"appliedTaxIds\\\":[],\\\"attributes\\\":[],\\\"cartId\\\":\\\"qa-cart-1\\\",\\\"category\\\":\\\"QA category\\\",\\\"conversionFactor\\\":1,\\\"description\\\":\\\"Synthetic catalog input; actual adapter output\\\",\\\"externalCode\\\":\\\"QA-EXT\\\",\\\"familyId\\\":\\\"qa-family\\\",\\\"id\\\":\\\"77777777-7777-4777-8777-777777777777\\\",\\\"images\\\":[],\\\"isInventoriable\\\":true,\\\"is_active\\\":true,\\\"is_sellable\\\":true,\\\"measurementUnit\\\":\\\"UND\\\",\\\"name\\\":\\\"QA full adapter product\\\",\\\"netAmount\\\":100,\\\"operationalFlags\\\":{\\\"ageRestricted\\\":false,\\\"allowNegativeStock\\\":false,\\\"autoPrintLabel\\\":false,\\\"excludeFromLoyalty\\\":false,\\\"excludeFromPromotions\\\":false,\\\"integersOnly\\\":true,\\\"isWeighted\\\":false,\\\"promptPrice\\\":false,\\\"trackInventory\\\":true,\\\"usesLots\\\":false,\\\"usesSerial\\\":false},\\\"posCategoryId\\\":\\\"qa-category\\\",\\\"posSortOrder\\\":3,\\\"price\\\":100,\\\"purchaseUnit\\\":\\\"UND\\\",\\\"quantity\\\":1,\\\"sku\\\":\\\"QA-FULL-PRODUCT\\\",\\\"stock\\\":8,\\\"stockBalances\\\":{\\\"88888888-8888-4888-8888-888888888888\\\":8},\\\"tariffs\\\":[{\\\"price\\\":100,\\\"tariffId\\\":\\\"qa-tariff\\\"}],\\\"taxAmount\\\":0,\\\"taxable\\\":false,\\\"totalAmount\\\":100,\\\"type\\\":\\\"PRODUCT\\\",\\\"v3SaleAuthority\\\":{\\\"binding\\\":\\\"[\\\\\\\"22222222-2222-4222-8222-222222222222\\\\\\\",\\\\\\\"11111111-1111-4111-8111-111111111111\\\\\\\",\\\\\\\"mock-device-v1\\\\\\\",\\\\\\\"https://erp.fixture.invalid/api/sync\\\\\\\",\\\\\\\"https://erp.fixture.invalid\\\\\\\"]\\\",\\\"inventoryCursor\\\":\\\"qa-stock-cursor-42\\\",\\\"inventorySyncId\\\":\\\"aaaaaaaa-0000-4000-8000-000000000006\\\",\\\"inventorySyncVersion\\\":6,\\\"inventoryVersion\\\":42,\\\"syncId\\\":\\\"aaaaaaaa-0000-4000-8000-000000000007\\\",\\\"syncVersion\\\":7,\\\"tariffId\\\":\\\"qa-tariff\\\",\\\"taxIncluded\\\":false,\\\"warehouseId\\\":\\\"88888888-8888-4888-8888-888888888888\\\"},\\\"variants\\\":[]}],\\\"ncf\\\":\\\"E310000001021\\\",\\\"ncfType\\\":\\\"E31\\\",\\\"netAmount\\\":100,\\\"payments\\\":[],\\\"pendingBalance\\\":100,\\\"settlementCurrencyCode\\\":\\\"DOP\\\",\\\"taxAmount\\\":0,\\\"terminalId\\\":\\\"11111111-1111-4111-8111-111111111111\\\",\\\"total\\\":100}\",\"88888888-8888-4888-8888-888888888888\",false,[],false,false,null]"
+          },
+          "summary": {
+            "transaction_id": "QA-V3-E31-NONE-LAB",
+            "display_id": "QA-V3-E31-NONE-LAB",
+            "document_type": "TICKET",
+            "status": "COMPLETED",
+            "total": 100,
+            "tax_amount": 0,
+            "net_amount": 100,
+            "discount_amount": 0,
+            "item_count": 1,
+            "payment_count": 0,
+            "customer_tax_id": "131000000",
+            "ncf": "E310000001021",
+            "ncf_type": "E31",
+            "pending_balance": 100,
+            "wallet_payment_amount": 0,
+            "wallet_deposit_amount": 0,
+            "loyalty_points_used": 0,
+            "coupon_codes": [],
+            "fiscal_issuance": {
+              "schemaVersion": 1,
+              "source": "POS_FISCAL_RESERVATION_V1",
+              "ncf": "E310000001021",
+              "ncfType": "E31",
+              "sequence": 1021,
+              "fiscalRangeId": "55555555-5555-4555-8555-555555555555",
+              "fiscalAllocationId": "66666666-6666-4666-8666-666666666666",
+              "prefix": "E31",
+              "rangeStart": 1,
+              "rangeEnd": 9999999999,
+              "allocationStart": 1001,
+              "allocationEnd": 2000,
+              "expiryDate": "2027-12-31",
+              "issuerRnc": "130090752",
+              "tenantId": "22222222-2222-4222-8222-222222222222",
+              "companyId": "44444444-4444-4444-8444-444444444444",
+              "terminalId": "11111111-1111-4111-8111-111111111111",
+              "capturedAt": "2026-10-16T03:30:00.000Z"
+            },
+            "fiscal_range_id": "55555555-5555-4555-8555-555555555555",
+            "fiscal_allocation_id": "66666666-6666-4666-8666-666666666666",
+            "fiscal_mode": "ECF",
+            "fiscal_provider": "MSELLER",
+            "electronic_ncf": "E310000001021"
+          },
+          "occurred_at": "2026-10-16T03:30:00.000Z",
+          "erp_fiscal_v3_application_plan_v1": {
+            "schemaVersion": 1,
+            "source": "ERP_PRE_APPLICATION_PLAN_V1",
+            "kind": "SALE",
+            "capturePriorStatus": "RECEIVED",
+            "id": "361847b8-07ed-4f4d-a07a-671977e2af8c",
+            "inboxId": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+            "eventId": "11111111-0000-4000-8000-000000000001",
+            "eventType": "SALE_POSTED",
+            "scope": {
+              "tenantId": "22222222-2222-4222-8222-222222222222",
+              "companyId": "44444444-4444-4444-8444-444444444444",
+              "storeId": "33333333-3333-4333-8333-333333333333",
+              "terminalId": "11111111-1111-4111-8111-111111111111",
+              "deviceId": "mock-device-v1"
+            },
+            "originalPayload": {
+              "tenant_id": "22222222-2222-4222-8222-222222222222",
+              "company_id": "44444444-4444-4444-8444-444444444444",
+              "store_id": "33333333-3333-4333-8333-333333333333",
+              "terminal_id": "11111111-1111-4111-8111-111111111111",
+              "device_id": "mock-device-v1",
+              "timezone": "America/Santo_Domingo",
+              "transaction": {
+                "id": "QA-V3-E31-NONE-LAB",
+                "documentType": "TICKET",
+                "status": "COMPLETED",
+                "terminalId": "11111111-1111-4111-8111-111111111111",
+                "date": "2026-10-16T03:30:00.000Z",
+                "ncf": "E310000001021",
+                "electronicNcf": "E310000001021",
+                "ncfType": "E31",
+                "fiscalMode": "ECF",
+                "fiscalProvider": "MSELLER",
+                "fiscalIssuance": {
+                  "schemaVersion": 1,
+                  "source": "POS_FISCAL_RESERVATION_V1",
+                  "ncf": "E310000001021",
+                  "ncfType": "E31",
+                  "sequence": 1021,
+                  "fiscalRangeId": "55555555-5555-4555-8555-555555555555",
+                  "fiscalAllocationId": "66666666-6666-4666-8666-666666666666",
+                  "prefix": "E31",
+                  "rangeStart": 1,
+                  "rangeEnd": 9999999999,
+                  "allocationStart": 1001,
+                  "allocationEnd": 2000,
+                  "expiryDate": "2027-12-31",
+                  "issuerRnc": "130090752",
+                  "tenantId": "22222222-2222-4222-8222-222222222222",
+                  "companyId": "44444444-4444-4444-8444-444444444444",
+                  "terminalId": "11111111-1111-4111-8111-111111111111",
+                  "capturedAt": "2026-10-16T03:30:00.000Z"
+                },
+                "settlementCurrencyCode": "DOP",
+                "total": 100,
+                "netAmount": 100,
+                "taxAmount": 0,
+                "discountAmount": 0,
+                "pendingBalance": 100,
+                "customerSnapshot": {
+                  "taxId": "131000000"
+                },
+                "items": [
+                  {
+                    "id": "77777777-7777-4777-8777-777777777777",
+                    "sku": "QA-FULL-PRODUCT",
+                    "externalCode": "QA-EXT",
+                    "name": "QA full adapter product",
+                    "description": "Synthetic catalog input; actual adapter output",
+                    "price": 100,
+                    "category": "QA category",
+                    "posCategoryId": "qa-category",
+                    "familyId": "qa-family",
+                    "posSortOrder": 3,
+                    "type": "PRODUCT",
+                    "is_active": true,
+                    "is_sellable": true,
+                    "v3SaleAuthority": {
+                      "inventorySyncId": "aaaaaaaa-0000-4000-8000-000000000006",
+                      "inventorySyncVersion": 6,
+                      "syncId": "aaaaaaaa-0000-4000-8000-000000000007",
+                      "syncVersion": 7,
+                      "tariffId": "qa-tariff",
+                      "taxIncluded": false,
+                      "inventoryVersion": 42,
+                      "inventoryCursor": "qa-stock-cursor-42",
+                      "binding": "[\"22222222-2222-4222-8222-222222222222\",\"11111111-1111-4111-8111-111111111111\",\"mock-device-v1\",\"https://erp.fixture.invalid/api/sync\",\"https://erp.fixture.invalid\"]",
+                      "warehouseId": "88888888-8888-4888-8888-888888888888"
+                    },
+                    "isInventoriable": true,
+                    "taxable": false,
+                    "appliedTaxIds": [],
+                    "operationalFlags": {
+                      "isWeighted": false,
+                      "trackInventory": true,
+                      "autoPrintLabel": false,
+                      "promptPrice": false,
+                      "integersOnly": true,
+                      "ageRestricted": false,
+                      "allowNegativeStock": false,
+                      "excludeFromPromotions": false,
+                      "excludeFromLoyalty": false,
+                      "usesLots": false,
+                      "usesSerial": false
+                    },
+                    "stock": 8,
+                    "stockBalances": {
+                      "88888888-8888-4888-8888-888888888888": 8
+                    },
+                    "measurementUnit": "UND",
+                    "purchaseUnit": "UND",
+                    "conversionFactor": 1,
+                    "activeInWarehouses": [
+                      "88888888-8888-4888-8888-888888888888"
+                    ],
+                    "images": [],
+                    "attributes": [],
+                    "variants": [],
+                    "tariffs": [
+                      {
+                        "tariffId": "qa-tariff",
+                        "price": 100
+                      }
+                    ],
+                    "cartId": "qa-cart-1",
+                    "quantity": 1,
+                    "netAmount": 100,
+                    "taxAmount": 0,
+                    "totalAmount": 100
+                  }
+                ],
+                "payments": [],
+                "fiscalEnvironment": 0,
+                "syncStatus": "PENDING",
+                "v3Binding": "[\"22222222-2222-4222-8222-222222222222\",\"11111111-1111-4111-8111-111111111111\",\"mock-device-v1\",\"https://erp.fixture.invalid/api/sync\",\"https://erp.fixture.invalid\"]",
+                "v3WarehouseId": "88888888-8888-4888-8888-888888888888",
+                "v3InventoryBaseline": "[\"[\\\"22222222-2222-4222-8222-222222222222\\\",\\\"11111111-1111-4111-8111-111111111111\\\",\\\"mock-device-v1\\\",\\\"https://erp.fixture.invalid/api/sync\\\",\\\"https://erp.fixture.invalid\\\"]\",\"aaaaaaaa-0000-4000-8000-000000000006\",6,42,\"qa-stock-cursor-42\"]",
+                "v3CommitFingerprint": "[\"{\\\"customerSnapshot\\\":{\\\"taxId\\\":\\\"131000000\\\"},\\\"date\\\":\\\"2026-10-16T03:30:00.000Z\\\",\\\"discountAmount\\\":0,\\\"documentType\\\":\\\"TICKET\\\",\\\"electronicNcf\\\":\\\"E310000001021\\\",\\\"fiscalEnvironment\\\":0,\\\"fiscalIssuance\\\":{\\\"allocationEnd\\\":2000,\\\"allocationStart\\\":1001,\\\"capturedAt\\\":\\\"2026-10-16T03:30:00.000Z\\\",\\\"companyId\\\":\\\"44444444-4444-4444-8444-444444444444\\\",\\\"expiryDate\\\":\\\"2027-12-31\\\",\\\"fiscalAllocationId\\\":\\\"66666666-6666-4666-8666-666666666666\\\",\\\"fiscalRangeId\\\":\\\"55555555-5555-4555-8555-555555555555\\\",\\\"issuerRnc\\\":\\\"130090752\\\",\\\"ncf\\\":\\\"E310000001021\\\",\\\"ncfType\\\":\\\"E31\\\",\\\"prefix\\\":\\\"E31\\\",\\\"rangeEnd\\\":9999999999,\\\"rangeStart\\\":1,\\\"schemaVersion\\\":1,\\\"sequence\\\":1021,\\\"source\\\":\\\"POS_FISCAL_RESERVATION_V1\\\",\\\"tenantId\\\":\\\"22222222-2222-4222-8222-222222222222\\\",\\\"terminalId\\\":\\\"11111111-1111-4111-8111-111111111111\\\"},\\\"fiscalMode\\\":\\\"ECF\\\",\\\"fiscalProvider\\\":\\\"MSELLER\\\",\\\"id\\\":\\\"QA-V3-E31-NONE-LAB\\\",\\\"items\\\":[{\\\"activeInWarehouses\\\":[\\\"88888888-8888-4888-8888-888888888888\\\"],\\\"appliedTaxIds\\\":[],\\\"attributes\\\":[],\\\"cartId\\\":\\\"qa-cart-1\\\",\\\"category\\\":\\\"QA category\\\",\\\"conversionFactor\\\":1,\\\"description\\\":\\\"Synthetic catalog input; actual adapter output\\\",\\\"externalCode\\\":\\\"QA-EXT\\\",\\\"familyId\\\":\\\"qa-family\\\",\\\"id\\\":\\\"77777777-7777-4777-8777-777777777777\\\",\\\"images\\\":[],\\\"isInventoriable\\\":true,\\\"is_active\\\":true,\\\"is_sellable\\\":true,\\\"measurementUnit\\\":\\\"UND\\\",\\\"name\\\":\\\"QA full adapter product\\\",\\\"netAmount\\\":100,\\\"operationalFlags\\\":{\\\"ageRestricted\\\":false,\\\"allowNegativeStock\\\":false,\\\"autoPrintLabel\\\":false,\\\"excludeFromLoyalty\\\":false,\\\"excludeFromPromotions\\\":false,\\\"integersOnly\\\":true,\\\"isWeighted\\\":false,\\\"promptPrice\\\":false,\\\"trackInventory\\\":true,\\\"usesLots\\\":false,\\\"usesSerial\\\":false},\\\"posCategoryId\\\":\\\"qa-category\\\",\\\"posSortOrder\\\":3,\\\"price\\\":100,\\\"purchaseUnit\\\":\\\"UND\\\",\\\"quantity\\\":1,\\\"sku\\\":\\\"QA-FULL-PRODUCT\\\",\\\"stock\\\":8,\\\"stockBalances\\\":{\\\"88888888-8888-4888-8888-888888888888\\\":8},\\\"tariffs\\\":[{\\\"price\\\":100,\\\"tariffId\\\":\\\"qa-tariff\\\"}],\\\"taxAmount\\\":0,\\\"taxable\\\":false,\\\"totalAmount\\\":100,\\\"type\\\":\\\"PRODUCT\\\",\\\"v3SaleAuthority\\\":{\\\"binding\\\":\\\"[\\\\\\\"22222222-2222-4222-8222-222222222222\\\\\\\",\\\\\\\"11111111-1111-4111-8111-111111111111\\\\\\\",\\\\\\\"mock-device-v1\\\\\\\",\\\\\\\"https://erp.fixture.invalid/api/sync\\\\\\\",\\\\\\\"https://erp.fixture.invalid\\\\\\\"]\\\",\\\"inventoryCursor\\\":\\\"qa-stock-cursor-42\\\",\\\"inventorySyncId\\\":\\\"aaaaaaaa-0000-4000-8000-000000000006\\\",\\\"inventorySyncVersion\\\":6,\\\"inventoryVersion\\\":42,\\\"syncId\\\":\\\"aaaaaaaa-0000-4000-8000-000000000007\\\",\\\"syncVersion\\\":7,\\\"tariffId\\\":\\\"qa-tariff\\\",\\\"taxIncluded\\\":false,\\\"warehouseId\\\":\\\"88888888-8888-4888-8888-888888888888\\\"},\\\"variants\\\":[]}],\\\"ncf\\\":\\\"E310000001021\\\",\\\"ncfType\\\":\\\"E31\\\",\\\"netAmount\\\":100,\\\"payments\\\":[],\\\"pendingBalance\\\":100,\\\"settlementCurrencyCode\\\":\\\"DOP\\\",\\\"taxAmount\\\":0,\\\"terminalId\\\":\\\"11111111-1111-4111-8111-111111111111\\\",\\\"total\\\":100}\",\"88888888-8888-4888-8888-888888888888\",false,[],false,false,null]"
+              },
+              "summary": {
+                "transaction_id": "QA-V3-E31-NONE-LAB",
+                "display_id": "QA-V3-E31-NONE-LAB",
+                "document_type": "TICKET",
+                "status": "COMPLETED",
+                "total": 100,
+                "tax_amount": 0,
+                "net_amount": 100,
+                "discount_amount": 0,
+                "item_count": 1,
+                "payment_count": 0,
+                "customer_tax_id": "131000000",
+                "ncf": "E310000001021",
+                "ncf_type": "E31",
+                "pending_balance": 100,
+                "wallet_payment_amount": 0,
+                "wallet_deposit_amount": 0,
+                "loyalty_points_used": 0,
+                "coupon_codes": [],
+                "fiscal_issuance": {
+                  "schemaVersion": 1,
+                  "source": "POS_FISCAL_RESERVATION_V1",
+                  "ncf": "E310000001021",
+                  "ncfType": "E31",
+                  "sequence": 1021,
+                  "fiscalRangeId": "55555555-5555-4555-8555-555555555555",
+                  "fiscalAllocationId": "66666666-6666-4666-8666-666666666666",
+                  "prefix": "E31",
+                  "rangeStart": 1,
+                  "rangeEnd": 9999999999,
+                  "allocationStart": 1001,
+                  "allocationEnd": 2000,
+                  "expiryDate": "2027-12-31",
+                  "issuerRnc": "130090752",
+                  "tenantId": "22222222-2222-4222-8222-222222222222",
+                  "companyId": "44444444-4444-4444-8444-444444444444",
+                  "terminalId": "11111111-1111-4111-8111-111111111111",
+                  "capturedAt": "2026-10-16T03:30:00.000Z"
+                },
+                "fiscal_range_id": "55555555-5555-4555-8555-555555555555",
+                "fiscal_allocation_id": "66666666-6666-4666-8666-666666666666",
+                "fiscal_mode": "ECF",
+                "fiscal_provider": "MSELLER",
+                "electronic_ncf": "E310000001021"
+              },
+              "occurred_at": "2026-10-16T03:30:00.000Z"
+            },
+            "sourceFullDigest": "4c9b8afc03f715822fc0b4d906e12ec177be81029fd72bb0fb8e2a6b89802f68",
+            "sourceChecksum": "d0069cf80a70f78e0bec26c2667ad930907396d31628df5e9b738ef6eb4ee00f",
+            "capturedAt": "2026-10-17T11:23:30.615Z",
+            "documentId": "837b7a73-bf69-4c03-8bc5-a6da5deff0fe",
+            "transactionId": "QA-V3-E31-NONE-LAB",
+            "fiscalIssuance": {
+              "schemaVersion": 1,
+              "source": "POS_FISCAL_RESERVATION_V1",
+              "ncf": "E310000001021",
+              "ncfType": "E31",
+              "sequence": 1021,
+              "fiscalRangeId": "55555555-5555-4555-8555-555555555555",
+              "fiscalAllocationId": "66666666-6666-4666-8666-666666666666",
+              "prefix": "E31",
+              "rangeStart": 1,
+              "rangeEnd": 9999999999,
+              "allocationStart": 1001,
+              "allocationEnd": 2000,
+              "expiryDate": "2027-12-31",
+              "issuerRnc": "130090752",
+              "tenantId": "22222222-2222-4222-8222-222222222222",
+              "companyId": "44444444-4444-4444-8444-444444444444",
+              "terminalId": "11111111-1111-4111-8111-111111111111",
+              "capturedAt": "2026-10-16T03:30:00.000Z"
+            },
+            "posAuthority": {
+              "v3Binding": "[\"22222222-2222-4222-8222-222222222222\",\"11111111-1111-4111-8111-111111111111\",\"mock-device-v1\",\"https://erp.fixture.invalid/api/sync\",\"https://erp.fixture.invalid\"]",
+              "v3WarehouseId": "88888888-8888-4888-8888-888888888888",
+              "v3InventoryBaseline": "[\"[\\\"22222222-2222-4222-8222-222222222222\\\",\\\"11111111-1111-4111-8111-111111111111\\\",\\\"mock-device-v1\\\",\\\"https://erp.fixture.invalid/api/sync\\\",\\\"https://erp.fixture.invalid\\\"]\",\"aaaaaaaa-0000-4000-8000-000000000006\",6,42,\"qa-stock-cursor-42\"]",
+              "v3CommitFingerprint": "[\"{\\\"customerSnapshot\\\":{\\\"taxId\\\":\\\"131000000\\\"},\\\"date\\\":\\\"2026-10-16T03:30:00.000Z\\\",\\\"discountAmount\\\":0,\\\"documentType\\\":\\\"TICKET\\\",\\\"electronicNcf\\\":\\\"E310000001021\\\",\\\"fiscalEnvironment\\\":0,\\\"fiscalIssuance\\\":{\\\"allocationEnd\\\":2000,\\\"allocationStart\\\":1001,\\\"capturedAt\\\":\\\"2026-10-16T03:30:00.000Z\\\",\\\"companyId\\\":\\\"44444444-4444-4444-8444-444444444444\\\",\\\"expiryDate\\\":\\\"2027-12-31\\\",\\\"fiscalAllocationId\\\":\\\"66666666-6666-4666-8666-666666666666\\\",\\\"fiscalRangeId\\\":\\\"55555555-5555-4555-8555-555555555555\\\",\\\"issuerRnc\\\":\\\"130090752\\\",\\\"ncf\\\":\\\"E310000001021\\\",\\\"ncfType\\\":\\\"E31\\\",\\\"prefix\\\":\\\"E31\\\",\\\"rangeEnd\\\":9999999999,\\\"rangeStart\\\":1,\\\"schemaVersion\\\":1,\\\"sequence\\\":1021,\\\"source\\\":\\\"POS_FISCAL_RESERVATION_V1\\\",\\\"tenantId\\\":\\\"22222222-2222-4222-8222-222222222222\\\",\\\"terminalId\\\":\\\"11111111-1111-4111-8111-111111111111\\\"},\\\"fiscalMode\\\":\\\"ECF\\\",\\\"fiscalProvider\\\":\\\"MSELLER\\\",\\\"id\\\":\\\"QA-V3-E31-NONE-LAB\\\",\\\"items\\\":[{\\\"activeInWarehouses\\\":[\\\"88888888-8888-4888-8888-888888888888\\\"],\\\"appliedTaxIds\\\":[],\\\"attributes\\\":[],\\\"cartId\\\":\\\"qa-cart-1\\\",\\\"category\\\":\\\"QA category\\\",\\\"conversionFactor\\\":1,\\\"description\\\":\\\"Synthetic catalog input; actual adapter output\\\",\\\"externalCode\\\":\\\"QA-EXT\\\",\\\"familyId\\\":\\\"qa-family\\\",\\\"id\\\":\\\"77777777-7777-4777-8777-777777777777\\\",\\\"images\\\":[],\\\"isInventoriable\\\":true,\\\"is_active\\\":true,\\\"is_sellable\\\":true,\\\"measurementUnit\\\":\\\"UND\\\",\\\"name\\\":\\\"QA full adapter product\\\",\\\"netAmount\\\":100,\\\"operationalFlags\\\":{\\\"ageRestricted\\\":false,\\\"allowNegativeStock\\\":false,\\\"autoPrintLabel\\\":false,\\\"excludeFromLoyalty\\\":false,\\\"excludeFromPromotions\\\":false,\\\"integersOnly\\\":true,\\\"isWeighted\\\":false,\\\"promptPrice\\\":false,\\\"trackInventory\\\":true,\\\"usesLots\\\":false,\\\"usesSerial\\\":false},\\\"posCategoryId\\\":\\\"qa-category\\\",\\\"posSortOrder\\\":3,\\\"price\\\":100,\\\"purchaseUnit\\\":\\\"UND\\\",\\\"quantity\\\":1,\\\"sku\\\":\\\"QA-FULL-PRODUCT\\\",\\\"stock\\\":8,\\\"stockBalances\\\":{\\\"88888888-8888-4888-8888-888888888888\\\":8},\\\"tariffs\\\":[{\\\"price\\\":100,\\\"tariffId\\\":\\\"qa-tariff\\\"}],\\\"taxAmount\\\":0,\\\"taxable\\\":false,\\\"totalAmount\\\":100,\\\"type\\\":\\\"PRODUCT\\\",\\\"v3SaleAuthority\\\":{\\\"binding\\\":\\\"[\\\\\\\"22222222-2222-4222-8222-222222222222\\\\\\\",\\\\\\\"11111111-1111-4111-8111-111111111111\\\\\\\",\\\\\\\"mock-device-v1\\\\\\\",\\\\\\\"https://erp.fixture.invalid/api/sync\\\\\\\",\\\\\\\"https://erp.fixture.invalid\\\\\\\"]\\\",\\\"inventoryCursor\\\":\\\"qa-stock-cursor-42\\\",\\\"inventorySyncId\\\":\\\"aaaaaaaa-0000-4000-8000-000000000006\\\",\\\"inventorySyncVersion\\\":6,\\\"inventoryVersion\\\":42,\\\"syncId\\\":\\\"aaaaaaaa-0000-4000-8000-000000000007\\\",\\\"syncVersion\\\":7,\\\"tariffId\\\":\\\"qa-tariff\\\",\\\"taxIncluded\\\":false,\\\"warehouseId\\\":\\\"88888888-8888-4888-8888-888888888888\\\"},\\\"variants\\\":[]}],\\\"ncf\\\":\\\"E310000001021\\\",\\\"ncfType\\\":\\\"E31\\\",\\\"netAmount\\\":100,\\\"payments\\\":[],\\\"pendingBalance\\\":100,\\\"settlementCurrencyCode\\\":\\\"DOP\\\",\\\"taxAmount\\\":0,\\\"terminalId\\\":\\\"11111111-1111-4111-8111-111111111111\\\",\\\"total\\\":100}\",\"88888888-8888-4888-8888-888888888888\",false,[],false,false,null]",
+              "lines": [
+                {
+                  "itemId": "77777777-7777-4777-8777-777777777777",
+                  "cartId": "qa-cart-1",
+                  "v3SaleAuthority": {
+                    "inventorySyncId": "aaaaaaaa-0000-4000-8000-000000000006",
+                    "inventorySyncVersion": 6,
+                    "syncId": "aaaaaaaa-0000-4000-8000-000000000007",
+                    "syncVersion": 7,
+                    "tariffId": "qa-tariff",
+                    "taxIncluded": false,
+                    "inventoryVersion": 42,
+                    "inventoryCursor": "qa-stock-cursor-42",
+                    "binding": "[\"22222222-2222-4222-8222-222222222222\",\"11111111-1111-4111-8111-111111111111\",\"mock-device-v1\",\"https://erp.fixture.invalid/api/sync\",\"https://erp.fixture.invalid\"]",
+                    "warehouseId": "88888888-8888-4888-8888-888888888888"
+                  }
+                }
+              ]
+            },
+            "environment": 0,
+            "currency": "DOP",
+            "date": "2026-10-15",
+            "total": 100,
+            "inventoryLocalId": "99999999-9999-4999-8999-999999999999",
+            "warehouseId": "88888888-8888-4888-8888-888888888888",
+            "totalCost": 25,
+            "resolvedLines": [
+              {
+                "itemId": "77777777-7777-4777-8777-777777777777",
+                "sku": "QA-FULL-PRODUCT",
+                "itemName": "QA full adapter product",
+                "quantity": 1,
+                "unitPrice": 100,
+                "discountedUnitPrice": 100,
+                "baseAmount": 100,
+                "originalUnitPrice": 100,
+                "netAmount": 100,
+                "taxAmount": 0,
+                "totalAmount": 100,
+                "taxRate": 0,
+                "discountRate": 0,
+                "discountAmount": 0,
+                "totalCost": 25,
+                "inventoryEntries": [
+                  {
+                    "itemId": "77777777-7777-4777-8777-777777777777",
+                    "quantity": 1,
+                    "unitCost": 25
+                  }
+                ],
+                "sourceFiscalSnapshot": {
+                  "transactionId": "QA-V3-E31-NONE-LAB",
+                  "sourceCartId": "qa-cart-1",
+                  "price": 100,
+                  "appliedTaxIds": [],
+                  "taxable": false,
+                  "v3SaleAuthority": {
+                    "taxIncluded": false
+                  }
+                }
+              }
+            ],
+            "masters": {
+              "items": [
+                {
+                  "id": "77777777-7777-4777-8777-777777777777",
+                  "tenant_id": "22222222-2222-4222-8222-222222222222",
+                  "company_id": "44444444-4444-4444-8444-444444444444",
+                  "sku": "QA-FULL-PRODUCT",
+                  "nombre": "QA full adapter product",
+                  "type": "PRODUCT",
+                  "costo_unitario": 25,
+                  "taxable": false,
+                  "is_active": true,
+                  "metadata": {
+                    "kit": null,
+                    "recipe": null,
+                    "variants": null,
+                    "is_kit": null,
+                    "is_serialized": null
+                  }
+                }
+              ],
+              "warehouse": {
+                "id": "88888888-8888-4888-8888-888888888888",
+                "tenant_id": "22222222-2222-4222-8222-222222222222",
+                "company_id": "44444444-4444-4444-8444-444444444444",
+                "store_id": "33333333-3333-4333-8333-333333333333",
+                "is_active": true,
+                "metadata": {
+                  "inventory_local_id": "99999999-9999-4999-8999-999999999999"
+                }
+              },
+              "local": {
+                "id": "99999999-9999-4999-8999-999999999999",
+                "mall_id": "33333333-3333-4333-8333-333333333333"
+              },
+              "company": {
+                "id": "44444444-4444-4444-8444-444444444444",
+                "tenant_id": "22222222-2222-4222-8222-222222222222",
+                "accountingControl": {
+                  "postSalesByCashClose": false,
+                  "salesPostingMode": "PER_DOCUMENT"
+                }
+              }
+            },
+            "accounting": {
+              "policy": "PER_DOCUMENT",
+              "accounts": {
+                "receivable": "1-01-02-001",
+                "revenue": "4-01-02",
+                "cost": "5-01-01",
+                "inventory": "1-01-03-001"
+              }
+            },
+            "settlement": {
+              "mode": "NONE",
+              "payments": [],
+              "paymentIntentIds": [],
+              "expectedPaymentSummary": null
+            },
+            "digest": "c4097ef5d9173e48195ee3b33c247d3cb2012fe5507cfa36ac2c431e3ca551bd"
+          },
+          "application_result": {
+            "document_id": "837b7a73-bf69-4c03-8bc5-a6da5deff0fe",
+            "accounting_entry_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+            "cogs_accounting_entry_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+          }
+        },
+        "created_at": "2026-10-16T03:30:00.000Z",
+        "processed_at": "2026-10-16T03:31:00.000Z"
+      }
+    ],
+    "documents": [
+      {
+        "id": "837b7a73-bf69-4c03-8bc5-a6da5deff0fe",
+        "tenant_id": "22222222-2222-4222-8222-222222222222",
+        "company_id": "44444444-4444-4444-8444-444444444444",
+        "mall_id": "33333333-3333-4333-8333-333333333333",
+        "tipo_documento": "FACTURA",
+        "codigo": "QA-V3-E31-NONE-LAB",
+        "fecha": "2026-10-15",
+        "estado": "PENDIENTE",
+        "client_id": null,
+        "total_neto": 100,
+        "itbis": 0,
+        "total_general": 100,
+        "ncf": "E310000001021",
+        "metadata": {
+          "source_channel": "POS",
+          "source_transaction_id": "QA-V3-E31-NONE-LAB",
+          "fiscalIssuance": {
+            "schemaVersion": 1,
+            "source": "POS_FISCAL_RESERVATION_V1",
+            "ncf": "E310000001021",
+            "ncfType": "E31",
+            "sequence": 1021,
+            "fiscalRangeId": "55555555-5555-4555-8555-555555555555",
+            "fiscalAllocationId": "66666666-6666-4666-8666-666666666666",
+            "prefix": "E31",
+            "rangeStart": 1,
+            "rangeEnd": 9999999999,
+            "allocationStart": 1001,
+            "allocationEnd": 2000,
+            "expiryDate": "2027-12-31",
+            "issuerRnc": "130090752",
+            "tenantId": "22222222-2222-4222-8222-222222222222",
+            "companyId": "44444444-4444-4444-8444-444444444444",
+            "terminalId": "11111111-1111-4111-8111-111111111111",
+            "capturedAt": "2026-10-16T03:30:00.000Z"
+          },
+          "fiscal_issuance": {
+            "schemaVersion": 1,
+            "source": "POS_FISCAL_RESERVATION_V1",
+            "ncf": "E310000001021",
+            "ncfType": "E31",
+            "sequence": 1021,
+            "fiscalRangeId": "55555555-5555-4555-8555-555555555555",
+            "fiscalAllocationId": "66666666-6666-4666-8666-666666666666",
+            "prefix": "E31",
+            "rangeStart": 1,
+            "rangeEnd": 9999999999,
+            "allocationStart": 1001,
+            "allocationEnd": 2000,
+            "expiryDate": "2027-12-31",
+            "issuerRnc": "130090752",
+            "tenantId": "22222222-2222-4222-8222-222222222222",
+            "companyId": "44444444-4444-4444-8444-444444444444",
+            "terminalId": "11111111-1111-4111-8111-111111111111",
+            "capturedAt": "2026-10-16T03:30:00.000Z"
+          },
+          "fiscal_range_id": "55555555-5555-4555-8555-555555555555",
+          "fiscal_allocation_id": "66666666-6666-4666-8666-666666666666",
+          "fiscalMode": "ECF",
+          "fiscal_mode": "ECF",
+          "fiscalProvider": "MSELLER",
+          "fiscal_provider": "MSELLER",
+          "fiscalCompliance": {
+            "mode": "ECF",
+            "provider": "MSELLER"
+          },
+          "ncfType": "E31",
+          "ncf_type": "E31",
+          "fiscal_ncf_type": "E31",
+          "fiscal_provider_id": "MSELLER",
+          "legacyNcf": null,
+          "legacy_ncf": null,
+          "electronicNcf": "E310000001021",
+          "electronic_ncf": "E310000001021",
+          "affectedNCF": null,
+          "affected_ncf": null,
+          "internal_non_fiscal": false,
+          "internalNonFiscal": false,
+          "accounting_posting_mode": "PER_DOCUMENT",
+          "accounting_journal_entry_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+          "accounting_cogs_journal_entry_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+        }
+      }
+    ],
+    "lines": [
+      {
+        "id": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+        "document_id": "837b7a73-bf69-4c03-8bc5-a6da5deff0fe",
+        "line_no": 1,
+        "item_id": "77777777-7777-4777-8777-777777777777",
+        "cantidad": 1,
+        "precio_unitario": 100,
+        "tasa_impuesto": 0,
+        "descuento_tasa": 0,
+        "descuento_monto": 0,
+        "subtotal_neto": 100,
+        "impuesto": 0,
+        "total_linea": 100,
+        "metadata": {
+          "fiscalSourceLineSnapshot": {
+            "documentId": "837b7a73-bf69-4c03-8bc5-a6da5deff0fe",
+            "lineCount": 1,
+            "lineNo": 1,
+            "itemId": "77777777-7777-4777-8777-777777777777",
+            "transactionId": "QA-V3-E31-NONE-LAB",
+            "sourceCartId": "qa-cart-1",
+            "quantity": 1,
+            "persistedPrice": 100,
+            "netAmount": 100,
+            "taxAmount": 0,
+            "totalAmount": 100,
+            "price": 100,
+            "appliedTaxIds": [],
+            "taxable": false,
+            "v3SaleAuthority": {
+              "taxIncluded": false
+            }
+          }
+        },
+        "item_sku": "QA-FULL-PRODUCT",
+        "item_name": "QA full adapter product"
+      }
+    ],
+    "movements": [
+      {
+        "id": "ffffffff-ffff-4fff-8fff-ffffffffffff",
+        "tenant_id": "22222222-2222-4222-8222-222222222222",
+        "company_id": "44444444-4444-4444-8444-444444444444",
+        "item_id": "77777777-7777-4777-8777-777777777777",
+        "local_id": "99999999-9999-4999-8999-999999999999",
+        "tipo_movimiento": "VENTA",
+        "cantidad": -1,
+        "movimiento_relacionado_id": "837b7a73-bf69-4c03-8bc5-a6da5deff0fe",
+        "metadata": {}
+      }
+    ],
+    "entries": [
+      {
+        "id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        "tenant_id": "22222222-2222-4222-8222-222222222222",
+        "company_id": "44444444-4444-4444-8444-444444444444",
+        "source_document_id": "837b7a73-bf69-4c03-8bc5-a6da5deff0fe",
+        "source_document_type": "SALES_INVOICE",
+        "status": "POSTED",
+        "journal_date": "2026-10-15",
+        "currency_code": "DOP",
+        "total_debit": 100,
+        "total_credit": 100
+      },
+      {
+        "id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        "tenant_id": "22222222-2222-4222-8222-222222222222",
+        "company_id": "44444444-4444-4444-8444-444444444444",
+        "source_document_id": "837b7a73-bf69-4c03-8bc5-a6da5deff0fe",
+        "source_document_type": "SALES_COGS",
+        "status": "POSTED",
+        "journal_date": "2026-10-15",
+        "currency_code": "DOP",
+        "total_debit": 25,
+        "total_credit": 25
+      }
+    ],
+    "journalLines": [
+      {
+        "id": "00000000-0000-4000-8000-000000000000",
+        "journal_entry_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        "account_code": "1-01-02-001",
+        "debit_amount": 100,
+        "credit_amount": 0,
+        "dimension_type": null,
+        "dimension_id": null,
+        "dimension_label": null
+      },
+      {
+        "id": "00000000-0000-4000-8000-000000000001",
+        "journal_entry_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        "account_code": "4-01-02",
+        "debit_amount": 0,
+        "credit_amount": 100,
+        "dimension_type": null,
+        "dimension_id": null,
+        "dimension_label": null
+      },
+      {
+        "id": "00000000-0000-4000-8000-000000000002",
+        "journal_entry_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        "account_code": "5-01-01",
+        "debit_amount": 25,
+        "credit_amount": 0,
+        "dimension_type": null,
+        "dimension_id": null,
+        "dimension_label": null
+      },
+      {
+        "id": "00000000-0000-4000-8000-000000000003",
+        "journal_entry_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        "account_code": "1-01-03-001",
+        "debit_amount": 0,
+        "credit_amount": 25,
+        "dimension_type": null,
+        "dimension_id": null,
+        "dimension_label": null
+      }
+    ],
+    "terminal": {
+      "id": "11111111-1111-4111-8111-111111111111",
+      "store_id": "33333333-3333-4333-8333-333333333333",
+      "device_id": "mock-device-v1",
+      "config": {
+        "is_active": true,
+        "runtime": {
+          "syncAuthToken": "synthetic-sync-token",
+          "tokenExpiresAt": "2099-01-01T00:00:00.000Z"
+        },
+        "security": {
+          "deviceBindingToken": "synthetic-device-token"
+        }
+      }
+    },
+    "store": {
+      "id": "33333333-3333-4333-8333-333333333333",
+      "company_id": "44444444-4444-4444-8444-444444444444",
+      "tenant_id": "22222222-2222-4222-8222-222222222222"
+    },
+    "tenant": {
+      "id": "22222222-2222-4222-8222-222222222222",
+      "status": "ACTIVE",
+      "config": {
+        "erpEnabled": true
+      }
+    },
+    "company": {
+      "id": "44444444-4444-4444-8444-444444444444",
+      "tenant_id": "22222222-2222-4222-8222-222222222222",
+      "tax_id": "130090752"
+    },
+    "ranges": [
+      {
+        "id": "55555555-5555-4555-8555-555555555555",
+        "tenant_id": "22222222-2222-4222-8222-222222222222",
+        "company_id": "44444444-4444-4444-8444-444444444444",
+        "ncf_type": "E31",
+        "prefix": "E31",
+        "start_number": 1,
+        "end_number": 9999999999,
+        "expiry_date": "2027-12-31",
+        "is_active": true
+      }
+    ],
+    "allocations": [
+      {
+        "id": "66666666-6666-4666-8666-666666666666",
+        "tenant_id": "22222222-2222-4222-8222-222222222222",
+        "company_id": "44444444-4444-4444-8444-444444444444",
+        "terminal_id": "11111111-1111-4111-8111-111111111111",
+        "store_id": "33333333-3333-4333-8333-333333333333",
+        "fiscal_range_id": "55555555-5555-4555-8555-555555555555",
+        "ncf_type": "E31",
+        "reserved_start": 1001,
+        "reserved_end": 2000,
+        "status": "ACTIVE"
+      }
+    ],
+    "receipts": [],
+    "paymentEntries": [],
+    "paymentJournalLines": []
+  },
+  "credentialMetadata": {
+    "tenant_id": "22222222-2222-4222-8222-222222222222",
+    "company_id": "44444444-4444-4444-8444-444444444444",
+    "provider_id": "MSELLER",
+    "company_key": "130090752",
+    "environment": 0,
+    "is_active": true,
+    "updated_at": null
+  },
+  "expectedHttpStatus": 200,
+  "expectedResponse": {
+    "schemaVersion": 2,
+    "source": "ERP_POS_APPLIED_RECEIPT_V2",
+    "decision": "READY",
+    "code": "FISCAL_APPLIED_RECEIPT_READY",
+    "profile": "POS_V3_DIRECT_STOCK_PER_DOCUMENT_DOP_V1",
+    "scope": {
+      "tenantId": "22222222-2222-4222-8222-222222222222",
+      "companyId": "44444444-4444-4444-8444-444444444444",
+      "storeId": "33333333-3333-4333-8333-333333333333",
+      "terminalId": "11111111-1111-4111-8111-111111111111",
+      "deviceId": "mock-device-v1"
+    },
+    "sourceDocument": {
+      "transactionId": "QA-V3-E31-NONE-LAB",
+      "eventId": "11111111-0000-4000-8000-000000000001",
+      "eventType": "SALE_POSTED",
+      "inboxId": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      "checksum": "d0069cf80a70f78e0bec26c2667ad930907396d31628df5e9b738ef6eb4ee00f",
+      "checksumAlgorithm": "SHA256_CANONICAL_JSON_FISCAL_SOURCE_PROJECTION_V1"
+    },
+    "document": {
+      "erpDocumentId": "837b7a73-bf69-4c03-8bc5-a6da5deff0fe",
+      "ncf": "E310000001021",
+      "ncfType": "E31",
+      "sourceSignedTotal": 100,
+      "currency": "DOP"
+    },
+    "fiscalIssuance": {
+      "schemaVersion": 1,
+      "source": "POS_FISCAL_RESERVATION_V1",
+      "ncf": "E310000001021",
+      "ncfType": "E31",
+      "sequence": 1021,
+      "fiscalRangeId": "55555555-5555-4555-8555-555555555555",
+      "fiscalAllocationId": "66666666-6666-4666-8666-666666666666",
+      "prefix": "E31",
+      "rangeStart": 1,
+      "rangeEnd": 9999999999,
+      "allocationStart": 1001,
+      "allocationEnd": 2000,
+      "expiryDate": "2027-12-31",
+      "issuerRnc": "130090752",
+      "tenantId": "22222222-2222-4222-8222-222222222222",
+      "companyId": "44444444-4444-4444-8444-444444444444",
+      "terminalId": "11111111-1111-4111-8111-111111111111",
+      "capturedAt": "2026-10-16T03:30:00.000Z"
+    },
+    "issuer": {
+      "rnc": "130090752",
+      "providerId": "MSELLER",
+      "environment": 0,
+      "credentialCompanyId": "44444444-4444-4444-8444-444444444444",
+      "credentialAccountRnc": "130090752"
+    },
+    "environmentBasis": "HISTORICAL_SOURCE",
+    "historicalEnvironment": 0,
+    "posAuthority": {
+      "v3Binding": "[\"22222222-2222-4222-8222-222222222222\",\"11111111-1111-4111-8111-111111111111\",\"mock-device-v1\",\"https://erp.fixture.invalid/api/sync\",\"https://erp.fixture.invalid\"]",
+      "v3WarehouseId": "88888888-8888-4888-8888-888888888888",
+      "v3InventoryBaseline": "[\"[\\\"22222222-2222-4222-8222-222222222222\\\",\\\"11111111-1111-4111-8111-111111111111\\\",\\\"mock-device-v1\\\",\\\"https://erp.fixture.invalid/api/sync\\\",\\\"https://erp.fixture.invalid\\\"]\",\"aaaaaaaa-0000-4000-8000-000000000006\",6,42,\"qa-stock-cursor-42\"]",
+      "v3CommitFingerprint": "[\"{\\\"customerSnapshot\\\":{\\\"taxId\\\":\\\"131000000\\\"},\\\"date\\\":\\\"2026-10-16T03:30:00.000Z\\\",\\\"discountAmount\\\":0,\\\"documentType\\\":\\\"TICKET\\\",\\\"electronicNcf\\\":\\\"E310000001021\\\",\\\"fiscalEnvironment\\\":0,\\\"fiscalIssuance\\\":{\\\"allocationEnd\\\":2000,\\\"allocationStart\\\":1001,\\\"capturedAt\\\":\\\"2026-10-16T03:30:00.000Z\\\",\\\"companyId\\\":\\\"44444444-4444-4444-8444-444444444444\\\",\\\"expiryDate\\\":\\\"2027-12-31\\\",\\\"fiscalAllocationId\\\":\\\"66666666-6666-4666-8666-666666666666\\\",\\\"fiscalRangeId\\\":\\\"55555555-5555-4555-8555-555555555555\\\",\\\"issuerRnc\\\":\\\"130090752\\\",\\\"ncf\\\":\\\"E310000001021\\\",\\\"ncfType\\\":\\\"E31\\\",\\\"prefix\\\":\\\"E31\\\",\\\"rangeEnd\\\":9999999999,\\\"rangeStart\\\":1,\\\"schemaVersion\\\":1,\\\"sequence\\\":1021,\\\"source\\\":\\\"POS_FISCAL_RESERVATION_V1\\\",\\\"tenantId\\\":\\\"22222222-2222-4222-8222-222222222222\\\",\\\"terminalId\\\":\\\"11111111-1111-4111-8111-111111111111\\\"},\\\"fiscalMode\\\":\\\"ECF\\\",\\\"fiscalProvider\\\":\\\"MSELLER\\\",\\\"id\\\":\\\"QA-V3-E31-NONE-LAB\\\",\\\"items\\\":[{\\\"activeInWarehouses\\\":[\\\"88888888-8888-4888-8888-888888888888\\\"],\\\"appliedTaxIds\\\":[],\\\"attributes\\\":[],\\\"cartId\\\":\\\"qa-cart-1\\\",\\\"category\\\":\\\"QA category\\\",\\\"conversionFactor\\\":1,\\\"description\\\":\\\"Synthetic catalog input; actual adapter output\\\",\\\"externalCode\\\":\\\"QA-EXT\\\",\\\"familyId\\\":\\\"qa-family\\\",\\\"id\\\":\\\"77777777-7777-4777-8777-777777777777\\\",\\\"images\\\":[],\\\"isInventoriable\\\":true,\\\"is_active\\\":true,\\\"is_sellable\\\":true,\\\"measurementUnit\\\":\\\"UND\\\",\\\"name\\\":\\\"QA full adapter product\\\",\\\"netAmount\\\":100,\\\"operationalFlags\\\":{\\\"ageRestricted\\\":false,\\\"allowNegativeStock\\\":false,\\\"autoPrintLabel\\\":false,\\\"excludeFromLoyalty\\\":false,\\\"excludeFromPromotions\\\":false,\\\"integersOnly\\\":true,\\\"isWeighted\\\":false,\\\"promptPrice\\\":false,\\\"trackInventory\\\":true,\\\"usesLots\\\":false,\\\"usesSerial\\\":false},\\\"posCategoryId\\\":\\\"qa-category\\\",\\\"posSortOrder\\\":3,\\\"price\\\":100,\\\"purchaseUnit\\\":\\\"UND\\\",\\\"quantity\\\":1,\\\"sku\\\":\\\"QA-FULL-PRODUCT\\\",\\\"stock\\\":8,\\\"stockBalances\\\":{\\\"88888888-8888-4888-8888-888888888888\\\":8},\\\"tariffs\\\":[{\\\"price\\\":100,\\\"tariffId\\\":\\\"qa-tariff\\\"}],\\\"taxAmount\\\":0,\\\"taxable\\\":false,\\\"totalAmount\\\":100,\\\"type\\\":\\\"PRODUCT\\\",\\\"v3SaleAuthority\\\":{\\\"binding\\\":\\\"[\\\\\\\"22222222-2222-4222-8222-222222222222\\\\\\\",\\\\\\\"11111111-1111-4111-8111-111111111111\\\\\\\",\\\\\\\"mock-device-v1\\\\\\\",\\\\\\\"https://erp.fixture.invalid/api/sync\\\\\\\",\\\\\\\"https://erp.fixture.invalid\\\\\\\"]\\\",\\\"inventoryCursor\\\":\\\"qa-stock-cursor-42\\\",\\\"inventorySyncId\\\":\\\"aaaaaaaa-0000-4000-8000-000000000006\\\",\\\"inventorySyncVersion\\\":6,\\\"inventoryVersion\\\":42,\\\"syncId\\\":\\\"aaaaaaaa-0000-4000-8000-000000000007\\\",\\\"syncVersion\\\":7,\\\"tariffId\\\":\\\"qa-tariff\\\",\\\"taxIncluded\\\":false,\\\"warehouseId\\\":\\\"88888888-8888-4888-8888-888888888888\\\"},\\\"variants\\\":[]}],\\\"ncf\\\":\\\"E310000001021\\\",\\\"ncfType\\\":\\\"E31\\\",\\\"netAmount\\\":100,\\\"payments\\\":[],\\\"pendingBalance\\\":100,\\\"settlementCurrencyCode\\\":\\\"DOP\\\",\\\"taxAmount\\\":0,\\\"terminalId\\\":\\\"11111111-1111-4111-8111-111111111111\\\",\\\"total\\\":100}\",\"88888888-8888-4888-8888-888888888888\",false,[],false,false,null]",
+      "lines": [
+        {
+          "itemId": "77777777-7777-4777-8777-777777777777",
+          "cartId": "qa-cart-1",
+          "v3SaleAuthority": {
+            "inventorySyncId": "aaaaaaaa-0000-4000-8000-000000000006",
+            "inventorySyncVersion": 6,
+            "syncId": "aaaaaaaa-0000-4000-8000-000000000007",
+            "syncVersion": 7,
+            "tariffId": "qa-tariff",
+            "taxIncluded": false,
+            "inventoryVersion": 42,
+            "inventoryCursor": "qa-stock-cursor-42",
+            "binding": "[\"22222222-2222-4222-8222-222222222222\",\"11111111-1111-4111-8111-111111111111\",\"mock-device-v1\",\"https://erp.fixture.invalid/api/sync\",\"https://erp.fixture.invalid\"]",
+            "warehouseId": "88888888-8888-4888-8888-888888888888"
+          }
+        }
+      ]
+    },
+    "erpApplicationPlan": {
+      "schemaVersion": 1,
+      "source": "ERP_PRE_APPLICATION_PLAN_V1",
+      "id": "361847b8-07ed-4f4d-a07a-671977e2af8c",
+      "digest": "c4097ef5d9173e48195ee3b33c247d3cb2012fe5507cfa36ac2c431e3ca551bd",
+      "capturedAt": "2026-10-17T11:23:30.615Z",
+      "costAndLocationBasis": "ERP_CAPTURED_BEFORE_NEW_APPLICATION",
+      "policy": "PER_DOCUMENT"
+    },
+    "materialization": {
+      "profile": "POS_V3_DIRECT_STOCK_PER_DOCUMENT_DOP_V1",
+      "lineIds": [
+        "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
+      ],
+      "movementIds": [
+        "ffffffff-ffff-4fff-8fff-ffffffffffff"
+      ],
+      "journalEntryIds": [
+        "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+      ],
+      "journalLineIds": [
+        "00000000-0000-4000-8000-000000000000",
+        "00000000-0000-4000-8000-000000000001",
+        "00000000-0000-4000-8000-000000000002",
+        "00000000-0000-4000-8000-000000000003"
+      ],
+      "inventoryLocalId": "99999999-9999-4999-8999-999999999999",
+      "warehouseId": "88888888-8888-4888-8888-888888888888"
+    },
+    "settlement": {
+      "mode": "NONE",
+      "sourcePayment": null,
+      "erpReceiptId": null,
+      "accountingEntryId": null,
+      "planId": null
+    },
+    "observation": {
+      "algorithm": "SHA256_CANONICAL_JSON_APPLIED_OBSERVATION_V2",
+      "digest": "616499492c493900d7fa80fa95911015f1d280de1a63de7f45494086c924b2e3"
+    },
+    "observedAt": "2026-10-17T12:00:00.000Z"
+  }
+}

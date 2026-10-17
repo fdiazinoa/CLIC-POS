@@ -1,0 +1,39 @@
+{
+  "vectors": [
+    "full-none-habitual-missing-env",
+    "full-none-lab-explicit-env",
+    "full-cash1-habitual-missing-env",
+    "full-cash1-lab-explicit-env"
+  ],
+  "primarySourceHashes": {
+    "services/sync/LargeMasterSyncV3Canary.ts": "9761a505a94909322bb55fd836e24c69d3bbd848237287612f744e11c0ad8c17",
+    "services/sync/LargeMasterSyncV3Client.ts": "b12a9d91e6e01652a385f5ea6672849c4ef6bb554cdeacc5c79f6dd289f001c8",
+    "services/sync/LargeMasterSyncV3OperationalCatalog.ts": "5706668f5b9a11cc5a6b13956872c064657e7e951c888c7df5d0b1b6017bbc6d",
+    "services/sync/SalePostedContract.ts": "8d76b4e577d2a788711348c7d5bd6598d4a446cfbdf765e9119b1596ee9ca0d2",
+    "services/sync/customerIdentityContract.ts": "76d37bae0d42425b0d03009fc59a7207e6eeaba69ca3e1f800b99e6334bcf21d",
+    "services/sync/LargeMasterSyncV3FinancialCommit.ts": "7b60ca11a8a6e7bc8a9e04eb33383c1f5cfec0093f4d87d1673b2d9163881e56",
+    "services/db/LargeMasterSyncV3FinancialRetention.ts": "35b56010f6fe7b1c73d129ff2a262c89c6a0f6725e2778670124d9f953d42d9b"
+  },
+  "bundledPosSourceHashes": {
+    "services/db/LargeMasterSyncV3FinancialRetention.ts": "35b56010f6fe7b1c73d129ff2a262c89c6a0f6725e2778670124d9f953d42d9b",
+    "services/sync/LargeMasterSyncV3Canary.ts": "9761a505a94909322bb55fd836e24c69d3bbd848237287612f744e11c0ad8c17",
+    "services/sync/LargeMasterSyncV3OperationalCatalog.ts": "5706668f5b9a11cc5a6b13956872c064657e7e951c888c7df5d0b1b6017bbc6d",
+    "services/sync/LargeMasterSyncV3Types.ts": "8de6465fd32beef70bc8b51a9742936fbfe349ee8dedf9ce1b2459f7c923deac",
+    "services/sync/SalePostedContract.ts": "8d76b4e577d2a788711348c7d5bd6598d4a446cfbdf765e9119b1596ee9ca0d2",
+    "services/sync/customerIdentityContract.ts": "76d37bae0d42425b0d03009fc59a7207e6eeaba69ca3e1f800b99e6334bcf21d",
+    "utils/cartQuantity.ts": "3668dce8c6fb56965e0cfa27a2c604fc86b37eb2d8c5e27f0d03bd03eb4aecd7",
+    "utils/quantityPresentation.ts": "bdd508094d5caf21d783a52ed75495840579210b5972064c6ac4de71d51eefea",
+    "utils/scaleWeight.ts": "fcaa345871533564487b94f9f4c5dfb0181cd2f7aa0c7d1e564eef5b5991a874",
+    "utils/weightedProduct.ts": "eaddbd1de2eeaca1303b3923f414f4dec21aa63725544d0aa2e004b76df849fc"
+  },
+  "fingerprintExactSpans": {
+    "identity": "const financialIdentity = (transaction: Transaction): string => {\n  const canonical = (value: any): any => Array.isArray(value) ? value.map(canonical)\n    : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort()\n      .filter(key => ![...V3_FINANCIAL_MUTABLE_FIELDS, ...V3_FINANCIAL_CAS_PROTECTED_FIELDS, 'relatedTransactions', 'syncStatus', 'syncError', 'cloudSyncStatus', 'cloudSyncError', 'cloudSyncedAt',\n        'updatedAt', 'status', 'v3InventoryBaseline', 'v3Binding', 'v3WarehouseId', 'v3CommitFingerprint', 'fiscalStatus',\n        'fiscalResponseMessage', 'fiscalResponseCode', 'fiscalSignedXml', 'fiscalQrCode'].includes(key))\n      .map(key => [key, canonical(value[key])])) : value;\n  const input = transaction.v3ReservationClaimId ? JSON.parse(JSON.stringify({...transaction,globalSequence:undefined,displayId:undefined,seriesNumber:undefined})) : transaction;\n  return JSON.stringify(canonical(input));\n};\n\n",
+    "operation": "const financialOperationIdentity=(transaction:Transaction,warehouseId:string,options:V3FinancialOptions):string=>JSON.stringify([\n  financialIdentity(transaction),warehouseId,options.refund===true,[...(options.conditions || new Map()).entries()].sort(),\n  options.adjustCustomerBalance===true,options.skipWalletDeposit===true,options.original?financialIdentity(options.original):null,\n]);\n"
+  },
+  "stubs": [
+    "diagnostic recorder no-op (no financial behavior)",
+    "SaleCatalog class unused by direct real adapt() call; synthetic catalog data injected",
+    "Canary Capacitor/db/client modules stubbed; not called by REAL validateLargeMasterSyncV3CanaryUrl"
+  ],
+  "limits": "Real pure adapter/serializer/fingerprint code only. No native commit/outbox/SQLite CAS, no service/device/sandbox, no POS changes."
+}
