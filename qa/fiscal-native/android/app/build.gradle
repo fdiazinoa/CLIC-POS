@@ -2,7 +2,7 @@ apply plugin: 'com.android.application'
 android {
  namespace 'com.clicpos.fiscalqa'
  compileSdk 36
- defaultConfig { applicationId 'com.clicpos.fiscalqa'; minSdk 24; targetSdk 36; versionCode 1; versionName '0.0.1-laboratory' }
+ defaultConfig { applicationId 'com.clicpos.fiscalqa'; minSdk 24; targetSdk 36; versionCode 1; versionName '0.0.1-laboratory'; manifestPlaceholders = [internetPermissionAction: providers.gradleProperty('fiscalQaOnline').getOrElse('false') == 'true' ? 'merge' : 'remove'] }
  buildTypes { debug { debuggable true } }
  sourceSets { main { assets.srcDirs = [providers.gradleProperty('fiscalQaAssetsDir').getOrElse('/tmp/clic-pos-fiscalqa-assets')] } }
  compileOptions { sourceCompatibility JavaVersion.VERSION_21; targetCompatibility JavaVersion.VERSION_21 }

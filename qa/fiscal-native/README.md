@@ -27,3 +27,33 @@ Alternate mode order for sessions2/3. Each command creates a new own DB; existin
 Web bundle target is Chrome83, with no new silent financial polyfill. Actual runtime Android/WebView/SQLite and unsupported API failures are reported. Current dedicated lab AVD is emulator-5580/API33/WebView103; it does not certify the older operational WebView83. Native logs/APK/source hashes and review/QA/sync/performance remain separate evidence and gates.
 
 All Gradle project outputs are redirected outside source by fiscalQaBuildDir (absolute, default/tmp/clic-pos-fiscalqa-gradle), with unique root/app/plugin subdirectories. Preserve failed intermediate builds externally; ESLint continues to inspect runner source without generated bundles contaminating repository checks. APK is under fiscalQaBuildDir/app/outputs/apk/debug/.
+
+## Explicit online Android ↔ ERP laboratory
+
+This separately selected build preserves the offline entry above. It alone enables INTERNET and mixed content (`--online` and matching `-PfiscalQaOnline=true`). Android network security permits cleartext only for127.0.0.1; the laboratory fetch driver allows only the exact18765origin and five documented paths. No App/bootstrap, product sync transport, public catalog, acceptance GET, credentials outside the synthetic handoff, or production assertReady activation is imported. No operational app installation, data copy, stop, settings or pairing is involved. The same harness UID retains its prior offline databases; each online session creates a unique `fiscal_online_<timestamp>` SQLite database and refuses a second session/partial-phase retry. Startup performs only runtime/HTTP preflight, no financial writes.
+
+From a reviewed, clean source SHA:
+
+```
+node qa/fiscal-native/build-bundle.mjs /tmp/clic-pos-fiscalqa-online-assets --online --lab-input=/tmp/erp-fiscal-android-lab-1017c
+JAVA_HOME=/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home ANDROID_HOME=/Users/felixdiaz/Library/Android/sdk ./android/gradlew -p qa/fiscal-native/android -PfiscalQaOnline=true -PfiscalQaAssetsDir=/tmp/clic-pos-fiscalqa-online-assets -PfiscalQaBuildDir=/tmp/clic-pos-fiscalqa-online-gradle assembleDebug
+```
+
+Build-time inputs are connection.json/catalog-input.json plus only master fiscal bounds/IDs/expiry/issuer from source-example.json; no original, event, checksum, receipt or expected READY is bundled. Two initial buffer numbers derive from the authorized synthetic master allocation start, distinct from preloaded control. The native adapter's real reserveFinancialNumbers validates/CASes authority and writes immutable nativeFiscalReservations; snapshotFiscalIssuance and a laboratory guard validate the consumed buffer/config/range. The operational utils/db reserve wrapper/lock is deliberately not imported and is not certified by this test. SQLite schema, catalog adapter/runtime/session, constructor, financial commit/serializers, receipt network validator and dispatcher/CAS are real. Config/identity and catalog seeds are synthetic laboratory ports, not full ERP bootstrap. Only sqlite_outbox_v2 is enabled inside the pre-existing synthetic port; product flags and all formats remain untouched.
+
+After independently verifying APK/package/SHA/device/tunnel/FAKEservice, QA invokes from the laboratory WebView DevTools:
+
+```
+await fiscalOnlineQA.preflight() // own runtime fingerprint + actual health/metrics; no operation
+await fiscalOnlineQA.start() // exactly2newCASH sources, SALE→PAYMENT inbox per source, real receipt and one ISSUE each
+```
+
+`ONLINE_READY_FOR_PROCESS_RESTART` exports session IDs, original rows/hashes, claims, counters, sequences and quick_check. For source2 the driver awaits and consumes the actual ISSUE response before deliberately throwing `LAB_INJECTED_ACK_LOST_AFTER_REAL_RESPONSE`; only that acknowledgement loss is simulated. FAKEprovider counter must increase exactly2. force-stop/start **only com.clicpos.fiscalqa**, then:
+
+```
+await fiscalOnlineQA.recover() // reopen, original durable claims, zero further HTTP/POST during dispatch replay
+await fiscalOnlineQA.snapshot()
+fiscalOnlineQA.report()
+```
+
+Recovered financial commit replay uses the original constructor output and must add no ledger/sequences/Outbox; full durable hashes stay fixed. Provider counter must remain unchanged. Any partial phase is HOLD with no auto-transport/retry/reserve or reset. PENDING/APPLIED/FAKE never proves DGII acceptance. This laboratory does not validate product UI performance, sandbox MSeller, printer, negative E34, historical post-Z or connect product assertReady. Do not replace fixtures with claims of real endpoints: online entry uses actual window.fetch throughout and records every allowed request/body SHA without headers.
