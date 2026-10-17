@@ -8,7 +8,7 @@ From a **clean frozen checkout**, Node22:
 
 ```
 node qa/fiscal-native/build-bundle.mjs /tmp/clic-pos-fiscalqa-assets
-JAVA_HOME=/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home ANDROID_HOME=/Users/felixdiaz/Library/Android/sdk ./android/gradlew -p qa/fiscal-native/android -PfiscalQaAssetsDir=/tmp/clic-pos-fiscalqa-assets assembleDebug
+JAVA_HOME=/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home ANDROID_HOME=/Users/felixdiaz/Library/Android/sdk ./android/gradlew -p qa/fiscal-native/android -PfiscalQaAssetsDir=/tmp/clic-pos-fiscalqa-assets -PfiscalQaBuildDir=/tmp/clic-pos-fiscalqa-gradle assembleDebug
 ```
 
 Build/install only after independent source/runner review and root's lab authorization. Asset manifest records exact source SHA, bundle hash, dependency graph, synthetic ports and native SQLite plugin file hashes. QA must additionally pin APK hash/package/signature/merged permissions and explicit lab serial. Product release build is a different gate. Do not run Gradle in the operational Android app project or install on an unselected target.
@@ -25,3 +25,5 @@ await fiscalQA.runPerformance({mode:'candidate',session:1,n:100,seedRows:10000})
 Alternate mode order for sessions2/3. Each command creates a new own DB; existing DB causes refusal, never reset. Both populate10k original synthetic rows first,17.5KB-ish payload (exact bytes reported). Baseline explicitly lacks the three new lookup indexes; candidate creates the actual three indexes on the populated DB. Only these disposable fixture DBs drop indexes before seeding. Captures migration,105 individual inserts/read lookups and actual constructor+financial commits (first5 warmups,100 retained raw samples), query plans, row/ledger/events and quick_check invariants. Counts include105 transactions/history/ledger and exactly210 new SALE/PAYMENT events. Six populated DBs can consume over1GB; ensure lab disk space first. Bridge-inclusive WebView performance.now is not UI input latency or physical POS performance. Do not trim tails or treat this as a hardware release budget approval.
 
 Web bundle target is Chrome83, with no new silent financial polyfill. Actual runtime Android/WebView/SQLite and unsupported API failures are reported. Current dedicated lab AVD is emulator-5580/API33/WebView103; it does not certify the older operational WebView83. Native logs/APK/source hashes and review/QA/sync/performance remain separate evidence and gates.
+
+All Gradle project outputs are redirected outside source by fiscalQaBuildDir (absolute, default/tmp/clic-pos-fiscalqa-gradle), with unique root/app/plugin subdirectories. Preserve failed intermediate builds externally; ESLint continues to inspect runner source without generated bundles contaminating repository checks. APK is under fiscalQaBuildDir/app/outputs/apk/debug/.
