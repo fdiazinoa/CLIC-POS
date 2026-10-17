@@ -2484,7 +2484,7 @@ export interface PaymentEntry {
   methodIcon?: string;
   creditOverrideApproved?: boolean;
   amount: number;
-  timestamp: Date;
+  timestamp: Date | string;
   currencyCode?: string;
   amountOriginal?: number;
   exchangeRate?: number;

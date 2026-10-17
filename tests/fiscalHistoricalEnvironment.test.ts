@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {readFileSync} from 'node:fs';
+import {readFileSync,mkdtempSync,rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import SQLite from 'better-sqlite3';
 import {build,transform} from 'esbuild';
 import {nativeFixture,id} from './articleFormatsNativeFixture';
 import {LargeMasterSyncV3Runtime} from '../services/sync/LargeMasterSyncV3Runtime';
@@ -57,16 +60,18 @@ async function modules(f:any,durable=true) {
  return {...m,session:globals.__fiscalEnvironment.session};
 }
 
-async function directFixture(){
- const f=await nativeFixture();
+async function directFixture(file?:string,seed=true){
+ const f=await nativeFixture(file?new SQLite(file):undefined,seed);
+ if(seed){
  f.db.prepare("INSERT INTO sync_v3_sessions(sync_id,sync_version,schema_version,contract_version,status,manifest_json,created_at,updated_at) VALUES(?,32,3,2,'ACTIVE','{}','fixture','fixture')").run(id(60));
  const article=JSON.parse((f.db.prepare('SELECT record_json FROM master_v3_articles').get() as any).record_json);article.activeWarehouseIds=[id(5)];f.db.prepare('UPDATE master_v3_articles SET record_json=?').run(JSON.stringify(article));
  f.db.prepare('INSERT INTO master_v3_tariffs(sync_version,tariff_id,active,record_json) VALUES(32,?,1,?)').run(id(6),JSON.stringify({id:id(6),name:'Synthetic',active:true,taxIncluded:false}));f.db.prepare('INSERT INTO master_v3_prices VALUES(32,?,?,100)').run(id(7),id(6));
+ }
  const m=await modules(f),config=await m.session.projectConfig(f.documents('config')[0]);
  const product=await m.session.withStock((await(await m.session.catalog(id(6),id(5))).get(id(7))).product,id(5));
  return {...f,...m,config,product};
 }
-for(const cash of [false,true])for(const value of [0,1,2,undefined])test('real constructor native first commit '+(cash?'CASH (known Date replay blocker)':'NONE replay')+' preserves environment '+String(value),async()=>{
+for(const cash of [false,true])for(const value of [0,1,2,undefined])test('real constructor native first commit '+(cash?'CASH replay':'NONE replay')+' preserves environment '+String(value),async()=>{
  const f=await directFixture();try{
   const environment=capture(value===undefined?{terminal_id:id(4),fiscalMode:'ECF',resolved:{terminalFiscalConfig:{fiscal:{providerId:'MSELLER',mode:'ECF'}}}}:raw(value));
   const data:any={id:id(85),documentType:'TICKET',seriesId:id(9),terminalId:id(4),date:'2026-10-17T12:00:00Z',status:'COMPLETED',userId:id(25),userName:'Synthetic',items:[{...f.product,quantity:1,cartId:'new-line',netAmount:100,taxAmount:0,totalAmount:100}],netAmount:100,taxAmount:0,total:100,payments:cash?[{id:id(86),method:'CASH',amount:100,timestamp:'2026-10-17T12:00:00Z'}]:[],...(environment!==undefined?{fiscalEnvironment:environment}:{})};
@@ -79,7 +84,7 @@ for(const cash of [false,true])for(const value of [0,1,2,undefined])test('real c
   assert.equal(Object.hasOwn(sale.transaction,'fiscalEnvironment'),value!==undefined);assert.equal(sale.transaction.fiscalEnvironment,value);assert.equal(sale.transaction.v3CommitFingerprint,fingerprint);
   if(cash){const payment=JSON.parse(paymentRow.payload_json),expected=buildPaymentPostedPayload(result.transaction,{paymentIntentIds:[]});assert.deepEqual(payment,expected);assert.equal(Object.hasOwn(payment,'fiscalEnvironment'),false);assert.equal(Object.hasOwn(payment.summary,'fiscalEnvironment'),false);}else assert.equal(paymentRow,undefined);
   const persisted=f.db.prepare('SELECT * FROM documents ORDER BY collection_name,doc_id').all();const serialized=JSON.stringify(rows);
-  const currentSnapshot=raw(2);assert.equal(capture(currentSnapshot),2);if(cash){assert.ok(transaction.payments[0].timestamp instanceof Date);assert.notEqual(financialIdentity(await f.adapter.getDocument('transactions',transaction.id)),financialIdentity(transaction));await assert.rejects(()=>f.persistV3FinancialTransaction(transaction,f.config,id(5)),/SYNC_V3_DUPLICATE_TRANSACTION_MISMATCH/);}else assert.equal((await f.persistV3FinancialTransaction(transaction,f.config,id(5))).created,false);assert.deepEqual(f.db.prepare('SELECT * FROM documents ORDER BY collection_name,doc_id').all(),persisted);assert.equal(JSON.stringify(f.db.prepare('SELECT * FROM sync_outbox_v2 ORDER BY local_sequence').all()),serialized);
+  const currentSnapshot=raw(2);assert.equal(capture(currentSnapshot),2);if(cash){assert.equal(typeof transaction.payments[0].timestamp,'string');assert.equal(financialIdentity(await f.adapter.getDocument('transactions',transaction.id)),financialIdentity(transaction));}assert.equal((await f.persistV3FinancialTransaction(transaction,f.config,id(5))).created,false);assert.deepEqual(f.db.prepare('SELECT * FROM documents ORDER BY collection_name,doc_id').all(),persisted);assert.equal(JSON.stringify(f.db.prepare('SELECT * FROM sync_outbox_v2 ORDER BY local_sequence').all()),serialized);
  }finally{f.db.close();}
 });
 test('ordinary checkout capture scope excludes returns/recovery/reservation/table/marketplace and preserves explicit zero',async()=>{
@@ -107,4 +112,31 @@ test('actual sanitized ERP snapshot retains explicit provenance while normalized
   const result=applyTerminalConfigSnapshot(base,{terminalId:id(4),incomingSnapshot:snapshot}),current=result.config.terminals[0];
   assert.equal(current.config.fiscal.environment,0);assert.equal(explicitTerminalFiscalEnvironment(current,id(4),'MSELLER','ECF'),present?0:undefined);assert.doesNotMatch(JSON.stringify(current.config.erpSnapshot),/synthetic-redacted/);
  }
+});
+for(const value of [0,1,2,undefined])test('actual CASH Date constructor survives SQLite close/new adapter replay with environment '+String(value),async()=>{
+ const directory=mkdtempSync(join(tmpdir(),'pos-date-restart-')),file=join(directory,'synthetic.sqlite');let f=await directFixture(file);try{
+  const rawTimestamp=new Date('2026-10-17T12:00:00.123Z');const data:any={id:id(95),documentType:'TICKET',seriesId:id(9),terminalId:id(4),date:'2026-10-17T12:00:00Z',status:'COMPLETED',userId:id(25),userName:'Synthetic',items:[{...f.product,quantity:1,cartId:'date-line',netAmount:100,taxAmount:0,totalAmount:100}],netAmount:100,taxAmount:0,total:100,payments:[{id:id(96),method:'CASH',amount:100,timestamp:rawTimestamp}],...(value!==undefined?{fiscalEnvironment:value}:{})};
+  const source=await f.transactionService.createTransaction(data,{deferDurablePersistence:true});assert.strictEqual(data.payments[0].timestamp,rawTimestamp);assert.equal(source.payments[0].timestamp,rawTimestamp.toISOString());
+  const first=await f.persistV3FinancialTransaction(source,f.config,id(5));assert.equal(first.created,true);
+  const state=()=>JSON.stringify({docs:f.db.prepare('SELECT * FROM documents ORDER BY collection_name,doc_id').all(),outbox:f.db.prepare('SELECT * FROM sync_outbox_v2 ORDER BY local_sequence').all()});const before=state();const checksum=await fiscalStatusSourceChecksum(first.transaction);const fingerprint=first.transaction.v3CommitFingerprint;
+  f.db.close();f=await directFixture(file,false);const loaded=await f.adapter.getDocument('transactions',source.id);assert.equal(await fiscalStatusSourceChecksum(loaded),checksum);assert.equal(loaded.v3CommitFingerprint,fingerprint);assert.equal(loaded.payments[0].timestamp,rawTimestamp.toISOString());
+  for(const candidate of [source,loaded])assert.equal((await f.persistV3FinancialTransaction(candidate,f.config,id(5))).created,false);assert.equal(state(),before);
+  const rows=f.db.prepare('SELECT event_type,payload_json FROM sync_outbox_v2 ORDER BY local_sequence').all() as any[];assert.equal(rows.length,2);for(const row of rows){const payload=JSON.parse(row.payload_json);assert.equal((payload.transaction?.payments||payload.payments)[0].timestamp,rawTimestamp.toISOString());}
+ }finally{f.db.close();rmSync(directory,{recursive:true,force:true});}
+});
+test('actual constructor preserves raw ISO literal and legacy Date shape, rejects invalid new V3 timestamp',async()=>{
+ const f=await directFixture();try{const base:any={id:id(95),documentType:'TICKET',seriesId:id(9),terminalId:id(4),date:'2026-10-17T12:00:00Z',status:'COMPLETED',userId:id(25),userName:'Synthetic',items:[{...f.product,quantity:1,cartId:'date-line',netAmount:100,taxAmount:0,totalAmount:100}],netAmount:100,taxAmount:0,total:100};
+  const raw='2026-10-17T08:00:00-04:00',payment={id:id(96),method:'CASH',amount:100,timestamp:raw};const created=await f.transactionService.createTransaction({...base,payments:[payment]},{deferDurablePersistence:true});assert.equal(created.payments[0].timestamp,raw);
+  const second=await f.transactionService.createTransaction({...base,payments:[{...payment,timestamp:new Date('2026-10-17T12:00:01Z')}]},{deferDurablePersistence:true});assert.notEqual(financialOperationIdentity(created,id(5),{}),financialOperationIdentity(second,id(5),{}));
+  await assert.rejects(()=>f.transactionService.createTransaction({...base,payments:[{...payment,timestamp:new Date(NaN)}]},{deferDurablePersistence:true}),/PAYMENT_TIMESTAMP_INVALID/);
+  const legacy=await f.transactionService.createTransaction({...base,items:[],payments:[payment]},{deferDurablePersistence:true});assert.ok(legacy.payments[0].timestamp instanceof Date);
+ }finally{f.db.close();}
+});
+
+test('historical malformed Date fingerprint stays immutable and rejected without read-time rewriting',async()=>{
+ const f=await directFixture();try{const source:any={id:id(95),documentType:'TICKET',seriesId:id(9),terminalId:id(4),date:'2026-10-17T12:00:00Z',status:'COMPLETED',userId:id(25),userName:'Synthetic',items:[{...f.product,quantity:1,cartId:'date-line',netAmount:100,taxAmount:0,totalAmount:100}],netAmount:100,taxAmount:0,total:100,payments:[{id:id(96),method:'CASH',amount:100,timestamp:new Date('2026-10-17T12:00:00Z')}]};
+  const oldFingerprint=financialOperationIdentity(source,id(5),{}),stored={...source,v3CommitFingerprint:oldFingerprint};
+  for(const collection of ['transactions','transactionHistory'])f.db.prepare('INSERT INTO documents VALUES(?,?,?,?,?)').run(collection,source.id,JSON.stringify(stored),0,'historical-fixture');
+  const before=JSON.stringify(f.db.prepare('SELECT * FROM documents ORDER BY collection_name,doc_id').all()),loaded=await f.adapter.getDocument('transactions',source.id);await assert.rejects(()=>f.persistV3FinancialTransaction(loaded,f.config,id(5)),/DUPLICATE_TRANSACTION_MISMATCH/);assert.equal(JSON.stringify(f.db.prepare('SELECT * FROM documents ORDER BY collection_name,doc_id').all()),before);assert.equal(f.db.prepare('SELECT count(*) n FROM sync_outbox_v2').get().n,0);
+ }finally{f.db.close();}
 });

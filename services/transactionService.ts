@@ -3,6 +3,7 @@ import { recordCheckoutDiagnostic } from './CheckoutDiagnostics';
 import { BusinessConfig, Customer, Transaction, DocumentType, DocumentSeries } from '../types';
 import { assertFormatsPostingClosed } from './articleFormats/activation';
 import { db } from '../utils/db';
+import { freezeNewV3PaymentTimestamps } from './sync/NewV3PaymentTimestamps';
 import { normalizeTransactionForSync } from './sync/sourceIdentity';
 import { isSyncFeatureEnabled } from './sync/SyncFeatureFlags';
 import {
@@ -531,7 +532,13 @@ class TransactionService {
             consignmentSyncResponse: data.consignmentSyncResponse
         };
 
-        const normalizedTransaction = normalizeTransactionForSync(transaction);
+        const normalized = normalizeTransactionForSync(transaction);
+        const newDirectV3Source = isV3FinancialDocument(data) && data.documentType === 'TICKET'
+            && !data.v3CommitFingerprint && !data.v3Binding && !data.originalTransactionId
+            && !data.v3ReservationClaimId && !data.v3RestoredTicketId && !data.reservationId
+            && !data.restaurantOrderId && !data.restaurantTableId;
+        const normalizedTransaction = newDirectV3Source
+            ? freezeNewV3PaymentTimestamps(normalized, transaction.payments) : normalized;
         // A reservation's commercial/fiscal lines are already frozen and validated against
         // its durable source. Generic sync normalization must not reinterpret that snapshot.
         if (data.v3ReservationClaimId) normalizedTransaction.items = transaction.items;
