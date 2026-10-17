@@ -19,6 +19,8 @@ if(online){
  // Only master fiscal configuration is carried forward, never the preloaded original.
  laboratoryInput={connection:{port:connection.port,provider:connection.provider,scope:connection.scope,headers:connection.headers},catalog,fiscalMaster:example.transaction.fiscalIssuance,controlNcf:example.transaction.ncf};
  for(const key of ['ncf','sequence','capturedAt'])delete laboratoryInput.fiscalMaster[key];
+ const {scope,headers}=connection,master=laboratoryInput.fiscalMaster,article=catalog.sale.article;
+ if(headers['x-tenant-id']!==scope.tenantId||headers['x-terminal-id']!==scope.terminalId||headers['x-device-id']!==scope.deviceId||headers.authorization!=='Bearer '+headers['x-sync-token']||!headers['x-device-token']||master.tenantId!==scope.tenantId||master.companyId!==scope.companyId||master.terminalId!==scope.terminalId||master.ncfType!=='E32'||master.prefix!=='E32'||!article.id||article.activeWarehouseIds?.length!==1||catalog.sale.price!==100||catalog.sale.tariff.taxIncluded!==false)throw Error('Laboratory input scope/config/catalog conflict');
 }
 const ports={
  '../db':'export const dbAdapter=new Proxy({}, {get:(_t,k)=>{const a=globalThis.__fiscalQA.adapter;return typeof a[k]==="function"?a[k].bind(a):a[k];}});',

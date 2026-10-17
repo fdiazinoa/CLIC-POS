@@ -39,6 +39,7 @@ async function json(path:string,method='GET',body?:any){const response=await req
 async function preflight(){
  assert(Capacitor.isNativePlatform()&&Capacitor.getPlatform()==='android','REAL_ANDROID_REQUIRED');
  assert(input.connection.port===18765&&input.connection.provider==='FAKE','FAKE_ONLY');
+ const headers=context().headers;for(const [key,value]of Object.entries(headers))assert(input.connection.headers[key.toLowerCase()]===value,'LAB_INPUT_HEADER_SCOPE_CONFLICT');assert(master.tenantId===scope.tenantId&&master.companyId===scope.companyId&&master.terminalId===scope.terminalId&&master.ncfType==='E32'&&master.prefix==='E32','LAB_MASTER_SCOPE_CONFLICT');
  report.capabilities={fetch:typeof fetch,abortController:typeof AbortController,textEncoder:typeof TextEncoder,textDecoder:typeof TextDecoder,crypto:typeof crypto.subtle?.digest,hasOwn:typeof (Object as any).hasOwn};
  for(const key of ['fetch','abortController','textEncoder','textDecoder','crypto'])assert(report.capabilities[key]==='function','LAB_RUNTIME_'+key);
  report.health=await json('/__lab/health');assert(report.health.labOnly===true&&report.health.provider==='FAKE'&&report.health.productionActivation===false&&report.health.postgres==='PRIVATE_UNIX_SOCKET'&&report.health.erpHead==='4596abe930c6f582773c9c641bf23ab3376b7ee1','LAB_SERVICE_IDENTITY_MISMATCH');report.metrics=await json('/__lab/metrics');assert(Number.isSafeInteger(report.metrics.providerCalls),'LAB_METRICS_INVALID');
@@ -51,6 +52,7 @@ async function open(name:string){const exists=await connections.isConnection(nam
 }
 async function assertAuthority(tx:any){assertFiscalIssuance(tx);const [business,buffer,allocation,range]=await Promise.all([adapter.getDocument('config','current'),adapter.getDocument('localFiscalBuffer','online-buffer'),adapter.getDocument('fiscalAllocations',master.fiscalAllocationId),adapter.getDocument('fiscalRanges',master.fiscalRangeId)]);
  assert(tx.fiscalIssuance&&business&&buffer&&allocation&&range,'LAB_AUTHORITY_MISSING');
+ const receipt=await adapter.getDocument('nativeFiscalReservations',JSON.stringify(['DOMINICAN_ECF_V1',master.issuerRnc,tx.ncf]));assert(receipt&&receipt.ncf===tx.ncf&&receipt.issuerRnc===master.issuerRnc&&receipt.tenantId===scope.tenantId&&receipt.companyId===scope.companyId&&receipt.terminalId===scope.terminalId&&receipt.allocationId===allocation.id&&receipt.fiscalRangeId===range.id&&receipt.number===tx.fiscalIssuance.sequence,'LAB_NATIVE_RESERVATION_RECEIPT_REQUIRED');
  const frozen={...buffer,currentNumber:tx.fiscalIssuance.sequence};validateFiscalBufferReservation({business,buffer:frozen,allocation,range,terminalId:scope.terminalId,type:'E32',ncf:tx.ncf});
  assert(buffer.currentNumber>tx.fiscalIssuance.sequence,'LAB_AUTHORITY_NOT_RESERVED');
  const expected=snapshotFiscalIssuance(business,range,allocation,frozen,tx.ncf);expected.capturedAt=tx.fiscalIssuance.capturedAt;assert(JSON.stringify(expected)===JSON.stringify(tx.fiscalIssuance),'LAB_AUTHORITY_SNAPSHOT_MISMATCH');
