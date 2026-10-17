@@ -1,3 +1,4 @@
+import {NativeTerminalAuthEvidenceStore,TERMINAL_AUTH_EVIDENCE_SCHEMA} from '../TerminalAuthEvidenceStore';
 import {FISCAL_OUTBOX_SOURCE_SQL,fiscalOutboxSourceParams,captureFiscalOutboxAnchors,type FiscalOutboxAnchor} from '../../fiscal/FiscalAppliedReceiptV2';
 import {assertV3ReservationSource,assertV3ReservationLines,assertV3ReservationInvoice,reservationClaimId} from '../../sync/LargeMasterSyncV3ReservationAuthority';
 import {reconcileInventoryPoolIndex,isInventoryPoolDDL} from '../../articleFormats/inventoryPoolIndex';
@@ -114,6 +115,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
     private disconnectPromise: Promise<void> | null = null;
     private writeQueue: Promise<unknown> = Promise.resolve();
     public readonly adapterType = 'local';
+    public readonly terminalAuthEvidenceStore=new NativeTerminalAuthEvidenceStore(()=>this.ensureDb() as any,work=>this.withWriteLock(work),work=>this.withNativeTransaction(work));
     public readonly masterSyncV3Store = this.serializedMasterStore();
 
     private serializedMasterStore():LargeMasterSyncV3SqliteStore {
@@ -952,6 +954,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             ${LARGE_MASTER_SYNC_V3_SCHEMA_SQL}
             ${ARTICLE_FORMATS_SCHEMA}
             ${NATIVE_FISCAL_RECEIPTS_SCHEMA}
+            ${TERMINAL_AUTH_EVIDENCE_SCHEMA}
         `);
         await this.withWriteLock(()=>this.withNativeTransaction(()=>reconcileInventoryPoolIndex({
             storageLayout:'DOCUMENTS',
