@@ -1,3 +1,4 @@
+import type {Transaction} from '../../types';
 /** Remote ACK/fiscal/Z publication may amend these fields, never replace the committed source. */
 export const V3_FINANCIAL_MUTABLE_FIELDS = [
   'status', 'updatedAt', 'syncStatus', 'syncError', 'cloudSyncStatus', 'cloudSyncError', 'cloudSyncedAt',
@@ -39,3 +40,22 @@ export const V3_FINANCIAL_RETAINED_UPSERT_SQL = `CASE WHEN documents.collection_
       SELECT value FROM json_each(documents.data, '$.relatedTransactions')
       UNION SELECT value FROM json_each(excluded.data, '$.relatedTransactions')))))
   ELSE excluded.data END`;
+
+export const financialIdentity = (transaction: Transaction): string => {
+  const canonical = (value: any): any => Array.isArray(value) ? value.map(canonical)
+    : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort()
+      .filter(key => ![...V3_FINANCIAL_MUTABLE_FIELDS, ...V3_FINANCIAL_CAS_PROTECTED_FIELDS, 'relatedTransactions', 'syncStatus', 'syncError', 'cloudSyncStatus', 'cloudSyncError', 'cloudSyncedAt',
+        'updatedAt', 'status', 'v3InventoryBaseline', 'v3Binding', 'v3WarehouseId', 'v3CommitFingerprint', 'fiscalStatus',
+        'fiscalResponseMessage', 'fiscalResponseCode', 'fiscalSignedXml', 'fiscalQrCode'].includes(key))
+      .map(key => [key, canonical(value[key])])) : value;
+  const input = transaction.v3ReservationClaimId ? JSON.parse(JSON.stringify({...transaction,globalSequence:undefined,displayId:undefined,seriesNumber:undefined})) : transaction;
+  return JSON.stringify(canonical(input));
+};
+
+export type V3FinancialOptions = { refund?: boolean; conditions?: Map<string, 'SELLABLE' | 'DAMAGED'>; original?: Transaction;
+    expectedOriginal?: Transaction; expectedOriginalHistory?: Transaction | null; originalCollection?: 'transactions' | 'transactionHistory';
+    adjustCustomerBalance?: boolean; skipWalletDeposit?: boolean };
+export const financialOperationIdentity=(transaction:Transaction,warehouseId:string,options:V3FinancialOptions):string=>JSON.stringify([
+  financialIdentity(transaction),warehouseId,options.refund===true,[...(options.conditions || new Map()).entries()].sort(),
+  options.adjustCustomerBalance===true,options.skipWalletDeposit===true,options.original?financialIdentity(options.original):null,
+]);
