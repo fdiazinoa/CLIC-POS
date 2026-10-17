@@ -1910,6 +1910,7 @@ export interface Transaction {
   electronicNcf?: string;
   fiscalMode?: FiscalMode;
   fiscalProvider?: FiscalProviderId;
+  fiscalEnvironment?: 0 | 1 | 2; // Explicit original environment; absence is not environment 0.
   fiscalSyncStatus?: CloudSyncStatus;
   fiscalSyncError?: string;
   fiscalSyncedAt?: string;

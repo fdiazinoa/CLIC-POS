@@ -461,6 +461,8 @@ class TransactionService {
             electronicNcf: data.electronicNcf,
             fiscalMode: data.fiscalMode,
             fiscalProvider: data.fiscalProvider,
+            ...(Object.prototype.hasOwnProperty.call(data, 'fiscalEnvironment') && typeof data.fiscalEnvironment === 'number' && [0, 1, 2].includes(data.fiscalEnvironment)
+                ? { fiscalEnvironment: data.fiscalEnvironment } : {}),
             fiscalSyncStatus: data.fiscalSyncStatus,
             fiscalSyncError: data.fiscalSyncError,
             fiscalSyncedAt: data.fiscalSyncedAt,
