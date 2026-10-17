@@ -30,3 +30,9 @@ test('laboratory selects static offline/online manifests; no tools directive pla
  assert.match(gradle,/manifest.srcFile providers.gradleProperty\('fiscalQaOnline'\).getOrElse\('false'\) == 'true' \? 'src\/online\/AndroidManifest.xml' : 'src\/main\/AndroidManifest.xml'/);
  assert.doesNotMatch(gradle,/manifestPlaceholders/);
 });
+
+test('HTML shell has explicit head for Capacitor fallback injection before laboratory script and native preflight precedes DB',()=>{
+ const build=readFileSync(new URL('../qa/fiscal-native/build-bundle.mjs',import.meta.url),'utf8'),runner=readFileSync(new URL('../qa/fiscal-native/online-runner.ts',import.meta.url),'utf8');
+ const html=build.match(/<!doctype html>(.*?)<\/html>/)?.[0];assert.ok(html);assert.ok(html.indexOf('<head>')<html.indexOf('</head>'));assert.ok(html.indexOf('</head>')<html.indexOf('<script src="lab.js">'));assert.match(html,/<body>.*<\/body>/);assert.match(html,/white-space:pre-wrap;word-break:break-word/);
+ const preflight=runner.slice(runner.indexOf('async function preflight()'),runner.indexOf('async function open('));assert.match(preflight,/Capacitor.isPluginAvailable\('CapacitorSQLite'\)/);assert.match(preflight,/LAB_NATIVE_SQLITE_BRIDGE_UNAVAILABLE/);assert.doesNotMatch(preflight,/await open\(|createConnection\(/);
+});
