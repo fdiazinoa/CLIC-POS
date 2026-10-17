@@ -10,7 +10,8 @@ import {getScopedFiscalDocumentStatus} from '../services/fiscal/FiscalScopedStat
 import {LARGE_MASTER_SYNC_V3_SCHEMA_SQL} from '../services/db/LargeMasterSyncV3Schema';
 import {CapacitorSQLiteAdapter} from '../services/db/adapters/CapacitorSQLiteAdapter';
 
-async function fixture(){
+const caja6Identity={tenantId:'tenant-six',companyId:'company-six',storeId:'store-six',terminalId:'terminal-six'};
+async function fixture(caja6=false){
  const binding=JSON.stringify(['tenant','terminal','device','https://erp.test/api/sync','https://erp.test']);
  const line={id:'P',cartId:'P',quantity:1,price:85,netAmount:85,taxAmount:23.8,totalAmount:108.8,
   v3SaleAuthority:{binding,syncId:'S1',syncVersion:1,inventoryVersion:1,inventoryCursor:'C',warehouseId:'W',tariffId:'T',taxIncluded:false}};
@@ -27,20 +28,26 @@ async function fixture(){
   issuer:{rnc:'130090752',providerId:'MSELLER',environment:0,credentialCompanyId:'company',credentialAccountRnc:'130090752'},environmentBasis:'PERSISTED_SUBMISSION_INTENT',
   historicalEnvironment:null,lookup:{requestedNcf:'E3200000506'},providerReceipt:{returnedNcf:'E320000000506',internalTrackId:'actual-track27',status:'DGIIAceptado',success:true,pending:false,invoiceTotal:108.8},
   decision:'ACCEPTED',observedAt:'2026-10-13T22:00:00Z'};
+ if(caja6){
+  const next=JSON.stringify([caja6Identity.tenantId,caja6Identity.terminalId,'device','https://erp.test/api/sync','https://erp.test']);
+  for(const row of [tx,history]){row.terminalId=caja6Identity.terminalId;row.v3Binding=next;row.v3InventoryBaseline=JSON.stringify([next,'S1',1,1,'C']);row.items=[{...line,v3SaleAuthority:{...line.v3SaleAuthority,binding:next}}];}
+  Object.assign(scope,caja6Identity,{binding:next});scope.sourceChecksum=await fiscalStatusSourceChecksum(tx);
+  Object.assign(proof.scope,caja6Identity);proof.issuer.credentialCompanyId=scope.companyId;proof.document.sourceChecksum=scope.sourceChecksum;
+ }
  return{tx,history,scope,proof};
 }
-async function native(){
- const f=await fixture(),sql=new DatabaseSync(':memory:');sql.exec('CREATE TABLE documents(collection_name TEXT,doc_id TEXT,data TEXT,sort_order INTEGER,updatedAt TEXT,PRIMARY KEY(collection_name,doc_id));');sql.exec(LARGE_MASTER_SYNC_V3_SCHEMA_SQL);
+async function native(caja6=false){
+ const f=await fixture(caja6),sql=new DatabaseSync(':memory:');sql.exec('CREATE TABLE documents(collection_name TEXT,doc_id TEXT,data TEXT,sort_order INTEGER,updatedAt TEXT,PRIMARY KEY(collection_name,doc_id));');sql.exec(LARGE_MASTER_SYNC_V3_SCHEMA_SQL);
  sql.prepare("INSERT INTO master_v3_operational_owner VALUES(1,'S2',2,?)").run(f.scope.binding);
  sql.exec("UPDATE master_v3_state SET active_sync_id='S2',active_version=2;INSERT INTO master_v3_inventory_state VALUES(1,'S1',1,1,'C','now');");
  for(const [sync,version] of [['S1',1],['S2',2]])sql.prepare('INSERT INTO master_v3_catalog_owners VALUES(?,?,?,?,?,?,?)').run(sync,version,f.scope.binding,'S1',1,1,'C');
- const config={id:'current',companyInfo:{rnc:'130090752'},terminals:[{id:'terminal',config:{currentDeviceId:'device',erpBinding:{tenantId:'tenant',companyId:'company',storeId:'store'}}}],fiscalCompliance:{providers:[{id:'MSELLER',environment:0}]}};
+ const config={id:'current',companyInfo:{rnc:'130090752'},terminals:[{id:f.scope.terminalId,config:{currentDeviceId:'device',erpBinding:{tenantId:f.scope.tenantId,companyId:f.scope.companyId,storeId:f.scope.storeId}}}],fiscalCompliance:{providers:[{id:'MSELLER',environment:0}]}};
  for(const [collection,row] of [['transactions',f.tx],['transactionHistory',f.history],['config',config],['outbox',{id:'event',status:'PENDING'}]])sql.prepare('INSERT INTO documents(collection_name,doc_id,data) VALUES(?,?,?)').run(collection,row.id,JSON.stringify(row));
  const bridge={query:async(q:string,v:any[]=[])=>({values:sql.prepare(q).all(...v)}),run:async(q:string,v:any[]=[])=>sql.prepare(q).run(...v),execute:async(q:string)=>{sql.exec(q);}};
  const adapter=new CapacitorSQLiteAdapter();Object.assign(adapter,{db:bridge,isReady:true});
  const read=(collection:string)=>JSON.parse(String(sql.prepare('SELECT data FROM documents WHERE collection_name=?').get(collection)?.data));
  let gets=0,publishes=0,now=100000,valid=true;
- const context={scope:{providerId:'MSELLER' as const,environment:0,issuerRnc:'130090752',tenantId:'tenant',companyId:'company',terminalId:'terminal',deviceId:'device',storeId:'store',binding:f.scope.binding},
+ const context={scope:{providerId:'MSELLER' as const,environment:0,issuerRnc:'130090752',tenantId:f.scope.tenantId,companyId:f.scope.companyId,terminalId:f.scope.terminalId,deviceId:'device',storeId:f.scope.storeId,binding:f.scope.binding},
   catalog:{syncId:'S2',syncVersion:2,binding:f.scope.binding},assertCurrent:async()=>{if(!valid)throw Error('changed scope');}};
  const deps:FiscalStatusDependencies={context:async()=>context,pair:async()=>({transaction:read('transactions'),history:read('transactionHistory')}),candidates:async()=>['27'],
   commit:async(mutations:any)=>adapter.saveDocumentsAtomically(mutations),get:async()=>{gets++;return f.proof;},publish:()=>{publishes++;assert.equal(read('transactions').fiscalSyncStatus,'SYNCED');assert.equal(read('transactionHistory').fiscalSyncStatus,'SYNCED');},now:()=>now};
@@ -113,7 +120,7 @@ test('bounded automatic jobs coalesce, max10 serial GET, 60s cooldown; concurren
  const rows=new Map<string,any>();for(let i=0;i<12;i++){
   const row={...f.tx,id:String(i)};row.fiscalSubmissionScope={...f.scope,sourceChecksum:await fiscalStatusSourceChecksum(row)};rows.set(row.id,row);
  }
- const context={scope:{providerId:'MSELLER' as const,environment:0,issuerRnc:'130090752',tenantId:'tenant',companyId:'company',terminalId:'terminal',deviceId:'device',storeId:'store',binding:f.scope.binding},
+ const context={scope:{providerId:'MSELLER' as const,environment:0,issuerRnc:'130090752',tenantId:f.scope.tenantId,companyId:f.scope.companyId,terminalId:f.scope.terminalId,deviceId:'device',storeId:f.scope.storeId,binding:f.scope.binding},
   catalog:{syncId:'S2',syncVersion:2,binding:f.scope.binding},assertCurrent:async()=>{}};
  const worker=new FiscalStatusReconciler({context:async()=>context,pair:async(id)=>({transaction:rows.get(id),history:rows.get(id)}),
   candidates:async()=>[...rows.keys()],get:async()=>{gets++;active++;maxActive=Math.max(maxActive,active);await new Promise(resolve=>setTimeout(resolve,1));active--;return{...f.proof,decision:'PENDING'};},
@@ -402,4 +409,135 @@ test('actual late fiscal callback never writes or republishes durable closed sal
   closedFiscalPublicationIds:{current:new Set(['closed'])},isTransactionReservedForClose:()=>false});
  await callback({id:'closed',v3InventoryBaseline:'source',fiscalSyncStatus:'SYNCED'});assert.deepEqual(rows,[]);assert.equal(writes,0);
  await assert.rejects(()=>callback({id:'unknown-missing',v3InventoryBaseline:'source'}),/ARCHIVED_RECONCILIATION_REQUIRED/);assert.equal(writes,0);
+});
+
+// Reproduction before the Caja 6 fix: a live session is blocked by historical binding expiry.
+test('Caja 6 status GET accepts live session with historical device binding expiry without changing expiry',async()=>{
+ const f=await fixture(true),identity={...caja6Identity,erpSyncBaseUrl:'https://erp.test/api/sync',deviceId:'device',syncToken:'live-session'};
+ const credentials={...identity,deviceToken:'authorized-device',deviceTokenSource:'ERP_REGISTER',authStatus:'AUTHENTICATED',syncTokenExpiresAt:'2099-01-01T00:00:00Z',deviceTokenExpiresAt:'2020-01-01T00:00:00Z'};
+ const before=structuredClone(credentials);let calls=0;
+ await getScopedFiscalDocumentStatus(f.tx,f.scope,()=>identity,async(_url,init)=>{calls++;assert.equal(init?.method,'GET');return{ok:true,json:async()=>f.proof} as Response;},()=>credentials, true);
+ assert.equal(calls,1);assert.deepEqual(credentials,before);
+});
+test('Caja 6 rejected original updates both native copies using status metadata CAS',async()=>{
+ const f=await native(true);try{
+  f.proof.decision='REJECTED';f.proof.providerReceipt.status='Rechazado';f.proof.providerReceipt.success=false;
+  f.deps.publish=()=>{};
+  await f.worker.consult('27',true,undefined,undefined,true);
+  assert.equal(f.read('transactions').fiscalSyncStatus,'ERROR');assert.equal(f.read('transactionHistory').fiscalSyncStatus,'ERROR');
+ }finally{f.sql.close();}
+});
+
+async function manualButton(worker:FiscalStatusReconciler){
+ const {transform}=await import('esbuild');const source=readFileSync(new URL('../App.tsx',import.meta.url),'utf8');
+ const start=source.indexOf('async (transaction: Transaction): Promise<string> => {',source.indexOf('const retryFiscalDocument ='));
+ const end=source.indexOf('}, [config, pollFiscalDocumentStatus, syncFiscalDocument, upsertFiscalTransaction, fiscalStatusWorker]);',start);
+ assert.ok(start>0&&end>start);
+ const code=(await transform('const callback='+source.slice(start,end+1)+';',{loader:'ts'})).code;
+ return new Function('fiscalStatusWorker',`const forbidden=()=>{throw Error('EMISSION_FORBIDDEN');};const syncFiscalDocument=forbidden,issueFiscalDocument=forbidden,consumeFiscalClassificationAttempt=forbidden,upsertFiscalTransaction=forbidden;${code}return callback;`)(worker);
+}
+async function manualFixture(alternateScope=false){
+ const f=await native(alternateScope),button=await manualButton(f.worker);
+ const identity={erpSyncBaseUrl:'https://erp.test/api/sync',tenantId:f.scope.tenantId,terminalId:f.scope.terminalId,deviceId:f.scope.deviceId,syncToken:'live-session'};
+ const credentials={...identity,companyId:f.scope.companyId,storeId:f.scope.storeId,deviceToken:'authorized-device',deviceTokenSource:'ERP_REGISTER',authStatus:'AUTHENTICATED',
+  syncTokenExpiresAt:'2099-01-01T00:00:00Z',deviceTokenExpiresAt:'2020-01-01T00:00:00Z'};
+ const beforeCredentials=structuredClone(credentials),requests:{url:string;method:string}[]=[];
+ let respond=async()=>({ok:true,status:200,json:async()=>f.proof}) as Response;
+ f.deps.get=(tx,scope,originalOnly)=>getScopedFiscalDocumentStatus(tx,scope,()=>identity,async(url,init)=>{
+  const parsed=new URL(String(url));requests.push({url:parsed.pathname,method:init!.method!});
+  assert.equal(init?.method,'GET');assert.equal(parsed.pathname,'/api/sync/v3/fiscal/documents/status');
+  assert.equal(parsed.searchParams.get('sourceTransactionId'),tx.id);assert.equal(init.headers['X-Device-Token'],credentials.deviceToken);
+  return respond();
+ },()=>credentials,originalOnly);
+ f.deps.publish=()=>{};
+ const snapshot=()=>['transactions','transactionHistory','outbox'].map(name=>f.read(name));
+ const before=snapshot(),count=Number(f.sql.prepare('SELECT COUNT(*) AS count FROM documents').get()!.count);
+ return {...f,button,identity,credentials,requests,before,beforeCredentials,snapshot,
+  respond:(callback:()=>Promise<Response>)=>{respond=callback;},
+  unchanged:()=>{assert.deepEqual(snapshot(),before);assert.deepEqual(credentials,beforeCredentials);},
+  noDuplicatesOrIssue:()=>{assert.equal(Number(f.sql.prepare('SELECT COUNT(*) AS count FROM documents').get()!.count),count);assert.ok(requests.every(req=>req.method==='GET'&&req.url.endsWith('/documents/status')));assert.deepEqual(f.read('outbox'),before[2]);},
+ };
+}
+for(const alternate of [false,true])for(const decision of ['ACCEPTED','REJECTED','PENDING'] as const)test(`manual button ${decision}, alternate terminal/company=${alternate}: GET only, original/history and immutable financial data`,async()=>{
+ const f=await manualFixture(alternate);try{
+  f.proof.decision=decision;if(decision!=='ACCEPTED'){f.proof.providerReceipt.success=false;f.proof.providerReceipt.pending=decision==='PENDING';f.proof.providerReceipt.status=decision==='REJECTED'?'Rechazado':'Pendiente';}
+  const message=await f.button({...f.tx,items:[],payments:[],total:999}); // stale UI must never be the persisted source
+  assert.equal(f.requests.length,1);
+  for(const [index,collection]of ['transactions','transactionHistory'].entries()){
+   const row=f.read(collection),before=f.before[index];
+   assert.equal(row.fiscalSyncStatus,decision==='ACCEPTED'?'SYNCED':decision==='REJECTED'?'ERROR':'PENDING');
+   for(const key of ['id','displayId','ncf','electronicNcf','ncfType','date','terminalId','customerId','customerSnapshot','items','payments','total','netAmount','taxAmount','taxBreakdown','v3CommitFingerprint','v3InventoryBaseline','fiscalSubmissionScope','fiscalClassificationProjection','fiscalClassificationAttemptedAt','fiscalPreSubmitRecoveryAudit'])assert.deepEqual(row[key],before[key],key);
+   if(decision!=='PENDING')assert.deepEqual(row.fiscalStatusProof,f.proof);
+  }
+  if(decision==='PENDING'){assert.match(message,/continúa pendiente/);f.unchanged();}
+  if(decision==='REJECTED')assert.match(message,/rechazado/);
+  if(decision==='ACCEPTED'){assert.match(message,/aceptado/);await f.button(f.tx);assert.equal(f.requests.length,1);}
+  assert.deepEqual(f.credentials,f.beforeCredentials);f.noDuplicatesOrIssue();
+ }finally{f.sql.close();}
+});
+for(const scenario of ['network','session-expired','session-missing','unauthorized-device','server-session-expired','server-device-revoked','scope-changed','response-scope','response-document','reference-mismatch','missing-scope','never-sent','invalid-json','write-error'] as const)test(`manual button ${scenario}: preserves original/history and reports reason, no ISSUE/duplicates`,async()=>{
+ const f=await manualFixture();try{
+  let expectedRequests=1;
+  if(scenario==='network')f.respond(async()=>{throw new TypeError('Failed to fetch');});
+  if(scenario==='session-expired'){f.credentials.syncTokenExpiresAt='2020-01-01T00:00:00Z';expectedRequests=0;}
+  if(scenario==='session-missing'){f.credentials.syncTokenExpiresAt='';expectedRequests=0;}
+  if(scenario==='unauthorized-device'){f.credentials.authStatus='DEVICE_NOT_AUTHORIZED';expectedRequests=0;}
+  if(scenario==='server-session-expired'||scenario==='server-device-revoked')f.respond(async()=>({ok:false,status:scenario==='server-session-expired'?401:403,json:async()=>({code:'AUTH_REQUIRED'})}) as Response);
+  if(scenario==='scope-changed'){f.credentials.storeId='foreign';expectedRequests=0;}
+  if(scenario==='response-scope')f.proof.scope.tenantId='foreign';
+  if(scenario==='response-document')f.proof.document.sourceTransactionId='another-document';
+  if(['reference-mismatch','missing-scope','never-sent'].includes(scenario)){
+   const row=f.read('transactions');
+   if(scenario==='reference-mismatch')row.fiscalReferenceId='different-original';
+   if(scenario==='missing-scope')delete row.fiscalSubmissionScope;
+   if(scenario==='never-sent'){delete row.fiscalProviderStatus;delete row.fiscalClassificationAttemptedAt;}
+   f.sql.prepare("UPDATE documents SET data=? WHERE collection_name='transactions'").run(JSON.stringify(row));f.before[0]=row;
+   if(scenario!=='reference-mismatch')expectedRequests=0;
+  }
+  if(scenario==='invalid-json')f.respond(async()=>new Response('invalid json',{status:200}));
+  if(scenario==='write-error')f.sql.exec("CREATE TRIGGER fail_status_history BEFORE UPDATE ON documents WHEN NEW.collection_name='transactionHistory' BEGIN SELECT RAISE(ABORT,'injected-status-write'); END;");
+  const beforeCredentials=structuredClone(f.credentials),message=await f.button(f.tx);
+  assert.match(message,/conserva|conservó/i);assert.equal(f.requests.length,expectedRequests);assert.deepEqual(f.snapshot(),f.before);assert.deepEqual(f.credentials,beforeCredentials);f.noDuplicatesOrIssue();
+ }finally{f.sql.close();}
+});
+test('manual button repeated presses share one status GET and one atomic metadata batch',async()=>{
+ const f=await manualFixture();let release!:()=>void,started!:()=>void;const entered=new Promise<void>(resolve=>{started=resolve;});
+ const barrier=new Promise<void>(resolve=>{release=resolve;});
+ f.respond(async()=>{started();await barrier;return{ok:true,status:200,json:async()=>f.proof} as Response;});
+ let commits=0;const commit=f.deps.commit;f.deps.commit=async mutations=>{commits++;await commit(mutations);};
+ try{
+  const presses=Array.from({length:20},()=>f.button(f.tx));await entered;assert.equal(f.requests.length,1);release();
+  const messages=await Promise.all(presses);assert.equal(new Set(messages).size,1);assert.equal(f.requests.length,1);assert.equal(commits,1);f.noDuplicatesOrIssue();
+ }finally{f.sql.close();}
+});
+test('historical binding expiry still blocks the unchanged ISSUE context',async()=>{
+ const {captureFiscalBoundContext}=await import('../services/fiscal/FiscalBoundContext');const f=await manualFixture();
+ try{assert.throws(()=>captureFiscalBoundContext(()=>f.identity,()=>f.credentials),/AUTH_REQUIRED/);assert.deepEqual(f.credentials,f.beforeCredentials);f.noDuplicatesOrIssue();}finally{f.sql.close();}
+});
+for(const decision of ['ACCEPTED','REJECTED'] as const)test(`native ${decision} status metadata cannot change financial data or fiscal identity`,async()=>{
+ const f=await manualFixture();try{
+  f.proof.decision=decision;if(decision==='REJECTED')Object.assign(f.proof.providerReceipt,{status:'Rechazado',success:false,pending:false});
+  let mutations:any[]=[];f.deps.commit=async rows=>{mutations=rows;};await f.button(f.tx);assert.equal(mutations.length,2);
+  for(const patch of [{total:1},{ncf:'E3200009999'},{payments:[]},{fiscalClassificationAttemptedAt:'changed'}]){
+   const invalid=mutations.map(row=>({...row,document:{...row.document,...patch}}));
+   await assert.rejects(()=>f.adapter.saveDocumentsAtomically(invalid),/METADATA_MUTATION_DENIED/);f.unchanged();
+  }
+ }finally{f.sql.close();}
+});
+
+for(const change of ['session','device','scope','historical-expiry','history-reference'] as const)test(`manual GET delayed ${change} change holds both SQLite copies`,async()=>{
+ const f=await manualFixture();try{
+  f.respond(async()=>{
+   if(change==='session')f.credentials.syncTokenExpiresAt='2020-01-01';
+   if(change==='device')f.identity.deviceId='foreign-device';
+   if(change==='scope')f.credentials.companyId='foreign-company';
+   if(change==='historical-expiry')f.credentials.deviceTokenExpiresAt='2021-01-01';
+   if(change==='history-reference'){
+    const history={...f.read('transactionHistory'),fiscalReferenceId:'different-original'};
+    f.sql.prepare("UPDATE documents SET data=? WHERE collection_name='transactionHistory'").run(JSON.stringify(history));f.before[1]=history;
+   }
+   return{ok:true,status:200,json:async()=>f.proof} as Response;
+  });
+  assert.match(await f.button(f.tx),/conserva/i);assert.deepEqual(f.snapshot(),f.before);f.noDuplicatesOrIssue();
+ }finally{f.sql.close();}
 });
