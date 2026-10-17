@@ -93,3 +93,7 @@ test('current association HOLDs after authorized origin drift and after config c
 test('getter rechecks durable SQL envelope after projection awaits',async()=>{
  const f=await fixture();try{await f.persist(await f.response());const verify=f.ports.verifyProjection;let changed=false;f.ports.verifyProjection=async value=>{await verify(value);if(!changed){changed=true;f.sql().exec("UPDATE terminal_auth_evidence_current SET envelope_json=envelope_json||' '");}};await assert.rejects(()=>readCurrentBindingAuthEvidence(f.ports));assert.equal((await f.adapter.terminalAuthEvidenceStore.history()).length,1);}finally{await f.closeAll();}
 });
+
+test('session expiring during awaited projection is HOLD at final synchronous return boundary',async()=>{
+ const f=await fixture(),originalNow=Date.now;try{const data=await f.response();await f.persist(data);const raw=(await f.adapter.terminalAuthEvidenceStore.read())!.raw,verify=f.ports.verifyProjection;f.ports.verifyProjection=async document=>{await verify(document);Date.now=()=>Date.parse(data.tokenExpiresAt)+1;};await assert.rejects(()=>readCurrentBindingAuthEvidence(f.ports));assert.equal((await f.adapter.terminalAuthEvidenceStore.read())!.raw,raw);assert.equal((await f.adapter.terminalAuthEvidenceStore.history()).length,1);}finally{Date.now=originalNow;await f.closeAll();}
+});

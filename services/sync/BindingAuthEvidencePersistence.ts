@@ -43,6 +43,7 @@ export async function readCurrentBindingAuthEvidence(ports:BindingAuthPersistenc
  if((await store.read())?.raw!==record.raw||ports.capture().document!==e.credentials||JSON.stringify(ports.readContext())!==contextPin)held();
  await ports.verifyProjection(e.credentials);
  if((await store.read())?.raw!==record.raw||ports.capture().document!==e.credentials||JSON.stringify(ports.readContext())!==contextPin)held();
+ if(Date.now()>=Date.parse(e.session.expiresAt))held();
  return JSON.parse(JSON.stringify(e));
 }
 
