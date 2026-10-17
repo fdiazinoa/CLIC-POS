@@ -1,3 +1,4 @@
+import {isTerminalAuthorizationSuperseded} from '../../utils/terminalAuthorizationGuard';
 import { Preferences } from '@capacitor/preferences';
 import type { BusinessConfig } from '../../types';
 import { separateTerminalIdentity } from './terminalIdentity';
@@ -35,7 +36,12 @@ export interface TerminalCredentials {
 
 const CREDENTIALS_KEY = 'clic_terminal_credentials_v1';
 let credentialWriteGeneration = 0;
+const AUTH_PROJECTION_MARKER='clic_terminal_auth_envelope_projection_v1';
+let projectedTerminalAuthDocument:string|null=null;
+export const resetTerminalAuthProjectionMemoryForTests=():void=>{projectedTerminalAuthDocument=null;};
 let credentialWriteQueue: Promise<void> = Promise.resolve();
+let readNativeCredentialsForProjection=async()=>{const result=await Preferences.get({key:CREDENTIALS_KEY});return result.value;};
+export const setTerminalCredentialNativeReaderForTests=(reader:(()=>Promise<string|null>)|null):void=>{readNativeCredentialsForProjection=reader|| (async()=>{const result=await Preferences.get({key:CREDENTIALS_KEY});return result.value;});};
 let writeNativeCredentials = (value: string) => Preferences.set({ key: CREDENTIALS_KEY, value });
 
 export const setTerminalCredentialNativeWriterForTests = (
@@ -245,7 +251,15 @@ const writeLegacyMirrors = (credentials: TerminalCredentials): void => {
 export const readTerminalCredentialsSync = (): TerminalCredentials => {
     const storage = getStorage();
     if (!storage) return {};
-    const stored = readJson(storage.getItem(CREDENTIALS_KEY));
+    const raw=storage.getItem(CREDENTIALS_KEY);
+    if(storage.getItem(AUTH_PROJECTION_MARKER)==='1'&&raw!==projectedTerminalAuthDocument)return {...readJson(raw),authStatus:'BOUND_AUTH_MISMATCH'};
+    if(projectedTerminalAuthDocument!==null&&raw===projectedTerminalAuthDocument){
+        const canonical=readJson(raw),status=storage.getItem('clic_sync_auth_status')||'';
+        if(/DEVICE_NOT_AUTHORIZED|NEEDS_REAUTH|BOUND_AUTH_MISMATCH|AUTH_ERROR|REVOKED/i.test(status))return {...canonical,authStatus:status};
+        try{assertTerminalBindingMirrors(storage,canonical);if(storage.getItem('clic_erp_sync_token')!==canonical.syncToken||storage.getItem('clic_erp_sync_token_expires_at')!==canonical.syncTokenExpiresAt||storage.getItem('clic_erp_sync_token_updated_at')!==canonical.syncTokenUpdatedAt)throw Error('drift');}catch{return {...canonical,authStatus:'BOUND_AUTH_MISMATCH'};}
+        return canonical;
+    }
+    const stored = readJson(raw);
     const storedIdentity = withoutConfigSnapshot(stored);
     const merged = mergeCredentials(storedIdentity, buildFromLegacyKeys(storage));
     const normalized = normalizeTerminalCredentialsIdentity(merged);
@@ -280,6 +294,7 @@ export const buildTerminalSyncAuthHeaders = (): Record<string, string> => {
 };
 
 export const readTerminalCredentials = async (): Promise<TerminalCredentials> => {
+    await (await import('./BindingAuthEvidencePersistence')).recoverBindingAuthEvidence();
     const storage = getStorage();
     const local = readTerminalCredentialsSync();
     const localConfigSnapshot = storage ? readConfigSnapshot(storage) : null;
@@ -394,4 +409,34 @@ export const saveTerminalSessionCAS=(snapshot:TerminalSessionSnapshot,session:{t
     });
     credentialWriteQueue=operation.catch(()=>undefined);
     return operation;
+};
+
+/** Compatibility projection only. SQL envelope remains the authority; this never pairs evidence in sync reads. */
+export const projectTerminalAuthEnvelope=(before:string,after:string,assertCurrent:()=>void|Promise<void>=()=>{}):Promise<void>=>{
+    const operation=credentialWriteQueue.then(async()=>{
+        const storage=getStorage(),allowed=async()=>{await assertCurrent();const raw=storage?.getItem(CREDENTIALS_KEY);if(!storage||raw!==before&&raw!==after)throw Error('SYNC_BINDING_PROJECTION_CONFLICT');assertTerminalBindingMirrors(storage,JSON.parse(after));};
+        await allowed();const generation=credentialWriteGeneration;
+        const native=await readNativeCredentialsForProjection();if(native!==null&&native!==before&&native!==after)throw Error('SYNC_BINDING_PROJECTION_CONFLICT');
+        const projected=JSON.parse(after);if(native===after&&storage!.getItem(CREDENTIALS_KEY)===after&&storage!.getItem('clic_erp_sync_token')===projected.syncToken&&storage!.getItem('clic_erp_sync_token_expires_at')===projected.syncTokenExpiresAt&&storage!.getItem('clic_erp_sync_token_updated_at')===projected.syncTokenUpdatedAt){projectedTerminalAuthDocument=after;return;}
+        await writeNativeCredentials(after);
+        await allowed();if(generation!==credentialWriteGeneration)throw Error('SYNC_BINDING_PROJECTION_CONFLICT');
+        const next=JSON.parse(after);
+        storage!.setItem(AUTH_PROJECTION_MARKER,'1');
+        storage!.setItem(CREDENTIALS_KEY,after);
+        storage!.setItem('clic_erp_sync_token',next.syncToken);
+        storage!.setItem('clic_erp_sync_token_expires_at',next.syncTokenExpiresAt);
+        storage!.setItem('clic_erp_sync_token_updated_at',next.syncTokenUpdatedAt);
+        projectedTerminalAuthDocument=after;
+        credentialWriteGeneration++;
+    });credentialWriteQueue=operation.catch(()=>undefined);return operation;
+};
+
+const assertTerminalBindingMirrors=(storage:Storage,c:TerminalCredentials)=>{
+    if(isTerminalAuthorizationSuperseded(storage)||/DEVICE_NOT_AUTHORIZED|NEEDS_REAUTH|BOUND_AUTH_MISMATCH|AUTH_ERROR|REVOKED/i.test(storage.getItem('clic_sync_auth_status')||''))throw Error('SYNC_BINDING_PROJECTION_CONFLICT');
+    const keys:Record<string,unknown>={CLIC_POS_DEVICE_TOKEN:c.deviceToken,CLIC_POS_DEVICE_TOKEN_SOURCE:c.deviceTokenSource,CLIC_POS_DEVICE_TOKEN_UPDATED_AT:c.deviceTokenUpdatedAt,CLIC_POS_DEVICE_TOKEN_EXPIRES_AT:c.deviceTokenExpiresAt,CLIC_POS_DEVICE_ID:c.deviceId,clic_erp_sync_terminal_id:c.erpTerminalId||c.terminalId,clic_erp_sync_tenant_id:c.erpTenantId||c.tenantId,clic_erp_sync_company_id:c.companyId,clic_erp_sync_store_id:c.storeId};
+    for(const [key,value]of Object.entries(keys)){const actual=storage.getItem(key);if(actual!==null&&actual!==value)throw Error('SYNC_BINDING_PROJECTION_CONFLICT');}
+};
+export const verifyTerminalAuthProjection=async(document:string):Promise<void>=>{
+    const storage=getStorage();if(!storage||storage.getItem(CREDENTIALS_KEY)!==document)throw Error('SYNC_BINDING_PROJECTION_CONFLICT');const c=JSON.parse(document);assertTerminalBindingMirrors(storage,c);
+    if(storage.getItem('clic_erp_sync_token')!==c.syncToken||storage.getItem('clic_erp_sync_token_expires_at')!==c.syncTokenExpiresAt||storage.getItem('clic_erp_sync_token_updated_at')!==c.syncTokenUpdatedAt||await readNativeCredentialsForProjection()!==document)throw Error('SYNC_BINDING_PROJECTION_CONFLICT');
 };

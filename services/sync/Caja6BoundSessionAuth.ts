@@ -1,3 +1,4 @@
+import {serializeBindingAuthExchange,captureBindingAuthAttempt,persistBindingAuthResponse,recoverBindingAuthEvidence,type BindingAuthPersistencePorts} from './BindingAuthEvidencePersistence';
 import {CAJA6_FISCAL_SCOPE as allowed} from '../fiscal/Caja6FiscalPreparationPolicy';
 import {sha256Utf8} from './LargeMasterSyncV3Client';
 import {validatedLargeMasterSyncV3ErpSyncBase,readLargeMasterSyncV3BoundIdentity,type LargeMasterSyncV3BoundIdentity} from './LargeMasterSyncV3BoundTransport';
@@ -14,29 +15,30 @@ export function validateBoundSessionAuthResponse(r:any,scope:{tenantId:string;te
  aliases(r,['deviceToken','device_token','terminalToken','terminal_token','activationToken','activation_token'],deviceToken);
  return {token:r.syncToken as string,expiresAt:r.tokenExpiresAt as string};
 }
-type Dependencies={identity?:()=>LargeMasterSyncV3BoundIdentity;capture?:()=>TerminalSessionSnapshot;save?:typeof saveTerminalSessionCAS;fetchImpl?:typeof fetch;hashDevice?:(v:string)=>Promise<string>;configFingerprint:()=>string;timeoutMs?:number};
+type Dependencies={persistence?:BindingAuthPersistencePorts;identity?:()=>LargeMasterSyncV3BoundIdentity;capture?:()=>TerminalSessionSnapshot;save?:typeof saveTerminalSessionCAS;fetchImpl?:typeof fetch;hashDevice?:(v:string)=>Promise<string>;configFingerprint:()=>string;timeoutMs?:number};
 /** Explicit Caja6-only AUTH. No register, retry, fallback, binding proof or fiscal activation. */
 async function renewBoundSession(deps:Dependencies):Promise<{status:'SESSION_RENEWED_BINDING_PROOF_REQUIRED'}>{
  const identity=deps.identity||readLargeMasterSyncV3BoundIdentity,capture=deps.capture||captureTerminalSessionSnapshot,save=deps.save||saveTerminalSessionCAS,fetchImpl=deps.fetchImpl||fetch;
+ await recoverBindingAuthEvidence(deps.persistence);
  const bound=identity(),snapshot=capture(),c=snapshot.credentials,base=validatedLargeMasterSyncV3ErpSyncBase(bound.erpSyncBaseUrl),origin=new URL(base).origin,config=deps.configFingerprint();
  if(origin!==allowed.origin||bound.tenantId!==allowed.tenantId||bound.terminalId!==allowed.terminalId||c.companyId!==allowed.companyId||c.storeId!==allowed.storeId||c.deviceId!==bound.deviceId||c.syncToken!==bound.syncToken||!literal(c.deviceToken)||!literal(bound.syncToken)||c.deviceTokenSource!=='ERP_REGISTER'||c.identityMigrationRequired||/DEVICE_NOT_AUTHORIZED|NEEDS_REAUTH|BOUND_AUTH_MISMATCH|AUTH_ERROR|REVOKED/i.test(c.authStatus||''))held();
  aliases(c,['tenantId','erpTenantId'],bound.tenantId);aliases(c,['terminalId','erpTerminalId'],bound.terminalId);
  if(!(c.tenantId||c.erpTenantId)||!(c.terminalId||c.erpTerminalId)||await(deps.hashDevice||sha256Utf8)(bound.deviceId)!==allowed.deviceSha256)held();
  const fingerprint=JSON.stringify(bound);
  const current=()=>{if(JSON.stringify(identity())!==fingerprint||capture().document!==snapshot.document||deps.configFingerprint()!==config)held();};current();
+ const attempt=await captureBindingAuthAttempt({origin,tenantId:bound.tenantId,companyId:c.companyId!,storeId:c.storeId!,terminalId:bound.terminalId,deviceId:bound.deviceId},current,deps.persistence);
  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),deps.timeoutMs??5000);
  try{
   const response=await fetchImpl(base+'/auth',{method:'POST',headers:{'Content-Type':'application/json',Accept:'application/json',Authorization:`Bearer ${bound.syncToken}`,'X-Sync-Token':bound.syncToken,'X-Tenant-Id':bound.tenantId,'X-Terminal-Id':bound.terminalId,'X-Device-Id':bound.deviceId,'X-Device-Token':c.deviceToken!},body:JSON.stringify({terminalId:bound.terminalId,deviceId:bound.deviceId}),redirect:'error',credentials:'omit',cache:'no-store',signal:controller.signal});
   current();if(response.status!==200||response.redirected||!response.headers.get('content-type')?.toLowerCase().includes('application/json'))held();
   const text=await response.text();if(new TextEncoder().encode(text).length>65536)held();current();
-  const session=validateBoundSessionAuthResponse(JSON.parse(text),{...bound,companyId:c.companyId!,storeId:c.storeId!},c.deviceToken!);
+  const data=JSON.parse(text),session=validateBoundSessionAuthResponse(data,{...bound,companyId:c.companyId!,storeId:c.storeId!},c.deviceToken!);
   const observation:TerminalSessionObservation={source:'LOCAL_OBSERVATION_OF_ERP_SYNC_AUTH',origin,route:'/api/sync/auth',tenantId:bound.tenantId,terminalId:bound.terminalId,deviceId:bound.deviceId,observedAt:new Date().toISOString()};
-  await save(snapshot,{...session,observation},current);return {status:'SESSION_RENEWED_BINDING_PROOF_REQUIRED'};
+  if(!await persistBindingAuthResponse(attempt,data,session,observation,deps.persistence))await save(snapshot,{...session,observation},current);return {status:'SESSION_RENEWED_BINDING_PROOF_REQUIRED'};
  }catch{held();}finally{clearTimeout(timer);}
 }
 
-// Serialize the whole AUTH exchange as well as its CAS, so a concurrent response cannot invalidate a newer saved session.
-let sessionRenewalQueue:Promise<unknown>=Promise.resolve();
+/** Shares the normal AUTH queue so neither channel can publish out of order. */
 export function renewCaja6BoundSession(deps:Dependencies):Promise<{status:'SESSION_RENEWED_BINDING_PROOF_REQUIRED'}>{
- const operation=sessionRenewalQueue.then(()=>renewBoundSession(deps));sessionRenewalQueue=operation.catch(()=>undefined);return operation;
+ return serializeBindingAuthExchange(()=>renewBoundSession(deps));
 }

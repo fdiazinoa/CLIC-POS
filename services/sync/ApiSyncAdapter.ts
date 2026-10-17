@@ -1,3 +1,6 @@
+import {CAJA6_FISCAL_SCOPE} from '../fiscal/Caja6FiscalPreparationPolicy';
+import {serializeBindingAuthExchange,fetchBindingAuthOnce,captureNormalBindingAuthAttempt,persistBindingAuthResponse,recoverBindingAuthEvidence,type BindingAuthAttempt} from './BindingAuthEvidencePersistence';
+import {validateBoundSessionAuthResponse} from './Caja6BoundSessionAuth';
 import {renewCaja6BoundSession} from './Caja6BoundSessionAuth';
 import { assertLegacyFormatPayload, assertLegacyFormatCollection } from '../articleFormats/activation';
 import { ArticleFormatError } from '../articleFormats/domain';
@@ -1884,7 +1887,8 @@ export class ApiSyncAdapter {
         return !Number.isFinite(lastAttemptMs) || Date.now() - lastAttemptMs >= this.ERP_REAUTH_RETRY_WINDOW_MS;
     }
 
-    private persistErpAuthPayloadFromResponse(input: {
+    private async persistErpAuthPayloadFromResponse(input: {
+        bindingAttempt?: BindingAuthAttempt | null;
         data: any;
         target: { terminalId: string };
         deviceId: string | null;
@@ -1892,8 +1896,15 @@ export class ApiSyncAdapter {
         existingDeviceToken: string | null;
         deviceTokenSourceWhenNew: string;
         deviceTokenSourceWhenRefresh: string;
-    }): { syncToken: string; deviceToken: string | null; canonicalTerminalId: string; expiresAt?: unknown } {
+    }): Promise<{ syncToken: string; deviceToken: string | null; canonicalTerminalId: string; expiresAt?: unknown }> {
         const { data, target, deviceId, tenantId, existingDeviceToken, deviceTokenSourceWhenNew, deviceTokenSourceWhenRefresh } = input;
+        if(Object.prototype.hasOwnProperty.call(data||{},'bindingEvidence')||input.bindingAttempt?.record){
+            const attempt=input.bindingAttempt;if(!attempt)throw Error('SYNC_BINDING_EVIDENCE_HELD');
+            const session=validateBoundSessionAuthResponse(data,attempt.scope,attempt.snapshot.credentials.deviceToken!);
+            const observation={source:'LOCAL_OBSERVATION_OF_ERP_SYNC_AUTH' as const,origin:attempt.scope.origin,route:'/api/sync/auth' as const,tenantId:attempt.scope.tenantId,terminalId:attempt.scope.terminalId,deviceId:attempt.scope.deviceId,observedAt:new Date().toISOString()};
+            await persistBindingAuthResponse(attempt,data,session,observation);
+            return {syncToken:session.token,deviceToken:null,canonicalTerminalId:attempt.scope.terminalId,expiresAt:session.expiresAt};
+        }
         const identity = persistErpSyncAuthIdentity(data, target.terminalId);
         if (identity.terminalId && identity.terminalId !== target.terminalId) {
             this.operationalTargetHint.terminalId = identity.terminalId;
@@ -2164,7 +2175,7 @@ export class ApiSyncAdapter {
         }
 
         const data = await response.json();
-        const persisted = this.persistErpAuthPayloadFromResponse({
+        const persisted = await this.persistErpAuthPayloadFromResponse({
             data,
             target,
             deviceId,
@@ -2938,6 +2949,8 @@ export class ApiSyncAdapter {
         useLocalTarget: boolean;
         kind: ResolvedSyncTarget['kind'];
     }> {
+        const recoveredAuth=await recoverBindingAuthEvidence();
+        if(recoveredAuth){this.erpAuthToken=recoveredAuth.envelope.session.token;if(Date.parse(recoveredAuth.envelope.session.expiresAt)<=Date.now()){force=true;this.erpAuthToken=null;}}
         const target = this.resolveOperationalTarget(operation);
         if (!target) {
             const routedTarget = resolveSyncTarget();
@@ -3142,6 +3155,10 @@ export class ApiSyncAdapter {
                 }
             }
 
+            return serializeBindingAuthExchange(async()=>{
+            await recoverBindingAuthEvidence();
+            const bindingAttempt=await captureNormalBindingAuthAttempt({base:target.baseUrl,terminalId:target.terminalId,deviceId,tenantId,configFingerprint:()=>JSON.stringify([this.config,this.operationalAuthorityRevision,safeLocalStorageGet('initial_terminal_config'),safeLocalStorageGet('clic_sync_profile')])});
+            const strictBindingAuth=Boolean(bindingAttempt&&(['origin','tenantId','companyId','storeId','terminalId'] as const).every(k=>bindingAttempt.scope[k]===CAJA6_FISCAL_SCOPE[k]));
             const authEndpoint = `${target.baseUrl}/auth`;
             console.info('pos_auth_started', {
                 terminalId: target.terminalId,
@@ -3161,8 +3178,9 @@ export class ApiSyncAdapter {
                 ...this.getLocalDeviceHeaders(),
                 ...(deviceToken ? { 'X-Device-Token': deviceToken } : {}),
             };
-            const response = await this.fetchWithRetry(authEndpoint, {
+            const authOptions:SyncRequestInit = {
                 method: 'POST',
+                redirect:'error',credentials:'omit',cache:'no-store',
                 clicTransportClass: target.useLocalTarget ? 'LAN_AUTH' : 'ERP_CLOUD',
                 headers: authHeaders,
                 body: JSON.stringify({
@@ -3178,8 +3196,10 @@ export class ApiSyncAdapter {
                     cloud_admin_tenant_id: readTerminalCredentialsSync().cloudAdminTenantId || safeLocalStorageGet('cloud_admin_tenant_id') || safeLocalStorageGet('clic_cloud_admin_tenant_id') || null,
                     app_version: safeLocalStorageGet('CLIC_POS_APP_VERSION') || safeLocalStorageGet('app_version') || null,
                 })
-            }, 2, 500, channel, operation);
+            };
+            const response = strictBindingAuth ? await fetchBindingAuthOnce(authEndpoint,authOptions) : await this.fetchWithRetry(authEndpoint,authOptions,2,500,channel,operation);
 
+            if(strictBindingAuth&&(!response.ok||response.redirected))throw Error('SYNC_BINDING_EVIDENCE_HELD');
             if (!response.ok) {
                 await this.handleDeviceSupersededResponse(response, target.terminalId);
                 let errorMessage = `ERP authentication failed: ${response.status} ${response.statusText}`;
@@ -3264,7 +3284,8 @@ export class ApiSyncAdapter {
             }
 
             const data = await response.json();
-            return this.persistErpAuthPayloadFromResponse({
+            return (await this.persistErpAuthPayloadFromResponse({
+                bindingAttempt,
                 data,
                 target,
                 deviceId,
@@ -3272,7 +3293,8 @@ export class ApiSyncAdapter {
                 existingDeviceToken: deviceToken,
                 deviceTokenSourceWhenNew: 'ERP_AUTH_REAUTH',
                 deviceTokenSourceWhenRefresh: 'ERP_AUTH_REFRESH',
-            }).syncToken;
+            })).syncToken;
+            });
         })();
 
         this.erpAuthInFlight[channel] = erpAuthPromise.finally(() => {
