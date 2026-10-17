@@ -4,7 +4,11 @@ const device=(value:unknown):value is string=>typeof value==='string'&&value.len
 /** New direct fiscal sources only. These are envelope fields at birth, never an authority backfill. */
 export function captureNewV3FiscalSourceMetadata(document:Transaction,config:BusinessConfig,binding:string,options:{refund?:boolean;retained?:boolean}={}):Record<string,string> {
  const tx=document as Transaction&Record<string,any>;
- if(options.refund||options.retained||tx.settlementCurrencyCode!=='DOP'||tx.documentType!=='TICKET'||tx.fiscalMode!=='ECF'||tx.fiscalProvider!=='MSELLER'||!['E31','E32','E44','E45'].includes(tx.ncfType||'')
+ const currencies=[tx.currency,tx.settlementCurrencyCode,tx.settlement_currency_code].filter(value=>value!==undefined&&value!==null&&value!=='');
+ const paymentCurrencies=(tx.payments||[]).flatMap(payment=>[payment.currency,(payment as any).currencyCode,(payment as any).currency_code]).filter(value=>value!==undefined&&value!==null&&value!=='');
+ const rates=[tx.exchangeRate,tx.settlementExchangeRate,tx.settlement_exchange_rate,...(tx.payments||[]).flatMap(payment=>[(payment as any).exchangeRate,(payment as any).exchange_rate])].filter(value=>value!==undefined&&value!==null);
+ if(!currencies.length||currencies.some(value=>value!=='DOP')||paymentCurrencies.some(value=>value!=='DOP')||rates.some(value=>value!==1))return {};
+ if(options.refund||options.retained||tx.documentType!=='TICKET'||tx.fiscalMode!=='ECF'||tx.fiscalProvider!=='MSELLER'||!['E31','E32','E44','E45'].includes(tx.ncfType||'')
   ||!Object.prototype.hasOwnProperty.call(tx,'fiscalEnvironment')||typeof tx.fiscalEnvironment!=='number'||![0,1,2].includes(tx.fiscalEnvironment)
   ||[tx.originalTransactionId,tx.reservationId,tx.v3ReservationClaimId,tx.v3RestoredTicketId,tx.restaurantOrderId,tx.restaurantTableId,tx.uberOrderId,tx.marketplaceOrderId,tx.zReportId,tx.closedAt,tx.closingId].some(Boolean))return {};
  const fail=():never=>{throw Error('FISCAL_V3_NEW_SOURCE_SCOPE_REQUIRED');};

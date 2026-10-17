@@ -13,3 +13,9 @@ test('Legacy B, No fiscal, other provider, missing environment and retained/retu
  for(const patch of [{fiscalMode:'NONE'},{fiscalMode:'LEGACY_B',ncfType:'B02'},{fiscalProvider:'DIGIFACT'},{fiscalEnvironment:undefined},{fiscalEnvironment:'0'},{settlementCurrencyCode:'USD'},{documentType:'REFUND'},{ncfType:'E34'},{reservationId:'r'},{v3ReservationClaimId:'r'},{v3RestoredTicketId:'r'},{originalTransactionId:'old'},{restaurantOrderId:'order'},{restaurantTableId:'table'},{uberOrderId:'uber'},{marketplaceOrderId:'market'},{zReportId:'z'},{closedAt:'old'}]){const f=inputs();assert.deepEqual(captureNewV3FiscalSourceMetadata({...f.tx,...patch},f.config,f.binding),{});}
  for(const options of [{refund:true},{retained:true}]){const f=inputs();assert.deepEqual(captureNewV3FiscalSourceMetadata(f.tx,f.config,f.binding,options),{});}
 });
+
+test('profile timezone requires explicit consistent original DOP and no transaction/payment FX conflict',()=>{
+ for(const patch of [{currency:'USD'},{settlement_currency_code:'USD'},{exchangeRate:2},{settlementExchangeRate:2},{settlement_exchange_rate:'1'},{payments:[{currency:'USD'}]},{payments:[{currencyCode:'USD'}]},{payments:[{currency_code:'USD'}]},{payments:[{currency:'DOP',exchangeRate:2}]},{payments:[{currency:'DOP',exchange_rate:'1'}]},{settlementCurrencyCode:undefined}]){const f=inputs();assert.deepEqual(captureNewV3FiscalSourceMetadata({...f.tx,...patch},f.config,f.binding),{});}
+ const f=inputs(),originalDate='2026-10-17T12:00:00.000Z';f.tx.date=originalDate;f.tx.payments=[{currency:'DOP',exchangeRate:1}];f.tx.currency='DOP';const originalTimezone=process.env.TZ;
+ try{for(const timezone of ['UTC','Asia/Tokyo']){process.env.TZ=timezone;assert.equal(captureNewV3FiscalSourceMetadata(f.tx,f.config,f.binding).timezone,'America/Santo_Domingo');assert.equal(f.tx.date,originalDate);}}finally{if(originalTimezone===undefined)delete process.env.TZ;else process.env.TZ=originalTimezone;}
+});
