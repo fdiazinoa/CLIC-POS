@@ -1,3 +1,4 @@
+import {captureNewV3FiscalSourceMetadata} from './NewV3FiscalSourceMetadata';
 export type {V3FinancialOptions} from '../db/LargeMasterSyncV3FinancialRetention';
 import { planReservationCommitmentRelease } from './LargeMasterSyncV3ReservationCommitments';
 import { assertV3ReservationInvoice,assertV3ReservationLines,reservationClaimId,reservationInvoiceId } from './LargeMasterSyncV3ReservationAuthority';
@@ -219,15 +220,16 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
       documents.push(...originalMutations);
     }
     if (isSyncFeatureEnabled('sqlite_outbox_v2') && !options.refund) {
+      const fiscalSourceMetadata = captureNewV3FiscalSourceMetadata(document,projected,session.binding,{refund:options.refund,retained:Boolean(retained)});
       const paymentIntentIds = (document.payments || []).map((payment: any) => payment.paymentIntentId).filter(Boolean);
       const claim = retained?.reservation ? JSON.parse(retained.expected) : undefined;
       // ADVANCE records a prior application in SALE_POSTED; PAYMENT_POSTED represents only newly received settlement.
       const newPayments = claim ? document.payments.filter(payment=>payment.method !== 'ADVANCE') : document.payments;
       const paymentPosted = buildPaymentPostedPayload(claim ? {...document,payments:newPayments,
-        settlementAppliedBase:newPayments.reduce((sum,payment)=>sum+Number(payment.amountApplied ?? payment.appliedAmount ?? payment.amount),0)} : document, { paymentIntentIds });
+        settlementAppliedBase:newPayments.reduce((sum,payment)=>sum+Number(payment.amountApplied ?? payment.appliedAmount ?? payment.amount),0)} : document, { ...fiscalSourceMetadata, paymentIntentIds });
       events.push({ eventId: claim?.saleEventId || createUuid(), eventType: 'SALE_POSTED', aggregateType: 'TRANSACTION',
           aggregateId: document.id, schemaVersion: 1,
-          payload: buildSalePostedPayload(document, { inventoryMovementIds: ledger.map(row => row.id), paymentIntentIds }), createdAt: document.date });
+          payload: buildSalePostedPayload(document, { ...fiscalSourceMetadata, inventoryMovementIds: ledger.map(row => row.id), paymentIntentIds }), createdAt: document.date });
       if (paymentPosted) events.push({ eventId: claim?.paymentEventId || createUuid(), eventType: 'PAYMENT_POSTED',
           aggregateType: 'TRANSACTION', aggregateId: document.id, schemaVersion: 1, payload: paymentPosted, createdAt: document.date });
       intentIds.push(...paymentIntentIds);
