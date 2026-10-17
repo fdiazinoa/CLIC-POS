@@ -11,7 +11,7 @@ import { planFinancialNumbers, FINANCIAL_COUNTER_UPSERT_SQL } from '../Financial
 import { ARTICLE_FORMATS_SCHEMA } from '../../articleFormats/schema';
 import type { FormatSQL,FormatStatement } from '../../articleFormats/store';
 import { getEffectiveFiscalComplianceConfig, getProviderEnvironment } from '../../../utils/fiscal/fiscalHelpers';
-import { validateV3FiscalMetadataMutation } from '../LargeMasterSyncV3FiscalMetadata';
+import { validateV3FiscalMetadataMutation,validateFiscalDispatchClaimBatch } from '../LargeMasterSyncV3FiscalMetadata';
 import { v3ArticleSemantics, v3RetainedLineFingerprint } from '../../sync/LargeMasterSyncV3StockAuthority';
 import { SYNC_MONITOR_PAGE_SQL, syncMonitorPageParams, decodeSyncMonitorPage, type SyncMonitorPageRequest } from '../SyncMonitorPage';
 import { Capacitor } from '@capacitor/core';
@@ -257,6 +257,25 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         await this.withWriteLock(async () => {
             const db = this.ensureDb();
             const now = new Date().toISOString();
+            if (documents.some(row=>row.v3FiscalMetadataOperation==='FISCAL_DISPATCH_CLAIM')) {
+              if(requireAbsent||replaceCollections.length)throw Error('SYNC_V3_FISCAL_METADATA_MUTATION_DENIED');
+              await validateFiscalDispatchClaimBatch(documents);
+              await this.executeUnlocked(documents.map(row=>({statement:row.collectionName==='fiscalDispatchClaims'
+                ? 'INSERT INTO documents(collection_name,doc_id,data,sort_order,updatedAt) VALUES(?,?,?,0,?)'
+                : 'UPDATE documents SET data=?,updatedAt=? WHERE collection_name=? AND doc_id=? AND data=?',
+                values:row.collectionName==='fiscalDispatchClaims'?[row.collectionName,row.document.id,JSON.stringify(row.document),now]
+                  :[JSON.stringify(row.document),now,row.collectionName,row.document.id,row.expectedDocument]})),async()=>{
+                await this.assertV3FinancialBaseline(documents);
+                const source=documents.find(row=>row.collectionName==='transactions')!,scope=source.document.fiscalSubmissionScope;
+                const config=documents.find(row=>row.collectionName==='config')!.document;
+                const terminals=(config.terminals||[]).filter((row:any)=>row.id===scope.terminalId),terminal=terminals[0];
+                const binding=terminal?.config?.erpBinding;
+                if(terminals.length!==1||binding?.tenantId!==scope.tenantId||binding?.companyId!==scope.companyId||binding?.storeId!==scope.storeId
+                  ||terminal.config?.currentDeviceId!==scope.deviceId||String(config.companyInfo?.rnc||'').replace(/\D/g,'')!==scope.issuerRnc
+                  ||getProviderEnvironment(getEffectiveFiscalComplianceConfig(config as any,terminal.config),'MSELLER')!==scope.environment)throw Error('SYNC_V3_FISCAL_METADATA_MUTATION_DENIED');
+              });
+              return;
+            }
             if (documents.some(row => row.v3FiscalMetadataOperation)) {
               if (requireAbsent || replaceCollections.length || documents.some(row => !row.v3FiscalMetadataOperation)) {
                 throw new Error('SYNC_V3_FISCAL_METADATA_MUTATION_DENIED');
@@ -850,6 +869,15 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             CREATE INDEX IF NOT EXISTS idx_documents_v3_inventory_baseline
             ON documents(json_extract(data, '$.v3InventoryBaseline'), json_extract(data, '$.productId'), json_extract(data, '$.warehouseId'))
             WHERE collection_name = 'inventoryLedger' AND json_extract(data, '$.v3InventoryBaseline') IS NOT NULL;
+            CREATE TRIGGER IF NOT EXISTS preserve_fiscal_dispatch_insert BEFORE INSERT ON documents
+            WHEN NEW.collection_name='fiscalDispatchClaims' AND EXISTS(SELECT 1 FROM documents WHERE collection_name='fiscalDispatchClaims' AND doc_id=NEW.doc_id)
+            BEGIN SELECT RAISE(ABORT, 'FISCAL_DISPATCH_UNKNOWN_GET_ONLY'); END;
+            CREATE TRIGGER IF NOT EXISTS preserve_fiscal_dispatch_update BEFORE UPDATE ON documents
+            WHEN OLD.collection_name='fiscalDispatchClaims'
+            BEGIN SELECT RAISE(ABORT, 'FISCAL_DISPATCH_UNKNOWN_GET_ONLY'); END;
+            CREATE TRIGGER IF NOT EXISTS preserve_fiscal_dispatch_delete BEFORE DELETE ON documents
+            WHEN OLD.collection_name='fiscalDispatchClaims'
+            BEGIN SELECT RAISE(ABORT, 'FISCAL_DISPATCH_UNKNOWN_GET_ONLY'); END;
             CREATE TRIGGER IF NOT EXISTS preserve_v3_inventory_delete BEFORE DELETE ON documents
             WHEN OLD.collection_name IN ('inventoryLedger', 'transactions', 'transactionHistory') AND json_extract(OLD.data, '$.v3InventoryBaseline') IS NOT NULL
             BEGIN SELECT RAISE(IGNORE); END;
