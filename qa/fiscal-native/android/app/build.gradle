@@ -7,6 +7,6 @@ android {
  sourceSets { main { assets.srcDirs = [providers.gradleProperty('fiscalQaAssetsDir').getOrElse('/tmp/clic-pos-fiscalqa-assets')] } }
  compileOptions { sourceCompatibility JavaVersion.VERSION_21; targetCompatibility JavaVersion.VERSION_21 }
 }
-dependencies { implementation project(':capacitor-android'); implementation project(':capacitor-community-sqlite') }
+dependencies { implementation project(':capacitor-android'); implementation project(':capacitor-community-sqlite'); implementation "androidx.appcompat:appcompat:$rootProject.ext.androidxAppCompatVersion" }
 
 gradle.taskGraph.whenReady { graph -> if (graph.allTasks.any { it.name.toLowerCase().contains('release') }) throw new GradleException('QA laboratory prohibits release tasks') }
