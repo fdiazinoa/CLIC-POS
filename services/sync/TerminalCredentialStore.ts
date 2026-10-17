@@ -21,6 +21,7 @@ export interface TerminalCredentials {
     syncToken?: string | null;
     syncTokenExpiresAt?: string | null;
     syncTokenUpdatedAt?: string | null;
+    syncSessionObservation?: TerminalSessionObservation | null;
     authStatus?: string | null;
     lastAuthError?: string | null;
     lastReauthAttemptAt?: string | null;
@@ -362,4 +363,35 @@ export const clearStoredSyncToken = (): void => {
         // Non-critical cleanup.
     }
     void saveTerminalCredentials(next);
+};
+
+/** Strict session-only CAS; never repairs, normalizes or rotates binding metadata. */
+export type TerminalSessionObservation={source:'LOCAL_OBSERVATION_OF_ERP_SYNC_AUTH';origin:string;route:'/api/sync/auth';tenantId:string;terminalId:string;deviceId:string;observedAt:string};
+export type TerminalSessionSnapshot={document:string;generation:number;credentials:TerminalCredentials};
+export const captureTerminalSessionSnapshot=():TerminalSessionSnapshot=>{
+    const storage=getStorage(),document=storage?.getItem(CREDENTIALS_KEY);
+    if(!document)throw Error('SYNC_AUTH_CANONICAL_CREDENTIALS_REQUIRED');
+    let credentials:TerminalCredentials;
+    try{credentials=JSON.parse(document);}catch{throw Error('SYNC_AUTH_CANONICAL_CREDENTIALS_REQUIRED');}
+    if(!credentials||typeof credentials!=='object'||Array.isArray(credentials))throw Error('SYNC_AUTH_CANONICAL_CREDENTIALS_REQUIRED');
+    return {document,generation:credentialWriteGeneration,credentials};
+};
+export const saveTerminalSessionCAS=(snapshot:TerminalSessionSnapshot,session:{token:string;expiresAt:string;observation:TerminalSessionObservation},assertCurrent:()=>void):Promise<void>=>{
+    const operation=credentialWriteQueue.then(async()=>{
+        const storage=getStorage();
+        const current=()=>{assertCurrent();if(!storage||credentialWriteGeneration!==snapshot.generation||storage.getItem(CREDENTIALS_KEY)!==snapshot.document)throw Error('SYNC_AUTH_SESSION_CHANGED');};
+        current();
+        if(typeof session.token!=='string'||!session.token||session.token.trim()!==session.token||/[\r\n\t]/.test(session.token)||!Number.isFinite(Date.parse(session.expiresAt))||Date.parse(session.expiresAt)<=Date.now()||session.observation.source!=='LOCAL_OBSERVATION_OF_ERP_SYNC_AUTH')throw Error('SYNC_AUTH_SESSION_INVALID');
+        const next={...JSON.parse(snapshot.document),syncToken:session.token,syncTokenExpiresAt:session.expiresAt,syncTokenUpdatedAt:session.observation.observedAt,syncSessionObservation:session.observation};
+        // Preferences and localStorage are separate stores: propagate failures/partial persistence, never label them atomic/durable success.
+        await writeNativeCredentials(JSON.stringify(next));
+        current();
+        storage!.setItem(CREDENTIALS_KEY,JSON.stringify(next));
+        storage!.setItem('clic_erp_sync_token',session.token);
+        storage!.setItem('clic_erp_sync_token_expires_at',session.expiresAt);
+        storage!.setItem('clic_erp_sync_token_updated_at',session.observation.observedAt);
+        credentialWriteGeneration++;
+    });
+    credentialWriteQueue=operation.catch(()=>undefined);
+    return operation;
 };

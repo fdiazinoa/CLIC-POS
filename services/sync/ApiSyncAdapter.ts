@@ -1,3 +1,4 @@
+import {renewCaja6BoundSession} from './Caja6BoundSessionAuth';
 import { assertLegacyFormatPayload, assertLegacyFormatCollection } from '../articleFormats/activation';
 import { ArticleFormatError } from '../articleFormats/domain';
 import { isSyncFeatureEnabled } from './SyncFeatureFlags';
@@ -39,6 +40,7 @@ import {
 import { requestJson } from '../network/httpClient';
 import {
     buildTerminalSyncAuthHeaders,
+    captureTerminalSessionSnapshot,
     clearStoredSyncToken,
     readTerminalCredentialsSync,
     saveTerminalCredentials,
@@ -434,6 +436,17 @@ export class ApiSyncAdapter {
     private readonly ERP_REAUTH_RETRY_WINDOW_MS = 30000;
 
     constructor(private readonly mutationJournal: LegacyMutationJournal = legacyMutationJournal) {}
+
+    /** Operator-invoked session renewal only; no register fallback or fiscal unlock. */
+    async renewCaja6BoundSessionOnly():Promise<{status:'SESSION_RENEWED_BINDING_PROOF_REQUIRED'}>{
+        if(this.erpAuthInFlight.sales||this.erpAuthInFlight.background)throw Error('SYNC_AUTH_SESSION_HELD');
+        const result=await renewCaja6BoundSession({configFingerprint:()=>JSON.stringify([this.config,this.operationalAuthorityRevision,
+            Boolean(this.erpAuthInFlight.sales),Boolean(this.erpAuthInFlight.background),
+            safeLocalStorageGet('initial_terminal_config'),safeLocalStorageGet('clic_sync_profile')])});
+        this.erpAuthToken=captureTerminalSessionSnapshot().credentials.syncToken||null;
+        return result;
+    }
+
 
     private isCircuitBreakerOpenError(error: unknown): boolean {
         const message = error instanceof Error ? error.message : String(error || '');
