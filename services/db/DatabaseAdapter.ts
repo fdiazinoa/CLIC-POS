@@ -15,7 +15,7 @@ export interface DurableDocumentMutation {
     requireAbsent?: boolean;
     expectedDocument?: string;
     /** Native CAS-only append path; remote ACK retained-upsert cannot modify these fields. */
-    v3FiscalMetadataOperation?: 'CLASSIFICATION_PROJECTION_APPEND' | 'CLASSIFICATION_ATTEMPT_CONSUME' | 'PRESUBMIT_EVIDENCE_REPAIR' | 'FISCAL_SUBMISSION_SCOPE_APPEND' | 'FISCAL_LOOKUP_APPROVAL_APPEND' | 'FISCAL_STATUS_RECONCILE' | 'FISCAL_PRINT_EVIDENCE_APPEND';
+    v3FiscalMetadataOperation?: 'FISCAL_DISPATCH_CLAIM' | 'CLASSIFICATION_PROJECTION_APPEND' | 'CLASSIFICATION_ATTEMPT_CONSUME' | 'PRESUBMIT_EVIDENCE_REPAIR' | 'FISCAL_SUBMISSION_SCOPE_APPEND' | 'FISCAL_LOOKUP_APPROVAL_APPEND' | 'FISCAL_STATUS_RECONCILE' | 'FISCAL_PRINT_EVIDENCE_APPEND';
     /** Verified V3 sale demand; checked against scoped baseline + ledger inside the write transaction. */
     v3CurrentCatalog?: { syncId: string; syncVersion: number; binding: string };
     /** Narrow native CAS disposition for an already expired local stamped reservation. */

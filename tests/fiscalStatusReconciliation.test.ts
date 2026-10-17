@@ -1,3 +1,4 @@
+import {requireFiscalErpAppliedReceipt,FISCAL_DISPATCH_CLAIMS} from '../services/fiscal/FiscalMSellerDispatch';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
@@ -78,13 +79,13 @@ for(const field of ['issuer','environment','company','ncf','total','track','pend
  assert.equal(await verifyFiscalStatusProof(p,f.scope,f.tx),false);
 });
 test('actual bound transport emits one GET with authenticated scope assertion, never normalizes echoed receipt; stale binding refuses',async()=>{
- const f=await fixture(),identity={erpSyncBaseUrl:'https://erp.test/api/sync',tenantId:'tenant',terminalId:'terminal',deviceId:'device',syncToken:'test-token'};let method='',calls=0;
+ const f=await fixture(),identity={erpSyncBaseUrl:'https://erp.test/api/sync',tenantId:'tenant',terminalId:'terminal',deviceId:'device',syncToken:'test-token'};let method='',calls=0;const credentials=()=>({...identity,companyId:'company',storeId:'store',deviceToken:'device-token',deviceTokenSource:'ERP_REGISTER'});
  const response=await getScopedFiscalDocumentStatus(f.tx,f.scope,()=>identity,async(url:any,init:any)=>{
   calls++;method=init.method;assert.equal(init.headers['X-Sync-Token'],'test-token');const parsed=new URL(url);assert.equal(parsed.pathname,'/api/sync/v3/fiscal/documents/status');
   assert.equal(JSON.parse(parsed.searchParams.get('scopeAssertion')!).sourceChecksum,f.scope.sourceChecksum);
   return{ok:true,json:async()=>f.proof} as Response;
- });assert.strictEqual(response,f.proof);assert.equal(method,'GET');assert.equal(calls,1);
- let reads=0;await assert.rejects(()=>getScopedFiscalDocumentStatus(f.tx,f.scope,()=>++reads===1?identity:{...identity,deviceId:'changed'},async()=>({ok:true,json:async()=>f.proof}) as Response),/SCOPE_CHANGED/);
+ },credentials);assert.strictEqual(response,f.proof);assert.equal(method,'GET');assert.equal(calls,1);
+ let reads=0;await assert.rejects(()=>getScopedFiscalDocumentStatus(f.tx,f.scope,()=>++reads===1?identity:{...identity,deviceId:'changed'},async()=>({ok:true,json:async()=>f.proof}) as Response,credentials),/SCOPE_CHANGED|AUTH_REQUIRED/);
 });
 test('shared checksum fixture agrees with independently written ERP canonical tuple',async()=>{
  const fixture=JSON.parse(readFileSync(new URL('./fixtures/fiscal-status-checksum-v1.json',import.meta.url),'utf8'));
@@ -192,25 +193,25 @@ test('actual App manual callback requires displayed environment confirmation bef
  assert.equal(await run(true),'GET-only');assert.equal(calls,1);assert.deepEqual(approval,['27',true,'U',0]);
  f.tx.fiscalLookupApproval={protected:'already-approved'};await run(false);assert.equal(calls,2);assert.deepEqual(approval,['27',true,'U',undefined]);
 });
-test('actual existing authorized App issue captures intent through native CAS before exactly one mock issue, preserving source/outbox',async()=>{
+test('actual App issuance remains held before intent when ERP APPLIED receipt is missing, preserving source/outbox',async()=>{
  const {transform}=await import('esbuild');const source=readFileSync(new URL('../App.tsx',import.meta.url),'utf8');
  const start=source.indexOf('async (transaction: Transaction,',source.indexOf('const syncFiscalDocument ='));
- const end=source.indexOf('}, [config, pollFiscalDocumentStatus, upsertFiscalTransaction, loadFiscalStatusContext]);',start);assert.ok(start>0&&end>start);
+ const end=source.indexOf('}, [config, pollFiscalDocumentStatus, upsertFiscalTransaction, loadFiscalStatusContext, fiscalStatusWorker]);',start);assert.ok(start>0&&end>start);
  const code=(await transform('const callback='+source.slice(start,end+1)+';',{loader:'ts'})).code;
- const create=new Function('f',`const {LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED,v3FiscalInFlightRef,config,db,dbAdapter,getLargeMasterSyncV3OperationalSession,validateV3FrozenFiscalAmounts,validateV3FrozenLineFiscalAmounts,getEffectiveFiscalComplianceConfig,getProviderEnvironment,getFiscalProviderConfig,getExistingFiscalProviderReference,pollFiscalDocumentStatus,resolveFiscalProviderEstablishmentCode,resolveFiscalProviderCashierCode,calculateTransactionFiscalSummary,buildV3FrozenFiscalProviderTransaction,upsertFiscalTransaction,issueFiscalDocument,applyFiscalProviderResult,isDelegatedFiscalProvider,window,loadFiscalStatusContext,fiscalStatusSourceChecksum}=f;${code}return callback;`);
+ const create=new Function('f',`const {LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED,v3FiscalInFlightRef,config,db,dbAdapter,getLargeMasterSyncV3OperationalSession,validateV3FrozenFiscalAmounts,validateV3FrozenLineFiscalAmounts,getEffectiveFiscalComplianceConfig,getProviderEnvironment,getFiscalProviderConfig,getExistingFiscalProviderReference,pollFiscalDocumentStatus,resolveFiscalProviderEstablishmentCode,resolveFiscalProviderCashierCode,calculateTransactionFiscalSummary,buildV3FrozenFiscalProviderTransaction,upsertFiscalTransaction,issueFiscalDocument,applyFiscalProviderResult,isDelegatedFiscalProvider,window,loadFiscalStatusContext,fiscalStatusSourceChecksum,requireFiscalErpAppliedReceipt,FISCAL_DISPATCH_CLAIMS,fiscalStatusWorker}=f;${code}return callback;`);
  const f=await native();try{
   const original=f.read('transactions');for(const key of ['fiscalSubmissionScope','fiscalProviderStatus','fiscalClassificationAttemptedAt','fiscalClassificationProjection','fiscalPreSubmitRecoveryAudit'])delete original[key];
   f.sql.prepare("UPDATE documents SET data=? WHERE collection_name='transactions'").run(JSON.stringify(original));
   let issues=0;const context=await f.deps.context();
   const sync=create({LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED:true,v3FiscalInFlightRef:{current:new Map()},config:{terminals:[],companyInfo:{rnc:'130090752'}},
-   db:{getDocument:async()=>f.read('transactions')},dbAdapter:f.adapter,getLargeMasterSyncV3OperationalSession:async()=>({assertCurrent:async()=>{},projectConfig:async()=>({terminals:[]}),validate:async()=>undefined}),
+   db:{getDocument:async(name:string)=>name==='transactions'?f.read('transactions'):null},dbAdapter:f.adapter,getLargeMasterSyncV3OperationalSession:async()=>({assertCurrent:async()=>{},projectConfig:async()=>({terminals:[]}),validate:async()=>undefined}),
    validateV3FrozenFiscalAmounts:()=>{},validateV3FrozenLineFiscalAmounts:()=>{},getEffectiveFiscalComplianceConfig:()=>({}),getProviderEnvironment:()=>0,getFiscalProviderConfig:()=>({}),getExistingFiscalProviderReference:(row:any)=>row.fiscalReferenceId,
    pollFiscalDocumentStatus:async()=>{},resolveFiscalProviderEstablishmentCode:()=>undefined,resolveFiscalProviderCashierCode:()=>undefined,calculateTransactionFiscalSummary:()=>{throw Error('legacy forbidden');},
    buildV3FrozenFiscalProviderTransaction:(row:any)=>row,upsertFiscalTransaction:async(row:any)=>f.adapter.saveDocument('transactions',row),
    issueFiscalDocument:async(input:any)=>{issues++;const stored=f.read('transactions');assert.equal(stored.fiscalSubmissionScope.environment,0);assert.equal(stored.fiscalSubmissionScope.basis,'PERSISTED_SUBMISSION_INTENT');assert.deepEqual(stored.fiscalSubmissionScope,input.transaction.fiscalSubmissionScope);return{success:false,pending:true};},
-   applyFiscalProviderResult:(row:any)=>row,isDelegatedFiscalProvider:()=>true,window:{setTimeout:()=>{}},loadFiscalStatusContext:async()=>context,fiscalStatusSourceChecksum});
-  await sync(original);assert.equal(issues,1);const final=f.read('transactions');for(const key of ['items','payments','ncf','electronicNcf','total','v3CommitFingerprint'])assert.deepEqual(final[key],original[key]);
-  assert.deepEqual(f.read('outbox'),{id:'event',status:'PENDING'});await sync(original);assert.equal(issues,1);
+   applyFiscalProviderResult:(row:any)=>row,isDelegatedFiscalProvider:()=>true,window:{setTimeout:()=>{}},loadFiscalStatusContext:async()=>context,fiscalStatusSourceChecksum,requireFiscalErpAppliedReceipt,FISCAL_DISPATCH_CLAIMS,fiscalStatusWorker:f.worker});
+  await assert.rejects(()=>sync(original),/APPLIED_RECEIPT_REQUIRED/);assert.equal(issues,0);const final=f.read('transactions');for(const key of ['items','payments','ncf','electronicNcf','total','v3CommitFingerprint'])assert.deepEqual(final[key],original[key]);
+  assert.deepEqual(f.read('outbox'),{id:'event',status:'PENDING'});await assert.rejects(()=>sync(original),/APPLIED_RECEIPT_REQUIRED/);assert.equal(issues,0);assert.equal(final.fiscalSubmissionScope,undefined);assert.equal(final.fiscalProviderStatus,undefined);
  }finally{f.sql.close();}
 });
 

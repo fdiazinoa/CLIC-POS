@@ -211,211 +211,19 @@ test('normaliza y persiste la respuesta fiscal completa de MSeller', async () =>
   assert.equal(failedWhileProcessing.success, false);
 });
 
-test('emite E31/E32/E34 exclusivamente al ERP y nunca envía credenciales MSeller', async (t) => {
-  const { issueFiscalDocument } = await import('../services/fiscal/fiscalService');
-  localStorageMock.clear();
-  localStorageMock.setItem('CLIC_ERP_BASE_URL', 'https://erp.example.test');
-  const originalFetch = globalThis.fetch;
-
-  try {
-    for (const documentCode of ['E31', 'E32', 'E34', 'E44', 'E45'] as const) {
-      await t.test(documentCode, async () => {
-        let requestUrl = '';
-        let requestBody = '';
-        globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
-          requestUrl = String(input);
-          requestBody = String(init?.body || '');
-          return Response.json({
-            success: true,
-            providerId: 'MSELLER',
-            environment: 1,
-            documentCode,
-            providerTransactionId: `${documentCode}0000000001`,
-            eNCF: `${documentCode}0000000001`,
-            status: 'RECIBIDO',
-            message: 'Pendiente DGII',
-            pending: true,
-          });
-        }) as typeof fetch;
-
-        const result = await issueFiscalDocument({
-          providerId: 'MSELLER',
-          environment: 1,
-          companyInfo: { name: 'Comercio QA', rnc: '101010101', phone: '', address: 'Santo Domingo' },
-          transaction: {
-            id: `sale-${documentCode}`,
-            date: new Date().toISOString(),
-            items: [{ id: 'p1', name: 'Producto', quantity: 1, price: 118 }],
-            total: 118,
-            payments: [],
-            userId: 'u1',
-            userName: 'QA',
-            status: 'COMPLETED',
-            ncfType: documentCode,
-            ncf: `${documentCode}0000000001`, fiscalIssuance:issuance(documentCode,1),
-            electronicNcf: `${documentCode}0000000001`,
-          } as any,
-          credentialKey: 'MSELLERQA001',
-          deliveryMode: 'LOCAL_DIRECT',
-          apiBaseUrl: 'https://ecf.api.mseller.app',
-        });
-
-        assert.equal(requestUrl, 'https://erp.example.test/api/fiscal/documents/issue');
-        assert.doesNotMatch(requestUrl, /mseller\.app|127\.0\.0\.1|10\.0\.2\.2/);
-        const parsedBody = JSON.parse(requestBody);
-        assert.equal(parsedBody.options.fiscalRangeId,'original-range-'+documentCode);
-        assert.deepEqual(parsedBody.options.fiscalIssuance,issuance(documentCode,1));
-        assert.equal(parsedBody.authToken, undefined);
-        assert.equal(parsedBody.options.apiBaseUrl, undefined);
-        assert.equal(parsedBody.options.testUrl, undefined);
-        assert.equal(parsedBody.options.issueUrl, undefined);
-        assert.equal(parsedBody.options.statusUrl, undefined);
-        assert.equal(parsedBody.options.deliveryMode, 'DELEGATED_ERP');
-        assert.doesNotMatch(requestBody, /apiKey|password|ecf\.api\.mseller\.app/i);
-        assert.match(requestBody, /"providerId":"MSELLER"/);
-        assert.match(requestBody, /"credentialKey":"MSELLERQA001"/);
-        assert.equal(result.pending, true);
-      });
-    }
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-});
-
-test('consulta estado por ERP y conserva pending desde raw o estados asíncronos', async () => {
-  const { getFiscalDocumentStatus } = await import('../services/fiscal/fiscalService');
-  localStorageMock.clear();
-  localStorageMock.setItem('CLIC_ERP_BASE_URL', 'https://erp.example.test');
-  const originalFetch = globalThis.fetch;
-  let requestUrl = '';
-  let requestHeaders: HeadersInit | undefined;
-
-  try {
-    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
-      requestUrl = String(input);
-      requestHeaders = init?.headers;
-      return Response.json({
-        success: true,
-        providerId: 'MSELLER',
-        environment: 0,
-        providerTransactionId: 'E310000000001',
-        status: 'RECIBIDO',
-        message: 'Documento recibido',
-        raw: { pending: true, securityCode: 'SEC-002', qr_url: 'https://qr.example.test/2' },
-      });
-    }) as typeof fetch;
-
-    const result = await getFiscalDocumentStatus(
-      'MSELLER',
-      0,
-      'E310000000001',
-      { name: 'Comercio QA', rnc: '101010101', phone: '', address: 'Santo Domingo' },
-      'MSELLERQA001',
-      'LOCAL_DIRECT'
-    );
-
-    assert.match(requestUrl, /^https:\/\/erp\.example\.test\/api\/fiscal\/documents\/status\?/);
-    assert.doesNotMatch(requestUrl, /mseller\.app|127\.0\.0\.1/);
-    assert.equal(requestHeaders, undefined);
-    assert.equal(result.pending, true);
-    assert.equal(result.securityCode, 'SEC-002');
-    assert.equal(result.qrUrl, 'https://qr.example.test/2');
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-});
-
-test('dos emisiones concurrentes de la misma venta comparten un solo POST', async () => {
-  const { issueFiscalDocument } = await import('../services/fiscal/fiscalService');
-  localStorageMock.clear();
-  localStorageMock.setItem('CLIC_ERP_BASE_URL', 'https://erp.example.test');
-  const originalFetch = globalThis.fetch;
-  let postCount = 0;
-
-  try {
-    globalThis.fetch = (async () => {
-      postCount += 1;
-      await new Promise((resolve) => setTimeout(resolve, 5));
-      return Response.json({
-        success: true,
-        providerId: 'MSELLER',
-        environment: 0,
-        documentCode: 'E31',
-        providerTransactionId: 'E310000000077',
-        eNCF: 'E310000000077',
-        status: 'RECIBIDO',
-        message: 'Pendiente DGII',
-        pending: true,
-      });
-    }) as typeof fetch;
-    const input = {
-      providerId: 'MSELLER' as const,
-      environment: 0,
-      companyInfo: { name: 'Comercio QA', rnc: '101010101', phone: '', address: 'Santo Domingo' },
-      transaction: {
-        id: 'sale-concurrent',
-        date: new Date().toISOString(),
-        items: [{ id: 'p1', name: 'Producto', quantity: 1, price: 118 }],
-        total: 118,
-        payments: [],
-        userId: 'u1',
-        userName: 'QA',
-        status: 'COMPLETED' as const,
-        ncfType: 'E31' as const,
-        ncf:'E310000000077',fiscalIssuance:issuance('E31',77),
-        electronicNcf: 'E310000000077',
-      },
-      deliveryMode: 'DELEGATED_ERP' as const,
-    } as any;
-
-    const [first, second] = await Promise.all([
-      issueFiscalDocument(input),
-      issueFiscalDocument(input),
-    ]);
-    assert.equal(postCount, 1);
-    assert.equal(first.providerTransactionId, second.providerTransactionId);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-});
-
-test('sin ERP configurado, MSeller queda sin ruta y nunca cae al backend fiscal local', async () => {
-  const { issueFiscalDocument } = await import('../services/fiscal/fiscalService');
-  localStorageMock.clear();
-  localStorageMock.setItem('CLIC_POS_FISCAL_BASE_URL', 'https://local-fiscal.example.test');
-  localStorageMock.setItem('CLIC_POS_MASTER_URL', 'https://master-lan.example.test');
-  const originalFetch = globalThis.fetch;
-  let fetchCalls = 0;
-
-  try {
-    globalThis.fetch = (async () => {
-      fetchCalls += 1;
-      return Response.json({ success: false });
-    }) as typeof fetch;
-
-    await assert.rejects(issueFiscalDocument({
-      providerId: 'MSELLER',
-      environment: 0,
-      companyInfo: { name: 'Comercio QA', rnc: '101010101', phone: '', address: 'Santo Domingo' },
-      transaction: {
-        id: 'sale-offline',
-        date: new Date().toISOString(),
-        items: [{ id: 'p1', name: 'Producto', quantity: 1, price: 118 }],
-        total: 118,
-        payments: [],
-        userId: 'u1',
-        userName: 'QA',
-        status: 'COMPLETED',
-        ncfType: 'E31',
-        ncf:'E310000000099',fiscalIssuance:issuance('E31',99),
-        electronicNcf: 'E310000000099',
-      } as any,
-      deliveryMode: 'DELEGATED_ERP',
-    }), /No se pudo contactar el backend fiscal/);
-    assert.equal(fetchCalls, 0);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+test('production E31/E32/E34/E44/E45 remains held without authoritative ERP APPLIED receipt, zero network and no source mutation',async()=>{
+ const {issueFiscalDocument,getFiscalDocumentStatus}=await import('../services/fiscal/fiscalService');
+ const {initDatabase}=await import('../services/db');await initDatabase();
+ const originalFetch=globalThis.fetch;let posts=0;globalThis.fetch=async()=>{posts++;return Response.json({success:true,status:'ACCEPTED'});};
+ try{for(const code of ['E31','E32','E34','E44','E45']){
+  const tx:any={id:'held-'+code,ncfType:code,ncf:code+'0000000001',electronicNcf:code+'0000000001',fiscalProvider:'MSELLER',fiscalIssuance:issuance(code,1),items:[],payments:[],total:118};
+  const before=JSON.stringify(tx),input:any={providerId:'MSELLER',environment:0,companyInfo:{name:'Synthetic',rnc:'101010101'},transaction:tx};
+  const results=await Promise.allSettled([issueFiscalDocument(input),issueFiscalDocument(input)]);
+  for(const result of results){assert.equal(result.status,'rejected');assert.match((result as PromiseRejectedResult).reason.message,/APPLIED_RECEIPT_REQUIRED/);}
+  assert.equal(JSON.stringify(tx),before);
+  await assert.rejects(()=>issueFiscalDocument({...input,providerId:'DIGIFACT'}),/UNKNOWN_GET_ONLY/);
+ }await assert.rejects(()=>getFiscalDocumentStatus('MSELLER',0,'track'),/SCOPED_GET_REQUIRED/);assert.equal(posts,0);
+ }finally{globalThis.fetch=originalFetch;}
 });
 
 test('protege reintentos con referencia o e-NCF certificado y bloquea credenciales locales', async () => {
@@ -436,4 +244,15 @@ test('protege reintentos con referencia o e-NCF certificado y bloquea credencial
   assert.match(appSource, /const existingReference = getExistingFiscalProviderReference\(transaction\);/);
   assert.match(appSource, /if \(existingReference\) \{\s*await pollFiscalDocumentStatus\(/);
   assert.match(appSource, /fiscalReferenceId: undefined,\s*fiscalCertifiedNcf: undefined,\s*fiscalProviderStatus: undefined,\s*fiscalQrUrl: undefined,\s*fiscalSecurityCode: undefined,/);
+});
+test('non-MSeller issuer/status retain legacy transport and acceptance; source claim blocks provider escape even if caller changes its provider field',async()=>{
+ const {issueFiscalDocument,getFiscalDocumentStatus}=await import('../services/fiscal/fiscalService');const {db}=await import('../utils/db');
+ const originalFetch=globalThis.fetch;let calls=0;localStorageMock.setItem('CLIC_POS_FISCAL_BASE_URL','https://legacy-fiscal.example.test');
+ globalThis.fetch=async(_url:any,init:any)=>{calls++;if(init?.method==='POST'){const body=JSON.parse(init.body);assert.equal(body.providerId,'POLARIS');assert.equal(body.transaction.fiscalProvider,'POLARIS');}
+  return Response.json({success:true,pending:false,status:'ACCEPTED',providerId:'POLARIS',environment:0,documentCode:'E32',eNCF:'E320000000077',providerTransactionId:'legacy-track'});};
+ const input:any={providerId:'POLARIS',environment:0,companyInfo:{name:'Synthetic',rnc:'101010101'},transaction:{id:'legacy-source',fiscalProvider:'POLARIS',ncfType:'E32',ncf:'E320000000077',electronicNcf:'E320000000077',items:[],payments:[],total:118}};
+ try{assert.equal((await issueFiscalDocument(input)).success,true);assert.equal(calls,1);assert.equal((await getFiscalDocumentStatus('POLARIS',0,'legacy-track')).success,true);assert.equal(calls,2);
+  await db.saveDocument('fiscalDispatchClaims' as any,{id:'claimed-source',malformed:true});
+  await assert.rejects(()=>issueFiscalDocument({...input,transaction:{...input.transaction,id:'claimed-source'}}),/UNKNOWN_GET_ONLY/);assert.equal(calls,2);
+ }finally{globalThis.fetch=originalFetch;}
 });

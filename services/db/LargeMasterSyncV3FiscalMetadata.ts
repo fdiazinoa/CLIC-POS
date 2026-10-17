@@ -12,6 +12,34 @@ const canonical = (value: any): any => Array.isArray(value) ? value.map(canonica
 const equal = (a: any,b: any): boolean => JSON.stringify(canonical(a)) === JSON.stringify(canonical(b));
 const without = (row: any, fields: string[]): any => Object.fromEntries(Object.entries(row).filter(([key])=>!fields.includes(key)));
 
+/** Complete dispatch unit only: an append-only claim plus original active/history/config CAS. */
+export async function validateFiscalDispatchClaimBatch(rows:DurableDocumentMutation[]):Promise<void>{
+  const find=(name:string)=>rows.filter(row=>row.collectionName===name);
+  if(rows.length!==4||rows.some(row=>row.v3FiscalMetadataOperation!=='FISCAL_DISPATCH_CLAIM')
+    ||['fiscalDispatchClaims','transactions','transactionHistory','config'].some(name=>find(name).length!==1))denied();
+  const claim=find('fiscalDispatchClaims')[0],source=find('transactions')[0],history=find('transactionHistory')[0],config=find('config')[0];
+  const c=claim.document,scope=source.document.fiscalSubmissionScope;
+  if(!claim.requireAbsent||claim.expectedDocument!==undefined||config.document.id!=='current'||!config.expectedDocument
+    ||config.requireAbsent||JSON.stringify(config.document)!==config.expectedDocument||!scope
+    ||c.id!==source.document.id||history.document.id!==c.id||c.sourceTransactionId!==c.id||c.providerId!=='MSELLER'
+    ||c.schemaVersion!==1||c.state!=='DISPATCH_INTENT'||c.sourceChecksum!==scope.sourceChecksum
+    ||!equal(c.submissionScope,scope)||!equal(history.document.fiscalSubmissionScope,scope)
+    ||!Number.isFinite(Date.parse(c.claimedAt))||! /^[a-f0-9]{64}$/.test(c.requestSha256)
+    ||Object.keys(c).sort().join(',')!==['id','schemaVersion','state','sourceTransactionId','providerId','scope','submissionScope','sourceChecksum','requestSha256','claimedAt'].sort().join(','))denied();
+  if(!c.scope||Object.keys(c.scope).sort().join(',')!==['origin','tenantId','companyId','storeId','terminalId','deviceId'].sort().join(',')
+    ||['tenantId','companyId','storeId','terminalId','deviceId'].some(key=>c.scope[key]!==scope[key]))denied();
+  let origin:URL;try{origin=new URL(c.scope.origin);}catch{denied();}if(origin!.origin!==c.scope.origin)denied();
+  for(const row of [source,history]){
+    if(!row.expectedDocument||row.requireAbsent||row.document.zReportId)denied();
+    const previous=JSON.parse(row.expectedDocument!);
+    if(previous.zReportId||previous.fiscalProvider!=='MSELLER'||previous.fiscalProviderStatus==='V3_ISSUE_REQUESTED'
+      ||previous.fiscalClassificationAttemptedAt||previous.fiscalReferenceId||previous.fiscalCertifiedNcf
+      ||row.document.fiscalProviderStatus!=='V3_ISSUE_REQUESTED')denied();
+    await validateV3FiscalMetadataMutation({...row,collectionName:'transactions',v3FiscalMetadataOperation:'FISCAL_SUBMISSION_SCOPE_APPEND',
+      document:{...row.document,fiscalProviderStatus:previous.fiscalProviderStatus}});
+  }
+}
+
 /** CAS-only append operations. Ordinary ACK publication cannot write these protected fields. */
 export async function validateV3FiscalMetadataMutation(mutation: DurableDocumentMutation): Promise<void> {
   if (!['transactions','transactionHistory'].includes(mutation.collectionName) || !mutation.expectedDocument

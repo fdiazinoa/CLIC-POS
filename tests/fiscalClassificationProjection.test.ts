@@ -63,7 +63,7 @@ test('classification attempt is consumed once before request, persists across ti
  assert.equal(JSON.stringify(tx.fiscalClassificationProjection),JSON.stringify(consumed.fiscalClassificationProjection));
 });
 
-test('actual App retry commits one-shot CAS before mock issue; timeout/restart/concurrent retry do not issue twice',async()=>{
+test('actual App retry defers MSeller classification consumption until authoritative ERP readiness',async()=>{
  const {DatabaseSync}=await import('node:sqlite');const {CapacitorSQLiteAdapter}=await import('../services/db/adapters/CapacitorSQLiteAdapter');
  const {readFileSync}=await import('node:fs');const {transform}=await import('esbuild');
  const {consumeFiscalClassificationAttempt}=await import('../utils/fiscalClassificationProjection');
@@ -86,10 +86,10 @@ test('actual App retry commits one-shot CAS before mock issue; timeout/restart/c
   getFiscalProviderConfig:()=>({}),getExistingFiscalProviderReference:()=>undefined,getFiscalProviderLabel:()=> 'MSeller',db:{getDocument:async()=>read()},dbAdapter:adapter,
   consumeFiscalClassificationAttempt,getLargeMasterSyncV3OperationalSession:async()=>({assertCurrent:async()=>{},ready:{runtime:{version:{syncId:'S',syncVersion:1}}},binding:'B'}),
   upsertFiscalTransaction:async(next:any)=>adapter.saveDocument('transactions',next),pollFiscalDocumentStatus:async()=>{throw Error('unexpected poll');},
-  syncFiscalDocument:async(next:any,explicit:boolean)=>{assert.ok(read().fiscalClassificationAttemptedAt);assert.equal(explicit,true);issues++;throw Error('mock timeout');}});
+  syncFiscalDocument:async()=>{assert.equal(read().fiscalClassificationAttemptedAt,undefined);throw Error('FISCAL_ERP_APPLIED_RECEIPT_REQUIRED');}});
  try{
-  const attempts=await Promise.allSettled([retry(tx),retry(tx)]);assert.equal(attempts.filter(row=>row.status==='fulfilled').length,0);assert.equal(issues,1);
-  await assert.rejects(()=>retry(JSON.parse(JSON.stringify(read()))),/RECONCILIATION/);assert.equal(issues,1);
+  const attempts=await Promise.allSettled([retry(tx),retry(tx)]);assert.equal(attempts.filter(row=>row.status==='fulfilled').length,0);assert.equal(issues,0);
+  await assert.rejects(()=>retry(JSON.parse(JSON.stringify(read()))),/APPLIED_RECEIPT_REQUIRED/);assert.equal(issues,0);assert.equal(read().fiscalClassificationAttemptedAt,undefined);
   assert.deepEqual(read().payments,tx.payments);assert.equal(read().taxBreakdown[1].type,'VAT');assert.equal(read().ncf,tx.ncf);
  }finally{sql.close();}
 });

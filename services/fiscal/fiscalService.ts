@@ -1,5 +1,5 @@
+import {dispatchMSellerDocument,FISCAL_DISPATCH_CLAIMS} from './FiscalMSellerDispatch';
 import {assertFiscalIssuance} from '../../utils/fiscalIssuance';
-import { applyFiscalClassificationProjection } from '../../utils/fiscalClassificationProjection';
 import { Capacitor, CapacitorHttp } from '@capacitor/core';
 import { CompanyInfo, FiscalProviderDeliveryMode, FiscalProviderId, Transaction } from '../../types';
 import { buildMasterUrlFromHost, resolveMasterEndpointFromCloud } from '../../utils/cloudMasterRegistry';
@@ -66,7 +66,7 @@ export interface FiscalStatusResponse {
     raw?: unknown;
 }
 
-interface IssueFiscalDocumentInput {
+export interface IssueFiscalDocumentInput {
     providerId: FiscalProviderId;
     environment: number;
     companyInfo: CompanyInfo;
@@ -1277,12 +1277,19 @@ const fiscalIssueInFlight = new Map<string, Promise<FiscalIssueResponse>>();
 const issueFiscalDocumentOnce = async (
     input: IssueFiscalDocumentInput
 ): Promise<FiscalIssueResponse> => {
+    if (input.providerId !== 'MSELLER') {
+        // A provider/config change cannot escape the durable MSeller source claim.
+        if(input.transaction.fiscalProvider === 'MSELLER')throw Error('FISCAL_DISPATCH_UNKNOWN_GET_ONLY');
+        const original = await db.getDocument('transactions',input.transaction.id) as Transaction | null;
+        if (original?.fiscalProvider === 'MSELLER'
+            || await db.getDocument(FISCAL_DISPATCH_CLAIMS as any,input.transaction.id)) throw Error('FISCAL_DISPATCH_UNKNOWN_GET_ONLY');
+    }
     if (!input.transaction.ncfType || !String(input.transaction.ncfType).startsWith('E')) {
         throw new Error('Solo se pueden emitir documentos electrónicos con esta ruta.');
     }
 
-    if (input.providerId === 'MSELLER') input = { ...input, transaction: await applyFiscalClassificationProjection(input.transaction) };
-    const isMSeller = input.providerId === 'MSELLER';
+    if (input.providerId === 'MSELLER') return dispatchMSellerDocument(input);
+    const isMSeller = false;
     const localCredential = isMSeller
         ? null
         : await resolveLocalFiscalCredential(
@@ -1382,7 +1389,8 @@ export const getFiscalDocumentStatus = async (
     credentialKey?: string,
     deliveryMode?: FiscalProviderDeliveryMode
 ): Promise<FiscalStatusResponse> => {
-    const isMSeller = providerId === 'MSELLER';
+    if (providerId === 'MSELLER') throw Error('FISCAL_SCOPED_GET_REQUIRED');
+    const isMSeller = false;
     const localCredential = isMSeller
         ? null
         : await resolveLocalFiscalCredential(providerId, companyInfo, credentialKey);
