@@ -2,7 +2,7 @@
 
 Task `fiscal-applied-receipt-v3`, POS base `6301a6e9c3fccd2749adb9bbe949ae61ff3b53c9` (PR913). Despite the task name, the wire DTO is **schemaVersion 2**, `ERP_POS_APPLIED_RECEIPT_V2`, profile `POS_V3_DIRECT_STOCK_PER_DOCUMENT_DOP_V1`. There is no v1 fallback or receipt schema3.
 
-Inspected ERP [draft PR2259](https://github.com/fdiazinoa/CLIC-ERP/pull/2259), exact SHA `4596abe930c6f582773c9c641bf23ab3376b7ee1`, contract `docs/ERP_POS_FISCAL_APPLIED_RECEIPT_V3.md`. This supersedes the missing-endpoint finding recorded historically in [FISCAL_ERP_BOUND_DISPATCH_V1.md](FISCAL_ERP_BOUND_DISPATCH_V1.md), without activating issuance.
+Inspected ERP [draft PR2259](https://github.com/fdiazinoa/CLIC-ERP/pull/2259), exact SHA `4596abe930c6f582773c9c641bf23ab3376b7ee1`, contract `docs/POS_FISCAL_APPLIED_RECEIPT_V3.md`. This supersedes the missing-endpoint finding recorded historically in [FISCAL_ERP_BOUND_DISPATCH_V1.md](FISCAL_ERP_BOUND_DISPATCH_V1.md), without activating issuance.
 
 ## Production remains disconnected
 
