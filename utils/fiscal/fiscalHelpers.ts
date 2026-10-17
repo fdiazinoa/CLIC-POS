@@ -511,6 +511,7 @@ export const canRetryFiscalTransaction = (tx?: Partial<Transaction> | null): boo
 
 export const getFiscalRetryActionLabel = (tx?: Partial<Transaction> | null): string => {
   if (!canRetryFiscalTransaction(tx)) return '';
+  if(tx?.fiscalProvider==='MSELLER')return 'Consultar estado';
   return tx?.fiscalReferenceId || tx?.fiscalCertifiedNcf
     ? 'Consultar estado'
     : 'Reintentar envío';

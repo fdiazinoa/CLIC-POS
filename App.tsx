@@ -10995,7 +10995,7 @@ const AppContent: React.FC = () => {
     commit:async mutations=> {
       if (!dbAdapter.saveDocumentsAtomically) throw new Error('FISCAL_STATUS_NATIVE_REQUIRED');
       await dbAdapter.saveDocumentsAtomically(mutations);
-    },get:getScopedFiscalDocumentStatus,publish:publishFiscalTransaction,
+    },get:(tx,scope,originalOnly)=>getScopedFiscalDocumentStatus(tx,scope,undefined,undefined,undefined,originalOnly),publish:publishFiscalTransaction,
   }),[loadFiscalStatusContext,publishFiscalTransaction]);
   const consultFiscalStatus = useCallback(async(transaction:Transaction):Promise<string>=> {
     const stored = await db.getDocument('transactions',transaction.id) as Transaction | null;
@@ -11427,10 +11427,16 @@ const AppContent: React.FC = () => {
   }, [config, pollFiscalDocumentStatus, upsertFiscalTransaction, loadFiscalStatusContext, fiscalStatusWorker]);
 
   const retryFiscalDocument = useCallback(async (transaction: Transaction): Promise<string> => {
-    // Never consume a classification retry, rewrite the original, or POST an ambiguous MSeller attempt.
-    if (transaction.fiscalProvider === 'MSELLER') {
-      await syncFiscalDocument(transaction);
-      return 'Consulta fiscal solicitada; se conserva el intento original sin reenviar.';
+    if(transaction.fiscalProvider==='MSELLER'){
+      // This action never enters syncFiscalDocument, classification retry or ISSUE, even without an original reference.
+      try { return await fiscalStatusWorker.consult(transaction.id,true,undefined,undefined,true); }
+      catch(error){
+        const code=error instanceof Error?error.message:'';
+        if(code==='FISCAL_TERMINAL_AUTH_REQUIRED')return 'Sesión vencida o dispositivo no autorizado. Se conserva el pendiente; valida la sesión vigente.';
+        if(/SCOPE|BINDING/.test(code))return 'El scope de la terminal cambió. Se conserva el pendiente y el envío original.';
+        if(/SOURCE|ATTEMPT/.test(code))return 'No se identificó inequívocamente el envío original. Se conserva el pendiente.';
+        return 'No se pudo consultar o guardar el estado del e-CF en el ERP. Se conserva la evidencia del documento original.';
+      }
     }
     if (LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED) {
       const stored = await db.getDocument('transactions', transaction.id) as Transaction | null;
@@ -11494,7 +11500,7 @@ const AppContent: React.FC = () => {
 
     await syncFiscalDocument(LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED ? transaction : retryingTransaction, Boolean(transaction.fiscalClassificationProjection));
     return 'Reintento de envío fiscal iniciado.';
-  }, [config, pollFiscalDocumentStatus, syncFiscalDocument, upsertFiscalTransaction]);
+  }, [config, pollFiscalDocumentStatus, syncFiscalDocument, upsertFiscalTransaction, fiscalStatusWorker]);
 
   const fiscalRecoveryInFlightRef = useRef<Set<string>>(new Set());
 
