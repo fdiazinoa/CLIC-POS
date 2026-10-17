@@ -23,6 +23,15 @@ export const DURABLE_OUTBOX_SCHEMA_SQL = `
         ON sync_outbox_v2(status, next_retry_at, local_sequence);
     CREATE INDEX IF NOT EXISTS idx_sync_outbox_v2_aggregate
         ON sync_outbox_v2(aggregate_type, aggregate_id, local_sequence);
+    -- Prepared fiscal source lookup includes every status and detects foreign aggregate aliases.
+    CREATE INDEX IF NOT EXISTS idx_outbox_fiscal_aggregate ON sync_outbox_v2(aggregate_id)
+        WHERE event_type IN ('SALE_POSTED','PAYMENT_POSTED');
+    CREATE INDEX IF NOT EXISTS idx_outbox_fiscal_transaction_alias
+        ON sync_outbox_v2(CASE WHEN json_valid(payload_json) THEN json_extract(payload_json,'$.transaction.id') END)
+        WHERE event_type IN ('SALE_POSTED','PAYMENT_POSTED');
+    CREATE INDEX IF NOT EXISTS idx_outbox_fiscal_summary_alias
+        ON sync_outbox_v2(CASE WHEN json_valid(payload_json) THEN json_extract(payload_json,'$.summary.transaction_id') END)
+        WHERE event_type IN ('SALE_POSTED','PAYMENT_POSTED');
     CREATE INDEX IF NOT EXISTS idx_sync_outbox_v2_lease
         ON sync_outbox_v2(status, lease_expires_at);
 

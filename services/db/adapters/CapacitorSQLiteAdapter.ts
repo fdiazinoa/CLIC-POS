@@ -1,3 +1,4 @@
+import {FISCAL_OUTBOX_SOURCE_SQL,fiscalOutboxSourceParams,captureFiscalOutboxAnchors,type FiscalOutboxAnchor} from '../../fiscal/FiscalAppliedReceiptV2';
 import {assertV3ReservationSource,assertV3ReservationLines,assertV3ReservationInvoice,reservationClaimId} from '../../sync/LargeMasterSyncV3ReservationAuthority';
 import {reconcileInventoryPoolIndex,isInventoryPoolDDL} from '../../articleFormats/inventoryPoolIndex';
 import {assertNoReconciledOrdinaryWriter} from '../../articleFormats/inventoryJournal';
@@ -243,13 +244,17 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         return this.withWriteLock(async()=>{
       const result = await this.ensureDb().query(`SELECT doc_id FROM documents WHERE collection_name='transactions'
         AND doc_id>? AND json_extract(data,'$.v3Binding')=? AND json_extract(data,'$.fiscalProvider')='MSELLER'
-        AND json_extract(data,'$.fiscalSyncStatus') IN ('PENDING','ERROR')
+        AND COALESCE(json_extract(data,'$.fiscalSyncStatus'),'PENDING') IN ('PENDING','ERROR')
         AND (json_type(data,'$.fiscalSubmissionScope')='object' OR json_type(data,'$.fiscalLookupApproval')='object')
         AND (json_extract(data,'$.fiscalProviderStatus')='V3_ISSUE_REQUESTED' OR json_extract(data,'$.fiscalClassificationAttemptedAt') IS NOT NULL
           OR json_extract(data,'$.fiscalReferenceId') IS NOT NULL OR json_extract(data,'$.fiscalCertifiedNcf') IS NOT NULL) ORDER BY doc_id LIMIT ?`,[afterId,binding,Math.min(10,Math.max(1,limit))]);
       return (result.values || []).map(row=>String(row.doc_id));
 
         });
+    }
+
+    async getFiscalAppliedSourceRows(transactionId:string):Promise<FiscalOutboxAnchor[]>{
+      return this.withWriteLock(async()=> (await this.ensureDb().query(FISCAL_OUTBOX_SOURCE_SQL,fiscalOutboxSourceParams(transactionId))).values as FiscalOutboxAnchor[] || []);
     }
 
     async saveDocumentsAtomically(documents: DurableDocumentMutation[], requireAbsent = false, replaceCollections: string[] = []): Promise<void> {
@@ -266,6 +271,12 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
                 values:row.collectionName==='fiscalDispatchClaims'?[row.collectionName,row.document.id,JSON.stringify(row.document),now]
                   :[JSON.stringify(row.document),now,row.collectionName,row.document.id,row.expectedDocument]})),async()=>{
                 await this.assertV3FinancialBaseline(documents);
+                const claim=documents.find(row=>row.collectionName==='fiscalDispatchClaims')!.document;
+                if(claim.schemaVersion===2){
+                  const rows=(await db.query(FISCAL_OUTBOX_SOURCE_SQL,fiscalOutboxSourceParams(claim.sourceTransactionId))).values as FiscalOutboxAnchor[] || [];
+                  const actual=captureFiscalOutboxAnchors(rows,claim.sourceTransactionId);
+                  if(JSON.stringify(actual)!==JSON.stringify(claim.outboxAnchors))throw Error('FISCAL_V3_ORIGINAL_OUTBOX_CHANGED');
+                }
                 const source=documents.find(row=>row.collectionName==='transactions')!,scope=source.document.fiscalSubmissionScope;
                 const config=documents.find(row=>row.collectionName==='config')!.document;
                 const terminals=(config.terminals||[]).filter((row:any)=>row.id===scope.terminalId),terminal=terminals[0];

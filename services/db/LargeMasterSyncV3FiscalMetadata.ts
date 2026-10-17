@@ -1,3 +1,4 @@
+import {validatePreparedAppliedReceipt,assertFiscalOriginalMirror} from '../fiscal/FiscalAppliedReceiptV2';
 import {resolveFiscalPrintDisplay} from '../fiscal/FiscalPrintEvidence';
 import { fiscalStatusSourceChecksum, validFiscalScope, verifyFiscalStatusProof } from '../fiscal/FiscalStatusProof';
 import { sha256Utf8 } from '../sync/LargeMasterSyncV3Client';
@@ -22,13 +23,19 @@ export async function validateFiscalDispatchClaimBatch(rows:DurableDocumentMutat
   if(!claim.requireAbsent||claim.expectedDocument!==undefined||config.document.id!=='current'||!config.expectedDocument
     ||config.requireAbsent||JSON.stringify(config.document)!==config.expectedDocument||!scope
     ||c.id!==source.document.id||history.document.id!==c.id||c.sourceTransactionId!==c.id||c.providerId!=='MSELLER'
-    ||c.schemaVersion!==1||c.state!=='DISPATCH_INTENT'||c.sourceChecksum!==scope.sourceChecksum
+    ||c.schemaVersion!==2||c.state!=='DISPATCH_INTENT'||c.sourceChecksum!==scope.sourceChecksum
     ||!equal(c.submissionScope,scope)||!equal(history.document.fiscalSubmissionScope,scope)
     ||!Number.isFinite(Date.parse(c.claimedAt))||! /^[a-f0-9]{64}$/.test(c.requestSha256)
-    ||Object.keys(c).sort().join(',')!==['id','schemaVersion','state','sourceTransactionId','providerId','scope','submissionScope','sourceChecksum','requestSha256','claimedAt'].sort().join(','))denied();
+    ||Object.keys(c).sort().join(',')!==['id','schemaVersion','state','sourceTransactionId','providerId','scope','submissionScope','sourceChecksum','requestSha256','claimedAt','appliedReceipt','appliedReceiptExpectation','outboxAnchors'].sort().join(','))denied();
   if(!c.scope||Object.keys(c.scope).sort().join(',')!==['origin','tenantId','companyId','storeId','terminalId','deviceId'].sort().join(',')
     ||['tenantId','companyId','storeId','terminalId','deviceId'].some(key=>c.scope[key]!==scope[key]))denied();
   let origin:URL;try{origin=new URL(c.scope.origin);}catch{denied();}if(origin!.origin!==c.scope.origin)denied();
+  {
+    const prepared=await validatePreparedAppliedReceipt({receipt:c.appliedReceipt,expectation:c.appliedReceiptExpectation,anchors:c.outboxAnchors,
+      originalTransaction:JSON.parse(c.outboxAnchors?.sale?.payload_json||'{}').transaction},c.scope,JSON.parse(source.expectedDocument||'{}'));
+    assertFiscalOriginalMirror(JSON.parse(history.expectedDocument||'{}'),prepared.originalTransaction);
+    if(c.sourceChecksum!==prepared.receipt.sourceDocument.checksum||scope.environment!==prepared.receipt.historicalEnvironment)denied();
+  }
   for(const row of [source,history]){
     if(!row.expectedDocument||row.requireAbsent||row.document.zReportId)denied();
     const previous=JSON.parse(row.expectedDocument!);
