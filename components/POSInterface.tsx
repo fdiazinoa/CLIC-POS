@@ -1,3 +1,4 @@
+import { explicitTerminalFiscalEnvironment } from '../utils/terminalConfigSnapshot';
 import {collectClosedTransactionIds,selectPendingSessionTransactions} from '../services/sync/ClosedTransactionMembership';
 import {reservationInvoiceId,reservationAdvancePayment,validateV3ReservationPricing,assertV3ReservationLines} from '../services/sync/LargeMasterSyncV3ReservationAuthority';
 import type {V3RecoveredReservation} from '../services/sync/LargeMasterSyncV3ReservationRecovery';
@@ -6054,7 +6055,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   ? calculateSalesCommission(documentTotal, currentUser)
                   : {};
 
+               const newDirectFiscalEnvironment = v3Operational && !hasReturns && !activeV3Reservation && !activeRecoveredReservation
+                  && !activeDirectV3TicketId && !activeTable && !activeOrderId && !uberRecoveredOrder
+                  && ['E31', 'E32', 'E44', 'E45'].includes(finalNcfType || '')
+                  ? explicitTerminalFiscalEnvironment(activeTerminal, terminalId, getDefaultFiscalProvider(config, activeTerminalConfig), fiscalCompliance.mode)
+                  : undefined;
                const txn = await withTimeout(transactionService.createTransaction({
+                  ...(newDirectFiscalEnvironment !== undefined ? { fiscalEnvironment: newDirectFiscalEnvironment } : {}),
                   ...(activeV3Reservation ? {id:reservationInvoiceId(activeV3Reservation.reservation.id),v3ReservationClaimId:activeV3Reservation.claimId} : {}),
                   documentType: hasReturns ? 'REFUND' : 'TICKET',
                   seriesId: hasReturns

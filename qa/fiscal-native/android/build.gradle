@@ -1,0 +1,8 @@
+buildscript { repositories { google(); mavenCentral() }; dependencies { classpath 'com.android.tools.build:gradle:8.13.0' } }
+apply from: '../../../android/variables.gradle'
+def fiscalQaBuildRoot = new File(providers.gradleProperty('fiscalQaBuildDir').getOrElse('/tmp/clic-pos-fiscalqa-gradle'))
+if (!fiscalQaBuildRoot.isAbsolute() || fiscalQaBuildRoot.getCanonicalFile().toPath().startsWith(new File(rootDir, '../../..').getCanonicalFile().toPath())) throw new GradleException('QA build outputs must be absolute and outside the source repository')
+allprojects {
+ layout.buildDirectory.set(new File(fiscalQaBuildRoot, project.path == ':' ? 'root' : project.path.substring(1).replace(':', '_')))
+ repositories { google(); mavenCentral() }
+}

@@ -241,6 +241,29 @@ const incomingFiscalProviderConfig = (
       || source.enabled === false) || {};
 };
 
+/** Explicit raw provenance only. Normalized fiscal defaults are not historical authority. */
+export const explicitTerminalFiscalEnvironment = (
+  terminal: { id: string; config?: { erpSnapshot?: unknown } } | undefined,
+  terminalId: string, providerId: string, mode: string,
+): 0 | 1 | 2 | undefined => {
+  if (!terminal || terminal.id !== terminalId || providerId !== 'MSELLER' || mode !== 'ECF') return undefined;
+  const snapshot = asObject(terminal.config?.erpSnapshot) as unknown as TerminalConfigSnapshot & Record<string, unknown>;
+  if (snapshot.terminal_id !== terminalId || snapshot.resolution_error != null) return undefined;
+  const source = incomingFiscalProviderConfig(snapshot, terminalId);
+  const providers = fiscalProviderKeys.filter(key => Object.prototype.hasOwnProperty.call(source, key));
+  if (!providers.length || providers.some(key => normalizeFiscalProviderId(source[key]) !== 'MSELLER')) return undefined;
+  const resolved = asObject(snapshot.resolved), wrapper = asObject(resolved.terminalFiscalConfig || resolved.terminal_fiscal_config);
+  if ([source, wrapper].some(record => record.enabled === false || record.canIssueFiscalDocuments === false)) return undefined;
+  const modes = ['mode', 'fiscalMode', 'fiscal_mode'].filter(key => Object.prototype.hasOwnProperty.call(source, key)).map(key => source[key]);
+  if (snapshot.fiscalMode !== undefined) modes.push(snapshot.fiscalMode);
+  if (!modes.length || modes.some(value => value !== 'ECF')) return undefined;
+  const keys = ['environment', 'ambiente'].filter(key => Object.prototype.hasOwnProperty.call(source, key));
+  if (!keys.length) return undefined;
+  const value = source[keys[0]];
+  if (typeof value !== 'number' || ![0, 1, 2].includes(value) || keys.some(key => source[key] !== value)) return undefined;
+  return value as 0 | 1 | 2;
+};
+
 export const sanitizeFiscalConfigSecrets = <T>(value: T): T =>
   stripFiscalSecrets(value) as T;
 
