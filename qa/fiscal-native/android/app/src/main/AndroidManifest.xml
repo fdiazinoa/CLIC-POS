@@ -1,5 +1,5 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
- <uses-permission android:name="android.permission.INTERNET" tools:node="${internetPermissionAction}" />
+ <uses-permission android:name="android.permission.INTERNET" tools:node="remove" />
  <application android:allowBackup="false" android:label="Fiscal QA laboratory" android:theme="@style/AppTheme" android:usesCleartextTraffic="false" android:networkSecurityConfig="@xml/lab_network_security">
   <activity android:name=".MainActivity" android:exported="true"><intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter></activity>
  </application>

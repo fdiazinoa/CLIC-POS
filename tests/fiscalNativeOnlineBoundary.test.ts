@@ -20,3 +20,13 @@ test('online inputs reject crossed headers, fiscal master and malformed catalog 
  assert.doesNotThrow(()=>assertLabInput(value));
  for(const patch of [(v:any)=>v.connection.headers['x-tenant-id']='foreign',(v:any)=>v.fiscalMaster.companyId='foreign',(v:any)=>v.fiscalMaster.issuerRnc='bad',(v:any)=>v.catalog.sale.article.id='SKU',(v:any)=>v.catalog.sale.article.activeWarehouseIds=['SKU'],(v:any)=>v.fiscalMaster.allocationStart=2001]){const bad=structuredClone(value);patch(bad);assert.throws(()=>assertLabInput(bad),/LAB_INPUT_CONFLICT/);}
 });
+
+test('laboratory selects static offline/online manifests; no tools directive placeholders',()=>{
+ const read=(path:string)=>readFileSync(new URL('../qa/fiscal-native/android/app/'+path,import.meta.url),'utf8');
+ const offline=read('src/main/AndroidManifest.xml'),online=read('src/online/AndroidManifest.xml'),gradle=read('build.gradle');
+ assert.match(offline,/<uses-permission android:name="android.permission.INTERNET" tools:node="remove"/);
+ assert.match(online,/<uses-permission android:name="android.permission.INTERNET" \/>/);
+ for(const manifest of [offline,online]){assert.doesNotMatch(manifest,/\$\{/);assert.match(manifest,/android:allowBackup="false"/);assert.match(manifest,/android:usesCleartextTraffic="false"/);assert.match(manifest,/android:networkSecurityConfig="@xml\/lab_network_security"/);}
+ assert.match(gradle,/manifest.srcFile providers.gradleProperty\('fiscalQaOnline'\).getOrElse\('false'\) == 'true' \? 'src\/online\/AndroidManifest.xml' : 'src\/main\/AndroidManifest.xml'/);
+ assert.doesNotMatch(gradle,/manifestPlaceholders/);
+});
