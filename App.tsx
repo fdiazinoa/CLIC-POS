@@ -1,3 +1,6 @@
+import {createNativeCaja6FiscalPreparation} from './services/fiscal/NativeCaja6FiscalPreparation';
+import {CAJA6_FISCAL_SCOPE} from './services/fiscal/Caja6FiscalPreparationPolicy';
+import FiscalPreparationPanel from './components/FiscalPreparationPanel';
 import {requireFiscalErpAppliedReceipt,FISCAL_DISPATCH_CLAIMS} from './services/fiscal/FiscalMSellerDispatch';
 import { assertFormatsPostingClosed } from './services/articleFormats/activation';
 import { attachFiscalStatusLifecycle } from './services/fiscal/FiscalStatusLifecycle';
@@ -11,7 +14,7 @@ import LargeMasterSyncV3CanaryScreen from './components/LargeMasterSyncV3CanaryS
 import { LARGE_MASTER_SYNC_V3_CANARY } from './services/sync/LargeMasterSyncV3Canary';
 import { LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED, usesLargeMasterSyncV3Authority } from './services/sync/LargeMasterSyncV3Authority';
 import LargeMasterSyncV3OperationalPOS from './components/LargeMasterSyncV3OperationalPOS';
-import { persistV3FinancialTransaction, validateV3FrozenFiscalAmounts,readV3CompletedReservation } from './services/sync/LargeMasterSyncV3FinancialCommit';
+import { validateV3FrozenFiscalAmounts,readV3CompletedReservation } from './services/sync/LargeMasterSyncV3FinancialCommit';
 import { validateV3FrozenLineFiscalAmounts } from './services/sync/LargeMasterSyncV3LineSource';
 import { buildV3FrozenFiscalProviderTransaction } from './components/v3OperationalUIQueue';
 import { getLargeMasterSyncV3OperationalSession } from './services/sync/LargeMasterSyncV3OperationalSession';
@@ -2383,6 +2386,8 @@ const AppContent: React.FC = () => {
 
   // --- SECURITY & DEVICE HANDSHAKE ---
   const [deviceId, setDeviceId] = useState<string>('');
+  const fiscalSinglePreparation=useMemo(()=>createNativeCaja6FiscalPreparation(),[currentUser?.id,deviceId]);
+  useEffect(()=>()=>fiscalSinglePreparation.cancel(),[fiscalSinglePreparation]);
   const [isDataLoaded, setIsDataLoaded] = useState<boolean>(false);
   const [fiscalHistoryHydrated,setFiscalHistoryHydrated]=useState(false);
   const [initialConnError, setInitialConnError] = useState<string | null>(null);
@@ -11568,7 +11573,7 @@ const AppContent: React.FC = () => {
       const warehouseId = terminal?.config.inventoryScope?.defaultSalesWarehouseId;
       if (!terminal || !warehouseId) throw new Error('SYNC_V3_CONFIGURED_WAREHOUSE_REQUIRED');
       let result;
-      try { result = await persistV3FinancialTransaction({ ...txn, terminalId: terminal.id,
+      try { result = await fiscalSinglePreparation.commit({ ...txn, terminalId: terminal.id,
         terminalName: terminal.config.terminalName || terminal.id }, config, warehouseId,
         { refund: txn.documentType === 'REFUND' });
       } catch (error) {
@@ -14186,6 +14191,7 @@ const AppContent: React.FC = () => {
       case 'SETTINGS':
         return (
           <Settings
+            fiscalPreparation={(config.terminals||[]).some(terminal=>terminal.id===CAJA6_FISCAL_SCOPE.terminalId&&terminal.config?.currentDeviceId===deviceId)?<FiscalPreparationPanel controller={fiscalSinglePreparation}/>:undefined}
             config={config}
             users={users}
             currentUser={currentUser}
