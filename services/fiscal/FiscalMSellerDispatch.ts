@@ -52,6 +52,7 @@ export const createMSellerDispatcher=(deps:FiscalDispatchDependencies)=>(async(i
    credentialKey:input.credentialKey,deliveryMode:'DELEGATED_ERP',taxRate:input.taxRate,tipoIngreso:input.tipoIngreso,modificationCode:input.modificationCode,unitCodeGoods:input.unitCodeGoods,unitCodeServices:input.unitCodeServices,
    establishmentCode:input.establishmentCode,branchCode:input.branchCode,branchName:input.branchName,cashierCode:input.cashierCode}});
  const catalog=await deps.catalog();
+ if(catalog.binding!==tx.v3Binding)throw Error('FISCAL_V3_BINDING_MISMATCH');
  const submissionScope={basis:'PERSISTED_SUBMISSION_INTENT' as const,providerId:'MSELLER' as const,environment:input.environment,issuerRnc:snapshot.issuerRnc,tenantId:scope.tenantId,companyId:scope.companyId,storeId:scope.storeId,terminalId:scope.terminalId,deviceId:scope.deviceId,binding:tx.v3Binding!,sourceChecksum:await fiscalStatusSourceChecksum(tx),capturedAt:new Date().toISOString()};
  const claim={id:claimId,schemaVersion:2,state:'DISPATCH_INTENT',sourceTransactionId:tx.id,providerId:'MSELLER',scope,submissionScope,appliedReceipt:prepared.receipt,appliedReceiptExpectation:prepared.expectation,outboxAnchors:prepared.anchors,sourceChecksum:await fiscalStatusSourceChecksum(tx),requestSha256:await sha256Utf8(body),claimedAt:new Date().toISOString()};
  context.assertCurrent();
@@ -62,6 +63,7 @@ export const createMSellerDispatcher=(deps:FiscalDispatchDependencies)=>(async(i
   {collectionName:'config',document:config,expectedDocument:JSON.stringify(config),v3FiscalMetadataOperation:'FISCAL_DISPATCH_CLAIM'}]);
  context.assertCurrent(); // Failure after claim is conservatively GET-only forever, even before fetch.
  if(JSON.stringify(await deps.get('config','current'))!==JSON.stringify(config))throw unknown();
+ if((await deps.catalog()).binding!==tx.v3Binding)throw unknown();
  const currentAnchors=captureFiscalOutboxAnchors(await deps.outboxRows(tx.id),tx.id);
  if(JSON.stringify(currentAnchors)!==JSON.stringify(prepared.anchors))throw unknown();
  const committedSource=await deps.get('transactions',tx.id);

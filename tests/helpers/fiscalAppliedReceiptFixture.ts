@@ -7,8 +7,8 @@ import {CapacitorSQLiteAdapter} from '../../services/db/adapters/CapacitorSQLite
 import {captureFiscalBoundContext} from '../../services/fiscal/FiscalBoundContext';
 import {createAppliedReceiptReadiness,type FiscalOutboxAnchor} from '../../services/fiscal/FiscalAppliedReceiptV2';
 export const wireFixture=(name='E32-none')=>JSON.parse(readFileSync(new URL('../fixtures/fiscal-applied-receipt-v2/'+name+'.json',import.meta.url),'utf8'));
-export async function appliedFixture(name='E32-none'){
- const wire=wireFixture(name),original=wire.originalSource.transaction,id=original.id,scope=wire.expectedResponse.scope,binding=JSON.parse(original.v3Binding),stamp=original.items[0].v3SaleAuthority;
+export async function appliedFixture(name='E32-none',derive?:(wire:any)=>Promise<void>){
+ const wire=wireFixture(name);if(derive)await derive(wire);const original=wire.originalSource.transaction,id=original.id,scope=wire.expectedResponse.scope,binding=JSON.parse(original.v3Binding),stamp=original.items[0].v3SaleAuthority;
  const directory=mkdtempSync(join(tmpdir(),'pos-applied-receipt-')),file=join(directory,'fixture.sqlite');let sql=new DatabaseSync(file),writes=0,failWrite=0,loseCommit=false;
  const adapter=new CapacitorSQLiteAdapter();
  const bridge={beginTransaction:async()=>sql.exec('BEGIN IMMEDIATE'),commitTransaction:async()=>sql.exec('COMMIT'),rollbackTransaction:async()=>sql.exec('ROLLBACK'),isTransactionActive:async()=>({result:sql.isTransaction}),
@@ -35,8 +35,9 @@ export async function appliedFixture(name='E32-none'){
  const requests:Array<{url:string;init?:RequestInit}>=[];
  const fetchImpl:typeof fetch=async(input,init)=>{const url=new URL(String(input));if(url.origin!=='https://erp.fixture.invalid')throw Error('fixture origin changed');requests.push({url:String(input),init});return fetch('http://127.0.0.1:'+port+url.pathname+url.search,init);};
  const pair=async()=>({transaction:await get('transactions',id),history:await get('transactionHistory',id)});
- const readiness=createAppliedReceiptReadiness({pair,rows:key=>adapter.getFiscalAppliedSourceRows(key),context,fetchImpl,timeoutMs:1000});
- const deps:any={outboxRows:(key:string)=>adapter.getFiscalAppliedSourceRows(key),assertReady:readiness,context,get,commit:(rows:any[])=>adapter.saveDocumentsAtomically(rows),fetchImpl,catalog:async()=>({syncId:stamp.syncId,syncVersion:stamp.syncVersion,binding:original.v3Binding}),timeoutMs:1000};
+ const catalog=async()=>({syncId:stamp.syncId,syncVersion:stamp.syncVersion,binding:original.v3Binding});
+ const readiness=createAppliedReceiptReadiness({pair,catalog:()=>deps.catalog(),rows:key=>adapter.getFiscalAppliedSourceRows(key),context,fetchImpl,timeoutMs:1000});
+ const deps:any={outboxRows:(key:string)=>adapter.getFiscalAppliedSourceRows(key),assertReady:readiness,context,get,commit:(rows:any[])=>adapter.saveDocumentsAtomically(rows),fetchImpl,catalog,timeoutMs:1000};
  const input:any={providerId:'MSELLER',environment:wire.expectedResponse.historicalEnvironment,transaction:structuredClone(original),credentialKey:wire.expectedResponse.issuer.rnc,sequenceExpiryDate:original.fiscalIssuance.expiryDate??undefined,companyInfo:{name:'Synthetic',rnc:wire.expectedResponse.issuer.rnc}};
  const standard=(req:any,res:any)=>{res.setHeader('content-type','application/json');res.end(JSON.stringify(req.method==='GET'?wire.expectedResponse:{success:true,providerId:'MSELLER',environment:input.environment,documentCode:input.transaction.ncfType,pending:false,status:'ACCEPTED',eNCF:'FOREIGN',message:'secret-token-echo'}));};handler=standard;
  return{wire,original,id,scope,binding,stamp,anchors,input,deps,adapter,identity,credentials,requests,get,pair,readiness,context,sql:()=>sql,

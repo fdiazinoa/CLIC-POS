@@ -157,7 +157,7 @@ export async function validateAppliedReceiptV2(value:unknown,anchors:FiscalAppli
  const expectation:AppliedReceiptExpectation={schemaVersion:2,source:APPLIED_SOURCE,profile:APPLIED_PROFILE,sourceTransactionId:tx.id,sourceEventId:anchors.sale.event_id,sourceEventType:'SALE_POSTED',sourcePaymentEventId:anchors.payment?.event_id||null,sourceChecksum:source.checksum,observation:r.observation};
  return JSON.parse(JSON.stringify({receipt:r,expectation,anchors,originalTransaction:tx}));
 }
-export type AppliedReadinessDependencies={pair:(id:string)=>Promise<{transaction:Transaction|null;history:Transaction|null}>;rows:(id:string)=>Promise<FiscalOutboxAnchor[]>;context:()=>ReturnType<typeof captureFiscalBoundContext>;fetchImpl:typeof fetch;timeoutMs?:number};
+export type AppliedReadinessDependencies={pair:(id:string)=>Promise<{transaction:Transaction|null;history:Transaction|null}>;rows:(id:string)=>Promise<FiscalOutboxAnchor[]>;context:()=>ReturnType<typeof captureFiscalBoundContext>;catalog:()=>Promise<{binding:string}>;fetchImpl:typeof fetch;timeoutMs?:number};
 /** Prepared only: never wired into App or the default dispatcher's production HOLD. */
 export const createAppliedReceiptReadiness=(deps:AppliedReadinessDependencies)=>(async(mirror:Transaction):Promise<PreparedAppliedReceipt>=>{
  const context=deps.context(),{origin:_origin,...scope}=context.descriptor;
@@ -165,7 +165,8 @@ export const createAppliedReceiptReadiness=(deps:AppliedReadinessDependencies)=>
  need(pair.transaction&&pair.history&&!pair.transaction.zReportId&&!pair.history.zReportId,'FISCAL_APPLIED_ARCHIVED_SOURCE_HELD');
  const anchors=captureFiscalOutboxAnchors(await deps.rows(mirror.id),mirror.id),source=await validateFiscalOriginal(anchors,scope);
  assertFiscalOriginalMirror(mirror,source.transaction);assertFiscalOriginalMirror(pair.transaction,source.transaction);assertFiscalOriginalMirror(pair.history,source.transaction);
- const binding=JSON.parse(source.transaction.v3Binding!);need(safeUrl(binding[3]).origin===context.descriptor.origin&&binding[4]===context.descriptor.origin,'FISCAL_V3_BINDING_MISMATCH');
+ const assertBinding=async()=>{need((await deps.catalog()).binding===source.transaction.v3Binding,'FISCAL_V3_BINDING_MISMATCH');context.assertCurrent();};
+ await assertBinding();
  const params=new URLSearchParams({sourceTransactionId:mirror.id,sourceEventId:anchors.sale.event_id,sourceEventType:'SALE_POSTED',sourceChecksum:source.checksum,ncf:source.transaction.ncf!,environment:String(source.environment)});
  if(anchors.payment)params.set('sourcePaymentEventId',anchors.payment.event_id);
  const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),deps.timeoutMs??5000);
@@ -176,12 +177,11 @@ export const createAppliedReceiptReadiness=(deps:AppliedReadinessDependencies)=>
   const reader=response.body?.getReader();need(reader);let bytes=0,text='';const decoder=new TextDecoder();
   try{while(true){const part=await reader!.read();if(part.done)break;bytes+=part.value.length;if(bytes>cap){await reader!.cancel();fail();}text+=decoder.decode(part.value,{stream:true});}text+=decoder.decode();}finally{reader!.releaseLock();}
   const prepared=await validateAppliedReceiptV2(JSON.parse(text),anchors,scope,mirror);
-  context.assertCurrent();return prepared;
+  await assertBinding();return prepared;
  }catch(error){if(error instanceof Error&&/^FISCAL_[A-Z0-9_]+$/.test(error.message))throw error;fail();}finally{clearTimeout(timeout);}
 });
 export async function validatePreparedAppliedReceipt(value:unknown,scope:AppliedReceiptV2['scope']&{origin?:string},mirror:Transaction):Promise<PreparedAppliedReceipt>{
  exact(value,['receipt','expectation','anchors','originalTransaction']);const p=value as PreparedAppliedReceipt;
  const validated=await validateAppliedReceiptV2(p.receipt,p.anchors,scope,mirror);
- if(scope.origin!==undefined){const binding=JSON.parse(validated.originalTransaction.v3Binding!);need(safeUrl(binding[3]).origin===scope.origin&&binding[4]===scope.origin,'FISCAL_V3_BINDING_MISMATCH');}
  need(same(p.expectation,validated.expectation)&&same(p.originalTransaction,validated.originalTransaction),'FISCAL_V3_APPLIED_EXPECTATION_MISMATCH');return validated;
 }

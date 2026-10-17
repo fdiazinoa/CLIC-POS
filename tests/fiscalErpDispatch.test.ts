@@ -229,3 +229,22 @@ for(const type of ['sale','payment'])test(`original ${type} credential metadata 
  const f=await appliedFixture('E32-cash1'),anchor=type==='sale'?f.anchors.sale:f.anchors.payment!,payload=JSON.parse(anchor.payload_json);payload.deviceToken='synthetic-forbidden-secret';f.sql().prepare('UPDATE sync_outbox_v2 SET payload_json=? WHERE event_id=?').run(JSON.stringify(payload),anchor.event_id);
  try{await assert.rejects(()=>createMSellerDispatcher(f.deps)(f.input),/SECRET_IN_SOURCE_HELD/);assert.equal(f.requests.length,0);assert.equal(await f.get(FISCAL_DISPATCH_CLAIMS,f.id),null);}finally{await f.close();}
 });
+test('derived laboratory binding allows distinct download origin as data; transport remains authorized ERP origin',async()=>{
+ const f=await appliedFixture('E32-none',async wire=>{
+  // Derived in-memory laboratory case; the six provenance-hashed ERP fixture files stay byte-exact.
+  const tx=wire.originalSource.transaction,binding=JSON.parse(tx.v3Binding);binding[4]='https://downloads.fixture.invalid';tx.v3Binding=JSON.stringify(binding);
+  for(const line of tx.items)line.v3SaleAuthority.binding=tx.v3Binding;
+  const baseline=JSON.parse(tx.v3InventoryBaseline);baseline[0]=tx.v3Binding;tx.v3InventoryBaseline=JSON.stringify(baseline);
+  tx.v3CommitFingerprint=financialOperationIdentity(tx,tx.v3WarehouseId,{});
+  const payload=wire.materializedSnapshot.sources[0].payload;payload.transaction=structuredClone(tx);payload.erp_fiscal_v3_application_plan_v1.originalPayload=structuredClone(wire.originalSource);
+  const a={sale:{event_id:wire.materializedSnapshot.sources[0].event_id,event_type:'SALE_POSTED',aggregate_type:'TRANSACTION',aggregate_id:tx.id,schema_version:1,payload_json:JSON.stringify(wire.originalSource)},payment:null};
+  const source=await validateFiscalOriginal(a,wire.expectedResponse.scope);wire.expectedResponse.sourceDocument.checksum=source.checksum;wire.expectedResponse.posAuthority=source.authority;
+ });
+ try{await createMSellerDispatcher(f.deps)(f.input);assert.equal(f.requests.length,2);assert.ok(f.requests.every(r=>new URL(r.url).origin==='https://erp.fixture.invalid'));assert.equal(JSON.parse(f.original.v3Binding)[4],'https://downloads.fixture.invalid');assert.equal(JSON.parse(String(f.requests[1].init!.body)).transaction.v3Binding,f.original.v3Binding);}finally{await f.close();}
+});
+for(const stage of ['before-get','during-get','after-claim'])test(`current full operational binding drift ${stage} holds without POST`,async()=>{
+ const f=await appliedFixture(),catalog=f.deps.catalog;let drift=stage==='before-get';f.deps.catalog=async()=>({...await catalog(),...(drift?{binding:'different-current-operational-binding'}:{})});
+ if(stage==='during-get')f.handle((req,res)=>{drift=true;f.standard(req,res);});
+ if(stage==='after-claim'){const commit=f.deps.commit;f.deps.commit=async(rows:any[])=>{await commit(rows);drift=true;};}
+ try{await assert.rejects(()=>createMSellerDispatcher(f.deps)(f.input));assert.equal(f.requests.filter(r=>r.init?.method==='POST').length,0);assert.equal(f.requests.filter(r=>r.init?.method==='GET').length,stage==='before-get'?0:1);assert.equal(Boolean(await f.get(FISCAL_DISPATCH_CLAIMS,f.id)),stage==='after-claim');}finally{await f.close();}
+});
