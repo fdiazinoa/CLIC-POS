@@ -1,0 +1,35 @@
+{
+  "erpHead": "4596abe930c6f582773c9c641bf23ab3376b7ee1",
+  "fixtures": [
+    {
+      "path": "erp/server/services/fixtures/fiscal-applied-receipt-v2/E31-none.json",
+      "sha256": "306c5dfba9dc2de67eb7fc04a04e1d74e52564281752b5a63eeb7e10e8569286",
+      "size": 63928
+    },
+    {
+      "path": "erp/server/services/fixtures/fiscal-applied-receipt-v2/E32-cash1.json",
+      "sha256": "7debb1007c9023ecde8a6839cd868c53be9e6d7c9074bb1c092d955c59230c63",
+      "size": 79425
+    },
+    {
+      "path": "erp/server/services/fixtures/fiscal-applied-receipt-v2/E32-none.json",
+      "sha256": "bb29152137ba0b01d462b5ef2b6af24b08ea5e368c06496ba737358131a0d6af",
+      "size": 63844
+    },
+    {
+      "path": "erp/server/services/fixtures/fiscal-applied-receipt-v2/E32-null-expiry.json",
+      "sha256": "c81551e2f421bb3726bb644594bc030e3593fa515dd13343d9afb2271e300dac",
+      "size": 63686
+    },
+    {
+      "path": "erp/server/services/fixtures/fiscal-applied-receipt-v2/E44-none.json",
+      "sha256": "710e4af26abd0dfb929de71b65e4a2da924360e40eada01da36b6e5aa34e5164",
+      "size": 63928
+    },
+    {
+      "path": "erp/server/services/fixtures/fiscal-applied-receipt-v2/E45-none.json",
+      "sha256": "ffaa98808f15458242a636b10652d08bcce202adb26e97d933353f69e3ca8c5d",
+      "size": 63928
+    }
+  ]
+}
