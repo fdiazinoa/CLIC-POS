@@ -28,7 +28,7 @@ const need=(condition:unknown,code?:string)=>{if(!condition)fail(code);};
 const object=(v:any)=>Boolean(v&&typeof v==='object'&&!Array.isArray(v));
 export const canonicalFiscalJson=(v:any):any=>Array.isArray(v)?v.map(canonicalFiscalJson):object(v)?Object.fromEntries(Object.keys(v).sort().filter(k=>v[k]!==undefined).map(k=>[k,canonicalFiscalJson(v[k])])):v;
 const same=(a:any,b:any)=>JSON.stringify(canonicalFiscalJson(a))===JSON.stringify(canonicalFiscalJson(b));
-const exact=(v:any,required:string[],optional:string[]=[])=>{need(object(v)&&required.every(k=>Object.hasOwn(v,k)&&v[k]!==undefined)&&Object.keys(v).every(k=>required.includes(k)||optional.includes(k)));};
+const exact=(v:any,required:string[],optional:string[]=[])=>{need(object(v)&&required.every(k=>Object.prototype.hasOwnProperty.call(v,k)&&v[k]!==undefined)&&Object.keys(v).every(k=>required.includes(k)||optional.includes(k)));};
 const uuid=(v:any)=>typeof v==='string'&&/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(v);
 const digest=(v:any)=>typeof v==='string'&&/^[a-f0-9]{64}$/.test(v);
 const bounded=(v:any)=>typeof v==='string'&&/^[A-Za-z0-9._:-]{1,160}$/.test(v);
