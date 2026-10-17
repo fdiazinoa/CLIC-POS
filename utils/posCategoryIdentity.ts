@@ -27,7 +27,7 @@ export function reconcileBoundV3PosCategories(
     keysByLabel.get(label)!.add(key);
     labelsByKey.get(key)!.add(label);
   }
-  return categories.map((category, index) => {
+  const reconciled = categories.map((category, index) => {
     const id = categoryIdentityKey(category.id);
     const label = categoryIdentityKey(category.name);
     if (!id || id !== label) return category;
@@ -42,6 +42,20 @@ export function reconcileBoundV3PosCategories(
       [...aliases].some(alias => (configuredAliasOwners.get(alias)?.size || 0) > 1);
     return conflict ? category : { ...category, id: key };
   });
+  // A V3 catalog can arrive before its classification master. Derive display
+  // identities from this bound, priced catalog only; never persist or replace
+  // configured identities, nor resolve ambiguous labels by guessing.
+  const declared = new Set(reconciled.flatMap(category =>
+    [category.id, category.code, category.name].map(categoryIdentityKey).filter(Boolean)));
+  for (const category of boundCategories) {
+    const key = categoryIdentityKey(category.key);
+    const label = categoryIdentityKey(category.label);
+    if (!key || !label || keysByLabel.get(label)?.size !== 1 || labelsByKey.get(key)?.size !== 1
+      || declared.has(key) || declared.has(label)) continue;
+    reconciled.push({ id: key, name: category.label.trim() });
+    declared.add(key); declared.add(label);
+  }
+  return reconciled;
 }
 /** Scope-local aliases are fail closed when labels/codes collide. Explicit IDs always win. */
 export function buildPosCategoryIdentity(categories: readonly Partial<ClassificationItem>[], families: readonly Partial<ClassificationItem>[] = []) {
