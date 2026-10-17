@@ -1,4 +1,5 @@
 import test from 'node:test';
+import type { ClassificationItem } from '../types';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { LARGE_MASTER_SYNC_V3_SCHEMA_SQL, ensureLargeMasterSyncV3ContractColumns, backfillLargeMasterSyncV3Categories } from '../services/db/LargeMasterSyncV3Schema';
@@ -82,6 +83,10 @@ test('reconciled selection drives native SQL by UUID and preserves financial/sto
     const metadata=await store.getOperationalCategories(version,'tariff');
     assert.deepEqual(metadata.map(category=>[category.key,category.label]),[[id,'Bebidas']]);
     const lookup=identity(synthetic,metadata);
+    const withoutSetupMasters = buildPosCategoryIdentity(reconcileBoundV3PosCategories([], metadata));
+    const missingMasterRows = await store.searchOperationalArticles(version, 'BEB-003', withoutSetupMasters.selectionFilter('Bebidas'), 60);
+    assert.deepEqual(missingMasterRows.map(row => row.sku), ['BEB-003']);
+    assert.equal(withoutSetupMasters.isProductAllowed(missingMasterRows[0] as { posCategoryId?: string; category?: string }, new Set([withoutSetupMasters.canonicalize('Bebidas')])), true);
     const filter=lookup.selectionFilter('Bebidas');
     const rows=await store.searchOperationalArticles(version,'Agua',filter,60);
     assert.deepEqual(rows.map(row=>row.sku).sort(),['182','183','184','395','396','397','BEB-003']);
@@ -89,4 +94,26 @@ test('reconciled selection drives native SQL by UUID and preserves financial/sto
     assert.deepEqual((await store.searchOperationalArticles(version,'BEB-003',filter,60)).map(row=>row.sku),['BEB-003']);
     assert.equal(JSON.stringify(['master_v3_articles','master_v3_prices','master_v3_inventory_balances'].map(table=>db.prepare(`SELECT * FROM ${table}`).all())),before);
   } finally { db.close(); }
+});
+
+
+test('MYKON: a bound category missing from setup masters remains visible under its existing allowlist', () => {
+  const categoryId = '8af264ba-6951-44f9-a027-c5b845851868';
+  const config: Partial<ClassificationItem>[] = [];
+  const metadata = [{ key: categoryId, label: 'Todos1' }];
+  const lookup = buildPosCategoryIdentity(reconcileBoundV3PosCategories(config, metadata));
+  const allowed = new Set([lookup.canonicalize('Todos1')]);
+  for (let index = 0; index < 3010; index++) {
+    assert.equal(lookup.isProductAllowed({ posCategoryId: categoryId, category: 'Todos1' }, allowed), true);
+  }
+  assert.deepEqual(lookup.selectionFilter('Todos1').ids, [categoryId]);
+  assert.equal(lookup.isProductAllowed({ posCategoryId: 'other', category: 'Todos1' }, allowed), false);
+  assert.equal(lookup.isProductAllowed({ category: 'Other' }, allowed), false);
+  assert.deepEqual(config, []);
+  for (const native of [[...metadata, { key: 'other', label: 'Todos1' }],
+    [...metadata, { key: categoryId, label: 'Other' }]]) {
+    assert.deepEqual(reconcileBoundV3PosCategories([], native), []);
+  }
+  const configured = [{ id: 'explicit-id', name: 'Todos1' }];
+  assert.deepEqual(reconcileBoundV3PosCategories(configured, metadata), configured);
 });
