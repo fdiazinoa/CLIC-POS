@@ -1,0 +1,16 @@
+{
+  "kind": "PINNED_PURE_ERP_PRODUCER_FIXTURE",
+  "sourceRepository": "CLIC-ERP",
+  "baseCommit": "912ab2a2d1c7c7036999f5c9fba0a7bbc369ab23",
+  "workingTreeDeltaIncluded": "None relative to frozenCommit: both pinned pure source hashes match frozen ERP commit exactly; contextRevision is included in body/hash.",
+  "producer": {
+    "path": "server/services/inventoryPresentations.js",
+    "sha256": "4baa53d303f2daa677a4b7c7ab9c84bb8ab4cc5d739dfd5c0f1265b4b1900950"
+  },
+  "shared": {
+    "path": "shared/articleFormats.js",
+    "sha256": "9294c30a9d27d63ea5c3ac2db2f66ada780fbc5867b6115e3d50771590bc9b39"
+  },
+  "limits": "Synthetic pure calls only. No network wrappers, receipt or authorization evidence, grant, storage, UI, checkout, financial/fiscal operation or availability claim. Source may advance independently; fixture never imports the moving external worktree.",
+  "frozenCommit": "115e6cb13d8e1f343efd99c8762036a7cf5b7860"
+}
