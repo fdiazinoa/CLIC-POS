@@ -112,7 +112,7 @@ const ProductTableSupermarket: React.FC<ProductTableSupermarketProps> = ({
                                                 Desc. Aplicado
                                             </span>
                                         )}
-                                        {item.articleFormat && <span className="text-[10px] text-blue-600">{item.articleFormat.name} · {item.articleFormat.factor} base · {item.baseQuantity} unidades</span>}
+                                        {item.articleFormat && <span className="text-[10px] text-blue-600">{item.articleFormat.name} · {item.articleFormat.factor} base · {item.baseQuantity} unidades</span>}{item.inventoryPresentation&&<span className="text-[10px] text-blue-600">{item.inventoryPresentation.format.name} · {item.inventoryPresentation.format.factor} base · {item.inventoryPresentation.baseQuantity} unidades</span>}
                                     </div>
                                 </td>
 

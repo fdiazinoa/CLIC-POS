@@ -1,3 +1,4 @@
+import {assertInventoryPresentationReturnAllowed} from './services/inventoryPresentations/selection';
 import {clearFiscalWorkflowCapability} from './services/fiscal/FiscalWorkflowV2Capability';
 import {resolveTerminalDocumentSeriesId} from './utils/seriesValidation';
 import {prepareFiscalFormatRuntime} from './services/fiscal/FiscalWorkflowV2FormatRuntime';
@@ -12985,6 +12986,7 @@ const AppContent: React.FC = () => {
     options: RefundProcessingOptions = {}
   ): Promise<Transaction | null> => {
     originalTx = await readRefundOriginal(originalTx);
+      assertInventoryPresentationReturnAllowed(originalTx);
     if((originalTx as any).articleFormatWire?.schema_version===2){
       if(!options.fiscalOperationId||!options.fiscalModificationCode)throw Error('Selecciona el motivo fiscal de la nota de crédito.');
       const terminal=getCurrentTerminal();if(!terminal)throw Error('FISCAL_WORKFLOW_DEVICE_CHANGED');

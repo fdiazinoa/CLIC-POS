@@ -1,3 +1,4 @@
+import {inventoryPresentationTicketLabel} from '../inventoryPresentations/selection';
 import {isVerifiedFiscalPrintDisplay,fiscalPrintTransaction,type FiscalPrintDisplay} from '../fiscal/FiscalPrintEvidence';
 import { articleFormatTicketLabel } from '../articleFormats/ticket';
 import { formatQuantity, terminalQuantityPresentation } from '../../utils/quantityPresentation';
@@ -523,6 +524,7 @@ export const buildEscPosTicketPayload = (
   transaction.items.forEach(item => {
     pushTextLines(chunks, splitLines(item.name || 'Articulo', width));
     if (item.articleFormat) pushTextLines(chunks, splitLines(articleFormatTicketLabel(item), width));
+    if(item.inventoryPresentation)pushTextLines(chunks,splitLines(inventoryPresentationTicketLabel(item),width));
     const discount = resolveLineDiscountPresentation(item);
     const displayedUnitPrice = discount.hasDiscount ? discount.originalUnitPrice : discount.finalUnitPrice;
     const displayedLineTotal = discount.hasDiscount ? discount.originalLineTotal : discount.finalLineTotal;
@@ -827,6 +829,7 @@ export const buildEscPosReservationPayload = (reservation: Reservation, config: 
   reservation.items.forEach(item => {
     pushTextLines(chunks, splitLines(item.name || 'Articulo', width));
     if (item.articleFormat) pushTextLines(chunks, splitLines(articleFormatTicketLabel(item), width));
+    if(item.inventoryPresentation)pushTextLines(chunks,splitLines(inventoryPresentationTicketLabel(item),width));
     pushPair(
       chunks,
       item.weightPresentation ? weightLineLabel(item, config.currencySymbol || '$', item.price, terminalQuantityPresentation(config, reservation.terminalId).salesDecimals) : `${formatQuantity(item.quantity, terminalQuantityPresentation(config, reservation.terminalId).salesDecimals)} x ${formatMoney(config.currencySymbol || '$', item.price)}`,

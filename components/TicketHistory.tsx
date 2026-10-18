@@ -1,3 +1,4 @@
+import {assertInventoryPresentationReturnAllowed} from '../services/inventoryPresentations/selection';
 import {FiscalBuyerDraftAction,hasFiscalWorkflowSourceMarker} from './FiscalBuyerDraftAction';
 import {resolveFiscalPrintReadiness,resolveFiscalAcceptance} from '../services/fiscal/FiscalPrintEvidence';
 import {readRefundOriginal} from '../services/localRefundPersistence';
@@ -2305,6 +2306,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
       requestMode: RefundRequestMode = 'STANDARD'
    ) => {
       originalTx = await readRefundOriginal(originalTx);
+      assertInventoryPresentationReturnAllowed(originalTx);
       const terminalConfig = config.terminals?.find(t => t.id === activeTerminalId)?.config;
       const fiscalMode = getEffectiveFiscalComplianceConfig(config, terminalConfig).mode;
       if (fiscalMode !== 'NONE') {

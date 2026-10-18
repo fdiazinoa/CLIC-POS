@@ -1,0 +1,11 @@
+{
+  "repository": "CLIC-ERP",
+  "source": "server/services/largeMasterSyncV3.js",
+  "sourceCommit": "b09c5446692bc3c98379f655be9e2d5db26a3bd2",
+  "sourceSha256": "4add95ccb4194d7400e4e0f172a87f57f4f4ca5c94da5ff24ff83053337a509f",
+  "excerptSha256": "bece01b6c3bdb528ea69c1e816e650587804a4a87abf0843a29a58aabc081812",
+  "exports": [
+    "getV3TariffScope",
+    "getV3CategoryScope"
+  ]
+}
