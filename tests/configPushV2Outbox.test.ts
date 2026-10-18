@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import {ownBrowserFixtureTimers} from './browserFixtureLifecycle';
+const fixtureTimers=ownBrowserFixtureTimers();
+test.after(async()=>{const {supabase}=await import('../utils/supabase');await supabase.auth.stopAutoRefresh();fixtureTimers.dispose();});
 
 import { createErpHeartbeatScheduler } from '../utils/erpHeartbeatScheduler';
 

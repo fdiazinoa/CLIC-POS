@@ -1,5 +1,8 @@
 // Run through esbuild with import.meta.env defined (see docs/POS_CATALOG_EDITS.md).
 import test from 'node:test';
+import {ownBrowserFixtureTimers} from './browserFixtureLifecycle';
+const fixtureTimers=ownBrowserFixtureTimers();
+test.after(async()=>{const {supabase}=await import('../utils/supabase');await supabase.auth.stopAutoRefresh();fixtureTimers.dispose();});
 import assert from 'node:assert/strict';
 class Storage {
     values = new Map<string, string>();
