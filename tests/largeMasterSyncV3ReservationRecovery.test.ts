@@ -313,7 +313,7 @@ for(const durable of [false,true])for(const ambiguity of ['none','commit-respons
   const db={get:(n:string)=>f.adapter.getCollection(n),getDocument:(...args:any[])=>f.adapter.getDocument(...args),assertFiscalTransactionAuthority:async()=>{}};
   const log={error:(...args:any[])=>messages.push(args.map(a=>a instanceof Error?a.message:a)),warn:no,log:no};
   const app=actualCallback('App.tsx','handleTransactionComplete',{assertFormatsPostingClosed,config:f.config,deviceId:id(50),db,LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED:true,
-   fiscalSinglePreparation:{commit:f.persistV3FinancialTransaction},readV3CompletedReservation:f.readV3CompletedReservation,
+   persistV3FinancialTransaction:f.persistV3FinancialTransaction,fiscalSinglePreparation:{commit:()=>{throw Error('PREPARATION_CONTROLLER_DISCONNECTED');}},readV3CompletedReservation:f.readV3CompletedReservation,
    setTransactions:()=>{if(['publication','close-reopen','settings-remount'].includes(ambiguity)&&!ui.publicationFailed){ui.publicationFailed=true;throw Error('injected-ui-publication');}},
    setCustomers:no,syncFiscalDocument:async()=>{},backgroundSyncManager:{triggerSync:async()=>{}},console:log});
   const context={restoreReservation:(id:string)=>f.restoreV3ReservationReference(id,warehouse),validate:(lines:any[],ref:any)=>f.session.validate(f.config,lines,tariff,warehouse,'SALE',undefined,ref),

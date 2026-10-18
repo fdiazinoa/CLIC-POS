@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {readFileSync} from 'node:fs';
+import {readFileSync,existsSync} from 'node:fs';
 import {createHash} from 'node:crypto';
 import {selectionNativeFixture} from './helpers/fiscalSelectionNative';
 import {createSingleFiscalPreparation,type PreparationPorts} from '../services/fiscal/FiscalSinglePreparation';
@@ -36,7 +36,7 @@ test('prepared digest A cannot be replaced by observation B; conflict holds befo
  const f=await selectionNativeFixture({future:true});try{await f.controller.arm();const source=await f.create();await f.controller.prepare();const before=f.snapshot();f.changeReceipt();await assert.rejects(f.command()(),/FISCAL_PREPARED_SELECTION_CHANGED/);assert.equal(f.snapshot(),before);assert.equal(await f.adapter.getDocument(FISCAL_DISPATCH_CLAIMS,source.id),null);assert.equal(f.metrics().posts,0);assert.equal(f.metrics().provider,0);}finally{await f.close();}
 });
 test('current native factory never accepts execution DI and automatic closures remain HOLD; no history entry/flags or raw device introduced',()=>{
- const source=(path:string)=>readFileSync(new URL('../'+path,import.meta.url),'utf8'),native=source('services/fiscal/NativeCaja6FiscalPreparation.ts');assert.match(native,/commitTransaction:persistV3FinancialTransaction/);assert.doesNotMatch(native,/SyntheticFutureCommandSink|syntheticFutureCommandSink|dispatch\(|execute\(/);assert.match(source('services/fiscal/FiscalMSellerDispatch.ts'),/assertReady:requireFiscalErpAppliedReceipt/);assert.match(source('App.tsx'),/await requireFiscalErpAppliedReceipt\(stored\)/);assert.match(source('App.tsx'),/fiscalSinglePreparation\.commit\(/);assert.doesNotMatch(source('components/FiscalPreparationPanel.tsx'),/onClick=.*execute|Enviar comprobante/);assert.equal(CAJA6_FISCAL_SCOPE.deviceSha256.length,64);
+ const source=(path:string)=>readFileSync(new URL('../'+path,import.meta.url),'utf8'),native=source('services/fiscal/NativeCaja6FiscalPreparation.ts');assert.match(native,/commitTransaction:persistV3FinancialTransaction/);assert.doesNotMatch(native,/SyntheticFutureCommandSink|syntheticFutureCommandSink|dispatch\(|execute\(/);assert.match(source('services/fiscal/FiscalMSellerDispatch.ts'),/assertReady:requireFiscalErpAppliedReceipt/);assert.match(source('App.tsx'),/await requireFiscalErpAppliedReceipt\(stored\)/);assert.match(source('App.tsx'),/await persistV3FinancialTransaction\(/);assert.doesNotMatch(source('App.tsx'),/fiscalSinglePreparation|createNativeCaja6FiscalPreparation|FiscalPreparationPanel/);assert.equal(existsSync(new URL('../components/FiscalPreparationPanel.tsx',import.meta.url)),false);assert.equal(CAJA6_FISCAL_SCOPE.deviceSha256.length,64);
 });
 
 test('concurrent second native commit cannot retarget the sole prospective selection',async()=>{

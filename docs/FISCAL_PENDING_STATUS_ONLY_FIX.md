@@ -53,7 +53,7 @@ El candidato inicial se implementó antes de leer el procedimiento multiagente a
 
 ## Panel de operación de prueba
 
-La petición adicional de excluir «Preparar una operación de prueba» / «Marcar la próxima venta nueva» del próximo APK no requiere borrar UI en esta base: `origin/develop` y esta rama no contienen `FiscalPreparationPanel`, `FiscalSinglePreparation`, `NativeCaja6Preparation` ni esos textos. El panel se rastreó en otra worktree/candidato; no se copiaron ni editaron sus archivos. Los assets compilados de esta rama se revisan para confirmar la misma ausencia. Esta comprobación de fuente/assets no certifica un APK instalado; deben verificarse el SHA y los bytes del próximo artefacto antes de distribuirlo. Se conservan datos y flags.
+En la rama original del PR923 el panel no existía. Para preparar el nuevo APK se integró también el source del candidato 1.1.532 (`78b0af0a`), conservando sus hotfixes de auth y guards tax/service; esa integración sí heredaba el panel. La rama `fix/android-status-no-test-panel` retira su componente y toda su composición productiva en App/Settings, restaurando la llamada directa a `persistV3FinancialTransaction`. Los módulos aislados de pruebas y la identidad usada por auth se conservan. La trazabilidad y validaciones de esta integración están en [APK_STATUS_NO_TEST_PANEL.md](./APK_STATUS_NO_TEST_PANEL.md). La comprobación de fuente/assets no certifica un APK instalado; deben verificarse el SHA y los bytes del próximo artefacto antes de distribuirlo. Se conservan datos y flags.
 
 ## Observación adicional: TCK6000033
 
