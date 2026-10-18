@@ -859,7 +859,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
                     actual.push(document);
                 }
                 fiscalBuffer=validateFiscalBufferReservation({business:actual[0],buffer:actual[1],allocation:actual[2],range:actual[3],terminalId:f.terminalId,type:f.type,ncf:f.ncf});
-                fiscalReceipt=await planNativeFiscalReceipt(async<T>(sql:string,values:(string|number|null)[])=>(await db.query(sql,values)).values as T[] || [],actual[0],actual[1],f.ncf,{requireIssuer:false});
+                fiscalReceipt=await planNativeFiscalReceipt(async<T>(sql:string,values:(string|number|null)[])=>(await db.query(sql,values)).values as T[] || [],actual[0],actual[1],f.ncf,{requireIssuer:f.type.startsWith('E')});
             }
             const plan=planFinancialNumbers(input,input.seriesId ? await read('internalSequences',input.seriesId) : undefined,
                 input.global ? await read('globalSequenceCounter','value') : undefined);

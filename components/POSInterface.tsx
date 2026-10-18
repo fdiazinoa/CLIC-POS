@@ -6522,6 +6522,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (processedCart.some(item => item.quantity > 0)) types.add(requiredSaleFiscalType);
       if (processedCart.some(item => item.quantity < 0)) types.add(resolveCreditNoteFiscalCode(fiscalCompliance.mode));
       for (const type of types) {
+         await db.assertFiscalIssuerAuthority(type);
          if (!await db.canRequestMoreNCF(type, terminalId, activeTerminalConfig)) {
             throw new Error(`No hay un lote fiscal ${type} vigente, descargado y asignado a esta terminal. La facturación está bloqueada.`);
          }
