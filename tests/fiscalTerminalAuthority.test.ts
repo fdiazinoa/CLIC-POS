@@ -94,7 +94,7 @@ test('production checkout guard blocks sales and refunds before non-V3 payment e
   try {
     (dbAdapter as any).getCollection = async (name: string) => name === 'fiscalRanges' ? [lot] : [];
     (dbAdapter as any).saveCollection = async () => { writes++; };
-    const context = createContext({ db, isOrderTakerMode: false, isFiscalModeDisabled: false,
+    const context = createContext({ db, useRef: () => ({current:null}), useEffect: () => {}, isOrderTakerMode: false, isFiscalModeDisabled: false,
       activeTerminalConfig: { erpTerminalId: terminalId, fiscal: { mode: 'LEGACY_B', enabled: true } },
       processedCart: [{ quantity: 1 }], requiredSaleFiscalType: 'B02', terminalId,
       fiscalCompliance: { mode: 'LEGACY_B' },

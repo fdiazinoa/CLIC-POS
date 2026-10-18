@@ -149,15 +149,20 @@ async function appCallback(name:string,begin:string,end:string,bindings:string,f
  const code=(await transform('const callback='+source.slice(a,b+1)+';',{loader:'ts'})).code;
  return new Function('f',`const {${bindings}}=f;${code}return callback;`)(fixture);
 }
-test('actual App production default remains disconnected with flag false; bare legacy accepted GET cannot rewrite NCF',async()=>{
- const f=await appliedFixture();let scoped=0,legacy=0,writes=0;
- try{const sync=await appCallback('syncFiscalDocument','async (transaction: Transaction,','}, [config, pollFiscalDocumentStatus, upsertFiscalTransaction, loadFiscalStatusContext, fiscalStatusWorker]);',
+test('actual App MSELLER consultation uses scoped GET with candidate OFF, preserves originals and propagates failure without ISSUE fallback',async()=>{
+ const f=await appliedFixture();let scoped=0,legacy=0,writes=0,failed=false;
+ Object.assign(f.credentials,{authStatus:'AUTHENTICATED',syncTokenExpiresAt:'2099-01-01T00:00:00Z',deviceTokenExpiresAt:'2020-01-01T00:00:00Z'});
+ const snapshot=()=>JSON.stringify({documents:f.sql().prepare('SELECT * FROM documents ORDER BY collection_name,doc_id').all(),outbox:f.sql().prepare('SELECT * FROM sync_outbox_v2 ORDER BY local_sequence').all()});
+ f.handle((req,res)=>{assert.equal(req.method,'GET');assert.match(req.url,/^\/api\/sync\/v3\/fiscal\/documents\/status\?/);const params=new URL(req.url,'http://fixture').searchParams;assert.equal(params.get('sourceTransactionId'),f.id);assert.equal(params.get('electronicNcf'),f.original.ncf);const scope=JSON.parse(params.get('scopeAssertion')!);for(const key of ['tenantId','companyId','storeId','terminalId','deviceId'])assert.equal(scope[key],f.scope[key]);res.statusCode=failed?429:200;res.setHeader('content-type','application/json');res.end(JSON.stringify(failed?{error:'rate-limited'}:{schemaVersion:1,source:'ERP_SCOPED_PROVIDER_GET',decision:'PENDING'}));});
+ const worker={consult:async(transactionId:string,...options:any[])=>{scoped++;assert.equal(transactionId,f.id);assert.deepEqual(options,[true,undefined,undefined,true]);return getScopedFiscalDocumentStatus(f.original,f.scope,()=>f.identity,f.deps.fetchImpl,()=>f.credentials,true);}};
+ try{const before=snapshot();const sync=await appCallback('syncFiscalDocument','async (transaction: Transaction,','}, [config, pollFiscalDocumentStatus, upsertFiscalTransaction, loadFiscalStatusContext, fiscalStatusWorker]);',
  'LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED,v3FiscalInFlightRef,db,getExistingFiscalProviderReference,fiscalStatusWorker,requireFiscalErpAppliedReceipt,FISCAL_DISPATCH_CLAIMS',
- {LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED:false,v3FiscalInFlightRef:{current:new Map()},db:{getDocument:f.get},getExistingFiscalProviderReference:(tx:any)=>tx.fiscalReferenceId,fiscalStatusWorker:{consult:async()=>{scoped++;}},requireFiscalErpAppliedReceipt,FISCAL_DISPATCH_CLAIMS});
- await assert.rejects(()=>sync(f.input.transaction),/APPLIED_RECEIPT_REQUIRED/);assert.equal(f.requests.length,0);assert.equal(await f.get(FISCAL_DISPATCH_CLAIMS,f.id),null);assert.deepEqual(await f.get('transactions',f.id),f.original);
+ {LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED:false,v3FiscalInFlightRef:{current:new Map()},db:{getDocument:f.get},getExistingFiscalProviderReference:(tx:any)=>tx.fiscalReferenceId,fiscalStatusWorker:worker,requireFiscalErpAppliedReceipt,FISCAL_DISPATCH_CLAIMS});
+ await Promise.all([sync(f.input.transaction),sync(f.input.transaction)]);assert.equal(scoped,1);assert.equal(f.requests.length,1);assert.equal(await f.get(FISCAL_DISPATCH_CLAIMS,f.id),null);assert.equal(snapshot(),before);
+ failed=true;await assert.rejects(()=>sync(f.input.transaction),/FISCAL_STATUS_PROOF_UNAVAILABLE/);assert.equal(scoped,2);assert.equal(f.requests.length,2);assert.equal(snapshot(),before);
  const poll=await appCallback('pollFiscalDocumentStatus','async (','}, [config.companyInfo, upsertFiscalTransaction, fiscalStatusWorker]);','LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED,fiscalStatusWorker,getFiscalDocumentStatus,upsertFiscalTransaction',
- {LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED:false,fiscalStatusWorker:{consult:async()=>{scoped++;}},getFiscalDocumentStatus:async()=>{legacy++;return{success:true,eNCF:'FOREIGN'};},upsertFiscalTransaction:async()=>{writes++;}});
- await poll(f.original,'MSELLER',0,'track');assert.equal(scoped,1);assert.equal(legacy,0);assert.equal(writes,0);
+ {LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED:false,fiscalStatusWorker:{consult:async(id:string)=>{scoped++;assert.equal(id,f.id);}},getFiscalDocumentStatus:async()=>{legacy++;return{success:true,eNCF:'FOREIGN'};},upsertFiscalTransaction:async()=>{writes++;}});
+ await poll(f.original,'MSELLER',0,'track');assert.equal(scoped,3);assert.equal(legacy,0);assert.equal(writes,0);assert.equal(f.requests.filter(r=>r.init?.method==='POST').length,0);assert.equal(snapshot(),before);
  }finally{await f.close();}
 });
 test('unknown ready dispatch restarts into existing scoped GET worker, accepted without QR stays accepted during App retry/claim',async()=>{

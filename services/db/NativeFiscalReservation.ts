@@ -1,3 +1,5 @@
+import {fiscalIssuerRnc} from '../../utils/fiscalIssuance';
+export {fiscalIssuerRnc} from '../../utils/fiscalIssuance';
 import type {BusinessConfig,LocalFiscalBuffer} from '../../types';
 import type {FormatStatement} from '../articleFormats/store';
 
@@ -20,13 +22,6 @@ BEGIN SELECT RAISE(ABORT,'NATIVE_FISCAL_RECEIPT_IMMUTABLE'); END;
 `;
 
 type Query=<T>(sql:string,values:(string|number|null)[])=>Promise<T[]>;
-export const fiscalIssuerRnc=(business:BusinessConfig):string|undefined=>{
- const raw=String(business.companyInfo?.rnc || '').trim();
- if(!/^[\d\s.-]+$/.test(raw))return undefined;
- const value=raw.replace(/[\s.-]/g,'');
- return /^(?:\d{9}|\d{11})$/.test(value) ? value : undefined;
-};
-
 /** Exact expressions/predicates shared by schema, planner and query-plan tests. */
 export function fiscalHistoricalCollisionQuery(field:typeof NATIVE_FISCAL_HISTORY_FIELDS[number],knownIssuer:boolean):string {
  return `SELECT d.doc_id FROM documents d WHERE d.collection_name IN ('transactions','transactionHistory')

@@ -876,6 +876,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, total,
 
       try {
          setFinalizeError(null);
+         if (validatePaymentAuthority) await validatePaymentAuthority();
          const newPayment = buildPaymentEntry(activePaymentMethod, valInSelectedCurrency);
          setPayments((prev) => [...prev, newPayment]);
          setInputAmount(

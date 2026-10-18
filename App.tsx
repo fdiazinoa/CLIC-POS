@@ -15091,6 +15091,8 @@ const AppContent: React.FC = () => {
               }
 
               try {
+                // Kiosk has no fiscal reservation: reject unsupported fiscal drafts before charging.
+                await db.assertFiscalTransactionAuthority({ documentType: 'TICKET', terminalId: currentTerminal.id }, activeConfig);
                 let gatewayPaymentFields: Partial<PaymentEntry> = {};
 
                 if (isIntegratedCard) {

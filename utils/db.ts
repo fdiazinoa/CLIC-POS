@@ -1,4 +1,4 @@
-import {snapshotFiscalIssuance,assertFiscalIssuance} from './fiscalIssuance';
+import {snapshotFiscalIssuance,assertFiscalIssuance,assertNewFiscalIssuer} from './fiscalIssuance';
 import {fiscalSequencePadding as getFiscalSequencePadding,formatFiscalNumber} from './fiscalNumber';
 import { resolveFiscalTerminalPolicyFromConfig,hasValidFiscalAllocationPointer,getFiscalRangeForEmission,hasValidAllocatedFiscalRange,isAllocationAllowedByPolicy } from './fiscalBufferAuthority';
 import { applyLocalUserProfiles } from './localUserProfiles';
@@ -571,7 +571,15 @@ const resolveFiscalTerminalPolicy = async (
   return resolveFiscalTerminalPolicyFromConfig(business,terminalId,allocations,context);
 };
 
+const assertPersistedFiscalIssuer = async (type: FiscalDocumentCode): Promise<void> => {
+  if (!type.startsWith('E')) return;
+  const stored = await dbAdapter.getCollection<BusinessConfig>('config');
+  const business = (Array.isArray(stored) ? stored[0] : stored) as BusinessConfig | undefined;
+  assertNewFiscalIssuer(business || {} as BusinessConfig, type);
+};
+
 const reserveFiscalBatch = async (terminalId: string, type: FiscalDocumentCode, context?: TerminalConfig): Promise<LocalFiscalBuffer | null> => {
+    await assertPersistedFiscalIssuer(type);
     const [ranges, rawAllocations] = await Promise.all([
       dbAdapter.getCollection<FiscalRangeDGII>('fiscalRanges'),
       dbAdapter.getCollection<FiscalAllocation>('fiscalAllocations'),
@@ -1373,6 +1381,8 @@ export const db = {
     };
   },
 
+  assertFiscalIssuerAuthority: assertPersistedFiscalIssuer,
+
   assertFiscalTransactionAuthority: async (transaction: Partial<Transaction>, context?: TerminalConfig): Promise<void> => {
     assertFiscalIssuance(transaction);
     if (transaction.ncf || transaction.ncfType) {
@@ -1432,6 +1442,7 @@ export const db = {
     withFiscalIssueLock(() => reserveFiscalBatch(terminalId, type, context)),
 
   reserveFiscalNumber: (type: FiscalDocumentCode, terminalId: string, _customBatchSize?: number, context?: TerminalConfig): Promise<{ncf:string;fiscalIssuance:FiscalIssuanceSnapshot} | null> => withFiscalIssueLock(async () => {
+    await assertPersistedFiscalIssuer(type);
     const allocations = await dbAdapter.getCollection<FiscalAllocation>('fiscalAllocations') || [];
     const policy = await resolveFiscalTerminalPolicy(terminalId, allocations, context);
     if (!policy.enabled || !terminalId?.trim() || !policy.authorityId?.trim()) return null;
@@ -1502,7 +1513,8 @@ export const db = {
     // A snapshot may revoke the lot while reserving. Never return a number from that stale authority.
     if (!await db.validatePreparedFiscalAuthority(type, terminalId, ncf, context)) return null;
 
-    const business = ((await dbAdapter.getCollection<BusinessConfig>('config')) || [])[0] || {} as BusinessConfig;
+    const storedBusiness = await dbAdapter.getCollection<BusinessConfig>('config');
+    const business = (Array.isArray(storedBusiness) ? storedBusiness[0] : storedBusiness) || {} as BusinessConfig;
     const frozenRange = (await dbAdapter.getCollection<FiscalRangeDGII>('fiscalRanges') || []).find(row=>row.id===buffer!.fiscalRangeId);
     if (!frozenRange || !activeAllocation || buffer.allocationId!==activeAllocation.id) throw Error('FISCAL_ISSUANCE_AUTHORITY_REQUIRED');
     let fiscalIssuance = snapshotFiscalIssuance(business,frozenRange,activeAllocation,buffer,ncf);
