@@ -1094,7 +1094,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, total,
                   })();
                }, 50);
             } else {
-               setFinalizeError('No se pudo completar la venta. Verifique secuencia fiscal y configuración de terminal.');
+               setFinalizeError('No se pudo completar la venta. Revise el motivo indicado e inténtelo de nuevo.');
             }
          } finally {
             if (slowProcessTimer) window.clearTimeout(slowProcessTimer);

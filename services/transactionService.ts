@@ -430,6 +430,7 @@ class TransactionService {
 
         // Create transaction object
         const transaction: Transaction = {
+            ...(data.inventoryPresentationContract===1?{inventoryPresentationContract:1 as const}:{}),
             id: data.id || createTechnicalId('TXN'),
             globalSequence,
             displayId,
