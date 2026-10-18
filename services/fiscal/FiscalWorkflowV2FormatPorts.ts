@@ -21,6 +21,13 @@ async function authority(sql:FormatSQL,context:NetworkContextV2,type:FiscalDocum
 export async function quoteFormatFiscalIssuance(sql:FormatSQL,context:NetworkContextV2,type:FiscalDocumentCode){
  need(sql.runExclusive,'FISCAL_WORKFLOW_NATIVE_REQUIRED');return sql.runExclusive!(async tx=>(await authority(tx,context,type)).issuance);
 }
+/** Reserve only a missing or exhausted local subpool through the existing fiscal allocator. No NCF is consumed here. */
+export async function prepareFormatFiscalBuffer(sql:FormatSQL,context:NetworkContextV2,type:FiscalDocumentCode,reserve?:()=>Promise<LocalFiscalBuffer|null>){
+ const rows=await sql.query<{data:string}>("SELECT data FROM documents WHERE collection_name='localFiscalBuffer' AND json_extract(data,'$.terminalId')=? AND json_extract(data,'$.type')=? LIMIT 2",[context.scope.terminalId,type]);
+ need(rows.length<=1,'FISCAL_WORKFLOW_FORMAT_AUTHORITY_REQUIRED');const buffer=rows.length?JSON.parse(rows[0].data) as LocalFiscalBuffer:null;
+ if(buffer){need(Number.isSafeInteger(buffer.currentNumber)&&Number.isSafeInteger(buffer.endNumber),'FISCAL_WORKFLOW_FORMAT_AUTHORITY_REQUIRED');if(buffer.currentNumber<=buffer.endNumber)return;}
+ const allocated=await (reserve?reserve():(await import('../../utils/db')).db.requestFiscalBatch(context.scope.terminalId,type,1));need(allocated,'FISCAL_WORKFLOW_NCF_ALLOCATION_REQUIRED');
+}
 export function createFiscalFormatHooks(readAuth=captureFiscalStatusBoundContext):FormatPostingV2Hooks{
  const current=(context:NetworkContextV2,event:WireEventV2)=>{const auth=readAuth();auth.assertCurrent();need(Date.parse(context.session_expires_at)>Date.now(),'FISCAL_WORKFLOW_SESSION_EXPIRED');for(const k of ['tenantId','companyId','storeId','terminalId','deviceId'] as const)need(auth.descriptor[k]===context.scope[k]&&event.fiscal.permit.scope[k]===context.scope[k],'FISCAL_WORKFLOW_SCOPE_MISMATCH');need(event.fiscal.permit.authorityHash===context.authority_hash);return auth;};
  return {

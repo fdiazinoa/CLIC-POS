@@ -190,7 +190,7 @@ test('actual hydration/online/successful-sync lifecycle registers only ready sta
  online=false;onOnline!();assert.equal(runs,2);online=true;onOnline!();assert.equal(runs,3);
  cleanup();assert.equal(disposes,1);assert.equal(onSync,undefined);assert.equal(onOnline,undefined);
 });
-test('actual App manual callback requires displayed environment confirmation before creating a lookup approval',async()=>{
+test('actual App historical MSeller manual callback consults the original only, without environment approval or source mutation',async()=>{
  const {transform}=await import('esbuild');const source=readFileSync(new URL('../App.tsx',import.meta.url),'utf8');
  const start=source.indexOf('async(transaction:Transaction):Promise<string>=> {',source.indexOf('const consultFiscalStatus ='));
  const end=source.indexOf('},[fiscalStatusWorker,currentUser?.id,loadFiscalStatusContext]);',start);
@@ -199,11 +199,10 @@ test('actual App manual callback requires displayed environment confirmation bef
  const f=await fixture();delete f.tx.fiscalSubmissionScope;let calls=0,approval:any,message='';
  const worker={consult:async(...args:any[])=>{calls++;approval=args;return'GET-only';}};
  const run=(answer:boolean)=>create({getDocument:async()=>f.tx},worker,{id:'U'},async()=>({scope:{environment:0}}),{confirm:(text:string)=>{message=text;return answer;}})(f.tx);
- assert.match(await run(false),/cancelada/);assert.equal(calls,0);assert.match(message,/TesteCF \(0\)/);
- assert.equal(await run(true),'GET-only');assert.equal(calls,1);assert.deepEqual(approval,['27',true,'U',0]);
- f.tx.fiscalLookupApproval={protected:'already-approved'};await run(false);assert.equal(calls,2);assert.deepEqual(approval,['27',true,'U',undefined]);
+ const before=JSON.stringify(f.tx);assert.equal(await run(false),'GET-only');assert.equal(calls,1);assert.equal(message,'');assert.deepEqual(approval,['27',true,undefined,undefined,true]);
+ assert.equal(await run(true),'GET-only');assert.equal(calls,2);assert.equal(JSON.stringify(f.tx),before);
 });
-test('actual App issuance remains held before intent when ERP APPLIED receipt is missing, preserving source/outbox',async()=>{
+test('actual App historical sync only consults: missing original attempt stays held with zero issuance and unchanged source/outbox',async()=>{
  const {transform}=await import('esbuild');const source=readFileSync(new URL('../App.tsx',import.meta.url),'utf8');
  const start=source.indexOf('async (transaction: Transaction,',source.indexOf('const syncFiscalDocument ='));
  const end=source.indexOf('}, [config, pollFiscalDocumentStatus, upsertFiscalTransaction, loadFiscalStatusContext, fiscalStatusWorker]);',start);assert.ok(start>0&&end>start);
@@ -220,8 +219,8 @@ test('actual App issuance remains held before intent when ERP APPLIED receipt is
    buildV3FrozenFiscalProviderTransaction:(row:any)=>row,upsertFiscalTransaction:async(row:any)=>f.adapter.saveDocument('transactions',row),
    issueFiscalDocument:async(input:any)=>{issues++;const stored=f.read('transactions');assert.equal(stored.fiscalSubmissionScope.environment,0);assert.equal(stored.fiscalSubmissionScope.basis,'PERSISTED_SUBMISSION_INTENT');assert.deepEqual(stored.fiscalSubmissionScope,input.transaction.fiscalSubmissionScope);return{success:false,pending:true};},
    applyFiscalProviderResult:(row:any)=>row,isDelegatedFiscalProvider:()=>true,window:{setTimeout:()=>{}},loadFiscalStatusContext:async()=>context,fiscalStatusSourceChecksum,requireFiscalErpAppliedReceipt,FISCAL_DISPATCH_CLAIMS,fiscalStatusWorker:f.worker});
-  await assert.rejects(()=>sync(original),/APPLIED_RECEIPT_REQUIRED/);assert.equal(issues,0);const final=f.read('transactions');for(const key of ['items','payments','ncf','electronicNcf','total','v3CommitFingerprint'])assert.deepEqual(final[key],original[key]);
-  assert.deepEqual(f.read('outbox'),{id:'event',status:'PENDING'});await assert.rejects(()=>sync(original),/APPLIED_RECEIPT_REQUIRED/);assert.equal(issues,0);assert.equal(final.fiscalSubmissionScope,undefined);assert.equal(final.fiscalProviderStatus,undefined);
+  await assert.rejects(()=>sync(original),/FISCAL_STATUS_ATTEMPT_REQUIRED/);assert.equal(issues,0);const final=f.read('transactions');for(const key of ['items','payments','ncf','electronicNcf','total','v3CommitFingerprint'])assert.deepEqual(final[key],original[key]);
+  assert.deepEqual(f.read('outbox'),{id:'event',status:'PENDING'});await assert.rejects(()=>sync(original),/FISCAL_STATUS_ATTEMPT_REQUIRED/);assert.equal(issues,0);assert.equal(final.fiscalSubmissionScope,undefined);assert.equal(final.fiscalProviderStatus,undefined);
  }finally{f.sql.close();}
 });
 

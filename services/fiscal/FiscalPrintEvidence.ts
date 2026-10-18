@@ -83,6 +83,7 @@ export const fiscalPrintTransaction=(tx:Transaction,display:FiscalPrintDisplay|u
 export async function resolveFiscalPrintReadiness(tx:Transaction,{timeoutMs=8000,signal}:{timeoutMs?:number;signal?:AbortSignal}={}):Promise<FiscalPrintDisplay|undefined>{
  let display=await resolveFiscalPrintDisplay(tx);if(display||tx.fiscalProvider!=='MSELLER'||signal?.aborted)return display;
  const {fiscalWorkflowV2Client}=await import('./FiscalWorkflowV2Client');
+ if(!fiscalWorkflowV2Client.enabled())return display;
  const controller=new AbortController(),abort=()=>controller.abort();signal?.addEventListener('abort',abort,{once:true});
  const budget=Math.max(0,Math.min(8000,timeoutMs)),deadline=Date.now()+budget;
  let finishDeadline:()=>void=()=>{};const stopped=new Promise<undefined>(resolve=>{finishDeadline=()=>resolve(undefined);});

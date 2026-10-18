@@ -6445,7 +6445,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       } catch (error: any) { setErrorToast(`V3: ${error.message || error}`); return; }
       if (hasV3ReservationCart && !activeV3Reservation) { setErrorToast('La referencia de la reserva aún no está validada.'); return; }
       if (v3Operational) {
-         try { if(processedCart.some(line=>line.articleFormat)){if(!formatRuntime)throw Error('FISCAL_WORKFLOW_FORMAT_NOT_READY');await formatRuntime.assertCurrent();}else await v3Operational.validate(cart, { ticketId: activeTable?.currentOrderId || activeDirectV3TicketId, claimId: activeDirectV3TicketId, reservationId:activeV3Reservation?.reservation.id,reservationClaimId:activeV3Reservation?.claimId, tableId: activeTable?.id === undefined ? undefined : String(activeTable.id) }); }
+         try { if(processedCart.some(line=>line.articleFormat)){if(!formatRuntime)throw Error('FISCAL_WORKFLOW_FORMAT_NOT_READY');await formatRuntime.prepareIssuance(requiredSaleFiscalType);}else await v3Operational.validate(cart, { ticketId: activeTable?.currentOrderId || activeDirectV3TicketId, claimId: activeDirectV3TicketId, reservationId:activeV3Reservation?.reservation.id,reservationClaimId:activeV3Reservation?.claimId, tableId: activeTable?.id === undefined ? undefined : String(activeTable.id) }); }
          catch (error: any) { setErrorToast(`V3: ${error.message || error}`); return; }
       }
       if (isOrderTakerMode) {
@@ -6540,6 +6540,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const newFiscalCheckout=fiscalCompliance.mode==='ECF'&&fiscalWorkflowV2Client.enabled()&&getDefaultFiscalProvider(config,activeTerminalConfig)==='MSELLER'
         &&!hasV3ReservationCart&&!activeV3Reservation&&!activeRecoveredReservation&&!activeDirectV3TicketId&&!activeTable&&!activeTable?.currentOrderId
         &&processedCart.every(line=>line.quantity>0);
+      const retainedFiscalOperation=fiscalCheckoutRef.current||fiscalCheckoutOperationRef.current||processedCart.some(line=>(line as any).fiscalCheckoutOperationId);
+      if(!fiscalWorkflowV2Client.enabled()&&retainedFiscalOperation)throw Error('FISCAL_WORKFLOW_CHECKOUT_RECONCILIATION_REQUIRED');
       if(!newFiscalCheckout)fiscalCheckoutRef.current=null;
       if(newFiscalCheckout){
         const tagged=processedCart.map(line=>(line as any).fiscalCheckoutOperationId).filter(Boolean);
@@ -6557,7 +6559,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
 
       setLargeMasterSyncV3CriticalOperation('PAYMENT', true);
-      try { if(processedCart.some(line=>line.articleFormat)){if(!formatRuntime)throw Error('FISCAL_WORKFLOW_FORMAT_NOT_READY');await formatRuntime.assertCurrent();}else await v3Operational.validate(cart, { ticketId: activeTable?.currentOrderId || activeDirectV3TicketId, claimId: activeDirectV3TicketId, reservationId:activeV3Reservation?.reservation.id,reservationClaimId:activeV3Reservation?.claimId, tableId: activeTable?.id === undefined ? undefined : String(activeTable.id) }); }
+      try { if(processedCart.some(line=>line.articleFormat)){if(!formatRuntime)throw Error('FISCAL_WORKFLOW_FORMAT_NOT_READY');await formatRuntime.prepareIssuance(requiredSaleFiscalType);}else await v3Operational.validate(cart, { ticketId: activeTable?.currentOrderId || activeDirectV3TicketId, claimId: activeDirectV3TicketId, reservationId:activeV3Reservation?.reservation.id,reservationClaimId:activeV3Reservation?.claimId, tableId: activeTable?.id === undefined ? undefined : String(activeTable.id) }); }
       catch (error) { setLargeMasterSyncV3CriticalOperation('PAYMENT', false); throw error; }
       return Object.assign(()=>setLargeMasterSyncV3CriticalOperation('PAYMENT',false),{...(fiscalCheckoutRef.current?{futureCheckout:{checkoutId:fiscalCheckoutRef.current.checkoutId,transactionId:fiscalCheckoutRef.current.transactionId}}:{}),recordPaymentEffect:async(paymentId:string)=>{if(fiscalCheckoutRef.current)await fiscalWorkflowV2Client.recordPayment(fiscalCheckoutRef.current,paymentId);}});
    };
