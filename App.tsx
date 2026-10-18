@@ -9657,6 +9657,9 @@ const AppContent: React.FC = () => {
       setSyncDiagnostic(null);
       clearPersistedTerminalAuthorizationBlock();
       markDeviceReauthorized(deviceId);
+      // Fresh binding does not pass through the paired-terminal startup path.
+      // Start the existing durable sender only after binding and auth are saved.
+      await backgroundSyncManager.initialize();
       if (isErpDirectBinding) {
         console.log('[SYNC_ROUTER] POS_ERP binding complete: skipping POS_CLOUD_STAGING snapshot and PUSH_MASTERS.');
       } else {
