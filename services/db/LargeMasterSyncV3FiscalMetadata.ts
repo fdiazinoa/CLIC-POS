@@ -1,4 +1,4 @@
-import {validatePreparedAppliedReceipt,assertFiscalOriginalMirror} from '../fiscal/FiscalAppliedReceiptV2';
+import {TAX_SERVICE_APPLIED_PROFILE,validatePreparedAppliedReceipt,assertFiscalOriginalMirror} from '../fiscal/FiscalAppliedReceiptV2';
 import {resolveFiscalPrintDisplay} from '../fiscal/FiscalPrintEvidence';
 import { fiscalStatusSourceChecksum, validFiscalScope, verifyFiscalStatusProof } from '../fiscal/FiscalStatusProof';
 import { sha256Utf8 } from '../sync/LargeMasterSyncV3Client';
@@ -33,6 +33,7 @@ export async function validateFiscalDispatchClaimBatch(rows:DurableDocumentMutat
   {
     const prepared=await validatePreparedAppliedReceipt({receipt:c.appliedReceipt,expectation:c.appliedReceiptExpectation,anchors:c.outboxAnchors,
       originalTransaction:JSON.parse(c.outboxAnchors?.sale?.payload_json||'{}').transaction},c.scope,JSON.parse(source.expectedDocument||'{}'));
+    if(prepared.receipt.profile===TAX_SERVICE_APPLIED_PROFILE)denied(); // Read-only preparation cannot create a durable issuance claim.
     assertFiscalOriginalMirror(JSON.parse(history.expectedDocument||'{}'),prepared.originalTransaction);
     if(c.sourceChecksum!==prepared.receipt.sourceDocument.checksum||scope.environment!==prepared.receipt.historicalEnvironment)denied();
   }

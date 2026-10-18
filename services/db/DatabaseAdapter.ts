@@ -94,6 +94,7 @@ export interface FinancialNumberResult {
 export interface DatabaseAdapter {
     connect(): Promise<void>;
     disconnect(): Promise<void>;
+    readonly terminalAuthEvidenceStore?: import('./TerminalAuthEvidenceStore').TerminalAuthEvidenceStore;
     readonly adapterType: 'local' | 'network';
     /** Present only on native adapters supporting the typed fiscal metadata CAS protocol. */
     readonly supportsV3FiscalMetadataCAS?: boolean;

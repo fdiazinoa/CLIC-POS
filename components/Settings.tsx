@@ -90,6 +90,7 @@ const SettingsModuleFallback: React.FC = () => (
 
 
 interface SettingsProps {
+  fiscalPreparation?:React.ReactNode;
   config: BusinessConfig;
   users: User[];
   currentUser: User | null;
@@ -1003,6 +1004,7 @@ const Settings: React.FC<SettingsProps> = (props) => {
             </div>
 
             <div className="space-y-12">
+              {hasPermission('SETTINGS_ACCESS')&&props.fiscalPreparation}
               <section>
                 <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-6 border-b border-slate-100 pb-2">Inventario y Catálogo</h2>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
