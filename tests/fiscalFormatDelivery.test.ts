@@ -45,7 +45,7 @@ test('actual preparation effect discovers with absent local flag and late capabi
  const cleanup=f.effect();await tick();assert.equal(f.calls(),1);cleanup?.();const second=f.effect();await tick();assert.equal(f.calls(),1);
  const runtime={assertCurrent:async()=>{}};f.jobs[0].resolve(runtime);await tick();assert.equal(f.state.runtime,runtime);assert.equal(f.state.error,null);assert.equal(f.state.preparing,false);second?.();
 });
-for(const reason of ['ERP_FLAG_DISABLED','POS_FORMAT_GRANT_REQUIRED','POS_FORMAT_SCOPE_FORBIDDEN','POS_FORMAT_AUTHORITY_EXPIRED','HTTP404','HTTP500','network-offline','timeout','POS_FORMAT_MASTER_HASH_INVALID','POS_FORMAT_MASTER_PARTIAL','POS_FORMAT_ACK_REQUIRED'])test(`actual discovery ${reason} shows hold, zero ready runtime and explicit retry can succeed`,async()=>{
+for(const reason of ['FISCAL_WORKFLOW_DISABLED','POS_FORMAT_DISABLED','ERP_FLAG_DISABLED','POS_FORMAT_GRANT_REQUIRED','POS_FORMAT_SCOPE_FORBIDDEN','POS_FORMAT_AUTHORITY_EXPIRED','HTTP404','HTTP500','network-offline','timeout','POS_FORMAT_MASTER_HASH_INVALID','POS_FORMAT_MASTER_PARTIAL','POS_FORMAT_ACK_REQUIRED'])test(`actual discovery ${reason} shows hold, zero ready runtime and explicit retry can succeed`,async()=>{
  const f=effectFixture();const cleanup=f.effect();await tick();f.jobs[0].reject(Error(reason));await tick();assert.equal(f.state.runtime,null);assert.deepEqual(f.state.error,fiscalFormatPreparationProblem(Error(reason)));assert.equal(f.state.preparing,false);assert.equal(f.calls(),1);await tick();assert.equal(f.calls(),1);
  cleanup?.();f.context.formatPreparationRetry++;const retryCleanup=f.effect();await tick();assert.equal(f.calls(),2);const runtime={assertCurrent:async()=>{}};f.jobs[1].resolve(runtime);await tick();assert.equal(f.state.runtime,runtime);assert.equal(f.state.error,null);retryCleanup?.();
 });
@@ -61,7 +61,7 @@ test('resolved discovery still requires current authority before publication',as
 test('preparation reasons explain ERP enablement, session, network and incomplete data without exposing raw errors',()=>{
  for(const [reason,expected]of [
   ['POS_FORMAT_GRANT_REQUIRED',/habilitación en el ERP para esta caja/],['POS_FORMAT_SCOPE_FORBIDDEN',/habilitación en el ERP para esta caja/],['POS_FORMAT_CAPABILITY_REQUIRED',/habilitación en el ERP para esta caja/],
-  ['ERP_FLAG_DISABLED',/deshabilitadas para esta empresa/],['POS_FORMAT_AUTHORITY_EXPIRED',/Valida la sesión/],['FISCAL_TERMINAL_AUTH_REQUIRED',/Valida la sesión/],
+  ['FISCAL_WORKFLOW_DISABLED',/servicio de presentaciones no está disponible en el ERP configurado/],['POS_FORMAT_DISABLED',/deshabilitadas para esta empresa/],['ERP_FLAG_DISABLED',/deshabilitadas para esta empresa/],['POS_FORMAT_AUTHORITY_EXPIRED',/Valida la sesión/],['FISCAL_TERMINAL_AUTH_REQUIRED',/Valida la sesión/],
   ['network-offline',/Revisa la conexión/],['timeout',/Revisa la conexión/],['Failed to fetch',/Revisa la conexión/],['HTTP500',/Revisa la conexión/],
   ['POS_FORMAT_MASTER_HASH_INVALID',/incompletos o no se pudieron verificar/],['POS_FORMAT_MASTER_PARTIAL',/incompletos o no se pudieron verificar/],['POS_FORMAT_ACK_REQUIRED',/incompletos o no se pudieron verificar/],['POS_FORMAT_INVENTORY_AUTHORITY_UNPROVEN',/incompletos o no se pudieron verificar/],
  ] as const){const result=fiscalFormatPreparationProblem(Error(reason));assert.match(result.message,expected);assert.ok(!result.message.includes(reason));if(/^[A-Z][A-Z0-9_]{2,95}$/.test(reason))assert.equal(result.code,reason);}
