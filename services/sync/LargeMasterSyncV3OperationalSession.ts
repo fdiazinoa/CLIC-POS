@@ -279,7 +279,7 @@ export class LargeMasterSyncV3OperationalSession {
     if(!lines.some(line=>line.inventoryPresentation!==undefined))return;
     const terminal=config.terminals.find(row=>row.config.currentDeviceId===this.identity.deviceId&&(row.config.erpTerminalId||row.id)===this.identity.terminalId);
     if(!terminal)throw Error('INVENTORY_PRESENTATION_SCOPE_CHANGED');
-    return validatePresentationCart(createPresentationRuntime(()=>presentationAuthority(config,terminal.id,terminal.config.pricing.allowedTariffIds,terminal.config.catalog?.allowedCategories||[])),lines);
+    return validatePresentationCart(createPresentationRuntime(()=>presentationAuthority(config,terminal.id)),lines);
   }
 
   async stockRequirements(config: BusinessConfig, lines: CartItem[], warehouseId: string,

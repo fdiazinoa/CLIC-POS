@@ -17,7 +17,7 @@ export async function assertPresentationCommit(transaction:Transaction,proof:Pre
  if(transaction.documentType==='REFUND'||transaction.inventoryPresentationContract!==1||!proof)throw Error('INVENTORY_PRESENTATION_COMMIT_PROOF_REQUIRED');
  const configs=await read<{data:string}>("SELECT data FROM documents WHERE collection_name='config' AND doc_id='current'",[]);if(configs.length!==1)throw Error('INVENTORY_PRESENTATION_SCOPE_CHANGED');
  const config=JSON.parse(configs[0].data) as BusinessConfig;
- const retained=JSON.parse(proof.contextContent),authority=presentationAuthority(config,transaction.terminalId,retained.context.tariffIds,retained.context.categories);
+ const retained=JSON.parse(proof.contextContent),authority=presentationAuthority(config,transaction.terminalId);
  assertPresentationAdmission(authority);await validatePresentationContext(retained.context,authority);
  if(retained.origin!==authority.origin||proof.bindingKey!==await inventoryPresentationRevision({origin:authority.origin,scope:authority.scope})||proof.contextKey!==await inventoryPresentationRevision({origin:authority.origin,contextRevision:retained.context.contextRevision}))throw Error('INVENTORY_PRESENTATION_SCOPE_CHANGED');
  const availability=await read<{state:string;context_key:string}>('SELECT state,context_key FROM inventory_presentation_availability WHERE binding_key=?',[proof.bindingKey]);
@@ -50,5 +50,5 @@ export async function assertPresentationCommit(transaction:Transaction,proof:Pre
  }
  assertPresentationAdmission(authority);
  // Re-read synchronous authority after hashing/queries, before the caller performs writes.
- if(canonicalPresentationJson(presentationAuthority(config,transaction.terminalId,retained.context.tariffIds,retained.context.categories))!==canonicalPresentationJson(authority))throw Error('INVENTORY_PRESENTATION_SCOPE_CHANGED');
+ if(canonicalPresentationJson(presentationAuthority(config,transaction.terminalId))!==canonicalPresentationJson(authority))throw Error('INVENTORY_PRESENTATION_SCOPE_CHANGED');
 }

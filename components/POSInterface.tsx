@@ -1273,7 +1273,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       let disposed=false;setPresentationMasters({});setPresentationSelection(null);setPresentationError(null);presentationRuntimeRef.current=null;
       if(!v3Operational)return;
       let runtime:PresentationRuntime;
-      try{runtime=createPresentationRuntime(()=>{const current=presentationConfigRef.current.terminals.find(t=>t.id===activeTerminalId);if(!current)throw Error('INVENTORY_PRESENTATION_SCOPE_CHANGED');return presentationAuthority(presentationConfigRef.current,activeTerminalId,current.config.pricing.allowedTariffIds,current.config.catalog?.allowedCategories||[]);});}
+      try{runtime=createPresentationRuntime(()=>{const current=presentationConfigRef.current.terminals.find(t=>t.id===activeTerminalId);if(!current)throw Error('INVENTORY_PRESENTATION_SCOPE_CHANGED');return presentationAuthority(presentationConfigRef.current,activeTerminalId);});}
       catch(error){setPresentationError(String(error));return;}
       void runtime.client.prepare().catch(async error=>{if(!/network|fetch|timeout|abort/i.test(String(error)))throw error;const cached=await runtime.client.cached();if(!cached)throw error;}).then(()=>{if(!disposed){presentationRuntimeRef.current=runtime;setPresentationReadyGeneration(value=>value+1);setPresentationError(null);setPresentationMasters({});}}).catch(error=>{if(!disposed)setPresentationError(String(error));});
       return()=>{disposed=true;runtime.client.cancel();};
