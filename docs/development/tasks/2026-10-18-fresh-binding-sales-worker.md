@@ -27,3 +27,17 @@ for the original are invalidated by this new evidence.
   upgrade persistence tests: 20 passed.
 - Physical fresh binding and queue acknowledgement remain pending; no reinstall,
   restart, DB edit, invoice application or fiscal emission was performed.
+
+## Subsequent explicit DEMO cleanup
+
+The user explicitly requested deleting the new local queue and the old Supabase
+inbox before pairing again. The new SALE/PAYMENT pair was removed from native
+storage with the application stopped: queue=0, integrity=ok, all other 48 tables
+unchanged. The user declined retaining a backup; the just-created copy was removed.
+
+The old FAILED SALE/PAYMENT pair was deleted atomically after exact identity,
+payload checksum and zero-effects checks. Two DELETE audit entries record request
+`demo-cleanup-tck36-20261018`. Postcheck: inbox36=0, fiscal documents with this NCF=0.
+No counters, fiscal configuration, stock, payments or documents were changed.
+The earlier recovery HOLD descriptors are obsolete and must never be executed.
+The sender fix still requires an updated APK; cleanup alone does not install it.
