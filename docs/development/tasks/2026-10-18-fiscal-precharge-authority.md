@@ -22,3 +22,15 @@ No fiscal provider request, reissue, existing-ticket repair, live DB mutation, A
 - `git diff --check` completed.
 
 An authority change after an earlier legitimate payment/reservation is not a global rollback. Previously authorized tenders remain available for reconciliation. The new guard prevents further invalid effects, while the native CAS protects actual frozen consumption; existing independent batching/config writes retain their real boundaries.
+
+## Test-only baseline addendum
+
+Separate analyst plan `/tmp/clic-pos-promised-flow-audit/plan.md` SHA256 `c220bc9a54257ef12c2d7e1c49ae449b141787fe6840ddaef161f2c7a156da74`, ratified independently by `/root/tck39_release` in `/tmp/clic-pos-promised-flow-review/plan-ratification.md` SHA256 `65eb92d5dd5629901c18fb80c83c30d0c4d6fc58345e7bbd4beaf4e8b03dbea9`. Sole test author remains `/root/precharge_developer`. These five obsolete expectations also failed on the unchanged base, independently reproduced by QA; no functional source changed in this addendum.
+
+The actual App MSELLER callback now has a behavioral regression test for candidate OFF: two concurrent calls produce one scoped authenticated HTTP GET, no POST/ISSUE/native claim and byte-identical original documents/Outbox. A subsequent429 propagates failure without fallback or writes. The test explicitly supplies a current authenticated session while retaining expired historical pairing evidence. The obsolete App direct ISSUE-readiness assertion is removed; dispatcher's strict assertReady proof, claim/CAS/fence and negative mutation-sensitive tests remain.
+
+Inventory OFF batch tests record V2 authority probe, V1 state probe, then one aggregate parameterized legacy SUM. The three-query budget is proven for batches of1/2/100 through the batch API;101 fails before SQL. Dedicated single-item and Session paths retain exactly one query and six-decimal results. Selected and drift cases, including batches, must reject without a legacy SUM. SQL trace from actual calls is archived at `/tmp/clic-pos-baseline-repair-sql-trace.safe.json` (synthetic scope only).
+
+Developer checks: Node24 host focal173/173 (`/tmp/clic-pos-baseline-repair-final-focal24.log`, SHA256 `e56b1ec2a0bec1e766ed4bc82d0f5f6bfa8da77ae075bbe70600103227777a52`); related112/112 (`/tmp/clic-pos-baseline-repair-related24.log`, SHA256 `37b1ae61b74dff551233895db6bae8838e9e97f7849aa6c9612095786ad3b62b`). Lint0errors/39warnings (`/tmp/clic-pos-baseline-repair-lint.log` SHA256 `83f440dd009b315b12b1fec8c83e5cfa22fec2bcdc7fb8916a58ef7416297f6c`); Node22 `tsc -b` exit0, empty log.
+
+Attempted Node22 native tests correctly failed because installed better-sqlite3 uses Node24 ABI137 rather than Node22 ABI127. No dependency rebuild was performed while other agents could be using it. Final independent QA owns clean installation and complete Node22 rerun; the failed ABI attempt is not reported as passing. No APK build/install, version change, provider, ERP or live data action occurred in this test-only addendum. Downstream gates remain pending.
