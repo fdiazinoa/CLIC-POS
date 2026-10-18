@@ -39,6 +39,7 @@ test('native develop migration preserves pending documents and V3 ownership with
   },query:async (sql:string,values:unknown[] = []) => ({values:db.prepare(sql).all(...values)}),
     run:async (sql:string,values:unknown[] = []) => ({changes:db.prepare(sql).run(...values)}),
     executeSet:async (statements:{statement:string;values:unknown[]}[]) => {db.transaction(() => {for(const s of statements) db.prepare(s.statement).run(...s.values);})();}};
+  Object.assign(bridge,{beginTransaction:async()=>{db.exec('BEGIN IMMEDIATE');},commitTransaction:async()=>{db.exec('COMMIT');},rollbackTransaction:async()=>{db.exec('ROLLBACK');},isTransactionActive:async()=>({result:db.inTransaction})});
   const adapter=new CapacitorSQLiteAdapter();Object.assign(adapter,{db:bridge});
   await (adapter as unknown as {initSchema():Promise<void>}).initSchema();
   await (adapter as unknown as {initSchema():Promise<void>}).initSchema();

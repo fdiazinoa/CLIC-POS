@@ -38,7 +38,8 @@ function setup(db=new SQLite(':memory:'), seed=true) {
   executeSet:async(statements:{statement:string;values:any[]}[])=>{
    control.count=statements.length;
    db.transaction(()=>{statements.forEach((s,i)=>{if(control.before===i)throw Error('injected:'+i);db.prepare(s.statement).run(...(s.values||[]));});if(control.before===statements.length)throw Error('injected:beforeCommit');})();
-   if(control.afterCommit)throw Error('injected:afterCommit');
+   // Uncertain COMMIT is injected at the owning transaction, after it commits.
+   if(control.afterCommit && !db.inTransaction)throw Error('injected:afterCommit');
   }};
  Object.assign(bridge,{run:async(sql:string,values:any[]=[])=>db.prepare(sql).run(...values),beginTransaction:async()=>{db.exec('BEGIN IMMEDIATE');},commitTransaction:async()=>{db.exec('COMMIT');},rollbackTransaction:async()=>{db.exec('ROLLBACK');},isTransactionActive:async()=>({result:db.inTransaction})});
  const adapter=new CapacitorSQLiteAdapter();Object.assign(adapter,{db:bridge});
@@ -47,7 +48,12 @@ function setup(db=new SQLite(':memory:'), seed=true) {
   executeSchema:async(sql:string)=>bridge.execute(sql),query:async<T>(sql:string,values:any[])=> (await bridge.query(sql,values)).values as T[],
   executeAtomic:async(statements:any[])=>bridge.executeSet(statements)};
  const exclusive=<T>(work:(sql:typeof direct)=>Promise<T>):Promise<T>=>{const pending=queue.then(()=>work(direct));queue=pending.then(()=>undefined,()=>undefined);return pending;};
- const sql={...direct,executeAtomic:(statements:any[])=>exclusive(port=>port.executeAtomic(statements)),runExclusive:exclusive};
+ const runFinancial=<T>(work:(sql:typeof direct)=>Promise<T>)=>exclusive(async port=>{
+  db.exec('BEGIN IMMEDIATE');let result:T;
+  try{result=await work(port);db.exec('COMMIT');}catch(error){if(db.inTransaction)db.exec('ROLLBACK');throw error;}
+  if(control.afterCommit)throw Error('injected:afterCommit');return result;
+ });
+ const sql={...direct,executeAtomic:(statements:any[])=>exclusive(port=>port.executeAtomic(statements)),runExclusive:exclusive,runFinancial};
  return {db,adapter,bridge,control,sql,nativeSQL:adapter.articleFormatSQL()};
 }
 const read=(db:SQLite.Database,name:string)=> (db.prepare('SELECT data FROM documents WHERE collection_name=? ORDER BY sort_order,doc_id').all(name) as {data:string}[]).map(r=>JSON.parse(r.data));
