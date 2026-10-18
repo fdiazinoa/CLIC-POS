@@ -1,3 +1,4 @@
+import {FiscalBuyerDraftAction} from './FiscalBuyerDraftAction';
 
 import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import {
@@ -2105,6 +2106,7 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                            )}
                         </section>
 
+                        <FiscalBuyerDraftAction transaction={tx} users={users}/>
                         <section>
                            <h4 className="text-[10px] font-black uppercase text-gray-400 tracking-widest mb-3">Artículos del Ticket</h4>
                            <div className="space-y-2">

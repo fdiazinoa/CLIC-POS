@@ -1,4 +1,4 @@
-import {isVerifiedFiscalPrintDisplay,type FiscalPrintDisplay} from '../fiscal/FiscalPrintEvidence';
+import {isVerifiedFiscalPrintDisplay,fiscalPrintTransaction,type FiscalPrintDisplay} from '../fiscal/FiscalPrintEvidence';
 import { articleFormatTicketLabel } from '../articleFormats/ticket';
 import { formatQuantity, terminalQuantityPresentation } from '../../utils/quantityPresentation';
 import { weightLineLabel, displayWeightQuantity } from '../../utils/scaleWeight';
@@ -511,6 +511,7 @@ export const buildEscPosTicketPayload = (
     pushTextLines(chunks, splitLines(`Tipo servicio: ${serviceLabel}`, width));
   }
 
+  transaction=fiscalPrintTransaction(transaction,fiscalPrint);
   const snapshot = transaction.customerSnapshot;
   const customerName = (snapshot?.name || transaction.customerName || 'Cliente Mostrador').trim() || 'Cliente Mostrador';
   chunks.push(divider(width));
@@ -664,7 +665,7 @@ export const buildEscPosTicketPayload = (
     pushTextLines(chunks,splitLines(fiscalPrint.certifiedNcf,width));pushQrCode(chunks,fiscalPrint.qrUrl);
     pushTextLines(chunks,splitLines(`Codigo de seguridad: ${fiscalPrint.securityCode}`,width));
     pushTextLines(chunks,splitLines(`Fecha firma: ${fiscalPrint.signedAt}`,width));
-    pushTextLines(chunks,splitLines(fiscalPrint.dgiiAccepted?'DGII: Aceptado':'DGII: Pendiente de confirmacion',width));
+    pushTextLines(chunks,splitLines(fiscalPrint.dgiiConditional?'DGII: Aceptado condicionalmente':fiscalPrint.dgiiAccepted?'DGII: Aceptado':'DGII: Pendiente de confirmacion',width));
     chunks.push(align(0));chunks.push(divider(width));
   } else if(transaction.ncfType?.startsWith('E')) pushTextLines(chunks,splitLines('Representacion fiscal firmada aun no disponible.',width));
   const footerLines = (config.receiptConfig?.footerMessage || 'Gracias por su compra.\nVuelva pronto.')

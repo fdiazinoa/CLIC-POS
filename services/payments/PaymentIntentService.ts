@@ -41,19 +41,20 @@ export class PaymentIntentService {
         amount: number;
         currencyCode: string;
         retainedOperation?: boolean;
+        futureCheckout?: {checkoutId:string;transactionId:string};
     }): Promise<PaymentIntentHandle | null> {
-        if (!this.isEnabled()) return null;
+        if (!this.isEnabled()){if(input.futureCheckout)throw new Error('PAYMENT_INTENT_NATIVE_REQUIRED');return null;}
         const intentId = createId();
         const idempotencyKey = `pos-payment:${clean(input.paymentId)}`;
         const now = new Date().toISOString();
         await this.database.executeSQL!(
             `INSERT INTO payment_intents_v2 (
                 intent_id, idempotency_key, payment_id, provider, integration_id,
-                amount, currency_code, status, created_at, updated_at
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, 'CREATED', ?, ?)
+                amount, currency_code, status, created_at, updated_at, transaction_id
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, 'CREATED', ?, ?, ?)
              ON CONFLICT(idempotency_key) DO NOTHING`,
             [intentId, idempotencyKey, clean(input.paymentId), clean(input.provider), clean(input.integrationId) || null,
-                Number(input.amount || 0), clean(input.currencyCode) || 'DOP', now, now]
+                Number(input.amount || 0), clean(input.currencyCode) || 'DOP', now, now,input.futureCheckout?.transactionId||null]
         );
         const result = await this.database.executeSQL!(
             'SELECT * FROM payment_intents_v2 WHERE idempotency_key = ? LIMIT 1',
@@ -65,14 +66,22 @@ export class PaymentIntentService {
             acc[column] = values[index];
             return acc;
         }, {});
-        if (input.retainedOperation && (row.provider !== clean(input.provider) || String(row.integration_id || '') !== clean(input.integrationId)
+        if ((input.retainedOperation||input.futureCheckout) && (row.provider !== clean(input.provider) || String(row.integration_id || '') !== clean(input.integrationId)
           || Number(row.amount) !== input.amount || row.currency_code !== clean(input.currencyCode)
-          || !['CREATED','AUTHORIZED'].includes(row.status))) throw new Error('PAYMENT_INTENT_RECONCILIATION_REQUIRED');
-        return { ...(input.retainedOperation ? {status:row.status,providerReference:row.provider_reference,
+          || !['CREATED','AUTHORIZED'].includes(row.status) || input.futureCheckout&&row.transaction_id!==input.futureCheckout.transactionId)) throw new Error('PAYMENT_INTENT_RECONCILIATION_REQUIRED');
+        return { ...((input.retainedOperation||input.futureCheckout) ? {status:row.status,providerReference:row.provider_reference,
             authorizationCode:row.authorization_code,responseCode:row.response_code} : {}), intentId: String(row.intent_id || intentId), idempotencyKey: String(row.idempotency_key || idempotencyKey) };
     }
 
-    async markAuthorizing(intentId: string, retainedOperation = false): Promise<void> {
+    async markAuthorizing(intentId: string, retainedOperation = false,futureCheckout?:{checkoutId:string;transactionId:string}): Promise<void> {
+        if(futureCheckout){
+            if(retainedOperation||!this.isEnabled())throw new Error('PAYMENT_INTENT_RECONCILIATION_REQUIRED');
+            const result=await this.database.executeSQL!(`UPDATE payment_intents_v2 SET status='AUTHORIZING',updated_at=? WHERE intent_id=? AND status='CREATED' AND transaction_id=?
+             AND EXISTS(SELECT 1 FROM pos_fiscal_checkouts_v2 c JOIN pos_fiscal_checkout_current_v2 p ON p.checkout_id=c.checkout_id
+              WHERE c.checkout_id=? AND c.transaction_id=payment_intents_v2.transaction_id AND c.phase='EFFECT_POSSIBLE'
+              AND EXISTS(SELECT 1 FROM json_each(c.checkout_json,'$.paymentIds') refs WHERE refs.value=payment_intents_v2.payment_id))`,[new Date().toISOString(),intentId,futureCheckout.transactionId,futureCheckout.checkoutId]);
+            if(Number(result?.changes?.changes)!==1)throw new Error('PAYMENT_INTENT_RECONCILIATION_REQUIRED');return;
+        }
         if (retainedOperation) {
             if (!this.isEnabled()) throw new Error('PAYMENT_INTENT_NATIVE_REQUIRED');
             const result = await this.database.executeSQL!(`UPDATE payment_intents_v2 SET status='AUTHORIZING',updated_at=? WHERE intent_id=? AND status='CREATED'

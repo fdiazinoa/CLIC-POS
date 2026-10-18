@@ -1,3 +1,5 @@
+import { fiscalWorkflowV2Client } from '../services/fiscal/FiscalWorkflowV2Client';
+import type {FiscalWorkflowCheckoutV2} from '../services/fiscal/FiscalWorkflowV2Types';
 import { explicitTerminalFiscalEnvironment } from '../utils/terminalConfigSnapshot';
 import {collectClosedTransactionIds,selectPendingSessionTransactions} from '../services/sync/ClosedTransactionMembership';
 import {reservationInvoiceId,reservationAdvancePayment,validateV3ReservationPricing,assertV3ReservationLines} from '../services/sync/LargeMasterSyncV3ReservationAuthority';
@@ -5530,6 +5532,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       try {
          const completed = await completedReservationForReceipt();
          if (completed) { clearCompletedReservationCart(); return completed; }
+         if(fiscalCheckoutRef.current?.phase==='COMMITTED'){
+            const prior=await db.getDocument('transactions',fiscalCheckoutRef.current.transactionId)||await db.getDocument('transactionHistory',fiscalCheckoutRef.current.transactionId);
+            if(!prior)throw Error('FISCAL_WORKFLOW_COMMITTED_RECEIPT_REQUIRED');
+            await fiscalWorkflowV2Client.acknowledge(fiscalCheckoutRef.current);fiscalCheckoutRef.current=null;
+            onUpdateCart([]);onSelectCustomer(null);return prior as Transaction;
+         }
+
          assertFormatsPostingClosed(processedCart);
          await assertCheckoutFiscalAuthority();
          if (v3Operational) await v3Operational.validate(processedCart, { ticketId: activeTable?.currentOrderId || activeDirectV3TicketId, claimId: activeDirectV3TicketId, reservationId:activeV3Reservation?.reservation.id,reservationClaimId:activeV3Reservation?.claimId, tableId: activeTable?.id === undefined ? undefined : String(activeTable.id) });
@@ -6062,6 +6071,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   : undefined;
                const txn = await withTimeout(transactionService.createTransaction({
                   ...(newDirectFiscalEnvironment !== undefined ? { fiscalEnvironment: newDirectFiscalEnvironment } : {}),
+                  ...(fiscalCheckoutRef.current?{id:fiscalCheckoutRef.current.transactionId,fiscalWorkflowCheckoutId:fiscalCheckoutRef.current.checkoutId}:{}),
                   ...(activeV3Reservation ? {id:reservationInvoiceId(activeV3Reservation.reservation.id),v3ReservationClaimId:activeV3Reservation.claimId} : {}),
                   documentType: hasReturns ? 'REFUND' : 'TICKET',
                   seriesId: hasReturns
@@ -6287,6 +6297,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   // For now, mostly relevant for Tables.
                }
 
+               if(fiscalCheckoutRef.current){
+                  await fiscalWorkflowV2Client.acknowledge(fiscalCheckoutRef.current);fiscalCheckoutRef.current=null;
+                  void fiscalWorkflowV2Client.prefetch().catch(()=>undefined);
+               }
                recordCheckoutDiagnostic('CART_CLEAR_REQUEST', { items: cart, tableId: activeTable?.id, orderId: activeTable?.currentOrderId, reason: 'POS_CLEAR_07' });
                onUpdateCart([]);
                resetCompletedSaleDiscount(setGlobalDiscount);
@@ -6499,17 +6513,35 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
    };
 
-   const beforeV3PaymentEffects = async (): Promise<PaymentEffectsFence> => {
+   const fiscalCheckoutRef=useRef<FiscalWorkflowCheckoutV2|null>(null);
+   useEffect(()=>{if(v3Operational&&fiscalCompliance.mode==='ECF')void fiscalWorkflowV2Client.prefetch().catch(()=>undefined);},[v3Operational,terminalId,fiscalCompliance.mode]);
+   const beforeV3PaymentEffects = async (paymentIds:string[]=[]): Promise<PaymentEffectsFence> => {
       const completed = await completedReservationForReceipt();
       if (completed) return Object.assign(() => {},{completedTransaction:completed});
       await assertCheckoutFiscalAuthority();
       if (hasV3ReservationCart && !activeV3Reservation) throw new Error('La referencia de la reserva aún no está validada.');
       if (activeV3Reservation && selectedCustomer?.id !== activeV3Reservation.reservation.customerId) throw new Error('El cliente de la reserva no puede cambiarse.');
       if (!v3Operational) return () => {};
+      const newFiscalCheckout=fiscalCompliance.mode==='ECF'&&getDefaultFiscalProvider(config,activeTerminalConfig)==='MSELLER'
+        &&!hasV3ReservationCart&&!activeV3Reservation&&!activeRecoveredReservation&&!activeDirectV3TicketId&&!activeTable&&!activeTable?.currentOrderId
+        &&processedCart.every(line=>line.quantity>0);
+      if(!newFiscalCheckout)fiscalCheckoutRef.current=null;
+      if(newFiscalCheckout){
+        const checkout=await fiscalWorkflowV2Client.reserveCheckout(JSON.stringify({items:processedCart,customerId:effectiveSelectedCustomer?.id||null,fiscalType:requiredSaleFiscalType}));
+        if(checkout.phase==='EFFECT_POSSIBLE'&&checkout.paymentIds.some(id=>!paymentIds.includes(id)))throw Error('PAYMENT_INTENT_RECONCILIATION_REQUIRED');
+        fiscalCheckoutRef.current=checkout;
+        if(!checkout.permit)setErrorToast('La venta comercial continúa sin autorización para emisión fiscal; no se emitirá automáticamente después.');
+        if(checkout.phase==='COMMITTED'){
+          const completed=await db.getDocument('transactions',checkout.transactionId)||await db.getDocument('transactionHistory',checkout.transactionId);
+          if(!completed)throw Error('FISCAL_WORKFLOW_COMMITTED_RECEIPT_REQUIRED');
+          return Object.assign(()=>{},{completedTransaction:completed as Transaction});
+        }
+      }
+
       setLargeMasterSyncV3CriticalOperation('PAYMENT', true);
       try { await v3Operational.validate(cart, { ticketId: activeTable?.currentOrderId || activeDirectV3TicketId, claimId: activeDirectV3TicketId, reservationId:activeV3Reservation?.reservation.id,reservationClaimId:activeV3Reservation?.claimId, tableId: activeTable?.id === undefined ? undefined : String(activeTable.id) }); }
       catch (error) { setLargeMasterSyncV3CriticalOperation('PAYMENT', false); throw error; }
-      return () => setLargeMasterSyncV3CriticalOperation('PAYMENT', false);
+      return Object.assign(()=>setLargeMasterSyncV3CriticalOperation('PAYMENT',false),{...(fiscalCheckoutRef.current?{futureCheckout:{checkoutId:fiscalCheckoutRef.current.checkoutId,transactionId:fiscalCheckoutRef.current.transactionId}}:{}),recordPaymentEffect:async(paymentId:string)=>{if(fiscalCheckoutRef.current)await fiscalWorkflowV2Client.recordPayment(fiscalCheckoutRef.current,paymentId);}});
    };
 
    const startCheckoutInteraction = (inputTimeStamp?: number) => {

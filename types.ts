@@ -1824,6 +1824,8 @@ export interface CartItem extends Product {
 }
 
 export interface Transaction {
+    /** Durable future checkout identity; never added to historical/retained sources. */
+    fiscalWorkflowCheckoutId?: string;
   v3ReservationClaimId?: string;
   v3RestoredTicketId?: string;
   v3CommitFingerprint?: string;

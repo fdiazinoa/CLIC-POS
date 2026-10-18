@@ -1,4 +1,4 @@
-import {resolveFiscalPrintDisplay,resolveFiscalAcceptance} from '../services/fiscal/FiscalPrintEvidence';
+import {resolveFiscalPrintReadiness,resolveFiscalAcceptance} from '../services/fiscal/FiscalPrintEvidence';
 import { recordCheckoutDiagnostic } from '../services/CheckoutDiagnostics';
 import { allowsDefaultPaymentMethods } from '../utils/erpPaymentMethods';
 
@@ -61,7 +61,7 @@ import { sendReceiptEmailViaErp } from '../services/email/receiptEmailService';
 import { buildReceiptEmailPayload } from '../services/email/receiptEmailPayload';
 import { setLargeMasterSyncV3CriticalOperation } from '../services/sync/LargeMasterSyncV3OperationGate';
 
-export type PaymentEffectsFence = (() => void) & {completedTransaction?: Transaction};
+export type PaymentEffectsFence = (() => void) & {completedTransaction?: Transaction;recordPaymentEffect?:(paymentId:string)=>Promise<void>;futureCheckout?:{checkoutId:string;transactionId:string}};
 
 interface PaymentModalProps {
    openingTrace?: PosInteractionTrace | null;
@@ -74,7 +74,7 @@ interface PaymentModalProps {
    onConfirm: (payments: PaymentEntry[], voluntaryTip?: number) => Promise<Transaction | null>;
    paymentOperationId?: string;
    paymentOperationDate?: string;
-   beforePaymentEffects?: () => Promise<PaymentEffectsFence>;
+   beforePaymentEffects?: (paymentIds:string[]) => Promise<PaymentEffectsFence>;
    validatePaymentAuthority?: () => Promise<void>;
    themeColor: string;
    customer?: Customer | null;
@@ -200,7 +200,7 @@ const sendReceiptEmailRequest = async (
    currencySymbol: string,
    users: User[],
 ): Promise<{ success: boolean; message?: string }> => {
-   return sendReceiptEmailViaErp(buildReceiptEmailPayload(transaction, email, config, currencySymbol, users,await resolveFiscalPrintDisplay(transaction),await resolveFiscalAcceptance(transaction)));
+   return sendReceiptEmailViaErp(buildReceiptEmailPayload(transaction, email, config, currencySymbol, users,await resolveFiscalPrintReadiness(transaction),await resolveFiscalAcceptance(transaction)));
 };
 
 const roundPaymentAmountByMethod = (
@@ -605,6 +605,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, total,
       };
    };
 
+   const workflowPaymentFenceRef=useRef<PaymentEffectsFence|null>(null);
    const authorizeIntegratedCardPayment = async (payment: PaymentEntry): Promise<PaymentEntry> => {
       const method = resolvePaymentMethodForEntry(payment);
       const integration = resolveGatewayIntegrationForPayment(payment, method);
@@ -623,6 +624,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, total,
       // Recheck authority immediately before each provider intent, including split payments.
       if (validatePaymentAuthority) await validatePaymentAuthority();
       const orderNumber = createAzulOrderNumber();
+      await workflowPaymentFenceRef.current?.recordPaymentEffect?.(payment.id);
       const intent = await paymentIntentService.create({
          paymentId: payment.id,
          provider: integration.provider,
@@ -630,11 +632,13 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, total,
          amount: amountInBase,
          currencyCode: payment.currencyCode || baseCurrency.code,
          retainedOperation: Boolean(paymentOperationId),
+         futureCheckout:workflowPaymentFenceRef.current?.futureCheckout,
       });
       // An intent alone does not retain the full provider receipt/order payload. The original approved
       // PaymentEntry can retry in this modal; a reconstructed entry after restart requires reconciliation.
-      if (paymentOperationId && intent?.status === 'AUTHORIZED') throw new Error('PAYMENT_INTENT_RECONCILIATION_REQUIRED');
-      if (intent) await paymentIntentService.markAuthorizing(intent.intentId,Boolean(paymentOperationId));
+      if ((paymentOperationId||workflowPaymentFenceRef.current?.futureCheckout) && intent?.status === 'AUTHORIZED') throw new Error('PAYMENT_INTENT_RECONCILIATION_REQUIRED');
+      if(workflowPaymentFenceRef.current?.futureCheckout&&!intent)throw Error('PAYMENT_INTENT_NATIVE_REQUIRED');
+      if (intent) await paymentIntentService.markAuthorizing(intent.intentId,Boolean(paymentOperationId),workflowPaymentFenceRef.current?.futureCheckout);
 
       setIsProcessingGateway(true);
       setFinalizeError(null);
@@ -909,7 +913,8 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, total,
       markInteractionStateUpdate(trace, 3);
       let releasePaymentFence: PaymentEffectsFence | undefined;
       try {
-         if (beforePaymentEffects) releasePaymentFence = await beforePaymentEffects();
+         if (beforePaymentEffects) releasePaymentFence = await beforePaymentEffects(payments.map(payment=>payment.id));
+         workflowPaymentFenceRef.current=releasePaymentFence||null;
          const completed = releasePaymentFence?.completedTransaction;
          let paymentsToConfirm = completed?.payments || payments;
          if (!completed && !canFinalize) { alert('Monto insuficiente'); return; }

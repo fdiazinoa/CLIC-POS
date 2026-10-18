@@ -113,6 +113,7 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
     const documents: DurableDocumentMutation[] = [];
     const events: DurableOutboxEventInput[] = [];
     const intentIds: string[] = [];
+    const fiscalWorkflowCommits: NonNullable<import('../db/DatabaseAdapter').FinancialCommitInput['fiscalWorkflowCommits']> = [];
     const results: FinancialResult[] = [];
     const stagedCustomers = new Map<string, Customer>();
     const stagedWallets = new Map<string, Wallet>();
@@ -221,6 +222,15 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
     }
     if (isSyncFeatureEnabled('sqlite_outbox_v2') && !options.refund) {
       const fiscalSourceMetadata = captureNewV3FiscalSourceMetadata(document,projected,session.binding,{refund:options.refund,retained:Boolean(retained)});
+      let fiscalWorkflowBirth: import('../fiscal/FiscalWorkflowV2Types').FiscalWorkflowBirthV2 | undefined;
+      if(document.fiscalWorkflowCheckoutId){
+        if(options.refund||retained||!dbAdapter.fiscalWorkflowStore)throw Error('FISCAL_WORKFLOW_NEW_SOURCE_REQUIRED');
+        const checkout=await dbAdapter.fiscalWorkflowStore.readCheckout(document.fiscalWorkflowCheckoutId);
+        if(!checkout||checkout.transactionId!==document.id)throw Error('FISCAL_WORKFLOW_CHECKOUT_REQUIRED');
+        if(checkout.permit)fiscalWorkflowBirth={schemaVersion:2,permitId:checkout.permit.permitId,transactionId:checkout.transactionId,nonce:checkout.permit.nonce,checkoutId:checkout.checkoutId};
+        fiscalWorkflowCommits.push({checkoutId:checkout.checkoutId,transactionId:document.id,birth:fiscalWorkflowBirth||null});
+      }
+
       const paymentIntentIds = (document.payments || []).map((payment: any) => payment.paymentIntentId).filter(Boolean);
       const claim = retained?.reservation ? JSON.parse(retained.expected) : undefined;
       // ADVANCE records a prior application in SALE_POSTED; PAYMENT_POSTED represents only newly received settlement.
@@ -229,7 +239,7 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
         settlementAppliedBase:newPayments.reduce((sum,payment)=>sum+Number(payment.amountApplied ?? payment.appliedAmount ?? payment.amount),0)} : document, { ...fiscalSourceMetadata, paymentIntentIds });
       events.push({ eventId: claim?.saleEventId || createUuid(), eventType: 'SALE_POSTED', aggregateType: 'TRANSACTION',
           aggregateId: document.id, schemaVersion: 1,
-          payload: buildSalePostedPayload(document, { ...fiscalSourceMetadata, inventoryMovementIds: ledger.map(row => row.id), paymentIntentIds }), createdAt: document.date });
+          payload: buildSalePostedPayload(document, { ...fiscalSourceMetadata,...(fiscalWorkflowBirth?{fiscalWorkflowBirth}:{}), inventoryMovementIds: ledger.map(row => row.id), paymentIntentIds }), createdAt: document.date });
       if (paymentPosted) events.push({ eventId: claim?.paymentEventId || createUuid(), eventType: 'PAYMENT_POSTED',
           aggregateType: 'TRANSACTION', aggregateId: document.id, schemaVersion: 1, payload: paymentPosted, createdAt: document.date });
       intentIds.push(...paymentIntentIds);
@@ -246,7 +256,7 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
     }
     if (events.length) {
       await durableOutboxRepository.commitFinancialTransaction({ documents, outboxEvent: events[0],
-        additionalOutboxEvents: events.slice(1), paymentIntentIds: intentIds });
+        additionalOutboxEvents: events.slice(1), paymentIntentIds: intentIds,fiscalWorkflowCommits });
     } else {
       if (!dbAdapter.saveDocumentsAtomically) throw new LargeMasterSyncV3Error('SYNC_V3_ATOMIC_COMMIT_REQUIRED');
       await dbAdapter.saveDocumentsAtomically(documents);

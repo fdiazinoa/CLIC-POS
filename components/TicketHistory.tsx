@@ -1,4 +1,5 @@
-import {resolveFiscalPrintDisplay,resolveFiscalAcceptance} from '../services/fiscal/FiscalPrintEvidence';
+import {FiscalBuyerDraftAction} from './FiscalBuyerDraftAction';
+import {resolveFiscalPrintReadiness,resolveFiscalAcceptance} from '../services/fiscal/FiscalPrintEvidence';
 import {readRefundOriginal} from '../services/localRefundPersistence';
 import { canProjectFiscalClassification } from '../utils/fiscalClassificationProjection';
 import { formatQuantity, terminalQuantityPresentation } from '../utils/quantityPresentation';
@@ -745,7 +746,7 @@ const TicketDetailDrawer: React.FC<{
    const canRequestAzulRefund = !isRefundDoc && tx.status !== 'REFUNDED' && canOfferAzulRefundAction(tx, config);
    const displayNcf = getFiscalDisplayNcf(tx);
    const displayFiscalCode = getFiscalDisplayCode(tx);
-   const canCorrectFiscal = isElectronicFiscalTransaction(tx)
+   const canCorrectFiscal = tx.fiscalProvider!=='MSELLER' && isElectronicFiscalTransaction(tx)
       && Boolean(onCorrectFiscalDocument)
       && (tx.fiscalSyncStatus === 'ERROR' || tx.fiscalSyncStatus === 'PENDING');
    const sortedCustomers = [...customers].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
@@ -1068,6 +1069,7 @@ const TicketDetailDrawer: React.FC<{
                               {tx.fiscalResponseMessage}
                            </p>
                         )}
+                        <FiscalBuyerDraftAction transaction={tx} users={users}/>
                         {(canConsultFiscal || canRetryFiscal || canCorrectFiscal) && (
                            <div className="mt-3 flex flex-wrap items-center gap-3">
                               {canConsultFiscal && (
@@ -2136,7 +2138,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
 
       transaction=await db.getDocument('transactions',transaction.id) as Transaction || await db.getDocument('transactionHistory',transaction.id) as Transaction || transaction;
       const result = await sendReceiptEmailViaErp(
-         buildReceiptEmailPayload(transaction, email, config, config.currencySymbol || 'RD$', users,await resolveFiscalPrintDisplay(transaction),await resolveFiscalAcceptance(transaction)),
+         buildReceiptEmailPayload(transaction, email, config, config.currencySymbol || 'RD$', users,await resolveFiscalPrintReadiness(transaction),await resolveFiscalAcceptance(transaction)),
       );
       try {
          await recordInvoiceAuditEvent({

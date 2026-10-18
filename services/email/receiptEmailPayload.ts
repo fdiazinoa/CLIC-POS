@@ -1,4 +1,4 @@
-import {isVerifiedFiscalPrintDisplay,type FiscalPrintDisplay,isVerifiedFiscalAcceptance,type VerifiedFiscalAcceptance} from '../fiscal/FiscalPrintEvidence';
+import {isVerifiedFiscalPrintDisplay,fiscalPrintTransaction,type FiscalPrintDisplay,isVerifiedFiscalAcceptance,type VerifiedFiscalAcceptance} from '../fiscal/FiscalPrintEvidence';
 import { terminalQuantityPresentation } from '../../utils/quantityPresentation';
 import { weightLineLabel } from '../../utils/scaleWeight';
 import type { BusinessConfig, CartItem, Transaction, User } from '../../types';
@@ -146,6 +146,7 @@ export const buildReceiptEmailPayload = (
     };
   });
 
+  transaction=fiscalPrintTransaction(transaction,fiscalPrint);
   return {
     email,
     cart,
