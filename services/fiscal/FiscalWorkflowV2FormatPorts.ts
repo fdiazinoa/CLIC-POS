@@ -28,6 +28,21 @@ export async function prepareFormatFiscalBuffer(sql:FormatSQL,context:NetworkCon
  if(buffer){need(Number.isSafeInteger(buffer.currentNumber)&&Number.isSafeInteger(buffer.endNumber),'FISCAL_WORKFLOW_FORMAT_AUTHORITY_REQUIRED');if(buffer.currentNumber<=buffer.endNumber)return;}
  const allocated=await (reserve?reserve():(await import('../../utils/db')).db.requestFiscalBatch(context.scope.terminalId,type,1));need(allocated,'FISCAL_WORKFLOW_NCF_ALLOCATION_REQUIRED');
 }
+/** Retain the approved payment receipt and consume its native intent inside the format financial transaction. */
+export async function preserveFormatPaymentReceipts(tx:FormatSQL,event:WireEventV2,transaction:Record<string,unknown>,input:Transaction['payments']){
+ const retained=transaction.payments as Transaction['payments'];need(Array.isArray(retained)&&retained.length===input.length,'PAYMENT_INTENT_RECONCILIATION_REQUIRED');
+ for(const wire of event.payments){
+  const matches=input.filter(p=>p.id===wire.payment_id),saved=retained.filter(p=>p.id===wire.payment_id);need(matches.length===1&&saved.length===1,'PAYMENT_INTENT_RECONCILIATION_REQUIRED');const payment=matches[0],applied=Number(payment.amountApplied??payment.appliedAmount??payment.amount);
+  need(Number.isFinite(applied)&&applied===Number(wire.amount)&&String(payment.method).toLowerCase()===wire.method&&(!payment.currencyCode||payment.currencyCode==='DOP'),'PAYMENT_INTENT_RECONCILIATION_REQUIRED');
+  if(payment.gatewayProvider||payment.paymentIntentId){
+   need(payment.paymentIntentId&&payment.gatewayIntegrationId&&payment.gatewayStatus==='APPROVED'&&payment.gatewayTransactionType==='SALE','PAYMENT_INTENT_RECONCILIATION_REQUIRED');
+   const intents=await tx.query<Record<string,any>>('SELECT * FROM payment_intents_v2 WHERE intent_id=?',[payment.paymentIntentId!]);const intent=intents[0];
+   need(intents.length===1&&intent.transaction_id===event.transaction_id&&intent.payment_id===payment.id&&intent.status==='AUTHORIZED'&&intent.provider===payment.gatewayProvider&&intent.integration_id===payment.gatewayIntegrationId&&intent.currency_code==='DOP'&&Number(intent.amount)===applied&&String(intent.provider_reference||'')===String(payment.gatewayReference||'')&&String(intent.authorization_code||'')===String(payment.gatewayAuthorizationCode||''),'PAYMENT_INTENT_RECONCILIATION_REQUIRED');
+   await tx.executeAtomic([{statement:"UPDATE payment_intents_v2 SET status='COMMITTED',committed_at=?,updated_at=?,last_error=NULL WHERE intent_id=? AND transaction_id=? AND status='AUTHORIZED'",values:[event.occurred_at,event.occurred_at,payment.paymentIntentId!,event.transaction_id]}]);const changes=await tx.query<{n:number}>('SELECT changes() n',[]);need(changes[0]?.n===1,'PAYMENT_INTENT_RECONCILIATION_REQUIRED');
+  }
+  const authority={...saved[0]};Object.assign(saved[0],JSON.parse(JSON.stringify(payment)),authority,{amountOriginal:payment.amountOriginal??payment.amount,amountApplied:applied,appliedAmount:applied});
+ }
+}
 export function createFiscalFormatHooks(readAuth=captureFiscalStatusBoundContext):FormatPostingV2Hooks{
  const current=(context:NetworkContextV2,event:WireEventV2)=>{const auth=readAuth();auth.assertCurrent();need(Date.parse(context.session_expires_at)>Date.now(),'FISCAL_WORKFLOW_SESSION_EXPIRED');for(const k of ['tenantId','companyId','storeId','terminalId','deviceId'] as const)need(auth.descriptor[k]===context.scope[k]&&event.fiscal.permit.scope[k]===context.scope[k],'FISCAL_WORKFLOW_SCOPE_MISMATCH');need(event.fiscal.permit.authorityHash===context.authority_hash);return auth;};
  return {

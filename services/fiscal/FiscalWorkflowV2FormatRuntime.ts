@@ -1,7 +1,7 @@
 import {dbAdapter} from '../db';
 import type {Transaction,CartItem,FiscalDocumentCode} from '../../types';
 import {captureFiscalStatusBoundContext} from './FiscalBoundContext';
-import {createFiscalFormatHooks,quoteFormatFiscalIssuance,prepareFormatFiscalBuffer} from './FiscalWorkflowV2FormatPorts';
+import {createFiscalFormatHooks,quoteFormatFiscalIssuance,prepareFormatFiscalBuffer,preserveFormatPaymentReceipts} from './FiscalWorkflowV2FormatPorts';
 import {prepareArticleFormatsAdaptersV2} from '../articleFormats/runtime';
 import {captureInventoryV2,downloadInventoryV2,installInventoryV2} from '../articleFormats/inventoryV2';
 import {prepareFormatSaleFinancialCommit,prepareFormatReturnFinancialCommit,commitFormatOwnedTransaction,returnWireLineV2} from '../articleFormats/financialV2';
@@ -25,8 +25,9 @@ export async function prepareFiscalFormatRuntime(terminalId:string){
   async commitSale(input:{checkout:FiscalWorkflowCheckoutV2;lines:CartItem[];ncfType:FiscalDocumentCode;buyer:Record<string,unknown>;customerId?:string;payments:Transaction['payments'];seriesId:string;userId:string;userName:string}){
    await assertCurrent();const checkout=input.checkout,p=checkout.permit;need(p?.operationKind==='SALE','FISCAL_WORKFLOW_REFERENCED_PERMIT_REQUIRED');await prepareIssuance(input.ncfType);const permit=formatWirePermit(p!),issuance=await quoteFormatFiscalIssuance(sql,runtime.context,input.ncfType);
    const birth={schemaVersion:2 as const,checkoutId:checkout.checkoutId,transactionId:checkout.transactionId,permitId:permit.permitId,nonce:permit.nonce};
-   const prepared=await prepareFormatSaleFinancialCommit({masters:runtime.masters,context:runtime.context,options:{seriesId:input.seriesId,userId:input.userId,userName:input.userName},permit,birth,eventId:createUuid(),occurredAt:new Date().toISOString(),fiscalIssuance:issuance as any,buyer:input.buyer,customerId:input.customerId,lines:input.lines.map(l=>({lineId:l.cartId,itemId:l.id,variantId:l.articleFormat?.variantId||null,tariffId:l.v3SaleAuthority?.tariffId||'',formatId:l.articleFormat?.id||null,quantity:String(l.quantity),discountRate:String(l.discountRate||0)})),payments:input.payments.map(p=>({payment_id:p.id!,method:String(p.method).toLowerCase() as any,amount:Math.abs(p.amount).toFixed(2)}))});
-   const result=await commitFormatOwnedTransaction(sql,runtime.masters,prepared,hooks) as Transaction;void runtime.drain().catch(()=>undefined);return result;
+   const prepared=await prepareFormatSaleFinancialCommit({masters:runtime.masters,context:runtime.context,options:{seriesId:input.seriesId,userId:input.userId,userName:input.userName},permit,birth,eventId:createUuid(),occurredAt:new Date().toISOString(),fiscalIssuance:issuance as any,buyer:input.buyer,customerId:input.customerId,lines:input.lines.map(l=>({lineId:l.cartId,itemId:l.id,variantId:l.articleFormat?.variantId||null,tariffId:l.v3SaleAuthority?.tariffId||'',formatId:l.articleFormat?.id||null,quantity:String(l.quantity),discountRate:String(l.discountRate||0)})),payments:input.payments.map(p=>({payment_id:p.id!,method:String(p.method).toLowerCase() as any,amount:Math.abs(p.amountApplied??p.appliedAmount??p.amount).toFixed(2)}))});
+   const saleHooks={...hooks,async consumeFiscalPermit(tx:any,birth:any,event:WireEventV2,transaction:Record<string,unknown>){await preserveFormatPaymentReceipts(tx,event,transaction,input.payments);await hooks.consumeFiscalPermit(tx,birth,event,transaction);}};
+   const result=await commitFormatOwnedTransaction(sql,runtime.masters,prepared,saleHooks) as Transaction;void runtime.drain().catch(()=>undefined);return result;
   },
   async commitReturn(input:{operationId:string;original:Transaction;items:CartItem[];kind:'RETURN'|'VOID';modificationCode:'1'|'2'|'3';payments:WireEventV2['payments'];seriesId:string;userId:string;userName:string}){
    await assertCurrent();const original=validateWireEventV2((input.original as any).articleFormatWire),state=await fiscalWorkflowV2Client.consult(input.original.id),ack=(input.original as any).articleFormatACK;
