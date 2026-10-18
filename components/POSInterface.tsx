@@ -1,3 +1,5 @@
+import {subscribeFiscalWorkflowCapability,fiscalWorkflowCapabilityRevision} from '../services/fiscal/FiscalWorkflowV2Capability';
+import {createFiscalFormatPreparation,fiscalFormatPreparationProblem} from '../services/fiscal/FiscalFormatPreparation';
 import {prepareFiscalFormatRuntime} from '../services/fiscal/FiscalWorkflowV2FormatRuntime';
 import {createUuid} from '../utils/uuid';
 import { fiscalWorkflowV2Client } from '../services/fiscal/FiscalWorkflowV2Client';
@@ -2400,8 +2402,27 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [editingItem, setEditingItem] = useState<CartItem | null>(null);
    const [formatSelection, setFormatSelection] = useState<{product: Product; variantId: string | null; basePrice: number; modifiers: string[]} | null>(null);
    const articleFormatsEnabled = Boolean(formatRuntime)&&fiscalWorkflowV2Client.enabled() || formatsEnabled(config, { capabilities: activeTerminalConfig?.articleFormatCapabilities });
-   useEffect(()=>{let disposed=false;setFormatRuntime(null);setFormatMasters({});if(!v3Operational||config.featureFlags?.ARTICLE_FORMATS!==true||!fiscalWorkflowV2Client.enabled())return;void prepareFiscalFormatRuntime(activeTerminalId).then(runtime=>{if(!disposed)setFormatRuntime(runtime);}).catch(()=>{});return()=>{disposed=true;};},[v3Operational,activeTerminalId,config.featureFlags?.ARTICLE_FORMATS]);
-   useEffect(()=>{let disposed=false;if(!formatRuntime)return;void Promise.all(baseProducts.slice(0,500).map(async product=>[product.id,await formatRuntime.masters.getPolicy(product.id)] as const)).then(rows=>{if(!disposed)setFormatMasters(Object.fromEntries(rows.filter(([,value])=>value)));});return()=>{disposed=true;};},[formatRuntime,baseProducts]);
+   const formatCapabilityRevision=React.useSyncExternalStore(subscribeFiscalWorkflowCapability,fiscalWorkflowCapabilityRevision,fiscalWorkflowCapabilityRevision);
+   const [formatPreparationRetry,setFormatPreparationRetry]=useState(0);
+   const [formatPreparationError,setFormatPreparationError]=useState<ReturnType<typeof fiscalFormatPreparationProblem>|null>(null);
+   const [formatPreparing,setFormatPreparing]=useState(false);
+   const formatPreparationRef=useRef(createFiscalFormatPreparation<Awaited<ReturnType<typeof prepareFiscalFormatRuntime>>>());
+   useEffect(()=>{
+      let disposed=false;
+      setFormatRuntime(null);setFormatMasters({});setFormatSelection(null);setFormatPreparationError(null);setFormatPreparing(false);
+      if(!v3Operational||!fiscalWorkflowV2Client.enabled())return;
+      setFormatPreparing(true);
+      // The server's V2 negotiation checks company flag, terminal capability and exact grant.
+      // A missing local flag is not a denial from that authoritative contract.
+      const context=JSON.stringify([activeTerminalId,formatCapabilityRevision,formatPreparationRetry]);
+      void formatPreparationRef.current(context,()=>prepareFiscalFormatRuntime(activeTerminalId)).then(async runtime=>{
+         await runtime.assertCurrent();
+         if(!disposed&&fiscalWorkflowV2Client.enabled())setFormatRuntime(runtime);
+      }).catch(error=>{if(!disposed)setFormatPreparationError(fiscalFormatPreparationProblem(error));})
+        .finally(()=>{if(!disposed)setFormatPreparing(false);});
+      return()=>{disposed=true;};
+   },[v3Operational,activeTerminalId,formatCapabilityRevision,formatPreparationRetry]);
+   useEffect(()=>{let disposed=false;if(!formatRuntime)return;void Promise.all(baseProducts.slice(0,500).map(async product=>[product.id,await formatRuntime.masters.getPolicy(product.id)] as const)).then(async rows=>{await formatRuntime.assertCurrent();if(!disposed)setFormatMasters(Object.fromEntries(rows.filter(([,value])=>value)));}).catch(error=>{if(!disposed){setFormatRuntime(null);setFormatMasters({});setFormatSelection(null);setFormatPreparationError(fiscalFormatPreparationProblem(error));}});return()=>{disposed=true;};},[formatRuntime,baseProducts]);
    const [activeCartItemId, setActiveCartItemId] = useState<string | null>(null);
    const handledAccountActionIdsRef = useRef<Set<string>>(new Set());
    useEffect(() => {
@@ -7764,6 +7785,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             />
          )}
 
+         {formatPreparationError && (
+            <div role="alert" className="flex items-center gap-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">
+               <span>{formatPreparationError.message}</span>
+               <details className="text-xs"><summary>Detalle de diagnóstico</summary><code>{formatPreparationError.code}</code></details>
+               <button type="button" disabled={formatPreparing||!v3Operational||!fiscalWorkflowV2Client.enabled()} onClick={()=>setFormatPreparationRetry(value=>value+1)} className="rounded border border-amber-500 px-3 py-1 disabled:opacity-50">Reintentar presentaciones</button>
+            </div>
+         )}
          {errorToast && (
             <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-[100] animate-in slide-in-from-bottom-5 fade-in duration-300">
                <div className="bg-red-600 text-white px-6 py-4 rounded-2xl shadow-2xl flex items-center gap-3 font-bold border-2 border-red-400">
