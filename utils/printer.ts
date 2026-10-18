@@ -1,3 +1,4 @@
+import {inventoryPresentationTicketHTML} from '../services/inventoryPresentations/selection';
 import {fiscalQrSvg} from '../services/fiscal/FiscalQrSvg';
 import {resolveFiscalPrintReadiness,fiscalPrintTransaction} from '../services/fiscal/FiscalPrintEvidence';
 import { articleFormatTicketHTML } from '../services/articleFormats/ticket';
@@ -482,7 +483,7 @@ const printTicketInternal = async (transaction: Transaction, config: BusinessCon
                         <tr>
                             <td style="width: 70%;">
                                 <span class="item-name">${item.name}</span>
-                                ${item.articleFormat ? `<span class="item-meta">${articleFormatTicketHTML(item)}</span>` : ''}
+                                ${item.articleFormat ? `<span class="item-meta">${articleFormatTicketHTML(item)}</span>` : ''}${item.inventoryPresentation ? `<span class="item-meta">${inventoryPresentationTicketHTML(item)}</span>` : ''}
                                 <span class="item-meta">
                                     ${weightLineLabel(item, currencySymbol, lineDiscount.hasDiscount ? lineDiscount.originalUnitPrice : lineDiscount.finalUnitPrice, terminalQuantityPresentation(config, transaction.terminalId).salesDecimals)}
                                     ${lineDiscount.hasDiscount ? `<br/><strong>Descuento artículo (${lineDiscount.discountPercentageLabel}): -${currencySymbol}${lineDiscount.discountAmount.toFixed(2)}</strong>` : ''}
@@ -826,7 +827,7 @@ const printReservationInternal = async (
                         <tr>
                             <td style="width: 70%;">
                                 <span class="item-name">${item.name}</span>
-                                ${item.articleFormat ? `<span class="item-meta">${articleFormatTicketHTML(item)}</span>` : ''}
+                                ${item.articleFormat ? `<span class="item-meta">${articleFormatTicketHTML(item)}</span>` : ''}${item.inventoryPresentation ? `<span class="item-meta">${inventoryPresentationTicketHTML(item)}</span>` : ''}
                                 <span class="item-meta">${weightLineLabel(item, currencySymbol, item.price, terminalQuantityPresentation(config, reservation.terminalId).salesDecimals)}</span>
                             </td>
                             <td class="text-right font-bold">

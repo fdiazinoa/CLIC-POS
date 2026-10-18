@@ -107,7 +107,7 @@ test('complete retained cache survives actual SQLite close/reopen while offline 
   f.data.authority.scope.warehouseId=id(99);await assert.rejects(client.cached(),/SCOPE_CHANGED/);assert.ok(await store.retained(old.contextKey,f.data.master().masterRevision));
  }finally{if(current?.open)current.close();rmSync(directory,{recursive:true,force:true});}
 });
-for(const at of [0,1,2])test(`each publication write ${at} rolls back all retained/cache-pointer effects`,async()=>{
+for(const at of [0,1,2,3])test(`each publication write ${at} rolls back all retained/cache-pointer effects`,async()=>{
  const f=await fixture();try{
   const bindingKey=await inventoryPresentationRevision({origin:f.data.authority.origin,scope}),sessionId=id(900+at);await f.store.begin(sessionId,bindingKey,f.data.authority.origin,f.data.context);await f.store.stage(sessionId,0,f.data.page([f.data.master()]));
   f.fault.failWrite=f.fault.writes+at;await assert.rejects(f.store.publish(sessionId,()=>{}),/injected-write/);
@@ -152,4 +152,16 @@ test('authority revoked after publication writes rolls back retained masters and
   const port=f.adapter.inventoryPresentationsSQL();let revoked=false;const store=new InventoryPresentationStore({...port,runTransaction:work=>port.runTransaction(tx=>work({...tx,executeAtomic:async statements=>{await tx.executeAtomic(statements);revoked=true;}}))});
   await assert.rejects(store.publish(sessionId,()=>{if(revoked)throw Error('AUTH_REVOKED');}),/AUTH_REVOKED/);assert.equal(await store.active(bindingKey),null);assert.equal((f.db.prepare('SELECT count(*) n FROM inventory_presentation_masters').get() as any).n,0);assert.equal((f.db.prepare('SELECT state FROM inventory_presentation_sessions WHERE id=?').get(sessionId) as any).state,'STAGING');
  }finally{f.db.close();}
+});
+test('online denial survives a new runtime and SQLite reopen offline; fresh successful negotiation clears only scoped availability',async()=>{
+ const {createPresentationRuntime}=await import('../services/inventoryPresentations/runtime');
+ const directory=mkdtempSync(join(tmpdir(),'clic-presentation-denial-')),file=join(directory,'pos.sqlite');let current:SQLite.Database|undefined;
+ try{
+  const f=await fixture(new SQLite(file));current=f.db;await f.client.prepare();const original=f.data.master(),cached=await f.client.cached();assert.ok(cached);
+  const denied=createPresentationRuntime(()=>f.data.authority,{sql:f.adapter.inventoryPresentationsSQL(),auth:f.options.auth,sessionId:()=>id(998),fetchImpl:async()=>new Response('{}',{status:403})});await assert.rejects(denied.client.prepare());
+  await assert.rejects(denied.client.cached(),/ERP_DENIED/);assert.deepEqual(await f.store.retained(cached.contextKey,original.masterRevision),original);assert.equal(f.documents('transactions').length,0);f.db.close();
+  const g=await nativeFixture(new SQLite(file),false);current=g.db;const offline=createPresentationRuntime(()=>f.data.authority,{sql:g.adapter.inventoryPresentationsSQL(),auth:f.options.auth,sessionId:()=>id(999),fetchImpl:async()=>{throw Error('network offline');}});
+  await assert.rejects(offline.client.cached(),/ERP_DENIED/);await assert.rejects(offline.client.prepare());await assert.rejects(offline.client.cached(),/ERP_DENIED/);
+  const restored=createPresentationRuntime(()=>f.data.authority,{sql:g.adapter.inventoryPresentationsSQL(),auth:f.options.auth,sessionId:()=>id(1000),fetchImpl:async(url:any)=>new Response(JSON.stringify(String(url).endsWith('/negotiate')?f.data.context:f.data.page([original])),{headers:{'X-Clic-Inventory-Presentations':'1'}})});await restored.client.prepare();assert.ok(await restored.client.cached());assert.deepEqual(await restored.store.retained(cached.contextKey,original.masterRevision),original);assert.equal(g.documents('transactions').length,0);
+ }finally{if(current?.open)current.close();rmSync(directory,{recursive:true,force:true});}
 });

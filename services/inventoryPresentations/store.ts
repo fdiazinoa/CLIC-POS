@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS inventory_presentation_masters(context_key TEXT NOT N
 CREATE TABLE IF NOT EXISTS inventory_presentation_sessions(id TEXT PRIMARY KEY,binding_key TEXT NOT NULL,context_key TEXT NOT NULL,state TEXT NOT NULL CHECK(state IN ('STAGING','COMPLETE')));
 CREATE TABLE IF NOT EXISTS inventory_presentation_pages(session_id TEXT NOT NULL,page_index INTEGER NOT NULL,content TEXT NOT NULL,PRIMARY KEY(session_id,page_index));
 CREATE TABLE IF NOT EXISTS inventory_presentation_selection(session_id TEXT NOT NULL,item_id TEXT NOT NULL,master_revision TEXT NOT NULL,content TEXT NOT NULL,PRIMARY KEY(session_id,item_id));
+CREATE TABLE IF NOT EXISTS inventory_presentation_availability(binding_key TEXT PRIMARY KEY,state TEXT NOT NULL CHECK(state IN ('READY','DENIED')),context_key TEXT);
 CREATE TABLE IF NOT EXISTS inventory_presentation_active(binding_key TEXT PRIMARY KEY,session_id TEXT NOT NULL);
 ${['contexts','masters'].flatMap(table=>['UPDATE','DELETE'].map(action=>`CREATE TRIGGER IF NOT EXISTS inventory_presentation_${table}_${action.toLowerCase()} BEFORE ${action} ON inventory_presentation_${table} BEGIN SELECT RAISE(ABORT,'INVENTORY_PRESENTATION_RETAINED_IMMUTABLE'); END;`)).join('\n')}
 CREATE TRIGGER IF NOT EXISTS inventory_presentation_context_insert BEFORE INSERT ON inventory_presentation_contexts WHEN EXISTS(SELECT 1 FROM inventory_presentation_contexts WHERE context_key=NEW.context_key AND content<>NEW.content) BEGIN SELECT RAISE(ABORT,'INVENTORY_PRESENTATION_RETAINED_IMMUTABLE'); END;
@@ -67,6 +68,7 @@ export class InventoryPresentationStore {
    await tx.executeAtomic([
     {statement:"INSERT OR IGNORE INTO inventory_presentation_masters(context_key,master_revision,item_id,content) SELECT s.context_key,x.master_revision,x.item_id,x.content FROM inventory_presentation_selection x JOIN inventory_presentation_sessions s ON s.id=x.session_id WHERE s.id=? AND s.state='STAGING'",values:[sessionId]},
     {statement:"UPDATE inventory_presentation_sessions SET state='COMPLETE' WHERE id=? AND state='STAGING'",values:[sessionId]},
+    {statement:"INSERT INTO inventory_presentation_availability VALUES(?,'READY',?) ON CONFLICT(binding_key) DO UPDATE SET state='READY',context_key=excluded.context_key",values:[session.binding_key,session.context_key]},
     {statement:'INSERT INTO inventory_presentation_active VALUES(?,?) ON CONFLICT(binding_key) DO UPDATE SET session_id=excluded.session_id',values:[session.binding_key,sessionId]},
    ]);assertCurrent();
   });
@@ -77,9 +79,12 @@ export class InventoryPresentationStore {
    await tx.executeAtomic([{statement:'DELETE FROM inventory_presentation_selection WHERE session_id=?',values:[sessionId]},{statement:'DELETE FROM inventory_presentation_pages WHERE session_id=?',values:[sessionId]},{statement:'DELETE FROM inventory_presentation_sessions WHERE id=?',values:[sessionId]}]);
   });
  }
+ async deny(bindingKey:string){
+  await this.migrate();await this.sql.runExclusive(tx=>tx.executeAtomic([{statement:"INSERT INTO inventory_presentation_availability VALUES(?,'DENIED',NULL) ON CONFLICT(binding_key) DO UPDATE SET state='DENIED',context_key=NULL",values:[bindingKey]}]));
+ }
  async active(bindingKey:string):Promise<{sessionId:string;contextKey:string;origin:string;context:PresentationContext}|null>{
   const rows=await this.sql.query<{session_id:string;context_key:string;content:string;state:string}>('SELECT a.session_id,s.context_key,c.content,s.state FROM inventory_presentation_active a JOIN inventory_presentation_sessions s ON s.id=a.session_id AND s.binding_key=a.binding_key JOIN inventory_presentation_contexts c USING(context_key) WHERE a.binding_key=?',[bindingKey]);
-  if(!rows.length)return null;need(rows.length===1&&rows[0].state==='COMPLETE');const value=JSON.parse(rows[0].content);return {sessionId:rows[0].session_id,contextKey:rows[0].context_key,...value};
+  if(!rows.length)return null;const availability=await this.sql.query<{state:string;context_key:string}>('SELECT state,context_key FROM inventory_presentation_availability WHERE binding_key=?',[bindingKey]);need(availability[0]?.state==='READY'&&availability[0]?.context_key===rows[0].context_key,'INVENTORY_PRESENTATION_ERP_DENIED');need(rows.length===1&&rows[0].state==='COMPLETE');const value=JSON.parse(rows[0].content);return {sessionId:rows[0].session_id,contextKey:rows[0].context_key,...value};
  }
  async masters(bindingKey:string,itemIds:string[]):Promise<Record<string,InventoryPresentationMaster>>{
   need(itemIds.length<=200,'INVENTORY_PRESENTATION_QUERY_LIMIT');if(!itemIds.length)return {};
@@ -87,6 +92,11 @@ export class InventoryPresentationStore {
   return Object.fromEntries(await Promise.all(rows.map(async row=>[row.item_id,await validateInventoryPresentationMaster(JSON.parse(row.content),{itemId:row.item_id})])));
  }
  async master(bindingKey:string,itemId:string):Promise<InventoryPresentationMaster|null>{return (await this.masters(bindingKey,[itemId]))[itemId]||null;}
+ async retainedMany(contextKey:string,revisions:string[]):Promise<Record<string,InventoryPresentationMaster>>{
+  need(revisions.length<=200,'INVENTORY_PRESENTATION_QUERY_LIMIT');if(!revisions.length)return {};
+  const rows=await this.sql.query<{master_revision:string;content:string}>(`SELECT DISTINCT m.master_revision,m.content FROM inventory_presentation_masters m JOIN inventory_presentation_selection x ON x.master_revision=m.master_revision AND x.item_id=m.item_id AND x.content=m.content JOIN inventory_presentation_sessions s ON s.id=x.session_id AND s.context_key=m.context_key AND s.state='COMPLETE' WHERE m.context_key=? AND m.master_revision IN (${revisions.map(()=>'?').join(',')})`,[contextKey,...revisions]);
+  return Object.fromEntries(await Promise.all(rows.map(async row=>[row.master_revision,await validateInventoryPresentationMaster(JSON.parse(row.content))])));
+ }
  async retained(contextKey:string,revision:string):Promise<InventoryPresentationMaster|null>{
   const rows=await this.sql.query<{content:string}>('SELECT content FROM inventory_presentation_masters WHERE context_key=? AND master_revision=?',[contextKey,revision]);return rows.length?validateInventoryPresentationMaster(JSON.parse(rows[0].content)):null;
  }

@@ -1,3 +1,4 @@
+import {assertInventoryPresentationReturnAllowed} from './inventoryPresentations/selection';
 import { withOriginal } from './recovery/OriginalCapture';
 import { recordCheckoutDiagnostic } from './CheckoutDiagnostics';
 import { BusinessConfig, Customer, Transaction, DocumentType, DocumentSeries } from '../types';
@@ -381,6 +382,10 @@ class TransactionService {
         options: { deferDurablePersistence?: boolean } = {},
     ): Promise<Transaction> {
         recordCheckoutDiagnostic('TRANSACTION_CREATE_INPUT', { items: data.items, total: data.total, transactionId: data.id, payments: data.payments, terminalId: data.terminalId });
+        if(data.items?.some(line=>line.inventoryPresentation!==undefined)){
+            if(data.documentType==='REFUND'||data.items.some(line=>line.quantity<=0))assertInventoryPresentationReturnAllowed(data);
+            data={...data,inventoryPresentationContract:1};
+        }else if(data.inventoryPresentationContract!==undefined)throw Error('INVENTORY_PRESENTATION_INVALID');
         assertFormatsPostingClosed(data.items || []);
         // Validate required fields
         if (!data.documentType) {

@@ -3350,6 +3350,7 @@ export class ApiSyncAdapter {
         body: Record<string, unknown>,
         options: {
             maxRequestBytes?: number;
+            inventoryPresentations?: boolean;
             acceptCompressedResponse?: boolean;
             includeHttpStatus?: boolean;
             reauthenticateOn401?: boolean;
@@ -3380,6 +3381,7 @@ export class ApiSyncAdapter {
             headers: {
                 ...this.buildOperationalHeaders(target, target.token, true),
                 ...this.getLocalDeviceHeaders(),
+                ...(options.inventoryPresentations?{'X-Clic-Inventory-Presentations':'1'}:{}),
                 ...(options.acceptCompressedResponse && this.resolveCapacitorPlatform() !== 'web'
                     ? { 'Accept-Encoding': 'gzip' }
                     : {}),
@@ -3407,6 +3409,7 @@ export class ApiSyncAdapter {
                 headers: {
                     ...this.buildOperationalHeaders(retriedTarget, retriedTarget.token, true),
                     ...this.getLocalDeviceHeaders(),
+                    ...(options.inventoryPresentations?{'X-Clic-Inventory-Presentations':'1'}:{}),
                     ...(options.acceptCompressedResponse && this.resolveCapacitorPlatform() !== 'web'
                         ? { 'Accept-Encoding': 'gzip' }
                         : {}),
@@ -6155,6 +6158,7 @@ export class ApiSyncAdapter {
         if (events.length > 50) throw new Error('BATCH_EVENT_LIMIT_EXCEEDED');
         const eventIds = events.map(event => String((event as any).eventId || (event as any).id || '')).filter(Boolean);
         return this.postOperationalPayload('/inbox/batch', { events }, {
+            inventoryPresentations: events.some((event:any)=>event.eventType==='SALE_POSTED'&&event.payload?.transaction?.inventoryPresentationContract===1),
             maxRequestBytes: 512 * 1024,
             responseValidator: {
                 reference: `pushDurableOutboxBatch:${eventIds.join(',')}`,

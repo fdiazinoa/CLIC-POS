@@ -1,3 +1,4 @@
+import {assertPresentationCommit} from '../../inventoryPresentations/nativeGuard';
 import { NativeFiscalWorkflowV2Store,FISCAL_WORKFLOW_V2_SCHEMA,consumeFiscalWorkflowBirth } from '../FiscalWorkflowV2Store';
 import {NativeTerminalAuthEvidenceStore,TERMINAL_AUTH_EVIDENCE_SCHEMA} from '../TerminalAuthEvidenceStore';
 import {FISCAL_OUTBOX_SOURCE_SQL,fiscalOutboxSourceParams,captureFiscalOutboxAnchors,type FiscalOutboxAnchor} from '../../fiscal/FiscalAppliedReceiptV2';
@@ -1177,6 +1178,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         const demands = new Map<string, { baseline: string; productId: string; warehouseId: string; quantity: number; quantityScale?:4; exactQuantity?:string; nonFormatWriter?:boolean }>();
         for (const mutation of documents) {
             const document = mutation.document as any;
+            if(mutation.collectionName==='transactions'&&mutation.requireAbsent)await assertPresentationCommit(document,mutation.inventoryPresentationPrecondition,async<T>(sql:string,values:(string|number|null)[])=>(await read(sql,values)).values as T[] || [],mutation.v3StockRequirements||[]);
             if(mutation.collectionName==='inventoryLedger'&&!document.articleFormatEventId
               &&(Number(document.qtyIn || 0)!==0||Number(document.qtyOut || 0)!==0)) {
               await assertNoReconciledOrdinaryWriter(async<T>(sql:string,values:(string|number|null)[])=>(await read(sql,values)).values as T[] || [],document.warehouseId);

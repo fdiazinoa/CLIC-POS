@@ -1,3 +1,6 @@
+import Decimal from 'decimal.js';
+import {createPresentationRuntime,presentationAuthority,validatePresentationCart} from '../inventoryPresentations/runtime';
+import {presentationInventoryQuantity} from '../inventoryPresentations/selection';
 import { assertV3ReservationSource, assertV3ReservationLines, validateV3ReservationPricing } from './LargeMasterSyncV3ReservationAuthority';
 import {requiresProductStockAvailability} from '../../utils/productStockPolicy';
 import { v3TaxSemantics } from './LargeMasterSyncV3StockAuthority';
@@ -189,6 +192,8 @@ export class LargeMasterSyncV3OperationalSession {
     intent: V3FinancialIntent = 'SALE', onValidatedSource?: (line: CartItem, source: Product) => void, reference?: V3RetainedReference, fiscalDeliveryOnly = false): Promise<V3RetainedContext | undefined> {
     await this.assertCurrent();
     if (!lines.length) throw new LargeMasterSyncV3Error('SYNC_V3_CART_EMPTY');
+    let presentationProof:Awaited<ReturnType<LargeMasterSyncV3OperationalSession['presentationProof']>>;
+    if(!fiscalDeliveryOnly&&lines.some(line=>line.inventoryPresentation!==undefined)){if(intent==='REFUND')throw Error('INVENTORY_PRESENTATION_SOURCE_REQUIRED_NOT_YET_SUPPORTED');presentationProof=await this.presentationProof(config,lines);}
     const authority = lines[0].v3SaleAuthority;
     if (!authority || authority.binding !== this.binding || authority.warehouseId !== warehouseId
       || authority.tariffId !== tariffId || authority.inventoryVersion !== this.ready.inventoryVersion
@@ -237,8 +242,8 @@ export class LargeMasterSyncV3OperationalSession {
     // Only an independently read retained account permits mixed source generations.
     const fiscalLines = retained ? lines.map(line => ({ ...line, v3SaleAuthority: authority })) : lines;
     buildLargeMasterSyncV3CheckoutFiscalInput(config, fiscalLines, authority, config.taxes || []);
-    const demand = new Map<string, number>();
-    for (const line of lines) demand.set(line.id, (demand.get(line.id) || 0) + Math.max(0, line.quantity));
+    const demand = new Map<string, number>(),presentationItems=new Set(lines.filter(line=>line.inventoryPresentation!==undefined).map(line=>line.id));
+    for (const line of lines) demand.set(line.id,presentationItems.has(line.id)?new Decimal(demand.get(line.id)||0).plus(Math.max(0,presentationInventoryQuantity(line))).toNumber():(demand.get(line.id)||0)+Math.max(0,line.quantity));
     for (const line of lines) {
       const stamp = line.v3SaleAuthority;
       const currentGeneration = stamp?.syncId === this.ready.runtime.version.syncId
@@ -248,6 +253,11 @@ export class LargeMasterSyncV3OperationalSession {
       if (intent === 'SALE' && !current) throw new LargeMasterSyncV3Error('SYNC_V3_ARTICLE_UNAVAILABLE');
       if (!source || source.product.appliedTaxIds?.join('|') !== line.appliedTaxIds?.join('|')) {
         throw new LargeMasterSyncV3Error('SYNC_V3_ARTICLE_UNAVAILABLE');
+      }
+      if(line.inventoryPresentation&&presentationProof){
+        const master=JSON.parse(presentationProof.masters[line.inventoryPresentation.masterRevision]||'null');
+        const base=master?.basePrices?.find((row:any)=>row.tariffId===tariffId);
+        if(!base||!new Decimal(base.price).eq(source.product.price)||base.taxIncluded!==source.authority.taxIncluded)throw Error('INVENTORY_PRESENTATION_CATALOG_PRICE_CHANGED');
       }
       validateV3PinnedLineSource(line, source.product, source.authority);
       onValidatedSource?.(line, source.product);
@@ -263,11 +273,19 @@ export class LargeMasterSyncV3OperationalSession {
     return retained;
   }
 
+  async presentationProof(config:BusinessConfig,lines:CartItem[]){
+    if(!lines.some(line=>line.inventoryPresentation!==undefined))return;
+    const terminal=config.terminals.find(row=>row.config.currentDeviceId===this.identity.deviceId&&(row.config.erpTerminalId||row.id)===this.identity.terminalId);
+    if(!terminal)throw Error('INVENTORY_PRESENTATION_SCOPE_CHANGED');
+    return validatePresentationCart(createPresentationRuntime(()=>presentationAuthority(config,terminal.id,terminal.config.pricing.allowedTariffIds,terminal.config.catalog?.allowedCategories||[])),lines);
+  }
+
   async stockRequirements(config: BusinessConfig, lines: CartItem[], warehouseId: string,
     intent: V3FinancialIntent): Promise<NonNullable<DurableDocumentMutation['v3StockRequirements']>> {
     if (intent === 'REFUND') return [];
     const catalog = await this.catalog(lines[0].v3SaleAuthority!.tariffId, warehouseId);
     const demands = new Map<string, number>();
+    const baseItems=new Set(lines.filter(line=>line.inventoryPresentation).map(line=>line.id));
     for (const line of lines) {
       if (line.quantity <= 0) throw new LargeMasterSyncV3Error('SYNC_V3_LINE_INVALID');
       const source = await catalog.get(line.id);
@@ -275,10 +293,10 @@ export class LargeMasterSyncV3OperationalSession {
       if (source.product.type !== 'SERVICE' && source.product.isInventoriable === true && requiresV3SaleAvailability(intent,
         source.product.operationalFlags?.trackInventory === true,
         source.product.operationalFlags?.allowNegativeStock === true)) {
-        demands.set(line.id, (demands.get(line.id) || 0) + line.quantity);
+        demands.set(line.id,baseItems.has(line.id)?new Decimal(demands.get(line.id)||0).plus(presentationInventoryQuantity(line)).toNumber():(demands.get(line.id)||0)+line.quantity);
       }
     }
-    return [...demands].map(([productId, quantity]) => ({ productId, quantity, warehouseId,
+    return [...demands].map(([productId, quantity]) => ({ productId, quantity, warehouseId,...(baseItems.has(productId)?{quantityScale:4 as const}:{}),
       baseline: v3InventoryBaselineKey(this.binding, lines[0].v3SaleAuthority!) }));
   }
 }

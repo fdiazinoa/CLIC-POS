@@ -1523,6 +1523,7 @@ export interface V3SaleAuthorityStamp {
 }
 
 export interface Product {
+  inventoryPresentationMaster?: import('./services/inventoryPresentations/contract').InventoryPresentationMaster;
   article_formats?: import('./services/articleFormats/contract').ArticleFormatsDTO;
   id: string;
   sku?: string;
@@ -1759,6 +1760,7 @@ export interface Table {
  * - Next sale will use new price
  */
 export interface CartItem extends Product {
+  inventoryPresentation?: import('./services/inventoryPresentations/contract').InventoryPresentation;
   /** Local recovery reference only; original reservation snapshots remain unchanged. */
   v3ReservationId?: string;
   weightPresentation?: WeightPresentation;
@@ -1824,6 +1826,7 @@ export interface CartItem extends Product {
 }
 
 export interface Transaction {
+  inventoryPresentationContract?: 1;
     /** Durable future checkout identity; never added to historical/retained sources. */
     fiscalWorkflowCheckoutId?: string;
   v3ReservationClaimId?: string;

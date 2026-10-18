@@ -20,6 +20,7 @@ export interface DurableDocumentMutation {
     v3CurrentCatalog?: { syncId: string; syncVersion: number; binding: string };
     /** Narrow native CAS disposition for an already expired local stamped reservation. */
     v3ReservationExpiration?: true;
+    inventoryPresentationPrecondition?: import('../inventoryPresentations/runtime').PresentationCommitProof;
     v3ExpectedRetainedDocument?: { collection: string; id: string; expected: string };
     v3StockRequirements?: Array<{ baseline: string; productId: string; warehouseId: string; quantity: number; quantityScale?: 4 }>;
 }

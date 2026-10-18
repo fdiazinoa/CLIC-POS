@@ -1,3 +1,4 @@
+import {presentationInventoryQuantity} from '../inventoryPresentations/selection';
 import {captureNewV3FiscalSourceMetadata} from './NewV3FiscalSourceMetadata';
 export type {V3FinancialOptions} from '../db/LargeMasterSyncV3FinancialRetention';
 import { planReservationCommitmentRelease } from './LargeMasterSyncV3ReservationCommitments';
@@ -54,7 +55,7 @@ export const buildV3InventoryLedger = (transaction: Transaction, warehouseId: st
     if (line.type !== 'PRODUCT' || line.trackingData?.length || line.recipeDetails?.length) {
       throw new LargeMasterSyncV3Error('SYNC_V3_ADVANCED_ARTICLE_CONTRACT_REQUIRED');
     }
-    const quantity = Math.abs(line.quantity);
+    const quantity = Math.abs(presentationInventoryQuantity(line));
     if (!Number.isFinite(quantity) || quantity === 0) throw new LargeMasterSyncV3Error('SYNC_V3_LINE_INVALID');
     if (refund && conditions?.get(line.cartId) === 'DAMAGED') return [];
     return [{ id: `V3-${transaction.id}-${encodeURIComponent(line.cartId)}`,
@@ -181,6 +182,7 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
     }
     documents.push(
       { collectionName: 'transactions', document: document as any, requireAbsent: true,
+        ...(transaction.items.some(line=>line.inventoryPresentation!==undefined)?{inventoryPresentationPrecondition:await session.presentationProof(projected,transaction.items)}:{}),
         ...(retained ? { v3ExpectedRetainedDocument: { collection: retained.collection, id: retained.id, expected: retained.expected } } : {}),
         v3StockRequirements: await session.stockRequirements(projected, transaction.items, warehouseId, options.refund ? 'REFUND' : 'SALE') },
       { collectionName: 'transactionHistory', document: document as any, requireAbsent: true,

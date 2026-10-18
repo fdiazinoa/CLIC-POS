@@ -1,3 +1,6 @@
+import {createPresentationRuntime,presentationAuthority,type PresentationRuntime} from '../services/inventoryPresentations/runtime';
+import {presentationFormatSnapshot,presentationBaseQuantity,presentationUnitPrice,type InventoryPresentationMaster} from '../services/inventoryPresentations/contract';
+import {normalizePresentationDraft,presentationInventoryQuantity,resizeInventoryPresentationLine,presentationSelectorDTO,assertInventoryPresentationReturnAllowed} from '../services/inventoryPresentations/selection';
 import {prepareFiscalFormatRuntime} from '../services/fiscal/FiscalWorkflowV2FormatRuntime';
 import {createUuid} from '../utils/uuid';
 import { fiscalWorkflowV2Client } from '../services/fiscal/FiscalWorkflowV2Client';
@@ -9,7 +12,7 @@ import type {V3RecoveredReservation} from '../services/sync/LargeMasterSyncV3Res
 import {requiresProductStockAvailability} from '../utils/productStockPolicy';
 import ArticleFormatSelector from './ArticleFormatSelector';
 import { formatsEnabled, assertFormatsPostingClosed } from '../services/articleFormats/activation';
-import { inventoryQuantity, resizeLine, resolveFormatBarcode, formatPrice, toBaseQuantity } from '../services/articleFormats/domain';
+import { resolveFormatBarcode, formatPrice, toBaseQuantity } from '../services/articleFormats/domain';
 import { addFormatLine, formatStockDemand, routeQuickFormat, baseCodeFormat, skuForFormatVariant, formatVariantForSku, assertOriginalSaleForFormatReturn } from '../services/articleFormats/cart';
 import type { ArticleFormat } from '../services/articleFormats/contract';
 import { buildPosCategoryIdentity, reconcileBoundV3PosCategories } from '../utils/posCategoryIdentity';
@@ -1216,7 +1219,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    transactions,
    zReports,
    closedHistoryIds,
-   onUpdateCart,
+   onUpdateCart: onUpdateCartRaw,
    selectedCustomer,
    onSelectCustomer,
    parkedTickets,
@@ -1256,9 +1259,28 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    catalogSearchProducts,
    catalogArticleDiagnostics,
 }) => {
+   const onUpdateCart:typeof onUpdateCartRaw=useCallback(value=>onUpdateCartRaw(previous=>normalizePresentationDraft(typeof value==='function'?value(previous):value)),[onUpdateCartRaw]);
+   const presentationConfigRef=useRef(config);presentationConfigRef.current=config;
+   const presentationRuntimeRef=useRef<PresentationRuntime|null>(null);
+   const [presentationMasters,setPresentationMasters]=useState<Record<string,InventoryPresentationMaster>>({});
+   const [presentationSelection,setPresentationSelection]=useState<Product|null>(null);
+   const [presentationError,setPresentationError]=useState<string|null>(null);
+   const [presentationRetry,setPresentationRetry]=useState(0);
+   const presentationTerminal=config.terminals.find(t=>t.id===activeTerminalId);
+   const presentationContextKey=JSON.stringify([presentationTerminal?.config.inventoryScope,presentationTerminal?.config.pricing,presentationTerminal?.config.catalog]);
+   useEffect(()=>{
+      let disposed=false;setPresentationMasters({});setPresentationSelection(null);setPresentationError(null);presentationRuntimeRef.current=null;
+      if(!v3Operational)return;
+      let runtime:PresentationRuntime;
+      try{runtime=createPresentationRuntime(()=>{const current=presentationConfigRef.current.terminals.find(t=>t.id===activeTerminalId);if(!current)throw Error('INVENTORY_PRESENTATION_SCOPE_CHANGED');return presentationAuthority(presentationConfigRef.current,activeTerminalId,current.config.pricing.allowedTariffIds,current.config.catalog?.allowedCategories||[]);});}
+      catch(error){setPresentationError(String(error));return;}
+      void runtime.client.prepare().catch(async error=>{if(!/network|fetch|timeout|abort/i.test(String(error)))throw error;const cached=await runtime.client.cached();if(!cached)throw error;}).then(()=>{if(!disposed){presentationRuntimeRef.current=runtime;setPresentationReadyGeneration(value=>value+1);setPresentationError(null);setPresentationMasters({});}}).catch(error=>{if(!disposed)setPresentationError(String(error));});
+      return()=>{disposed=true;runtime.client.cancel();};
+   },[v3Operational,activeTerminalId,presentationContextKey,presentationRetry]);
+   const [presentationReadyGeneration,setPresentationReadyGeneration]=useState(0);
    const [formatRuntime,setFormatRuntime]=useState<Awaited<ReturnType<typeof prepareFiscalFormatRuntime>>|null>(null);
    const [formatMasters,setFormatMasters]=useState<Record<string,any>>({});
-   const products=useMemo(()=>baseProducts.map(product=>formatMasters[product.id]?{...product,article_formats:formatMasters[product.id].dto,articleFormatVariantSkus:formatMasters[product.id].policy.variant_skus}:product),[baseProducts,formatMasters]);
+   const products=useMemo(()=>baseProducts.map(raw=>{const product=presentationMasters[raw.id]?.formats.some(f=>f.active&&f.allowSale&&!f.isBase)?{...raw,inventoryPresentationMaster:presentationMasters[raw.id]}:raw;return formatMasters[product.id]?{...product,article_formats:formatMasters[product.id].dto,articleFormatVariantSkus:formatMasters[product.id].policy.variant_skus}:product;}),[baseProducts,formatMasters,presentationMasters]);
    freezeCount('POS_RENDER_COUNT');
    markRenderStart('POS_INTERACTION_VIEW');
    const tableQa = React.useSyncExternalStore(subscribeTableLatencyQa, getTableLatencyQaState, getTableLatencyQaState);
@@ -1309,7 +1331,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const lastProductTouchAtRef = useRef(0);
    const quickActionOpenedAtRef = useRef(0);
    const [productPrices, setProductPrices] = useState<ProductPrice[]>(externalProductPrices);
-   const catalogProducts = catalogSearchProducts ?? products;
+   const visiblePresentationProducts=catalogSearchProducts??baseProducts;
+   const presentationVisibleKey=visiblePresentationProducts.map(product=>product.id).join('|');
+   useEffect(()=>{let disposed=false;const runtime=presentationRuntimeRef.current;if(!runtime)return;void(async()=>{const active=await runtime.client.cached();if(!active)return;const rows:Record<string,InventoryPresentationMaster>={};for(let index=0;index<visiblePresentationProducts.length;index+=200)Object.assign(rows,await runtime.store.masters(active.bindingKey,visiblePresentationProducts.slice(index,index+200).map(p=>p.id)));if(!disposed)setPresentationMasters(rows);})().catch(error=>{if(!disposed)setPresentationError(String(error));});return()=>{disposed=true;};},[presentationReadyGeneration,presentationVisibleKey]);
+   const catalogProducts = useMemo(()=>(catalogSearchProducts ?? products).map(product=>presentationMasters[product.id]?.formats.some(f=>f.active&&f.allowSale&&!f.isBase)?{...product,inventoryPresentationMaster:presentationMasters[product.id]}:product),[catalogSearchProducts,products,presentationMasters]);
 
    useEffect(() => {
       freezeCount('EFFECT_PRODUCT_PRICES');
@@ -3326,7 +3351,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const demand: Record<string, number> = {};
 
       for (const cartItem of items || []) {
-         const quantity = inventoryQuantity(cartItem);
+         const quantity = presentationInventoryQuantity(cartItem);
          if (quantity <= 0) continue;
 
          const deductions = calculateInventoryDeductions(cartItem, quantity, products);
@@ -3347,7 +3372,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const quantities: Record<string, number> = {};
       for (const item of cart || []) {
          if (!item?.id) continue;
-         quantities[item.id] = (quantities[item.id] || 0) + inventoryQuantity(item);
+         quantities[item.id] = (quantities[item.id] || 0) + presentationInventoryQuantity(item);
       }
       return quantities;
    }, [cart]);
@@ -3450,12 +3475,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    }, []);
 
    const rejectFormatQuickReturn = useCallback((product: Product, returnMode = isReturnMode): boolean => {
-      try { assertOriginalSaleForFormatReturn(product,returnMode); return false; }
+      try { if(returnMode)assertInventoryPresentationReturnAllowed(product);assertOriginalSaleForFormatReturn(product,returnMode); return false; }
       catch { setErrorToast('Selecciona el ticket original para devolver esta presentación.'); return true; }
    }, [isReturnMode]);
 
    const performAddToCart = useCallback(async (product: Product, quantity: number = 1, priceOverride?: number, modifiers?: string[], trackingData?: any[], selectedVariant?: ProductVariant, variantInfo?: string, note?: string, restaurantConfig?: CartItem['restaurantConfig'], consignmentPatch?: Pick<CartItem, 'consignmentId' | 'consignmentDocumentNo' | 'consignmentLineId'>) => {
       if (rejectFormatQuickReturn(product,isReturnMode || quantity < 0)) return false;
+      if(product.inventoryPresentationMaster){const {inventoryPresentationMaster:_overlay,...source}=product;product=source;}
       const mounted = uiLifetime.current.capture();
       const isCurrent = () => mounted() && addContext.current === v3Operational;
       const trace = activeAddTraceRef.current || beginPosInteraction('ADD_TICKET_ITEM', { source: 'programmatic', productId: product.id });
@@ -3473,7 +3499,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const authorize = () => authorizeSubtotalizedEdit('Agregar artículo a ticket subtotalizado');
       if (!(v3Operational ? await authorizeV3UIContext(isCurrent, authorize) : await authorize())) return;
       if (quantity > 0 && !ensureSalesWithOpenZPermission()) return;
-      if (!canAddItemToCart(product, quantity, { skipStockValidation: Boolean(consignmentPatch?.consignmentLineId) })) return;
+      if (!canAddItemToCart(product, (product as CartItem).inventoryPresentation?presentationBaseQuantity(quantity,(product as CartItem).inventoryPresentation!.format.factor):quantity, { skipStockValidation: Boolean(consignmentPatch?.consignmentLineId) })) return;
 
       // TRACEABILITY INTERCEPTION
       const usesLots = product.operationalFlags?.usesLots;
@@ -3511,7 +3537,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          const existingTaxSignature = resolveEffectiveTaxIds(i.appliedTaxIds, activeTerminalConfig, i.taxable).slice().sort().join('|');
          const existingIdentityKey = String((i as any).cartIdentityKey || productLineIdentityKey(i, i.price));
          const existingConsignmentKey = i.consignmentLineId || '';
-         return !i.articleFormat && existingIdentityKey === lineIdentityKey
+         return !i.articleFormat && !i.inventoryPresentation && !(product as CartItem).inventoryPresentation && existingIdentityKey === lineIdentityKey
             && (i.salespersonId || '') === (activeTableSellerId || '')
             && !i.subtotalizedAt
             && Math.sign(Number(i.quantity || 0)) === Math.sign(quantity)
@@ -3566,7 +3592,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             variantInfo,
             appliedTaxIds: effectiveTaxIds,
             production_area_id: productionAreaId || undefined,
-            originalPrice: getProductPrice(product),
+            originalPrice: (product as CartItem).inventoryPresentation?priceOverride:getProductPrice(product),
             trackingData,
             ...consignmentPatch,
          };
@@ -3627,6 +3653,18 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       return context ? addQueue.current.run(isCurrent,operation) : operation();
    },[rejectFormatQuickReturn,isReturnMode,articleFormatsEnabled,formatRuntime,v3Operational,blockRecoveredUberOrderMutation,authorizeSubtotalizedEdit,ensureSalesWithOpenZPermission,canAddItemToCart,activeTerminalConfig,activeTable?.currentOrderId,activeTable?.id,activeDirectV3TicketId,onUpdateCart]);
 
+   const addSelectedPresentation=useCallback((product:Product,formatId:string,quantity=1)=>{
+      try{
+         const master=product.inventoryPresentationMaster;if(!master)throw Error('INVENTORY_PRESENTATION_MASTER_REQUIRED');
+         if(isReturnMode||quantity<=0)assertInventoryPresentationReturnAllowed(product);
+         const selected=master.formats.find(f=>f.id===formatId&&f.active&&f.allowSale);if(!selected)throw Error('INVENTORY_PRESENTATION_SALE_NOT_ALLOWED');
+         const {inventoryPresentationMaster:_overlay,...source}=product;
+         const price=presentationUnitPrice(selected,activeTariffId,master);
+         const line={...source,price,originalPrice:price,inventoryPresentation:{schemaVersion:1 as const,itemId:master.itemId,variantId:null,format:presentationFormatSnapshot(selected),commercialQuantity:quantity,baseQuantity:presentationBaseQuantity(quantity,selected.factor),tariffId:activeTariffId,masterRevision:master.masterRevision}};
+         setPresentationSelection(null);return addToCart(line as CartItem,quantity,price);
+      }catch(error){setErrorToast(error instanceof Error?error.message:String(error));return Promise.resolve(false);}
+   },[activeTariffId,isReturnMode,addToCart]);
+
    const handleProductClick = useCallback((product: Product) => {
       if (rejectFormatQuickReturn(product)) return;
       if (Date.now() < suppressProductInputUntilMs) return;
@@ -3658,6 +3696,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
       else if (hasVariants) setSelectedProductForVariants(product);
       else if (hasRestaurantConfig) setProductForModifiers(product);
+      else if(product.inventoryPresentationMaster&&!isReturnMode)setPresentationSelection(product);
       else if (articleFormatsEnabled && product.article_formats?.formats.length && !isReturnMode) setFormatSelection({product,variantId:null,basePrice:getProductPrice(product),modifiers:[]});
       else addToCart(product, isReturnMode ? -1 : 1);
    }, [isMobile, defaultSalesWarehouseId, ensureSalesWithOpenZPermission, canAddItemToCart, addToCart, isReturnMode, suppressProductInputUntilMs, v3Operational, config, activeTerminalId, rejectFormatQuickReturn, articleFormatsEnabled, getProductPrice]);
@@ -4005,6 +4044,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const context = v3Operational;
       const mounted = uiLifetime.current.capture();
       const resolveAndAdd = async () => {
+         const presentationMatches=Object.entries(presentationMasters).flatMap(([itemId,master])=>master.formats.filter(format=>format.active&&format.allowSale&&format.barcode&&format.barcode===raw).map(format=>({itemId,master,format})));
+         if(presentationMatches.length>1)throw Error('INVENTORY_PRESENTATION_BARCODE_AMBIGUOUS');
+         if(presentationMatches.length===1){const selected=presentationMatches[0],product=products.find(p=>p.id===selected.itemId);if(product){const match={product:{...product,inventoryPresentationMaster:selected.master},quantity:1,price:presentationUnitPrice(selected.format,activeTariffId,selected.master),modifiers:[]};return {match,added:await addSelectedPresentation(match.product,selected.format.id)};}}
          const match: {product: Product; quantity: number; price: number; modifiers: string[]; selectedVariant?: ProductVariant; variantInfo?: string; format?: ArticleFormat} | null = context ? await context.resolveCode(raw) : findProductByAnyCode(raw);
          if (context) assertV3UIContext(() => mounted() && addContext.current === context);
          if (match && 'format' in match && match.format) {
@@ -4022,7 +4064,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          return { match, added };
       };
       return context ? scanQueue.current.run(() => mounted() && addContext.current === context, resolveAndAdd) : resolveAndAdd();
-   }, [v3Operational, findProductByAnyCode, addToCart, isReturnMode, handleProductClick, addSelectedFormat]);
+   }, [v3Operational, findProductByAnyCode, addToCart, isReturnMode, handleProductClick, addSelectedFormat,presentationMasters,products,activeTariffId,addSelectedPresentation]);
 
    const handleSearchKeyDown = useCallback(async (e: React.KeyboardEvent<HTMLInputElement>) => {
       try {
@@ -4120,6 +4162,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          }
       }
 
+      const selectedPresentation=Object.entries(presentationMasters).flatMap(([itemId,master])=>master.formats.filter(f=>f.active&&f.allowSale&&f.barcode===trimmed&&f.barcode).map(format=>({itemId,master,format})));
+      if(selectedPresentation.length>1)throw Error('INVENTORY_PRESENTATION_BARCODE_AMBIGUOUS');
+      if(selectedPresentation.length===1){const selected=selectedPresentation[0],source=products.find(p=>p.id===selected.itemId);if(source){const added=await addSelectedPresentation({...source,inventoryPresentationMaster:selected.master},selected.format.id);return {success:added,message:added?'Presentación agregada':'Presentación rechazada'};}}
+
       // 2. Normal Barcode Search. Use the memoized code index instead of scanning
       // the whole catalog on every hardware scan.
       const match: {product: Product; quantity: number; price: number; modifiers: string[]; selectedVariant?: ProductVariant; variantInfo?: string; format?: ArticleFormat} | null = v3Operational ? await v3Operational.resolveCode(trimmed) : findProductByAnyCode(trimmed);
@@ -4164,7 +4210,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          if (trace.stages.HANDLER_END === undefined) markInteractionStage(trace, 'HANDLER_END');
          if (activeAddTraceRef.current === trace) activeAddTraceRef.current = null;
       }
-   }, [activeReservationByScanCode, addToCart, config.scaleLabelConfig, handleProductClick, getProductPrice, handleRecoverReservation, findProductByAnyCode, productCodeIndex, routeScannedCoupon, onOpenInvoiceActions, isReturnMode, v3Operational, addSelectedFormat]);
+   }, [activeReservationByScanCode, addToCart, config.scaleLabelConfig, handleProductClick, getProductPrice, handleRecoverReservation, findProductByAnyCode, productCodeIndex, routeScannedCoupon, onOpenInvoiceActions, isReturnMode, v3Operational, addSelectedFormat,presentationMasters,products,addSelectedPresentation]);
 
    const processBarcode = useCallback((...args: Parameters<typeof performBarcode>) => {
       const context = v3Operational;
@@ -5276,10 +5322,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             if (!authorized) return;
          }
 
-         updatedItem = resizeLine(updatedItem,updatedItem.quantity);
+         updatedItem = resizeInventoryPresentationLine(updatedItem,updatedItem.quantity);
          // Stock Check (Quantity Increase), in historical base units for formats.
          if (originalItem && updatedItem.quantity > originalItem.quantity) {
-            const diff = inventoryQuantity(updatedItem) - inventoryQuantity(originalItem);
+            const diff = presentationInventoryQuantity(updatedItem) - presentationInventoryQuantity(originalItem);
             if (!canAddItemToCart(updatedItem, diff)) return;
          }
          const requestedLineDiscountPercent = updatedItem.adjustmentSource === 'MANUAL_DISCOUNT'
@@ -6513,6 +6559,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    });
 
    const assertCheckoutFiscalAuthority = async () => {
+      if(processedCart.some(line=>line.inventoryPresentation!==undefined)){
+         if(!v3Operational||isOrderTakerMode)throw Error('INVENTORY_PRESENTATION_CHECKOUT_REQUIRED');
+         await v3Operational.validate(processedCart);
+      }
       if (isOrderTakerMode) return;
       if (isFiscalModeDisabled) {
          if (isTerminalFiscalReceiptRequired(activeTerminalConfig)) throw new Error('La terminal exige comprobantes fiscales. Sincronice su configuración.');
@@ -7764,6 +7814,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             />
          )}
 
+         {presentationError&&<div role="status" className="fixed top-16 right-4 z-50 bg-amber-50 border rounded-xl p-3 max-w-sm"><p>Presentaciones no disponibles. Revisa la conexión o la habilitación de esta caja en el ERP.</p><button type="button" onClick={()=>setPresentationRetry(value=>value+1)}>Reintentar</button><details><summary>Detalle</summary><code>{presentationError}</code></details></div>}
          {errorToast && (
             <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-[100] animate-in slide-in-from-bottom-5 fade-in duration-300">
                <div className="bg-red-600 text-white px-6 py-4 rounded-2xl shadow-2xl flex items-center gap-3 font-bold border-2 border-red-400">
@@ -8815,7 +8866,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                        <div className="flex justify-between items-start">
                                           <h4 className="font-bold text-gray-800 text-sm leading-tight line-clamp-1">{item.name}</h4>
                                        </div>
-                                       {item.articleFormat && <p className="text-xs text-blue-600">{item.articleFormat.name} · {item.articleFormat.factor} base · {item.baseQuantity} unidades</p>}
+                                       {item.articleFormat && <p className="text-xs text-blue-600">{item.articleFormat.name} · {item.articleFormat.factor} base · {item.baseQuantity} unidades</p>}{item.inventoryPresentation&&<p className="text-xs text-blue-600">{item.inventoryPresentation.format.name} · {item.inventoryPresentation.format.factor} base · {item.inventoryPresentation.baseQuantity} unidades</p>}
                                        <div className="flex flex-col mt-0.5">
                                           <div className="flex items-center gap-2">
                                              <span className="text-xs font-black text-blue-600">{baseCurrency.symbol}{displayWeightPrice(item).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: item.weightPresentation ? 8 : 2 })}{item.weightPresentation ? `/${item.weightPresentation.displayUnit}` : ''}</span>
@@ -8964,7 +9015,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                           {hasDiscount && <p className="text-[10px] text-gray-400 line-through">{baseCurrency.symbol}{(item.originalPrice! * item.quantity).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>}
                                        </div>
                                     </div>
-                                    {item.articleFormat && <p className="text-xs text-blue-600">{item.articleFormat.name} · {item.articleFormat.factor} base · {item.baseQuantity} unidades</p>}
+                                    {item.articleFormat && <p className="text-xs text-blue-600">{item.articleFormat.name} · {item.articleFormat.factor} base · {item.baseQuantity} unidades</p>}{item.inventoryPresentation&&<p className="text-xs text-blue-600">{item.inventoryPresentation.format.name} · {item.inventoryPresentation.format.factor} base · {item.inventoryPresentation.baseQuantity} unidades</p>}
 
                                     <div className="flex items-center justify-between">
                                        <div className="flex flex-col">
@@ -9503,6 +9554,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             canEditQuantity={cartItemEditCapabilities.canEditQuantity && !editingItem.dispatched}
             canVoidItem={cartItemEditCapabilities.canVoidItem && !editingItem.dispatched}
          />}
+         {presentationSelection?.inventoryPresentationMaster&&<ArticleFormatSelector itemName={presentationSelection.name} dto={presentationSelectorDTO(presentationSelection.inventoryPresentationMaster)} variantId={null} tariffId={activeTariffId} baseTariffPrice={getProductPrice(presentationSelection)} stockBase={getScopedProductStock(presentationSelection)-(committedByProduct[presentationSelection.id]||0)-cart.filter(line=>line.id===presentationSelection.id).reduce((sum,line)=>sum+presentationInventoryQuantity(line),0)} currencySymbol={baseCurrency.symbol} onClose={()=>setPresentationSelection(null)} onSelect={format=>{void addSelectedPresentation(presentationSelection,format.id);         }}/>}
          {formatSelection?.product.article_formats && <ArticleFormatSelector itemName={formatSelection.product.name} dto={formatSelection.product.article_formats} variantId={formatSelection.variantId} tariffId={activeTariffId} baseTariffPrice={formatSelection.basePrice} stockBase={getScopedProductStock(formatSelection.product) - (committedByProduct[formatSelection.product.id] || 0) - formatStockDemand(cart,formatSelection.product.id)} currencySymbol={baseCurrency.symbol} onClose={() => setFormatSelection(null)} onSelect={(format,price) => { void addSelectedFormat(formatSelection.product,format,price,1,formatSelection.modifiers); }} />}
          {selectedProductForVariants && <ProductVariantSelector product={selectedProductForVariants} productSalesPrice={getProductPrice(selectedProductForVariants)} currencySymbol={baseCurrency.symbol} onClose={() => setSelectedProductForVariants(null)} onConfirm={handleVariantConfirm} />}
          {productForScale && saleScaleContext && <ScaleModal key={JSON.stringify(saleScaleContext)}
