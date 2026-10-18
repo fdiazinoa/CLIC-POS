@@ -3,7 +3,7 @@ import test from 'node:test';
 import {nativeFixture,nativeSale,context,id,dto,policy,options} from './articleFormatsNativeFixture';
 import {validateWireEvent,wireHash} from '../services/articleFormats/wire';
 import {validateWireEventV2,validateContextV2,FORMAT_EVENT_TYPES_V2,type NetworkContextV2,type WireEventV2} from '../services/articleFormats/v2';
-import {saleWireLineV2,returnWireLineV2,prepareFormatFinancialCommit,commitFormatOwnedTransaction,getArticleFormatReadinessV2} from '../services/articleFormats/financialV2';
+import {saleWireLineV2,returnWireLineV2,prepareFormatFinancialCommit,commitFormatOwnedTransaction,getArticleFormatReadinessV2,formatTaxBreakdownV2} from '../services/articleFormats/financialV2';
 import {ArticleFormatNetworkMaster} from '../services/articleFormats/networkMaster';
 import {canonicalContent} from '../services/articleFormats/store';
 import {readNativeFormatAuthority} from '../services/articleFormats/nativeV3Financial';
@@ -70,5 +70,27 @@ test('Caja12 net550 +18%ITBIS +10%SERVICE is704 and partial returns preserve eac
  assert.equal(original.net_amount,'550.00');assert.equal(original.vat_amount,'99.00');assert.equal(original.service_charge_amount,'55.00');assert.equal(original.tax_amount,'154.00');assert.equal(original.total_amount,'704.00');assert.equal(original.base_quantity,'12');
  const a=returnWireLineV2(original,[],'0.3',id(97)),b=returnWireLineV2(original,[a],'0.7',id(98));assert.equal(Number(a.vat_amount)+Number(b.vat_amount),-99);assert.equal(Number(a.service_charge_amount)+Number(b.service_charge_amount),-55);assert.equal(Number(a.total_amount)+Number(b.total_amount),-704);
  const event=sale();event.lines=[original];event.totals={net_amount:'550.00',vat_amount:'99.00',service_charge_amount:'55.00',tax_amount:'154.00',discount_amount:'0.00',total_amount:'704.00'};event.payments[0].amount='704.00';assert.equal(validateWireEventV2(event).totals.total_amount,'704.00');
+ const refundedBreakdown=formatTaxBreakdownV2({...event,lines:[a,b]},{[a.line_id]:p,[b.line_id]:p});assert.deepEqual(refundedBreakdown.map(t=>({amount:t.amount,taxableBase:t.taxableBase,total:t.total,lineCount:t.lineCount})),[{amount:-99,taxableBase:-550,total:-649,lineCount:2},{amount:-55,taxableBase:-550,total:-605,lineCount:2}]);
  const bad={...p,taxes:[{id:id(95),type:'ITBIS',rate:.18},{id:id(96),type:'ITBIS',rate:.1}]};assert.throws(()=>saleWireLineV2(master,bad,event.lines[0],event.occurred_at,id(4)),/SERVICE_CHARGE/);
+});
+
+test('actual format constructor704 produces complete frozen tax display lines and real ESC/POS output',async t=>{
+ const {buildEscPosTicketPayload}=await import('../services/printer/EscPosFormatter');
+ const f=await nativeFixture();t.after(()=>f.db.close());
+ const taxes=[{id:id(95),name:'IVA18',type:'ITBIS',rate:.18},{id:id(96),name:'Servicio10',type:'SERVICE_CHARGE',rate:.1,fiscalAdditionalTaxCode:'001'}];
+ const frozenPolicy={...policy,taxes,tax_rate:'0.18',service_charge_rate:'0.1',tax_components_version:2,service_charge_base:'NET'};
+ const frozenDTO={...dto,formats:dto.formats.map(format=>format.id==='case'?{...format,factor:12,prices:[{tariffId:id(6),price:550}]}:format)};
+ f.db.prepare('UPDATE article_format_network_sessions SET context=?').run(canonicalContent(ctx));
+ f.db.prepare('UPDATE article_format_network_policies SET dto=?,policy=?').run(canonicalContent(frozenDTO),canonicalContent(frozenPolicy));
+ f.db.exec(INVENTORY_V2_SCHEMA);const authority=await readNativeFormatAuthority(f.sql,ctx);
+ f.db.prepare('INSERT INTO article_format_inventory_v2_authority VALUES(1,?,?,?,?,?)').run(ctx.authority_hash,canonicalContent(ctx.scope),ctx.session_expires_at,authority.baseline,'{}');
+ f.db.prepare('INSERT INTO article_format_inventory_v2_cells VALUES(?,?)').run(id(7),canonicalContent({kind:'BALANCE',item_id:id(7),warehouse_id:id(5),local_id:id(51),qty_physical:'137.0000',qty_committed:'0.0000',qty_reserved:'0.0000',source:'ERP_STOCK_AND_OMNICHANNEL_V1',source_version:1,source_hash:'a'.repeat(64),disjunction:'TRIVIAL_ZERO_OPERAND'}));
+ const e=sale();e.lines=[saleWireLineV2(frozenDTO,frozenPolicy as any,{...e.lines[0],commercial_quantity:'1',base_quantity:'12'},e.occurred_at,id(4))];e.totals={net_amount:'550.00',vat_amount:'99.00',service_charge_amount:'55.00',tax_amount:'154.00',discount_amount:'0.00',total_amount:'704.00'};e.payments[0].amount='704.00';
+ const masters=new ArticleFormatNetworkMaster(f.sql,ctx,{request:async()=>{throw Error('unexpected network');}});
+ await new ArticleFormatPosting(f.sql,ctx,masters,{validateAuthority:async()=>{},consumeFiscalPermit:async()=>{}}).post(e,options);
+ const tx=f.documents('transactions')[0],before=canonicalContent(tx);
+
+ const config:any={currencySymbol:'RD$',taxRate:0,taxes:[],receiptConfig:{showQr:false},companyInfo:{name:'Synthetic'},currencies:[]};
+ const ticket=Buffer.from(buildEscPosTicketPayload(tx,config)!,'base64').toString('utf8');assert.match(ticket,/IVA18/);assert.match(ticket,/Servicio10/);assert.match(ticket,/704\.00/);assert.equal(canonicalContent(tx),before);
+ assert.deepEqual(tx.taxBreakdown,[{id:id(95),name:'IVA18',type:'VAT',rate:.18,amount:99,taxableBase:550,total:649,lineCount:1},{id:id(96),name:'Servicio10',type:'SERVICE_CHARGE',rate:.1,fiscalAdditionalTaxCode:'001',amount:55,taxableBase:550,total:605,lineCount:1}]);
 });

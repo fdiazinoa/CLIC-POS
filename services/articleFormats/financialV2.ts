@@ -1,3 +1,4 @@
+import type {FiscalTaxBreakdownLine} from '../../utils/fiscalBreakdown';
 import {cloneFormatJSON} from './json';
 import {canonicalContent,type FormatSQL} from './store';
 import {saleWireLine,returnWireLine,ArticleFormatPosting,type NetworkMasterPort,type LocalPostingOptions} from './posting';
@@ -38,6 +39,24 @@ export function returnWireLineV2(original:PostingLine,returns:PostingLine[],quan
  const component=(k:'vat_amount'|'service_charge_amount')=>{const consumed=returns.reduce((n,l)=>n.plus('line_kind' in l?new Money(l[k]).abs():0),new Money(0));const total=new Money(original[k]).abs();return (last?total.minus(consumed):total.mul(q).div(sold).toDecimalPlaces(2)).negated();};
  const vat=component('vat_amount'),service=component('service_charge_amount'),tax=vat.plus(service),net=new Money(quote.net_amount).negated();
  return {...quote,line_kind:original.line_kind,article_format:original.article_format,...Object.fromEntries(AMOUNTS.map(k=>[k,new Money(quote[k]).negated().toFixed(2)])),vat_amount:vat.toFixed(2),service_charge_amount:service.toFixed(2),tax_amount:tax.toFixed(2),total_amount:net.plus(tax).toFixed(2)};
+}
+/** Display/accounting projection from the same frozen policy and signed wire amounts.
+ * Does not consult current tax masters or change an existing transaction. */
+export function formatTaxBreakdownV2(event:WireEventV2,policies:Record<string,NetworkLinePolicy>):FiscalTaxBreakdownLine[]{
+ const grouped=new Map<string,{line:FiscalTaxBreakdownLine;amount:InstanceType<typeof Money>;base:InstanceType<typeof Money>}>();
+ for(const wire of event.lines){
+  const taxes=policies[wire.line_id].taxes;
+  requireFormat(taxes.filter(t=>t.type==='ITBIS').length<=1&&taxes.filter(t=>t.type==='SERVICE_CHARGE').length<=1,'POS_FORMAT_TAX_PROFILE_UNSUPPORTED');
+  for(const tax of taxes){
+   requireFormat(tax.type==='ITBIS'||tax.type==='SERVICE_CHARGE','POS_FORMAT_TAX_PROFILE_UNSUPPORTED');
+   const service=tax.type==='SERVICE_CHARGE',type:NonNullable<FiscalTaxBreakdownLine['type']>=service?'SERVICE_CHARGE':'VAT',name=typeof tax.name==='string'&&tax.name.trim()?tax.name:(service?'Servicio':'ITBIS');
+   requireFormat(!service||tax.fiscalAdditionalTaxCode==='001','POS_FORMAT_SERVICE_CHARGE_CODE_REQUIRED');
+   const group=grouped.get(tax.id)||{line:{id:tax.id,name,rate:tax.rate,type,...(service?{fiscalAdditionalTaxCode:'001' as const}:{}),amount:0,taxableBase:0,total:0,lineCount:0},amount:new Money(0),base:new Money(0)};
+   requireFormat(group.line.name===name&&group.line.type===type&&group.line.rate===tax.rate,'POS_FORMAT_TAX_PROFILE_UNSUPPORTED');
+   group.amount=group.amount.plus(service?wire.service_charge_amount:wire.vat_amount);group.base=group.base.plus(wire.net_amount);group.line.lineCount++;grouped.set(tax.id,group);
+  }
+ }
+ return [...grouped.values()].map(({line,amount,base})=>({...line,amount:amount.toNumber(),taxableBase:base.toNumber(),total:base.plus(amount).toNumber()}));
 }
 export interface FormatACKV2 extends Omit<FormatACK,'schema_version'> {
  schema_version:2;profile:typeof FORMAT_PROFILE_V2;fiscal_permit_id:string;ncf:string;accounting_policy:'CASH_CLOSE';deferred_contribution_ids:string[];

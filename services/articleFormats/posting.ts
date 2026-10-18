@@ -1,7 +1,7 @@
 import {INVENTORY_V2_SCHEMA} from './inventoryV2';
 import {cloneFormatJSON} from './json';
 import {validateWireEventV2,validateContextV2,v2ReturnContext,type PostingContext,type PostingEvent,type WireEventV2} from './v2';
-import {saleWireLineV2,returnWireLineV2,validateACKV2,type FormatPostingV2Hooks,getArticleFormatReadinessV2} from './financialV2';
+import {saleWireLineV2,returnWireLineV2,validateACKV2,formatTaxBreakdownV2,type FormatPostingV2Hooks,getArticleFormatReadinessV2} from './financialV2';
 import {reconcileInventoryPoolIndex} from './inventoryPoolIndex';
 import {planInventoryOriginal} from './inventoryJournal';
 import {NATIVE_FISCAL_RECEIPTS_SCHEMA,planNativeFiscalReceipt} from '../db/NativeFiscalReservation';
@@ -259,7 +259,7 @@ export class ArticleFormatPosting {
    const transaction={id:event.transaction_id,date:event.occurred_at,displayId,globalSequence:global.count,seriesNumber:next,seriesId:options.seriesId,
     documentType:sale?'TICKET':'REFUND',type:sale?'SALE':'REFUND',items,payments,total:new Money(event.totals.total_amount).abs().mul(multiplier).toNumber(),
     netAmount:new Money(event.totals.net_amount).abs().mul(multiplier).toNumber(),taxAmount:new Money(event.totals.tax_amount).abs().mul(multiplier).toNumber(),
-    discountAmount:new Money(event.totals.discount_amount).abs().mul(multiplier).toNumber(),...(event.schema_version===2?{vatAmount:Number(event.totals.vat_amount),serviceChargeAmount:Number(event.totals.service_charge_amount),taxBreakdown:Object.values(policies).flatMap(p=>p.taxes).filter((t,i,all)=>all.findIndex(x=>x.id===t.id)===i).map(t=>({taxId:t.id,type:t.type,rate:t.rate,amount:event.lines.filter(l=>policies[l.line_id].taxes.some(x=>x.id===t.id)).reduce((n,l)=>n.plus('vat_amount' in l?(t.type==='SERVICE_CHARGE'?l.service_charge_amount:l.vat_amount):0),new Money(0)).toNumber(),...(t.type==='SERVICE_CHARGE'?{fiscalAdditionalTaxCode:'001'}:{})}))}:{}),status:'COMPLETED',terminalId:this.context.scope.terminalId,
+    discountAmount:new Money(event.totals.discount_amount).abs().mul(multiplier).toNumber(),...(event.schema_version===2?{vatAmount:Number(event.totals.vat_amount),serviceChargeAmount:Number(event.totals.service_charge_amount),taxBreakdown:formatTaxBreakdownV2(event,policies)}:{}),status:'COMPLETED',terminalId:this.context.scope.terminalId,
     userId:options.userId,userName:options.userName,customerId:event.customer_id,originalTransactionId:original?.transaction_id,
     ...(event.fiscal.mode==='LEGACY_B'?{ncf:event.fiscal.ncf,ncfType:event.fiscal.ncf_type,...(fiscalReceipt?{fiscalIssuerRnc:fiscalReceipt.issuerRnc}:{} )}:{}),
     ...(event.schema_version===2?{ncf:event.fiscal.ncf,ncfType:event.fiscal.ncf_type,fiscalIssuerRnc:event.fiscal.issuer_rnc,fiscalIssuance:event.fiscal.fiscal_issuance,fiscalWorkflowBirth:event.fiscal.birth,fiscalStatus:'PENDING',fiscalMode:'ECF',fiscalProvider:'MSELLER',fiscalEnvironment:event.fiscal.environment,currency:'DOP',settlementCurrencyCode:'DOP',customerSnapshot:event.fiscal.buyer_snapshot,fiscalWorkflowPermit:event.fiscal.permit}:{}),
