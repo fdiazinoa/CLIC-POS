@@ -1,3 +1,4 @@
+import {isInventoryPresentationEligible,assertInventoryPresentationEligible} from '../services/inventoryPresentations/eligibility';
 import {createPresentationRuntime,presentationAuthority,type PresentationRuntime} from '../services/inventoryPresentations/runtime';
 import {presentationFormatSnapshot,presentationBaseQuantity,presentationUnitPrice,type InventoryPresentationMaster} from '../services/inventoryPresentations/contract';
 import {normalizePresentationDraft,presentationInventoryQuantity,resizeInventoryPresentationLine,presentationSelectorDTO,assertInventoryPresentationReturnAllowed} from '../services/inventoryPresentations/selection';
@@ -1280,7 +1281,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [presentationReadyGeneration,setPresentationReadyGeneration]=useState(0);
    const [formatRuntime,setFormatRuntime]=useState<Awaited<ReturnType<typeof prepareFiscalFormatRuntime>>|null>(null);
    const [formatMasters,setFormatMasters]=useState<Record<string,any>>({});
-   const products=useMemo(()=>baseProducts.map(raw=>{const product=presentationMasters[raw.id]?.formats.some(f=>f.active&&f.allowSale&&!f.isBase)?{...raw,inventoryPresentationMaster:presentationMasters[raw.id]}:raw;return formatMasters[product.id]?{...product,article_formats:formatMasters[product.id].dto,articleFormatVariantSkus:formatMasters[product.id].policy.variant_skus}:product;}),[baseProducts,formatMasters,presentationMasters]);
+   const products=useMemo(()=>baseProducts.map(raw=>{const product=isInventoryPresentationEligible(raw)&&presentationMasters[raw.id]?.formats.some(f=>f.active&&f.allowSale&&!f.isBase)?{...raw,inventoryPresentationMaster:presentationMasters[raw.id]}:raw;return formatMasters[product.id]?{...product,article_formats:formatMasters[product.id].dto,articleFormatVariantSkus:formatMasters[product.id].policy.variant_skus}:product;}),[baseProducts,formatMasters,presentationMasters]);
    freezeCount('POS_RENDER_COUNT');
    markRenderStart('POS_INTERACTION_VIEW');
    const tableQa = React.useSyncExternalStore(subscribeTableLatencyQa, getTableLatencyQaState, getTableLatencyQaState);
@@ -1334,7 +1335,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const visiblePresentationProducts=catalogSearchProducts??baseProducts;
    const presentationVisibleKey=visiblePresentationProducts.map(product=>product.id).join('|');
    useEffect(()=>{let disposed=false;const runtime=presentationRuntimeRef.current;if(!runtime)return;void(async()=>{const active=await runtime.client.cached();if(!active)return;const rows:Record<string,InventoryPresentationMaster>={};for(let index=0;index<visiblePresentationProducts.length;index+=200)Object.assign(rows,await runtime.store.masters(active.bindingKey,visiblePresentationProducts.slice(index,index+200).map(p=>p.id)));if(!disposed)setPresentationMasters(rows);})().catch(error=>{if(!disposed)setPresentationError(String(error));});return()=>{disposed=true;};},[presentationReadyGeneration,presentationVisibleKey]);
-   const catalogProducts = useMemo(()=>(catalogSearchProducts ?? products).map(product=>presentationMasters[product.id]?.formats.some(f=>f.active&&f.allowSale&&!f.isBase)?{...product,inventoryPresentationMaster:presentationMasters[product.id]}:product),[catalogSearchProducts,products,presentationMasters]);
+   const catalogProducts = useMemo(()=>(catalogSearchProducts ?? products).map(product=>isInventoryPresentationEligible(product)&&presentationMasters[product.id]?.formats.some(f=>f.active&&f.allowSale&&!f.isBase)?{...product,inventoryPresentationMaster:presentationMasters[product.id]}:product),[catalogSearchProducts,products,presentationMasters]);
 
    useEffect(() => {
       freezeCount('EFFECT_PRODUCT_PRICES');
@@ -3655,6 +3656,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const addSelectedPresentation=useCallback((product:Product,formatId:string,quantity=1)=>{
       try{
+         assertInventoryPresentationEligible(product);
          const master=product.inventoryPresentationMaster;if(!master)throw Error('INVENTORY_PRESENTATION_MASTER_REQUIRED');
          if(isReturnMode||quantity<=0)assertInventoryPresentationReturnAllowed(product);
          const selected=master.formats.find(f=>f.id===formatId&&f.active&&f.allowSale);if(!selected)throw Error('INVENTORY_PRESENTATION_SALE_NOT_ALLOWED');

@@ -1,3 +1,4 @@
+import {assertInventoryPresentationEligible} from './eligibility';
 import {assertPresentationAdmission,beginPresentationAdmission,finishPresentationAdmission} from './admission';
 import type {CartItem} from '../../types';
 import {createUuid} from '../../utils/uuid';
@@ -28,6 +29,7 @@ export type PresentationRuntime=ReturnType<typeof createPresentationRuntime>;
 /** Capture only retained bytes; selected master revisions remain frozen across later refreshes. */
 export async function validatePresentationCart(runtime:PresentationRuntime,lines:CartItem[]){
  const selected=lines.filter(line=>line.inventoryPresentation!==undefined);if(!selected.length)return;
+ for(const line of selected)assertInventoryPresentationEligible(line);
  const active=await runtime.client.cached();if(!active)throw Error('INVENTORY_PRESENTATION_CACHE_REQUIRED');
  const masters:Record<string,string>={},retained:Record<string,import('./contract').InventoryPresentationMaster>={};
  const revisions=Array.from(new Set(selected.map(line=>line.inventoryPresentation!.masterRevision)));

@@ -1,3 +1,4 @@
+import {assertInventoryPresentationEligible} from '../inventoryPresentations/eligibility';
 import Decimal from 'decimal.js';
 import {createPresentationRuntime,presentationAuthority,validatePresentationCart} from '../inventoryPresentations/runtime';
 import {presentationInventoryQuantity} from '../inventoryPresentations/selection';
@@ -255,6 +256,7 @@ export class LargeMasterSyncV3OperationalSession {
         throw new LargeMasterSyncV3Error('SYNC_V3_ARTICLE_UNAVAILABLE');
       }
       if(line.inventoryPresentation&&presentationProof){
+        assertInventoryPresentationEligible(source.product);
         const master=JSON.parse(presentationProof.masters[line.inventoryPresentation.masterRevision]||'null');
         const base=master?.basePrices?.find((row:any)=>row.tariffId===tariffId);
         if(!base||!new Decimal(base.price).eq(source.product.price)||base.taxIncluded!==source.authority.taxIncluded)throw Error('INVENTORY_PRESENTATION_CATALOG_PRICE_CHANGED');

@@ -1,3 +1,4 @@
+import {assertInventoryPresentationEligible} from './eligibility';
 import {assertPresentationAdmission} from './admission';
 import {requiresProductStockAvailability} from '../../utils/productStockPolicy';
 import Decimal from 'decimal.js';
@@ -25,6 +26,14 @@ export async function assertPresentationCommit(transaction:Transaction,proof:Pre
  const sessions=await read<{state:string;context_key:string;binding_key:string}>('SELECT state,context_key,binding_key FROM inventory_presentation_sessions WHERE id=?',[proof.sessionId]);
  if(contexts[0]?.content!==proof.contextContent||sessions[0]?.state!=='COMPLETE'||sessions[0]?.context_key!==proof.contextKey||sessions[0]?.binding_key!==proof.bindingKey)throw Error('INVENTORY_PRESENTATION_COMMIT_PROOF_CHANGED');
  for(const line of selected){
+  assertInventoryPresentationEligible(line);
+  const source=await read<{record_json:string}>('SELECT record_json FROM master_v3_articles WHERE article_id=? AND sync_version=?',[line.id,line.v3SaleAuthority?.syncVersion??-1]);
+  if(source.length!==1)throw Error('INVENTORY_PRESENTATION_DIRECT_PRODUCT_REQUIRED');
+  const article=JSON.parse(source[0].record_json);
+  if(article.id!==line.id)throw Error('INVENTORY_PRESENTATION_DIRECT_PRODUCT_REQUIRED');
+  assertInventoryPresentationEligible({...article,isInventoriable:article.inventoriable});
+  const variants=await read<{variant_id:string}>('SELECT variant_id FROM master_v3_variants WHERE article_id=? AND sync_version=? AND active=1 LIMIT 1',[line.id,line.v3SaleAuthority?.syncVersion??-1]);
+  if(variants.length)throw Error('INVENTORY_PRESENTATION_DIRECT_PRODUCT_REQUIRED');
   const descriptor=line.inventoryPresentation!,expected=proof.masters[descriptor.masterRevision];
   const rows=await read<{content:string}>('SELECT content FROM inventory_presentation_masters WHERE context_key=? AND master_revision=? AND item_id=?',[proof.contextKey,descriptor.masterRevision,line.id]);
   if(!expected||rows.length!==1||rows[0].content!==expected||line.quantity<=0||line.variantId||line.variantSku||descriptor.tariffId!==line.v3SaleAuthority?.tariffId||line.v3SaleAuthority?.warehouseId!==authority.scope.warehouseId)throw Error('INVENTORY_PRESENTATION_COMMIT_PROOF_CHANGED');
