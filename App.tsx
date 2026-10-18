@@ -14,7 +14,10 @@ import LargeMasterSyncV3OperationalPOS from './components/LargeMasterSyncV3Opera
 import { persistV3FinancialTransaction, validateV3FrozenFiscalAmounts,readV3CompletedReservation } from './services/sync/LargeMasterSyncV3FinancialCommit';
 import { validateV3FrozenLineFiscalAmounts } from './services/sync/LargeMasterSyncV3LineSource';
 import { buildV3FrozenFiscalProviderTransaction } from './components/v3OperationalUIQueue';
-import { getLargeMasterSyncV3OperationalSession } from './services/sync/LargeMasterSyncV3OperationalSession';
+import { captureFiscalStatusBoundContext } from './services/fiscal/FiscalBoundContext';
+import { readLargeMasterSyncV3BoundIdentity } from './services/sync/LargeMasterSyncV3BoundTransport';
+import { assertLargeMasterSyncV3NativeAndroid } from './services/sync/LargeMasterSyncV3Platform';
+import { getLargeMasterSyncV3OperationalSession, v3BindingKey } from './services/sync/LargeMasterSyncV3OperationalSession';
 import { assertLargeMasterSyncV3SetupContract, largeMasterSyncV3DownloadOrigin } from './services/sync/LargeMasterSyncV3DownloadOrigin';
 import { completeLargeMasterSyncV3Setup } from './services/sync/LargeMasterSyncV3SetupCompletion';
 import { createV3Progress, type V3Progress } from './services/sync/LargeMasterSyncV3Progress';
@@ -10958,7 +10961,51 @@ const AppContent: React.FC = () => {
     window.dispatchEvent(new Event('transactionsUpdated'));
   }, []);
 
-  const loadFiscalStatusContext = useCallback(async () => {
+  const loadFiscalStatusContext = useCallback(async (originalOnly = false) => {
+    if (originalOnly) {
+      // Manual status never opens an operational session: its cold path can bootstrap masters.
+      assertLargeMasterSyncV3NativeAndroid();
+      const store = dbAdapter.masterSyncV3Store;
+      if (!dbAdapter.supportsV3FiscalMetadataCAS || !dbAdapter.saveDocumentsAtomically
+        || !store?.getActiveRuntimeVersion || !store.getOperationalOwner) throw new Error('FISCAL_STATUS_NATIVE_REQUIRED');
+      const identity = readLargeMasterSyncV3BoundIdentity();
+      const auth = captureFiscalStatusBoundContext();
+      const downloadOrigin = largeMasterSyncV3DownloadOrigin();
+      const bindingKey = v3BindingKey(identity,downloadOrigin);
+      const identityFingerprint = JSON.stringify(identity);
+      const assertIdentity = () => {
+        assertLargeMasterSyncV3NativeAndroid();auth.assertCurrent();
+        if (dbAdapter.masterSyncV3Store !== store || !dbAdapter.supportsV3FiscalMetadataCAS || !dbAdapter.saveDocumentsAtomically
+          || JSON.stringify(readLargeMasterSyncV3BoundIdentity()) !== identityFingerprint
+          || largeMasterSyncV3DownloadOrigin() !== downloadOrigin) throw new Error('FISCAL_STATUS_SCOPE_CHANGED');
+      };
+      const snapshot = async () => {
+        assertIdentity();
+        const persisted = resolvePersistedBusinessConfig(await db.get('config') as unknown);
+        const matches = persisted?.terminals?.filter(terminal => terminal.id === identity.terminalId
+          && terminal.config?.currentDeviceId === identity.deviceId);
+        const terminal = matches?.[0], binding = terminal?.config?.erpBinding;
+        if (!persisted || matches?.length !== 1 || !binding
+          || binding.tenantId !== auth.descriptor.tenantId || binding.companyId !== auth.descriptor.companyId
+          || binding.storeId !== auth.descriptor.storeId || identity.tenantId !== auth.descriptor.tenantId
+          || identity.terminalId !== auth.descriptor.terminalId || identity.deviceId !== auth.descriptor.deviceId
+          || new URL(auth.base).origin !== new URL(identity.erpSyncBaseUrl).origin) throw new Error('FISCAL_STATUS_SCOPE_CHANGED');
+        const environment = getProviderEnvironment(getEffectiveFiscalComplianceConfig(persisted,terminal.config),'MSELLER');
+        const [runtime,owner] = await Promise.all([store.getActiveRuntimeVersion(),store.getOperationalOwner!()]);
+        if (!runtime || (runtime.contractVersion || 1) < 2 || !runtime.syncId || !Number.isSafeInteger(runtime.syncVersion)
+          || runtime.syncVersion < 1 || owner?.binding !== bindingKey || owner.syncId !== runtime.syncId
+          || owner.syncVersion !== runtime.syncVersion) throw new Error('FISCAL_STATUS_LOCAL_CONTEXT_REQUIRED');
+        assertIdentity();
+        return { scope:{providerId:'MSELLER' as const,environment,issuerRnc:String(persisted.companyInfo?.rnc || '').replace(/\D/g,''),
+          tenantId:binding.tenantId,companyId:binding.companyId,terminalId:terminal.id,deviceId:identity.deviceId,storeId:binding.storeId,binding:bindingKey},
+          catalog:{syncId:runtime.syncId,syncVersion:runtime.syncVersion,binding:bindingKey},
+          runtime:{...runtime},owner:{...owner} };
+      };
+      const captured = await snapshot(),fingerprint = JSON.stringify(captured);
+      return {scope:captured.scope,catalog:captured.catalog,assertCurrent:async()=>{
+        if (JSON.stringify(await snapshot()) !== fingerprint) throw new Error('FISCAL_STATUS_SCOPE_CHANGED');
+      }};
+    }
     const session = await getLargeMasterSyncV3OperationalSession();
     await session.assertCurrent();
     const persisted = resolvePersistedBusinessConfig(await db.get('config') as unknown);
@@ -10995,7 +11042,7 @@ const AppContent: React.FC = () => {
     commit:async mutations=> {
       if (!dbAdapter.saveDocumentsAtomically) throw new Error('FISCAL_STATUS_NATIVE_REQUIRED');
       await dbAdapter.saveDocumentsAtomically(mutations);
-    },get:getScopedFiscalDocumentStatus,publish:publishFiscalTransaction,
+    },get:(tx,scope,originalOnly)=>getScopedFiscalDocumentStatus(tx,scope,undefined,undefined,undefined,originalOnly),publish:publishFiscalTransaction,
   }),[loadFiscalStatusContext,publishFiscalTransaction]);
   const consultFiscalStatus = useCallback(async(transaction:Transaction):Promise<string>=> {
     const stored = await db.getDocument('transactions',transaction.id) as Transaction | null;
@@ -11427,10 +11474,17 @@ const AppContent: React.FC = () => {
   }, [config, pollFiscalDocumentStatus, upsertFiscalTransaction, loadFiscalStatusContext, fiscalStatusWorker]);
 
   const retryFiscalDocument = useCallback(async (transaction: Transaction): Promise<string> => {
-    // Never consume a classification retry, rewrite the original, or POST an ambiguous MSeller attempt.
-    if (transaction.fiscalProvider === 'MSELLER') {
-      await syncFiscalDocument(transaction);
-      return 'Consulta fiscal solicitada; se conserva el intento original sin reenviar.';
+    if(transaction.fiscalProvider==='MSELLER'){
+      // This action never enters syncFiscalDocument, classification retry or ISSUE, even without an original reference.
+      try { return await fiscalStatusWorker.consult(transaction.id,true,undefined,undefined,true); }
+      catch(error){
+        const code=error instanceof Error?error.message:'';
+        if(/FISCAL_STATUS_(LOCAL_CONTEXT_REQUIRED|NATIVE_REQUIRED)|SYNC_V3_NATIVE_ANDROID_REQUIRED/.test(code))return 'El contexto local autorizado no está disponible. Se conserva el pendiente; valida la preparación de la terminal antes de consultar.';
+        if(code==='FISCAL_TERMINAL_AUTH_REQUIRED')return 'Sesión vencida o dispositivo no autorizado. Se conserva el pendiente; valida la sesión vigente.';
+        if(/SCOPE|BINDING/.test(code))return 'El scope de la terminal cambió. Se conserva el pendiente y el envío original.';
+        if(/SOURCE|ATTEMPT/.test(code))return 'No se identificó inequívocamente el envío original. Se conserva el pendiente.';
+        return 'No se pudo consultar o guardar el estado del e-CF en el ERP. Se conserva la evidencia del documento original.';
+      }
     }
     if (LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED) {
       const stored = await db.getDocument('transactions', transaction.id) as Transaction | null;
@@ -11494,7 +11548,7 @@ const AppContent: React.FC = () => {
 
     await syncFiscalDocument(LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED ? transaction : retryingTransaction, Boolean(transaction.fiscalClassificationProjection));
     return 'Reintento de envío fiscal iniciado.';
-  }, [config, pollFiscalDocumentStatus, syncFiscalDocument, upsertFiscalTransaction]);
+  }, [config, pollFiscalDocumentStatus, syncFiscalDocument, upsertFiscalTransaction, fiscalStatusWorker]);
 
   const fiscalRecoveryInFlightRef = useRef<Set<string>>(new Set());
 
