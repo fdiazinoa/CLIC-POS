@@ -58,5 +58,17 @@ test('coverage V2 atomically absorbs only the exact original, keeping 137-48 the
  const stock=await readInventoryV2(f.sql.query,capture.nativeBaseline,[id(7)],id(5));assert.equal(stock![id(7)].physical.toString(),'89');assert.equal(stock![id(7)].available.toString(),'89');
  const prior=f.db.prepare('SELECT * FROM article_format_inventory_v2_authority').all();await assert.rejects(installInventoryV2(f.sql,capture,download,async()=>{}),/ORDINAL_STALE/);assert.deepEqual(f.db.prepare('SELECT * FROM article_format_inventory_v2_authority').all(),prior);
  const bad={request:async(path:string)=>path.endsWith('/pages/0')?{schema_version:2,receipt_id:receipt,baseline_id:baseline,index:0,next_index:null,row_count:2,checksum,canonical_payload_text:'[]',rows:[]}:transport.request(path)};await assert.rejects(downloadInventoryV2(bad,capture),/RECEIPT_INVALID/);assert.deepEqual(f.db.prepare('SELECT * FROM article_format_inventory_v2_authority').all(),prior);
+ const stable=download.rows[0].qty_physical;download.rows[0].qty_physical='999.0000';await assert.rejects(installInventoryV2(f.sql,capture,download,async()=>{}),/STAGING_CHANGED/);download.rows[0].qty_physical=stable;
+ capture.ledger[0].qtyOut=0;await assert.rejects(installInventoryV2(f.sql,capture,download,async()=>{}),/STAGING_CHANGED/);assert.deepEqual(f.db.prepare('SELECT * FROM article_format_inventory_v2_authority').all(),prior);
  assert.equal((await f.posting.pending()).length,1,'physical receipt preserves the financial Outbox');
+});
+
+test('Caja12 net550 +18%ITBIS +10%SERVICE is704 and partial returns preserve each frozen component',()=>{
+ const p={...policy,taxes:[{id:id(95),type:'ITBIS',rate:.18},{id:id(96),type:'SERVICE_CHARGE',rate:.1,fiscalAdditionalTaxCode:'001'}],tax_rate:'0.18',service_charge_rate:'0.1',tax_components_version:2 as const,service_charge_base:'NET' as const};
+ const master={...dto,formats:dto.formats.map(f=>f.id==='case'?{...f,factor:12,prices:[{tariffId:id(6),price:550}]}:f)};
+ const original=saleWireLineV2(master,p,{...sale().lines[0],commercial_quantity:'1',base_quantity:'12'},sale().occurred_at,id(4));
+ assert.equal(original.net_amount,'550.00');assert.equal(original.vat_amount,'99.00');assert.equal(original.service_charge_amount,'55.00');assert.equal(original.tax_amount,'154.00');assert.equal(original.total_amount,'704.00');assert.equal(original.base_quantity,'12');
+ const a=returnWireLineV2(original,[],'0.3',id(97)),b=returnWireLineV2(original,[a],'0.7',id(98));assert.equal(Number(a.vat_amount)+Number(b.vat_amount),-99);assert.equal(Number(a.service_charge_amount)+Number(b.service_charge_amount),-55);assert.equal(Number(a.total_amount)+Number(b.total_amount),-704);
+ const event=sale();event.lines=[original];event.totals={net_amount:'550.00',vat_amount:'99.00',service_charge_amount:'55.00',tax_amount:'154.00',discount_amount:'0.00',total_amount:'704.00'};event.payments[0].amount='704.00';assert.equal(validateWireEventV2(event).totals.total_amount,'704.00');
+ const bad={...p,taxes:[{id:id(95),type:'ITBIS',rate:.18},{id:id(96),type:'ITBIS',rate:.1}]};assert.throws(()=>saleWireLineV2(master,bad,event.lines[0],event.occurred_at,id(4)),/SERVICE_CHARGE/);
 });

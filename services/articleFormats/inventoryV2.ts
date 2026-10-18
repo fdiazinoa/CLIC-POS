@@ -2,6 +2,7 @@ import {canonicalContent,type FormatSQL,type FormatStatement} from './store';
 import {Money,hashText,requireFormat,uuid,type FormatTransport} from './wire';
 import {signedBase4} from './inventoryContract';
 import {readNativeFormatAuthority} from './nativeV3Financial';
+import {cloneFormatJSON} from './json';
 import {validateContextV2,type NetworkContextV2} from './v2';
 export const INVENTORY_V2_SCHEMA=`
 CREATE TABLE IF NOT EXISTS article_format_inventory_v2_generation(singleton INTEGER PRIMARY KEY CHECK(singleton=1),generation INTEGER NOT NULL);
@@ -11,12 +12,18 @@ CREATE TABLE IF NOT EXISTS article_format_inventory_v2_cells(item_id TEXT PRIMAR
 CREATE TABLE IF NOT EXISTS article_format_inventory_v2_absorbed(ledger_id TEXT PRIMARY KEY,content_hash TEXT NOT NULL,receipt_id TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS article_format_inventory_v2_history(receipt_id TEXT PRIMARY KEY,manifest TEXT NOT NULL);
 ${['INSERT','UPDATE','DELETE'].map(op=>`CREATE TRIGGER IF NOT EXISTS article_format_inventory_v2_generation_${op.toLowerCase()} AFTER ${op} ON documents WHEN ${op==='INSERT'?'NEW':'OLD'}.collection_name IN ('inventoryLedger','inventoryCommitments','reservations') BEGIN UPDATE article_format_inventory_v2_generation SET generation=generation+1 WHERE singleton=1;END;`).join('\n')}
+CREATE TRIGGER IF NOT EXISTS article_format_inventory_v2_source_update AFTER UPDATE OF payload_json,event_id,event_type ON sync_outbox_v2 WHEN (OLD.event_type='SALE_POSTED' OR NEW.event_type='SALE_POSTED') AND (OLD.payload_json<>NEW.payload_json OR OLD.event_id<>NEW.event_id OR OLD.event_type<>NEW.event_type) BEGIN UPDATE article_format_inventory_v2_generation SET generation=generation+1 WHERE singleton=1;END;
+CREATE TRIGGER IF NOT EXISTS article_format_inventory_v2_source_insert AFTER INSERT ON sync_outbox_v2 WHEN NEW.event_type='SALE_POSTED' BEGIN UPDATE article_format_inventory_v2_generation SET generation=generation+1 WHERE singleton=1;END;
+CREATE TRIGGER IF NOT EXISTS article_format_inventory_v2_source_delete AFTER DELETE ON sync_outbox_v2 WHEN OLD.event_type='SALE_POSTED' BEGIN UPDATE article_format_inventory_v2_generation SET generation=generation+1 WHERE singleton=1;END;
 CREATE TRIGGER IF NOT EXISTS article_format_inventory_v2_history_update BEFORE UPDATE ON article_format_inventory_v2_history BEGIN SELECT RAISE(ABORT,'POS_FORMAT_INVENTORY_IMMUTABLE');END;
 CREATE TRIGGER IF NOT EXISTS article_format_inventory_v2_history_delete BEFORE DELETE ON article_format_inventory_v2_history BEGIN SELECT RAISE(ABORT,'POS_FORMAT_INVENTORY_IMMUTABLE');END;
 `;
 interface Original {source_kind:'ARTICLE_FORMAT_V1'|'ARTICLE_FORMAT_V2'|'ORDINARY_V3';event_id:string;original:Record<string,any>}
 interface Ledger {id:string;productId:string;warehouseId:string;qtyIn:number;qtyOut:number;v3Binding:string;articleFormatEventId?:string;articleFormatLineId?:string;documentRef:string}
 interface Capture {context:NetworkContextV2;generation:string;nativeBaseline:string;originals:Original[];ledger:Ledger[];ledgerHash:string}
+// Only a complete, unchanged capture/download produced by this pipeline may select authority.
+const captureSeals=new WeakMap<object,string>(),downloadSeals=new WeakMap<object,string>();
+function sealed<T extends object>(value:T,seals:WeakMap<object,string>):T{requireFormat(seals.get(value)===canonicalContent(value),'POS_FORMAT_INVENTORY_STAGING_CHANGED');return cloneFormatJSON(value);}
 const same=(a:unknown,b:unknown)=>canonicalContent(a)===canonicalContent(b);
 const sourceScope=(c:NetworkContextV2)=>({tenant_id:c.scope.tenantId,company_id:c.scope.companyId,store_id:c.scope.storeId,terminal_id:c.scope.terminalId,device_id:c.scope.deviceId,warehouse_id:c.scope.warehouseId,local_id:c.scope.localId});
 const generation=async(sql:FormatSQL)=>String((await sql.query<{generation:number}>('SELECT generation FROM article_format_inventory_v2_generation WHERE singleton=1',[]))[0]?.generation??'');
@@ -42,7 +49,7 @@ export async function captureInventoryV2(sql:FormatSQL,input:NetworkContextV2):P
   for(const row of ordinary){const p=JSON.parse(row.payload_json);if(p.tenant_id===c.scope.tenantId&&p.terminal_id===c.scope.terminalId&&p.transaction?.v3WarehouseId===c.scope.warehouseId){requireFormat(p.company_id===c.scope.companyId&&p.store_id===c.scope.storeId&&p.device_id===c.scope.deviceId,'POS_FORMAT_INVENTORY_SCOPE_FORBIDDEN');originals.push({source_kind:'ORDINARY_V3',event_id:row.event_id,original:p});}}
   requireFormat(originals.length<=200&&new Set(originals.map(o=>o.event_id)).size===originals.length,'POS_FORMAT_INVENTORY_BACKLOG_LIMIT');
   for(const l of ledger){requireFormat(originals.some(o=>l.articleFormatEventId?o.event_id===l.articleFormatEventId:o.source_kind==='ORDINARY_V3'&&o.original.transaction?.id===l.documentRef),'POS_FORMAT_INVENTORY_UNREPRESENTED_EFFECT');}
-  return {context:c,generation:await generation(tx),nativeBaseline:authority.baseline,originals,ledger,ledgerHash:await hashText(canonicalContent(ledger))};
+  const captured={context:c,generation:await generation(tx),nativeBaseline:authority.baseline,originals,ledger,ledgerHash:await hashText(canonicalContent(ledger))};captureSeals.set(captured,canonicalContent(captured));return captured;
  });
 }
 function validCell(cell:any,c:NetworkContextV2){
@@ -52,6 +59,7 @@ function validCell(cell:any,c:NetworkContextV2){
 }
 /** Download all immutable pages. Staging is inert; only install below changes a selected authority. */
 export async function downloadInventoryV2(transport:FormatTransport,capture:Capture){
+ capture=sealed(capture,captureSeals);
  const c=capture.context,prefix='/api/sync/article-formats/v2',body={schema_version:2,journal_generation:capture.generation,events:capture.originals};
  requireFormat(new TextEncoder().encode(JSON.stringify(body)).length<=8*1024*1024,'POS_FORMAT_INVENTORY_BACKLOG_LIMIT');
  const b=await transport.request(`${prefix}/inventory-baselines`,{});uuid(b.baseline_id);
@@ -67,10 +75,11 @@ export async function downloadInventoryV2(transport:FormatTransport,capture:Capt
  }
  requireFormat(rows.length===m.row_count,'POS_FORMAT_INVENTORY_RECEIPT_INVALID');
  const completed=await transport.request(`${prefix}/inventory-receipts/${m.receipt_id}/complete`,{schema_version:2,pages:m.pages.map(({index,checksum}:any)=>({index,checksum}))});
- requireFormat(same({...completed,complete:false},m)&&completed.complete===true,'POS_FORMAT_INVENTORY_ACK_INVALID');return {manifest:completed,rows};
+ requireFormat(same({...completed,complete:false},m)&&completed.complete===true,'POS_FORMAT_INVENTORY_ACK_INVALID');const downloaded={manifest:completed,rows};downloadSeals.set(downloaded,canonicalContent(downloaded));return downloaded;
 }
 export async function installInventoryV2(sql:FormatSQL,capture:Capture,download:Awaited<ReturnType<typeof downloadInventoryV2>>,validateAuthority:(tx:FormatSQL,c:NetworkContextV2)=>Promise<void>){
  requireFormat(sql.runFinancial,'POS_FORMAT_ATOMIC_STORAGE_REQUIRED');
+ capture=sealed(capture,captureSeals);download=sealed(download,downloadSeals);
  return sql.runFinancial!(async tx=>{
   const c=capture.context;await validateAuthority(tx,c);const authority=await readNativeFormatAuthority(tx,c);await assertLocalCommitments(tx,c);
   requireFormat(authority.baseline===capture.nativeBaseline&&await generation(tx)===capture.generation&&await hashText(canonicalContent(await localLedger(tx,c)))===capture.ledgerHash,'POS_FORMAT_INVENTORY_GENERATION_CHANGED');
