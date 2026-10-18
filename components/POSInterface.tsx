@@ -1,3 +1,5 @@
+import {prepareFiscalFormatRuntime} from '../services/fiscal/FiscalWorkflowV2FormatRuntime';
+import {createUuid} from '../utils/uuid';
 import { fiscalWorkflowV2Client } from '../services/fiscal/FiscalWorkflowV2Client';
 import type {FiscalWorkflowCheckoutV2} from '../services/fiscal/FiscalWorkflowV2Types';
 import { explicitTerminalFiscalEnvironment } from '../utils/terminalConfigSnapshot';
@@ -1204,7 +1206,7 @@ const buildUberRecoveredPayment = (reservation: Reservation, amount: number): Pa
 const POSInterface: React.FC<POSInterfaceProps> = ({
    config,
    currentUser,
-   products,
+   products:baseProducts,
    onUpdateProducts,
    roles,
    users,
@@ -1254,6 +1256,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    catalogSearchProducts,
    catalogArticleDiagnostics,
 }) => {
+   const [formatRuntime,setFormatRuntime]=useState<Awaited<ReturnType<typeof prepareFiscalFormatRuntime>>|null>(null);
+   const [formatMasters,setFormatMasters]=useState<Record<string,any>>({});
+   const products=useMemo(()=>baseProducts.map(product=>formatMasters[product.id]?{...product,article_formats:formatMasters[product.id].dto,articleFormatVariantSkus:formatMasters[product.id].policy.variant_skus}:product),[baseProducts,formatMasters]);
    freezeCount('POS_RENDER_COUNT');
    markRenderStart('POS_INTERACTION_VIEW');
    const tableQa = React.useSyncExternalStore(subscribeTableLatencyQa, getTableLatencyQaState, getTableLatencyQaState);
@@ -2394,7 +2399,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const [editingItem, setEditingItem] = useState<CartItem | null>(null);
    const [formatSelection, setFormatSelection] = useState<{product: Product; variantId: string | null; basePrice: number; modifiers: string[]} | null>(null);
-   const articleFormatsEnabled = formatsEnabled(config, { capabilities: activeTerminalConfig?.articleFormatCapabilities });
+   const articleFormatsEnabled = Boolean(formatRuntime)&&fiscalWorkflowV2Client.enabled() || formatsEnabled(config, { capabilities: activeTerminalConfig?.articleFormatCapabilities });
+   useEffect(()=>{let disposed=false;setFormatRuntime(null);setFormatMasters({});if(!v3Operational||config.featureFlags?.ARTICLE_FORMATS!==true||!fiscalWorkflowV2Client.enabled())return;void prepareFiscalFormatRuntime(activeTerminalId).then(runtime=>{if(!disposed)setFormatRuntime(runtime);}).catch(()=>{});return()=>{disposed=true;};},[v3Operational,activeTerminalId,config.featureFlags?.ARTICLE_FORMATS]);
+   useEffect(()=>{let disposed=false;if(!formatRuntime)return;void Promise.all(baseProducts.slice(0,500).map(async product=>[product.id,await formatRuntime.masters.getPolicy(product.id)] as const)).then(rows=>{if(!disposed)setFormatMasters(Object.fromEntries(rows.filter(([,value])=>value)));});return()=>{disposed=true;};},[formatRuntime,baseProducts]);
    const [activeCartItemId, setActiveCartItemId] = useState<string | null>(null);
    const handledAccountActionIdsRef = useRef<Set<string>>(new Set());
    useEffect(() => {
@@ -3605,8 +3612,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             if (!canAddItemToCart(product,toBaseQuantity(quantity,format.factor))) return false;
             const selectedProduct = { ...product, appliedTaxIds: resolveEffectiveTaxIds(product.appliedTaxIds,activeTerminalConfig,product.taxable) };
             const previous = latestAddCart.current;
-            const next = addFormatLine(previous,selectedProduct,format,quantity,price,crypto.randomUUID(),modifiers);
-            if (context) {
+            const next = addFormatLine(previous,selectedProduct,format,quantity,price,createUuid(),modifiers);
+            if (context && !formatRuntime) {
                await context.validate(next,{ticketId:activeTable?.currentOrderId || activeDirectV3TicketId,claimId:activeDirectV3TicketId,reservationId:activeV3Reservation?.reservation.id,reservationClaimId:activeV3Reservation?.claimId,tableId:activeTable?.id === undefined ? undefined : String(activeTable.id)});
                assertV3UIContext(isCurrent);
             }
@@ -3618,7 +3625,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          } catch (error) { setErrorToast(error instanceof Error ? error.message : 'Presentación no válida'); return false; }
       };
       return context ? addQueue.current.run(isCurrent,operation) : operation();
-   },[rejectFormatQuickReturn,isReturnMode,articleFormatsEnabled,v3Operational,blockRecoveredUberOrderMutation,authorizeSubtotalizedEdit,ensureSalesWithOpenZPermission,canAddItemToCart,activeTerminalConfig,activeTable?.currentOrderId,activeTable?.id,activeDirectV3TicketId,onUpdateCart]);
+   },[rejectFormatQuickReturn,isReturnMode,articleFormatsEnabled,formatRuntime,v3Operational,blockRecoveredUberOrderMutation,authorizeSubtotalizedEdit,ensureSalesWithOpenZPermission,canAddItemToCart,activeTerminalConfig,activeTable?.currentOrderId,activeTable?.id,activeDirectV3TicketId,onUpdateCart]);
 
    const handleProductClick = useCallback((product: Product) => {
       if (rejectFormatQuickReturn(product)) return;
@@ -5532,13 +5539,19 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       try {
          const completed = await completedReservationForReceipt();
          if (completed) { clearCompletedReservationCart(); return completed; }
-         if(fiscalCheckoutRef.current?.phase==='COMMITTED'){
+         if(fiscalCheckoutRef.current&&['COMMITTED','ACKNOWLEDGED'].includes(fiscalCheckoutRef.current.phase)){
             const prior=await db.getDocument('transactions',fiscalCheckoutRef.current.transactionId)||await db.getDocument('transactionHistory',fiscalCheckoutRef.current.transactionId);
             if(!prior)throw Error('FISCAL_WORKFLOW_COMMITTED_RECEIPT_REQUIRED');
             await fiscalWorkflowV2Client.acknowledge(fiscalCheckoutRef.current);fiscalCheckoutRef.current=null;
             onUpdateCart([]);onSelectCustomer(null);return prior as Transaction;
          }
 
+         if(processedCart.some(line=>line.articleFormat)){
+            if(!formatRuntime||!fiscalCheckoutRef.current?.permit||processedCart.some(line=>line.quantity<=0)||activeTable||activeDirectV3TicketId||activeV3Reservation||activeRecoveredReservation)throw Error('FISCAL_WORKFLOW_FORMAT_NOT_READY');
+            await formatRuntime.assertCurrent();const result=await formatRuntime.commitSale({checkout:fiscalCheckoutRef.current,lines:processedCart,ncfType:requiredSaleFiscalType,buyer:buildTransactionCustomerSnapshot(effectiveSelectedCustomer)||{},customerId:effectiveSelectedCustomer?.id,payments,seriesId:resolveTerminalDocumentSeriesId(activeTerminalConfig,'TICKET')!,userId:currentUser.id,userName:currentUser.name});
+            await onTransactionComplete(result);await fiscalWorkflowV2Client.acknowledge(fiscalCheckoutRef.current);fiscalCheckoutRef.current=null;
+            onUpdateCart([]);resetCompletedSaleDiscount(setGlobalDiscount);onSelectCustomer(null);return result;
+         }
          assertFormatsPostingClosed(processedCart);
          await assertCheckoutFiscalAuthority();
          if (v3Operational) await v3Operational.validate(processedCart, { ticketId: activeTable?.currentOrderId || activeDirectV3TicketId, claimId: activeDirectV3TicketId, reservationId:activeV3Reservation?.reservation.id,reservationClaimId:activeV3Reservation?.claimId, tableId: activeTable?.id === undefined ? undefined : String(activeTable.id) });
@@ -6432,7 +6445,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       } catch (error: any) { setErrorToast(`V3: ${error.message || error}`); return; }
       if (hasV3ReservationCart && !activeV3Reservation) { setErrorToast('La referencia de la reserva aún no está validada.'); return; }
       if (v3Operational) {
-         try { await v3Operational.validate(cart, { ticketId: activeTable?.currentOrderId || activeDirectV3TicketId, claimId: activeDirectV3TicketId, reservationId:activeV3Reservation?.reservation.id,reservationClaimId:activeV3Reservation?.claimId, tableId: activeTable?.id === undefined ? undefined : String(activeTable.id) }); }
+         try { if(processedCart.some(line=>line.articleFormat)){if(!formatRuntime)throw Error('FISCAL_WORKFLOW_FORMAT_NOT_READY');await formatRuntime.assertCurrent();}else await v3Operational.validate(cart, { ticketId: activeTable?.currentOrderId || activeDirectV3TicketId, claimId: activeDirectV3TicketId, reservationId:activeV3Reservation?.reservation.id,reservationClaimId:activeV3Reservation?.claimId, tableId: activeTable?.id === undefined ? undefined : String(activeTable.id) }); }
          catch (error: any) { setErrorToast(`V3: ${error.message || error}`); return; }
       }
       if (isOrderTakerMode) {
@@ -6514,7 +6527,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    };
 
    const fiscalCheckoutRef=useRef<FiscalWorkflowCheckoutV2|null>(null);
-   useEffect(()=>{if(v3Operational&&fiscalCompliance.mode==='ECF')void fiscalWorkflowV2Client.prefetch().catch(()=>undefined);},[v3Operational,terminalId,fiscalCompliance.mode]);
+   const fiscalCheckoutOperationRef=useRef<string|null>(null);
+   useEffect(()=>{if(cart.length===0)fiscalCheckoutOperationRef.current=null;},[cart.length]);
+   useEffect(()=>{if(v3Operational&&fiscalCompliance.mode==='ECF'&&fiscalWorkflowV2Client.enabled())void fiscalWorkflowV2Client.prefetch().catch(()=>undefined);},[v3Operational,terminalId,fiscalCompliance.mode]);
    const beforeV3PaymentEffects = async (paymentIds:string[]=[]): Promise<PaymentEffectsFence> => {
       const completed = await completedReservationForReceipt();
       if (completed) return Object.assign(() => {},{completedTransaction:completed});
@@ -6522,16 +6537,19 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (hasV3ReservationCart && !activeV3Reservation) throw new Error('La referencia de la reserva aún no está validada.');
       if (activeV3Reservation && selectedCustomer?.id !== activeV3Reservation.reservation.customerId) throw new Error('El cliente de la reserva no puede cambiarse.');
       if (!v3Operational) return () => {};
-      const newFiscalCheckout=fiscalCompliance.mode==='ECF'&&getDefaultFiscalProvider(config,activeTerminalConfig)==='MSELLER'
+      const newFiscalCheckout=fiscalCompliance.mode==='ECF'&&fiscalWorkflowV2Client.enabled()&&getDefaultFiscalProvider(config,activeTerminalConfig)==='MSELLER'
         &&!hasV3ReservationCart&&!activeV3Reservation&&!activeRecoveredReservation&&!activeDirectV3TicketId&&!activeTable&&!activeTable?.currentOrderId
         &&processedCart.every(line=>line.quantity>0);
       if(!newFiscalCheckout)fiscalCheckoutRef.current=null;
       if(newFiscalCheckout){
-        const checkout=await fiscalWorkflowV2Client.reserveCheckout(JSON.stringify({items:processedCart,customerId:effectiveSelectedCustomer?.id||null,fiscalType:requiredSaleFiscalType}));
+        const tagged=processedCart.map(line=>(line as any).fiscalCheckoutOperationId).filter(Boolean);
+        const operationId=fiscalCheckoutOperationRef.current|| (tagged.length===processedCart.length&&new Set(tagged).size===1?tagged[0]:createUuid());fiscalCheckoutOperationRef.current=operationId;
+        const checkout=await fiscalWorkflowV2Client.reserveCheckout(JSON.stringify({items:processedCart.map(({fiscalCheckoutOperationId:_op,...line}:any)=>line),customerId:effectiveSelectedCustomer?.id||null,fiscalType:requiredSaleFiscalType}),operationId);
+        onUpdateCart(processedCart.map(line=>({...line,fiscalCheckoutOperationId:operationId})));
         if(checkout.phase==='EFFECT_POSSIBLE'&&checkout.paymentIds.some(id=>!paymentIds.includes(id)))throw Error('PAYMENT_INTENT_RECONCILIATION_REQUIRED');
         fiscalCheckoutRef.current=checkout;
         if(!checkout.permit)setErrorToast('La venta comercial continúa sin autorización para emisión fiscal; no se emitirá automáticamente después.');
-        if(checkout.phase==='COMMITTED'){
+        if(['COMMITTED','ACKNOWLEDGED'].includes(checkout.phase)){
           const completed=await db.getDocument('transactions',checkout.transactionId)||await db.getDocument('transactionHistory',checkout.transactionId);
           if(!completed)throw Error('FISCAL_WORKFLOW_COMMITTED_RECEIPT_REQUIRED');
           return Object.assign(()=>{},{completedTransaction:completed as Transaction});
@@ -6539,7 +6557,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
 
       setLargeMasterSyncV3CriticalOperation('PAYMENT', true);
-      try { await v3Operational.validate(cart, { ticketId: activeTable?.currentOrderId || activeDirectV3TicketId, claimId: activeDirectV3TicketId, reservationId:activeV3Reservation?.reservation.id,reservationClaimId:activeV3Reservation?.claimId, tableId: activeTable?.id === undefined ? undefined : String(activeTable.id) }); }
+      try { if(processedCart.some(line=>line.articleFormat)){if(!formatRuntime)throw Error('FISCAL_WORKFLOW_FORMAT_NOT_READY');await formatRuntime.assertCurrent();}else await v3Operational.validate(cart, { ticketId: activeTable?.currentOrderId || activeDirectV3TicketId, claimId: activeDirectV3TicketId, reservationId:activeV3Reservation?.reservation.id,reservationClaimId:activeV3Reservation?.claimId, tableId: activeTable?.id === undefined ? undefined : String(activeTable.id) }); }
       catch (error) { setLargeMasterSyncV3CriticalOperation('PAYMENT', false); throw error; }
       return Object.assign(()=>setLargeMasterSyncV3CriticalOperation('PAYMENT',false),{...(fiscalCheckoutRef.current?{futureCheckout:{checkoutId:fiscalCheckoutRef.current.checkoutId,transactionId:fiscalCheckoutRef.current.transactionId}}:{}),recordPaymentEffect:async(paymentId:string)=>{if(fiscalCheckoutRef.current)await fiscalWorkflowV2Client.recordPayment(fiscalCheckoutRef.current,paymentId);}});
    };

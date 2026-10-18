@@ -1,8 +1,9 @@
+import {createUuid} from '../utils/uuid';
 import { formatQuantity } from '../utils/quantityPresentation';
 import { displayWeightQuantity, displayWeightPrice, canonicalWeightQuantity, formatWeightNumber } from '../utils/scaleWeight';
 import React, { useState, useEffect, useRef } from 'react';
 import { X, RotateCcw, AlertTriangle, Check, Archive, Trash2, ListChecks } from 'lucide-react';
-import { Transaction, CartItem } from '../types';
+import { Transaction, CartItem, RefundProcessingOptions } from '../types';
 import { refundLine } from '../services/articleFormats/domain';
 import { getRefundItemKey, hasRefundableItems } from '../utils/refundAvailability';
 
@@ -16,7 +17,8 @@ interface RefundModalProps {
         originalTx: Transaction,
         refundItems: CartItem[],
         conditions: Map<string, 'SELLABLE' | 'DAMAGED'>,
-        reason: string
+        reason: string,
+        fiscalOptions?: RefundProcessingOptions
     ) => Promise<unknown> | void;
     quantityDecimals?: number;
     currencySymbol: string;
@@ -40,9 +42,11 @@ export const RefundModal: React.FC<RefundModalProps> = ({
     const [submitting,setSubmitting] = useState(false);
     const [submitError,setSubmitError] = useState('');
     const [reason, setReason] = useState('Devolución de Cliente');
+    const fiscalOperationRef=useRef(createUuid());const [fiscalCode,setFiscalCode]=useState<''|'1'|'2'|'3'>('');const [fiscalKind,setFiscalKind]=useState<'RETURN'|'VOID'>('RETURN');
 
     useEffect(() => {
         if (isOpen && transaction) {
+            fiscalOperationRef.current=createUuid();setFiscalCode('');setFiscalKind('RETURN');
             const initialQuantities = new Map<string, number>();
             if (mode === 'AZUL_GATEWAY_REFUND') {
                 transaction.items.forEach(item => {
@@ -128,7 +132,8 @@ export const RefundModal: React.FC<RefundModalProps> = ({
                 ...item, quantity: refundQuantities.get(item.cartId) || 0
             }));
 
-        await onConfirm(transaction, itemsToRefund, itemConditions, reason || 'Devolución General');
+        if((transaction as any).articleFormatWire?.schema_version===2&&!fiscalCode)throw Error('Selecciona el motivo fiscal de la nota de crédito.');
+        await onConfirm(transaction, itemsToRefund, itemConditions, reason || 'Devolución General',(transaction as any).articleFormatWire?.schema_version===2?{fiscalOperationId:fiscalOperationRef.current,fiscalOperationKind:fiscalKind,fiscalModificationCode:fiscalCode as '1'|'2'|'3'}:undefined);
         } catch(error) { setSubmitError(error instanceof Error ? error.message : 'No se pudo completar la devolución.'); }
         finally { submittingRef.current=false; setSubmitting(false); }
     };
@@ -275,6 +280,7 @@ export const RefundModal: React.FC<RefundModalProps> = ({
                             })}
                         </tbody>
                     </table></fieldset>
+                    {(transaction as any).articleFormatWire?.schema_version===2&&<div className="space-y-2 p-3"><label className="block">Operación<select value={fiscalKind} onChange={event=>setFiscalKind(event.target.value as 'RETURN'|'VOID')} className="ml-2 rounded border p-2"><option value="RETURN">Devolución</option><option value="VOID">Anulación completa</option></select></label><label className="block">Motivo fiscal<select required value={fiscalCode} onChange={event=>setFiscalCode(event.target.value as ''|'1'|'2'|'3')} className="ml-2 rounded border p-2"><option value="">Seleccionar</option><option value="1">Anula el comprobante</option><option value="2">Corrige el texto</option><option value="3">Corrige montos</option></select></label></div>}
 
                     {!isGatewayRefundMode && (
                         <div className="mt-4 flex items-center justify-between gap-3">

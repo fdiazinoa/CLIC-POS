@@ -1,3 +1,4 @@
+import {observeFiscalWorkflowCapability} from '../fiscal/FiscalWorkflowV2Capability';
 import { resolveLocalDeviceId } from '../../utils/deviceRevocation';
 import { isTerminalAuthorizationSuperseded } from '../../utils/terminalAuthorizationGuard';
 import { readTerminalCredentialsSync } from './TerminalCredentialStore';
@@ -108,6 +109,7 @@ export const createLargeMasterSyncV3BoundTransport = (
       });
       const rawText = await response.text();
       assertStillBound();
+      if(response.ok)observeFiscalWorkflowCapability(erpBase,{'X-Tenant-Id':bound.tenantId,'X-Terminal-Id':bound.terminalId,'X-Device-Id':bound.deviceId,'X-Sync-Token':bound.syncToken},response.headers.get('X-Clic-Fiscal-Workflow-V2'));
       return { status: response.status,
         headers: Object.fromEntries(response.headers.entries()), text: rawText };
     },

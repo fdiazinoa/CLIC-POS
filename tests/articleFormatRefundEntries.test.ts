@@ -1,3 +1,4 @@
+import {createUuid} from '../utils/uuid';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
@@ -51,7 +52,7 @@ function fixture(isReturnMode: boolean, articleFormatsEnabled: boolean, isMobile
   const pending: Promise<unknown>[]=[];
   const effect = (name:string) => (value:unknown) => effects.push({name,value});
   const latestAddCart={current:cart};
-  const common: Record<string,any> = {isReturnMode,articleFormatsEnabled,isMobile,defaultSalesWarehouseId:'fixture-wh',activeTariffId:'retail',
+  const common: Record<string,any> = {createUuid,formatRuntime:null,isReturnMode,articleFormatsEnabled,isMobile,defaultSalesWarehouseId:'fixture-wh',activeTariffId:'retail',
     setErrorToast:effect('error'),setSelectedProductForVariants:effect('variants'),setFormatSelection:effect('formats'),setPendingProductToAdd:effect('pending'),
     setShowMobileConfigModal:effect('mobile'),setProductForScale:effect('scale'),setPendingTrackingProduct:effect('tracking'),setLastAddedCartId:effect('highlight'),
     assertOriginalSaleForFormatReturn,legacyMergeCandidate,addFormatLine,toBaseQuantity,crypto:{randomUUID:() => 'fixture-format-line'},cart,

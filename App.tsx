@@ -1,3 +1,7 @@
+import {clearFiscalWorkflowCapability} from './services/fiscal/FiscalWorkflowV2Capability';
+import {resolveTerminalDocumentSeriesId} from './utils/seriesValidation';
+import {prepareFiscalFormatRuntime} from './services/fiscal/FiscalWorkflowV2FormatRuntime';
+import {financialIdentity} from './services/db/LargeMasterSyncV3FinancialRetention';
 import { fiscalWorkflowV2Client,fiscalWorkflowMessage } from './services/fiscal/FiscalWorkflowV2Client';
 import {requireFiscalErpAppliedReceipt,FISCAL_DISPATCH_CLAIMS} from './services/fiscal/FiscalMSellerDispatch';
 import { assertFormatsPostingClosed } from './services/articleFormats/activation';
@@ -3414,6 +3418,7 @@ const AppContent: React.FC = () => {
   }, [getCurrentDeviceRoleRaw]);
 
   const navigateToUserLogin = React.useCallback(() => {
+    clearFiscalWorkflowCapability();
     clearActiveUserSession();
     clearSecurityState();
     setCurrentUser(null);
@@ -11601,6 +11606,7 @@ const AppContent: React.FC = () => {
   }, [fiscalStatusWorker,isDataLoaded,fiscalHistoryHydrated,isSecurityLoaded,deviceId,config.companyInfo.rnc,fiscalStatusLifecycleKey]);
 
   const handleTransactionComplete = async (txn: Transaction) => {
+    if((txn as any).articleFormatWire?.schema_version===2){const original=await db.getDocument('transactionHistory',txn.id) as Transaction|null;if(!original||financialIdentity(original)!==financialIdentity(txn))throw Error('FISCAL_WORKFLOW_RETAINED_SOURCE_CHANGED');setTransactions(previous=>[...previous.filter(row=>row.id!==original.id),original]);return;}
     assertFormatsPostingClosed(txn.items || []);
     const fiscalTerminal = (config.terminals || []).find(terminal => terminal.config?.currentDeviceId === deviceId);
     if ((txn.ncf || txn.ncfType) && (!fiscalTerminal ||
@@ -12976,6 +12982,16 @@ const AppContent: React.FC = () => {
     options: RefundProcessingOptions = {}
   ): Promise<Transaction | null> => {
     originalTx = await readRefundOriginal(originalTx);
+    if((originalTx as any).articleFormatWire?.schema_version===2){
+      if(!options.fiscalOperationId||!options.fiscalModificationCode)throw Error('Selecciona el motivo fiscal de la nota de crédito.');
+      const terminal=getCurrentTerminal();if(!terminal)throw Error('FISCAL_WORKFLOW_DEVICE_CHANGED');
+      const runtime=await prepareFiscalFormatRuntime(terminal.config?.erpTerminalId||terminal.id);
+      const originalWire=(originalTx as any).articleFormatWire;
+      if(originalWire.payments.some((payment:any)=>payment.method!=='cash'))throw Error('La devolución de un pago integrado necesita conciliación antes de crear la nota de crédito.');
+      if(itemsToRefund.some(item=>conditions.get(item.cartId)==='DAMAGED')&&runtime.context.return_context?.return_policy==='RESTOCK')throw Error('La autorización vigente no permite registrar estas unidades como merma.');
+      const result=await runtime.commitReturn({operationId:options.fiscalOperationId,original:originalTx,items:itemsToRefund,kind:options.fiscalOperationKind||'RETURN',modificationCode:options.fiscalModificationCode,payments:[],seriesId:resolveTerminalDocumentSeriesId(terminal.config,'REFUND')!,userId:currentUser!.id,userName:currentUser!.name});
+      await handleTransactionComplete(result);return result;
+    }
     assertFormatsPostingClosed(itemsToRefund || []);
     assertFormatsPostingClosed(originalTx.items || []);
     console.log("🔄 Procesando Devolución Integral:", { originalTx, items: itemsToRefund.length, reason });

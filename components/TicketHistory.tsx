@@ -2693,7 +2693,8 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
       originalTx: Transaction,
       refundItems: CartItem[],
       conditions: Map<string, 'SELLABLE' | 'DAMAGED'>,
-      reason: string
+      reason: string,
+      fiscalOptions?: RefundProcessingOptions
    ) => {
       if (!originalTx || refundItems.length === 0) return;
       const availability = originalTx.erpRefundSource
@@ -2734,6 +2735,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
 
       if (!authorized) return;
 
+      if((originalTx as any).articleFormatWire?.schema_version===2){await onRefundTransaction(originalTx,refundItems,conditions,reason||'Devolución',fiscalOptions);setIsRefundModalOpen(false);setRefundTx(null);setSelectedTxId(null);return;}
       await executeRefundFlow(originalTx, refundItems, conditions, reason || 'Devolución', refundRequestMode);
    };
 
