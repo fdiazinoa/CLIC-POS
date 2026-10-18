@@ -1,3 +1,7 @@
+import {INVENTORY_V2_SCHEMA} from './inventoryV2';
+import {cloneFormatJSON} from './json';
+import {validateWireEventV2,validateContextV2,v2ReturnContext,type PostingContext,type PostingEvent,type WireEventV2} from './v2';
+import {saleWireLineV2,returnWireLineV2,validateACKV2,type FormatPostingV2Hooks,getArticleFormatReadinessV2} from './financialV2';
 import {reconcileInventoryPoolIndex} from './inventoryPoolIndex';
 import {planInventoryOriginal} from './inventoryJournal';
 import {NATIVE_FISCAL_RECEIPTS_SCHEMA,planNativeFiscalReceipt} from '../db/NativeFiscalReservation';
@@ -80,26 +84,26 @@ export function returnWireLine(original:WireLine,returns:WireLine[],quantity:str
   const n=last?new Money(original[k]).minus(consumed):new Money(original[k]).mul(q).div(sold).toDecimalPlaces(2);
   requireFormat(n.gte(0)&&n.plus(consumed).lte(original[k]),'POS_FORMAT_RETURN_AMOUNT_EXCEEDS_SOURCE');return [k,amount(n)];
  })) as Omit<WireEvent['totals'],'total_amount'>;
- return {...structuredClone(original),line_id:lineId,source_line_id:original.line_id,commercial_quantity:quantity,
+ return {...cloneFormatJSON(original),line_id:lineId,source_line_id:original.line_id,commercial_quantity:quantity,
   base_quantity:q.mul(original.article_format.factor).toFixed(),...values,total_amount:amount(new Money(values.net_amount).plus(values.tax_amount))};
 }
 
 /** SQLite-only posting. All canonical collections and the prepared journal/outbox share ONE native commit. */
 export class ArticleFormatPosting {
- readonly context:NetworkContext;
- constructor(private readonly sql:FormatSQL,context:NetworkContext,private readonly masters:NetworkMasterPort){
-  this.context=deepFreeze(validateContext(context));requireFormat(sql.runExclusive,'POS_FORMAT_ATOMIC_STORAGE_REQUIRED');
+ readonly context:PostingContext;
+ constructor(private readonly sql:FormatSQL,context:PostingContext,private readonly masters:NetworkMasterPort,private readonly v2Hooks?:FormatPostingV2Hooks){
+  this.context=deepFreeze(context.schema_version===2?validateContextV2(context):validateContext(context));requireFormat(sql.runExclusive,'POS_FORMAT_ATOMIC_STORAGE_REQUIRED');
  }
- async migrate(){await this.sql.executeSchema((this.sql.storageLayout==='DOCUMENTS'?'':'CREATE TABLE IF NOT EXISTS collections(key TEXT PRIMARY KEY NOT NULL,value TEXT NOT NULL,updatedAt TEXT NOT NULL);')+ARTICLE_FORMATS_SCHEMA+articleFormatWireSchema(this.sql.storageLayout)+(this.sql.storageLayout==='DOCUMENTS'?NATIVE_FISCAL_RECEIPTS_SCHEMA:''));if(this.sql.storageLayout==='DOCUMENTS'){requireFormat(this.sql.runFinancial,'POS_FORMAT_ATOMIC_STORAGE_REQUIRED');await this.sql.runFinancial!(tx=>reconcileInventoryPoolIndex(tx,true));}}
+ async migrate(){await this.sql.executeSchema((this.sql.storageLayout==='DOCUMENTS'?'':'CREATE TABLE IF NOT EXISTS collections(key TEXT PRIMARY KEY NOT NULL,value TEXT NOT NULL,updatedAt TEXT NOT NULL);')+ARTICLE_FORMATS_SCHEMA+(this.context.schema_version===2?INVENTORY_V2_SCHEMA:'')+articleFormatWireSchema(this.sql.storageLayout)+(this.sql.storageLayout==='DOCUMENTS'?NATIVE_FISCAL_RECEIPTS_SCHEMA:''));if(this.sql.storageLayout==='DOCUMENTS'){requireFormat(this.sql.runFinancial,'POS_FORMAT_ATOMIC_STORAGE_REQUIRED');await this.sql.runFinancial!(tx=>reconcileInventoryPoolIndex(tx,true));}}
  private scope(){return [this.context.scope.tenantId,this.context.scope.companyId];}
  private async saved(sql:FormatSQL,eventId:string):Promise<SavedWire|undefined>{
   return (await sql.query<SavedWire>(`SELECT o.content,w.content_hash,w.context,w.policies,w.ack,w.attempts,w.next_attempt FROM article_format_wire_events w
    JOIN article_format_outbox o USING(tenant_id,company_id,event_id) WHERE w.tenant_id=? AND w.company_id=? AND w.event_id=?`,[...this.scope(),eventId]))[0];
  }
- async post(input:WireEvent,options:LocalPostingOptions):Promise<any>{
-  options=structuredClone(options);
+ async post(input:PostingEvent,options:LocalPostingOptions):Promise<any>{
+  options=cloneFormatJSON(options);
   requireFormat(options.userId && options.userName && options.seriesId,'POS_FORMAT_LOCAL_ACTOR_REQUIRED');
-  const event=validateWireEvent(input),content=canonicalContent(event),hash=await wireHash(event);
+  const event=input.schema_version===2?validateWireEventV2(input):validateWireEvent(input),content=canonicalContent(event),hash=await wireHash(event);
   return (this.sql.runFinancial || this.sql.runExclusive)!(async sql=>{
    const previous=await this.saved(sql,event.event_id);
    if(previous){requireFormat(previous.content===content&&previous.content_hash===hash,'POS_FORMAT_IDENTITY_CONFLICT');return this.document(sql,event.transaction_id);}
@@ -107,9 +111,15 @@ export class ArticleFormatPosting {
    requireFormat(sql.storageLayout!=='DOCUMENTS' || ['ISOLATED_SQLITE','NATIVE_V3_TRANSACTION'].includes(sql.financialPostingReadiness || ''),'POS_FORMAT_NATIVE_POSTING_NOT_READY');
    const native=sql.financialPostingReadiness==='NATIVE_V3_TRANSACTION';
    const masters=this.masters.forSQL?.(sql) || this.masters;
-   const sale=event.event_type==='ARTICLE_FORMAT_SALE_V1',isVoid=event.event_type==='ARTICLE_FORMAT_VOID_V1';
-   const policies:Record<string,NetworkLinePolicy & {cogs_amount?:string}>={};const priorCosts:Record<string,string>={};let original:WireEvent|undefined;
-   let returns:WireEvent[]=[];
+   const sale=event.event_type==='ARTICLE_FORMAT_SALE_V1'||event.event_type==='ARTICLE_FORMAT_SALE_V2',isVoid=event.event_type==='ARTICLE_FORMAT_VOID_V1'||event.event_type==='ARTICLE_FORMAT_VOID_V2';
+   requireFormat(event.schema_version===this.context.schema_version,'POS_FORMAT_VERSION_UNSUPPORTED');
+   if(event.schema_version===2){
+    requireFormat(this.context.schema_version===2&&this.v2Hooks&&native,'POS_FORMAT_V2_ATOMIC_AUTHORITY_REQUIRED');
+    const readiness=await getArticleFormatReadinessV2(sql,this.context);requireFormat(readiness.ready,readiness.reasons[0]);
+    await this.v2Hooks.validateAuthority(sql,this.context,event);
+   }
+   const policies:Record<string,NetworkLinePolicy & {cogs_amount?:string}>={};const priorCosts:Record<string,string>={};let original:PostingEvent|undefined;
+   let returns:PostingEvent[]=[];
    if(sale){
     const revision=await masters.getActiveRevision();requireFormat(revision,'POS_FORMAT_REVISION_INCOMPLETE');
     assertSame(event.master,{sync_id:revision.syncId,revision:revision.revision},'POS_FORMAT_REVISION_INCOMPLETE');
@@ -118,16 +128,17 @@ export class ArticleFormatPosting {
      const master=await masters.getPolicy(l.item_id,revision.syncId,revision.revision);requireFormat(master,'POS_FORMAT_MASTER_MISSING');
      policies[l.line_id]=master.policy;
      requireFormat(master.policy.warehouse_id===this.context.scope.warehouseId && this.context.tariff_ids.includes(l.tariff_id),'POS_FORMAT_SCOPE_FORBIDDEN');
-     assertSame(l,saleWireLine(master.dto,master.policy,{lineId:l.line_id,formatId:l.article_format.id,variantId:l.variant_id,tariffId:l.tariff_id,
-      quantity:l.commercial_quantity,discountRate:l.discount_rate,promotionId:l.promotion_id,occurredAt:event.occurred_at,terminalId:this.context.scope.terminalId}),'POS_FORMAT_PRICE_OR_HISTORY_MISMATCH');
+     if(event.schema_version===2){assertSame(l,saleWireLineV2(master.dto,master.policy,l,event.occurred_at,this.context.scope.terminalId),'POS_FORMAT_PRICE_OR_HISTORY_MISMATCH');}
+     else {requireFormat(l.article_format,'POS_FORMAT_SNAPSHOT_INVALID');assertSame(l,saleWireLine(master.dto,master.policy,{lineId:l.line_id,formatId:l.article_format.id,variantId:l.variant_id,tariffId:l.tariff_id,
+      quantity:l.commercial_quantity,discountRate:l.discount_rate,promotionId:l.promotion_id,occurredAt:event.occurred_at,terminalId:this.context.scope.terminalId}),'POS_FORMAT_PRICE_OR_HISTORY_MISMATCH');}
     }
    }else{
-    const authorization=authorizedReturnContext(this.context);
+    const authorization=this.context.schema_version===2?v2ReturnContext(this.context):authorizedReturnContext(this.context);
     requireFormat(event.return_context,'POS_FORMAT_RETURN_CONTEXT_REQUIRED');
     assertSame(event.return_context,authorization,'POS_FORMAT_RETURN_CONTEXT_CONFLICT');
     const source=await this.saved(sql,event.source_event_id!);requireFormat(source?.ack,'POS_FORMAT_SOURCE_NOT_CONFIRMED');
-    original=validateWireEvent(JSON.parse(source.content));requireFormat(original.event_type==='ARTICLE_FORMAT_SALE_V1');
-    const sourceCtx:NetworkContext=JSON.parse(source.context);requireFormat(sourceCtx.scope.warehouseId===this.context.scope.warehouseId && sourceCtx.scope.terminalId===this.context.scope.terminalId && sourceCtx.scope.storeId===this.context.scope.storeId,'POS_FORMAT_SOURCE_FORBIDDEN');
+    const parsed=JSON.parse(source.content);original=parsed.schema_version===2?validateWireEventV2(parsed):validateWireEvent(parsed);requireFormat(original.event_type==='ARTICLE_FORMAT_SALE_V1'||original.event_type==='ARTICLE_FORMAT_SALE_V2');requireFormat(original.schema_version===event.schema_version,'POS_FORMAT_SOURCE_MISMATCH');
+    const sourceCtx:PostingContext=JSON.parse(source.context);requireFormat(sourceCtx.scope.warehouseId===this.context.scope.warehouseId && sourceCtx.scope.terminalId===this.context.scope.terminalId && sourceCtx.scope.storeId===this.context.scope.storeId,'POS_FORMAT_SOURCE_FORBIDDEN');
     requireFormat(original.fiscal.mode===event.fiscal.mode,'POS_FORMAT_FISCAL_INVALID');
     requireFormat(original.customer_id===event.customer_id,'POS_FORMAT_SOURCE_MISMATCH');
     const rows=await sql.query<{content:string;policies:string}>(`SELECT o.content,w.policies FROM article_format_outbox o JOIN article_format_wire_events w USING(tenant_id,company_id,event_id)
@@ -140,7 +151,7 @@ export class ArticleFormatPosting {
      requireFormat(!sources.has(l.source_line_id),'POS_FORMAT_LINE_DUPLICATE');sources.add(l.source_line_id!);
      const old=original.lines.find(x=>x.line_id===l.source_line_id);requireFormat(old,'POS_FORMAT_SOURCE_MISMATCH');
      const prior=returns.flatMap(r=>r.lines).filter(x=>x.source_line_id===old.line_id);
-     assertSame(l,returnWireLine(old,prior,l.commercial_quantity,l.line_id));policies[l.line_id]=sourcePolicies[old.line_id];
+     assertSame(l,event.schema_version===2?returnWireLineV2(old,prior,l.commercial_quantity,l.line_id):returnWireLine(old as WireLine,prior as WireLine[],l.commercial_quantity,l.line_id));policies[l.line_id]=sourcePolicies[old.line_id];
      if(isVoid)requireFormat(prior.length===0 && new Money(l.commercial_quantity).eq(old.commercial_quantity),'POS_FORMAT_VOID_REQUIRES_WHOLE_SALE');
     }
     if(isVoid)requireFormat(event.lines.length===original.lines.length&&returns.length===0,'POS_FORMAT_VOID_REQUIRES_WHOLE_SALE');
@@ -194,7 +205,7 @@ export class ArticleFormatPosting {
    const financialMutations:DurableDocumentMutation[]=[];
    const sourceExpected=original ? JSON.stringify(data.transactions.find(t=>t.id===original.transaction_id)) : undefined;
    for(const l of event.lines){
-    const product=native&&original ? structuredClone(data.transactions.find(t=>t.id===original.transaction_id)?.items.find((p:any)=>p.cartId===l.source_line_id)) : data.products.find(p=>p.id===l.item_id),policy=policies[l.line_id];
+    const product=native&&original ? cloneFormatJSON(data.transactions.find(t=>t.id===original.transaction_id)?.items.find((p:any)=>p.cartId===l.source_line_id)) : data.products.find(p=>p.id===l.item_id),policy=policies[l.line_id];
     requireFormat(product && product.isInventoriable!==false&&product.operationalFlags?.trackInventory!==false
      &&!product.operationalFlags?.usesLots&&!product.operationalFlags?.usesSerial&&!product.operationalFlags?.usesSerialNumbers
      &&!product.recipeDetails?.length&&['PRODUCT','PRODUCTO_TERMINADO','',undefined].includes(product.type),'POS_FORMAT_ITEM_PROFILE_UNSUPPORTED');
@@ -241,19 +252,21 @@ export class ArticleFormatPosting {
       inventorySyncVersion:authority.inventorySyncVersion,inventoryVersion:authority.inventoryVersion,inventoryCursor:authority.inventoryCursor,
       warehouseId:authority.warehouseId,tariffId:l.tariff_id,taxIncluded:policy.base_prices.find(p=>p.tariff_id===l.tariff_id&&p.variant_id===l.variant_id)?.tax_included===true}} : {}),articleFormat:l.article_format,baseQuantity:base.mul(multiplier).toNumber(),formatWireLine:l,formatPolicy:policy});
    }
-   const payments=event.payments.map(p=>({id:p.payment_id,transactionId:event.transaction_id,amount:new Money(p.amount).mul(multiplier).toNumber(),method:p.method,
+   const payments=event.payments.map(p=>({id:p.payment_id,transactionId:event.transaction_id,amount:new Money(p.amount).abs().mul(multiplier).toNumber(),method:p.method,
     articleFormatEventId:event.event_id,wirePayment:p,...(authority ? {v3InventoryBaseline:authority.baseline,v3Binding:authority.binding,v3WarehouseId:authority.warehouseId} : {})}));
    for(const p of payments)requireFormat(!data.payments.some(old=>old.id===p.id),'POS_FORMAT_IDENTITY_CONFLICT');
    data.payments.push(...payments);
    const transaction={id:event.transaction_id,date:event.occurred_at,displayId,globalSequence:global.count,seriesNumber:next,seriesId:options.seriesId,
-    documentType:sale?'TICKET':'REFUND',type:sale?'SALE':'REFUND',items,payments,total:new Money(event.totals.total_amount).mul(multiplier).toNumber(),
-    netAmount:new Money(event.totals.net_amount).mul(multiplier).toNumber(),taxAmount:new Money(event.totals.tax_amount).mul(multiplier).toNumber(),
-    discountAmount:new Money(event.totals.discount_amount).mul(multiplier).toNumber(),status:'COMPLETED',terminalId:this.context.scope.terminalId,
+    documentType:sale?'TICKET':'REFUND',type:sale?'SALE':'REFUND',items,payments,total:new Money(event.totals.total_amount).abs().mul(multiplier).toNumber(),
+    netAmount:new Money(event.totals.net_amount).abs().mul(multiplier).toNumber(),taxAmount:new Money(event.totals.tax_amount).abs().mul(multiplier).toNumber(),
+    discountAmount:new Money(event.totals.discount_amount).abs().mul(multiplier).toNumber(),...(event.schema_version===2?{vatAmount:Number(event.totals.vat_amount),serviceChargeAmount:Number(event.totals.service_charge_amount),taxBreakdown:Object.values(policies).flatMap(p=>p.taxes).filter((t,i,all)=>all.findIndex(x=>x.id===t.id)===i).map(t=>({taxId:t.id,type:t.type,rate:t.rate,amount:event.lines.filter(l=>policies[l.line_id].taxes.some(x=>x.id===t.id)).reduce((n,l)=>n.plus('vat_amount' in l?(t.type==='SERVICE_CHARGE'?l.service_charge_amount:l.vat_amount):0),new Money(0)).toNumber(),...(t.type==='SERVICE_CHARGE'?{fiscalAdditionalTaxCode:'001'}:{})}))}:{}),status:'COMPLETED',terminalId:this.context.scope.terminalId,
     userId:options.userId,userName:options.userName,customerId:event.customer_id,originalTransactionId:original?.transaction_id,
     ...(event.fiscal.mode==='LEGACY_B'?{ncf:event.fiscal.ncf,ncfType:event.fiscal.ncf_type,...(fiscalReceipt?{fiscalIssuerRnc:fiscalReceipt.issuerRnc}:{} )}:{}),
+    ...(event.schema_version===2?{ncf:event.fiscal.ncf,ncfType:event.fiscal.ncf_type,fiscalIssuerRnc:event.fiscal.issuer_rnc,fiscalIssuance:event.fiscal.fiscal_issuance,fiscalWorkflowBirth:event.fiscal.birth,fiscalStatus:'PENDING',fiscalMode:'ECF',fiscalProvider:'MSELLER',fiscalEnvironment:event.fiscal.environment,currency:'DOP',settlementCurrencyCode:'DOP',customerSnapshot:event.fiscal.buyer_snapshot,fiscalWorkflowPermit:event.fiscal.permit}:{}),
     cloudSyncStatus:'PENDING',articleFormatEventId:event.event_id,articleFormatWire:event,
     ...(authority ? {v3Binding:authority.binding,v3WarehouseId:authority.warehouseId,v3InventoryBaseline:authority.baseline,
      v3CommitFingerprint:hash,articleFormatMasterRevision:original ? undefined : event.master} : {})};
+   if(event.schema_version===2){await this.v2Hooks!.consumeFiscalPermit(sql,event.fiscal.birth,event,transaction);}
    if(authority){
     const current={binding:authority.binding,syncId:authority.syncId,syncVersion:authority.syncVersion};
     financialMutations.push({collectionName:'transactions',document:transaction,requireAbsent:true,v3CurrentCatalog:current,
@@ -285,18 +298,18 @@ export class ArticleFormatPosting {
   });
  }
  private async document(sql:FormatSQL,id:string){return (await new FormatLocalDocuments(sql).read('transactionHistory',[id])).find(t=>t.id===id);}
- async pending(now=Number.MAX_SAFE_INTEGER):Promise<{event:WireEvent;hash:string;context:NetworkContext;attempts:number}[]>{
+ async pending(now=Number.MAX_SAFE_INTEGER):Promise<{event:PostingEvent;hash:string;context:PostingContext;attempts:number}[]>{
   const rows=await this.sql.query<SavedWire>(`SELECT o.content,w.content_hash,w.context,w.attempts FROM article_format_wire_events w
    JOIN article_format_outbox o USING(tenant_id,company_id,event_id) WHERE w.tenant_id=? AND w.company_id=? AND o.state='PENDING' AND w.next_attempt<=? ORDER BY w.rowid`,[...this.scope(),now]);
-  return rows.map(r=>({event:validateWireEvent(JSON.parse(r.content)),hash:r.content_hash,context:JSON.parse(r.context),attempts:r.attempts}));
+  return rows.map(r=>({event:JSON.parse(r.content).schema_version===2?validateWireEventV2(JSON.parse(r.content)):validateWireEvent(JSON.parse(r.content)),hash:r.content_hash,context:JSON.parse(r.context),attempts:r.attempts}));
  }
- async acknowledge(event:WireEvent,ack:unknown){
-  event=validateWireEvent(event);const candidateACK=structuredClone(ack);
+ async acknowledge(event:PostingEvent,ack:unknown){
+  event=event.schema_version===2?validateWireEventV2(event):validateWireEvent(event);const candidateACK=cloneFormatJSON(ack);
   const hash=await wireHash(event);
   return (this.sql.runFinancial || this.sql.runExclusive)!(async sql=>{
    const row=await this.saved(sql,event.event_id);requireFormat(row&&row.content===canonicalContent(event)&&row.content_hash===hash,'POS_FORMAT_ACK_CONFLICT');
-   const savedContext:NetworkContext=JSON.parse(row.context);
-   const validated=validateACK(candidateACK,event,hash,savedContext.return_policy||undefined);
+   const savedContext:PostingContext=JSON.parse(row.context);
+   const validated=event.schema_version===2?validateACKV2(candidateACK,event,hash):validateACK(candidateACK,event,hash,savedContext.return_policy||undefined);
    if(row.ack){assertSame(JSON.parse(row.ack),validated,'POS_FORMAT_ACK_CONFLICT');return;}
    const statements:FormatStatement[]=[{statement:'INSERT INTO article_format_wire_write_scope VALUES(1)'},{statement:'UPDATE article_format_wire_events SET ack=?,last_error=NULL WHERE tenant_id=? AND company_id=? AND event_id=?',values:[canonicalContent(validated),...this.scope(),event.event_id]},
     {statement:"UPDATE article_format_outbox SET state='ACKED' WHERE tenant_id=? AND company_id=? AND event_id=?",values:[...this.scope(),event.event_id]}];

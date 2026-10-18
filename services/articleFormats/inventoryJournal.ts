@@ -1,3 +1,5 @@
+import {readInventoryV2} from './inventoryV2';
+import type {PostingContext,PostingEvent} from './v2';
 import {ensureInventoryPoolIndex} from './inventoryPoolIndex';
 import type {FormatSQL,FormatStatement} from './store';
 import {canonicalContent} from './store';
@@ -10,7 +12,7 @@ const fail=(value:unknown,code='POS_FORMAT_INVENTORY_CONTEXT_INCOMPLETE')=>requi
 const generation=()=>globalThis.crypto.randomUUID();
 const key=(s:InventoryScope)=>canonicalContent(inventoryScope(s));
 const insert=(table:string,columns:string,values:(string|number|null)[]):FormatStatement=>({statement:`INSERT INTO ${table} (${columns}) VALUES(${values.map(()=>'?').join(',')})`,values});
-function matchContext(scope:InventoryScope,context:NetworkContext){
+function matchContext(scope:InventoryScope,context:PostingContext){
  const s=context.scope;fail(scope.tenant_id===s.tenantId&&scope.company_id===s.companyId&&scope.store_id===s.storeId
   &&scope.terminal_id===s.terminalId&&scope.warehouse_id===s.warehouseId,'POS_FORMAT_INVENTORY_SCOPE_FORBIDDEN');
 }
@@ -51,14 +53,14 @@ async function assertSelectedAuthority(query:InventoryQuery,state:State,b:Bindin
  fail(selected.scope_key===b.scope_key&&selected.baseline_id===state.baseline_id&&selected.context_token===contextToken
   &&selected.authorization===b.authorization,'POS_FORMAT_INVENTORY_AUTHORITY_CHANGED');
 }
-export async function planInventoryOriginal(sql:FormatSQL,event:WireEvent,context:NetworkContext,hash:string):Promise<FormatStatement[]>{
+export async function planInventoryOriginal(sql:FormatSQL,event:PostingEvent,context:PostingContext,hash:string):Promise<FormatStatement[]>{
  const b=await binding(sql);if(b)matchContext(JSON.parse(b.scope_key),context);
  const values=[context.scope.tenantId,context.scope.companyId,event.event_id];
  const statements:FormatStatement[]=[insert('article_format_inventory_originals','tenant_id,company_id,event_id,original,content_hash,context',[...values,canonicalContent(event),hash,canonicalContent(context)])];
  for(const line of event.lines){
-  const policy=event.event_type==='ARTICLE_FORMAT_SALE_V1'?null:event.return_context?.return_policy;
-  fail(event.event_type==='ARTICLE_FORMAT_SALE_V1'||policy,'POS_FORMAT_INVENTORY_CONTEXT_INCOMPLETE');
-  const delta=event.event_type==='ARTICLE_FORMAT_SALE_V1'?new Money(line.base_quantity).negated():policy==='RESTOCK'?new Money(line.base_quantity):new Money(0);
+  const policy=(event.event_type==='ARTICLE_FORMAT_SALE_V1'||event.event_type==='ARTICLE_FORMAT_SALE_V2')?null:event.return_context?.return_policy;
+  fail(event.event_type==='ARTICLE_FORMAT_SALE_V1'||event.event_type==='ARTICLE_FORMAT_SALE_V2'||policy,'POS_FORMAT_INVENTORY_CONTEXT_INCOMPLETE');
+  const delta=event.event_type==='ARTICLE_FORMAT_SALE_V1'||event.event_type==='ARTICLE_FORMAT_SALE_V2'?new Money(line.base_quantity).negated():policy==='RESTOCK'?new Money(line.base_quantity):new Money(0);
   statements.push(insert('article_format_inventory_effects','tenant_id,company_id,event_id,line_id,item_id,variant_id,warehouse_id,delta_base,return_policy',
    [...values,line.line_id,line.item_id,line.variant_id,context.scope.warehouseId,delta.toFixed(4),policy || null]));
  }
@@ -224,6 +226,7 @@ export async function readReconciledPhysicalInventory(query:InventoryQuery,basel
 }
 
 export async function readReconciledInventory(query:InventoryQuery,baseline:string,itemIds:string[],warehouseId:string){
+ const v2=await readInventoryV2(query,baseline,itemIds,warehouseId);if(v2)return v2;
  const physical=await readReconciledPhysicalInventory(query,baseline,itemIds,warehouseId);if(!physical)return undefined;
  const b=(await query<Binding>('SELECT * FROM article_format_inventory_binding WHERE singleton=1',[]))[0];
  const state=(await query<State>('SELECT * FROM article_format_inventory_state WHERE scope_key=?',[b.scope_key]))[0];

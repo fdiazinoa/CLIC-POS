@@ -1,3 +1,5 @@
+import {cloneFormatJSON} from './json';
+import {validateContextV2,type PostingContext} from './v2';
 import type { ArticleFormatsDTO } from './contract';
 import { validateDTO } from './domain';
 import { canonicalContent, type FormatSQL, type FormatStatement } from './store';
@@ -10,9 +12,9 @@ export interface NetworkLinePolicy {
   item_id: string; base_unit_cost: string; variant_ids: string[]; variant_skus: Record<string,string|null>;
   base_prices: {variant_id:string|null;tariff_id:string;price:string;tax_included:boolean}[];
   taxes: {id:string;rate:number;type:string;[key:string]:unknown}[];
-  tax_rate: string; max_discount_rate: string; promotions: Record<string,unknown>[]; warehouse_id: string;
+  tax_rate: string; service_charge_rate?:string;tax_components_version?:2;service_charge_base?:'NET';max_discount_rate: string; promotions: Record<string,unknown>[]; warehouse_id: string;
 }
-export interface NetworkMasterRevision { syncId:string;revision:number;context:NetworkContext;revisionChecksum:string }
+export interface NetworkMasterRevision { syncId:string;revision:number;context:PostingContext;revisionChecksum:string }
 export interface NetworkHistoricalPolicy { dto:ArticleFormatsDTO;policy:NetworkLinePolicy }
 interface Summary {count:number;chunks:number;bytes:number;gzipBytes:number;checksum:string}
 interface Manifest {
@@ -51,11 +53,11 @@ function recordCursor(dataset:NetworkMasterDataset,record:Record<string,any>):st
  * Callers hydrate their bounded catalog pages from getDataset/getMaster, never legacy latest-revision tables.
  */
 export class ArticleFormatNetworkMaster {
-  readonly context:NetworkContext;
+  readonly context:PostingContext;
   private inFlight:Promise<NetworkMasterRevision>|undefined;
   private inFlightSyncId:string|undefined;
-  constructor(private readonly sql:FormatSQL, negotiated:NetworkContext, private readonly transport:FormatTransport) {
-    this.context=freezeJSON(validateContext(negotiated));
+  constructor(private readonly sql:FormatSQL, negotiated:PostingContext, private readonly transport:FormatTransport) {
+    this.context=freezeJSON(negotiated.schema_version===2?validateContextV2(negotiated):validateContext(negotiated));
   }
   /** Rebind local authenticated policy reads to the financial transaction; no transport is used by these reads. */
   forSQL(sql:FormatSQL):ArticleFormatNetworkMaster { return new ArticleFormatNetworkMaster(sql,this.context,this.transport); }
@@ -105,7 +107,7 @@ export class ArticleFormatNetworkMaster {
     return rows.flatMap(row=>(JSON.parse(row.raw_text) as Chunk).records) as T[];
   }
   async stageManifest(input:unknown):Promise<NetworkMasterRevision>{
-    const m=structuredClone(input) as Manifest;
+    const m=cloneFormatJSON(input) as Manifest;
     requireFormat(m?.status==='READY','POS_FORMAT_SESSION_NOT_READY');uuid(m.syncId);
     requireFormat(m.schemaVersion===3&&m.contractVersion===3&&m.type==='FULL'
       &&Number.isSafeInteger(m.syncVersion)&&m.syncVersion>0,'POS_FORMAT_MANIFEST_INVALID');
@@ -145,12 +147,12 @@ export class ArticleFormatNetworkMaster {
       decimal(price.price,4);prices.add(key);
     }
     requireFormat(Array.isArray(p.taxes)&&Array.isArray(p.promotions),'POS_FORMAT_POLICY_INVALID');
-    let tax=new Money(0);const ids=new Set<string>();
-    for(const entry of p.taxes){uuid(entry.id);requireFormat(!ids.has(entry.id)&&entry.type==='ITBIS'
+    let tax=new Money(0),service=new Money(0);const ids=new Set<string>();
+    for(const entry of p.taxes){uuid(entry.id);requireFormat(!ids.has(entry.id)&&(entry.type==='ITBIS'||this.context.schema_version===2&&entry.type==='SERVICE_CHARGE'&&entry.fiscalAdditionalTaxCode==='001')
       &&typeof entry.rate==='number'&&Number.isFinite(entry.rate)&&entry.rate>=0&&entry.rate<=1,'POS_FORMAT_POLICY_INVALID');
-      ids.add(entry.id);tax=tax.plus(String(entry.rate));}
-    requireFormat(tax.eq(p.tax_rate),'POS_FORMAT_POLICY_INVALID');
-    return structuredClone(p);
+      ids.add(entry.id);if(entry.type==='SERVICE_CHARGE')service=service.plus(String(entry.rate));else tax=tax.plus(String(entry.rate));}
+    requireFormat((this.context.schema_version!==2||service.eq(p.service_charge_rate??'0'))&&tax.eq(p.tax_rate),'POS_FORMAT_POLICY_INVALID');
+    return cloneFormatJSON(p);
   }
   private async stageChunk(m:Manifest,dataset:NetworkMasterDataset,index:number,raw:unknown,cursor:string|null):Promise<string|null>{
     requireFormat(typeof raw==='string','POS_FORMAT_RAW_CHUNK_REQUIRED');

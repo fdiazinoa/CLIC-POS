@@ -17,3 +17,13 @@ export async function prepareArticleFormatsAdapters(sql:FormatSQL,transport:Form
  await masters.migrate();await posting.migrate();
  return {context,masters,posting,drain:()=>drainFormatWireEvents(posting,transport)};
 }
+
+/** V2 construction uses its own server authority and never changes readiness V1. */
+export async function prepareArticleFormatsAdaptersV2(sql:FormatSQL,transport:FormatTransport,terminalId:string,hooks:import('./financialV2').FormatPostingV2Hooks){
+ const {validateContextV2}=await import('./v2');
+ const context=validateContextV2(await transport.request('/api/sync/article-formats/v2/negotiate',{}));
+ requireFormat(context.scope.terminalId===terminalId,'POS_FORMAT_SCOPE_FORBIDDEN');
+ const masters=new ArticleFormatNetworkMaster(sql,context,transport),posting=new ArticleFormatPosting(sql,context,masters,hooks);
+ await masters.migrate();await posting.migrate();
+ return {context,masters,posting,drain:()=>drainFormatWireEvents(posting,transport),readiness:()=>import('./financialV2').then(m=>m.getArticleFormatReadinessV2(sql,context))};
+}

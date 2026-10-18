@@ -1,3 +1,4 @@
+import {cloneFormatJSON} from './json';
 import Decimal from 'decimal.js';
 import { ArticleFormatError, snapshot } from './domain';
 import type { ArticleFormatSnapshot } from './contract';
@@ -59,7 +60,7 @@ export function validateReturnContext(value:any):ReturnContext {
   requireFormat(value.schema_version===1 && Number.isSafeInteger(value.grant_revision)&&value.grant_revision>0
     &&typeof value.fingerprint==='string'&&/^[a-f0-9]{64}$/.test(value.fingerprint)
     &&['RESTOCK','DAMAGED','NO_RETURN'].includes(value.return_policy),'POS_FORMAT_RETURN_CONTEXT_INVALID');
-  uuid(value.id);return structuredClone(value);
+  uuid(value.id);return cloneFormatJSON(value);
 }
 /** Legacy negotiation remains usable for sales/history, never authorizes a new RETURN/VOID. */
 export function validateContext(ctx:any):NetworkContext {
@@ -87,7 +88,7 @@ export function validateContext(ctx:any):NetworkContext {
       &&r.readiness_required===true&&r.baselines_url==='/api/sync/article-formats/v1/inventory-baselines'
       &&(!r.supported||r.balance_grain==='ITEM_LOCAL_AGGREGATE'&&r.quantity_scale===4),'POS_FORMAT_INVENTORY_NEGOTIATION_INVALID');
   }
-  return structuredClone(ctx);
+  return cloneFormatJSON(ctx);
 }
 /** Checks before any new local posting. Historical Outbox replay does not call this. */
 export function authorizedReturnContext(ctx:NetworkContext):ReturnContext {
@@ -139,7 +140,7 @@ export function validateWireEvent(input:unknown):WireEvent {
   for(const p of e.payments){fields(p,['payment_id','method','amount']);uuid(p.payment_id);requireFormat(!paymentIds.has(p.payment_id));paymentIds.add(p.payment_id);
     requireFormat(['cash','card','transfer'].includes(p.method),'POS_FORMAT_PAYMENT_UNSUPPORTED');decimal(p.amount,2,true);}
   requireFormat(e.payments.reduce((n,p)=>n.plus(p.amount),new Money(0)).eq(e.totals.total_amount),'POS_FORMAT_FULL_SETTLEMENT_REQUIRED');
-  return structuredClone(e);
+  return cloneFormatJSON(e);
 }
 export const AMOUNTS=['net_amount','tax_amount','discount_amount','total_amount'] as const;
 /** PostgreSQL jsonb::text canonical form, including its byte-length-first object key order. */
@@ -160,7 +161,7 @@ export async function hashText(text:string):Promise<string>{
   const digest=await globalThis.crypto.subtle.digest('SHA-256',new TextEncoder().encode(text));
   return Array.from(new Uint8Array(digest),v=>v.toString(16).padStart(2,'0')).join('');
 }
-export async function wireHash(event:WireEvent):Promise<string>{return hashText(postgresJSON(event));}
+export async function wireHash(event:unknown):Promise<string>{return hashText(postgresJSON(event));}
 export function validateACK(value:any,event:WireEvent,hash:string,physicalPolicy?:PhysicalReturn):FormatACK {
   requireFormat(value?.schema_version===1 && value.eventId===event.event_id && value.applied===true && value.disposition==='APPLIED'
     &&value.inventory_quantity_unit==='BASE'&&value.content_hash===hash&&typeof value.document_code==='string'&&value.document_code.length>0
@@ -187,14 +188,14 @@ export function validateACK(value:any,event:WireEvent,hash:string,physicalPolicy
       'POS_FORMAT_ACK_RETURN_AUTHORIZATION_INVALID');
   }
   // An old APPLIED event without context keeps its historical ACK, without fabricated authorization.
-  return structuredClone(value);
+  return cloneFormatJSON(value);
 }
 export class FormatHTTPError extends Error {
   constructor(readonly status:number,readonly code:string,readonly retryable:boolean){super(code);}
 }
 /** Only explicitly supplied ERP credentials; never derives scope from request bodies. */
 export function createFormatTransport(baseURL:string,credentials:{syncToken:string;terminalId:string;tenantId:string;deviceToken:string;deviceId:string},
-  fetcher:typeof fetch=fetch,timeoutMs=15000,options:{negotiateReturnContextV1?:boolean;fixtureInventoryReconciliationV1?:boolean}={}):FormatTransport {
+  fetcher:typeof fetch=fetch,timeoutMs=15000,options:{negotiateReturnContextV1?:boolean;fixtureInventoryReconciliationV1?:boolean;contractVersion?:1|2}={}):FormatTransport {
   const origin=new URL(baseURL);
   requireFormat(origin.protocol==='https:' || origin.protocol==='http:'&&['localhost','127.0.0.1','[::1]'].includes(origin.hostname),'POS_FORMAT_TRANSPORT_INSECURE');
   return {async request(path,body){
@@ -204,7 +205,7 @@ export function createFormatTransport(baseURL:string,credentials:{syncToken:stri
       const response=await fetcher(new URL(path,origin),{method:body===undefined?'GET':'POST',signal:controller.signal,redirect:'error',headers:{
         'Authorization':`Bearer ${credentials.syncToken}`,'x-sync-token':credentials.syncToken,'x-terminal-id':credentials.terminalId,
         'x-tenant-id':credentials.tenantId,'x-device-token':credentials.deviceToken,'x-device-id':credentials.deviceId,
-        'x-article-formats-contract':'1',...(options.fixtureInventoryReconciliationV1&&/^\/api\/sync\/article-formats\/v1\/(?:negotiate$|inventory-baselines(?:\/|$)|inventory-receipts\/)/.test(path)?{'x-article-formats-inventory-reconciliation':'1'}:{}),...(options.negotiateReturnContextV1&&path==='/api/sync/article-formats/v1/negotiate'?{'x-article-formats-return-context':'1'}:{}),'x-pos-capabilities':'largeMasterSyncV3','Content-Type':'application/json'
+        'x-article-formats-contract':options.contractVersion===2&&!path.startsWith('/api/sync/article-formats/v1/')?'2':'1',...(options.fixtureInventoryReconciliationV1&&/^\/api\/sync\/article-formats\/v1\/(?:negotiate$|inventory-baselines(?:\/|$)|inventory-receipts\/)/.test(path)?{'x-article-formats-inventory-reconciliation':'1'}:{}),...(options.negotiateReturnContextV1&&path==='/api/sync/article-formats/v1/negotiate'?{'x-article-formats-return-context':'1'}:{}),'x-pos-capabilities':'largeMasterSyncV3','Content-Type':'application/json'
       },...(body===undefined?{}:{body:JSON.stringify(body)})});
       const text=await response.text();let result:any;try{result=JSON.parse(text);}catch{throw new FormatHTTPError(response.status,'POS_FORMAT_RESPONSE_INVALID',true);}
       if(response.status===202)throw new FormatHTTPError(202,'POS_FORMAT_SESSION_NOT_READY',true);

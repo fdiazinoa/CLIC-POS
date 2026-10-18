@@ -1,3 +1,4 @@
+import {cloneFormatJSON} from './json';
 import type { ArticleFormatLine, ArticleFormatMasterPage, ArticleFormatsDTO, ArticleFormatScope } from './contract';
 import { ArticleFormatError, baseCost, exactDecimal, inventoryQuantity, snapshot, validateDTO } from './domain';
 import { ARTICLE_FORMATS_SCHEMA } from './schema';
@@ -110,7 +111,7 @@ export class ArticleFormatStore {
 
   async commitLocalEvent(event: FormatLocalEvent): Promise<void> {
     // Own the entire payload before awaits; callers cannot mutate durable content mid-commit.
-    event = structuredClone(event);
+    event = cloneFormatJSON(event);
     this.assertScope(event.scope);
     if (event.terminalId !== this.terminalId || !event.eventId || !event.warehouseId || !event.lines.length
       || !['SALE','REFUND','VOID'].includes(event.kind)) throw new ArticleFormatError('ARTICLE_FORMAT_INVALID_EVENT');

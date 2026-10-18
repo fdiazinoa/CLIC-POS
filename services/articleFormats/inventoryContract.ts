@@ -1,3 +1,4 @@
+import {cloneFormatJSON} from './json';
 import {canonicalContent} from './store';
 import {Money,hashText,requireFormat,uuid,validateWireEvent,type WireEvent,type FormatTransport} from './wire';
 
@@ -19,7 +20,7 @@ export function inventoryScope(value:unknown):InventoryScope {
  const s=value as InventoryScope;
  fail(s&&typeof s==='object'&&Object.keys(s).length===7,'POS_FORMAT_INVENTORY_SCOPE_FORBIDDEN');
  for(const key of ['tenant_id','company_id','store_id','terminal_id','warehouse_id','local_id'])uuid(s[key]);
- fail(typeof s.device_id==='string'&&s.device_id.length>0&&s.device_id.length<=512,'POS_FORMAT_INVENTORY_SCOPE_FORBIDDEN');return structuredClone(s);
+ fail(typeof s.device_id==='string'&&s.device_id.length>0&&s.device_id.length<=512,'POS_FORMAT_INVENTORY_SCOPE_FORBIDDEN');return cloneFormatJSON(s);
 }
 export function signedBase4(value:unknown){
  fail(typeof value==='string'&&/^-?(?:0|[1-9]\d{0,10})\.\d{4}$/.test(value)&&value!=='-0.0000','POS_FORMAT_PRECISION_INVALID');
@@ -35,7 +36,7 @@ export function validateInventoryNegotiation(value:any){
 export function validateBaseline(v:any,scope:InventoryScope):InventoryBaseline {
  uuid(v?.baseline_id);fail(v.schema_version===1&&typeof v.ordinal==='string'&&/^[1-9]\d*$/.test(v.ordinal)&&v.ordinal.length<=128
   &&same(inventoryScope(v.scope),scope)&&v.balance_grain==='ITEM_LOCAL_AGGREGATE'&&v.quantity_scale===4);
- count(v.balance_count);fail(v.cut_kind==='MATERIALIZED_MVCC'&&typeof v.snapshot_descriptor==='string'&&v.snapshot_descriptor.length>0);return structuredClone(v);
+ count(v.balance_count);fail(v.cut_kind==='MATERIALIZED_MVCC'&&typeof v.snapshot_descriptor==='string'&&v.snapshot_descriptor.length>0);return cloneFormatJSON(v);
 }
 export async function validateManifest(v:any,b:InventoryBaseline,generation:string,ids:string[],complete=false):Promise<InventoryManifest>{
  uuid(v?.receipt_id);fail(v.schema_version===1&&v.baseline_id===b.baseline_id&&v.ordinal===b.ordinal&&same(v.scope,b.scope)
@@ -46,7 +47,7 @@ export async function validateManifest(v:any,b:InventoryBaseline,generation:stri
  count(v.page_count,502);fail(v.page_count===Math.max(1,Math.ceil(v.row_count/100))&&Array.isArray(v.pages)&&v.pages.length===v.page_count);
  let rows=0;for(let i=0;i<v.pages.length;i++){const p=v.pages[i];fail(p.index===i);hash(p.checksum);count(p.row_count,100);
   fail(p.row_count===(i===v.page_count-1?v.row_count-i*100:100));rows+=p.row_count;}
- hash(v.checksum);fail(rows===v.row_count&&await hashText(v.pages.map(p=>p.checksum).join(''))===v.checksum);return structuredClone(v);
+ hash(v.checksum);fail(rows===v.row_count&&await hashText(v.pages.map(p=>p.checksum).join(''))===v.checksum);return cloneFormatJSON(v);
 }
 export async function validatePage(v:any,m:InventoryManifest,index:number):Promise<InventoryPage>{
  const expected=m.pages[index];fail(expected&&v?.schema_version===1&&v.receipt_id===m.receipt_id&&v.baseline_id===m.baseline_id
@@ -54,7 +55,7 @@ export async function validatePage(v:any,m:InventoryManifest,index:number):Promi
  fail(typeof v.canonical_payload_text==='string'&&new TextEncoder().encode(v.canonical_payload_text).length<=128*1024*1024);
  fail(await hashText(v.canonical_payload_text)===expected.checksum);
  let parsed:unknown;try{parsed=JSON.parse(v.canonical_payload_text);}catch{fail(false);}
- fail(Array.isArray(v.rows)&&v.rows.length===v.row_count&&same(parsed,v.rows));return structuredClone(v);
+ fail(Array.isArray(v.rows)&&v.rows.length===v.row_count&&same(parsed,v.rows));return cloneFormatJSON(v);
 }
 /** Validates all effects against immutable historical quantities, including zero-policy originals. */
 export async function validateInventoryRows(m:InventoryManifest,pages:InventoryPage[],originals:JournalOriginal[]){
