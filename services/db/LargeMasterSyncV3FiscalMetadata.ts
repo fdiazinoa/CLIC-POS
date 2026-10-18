@@ -1,6 +1,6 @@
 import {TAX_SERVICE_APPLIED_PROFILE,validatePreparedAppliedReceipt,assertFiscalOriginalMirror} from '../fiscal/FiscalAppliedReceiptV2';
 import {resolveFiscalPrintDisplay} from '../fiscal/FiscalPrintEvidence';
-import { fiscalStatusSourceChecksum, validFiscalScope, verifyFiscalStatusProof } from '../fiscal/FiscalStatusProof';
+import { fiscalStatusSourceChecksum, validFiscalScope, verifyFiscalStatusProof, verifyRejectedFiscalStatusProof, matchesOriginalFiscalReference } from '../fiscal/FiscalStatusProof';
 import { sha256Utf8 } from '../sync/LargeMasterSyncV3Client';
 import type { DurableDocumentMutation } from './DatabaseAdapter';
 import type { Transaction } from '../../types';
@@ -84,12 +84,16 @@ export async function validateV3FiscalMetadataMutation(mutation: DurableDocument
     const scope = canonicalSource.fiscalSubmissionScope || canonicalSource.fiscalLookupApproval;
     const allowed = ['fiscalSyncStatus','fiscalSyncError','fiscalProviderStatus','fiscalReferenceId','fiscalCertifiedNcf',
       'fiscalResponseMessage','fiscalSyncedAt','fiscalStatusProof'];
-    if (previous.fiscalSyncStatus === 'SYNCED' || !scope || next.fiscalSyncStatus !== 'SYNCED' || next.fiscalSyncError !== undefined
+    const rejected=Boolean(scope&&await verifyRejectedFiscalStatusProof(next.fiscalStatusProof,scope,previous));
+    if (previous.fiscalSyncStatus === 'SYNCED' || !scope
+      || (rejected ? next.fiscalSyncStatus!=='ERROR'||next.fiscalSyncError!=='e-CF original rechazado por el proveedor.'
+        ||next.fiscalSyncedAt!==previous.fiscalSyncedAt||!matchesOriginalFiscalReference(next.fiscalStatusProof,previous)
+        : next.fiscalSyncStatus !== 'SYNCED' || next.fiscalSyncError !== undefined)
       || next.fiscalReferenceId !== next.fiscalStatusProof?.providerReceipt.internalTrackId
       || next.fiscalCertifiedNcf !== next.fiscalStatusProof?.providerReceipt.returnedNcf
       || next.fiscalProviderStatus !== next.fiscalStatusProof?.providerReceipt.status
-      || next.fiscalSyncedAt !== next.fiscalStatusProof?.observedAt || !equal(without(previous,allowed),without(next,allowed))
-      || !await verifyFiscalStatusProof(next.fiscalStatusProof,scope,previous)) denied();
+      || !rejected&&next.fiscalSyncedAt !== next.fiscalStatusProof?.observedAt || !equal(without(previous,allowed),without(next,allowed))
+      || !rejected&&!await verifyFiscalStatusProof(next.fiscalStatusProof,scope,previous)) denied();
     return;
   }
   if (operation === 'CLASSIFICATION_PROJECTION_APPEND') {
