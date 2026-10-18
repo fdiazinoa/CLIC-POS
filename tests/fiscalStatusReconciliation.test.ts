@@ -6,6 +6,9 @@ import {readFileSync} from 'node:fs';
 import {FiscalStatusReconciler,type FiscalStatusDependencies} from '../services/fiscal/FiscalStatusReconciler';
 import {fiscalStatusSourceChecksum,verifyFiscalStatusProof,type FiscalStatusScope,type FiscalStatusProof} from '../services/fiscal/FiscalStatusProof';
 import {attachFiscalStatusLifecycle} from '../services/fiscal/FiscalStatusLifecycle';
+import {captureFiscalStatusBoundContext,captureFiscalBoundContext} from '../services/fiscal/FiscalBoundContext';
+import {v3BindingKey} from '../services/sync/LargeMasterSyncV3OperationalSession';
+import {getEffectiveFiscalComplianceConfig,getProviderEnvironment} from '../utils/fiscal/fiscalHelpers';
 import {getScopedFiscalDocumentStatus} from '../services/fiscal/FiscalScopedStatusTransport';
 import {LARGE_MASTER_SYNC_V3_SCHEMA_SQL} from '../services/db/LargeMasterSyncV3Schema';
 import {CapacitorSQLiteAdapter} from '../services/db/adapters/CapacitorSQLiteAdapter';
@@ -441,6 +444,16 @@ async function manualFixture(alternateScope=false){
  const identity={erpSyncBaseUrl:'https://erp.test/api/sync',tenantId:f.scope.tenantId,terminalId:f.scope.terminalId,deviceId:f.scope.deviceId,syncToken:'live-session'};
  const credentials={...identity,companyId:f.scope.companyId,storeId:f.scope.storeId,deviceToken:'authorized-device',deviceTokenSource:'ERP_REGISTER',authStatus:'AUTHENTICATED',
   syncTokenExpiresAt:'2099-01-01T00:00:00Z',deviceTokenExpiresAt:'2020-01-01T00:00:00Z'};
+ // A real active contract-2 catalog is required by the local read-only context.
+ f.sql.exec("INSERT INTO sync_v3_sessions(sync_id,sync_version,schema_version,contract_version,status,manifest_json,created_at,updated_at) VALUES('S2',2,3,2,'ACTIVE','{}','now','now');");
+ const state:any={opens:0,origin:'https://erp.test',native:true,forbidden:[],adapter:{supportsV3FiscalMetadataCAS:true,
+  saveDocumentsAtomically:(mutations:any)=>f.adapter.saveDocumentsAtomically(mutations),
+  connect:()=>{throw Error('FORBIDDEN_CONNECT');},
+  masterSyncV3Store:new Proxy(f.adapter.masterSyncV3Store,{get:(store,key)=>{
+   if(key==='getActiveRuntimeVersion'||key==='getOperationalOwner')return (store as any)[key].bind(store);
+   state.forbidden.push(String(key));throw Error('FORBIDDEN_STORE_OPERATION:'+String(key));
+  }})}};
+ f.deps.context=await actualAppStatusContext({...f,identity,credentials},state);
  const beforeCredentials=structuredClone(credentials),requests:{url:string;method:string}[]=[];
  let respond=async()=>({ok:true,status:200,json:async()=>f.proof}) as Response;
  f.deps.get=(tx,scope,originalOnly)=>getScopedFiscalDocumentStatus(tx,scope,()=>identity,async(url,init)=>{
@@ -452,10 +465,10 @@ async function manualFixture(alternateScope=false){
  f.deps.publish=()=>{};
  const snapshot=()=>['transactions','transactionHistory','outbox'].map(name=>f.read(name));
  const before=snapshot(),count=Number(f.sql.prepare('SELECT COUNT(*) AS count FROM documents').get()!.count);
- return {...f,button,identity,credentials,requests,before,beforeCredentials,snapshot,
+ return {...f,button,identity,credentials,state,requests,before,beforeCredentials,snapshot,
   respond:(callback:()=>Promise<Response>)=>{respond=callback;},
   unchanged:()=>{assert.deepEqual(snapshot(),before);assert.deepEqual(credentials,beforeCredentials);},
-  noDuplicatesOrIssue:()=>{assert.equal(Number(f.sql.prepare('SELECT COUNT(*) AS count FROM documents').get()!.count),count);assert.ok(requests.every(req=>req.method==='GET'&&req.url.endsWith('/documents/status')));assert.deepEqual(f.read('outbox'),before[2]);},
+  noDuplicatesOrIssue:()=>{assert.equal(state.opens,0);assert.deepEqual(state.forbidden,[]);assert.equal(Number(f.sql.prepare('SELECT COUNT(*) AS count FROM documents').get()!.count),count);assert.ok(requests.every(req=>req.method==='GET'&&req.url.endsWith('/documents/status')));assert.deepEqual(f.read('outbox'),before[2]);},
  };
 }
 for(const alternate of [false,true])for(const decision of ['ACCEPTED','REJECTED','PENDING'] as const)test(`manual button ${decision}, alternate terminal/company=${alternate}: GET only, original/history and immutable financial data`,async()=>{
@@ -539,5 +552,116 @@ for(const change of ['session','device','scope','historical-expiry','history-ref
    return{ok:true,status:200,json:async()=>f.proof} as Response;
   });
   assert.match(await f.button(f.tx),/conserva/i);assert.deepEqual(f.snapshot(),f.before);f.noDuplicatesOrIssue();
+ }finally{f.sql.close();}
+});
+
+// Corrective iteration P1/P3: these regressions are run before implementation.
+for(const source of ['ERP_REGISTER','ERP_REGISTER_REAUTH','ERP_REGISTER_REFRESH','ERP_AUTH_REAUTH','ERP_AUTH_REFRESH'])test(`manual status accepts exact legitimate ERP source ${source}`,()=>{
+ const identity={erpSyncBaseUrl:'https://erp.test/api/sync',tenantId:'tenant',terminalId:'terminal',deviceId:'device',syncToken:'live-session'};
+ const credentials={...identity,companyId:'company',storeId:'store',deviceToken:'authorized-device',deviceTokenSource:source,authStatus:'AUTHENTICATED',syncTokenExpiresAt:'2099-01-01T00:00:00Z',deviceTokenExpiresAt:'2020-01-01T00:00:00Z'};
+ const before=structuredClone(credentials);
+ assert.doesNotThrow(()=>captureFiscalStatusBoundContext(()=>identity,()=>credentials));
+ assert.deepEqual(credentials,before);
+ assert.throws(()=>captureFiscalBoundContext(()=>identity,()=>credentials),/AUTH_REQUIRED/);
+ if(source!=='ERP_REGISTER')assert.throws(()=>captureFiscalBoundContext(()=>identity,()=>({...credentials,deviceTokenExpiresAt:'2099-01-01T00:00:00Z'})),/AUTH_REQUIRED/);
+});
+async function actualAppStatusContext(f:any,state:any){
+ const {transform}=await import('esbuild'),source=readFileSync(new URL('../App.tsx',import.meta.url),'utf8');
+ const start=source.indexOf('const loadFiscalStatusContext ='),end=source.indexOf('const fiscalStatusWorker =',start);
+ assert.ok(start>0&&end>start);
+ const code=(await transform(source.slice(start,end),{loader:'ts'})).code;
+ const configStart=source.indexOf('const resolvePersistedBusinessConfig ='),configEnd=source.indexOf('const normalizeTerminalDocumentAssignments =',configStart);
+ const configCode=(await transform(source.slice(configStart,configEnd),{loader:'ts'})).code;
+ const deps={db:{get:async()=>f.read('config')},dbAdapter:state.adapter,
+  getLargeMasterSyncV3OperationalSession:async()=>{state.opens++;throw Error('FORBIDDEN_BOOTSTRAP_POST');},
+  captureFiscalStatusBoundContext:()=>captureFiscalStatusBoundContext(()=>f.identity,()=>f.credentials),
+  readLargeMasterSyncV3BoundIdentity:()=>f.identity,largeMasterSyncV3DownloadOrigin:()=>state.origin,
+  assertLargeMasterSyncV3NativeAndroid:()=>{if(!state.native)throw Error('SYNC_V3_NATIVE_ANDROID_REQUIRED');},
+  v3BindingKey,getEffectiveFiscalComplianceConfig,getProviderEnvironment};
+ return new Function('f',`const {${Object.keys(deps).join(',')}}=f;const useCallback=(fn)=>fn;${configCode}${code}return loadFiscalStatusContext;`)(deps);
+}
+test('actual App manual cold context never opens operational session/bootstrap',async()=>{
+ const f=await manualFixture();try{
+  const state={opens:0,origin:'https://erp.test',native:true,adapter:{supportsV3FiscalMetadataCAS:true,saveDocumentsAtomically:async()=>{throw Error('FORBIDDEN_WRITE');}}};
+  const load=await actualAppStatusContext(f,state);let error:unknown;
+  try{await load(true);}catch(cause){error=cause;}
+  assert.equal(state.opens,0,'manual status must not call operationalSession.open (cold path performs POST/bootstrap)');
+  assert.match(String(error),/FISCAL_STATUS_(?:NATIVE_REQUIRED|LOCAL_CONTEXT_REQUIRED)/);f.unchanged();assert.equal(f.requests.length,0);
+ }finally{f.sql.close();}
+});
+
+for(const source of ['LEGACY','LOCAL','ERP_REGISTER_FORGED','ERP_REGISTER_REAUTH_EXTRA','ERP_AUTH','UNKNOWN',''])test(`manual status rejects untrusted credential source ${source}`,()=>{
+ const identity={erpSyncBaseUrl:'https://erp.test/api/sync',tenantId:'tenant',terminalId:'terminal',deviceId:'device',syncToken:'live-session'};
+ const credentials={...identity,companyId:'company',storeId:'store',deviceToken:'authorized-device',deviceTokenSource:source,authStatus:'AUTHENTICATED',syncTokenExpiresAt:'2099-01-01T00:00:00Z',deviceTokenExpiresAt:'2020-01-01T00:00:00Z'};
+ assert.throws(()=>captureFiscalStatusBoundContext(()=>identity,()=>credentials),/AUTH_REQUIRED/);
+});
+for(const missing of ['store','runtime','owner','owner-binding','owner-version','runtime-contract','cas','native'] as const)test(`actual App manual context ${missing} fails closed without requests/bootstrap/writes`,async()=>{
+ const f=await manualFixture();try{
+  if(missing==='store')f.state.adapter.masterSyncV3Store=undefined;
+  if(missing==='runtime')f.sql.exec('UPDATE master_v3_state SET active_sync_id=NULL,active_version=NULL');
+  if(missing==='owner')f.sql.exec('DELETE FROM master_v3_operational_owner');
+  if(missing==='owner-binding')f.sql.exec("UPDATE master_v3_operational_owner SET binding='foreign'");
+  if(missing==='owner-version')f.sql.exec('UPDATE master_v3_operational_owner SET sync_version=999');
+  if(missing==='runtime-contract')f.sql.exec('UPDATE sync_v3_sessions SET contract_version=1');
+  if(missing==='cas')f.state.adapter.supportsV3FiscalMetadataCAS=false;
+  if(missing==='native')f.state.native=false;
+  const before=JSON.stringify(f.sql.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all().map((row:any)=>[row.name,f.sql.prepare('SELECT * FROM '+row.name).all()]));
+  const message=await f.button(f.tx);assert.match(message,/contexto local autorizado|preparación/);assert.equal(f.requests.length,0);f.unchanged();f.noDuplicatesOrIssue();
+  const after=JSON.stringify(f.sql.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all().map((row:any)=>[row.name,f.sql.prepare('SELECT * FROM '+row.name).all()]));assert.equal(after,before);
+ }finally{f.sql.close();}
+});
+for(const source of ['ERP_REGISTER_REAUTH','ERP_REGISTER_REFRESH','ERP_AUTH_REAUTH','ERP_AUTH_REFRESH'])test(`real App context recovered source ${source} completes original GET and native CAS`,async()=>{
+ const f=await manualFixture();try{
+  f.credentials.deviceTokenSource=source;const before=structuredClone(f.credentials);
+  assert.match(await f.button(f.tx),/aceptado/);assert.equal(f.requests.length,1);assert.equal(f.read('transactions').fiscalSyncStatus,'SYNCED');
+  assert.deepEqual(f.credentials,before);f.noDuplicatesOrIssue();
+ }finally{f.sql.close();}
+});
+for(const change of ['auth-source','session-token','erp-base','download-origin','owner-binding','owner-version','runtime-version','runtime-contract',
+ 'config-tenant','config-company','config-store','config-terminal','config-device','config-rnc','config-environment'] as const)test(`real App context delayed ${change} blocks metadata commit`,async()=>{
+ const f=await manualFixture();try{
+  f.respond(async()=>{
+   if(change==='auth-source')f.credentials.deviceTokenSource='ERP_REGISTER_REFRESH';
+   if(change==='session-token'){f.identity.syncToken='new-token';f.credentials.syncToken='new-token';}
+   if(change==='erp-base')f.identity.erpSyncBaseUrl='https://other.test/api/sync';
+   if(change==='download-origin')f.state.origin='https://other.test';
+   if(change==='owner-binding')f.sql.exec("UPDATE master_v3_operational_owner SET binding='foreign'");
+   if(change==='owner-version')f.sql.exec('UPDATE master_v3_operational_owner SET sync_version=3');
+   if(change==='runtime-version')f.sql.exec('UPDATE master_v3_state SET active_version=3');
+   if(change==='runtime-contract')f.sql.exec('UPDATE sync_v3_sessions SET contract_version=3');
+   if(change.startsWith('config-')){
+    const config=f.read('config'),terminal=config.terminals[0];
+    if(change==='config-tenant')terminal.config.erpBinding.tenantId='foreign';
+    if(change==='config-company')terminal.config.erpBinding.companyId='foreign';
+    if(change==='config-store')terminal.config.erpBinding.storeId='foreign';
+    if(change==='config-terminal')terminal.id='foreign';
+    if(change==='config-device')terminal.config.currentDeviceId='foreign';
+    if(change==='config-rnc')config.companyInfo.rnc='999999999';
+    if(change==='config-environment')config.fiscalCompliance.providers[0].environment=2;
+    f.sql.prepare("UPDATE documents SET data=? WHERE collection_name='config'").run(JSON.stringify(config));
+   }
+   return {ok:true,status:200,json:async()=>f.proof} as Response;
+  });
+  assert.match(await f.button(f.tx),/conserva/i);assert.deepEqual(f.snapshot(),f.before);assert.equal(f.requests.length,1);f.noDuplicatesOrIssue();
+ }finally{f.sql.close();}
+});
+test('App context keeps the existing operational-session default for automatic/other callers',async()=>{
+ const f=await manualFixture();try{
+  await assert.rejects(()=>f.deps.context(),/FORBIDDEN_BOOTSTRAP_POST/);assert.equal(f.state.opens,1);
+  await assert.rejects(()=>f.deps.context(false),/FORBIDDEN_BOOTSTRAP_POST/);assert.equal(f.state.opens,2);f.unchanged();
+ }finally{f.sql.close();}
+});
+
+for(const change of ['config','owner','runtime'] as const)test(`real App context ${change} change after source read blocks the status request`,async()=>{
+ const f=await manualFixture();try{
+  const pair=f.deps.pair;
+  f.deps.pair=async(id)=>{
+   const result=await pair(id);
+   if(change==='config'){const config=f.read('config');config.companyInfo.rnc='999999999';f.sql.prepare("UPDATE documents SET data=? WHERE collection_name='config'").run(JSON.stringify(config));}
+   if(change==='owner')f.sql.exec("UPDATE master_v3_operational_owner SET binding='foreign'");
+   if(change==='runtime')f.sql.exec('UPDATE master_v3_state SET active_version=3');
+   return result;
+  };
+  assert.match(await f.button(f.tx),/conserva/i);assert.equal(f.requests.length,0);assert.deepEqual(f.snapshot(),f.before);f.noDuplicatesOrIssue();
  }finally{f.sql.close();}
 });

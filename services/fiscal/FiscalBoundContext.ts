@@ -28,7 +28,8 @@ export const captureFiscalStatusBoundContext=(readIdentity:()=>LargeMasterSyncV3
  if((credentials.erpTenantId||credentials.tenantId)!==identity.tenantId||(credentials.erpTerminalId||credentials.terminalId)!==identity.terminalId
    ||credentials.deviceId!==identity.deviceId||credentials.syncToken!==identity.syncToken||!token(identity.syncToken)||!token(credentials.deviceToken)
    ||!credentials.companyId||!credentials.storeId||credentials.identityMigrationRequired
-   ||!['AUTHENTICATED','BOUND'].includes(credentials.authStatus||'')||credentials.deviceTokenSource!=='ERP_REGISTER'
+   ||!['AUTHENTICATED','BOUND'].includes(credentials.authStatus||'')
+   ||!['ERP_REGISTER','ERP_REGISTER_REAUTH','ERP_REGISTER_REFRESH','ERP_AUTH_REAUTH','ERP_AUTH_REFRESH'].includes(credentials.deviceTokenSource||'')
    ||!credentials.syncTokenExpiresAt||!Number.isFinite(Date.parse(credentials.syncTokenExpiresAt))||Date.parse(credentials.syncTokenExpiresAt)<=now
    ||credentials.deviceTokenExpiresAt&&!Number.isFinite(Date.parse(credentials.deviceTokenExpiresAt)))throw Error('FISCAL_TERMINAL_AUTH_REQUIRED');
  const descriptor={origin,tenantId:identity.tenantId,companyId:credentials.companyId,storeId:credentials.storeId,terminalId:identity.terminalId,deviceId:identity.deviceId};

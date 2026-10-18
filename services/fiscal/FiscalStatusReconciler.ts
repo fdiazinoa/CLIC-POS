@@ -9,7 +9,7 @@ export interface FiscalStatusContext {
   catalog: Catalog; assertCurrent: ()=>Promise<void>;
 }
 export interface FiscalStatusDependencies {
-  context: ()=>Promise<FiscalStatusContext>;
+  context: (originalOnly?:boolean)=>Promise<FiscalStatusContext>;
   pair: (id:string)=>Promise<{transaction:Transaction;history:Transaction}>;
   candidates: (binding:string,after:string,limit:number)=>Promise<string[]>;
   commit: (mutations:DurableDocumentMutation[])=>Promise<void>;
@@ -27,7 +27,7 @@ export class FiscalStatusReconciler {
   dispose(){this.generation++;this.cursor='';this.cooldown.clear();}
   private serialize<T>(operation:()=>Promise<T>):Promise<T>{const task=this.tail.then(operation);this.tail=task.catch(()=>{});return task;}
   async consult(id:string,manual=false,actorId?:string,approvedLookupEnvironment?:number,originalOnly=false):Promise<string>{
-    const context=await this.deps.context(),generation=this.generation,key=context.scope.binding+':'+id+(originalOnly?':original':'');
+    const context=await this.deps.context(originalOnly),generation=this.generation,key=context.scope.binding+':'+id+(originalOnly?':original':'');
     const pending=this.inflight.get(key);if(pending)return pending;
     const now=(this.deps.now||Date.now)();
     if(!manual&&now-(this.cooldown.get(key)??-Infinity)<60000)return 'Consulta fiscal en espera.';
@@ -48,6 +48,7 @@ export class FiscalStatusReconciler {
         pair=await this.deps.pair(id);tx=pair.transaction;
       }
       if(scope.sourceChecksum!==checksum||Object.keys(context.scope).some(key=>(scope as any)[key]!==(context.scope as any)[key]))throw Error('FISCAL_STATUS_SCOPE_CHANGED');
+      if(originalOnly){await context.assertCurrent();if(generation!==this.generation)throw Error('FISCAL_STATUS_SCOPE_CHANGED');}
       const proof=await this.deps.get(tx,scope,originalOnly);
       await context.assertCurrent();if(generation!==this.generation)throw Error('FISCAL_STATUS_SCOPE_CHANGED');
       const accepted=await verifyFiscalStatusProof(proof,scope,tx);

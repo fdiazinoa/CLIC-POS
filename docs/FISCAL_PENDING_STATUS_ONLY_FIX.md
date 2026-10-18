@@ -20,22 +20,40 @@ Ambas reproducciones son automatizadas con credenciales sintéticas y SQLite rea
 
 ## Comportamiento
 
-- La consulta exige sesión vigente, dispositivo vinculado, credenciales de registro y coincidencia exacta de tenant/empresa/tienda/terminal/dispositivo. El ERP valida los mismos encabezados en el GET. Rechazos 401/403 se muestran como problema de sesión/dispositivo.
+- La consulta exige sesión vigente, dispositivo vinculado, credenciales procedentes del registro/autenticación ERP y coincidencia exacta de tenant/empresa/tienda/terminal/dispositivo. El ERP valida los mismos encabezados en el GET. Rechazos 401/403 se muestran como problema de sesión/dispositivo.
 - El vencimiento histórico del vínculo se conserva íntegro y forma parte del fingerprint de carrera. No sustituye el vencimiento de la sesión vigente. `captureFiscalBoundContext`, usado para emisión, conserva su guard original.
 - Solo se consulta si existe intento previo y scope persistido válido con checksum del original. El botón no genera autorizaciones de búsqueda ni infiere el entorno histórico.
 - Aceptado pasa a `SYNCED`; rechazado inequívoco pasa a `ERROR`, con prueba y motivo. Pendiente, identidad ambigua, scope ausente, error de red o fallo de escritura conservan la evidencia. No se consumen reintentos de clasificación.
 - Las escrituras atómicas existentes preservan identidad fiscal, importes, impuestos, pagos y datos independientes del historial; no crean documentos, eventos ni números fiscales.
 - Pulsaciones simultáneas comparten la consulta. El resto de la reconciliación automática conserva su comportamiento.
 
-## Validación
+## Iteración correctiva P1–P5
 
-- `npm exec -- tsx --test tests/fiscal*.test.ts tests/msellerFiscalIntegration.test.ts tests/terminalFiscalProviderSnapshot.test.ts tests/terminalAuthorizationGuard.test.ts tests/largeMasterSyncV3CheckoutAuthority.test.ts tests/largeMasterSyncV3RefundAuthority.test.ts tests/posFiscalStatusRefresh.test.ts`: **499 aprobadas**, cero fallos.
-- Incluye 74 pruebas de reconciliación: callback real del botón → transporte real con fetch simulado → adaptador SQLite real. Aceptado/rechazado/pendiente en dos scopes distintos; red; sesión vencida/ausente; dispositivo no autorizado/revocado; 401/403; scope/documento/referencia incorrectos; falta de scope/intento; JSON inválido; rollback si falla el historial; cambios durante el GET; veinte pulsaciones → un GET/un batch. Todos los requests de esa ruta son GET de estado; cero ISSUE/duplicados; outbox y datos financieros preservados.
-- `npm run build`: aprobado (advertencia de tamaño de chunks).
+El candidato inicial `7e385adc51e749dd1230d610c00df11e2983fdd0` tenía dos hallazgos adicionales. Antes de cambiar su implementación se reprodujeron ambos mediante regresiones: las cuatro fuentes legítimas de recuperación de credenciales devolvían `FISCAL_TERMINAL_AUTH_REQUIRED`, y el contexto manual frío invocaba la sesión operacional, cuya apertura puede solicitar maestros por POST y escribir preparación local. Las pruebas anteriores sustituían ese contexto y no detectaban ese recorrido.
+
+La consulta manual ahora acepta exactamente `ERP_REGISTER`, `ERP_REGISTER_REAUTH`, `ERP_REGISTER_REFRESH`, `ERP_AUTH_REAUTH` y `ERP_AUTH_REFRESH`, manteniendo los demás controles de sesión/dispositivo/scope. `captureFiscalBoundContext` y la función de emisión `syncFiscalDocument` permanecen idénticos, byte por byte, al candidato inicial.
+
+`context(originalOnly)` selecciona únicamente para esa acción una lectura local del binding autorizado, configuración persistida, runtime activo con contrato >= 2 y owner coincidente. No abre sesiones operacionales, conecta/prepara catálogos, descarga, registra, refresca credenciales ni escribe configuración. Si falta ese contexto, conserva el pendiente y explica que debe validarse la preparación de la terminal. La selección predeterminada, automática y de impresión conserva su recorrido existente.
+
+La identidad/base/origen, credenciales y ambas fechas, scope fiscal persistido, runtime y owner se comparan con los valores capturados antes de la petición y del commit; los cambios bloquean la reconciliación. Las escrituras de estado siguen usando el mismo CAS atómico sobre el original y su historial.
+
+## Validación técnica de implementación
+
+Ejecución local con **Node 24.11.1**; WORKFLOW/CI prescribe Node 22. No se atribuye a esta ejecución validación en Node 22.
+
+- `tsx --test tests/fiscal*.test.ts tests/msellerFiscalIntegration.test.ts tests/terminalFiscalProviderSnapshot.test.ts tests/terminalAuthorizationGuard.test.ts tests/largeMasterSyncV3CheckoutAuthority.test.ts tests/largeMasterSyncV3RefundAuthority.test.ts tests/posFiscalStatusRefresh.test.ts`: **543 pruebas completadas, cero fallos**.
+- Incluye **118 pruebas de reconciliación**; las manuales ejecutan callback y contexto reales extraídos de App, transporte de estado con fetch simulado y adaptador SQLite real. Aceptado/rechazado/pendiente, red, sesión vencida, 401/403, identidad ambigua, rollback del historial, carreras de auth/base/origen/config/runtime/owner y veinte pulsaciones → un GET/un batch. Contexto ausente/inconsistente → cero peticiones/cero escrituras; ninguna llamada a bootstrap/POST/descarga/ISSUE y ningún documento/NCF/evento nuevo.
+- `npm run build`: compilación TypeScript/Vite completada; advertencias de tamaño de chunks y Browserslist.
 - `npm run lint`: cero errores, 39 advertencias.
-- `git diff --check`: aprobado.
+- `git diff --check`: sin errores.
 
-Pendiente: smoke de la versión candidata instalada en Android contra una respuesta ERP real de un envío original inequívocamente identificado. No se compiló/instaló APK, desplegó ERP, reemitió e-CF ni activó bindingEvidence.
+Estos resultados son evidencia del desarrollador, **no aprobación de QA/review/sync/performance**. Quedan pendientes las revisiones independientes sobre el nuevo SHA, suites transversales exigidas por el selector, repetición con Node 22, smoke Android contra ERP real y medición comparable baseline/candidato. Ningún gate requerido se declara aprobado o prescindible por falta de entorno. No se compiló/instaló APK, desplegó ERP, reemitió e-CF ni activó bindingEvidence.
+
+El candidato inicial se implementó antes de leer el procedimiento multiagente actualizado y sin aprobación independiente previa del plan; esa omisión histórica no se subsana retroactivamente. Esta iteración sí sigue el análisis P1–P5 y aprobación prospectiva independiente registrados externamente. El cliente expone identidades de agentes delegados, pero no selección nativa de roles ni UUID de sesión independiente; no se inventan firmas o identidades.
+
+## Panel de operación de prueba
+
+La petición adicional de excluir «Preparar una operación de prueba» / «Marcar la próxima venta nueva» del próximo APK no requiere borrar UI en esta base: `origin/develop` y esta rama no contienen `FiscalPreparationPanel`, `FiscalSinglePreparation`, `NativeCaja6Preparation` ni esos textos. El panel se rastreó en otra worktree/candidato; no se copiaron ni editaron sus archivos. Los assets compilados de esta rama se revisan para confirmar la misma ausencia. Esta comprobación de fuente/assets no certifica un APK instalado; deben verificarse el SHA y los bytes del próximo artefacto antes de distribuirlo. Se conservan datos y flags.
 
 ## Observación adicional: TCK6000033
 
