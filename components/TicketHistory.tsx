@@ -1,4 +1,4 @@
-import {FiscalBuyerDraftAction} from './FiscalBuyerDraftAction';
+import {FiscalBuyerDraftAction,hasFiscalWorkflowSourceMarker} from './FiscalBuyerDraftAction';
 import {resolveFiscalPrintReadiness,resolveFiscalAcceptance} from '../services/fiscal/FiscalPrintEvidence';
 import {readRefundOriginal} from '../services/localRefundPersistence';
 import { canProjectFiscalClassification } from '../utils/fiscalClassificationProjection';
@@ -615,7 +615,7 @@ const SalesHistoryTable: React.FC<{
                                  <span className="text-[10px] font-bold text-gray-400">
                                     {displayNcf || 'Sin NCF'}
                                  </span>
-                                 <FiscalSyncBadge transaction={tx} compact />
+                                 {!hasFiscalWorkflowSourceMarker(tx)&&<FiscalSyncBadge transaction={tx} compact />}
                                  {reviewedTransactionIds.has(tx.id) && (
                                     <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[9px] font-black uppercase text-amber-700">
                                        <Flag size={10} /> Revisión
@@ -1035,6 +1035,7 @@ const TicketDetailDrawer: React.FC<{
                         <p className="text-xs font-bold text-gray-800 truncate">{displayNcf || 'Sin NCF'}</p>
                      </div>
                      <div className="col-span-2 p-3 bg-slate-50 rounded-xl border border-slate-200">
+                        <FiscalBuyerDraftAction transaction={tx} users={users}>
                         <div className="flex flex-wrap items-start justify-between gap-3">
                            <div>
                               <p className="text-[10px] font-bold text-slate-400 uppercase">Estado Fiscal</p>
@@ -1069,7 +1070,6 @@ const TicketDetailDrawer: React.FC<{
                               {tx.fiscalResponseMessage}
                            </p>
                         )}
-                        <FiscalBuyerDraftAction transaction={tx} users={users}/>
                         {(canConsultFiscal || canRetryFiscal || canCorrectFiscal) && (
                            <div className="mt-3 flex flex-wrap items-center gap-3">
                               {canConsultFiscal && (
@@ -1102,6 +1102,7 @@ const TicketDetailDrawer: React.FC<{
                               )}
                            </div>
                         )}
+                        </FiscalBuyerDraftAction>
                      </div>
                      {isRefundDoc && (
                         <div className="p-3 bg-red-50/60 rounded-xl border border-red-100">

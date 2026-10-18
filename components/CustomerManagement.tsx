@@ -1,4 +1,4 @@
-import {FiscalBuyerDraftAction} from './FiscalBuyerDraftAction';
+import {FiscalBuyerDraftAction,hasFiscalWorkflowSourceMarker} from './FiscalBuyerDraftAction';
 
 import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import {
@@ -1430,7 +1430,7 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                                                    </p>
                                                    <div className="mt-2 flex flex-wrap items-center gap-2">
                                                       <span className="text-[10px] font-bold text-gray-400">{fiscalNumber || 'Sin NCF'}</span>
-                                                      <FiscalSyncBadge transaction={tx} compact />
+                                                      {!hasFiscalWorkflowSourceMarker(tx)&&<FiscalSyncBadge transaction={tx} compact />}
                                                    </div>
                                                 </div>
                                              </div>
@@ -2106,7 +2106,6 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                            )}
                         </section>
 
-                        <FiscalBuyerDraftAction transaction={tx} users={users}/>
                         <section>
                            <h4 className="text-[10px] font-black uppercase text-gray-400 tracking-widest mb-3">Artículos del Ticket</h4>
                            <div className="space-y-2">
@@ -2159,6 +2158,7 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                                  <p className="text-xs font-bold text-gray-800 truncate">{tx.ncf || 'Sin NCF'}</p>
                               </div>
                               <div className="col-span-2 p-3 bg-slate-50 rounded-xl border border-slate-200">
+                                 <FiscalBuyerDraftAction transaction={tx} users={users}>
                                  <div className="flex flex-wrap items-start justify-between gap-3">
                                     <div>
                                        <p className="text-[10px] font-bold text-slate-400 uppercase">Estado Fiscal</p>
@@ -2210,6 +2210,7 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                                        )}
                                     </div>
                                  )}
+                                 </FiscalBuyerDraftAction>
                               </div>
                               {isRefundDoc && (
                                  <div className="p-3 bg-red-50/60 rounded-xl border border-red-100">
