@@ -1,0 +1,280 @@
+{
+  "fixtureOnly": true,
+  "dispatchable": false,
+  "sourceFixture": "e32-352-original.json",
+  "request": {
+    "providerId": "MSELLER",
+    "environment": 0,
+    "documentCode": "E32",
+    "companyInfo": {
+      "name": "Emisor sintético de laboratorio",
+      "rnc": "130090752"
+    },
+    "transaction": {
+      "id": "QA-V3-E32-352",
+      "documentType": "TICKET",
+      "status": "COMPLETED",
+      "terminalId": "11111111-1111-4111-8111-111111111111",
+      "date": "2026-10-17T16:00:00.000Z",
+      "ncf": "E320000001021",
+      "electronicNcf": "E320000001021",
+      "ncfType": "E32",
+      "fiscalMode": "ECF",
+      "fiscalProvider": "MSELLER",
+      "fiscalEnvironment": 0,
+      "fiscalIssuance": {
+        "schemaVersion": 1,
+        "source": "POS_FISCAL_RESERVATION_V1",
+        "ncf": "E320000001021",
+        "ncfType": "E32",
+        "sequence": 1021,
+        "fiscalRangeId": "55555555-5555-4555-8555-555555555555",
+        "fiscalAllocationId": "66666666-6666-4666-8666-666666666666",
+        "prefix": "E32",
+        "rangeStart": 1,
+        "rangeEnd": 9999999999,
+        "allocationStart": 1001,
+        "allocationEnd": 2000,
+        "expiryDate": "2027-12-31",
+        "issuerRnc": "130090752",
+        "tenantId": "22222222-2222-4222-8222-222222222222",
+        "companyId": "44444444-4444-4444-8444-444444444444",
+        "terminalId": "11111111-1111-4111-8111-111111111111",
+        "capturedAt": "2026-10-16T03:30:00.000Z"
+      },
+      "settlementCurrencyCode": "DOP",
+      "total": 352,
+      "netAmount": 275,
+      "taxAmount": 77,
+      "taxBreakdown": [
+        {
+          "id": "qa-vat-001",
+          "name": "ITBIS",
+          "rate": 0.18,
+          "type": "VAT",
+          "amount": 49.5,
+          "taxableBase": 275,
+          "total": 324.5,
+          "lineCount": 1
+        },
+        {
+          "id": "qa-service-002",
+          "name": "Impuesto 10%",
+          "rate": 0.1,
+          "type": "SERVICE_CHARGE",
+          "fiscalAdditionalTaxCode": "001",
+          "amount": 27.5,
+          "taxableBase": 275,
+          "total": 302.5,
+          "lineCount": 1
+        }
+      ],
+      "discountAmount": 0,
+      "isTaxIncluded": false,
+      "serviceType": "DINE_IN",
+      "serviceTaxPolicySnapshot": {
+        "legalTip": {
+          "enabled": false,
+          "percentage": 0
+        },
+        "taxIds": [
+          "qa-vat-001",
+          "qa-service-002"
+        ],
+        "serviceType": "DINE_IN",
+        "source": "POS"
+      },
+      "serviceChargeAmount": 0,
+      "pendingBalance": 0,
+      "items": [
+        {
+          "id": "77777777-7777-4777-8777-777777777777",
+          "sku": "182",
+          "externalCode": "QA-EXT",
+          "name": "SKU 182 synthetic fixture",
+          "description": "Synthetic catalog input; actual adapter output",
+          "price": 275,
+          "category": "QA category",
+          "posCategoryId": "qa-category",
+          "familyId": "qa-family",
+          "posSortOrder": 3,
+          "type": "PRODUCT",
+          "is_active": true,
+          "is_sellable": true,
+          "v3SaleAuthority": {
+            "inventorySyncId": "aaaaaaaa-0000-4000-8000-000000000006",
+            "inventorySyncVersion": 6,
+            "syncId": "aaaaaaaa-0000-4000-8000-000000000007",
+            "syncVersion": 7,
+            "tariffId": "qa-tariff",
+            "taxIncluded": false,
+            "inventoryVersion": 42,
+            "inventoryCursor": "qa-stock-cursor-42",
+            "binding": "[\"22222222-2222-4222-8222-222222222222\",\"11111111-1111-4111-8111-111111111111\",\"mock-device-v1\",\"https://erp.fixture.invalid/api/sync\",\"https://erp.fixture.invalid\"]",
+            "warehouseId": "88888888-8888-4888-8888-888888888888"
+          },
+          "isInventoriable": true,
+          "taxable": true,
+          "appliedTaxIds": [
+            "qa-vat-001",
+            "qa-service-002"
+          ],
+          "operationalFlags": {
+            "isWeighted": false,
+            "trackInventory": true,
+            "autoPrintLabel": false,
+            "promptPrice": false,
+            "integersOnly": true,
+            "ageRestricted": false,
+            "allowNegativeStock": false,
+            "excludeFromPromotions": false,
+            "excludeFromLoyalty": false,
+            "usesLots": false,
+            "usesSerial": false
+          },
+          "stock": 8,
+          "stockBalances": {
+            "88888888-8888-4888-8888-888888888888": 8
+          },
+          "measurementUnit": "UND",
+          "purchaseUnit": "UND",
+          "conversionFactor": 1,
+          "activeInWarehouses": [
+            "88888888-8888-4888-8888-888888888888"
+          ],
+          "images": [],
+          "attributes": [],
+          "variants": [],
+          "tariffs": [
+            {
+              "tariffId": "qa-tariff",
+              "price": 275
+            }
+          ],
+          "cartId": "qa-cart-1",
+          "quantity": 1,
+          "netAmount": 275,
+          "taxAmount": 77,
+          "totalAmount": 352,
+          "taxRate": 0.28,
+          "discountAmount": 0
+        }
+      ],
+      "payments": [
+        {
+          "id": "qa-cash-payment",
+          "method": "CASH",
+          "amount": 352,
+          "appliedAmount": 352,
+          "currency": "DOP"
+        }
+      ],
+      "settlementAppliedBase": 352,
+      "syncStatus": "PENDING",
+      "v3Binding": "[\"22222222-2222-4222-8222-222222222222\",\"11111111-1111-4111-8111-111111111111\",\"mock-device-v1\",\"https://erp.fixture.invalid/api/sync\",\"https://erp.fixture.invalid\"]",
+      "v3WarehouseId": "88888888-8888-4888-8888-888888888888",
+      "v3InventoryBaseline": "[\"[\\\"22222222-2222-4222-8222-222222222222\\\",\\\"11111111-1111-4111-8111-111111111111\\\",\\\"mock-device-v1\\\",\\\"https://erp.fixture.invalid/api/sync\\\",\\\"https://erp.fixture.invalid\\\"]\",\"aaaaaaaa-0000-4000-8000-000000000006\",6,42,\"qa-stock-cursor-42\"]",
+      "v3CommitFingerprint": "[\"{\\\"date\\\":\\\"2026-10-17T16:00:00.000Z\\\",\\\"discountAmount\\\":0,\\\"documentType\\\":\\\"TICKET\\\",\\\"electronicNcf\\\":\\\"E320000001021\\\",\\\"fiscalEnvironment\\\":0,\\\"fiscalIssuance\\\":{\\\"allocationEnd\\\":2000,\\\"allocationStart\\\":1001,\\\"capturedAt\\\":\\\"2026-10-16T03:30:00.000Z\\\",\\\"companyId\\\":\\\"44444444-4444-4444-8444-444444444444\\\",\\\"expiryDate\\\":\\\"2027-12-31\\\",\\\"fiscalAllocationId\\\":\\\"66666666-6666-4666-8666-666666666666\\\",\\\"fiscalRangeId\\\":\\\"55555555-5555-4555-8555-555555555555\\\",\\\"issuerRnc\\\":\\\"130090752\\\",\\\"ncf\\\":\\\"E320000001021\\\",\\\"ncfType\\\":\\\"E32\\\",\\\"prefix\\\":\\\"E32\\\",\\\"rangeEnd\\\":9999999999,\\\"rangeStart\\\":1,\\\"schemaVersion\\\":1,\\\"sequence\\\":1021,\\\"source\\\":\\\"POS_FISCAL_RESERVATION_V1\\\",\\\"tenantId\\\":\\\"22222222-2222-4222-8222-222222222222\\\",\\\"terminalId\\\":\\\"11111111-1111-4111-8111-111111111111\\\"},\\\"fiscalMode\\\":\\\"ECF\\\",\\\"fiscalProvider\\\":\\\"MSELLER\\\",\\\"id\\\":\\\"QA-V3-E32-352\\\",\\\"isTaxIncluded\\\":false,\\\"items\\\":[{\\\"activeInWarehouses\\\":[\\\"88888888-8888-4888-8888-888888888888\\\"],\\\"appliedTaxIds\\\":[\\\"qa-vat-001\\\",\\\"qa-service-002\\\"],\\\"attributes\\\":[],\\\"cartId\\\":\\\"qa-cart-1\\\",\\\"category\\\":\\\"QA category\\\",\\\"conversionFactor\\\":1,\\\"description\\\":\\\"Synthetic catalog input; actual adapter output\\\",\\\"discountAmount\\\":0,\\\"externalCode\\\":\\\"QA-EXT\\\",\\\"familyId\\\":\\\"qa-family\\\",\\\"id\\\":\\\"77777777-7777-4777-8777-777777777777\\\",\\\"images\\\":[],\\\"isInventoriable\\\":true,\\\"is_active\\\":true,\\\"is_sellable\\\":true,\\\"measurementUnit\\\":\\\"UND\\\",\\\"name\\\":\\\"SKU 182 synthetic fixture\\\",\\\"netAmount\\\":275,\\\"operationalFlags\\\":{\\\"ageRestricted\\\":false,\\\"allowNegativeStock\\\":false,\\\"autoPrintLabel\\\":false,\\\"excludeFromLoyalty\\\":false,\\\"excludeFromPromotions\\\":false,\\\"integersOnly\\\":true,\\\"isWeighted\\\":false,\\\"promptPrice\\\":false,\\\"trackInventory\\\":true,\\\"usesLots\\\":false,\\\"usesSerial\\\":false},\\\"posCategoryId\\\":\\\"qa-category\\\",\\\"posSortOrder\\\":3,\\\"price\\\":275,\\\"purchaseUnit\\\":\\\"UND\\\",\\\"quantity\\\":1,\\\"sku\\\":\\\"182\\\",\\\"stock\\\":8,\\\"stockBalances\\\":{\\\"88888888-8888-4888-8888-888888888888\\\":8},\\\"tariffs\\\":[{\\\"price\\\":275,\\\"tariffId\\\":\\\"qa-tariff\\\"}],\\\"taxAmount\\\":77,\\\"taxRate\\\":0.28,\\\"taxable\\\":true,\\\"totalAmount\\\":352,\\\"type\\\":\\\"PRODUCT\\\",\\\"v3SaleAuthority\\\":{\\\"binding\\\":\\\"[\\\\\\\"22222222-2222-4222-8222-222222222222\\\\\\\",\\\\\\\"11111111-1111-4111-8111-111111111111\\\\\\\",\\\\\\\"mock-device-v1\\\\\\\",\\\\\\\"https://erp.fixture.invalid/api/sync\\\\\\\",\\\\\\\"https://erp.fixture.invalid\\\\\\\"]\\\",\\\"inventoryCursor\\\":\\\"qa-stock-cursor-42\\\",\\\"inventorySyncId\\\":\\\"aaaaaaaa-0000-4000-8000-000000000006\\\",\\\"inventorySyncVersion\\\":6,\\\"inventoryVersion\\\":42,\\\"syncId\\\":\\\"aaaaaaaa-0000-4000-8000-000000000007\\\",\\\"syncVersion\\\":7,\\\"tariffId\\\":\\\"qa-tariff\\\",\\\"taxIncluded\\\":false,\\\"warehouseId\\\":\\\"88888888-8888-4888-8888-888888888888\\\"},\\\"variants\\\":[]}],\\\"ncf\\\":\\\"E320000001021\\\",\\\"ncfType\\\":\\\"E32\\\",\\\"netAmount\\\":275,\\\"payments\\\":[{\\\"amount\\\":352,\\\"appliedAmount\\\":352,\\\"currency\\\":\\\"DOP\\\",\\\"id\\\":\\\"qa-cash-payment\\\",\\\"method\\\":\\\"CASH\\\"}],\\\"pendingBalance\\\":0,\\\"serviceChargeAmount\\\":0,\\\"serviceTaxPolicySnapshot\\\":{\\\"legalTip\\\":{\\\"enabled\\\":false,\\\"percentage\\\":0},\\\"serviceType\\\":\\\"DINE_IN\\\",\\\"source\\\":\\\"POS\\\",\\\"taxIds\\\":[\\\"qa-vat-001\\\",\\\"qa-service-002\\\"]},\\\"serviceType\\\":\\\"DINE_IN\\\",\\\"settlementAppliedBase\\\":352,\\\"settlementCurrencyCode\\\":\\\"DOP\\\",\\\"taxAmount\\\":77,\\\"taxBreakdown\\\":[{\\\"amount\\\":49.5,\\\"id\\\":\\\"qa-vat-001\\\",\\\"lineCount\\\":1,\\\"name\\\":\\\"ITBIS\\\",\\\"rate\\\":0.18,\\\"taxableBase\\\":275,\\\"total\\\":324.5,\\\"type\\\":\\\"VAT\\\"},{\\\"amount\\\":27.5,\\\"fiscalAdditionalTaxCode\\\":\\\"001\\\",\\\"id\\\":\\\"qa-service-002\\\",\\\"lineCount\\\":1,\\\"name\\\":\\\"Impuesto 10%\\\",\\\"rate\\\":0.1,\\\"taxableBase\\\":275,\\\"total\\\":302.5,\\\"type\\\":\\\"SERVICE_CHARGE\\\"}],\\\"terminalId\\\":\\\"11111111-1111-4111-8111-111111111111\\\",\\\"total\\\":352}\",\"88888888-8888-4888-8888-888888888888\",false,[],false,false,null]"
+    },
+    "options": {
+      "credentialKey": "130090752",
+      "deliveryMode": "DELEGATED_ERP",
+      "fiscalIssuance": {
+        "schemaVersion": 1,
+        "source": "POS_FISCAL_RESERVATION_V1",
+        "ncf": "E320000001021",
+        "ncfType": "E32",
+        "sequence": 1021,
+        "fiscalRangeId": "55555555-5555-4555-8555-555555555555",
+        "fiscalAllocationId": "66666666-6666-4666-8666-666666666666",
+        "prefix": "E32",
+        "rangeStart": 1,
+        "rangeEnd": 9999999999,
+        "allocationStart": 1001,
+        "allocationEnd": 2000,
+        "expiryDate": "2027-12-31",
+        "issuerRnc": "130090752",
+        "tenantId": "22222222-2222-4222-8222-222222222222",
+        "companyId": "44444444-4444-4444-8444-444444444444",
+        "terminalId": "11111111-1111-4111-8111-111111111111",
+        "capturedAt": "2026-10-16T03:30:00.000Z"
+      },
+      "fiscalRangeId": "55555555-5555-4555-8555-555555555555",
+      "fiscalAllocationId": "66666666-6666-4666-8666-666666666666",
+      "sequenceExpiryDate": "2027-12-31"
+    }
+  },
+  "expectedPayload": {
+    "ECF": {
+      "Encabezado": {
+        "Version": "1.0",
+        "IdDoc": {
+          "TipoeCF": 32,
+          "eNCF": "E320000001021",
+          "IndicadorEnvioDiferido": 1,
+          "IndicadorMontoGravado": 0,
+          "TipoIngresos": "01",
+          "TipoPago": 1
+        },
+        "Emisor": {
+          "RNCEmisor": "130090752",
+          "RazonSocialEmisor": "Emisor sintético de laboratorio",
+          "DireccionEmisor": "República Dominicana",
+          "FechaEmision": "17-10-2026"
+        },
+        "Comprador": {
+          "RNCComprador": "00000000000",
+          "RazonSocialComprador": "Consumidor Final"
+        },
+        "Totales": {
+          "MontoGravadoTotal": 275,
+          "MontoGravadoI1": 275,
+          "MontoExento": 0,
+          "ITBIS1": 18,
+          "TotalITBIS": 49.5,
+          "TotalITBIS1": 49.5,
+          "MontoImpuestoAdicional": 27.5,
+          "ImpuestosAdicionales": {
+            "ImpuestoAdicional": [
+              {
+                "TipoImpuesto": "001",
+                "TasaImpuestoAdicional": 10,
+                "OtrosImpuestosAdicionales": 27.5
+              }
+            ]
+          },
+          "MontoTotal": 352
+        }
+      },
+      "DetallesItems": {
+        "Item": [
+          {
+            "NumeroLinea": 1,
+            "IndicadorFacturacion": 1,
+            "NombreItem": "SKU 182 synthetic fixture",
+            "IndicadorBienoServicio": 1,
+            "CantidadItem": 1,
+            "UnidadMedida": 47,
+            "PrecioUnitarioItem": 275,
+            "TablaImpuestoAdicional": {
+              "ImpuestoAdicional": [
+                {
+                  "TipoImpuesto": "001"
+                }
+              ]
+            },
+            "MontoItem": 275
+          }
+        ]
+      }
+    }
+  },
+  "meaning": {
+    "erpVatCode": "001",
+    "erpServiceChargeCode": "002",
+    "dgiiAdditionalTaxCode": "001",
+    "voluntaryTip": 0,
+    "serviceChargeAmount": 27.5,
+    "readiness": "HOLD_PROFILE_NOT_IMPLEMENTED"
+  }
+}

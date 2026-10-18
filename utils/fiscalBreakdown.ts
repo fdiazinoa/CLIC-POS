@@ -591,5 +591,6 @@ export const freezeAuthoritativeLineFiscalAmounts = <T extends TaxableLineItem>(
 export const formatTaxLineLabel = (tax: Pick<FiscalTaxBreakdownLine, 'name' | 'rate'>): string => {
   const ratePercent = tax.rate <= 1 ? tax.rate * 100 : tax.rate;
   const formattedRate = Number.isInteger(ratePercent) ? `${ratePercent}%` : `${ratePercent.toFixed(2)}%`;
-  return tax.name.includes('%') ? tax.name : `${tax.name} ${formattedRate}`;
+  const name = typeof tax.name === 'string' && tax.name.trim() ? tax.name : (tax as Partial<FiscalTaxBreakdownLine>).type === 'SERVICE_CHARGE' ? 'Servicio' : 'ITBIS';
+  return name.includes('%') ? name : `${name} ${formattedRate}`;
 };

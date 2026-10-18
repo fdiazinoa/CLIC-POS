@@ -1,3 +1,8 @@
+import {clearFiscalWorkflowCapability} from './services/fiscal/FiscalWorkflowV2Capability';
+import {resolveTerminalDocumentSeriesId} from './utils/seriesValidation';
+import {prepareFiscalFormatRuntime} from './services/fiscal/FiscalWorkflowV2FormatRuntime';
+import {financialIdentity} from './services/db/LargeMasterSyncV3FinancialRetention';
+import { fiscalWorkflowV2Client,fiscalWorkflowMessage } from './services/fiscal/FiscalWorkflowV2Client';
 import {requireFiscalErpAppliedReceipt,FISCAL_DISPATCH_CLAIMS} from './services/fiscal/FiscalMSellerDispatch';
 import { assertFormatsPostingClosed } from './services/articleFormats/activation';
 import { attachFiscalStatusLifecycle } from './services/fiscal/FiscalStatusLifecycle';
@@ -14,7 +19,10 @@ import LargeMasterSyncV3OperationalPOS from './components/LargeMasterSyncV3Opera
 import { persistV3FinancialTransaction, validateV3FrozenFiscalAmounts,readV3CompletedReservation } from './services/sync/LargeMasterSyncV3FinancialCommit';
 import { validateV3FrozenLineFiscalAmounts } from './services/sync/LargeMasterSyncV3LineSource';
 import { buildV3FrozenFiscalProviderTransaction } from './components/v3OperationalUIQueue';
-import { getLargeMasterSyncV3OperationalSession } from './services/sync/LargeMasterSyncV3OperationalSession';
+import { captureFiscalStatusBoundContext } from './services/fiscal/FiscalBoundContext';
+import { readLargeMasterSyncV3BoundIdentity } from './services/sync/LargeMasterSyncV3BoundTransport';
+import { assertLargeMasterSyncV3NativeAndroid } from './services/sync/LargeMasterSyncV3Platform';
+import { getLargeMasterSyncV3OperationalSession, v3BindingKey } from './services/sync/LargeMasterSyncV3OperationalSession';
 import { assertLargeMasterSyncV3SetupContract, largeMasterSyncV3DownloadOrigin } from './services/sync/LargeMasterSyncV3DownloadOrigin';
 import { completeLargeMasterSyncV3Setup } from './services/sync/LargeMasterSyncV3SetupCompletion';
 import { createV3Progress, type V3Progress } from './services/sync/LargeMasterSyncV3Progress';
@@ -3410,6 +3418,7 @@ const AppContent: React.FC = () => {
   }, [getCurrentDeviceRoleRaw]);
 
   const navigateToUserLogin = React.useCallback(() => {
+    clearFiscalWorkflowCapability();
     clearActiveUserSession();
     clearSecurityState();
     setCurrentUser(null);
@@ -10958,7 +10967,51 @@ const AppContent: React.FC = () => {
     window.dispatchEvent(new Event('transactionsUpdated'));
   }, []);
 
-  const loadFiscalStatusContext = useCallback(async () => {
+  const loadFiscalStatusContext = useCallback(async (originalOnly = false) => {
+    if (originalOnly) {
+      // Manual status never opens an operational session: its cold path can bootstrap masters.
+      assertLargeMasterSyncV3NativeAndroid();
+      const store = dbAdapter.masterSyncV3Store;
+      if (!dbAdapter.supportsV3FiscalMetadataCAS || !dbAdapter.saveDocumentsAtomically
+        || !store?.getActiveRuntimeVersion || !store.getOperationalOwner) throw new Error('FISCAL_STATUS_NATIVE_REQUIRED');
+      const identity = readLargeMasterSyncV3BoundIdentity();
+      const auth = captureFiscalStatusBoundContext();
+      const downloadOrigin = largeMasterSyncV3DownloadOrigin();
+      const bindingKey = v3BindingKey(identity,downloadOrigin);
+      const identityFingerprint = JSON.stringify(identity);
+      const assertIdentity = () => {
+        assertLargeMasterSyncV3NativeAndroid();auth.assertCurrent();
+        if (dbAdapter.masterSyncV3Store !== store || !dbAdapter.supportsV3FiscalMetadataCAS || !dbAdapter.saveDocumentsAtomically
+          || JSON.stringify(readLargeMasterSyncV3BoundIdentity()) !== identityFingerprint
+          || largeMasterSyncV3DownloadOrigin() !== downloadOrigin) throw new Error('FISCAL_STATUS_SCOPE_CHANGED');
+      };
+      const snapshot = async () => {
+        assertIdentity();
+        const persisted = resolvePersistedBusinessConfig(await db.get('config') as unknown);
+        const matches = persisted?.terminals?.filter(terminal => terminal.id === identity.terminalId
+          && terminal.config?.currentDeviceId === identity.deviceId);
+        const terminal = matches?.[0], binding = terminal?.config?.erpBinding;
+        if (!persisted || matches?.length !== 1 || !binding
+          || binding.tenantId !== auth.descriptor.tenantId || binding.companyId !== auth.descriptor.companyId
+          || binding.storeId !== auth.descriptor.storeId || identity.tenantId !== auth.descriptor.tenantId
+          || identity.terminalId !== auth.descriptor.terminalId || identity.deviceId !== auth.descriptor.deviceId
+          || new URL(auth.base).origin !== new URL(identity.erpSyncBaseUrl).origin) throw new Error('FISCAL_STATUS_SCOPE_CHANGED');
+        const environment = getProviderEnvironment(getEffectiveFiscalComplianceConfig(persisted,terminal.config),'MSELLER');
+        const [runtime,owner] = await Promise.all([store.getActiveRuntimeVersion(),store.getOperationalOwner!()]);
+        if (!runtime || (runtime.contractVersion || 1) < 2 || !runtime.syncId || !Number.isSafeInteger(runtime.syncVersion)
+          || runtime.syncVersion < 1 || owner?.binding !== bindingKey || owner.syncId !== runtime.syncId
+          || owner.syncVersion !== runtime.syncVersion) throw new Error('FISCAL_STATUS_LOCAL_CONTEXT_REQUIRED');
+        assertIdentity();
+        return { scope:{providerId:'MSELLER' as const,environment,issuerRnc:String(persisted.companyInfo?.rnc || '').replace(/\D/g,''),
+          tenantId:binding.tenantId,companyId:binding.companyId,terminalId:terminal.id,deviceId:identity.deviceId,storeId:binding.storeId,binding:bindingKey},
+          catalog:{syncId:runtime.syncId,syncVersion:runtime.syncVersion,binding:bindingKey},
+          runtime:{...runtime},owner:{...owner} };
+      };
+      const captured = await snapshot(),fingerprint = JSON.stringify(captured);
+      return {scope:captured.scope,catalog:captured.catalog,assertCurrent:async()=>{
+        if (JSON.stringify(await snapshot()) !== fingerprint) throw new Error('FISCAL_STATUS_SCOPE_CHANGED');
+      }};
+    }
     const session = await getLargeMasterSyncV3OperationalSession();
     await session.assertCurrent();
     const persisted = resolvePersistedBusinessConfig(await db.get('config') as unknown);
@@ -10995,9 +11048,10 @@ const AppContent: React.FC = () => {
     commit:async mutations=> {
       if (!dbAdapter.saveDocumentsAtomically) throw new Error('FISCAL_STATUS_NATIVE_REQUIRED');
       await dbAdapter.saveDocumentsAtomically(mutations);
-    },get:getScopedFiscalDocumentStatus,publish:publishFiscalTransaction,
+    },get:(tx,scope,originalOnly)=>getScopedFiscalDocumentStatus(tx,scope,undefined,undefined,undefined,originalOnly),publish:publishFiscalTransaction,
   }),[loadFiscalStatusContext,publishFiscalTransaction]);
   const consultFiscalStatus = useCallback(async(transaction:Transaction):Promise<string>=> {
+    if(transaction.fiscalProvider==='MSELLER'){if(transaction.fiscalWorkflowCheckoutId||(transaction as any).articleFormatWire?.schema_version===2)return fiscalWorkflowMessage(await fiscalWorkflowV2Client.consult(transaction.id));return fiscalStatusWorker.consult(transaction.id,true,undefined,undefined,true);}
     const stored = await db.getDocument('transactions',transaction.id) as Transaction | null;
     if (!stored) throw new Error('FISCAL_STATUS_SOURCE_REQUIRED');
     let approvedEnvironment: number | undefined;
@@ -11043,6 +11097,7 @@ const AppContent: React.FC = () => {
     transaction: Transaction,
     correction: FiscalDocumentCorrectionInput
   ): Promise<Transaction> => {
+    if(transaction.fiscalProvider==='MSELLER')throw Error('La corrección fiscal usa el borrador autorizado del comprador; el original no se modifica.');
     if (!canRetryFiscalTransaction(transaction)) {
       throw new Error('Solo se pueden corregir e-CF pendientes o con error.');
     }
@@ -11281,19 +11336,7 @@ const AppContent: React.FC = () => {
     if (!documentCode || !documentCode.startsWith('E')) return;
     if (!electronicNcf) return;
 
-    if (providerId === 'MSELLER') {
-      // Prepared applied-receipt v2 remains unwired. Hold before attempt/projection markers.
-      const stored = await db.getDocument('transactions',transaction.id) as Transaction | null;
-      if (!stored || stored.zReportId) throw Error('FISCAL_STATUS_ARCHIVED_RECONCILIATION_REQUIRED');
-      if (stored.fiscalProvider !== 'MSELLER') throw Error('FISCAL_SUBMISSION_SCOPE_CHANGED');
-      if (stored.fiscalProviderStatus === 'V3_ISSUE_REQUESTED' || stored.fiscalClassificationAttemptedAt
-        || getExistingFiscalProviderReference(stored) || await db.getDocument(FISCAL_DISPATCH_CLAIMS as any,stored.id)) {
-        await fiscalStatusWorker.consult(stored.id);
-        return;
-      }
-      await requireFiscalErpAppliedReceipt(stored);
-      return;
-    }
+    if(providerId==='MSELLER'){if(transaction.fiscalWorkflowCheckoutId||(transaction as any).articleFormatWire?.schema_version===2)await fiscalWorkflowV2Client.consult(transaction.id);else await fiscalStatusWorker.consult(transaction.id,true,undefined,undefined,true);return;}
     if (transaction.fiscalClassificationProjection && !explicitClassificationRetry) return;
     try {
       let fiscalConfig = config;
@@ -11427,10 +11470,17 @@ const AppContent: React.FC = () => {
   }, [config, pollFiscalDocumentStatus, upsertFiscalTransaction, loadFiscalStatusContext, fiscalStatusWorker]);
 
   const retryFiscalDocument = useCallback(async (transaction: Transaction): Promise<string> => {
-    // Never consume a classification retry, rewrite the original, or POST an ambiguous MSeller attempt.
-    if (transaction.fiscalProvider === 'MSELLER') {
-      await syncFiscalDocument(transaction);
-      return 'Consulta fiscal solicitada; se conserva el intento original sin reenviar.';
+    if(transaction.fiscalProvider==='MSELLER'){
+      // This action never enters syncFiscalDocument, classification retry or ISSUE, even without an original reference.
+      try { return transaction.fiscalWorkflowCheckoutId||(transaction as any).articleFormatWire?.schema_version===2?fiscalWorkflowMessage(await fiscalWorkflowV2Client.consult(transaction.id)):await fiscalStatusWorker.consult(transaction.id,true,undefined,undefined,true); }
+      catch(error){
+        const code=error instanceof Error?error.message:'';
+        if(/FISCAL_STATUS_(LOCAL_CONTEXT_REQUIRED|NATIVE_REQUIRED)|SYNC_V3_NATIVE_ANDROID_REQUIRED/.test(code))return 'El contexto local autorizado no está disponible. Se conserva el pendiente; valida la preparación de la terminal antes de consultar.';
+        if(code==='FISCAL_TERMINAL_AUTH_REQUIRED')return 'Sesión vencida o dispositivo no autorizado. Se conserva el pendiente; valida la sesión vigente.';
+        if(/SCOPE|BINDING/.test(code))return 'El scope de la terminal cambió. Se conserva el pendiente y el envío original.';
+        if(/SOURCE|ATTEMPT/.test(code))return 'No se identificó inequívocamente el envío original. Se conserva el pendiente.';
+        return 'No se pudo consultar o guardar el estado del e-CF en el ERP. Se conserva la evidencia del documento original.';
+      }
     }
     if (LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED) {
       const stored = await db.getDocument('transactions', transaction.id) as Transaction | null;
@@ -11494,7 +11544,7 @@ const AppContent: React.FC = () => {
 
     await syncFiscalDocument(LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED ? transaction : retryingTransaction, Boolean(transaction.fiscalClassificationProjection));
     return 'Reintento de envío fiscal iniciado.';
-  }, [config, pollFiscalDocumentStatus, syncFiscalDocument, upsertFiscalTransaction]);
+  }, [config, pollFiscalDocumentStatus, syncFiscalDocument, upsertFiscalTransaction, fiscalStatusWorker]);
 
   const fiscalRecoveryInFlightRef = useRef<Set<string>>(new Set());
 
@@ -11506,7 +11556,7 @@ const AppContent: React.FC = () => {
       if (LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED) return;
       const storedTransactions = await db.get('transactions') as Transaction[] || [];
       const pendingMSeller = storedTransactions.filter((candidate) =>
-        candidate.fiscalProvider === 'MSELLER'
+        candidate.fiscalProvider === 'MSELLER' && Boolean(candidate.fiscalWorkflowCheckoutId)
         && candidate.fiscalSyncStatus === 'PENDING'
         && !candidate.fiscalClassificationProjection
         && String(candidate.ncfType || '').startsWith('E')
@@ -11546,7 +11596,7 @@ const AppContent: React.FC = () => {
       terminal.config?.erpBinding?.storeId,getProviderEnvironment(getEffectiveFiscalComplianceConfig(config,terminal.config),'MSELLER')]));
   useEffect(() => {
     if (!LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED) return;
-    return attachFiscalStatusLifecycle(fiscalStatusWorker,{
+    return attachFiscalStatusLifecycle({runAutomatic:async()=>{await fiscalWorkflowV2Client.prefetch().catch(()=>undefined);await fiscalWorkflowV2Client.runRound();await fiscalStatusWorker.runAutomatic();},dispose:()=>{fiscalWorkflowV2Client.invalidate();fiscalStatusWorker.dispose();}},{
       hydrated:isDataLoaded&&fiscalHistoryHydrated&&isSecurityLoaded,
       online:()=>navigator.onLine,addOnline:listener=>window.addEventListener('online',listener),removeOnline:listener=>window.removeEventListener('online',listener),
       addTransactionsUpdated:listener=>window.addEventListener('transactionsUpdated',listener),
@@ -11556,6 +11606,7 @@ const AppContent: React.FC = () => {
   }, [fiscalStatusWorker,isDataLoaded,fiscalHistoryHydrated,isSecurityLoaded,deviceId,config.companyInfo.rnc,fiscalStatusLifecycleKey]);
 
   const handleTransactionComplete = async (txn: Transaction) => {
+    if((txn as any).articleFormatWire?.schema_version===2){const original=await db.getDocument('transactionHistory',txn.id) as Transaction|null;if(!original||financialIdentity(original)!==financialIdentity(txn))throw Error('FISCAL_WORKFLOW_RETAINED_SOURCE_CHANGED');setTransactions(previous=>[...previous.filter(row=>row.id!==original.id),original]);return;}
     assertFormatsPostingClosed(txn.items || []);
     const fiscalTerminal = (config.terminals || []).find(terminal => terminal.config?.currentDeviceId === deviceId);
     if ((txn.ncf || txn.ncfType) && (!fiscalTerminal ||
@@ -12931,6 +12982,16 @@ const AppContent: React.FC = () => {
     options: RefundProcessingOptions = {}
   ): Promise<Transaction | null> => {
     originalTx = await readRefundOriginal(originalTx);
+    if((originalTx as any).articleFormatWire?.schema_version===2){
+      if(!options.fiscalOperationId||!options.fiscalModificationCode)throw Error('Selecciona el motivo fiscal de la nota de crédito.');
+      const terminal=getCurrentTerminal();if(!terminal)throw Error('FISCAL_WORKFLOW_DEVICE_CHANGED');
+      const runtime=await prepareFiscalFormatRuntime(terminal.config?.erpTerminalId||terminal.id);
+      const originalWire=(originalTx as any).articleFormatWire;
+      if(originalWire.payments.some((payment:any)=>payment.method!=='cash'))throw Error('La devolución de un pago integrado necesita conciliación antes de crear la nota de crédito.');
+      if(itemsToRefund.some(item=>conditions.get(item.cartId)==='DAMAGED')&&runtime.context.return_context?.return_policy==='RESTOCK')throw Error('La autorización vigente no permite registrar estas unidades como merma.');
+      const result=await runtime.commitReturn({operationId:options.fiscalOperationId,original:originalTx,items:itemsToRefund,kind:options.fiscalOperationKind||'RETURN',modificationCode:options.fiscalModificationCode,payments:[],seriesId:resolveTerminalDocumentSeriesId(terminal.config,'REFUND')!,userId:currentUser!.id,userName:currentUser!.name});
+      await handleTransactionComplete(result);return result;
+    }
     assertFormatsPostingClosed(itemsToRefund || []);
     assertFormatsPostingClosed(originalTx.items || []);
     console.log("🔄 Procesando Devolución Integral:", { originalTx, items: itemsToRefund.length, reason });

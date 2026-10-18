@@ -1,3 +1,4 @@
+import {cloneFormatJSON} from './json';
 import Decimal from 'decimal.js';
 import type { ArticleFormat, ArticleFormatLine, ArticleFormatsDTO, ArticleFormatSnapshot } from './contract';
 
@@ -128,7 +129,7 @@ export function validateDTO(value: ArticleFormatsDTO, allowedTariffIds: readonly
         || formats.some(f => f[`default_${operation}`] && (!f.active || !f[`allow_${operation}`]))) return fail('ARTICLE_FORMAT_INVALID_DEFAULT');
     }
   }
-  return structuredClone(value);
+  return cloneFormatJSON(value);
 }
 
 export function resolveFormatBarcode(products: { id: string; article_formats?: ArticleFormatsDTO }[], code: string) {

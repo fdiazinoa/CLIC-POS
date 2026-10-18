@@ -65,3 +65,15 @@ export async function verifyFiscalStatusProof(proof: FiscalStatusProof, scope: F
     && typeof p.providerReceipt.invoiceTotal==='number'&&Number.isFinite(p.providerReceipt.invoiceTotal)&&Math.abs(p.providerReceipt.invoiceTotal-tx.total)<0.005
     && Number.isFinite(Date.parse(p.observedAt));
 }
+
+/** Only an exact scoped GET can record rejection of the original submission. */
+export async function verifyRejectedFiscalStatusProof(proof: FiscalStatusProof,scope: FiscalStatusScope,tx: Transaction):Promise<boolean>{
+ return proof?.source==='ERP_SCOPED_PROVIDER_GET'&&proof.decision==='REJECTED'
+  && ['RECHAZADO','DGIIRECHAZADO','REJECTED'].includes(String(proof.providerReceipt?.status).trim().toUpperCase())
+  && proof.providerReceipt.success===false&&proof.providerReceipt.pending===false
+  && await verifyFiscalStatusProof(proof,scope,tx,false);
+}
+export const matchesOriginalFiscalReference=(proof:FiscalStatusProof,tx:Transaction):boolean=>
+ (!tx.fiscalReferenceId||tx.fiscalReferenceId===proof.providerReceipt?.internalTrackId)
+ && (!tx.fiscalCertifiedNcf||sameFiscalNcf(tx.fiscalCertifiedNcf,proof.providerReceipt?.returnedNcf))
+ && (!tx.ncf||sameFiscalNcf(tx.ncf,tx.electronicNcf||tx.ncf));

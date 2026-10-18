@@ -1,3 +1,5 @@
+import { NativeFiscalWorkflowV2Store,FISCAL_WORKFLOW_V2_SCHEMA,consumeFiscalWorkflowBirth } from '../FiscalWorkflowV2Store';
+import {NativeTerminalAuthEvidenceStore,TERMINAL_AUTH_EVIDENCE_SCHEMA} from '../TerminalAuthEvidenceStore';
 import {FISCAL_OUTBOX_SOURCE_SQL,fiscalOutboxSourceParams,captureFiscalOutboxAnchors,type FiscalOutboxAnchor} from '../../fiscal/FiscalAppliedReceiptV2';
 import {assertV3ReservationSource,assertV3ReservationLines,assertV3ReservationInvoice,reservationClaimId} from '../../sync/LargeMasterSyncV3ReservationAuthority';
 import {reconcileInventoryPoolIndex,isInventoryPoolDDL} from '../../articleFormats/inventoryPoolIndex';
@@ -114,6 +116,8 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
     private disconnectPromise: Promise<void> | null = null;
     private writeQueue: Promise<unknown> = Promise.resolve();
     public readonly adapterType = 'local';
+    public readonly fiscalWorkflowStore=new NativeFiscalWorkflowV2Store(()=>this.ensureDb() as any,work=>this.withWriteLock(work));
+    public readonly terminalAuthEvidenceStore=new NativeTerminalAuthEvidenceStore(()=>this.ensureDb() as any,work=>this.withWriteLock(work),work=>this.withNativeTransaction(work));
     public readonly masterSyncV3Store = this.serializedMasterStore();
 
     private serializedMasterStore():LargeMasterSyncV3SqliteStore {
@@ -554,8 +558,17 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
 
         const needsFinancialPrecondition = input.documents.some(row => row.document.v3InventoryBaseline
           || row.requireAbsent || row.expectedDocument !== undefined || row.v3StockRequirements);
-        await this.withWriteLock(() => this.executeUnlocked(statements,
-          needsFinancialPrecondition ? () => this.assertV3FinancialBaseline(input.documents) : undefined));
+        await this.withWriteLock(() => this.executeUnlocked(statements,async()=>{
+          if(needsFinancialPrecondition)await this.assertV3FinancialBaseline(input.documents);
+          const births=outboxEvents.filter(e=>e.eventType==='SALE_POSTED'&&e.payload.fiscalWorkflowBirth);
+          if(births.some(e=>!input.fiscalWorkflowCommits?.some(c=>c.transactionId===e.aggregateId&&JSON.stringify(c.birth)===JSON.stringify(e.payload.fiscalWorkflowBirth))))throw Error('FISCAL_WORKFLOW_ATOMIC_BIRTH_REQUIRED');
+          for(const commit of input.fiscalWorkflowCommits||[]){
+            const source=input.documents.find(d=>d.collectionName==='transactions'&&d.document.id===commit.transactionId);
+            const history=input.documents.find(d=>d.collectionName==='transactionHistory'&&d.document.id===commit.transactionId);
+            if(!source?.requireAbsent||!history?.requireAbsent)throw Error('FISCAL_WORKFLOW_NEW_SOURCE_REQUIRED');
+            await consumeFiscalWorkflowBirth(this.ensureDb() as any,commit,source.document as any);
+          }
+        }));
     }
 
     async getMasterNumberRanges(): Promise<MasterNumberRangeRecord[]> {
@@ -867,6 +880,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         const db = this.ensureDb();
         await db.execute('PRAGMA foreign_keys = ON;', false);
         await db.execute(`
+            ${FISCAL_WORKFLOW_V2_SCHEMA}
             CREATE TABLE IF NOT EXISTS documents (
                 collection_name TEXT NOT NULL,
                 doc_id TEXT NOT NULL,
@@ -952,6 +966,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             ${LARGE_MASTER_SYNC_V3_SCHEMA_SQL}
             ${ARTICLE_FORMATS_SCHEMA}
             ${NATIVE_FISCAL_RECEIPTS_SCHEMA}
+            ${TERMINAL_AUTH_EVIDENCE_SCHEMA}
         `);
         await this.withWriteLock(()=>this.withNativeTransaction(()=>reconcileInventoryPoolIndex({
             storageLayout:'DOCUMENTS',

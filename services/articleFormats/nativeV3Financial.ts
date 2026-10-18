@@ -1,7 +1,8 @@
+import type {PostingContext,PostingEvent} from './v2';
 import {readV3Base4Stock} from '../db/V3Base4Stock';
 import type {BusinessConfig} from '../../types';
 import type { FormatSQL } from './store';
-import { requireFormat, type NetworkContext, type WireEvent } from './wire';
+import { requireFormat } from './wire';
 import type { FormatLocalDocuments } from './localDocuments';
 
 export interface NativeFormatAuthority {
@@ -11,7 +12,7 @@ export interface NativeFormatAuthority {
 
 /** Format revision authenticates price/policy; normalized V3 independently owns physical stock.
  * Their revision IDs are deliberately not equated. Both authorities are frozen on the document. */
-export async function readNativeFormatAuthority(sql:FormatSQL,context:NetworkContext):Promise<NativeFormatAuthority> {
+export async function readNativeFormatAuthority(sql:FormatSQL,context:PostingContext):Promise<NativeFormatAuthority> {
  const rows=await sql.query<any>(`SELECT o.binding,o.sync_id,o.sync_version,i.sync_id AS inventory_sync_id,
   i.sync_version AS inventory_sync_version,i.inventory_version,i.cursor FROM master_v3_operational_owner o
   JOIN master_v3_state s ON s.singleton=1 AND s.active_sync_id=o.sync_id AND s.active_version=o.sync_version
@@ -40,7 +41,7 @@ export async function readNativeFormatAuthority(sql:FormatSQL,context:NetworkCon
   baseline,warehouseId:context.scope.warehouseId};
 }
 
-export async function readNativeFinancialDocuments(sql:FormatSQL,local:FormatLocalDocuments,event:WireEvent,seriesId:string,authority:NativeFormatAuthority,original?:WireEvent):Promise<Record<string,any[]>> {
+export async function readNativeFinancialDocuments(sql:FormatSQL,local:FormatLocalDocuments,event:PostingEvent,seriesId:string,authority:NativeFormatAuthority,original?:PostingEvent):Promise<Record<string,any[]>> {
  const ids=[event.transaction_id,...(original ? [original.transaction_id] : [])];
  const data:Record<string,any[]>={};
  const filters:Record<string,string[]>={transactions:ids,transactionHistory:ids,payments:event.payments.map(p=>p.payment_id),

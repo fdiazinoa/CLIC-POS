@@ -35,6 +35,7 @@ export interface DurableOutboxEventInput {
 }
 
 export interface FinancialCommitInput {
+    fiscalWorkflowCommits?: Array<{checkoutId:string;transactionId:string;birth:import('../fiscal/FiscalWorkflowV2Types').FiscalWorkflowBirthV2|null}>;
     documents: DurableDocumentMutation[];
     outboxEvent: DurableOutboxEventInput;
     additionalOutboxEvents?: DurableOutboxEventInput[];
@@ -94,6 +95,10 @@ export interface FinancialNumberResult {
 export interface DatabaseAdapter {
     connect(): Promise<void>;
     disconnect(): Promise<void>;
+    articleFormatSQL?():import('../articleFormats/store').FormatSQL;
+    articleFormatFinancialSQL?():import('../articleFormats/store').FormatSQL;
+    readonly fiscalWorkflowStore?: import('../fiscal/FiscalWorkflowV2Types').FiscalWorkflowStore;
+    readonly terminalAuthEvidenceStore?: import('./TerminalAuthEvidenceStore').TerminalAuthEvidenceStore;
     readonly adapterType: 'local' | 'network';
     /** Present only on native adapters supporting the typed fiscal metadata CAS protocol. */
     readonly supportsV3FiscalMetadataCAS?: boolean;

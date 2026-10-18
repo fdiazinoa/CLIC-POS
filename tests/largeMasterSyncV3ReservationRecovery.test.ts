@@ -264,7 +264,7 @@ test('actual provider callback refuses to synthesize a partial approved receipt 
   await service.markAuthorizing(intent.intentId,true);await service.markAuthorized(intent.intentId,{providerReference:'SYNTHETIC',authorizationCode:'SYNTHETIC',responseCode:'00'});
   const source=readFileSync('components/PaymentModal.tsx','utf8'),ast=ts.createSourceFile('PaymentModal.tsx',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);let arrow:ts.Expression|undefined;
   function visit(node:ts.Node){if(ts.isVariableDeclaration(node)&&node.name.getText(ast)==='authorizeIntegratedCardPayment')arrow=node.initializer;ts.forEachChild(node,visit);}visit(ast);assert.ok(arrow);
-  const binding={resolvePaymentMethodForEntry:()=>({}),resolveGatewayIntegrationForPayment:()=>({provider:'AZUL',id:'synthetic'}),roundToTwo:(n:number)=>Math.round(n*100)/100,
+  const binding={workflowPaymentFenceRef:{current:null},resolvePaymentMethodForEntry:()=>({}),resolveGatewayIntegrationForPayment:()=>({provider:'AZUL',id:'synthetic'}),roundToTwo:(n:number)=>Math.round(n*100)/100,
     selectedCurrency:{rate:1},baseCurrency:{code:'DOP'},calculateGatewayTaxAmount:()=>0,validatePaymentAuthority:async()=>{},createAzulOrderNumber:()=> 'synthetic',paymentIntentService:service,paymentOperationId:reservationClaimId(reservationId)};
   const js=ts.transpileModule('const handle='+arrow.getText(ast)+';',{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText;
   const callback=new Function(...Object.keys(binding),js+'return handle;')(...Object.values(binding));
@@ -313,12 +313,12 @@ for(const durable of [false,true])for(const ambiguity of ['none','commit-respons
   const db={get:(n:string)=>f.adapter.getCollection(n),getDocument:(...args:any[])=>f.adapter.getDocument(...args),assertFiscalTransactionAuthority:async()=>{}};
   const log={error:(...args:any[])=>messages.push(args.map(a=>a instanceof Error?a.message:a)),warn:no,log:no};
   const app=actualCallback('App.tsx','handleTransactionComplete',{assertFormatsPostingClosed,config:f.config,deviceId:id(50),db,LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED:true,
-   persistV3FinancialTransaction:f.persistV3FinancialTransaction,readV3CompletedReservation:f.readV3CompletedReservation,
+   persistV3FinancialTransaction:f.persistV3FinancialTransaction,fiscalSinglePreparation:{commit:()=>{throw Error('PREPARATION_CONTROLLER_DISCONNECTED');}},readV3CompletedReservation:f.readV3CompletedReservation,
    setTransactions:()=>{if(['publication','close-reopen','settings-remount'].includes(ambiguity)&&!ui.publicationFailed){ui.publicationFailed=true;throw Error('injected-ui-publication');}},
    setCustomers:no,syncFiscalDocument:async()=>{},backgroundSyncManager:{triggerSync:async()=>{}},console:log});
   const context={restoreReservation:(id:string)=>f.restoreV3ReservationReference(id,warehouse),validate:(lines:any[],ref:any)=>f.session.validate(f.config,lines,tariff,warehouse,'SALE',undefined,ref),
    completedReservation:(r:any,lines:any[],customerId?:string)=>f.readV3CompletedReservation({reservationId:r.id,claimId:reservationClaimId(r.id),expectedSource:r,lines,customerId})};
-  const shared:Record<string,any>={activeV3Reservation:recovery,v3Operational:context,activeRecoveredReservation:source,cart:source.items.map((line:any)=>({...line,v3ReservationId:source.id})),processedCart:source.items,cartTotal:1000,cartTax:0,cartTip:0,
+  const shared:Record<string,any>={activeV3Reservation:recovery,v3Operational:context,fiscalCompliance:{mode:'NONE'},fiscalCheckoutRef:{current:null},activeRecoveredReservation:source,cart:source.items.map((line:any)=>({...line,v3ReservationId:source.id})),processedCart:source.items,cartTotal:1000,cartTax:0,cartTip:0,
    activeTerminalId:id(4),activeTerminalConfig:f.config.terminals[0].config,activeTable:undefined,activeDirectV3TicketId:undefined,activeTableContext:{},activeParkedTicket:undefined,
    selectedCustomer:customer,effectiveSelectedCustomer:customer,hasV3ReservationCart:true,config:f.config,products:recovery.products,currentUser:{id:id(25),name:'Synthetic'},baseCurrency:{code:'DOP',symbol:'$'},
    isOrderTakerMode:false,hasSubtotalizedCart:false,isSelectedCustomerTaxExempt:false,refundAuthorizedBy:null,redeemedCoupon:null,isTaxIncluded:false,discountAmount:0,
@@ -341,7 +341,7 @@ for(const durable of [false,true])for(const ambiguity of ['none','commit-respons
    const bridge=(f.adapter as any).db,execute=bridge.execute;let lost=false;
    bridge.execute=async(sql:string,...args:any[])=>{const result=await execute(sql,...args);if(sql==='COMMIT;'&&!lost){lost=true;throw Error('injected-commit-response');}return result;};
   }
-  const modal:Record<string,any>={items:source.items,total:700,payments:prepared.transaction.payments.filter((p:any)=>p.method!=='ADVANCE'),voluntaryTip:0,
+  const modal:Record<string,any>={workflowPaymentFenceRef:{current:null},items:source.items,total:700,payments:prepared.transaction.payments.filter((p:any)=>p.method!=='ADVANCE'),voluntaryTip:0,
    isFinalizing:false,isProcessingGateway:false,canFinalize:true,isCreditActionBlocked:false,paymentOperationId:recovery.claimId,beforePaymentEffects:before,onConfirm,
    recordCheckoutDiagnostic:no,beginPosInteraction:()=>trace,expectInteractionRender:no,markInteractionStateUpdate:no,markInteractionStage:mark,
    setFinalizeError:(message:any)=>{if(message)messages.push(message);},setSuccessNotice:no,setIsFinalizing:no,setShowSupervisorModal:no,canFinalizeWithTypedAmount:false,

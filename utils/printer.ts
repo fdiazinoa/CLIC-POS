@@ -1,4 +1,5 @@
-import {resolveFiscalPrintDisplay} from '../services/fiscal/FiscalPrintEvidence';
+import {fiscalQrSvg} from '../services/fiscal/FiscalQrSvg';
+import {resolveFiscalPrintReadiness,fiscalPrintTransaction} from '../services/fiscal/FiscalPrintEvidence';
 import { articleFormatTicketHTML } from '../services/articleFormats/ticket';
 import { formatQuantity, terminalQuantityPresentation } from './quantityPresentation';
 import { weightLineLabel, displayWeightQuantity } from './scaleWeight';
@@ -249,9 +250,10 @@ export const buildTicketTaxPresentationHtml = (
 const printTicketInternal = async (transaction: Transaction, config: BusinessConfig): Promise<boolean> => {
     const persisted=await dbAdapter.getDocument<Transaction>('transactions',transaction.id) || await dbAdapter.getDocument<Transaction>('transactionHistory',transaction.id);
     if(persisted)transaction=persisted;
-    const fiscalPrint=await resolveFiscalPrintDisplay(transaction);
+    const fiscalPrint=await resolveFiscalPrintReadiness(transaction);
+    transaction=fiscalPrintTransaction(transaction,fiscalPrint);
     const escapeFiscal=(value:string)=>value.replace(/[&<>"']/g,character=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[character]!));
-    const scriptJson=(value:string)=>JSON.stringify(value).replace(/</g,'\\u003c').replace(/\u2028/g,'\\u2028').replace(/\u2029/g,'\\u2029');
+    
     const { companyInfo, currencySymbol, receiptConfig, currencies } = config;
     const users = ((await dbAdapter.getCollection('users')) || []) as any[];
     const salesUsers = getTerminalSnapshotSellers(config, transaction.terminalId);
@@ -304,6 +306,8 @@ const printTicketInternal = async (transaction: Transaction, config: BusinessCon
     });
     const copies = resolveConfiguredPrintCopies(config, resolveTransactionPrintKind(transaction));
     const qrPayload = String(transaction.displayId || transaction.id || '').trim();
+    const fiscalSvg=fiscalPrint?await fiscalQrSvg(fiscalPrint.qrUrl):'';
+    const internalSvg=receiptConfig?.showQr&&qrPayload?await fiscalQrSvg(qrPayload,100):'';
 
     // Foreign Currency Calculation
     const foreignCurrenciesHtml = receiptConfig?.showForeignCurrencyTotals && currencies ? currencies
@@ -319,7 +323,7 @@ const printTicketInternal = async (transaction: Transaction, config: BusinessCon
         <html>
         <head>
             <title>Ticket #${transaction.displayId || transaction.id}</title>
-            <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+
             <style>
                 @page { size: 80mm auto; margin: 0; }
                 body {
@@ -594,7 +598,7 @@ const printTicketInternal = async (transaction: Transaction, config: BusinessCon
                 </div>
             ` : ''}
 
-            ${fiscalPrint ? `<div class="divider"></div><div style="text-align:center"><b>COMPROBANTE ELECTRÓNICO FIRMADO</b><div>${escapeFiscal(fiscalPrint.certifiedNcf)}</div><div id="fiscal-qrcode"></div><div>Código de seguridad: ${escapeFiscal(fiscalPrint.securityCode)}</div><div>Fecha firma: ${escapeFiscal(fiscalPrint.signedAt)}</div><div>Estado DGII: ${fiscalPrint.dgiiAccepted?'Aceptado':'Pendiente de confirmación'}</div></div>` : transaction.ncfType?.startsWith('E') ? '<div>Representación fiscal firmada aún no disponible.</div>' : ''}
+            ${fiscalPrint ? `<div class="divider"></div><div style="text-align:center"><b>COMPROBANTE ELECTRÓNICO FIRMADO</b><div>${escapeFiscal(fiscalPrint.certifiedNcf)}</div><div id="fiscal-qrcode">${fiscalSvg}</div><div>Código de seguridad: ${escapeFiscal(fiscalPrint.securityCode)}</div><div>Fecha firma: ${escapeFiscal(fiscalPrint.signedAt)}</div><div>Estado DGII: ${fiscalPrint.dgiiConditional?'Aceptado condicionalmente':fiscalPrint.dgiiAccepted?'Aceptado':'Pendiente de confirmación'}</div></div>` : transaction.ncfType?.startsWith('E') ? '<div>Representación fiscal firmada aún no disponible.</div>' : ''}
             <div class="footer">
                 ${receiptConfig?.footerMessage ? `<div style="margin-bottom: 8px;">${receiptConfig.footerMessage}</div>` : ''}
                 <div>¡Gracias por su compra!</div>
@@ -607,7 +611,7 @@ const printTicketInternal = async (transaction: Transaction, config: BusinessCon
                     ${transaction.ncf ? `<div class="ncf-row" style="margin-top: 2px; text-align: left;">${transaction.ncf}</div>` : ''}
                 </div>
                 <div class="divider"></div>
-                <div id="qrcode"></div>
+                <div id="qrcode">${internalSvg}</div>
                 ${receiptConfig?.showOrderNumber && transaction.orderNumber ? `<div class="order-number-qr">NO. ORDEN<br/>${transaction.orderNumber}</div>` : ''}
                 <div style="font-weight: bold; font-size: 9px; margin-top: 12px;">ESCANEA ESTE TICKET PARA DEVOLUCIONES Y CUPONES</div>
                 ` : ''}
@@ -615,23 +619,6 @@ const printTicketInternal = async (transaction: Transaction, config: BusinessCon
             
             <script>
                 window.onload = function() {
-                    ${fiscalPrint ? `try { new QRCode(document.getElementById("fiscal-qrcode"),{text:${scriptJson(fiscalPrint.qrUrl)},width:140,height:140,correctLevel:QRCode.CorrectLevel.M}); } catch(error) { document.getElementById("fiscal-qrcode").textContent="QR fiscal no disponible"; }` : ''}
-                    ${receiptConfig?.showQr ? `
-                    try {
-                        new QRCode(document.getElementById("qrcode"), {
-                            text: ${scriptJson(qrPayload)},
-                            width: 100,
-                            height: 100,
-                            colorDark : "#000000",
-                            colorLight : "#ffffff",
-                            correctLevel : QRCode.CorrectLevel.H
-                        });
-                    } catch (e) {
-                        console.error("QR Code generation failed", e);
-                        document.getElementById("qrcode").innerHTML = "QR ERROR";
-                    }
-                    ` : ''}
-                    
                     setTimeout(() => {
                         window.print();
                     }, 500);

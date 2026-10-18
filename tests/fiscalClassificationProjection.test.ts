@@ -78,18 +78,18 @@ test('actual App retry defers MSeller classification consumption until authorita
  await adapter.saveDocument('transactions',tx);
  const read=()=>JSON.parse(String(sql.prepare('SELECT data FROM documents WHERE doc_id=?').get('505')?.data));
  const source=readFileSync(new URL('../App.tsx',import.meta.url),'utf8');const start=source.indexOf('async (transaction: Transaction): Promise<string> => {',source.indexOf('const retryFiscalDocument ='));
- const end=source.indexOf('}, [config, pollFiscalDocumentStatus, syncFiscalDocument, upsertFiscalTransaction]);',start);assert.ok(start>0&&end>start);
+ const end=source.indexOf('}, [config, pollFiscalDocumentStatus, syncFiscalDocument, upsertFiscalTransaction, fiscalStatusWorker]);',start);assert.ok(start>0&&end>start);
  const compiled=await transform(`const callback=${source.slice(start,end+1)};`,{loader:'ts'});
- const create=new Function('f',`const {LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED,canProjectFiscalClassification,canRetryFiscalTransaction,config,getEffectiveFiscalComplianceConfig,getProviderEnvironment,getFiscalProviderConfig,getExistingFiscalProviderReference,getFiscalProviderLabel,db,dbAdapter,consumeFiscalClassificationAttempt,getLargeMasterSyncV3OperationalSession,upsertFiscalTransaction,pollFiscalDocumentStatus,syncFiscalDocument}=f;${compiled.code}return callback;`);
+ const create=new Function('f',`const {LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED,canProjectFiscalClassification,canRetryFiscalTransaction,config,getEffectiveFiscalComplianceConfig,getProviderEnvironment,getFiscalProviderConfig,getExistingFiscalProviderReference,getFiscalProviderLabel,db,dbAdapter,consumeFiscalClassificationAttempt,getLargeMasterSyncV3OperationalSession,upsertFiscalTransaction,pollFiscalDocumentStatus,syncFiscalDocument,fiscalStatusWorker}=f;${compiled.code}return callback;`);
  let issues=0;
- const retry=create({LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED:true,canProjectFiscalClassification,canRetryFiscalTransaction:()=>true,config:{terminals:[]},getEffectiveFiscalComplianceConfig:()=>({}),getProviderEnvironment:()=>0,
+ const retry=create({fiscalStatusWorker:{consult:async()=>{throw Error('FISCAL_STATUS_ATTEMPT_REQUIRED');}},LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED:true,canProjectFiscalClassification,canRetryFiscalTransaction:()=>true,config:{terminals:[]},getEffectiveFiscalComplianceConfig:()=>({}),getProviderEnvironment:()=>0,
   getFiscalProviderConfig:()=>({}),getExistingFiscalProviderReference:()=>undefined,getFiscalProviderLabel:()=> 'MSeller',db:{getDocument:async()=>read()},dbAdapter:adapter,
   consumeFiscalClassificationAttempt,getLargeMasterSyncV3OperationalSession:async()=>({assertCurrent:async()=>{},ready:{runtime:{version:{syncId:'S',syncVersion:1}}},binding:'B'}),
   upsertFiscalTransaction:async(next:any)=>adapter.saveDocument('transactions',next),pollFiscalDocumentStatus:async()=>{throw Error('unexpected poll');},
   syncFiscalDocument:async()=>{assert.equal(read().fiscalClassificationAttemptedAt,undefined);throw Error('FISCAL_ERP_APPLIED_RECEIPT_REQUIRED');}});
  try{
-  const attempts=await Promise.allSettled([retry(tx),retry(tx)]);assert.equal(attempts.filter(row=>row.status==='fulfilled').length,0);assert.equal(issues,0);
-  await assert.rejects(()=>retry(JSON.parse(JSON.stringify(read()))),/APPLIED_RECEIPT_REQUIRED/);assert.equal(issues,0);assert.equal(read().fiscalClassificationAttemptedAt,undefined);
+  const attempts=await Promise.allSettled([retry(tx),retry(tx)]);assert.equal(attempts.filter(row=>row.status==='fulfilled'&&/No se identificó/.test(String(row.value))).length,2);assert.equal(issues,0);
+  assert.match(await retry(JSON.parse(JSON.stringify(read()))),/No se identificó/);assert.equal(issues,0);assert.equal(read().fiscalClassificationAttemptedAt,undefined);
   assert.deepEqual(read().payments,tx.payments);assert.equal(read().taxBreakdown[1].type,'VAT');assert.equal(read().ncf,tx.ncf);
  }finally{sql.close();}
 });

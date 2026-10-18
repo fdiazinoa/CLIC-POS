@@ -1,4 +1,5 @@
-import {resolveFiscalPrintDisplay,resolveFiscalAcceptance} from '../services/fiscal/FiscalPrintEvidence';
+import {FiscalBuyerDraftAction,hasFiscalWorkflowSourceMarker} from './FiscalBuyerDraftAction';
+import {resolveFiscalPrintReadiness,resolveFiscalAcceptance} from '../services/fiscal/FiscalPrintEvidence';
 import {readRefundOriginal} from '../services/localRefundPersistence';
 import { canProjectFiscalClassification } from '../utils/fiscalClassificationProjection';
 import { formatQuantity, terminalQuantityPresentation } from '../utils/quantityPresentation';
@@ -614,7 +615,7 @@ const SalesHistoryTable: React.FC<{
                                  <span className="text-[10px] font-bold text-gray-400">
                                     {displayNcf || 'Sin NCF'}
                                  </span>
-                                 <FiscalSyncBadge transaction={tx} compact />
+                                 {!hasFiscalWorkflowSourceMarker(tx)&&<FiscalSyncBadge transaction={tx} compact />}
                                  {reviewedTransactionIds.has(tx.id) && (
                                     <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[9px] font-black uppercase text-amber-700">
                                        <Flag size={10} /> Revisión
@@ -745,7 +746,7 @@ const TicketDetailDrawer: React.FC<{
    const canRequestAzulRefund = !isRefundDoc && tx.status !== 'REFUNDED' && canOfferAzulRefundAction(tx, config);
    const displayNcf = getFiscalDisplayNcf(tx);
    const displayFiscalCode = getFiscalDisplayCode(tx);
-   const canCorrectFiscal = isElectronicFiscalTransaction(tx)
+   const canCorrectFiscal = tx.fiscalProvider!=='MSELLER' && isElectronicFiscalTransaction(tx)
       && Boolean(onCorrectFiscalDocument)
       && (tx.fiscalSyncStatus === 'ERROR' || tx.fiscalSyncStatus === 'PENDING');
    const sortedCustomers = [...customers].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
@@ -1034,6 +1035,7 @@ const TicketDetailDrawer: React.FC<{
                         <p className="text-xs font-bold text-gray-800 truncate">{displayNcf || 'Sin NCF'}</p>
                      </div>
                      <div className="col-span-2 p-3 bg-slate-50 rounded-xl border border-slate-200">
+                        <FiscalBuyerDraftAction transaction={tx} users={users}>
                         <div className="flex flex-wrap items-start justify-between gap-3">
                            <div>
                               <p className="text-[10px] font-bold text-slate-400 uppercase">Estado Fiscal</p>
@@ -1100,6 +1102,7 @@ const TicketDetailDrawer: React.FC<{
                               )}
                            </div>
                         )}
+                        </FiscalBuyerDraftAction>
                      </div>
                      {isRefundDoc && (
                         <div className="p-3 bg-red-50/60 rounded-xl border border-red-100">
@@ -2136,7 +2139,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
 
       transaction=await db.getDocument('transactions',transaction.id) as Transaction || await db.getDocument('transactionHistory',transaction.id) as Transaction || transaction;
       const result = await sendReceiptEmailViaErp(
-         buildReceiptEmailPayload(transaction, email, config, config.currencySymbol || 'RD$', users,await resolveFiscalPrintDisplay(transaction),await resolveFiscalAcceptance(transaction)),
+         buildReceiptEmailPayload(transaction, email, config, config.currencySymbol || 'RD$', users,await resolveFiscalPrintReadiness(transaction),await resolveFiscalAcceptance(transaction)),
       );
       try {
          await recordInvoiceAuditEvent({
@@ -2691,7 +2694,8 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
       originalTx: Transaction,
       refundItems: CartItem[],
       conditions: Map<string, 'SELLABLE' | 'DAMAGED'>,
-      reason: string
+      reason: string,
+      fiscalOptions?: RefundProcessingOptions
    ) => {
       if (!originalTx || refundItems.length === 0) return;
       const availability = originalTx.erpRefundSource
@@ -2732,6 +2736,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
 
       if (!authorized) return;
 
+      if((originalTx as any).articleFormatWire?.schema_version===2){await onRefundTransaction(originalTx,refundItems,conditions,reason||'Devolución',fiscalOptions);setIsRefundModalOpen(false);setRefundTx(null);setSelectedTxId(null);return;}
       await executeRefundFlow(originalTx, refundItems, conditions, reason || 'Devolución', refundRequestMode);
    };
 

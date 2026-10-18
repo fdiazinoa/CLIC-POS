@@ -1,4 +1,4 @@
-import {validatePreparedAppliedReceipt,assertFiscalOriginalMirror,captureFiscalOutboxAnchors,type PreparedAppliedReceipt,type FiscalOutboxAnchor} from './FiscalAppliedReceiptV2';
+import {TAX_SERVICE_APPLIED_PROFILE,validatePreparedAppliedReceipt,assertFiscalOriginalMirror,captureFiscalOutboxAnchors,type PreparedAppliedReceipt,type FiscalOutboxAnchor} from './FiscalAppliedReceiptV2';
 import {getLargeMasterSyncV3OperationalSession} from '../sync/LargeMasterSyncV3OperationalSession';
 import type {Transaction} from '../../types';
 import type {IssueFiscalDocumentInput,FiscalIssueResponse} from './fiscalService';
@@ -33,6 +33,8 @@ export const createMSellerDispatcher=(deps:FiscalDispatchDependencies)=>(async(i
  const readiness=await deps.assertReady(mirror); // Production always HOLD before markers/claims/POST until operational connection is separately reviewed and authorized.
  const context=deps.context(),scope=context.descriptor;
  const prepared=await validatePreparedAppliedReceipt(readiness,scope,mirror),tx=prepared.originalTransaction;
+ // Tax/service preparation is read-only: READY grants no claim or ISSUE authority.
+ if(prepared.receipt.profile===TAX_SERVICE_APPLIED_PROFILE)throw Error('FISCAL_ERP_APPLIED_RECEIPT_REQUIRED');
  if(input.environment!==prepared.receipt.historicalEnvironment)throw Error('FISCAL_APPLIED_HISTORICAL_ENVIRONMENT_REQUIRED');
  if(input.providerId!=='MSELLER'||tx.fiscalProvider!=='MSELLER'||!['E31','E32','E34','E44','E45'].includes(String(tx.ncfType))||![0,1,2].includes(input.environment))throw Error('FISCAL_REQUEST_INVALID');
  if(tx.ncfType==='E34'&&tx.total<0)throw Error('FISCAL_SIGNED_TOTAL_CONTRACT_REQUIRED');

@@ -1824,6 +1824,8 @@ export interface CartItem extends Product {
 }
 
 export interface Transaction {
+    /** Durable future checkout identity; never added to historical/retained sources. */
+    fiscalWorkflowCheckoutId?: string;
   v3ReservationClaimId?: string;
   v3RestoredTicketId?: string;
   v3CommitFingerprint?: string;
@@ -2535,6 +2537,9 @@ export interface PaymentEntry {
 export type RefundSettlementMode = 'WALLET' | 'CARD_VOID' | 'CARD_REFUND';
 
 export interface RefundProcessingOptions {
+  fiscalOperationId?:string;
+  fiscalOperationKind?:'RETURN'|'VOID';
+  fiscalModificationCode?:'1'|'2'|'3';
   refundPayments?: PaymentEntry[];
   settlementMode?: RefundSettlementMode;
   skipWalletDeposit?: boolean;
