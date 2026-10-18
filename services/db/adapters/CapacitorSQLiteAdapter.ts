@@ -774,6 +774,18 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
     /** Internal typed V3 bridge. Presence is storage support, never integral or network admission readiness. */
     articleFormatFinancialSQL(): FormatSQL { return this.createArticleFormatSQL(true); }
 
+    /** Commercial policy cache on the existing shared SQL lock; no financial-format admission. */
+    inventoryPresentationsSQL():import('../../inventoryPresentations/store').PresentationSQL {
+        const port=this.createArticleFormatSQL(false);
+        return {executeSchema:port.executeSchema,query:port.query,executeAtomic:port.executeAtomic,runExclusive:work=>port.runExclusive!(work),
+            runTransaction:work=>this.withWriteLock(()=>this.withNativeTransaction(()=>work({
+                executeSchema:async()=>{throw Error('INVENTORY_PRESENTATION_SCHEMA_INSIDE_TRANSACTION');},
+                query:async<T>(sql:string,values:(string|number|null)[])=>(await this.ensureDb().query(sql,values)).values as T[] || [],
+                executeAtomic:statements=>this.executeArticleFormatOwned(statements),
+            }))),
+        };
+    }
+
     private createArticleFormatSQL(financial: boolean): FormatSQL {
         const direct: FormatSQL = {
             storageLayout: 'DOCUMENTS',

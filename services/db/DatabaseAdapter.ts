@@ -97,6 +97,7 @@ export interface DatabaseAdapter {
     disconnect(): Promise<void>;
     articleFormatSQL?():import('../articleFormats/store').FormatSQL;
     articleFormatFinancialSQL?():import('../articleFormats/store').FormatSQL;
+    inventoryPresentationsSQL?():import('../inventoryPresentations/store').PresentationSQL;
     readonly fiscalWorkflowStore?: import('../fiscal/FiscalWorkflowV2Types').FiscalWorkflowStore;
     readonly terminalAuthEvidenceStore?: import('./TerminalAuthEvidenceStore').TerminalAuthEvidenceStore;
     readonly adapterType: 'local' | 'network';
