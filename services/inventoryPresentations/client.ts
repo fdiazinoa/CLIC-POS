@@ -67,6 +67,14 @@ export function createInventoryPresentationClient(options:{store:InventoryPresen
  return {
   prepare():Promise<PresentationContext>{if(pending)return pending;const operation=download().finally(()=>{if(pending===operation)pending=null;});pending=operation;return operation;},
   cancel(){generation++;controller?.abort();},
-  async cached(){const auth=authProvider(),expected=options.authority();auth.assertCurrent();need(auth.origin===expected.origin&&Object.entries(auth.scope).every(([key,value])=>expected.scope[key as keyof PresentationScope]===value),'INVENTORY_PRESENTATION_SCOPE_CHANGED');await options.store.migrate();const bindingKey=await inventoryPresentationRevision({origin:expected.origin,scope:expected.scope}),cached=await options.store.active(bindingKey);if(!cached)return null;await validatePresentationContext(cached.context,expected);auth.assertCurrent();return {...cached,bindingKey};},
+  async cached(){
+   const version=generation,auth=authProvider(),expected=JSON.parse(canonicalPresentationJson(options.authority())) as PresentationAuthority;
+   const assertCurrent=()=>{auth.assertCurrent();need(version===generation&&canonicalPresentationJson(options.authority())===canonicalPresentationJson(expected),'INVENTORY_PRESENTATION_CONTEXT_CHANGED');};
+   assertCurrent();need(auth.origin===expected.origin&&Object.entries(auth.scope).every(([key,value])=>expected.scope[key as keyof PresentationScope]===value),'INVENTORY_PRESENTATION_SCOPE_CHANGED');
+   await options.store.migrate();assertCurrent();
+   const bindingKey=await inventoryPresentationRevision({origin:expected.origin,scope:expected.scope});assertCurrent();
+   const cached=await options.store.active(bindingKey);assertCurrent();if(!cached)return null;
+   await validatePresentationContext(cached.context,expected);assertCurrent();return {...cached,bindingKey};
+  },
  };
 }

@@ -6,7 +6,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {nativeFixture,id} from './articleFormatsNativeFixture';
 import {buildInventoryPresentationMaster,presentationRevision} from './fixtures/inventoryPresentations/erp/server/services/inventoryPresentations.js';
-import {createInventoryPresentationClient,capturePresentationAuth,PRESENTATIONS_ROOT,type PresentationAuthority,type PresentationContext} from '../services/inventoryPresentations/client';
+import {createInventoryPresentationClient,capturePresentationAuth,PRESENTATIONS_ROOT,type PresentationAuthority,type PresentationContext,type PresentationPage} from '../services/inventoryPresentations/client';
 import {InventoryPresentationStore} from '../services/inventoryPresentations/store';
 import {inventoryPresentationRevision} from '../services/inventoryPresentations/contract';
 const scope={tenantId:id(1),companyId:id(2),storeId:id(3),terminalId:id(4),deviceId:id(50),warehouseId:id(5),localId:id(51)};
@@ -15,7 +15,7 @@ function fixtures(){
  const body={schemaVersion:1,contract:'INVENTORY_PRESENTATIONS_V1',scope:authority.scope,tariffIds:authority.tariffIds,categories:[],inventoryQuantityUnit:'BASE'};
  const context={...body,contextRevision:presentationRevision(body),returnPolicy:'SOURCE_REQUIRED_NOT_YET_SUPPORTED',mastersUrl:PRESENTATIONS_ROOT+'/masters'} as PresentationContext;
  const master=(itemId=id(7),price=250)=>buildInventoryPresentationMaster({id:itemId,sku:'BEB-003',nombre:'Agua',precio_venta:85,metadata:{articleFormats:[{id:'unit',variantId:null,name:'Unidad',abbreviation:'UN',factor:1,active:true,isBase:true,allowSale:true,allowPurchase:false,defaultSale:false,defaultPurchase:false,sortOrder:0,prices:[{tariffId:id(6),price:85}]},{id:'pack',variantId:null,name:'Pack',abbreviation:'PK',factor:12,active:true,isBase:false,allowSale:true,allowPurchase:true,defaultSale:true,defaultPurchase:true,sortOrder:1,prices:[{tariffId:id(6),price}]}]}},[{id:id(6),tax_included:false}],{contextRevision:context.contextRevision});
- const page=(items:any[],nextAfter:string|null=null)=>({schemaVersion:1,contract:'INVENTORY_PRESENTATIONS_V1',contextRevision:context.contextRevision,items,checksum:presentationRevision(items),nextAfter});
+ const page=(items:any[],nextAfter:string|null=null):PresentationPage=>({schemaVersion:1,contract:'INVENTORY_PRESENTATIONS_V1',contextRevision:context.contextRevision,items,checksum:presentationRevision(items),nextAfter});
  return {authority,context,master,page};
 }
 async function fixture(db?:SQLite.Database){
@@ -120,5 +120,15 @@ test('staging selection tamper cannot publish a valid but undelivered revision',
   const bindingKey=await inventoryPresentationRevision({origin:f.data.authority.origin,scope}),sessionId=id(950);await f.store.begin(sessionId,bindingKey,f.data.authority.origin,f.data.context);await f.store.stage(sessionId,0,f.data.page([f.data.master()]));
   const foreign=f.data.master(id(7),275);f.db.prepare('UPDATE inventory_presentation_selection SET master_revision=?,content=? WHERE session_id=?').run(foreign.masterRevision,JSON.stringify(Object.fromEntries(Object.entries(foreign).sort())),sessionId);
   await assert.rejects(f.store.publish(sessionId,()=>{}),/CACHE_INVALID/);assert.equal(await f.store.active(bindingKey),null);assert.equal((f.db.prepare('SELECT count(*) n FROM inventory_presentation_masters').get() as any).n,0);
+ }finally{f.db.close();}
+});
+for(const kind of ['warehouse','tariff','cancel','null-warehouse','null-tariff','null-cancel'])test(`cached ${kind} race is denied after lookup even without auth-token change`,async()=>{
+ const f=await fixture();try{
+  await f.client.prepare();let release!:()=>void,entered!:()=>void;const blocked=new Promise<void>(resolve=>{release=resolve;}),started=new Promise<void>(resolve=>{entered=resolve;});
+  const original=f.store.active.bind(f.store);f.store.active=async key=>{const result=await original(key);entered();await blocked;return kind.startsWith('null-')?null:result;};
+  const pending=f.client.cached();await started;
+  if(kind.endsWith('warehouse'))f.data.authority.scope.warehouseId=id(99);else if(kind.endsWith('tariff'))f.data.authority.tariffIds=[id(99)];else f.client.cancel();
+  release();await assert.rejects(pending,/CONTEXT_CHANGED/);
+  assert.equal(f.documents('transactions').length,0);assert.equal((f.db.prepare('SELECT count(*) n FROM inventory_presentation_masters').get() as any).n,1);
  }finally{f.db.close();}
 });
