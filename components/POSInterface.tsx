@@ -5543,6 +5543,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             const prior=await db.getDocument('transactions',fiscalCheckoutRef.current.transactionId)||await db.getDocument('transactionHistory',fiscalCheckoutRef.current.transactionId);
             if(!prior)throw Error('FISCAL_WORKFLOW_COMMITTED_RECEIPT_REQUIRED');
             await fiscalWorkflowV2Client.acknowledge(fiscalCheckoutRef.current);fiscalCheckoutRef.current=null;
+            if((prior as any).articleFormatWire?.schema_version===2)void fiscalWorkflowV2Client.prefetch().catch(()=>undefined);
             onUpdateCart([]);onSelectCustomer(null);return prior as Transaction;
          }
 
@@ -5550,6 +5551,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             if(!formatRuntime||!fiscalCheckoutRef.current?.permit||processedCart.some(line=>line.quantity<=0)||activeTable||activeDirectV3TicketId||activeV3Reservation||activeRecoveredReservation)throw Error('FISCAL_WORKFLOW_FORMAT_NOT_READY');
             await formatRuntime.assertCurrent();const result=await formatRuntime.commitSale({checkout:fiscalCheckoutRef.current,lines:processedCart,ncfType:requiredSaleFiscalType,buyer:buildTransactionCustomerSnapshot(effectiveSelectedCustomer)||{},customerId:effectiveSelectedCustomer?.id,payments,seriesId:resolveTerminalDocumentSeriesId(activeTerminalConfig,'TICKET')!,userId:currentUser.id,userName:currentUser.name});
             await onTransactionComplete(result);await fiscalWorkflowV2Client.acknowledge(fiscalCheckoutRef.current);fiscalCheckoutRef.current=null;
+            void fiscalWorkflowV2Client.prefetch().catch(()=>undefined);
             onUpdateCart([]);resetCompletedSaleDiscount(setGlobalDiscount);onSelectCustomer(null);return result;
          }
          assertFormatsPostingClosed(processedCart);
@@ -6540,13 +6542,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const newFiscalCheckout=fiscalCompliance.mode==='ECF'&&fiscalWorkflowV2Client.enabled()&&getDefaultFiscalProvider(config,activeTerminalConfig)==='MSELLER'
         &&!hasV3ReservationCart&&!activeV3Reservation&&!activeRecoveredReservation&&!activeDirectV3TicketId&&!activeTable&&!activeTable?.currentOrderId
         &&processedCart.every(line=>line.quantity>0);
+      const requiresFiscalPermit=processedCart.some(line=>line.articleFormat);
+      if(requiresFiscalPermit&&!newFiscalCheckout)throw Error('No se puede cobrar esta presentación sin la autorización fiscal vigente. Vuelve a sincronizar y reintenta.');
       const retainedFiscalOperation=fiscalCheckoutRef.current||fiscalCheckoutOperationRef.current||processedCart.some(line=>(line as any).fiscalCheckoutOperationId);
       if(!fiscalWorkflowV2Client.enabled()&&retainedFiscalOperation)throw Error('FISCAL_WORKFLOW_CHECKOUT_RECONCILIATION_REQUIRED');
       if(!newFiscalCheckout)fiscalCheckoutRef.current=null;
       if(newFiscalCheckout){
         const tagged=processedCart.map(line=>(line as any).fiscalCheckoutOperationId).filter(Boolean);
         const operationId=fiscalCheckoutOperationRef.current|| (tagged.length===processedCart.length&&new Set(tagged).size===1?tagged[0]:createUuid());fiscalCheckoutOperationRef.current=operationId;
-        const checkout=await fiscalWorkflowV2Client.reserveCheckout(JSON.stringify({items:processedCart.map(({fiscalCheckoutOperationId:_op,...line}:any)=>line),customerId:effectiveSelectedCustomer?.id||null,fiscalType:requiredSaleFiscalType}),operationId);
+        const checkout=await fiscalWorkflowV2Client.reserveCheckout(JSON.stringify({items:processedCart.map(({fiscalCheckoutOperationId:_op,...line}:any)=>line),customerId:effectiveSelectedCustomer?.id||null,fiscalType:requiredSaleFiscalType}),operationId,{requirePermit:requiresFiscalPermit}).catch(error=>{if(error instanceof Error&&error.message==='FISCAL_WORKFLOW_PERMIT_REQUIRED')throw Error('No hay autorización fiscal disponible para esta presentación. Espera la sincronización y vuelve a cobrar; no se realizó ningún pago.');throw error;});
         onUpdateCart(processedCart.map(line=>({...line,fiscalCheckoutOperationId:operationId})));
         if(checkout.phase==='EFFECT_POSSIBLE'&&checkout.paymentIds.some(id=>!paymentIds.includes(id)))throw Error('PAYMENT_INTENT_RECONCILIATION_REQUIRED');
         fiscalCheckoutRef.current=checkout;
