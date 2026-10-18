@@ -10,7 +10,7 @@ export interface PresentationAuthority {origin:string;scope:PresentationScope;ta
 export interface PresentationAuth {origin:string;scope:Pick<PresentationScope,'tenantId'|'companyId'|'storeId'|'terminalId'|'deviceId'>;headers:Record<string,string>;assertCurrent():void}
 const scopeKeys=['tenantId','companyId','storeId','terminalId','deviceId','warehouseId','localId'] as const;
 const need=(ok:unknown,code='INVENTORY_PRESENTATION_PROTOCOL_INVALID'):void=>{if(!ok)throw Error(code);};
-const exact=(v:any,keys:string[])=>Boolean(v&&typeof v==='object'&&!Array.isArray(v)&&Object.keys(v).length===keys.length&&keys.every(k=>Object.hasOwn(v,k)));
+const exact=(v:any,keys:string[])=>Boolean(v&&typeof v==='object'&&!Array.isArray(v)&&Object.keys(v).length===keys.length&&keys.every(k=>Object.prototype.hasOwnProperty.call(v,k)));
 const hash=(v:unknown)=>typeof v==='string'&&/^[a-f0-9]{64}$/.test(v);
 const uuid=(v:unknown)=>typeof v==='string'&&/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(v);
 const strings=(v:unknown):v is string[]=>Array.isArray(v)&&v.every(x=>typeof x==='string'&&x.length>0)&&new Set(v).size===v.length;

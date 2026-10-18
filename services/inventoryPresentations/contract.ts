@@ -9,7 +9,7 @@ export interface InventoryPresentation {schemaVersion:1;itemId:string;variantId:
 const D=Decimal.clone({precision:40,rounding:Decimal.ROUND_HALF_UP});
 const need=(ok:unknown,code:string):void=>{if(!ok)throw Error(code);};
 const record=(value:unknown):value is Record<string,any>=>Boolean(value&&typeof value==='object'&&!Array.isArray(value));
-const exact=(value:unknown,keys:string[]):value is Record<string,any>=>record(value)&&Object.keys(value).length===keys.length&&keys.every(k=>Object.hasOwn(value,k));
+const exact=(value:unknown,keys:string[]):value is Record<string,any>=>record(value)&&Object.keys(value).length===keys.length&&keys.every(k=>Object.prototype.hasOwnProperty.call(value,k));
 const text=(value:unknown):value is string=>typeof value==='string'&&value.length>0;
 const snapshotKeys=['schemaVersion','id','variantId','name','abbreviation','factor','barcode'];
 const masterKeys=['schemaVersion','contextRevision','itemId','sku','name','inventoryQuantityUnit','formats','basePrices','masterRevision'];
@@ -60,7 +60,7 @@ export function presentationFormatSnapshot(format:PresentationFormat):Presentati
 export async function validateInventoryPresentationMaster(value:unknown,expected?:{itemId?:string;contextRevision?:string|null}):Promise<InventoryPresentationMaster>{
  need(exact(value,masterKeys),'INVENTORY_PRESENTATION_MASTER_INVALID');const m=JSON.parse(canonicalPresentationJson(value)) as Record<string,any>;
  need(m.schemaVersion===1&&(m.contextRevision===null||text(m.contextRevision))&&text(m.itemId)&&typeof m.sku==='string'&&typeof m.name==='string'&&m.inventoryQuantityUnit==='BASE'&&typeof m.masterRevision==='string'&&/^[a-f0-9]{64}$/.test(m.masterRevision),'INVENTORY_PRESENTATION_MASTER_INVALID');
- need(!expected||(!expected.itemId||expected.itemId===m.itemId)&&(!Object.hasOwn(expected,'contextRevision')||expected.contextRevision===m.contextRevision),'INVENTORY_PRESENTATION_MASTER_CHANGED');
+ need(!expected||(!expected.itemId||expected.itemId===m.itemId)&&(!Object.prototype.hasOwnProperty.call(expected,'contextRevision')||expected.contextRevision===m.contextRevision),'INVENTORY_PRESENTATION_MASTER_CHANGED');
  need(Array.isArray(m.formats)&&m.formats.length>0&&Array.isArray(m.basePrices)&&m.basePrices.length>0,'INVENTORY_PRESENTATION_MASTER_INVALID');
  const tariffs=new Set<string>();
  for(const p of m.basePrices){need(exact(p,['tariffId','price','taxIncluded'])&&text(p.tariffId)&&typeof p.taxIncluded==='boolean'&&!tariffs.has(p.tariffId),'INVENTORY_PRESENTATION_MASTER_INVALID');tariffs.add(p.tariffId);price(p.price);}

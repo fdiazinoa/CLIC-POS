@@ -19,3 +19,11 @@ No live network/DB, ERP edits/migrations/config/activation, ADB, POS reset, UI, 
 ## Independent review follow-up: cached-read authority race
 
 Review found that cached() kept a live reference to caller authority and could return an old policy after warehouse/tariff changed during the asynchronous active-pointer lookup. The read now snapshots authority by value and captures generation, then rechecks live auth, generation and canonical current authority after every await and before either policy or null return. Cancellation also invalidates an in-flight cached read. Six adversarial cases mutate warehouse/tariff or cancel while lookup is paused, for both an existing cache and a null result; each rejects without token change. Focused regression102/102 Node22 completed (`/tmp/clic-pos-inventory-presentations-phase2-cache-race-tests.log`). This fixes the reported read race; independent review and QA of the new SHA remain required. No UI or checkout is activated.
+
+### Bounded publication and Chrome 83 follow-up
+
+Implemented the approved bounded publication addendum (`4bdb30a7bbfcfabc3e6b8d6b79b91e67dacdeb08899395424de6a6071bc63b56`): each retained page and its selection/retained lookups contain at most 200 masters; final retention uses `INSERT ... SELECT` in the same native transaction, with the active pointer last. Completeness, cursor order, hashes, byte equality, immutable revisions and rollback remain enforced. Authority is checked again after writes before commit.
+
+Replaced `Object.hasOwn` only in the new POS validators with `Object.prototype.hasOwnProperty.call` for the observed Chrome 83 WebView. Archived ERP producer fixtures remain unchanged. An isolated subprocess removes Object.hasOwn, structuredClone and crypto.randomUUID and validates producer DTOs without network access.
+
+Developer verification: Node 22 contract/transport suite **74/74** (`/tmp/clic-pos-inventory-presentations-bounded-tests.log`), including 5000-master publication with maximum 200 returned rows and 201 SQL parameters, one retention projection, and late-authority rollback. This is host SQLite evidence; independent native Chrome 83/device and performance verification remain pending. F3 draft files are excluded from this commit and its scope.

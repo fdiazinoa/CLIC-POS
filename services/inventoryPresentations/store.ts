@@ -1,5 +1,5 @@
 import {canonicalPresentationJson,inventoryPresentationRevision,validateInventoryPresentationMaster,type InventoryPresentationMaster} from './contract';
-import type {PresentationContext,PresentationPage} from './client';
+import {validatePresentationPage,type PresentationContext,type PresentationPage} from './client';
 export interface PresentationSQLCore {
  executeSchema(sql:string):Promise<void>;
  query<T>(sql:string,values:(string|number|null)[]):Promise<T[]>;
@@ -45,22 +45,30 @@ export class InventoryPresentationStore {
  }
  async publish(sessionId:string,assertCurrent:()=>void){
   await this.sql.runTransaction(async tx=>{
-   assertCurrent();const sessions=await tx.query<{binding_key:string;context_key:string;state:string}>('SELECT binding_key,context_key,state FROM inventory_presentation_sessions WHERE id=?',[sessionId]);need(sessions.length===1&&sessions[0].state==='STAGING');
-   const session=sessions[0],pages=await tx.query<{page_index:number;content:string}>('SELECT page_index,content FROM inventory_presentation_pages WHERE session_id=? ORDER BY page_index',[sessionId]);need(pages.length>0);
-   for(const [index,row]of pages.entries()){
-    const page=JSON.parse(row.content) as PresentationPage;need(row.page_index===index&&page.checksum===await inventoryPresentationRevision(page.items));need(index===pages.length-1?page.nextAfter===null:page.nextAfter!==null);
-   }
-   const selected=await tx.query<{item_id:string;master_revision:string;content:string}>('SELECT item_id,master_revision,content FROM inventory_presentation_selection WHERE session_id=? ORDER BY item_id',[sessionId]);
-   const delivered=new Map<string,string>();for(const row of pages)for(const item of JSON.parse(row.content).items){need(!delivered.has(item.itemId));delivered.set(item.itemId,canonicalPresentationJson(item));}
-   need(selected.length===delivered.size&&selected.every(item=>delivered.get(item.item_id)===item.content));
-   for(const item of selected)await validateInventoryPresentationMaster(JSON.parse(item.content));
-   for(let offset=0;offset<selected.length;offset+=200){const batch=selected.slice(offset,offset+200),retained=await tx.query<{master_revision:string;content:string}>(`SELECT master_revision,content FROM inventory_presentation_masters WHERE context_key=? AND master_revision IN (${batch.map(()=>'?').join(',')})`,[session.context_key,...batch.map(item=>item.master_revision)]);for(const old of retained)need(batch.find(item=>item.master_revision===old.master_revision)?.content===old.content);}
    assertCurrent();
+   const sessions=await tx.query<{binding_key:string;context_key:string;state:string;content:string}>('SELECT s.binding_key,s.context_key,s.state,c.content FROM inventory_presentation_sessions s JOIN inventory_presentation_contexts c USING(context_key) WHERE s.id=?',[sessionId]);need(sessions.length===1&&sessions[0].state==='STAGING');
+   const session=sessions[0],context=JSON.parse(session.content).context as PresentationContext;
+   const summary=(await tx.query<{n:number;first:number;last:number}>('SELECT count(*) n,min(page_index) first,max(page_index) last FROM inventory_presentation_pages WHERE session_id=?',[sessionId]))[0];need(summary.n>0&&summary.n<=1000&&summary.first===0&&summary.last===summary.n-1);
+   let after:string|null=null,delivered=0;
+   for(let index=0;index<summary.n;index++){
+    assertCurrent();
+    const rows=await tx.query<{content:string}>('SELECT content FROM inventory_presentation_pages WHERE session_id=? AND page_index=? LIMIT 1',[sessionId,index]);need(rows.length===1);
+    const page=await validatePresentationPage(JSON.parse(rows[0].content),context,after);need(index===summary.n-1?page.nextAfter===null:page.nextAfter!==null);
+    delivered+=page.items.length;
+    if(page.items.length){
+     const selected=await tx.query<{item_id:string;master_revision:string;content:string}>(`SELECT item_id,master_revision,content FROM inventory_presentation_selection WHERE session_id=? AND item_id IN (${page.items.map(()=>'?').join(',')})`,[sessionId,...page.items.map(item=>item.itemId)]);
+     need(selected.length===page.items.length&&page.items.every(item=>selected.some(row=>row.item_id===item.itemId&&row.master_revision===item.masterRevision&&row.content===canonicalPresentationJson(item))));
+     const retained=await tx.query<{master_revision:string;content:string}>(`SELECT master_revision,content FROM inventory_presentation_masters WHERE context_key=? AND master_revision IN (${page.items.map(()=>'?').join(',')})`,[session.context_key,...page.items.map(item=>item.masterRevision)]);
+     for(const old of retained)need(selected.find(item=>item.master_revision===old.master_revision)?.content===old.content);
+    }
+    after=page.nextAfter;
+   }
+   const count=(await tx.query<{n:number}>('SELECT count(*) n FROM inventory_presentation_selection WHERE session_id=?',[sessionId]))[0];need(count.n===delivered);assertCurrent();
    await tx.executeAtomic([
-    ...selected.map(item=>({statement:'INSERT OR IGNORE INTO inventory_presentation_masters VALUES(?,?,?,?)',values:[session.context_key,item.master_revision,item.item_id,item.content]})),
+    {statement:"INSERT OR IGNORE INTO inventory_presentation_masters(context_key,master_revision,item_id,content) SELECT s.context_key,x.master_revision,x.item_id,x.content FROM inventory_presentation_selection x JOIN inventory_presentation_sessions s ON s.id=x.session_id WHERE s.id=? AND s.state='STAGING'",values:[sessionId]},
     {statement:"UPDATE inventory_presentation_sessions SET state='COMPLETE' WHERE id=? AND state='STAGING'",values:[sessionId]},
     {statement:'INSERT INTO inventory_presentation_active VALUES(?,?) ON CONFLICT(binding_key) DO UPDATE SET session_id=excluded.session_id',values:[session.binding_key,sessionId]},
-   ]);
+   ]);assertCurrent();
   });
  }
  async discard(sessionId:string){

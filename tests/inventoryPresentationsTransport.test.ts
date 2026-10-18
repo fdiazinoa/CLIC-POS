@@ -132,3 +132,24 @@ for(const kind of ['warehouse','tariff','cancel','null-warehouse','null-tariff',
   assert.equal(f.documents('transactions').length,0);assert.equal((f.db.prepare('SELECT count(*) n FROM inventory_presentation_masters').get() as any).n,1);
  }finally{f.db.close();}
 });
+test('new presentation validators work in isolated Chrome83 API profile without Object.hasOwn or structuredClone',async()=>{
+ const {spawnSync}=await import('node:child_process');const {authority,context,master}=fixtures();
+ const source=`Object.hasOwn=undefined;globalThis.structuredClone=undefined;Object.defineProperty(globalThis.crypto,'randomUUID',{value:undefined});globalThis.fetch=()=>{throw Error('network forbidden');};const contract=await import(${JSON.stringify(new URL('../services/inventoryPresentations/contract.ts',import.meta.url).href)});const client=await import(${JSON.stringify(new URL('../services/inventoryPresentations/client.ts',import.meta.url).href)});await contract.validateInventoryPresentationMaster(${JSON.stringify(master())},{contextRevision:${JSON.stringify(context.contextRevision)}});await client.validatePresentationContext(${JSON.stringify(context)},${JSON.stringify(authority)});console.log('CHROME83_PROFILE_OK');`;
+ const child=spawnSync(process.execPath,['--import','tsx','--input-type=module','-e',source],{encoding:'utf8',timeout:20000});assert.equal(child.status,0,child.stderr);assert.match(child.stdout,/CHROME83_PROFILE_OK/);
+});
+test('publication of 5000 masters reads bounded pages and selections and retains with one SQL projection',async()=>{
+ const f=await fixture();try{
+  const sessionId=id(990),bindingKey=await inventoryPresentationRevision({origin:f.data.authority.origin,scope});await f.store.begin(sessionId,bindingKey,f.data.authority.origin,f.data.context);
+  for(let index=0;index<25;index++){const items=Array.from({length:200},(_,offset)=>f.data.master(id(10000+index*200+offset)));await f.store.stage(sessionId,index,f.data.page(items,index===24?null:items[199].itemId));}
+  const port=f.adapter.inventoryPresentationsSQL();let maxRows=0,maxParameters=0,projection=0;
+  const store=new InventoryPresentationStore({...port,runTransaction:work=>port.runTransaction(tx=>work({...tx,query:async(statement,values)=>{const rows=await tx.query(statement,values);maxRows=Math.max(maxRows,rows.length);maxParameters=Math.max(maxParameters,values?.length||0);return rows;},executeAtomic:async statements=>{projection+=statements.filter(s=>s.statement.startsWith('INSERT OR IGNORE INTO inventory_presentation_masters')&&s.statement.includes(' SELECT ')).length;return tx.executeAtomic(statements);}}))});
+  await store.publish(sessionId,()=>{});assert.equal(maxRows,200);assert.ok(maxParameters<=201);assert.equal(projection,1);assert.equal((f.db.prepare('SELECT count(*) n FROM inventory_presentation_masters').get() as any).n,5000);assert.equal((await store.active(bindingKey))!.sessionId,sessionId);
+ }finally{f.db.close();}
+});
+test('authority revoked after publication writes rolls back retained masters and active pointer',async()=>{
+ const f=await fixture();try{
+  const sessionId=id(991),bindingKey=await inventoryPresentationRevision({origin:f.data.authority.origin,scope});await f.store.begin(sessionId,bindingKey,f.data.authority.origin,f.data.context);await f.store.stage(sessionId,0,f.data.page([f.data.master()]));
+  const port=f.adapter.inventoryPresentationsSQL();let revoked=false;const store=new InventoryPresentationStore({...port,runTransaction:work=>port.runTransaction(tx=>work({...tx,executeAtomic:async statements=>{await tx.executeAtomic(statements);revoked=true;}}))});
+  await assert.rejects(store.publish(sessionId,()=>{if(revoked)throw Error('AUTH_REVOKED');}),/AUTH_REVOKED/);assert.equal(await store.active(bindingKey),null);assert.equal((f.db.prepare('SELECT count(*) n FROM inventory_presentation_masters').get() as any).n,0);assert.equal((f.db.prepare('SELECT state FROM inventory_presentation_sessions WHERE id=?').get(sessionId) as any).state,'STAGING');
+ }finally{f.db.close();}
+});
