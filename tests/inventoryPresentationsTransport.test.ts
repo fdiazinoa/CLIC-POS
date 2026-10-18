@@ -165,3 +165,21 @@ test('online denial survives a new runtime and SQLite reopen offline; fresh succ
   const restored=createPresentationRuntime(()=>f.data.authority,{sql:g.adapter.inventoryPresentationsSQL(),auth:f.options.auth,sessionId:()=>id(1000),fetchImpl:async(url:any)=>new Response(JSON.stringify(String(url).endsWith('/negotiate')?f.data.context:f.data.page([original])),{headers:{'X-Clic-Inventory-Presentations':'1'}})});await restored.client.prepare();assert.ok(await restored.client.cached());assert.deepEqual(await restored.store.retained(cached.contextKey,original.masterRevision),original);assert.equal(g.documents('transactions').length,0);
  }finally{if(current?.open)current.close();rmSync(directory,{recursive:true,force:true});}
 });
+for(const status of [408,429,500,502,503,504])test(`temporary HTTP ${status} reuses only an authenticated complete cache without a durable denial`,async()=>{
+ const {createPresentationRuntime}=await import('../services/inventoryPresentations/runtime');const f=await fixture();try{
+  await f.client.prepare();const original=await f.client.cached();const runtime=createPresentationRuntime(()=>f.data.authority,{sql:f.adapter.inventoryPresentationsSQL(),auth:f.options.auth,sessionId:()=>id(1100+status),fetchImpl:async()=>new Response('{}',{status})});
+  assert.deepEqual(await runtime.client.prepare(),f.data.context);assert.equal((await runtime.client.cached())!.sessionId,original!.sessionId);assert.equal((f.db.prepare('SELECT state FROM inventory_presentation_availability').get() as any).state,'READY');assert.equal(f.documents('transactions').length,0);
+ }finally{f.db.close();}
+});
+for(const status of [429,503])test(`temporary HTTP ${status} without previous cache cannot enable presentations`,async()=>{
+ const {createPresentationRuntime}=await import('../services/inventoryPresentations/runtime');const f=await fixture();try{
+  const runtime=createPresentationRuntime(()=>f.data.authority,{sql:f.adapter.inventoryPresentationsSQL(),auth:f.options.auth,sessionId:()=>id(1200+status),fetchImpl:async()=>new Response('{}',{status})});await assert.rejects(runtime.client.prepare(),new RegExp(`HTTP_${status}`));assert.equal(await runtime.client.cached(),null);assert.equal((f.db.prepare('SELECT count(*) n FROM inventory_presentation_availability').get() as any).n,0);
+ }finally{f.db.close();}
+});
+test('503 refresh preserves READY through physical SQLite reopen and offline restart',async()=>{
+ const {createPresentationRuntime}=await import('../services/inventoryPresentations/runtime');const directory=mkdtempSync(join(tmpdir(),'clic-presentation-503-')),file=join(directory,'pos.sqlite');let current:SQLite.Database|undefined;
+ try{
+  const f=await fixture(new SQLite(file));current=f.db;await f.client.prepare();const initial=await f.client.cached();const runtime=createPresentationRuntime(()=>f.data.authority,{sql:f.adapter.inventoryPresentationsSQL(),auth:f.options.auth,sessionId:()=>id(1800),fetchImpl:async()=>new Response('{}',{status:503})});await runtime.client.prepare();assert.ok(await runtime.client.cached());f.db.close();
+  const g=await nativeFixture(new SQLite(file),false);current=g.db;const restarted=createPresentationRuntime(()=>f.data.authority,{sql:g.adapter.inventoryPresentationsSQL(),auth:f.options.auth,sessionId:()=>id(1801),fetchImpl:async()=>{throw Error('network offline');}});await restarted.client.prepare();assert.equal((await restarted.client.cached())!.sessionId,initial!.sessionId);assert.equal((g.db.prepare('SELECT state FROM inventory_presentation_availability').get() as any).state,'READY');assert.equal(g.documents('transactions').length,0);
+ }finally{if(current?.open)current.close();rmSync(directory,{recursive:true,force:true});}
+});

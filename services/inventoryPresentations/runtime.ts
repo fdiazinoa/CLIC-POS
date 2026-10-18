@@ -8,6 +8,7 @@ import {InventoryPresentationStore,type PresentationSQL} from './store';
 import {canonicalPresentationJson,inventoryPresentationRevision,validateInventoryPresentation} from './contract';
 
 export {presentationAuthority} from './authority';
+export const isTransientPresentationFailure=(error:unknown)=>/network|fetch|timeout|abort|INVENTORY_PRESENTATION_HTTP_(?:408|429|5\d{2})\b/i.test(String(error));
 export function createPresentationRuntime(authority:()=>PresentationAuthority,ports:{sql?:PresentationSQL;auth?:()=>PresentationAuth;fetchImpl?:typeof fetch;sessionId?:()=>string}={}){
  const sql=ports.sql??dbAdapter.inventoryPresentationsSQL?.();if(!sql)throw Error('INVENTORY_PRESENTATION_NATIVE_REQUIRED');
  const store=new InventoryPresentationStore(sql),raw=createInventoryPresentationClient({store,authority,sessionId:ports.sessionId??createUuid,...(ports.auth?{auth:ports.auth}:{}),...(ports.fetchImpl?{fetchImpl:ports.fetchImpl}:{})});
@@ -16,9 +17,11 @@ export function createPresentationRuntime(authority:()=>PresentationAuthority,po
   const version=generation,expected=authority(),lease=beginPresentationAdmission(expected);
   return raw.prepare().catch(async error=>{
    if(version!==generation)throw error;
-   let offlineValid=false;
-   if(/network|fetch|timeout|abort/i.test(String(error)))try{offlineValid=Boolean(await raw.cached());}catch{/* No complete authenticated cache. */}
-   if(!offlineValid)await store.deny(await inventoryPresentationRevision({origin:expected.origin,scope:expected.scope}));
+   if(isTransientPresentationFailure(error)){
+    try{const cached=await raw.cached();if(cached&&version===generation&&canonicalPresentationJson(authority())===canonicalPresentationJson(expected))return cached.context;}catch{/* A known denial or invalid session never authorizes fallback. */}
+    throw error;
+   }
+   await store.deny(await inventoryPresentationRevision({origin:expected.origin,scope:expected.scope}));
    throw error;
   }).finally(()=>finishPresentationAdmission(lease));
  },async cached(){assertPresentationAdmission(authority());return raw.cached();}};
