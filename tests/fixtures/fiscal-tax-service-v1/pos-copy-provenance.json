@@ -1,0 +1,53 @@
+{
+  "erpRevision": "c348bdc87224a57ecd67bb6af7e86acd9cc814c1",
+  "sourceDirectory": "server/services/fixtures/fiscal-tax-service-v1",
+  "synthetic": true,
+  "realCaja6Operation": false,
+  "files": [
+    {
+      "path": "applied-receipt-e32-352-local.json",
+      "sha256": "8015c8e0d3099ec55c2e1596a863b8ca26e8b12c563ecd300a717caf8dad43a8",
+      "size": 12406
+    },
+    {
+      "path": "conflict-binding.json",
+      "sha256": "a47d1dd61fc77c53d465465013d4061043a7efd61bf9d5de85a0977df32cec0a",
+      "size": 41879
+    },
+    {
+      "path": "conflict-service-type.json",
+      "sha256": "1416011d00b03368c4c8a280f13c5c3afc8794284cf9aaca902f9f07061c4ac6",
+      "size": 42062
+    },
+    {
+      "path": "conflict-tax-classification.json",
+      "sha256": "f26dee3bda7aa848873c2900b800c10945f43a94195a9cf00ceebeb5a7a30799",
+      "size": 42073
+    },
+    {
+      "path": "conflict-tip-reclassification.json",
+      "sha256": "5e214c736b6e74499d9a602ae806d5f06da1c4c2f33f84dbda605a134dfe1bd2",
+      "size": 42096
+    },
+    {
+      "path": "conflict-total.json",
+      "sha256": "753f8713c21b20f3d1b5fc572fabb2345b00fa0c102dcbe4e190b5423e307a17",
+      "size": 42041
+    },
+    {
+      "path": "e32-352-original.json",
+      "sha256": "216b08aebe55959d87b02ff4c3705f8173cecf7b22a9be07c83c425732a8a676",
+      "size": 31700
+    },
+    {
+      "path": "mseller-e32-352-projection.json",
+      "sha256": "773badb3762acd4357150ca7855349bb411a3cbdd41615007ca63ffb8f36d956",
+      "size": 13549
+    },
+    {
+      "path": "provenance.json",
+      "sha256": "010dbcff1aa9726736dbcd0afb51a66466c5531ba6e10228fa317f275e7f439c",
+      "size": 3294
+    }
+  ]
+}

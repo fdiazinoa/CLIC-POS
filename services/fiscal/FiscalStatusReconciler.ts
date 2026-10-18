@@ -1,7 +1,7 @@
 import {resolveFiscalPrintDisplay} from './FiscalPrintEvidence';
 import type { Transaction } from '../../types';
 import type { DurableDocumentMutation } from '../db/DatabaseAdapter';
-import { fiscalStatusSourceChecksum,verifyFiscalStatusProof,type FiscalStatusScope,type FiscalStatusProof } from './FiscalStatusProof';
+import { fiscalStatusSourceChecksum,verifyFiscalStatusProof,validFiscalScope,verifyRejectedFiscalStatusProof,matchesOriginalFiscalReference,type FiscalStatusScope,type FiscalStatusProof } from './FiscalStatusProof';
 
 type Catalog = {syncId:string;syncVersion:number;binding:string};
 export interface FiscalStatusContext {
@@ -9,11 +9,11 @@ export interface FiscalStatusContext {
   catalog: Catalog; assertCurrent: ()=>Promise<void>;
 }
 export interface FiscalStatusDependencies {
-  context: ()=>Promise<FiscalStatusContext>;
+  context: (originalOnly?:boolean)=>Promise<FiscalStatusContext>;
   pair: (id:string)=>Promise<{transaction:Transaction;history:Transaction}>;
   candidates: (binding:string,after:string,limit:number)=>Promise<string[]>;
   commit: (mutations:DurableDocumentMutation[])=>Promise<void>;
-  get: (tx:Transaction,scope:FiscalStatusScope)=>Promise<FiscalStatusProof>;
+  get: (tx:Transaction,scope:FiscalStatusScope,originalOnly?:boolean)=>Promise<FiscalStatusProof>;
   publish: (tx:Transaction)=>void;
   now?:()=>number;
 }
@@ -26,8 +26,8 @@ export class FiscalStatusReconciler {
   constructor(private readonly deps:FiscalStatusDependencies){}
   dispose(){this.generation++;this.cursor='';this.cooldown.clear();}
   private serialize<T>(operation:()=>Promise<T>):Promise<T>{const task=this.tail.then(operation);this.tail=task.catch(()=>{});return task;}
-  async consult(id:string,manual=false,actorId?:string,approvedLookupEnvironment?:number):Promise<string>{
-    const context=await this.deps.context(),generation=this.generation,key=context.scope.binding+':'+id;
+  async consult(id:string,manual=false,actorId?:string,approvedLookupEnvironment?:number,originalOnly=false):Promise<string>{
+    const context=await this.deps.context(originalOnly),generation=this.generation,key=context.scope.binding+':'+id+(originalOnly?':original':'');
     const pending=this.inflight.get(key);if(pending)return pending;
     const now=(this.deps.now||Date.now)();
     if(!manual&&now-(this.cooldown.get(key)??-Infinity)<60000)return 'Consulta fiscal en espera.';
@@ -35,10 +35,11 @@ export class FiscalStatusReconciler {
       this.cooldown.set(key,(this.deps.now||Date.now)());await context.assertCurrent();
       if(generation!==this.generation)throw Error('FISCAL_STATUS_SCOPE_CHANGED');
       let pair=await this.deps.pair(id),tx=pair.transaction;
-      if(tx.fiscalSyncStatus==='SYNCED'&&await resolveFiscalPrintDisplay(tx))return 'Estado fiscal confirmado.';
+      if(tx.fiscalSyncStatus==='SYNCED'&&(originalOnly||await resolveFiscalPrintDisplay(tx)))return 'Estado fiscal confirmado.';
       if(!attempted(tx)||tx.terminalId!==context.scope.terminalId||(tx as any).v3Binding!==context.scope.binding)throw Error('FISCAL_STATUS_ATTEMPT_REQUIRED');
       const checksum=await fiscalStatusSourceChecksum(tx);
       let scope=tx.fiscalSubmissionScope||tx.fiscalLookupApproval;
+      if(originalOnly&&(!scope||!validFiscalScope(scope,tx)))return 'No se identificó inequívocamente el envío original y su scope. Se conserva el pendiente.';
       if(!scope){
         if(!manual||!actorId||approvedLookupEnvironment!==context.scope.environment)throw Error('FISCAL_STATUS_LOOKUP_APPROVAL_REQUIRED');
         scope={...context.scope,basis:'EXPLICIT_AUTHORIZED_LOOKUP',sourceChecksum:checksum,capturedAt:new Date().toISOString(),approvedById:actorId};
@@ -47,9 +48,33 @@ export class FiscalStatusReconciler {
         pair=await this.deps.pair(id);tx=pair.transaction;
       }
       if(scope.sourceChecksum!==checksum||Object.keys(context.scope).some(key=>(scope as any)[key]!==(context.scope as any)[key]))throw Error('FISCAL_STATUS_SCOPE_CHANGED');
-      const proof=await this.deps.get(tx,scope);
+      if(originalOnly){await context.assertCurrent();if(generation!==this.generation)throw Error('FISCAL_STATUS_SCOPE_CHANGED');}
+      const proof=await this.deps.get(tx,scope,originalOnly);
       await context.assertCurrent();if(generation!==this.generation)throw Error('FISCAL_STATUS_SCOPE_CHANGED');
       const accepted=await verifyFiscalStatusProof(proof,scope,tx);
+      if(originalOnly){
+        const rejected=await verifyRejectedFiscalStatusProof(proof,scope,tx);
+        if(!matchesOriginalFiscalReference(proof,tx)||!matchesOriginalFiscalReference(proof,pair.history)||!await verifyFiscalStatusProof(proof,scope,tx,false))
+          return 'La respuesta ERP no identifica inequívocamente el envío original. Se conserva el pendiente.';
+        if(!accepted&&!rejected)return proof.decision==='PENDING'
+          ? 'El e-CF original continúa pendiente en el ERP.'
+          : 'El ERP no confirmó un estado definitivo del envío original. Se conserva el pendiente.';
+        const fresh=await this.deps.pair(id);
+        if(!same(fresh.transaction,tx)||!same(fresh.history,pair.history))throw Error('FISCAL_STATUS_SOURCE_CHANGED');
+        const fields={fiscalSyncStatus:accepted?'SYNCED' as const:'ERROR' as const,
+          fiscalSyncError:accepted?undefined:'e-CF original rechazado por el proveedor.',fiscalProviderStatus:proof.providerReceipt.status,
+          fiscalReferenceId:proof.providerReceipt.internalTrackId,fiscalCertifiedNcf:proof.providerReceipt.returnedNcf,
+          fiscalResponseMessage:accepted?'Estado fiscal aceptado confirmado con el proveedor.':'e-CF original rechazado por el proveedor. No se reemitió.',
+          fiscalSyncedAt:accepted?proof.observedAt:tx.fiscalSyncedAt,fiscalStatusProof:proof};
+        const mutations=([['transactions',fresh.transaction],['transactionHistory',fresh.history]] as const).map(([collectionName,original])=>({
+          collectionName,document:{...original,...fields,...(!accepted?{fiscalSyncedAt:original.fiscalSyncedAt}:{})},expectedDocument:JSON.stringify(original),
+          v3CurrentCatalog:context.catalog,v3FiscalMetadataOperation:'FISCAL_STATUS_RECONCILE' as const,
+          ...(collectionName==='transactionHistory'?{v3ExpectedRetainedDocument:{collection:'transactions',id:tx.id,expected:JSON.stringify(tx)}}:{})}));
+        await context.assertCurrent();if(generation!==this.generation)throw Error('FISCAL_STATUS_SCOPE_CHANGED');
+        await this.deps.commit(mutations);await context.assertCurrent();
+        if(generation===this.generation)this.deps.publish(mutations[0].document);
+        return accepted?'Estado fiscal aceptado y actualizado.':'Estado fiscal rechazado y actualizado. No se reemitió el documento.';
+      }
       const display=await resolveFiscalPrintDisplay({...tx,fiscalPrintProof:proof});
       if(!accepted&&!display)return 'Estado aún no confirmado; se conservó la evidencia fiscal.';
       const fresh=await this.deps.pair(id);
