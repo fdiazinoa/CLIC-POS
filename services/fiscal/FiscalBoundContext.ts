@@ -35,6 +35,6 @@ export const captureFiscalStatusBoundContext=(readIdentity:()=>LargeMasterSyncV3
  const descriptor={origin,tenantId:identity.tenantId,companyId:credentials.companyId,storeId:credentials.storeId,terminalId:identity.terminalId,deviceId:identity.deviceId};
  // Both dates remain in the race fingerprint. Only the live session expiry authorizes this status GET.
  const fingerprint=JSON.stringify([descriptor,identity.syncToken,credentials.deviceToken,credentials.syncTokenExpiresAt,credentials.deviceTokenExpiresAt,credentials.authStatus,credentials.deviceTokenSource]);
- return {base,descriptor,headers:{Authorization:`Bearer ${identity.syncToken}`,'X-Sync-Token':identity.syncToken,'X-Terminal-Id':identity.terminalId,'X-Device-Id':identity.deviceId,'X-Device-Token':credentials.deviceToken!,'X-Tenant-Id':identity.tenantId},
+ return {base,descriptor,sessionExpiresAt:credentials.syncTokenExpiresAt,headers:{Authorization:`Bearer ${identity.syncToken}`,'X-Sync-Token':identity.syncToken,'X-Terminal-Id':identity.terminalId,'X-Device-Id':identity.deviceId,'X-Device-Token':credentials.deviceToken!,'X-Tenant-Id':identity.tenantId},
   assertCurrent:()=>{const fresh=captureFiscalStatusBoundContext(readIdentity,readCredentials,Date.now());if(fresh.fingerprint!==fingerprint)throw Error('FISCAL_SUBMISSION_SCOPE_CHANGED');},fingerprint};
 };

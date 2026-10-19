@@ -2428,7 +2428,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [editingItem, setEditingItem] = useState<CartItem | null>(null);
    const [formatSelection, setFormatSelection] = useState<{product: Product; variantId: string | null; basePrice: number; modifiers: string[]} | null>(null);
    const articleFormatsEnabled = Boolean(formatRuntime)&&fiscalWorkflowV2Client.enabled() || formatsEnabled(config, { capabilities: activeTerminalConfig?.articleFormatCapabilities });
-   useEffect(()=>{let disposed=false;setFormatRuntime(null);setFormatMasters({});if(!v3Operational||config.featureFlags?.ARTICLE_FORMATS!==true||!fiscalWorkflowV2Client.enabled())return;void prepareFiscalFormatRuntime(activeTerminalId).then(runtime=>{if(!disposed)setFormatRuntime(runtime);}).catch(()=>{});return()=>{disposed=true;};},[v3Operational,activeTerminalId,config.featureFlags?.ARTICLE_FORMATS]);
+   useEffect(()=>{
+      let disposed=false,generation=0;
+      const prepare=()=>{
+         const current=++generation;setFormatRuntime(null);setFormatMasters({});
+         if(!v3Operational||config.featureFlags?.ARTICLE_FORMATS!==true||!fiscalWorkflowV2Client.enabled())return;
+         void prepareFiscalFormatRuntime(activeTerminalId).then(runtime=>{if(!disposed&&generation===current)setFormatRuntime(runtime);}).catch(()=>{});
+      };
+      const unsubscribe=subscribeFiscalWorkflowCapability(prepare);prepare();
+      return()=>{disposed=true;generation++;unsubscribe();};
+   },[v3Operational,activeTerminalId,config.featureFlags?.ARTICLE_FORMATS]);
    useEffect(()=>{let disposed=false;if(!formatRuntime)return;void Promise.all(baseProducts.slice(0,500).map(async product=>[product.id,await formatRuntime.masters.getPolicy(product.id)] as const)).then(rows=>{if(!disposed)setFormatMasters(Object.fromEntries(rows.filter(([,value])=>value)));});return()=>{disposed=true;};},[formatRuntime,baseProducts]);
    const [activeCartItemId, setActiveCartItemId] = useState<string | null>(null);
    const handledAccountActionIdsRef = useRef<Set<string>>(new Set());

@@ -1,4 +1,4 @@
-import {hasFiscalWorkflowCapability} from './FiscalWorkflowV2Capability';
+import {hasFiscalWorkflowCapability,observeFiscalWorkflowCapability} from './FiscalWorkflowV2Capability';
 import type {Transaction} from '../../types';
 import {dbAdapter} from '../db';
 import {createUuid} from '../../utils/uuid';
@@ -41,6 +41,7 @@ async function verifyFormatWorkflowSource(source:Transaction,state:FiscalWorkflo
 }
 export function createFiscalWorkflowV2Client({readAuth=captureFiscalStatusBoundContext,fetchImpl=fetch,store=()=>dbAdapter.fiscalWorkflowStore,readSource=async(id:string)=>await dbAdapter.getDocument<Transaction>('transactions',id)||await dbAdapter.getDocument<Transaction>('transactionHistory',id)}={}){
  const refills=new Map<string,Promise<void>>();const inFlight=new Map<string,Promise<FiscalWorkflowStateV2>>();let cursor='',generation=0;let currentAuthority:{fingerprint:string;authorityHash:string;expires:number}|null=null;
+ let discovering:{key:string;promise:Promise<void>}|null=null;
  const authorityFingerprint=(auth:ReturnType<typeof readAuth>)=>json([auth.base,auth.headers,(auth as any).fingerprint||null]);
  const authorityFor=(auth:ReturnType<typeof readAuth>)=>currentAuthority?.fingerprint===authorityFingerprint(auth)&&currentAuthority.expires>Date.now()?currentAuthority.authorityHash:undefined;
  const request=async(path:string,body?:Record<string,any>,signal?:AbortSignal)=>{
@@ -50,6 +51,21 @@ export function createFiscalWorkflowV2Client({readAuth=captureFiscalStatusBoundC
  return {
  enabled(){try{const auth=readAuth();auth.assertCurrent();return hasFiscalWorkflowCapability(auth.base,auth.headers);}catch{return false;}},
  invalidate(){generation++;cursor='';currentAuthority=null;},
+ discover():Promise<void>{
+  let auth:ReturnType<typeof readAuth>;try{auth=readAuth();auth.assertCurrent();}catch(error){return Promise.reject(error);}
+  if(hasFiscalWorkflowCapability(auth.base,auth.headers))return Promise.resolve();
+  const key=authorityFingerprint(auth),epoch=generation;if(discovering?.key===key)return discovering.promise;
+  const promise=(async()=>{
+   const {data}=await request('capability');auth.assertCurrent();if(epoch!==generation)fail('FISCAL_WORKFLOW_CONTEXT_CHANGED');
+   const keys=['schemaVersion','capability','version','scope','authorityHash','sessionExpiresAt'];
+   const expires=Date.parse(data?.sessionExpiresAt),localExpires=Date.parse((auth as any).sessionExpiresAt||data?.sessionExpiresAt),now=Date.now();
+   if(!data||typeof data!=='object'||Array.isArray(data)||Object.keys(data).length!==keys.length||keys.some(k=>!Object.prototype.hasOwnProperty.call(data,k))
+    ||data.schemaVersion!==2||data.capability!=='fiscalWorkflowV2'||data.version!==2||!contexts(data.scope,scopeOf(auth.descriptor))
+    ||typeof data.sessionExpiresAt!=='string'||!/^[a-f0-9]{64}$/.test(data.authorityHash)||!Number.isFinite(expires)||!Number.isFinite(localExpires)||Math.min(expires,localExpires)<=now)fail();
+   // Discovery grants availability only. The normal permit response must still prove its own authority.
+   observeFiscalWorkflowCapability(auth.base,auth.headers,'2',now,Math.min(300000,expires-now,localExpires-now));
+  })().finally(()=>{if(discovering?.promise===promise)discovering=null;});discovering={key,promise};return promise;
+ },
  prefetch():Promise<void>{
   if(!this.enabled())return Promise.resolve();
   const captured=readAuth(),refillKey=authorityFingerprint(captured),epoch=generation,existing=refills.get(refillKey);if(existing)return existing;
