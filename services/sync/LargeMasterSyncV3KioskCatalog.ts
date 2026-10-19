@@ -15,7 +15,6 @@ export interface V3KioskPage {
 /** One immutable sale context shared by catalog and checkout; never hydrates App's legacy catalog. */
 export class LargeMasterSyncV3KioskCatalog {
   private active = true;
-  private readonly contextKey: string;
   private constructor(
     readonly config: BusinessConfig,
     readonly categories: V3OperationalCategory[],
@@ -26,13 +25,21 @@ export class LargeMasterSyncV3KioskCatalog {
     private readonly context: V3KioskContext,
     private readonly getContext: () => V3KioskContext,
     private readonly assertIdentity: () => void,
-  ) { this.contextKey = JSON.stringify(context); }
+    private readonly contextKey: string,
+  ) {}
 
   static async open(getContext: () => V3KioskContext,
     openSession: () => Promise<LargeMasterSyncV3OperationalSession> = getLargeMasterSyncV3OperationalSession,
     readIdentity = readLargeMasterSyncV3BoundIdentity,
     readBindingProof = readOperationalCatalogBindingProof): Promise<LargeMasterSyncV3KioskCatalog> {
     const context = getContext();
+    const contextConfig = context.config;
+    const contextKey = JSON.stringify(context);
+    const assertOpeningContext = () => {
+      const current = getContext();
+      if (current.config !== contextConfig || JSON.stringify(current) !== contextKey)
+        throw Error('SYNC_V3_KIOSK_CONTEXT_CHANGED');
+    };
     const terminal = context.config.terminals.find(row => row.id === context.terminalId);
     const identity = readIdentity();
     const proof = readBindingProof();
@@ -54,8 +61,14 @@ export class LargeMasterSyncV3KioskCatalog {
     if (!allowed.includes(tariffId)) throw Error('SYNC_V3_TARIFF_UNAVAILABLE');
     if (!terminal.config.inventoryScope?.visibleWarehouseIds?.includes(warehouseId)) throw Error('SYNC_V3_WAREHOUSE_UNAVAILABLE');
     const session = await openSession();
+    assertOpeningContext();
+    assertIdentity();
     const [config, source] = await Promise.all([session.projectConfig(context.config), session.catalog(tariffId, warehouseId)]);
+    assertOpeningContext();
+    assertIdentity();
     const allCategories = await source.categories();
+    assertOpeningContext();
+    assertIdentity();
     const normalize = (value: string) => value.trim().toLowerCase();
     const declared = new Set((terminal.config.catalog?.allowedCategories || []).map(normalize));
     const categoryAliases = new Set<string>(declared);
@@ -64,7 +77,7 @@ export class LargeMasterSyncV3KioskCatalog {
       if (aliases.some(value => declared.has(value))) aliases.forEach(value => categoryAliases.add(value));
     }
     const categories = declared.size ? allCategories.filter(row => categoryAliases.has(normalize(row.key)) || categoryAliases.has(normalize(row.label))) : allCategories;
-    const result = new LargeMasterSyncV3KioskCatalog(config, categories, tariffId, warehouseId, source, session, context, getContext, assertIdentity);
+    const result = new LargeMasterSyncV3KioskCatalog(config, categories, tariffId, warehouseId, source, session, context, getContext, assertIdentity, contextKey);
     await result.assertCurrent();
     return result;
   }

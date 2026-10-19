@@ -100,3 +100,22 @@ test('an entirely unsupported native page keeps the next cursor and diagnostics;
    await assert.rejects(f.open(),/UNAVAILABLE/);
  }finally{f.sql.close();}}
 });
+
+test('opening pins context before the first await and rejects in-place revocations while session preparation waits',async()=>{
+ const mutations: Array<(context: Awaited<ReturnType<typeof nativeFixture>>['context'])=>void>=[
+  context=>{context.config.terminals[0].config.pricing!.defaultTariffId='REVOKED';},
+  context=>{context.config.terminals[0].config.pricing!.allowedTariffIds=[];},
+  context=>{context.config.terminals[0].config.inventoryScope!.defaultSalesWarehouseId='OTHER';},
+  context=>{context.config.terminals[0].config.inventoryScope!.visibleWarehouseIds=[];},
+  context=>{context.config.terminals[0].config.currentDeviceId='OTHER';},
+  context=>{context.config.terminals[0].config.erpBinding={...context.config.terminals[0].config.erpBinding,companyId:'OTHER'};},
+  context=>{context.config.terminals[0].config.catalog={allowedCategories:['OTHER']};},
+  context=>{context.terminalId='OTHER';},
+ ];
+ for(const mutate of mutations){const f=await nativeFixture();try{
+  let resume!:()=>void;const gate=new Promise<void>(resolve=>{resume=resolve;});
+  const pending=LargeMasterSyncV3KioskCatalog.open(()=>f.context,async()=>{await gate;return f.session;},()=>f.identity,()=>f.proof);
+  mutate(f.context);resume();
+  await assert.rejects(pending,/CONTEXT_CHANGED/);
+ }finally{f.sql.close();}}
+});
