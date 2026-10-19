@@ -1,3 +1,4 @@
+import { useLargeMasterSyncV3Kiosk } from './components/kiosk/useLargeMasterSyncV3Kiosk';
 import {resolveAttendanceScope} from './services/attendance/LocalAttendance';
 import {assertInventoryPresentationReturnAllowed} from './services/inventoryPresentations/selection';
 import {clearFiscalWorkflowCapability} from './services/fiscal/FiscalWorkflowV2Capability';
@@ -5238,6 +5239,12 @@ const AppContent: React.FC = () => {
   const [kioskCouponBenefit, setKioskCouponBenefit] = useState<KioskCouponBenefit | null>(null);
   const [kioskServiceType, setKioskServiceType] = useState<Extract<OrderServiceType, 'DINE_IN' | 'TAKEOUT'> | null>(null);
   const [kioskOrderNumber, setKioskOrderNumber] = useState<string | null>(null);
+  const kioskV3Enabled = LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED && (currentView === 'KIOSK_BROWSER' || currentView === 'KIOSK_PAYMENT');
+  const kioskV3 = useLargeMasterSyncV3Kiosk(kioskV3Enabled, config, getCurrentTerminal()?.id || '');
+  const kioskV3CartRef = useRef(cart);
+  kioskV3CartRef.current = cart;
+  const kioskV3AddingRef = useRef(false);
+
   const [ambiguousProductionPrints, setAmbiguousProductionPrints] = useState<ProductionPrintIntent[]>([]);
   const [resolvingProductionPrintId, setResolvingProductionPrintId] = useState<string | null>(null);
   const refreshAmbiguousProductionPrints = useCallback(() => {
@@ -11615,7 +11622,7 @@ const AppContent: React.FC = () => {
     });
   }, [fiscalStatusWorker,isDataLoaded,fiscalHistoryHydrated,isSecurityLoaded,deviceId,config.companyInfo.rnc,fiscalStatusLifecycleKey]);
 
-  const handleTransactionComplete = async (txn: Transaction) => {
+  const handleTransactionComplete = async (txn: Transaction, onCommitted?: (transaction: Transaction) => void) => {
     if((txn as any).articleFormatWire?.schema_version===2){const original=await db.getDocument('transactionHistory',txn.id) as Transaction|null;if(!original||financialIdentity(original)!==financialIdentity(txn))throw Error('FISCAL_WORKFLOW_RETAINED_SOURCE_CHANGED');setTransactions(previous=>[...previous.filter(row=>row.id!==original.id),original]);return;}
     assertFormatsPostingClosed(txn.items || []);
     const fiscalTerminal = (config.terminals || []).find(terminal => terminal.config?.currentDeviceId === deviceId);
@@ -11639,6 +11646,7 @@ const AppContent: React.FC = () => {
         if (!completed) throw error;
         result = {transaction:completed,created:false};
       }
+      onCommitted?.(result.transaction);
       if (txn.v3ReservationClaimId) Object.assign(txn,result.transaction); // Return committed numbering to the existing receipt caller.
       setTransactions(previous => [...previous.filter(row => row.id !== result.transaction.id), result.transaction]);
       if (result.transaction.customerId && result.transaction.pendingBalance) {
@@ -14924,12 +14932,19 @@ const AppContent: React.FC = () => {
       case 'KIOSK_BROWSER':
         const kioskBrowserTerminal = getCurrentTerminal();
         const kioskBrowserRestaurantMode = isRestaurantBusiness(config, kioskBrowserTerminal?.config);
+        if (kioskV3Enabled && !kioskV3.catalog) return <div role={kioskV3.error ? 'alert' : 'status'} className="p-8">
+          <p>{kioskV3.error ? `Catálogo no disponible: ${kioskV3.error}` : 'Preparando catálogo autorizado e inventario…'}</p>
+          <button type="button" onClick={() => handleViewChange('KIOSK_WELCOME')}>Volver al inicio</button>
+        </div>;
         return (
           <KioskProductBrowser
             products={products}
+            v3Catalog={kioskV3Enabled ? kioskV3.catalog : undefined}
             warehouses={warehouses}
             cart={cart}
-            onAddToCart={(product, quantity = 1) => {
+            onAddToCart={async (product, quantity = 1) => {
+              if (kioskV3Enabled && (kioskV3.payment.pending || kioskV3AddingRef.current)) { alert('Espera o reintenta el pago pendiente con el mismo pedido.'); return; }
+              const expectedCart = kioskV3CartRef.current;
               const sourceCartId = String((product as Partial<CartItem>).cartId || '').trim();
               const existing = sourceCartId
                 ? cart.find(item => item.cartId === sourceCartId)
@@ -14944,14 +14959,34 @@ const AppContent: React.FC = () => {
               } else {
                 newCart = [...cart, { ...product, quantity, cartId: sourceCartId || uuidv4() } as CartItem];
               }
-              setCart(applyKioskCartPromotions(newCart.filter(item => item.quantity > 0)));
+              const next = applyKioskCartPromotions(newCart.filter(item => item.quantity > 0));
+              if (kioskV3Enabled) {
+                kioskV3AddingRef.current = true;
+                try {
+                  if (!kioskV3.catalog) throw Error('Catálogo autorizado no disponible.');
+                  await kioskV3.catalog.validate(next);
+                  if (expectedCart !== kioskV3CartRef.current) throw Error('El pedido cambió durante la validación. Intenta de nuevo.');
+                  setCart(next);
+                } catch (reason) { alert(reason instanceof Error ? reason.message : 'No se pudo validar el artículo.'); }
+                finally { kioskV3AddingRef.current = false; }
+              } else setCart(next);
             }}
             onRemoveFromCart={(cartIdentity) => {
+              if (kioskV3Enabled && kioskV3.payment.pending) { alert('Reintenta el pago pendiente antes de cambiar el pedido.'); return; }
               const newCart = cart.filter(item => (item.cartId || item.id) !== cartIdentity);
               setCart(applyKioskCartPromotions(newCart));
             }}
-            onCheckout={() => handleViewChange('KIOSK_PAYMENT')}
+            onCheckout={async () => {
+              try {
+                if (kioskV3Enabled) {
+                  if (!kioskV3.catalog) throw Error('Catálogo autorizado no disponible.');
+                  await kioskV3.catalog.validate(cart);
+                }
+                handleViewChange('KIOSK_PAYMENT');
+              } catch (reason) { alert(reason instanceof Error ? reason.message : 'No se pudo validar el pedido.'); }
+            }}
             onCancel={() => {
+              if (kioskV3Enabled && kioskV3.payment.pending) { alert('Reintenta el pago pendiente con el mismo pedido.'); return; }
               clearSecurityState();
               recordCheckoutDiagnostic('CART_CLEAR_REQUEST', { items: cart, tableId: activeTable?.id, orderId: activeTable?.currentOrderId, reason: 'APP_CLEAR_02' });
               setCart([]);
@@ -14961,8 +14996,8 @@ const AppContent: React.FC = () => {
               setKioskOrderNumber(null);
               handleViewChange('KIOSK_WELCOME');
             }}
-            config={config}
-            terminalId={getCurrentTerminal()?.id || 'T1'}
+            config={kioskV3Enabled ? kioskV3.catalog!.config : config}
+            terminalId={kioskV3Enabled ? kioskBrowserTerminal?.id : kioskBrowserTerminal?.id || 'T1'}
             customerConfidenceIndex={selectedCustomer ? 1 : 0.75}
             selectedCustomer={selectedCustomer}
             redeemedCoupon={kioskRedeemedCoupon}
@@ -14998,38 +15033,40 @@ const AppContent: React.FC = () => {
         );
 
       case 'KIOSK_PAYMENT':
+        const kioskPaymentConfig = kioskV3Enabled ? kioskV3.catalog?.config : config;
+        if (!kioskPaymentConfig) return <div role={kioskV3.error ? 'alert' : 'status'} className="p-8">{kioskV3.error || 'Preparando validación del pago…'}<button type="button" onClick={() => handleViewChange('KIOSK_BROWSER')}>Volver al pedido</button></div>;
         const kioskTerminal = getCurrentTerminal();
         const kioskActiveConfig = kioskTerminal?.config;
         const kioskCartGrossTotal = roundMoney(cart.reduce((sum, item) => {
           return sum + Math.abs((Number(item.price) || 0) * (Number(item.quantity) || 0));
         }, 0));
         const kioskCouponDiscountAmount = getKioskCouponDiscountAmount(kioskCartGrossTotal);
-        const kioskPaymentMethods = resolveKioskPaymentMethods(config, selectedCustomer);
-        const kioskPaymentRestaurantMode = isRestaurantBusiness(config, kioskActiveConfig);
+        const kioskPaymentMethods = resolveKioskPaymentMethods(kioskPaymentConfig, selectedCustomer);
+        const kioskPaymentRestaurantMode = isRestaurantBusiness(kioskPaymentConfig, kioskActiveConfig);
         const kioskTotals = buildKioskPaymentTotals(
           cart,
-          config,
+          kioskPaymentConfig,
           kioskActiveConfig,
           kioskCouponDiscountAmount,
           kioskPaymentRestaurantMode ? kioskServiceType : null,
         );
-        return (
-          <KioskPayment
-            cart={cart}
-            paymentMethods={kioskPaymentMethods}
-            totals={kioskTotals}
-            selectedCustomer={selectedCustomer}
-            redeemedCoupon={kioskRedeemedCoupon}
-            onLookupCustomerByCode={handleKioskCustomerLookup}
-            onLookupCustomerByPhone={handleKioskCustomerLookup}
-            onRedeemCoupon={handleKioskCouponRedeem}
-            onClearCustomer={clearKioskCustomerSelection}
-            onClearCoupon={clearKioskCoupon}
-            onBack={() => handleViewChange('KIOSK_BROWSER')}
-            onPaymentComplete={async (method) => {
+        const completeKioskPayment = async (method: KioskResolvedPaymentMethod): Promise<Transaction> => {
+              if (kioskV3Enabled) {
+                if (method.type !== 'CASH' || kioskRedeemedCoupon || kioskCouponDiscountAmount > 0 || cart.some(line => Number(line.discountAmount || 0) !== 0))
+                  throw Error('Este pedido V3 requiere efectivo sin cupones ni descuentos. Tarjeta, wallet y cupones están detenidos antes del cobro.');
+                if (!kioskV3.catalog) throw Error('Catálogo autorizado no disponible.');
+                await kioskV3.catalog.assertCurrent();
+                const retry = kioskV3.payment.retryDraft;
+                if (retry) {
+                  await handleTransactionComplete(retry, committed => Object.assign(retry, committed));
+                  return retry;
+                }
+                await kioskV3.catalog.validate(cart);
+              }
+
               console.log(`Payment completed with ${method.label} (${method.type})`);
 
-              // Get current terminal and config
+              // Get current terminal and kioskPaymentConfig
               const currentTerminal = kioskTerminal || getCurrentTerminal();
               const activeConfig = currentTerminal?.config;
               const kioskOperator: Pick<User, 'id' | 'name'> = currentUser
@@ -15037,7 +15074,7 @@ const AppContent: React.FC = () => {
                 || { id: 'self-checkout', name: 'Self Checkout' };
 
               if (!currentTerminal || !activeConfig) {
-                console.error("Missing terminal config for kiosk transaction");
+                console.error("Missing terminal kioskPaymentConfig for kiosk transaction");
                 throw new Error('Esta terminal no tiene configuración activa para completar el pago.');
               }
               if (kioskPaymentRestaurantMode && !kioskServiceType) {
@@ -15076,15 +15113,18 @@ const AppContent: React.FC = () => {
                   throw new Error(`Saldo insuficiente en wallet. Disponible: ${walletBalance.toFixed(2)}.`);
                 }
               }
-              const baseCurrency = config.currencies?.find(currency => currency.isBase)?.code || 'DOP';
-              const configuredMethod = (config.paymentMethods || []).find(paymentMethod => paymentMethod.id === method.id)
-                || (config.paymentMethods || []).find(paymentMethod => paymentMethod.type === method.type && paymentMethod.name === method.label)
-                || (config.paymentMethods || []).find(paymentMethod => paymentMethod.type === method.type);
+              const baseCurrency = kioskPaymentConfig.currencies?.find(currency => currency.isBase)?.code || 'DOP';
+              const configuredMethod = (kioskPaymentConfig.paymentMethods || []).find(paymentMethod => paymentMethod.id === method.id)
+                || (kioskPaymentConfig.paymentMethods || []).find(paymentMethod => paymentMethod.type === method.type && paymentMethod.name === method.label)
+                || (kioskPaymentConfig.paymentMethods || []).find(paymentMethod => paymentMethod.type === method.type);
+              if (kioskV3Enabled && (configuredMethod?.type !== 'CASH' || configuredMethod.id !== method.id)) {
+                throw Error('El método de pago no coincide con el efectivo autorizado. No se ha realizado ningún cobro.');
+              }
               const isIntegratedCard = configuredMethod?.type === 'CARD' && configuredMethod.integrationMode === 'INTEGRATED';
               const assignedIntegration = configuredMethod?.integrationId
-                ? config.integrations?.find(integration => integration.id === configuredMethod.integrationId)
+                ? kioskPaymentConfig.integrations?.find(integration => integration.id === configuredMethod.integrationId)
                 : (configuredMethod?.integration && configuredMethod.integration !== 'NONE'
-                    ? config.integrations?.find(integration => integration.provider === configuredMethod.integration)
+                    ? kioskPaymentConfig.integrations?.find(integration => integration.provider === configuredMethod.integration)
                   : undefined);
 
               // Get assigned sequence
@@ -15100,6 +15140,7 @@ const AppContent: React.FC = () => {
               }
 
               try {
+                if (kioskV3Enabled) await kioskV3.catalog!.validate(cart);
                 // Kiosk has no fiscal reservation: reject unsupported fiscal drafts before charging.
                 await db.assertFiscalTransactionAuthority({ documentType: 'TICKET', terminalId: currentTerminal.id }, activeConfig);
                 let gatewayPaymentFields: Partial<PaymentEntry> = {};
@@ -15156,7 +15197,7 @@ const AppContent: React.FC = () => {
                   };
                 }
 
-                const kioskTransactionItems = freezeAuthoritativeLineFiscalAmounts(cart, config, {
+                const kioskTransactionItems = freezeAuthoritativeLineFiscalAmounts(cart, kioskPaymentConfig, {
                   isTaxIncluded: kioskTotals.taxIncluded,
                   terminalConfig: activeConfig,
                   transactionNetAmount: kioskTotals.subtotal,
@@ -15166,7 +15207,7 @@ const AppContent: React.FC = () => {
                 });
 
                 // Create Transaction
-                const txn = await transactionService.createTransaction({
+                const createKioskTransaction = () => transactionService.createTransaction({
                   documentType: 'TICKET',
                   seriesId: seriesId,
                   date: new Date().toISOString(),
@@ -15181,7 +15222,7 @@ const AppContent: React.FC = () => {
                     amount: total,
                     timestamp: new Date(),
                     currencyCode: baseCurrency,
-                    currency: config.currencySymbol,
+                    currency: kioskPaymentConfig.currencySymbol,
                     ...gatewayPaymentFields,
                   }],
                   userId: kioskOperator.id,
@@ -15215,13 +15256,17 @@ const AppContent: React.FC = () => {
                   service_tax_policy_snapshot: kioskPaymentRestaurantMode ? kioskTotals.serviceTaxPolicySnapshot : undefined,
                   serviceChargeAmount: kioskPaymentRestaurantMode ? kioskTotals.serviceChargeAmount : undefined,
                   orderNumber: kioskPaymentRestaurantMode ? kioskOrderNumber || undefined : undefined,
-                });
+                }, kioskV3Enabled ? { deferDurablePersistence: true } : undefined);
+                if (kioskV3Enabled) await kioskV3.catalog!.validate(cart);
+                const txn = kioskV3Enabled
+                  ? await kioskV3.payment.transaction(createKioskTransaction)
+                  : await createKioskTransaction();
 
                 if (kioskRedeemedCoupon) {
                   const finalTicketRef = txn.displayId || txn.id;
                   const configWithFinalCouponRef: BusinessConfig = {
                     ...config,
-                    coupons: (config.coupons || []).map((coupon) =>
+                    coupons: (kioskPaymentConfig.coupons || []).map((coupon) =>
                       coupon.id === kioskRedeemedCoupon.id
                         ? {
                           ...coupon,
@@ -15260,7 +15305,7 @@ const AppContent: React.FC = () => {
                 }
 
                 // Save and Sync
-                await handleTransactionComplete(txn);
+                await handleTransactionComplete(txn, kioskV3Enabled ? committed => Object.assign(txn, committed) : undefined);
                 if (kioskPaymentRestaurantMode) {
                   try {
                     const productionAreas = Array.isArray(kioskProductionAreas) ? kioskProductionAreas : [];
@@ -15289,7 +15334,7 @@ const AppContent: React.FC = () => {
                           items: areaItems,
                           printerId: area.printer_id || area.printerId,
                         });
-                        await dispatchProductionPrint(printIntent, (intent) => printComanda(config, {
+                        await dispatchProductionPrint(printIntent, (intent) => printComanda(kioskPaymentConfig, {
                           items: intent.items,
                           orderNumber: intent.orderNumber,
                           customerName: intent.customerName,
@@ -15330,7 +15375,7 @@ const AppContent: React.FC = () => {
                         total: roundMoney(areaItems.reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0), 0)),
                       };
                       const intent = createProductionDispatchIntent({
-                        kdsBaseUrl: resolveKdsBaseUrl(area, config),
+                        kdsBaseUrl: resolveKdsBaseUrl(area, kioskPaymentConfig),
                         cartIds: areaItems.map(item => item.cartId),
                         payload,
                       });
@@ -15345,19 +15390,37 @@ const AppContent: React.FC = () => {
                 console.error("Error creating kiosk transaction:", error);
                 throw new Error(error instanceof Error ? error.message : "Error al guardar la transacción. Por favor intente de nuevo.");
               }
-            }}
+
+        };
+        return (
+          <KioskPayment
+            cart={cart}
+            paymentMethods={kioskPaymentMethods}
+            totals={kioskTotals}
+            selectedCustomer={selectedCustomer}
+            redeemedCoupon={kioskRedeemedCoupon}
+            onLookupCustomerByCode={handleKioskCustomerLookup}
+            onLookupCustomerByPhone={handleKioskCustomerLookup}
+            onRedeemCoupon={kioskV3Enabled ? () => ({ success: false, message: 'Los cupones están detenidos en el kiosco V3; no se ha modificado el cupón.' }) : handleKioskCouponRedeem}
+            onClearCustomer={clearKioskCustomerSelection}
+            onClearCoupon={clearKioskCoupon}
+            onBack={() => { if (kioskV3Enabled && kioskV3.payment.pending) { alert('Reintenta el pago pendiente con el mismo pedido.'); return; } handleViewChange('KIOSK_BROWSER'); }}
+            onPaymentComplete={method => kioskV3Enabled
+              ? kioskV3.payment.run(JSON.stringify([cart, method, selectedCustomer?.id, kioskRedeemedCoupon, kioskTotals, kioskPaymentConfig.terminals, kioskServiceType]), () => completeKioskPayment(method))
+              : completeKioskPayment(method)}
             onPrintReceipt={async (transaction) => {
-              if (!config) {
+              if (!kioskPaymentConfig) {
                 throw new Error('No hay configuración disponible para imprimir.');
               }
 
-              const printed = await printTicket(transaction, config);
+              const printed = await printTicket(transaction, kioskPaymentConfig);
               if (!printed) {
                 throw new Error('La impresora no respondió. Verifica el módulo de hardware.');
               }
               return printed;
             }}
             onCancel={() => {
+              if (kioskV3Enabled && kioskV3.payment.pending) { alert('Reintenta el pago pendiente con el mismo pedido.'); return; }
               clearSecurityState();
               recordCheckoutDiagnostic('CART_CLEAR_REQUEST', { items: cart, tableId: activeTable?.id, orderId: activeTable?.currentOrderId, reason: 'APP_CLEAR_03' });
               setCart([]);
