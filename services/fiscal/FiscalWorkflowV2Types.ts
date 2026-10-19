@@ -7,7 +7,7 @@ export interface FiscalWorkflowStateV2 {schemaVersion:2;source:'ERP_POS_FISCAL_W
 export interface FiscalWorkflowStore {
  refillOperation(scopeKey:string):Promise<string>;
  savePermits(scopeKey:string,operationId:string,permits:FiscalWorkflowPermitV2[]):Promise<void>;
- reserveCheckout(scopeKey:string,cartIdentity:string,selection?:{operationKind:'RETURN'|'VOID';originalReference:NonNullable<FiscalWorkflowPermitV2['originalReference']>},operationId?:string,options?:{requirePermit?:boolean}):Promise<FiscalWorkflowCheckoutV2>;
+ reserveCheckout(scopeKey:string,cartIdentity:string,selection?:{operationKind:'RETURN'|'VOID';originalReference:NonNullable<FiscalWorkflowPermitV2['originalReference']>},operationId?:string,options?:{requirePermit?:boolean;authorityHash?:string}):Promise<FiscalWorkflowCheckoutV2>;
  markPaymentPossible(checkoutId:string,paymentId:string):Promise<void>;
  acknowledgeCheckout(checkoutId:string):Promise<void>;
  currentCheckout(scopeKey:string):Promise<FiscalWorkflowCheckoutV2|null>;

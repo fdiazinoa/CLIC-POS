@@ -40,24 +40,48 @@ async function verifyFormatWorkflowSource(source:Transaction,state:FiscalWorkflo
  }catch{return false;}
 }
 export function createFiscalWorkflowV2Client({readAuth=captureFiscalStatusBoundContext,fetchImpl=fetch,store=()=>dbAdapter.fiscalWorkflowStore,readSource=async(id:string)=>await dbAdapter.getDocument<Transaction>('transactions',id)||await dbAdapter.getDocument<Transaction>('transactionHistory',id)}={}){
- const refills=new Map<string,Promise<void>>();const inFlight=new Map<string,Promise<FiscalWorkflowStateV2>>();let cursor='',generation=0;
+ const refills=new Map<string,Promise<void>>();const inFlight=new Map<string,Promise<FiscalWorkflowStateV2>>();let cursor='',generation=0;let currentAuthority:{fingerprint:string;authorityHash:string;expires:number}|null=null;
+ const authorityFingerprint=(auth:ReturnType<typeof readAuth>)=>json([auth.base,auth.headers,(auth as any).fingerprint||null]);
+ const authorityFor=(auth:ReturnType<typeof readAuth>)=>currentAuthority?.fingerprint===authorityFingerprint(auth)&&currentAuthority.expires>Date.now()?currentAuthority.authorityHash:undefined;
  const request=async(path:string,body?:Record<string,any>,signal?:AbortSignal)=>{
   const auth=readAuth();auth.assertCurrent();const controller=new AbortController(),abort=()=>controller.abort();signal?.addEventListener('abort',abort,{once:true});const timer=setTimeout(abort,8000);
   try{const response=await fetchImpl(`${auth.base}/fiscal/workflow/v2/${path}`,{method:body?'POST':'GET',headers:{...auth.headers,Accept:'application/json',...(body?{'Content-Type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{}),credentials:'omit',cache:'no-store',redirect:'error',signal:controller.signal});const data=await response.json();auth.assertCurrent();if(!response.ok)fail(typeof data?.code==='string'?data.code:'FISCAL_WORKFLOW_UNAVAILABLE');if(JSON.stringify(data).length>600000)fail();return {data,auth};}finally{clearTimeout(timer);signal?.removeEventListener('abort',abort);}
  };
  return {
  enabled(){try{const auth=readAuth();auth.assertCurrent();return hasFiscalWorkflowCapability(auth.base,auth.headers);}catch{return false;}},
- invalidate(){generation++;cursor='';},
- prefetch():Promise<void>{if(!this.enabled())return Promise.resolve();const captured=readAuth(),refillKey=json([captured.base,captured.headers]),epoch=generation;const existing=refills.get(refillKey);if(existing)return existing;const refill=(async()=>{const native=store();if(!native)return;const auth=captured,key=json(scopeOf(auth.descriptor)),operationId=await native.refillOperation(key);auth.assertCurrent();const {data}=await request('permits',{operationId,capability:'fiscalWorkflowV2'});if(data?.schemaVersion!==2||!Array.isArray(data.permits)||data.permits.length>16)fail();for(const permit of data.permits as FiscalWorkflowPermitV2[])if(permit.schemaVersion!==2||!contexts(permit.scope,scopeOf(auth.descriptor))||!/^\d{9}(?:\d{2})?$/.test(permit.issuerRnc)||!Number.isFinite(Date.parse(permit.expiresAt))||!permit.transactionId||!permit.permitId||!permit.nonce)fail();auth.assertCurrent();if(epoch!==generation||!hasFiscalWorkflowCapability(auth.base,auth.headers))fail('FISCAL_WORKFLOW_DISABLED');await native.savePermits(key,operationId,data.permits);})().finally(()=>{refills.delete(refillKey);});refills.set(refillKey,refill);return refill;},
- async reserveCheckout(cartIdentity:string,operationId:string,options?:{requirePermit?:boolean}):Promise<FiscalWorkflowCheckoutV2>{if(!this.enabled())fail('FISCAL_WORKFLOW_DISABLED');const native=store();if(!native)fail('FISCAL_WORKFLOW_NATIVE_REQUIRED');const auth=readAuth();auth.assertCurrent();const checkout=await native.reserveCheckout(json(scopeOf(auth.descriptor)),cartIdentity,undefined,operationId,options);auth.assertCurrent();return checkout;},
+ invalidate(){generation++;cursor='';currentAuthority=null;},
+ prefetch():Promise<void>{
+  if(!this.enabled())return Promise.resolve();
+  const captured=readAuth(),refillKey=authorityFingerprint(captured),epoch=generation,existing=refills.get(refillKey);if(existing)return existing;
+  const refill=(async()=>{
+   const native=store();if(!native)return;const auth=captured,key=json(scopeOf(auth.descriptor));
+   for(let attempt=0;attempt<2;attempt++){
+    const operationId=await native.refillOperation(key);auth.assertCurrent();
+    const {data}=await request('permits',{operationId,capability:'fiscalWorkflowV2'});
+    if(data?.schemaVersion!==2||!Array.isArray(data.permits)||data.permits.length>16||!/^[a-f0-9]{64}$/.test(data.authorityHash)
+      ||(data.refillRequired!==undefined&&typeof data.refillRequired!=='boolean')||data.refillRequired&&data.permits.length)fail();
+    if(currentAuthority?.fingerprint===authorityFingerprint(auth)&&currentAuthority.authorityHash!==data.authorityHash)currentAuthority=null;
+    for(const permit of data.permits as FiscalWorkflowPermitV2[])if(permit.schemaVersion!==2||!contexts(permit.scope,scopeOf(auth.descriptor))
+      ||!/^\d{9}(?:\d{2})?$/.test(permit.issuerRnc)||!Number.isFinite(Date.parse(permit.expiresAt))||Date.parse(permit.expiresAt)<=Date.now()
+      ||!permit.transactionId||!permit.permitId||!permit.nonce||permit.authorityHash!==data.authorityHash||permit.state&&permit.state!=='PERMIT')fail();
+    auth.assertCurrent();if(epoch!==generation||!hasFiscalWorkflowCapability(auth.base,auth.headers))fail('FISCAL_WORKFLOW_DISABLED');
+    await native.savePermits(key,operationId,data.permits);auth.assertCurrent();if(epoch!==generation)fail('FISCAL_WORKFLOW_DISABLED');
+    if(data.refillRequired){currentAuthority=null;continue;}
+    currentAuthority={fingerprint:authorityFingerprint(auth),authorityHash:data.authorityHash,expires:Date.now()+300000};return;
+   }
+   fail('FISCAL_WORKFLOW_PERMIT_REQUIRED');
+  })().finally(()=>{refills.delete(refillKey);});refills.set(refillKey,refill);return refill;
+ },
+ async reserveCheckout(cartIdentity:string,operationId:string,options?:{requirePermit?:boolean}):Promise<FiscalWorkflowCheckoutV2>{if(!this.enabled())fail('FISCAL_WORKFLOW_DISABLED');const native=store();if(!native)fail('FISCAL_WORKFLOW_NATIVE_REQUIRED');const auth=readAuth();auth.assertCurrent();const checkout=await native.reserveCheckout(json(scopeOf(auth.descriptor)),cartIdentity,undefined,operationId,options?.requirePermit?{...options,authorityHash:authorityFor(auth)}:options);auth.assertCurrent();return checkout;},
  async reserveReferencedCheckout(cartIdentity:string,operationKind:'RETURN'|'VOID',originalReference:NonNullable<FiscalWorkflowPermitV2['originalReference']>,operationId:string){
   if(!this.enabled())fail('FISCAL_WORKFLOW_DISABLED');const native=store();if(!native)fail('FISCAL_WORKFLOW_NATIVE_REQUIRED');const auth=readAuth(),scopeKey=json(scopeOf(auth.descriptor));auth.assertCurrent();
-  const existing=await native.currentCheckout(scopeKey);if(existing&&!(existing.phase==='ACKNOWLEDGED'&&existing.operationId!==operationId)){if(existing.cartIdentity!==cartIdentity||existing.permit?.operationKind!==operationKind||json(existing.permit.originalReference)!==json(originalReference))fail('FISCAL_WORKFLOW_CHECKOUT_RECONCILIATION_REQUIRED');auth.assertCurrent();return existing;}
+  const existing=await native.currentCheckout(scopeKey);if(existing&&!(existing.phase==='ACKNOWLEDGED'&&existing.operationId!==operationId)){if(existing.cartIdentity!==cartIdentity||existing.permit?.operationKind!==operationKind||json(existing.permit.originalReference)!==json(originalReference))fail('FISCAL_WORKFLOW_CHECKOUT_RECONCILIATION_REQUIRED');if(['COMMITTED','ACKNOWLEDGED'].includes(existing.phase)){auth.assertCurrent();return existing;}}
   const operationKey=scopeKey+'|'+operationId,requestOperationId=await native.refillOperation(operationKey);
   const {data}=await request('permits',{operationId:requestOperationId,capability:'fiscalWorkflowV2',operationKind,originalReference});
-  if(data?.schemaVersion!==2||!Array.isArray(data.permits)||data.permits.length!==1)fail('FISCAL_WORKFLOW_REFERENCED_PERMIT_REQUIRED');
-  const p=data.permits[0] as FiscalWorkflowPermitV2;if(!contexts(p.scope,scopeOf(auth.descriptor))||p.operationKind!==operationKind||json(p.originalReference)!==json(originalReference))fail();
-  auth.assertCurrent();await native.savePermits(operationKey,requestOperationId,[p]);const checkout=await native.reserveCheckout(scopeKey,cartIdentity,{operationKind,originalReference},operationId);auth.assertCurrent();return checkout;
+  if(data?.schemaVersion===2&&data.refillRequired===true&&Array.isArray(data.permits)&&!data.permits.length&&/^[a-f0-9]{64}$/.test(data.authorityHash)){auth.assertCurrent();await native.savePermits(operationKey,requestOperationId,[]);fail('FISCAL_WORKFLOW_REFERENCED_PERMIT_REQUIRED');}
+  if(data?.schemaVersion!==2||!Array.isArray(data.permits)||data.permits.length!==1||!/^[a-f0-9]{64}$/.test(data.authorityHash)||data.refillRequired)fail('FISCAL_WORKFLOW_REFERENCED_PERMIT_REQUIRED');
+  const p=data.permits[0] as FiscalWorkflowPermitV2;if(!contexts(p.scope,scopeOf(auth.descriptor))||p.operationKind!==operationKind||json(p.originalReference)!==json(originalReference)||p.authorityHash!==data.authorityHash)fail();
+  auth.assertCurrent();await native.savePermits(operationKey,requestOperationId,[p]);const checkout=await native.reserveCheckout(scopeKey,cartIdentity,{operationKind,originalReference},operationId,{requirePermit:true,authorityHash:p.authorityHash});auth.assertCurrent();return checkout;
  },
  async recordPayment(checkout:FiscalWorkflowCheckoutV2,paymentId:string){await store()?.markPaymentPossible(checkout.checkoutId,paymentId);},
  async acknowledge(checkout:FiscalWorkflowCheckoutV2){await store()?.acknowledgeCheckout(checkout.checkoutId);},

@@ -22,7 +22,7 @@ test('capability arrival notifies mounted preparation once per bound authority; 
 test('prefetch is singleflight and cannot save stale authority after invalidation',async()=>{
  clearFiscalWorkflowCapability();observeFiscalWorkflowCapability(base,headers,'2');let requests=0,saves=0,release:()=>void=()=>{};
  const pending=new Promise<void>(r=>{release=r;});const store:any={refillOperation:async()=> 'stable-refill',savePermits:async()=>{saves++;}};
- const client=createFiscalWorkflowV2Client({store:()=>store,readAuth:()=>({base,headers,descriptor:{tenantId:'tenant',companyId:'company',storeId:'store',terminalId:'terminal',deviceId:'device'},assertCurrent(){}}),fetchImpl:async()=>{requests++;await pending;return {ok:true,json:async()=>({schemaVersion:2,permits:[]})} as Response;}} as any);
+ const client=createFiscalWorkflowV2Client({store:()=>store,readAuth:()=>({base,headers,descriptor:{tenantId:'tenant',companyId:'company',storeId:'store',terminalId:'terminal',deviceId:'device'},assertCurrent(){}}),fetchImpl:async()=>{requests++;await pending;return {ok:true,json:async()=>({schemaVersion:2,authorityHash:'a'.repeat(64),permits:[]})} as Response;}} as any);
  const a=client.prefetch(),b=client.prefetch();assert.equal(a,b);await Promise.resolve();client.invalidate();release();await assert.rejects(a,/DISABLED/);assert.equal(requests,1);assert.equal(saves,0);clearFiscalWorkflowCapability();
 });
 test('ordinary NONE and LEGACY_B retain their local prepayment path without workflow requests',async()=>{
