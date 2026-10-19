@@ -8,6 +8,7 @@
 import React from 'react';
 import { Building2, ShoppingBag, ShoppingCart, Settings, UtensilsCrossed } from 'lucide-react';
 import type { OrderServiceType } from '../../types';
+import './RestaurantKiosk.css';
 
 interface KioskWelcomeProps {
     onStartShopping: () => void;
@@ -29,6 +30,26 @@ const KioskWelcome: React.FC<KioskWelcomeProps> = ({
         .replace(/\s+/g, ' ')
         .trim()
         .replace(/^CLIC POS$/i, 'CLIC-POS') || 'CLIC-POS';
+
+    if (restaurantMode) return (
+        <div className="restaurant-welcome">
+            <header className="restaurant-welcome-header">
+                <div className="restaurant-brand"><span className="restaurant-brand-mark"><UtensilsCrossed aria-hidden="true" /></span><div><p>BIENVENIDO A</p><h2>{normalizedStoreName}</h2></div></div>
+                {onAdminAccess ? <button type="button" className="restaurant-admin" aria-label="Acceso administrativo" onClick={onAdminAccess}><Settings size={23} /></button> : null}
+            </header>
+            <main className="restaurant-welcome-main">
+                <div className="restaurant-welcome-art" aria-hidden="true"><UtensilsCrossed strokeWidth={1.3} /></div>
+                <p className="restaurant-eyebrow">EL MOMENTO DE ELEGIR</p>
+                <h1>Un buen pedido<br />empieza contigo.</h1>
+                <p className="restaurant-welcome-description">¿Cómo deseas disfrutarlo hoy?</p>
+                <div className="restaurant-service-options" role="group" aria-label="Modalidad del pedido">
+                    <button type="button" onClick={() => onSelectServiceType?.('DINE_IN')}><Building2 aria-hidden="true" /><strong>Comer aquí</strong><span>Disfruta tu pedido en el restaurante</span></button>
+                    <button type="button" onClick={() => onSelectServiceType?.('TAKEOUT')}><ShoppingBag aria-hidden="true" /><strong>Para llevar</strong><span>Tu pedido, listo para acompañarte</span></button>
+                </div>
+            </main>
+            <footer className="restaurant-welcome-footer">ELIGE · PERSONALIZA · DISFRUTA</footer>
+        </div>
+    );
 
     return (
         <div

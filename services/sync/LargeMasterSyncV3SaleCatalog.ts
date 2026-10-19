@@ -86,6 +86,13 @@ export class LargeMasterSyncV3SaleCatalog {
     return this.priceArticles(articles);
   }
 
+  /** Bounded native IDs are candidates only; prices/taxes still come from sale authority. */
+  async getMany(articleIds: string[]): Promise<V3SaleArticle[]> {
+    if (articleIds.length > 30) throw new LargeMasterSyncV3Error('SYNC_V3_PAGE_LIMIT_EXCEEDED');
+    const articles = await Promise.all([...new Set(articleIds)].map(articleId => this.runtime.getOperationalArticle(id(articleId))));
+    return this.priceArticles(articles.filter((article): article is RecordObject => article !== null));
+  }
+
   async get(articleId: string): Promise<V3SaleArticle | null> {
     const article = await this.runtime.getOperationalArticle(id(articleId));
     if (!article) return null;
