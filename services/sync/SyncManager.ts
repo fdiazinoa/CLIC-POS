@@ -2487,7 +2487,8 @@ class SyncManager {
                     const binding = JSON.stringify([...bindingParts, stockAuthority]);
                     assertManifestBinding();
                     if (!companyId) throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
-                    if (needsV3ManifestRefresh(fingerprint, hint || Boolean(options?.explicitV3Refresh), checkpoint, binding, { ...session.ready.runtime.version, stockAuthority })) {
+                    if (Boolean(options?.explicitV3Refresh)
+                        || needsV3ManifestRefresh(fingerprint, hint, checkpoint, binding, { ...session.ready.runtime.version, stockAuthority })) {
                         await this.refreshV3Catalog();
                         const applied = await getLargeMasterSyncV3OperationalSession(false);
                         await applied.assertCurrent();
