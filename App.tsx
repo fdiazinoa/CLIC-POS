@@ -11597,10 +11597,15 @@ const AppContent: React.FC = () => {
 
   const fiscalStatusLifecycleKey=JSON.stringify((config.terminals || []).filter(terminal=>terminal.config?.currentDeviceId===deviceId)
     .map(terminal=>[terminal.id,terminal.config?.currentDeviceId,terminal.config?.erpBinding?.tenantId,terminal.config?.erpBinding?.companyId,
-      terminal.config?.erpBinding?.storeId,getProviderEnvironment(getEffectiveFiscalComplianceConfig(config,terminal.config),'MSELLER')]));
+      terminal.config?.erpBinding?.storeId,getProviderEnvironment(getEffectiveFiscalComplianceConfig(config,terminal.config),'MSELLER'),
+      getEffectiveFiscalComplianceConfig(config,terminal.config).mode,getDefaultFiscalProvider(config,terminal.config)]));
   useEffect(() => {
     if (!LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED) return;
-    return attachFiscalStatusLifecycle({runAutomatic:async()=>{await fiscalWorkflowV2Client.prefetch().catch(()=>undefined);await fiscalWorkflowV2Client.runRound();await fiscalStatusWorker.runAutomatic();},dispose:()=>{fiscalWorkflowV2Client.invalidate();fiscalStatusWorker.dispose();}},{
+    return attachFiscalStatusLifecycle({runAutomatic:async()=>{
+      const terminal=(config.terminals || []).find(row=>row.config?.currentDeviceId===deviceId);
+      if(terminal&&getEffectiveFiscalComplianceConfig(config,terminal.config).mode==='ECF'&&getDefaultFiscalProvider(config,terminal.config)==='MSELLER')
+        await fiscalWorkflowV2Client.discover().catch(()=>undefined);
+      await fiscalWorkflowV2Client.prefetch().catch(()=>undefined);await fiscalWorkflowV2Client.runRound();await fiscalStatusWorker.runAutomatic();},dispose:()=>{fiscalWorkflowV2Client.invalidate();fiscalStatusWorker.dispose();}},{
       hydrated:isDataLoaded&&fiscalHistoryHydrated&&isSecurityLoaded,
       online:()=>navigator.onLine,addOnline:listener=>window.addEventListener('online',listener),removeOnline:listener=>window.removeEventListener('online',listener),
       addTransactionsUpdated:listener=>window.addEventListener('transactionsUpdated',listener),
