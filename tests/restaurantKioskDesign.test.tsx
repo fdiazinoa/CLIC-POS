@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import ts from 'typescript';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import React from 'react';
@@ -326,4 +328,61 @@ test('unavailable real products stay disabled, with their reason visible and no 
   assert.match(html, /Sin existencias/);
   assert.match(html, /\$100\.00/);
   assert.doesNotMatch(html, /mixkit|unsplash|<img/);
+});
+
+test('actual dialog close effect returns focus to search when the original review button becomes disabled or detached', () => {
+  const source = ts.createSourceFile(
+    'RestaurantKioskMenu.tsx',
+    readFileSync(
+      new URL('../components/kiosk/RestaurantKioskMenu.tsx', import.meta.url),
+      'utf8',
+    ),
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TSX,
+  );
+  let effect: ts.ArrowFunction | undefined;
+  function visit(node: ts.Node) {
+    if (
+      ts.isCallExpression(node) &&
+      node.expression.getText(source) === 'useEffect' &&
+      ts.isArrowFunction(node.arguments[0])
+    )
+      effect = node.arguments[0];
+    ts.forEachChild(node, visit);
+  }
+  visit(source);
+  assert.ok(effect);
+  const compiled = ts.transpileModule(
+    'const closeEffect = ' + effect.getText(source),
+    { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
+  ).outputText;
+  for (const state of ['enabled', 'disabled', 'detached'] as const) {
+    const calls: string[] = [];
+    const opener = {
+      isConnected: state !== 'detached',
+      matches: (selector: string) => {
+        assert.equal(selector, ':disabled');
+        return state === 'disabled';
+      },
+      focus: () => calls.push('opener'),
+    };
+    const close = new Function(
+      'dialogRef',
+      'reviewOpen',
+      'returnFocusRef',
+      'searchRef',
+      compiled + '; return closeEffect;',
+    )(
+      { current: { open: true, close: () => calls.push('close') } },
+      false,
+      { current: opener },
+      { current: { focus: () => calls.push('search') } },
+    );
+    close();
+    assert.deepEqual(calls, [
+      'close',
+      state === 'enabled' ? 'opener' : 'search',
+    ]);
+  }
 });

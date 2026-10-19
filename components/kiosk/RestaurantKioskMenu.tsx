@@ -209,6 +209,7 @@ export default function RestaurantKioskMenu(props: RestaurantKioskMenuProps) {
   const [reviewOpen, setReviewOpen] = useState(false);
   const dialogRef = useRef<HTMLDialogElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
   const lastPage = Math.max(0, Math.ceil(products.length / PAGE_SIZE) - 1);
   const currentPage = Math.min(page, lastPage);
@@ -240,7 +241,9 @@ export default function RestaurantKioskMenu(props: RestaurantKioskMenuProps) {
       dialog.showModal();
     } else if (!reviewOpen && dialog.open) {
       dialog.close();
-      returnFocusRef.current?.focus();
+      const opener = returnFocusRef.current;
+      if (opener?.isConnected && !opener.matches(':disabled')) opener.focus();
+      else searchRef.current?.focus();
     }
   }, [reviewOpen]);
 
@@ -315,6 +318,7 @@ export default function RestaurantKioskMenu(props: RestaurantKioskMenuProps) {
             <Search size={23} aria-hidden="true" />
             <span className="sr-only">Buscar en el menú</span>
             <input
+              ref={searchRef}
               type="search"
               value={searchQuery}
               onChange={(event) => changeSearch(event.target.value)}

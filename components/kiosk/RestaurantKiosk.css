@@ -105,7 +105,7 @@
   flex-shrink: 0;
   border: 1px solid transparent;
   border-radius: 22px;
-  padding: 11px 7px;
+  padding: 11px 3px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -124,7 +124,7 @@
 }
 .restaurant-category-rail button > span:last-child {
   max-width: 100%;
-  overflow: hidden;
+  overflow-wrap: anywhere;
 }
 .restaurant-category-image {
   width: 52px;
