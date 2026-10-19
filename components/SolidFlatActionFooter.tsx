@@ -1,7 +1,7 @@
 import React from 'react';
 import {
     Percent, QrCode, Inbox, StickyNote, ArrowRightLeft,
-    Lock, LogOut, Settings, Box, Save, CreditCard, RotateCcw, Package, Power
+    Lock, LogOut, Settings, Box, Save, CreditCard, RotateCcw, Clock, Power
 } from 'lucide-react';
 import { BusinessConfig } from '../types';
 
@@ -131,7 +131,7 @@ const SolidFlatActionFooter: React.FC<SolidFlatActionFooterProps> = ({
                 {/* CONFIGURACIÓN (Slate Gray) */}
                 {renderButton('SETTINGS', 'Ajustes', <Settings />, 'config')}
                 {renderButton('DRAWER', 'Cajón', <Box />, 'config')}
-                {renderButton('TRACKING', 'Rastreo', <Package />, 'config')}
+                {renderButton('ATTENDANCE', 'Asistencia', <Clock />, 'config')}
 
                 {/* CIERRE Y SALIDA (Red/Violet) */}
                 {renderButton('Z_REPORT', 'Cierre Z', <Lock />, 'closing')}

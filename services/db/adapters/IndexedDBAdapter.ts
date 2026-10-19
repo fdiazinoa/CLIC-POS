@@ -1,3 +1,4 @@
+import { ATTENDANCE_COLLECTION, validateAttendanceRecord } from '../../attendance/LocalAttendance';
 import type {
     DatabaseAdapter,
     DurableDocumentMutation,
@@ -12,7 +13,7 @@ import {
 } from '../../sync/masterNumberRangeContract';
 
 const DB_NAME = 'clic_pos_indexeddb';
-const DB_VERSION = 26; // v26 adds strict durable production dispatch and print queues
+const DB_VERSION = 27; // v27 adds the dedicated local attendance store
 const OLD_DB_KEY = 'clic_pos_db_v1';
 const OPEN_TIMEOUT_MS = 15000;
 const CURSOR_IDLE_TIMEOUT_MS = 3000;
@@ -43,12 +44,13 @@ const STORES = [
     'masterNumberRanges', 'masterNumberSyncReceipts',
     'recoveryOriginals', 'recoveryState', 'recoveryStage', 'wallet_transactions',
     'legacyMutationJournal', 'legacyMutationCompletions',
-    'kdsDispatchQueue', 'productionPrintQueue'
+    'kdsDispatchQueue', 'productionPrintQueue', ATTENDANCE_COLLECTION
 ];
 
 export class IndexedDBAdapter implements DatabaseAdapter {
     private db: IDBDatabase | null = null;
     private storageOnlyMode = false;
+    private attendanceReady: Promise<void> | null = null;
     public readonly adapterType = 'local';
 
     async connect(): Promise<void> {
@@ -198,7 +200,69 @@ export class IndexedDBAdapter implements DatabaseAdapter {
             console.warn('[IndexedDBAdapter] Version change detected. Closing DB connection to unblock upgrade.');
             this.db?.close();
             this.db = null;
+            this.attendanceReady = null;
         };
+    }
+
+    private ensureAttendanceReady(): Promise<void> {
+        if (!this.hasStore(ATTENDANCE_COLLECTION)) return Promise.reject(new Error('ATTENDANCE_DURABLE_STORE_UNAVAILABLE'));
+        if (!this.attendanceReady) {
+            this.attendanceReady = Promise.resolve().then(async () => {
+                // Reconcile the retained fallback once per connection. Never remove or rewrite its bytes.
+                const rows = this.readFallbackCollection(ATTENDANCE_COLLECTION).map(validateAttendanceRecord);
+                if (rows.length) await this.writeAttendanceRows(rows);
+            }).catch(error => {
+                this.attendanceReady = null;
+                throw error;
+            });
+        }
+        return this.attendanceReady;
+    }
+
+    private attendanceRead<T>(requestFor: (store: IDBObjectStore) => IDBRequest<T>): Promise<T> {
+        return new Promise((resolve, reject) => {
+            try {
+                if (!this.hasStore(ATTENDANCE_COLLECTION)) throw new Error('ATTENDANCE_DURABLE_STORE_UNAVAILABLE');
+                const tx = this.db!.transaction(ATTENDANCE_COLLECTION, 'readonly');
+                const request = requestFor(tx.objectStore(ATTENDANCE_COLLECTION));
+                tx.oncomplete = () => resolve(request.result);
+                tx.onabort = tx.onerror = () => reject(tx.error || new Error('ATTENDANCE_READ_FAILED'));
+            } catch (error) { reject(error); }
+        });
+    }
+
+    private writeAttendanceRows(rows: ReturnType<typeof validateAttendanceRecord>[]): Promise<void> {
+        return new Promise((resolve, reject) => {
+            try {
+                if (!this.hasStore(ATTENDANCE_COLLECTION)) throw new Error('ATTENDANCE_DURABLE_STORE_UNAVAILABLE');
+                const tx = this.db!.transaction(ATTENDANCE_COLLECTION, 'readwrite');
+                const store = tx.objectStore(ATTENDANCE_COLLECTION);
+                let failure: unknown;
+                tx.oncomplete = () => resolve();
+                tx.onabort = tx.onerror = () => reject(failure || tx.error || new Error('ATTENDANCE_WRITE_FAILED'));
+                // Chained requests also detect conflicting duplicates within one fallback array.
+                let index = 0;
+                const next = () => {
+                    if (index === rows.length) return;
+                    const row = rows[index++];
+                    const request = store.get(row.id);
+                    request.onsuccess = () => {
+                        try {
+                            if (request.result !== undefined) {
+                                if (JSON.stringify(validateAttendanceRecord(request.result)) !== JSON.stringify(row)) {
+                                    throw new Error('ATTENDANCE_RECORD_CONFLICT');
+                                }
+                            } else store.add(row);
+                            next();
+                        } catch (error) {
+                            failure = error;
+                            tx.abort();
+                        }
+                    };
+                };
+                next();
+            } catch (error) { reject(error); }
+        });
     }
 
     private hasStore(collectionName: string): boolean {
@@ -233,10 +297,12 @@ export class IndexedDBAdapter implements DatabaseAdapter {
     private readFallbackCollection(collectionName: string): any[] {
         try {
             const raw = localStorage.getItem(this.fallbackKey(collectionName));
-            if (!raw) return [];
+            if (raw === null || (!raw && collectionName !== 'attendanceTimeRecordsV1')) return [];
             const parsed = JSON.parse(raw);
+            if (collectionName === 'attendanceTimeRecordsV1' && !Array.isArray(parsed)) throw new Error('ATTENDANCE_STORAGE_UNREADABLE');
             return Array.isArray(parsed) ? parsed : [];
         } catch {
+            if (collectionName === 'attendanceTimeRecordsV1') throw new Error('ATTENDANCE_STORAGE_UNREADABLE');
             return [];
         }
     }
@@ -333,6 +399,7 @@ export class IndexedDBAdapter implements DatabaseAdapter {
     }
 
     async disconnect(): Promise<void> {
+        this.attendanceReady = null;
         if (this.db) {
             this.db.close();
             this.db = null;
@@ -341,6 +408,10 @@ export class IndexedDBAdapter implements DatabaseAdapter {
     }
 
     async getCollection<T>(collectionName: string, _queryParams?: Record<string, string>): Promise<T[]> {
+        if (collectionName === ATTENDANCE_COLLECTION) {
+            await this.ensureAttendanceReady();
+            return this.attendanceRead<T[]>(store => store.getAll());
+        }
         if (!this.db && !this.storageOnlyMode) throw new Error('DB not connected');
         if (this.isStrictDurableCollection(collectionName)) this.assertStrictDurableStoresAvailable();
 
@@ -405,6 +476,7 @@ export class IndexedDBAdapter implements DatabaseAdapter {
     }
 
     async saveCollection<T>(collectionName: string, data: T[]): Promise<void> {
+        if (collectionName === ATTENDANCE_COLLECTION) throw new Error('ATTENDANCE_IMMUTABLE_COLLECTION');
         if (!this.db && !this.storageOnlyMode) throw new Error('DB not connected');
         if (this.isStrictDurableCollection(collectionName)) this.assertStrictDurableStoresAvailable();
         const docs = this.toStoredDocuments(collectionName, data);
@@ -445,6 +517,11 @@ export class IndexedDBAdapter implements DatabaseAdapter {
     }
 
     async saveDocument<T extends { id: string }>(collectionName: string, doc: T): Promise<void> {
+        if (collectionName === ATTENDANCE_COLLECTION) {
+            const record = validateAttendanceRecord(doc);
+            await this.ensureAttendanceReady();
+            return this.writeAttendanceRows([record]);
+        }
         if (!this.db && !this.storageOnlyMode) throw new Error('DB not connected');
         if (this.isStrictDurableCollection(collectionName)) this.assertStrictDurableStoresAvailable();
 
@@ -755,6 +832,10 @@ export class IndexedDBAdapter implements DatabaseAdapter {
     }
 
     async getDocument<T>(collectionName: string, id: string): Promise<T | null> {
+        if (collectionName === ATTENDANCE_COLLECTION) {
+            await this.ensureAttendanceReady();
+            return (await this.attendanceRead<T | undefined>(store => store.get(id))) ?? null;
+        }
         if (!this.db && !this.storageOnlyMode) throw new Error('DB not connected');
 
         return new Promise((resolve, reject) => {
@@ -780,6 +861,7 @@ export class IndexedDBAdapter implements DatabaseAdapter {
     }
 
     async deleteDocument(collectionName: string, id: string): Promise<void> {
+        if (collectionName === ATTENDANCE_COLLECTION) throw new Error('ATTENDANCE_IMMUTABLE_COLLECTION');
         if (!this.db && !this.storageOnlyMode) throw new Error('DB not connected');
         if (this.isStrictDurableCollection(collectionName)) this.assertStrictDurableStoresAvailable();
 

@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import {
     Percent, QrCode, Inbox, StickyNote, Box, Save, Settings,
-    Lock, LogOut, Package, RotateCcw, CreditCard, Calendar
+    Lock, LogOut, Clock, RotateCcw, CreditCard, Calendar
 } from 'lucide-react';
 import { BusinessConfig } from '../types';
 
@@ -60,6 +60,7 @@ const IconOnlyActionGrid: React.FC<IconOnlyActionGridProps> = ({
                 onMouseLeave={() => setHint(null)}
             >
                 <button
+                    aria-label={label}
                     disabled={disabled}
                     onClick={() => onAction(id)}
                     className={`
@@ -104,7 +105,7 @@ const IconOnlyActionGrid: React.FC<IconOnlyActionGridProps> = ({
                 {/* UTILITY GROUP (Gray) */}
                 {renderButton('SETTINGS', 'Ajustes', <Settings />, 'utility')}
                 {renderButton('DRAWER', 'Cajón', <Box />, 'utility')}
-                {renderButton('TRACKING', 'Rastreo', <Package />, 'utility')}
+                {renderButton('ATTENDANCE', 'Asistencia', <Clock />, 'utility')}
                 {renderButton('AGENDA', 'Agenda', <Calendar />, 'utility')}
 
                 {/* CLOSING GROUP (Red) */}

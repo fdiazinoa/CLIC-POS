@@ -30,7 +30,10 @@ for (const orientation of ['horizontal', 'vertical'] as const) {
       const html = renderToStaticMarkup(history[0]);
       assert.match(html, /Historial Factura/);
       assert.match(html, /lucide-history/);
-      assert.equal(buttons.some(button => button.props['data-action-id'] === 'ATTENDANCE'), false);
+      const attendance = buttons.filter(button => button.props['data-action-id'] === 'ATTENDANCE');
+      assert.equal(attendance.length, 1);
+      assert.notStrictEqual(attendance[0], history[0]);
+      assert.match(renderToStaticMarkup(attendance[0]), /Asistencia/);
       history[0].props.onClick();
       assert.deepEqual(dispatched, ['HISTORY']);
     });

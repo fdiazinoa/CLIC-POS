@@ -9486,9 +9486,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            </button>
                         )}
                         {!hideTableExtras && (
-                           <button onClick={() => onOpenInventoryTracking()} className="flex h-12 min-w-[58px] flex-col items-center justify-center gap-0.5 rounded-xl bg-emerald-600 px-2 text-white shadow-sm shadow-emerald-600/25 active:scale-95">
-                              <Package size={18} />
-                              <span className="text-[9px] font-bold uppercase">Rast.</span>
+                           <button aria-label="Asistencia" title="Asistencia" onClick={() => onOpenAttendance()} className="flex h-12 min-w-[58px] flex-col items-center justify-center gap-0.5 rounded-xl bg-emerald-600 px-2 text-white shadow-sm shadow-emerald-600/25 active:scale-95">
+                              <Clock size={18} />
+                              <span className="text-[9px] font-bold uppercase">Asist.</span>
                            </button>
                         )}
                      </div>

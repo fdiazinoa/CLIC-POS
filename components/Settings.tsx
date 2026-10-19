@@ -59,6 +59,7 @@ const EmailSettings = React.lazy(() => import('./EmailSettings'));
 const TipsSettings = React.lazy(() => import('./TipsSettings'));
 const DataSecurityHub = React.lazy(() => import('./DataSecurityHub'));
 const AuditLogViewer = React.lazy(() => import('./AuditLogViewer'));
+const InventoryTracking = React.lazy(() => import('./InventoryTracking'));
 const TeamHub = React.lazy(() => import('./TeamHub'));
 const PaymentSettings = React.lazy(() => import('./PaymentSettings'));
 const IntegrationSettings = React.lazy(() => import('./IntegrationSettings'));
@@ -145,7 +146,7 @@ interface SettingsProps {
   erpRoleAuthority?: boolean;
 }
 
-type SettingsView = 'CHECKOUT_TRACKING' | 'HOME' | 'CATALOG' | 'WAREHOUSES' | 'PAYMENTS' | 'INTEGRATIONS' | 'COMPANY' | 'RECEIPT' | 'TERMINALS' | 'TEAM' | 'HARDWARE' | 'SECURITY' | 'LOGS' | 'EXCHANGE' | 'EMAIL' | 'TIPS' | 'DOCUMENTS' | 'TAXES' | 'SERVICE_TYPES' | 'PROMOTIONS' | 'IMPORT_EXPORT' | 'LOYALTY' | 'WALLET_KEYS' | 'SYNC' | 'MASTER_NUMBER_RANGES' | 'LAYOUT' | 'PRODUCTION_AREAS' | 'LABELS' | 'CUSTOMERS' | 'REPORTS' | 'AGENDA' | 'SPACES';
+type SettingsView = 'INVENTORY_TRACKING' | 'CHECKOUT_TRACKING' | 'HOME' | 'CATALOG' | 'WAREHOUSES' | 'PAYMENTS' | 'INTEGRATIONS' | 'COMPANY' | 'RECEIPT' | 'TERMINALS' | 'TEAM' | 'HARDWARE' | 'SECURITY' | 'LOGS' | 'EXCHANGE' | 'EMAIL' | 'TIPS' | 'DOCUMENTS' | 'TAXES' | 'SERVICE_TYPES' | 'PROMOTIONS' | 'IMPORT_EXPORT' | 'LOYALTY' | 'WALLET_KEYS' | 'SYNC' | 'MASTER_NUMBER_RANGES' | 'LAYOUT' | 'PRODUCTION_AREAS' | 'LABELS' | 'CUSTOMERS' | 'REPORTS' | 'AGENDA' | 'SPACES';
 
 const ORDER_TAKER_SETTINGS_VIEWS = new Set<SettingsView>([
   'HOME',
@@ -955,6 +956,9 @@ const Settings: React.FC<SettingsProps> = (props) => {
           />
         );
 
+      case 'INVENTORY_TRACKING':
+        return hasPermission('SETTINGS_ACCESS') ? <InventoryTracking onClose={() => setCurrentView('HOME')} /> : null;
+
       case 'CHECKOUT_TRACKING':
         return hasPermission('SETTINGS_ACCESS') ? <CheckoutTrackingSettings config={props.config} currentDeviceId={props.currentDeviceId} onClose={() => setCurrentView('HOME')} /> : null;
 
@@ -1021,6 +1025,14 @@ const Settings: React.FC<SettingsProps> = (props) => {
                     color="bg-blue-600"
                     onClick={() => setCurrentView('CATALOG')}
                     locked={!hasPermission('CATALOG_VIEW') && !hasPermission('CATALOG_MANAGE')}
+                  />
+                  <SettingsCard
+                    icon={Package}
+                    label="Rastreo"
+                    description="Trazabilidad de inventario"
+                    color="bg-emerald-600"
+                    onClick={() => { if (hasPermission('SETTINGS_ACCESS')) setCurrentView('INVENTORY_TRACKING'); }}
+                    locked={!hasPermission('SETTINGS_ACCESS')}
                   />
                   <SettingsCard
                     icon={Building2}
