@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import SQLite from 'better-sqlite3';
-import {mkdtempSync,rmSync} from 'node:fs';
+import {mkdtempSync,rmSync,readFileSync} from 'node:fs';
+import ts from 'typescript';
+import {assertPresentationAdmission} from '../services/inventoryPresentations/admission';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {nativeFixture,id} from './articleFormatsNativeFixture';
@@ -182,4 +184,38 @@ test('503 refresh preserves READY through physical SQLite reopen and offline res
   const f=await fixture(new SQLite(file));current=f.db;await f.client.prepare();const initial=await f.client.cached();const runtime=createPresentationRuntime(()=>f.data.authority,{sql:f.adapter.inventoryPresentationsSQL(),auth:f.options.auth,sessionId:()=>id(1800),fetchImpl:async()=>new Response('{}',{status:503})});await runtime.client.prepare();assert.ok(await runtime.client.cached());f.db.close();
   const g=await nativeFixture(new SQLite(file),false);current=g.db;const restarted=createPresentationRuntime(()=>f.data.authority,{sql:g.adapter.inventoryPresentationsSQL(),auth:f.options.auth,sessionId:()=>id(1801),fetchImpl:async()=>{throw Error('network offline');}});await restarted.client.prepare();assert.equal((await restarted.client.cached())!.sessionId,initial!.sessionId);assert.equal((g.db.prepare('SELECT state FROM inventory_presentation_availability').get() as any).state,'READY');assert.equal(g.documents('transactions').length,0);
  }finally{if(current?.open)current.close();rmSync(directory,{recursive:true,force:true});}
+});
+
+function livePresentationAuth(){
+ const identity={erpSyncBaseUrl:'https://erp.invalid/api/sync',tenantId:scope.tenantId,terminalId:scope.terminalId,deviceId:scope.deviceId,syncToken:'synthetic-session'};
+ const credentials:any={...identity,companyId:scope.companyId,storeId:scope.storeId,deviceToken:'synthetic-device',deviceTokenSource:'ERP_REGISTER',authStatus:'AUTHENTICATED',syncTokenExpiresAt:'2099-01-01',deviceTokenExpiresAt:'2020-01-01'};
+ return {credentials,auth:()=>capturePresentationAuth(()=>identity,()=>credentials)};
+}
+function presentationStartupEffect(bindings:Record<string,unknown>){
+ const source=readFileSync(new URL('../components/POSInterface.tsx',import.meta.url),'utf8'),ast=ts.createSourceFile('POSInterface.tsx',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);const effects:ts.Expression[]=[];
+ function visit(node:ts.Node){if(ts.isCallExpression(node)&&node.expression.getText(ast)==='useEffect'&&node.arguments[0]?.getText(ast).includes('runtime.client.prepare()'))effects.push(node.arguments[0]);ts.forEachChild(node,visit);}visit(ast);assert.equal(effects.length,1);
+ const js=ts.transpileModule('const mount='+effects[0].getText(ast),{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
+ return new Function(...Object.keys(bindings),js+';return mount();')(...Object.values(bindings)) as (()=>void)|undefined;
+}
+test('actual POS startup effect handles a real expired session without synchronous escape, cache fallback or admission lease',async()=>{
+ const {createPresentationRuntime}=await import('../services/inventoryPresentations/runtime'),f=await fixture(),live=livePresentationAuth();let cleanup:(()=>void)|undefined;
+ try{
+  await f.client.prepare();const before=f.state(),requests=f.requests.length,retained=JSON.stringify(f.db.prepare('SELECT * FROM inventory_presentation_active').all());live.credentials.syncTokenExpiresAt='2020-01-01';const credentialBytes=JSON.stringify(live.credentials);
+  const errors:(string|null)[]=[],reference:{current:unknown}={current:null};let cacheReads=0,ready=0,runtime:ReturnType<typeof createPresentationRuntime>|undefined;
+  const authority=()=>{live.auth();return JSON.parse(JSON.stringify(f.data.authority));};
+  assert.doesNotThrow(()=>{cleanup=presentationStartupEffect({v3Operational:{},activeTerminalId:scope.terminalId,presentationConfigRef:{current:{terminals:[{id:scope.terminalId}]}},presentationAuthority:authority,presentationRuntimeRef:reference,setPresentationMasters:()=>{},setPresentationSelection:()=>{},setPresentationError:(e:string|null)=>errors.push(e),setPresentationReadyGeneration:()=>{ready++;},createPresentationRuntime:(readAuthority:()=>PresentationAuthority)=>{
+   runtime=createPresentationRuntime(readAuthority,{sql:f.adapter.inventoryPresentationsSQL(),auth:live.auth,fetchImpl:f.options.fetchImpl,sessionId:()=>id(1900)});const active=runtime.store.active.bind(runtime.store);runtime.store.active=async key=>{cacheReads++;return active(key);};return runtime;
+  }});});
+  await new Promise<void>(resolve=>setImmediate(resolve));assert.match(errors.at(-1)||'',/INVENTORY_PRESENTATION_AUTH_REQUIRED/);assert.equal(reference.current,null);assert.equal(ready,0);assert.equal(cacheReads,0);assert.equal(f.requests.length,requests);assert.equal(JSON.stringify(live.credentials),credentialBytes);assert.equal(JSON.stringify(f.db.prepare('SELECT * FROM inventory_presentation_active').all()),retained);assert.deepEqual(f.state(),before);assert.doesNotThrow(()=>assertPresentationAdmission(f.data.authority));
+  // The rejected preparation must not poison a later valid session or leave a fence behind.
+  live.credentials.syncTokenExpiresAt='2099-01-01';f.setPages([f.data.page([f.data.master()])]);assert.deepEqual(await runtime!.client.prepare(),f.data.context);assert.doesNotThrow(()=>assertPresentationAdmission(f.data.authority));
+ }finally{cleanup?.();f.db.close();}
+});
+for(const reason of ['session','scope','cancel'])test(`runtime ${reason} denial after request releases its admission and never publishes or reads cached masters`,async()=>{
+ const {createPresentationRuntime}=await import('../services/inventoryPresentations/runtime'),f=await fixture(),live=livePresentationAuth();let release!:()=>void,started!:()=>void;const blocked=new Promise<void>(resolve=>{release=resolve;}),entered=new Promise<void>(resolve=>{started=resolve;});
+ try{
+  const expected=JSON.parse(JSON.stringify(f.data.authority)),runtime=createPresentationRuntime(()=>{live.auth();return JSON.parse(JSON.stringify(f.data.authority));},{sql:f.adapter.inventoryPresentationsSQL(),auth:live.auth,sessionId:()=>id(1901),fetchImpl:async(url:any,init:any)=>{started();await blocked;return f.options.fetchImpl(url,init);}});let cacheReads=0;const active=runtime.store.active.bind(runtime.store);runtime.store.active=async key=>{cacheReads++;return active(key);};const before=f.state(),pending=runtime.client.prepare();assert.throws(()=>assertPresentationAdmission(expected),/PREPARATION_PENDING/);await entered;
+  if(reason==='session')live.credentials.syncTokenExpiresAt='2020-01-01';else if(reason==='scope')f.data.authority.scope.warehouseId=id(99);else runtime.client.cancel();release();await assert.rejects(pending,/AUTH_REQUIRED|CONTEXT_CHANGED/);
+  assert.doesNotThrow(()=>assertPresentationAdmission(expected));assert.equal(cacheReads,0);assert.equal((f.db.prepare('SELECT count(*) n FROM inventory_presentation_active').get() as any).n,0);assert.deepEqual(f.state(),before);
+ }finally{release?.();f.db.close();}
 });
