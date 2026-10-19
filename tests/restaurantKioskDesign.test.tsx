@@ -141,7 +141,7 @@ test('retail browser keeps existing cart checkout rather than restaurant navigat
   assert.doesNotMatch(html, /Categorías del menú|Revisar pedido/);
 });
 
-function menuTree(overrides: Record<string, unknown> = {}) {
+function menuTree(overrides: Record<string, unknown> = {}, wide?: boolean) {
   const events: string[] = [];
   let tree: React.ReactNode;
   const menuProps = {
@@ -177,8 +177,22 @@ function menuTree(overrides: Record<string, unknown> = {}) {
     tree = RestaurantKioskMenu(menuProps);
     return tree;
   }
-  const html = renderToStaticMarkup(<Probe />);
-  return { tree: tree!, html, events };
+  const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  if (wide !== undefined)
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: { matchMedia: () => ({ matches: wide }) },
+    });
+  try {
+    const html = renderToStaticMarkup(<Probe />);
+    return { tree: tree!, html, events };
+  } finally {
+    if (wide !== undefined) {
+      if (originalWindow)
+        Object.defineProperty(globalThis, 'window', originalWindow);
+      else delete (globalThis as any).window;
+    }
+  }
 }
 
 test('actual restaurant category/search/product callbacks remain distinct from checkout and cancellation', () => {
@@ -234,7 +248,7 @@ test('real order controls preserve configured line cartId and note without reass
     },
   ];
   const before = JSON.stringify(cart);
-  const menu = menuTree({ cart, subtotal: 300, itemCount: 3 });
+  const menu = menuTree({ cart, subtotal: 300, itemCount: 3 }, true);
   const order = elements(menu.tree).find(
     (value) =>
       typeof value.type === 'function' && value.type.name === 'RestaurantOrder',
@@ -385,4 +399,145 @@ test('actual dialog close effect returns focus to search when the original revie
       state === 'enabled' ? 'opener' : 'search',
     ]);
   }
+});
+
+test('portrait initial render excludes hidden order rows and images while keeping the subtotal bar', () => {
+  const cart = Array.from({ length: 32 }, (_, index) => ({
+    ...products[0],
+    cartId: `configured-${index}`,
+    name: `Order-only line ${index}`,
+    quantity: 1,
+    image: `/fixture-order-${index}.png`,
+  }));
+  const portrait = menuTree({ cart, subtotal: 3200, itemCount: 32 }, false);
+  assert.doesNotMatch(
+    portrait.html,
+    /<aside|restaurant-order-lines|Order-only line|fixture-order-/,
+  );
+  assert.match(portrait.html, /Subtotal del pedido|Revisar pedido/);
+  const wide = menuTree({ cart, subtotal: 3200, itemCount: 32 }, true);
+  assert.match(wide.html, /<aside/);
+  assert.equal(
+    (wide.html.match(/class="restaurant-order-line"/g) || []).length,
+    32,
+  );
+  assert.match(wide.html, /Order-only line 31/);
+});
+
+test('windowless and no-matchMedia initial renders safely omit the wide order', () => {
+  const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  try {
+    delete (globalThis as any).window;
+    for (const viewportWindow of [undefined, {}]) {
+      if (viewportWindow)
+        Object.defineProperty(globalThis, 'window', {
+          configurable: true,
+          value: viewportWindow,
+        });
+      else delete (globalThis as any).window;
+      const menu = menuTree();
+      assert.doesNotMatch(menu.html, /<aside/);
+      const bar = elements(menu.tree).find(
+        (value) =>
+          value.type === 'footer' &&
+          value.props.className === 'restaurant-order-bar',
+      )!;
+      assert.equal(
+        bar.props.style.display,
+        'flex',
+        'No-API summary must override the wide CSS hide rule',
+      );
+    }
+  } finally {
+    if (originalWindow)
+      Object.defineProperty(globalThis, 'window', originalWindow);
+    else delete (globalThis as any).window;
+  }
+});
+
+test('actual responsive effect uses the exact CSS breakpoint, handles changes and removes its listener', () => {
+  const source = ts.createSourceFile(
+    'RestaurantKioskMenu.tsx',
+    readFileSync(
+      new URL('../components/kiosk/RestaurantKioskMenu.tsx', import.meta.url),
+      'utf8',
+    ),
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TSX,
+  );
+  let effect: ts.ArrowFunction | undefined;
+  let query = '';
+  function visit(node: ts.Node) {
+    if (
+      ts.isVariableDeclaration(node) &&
+      node.name.getText(source) === 'WIDE_ORDER_QUERY' &&
+      node.initializer &&
+      ts.isStringLiteral(node.initializer)
+    )
+      query = node.initializer.text;
+    if (
+      ts.isCallExpression(node) &&
+      node.expression.getText(source) === 'useEffect' &&
+      ts.isArrowFunction(node.arguments[0]) &&
+      node.arguments[0].getText(source).includes('addEventListener')
+    )
+      effect = node.arguments[0];
+    ts.forEachChild(node, visit);
+  }
+  visit(source);
+  assert.ok(effect);
+  assert.equal(query, '(min-width: 1280px) and (min-aspect-ratio: 4/3)');
+  const css = readFileSync(
+    new URL('../components/kiosk/RestaurantKiosk.css', import.meta.url),
+    'utf8',
+  );
+  assert.ok(css.includes(`@media ${query}`));
+  const compiled = ts.transpileModule(
+    'const subscribe = ' + effect.getText(source),
+    { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
+  ).outputText;
+  const updates: boolean[] = [];
+  let listener: (() => void) | undefined;
+  let removed = false;
+  const media = {
+    matches: false,
+    addEventListener: (type: string, callback: () => void) => {
+      assert.equal(type, 'change');
+      listener = callback;
+    },
+    removeEventListener: (type: string, callback: () => void) => {
+      assert.equal(type, 'change');
+      assert.equal(callback, listener);
+      removed = true;
+    },
+  };
+  const window = {
+    matchMedia: (actualQuery: string) => {
+      assert.equal(actualQuery, query);
+      return media;
+    },
+  };
+  const subscribe = new Function(
+    'window',
+    'WIDE_ORDER_QUERY',
+    'setShowWideOrder',
+    compiled + ';return subscribe;',
+  )(window, query, (value: boolean) => updates.push(value));
+  const cleanup = subscribe();
+  assert.deepEqual(updates, [false]);
+  media.matches = true;
+  listener!();
+  media.matches = false;
+  listener!();
+  assert.deepEqual(updates, [false, true, false]);
+  cleanup();
+  assert.equal(removed, true);
+  const noApi = new Function(
+    'window',
+    'WIDE_ORDER_QUERY',
+    'setShowWideOrder',
+    compiled + ';return subscribe;',
+  )({}, query, () => assert.fail('No API must not update'));
+  assert.equal(noApi(), undefined);
 });

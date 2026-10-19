@@ -183,6 +183,11 @@ function RestaurantOrder({
 }
 
 const PAGE_SIZE = 30;
+const WIDE_ORDER_QUERY = '(min-width: 1280px) and (min-aspect-ratio: 4/3)';
+const isWideOrderViewport = () =>
+  typeof window !== 'undefined' &&
+  typeof window.matchMedia === 'function' &&
+  window.matchMedia(WIDE_ORDER_QUERY).matches;
 
 export default function RestaurantKioskMenu(props: RestaurantKioskMenuProps) {
   const {
@@ -207,6 +212,7 @@ export default function RestaurantKioskMenu(props: RestaurantKioskMenuProps) {
   } = props;
   const [page, setPage] = useState(0);
   const [reviewOpen, setReviewOpen] = useState(false);
+  const [showWideOrder, setShowWideOrder] = useState(isWideOrderViewport);
   const dialogRef = useRef<HTMLDialogElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -229,6 +235,19 @@ export default function RestaurantKioskMenu(props: RestaurantKioskMenuProps) {
   const heroProduct = products.find((product) =>
     Boolean(resolveProductImageSrc(product)),
   );
+
+  useEffect(() => {
+    if (
+      typeof window === 'undefined' ||
+      typeof window.matchMedia !== 'function'
+    )
+      return;
+    const media = window.matchMedia(WIDE_ORDER_QUERY);
+    const update = () => setShowWideOrder(media.matches);
+    update();
+    media.addEventListener('change', update);
+    return () => media.removeEventListener('change', update);
+  }, []);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -453,19 +472,24 @@ export default function RestaurantKioskMenu(props: RestaurantKioskMenuProps) {
             ) : null}
           </div>
         </main>
-        <aside
-          className="restaurant-wide-order"
-          aria-label="Resumen del pedido"
-        >
-          <header>
-            <ShoppingBag size={25} />
-            <h2>Tu pedido</h2>
-            <span>{itemCount}</span>
-          </header>
-          <RestaurantOrder {...props} />
-        </aside>
+        {showWideOrder ? (
+          <aside
+            className="restaurant-wide-order"
+            aria-label="Resumen del pedido"
+          >
+            <header>
+              <ShoppingBag size={25} />
+              <h2>Tu pedido</h2>
+              <span>{itemCount}</span>
+            </header>
+            <RestaurantOrder {...props} />
+          </aside>
+        ) : null}
       </div>
-      <footer className="restaurant-order-bar">
+      <footer
+        className="restaurant-order-bar"
+        style={showWideOrder ? undefined : { display: 'flex' }}
+      >
         <div>
           <span className="restaurant-order-count">{itemCount}</span>
           <div>
