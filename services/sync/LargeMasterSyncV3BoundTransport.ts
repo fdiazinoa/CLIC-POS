@@ -71,6 +71,7 @@ export const createLargeMasterSyncV3BoundTransport = (
   v3BaseUrl: string,
   readIdentity: () => LargeMasterSyncV3BoundIdentity = readLargeMasterSyncV3BoundIdentity,
   fetchImpl: typeof fetch = fetch,
+  readCredentials = readTerminalCredentialsSync,
 ): LargeMasterSyncV3Transport => {
   const v3Origin = origin(v3BaseUrl);
   const bound = readIdentity();
@@ -87,10 +88,25 @@ export const createLargeMasterSyncV3BoundTransport = (
       throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
     }
   };
+  // Availability is associated with the local credential that will request permits.
+  // V3 master authentication and the fiscal permit endpoint retain their existing contracts.
+  const fiscalAssociation = () => {
+    try {
+      const credentials = readCredentials(), deviceToken = credentials.deviceToken;
+      if ((credentials.erpTenantId || credentials.tenantId) !== bound.tenantId
+        || (credentials.erpTerminalId || credentials.terminalId) !== bound.terminalId
+        || credentials.deviceId !== bound.deviceId || credentials.syncToken !== bound.syncToken
+        || typeof deviceToken !== 'string' || !deviceToken || deviceToken.trim() !== deviceToken
+        || /[\r\n\t]/.test(deviceToken)) return null;
+      return {deviceToken, fingerprint: JSON.stringify([bound.tenantId, bound.terminalId, bound.deviceId,
+        bound.syncToken, deviceToken, credentials.companyId, credentials.storeId])};
+    } catch { return null; }
+  };
   return {
     async request(path, init) {
       if (!validPath(path, init.method)) throw new LargeMasterSyncV3Error('SYNC_V3_PATH_INVALID');
       assertStillBound();
+      const beforeFiscalAssociation = fiscalAssociation();
       const response = await fetchImpl(`${v3Origin}${path}`, {
         method: init.method,
         headers: {
@@ -109,7 +125,13 @@ export const createLargeMasterSyncV3BoundTransport = (
       });
       const rawText = await response.text();
       assertStillBound();
-      if(response.ok)observeFiscalWorkflowCapability(erpBase,{'X-Tenant-Id':bound.tenantId,'X-Terminal-Id':bound.terminalId,'X-Device-Id':bound.deviceId,'X-Sync-Token':bound.syncToken},response.headers.get('X-Clic-Fiscal-Workflow-V2'));
+      if (response.ok) {
+        const afterFiscalAssociation = fiscalAssociation();
+        if (beforeFiscalAssociation && afterFiscalAssociation?.fingerprint === beforeFiscalAssociation.fingerprint)
+          observeFiscalWorkflowCapability(erpBase, {'X-Tenant-Id':bound.tenantId,'X-Terminal-Id':bound.terminalId,
+            'X-Device-Id':bound.deviceId,'X-Sync-Token':bound.syncToken,'X-Device-Token':beforeFiscalAssociation.deviceToken},
+            response.headers.get('X-Clic-Fiscal-Workflow-V2'));
+      }
       return { status: response.status,
         headers: Object.fromEntries(response.headers.entries()), text: rawText };
     },
