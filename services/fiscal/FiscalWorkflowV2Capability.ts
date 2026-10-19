@@ -4,7 +4,7 @@ let accepted:{key:string;expires:number}|null=null;
 const listeners=new Set<()=>void>();
 export function subscribeFiscalWorkflowCapability(listener:()=>void){listeners.add(listener);return ()=>{listeners.delete(listener);};}
 const notify=()=>{for(const listener of listeners)listener();};
-const key=(base:string,h:Record<string,string>)=>JSON.stringify([new URL(base).origin,h['X-Tenant-Id'],h['X-Terminal-Id'],h['X-Device-Id'],h['X-Sync-Token']]);
+const key=(base:string,h:Record<string,string>)=>JSON.stringify([new URL(base).origin,h['X-Tenant-Id'],h['X-Terminal-Id'],h['X-Device-Id'],h['X-Sync-Token'],h['X-Device-Token']]);
 export function observeFiscalWorkflowCapability(base:string,headers:Record<string,string>,value:string|null,now=Date.now()){
  const nextKey=key(base,headers),wasCurrent=accepted?.key===nextKey&&accepted.expires>now;
  if(value==='2')accepted={key:nextKey,expires:now+300000};else accepted=null;

@@ -4,6 +4,7 @@ import {presentationFormatSnapshot,presentationBaseQuantity,presentationUnitPric
 import {normalizePresentationDraft,presentationInventoryQuantity,resizeInventoryPresentationLine,presentationSelectorDTO,assertInventoryPresentationReturnAllowed} from '../services/inventoryPresentations/selection';
 import {prepareFiscalFormatRuntime} from '../services/fiscal/FiscalWorkflowV2FormatRuntime';
 import {createUuid} from '../utils/uuid';
+import {assertFiscalWorkflowCheckoutReplay,readFiscalWorkflowLocalScope} from '../services/fiscal/FiscalWorkflowCheckoutReplay';
 import { subscribeFiscalWorkflowCapability } from '../services/fiscal/FiscalWorkflowV2Capability';
 import { fiscalWorkflowV2Client } from '../services/fiscal/FiscalWorkflowV2Client';
 import type {FiscalWorkflowCheckoutV2} from '../services/fiscal/FiscalWorkflowV2Types';
@@ -5591,6 +5592,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          if(fiscalCheckoutRef.current&&['COMMITTED','ACKNOWLEDGED'].includes(fiscalCheckoutRef.current.phase)){
             const prior=await db.getDocument('transactions',fiscalCheckoutRef.current.transactionId)||await db.getDocument('transactionHistory',fiscalCheckoutRef.current.transactionId);
             if(!prior)throw Error('FISCAL_WORKFLOW_COMMITTED_RECEIPT_REQUIRED');
+            assertFiscalWorkflowCheckoutReplay(fiscalCheckoutRef.current,prior as Transaction,currentFiscalCheckoutCartIdentity(),readFiscalWorkflowLocalScope(activeTerminalConfig,activeTerminal?.id||'T1'));
             await fiscalWorkflowV2Client.acknowledge(fiscalCheckoutRef.current);fiscalCheckoutRef.current=null;
             if((prior as any).articleFormatWire?.schema_version===2)void fiscalWorkflowV2Client.prefetch().catch(()=>undefined);
             onUpdateCart([]);onSelectCustomer(null);return prior as Transaction;
@@ -6582,6 +6584,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
    };
 
+   const currentFiscalCheckoutCartIdentity=()=>JSON.stringify({items:processedCart.map(({fiscalCheckoutOperationId:_op,...line}:any)=>line),customerId:effectiveSelectedCustomer?.id||null,fiscalType:requiredSaleFiscalType});
    const fiscalCheckoutRef=useRef<FiscalWorkflowCheckoutV2|null>(null);
    const fiscalCheckoutOperationRef=useRef<string|null>(null);
    useEffect(()=>{if(cart.length===0)fiscalCheckoutOperationRef.current=null;},[cart.length]);
@@ -6595,6 +6598,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if(fiscalCheckoutRef.current&&['COMMITTED','ACKNOWLEDGED'].includes(fiscalCheckoutRef.current.phase)){
          const completed=await db.getDocument('transactions',fiscalCheckoutRef.current.transactionId)||await db.getDocument('transactionHistory',fiscalCheckoutRef.current.transactionId);
          if(!completed)throw Error('FISCAL_WORKFLOW_COMMITTED_RECEIPT_REQUIRED');
+         assertFiscalWorkflowCheckoutReplay(fiscalCheckoutRef.current,completed as Transaction,currentFiscalCheckoutCartIdentity(),readFiscalWorkflowLocalScope(activeTerminalConfig,terminalId));
          return Object.assign(()=>{},{completedTransaction:completed as Transaction});
       }
       await assertCheckoutFiscalAuthority();
@@ -6613,7 +6617,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if(newFiscalCheckout){
         const tagged=processedCart.map(line=>(line as any).fiscalCheckoutOperationId).filter(Boolean);
         const operationId=fiscalCheckoutOperationRef.current|| (tagged.length===processedCart.length&&new Set(tagged).size===1?tagged[0]:createUuid());fiscalCheckoutOperationRef.current=operationId;
-        const checkout=await fiscalWorkflowV2Client.reserveCheckout(JSON.stringify({items:processedCart.map(({fiscalCheckoutOperationId:_op,...line}:any)=>line),customerId:effectiveSelectedCustomer?.id||null,fiscalType:requiredSaleFiscalType}),operationId,{requirePermit:requiresFiscalPermit}).catch(error=>{if(error instanceof Error&&error.message==='FISCAL_WORKFLOW_PERMIT_REQUIRED')throw Error('No hay autorización fiscal disponible para esta venta. Espera la sincronización y vuelve a cobrar; no se realizó ningún pago.');throw error;});
+        const checkout=await fiscalWorkflowV2Client.reserveCheckout(currentFiscalCheckoutCartIdentity(),operationId,{requirePermit:requiresFiscalPermit}).catch(error=>{if(error instanceof Error&&error.message==='FISCAL_WORKFLOW_PERMIT_REQUIRED')throw Error('No hay autorización fiscal disponible para esta venta. Espera la sincronización y vuelve a cobrar; no se realizó ningún pago.');throw error;});
         onUpdateCart(processedCart.map(line=>({...line,fiscalCheckoutOperationId:operationId})));
         if(checkout.phase==='EFFECT_POSSIBLE'&&checkout.paymentIds.some(id=>!paymentIds.includes(id)))throw Error('PAYMENT_INTENT_RECONCILIATION_REQUIRED');
         fiscalCheckoutRef.current=checkout;
@@ -6621,6 +6625,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
         if(['COMMITTED','ACKNOWLEDGED'].includes(checkout.phase)){
           const completed=await db.getDocument('transactions',checkout.transactionId)||await db.getDocument('transactionHistory',checkout.transactionId);
           if(!completed)throw Error('FISCAL_WORKFLOW_COMMITTED_RECEIPT_REQUIRED');
+          assertFiscalWorkflowCheckoutReplay(checkout,completed as Transaction,currentFiscalCheckoutCartIdentity(),readFiscalWorkflowLocalScope(activeTerminalConfig,terminalId));
           return Object.assign(()=>{},{completedTransaction:completed as Transaction});
         }
       }
