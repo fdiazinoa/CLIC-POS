@@ -57,6 +57,7 @@ export function createFiscalWorkflowV2Client({readAuth=captureFiscalStatusBoundC
    const native=store();if(!native)return;const auth=captured,key=json(scopeOf(auth.descriptor));
    for(let attempt=0;attempt<2;attempt++){
     const operationId=await native.refillOperation(key);auth.assertCurrent();
+    if(currentAuthority?.fingerprint===authorityFingerprint(auth))currentAuthority=null;
     const {data}=await request('permits',{operationId,capability:'fiscalWorkflowV2'});
     if(data?.schemaVersion!==2||!Array.isArray(data.permits)||data.permits.length>16||!/^[a-f0-9]{64}$/.test(data.authorityHash)
       ||(data.refillRequired!==undefined&&typeof data.refillRequired!=='boolean')||data.refillRequired&&data.permits.length)fail();
