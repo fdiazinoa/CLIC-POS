@@ -387,6 +387,13 @@ class TransactionService {
             data={...data,inventoryPresentationContract:1};
         }else if(data.inventoryPresentationContract!==undefined)throw Error('INVENTORY_PRESENTATION_INVALID');
         assertFormatsPostingClosed(data.items || []);
+        // Checkout authority is immutable source identity, not a post-sale fiscal annotation.
+        if (data.fiscalWorkflowCheckoutId !== undefined
+            && (typeof data.fiscalWorkflowCheckoutId !== 'string'
+                || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(data.fiscalWorkflowCheckoutId)
+                || !data.id || !isV3FinancialDocument(data))) {
+            throw new Error('FISCAL_WORKFLOW_CHECKOUT_REQUIRED');
+        }
         // Validate required fields
         if (!data.documentType) {
             throw new Error('documentType is required');
@@ -431,6 +438,7 @@ class TransactionService {
         // Create transaction object
         const transaction: Transaction = {
             ...(data.inventoryPresentationContract===1?{inventoryPresentationContract:1 as const}:{}),
+            ...(data.fiscalWorkflowCheckoutId ? { fiscalWorkflowCheckoutId: data.fiscalWorkflowCheckoutId } : {}),
             id: data.id || createTechnicalId('TXN'),
             globalSequence,
             displayId,

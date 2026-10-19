@@ -1,7 +1,7 @@
 import { validWeightPresentation } from '../../utils/scaleWeight';
 import { hasV3KilogramContract } from '../../utils/weightedProduct';
 import type { BusinessConfig, CartItem, Product, Transaction, V3SaleAuthorityStamp } from '../../types';
-import { calculateLineFiscalValuesForTransaction, calculateUncoveredServiceChargeBase, freezeAuthoritativeLineFiscalAmounts } from '../../utils/fiscalBreakdown';
+import { calculateTaxBreakdownFromItems, calculateLineFiscalValuesForTransaction, calculateUncoveredServiceChargeBase, freezeAuthoritativeLineFiscalAmounts } from '../../utils/fiscalBreakdown';
 import { resolveAppliedServiceTaxPolicy } from '../../utils/serviceTaxPolicy';
 import { LargeMasterSyncV3Error } from './LargeMasterSyncV3Types';
 
@@ -49,8 +49,19 @@ export const validateV3FrozenLineFiscalAmounts = (transaction: Transaction, conf
   const uncoveredBase = calculateUncoveredServiceChargeBase(transaction.items, config, options);
   const maximumCharge = policy.legalTip?.enabled === true
     ? round(uncoveredBase * Number(policy.legalTip.percentage || 0) / 100) : 0;
-  const expectedNet = round(calculated.reduce((sum, row) => sum + row.netAmount, 0) + charge);
-  const expectedTax = round(calculated.reduce((sum, row) => sum + row.taxAmount, 0));
+  // Direct positive sales use the UI's aggregated tax header before freezing
+  // the final-line residual. Refunds and retained snapshots keep their own algebra.
+  const directSaleHeader = transaction.documentType === 'TICKET' && transaction.items.every(line => line.quantity > 0)
+    && !transaction.originalTransactionId && !transaction.v3ReservationClaimId && !transaction.reservationId
+    && !transaction.v3RestoredTicketId && !transaction.restaurantOrderId && !transaction.restaurantTableId;
+  const expectedTax = directSaleHeader
+    ? round(calculateTaxBreakdownFromItems(transaction.items, config, { ...options, fallbackTaxRate: 0 })
+      .reduce((sum, tax) => sum + tax.amount, 0))
+    : round(calculated.reduce((sum, row) => sum + row.taxAmount, 0));
+  const expectedNet = directSaleHeader
+    ? round(transaction.items.reduce((sum, line) => sum + line.price * line.quantity, 0)
+      - options.discountAmount - (options.isTaxIncluded ? expectedTax : 0) + charge)
+    : round(calculated.reduce((sum, row) => sum + row.netAmount, 0) + charge);
   const expectedTotal = round(expectedNet + expectedTax);
   if (!Number.isFinite(charge) || charge < 0 || charge > maximumCharge + 0.02
     || ![transaction.netAmount, transaction.taxAmount, Math.abs(transaction.total)]
