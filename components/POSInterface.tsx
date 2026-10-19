@@ -4,6 +4,7 @@ import {presentationFormatSnapshot,presentationBaseQuantity,presentationUnitPric
 import {normalizePresentationDraft,presentationInventoryQuantity,resizeInventoryPresentationLine,presentationSelectorDTO,assertInventoryPresentationReturnAllowed} from '../services/inventoryPresentations/selection';
 import {prepareFiscalFormatRuntime} from '../services/fiscal/FiscalWorkflowV2FormatRuntime';
 import {createUuid} from '../utils/uuid';
+import { subscribeFiscalWorkflowCapability } from '../services/fiscal/FiscalWorkflowV2Capability';
 import { fiscalWorkflowV2Client } from '../services/fiscal/FiscalWorkflowV2Client';
 import type {FiscalWorkflowCheckoutV2} from '../services/fiscal/FiscalWorkflowV2Types';
 import { explicitTerminalFiscalEnvironment } from '../utils/terminalConfigSnapshot';
@@ -6584,30 +6585,39 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const fiscalCheckoutRef=useRef<FiscalWorkflowCheckoutV2|null>(null);
    const fiscalCheckoutOperationRef=useRef<string|null>(null);
    useEffect(()=>{if(cart.length===0)fiscalCheckoutOperationRef.current=null;},[cart.length]);
-   useEffect(()=>{if(v3Operational&&fiscalCompliance.mode==='ECF'&&fiscalWorkflowV2Client.enabled())void fiscalWorkflowV2Client.prefetch().catch(()=>undefined);},[v3Operational,terminalId,fiscalCompliance.mode]);
+   useEffect(()=>{
+      const prepare=()=>{if(v3Operational&&fiscalCompliance.mode==='ECF'&&fiscalWorkflowV2Client.enabled())void fiscalWorkflowV2Client.prefetch().catch(()=>undefined);};
+      const unsubscribe=subscribeFiscalWorkflowCapability(prepare);prepare();return unsubscribe;
+   },[v3Operational,terminalId,fiscalCompliance.mode]);
    const beforeV3PaymentEffects = async (paymentIds:string[]=[]): Promise<PaymentEffectsFence> => {
       const completed = await completedReservationForReceipt();
       if (completed) return Object.assign(() => {},{completedTransaction:completed});
+      if(fiscalCheckoutRef.current&&['COMMITTED','ACKNOWLEDGED'].includes(fiscalCheckoutRef.current.phase)){
+         const completed=await db.getDocument('transactions',fiscalCheckoutRef.current.transactionId)||await db.getDocument('transactionHistory',fiscalCheckoutRef.current.transactionId);
+         if(!completed)throw Error('FISCAL_WORKFLOW_COMMITTED_RECEIPT_REQUIRED');
+         return Object.assign(()=>{},{completedTransaction:completed as Transaction});
+      }
       await assertCheckoutFiscalAuthority();
       if (hasV3ReservationCart && !activeV3Reservation) throw new Error('La referencia de la reserva aún no está validada.');
       if (activeV3Reservation && selectedCustomer?.id !== activeV3Reservation.reservation.customerId) throw new Error('El cliente de la reserva no puede cambiarse.');
       if (!v3Operational) return () => {};
-      const newFiscalCheckout=fiscalCompliance.mode==='ECF'&&fiscalWorkflowV2Client.enabled()&&getDefaultFiscalProvider(config,activeTerminalConfig)==='MSELLER'
+      const delegatedFiscalCheckout=fiscalCompliance.mode==='ECF'&&getDefaultFiscalProvider(config,activeTerminalConfig)==='MSELLER';
+      const newFiscalCheckout=delegatedFiscalCheckout&&fiscalWorkflowV2Client.enabled()
         &&!hasV3ReservationCart&&!activeV3Reservation&&!activeRecoveredReservation&&!activeDirectV3TicketId&&!activeTable&&!activeTable?.currentOrderId
         &&processedCart.every(line=>line.quantity>0);
-      const requiresFiscalPermit=processedCart.some(line=>line.articleFormat);
-      if(requiresFiscalPermit&&!newFiscalCheckout)throw Error('No se puede cobrar esta presentación sin la autorización fiscal vigente. Vuelve a sincronizar y reintenta.');
+      const requiresFiscalPermit=delegatedFiscalCheckout||processedCart.some(line=>line.articleFormat);
       const retainedFiscalOperation=fiscalCheckoutRef.current||fiscalCheckoutOperationRef.current||processedCart.some(line=>(line as any).fiscalCheckoutOperationId);
       if(!fiscalWorkflowV2Client.enabled()&&retainedFiscalOperation)throw Error('FISCAL_WORKFLOW_CHECKOUT_RECONCILIATION_REQUIRED');
+      if(requiresFiscalPermit&&!newFiscalCheckout)throw Error('No se puede cobrar sin la autorización fiscal vigente del ERP. Sincroniza y vuelve a intentar; no se realizó ningún pago.');
       if(!newFiscalCheckout)fiscalCheckoutRef.current=null;
       if(newFiscalCheckout){
         const tagged=processedCart.map(line=>(line as any).fiscalCheckoutOperationId).filter(Boolean);
         const operationId=fiscalCheckoutOperationRef.current|| (tagged.length===processedCart.length&&new Set(tagged).size===1?tagged[0]:createUuid());fiscalCheckoutOperationRef.current=operationId;
-        const checkout=await fiscalWorkflowV2Client.reserveCheckout(JSON.stringify({items:processedCart.map(({fiscalCheckoutOperationId:_op,...line}:any)=>line),customerId:effectiveSelectedCustomer?.id||null,fiscalType:requiredSaleFiscalType}),operationId,{requirePermit:requiresFiscalPermit}).catch(error=>{if(error instanceof Error&&error.message==='FISCAL_WORKFLOW_PERMIT_REQUIRED')throw Error('No hay autorización fiscal disponible para esta presentación. Espera la sincronización y vuelve a cobrar; no se realizó ningún pago.');throw error;});
+        const checkout=await fiscalWorkflowV2Client.reserveCheckout(JSON.stringify({items:processedCart.map(({fiscalCheckoutOperationId:_op,...line}:any)=>line),customerId:effectiveSelectedCustomer?.id||null,fiscalType:requiredSaleFiscalType}),operationId,{requirePermit:requiresFiscalPermit}).catch(error=>{if(error instanceof Error&&error.message==='FISCAL_WORKFLOW_PERMIT_REQUIRED')throw Error('No hay autorización fiscal disponible para esta venta. Espera la sincronización y vuelve a cobrar; no se realizó ningún pago.');throw error;});
         onUpdateCart(processedCart.map(line=>({...line,fiscalCheckoutOperationId:operationId})));
         if(checkout.phase==='EFFECT_POSSIBLE'&&checkout.paymentIds.some(id=>!paymentIds.includes(id)))throw Error('PAYMENT_INTENT_RECONCILIATION_REQUIRED');
         fiscalCheckoutRef.current=checkout;
-        if(!checkout.permit)setErrorToast('La venta comercial continúa sin autorización para emisión fiscal; no se emitirá automáticamente después.');
+        if(!checkout.permit)throw Error('FISCAL_WORKFLOW_PERMIT_REQUIRED');
         if(['COMMITTED','ACKNOWLEDGED'].includes(checkout.phase)){
           const completed=await db.getDocument('transactions',checkout.transactionId)||await db.getDocument('transactionHistory',checkout.transactionId);
           if(!completed)throw Error('FISCAL_WORKFLOW_COMMITTED_RECEIPT_REQUIRED');
