@@ -1,3 +1,4 @@
+import {resolveAttendanceScope} from './services/attendance/LocalAttendance';
 import {assertInventoryPresentationReturnAllowed} from './services/inventoryPresentations/selection';
 import {clearFiscalWorkflowCapability} from './services/fiscal/FiscalWorkflowV2Capability';
 import {resolveTerminalDocumentSeriesId} from './utils/seriesValidation';
@@ -14248,6 +14249,7 @@ const AppContent: React.FC = () => {
             onUpdateRoles={handleTeamRolesUpdate}
             onClose={() => setCurrentView('POS')}
             mode="ATTENDANCE"
+            attendanceScope={resolveAttendanceScope(getCurrentTerminal(), deviceId, isErpManagedPosUserRuntime())}
             canManageAttendance={canManageAttendance}
             erpManaged={isErpManagedPosUserRuntime()}
           />

@@ -1,7 +1,7 @@
 import React, { useMemo } from 'react';
 import {
     Percent, QrCode, Inbox, StickyNote, ArrowRightLeft,
-    Lock, LogOut, Settings, Package, Box, Save, CreditCard, Layout, Power
+    Lock, LogOut, Settings, Clock, Box, Save, CreditCard, Layout, Power
 } from 'lucide-react';
 import { CartItem, Product, BusinessConfig } from '../types';
 
@@ -114,10 +114,10 @@ const ActionButtonsGrid: React.FC<ActionButtonsGridProps> = ({
             className: 'bg-emerald-600 border-emerald-500 text-white shadow-sm shadow-emerald-600/25 hover:bg-emerald-700'
         },
         {
-            id: 'TRACKING',
-            label: 'Rastreo',
-            icon: <Package size={14} />,
-            onClick: () => onAction('TRACKING'),
+            id: 'ATTENDANCE',
+            label: 'Asistencia',
+            icon: <Clock size={14} />,
+            onClick: () => onAction('ATTENDANCE'),
             className: 'bg-emerald-600 border-emerald-500 text-white shadow-sm shadow-emerald-600/25 hover:bg-emerald-700'
         },
         {

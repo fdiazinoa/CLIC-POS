@@ -1,5 +1,5 @@
 
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import {
    Users, Calendar, ShieldCheck, Clock, Check, X,
@@ -7,11 +7,13 @@ import {
    Trash2, AlertCircle, LogIn, LogOut, Plus,
    FileBarChart, AlertOctagon, Download, Edit2, User as UserIcon, Fingerprint
 } from 'lucide-react';
-import { User, RoleDefinition, Shift, TimeRecord, ZReportModule } from '../types';
+import { User, RoleDefinition, Shift, ZReportModule } from '../types';
 import { AVAILABLE_PERMISSIONS } from '../constants';
 import LocalUserProfileModal from './LocalUserProfileModal';
 import { biometricService } from '../services/BiometricAuthService';
 import { resolveTeamHubTabs, TeamHubMode, TeamHubTab } from '../utils/teamHubAccess';
+import {dbAdapter} from '../services/db';
+import {authenticateAttendancePin,attendanceScopeKey,createAttendanceOperation,createLocalAttendanceRepository,type AttendanceScope,type LocalAttendanceRecord} from '../services/attendance/LocalAttendance';
 import { normalizeSalesPercent } from '../utils/userSalesPolicy';
 
 interface TeamHubProps {
@@ -23,6 +25,7 @@ interface TeamHubProps {
    mode?: TeamHubMode;
    canManageAttendance?: boolean;
    erpManaged?: boolean;
+   attendanceScope?: AttendanceScope | null;
 }
 
 // --- MOCK DATA FOR SHIFTS ---
@@ -38,28 +41,20 @@ const UNASSIGNED_SHIFTS: Shift[] = [
    { id: 'new_n', userId: null, dayOfWeek: 0, startTime: '22:00', endTime: '02:00', label: 'Noche', color: 'bg-indigo-100 border-indigo-300 text-indigo-800' },
 ];
 
-// MOCK DATA FOR REPORT DEMO (Usually comes from DB)
-const MOCK_TIME_RECORDS: TimeRecord[] = [
-   // User 2: Normal Day
-   { id: 'tr1', userId: 'u2', type: 'IN', timestamp: new Date(new Date().setHours(8, 55)).toISOString(), method: 'PIN' },
-   { id: 'tr2', userId: 'u2', type: 'OUT', timestamp: new Date(new Date().setHours(17, 5)).toISOString(), method: 'PIN' },
-   // User 3: Missing Out
-   { id: 'tr3', userId: 'u3', type: 'IN', timestamp: new Date(new Date().setHours(14, 58)).toISOString(), method: 'PIN' },
-   // User 4: Overtime
-   { id: 'tr4', userId: 'u4', type: 'IN', timestamp: new Date(new Date().setHours(9, 0)).toISOString(), method: 'PIN' },
-   { id: 'tr5', userId: 'u4', type: 'OUT', timestamp: new Date(new Date().setHours(20, 30)).toISOString(), method: 'PIN' },
-];
-
 // --- HELPER COMPONENTS ---
 
-const SlideUnlock: React.FC<{ onUnlock: () => void; label: string; mode: 'IN' | 'OUT' }> = ({ onUnlock, label, mode }) => {
+const SlideUnlock: React.FC<{ onUnlock: () => void; label: string; mode: 'IN' | 'OUT'; disabled?: boolean }> = ({ onUnlock, label, mode, disabled = false }) => {
    const [sliderValue, setSliderValue] = useState(0);
+   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+   useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
 
    const handleInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+      if (disabled || timer.current) return;
       const val = parseInt(e.target.value);
       setSliderValue(val);
       if (val === 100) {
-         setTimeout(() => {
+         timer.current = setTimeout(() => {
+            timer.current = null;
             onUnlock();
             setSliderValue(0);
          }, 200);
@@ -90,6 +85,7 @@ const SlideUnlock: React.FC<{ onUnlock: () => void; label: string; mode: 'IN' | 
             max="100"
             value={sliderValue}
             onChange={handleInput}
+            disabled={disabled}
             onTouchEnd={handleEnd}
             onMouseUp={handleEnd}
             className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-20"
@@ -112,7 +108,8 @@ const TeamHub: React.FC<TeamHubProps> = ({
    onClose,
    mode = 'ADMIN',
    canManageAttendance = false,
-   erpManaged = false
+   erpManaged = false,
+   attendanceScope = null
 }) => {
    const availableTabs = useMemo(
       () => resolveTeamHubTabs(mode, canManageAttendance),
@@ -129,8 +126,39 @@ const TeamHub: React.FC<TeamHubProps> = ({
    // Clock-in State
    const [pin, setPin] = useState('');
    const [authenticatedUser, setAuthenticatedUser] = useState<User | null>(null);
-   const [isFaceScanning, setIsFaceScanning] = useState(false);
-   const [timeRecords, setTimeRecords] = useState<TimeRecord[]>(MOCK_TIME_RECORDS);
+   const [timeRecords, setTimeRecords] = useState<LocalAttendanceRecord[]>([]);
+   const [clockError, setClockError] = useState<string | null>(null);
+   const [clockLoading, setClockLoading] = useState(mode === 'ATTENDANCE');
+   const [clockBusy, setClockBusy] = useState(false);
+   const [clockRetry, setClockRetry] = useState(0);
+   const repository = useMemo(() => createLocalAttendanceRepository(dbAdapter), []);
+   const pendingPunches = useRef(new Map<string, LocalAttendanceRecord>());
+   const clockChallenge = useRef(0);
+   const activeClockChallenge = clockChallenge.current;
+   const savingPunch = useRef(false);
+   const clockGeneration = useRef(0);
+   const clockScopeKey = attendanceScope ? attendanceScopeKey(attendanceScope) : '';
+   const currentClock = useRef({ users, erpManaged, attendanceScope, authenticatedUser, pin });
+   currentClock.current = { users, erpManaged, attendanceScope, authenticatedUser, pin };
+
+   useEffect(() => {
+      const generation = ++clockGeneration.current;
+      pendingPunches.current.clear();
+      clockChallenge.current++;
+      savingPunch.current = false;
+      currentClock.current.authenticatedUser = null;
+      setAuthenticatedUser(null); setPin(''); setTimeRecords([]); setClockError(null); setClockBusy(false);
+      if (mode !== 'ATTENDANCE') { setClockLoading(false); return; }
+      const scope = clockScopeKey ? JSON.parse(clockScopeKey) as AttendanceScope : null;
+      if (!scope) { setClockLoading(false); setClockError('No se pudo identificar la caja y el dispositivo para guardar asistencia.'); return; }
+      setClockLoading(true);
+      void repository.load(scope).then(rows => {
+         if (clockGeneration.current === generation) setTimeRecords(rows);
+      }).catch(error => {
+         if (clockGeneration.current === generation) setClockError(String(error));
+      }).finally(() => { if (clockGeneration.current === generation) setClockLoading(false); });
+      return () => { clockGeneration.current++; };
+   }, [mode, clockScopeKey, clockRetry, repository]);
 
    // Schedule State
    const [shifts, setShifts] = useState<Shift[]>(INITIAL_SHIFTS);
@@ -150,7 +178,9 @@ const TeamHub: React.FC<TeamHubProps> = ({
    // --- LOGIC: CLOCK IN/OUT ---
 
    const handlePinPress = (key: string) => {
+      if (savingPunch.current || clockLoading || !attendanceScope) return;
       if (key === 'C') {
+         clockChallenge.current++; currentClock.current.authenticatedUser = null; currentClock.current.pin = '';
          setPin('');
          setAuthenticatedUser(null);
       } else if (key === 'BACK') {
@@ -159,40 +189,39 @@ const TeamHub: React.FC<TeamHubProps> = ({
          const newPin = pin + key;
          setPin(newPin);
          if (newPin.length === 4) {
-            const user = users.find(u => u.pin === newPin);
-            if (user) {
-               setAuthenticatedUser(user);
-            } else {
-               setPin('');
-               alert('PIN Incorrecto');
-            }
+            try {
+               const user = authenticateAttendancePin(users, newPin, erpManaged);
+               clockChallenge.current++; currentClock.current.authenticatedUser = user; currentClock.current.pin = newPin;
+               setAuthenticatedUser(user); setClockError(null);
+            } catch (error) { setPin(''); setClockError(String(error)); }
          }
       }
    };
 
-   const handleFaceId = () => {
-      setIsFaceScanning(true);
-      setTimeout(() => {
-         setIsFaceScanning(false);
-         // Simulate finding a random user
-         setPin(users[0].pin);
-         setAuthenticatedUser(users[0]);
-      }, 2000);
-   };
-
-   const handleClockAction = (type: 'IN' | 'OUT') => {
-      if (!authenticatedUser) return;
-      const record: TimeRecord = {
-         id: Math.random().toString(36).substr(2, 9),
-         userId: authenticatedUser.id,
-         type,
-         timestamp: new Date().toISOString(),
-         method: isFaceScanning ? 'FACE_ID' : 'PIN'
-      };
-      setTimeRecords(prev => [record, ...prev]);
-      alert(`${type === 'IN' ? 'Entrada' : 'Salida'} registrada: ${new Date().toLocaleTimeString()}`);
-      setPin('');
-      setAuthenticatedUser(null);
+   const handleClockAction = async (type: 'IN' | 'OUT', challenge: number) => {
+      if (savingPunch.current || challenge !== clockChallenge.current) return;
+      const current = currentClock.current;
+      if (!current.authenticatedUser || !current.attendanceScope || clockLoading) return;
+      const generation = clockGeneration.current;
+      try {
+         const employee = authenticateAttendancePin(current.users, current.pin, current.erpManaged);
+         if (employee.id !== current.authenticatedUser.id) throw Error('El empleado cambió. Valida de nuevo el PIN.');
+         const operation = pendingPunches.current.get(employee.id) || createAttendanceOperation(current.attendanceScope, employee, type);
+         if (operation.userId !== employee.id || operation.type !== type || attendanceScopeKey(operation.scope) !== attendanceScopeKey(current.attendanceScope)) throw Error('Reintenta la marca pendiente original antes de cambiar de operación.');
+         pendingPunches.current.set(employee.id, operation);
+         savingPunch.current = true; setClockBusy(true); setClockError(null);
+         const saved = await repository.commit(operation);
+         if (generation !== clockGeneration.current || challenge !== clockChallenge.current) return;
+         const latest = currentClock.current;
+         if (!latest.authenticatedUser || latest.authenticatedUser.id !== employee.id || authenticateAttendancePin(latest.users, latest.pin, latest.erpManaged).id !== employee.id) throw Error('El empleado cambió. Revalida el PIN para confirmar la marca.');
+         setTimeRecords(previous => [saved, ...previous.filter(record => record.id !== saved.id)]);
+         pendingPunches.current.delete(employee.id);
+         clockChallenge.current++;
+         currentClock.current.authenticatedUser = null;
+         setAuthenticatedUser(null); setPin('');
+         alert(`${type === 'IN' ? 'Entrada' : 'Salida'} guardada en esta caja: ${new Date(saved.timestamp).toLocaleTimeString()}`);
+      } catch (error) { if (generation === clockGeneration.current) setClockError(String(error)); }
+      finally { if (generation === clockGeneration.current) { savingPunch.current = false; setClockBusy(false); } }
    };
 
    // --- LOGIC: USER MANAGEMENT ---
@@ -326,7 +355,13 @@ const TeamHub: React.FC<TeamHubProps> = ({
    const dailyReports = useMemo(() => {
       const reports: any[] = [];
       users.forEach(user => {
-         const userRecords = timeRecords.filter(r => r.userId === user.id).sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+         const days = new Map<string, LocalAttendanceRecord[]>();
+         timeRecords.filter(record => record.userId === user.id).forEach(record => {
+            const day = new Date(record.timestamp).toLocaleDateString();
+            days.set(day, [...(days.get(day) || []), record]);
+         });
+         days.forEach(dayRecords => {
+         const userRecords = dayRecords.slice().sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
          if (userRecords.length > 0) {
             const firstIn = userRecords.find(r => r.type === 'IN');
             const lastOut = userRecords.reverse().find(r => r.type === 'OUT');
@@ -351,6 +386,7 @@ const TeamHub: React.FC<TeamHubProps> = ({
                });
             }
          }
+         });
       });
       return reports;
    }, [timeRecords, users]);
@@ -512,11 +548,15 @@ const TeamHub: React.FC<TeamHubProps> = ({
                            </div>
                         )}
 
+                        <p className="text-xs text-slate-500 mb-3">Las marcas se guardan localmente en esta caja mediante PIN.</p>
+                        {clockLoading && <p role="status">Cargando asistencia guardada...</p>}
+                        {clockBusy && <p role="status">Guardando marca...</p>}
+                        {clockError && <div role="alert" className="mb-3 text-sm text-red-700"><p>{clockError}</p><button type="button" disabled={clockBusy} onClick={() => { if (pendingPunches.current.size && !currentClock.current.authenticatedUser) { setClockError('Valida el PIN del empleado para reintentar su marca pendiente.'); return; } const pending = pendingPunches.current.get(currentClock.current.authenticatedUser?.id || ''); if (pending) { void handleClockAction(pending.type, clockChallenge.current); } else setClockRetry(value => value + 1); }}>Reintentar</button></div>}
                         {authenticatedUser ? (
                            <div className="w-full space-y-4 animate-in slide-in-from-bottom-10 fade-in duration-500">
-                              <SlideUnlock label="Entrada" mode="IN" onUnlock={() => handleClockAction('IN')} />
-                              <SlideUnlock label="Salida" mode="OUT" onUnlock={() => handleClockAction('OUT')} />
-                              <button onClick={() => { setAuthenticatedUser(null); setPin(''); }} className="w-full py-3 text-slate-400 text-xs font-bold uppercase tracking-wider hover:text-slate-600 transition-colors mt-2">Cancelar</button>
+                              <SlideUnlock key={`in-${activeClockChallenge}`} label="Entrada" mode="IN" disabled={clockBusy || clockLoading || !attendanceScope} onUnlock={() => { void handleClockAction('IN', activeClockChallenge); }} />
+                              <SlideUnlock key={`out-${activeClockChallenge}`} label="Salida" mode="OUT" disabled={clockBusy || clockLoading || !attendanceScope} onUnlock={() => { void handleClockAction('OUT', activeClockChallenge); }} />
+                              <button disabled={clockBusy} onClick={() => { if (savingPunch.current) return; clockChallenge.current++; currentClock.current.authenticatedUser = null; currentClock.current.pin = ''; setAuthenticatedUser(null); setPin(''); }} className="w-full py-3 text-slate-400 text-xs font-bold uppercase tracking-wider hover:text-slate-600 transition-colors mt-2">Cancelar</button>
                            </div>
                         ) : (
                            <div className="w-full px-2">
