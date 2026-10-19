@@ -6618,16 +6618,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
         const tagged=processedCart.map(line=>(line as any).fiscalCheckoutOperationId).filter(Boolean);
         const operationId=fiscalCheckoutOperationRef.current|| (tagged.length===processedCart.length&&new Set(tagged).size===1?tagged[0]:createUuid());fiscalCheckoutOperationRef.current=operationId;
         const checkout=await fiscalWorkflowV2Client.reserveCheckout(currentFiscalCheckoutCartIdentity(),operationId,{requirePermit:requiresFiscalPermit}).catch(error=>{if(error instanceof Error&&error.message==='FISCAL_WORKFLOW_PERMIT_REQUIRED')throw Error('No hay autorización fiscal disponible para esta venta. Espera la sincronización y vuelve a cobrar; no se realizó ningún pago.');throw error;});
-        onUpdateCart(processedCart.map(line=>({...line,fiscalCheckoutOperationId:operationId})));
-        if(checkout.phase==='EFFECT_POSSIBLE'&&checkout.paymentIds.some(id=>!paymentIds.includes(id)))throw Error('PAYMENT_INTENT_RECONCILIATION_REQUIRED');
-        fiscalCheckoutRef.current=checkout;
         if(!checkout.permit)throw Error('FISCAL_WORKFLOW_PERMIT_REQUIRED');
         if(['COMMITTED','ACKNOWLEDGED'].includes(checkout.phase)){
           const completed=await db.getDocument('transactions',checkout.transactionId)||await db.getDocument('transactionHistory',checkout.transactionId);
           if(!completed)throw Error('FISCAL_WORKFLOW_COMMITTED_RECEIPT_REQUIRED');
           assertFiscalWorkflowCheckoutReplay(checkout,completed as Transaction,currentFiscalCheckoutCartIdentity(),readFiscalWorkflowLocalScope(activeTerminalConfig,terminalId));
+          fiscalCheckoutRef.current=checkout;
           return Object.assign(()=>{},{completedTransaction:completed as Transaction});
         }
+        if(checkout.phase==='EFFECT_POSSIBLE'&&checkout.paymentIds.some(id=>!paymentIds.includes(id)))throw Error('PAYMENT_INTENT_RECONCILIATION_REQUIRED');
+        onUpdateCart(processedCart.map(line=>({...line,fiscalCheckoutOperationId:operationId})));
+        fiscalCheckoutRef.current=checkout;
       }
 
       setLargeMasterSyncV3CriticalOperation('PAYMENT', true);
