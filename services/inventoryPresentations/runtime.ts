@@ -13,7 +13,7 @@ export function createPresentationRuntime(authority:()=>PresentationAuthority,po
  const sql=ports.sql??dbAdapter.inventoryPresentationsSQL?.();if(!sql)throw Error('INVENTORY_PRESENTATION_NATIVE_REQUIRED');
  const store=new InventoryPresentationStore(sql),raw=createInventoryPresentationClient({store,authority,sessionId:ports.sessionId??createUuid,...(ports.auth?{auth:ports.auth}:{}),...(ports.fetchImpl?{fetchImpl:ports.fetchImpl}:{})});
  let generation=0;
- const client={...raw,cancel(){generation++;raw.cancel();},prepare(){
+ const client={...raw,cancel(){generation++;raw.cancel();},async prepare(){
   const version=generation,expected=authority(),lease=beginPresentationAdmission(expected);
   return raw.prepare().catch(async error=>{
    if(version!==generation)throw error;
