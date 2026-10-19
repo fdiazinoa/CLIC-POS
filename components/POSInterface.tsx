@@ -7841,7 +7841,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             />
          )}
 
-         {presentationError&&<div role="status" className="fixed top-16 right-4 z-50 bg-amber-50 border rounded-xl p-3 max-w-sm"><p>Presentaciones no disponibles. Revisa la conexión o la habilitación de esta caja en el ERP.</p><button type="button" onClick={()=>setPresentationRetry(value=>value+1)}>Reintentar</button><details><summary>Detalle</summary><code>{presentationError}</code></details></div>}
+         {presentationError&&(cart.some(line=>line.inventoryPresentation!==undefined)||presentationSelection?.inventoryPresentationMaster)&&<div role="status" className="fixed top-16 right-4 z-50 bg-amber-50 border rounded-xl p-3 max-w-sm"><p>Presentaciones no disponibles. Revisa la conexión o la habilitación de esta caja en el ERP.</p><button type="button" onClick={()=>setPresentationRetry(value=>value+1)}>Reintentar</button><details><summary>Detalle</summary><code>{presentationError}</code></details></div>}
          {errorToast && (
             <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-[100] animate-in slide-in-from-bottom-5 fade-in duration-300">
                <div className="bg-red-600 text-white px-6 py-4 rounded-2xl shadow-2xl flex items-center gap-3 font-bold border-2 border-red-400">
