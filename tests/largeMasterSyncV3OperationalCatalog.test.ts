@@ -6,6 +6,7 @@ import type { LargeMasterSyncV3CandidateReady } from '../services/sync/LargeMast
 import { validateV3PinnedLineSource } from '../services/sync/LargeMasterSyncV3LineSource';
 import { buildLargeMasterSyncV3CheckoutFiscalInput } from '../services/sync/LargeMasterSyncV3CheckoutAuthority';
 import { calculateLineFiscalValuesForTransaction } from '../utils/fiscalBreakdown';
+import { resolveProductImageSrc } from '../utils/entityImage';
 import type { CartItem, BusinessConfig } from '../types';
 import type { LargeMasterSyncV3Runtime } from '../services/sync/LargeMasterSyncV3Runtime';
 
@@ -116,6 +117,34 @@ test('rejects a result if the independent inventory snapshot changes mid-read', 
   const changing = fixture({ advanceInventoryAfterBalance: true });
   const catalog = await LargeMasterSyncV3OperationalCatalog.open(changing.ready, 'T1', 'W');
   await assert.rejects(() => catalog.search('Agua'), /SYNC_V3_INVENTORY_NOT_READY/);
+});
+
+test('authoritative image references survive get/search/page and reject inline media without legacy reads', async () => {
+  const source = { ...article, image_url: 'https://images.example.test/canonical.jpg',
+    images: ['data:image/png;base64,abc', 'https://images.example.test/side.jpg'],
+    image: 'file:///legacy.jpg', image_version: 'v2' };
+  const { ready } = fixture({ article: source, variants: [] });
+  Object.assign(ready.runtime, { async readAdministrativeCatalogPage(request: any) {
+    assert.equal(request.limit, 30);
+    return { rows: [{ id: 'A', images: ['https://wrong.example.test/legacy.jpg'] }], nextCursor: null };
+  } });
+  const catalog = await LargeMasterSyncV3OperationalCatalog.open(ready, 'T1', 'W');
+  const results = [(await catalog.get('A'))!, ...(await catalog.search('Agua')),
+    ...(await catalog.page({ limit: 30 })).items];
+  assert.equal(results.length, 3);
+  for (const { product } of results) {
+    assert.deepEqual(product.images, ['https://images.example.test/canonical.jpg', 'https://images.example.test/side.jpg']);
+    assert.equal(product.imageVersion, 'v2');
+    assert.equal(resolveProductImageSrc(product), source.image_url);
+    assert.equal(product.price, 125.5);
+    assert.equal(product.v3SaleAuthority?.tariffId, 'T1');
+  }
+  for (const value of [undefined, 'data:image/jpeg;base64,abc', 'file:///a.jpg', 'javascript:alert(1)',
+    '/relative.jpg', 'https://u:p@images.example.test/a.jpg', `https://images.example.test/${'x'.repeat(2048)}`]) {
+    const { ready: invalid } = fixture({ article: { ...article, images: [value] }, variants: [] });
+    const empty = await LargeMasterSyncV3OperationalCatalog.open(invalid, 'T1', 'W');
+    assert.deepEqual((await empty.get('A'))!.product.images, []);
+  }
 });
 
 const weightedArticle = { ...article, name: 'BAL-001', measurementUnit: 'Kilogramo', purchaseUnit: 'kg',

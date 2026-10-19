@@ -19,7 +19,7 @@ async function nativeFixture() {
   const price = sql.prepare('INSERT INTO master_v3_prices VALUES(?,?,?,?)');
   for (let i=0;i<95;i++) {
     const id=`P${String(i).padStart(3,'0')}`;
-    const row={id,name:`Producto ${i}`,type:'PRODUCT',active:true,sellable:true,taxable:false,taxIds:[],category:i<30?'Otros':'Café',posCategoryId:i<30?'other':i%2?'café':undefined,activeWarehouseIds:['W'],operationalFlags:{trackInventory:true},...(i===30?{modifiers:['unsupported']}: {})};
+    const row={id,name:`Producto ${i}`,type:'PRODUCT',active:true,sellable:true,taxable:false,taxIds:[],category:i<30?'Otros':'Café',posCategoryId:i<30?'other':i%2?'café':undefined,activeWarehouseIds:['W'],operationalFlags:{trackInventory:true},images:[`https://images.example.test/${id}.jpg`],image_version:'v1',...(i===30?{modifiers:['unsupported']}: {})};
     article.run(id,row.name,JSON.stringify(row),i<30?'otros':'café',row.category,row.posCategoryId || '');
     price.run(2,id,'T',100+i);
     sql.prepare('INSERT INTO master_v3_inventory_balances VALUES(?,?,?,?,?,?)').run(id,'W',9,2,1,'now');
@@ -44,6 +44,8 @@ test('real SQLite native category identity/label filter precedes limit, reaches 
     do {const page=await catalog.page('','Café',cursor);assert.ok(page.products.length<=30);ids.push(...page.products.map(row=>row.id));diagnostics.push(...page.diagnostics);cursor=page.nextCursor;}while(cursor);
     assert.equal(ids.length,64);assert.equal(new Set(ids).size,64);assert.ok(ids.includes('P094'));assert.ok(!ids.includes('P000'));assert.match(diagnostics.join(' '),/modificadores/);
     const last=await catalog.page('Producto 94','Todos',null);assert.equal(last.products[0].price,194);assert.equal(last.products[0].stock,6);assert.equal(last.products[0].v3SaleAuthority?.tariffId,'T');
+    assert.deepEqual(last.products[0].images,['https://images.example.test/P094.jpg']);
+    assert.equal(last.products[0].imageVersion,'v1');
     assert.ok(f.calls.every(call=>call.size<=30));
     const empty=await f.store.readAdministrativeCatalogPage(f.ready.runtime.version,{tariffId:'T',warehouseId:'W',inventoryVersion:4,inventoryCursor:'C',operationalCategoryKeys:[],limit:30});assert.equal(empty.rows.length,0);
   }finally{f.sql.close();}
