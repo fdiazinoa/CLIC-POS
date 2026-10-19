@@ -29,6 +29,7 @@ import PromoBottomSheet from '../PromoBottomSheet';
 import SecurityOverlay from './SecurityOverlay';
 import { useKioskSecurityContext } from './KioskContext';
 import ModifierModal from '../ModifierModal';
+import RestaurantKioskMenu from './RestaurantKioskMenu';
 import { productHasRestaurantConfiguration, resolveRestaurantProductConfig } from '../../utils/restaurantProductConfig';
 
 const normalizeToken = (value: unknown): string =>
@@ -755,7 +756,19 @@ const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
   }, [handleHardwareScan]);
 
   return (
-    <div className="fixed inset-0 w-screen h-screen flex bg-slate-50 overflow-hidden">
+    <div className={restaurantMode ? 'fixed inset-0 w-screen h-screen overflow-hidden' : 'fixed inset-0 w-screen h-screen flex bg-slate-50 overflow-hidden'}>
+      {restaurantMode ? <RestaurantKioskMenu
+        storeName={config.companyInfo?.name || 'CLIC-POS'} serviceType={serviceType}
+        products={filteredProducts} catalogProducts={sellableProducts} categories={categories}
+        selectedCategory={selectedCategory} searchQuery={searchQuery} cart={cart}
+        subtotal={subtotal} itemCount={itemCount} checkoutError={checkoutError} feedback={lastScanned}
+        selectedCustomerName={selectedCustomer?.name} couponCode={redeemedCoupon?.code}
+        formatMoney={formatMoney} displayCategory={displayCategory} getPrice={getProductPrice}
+        getAvailability={getProductAvailability} onSearch={setSearchQuery} onCategory={setSelectedCategory}
+        onProduct={handleProductClick} onIncrease={handleIncrease} onDecrease={handleDecrease}
+        onRemove={onRemoveFromCart} onCheckout={handleCheckoutAttempt} onCancel={handleCancelPurchase}
+      /> : <>
+
       <section className="flex-[7] min-w-0 h-full flex flex-col overflow-hidden">
         <header className="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between z-10">
           <div className="flex items-center gap-3">
@@ -1062,6 +1075,7 @@ const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
           </button>
         </div>
       </aside>
+      </>}
 
       {weightInstructionOpen && weighingProduct && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in">
