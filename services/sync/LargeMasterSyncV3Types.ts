@@ -166,6 +166,8 @@ export interface V3CatalogArticle {
   active: boolean; sellable: boolean; type: string | null; price: number | null; balance: number | null; stock?: number | null;
 }
 export interface V3CatalogPageRequest {
+  /** Optional operational POS identity filter; legacy administrative callers are unchanged. */
+  operationalCategoryKeys?: readonly string[];
   query?: string; category?: 'ALL' | 'NONE';
   departmentId?: string; sectionId?: string; familyId?: string; brandId?: string; categoryId?: string; posCategoryId?: string;
   afterId?: string | null; limit?: number;

@@ -5,7 +5,7 @@ import type { Product, ProductOperationalFlags, ProductVariant, TaxDefinition,
   V3SaleAuthorityStamp } from '../../types';
 import type { LargeMasterSyncV3CandidateReady } from './LargeMasterSyncV3Candidate';
 import { LargeMasterSyncV3SaleCatalog, type V3SaleArticle } from './LargeMasterSyncV3SaleCatalog';
-import { LargeMasterSyncV3Error } from './LargeMasterSyncV3Types';
+import { LargeMasterSyncV3Error, type V3CatalogPageRequest } from './LargeMasterSyncV3Types';
 
 type RecordObject = Record<string, unknown>;
 
@@ -205,6 +205,31 @@ export class LargeMasterSyncV3OperationalCatalog {
     await this.assertInventoryVersion();
     onDiagnostics?.(diagnostics);
     return items.filter((item): item is V3OperationalProduct => item !== null);
+  }
+
+  /** Native cursor paging without treating administrative DTOs as sale authority. */
+  async page(request: Pick<V3CatalogPageRequest, 'query' | 'afterId' | 'limit' | 'categoryId' | 'posCategoryId' | 'operationalCategoryKeys'>) {
+    await this.assertInventoryVersion();
+    const result = await this.ready.runtime.readAdministrativeCatalogPage({ ...request,
+      limit: 30, tariffId: this.saleCatalog.tariffId, warehouseId: this.warehouseId,
+      inventoryVersion: this.ready.inventoryVersion, inventoryCursor: this.ready.inventoryCursor });
+    const sales = await this.saleCatalog.getMany(result.rows.map(row => row.id));
+    const supports = await this.ready.runtime.getOperationalSupports(sales.map(sale => stringValue(sale.article.id)), this.warehouseId);
+    const diagnostics: V3ArticleDiagnostic[] = [];
+    const items = await Promise.all(sales.map(async sale => {
+      try { return await this.adapt(sale, supports ? {
+        balance: supports.balances[stringValue(sale.article.id)] || null,
+        variants: supports.variants[stringValue(sale.article.id)] || [],
+      } : undefined); }
+      catch (error) {
+        if (!(error instanceof UnsupportedArticleError)) throw error;
+        diagnostics.push({ articleId: stringValue(sale.article.id), sku: stringValue(sale.article.sku), code: error.code, reason: error.reason });
+        return null;
+      }
+    }));
+    await this.assertInventoryVersion();
+    return { items: items.filter((item): item is V3OperationalProduct => item !== null),
+      diagnostics, nextCursor: result.nextCursor };
   }
 
   async get(articleId: string): Promise<V3OperationalProduct | null> {

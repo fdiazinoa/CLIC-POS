@@ -852,6 +852,11 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
       predicate += ` AND ${classificationColumns[key]} = ?`;
       bindings.push(value);
     }
+    if (request.operationalCategoryKeys !== undefined) {
+      const keys = [...new Set(request.operationalCategoryKeys.map(normalizeV3CategoryKey).filter(Boolean))];
+      predicate += keys.length ? ` AND (CASE WHEN a.pos_category_id <> '' THEN a.pos_category_id ELSE a.pos_category_key END) IN (${keys.map(() => '?').join(',')})` : ' AND 0';
+      bindings.push(...keys);
+    }
     const db = this.connection();
     const global = first(await db.query(`SELECT COUNT(*) AS total,
       EXISTS(SELECT 1 FROM master_v3_tariffs WHERE sync_version = ? AND tariff_id = ? AND active = 1) AS validTariff

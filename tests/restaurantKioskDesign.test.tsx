@@ -541,3 +541,14 @@ test('actual responsive effect uses the exact CSS breakpoint, handles changes an
   )({}, query, () => assert.fail('No API must not update'));
   assert.equal(noApi(), undefined);
 });
+
+test('native cursor controls use actual remote callbacks without truncating or inventing a total page count', () => {
+  const calls: string[]=[];
+  const {tree,html}=menuTree({products:products.slice(30,60),remotePage:{index:1,hasNext:true,loading:false,onNext:()=>calls.push('next'),onPrevious:()=>calls.push('previous')}});
+  assert.match(html,/Página 2/);
+  const nodes=elements(tree);
+  nodes.find(node=>node.props['aria-label']==='Siguiente página')!.props.onClick();
+  nodes.find(node=>node.props['aria-label']==='Página anterior')!.props.onClick();
+  assert.deepEqual(calls,['next','previous']);
+  assert.equal(nodes.filter(node=>node.props.className==='restaurant-product-card').length,30);
+});

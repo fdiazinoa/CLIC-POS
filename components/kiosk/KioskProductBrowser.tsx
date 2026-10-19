@@ -30,6 +30,7 @@ import SecurityOverlay from './SecurityOverlay';
 import { useKioskSecurityContext } from './KioskContext';
 import ModifierModal from '../ModifierModal';
 import RestaurantKioskMenu from './RestaurantKioskMenu';
+import type { LargeMasterSyncV3KioskCatalog, V3KioskPage } from '../../services/sync/LargeMasterSyncV3KioskCatalog';
 import { productHasRestaurantConfiguration, resolveRestaurantProductConfig } from '../../utils/restaurantProductConfig';
 
 const normalizeToken = (value: unknown): string =>
@@ -102,6 +103,7 @@ const scoreProductForSales = (product: Product, warehouses: Warehouse[]): number
 
 interface KioskProductBrowserProps {
   products: Product[];
+  v3Catalog?: LargeMasterSyncV3KioskCatalog;
   warehouses: Warehouse[];
   cart: CartItem[];
   onAddToCart: (product: Product, quantity?: number) => void;
@@ -118,7 +120,8 @@ interface KioskProductBrowserProps {
 }
 
 const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
-  products,
+  products: legacyProducts,
+  v3Catalog,
   warehouses,
   cart,
   onAddToCart,
@@ -134,8 +137,38 @@ const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
   serviceType,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
+  const [v3Page, setV3Page] = useState<V3KioskPage>({ products: [], nextCursor: null, diagnostics: [] });
+  const [cursors, setCursors] = useState<(string | null)[]>([null]);
+  const [catalogLoading, setCatalogLoading] = useState(Boolean(v3Catalog));
+  const [catalogError, setCatalogError] = useState('');
+  const [inventoryRevision, setInventoryRevision] = useState(0);
+  const products = v3Catalog ? v3Page.products : legacyProducts;
+
   const [lastScanned, setLastScanned] = useState<string | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<string>('Todos');
+  useEffect(() => { setCursors([null]); setSelectedCategory('Todos'); setSearchQuery(''); }, [v3Catalog]);
+  const cursor = cursors[cursors.length - 1];
+  useEffect(() => {
+    if (!v3Catalog) return;
+    let current = true;
+    setCatalogLoading(true);
+    setCatalogError('');
+    setV3Page({ products: [], nextCursor: null, diagnostics: [] });
+    void v3Catalog.page(searchQuery, selectedCategory, cursor).then(page => {
+      if (current) setV3Page(page);
+    }).catch(reason => { if (current) setCatalogError(String(reason.message || reason)); })
+      .finally(() => { if (current) setCatalogLoading(false); });
+    return () => { current = false; };
+  }, [v3Catalog, searchQuery, selectedCategory, cursor, inventoryRevision]);
+  useEffect(() => {
+    if (!v3Catalog) return;
+    const refresh = () => { setCursors([null]); setInventoryRevision(value => value + 1); };
+    window.addEventListener('v3InventoryUpdated', refresh);
+    return () => window.removeEventListener('v3InventoryUpdated', refresh);
+  }, [v3Catalog]);
+  const changeSearch = (value: string) => { setCursors([null]); setSearchQuery(value); };
+  const changeCategory = (value: string) => { setCursors([null]); setSelectedCategory(value); };
+
   const [activeAddProductId, setActiveAddProductId] = useState<string | null>(null);
   const [cartPulse, setCartPulse] = useState(false);
   const [language, setLanguage] = useState<'ES' | 'EN'>('ES');
@@ -215,6 +248,7 @@ const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
   const [productPrices, setProductPrices] = useState<ProductPrice[]>([]);
 
   useEffect(() => {
+    if (v3Catalog) return;
     let cancelled = false;
 
     const refreshProductPrices = async () => {
@@ -234,7 +268,7 @@ const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
       cancelled = true;
       window.removeEventListener('productPricesUpdated', refreshProductPrices);
     };
-  }, []);
+  }, [v3Catalog]);
 
   const normalizeScopeKey = useCallback((value: unknown) => normalizeToken(value), []);
   const terminal = (config.terminals || []).find(t => t.id === terminalId);
@@ -506,6 +540,7 @@ const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
   );
 
   const categories = useMemo(() => {
+    if (v3Catalog) return ['Todos', ...new Set(v3Catalog.categories.map(row => row.label))];
     const availableCategoryMap = new Map<string, string>();
     for (const product of sellableProducts) {
       const normalizedCategory = canonicalizeCategory(product?.category);
@@ -515,10 +550,10 @@ const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
     }
 
     return ['Todos', ...Array.from(availableCategoryMap.values()).sort((a, b) => a.localeCompare(b, 'es', { sensitivity: 'base' }))];
-  }, [canonicalizeCategory, displayCategory, sellableProducts]);
+  }, [canonicalizeCategory, displayCategory, sellableProducts, v3Catalog]);
 
   const filteredProducts = useMemo(
-    () => sellableProducts.filter((product) => {
+    () => v3Catalog ? sellableProducts : sellableProducts.filter((product) => {
       const normalizedSearch = searchQuery.trim().toLowerCase();
       const matchesSearch = !normalizedSearch
         || (product.name || '').toLowerCase().includes(normalizedSearch)
@@ -529,7 +564,7 @@ const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
       const matchesCategory = selectedCategory === 'Todos' || canonicalizeCategory(product.category) === canonicalizeCategory(selectedCategory);
       return matchesSearch && matchesCategory;
     }),
-    [canonicalizeCategory, searchQuery, selectedCategory, sellableProducts]
+    [canonicalizeCategory, searchQuery, selectedCategory, sellableProducts, v3Catalog]
   );
 
   const suggestions = useMemo(
@@ -661,6 +696,7 @@ const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
 
   const handleCheckoutAttempt = () => {
     if (cart.length === 0) return;
+    if (v3Catalog && (catalogLoading || catalogError)) { setCheckoutError(catalogError || 'Espera a que termine la consulta del catálogo.'); return; }
     if (restaurantMode) {
       const unrouted = cart.find(item => !resolveRestaurantProductConfig(item).production_area_id);
       if (unrouted) {
@@ -757,6 +793,12 @@ const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
 
   return (
     <div className={restaurantMode ? 'fixed inset-0 w-screen h-screen overflow-hidden' : 'fixed inset-0 w-screen h-screen flex bg-slate-50 overflow-hidden'}>
+      {!restaurantMode && v3Catalog ? <div className="fixed top-24 right-6 z-30 bg-white p-3 rounded shadow" aria-label="Páginas del catálogo">
+        <p role={catalogError ? 'alert' : 'status'}>{catalogError || (catalogLoading ? 'Consultando catálogo autorizado…' : v3Page.diagnostics.join('; '))}</p>
+        <button type="button" disabled={catalogLoading || cursors.length === 1} onClick={() => setCursors(previous => previous.slice(0, -1))}>Anterior</button>
+        <span> Página {cursors.length} </span>
+        <button type="button" disabled={catalogLoading || !v3Page.nextCursor} onClick={() => setCursors(previous => [...previous, v3Page.nextCursor])}>Siguiente</button>
+      </div> : null}
       {restaurantMode ? <RestaurantKioskMenu
         storeName={config.companyInfo?.name || 'CLIC-POS'} serviceType={serviceType}
         products={filteredProducts} catalogProducts={sellableProducts} categories={categories}
@@ -764,7 +806,12 @@ const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
         subtotal={subtotal} itemCount={itemCount} checkoutError={checkoutError} feedback={lastScanned}
         selectedCustomerName={selectedCustomer?.name} couponCode={redeemedCoupon?.code}
         formatMoney={formatMoney} displayCategory={displayCategory} getPrice={getProductPrice}
-        getAvailability={getProductAvailability} onSearch={setSearchQuery} onCategory={setSelectedCategory}
+        getAvailability={getProductAvailability} onSearch={changeSearch} onCategory={changeCategory}
+        catalogStatus={v3Catalog ? catalogError || (catalogLoading ? 'Consultando catálogo autorizado…' : v3Page.diagnostics.length ? `Artículos no disponibles: ${v3Page.diagnostics.join('; ')}` : '') : undefined}
+        catalogLoading={catalogLoading && Boolean(v3Catalog)}
+        remotePage={v3Catalog ? { index: cursors.length - 1, hasNext: Boolean(v3Page.nextCursor), loading: catalogLoading,
+          onPrevious: () => setCursors(previous => previous.slice(0, -1)),
+          onNext: () => { if (v3Page.nextCursor) setCursors(previous => [...previous, v3Page.nextCursor]); } } : undefined}
         onProduct={handleProductClick} onIncrease={handleIncrease} onDecrease={handleDecrease}
         onRemove={onRemoveFromCart} onCheckout={handleCheckoutAttempt} onCancel={handleCancelPurchase}
       /> : <>

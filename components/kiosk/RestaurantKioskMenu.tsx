@@ -28,6 +28,9 @@ interface RestaurantKioskMenuProps {
   itemCount: number;
   checkoutError: string;
   feedback: string | null;
+  catalogStatus?: string;
+  catalogLoading?: boolean;
+  remotePage?: { index: number; hasNext: boolean; loading: boolean; onPrevious(): void; onNext(): void };
   selectedCustomerName?: string;
   couponCode?: string;
   formatMoney: (value: number) => string;
@@ -218,8 +221,8 @@ export default function RestaurantKioskMenu(props: RestaurantKioskMenuProps) {
   const searchRef = useRef<HTMLInputElement>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
   const lastPage = Math.max(0, Math.ceil(products.length / PAGE_SIZE) - 1);
-  const currentPage = Math.min(page, lastPage);
-  const visibleProducts = products.slice(
+  const currentPage = props.remotePage?.index ?? Math.min(page, lastPage);
+  const visibleProducts = props.remotePage ? products : products.slice(
     currentPage * PAGE_SIZE,
     (currentPage + 1) * PAGE_SIZE,
   );
@@ -278,7 +281,9 @@ export default function RestaurantKioskMenu(props: RestaurantKioskMenuProps) {
     resetMenuPosition();
   };
   const changePage = (next: number) => {
-    setPage(next);
+    if (props.remotePage) {
+      if (next > currentPage) props.remotePage.onNext(); else props.remotePage.onPrevious();
+    } else setPage(next);
     resetMenuPosition();
   };
   const serviceLabel = serviceType === 'TAKEOUT' ? 'Para llevar' : 'Comer aquí';
@@ -437,14 +442,15 @@ export default function RestaurantKioskMenu(props: RestaurantKioskMenuProps) {
                 );
               })}
             </div>
-            {!products.length ? (
+            {props.catalogStatus ? <p role="status" className="p-4 text-slate-800">{props.catalogStatus}</p> : null}
+            {!products.length && !props.catalogLoading && !props.catalogStatus ? (
               <div className="restaurant-no-results">
                 <Search size={40} aria-hidden="true" />
                 <h3>No encontramos ese producto</h3>
                 <p>Prueba otra búsqueda o elige una categoría.</p>
               </div>
             ) : null}
-            {products.length > PAGE_SIZE ? (
+            {(props.remotePage ? (currentPage > 0 || props.remotePage.hasNext) : products.length > PAGE_SIZE) ? (
               <nav
                 className="restaurant-pagination"
                 aria-label="Páginas del menú"
@@ -452,18 +458,18 @@ export default function RestaurantKioskMenu(props: RestaurantKioskMenuProps) {
                 <button
                   type="button"
                   aria-label="Página anterior"
-                  disabled={currentPage === 0}
+                  disabled={currentPage === 0 || props.remotePage?.loading}
                   onClick={() => changePage(currentPage - 1)}
                 >
                   <ArrowLeft size={21} /> Anterior
                 </button>
                 <span aria-live="polite">
-                  {currentPage + 1} / {lastPage + 1}
+                  {props.remotePage ? `Página ${currentPage + 1}` : `${currentPage + 1} / ${lastPage + 1}`}
                 </span>
                 <button
                   type="button"
                   aria-label="Siguiente página"
-                  disabled={currentPage === lastPage}
+                  disabled={props.remotePage ? !props.remotePage.hasNext || props.remotePage.loading : currentPage === lastPage}
                   onClick={() => changePage(currentPage + 1)}
                 >
                   Siguiente <ArrowRight size={21} />
