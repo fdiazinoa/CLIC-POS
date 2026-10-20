@@ -1,5 +1,6 @@
 import { validWeightPresentation } from '../../utils/scaleWeight';
 import { hasV3KilogramContract } from '../../utils/weightedProduct';
+import { resolveRestaurantProductConfig } from '../../utils/restaurantProductConfig';
 import type { BusinessConfig, CartItem, Product, Transaction, V3SaleAuthorityStamp } from '../../types';
 import { calculateTaxBreakdownFromItems, calculateLineFiscalValuesForTransaction, calculateUncoveredServiceChargeBase, freezeAuthoritativeLineFiscalAmounts } from '../../utils/fiscalBreakdown';
 import { resolveAppliedServiceTaxPolicy } from '../../utils/serviceTaxPolicy';
@@ -7,6 +8,12 @@ import { LargeMasterSyncV3Error } from './LargeMasterSyncV3Types';
 
 /** A valid stamp cannot authorize changing the source's inventory or fiscal semantics. */
 export const validateV3PinnedLineSource = (line: CartItem, product: Product, authority: V3SaleAuthorityStamp): void => {
+  const lineRestaurant = resolveRestaurantProductConfig(line);
+  const sourceRestaurant = resolveRestaurantProductConfig(product);
+  if (lineRestaurant.production_area_id !== sourceRestaurant.production_area_id
+    || lineRestaurant.product_type !== sourceRestaurant.product_type) {
+    throw new LargeMasterSyncV3Error('SYNC_V3_ARTICLE_SOURCE_CHANGED');
+  }
   if (line.id !== product.id || line.type !== product.type || line.isInventoriable !== product.isInventoriable
     || line.taxable !== product.taxable || line.v3SaleAuthority?.taxIncluded !== authority.taxIncluded
     || JSON.stringify(line.appliedTaxIds) !== JSON.stringify(product.appliedTaxIds)) {
