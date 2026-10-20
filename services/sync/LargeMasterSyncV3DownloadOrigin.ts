@@ -53,6 +53,8 @@ export const assertLargeMasterSyncV3ConfigPayload = (payload: Record<string, any
     [Boolean(scopes?.resolvedScopes?.includes('inventory')), snapshot.resolved?.inventory?.warehouses],
     [Boolean(scopes?.resolvedScopes?.includes('documents')), snapshot.resolved?.documents?.document_series],
     [Boolean(scopes?.resolvedScopes?.includes('documents')), snapshot.resolved?.documents?.fiscal_ranges],
+    [false, snapshot.resolved?.catalog?.production_areas],
+    [false, snapshot.resolved?.catalog?.productionAreas],
   ];
   if (arrays.some(([required, value]) => (required || value !== undefined) && !Array.isArray(value))) {
     throw new LargeMasterSyncV3Error('SYNC_V3_SETUP_SNAPSHOT_REQUIRED');

@@ -8,6 +8,8 @@ import { LargeMasterSyncV3OperationalCatalog } from '../services/sync/LargeMaste
 import { LargeMasterSyncV3KioskCatalog, V3KioskPaymentAttempt } from '../services/sync/LargeMasterSyncV3KioskCatalog';
 import type { BusinessConfig, Transaction } from '../types';
 import type { LargeMasterSyncV3OperationalSession } from '../services/sync/LargeMasterSyncV3OperationalSession';
+import { validateV3PinnedLineSource } from '../services/sync/LargeMasterSyncV3LineSource';
+import { prepareKioskProduction } from '../services/restaurant/KioskProductionPreflight';
 
 async function nativeFixture() {
   const sql = new DatabaseSync(':memory:'); sql.exec(LARGE_MASTER_SYNC_V3_SCHEMA_SQL);
@@ -49,6 +51,23 @@ test('real SQLite native category identity/label filter precedes limit, reaches 
     assert.ok(f.calls.every(call=>call.size<=30));
     const empty=await f.store.readAdministrativeCatalogPage(f.ready.runtime.version,{tariffId:'T',warehouseId:'W',inventoryVersion:4,inventoryCursor:'C',operationalCategoryKeys:[],limit:30});assert.equal(empty.rows.length,0);
   }finally{f.sql.close();}
+});
+
+test('native simple route reaches preflight and pinned source rejects tampering while advanced DTOs stay unavailable',async()=>{
+ const f=await nativeFixture();try{
+  f.sql.exec("UPDATE master_v3_articles SET record_json=json_set(record_json,'$.production_area_id','COCINA','$.product_type','SIMPLE','$.restaurant_unsupported',json('false')) WHERE article_id='P094'");
+  const catalog=await f.open();const page=await catalog.page('Producto 94','Todos',null);const product=page.products[0];
+  assert.equal(product.production_area_id,'COCINA');assert.equal(product.product_type,'SIMPLE');
+  const line={...product,cartId:'line-route',quantity:1};
+  const targets=prepareKioskProduction([line],[{id:'COCINA',name:'Cocina',modo_salida:'KDS',kds_host:'10.0.0.2'}],f.context.config,'local');
+  assert.equal(targets[0].areaId,'COCINA');assert.equal(targets[0].kdsBaseUrl,'http://10.0.0.2:8001');
+  validateV3PinnedLineSource(line,product,product.v3SaleAuthority!);
+  assert.throws(()=>validateV3PinnedLineSource({...line,production_area_id:'OTHER'},product,product.v3SaleAuthority!),/ARTICLE_SOURCE_CHANGED/);
+  for(const indicator of [true,null,'false']){
+   f.sql.prepare("UPDATE master_v3_articles SET record_json=json_set(record_json,'$.restaurant_unsupported',json(?)) WHERE article_id='P094'").run(JSON.stringify(indicator));
+   const blocked=await catalog.page('Producto 94','Todos',null);assert.deepEqual(blocked.products,[]);assert.match(blocked.diagnostics.join(' '),/restaurante/);
+  }
+ }finally{f.sql.close();}
 });
 
 test('native page rejects changed inventory/context/disposed readers and never falls back after SQL failure',async()=>{

@@ -172,8 +172,7 @@ import { resolveAppliedServiceTaxPolicy } from './utils/serviceTaxPolicy';
 import { shouldApplyRestaurantServiceCharge } from './utils/orderServiceType';
 import { isRestaurantBusiness } from './utils/businessVertical';
 import { resolveRestaurantProductConfig } from './utils/restaurantProductConfig';
-import { resolveKdsBaseUrl } from './utils/kdsRouting';
-import { resolveProductionOutputTargets } from './utils/productionOutputMode';
+import { prepareKioskProduction } from './services/restaurant/KioskProductionPreflight';
 import {
   buildProductionDispatchItems,
   createProductionPrintIntent,
@@ -8731,6 +8730,7 @@ const AppContent: React.FC = () => {
       boundUsers?: User[];
       masterIp?: string;
       snapshotItems?: Product[];
+      productionAreas?: unknown[];
       bootstrapProtocol?: 'v3' | 'legacy';
       masterSync?: Record<string, unknown>;
       downloadOrigin?: string;
@@ -9457,7 +9457,8 @@ const AppContent: React.FC = () => {
         setupResult.progress?.({ stepId: 'sync', message: 'Validando catálogo V3 e inventario operativo...' });
         updatedConfig = await completeLargeMasterSyncV3Setup(updatedConfig,
           async () => { const session = await getLargeMasterSyncV3OperationalSession();
-            attemptReporter?.phase('config'); return session; }, projected => db.save('config', projected));
+            attemptReporter?.phase('config'); return session; }, projected => db.save('config', projected),
+          { productionAreas: setupResult.productionAreas });
         attemptReporter?.phase('config');
       } else if (shouldFullPullOnPairing) {
         setupResult.progress?.({
@@ -15080,24 +15081,12 @@ const AppContent: React.FC = () => {
               if (kioskPaymentRestaurantMode && !kioskServiceType) {
                 throw new Error('Selecciona si el pedido es para comer aquí o para llevar.');
               }
-              if (kioskPaymentRestaurantMode) {
-                const unrouted = cart.find(item => !resolveRestaurantProductConfig(item).production_area_id);
-                if (unrouted) throw new Error(`${unrouted.name} no tiene centro de producción configurado.`);
-              }
               const kioskProductionAreas = kioskPaymentRestaurantMode
                 ? await db.get('productionAreas' as any).catch(() => []) as any
                 : [];
-              if (kioskPaymentRestaurantMode) {
-                const availableAreaIds = new Set(
-                  (Array.isArray(kioskProductionAreas) ? kioskProductionAreas : [])
-                    .map((area: any) => String(area?.id || '').trim())
-                    .filter(Boolean),
-                );
-                const unavailableRoute = cart.find(item => !availableAreaIds.has(
-                  String(resolveRestaurantProductConfig(item).production_area_id || '').trim(),
-                ));
-                if (unavailableRoute) throw new Error(`${unavailableRoute.name} no tiene un centro de producción disponible.`);
-              }
+              const kioskProductionPlan = kioskPaymentRestaurantMode
+                ? prepareKioskProduction(cart, Array.isArray(kioskProductionAreas) ? kioskProductionAreas : [], kioskPaymentConfig, currentTerminal.id)
+                : [];
 
               // Calculate totals
               const subtotal = kioskTotals.subtotal;
@@ -15321,7 +15310,9 @@ const AppContent: React.FC = () => {
 
                     for (const [areaId, areaItems] of grouped) {
                       const area: any = areaById.get(areaId);
-                      const { shouldPrint, shouldSendKds } = resolveProductionOutputTargets(area?.modo_salida);
+                      const target = kioskProductionPlan.find(row => row.areaId === areaId);
+                      if (!target) throw Error('El destino de producción validado no está disponible.');
+                      const { shouldPrint, shouldSendKds } = target;
                       const areaName = area.nombre || area.name || areaId;
                       if (shouldPrint) {
                         const printIntent = createProductionPrintIntent({
@@ -15332,7 +15323,7 @@ const AppContent: React.FC = () => {
                           orderNumber: txn.orderNumber,
                           customerName: txn.customerName || 'Cliente General',
                           items: areaItems,
-                          printerId: area.printer_id || area.printerId,
+                          printerId: target.printerId,
                         });
                         await dispatchProductionPrint(printIntent, (intent) => printComanda(kioskPaymentConfig, {
                           items: intent.items,
@@ -15375,7 +15366,7 @@ const AppContent: React.FC = () => {
                         total: roundMoney(areaItems.reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0), 0)),
                       };
                       const intent = createProductionDispatchIntent({
-                        kdsBaseUrl: resolveKdsBaseUrl(area, kioskPaymentConfig),
+                        kdsBaseUrl: target.kdsBaseUrl || undefined,
                         cartIds: areaItems.map(item => item.cartId),
                         payload,
                       });

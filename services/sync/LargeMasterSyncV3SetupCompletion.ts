@@ -1,4 +1,5 @@
 import type { BusinessConfig } from '../../types';
+import { persistProductionAreaSnapshot } from '../restaurant/ProductionAreaSnapshot';
 import type { LargeMasterSyncV3Metric } from './LargeMasterSyncV3Client';
 import { createV3Progress, type V3Progress } from './LargeMasterSyncV3Progress';
 
@@ -12,12 +13,16 @@ export const completeLargeMasterSyncV3Setup = async (
   config: BusinessConfig,
   getSession: () => Promise<V3SetupSession>,
   persist: (config: BusinessConfig) => Promise<void>,
+  options?: { productionAreas?: unknown[] },
 ): Promise<BusinessConfig> => {
   const session = await getSession();
   await session.assertCurrent();
   const projected = await session.projectConfig(config);
   await persist(projected);
   await session.assertCurrent();
+  if (options?.productionAreas !== undefined) {
+    await persistProductionAreaSnapshot({ resolved: { catalog: { production_areas: options.productionAreas } } }, () => session.assertCurrent());
+  }
   return projected;
 };
 

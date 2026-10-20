@@ -44,6 +44,7 @@ interface PairingResult {
   boundUsers?: UserType[];
   masterIp?: string;
   snapshotItems?: Product[];
+  productionAreas?: unknown[];
   rooms?: any[];
   tables?: any[];
   deviceToken?: string;
@@ -686,6 +687,7 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
                 users,
                 masterIp: resolvedMasterIp,
                 snapshotItems,
+                productionAreas,
                 rooms,
                 tables,
                 snapshotMeta,
@@ -716,6 +718,7 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
                   boundUsers: users,
                   masterIp: resolvedMasterIp,
                   snapshotItems,
+                  productionAreas,
                   rooms,
                   tables,
                   snapshotMeta,

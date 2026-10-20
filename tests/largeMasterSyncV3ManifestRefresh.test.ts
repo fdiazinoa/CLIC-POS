@@ -127,6 +127,21 @@ test('consumed manifest with false flags repairs BEB003 70 to 85 through V3 and 
   f.changeGeneration(); await sync(f); assert.equal(f.exports(), 4);
 });
 
+test('explicit manual production metadata refresh is scoped without items; failure cannot publish a consumed checkpoint', async()=>{
+ const f=await fixture();await sync(f);const marker=f.marker();const before=f.fetches();let configs=0;
+ f.instance.refreshTerminalResolvedConfig=async(_snapshot:unknown,options:any)=>{
+  configs++;assert.deepEqual(Array.from(options.masterScopes),[]);assert.deepEqual(Array.from(options.blockScopes),[]);
+  assert.deepEqual(Array.from(options.resolvedScopes),['catalog']);assert.equal(options.supplementalMode,'skip');
+  assert.equal(options.forceRemoteFetch,true);assert.equal(options.requireOperationalTerminalConfig,true);
+  throw Error('TERMINAL_PRODUCTION_AREAS_QUERY_FAILED');
+ };
+ await assert.rejects(f.instance.manualSyncAll(),/TERMINAL_PRODUCTION_AREAS_QUERY_FAILED/);
+ assert.equal(configs,1);assert.ok(f.fetches()>before);assert.equal(f.marker(),marker);
+ f.instance.refreshTerminalResolvedConfig=async(_snapshot:unknown,options:any)=>{if(options.requireOperationalTerminalConfig)configs++;return f.config();};
+ await f.instance.manualSyncAll();assert.equal(configs,2);assert.equal(f.exports(),3);
+ const count=configs;await sync(f);assert.equal(configs,count);
+});
+
 for (const code of ['SYNC_SNAPSHOT_NOT_READY', 'SYNC_V3_INVENTORY_COVERAGE_REQUIRED']) test(`${code} leaves marker, cursor and readiness untouched, then retries`, async () => {
   const f = await fixture(); const before = clone(f.cursors()); f.manifest().cursor_map.product_prices = 'new-price';
   f.onPrepare(async () => { throw new LargeMasterSyncV3Error(code); });
