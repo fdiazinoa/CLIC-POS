@@ -230,6 +230,7 @@ interface BoundTerminalPayload {
   users?: UserType[];
   masterIp?: string;
   snapshotItems?: Product[];
+  productionAreas?: unknown[];
   rooms?: any[];
   tables?: any[];
   snapshotMeta?: {
@@ -1629,6 +1630,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           users: data.users,
           masterIp: resolvedMasterHost,
           snapshotItems: pairingSnapshotItems<Product>(initialConfigData),
+          productionAreas: initialConfigData.terminal_config?.resolved?.catalog?.production_areas,
           rooms: Array.isArray(initialConfigData.rooms) ? initialConfigData.rooms : undefined,
           tables: Array.isArray(initialConfigData.tables) ? initialConfigData.tables : undefined,
           snapshotMeta: {

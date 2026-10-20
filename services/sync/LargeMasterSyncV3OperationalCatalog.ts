@@ -1,5 +1,6 @@
 import { weightUnit } from '../../utils/scaleWeight';
 import { v3ArticleImages } from '../../utils/v3ArticlePresentation';
+import { v3RestaurantContract } from '../../utils/v3RestaurantContract';
 import { hasV3KilogramContract } from '../../utils/weightedProduct';
 import type { V3CategoryFilter } from './LargeMasterSyncV3Categories';
 import type { Product, ProductOperationalFlags, ProductVariant, TaxDefinition,
@@ -109,6 +110,9 @@ export class LargeMasterSyncV3OperationalCatalog {
     if ((Array.isArray(article.recipeDetails) && article.recipeDetails.length) || (Array.isArray(article.modifiers) && article.modifiers.length)) {
       throw new UnsupportedArticleError('Receta o modificadores no soportados');
     }
+    let restaurant: ReturnType<typeof v3RestaurantContract>;
+    try { restaurant = v3RestaurantContract(article); }
+    catch (error) { throw new UnsupportedArticleError((error as Error).message); }
     const articleId = stringValue(article.id);
     const name = stringValue(article.name);
     if (!articleId || !name || sale.version.syncId !== this.ready.runtime.version.syncId
@@ -152,6 +156,7 @@ export class LargeMasterSyncV3OperationalCatalog {
       inventoryCursor: this.ready.inventoryCursor,
     });
     const product: Product = {
+      ...restaurant,
       id: articleId,
       sku: optionalString(article.sku),
       externalCode: optionalString(article.externalCode),

@@ -16,6 +16,7 @@ import { syncErpPaymentMethods } from './PaymentMethodsSync';
 import { assertLegacyMasterPullAllowed, isLargeMasterSyncV3ReplacedCollection,
     usesLargeMasterSyncV3Authority } from './LargeMasterSyncV3Authority';
 import { persistLargeMasterSyncV3ConfigPushCatalog } from './LargeMasterSyncV3ConfigPush';
+import { persistProductionAreaSnapshot } from '../restaurant/ProductionAreaSnapshot';
 import { readLargeMasterSyncV3BoundIdentity } from './LargeMasterSyncV3BoundTransport';
 import { LargeMasterSyncV3Error } from './LargeMasterSyncV3Types';
 import { getLargeMasterSyncV3OperationalSession } from './LargeMasterSyncV3OperationalSession';
@@ -2490,6 +2491,13 @@ class SyncManager {
                     if (Boolean(options?.explicitV3Refresh)
                         || needsV3ManifestRefresh(fingerprint, hint, checkpoint, binding, { ...session.ready.runtime.version, stockAuthority })) {
                         await this.refreshV3Catalog();
+                        if (options?.explicitV3Refresh) {
+                            await this.refreshTerminalResolvedConfig(undefined, { baseConfig: config, persist: true,
+                                forceRemoteFetch: true, masterScopes: [], blockScopes: [], resolvedScopes: ['catalog'],
+                                supplementalMode: 'skip', deferDuringSale: true, dispatchEvent: false,
+                                requireOperationalTerminalConfig: true });
+                            assertManifestBinding();
+                        }
                         const applied = await getLargeMasterSyncV3OperationalSession(false);
                         await applied.assertCurrent();
                         const appliedStock = JSON.stringify([applied.ready.inventorySyncId || applied.ready.runtime.version.syncId,
@@ -3870,6 +3878,7 @@ class SyncManager {
                     }
                 }
                 const structuredMasterData = await this.refreshTerminalStructuredMasterData(snapshot, catalogDelta, {
+                    assertCurrent: options?.requireOperationalTerminalConfig ? assertRefreshAuthorityCurrent : undefined,
                     terminalIds: [
                         context.terminalId,
                         snapshotTerminalId,
@@ -5038,6 +5047,7 @@ class SyncManager {
         catalogDelta?: Record<string, unknown> | null,
         options?: {
             terminalIds?: Array<string | null | undefined>;
+            assertCurrent?: () => Promise<void>;
         }
     ): Promise<{
         users: number;
@@ -5058,6 +5068,7 @@ class SyncManager {
         };
 
         const catalogClassificationResults = await this.applyTerminalCatalogClassifications(snapshot);
+        await persistProductionAreaSnapshot(snapshot, options?.assertCurrent);
         results.categories = catalogClassificationResults.categories;
         results.productGroups = catalogClassificationResults.productGroups;
 
