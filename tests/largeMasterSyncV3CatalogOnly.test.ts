@@ -248,7 +248,7 @@ test('actual operational validation accepts saved old70/current85 and rejects lo
 
 test('historical refund requires actual original transaction CAS and preserves its old price/source',async()=>{
  const f=fixture();try{
-  const original={id:'original',items:[oldLine],type:'SALE'};f.insert('transactions',original);
+  const original={id:'original',items:[oldLine],type:'SALE',status:'COMPLETED'};f.insert('transactions',original);
   f.stage('N',102);await f.store.activateCatalogOnly('N',await f.transition());
   const documents=financial('refund',1,102,'N');
   Object.assign(documents[0].document,{type:'REFUND',originalTransactionId:'original',items:[{...oldLine,quantity:-1}]});
@@ -259,6 +259,28 @@ test('historical refund requires actual original transaction CAS and preserves i
   await f.adapter.saveDocumentsAtomically(documents);assert.equal(await f.stock(),101);
   assert.equal(JSON.parse(f.read('transactions').find(value=>JSON.parse(value).id==='refund')!).items[0].price,70);
   assert.deepEqual(JSON.parse(f.read('transactions').find(value=>JSON.parse(value).id==='original')!),original);
+ }finally{f.sql.close();}
+});
+
+for (const status of [undefined, 'PENDING', 'VOIDED', 'CANCELLED', 'REFUNDED', 'PARTIAL_REFUND'])
+test(`historical refund native status ${status ?? 'missing'} preserves authority and atomic failure`, async () => {
+ const f=fixture();try{
+  const original={id:'original',items:[oldLine],type:'SALE',...(status ? {status} : {})};f.insert('transactions',original);
+  f.stage('N',102);await f.store.activateCatalogOnly('N',await f.transition());
+  const documents=financial('refund',1,102,'N');
+  Object.assign(documents[0].document,{type:'REFUND',originalTransactionId:'original',items:[{...oldLine,quantity:-1}]});
+  documents[0].v3StockRequirements=[];
+  documents[0].v3ExpectedRetainedDocument={collection:'transactions',id:'original',expected:JSON.stringify(original)};
+  Object.assign(documents[1].document,{qtyOut:0,qtyIn:1});
+  const transactions=f.read('transactions');const ledger=f.read('inventoryLedger');
+  if(status==='PARTIAL_REFUND'){
+   await f.adapter.saveDocumentsAtomically(documents);assert.equal(await f.stock(),101);
+   const saved=JSON.parse(f.read('transactions').find(row=>JSON.parse(row).id==='refund')!);
+   assert.equal(saved.items[0].price,70);assert.equal(saved.items[0].v3SaleAuthority.syncId,'S');
+  }else{
+   await assert.rejects(f.adapter.saveDocumentsAtomically(documents),/ORIGINAL_NOT_REFUNDABLE/);
+   assert.deepEqual(f.read('transactions'),transactions);assert.deepEqual(f.read('inventoryLedger'),ledger);assert.equal(await f.stock(),100);
+  }
  }finally{f.sql.close();}
 });
 
