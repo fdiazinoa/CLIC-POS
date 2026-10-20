@@ -4,8 +4,10 @@ import { resolveProductionOutputTargets } from '../../utils/productionOutputMode
 import { resolveKdsBaseUrl } from '../../utils/kdsRouting';
 
 /** Validate configured destinations before any cash/sequence/transaction effects. Connectivity retries stay durable. */
-export function prepareKioskProduction(items: CartItem[], areas: unknown[], config: BusinessConfig, terminalId: string) {
-  const areaById = new Map(areas.filter((row: any) => row && row.active !== false && row.is_active !== false)
+export function prepareKioskProduction(items: CartItem[], areas: unknown[], config: BusinessConfig, terminalId: string,
+  options: { strict?: boolean } = {}) {
+  const strict = options.strict !== false;
+  const areaById = new Map(areas.filter((row: any) => row && (!strict || row.active !== false && row.is_active !== false))
     .map((row: any) => [String(row.id || '').trim(), row]));
   const selected = new Map<string, any>();
   for (const item of items) {
@@ -16,6 +18,11 @@ export function prepareKioskProduction(items: CartItem[], areas: unknown[], conf
     selected.set(id, area);
   }
   return [...selected].map(([areaId, area]) => {
+    if (!strict) {
+      // Existing non-V3 kiosks default omitted modes to KDS and queue missing/offline targets.
+      return { areaId, area, ...resolveProductionOutputTargets(area.modo_salida),
+        printerId: area.printer_id || area.printerId, kdsBaseUrl: resolveKdsBaseUrl(area, config) };
+    }
     const rawMode = String(area.modo_salida || '').trim().toUpperCase();
     if (!['KDS', 'PRINTER', 'IMPRESORA', 'TICKET', 'AMBOS', 'BOTH', 'KDS_PRINTER', 'PRINTER_KDS',
       'PANTALLA_IMPRESORA', 'PANTALLA_E_IMPRESORA', 'MONITOR_TICKET'].includes(rawMode)) {

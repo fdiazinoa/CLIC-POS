@@ -15085,7 +15085,8 @@ const AppContent: React.FC = () => {
                 ? await db.get('productionAreas' as any).catch(() => []) as any
                 : [];
               const kioskProductionPlan = kioskPaymentRestaurantMode
-                ? prepareKioskProduction(cart, Array.isArray(kioskProductionAreas) ? kioskProductionAreas : [], kioskPaymentConfig, currentTerminal.id)
+                ? prepareKioskProduction(cart, Array.isArray(kioskProductionAreas) ? kioskProductionAreas : [], kioskPaymentConfig, currentTerminal.id,
+                  { strict: kioskV3Enabled })
                 : [];
 
               // Calculate totals
