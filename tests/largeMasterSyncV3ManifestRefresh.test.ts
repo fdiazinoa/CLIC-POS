@@ -89,7 +89,30 @@ async function fixture() {
     onSave: (callback: typeof save) => { save = callback; }, corrupt: () => { corrupt = true; },
     changeGeneration: () => { active = { ...active, syncId: 'external', syncVersion: 103 }; } };
 }
-const sync = (f: any) => f.instance.syncTerminalManifestInBackground(f.config(), { reason: 'force_sync', throwOnError: true });
+const sync = (f: any) => {
+  // Exercise automatic reconciliation without its wall-clock throttle.
+  f.instance.lastBackgroundTerminalManifestSyncAt = 0;
+  return f.instance.syncTerminalManifestInBackground(f.config(), { reason: 'periodic_manifest', throwOnError: true });
+};
+
+test('manual and force negotiate once with a matching checkpoint while ordinary manifests stay idle', async () => {
+  for (const reason of ['manual_sync', 'force_sync'] as const) {
+    const f = await fixture();
+    await sync(f); // Seed a successfully committed checkpoint for this exact fingerprint/generation/stock.
+    const marker = f.marker(); const cursor = clone(f.cursors());
+    assert.ok(marker); assert.equal(f.exports(), 1);
+    await f.instance.syncTerminalManifestInBackground(f.config(), { reason, throwOnError: true });
+    assert.equal(f.exports(), 2, reason);
+    assert.equal(f.marker(), marker);
+    assert.deepEqual(f.cursors(), cursor);
+    assert.deepEqual(f.events, ['v3CatalogUpdated', 'configUpdated', 'v3CatalogUpdated', 'configUpdated']);
+    for (const automatic of ['periodic_manifest', 'realtime'] as const) {
+      f.instance.lastBackgroundTerminalManifestSyncAt = 0;
+      await f.instance.syncTerminalManifestInBackground(f.config(), { reason: automatic, throwOnError: true });
+      assert.equal(f.exports(), 2);
+    }
+  }
+});
 
 test('consumed manifest with false flags repairs BEB003 70 to 85 through V3 and survives restart', async () => {
   const f = await fixture(); assert.equal(f.active().price, 70);

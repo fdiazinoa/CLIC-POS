@@ -23,6 +23,7 @@ import { hasProductPromotion } from '../../utils/promotionEngine';
 import { parseScaleBarcode } from '../../utils/barcodeParser';
 import { db } from '../../utils/db';
 import { resolveProductImageSrc } from '../../utils/entityImage';
+import { requiresKioskStockAvailability } from '../../utils/kioskProductStockPolicy';
 import { resolveProductActiveWarehouseIds } from '../../utils/masterIdentity';
 import { productIdentityCandidates, resolveOperationalProductId } from '../../utils/productReferences';
 import PromoBottomSheet from '../PromoBottomSheet';
@@ -580,13 +581,12 @@ const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
       return { canSell: false, reason: 'No disponible en este almacén', availableStock: 0 };
     }
 
-    const trackInventory = product.operationalFlags?.trackInventory ?? config.features?.stockTracking ?? false;
-    const productAllowsNegative = product.operationalFlags?.allowNegativeStock ?? false;
-    const terminalAllowsNegative = activeTerminalConfig?.workflow?.inventory?.allowNegativeStock ?? false;
-    const allowsNegative = productAllowsNegative && terminalAllowsNegative;
     const availableStock = getScopedProductStock(product);
 
-    if (trackInventory && !allowsNegative) {
+    if (requiresKioskStockAvailability(product, {
+      stockTracking: config.features?.stockTracking,
+      allowNegativeStock: activeTerminalConfig?.workflow?.inventory?.allowNegativeStock,
+    })) {
       const inCartQty = cart
         .filter(item => item.id === product.id)
         .reduce((sum, item) => sum + Number(item.quantity || 0), 0);

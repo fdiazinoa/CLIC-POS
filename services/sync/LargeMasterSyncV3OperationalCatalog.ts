@@ -1,4 +1,5 @@
 import { weightUnit } from '../../utils/scaleWeight';
+import { v3ArticleImages } from '../../utils/v3ArticlePresentation';
 import { hasV3KilogramContract } from '../../utils/weightedProduct';
 import type { V3CategoryFilter } from './LargeMasterSyncV3Categories';
 import type { Product, ProductOperationalFlags, ProductVariant, TaxDefinition,
@@ -177,7 +178,9 @@ export class LargeMasterSyncV3OperationalCatalog {
       conversionFactor: typeof article.conversionFactor === 'number' ? article.conversionFactor : undefined,
       activeInWarehouses: Array.isArray(article.activeWarehouseIds)
         ? article.activeWarehouseIds.map(stringValue).filter(Boolean) : [],
-      images: [],
+      images: v3ArticleImages(article),
+      imageVersion: stringValue(article.image_version).length <= 128
+        ? optionalString(article.image_version) : undefined,
       attributes: [],
       variants,
       tariffs: [{ tariffId: this.saleCatalog.tariffId, price: sale.price }],
