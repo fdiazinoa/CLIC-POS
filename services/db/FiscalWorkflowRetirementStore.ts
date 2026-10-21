@@ -54,7 +54,7 @@ export async function assertRetirementHasNoEffects(sql:SQL,p:FiscalRetirementPro
   inspect(envelope);
   if(kind==='MEMBERSHIP'){if(envelope?.version!==1||envelope.domain!=='pos.retained-capture-set.v1')retirementFail();return;}
   if(envelope?.version!==1||!CAPTURE_COLLECTIONS[envelope.collection]||kind&&CAPTURE_COLLECTIONS[envelope.collection]!==kind||typeof envelope.document!=='string'||typeof envelope.original!=='string'
-    ||Object.keys(envelope).some(k=>!['version','collection','document','original','originalStage','producerInput','configuration','transport'].includes(k)))retirementFail();
+    ||Object.keys(envelope).some(k=>!['version','collection','document','original','originalStage','producerInput','configuration','transport','closeCommitId'].includes(k)))retirementFail();
   const doc=decode(envelope.document);if(!doc||typeof doc!=='object'||originalId!==undefined&&(doc as any).id!==originalId)retirementFail();inspect(doc);inspect(decode(envelope.original));
   if(envelope.producerInput!==undefined)inspect(decode(envelope.producerInput));if(envelope.configuration!==undefined)inspect(decode(envelope.configuration));
   if(envelope.transport!==undefined){const t=envelope.transport;if(!t||t.version!==1||!['/api/sync/transactions','/api/sync/cash/movements'].includes(t.route)||typeof t.item!=='string'||Object.keys(t).some(k=>!['version','route','item'].includes(k)))retirementFail();inspect(decode(t.item));}
@@ -62,7 +62,27 @@ export async function assertRetirementHasNoEffects(sql:SQL,p:FiscalRetirementPro
  const rows=(await sql.query(`SELECT collection_name,doc_id,length(CAST(data AS BLOB)) bytes,substr(data,1,1048577) data FROM documents WHERE collection_name IN (${relevantCollections.map(()=>'?').join(',')}) LIMIT 513`,relevantCollections)).values||[];
  if(rows.length>RETIREMENT_SCAN_LIMITS.rows)retirementFail();
  for(const row of rows){total+=row.bytes;if(row.bytes>RETIREMENT_SCAN_LIMITS.encodedBytes||total>RETIREMENT_SCAN_LIMITS.totalBytes)retirementFail();if(ids.has(row.doc_id))retirementFail();const value=parse(row.data);inspect(value);
-  if(row.collection_name==='recoveryState'&&typeof value?.body==='string'){const body:any=decode(value.body);inspect(body);if(body&&['collection','document','original'].some(k=>Object.hasOwn(body,k)))inspectEnvelope(body);}
+  if(row.collection_name==='recoveryState'&&typeof value?.body==='string'){
+   const body:any=decode(value.body);let identity:any[]=[];try{const id=JSON.parse(row.doc_id);if(Array.isArray(id))identity=id;}catch{/* Plain IDs are separate supported profiles below. */}
+   const kind=identity[0];
+   if(['TRANSACTION','CASH_MOVEMENT','COLLECTION','WALLET','Z_REPORT'].includes(kind))inspectEnvelope(body,kind,identity[1]);
+   else{
+    if(typeof value.bodySha256!=='string'||await originalDigest(new TextEncoder().encode(value.body))!==value.bodySha256||!body||typeof body!=='object'||Array.isArray(body))retirementFail();
+    const known=kind==='closePreparation'&&body.domain==='pos.close.preparation.local.v1'&&body.version===1
+      ||kind==='recoveryCloseUI'&&value.uiRecoveryClose===1&&body.scopeKey===identity[1]&&body.preparationId===identity[2]
+      ||kind==='receivedCloseCandidate'&&body.input?.scopeKey===identity[1]&&body.input?.preparationId===identity[2]&&typeof body.submissionBody==='string'
+      ||kind==='receivedCloseAck'&&body.status==='COMMITTED'&&body.coverage==='RECEIVED_ONLY'
+      ||kind==='receivedClosePublished'&&typeof body.commitId==='string'&&typeof body.packetHash==='string'
+      ||kind==='receivedCloseCancelled'&&body.status==='CANCELLED'&&body.reason==='NUMBER_CONFLICT';
+    if(!known)retirementFail();
+    const expand=(value:any,depth=0):void=>{if(depth>8)retirementFail();inspect(value);if(!value||typeof value!=='object')return;for(const [key,child] of Object.entries(value)){
+      if(typeof child==='string'&&['body','requestBody','expectedDocument','declarationBody'].includes(key))expand(decode(child),depth+1);
+      else if(typeof child==='string'&&['submissionBody','packetJson','requestJson','sourceExpected'].includes(key))expand(parse(child),depth+1);
+      else if(typeof child==='string'&&/^\["(?:object|array|string|number|date|boolean|null|undefined)"/.test(child))retirementFail();
+      else if(child&&typeof child==='object')expand(child,depth);
+    }};expand(body);
+   }
+  }
   if(row.collection_name==='v3RestoredTicketSources'&&typeof value?.sourceExpected==='string')inspect(parse(value.sourceExpected));
   if(['recoveryOriginals','recoveryStage'].includes(row.collection_name)){
    const r=row.collection_name==='recoveryStage'?value.record:value;
@@ -90,4 +110,25 @@ export async function completeRetirement(sql:SQL,scopeKey:string,receipt:FiscalR
  await sql.run("UPDATE pos_fiscal_checkout_retirements_v1 SET phase='CLOSED',receipt_json=?,closed_at=? WHERE command_id=? AND phase='CLOSING'",[JSON.stringify(receipt),receipt.closedAt,proof.commandId],false);
  await sql.run('DELETE FROM pos_fiscal_checkout_current_v2 WHERE scope_key=? AND checkout_id=?',[scopeKey,proof.checkoutId],false);
  if(Number((await one(sql,'SELECT changes() count'))?.count)!==1)retirementFail();return {...proof,scopeKey,phase:'CLOSED',receipt};
+}
+
+/** Promotion uses original provenance under the same native writer transaction, never just runtime id. */
+export async function assertRetirementRecoveryPromotion(sql:SQL,mutations:import('./DatabaseAdapter').DurableDocumentMutation[]):Promise<void>{
+ const promoted=mutations.filter(row=>row.recoveryOriginal!==undefined);
+ if(!promoted.length)return;
+ const retired=(await sql.query('SELECT transaction_id,checkout_id,permit_id FROM pos_fiscal_checkout_retirements_v1 LIMIT 513')).values||[];
+ if(!retired.length)return;if(retired.length>RETIREMENT_SCAN_LIMITS.rows)retirementFail();
+ const ids=new Set(retired.flatMap(row=>[row.transaction_id,row.checkout_id,row.permit_id]));let nodes=0,total=0;
+ const scan=(value:any,depth=0):void=>{if(++nodes>RETIREMENT_SCAN_LIMITS.nodes||depth>64)retirementFail();if(typeof value==='string'){if(ids.has(value))throw Error('FISCAL_WORKFLOW_RETIREMENT_FENCED');}else if(value&&typeof value==='object')Object.values(value).forEach(v=>scan(v,depth+1));};
+ const decode=(text:string)=>{if(typeof text!=='string'||new TextEncoder().encode(text).length>RETIREMENT_SCAN_LIMITS.decodedBytes)retirementFail();try{return decodeOriginal(text);}catch{return retirementFail();}};
+ if(promoted.length>RETIREMENT_SCAN_LIMITS.rows)retirementFail();
+ for(const mutation of promoted){
+  const r=mutation.recoveryOriginal!;if(r.encoding!=='pos.original.typed-json.v1'||r.version!==1||typeof r.bodyBase64!=='string'||r.bodyBase64.length>RETIREMENT_SCAN_LIMITS.encodedBytes)retirementFail();
+  let bytes:Uint8Array;try{bytes=decodeBase64(r.bodyBase64);}catch{return retirementFail();}total+=bytes.length;
+  if(bytes.length!==r.byteLength||total>RETIREMENT_SCAN_LIMITS.totalBytes||await originalDigest(bytes)!==r.bodySha256)retirementFail();
+  let envelope:any;try{envelope=decode(new TextDecoder('utf-8',{fatal:true}).decode(bytes));}catch{return retirementFail();}
+  if(envelope?.version!==1||CAPTURE_COLLECTIONS[envelope.collection]!==r.kind||typeof envelope.document!=='string'||typeof envelope.original!=='string')retirementFail();
+  scan(envelope);for(const key of ['document','original','producerInput','configuration'])if(envelope[key]!==undefined)scan(decode(envelope[key]));
+  if(envelope.transport!==undefined){const t=envelope.transport;if(t?.version!==1||!['/api/sync/transactions','/api/sync/cash/movements'].includes(t.route)||typeof t.item!=='string')retirementFail();scan(decode(t.item));}
+ }
 }

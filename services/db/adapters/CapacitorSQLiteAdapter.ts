@@ -1,4 +1,4 @@
-import {FISCAL_RETIREMENT_WRITER_SCHEMA} from '../FiscalWorkflowRetirementStore';
+import {FISCAL_RETIREMENT_WRITER_SCHEMA,assertRetirementRecoveryPromotion} from '../FiscalWorkflowRetirementStore';
 import {assertPresentationCommit} from '../../inventoryPresentations/nativeGuard';
 import { NativeFiscalWorkflowV2Store,FISCAL_WORKFLOW_V2_SCHEMA,consumeFiscalWorkflowBirth } from '../FiscalWorkflowV2Store';
 import {NativeTerminalAuthEvidenceStore,TERMINAL_AUTH_EVIDENCE_SCHEMA} from '../TerminalAuthEvidenceStore';
@@ -350,7 +350,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
               }
               return;
             }
-            const needsFinancialPrecondition = documents.some(row => row.document.v3InventoryBaseline
+            const needsFinancialPrecondition = documents.some(row => row.recoveryOriginal || row.document.v3InventoryBaseline
               || row.requireAbsent || row.expectedDocument !== undefined || row.v3StockRequirements);
             const assertAbsent = async () => {
               for (const { collectionName, document } of documents) {
@@ -361,6 +361,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             // Preserve the established legacy executeSet path; V3/CAS checks must run after BEGIN.
             if (requireAbsent && !needsFinancialPrecondition) await assertAbsent();
             const precondition = async () => {
+              await assertRetirementRecoveryPromotion(db,documents);
               await this.assertV3FinancialBaseline(documents);
               if (requireAbsent) await assertAbsent();
             };
