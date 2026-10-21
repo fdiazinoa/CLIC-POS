@@ -291,3 +291,23 @@ test('healthy + unsupported page keeps healthy results, bounded diagnostics rese
   await catalog.search('', undefined, 60, rows => { warnings = rows; }); assert.deepEqual(warnings, []);
   assert.ok(calls.length < 12);
 });
+
+const inactiveFraction={enabled:false,fraction_mode:'HALF',pricing_rule:'HIGHEST_PRICE',max_parts:2,require_equal_parts:true,options:[]};
+test('proven inactive fraction aliases are visible through authoritative get/search/page; invalid and conflicting rules remain held',async()=>{
+ for(const alias of ['fraction_rule','fractionRule']){
+  const {ready}=fixture({article:{...article,product_type:'SIMPLE',production_area_id:'COCINA',[alias]:inactiveFraction},variants:[]});
+  Object.assign(ready.runtime,{readAdministrativeCatalogPage:async()=>({rows:[{id:'A'}],nextCursor:null})});
+  const catalog=await LargeMasterSyncV3OperationalCatalog.open(ready,'T1','W');
+  for(const row of [(await catalog.get('A'))!,...(await catalog.search('Agua')),...(await catalog.page({limit:30})).items]){
+   assert.equal(row.product.production_area_id,'COCINA');assert.equal(row.product.price,125.5);assert.equal(row.product.v3SaleAuthority?.inventoryVersion,4);
+  }
+  const other=alias==='fraction_rule'?'fractionRule':'fraction_rule';
+  for(const bad of [{},{enabled:true},{enabled:'false'}, {...inactiveFraction,options:'bad'}, {...inactiveFraction,max_parts:1.5}, {...inactiveFraction,pricing_rule:'UNKNOWN'}, {...inactiveFraction,options:[{}]}]){
+   const {ready:invalid}=fixture({article:{...article,restaurant:{product_type:'SIMPLE',[alias]:inactiveFraction,[other]:bad}},variants:[]});
+   const blocked=await LargeMasterSyncV3OperationalCatalog.open(invalid,'T1','W');
+   assert.deepEqual(await blocked.search('Agua'),[]);await assert.rejects(blocked.get('A'),/ADVANCED_ARTICLE_CONTRACT_REQUIRED/);
+  }
+ }
+ const {ready}=fixture({article:{...article,restaurant_unsupported:true,fraction_rule:inactiveFraction},variants:[]});
+ const stale=await LargeMasterSyncV3OperationalCatalog.open(ready,'T1','W');await assert.rejects(stale.get('A'),/ADVANCED_ARTICLE_CONTRACT_REQUIRED/);
+});
