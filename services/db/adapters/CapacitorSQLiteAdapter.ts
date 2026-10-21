@@ -1,3 +1,4 @@
+import {FISCAL_RETIREMENT_WRITER_SCHEMA} from '../FiscalWorkflowRetirementStore';
 import {assertPresentationCommit} from '../../inventoryPresentations/nativeGuard';
 import { NativeFiscalWorkflowV2Store,FISCAL_WORKFLOW_V2_SCHEMA,consumeFiscalWorkflowBirth } from '../FiscalWorkflowV2Store';
 import {NativeTerminalAuthEvidenceStore,TERMINAL_AUTH_EVIDENCE_SCHEMA} from '../TerminalAuthEvidenceStore';
@@ -976,6 +977,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             CREATE INDEX IF NOT EXISTS idx_master_number_ranges_allocation
             ON master_number_ranges(entity_type, status, start_number, range_id);
             ${DURABLE_OUTBOX_SCHEMA_SQL}
+            ${FISCAL_RETIREMENT_WRITER_SCHEMA}
             ${LARGE_MASTER_SYNC_V3_SCHEMA_SQL}
             ${ARTICLE_FORMATS_SCHEMA}
             ${NATIVE_FISCAL_RECEIPTS_SCHEMA}
