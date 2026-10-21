@@ -3,6 +3,8 @@ import {CAPTURE_COLLECTIONS} from '../recovery/OriginalCapture';
 import {cartDigest,isExpiredPrepared,retirementFail,validateRetirementProof,validateRetirementReceipt} from '../fiscal/FiscalWorkflowRetirement';
 import type {FiscalRetirementProof,FiscalRetirementReceipt,FiscalRetirementRecord,FiscalWorkflowCheckoutV2} from '../fiscal/FiscalWorkflowV2Types';
 
+/** UUID spelling equivalence only; arbitrary legacy identifiers retain byte/case identity. */
+const uuidIdentity=(value:string)=>/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value)?value.toLowerCase():value;
 /** Parse JSON grammar instead of guessing codec tags from source prefixes. */
 function typedOriginalText(text:string):boolean{
  if(new TextEncoder().encode(text).length>1048576)retirementFail();
@@ -15,19 +17,19 @@ CREATE INDEX IF NOT EXISTS pos_fiscal_retirement_scope_v1 ON pos_fiscal_checkout
 CREATE TRIGGER IF NOT EXISTS pos_fiscal_retirement_identity_v1 BEFORE UPDATE ON pos_fiscal_checkout_retirements_v1 WHEN OLD.phase<>'CLOSING' OR NEW.phase<>'CLOSED' OR OLD.checkout_id IS NOT NEW.checkout_id OR OLD.transaction_id IS NOT NEW.transaction_id OR OLD.command_id IS NOT NEW.command_id OR OLD.scope_key IS NOT NEW.scope_key OR OLD.operation_id IS NOT NEW.operation_id OR OLD.permit_id IS NOT NEW.permit_id OR OLD.cart_identity_sha256 IS NOT NEW.cart_identity_sha256 OR OLD.created_at IS NOT NEW.created_at BEGIN SELECT RAISE(ABORT,'FISCAL_WORKFLOW_RETIREMENT_IMMUTABLE');END;
 CREATE TRIGGER IF NOT EXISTS pos_fiscal_retirement_delete_v1 BEFORE DELETE ON pos_fiscal_checkout_retirements_v1 BEGIN SELECT RAISE(ABORT,'FISCAL_WORKFLOW_RETIREMENT_IMMUTABLE');END;
 CREATE INDEX IF NOT EXISTS pos_fiscal_retirement_operation_v1 ON pos_fiscal_checkout_retirements_v1(scope_key,operation_id);
-CREATE TRIGGER IF NOT EXISTS pos_fiscal_retired_checkout_insert_v1 BEFORE INSERT ON pos_fiscal_checkouts_v2 WHEN EXISTS(SELECT 1 FROM pos_fiscal_checkout_retirements_v1 WHERE checkout_id=NEW.checkout_id OR transaction_id=NEW.transaction_id OR permit_id=NEW.permit_id OR (scope_key=NEW.scope_key AND operation_id=json_extract(NEW.checkout_json,'$.operationId'))) BEGIN SELECT RAISE(ABORT,'FISCAL_WORKFLOW_RETIREMENT_FENCED');END;
-CREATE TRIGGER IF NOT EXISTS pos_fiscal_retired_checkout_v1 BEFORE UPDATE ON pos_fiscal_checkouts_v2 WHEN EXISTS(SELECT 1 FROM pos_fiscal_checkout_retirements_v1 WHERE checkout_id=OLD.checkout_id) BEGIN SELECT RAISE(ABORT,'FISCAL_WORKFLOW_RETIREMENT_FENCED');END;
-CREATE TRIGGER IF NOT EXISTS pos_fiscal_retired_permit_v1 BEFORE UPDATE ON pos_fiscal_permits_v2 WHEN EXISTS(SELECT 1 FROM pos_fiscal_checkout_retirements_v1 WHERE checkout_id=OLD.checkout_id OR permit_id=OLD.permit_id) BEGIN SELECT RAISE(ABORT,'FISCAL_WORKFLOW_RETIREMENT_FENCED');END;
-CREATE TRIGGER IF NOT EXISTS pos_fiscal_retired_pointer_delete_v1 BEFORE DELETE ON pos_fiscal_checkout_current_v2 WHEN EXISTS(SELECT 1 FROM pos_fiscal_checkout_retirements_v1 WHERE checkout_id=OLD.checkout_id AND (scope_key<>OLD.scope_key OR phase<>'CLOSED' OR receipt_json IS NULL)) BEGIN SELECT RAISE(ABORT,'FISCAL_WORKFLOW_RETIREMENT_FENCED');END;
-CREATE TRIGGER IF NOT EXISTS pos_fiscal_retired_pointer_update_v1 BEFORE UPDATE ON pos_fiscal_checkout_current_v2 WHEN EXISTS(SELECT 1 FROM pos_fiscal_checkout_retirements_v1 WHERE checkout_id=OLD.checkout_id OR checkout_id=NEW.checkout_id) BEGIN SELECT RAISE(ABORT,'FISCAL_WORKFLOW_RETIREMENT_FENCED');END;
-CREATE TRIGGER IF NOT EXISTS pos_fiscal_retired_pointer_insert_v1 BEFORE INSERT ON pos_fiscal_checkout_current_v2 WHEN EXISTS(SELECT 1 FROM pos_fiscal_checkout_retirements_v1 WHERE checkout_id=NEW.checkout_id) BEGIN SELECT RAISE(ABORT,'FISCAL_WORKFLOW_RETIREMENT_FENCED');END;
+CREATE TRIGGER IF NOT EXISTS pos_fiscal_retired_checkout_insert_v2 BEFORE INSERT ON pos_fiscal_checkouts_v2 WHEN EXISTS(SELECT 1 FROM pos_fiscal_checkout_retirements_v1 WHERE checkout_id=NEW.checkout_id COLLATE NOCASE OR transaction_id=NEW.transaction_id COLLATE NOCASE OR permit_id=NEW.permit_id COLLATE NOCASE OR (scope_key=NEW.scope_key AND operation_id=json_extract(NEW.checkout_json,'$.operationId') COLLATE NOCASE)) BEGIN SELECT RAISE(ABORT,'FISCAL_WORKFLOW_RETIREMENT_FENCED');END;
+CREATE TRIGGER IF NOT EXISTS pos_fiscal_retired_checkout_v2 BEFORE UPDATE ON pos_fiscal_checkouts_v2 WHEN EXISTS(SELECT 1 FROM pos_fiscal_checkout_retirements_v1 WHERE checkout_id=OLD.checkout_id COLLATE NOCASE) BEGIN SELECT RAISE(ABORT,'FISCAL_WORKFLOW_RETIREMENT_FENCED');END;
+CREATE TRIGGER IF NOT EXISTS pos_fiscal_retired_permit_v2 BEFORE UPDATE ON pos_fiscal_permits_v2 WHEN EXISTS(SELECT 1 FROM pos_fiscal_checkout_retirements_v1 WHERE checkout_id=OLD.checkout_id COLLATE NOCASE OR permit_id=OLD.permit_id COLLATE NOCASE) BEGIN SELECT RAISE(ABORT,'FISCAL_WORKFLOW_RETIREMENT_FENCED');END;
+CREATE TRIGGER IF NOT EXISTS pos_fiscal_retired_pointer_delete_v2 BEFORE DELETE ON pos_fiscal_checkout_current_v2 WHEN EXISTS(SELECT 1 FROM pos_fiscal_checkout_retirements_v1 WHERE checkout_id=OLD.checkout_id COLLATE NOCASE AND (scope_key<>OLD.scope_key OR phase<>'CLOSED' OR receipt_json IS NULL)) BEGIN SELECT RAISE(ABORT,'FISCAL_WORKFLOW_RETIREMENT_FENCED');END;
+CREATE TRIGGER IF NOT EXISTS pos_fiscal_retired_pointer_update_v2 BEFORE UPDATE ON pos_fiscal_checkout_current_v2 WHEN EXISTS(SELECT 1 FROM pos_fiscal_checkout_retirements_v1 WHERE checkout_id=OLD.checkout_id COLLATE NOCASE OR checkout_id=NEW.checkout_id COLLATE NOCASE) BEGIN SELECT RAISE(ABORT,'FISCAL_WORKFLOW_RETIREMENT_FENCED');END;
+CREATE TRIGGER IF NOT EXISTS pos_fiscal_retired_pointer_insert_v2 BEFORE INSERT ON pos_fiscal_checkout_current_v2 WHEN EXISTS(SELECT 1 FROM pos_fiscal_checkout_retirements_v1 WHERE checkout_id=NEW.checkout_id COLLATE NOCASE) BEGIN SELECT RAISE(ABORT,'FISCAL_WORKFLOW_RETIREMENT_FENCED');END;
 `;
 // Targets must exist first: installed after documents + durable outbox on native init.
 export const FISCAL_RETIREMENT_WRITER_SCHEMA=[
- ...['payment_intents_v2','pos_fiscal_watch_v2','pos_fiscal_state_v2'].flatMap(table=>['INSERT','UPDATE'].map(event=>`CREATE TRIGGER IF NOT EXISTS retired_${table}_${event.toLowerCase()}_v1 BEFORE ${event} ON ${table} WHEN EXISTS(SELECT 1 FROM pos_fiscal_checkout_retirements_v1 WHERE transaction_id=NEW.transaction_id) BEGIN SELECT RAISE(ABORT,'FISCAL_WORKFLOW_RETIREMENT_FENCED');END;`)),
- ...['INSERT','UPDATE'].map(event=>`CREATE TRIGGER IF NOT EXISTS retired_documents_${event.toLowerCase()}_v1 BEFORE ${event} ON documents WHEN NEW.collection_name IN ('transactions','transactionHistory','inventoryLedger','inventoryTracking','collections','cashMovements','wallet_transactions','recoveryOriginals','recoveryStage','recoveryState','v3RestoredTicketSources') AND EXISTS(SELECT 1 FROM pos_fiscal_checkout_retirements_v1 r WHERE r.transaction_id=NEW.doc_id OR r.checkout_id=NEW.doc_id OR r.permit_id=NEW.doc_id OR EXISTS(SELECT 1 FROM json_tree(NEW.data) j WHERE j.type='text' AND j.value IN (r.transaction_id,r.checkout_id,r.permit_id))) BEGIN SELECT RAISE(ABORT,'FISCAL_WORKFLOW_RETIREMENT_FENCED');END;`),
- ...['INSERT','UPDATE'].map(event=>`CREATE TRIGGER IF NOT EXISTS retired_legacy_queue_${event.toLowerCase()}_v1 BEFORE ${event} ON sync_queue WHEN EXISTS(SELECT 1 FROM pos_fiscal_checkout_retirements_v1 r JOIN json_tree(NEW.payload) j ON j.type='text' AND j.value IN (r.transaction_id,r.checkout_id,r.permit_id)) BEGIN SELECT RAISE(ABORT,'FISCAL_WORKFLOW_RETIREMENT_FENCED');END;`),
- ...['INSERT','UPDATE'].map(event=>`CREATE TRIGGER IF NOT EXISTS retired_outbox_${event.toLowerCase()}_v1 BEFORE ${event} ON sync_outbox_v2 WHEN NEW.event_type IN ('SALE_POSTED','PAYMENT_POSTED') AND EXISTS(SELECT 1 FROM pos_fiscal_checkout_retirements_v1 WHERE transaction_id=NEW.aggregate_id OR transaction_id=json_extract(NEW.payload_json,'$.transaction.id') OR transaction_id=json_extract(NEW.payload_json,'$.summary.transaction_id') OR transaction_id=json_extract(NEW.payload_json,'$.fiscalWorkflowBirth.transactionId') OR permit_id=json_extract(NEW.payload_json,'$.fiscalWorkflowBirth.permitId')) BEGIN SELECT RAISE(ABORT,'FISCAL_WORKFLOW_RETIREMENT_FENCED');END;`),
+ ...['payment_intents_v2','pos_fiscal_watch_v2','pos_fiscal_state_v2'].flatMap(table=>['INSERT','UPDATE'].map(event=>`CREATE TRIGGER IF NOT EXISTS retired_${table}_${event.toLowerCase()}_v2 BEFORE ${event} ON ${table} WHEN EXISTS(SELECT 1 FROM pos_fiscal_checkout_retirements_v1 WHERE transaction_id=NEW.transaction_id COLLATE NOCASE) BEGIN SELECT RAISE(ABORT,'FISCAL_WORKFLOW_RETIREMENT_FENCED');END;`)),
+ ...['INSERT','UPDATE'].map(event=>`CREATE TRIGGER IF NOT EXISTS retired_documents_${event.toLowerCase()}_v2 BEFORE ${event} ON documents WHEN NEW.collection_name IN ('transactions','transactionHistory','inventoryLedger','inventoryTracking','collections','cashMovements','wallet_transactions','recoveryOriginals','recoveryStage','recoveryState','v3RestoredTicketSources') AND EXISTS(SELECT 1 FROM pos_fiscal_checkout_retirements_v1 r WHERE r.transaction_id=NEW.doc_id COLLATE NOCASE OR r.checkout_id=NEW.doc_id COLLATE NOCASE OR r.permit_id=NEW.doc_id COLLATE NOCASE OR EXISTS(SELECT 1 FROM json_tree(NEW.data) j WHERE j.type='text' AND j.value COLLATE NOCASE IN (r.transaction_id,r.checkout_id,r.permit_id))) BEGIN SELECT RAISE(ABORT,'FISCAL_WORKFLOW_RETIREMENT_FENCED');END;`),
+ ...['INSERT','UPDATE'].map(event=>`CREATE TRIGGER IF NOT EXISTS retired_legacy_queue_${event.toLowerCase()}_v2 BEFORE ${event} ON sync_queue WHEN EXISTS(SELECT 1 FROM pos_fiscal_checkout_retirements_v1 r JOIN json_tree(NEW.payload) j ON j.type='text' AND j.value COLLATE NOCASE IN (r.transaction_id,r.checkout_id,r.permit_id)) BEGIN SELECT RAISE(ABORT,'FISCAL_WORKFLOW_RETIREMENT_FENCED');END;`),
+ ...['INSERT','UPDATE'].map(event=>`CREATE TRIGGER IF NOT EXISTS retired_outbox_${event.toLowerCase()}_v2 BEFORE ${event} ON sync_outbox_v2 WHEN NEW.event_type IN ('SALE_POSTED','PAYMENT_POSTED') AND EXISTS(SELECT 1 FROM pos_fiscal_checkout_retirements_v1 WHERE transaction_id=NEW.aggregate_id COLLATE NOCASE OR transaction_id=json_extract(NEW.payload_json,'$.transaction.id') COLLATE NOCASE OR transaction_id=json_extract(NEW.payload_json,'$.summary.transaction_id') COLLATE NOCASE OR transaction_id=json_extract(NEW.payload_json,'$.fiscalWorkflowBirth.transactionId') COLLATE NOCASE OR permit_id=json_extract(NEW.payload_json,'$.fiscalWorkflowBirth.permitId') COLLATE NOCASE) BEGIN SELECT RAISE(ABORT,'FISCAL_WORKFLOW_RETIREMENT_FENCED');END;`),
 ].join('\n');
 const one=async(sql:SQL,q:string,v:any[]=[])=> (await sql.query(q,v)).values?.[0];
 const proofFrom=(row:any):FiscalRetirementProof=>({schemaVersion:1,commandId:row.command_id,checkoutId:row.checkout_id,transactionId:row.transaction_id,permitId:row.permit_id,originalOperationId:row.operation_id,cartIdentitySha256:row.cart_identity_sha256,reason:'EXPIRED_PREPARED_NO_EFFECTS'});
@@ -35,7 +37,7 @@ const record=(row:any):FiscalRetirementRecord=>({...proofFrom(row),scopeKey:row.
 export async function readRetirement(sql:SQL,scopeKey:string):Promise<FiscalRetirementRecord|null>{
  const row=await one(sql,'SELECT * FROM pos_fiscal_checkout_retirements_v1 WHERE scope_key=? ORDER BY created_at DESC,command_id DESC LIMIT 1',[scopeKey]);return row?record(row):null;
 }
-export async function assertNotRetired(sql:SQL,checkoutId:string):Promise<void>{if(await one(sql,'SELECT 1 FROM pos_fiscal_checkout_retirements_v1 WHERE checkout_id=?',[checkoutId]))throw Error('FISCAL_WORKFLOW_RETIREMENT_FENCED');}
+export async function assertNotRetired(sql:SQL,checkoutId:string):Promise<void>{if(await one(sql,'SELECT 1 FROM pos_fiscal_checkout_retirements_v1 WHERE checkout_id=? COLLATE NOCASE',[checkoutId]))throw Error('FISCAL_WORKFLOW_RETIREMENT_FENCED');}
 async function original(sql:SQL,scopeKey:string,proof:FiscalRetirementProof):Promise<FiscalWorkflowCheckoutV2>{
  validateRetirementProof(proof);
  const row=await one(sql,'SELECT c.* FROM pos_fiscal_checkouts_v2 c JOIN pos_fiscal_checkout_current_v2 p ON p.checkout_id=c.checkout_id AND p.scope_key=c.scope_key WHERE c.scope_key=? AND c.checkout_id=?',[scopeKey,proof.checkoutId]);
@@ -48,12 +50,12 @@ export const RETIREMENT_SCAN_LIMITS={rows:512,encodedBytes:1048576,totalBytes:83
 const relevantCollections=['v3RestoredTicketSources','recoveryOriginals','recoveryStage','recoveryState'];
 /** All replay stores are decoded under the writer. Unknown/oversized evidence is a hold. */
 export async function assertRetirementHasNoEffects(sql:SQL,p:FiscalRetirementProof):Promise<void>{
- for(const table of ['payment_intents_v2','pos_fiscal_watch_v2','pos_fiscal_state_v2'])if(await one(sql,`SELECT 1 FROM ${table} WHERE transaction_id=? LIMIT 1`,[p.transactionId]))retirementFail();
- const ids=new Set([p.transactionId,p.checkoutId,p.permitId]);let nodes=0,total=0;
+ for(const table of ['payment_intents_v2','pos_fiscal_watch_v2','pos_fiscal_state_v2'])if(await one(sql,`SELECT 1 FROM ${table} WHERE transaction_id=? COLLATE NOCASE LIMIT 1`,[p.transactionId]))retirementFail();
+ const ids=new Set([p.transactionId,p.checkoutId,p.permitId].map(uuidIdentity));let nodes=0,total=0;
  const inspect=(value:any,depth=0,wrappers=0,key=''):void=>{
   if(++nodes>RETIREMENT_SCAN_LIMITS.nodes||depth>RETIREMENT_SCAN_LIMITS.depth||wrappers>8)retirementFail();
   if(typeof value==='string'){
-   if(ids.has(value))retirementFail();
+   if(ids.has(uuidIdentity(value)))retirementFail();
    if(['document','original','producerInput','configuration','item','body','requestBody','expectedDocument','declarationBody','capture'].includes(key))inspect(decode(value),0,wrappers+1);
    else if(typedOriginalText(value)){retirementFail();
    }else if(['submissionBody','packetJson','requestJson','sourceExpected'].includes(key))inspect(parse(value),0,wrappers+1);
@@ -61,7 +63,7 @@ export async function assertRetirementHasNoEffects(sql:SQL,p:FiscalRetirementPro
  };
  const parse=(text:string)=>{try{return JSON.parse(text);}catch{return retirementFail();}};
  const decode=(text:string)=>{if(typeof text!=='string'||new TextEncoder().encode(text).length>RETIREMENT_SCAN_LIMITS.decodedBytes)retirementFail();try{return decodeOriginal(text);}catch{return retirementFail();}};
- const finance=(await sql.query(`SELECT doc_id FROM documents WHERE collection_name IN ('transactions','transactionHistory','inventoryLedger','inventoryTracking','collections','cashMovements','wallet_transactions') AND (doc_id IN (?,?,?) OR EXISTS(SELECT 1 FROM json_tree(documents.data) j WHERE j.type='text' AND j.value IN (?,?,?))) LIMIT 1`,[p.transactionId,p.checkoutId,p.permitId,p.transactionId,p.checkoutId,p.permitId])).values||[];if(finance.length)retirementFail();
+ const finance=(await sql.query(`SELECT doc_id FROM documents WHERE collection_name IN ('transactions','transactionHistory','inventoryLedger','inventoryTracking','collections','cashMovements','wallet_transactions') AND (doc_id COLLATE NOCASE IN (?,?,?) OR EXISTS(SELECT 1 FROM json_tree(documents.data) j WHERE j.type='text' AND j.value COLLATE NOCASE IN (?,?,?))) LIMIT 1`,[p.transactionId,p.checkoutId,p.permitId,p.transactionId,p.checkoutId,p.permitId])).values||[];if(finance.length)retirementFail();
 
  const inspectEnvelope=(envelope:any,kind?:string,originalId?:string)=>{
   inspect(envelope);
@@ -74,7 +76,7 @@ export async function assertRetirementHasNoEffects(sql:SQL,p:FiscalRetirementPro
  };
  const rows=(await sql.query(`SELECT collection_name,doc_id,length(CAST(data AS BLOB)) bytes,substr(data,1,1048577) data FROM documents WHERE collection_name IN (${relevantCollections.map(()=>'?').join(',')}) LIMIT 513`,relevantCollections)).values||[];
  if(rows.length>RETIREMENT_SCAN_LIMITS.rows)retirementFail();
- for(const row of rows){total+=row.bytes;if(row.bytes>RETIREMENT_SCAN_LIMITS.encodedBytes||total>RETIREMENT_SCAN_LIMITS.totalBytes)retirementFail();if(ids.has(row.doc_id))retirementFail();const value=parse(row.data);inspect(value);
+ for(const row of rows){total+=row.bytes;if(row.bytes>RETIREMENT_SCAN_LIMITS.encodedBytes||total>RETIREMENT_SCAN_LIMITS.totalBytes)retirementFail();if(ids.has(uuidIdentity(row.doc_id)))retirementFail();const value=parse(row.data);inspect(value);
   if(row.collection_name==='recoveryState'&&typeof value?.body==='string'){
    const body:any=decode(value.body);let identity:any[]=[];try{const id=JSON.parse(row.doc_id);if(Array.isArray(id))identity=id;}catch{/* Plain IDs are separate supported profiles below. */}
    const kind=identity[0];
@@ -135,11 +137,11 @@ export async function assertRetirementRecoveryPromotion(sql:SQL,mutations:import
  if(!promoted.length)return;
  const retired=(await sql.query('SELECT transaction_id,checkout_id,permit_id FROM pos_fiscal_checkout_retirements_v1 LIMIT 513')).values||[];
  if(!retired.length)return;if(retired.length>RETIREMENT_SCAN_LIMITS.rows)retirementFail();
- const ids=new Set(retired.flatMap(row=>[row.transaction_id,row.checkout_id,row.permit_id]));let nodes=0,total=0;
+ const ids=new Set(retired.flatMap(row=>[row.transaction_id,row.checkout_id,row.permit_id].map(uuidIdentity)));let nodes=0,total=0;
  const scan=(value:any,depth=0,wrappers=0,key=''):void=>{
   if(++nodes>RETIREMENT_SCAN_LIMITS.nodes||depth>64||wrappers>8)retirementFail();
   if(typeof value==='string'){
-   if(ids.has(value))throw Error('FISCAL_WORKFLOW_RETIREMENT_FENCED');
+   if(ids.has(uuidIdentity(value)))throw Error('FISCAL_WORKFLOW_RETIREMENT_FENCED');
    if(['document','original','producerInput','configuration','item','body','requestBody','expectedDocument','declarationBody','capture'].includes(key))scan(decode(value),0,wrappers+1);
    else if(typedOriginalText(value)){retirementFail();
    }else if(['submissionBody','packetJson','requestJson','sourceExpected'].includes(key)){let parsed;try{parsed=JSON.parse(value);}catch{return retirementFail();}scan(parsed,0,wrappers+1);}

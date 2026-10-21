@@ -52,7 +52,7 @@ export class PaymentIntentService {
                 intent_id, idempotency_key, payment_id, provider, integration_id,
                 amount, currency_code, status, created_at, updated_at, transaction_id
              ) SELECT ?, ?, ?, ?, ?, ?, ?, 'CREATED', ?, ?, ?
-             ${input.futureCheckout?'WHERE NOT EXISTS(SELECT 1 FROM pos_fiscal_checkout_retirements_v1 WHERE transaction_id=?)':''}
+             ${input.futureCheckout?'WHERE NOT EXISTS(SELECT 1 FROM pos_fiscal_checkout_retirements_v1 WHERE transaction_id=? COLLATE NOCASE)':''}
              ON CONFLICT(idempotency_key) DO NOTHING`,
             [intentId, idempotencyKey, clean(input.paymentId), clean(input.provider), clean(input.integrationId) || null,
                 Number(input.amount || 0), clean(input.currencyCode) || 'DOP', now, now,input.futureCheckout?.transactionId||null,...(input.futureCheckout?[input.futureCheckout.transactionId]:[])]
@@ -81,7 +81,7 @@ export class PaymentIntentService {
             const result=await this.database.executeSQL!(`UPDATE payment_intents_v2 SET status='AUTHORIZING',updated_at=? WHERE intent_id=? AND status='CREATED' AND transaction_id=?
              AND EXISTS(SELECT 1 FROM pos_fiscal_checkouts_v2 c JOIN pos_fiscal_checkout_current_v2 p ON p.checkout_id=c.checkout_id
               WHERE c.checkout_id=? AND c.transaction_id=payment_intents_v2.transaction_id AND c.phase='EFFECT_POSSIBLE'
-              AND NOT EXISTS(SELECT 1 FROM pos_fiscal_checkout_retirements_v1 retired WHERE retired.checkout_id=c.checkout_id)
+              AND NOT EXISTS(SELECT 1 FROM pos_fiscal_checkout_retirements_v1 retired WHERE retired.checkout_id=c.checkout_id COLLATE NOCASE)
               AND EXISTS(SELECT 1 FROM json_each(c.checkout_json,'$.paymentIds') refs WHERE refs.value=payment_intents_v2.payment_id))`,[new Date().toISOString(),intentId,futureCheckout.transactionId,futureCheckout.checkoutId]);
             if(Number(result?.changes?.changes)!==1)throw new Error('PAYMENT_INTENT_RECONCILIATION_REQUIRED');return;
         }
