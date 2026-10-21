@@ -1,3 +1,6 @@
+import {FINANCIAL_COUNTER_UPSERT_SQL} from '../services/db/FinancialNumberReservation';
+import {ARTICLE_FORMAT_RETAINED_UPSERT_SQL} from '../services/db/ArticleFormatFinancialRetention';
+import {V3_FINANCIAL_RETAINED_UPSERT_SQL} from '../services/db/LargeMasterSyncV3FinancialRetention';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
@@ -83,7 +86,7 @@ for(const phase of ['CLOSING','CLOSED'])test('actual saved 546 writer bodies fai
  const tx:any={id:f.checkout.transactionId,total:100,items:[],payments:[]};await assert.rejects(f.adapter.commitFinancialTransaction({documents:[{collectionName:'transactions',document:tx,requireAbsent:true},{collectionName:'transactionHistory',document:tx,requireAbsent:true}],outboxEvent:{eventId:id(81),eventType:'SALE_POSTED',aggregateType:'TRANSACTION',aggregateId:tx.id,schemaVersion:1,payload:{transaction:tx},createdAt:new Date().toISOString()}} as any),/FENCED/);
  assert.equal(f.snapshot(),before);assert.equal(f.sql.prepare('SELECT total_changes() n').get()!.n,writes);
  // Re-executing old CREATE IF NOT EXISTS initialization cannot remove unknown sidecars/triggers.
- f.sql.exec(FISCAL_WORKFLOW_V2_SCHEMA+DURABLE_OUTBOX_SCHEMA_SQL);assert.equal((await f.store.retirement(key))!.phase,phase);assert.throws(()=>f.doc('transactions',{id:f.checkout.transactionId}),/FENCED/);
+ f.sql.exec(oldWriters.schema+DURABLE_OUTBOX_SCHEMA_SQL);assert.equal((await f.store.retirement(key))!.phase,phase);assert.throws(()=>f.doc('transactions',{id:f.checkout.transactionId}),/FENCED/);
  }finally{f.sql.close();}});
 
 test('actual UI closure callback uses latest current lines and removes only retired operation tags',async()=>{
@@ -125,4 +128,33 @@ for(const invalid of ['proof','cart-durable','json-id','payments','phase','point
  if(invalid==='pointer')f.sql.prepare('DELETE FROM pos_fiscal_checkout_current_v2').run();
  if(invalid==='foreign-permit')f.sql.prepare("UPDATE pos_fiscal_checkouts_v2 SET checkout_json=json_set(checkout_json,'$.permit.scope.deviceId','other')").run();
  const before=f.snapshot(),writes=f.sql.prepare('SELECT total_changes() n').get()!.n;await assert.rejects(f.store.beginRetirement(key,proof),/RETIREMENT/);assert.equal(f.snapshot(),before);assert.equal(f.sql.prepare('SELECT total_changes() n').get()!.n,writes);
+ }finally{f.sql.close();}});
+
+test('old 546 reserve cannot reuse a retired operation after CLOSED; explicit unrelated operation works',async()=>{const f=await retirementFixture();try{await f.store.beginRetirement(key,f.proof);await f.store.completeRetirement(key,f.receipt);const before=f.snapshot();const reserve=oldMethod('reserveCheckout',{one:(r:any)=>r.values?.[0],fail:()=>{throw Error('CONFLICT');},createUuid:()=>id(80),fiscalWorkflowScopeKey});await assert.rejects(reserve.call(f.store,key,'edited cart',undefined,f.checkout.operationId),/FENCED/);assert.equal(f.snapshot(),before);await assert.rejects(f.store.reserveCheckout(key,'edited cart',undefined,f.checkout.operationId),/FENCED/);const next=await f.store.reserveCheckout(key,'edited cart',undefined,id(90));assert.notEqual(next.operationId,f.checkout.operationId);assert.notEqual(next.transactionId,f.checkout.transactionId);}finally{f.sql.close();}});
+for(const location of ['sync_queue','retained-original','aliased-history'])test('persistent fence denies late '+location+' from actual producer shape',async()=>{const f=await retirementFixture();try{await f.store.beginRetirement(key,f.proof);await f.store.completeRetirement(key,f.receipt);const before=f.snapshot();
+ if(location==='sync_queue')assert.throws(()=>f.sql.prepare("INSERT INTO sync_queue VALUES('q','TRANSACTION',?,'PENDING')").run(JSON.stringify({id:f.checkout.transactionId})),/FENCED/);
+ if(location==='retained-original'){const {captureDocument}=await import('../services/recovery/OriginalCapture');const captured=captureDocument('transactions',{id:f.checkout.transactionId,total:100},{key:'synthetic'})!;assert.throws(()=>f.doc('recoveryOriginals',captured),/FENCED/);}
+ if(location==='aliased-history')assert.throws(()=>f.doc('transactionHistory',{id:'foreign',fiscalWorkflowBirth:{transactionId:f.checkout.transactionId,permitId:f.permit.permitId,checkoutId:f.checkout.checkoutId}}),/FENCED/);
+ assert.equal(f.snapshot(),before);f.doc('recoveryState',{id:'unrelated',body:encodeOriginal({scopeKey:'other',preparationId:'closejob',published:true})});
+ }finally{f.sql.close();}});
+test('preexisting nested fiscal birth alias blocks retirement; unrelated close-job body is accepted',async()=>{for(const related of [true,false]){const f=await retirementFixture();try{if(related){f.doc('transactionHistory',{id:'foreign',fiscalWorkflowBirth:{transactionId:f.checkout.transactionId}});await assert.rejects(f.store.beginRetirement(key,f.proof),/RETIREMENT/);}else{f.doc('recoveryState',{id:'unrelated-close',body:encodeOriginal({scopeKey:'other',preparationId:'closejob',published:true})});assert.equal((await f.store.beginRetirement(key,f.proof)).phase,'CLOSING');}}finally{f.sql.close();}}});
+
+test('actual old 546 financial adapter invokes actual old consume and persistent triggers reject before effects',async()=>{const f=await retirementFixture();try{await f.store.beginRetirement(key,f.proof);
+ const consumeJS=ts.transpileModule(oldWriters.methods.consume.replace('export ',''),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.None}}).outputText;
+ const consume=new Function('one','fail',consumeJS+';return consumeFiscalWorkflowBirth;')((r:any)=>r.values?.[0],()=>{throw Error('CONFLICT');});
+ const source=readFileSync(new URL('../services/db/adapters/CapacitorSQLiteAdapter.ts',import.meta.url),'utf8'),ast=ts.createSourceFile('a.ts',source,ts.ScriptTarget.Latest,true);let sql='';function visit(n:ts.Node){if(ts.isVariableDeclaration(n)&&n.name.getText(ast)==='DOCUMENT_UPSERT_SQL')sql=new Function('FINANCIAL_COUNTER_UPSERT_SQL','ARTICLE_FORMAT_RETAINED_UPSERT_SQL','V3_FINANCIAL_RETAINED_UPSERT_SQL','return '+n.initializer!.getText(ast))(FINANCIAL_COUNTER_UPSERT_SQL,ARTICLE_FORMAT_RETAINED_UPSERT_SQL,V3_FINANCIAL_RETAINED_UPSERT_SQL);ts.forEachChild(n,visit);}visit(ast);
+ const commit=oldMethod('commitFinancialTransaction',{DOCUMENT_UPSERT_SQL:sql,consumeFiscalWorkflowBirth:consume});
+ const tx:any={id:f.checkout.transactionId,total:100,items:[],payments:[]},birth={schemaVersion:2,checkoutId:f.checkout.checkoutId,transactionId:tx.id,permitId:f.permit.permitId,nonce:f.permit.nonce};const before=f.snapshot();
+ await assert.rejects(commit.call(f.adapter,{documents:[{collectionName:'transactions',document:tx,requireAbsent:true},{collectionName:'transactionHistory',document:tx,requireAbsent:true}],outboxEvent:{eventId:id(82),eventType:'SALE_POSTED',aggregateType:'TRANSACTION',aggregateId:tx.id,schemaVersion:1,payload:{transaction:tx,fiscalWorkflowBirth:birth},createdAt:new Date().toISOString()},fiscalWorkflowCommits:[{checkoutId:f.checkout.checkoutId,transactionId:tx.id,birth}]}),/FENCED/);assert.equal(f.snapshot(),before);
+ }finally{f.sql.close();}});
+
+test('actual unchanged old recovery download/restore cannot materialize a retired original; audit rows do not authorize replay',async()=>{const f=await retirementFixture();try{
+ const {captureDocument}=await import('../services/recovery/OriginalCapture'),{PendingOperationsRecovery,originalRecord,recordBytes}=await import('../services/recovery/PendingOperationsRecovery');
+ await f.store.beginRetirement(key,f.proof);await f.store.completeRetirement(key,f.receipt);
+ const captured={...captureDocument('transactions',{id:f.checkout.transactionId,terminalId:scope.terminalId,total:100},{key})!,storageEpoch:id(91),openSetId:id(92),sequence:'1',revision:'1'};
+ const r=await originalRecord(captured),row={receiptId:'1',recordHash:await originalDigest(recordBytes(r)),receivedAt:new Date().toISOString(),record:r};
+ const snapshot={snapshotId:'synthetic-snapshot',totalRecords:1,snapshotDigest:await originalDigest(new TextEncoder().encode('1:'+row.recordHash+'\n')),expiresAt:'2099-01-01T00:00:00Z',nextCursor:'0',completeness:'RECEIVED_ORIGINALS_ONLY',exactZEligible:false,closeAuthorization:'NOT_GRANTED'};
+ const api:any={context:async()=>({key,terminalIds:[scope.terminalId],enabled:true}),snapshot:async()=>snapshot,page:async()=>({...snapshot,records:[row],pageStart:0,nextCursor:null})};
+ const recovery=new PendingOperationsRecovery(f.adapter,api);await assert.rejects(recovery.download(),/FENCED/);await assert.rejects(recovery.restore(),/NOT_VERIFIED/);
+ assert.equal(f.sql.prepare("SELECT count(*) n FROM documents WHERE collection_name IN ('transactions','transactionHistory','inventoryLedger','recoveryStage')").get()!.n,0);assert.equal(f.sql.prepare('SELECT count(*) n FROM sync_outbox_v2').get()!.n,0);assert.equal((await f.store.retirement(key))!.phase,'CLOSED');
  }finally{f.sql.close();}});
