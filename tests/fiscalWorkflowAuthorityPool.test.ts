@@ -15,6 +15,14 @@ test('rotated authority without a successful batch holds before creating checkou
 for(const effect of [false,true])test(`prepared checkout under old authority is retained for reconciliation (${effect?'effect possible':'before effect'})`,async()=>{const f=fixture();try{await f.client.prefetch();const original=await f.client.reserveCheckout('cart','operation',{requirePermit:true});if(effect)await f.store.markPaymentPossible(original.checkoutId,'payment');f.rotate('b');await f.client.prefetch();await assert.rejects(f.client.reserveCheckout('cart','operation',{requirePermit:true}),/RECONCILIATION/);const retained=await f.store.readCheckout(original.checkoutId);assert.equal(retained?.transactionId,original.transactionId);assert.equal(retained?.permit?.authorityHash,'a'.repeat(64));assert.equal(retained?.phase,effect?'EFFECT_POSSIBLE':'PREPARED');assert.equal((f.sql.prepare('SELECT count(*) n FROM pos_fiscal_checkouts_v2').get() as any).n,1);}finally{f.close();}});
 test('new client after restart requires an authenticated current batch despite native permits; it never borrows a later permit into an existing checkout',async()=>{const f=fixture();try{await f.client.prefetch();f.client.invalidate();await assert.rejects(f.client.reserveCheckout('cart','operation',{requirePermit:true}),/PERMIT_REQUIRED/);await f.client.prefetch();assert.equal((await f.client.reserveCheckout('cart','operation',{requirePermit:true})).permit?.authorityHash,'a'.repeat(64));}finally{f.close();}});
 
+test('same-cart remount safely adopts the existing PREPARED operation without allocating another permit',async()=>{
+ const f=fixture();try{await f.client.prefetch();const original=await f.client.reserveCheckout('cart','original-operation',{requirePermit:true});
+  const before=f.calls();const recovered=await f.client.reserveCheckout('cart','fresh-ui-operation',{requirePermit:true});
+  assert.deepEqual(recovered,original);assert.equal(f.calls(),before);
+  assert.equal((f.sql.prepare('SELECT count(*) n FROM pos_fiscal_checkouts_v2').get() as any).n,1);
+ }finally{f.close();}
+});
+
 test('stale replay operation clears only its refill journal and retries once in background with the fresh server proof',async()=>{
  const f=fixture();try{let calls=0;const operations:string[]=[],headers={'X-Tenant-Id':'tenant','X-Terminal-Id':'terminal','X-Device-Id':'device','X-Sync-Token':'synthetic','X-Device-Token':'synthetic'};observeFiscalWorkflowCapability(base,headers,'2');
  const client=createFiscalWorkflowV2Client({store:()=>f.store,readAuth:()=>({base,headers,descriptor:scope,assertCurrent(){}}),fetchImpl:async(_url:string,options:any)=>{calls++;operations.push(JSON.parse(options.body).operationId);return {ok:true,json:async()=>({schemaVersion:2,authorityHash:'b'.repeat(64),refillRequired:calls===1,permits:calls===1?[]:[f.permit('b')]})};}} as any);

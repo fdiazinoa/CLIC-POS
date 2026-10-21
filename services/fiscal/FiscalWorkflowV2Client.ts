@@ -1,3 +1,4 @@
+import {matchesPreparedRecovery,hasPreparedSalePermit} from './FiscalWorkflowCheckoutRecovery';
 import {hasFiscalWorkflowCapability,observeFiscalWorkflowCapability} from './FiscalWorkflowV2Capability';
 import type {Transaction} from '../../types';
 import {dbAdapter} from '../db';
@@ -6,7 +7,7 @@ import {financialIdentity} from '../db/LargeMasterSyncV3FinancialRetention';
 import {captureFiscalStatusBoundContext} from './FiscalBoundContext';
 import {fiscalStatusSourceChecksum} from './FiscalStatusProof';
 import {sha256Utf8} from '../sync/LargeMasterSyncV3Client';
-import type {FiscalWorkflowCheckoutV2,FiscalWorkflowPermitV2,FiscalWorkflowScope,FiscalWorkflowStateV2} from './FiscalWorkflowV2Types';
+import type {FiscalWorkflowCheckoutV2,FiscalWorkflowPermitV2,FiscalWorkflowScope,FiscalWorkflowStateV2,FiscalWorkflowPreparedRecovery} from './FiscalWorkflowV2Types';
 const canonical=(value:any):any=>Array.isArray(value)?value.map(canonical):value&&typeof value==='object'?Object.fromEntries(Object.keys(value).sort().filter(k=>value[k]!==undefined).map(k=>[k,canonical(value[k])])):value;
 const json=(value:any)=>JSON.stringify(canonical(value));
 const fail=(code='FISCAL_WORKFLOW_PROOF_INVALID'):never=>{throw Error(code);};
@@ -89,7 +90,25 @@ export function createFiscalWorkflowV2Client({readAuth=captureFiscalStatusBoundC
    fail('FISCAL_WORKFLOW_PERMIT_REQUIRED');
   })().finally(()=>{refills.delete(refillKey);});refills.set(refillKey,refill);return refill;
  },
- async reserveCheckout(cartIdentity:string,operationId:string,options?:{requirePermit?:boolean}):Promise<FiscalWorkflowCheckoutV2>{if(!this.enabled())fail('FISCAL_WORKFLOW_DISABLED');const native=store();if(!native)fail('FISCAL_WORKFLOW_NATIVE_REQUIRED');const auth=readAuth();auth.assertCurrent();const checkout=await native.reserveCheckout(json(scopeOf(auth.descriptor)),cartIdentity,undefined,operationId,options?.requirePermit?{...options,authorityHash:authorityFor(auth)}:options);auth.assertCurrent();return checkout;},
+ async reserveCheckout(cartIdentity:string,operationId:string,options?:{requirePermit?:boolean}):Promise<FiscalWorkflowCheckoutV2>{
+  if(!this.enabled())fail('FISCAL_WORKFLOW_DISABLED');const native=store();if(!native)fail('FISCAL_WORKFLOW_NATIVE_REQUIRED');
+  const auth=readAuth(),epoch=generation,scopeKey=json(scopeOf(auth.descriptor));auth.assertCurrent();
+  const current=await native.currentCheckout(scopeKey);auth.assertCurrent();
+  if(epoch!==generation||!this.enabled())fail('FISCAL_WORKFLOW_DISABLED');
+  let expectedCurrent:FiscalWorkflowPreparedRecovery|undefined;
+  if(current?.phase==='PREPARED'&&current.operationId!==operationId){
+   expectedCurrent={scopeKey,checkoutId:current.checkoutId,transactionId:current.transactionId,operationId:current.operationId,
+     cartIdentity,phase:'PREPARED',paymentIds:[]};
+   if(!matchesPreparedRecovery(current,expectedCurrent)||options?.requirePermit!==true
+     ||!hasPreparedSalePermit(current,scopeKey,authorityFor(auth)))fail('FISCAL_WORKFLOW_CHECKOUT_RECONCILIATION_REQUIRED');
+  }
+  const chosenOperation=expectedCurrent?.operationId||operationId;
+  const checkout=await native.reserveCheckout(scopeKey,cartIdentity,undefined,chosenOperation,
+    {...options,...(options?.requirePermit?{authorityHash:authorityFor(auth)}:{}),...(expectedCurrent?{expectedCurrent}:{})});
+  auth.assertCurrent();if(epoch!==generation||!this.enabled())fail('FISCAL_WORKFLOW_DISABLED');
+  if(expectedCurrent&&(!matchesPreparedRecovery(checkout,expectedCurrent)||!hasPreparedSalePermit(checkout,scopeKey,authorityFor(auth))))fail('FISCAL_WORKFLOW_CHECKOUT_RECONCILIATION_REQUIRED');
+  return checkout;
+ },
  async reserveReferencedCheckout(cartIdentity:string,operationKind:'RETURN'|'VOID',originalReference:NonNullable<FiscalWorkflowPermitV2['originalReference']>,operationId:string){
   if(!this.enabled())fail('FISCAL_WORKFLOW_DISABLED');const native=store();if(!native)fail('FISCAL_WORKFLOW_NATIVE_REQUIRED');const auth=readAuth(),scopeKey=json(scopeOf(auth.descriptor));auth.assertCurrent();
   const existing=await native.currentCheckout(scopeKey);if(existing&&!(existing.phase==='ACKNOWLEDGED'&&existing.operationId!==operationId)){if(existing.cartIdentity!==cartIdentity||existing.permit?.operationKind!==operationKind||json(existing.permit.originalReference)!==json(originalReference))fail('FISCAL_WORKFLOW_CHECKOUT_RECONCILIATION_REQUIRED');if(['COMMITTED','ACKNOWLEDGED'].includes(existing.phase)){auth.assertCurrent();return existing;}}

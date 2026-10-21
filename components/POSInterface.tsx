@@ -6636,7 +6636,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
           return Object.assign(()=>{},{completedTransaction:completed as Transaction});
         }
         if(checkout.phase==='EFFECT_POSSIBLE'&&checkout.paymentIds.some(id=>!paymentIds.includes(id)))throw Error('PAYMENT_INTENT_RECONCILIATION_REQUIRED');
-        onUpdateCart(processedCart.map(line=>({...line,fiscalCheckoutOperationId:operationId})));
+        fiscalCheckoutOperationRef.current=checkout.operationId;
+        onUpdateCart(processedCart.map(line=>({...line,fiscalCheckoutOperationId:checkout.operationId})));
         fiscalCheckoutRef.current=checkout;
       }
 
