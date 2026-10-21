@@ -1,3 +1,4 @@
+import {fiscalWorkflowScopeKey} from '../services/fiscal/FiscalWorkflowV2Types';
 import {isInventoryPresentationEligible,assertInventoryPresentationEligible} from '../services/inventoryPresentations/eligibility';
 import {createPresentationRuntime,presentationAuthority,type PresentationRuntime} from '../services/inventoryPresentations/runtime';
 import {presentationFormatSnapshot,presentationBaseQuantity,presentationUnitPrice,type InventoryPresentationMaster} from '../services/inventoryPresentations/contract';
@@ -6601,6 +6602,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const prepare=()=>{if(v3Operational&&fiscalCompliance.mode==='ECF'&&fiscalWorkflowV2Client.enabled())void fiscalWorkflowV2Client.prefetch().catch(()=>undefined);};
       const unsubscribe=subscribeFiscalWorkflowCapability(prepare);prepare();return unsubscribe;
    },[v3Operational,terminalId,fiscalCompliance.mode]);
+   const fiscalRetirementUIRef=useRef({cart,terminalConfig:activeTerminalConfig,terminalId});
+   fiscalRetirementUIRef.current={cart,terminalConfig:activeTerminalConfig,terminalId};
+   const onFiscalAttemptClosed = (record:import('../services/fiscal/FiscalWorkflowV2Types').FiscalRetirementRecord) => {
+      if(record.phase!=='CLOSED'||!record.receipt||fiscalWorkflowScopeKey(readFiscalWorkflowLocalScope(fiscalRetirementUIRef.current.terminalConfig,fiscalRetirementUIRef.current.terminalId))!==record.scopeKey)throw Error('FISCAL_WORKFLOW_RETIREMENT_RECONCILIATION_REQUIRED');
+      if(fiscalCheckoutRef.current?.checkoutId===record.checkoutId)fiscalCheckoutRef.current=null;
+      if(fiscalCheckoutOperationRef.current===record.originalOperationId)fiscalCheckoutOperationRef.current=null;
+      onUpdateCart(fiscalRetirementUIRef.current.cart.map(line=>{if((line as any).fiscalCheckoutOperationId!==record.originalOperationId)return line;const {fiscalCheckoutOperationId:_op,...current}=line as any;return current;}));
+      setShowPaymentModal(false);
+      setSuccessToast('Intento fiscal vencido cerrado. Revisa el ticket actual y selecciona el pago para iniciar un nuevo intento.');
+   };
    const beforeV3PaymentEffects = async (paymentIds:string[]=[]): Promise<PaymentEffectsFence> => {
       const completed = await completedReservationForReceipt();
       if (completed) return Object.assign(() => {},{completedTransaction:completed});
@@ -9550,7 +9561,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                setReturnToTableMapAfterPayment(false);
                onOpenTableMap();
             }
-         }} paymentOperationId={activeV3Reservation?.claimId} paymentOperationDate={activeV3Reservation?.invoiceDate} beforePaymentEffects={beforeV3PaymentEffects} validatePaymentAuthority={assertCheckoutFiscalAuthority} onConfirm={handlePaymentConfirm} themeColor={config.themeColor} customer={effectiveSelectedCustomer} isDelinquent={isDelinquent} users={users} roles={roles} isMaster={isMaster} currentUser={currentUser} isRestaurantMode={isRestaurantMode} isInstallmentPayment={isIntermediateFractionPayment} />}
+         }} paymentOperationId={activeV3Reservation?.claimId} paymentOperationDate={activeV3Reservation?.invoiceDate} onFiscalAttemptClosed={onFiscalAttemptClosed} beforePaymentEffects={beforeV3PaymentEffects} validatePaymentAuthority={assertCheckoutFiscalAuthority} onConfirm={handlePaymentConfirm} themeColor={config.themeColor} customer={effectiveSelectedCustomer} isDelinquent={isDelinquent} users={users} roles={roles} isMaster={isMaster} currentUser={currentUser} isRestaurantMode={isRestaurantMode} isInstallmentPayment={isIntermediateFractionPayment} />}
          {showLoyaltyModal && <LoyaltyScanModal onClose={() => setShowLoyaltyModal(false)} onScan={handleLoyaltyScan} />}
          {showTableSellerModal && activeTable && <TableSellerModal
             tableName={activeTable.nombre || activeTable.name || 'Mesa'}

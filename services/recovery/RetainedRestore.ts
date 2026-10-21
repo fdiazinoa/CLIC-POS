@@ -224,6 +224,7 @@ export function restoreRetainedSet(
       )), "RECOVERY_LOCAL_CONFLICT");
       mutations.push({
         collectionName: collection,
+        recoveryOriginal: row.record,
         document: {
           ...document,
           _posRecovery: {

@@ -946,7 +946,7 @@ export class PendingOperationsRecovery {
           continue;
         if (current)
           fail("RECOVERY_LOCAL_CONFLICT:" + destination + ":" + document.id);
-        mutations.push({ collectionName: destination, document: restored });
+        mutations.push({ collectionName: destination, document: restored, recoveryOriginal: row.record });
       }
       // Preserve original staging and pending local work; no inventory/customer/series writes.
       mutations.push({

@@ -18,7 +18,14 @@ export interface FiscalWorkflowStore {
  readCheckout(checkoutId:string):Promise<FiscalWorkflowCheckoutV2|null>;
  readState(transactionId:string):Promise<FiscalWorkflowStateV2|null>;
  saveState(source:Transaction,state:FiscalWorkflowStateV2,expectedVersion:number|null):Promise<void>;
+ retirement?(scopeKey:string):Promise<FiscalRetirementRecord|null>;
+ beginRetirement?(scopeKey:string,expected:FiscalRetirementProof):Promise<FiscalRetirementRecord>;
+ completeRetirement?(scopeKey:string,receipt:FiscalRetirementReceipt):Promise<FiscalRetirementRecord>;
  candidates(scopeKey:string,afterId:string,limit:number):Promise<string[]>;
 }
 
 export const fiscalWorkflowScopeKey=(scope:FiscalWorkflowScope):string=>JSON.stringify(Object.fromEntries(Object.keys(scope).sort().map(key=>[key,(scope as any)[key]])));
+
+export interface FiscalRetirementProof {schemaVersion:1;commandId:string;checkoutId:string;permitId:string;transactionId:string;originalOperationId:string;cartIdentitySha256:string;reason:'EXPIRED_PREPARED_NO_EFFECTS'}
+export interface FiscalRetirementReceipt extends FiscalRetirementProof {scope:FiscalWorkflowScope;state:'HELD';closedAt:string;historyId:string}
+export interface FiscalRetirementRecord extends FiscalRetirementProof {scopeKey:string;phase:'CLOSING'|'CLOSED';receipt:FiscalRetirementReceipt|null}

@@ -1,3 +1,5 @@
+import {FiscalExpiredCheckoutAction} from './FiscalExpiredCheckoutAction';
+import type {FiscalRetirementRecord} from '../services/fiscal/FiscalWorkflowV2Types';
 import {resolveFiscalPrintReadiness,resolveFiscalAcceptance} from '../services/fiscal/FiscalPrintEvidence';
 import { recordCheckoutDiagnostic } from '../services/CheckoutDiagnostics';
 import { allowsDefaultPaymentMethods } from '../utils/erpPaymentMethods';
@@ -74,6 +76,7 @@ interface PaymentModalProps {
    onConfirm: (payments: PaymentEntry[], voluntaryTip?: number) => Promise<Transaction | null>;
    paymentOperationId?: string;
    paymentOperationDate?: string;
+   onFiscalAttemptClosed?: (record:FiscalRetirementRecord)=>void;
    beforePaymentEffects?: (paymentIds:string[]) => Promise<PaymentEffectsFence>;
    validatePaymentAuthority?: () => Promise<void>;
    themeColor: string;
@@ -252,7 +255,7 @@ type GatewayProgressOverlayState = {
 
 import SupervisorAuthModal from './SupervisorAuthModal';
 
-const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, total, items, taxAmount = 0, currencySymbol, config, onClose, onConfirm, paymentOperationId, paymentOperationDate, beforePaymentEffects, validatePaymentAuthority, themeColor, customer, isDelinquent, users, isMaster, currentUser, roles, isRestaurantMode, isInstallmentPayment = false }) => {
+const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, total, items, taxAmount = 0, currencySymbol, config, onClose, onConfirm, paymentOperationId, paymentOperationDate, onFiscalAttemptClosed, beforePaymentEffects, validatePaymentAuthority, themeColor, customer, isDelinquent, users, isMaster, currentUser, roles, isRestaurantMode, isInstallmentPayment = false }) => {
    markRenderStart('PAYMENT_MODAL');
    useLayoutEffect(() => markRenderEnd('PAYMENT_MODAL'));
    const openingDestinationMounted = useRef(false);
@@ -1486,6 +1489,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, total,
                </div>
 
                <div className="sticky bottom-0 z-10 p-3 bg-white border-t border-gray-200 rounded-xl md:rounded-2xl mt-3 lg:mt-3 shadow-inner shrink-0">
+                  {onFiscalAttemptClosed&&<FiscalExpiredCheckoutAction users={users} operationIds={items.map(item=>(item as any).fiscalCheckoutOperationId).filter(Boolean)} onClosed={onFiscalAttemptClosed}/>}
                   {finalizeError && (
                      <div className="mb-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-bold text-red-600">
                         {finalizeError}

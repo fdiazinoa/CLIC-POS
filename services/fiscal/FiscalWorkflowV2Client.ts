@@ -1,3 +1,6 @@
+import {cartDigest,isExpiredPrepared,retirementReason,validateRetirementReceipt} from './FiscalWorkflowRetirement';
+import {fiscalWorkflowScopeKey} from './FiscalWorkflowV2Types';
+import type {FiscalRetirementProof,FiscalRetirementRecord} from './FiscalWorkflowV2Types';
 import {matchesPreparedRecovery,hasPreparedSalePermit} from './FiscalWorkflowCheckoutRecovery';
 import {hasFiscalWorkflowCapability,observeFiscalWorkflowCapability} from './FiscalWorkflowV2Capability';
 import type {Transaction} from '../../types';
@@ -41,6 +44,7 @@ async function verifyFormatWorkflowSource(source:Transaction,state:FiscalWorkflo
  }catch{return false;}
 }
 export function createFiscalWorkflowV2Client({readAuth=captureFiscalStatusBoundContext,fetchImpl=fetch,store=()=>dbAdapter.fiscalWorkflowStore,readSource=async(id:string)=>await dbAdapter.getDocument<Transaction>('transactions',id)||await dbAdapter.getDocument<Transaction>('transactionHistory',id)}={}){
+ const retirements=new Map<string,Promise<FiscalRetirementRecord>>();
  const refills=new Map<string,Promise<void>>();const inFlight=new Map<string,Promise<FiscalWorkflowStateV2>>();let cursor='',generation=0;let currentAuthority:{fingerprint:string;authorityHash:string;expires:number}|null=null;
  let discovering:{key:string;promise:Promise<void>}|null=null;
  const authorityFingerprint=(auth:ReturnType<typeof readAuth>)=>json([auth.base,auth.headers,(auth as any).fingerprint||null]);
@@ -89,6 +93,29 @@ export function createFiscalWorkflowV2Client({readAuth=captureFiscalStatusBoundC
    }
    fail('FISCAL_WORKFLOW_PERMIT_REQUIRED');
   })().finally(()=>{refills.delete(refillKey);});refills.set(refillKey,refill);return refill;
+ },
+ async retirementCandidate():Promise<FiscalRetirementRecord|null>{
+  const auth=readAuth(),epoch=generation;auth.assertCurrent();const native=store();if(!native?.retirement)return null;
+  const key=fiscalWorkflowScopeKey(scopeOf(auth.descriptor)),current=await native.currentCheckout(key);auth.assertCurrent();
+  const saved=await native.retirement(key);auth.assertCurrent();if(epoch!==generation)fail('FISCAL_WORKFLOW_CONTEXT_CHANGED');
+  if(saved&&(!current||saved.checkoutId===current.checkoutId))return saved;
+  if(!isExpiredPrepared(current,key))return null;
+  return {schemaVersion:1,commandId:createUuid(),checkoutId:current.checkoutId,transactionId:current.transactionId,permitId:current.permit!.permitId,originalOperationId:current.operationId,cartIdentitySha256:await cartDigest(current.cartIdentity),reason:retirementReason,scopeKey:key,phase:'CLOSING',receipt:null};
+ },
+ retireExpiredCheckout(candidate:FiscalRetirementRecord,operator?:{actorId:string;pin:string}):Promise<FiscalRetirementRecord>{
+  const auth=readAuth(),epoch=generation;auth.assertCurrent();const key=fiscalWorkflowScopeKey(scopeOf(auth.descriptor));
+  if(candidate.scopeKey!==key)return Promise.reject(Error('FISCAL_WORKFLOW_CONTEXT_CHANGED'));
+  const existing=retirements.get(key);if(existing)return existing;
+  const run=(async()=>{
+   const native=store();if(!native?.beginRetirement||!native.completeRetirement)fail('FISCAL_WORKFLOW_NATIVE_REQUIRED');
+   const {scopeKey:_key,phase:_phase,receipt:_receipt,...proof}=candidate;
+   if(candidate.phase==='CLOSED'&&candidate.receipt){auth.assertCurrent();return native!.completeRetirement!(key,candidate.receipt);}
+   const pending=await native!.beginRetirement!(key,proof);auth.assertCurrent();if(epoch!==generation)fail('FISCAL_WORKFLOW_CONTEXT_CHANGED');
+   const original=await native!.readCheckout(pending.checkoutId);auth.assertCurrent();if(!original?.permit||original.permit.permitId!==pending.permitId)fail();
+   const {data}=await request('retire-unborn',{...proof,nonce:original!.permit!.nonce,...(operator?{actorId:operator.actorId,pin:operator.pin}:{})});
+   auth.assertCurrent();if(epoch!==generation)fail('FISCAL_WORKFLOW_CONTEXT_CHANGED');validateRetirementReceipt(data,proof,scopeOf(auth.descriptor));
+   const closed=await native!.completeRetirement!(key,data);auth.assertCurrent();if(epoch!==generation)fail('FISCAL_WORKFLOW_CONTEXT_CHANGED');return closed;
+  })().finally(()=>retirements.delete(key));retirements.set(key,run);return run;
  },
  async reserveCheckout(cartIdentity:string,operationId:string,options?:{requirePermit?:boolean}):Promise<FiscalWorkflowCheckoutV2>{
   if(!this.enabled())fail('FISCAL_WORKFLOW_DISABLED');const native=store();if(!native)fail('FISCAL_WORKFLOW_NATIVE_REQUIRED');

@@ -12,6 +12,8 @@ export type DurableOutboxStatus =
 export interface DurableDocumentMutation {
     collectionName: string;
     document: { id: string; [key: string]: any };
+    /** Verified original provenance: native restoration checks retirement inside its writer transaction. */
+    recoveryOriginal?: import('../recovery/PendingOperationsRecovery').OriginalRecord;
     requireAbsent?: boolean;
     expectedDocument?: string;
     /** Native CAS-only append path; remote ACK retained-upsert cannot modify these fields. */
