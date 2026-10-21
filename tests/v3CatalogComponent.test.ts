@@ -29,8 +29,8 @@ test('executable readonly component resets cursor/search/context, ignores late c
         :'exports.LargeMasterSyncV3CatalogRead=globalThis.__catalogRead;'}));
     }}]});
   const previousWindow=(globalThis as any).window;
-  Object.assign(globalThis,{__catalogHooks:hooks,__catalogRead:read,window:{setTimeout:(callback:()=>void)=>{
-    const id=++timerId;timers.set(id,callback);return id;},clearTimeout:(id:number)=>timers.delete(id)}});
+  Object.assign(globalThis,{__catalogHooks:hooks,__catalogRead:read,window:Object.assign(new EventTarget(),{setTimeout:(callback:()=>void)=>{
+    const id=++timerId;timers.set(id,callback);return id;},clearTimeout:(id:number)=>timers.delete(id)})});
   const module={exports:{} as any};new Function('module','exports',built.outputFiles[0].text)(module,module.exports);
   const exported=module.exports;
   let props:any={terminalId:'local',config:{terminals:[{id:'local',config:{currentDeviceId:'device',erpTerminalId:'erp',
@@ -53,9 +53,12 @@ test('executable readonly component resets cursor/search/context, ignores late c
     button('Siguiente').props.onClick();render();await settle();
     find(node=>node.type==='select').props.onChange({target:{value:'NONE'}});render();await settle();
     assert.equal(requests.at(-1).afterId,null);assert.equal(requests.at(-1).category,'NONE');
+    find(node=>node.type==='select'&&node.props['aria-label']==='Departamento').props.onChange({target:{value:'department-selected'}});render();await settle();
+    assert.equal(requests.at(-1).departmentId,'department-selected');
     hold=true;button('Siguiente').props.onClick();render();await settle();assert.ok(lateResolve);
     props={...props,terminalId:'new-terminal',config:{terminals:[]}};render();await settle();
     assert.equal(opens,2);assert.equal(requests.at(-1).afterId,null);
+    assert.equal(requests.at(-1).departmentId,undefined);
     lateResolve({...page,total:999});await settle();
     const visible=find(node=>typeof node.type==='function'&&node.type.name==='V3CatalogPageView');
     assert.equal(visible.props.state.page.total,300);
