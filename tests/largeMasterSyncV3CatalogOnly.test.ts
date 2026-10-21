@@ -44,7 +44,7 @@ function fixture() {
   const insert = (collection: string, document: any) => sql.prepare('INSERT OR REPLACE INTO documents(collection_name,doc_id,data) VALUES(?,?,?)').run(collection, document.id, JSON.stringify(document));
   const transition = async () => ({ assertIdentity:()=>{}, binding: 'binding', expectedCatalog: (await store.getActiveRuntimeVersion())!, inventory: (await store.getInventoryAuthority())! });
   const stock = async () => 100 + await store.getLocalInventoryDelta(baseline, 'P', 'W');
-  return { sql, store, adapter, stage, insert, read, transition, stock, onLastActivationWrite:(callback:()=>void)=>{lastActivationWrite=callback;}, fail: (value: boolean) => { fail = value; } };
+  return { sql, bridge, store, adapter, stage, insert, read, transition, stock, onLastActivationWrite:(callback:()=>void)=>{lastActivationWrite=callback;}, fail: (value: boolean) => { fail = value; } };
 }
 function financial(id: string, quantity: number, version = 47, sourceId = 'S'): DurableDocumentMutation[] {
   const scope = { v3Binding: 'binding', v3WarehouseId: 'W', v3InventoryBaseline: baseline };
@@ -377,5 +377,57 @@ for(const fault of [false,true]) test(`explicit VAT10→service catalog on used 
   assert.deepEqual(f.read('inventoryLedger'),beforeLedger);assert.deepEqual(f.read('transactions'),beforeSales);
   assert.equal(JSON.parse(f.read('outbox')[0]).lease,'owner');assert.equal(JSON.parse(f.read('parkedTickets')[0]).items[0].price,70);
   assert.equal(JSON.parse(String(f.sql.prepare('SELECT record_json FROM master_v3_taxes WHERE sync_version=47').get()?.record_json)).type,'VAT');
+ }finally{f.sql.close();}
+});
+
+import {createHash} from 'node:crypto';
+import {readFileSync} from 'node:fs';
+import {createRequire} from 'node:module';
+import React from 'react';
+import {renderToStaticMarkup} from 'react-dom/server';
+import {LargeMasterSyncV3Runtime} from '../services/sync/LargeMasterSyncV3Runtime';
+import {LargeMasterSyncV3OperationalCatalog} from '../services/sync/LargeMasterSyncV3OperationalCatalog';
+
+test('two distinct authoritative image chunks replace rendered references while stock baseline, pending ledger/outbox and old receipts stay unchanged',async()=>{
+ const f=fixture();try{
+  const standalone=[1,2].map(edit=>{
+   const article={id:'P',sku:'BEB-005',name:'Refresco',type:'PRODUCT',active:true,sellable:true,inventoriable:true,taxable:false,taxIds:[],
+    category:'Bebidas',activeWarehouseIds:['W'],operationalFlags:{trackInventory:true,allowNegativeStock:true},product_type:'SIMPLE',production_area_id:null,restaurant_unsupported:false,
+    images:[`https://images.example.test/beb-005-${edit}.png`],image_url:`https://images.example.test/beb-005-${edit}.png`,image_version:String(1000+edit)};
+   const payloadText=JSON.stringify({schemaVersion:3,syncId:edit===1?'N':'N2',dataset:'articles',chunkIndex:0,records:[article]});
+   return {article,chunk:{payloadText,checksum:createHash('sha256').update(payloadText).digest('hex'),rawBytes:Buffer.byteLength(payloadText),recordCount:1}};
+  });
+  // Optional explicit external evidence uses the actual ERP editor/DTO/chunk output; CI remains standalone.
+  const edits=process.env.POS_545_ERP_FIXTURE?JSON.parse(readFileSync(process.env.POS_545_ERP_FIXTURE,'utf8')):standalone;
+  assert.equal(edits.length,2);
+  // The fixture's initial authoritative article already has these inventory/fiscal semantics;
+  // only URL/version/presentation changes across the following immutable generations.
+  const original={...edits[0].article,images:['https://images.example.test/original.png'],image_url:'https://images.example.test/original.png',image_version:'original'};
+  f.sql.prepare('UPDATE master_v3_articles SET record_json=?,taxable=?,tax_ids_json=? WHERE sync_version=47').run(JSON.stringify(original),original.taxable?1:0,JSON.stringify(original.taxIds));
+  await f.adapter.saveDocumentsAtomically(financial('pending-sale',1));f.insert('outbox',{id:'pending',status:'PENDING',lease:'owner'});
+  const anchor=JSON.stringify(await f.store.getInventoryAuthority()),ledger=f.read('inventoryLedger'),sales=f.read('transactions'),outbox=f.read('outbox');
+  const run=f.bridge.run;(f.bridge as any).run=async(query:string,values:any[]=[])=>({changes:await run(query,values)});
+  const compiled=await build({stdin:{contents:"export {RestaurantCatalogImage} from './components/kiosk/RestaurantKioskMenu';",resolveDir:new URL('..',import.meta.url).pathname,loader:'tsx'},bundle:true,platform:'node',format:'cjs',packages:'external',loader:{'.css':'empty'},write:false,logLevel:'silent'});
+  const loaded={exports:{} as any};new Function('require','module','exports',compiled.outputFiles[0].text)(createRequire(import.meta.url),loaded,loaded.exports);
+  for(const [index,edit] of edits.entries()){
+   const syncId=index===0?'N':'N2',version=102+index;f.stage(syncId,version,100,edit.article);
+   f.sql.prepare("UPDATE sync_v3_sessions SET status='STAGING' WHERE sync_id=?").run(syncId);
+   f.sql.prepare("INSERT INTO sync_v3_dataset_progress(sync_id,dataset,expected_count,expected_chunks,expected_checksum,applied_count,applied_chunks,status,updated_at)VALUES(?,'articles',1,1,?,0,0,'PENDING','now')").run(syncId,createHash('sha256').update(edit.chunk.checksum).digest('hex'));
+   assert.equal(createHash('sha256').update(edit.chunk.payloadText).digest('hex'),edit.chunk.checksum);
+   const envelope=JSON.parse(edit.chunk.payloadText);assert.equal(envelope.syncId,syncId);
+   await f.store.applyChunk({envelope,checksum:edit.chunk.checksum,recordCount:1,rawBytes:edit.chunk.rawBytes,rawText:edit.chunk.payloadText});
+   await f.store.markDatasetValidated(syncId,'articles');f.sql.prepare("UPDATE sync_v3_sessions SET status='VALIDATED' WHERE sync_id=?").run(syncId);
+   await f.store.activateCatalogOnly(syncId,await f.transition());
+   const runtime=LargeMasterSyncV3Runtime.retained(f.store,{syncId,syncVersion:version,contractVersion:2});
+   const catalog=await LargeMasterSyncV3OperationalCatalog.open({runtime,inventorySyncId:'S',inventorySyncVersion:47,inventoryVersion:4,inventoryCursor:'C'},'T','W');
+   const page=await catalog.page({query:'BEB-005',limit:30});assert.equal(page.items.length,1);
+   for(const item of [(await catalog.get('P'))!,...(await catalog.search('Refresco')),...page.items]){
+    assert.equal(item.product.images[0],edit.article.image_url);assert.equal(item.product.imageVersion,edit.article.image_version);assert.equal(item.product.price,100);
+    const html=renderToStaticMarkup(React.createElement(loaded.exports.RestaurantCatalogImage,{product:item.product}));
+    assert.ok(html.includes(`src="${edit.article.image_url}"`));assert.equal(item.authority.inventoryVersion,4);
+   }
+   assert.equal(JSON.stringify(await f.store.getInventoryAuthority()),anchor);assert.equal(await f.stock(),99);
+   assert.deepEqual(f.read('inventoryLedger'),ledger);assert.deepEqual(f.read('transactions'),sales);assert.deepEqual(f.read('outbox'),outbox);
+  }
  }finally{f.sql.close();}
 });

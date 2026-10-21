@@ -4186,7 +4186,8 @@ const AppContent: React.FC = () => {
             ? 'manual_sync'
             : 'periodic';
         authenticatedRequestSucceeded = await triggerErpSyncOutbox(triggerReason) !== null;
-        if (usesLargeMasterSyncV3Authority(syncPolicy.resolve().kind)
+        const v3Authority = usesLargeMasterSyncV3Authority(syncPolicy.resolve().kind);
+        if (v3Authority
           && (!reasons.includes('REALTIME_HINT') || isV3CatalogHint(collections, domainVersions, imageOnly))) {
           await syncManager.syncTerminalManifestInBackground(undefined, {
             reason: reasons.includes('REALTIME_HINT') ? 'force_sync' : 'periodic_manifest', throwOnError: true,
@@ -4203,7 +4204,8 @@ const AppContent: React.FC = () => {
               hinted_domains: Object.keys(domainVersions),
             });
           } else if (imageOnly || collections.length > 0) {
-            const requestedCollections = collections.length > 0 ? collections : ['products'];
+            const requestedCollections = (collections.length > 0 ? collections : ['products'])
+              .filter(collection => !v3Authority || !imageOnly || !['products', 'items', 'articles'].includes(collection.toLowerCase()));
             for (const collection of requestedCollections) {
               await syncManager.pullCatalog(collection as any, false, { ignoreThrottle: true });
             }

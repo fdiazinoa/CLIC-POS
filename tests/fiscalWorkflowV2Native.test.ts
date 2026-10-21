@@ -25,3 +25,102 @@ test('ACK COMMIT response loss recovers same durable operation, idempotent ACK; 
 test('required format permit is selected atomically before any checkout journal, intent, or payment; ordinary no-permit path remains commercial',async()=>{const f=fixture();try{await assert.rejects(f.store.reserveCheckout(key,'format-cart',undefined,'format-operation',{requirePermit:true,authorityHash:'a'.repeat(64)}),/PERMIT_REQUIRED/);for(const table of ['pos_fiscal_checkouts_v2','pos_fiscal_checkout_current_v2','payment_intents_v2','sync_outbox_v2','documents'])assert.equal((f.sql.prepare('SELECT count(*) n FROM '+table).get() as any).n,0);const op=await f.store.refillOperation(key);await f.store.savePermits(key,op,[f.permit(1)]);const a=await f.store.reserveCheckout(key,'format-cart',undefined,'format-operation',{requirePermit:true,authorityHash:'a'.repeat(64)});assert.equal(a.permit?.permitId,f.permit(1).permitId);assert.equal(a.paymentIds.length,0);assert.equal((await f.store.reserveCheckout(key,'format-cart',undefined,'format-operation',{requirePermit:true,authorityHash:'a'.repeat(64)})).checkoutId,a.checkoutId);await f.adapter.commitFinancialTransaction(commit(a,transaction(a)));await f.store.acknowledgeCheckout(a.checkoutId);await assert.rejects(f.store.reserveCheckout(key,'format-cart',undefined,'next-operation',{requirePermit:true,authorityHash:'a'.repeat(64)}),/PERMIT_REQUIRED/);assert.equal((await f.store.currentCheckout(key))?.checkoutId,a.checkoutId,'failed required reservation restores the acknowledged pointer');assert.equal((f.sql.prepare('SELECT count(*) n FROM pos_fiscal_checkouts_v2').get() as any).n,1);}finally{f.sql.close();}
  const legacy=fixture();try{const a=await legacy.store.reserveCheckout(key,'ordinary-cart',undefined,'ordinary-operation');assert.equal(a.permit,null);await assert.rejects(legacy.store.reserveCheckout(key,'ordinary-cart',undefined,'ordinary-operation',{requirePermit:true,authorityHash:'a'.repeat(64)}),/PERMIT_REQUIRED/);const refill=await legacy.store.refillOperation(key);await legacy.store.savePermits(key,refill,[legacy.permit(2)]);await assert.rejects(legacy.store.reserveCheckout(key,'ordinary-cart',undefined,'ordinary-operation',{requirePermit:true,authorityHash:'a'.repeat(64)}),/PERMIT_REQUIRED/);assert.equal((await legacy.store.readCheckout(a.checkoutId))?.permit,null,'never backfill an exposed ordinary identity');assert.equal((legacy.sql.prepare('SELECT state FROM pos_fiscal_permits_v2').get() as any).state,'AVAILABLE');}finally{legacy.sql.close();}});
 test('background refill after ACK supports sixteen consecutive required-permit births with distinct durable identities',async()=>{const f=fixture();const {createFiscalWorkflowV2Client}=await import('../services/fiscal/FiscalWorkflowV2Client'),{observeFiscalWorkflowCapability,clearFiscalWorkflowCapability}=await import('../services/fiscal/FiscalWorkflowV2Capability');const base='https://erp.example.invalid/api/sync',headers={'X-Tenant-Id':'tenant','X-Terminal-Id':'terminal','X-Device-Id':'device','X-Sync-Token':'synthetic'};let next=15,requests=0;try{const op=await f.store.refillOperation(key);await f.store.savePermits(key,op,Array.from({length:14},(_,n)=>f.permit(n+1)));observeFiscalWorkflowCapability(base,headers,'2');const client=createFiscalWorkflowV2Client({store:()=>f.store,readAuth:()=>({base,headers,descriptor:scope,assertCurrent(){}}),fetchImpl:async(url)=>{assert.match(String(url),/\/permits$/);requests++;const available=(f.sql.prepare("SELECT permit_json FROM pos_fiscal_permits_v2 WHERE state='AVAILABLE'").all() as any[]).map(r=>JSON.parse(r.permit_json));return {ok:true,json:async()=>({schemaVersion:2,authorityHash:'a'.repeat(64),permits:[...available,f.permit(next++)]})} as Response;}} as any),ids=new Set<string>();await client.prefetch();for(let i=0;i<16;i++){const beforeRequests=requests,checkout=await client.reserveCheckout('same-content','operation-'+i,{requirePermit:true});assert.equal(requests,beforeRequests,'Cobrar reads local permit only');assert.ok(checkout.permit);ids.add(checkout.transactionId);const tx=transaction(checkout);tx.ncf='E32'+String(i+1).padStart(10,'0');await f.adapter.commitFinancialTransaction(commit(checkout,tx));await client.acknowledge(checkout);await client.prefetch();}assert.equal(ids.size,16);assert.equal(requests,17);assert.equal((f.sql.prepare('SELECT count(*) n FROM sync_outbox_v2').get() as any).n,16);assert.equal((f.sql.prepare("SELECT count(*) n FROM pos_fiscal_checkouts_v2 WHERE permit_id IS NULL").get() as any).n,0);assert.equal((f.sql.prepare("SELECT count(*) n FROM pos_fiscal_permits_v2 WHERE state='CONSUMED'").get() as any).n,16);}finally{clearFiscalWorkflowCapability();f.sql.close();}});
+
+import {createFiscalWorkflowV2Client} from '../services/fiscal/FiscalWorkflowV2Client';
+import {observeFiscalWorkflowCapability,clearFiscalWorkflowCapability} from '../services/fiscal/FiscalWorkflowV2Capability';
+import {readFileSync} from 'node:fs';
+import ts from 'typescript';
+import {assertFiscalWorkflowCheckoutReplay} from '../services/fiscal/FiscalWorkflowCheckoutReplay';
+const recoveryBase='https://erp.example.invalid/api/sync';
+async function recoveryClient(f:ReturnType<typeof fixture>){
+ const headers={'X-Tenant-Id':'tenant','X-Terminal-Id':'terminal','X-Device-Id':'device','X-Sync-Token':'recovery-fixture'};
+ observeFiscalWorkflowCapability(recoveryBase,headers,'2');let requests=0;
+ const client=createFiscalWorkflowV2Client({store:()=>f.store,readAuth:()=>({base:recoveryBase,headers,descriptor:scope,assertCurrent(){}}),
+  fetchImpl:async()=>{requests++;return {ok:true,json:async()=>({schemaVersion:2,authorityHash:'a'.repeat(64),permits:[f.permit(1),f.permit(2),f.permit(3)]})} as Response;}} as any);
+ await client.prefetch();return {client,requests:()=>requests};
+}
+const recoverySnapshot=(f:ReturnType<typeof fixture>)=>JSON.stringify(['pos_fiscal_checkout_current_v2','pos_fiscal_checkouts_v2','pos_fiscal_permits_v2','documents','sync_outbox_v2'].map(table=>f.sql.prepare('SELECT * FROM '+table).all()));
+const changes=(f:ReturnType<typeof fixture>)=>Number(f.sql.prepare('SELECT total_changes() n').get()?.n);
+
+for(const race of ['missing','effect','committed','ack','replacement-prepared','replacement-ack','malformed-payments'])test(`recovery CAS rejects ${race} between read and reserve before any native mutation`,async()=>{
+ const f=fixture();try{const c=await recoveryClient(f);await c.client.reserveCheckout('cart','original-operation',{requirePermit:true});
+  const read=f.store.currentCheckout.bind(f.store);let raced=false,before='',writes=0;
+  f.store.currentCheckout=async scopeKey=>{
+   const original=await read(scopeKey);if(raced)return original;raced=true;
+   if(race==='missing')f.sql.prepare('DELETE FROM pos_fiscal_checkout_current_v2 WHERE scope_key=?').run(key);
+   else if(race==='effect')await f.store.markPaymentPossible(original!.checkoutId,'unknown-card');
+   else if(race==='malformed-payments')f.sql.prepare("UPDATE pos_fiscal_checkouts_v2 SET checkout_json=json_set(checkout_json,'$.paymentIds',json('null')) WHERE checkout_id=?").run(original!.checkoutId);
+   else{
+    await f.adapter.commitFinancialTransaction(commit(original,transaction(original)));
+    if(race!=='committed')await f.store.acknowledgeCheckout(original!.checkoutId);
+    if(race.startsWith('replacement')){
+     const replacement=await f.store.reserveCheckout(key,'cart',undefined,'replacement-operation',{requirePermit:true,authorityHash:'a'.repeat(64)});
+     if(race==='replacement-ack'){const tx=transaction(replacement);tx.ncf='E320000000002';await f.adapter.commitFinancialTransaction(commit(replacement,tx));await f.store.acknowledgeCheckout(replacement.checkoutId);}
+    }
+   }
+   before=recoverySnapshot(f);writes=changes(f);return original;
+  };
+  await assert.rejects(c.client.reserveCheckout('cart','remounted-ui-operation',{requirePermit:true}),/RECONCILIATION/);
+  assert.equal(recoverySnapshot(f),before);assert.equal(changes(f),writes,'CAS must precede allocation/pointer/permit mutation, including rolled-back writes');
+  assert.equal(c.requests(),1);
+ }finally{clearFiscalWorkflowCapability();f.sql.close();}
+});
+
+test('native recovery rejects incomplete/forged expected tuples with zero attempted row writes',async()=>{
+ const f=fixture();try{const c=await recoveryClient(f),checkout=await c.client.reserveCheckout('cart','original',{requirePermit:true});
+  const proof={scopeKey:key,checkoutId:checkout.checkoutId,transactionId:checkout.transactionId,operationId:'original',cartIdentity:'cart',phase:'PREPARED',paymentIds:[]};
+  for(const patch of [{scopeKey:'other'},{checkoutId:''},{transactionId:'other'},{operationId:null},{cartIdentity:'different'},{phase:'ACKNOWLEDGED'},{paymentIds:null},{paymentIds:['unknown']}]){
+   const before=recoverySnapshot(f),writes=changes(f);
+   await assert.rejects(f.store.reserveCheckout(key,'cart',undefined,'original',{requirePermit:true,authorityHash:'a'.repeat(64),expectedCurrent:{...proof,...patch} as any}),/RECONCILIATION/);
+   assert.equal(recoverySnapshot(f),before);assert.equal(changes(f),writes);
+  }
+ }finally{clearFiscalWorkflowCapability();f.sql.close();}
+});
+
+test('actual remounted prepayment callback adopts returned durable op then one cash birth/ACK replays without another effect',async()=>{
+ const f=fixture();try{const c=await recoveryClient(f),cart=[{id:'item',cartId:'line',quantity:1,price:748.8}],cartIdentity=JSON.stringify({items:cart,customerId:null,fiscalType:'E32'});
+  const original=await c.client.reserveCheckout(cartIdentity,'interrupted-operation',{requirePermit:true});
+  const text=readFileSync(new URL('../components/POSInterface.tsx',import.meta.url),'utf8'),ast=ts.createSourceFile('POSInterface.tsx',text,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);let arrow:any;
+  function visit(n:ts.Node){if(ts.isVariableDeclaration(n)&&n.name.getText(ast)==='beforeV3PaymentEffects')arrow=n.initializer;ts.forEachChild(n,visit);}visit(ast);
+  const updates:any[]=[],checkoutRef:any={current:null},operationRef:any={current:null};let validation=0;
+  const context:any={completedReservationForReceipt:async()=>null,assertCheckoutFiscalAuthority:async()=>{},hasV3ReservationCart:false,activeV3Reservation:null,selectedCustomer:null,
+   v3Operational:{validate:async()=>{validation++;}},fiscalCompliance:{mode:'ECF'},fiscalWorkflowV2Client:c.client,getDefaultFiscalProvider:()=> 'MSELLER',config:{},activeTerminalConfig:{},terminalId:'terminal',
+   activeRecoveredReservation:null,activeDirectV3TicketId:null,activeTable:null,processedCart:cart,cart,fiscalCheckoutRef:checkoutRef,fiscalCheckoutOperationRef:operationRef,
+   currentFiscalCheckoutCartIdentity:()=>cartIdentity,onUpdateCart:(items:any[])=>updates.push(items),createUuid:()=> 'fresh-ui-operation',setLargeMasterSyncV3CriticalOperation:()=>{},
+   assertFiscalWorkflowCheckoutReplay,readFiscalWorkflowLocalScope:()=>scope,db:{getDocument:async(collection:string,id:string)=>{const row=f.sql.prepare('SELECT data FROM documents WHERE collection_name=? AND doc_id=?').get(collection,id);return row?JSON.parse(String(row.data)):null;}}};
+  const js=ts.transpileModule('const invoke='+arrow.getText(ast),{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,invoke=new Function(...Object.keys(context),js+';return invoke;')(...Object.values(context));
+  const [first,repeat]=await Promise.all([invoke(),invoke()]);
+  assert.deepEqual(first.futureCheckout,{checkoutId:original.checkoutId,transactionId:original.transactionId});assert.deepEqual(repeat.futureCheckout,first.futureCheckout);
+  assert.equal(operationRef.current,'interrupted-operation');assert.ok(updates.every(rows=>rows.every((row:any)=>row.fiscalCheckoutOperationId==='interrupted-operation')));assert.equal(validation,2);
+  assert.equal((f.sql.prepare('SELECT count(*) n FROM pos_fiscal_checkouts_v2').get() as any).n,1);assert.equal(c.requests(),1);
+  const tx={...transaction(original),items:cart,total:748.8,netAmount:748.8};await f.adapter.commitFinancialTransaction(commit(original,tx));
+  await assert.rejects(f.adapter.commitFinancialTransaction(commit(original,tx)),/DUPLICATE/);
+  const receipt=(await invoke()).completedTransaction;assert.equal(receipt.id,original.transactionId);await c.client.acknowledge(await f.store.readCheckout(original.checkoutId) as any);
+  checkoutRef.current=await f.store.readCheckout(original.checkoutId);c.client.invalidate();
+  assert.equal((await invoke()).completedTransaction.id,original.transactionId);
+  assert.equal((f.sql.prepare('SELECT count(*) n FROM sync_outbox_v2').get() as any).n,1);assert.equal((f.sql.prepare("SELECT count(*) n FROM documents WHERE collection_name='transactionHistory'").get() as any).n,1);
+  assert.equal((f.sql.prepare("SELECT count(*) n FROM pos_fiscal_permits_v2 WHERE state='CONSUMED'").get() as any).n,1);
+ }finally{clearFiscalWorkflowCapability();f.sql.close();}
+});
+
+for(const corruption of ['missing','malformed','transaction','scope','return','void','nonce','native-permit'])test(`remount never recovers a ${corruption} permit into SALE`,async()=>{
+ const f=fixture();try{const c=await recoveryClient(f),checkout=await c.client.reserveCheckout('cart','original',{requirePermit:true});
+  if(corruption==='native-permit')f.sql.prepare('UPDATE pos_fiscal_checkouts_v2 SET checkout_json=? WHERE checkout_id=?').run(JSON.stringify({...checkout,permit:{...checkout.permit,nonce:'different'}}),checkout.checkoutId);
+  else{
+   const permit:any=corruption==='missing'?null:corruption==='malformed'?{}:{...checkout.permit};
+   if(corruption==='transaction')permit.transactionId='foreign-transaction';if(corruption==='scope')permit.scope={...scope,tenantId:'foreign'};
+   if(corruption==='return')permit.operationKind='RETURN';if(corruption==='void')permit.operationKind='VOID';if(corruption==='nonce')permit.nonce='';
+   f.sql.prepare('UPDATE pos_fiscal_checkouts_v2 SET checkout_json=? WHERE checkout_id=?').run(JSON.stringify({...checkout,permit}),checkout.checkoutId);
+  }
+  const before=recoverySnapshot(f),writes=changes(f);
+  await assert.rejects(c.client.reserveCheckout('cart','remounted-ui',{requirePermit:true}),/RECONCILIATION/);
+  assert.equal(recoverySnapshot(f),before);assert.equal(changes(f),writes);
+ }finally{clearFiscalWorkflowCapability();f.sql.close();}
+});
+test('client context invalidation between current read and reservation cannot mutate a prepared operation',async()=>{
+ const f=fixture();try{const c=await recoveryClient(f);await c.client.reserveCheckout('cart','original',{requirePermit:true});
+  const read=f.store.currentCheckout.bind(f.store);f.store.currentCheckout=async key=>{const value=await read(key);c.client.invalidate();return value;};
+  const before=recoverySnapshot(f),writes=changes(f);await assert.rejects(c.client.reserveCheckout('cart','remounted-ui',{requirePermit:true}),/DISABLED/);
+  assert.equal(recoverySnapshot(f),before);assert.equal(changes(f),writes);
+ }finally{clearFiscalWorkflowCapability();f.sql.close();}
+});

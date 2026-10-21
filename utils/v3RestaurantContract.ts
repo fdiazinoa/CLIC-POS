@@ -1,3 +1,4 @@
+import { isInactiveFractionRule } from './inactiveFractionRule';
 const object = (value: unknown): Record<string, unknown> => value && typeof value === 'object' && !Array.isArray(value)
   ? value as Record<string, unknown> : {};
 
@@ -7,7 +8,7 @@ export function v3RestaurantContract(source: Record<string, unknown>): { product
   const rows = [source, ...['restaurant', 'restaurantConfig', 'restaurant_config', 'comanda', 'command'].map(key => object(source[key]))];
   if (rows.some(row => ['recipeDetails', 'recipe_details', 'modifiers', 'availableModifiers', 'modifier_groups', 'modifierGroups',
     'combo_groups', 'comboGroups', 'note_presets', 'notePresets'].some(key => row[key] != null && (!Array.isArray(row[key]) || (row[key] as unknown[]).length > 0))
-    || Boolean(row.fraction_rule || row.fractionRule)
+    || ['fraction_rule', 'fractionRule'].some(key => row[key] != null && !isInactiveFractionRule(row[key]))
     || (row.product_type != null || row.productType != null)
       && !['SIMPLE', 'SERVICE'].includes(String(row.product_type ?? row.productType).toUpperCase()))) throw Error('Configuración avanzada de restaurante no soportada');
   const type = source.product_type;
