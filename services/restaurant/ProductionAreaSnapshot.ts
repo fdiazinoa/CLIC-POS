@@ -10,7 +10,7 @@ const outputFields: Record<string, string[]> = { modo_salida: ['modo_salida', 'o
 export function productionAreaRows(snapshot: unknown): unknown[] | undefined {
   const root = object(snapshot);
   const catalog = object(object(object(root.terminal_config || root).resolved).catalog);
-  for (const key of ['production_areas', 'productionAreas']) if (Object.hasOwn(catalog, key)) {
+  for (const key of ['production_areas', 'productionAreas']) if (Object.prototype.hasOwnProperty.call(catalog, key)) {
     if (!Array.isArray(catalog[key])) throw Error('PRODUCTION_AREAS_SNAPSHOT_INVALID');
     return catalog[key];
   }
@@ -27,10 +27,10 @@ export function mergeProductionAreaSnapshot(rows: unknown[], local: unknown[]): 
     seen.add(id);
     const merged: Record<string, any> = { ...byId.get(id), id, name, nombre: name, active: true, is_active: true };
     for (const field of ['code', 'description', 'station_type', 'sort_order', 'updated_at']) {
-      if (Object.hasOwn(row, field)) merged[field] = row[field];
+      if (Object.prototype.hasOwnProperty.call(row, field)) merged[field] = row[field];
     }
     for (const [field, aliases] of Object.entries(outputFields)) {
-      const key = aliases.find(alias => Object.hasOwn(row, alias));
+      const key = aliases.find(alias => Object.prototype.hasOwnProperty.call(row, alias));
       if (!key) continue;
       const value = row[key];
       if (value != null && typeof value !== 'string' && typeof value !== 'number') throw Error('PRODUCTION_AREAS_SNAPSHOT_INVALID');

@@ -12,7 +12,7 @@ export function validateRetirementProof(proof:FiscalRetirementProof):void {
 export function validateRetirementReceipt(receipt:FiscalRetirementReceipt,proof:FiscalRetirementProof,scope:FiscalWorkflowScope):void {
  validateRetirementProof(receipt);
  const keys=['schemaVersion','commandId','checkoutId','permitId','transactionId','originalOperationId','cartIdentitySha256','reason','scope','state','closedAt','historyId'];
- if(Object.keys(receipt).length!==keys.length||keys.some(k=>!Object.hasOwn(receipt,k))||receipt.state!=='HELD'||!isRetirementUuid(receipt.historyId)||!Number.isFinite(Date.parse(receipt.closedAt))
+ if(Object.keys(receipt).length!==keys.length||keys.some(k=>!Object.prototype.hasOwnProperty.call(receipt,k))||receipt.state!=='HELD'||!isRetirementUuid(receipt.historyId)||!Number.isFinite(Date.parse(receipt.closedAt))
    ||fiscalWorkflowScopeKey(receipt.scope)!==fiscalWorkflowScopeKey(scope)||Object.keys(proof).some(k=>(receipt as any)[k]!== (proof as any)[k]))retirementFail();
 }
 export function isExpiredPrepared(checkout:FiscalWorkflowCheckoutV2|null,scopeKey:string):checkout is FiscalWorkflowCheckoutV2 {
