@@ -13,7 +13,7 @@ import {
   type LargeMasterSyncV3Progress,
   type LargeMasterSyncV3RuntimeVersion,
   type LargeMasterSyncV3Store,
-  type V3CatalogPageRequest, type V3CatalogPage,
+  type V3CatalogPageRequest, type V3CatalogPage, type V3ProductionCatalogRequest, type V3ProductionCatalogPage,
 } from '../sync/LargeMasterSyncV3Types';
 import { isLargeMasterSyncV3OperationalWindowHeld, reserveLargeMasterSyncV3BaselineMutation } from '../sync/LargeMasterSyncV3OperationGate';
 
@@ -822,6 +822,40 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
   }
 
   /** Four bounded SELECTs (three for an empty page); never transfers full records or legacy data. */
+  async readProductionCatalogPage(runtime: LargeMasterSyncV3RuntimeVersion, request: V3ProductionCatalogRequest): Promise<V3ProductionCatalogPage> {
+    requireOperationalVersion(runtime);
+    const limit = Number.isFinite(request.limit) ? Math.max(1, Math.min(100, Math.floor(request.limit!))) : 80;
+    const query = (request.query || '').trim().toLowerCase().slice(0, 120);
+    const category = request.categoryId;
+    const json = "CASE WHEN json_valid(a.record_json) THEN a.record_json ELSE '{}' END";
+    const route = `nullif(trim(json_extract(${json}, '$.production_area_id')), '')`;
+    const categoryKey = "coalesce(nullif(a.pos_category_id,''),a.pos_category_key,'')";
+    const predicate = `a.sync_version = ? AND (? = '' OR instr(lower(coalesce(a.description,'')),?) > 0
+      OR instr(lower(coalesce(a.sku,'')),?) > 0 OR a.article_id IN (SELECT b.article_id FROM master_v3_barcodes b
+        WHERE b.sync_version=? AND instr(lower(b.barcode),?)>0))
+      AND (? IS NULL OR ${categoryKey} = ?)`;
+    const values = [runtime.syncVersion, query, query, query, runtime.syncVersion, query, category ?? null, category ?? null];
+    const db = this.connection();
+    const total = first(await db.query('SELECT count(*) AS total FROM master_v3_articles WHERE sync_version=?', [runtime.syncVersion]));
+    const counts = first(await db.query(`SELECT count(*) AS total, coalesce(sum(CASE WHEN a.article_id>coalesce(?,'') THEN 1 ELSE 0 END),0) AS remaining FROM master_v3_articles a WHERE ${predicate}`, [request.afterId ?? null,...values]));
+    const page = rows(await db.query(`SELECT a.article_id AS id,a.description AS name,a.sku,${categoryKey} AS categoryId,
+      ${route} AS route,json_extract(${json},'$.product_type') AS productType,
+      json_extract(${json},'$.restaurant_unsupported') AS unsupported
+      FROM master_v3_articles a WHERE ${predicate} AND a.article_id>coalesce(?,'') ORDER BY a.article_id LIMIT ?`, [...values,request.afterId ?? null,limit]));
+    // Grouped metadata, never full article JSON, crosses the native bridge.
+    const categories = rows(await db.query(`SELECT ${categoryKey} AS id,min(a.pos_category_label) AS label,count(*) AS count
+      FROM master_v3_articles a WHERE a.sync_version=? GROUP BY ${categoryKey} ORDER BY id`,[runtime.syncVersion]));
+    const assigned = rows(await db.query(`SELECT ${route} AS id,count(*) AS count FROM master_v3_articles a
+      WHERE a.sync_version=? AND ${route} IS NOT NULL GROUP BY ${route}`,[runtime.syncVersion]));
+    return {total:Number(total?.total || 0),filteredTotal:Number(counts?.total || 0),
+      nextCursor:Number(counts?.remaining || 0)>page.length && page.length ? String(page[page.length-1].id) : null,
+      rows:page.map(row=>({id:String(row.id),name:String(row.name || row.id),sku:row.sku == null ? null : String(row.sku),
+        categoryId:String(row.categoryId || ''),productionAreaId:row.route == null ? null : String(row.route),
+        productType:String(row.productType || 'SIMPLE'),unsupported:Number(row.unsupported)===1})),
+      categories:categories.map(row=>({id:String(row.id || ''),label:String(row.label || row.id || 'Sin categoría'),count:Number(row.count)})),
+      assignedCounts:Object.fromEntries(assigned.map(row=>[String(row.id),Number(row.count)]))};
+  }
+
   async readAdministrativeCatalogPage(runtime: LargeMasterSyncV3RuntimeVersion, request: V3CatalogPageRequest): Promise<V3CatalogPage> {
     requireOperationalVersion(runtime);
     const inventory = await this.getInventorySnapshotVersion(runtime);

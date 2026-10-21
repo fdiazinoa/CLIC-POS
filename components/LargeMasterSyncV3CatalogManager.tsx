@@ -87,7 +87,7 @@ export default function LargeMasterSyncV3CatalogManager(props: {
   const reader = useRef<Promise<LargeMasterSyncV3CatalogRead>>();
   useEffect(() => {
     view.cancel(); reader.current = undefined;
-    setFilters({}); setCategory('ALL');
+    setFilters(previous => Object.keys(previous).length === 0 ? previous : {}); setCategory('ALL');
     setCursors(previous => previous.length === 1 && previous[0] === null ? previous : [null]);
     oldContext.current = contextKey;
     return () => { view.cancel(); };

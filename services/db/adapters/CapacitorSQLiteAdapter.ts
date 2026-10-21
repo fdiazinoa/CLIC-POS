@@ -73,6 +73,7 @@ export const NATIVE_V3_METHOD_CONCURRENCY = {
     activateCatalogOnly: 'write',
     getCatalogReceipt: 'read',
     readAdministrativeCatalogPage: 'read',
+    readProductionCatalogPage: 'read',
     prepare: 'write',
     readProgress: 'read',
     findIncomplete: 'read',
@@ -1234,6 +1235,15 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
                     AND COALESCE(json_extract(data,'$.type'),'SALE') != 'REFUND') LIMIT 1`,[expected.id,expected.id]);
                 if(closed.values?.length) throw new Error('SYNC_V3_RETAINED_TICKET_CHANGED');
               }
+            }
+            if (mutation.collectionName === 'catalogEdits' && document.mutation?.domain === 'item_operations'
+              && document.mutation?.field === 'production_area_id' && mutation.v3CurrentCatalog) {
+              const current = mutation.v3CurrentCatalog;
+              const active = await read(`SELECT o.binding FROM master_v3_operational_owner o
+                JOIN master_v3_state s ON s.singleton=1 WHERE o.singleton=1 AND o.binding=?
+                AND o.sync_id=? AND o.sync_version=? AND s.active_sync_id=o.sync_id AND s.active_version=o.sync_version`,
+                [current.binding,current.syncId,current.syncVersion]);
+              if (!active.values?.length) throw new Error('SYNC_V3_CATALOG_VERSION_CHANGED');
             }
             if (!document.v3InventoryBaseline) continue;
             const [binding, syncId, syncVersion, inventoryVersion, cursor] = JSON.parse(document.v3InventoryBaseline);

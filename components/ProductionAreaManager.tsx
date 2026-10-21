@@ -1,3 +1,6 @@
+import ProductionCatalogV3Panel from './ProductionCatalogV3Panel';
+import { usesLargeMasterSyncV3Authority } from '../services/sync/LargeMasterSyncV3Authority';
+import { loadSyncProfile } from '../services/sync/SyncProfile';
 import React, { useState, useEffect, useMemo } from 'react';
 import { Plus, Trash2, Save, Printer, Monitor, Layers, Server, AlertCircle, RefreshCw, CheckCircle2, XCircle, Search, PackageCheck, PackageX } from 'lucide-react';
 import { BusinessConfig, PrinterDevice, Product } from '../types';
@@ -22,11 +25,19 @@ interface ProductionArea {
 
 interface ProductionAreaManagerProps {
     terminals: any[];
+    actorId?: string;
     config: BusinessConfig;
     onUpdateConfig: (config: BusinessConfig, restart?: boolean) => void;
 }
 
-const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals, config, onUpdateConfig }) => {
+const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals, config, onUpdateConfig, actorId }) => {
+    const profile = loadSyncProfile();
+    const v3 = usesLargeMasterSyncV3Authority(profile.cloudChannel);
+    const currentTerminal = config.terminals.find(terminal => terminal.id === profile.localTerminalId
+        || terminal.config.erpTerminalId === profile.erpTerminalId);
+    const catalogContextKey = JSON.stringify([profile.cloudChannel,profile.erpTerminalId,profile.localTerminalId,
+        currentTerminal?.config.currentDeviceId,currentTerminal?.config.erpBinding?.companyId,
+        currentTerminal?.config.pricing,currentTerminal?.config.inventoryScope]);
     const NO_CATEGORY_FILTER_VALUE = '__NO_CATEGORY__';
     const [areas, setAreas] = useState<ProductionArea[]>([]);
     const [products, setProducts] = useState<Product[]>([]);
@@ -136,6 +147,7 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
     };
 
     const fetchProducts = async () => {
+        if (v3) { setProducts([]); return; }
         try {
             const localProducts = await db.get('products' as any) as Product[] || [];
             setProducts(Array.isArray(localProducts) ? localProducts : []);
@@ -241,12 +253,17 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
     };
 
     const handleAssignProductToArea = async (productId: string, areaId: string, assign: boolean) => {
+        if (v3) return;
         setSavingProductAreaId(areaId);
         try {
-            const nextProducts = products.map(product => {
+            const currentProducts = await db.get('products') as Product[] || [];
+            const expected = products.find(product => product.id === productId);
+            const current = currentProducts.find(product => product.id === productId);
+            if (!expected || !current || resolveRestaurantProductConfig(expected).production_area_id !== resolveRestaurantProductConfig(current).production_area_id) throw new Error('La asignación cambió. Actualiza el catálogo.');
+            const nextProducts = currentProducts.filter(product => product.id === productId).map(product => {
                 if (product.id !== productId) return product;
                 const resolved = resolveRestaurantProductConfig(product);
-                const nextAreaId = assign ? areaId : undefined;
+                const nextAreaId = assign ? areaId : (resolved.production_area_id === areaId ? undefined : resolved.production_area_id);
                 return normalizeRestaurantProductConfig({
                     ...product,
                     production_area_id: nextAreaId,
@@ -258,8 +275,8 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
                     updatedAt: new Date().toISOString(),
                 });
             });
-            setProducts(nextProducts);
-            await db.save('products' as any, nextProducts);
+            await db.saveDocuments('products', nextProducts);
+            await fetchProducts();
             window.dispatchEvent(new CustomEvent('productsUpdated'));
             await ensureKitchenModuleEnabled();
         } catch (error) {
@@ -284,13 +301,20 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
     };
 
     const handleSetFilteredProductsForArea = async (areaId: string, assign: boolean) => {
+        if (v3) return;
         const visibleProducts = getAreaFilteredProducts(areaId);
         if (visibleProducts.length === 0) return;
 
         setSavingProductAreaId(areaId);
         try {
             const visibleIds = new Set(visibleProducts.map(product => product.id));
-            const nextProducts = products.map(product => {
+            const currentProducts = await db.get('products') as Product[] || [];
+            const before = new Map(visibleProducts.map(product => [product.id, resolveRestaurantProductConfig(product).production_area_id]));
+            if (visibleProducts.some(product => {
+                const current = currentProducts.find(row => row.id === product.id);
+                return !current || resolveRestaurantProductConfig(current).production_area_id !== before.get(product.id);
+            })) throw new Error('Las asignaciones cambiaron. Actualiza el catálogo.');
+            const nextProducts = currentProducts.filter(product => visibleIds.has(product.id)).map(product => {
                 if (!visibleIds.has(product.id)) return product;
                 const resolved = resolveRestaurantProductConfig(product);
                 const currentAreaId = resolved.production_area_id;
@@ -306,8 +330,8 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
                     updatedAt: new Date().toISOString(),
                 });
             });
-            setProducts(nextProducts);
-            await db.save('products' as any, nextProducts);
+            await db.saveDocuments('products', nextProducts);
+            await fetchProducts();
             window.dispatchEvent(new CustomEvent('productsUpdated'));
             await ensureKitchenModuleEnabled();
         } catch (error) {
@@ -417,6 +441,7 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
                 </div>
             </div>
 
+            {v3 && <ProductionCatalogV3Panel key={catalogContextKey} contextKey={catalogContextKey} areas={areas} actorId={actorId} />}
             <div className="grid grid-cols-1 gap-5">
                 {areas.length === 0 ? (
                     <div className="col-span-full py-12 bg-slate-50 rounded-[2rem] border-2 border-dashed border-slate-200 flex flex-col items-center justify-center text-slate-400">
@@ -638,7 +663,7 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
                             )}
                         </div>
 
-                        <div className="rounded-[1.5rem] border border-slate-100 bg-slate-50/70 p-4">
+                        {!v3 && <div className="rounded-[1.5rem] border border-slate-100 bg-slate-50/70 p-4">
                             <div className="mb-3 flex items-start justify-between gap-3">
                                 <div>
                                     <h4 className="text-sm font-black text-slate-800">Artículos del centro</h4>
@@ -741,7 +766,7 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
                             <p className="mt-3 text-[10px] font-bold leading-relaxed text-slate-400">
                                 Al marcar un artículo aquí se guarda su destino de producción local. Si luego sincroniza desde ERP, el snapshot puede actualizar esta asignación.
                             </p>
-                        </div>
+                        </div>}
                         </div>
 
                         <div className="mt-5 flex justify-end">

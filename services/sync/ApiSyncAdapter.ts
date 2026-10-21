@@ -5895,6 +5895,29 @@ export class ApiSyncAdapter {
         }
     }
 
+    private productionRoutingSupport: { fingerprint: string; supported: boolean } | undefined;
+    async productionRoutingCapability(allowOfflineCache = false): Promise<boolean> {
+        const fingerprint = () => {
+            const credentials = readTerminalCredentialsSync();
+            const target = resolveSyncTarget();
+            return JSON.stringify([target.kind,target.baseUrl,target.terminalId,credentials.erpTenantId || credentials.tenantId,
+                credentials.companyId,credentials.deviceId,credentials.syncToken]);
+        };
+        const before = fingerprint();
+        try {
+            const payload = await this.getOperationalPayload('/catalog-edits/capabilities');
+            if (fingerprint() !== before) return false;
+            const supported = payload?.production_routing_contract === 1;
+            this.productionRoutingSupport = { fingerprint: before, supported };
+            return supported;
+        } catch (error) {
+            const http = Number(String(error).match(/failed(?: after re-auth)?:\s*(\d{3})/i)?.[1]);
+            if (http && http < 500) this.productionRoutingSupport = undefined;
+            return allowOfflineCache && !http && fingerprint() === before
+                && this.productionRoutingSupport?.fingerprint === before && this.productionRoutingSupport.supported === true;
+        }
+    }
+
     async sendCatalogEdit(edit: import('./CatalogEditQueue').CatalogEdit): Promise<import('./CatalogEditQueue').CatalogResult> {
         const { catalogScopeMatches } = await import('./catalogEdits');
         if (!catalogScopeMatches(edit.scope)) throw new Error('El cambio pertenece a otra vinculación.');

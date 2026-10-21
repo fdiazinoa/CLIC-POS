@@ -200,7 +200,10 @@ export async function resolveCatalogConflict(
     return followUp;
 }
 export const catalogEditQueue = new CatalogEditQueue({
-    read: readCatalogEdits, save: edit => db.saveDocument('catalogEdits', edit),
+    read: readCatalogEdits, save: async edit => {
+        await db.saveDocument('catalogEdits', edit);
+        if (edit.mutation.field === 'production_area_id') window.dispatchEvent(new CustomEvent('productionRoutingQueueUpdated'));
+    },
     matchesScope: catalogScopeMatches, now: Date.now,
     shouldPause: isPosSaleActive,
     yieldToUi: yieldBackgroundSyncChunk,

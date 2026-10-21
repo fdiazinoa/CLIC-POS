@@ -675,6 +675,7 @@ const Settings: React.FC<SettingsProps> = (props) => {
               <X size={24} />
             </button>
             <ProductionAreaManager
+              actorId={props.currentUser?.id}
               terminals={props.config.terminals}
               config={props.config}
               onUpdateConfig={props.onUpdateConfig}

@@ -22,8 +22,11 @@ export type CatalogEdit = {
     resolvedBy?: string;
     resolvedAt?: string;
     snapshotConfirmedAt?: string;
+    /** acknowledgedSyncId is accepted from old records for diagnostics only. */
+    routingSnapshot?: { binding: string; syncId: string; acknowledgedSyncId?: string };
+    publicationPending?: boolean;
 };
-export type CatalogResult = { id: string; status: 'APPLIED' | 'CONFLICT' | 'REJECTED'; code?: string; current?: unknown };
+export type CatalogResult = { id: string; status: 'APPLIED' | 'CONFLICT' | 'REJECTED'; code?: string; current?: unknown; publication_pending?: boolean };
 export interface CatalogQueueDependencies {
     read(): Promise<CatalogEdit[]>;
     save(edit: CatalogEdit): Promise<void>;
@@ -112,7 +115,7 @@ export class CatalogEditQueue {
                     ? 'APPLIED'
                     : result.status;
                 outcomes.set(edit.id, effectiveStatus);
-                await this.deps.save({ ...edit, status: effectiveStatus, syncStatus: effectiveStatus === 'APPLIED' ? 'SYNCED' : 'ERROR',
+                await this.deps.save({ ...edit, publicationPending: result.publication_pending, status: effectiveStatus, syncStatus: effectiveStatus === 'APPLIED' ? 'SYNCED' : 'ERROR',
                     syncError: effectiveStatus === 'APPLIED' ? undefined : result.code,
                     ...(effectiveStatus === 'CONFLICT' ? { conflictCurrent: result.current as CatalogMutationValue } : {}),
                     message: effectiveStatus === 'CONFLICT'
