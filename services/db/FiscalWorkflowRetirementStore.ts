@@ -45,7 +45,15 @@ const relevantCollections=['v3RestoredTicketSources','recoveryOriginals','recove
 export async function assertRetirementHasNoEffects(sql:SQL,p:FiscalRetirementProof):Promise<void>{
  for(const table of ['payment_intents_v2','pos_fiscal_watch_v2','pos_fiscal_state_v2'])if(await one(sql,`SELECT 1 FROM ${table} WHERE transaction_id=? LIMIT 1`,[p.transactionId]))retirementFail();
  const ids=new Set([p.transactionId,p.checkoutId,p.permitId]);let nodes=0,total=0;
- const inspect=(value:any,depth=0):void=>{if(++nodes>RETIREMENT_SCAN_LIMITS.nodes||depth>RETIREMENT_SCAN_LIMITS.depth)retirementFail();if(typeof value==='string'){if(ids.has(value))retirementFail();}else if(value&&typeof value==='object')Object.values(value).forEach(v=>inspect(v,depth+1));};
+ const inspect=(value:any,depth=0,wrappers=0,key=''):void=>{
+  if(++nodes>RETIREMENT_SCAN_LIMITS.nodes||depth>RETIREMENT_SCAN_LIMITS.depth||wrappers>8)retirementFail();
+  if(typeof value==='string'){
+   if(ids.has(value))retirementFail();
+   if(/^\["(?:object|array|string|number|date|boolean|null|undefined)"/.test(value)){
+    if(!['document','original','producerInput','configuration','item','body','requestBody','expectedDocument','declarationBody'].includes(key))retirementFail();inspect(decode(value),0,wrappers+1);
+   }else if(['submissionBody','packetJson','requestJson','sourceExpected'].includes(key))inspect(parse(value),0,wrappers+1);
+  }else if(value&&typeof value==='object')Object.entries(value).forEach(([key,v])=>inspect(v,depth+1,wrappers,key));
+ };
  const parse=(text:string)=>{try{return JSON.parse(text);}catch{return retirementFail();}};
  const decode=(text:string)=>{if(typeof text!=='string'||new TextEncoder().encode(text).length>RETIREMENT_SCAN_LIMITS.decodedBytes)retirementFail();try{return decodeOriginal(text);}catch{return retirementFail();}};
  const finance=(await sql.query(`SELECT doc_id FROM documents WHERE collection_name IN ('transactions','transactionHistory','inventoryLedger','inventoryTracking','collections','cashMovements','wallet_transactions') AND (doc_id IN (?,?,?) OR EXISTS(SELECT 1 FROM json_tree(documents.data) j WHERE j.type='text' AND j.value IN (?,?,?))) LIMIT 1`,[p.transactionId,p.checkoutId,p.permitId,p.transactionId,p.checkoutId,p.permitId])).values||[];if(finance.length)retirementFail();
@@ -75,6 +83,14 @@ export async function assertRetirementHasNoEffects(sql:SQL,p:FiscalRetirementPro
       ||kind==='receivedClosePublished'&&typeof body.commitId==='string'&&typeof body.packetHash==='string'
       ||kind==='receivedCloseCancelled'&&body.status==='CANCELLED'&&body.reason==='NUMBER_CONFLICT';
     if(!known)retirementFail();
+    const fields:Record<string,string[]>={
+     closePreparation:['domain','version','requestBody','commandId','closeControl','preparedAt','nativeReport','nativeConfiguration','receivedContext','members','dependencies','observation','coverage','configurationCoverage','seal','exactZEligible','closeAuthorization'],
+     recoveryCloseUI:['scopeKey','preparationId','snapshotId','seriesId','receiptBindings','terminalId'],
+     receivedCloseCandidate:['input','scope','preparationHash','observed','submissionBody'],
+     receivedCloseAck:['scope','commitId','membershipId','commandId','closeId','closeEventId','intentHash','registrationHash','seriesId','number','code','journalId','nextOpenSetId','report','summary','journal','packetHash','status','coverage','legacy','exactZEligible','closeAuthorization','snapshotId','snapshot','preparationHash','resourceHash','requestHash','committedAt','nativeProfile','financialState','operationStates','selectionProfile','configurationBasis','historicalConfiguration'],
+     receivedClosePublished:['commitId','packetHash'],
+     receivedCloseCancelled:['version','status','reason','proofId','commandId','scope','requestHash','exactZEligible','closeAuthorization','cancelledAt','series']
+    };if(!fields[kind]||Object.keys(body).some(k=>!fields[kind].includes(k)))retirementFail();
     const expand=(value:any,depth=0):void=>{if(depth>8)retirementFail();inspect(value);if(!value||typeof value!=='object')return;for(const [key,child] of Object.entries(value)){
       if(typeof child==='string'&&['body','requestBody','expectedDocument','declarationBody'].includes(key))expand(decode(child),depth+1);
       else if(typeof child==='string'&&['submissionBody','packetJson','requestJson','sourceExpected'].includes(key))expand(parse(child),depth+1);
@@ -83,6 +99,7 @@ export async function assertRetirementHasNoEffects(sql:SQL,p:FiscalRetirementPro
     }};expand(body);
    }
   }
+  if(row.collection_name==='recoveryState'&&value?.body!==undefined&&typeof value.body!=='string'&&!(row.doc_id.startsWith('pendingSelection:')&&value.body?.version===1&&value.body?.profile==='erp.received-native-operations.v1'))retirementFail();
   if(row.collection_name==='v3RestoredTicketSources'&&typeof value?.sourceExpected==='string')inspect(parse(value.sourceExpected));
   if(['recoveryOriginals','recoveryStage'].includes(row.collection_name)){
    const r=row.collection_name==='recoveryStage'?value.record:value;
@@ -119,7 +136,15 @@ export async function assertRetirementRecoveryPromotion(sql:SQL,mutations:import
  const retired=(await sql.query('SELECT transaction_id,checkout_id,permit_id FROM pos_fiscal_checkout_retirements_v1 LIMIT 513')).values||[];
  if(!retired.length)return;if(retired.length>RETIREMENT_SCAN_LIMITS.rows)retirementFail();
  const ids=new Set(retired.flatMap(row=>[row.transaction_id,row.checkout_id,row.permit_id]));let nodes=0,total=0;
- const scan=(value:any,depth=0):void=>{if(++nodes>RETIREMENT_SCAN_LIMITS.nodes||depth>64)retirementFail();if(typeof value==='string'){if(ids.has(value))throw Error('FISCAL_WORKFLOW_RETIREMENT_FENCED');}else if(value&&typeof value==='object')Object.values(value).forEach(v=>scan(v,depth+1));};
+ const scan=(value:any,depth=0,wrappers=0,key=''):void=>{
+  if(++nodes>RETIREMENT_SCAN_LIMITS.nodes||depth>64||wrappers>8)retirementFail();
+  if(typeof value==='string'){
+   if(ids.has(value))throw Error('FISCAL_WORKFLOW_RETIREMENT_FENCED');
+   if(/^\["(?:object|array|string|number|date|boolean|null|undefined)"/.test(value)){
+    if(!['document','original','producerInput','configuration','item','body','requestBody','expectedDocument','declarationBody'].includes(key))retirementFail();scan(decode(value),0,wrappers+1);
+   }else if(['submissionBody','packetJson','requestJson','sourceExpected'].includes(key)){let parsed;try{parsed=JSON.parse(value);}catch{return retirementFail();}scan(parsed,0,wrappers+1);}
+  }else if(value&&typeof value==='object')Object.entries(value).forEach(([key,v])=>scan(v,depth+1,wrappers,key));
+ };
  const decode=(text:string)=>{if(typeof text!=='string'||new TextEncoder().encode(text).length>RETIREMENT_SCAN_LIMITS.decodedBytes)retirementFail();try{return decodeOriginal(text);}catch{return retirementFail();}};
  if(promoted.length>RETIREMENT_SCAN_LIMITS.rows)retirementFail();
  for(const mutation of promoted){
@@ -127,7 +152,7 @@ export async function assertRetirementRecoveryPromotion(sql:SQL,mutations:import
   let bytes:Uint8Array;try{bytes=decodeBase64(r.bodyBase64);}catch{return retirementFail();}total+=bytes.length;
   if(bytes.length!==r.byteLength||total>RETIREMENT_SCAN_LIMITS.totalBytes||await originalDigest(bytes)!==r.bodySha256)retirementFail();
   let envelope:any;try{envelope=decode(new TextDecoder('utf-8',{fatal:true}).decode(bytes));}catch{return retirementFail();}
-  if(envelope?.version!==1||CAPTURE_COLLECTIONS[envelope.collection]!==r.kind||typeof envelope.document!=='string'||typeof envelope.original!=='string')retirementFail();
+  if(envelope?.version!==1||CAPTURE_COLLECTIONS[envelope.collection]!==r.kind||typeof envelope.document!=='string'||typeof envelope.original!=='string'||Object.keys(envelope).some(k=>!['version','collection','document','original','originalStage','producerInput','configuration','transport','closeCommitId'].includes(k)))retirementFail();
   scan(envelope);for(const key of ['document','original','producerInput','configuration'])if(envelope[key]!==undefined)scan(decode(envelope[key]));
   if(envelope.transport!==undefined){const t=envelope.transport;if(t?.version!==1||!['/api/sync/transactions','/api/sync/cash/movements'].includes(t.route)||typeof t.item!=='string')retirementFail();scan(decode(t.item));}
  }
