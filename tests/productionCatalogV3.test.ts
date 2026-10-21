@@ -50,15 +50,20 @@ const make=():CatalogEdit=>({id:'m1',scope:{tenantId:'t',companyId:'c',terminalI
 test('routing ACK loss/restart preserves immutable intent, explicit publication and post-ACK snapshot fence',async()=>{
  let edit=make(),now=0,requests=0;const saved:string[]=[];
  const deps={read:async()=>[structuredClone(edit)],save:async(next:CatalogEdit)=>{edit=next;saved.push(next.status);},matchesScope:()=>true,now:()=>now,
- send:async(item:CatalogEdit)=>{requests++;assert.deepEqual(item.mutation,make().mutation);if(requests===1)throw Error('lost ACK');return{id:item.id,status:'APPLIED' as const,publication_pending:true};},
- onApplied:async(item:CatalogEdit)=>({routingSnapshot:{...item.routingSnapshot!,acknowledgedSyncId:'ACK'}})};
+ send:async(item:CatalogEdit)=>{requests++;assert.deepEqual(item.mutation,make().mutation);if(requests===1)throw Error('lost ACK');return{id:item.id,status:'APPLIED' as const,publication_pending:true};}};
  await new CatalogEditQueue(deps).process();assert.equal(edit.status,'PENDING');now=999999;
  await new CatalogEditQueue(deps).process();assert.equal(edit.status,'APPLIED');assert.equal(edit.publicationPending,true);assert.equal(requests,2);
  const row={id:'a',name:'a',sku:null,categoryId:'',productionAreaId:'CAJA_4',productType:'SIMPLE',unsupported:false};
- for(const syncId of ['OLD','ACK'])assert.equal(routingSnapshotConfirms(edit,{binding:'B',version:{syncId,syncVersion:1}},row),false);
+ assert.equal(routingSnapshotConfirms(edit,{binding:'B',version:{syncId:'OLD',syncVersion:1}},row),false);
+ assert.equal(routingSnapshotConfirms({...edit,routingSnapshot:{...edit.routingSnapshot!,acknowledgedSyncId:'NEW'}},{binding:'B',version:{syncId:'NEW',syncVersion:2}},row),true);
  assert.equal(routingSnapshotConfirms(edit,{binding:'B',version:{syncId:'NEW',syncVersion:2}},row),true);
  assert.equal(routingSnapshotConfirms(edit,{binding:'OTHER',version:{syncId:'NEW',syncVersion:2}},row),false);
  assert.equal(routingSnapshotConfirms(edit,{binding:'B',version:{syncId:'NEW',syncVersion:2}},{...row,productionAreaId:null}),false);
+
+ for(const status of ['PENDING','CONFLICT','REJECTED'] as const)assert.equal(routingSnapshotConfirms({...edit,status},{binding:'B',version:{syncId:'NEW',syncVersion:2}},row),false);
+ assert.equal(routingSnapshotConfirms({...edit,resolution:'DISCARDED'},{binding:'B',version:{syncId:'NEW',syncVersion:2}},row),false);
+ assert.equal(routingSnapshotConfirms({...edit,routingSnapshot:undefined},{binding:'B',version:{syncId:'NEW',syncVersion:2}},row),false);
+ assert.equal(routingSnapshotConfirms(edit,{binding:'B',version:{syncId:'NEW',syncVersion:2}},{...row,id:'other'}),false);
  await new CatalogEditQueue(deps).process();assert.equal(requests,2);
 });
 
@@ -89,7 +94,49 @@ test('real routing writer freezes displayed IDs, persists intents atomically, re
  for(const edit of queued){edit.status='APPLIED';edit.routingSnapshot.acknowledgedSyncId='ACK';sql.prepare('update documents set data=? where doc_id=?').run(JSON.stringify(edit),edit.id);}
  const page=rows.map(row=>({...row,productionAreaId:'A'}));reads=0;const statuses=await api.productionRoutingStates({...reader,version:{syncId:'NEW',syncVersion:2}},page);assert.equal(reads,1);assert.deepEqual(Object.values(statuses),['Confirmado por catálogo ERP','Confirmado por catálogo ERP']);
  assert.ok((await read()).every(edit=>Boolean(edit.snapshotConfirmedAt)));assert.equal(commits,2);
- current=false;await assert.rejects(api.enqueueProductionRouting(reader,frozen,'A','actor'),/STALE/);assert.equal(commits,2);
+ matches=false;assert.deepEqual(await api.productionRoutingStates({...reader,version:{syncId:'NEW',syncVersion:2}},page),{});assert.equal(commits,2);matches=true;
+
+ // Real durable queue and state reconciliation in both delivery orders, including
+ // committed-but-lost ACK, restarts and historical stuck ACK-generation metadata.
+ for(const order of ['snapshot-before-ack','ack-before-snapshot']){
+  sql.exec('delete from documents');
+  const sourceRows=rows.map(row=>({...row,productionAreaId:'A'}));
+  await api.enqueueProductionRouting(reader,sourceRows,null,'actor');
+  const historical=await read();
+  for(const edit of historical){edit.routingSnapshot.acknowledgedSyncId='NEW';sql.prepare('update documents set data=? where doc_id=?').run(JSON.stringify(edit),edit.id);}
+  let active=reader,lose=true,clock=0;
+  const requested=new Map<string,string>();
+  const queueDeps={read,save:async(edit:CatalogEdit)=>{sql.prepare('update documents set data=? where doc_id=?').run(JSON.stringify(edit),edit.id);},matchesScope:()=>true,now:()=>clock,
+   send:async(edit:CatalogEdit)=>{
+    const payload=JSON.stringify(edit.mutation);if(requested.has(edit.id))assert.equal(requested.get(edit.id),payload);requested.set(edit.id,payload);
+    if(order==='snapshot-before-ack')active={...reader,version:{syncId:'NEW',syncVersion:2}};
+    if(lose){lose=false;throw Error('committed ACK lost');}
+    return{id:edit.id,status:'APPLIED' as const};
+   }};
+  await new CatalogEditQueue(queueDeps).process();
+  const canonical=sourceRows.map(row=>({...row,productionAreaId:null}));
+  let states=await api.productionRoutingStates(active,canonical);
+  const pending=(await read()).find(edit=>edit.status==='PENDING');assert.ok(pending);assert.equal(pending.snapshotConfirmedAt,undefined);assert.equal(states[pending.mutation.recordId],'Pendiente de envío al ERP');
+  // Reopen the durable queue and replay the same immutable request after backoff.
+  clock=999999;await new CatalogEditQueue(queueDeps).process();
+  assert.ok((await read()).every(edit=>edit.status==='APPLIED'));
+  if(order==='ack-before-snapshot'){
+   states=await api.productionRoutingStates(active,canonical);
+   assert.ok(Object.values(states).every(value=>value==='Aplicado en ERP; esperando catálogo actualizado'));
+   assert.ok((await read()).every(edit=>!edit.snapshotConfirmedAt));
+   active={...reader,version:{syncId:'NEW',syncVersion:2}};
+  }
+  states=await api.productionRoutingStates(active,canonical);
+  assert.ok(Object.values(states).every(value=>value==='Confirmado por catálogo ERP'));
+  assert.ok((await read()).every(edit=>edit.snapshotConfirmedAt));
+  // Restart after confirmation is idempotent, and another changed assignment unblocks.
+  const committed=commits;await api.productionRoutingStates(active,canonical);assert.equal(commits,committed);
+  await api.enqueueProductionRouting(active,canonical,'OTHER','actor');
+  assert.equal((await read()).filter(edit=>edit.status==='PENDING').length,2);
+  assert.deepEqual((await read()).filter(edit=>edit.status==='PENDING').map(edit=>edit.mutation.before),[null,null]);
+ }
+ current=false;await assert.rejects(api.enqueueProductionRouting(reader,frozen,'A','actor'),/STALE/);
+
  }finally{sql.close();(globalThis as any).window=oldWindow;delete(globalThis as any).__productionWriterFixture;}
 });
 

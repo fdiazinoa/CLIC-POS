@@ -208,11 +208,6 @@ export const catalogEditQueue = new CatalogEditQueue({
     shouldPause: isPosSaleActive,
     yieldToUi: yieldBackgroundSyncChunk,
     chunkSize: 25,
-    onApplied: async edit => {
-        if (edit.mutation.domain !== 'item_operations' || edit.mutation.field !== 'production_area_id' || !edit.routingSnapshot) return {};
-        const active = await dbAdapter.masterSyncV3Store?.getActiveRuntimeVersion();
-        return { routingSnapshot: { ...edit.routingSnapshot, acknowledgedSyncId: active?.syncId || edit.routingSnapshot.syncId } };
-    },
     onPermanentRejection: async (edit) => restoreRejectedProductValue(edit, true),
     send: async edit => {
         let outboundEdit = edit;

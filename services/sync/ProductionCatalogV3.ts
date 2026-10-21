@@ -55,7 +55,6 @@ export const isProductionRoutingEdit = (edit: CatalogEdit) => edit.mutation.doma
 export function routingSnapshotConfirms(edit: CatalogEdit, reader: Pick<ProductionCatalogV3,'binding'|'version'>, row: V3ProductionArticle) {
   const source = edit.routingSnapshot;
   return edit.status === 'APPLIED' && !edit.resolution && source?.binding === reader.binding
-    && Boolean(source.acknowledgedSyncId) && source.acknowledgedSyncId !== reader.version.syncId
     && source.syncId !== reader.version.syncId && row.id === edit.mutation.recordId
     && row.productionAreaId === edit.mutation.after;
 }
