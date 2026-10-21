@@ -49,8 +49,8 @@ export async function assertRetirementHasNoEffects(sql:SQL,p:FiscalRetirementPro
   if(++nodes>RETIREMENT_SCAN_LIMITS.nodes||depth>RETIREMENT_SCAN_LIMITS.depth||wrappers>8)retirementFail();
   if(typeof value==='string'){
    if(ids.has(value))retirementFail();
-   if(/^\["(?:object|array|string|number|date|boolean|null|undefined)"/.test(value)){
-    if(!['document','original','producerInput','configuration','item','body','requestBody','expectedDocument','declarationBody'].includes(key))retirementFail();inspect(decode(value),0,wrappers+1);
+   if(['document','original','producerInput','configuration','item','body','requestBody','expectedDocument','declarationBody','capture'].includes(key))inspect(decode(value),0,wrappers+1);
+   else if(/^\["(?:object|array|string|number|date|boolean|null|undefined)"/.test(value.trimStart())){retirementFail();
    }else if(['submissionBody','packetJson','requestJson','sourceExpected'].includes(key))inspect(parse(value),0,wrappers+1);
   }else if(value&&typeof value==='object')Object.entries(value).forEach(([key,v])=>inspect(v,depth+1,wrappers,key));
  };
@@ -91,12 +91,7 @@ export async function assertRetirementHasNoEffects(sql:SQL,p:FiscalRetirementPro
      receivedClosePublished:['commitId','packetHash'],
      receivedCloseCancelled:['version','status','reason','proofId','commandId','scope','requestHash','exactZEligible','closeAuthorization','cancelledAt','series']
     };if(!fields[kind]||Object.keys(body).some(k=>!fields[kind].includes(k)))retirementFail();
-    const expand=(value:any,depth=0):void=>{if(depth>8)retirementFail();inspect(value);if(!value||typeof value!=='object')return;for(const [key,child] of Object.entries(value)){
-      if(typeof child==='string'&&['body','requestBody','expectedDocument','declarationBody'].includes(key))expand(decode(child),depth+1);
-      else if(typeof child==='string'&&['submissionBody','packetJson','requestJson','sourceExpected'].includes(key))expand(parse(child),depth+1);
-      else if(typeof child==='string'&&/^\["(?:object|array|string|number|date|boolean|null|undefined)"/.test(child))retirementFail();
-      else if(child&&typeof child==='object')expand(child,depth);
-    }};expand(body);
+    inspect(body);
    }
   }
   if(row.collection_name==='recoveryState'&&value?.body!==undefined&&typeof value.body!=='string'&&!(row.doc_id.startsWith('pendingSelection:')&&value.body?.version===1&&value.body?.profile==='erp.received-native-operations.v1'))retirementFail();
@@ -140,8 +135,8 @@ export async function assertRetirementRecoveryPromotion(sql:SQL,mutations:import
   if(++nodes>RETIREMENT_SCAN_LIMITS.nodes||depth>64||wrappers>8)retirementFail();
   if(typeof value==='string'){
    if(ids.has(value))throw Error('FISCAL_WORKFLOW_RETIREMENT_FENCED');
-   if(/^\["(?:object|array|string|number|date|boolean|null|undefined)"/.test(value)){
-    if(!['document','original','producerInput','configuration','item','body','requestBody','expectedDocument','declarationBody'].includes(key))retirementFail();scan(decode(value),0,wrappers+1);
+   if(['document','original','producerInput','configuration','item','body','requestBody','expectedDocument','declarationBody','capture'].includes(key))scan(decode(value),0,wrappers+1);
+   else if(/^\["(?:object|array|string|number|date|boolean|null|undefined)"/.test(value.trimStart())){retirementFail();
    }else if(['submissionBody','packetJson','requestJson','sourceExpected'].includes(key)){let parsed;try{parsed=JSON.parse(value);}catch{return retirementFail();}scan(parsed,0,wrappers+1);}
   }else if(value&&typeof value==='object')Object.entries(value).forEach(([key,v])=>scan(v,depth+1,wrappers,key));
  };
