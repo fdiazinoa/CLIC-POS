@@ -3,6 +3,11 @@ import {CAPTURE_COLLECTIONS} from '../recovery/OriginalCapture';
 import {cartDigest,isExpiredPrepared,retirementFail,validateRetirementProof,validateRetirementReceipt} from '../fiscal/FiscalWorkflowRetirement';
 import type {FiscalRetirementProof,FiscalRetirementReceipt,FiscalRetirementRecord,FiscalWorkflowCheckoutV2} from '../fiscal/FiscalWorkflowV2Types';
 
+/** Parse JSON grammar instead of guessing codec tags from source prefixes. */
+function typedOriginalText(text:string):boolean{
+ if(new TextEncoder().encode(text).length>1048576)retirementFail();
+ try{const value=JSON.parse(text);return Array.isArray(value)&&['object','array','string','number','date','boolean','null','undefined'].includes(value[0]);}catch{return false;}
+}
 type SQL={query(sql:string,values?:any[]):Promise<{values?:any[]}>;run(sql:string,values?:any[],transaction?:boolean):Promise<any>};
 export const FISCAL_RETIREMENT_IDENTITY_SCHEMA=`
 CREATE TABLE IF NOT EXISTS pos_fiscal_checkout_retirements_v1(checkout_id TEXT PRIMARY KEY REFERENCES pos_fiscal_checkouts_v2(checkout_id),transaction_id TEXT NOT NULL UNIQUE,command_id TEXT NOT NULL UNIQUE,scope_key TEXT NOT NULL,operation_id TEXT NOT NULL,permit_id TEXT NOT NULL,cart_identity_sha256 TEXT NOT NULL CHECK(length(cart_identity_sha256)=64),phase TEXT NOT NULL CHECK(phase IN ('CLOSING','CLOSED')),receipt_json TEXT,created_at TEXT NOT NULL,closed_at TEXT,CHECK((phase='CLOSING' AND receipt_json IS NULL AND closed_at IS NULL) OR (phase='CLOSED' AND receipt_json IS NOT NULL AND closed_at IS NOT NULL)));
@@ -50,7 +55,7 @@ export async function assertRetirementHasNoEffects(sql:SQL,p:FiscalRetirementPro
   if(typeof value==='string'){
    if(ids.has(value))retirementFail();
    if(['document','original','producerInput','configuration','item','body','requestBody','expectedDocument','declarationBody','capture'].includes(key))inspect(decode(value),0,wrappers+1);
-   else if(/^\["(?:object|array|string|number|date|boolean|null|undefined)"/.test(value.trimStart())){retirementFail();
+   else if(typedOriginalText(value)){retirementFail();
    }else if(['submissionBody','packetJson','requestJson','sourceExpected'].includes(key))inspect(parse(value),0,wrappers+1);
   }else if(value&&typeof value==='object')Object.entries(value).forEach(([key,v])=>inspect(v,depth+1,wrappers,key));
  };
@@ -136,7 +141,7 @@ export async function assertRetirementRecoveryPromotion(sql:SQL,mutations:import
   if(typeof value==='string'){
    if(ids.has(value))throw Error('FISCAL_WORKFLOW_RETIREMENT_FENCED');
    if(['document','original','producerInput','configuration','item','body','requestBody','expectedDocument','declarationBody','capture'].includes(key))scan(decode(value),0,wrappers+1);
-   else if(/^\["(?:object|array|string|number|date|boolean|null|undefined)"/.test(value.trimStart())){retirementFail();
+   else if(typedOriginalText(value)){retirementFail();
    }else if(['submissionBody','packetJson','requestJson','sourceExpected'].includes(key)){let parsed;try{parsed=JSON.parse(value);}catch{return retirementFail();}scan(parsed,0,wrappers+1);}
   }else if(value&&typeof value==='object')Object.entries(value).forEach(([key,v])=>scan(v,depth+1,wrappers,key));
  };
