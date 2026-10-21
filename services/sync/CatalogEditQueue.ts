@@ -22,13 +22,16 @@ export type CatalogEdit = {
     resolvedBy?: string;
     resolvedAt?: string;
     snapshotConfirmedAt?: string;
+    routingSnapshot?: { binding: string; syncId: string; acknowledgedSyncId?: string };
+    publicationPending?: boolean;
 };
-export type CatalogResult = { id: string; status: 'APPLIED' | 'CONFLICT' | 'REJECTED'; code?: string; current?: unknown };
+export type CatalogResult = { id: string; status: 'APPLIED' | 'CONFLICT' | 'REJECTED'; code?: string; current?: unknown; publication_pending?: boolean };
 export interface CatalogQueueDependencies {
     read(): Promise<CatalogEdit[]>;
     save(edit: CatalogEdit): Promise<void>;
     matchesScope(scope: CatalogScope): boolean;
     send(edit: CatalogEdit): Promise<CatalogResult>;
+    onApplied?(edit: CatalogEdit): Promise<Partial<CatalogEdit>>;
     onPermanentRejection?(edit: CatalogEdit, code: string): Promise<void>;
     shouldPause?(): boolean;
     yieldToUi?(): Promise<void>;
@@ -112,7 +115,8 @@ export class CatalogEditQueue {
                     ? 'APPLIED'
                     : result.status;
                 outcomes.set(edit.id, effectiveStatus);
-                await this.deps.save({ ...edit, status: effectiveStatus, syncStatus: effectiveStatus === 'APPLIED' ? 'SYNCED' : 'ERROR',
+                const applied = effectiveStatus === 'APPLIED' ? await this.deps.onApplied?.(edit) : undefined;
+                await this.deps.save({ ...edit, ...applied, publicationPending: result.publication_pending, status: effectiveStatus, syncStatus: effectiveStatus === 'APPLIED' ? 'SYNCED' : 'ERROR',
                     syncError: effectiveStatus === 'APPLIED' ? undefined : result.code,
                     ...(effectiveStatus === 'CONFLICT' ? { conflictCurrent: result.current as CatalogMutationValue } : {}),
                     message: effectiveStatus === 'CONFLICT'

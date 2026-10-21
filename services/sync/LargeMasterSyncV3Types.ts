@@ -114,6 +114,7 @@ export interface LargeMasterSyncV3Store {
   prepareCatalogOnly?(manifest: LargeMasterSyncV3Manifest, transition: LargeMasterSyncV3CatalogTransition): Promise<void>;
   activateCatalogOnly?(syncId: string, transition: LargeMasterSyncV3CatalogTransition): Promise<LargeMasterSyncV3RuntimeVersion>;
   getCatalogReceipt?(runtime: LargeMasterSyncV3RuntimeVersion, binding: string): Promise<LargeMasterSyncV3InventoryAuthority | null>;
+  readProductionCatalogPage?(runtime: LargeMasterSyncV3RuntimeVersion, request: V3ProductionCatalogRequest): Promise<V3ProductionCatalogPage>;
   readAdministrativeCatalogPage?(runtime: LargeMasterSyncV3RuntimeVersion, request: V3CatalogPageRequest): Promise<V3CatalogPage>;
   prepare(manifest: LargeMasterSyncV3Manifest): Promise<void>;
   readProgress(syncId: string): Promise<LargeMasterSyncV3Progress | null>;
@@ -181,3 +182,11 @@ export class LargeMasterSyncV3Error extends Error {
     this.name = 'LargeMasterSyncV3Error';
   }
 }
+
+/** Metadata administration only: no price, inventory or sellability authority. */
+export interface V3ProductionArticle { id: string; name: string; sku: string | null; categoryId: string;
+  productionAreaId: string | null; productType: string; unsupported: boolean }
+export interface V3ProductionCatalogRequest { query?: string; categoryId?: string; afterId?: string | null; limit?: number }
+export interface V3ProductionCatalogPage { rows: V3ProductionArticle[]; total: number; filteredTotal: number;
+  nextCursor: string | null; categories: Array<{id: string; label: string; count: number}>;
+  assignedCounts: Record<string, number> }
