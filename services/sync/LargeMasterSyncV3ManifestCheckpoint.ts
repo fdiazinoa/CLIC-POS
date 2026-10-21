@@ -16,7 +16,8 @@ export const needsV3ManifestRefresh = (fingerprint: string | null, hint: boolean
     || checkpoint.stockAuthority !== generation.stockAuthority || checkpoint.syncId !== generation.syncId || checkpoint.syncVersion !== generation.syncVersion : hint;
 
 export const isV3CatalogHint = (collections: string[], domains: Record<string, unknown>, imageOnly: boolean): boolean => {
-  if (imageOnly) return false;
+  if (imageOnly) return collections.length === 0
+    || collections.some(value => ['products', 'items', 'articles'].includes(value.toLowerCase()));
   const hints = [...collections, ...Object.keys(domains)].map(value => value.toLowerCase());
   return hints.length === 0 || hints.some(value => ['catalog', 'items', 'articles', 'products', 'prices',
     'product_prices', 'productprices', 'terminal_config', 'company_config'].includes(value));

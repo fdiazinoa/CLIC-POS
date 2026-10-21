@@ -184,7 +184,8 @@ test('relevant hint predicate excludes inventory/image churn and semantic finger
   assert.equal(isV3CatalogHint([], { catalog: 2 }, false), true);
   assert.equal(isV3CatalogHint([], {}, false), true);
   assert.equal(isV3CatalogHint(['inventory'], { inventory: 2 }, false), false);
-  assert.equal(isV3CatalogHint(['products'], { catalog: 2 }, true), false);
+  assert.equal(isV3CatalogHint(['products'], { catalog: 2 }, true), true);
+  assert.equal(isV3CatalogHint(['customers'], { catalog: 2 }, true), false);
   assert.equal(v3ManifestFingerprint({ cursor_map: {} }), null);
 });
 
