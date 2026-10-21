@@ -234,7 +234,7 @@ export async function readReconciledInventory(query:InventoryQuery,baseline:stri
  const result:Record<string,{physical:InstanceType<typeof Money>;committed:InstanceType<typeof Money>;reserved:InstanceType<typeof Money>;available:InstanceType<typeof Money>}>={};
  for(const [itemId,stock] of Object.entries(physical)){
   // qty_reserved is absent from ERP v1. Never combine a new cut with stale V3 reservations.
-  fail(reservation?.baseline_id===state.baseline_id&&Object.hasOwn(reservation.quantities,itemId),'POS_FORMAT_INVENTORY_RESERVATIONS_UNPROVEN');
+  fail(reservation?.baseline_id===state.baseline_id&&Object.prototype.hasOwnProperty.call(reservation.quantities,itemId),'POS_FORMAT_INVENTORY_RESERVATIONS_UNPROVEN');
   const reserved=signedBase4(reservation.quantities[itemId]);fail(reserved.gte(0));
   result[itemId]={...stock,reserved,available:stock.physical.minus(stock.committed).minus(reserved)};
  }

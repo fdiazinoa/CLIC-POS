@@ -7,6 +7,8 @@ const labels: Record<string, string> = {
   inventory_download: 'Descargando inventario...', inventory_save: 'Guardando inventario...',
   inventory_readback: 'Verificando inventario guardado...', runtime: 'Verificando catálogo operativo...',
   owner: 'Verificando sesión y pertenencia del catálogo...', cached: 'Catálogo existente verificado',
+  services: 'Inicializando servicios del POS...', security: 'Actualizando usuarios y permisos...',
+  lifecycle: 'Confirmando terminal y configuración pendiente...',
   verified: 'Catálogo existente verificado', config: 'Aplicando configuración y seguridad...', ready: 'Terminal lista',
 };
 

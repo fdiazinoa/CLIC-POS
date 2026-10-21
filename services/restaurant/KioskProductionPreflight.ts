@@ -31,8 +31,8 @@ export function prepareKioskProduction(items: CartItem[], areas: unknown[], conf
     const targets = resolveProductionOutputTargets(rawMode);
     let printerId: string | undefined;
     if (targets.shouldPrint) {
-      const explicit = Object.hasOwn(area, 'printer_id') ? area.printer_id : area.printerId;
-      const explicitClear = Object.hasOwn(area, 'printer_id') && !area.printer_id;
+      const explicit = Object.prototype.hasOwnProperty.call(area, 'printer_id') ? area.printer_id : area.printerId;
+      const explicitClear = Object.prototype.hasOwnProperty.call(area, 'printer_id') && !area.printer_id;
       const terminal = config.terminals?.find(row => row.id === terminalId);
       const assigned = terminal?.config?.hardware?.printerAssignments?.KITCHEN;
       const printer = explicitClear ? undefined : explicit ? config.availablePrinters?.find(row => row.id === explicit)

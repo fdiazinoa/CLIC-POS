@@ -9397,6 +9397,7 @@ const AppContent: React.FC = () => {
         stepId: 'sync',
         message: 'Inicializando servicios del POS con la nueva terminal...',
       });
+      if (candidateV3Setup) attemptReporter?.phase('services');
       permissionService.initialize(updatedConfig, terminalId);
       await syncManager.initialize(updatedConfig, terminalId, isSlave ? {
         clientMasterAuthority: {
@@ -9406,8 +9407,8 @@ const AppContent: React.FC = () => {
           source: 'STORED',
         },
       } : undefined);
-      if (candidateV3Setup) attemptReporter?.phase('config');
       if (isErpDirectBinding) {
+        if (candidateV3Setup) attemptReporter?.phase('security');
         try {
           setupResult.progress?.({
             stepId: 'sync',
@@ -9423,6 +9424,7 @@ const AppContent: React.FC = () => {
         }
       }
       if (isErpDirectBinding && navigator.onLine) {
+        if (candidateV3Setup) attemptReporter?.phase('lifecycle');
         try {
           setupResult.progress?.({
             stepId: 'sync',
