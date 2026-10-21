@@ -33,10 +33,14 @@ export function fixture() {
           try{sql.exec(statement);if(transaction)sql.exec("COMMIT");}
           catch(error){if(transaction)sql.exec("ROLLBACK");throw error;}
         },
-        run: async (statement: string,values: any[]=[]) => {
-          const result=sql.prepare(statement).run(...values);
-          if(failWrite||(failCollection&&values[0]===failCollection))throw Error("disk failed");
-          return {changes:result};
+        run: async (statement: string,values: any[]=[],transaction=true) => {
+          if(transaction)sql.exec("BEGIN");
+          try{
+            const result=sql.prepare(statement).run(...values);
+            if(failWrite||(failCollection&&values[0]===failCollection))throw Error("disk failed");
+            if(transaction)sql.exec("COMMIT");
+            return {changes:result};
+          }catch(error){if(transaction)sql.exec("ROLLBACK");throw error;}
         },
         executeSet: async (rows: any[],transaction=true) => {
           if(transaction)sql.exec("BEGIN");
