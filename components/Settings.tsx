@@ -72,6 +72,7 @@ const LoyaltySettings = React.lazy(() => import('./LoyaltySettings'));
 const WalletIntegrations = React.lazy(() => import('./WalletIntegrations'));
 const SyncSettings = React.lazy(() => import('./SyncSettings'));
 const ProductionAreaManager = React.lazy(() => import('./ProductionAreaManager'));
+const ProductionSettingsOperatorBoundary = React.lazy(() => import('./ProductionSettingsOperatorBoundary'));
 const LabelDesigner = React.lazy(() => import('./LabelDesigner'));
 const CustomerManagement = React.lazy(() => import('./CustomerManagement'));
 const ReportDashboard = React.lazy(() => import('./ReportDashboard'));
@@ -674,12 +675,13 @@ const Settings: React.FC<SettingsProps> = (props) => {
             >
               <X size={24} />
             </button>
-            <ProductionAreaManager
-              actorId={props.currentUser?.id}
-              terminals={props.config.terminals}
-              config={props.config}
-              onUpdateConfig={props.onUpdateConfig}
-            />
+            <ProductionSettingsOperatorBoundary key={JSON.stringify([activeTerminal?.id, props.currentDeviceId])}
+              currentUser={props.currentUser} users={props.users} roles={props.roles}
+              config={activeTerminal?.config} terminalLabel={activeTerminal?.config.terminalName || activeTerminal?.id}
+              subVertical={props.config.subVertical}>
+              {actorId => <ProductionAreaManager actorId={actorId} terminals={props.config.terminals}
+                config={props.config} onUpdateConfig={props.onUpdateConfig} />}
+            </ProductionSettingsOperatorBoundary>
           </div>
         );
 
