@@ -243,6 +243,12 @@ test('actual operational validation accepts saved old70/current85 and rejects lo
    assert.equal(context.id,ticket.id);assert.equal(saved.price,70);assert.equal(added.price,85);
    await assert.rejects(session.validate(config,[saved,added],'T','W'),/CART_MIXED_VERSION/);
    await assert.rejects(session.validate(config,[{...saved,price:999},added],'T','W','SALE',undefined,{ticketId:ticket.id}),/RETAINED_LINE_CHANGED/);
+   // TableMap creates this durable empty account before the first product click.
+   const empty={id:'new-table-account',tableId:'13',items:[],total:0};f.insert('parkedTickets',empty);
+   const first=await session.validate(config,[added],'T','W','SALE',undefined,{ticketId:empty.id,tableId:'13'});
+   assert.equal(first.expected,JSON.stringify(empty));
+   await assert.rejects(session.validate(config,[saved,added],'T','W','SALE',undefined,{ticketId:empty.id,tableId:'13'}),/RETAINED_LINE_CHANGED/);
+   await assert.rejects(session.validate(config,[added],'T','W','SALE',undefined,{ticketId:empty.id,tableId:'14'}),/RETAINED_SOURCE_REQUIRED/);
   }finally{f.sql.close();}
  });
 

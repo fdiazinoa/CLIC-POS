@@ -43,7 +43,14 @@ export const readV3RetainedCheckout = async (reference: V3RetainedReference | un
     const history = await db.getDocument('transactionHistory',id) as Transaction | null;
     if (history?.zReportId) { stored=history; collection='transactionHistory'; }
   }
-  if (!stored || !Array.isArray(stored.items) || !stored.items.length) throw new LargeMasterSyncV3Error('SYNC_V3_RETAINED_SOURCE_REQUIRED');
+  // TableMap durably creates a zero-total account before its first article.
+  // This empty source can authorize current-catalog additions, never retained lines.
+  const emptyTableAccount = !refund && collection === 'parkedTickets' && Boolean(reference?.tableId)
+    && stored?.id === id && (stored as ParkedTicket).tableId != null
+    && String((stored as ParkedTicket).tableId) === reference?.tableId && stored?.total === 0;
+  if (!stored || !Array.isArray(stored.items) || (!stored.items.length && !emptyTableAccount)) {
+    throw new LargeMasterSyncV3Error('SYNC_V3_RETAINED_SOURCE_REQUIRED');
+  }
   if (!refund) {
     const ticket = stored as ParkedTicket;
     if (collection === 'v3RestoredTicketSources' && !['PENDING','PARKED'].includes((stored as any).state)) {
