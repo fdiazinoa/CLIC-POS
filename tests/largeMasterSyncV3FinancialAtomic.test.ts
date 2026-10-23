@@ -372,3 +372,20 @@ test('actual refund helper lost ACK replays exact canonical receipt without writ
   const orphanState=snapshot();await assert.rejects(()=>module.persistStandaloneRefundTransaction(refund,options),/DUPLICATE_TRANSACTION_MISMATCH/);assert.equal(snapshot(),orphanState);assert.equal(writes,writesAfter);
  }finally{f.sql.close();}
 });
+test('native financial writer preserves UI-shaped Date identity through durable SALE/PAYMENT reload and replay',async()=>{
+ const f=fixture();try{const module=await financialModule(f,true),transaction=module.transaction('date-cash');
+  transaction.payments=[{id:'date-payment',method:'CASH',amount:118,timestamp:new Date('2026-10-23T06:39:12.403-04:00')}];
+  const first=await module.persistV3FinancialTransaction(transaction,{} as BusinessConfig,'W');assert.equal(first.created,true);
+  const active=f.rows('transactions')[0],history=f.rows('transactionHistory')[0];assert.equal(active.payments[0].timestamp,'2026-10-23T10:39:12.403Z');assert.equal(active.v3CommitFingerprint,history.v3CommitFingerprint);
+  const {financialOperationIdentity}=await import('../services/db/LargeMasterSyncV3FinancialRetention');assert.equal(active.v3CommitFingerprint,financialOperationIdentity(active,'W',{}));
+  if(process.env.CLIC_ERP_SOURCE_ROOT){const {pathToFileURL}=await import('node:url');const {v3OperationFingerprint}=await import(pathToFileURL(process.env.CLIC_ERP_SOURCE_ROOT+'/server/services/fiscal/posFiscalV3Source.js').href);assert.equal(active.v3CommitFingerprint,v3OperationFingerprint(active));}
+  const events=f.sql.prepare('SELECT payload_json FROM sync_outbox_v2 ORDER BY local_sequence').all().map(row=>JSON.parse(String(row.payload_json)));
+  assert.equal(events.length,2);assert.equal(events[0].transaction.payments[0].timestamp,active.payments[0].timestamp);
+  assert.equal((await module.persistV3FinancialTransaction(active,{} as BusinessConfig,'W')).created,false);assert.equal(f.rows('transactions').length,1);assert.equal(f.sql.prepare('SELECT count(*) n FROM sync_outbox_v2').get()!.n,2);
+ }finally{f.sql.close();}
+});
+test('invalid Date is rejected at financial identity before a fresh native commit and does not rewrite existing effects',async()=>{
+ const f=fixture();try{const module=await financialModule(f,true),transaction=module.transaction('invalid-date');transaction.payments=[{id:'invalid-payment',method:'CASH',amount:118,timestamp:new Date(NaN)}];
+  await assert.rejects(module.persistV3FinancialTransaction(transaction,{} as BusinessConfig,'W'),/SYNC_V3_FINANCIAL_DATE_INVALID/);assert.equal(f.rows('transactions').length,0);assert.equal(f.rows('transactionHistory').length,0);assert.equal(f.sql.prepare('SELECT count(*) n FROM sync_outbox_v2').get()!.n,0);
+ }finally{f.sql.close();}
+});

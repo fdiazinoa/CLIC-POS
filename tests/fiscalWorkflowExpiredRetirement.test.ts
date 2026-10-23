@@ -4,7 +4,7 @@ import {V3_FINANCIAL_RETAINED_UPSERT_SQL} from '../services/db/LargeMasterSyncV3
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
-import {NativeFiscalWorkflowV2Store,FISCAL_WORKFLOW_V2_SCHEMA} from '../services/db/FiscalWorkflowV2Store';
+import {NativeFiscalWorkflowV2Store,FISCAL_WORKFLOW_V2_SCHEMA,consumeFiscalWorkflowBirth} from '../services/db/FiscalWorkflowV2Store';
 import {FISCAL_RETIREMENT_WRITER_SCHEMA,RETIREMENT_SCAN_LIMITS} from '../services/db/FiscalWorkflowRetirementStore';
 import {DURABLE_OUTBOX_SCHEMA_SQL} from '../services/sync/DurableOutboxSchema';
 import {CapacitorSQLiteAdapter} from '../services/db/adapters/CapacitorSQLiteAdapter';
@@ -82,9 +82,15 @@ for(const phase of ['CLOSING','CLOSED'])test('actual saved 546 writer bodies fai
  await assert.rejects(oldMethod('markPaymentPossible',{one:(r:any)=>r.values?.[0],fail:()=>{throw Error('CONFLICT');}}).call(f.store,f.checkout.checkoutId,'p'),/FENCED/);
  const service=new PaymentIntentService(f.adapter,()=>true),create=oldMethod('create',{createId:()=>id(80),clean:(v:any)=>String(v||'').trim()});
  await assert.rejects(create.call(service,{paymentId:'payment',provider:'TEST',amount:100,currencyCode:'DOP',futureCheckout:{checkoutId:f.checkout.checkoutId,transactionId:f.checkout.transactionId}}),/FENCED/);
- // The old commit adapter body is byte-identical to the running method; this executes that old body on the real native adapter.
- const text=readFileSync(new URL('../services/db/adapters/CapacitorSQLiteAdapter.ts',import.meta.url),'utf8'),ast=ts.createSourceFile('adapter.ts',text,ts.ScriptTarget.Latest,true);let method='';function visit(n:ts.Node){if(ts.isMethodDeclaration(n)&&n.name.getText(ast)==='commitFinancialTransaction')method=n.getText(ast);ts.forEachChild(n,visit);}visit(ast);assert.equal(method,oldWriters.methods.commitFinancialTransaction);
- const tx:any={id:f.checkout.transactionId,total:100,items:[],payments:[]};await assert.rejects(f.adapter.commitFinancialTransaction({documents:[{collectionName:'transactions',document:tx,requireAbsent:true},{collectionName:'transactionHistory',document:tx,requireAbsent:true}],outboxEvent:{eventId:id(81),eventType:'SALE_POSTED',aggregateType:'TRANSACTION',aggregateId:tx.id,schemaVersion:1,payload:{transaction:tx},createdAt:new Date().toISOString()}} as any),/FENCED/);
+ // Execute the saved 546 body itself and the current additive writer against the
+ // same real SQLite fences. The fixture remains literal; no byte-equality shortcut.
+ const text=readFileSync(new URL('../services/db/adapters/CapacitorSQLiteAdapter.ts',import.meta.url),'utf8'),ast=ts.createSourceFile('adapter.ts',text,ts.ScriptTarget.Latest,true);let initializer='';function visit(n:ts.Node){if(ts.isVariableDeclaration(n)&&n.name.getText(ast)==='DOCUMENT_UPSERT_SQL')initializer=n.initializer!.getText(ast);ts.forEachChild(n,visit);}visit(ast);assert.ok(initializer);
+ const documentUpsert=new Function('FINANCIAL_COUNTER_UPSERT_SQL','ARTICLE_FORMAT_RETAINED_UPSERT_SQL','V3_FINANCIAL_RETAINED_UPSERT_SQL','return '+initializer)(FINANCIAL_COUNTER_UPSERT_SQL,ARTICLE_FORMAT_RETAINED_UPSERT_SQL,V3_FINANCIAL_RETAINED_UPSERT_SQL);
+ const legacyCommit=oldMethod('commitFinancialTransaction',{DOCUMENT_UPSERT_SQL:documentUpsert,consumeFiscalWorkflowBirth});
+ const tx:any={id:f.checkout.transactionId,total:100,items:[],payments:[]},input:any={documents:[{collectionName:'transactions',document:tx,requireAbsent:true},{collectionName:'transactionHistory',document:tx,requireAbsent:true}],outboxEvent:{eventId:id(81),eventType:'SALE_POSTED',aggregateType:'TRANSACTION',aggregateId:tx.id,schemaVersion:1,payload:{transaction:tx},createdAt:new Date().toISOString()}};
+ for(const commit of [()=>legacyCommit.call(f.adapter,input),()=>f.adapter.commitFinancialTransaction(input)]){
+  await assert.rejects(commit(),/FENCED/);assert.equal(f.snapshot(),before);assert.equal(f.sql.prepare('SELECT total_changes() n').get()!.n,writes);
+ }
  assert.equal(f.snapshot(),before);assert.equal(f.sql.prepare('SELECT total_changes() n').get()!.n,writes);
  // Re-executing old CREATE IF NOT EXISTS initialization cannot remove unknown sidecars/triggers.
  f.sql.exec(oldWriters.schema+DURABLE_OUTBOX_SCHEMA_SQL);assert.equal((await f.store.retirement(key))!.phase,phase);assert.throws(()=>f.doc('transactions',{id:f.checkout.transactionId}),/FENCED/);

@@ -10,6 +10,8 @@ import {financialIdentity} from '../db/LargeMasterSyncV3FinancialRetention';
 import {captureFiscalStatusBoundContext} from './FiscalBoundContext';
 import {fiscalStatusSourceChecksum} from './FiscalStatusProof';
 import {sha256Utf8} from '../sync/LargeMasterSyncV3Client';
+import {readOfflineFiscalLocalAuthority} from './OfflineFiscalLeaseContext';
+import {validateOfflineFiscalLease,validateOfflineFiscalPermit,type OfflineFiscalLease,type TableFiscalSaleContext} from './OfflineFiscalLease';
 import type {FiscalWorkflowCheckoutV2,FiscalWorkflowPermitV2,FiscalWorkflowScope,FiscalWorkflowStateV2,FiscalWorkflowPreparedRecovery} from './FiscalWorkflowV2Types';
 const canonical=(value:any):any=>Array.isArray(value)?value.map(canonical):value&&typeof value==='object'?Object.fromEntries(Object.keys(value).sort().filter(k=>value[k]!==undefined).map(k=>[k,canonical(value[k])])):value;
 const json=(value:any)=>JSON.stringify(canonical(value));
@@ -43,7 +45,8 @@ async function verifyFormatWorkflowSource(source:Transaction,state:FiscalWorkflo
   return digest===state.originalDigestV2;
  }catch{return false;}
 }
-export function createFiscalWorkflowV2Client({readAuth=captureFiscalStatusBoundContext,fetchImpl=fetch,store=()=>dbAdapter.fiscalWorkflowStore,readSource=async(id:string)=>await dbAdapter.getDocument<Transaction>('transactions',id)||await dbAdapter.getDocument<Transaction>('transactionHistory',id)}={}){
+export function createFiscalWorkflowV2Client({readAuth=captureFiscalStatusBoundContext,readOfflineAuthority=readOfflineFiscalLocalAuthority,fetchImpl=fetch,store=()=>dbAdapter.fiscalWorkflowStore,readSource=async(id:string)=>await dbAdapter.getDocument<Transaction>('transactions',id)||await dbAdapter.getDocument<Transaction>('transactionHistory',id)}={}){
+ let offlinePrefetch:Promise<void>|null=null;
  const retirements=new Map<string,Promise<FiscalRetirementRecord>>();
  const refills=new Map<string,Promise<void>>();const inFlight=new Map<string,Promise<FiscalWorkflowStateV2>>();let cursor='',generation=0;let currentAuthority:{fingerprint:string;authorityHash:string;expires:number}|null=null;
  let discovering:{key:string;promise:Promise<void>}|null=null;
@@ -54,6 +57,59 @@ export function createFiscalWorkflowV2Client({readAuth=captureFiscalStatusBoundC
   try{const response=await fetchImpl(`${auth.base}/fiscal/workflow/v2/${path}`,{method:body?'POST':'GET',headers:{...auth.headers,Accept:'application/json',...(body?{'Content-Type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{}),credentials:'omit',cache:'no-store',redirect:'error',signal:controller.signal});const data=await response.json();auth.assertCurrent();if(!response.ok)fail(typeof data?.code==='string'?data.code:'FISCAL_WORKFLOW_UNAVAILABLE');if(JSON.stringify(data).length>600000)fail();return {data,auth};}finally{clearTimeout(timer);signal?.removeEventListener('abort',abort);}
  };
  return {
+ async offlineStatus():Promise<{remaining:number;validUntil:string}|null>{try{const native=store();if(!native?.offlineLease||!native.offlineLeasePermitCount)return null;const lease=await native.offlineLease(await readOfflineAuthority());return lease?{remaining:await native.offlineLeasePermitCount(lease.leaseId,true),validUntil:lease.validUntil}:null;}catch{return null;}},
+ async localCheckout(accountId?:string,tableId?:string):Promise<FiscalWorkflowCheckoutV2|null>{const authority=await readOfflineAuthority(),key=fiscalWorkflowScopeKey(authority.scope),native=store();return accountId&&tableId&&await native?.checkoutForTable?.(key,accountId,tableId)||await native?.currentCheckout(key)||null;},
+ async offlineReady():Promise<boolean>{try{const native=store();if(!native?.offlineLease)return false;const authority=await readOfflineAuthority();if(await native.offlineLease(authority))return true;const current=await native.currentCheckout(fiscalWorkflowScopeKey(authority.scope));return Boolean(current?.phase==='EFFECT_POSSIBLE'&&current.permit?.leaseId&&current.offlineBindingHash===authority.bindingHash&&Number.isFinite(Date.parse(current.offlineEffectAt||''))&&Date.parse(current.offlineEffectAt!)<Date.parse(current.permit.expiresAt));}catch(error){if(error instanceof Error&&error.message==='OFFLINE_FISCAL_BINDING_CHANGED')await store()?.revokeOfflineLeases?.('*');return false;}},
+ prefetchOfflineLease():Promise<void>{
+  if(offlinePrefetch)return offlinePrefetch;
+  offlinePrefetch=(async()=>{
+   const native=store();if(!native?.saveOfflineLeasePage||!native.offlineLease||!native.offlineLeasePermitCount)return;
+   const authority=await readOfflineAuthority(),existing=await native.offlineLease(authority),epoch=generation;
+   if(existing&&await native.offlineLeasePermitCount(existing.leaseId)===existing.saleCapacity
+    &&await native.offlineLeasePermitCount(existing.leaseId,true)>Math.min(16,existing.saleCapacity/4))return;
+   const captured=readAuth();captured.assertCurrent();
+   const capability=(await request('offline-lease/capability')).data;
+   if(capability?.schemaVersion!==1||capability.capability!=='OFFLINE_FISCAL_LEASE_V1'||capability.version!==1
+    ||!contexts(capability.scope,authority.scope)||capability.policy?.pageSize!==16)fail('OFFLINE_FISCAL_LEASE_DISABLED');
+   const operationKey=fiscalWorkflowScopeKey(authority.scope)+'|offline-lease-v1',operationId=await native.refillOperation(operationKey);
+   let leaseId:string|null=null,page=0;
+   do{
+    const {data}=await request('offline-lease/permits',{schemaVersion:1,operationId,leaseId,page});
+    if(data?.schemaVersion!==1||!Array.isArray(data.permits)||data.permits.length>16||data.page!==page
+     ||data.nextPage!==null&&data.nextPage!==page+1)fail('OFFLINE_FISCAL_LEASE_INVALID');
+    const lease=data.lease as OfflineFiscalLease;validateOfflineFiscalLease(lease,authority);
+    if(leaseId&&lease.leaseId!==leaseId||page>Math.ceil(lease.saleCapacity/16))fail('OFFLINE_FISCAL_LEASE_INVALID');
+    for(const permit of data.permits)validateOfflineFiscalPermit(permit,lease);
+    captured.assertCurrent();if(epoch!==generation||JSON.stringify(await readOfflineAuthority())!==JSON.stringify(authority))fail('OFFLINE_FISCAL_BINDING_CHANGED');
+    await native.saveOfflineLeasePage(lease,data.permits,authority,data.serverTime);
+    if(page===0&&typeof window!=='undefined')window.dispatchEvent(new CustomEvent('offlineFiscalReserveUpdated'));
+    leaseId=lease.leaseId;page=data.nextPage;
+   }while(page!==null);
+   await native.savePermits(operationKey,operationId,[]);
+   if(typeof window!=='undefined')window.dispatchEvent(new CustomEvent('offlineFiscalReserveUpdated'));
+  })().catch(async error=>{if(error instanceof Error&&/^(FISCAL_OFFLINE_(LEASE_REVOKED|BINDING_CHANGED|AUTHORITY_CHANGED|MASTER_REQUIRED)|OFFLINE_FISCAL_LEASE_REVOKED|FISCAL_WORKFLOW_(SCOPE_CHANGED|DEVICE_CHANGED|ERP_ACTIVE_REQUIRED|ASSIGNMENT_REQUIRED|ISSUER_SCOPE_REQUIRED))$/.test(error.message))await store()?.revokeOfflineLeases?.('*');throw error;}).finally(()=>{offlinePrefetch=null;});return offlinePrefetch;
+ },
+ async reserveOfflineCheckout(cartIdentity:string,operationId:string,fiscalSaleContext?:TableFiscalSaleContext):Promise<FiscalWorkflowCheckoutV2>{
+  const native=store();if(!native?.offlineLease)fail('OFFLINE_FISCAL_NATIVE_REQUIRED');
+  const authority=await readOfflineAuthority(),scopeKey=fiscalWorkflowScopeKey(authority.scope);let current=await native.currentCheckout(scopeKey);
+  let requestedOperation=operationId;
+  if(!current&&await native.abandonedOfflineOperation?.(scopeKey,operationId))requestedOperation=createUuid();
+  if(current?.phase==='PREPARED'&&current.permit?.leaseId&&(current.cartIdentity!==cartIdentity||JSON.stringify(current.fiscalSaleContext)!==JSON.stringify(fiscalSaleContext))){
+   if(!native.abandonOfflinePrepared)fail('OFFLINE_FISCAL_ABANDON_NOT_SAFE');
+   try{await native.abandonOfflinePrepared(current);}catch(error){const proof=await native.abandonedOfflineOperation?.(scopeKey,current.operationId);if(!proof||JSON.stringify(proof)!==JSON.stringify(current))throw error;}current=null;requestedOperation=createUuid();
+  }
+  const paidRecovery=current?.phase==='EFFECT_POSSIBLE'&&current.operationId===requestedOperation&&current.cartIdentity===cartIdentity;
+  const lease=await native.offlineLease(authority,paidRecovery,paidRecovery?current!.permit?.leaseId:undefined);if(!lease)fail('OFFLINE_FISCAL_LEASE_REQUIRED');
+  let expectedCurrent:FiscalWorkflowPreparedRecovery|undefined;
+  if(current?.phase==='PREPARED'&&current.operationId!==operationId){
+   expectedCurrent={scopeKey,checkoutId:current.checkoutId,transactionId:current.transactionId,operationId:current.operationId,cartIdentity,phase:'PREPARED',paymentIds:[]};
+   if(!matchesPreparedRecovery(current,expectedCurrent)||current.permit?.leaseId!==lease.leaseId||current.permit.authorityHash!==lease.authorityHash)fail('FISCAL_WORKFLOW_CHECKOUT_RECONCILIATION_REQUIRED');
+  }
+  const checkout=await native.reserveCheckout(scopeKey,cartIdentity,undefined,expectedCurrent?.operationId||requestedOperation,
+   {requirePermit:true,authorityHash:lease.authorityHash,offline:{authority,leaseId:lease.leaseId,...(paidRecovery?{allowPaidRecovery:true}:{}),...(fiscalSaleContext?{fiscalSaleContext}:{})},...(expectedCurrent?{expectedCurrent}:{})});
+  if(JSON.stringify(await readOfflineAuthority())!==JSON.stringify(authority))fail('OFFLINE_FISCAL_BINDING_CHANGED');
+  return checkout;
+ },
  enabled(){try{const auth=readAuth();auth.assertCurrent();return hasFiscalWorkflowCapability(auth.base,auth.headers);}catch{return false;}},
  invalidate(){generation++;cursor='';currentAuthority=null;},
  discover():Promise<void>{
@@ -146,7 +202,7 @@ export function createFiscalWorkflowV2Client({readAuth=captureFiscalStatusBoundC
   const p=data.permits[0] as FiscalWorkflowPermitV2;if(!contexts(p.scope,scopeOf(auth.descriptor))||p.operationKind!==operationKind||json(p.originalReference)!==json(originalReference)||p.authorityHash!==data.authorityHash)fail();
   auth.assertCurrent();await native.savePermits(operationKey,requestOperationId,[p]);const checkout=await native.reserveCheckout(scopeKey,cartIdentity,{operationKind,originalReference},operationId,{requirePermit:true,authorityHash:p.authorityHash});auth.assertCurrent();return checkout;
  },
- async recordPayment(checkout:FiscalWorkflowCheckoutV2,paymentId:string){await store()?.markPaymentPossible(checkout.checkoutId,paymentId);},
+ async recordPayment(checkout:FiscalWorkflowCheckoutV2,paymentId:string){const native=store();if(!native)fail();let markError:unknown;try{await native.markPaymentPossible(checkout.checkoutId,paymentId);}catch(error){markError=error;}const durable=await native.readCheckout(checkout.checkoutId);if(!durable||durable.phase!=='EFFECT_POSSIBLE'||!durable.paymentIds.includes(paymentId)){if(markError)throw markError;fail('PAYMENT_INTENT_RECONCILIATION_REQUIRED');}Object.assign(checkout,durable);},
  async acknowledge(checkout:FiscalWorkflowCheckoutV2){await store()?.acknowledgeCheckout(checkout.checkoutId);},
  async cached(id:string){return await store()?.readState(id)||null;},
  consult(id:string,signal?:AbortSignal):Promise<FiscalWorkflowStateV2>{if(!this.enabled())return Promise.reject(Error('FISCAL_WORKFLOW_DISABLED'));const current=inFlight.get(id);if(current)return current;const version=generation;const promise=(async()=>{const native=store(),source=await readSource(id);if(!native||!source)fail('FISCAL_WORKFLOW_RETAINED_SOURCE_REQUIRED');const before=await native.readState(id),{data,auth}=await request('status?'+new URLSearchParams({transactionId:id}),undefined,signal);if(version!==generation||signal?.aborted)fail('FISCAL_WORKFLOW_CONTEXT_CHANGED');if(!contexts(data.scope,scopeOf(auth.descriptor))||!await verifyFiscalWorkflowState(source,data))fail();if(before&&before.observationVersion>=data.observationVersion)return before;auth.assertCurrent();await native.saveState(source,data,before?.observationVersion??null);window.dispatchEvent(new CustomEvent('fiscalWorkflowUpdated',{detail:{id,state:data}}));return data as FiscalWorkflowStateV2;})().finally(()=>inFlight.delete(id));inFlight.set(id,promise);return promise;},

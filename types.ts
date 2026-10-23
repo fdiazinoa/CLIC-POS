@@ -1829,6 +1829,8 @@ export interface Transaction {
   inventoryPresentationContract?: 1;
     /** Durable future checkout identity; never added to historical/retained sources. */
     fiscalWorkflowCheckoutId?: string;
+    fiscalOfflineLeaseId?: string;
+    fiscalSaleContext?: import('./services/fiscal/OfflineFiscalLease').TableFiscalSaleContext;
   v3ReservationClaimId?: string;
   v3RestoredTicketId?: string;
   v3CommitFingerprint?: string;

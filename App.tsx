@@ -11618,6 +11618,7 @@ const AppContent: React.FC = () => {
       const terminal=(config.terminals || []).find(row=>row.config?.currentDeviceId===deviceId);
       if(terminal&&getEffectiveFiscalComplianceConfig(config,terminal.config).mode==='ECF'&&getDefaultFiscalProvider(config,terminal.config)==='MSELLER')
         await fiscalWorkflowV2Client.discover().catch(()=>undefined);
+      void fiscalWorkflowV2Client.prefetchOfflineLease().catch(()=>undefined);
       await fiscalWorkflowV2Client.prefetch().catch(()=>undefined);await fiscalWorkflowV2Client.runRound();await fiscalStatusWorker.runAutomatic();},dispose:()=>{fiscalWorkflowV2Client.invalidate();fiscalStatusWorker.dispose();}},{
       hydrated:isDataLoaded&&fiscalHistoryHydrated&&isSecurityLoaded,
       online:()=>navigator.onLine,addOnline:listener=>window.addEventListener('online',listener),removeOnline:listener=>window.removeEventListener('online',listener),

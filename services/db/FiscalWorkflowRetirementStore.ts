@@ -31,6 +31,7 @@ export const FISCAL_RETIREMENT_WRITER_SCHEMA=[
  ...['INSERT','UPDATE'].map(event=>`CREATE TRIGGER IF NOT EXISTS retired_legacy_queue_${event.toLowerCase()}_v2 BEFORE ${event} ON sync_queue WHEN EXISTS(SELECT 1 FROM pos_fiscal_checkout_retirements_v1 r JOIN json_tree(NEW.payload) j ON j.type='text' AND j.value COLLATE NOCASE IN (r.transaction_id,r.checkout_id,r.permit_id)) BEGIN SELECT RAISE(ABORT,'FISCAL_WORKFLOW_RETIREMENT_FENCED');END;`),
  ...['INSERT','UPDATE'].map(event=>`CREATE TRIGGER IF NOT EXISTS retired_outbox_${event.toLowerCase()}_v2 BEFORE ${event} ON sync_outbox_v2 WHEN NEW.event_type IN ('SALE_POSTED','PAYMENT_POSTED') AND EXISTS(SELECT 1 FROM pos_fiscal_checkout_retirements_v1 WHERE transaction_id=NEW.aggregate_id COLLATE NOCASE OR transaction_id=json_extract(NEW.payload_json,'$.transaction.id') COLLATE NOCASE OR transaction_id=json_extract(NEW.payload_json,'$.summary.transaction_id') COLLATE NOCASE OR transaction_id=json_extract(NEW.payload_json,'$.fiscalWorkflowBirth.transactionId') COLLATE NOCASE OR permit_id=json_extract(NEW.payload_json,'$.fiscalWorkflowBirth.permitId') COLLATE NOCASE) BEGIN SELECT RAISE(ABORT,'FISCAL_WORKFLOW_RETIREMENT_FENCED');END;`),
 ].join('\n');
+export const OFFLINE_FISCAL_ABANDON_WRITER_SCHEMA=FISCAL_RETIREMENT_WRITER_SCHEMA.replaceAll('retired_','offline_abandoned_').replaceAll('pos_fiscal_checkout_retirements_v1','pos_offline_fiscal_abandoned_v1').replaceAll('FISCAL_WORKFLOW_RETIREMENT_FENCED','OFFLINE_FISCAL_ABANDONED');
 const one=async(sql:SQL,q:string,v:any[]=[])=> (await sql.query(q,v)).values?.[0];
 const proofFrom=(row:any):FiscalRetirementProof=>({schemaVersion:1,commandId:row.command_id,checkoutId:row.checkout_id,transactionId:row.transaction_id,permitId:row.permit_id,originalOperationId:row.operation_id,cartIdentitySha256:row.cart_identity_sha256,reason:'EXPIRED_PREPARED_NO_EFFECTS'});
 const record=(row:any):FiscalRetirementRecord=>({...proofFrom(row),scopeKey:row.scope_key,phase:row.phase,receipt:row.receipt_json?JSON.parse(row.receipt_json):null});
@@ -49,7 +50,7 @@ async function original(sql:SQL,scopeKey:string,proof:FiscalRetirementProof):Pro
 export const RETIREMENT_SCAN_LIMITS={rows:512,encodedBytes:1048576,totalBytes:8388608,decodedBytes:1048576,nodes:50000,depth:64} as const;
 const relevantCollections=['v3RestoredTicketSources','recoveryOriginals','recoveryStage','recoveryState'];
 /** All replay stores are decoded under the writer. Unknown/oversized evidence is a hold. */
-export async function assertRetirementHasNoEffects(sql:SQL,p:FiscalRetirementProof):Promise<void>{
+export async function assertRetirementHasNoEffects(sql:SQL,p:Pick<FiscalRetirementProof,'transactionId'|'checkoutId'|'permitId'>,options:{targetedQueues?:boolean}={}):Promise<void>{
  for(const table of ['payment_intents_v2','pos_fiscal_watch_v2','pos_fiscal_state_v2'])if(await one(sql,`SELECT 1 FROM ${table} WHERE transaction_id=? COLLATE NOCASE LIMIT 1`,[p.transactionId]))retirementFail();
  const ids=new Set([p.transactionId,p.checkoutId,p.permitId].map(uuidIdentity));let nodes=0,total=0;
  const inspect=(value:any,depth=0,wrappers=0,key=''):void=>{
@@ -112,7 +113,12 @@ export async function assertRetirementHasNoEffects(sql:SQL,p:FiscalRetirementPro
    inspectEnvelope(envelope,r.kind,r.originalId);
   }
  }
- for(const [table,column] of [['sync_outbox_v2','payload_json'],['sync_queue','payload']] as const){const queued=(await sql.query(`SELECT length(CAST(${column} AS BLOB)) bytes,substr(${column},1,1048577) payload${table==='sync_outbox_v2'?',aggregate_id':''} FROM ${table} LIMIT 513`)).values||[];if(queued.length>512)retirementFail();for(const row of queued){total+=row.bytes;if(row.bytes>RETIREMENT_SCAN_LIMITS.encodedBytes||total>RETIREMENT_SCAN_LIMITS.totalBytes)retirementFail();inspect(row.aggregate_id);inspect(parse(row.payload));}}
+ for(const [table,column] of [['sync_outbox_v2','payload_json'],['sync_queue','payload']] as const){
+  // Offline abandon may have >512 unrelated ordinary sales queued. Preserve every
+  // recursive decoder candidate; only plain, unrelated queue envelopes are skipped.
+  const targeted=options.targetedQueues?` WHERE ${table==='sync_outbox_v2'?'aggregate_id COLLATE NOCASE IN (?,?,?) OR ':''}EXISTS(SELECT 1 FROM json_tree(${column}) j WHERE j.type='text' AND (j.value COLLATE NOCASE IN (?,?,?) OR j.key IN ('document','original','producerInput','configuration','item','body','requestBody','expectedDocument','declarationBody','capture','submissionBody','packetJson','requestJson','sourceExpected') OR CASE WHEN json_valid(j.value) THEN json_extract(j.value,'$[0]') IN ('object','array','string','number','date','boolean','null','undefined') ELSE 0 END))`:'';
+  const identities=[p.transactionId,p.checkoutId,p.permitId],params=options.targetedQueues?[...(table==='sync_outbox_v2'?identities:[]),...identities]:[];
+  const queued=(await sql.query(`SELECT length(CAST(${column} AS BLOB)) bytes,substr(${column},1,1048577) payload${table==='sync_outbox_v2'?',aggregate_id':''} FROM ${table}${targeted} LIMIT 513`,params)).values||[];if(queued.length>512)retirementFail();for(const row of queued){total+=row.bytes;if(row.bytes>RETIREMENT_SCAN_LIMITS.encodedBytes||total>RETIREMENT_SCAN_LIMITS.totalBytes)retirementFail();inspect(row.aggregate_id);inspect(parse(row.payload));}}
 }
 export async function beginRetirement(sql:SQL,scopeKey:string,proof:FiscalRetirementProof):Promise<FiscalRetirementRecord>{
  const c=await original(sql,scopeKey,proof);await assertRetirementHasNoEffects(sql,proof);
@@ -135,7 +141,8 @@ export async function completeRetirement(sql:SQL,scopeKey:string,receipt:FiscalR
 export async function assertRetirementRecoveryPromotion(sql:SQL,mutations:import('./DatabaseAdapter').DurableDocumentMutation[]):Promise<void>{
  const promoted=mutations.filter(row=>row.recoveryOriginal!==undefined);
  if(!promoted.length)return;
- const retired=(await sql.query('SELECT transaction_id,checkout_id,permit_id FROM pos_fiscal_checkout_retirements_v1 LIMIT 513')).values||[];
+ const abandonedExists=(await sql.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='pos_offline_fiscal_abandoned_v1'")).values?.length;
+ const retired=(await sql.query('SELECT transaction_id,checkout_id,permit_id FROM pos_fiscal_checkout_retirements_v1'+(abandonedExists?' UNION SELECT transaction_id,checkout_id,permit_id FROM pos_offline_fiscal_abandoned_v1':'')+' LIMIT 513')).values||[];
  if(!retired.length)return;if(retired.length>RETIREMENT_SCAN_LIMITS.rows)retirementFail();
  const ids=new Set(retired.flatMap(row=>[row.transaction_id,row.checkout_id,row.permit_id].map(uuidIdentity)));let nodes=0,total=0;
  const scan=(value:any,depth=0,wrappers=0,key=''):void=>{
