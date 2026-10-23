@@ -15,7 +15,7 @@ digest = hashlib.sha256(payload.encode()).hexdigest()
 assert f'LICENSE_DOCUMENT_HASH = "{digest}"' in source, 'Update the document hash after editing the canonical text'
 styles = getSampleStyleSheet()
 styles['BodyText'].fontSize = 10
-styles['BodyText'].leading = 15
+styles['BodyText'].leading = 14
 styles['Heading1'].textColor = colors.HexColor('#0f172a')
 flow = [Paragraph(escape(document['title']), styles['Heading1']),
         Paragraph(escape(f"Proveedor: {document['provider']} · Versión: {document['version']}"), styles['BodyText']),
