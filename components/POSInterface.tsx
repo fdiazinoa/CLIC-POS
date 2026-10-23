@@ -6145,7 +6145,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                const taxAmount = v3RefundFiscal.length
                   ? Math.round(v3RefundFiscal.reduce((sum, row) => sum + row.taxAmount, 0) * 100) / 100
                   : cartTax;
-               const offlineTableInvoice=Boolean(fiscalCheckoutRef.current?.permit?.leaseId&&fiscalCheckoutRef.current.fiscalSaleContext);
+               const offlineTableInvoice=Boolean((fiscalCheckoutRef.current?.permit?.leaseId||fiscalCheckoutRef.current?.allocation)&&fiscalCheckoutRef.current.fiscalSaleContext);
                const netAmount = Math.round(((documentTotal - taxAmount - (offlineTableInvoice?cartTip:0)) + Number.EPSILON) * 100) / 100;
                const documentItems = !isRefundOnly || v3Operational
                   ? freezeAuthoritativeLineFiscalAmounts(contextualDocumentItems, config, {
