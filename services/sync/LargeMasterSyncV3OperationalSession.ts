@@ -1,3 +1,4 @@
+import { v3OperationalConfigContext } from './LargeMasterSyncV3OperationalConfigScope';
 import {readOfflineV3OperationalAuthority,type V3LocalOperationalIdentity,type V3OfflineOperationalAuthority} from './OfflineV3OperationalIdentity';
 import {readOperationalCatalogBindingProof} from './OperationalTerminalConfig';
 import {resolveSyncTarget} from './SyncProfile';
@@ -40,6 +41,8 @@ export const v3InventoryBaselineKey = (binding: string, stamp: V3SaleAuthoritySt
 export type V3CodeMatch = { product: Product; quantity: number; price: number; modifiers: string[];
   selectedVariant?: ProductVariant; variantInfo?: string };
 
+const configContextFlights = new Map<string, Promise<LargeMasterSyncV3OperationalSession>>();
+
 /** One bound, immutable baseline. ACK never removes local stock movements. */
 export class LargeMasterSyncV3OperationalSession {
   private constructor(
@@ -53,7 +56,7 @@ export class LargeMasterSyncV3OperationalSession {
     private readonly setupCredentialGuard?:string,
   ) {}
 
-  static async open(refresh = false, metric?: (metric: LargeMasterSyncV3Metric) => void): Promise<LargeMasterSyncV3OperationalSession> {
+  static async open(refresh = false, metric?: (metric: LargeMasterSyncV3Metric) => void, cachedOnly = false): Promise<LargeMasterSyncV3OperationalSession> {
     const observe = (event: LargeMasterSyncV3Metric) => { try { metric?.(event); } catch { /* Observer only. */ } };
     if (!LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED || LARGE_MASTER_SYNC_V3_CANARY) {
       throw new LargeMasterSyncV3Error('SYNC_V3_OPERATIONAL_BUILD_REQUIRED');
@@ -65,12 +68,7 @@ export class LargeMasterSyncV3OperationalSession {
     const binding = v3BindingKey(identity, v3BaseUrl);
     const credentialGuard = readOperationalTerminalBinding();
     await dbAdapter.connect();
-    const configScope = (config: BusinessConfig) => {
-      const terminal=config?.terminals?.find(row => row.config?.currentDeviceId === identity.deviceId
-        && (row.config.erpTerminalId || row.id) === identity.terminalId);
-      return JSON.stringify([terminal?.config.erpBinding?.companyId,terminal?.config.inventoryScope,
-        terminal?.config.pricing,terminal?.config.fiscal]);
-    };
+    const configScope = (config: BusinessConfig) => v3OperationalConfigContext(config, identity).scope;
     const expectedScope=configScope(await db.get('config') as unknown as BusinessConfig);
     const assertIdentity = async (owned?: LargeMasterSyncV3IdentityReadContext) => {
       const currentScope=configScope(owned ? await owned.readConfig() : await db.get('config') as unknown as BusinessConfig);
@@ -104,6 +102,7 @@ export class LargeMasterSyncV3OperationalSession {
       }
     }
     if(!ready&&offlineAuthority)throw new LargeMasterSyncV3Error('SYNC_V3_OFFLINE_CACHED_RUNTIME_REQUIRED');
+    if (!ready && cachedOnly) throw new LargeMasterSyncV3Error('SYNC_V3_OFFLINE_CACHED_RUNTIME_REQUIRED');
     if (!ready) {
       const anchor = await store.getInventoryAuthority?.();
       const catalogOnly = Boolean(refresh && runtime && owner?.binding === binding && anchor);
@@ -124,6 +123,60 @@ export class LargeMasterSyncV3OperationalSession {
     return new LargeMasterSyncV3OperationalSession(ready, binding, store, v3BaseUrl, identity,offlineAuthority,expectedScope,credentialGuard);
   }
 
+  /** Renew only the UI read context. Never downloads, changes the old session, or retries a sale. */
+  static async acquireConfigContext(config: BusinessConfig, localTerminalId: string): Promise<LargeMasterSyncV3OperationalSession> {
+    const requested = v3OperationalConfigContext(config, { localTerminalId });
+    const readAuthority = async () => {
+      const guard = readOperationalTerminalBinding();
+      const origin = largeMasterSyncV3DownloadOrigin();
+      let identity: V3LocalOperationalIdentity, mode: 'bound' | 'offline';
+      try { identity = readLargeMasterSyncV3BoundIdentity(); mode = 'bound'; }
+      catch { identity = (await readOfflineV3OperationalAuthority()).identity; mode = 'offline'; }
+      const proof = readOperationalCatalogBindingProof();
+      const canonical = v3OperationalConfigContext(config, { localTerminalId, ...identity });
+      if (!proof || proof.companyId !== canonical.terminal.config.erpBinding?.companyId
+        || canonical.terminal.config.erpBinding?.tenantId !== identity.tenantId
+        || proof.tenantId !== identity.tenantId || proof.terminalId !== identity.terminalId
+        || proof.deviceId !== identity.deviceId || guard !== readOperationalTerminalBinding()
+        || origin !== largeMasterSyncV3DownloadOrigin()) throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
+      return { guard, origin, identity, proof, mode };
+    };
+    const authority = await readAuthority();
+    const key = JSON.stringify([requested.scope, localTerminalId, authority]);
+    let pending = configContextFlights.get(key);
+    if (!pending) {
+      pending = (async () => {
+        const persisted = await db.get('config') as unknown as BusinessConfig;
+        if (v3OperationalConfigContext(persisted, { localTerminalId, ...authority.identity }).scope !== requested.scope)
+          throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
+        await dbAdapter.connect();
+        const store = dbAdapter.masterSyncV3Store;
+        const readCached = async () => {
+          const runtime = await store?.getActiveRuntimeVersion();
+          const owner = await store?.getOperationalOwner?.();
+          const inventory = runtime && await store?.getInventorySnapshotVersion(runtime);
+          if (!runtime || (runtime.contractVersion || 1) < 2 || !owner || !inventory
+            || owner.binding !== v3BindingKey(authority.identity, authority.origin)
+            || owner.syncId !== runtime.syncId || owner.syncVersion !== runtime.syncVersion)
+            throw new LargeMasterSyncV3Error('SYNC_V3_OFFLINE_CACHED_RUNTIME_REQUIRED');
+          return JSON.stringify([runtime, owner, inventory, await store?.getInventoryAuthority?.()]);
+        };
+        const cached = await readCached();
+        const session = await LargeMasterSyncV3OperationalSession.open(false, undefined, true);
+        if (await readCached() !== cached) throw new LargeMasterSyncV3Error('SYNC_V3_RUNTIME_VERSION_CHANGED');
+        if (session.expectedConfigScope !== requested.scope || JSON.stringify(await readAuthority()) !== JSON.stringify(authority))
+          throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
+        session.assertSetupIdentity();
+        await session.assertCurrent();
+        if (JSON.stringify(await readAuthority()) !== JSON.stringify(authority)) throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
+        return session;
+      })();
+      configContextFlights.set(key, pending);
+      void pending.finally(() => { if (configContextFlights.get(key) === pending) configContextFlights.delete(key); }).catch(() => undefined);
+    }
+    return pending;
+  }
+
   async assertCurrent(): Promise<void> {
     assertLargeMasterSyncV3NativeAndroid();
     try{
@@ -137,8 +190,7 @@ export class LargeMasterSyncV3OperationalSession {
     }
     if(this.expectedConfigScope!==undefined){
     const config=await db.get('config') as unknown as BusinessConfig;
-    const terminal=config?.terminals?.find(row=>row.config?.currentDeviceId===this.identity.deviceId&&(row.config.erpTerminalId||row.id)===this.identity.terminalId);
-    if(this.expectedConfigScope!==undefined&&JSON.stringify([terminal?.config.erpBinding?.companyId,terminal?.config.inventoryScope,terminal?.config.pricing,terminal?.config.fiscal])!==this.expectedConfigScope)throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
+    if(v3OperationalConfigContext(config,this.identity).scope!==this.expectedConfigScope)throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
     }
     const active = await this.store.getActiveRuntimeVersion();
     const inventory = await this.ready.runtime.getInventorySnapshotVersion();
@@ -359,3 +411,6 @@ export const getLargeMasterSyncV3OperationalSession = createLargeMasterSyncV3Ses
   () => {try{const identity=readLargeMasterSyncV3BoundIdentity();return JSON.stringify([v3BindingKey(identity,largeMasterSyncV3DownloadOrigin()),identity.syncToken]);}
     catch{return JSON.stringify(['offline-observation',readOperationalCatalogBindingProof(),resolveSyncTarget().baseUrl,largeMasterSyncV3DownloadOrigin()]);}},
 );
+
+export const acquireLargeMasterSyncV3ConfigContext = (config: BusinessConfig, localTerminalId: string) =>
+  LargeMasterSyncV3OperationalSession.acquireConfigContext(config, localTerminalId);
