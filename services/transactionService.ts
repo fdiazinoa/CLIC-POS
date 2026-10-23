@@ -438,7 +438,7 @@ class TransactionService {
 
         // Generate IDs
         const { globalSequence, displayId, seriesNumber } =
-            data.v3ReservationClaimId ? {globalSequence:undefined,displayId:undefined,seriesNumber:undefined} : await this.generateTransactionId(data.documentType, resolvedSeriesId);
+            (data.v3ReservationClaimId||data.fiscalAllocationAuthorizationId) ? {globalSequence:undefined,displayId:undefined,seriesNumber:undefined} : await this.generateTransactionId(data.documentType, resolvedSeriesId);
         const normalizedFiscalAmounts = await normalizeFiscalAmounts(data);
 
         // Create transaction object
@@ -447,6 +447,7 @@ class TransactionService {
             ...(data.fiscalWorkflowCheckoutId ? { fiscalWorkflowCheckoutId: data.fiscalWorkflowCheckoutId } : {}),
             ...(data.fiscalSaleContext ? {fiscalSaleContext:data.fiscalSaleContext} : {}),
             ...(data.fiscalOfflineLeaseId ? {fiscalOfflineLeaseId:data.fiscalOfflineLeaseId} : {}),
+            ...(data.fiscalAllocationAuthorizationId?{fiscalAllocationAuthorizationId:data.fiscalAllocationAuthorizationId}:{}),
             id: data.id || createTechnicalId('TXN'),
             globalSequence,
             displayId,

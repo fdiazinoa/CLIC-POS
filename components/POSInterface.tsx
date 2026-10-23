@@ -5867,7 +5867,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             finalNcf = reservedRefundNcf; finalIssuance=refundIssuance;
             finalNcfType = refundFiscalType;
          } else {
-            const reservation=await db.reserveFiscalNumber(fiscalStatus.type,terminalId,1,activeTerminalConfig);
+            const reservation=fiscalCheckoutRef.current?.allocation?await fiscalWorkflowV2Client.allocationDraft(fiscalCheckoutRef.current):await db.reserveFiscalNumber(fiscalStatus.type,terminalId,1,activeTerminalConfig);
             finalNcf=reservation?.ncf; finalIssuance=reservation?.fiscalIssuance;
 
             if (!finalNcf) {
@@ -6159,7 +6159,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   : undefined;
                const txn = await withTimeout(transactionService.createTransaction({
                   ...(newDirectFiscalEnvironment !== undefined ? { fiscalEnvironment: newDirectFiscalEnvironment } : {}),
-                  ...(fiscalCheckoutRef.current?{id:fiscalCheckoutRef.current.transactionId,fiscalWorkflowCheckoutId:fiscalCheckoutRef.current.checkoutId,...(fiscalCheckoutRef.current.permit?.leaseId?{fiscalOfflineLeaseId:fiscalCheckoutRef.current.permit.leaseId}:{}),...(fiscalCheckoutRef.current.fiscalSaleContext?{fiscalSaleContext:fiscalCheckoutRef.current.fiscalSaleContext}:{})}:{}),
+                  ...(fiscalCheckoutRef.current?{id:fiscalCheckoutRef.current.transactionId,fiscalWorkflowCheckoutId:fiscalCheckoutRef.current.checkoutId,...(fiscalCheckoutRef.current.permit?.leaseId?{fiscalOfflineLeaseId:fiscalCheckoutRef.current.permit.leaseId}:{}),...(fiscalCheckoutRef.current.allocation?{fiscalAllocationAuthorizationId:fiscalCheckoutRef.current.allocation.authorizationId}:{}),...(fiscalCheckoutRef.current.fiscalSaleContext?{fiscalSaleContext:fiscalCheckoutRef.current.fiscalSaleContext}:{})}:{}),
                   ...(activeV3Reservation ? {id:reservationInvoiceId(activeV3Reservation.reservation.id),v3ReservationClaimId:activeV3Reservation.claimId} : {}),
                   documentType: hasReturns ? 'REFUND' : 'TICKET',
                   seriesId: hasReturns
@@ -6600,7 +6600,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (processedCart.some(item => item.quantity < 0)) types.add(resolveCreditNoteFiscalCode(fiscalCompliance.mode));
       for (const type of types) {
          await db.assertFiscalIssuerAuthority(type);
-         if (!await db.canRequestMoreNCF(type, terminalId, activeTerminalConfig)) {
+         if (!(v3Operational&&fiscalCompliance.mode==='ECF'&&await fiscalWorkflowV2Client.allocationReady(type))&&!await db.canRequestMoreNCF(type, terminalId, activeTerminalConfig)) {
             throw new Error(`No hay un lote fiscal ${type} vigente, descargado y asignado a esta terminal. La facturación está bloqueada.`);
          }
       }
@@ -6609,7 +6609,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const offlineTableFiscalContextRef=useRef<TableFiscalSaleContext|undefined>(undefined);
    const currentFiscalCheckoutCartIdentity=(fiscalSaleContext=offlineTableFiscalContextRef.current)=>JSON.stringify({...(fiscalSaleContext?{fiscalSaleContext}:{}),items:processedCart.map(({fiscalCheckoutOperationId:_op,...line}:any)=>line),customerId:effectiveSelectedCustomer?.id||null,fiscalType:requiredSaleFiscalType});
    const fiscalCheckoutRef=useRef<FiscalWorkflowCheckoutV2|null>(null);
-   const [offlineFiscalReserveInfo,setOfflineFiscalReserveInfo]=useState<{remaining:number;validUntil:string}|null>(null);
+   const [offlineFiscalReserveInfo,setOfflineFiscalReserveInfo]=useState<{remaining:number;validUntil:string|null;remainingByType?:Record<string,number>}|null>(null);
    useEffect(()=>{
       let disposed=false;
       const update=()=>{void fiscalWorkflowV2Client.offlineStatus().then(value=>{if(!disposed)setOfflineFiscalReserveInfo(value);});};
@@ -6620,7 +6620,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const fiscalCheckoutOperationRef=useRef<string|null>(null);
    useEffect(()=>{if(cart.length===0)fiscalCheckoutOperationRef.current=null;},[cart.length]);
    useEffect(()=>{
-      const prepare=()=>{if(v3Operational&&fiscalCompliance.mode==='ECF')void fiscalWorkflowV2Client.prefetchOfflineLease().catch(()=>undefined);if(v3Operational&&fiscalCompliance.mode==='ECF'&&fiscalWorkflowV2Client.enabled())void fiscalWorkflowV2Client.prefetch().catch(()=>undefined);};
+      const prepare=()=>{if(v3Operational&&fiscalCompliance.mode==='ECF')void fiscalWorkflowV2Client.prepareOfflineAuthority().catch(()=>undefined);if(v3Operational&&fiscalCompliance.mode==='ECF'&&fiscalWorkflowV2Client.enabled())void fiscalWorkflowV2Client.prefetch().catch(()=>undefined);};
       const unsubscribe=subscribeFiscalWorkflowCapability(prepare);prepare();return unsubscribe;
    },[v3Operational,terminalId,fiscalCompliance.mode]);
    const fiscalRetirementUIRef=useRef({cart,terminalConfig:activeTerminalConfig,terminalId});
@@ -6638,7 +6638,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (completed) return Object.assign(() => {},{completedTransaction:completed});
       if(activeTable&&fiscalWorkflowV2Client.localCheckout&&!fiscalCheckoutRef.current){
         const retained=await fiscalWorkflowV2Client.localCheckout(String(activeTable.currentOrderId),String(activeTable.id)).catch(()=>null);
-        if(retained?.permit?.leaseId&&['COMMITTED','ACKNOWLEDGED'].includes(retained.phase)
+        if((retained?.permit?.leaseId||retained?.allocation)&&['COMMITTED','ACKNOWLEDGED'].includes(retained.phase)
           &&retained.fiscalSaleContext?.accountId===String(activeTable.currentOrderId)
           &&retained.fiscalSaleContext.tableId===String(activeTable.id)){
           offlineTableFiscalContextRef.current=retained.fiscalSaleContext;fiscalCheckoutRef.current=retained;
@@ -6679,7 +6679,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
           if(!isMaster)throw Error('El cobro de mesas sin ERP debe realizarse en la caja Master que conserva la cuenta.');
           if(activePaymentFraction)throw Error('La reserva fiscal offline admite el cobro completo de la mesa; esta cuenta tiene pagos fraccionados pendientes.');
           if(offlineAvailable)throw Error('La reserva fiscal offline de mesas admite efectivo. Este método requiere su autorización de pago habitual.');
-          throw Error('Esta caja no tiene una reserva fiscal offline vigente para cobrar la mesa. Debe descargar una reserva nueva al recuperar la conexión; los permisos vencidos no se reutilizan.');
+          const readiness=await fiscalWorkflowV2Client.offlineReadiness();throw Error(readiness.reason==='FISCAL_RANGE_EXHAUSTED'?'Se agotaron los comprobantes fiscales asignados a esta caja. No se realizó ningún pago.':readiness.reason==='FISCAL_RANGE_EXPIRED'?'El rango fiscal asignado está vencido. No se realizó ningún pago.':`La caja todavía no tiene preparada su autorización fiscal offline (${readiness.code||readiness.reason}). Conserva la cuenta; no se realizó ningún pago.`);
         }
         throw Error('No se puede cobrar sin la autorización fiscal vigente del ERP. Sincroniza y vuelve a intentar; no se realizó ningún pago.');
       }
@@ -6688,7 +6688,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
         const tagged=processedCart.map(line=>(line as any).fiscalCheckoutOperationId).filter(Boolean);
         const operationId=fiscalCheckoutOperationRef.current|| (tagged.length===processedCart.length&&new Set(tagged).size===1?tagged[0]:createUuid());fiscalCheckoutOperationRef.current=operationId;
         const checkout=await (offlineFiscalCheckout?fiscalWorkflowV2Client.reserveOfflineCheckout(currentFiscalCheckoutCartIdentity(),operationId,offlineTableFiscalContextRef.current):fiscalWorkflowV2Client.reserveCheckout(currentFiscalCheckoutCartIdentity(),operationId,{requirePermit:requiresFiscalPermit})).catch(error=>{if(offlineFiscalCheckout&&fiscalCheckoutRef.current?.phase!=='EFFECT_POSSIBLE')offlineTablePaymentFenceRef.current=false;if(error instanceof Error&&error.message==='FISCAL_WORKFLOW_PERMIT_REQUIRED')throw Error(offlineFiscalCheckout?'No hay permisos fiscales offline disponibles. Se requiere una nueva reserva autorizada; reconectar no garantiza reposición antes del vencimiento. No se realizó ningún pago.':'No hay autorización fiscal disponible para esta venta. Espera la sincronización y vuelve a cobrar; no se realizó ningún pago.');throw error;});
-        if(!checkout.permit)throw Error('FISCAL_WORKFLOW_PERMIT_REQUIRED');
+        if(!checkout.permit&&!checkout.allocation)throw Error('FISCAL_WORKFLOW_PERMIT_REQUIRED');
         if(['COMMITTED','ACKNOWLEDGED'].includes(checkout.phase)){
           const completed=await db.getDocument('transactions',checkout.transactionId)||await db.getDocument('transactionHistory',checkout.transactionId);
           if(!completed)throw Error('FISCAL_WORKFLOW_COMMITTED_RECEIPT_REQUIRED');

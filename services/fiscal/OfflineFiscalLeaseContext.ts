@@ -34,5 +34,5 @@ export async function readOfflineFiscalLocalAuthority():Promise<OfflineFiscalLoc
  const {dbAdapter}=await import('../db');
  await dbAdapter.connect();
  try{return await offlineFiscalAuthorityFromConfig(await dbAdapter.getDocument<BusinessConfig>('config','current') as BusinessConfig);}
- catch(error){if(error instanceof Error&&error.message==='OFFLINE_FISCAL_BINDING_CHANGED')await dbAdapter.fiscalWorkflowStore?.revokeOfflineLeases?.('*');throw error;}
+ catch(error){if(error instanceof Error&&error.message==='OFFLINE_FISCAL_BINDING_CHANGED'){await dbAdapter.fiscalWorkflowStore?.revokeOfflineLeases?.('*');await dbAdapter.fiscalWorkflowStore?.revokeAllocations?.('*');}throw error;}
 }

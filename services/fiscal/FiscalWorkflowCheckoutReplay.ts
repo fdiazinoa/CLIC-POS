@@ -18,8 +18,8 @@ export function assertFiscalWorkflowCheckoutReplay(checkout:FiscalWorkflowChecko
  const checkoutId=source.fiscalWorkflowCheckoutId||formatBirth?.checkoutId;
  if(!['COMMITTED','ACKNOWLEDGED'].includes(checkout.phase)||checkout.scopeKey!==fiscalWorkflowScopeKey(scope)
   ||checkout.cartIdentity!==cartIdentity||source.id!==checkout.transactionId||source.terminalId!==scope.terminalId
-  ||checkoutId!==checkout.checkoutId||!checkout.permit||checkout.permit.transactionId!==source.id
-  ||fiscalWorkflowScopeKey(checkout.permit.scope)!==fiscalWorkflowScopeKey(scope))throw Error('FISCAL_WORKFLOW_CHECKOUT_RECONCILIATION_REQUIRED');
+  ||checkoutId!==checkout.checkoutId||(!checkout.allocation&&(!checkout.permit||checkout.permit.transactionId!==source.id||fiscalWorkflowScopeKey(checkout.permit.scope)!==fiscalWorkflowScopeKey(scope)))
+  ||checkout.allocation&&(source.fiscalAllocationAuthorizationId!==checkout.allocation.authorizationId||source.ncf!==checkout.allocation.ncf||JSON.stringify(source.fiscalIssuance)!==JSON.stringify(checkout.allocationIssuance)))throw Error('FISCAL_WORKFLOW_CHECKOUT_RECONCILIATION_REQUIRED');
  let cart:any;try{cart=JSON.parse(cartIdentity);}catch{throw Error('FISCAL_WORKFLOW_CHECKOUT_RECONCILIATION_REQUIRED');}
  if((source.customerId||null)!==(cart.customerId||null)||source.ncfType!==cart.fiscalType)throw Error('FISCAL_WORKFLOW_CHECKOUT_RECONCILIATION_REQUIRED');
 }

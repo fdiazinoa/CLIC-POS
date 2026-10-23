@@ -1,3 +1,4 @@
+import type {OfflineFiscalAllocation} from './OfflineFiscalAllocation';
 import {cartDigest,isExpiredPrepared,retirementReason,validateRetirementReceipt} from './FiscalWorkflowRetirement';
 import {fiscalWorkflowScopeKey} from './FiscalWorkflowV2Types';
 import type {FiscalRetirementProof,FiscalRetirementRecord} from './FiscalWorkflowV2Types';
@@ -49,6 +50,7 @@ export function createFiscalWorkflowV2Client({readAuth=captureFiscalStatusBoundC
  let offlinePrefetch:Promise<void>|null=null;
  const retirements=new Map<string,Promise<FiscalRetirementRecord>>();
  const refills=new Map<string,Promise<void>>();const inFlight=new Map<string,Promise<FiscalWorkflowStateV2>>();let cursor='',generation=0;let currentAuthority:{fingerprint:string;authorityHash:string;expires:number}|null=null;
+ let leasePreparationError:string|null=null,allocationPreparationError:string|null=null,allocationPrefetch:Promise<void>|null=null;
  let discovering:{key:string;promise:Promise<void>}|null=null;
  const authorityFingerprint=(auth:ReturnType<typeof readAuth>)=>json([auth.base,auth.headers,(auth as any).fingerprint||null]);
  const authorityFor=(auth:ReturnType<typeof readAuth>)=>currentAuthority?.fingerprint===authorityFingerprint(auth)&&currentAuthority.expires>Date.now()?currentAuthority.authorityHash:undefined;
@@ -57,9 +59,36 @@ export function createFiscalWorkflowV2Client({readAuth=captureFiscalStatusBoundC
   try{const response=await fetchImpl(`${auth.base}/fiscal/workflow/v2/${path}`,{method:body?'POST':'GET',headers:{...auth.headers,Accept:'application/json',...(body?{'Content-Type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{}),credentials:'omit',cache:'no-store',redirect:'error',signal:controller.signal});const data=await response.json();auth.assertCurrent();if(!response.ok)fail(typeof data?.code==='string'?data.code:'FISCAL_WORKFLOW_UNAVAILABLE');if(JSON.stringify(data).length>600000)fail();return {data,auth};}finally{clearTimeout(timer);signal?.removeEventListener('abort',abort);}
  };
  return {
- async offlineStatus():Promise<{remaining:number;validUntil:string}|null>{try{const native=store();if(!native?.offlineLease||!native.offlineLeasePermitCount)return null;const lease=await native.offlineLease(await readOfflineAuthority());return lease?{remaining:await native.offlineLeasePermitCount(lease.leaseId,true),validUntil:lease.validUntil}:null;}catch{return null;}},
+ async allocationReady(type?:string):Promise<boolean>{try{const value=await store()?.allocationAvailability?.(await readOfflineAuthority(),type);return Boolean(value&&Object.values(value.remaining).some(n=>n>0));}catch{return false;}},
+ async offlineReadiness():Promise<{reason:string;code?:string;remaining?:Record<string,number>}>{
+  try{const local=await readOfflineAuthority(),native=store(),current=await native?.currentCheckout(fiscalWorkflowScopeKey(local.scope));
+   if(current?.allocation&&current.phase==='EFFECT_POSSIBLE'){await native?.allocationDraft?.(current);return {reason:'READY_ALLOCATION'};}
+   const allocation=await native?.allocationAvailability?.(local);if(allocation)return {reason:Object.values(allocation.remaining).some(n=>n>0)?'READY_ALLOCATION':'FISCAL_RANGE_EXHAUSTED',remaining:allocation.remaining};
+   if(await native?.offlineLease?.(local))return {reason:'READY_V1'};
+   const leaseReason=await native?.offlineLeaseReason?.(local);if(leaseReason&&leaseReason!=='MISSING_AUTHORIZATION')return {reason:leaseReason};const preparationError=leasePreparationError||allocationPreparationError;
+   return preparationError?{reason:/DISABLED/.test(preparationError)?'PREPARATION_DISABLED':'PREPARATION_FAILED',code:preparationError}:{reason:'MISSING_AUTHORIZATION'};
+  }catch(error){const code=error instanceof Error?error.message:'OFFLINE_FISCAL_PREPARATION_FAILED';return {reason:/CLOCK_ROLLBACK/.test(code)?'CLOCK_ROLLBACK':/RANGE_EXPIRED/.test(code)?'FISCAL_RANGE_EXPIRED':/RANGE_EXHAUSTED/.test(code)?'FISCAL_RANGE_EXHAUSTED':/REVOKED/.test(code)?'AUTHORITY_REVOKED':'AUTHORITY_CHANGED',code};}
+ },
+ async prepareOfflineAuthority():Promise<void>{
+  await this.prefetchOfflineAllocation().catch(()=>undefined);
+  try{if(await store()?.offlineAllocation?.(await readOfflineAuthority()))return;}catch{/* V1 still checks its own unchanged authority. */}
+  await this.prefetchOfflineLease();
+ },
+ async prefetchOfflineAllocation():Promise<void>{
+  if(allocationPrefetch)return allocationPrefetch;
+  allocationPrefetch=(async()=>{const native=store();if(!native?.saveAllocation)return;const local=await readOfflineAuthority(),epoch=generation,captured=readAuth();captured.assertCurrent();
+   const operationKey=fiscalWorkflowScopeKey(local.scope)+'|allocation-v2|'+local.bindingHash,operationId=await native.refillOperation(operationKey);
+   let response;try{response=await request('offline-allocation/authority',{schemaVersion:2,operationId});}catch(error){if(error instanceof Error&&error.message==='FISCAL_ALLOCATION_OPERATION_RETIRED')await native.savePermits(operationKey,operationId,[]);throw error;}const {data}=response;
+   if(data?.schemaVersion!==2||data.capability!=='OFFLINE_FISCAL_ALLOCATION_V2')fail('OFFLINE_FISCAL_ALLOCATION_INVALID');
+   captured.assertCurrent();if(epoch!==generation||JSON.stringify(await readOfflineAuthority())!==JSON.stringify(local))fail('OFFLINE_FISCAL_BINDING_CHANGED');
+   await native.saveAllocation(data.authorization as OfflineFiscalAllocation,local,data.serverTime);await native.savePermits(operationKey,operationId,[]);allocationPreparationError=null;
+   if(typeof window!=='undefined')window.dispatchEvent(new CustomEvent('offlineFiscalReserveUpdated'));
+  })().catch(async error=>{if(error instanceof Error&&/^(FISCAL_ALLOCATION_(AUTHORITY_CHANGED|MASTER_REQUIRED|RANGE_REQUIRED)|FISCAL_WORKFLOW_(SCOPE_CHANGED|DEVICE_CHANGED|ERP_ACTIVE_REQUIRED|ASSIGNMENT_REQUIRED|ISSUER_SCOPE_REQUIRED))$/.test(error.message))await store()?.revokeAllocations?.('*');allocationPreparationError=error instanceof Error&&/^[A-Z0-9_]+$/.test(error.message)?error.message:'OFFLINE_FISCAL_PREPARATION_FAILED';throw error;}).finally(()=>{allocationPrefetch=null;});return allocationPrefetch;
+ },
+ async allocationDraft(checkout:FiscalWorkflowCheckoutV2){const native=store();if(!native?.allocationDraft)fail('OFFLINE_FISCAL_NATIVE_REQUIRED');return native!.allocationDraft!(checkout);},
+ async offlineStatus():Promise<{remaining:number;validUntil:string|null;remainingByType?:Record<string,number>}|null>{try{const native=store(),local=await readOfflineAuthority(),allocation=await native?.allocationAvailability?.(local);if(allocation)return {remaining:Object.values(allocation.remaining).reduce((sum,n)=>sum+n,0),validUntil:null,remainingByType:allocation.remaining};if(!native?.offlineLease||!native.offlineLeasePermitCount)return null;const lease=await native.offlineLease(await readOfflineAuthority());return lease?{remaining:await native.offlineLeasePermitCount(lease.leaseId,true),validUntil:lease.validUntil}:null;}catch{return null;}},
  async localCheckout(accountId?:string,tableId?:string):Promise<FiscalWorkflowCheckoutV2|null>{const authority=await readOfflineAuthority(),key=fiscalWorkflowScopeKey(authority.scope),native=store();return accountId&&tableId&&await native?.checkoutForTable?.(key,accountId,tableId)||await native?.currentCheckout(key)||null;},
- async offlineReady():Promise<boolean>{try{const native=store();if(!native?.offlineLease)return false;const authority=await readOfflineAuthority();if(await native.offlineLease(authority))return true;const current=await native.currentCheckout(fiscalWorkflowScopeKey(authority.scope));return Boolean(current?.phase==='EFFECT_POSSIBLE'&&current.permit?.leaseId&&current.offlineBindingHash===authority.bindingHash&&Number.isFinite(Date.parse(current.offlineEffectAt||''))&&Date.parse(current.offlineEffectAt!)<Date.parse(current.permit.expiresAt));}catch(error){if(error instanceof Error&&error.message==='OFFLINE_FISCAL_BINDING_CHANGED')await store()?.revokeOfflineLeases?.('*');return false;}},
+ async offlineReady():Promise<boolean>{const readiness=await this.offlineReadiness();if(readiness.reason==='READY_ALLOCATION')return true;try{const native=store();if(!native?.offlineLease)return false;const authority=await readOfflineAuthority();if(await native.offlineLease(authority))return true;const current=await native.currentCheckout(fiscalWorkflowScopeKey(authority.scope));return Boolean(current?.phase==='EFFECT_POSSIBLE'&&current.permit?.leaseId&&current.offlineBindingHash===authority.bindingHash&&Number.isFinite(Date.parse(current.offlineEffectAt||''))&&Date.parse(current.offlineEffectAt!)<Date.parse(current.permit.expiresAt));}catch(error){if(error instanceof Error&&error.message==='OFFLINE_FISCAL_BINDING_CHANGED')await store()?.revokeOfflineLeases?.('*');return false;}},
  prefetchOfflineLease():Promise<void>{
   if(offlinePrefetch)return offlinePrefetch;
   offlinePrefetch=(async()=>{
@@ -85,13 +114,18 @@ export function createFiscalWorkflowV2Client({readAuth=captureFiscalStatusBoundC
     if(page===0&&typeof window!=='undefined')window.dispatchEvent(new CustomEvent('offlineFiscalReserveUpdated'));
     leaseId=lease.leaseId;page=data.nextPage;
    }while(page!==null);
-   await native.savePermits(operationKey,operationId,[]);
+   await native.savePermits(operationKey,operationId,[]);leasePreparationError=null;
    if(typeof window!=='undefined')window.dispatchEvent(new CustomEvent('offlineFiscalReserveUpdated'));
-  })().catch(async error=>{if(error instanceof Error&&/^(FISCAL_OFFLINE_(LEASE_REVOKED|BINDING_CHANGED|AUTHORITY_CHANGED|MASTER_REQUIRED)|OFFLINE_FISCAL_LEASE_REVOKED|FISCAL_WORKFLOW_(SCOPE_CHANGED|DEVICE_CHANGED|ERP_ACTIVE_REQUIRED|ASSIGNMENT_REQUIRED|ISSUER_SCOPE_REQUIRED))$/.test(error.message))await store()?.revokeOfflineLeases?.('*');throw error;}).finally(()=>{offlinePrefetch=null;});return offlinePrefetch;
+  })().catch(async error=>{leasePreparationError=error instanceof Error&&/^[A-Z0-9_]+$/.test(error.message)?error.message:'OFFLINE_FISCAL_PREPARATION_FAILED';if(error instanceof Error&&/^(FISCAL_OFFLINE_(LEASE_REVOKED|BINDING_CHANGED|AUTHORITY_CHANGED|MASTER_REQUIRED)|OFFLINE_FISCAL_LEASE_REVOKED|FISCAL_WORKFLOW_(SCOPE_CHANGED|DEVICE_CHANGED|ERP_ACTIVE_REQUIRED|ASSIGNMENT_REQUIRED|ISSUER_SCOPE_REQUIRED))$/.test(error.message))await store()?.revokeOfflineLeases?.('*');throw error;}).finally(()=>{offlinePrefetch=null;});return offlinePrefetch;
  },
  async reserveOfflineCheckout(cartIdentity:string,operationId:string,fiscalSaleContext?:TableFiscalSaleContext):Promise<FiscalWorkflowCheckoutV2>{
   const native=store();if(!native?.offlineLease)fail('OFFLINE_FISCAL_NATIVE_REQUIRED');
   const authority=await readOfflineAuthority(),scopeKey=fiscalWorkflowScopeKey(authority.scope);let current=await native.currentCheckout(scopeKey);
+  // An existing paid attempt keeps its original kind, even when a new authority is downloaded.
+  if(current?.allocation||!current&&await native.allocationAvailability?.(authority)){
+   if(!native.reserveAllocationCheckout)fail('OFFLINE_FISCAL_NATIVE_REQUIRED');
+   return native.reserveAllocationCheckout!(authority,cartIdentity,operationId,fiscalSaleContext);
+  }
   let requestedOperation=operationId;
   if(!current&&await native.abandonedOfflineOperation?.(scopeKey,operationId))requestedOperation=createUuid();
   if(current?.phase==='PREPARED'&&current.permit?.leaseId&&(current.cartIdentity!==cartIdentity||JSON.stringify(current.fiscalSaleContext)!==JSON.stringify(fiscalSaleContext))){
