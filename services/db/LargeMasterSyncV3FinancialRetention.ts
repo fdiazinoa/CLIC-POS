@@ -42,7 +42,10 @@ export const V3_FINANCIAL_RETAINED_UPSERT_SQL = `CASE WHEN documents.collection_
   ELSE excluded.data END`;
 
 export const financialIdentity = (transaction: Transaction): string => {
-  const canonical = (value: any): any => Array.isArray(value) ? value.map(canonical)
+  const canonical = (value: any): any => value instanceof Date ? (() => {
+    if (!Number.isFinite(Date.prototype.getTime.call(value))) throw new Error('SYNC_V3_FINANCIAL_DATE_INVALID');
+    return Date.prototype.toISOString.call(value);
+  })() : Array.isArray(value) ? value.map(canonical)
     : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort()
       .filter(key => ![...V3_FINANCIAL_MUTABLE_FIELDS, ...V3_FINANCIAL_CAS_PROTECTED_FIELDS, 'relatedTransactions', 'syncStatus', 'syncError', 'cloudSyncStatus', 'cloudSyncError', 'cloudSyncedAt',
         'updatedAt', 'status', 'v3InventoryBaseline', 'v3Binding', 'v3WarehouseId', 'v3CommitFingerprint', 'fiscalStatus',
