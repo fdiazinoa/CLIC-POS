@@ -15,7 +15,7 @@ export interface FiscalWorkflowStore {
  reserveAllocationCheckout?(authority:import('./OfflineFiscalLease').OfflineFiscalLocalAuthority,cartIdentity:string,operationId:string,context?:import('./OfflineFiscalLease').TableFiscalSaleContext):Promise<FiscalWorkflowCheckoutV2>;
  allocationAvailability?(authority:import('./OfflineFiscalLease').OfflineFiscalLocalAuthority,type?:string):Promise<{authorizationId:string;remaining:Record<string,number>;total?:Record<string,number>}|null>;
  allocationCommitPreconditions?(checkout:FiscalWorkflowCheckoutV2):Promise<Array<{collection:string;id:string;expected:string|null}>>;
- allocationDraft?(checkout:FiscalWorkflowCheckoutV2):Promise<{ncf:string;fiscalIssuance:import('../../types').FiscalIssuanceSnapshot}>;
+ allocationDraft?(checkout:FiscalWorkflowCheckoutV2):Promise<{ncf:string;fiscalIssuance:import('../../types').FiscalIssuanceSnapshot;fiscalEnvironment:0|1|2}>;
 
  checkoutForTable?(scopeKey:string,accountId:string,tableId:string):Promise<FiscalWorkflowCheckoutV2|null>;
  abandonedOfflineOperation?(scopeKey:string,operationId:string):Promise<FiscalWorkflowCheckoutV2|null>;

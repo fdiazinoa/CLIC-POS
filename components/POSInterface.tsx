@@ -6166,7 +6166,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   ? calculateSalesCommission(documentTotal, currentUser)
                   : {};
 
-               const newDirectFiscalEnvironment = fiscalCheckoutRef.current?.permit?.leaseId ? fiscalCheckoutRef.current.permit.environment : v3Operational && !hasReturns && !activeV3Reservation && !activeRecoveredReservation
+               const newDirectFiscalEnvironment = fiscalCheckoutRef.current?.allocation ? fiscalCheckoutRef.current.allocation.environment : fiscalCheckoutRef.current?.permit?.leaseId ? fiscalCheckoutRef.current.permit.environment : v3Operational && !hasReturns && !activeV3Reservation && !activeRecoveredReservation
                   && !activeDirectV3TicketId && ((!activeTable&&!activeOrderId)||offlineTableInvoice) && !uberRecoveredOrder
                   && ['E31', 'E32', 'E44', 'E45'].includes(finalNcfType || '')
                   ? explicitTerminalFiscalEnvironment(activeTerminal, terminalId, getDefaultFiscalProvider(config, activeTerminalConfig), fiscalCompliance.mode)

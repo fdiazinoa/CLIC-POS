@@ -19,7 +19,7 @@ export interface OfflineFiscalAllocationBirth {
 }
 export interface OfflineFiscalAllocationSelection {
  authorizationId:string;authorityHash:string;allocationId:string;fiscalRangeId:string;ncf:string;ncfType:string;
- sequence:number;bufferId:string;
+ sequence:number;bufferId:string;environment?:0|1|2;
 }
 export const allocationFail=(code='OFFLINE_FISCAL_ALLOCATION_INVALID'):never=>{throw Error(code);};
 const uuid=(v:unknown):v is string=>typeof v==='string'&&/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(v);

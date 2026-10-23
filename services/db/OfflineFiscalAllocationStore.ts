@@ -79,6 +79,7 @@ export async function readAllocation(sql:SQL,local:OfflineFiscalLocalAuthority,i
  }return null;
 }
 export async function readAllocationSelection(sql:SQL,authority:OfflineFiscalAllocation,type:string,time:number,selection?:OfflineFiscalAllocationSelection,allocationId?:string){
+ if(selection&&selection.environment!==undefined&&selection.environment!==authority.environment)allocationFail('OFFLINE_FISCAL_AUTHORITY_CHANGED');
  const members=authority.allocations.filter(a=>a.ncfType===type&&(!selection||a.allocationId===selection.allocationId)&&(!allocationId||a.allocationId===allocationId));
  if(!members.length)allocationFail('OFFLINE_FISCAL_ALLOCATION_REQUIRED');
  let expired=false;
@@ -99,7 +100,7 @@ export async function readAllocationSelection(sql:SQL,authority:OfflineFiscalAll
   if(selection&&(selection.bufferId!==buffer.id||selection.sequence!==buffer.currentNumber||selection.ncf!==ncf))allocationFail('OFFLINE_FISCAL_NUMBER_OWNER_CONFLICT');
   const nextBuffer={...validateFiscalBufferReservation({business:config,terminalId:authority.scope.terminalId,type:type as any,buffer:{...buffer,expiryDate:''},allocation:reservedAllocation,range:{...range,expiryDate:''},ncf}),expiryDate:buffer.expiryDate};
   const issuance=snapshotFiscalIssuance(config,range,allocation,buffer,ncf);
-  return {config,buffer,allocation,range,nextBuffer,issuance,createBuffer,reserveAllocation,reservedAllocation,remaining:buffer.endNumber-buffer.currentNumber+1+Math.max(0,member.end-Math.max(reservedAllocation.nextNumber,buffer.endNumber+1)+1),selection:{authorizationId:authority.authorizationId,authorityHash:authority.authorityHash,allocationId:member.allocationId,fiscalRangeId:member.fiscalRangeId,ncf,ncfType:type,sequence:buffer.currentNumber,bufferId:buffer.id} as OfflineFiscalAllocationSelection};
+  return {config,buffer,allocation,range,nextBuffer,issuance,createBuffer,reserveAllocation,reservedAllocation,remaining:buffer.endNumber-buffer.currentNumber+1+Math.max(0,member.end-Math.max(reservedAllocation.nextNumber,buffer.endNumber+1)+1),selection:{authorizationId:authority.authorizationId,authorityHash:authority.authorityHash,environment:authority.environment,allocationId:member.allocationId,fiscalRangeId:member.fiscalRangeId,ncf,ncfType:type,sequence:buffer.currentNumber,bufferId:buffer.id} as OfflineFiscalAllocationSelection};
  }
  allocationFail(expired?'OFFLINE_FISCAL_RANGE_EXPIRED':'OFFLINE_FISCAL_RANGE_EXHAUSTED');
 }
@@ -132,7 +133,7 @@ export async function assertAllocationCheckout(sql:SQL,checkout:FiscalWorkflowCh
  if(!checkout.allocation)allocationFail();const config=await document<BusinessConfig>(sql,'config','current'),local=await offlineFiscalAuthorityFromConfig(config),proof=await readAllocation(sql,local,checkout.allocation.authorizationId,recovery);
  if(!proof||proof.authority.authorityHash!==checkout.allocation.authorityHash||checkout.offlineBindingHash!==local.bindingHash)allocationFail('OFFLINE_FISCAL_AUTHORITY_CHANGED');
  const claim=await row(sql,'SELECT * FROM pos_fiscal_pending_numbers_v2 WHERE checkout_id=?',[checkout.checkoutId]);
- if(!claim||claim.transaction_id!==checkout.transactionId||claim.authorization_id!==proof.authority.authorizationId||claim.ncf!==checkout.allocation.ncf||claim.sequence!==checkout.allocation.sequence||claim.allocation_id!==checkout.allocation.allocationId||!['PREPARED','EFFECT_POSSIBLE'].includes(claim.state))allocationFail('OFFLINE_FISCAL_NUMBER_OWNER_CONFLICT');
+ if(!claim||claim.transaction_id!==checkout.transactionId||claim.authorization_id!==proof.authority.authorizationId||claim.environment!==proof.authority.environment||claim.ncf!==checkout.allocation.ncf||claim.sequence!==checkout.allocation.sequence||claim.allocation_id!==checkout.allocation.allocationId||!['PREPARED','EFFECT_POSSIBLE'].includes(claim.state))allocationFail('OFFLINE_FISCAL_NUMBER_OWNER_CONFLICT');
  const at=recovery?Date.parse(checkout.offlineEffectAt||''):proof.now;
  if(!Number.isFinite(at)||at<Date.parse(proof.authority.issuedAt))allocationFail('OFFLINE_FISCAL_CLOCK_INVALID');
  const planned=await readAllocationSelection(sql,proof.authority,checkout.allocation.ncfType,at,checkout.allocation);
