@@ -9,7 +9,7 @@ for (const persistIdentity of [false, undefined]) {
     test(`activation resolver persistence mode ${String(persistIdentity)} preserves expected identity writes`, async () => {
         const writes: string[] = [];
         const tenant = { id: '11111111-1111-4111-8111-111111111111', slug: 'synthetic' };
-        const source = readFileSync(new URL('../utils/licenseGuard.ts', import.meta.url), 'utf8').replaceAll('import.meta.env', '({})');
+        const source = readFileSync(new URL('../utils/licenseGuard.ts', import.meta.url), 'utf8').replaceAll('import.meta.env', '({VITE_SUPABASE_URL: "https://synthetic.invalid", VITE_SUPABASE_ANON_KEY: "synthetic-public"})');
         const js = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
         const exports: Record<string, any> = {};
         const context = vm.createContext({
@@ -19,6 +19,7 @@ for (const persistIdentity of [false, undefined]) {
             require: (name: string) => {
                 if (name === './supabase') return { ensureSupabaseSessionRestored: async () => {}, supabase: { auth: { getSession: async () => ({ data: { session: { user: { email: 'synthetic@example.invalid' } } } }) } } };
                 if (name === './cloudDefaults') return { DEFAULT_CLOUD_SUPABASE_ANON_KEY: 'synthetic-public', DEFAULT_CLOUD_SUPABASE_URL: 'https://synthetic.invalid', normalizeCloudUrl: (value: string) => value };
+                if (name === './erpBaseUrl') return { DEFAULT_PUBLIC_ERP_BASE_URL: 'https://synthetic.invalid' };
                 if (name === './erpSyncLifecycle') return { clearStoredErpSyncBinding: () => {} };
                 throw Error(`Unexpected dependency ${name}`);
             },

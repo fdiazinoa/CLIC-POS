@@ -65,3 +65,15 @@ test('activation paths share the gate before identity writes; no premature succe
     assert.match(activation, /VITE_LICENSE_ACCEPTANCE_ENABLED === 'true'/);
     assert.doesNotMatch(activation, /setTimeout|setStep\('SUCCESS'\)/);
 });
+
+test('local mode selection retains its existing identity-free callback and creates no false acceptance', () => {
+    const activation = readFileSync(new URL('../components/ActivationScreen.tsx', import.meta.url), 'utf8');
+    const body = activation.split('const continueToTerminalModeSelection = () => {')[1]?.split('\n    };')[0];
+    assert.ok(body, 'Existing mode selector remains present');
+    let selected: Record<string, unknown> | undefined;
+    const run = new Function('setError', 'onActivationComplete', body);
+    run(() => {}, (value: Record<string, unknown>) => { selected = value; });
+    assert.equal(selected?.activationMode, 'LOCAL_OR_ERP');
+    assert.equal(selected?.tenantId, '');
+    assert.doesNotMatch(body, /localStorage|recordLicenseAcceptance|readLicenseAcceptance/);
+});
