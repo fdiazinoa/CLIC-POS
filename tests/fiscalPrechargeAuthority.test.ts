@@ -77,7 +77,7 @@ test('fresh issuer loss blocks typed finalization before payment entry, provider
  let effects=0,error='';
  const context=evaluate(source.slice(start,end)+'\nglobalThis.finalize=handleFinalize;',{
   recordCheckoutDiagnostic:()=>{},items:[],total:25,payments:[],isFinalizing:false,isProcessingGateway:false,
-  canFinalize:true,isCreditActionBlocked:false,beginPosInteraction:()=>({stages:{}}),expectInteractionRender:()=>{},
+  canFinalize:true,canFinalizeWithTypedAmount:false,isCreditActionBlocked:false,beginPosInteraction:()=>({stages:{}}),expectInteractionRender:()=>{},
   setFinalizeError:(e:string)=>{error=e;},setSuccessNotice:()=>{},setGatewayProgress:()=>{},setIsFinalizing:()=>{},markInteractionStateUpdate:()=>{},
   beforePaymentEffects:async()=>{throw Error('FISCAL_ISSUER_RNC_REQUIRED');},
   markInteractionStage:()=>{},completePosInteraction:()=>{},cancelPosInteraction:()=>{},failPosInteraction:()=>{},
@@ -119,13 +119,13 @@ test('valid offline native E repeated click has one receipt and one increment; l
 
 test('checkout reads persisted issuer each time, including refunds, while explicit NONE/order-taker stays offline',async()=>{
  const source=readFileSync(new URL('../components/POSInterface.tsx',import.meta.url),'utf8');
- const body=source.slice(source.indexOf('   const assertCheckoutFiscalAuthority ='),source.indexOf('   const fiscalCheckoutRef='));
+ const body=source.slice(source.indexOf('   const assertCheckoutFiscalAuthority ='),source.indexOf('   const offlineTableFiscalContextRef='));
  const get=dbAdapter.getCollection;let lotChecks=0;let rnc='130090752';
  try{
   (dbAdapter as any).getCollection=async()=>[business(rnc)];
   const context=evaluate(body+'\nglobalThis.check=assertCheckoutFiscalAuthority;',{
    db:{assertFiscalIssuerAuthority:db.assertFiscalIssuerAuthority,canRequestMoreNCF:async()=>{lotChecks++;return true;}},
-   isOrderTakerMode:false,isFiscalModeDisabled:false,activeTerminalConfig:{fiscal:{mode:'ECF'}},terminalId:'terminal',
+   v3Operational:null,isOrderTakerMode:false,isFiscalModeDisabled:false,activeTerminalConfig:{fiscal:{mode:'ECF'}},terminalId:'terminal',
    processedCart:[{quantity:1}],requiredSaleFiscalType:'E32',resolveCreditNoteFiscalCode:()=> 'E34',
    fiscalCompliance:{mode:'ECF'},isTerminalFiscalReceiptRequired:(c:any)=>c.fiscal.mode!=='NONE',
   });
@@ -142,19 +142,20 @@ test('real Kiosk callback denies mandatory fiscal before provider, and nonfiscal
  const ast=ts.createSourceFile('App.tsx',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
  let arrow:ts.ArrowFunction|undefined;
  const visit=(node:ts.Node)=>{
-  if(ts.isArrowFunction(node)&&node.body.getText(ast).startsWith('{\n              console.log(`Payment completed with'))arrow=node;
+  if(ts.isVariableDeclaration(node)&&node.name.getText(ast)==='completeKioskPayment'&&node.initializer&&ts.isArrowFunction(node.initializer))arrow=node.initializer;
   ts.forEachChild(node,visit);
  };visit(ast);assert.ok(arrow);
  const get=dbAdapter.getCollection;let calls=0;const terminal:any={id:'kiosk',config:{fiscal:{mode:'ECF'}}};
  try{
   (dbAdapter as any).getCollection=async()=>[{terminals:[terminal]}];
   const context=evaluate('globalThis.pay='+arrow!.getText(ast)+';',{
-   console:{log:()=>{},error:()=>{}},db,kioskTerminal:terminal,currentUser:{id:'user',name:'User'},users:[],
+   console:{log:()=>{},error:()=>{}},kioskV3Enabled:false,db,kioskTerminal:terminal,currentUser:{id:'user',name:'User'},users:[],
    kioskPaymentRestaurantMode:false,selectedCustomer:null,kioskTotals:{subtotal:10,tax:0,total:10},
    config:{currencies:[{isBase:true,code:'DOP'}],paymentMethods:[{id:'card',type:'CARD',integrationMode:'INTEGRATED',integrationId:'azul'}],integrations:[{id:'azul',provider:'AZUL'}]},
    internalSequences:[],mergeDocumentSeriesCollection:(a:any)=>a,resolveDocumentAssignmentId:()=> 'series',
    createKioskGatewayOrderNumber:()=> 'order',azulMcmService:{sale:async()=>{calls++;throw Error('provider-boundary');}},
   });
+  context.kioskPaymentConfig=context.config;
   await assert.rejects(()=>context.pay({id:'card',type:'CARD',label:'Card'}),/FISCAL_TERMINAL_AUTHORITY_REQUIRED/);assert.equal(calls,0);
   terminal.config.fiscal.mode='NONE';await assert.rejects(()=>context.pay({id:'card',type:'CARD',label:'Card'}),/provider-boundary/);assert.equal(calls,1);
  }finally{dbAdapter.getCollection=get;}
