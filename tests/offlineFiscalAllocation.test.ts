@@ -85,15 +85,15 @@ test('full retained mesa CASH+10% native transaction settles once, counters and 
  const c=await f.client().reserveOfflineCheckout(JSON.stringify({...JSON.parse(identity('account')),fiscalSaleContext:context}),'op',context);await f.client().recordPayment(c,'payment-'+c.checkoutId);const commit=await input(f,c);await f.adapter.commitFinancialTransaction(commit as any);
  const source=JSON.parse(String(f.sql.prepare("SELECT data FROM documents WHERE collection_name='transactionHistory'").get()!.data));assert.deepEqual([source.netAmount,source.taxAmount,source.serviceChargeAmount,source.total],[555,99.9,55.5,710.4]);assert.equal(f.sql.prepare("SELECT count(*) n FROM documents WHERE collection_name='v3TicketSettlements'").get()!.n,1);await assert.rejects(f.adapter.commitFinancialTransaction(commit as any),/DUPLICATE|CONCURRENT_FINANCIAL_UPDATE/);assert.equal(f.count('sync_outbox_v2'),1);
  }finally{f.sql.close();}});
-test('REPLACE/alias/buffer and authority deletion cannot erase pending owner; receipt lookup uses activeNCF index',async()=>{const f=await fixture();try{
+test('REPLACE/alias/buffer and authority withdrawal retain immutable pending owner; receipt lookup uses activeNCF index',async()=>{const f=await fixture();try{
  await f.client().reserveOfflineCheckout(identity('a'),'op');
  const replace=f.sql.prepare('INSERT OR REPLACE INTO documents(collection_name,doc_id,data)VALUES(?,?,?)');
  assert.throws(()=>replace.run('localFiscalBuffer',uuid(4),JSON.stringify({id:uuid(4),allocationId:'foreign',currentNumber:2})),/NUMBER_RESERVED/);
  assert.throws(()=>replace.run('fiscalAllocations',f.allocation.id,JSON.stringify({...f.allocation,nextNumber:999})),/NUMBER_RESERVED/);
  replace.run('config','current',JSON.stringify({...f.config,companyInfo:{rnc:'999999999'}}));assert.equal(f.sql.prepare('SELECT revoked FROM pos_offline_fiscal_allocations_v2').get()!.revoked,1);
- assert.throws(()=>f.sql.prepare("DELETE FROM documents WHERE collection_name='fiscalAllocations'").run(),/NUMBER_RESERVED/);
- assert.throws(()=>f.sql.prepare("DELETE FROM documents WHERE collection_name='fiscalRanges'").run(),/NUMBER_RESERVED/);
- assert.throws(()=>f.sql.prepare("DELETE FROM documents WHERE collection_name='config'").run(),/NUMBER_RESERVED/);
+ f.sql.prepare("DELETE FROM documents WHERE collection_name='fiscalAllocations'").run();
+ f.sql.prepare("DELETE FROM documents WHERE collection_name='fiscalRanges'").run();
+ f.sql.prepare("DELETE FROM documents WHERE collection_name='config'").run();assert.equal(f.count('pos_fiscal_authority_withdrawals_v2'),3);assert.equal(f.count('pos_fiscal_pending_numbers_v2'),1);
  const plan=f.sql.prepare("EXPLAIN QUERY PLAN SELECT 1 FROM pos_fiscal_pending_numbers_v2 p JOIN pos_offline_fiscal_allocations_v2 a ON a.authorization_id=p.authorization_id WHERE p.state IN('PREPARED','EFFECT_POSSIBLE') AND p.ncf=? AND json_extract(a.authority_json,'$.issuerRnc')=?").all('E320000000001','101010101');assert.match(JSON.stringify(plan),/pos_fiscal_pending_active_ncf_v2/);
  }finally{f.sql.close();}});
 
@@ -104,4 +104,57 @@ test('compact preparation saves one immutable authority, completes issuance oper
 test('old ERP or V2 OFF keeps the real V1 fallback and reports disabled preparation instead of inventing an expiry',async()=>{const f=await fixture({download:false});try{
  const paths:string[]=[];const client=createFiscalWorkflowV2Client({store:()=>f.store,readOfflineAuthority:async()=>f.local,readAuth:()=>({base:'https://synthetic.invalid/api/sync',headers:{},descriptor:scope,assertCurrent:()=>{}}),fetchImpl:async(url:any)=>{paths.push(String(url));return {ok:false,json:async()=>({code:String(url).includes('offline-allocation')?'FISCAL_ALLOCATION_DISABLED':'FISCAL_OFFLINE_DISABLED'})};}} as any);
  await assert.rejects(client.prepareOfflineAuthority(),/FISCAL_OFFLINE_DISABLED/);assert.equal(paths.length,2);assert.equal((await client.offlineReadiness()).reason,'PREPARATION_DISABLED');assert.equal((await client.offlineReadiness()).code,'FISCAL_OFFLINE_DISABLED');assert.equal(f.count('pos_fiscal_permits_v2'),0);assert.equal(f.count('pos_offline_fiscal_allocations_v2'),0);
+ }finally{f.sql.close();}});
+
+test('additive authority expansion preserves original PREPARED and possible-payment identities after restart',async()=>{
+ for(const effects of [false,true]){const f=await fixture();try{
+ const c=await f.client().reserveOfflineCheckout(identity('expansion'),'op');if(effects)await f.client().recordPayment(c,'payment-'+c.checkoutId);
+ const original=JSON.stringify(c),member={...f.grant.allocations[0],allocationId:uuid(30),fiscalRangeId:uuid(31),start:10,end:20,rangeStart:10,rangeEnd:20};
+ const {authorityHash:_oldHash,...originalGrant}=f.grant;const unsigned={...originalGrant,authorizationId:uuid(32),allocations:[...f.grant.allocations,member]};const expanded={...unsigned,authorityHash:await allocationHash(unsigned)};
+ await f.store.saveAllocation!(expanded,f.local,new Date().toISOString());assert.equal(f.sql.prepare('SELECT revoked FROM pos_offline_fiscal_allocations_v2 WHERE authorization_id=?').get(f.grant.authorizationId)!.revoked,0);
+ const restarted=new NativeFiscalWorkflowV2Store(()=>f.bridge,work=>work());assert.equal(JSON.stringify(await restarted.readCheckout(c.checkoutId)),original);
+ await restarted.markPaymentPossible(c.checkoutId,'payment-'+c.checkoutId);Object.assign(c,await restarted.readCheckout(c.checkoutId));await f.adapter.commitFinancialTransaction(await input(f,c) as any);assert.equal(f.count('sync_outbox_v2'),1);
+ }finally{f.sql.close();}}
+});
+
+test('real adapter config replacement, setup CAS and multi-collection refresh preserve fiscal owners',async()=>{
+ for(const effects of [false,true]){const f=await fixture();try{
+ const c=await f.client().reserveOfflineCheckout(identity('refresh'),'op');if(effects)await f.client().recordPayment(c,'payment-'+c.checkoutId);
+ await f.adapter.saveCollection('config',{...f.config,themeColor:'blue'} as any);
+ const current:any=await f.adapter.getCollection('config');let casChecks=0;await f.adapter.compareAndSwapV3SetupConfig(current,{...current,taxRate:0,taxes:[],tariffs:[]},()=>{casChecks++;});assert.equal(casChecks,1);
+ const projected:any=await f.adapter.getCollection('config');await f.adapter.saveDocumentsAtomically([{collectionName:'config',document:{...projected,themeColor:'green'}},{collectionName:'fiscalAllocations',document:f.allocation},{collectionName:'fiscalRanges',document:f.range},{collectionName:'products',document:{id:'catalog-refresh',name:'updated'}}],false,['config','fiscalAllocations','fiscalRanges','products']);
+ assert.equal(f.sql.prepare('SELECT revoked FROM pos_offline_fiscal_allocations_v2').get()!.revoked,0);assert.equal(f.count('pos_fiscal_authority_withdrawals_v2'),0);
+ await f.store.markPaymentPossible(c.checkoutId,'payment-'+c.checkoutId);Object.assign(c,await f.store.readCheckout(c.checkoutId));await f.adapter.commitFinancialTransaction(await input(f,c) as any);assert.equal(f.count('sync_outbox_v2'),1);
+ }finally{f.sql.close();}}
+});
+
+test('authoritative omission and ownership replacement fence new effects and retain possible-payment proof',async()=>{
+ for(const collection of ['config','fiscalAllocations','fiscalRanges'])for(const effects of [false,true])for(const snapshot of [false,true]){const f=await fixture();try{
+ const c=await f.client().reserveOfflineCheckout(identity('withdrawal'),'op');if(effects)await f.client().recordPayment(c,'original-payment');
+ if(snapshot)await f.adapter.saveDocumentsAtomically([{collectionName:'products',document:{id:'refresh'}}],false,[collection,'products']);else await f.adapter.saveCollection(collection,[]);
+ assert.equal(f.sql.prepare('SELECT revoked FROM pos_offline_fiscal_allocations_v2').get()!.revoked,1);assert.equal(f.sql.prepare('SELECT count(*) n FROM documents WHERE collection_name=?').get(collection)!.n,0);assert.equal(f.count('pos_fiscal_authority_withdrawals_v2'),1);
+ const restarted=new NativeFiscalWorkflowV2Store(()=>f.bridge,work=>work());const original=await restarted.readCheckout(c.checkoutId);assert.equal(original!.phase,effects?'EFFECT_POSSIBLE':'PREPARED');assert.deepEqual(original!.paymentIds,effects?['original-payment']:[]);await assert.rejects(restarted.markPaymentPossible(c.checkoutId,'new-effect'));
+ assert.equal(f.count('pos_fiscal_pending_numbers_v2'),1);assert.equal(f.count('sync_outbox_v2'),0);assert.throws(()=>f.sql.prepare('DELETE FROM pos_fiscal_authority_withdrawals_v2').run(),/IMMUTABLE/);
+ // A later projection cannot resurrect the retired authority or move its claimed number.
+ const doc=collection==='config'?f.config:collection==='fiscalAllocations'?f.allocation:f.range;await f.adapter.saveCollection(collection,collection==='config'?doc as any:[doc]);await assert.rejects(restarted.markPaymentPossible(c.checkoutId,'new-effect'),/REVOKED/);
+ if(collection==='fiscalAllocations')await assert.rejects(f.adapter.saveCollection(collection,[{...f.allocation,nextNumber:999}]),/NUMBER_RESERVED/);
+ }finally{f.sql.close();}}
+ for(const collection of ['config','fiscalAllocations','fiscalRanges']){const f=await fixture();try{
+ const c=await f.client().reserveOfflineCheckout(identity('ownership'),'op');const doc=collection==='config'?{...f.config,companyInfo:{rnc:'999999999'}}:collection==='fiscalAllocations'?{...f.allocation,terminalId:'other-terminal',nextNumber:999}:{...f.range,isActive:false};
+ await f.adapter.saveDocumentsAtomically([{collectionName:collection,document:doc}],false,[collection]);assert.equal(f.sql.prepare('SELECT revoked FROM pos_offline_fiscal_allocations_v2').get()!.revoked,1);await assert.rejects(f.store.markPaymentPossible(c.checkoutId,'new-effect'));assert.equal(f.count('pos_fiscal_pending_numbers_v2'),1);
+ }finally{f.sql.close();}}
+});
+
+test('A to A+B expansion then actual A withdrawal and return never revives original grant or reassigns number',async()=>{const f=await fixture();try{
+ const c=await f.client().reserveOfflineCheckout(identity('irreversible'),'op');await f.client().recordPayment(c,'original-payment');
+ const {authorityHash:_hash,...original}=f.grant;const memberB={...f.grant.allocations[0],allocationId:uuid(60),fiscalRangeId:uuid(61),start:10,end:20,rangeStart:10,rangeEnd:20};
+ const expanded={...original,authorizationId:uuid(62),allocations:[...original.allocations,memberB]};await f.store.saveAllocation!({...expanded,authorityHash:await allocationHash(expanded)},f.local,new Date().toISOString());
+ const seriesBefore=String(f.sql.prepare("SELECT data FROM documents WHERE collection_name='internalSequences'").get()!.data),bufferBefore=String(f.sql.prepare("SELECT data FROM documents WHERE collection_name='localFiscalBuffer'").get()!.data);
+ await f.adapter.saveDocumentsAtomically([],false,['fiscalAllocations']);assert.equal(f.sql.prepare('SELECT count(*) n FROM pos_offline_fiscal_allocations_v2 WHERE revoked=1').get()!.n,2);
+ assert.equal(String(f.sql.prepare("SELECT data FROM pos_fiscal_authority_withdrawals_v2 WHERE collection_name='fiscalAllocations'").get()!.data),JSON.stringify(f.allocation));
+ await assert.rejects(f.adapter.saveCollection('fiscalAllocations',[{...f.allocation,nextNumber:5}]),/NUMBER_RESERVED/);
+ await f.adapter.saveCollection('fiscalAllocations',[f.allocation]);const restored={...expanded,authorizationId:uuid(63)};await f.store.saveAllocation!({...restored,authorityHash:await allocationHash(restored)},f.local,new Date().toISOString());
+ await assert.rejects(f.store.saveAllocation!(f.grant,f.local,new Date().toISOString()),/AUTHORITY_CHANGED/);await assert.rejects(f.store.markPaymentPossible(c.checkoutId,'second-payment'),/REVOKED/);await assert.rejects(f.store.allocationCommitPreconditions!(c),/REVOKED/);
+ const saved=await f.store.readCheckout(c.checkoutId);assert.deepEqual(saved!.paymentIds,['original-payment']);assert.equal(saved!.transactionId,c.transactionId);assert.equal(saved!.allocation!.ncf,c.allocation!.ncf);
+ assert.equal(String(f.sql.prepare("SELECT data FROM documents WHERE collection_name='internalSequences'").get()!.data),seriesBefore);assert.equal(String(f.sql.prepare("SELECT data FROM documents WHERE collection_name='localFiscalBuffer'").get()!.data),bufferBefore);assert.equal(f.count('sync_outbox_v2'),0);assert.equal(f.count('pos_fiscal_pending_numbers_v2'),1);
  }finally{f.sql.close();}});

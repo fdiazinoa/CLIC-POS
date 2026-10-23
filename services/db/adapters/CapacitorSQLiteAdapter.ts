@@ -1118,12 +1118,13 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             values:[now,...ids],
         });
         // Preserve issued counters; omitting a series revokes its eligibility without erasing its high-water mark.
-        // Buffers included in a replacement retain their live row so same-epoch stale saves cannot rewind them.
-        const preserveIncomingBuffer=name==='localFiscalBuffer'&&ids.length>0;
+        // Incoming fiscal/config rows are updated in place. Only actual omissions are withdrawals;
+        // deleting a matching row first would revoke unchanged authority and erase live buffer state.
+        const preserveIncomingRows=['localFiscalBuffer','config','fiscalAllocations','fiscalRanges'].includes(name)&&ids.length>0;
         statements.push({statement:`DELETE FROM documents WHERE collection_name=?
             AND collection_name NOT IN ('internalSequences','globalSequenceCounter')
-            ${preserveIncomingBuffer ? `AND doc_id NOT IN (${placeholders})` : ''}`,
-            values:[name,...(preserveIncomingBuffer ? ids : [])]});
+            ${preserveIncomingRows ? `AND doc_id NOT IN (${placeholders})` : ''}`,
+            values:[name,...(preserveIncomingRows ? ids : [])]});
         return statements;
     }
 
