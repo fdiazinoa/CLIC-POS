@@ -2,7 +2,7 @@
 
 La sesión de transporte del ERP y su caché V2 de cinco minutos no autorizan esta reserva. El ERP debe habilitar explícitamente `OFFLINE_FISCAL_LEASE_V1` para empresa/terminal, con la migración y API complementarias. Backend antiguo/default-OFF conserva V2; el POS no convierte permisos V2 vencidos en permisos offline nuevos.
 
-Contrato inicial: hasta siete días, 1024 ventas por reserva como política predeterminada del ERP, páginas de hasta 16 permisos y máximo técnico de 4096. SQLite conserva lease, permisos, reloj observado y vinculación sin guardar otra copia del bearer. Preparar páginas ocurre en segundo plano; el cobro utiliza exclusivamente la reserva ya guardada, sin esperar HTTP. La pantalla de pago muestra la cantidad realmente descargada disponible y su vencimiento. Se necesita descargar una reserva nueva online antes de poder usarla.
+Contrato inicial: hasta siete días, 1024 intentos por reserva como política predeterminada del ERP, páginas de hasta 16 permisos y máximo técnico de 4096. SQLite conserva lease, permisos, reloj observado y vinculación sin guardar otra copia del bearer. Preparar páginas ocurre en segundo plano; el cobro utiliza exclusivamente la reserva ya guardada, sin esperar HTTP. La pantalla de pago muestra la cantidad realmente descargada disponible y su vencimiento. Se necesita descargar una reserva nueva online antes de poder usarla.
 
 ## Alcance de cobro
 

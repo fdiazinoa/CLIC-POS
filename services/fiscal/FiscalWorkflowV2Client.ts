@@ -93,9 +93,10 @@ export function createFiscalWorkflowV2Client({readAuth=captureFiscalStatusBoundC
   const native=store();if(!native?.offlineLease)fail('OFFLINE_FISCAL_NATIVE_REQUIRED');
   const authority=await readOfflineAuthority(),scopeKey=fiscalWorkflowScopeKey(authority.scope);let current=await native.currentCheckout(scopeKey);
   let requestedOperation=operationId;
+  if(!current&&await native.abandonedOfflineOperation?.(scopeKey,operationId))requestedOperation=createUuid();
   if(current?.phase==='PREPARED'&&current.permit?.leaseId&&(current.cartIdentity!==cartIdentity||JSON.stringify(current.fiscalSaleContext)!==JSON.stringify(fiscalSaleContext))){
    if(!native.abandonOfflinePrepared)fail('OFFLINE_FISCAL_ABANDON_NOT_SAFE');
-   await native.abandonOfflinePrepared(current);current=null;requestedOperation=createUuid();
+   try{await native.abandonOfflinePrepared(current);}catch(error){const proof=await native.abandonedOfflineOperation?.(scopeKey,current.operationId);if(!proof||JSON.stringify(proof)!==JSON.stringify(current))throw error;}current=null;requestedOperation=createUuid();
   }
   const paidRecovery=current?.phase==='EFFECT_POSSIBLE'&&current.operationId===requestedOperation&&current.cartIdentity===cartIdentity;
   const lease=await native.offlineLease(authority,paidRecovery,paidRecovery?current!.permit?.leaseId:undefined);if(!lease)fail('OFFLINE_FISCAL_LEASE_REQUIRED');
@@ -201,7 +202,7 @@ export function createFiscalWorkflowV2Client({readAuth=captureFiscalStatusBoundC
   const p=data.permits[0] as FiscalWorkflowPermitV2;if(!contexts(p.scope,scopeOf(auth.descriptor))||p.operationKind!==operationKind||json(p.originalReference)!==json(originalReference)||p.authorityHash!==data.authorityHash)fail();
   auth.assertCurrent();await native.savePermits(operationKey,requestOperationId,[p]);const checkout=await native.reserveCheckout(scopeKey,cartIdentity,{operationKind,originalReference},operationId,{requirePermit:true,authorityHash:p.authorityHash});auth.assertCurrent();return checkout;
  },
- async recordPayment(checkout:FiscalWorkflowCheckoutV2,paymentId:string){await store()?.markPaymentPossible(checkout.checkoutId,paymentId);},
+ async recordPayment(checkout:FiscalWorkflowCheckoutV2,paymentId:string){const native=store();if(!native)fail();let markError:unknown;try{await native.markPaymentPossible(checkout.checkoutId,paymentId);}catch(error){markError=error;}const durable=await native.readCheckout(checkout.checkoutId);if(!durable||durable.phase!=='EFFECT_POSSIBLE'||!durable.paymentIds.includes(paymentId)){if(markError)throw markError;fail('PAYMENT_INTENT_RECONCILIATION_REQUIRED');}Object.assign(checkout,durable);},
  async acknowledge(checkout:FiscalWorkflowCheckoutV2){await store()?.acknowledgeCheckout(checkout.checkoutId);},
  async cached(id:string){return await store()?.readState(id)||null;},
  consult(id:string,signal?:AbortSignal):Promise<FiscalWorkflowStateV2>{if(!this.enabled())return Promise.reject(Error('FISCAL_WORKFLOW_DISABLED'));const current=inFlight.get(id);if(current)return current;const version=generation;const promise=(async()=>{const native=store(),source=await readSource(id);if(!native||!source)fail('FISCAL_WORKFLOW_RETAINED_SOURCE_REQUIRED');const before=await native.readState(id),{data,auth}=await request('status?'+new URLSearchParams({transactionId:id}),undefined,signal);if(version!==generation||signal?.aborted)fail('FISCAL_WORKFLOW_CONTEXT_CHANGED');if(!contexts(data.scope,scopeOf(auth.descriptor))||!await verifyFiscalWorkflowState(source,data))fail();if(before&&before.observationVersion>=data.observationVersion)return before;auth.assertCurrent();await native.saveState(source,data,before?.observationVersion??null);window.dispatchEvent(new CustomEvent('fiscalWorkflowUpdated',{detail:{id,state:data}}));return data as FiscalWorkflowStateV2;})().finally(()=>inFlight.delete(id));inFlight.set(id,promise);return promise;},

@@ -38,7 +38,9 @@ export class NativeFiscalWorkflowV2Store implements FiscalWorkflowStore {
   const checkout=row?JSON.parse(row.checkout_json) as FiscalWorkflowCheckoutV2:null;
   return checkout?.permit?.leaseId&&checkout.fiscalSaleContext?.accountId===accountId&&checkout.fiscalSaleContext.tableId===tableId?checkout:null;
  });}
+ async abandonedOfflineOperation(scopeKey:string,operationId:string):Promise<FiscalWorkflowCheckoutV2|null>{return this.lock(async()=>{const row=(await this.connection().query('SELECT a.original_identity,c.checkout_json FROM pos_offline_fiscal_abandoned_v1 a JOIN pos_fiscal_checkouts_v2 c ON c.checkout_id=a.checkout_id WHERE a.scope_key=? AND a.operation_id=?',[scopeKey,operationId])).values?.[0];if(!row)return null;if(row.original_identity!==row.checkout_json)throw Error('OFFLINE_FISCAL_ABANDON_NOT_SAFE');const expected=JSON.parse(row.original_identity) as FiscalWorkflowCheckoutV2;if(expected.phase!=='PREPARED'||expected.paymentIds.length||!expected.permit?.leaseId||expected.scopeKey!==scopeKey||expected.operationId!==operationId)throw Error('OFFLINE_FISCAL_ABANDON_NOT_SAFE');return expected;});}
  async abandonOfflinePrepared(expected:FiscalWorkflowCheckoutV2):Promise<void>{await this.transaction(async sql=>{
+  const proof=(await sql.query('SELECT original_identity FROM pos_offline_fiscal_abandoned_v1 WHERE checkout_id=?',[expected.checkoutId])).values?.[0];if(proof){if(proof.original_identity!==JSON.stringify(expected))throw Error('OFFLINE_FISCAL_ABANDON_NOT_SAFE');return;}
   const row=(await sql.query('SELECT c.checkout_json FROM pos_fiscal_checkout_current_v2 p JOIN pos_fiscal_checkouts_v2 c ON c.checkout_id=p.checkout_id AND c.scope_key=p.scope_key WHERE p.scope_key=? AND p.checkout_id=?',[expected.scopeKey,expected.checkoutId])).values?.[0];
   if(!row||row.checkout_json!==JSON.stringify(expected)||!expected.permit?.leaseId||expected.phase!=='PREPARED'||!Array.isArray(expected.paymentIds)||expected.paymentIds.length)throw Error('OFFLINE_FISCAL_ABANDON_NOT_SAFE');
   const permit=(await sql.query('SELECT * FROM pos_fiscal_permits_v2 WHERE permit_id=?',[expected.permit.permitId])).values?.[0];
@@ -108,6 +110,9 @@ export async function consumeFiscalWorkflowBirth(sql:Connection,input:{checkoutI
  if(!['PREPARED','EFFECT_POSSIBLE'].includes(checkout.phase)||checkout.transactionId!==source.id||checkout.transactionId!==input.transactionId)fail();
  if(checkout.permit?.leaseId){
   const lease=await assertOfflineCheckoutAuthority(sql,checkout,checkout.phase==='EFFECT_POSSIBLE');
+  const issuance=source.fiscalIssuance;
+  if(source.fiscalEnvironment!==lease.environment||source.fiscalProvider!=='MSELLER'||source.fiscalMode!=='ECF'||source.terminalId!==lease.scope.terminalId
+   ||!issuance||issuance.schemaVersion!==1||issuance.source!=='POS_FISCAL_RESERVATION_V1'||issuance.issuerRnc!==lease.issuerRnc||issuance.tenantId!==lease.scope.tenantId||issuance.companyId!==lease.scope.companyId||issuance.terminalId!==lease.scope.terminalId||issuance.ncf!==source.ncf||issuance.ncfType!==source.ncfType)throw Error('OFFLINE_FISCAL_SOURCE_AUTHORITY_CHANGED');
   if(!Number.isFinite(Date.parse(source.date))||source.date!==checkout.offlineSaleDate||Date.parse(source.date)<Date.parse(lease.issuedAt)||Date.parse(source.date)>=Date.parse(lease.validUntil))throw Error('OFFLINE_FISCAL_LEASE_REQUIRED');
   if(JSON.stringify((source as any).fiscalSaleContext)!==JSON.stringify(checkout.fiscalSaleContext)||(source as any).fiscalOfflineLeaseId!==lease.leaseId)throw Error('OFFLINE_FISCAL_TABLE_SOURCE_REQUIRED');
  }

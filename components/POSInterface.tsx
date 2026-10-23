@@ -6152,7 +6152,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   ? calculateSalesCommission(documentTotal, currentUser)
                   : {};
 
-               const newDirectFiscalEnvironment = v3Operational && !hasReturns && !activeV3Reservation && !activeRecoveredReservation
+               const newDirectFiscalEnvironment = fiscalCheckoutRef.current?.permit?.leaseId ? fiscalCheckoutRef.current.permit.environment : v3Operational && !hasReturns && !activeV3Reservation && !activeRecoveredReservation
                   && !activeDirectV3TicketId && ((!activeTable&&!activeOrderId)||offlineTableInvoice) && !uberRecoveredOrder
                   && ['E31', 'E32', 'E44', 'E45'].includes(finalNcfType || '')
                   ? explicitTerminalFiscalEnvironment(activeTerminal, terminalId, getDefaultFiscalProvider(config, activeTerminalConfig), fiscalCompliance.mode)
@@ -6687,7 +6687,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if(newFiscalCheckout){
         const tagged=processedCart.map(line=>(line as any).fiscalCheckoutOperationId).filter(Boolean);
         const operationId=fiscalCheckoutOperationRef.current|| (tagged.length===processedCart.length&&new Set(tagged).size===1?tagged[0]:createUuid());fiscalCheckoutOperationRef.current=operationId;
-        const checkout=await (offlineFiscalCheckout?fiscalWorkflowV2Client.reserveOfflineCheckout(currentFiscalCheckoutCartIdentity(),operationId,offlineTableFiscalContextRef.current):fiscalWorkflowV2Client.reserveCheckout(currentFiscalCheckoutCartIdentity(),operationId,{requirePermit:requiresFiscalPermit})).catch(error=>{if(offlineFiscalCheckout&&fiscalCheckoutRef.current?.phase!=='EFFECT_POSSIBLE')offlineTablePaymentFenceRef.current=false;if(error instanceof Error&&error.message==='FISCAL_WORKFLOW_PERMIT_REQUIRED')throw Error('No hay autorización fiscal disponible para esta venta. Espera la sincronización y vuelve a cobrar; no se realizó ningún pago.');throw error;});
+        const checkout=await (offlineFiscalCheckout?fiscalWorkflowV2Client.reserveOfflineCheckout(currentFiscalCheckoutCartIdentity(),operationId,offlineTableFiscalContextRef.current):fiscalWorkflowV2Client.reserveCheckout(currentFiscalCheckoutCartIdentity(),operationId,{requirePermit:requiresFiscalPermit})).catch(error=>{if(offlineFiscalCheckout&&fiscalCheckoutRef.current?.phase!=='EFFECT_POSSIBLE')offlineTablePaymentFenceRef.current=false;if(error instanceof Error&&error.message==='FISCAL_WORKFLOW_PERMIT_REQUIRED')throw Error(offlineFiscalCheckout?'No hay permisos fiscales offline disponibles. Se requiere una nueva reserva autorizada; reconectar no garantiza reposición antes del vencimiento. No se realizó ningún pago.':'No hay autorización fiscal disponible para esta venta. Espera la sincronización y vuelve a cobrar; no se realizó ningún pago.');throw error;});
         if(!checkout.permit)throw Error('FISCAL_WORKFLOW_PERMIT_REQUIRED');
         if(['COMMITTED','ACKNOWLEDGED'].includes(checkout.phase)){
           const completed=await db.getDocument('transactions',checkout.transactionId)||await db.getDocument('transactionHistory',checkout.transactionId);

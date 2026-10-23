@@ -41,7 +41,7 @@ async function tableSource(f:Awaited<ReturnType<typeof fixture>>,id='account'){
  return {account,literal,context:{schemaVersion:1 as const,kind:'TABLE_ACCOUNT' as const,accountId:id,tableId:'mesa-6',sourceSha256:await tableFiscalSourceDigest(literal)}};
 }
 function commit(f:any,c:any,table?:Awaited<ReturnType<typeof tableSource>>){
- const tx:any={id:c.transactionId,fiscalWorkflowCheckoutId:c.checkoutId,fiscalOfflineLeaseId:f.lease.leaseId,date:c.offlineSaleDate,terminalId:'00000000-0000-4000-8000-000000000001',ncf:'E32'+c.transactionId.slice(-10),ncfType:'E32',total:710.4,netAmount:555,taxAmount:99.9,serviceChargeAmount:55.5,items:[{id:'item',cartId:'line',quantity:1,price:555}],payments:[{id:'payment',method:'CASH',amount:710.4}],...(table?{fiscalSaleContext:table.context,restaurantOrderId:table.context.accountId,restaurantTableId:table.context.tableId}:{})};
+ const tx:any={id:c.transactionId,fiscalWorkflowCheckoutId:c.checkoutId,fiscalOfflineLeaseId:f.lease.leaseId,date:c.offlineSaleDate,terminalId:'00000000-0000-4000-8000-000000000001',ncf:'E32'+c.transactionId.slice(-10),ncfType:'E32',total:710.4,netAmount:555,taxAmount:99.9,serviceChargeAmount:55.5,items:[{id:'item',cartId:'line',quantity:1,price:555}],payments:[{id:'payment',method:'CASH',amount:710.4}],fiscalEnvironment:f.lease.environment,fiscalProvider:'MSELLER',fiscalMode:'ECF',fiscalIssuance:{schemaVersion:1,source:'POS_FISCAL_RESERVATION_V1',ncf:'E32'+c.transactionId.slice(-10),ncfType:'E32',sequence:1,fiscalRangeId:'synthetic-range',fiscalAllocationId:'synthetic-allocation',prefix:'E32',rangeStart:1,rangeEnd:1024,allocationStart:1,allocationEnd:1024,expiryDate:null,issuerRnc:f.lease.issuerRnc,tenantId:scope.tenantId,companyId:scope.companyId,terminalId:scope.terminalId,capturedAt:c.offlineSaleDate},...(table?{fiscalSaleContext:table.context,restaurantOrderId:table.context.accountId,restaurantTableId:table.context.tableId}:{})};
  const birth={schemaVersion:2,permitId:c.permit.permitId,transactionId:c.transactionId,nonce:c.permit.nonce,checkoutId:c.checkoutId};
  return {documents:[{collectionName:'transactions',document:tx,requireAbsent:true},{collectionName:'transactionHistory',document:tx,requireAbsent:true},...(table?[{collectionName:'v3TicketSettlements',document:{id:table.context.accountId,transactionId:tx.id},requireAbsent:true,v3ExpectedRetainedDocument:{collection:'parkedTickets',id:table.context.accountId,expected:table.literal}}]:[])],outboxEvent:{eventId:'sale-'+tx.id,eventType:'SALE_POSTED',aggregateType:'TRANSACTION',aggregateId:tx.id,schemaVersion:1,createdAt:tx.date,payload:{transaction:tx,fiscalWorkflowBirth:birth}},fiscalWorkflowCommits:[{checkoutId:c.checkoutId,transactionId:tx.id,birth}]};
 }
@@ -121,7 +121,10 @@ test('actual table prepayment callback reserves locally, pins retained account, 
   const cleanup=text.match(/await fiscalWorkflowV2Client\.acknowledge\(fiscalCheckoutRef\.current\);fiscalCheckoutRef\.current=null;fiscalCheckoutOperationRef\.current=null;offlineTableFiscalContextRef\.current=undefined;offlineTablePaymentFenceRef\.current=false;/)?.[0];assert.ok(cleanup);
   const reset=new Function(...Object.keys(ctx),'return (async()=>{'+cleanup+'})()');
   const tableA=table;const payA=await invoke([],['CASH']);await payA.recordPaymentEffect('payment');payA();assert.equal(fenceRef.current,true,'possible cash effect keeps retained source fenced');
-  const checkoutA=checkoutRef.current;await f.adapter.commitFinancialTransaction(commit(f,checkoutA,table) as any);await reset(...Object.values(ctx));assert.equal(checkoutRef.current,null);assert.equal(contextRef.current,undefined);assert.equal(fenceRef.current,false);
+  const checkoutA=checkoutRef.current;assert.equal(checkoutA.phase,'EFFECT_POSSIBLE');
+  table.account.items[0].quantity=2;await assert.rejects(invoke(['payment'],['CASH']),/RECONCILIATION/);assert.equal(fenceRef.current,true);assert.equal(f.sql.prepare("SELECT data FROM documents WHERE collection_name='parkedTickets' AND doc_id=?").get(table.account.id)!.data,table.literal);table.account.items[0].quantity=1;
+  const retry=await invoke(['payment'],['CASH']);assert.equal(retry.futureCheckout.checkoutId,checkoutA.checkoutId);retry();assert.equal(fenceRef.current,true);
+  await f.adapter.commitFinancialTransaction(commit(f,checkoutA,table) as any);await reset(...Object.values(ctx));assert.equal(checkoutRef.current,null);assert.equal(contextRef.current,undefined);assert.equal(fenceRef.current,false);
   table=await tableSource(f,'second-account');ctx.activeTable.currentOrderId=table.account.id;
   const payB=await invoke([],['CASH']);assert.notEqual(checkoutRef.current.checkoutId,checkoutA.checkoutId);await f.adapter.commitFinancialTransaction(commit(f,checkoutRef.current,table) as any);await reset(...Object.values(ctx));payB();
   table=tableA;ctx.activeTable.currentOrderId=table.account.id;
@@ -207,4 +210,28 @@ test('abandon refuses a prepared checkout with durable intent, recovery evidence
   const expected=kind==='cas'?{...c,operationId:'forged'}:c;
   await assert.rejects(f.store.abandonOfflinePrepared!(expected));assert.equal(count(f,'pos_offline_fiscal_abandoned_v1'),0);assert.ok(await f.store.currentCheckout(c.scopeKey));
  }finally{f.sql.close();}}
+});
+test('owned lease consumption rejects missing or foreign fiscal source fields without losing durable cash effect',async()=>{
+ for(const field of ['fiscalEnvironment','wrongEnvironment','fiscalProvider','missingProvider','fiscalMode','missingMode','fiscalIssuance','issuerRnc','tenantId','companyId','terminalId','sourceTerminal']){
+  const f=await fixture(1);try{const table=await tableSource(f),c=await f.client().reserveOfflineCheckout('cart','operation',table.context);await f.client().recordPayment(c,'payment');const input=commit(f,c,table),tx=input.documents[0].document as any;
+   f.sql.prepare("INSERT INTO payment_intents_v2(intent_id,idempotency_key,payment_id,provider,transaction_id,amount,currency_code,status,created_at,updated_at)VALUES('intent','intent','payment','CASH',?,710.4,'DOP','AUTHORIZED','now','now')").run(c.transactionId);(input as any).paymentIntentIds=['intent'];
+   if(field==='fiscalEnvironment')delete tx.fiscalEnvironment;else if(field==='wrongEnvironment')tx.fiscalEnvironment=1;else if(field==='missingProvider')delete tx.fiscalProvider;else if(field==='missingMode')delete tx.fiscalMode;
+   else if(field==='fiscalProvider')tx.fiscalProvider='FOREIGN';else if(field==='fiscalMode')tx.fiscalMode='LEGACY';else if(field==='fiscalIssuance')delete tx.fiscalIssuance;
+   else if(field==='sourceTerminal')tx.terminalId='foreign';else tx.fiscalIssuance[field]='foreign';
+   await assert.rejects(f.adapter.commitFinancialTransaction(input as any),/SOURCE_AUTHORITY_CHANGED/);
+   assert.equal(count(f,'sync_outbox_v2'),0);assert.equal(f.sql.prepare("SELECT count(*) n FROM documents WHERE collection_name IN ('transactions','transactionHistory','v3TicketSettlements')").get()!.n,0);
+   const retained=await f.store.readCheckout(c.checkoutId);assert.equal(retained?.phase,'EFFECT_POSSIBLE');assert.deepEqual(retained?.paymentIds,['payment']);assert.equal(f.sql.prepare("SELECT status FROM payment_intents_v2 WHERE intent_id='intent'").get()!.status,'AUTHORIZED');assert.equal(f.sql.prepare("SELECT state FROM pos_fiscal_permits_v2").get()!.state,'RESERVED');assert.equal(f.requests(),0);
+  }finally{f.sql.close();}
+ }
+});
+test('durable abandonment is exact idempotent proof; lost commit acknowledgement and restart recover a fresh operation offline',async()=>{
+ const f=await fixture(3);try{
+  const first=await f.client().reserveOfflineCheckout('original','old-operation');
+  await f.store.abandonOfflinePrepared!(first);await f.store.abandonOfflinePrepared!(first);
+  await assert.rejects(f.store.abandonOfflinePrepared!({...first,cartIdentity:'conflicting'}),/NOT_SAFE/);
+  const second=await f.client().reserveOfflineCheckout('changed','old-operation');assert.notEqual(second.operationId,first.operationId);assert.notEqual(second.checkoutId,first.checkoutId);
+  const native=f.store.abandonOfflinePrepared!.bind(f.store);f.store.abandonOfflinePrepared=async expected=>{await native(expected);throw Error('SYNTHETIC_COMMIT_ACK_LOST');};
+  const third=await f.client().reserveOfflineCheckout('third','old-operation');assert.notEqual(third.operationId,second.operationId);assert.equal(count(f,'pos_offline_fiscal_abandoned_v1'),2);assert.equal(f.requests(),0);
+  await f.adapter.commitFinancialTransaction(commit(f,third) as any);assert.equal(count(f,'sync_outbox_v2'),1);
+ }finally{f.sql.close();}
 });

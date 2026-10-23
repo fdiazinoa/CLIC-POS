@@ -1353,7 +1353,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, total,
                   <p className={`font-medium uppercase text-[10px] md:text-xs tracking-widest mb-1 ${isRefund ? 'text-rose-500' : 'text-gray-500'}`}>
                      {isRefund ? 'Monto a Devolver' : 'Total a Cobrar'}
                   </p>
-                  {offlineFiscalReserve&&<p role="status" className="text-xs text-slate-500 mt-1">Reserva fiscal local: {offlineFiscalReserve.remaining} ventas · hasta {new Date(offlineFiscalReserve.validUntil).toLocaleString('es-DO')}</p>}
+                  {offlineFiscalReserve&&<p role="status" className="text-xs text-slate-500 mt-1">Reserva fiscal local: {offlineFiscalReserve.remaining} permisos disponibles · hasta {new Date(offlineFiscalReserve.validUntil).toLocaleString('es-DO')}</p>}
 
                   <h1 className={`text-3xl md:text-4xl lg:text-[2.7rem] font-black leading-none ${isRefund ? 'text-rose-600' : 'text-gray-900'}`}>
                      {currencySymbol}{effectiveTotalToPay.toFixed(2)}
