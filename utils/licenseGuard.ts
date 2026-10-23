@@ -487,7 +487,7 @@ export const clearTenantIdentity = () => {
     clearStoredErpSyncBinding();
 };
 
-export const resolveTenantRecord = async (identity?: string | TenantIdentity): Promise<TenantRecord | null> => {
+export const resolveTenantRecord = async (identity?: string | TenantIdentity, options: { persistIdentity?: boolean } = {}): Promise<TenantRecord | null> => {
     try {
         const { supabaseUrl, supabaseKey } = getCloudConfig();
 
@@ -532,7 +532,7 @@ export const resolveTenantRecord = async (identity?: string | TenantIdentity): P
                 (await fetchTenantStatusById(supabaseUrl, supabaseKey, candidateId));
 
             if (tenant) {
-                persistTenantIdentity(tenant, metadataSlug || storedSlug);
+                if (options.persistIdentity !== false) persistTenantIdentity(tenant, metadataSlug || storedSlug);
                 return tenant;
             }
         }
@@ -551,7 +551,7 @@ export const resolveTenantRecord = async (identity?: string | TenantIdentity): P
                 ));
 
             if (tenant) {
-                persistTenantIdentity(tenant, candidateSlug);
+                if (options.persistIdentity !== false) persistTenantIdentity(tenant, candidateSlug);
                 return tenant;
             }
         }
@@ -570,7 +570,7 @@ export const resolveTenantRecord = async (identity?: string | TenantIdentity): P
                 ));
 
             if (tenant) {
-                persistTenantIdentity(tenant);
+                if (options.persistIdentity !== false) persistTenantIdentity(tenant);
                 return tenant;
             }
         }

@@ -1,4 +1,7 @@
 import React, { useEffect, useState } from 'react';
+import LicenseAcceptance from './LicenseAcceptance';
+import { readLicenseAcceptance, type AcceptanceIdentity } from '../utils/licenseAcceptance';
+import { licenseClause } from '../legal/licenseClause';
 import { supabase } from '../utils/supabase';
 import { resolveTenantRecord } from '../utils/licenseGuard';
 import {
@@ -9,7 +12,6 @@ import {
     Rocket,
     Lock,
     Mail,
-    CheckCircle,
     AlertCircle,
     ShieldCheck,
     ArrowRight,
@@ -22,7 +24,7 @@ interface ActivationScreenProps {
     onActivationComplete: (tenantData: any) => void;
 }
 
-type ActivationStep = 'LOGIN' | 'CHANGE_PASSWORD' | 'SUCCESS';
+type ActivationStep = 'LOGIN' | 'CHANGE_PASSWORD';
 type TenantType = 'full' | 'pos_only';
 
 type DistributorOption = {
@@ -136,6 +138,7 @@ const requiresPasswordChange = (user: any): boolean => {
 };
 
 const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivationComplete }) => {
+    const [pendingAcceptance, setPendingAcceptance] = useState<{ identity: AcceptanceIdentity; complete: () => void } | null>(null);
     const [step, setStep] = useState<ActivationStep>('LOGIN');
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
@@ -393,18 +396,43 @@ const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivationComplet
 
             if (updateError) throw updateError;
 
-            setStep('SUCCESS');
-            setTimeout(() => {
-                void completeActivation(data.user, email).catch((err: any) => {
-                    setStep('CHANGE_PASSWORD');
-                    setError(err.message || 'No se pudo completar la activacion.');
-                });
-            }, 2000);
+            await completeActivation(data.user, email);
         } catch (err: unknown) {
             setError(normalizeActivationErrorMessage(err) || 'Error al actualizar la contraseña.');
         } finally {
             setLoading(false);
         }
+    };
+
+    const finishOrRequestAcceptance = (tenantData: any, user: any, legalName: string, unverified: boolean) => {
+        const identity = resolveActivationTenantIdentity(user, tenantData.email);
+        const complete = () => {
+            localStorage.setItem('clic_tenant_id', tenantData.tenantId);
+            localStorage.setItem('active_tenant_id', tenantData.tenantId);
+            localStorage.setItem('clic_erp_tenant_id', tenantData.tenantId);
+            localStorage.setItem('clic_tenant_email', identity.email || tenantData.email);
+            if (identity.tenantName) localStorage.setItem('clic_tenant_name', identity.tenantName);
+            if (identity.cloudAdminTenantId) {
+                localStorage.setItem('clic_cloud_tenant_id', identity.cloudAdminTenantId);
+                localStorage.setItem('cloud_admin_tenant_id', identity.cloudAdminTenantId);
+                localStorage.setItem('clic_cloud_admin_tenant_id', identity.cloudAdminTenantId);
+            }
+            if (unverified) localStorage.setItem('clic_tenant_unverified', '1');
+            else localStorage.removeItem('clic_tenant_unverified');
+            if (tenantData.slug) localStorage.setItem('clic_tenant_slug', tenantData.slug);
+            onActivationComplete(tenantData);
+        };
+        if (import.meta.env.VITE_LICENSE_ACCEPTANCE_ENABLED === 'true') {
+            const identity = { tenantId: tenantData.tenantId, legalName, userId: user.id, userName: tenantData.name };
+            // An unreadable record still opens the gate; its save remains fail-closed with a retry.
+            let accepted = false;
+            try { accepted = Boolean(readLicenseAcceptance(localStorage, tenantData.tenantId)); } catch { /* Gate handles local storage errors. */ }
+            if (!accepted) {
+                setPendingAcceptance({ identity, complete });
+                return;
+            }
+        }
+        complete();
     };
 
     const completeActivation = async (user: any, fallbackEmail?: string) => {
@@ -439,24 +467,8 @@ const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivationComplet
                 slug: metadataSlug || localStorage.getItem('clic_tenant_slug') || null,
             };
 
-            localStorage.setItem('clic_tenant_id', tenantData.tenantId);
-            localStorage.setItem('active_tenant_id', tenantData.tenantId);
-            localStorage.setItem('clic_erp_tenant_id', tenantData.tenantId);
-            localStorage.setItem('clic_tenant_email', identity.email || tenantData.email);
-            if (identity.tenantName) {
-                localStorage.setItem('clic_tenant_name', identity.tenantName);
-            }
-            if (identity.cloudAdminTenantId) {
-                localStorage.setItem('clic_cloud_tenant_id', identity.cloudAdminTenantId);
-                localStorage.setItem('cloud_admin_tenant_id', identity.cloudAdminTenantId);
-                localStorage.setItem('clic_cloud_admin_tenant_id', identity.cloudAdminTenantId);
-            }
-            localStorage.removeItem('clic_tenant_unverified');
-            if (tenantData.slug) {
-                localStorage.setItem('clic_tenant_slug', tenantData.slug);
-            }
-
-            onActivationComplete(tenantData);
+            finishOrRequestAcceptance(tenantData, user,
+                user.user_metadata?.legal_name || identity.tenantName || user.user_metadata?.company_name || user.user_metadata?.tenant_name || metadataSlug || metadataTenantId, false);
             return;
         }
 
@@ -464,7 +476,7 @@ const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivationComplet
             tenantId: metadataTenantId || undefined,
             slug: metadataSlug || undefined,
             email: fallbackEmail || user?.email,
-        });
+        }, { persistIdentity: false });
 
         if (!resolvedTenant?.id && !fallbackTenantId) {
             throw new Error(`No se pudo resolver la licencia para ${fallbackEmail || user?.email || 'este usuario'}. Solicite reprovisionar el tenant en Cloud Admin.`);
@@ -479,30 +491,16 @@ const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivationComplet
             slug: resolvedSlug || null,
         };
 
-        localStorage.setItem('clic_tenant_id', tenantData.tenantId);
-        localStorage.setItem('active_tenant_id', tenantData.tenantId);
-        localStorage.setItem('clic_erp_tenant_id', tenantData.tenantId);
-        localStorage.setItem('clic_tenant_email', identity.email || tenantData.email);
-        if (identity.tenantName) {
-            localStorage.setItem('clic_tenant_name', identity.tenantName);
-        }
-        if (identity.cloudAdminTenantId) {
-            localStorage.setItem('clic_cloud_tenant_id', identity.cloudAdminTenantId);
-            localStorage.setItem('cloud_admin_tenant_id', identity.cloudAdminTenantId);
-            localStorage.setItem('clic_cloud_admin_tenant_id', identity.cloudAdminTenantId);
-        }
-        if (!resolvedTenant?.id) {
-            localStorage.setItem('clic_tenant_unverified', '1');
-            console.warn('Activation completed with unverified tenant mapping. Using auth user id as fallback tenant key.');
-        } else {
-            localStorage.removeItem('clic_tenant_unverified');
-        }
-        if (tenantData.slug) {
-            localStorage.setItem('clic_tenant_slug', tenantData.slug);
-        }
-
-        onActivationComplete(tenantData);
+        finishOrRequestAcceptance(tenantData, user,
+            user.user_metadata?.legal_name || identity.tenantName || user.user_metadata?.company_name || user.user_metadata?.tenant_name || resolvedTenant?.slug || tenantData.tenantId,
+            !resolvedTenant?.id);
     };
+
+    if (pendingAcceptance) return <LicenseAcceptance
+        key={`${pendingAcceptance.identity.tenantId}:${licenseClause.version}`}
+        identity={pendingAcceptance.identity}
+        onAccepted={pendingAcceptance.complete}
+    />;
 
     return (
         <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4 overflow-hidden relative">
@@ -659,17 +657,6 @@ const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivationComplet
                         </div>
                     )}
 
-                    {step === 'SUCCESS' && (
-                        <div className="text-center py-10 animate-in zoom-in duration-500">
-                            <div className="flex justify-center mb-6">
-                                <div className="bg-green-500/20 p-6 rounded-full">
-                                    <CheckCircle className="text-green-500" size={64} />
-                                </div>
-                            </div>
-                            <h1 className="text-3xl font-black text-white mb-2">¡Activado!</h1>
-                            <p className="text-slate-400">Vinculación exitosa. Iniciando configuración...</p>
-                        </div>
-                    )}
 
                 </div>
 
