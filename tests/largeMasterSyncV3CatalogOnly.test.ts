@@ -339,7 +339,7 @@ for(const drift of ['none','syncToken','tenantId','company','warehouse','origin'
    '../../utils/db':'export const db=globalThis.__sessionFence.db;','../db':'export const dbAdapter=globalThis.__sessionFence.adapter;',
    './LargeMasterSyncV3Authority':'export const LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED=true;',
    './LargeMasterSyncV3CanaryFacade':'export const LARGE_MASTER_SYNC_V3_CANARY=false;export const validateLargeMasterSyncV3CanaryUrl=value=>value;',
-   './OperationalTerminalConfig':'export const readOperationalTerminalBinding=()=>"credentials";',
+   './OperationalTerminalConfig':'export const readOperationalTerminalBinding=()=>"credentials";export const readOperationalCatalogBindingProof=()=>null;',
    './LargeMasterSyncV3Platform':'export const assertLargeMasterSyncV3NativeAndroid=()=>{};',
    './LargeMasterSyncV3DownloadOrigin':'export const largeMasterSyncV3DownloadOrigin=()=>globalThis.__sessionFence.state.origin;',
    './LargeMasterSyncV3BoundTransport':`export const readLargeMasterSyncV3BoundIdentity=()=>({...globalThis.__sessionFence.state.identity});export const validatedLargeMasterSyncV3ErpSyncBase=value=>value;

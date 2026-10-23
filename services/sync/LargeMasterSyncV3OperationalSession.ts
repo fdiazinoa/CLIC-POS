@@ -1,3 +1,6 @@
+import {readOfflineV3OperationalAuthority,type V3LocalOperationalIdentity,type V3OfflineOperationalAuthority} from './OfflineV3OperationalIdentity';
+import {readOperationalCatalogBindingProof} from './OperationalTerminalConfig';
+import {resolveSyncTarget} from './SyncProfile';
 import {assertInventoryPresentationEligible} from '../inventoryPresentations/eligibility';
 import Decimal from 'decimal.js';
 import {createPresentationRuntime,presentationAuthority,validatePresentationCart} from '../inventoryPresentations/runtime';
@@ -7,9 +10,9 @@ import {requiresProductStockAvailability} from '../../utils/productStockPolicy';
 import { v3TaxSemantics } from './LargeMasterSyncV3StockAuthority';
 import { db } from '../../utils/db';
 import { readV3RetainedCheckout, assertV3RetainedLine, type V3RetainedContext, type V3RetainedReference } from './LargeMasterSyncV3RetainedCheckout';
-import { v3StockSource, sameV3StockAuthority } from './LargeMasterSyncV3StockAuthority';
+import { v3StockSource, sameV3StockAuthority, v3RetainedLineFingerprint } from './LargeMasterSyncV3StockAuthority';
 import { assertLargeMasterSyncV3NativeAndroid } from './LargeMasterSyncV3Platform';
-import type { BusinessConfig, CartItem, Product, ProductVariant, TaxDefinition, V3SaleAuthorityStamp } from '../../types';
+import type { BusinessConfig, CartItem, Product, ProductVariant, TaxDefinition, V3SaleAuthorityStamp, Transaction } from '../../types';
 import { dbAdapter } from '../db';
 import { LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED } from './LargeMasterSyncV3Authority';
 import { LARGE_MASTER_SYNC_V3_CANARY, validateLargeMasterSyncV3CanaryUrl } from './LargeMasterSyncV3Canary';
@@ -27,7 +30,7 @@ import { largeMasterSyncV3DownloadOrigin } from './LargeMasterSyncV3DownloadOrig
 import { createLargeMasterSyncV3SessionCoordinator } from './LargeMasterSyncV3SetupCompletion';
 import type { LargeMasterSyncV3Metric } from './LargeMasterSyncV3Client';
 
-export const v3BindingKey = (identity: LargeMasterSyncV3BoundIdentity, v3BaseUrl: string): string =>
+export const v3BindingKey = (identity: Omit<LargeMasterSyncV3BoundIdentity,'syncToken'>, v3BaseUrl: string): string =>
   JSON.stringify([identity.tenantId, identity.terminalId, identity.deviceId,
     identity.erpSyncBaseUrl, validateLargeMasterSyncV3CanaryUrl(v3BaseUrl)]);
 
@@ -44,7 +47,9 @@ export class LargeMasterSyncV3OperationalSession {
     readonly binding: string,
     private readonly store: LargeMasterSyncV3Store,
     private readonly v3BaseUrl: string,
-    private readonly identity: LargeMasterSyncV3BoundIdentity,
+    private readonly identity: V3LocalOperationalIdentity,
+    private offlineAuthority?:V3OfflineOperationalAuthority,
+    private readonly expectedConfigScope?:string,
   ) {}
 
   static async open(refresh = false, metric?: (metric: LargeMasterSyncV3Metric) => void): Promise<LargeMasterSyncV3OperationalSession> {
@@ -54,7 +59,8 @@ export class LargeMasterSyncV3OperationalSession {
     }
     assertLargeMasterSyncV3NativeAndroid();
     const v3BaseUrl = largeMasterSyncV3DownloadOrigin();
-    const identity = readLargeMasterSyncV3BoundIdentity();
+    let identity:V3LocalOperationalIdentity,offlineAuthority:V3OfflineOperationalAuthority|undefined;
+    try{identity=readLargeMasterSyncV3BoundIdentity();}catch(error){try{offlineAuthority=await readOfflineV3OperationalAuthority();identity=offlineAuthority.identity;}catch{throw error;}}
     const binding = v3BindingKey(identity, v3BaseUrl);
     const credentialGuard = readOperationalTerminalBinding();
     await dbAdapter.connect();
@@ -67,9 +73,15 @@ export class LargeMasterSyncV3OperationalSession {
     const expectedScope=configScope(await db.get('config') as unknown as BusinessConfig);
     const assertIdentity = async (owned?: LargeMasterSyncV3IdentityReadContext) => {
       const currentScope=configScope(owned ? await owned.readConfig() : await db.get('config') as unknown as BusinessConfig);
-      if(JSON.stringify(readLargeMasterSyncV3BoundIdentity()) !== JSON.stringify(identity)
-        || largeMasterSyncV3DownloadOrigin() !== v3BaseUrl || readOperationalTerminalBinding() !== credentialGuard
-        || currentScope !== expectedScope) throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
+      if(largeMasterSyncV3DownloadOrigin()!==v3BaseUrl||currentScope!==expectedScope)throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
+      try{if(JSON.stringify(readLargeMasterSyncV3BoundIdentity())!==JSON.stringify(identity)||readOperationalTerminalBinding()!==credentialGuard)throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');}
+      catch(error){
+        // Download/activation owns its SQL connection and retains live transport authority.
+        if(owned)throw error;
+        let local:V3OfflineOperationalAuthority;try{local=await readOfflineV3OperationalAuthority();}catch{throw error;}
+        if(v3BindingKey(local.identity,v3BaseUrl)!==binding)throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
+        offlineAuthority=local;
+      }
     };
     await assertIdentity();
     const store = dbAdapter.masterSyncV3Store;
@@ -90,6 +102,7 @@ export class LargeMasterSyncV3OperationalSession {
             ? { inventorySyncId: anchor.syncId, inventorySyncVersion: anchor.syncVersion } : {}) };
       }
     }
+    if(!ready&&offlineAuthority)throw new LargeMasterSyncV3Error('SYNC_V3_OFFLINE_CACHED_RUNTIME_REQUIRED');
     if (!ready) {
       const anchor = await store.getInventoryAuthority?.();
       const catalogOnly = Boolean(refresh && runtime && owner?.binding === binding && anchor);
@@ -107,14 +120,24 @@ export class LargeMasterSyncV3OperationalSession {
     } else {
       observe({ event: 'setup_phase', phase: 'cached' });
     }
-    return new LargeMasterSyncV3OperationalSession(ready, binding, store, v3BaseUrl, identity);
+    return new LargeMasterSyncV3OperationalSession(ready, binding, store, v3BaseUrl, identity,offlineAuthority,expectedScope);
   }
 
   async assertCurrent(): Promise<void> {
     assertLargeMasterSyncV3NativeAndroid();
-    const current = readLargeMasterSyncV3BoundIdentity();
-    if (v3BindingKey(current, this.v3BaseUrl) !== this.binding || current.syncToken !== this.identity.syncToken) {
-      throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
+    try{
+      const current=readLargeMasterSyncV3BoundIdentity();
+      if(v3BindingKey(current,this.v3BaseUrl)!==this.binding||current.syncToken!==this.identity.syncToken)throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
+      this.offlineAuthority=undefined;
+    }catch(error){
+      let local:V3OfflineOperationalAuthority;try{local=await readOfflineV3OperationalAuthority();}catch{throw error;}
+      if(v3BindingKey(local.identity,largeMasterSyncV3DownloadOrigin())!==this.binding)throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
+      this.offlineAuthority=local;
+    }
+    if(this.expectedConfigScope!==undefined){
+    const config=await db.get('config') as unknown as BusinessConfig;
+    const terminal=config?.terminals?.find(row=>row.config?.currentDeviceId===this.identity.deviceId&&(row.config.erpTerminalId||row.id)===this.identity.terminalId);
+    if(this.expectedConfigScope!==undefined&&JSON.stringify([terminal?.config.erpBinding?.companyId,terminal?.config.inventoryScope,terminal?.config.pricing,terminal?.config.fiscal])!==this.expectedConfigScope)throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
     }
     const active = await this.store.getActiveRuntimeVersion();
     const inventory = await this.ready.runtime.getInventorySnapshotVersion();
@@ -125,6 +148,22 @@ export class LargeMasterSyncV3OperationalSession {
       || owner?.binding !== this.binding || owner.syncId !== active.syncId || owner.syncVersion !== active.syncVersion) {
       throw new LargeMasterSyncV3Error('SYNC_V3_RUNTIME_VERSION_CHANGED');
     }
+  }
+
+  assertFinancialOfflineAuthority(transaction:Transaction):void {
+    if(!this.offlineAuthority)return;
+    if(!transaction.fiscalOfflineLeaseId||!transaction.fiscalWorkflowCheckoutId||transaction.documentType!=='TICKET'
+      ||!transaction.items.length||transaction.items.some(line=>line.quantity<=0||line.articleFormat)
+      ||transaction.payments.some(payment=>payment.method!=='CASH'))throw new LargeMasterSyncV3Error('SYNC_V3_OFFLINE_FINANCIAL_AUTHORITY_REQUIRED');
+    const recovery=this.offlineAuthority.recovery;if(!recovery)return;
+    let cart:any;try{cart=JSON.parse(recovery.cartIdentity);}catch{throw new LargeMasterSyncV3Error('SYNC_V3_OFFLINE_FINANCIAL_AUTHORITY_REQUIRED');}
+    if(transaction.id!==recovery.transactionId||transaction.fiscalWorkflowCheckoutId!==recovery.checkoutId||transaction.fiscalOfflineLeaseId!==recovery.leaseId
+      ||(cart.customerId||null)!==(transaction.customerId||null)||cart.fiscalType!==transaction.ncfType
+      ||JSON.stringify(cart.fiscalSaleContext)!==JSON.stringify(transaction.fiscalSaleContext)
+      ||!Array.isArray(cart.items)||cart.items.length!==transaction.items.length||transaction.items.some(line=>{
+        const originals=cart.items.filter((old:CartItem)=>old.id===line.id&&old.cartId===line.cartId);
+        return originals.length!==1||originals[0].quantity!==line.quantity||v3RetainedLineFingerprint(originals[0])!==v3RetainedLineFingerprint(line);
+      })||transaction.payments.length!==recovery.paymentIds.length||transaction.payments.some(payment=>!recovery.paymentIds.includes(payment.id)))throw new LargeMasterSyncV3Error('SYNC_V3_OFFLINE_FINANCIAL_AUTHORITY_REQUIRED');
   }
 
   async catalog(tariffId: string, warehouseId: string) {
@@ -305,6 +344,6 @@ export class LargeMasterSyncV3OperationalSession {
 
 export const getLargeMasterSyncV3OperationalSession = createLargeMasterSyncV3SessionCoordinator(
   (refresh, metric) => LargeMasterSyncV3OperationalSession.open(refresh, metric),
-  () => { const identity = readLargeMasterSyncV3BoundIdentity();
-    return JSON.stringify([v3BindingKey(identity, largeMasterSyncV3DownloadOrigin()), identity.syncToken]); },
+  () => {try{const identity=readLargeMasterSyncV3BoundIdentity();return JSON.stringify([v3BindingKey(identity,largeMasterSyncV3DownloadOrigin()),identity.syncToken]);}
+    catch{return JSON.stringify(['offline-observation',readOperationalCatalogBindingProof(),resolveSyncTarget().baseUrl,largeMasterSyncV3DownloadOrigin()]);}},
 );

@@ -1,3 +1,4 @@
+import {isOfflineTableFiscalTransaction} from '../fiscal/OfflineTableFiscalCheckout';
 import { validWeightPresentation } from '../../utils/scaleWeight';
 import { hasV3KilogramContract } from '../../utils/weightedProduct';
 import { resolveRestaurantProductConfig } from '../../utils/restaurantProductConfig';
@@ -65,18 +66,20 @@ export const validateV3FrozenLineFiscalAmounts = (transaction: Transaction, conf
     ? round(calculateTaxBreakdownFromItems(transaction.items, config, { ...options, fallbackTaxRate: 0 })
       .reduce((sum, tax) => sum + tax.amount, 0))
     : round(calculated.reduce((sum, row) => sum + row.taxAmount, 0));
+  const separateCharge=isOfflineTableFiscalTransaction(transaction);
+  if(separateCharge&&JSON.stringify(transaction.serviceTaxPolicySnapshot)!==JSON.stringify(policy))throw new LargeMasterSyncV3Error('SYNC_V3_FROZEN_FISCAL_SOURCE_CHANGED');
   const expectedNet = directSaleHeader
     ? round(transaction.items.reduce((sum, line) => sum + line.price * line.quantity, 0)
       - options.discountAmount - (options.isTaxIncluded ? expectedTax : 0) + charge)
-    : round(calculated.reduce((sum, row) => sum + row.netAmount, 0) + charge);
-  const expectedTotal = round(expectedNet + expectedTax);
+    : round(calculated.reduce((sum, row) => sum + row.netAmount, 0) + (separateCharge?0:charge));
+  const expectedTotal = round(expectedNet + expectedTax + (separateCharge?charge:0));
   if (!Number.isFinite(charge) || charge < 0 || charge > maximumCharge + 0.02
     || ![transaction.netAmount, transaction.taxAmount, Math.abs(transaction.total)]
     .every((value, index) => typeof value === 'number' && Math.abs(value - [expectedNet, expectedTax, expectedTotal][index]) <= 0.02)) {
     throw new LargeMasterSyncV3Error('SYNC_V3_FROZEN_FISCAL_SOURCE_CHANGED');
   }
   const frozen = freezeAuthoritativeLineFiscalAmounts(transaction.items, config, { ...options,
-    transactionNetAmount: expectedNet, transactionTaxAmount: expectedTax, transactionTotal: expectedTotal });
+    transactionNetAmount: expectedNet, transactionTaxAmount: expectedTax, transactionTotal: expectedTotal-(separateCharge?charge:0) });
   for (let index = 0; index < frozen.length; index++) {
     if (!['netAmount', 'taxAmount', 'totalAmount'].every(key => {
       const actual = (transaction.items[index] as any)[key];

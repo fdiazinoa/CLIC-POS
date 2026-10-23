@@ -1,3 +1,4 @@
+import {isOfflineTableFiscalTransaction} from './fiscal/OfflineTableFiscalCheckout';
 import {assertInventoryPresentationReturnAllowed} from './inventoryPresentations/selection';
 import { withOriginal } from './recovery/OriginalCapture';
 import { recordCheckoutDiagnostic } from './CheckoutDiagnostics';
@@ -113,6 +114,11 @@ const normalizeFiscalAmounts = async (data: Partial<Transaction>): Promise<{ net
         };
     }
 
+    if(isOfflineTableFiscalTransaction(data)){
+        const serviceCharge=Number(data.serviceChargeAmount||0);
+        if(!Number.isFinite(serviceCharge)||serviceCharge<0||Math.abs(providedNet+providedTax+serviceCharge-total)>0.02)throw Error('OFFLINE_FISCAL_TABLE_TOTAL_INVALID');
+        return {netAmount:providedNet,taxAmount:providedTax};
+    }
     const derived = await deriveFiscalAmountsFromItems(data);
     if (derived && derived.total > EPSILON) {
         return {
@@ -439,6 +445,8 @@ class TransactionService {
         const transaction: Transaction = {
             ...(data.inventoryPresentationContract===1?{inventoryPresentationContract:1 as const}:{}),
             ...(data.fiscalWorkflowCheckoutId ? { fiscalWorkflowCheckoutId: data.fiscalWorkflowCheckoutId } : {}),
+            ...(data.fiscalSaleContext ? {fiscalSaleContext:data.fiscalSaleContext} : {}),
+            ...(data.fiscalOfflineLeaseId ? {fiscalOfflineLeaseId:data.fiscalOfflineLeaseId} : {}),
             id: data.id || createTechnicalId('TXN'),
             globalSequence,
             displayId,

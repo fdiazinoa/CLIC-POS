@@ -1,4 +1,5 @@
-import {FISCAL_RETIREMENT_WRITER_SCHEMA,assertRetirementRecoveryPromotion} from '../FiscalWorkflowRetirementStore';
+import {FISCAL_RETIREMENT_WRITER_SCHEMA,OFFLINE_FISCAL_ABANDON_WRITER_SCHEMA,assertRetirementRecoveryPromotion} from '../FiscalWorkflowRetirementStore';
+import {assertTableFiscalSaleContext} from '../../fiscal/OfflineTableFiscalCheckout';
 import {assertPresentationCommit} from '../../inventoryPresentations/nativeGuard';
 import { NativeFiscalWorkflowV2Store,FISCAL_WORKFLOW_V2_SCHEMA,consumeFiscalWorkflowBirth } from '../FiscalWorkflowV2Store';
 import {NativeTerminalAuthEvidenceStore,TERMINAL_AUTH_EVIDENCE_SCHEMA} from '../TerminalAuthEvidenceStore';
@@ -570,6 +571,13 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             const source=input.documents.find(d=>d.collectionName==='transactions'&&d.document.id===commit.transactionId);
             const history=input.documents.find(d=>d.collectionName==='transactionHistory'&&d.document.id===commit.transactionId);
             if(!source?.requireAbsent||!history?.requireAbsent)throw Error('FISCAL_WORKFLOW_NEW_SOURCE_REQUIRED');
+            if((source.document as any).fiscalSaleContext){
+              const context=(source.document as any).fiscalSaleContext;
+              const settlement=input.documents.find(d=>d.collectionName==='v3TicketSettlements'&&d.document.id===context.accountId);
+              if(!settlement?.requireAbsent||settlement.document.transactionId!==commit.transactionId||!settlement.v3ExpectedRetainedDocument)throw Error('OFFLINE_FISCAL_TABLE_ATOMIC_SETTLEMENT_REQUIRED');
+              const retained=settlement.v3ExpectedRetainedDocument;
+              await assertTableFiscalSaleContext(source.document as any,{collection:retained.collection,id:retained.id,expected:retained.expected});
+            }
             await consumeFiscalWorkflowBirth(this.ensureDb() as any,commit,source.document as any);
           }
         }));
@@ -980,6 +988,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             ON master_number_ranges(entity_type, status, start_number, range_id);
             ${DURABLE_OUTBOX_SCHEMA_SQL}
             ${FISCAL_RETIREMENT_WRITER_SCHEMA}
+            ${OFFLINE_FISCAL_ABANDON_WRITER_SCHEMA}
             ${LARGE_MASTER_SYNC_V3_SCHEMA_SQL}
             ${ARTICLE_FORMATS_SCHEMA}
             ${NATIVE_FISCAL_RECEIPTS_SCHEMA}

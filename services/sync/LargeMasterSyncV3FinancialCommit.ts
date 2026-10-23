@@ -1,3 +1,4 @@
+import {isOfflineTableFiscalTransaction,assertTableFiscalSaleContext} from '../fiscal/OfflineTableFiscalCheckout';
 import {presentationInventoryQuantity} from '../inventoryPresentations/selection';
 import {captureNewV3FiscalSourceMetadata} from './NewV3FiscalSourceMetadata';
 export type {V3FinancialOptions} from '../db/LargeMasterSyncV3FinancialRetention';
@@ -37,7 +38,7 @@ export const validateV3FrozenFiscalAmounts = (transaction: Partial<Transaction>,
       && line.v3SaleAuthority.inventoryVersion === stamp.inventoryVersion && line.v3SaleAuthority.inventoryCursor === stamp.inventoryCursor))
     || ![transaction.netAmount, transaction.taxAmount, transaction.total].every(value => typeof value === 'number' && Number.isFinite(value))
     || Number(transaction.netAmount) < 0 || Number(transaction.taxAmount) < 0
-    || Math.abs(Number(transaction.netAmount) + Number(transaction.taxAmount) - Math.abs(Number(transaction.total))) > 0.02) {
+    || Math.abs(Number(transaction.netAmount) + Number(transaction.taxAmount) + (isOfflineTableFiscalTransaction(transaction)?Number(transaction.serviceChargeAmount||0):0) - Math.abs(Number(transaction.total))) > 0.02) {
     throw new LargeMasterSyncV3Error('SYNC_V3_FROZEN_FISCAL_INVALID');
   }
 };
@@ -107,6 +108,7 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
       return existing.map(transaction => ({ transaction: transaction!, created: false }));
     }
     for (const { transaction } of entries) {
+      session.assertFinancialOfflineAuthority?.(transaction);
       await db.assertFiscalTransactionAuthority(transaction,
         config.terminals?.find(terminal => terminal.id === transaction.terminalId || terminal.config?.erpTerminalId === transaction.terminalId)?.config);
     }
@@ -223,12 +225,14 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
       documents.push(...originalMutations);
     }
     if (isSyncFeatureEnabled('sqlite_outbox_v2') && !options.refund) {
-      const fiscalSourceMetadata = captureNewV3FiscalSourceMetadata(document,projected,session.binding,{refund:options.refund,retained:Boolean(retained)});
+      const offlineTable=isOfflineTableFiscalTransaction(document);
+      if(offlineTable)await assertTableFiscalSaleContext(document,retained);
+      const fiscalSourceMetadata = captureNewV3FiscalSourceMetadata(document,projected,session.binding,{refund:options.refund,retained:Boolean(retained),offlineTableAccount:offlineTable});
       let fiscalWorkflowBirth: import('../fiscal/FiscalWorkflowV2Types').FiscalWorkflowBirthV2 | undefined;
       if(document.fiscalWorkflowCheckoutId){
-        if(options.refund||retained||!dbAdapter.fiscalWorkflowStore)throw Error('FISCAL_WORKFLOW_NEW_SOURCE_REQUIRED');
+        if(options.refund||retained&&!offlineTable||!dbAdapter.fiscalWorkflowStore)throw Error('FISCAL_WORKFLOW_NEW_SOURCE_REQUIRED');
         const checkout=await dbAdapter.fiscalWorkflowStore.readCheckout(document.fiscalWorkflowCheckoutId);
-        if(!checkout||checkout.transactionId!==document.id)throw Error('FISCAL_WORKFLOW_CHECKOUT_REQUIRED');
+        if(!checkout||checkout.transactionId!==document.id||offlineTable&&(!checkout.permit?.leaseId||JSON.stringify(checkout.fiscalSaleContext)!==JSON.stringify(document.fiscalSaleContext)))throw Error('FISCAL_WORKFLOW_CHECKOUT_REQUIRED');
         if(checkout.permit)fiscalWorkflowBirth={schemaVersion:2,permitId:checkout.permit.permitId,transactionId:checkout.transactionId,nonce:checkout.permit.nonce,checkoutId:checkout.checkoutId};
         fiscalWorkflowCommits.push({checkoutId:checkout.checkoutId,transactionId:document.id,birth:fiscalWorkflowBirth||null});
       }
@@ -253,6 +257,7 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
     }
     await session.assertCurrent();
     for (const { transaction } of entries) {
+      session.assertFinancialOfflineAuthority?.(transaction);
       await db.assertFiscalTransactionAuthority(transaction,
         config.terminals?.find(terminal => terminal.id === transaction.terminalId || terminal.config?.erpTerminalId === transaction.terminalId)?.config);
     }

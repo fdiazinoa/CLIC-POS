@@ -1,14 +1,14 @@
 import type {FiscalWorkflowCheckoutV2,FiscalWorkflowPreparedRecovery} from './FiscalWorkflowV2Types';
 import {fiscalWorkflowScopeKey} from './FiscalWorkflowV2Types';
 
-export function hasPreparedSalePermit(checkout:FiscalWorkflowCheckoutV2,scopeKey:string,authorityHash?:string):boolean {
+export function hasPreparedSalePermit(checkout:FiscalWorkflowCheckoutV2,scopeKey:string,authorityHash?:string,now=Date.now()):boolean {
  const permit=checkout.permit,scope=permit?.scope;
  return Boolean(permit&&permit.schemaVersion===2&&permit.operationKind==='SALE'&&permit.transactionId===checkout.transactionId
   &&['permitId','transactionId','nonce'].every(key=>typeof (permit as any)[key]==='string'&&(permit as any)[key].trim())
   &&scope&&['tenantId','companyId','storeId','terminalId','deviceId'].every(key=>typeof (scope as any)[key]==='string'&&(scope as any)[key].trim())
   &&fiscalWorkflowScopeKey(scope)===scopeKey&&authorityHash&&permit.authorityHash===authorityHash
   &&/^[a-f0-9]{64}$/.test(permit.authorityHash)&&/^\d{9}(?:\d{2})?$/.test(permit.issuerRnc)
-  &&[0,1,2].includes(permit.environment)&&Number.isFinite(Date.parse(permit.expiresAt))&&Date.parse(permit.expiresAt)>Date.now());
+  &&[0,1,2].includes(permit.environment)&&Number.isFinite(Date.parse(permit.expiresAt))&&Date.parse(permit.expiresAt)>now);
 }
 
 /** Complete local proof only: no identity can be inferred from a partial or malformed row. */
