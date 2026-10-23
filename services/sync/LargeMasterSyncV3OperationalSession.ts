@@ -125,6 +125,7 @@ export class LargeMasterSyncV3OperationalSession {
 
   /** Renew only the UI read context. Never downloads, changes the old session, or retries a sale. */
   static async acquireConfigContext(config: BusinessConfig, localTerminalId: string): Promise<LargeMasterSyncV3OperationalSession> {
+    const coordinatorGeneration = getLargeMasterSyncV3OperationalSession.captureConfigContext();
     const requested = v3OperationalConfigContext(config, { localTerminalId });
     const readAuthority = async () => {
       const guard = readOperationalTerminalBinding();
@@ -168,7 +169,15 @@ export class LargeMasterSyncV3OperationalSession {
           throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
         session.assertSetupIdentity();
         await session.assertCurrent();
-        if (JSON.stringify(await readAuthority()) !== JSON.stringify(authority)) throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
+        const assertPublicationAuthority = async () => {
+          if (JSON.stringify(await readAuthority()) !== JSON.stringify(authority)) throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
+          const current = await db.get('config') as unknown as BusinessConfig;
+          if (v3OperationalConfigContext(current, { localTerminalId, ...authority.identity }).scope !== requested.scope)
+            throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
+          if (await readCached() !== cached) throw new LargeMasterSyncV3Error('SYNC_V3_RUNTIME_VERSION_CHANGED');
+          session.assertSetupIdentity();
+        };
+        await getLargeMasterSyncV3OperationalSession.publishConfigContext(session, coordinatorGeneration, assertPublicationAuthority);
         return session;
       })();
       configContextFlights.set(key, pending);

@@ -36,13 +36,15 @@ test('shared fingerprint retains complete metadata and rejects missing/ambiguous
 
 test('actual native session renews normalized metadata once; old session rejects, no downloads or financial writes', async () => {
   const f = await fixture(); try {
-    const old = await f.module.LargeMasterSyncV3OperationalSession.open(false);
+    const old = await f.module.getLargeMasterSyncV3OperationalSession();
     const next = structuredClone(f.env.config); next.terminals[0].config.pricing.tariffs = [{ id: id(6), isDefault: true }];
     await f.adapter.saveCollection('config', next);
     const before = f.state(), opens = f.opens();
     const sessions = await Promise.all([f.module.acquireLargeMasterSyncV3ConfigContext(next, id(4)), f.module.acquireLargeMasterSyncV3ConfigContext(next, id(4))]);
     assert.strictEqual(sessions[0], sessions[1]); assert.equal(f.opens() - opens, 2);
     await sessions[0].assertCurrent(); await assert.rejects(old.assertCurrent(), /BINDING_CHANGED/);
+    assert.strictEqual(await f.module.getLargeMasterSyncV3OperationalSession(), sessions[0], 'first ordinary financial getter observes published B');
+    await assert.rejects(old.assertCurrent(), /BINDING_CHANGED/);
     assert.deepEqual(f.state(), before); assert.equal(f.env.downloads, 0);
   } finally { f.close(); }
 });
