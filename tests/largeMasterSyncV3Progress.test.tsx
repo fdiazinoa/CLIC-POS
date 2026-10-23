@@ -7,7 +7,7 @@ import { createV3Progress } from '../services/sync/LargeMasterSyncV3Progress';
 import { createLargeMasterSyncV3SessionCoordinator, completeLargeMasterSyncV3Setup } from '../services/sync/LargeMasterSyncV3SetupCompletion';
 import type { BusinessConfig } from '../types';
 
-const session = { assertCurrent: async () => undefined, projectConfig: async (config: BusinessConfig) => config };
+const session = { assertSetupIdentity: () => undefined, assertCurrent: async () => undefined, projectConfig: async (config: BusinessConfig) => config };
 const html = (progress: ReturnType<typeof createV3Progress>) => renderToStaticMarkup(<LargeMasterSyncV3SetupProgress progress={progress} />);
 
 test('bounded publication retains exact latest count, ignores downloads/retries and fences old generations', () => {
@@ -224,7 +224,7 @@ test('config/current failures never finish and preserve prior roster/role refere
         if (failure === 'config') throw new Error('config'); return value;
       } };
     });
-    await assert.rejects(async () => { await completeLargeMasterSyncV3Setup(config, get, async () => {
+    await assert.rejects(async () => { await completeLargeMasterSyncV3Setup(async () => config, get, async () => {
       if (failure === 'persist') throw new Error('persist');
     }); finish++; });
     assert.equal(finish, 0);

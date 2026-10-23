@@ -43,33 +43,34 @@ const fixture = (failure?: string) => {
       assertCurrent: async () => { boundary('assertCurrent'); assert.equal(owner, 'binding');
         assert.equal(ready.inventoryVersion, 9); assert.equal(ready.inventoryCursor, 'inventory-9'); },
       projectConfig: async (original: BusinessConfig) => { boundary('projectConfig');
-        return { ...original, taxes: [], tariffs: [] }; },
+        return { ...original, taxes: [], tariffs: [], taxRate: 0 }; },
+      assertSetupIdentity: () => { boundary('assertSetupIdentity'); },
     };
   });
-  return { calls, getSession, persist: async () => { boundary('persistProjection'); } };
+  return { calls, getSession, persist: async (_expected: BusinessConfig, _projected: BusinessConfig, guard: () => void) => { guard(); boundary('persistProjection'); } };
 };
 
 test('catalog/inventory persistence and owner verification finish before setup can complete', async () => {
   const f = fixture();
   let finish = 0;
-  const result = await completeLargeMasterSyncV3Setup(config, f.getSession, f.persist);
+  const result = await completeLargeMasterSyncV3Setup(async () => config, f.getSession, f.persist);
   finish++;
   assert.equal(finish, 1);
   assert.equal(result.metadata?.syncToken, config.metadata?.syncToken);
   assert.equal((result as any).rooms, (config as any).rooms);
   assert.deepEqual(f.calls.filter(name => name !== 'assertCurrent'), ['operationalWindow', 'requestSync', 'staging',
     'manifestChunksActivate', 'inventoryRailway', 'operationalWindow', 'persistInventory',
-    'readInventory', 'runtime', 'owner', 'projectConfig', 'persistProjection']);
+    'readInventory', 'runtime', 'owner', 'projectConfig', 'assertSetupIdentity', 'persistProjection']);
 });
 
 test('failure at every readiness boundary keeps finish/LOGIN at zero', async () => {
   for (const failure of ['requestSync', 'staging', 'manifestChunksActivate', 'inventoryRailway',
     'operationalWindow', 'persistInventory', 'readInventory', 'runtime', 'owner',
-    'assertCurrent', 'projectConfig', 'persistProjection']) {
+    'assertCurrent', 'projectConfig', 'assertSetupIdentity', 'persistProjection']) {
     const f = fixture(failure);
     let finish = 0;
     await assert.rejects(async () => {
-      await completeLargeMasterSyncV3Setup(config, f.getSession, f.persist);
+      await completeLargeMasterSyncV3Setup(async () => config, f.getSession, f.persist);
       finish++;
     }, new RegExp(`${failure} failed`));
     assert.equal(finish, 0, failure);
@@ -133,4 +134,37 @@ test('refresh never recovers binding/token errors or changes identity during run
     await assert.rejects(get(true), /stale/);
     assert.deepEqual(opens, mode === 'binding' ? [false] : [false, false]);
   }
+});
+
+
+test('completion projects canonical lifecycle B rather than the earlier pairing A', async () => {
+  const stale = { ...config, companyInfo: { name: 'old' }, permissions: ['old'] } as unknown as BusinessConfig;
+  const latest = { ...stale, companyInfo: { name: 'current' }, permissions: ['new'],
+    terminals: [{ id: 'terminal', config: { pricing: { version: 2 }, inventoryScope: { warehouseId: 'B' } } }] } as unknown as BusinessConfig;
+  let persisted = latest;
+  const session = {
+    assertCurrent: async () => { assert.deepEqual(persisted.terminals, latest.terminals); },
+    assertSetupIdentity: () => undefined,
+    projectConfig: async (value: BusinessConfig) => {
+      assert.strictEqual(value, latest);
+      return { ...value, taxes: [], tariffs: [], taxRate: 0 };
+    },
+  };
+  const result = await completeLargeMasterSyncV3Setup(async () => persisted, async () => session,
+    async (expected, next, guard) => { assert.strictEqual(expected, latest); guard(); persisted = next; });
+  assert.strictEqual(result, persisted);
+  assert.deepEqual(result.terminals, latest.terminals);
+  assert.deepEqual(result.companyInfo, latest.companyInfo);
+  assert.deepEqual((result as any).permissions, ['new']);
+  assert.equal(result.taxRate, 0);
+});
+
+test('completion rechecks session after asynchronous projection and never persists changed scope', async () => {
+  let current = true, writes = 0;
+  await assert.rejects(completeLargeMasterSyncV3Setup(async () => config, async () => ({
+    assertCurrent: async () => { if (!current) throw Error('scope-changed'); },
+    assertSetupIdentity: () => undefined,
+    projectConfig: async value => { current = false; return value; },
+  }), async () => { writes++; }), /scope-changed/);
+  assert.equal(writes, 0);
 });

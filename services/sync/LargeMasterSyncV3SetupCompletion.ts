@@ -8,17 +8,26 @@ export interface V3SetupSession {
   projectConfig(config: BusinessConfig): Promise<BusinessConfig>;
 }
 
+export interface V3SetupCommitSession extends V3SetupSession {
+  /** Synchronous, local-only guard; safe while the native writer lane is owned. */
+  assertSetupIdentity(): void;
+}
+
 /** Completion is possible only after the catalog/inventory session and persisted projection agree. */
 export const completeLargeMasterSyncV3Setup = async (
-  config: BusinessConfig,
-  getSession: () => Promise<V3SetupSession>,
-  persist: (config: BusinessConfig) => Promise<void>,
+  readCurrent: () => Promise<BusinessConfig>,
+  getSession: () => Promise<V3SetupCommitSession>,
+  persist: (expected: BusinessConfig, projected: BusinessConfig, assertIdentity: () => void) => Promise<void>,
   options?: { productionAreas?: unknown[] },
 ): Promise<BusinessConfig> => {
   const session = await getSession();
   await session.assertCurrent();
-  const projected = await session.projectConfig(config);
-  await persist(projected);
+  // Lifecycle/config synchronization may have persisted a newer scope since pairing began.
+  // Runtime projection and async guards may reenter SQLite, so keep them outside the CAS lane.
+  const current = await readCurrent();
+  const projected = await session.projectConfig(current);
+  await session.assertCurrent();
+  await persist(current, projected, () => session.assertSetupIdentity());
   await session.assertCurrent();
   if (options?.productionAreas !== undefined) {
     await persistProductionAreaSnapshot({ resolved: { catalog: { production_areas: options.productionAreas } } }, () => session.assertCurrent());

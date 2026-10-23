@@ -118,6 +118,10 @@ export interface DatabaseAdapter {
     /** Shared native transaction for global and document-series issuance. Never broadcasts inside SQL. */
     reserveFinancialNumbers?(input: FinancialNumberReservation): Promise<FinancialNumberResult>;
 
+    /** Native-only setup projection: canonical CAS, taxes/tariffs/taxRate only; no generic save fallback. */
+    compareAndSwapV3SetupConfig?(expected: import('../../types').BusinessConfig,
+        projected: import('../../types').BusinessConfig, assertIdentity: () => void): Promise<void>;
+
     // Generic CRUD
     getCollection<T>(collectionName: string, queryParams?: Record<string, string>): Promise<T[]>;
     saveCollection<T>(collectionName: string, data: T[]): Promise<void>;

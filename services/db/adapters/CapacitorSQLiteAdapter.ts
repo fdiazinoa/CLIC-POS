@@ -244,6 +244,37 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         await this.replaceStoredDocuments(collectionName, docs);
     }
 
+    async compareAndSwapV3SetupConfig(expected: import('../../../types').BusinessConfig,
+        projected: import('../../../types').BusinessConfig, assertIdentity: () => void): Promise<void> {
+        // Freeze inputs before waiting on the lane; callers cannot mutate a queued precondition.
+        const expectedJson = JSON.stringify(expected);
+        const next = JSON.parse(JSON.stringify(projected));
+        const original = JSON.parse(expectedJson);
+        const withoutProjection = (value: any) => {
+            const { taxes: _taxes, tariffs: _tariffs, taxRate: _taxRate, ...rest } = value;
+            return JSON.stringify(rest);
+        };
+        if (withoutProjection(next) !== withoutProjection(original) || next.taxRate !== 0
+            || !Array.isArray(next.taxes) || !Array.isArray(next.tariffs)) {
+            throw new Error('SYNC_V3_SETUP_PROJECTION_INVALID');
+        }
+        return this.withWriteLock(() => this.withNativeTransaction(async () => {
+            if (JSON.stringify(await this.readConfigOwned()) !== expectedJson) {
+                throw new Error('SYNC_V3_BINDING_CHANGED');
+            }
+            const now = new Date().toISOString();
+            const rows = this.toDocumentRows('config', this.toStoredDocuments('config', next));
+            const statements = [
+                ...this.collectionReplacementStatements('config', rows.map(row => row.docId), now),
+                ...rows.map(row => ({ statement: DOCUMENT_UPSERT_SQL,
+                    values: ['config', row.docId, row.data, 'config', row.docId, 'config', now] })),
+            ];
+            // This hook must never call public DB/runtime APIs or return asynchronous work.
+            assertIdentity();
+            for (const entry of statements) await this.ensureDb().run(entry.statement, entry.values, false);
+        }));
+    }
+
     async saveDocument<T extends { id: string }>(collectionName: string, doc: T): Promise<void> {
         await this.upsertStoredDocuments(collectionName, [doc]);
     }

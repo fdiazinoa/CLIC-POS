@@ -33,7 +33,7 @@ async function fixture(run: (state: { rows: Map<string,any>;events:string[];writ
 test('fresh V3 setup persists scoped production master before success; actual print/KDS intents retain route/cartId',async()=>{
  await fixture(async f=>{
   let current=true,configSaved=false;
-  await completeLargeMasterSyncV3Setup(config,async()=>({assertCurrent:async()=>{assert.ok(current);},projectConfig:async c=>c}),
+  await completeLargeMasterSyncV3Setup(async()=>config,async()=>({assertSetupIdentity:()=>undefined,assertCurrent:async()=>{assert.ok(current);},projectConfig:async c=>c}),
     async()=>{configSaved=true;},{productionAreas:[area]});
   assert.equal(configSaved,true);assert.deepEqual(f.events,['productionAreasUpdated']);
   const [target]=prepareKioskProduction([line],f.rows.get('productionAreas'),config,'T');
