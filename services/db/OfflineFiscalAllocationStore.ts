@@ -161,13 +161,13 @@ export async function consumeAllocationNumber(sql:SQL,checkout:FiscalWorkflowChe
 
 export async function allocationAvailability(sql:SQL,local:OfflineFiscalLocalAuthority,type?:string){
  const proof=await readAllocation(sql,local);if(!proof)return null;
- const remaining:Record<string,number>={};let lastError:unknown;
+ const remaining:Record<string,number>={},total:Record<string,number>={};let lastError:unknown;
  for(const member of proof.authority.allocations.filter(m=>!type||m.ncfType===type)){
-  try{const p=await readAllocationSelection(sql,proof.authority,member.ncfType,proof.now,undefined,member.allocationId);remaining[member.ncfType]=(remaining[member.ncfType]||0)+p.remaining;}
+  try{const p=await readAllocationSelection(sql,proof.authority,member.ncfType,proof.now,undefined,member.allocationId);remaining[member.ncfType]=(remaining[member.ncfType]||0)+p.remaining;total[member.ncfType]=(total[member.ncfType]||0)+member.end-member.start+1;}
   catch(error){lastError=error;}
  }
  if(!Object.values(remaining).some(n=>n>0)&&lastError)throw lastError;
- return {authorizationId:proof.authority.authorizationId,remaining};
+ return {authorizationId:proof.authority.authorizationId,remaining,total};
 }
 export async function allocationCommitPreconditions(sql:SQL,checkout:FiscalWorkflowCheckoutV2){
  const proof=await assertAllocationCheckout(sql,checkout,checkout.phase==='EFFECT_POSSIBLE');

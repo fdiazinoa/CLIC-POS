@@ -59,6 +59,25 @@ export function createFiscalWorkflowV2Client({readAuth=captureFiscalStatusBoundC
   try{const response=await fetchImpl(`${auth.base}/fiscal/workflow/v2/${path}`,{method:body?'POST':'GET',headers:{...auth.headers,Accept:'application/json',...(body?{'Content-Type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{}),credentials:'omit',cache:'no-store',redirect:'error',signal:controller.signal});const data=await response.json();auth.assertCurrent();if(!response.ok)fail(typeof data?.code==='string'?data.code:'FISCAL_WORKFLOW_UNAVAILABLE');if(JSON.stringify(data).length>600000)fail();return {data,auth};}finally{clearTimeout(timer);signal?.removeEventListener('abort',abort);}
  };
  return {
+ /** Cached native policy shared by COBRAR and its precharge guard. Never acquires authority. */
+ async checkoutFiscalStatus(type:string):Promise<{remaining:number;total:number;recovery?:boolean}|null>{
+  const native=store(),local=await readOfflineAuthority(),current=await native?.currentCheckout(fiscalWorkflowScopeKey(local.scope));
+  if(current&&['PREPARED','EFFECT_POSSIBLE'].includes(current.phase)){
+   if(!current.allocation&&!current.permit?.leaseId)return null; // Online/V1 permits retain their existing caller policy.
+   if(current.offlineBindingHash!==local.bindingHash)fail('FISCAL_WORKFLOW_CHECKOUT_RECONCILIATION_REQUIRED');
+   if(current.phase==='EFFECT_POSSIBLE'){
+    if(!current.paymentIds.length||JSON.parse(current.cartIdentity).fiscalType!==type)fail('FISCAL_WORKFLOW_CHECKOUT_RECONCILIATION_REQUIRED');
+    if(current.allocation){if(!native?.allocationDraft)fail('OFFLINE_FISCAL_NATIVE_REQUIRED');await native!.allocationDraft!(current);}
+    else if(current.permit?.leaseId){const lease=await native?.offlineLease?.(local,true,current.permit.leaseId),at=Date.parse(current.offlineEffectAt||'');if(!lease||lease.leaseId!==current.permit.leaseId||!Number.isFinite(at)||at<Date.parse(lease.issuedAt)||at>=Date.parse(lease.validUntil))fail('FISCAL_WORKFLOW_CHECKOUT_RECONCILIATION_REQUIRED');}
+    else fail('FISCAL_WORKFLOW_CHECKOUT_RECONCILIATION_REQUIRED');
+    return {remaining:1,total:1,recovery:true};
+   }
+   if(current.permit?.leaseId)return null; // Existing V1 preparation keeps its legacy numbering policy.
+   if(current.allocation){if(!native?.allocationDraft)fail('OFFLINE_FISCAL_NATIVE_REQUIRED');await native!.allocationDraft!(current);}
+  }
+  const allocation=await native?.allocationAvailability?.(local,type);if(!allocation)return null;
+  return {remaining:allocation.remaining[type]||0,total:allocation.total?.[type]||allocation.remaining[type]||0};
+ },
  async allocationReady(type?:string):Promise<boolean>{try{const value=await store()?.allocationAvailability?.(await readOfflineAuthority(),type);return Boolean(value&&Object.values(value.remaining).some(n=>n>0));}catch{return false;}},
  async offlineReadiness():Promise<{reason:string;code?:string;remaining?:Record<string,number>}>{
   try{const local=await readOfflineAuthority(),native=store(),current=await native?.currentCheckout(fiscalWorkflowScopeKey(local.scope));

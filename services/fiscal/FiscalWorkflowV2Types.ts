@@ -13,7 +13,7 @@ export interface FiscalWorkflowStore {
  saveAllocation?(value:import('./OfflineFiscalAllocation').OfflineFiscalAllocation,authority:import('./OfflineFiscalLease').OfflineFiscalLocalAuthority,serverTime:string):Promise<void>;
  offlineAllocation?(authority:import('./OfflineFiscalLease').OfflineFiscalLocalAuthority,id?:string,recovery?:boolean):Promise<{authority:import('./OfflineFiscalAllocation').OfflineFiscalAllocation;now:number}|null>;
  reserveAllocationCheckout?(authority:import('./OfflineFiscalLease').OfflineFiscalLocalAuthority,cartIdentity:string,operationId:string,context?:import('./OfflineFiscalLease').TableFiscalSaleContext):Promise<FiscalWorkflowCheckoutV2>;
- allocationAvailability?(authority:import('./OfflineFiscalLease').OfflineFiscalLocalAuthority,type?:string):Promise<{authorizationId:string;remaining:Record<string,number>}|null>;
+ allocationAvailability?(authority:import('./OfflineFiscalLease').OfflineFiscalLocalAuthority,type?:string):Promise<{authorizationId:string;remaining:Record<string,number>;total?:Record<string,number>}|null>;
  allocationCommitPreconditions?(checkout:FiscalWorkflowCheckoutV2):Promise<Array<{collection:string;id:string;expected:string|null}>>;
  allocationDraft?(checkout:FiscalWorkflowCheckoutV2):Promise<{ncf:string;fiscalIssuance:import('../../types').FiscalIssuanceSnapshot}>;
 

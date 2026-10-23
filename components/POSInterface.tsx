@@ -4342,6 +4342,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          }
 
          try {
+            if(v3Operational&&fiscalCompliance.mode==='ECF'){
+               const allocation=await fiscalWorkflowV2Client.checkoutFiscalStatus(type);
+               if(cancelled)return;
+               if(allocation){
+                  setStatus(null);
+                  setFiscalStatus({type,hasNCF:allocation.remaining>0,localBuffer:null,isUsingPool:false,isTerminalBlock:true,remaining:allocation.remaining,total:allocation.total});
+                  return;
+               }
+            }
             const canIssue = await db.canRequestMoreNCF(type, terminalId, activeTerminalConfig);
             const allocations = await db.get('fiscalAllocations');
             const authorityId = activeTerminalConfig?.erpTerminalId || terminalId;
@@ -4366,11 +4375,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             setFiscalStatus({ type, hasNCF: false, localBuffer: null, isUsingPool: false, isTerminalBlock: false, remaining: 0, total: 0 });
          }
       };
-      checkFiscalStatus();
+      const refresh=()=>{void checkFiscalStatus();};
+      refresh();window.addEventListener('offlineFiscalReserveUpdated',refresh);window.addEventListener('transactionsUpdated',refresh);window.addEventListener('configUpdated',refresh);
       return () => {
          cancelled = true;
+         window.removeEventListener('offlineFiscalReserveUpdated',refresh);window.removeEventListener('transactionsUpdated',refresh);window.removeEventListener('configUpdated',refresh);
       };
    }, [
+      v3Operational,
+      fiscalCompliance.mode,
+      showPaymentModal,
       isFiscalModeDisabled,
       isOrderTakerMode,
       requiredSaleFiscalType,
@@ -6600,7 +6614,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (processedCart.some(item => item.quantity < 0)) types.add(resolveCreditNoteFiscalCode(fiscalCompliance.mode));
       for (const type of types) {
          await db.assertFiscalIssuerAuthority(type);
-         if (!(v3Operational&&fiscalCompliance.mode==='ECF'&&await fiscalWorkflowV2Client.allocationReady(type))&&!await db.canRequestMoreNCF(type, terminalId, activeTerminalConfig)) {
+         const allocation=v3Operational&&fiscalCompliance.mode==='ECF'?await fiscalWorkflowV2Client.checkoutFiscalStatus(type):null;
+         if (!(allocation?allocation.remaining>0:await db.canRequestMoreNCF(type, terminalId, activeTerminalConfig))) {
             throw new Error(`No hay un lote fiscal ${type} vigente, descargado y asignado a esta terminal. La facturación está bloqueada.`);
          }
       }

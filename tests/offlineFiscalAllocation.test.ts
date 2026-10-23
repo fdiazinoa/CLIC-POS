@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
+import {readFileSync} from 'node:fs';
+import {createContext,Script} from 'node:vm';
+import ts from 'typescript';
 import {CapacitorSQLiteAdapter} from '../services/db/adapters/CapacitorSQLiteAdapter';
 import {FISCAL_WORKFLOW_V2_SCHEMA,NativeFiscalWorkflowV2Store} from '../services/db/FiscalWorkflowV2Store';
 import {OFFLINE_FISCAL_ALLOCATION_WRITER_SCHEMA} from '../services/db/OfflineFiscalAllocationStore';
@@ -157,4 +160,31 @@ test('A to A+B expansion then actual A withdrawal and return never revives origi
  await assert.rejects(f.store.saveAllocation!(f.grant,f.local,new Date().toISOString()),/AUTHORITY_CHANGED/);await assert.rejects(f.store.markPaymentPossible(c.checkoutId,'second-payment'),/REVOKED/);await assert.rejects(f.store.allocationCommitPreconditions!(c),/REVOKED/);
  const saved=await f.store.readCheckout(c.checkoutId);assert.deepEqual(saved!.paymentIds,['original-payment']);assert.equal(saved!.transactionId,c.transactionId);assert.equal(saved!.allocation!.ncf,c.allocation!.ncf);
  assert.equal(String(f.sql.prepare("SELECT data FROM documents WHERE collection_name='internalSequences'").get()!.data),seriesBefore);assert.equal(String(f.sql.prepare("SELECT data FROM documents WHERE collection_name='localFiscalBuffer'").get()!.data),bufferBefore);assert.equal(f.count('sync_outbox_v2'),0);assert.equal(f.count('pos_fiscal_pending_numbers_v2'),1);
+ }finally{f.sql.close();}});
+
+test('actual COBRAR status caller admits real fully reserved buffer then disables fourth exhausted sale',async()=>{const f=await fixture();try{
+ const source=readFileSync(new URL('../components/POSInterface.tsx',import.meta.url),'utf8'),start=source.indexOf('      const checkFiscalStatus = async () => {'),end=source.indexOf('      const refresh=',start);assert.ok(start>0&&end>start);
+ let state:any,legacyCalls=0;const context=createContext({cancelled:false,requiredSaleFiscalType:'E32',isOrderTakerMode:false,isFiscalModeDisabled:false,v3Operational:{},fiscalCompliance:{mode:'ECF'},fiscalWorkflowV2Client:f.client(),terminalId:scope.terminalId,activeTerminalConfig:f.config.terminals[0].config,setStatus:()=>{},setFiscalStatus:(next:any)=>{state=next;},console:{error:()=>{}},db:{canRequestMoreNCF:async()=>{legacyCalls++;return false;},get:async()=>[]}});
+ new Script(ts.transpileModule(source.slice(start,end)+'\nglobalThis.check=checkFiscalStatus;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText).runInContext(context);
+ // This is the real assigned-buffer invariant: allocation pointer past end while owned buffer remains.
+ assert.equal(f.allocation.nextNumber,4);assert.equal(f.allocation.reservedEnd,3);
+ for(let number=1;number<=3;number++){
+  await (context.check as ()=>Promise<void>)();assert.equal(state.hasNCF,true);assert.equal(state.remaining,4-number);assert.equal(state.total,3);
+  const c=await f.client().reserveOfflineCheckout(identity('ui-'+number),'operation-'+number);await f.client().recordPayment(c,'payment-'+c.checkoutId);await f.adapter.commitFinancialTransaction(await input(f,c) as any);await f.store.acknowledgeCheckout(c.checkoutId);
+ }
+ await (context.check as ()=>Promise<void>)();assert.equal(state.hasNCF,false);assert.equal(state.remaining,0);assert.equal(legacyCalls,0);assert.equal(f.count('sync_outbox_v2'),3);await assert.rejects(f.client().reserveOfflineCheckout(identity('fourth'),'operation-fourth'),/EXHAUSTED/);
+ }finally{f.sql.close();}});
+
+test('checkout status respects native withdrawal/expiry and paid original kind before new authority',async()=>{
+ for(const withdrawal of ['fiscalAllocations','fiscalRanges','config']){const f=await fixture();try{await f.adapter.saveCollection(withdrawal,[]);await assert.rejects(f.client().checkoutFiscalStatus('E32'));}finally{f.sql.close();}}
+ const expired=await fixture({expiry:'2020-01-01'});try{await assert.rejects(expired.client().checkoutFiscalStatus('E32'),/EXPIRED/);}finally{expired.sql.close();}
+ const f=await fixture();try{const c=await f.client().reserveOfflineCheckout(identity('original'),'op');await f.client().recordPayment(c,'original-payment');assert.deepEqual(await f.client().checkoutFiscalStatus('E32'),{remaining:1,total:1,recovery:true});await assert.rejects(f.client().checkoutFiscalStatus('E31'),/RECONCILIATION/);await f.adapter.saveCollection('fiscalAllocations',[]);await assert.rejects(f.client().checkoutFiscalStatus('E32'),/REVOKED/);assert.deepEqual((await f.store.readCheckout(c.checkoutId))!.paymentIds,['original-payment']);}finally{f.sql.close();}
+});
+
+test('UI status paid V1 recovery ignores newer V2 states and rejects invalid original proof',async()=>{const f=await fixture();try{
+ for(const mode of ['NONE','REVOKED','EXPIRED','EXPANDED']){
+  let probed=false;const current:any={checkoutId:'original',transactionId:'original-tx',phase:'EFFECT_POSSIBLE',paymentIds:['original-payment'],permit:{leaseId:'original-lease'},offlineBindingHash:f.local.bindingHash,offlineEffectAt:'2026-10-21T12:00:00Z',cartIdentity:identity('original')};
+  const client=createFiscalWorkflowV2Client({store:()=>({currentCheckout:async()=>current,offlineLease:async()=>({leaseId:'original-lease',issuedAt:'2026-10-20T00:00:00Z',validUntil:'2026-10-22T00:00:00Z'}),allocationAvailability:async()=>{probed=true;if(mode==='REVOKED'||mode==='EXPIRED')throw Error(mode);return mode==='EXPANDED'?{remaining:{E32:10}}:null;}}),readOfflineAuthority:async()=>f.local,readAuth:()=>{throw Error('NO_NETWORK');}} as any);
+  assert.deepEqual(await client.checkoutFiscalStatus('E32'),{remaining:1,total:1,recovery:true});assert.equal(probed,false);current.offlineEffectAt='2026-10-23T00:00:00Z';await assert.rejects(client.checkoutFiscalStatus('E32'),/RECONCILIATION/);assert.equal(probed,false);
+ }
  }finally{f.sql.close();}});
