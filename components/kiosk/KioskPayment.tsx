@@ -6,10 +6,12 @@
  * IMPROVED: Shows all items, promotions, and clear receipt-style summary.
  */
 
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { CreditCard, Banknote, ArrowLeft, CheckCircle, User, Smartphone, Printer, Mail, XCircle, QrCode, Wallet, DollarSign, Zap, Search, Ticket, X } from 'lucide-react';
-import { CartItem, Customer, PaymentMethod, RedeemedCouponRef, Transaction } from '../../types';
+import { BusinessConfig, User as PosUser, CartItem, Customer, PaymentMethod, RedeemedCouponRef, Transaction } from '../../types';
 import { sendReceiptEmailViaErp } from '../../services/email/receiptEmailService';
+import { buildReceiptEmailPayload } from '../../services/email/receiptEmailPayload';
+import { resolveFiscalPrintReadiness, resolveFiscalAcceptance } from '../../services/fiscal/FiscalPrintEvidence';
 
 export type KioskResolvedPaymentMethod = {
     key: string;
@@ -43,6 +45,8 @@ export type KioskActionResult = {
 
 interface KioskPaymentProps {
     cart: CartItem[];
+    config?: BusinessConfig;
+    users?: PosUser[];
     paymentMethods: KioskResolvedPaymentMethod[];
     totals?: KioskPaymentTotals;
     selectedCustomer?: Customer | null;
@@ -148,6 +152,8 @@ const getPaymentSupportText = (method: KioskResolvedPaymentMethod) => {
 
 const KioskPayment: React.FC<KioskPaymentProps> = ({
     cart,
+    config,
+    users = [],
     paymentMethods,
     totals,
     selectedCustomer,
@@ -169,6 +175,7 @@ const KioskPayment: React.FC<KioskPaymentProps> = ({
     const [email, setEmail] = useState('');
     const [sendingEmail, setSendingEmail] = useState(false);
     const [emailSent, setEmailSent] = useState(false);
+    const emailInFlight = useRef(false);
     const [lookupMode, setLookupMode] = useState<KioskLookupMode | null>(null);
     const [lookupValue, setLookupValue] = useState('');
     const [lookupMessage, setLookupMessage] = useState('');
@@ -279,16 +286,22 @@ const KioskPayment: React.FC<KioskPaymentProps> = ({
     };
 
     const handleSendEmail = async () => {
-        if (!email) return;
+        const recipient = email.trim();
+        if (!recipient || emailInFlight.current) return;
+        const transaction = completedTransaction;
+        if (!transaction || !String(transaction.displayId || transaction.id || '').trim()) {
+            alert('No hay una transacción guardada disponible para enviar el recibo.');
+            return;
+        }
+        emailInFlight.current = true;
         setSendingEmail(true);
 
         try {
-            const result = await sendReceiptEmailViaErp({
-                email,
-                cart,
-                total,
-                paymentMethod: selectedMethod || 'CARD'
-            });
+            const result = await sendReceiptEmailViaErp(buildReceiptEmailPayload(
+                transaction, recipient, config, config?.currencySymbol || '$', users,
+                await resolveFiscalPrintReadiness(transaction),
+                await resolveFiscalAcceptance(transaction),
+            ));
             if (!result.success) {
                 throw new Error(result.message || 'Resend no confirmo el envio.');
             }
@@ -302,6 +315,7 @@ const KioskPayment: React.FC<KioskPaymentProps> = ({
             setEmailSent(false);
             alert(error instanceof Error ? error.message : 'No se pudo enviar el ticket.');
         } finally {
+            emailInFlight.current = false;
             setSendingEmail(false);
         }
     };
