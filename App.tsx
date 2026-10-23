@@ -15395,6 +15395,8 @@ const AppContent: React.FC = () => {
         };
         return (
           <KioskPayment
+            config={kioskPaymentConfig}
+            users={users}
             cart={cart}
             paymentMethods={kioskPaymentMethods}
             totals={kioskTotals}
