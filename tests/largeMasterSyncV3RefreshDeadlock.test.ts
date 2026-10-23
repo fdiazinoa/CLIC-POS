@@ -198,10 +198,16 @@ for(const negative of [true,false])test(`current-generation validation reuses on
    }
    const {LargeMasterSyncV3OperationalSession:Session}=await sessionModule(f),session=await Session.open(false),config=await session.projectConfig(f.config),catalog=await session.catalog(tariff,warehouse),lines:any[]=[];
    for(let n=0;n<=prior;n++)lines.push({...await session.withStock((await catalog.get(duplicate||n===0?product:id(1000+n))).product,warehouse),quantity:1,cartId:'count-'+n});
-   const commands:{method:string;sql:string}[]=[];
-   for(const method of ['query','run','execute']){const original=f.bridge[method].bind(f.bridge);f.bridge[method]=async(...args:any[])=>{commands.push({method,sql:args[0]});return original(...args);};}
+   const commands:{method:string;sql:string;values:any[]}[]=[];
+   for(const method of ['query','run','execute']){const original=f.bridge[method].bind(f.bridge);f.bridge[method]=async(...args:any[])=>{commands.push({method,sql:args[0],values:args[1] || []});return original(...args);};}
    const sources:any[]=[];await session.validate(config,lines,tariff,warehouse,'SALE',(_line:any,source:any)=>{sources.push(source);source.name='callback-local';});
-   assert.equal(commands.length,13+(negative?6:7)*lines.length,`prior=${prior}, duplicate=${duplicate}`);assert.equal(commands.filter(c=>c.method!=='query').length,0);assert.equal(commands.filter(c=>c.sql.includes('master_v3_taxes')).length,1);
+   // Scope validation added one canonical config read at each of the three session fences.
+   // Budget those exact security reads separately; preserve the original catalog work budget.
+   const configGuardSql = 'SELECT doc_id, length(data) AS data_length, CASE WHEN length(data) <= ? THEN data ELSE NULL END AS data FROM documents WHERE collection_name = ? ORDER BY sort_order ASC, updatedAt ASC LIMIT ? OFFSET ?';
+   const configGuards = commands.filter(c => c.method === 'query' && c.sql === configGuardSql
+     && JSON.stringify(c.values) === JSON.stringify([4 * 1024 * 1024, 'config', 15, 0]));
+   assert.equal(configGuards.length,3,'exactly three canonical config scope guards');
+   assert.equal(commands.length-configGuards.length,13+(negative?6:7)*lines.length,`prior=${prior}, duplicate=${duplicate}`);assert.equal(commands.filter(c=>c.method!=='query').length,0);assert.equal(commands.filter(c=>c.sql.includes('master_v3_taxes')).length,1);
    assert.equal(sources.length,lines.length);assert.equal(new Set(sources).size,lines.length,'callback mutation cannot leak into the next line');assert.equal((await catalog.get(product)).product.name,'Synthetic');assert.equal(f.db.inTransaction,false);
   }finally{f.db.close();delete (globalThis as any).__refresh;}
  }
