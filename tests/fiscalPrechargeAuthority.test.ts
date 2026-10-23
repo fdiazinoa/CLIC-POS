@@ -81,7 +81,7 @@ test('fresh issuer loss blocks typed finalization before payment entry, provider
   setFinalizeError:(e:string)=>{error=e;},setSuccessNotice:()=>{},setGatewayProgress:()=>{},setIsFinalizing:()=>{},markInteractionStateUpdate:()=>{},
   beforePaymentEffects:async()=>{throw Error('FISCAL_ISSUER_RNC_REQUIRED');},
   markInteractionStage:()=>{},completePosInteraction:()=>{},cancelPosInteraction:()=>{},failPosInteraction:()=>{},
-  workflowPaymentFenceRef:{current:null},onConfirm:()=>{effects++;},buildPaymentEntry:()=>{effects++;},
+  workflowPaymentFenceRef:{current:{recordPaymentEffect:async()=>{effects++;}}},onConfirm:()=>{effects++;},buildPaymentEntry:()=>{effects++;},
  });
  await context.finalize();assert.equal(effects,0);assert.match(error,/ISSUER_RNC/);
 });
