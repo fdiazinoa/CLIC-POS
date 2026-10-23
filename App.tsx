@@ -9459,9 +9459,13 @@ const AppContent: React.FC = () => {
       if (candidateV3Setup) {
         setCatalogDiagnosticStatus('SYNCING');
         setupResult.progress?.({ stepId: 'sync', message: 'Validando catálogo V3 e inventario operativo...' });
-        updatedConfig = await completeLargeMasterSyncV3Setup(updatedConfig,
+        updatedConfig = await completeLargeMasterSyncV3Setup(
+          async () => await db.get('config') as unknown as BusinessConfig,
           async () => { const session = await getLargeMasterSyncV3OperationalSession();
-            attemptReporter?.phase('config'); return session; }, projected => db.save('config', projected),
+            attemptReporter?.phase('config'); return session; }, async (expected, projected, guard) => {
+            if (!dbAdapter.compareAndSwapV3SetupConfig) throw new Error('SYNC_V3_NATIVE_STORE_UNAVAILABLE');
+            await dbAdapter.compareAndSwapV3SetupConfig(expected, projected, guard);
+          },
           { productionAreas: setupResult.productionAreas });
         attemptReporter?.phase('config');
       } else if (shouldFullPullOnPairing) {

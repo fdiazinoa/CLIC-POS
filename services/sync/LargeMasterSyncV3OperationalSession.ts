@@ -50,6 +50,7 @@ export class LargeMasterSyncV3OperationalSession {
     private readonly identity: V3LocalOperationalIdentity,
     private offlineAuthority?:V3OfflineOperationalAuthority,
     private readonly expectedConfigScope?:string,
+    private readonly setupCredentialGuard?:string,
   ) {}
 
   static async open(refresh = false, metric?: (metric: LargeMasterSyncV3Metric) => void): Promise<LargeMasterSyncV3OperationalSession> {
@@ -120,7 +121,7 @@ export class LargeMasterSyncV3OperationalSession {
     } else {
       observe({ event: 'setup_phase', phase: 'cached' });
     }
-    return new LargeMasterSyncV3OperationalSession(ready, binding, store, v3BaseUrl, identity,offlineAuthority,expectedScope);
+    return new LargeMasterSyncV3OperationalSession(ready, binding, store, v3BaseUrl, identity,offlineAuthority,expectedScope,credentialGuard);
   }
 
   async assertCurrent(): Promise<void> {
@@ -147,6 +148,17 @@ export class LargeMasterSyncV3OperationalSession {
       || inventory?.version !== this.ready.inventoryVersion || inventory.cursor !== this.ready.inventoryCursor
       || owner?.binding !== this.binding || owner.syncId !== active.syncId || owner.syncVersion !== active.syncVersion) {
       throw new LargeMasterSyncV3Error('SYNC_V3_RUNTIME_VERSION_CHANGED');
+    }
+  }
+
+  /** Pairing-only synchronous guard. Raw credentials/profile include the captured company/tenant/device/token.
+   * Never call async identity recovery or a DB getter while the native CAS owns its writer lane. */
+  assertSetupIdentity(): void {
+    assertLargeMasterSyncV3NativeAndroid();
+    if (this.setupCredentialGuard === undefined
+      || readOperationalTerminalBinding() !== this.setupCredentialGuard
+      || largeMasterSyncV3DownloadOrigin() !== this.v3BaseUrl) {
+      throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
     }
   }
 
