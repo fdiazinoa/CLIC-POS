@@ -1,3 +1,4 @@
+import { v3OperationalConfigContext } from '../services/sync/LargeMasterSyncV3OperationalConfigScope';
 import {readV3CompletedReservation} from '../services/sync/LargeMasterSyncV3FinancialCommit';
 import {restoreV3ReservationReference,expireV3Reservation} from '../services/sync/LargeMasterSyncV3ReservationRecovery';
 import { claimV3DirectTicket, readV3DirectWaitingTickets, updateV3DirectTicket } from '../services/sync/LargeMasterSyncV3DirectTicketSource';
@@ -7,7 +8,7 @@ import type { V3OperationalCategory } from '../services/sync/LargeMasterSyncV3Ca
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import POSInterface, { type POSInterfaceProps, type V3OperationalPOSBoundary } from './POSInterface';
 import type { BusinessConfig, Product } from '../types';
-import { getLargeMasterSyncV3OperationalSession, type LargeMasterSyncV3OperationalSession } from '../services/sync/LargeMasterSyncV3OperationalSession';
+import { acquireLargeMasterSyncV3ConfigContext, type LargeMasterSyncV3OperationalSession } from '../services/sync/LargeMasterSyncV3OperationalSession';
 import type { LargeMasterSyncV3OperationalCatalog, V3ArticleDiagnostic } from '../services/sync/LargeMasterSyncV3OperationalCatalog';
 import { reconcileV3TariffSelection, v3TariffContextKey, isV3TariffContextCurrent,
   type V3TariffSelection } from '../services/sync/LargeMasterSyncV3TariffSelection';
@@ -45,7 +46,10 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps> = props => {
   try { reconciled = reconcileV3TariffSelection(selection, authority, props.cart.length > 0); }
   catch (reason) { authorityError = String((reason as Error).message || reason); }
   const tariffId = reconciled?.tariffId || '';
-  const wantedContextKey = JSON.stringify([authorityKey, tariffId]);
+  let configScope = '';
+  try { configScope = v3OperationalConfigContext(props.config, { localTerminalId: props.activeTerminalId || '' }).key; }
+  catch (reason) { authorityError = String((reason as Error).message || reason); }
+  const wantedContextKey = JSON.stringify([authorityKey, tariffId, configScope]);
   const latestContextKey = useRef(wantedContextKey);
   latestContextKey.current = authorityError ? '' : wantedContextKey;
   const [loadedContextKey, setLoadedContextKey] = useState('');
@@ -58,14 +62,13 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps> = props => {
     let current = true;
     const context = ++contextSequence.current;
     catalog.current = undefined;
-    setProjected(undefined);
     setError('');
     setArticleDiagnostics([]);
     ++querySequence.current;
     void (async () => {
       if (authorityError) throw new Error(authorityError);
       if (!warehouseId || !tariffId) throw new Error('SYNC_V3_CONFIGURED_TARIFF_WAREHOUSE_REQUIRED');
-      const ready = await getLargeMasterSyncV3OperationalSession();
+      const ready = await acquireLargeMasterSyncV3ConfigContext(latestProps.current.config, latestProps.current.activeTerminalId || '');
       const [config, source] = await Promise.all([ready.projectConfig(latestProps.current.config), ready.catalog(tariffId, warehouseId)]);
       const categoryMetadata = await source.categories();
       if (!current || !isV3TariffContextCurrent(wantedContextKey, latestContextKey.current, context, contextSequence.current)) return;
@@ -79,11 +82,12 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps> = props => {
       setLoadedContextKey(wantedContextKey);
     })().catch(reason => { if (current && latestContextKey.current === wantedContextKey) setError(String(reason.message || reason)); });
     return () => { current = false; ++contextSequence.current; ++querySequence.current; };
-  }, [props.activeTerminalId, warehouseId, tariffId, authorityKey, authorityError, catalogRevision]);
+  }, [props.activeTerminalId, warehouseId, tariffId, authorityKey, authorityError, configScope, catalogRevision]);
 
-  const effectiveConfig = useMemo(() => projected ? { ...props.config,
+  const effectiveConfig = useMemo(() => projected ? {
+    ...(loadedContextKey === wantedContextKey && !authorityError ? props.config : projected),
     tariffs: projected.tariffs, taxes: projected.taxes, taxRate: projected.taxRate } : undefined,
-  [props.config, projected]);
+  [props.config, projected, loadedContextKey, wantedContextKey, authorityError]);
 
   const remember = useCallback((rows: Product[]) => {
     setCache(previous => {
@@ -188,19 +192,33 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps> = props => {
     return () => window.removeEventListener('v3InventoryUpdated', refresh);
   }, [boundary]);
 
-  if (authorityError || error) return <div role="alert" className="p-6 text-red-700">
-    <p>Candidato V3 detenido: {authorityError || error}</p>
+  // Keep the mounted POS (including retained-ticket/reservation/payment state) across renewal.
+  // A distinct rejecting boundary also retires the child's queued and in-flight old actions.
+  const lastBoundary = useRef<V3OperationalPOSBoundary>();
+  if (boundary) lastBoundary.current = boundary;
+  const blockedBoundary = useMemo<V3OperationalPOSBoundary>(() => {
+    const reject = () => { throw new Error('SYNC_V3_UI_CONTEXT_CHANGED'); };
+    const rejectAsync = async () => reject();
+    return { tariffId: lastBoundary.current?.tariffId || tariffId,
+      categories: lastBoundary.current?.categories || categories,
+      search: rejectAsync, resolveCode: rejectAsync, validate: rejectAsync, changeTariff: reject,
+      completedReservation: rejectAsync, expireReservation: rejectAsync, restoreReservation: rejectAsync,
+      restoreRetainedTicket: rejectAsync, updateRetainedTicket: rejectAsync, waitingTickets: rejectAsync };
+  }, [wantedContextKey, authorityError, error, boundary]);
+  const failure = authorityError || error;
+  const notice = failure ? <div role="alert" className="p-6 text-red-700">
+    <p>Candidato V3 detenido: {failure}</p>
     <button type="button" onClick={() => props.onOpenSettings()} className="mt-4 rounded bg-blue-600 px-4 py-2 text-white">
       Abrir ajustes
     </button>
-  </div>;
-  if (!projected || !boundary) return <div role="status" className="p-6">Preparando catálogo V3 e inventario del dispositivo vinculado…</div>;
-  return <POSInterface {...props} config={effectiveConfig!} products={cache} productPrices={[]}
-    v3Operational={boundary} catalogSearchProducts={visible}
+  </div> : !boundary ? <div role="status" className="p-6">Preparando catálogo V3 e inventario del dispositivo vinculado…</div> : null;
+  if (!projected) return notice;
+  return <>{notice}<POSInterface {...props} config={effectiveConfig!} products={cache} productPrices={[]}
+    v3Operational={failure ? blockedBoundary : boundary || blockedBoundary} catalogSearchProducts={visible}
     catalogArticleDiagnostics={articleDiagnostics}
     onUpdateProducts={() => { throw new Error('SYNC_V3_LOCAL_CATALOG_EDIT_UNSUPPORTED'); }}
     onUpdateConfig={next => props.onUpdateConfig({ ...next, taxes: props.config.taxes,
-      tariffs: props.config.tariffs, taxRate: props.config.taxRate })} />;
+      tariffs: props.config.tariffs, taxRate: props.config.taxRate })} /></>;
 };
 
 export default LargeMasterSyncV3OperationalPOS;

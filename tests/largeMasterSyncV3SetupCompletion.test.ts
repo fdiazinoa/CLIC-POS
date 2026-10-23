@@ -168,3 +168,72 @@ test('completion rechecks session after asynchronous projection and never persis
   }), async () => { writes++; }), /scope-changed/);
   assert.equal(writes, 0);
 });
+
+const contextDeferred = <T>() => { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; }); return { promise, resolve }; };
+const contextSession = (name: string, guard: () => Promise<void> = async () => {}) => ({ name, assertCurrent: guard, projectConfig: async (value: BusinessConfig) => value });
+
+test('published context is a verified shared flight; first financial caller waits and receives B', async () => {
+  let current = 'A', opens = 0;
+  const a = contextSession('A', async () => { if (current !== 'A') throw Error('stale-A'); });
+  const get = createLargeMasterSyncV3SessionCoordinator(async () => { opens++; return a; }, () => 'same-transport');
+  await get(); const expected = get.captureConfigContext(); current = 'B';
+  const hold = contextDeferred<void>(), entered = contextDeferred<void>(); let checks = 0;
+  const b = contextSession('B');
+  const publishing = get.publishConfigContext(b, expected, async () => { if (++checks === 1) { entered.resolve(); await hold.promise; } });
+  await entered.promise; let delivered = false; const first = get().then(session => { delivered = true; return session; });
+  await Promise.resolve(); assert.equal(delivered, false);
+  hold.resolve(); await publishing; assert.strictEqual(await first, b); assert.equal(opens, 1);
+  await assert.rejects(a.assertCurrent(), /stale-A/);
+});
+
+test('older candidate cannot overwrite a newer explicit refresh generation', async () => {
+  const refreshing = contextDeferred<ReturnType<typeof contextSession>>(), entered = contextDeferred<void>();
+  const a = contextSession('A'), r = contextSession('REFRESH');
+  const get = createLargeMasterSyncV3SessionCoordinator(async refresh => { if (refresh) { entered.resolve(); return refreshing.promise; } return a; }, () => 'transport');
+  await get(); const before = get.captureConfigContext(); const fresh = get(true); await entered.promise;
+  let checks = 0; await assert.rejects(get.publishConfigContext(contextSession('OLD-CANDIDATE'), before, async () => { checks++; }), /UI_CONTEXT_CHANGED/);
+  assert.equal(checks, 0); refreshing.resolve(r); assert.strictEqual(await fresh, r); assert.strictEqual(await get(), r);
+});
+
+test('older candidate cannot overwrite another context publication', async () => {
+  const get = createLargeMasterSyncV3SessionCoordinator(async () => contextSession('A'), () => 'transport');
+  await get(); const expected = get.captureConfigContext(), hold = contextDeferred<void>(), entered = contextDeferred<void>(), b = contextSession('B');
+  const winner = get.publishConfigContext(b, expected, async () => { entered.resolve(); await hold.promise; });
+  await entered.promise; await assert.rejects(get.publishConfigContext(contextSession('STALE'), expected, async () => {}), /UI_CONTEXT_CHANGED/);
+  hold.resolve(); await winner; assert.strictEqual(await get(), b);
+});
+
+test('refresh racing a reserved publication invalidates the old generation without resurrecting it', async () => {
+  let opens = 0; const get = createLargeMasterSyncV3SessionCoordinator(async () => contextSession(`open-${++opens}`), () => 'transport');
+  await get(); const expected = get.captureConfigContext(), hold = contextDeferred<void>(), entered = contextDeferred<void>();
+  const publication = get.publishConfigContext(contextSession('B'), expected, async () => { entered.resolve(); await hold.promise; });
+  const publicationReject = assert.rejects(publication, /UI_CONTEXT_CHANGED/); await entered.promise;
+  const refreshReject = assert.rejects(get(true), /UI_CONTEXT_CHANGED/);
+  hold.resolve(); await Promise.all([publicationReject, refreshReject]);
+  assert.equal((await get()).name, 'open-2', 'no older B publication survived the competing refresh');
+});
+
+for (const change of ['transport-scope', 'authority-guard']) test(`publication rechecks ${change} after asynchronous validation`, async () => {
+  let scope = 'transport', valid = true, opens = 0;
+  const get = createLargeMasterSyncV3SessionCoordinator(async () => contextSession(`fresh-${++opens}`), () => scope);
+  await get(); const expected = get.captureConfigContext(); const hold = contextDeferred<void>(), entered = contextDeferred<void>(); let checks = 0;
+  const publishing = get.publishConfigContext(contextSession('B'), expected, async () => {
+    if (!valid) throw Error('authority-changed');
+    if (++checks === 1) { entered.resolve(); await hold.promise; }
+    if (!valid) throw Error('authority-changed');
+  });
+  const rejected = assert.rejects(publishing, /UI_CONTEXT_CHANGED|authority-changed/); await entered.promise;
+  if (change === 'transport-scope') scope = 'foreign-token'; else valid = false;
+  hold.resolve(); await rejected; assert.equal((await get()).name, 'fresh-2');
+});
+
+test('old in-flight A assertion failure cannot clear the already published B flight', async () => {
+  const entered = contextDeferred<void>(), hold = contextDeferred<void>(); let waiting = false;
+  const a = contextSession('A', async () => { if (waiting) { entered.resolve(); await hold.promise; throw Error('stale-A'); } });
+  const get = createLargeMasterSyncV3SessionCoordinator(async () => a, () => 'transport');
+  await get(); const expected = get.captureConfigContext(); waiting = true;
+  const oldFailure = assert.rejects(get(), /stale-A/); await entered.promise;
+  const b = contextSession('B'); await get.publishConfigContext(b, expected, async () => {});
+  assert.strictEqual(await get(), b); hold.resolve(); await oldFailure;
+  assert.strictEqual(await get(), b, 'old consumer failure must not erase newer B');
+});

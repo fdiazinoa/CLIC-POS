@@ -177,9 +177,9 @@ test('actual component reconciles corrected pricing, retains manual tariff and f
   try {
     const mocks: Record<string, string> = {
       react: `const R=globalThis.__v3TariffHarness.react;export default R;export const {useState,useRef,useMemo,useEffect,useCallback}=R;`,
-      'react/jsx-runtime': 'export const jsx=(type,props)=>({type,props});export const jsxs=jsx;',
+      'react/jsx-runtime': 'export const Fragment=Symbol.for("react.fragment");export const jsx=(type,props)=>({type,props});export const jsxs=jsx;',
       './POSInterface': 'export default function MockPOS(){}',
-      '../services/sync/LargeMasterSyncV3OperationalSession': 'export const getLargeMasterSyncV3OperationalSession=async()=>globalThis.__v3TariffHarness.ready;',
+      '../services/sync/LargeMasterSyncV3OperationalSession': 'export const acquireLargeMasterSyncV3ConfigContext=async()=>globalThis.__v3TariffHarness.ready;',
     };
     const bundled = await build({ entryPoints: [new URL('../components/LargeMasterSyncV3OperationalPOS.tsx', import.meta.url).pathname],
       bundle: true, write: false, format: 'esm', platform: 'node', jsx: 'transform',
@@ -193,7 +193,11 @@ test('actual component reconciles corrected pricing, retains manual tariff and f
       onOpenSettings: (...args: unknown[]) => settingsCalls.push(args) };
     props.config.terminals[0].config.inventoryScope = { defaultSalesWarehouseId: 'W' };
     let node: any;
-    const render = () => { cursor = 0; dirty = false; effects = []; node = component(props); effects.forEach(fn => fn()); };
+    const render = () => { cursor = 0; dirty = false; effects = []; const tree = component(props);
+      // Fragment keeps the live POS mounted beside renewal notices; inspect the active notice or POS.
+      node = tree?.props?.children?.find?.((child: any) => child?.props?.role)
+        || tree?.props?.children?.find?.((child: any) => child?.props?.v3Operational) || tree;
+      effects.forEach(fn => fn()); };
     const settle = async () => { for (let n = 0; n < 12; n++) { await Promise.resolve(); if (dirty) render(); } };
     render(); await settle();
     assert.equal(node.props.role, 'alert');

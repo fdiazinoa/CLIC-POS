@@ -35,13 +35,25 @@ export const completeLargeMasterSyncV3Setup = async (
   return projected;
 };
 
+export interface V3SessionContextGeneration {
+  readonly generation: number;
+  readonly scope: string | undefined;
+}
+
+export type V3SessionCoordinator<T extends V3SetupSession> = ((refresh?: boolean) => Promise<T>) & {
+  progress: V3Progress;
+  captureConfigContext(): V3SessionContextGeneration;
+  publishConfigContext(session: T, expected: V3SessionContextGeneration, assertAuthority: () => Promise<void>): Promise<void>;
+};
+
 /** Shared setup/startup preparation; cached sessions are verified on every use. */
 export const createLargeMasterSyncV3SessionCoordinator = <T extends V3SetupSession>(
   open: (refresh: boolean, metric?: (metric: LargeMasterSyncV3Metric) => void) => Promise<T>,
   scope?: () => string,
-): ((refresh?: boolean) => Promise<T>) & { progress: V3Progress } => {
+): V3SessionCoordinator<T> => {
   let opening: Promise<T> | undefined;
   let refreshing: Promise<T> | undefined;
+  let generation = 0;
   const progress = createV3Progress();
   let reporter = progress.begin();
   let observedScope: string | undefined;
@@ -51,7 +63,7 @@ export const createLargeMasterSyncV3SessionCoordinator = <T extends V3SetupSessi
     const pending = Promise.resolve().then(() => open(refresh, attempt.metric))
       .catch(error => { attempt.fail(); throw error; });
     // A refresh already owns its outer shared flight while it verifies the cache.
-    if (!refresh) opening = pending;
+    if (!refresh) { opening = pending; generation++; }
     reporter = progress.begin();
     attempt = reporter;
     return pending;
@@ -64,6 +76,7 @@ export const createLargeMasterSyncV3SessionCoordinator = <T extends V3SetupSessi
       reporter = progress.begin();
     }
     if (refresh && !refreshing) {
+      generation++;
       const previous = opening;
       refreshing = Promise.resolve().then(async () => {
         if (previous) {
@@ -98,9 +111,37 @@ export const createLargeMasterSyncV3SessionCoordinator = <T extends V3SetupSessi
     } catch (error) {
       if (opening === pending && observedScope === currentScope) pendingReporter = reporter;
       pendingReporter.fail();
-      if (opening === pending) opening = undefined;
+      if (opening === pending) { opening = undefined; generation++; }
       throw error;
     }
   };
-  return Object.assign(get, { progress });
+  const captureConfigContext = (): V3SessionContextGeneration => ({ generation, scope: scope?.() });
+  const publishConfigContext = async (session: T, expected: V3SessionContextGeneration,
+    assertAuthority: () => Promise<void>): Promise<void> => {
+    const changed = () => Object.assign(new Error('SYNC_V3_UI_CONTEXT_CHANGED'), { code: 'SYNC_V3_UI_CONTEXT_CHANGED' });
+    if (refreshing || generation !== expected.generation || scope?.() !== expected.scope) throw changed();
+    const ownedGeneration = ++generation;
+    const assertGeneration = () => {
+      if (generation !== ownedGeneration || scope?.() !== expected.scope) throw changed();
+    };
+    // Reserve the verification flight synchronously. Ordinary financial callers must await it;
+    // none can observe the new session before authority and generation are verified.
+    const pending = Promise.resolve().then(async () => {
+      assertGeneration();
+      await assertAuthority();
+      assertGeneration();
+      await session.assertCurrent();
+      await assertAuthority();
+      assertGeneration();
+      return session;
+    });
+    opening = pending;
+    try { await pending; }
+    catch (error) {
+      // An older publisher cannot erase a newer refresh/cache generation.
+      if (opening === pending) { opening = undefined; generation++; }
+      throw error;
+    }
+  };
+  return Object.assign(get, { progress, captureConfigContext, publishConfigContext });
 };
