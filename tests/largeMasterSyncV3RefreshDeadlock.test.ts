@@ -8,6 +8,7 @@ import {tmpdir} from 'node:os';
 import {nativeFixture,id} from './articleFormatsNativeFixture';
 import type {LargeMasterSyncV3IdentityReadContext,LargeMasterSyncV3CatalogTransition,LargeMasterSyncV3Manifest} from '../services/sync/LargeMasterSyncV3Types';
 import {LargeMasterSyncV3Runtime} from '../services/sync/LargeMasterSyncV3Runtime';
+import {readOperationalTerminalBinding} from '../services/sync/OperationalTerminalConfig';
 const oldId=id(60),newId=id(61),warehouse=id(5),tariff=id(6),product=id(7);
 const manifest:LargeMasterSyncV3Manifest={syncId:newId,syncVersion:33,schemaVersion:3,contractVersion:2,type:'FULL',status:'READY',createdAt:'2026-10-15',datasets:{}};
 async function fixture(file?:string,track=true,negative=false){
@@ -97,7 +98,7 @@ async function sessionModule(f:Awaited<ReturnType<typeof fixture>>){
   await assertIdentity();const transition={...await f.transition(),binding,assertIdentity};await store.prepareCatalogOnly(manifest,transition);f.stage(33,g.__refresh.patch || {});await store.activateCatalogOnly(newId,transition);
   return {runtime:await LargeMasterSyncV3Runtime.open(store),inventoryVersion:4,inventoryCursor:'inventory-cursor',inventorySyncId:oldId,inventorySyncVersion:32};
  };
- sessionBundle ||= build({entryPoints:[new URL('../services/sync/LargeMasterSyncV3OperationalSession.ts',import.meta.url).pathname],bundle:true,write:false,platform:'node',format:'esm',define:{'import.meta.env':'{}'},plugins:[{name:'native-refresh-environment',setup(b){b.onResolve({filter:/^(\.\.\/db|\.\.\/\.\.\/utils\/db|\.\/LargeMasterSyncV3(?:Platform|Authority|Candidate|BoundTransport|DownloadOrigin)|\.\/OperationalTerminalConfig)$/},a=>({path:a.path,namespace:'refresh'}));b.onLoad({filter:/.*/,namespace:'refresh'},a=>({loader:'js',contents:a.path==='../db'?'export const dbAdapter=new Proxy({}, {get:(_t,k)=>{const a=globalThis.__refresh.adapter;return typeof a[k]==="function"?a[k].bind(a):a[k];}});':a.path==='../../utils/db'?'export const db={get:()=>globalThis.__refresh.adapter.getCollection("config"),getDocument:(...a)=>globalThis.__refresh.adapter.getDocument(...a)};':a.path.endsWith('Platform')?'export const assertLargeMasterSyncV3NativeAndroid=()=>{};':a.path.endsWith('Authority')?'export const LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED=true;':a.path.endsWith('Candidate')?'export const prepareLargeMasterSyncV3CatalogOnly=(...a)=>globalThis.__refresh.refresh(...a);export const prepareLargeMasterSyncV3Candidate=()=>{throw Error("unexpected fresh download")};export const prepareLargeMasterSyncV3UnusedBaseline=()=>{throw Error("unexpected baseline replacement")};':a.path.endsWith('BoundTransport')?'export const readLargeMasterSyncV3BoundIdentity=()=>globalThis.__refresh.identity;':a.path.endsWith('DownloadOrigin')?'export const largeMasterSyncV3DownloadOrigin=()=>globalThis.__refresh.origin;':'export const readOperationalTerminalBinding=()=>globalThis.__refresh.guard;'}));}}]}).then(r=>import('data:text/javascript;base64,'+Buffer.from(r.outputFiles[0].text).toString('base64')));
+ sessionBundle ||= build({entryPoints:[new URL('../services/sync/LargeMasterSyncV3OperationalSession.ts',import.meta.url).pathname],bundle:true,write:false,platform:'node',format:'esm',define:{'import.meta.env':'{}'},plugins:[{name:'native-refresh-environment',setup(b){b.onResolve({filter:/^(\.\.\/db|\.\.\/\.\.\/utils\/db|\.\/LargeMasterSyncV3(?:Platform|Authority|Candidate|BoundTransport|DownloadOrigin)|\.\/OperationalTerminalConfig)$/},a=>({path:a.path,namespace:'refresh'}));b.onLoad({filter:/.*/,namespace:'refresh'},a=>({loader:'js',contents:a.path==='../db'?'export const dbAdapter=new Proxy({}, {get:(_t,k)=>{const a=globalThis.__refresh.adapter;return typeof a[k]==="function"?a[k].bind(a):a[k];}});':a.path==='../../utils/db'?'export const db={get:()=>globalThis.__refresh.adapter.getCollection("config"),getDocument:(...a)=>globalThis.__refresh.adapter.getDocument(...a)};':a.path.endsWith('Platform')?'export const assertLargeMasterSyncV3NativeAndroid=()=>{};':a.path.endsWith('Authority')?'export const LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED=true;':a.path.endsWith('Candidate')?'export const prepareLargeMasterSyncV3CatalogOnly=(...a)=>globalThis.__refresh.refresh(...a);export const prepareLargeMasterSyncV3Candidate=()=>{throw Error("unexpected fresh download")};export const prepareLargeMasterSyncV3UnusedBaseline=()=>{throw Error("unexpected baseline replacement")};':a.path.endsWith('BoundTransport')?'export const readLargeMasterSyncV3BoundIdentity=()=>globalThis.__refresh.identity;export const validatedLargeMasterSyncV3ErpSyncBase=value=>value;':a.path.endsWith('DownloadOrigin')?'export const largeMasterSyncV3DownloadOrigin=()=>globalThis.__refresh.origin;':'export const readOperationalTerminalBinding=()=>globalThis.__refresh.readGuard?.()??globalThis.__refresh.guard;export const readOperationalCatalogBindingProof=()=>undefined;'}));}}]}).then(r=>import('data:text/javascript;base64,'+Buffer.from(r.outputFiles[0].text).toString('base64')));
  return sessionBundle;
 }
 
@@ -242,3 +243,34 @@ for(const scenario of ['retained','tax-changed','receipt-missing','current-missi
   assert.deepEqual(f.documents('parkedTickets'),retainedBefore);assert.equal(f.documents('transactions').length,0);
  }finally{f.db.close();delete (globalThis as any).__refresh;}
 });
+
+
+for (const changedKey of ['clic_erp_sync_company_id', 'clic_erp_sync_terminal_id', 'clic_erp_sync_tenant_id',
+  'CLIC_POS_DEVICE_ID', 'clic_sync_profile', 'clic_terminal_credentials_v1', 'clic_erp_sync_token', 'download-origin']) {
+  test(`real setup session rejects ${changedKey} drift inside native CAS before any write`, async () => {
+    const f = await fixture();
+    const previous = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+    const values = new Map<string, string>();
+    Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: (key: string) => values.get(key) ?? null } });
+    try {
+      const { LargeMasterSyncV3OperationalSession: Session } = await sessionModule(f);
+      const environment = (globalThis as any).__refresh;
+      environment.readGuard = readOperationalTerminalBinding;
+      const session = await Session.open(false);
+      session.assertSetupIdentity();
+      const current = await f.adapter.getCollection<any>('config');
+      const projected = await session.projectConfig(current);
+      const before = state(f);
+      if (changedKey === 'download-origin') environment.origin = 'https://other.invalid';
+      else values.set(changedKey, 'changed');
+      await assert.rejects(bounded(f.adapter.compareAndSwapV3SetupConfig(current, projected,
+        () => session.assertSetupIdentity())), /SYNC_V3_BINDING_CHANGED/);
+      assert.deepEqual(state(f), before);
+      assert.equal(f.db.inTransaction, false);
+    } finally {
+      f.db.close(); delete (globalThis as any).__refresh;
+      if (previous) Object.defineProperty(globalThis, 'localStorage', previous);
+      else delete (globalThis as any).localStorage;
+    }
+  });
+}
