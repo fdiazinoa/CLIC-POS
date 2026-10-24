@@ -333,6 +333,12 @@ export class DurableOutboxRepository {
         await this.refreshMetrics();
     }
 
+    async hasPendingTrackingEvents():Promise<boolean>{
+        if(!this.isSupported())return false;
+        const result=await this.requireSql()("SELECT 1 present FROM sync_outbox_v2 WHERE json_extract(payload_json,'$.pos_tracking_contract_version')='1' AND status IN('PENDING','SENDING','RETRY_WAIT') LIMIT 1");
+        return rowsFromResult(result).length>0;
+    }
+
     async refreshMetrics(): Promise<void> {
         if (!this.database.executeSQL) return;
         const result = await this.database.executeSQL(

@@ -61,7 +61,7 @@ export const buildV3InventoryLedger = (transaction: Transaction, warehouseId: st
     if (!Number.isFinite(quantity) || quantity === 0) throw new LargeMasterSyncV3Error('SYNC_V3_LINE_INVALID');
     if (refund && conditions?.get(line.cartId) === 'DAMAGED') return [];
     return [{ id: `V3-${transaction.id}-${encodeURIComponent(line.cartId)}`,
-      createdAt: transaction.date, warehouseId, productId: line.id,
+      createdAt: transaction.date, warehouseId, productId: line.id,...(transaction.trackingCheckoutId?{trackingCheckoutId:transaction.trackingCheckoutId}:{}),
       concept: refund ? 'DEVOLUCIÓN_VENTA' : 'VENTA', documentRef: transaction.id,
       qtyIn: refund ? quantity : 0, qtyOut: refund ? 0 : quantity,
       unitCost: line.cost || 0, balanceQty: 0, balanceAvgCost: line.cost || 0,
@@ -244,7 +244,7 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
       }
       documents.push(...originalMutations);
     }
-    if (isSyncFeatureEnabled('sqlite_outbox_v2') && !options.refund) {
+    if ((isSyncFeatureEnabled('sqlite_outbox_v2')||document.items.some(line=>line.trackingData?.length)) && !options.refund) {
       const offlineTable=isOfflineTableFiscalTransaction(document);
       if(offlineTable)await assertTableFiscalSaleContext(document,retained);
       const fiscalSourceMetadata = {...captureNewV3FiscalSourceMetadata(document,projected,session.binding,{refund:options.refund,retained:Boolean(retained),offlineTableAccount:offlineTable}),...captureTrackingSourceMetadata(document,projected)};
@@ -286,6 +286,7 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
       await durableOutboxRepository.commitFinancialTransaction({ documents, outboxEvent: events[0],
         additionalOutboxEvents: events.slice(1), paymentIntentIds: intentIds,fiscalWorkflowCommits,trackingCommits,...(fiscalAllocationPreconditions.length?{fiscalAllocationPreconditions}:{}) });
     } else {
+      if(trackingCommits.length)throw Error('TRACKING_ATOMIC_OUTBOX_REQUIRED');
       if (!dbAdapter.saveDocumentsAtomically) throw new LargeMasterSyncV3Error('SYNC_V3_ATOMIC_COMMIT_REQUIRED');
       await dbAdapter.saveDocumentsAtomically(documents);
     }

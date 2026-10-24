@@ -1,5 +1,7 @@
+import {TRACKING_OPERATION_SCHEMA,prepareTrackingOperation,readTrackingOperation,recordTrackingPaymentEffect,assertTrackingOperationCommit,readCommittedTrackingReceipt,retireTrackingOperation,type TrackingOperation,type TrackingScope} from '../TrackingCheckoutOperation';
 import {base6,readV3Base6Stock} from '../V3Base6Stock';
 import {TRACKING_ALLOCATION_SCHEMA,installTrackingAllocation,prepareTrackingCheckout,fenceTrackingCheckout,abandonTrackingCheckout,consumeTrackingCheckout} from '../TrackingAllocationStore';
+import type {Transaction} from '../../../types';
 import type {TrackingAuthority,TrackingSelection} from '../../tracking/TrackingAuthority';
 import {OFFLINE_FISCAL_ALLOCATION_WRITER_SCHEMA} from '../OfflineFiscalAllocationStore';
 import {FISCAL_RETIREMENT_WRITER_SCHEMA,OFFLINE_FISCAL_ABANDON_WRITER_SCHEMA,assertRetirementRecoveryPromotion} from '../FiscalWorkflowRetirementStore';
@@ -542,20 +544,22 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         return this.withWriteLock(() => db.run(normalized, params));
     }
 
+    async readTrackingCheckout(cartIdentity:string,scope:TrackingScope){return this.withWriteLock(()=>readTrackingOperation(this.ensureDb() as any,cartIdentity,scope));}
+    async readCommittedTrackingReceipt(operation:TrackingOperation){return this.withWriteLock(()=>readCommittedTrackingReceipt(this.ensureDb() as any,operation));}
     async readTrackingAuthority(allocationId:string):Promise<{authorityJson:string;witnessHash:string;availableMinor:number}|null>{
         const row=(await this.ensureDb().query("SELECT a.authority_json,a.delivery_witness_hash,a.state,json_extract(a.authority_json,'$.quantityMinor')-a.consumed_minor-coalesce((SELECT sum(c.quantity_minor) FROM pos_tracking_checkout_v1 c WHERE c.allocation_id=a.id AND c.phase IN('PREPARED','EFFECT_POSSIBLE')),0) available_minor FROM pos_tracking_allocations_v1 a WHERE a.id=?",[allocationId])).values?.[0];return row?{authorityJson:String(row.authority_json),witnessHash:String(row.delivery_witness_hash),availableMinor:row.state==='ACTIVE'?Number(row.available_minor):0}:null;
     }
     async installTrackingAuthority(authority:TrackingAuthority,previouslySeen:boolean,serverConsumedMinor=0,deliveryWitnessHash?:string):Promise<void>{
         await this.withWriteLock(()=>this.executeUnlocked([],()=>installTrackingAllocation(this.ensureDb() as any,authority,previouslySeen,serverConsumedMinor,deliveryWitnessHash),true));
     }
-    async prepareTrackingCheckout(checkoutId:string,selections:TrackingSelection[],scope:Pick<TrackingAuthority,'tenantId'|'companyId'|'storeId'|'warehouseId'|'terminalId'|'deviceId'>):Promise<void>{
-        await this.withWriteLock(()=>this.executeUnlocked([],()=>prepareTrackingCheckout(this.ensureDb() as any,checkoutId,selections,scope),true));
+    async prepareTrackingCheckout(checkoutId:string,selections:TrackingSelection[],scope:Pick<TrackingAuthority,'tenantId'|'companyId'|'storeId'|'warehouseId'|'terminalId'|'deviceId'>,operation:{transactionId:string;cartIdentity:string}):Promise<void>{
+        await this.withWriteLock(()=>this.executeUnlocked([],async()=>{await prepareTrackingOperation(this.ensureDb() as any,checkoutId,operation.transactionId,operation.cartIdentity,scope);await prepareTrackingCheckout(this.ensureDb() as any,checkoutId,selections,scope);},true));
     }
-    async fenceTrackingCheckout(checkoutId:string):Promise<number>{
-        let effectAt=0;await this.withWriteLock(()=>this.executeUnlocked([],async()=>{effectAt=await fenceTrackingCheckout(this.ensureDb() as any,checkoutId);},true));return effectAt;
+    async fenceTrackingCheckout(checkoutId:string,paymentId:string):Promise<number>{
+        let effectAt=0;await this.withWriteLock(()=>this.executeUnlocked([],async()=>{effectAt=await fenceTrackingCheckout(this.ensureDb() as any,checkoutId);await recordTrackingPaymentEffect(this.ensureDb() as any,checkoutId,paymentId);},true));return effectAt;
     }
     async abandonTrackingCheckout(checkoutId:string):Promise<void>{
-        await this.withWriteLock(()=>this.executeUnlocked([],()=>abandonTrackingCheckout(this.ensureDb() as any,checkoutId),true));
+        await this.withWriteLock(()=>this.executeUnlocked([],async()=>{await abandonTrackingCheckout(this.ensureDb() as any,checkoutId);await retireTrackingOperation(this.ensureDb() as any,checkoutId);},true));
     }
 
     async commitFinancialTransaction(input: FinancialCommitInput): Promise<void> {
@@ -626,6 +630,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             if(!source||!event||!history||JSON.stringify(history.document.items?.flatMap((line:any)=>line.trackingData||[])||[])!==JSON.stringify(tracking.selections)||JSON.stringify(selections)!==JSON.stringify(tracking.selections)||JSON.stringify(event.payload.transaction?.items?.flatMap((line:any)=>line.trackingData||[])||[])!==JSON.stringify(tracking.selections))throw Error('TRACKING_ATOMIC_SOURCE_REQUIRED');
             const effectRows=(await this.ensureDb().query('SELECT effect_at_ms FROM pos_tracking_checkout_v1 WHERE checkout_id=?',[tracking.checkoutId])).values||[];
             if(!Number.isFinite(Date.parse(source.document.trackingEffectAt))||effectRows.some((row:any)=>row.effect_at_ms!==Date.parse(source.document.trackingEffectAt)))throw Error('TRACKING_EFFECT_TIME_REQUIRED');
+            await assertTrackingOperationCommit(this.ensureDb() as any,tracking.checkoutId,source.document as Transaction);
             await consumeTrackingCheckout(this.ensureDb() as any,tracking.checkoutId,tracking.transactionId,tracking.selections);
           }
           if(input.documents.some(d=>d.collectionName==='transactions'&&d.document.items?.some((line:any)=>line.v3SaleAuthority&&line.trackingData?.length))&&!input.trackingCommits?.length)throw Error('TRACKING_ATOMIC_SOURCE_REQUIRED');
@@ -1071,6 +1076,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             ${OFFLINE_FISCAL_ABANDON_WRITER_SCHEMA}
             ${OFFLINE_FISCAL_ALLOCATION_WRITER_SCHEMA}
             ${TRACKING_ALLOCATION_SCHEMA}
+            ${TRACKING_OPERATION_SCHEMA}
             ${LARGE_MASTER_SYNC_V3_SCHEMA_SQL}
             ${ARTICLE_FORMATS_SCHEMA}
             ${NATIVE_FISCAL_RECEIPTS_SCHEMA}

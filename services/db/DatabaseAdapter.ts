@@ -142,10 +142,12 @@ export interface DatabaseAdapter {
     // documents and their durable outbox events in one database transaction.
     commitFinancialTransaction?(input: FinancialCommitInput): Promise<void>;
 
+    readTrackingCheckout?(cartIdentity:string,scope:import('./TrackingCheckoutOperation').TrackingScope):Promise<import('./TrackingCheckoutOperation').TrackingOperation|null>;
+    readCommittedTrackingReceipt?(operation:import('./TrackingCheckoutOperation').TrackingOperation):Promise<import('../../types').Transaction|null>;
     readTrackingAuthority?(allocationId:string):Promise<{authorityJson:string;witnessHash:string;availableMinor:number}|null>;
     installTrackingAuthority?(authority:import('../tracking/TrackingAuthority').TrackingAuthority, previouslySeen:boolean, serverConsumedMinor?:number,deliveryWitnessHash?:string):Promise<void>;
-    prepareTrackingCheckout?(checkoutId:string,selections:import('../tracking/TrackingAuthority').TrackingSelection[],scope:Pick<import('../tracking/TrackingAuthority').TrackingAuthority,'tenantId'|'companyId'|'storeId'|'warehouseId'|'terminalId'|'deviceId'>):Promise<void>;
-    fenceTrackingCheckout?(checkoutId:string):Promise<number>;
+    prepareTrackingCheckout?(checkoutId:string,selections:import('../tracking/TrackingAuthority').TrackingSelection[],scope:Pick<import('../tracking/TrackingAuthority').TrackingAuthority,'tenantId'|'companyId'|'storeId'|'warehouseId'|'terminalId'|'deviceId'>,operation:{transactionId:string;cartIdentity:string}):Promise<void>;
+    fenceTrackingCheckout?(checkoutId:string,paymentId:string):Promise<number>;
     abandonTrackingCheckout?(checkoutId:string):Promise<void>;
 
     getMasterNumberRanges?(): Promise<MasterNumberRangeRecord[]>;

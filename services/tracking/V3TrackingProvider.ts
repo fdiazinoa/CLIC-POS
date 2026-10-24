@@ -5,7 +5,7 @@ import {
   createLargeMasterSyncV3BoundTransport,
   readLargeMasterSyncV3BoundIdentity,
 } from "../sync/LargeMasterSyncV3BoundTransport";
-import { readTerminalCredentialsSync } from "../sync/TerminalCredentialStore";
+import {getLargeMasterSyncV3OperationalSession} from "../sync/LargeMasterSyncV3OperationalSession";
 import {
   acceptTrackingDelivery,
   nativeTrackingWitnessPreferences,
@@ -23,11 +23,7 @@ export async function loadV3TrackingOptions(
     !dbAdapter.installTrackingAuthority
   )
     trackingFail("TRACKING_NATIVE_AUTHORITY_REQUIRED");
-  const identity = readLargeMasterSyncV3BoundIdentity(),
-    credentials = readTerminalCredentialsSync();
-  const transport = createLargeMasterSyncV3BoundTransport(
-    new URL(identity.erpSyncBaseUrl).origin,
-  );
+  const session=await getLargeMasterSyncV3OperationalSession(),owner=await session.trackingOwner();
   const available: InventoryTracking[] = [];
   for (const snapshot of product.v3TrackingAuthorities || []) {
     const a = snapshot.authority;
@@ -38,11 +34,11 @@ export async function loadV3TrackingOptions(
     )
       continue;
     if (
-      a.tenantId !== identity.tenantId ||
-      a.terminalId !== identity.terminalId ||
-      a.deviceId !== identity.deviceId ||
-      a.companyId !== credentials.companyId ||
-      a.storeId !== credentials.storeId
+      a.tenantId !== owner.tenantId ||
+      a.terminalId !== owner.terminalId ||
+      a.deviceId !== owner.deviceId ||
+      a.companyId !== owner.companyId ||
+      a.storeId !== owner.storeId
     )
       trackingFail("TRACKING_OWNER_CHANGED");
     if (!["ACTIVE", "EXHAUSTED"].includes(snapshot.state)) continue;
@@ -57,6 +53,7 @@ export async function loadV3TrackingOptions(
           witnessHash,
         ),
       async claim(id, witnessHash) {
+        const identity=readLargeMasterSyncV3BoundIdentity();const transport=createLargeMasterSyncV3BoundTransport(new URL(identity.erpSyncBaseUrl).origin);
         const response = await transport.request(
           `/api/sync/v3/tracking/allocations/${id}/claim`,
           { method: "POST", body: { witnessHash } },

@@ -1,4 +1,7 @@
-import {assertTrackingLine,trackingSelectionsForCart} from '../services/tracking/TrackingLine';
+import {
+  assertTrackingLine,
+  trackingSelectionsForCart,
+} from "../services/tracking/TrackingLine";
 import {
   acceptTrackingDelivery,
   type TrackingAllocationSnapshot,
@@ -443,7 +446,97 @@ test("lost delivery acknowledgment cannot replay first-install permission", asyn
   assert.equal(installs, 0);
 });
 
-for(const option of [{kind:'LOT',quantity:.125,usesLots:true,usesSerial:false},{kind:'SERIAL',quantity:1,usesLots:false,usesSerial:true},{kind:'SERIAL',quantity:1,usesLots:true,usesSerial:true}])test(`pinned source preserves ${option.kind} with lot=${option.usesLots} serial=${option.usesSerial}`,()=>{
- const f=fixture();f.a.kind=option.kind as 'LOT'|'SERIAL';f.a.lotCode=option.usesLots&&option.usesSerial?'lot-1':null;const product:any={id:f.a.itemId,operationalFlags:{usesLots:option.usesLots,usesSerial:option.usesSerial},v3TrackingAuthorities:[{authority:f.a,state:'ACTIVE'}],v3SaleAuthority:{warehouseId:f.a.warehouseId}};
- const records:any=[{v3Authority:f.a,selectedQuantityMinor:option.quantity*1000000}],trackingData=trackingSelectionsForCart(records,product,'source-cart');const line={...product,cartId:'source-cart',quantity:option.quantity,trackingData};assertTrackingLine(line,product);assert.equal(trackingData[0].cartId,'source-cart');assert.throws(()=>assertTrackingLine({...line,quantity:option.quantity+1},product),/BASE_QUANTITY_CHANGED/);assert.throws(()=>assertTrackingLine({...line,cartId:'substituted'},product),/SOURCE_CHANGED/);
+for (const option of [
+  { kind: "LOT", quantity: 0.125, usesLots: true, usesSerial: false },
+  { kind: "SERIAL", quantity: 1, usesLots: false, usesSerial: true },
+  { kind: "SERIAL", quantity: 1, usesLots: true, usesSerial: true },
+])
+  test(`pinned source preserves ${option.kind} with lot=${option.usesLots} serial=${option.usesSerial}`, () => {
+    const f = fixture();
+    f.a.kind = option.kind as "LOT" | "SERIAL";
+    f.a.lotCode = option.usesLots && option.usesSerial ? "lot-1" : null;
+    const product: any = {
+      id: f.a.itemId,
+      operationalFlags: {
+        usesLots: option.usesLots,
+        usesSerial: option.usesSerial,
+      },
+      v3TrackingAuthorities: [{ authority: f.a, state: "ACTIVE" }],
+      v3SaleAuthority: { warehouseId: f.a.warehouseId },
+    };
+    const records: any = [
+        { v3Authority: f.a, selectedQuantityMinor: option.quantity * 1000000 },
+      ],
+      trackingData = trackingSelectionsForCart(records, product, "source-cart");
+    const line = {
+      ...product,
+      cartId: "source-cart",
+      quantity: option.quantity,
+      trackingData,
+    };
+    assertTrackingLine(line, product);
+    assert.equal(trackingData[0].cartId, "source-cart");
+    assert.throws(
+      () =>
+        assertTrackingLine({ ...line, quantity: option.quantity + 1 }, product),
+      /BASE_QUANTITY_CHANGED/,
+    );
+    assert.throws(
+      () => assertTrackingLine({ ...line, cartId: "substituted" }, product),
+      /SOURCE_CHANGED/,
+    );
+  });
+
+test("concurrent first delivery preserves one external witness and one claim", async () => {
+  const f = fixture();
+  let witness: string | null = null;
+  let writes = 0,
+    claims = 0,
+    installs = 0;
+  let enterClaim!: () => void, releaseClaim!: () => void;
+  const entered = new Promise<void>((resolve) => {
+    enterClaim = resolve;
+  });
+  const release = new Promise<void>((resolve) => {
+    releaseClaim = resolve;
+  });
+  const snapshot: TrackingAllocationSnapshot = {
+    authority: f.a,
+    state: "ACTIVE",
+    serverConsumedMinor: 0,
+    delivered: false,
+    witnessHash: null,
+  };
+  const port = {
+    async readLocal() {
+      return null;
+    },
+    async readWitness() {
+      return witness;
+    },
+    async writeWitness(_key: string, value: string) {
+      writes++;
+      witness = value;
+    },
+    async claim(allocationId: string, witnessHash: string) {
+      claims++;
+      enterClaim();
+      await release;
+      return { allocationId, witnessHash, firstInstallationAllowed: true };
+    },
+    async install() {
+      installs++;
+    },
+  };
+  const first = acceptTrackingDelivery(snapshot, port);
+  await entered;
+  const savedWitness = witness;
+  const second = acceptTrackingDelivery(snapshot, port);
+  assert.equal(first, second);
+  releaseClaim();
+  await Promise.all([first, second]);
+  assert.equal(witness, savedWitness);
+  assert.equal(writes, 1);
+  assert.equal(claims, 1);
+  assert.equal(installs, 1);
 });

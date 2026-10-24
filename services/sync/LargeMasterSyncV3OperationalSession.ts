@@ -56,6 +56,13 @@ export class LargeMasterSyncV3OperationalSession {
     private readonly setupCredentialGuard?:string,
   ) {}
 
+  async trackingOwner(){
+    await this.assertCurrent();
+    const {terminal}=v3OperationalConfigContext(await db.get('config') as unknown as BusinessConfig,this.identity),erp=terminal.config.erpBinding;
+    if(!erp?.companyId||!erp.storeId)throw Error('TRACKING_OWNER_REQUIRED');
+    return {tenantId:this.identity.tenantId,companyId:erp.companyId,storeId:erp.storeId,terminalId:this.identity.terminalId,deviceId:this.identity.deviceId};
+  }
+
   static async open(refresh = false, metric?: (metric: LargeMasterSyncV3Metric) => void, cachedOnly = false): Promise<LargeMasterSyncV3OperationalSession> {
     const observe = (event: LargeMasterSyncV3Metric) => { try { metric?.(event); } catch { /* Observer only. */ } };
     if (!LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED || LARGE_MASTER_SYNC_V3_CANARY) {

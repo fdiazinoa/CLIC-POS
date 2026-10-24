@@ -1,4 +1,7 @@
+import {v3RetainedLineFingerprint} from '../services/sync/LargeMasterSyncV3StockAuthority';
+import {assertTrackingOperationReceipt,type TrackingScope} from '../services/db/TrackingCheckoutOperation';
 import {dbAdapter} from '../services/db';
+import {durableOutboxRepository} from '../services/sync/DurableOutboxRepository';
 import {loadV3TrackingOptions} from '../services/tracking/V3TrackingProvider';
 import {trackingSelectionsForCart} from '../services/tracking/TrackingLine';
 import InteractionProgress,{yieldInteractionPaint,type InteractionProgressHandle} from './InteractionProgress';
@@ -2581,7 +2584,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    );
    const [showMobileConfigModal, setShowMobileConfigModal] = useState(false);
    const [pendingProductToAdd, setPendingProductToAdd] = useState<Product | null>(null);
-   const trackingCheckoutRef=useRef<{checkoutId:string;transactionId:string;operationId:string;effectAt?:string}|null>(null);
+   const trackingCheckoutRef=useRef<{checkoutId:string;transactionId:string;operationId:string;effectAt?:string;paymentIds?:string[]}|null>(null);
    const [pendingTrackingProduct, setPendingTrackingProduct] = useState<{ product: Product, quantity: number, price?: number, modifiers?: string[],selectedVariant?:ProductVariant,variantInfo?:string,note?:string,restaurantConfig?:CartItem['restaurantConfig'] } | null>(null);
    const loadPendingV3Tracking=useCallback(()=>pendingTrackingProduct?loadV3TrackingOptions(pendingTrackingProduct.product,defaultSalesWarehouseId||'wh_central',pendingTrackingProduct.selectedVariant?.id||pendingTrackingProduct.selectedVariant?.variantId||pendingTrackingProduct.selectedVariant?.sku||''):Promise.resolve([]),[pendingTrackingProduct,defaultSalesWarehouseId]);
 
@@ -5662,6 +5665,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             trackingCheckoutRef.current=null;onUpdateCart([]);onSelectCustomer(null);return prior as Transaction;
          }
 
+         const trackingReceipt=await resolveCommittedTrackingReceipt(payments.map(payment=>payment.id));
+         if(trackingReceipt){
+            await authorizeFiscalReceiptRecovery();
+            if(trackingReceipt.restaurantOrderId&&activeTable&&String(trackingReceipt.restaurantOrderId)===String(activeTable.currentOrderId)){
+               const remaining=parkedTicketsRef.current.filter(ticket=>ticket.id!==String(trackingReceipt.restaurantOrderId));parkedTicketsRef.current=remaining;
+               await Promise.resolve(onUpdateParkedTicketsRef.current(remaining));await Promise.resolve(onTableOrderClosedRef.current?.(activeTable,activeTable.currentOrderId,remaining));onClearActiveTable?.();
+            }
+            trackingCheckoutRef.current=null;onUpdateCart([]);resetCompletedSaleDiscount(setGlobalDiscount);onSelectCustomer(null);return trackingReceipt;
+         }
+
          if(processedCart.some(line=>line.articleFormat)){
             if(!formatRuntime||!fiscalCheckoutRef.current?.permit||processedCart.some(line=>line.quantity<=0)||activeTable||activeDirectV3TicketId||activeV3Reservation||activeRecoveredReservation)throw Error('FISCAL_WORKFLOW_FORMAT_NOT_READY');
             await formatRuntime.assertCurrent();const result=await formatRuntime.commitSale({checkout:fiscalCheckoutRef.current,lines:processedCart,ncfType:requiredSaleFiscalType,buyer:buildTransactionCustomerSnapshot(effectiveSelectedCustomer)||{},customerId:effectiveSelectedCustomer?.id,payments,seriesId:resolveTerminalDocumentSeriesId(activeTerminalConfig,'TICKET')!,userId:currentUser.id,userName:currentUser.name});
@@ -6281,7 +6294,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   ...txn,
                   seriesId: txn.seriesId || (isRefundOnly ? refundSeriesId : assignedSequenceId)
                };
-               const durableSaleCommit = !isRefundOnly && isSyncFeatureEnabled('sqlite_outbox_v2');
+               const durableSaleCommit = !isRefundOnly && (isSyncFeatureEnabled('sqlite_outbox_v2')||processedCart.some(line=>line.trackingData?.length));
                let settledFinalTxn = durableSaleCommit
                   ? finalTxn
                   : await syncConsignmentSettlement(finalTxn);
@@ -6713,6 +6726,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const offlineTableFiscalContextRef=useRef<TableFiscalSaleContext|undefined>(undefined);
    const currentFiscalCheckoutCartIdentity=(fiscalSaleContext=offlineTableFiscalContextRef.current)=>JSON.stringify({...(fiscalSaleContext?{fiscalSaleContext}:{}),items:processedCart.map(({fiscalCheckoutOperationId:_op,...line}:any)=>line),customerId:effectiveSelectedCustomer?.id||null,fiscalType:requiredSaleFiscalType});
+   const currentTrackingCartIdentity=()=>JSON.stringify({lineSources:processedCart.map(v3RetainedLineFingerprint),customerId:effectiveSelectedCustomer?.id||null,fiscalType:requiredSaleFiscalType,tableId:activeTable?.id===undefined?null:String(activeTable.id),accountId:activeTable?.currentOrderId||null,total:amountDueNow,serviceChargeAmount:cartTip});
+   const trackingLocalScope=():TrackingScope=>({...readFiscalWorkflowLocalScope(activeTerminalConfig,terminalId),warehouseId:defaultSalesWarehouseId!});
    const fiscalCheckoutRef=useRef<FiscalWorkflowCheckoutV2|null>(null);
    const [offlineFiscalReserveInfo,setOfflineFiscalReserveInfo]=useState<{remaining:number;validUntil:string|null;remainingByType?:Record<string,number>}|null>(null);
    useEffect(()=>{
@@ -6761,6 +6776,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
       return null;
    };
+   const resolveCommittedTrackingReceipt=async(paymentIds:string[]=[])=>{
+      if(!processedCart.some(line=>line.trackingData?.length))return null;
+      if(!dbAdapter.readTrackingCheckout||!dbAdapter.readCommittedTrackingReceipt)throw Error('TRACKING_NATIVE_AUTHORITY_REQUIRED');
+      const scope=trackingLocalScope(),identity=currentTrackingCartIdentity(),operation=await dbAdapter.readTrackingCheckout(identity,scope);
+      if(!operation)return null;
+      trackingCheckoutRef.current={checkoutId:operation.checkoutId,transactionId:operation.transactionId,operationId:operation.checkoutId,paymentIds:operation.paymentIds};
+      if(operation.phase!=='CONSUMED')return null;
+      const source=await dbAdapter.readCommittedTrackingReceipt(operation);if(!source)throw Error('TRACKING_COMMITTED_RECEIPT_REQUIRED');
+      assertTrackingOperationReceipt(operation,source,identity,scope,paymentIds);trackingCheckoutRef.current.effectAt=source.trackingEffectAt;return source;
+   };
    const bindCommittedFiscalReceipt = (receipt:{checkout:FiscalWorkflowCheckoutV2;transaction:Transaction}) => {
       offlineTableFiscalContextRef.current=receipt.checkout.fiscalSaleContext;fiscalCheckoutRef.current=receipt.checkout;
    };
@@ -6773,7 +6798,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       checkoutAdmissionRef.current?.assertCurrent();
    };
    const completeCommittedFiscalReceipt = async (paymentIds:string[]=[],beforeRecovery?:()=>void) => {
-      const receipt=await resolveCommittedFiscalReceipt(paymentIds);if(!receipt)return null;
+      const receipt=await resolveCommittedFiscalReceipt(paymentIds);
+      if(!receipt){const source=await resolveCommittedTrackingReceipt(paymentIds);if(!source)return null;beforeRecovery?.();const result=await handlePaymentConfirm(source.payments||[],source.voluntaryTipAmount);if(!result)throw Error('TRACKING_COMMITTED_RECEIPT_COMPLETION_REQUIRED');return result;}
       beforeRecovery?.();bindCommittedFiscalReceipt(receipt);
       const completed=await handlePaymentConfirm(receipt.transaction.payments||[],receipt.transaction.voluntaryTipAmount);
       if(!completed)throw Error('FISCAL_WORKFLOW_RECEIPT_COMPLETION_REQUIRED');return completed;
@@ -6783,6 +6809,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (completed) return Object.assign(() => {},{completedTransaction:completed});
       const receipt=await resolveCommittedFiscalReceipt(paymentIds);
       if(receipt){bindCommittedFiscalReceipt(receipt);return Object.assign(()=>{},{completedTransaction:receipt.transaction});}
+      const trackedReceipt=await resolveCommittedTrackingReceipt(paymentIds);if(trackedReceipt)return Object.assign(()=>{},{completedTransaction:trackedReceipt});
       if(fiscalCheckoutRef.current&&['COMMITTED','ACKNOWLEDGED'].includes(fiscalCheckoutRef.current.phase)){
          const completed=await db.getDocument('transactions',fiscalCheckoutRef.current.transactionId)||await db.getDocument('transactionHistory',fiscalCheckoutRef.current.transactionId);
          if(!completed)throw Error('FISCAL_WORKFLOW_COMMITTED_RECEIPT_REQUIRED');
@@ -6849,18 +6876,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const trackingSelections=processedCart.flatMap(line=>line.trackingData||[]);
       let trackingEffectPossible=false;
       if(trackingSelections.length){
-        if(!dbAdapter.prepareTrackingCheckout||!dbAdapter.fenceTrackingCheckout)throw Error('TRACKING_NATIVE_AUTHORITY_REQUIRED');
-        const tagged=processedCart.map(line=>(line as any).trackingCheckoutId).filter(Boolean),taggedTransactions=processedCart.map(line=>(line as any).trackingTransactionId).filter(Boolean);
+        if(!durableOutboxRepository.isSupported()||!dbAdapter.prepareTrackingCheckout||!dbAdapter.fenceTrackingCheckout)throw Error('TRACKING_NATIVE_AUTHORITY_REQUIRED');
         const previous=trackingCheckoutRef.current;
-        const checkoutId=fiscalCheckoutRef.current?.checkoutId||previous?.checkoutId||(tagged.length===processedCart.length&&new Set(tagged).size===1?tagged[0]:createUuid());
-        const transactionId=fiscalCheckoutRef.current?.transactionId||previous?.transactionId||(taggedTransactions.length===processedCart.length&&new Set(taggedTransactions).size===1?taggedTransactions[0]:createUuid());
+        const checkoutId=fiscalCheckoutRef.current?.checkoutId||previous?.checkoutId||createUuid();
+        const transactionId=fiscalCheckoutRef.current?.transactionId||previous?.transactionId||createUuid();
         trackingCheckoutRef.current={checkoutId,transactionId,operationId:checkoutId,...(previous?.effectAt?{effectAt:previous.effectAt}:{})};
-        const owner=trackingSelections[0].authority;
-        await dbAdapter.prepareTrackingCheckout(checkoutId,trackingSelections,{tenantId:owner.tenantId,companyId:owner.companyId,storeId:owner.storeId,warehouseId:owner.warehouseId,terminalId:owner.terminalId,deviceId:owner.deviceId});
-        if(!fiscalCheckoutRef.current)onUpdateCart(processedCart.map(line=>({...line,trackingCheckoutId:checkoutId,trackingTransactionId:transactionId})));
+        if(previous?.paymentIds?.some(id=>!paymentIds.includes(id)))throw Error('TRACKING_PAYMENT_RECONCILIATION_REQUIRED');
+        await dbAdapter.prepareTrackingCheckout(checkoutId,trackingSelections,trackingLocalScope(),{transactionId,cartIdentity:currentTrackingCartIdentity()});
       }
       let offlineEffectPossible=fiscalCheckoutRef.current?.phase==='EFFECT_POSSIBLE';
-      return Object.assign(()=>{if(trackingSelections.length&&!trackingEffectPossible&&trackingCheckoutRef.current)void dbAdapter.abandonTrackingCheckout?.(trackingCheckoutRef.current.checkoutId).catch(error=>setErrorToast(error instanceof Error?error.message:'TRACKING_CHECKOUT_RECONCILIATION_REQUIRED'));if(offlineFiscalCheckout&&!offlineEffectPossible)offlineTablePaymentFenceRef.current=false;setLargeMasterSyncV3CriticalOperation('PAYMENT',false);},{...(fiscalCheckoutRef.current?{futureCheckout:{checkoutId:fiscalCheckoutRef.current.checkoutId,transactionId:fiscalCheckoutRef.current.transactionId,operationId:fiscalCheckoutRef.current.operationId}}:trackingCheckoutRef.current?{futureCheckout:trackingCheckoutRef.current}:{}),recordPaymentEffect:async(paymentId:string)=>{if(trackingSelections.length&&trackingCheckoutRef.current){const effectAt=await dbAdapter.fenceTrackingCheckout!(trackingCheckoutRef.current.checkoutId);trackingCheckoutRef.current.effectAt=new Date(effectAt).toISOString();trackingEffectPossible=true;}if(fiscalCheckoutRef.current){await fiscalWorkflowV2Client.recordPayment(fiscalCheckoutRef.current,paymentId);offlineEffectPossible=true;}}});
+      return Object.assign(async()=>{if(trackingSelections.length&&!trackingEffectPossible&&trackingCheckoutRef.current){const abandoned=trackingCheckoutRef.current.checkoutId;await dbAdapter.abandonTrackingCheckout?.(abandoned);if(trackingCheckoutRef.current?.checkoutId===abandoned)trackingCheckoutRef.current=null;}if(offlineFiscalCheckout&&!offlineEffectPossible)offlineTablePaymentFenceRef.current=false;setLargeMasterSyncV3CriticalOperation('PAYMENT',false);},{...(fiscalCheckoutRef.current?{futureCheckout:{checkoutId:fiscalCheckoutRef.current.checkoutId,transactionId:fiscalCheckoutRef.current.transactionId,operationId:fiscalCheckoutRef.current.operationId}}:trackingCheckoutRef.current?{futureCheckout:trackingCheckoutRef.current}:{}),recordPaymentEffect:async(paymentId:string)=>{if(trackingSelections.length&&trackingCheckoutRef.current){const effectAt=await dbAdapter.fenceTrackingCheckout!(trackingCheckoutRef.current.checkoutId,paymentId);trackingCheckoutRef.current.effectAt=new Date(effectAt).toISOString();trackingEffectPossible=true;}if(fiscalCheckoutRef.current){await fiscalWorkflowV2Client.recordPayment(fiscalCheckoutRef.current,paymentId);offlineEffectPossible=true;}}});
    };
 
    const startCheckoutInteraction = (inputTimeStamp?: number) => {

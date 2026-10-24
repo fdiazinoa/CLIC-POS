@@ -401,6 +401,7 @@ export interface InventoryAuditLog {
 }
 
 export interface InventoryLedgerEntry {
+  trackingCheckoutId?:string;
   v3InventoryBaseline?: string;
   v3Binding?: string;
   id: string;

@@ -54,7 +54,7 @@ const nonce = () => {
 };
 /** No persistent token can recreate first-install permission. Only the one-shot
  * server response on this live attempt authorizes installing an absent row. */
-export async function acceptTrackingDelivery(
+async function acceptTrackingDeliveryOnce(
   snapshot: TrackingAllocationSnapshot,
   port: DeliveryPort,
 ): Promise<void> {
@@ -123,4 +123,26 @@ export async function acceptTrackingDelivery(
     snapshot.serverConsumedMinor,
     witnessHash,
   );
+}
+
+const deliveries = new Map<
+  string,
+  { identity: string; promise: Promise<void> }
+>();
+export function acceptTrackingDelivery(
+  snapshot: TrackingAllocationSnapshot,
+  port: DeliveryPort,
+): Promise<void> {
+  const key = snapshot.authority.allocationId,
+    identity = JSON.stringify(snapshot),
+    pending = deliveries.get(key);
+  if (pending)
+    return pending.identity === identity
+      ? pending.promise
+      : Promise.reject(Error("TRACKING_DELIVERY_SOURCE_CHANGED"));
+  const promise = acceptTrackingDeliveryOnce(snapshot, port).finally(() => {
+    if (deliveries.get(key)?.promise === promise) deliveries.delete(key);
+  });
+  deliveries.set(key, { identity, promise });
+  return promise;
 }
