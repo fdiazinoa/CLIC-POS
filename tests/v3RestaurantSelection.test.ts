@@ -36,3 +36,17 @@ test('fraction prices and equal parts come from source rule',()=>{
  const line:any={price:150,originalPrice:150,quantity:1,restaurantConfig:{product_type:'FRACTIONABLE',modifierGroups:{},comboGroups:{},selected_modifiers:[],selected_combo_items:[],selected_fraction_parts:parts},selected_modifiers:[],selected_combo_items:[],selected_fraction_parts:parts};
  assert.equal(validateV3RestaurantSelection(line,source),150);parts[0].price=1;assert.throws(()=>validateV3RestaurantSelection(line,source));
 });
+
+test('actual barcode callback opens restaurant configuration before any cart mutation',async()=>{
+ const {readFileSync}=await import('node:fs'),ts=(await import('typescript')).default;
+ const text=readFileSync(new URL('../components/POSInterface.tsx',import.meta.url),'utf8'),ast=ts.createSourceFile('POSInterface.tsx',text,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
+ let callback:ts.Node|undefined;
+ const visit=(n:ts.Node)=>{if(ts.isVariableDeclaration(n)&&n.name.getText(ast)==='resolveSubmittedCode'&&n.initializer&&ts.isCallExpression(n.initializer))callback=n.initializer.arguments[0];ts.forEachChild(n,visit);};visit(ast);assert.ok(callback);
+ const {source}=fixture();let adds=0,opened:unknown;
+ const boundary={resolveCode:async()=>({product:source,quantity:1,price:550,modifiers:[]})};
+ const {productHasRestaurantConfiguration}=await import('../utils/restaurantProductConfig');
+ const dependencies:any={v3Operational:boundary,uiLifetime:{current:{capture:()=>()=>true}},presentationMasters:{},products:[],addContext:{current:boundary},scanQueue:{current:{run:(_guard:any,run:any)=>run()}},assertV3UIContext:(guard:any)=>assert.equal(guard(),true),isWeightedProduct:()=>false,productHasRestaurantConfiguration,handleProductClick:(product:any)=>{opened=product;},addToCart:()=>{adds++;return true;},isReturnMode:false};
+ const code=ts.transpileModule('const invoke='+callback.getText(ast),{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
+ const invoke=new Function(...Object.keys(dependencies),code+';return invoke;')(...Object.values(dependencies));
+ const result=await invoke('322');assert.equal(result.added,true);assert.strictEqual(opened,source);assert.equal(adds,0);
+});

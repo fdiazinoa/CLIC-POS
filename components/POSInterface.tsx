@@ -3564,6 +3564,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             && existingConsignmentKey === consignmentIdentityKey
             && (i.variantSku || '') === (variantSku || '')
             && iMods === modifiersString
+            && (!v3Operational || JSON.stringify([i.restaurantConfig,i.note]) === JSON.stringify([lineRestaurantConfig,note]))
             && i.price === finalPrice
             && existingTaxSignature === taxSignature
             && sameWeightPresentation(i.weightPresentation, (product as CartItem).weightPresentation);
@@ -4080,6 +4081,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             handleProductClick(match.product);
             return { match, added: true };
          }
+         if(match && productHasRestaurantConfiguration(match.product)){
+            if(match.quantity!==1)throw Error('Configure el artículo antes de ajustar su cantidad.');
+            handleProductClick(match.product);return {match,added:true};
+         }
          const added = match ? await addToCart(match.product, (isReturnMode ? -1 : 1) * match.quantity,
             match.price, match.modifiers, undefined, match.selectedVariant, match.variantInfo) : false;
          return { match, added };
@@ -4203,6 +4208,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             return { success: true, message: `${match.product.name}: ingrese o lea el peso` };
          }
          const hasConfiguredVariant = Boolean(match.selectedVariant || match.modifiers?.length);
+         if(productHasRestaurantConfiguration(match.product)){
+            if(match.quantity!==1)throw Error('Configure el artículo antes de ajustar su cantidad.');
+            handleProductClick(match.product);return {success:true,message:`${match.product.name}: seleccione sus opciones`};
+         }
          if (!hasConfiguredVariant && ((match.product.variants || []).length > 0 || (match.product.attributes || []).length > 0)) {
             handleProductClick(match.product);
          } else {
