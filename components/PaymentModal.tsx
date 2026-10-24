@@ -64,7 +64,7 @@ import { sendReceiptEmailViaErp } from '../services/email/receiptEmailService';
 import { buildReceiptEmailPayload } from '../services/email/receiptEmailPayload';
 import { setLargeMasterSyncV3CriticalOperation } from '../services/sync/LargeMasterSyncV3OperationGate';
 
-export type PaymentEffectsFence = (() => void) & {completedTransaction?: Transaction;recordPaymentEffect?:(paymentId:string)=>Promise<void>;futureCheckout?:{checkoutId:string;transactionId:string}};
+export type PaymentEffectsFence = (() => void) & {completedTransaction?: Transaction;recordPaymentEffect?:(paymentId:string)=>Promise<void>;futureCheckout?:{checkoutId:string;transactionId:string;operationId?:string}};
 
 interface PaymentModalProps {
    openingTrace?: PosInteractionTrace | null;
@@ -906,13 +906,22 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
    const finalizationMountedRef=useRef(true);
    useEffect(()=>{finalizationMountedRef.current=true;return ()=>{finalizationMountedRef.current=false;};},[]);
    const finalizationContextRef=useRef<any>(null);
-   finalizationContextRef.current={payments,items,total,customerId:customer?.id,user:currentUser,currency:selectedCurrency,
+   finalizationContextRef.current={payments,items,total,inputAmount,voluntaryTip,customerId:customer?.id,user:currentUser,currency:selectedCurrency,
       activeMethodKey,canFinalize,isCreditActionBlocked,roles:roles||config?.roles,methods:config?.paymentMethods,integrations:config?.integrations};
    const handleFinalize = async () => {
       if (finalizationSubmissionRef.current || isFinalizing || isProcessingGateway || isSuccessScreen) return;
       finalizationSubmissionRef.current=true;
-      const identity=JSON.stringify(finalizationContextRef.current);
-      const assertContext=()=>{if(!finalizationMountedRef.current||JSON.stringify(finalizationContextRef.current)!==identity)throw Error('PAYMENT_CONFIRM_CONTEXT_CHANGED');};
+      const commercialIdentity=(context:any)=>JSON.stringify({...context,items:context.items?.map(({fiscalCheckoutOperationId:_op,...line}:any)=>line)});
+      const operationTags=(context:any)=>(context.items||[]).map((line:any)=>line.fiscalCheckoutOperationId??null);
+      const identity=commercialIdentity(finalizationContextRef.current),originalTags=JSON.stringify(operationTags(finalizationContextRef.current));
+      const assertContext=(fence?:PaymentEffectsFence)=>{
+         const current=finalizationContextRef.current;
+         if(!finalizationMountedRef.current||commercialIdentity(current)!==identity)throw Error('PAYMENT_CONFIRM_CONTEXT_CHANGED');
+         if(JSON.stringify(operationTags(current))!==originalTags){
+            const checkout=fence?.futureCheckout;
+            if(typeof checkout?.checkoutId!=='string'||!checkout.checkoutId||typeof checkout.transactionId!=='string'||!checkout.transactionId||typeof checkout.operationId!=='string'||!checkout.operationId||operationTags(current).some((tag:any)=>tag!==checkout.operationId))throw Error('PAYMENT_CONFIRM_CONTEXT_CHANGED');
+         }
+      };
       finalizationProgressRef.current?.show('Validando pago…');
       try{
       await yieldInteractionPaint();assertContext();
@@ -943,7 +952,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
       let releasePaymentFence: PaymentEffectsFence | undefined;
       try {
          if (beforePaymentEffects) releasePaymentFence = await beforePaymentEffects(payments.map(payment=>payment.id),[...payments.map(payment=>payment.method),...(canFinalizeWithTypedAmount?[activeRuntimeMethod]:[])]);
-         workflowPaymentFenceRef.current=releasePaymentFence||null;assertContext();
+         workflowPaymentFenceRef.current=releasePaymentFence||null;assertContext(releasePaymentFence);
          const completed = releasePaymentFence?.completedTransaction;
          let paymentsToConfirm = completed?.payments || payments;
          if (!completed && !canFinalize) { alert('Monto insuficiente'); return; }
