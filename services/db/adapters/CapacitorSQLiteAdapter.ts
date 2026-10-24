@@ -1,3 +1,5 @@
+import {TRACKING_ALLOCATION_SCHEMA,installTrackingAllocation,prepareTrackingCheckout,fenceTrackingCheckout,abandonTrackingCheckout,consumeTrackingCheckout} from '../TrackingAllocationStore';
+import type {TrackingAuthority,TrackingSelection} from '../../tracking/TrackingAuthority';
 import {OFFLINE_FISCAL_ALLOCATION_WRITER_SCHEMA} from '../OfflineFiscalAllocationStore';
 import {FISCAL_RETIREMENT_WRITER_SCHEMA,OFFLINE_FISCAL_ABANDON_WRITER_SCHEMA,assertRetirementRecoveryPromotion} from '../FiscalWorkflowRetirementStore';
 import {assertTableFiscalSaleContext} from '../../fiscal/OfflineTableFiscalCheckout';
@@ -539,6 +541,19 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         return this.withWriteLock(() => db.run(normalized, params));
     }
 
+    async installTrackingAuthority(authority:TrackingAuthority,previouslySeen:boolean,serverConsumedMinor=0):Promise<void>{
+        await this.withWriteLock(()=>this.executeUnlocked([],()=>installTrackingAllocation(this.ensureDb() as any,authority,previouslySeen,serverConsumedMinor),true));
+    }
+    async prepareTrackingCheckout(checkoutId:string,selections:TrackingSelection[],scope:Pick<TrackingAuthority,'tenantId'|'companyId'|'storeId'|'warehouseId'|'terminalId'|'deviceId'>):Promise<void>{
+        await this.withWriteLock(()=>this.executeUnlocked([],()=>prepareTrackingCheckout(this.ensureDb() as any,checkoutId,selections,scope),true));
+    }
+    async fenceTrackingCheckout(checkoutId:string):Promise<void>{
+        await this.withWriteLock(()=>this.executeUnlocked([],()=>fenceTrackingCheckout(this.ensureDb() as any,checkoutId),true));
+    }
+    async abandonTrackingCheckout(checkoutId:string):Promise<void>{
+        await this.withWriteLock(()=>this.executeUnlocked([],()=>abandonTrackingCheckout(this.ensureDb() as any,checkoutId),true));
+    }
+
     async commitFinancialTransaction(input: FinancialCommitInput): Promise<void> {
         const now = new Date().toISOString();
         const statements: Array<{ statement: string; values: any[] }> = [];
@@ -596,6 +611,14 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         const needsFinancialPrecondition = input.documents.some(row => row.document.v3InventoryBaseline
           || row.requireAbsent || row.expectedDocument !== undefined || row.v3StockRequirements);
         await this.withWriteLock(() => this.executeUnlocked(statements,async()=>{
+          for(const tracking of input.trackingCommits||[]){
+            const source=input.documents.find(d=>d.collectionName==='transactions'&&d.document.id===tracking.transactionId);
+            const event=outboxEvents.find(e=>e.eventType==='SALE_POSTED'&&e.aggregateId===tracking.transactionId);
+            const selections=source?.document.items?.flatMap((line:any)=>line.trackingData||[])||[];
+            if(!source||!event||JSON.stringify(selections)!==JSON.stringify(tracking.selections)||JSON.stringify(event.payload.transaction?.items?.flatMap((line:any)=>line.trackingData||[])||[])!==JSON.stringify(tracking.selections))throw Error('TRACKING_ATOMIC_SOURCE_REQUIRED');
+            await consumeTrackingCheckout(this.ensureDb() as any,tracking.checkoutId,tracking.transactionId,tracking.selections);
+          }
+          if(input.documents.some(d=>d.collectionName==='transactions'&&d.document.items?.some((line:any)=>line.v3SaleAuthority&&line.trackingData?.length))&&!input.trackingCommits?.length)throw Error('TRACKING_ATOMIC_SOURCE_REQUIRED');
           if(needsFinancialPrecondition)await this.assertV3FinancialBaseline(input.documents);
           for(const proof of input.fiscalAllocationPreconditions||[]){
             if(!['config','fiscalAllocations','fiscalRanges','localFiscalBuffer'].includes(proof.collection))throw Error('OFFLINE_FISCAL_COMMIT_PROOF_INVALID');
@@ -627,7 +650,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             }
             await consumeFiscalWorkflowBirth(this.ensureDb() as any,commit,source.document as any,outboxEvents.find(e=>e.eventType==='SALE_POSTED'&&e.aggregateId===commit.transactionId)?.eventId);
           }
-        },Boolean(input.fiscalAllocationPreconditions?.length)));
+        },Boolean(input.fiscalAllocationPreconditions?.length||input.trackingCommits?.length)));
     }
 
     async getMasterNumberRanges(): Promise<MasterNumberRangeRecord[]> {
@@ -1037,6 +1060,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             ${FISCAL_RETIREMENT_WRITER_SCHEMA}
             ${OFFLINE_FISCAL_ABANDON_WRITER_SCHEMA}
             ${OFFLINE_FISCAL_ALLOCATION_WRITER_SCHEMA}
+            ${TRACKING_ALLOCATION_SCHEMA}
             ${LARGE_MASTER_SYNC_V3_SCHEMA_SQL}
             ${ARTICLE_FORMATS_SCHEMA}
             ${NATIVE_FISCAL_RECEIPTS_SCHEMA}

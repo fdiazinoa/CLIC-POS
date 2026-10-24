@@ -38,6 +38,7 @@ export interface DurableOutboxEventInput {
 }
 
 export interface FinancialCommitInput {
+    trackingCommits?:Array<{checkoutId:string;transactionId:string;selections:import('../tracking/TrackingAuthority').TrackingSelection[]}>;
     fiscalAllocationPreconditions?:Array<{collection:string;id:string;expected:string|null}>;
     fiscalWorkflowCommits?: Array<{checkoutId:string;transactionId:string;birth:import('../fiscal/FiscalWorkflowV2Types').FiscalWorkflowBirthV2|null}>;
     documents: DurableDocumentMutation[];
@@ -140,6 +141,11 @@ export interface DatabaseAdapter {
     // Android SQLite only. POS-2A uses this boundary to commit the financial
     // documents and their durable outbox events in one database transaction.
     commitFinancialTransaction?(input: FinancialCommitInput): Promise<void>;
+
+    installTrackingAuthority?(authority:import('../tracking/TrackingAuthority').TrackingAuthority, previouslySeen:boolean, serverConsumedMinor?:number):Promise<void>;
+    prepareTrackingCheckout?(checkoutId:string,selections:import('../tracking/TrackingAuthority').TrackingSelection[],scope:Pick<import('../tracking/TrackingAuthority').TrackingAuthority,'tenantId'|'companyId'|'storeId'|'warehouseId'|'terminalId'|'deviceId'>):Promise<void>;
+    fenceTrackingCheckout?(checkoutId:string):Promise<void>;
+    abandonTrackingCheckout?(checkoutId:string):Promise<void>;
 
     getMasterNumberRanges?(): Promise<MasterNumberRangeRecord[]>;
     upsertMasterNumberRanges?(ranges: MasterNumberRangeRecord[]): Promise<void>;
