@@ -29,8 +29,8 @@ export function normalizeV3RestaurantSelection(value:unknown):Pick<Product,'prod
  unique(combos,g=>g.id);unique(modifiers,g=>g.id);
  let fraction:ProductFractionRule|undefined;
  if(source.fraction_rule&&record(source.fraction_rule).enabled!==false){
-  const f=record(source.fraction_rule),options=list(f.options).filter(o=>record(o).active!==false);
-  if(options.length){need(['HIGHEST_PRICE','AVERAGE_PRICE','SUM_PARTS','BASE_PLUS_DIFF'].includes(f.pricing_rule));const parts=count(f.max_parts,2);need(parts>=2&&parts<=16);options.forEach(o=>{text(o.option_product_id||o.product_id||o.id,128);text(o.name);amount(o.price_override??o.price);});unique(options,o=>String(o.option_product_id||o.product_id||o.id));fraction={...f,options,max_parts:parts};}
+  const f=record(source.fraction_rule),options=list(f.options).filter(o=>record(o).active!==false).map(o=>({...o,...(o.price_override==null&&o.price==null?{price:null}:{})}));
+  if(options.length){need(['HIGHEST_PRICE','AVERAGE_PRICE','SUM_PARTS','BASE_PLUS_DIFF'].includes(f.pricing_rule));const parts=count(f.max_parts,2);need(parts>=2&&parts<=16);options.forEach(o=>{text(o.option_product_id||o.product_id||o.id,128);text(o.name);if(o.price_override!=null||o.price!=null)amount(o.price_override??o.price);});unique(options,o=>String(o.option_product_id||o.product_id||o.id));fraction={...f,options,max_parts:parts};}
  }
  if(type==='FRACTIONABLE')need(fraction);
  const notes=list(source.note_presets);notes.forEach(n=>text(n,1000));
@@ -100,7 +100,7 @@ export function validateV3RestaurantSelection(line:CartItem,product:Product):num
  let base=variantPrice;
  const rule=source.fraction_rule;
  if(rule?.options?.length){
-  const parts=list(s.selected_fraction_parts);need(parts.length===rule.max_parts||source.product_type!=='FRACTIONABLE'&&parts.length===0);const prices=parts.map(part=>{const o=rule.options!.find(option=>String(option.option_product_id||option.product_id||option.id)===part.id);need(o);const price=Number(o!.price_override??o!.price);need(part.ratio===1/parts.length&&part.price===price&&part.product_id===(o!.product_id||o!.option_product_id)&&part.name===(o!.name||part.id));return price;});
+  const parts=list(s.selected_fraction_parts);need(parts.length===rule.max_parts||source.product_type!=='FRACTIONABLE'&&parts.length===0);const prices=parts.map(part=>{const o=rule.options!.find(option=>String(option.option_product_id||option.product_id||option.id)===part.id);need(o);const price=Number(o!.price_override??o!.price??variantPrice);need(part.ratio===1/parts.length&&part.price===price&&part.product_id===(o!.product_id||o!.option_product_id)&&part.name===(o!.name||part.id));return price;});
   need(canonical(line.selected_fraction_parts||[])===canonical(parts));
   if(parts.length)base=['AVERAGE_PRICE','SUM_PARTS'].includes(String(rule.pricing_rule))?prices.reduce((sum,p)=>sum+p,0)/parts.length:rule.pricing_rule==='BASE_PLUS_DIFF'?Math.max(product.price,...prices):Math.max(...prices);
  }else need(!list(s.selected_fraction_parts).length&&!line.selected_fraction_parts?.length);

@@ -34,3 +34,21 @@ test('full optional fractions preserve source price and ratios, reject altered s
  assert.equal(validateV3RestaurantSelection(line,source),200);
  parts[0].price=1;assert.throws(()=>validateV3RestaurantSelection(line,source));
 });
+
+for(const pricing_rule of ['HIGHEST_PRICE','AVERAGE_PRICE','SUM_PARTS','BASE_PLUS_DIFF'])test(`missing fraction price inherits pinned tariff for ${pricing_rule}, explicit zero stays zero`,()=>{
+ const raw={product_type:'FRACTIONABLE',fraction_rule:{enabled:true,max_parts:2,pricing_rule,options:[{id:'a',product_id:'a',name:'A'},{id:'b',product_id:'b',name:'B',price:0}]}};
+ const normalized=normalizeV3RestaurantSelection(raw);assert.equal(normalized.fraction_rule!.options![0].price,null);
+ for(const base of [100,175]){
+  const source:any={...normalized,price:base};const parts=[{id:'a',product_id:'a',name:'A',price:base,ratio:.5},{id:'b',product_id:'b',name:'B',price:0,ratio:.5}];
+  const price=['AVERAGE_PRICE','SUM_PARTS'].includes(pricing_rule)?base/2:base;
+  const line:any={price,originalPrice:price,selected_combo_items:[],selected_modifiers:[],selected_fraction_parts:parts,restaurantConfig:{product_type:'FRACTIONABLE',comboGroups:{},modifierGroups:{},selected_combo_items:[],selected_modifiers:[],selected_fraction_parts:parts}};
+  assert.equal(validateV3RestaurantSelection(line,source),price);
+  parts[0].price=base===100?175:100;assert.throws(()=>validateV3RestaurantSelection(line,source));
+ }
+});
+test('explicit fraction override remains higher priority; malformed explicit price never becomes a default',()=>{
+ for(const price of [-1,'100',NaN])assert.throws(()=>normalizeV3RestaurantSelection({product_type:'FRACTIONABLE',fraction_rule:{enabled:true,max_parts:2,pricing_rule:'HIGHEST_PRICE',options:[{id:'a',product_id:'a',name:'A',price}]}}));
+ const source:any={...normalizeV3RestaurantSelection({product_type:'FRACTIONABLE',fraction_rule:{enabled:true,max_parts:2,pricing_rule:'HIGHEST_PRICE',options:[{id:'a',product_id:'a',name:'A',price:90,price_override:120}]}}),price:175};
+ const parts=[{id:'a',product_id:'a',name:'A',price:120,ratio:.5},{id:'a',product_id:'a',name:'A',price:120,ratio:.5}];
+ assert.equal(validateV3RestaurantSelection({price:120,originalPrice:120,selected_fraction_parts:parts,restaurantConfig:{product_type:'FRACTIONABLE',comboGroups:{},modifierGroups:{},selected_fraction_parts:parts}} as any,source),120);
+});
