@@ -3508,10 +3508,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       expectInteractionRender(trace, 'POS_INTERACTION_VIEW');
       try {
       if (v3Operational) {
-         if (trackingData?.length || consignmentPatch || modifiers?.length && !restaurantConfig) {
+         if (trackingData?.length || consignmentPatch || modifiers?.length && !restaurantConfig && !selectedVariant) {
             throw new Error('SYNC_V3_ADVANCED_ARTICLE_CONTRACT_REQUIRED');
          }
-         await v3Operational.validate([...latestAddCart.current, { ...product, price: priceOverride ?? product.price, originalPrice: priceOverride ?? product.price, quantity, modifiers, note, restaurantConfig, selected_modifiers: restaurantConfig?.selected_modifiers, selected_combo_items: restaurantConfig?.selected_combo_items, selected_fraction_parts: restaurantConfig?.selected_fraction_parts, cartId: 'candidate-validation' } as CartItem], { ticketId: activeTable?.currentOrderId || activeDirectV3TicketId, claimId: activeDirectV3TicketId, reservationId:activeV3Reservation?.reservation.id,reservationClaimId:activeV3Reservation?.claimId, tableId: activeTable?.id === undefined ? undefined : String(activeTable.id) });
+         await v3Operational.validate([...latestAddCart.current, { ...product, variantId: selectedVariant?.id || selectedVariant?.variantId, variantSku: selectedVariant?.sku, price: priceOverride ?? resolveVariantSalesPrice(selectedVariant, getProductPrice(product)), originalPrice: priceOverride ?? resolveVariantSalesPrice(selectedVariant, getProductPrice(product)), quantity, modifiers, note, restaurantConfig, selected_modifiers: restaurantConfig?.selected_modifiers, selected_combo_items: restaurantConfig?.selected_combo_items, selected_fraction_parts: restaurantConfig?.selected_fraction_parts, cartId: 'candidate-validation' } as CartItem], { ticketId: activeTable?.currentOrderId || activeDirectV3TicketId, claimId: activeDirectV3TicketId, reservationId:activeV3Reservation?.reservation.id,reservationClaimId:activeV3Reservation?.claimId, tableId: activeTable?.id === undefined ? undefined : String(activeTable.id) });
          assertV3UIContext(isCurrent);
          if(restaurantConfig)modifiers=[...(restaurantConfig.selected_modifiers||[]).map((row:any)=>row.name),...(restaurantConfig.selected_combo_items||[]).map((row:any)=>row.name),...(note?[`Nota: ${note}`]:[])];
       }
@@ -3613,7 +3613,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             variantInfo,
             appliedTaxIds: effectiveTaxIds,
             production_area_id: productionAreaId || undefined,
-            originalPrice: (product as CartItem).inventoryPresentation || restaurantConfig ? finalPrice : getProductPrice(product),
+            originalPrice: (product as CartItem).inventoryPresentation || restaurantConfig || v3Operational && selectedVariant ? finalPrice : getProductPrice(product),
             trackingData,
             ...consignmentPatch,
          };

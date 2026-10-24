@@ -1,3 +1,4 @@
+import { resolveVariantSalesPrice } from '../utils/variantSalesPrice';
 import { v3OperationalConfigContext } from '../services/sync/LargeMasterSyncV3OperationalConfigScope';
 import {readV3CompletedReservation} from '../services/sync/LargeMasterSyncV3FinancialCommit';
 import {restoreV3ReservationReference,expireV3Reservation} from '../services/sync/LargeMasterSyncV3ReservationRecovery';
@@ -149,8 +150,8 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps> = props => {
       assertContext();
       assertWeightedCodeInput(product, raw);
       remember([product]);
-      return { product, quantity, price: match.variant?.price ?? product.price,
-        modifiers: [], selectedVariant: match.variant || undefined,
+      return { product, quantity, price: resolveVariantSalesPrice(match.variant, product.price),
+        modifiers: match.variant ? Object.values(match.variant.attributeValues || {}).map(String) : [], selectedVariant: match.variant || undefined,
         variantInfo: match.variant ? Object.entries(match.variant.attributeValues || {}).map(([key, value]) => `${key}: ${value}`).join(' · ') : undefined };
     },
     validate: async (lines, reference) => {

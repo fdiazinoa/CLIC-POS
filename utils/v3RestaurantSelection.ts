@@ -1,5 +1,6 @@
 import type { Product, CartItem, ComboGroup, ModifierGroup, ProductFractionRule } from '../types';
 import { resolveRestaurantProductConfig } from './restaurantProductConfig';
+import { resolveVariantSalesPrice } from './variantSalesPrice';
 const need=(ok:unknown):void=>{if(!ok)throw Error('SYNC_V3_RESTAURANT_SELECTION_INVALID');};
 const record=(v:unknown):Record<string,any>=>{need(v&&typeof v==='object'&&!Array.isArray(v));return v as Record<string,any>;};
 const text=(v:unknown,max=256):string=>{need(typeof v==='string'&&v.trim().length>0&&v.length<=max);return v as string;};
@@ -40,13 +41,26 @@ export function normalizeV3RestaurantSelection(value:unknown):Pick<Product,'prod
 /** Derive price and persisted option snapshots only from the pinned source, never client deltas. */
 export function validateV3RestaurantSelection(line:CartItem,product:Product):number {
  const source=resolveRestaurantProductConfig(product),selected=line.restaurantConfig;
+ let variantPrice=product.price,variantLabels:string[][]|undefined;
+ if(line.variantId||line.variantSku){
+  const variants=product.variants||[];
+  const matches=variants.filter(variant=>line.variantId?variant.id===line.variantId:variant.sku===line.variantSku);
+  need(matches.length===1&&(!line.variantSku||matches[0].sku===line.variantSku));
+  const variant=matches[0],values=variant.attributeValues||{};
+  // Scanner uses the selected record's order; the selector uses the pinned union of attribute keys.
+  const keys=Array.from(new Set(variants.flatMap(row=>Object.keys(row.attributeValues||{}))));
+  variantLabels=[Object.values(values).map(String),keys.map(key=>values[key]||values[key.toLowerCase()]||values[key.toUpperCase()]).filter(Boolean)];
+  if(!keys.length)variantLabels.push([variant.sku]);
+  variantPrice=resolveVariantSalesPrice(variant,product.price);
+ }
  const advanced=source.combo_groups.length||source.modifier_groups.length||source.fraction_rule?.options?.length||source.note_presets.length;
  if (!advanced) {
   const simpleRoute = source.product_type === 'SIMPLE' || source.product_type === 'SERVICE';
   const emptyArray = (value: unknown) => value === undefined || value === null && simpleRoute || Array.isArray(value) && value.length === 0;
   const emptyMap = (value: unknown) => value === undefined || value === null && simpleRoute || Boolean(value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0);
   need(emptyArray(line.selected_combo_items) && emptyArray(line.selected_modifiers)
-   && emptyArray(line.selected_fraction_parts) && emptyArray(line.modifiers));
+   && emptyArray(line.selected_fraction_parts));
+  need(variantLabels?Array.isArray(line.modifiers)&&variantLabels.some(labels=>JSON.stringify(labels)===JSON.stringify(line.modifiers)):emptyArray(line.modifiers));
   need(selected !== null || simpleRoute);
   if (selected != null) {
    const s = record(selected);
@@ -58,7 +72,9 @@ export function validateV3RestaurantSelection(line:CartItem,product:Product):num
     && emptyArray(s.selected_combo_items) && emptyArray(s.selected_modifiers) && emptyArray(s.selected_fraction_parts));
    need(s.note === undefined || typeof s.note === 'string' && s.note.length <= 2000 && s.note === line.note);
   }
-  return product.price;
+  if(variantLabels)need(Number.isFinite(line.price)&&line.price>=0&&line.price<=variantPrice+.01
+   &&Math.abs(Number(line.originalPrice??line.price)-variantPrice)<.02);
+  return variantPrice;
  }
  need(selected);const s=record(selected);need(Object.keys(s).every(k=>['modifierGroups','comboGroups','fractions','selected_modifiers','selected_fraction_parts','selected_combo_items','product_type','production_area_id','note'].includes(k)));let extra=0;
  const pick=(groups:any[],mapping:unknown,kind:'items'|'modifiers')=>{
@@ -78,12 +94,12 @@ export function validateV3RestaurantSelection(line:CartItem,product:Product):num
  const canonical=(v:unknown):string=>JSON.stringify(v,(_key,value)=>value&&typeof value==='object'&&!Array.isArray(value)?Object.fromEntries(Object.entries(value).sort(([a],[b])=>a.localeCompare(b))):value);
  need(canonical(s.selected_combo_items||[])===canonical(combos)&&canonical(s.selected_modifiers||[])===canonical(modifiers));
  need(canonical(line.selected_combo_items||[])===canonical(combos)&&canonical(line.selected_modifiers||[])===canonical(modifiers));
- let base=product.price;
+ let base=variantPrice;
  const rule=source.fraction_rule;
  if(rule?.options?.length){
-  const parts=list(s.selected_fraction_parts);need(parts.length===rule.max_parts);const prices=parts.map(part=>{const o=rule.options!.find(option=>String(option.option_product_id||option.product_id||option.id)===part.id);need(o);const price=Number(o!.price_override??o!.price);need(part.ratio===1/parts.length&&part.price===price&&part.product_id===(o!.product_id||o!.option_product_id)&&part.name===(o!.name||part.id));return price;});
+  const parts=list(s.selected_fraction_parts);need(parts.length===rule.max_parts||source.product_type!=='FRACTIONABLE'&&parts.length===0);const prices=parts.map(part=>{const o=rule.options!.find(option=>String(option.option_product_id||option.product_id||option.id)===part.id);need(o);const price=Number(o!.price_override??o!.price);need(part.ratio===1/parts.length&&part.price===price&&part.product_id===(o!.product_id||o!.option_product_id)&&part.name===(o!.name||part.id));return price;});
   need(canonical(line.selected_fraction_parts||[])===canonical(parts));
-  base=['AVERAGE_PRICE','SUM_PARTS'].includes(String(rule.pricing_rule))?prices.reduce((sum,p)=>sum+p,0)/parts.length:rule.pricing_rule==='BASE_PLUS_DIFF'?Math.max(product.price,...prices):Math.max(...prices);
+  if(parts.length)base=['AVERAGE_PRICE','SUM_PARTS'].includes(String(rule.pricing_rule))?prices.reduce((sum,p)=>sum+p,0)/parts.length:rule.pricing_rule==='BASE_PLUS_DIFF'?Math.max(product.price,...prices):Math.max(...prices);
  }else need(!list(s.selected_fraction_parts).length&&!line.selected_fraction_parts?.length);
  need(s.product_type===source.product_type&&s.production_area_id===source.production_area_id);
  need(!s.note||typeof s.note==='string'&&s.note.length<=2000);need((line.note||undefined)===(s.note||undefined));
