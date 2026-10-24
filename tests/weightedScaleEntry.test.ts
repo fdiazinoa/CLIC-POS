@@ -1,3 +1,4 @@
+import {requiresProductStockAvailability} from '../utils/productStockPolicy';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -22,6 +23,7 @@ test('actual click opens admitted untracked scale; existing tracked stock callba
     conversionFactor: 1, operationalFlags: { isWeighted: true, integersOnly: false, trackInventory: false },
     v3SaleAuthority: { syncId: 'S', syncVersion: 85 }, variants: [], attributes: [] };
   const canAdd = await callback('canAddItemToCart', {
+    requiresProductStockAvailability,
     setErrorToast: (error: string) => errors.push(error), setTimeout: () => 0,
     productHasActiveTariff: () => true, resolveProductActiveWarehouseIds: () => ['W'],
     productMatchesTerminalWarehouse: () => true, warehouses: [{ id: 'W' }], config: { features: {} },
@@ -32,6 +34,7 @@ test('actual click opens admitted untracked scale; existing tracked stock callba
   let modal: unknown;
   let added = 0;
   const click = await callback('handleProductClick', {
+    rejectFormatQuickReturn: () => false, articleFormatsEnabled:false, getProductPrice:(product:any)=>product.price,
     suppressProductInputUntilMs: 0, isMobile: false, defaultSalesWarehouseId: 'W',
     isWeightedProduct, productHasRestaurantConfiguration: () => false, isReturnMode: false,
     ensureSalesWithOpenZPermission: () => true, canAddItemToCart: canAdd, v3Operational: {},
