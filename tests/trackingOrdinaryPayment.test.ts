@@ -44,3 +44,16 @@ test('ordinary tracking recovers its original native receipt after lost COMMIT A
  f.bridge.commitTransaction=originalCommit;const operation=await f.adapter.readTrackingCheckout(identity,f.scope);assert.equal(operation?.phase,'CONSUMED');const recovered=await f.adapter.readCommittedTrackingReceipt(operation!);assert.equal(recovered?.id,source.id);assert.equal(JSON.stringify(recovered),JSON.stringify(source));assert.equal(f.sql.prepare('select consumed_minor from pos_tracking_allocations_v1').get()?.consumed_minor,125000);assert.equal(f.sql.prepare('select count(*) n from sync_outbox_v2').get()?.n,1);
  const restart=new CapacitorSQLiteAdapter();Object.assign(restart,{db:f.bridge,isReady:true});assert.equal((await restart.readCommittedTrackingReceipt((await restart.readTrackingCheckout(identity,f.scope))!))?.id,source.id);assert.equal(f.sql.prepare('select consumed_minor from pos_tracking_allocations_v1').get()?.consumed_minor,125000);
 });
+
+test('pre-effect cancellation retires the durable operation and a fresh checkout can claim the same lot',async()=>{
+ const f=await nativeFixture(),identity=JSON.stringify({lineSources:f.items.map(v3RetainedLineFingerprint),customerId:null,fiscalType:'B02',total:12.5,serviceChargeAmount:0,tableId:null,accountId:null});
+ const first=randomUUID(),second=randomUUID();
+ await f.adapter.prepareTrackingCheckout(first,f.items.flatMap((line:any)=>line.trackingData),f.scope,{transactionId:randomUUID(),cartIdentity:identity});
+ await f.adapter.abandonTrackingCheckout(first);
+ assert.equal(await f.adapter.readTrackingCheckout(identity,f.scope),null);
+ await f.adapter.prepareTrackingCheckout(second,f.items.flatMap((line:any)=>line.trackingData),f.scope,{transactionId:randomUUID(),cartIdentity:identity});
+ assert.equal((await f.adapter.readTrackingCheckout(identity,f.scope))?.checkoutId,second);
+ await f.adapter.fenceTrackingCheckout(second,'cash');
+ await assert.rejects(f.adapter.abandonTrackingCheckout(second),/EFFECT|PAID|RECONCILIATION/);
+ assert.equal((await f.adapter.readTrackingCheckout(identity,f.scope))?.phase,'EFFECT_POSSIBLE');
+});
