@@ -6536,10 +6536,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const checkoutAdmissionContextRef=useRef<any>(null);
    checkoutAdmissionContextRef.current={cart,customerId:effectiveSelectedCustomer?.id||null,fiscalType:requiredSaleFiscalType,
       tableId:activeTable?.id,accountId:activeTable?.currentOrderId,terminalId,user:currentUser,canCheckout,canSellWithOpenZ,
-      activePaymentFraction,isCurrentPaymentFraction,refundAuthorizedBy,mode:fiscalCompliance.mode,v3:Boolean(v3Operational),terminal:activeTerminalConfig};
+      activePaymentFraction,isCurrentPaymentFraction,refundAuthorizedBy,sessionStartedAt:terminalTransactions[0]?.date||null,mode:fiscalCompliance.mode,v3:Boolean(v3Operational),terminal:activeTerminalConfig};
    const readCheckoutAdmissionIdentity=()=>{
       const {terminal,...context}=checkoutAdmissionContextRef.current;
-      return JSON.stringify({...context,scope:context.v3&&context.mode==='ECF'?readFiscalWorkflowLocalScope(terminal,context.terminalId):null});
+      return JSON.stringify({...context,sessionPolicy:{forceZChange:Boolean(terminal?.workflow?.session?.forceZChange),businessStartHour:terminal?.workflow?.session?.businessStartHour||0},scope:context.v3&&context.mode==='ECF'?readFiscalWorkflowLocalScope(terminal,context.terminalId):null});
    };
    useEffect(()=>()=>{if(checkoutAdmissionRef.current&&!checkoutAdmissionRef.current.locked)checkoutAdmissionRef.current.cancelled=true;},[]);
 
