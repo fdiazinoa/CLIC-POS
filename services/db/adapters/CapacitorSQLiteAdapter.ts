@@ -1,3 +1,4 @@
+import {OFFLINE_FISCAL_ALLOCATION_WRITER_SCHEMA} from '../OfflineFiscalAllocationStore';
 import {FISCAL_RETIREMENT_WRITER_SCHEMA,OFFLINE_FISCAL_ABANDON_WRITER_SCHEMA,assertRetirementRecoveryPromotion} from '../FiscalWorkflowRetirementStore';
 import {assertTableFiscalSaleContext} from '../../fiscal/OfflineTableFiscalCheckout';
 import {assertPresentationCommit} from '../../inventoryPresentations/nativeGuard';
@@ -596,6 +597,12 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
           || row.requireAbsent || row.expectedDocument !== undefined || row.v3StockRequirements);
         await this.withWriteLock(() => this.executeUnlocked(statements,async()=>{
           if(needsFinancialPrecondition)await this.assertV3FinancialBaseline(input.documents);
+          for(const proof of input.fiscalAllocationPreconditions||[]){
+            if(!['config','fiscalAllocations','fiscalRanges','localFiscalBuffer'].includes(proof.collection))throw Error('OFFLINE_FISCAL_COMMIT_PROOF_INVALID');
+            const actual=(await this.ensureDb().query('SELECT data FROM documents WHERE collection_name=? AND doc_id=?',[proof.collection,proof.id])).values?.[0]?.data||null;
+            if(actual!==proof.expected)throw Error('OFFLINE_FISCAL_COMMIT_AUTHORITY_CHANGED');
+          }
+          if(input.fiscalWorkflowCommits?.some(c=>c.birth?.schemaVersion===3)&&!input.fiscalAllocationPreconditions?.length)throw Error('OFFLINE_FISCAL_COMMIT_PROOF_REQUIRED');
           const births=outboxEvents.filter(e=>e.eventType==='SALE_POSTED'&&e.payload.fiscalWorkflowBirth);
           if(births.some(e=>!input.fiscalWorkflowCommits?.some(c=>c.transactionId===e.aggregateId&&JSON.stringify(c.birth)===JSON.stringify(e.payload.fiscalWorkflowBirth))))throw Error('FISCAL_WORKFLOW_ATOMIC_BIRTH_REQUIRED');
           for(const commit of input.fiscalWorkflowCommits||[]){
@@ -609,9 +616,18 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
               const retained=settlement.v3ExpectedRetainedDocument;
               await assertTableFiscalSaleContext(source.document as any,{collection:retained.collection,id:retained.id,expected:retained.expected});
             }
-            await consumeFiscalWorkflowBirth(this.ensureDb() as any,commit,source.document as any);
+            if(commit.birth?.schemaVersion===3){
+              if(input.fiscalWorkflowCommits?.length!==1||new Set(input.documents.map(d=>JSON.stringify([d.collectionName,d.document.id]))).size!==input.documents.length||JSON.stringify(source.document)!==JSON.stringify(history.document))throw Error('OFFLINE_FISCAL_ATOMIC_SOURCE_REQUIRED');
+              const tx=source.document as unknown as import('../../../types').Transaction;
+              const seriesRaw=(await this.ensureDb().query("SELECT data FROM documents WHERE collection_name='internalSequences' AND doc_id=?",[tx.seriesId])).values?.[0]?.data;
+              const counterRaw=(await this.ensureDb().query("SELECT data FROM documents WHERE collection_name='globalSequenceCounter' AND doc_id='value'")).values?.[0]?.data;
+              const numbers=planFinancialNumbers({seriesId:tx.seriesId,documentType:'TICKET',global:true},seriesRaw?JSON.parse(seriesRaw):undefined,counterRaw?JSON.parse(counterRaw):undefined);
+              const seriesMutation=input.documents.filter(d=>d.collectionName==='internalSequences'),counterMutation=input.documents.filter(d=>d.collectionName==='globalSequenceCounter');
+              if(!tx.seriesId||seriesMutation.length!==1||counterMutation.length!==1||JSON.stringify([tx.displayId,tx.seriesNumber,tx.globalSequence])!==JSON.stringify([numbers.result.displayId,numbers.result.seriesNumber,numbers.result.globalSequence])||JSON.stringify(seriesMutation[0].document)!==JSON.stringify(numbers.series)||seriesMutation[0].expectedDocument!==seriesRaw||JSON.stringify(counterMutation[0].document)!==JSON.stringify(numbers.counter)||(counterRaw?counterMutation[0].expectedDocument!==counterRaw:counterMutation[0].requireAbsent!==true))throw Error('OFFLINE_FISCAL_NUMBER_PLAN_CHANGED');
+            }
+            await consumeFiscalWorkflowBirth(this.ensureDb() as any,commit,source.document as any,outboxEvents.find(e=>e.eventType==='SALE_POSTED'&&e.aggregateId===commit.transactionId)?.eventId);
           }
-        }));
+        },Boolean(input.fiscalAllocationPreconditions?.length)));
     }
 
     async getMasterNumberRanges(): Promise<MasterNumberRangeRecord[]> {
@@ -1020,6 +1036,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             ${DURABLE_OUTBOX_SCHEMA_SQL}
             ${FISCAL_RETIREMENT_WRITER_SCHEMA}
             ${OFFLINE_FISCAL_ABANDON_WRITER_SCHEMA}
+            ${OFFLINE_FISCAL_ALLOCATION_WRITER_SCHEMA}
             ${LARGE_MASTER_SYNC_V3_SCHEMA_SQL}
             ${ARTICLE_FORMATS_SCHEMA}
             ${NATIVE_FISCAL_RECEIPTS_SCHEMA}
@@ -1101,12 +1118,13 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             values:[now,...ids],
         });
         // Preserve issued counters; omitting a series revokes its eligibility without erasing its high-water mark.
-        // Buffers included in a replacement retain their live row so same-epoch stale saves cannot rewind them.
-        const preserveIncomingBuffer=name==='localFiscalBuffer'&&ids.length>0;
+        // Incoming fiscal/config rows are updated in place. Only actual omissions are withdrawals;
+        // deleting a matching row first would revoke unchanged authority and erase live buffer state.
+        const preserveIncomingRows=['localFiscalBuffer','config','fiscalAllocations','fiscalRanges'].includes(name)&&ids.length>0;
         statements.push({statement:`DELETE FROM documents WHERE collection_name=?
             AND collection_name NOT IN ('internalSequences','globalSequenceCounter')
-            ${preserveIncomingBuffer ? `AND doc_id NOT IN (${placeholders})` : ''}`,
-            values:[name,...(preserveIncomingBuffer ? ids : [])]});
+            ${preserveIncomingRows ? `AND doc_id NOT IN (${placeholders})` : ''}`,
+            values:[name,...(preserveIncomingRows ? ids : [])]});
         return statements;
     }
 
@@ -1395,12 +1413,14 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         }
     }
 
-    private async executeUnlocked(statements: Array<{ statement: string; values: any[] }>, precondition?: () => Promise<void>): Promise<void> {
+    private async executeUnlocked(statements: Array<{ statement: string; values: any[] }>, precondition?: () => Promise<void>, nativeFinancial=false): Promise<void> {
         const db = this.ensureDb();
         const executable = statements.map((entry) => ({
             statement: entry.statement.trim(),
             values: entry.values,
         }));
+
+        if(nativeFinancial){await this.withNativeTransaction(async()=>{await precondition?.();for(const entry of executable)await db.run(entry.statement,entry.values,false);});return;}
 
         if (!precondition && typeof (db as any).executeSet === 'function') {
             await (db as any).executeSet(executable, true, 'no');

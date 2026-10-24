@@ -1,5 +1,6 @@
+import InteractionProgress,{yieldInteractionPaint,type InteractionProgressHandle} from './InteractionProgress';
 import {readTableFiscalSaleContext} from '../services/fiscal/OfflineTableFiscalCheckout';
-import type {TableFiscalSaleContext} from '../services/fiscal/OfflineFiscalLease';
+import {tableFiscalSourceDigest,type TableFiscalSaleContext} from '../services/fiscal/OfflineFiscalLease';
 import {fiscalWorkflowScopeKey} from '../services/fiscal/FiscalWorkflowV2Types';
 import {isInventoryPresentationEligible,assertInventoryPresentationEligible} from '../services/inventoryPresentations/eligibility';
 import {createPresentationRuntime,presentationAuthority,type PresentationRuntime} from '../services/inventoryPresentations/runtime';
@@ -4322,11 +4323,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       selectedCustomer?.requiresFiscalInvoice
    ]);
 
+   const [fiscalReceiptRecoveryAvailable,setFiscalReceiptRecoveryAvailable]=useState(false);
+   const [receiptOnlyInitialTransaction,setReceiptOnlyInitialTransaction]=useState<Transaction|null>(null);
    useEffect(() => {
       let cancelled = false;
 
       const checkFiscalStatus = async () => {
          const type = requiredSaleFiscalType;
+         try{const receipt=await resolveCommittedFiscalReceipt();if(cancelled)return;setFiscalReceiptRecoveryAvailable(Boolean(receipt));}
+         catch{if(cancelled)return;setFiscalReceiptRecoveryAvailable(false);}
          if (isOrderTakerMode || isFiscalModeDisabled) {
             setStatus(null);
             setFiscalStatus({
@@ -4342,6 +4347,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          }
 
          try {
+            if(v3Operational&&fiscalCompliance.mode==='ECF'){
+               const allocation=await fiscalWorkflowV2Client.checkoutFiscalStatus(type);
+               if(cancelled)return;
+               if(allocation){
+                  setStatus(null);
+                  setFiscalStatus({type,hasNCF:allocation.remaining>0,localBuffer:null,isUsingPool:false,isTerminalBlock:true,remaining:allocation.remaining,total:allocation.total});
+                  return;
+               }
+            }
             const canIssue = await db.canRequestMoreNCF(type, terminalId, activeTerminalConfig);
             const allocations = await db.get('fiscalAllocations');
             const authorityId = activeTerminalConfig?.erpTerminalId || terminalId;
@@ -4366,11 +4380,20 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             setFiscalStatus({ type, hasNCF: false, localBuffer: null, isUsingPool: false, isTerminalBlock: false, remaining: 0, total: 0 });
          }
       };
-      checkFiscalStatus();
+      const refresh=()=>{void checkFiscalStatus();};
+      refresh();window.addEventListener('offlineFiscalReserveUpdated',refresh);window.addEventListener('transactionsUpdated',refresh);window.addEventListener('configUpdated',refresh);
       return () => {
          cancelled = true;
+         window.removeEventListener('offlineFiscalReserveUpdated',refresh);window.removeEventListener('transactionsUpdated',refresh);window.removeEventListener('configUpdated',refresh);
       };
    }, [
+      v3Operational,
+      fiscalCompliance.mode,
+      cart,
+      effectiveSelectedCustomer?.id,
+      activeTable?.id,
+      activeTable?.currentOrderId,
+      showPaymentModal,
       isFiscalModeDisabled,
       isOrderTakerMode,
       requiredSaleFiscalType,
@@ -4951,7 +4974,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          tableId: activeTable?.id, orderId: activeTable?.currentOrderId, terminalId: activeTerminalId });
    }, [processedCart, cartTotal, activeTable?.id, activeTable?.currentOrderId]);
 
-   const canCheckoutWithFiscalPolicy = isOrderTakerMode || isFiscalModeDisabled || fiscalStatus.hasNCF;
+   const canCheckoutWithFiscalPolicy = isOrderTakerMode || isFiscalModeDisabled || fiscalStatus.hasNCF || fiscalReceiptRecoveryAvailable;
    const checkoutActionLabel = isOrderTakerMode
       ? 'GUARDAR PEDIDO'
       : !canCheckoutWithFiscalPolicy
@@ -5603,10 +5626,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       try {
          const completed = await completedReservationForReceipt();
          if (completed) { clearCompletedReservationCart(); return completed; }
+         const receipt=await resolveCommittedFiscalReceipt(payments.map(payment=>payment.id));
+         if(receipt)bindCommittedFiscalReceipt(receipt);
          if(fiscalCheckoutRef.current&&['COMMITTED','ACKNOWLEDGED'].includes(fiscalCheckoutRef.current.phase)){
             const prior=(await db.getDocument('transactions',fiscalCheckoutRef.current.transactionId)||await db.getDocument('transactionHistory',fiscalCheckoutRef.current.transactionId)) as Transaction|null;
             if(!prior)throw Error('FISCAL_WORKFLOW_COMMITTED_RECEIPT_REQUIRED');
-            assertFiscalWorkflowCheckoutReplay(fiscalCheckoutRef.current,prior as Transaction,currentFiscalCheckoutCartIdentity(),readFiscalWorkflowLocalScope(activeTerminalConfig,activeTerminal?.id||'T1'));
+            assertFiscalWorkflowCheckoutReplay(fiscalCheckoutRef.current,prior as Transaction,currentFiscalCheckoutCartIdentity(),readFiscalWorkflowLocalScope(activeTerminalConfig,activeTerminal?.id||'T1'),payments.map(payment=>payment.id));
+            if(receipt)await authorizeFiscalReceiptRecovery();
             if(prior.fiscalSaleContext&&activeTable&&prior.fiscalSaleContext.accountId===String(activeTable.currentOrderId)){
               const remaining=parkedTicketsRef.current.filter(ticket=>ticket.id!==prior.fiscalSaleContext!.accountId);
               parkedTicketsRef.current=remaining;
@@ -5867,7 +5893,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             finalNcf = reservedRefundNcf; finalIssuance=refundIssuance;
             finalNcfType = refundFiscalType;
          } else {
-            const reservation=await db.reserveFiscalNumber(fiscalStatus.type,terminalId,1,activeTerminalConfig);
+            const reservation=fiscalCheckoutRef.current?.allocation?await fiscalWorkflowV2Client.allocationDraft(fiscalCheckoutRef.current):await db.reserveFiscalNumber(fiscalStatus.type,terminalId,1,activeTerminalConfig);
             finalNcf=reservation?.ncf; finalIssuance=reservation?.fiscalIssuance;
 
             if (!finalNcf) {
@@ -6131,7 +6157,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                const taxAmount = v3RefundFiscal.length
                   ? Math.round(v3RefundFiscal.reduce((sum, row) => sum + row.taxAmount, 0) * 100) / 100
                   : cartTax;
-               const offlineTableInvoice=Boolean(fiscalCheckoutRef.current?.permit?.leaseId&&fiscalCheckoutRef.current.fiscalSaleContext);
+               const offlineTableInvoice=Boolean((fiscalCheckoutRef.current?.permit?.leaseId||fiscalCheckoutRef.current?.allocation)&&fiscalCheckoutRef.current.fiscalSaleContext);
                const netAmount = Math.round(((documentTotal - taxAmount - (offlineTableInvoice?cartTip:0)) + Number.EPSILON) * 100) / 100;
                const documentItems = !isRefundOnly || v3Operational
                   ? freezeAuthoritativeLineFiscalAmounts(contextualDocumentItems, config, {
@@ -6152,14 +6178,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   ? calculateSalesCommission(documentTotal, currentUser)
                   : {};
 
-               const newDirectFiscalEnvironment = fiscalCheckoutRef.current?.permit?.leaseId ? fiscalCheckoutRef.current.permit.environment : v3Operational && !hasReturns && !activeV3Reservation && !activeRecoveredReservation
+               const newDirectFiscalEnvironment = fiscalCheckoutRef.current?.allocation ? fiscalCheckoutRef.current.allocation.environment : fiscalCheckoutRef.current?.permit?.leaseId ? fiscalCheckoutRef.current.permit.environment : v3Operational && !hasReturns && !activeV3Reservation && !activeRecoveredReservation
                   && !activeDirectV3TicketId && ((!activeTable&&!activeOrderId)||offlineTableInvoice) && !uberRecoveredOrder
                   && ['E31', 'E32', 'E44', 'E45'].includes(finalNcfType || '')
                   ? explicitTerminalFiscalEnvironment(activeTerminal, terminalId, getDefaultFiscalProvider(config, activeTerminalConfig), fiscalCompliance.mode)
                   : undefined;
                const txn = await withTimeout(transactionService.createTransaction({
                   ...(newDirectFiscalEnvironment !== undefined ? { fiscalEnvironment: newDirectFiscalEnvironment } : {}),
-                  ...(fiscalCheckoutRef.current?{id:fiscalCheckoutRef.current.transactionId,fiscalWorkflowCheckoutId:fiscalCheckoutRef.current.checkoutId,...(fiscalCheckoutRef.current.permit?.leaseId?{fiscalOfflineLeaseId:fiscalCheckoutRef.current.permit.leaseId}:{}),...(fiscalCheckoutRef.current.fiscalSaleContext?{fiscalSaleContext:fiscalCheckoutRef.current.fiscalSaleContext}:{})}:{}),
+                  ...(fiscalCheckoutRef.current?{id:fiscalCheckoutRef.current.transactionId,fiscalWorkflowCheckoutId:fiscalCheckoutRef.current.checkoutId,...(fiscalCheckoutRef.current.permit?.leaseId?{fiscalOfflineLeaseId:fiscalCheckoutRef.current.permit.leaseId}:{}),...(fiscalCheckoutRef.current.allocation?{fiscalAllocationAuthorizationId:fiscalCheckoutRef.current.allocation.authorizationId}:{}),...(fiscalCheckoutRef.current.fiscalSaleContext?{fiscalSaleContext:fiscalCheckoutRef.current.fiscalSaleContext}:{})}:{}),
                   ...(activeV3Reservation ? {id:reservationInvoiceId(activeV3Reservation.reservation.id),v3ReservationClaimId:activeV3Reservation.claimId} : {}),
                   documentType: hasReturns ? 'REFUND' : 'TICKET',
                   seriesId: hasReturns
@@ -6505,9 +6531,33 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       setSuccessToast(`Cuenta dividida en ${splitCount}: cuentas guardadas en Tickets en Espera`);
    };
 
-   const proceedToCheckout = (trace: PosInteractionTrace) => observeDestinationAttempt(trace, async () => {
+   const checkoutProgressRef=useRef<InteractionProgressHandle|null>(null);
+   const checkoutAdmissionRef=useRef<{cancelled:boolean;locked:boolean;assertCurrent:()=>void}|null>(null);
+   const checkoutAdmissionContextRef=useRef<any>(null);
+   checkoutAdmissionContextRef.current={cart,customerId:effectiveSelectedCustomer?.id||null,fiscalType:requiredSaleFiscalType,
+      tableId:activeTable?.id,accountId:activeTable?.currentOrderId,terminalId,user:currentUser,canCheckout,canSellWithOpenZ,
+      activePaymentFraction,isCurrentPaymentFraction,refundAuthorizedBy,sessionStartedAt:terminalTransactions[0]?.date||null,mode:fiscalCompliance.mode,v3:Boolean(v3Operational),terminal:activeTerminalConfig};
+   const readCheckoutAdmissionIdentity=()=>{
+      const {terminal,...context}=checkoutAdmissionContextRef.current;
+      return JSON.stringify({...context,sessionPolicy:{forceZChange:Boolean(terminal?.workflow?.session?.forceZChange),businessStartHour:terminal?.workflow?.session?.businessStartHour||0},scope:context.v3&&context.mode==='ECF'?readFiscalWorkflowLocalScope(terminal,context.terminalId):null});
+   };
+   useEffect(()=>()=>{if(checkoutAdmissionRef.current&&!checkoutAdmissionRef.current.locked)checkoutAdmissionRef.current.cancelled=true;},[]);
+
+   const proceedToCheckout = (trace: PosInteractionTrace,validateFiscal=false) => {
+      if(checkoutAdmissionRef.current)return Promise.resolve();
+      let identity:string;try{identity=readCheckoutAdmissionIdentity();}catch(error){setErrorToast(error instanceof Error?error.message:String(error));return Promise.resolve();}
+      const originalCheckout=fiscalCheckoutRef.current?.checkoutId;
+      const admission={cancelled:false,locked:false,assertCurrent:()=>{
+         if(admission.cancelled||readCheckoutAdmissionIdentity()!==identity||!admission.locked&&fiscalCheckoutRef.current?.checkoutId!==originalCheckout)throw Error('CHECKOUT_ADMISSION_CONTEXT_CHANGED');
+      }};
+      checkoutAdmissionRef.current=admission;
+      checkoutProgressRef.current?.show('Preparando cobro…',()=>{if(!admission.locked)admission.cancelled=true;});
+      return observeDestinationAttempt(trace, async () => {
+      try{
+      await yieldInteractionPaint();admission.assertCurrent();
+      if(!await canProceedWithOperationalSession())return;admission.assertCurrent();
       try {
-         const completed = await completedReservationForReceipt();
+         const completed = await completedReservationForReceipt();admission.assertCurrent();
          if (completed) {
             setReturnToTableMapAfterPayment(false);
             expectInteractionDestination(trace, 'PAYMENT_MODAL');
@@ -6518,12 +6568,36 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             return;
          }
       } catch (error: any) { setErrorToast(`V3: ${error.message || error}`); return; }
+      try {
+         const recovered=await completeCommittedFiscalReceipt([],()=>{admission.assertCurrent();admission.locked=true;checkoutProgressRef.current?.lock();});
+         if(recovered){
+            setReceiptOnlyInitialTransaction(recovered);setReturnToTableMapAfterPayment(false);
+            expectInteractionDestination(trace,'PAYMENT_MODAL');paymentModalTraceRef.current=trace;setShowPaymentModal(true);
+            markInteractionStateUpdate(trace,2);markInteractionStage(trace,'HANDLER_END');return;
+         }
+      }catch(error:any){setErrorToast(`V3: ${error.message||error}`);return;}
+      admission.assertCurrent();
+      if(validateFiscal&&!isOrderTakerMode){const validation=validateTerminalDocument(config,terminalId,'TICKET');if(!validation.isValid){alert(validation.error);return;}}
+      try{await assertNewCheckoutFiscalAuthority(admission.assertCurrent);admission.assertCurrent();}
+      catch(error){
+         admission.assertCurrent();
+         const recovered=await completeCommittedFiscalReceipt([],()=>{admission.assertCurrent();admission.locked=true;checkoutProgressRef.current?.lock();});
+         if(recovered){setReceiptOnlyInitialTransaction(recovered);setShowPaymentModal(true);return;}
+         throw error;
+      }
       if (hasV3ReservationCart && !activeV3Reservation) { setErrorToast('La referencia de la reserva aún no está validada.'); return; }
       if (v3Operational) {
          try { if(processedCart.some(line=>line.articleFormat)){if(!formatRuntime)throw Error('FISCAL_WORKFLOW_FORMAT_NOT_READY');await formatRuntime.prepareIssuance(requiredSaleFiscalType);}else await v3Operational.validate(cart, { ticketId: activeTable?.currentOrderId || activeDirectV3TicketId, claimId: activeDirectV3TicketId, reservationId:activeV3Reservation?.reservation.id,reservationClaimId:activeV3Reservation?.claimId, tableId: activeTable?.id === undefined ? undefined : String(activeTable.id) }); }
-         catch (error: any) { setErrorToast(`V3: ${error.message || error}`); return; }
+         catch (error: any) {
+            admission.assertCurrent();
+            const recovered=await completeCommittedFiscalReceipt([],()=>{admission.assertCurrent();admission.locked=true;checkoutProgressRef.current?.lock();});
+            if(recovered){setReceiptOnlyInitialTransaction(recovered);setShowPaymentModal(true);return;}
+            setErrorToast(`V3: ${error.message || error}`);return;
+         }
+         admission.assertCurrent();
       }
       if (isOrderTakerMode) {
+         admission.assertCurrent();admission.locked=true;checkoutProgressRef.current?.lock();
          try {
             await handleSendAndExit();
          } catch (error) {
@@ -6555,6 +6629,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             actionDescription: 'Autorizar Cobro / Finalizar Venta',
             context: { originalValue: amountDueNow }
          });
+         admission.assertCurrent();
          if (!authorized) {
             setErrorToast('Tu rol no permite cobrar. Solicita intervención de supervisor.');
             window.setTimeout(() => setErrorToast(null), 3500);
@@ -6576,6 +6651,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          handlePaymentConfirm(marketplacePayment ? [marketplacePayment] : []).catch(console.error);
          return;
       }
+      admission.assertCurrent();
       setReturnToTableMapAfterPayment(false);
       recordCheckoutDiagnostic('CHECKOUT_OPEN', { items: processedCart, expectedItemCount: cart.length, total: cartTotal, tableId: activeTable?.id, orderId: activeTable?.currentOrderId, terminalId: activeTerminalId });
       expectInteractionDestination(trace, 'PAYMENT_MODAL');
@@ -6583,12 +6659,19 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       setShowPaymentModal(true);
       markInteractionStateUpdate(trace, 2);
       markInteractionStage(trace, 'HANDLER_END');
-   });
+      }catch(error){if(!admission.cancelled)setErrorToast(error instanceof Error?error.message:String(error));}
+      finally{if(checkoutAdmissionRef.current===admission){checkoutAdmissionRef.current=null;checkoutProgressRef.current?.hide();}}
+      });
+   };
 
    const assertCheckoutFiscalAuthority = async () => {
+      if(await resolveCommittedFiscalReceipt())return;
+      return assertNewCheckoutFiscalAuthority();
+   };
+   const assertNewCheckoutFiscalAuthority = async (assertAdmissionCurrent?:()=>void) => {
       if(processedCart.some(line=>line.inventoryPresentation!==undefined)){
          if(!v3Operational||isOrderTakerMode)throw Error('INVENTORY_PRESENTATION_CHECKOUT_REQUIRED');
-         await v3Operational.validate(processedCart);
+         await v3Operational.validate(processedCart);assertAdmissionCurrent?.();
       }
       if (isOrderTakerMode) return;
       if (isFiscalModeDisabled) {
@@ -6599,8 +6682,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (processedCart.some(item => item.quantity > 0)) types.add(requiredSaleFiscalType);
       if (processedCart.some(item => item.quantity < 0)) types.add(resolveCreditNoteFiscalCode(fiscalCompliance.mode));
       for (const type of types) {
-         await db.assertFiscalIssuerAuthority(type);
-         if (!await db.canRequestMoreNCF(type, terminalId, activeTerminalConfig)) {
+         await db.assertFiscalIssuerAuthority(type);assertAdmissionCurrent?.();
+         const allocation=v3Operational&&fiscalCompliance.mode==='ECF'?await fiscalWorkflowV2Client.checkoutFiscalStatus(type):null;
+         assertAdmissionCurrent?.();
+         const canIssue=allocation?allocation.remaining>0:await db.canRequestMoreNCF(type, terminalId, activeTerminalConfig);assertAdmissionCurrent?.();
+         if (!canIssue) {
             throw new Error(`No hay un lote fiscal ${type} vigente, descargado y asignado a esta terminal. La facturación está bloqueada.`);
          }
       }
@@ -6609,7 +6695,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const offlineTableFiscalContextRef=useRef<TableFiscalSaleContext|undefined>(undefined);
    const currentFiscalCheckoutCartIdentity=(fiscalSaleContext=offlineTableFiscalContextRef.current)=>JSON.stringify({...(fiscalSaleContext?{fiscalSaleContext}:{}),items:processedCart.map(({fiscalCheckoutOperationId:_op,...line}:any)=>line),customerId:effectiveSelectedCustomer?.id||null,fiscalType:requiredSaleFiscalType});
    const fiscalCheckoutRef=useRef<FiscalWorkflowCheckoutV2|null>(null);
-   const [offlineFiscalReserveInfo,setOfflineFiscalReserveInfo]=useState<{remaining:number;validUntil:string}|null>(null);
+   const [offlineFiscalReserveInfo,setOfflineFiscalReserveInfo]=useState<{remaining:number;validUntil:string|null;remainingByType?:Record<string,number>}|null>(null);
    useEffect(()=>{
       let disposed=false;
       const update=()=>{void fiscalWorkflowV2Client.offlineStatus().then(value=>{if(!disposed)setOfflineFiscalReserveInfo(value);});};
@@ -6620,7 +6706,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const fiscalCheckoutOperationRef=useRef<string|null>(null);
    useEffect(()=>{if(cart.length===0)fiscalCheckoutOperationRef.current=null;},[cart.length]);
    useEffect(()=>{
-      const prepare=()=>{if(v3Operational&&fiscalCompliance.mode==='ECF')void fiscalWorkflowV2Client.prefetchOfflineLease().catch(()=>undefined);if(v3Operational&&fiscalCompliance.mode==='ECF'&&fiscalWorkflowV2Client.enabled())void fiscalWorkflowV2Client.prefetch().catch(()=>undefined);};
+      const prepare=()=>{if(v3Operational&&fiscalCompliance.mode==='ECF')void fiscalWorkflowV2Client.prepareOfflineAuthority().catch(()=>undefined);if(v3Operational&&fiscalCompliance.mode==='ECF'&&fiscalWorkflowV2Client.enabled())void fiscalWorkflowV2Client.prefetch().catch(()=>undefined);};
       const unsubscribe=subscribeFiscalWorkflowCapability(prepare);prepare();return unsubscribe;
    },[v3Operational,terminalId,fiscalCompliance.mode]);
    const fiscalRetirementUIRef=useRef({cart,terminalConfig:activeTerminalConfig,terminalId});
@@ -6633,21 +6719,55 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       setShowPaymentModal(false);
       setSuccessToast('Intento fiscal vencido cerrado. Revisa el ticket actual y selecciona el pago para iniciar un nuevo intento.');
    };
+   // Read-only original-receipt proof; never asks whether a NEW fiscal sale is eligible.
+   const resolveCommittedFiscalReceipt = async (paymentIds:string[]=[]) => {
+      const original=fiscalCheckoutRef.current;
+      const originalOffline=Boolean(original?.allocation||original?.permit?.leaseId);
+      if(fiscalWorkflowV2Client.localCheckoutForReceipt&&(originalOffline||activeTable&&v3Operational&&fiscalCompliance.mode==='ECF')){
+        const scope=readFiscalWorkflowLocalScope(activeTerminalConfig,terminalId);
+        const durable=await fiscalWorkflowV2Client.localCheckoutForReceipt(scope,originalOffline?original!.checkoutId:undefined,
+          activeTable?.currentOrderId===undefined?undefined:String(activeTable.currentOrderId),activeTable?.id===undefined?undefined:String(activeTable.id));
+        if(originalOffline&&(!durable||durable.checkoutId!==original!.checkoutId||durable.transactionId!==original!.transactionId||durable.operationId!==original!.operationId
+          ||durable.scopeKey!==original!.scopeKey||durable.cartIdentity!==original!.cartIdentity||JSON.stringify(durable.fiscalSaleContext)!==JSON.stringify(original!.fiscalSaleContext)
+          ||durable.allocation?.authorizationId!==original!.allocation?.authorizationId||durable.permit?.permitId!==original!.permit?.permitId||durable.permit?.leaseId!==original!.permit?.leaseId
+          ||JSON.stringify([...durable.paymentIds].sort())!==JSON.stringify([...original!.paymentIds].sort())))throw Error('FISCAL_WORKFLOW_CHECKOUT_RECONCILIATION_REQUIRED');
+        if(durable&&['COMMITTED','ACKNOWLEDGED'].includes(durable.phase)){
+          if(durable.fiscalSaleContext&&(!activeTable||durable.fiscalSaleContext.accountId!==String(activeTable.currentOrderId)||durable.fiscalSaleContext.tableId!==String(activeTable.id)))throw Error('FISCAL_WORKFLOW_CHECKOUT_RECONCILIATION_REQUIRED');
+          const source=await db.getDocument('transactions',durable.transactionId)||await db.getDocument('transactionHistory',durable.transactionId);
+          if(!source)throw Error('FISCAL_WORKFLOW_COMMITTED_RECEIPT_REQUIRED');
+          assertFiscalWorkflowCheckoutReplay(durable,source as Transaction,currentFiscalCheckoutCartIdentity(durable.fiscalSaleContext),scope,paymentIds);
+          if(durable.fiscalSaleContext){const account=await db.getDocument('parkedTickets',durable.fiscalSaleContext.accountId);if(account&&await tableFiscalSourceDigest(JSON.stringify(account))!==durable.fiscalSaleContext.sourceSha256)throw Error('FISCAL_WORKFLOW_CHECKOUT_RECONCILIATION_REQUIRED');}
+          return {checkout:durable,transaction:source as Transaction};
+        }
+      }
+      return null;
+   };
+   const bindCommittedFiscalReceipt = (receipt:{checkout:FiscalWorkflowCheckoutV2;transaction:Transaction}) => {
+      offlineTableFiscalContextRef.current=receipt.checkout.fiscalSaleContext;fiscalCheckoutRef.current=receipt.checkout;
+   };
+   const authorizeFiscalReceiptRecovery = async () => {
+      if(cart.some(item=>!isValidCartQuantity(item.quantity)))throw Error('La cantidad del ticket no es válida.');
+      if(cart.some(item=>Number(item.quantity)<0&&item.isReturnLine!==true)&&!refundAuthorizedBy)throw Error('La línea negativa no fue creada desde el modo Devolución.');
+      if(activePaymentFraction&&!isCurrentPaymentFraction)throw Error('El total de la cuenta cambió después de fraccionarla.');
+      if(!ensureSalesWithOpenZPermission())throw Error('La recuperación requiere permiso para la jornada operativa actual.');
+      if(!canCheckout&&!await requestApproval({permission:'POS_CHECKOUT',actionDescription:'Autorizar Cobro / Finalizar Venta',context:{originalValue:amountDueNow}}))throw Error('Tu rol no permite cobrar. Solicita intervención de supervisor.');
+      checkoutAdmissionRef.current?.assertCurrent();
+   };
+   const completeCommittedFiscalReceipt = async (paymentIds:string[]=[],beforeRecovery?:()=>void) => {
+      const receipt=await resolveCommittedFiscalReceipt(paymentIds);if(!receipt)return null;
+      beforeRecovery?.();bindCommittedFiscalReceipt(receipt);
+      const completed=await handlePaymentConfirm(receipt.transaction.payments||[],receipt.transaction.voluntaryTipAmount);
+      if(!completed)throw Error('FISCAL_WORKFLOW_RECEIPT_COMPLETION_REQUIRED');return completed;
+   };
    const beforeV3PaymentEffects = async (paymentIds:string[]=[],paymentMethods:string[]=[]): Promise<PaymentEffectsFence> => {
       const completed = await completedReservationForReceipt();
       if (completed) return Object.assign(() => {},{completedTransaction:completed});
-      if(activeTable&&fiscalWorkflowV2Client.localCheckout&&!fiscalCheckoutRef.current){
-        const retained=await fiscalWorkflowV2Client.localCheckout(String(activeTable.currentOrderId),String(activeTable.id)).catch(()=>null);
-        if(retained?.permit?.leaseId&&['COMMITTED','ACKNOWLEDGED'].includes(retained.phase)
-          &&retained.fiscalSaleContext?.accountId===String(activeTable.currentOrderId)
-          &&retained.fiscalSaleContext.tableId===String(activeTable.id)){
-          offlineTableFiscalContextRef.current=retained.fiscalSaleContext;fiscalCheckoutRef.current=retained;
-        }
-      }
+      const receipt=await resolveCommittedFiscalReceipt(paymentIds);
+      if(receipt){bindCommittedFiscalReceipt(receipt);return Object.assign(()=>{},{completedTransaction:receipt.transaction});}
       if(fiscalCheckoutRef.current&&['COMMITTED','ACKNOWLEDGED'].includes(fiscalCheckoutRef.current.phase)){
          const completed=await db.getDocument('transactions',fiscalCheckoutRef.current.transactionId)||await db.getDocument('transactionHistory',fiscalCheckoutRef.current.transactionId);
          if(!completed)throw Error('FISCAL_WORKFLOW_COMMITTED_RECEIPT_REQUIRED');
-         assertFiscalWorkflowCheckoutReplay(fiscalCheckoutRef.current,completed as Transaction,currentFiscalCheckoutCartIdentity(),readFiscalWorkflowLocalScope(activeTerminalConfig,terminalId));
+         assertFiscalWorkflowCheckoutReplay(fiscalCheckoutRef.current,completed as Transaction,currentFiscalCheckoutCartIdentity(),readFiscalWorkflowLocalScope(activeTerminalConfig,terminalId),paymentIds);
          return Object.assign(()=>{},{completedTransaction:completed as Transaction});
       }
       await assertCheckoutFiscalAuthority();
@@ -6679,7 +6799,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
           if(!isMaster)throw Error('El cobro de mesas sin ERP debe realizarse en la caja Master que conserva la cuenta.');
           if(activePaymentFraction)throw Error('La reserva fiscal offline admite el cobro completo de la mesa; esta cuenta tiene pagos fraccionados pendientes.');
           if(offlineAvailable)throw Error('La reserva fiscal offline de mesas admite efectivo. Este método requiere su autorización de pago habitual.');
-          throw Error('Esta caja no tiene una reserva fiscal offline vigente para cobrar la mesa. Debe descargar una reserva nueva al recuperar la conexión; los permisos vencidos no se reutilizan.');
+          const readiness=await fiscalWorkflowV2Client.offlineReadiness();throw Error(readiness.reason==='FISCAL_RANGE_EXHAUSTED'?'Se agotaron los comprobantes fiscales asignados a esta caja. No se realizó ningún pago.':readiness.reason==='FISCAL_RANGE_EXPIRED'?'El rango fiscal asignado está vencido. No se realizó ningún pago.':`La caja todavía no tiene preparada su autorización fiscal offline (${readiness.code||readiness.reason}). Conserva la cuenta; no se realizó ningún pago.`);
         }
         throw Error('No se puede cobrar sin la autorización fiscal vigente del ERP. Sincroniza y vuelve a intentar; no se realizó ningún pago.');
       }
@@ -6688,7 +6808,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
         const tagged=processedCart.map(line=>(line as any).fiscalCheckoutOperationId).filter(Boolean);
         const operationId=fiscalCheckoutOperationRef.current|| (tagged.length===processedCart.length&&new Set(tagged).size===1?tagged[0]:createUuid());fiscalCheckoutOperationRef.current=operationId;
         const checkout=await (offlineFiscalCheckout?fiscalWorkflowV2Client.reserveOfflineCheckout(currentFiscalCheckoutCartIdentity(),operationId,offlineTableFiscalContextRef.current):fiscalWorkflowV2Client.reserveCheckout(currentFiscalCheckoutCartIdentity(),operationId,{requirePermit:requiresFiscalPermit})).catch(error=>{if(offlineFiscalCheckout&&fiscalCheckoutRef.current?.phase!=='EFFECT_POSSIBLE')offlineTablePaymentFenceRef.current=false;if(error instanceof Error&&error.message==='FISCAL_WORKFLOW_PERMIT_REQUIRED')throw Error(offlineFiscalCheckout?'No hay permisos fiscales offline disponibles. Se requiere una nueva reserva autorizada; reconectar no garantiza reposición antes del vencimiento. No se realizó ningún pago.':'No hay autorización fiscal disponible para esta venta. Espera la sincronización y vuelve a cobrar; no se realizó ningún pago.');throw error;});
-        if(!checkout.permit)throw Error('FISCAL_WORKFLOW_PERMIT_REQUIRED');
+        if(!checkout.permit&&!checkout.allocation)throw Error('FISCAL_WORKFLOW_PERMIT_REQUIRED');
         if(['COMMITTED','ACKNOWLEDGED'].includes(checkout.phase)){
           const completed=await db.getDocument('transactions',checkout.transactionId)||await db.getDocument('transactionHistory',checkout.transactionId);
           if(!completed)throw Error('FISCAL_WORKFLOW_COMMITTED_RECEIPT_REQUIRED');
@@ -6708,7 +6828,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       catch (error) { if(offlineFiscalCheckout&&fiscalCheckoutRef.current?.phase!=='EFFECT_POSSIBLE')offlineTablePaymentFenceRef.current=false;setLargeMasterSyncV3CriticalOperation('PAYMENT', false); throw error; }
       if(offlineFiscalCheckout&&activeTable&&JSON.stringify(await readTableFiscalSaleContext(String(activeTable.currentOrderId),String(activeTable.id)).catch(error=>{offlineTablePaymentFenceRef.current=false;setLargeMasterSyncV3CriticalOperation('PAYMENT',false);throw error;}))!==JSON.stringify(offlineTableFiscalContextRef.current)){offlineTablePaymentFenceRef.current=false;setLargeMasterSyncV3CriticalOperation('PAYMENT',false);throw Error('OFFLINE_FISCAL_TABLE_SOURCE_CHANGED');}
       let offlineEffectPossible=fiscalCheckoutRef.current?.phase==='EFFECT_POSSIBLE';
-      return Object.assign(()=>{if(offlineFiscalCheckout&&!offlineEffectPossible)offlineTablePaymentFenceRef.current=false;setLargeMasterSyncV3CriticalOperation('PAYMENT',false);},{...(fiscalCheckoutRef.current?{futureCheckout:{checkoutId:fiscalCheckoutRef.current.checkoutId,transactionId:fiscalCheckoutRef.current.transactionId}}:{}),recordPaymentEffect:async(paymentId:string)=>{if(fiscalCheckoutRef.current){await fiscalWorkflowV2Client.recordPayment(fiscalCheckoutRef.current,paymentId);offlineEffectPossible=true;}}});
+      return Object.assign(()=>{if(offlineFiscalCheckout&&!offlineEffectPossible)offlineTablePaymentFenceRef.current=false;setLargeMasterSyncV3CriticalOperation('PAYMENT',false);},{...(fiscalCheckoutRef.current?{futureCheckout:{checkoutId:fiscalCheckoutRef.current.checkoutId,transactionId:fiscalCheckoutRef.current.transactionId,operationId:fiscalCheckoutRef.current.operationId}}:{}),recordPaymentEffect:async(paymentId:string)=>{if(fiscalCheckoutRef.current){await fiscalWorkflowV2Client.recordPayment(fiscalCheckoutRef.current,paymentId);offlineEffectPossible=true;}}});
    };
 
    const startCheckoutInteraction = (inputTimeStamp?: number) => {
@@ -6721,18 +6841,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    // supervisor awaits. A render of either warning is not the payment modal.
    const requestCheckout = (inputTimeStamp: number, validateFiscal: boolean) => {
       const trace = startCheckoutInteraction(inputTimeStamp);
-      return observeDestinationAttempt(trace, async () => {
-         if (validateFiscal && !isOrderTakerMode) {
-            const validation = validateTerminalDocument(config, terminalId, 'TICKET');
-            if (!validation.isValid) {
-               alert(validation.error);
-               return;
-            }
-         }
-         if (!await canProceedWithOperationalSession()) return;
-         try { await assertCheckoutFiscalAuthority(); } catch (error) { alert(error instanceof Error ? error.message : String(error)); return; }
-         return proceedToCheckout(trace);
-      });
+      return proceedToCheckout(trace,validateFiscal);
    };
 
    const persistProductionRoutingAssignments = async (
@@ -9606,10 +9715,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                onConfirm={handleSplitConfirm}
             />
          )}
-         {showPaymentModal && <UnifiedPaymentModal openingTrace={paymentModalTraceRef.current} total={amountDueNow} items={cart} taxAmount={nextPaymentFractionPart && cartTotal > 0 ? cartTax * (amountDueNow / cartTotal) : cartTax} currencySymbol={baseCurrency.symbol} config={config} onClose={() => {
+         <InteractionProgress ref={checkoutProgressRef}/>
+         {showPaymentModal && <UnifiedPaymentModal receiptOnlyInitialTransaction={receiptOnlyInitialTransaction} recoverCommittedReceipt={completeCommittedFiscalReceipt} openingTrace={paymentModalTraceRef.current} total={amountDueNow} items={cart} taxAmount={nextPaymentFractionPart && cartTotal > 0 ? cartTax * (amountDueNow / cartTotal) : cartTax} currencySymbol={baseCurrency.symbol} config={config} onClose={() => {
             finishInteraction(paymentModalTraceRef.current, 'cancelled');
             recordCheckoutDiagnostic('PAYMENT_CLOSE');
-            setShowPaymentModal(false);
+            setReceiptOnlyInitialTransaction(null);setShowPaymentModal(false);
             if (returnToTableMapAfterPayment && onOpenTableMap) {
                setReturnToTableMapAfterPayment(false);
                onOpenTableMap();

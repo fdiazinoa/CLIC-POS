@@ -1,10 +1,11 @@
+import InteractionProgress,{yieldInteractionPaint,type InteractionProgressHandle} from './InteractionProgress';
 import {FiscalExpiredCheckoutAction} from './FiscalExpiredCheckoutAction';
 import type {FiscalRetirementRecord} from '../services/fiscal/FiscalWorkflowV2Types';
 import {resolveFiscalPrintReadiness,resolveFiscalAcceptance} from '../services/fiscal/FiscalPrintEvidence';
 import { recordCheckoutDiagnostic } from '../services/CheckoutDiagnostics';
 import { allowsDefaultPaymentMethods } from '../utils/erpPaymentMethods';
 
-import React, { useState, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback } from 'react';
 import {
    X, CreditCard, Banknote, QrCode, CheckCircle2,
    Trash2, Plus, Wallet, Printer, Mail, ShieldAlert,
@@ -63,10 +64,12 @@ import { sendReceiptEmailViaErp } from '../services/email/receiptEmailService';
 import { buildReceiptEmailPayload } from '../services/email/receiptEmailPayload';
 import { setLargeMasterSyncV3CriticalOperation } from '../services/sync/LargeMasterSyncV3OperationGate';
 
-export type PaymentEffectsFence = (() => void) & {completedTransaction?: Transaction;recordPaymentEffect?:(paymentId:string)=>Promise<void>;futureCheckout?:{checkoutId:string;transactionId:string}};
+export type PaymentEffectsFence = (() => void) & {completedTransaction?: Transaction;recordPaymentEffect?:(paymentId:string)=>Promise<void>;futureCheckout?:{checkoutId:string;transactionId:string;operationId?:string}};
 
 interface PaymentModalProps {
    openingTrace?: PosInteractionTrace | null;
+   receiptOnlyInitialTransaction?: Transaction|null;
+   recoverCommittedReceipt?: (paymentIds:string[])=>Promise<Transaction|null>;
    total: number;
    items: CartItem[]; // Added items prop
    taxAmount?: number;
@@ -77,7 +80,7 @@ interface PaymentModalProps {
    paymentOperationId?: string;
    paymentOperationDate?: string;
    onFiscalAttemptClosed?: (record:FiscalRetirementRecord)=>void;
-   offlineFiscalReserve?:{remaining:number;validUntil:string}|null;
+   offlineFiscalReserve?:{remaining:number;validUntil:string|null;remainingByType?:Record<string,number>}|null;
    beforePaymentEffects?: (paymentIds:string[],paymentMethods?:string[]) => Promise<PaymentEffectsFence>;
    validatePaymentAuthority?: () => Promise<void>;
    themeColor: string;
@@ -256,7 +259,8 @@ type GatewayProgressOverlayState = {
 
 import SupervisorAuthModal from './SupervisorAuthModal';
 
-const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, total, items, taxAmount = 0, currencySymbol, config, onClose, onConfirm, paymentOperationId, paymentOperationDate, onFiscalAttemptClosed, offlineFiscalReserve, beforePaymentEffects, validatePaymentAuthority, themeColor, customer, isDelinquent, users, isMaster, currentUser, roles, isRestaurantMode, isInstallmentPayment = false }) => {
+const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receiptOnlyInitialTransaction, recoverCommittedReceipt, total, items, taxAmount = 0, currencySymbol, config, onClose, onConfirm, paymentOperationId, paymentOperationDate, onFiscalAttemptClosed, offlineFiscalReserve, beforePaymentEffects, validatePaymentAuthority, themeColor, customer, isDelinquent, users, isMaster, currentUser, roles, isRestaurantMode, isInstallmentPayment = false }) => {
+   const receiptOnly=Boolean(receiptOnlyInitialTransaction);
    markRenderStart('PAYMENT_MODAL');
    useLayoutEffect(() => markRenderEnd('PAYMENT_MODAL'));
    const openingDestinationMounted = useRef(false);
@@ -266,14 +270,15 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, total,
       return () => { openingDestinationMounted.current = false; };
    }, [openingTrace]);
    useEffect(() => {
+      if(receiptOnly)return;
       setLargeMasterSyncV3CriticalOperation('PAYMENT', true);
       return () => setLargeMasterSyncV3CriticalOperation('PAYMENT', false);
-   }, []);
+   }, [receiptOnly]);
    const [payments, setPayments] = useState<PaymentEntry[]>([]);
    const [activeMethodKey, setActiveMethodKey] = useState<string>('');
    const [inputAmount, setInputAmount] = useState<string>('');
-   const [isSuccessScreen, setIsSuccessScreen] = useState(false);
-   const [completedTransaction, setCompletedTransaction] = useState<Transaction | null>(null);
+   const [isSuccessScreen, setIsSuccessScreen] = useState(Boolean(receiptOnlyInitialTransaction));
+   const [completedTransaction, setCompletedTransaction] = useState<Transaction | null>(receiptOnlyInitialTransaction||null);
    const [shouldClearInput, setShouldClearInput] = useState(true);
    const [voluntaryTip, setVoluntaryTip] = useState(0);
    const [isFinalizing, setIsFinalizing] = useState(false);
@@ -392,7 +397,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, total,
       return methods;
    }, [config?.paymentMethods, config?.paymentMethodsSource, config?.integrations, customer?.wallet]);
 
-   const selectPaymentMethod = (method: ResolvedPaymentMethod) => {
+   const selectPaymentMethod = useCallback((method: ResolvedPaymentMethod) => {
       setActiveMethodKey(method.key);
       if (remaining > 0) {
          setInputAmount(
@@ -405,7 +410,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, total,
          );
          setShouldClearInput(true);
       }
-   };
+   },[remaining,selectedCurrency.rate,selectedCurrency.code,baseCurrency.code]);
 
    const activePaymentMethod = useMemo(
       () => configuredMethods.find(method => method.key === activeMethodKey) || configuredMethods[0] || null,
@@ -440,13 +445,14 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, total,
    const denominations = selectedCurrency.code === 'USD' ? [1, 5, 10, 20, 50, 100] : [50, 100, 200, 500, 1000, 2000];
 
    useEffect(() => {
-      if (configuredMethods.length === 0) return;
+      if (isSuccessScreen || configuredMethods.length === 0) return;
       if (!configuredMethods.some(method => method.key === activeMethodKey)) {
          setActiveMethodKey(configuredMethods[0].key);
       }
-   }, [configuredMethods, activeMethodKey]);
+   }, [configuredMethods, activeMethodKey, isSuccessScreen]);
 
    useEffect(() => {
+      if(isSuccessScreen)return;
       if (remaining > 0) {
          const suggestedAmount = formatRoundedInput(
             remaining / selectedCurrency.rate,
@@ -460,7 +466,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, total,
          setInputAmount('');
          setShouldClearInput(false);
       }
-   }, [remaining, activeMethod, selectedCurrency, activeForeignCurrencyRounding, baseCurrency.code]);
+   }, [remaining, activeMethod, selectedCurrency, activeForeignCurrencyRounding, baseCurrency.code, isSuccessScreen]);
 
    const handleNumPad = (key: string) => {
       if (key === 'C') { setInputAmount(''); setShouldClearInput(false); return; }
@@ -895,9 +901,36 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, total,
 
    const handleRemovePayment = (id: string) => { setPayments(prev => prev.filter(p => p.id !== id)); };
 
+   const finalizationProgressRef=useRef<InteractionProgressHandle|null>(null);
+   const finalizationSubmissionRef=useRef(false);
+   const finalizationMountedRef=useRef(true);
+   useEffect(()=>{finalizationMountedRef.current=true;return ()=>{finalizationMountedRef.current=false;};},[]);
+   const finalizationContextRef=useRef<any>(null);
+   finalizationContextRef.current={payments,items,total,inputAmount,voluntaryTip,customerId:customer?.id,user:currentUser,currency:selectedCurrency,
+      activeMethodKey,canFinalize,isCreditActionBlocked,roles:roles||config?.roles,methods:config?.paymentMethods,integrations:config?.integrations};
    const handleFinalize = async () => {
+      if (finalizationSubmissionRef.current || isFinalizing || isProcessingGateway || isSuccessScreen) return;
+      finalizationSubmissionRef.current=true;
+      const commercialIdentity=(context:any)=>JSON.stringify({...context,items:context.items?.map(({fiscalCheckoutOperationId:_op,...line}:any)=>line)});
+      const operationTags=(context:any)=>(context.items||[]).map((line:any)=>line.fiscalCheckoutOperationId??null);
+      const identity=commercialIdentity(finalizationContextRef.current),originalTags=JSON.stringify(operationTags(finalizationContextRef.current));
+      const assertContext=(fence?:PaymentEffectsFence)=>{
+         const current=finalizationContextRef.current;
+         if(!finalizationMountedRef.current||commercialIdentity(current)!==identity)throw Error('PAYMENT_CONFIRM_CONTEXT_CHANGED');
+         if(JSON.stringify(operationTags(current))!==originalTags){
+            const checkout=fence?.futureCheckout;
+            if(typeof checkout?.checkoutId!=='string'||!checkout.checkoutId||typeof checkout.transactionId!=='string'||!checkout.transactionId||typeof checkout.operationId!=='string'||!checkout.operationId||operationTags(current).some((tag:any)=>tag!==checkout.operationId))throw Error('PAYMENT_CONFIRM_CONTEXT_CHANGED');
+         }
+      };
+      finalizationProgressRef.current?.show('Validando pago…');
+      try{
+      await yieldInteractionPaint();assertContext();
       recordCheckoutDiagnostic('PAYMENT_MODAL_CONFIRM', { items, total, payments });
-      if (isFinalizing || isProcessingGateway) return;
+      if(recoverCommittedReceipt){
+         const recovered=await recoverCommittedReceipt(payments.map(payment=>payment.id));
+         if(recovered){setCompletedTransaction(recovered);setIsSuccessScreen(true);setSuccessNotice(null);return;}
+         assertContext();
+      }
       if (!canFinalize && !paymentOperationId) {
          alert("Monto insuficiente");
          return;
@@ -919,7 +952,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, total,
       let releasePaymentFence: PaymentEffectsFence | undefined;
       try {
          if (beforePaymentEffects) releasePaymentFence = await beforePaymentEffects(payments.map(payment=>payment.id),[...payments.map(payment=>payment.method),...(canFinalizeWithTypedAmount?[activeRuntimeMethod]:[])]);
-         workflowPaymentFenceRef.current=releasePaymentFence||null;
+         workflowPaymentFenceRef.current=releasePaymentFence||null;assertContext(releasePaymentFence);
          const completed = releasePaymentFence?.completedTransaction;
          let paymentsToConfirm = completed?.payments || payments;
          if (!completed && !canFinalize) { alert('Monto insuficiente'); return; }
@@ -1014,6 +1047,12 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, total,
             slowProcessTimer = window.setTimeout(() => {
                setFinalizeError('El cobro está tardando más de lo esperado, espere unos segundos...');
             }, 15000);
+            // The cashier has confirmed these exact cash tenders. Persist possible effect before
+            // construction/commit so retries retain the original checkout, tender IDs and effect date.
+            // This marker never means that the sale or a receipt has already committed.
+            if(!completed&&paymentsToConfirm.length>0&&paymentsToConfirm.every(payment=>payment.method==='CASH')){
+               for(const payment of paymentsToConfirm)await workflowPaymentFenceRef.current?.recordPaymentEffect?.(payment.id);
+            }
             const txn = await onConfirm(paymentsToConfirm, completed?.voluntaryTipAmount ?? voluntaryTip);
             recordCheckoutDiagnostic('PAYMENT_RESULT', { items: txn?.items, total: txn?.total, transactionId: txn?.id, displayId: txn?.displayId, status: txn ? 'RETURNED' : 'NO_TRANSACTION' });
 
@@ -1113,6 +1152,8 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, total,
          setIsFinalizing(false);
          if (trace.stages.HANDLER_END === undefined) markInteractionStage(trace, 'HANDLER_END');
       }
+      }catch(error){setFinalizeError(error instanceof Error?error.message:String(error));}
+      finally{finalizationSubmissionRef.current=false;finalizationProgressRef.current?.hide();}
    };
 
    const themeBgClass = { blue: 'bg-blue-600', orange: 'bg-orange-600', gray: 'bg-gray-800' }[themeColor] || 'bg-indigo-600';
@@ -1190,6 +1231,42 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, total,
          setIsSendingEmail(false);
       }
    };
+
+   // Pending feedback does not rebuild unchanged method icons/buttons or their handlers.
+   const paymentMethodPresentation=useMemo(()=>isSuccessScreen?null:(
+               <div className="flex flex-wrap p-3 md:p-4 gap-2 md:gap-3 shrink-0 max-h-[150px] overflow-y-auto no-scrollbar">
+                  {configuredMethods.length === 0 && <p role="status" className="w-full p-3 text-sm text-gray-600">No hay formas de pago habilitadas.</p>}
+                  {configuredMethods.map(method => {
+                     const methodRuntimeType = resolvePaymentMethodTypeForRuntime(method.type, method.label, method.id);
+                     const methodIsCredit = methodRuntimeType === 'CREDIT';
+                     const methodIsLoyaltyRedeem = isLoyaltyRedeemMethod(method.type, method.label, method.id);
+                     const methodIsIntegratedCard = method.definition?.type === 'CARD' && method.definition.integrationMode === 'INTEGRATED';
+                     const methodRequiresOnline = method.type === 'WALLET' || methodIsCredit || methodIsLoyaltyRedeem || methodIsIntegratedCard;
+                     const methodDisabledOffline = !isOnline && !isMaster && methodRequiresOnline;
+                     const isExceeded = methodIsCredit && isDelinquent && !isOverrideActive;
+                     return (
+                        <button
+                           key={method.key}
+                           onClick={() => !methodDisabledOffline && selectPaymentMethod(method)}
+                           disabled={methodDisabledOffline}
+                           className={`min-w-[calc(50%-0.25rem)] lg:min-w-[calc(33.333%-0.5rem)] xl:min-w-[120px] flex-1 py-2.5 md:py-3 rounded-2xl border-2 flex flex-col items-center justify-center gap-1 transition-all bg-white ${activePaymentMethod?.key === method.key ? `border-current ${themeTextClass} shadow-sm` : 'border-gray-200 text-slate-500 hover:border-gray-300 hover:bg-white'} ${isExceeded ? 'bg-red-50/50 border-red-200' : ''} ${methodDisabledOffline ? 'opacity-50 cursor-not-allowed bg-gray-50 hover:border-gray-200 hover:bg-gray-50' : ''}`}
+                        >
+                           <method.Icon size={22} className="md:w-7 md:h-7" strokeWidth={2.4} />
+                           <span className="font-black text-[9px] md:text-[10px] uppercase tracking-widest">{method.label}</span>
+                           {methodIsIntegratedCard && method.integration && (
+                              <span className="text-[7px] text-indigo-600 font-bold">{method.integration.provider}</span>
+                           )}
+                           {isExceeded && (
+                              <span className="text-[7px] text-red-600 font-bold">LÍMITE EXCEDIDO</span>
+                           )}
+                           {methodDisabledOffline && (
+                              <span className="text-[7px] text-amber-600 font-bold">REQUIERE CONEXIÓN</span>
+                           )}
+                        </button>
+                     );
+                  })}
+               </div>
+   ),[isSuccessScreen,configuredMethods,activePaymentMethod?.key,isOnline,isMaster,isDelinquent,isOverrideActive,themeTextClass,selectPaymentMethod]);
 
    if (isSuccessScreen) {
       return (
@@ -1328,6 +1405,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, total,
 
    return (
       <>
+         <InteractionProgress ref={finalizationProgressRef}/>
          {gatewayProgressOverlay}
          <div className="fixed inset-0 z-[60] flex items-end lg:items-center justify-center bg-black/60 backdrop-blur-sm lg:p-3">
             <div className="bg-white w-full max-w-6xl h-[100dvh] lg:h-[92dvh] lg:max-h-[760px] lg:rounded-[2.5rem] shadow-2xl flex flex-col lg:flex-row overflow-hidden">
@@ -1353,7 +1431,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, total,
                   <p className={`font-medium uppercase text-[10px] md:text-xs tracking-widest mb-1 ${isRefund ? 'text-rose-500' : 'text-gray-500'}`}>
                      {isRefund ? 'Monto a Devolver' : 'Total a Cobrar'}
                   </p>
-                  {offlineFiscalReserve&&<p role="status" className="text-xs text-slate-500 mt-1">Reserva fiscal local: {offlineFiscalReserve.remaining} permisos disponibles · hasta {new Date(offlineFiscalReserve.validUntil).toLocaleString('es-DO')}</p>}
+                  {offlineFiscalReserve&&<p role="status" className="text-xs text-slate-500 mt-1">{offlineFiscalReserve.remainingByType?`Comprobantes locales: ${Object.entries(offlineFiscalReserve.remainingByType).map(([type,count])=>`${type}: ${count}`).join(' · ')}`:`Reserva fiscal local: ${offlineFiscalReserve.remaining} permisos disponibles · hasta ${new Date(offlineFiscalReserve.validUntil!).toLocaleString('es-DO')}`}</p>}
 
                   <h1 className={`text-3xl md:text-4xl lg:text-[2.7rem] font-black leading-none ${isRefund ? 'text-rose-600' : 'text-gray-900'}`}>
                      {currencySymbol}{effectiveTotalToPay.toFixed(2)}
@@ -1540,38 +1618,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, total,
             {/* INPUT SECTION */}
             <div className="flex-1 flex flex-col bg-white overflow-hidden min-h-0">
                {/* Payment Methods */}
-               <div className="flex flex-wrap p-3 md:p-4 gap-2 md:gap-3 shrink-0 max-h-[150px] overflow-y-auto no-scrollbar">
-                  {configuredMethods.length === 0 && <p role="status" className="w-full p-3 text-sm text-gray-600">No hay formas de pago habilitadas.</p>}
-                  {configuredMethods.map(method => {
-                     const methodRuntimeType = resolvePaymentMethodTypeForRuntime(method.type, method.label, method.id);
-                     const methodIsCredit = methodRuntimeType === 'CREDIT';
-                     const methodIsLoyaltyRedeem = isLoyaltyRedeemMethod(method.type, method.label, method.id);
-                     const methodIsIntegratedCard = method.definition?.type === 'CARD' && method.definition.integrationMode === 'INTEGRATED';
-                     const methodRequiresOnline = method.type === 'WALLET' || methodIsCredit || methodIsLoyaltyRedeem || methodIsIntegratedCard;
-                     const methodDisabledOffline = !isOnline && !isMaster && methodRequiresOnline;
-                     const isExceeded = methodIsCredit && isDelinquent && !isOverrideActive;
-                     return (
-                        <button
-                           key={method.key}
-                           onClick={() => !methodDisabledOffline && selectPaymentMethod(method)}
-                           disabled={methodDisabledOffline}
-                           className={`min-w-[calc(50%-0.25rem)] lg:min-w-[calc(33.333%-0.5rem)] xl:min-w-[120px] flex-1 py-2.5 md:py-3 rounded-2xl border-2 flex flex-col items-center justify-center gap-1 transition-all bg-white ${activePaymentMethod?.key === method.key ? `border-current ${themeTextClass} shadow-sm` : 'border-gray-200 text-slate-500 hover:border-gray-300 hover:bg-white'} ${isExceeded ? 'bg-red-50/50 border-red-200' : ''} ${methodDisabledOffline ? 'opacity-50 cursor-not-allowed bg-gray-50 hover:border-gray-200 hover:bg-gray-50' : ''}`}
-                        >
-                           <method.Icon size={22} className="md:w-7 md:h-7" strokeWidth={2.4} />
-                           <span className="font-black text-[9px] md:text-[10px] uppercase tracking-widest">{method.label}</span>
-                           {methodIsIntegratedCard && method.integration && (
-                              <span className="text-[7px] text-indigo-600 font-bold">{method.integration.provider}</span>
-                           )}
-                           {isExceeded && (
-                              <span className="text-[7px] text-red-600 font-bold">LÍMITE EXCEDIDO</span>
-                           )}
-                           {methodDisabledOffline && (
-                              <span className="text-[7px] text-amber-600 font-bold">REQUIERE CONEXIÓN</span>
-                           )}
-                        </button>
-                     );
-                  })}
-               </div>
+               {paymentMethodPresentation}
 
                {isDelinquent && !isOverrideActive && (
                   <div className="mx-4 mb-4 p-3 bg-red-50 border border-red-200 rounded-xl flex items-center justify-between">

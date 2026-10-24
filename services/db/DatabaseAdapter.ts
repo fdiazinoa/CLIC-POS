@@ -38,6 +38,7 @@ export interface DurableOutboxEventInput {
 }
 
 export interface FinancialCommitInput {
+    fiscalAllocationPreconditions?:Array<{collection:string;id:string;expected:string|null}>;
     fiscalWorkflowCommits?: Array<{checkoutId:string;transactionId:string;birth:import('../fiscal/FiscalWorkflowV2Types').FiscalWorkflowBirthV2|null}>;
     documents: DurableDocumentMutation[];
     outboxEvent: DurableOutboxEventInput;

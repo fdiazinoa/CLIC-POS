@@ -1,0 +1,186 @@
+{
+  "id": "4404efd4-f622-4ef0-86a3-46de61e7bbdd",
+  "fiscalWorkflowCheckoutId": "152df5b0-af9b-47f9-a08a-bc6244bb6156",
+  "fiscalAllocationAuthorizationId": "70717c02-2373-4a8e-b846-1f79d2b4d0c8",
+  "fiscalSaleContext": {
+    "schemaVersion": 1,
+    "kind": "TABLE_ACCOUNT",
+    "accountId": "cccccccc-1111-4111-8111-ccccccccccc6",
+    "tableId": "SYNTHETIC-MESA-6",
+    "sourceSha256": "96e0231611b9a53adf4dddbe99a39d82cccaf6c68b5720c902001fe53cc7ca98"
+  },
+  "documentType": "TICKET",
+  "seriesId": "QA-SERIES",
+  "date": "2026-10-23T23:36:43.535Z",
+  "items": [
+    {
+      "id": "77777777-7777-4777-8777-777777777777",
+      "sku": "182",
+      "externalCode": "QA-EXT",
+      "name": "SKU 182 synthetic fixture",
+      "description": "Synthetic catalog input; actual adapter output",
+      "price": 555,
+      "category": "QA category",
+      "posCategoryId": "qa-category",
+      "familyId": "qa-family",
+      "posSortOrder": 3,
+      "type": "PRODUCT",
+      "is_active": true,
+      "is_sellable": true,
+      "v3SaleAuthority": {
+        "syncId": "99999999-9999-4999-8999-999999999999",
+        "syncVersion": 32,
+        "tariffId": "qa-tariff",
+        "taxIncluded": false,
+        "inventoryVersion": 4,
+        "inventoryCursor": "qa-inventory",
+        "binding": "[\"22222222-2222-4222-8222-222222222222\",\"11111111-1111-4111-8111-111111111111\",\"mock-device-v1\",\"https://erp.invalid/api/sync\",\"https://erp.invalid\"]",
+        "warehouseId": "88888888-8888-4888-8888-888888888888"
+      },
+      "isInventoriable": true,
+      "taxable": true,
+      "appliedTaxIds": [
+        "qa-vat-001"
+      ],
+      "operationalFlags": {
+        "isWeighted": false,
+        "trackInventory": true,
+        "autoPrintLabel": false,
+        "promptPrice": false,
+        "integersOnly": true,
+        "ageRestricted": false,
+        "allowNegativeStock": false,
+        "excludeFromPromotions": false,
+        "excludeFromLoyalty": false,
+        "usesLots": false,
+        "usesSerial": false
+      },
+      "stock": 10000,
+      "stockBalances": {
+        "88888888-8888-4888-8888-888888888888": 10000
+      },
+      "measurementUnit": "UND",
+      "purchaseUnit": "UND",
+      "conversionFactor": 1,
+      "activeInWarehouses": [
+        "88888888-8888-4888-8888-888888888888"
+      ],
+      "images": [],
+      "attributes": [],
+      "variants": [],
+      "tariffs": [
+        {
+          "tariffId": "qa-tariff",
+          "price": 555
+        }
+      ],
+      "cartId": "qa-line",
+      "quantity": 1,
+      "originalPrice": 555,
+      "tableDisplayLabel": "Synthetic Mesa 6",
+      "netAmount": 610.5,
+      "taxAmount": 99.9,
+      "totalAmount": 710.4,
+      "taxRate": 0.18
+    }
+  ],
+  "total": 710.4,
+  "payments": [
+    {
+      "id": "f543975f-58ad-466f-8f56-495f6c935ad5",
+      "method": "CASH",
+      "methodId": "CASH",
+      "methodLabel": "Efectivo",
+      "amount": 710.4,
+      "timestamp": "2026-10-23T23:38:43.915Z",
+      "currencyCode": "DOP",
+      "amountOriginal": 710.4,
+      "exchangeRate": 1,
+      "appliedAmount": 710.4,
+      "amountApplied": 710.4,
+      "changeAmount": 0,
+      "currency_code": "DOP",
+      "exchange_rate": 1,
+      "applied_amount": 710.4,
+      "change_amount": 0
+    }
+  ],
+  "settlementCurrencyCode": "DOP",
+  "settlementExchangeRate": 1,
+  "settlementReceivedOriginal": 710.4,
+  "settlementReceivedBase": 710.4,
+  "settlementAppliedBase": 710.4,
+  "settlementChangeBase": 0,
+  "settlement_currency_code": "DOP",
+  "settlement_exchange_rate": 1,
+  "settlement_received_original": 710.4,
+  "settlement_received_base": 710.4,
+  "settlement_applied_base": 710.4,
+  "settlement_change_base": 0,
+  "userId": "qa-user",
+  "userName": "Synthetic QA",
+  "terminalId": "11111111-1111-4111-8111-111111111111",
+  "status": "COMPLETED",
+  "tableDisplayLabel": "Synthetic Mesa 6",
+  "restaurantOrderId": "cccccccc-1111-4111-8111-ccccccccccc6",
+  "restaurantTableId": "SYNTHETIC-MESA-6",
+  "restaurantSettlementStatus": "PENDING",
+  "ncf": "E320000001001",
+  "fiscalIssuance": {
+    "schemaVersion": 1,
+    "source": "POS_FISCAL_RESERVATION_V1",
+    "ncf": "E320000001001",
+    "ncfType": "E32",
+    "sequence": 1001,
+    "fiscalRangeId": "55555555-5555-4555-8555-555555555555",
+    "fiscalAllocationId": "66666666-6666-4666-8666-666666666666",
+    "prefix": "E32",
+    "rangeStart": 1,
+    "rangeEnd": 9999999999,
+    "allocationStart": 1001,
+    "allocationEnd": 2000,
+    "expiryDate": "2027-12-31",
+    "issuerRnc": "130090752",
+    "tenantId": "22222222-2222-4222-8222-222222222222",
+    "companyId": "44444444-4444-4444-8444-444444444444",
+    "terminalId": "11111111-1111-4111-8111-111111111111",
+    "capturedAt": "2026-10-23T23:38:43.824Z"
+  },
+  "ncfType": "E32",
+  "electronicNcf": "E320000001001",
+  "fiscalMode": "ECF",
+  "fiscalProvider": "MSELLER",
+  "taxAmount": 99.9,
+  "netAmount": 610.5,
+  "taxBreakdown": [
+    {
+      "id": "qa-vat-001",
+      "name": "ITBIS",
+      "rate": 0.18,
+      "type": "VAT",
+      "amount": 99.9,
+      "taxableBase": 555,
+      "total": 654.9,
+      "lineCount": 1
+    }
+  ],
+  "discountAmount": 0,
+  "discountType": "FIXED",
+  "discountValue": 0,
+  "isTaxIncluded": false,
+  "serviceChargeAmount": 55.5,
+  "serviceType": "DINE_IN",
+  "serviceTaxPolicySnapshot": {
+    "legalTip": {
+      "enabled": true,
+      "percentage": 10
+    },
+    "taxIds": [
+      "qa-vat-001"
+    ],
+    "serviceType": "DINE_IN",
+    "source": "POS"
+  },
+  "voluntaryTipAmount": 0,
+  "skipErpSaleSync": false
+}

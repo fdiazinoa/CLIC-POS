@@ -1385,6 +1385,15 @@ export const db = {
 
   assertFiscalTransactionAuthority: async (transaction: Partial<Transaction>, context?: TerminalConfig): Promise<void> => {
     assertFiscalIssuance(transaction);
+    if(transaction.fiscalAllocationAuthorizationId){
+      const store=dbAdapter.fiscalWorkflowStore,checkout=transaction.fiscalWorkflowCheckoutId&&await store?.readCheckout(transaction.fiscalWorkflowCheckoutId);
+      if(!checkout?.allocation||checkout.transactionId!==transaction.id||checkout.allocation.authorizationId!==transaction.fiscalAllocationAuthorizationId||checkout.allocation.ncf!==transaction.ncf||checkout.allocation.ncfType!==transaction.ncfType||JSON.stringify(checkout.allocationIssuance)!==JSON.stringify(transaction.fiscalIssuance))throw Error('OFFLINE_FISCAL_SOURCE_AUTHORITY_CHANGED');
+      if(['COMMITTED','ACKNOWLEDGED'].includes(checkout.phase)){
+        const saved=await dbAdapter.getDocument<Transaction>('transactionHistory',checkout.transactionId);
+        if(!saved||saved.ncf!==transaction.ncf||JSON.stringify(saved.fiscalIssuance)!==JSON.stringify(transaction.fiscalIssuance))throw Error('OFFLINE_FISCAL_SOURCE_AUTHORITY_CHANGED');
+      }else if(!store?.allocationDraft)throw Error('OFFLINE_FISCAL_NATIVE_REQUIRED');else await store.allocationDraft(checkout);
+      return;
+    }
     if (transaction.ncf || transaction.ncfType) {
       if (!transaction.ncf || !transaction.ncfType || !transaction.terminalId ||
           !await db.validatePreparedFiscalAuthority(transaction.ncfType, transaction.terminalId, transaction.ncf, context)) {

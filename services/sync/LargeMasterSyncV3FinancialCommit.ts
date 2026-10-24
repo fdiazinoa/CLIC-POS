@@ -72,8 +72,10 @@ export const buildV3InventoryLedger = (transaction: Transaction, warehouseId: st
 
 type FinancialEntry = { transaction: Transaction; options?: V3FinancialOptions };
 type FinancialResult = { transaction: Transaction; created: boolean };
-const assertFinancialReplay=(stored:Transaction|null,transaction:Transaction,identity:string):void=>{
-  if(!stored||financialIdentity(stored)!==financialIdentity(transaction)||stored.v3CommitFingerprint!==identity)
+const allocationDraftIdentity=(transaction:Transaction,warehouseId:string,options:V3FinancialOptions)=>financialOperationIdentity(transaction.fiscalAllocationAuthorizationId?{...transaction,globalSequence:undefined,displayId:undefined,seriesNumber:undefined}:transaction,warehouseId,options);
+const assertFinancialReplay=(stored:Transaction|null,transaction:Transaction,identity:string,warehouseId?:string,options:V3FinancialOptions={}):void=>{
+  if(transaction.fiscalAllocationAuthorizationId&&stored&&(['globalSequence','displayId','seriesNumber'] as const).some(key=>transaction[key]!==undefined&&transaction[key]!==stored[key]))throw new LargeMasterSyncV3Error('SYNC_V3_DUPLICATE_TRANSACTION_MISMATCH');
+  if(!stored||(transaction.fiscalAllocationAuthorizationId?financialIdentity({...stored,globalSequence:undefined,displayId:undefined,seriesNumber:undefined})!==financialIdentity({...transaction,globalSequence:undefined,displayId:undefined,seriesNumber:undefined}):financialIdentity(stored)!==financialIdentity(transaction))||stored.v3CommitFingerprint!==(transaction.fiscalAllocationAuthorizationId&&warehouseId?financialOperationIdentity(stored,warehouseId,options):identity))
     throw new LargeMasterSyncV3Error('SYNC_V3_DUPLICATE_TRANSACTION_MISMATCH');
 };
 /** A committed receipt is checked with the same canonical identity as the financial writer, never by ID alone. */
@@ -94,8 +96,8 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
   if (!entries.length || new Set(entries.map(entry => entry.transaction.id)).size !== entries.length) {
     return Promise.reject(new LargeMasterSyncV3Error('SYNC_V3_DUPLICATE_TRANSACTION_MISMATCH'));
   }
-  const identities = entries.map(({transaction,options={}})=>financialOperationIdentity(transaction,warehouseId,options));
-  const identity = JSON.stringify([entries.map(entry => entry.transaction.id), identities]);
+  const identities = entries.map(({transaction,options={}})=>allocationDraftIdentity(transaction,warehouseId,options));
+  const identity = JSON.stringify([entries.map(entry => entry.transaction.id), identities,entries.map(({transaction})=>transaction.fiscalAllocationAuthorizationId?[transaction.globalSequence,transaction.displayId,transaction.seriesNumber]:null)]);
   const pending = entries.map(entry => commits.get(entry.transaction.id)).find(Boolean);
   if (pending) return pending.identity === identity ? pending.promise
     : Promise.reject(new LargeMasterSyncV3Error('SYNC_V3_DUPLICATE_TRANSACTION_MISMATCH'));
@@ -104,7 +106,8 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
     await session.assertCurrent();
     const existing = await Promise.all(entries.map(entry => db.getDocument('transactions', entry.transaction.id) as Promise<Transaction | null>));
     if (existing.some(Boolean)) {
-      existing.forEach((stored,index)=>assertFinancialReplay(stored,entries[index].transaction,identities[index]));
+      existing.forEach((stored,index)=>assertFinancialReplay(stored,entries[index].transaction,identities[index],warehouseId,entries[index].options||{}));
+      for(const stored of existing)if(stored?.fiscalAllocationAuthorizationId)await db.assertFiscalTransactionAuthority(stored);
       return existing.map(transaction => ({ transaction: transaction!, created: false }));
     }
     for (const { transaction } of entries) {
@@ -116,6 +119,7 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
     const documents: DurableDocumentMutation[] = [];
     const events: DurableOutboxEventInput[] = [];
     const intentIds: string[] = [];
+    const fiscalAllocationPreconditions:NonNullable<import('../db/DatabaseAdapter').FinancialCommitInput['fiscalAllocationPreconditions']>=[];
     const fiscalWorkflowCommits: NonNullable<import('../db/DatabaseAdapter').FinancialCommitInput['fiscalWorkflowCommits']> = [];
     const results: FinancialResult[] = [];
     const stagedCustomers = new Map<string, Customer>();
@@ -144,6 +148,15 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
       documents.push({ collectionName: retained.collection, document: { ...JSON.parse(retained.expected), state: 'SETTLED' },
         expectedDocument: retained.expected, v3ExpectedRetainedDocument: { collection: retained.collection, id: retained.id, expected: retained.expected } });
     }
+    if(transaction.fiscalAllocationAuthorizationId){
+      if(entries.length!==1||options.refund||!transaction.fiscalWorkflowCheckoutId||!dbAdapter.fiscalWorkflowStore?.allocationCommitPreconditions)throw Error('OFFLINE_FISCAL_NATIVE_REQUIRED');
+      const checkout=await dbAdapter.fiscalWorkflowStore.readCheckout(transaction.fiscalWorkflowCheckoutId);if(!checkout?.allocation)throw Error('OFFLINE_FISCAL_ALLOCATION_REQUIRED');
+      fiscalAllocationPreconditions.push(...await dbAdapter.fiscalWorkflowStore.allocationCommitPreconditions(checkout));
+      const series=await db.getDocument('internalSequences',transaction.seriesId!) as any,counter=await db.getDocument('globalSequenceCounter' as any,'value') as any;
+      const planned=planFinancialNumbers({seriesId:transaction.seriesId,documentType:transaction.documentType,global:true},series,counter);
+      transaction={...transaction,globalSequence:planned.result.globalSequence,displayId:planned.result.displayId,seriesNumber:planned.result.seriesNumber};
+      documents.push({collectionName:'internalSequences',document:planned.series!,expectedDocument:JSON.stringify(series)},{collectionName:'globalSequenceCounter',document:planned.counter!,...(counter?{expectedDocument:JSON.stringify(counter)}:{requireAbsent:true})});
+    }
     if (transaction.v3ReservationClaimId) {
       const reservation = retained?.reservation;
       if (!reservation || retained.collection !== 'v3RestoredTicketSources') throw new LargeMasterSyncV3Error('SYNC_V3_RESERVATION_SOURCE_REQUIRED');
@@ -168,6 +181,9 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
     const document: Transaction = { ...transaction, items: authoritativeLines, syncStatus: 'PENDING', v3Binding: session.binding,
       v3WarehouseId: warehouseId, v3CommitFingerprint: identities[index],
       v3InventoryBaseline: v3InventoryBaselineKey(session.binding, stamp!) };
+    // Draft identity coordinates retries before numbering. The immutable source fingerprint
+    // covers the final numbered/validated document written with receipt, history and Outbox.
+    if(document.fiscalAllocationAuthorizationId)document.v3CommitFingerprint=financialOperationIdentity(document,warehouseId,options);
     let customerUpdate: Customer | null = null;
     let customerBefore: Customer | null = null;
     let walletDelta = options.refund ? Number(document.walletDepositAmount || 0) : -Number(document.walletPaymentAmount || 0);
@@ -232,8 +248,9 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
       if(document.fiscalWorkflowCheckoutId){
         if(options.refund||retained&&!offlineTable||!dbAdapter.fiscalWorkflowStore)throw Error('FISCAL_WORKFLOW_NEW_SOURCE_REQUIRED');
         const checkout=await dbAdapter.fiscalWorkflowStore.readCheckout(document.fiscalWorkflowCheckoutId);
-        if(!checkout||checkout.transactionId!==document.id||offlineTable&&(!checkout.permit?.leaseId||JSON.stringify(checkout.fiscalSaleContext)!==JSON.stringify(document.fiscalSaleContext)))throw Error('FISCAL_WORKFLOW_CHECKOUT_REQUIRED');
-        if(checkout.permit)fiscalWorkflowBirth={schemaVersion:2,permitId:checkout.permit.permitId,transactionId:checkout.transactionId,nonce:checkout.permit.nonce,checkoutId:checkout.checkoutId};
+        if(!checkout||checkout.transactionId!==document.id||offlineTable&&(!(checkout.permit?.leaseId||checkout.allocation)||JSON.stringify(checkout.fiscalSaleContext)!==JSON.stringify(document.fiscalSaleContext)))throw Error('FISCAL_WORKFLOW_CHECKOUT_REQUIRED');
+        if(checkout.allocation)fiscalWorkflowBirth={schemaVersion:3,authorizationKind:'OFFLINE_FISCAL_ALLOCATION_V2',authorizationId:checkout.allocation.authorizationId,authorityHash:checkout.allocation.authorityHash,checkoutId:checkout.checkoutId,transactionId:checkout.transactionId};
+        else if(checkout.permit)fiscalWorkflowBirth={schemaVersion:2,permitId:checkout.permit.permitId,transactionId:checkout.transactionId,nonce:checkout.permit.nonce,checkoutId:checkout.checkoutId};
         fiscalWorkflowCommits.push({checkoutId:checkout.checkoutId,transactionId:document.id,birth:fiscalWorkflowBirth||null});
       }
 
@@ -263,7 +280,7 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
     }
     if (events.length) {
       await durableOutboxRepository.commitFinancialTransaction({ documents, outboxEvent: events[0],
-        additionalOutboxEvents: events.slice(1), paymentIntentIds: intentIds,fiscalWorkflowCommits });
+        additionalOutboxEvents: events.slice(1), paymentIntentIds: intentIds,fiscalWorkflowCommits,...(fiscalAllocationPreconditions.length?{fiscalAllocationPreconditions}:{}) });
     } else {
       if (!dbAdapter.saveDocumentsAtomically) throw new LargeMasterSyncV3Error('SYNC_V3_ATOMIC_COMMIT_REQUIRED');
       await dbAdapter.saveDocumentsAtomically(documents);

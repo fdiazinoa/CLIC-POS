@@ -103,15 +103,15 @@ test('actual table prepayment callback reserves locally, pins retained account, 
   const checkoutRef:any={current:null},contextRef:any={current:undefined},fenceRef={current:false};let updates=0,race=false,operation=0;
   const currentContext=async()=>({...table.context,sourceSha256:await tableFiscalSourceDigest(String(f.sql.prepare("SELECT data FROM documents WHERE collection_name='parkedTickets' AND doc_id=?").get(table.account.id)!.data))});
   const ctx:any={completedReservationForReceipt:async()=>null,assertCheckoutFiscalAuthority:async()=>{},hasV3ReservationCart:false,activeV3Reservation:null,selectedCustomer:null,
-   db:{getDocument:async(collection:string,id:string)=>{const row=f.sql.prepare('SELECT data FROM documents WHERE collection_name=? AND doc_id=?').get(collection,id);return row?JSON.parse(String(row.data)):null;}},assertFiscalWorkflowCheckoutReplay,readFiscalWorkflowLocalScope,
+   db:{getDocument:async(collection:string,id:string)=>{const row=f.sql.prepare('SELECT data FROM documents WHERE collection_name=? AND doc_id=?').get(collection,id);return row?JSON.parse(String(row.data)):null;}},assertFiscalWorkflowCheckoutReplay,readFiscalWorkflowLocalScope,tableFiscalSourceDigest,
    v3Operational:{validate:async()=>{if(race)f.sql.prepare("UPDATE documents SET data=? WHERE collection_name='parkedTickets'").run(JSON.stringify({...table.account,guests:9}));}},
    fiscalCompliance:{mode:'ECF'},fiscalWorkflowV2Client:f.client(),getDefaultFiscalProvider:()=> 'MSELLER',config,activeTerminalConfig:config.terminals[0].config,terminalId:scope.terminalId,
    activeRecoveredReservation:null,activeDirectV3TicketId:null,activeTable:{id:'mesa-6',currentOrderId:table.account.id},isMaster:true,activePaymentFraction:null,cartTip:55.5,appliedServiceTaxPolicy:{legalTip:{enabled:true,percentage:10}},
    processedCart:table.account.items,cart:table.account.items,fiscalCheckoutRef:checkoutRef,fiscalCheckoutOperationRef:{current:null},offlineTableFiscalContextRef:contextRef,
    offlineTablePaymentFenceRef:fenceRef,ticketAutoSyncFlushRef:{current:null},ticketAutoSyncTimeoutRef:{current:null},readTableFiscalSaleContext:currentContext,
-   currentFiscalCheckoutCartIdentity:()=>JSON.stringify({fiscalSaleContext:contextRef.current,items:table.account.items,customerId:null,fiscalType:'E32'}),
+   currentFiscalCheckoutCartIdentity:(saleContext=contextRef.current)=>JSON.stringify({fiscalSaleContext:saleContext,items:table.account.items,customerId:null,fiscalType:'E32'}),
    onUpdateCart:()=>{updates++;},createUuid:()=>uuid(7,++operation),setLargeMasterSyncV3CriticalOperation:()=>{}};
-  const js=ts.transpileModule('const invoke='+arrow.getText(ast),{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
+  const js=ts.transpileModule(text.slice(text.indexOf('   const resolveCommittedFiscalReceipt ='),text.indexOf('   const beforeV3PaymentEffects ='))+'const invoke='+arrow.getText(ast),{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
   const invoke=new Function(...Object.keys(ctx),js+';return invoke;')(...Object.values(ctx));
   f.sql.prepare("UPDATE documents SET data=? WHERE collection_name='parkedTickets' AND doc_id=?").run(JSON.stringify({...table.account,items:[],total:0}),table.account.id);
   let flushes=0;ctx.ticketAutoSyncFlushRef.current=async()=>{flushes++;f.sql.prepare("UPDATE documents SET data=? WHERE collection_name='parkedTickets' AND doc_id=?").run(table.literal,table.account.id);};
@@ -124,7 +124,7 @@ test('actual table prepayment callback reserves locally, pins retained account, 
   const checkoutA=checkoutRef.current;assert.equal(checkoutA.phase,'EFFECT_POSSIBLE');
   table.account.items[0].quantity=2;await assert.rejects(invoke(['payment'],['CASH']),/RECONCILIATION/);assert.equal(fenceRef.current,true);assert.equal(f.sql.prepare("SELECT data FROM documents WHERE collection_name='parkedTickets' AND doc_id=?").get(table.account.id)!.data,table.literal);table.account.items[0].quantity=1;
   const retry=await invoke(['payment'],['CASH']);assert.equal(retry.futureCheckout.checkoutId,checkoutA.checkoutId);retry();assert.equal(fenceRef.current,true);
-  await f.adapter.commitFinancialTransaction(commit(f,checkoutA,table) as any);await reset(...Object.values(ctx));assert.equal(checkoutRef.current,null);assert.equal(contextRef.current,undefined);assert.equal(fenceRef.current,false);
+  await f.adapter.commitFinancialTransaction(commit(f,checkoutA,table) as any);const actualNow=Date.now;Date.now=()=>actualNow()+8*86400000;try{const recovered=await invoke(['payment'],['CASH']);assert.equal(recovered.completedTransaction.id,checkoutA.transactionId);assert.equal(checkoutRef.current.phase,'COMMITTED');assert.equal(count(f,'sync_outbox_v2'),1);}finally{Date.now=actualNow;}await reset(...Object.values(ctx));assert.equal(checkoutRef.current,null);assert.equal(contextRef.current,undefined);assert.equal(fenceRef.current,false);
   table=await tableSource(f,'second-account');ctx.activeTable.currentOrderId=table.account.id;
   const payB=await invoke([],['CASH']);assert.notEqual(checkoutRef.current.checkoutId,checkoutA.checkoutId);await f.adapter.commitFinancialTransaction(commit(f,checkoutRef.current,table) as any);await reset(...Object.values(ctx));payB();
   table=tableA;ctx.activeTable.currentOrderId=table.account.id;

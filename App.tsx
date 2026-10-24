@@ -11622,7 +11622,7 @@ const AppContent: React.FC = () => {
       const terminal=(config.terminals || []).find(row=>row.config?.currentDeviceId===deviceId);
       if(terminal&&getEffectiveFiscalComplianceConfig(config,terminal.config).mode==='ECF'&&getDefaultFiscalProvider(config,terminal.config)==='MSELLER')
         await fiscalWorkflowV2Client.discover().catch(()=>undefined);
-      void fiscalWorkflowV2Client.prefetchOfflineLease().catch(()=>undefined);
+      void fiscalWorkflowV2Client.prepareOfflineAuthority().catch(()=>undefined);
       await fiscalWorkflowV2Client.prefetch().catch(()=>undefined);await fiscalWorkflowV2Client.runRound();await fiscalStatusWorker.runAutomatic();},dispose:()=>{fiscalWorkflowV2Client.invalidate();fiscalStatusWorker.dispose();}},{
       hydrated:isDataLoaded&&fiscalHistoryHydrated&&isSecurityLoaded,
       online:()=>navigator.onLine,addOnline:listener=>window.addEventListener('online',listener),removeOnline:listener=>window.removeEventListener('online',listener),
@@ -11657,7 +11657,7 @@ const AppContent: React.FC = () => {
         result = {transaction:completed,created:false};
       }
       onCommitted?.(result.transaction);
-      if (txn.v3ReservationClaimId) Object.assign(txn,result.transaction); // Return committed numbering to the existing receipt caller.
+      if (txn.v3ReservationClaimId||txn.fiscalAllocationAuthorizationId) Object.assign(txn,result.transaction); // Return committed numbering to the existing receipt caller.
       setTransactions(previous => [...previous.filter(row => row.id !== result.transaction.id), result.transaction]);
       if (result.transaction.customerId && result.transaction.pendingBalance) {
         const updated = await db.getDocument('customers', result.transaction.customerId) as Customer | null;

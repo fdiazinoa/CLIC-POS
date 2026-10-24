@@ -88,9 +88,9 @@ test('actual remounted prepayment callback adopts returned durable op then one c
    activeRecoveredReservation:null,activeDirectV3TicketId:null,activeTable:null,processedCart:cart,cart,fiscalCheckoutRef:checkoutRef,fiscalCheckoutOperationRef:operationRef,
    currentFiscalCheckoutCartIdentity:()=>cartIdentity,onUpdateCart:(items:any[])=>updates.push(items),createUuid:()=> 'fresh-ui-operation',setLargeMasterSyncV3CriticalOperation:()=>{},
    assertFiscalWorkflowCheckoutReplay,readFiscalWorkflowLocalScope:()=>scope,db:{getDocument:async(collection:string,id:string)=>{const row=f.sql.prepare('SELECT data FROM documents WHERE collection_name=? AND doc_id=?').get(collection,id);return row?JSON.parse(String(row.data)):null;}}};
-  const js=ts.transpileModule('const invoke='+arrow.getText(ast),{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,invoke=new Function(...Object.keys(context),js+';return invoke;')(...Object.values(context));
+  const js=ts.transpileModule(text.slice(text.indexOf('   const resolveCommittedFiscalReceipt ='),text.indexOf('   const beforeV3PaymentEffects ='))+'const invoke='+arrow.getText(ast),{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,invoke=new Function(...Object.keys(context),js+';return invoke;')(...Object.values(context));
   const [first,repeat]=await Promise.all([invoke(),invoke()]);
-  assert.deepEqual(first.futureCheckout,{checkoutId:original.checkoutId,transactionId:original.transactionId});assert.deepEqual(repeat.futureCheckout,first.futureCheckout);
+  assert.deepEqual(first.futureCheckout,{checkoutId:original.checkoutId,transactionId:original.transactionId,operationId:original.operationId});assert.deepEqual(repeat.futureCheckout,first.futureCheckout);
   assert.equal(operationRef.current,'interrupted-operation');assert.ok(updates.every(rows=>rows.every((row:any)=>row.fiscalCheckoutOperationId==='interrupted-operation')));assert.equal(validation,2);
   assert.equal((f.sql.prepare('SELECT count(*) n FROM pos_fiscal_checkouts_v2').get() as any).n,1);assert.equal(c.requests(),1);
   const tx={...transaction(original),items:cart,total:748.8,netAmount:748.8};await f.adapter.commitFinancialTransaction(commit(original,tx));
