@@ -7199,10 +7199,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                kdsAreaId: dispatchMeta?.areaId,
                kdsItemIds: dispatchMeta?.itemIds,
                production_area_id: dispatchMeta?.areaId || resolveProductionAreaId(item) || undefined,
-               restaurantConfig: {
-                  ...(item.restaurantConfig || {}),
-                  production_area_id: dispatchMeta?.areaId || item.restaurantConfig?.production_area_id || undefined,
-               },
+               ...(item.restaurantConfig ? {
+                  restaurantConfig: {
+                     ...item.restaurantConfig,
+                     production_area_id: dispatchMeta?.areaId || item.restaurantConfig.production_area_id || undefined,
+                  },
+               } : {}),
             } : item;
          });
          if (!options.backgroundTableExit) onUpdateCart(updatedCart);

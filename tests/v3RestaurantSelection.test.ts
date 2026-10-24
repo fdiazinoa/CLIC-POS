@@ -51,3 +51,48 @@ test('actual barcode callback opens restaurant configuration before any cart mut
  const invoke=new Function(...Object.keys(dependencies),code+';return invoke;')(...Object.values(dependencies));
  const result=await invoke('322');assert.equal(result.added,true);assert.strictEqual(opened,source);assert.equal(adds,0);
 });
+
+
+test('saved simple KDS routing survives JSON park/restore without a commercial type snapshot', () => {
+ for (const product_type of ['SIMPLE', 'SERVICE']) {
+  const product: any = {id:'water', type:'PRODUCT', product_type, production_area_id:'CAJA_4', price:85};
+  const line: any = {...product, quantity:1, restaurantConfig:{production_area_id:'CAJA_4'}};
+  for (const restaurantConfig of [undefined, line.restaurantConfig, {...line.restaurantConfig, product_type},
+   {...line.restaurantConfig, comboGroups:{}, modifierGroups:{}, fractions:[], selected_combo_items:[], selected_modifiers:[], selected_fraction_parts:[]}]) {
+   const restored = JSON.parse(JSON.stringify({...line, restaurantConfig}));
+   assert.equal(validateV3RestaurantSelection(restored, product), 85);
+  }
+  for (const patch of [{product_type:null}, {product_type:'COMBO'}, {production_area_id:'OTHER'},
+   {comboGroups:[]}, {modifierGroups:null}, {selected_modifiers:[{}]}, {fractions:[{}]}, {unknown:true}, {note:'different'}]) {
+   assert.throws(() => validateV3RestaurantSelection({...line, restaurantConfig:{...line.restaurantConfig,...patch}}, product));
+  }
+  for (const patch of [{selected_modifiers:{}}, {selected_combo_items:null}, {modifiers:'bad'}, {selected_fraction_parts:[{}]}]) {
+   assert.throws(() => validateV3RestaurantSelection({...line,...patch}, product));
+  }
+ }
+ for (const product_type of ['COMBO','FRACTIONABLE']) {
+  const product:any = {product_type, price:85, production_area_id:'CAJA_4'};
+  assert.throws(() => validateV3RestaurantSelection({price:85,restaurantConfig:{production_area_id:'CAJA_4'}} as any, product));
+ }
+});
+
+test('actual kitchen dispatch preserves genuine selections and does not synthesize commercial routing config', async () => {
+ const {readFileSync} = await import('node:fs');
+ const ts = await import('typescript');
+ const text = readFileSync(new URL('../components/POSInterface.tsx',import.meta.url),'utf8');
+ const start = text.indexOf('         const updatedCart = cart.map(item => {', text.indexOf('// 3. Mark items as dispatched'));
+ const end = text.indexOf('         if (!options.backgroundTableExit)',start);
+ assert.ok(start > 0 && end > start);
+ const js = ts.transpileModule(text.slice(start,end),{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
+ const dispatch = new Function('cart','getCartDispatchKey','dispatchMetaByCartId','dispatchedCartIds','orderNumber','activeTableContext','queuedCartIds','sentCartIds','resolveProductionAreaId',js+'return updatedCart;');
+ const {source, line} = fixture();
+ const simple:any = {id:'water',cartId:'simple',type:'PRODUCT',product_type:'SIMPLE',price:85,quantity:1,production_area_id:'CAJA_4'};
+ const restored = JSON.parse(JSON.stringify(dispatch([simple,line],(item:any)=>item.cartId,new Map(),new Set(['simple',line.cartId]),'order',{},new Set(),new Set(),(item:any)=>item.production_area_id)));
+ assert.equal(restored[0].restaurantConfig,undefined);
+ assert.doesNotThrow(()=>validateV3RestaurantSelection(restored[0],simple));
+ assert.doesNotThrow(()=>validateV3PinnedLineSource(restored[0],simple,{taxIncluded:undefined} as any));
+ assert.deepEqual(restored[1].restaurantConfig,line.restaurantConfig);
+ assert.equal(validateV3RestaurantSelection(restored[1],source),640);
+ restored[1].price++;
+ assert.throws(()=>validateV3RestaurantSelection(restored[1],source));
+});

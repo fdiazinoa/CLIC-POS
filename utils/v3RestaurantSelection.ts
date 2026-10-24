@@ -41,7 +41,24 @@ export function normalizeV3RestaurantSelection(value:unknown):Pick<Product,'prod
 export function validateV3RestaurantSelection(line:CartItem,product:Product):number {
  const source=resolveRestaurantProductConfig(product),selected=line.restaurantConfig;
  const advanced=source.combo_groups.length||source.modifier_groups.length||source.fraction_rule?.options?.length||source.note_presets.length;
- if(!advanced){need(!line.selected_combo_items?.length&&!line.selected_modifiers?.length&&!line.selected_fraction_parts?.length&&!line.modifiers?.length);if(selected){const s=record(selected);need(!Object.keys(s.comboGroups||{}).length&&!Object.keys(s.modifierGroups||{}).length&&s.product_type===source.product_type&&s.production_area_id===source.production_area_id);}return product.price;}
+ if (!advanced) {
+  const emptyArray = (value: unknown) => value === undefined || Array.isArray(value) && value.length === 0;
+  const emptyMap = (value: unknown) => value === undefined || Boolean(value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0);
+  need(emptyArray(line.selected_combo_items) && emptyArray(line.selected_modifiers)
+   && emptyArray(line.selected_fraction_parts) && emptyArray(line.modifiers));
+  const simpleRoute = source.product_type === 'SIMPLE' || source.product_type === 'SERVICE';
+  if (selected !== undefined) {
+   const s = record(selected);
+   need(Object.keys(s).every(key => ['product_type', 'production_area_id', 'comboGroups', 'modifierGroups',
+    'fractions', 'selected_combo_items', 'selected_modifiers', 'selected_fraction_parts', 'note'].includes(key)));
+   need((s.product_type === undefined && simpleRoute || s.product_type === source.product_type)
+    && s.production_area_id === source.production_area_id);
+   need(emptyMap(s.comboGroups) && emptyMap(s.modifierGroups) && emptyArray(s.fractions)
+    && emptyArray(s.selected_combo_items) && emptyArray(s.selected_modifiers) && emptyArray(s.selected_fraction_parts));
+   need(s.note === undefined || typeof s.note === 'string' && s.note.length <= 2000 && s.note === line.note);
+  }
+  return product.price;
+ }
  need(selected);const s=record(selected);need(Object.keys(s).every(k=>['modifierGroups','comboGroups','fractions','selected_modifiers','selected_fraction_parts','selected_combo_items','product_type','production_area_id','note'].includes(k)));let extra=0;
  const pick=(groups:any[],mapping:unknown,kind:'items'|'modifiers')=>{
   const map=mapping==null?{}:record(mapping);need(Object.keys(map).every(id=>groups.some(g=>g.id===id)));
