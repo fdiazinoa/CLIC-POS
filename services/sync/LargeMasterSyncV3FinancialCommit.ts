@@ -73,9 +73,9 @@ export const buildV3InventoryLedger = (transaction: Transaction, warehouseId: st
 type FinancialEntry = { transaction: Transaction; options?: V3FinancialOptions };
 type FinancialResult = { transaction: Transaction; created: boolean };
 const allocationDraftIdentity=(transaction:Transaction,warehouseId:string,options:V3FinancialOptions)=>financialOperationIdentity(transaction.fiscalAllocationAuthorizationId?{...transaction,globalSequence:undefined,displayId:undefined,seriesNumber:undefined}:transaction,warehouseId,options);
-const assertFinancialReplay=(stored:Transaction|null,transaction:Transaction,identity:string):void=>{
+const assertFinancialReplay=(stored:Transaction|null,transaction:Transaction,identity:string,warehouseId?:string,options:V3FinancialOptions={}):void=>{
   if(transaction.fiscalAllocationAuthorizationId&&stored&&(['globalSequence','displayId','seriesNumber'] as const).some(key=>transaction[key]!==undefined&&transaction[key]!==stored[key]))throw new LargeMasterSyncV3Error('SYNC_V3_DUPLICATE_TRANSACTION_MISMATCH');
-  if(!stored||(transaction.fiscalAllocationAuthorizationId?financialIdentity({...stored,globalSequence:undefined,displayId:undefined,seriesNumber:undefined})!==financialIdentity({...transaction,globalSequence:undefined,displayId:undefined,seriesNumber:undefined}):financialIdentity(stored)!==financialIdentity(transaction))||stored.v3CommitFingerprint!==identity)
+  if(!stored||(transaction.fiscalAllocationAuthorizationId?financialIdentity({...stored,globalSequence:undefined,displayId:undefined,seriesNumber:undefined})!==financialIdentity({...transaction,globalSequence:undefined,displayId:undefined,seriesNumber:undefined}):financialIdentity(stored)!==financialIdentity(transaction))||stored.v3CommitFingerprint!==(transaction.fiscalAllocationAuthorizationId&&warehouseId?financialOperationIdentity(stored,warehouseId,options):identity))
     throw new LargeMasterSyncV3Error('SYNC_V3_DUPLICATE_TRANSACTION_MISMATCH');
 };
 /** A committed receipt is checked with the same canonical identity as the financial writer, never by ID alone. */
@@ -106,7 +106,7 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
     await session.assertCurrent();
     const existing = await Promise.all(entries.map(entry => db.getDocument('transactions', entry.transaction.id) as Promise<Transaction | null>));
     if (existing.some(Boolean)) {
-      existing.forEach((stored,index)=>assertFinancialReplay(stored,entries[index].transaction,identities[index]));
+      existing.forEach((stored,index)=>assertFinancialReplay(stored,entries[index].transaction,identities[index],warehouseId,entries[index].options||{}));
       for(const stored of existing)if(stored?.fiscalAllocationAuthorizationId)await db.assertFiscalTransactionAuthority(stored);
       return existing.map(transaction => ({ transaction: transaction!, created: false }));
     }
@@ -181,6 +181,9 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
     const document: Transaction = { ...transaction, items: authoritativeLines, syncStatus: 'PENDING', v3Binding: session.binding,
       v3WarehouseId: warehouseId, v3CommitFingerprint: identities[index],
       v3InventoryBaseline: v3InventoryBaselineKey(session.binding, stamp!) };
+    // Draft identity coordinates retries before numbering. The immutable source fingerprint
+    // covers the final numbered/validated document written with receipt, history and Outbox.
+    if(document.fiscalAllocationAuthorizationId)document.v3CommitFingerprint=financialOperationIdentity(document,warehouseId,options);
     let customerUpdate: Customer | null = null;
     let customerBefore: Customer | null = null;
     let walletDelta = options.refund ? Number(document.walletDepositAmount || 0) : -Number(document.walletPaymentAmount || 0);
