@@ -413,7 +413,8 @@ class BackgroundSyncManager {
                     collectionErrors.push(`sync_outbox_v2: ${batch.retrying} event(s) scheduled for retry`);
                 }
                 console.log('[POS-2B] durable batch completed', batch);
-            } else {
+            }
+            if (!isSyncFeatureEnabled('sqlite_outbox_v2')) {
                 // Legacy path remains available while POS-2B is dark.
                 await this.processCollection<any>('transactions', async (item) => {
                     return apiSyncAdapter.pushTransaction(item);
@@ -467,7 +468,7 @@ class BackgroundSyncManager {
 
             // The SALE_COMMITTED durable event owns its inventory movements.
             // Sending the legacy ledger as well would duplicate the operation.
-            if (!durableBatchActive) {
+            if (!isSyncFeatureEnabled('sqlite_outbox_v2')) {
                 await this.processCollection<InventoryLedgerEntry>('inventoryLedger', async (item) => {
                     return apiSyncAdapter.pushInventoryMovement(item);
                 }).catch((error: any) => {
@@ -713,7 +714,7 @@ class BackgroundSyncManager {
                 : null;
         }
         const collections = (collectionOverride || [...this.operationalCollections, 'catalogEdits']).filter(collection =>
-            !durableBatchActive || (collection !== 'transactions' && collection !== 'inventoryLedger')
+            !isSyncFeatureEnabled('sqlite_outbox_v2') || (collection !== 'transactions' && collection !== 'inventoryLedger')
         );
 
         for (const col of collections) {
