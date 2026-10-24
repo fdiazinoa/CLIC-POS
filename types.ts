@@ -1525,6 +1525,7 @@ export interface V3SaleAuthorityStamp {
 }
 
 export interface Product {
+  v3TrackingAuthorities?:import('./services/tracking/TrackingDeliveryWitness').TrackingAllocationSnapshot[];
   inventoryPresentationMaster?: import('./services/inventoryPresentations/contract').InventoryPresentationMaster;
   article_formats?: import('./services/articleFormats/contract').ArticleFormatsDTO;
   id: string;
@@ -1659,6 +1660,9 @@ export interface InventoryCommitment {
 }
 
 export interface InventoryTracking {
+  v3Authority?:import('./services/tracking/TrackingAuthority').TrackingAuthority;
+  availableMinor?:number;
+  selectedQuantityMinor?:number;
   id: string;
   productId: string;
   variantId?: string;
@@ -1828,6 +1832,8 @@ export interface CartItem extends Product {
 }
 
 export interface Transaction {
+  trackingCheckoutId?:string;
+  trackingEffectAt?:string;
   inventoryPresentationContract?: 1;
     /** Durable future checkout identity; never added to historical/retained sources. */
     fiscalWorkflowCheckoutId?: string;

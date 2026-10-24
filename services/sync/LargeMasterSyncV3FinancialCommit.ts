@@ -1,3 +1,4 @@
+import {captureTrackingSourceMetadata} from '../tracking/TrackingSourceMetadata';
 import {isOfflineTableFiscalTransaction,assertTableFiscalSaleContext} from '../fiscal/OfflineTableFiscalCheckout';
 import {presentationInventoryQuantity} from '../inventoryPresentations/selection';
 import {captureNewV3FiscalSourceMetadata} from './NewV3FiscalSourceMetadata';
@@ -53,7 +54,7 @@ export const buildV3InventoryLedger = (transaction: Transaction, warehouseId: st
     }
     seen.add(line.cartId);
     if (line.type === 'SERVICE' || line.isInventoriable !== true) return [];
-    if (line.type !== 'PRODUCT' || line.trackingData?.length || line.recipeDetails?.length) {
+    if (line.type !== 'PRODUCT' || line.recipeDetails?.length) {
       throw new LargeMasterSyncV3Error('SYNC_V3_ADVANCED_ARTICLE_CONTRACT_REQUIRED');
     }
     const quantity = Math.abs(presentationInventoryQuantity(line));
@@ -120,6 +121,7 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
     const events: DurableOutboxEventInput[] = [];
     const intentIds: string[] = [];
     const fiscalAllocationPreconditions:NonNullable<import('../db/DatabaseAdapter').FinancialCommitInput['fiscalAllocationPreconditions']>=[];
+    const trackingCommits:NonNullable<import('../db/DatabaseAdapter').FinancialCommitInput['trackingCommits']>=[];
     const fiscalWorkflowCommits: NonNullable<import('../db/DatabaseAdapter').FinancialCommitInput['fiscalWorkflowCommits']> = [];
     const results: FinancialResult[] = [];
     const stagedCustomers = new Map<string, Customer>();
@@ -148,6 +150,8 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
       documents.push({ collectionName: retained.collection, document: { ...JSON.parse(retained.expected), state: 'SETTLED' },
         expectedDocument: retained.expected, v3ExpectedRetainedDocument: { collection: retained.collection, id: retained.id, expected: retained.expected } });
     }
+    const trackingSelections=transaction.items.flatMap(line=>line.trackingData||[]);
+    if(trackingSelections.length){if(!transaction.trackingCheckoutId||options.refund)throw Error('TRACKING_CHECKOUT_SOURCE_REQUIRED');trackingCommits.push({checkoutId:transaction.trackingCheckoutId,transactionId:transaction.id,selections:trackingSelections});}
     if(transaction.fiscalAllocationAuthorizationId){
       if(entries.length!==1||options.refund||!transaction.fiscalWorkflowCheckoutId||!dbAdapter.fiscalWorkflowStore?.allocationCommitPreconditions)throw Error('OFFLINE_FISCAL_NATIVE_REQUIRED');
       const checkout=await dbAdapter.fiscalWorkflowStore.readCheckout(transaction.fiscalWorkflowCheckoutId);if(!checkout?.allocation)throw Error('OFFLINE_FISCAL_ALLOCATION_REQUIRED');
@@ -243,7 +247,7 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
     if (isSyncFeatureEnabled('sqlite_outbox_v2') && !options.refund) {
       const offlineTable=isOfflineTableFiscalTransaction(document);
       if(offlineTable)await assertTableFiscalSaleContext(document,retained);
-      const fiscalSourceMetadata = captureNewV3FiscalSourceMetadata(document,projected,session.binding,{refund:options.refund,retained:Boolean(retained),offlineTableAccount:offlineTable});
+      const fiscalSourceMetadata = {...captureNewV3FiscalSourceMetadata(document,projected,session.binding,{refund:options.refund,retained:Boolean(retained),offlineTableAccount:offlineTable}),...captureTrackingSourceMetadata(document,projected)};
       let fiscalWorkflowBirth: import('../fiscal/FiscalWorkflowV2Types').FiscalWorkflowBirthV2 | undefined;
       if(document.fiscalWorkflowCheckoutId){
         if(options.refund||retained&&!offlineTable||!dbAdapter.fiscalWorkflowStore)throw Error('FISCAL_WORKFLOW_NEW_SOURCE_REQUIRED');
@@ -280,7 +284,7 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
     }
     if (events.length) {
       await durableOutboxRepository.commitFinancialTransaction({ documents, outboxEvent: events[0],
-        additionalOutboxEvents: events.slice(1), paymentIntentIds: intentIds,fiscalWorkflowCommits,...(fiscalAllocationPreconditions.length?{fiscalAllocationPreconditions}:{}) });
+        additionalOutboxEvents: events.slice(1), paymentIntentIds: intentIds,fiscalWorkflowCommits,trackingCommits,...(fiscalAllocationPreconditions.length?{fiscalAllocationPreconditions}:{}) });
     } else {
       if (!dbAdapter.saveDocumentsAtomically) throw new LargeMasterSyncV3Error('SYNC_V3_ATOMIC_COMMIT_REQUIRED');
       await dbAdapter.saveDocumentsAtomically(documents);

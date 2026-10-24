@@ -1,3 +1,4 @@
+import {assertTrackingLine} from '../tracking/TrackingLine';
 import {validateV3RestaurantSelection} from '../../utils/v3RestaurantSelection';
 import {isOfflineTableFiscalTransaction} from '../fiscal/OfflineTableFiscalCheckout';
 import { validWeightPresentation } from '../../utils/scaleWeight';
@@ -43,6 +44,7 @@ export const validateV3PinnedLineSource = (line: CartItem, product: Product, aut
     }
   }
   validateV3RestaurantSelection(line,product);
+  assertTrackingLine(line,product);
 };
 
 /** Recompute from V3 taxes and the permitted final price/discount, never a legacy fallback rate. */

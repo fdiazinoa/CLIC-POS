@@ -1,3 +1,4 @@
+import {base6,readV3Base6Stock} from '../V3Base6Stock';
 import {TRACKING_ALLOCATION_SCHEMA,installTrackingAllocation,prepareTrackingCheckout,fenceTrackingCheckout,abandonTrackingCheckout,consumeTrackingCheckout} from '../TrackingAllocationStore';
 import type {TrackingAuthority,TrackingSelection} from '../../tracking/TrackingAuthority';
 import {OFFLINE_FISCAL_ALLOCATION_WRITER_SCHEMA} from '../OfflineFiscalAllocationStore';
@@ -541,14 +542,17 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         return this.withWriteLock(() => db.run(normalized, params));
     }
 
-    async installTrackingAuthority(authority:TrackingAuthority,previouslySeen:boolean,serverConsumedMinor=0):Promise<void>{
-        await this.withWriteLock(()=>this.executeUnlocked([],()=>installTrackingAllocation(this.ensureDb() as any,authority,previouslySeen,serverConsumedMinor),true));
+    async readTrackingAuthority(allocationId:string):Promise<{authorityJson:string;witnessHash:string;availableMinor:number}|null>{
+        const row=(await this.ensureDb().query("SELECT a.authority_json,a.delivery_witness_hash,a.state,json_extract(a.authority_json,'$.quantityMinor')-a.consumed_minor-coalesce((SELECT sum(c.quantity_minor) FROM pos_tracking_checkout_v1 c WHERE c.allocation_id=a.id AND c.phase IN('PREPARED','EFFECT_POSSIBLE')),0) available_minor FROM pos_tracking_allocations_v1 a WHERE a.id=?",[allocationId])).values?.[0];return row?{authorityJson:String(row.authority_json),witnessHash:String(row.delivery_witness_hash),availableMinor:row.state==='ACTIVE'?Number(row.available_minor):0}:null;
+    }
+    async installTrackingAuthority(authority:TrackingAuthority,previouslySeen:boolean,serverConsumedMinor=0,deliveryWitnessHash?:string):Promise<void>{
+        await this.withWriteLock(()=>this.executeUnlocked([],()=>installTrackingAllocation(this.ensureDb() as any,authority,previouslySeen,serverConsumedMinor,deliveryWitnessHash),true));
     }
     async prepareTrackingCheckout(checkoutId:string,selections:TrackingSelection[],scope:Pick<TrackingAuthority,'tenantId'|'companyId'|'storeId'|'warehouseId'|'terminalId'|'deviceId'>):Promise<void>{
         await this.withWriteLock(()=>this.executeUnlocked([],()=>prepareTrackingCheckout(this.ensureDb() as any,checkoutId,selections,scope),true));
     }
-    async fenceTrackingCheckout(checkoutId:string):Promise<void>{
-        await this.withWriteLock(()=>this.executeUnlocked([],()=>fenceTrackingCheckout(this.ensureDb() as any,checkoutId),true));
+    async fenceTrackingCheckout(checkoutId:string):Promise<number>{
+        let effectAt=0;await this.withWriteLock(()=>this.executeUnlocked([],async()=>{effectAt=await fenceTrackingCheckout(this.ensureDb() as any,checkoutId);},true));return effectAt;
     }
     async abandonTrackingCheckout(checkoutId:string):Promise<void>{
         await this.withWriteLock(()=>this.executeUnlocked([],()=>abandonTrackingCheckout(this.ensureDb() as any,checkoutId),true));
@@ -620,6 +624,8 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             const history=input.documents.find(d=>d.collectionName==='transactionHistory'&&d.document.id===tracking.transactionId);
             const selections=source?.document.items?.flatMap((line:any)=>line.trackingData||[])||[];
             if(!source||!event||!history||JSON.stringify(history.document.items?.flatMap((line:any)=>line.trackingData||[])||[])!==JSON.stringify(tracking.selections)||JSON.stringify(selections)!==JSON.stringify(tracking.selections)||JSON.stringify(event.payload.transaction?.items?.flatMap((line:any)=>line.trackingData||[])||[])!==JSON.stringify(tracking.selections))throw Error('TRACKING_ATOMIC_SOURCE_REQUIRED');
+            const effectRows=(await this.ensureDb().query('SELECT effect_at_ms FROM pos_tracking_checkout_v1 WHERE checkout_id=?',[tracking.checkoutId])).values||[];
+            if(!Number.isFinite(Date.parse(source.document.trackingEffectAt))||effectRows.some((row:any)=>row.effect_at_ms!==Date.parse(source.document.trackingEffectAt)))throw Error('TRACKING_EFFECT_TIME_REQUIRED');
             await consumeTrackingCheckout(this.ensureDb() as any,tracking.checkoutId,tracking.transactionId,tracking.selections);
           }
           if(input.documents.some(d=>d.collectionName==='transactions'&&d.document.items?.some((line:any)=>line.v3SaleAuthority&&line.trackingData?.length))&&!input.trackingCommits?.length)throw Error('TRACKING_ATOMIC_SOURCE_REQUIRED');
@@ -1265,7 +1271,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
           if (!reads.has(key)) reads.set(key, this.ensureDb().query(sql, values));
           return reads.get(key)!;
         };
-        const demands = new Map<string, { baseline: string; productId: string; warehouseId: string; quantity: number; quantityScale?:4; exactQuantity?:string; nonFormatWriter?:boolean }>();
+        const demands = new Map<string, { baseline: string; productId: string; warehouseId: string; quantity: number; quantityScale?:4|6; exactQuantity?:string; nonFormatWriter?:boolean }>();
         for (const mutation of documents) {
             const document = mutation.document as any;
             if(mutation.collectionName==='transactions'&&mutation.requireAbsent)await assertPresentationCommit(document,mutation.inventoryPresentationPrecondition,async<T>(sql:string,values:(string|number|null)[])=>(await read(sql,values)).values as T[] || [],mutation.v3StockRequirements||[]);
@@ -1408,11 +1414,13 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             }
             for (const requirement of mutation.v3StockRequirements || []) {
               if (requirement.baseline !== document.v3InventoryBaseline || requirement.warehouseId !== document.v3WarehouseId
-                || !Number.isFinite(requirement.quantity) || requirement.quantity <= 0 || (requirement.quantityScale!==undefined && requirement.quantityScale!==4)) throw new Error('SYNC_V3_MOVEMENT_AUTHORITY_INVALID');
+                || !Number.isFinite(requirement.quantity) || requirement.quantity <= 0 || (requirement.quantityScale!==undefined && requirement.quantityScale!==4&&requirement.quantityScale!==6)) throw new Error('SYNC_V3_MOVEMENT_AUTHORITY_INVALID');
               const key = JSON.stringify([requirement.baseline, requirement.productId, requirement.warehouseId]);
               const prior = demands.get(key);
               const exactQuantity=new Money(String(requirement.quantity)).plus(prior?.exactQuantity || String(prior?.quantity || 0)).toFixed();
               const quantityScale=requirement.quantityScale || prior?.quantityScale;
+              if(prior?.quantityScale&&requirement.quantityScale&&prior.quantityScale!==requirement.quantityScale)throw Error('TRACKING_BASE_PRECISION_INVALID');
+              if(quantityScale===6){base6(requirement.quantity);const exact=new Money(exactQuantity);if(exact.dp()>6||exact.abs().times(1000000).gt(Number.MAX_SAFE_INTEGER))throw Error('TRACKING_BASE_PRECISION_INVALID');}
               if(quantityScale===4){
                 base4(requirement.quantity);
                 const exact=new Money(exactQuantity);
@@ -1424,6 +1432,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         // Both this read and every ledger write occur after BEGIN, under the shared native write queue.
         for (const demand of demands.values()) {
           if(demand.nonFormatWriter)await assertNoReconciledOrdinaryWriter(async<T>(sql:string,values:(string|number|null)[])=>(await read(sql,values)).values as T[] || [],demand.warehouseId);
+          if(demand.quantityScale===6){const stock=await readV3Base6Stock(async<T>(sql:string,values:(string|number|null)[])=>(await read(sql,values)).values as T[]||[],demand.baseline,demand.productId,demand.warehouseId);if(new Money(demand.exactQuantity!).gt(stock.available))throw Error('SYNC_V3_STOCK_INSUFFICIENT');continue;}
           if(demand.quantityScale===4){
             const stock=await readV3Base4Stock(async<T>(sql:string,values:(string|number|null)[])=>(await read(sql,values)).values as T[] || [],demand.baseline,demand.productId,demand.warehouseId);
             if(new Money(demand.exactQuantity!).gt(stock.available))throw new Error('SYNC_V3_STOCK_INSUFFICIENT');

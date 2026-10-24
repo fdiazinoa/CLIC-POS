@@ -1,3 +1,8 @@
+import {assertTrackingLine,trackingSelectionsForCart} from '../services/tracking/TrackingLine';
+import {
+  acceptTrackingDelivery,
+  type TrackingAllocationSnapshot,
+} from "../services/tracking/TrackingDeliveryWitness";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
@@ -83,7 +88,7 @@ function fixture() {
 }
 test("serial ownership admits one checkout before any payment effect", async () => {
   const f = fixture();
-  await installTrackingAllocation(f.sql, f.a, false);
+  await installTrackingAllocation(f.sql, f.a, false, 0, f.a.checksum);
   await prepareTrackingCheckout(
     f.sql,
     "checkout-1",
@@ -114,7 +119,7 @@ test("serial ownership admits one checkout before any payment effect", async () 
 });
 test("only a checkout without possible effects can release a selection", async () => {
   const f = fixture();
-  await installTrackingAllocation(f.sql, f.a, false);
+  await installTrackingAllocation(f.sql, f.a, false, 0, f.a.checksum);
   await prepareTrackingCheckout(
     f.sql,
     "abandon",
@@ -143,14 +148,14 @@ test("only a checkout without possible effects can release a selection", async (
 test("snapshot refresh never renews consumed serial or lost database ownership", async () => {
   const f = fixture();
   await assert.rejects(
-    installTrackingAllocation(f.sql, f.a, true),
+    installTrackingAllocation(f.sql, f.a, true, 0, f.a.checksum),
     /LOCAL_OWNERSHIP_MISSING/,
   );
-  await installTrackingAllocation(f.sql, f.a, false);
+  await installTrackingAllocation(f.sql, f.a, false, 0, f.a.checksum);
   await prepareTrackingCheckout(f.sql, "first", [f.selection], f.scope, f.now);
   await fenceTrackingCheckout(f.sql, "first", f.now);
   await consumeTrackingCheckout(f.sql, "first", "sale", [f.selection]);
-  await installTrackingAllocation(f.sql, f.a, true);
+  await installTrackingAllocation(f.sql, f.a, true, 0, f.a.checksum);
   await assert.rejects(
     prepareTrackingCheckout(f.sql, "later", [f.selection], f.scope, f.now),
     /QUOTA_EXHAUSTED/,
@@ -158,7 +163,7 @@ test("snapshot refresh never renews consumed serial or lost database ownership",
 });
 test("sale and tracking quota roll back together when native writer fails", async () => {
   const f = fixture();
-  await installTrackingAllocation(f.sql, f.a, false);
+  await installTrackingAllocation(f.sql, f.a, false, 0, f.a.checksum);
   await prepareTrackingCheckout(
     f.sql,
     "checkout",
@@ -218,7 +223,7 @@ test("prepared lot expires before first payment but paid recovery retains origin
       ),
     )
     .digest("hex");
-  await installTrackingAllocation(f.sql, f.a, false);
+  await installTrackingAllocation(f.sql, f.a, false, 0, f.a.checksum);
   f.db
     .prepare("update pos_tracking_allocations_v1 set max_local_ms=?")
     .run(before);
@@ -265,7 +270,7 @@ test("one lot allocation supports distinct cart lines without merging their sour
     cartId: "other-price",
     quantityMinor: 1500000,
   };
-  await installTrackingAllocation(f.sql, f.a, false);
+  await installTrackingAllocation(f.sql, f.a, false, 0, f.a.checksum);
   await prepareTrackingCheckout(
     f.sql,
     "lot-checkout",
@@ -309,7 +314,7 @@ test("entire checkout selection set is immutable before any paid recovery", asyn
       ),
     )
     .digest("hex");
-  await installTrackingAllocation(f.sql, f.a, false);
+  await installTrackingAllocation(f.sql, f.a, false, 0, f.a.checksum);
   await prepareTrackingCheckout(f.sql, "sealed", [f.selection], f.scope, f.now);
   await fenceTrackingCheckout(f.sql, "sealed", f.now);
   await assert.rejects(
@@ -328,4 +333,117 @@ test("entire checkout selection set is immutable before any paid recovery", asyn
       ?.consumed_minor,
     1000000,
   );
+});
+
+test("external native witness plus one-shot claim prevents database and app-data reseeding", async () => {
+  const f = fixture();
+  let witness: string | null = null,
+    local: { authorityJson: string; witnessHash: string } | null = null,
+    claimed = false,
+    witnessHash: string | null = null,
+    installs = 0;
+  const port = {
+    async readWitness() {
+      return witness;
+    },
+    async writeWitness(_key: string, value: string) {
+      witness = value;
+    },
+    async readLocal() {
+      return local;
+    },
+    async claim(allocationId: string, hash: string) {
+      const first = !claimed;
+      claimed = true;
+      witnessHash = hash;
+      return {
+        allocationId,
+        witnessHash: hash,
+        firstInstallationAllowed: first,
+      };
+    },
+    async install(
+      authority: TrackingAuthority,
+      previouslySeen: boolean,
+      serverConsumedMinor: number,
+      hash: string,
+    ) {
+      await installTrackingAllocation(
+        f.sql,
+        authority,
+        previouslySeen,
+        serverConsumedMinor,
+        hash,
+      );
+      local = { authorityJson: JSON.stringify(authority), witnessHash: hash };
+      installs++;
+    },
+  };
+  const initial: TrackingAllocationSnapshot = {
+    authority: f.a,
+    state: "ACTIVE",
+    serverConsumedMinor: 0,
+    delivered: false,
+    witnessHash: null,
+  };
+  await acceptTrackingDelivery(initial, port);
+  assert.equal(installs, 1);
+  assert.ok(witness);
+  const delivered = { ...initial, delivered: true, witnessHash };
+  await acceptTrackingDelivery(delivered, port);
+  assert.equal(installs, 2);
+  local = null;
+  await assert.rejects(
+    acceptTrackingDelivery(delivered, port),
+    /LOCAL_OWNERSHIP_MISSING/,
+  );
+  witness = null;
+  await assert.rejects(
+    acceptTrackingDelivery(delivered, port),
+    /LOCAL_OWNERSHIP_MISSING/,
+  );
+  assert.equal(installs, 2);
+});
+test("lost delivery acknowledgment cannot replay first-install permission", async () => {
+  const f = fixture();
+  let witness: string | null = null,
+    claims = 0,
+    installs = 0;
+  const initial: TrackingAllocationSnapshot = {
+    authority: f.a,
+    state: "ACTIVE",
+    serverConsumedMinor: 0,
+    delivered: false,
+    witnessHash: null,
+  };
+  const port = {
+    async readWitness() {
+      return witness;
+    },
+    async writeWitness(_key: string, value: string) {
+      witness = value;
+    },
+    async readLocal() {
+      return null;
+    },
+    async claim() {
+      claims++;
+      throw Error("lost ACK after server delivery commit");
+    },
+    async install() {
+      installs++;
+    },
+  };
+  await assert.rejects(acceptTrackingDelivery(initial, port), /lost ACK/);
+  await assert.rejects(
+    acceptTrackingDelivery(initial, port),
+    /LOCAL_OWNERSHIP_MISSING/,
+  );
+  assert.equal(claims, 1);
+  assert.equal(installs, 0);
+});
+
+for(const option of [{kind:'LOT',quantity:.125,usesLots:true,usesSerial:false},{kind:'SERIAL',quantity:1,usesLots:false,usesSerial:true},{kind:'SERIAL',quantity:1,usesLots:true,usesSerial:true}])test(`pinned source preserves ${option.kind} with lot=${option.usesLots} serial=${option.usesSerial}`,()=>{
+ const f=fixture();f.a.kind=option.kind as 'LOT'|'SERIAL';f.a.lotCode=option.usesLots&&option.usesSerial?'lot-1':null;const product:any={id:f.a.itemId,operationalFlags:{usesLots:option.usesLots,usesSerial:option.usesSerial},v3TrackingAuthorities:[{authority:f.a,state:'ACTIVE'}],v3SaleAuthority:{warehouseId:f.a.warehouseId}};
+ const records:any=[{v3Authority:f.a,selectedQuantityMinor:option.quantity*1000000}],trackingData=trackingSelectionsForCart(records,product,'source-cart');const line={...product,cartId:'source-cart',quantity:option.quantity,trackingData};assertTrackingLine(line,product);assert.equal(trackingData[0].cartId,'source-cart');assert.throws(()=>assertTrackingLine({...line,quantity:option.quantity+1},product),/BASE_QUANTITY_CHANGED/);assert.throws(()=>assertTrackingLine({...line,cartId:'substituted'},product),/SOURCE_CHANGED/);
 });

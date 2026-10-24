@@ -408,7 +408,8 @@ export class LargeMasterSyncV3OperationalSession {
     if (intent === 'REFUND') return [];
     const catalog = await this.catalog(lines[0].v3SaleAuthority!.tariffId, warehouseId);
     const demands = new Map<string, number>();
-    const baseItems=new Set(lines.filter(line=>line.inventoryPresentation).map(line=>line.id));
+    const baseItems=new Set(lines.filter(line=>line.inventoryPresentation||line.trackingData?.length).map(line=>line.id));
+    const trackingItems=new Set(lines.filter(line=>line.trackingData?.length).map(line=>line.id));
     for (const line of lines) {
       if (line.quantity <= 0) throw new LargeMasterSyncV3Error('SYNC_V3_LINE_INVALID');
       const source = await catalog.get(line.id);
@@ -419,7 +420,7 @@ export class LargeMasterSyncV3OperationalSession {
         demands.set(line.id,baseItems.has(line.id)?new Decimal(demands.get(line.id)||0).plus(presentationInventoryQuantity(line)).toNumber():(demands.get(line.id)||0)+line.quantity);
       }
     }
-    return [...demands].map(([productId, quantity]) => ({ productId, quantity, warehouseId,...(baseItems.has(productId)?{quantityScale:4 as const}:{}),
+    return [...demands].map(([productId, quantity]) => ({ productId, quantity, warehouseId,...(trackingItems.has(productId)?{quantityScale:6 as const}:baseItems.has(productId)?{quantityScale:4 as const}:{}),
       baseline: v3InventoryBaselineKey(this.binding, lines[0].v3SaleAuthority!) }));
   }
 }

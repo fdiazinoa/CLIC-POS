@@ -24,7 +24,7 @@ export interface DurableDocumentMutation {
     v3ReservationExpiration?: true;
     inventoryPresentationPrecondition?: import('../inventoryPresentations/runtime').PresentationCommitProof;
     v3ExpectedRetainedDocument?: { collection: string; id: string; expected: string };
-    v3StockRequirements?: Array<{ baseline: string; productId: string; warehouseId: string; quantity: number; quantityScale?: 4 }>;
+    v3StockRequirements?: Array<{ baseline: string; productId: string; warehouseId: string; quantity: number; quantityScale?: 4|6 }>;
 }
 
 export interface DurableOutboxEventInput {
@@ -142,9 +142,10 @@ export interface DatabaseAdapter {
     // documents and their durable outbox events in one database transaction.
     commitFinancialTransaction?(input: FinancialCommitInput): Promise<void>;
 
-    installTrackingAuthority?(authority:import('../tracking/TrackingAuthority').TrackingAuthority, previouslySeen:boolean, serverConsumedMinor?:number):Promise<void>;
+    readTrackingAuthority?(allocationId:string):Promise<{authorityJson:string;witnessHash:string;availableMinor:number}|null>;
+    installTrackingAuthority?(authority:import('../tracking/TrackingAuthority').TrackingAuthority, previouslySeen:boolean, serverConsumedMinor?:number,deliveryWitnessHash?:string):Promise<void>;
     prepareTrackingCheckout?(checkoutId:string,selections:import('../tracking/TrackingAuthority').TrackingSelection[],scope:Pick<import('../tracking/TrackingAuthority').TrackingAuthority,'tenantId'|'companyId'|'storeId'|'warehouseId'|'terminalId'|'deviceId'>):Promise<void>;
-    fenceTrackingCheckout?(checkoutId:string):Promise<void>;
+    fenceTrackingCheckout?(checkoutId:string):Promise<number>;
     abandonTrackingCheckout?(checkoutId:string):Promise<void>;
 
     getMasterNumberRanges?(): Promise<MasterNumberRangeRecord[]>;

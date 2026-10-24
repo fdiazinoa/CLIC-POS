@@ -9,6 +9,7 @@ interface TrackingSelectionModalProps {
     quantity: number;
     onSelect: (tracking: InventoryTracking[]) => void;
     onClose: () => void;
+    loadOptions?:()=>Promise<InventoryTracking[]>;
 }
 
 const TrackingSelectionModal: React.FC<TrackingSelectionModalProps> = ({
@@ -16,21 +17,24 @@ const TrackingSelectionModal: React.FC<TrackingSelectionModalProps> = ({
     warehouseId,
     quantity,
     onSelect,
-    onClose
+    onClose,loadOptions
 }) => {
     const [availableTracking, setAvailableTracking] = useState<InventoryTracking[]>([]);
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
     const [searchTerm, setSearchTerm] = useState('');
+    const [loadError,setLoadError]=useState('');
     const [isLoading, setIsLoading] = useState(true);
 
     const isLot = product.operationalFlags?.usesLots;
     const isSerial = product.operationalFlags?.usesSerial;
 
     useEffect(() => {
+        let current=true;
+        setLoadError('');setSelectedIds(new Set());
         const loadTracking = async () => {
             setIsLoading(true);
             try {
-                const allTracking = await db.get('inventoryTracking') as InventoryTracking[] || [];
+                const allTracking = loadOptions?await loadOptions():await db.get('inventoryTracking') as InventoryTracking[] || [];
                 const filtered = allTracking.filter(t =>
                     t.productId === product.id &&
                     t.warehouseId === warehouseId &&
@@ -38,7 +42,7 @@ const TrackingSelectionModal: React.FC<TrackingSelectionModalProps> = ({
                 );
 
                 // FEFO Logic for Lots: Sort by Expiration Date
-                if (isLot) {
+                if (isLot&&!isSerial) {
                     filtered.sort((a, b) => {
                         if (!a.expirationDate) return 1;
                         if (!b.expirationDate) return -1;
@@ -46,15 +50,15 @@ const TrackingSelectionModal: React.FC<TrackingSelectionModalProps> = ({
                     });
                 }
 
-                setAvailableTracking(filtered);
+                if(current)setAvailableTracking(filtered);
             } catch (error) {
-                console.error("Error loading tracking data:", error);
+                if(current){setAvailableTracking([]);setLoadError(error instanceof Error?error.message:'No se pudo cargar trazabilidad.');}
             } finally {
-                setIsLoading(false);
+                if(current)setIsLoading(false);
             }
         };
-        loadTracking();
-    }, [product.id, warehouseId, isLot]);
+        loadTracking();return()=>{current=false;};
+    }, [product.id, warehouseId, isLot,loadOptions]);
 
     const filteredItems = useMemo(() => {
         if (!searchTerm) return availableTracking;
@@ -73,12 +77,16 @@ const TrackingSelectionModal: React.FC<TrackingSelectionModalProps> = ({
             alert("Debe seleccionar al menos un lote.");
             return;
         }
+        if(loadOptions){
+            if(selected.some(t=>!t.v3Authority||Number(t.availableMinor)<(isSerial?1000000:quantity*1000000))){setLoadError('La existencia asignada no alcanza para esta cantidad.');return;}
+            onSelect(selected.map(t=>({...t,selectedQuantityMinor:isSerial?1000000:quantity*1000000})));return;
+        }
         onSelect(selected);
     };
 
     const toggleSelection = (id: string) => {
         const next = new Set(selectedIds);
-        if (isLot) {
+        if (isLot&&!isSerial) {
             // For lots, usually we pick one, but we might allow multiple if needed.
             // In this simple version, let's allow 1 lot per cart item for simplicity.
             next.clear();
@@ -92,6 +100,7 @@ const TrackingSelectionModal: React.FC<TrackingSelectionModalProps> = ({
 
     return (
         <div className="fixed inset-0 z-[100] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
+            {loadError&&<div role="alert" className="absolute top-4 rounded bg-white p-4 text-red-700">{loadError}</div>}
             <div className="bg-white rounded-[2.5rem] w-full max-w-xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
                 {/* Header */}
                 <div className="p-8 border-b bg-gray-50/50 flex justify-between items-center">

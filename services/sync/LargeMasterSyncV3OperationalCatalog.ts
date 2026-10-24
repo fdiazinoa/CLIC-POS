@@ -100,7 +100,7 @@ export class LargeMasterSyncV3OperationalCatalog {
       throw new UnsupportedArticleError('Indicador de peso inválido');
     }
     if (!['PRODUCT', 'SERVICE'].includes(String(article.type))) throw new UnsupportedArticleError('Tipo de artículo no soportado');
-    if (sourceFlags.usesLots || sourceFlags.usesSerial) throw new UnsupportedArticleError('Lotes o series no soportados');
+    if ((sourceFlags.usesLots || sourceFlags.usesSerial)&&(article.tracking_contract_version!==1||!Array.isArray(article.tracking_authorities))) throw new UnsupportedArticleError('Autoridad finita de lotes o series requerida');
     if (sourceFlags.isWeighted && !hasV3KilogramContract(article)) {
       const reasons = [sourceFlags.trackInventory && 'control de stock', sourceFlags.integersOnly !== false && 'cantidades enteras',
         (!weightUnit(article.measurementUnit) || weightUnit(article.measurementUnit) !== weightUnit(article.purchaseUnit)) && 'unidades de peso incompatibles',
@@ -157,6 +157,7 @@ export class LargeMasterSyncV3OperationalCatalog {
     });
     const product: Product = {
       ...restaurant,
+      ...((sourceFlags.usesLots||sourceFlags.usesSerial)?{v3TrackingAuthorities:structuredClone(article.tracking_authorities) as Product['v3TrackingAuthorities']}:{ }),
       id: articleId,
       sku: optionalString(article.sku),
       externalCode: optionalString(article.externalCode),
