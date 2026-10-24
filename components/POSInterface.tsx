@@ -2271,10 +2271,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [categoryFilter, setCategoryFilter] = useState('ALL');
    useEffect(() => {
       if (!v3Operational) return;
+      let current = true;
       void v3Operational.search(catalogSearchQuery, categoryFilter === 'ALL' ? null : categoryFilter,
          categoryFilter === 'ALL' ? undefined : categoryLookup.identity.selectionFilter(categoryFilter, effectiveAllowedCategorySet.size === 0
             ? (v3Operational.categories || []).map(category => category.key) : []))
-         .catch(error => setErrorToast(`V3: ${error.message || error}`));
+         .catch(error => { if (current) setErrorToast(`V3: ${error.message || error}`); });
+      return () => { current = false; };
    }, [v3Operational, catalogSearchQuery, categoryFilter, categoryLookup.aliasToCanonical]);
    const [mobileView, setMobileView] = useState<'PRODUCTS' | 'TICKET'>('PRODUCTS');
    const returnToTicketView = useCallback(() => {
@@ -6776,7 +6778,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (!v3Operational) return () => {};
       const delegatedFiscalCheckout=fiscalCompliance.mode==='ECF'&&getDefaultFiscalProvider(config,activeTerminalConfig)==='MSELLER';
       const offlineAvailable=Boolean(fiscalWorkflowV2Client.offlineReady&&await fiscalWorkflowV2Client.offlineReady());
-      const offlineFiscalCheckout=offlineAvailable&&paymentMethods.length>0&&paymentMethods.every(method=>method.toUpperCase()==='CASH')
+      const offlineFiscalCheckout=offlineAvailable&&paymentMethods.length>0
         &&!hasV3ReservationCart&&!activeV3Reservation&&!activeRecoveredReservation&&!activeDirectV3TicketId
         &&processedCart.every(line=>line.quantity>0&&!line.articleFormat)
         &&(!activeTable?cartTip===0:isMaster&&!activePaymentFraction&&Boolean(activeTable.currentOrderId)
@@ -6798,7 +6800,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
         if(activeTable){
           if(!isMaster)throw Error('El cobro de mesas sin ERP debe realizarse en la caja Master que conserva la cuenta.');
           if(activePaymentFraction)throw Error('La reserva fiscal offline admite el cobro completo de la mesa; esta cuenta tiene pagos fraccionados pendientes.');
-          if(offlineAvailable)throw Error('La reserva fiscal offline de mesas admite efectivo. Este método requiere su autorización de pago habitual.');
+          if(offlineAvailable)throw Error('La cuenta no reúne las condiciones del cobro fiscal offline. Conserva la cuenta y revisa su configuración.');
           const readiness=await fiscalWorkflowV2Client.offlineReadiness();throw Error(readiness.reason==='FISCAL_RANGE_EXHAUSTED'?'Se agotaron los comprobantes fiscales asignados a esta caja. No se realizó ningún pago.':readiness.reason==='FISCAL_RANGE_EXPIRED'?'El rango fiscal asignado está vencido. No se realizó ningún pago.':`La caja todavía no tiene preparada su autorización fiscal offline (${readiness.code||readiness.reason}). Conserva la cuenta; no se realizó ningún pago.`);
         }
         throw Error('No se puede cobrar sin la autorización fiscal vigente del ERP. Sincroniza y vuelve a intentar; no se realizó ningún pago.');

@@ -1047,10 +1047,10 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
             slowProcessTimer = window.setTimeout(() => {
                setFinalizeError('El cobro está tardando más de lo esperado, espere unos segundos...');
             }, 15000);
-            // The cashier has confirmed these exact cash tenders. Persist possible effect before
+            // The cashier has confirmed these exact tenders, after each method's normal authorization. Persist possible effect before
             // construction/commit so retries retain the original checkout, tender IDs and effect date.
             // This marker never means that the sale or a receipt has already committed.
-            if(!completed&&paymentsToConfirm.length>0&&paymentsToConfirm.every(payment=>payment.method==='CASH')){
+            if(!completed&&paymentsToConfirm.length>0){
                for(const payment of paymentsToConfirm)await workflowPaymentFenceRef.current?.recordPaymentEffect?.(payment.id);
             }
             const txn = await onConfirm(paymentsToConfirm, completed?.voluntaryTipAmount ?? voluntaryTip);
