@@ -22,6 +22,10 @@ function fixture(stock = 5) {
   sql.prepare('INSERT INTO master_v3_inventory_balances VALUES(?,?,?,?,?,?)').run('P', 'W', stock + 3, 2, 1, 'now');
   let failId: string | undefined;
   const bridge = {
+    beginTransaction:async()=>{sql.exec('BEGIN IMMEDIATE');},
+    commitTransaction:async()=>{sql.exec('COMMIT');},
+    rollbackTransaction:async()=>{sql.exec('ROLLBACK');},
+    isTransactionActive:async()=>({result:sql.isTransaction}),
     query: async (query: string, params: any[] = []) => ({ values: sql.prepare(query).all(...params) }),
     execute: async (query: string) => { sql.exec(query); },
     run: async (query: string, params: any[] = []) => {
@@ -388,4 +392,14 @@ test('invalid Date is rejected at financial identity before a fresh native commi
  const f=fixture();try{const module=await financialModule(f,true),transaction=module.transaction('invalid-date');transaction.payments=[{id:'invalid-payment',method:'CASH',amount:118,timestamp:new Date(NaN)}];
   await assert.rejects(module.persistV3FinancialTransaction(transaction,{} as BusinessConfig,'W'),/SYNC_V3_FINANCIAL_DATE_INVALID/);assert.equal(f.rows('transactions').length,0);assert.equal(f.rows('transactionHistory').length,0);assert.equal(f.sql.prepare('SELECT count(*) n FROM sync_outbox_v2').get()!.n,0);
  }finally{f.sql.close();}
+});
+
+test('tracking commits require a bijection for every tracked transaction, history and outbox source',async()=>{
+ const f=fixture();const selected={authority:{allocationId:'allocation'},cartId:'line',quantityMinor:1000000};
+ const line={id:'P',cartId:'line',v3SaleAuthority:{binding:'binding'},trackingData:[selected]};
+ const transaction=(id:string)=>({collectionName:'transactions',document:{id,items:[line]}});
+ const event=(id:string)=>({eventId:'event-'+id,eventType:'SALE_POSTED',aggregateType:'Transaction',aggregateId:id,schemaVersion:1,payload:{transaction:{id,items:[line]}},createdAt:'now'});
+ await assert.rejects(f.adapter.commitFinancialTransaction({documents:[transaction('one'),transaction('two')] as any,outboxEvent:event('one'),additionalOutboxEvents:[event('two')],trackingCommits:[{checkoutId:'checkout',transactionId:'one',selections:[selected] as any}]}),/TRACKING_ATOMIC_SOURCE_REQUIRED/);
+ await assert.rejects(f.adapter.commitFinancialTransaction({documents:[transaction('one')] as any,outboxEvent:event('one'),trackingCommits:[{checkoutId:'checkout',transactionId:'one',selections:[selected] as any}]}),/TRACKING_ATOMIC_SOURCE_REQUIRED/);
+ assert.equal(f.rows('transactions').length,0);assert.equal(f.sql.prepare('select count(*) n from sync_outbox_v2').get()?.n,0);
 });

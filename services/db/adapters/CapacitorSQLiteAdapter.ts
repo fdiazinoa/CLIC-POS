@@ -611,11 +611,15 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         const needsFinancialPrecondition = input.documents.some(row => row.document.v3InventoryBaseline
           || row.requireAbsent || row.expectedDocument !== undefined || row.v3StockRequirements);
         await this.withWriteLock(() => this.executeUnlocked(statements,async()=>{
+          const trackedSources=input.documents.filter(d=>d.collectionName==='transactions'&&d.document.items?.some((line:any)=>line.v3SaleAuthority&&line.trackingData?.length));
+          const trackingCommits=input.trackingCommits||[];
+          if(trackedSources.length!==trackingCommits.length||new Set(trackingCommits.map(c=>c.transactionId)).size!==trackingCommits.length||new Set(trackingCommits.map(c=>c.checkoutId)).size!==trackingCommits.length||trackedSources.some(d=>trackingCommits.filter(c=>c.transactionId===d.document.id).length!==1))throw Error('TRACKING_ATOMIC_SOURCE_REQUIRED');
           for(const tracking of input.trackingCommits||[]){
             const source=input.documents.find(d=>d.collectionName==='transactions'&&d.document.id===tracking.transactionId);
             const event=outboxEvents.find(e=>e.eventType==='SALE_POSTED'&&e.aggregateId===tracking.transactionId);
+            const history=input.documents.find(d=>d.collectionName==='transactionHistory'&&d.document.id===tracking.transactionId);
             const selections=source?.document.items?.flatMap((line:any)=>line.trackingData||[])||[];
-            if(!source||!event||JSON.stringify(selections)!==JSON.stringify(tracking.selections)||JSON.stringify(event.payload.transaction?.items?.flatMap((line:any)=>line.trackingData||[])||[])!==JSON.stringify(tracking.selections))throw Error('TRACKING_ATOMIC_SOURCE_REQUIRED');
+            if(!source||!event||!history||JSON.stringify(history.document.items?.flatMap((line:any)=>line.trackingData||[])||[])!==JSON.stringify(tracking.selections)||JSON.stringify(selections)!==JSON.stringify(tracking.selections)||JSON.stringify(event.payload.transaction?.items?.flatMap((line:any)=>line.trackingData||[])||[])!==JSON.stringify(tracking.selections))throw Error('TRACKING_ATOMIC_SOURCE_REQUIRED');
             await consumeTrackingCheckout(this.ensureDb() as any,tracking.checkoutId,tracking.transactionId,tracking.selections);
           }
           if(input.documents.some(d=>d.collectionName==='transactions'&&d.document.items?.some((line:any)=>line.v3SaleAuthority&&line.trackingData?.length))&&!input.trackingCommits?.length)throw Error('TRACKING_ATOMIC_SOURCE_REQUIRED');
