@@ -1,10 +1,11 @@
+import InteractionProgress,{yieldInteractionPaint,type InteractionProgressHandle} from './InteractionProgress';
 import {FiscalExpiredCheckoutAction} from './FiscalExpiredCheckoutAction';
 import type {FiscalRetirementRecord} from '../services/fiscal/FiscalWorkflowV2Types';
 import {resolveFiscalPrintReadiness,resolveFiscalAcceptance} from '../services/fiscal/FiscalPrintEvidence';
 import { recordCheckoutDiagnostic } from '../services/CheckoutDiagnostics';
 import { allowsDefaultPaymentMethods } from '../utils/erpPaymentMethods';
 
-import React, { useState, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback } from 'react';
 import {
    X, CreditCard, Banknote, QrCode, CheckCircle2,
    Trash2, Plus, Wallet, Printer, Mail, ShieldAlert,
@@ -396,7 +397,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
       return methods;
    }, [config?.paymentMethods, config?.paymentMethodsSource, config?.integrations, customer?.wallet]);
 
-   const selectPaymentMethod = (method: ResolvedPaymentMethod) => {
+   const selectPaymentMethod = useCallback((method: ResolvedPaymentMethod) => {
       setActiveMethodKey(method.key);
       if (remaining > 0) {
          setInputAmount(
@@ -409,7 +410,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
          );
          setShouldClearInput(true);
       }
-   };
+   },[remaining,selectedCurrency.rate,selectedCurrency.code,baseCurrency.code]);
 
    const activePaymentMethod = useMemo(
       () => configuredMethods.find(method => method.key === activeMethodKey) || configuredMethods[0] || null,
@@ -900,14 +901,26 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
 
    const handleRemovePayment = (id: string) => { setPayments(prev => prev.filter(p => p.id !== id)); };
 
+   const finalizationProgressRef=useRef<InteractionProgressHandle|null>(null);
+   const finalizationSubmissionRef=useRef(false);
+   const finalizationMountedRef=useRef(true);
+   useEffect(()=>{finalizationMountedRef.current=true;return ()=>{finalizationMountedRef.current=false;};},[]);
+   const finalizationContextRef=useRef<any>(null);
+   finalizationContextRef.current={payments,items,total,customerId:customer?.id,user:currentUser,currency:selectedCurrency,
+      activeMethodKey,canFinalize,isCreditActionBlocked,roles:roles||config?.roles,methods:config?.paymentMethods,integrations:config?.integrations};
    const handleFinalize = async () => {
+      if (finalizationSubmissionRef.current || isFinalizing || isProcessingGateway || isSuccessScreen) return;
+      finalizationSubmissionRef.current=true;
+      const identity=JSON.stringify(finalizationContextRef.current);
+      const assertContext=()=>{if(!finalizationMountedRef.current||JSON.stringify(finalizationContextRef.current)!==identity)throw Error('PAYMENT_CONFIRM_CONTEXT_CHANGED');};
+      finalizationProgressRef.current?.show('Validando pago…');
+      try{
+      await yieldInteractionPaint();assertContext();
       recordCheckoutDiagnostic('PAYMENT_MODAL_CONFIRM', { items, total, payments });
-      if (isFinalizing || isProcessingGateway || isSuccessScreen) return;
       if(recoverCommittedReceipt){
-         setIsFinalizing(true);
-         try{const recovered=await recoverCommittedReceipt(payments.map(payment=>payment.id));if(recovered){setCompletedTransaction(recovered);setIsSuccessScreen(true);setSuccessNotice(null);return;}}
-         catch(error){setFinalizeError(error instanceof Error?error.message:String(error));return;}
-         finally{setIsFinalizing(false);}
+         const recovered=await recoverCommittedReceipt(payments.map(payment=>payment.id));
+         if(recovered){setCompletedTransaction(recovered);setIsSuccessScreen(true);setSuccessNotice(null);return;}
+         assertContext();
       }
       if (!canFinalize && !paymentOperationId) {
          alert("Monto insuficiente");
@@ -930,7 +943,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
       let releasePaymentFence: PaymentEffectsFence | undefined;
       try {
          if (beforePaymentEffects) releasePaymentFence = await beforePaymentEffects(payments.map(payment=>payment.id),[...payments.map(payment=>payment.method),...(canFinalizeWithTypedAmount?[activeRuntimeMethod]:[])]);
-         workflowPaymentFenceRef.current=releasePaymentFence||null;
+         workflowPaymentFenceRef.current=releasePaymentFence||null;assertContext();
          const completed = releasePaymentFence?.completedTransaction;
          let paymentsToConfirm = completed?.payments || payments;
          if (!completed && !canFinalize) { alert('Monto insuficiente'); return; }
@@ -1130,6 +1143,8 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
          setIsFinalizing(false);
          if (trace.stages.HANDLER_END === undefined) markInteractionStage(trace, 'HANDLER_END');
       }
+      }catch(error){setFinalizeError(error instanceof Error?error.message:String(error));}
+      finally{finalizationSubmissionRef.current=false;finalizationProgressRef.current?.hide();}
    };
 
    const themeBgClass = { blue: 'bg-blue-600', orange: 'bg-orange-600', gray: 'bg-gray-800' }[themeColor] || 'bg-indigo-600';
@@ -1207,6 +1222,42 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
          setIsSendingEmail(false);
       }
    };
+
+   // Pending feedback does not rebuild unchanged method icons/buttons or their handlers.
+   const paymentMethodPresentation=useMemo(()=>isSuccessScreen?null:(
+               <div className="flex flex-wrap p-3 md:p-4 gap-2 md:gap-3 shrink-0 max-h-[150px] overflow-y-auto no-scrollbar">
+                  {configuredMethods.length === 0 && <p role="status" className="w-full p-3 text-sm text-gray-600">No hay formas de pago habilitadas.</p>}
+                  {configuredMethods.map(method => {
+                     const methodRuntimeType = resolvePaymentMethodTypeForRuntime(method.type, method.label, method.id);
+                     const methodIsCredit = methodRuntimeType === 'CREDIT';
+                     const methodIsLoyaltyRedeem = isLoyaltyRedeemMethod(method.type, method.label, method.id);
+                     const methodIsIntegratedCard = method.definition?.type === 'CARD' && method.definition.integrationMode === 'INTEGRATED';
+                     const methodRequiresOnline = method.type === 'WALLET' || methodIsCredit || methodIsLoyaltyRedeem || methodIsIntegratedCard;
+                     const methodDisabledOffline = !isOnline && !isMaster && methodRequiresOnline;
+                     const isExceeded = methodIsCredit && isDelinquent && !isOverrideActive;
+                     return (
+                        <button
+                           key={method.key}
+                           onClick={() => !methodDisabledOffline && selectPaymentMethod(method)}
+                           disabled={methodDisabledOffline}
+                           className={`min-w-[calc(50%-0.25rem)] lg:min-w-[calc(33.333%-0.5rem)] xl:min-w-[120px] flex-1 py-2.5 md:py-3 rounded-2xl border-2 flex flex-col items-center justify-center gap-1 transition-all bg-white ${activePaymentMethod?.key === method.key ? `border-current ${themeTextClass} shadow-sm` : 'border-gray-200 text-slate-500 hover:border-gray-300 hover:bg-white'} ${isExceeded ? 'bg-red-50/50 border-red-200' : ''} ${methodDisabledOffline ? 'opacity-50 cursor-not-allowed bg-gray-50 hover:border-gray-200 hover:bg-gray-50' : ''}`}
+                        >
+                           <method.Icon size={22} className="md:w-7 md:h-7" strokeWidth={2.4} />
+                           <span className="font-black text-[9px] md:text-[10px] uppercase tracking-widest">{method.label}</span>
+                           {methodIsIntegratedCard && method.integration && (
+                              <span className="text-[7px] text-indigo-600 font-bold">{method.integration.provider}</span>
+                           )}
+                           {isExceeded && (
+                              <span className="text-[7px] text-red-600 font-bold">LÍMITE EXCEDIDO</span>
+                           )}
+                           {methodDisabledOffline && (
+                              <span className="text-[7px] text-amber-600 font-bold">REQUIERE CONEXIÓN</span>
+                           )}
+                        </button>
+                     );
+                  })}
+               </div>
+   ),[isSuccessScreen,configuredMethods,activePaymentMethod?.key,isOnline,isMaster,isDelinquent,isOverrideActive,themeTextClass,selectPaymentMethod]);
 
    if (isSuccessScreen) {
       return (
@@ -1345,6 +1396,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
 
    return (
       <>
+         <InteractionProgress ref={finalizationProgressRef}/>
          {gatewayProgressOverlay}
          <div className="fixed inset-0 z-[60] flex items-end lg:items-center justify-center bg-black/60 backdrop-blur-sm lg:p-3">
             <div className="bg-white w-full max-w-6xl h-[100dvh] lg:h-[92dvh] lg:max-h-[760px] lg:rounded-[2.5rem] shadow-2xl flex flex-col lg:flex-row overflow-hidden">
@@ -1557,38 +1609,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
             {/* INPUT SECTION */}
             <div className="flex-1 flex flex-col bg-white overflow-hidden min-h-0">
                {/* Payment Methods */}
-               <div className="flex flex-wrap p-3 md:p-4 gap-2 md:gap-3 shrink-0 max-h-[150px] overflow-y-auto no-scrollbar">
-                  {configuredMethods.length === 0 && <p role="status" className="w-full p-3 text-sm text-gray-600">No hay formas de pago habilitadas.</p>}
-                  {configuredMethods.map(method => {
-                     const methodRuntimeType = resolvePaymentMethodTypeForRuntime(method.type, method.label, method.id);
-                     const methodIsCredit = methodRuntimeType === 'CREDIT';
-                     const methodIsLoyaltyRedeem = isLoyaltyRedeemMethod(method.type, method.label, method.id);
-                     const methodIsIntegratedCard = method.definition?.type === 'CARD' && method.definition.integrationMode === 'INTEGRATED';
-                     const methodRequiresOnline = method.type === 'WALLET' || methodIsCredit || methodIsLoyaltyRedeem || methodIsIntegratedCard;
-                     const methodDisabledOffline = !isOnline && !isMaster && methodRequiresOnline;
-                     const isExceeded = methodIsCredit && isDelinquent && !isOverrideActive;
-                     return (
-                        <button
-                           key={method.key}
-                           onClick={() => !methodDisabledOffline && selectPaymentMethod(method)}
-                           disabled={methodDisabledOffline}
-                           className={`min-w-[calc(50%-0.25rem)] lg:min-w-[calc(33.333%-0.5rem)] xl:min-w-[120px] flex-1 py-2.5 md:py-3 rounded-2xl border-2 flex flex-col items-center justify-center gap-1 transition-all bg-white ${activePaymentMethod?.key === method.key ? `border-current ${themeTextClass} shadow-sm` : 'border-gray-200 text-slate-500 hover:border-gray-300 hover:bg-white'} ${isExceeded ? 'bg-red-50/50 border-red-200' : ''} ${methodDisabledOffline ? 'opacity-50 cursor-not-allowed bg-gray-50 hover:border-gray-200 hover:bg-gray-50' : ''}`}
-                        >
-                           <method.Icon size={22} className="md:w-7 md:h-7" strokeWidth={2.4} />
-                           <span className="font-black text-[9px] md:text-[10px] uppercase tracking-widest">{method.label}</span>
-                           {methodIsIntegratedCard && method.integration && (
-                              <span className="text-[7px] text-indigo-600 font-bold">{method.integration.provider}</span>
-                           )}
-                           {isExceeded && (
-                              <span className="text-[7px] text-red-600 font-bold">LÍMITE EXCEDIDO</span>
-                           )}
-                           {methodDisabledOffline && (
-                              <span className="text-[7px] text-amber-600 font-bold">REQUIERE CONEXIÓN</span>
-                           )}
-                        </button>
-                     );
-                  })}
-               </div>
+               {paymentMethodPresentation}
 
                {isDelinquent && !isOverrideActive && (
                   <div className="mx-4 mb-4 p-3 bg-red-50 border border-red-200 rounded-xl flex items-center justify-between">
