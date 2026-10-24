@@ -6170,7 +6170,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   ? Math.round(v3RefundFiscal.reduce((sum, row) => sum + row.taxAmount, 0) * 100) / 100
                   : cartTax;
                const offlineTableInvoice=Boolean((fiscalCheckoutRef.current?.permit?.leaseId||fiscalCheckoutRef.current?.allocation)&&fiscalCheckoutRef.current.fiscalSaleContext);
-               const netAmount = Math.round(((documentTotal - taxAmount - (offlineTableInvoice?cartTip:0)) + Number.EPSILON) * 100) / 100;
+               const offlineFiscalHeader=Boolean(fiscalCheckoutRef.current?.permit?.leaseId||fiscalCheckoutRef.current?.allocation);
+               const netAmount = Math.round(((documentTotal - taxAmount - (offlineFiscalHeader?cartTip:0)) + Number.EPSILON) * 100) / 100;
                const documentItems = !isRefundOnly || v3Operational
                   ? freezeAuthoritativeLineFiscalAmounts(contextualDocumentItems, config, {
                      discountAmount: isRefundOnly ? 0 : discountAmount,
@@ -6178,7 +6179,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      terminalConfig: activeTerminalConfig,
                      transactionNetAmount: netAmount,
                      transactionTaxAmount: taxAmount,
-                     transactionTotal: documentTotal-(offlineTableInvoice?cartTip:0),
+                     transactionTotal: documentTotal-(offlineFiscalHeader?cartTip:0),
                      taxExempt: isSelectedCustomerTaxExempt,
                      allowedTaxIds: appliedServiceTaxPolicy.taxIds,
                   })
@@ -6705,7 +6706,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    };
 
    const offlineTableFiscalContextRef=useRef<TableFiscalSaleContext|undefined>(undefined);
-   const currentFiscalCheckoutCartIdentity=(fiscalSaleContext=offlineTableFiscalContextRef.current)=>JSON.stringify({...(fiscalSaleContext?{fiscalSaleContext}:{}),items:processedCart.map(({fiscalCheckoutOperationId:_op,...line}:any)=>line),customerId:effectiveSelectedCustomer?.id||null,fiscalType:requiredSaleFiscalType});
+   const currentFiscalCheckoutCartIdentity=(fiscalSaleContext=offlineTableFiscalContextRef.current)=>JSON.stringify({...(fiscalSaleContext?{fiscalSaleContext}:{}),...(!activeTable&&cartTip>0?{serviceChargeAmount:cartTip,serviceType:effectiveOrderServiceType,serviceTaxPolicySnapshot:appliedServiceTaxPolicy,discountAmount,taxExempt:isSelectedCustomerTaxExempt}:{}),items:processedCart.map(({fiscalCheckoutOperationId:_op,...line}:any)=>line),customerId:effectiveSelectedCustomer?.id||null,fiscalType:requiredSaleFiscalType});
    const fiscalCheckoutRef=useRef<FiscalWorkflowCheckoutV2|null>(null);
    const [offlineFiscalReserveInfo,setOfflineFiscalReserveInfo]=useState<{remaining:number;validUntil:string|null;remainingByType?:Record<string,number>}|null>(null);
    useEffect(()=>{
@@ -6791,7 +6792,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const offlineFiscalCheckout=offlineAvailable&&paymentMethods.length>0
         &&!hasV3ReservationCart&&!activeV3Reservation&&!activeRecoveredReservation&&!activeDirectV3TicketId
         &&processedCart.every(line=>line.quantity>0&&!line.articleFormat)
-        &&(!activeTable?cartTip===0:isMaster&&!activePaymentFraction&&Boolean(activeTable.currentOrderId)
+        &&(!activeTable?(cartTip===0||appliedServiceTaxPolicy.legalTip?.enabled===true&&appliedServiceTaxPolicy.legalTip.percentage===10):isMaster&&!activePaymentFraction&&Boolean(activeTable.currentOrderId)
           &&(cartTip===0||appliedServiceTaxPolicy.legalTip?.enabled===true&&appliedServiceTaxPolicy.legalTip.percentage===10));
       const newFiscalCheckout=delegatedFiscalCheckout&&(fiscalWorkflowV2Client.enabled()||offlineFiscalCheckout)
         &&!hasV3ReservationCart&&!activeV3Reservation&&!activeRecoveredReservation&&!activeDirectV3TicketId&&(!activeTable||offlineFiscalCheckout)

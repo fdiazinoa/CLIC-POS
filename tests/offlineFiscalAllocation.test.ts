@@ -244,3 +244,28 @@ test('fiscal allocation never converts an unapproved integrated card into a manu
   assert.equal(f.count('sync_outbox_v2'),0);assert.equal(f.sql.prepare("SELECT count(*) n FROM documents WHERE collection_name='nativeFiscalReservations'").get()!.n,0);
  }finally{f.sql.close();}
 });
+
+for(const methods of [['CASH'],['CARD'],['CASH','CARD']])test(`direct legal charge ${methods.join('+')} is bound before effects and commits once without table context`,async()=>{
+ const f=await fixture();try{
+  let policy:any;
+  f.config.terminals[0].config.financial={serviceTaxPolicies:{DINE_IN:{legalTip:{enabled:true,percentage:10}}}};
+  policy=(await import('../utils/serviceTaxPolicy')).resolveAppliedServiceTaxPolicy(f.config,f.config.terminals[0].config,'DINE_IN');
+  f.sql.prepare("UPDATE documents SET data=? WHERE collection_name='config' AND doc_id='current'").run(JSON.stringify(f.config));
+  f.sql.exec('CREATE TABLE master_v3_taxes(sync_version INTEGER,tax_id TEXT,active INTEGER,record_json TEXT)');
+  f.sql.prepare('INSERT INTO master_v3_taxes VALUES(1,?,1,?)').run('VAT',JSON.stringify({id:'VAT',name:'VAT',type:'SALES',rate:.18}));
+  const items=[{id:'item',cartId:'line',quantity:1,price:555,taxable:true,appliedTaxIds:['VAT'],v3SaleAuthority:{syncVersion:1,taxIncluded:false}}];
+  const cart={items,customerId:null,fiscalType:'E32',serviceChargeAmount:55.5,serviceType:'DINE_IN',serviceTaxPolicySnapshot:policy,discountAmount:0,taxExempt:false};
+  for(const patch of [{serviceChargeAmount:1},{serviceTaxPolicySnapshot:{...policy,legalTip:{enabled:true,percentage:20}}}])await assert.rejects(f.client().reserveOfflineCheckout(JSON.stringify({...cart,...patch}),'forged'),/DIRECT_TIP_INVALID/);
+  assert.equal(f.count('pos_fiscal_pending_numbers_v2'),0);
+  const c=await f.client().reserveOfflineCheckout(JSON.stringify(cart),'direct-tip');
+  const payments=methods.map((method,index)=>({id:'payment-'+c.checkoutId+'-'+index,method,amount:710.4/methods.length}));
+  for(const payment of payments)await f.client().recordPayment(c,payment.id);
+  const commit=await input(f,c),source=commit.outboxEvent.payload.transaction;
+  Object.assign(source,{items,total:710.4,serviceChargeAmount:55.5,serviceType:'DINE_IN',serviceTaxPolicySnapshot:policy,discountAmount:0,customerSnapshot:{isTaxExempt:false},payments});
+  f.setFault('transactionHistory');await assert.rejects(f.adapter.commitFinancialTransaction(commit as any),/SYNTHETIC_DISK_FAILURE/);
+  assert.equal(f.count('sync_outbox_v2'),0);assert.equal(f.sql.prepare("SELECT state FROM pos_fiscal_pending_numbers_v2").get()!.state,'EFFECT_POSSIBLE');
+  f.setFault('');await f.adapter.commitFinancialTransaction(commit as any);
+  assert.equal(f.count('sync_outbox_v2'),1);assert.equal(f.sql.prepare("SELECT state FROM pos_fiscal_pending_numbers_v2").get()!.state,'CONSUMED');
+  await assert.rejects(f.adapter.commitFinancialTransaction(commit as any),/DUPLICATE|CONCURRENT_FINANCIAL_UPDATE/);assert.equal(f.count('sync_outbox_v2'),1);
+ }finally{f.sql.close();}
+});

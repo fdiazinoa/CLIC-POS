@@ -1,3 +1,4 @@
+import {hasOfflineFiscalHeader} from '../fiscal/OfflineFiscalCharge';
 import {isOfflineTableFiscalTransaction,assertTableFiscalSaleContext} from '../fiscal/OfflineTableFiscalCheckout';
 import {presentationInventoryQuantity} from '../inventoryPresentations/selection';
 import {captureNewV3FiscalSourceMetadata} from './NewV3FiscalSourceMetadata';
@@ -38,7 +39,7 @@ export const validateV3FrozenFiscalAmounts = (transaction: Partial<Transaction>,
       && line.v3SaleAuthority.inventoryVersion === stamp.inventoryVersion && line.v3SaleAuthority.inventoryCursor === stamp.inventoryCursor))
     || ![transaction.netAmount, transaction.taxAmount, transaction.total].every(value => typeof value === 'number' && Number.isFinite(value))
     || Number(transaction.netAmount) < 0 || Number(transaction.taxAmount) < 0
-    || Math.abs(Number(transaction.netAmount) + Number(transaction.taxAmount) + (isOfflineTableFiscalTransaction(transaction)?Number(transaction.serviceChargeAmount||0):0) - Math.abs(Number(transaction.total))) > 0.02) {
+    || Math.abs(Number(transaction.netAmount) + Number(transaction.taxAmount) + (hasOfflineFiscalHeader(transaction)?Number(transaction.serviceChargeAmount||0):0) - Math.abs(Number(transaction.total))) > 0.02) {
     throw new LargeMasterSyncV3Error('SYNC_V3_FROZEN_FISCAL_INVALID');
   }
 };

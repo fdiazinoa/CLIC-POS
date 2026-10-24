@@ -1,3 +1,4 @@
+import {hasOfflineFiscalHeader,assertDirectFiscalCharge} from '../fiscal/OfflineFiscalCharge';
 import {validateV3RestaurantSelection} from '../../utils/v3RestaurantSelection';
 import {isOfflineTableFiscalTransaction} from '../fiscal/OfflineTableFiscalCheckout';
 import { validWeightPresentation } from '../../utils/scaleWeight';
@@ -68,11 +69,12 @@ export const validateV3FrozenLineFiscalAmounts = (transaction: Transaction, conf
     ? round(calculateTaxBreakdownFromItems(transaction.items, config, { ...options, fallbackTaxRate: 0 })
       .reduce((sum, tax) => sum + tax.amount, 0))
     : round(calculated.reduce((sum, row) => sum + row.taxAmount, 0));
-  const separateCharge=isOfflineTableFiscalTransaction(transaction);
+  const separateCharge=hasOfflineFiscalHeader(transaction);
+  if(separateCharge&&!isOfflineTableFiscalTransaction(transaction))assertDirectFiscalCharge(transaction,config);
   if(separateCharge&&JSON.stringify(transaction.serviceTaxPolicySnapshot)!==JSON.stringify(policy))throw new LargeMasterSyncV3Error('SYNC_V3_FROZEN_FISCAL_SOURCE_CHANGED');
   const expectedNet = directSaleHeader
     ? round(transaction.items.reduce((sum, line) => sum + line.price * line.quantity, 0)
-      - options.discountAmount - (options.isTaxIncluded ? expectedTax : 0) + charge)
+      - options.discountAmount - (options.isTaxIncluded ? expectedTax : 0) + (separateCharge?0:charge))
     : round(calculated.reduce((sum, row) => sum + row.netAmount, 0) + (separateCharge?0:charge));
   const expectedTotal = round(expectedNet + expectedTax + (separateCharge?charge:0));
   if (!Number.isFinite(charge) || charge < 0 || charge > maximumCharge + 0.02

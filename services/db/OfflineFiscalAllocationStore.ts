@@ -1,3 +1,4 @@
+import {assertDirectFiscalCharge} from '../fiscal/OfflineFiscalCharge';
 import {assertOfflineFiscalPaymentReceipts} from './OfflineFiscalPaymentAuthority';
 import {assertRetirementHasNoEffects} from './FiscalWorkflowRetirementStore';
 import type {BusinessConfig,FiscalAllocation,FiscalRangeDGII,LocalFiscalBuffer,Transaction} from '../../types';
@@ -62,6 +63,18 @@ CREATE TRIGGER IF NOT EXISTS pos_allocation_member_revoke_update_v2 AFTER UPDATE
 `;
 const row=async(sql:SQL,query:string,params:any[]=[])=> (await sql.query(query,params)).values?.[0];
 const document=async<T>(sql:SQL,name:string,id:string):Promise<T>=>{const value=await row(sql,'SELECT data FROM documents WHERE collection_name=? AND doc_id=?',[name,id]);if(!value)allocationFail('OFFLINE_FISCAL_ALLOCATION_REQUIRED');return JSON.parse(value.data);};
+
+async function assertDirectAllocationCharge(sql:SQL,cart:any,local:OfflineFiscalLocalAuthority):Promise<void>{
+ if(cart.fiscalSaleContext||cart.serviceChargeAmount===undefined||cart.serviceChargeAmount===0)return;
+ const config=await document<BusinessConfig>(sql,'config','current');
+ const version=cart.items?.[0]?.v3SaleAuthority?.syncVersion;
+ if(!Number.isSafeInteger(version))allocationFail('OFFLINE_FISCAL_DIRECT_TIP_INVALID');
+ const records=(await sql.query('SELECT record_json FROM master_v3_taxes WHERE sync_version=? AND active=1 ORDER BY tax_id',[version])).values||[];
+ const taxes=records.map(row=>{const raw=JSON.parse(row.record_json);return {...raw,type:raw.type==='SALES'?'VAT':raw.type};});
+ if(cart.items.some((line:any)=>(line.appliedTaxIds||[]).some((id:string)=>!taxes.some(row=>row.id===id))))allocationFail('OFFLINE_FISCAL_DIRECT_TIP_INVALID');
+ if(cart.taxExempt){const customer=cart.customerId?await document<any>(sql,'customers',cart.customerId):null;if(customer?.isTaxExempt!==true)allocationFail('OFFLINE_FISCAL_DIRECT_TIP_INVALID');}
+ assertDirectFiscalCharge({...cart,terminalId:local.scope.terminalId,customerSnapshot:{isTaxExempt:cart.taxExempt===true}}, {...config,taxes});
+}
 export async function saveAllocation(sql:SQL,value:OfflineFiscalAllocation,local:OfflineFiscalLocalAuthority,serverTime:string):Promise<void>{
  await validateOfflineFiscalAllocation(value,local);const now=Date.now(),server=Date.parse(serverTime);
  if(!Number.isFinite(server)||server<Date.parse(value.issuedAt))allocationFail('OFFLINE_FISCAL_CLOCK_INVALID');
@@ -122,6 +135,7 @@ export async function prepareAllocationCheckout(sql:SQL,local:OfflineFiscalLocal
  const proof=await readAllocation(sql,local);if(!proof)allocationFail('OFFLINE_FISCAL_ALLOCATION_REQUIRED');
  let cart:any;try{cart=JSON.parse(cartIdentity);}catch{allocationFail();}if(context)validateTableFiscalSaleContext(context);
  if(!Array.isArray(cart.items)||!cart.items.length||cart.items.some((line:any)=>!line.id||!line.cartId||!Number.isFinite(line.quantity)||line.quantity<=0||!Number.isFinite(line.price)||line.price<0||line.articleFormat||line.recipeDetails?.length||line.trackingData?.length)||JSON.stringify(context)!==JSON.stringify(cart.fiscalSaleContext))allocationFail('OFFLINE_FISCAL_SOURCE_UNSUPPORTED');
+ await assertDirectAllocationCharge(sql,cart,local);
  await assertNoPendingAllocationTable(sql,local.scope,context);
  const planned=await readAllocationSelection(sql,proof.authority,cart.fiscalType,proof.now);
  await planNativeFiscalReceipt(async<T>(query:string,params:any[])=>(await sql.query(query,params)).values as T[]||[],planned.config,planned.buffer,planned.selection.ncf,{transactionId:'pending',requireIssuer:true});
@@ -132,6 +146,7 @@ export async function prepareAllocationCheckout(sql:SQL,local:OfflineFiscalLocal
 }
 export async function assertAllocationCheckout(sql:SQL,checkout:FiscalWorkflowCheckoutV2,recovery=false){
  if(!checkout.allocation)allocationFail();const config=await document<BusinessConfig>(sql,'config','current'),local=await offlineFiscalAuthorityFromConfig(config),proof=await readAllocation(sql,local,checkout.allocation.authorizationId,recovery);
+ if(!recovery)await assertDirectAllocationCharge(sql,JSON.parse(checkout.cartIdentity),local);
  if(!proof||proof.authority.authorityHash!==checkout.allocation.authorityHash||checkout.offlineBindingHash!==local.bindingHash)allocationFail('OFFLINE_FISCAL_AUTHORITY_CHANGED');
  const claim=await row(sql,'SELECT * FROM pos_fiscal_pending_numbers_v2 WHERE checkout_id=?',[checkout.checkoutId]);
  if(!claim||claim.transaction_id!==checkout.transactionId||claim.authorization_id!==proof.authority.authorizationId||claim.environment!==proof.authority.environment||claim.ncf!==checkout.allocation.ncf||claim.sequence!==checkout.allocation.sequence||claim.allocation_id!==checkout.allocation.allocationId||!['PREPARED','EFFECT_POSSIBLE'].includes(claim.state))allocationFail('OFFLINE_FISCAL_NUMBER_OWNER_CONFLICT');
@@ -144,8 +159,11 @@ export async function assertAllocationCheckout(sql:SQL,checkout:FiscalWorkflowCh
 export async function consumeAllocationNumber(sql:SQL,checkout:FiscalWorkflowCheckoutV2,source:Transaction,eventId:string):Promise<void>{
  const proof=await assertAllocationCheckout(sql,checkout,checkout.phase==='EFFECT_POSSIBLE'),selection=checkout.allocation!;
  const cart=JSON.parse(checkout.cartIdentity),money=(v:unknown)=>typeof v==='number'&&Number.isFinite(v)?Math.round(v*100):NaN;
- if(checkout.phase!=='EFFECT_POSSIBLE'||checkout.paymentIds.length!==source.payments.length||new Set(source.payments.map(p=>p.id)).size!==source.payments.length||source.payments.some(p=>!checkout.paymentIds.includes(p.id))||source.documentType!=='TICKET'||source.originalTransactionId||source.reservationId||source.v3ReservationClaimId||source.v3RestoredTicketId||source.payments.length===0||source.payments.some(p=>!['CASH','CARD','QR','WALLET','ADVANCE','OTHER','CREDIT','STORE_CREDIT','UBER_EATS'].includes(p.method))||money(Number(source.pendingBalance||0))!==source.payments.filter(p=>p.method==='CREDIT').reduce((sum,p)=>sum+money(p.amountApplied??p.appliedAmount??p.amount),0)||source.items.length!==cart.items.length||source.items.some(line=>line.quantity<=0||line.articleFormat||line.recipeDetails?.length||line.trackingData?.length||cart.items.filter((old:any)=>old.id===line.id&&old.cartId===line.cartId&&old.quantity===line.quantity&&old.price===line.price&&JSON.stringify([old.restaurantConfig,old.selected_combo_items,old.selected_modifiers,old.selected_fraction_parts,old.note,old.variantId,old.variantSku])===JSON.stringify([line.restaurantConfig,line.selected_combo_items,line.selected_modifiers,line.selected_fraction_parts,line.note,line.variantId,line.variantSku])).length!==1)||(source.customerId||null)!==(cart.customerId||null)||source.ncfType!==cart.fiscalType||money(source.netAmount)+money(source.taxAmount)+money(Number(source.serviceChargeAmount||0))!==money(source.total)||source.payments.reduce((sum,p)=>sum+money(p.amountApplied??p.appliedAmount??p.amount),0)!==money(source.total)||!checkout.fiscalSaleContext&&Number(source.serviceChargeAmount||0)!==0)allocationFail('OFFLINE_FISCAL_SOURCE_UNSUPPORTED');
- if(checkout.fiscalSaleContext&&Number(source.serviceChargeAmount||0)>0){
+ if(checkout.phase!=='EFFECT_POSSIBLE'||checkout.paymentIds.length!==source.payments.length||new Set(source.payments.map(p=>p.id)).size!==source.payments.length||source.payments.some(p=>!checkout.paymentIds.includes(p.id))||source.documentType!=='TICKET'||source.originalTransactionId||source.reservationId||source.v3ReservationClaimId||source.v3RestoredTicketId||source.payments.length===0||source.payments.some(p=>!['CASH','CARD','QR','WALLET','ADVANCE','OTHER','CREDIT','STORE_CREDIT','UBER_EATS'].includes(p.method))||money(Number(source.pendingBalance||0))!==source.payments.filter(p=>p.method==='CREDIT').reduce((sum,p)=>sum+money(p.amountApplied??p.appliedAmount??p.amount),0)||source.items.length!==cart.items.length||source.items.some(line=>line.quantity<=0||line.articleFormat||line.recipeDetails?.length||line.trackingData?.length||cart.items.filter((old:any)=>old.id===line.id&&old.cartId===line.cartId&&old.quantity===line.quantity&&old.price===line.price&&JSON.stringify([old.restaurantConfig,old.selected_combo_items,old.selected_modifiers,old.selected_fraction_parts,old.note,old.variantId,old.variantSku])===JSON.stringify([line.restaurantConfig,line.selected_combo_items,line.selected_modifiers,line.selected_fraction_parts,line.note,line.variantId,line.variantSku])).length!==1)||(source.customerId||null)!==(cart.customerId||null)||source.ncfType!==cart.fiscalType||money(source.netAmount)+money(source.taxAmount)+money(Number(source.serviceChargeAmount||0))!==money(source.total)||source.payments.reduce((sum,p)=>sum+money(p.amountApplied??p.appliedAmount??p.amount),0)!==money(source.total)||!checkout.fiscalSaleContext&&Number(source.serviceChargeAmount||0)!==Number(cart.serviceChargeAmount||0))allocationFail('OFFLINE_FISCAL_SOURCE_UNSUPPORTED');
+ if(!checkout.fiscalSaleContext&&Number(source.serviceChargeAmount||0)>0){
+  if(JSON.stringify(source.serviceTaxPolicySnapshot)!==JSON.stringify(cart.serviceTaxPolicySnapshot)||source.serviceType!==cart.serviceType||Number(source.discountAmount||0)!==Number(cart.discountAmount||0)||Boolean(source.customerSnapshot?.isTaxExempt)!==Boolean(cart.taxExempt))allocationFail('OFFLINE_FISCAL_DIRECT_TIP_INVALID');
+ }
+ if(Number(source.serviceChargeAmount||0)>0){
   const policy=source.serviceTaxPolicySnapshot,assignedBase=(source.taxBreakdown||[]).filter(r=>r.type==='SERVICE_CHARGE').reduce((sum,r)=>sum+money(r.taxableBase),0);
   if(policy?.legalTip?.enabled!==true||policy.legalTip.percentage!==10||money(Number(source.serviceChargeAmount))!==Math.round((money(source.netAmount)-assignedBase)*.1))allocationFail('OFFLINE_FISCAL_TABLE_TIP_UNSUPPORTED');
  }
