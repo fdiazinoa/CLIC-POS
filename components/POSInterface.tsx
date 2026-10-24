@@ -6726,7 +6726,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const offlineTableFiscalContextRef=useRef<TableFiscalSaleContext|undefined>(undefined);
    const currentFiscalCheckoutCartIdentity=(fiscalSaleContext=offlineTableFiscalContextRef.current)=>JSON.stringify({...(fiscalSaleContext?{fiscalSaleContext}:{}),items:processedCart.map(({fiscalCheckoutOperationId:_op,...line}:any)=>line),customerId:effectiveSelectedCustomer?.id||null,fiscalType:requiredSaleFiscalType});
-   const currentTrackingCartIdentity=()=>JSON.stringify({lineSources:processedCart.map(v3RetainedLineFingerprint),customerId:effectiveSelectedCustomer?.id||null,fiscalType:requiredSaleFiscalType,tableId:activeTable?.id===undefined?null:String(activeTable.id),accountId:activeTable?.currentOrderId||null,total:amountDueNow,serviceChargeAmount:cartTip});
+   const currentTrackingCartIdentity=()=>JSON.stringify({lineSources:processedCart.map(v3RetainedLineFingerprint),lineQuantities:processedCart.map(line=>line.quantity),customerId:effectiveSelectedCustomer?.id||null,fiscalType:requiredSaleFiscalType,tableId:activeTable?.id===undefined?null:String(activeTable.id),accountId:activeTable?.currentOrderId||null,total:amountDueNow,serviceChargeAmount:cartTip});
    const trackingLocalScope=():TrackingScope=>({...readFiscalWorkflowLocalScope(activeTerminalConfig,terminalId),warehouseId:defaultSalesWarehouseId!});
    const fiscalCheckoutRef=useRef<FiscalWorkflowCheckoutV2|null>(null);
    const [offlineFiscalReserveInfo,setOfflineFiscalReserveInfo]=useState<{remaining:number;validUntil:string|null;remainingByType?:Record<string,number>}|null>(null);

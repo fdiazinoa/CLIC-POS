@@ -166,6 +166,9 @@ export function assertTrackingOperationReceipt(
         Number(cart.serviceChargeAmount)) ||
     String(source.restaurantTableId || "") !== String(cart.tableId || "") ||
     String(source.restaurantOrderId || "") !== String(cart.accountId || "") ||
+    !Array.isArray(cart.lineQuantities) ||
+    cart.lineQuantities.length !== source.items.length ||
+    source.items.some((line,index)=>line.quantity !== cart.lineQuantities[index]) ||
     !Array.isArray(lineSources) ||
     source.items.length !== lineSources.length ||
     source.items.some(

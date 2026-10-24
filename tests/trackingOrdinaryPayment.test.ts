@@ -9,7 +9,7 @@ import {DatabaseSync} from 'node:sqlite';
 import ts from 'typescript';
 import {CapacitorSQLiteAdapter} from '../services/db/adapters/CapacitorSQLiteAdapter';
 import {TRACKING_ALLOCATION_SCHEMA,installTrackingAllocation} from '../services/db/TrackingAllocationStore';
-import {TRACKING_OPERATION_SCHEMA} from '../services/db/TrackingCheckoutOperation';
+import {TRACKING_OPERATION_SCHEMA,assertTrackingOperationReceipt} from '../services/db/TrackingCheckoutOperation';
 import {v3RetainedLineFingerprint} from '../services/sync/LargeMasterSyncV3StockAuthority';
 const pos=readFileSync(new URL('../components/POSInterface.tsx',import.meta.url),'utf8'),modal=readFileSync(new URL('../components/PaymentModal.tsx',import.meta.url),'utf8');
 const ast=ts.createSourceFile('POSInterface.tsx',pos,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);let before:any;function visit(node:any){if(ts.isVariableDeclaration(node)&&node.name.getText(ast)==='beforeV3PaymentEffects')before=node.initializer;ts.forEachChild(node,visit);}visit(ast);
@@ -26,7 +26,7 @@ async function nativeFixture(){
 test('actual ordinary prepayment and PaymentModal finalize reserve and fence native tracking without a commercial cart mutation',async()=>{
  const {sql,adapter,scope,items,payments}=await nativeFixture();
  const ctx:any={current:{items,payments,total:12.5,inputAmount:'',voluntaryTip:0}},ref:any={current:null};let error='',confirmed=0,cartWrites=0;
- const f:any={completedReservationForReceipt:async()=>null,assertCheckoutFiscalAuthority:async()=>{},hasV3ReservationCart:false,activeV3Reservation:null,selectedCustomer:null,v3Operational:{validate:async()=>{}},fiscalCompliance:{mode:'NONE'},fiscalWorkflowV2Client:{enabled:()=>false,offlineReady:async()=>false},getDefaultFiscalProvider:()=>null,config:{},activeTerminalConfig:{},terminalId:scope.terminalId,activeRecoveredReservation:null,activeDirectV3TicketId:null,activeTable:null,processedCart:items,cart:items,fiscalCheckoutRef:{current:null},fiscalCheckoutOperationRef:{current:null},offlineTableFiscalContextRef:{current:undefined},trackingCheckoutRef:ref,dbAdapter:adapter,durableOutboxRepository:{isSupported:()=>true},trackingLocalScope:()=>scope,currentTrackingCartIdentity:()=>JSON.stringify({lineSources:items.map(v3RetainedLineFingerprint),customerId:null,fiscalType:'B02',total:12.5,serviceChargeAmount:0,tableId:null,accountId:null}),createUuid:randomUUID,setLargeMasterSyncV3CriticalOperation:()=>{},onUpdateCart:()=>{cartWrites++;},db:{getDocument:async()=>null}};
+ const f:any={completedReservationForReceipt:async()=>null,assertCheckoutFiscalAuthority:async()=>{},hasV3ReservationCart:false,activeV3Reservation:null,selectedCustomer:null,v3Operational:{validate:async()=>{}},fiscalCompliance:{mode:'NONE'},fiscalWorkflowV2Client:{enabled:()=>false,offlineReady:async()=>false},getDefaultFiscalProvider:()=>null,config:{},activeTerminalConfig:{},terminalId:scope.terminalId,activeRecoveredReservation:null,activeDirectV3TicketId:null,activeTable:null,processedCart:items,cart:items,fiscalCheckoutRef:{current:null},fiscalCheckoutOperationRef:{current:null},offlineTableFiscalContextRef:{current:undefined},trackingCheckoutRef:ref,dbAdapter:adapter,durableOutboxRepository:{isSupported:()=>true},trackingLocalScope:()=>scope,currentTrackingCartIdentity:()=>JSON.stringify({lineSources:items.map(v3RetainedLineFingerprint),lineQuantities:items.map((line:any)=>line.quantity),customerId:null,fiscalType:'B02',total:12.5,serviceChargeAmount:0,tableId:null,accountId:null}),createUuid:randomUUID,setLargeMasterSyncV3CriticalOperation:()=>{},onUpdateCart:()=>{cartWrites++;},db:{getDocument:async()=>null}};
  const actualBefore=new Function(...Object.keys(f),ts.transpileModule(pos.slice(helperStart,helperEnd)+'\nconst invoke='+before.getText(ast)+';return invoke;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText)(...Object.values(f));
  const m:any={finalizationMountedRef:{current:true},finalizationSubmissionRef:{current:false},finalizationProgressRef:{current:null},finalizationContextRef:ctx,yieldInteractionPaint:async()=>{},recordCheckoutDiagnostic:()=>{},items,total:12.5,payments,isFinalizing:false,isProcessingGateway:false,isSuccessScreen:false,recoverCommittedReceipt:async()=>null,setFinalizeError:(value:string)=>{error=value;},setSuccessNotice:()=>{},setIsFinalizing:()=>{},canFinalize:true,isCreditActionBlocked:false,beginPosInteraction:()=>({stages:{}}),expectInteractionRender:()=>{},markInteractionStateUpdate:()=>{},markInteractionStage:()=>{},canFinalizeWithTypedAmount:false,workflowPaymentFenceRef:{current:null},setGatewayProgress:()=>{},beforePaymentEffects:actualBefore,sumCreditPaymentsBase:()=>0,isOnline:true,isMaster:true,measureInteractionStage:(_trace:any,_a:any,_b:any,fn:any)=>fn(),authorizePendingGatewayPayments:async(value:any)=>value,setPayments:()=>{},window:{setTimeout,clearTimeout},voluntaryTip:0,onConfirm:async()=>{confirmed++;return null;}};
  const execute=new Function(...Object.keys(m),ts.transpileModule(modal.slice(modalStart,modalEnd)+'\nreturn handleFinalize;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText)(...Object.values(m));await execute();
@@ -35,7 +35,7 @@ test('actual ordinary prepayment and PaymentModal finalize reserve and fence nat
 
 test('ordinary tracking recovers its original native receipt after lost COMMIT ACK and restart without consuming again',async()=>{
  const f=await nativeFixture();f.sql.exec("CREATE TABLE documents(collection_name TEXT NOT NULL,doc_id TEXT NOT NULL,data TEXT NOT NULL,sort_order INTEGER,updatedAt TEXT,PRIMARY KEY(collection_name,doc_id));"+DURABLE_OUTBOX_SCHEMA_SQL);
- const transactionId=randomUUID(),checkoutId=randomUUID(),identity=JSON.stringify({lineSources:f.items.map(v3RetainedLineFingerprint),customerId:null,fiscalType:'B02',total:12.5,serviceChargeAmount:0,tableId:null,accountId:null});
+ const transactionId=randomUUID(),checkoutId=randomUUID(),identity=JSON.stringify({lineSources:f.items.map(v3RetainedLineFingerprint),lineQuantities:f.items.map((line:any)=>line.quantity),customerId:null,fiscalType:'B02',total:12.5,serviceChargeAmount:0,tableId:null,accountId:null});
  await f.adapter.prepareTrackingCheckout(checkoutId,f.items.flatMap((line:any)=>line.trackingData),f.scope,{transactionId,cartIdentity:identity});const effectAt=await f.adapter.fenceTrackingCheckout(checkoutId,'cash');
  const source:any={id:transactionId,terminalId:f.scope.terminalId,trackingCheckoutId:checkoutId,trackingEffectAt:new Date(effectAt).toISOString(),items:f.items,payments:f.payments,customerId:null,ncfType:'B02',total:12.5,netAmount:12.5,taxAmount:0,serviceChargeAmount:0,date:new Date(effectAt).toISOString(),documentType:'TICKET',v3WarehouseId:f.scope.warehouseId};source.v3CommitFingerprint=financialOperationIdentity(source,f.scope.warehouseId,{});
  const payload=buildSalePostedPayload(source,{pos_tracking_contract_version:'1',tenant_id:f.scope.tenantId,company_id:f.scope.companyId,store_id:f.scope.storeId,terminal_id:f.scope.terminalId,device_id:f.scope.deviceId});
@@ -46,7 +46,7 @@ test('ordinary tracking recovers its original native receipt after lost COMMIT A
 });
 
 test('pre-effect cancellation retires the durable operation and a fresh checkout can claim the same lot',async()=>{
- const f=await nativeFixture(),identity=JSON.stringify({lineSources:f.items.map(v3RetainedLineFingerprint),customerId:null,fiscalType:'B02',total:12.5,serviceChargeAmount:0,tableId:null,accountId:null});
+ const f=await nativeFixture(),identity=JSON.stringify({lineSources:f.items.map(v3RetainedLineFingerprint),lineQuantities:f.items.map((line:any)=>line.quantity),customerId:null,fiscalType:'B02',total:12.5,serviceChargeAmount:0,tableId:null,accountId:null});
  const first=randomUUID(),second=randomUUID();
  await f.adapter.prepareTrackingCheckout(first,f.items.flatMap((line:any)=>line.trackingData),f.scope,{transactionId:randomUUID(),cartIdentity:identity});
  await f.adapter.abandonTrackingCheckout(first);
@@ -57,3 +57,11 @@ test('pre-effect cancellation retires the durable operation and a fresh checkout
  await assert.rejects(f.adapter.abandonTrackingCheckout(second),/EFFECT|PAID|RECONCILIATION/);
  assert.equal((await f.adapter.readTrackingCheckout(identity,f.scope))?.phase,'EFFECT_POSSIBLE');
 });
+
+ test('tracking receipt source rejects changed quantities even when price and total stay equal', async()=>{
+ const f=await nativeFixture();const identity=JSON.stringify({lineSources:f.items.map(v3RetainedLineFingerprint),lineQuantities:[.125],customerId:null,fiscalType:'B02',total:0,serviceChargeAmount:0,tableId:null,accountId:null});
+ const checkoutId=randomUUID(),transactionId=randomUUID();await f.adapter.prepareTrackingCheckout(checkoutId,f.items.flatMap((line:any)=>line.trackingData),f.scope,{transactionId,cartIdentity:identity});await f.adapter.fenceTrackingCheckout(checkoutId,'cash');const operation=(await f.adapter.readTrackingCheckout(identity,f.scope))!;
+ const source:any={id:transactionId,trackingCheckoutId:checkoutId,terminalId:f.scope.terminalId,ncfType:'B02',total:0,items:f.items,payments:f.payments};
+ assertTrackingOperationReceipt(operation,source,identity,f.scope);
+ assert.throws(()=>assertTrackingOperationReceipt(operation,{...source,items:[{...f.items[0],quantity:.25}]},identity,f.scope),/RECONCILIATION_REQUIRED/);
+ });
