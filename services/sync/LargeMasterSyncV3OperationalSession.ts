@@ -56,6 +56,13 @@ export class LargeMasterSyncV3OperationalSession {
     private readonly setupCredentialGuard?:string,
   ) {}
 
+  async trackingOwner(){
+    await this.assertCurrent();
+    const {terminal}=v3OperationalConfigContext(await db.get('config') as unknown as BusinessConfig,this.identity),erp=terminal.config.erpBinding;
+    if(!erp?.companyId||!erp.storeId)throw Error('TRACKING_OWNER_REQUIRED');
+    return {tenantId:this.identity.tenantId,companyId:erp.companyId,storeId:erp.storeId,terminalId:this.identity.terminalId,deviceId:this.identity.deviceId};
+  }
+
   static async open(refresh = false, metric?: (metric: LargeMasterSyncV3Metric) => void, cachedOnly = false): Promise<LargeMasterSyncV3OperationalSession> {
     const observe = (event: LargeMasterSyncV3Metric) => { try { metric?.(event); } catch { /* Observer only. */ } };
     if (!LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED || LARGE_MASTER_SYNC_V3_CANARY) {
@@ -125,7 +132,6 @@ export class LargeMasterSyncV3OperationalSession {
 
   /** Renew only the UI read context. Never downloads, changes the old session, or retries a sale. */
   static async acquireConfigContext(config: BusinessConfig, localTerminalId: string): Promise<LargeMasterSyncV3OperationalSession> {
-    const coordinatorGeneration = getLargeMasterSyncV3OperationalSession.captureConfigContext();
     const requested = v3OperationalConfigContext(config, { localTerminalId });
     const readAuthority = async () => {
       const guard = readOperationalTerminalBinding();
@@ -177,7 +183,18 @@ export class LargeMasterSyncV3OperationalSession {
           if (await readCached() !== cached) throw new LargeMasterSyncV3Error('SYNC_V3_RUNTIME_VERSION_CHANGED');
           session.assertSetupIdentity();
         };
-        await getLargeMasterSyncV3OperationalSession.publishConfigContext(session, coordinatorGeneration, assertPublicationAuthority);
+        // Cached reads may overlap startup preparation. Revalidate the complete authority
+        // before capturing a fresh publication generation; never retry a financial action.
+        for (let attempt = 0; ; attempt++) {
+          await assertPublicationAuthority();
+          const generation = getLargeMasterSyncV3OperationalSession.captureConfigContext();
+          try {
+            await getLargeMasterSyncV3OperationalSession.publishConfigContext(session, generation, assertPublicationAuthority);
+            break;
+          } catch (error) {
+            if (attempt >= 2 || (error as { code?: string }).code !== 'SYNC_V3_UI_CONTEXT_CHANGED') throw error;
+          }
+        }
         return session;
       })();
       configContextFlights.set(key, pending);
@@ -226,8 +243,7 @@ export class LargeMasterSyncV3OperationalSession {
   assertFinancialOfflineAuthority(transaction:Transaction):void {
     if(!this.offlineAuthority)return;
     if((!transaction.fiscalOfflineLeaseId&&!transaction.fiscalAllocationAuthorizationId)||!transaction.fiscalWorkflowCheckoutId||transaction.documentType!=='TICKET'
-      ||!transaction.items.length||transaction.items.some(line=>line.quantity<=0||line.articleFormat)
-      ||transaction.payments.some(payment=>payment.method!=='CASH'))throw new LargeMasterSyncV3Error('SYNC_V3_OFFLINE_FINANCIAL_AUTHORITY_REQUIRED');
+      ||!transaction.items.length||transaction.items.some(line=>line.quantity<=0||line.articleFormat))throw new LargeMasterSyncV3Error('SYNC_V3_OFFLINE_FINANCIAL_AUTHORITY_REQUIRED');
     const recovery=this.offlineAuthority.recovery;if(!recovery)return;
     let cart:any;try{cart=JSON.parse(recovery.cartIdentity);}catch{throw new LargeMasterSyncV3Error('SYNC_V3_OFFLINE_FINANCIAL_AUTHORITY_REQUIRED');}
     if(transaction.id!==recovery.transactionId||transaction.fiscalWorkflowCheckoutId!==recovery.checkoutId||(recovery.authorizationId?transaction.fiscalAllocationAuthorizationId!==recovery.authorizationId:transaction.fiscalOfflineLeaseId!==recovery.leaseId)
@@ -399,7 +415,8 @@ export class LargeMasterSyncV3OperationalSession {
     if (intent === 'REFUND') return [];
     const catalog = await this.catalog(lines[0].v3SaleAuthority!.tariffId, warehouseId);
     const demands = new Map<string, number>();
-    const baseItems=new Set(lines.filter(line=>line.inventoryPresentation).map(line=>line.id));
+    const baseItems=new Set(lines.filter(line=>line.inventoryPresentation||line.trackingData?.length).map(line=>line.id));
+    const trackingItems=new Set(lines.filter(line=>line.trackingData?.length).map(line=>line.id));
     for (const line of lines) {
       if (line.quantity <= 0) throw new LargeMasterSyncV3Error('SYNC_V3_LINE_INVALID');
       const source = await catalog.get(line.id);
@@ -410,7 +427,7 @@ export class LargeMasterSyncV3OperationalSession {
         demands.set(line.id,baseItems.has(line.id)?new Decimal(demands.get(line.id)||0).plus(presentationInventoryQuantity(line)).toNumber():(demands.get(line.id)||0)+line.quantity);
       }
     }
-    return [...demands].map(([productId, quantity]) => ({ productId, quantity, warehouseId,...(baseItems.has(productId)?{quantityScale:4 as const}:{}),
+    return [...demands].map(([productId, quantity]) => ({ productId, quantity, warehouseId,...(trackingItems.has(productId)?{quantityScale:6 as const}:baseItems.has(productId)?{quantityScale:4 as const}:{}),
       baseline: v3InventoryBaselineKey(this.binding, lines[0].v3SaleAuthority!) }));
   }
 }

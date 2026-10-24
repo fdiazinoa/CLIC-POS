@@ -207,7 +207,7 @@ test('actual prepayment and fresh COBRAR pipeline recover native committed table
  const cold=invokeFor('valid',true);assert.equal((await cold.invoke()).completedTransaction.id,c.transactionId);assert.equal(cold.ref.current.phase,'COMMITTED');assert.equal(authority,0);assert.equal(closed,0);assert.equal(markers,0);assert.equal(literals(),before);
  // Existing actual completion branch ACKs and performs UI/table projection cleanup, without financial publication.
  let cleaned=0,tableClosed=0;const parkedRef={current:[account,other]};
- const bindings:any={authorizeFiscalReceiptRecovery:async()=>{},fiscalCheckoutRef:state.ref,fiscalCheckoutOperationRef:{current:c.operationId},offlineTableFiscalContextRef:state.contextRef,offlineTablePaymentFenceRef:{current:true},payments:[{id:'original-cash'}],db:{getDocument:(name:string,id:string)=>f.adapter.getDocument(name,id)},assertFiscalWorkflowCheckoutReplay,currentFiscalCheckoutCartIdentity:()=>c.cartIdentity,readFiscalWorkflowLocalScope:()=>scope,activeTerminalConfig:f.config.terminals[0].config,activeTerminal:f.config.terminals[0],terminalId:scope.terminalId,activeTable:{id:account.tableId,currentOrderId:account.id},parkedTicketsRef:parkedRef,onUpdateParkedTicketsRef:{current:async(rows:any[])=>{assert.deepEqual(rows,[other]);}},onTableOrderClosedRef:{current:async()=>{tableClosed++;}},onClearActiveTable:()=>{cleaned++;},fiscalWorkflowV2Client:client,onUpdateCart:()=>{cleaned++;},onSelectCustomer:()=>{cleaned++;}};
+ const bindings:any={trackingCheckoutRef:{current:null},authorizeFiscalReceiptRecovery:async()=>{},fiscalCheckoutRef:state.ref,fiscalCheckoutOperationRef:{current:c.operationId},offlineTableFiscalContextRef:state.contextRef,offlineTablePaymentFenceRef:{current:true},payments:[{id:'original-cash'}],db:{getDocument:(name:string,id:string)=>f.adapter.getDocument(name,id)},assertFiscalWorkflowCheckoutReplay,currentFiscalCheckoutCartIdentity:()=>c.cartIdentity,readFiscalWorkflowLocalScope:()=>scope,activeTerminalConfig:f.config.terminals[0].config,activeTerminal:f.config.terminals[0],terminalId:scope.terminalId,activeTable:{id:account.tableId,currentOrderId:account.id},parkedTicketsRef:parkedRef,onUpdateParkedTicketsRef:{current:async(rows:any[])=>{assert.deepEqual(rows,[other]);}},onTableOrderClosedRef:{current:async()=>{tableClosed++;}},onClearActiveTable:()=>{cleaned++;},fiscalWorkflowV2Client:client,onUpdateCart:()=>{cleaned++;},onSelectCustomer:()=>{cleaned++;}};
  // Actual fresh COBRAR request -> proceed -> full completion uses the original native receipt.
  const names=['resolveCommittedFiscalReceipt','bindCommittedFiscalReceipt','authorizeFiscalReceiptRecovery','completeCommittedFiscalReceipt','handlePaymentConfirm','assertCheckoutFiscalAuthority','assertNewCheckoutFiscalAuthority','readCheckoutAdmissionIdentity','proceedToCheckout','startCheckoutInteraction','requestCheckout'];const declarations:string[]=[];const collect=(node:any)=>{if(ts.isVariableDeclaration(node)&&names.includes(node.name.getText(ast)))declarations.push('const '+node.getText(ast)+';');ts.forEachChild(node,collect);};collect(ast);
  state.ref.current=null;state.contextRef.current=undefined;let receipt:any=null,modal=false;const errors:string[]=[];
@@ -219,3 +219,28 @@ test('actual prepayment and fresh COBRAR pipeline recover native committed table
  const body=ts.transpileModule(declarations.join('\n')+'\nreturn requestCheckout;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,request=new Function(...Object.keys(entry),body)(...Object.values(entry));await request(1,true);
  assert.deepEqual(errors,[]);assert.equal(modal,true);assert.equal(receipt.id,c.transactionId);assert.equal(markers,0);assert.equal(authority,0);assert.equal(closed,0);assert.equal(tableClosed,1);assert.equal(cleaned,3);assert.equal(state.ref.current,null);assert.equal((await f.store.readCheckout(c.checkoutId))!.phase,'ACKNOWLEDGED');assert.equal(literals(),before);
  }finally{f.sql.close();}});
+
+for (const methods of [['CARD'],['CASH','CARD'],['CREDIT'],['QR'],['WALLET'],['ADVANCE'],['OTHER'],['STORE_CREDIT'],['UBER_EATS']]) test(`fiscal native allocation is tender independent: ${methods.join('+')}`,async()=>{
+ const f=await fixture();try{
+  const c=await f.client().reserveOfflineCheckout(identity('method-test'),'method-operation');
+  const ids=methods.map((_method,index)=>`payment-${c.checkoutId}-${index}`);
+  for(const id of ids)await f.client().recordPayment(c,id);
+  const commit=await input(f,c),source=commit.documents.find((d:any)=>d.collectionName==='transactions')!.document;
+  const cents=Math.round(source.total*100),part=Math.floor(cents/methods.length);
+  source.payments=methods.map((method,index)=>({id:ids[index],method,methodId:method==='CARD'?'002':method==='CREDIT'?'003':'001',amount:(index===methods.length-1?cents-part*index:part)/100}));
+  source.pendingBalance=source.payments.filter((p:any)=>p.method==='CREDIT').reduce((sum:number,p:any)=>sum+p.amount,0)||undefined;
+  await f.adapter.commitFinancialTransaction(commit as any);
+  const saved=JSON.parse(String(f.sql.prepare("SELECT data FROM documents WHERE collection_name='transactions' AND doc_id=?").get(c.transactionId)!.data));
+  assert.deepEqual(saved.payments,source.payments);assert.equal(f.count('sync_outbox_v2'),1);
+  assert.equal((await f.store.readCheckout(c.checkoutId))!.phase,'COMMITTED');
+ }finally{f.sql.close();}
+});
+test('fiscal allocation never converts an unapproved integrated card into a manual tender',async()=>{
+ const f=await fixture();try{
+  const c=await f.client().reserveOfflineCheckout(identity('gateway-test'),'gateway-operation');await f.client().recordPayment(c,'payment-'+c.checkoutId);
+  const commit=await input(f,c),source=commit.documents.find((d:any)=>d.collectionName==='transactions')!.document;
+  source.payments[0]={...source.payments[0],method:'CARD',gatewayProvider:'AZUL',gatewayStatus:'PENDING'};
+  await assert.rejects(f.adapter.commitFinancialTransaction(commit as any),/PAYMENT_INTENT_RECONCILIATION_REQUIRED/);
+  assert.equal(f.count('sync_outbox_v2'),0);assert.equal(f.sql.prepare("SELECT count(*) n FROM documents WHERE collection_name='nativeFiscalReservations'").get()!.n,0);
+ }finally{f.sql.close();}
+});

@@ -21,14 +21,14 @@ env.acquire = async input => {
   if (env.fail) throw Error('SYNC_V3_BINDING_CHANGED');
   const expected = JSON.stringify(input.terminals[0].config);
   const assertCurrent = async () => { if (JSON.stringify(canonical.terminals[0].config) !== expected) throw Error('SYNC_V3_BINDING_CHANGED'); };
-  return { assertCurrent, projectConfig: async value => value, catalog: async () => ({ categories: async () => [], search: async () => [], get: async () => null }),
+  return { assertCurrent, projectConfig: async value => value, catalog: async () => ({ categories: async () => [], search: async () => { if (env.searchHold) return env.searchHold; return []; }, get: async () => { const owned = env.getHold; env.getHold = undefined; if (owned) return owned; return null; } }),
     withStocks: async rows => rows, validate: async () => { await new Promise(resolve => { releaseValidation = resolve; }); await assertCurrent(); } };
 };
 const mocks = {
   react: 'module.exports=globalThis.__mountedV3Context.React;module.exports.default=module.exports;',
   './POSInterface': `const E=globalThis.__mountedV3Context,R=E.React;module.exports=function POS(props){const [source]=R.useState({ticketId:'retained-ticket',reservationId:'retained-reservation',modal:'payment-open'});R.useEffect(()=>{E.mounts++;return()=>E.unmounts++;},[]);E.child={props,source};return R.createElement('section',{'data-pos':true});};`,
   '../services/sync/LargeMasterSyncV3OperationalSession': 'exports.acquireLargeMasterSyncV3ConfigContext=(config)=>globalThis.__mountedV3Context.acquire(config);',
-  '../services/sync/LargeMasterSyncV3CatalogUpdates': 'exports.subscribeLargeMasterSyncV3CatalogUpdates=()=>()=>{};',
+  '../services/sync/LargeMasterSyncV3CatalogUpdates': 'exports.subscribeLargeMasterSyncV3CatalogUpdates=callback=>{globalThis.__mountedV3Context.catalogUpdated=callback;return()=>{};};',
   '../services/sync/LargeMasterSyncV3FinancialCommit': 'exports.readV3CompletedReservation=()=>{throw Error("unused");};',
   '../services/sync/LargeMasterSyncV3ReservationRecovery': 'exports.restoreV3ReservationReference=exports.expireV3Reservation=()=>{throw Error("unused");};',
   '../services/sync/LargeMasterSyncV3DirectTicketSource': 'exports.claimV3DirectTicket=exports.readV3DirectWaitingTickets=exports.updateV3DirectTicket=()=>{throw Error("unused");};',
@@ -44,8 +44,29 @@ const settle = async () => act(async () => { for (let n = 0; n < 20; n++) await 
 try {
   await act(async () => { renderer = Renderer.create(React.createElement(Component, props())); }); await settle();
   assert.equal(env.mounts, 1); const source = env.child.source, old = env.child.props.v3Operational, originalCart = JSON.stringify(cart);
+  let rejectGet;
+  env.getHold = new Promise((_resolve, reject) => { rejectGet = reject; });
+  const pendingCart = [...cart];
+  await act(async () => renderer.update(React.createElement(Component, { ...props(), cart: pendingCart })));
+  // Listener retires the read synchronously, before React effect cleanup runs.
+  await act(async () => { env.catalogUpdated(); });
+  env.getHold = undefined;
+  rejectGet(Error('retired-cart-read-failed'));
+  await settle();
+  assert.ok(!JSON.stringify(renderer.toJSON()).includes('retired-cart-read-failed'));
+  await act(async () => renderer.update(React.createElement(Component, props()))); await settle();
+  let rejectSearch;
+  env.searchHold = new Promise((_resolve, reject) => { rejectSearch = reject; });
+  const retiredSearch = env.child.props.v3Operational.search('', null);
+  await Promise.resolve();
+  await act(async () => { env.catalogUpdated(); });
+  env.searchHold = undefined;
+  rejectSearch(Error('retired-read-failed'));
+  await retiredSearch; await settle();
+  assert.ok(!JSON.stringify(renderer.toJSON()).includes('retired-read-failed'));
+  const active = env.child.props.v3Operational;
   let adds = 0;
-  const inFlight = old.validate(cart).then(() => adds++); const rejectedOld = assert.rejects(inFlight, /BINDING_CHANGED|UI_CONTEXT_CHANGED/);
+  const inFlight = active.validate(cart).then(() => adds++); const rejectedOld = assert.rejects(inFlight, /BINDING_CHANGED|UI_CONTEXT_CHANGED/);
   let releaseRenewal; env.hold = new Promise(resolve => { releaseRenewal = resolve; });
   canonical = structuredClone(canonical); canonical.terminals[0].config.pricing.tariffs = [{ id: 'T', isDefault: true }];
   await act(async () => renderer.update(React.createElement(Component, props()))); await settle();

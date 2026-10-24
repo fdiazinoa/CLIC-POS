@@ -19,7 +19,7 @@ export interface LargeMasterSyncV3HttpResponse {
 }
 
 export interface LargeMasterSyncV3Transport {
-  request(path: string, init: { method: 'GET' | 'POST'; signal?: AbortSignal }): Promise<LargeMasterSyncV3HttpResponse>;
+  request(path: string, init: { method: 'GET' | 'POST'; signal?: AbortSignal;body?:{witnessHash:string} }): Promise<LargeMasterSyncV3HttpResponse>;
 }
 
 export interface LargeMasterSyncV3Metric {
@@ -232,10 +232,11 @@ export class FetchLargeMasterSyncV3Transport implements LargeMasterSyncV3Transpo
     private readonly fetchImpl: typeof fetch = fetch,
   ) {}
 
-  async request(path: string, init: { method: 'GET' | 'POST'; signal?: AbortSignal }): Promise<LargeMasterSyncV3HttpResponse> {
+  async request(path: string, init: { method: 'GET' | 'POST'; signal?: AbortSignal;body?:{witnessHash:string} }): Promise<LargeMasterSyncV3HttpResponse> {
     const response = await this.fetchImpl(`${this.baseUrl.replace(/\/+$/, '')}${path}`, {
       method: init.method,
-      headers: this.getHeaders(),
+      headers: {...this.getHeaders(),'X-Pos-Tracking-Contract':'1',...(init.body?{'Content-Type':'application/json'}:{})},
+      ...(init.body?{body:JSON.stringify(init.body)}:{}),
       signal: init.signal,
     });
     return {

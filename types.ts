@@ -401,6 +401,7 @@ export interface InventoryAuditLog {
 }
 
 export interface InventoryLedgerEntry {
+  trackingCheckoutId?:string;
   v3InventoryBaseline?: string;
   v3Binding?: string;
   id: string;
@@ -1031,6 +1032,8 @@ export interface PaymentIntegrationDefinition {
 export type PaymentMethodRoundingRule = 'NONE' | 'UP' | 'DOWN' | 'ZERO_DECIMALS';
 
 export interface PaymentMethodDefinition {
+  /** Original ERP method type; TRANSFER is recorded through the existing OTHER runtime. */
+  sourceType?: string;
   id: string;
   name: string;
   type: PaymentMethod;
@@ -1523,6 +1526,7 @@ export interface V3SaleAuthorityStamp {
 }
 
 export interface Product {
+  v3TrackingAuthorities?:import('./services/tracking/TrackingDeliveryWitness').TrackingAllocationSnapshot[];
   inventoryPresentationMaster?: import('./services/inventoryPresentations/contract').InventoryPresentationMaster;
   article_formats?: import('./services/articleFormats/contract').ArticleFormatsDTO;
   id: string;
@@ -1657,6 +1661,9 @@ export interface InventoryCommitment {
 }
 
 export interface InventoryTracking {
+  v3Authority?:import('./services/tracking/TrackingAuthority').TrackingAuthority;
+  availableMinor?:number;
+  selectedQuantityMinor?:number;
   id: string;
   productId: string;
   variantId?: string;
@@ -1826,6 +1833,8 @@ export interface CartItem extends Product {
 }
 
 export interface Transaction {
+  trackingCheckoutId?:string;
+  trackingEffectAt?:string;
   inventoryPresentationContract?: 1;
     /** Durable future checkout identity; never added to historical/retained sources. */
     fiscalWorkflowCheckoutId?: string;
@@ -2485,6 +2494,7 @@ export interface Reservation {
 }
 
 export interface PaymentEntry {
+  sourceMethodType?: string;
   id: string;
   method: PaymentMethod;
   methodId?: string;

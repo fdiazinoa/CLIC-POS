@@ -20,5 +20,5 @@ export function captureNewV3FiscalSourceMetadata(document:Transaction,config:Bus
  if(tx.terminalId!==terminalId||tx.v3Binding!==binding||!uuid(tx.v3WarehouseId)||!tx.items.length||tx.items.some(line=>line.v3SaleAuthority?.binding!==binding||line.v3SaleAuthority?.warehouseId!==tx.v3WarehouseId)
   ||local?.erpTerminalId&&local.erpTerminalId!==terminalId||local?.currentDeviceId!==deviceId||erp?.tenantId!==tenantId||!uuid(erp?.companyId)||!uuid(erp?.storeId)
   ||!fiscal||fiscal.tenantId!==tenantId||fiscal.companyId!==erp.companyId||fiscal.terminalId!==terminalId)fail();
- return {tenant_id:tenantId,company_id:erp.companyId!,store_id:erp.storeId!,terminal_id:terminalId,device_id:deviceId,timezone:'America/Santo_Domingo'};
+ return {tenant_id:tenantId,company_id:erp.companyId!,store_id:erp.storeId!,terminal_id:terminalId,device_id:deviceId,timezone:'America/Santo_Domingo',pos_operational_contract_version:'1'};
 }

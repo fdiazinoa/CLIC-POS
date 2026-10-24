@@ -64,7 +64,7 @@ import { sendReceiptEmailViaErp } from '../services/email/receiptEmailService';
 import { buildReceiptEmailPayload } from '../services/email/receiptEmailPayload';
 import { setLargeMasterSyncV3CriticalOperation } from '../services/sync/LargeMasterSyncV3OperationGate';
 
-export type PaymentEffectsFence = (() => void) & {completedTransaction?: Transaction;recordPaymentEffect?:(paymentId:string)=>Promise<void>;futureCheckout?:{checkoutId:string;transactionId:string;operationId?:string}};
+export type PaymentEffectsFence = (() => void|Promise<void>) & {completedTransaction?: Transaction;recordPaymentEffect?:(paymentId:string)=>Promise<void>;futureCheckout?:{checkoutId:string;transactionId:string;operationId?:string}};
 
 interface PaymentModalProps {
    openingTrace?: PosInteractionTrace | null;
@@ -582,6 +582,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
       id: paymentOperationId ? `${paymentOperationId}:payment:${payments.length}` : createPaymentId(),
       method: getMethodRuntimeType(method),
       methodId: method.id,
+      sourceMethodType: method.definition?.sourceType,
       methodLabel: method.label,
       methodIcon: method.iconName,
       creditOverrideApproved: getMethodRuntimeType(method) === 'CREDIT' && canBypassCreditLimit ? true : undefined,
@@ -1047,10 +1048,10 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
             slowProcessTimer = window.setTimeout(() => {
                setFinalizeError('El cobro está tardando más de lo esperado, espere unos segundos...');
             }, 15000);
-            // The cashier has confirmed these exact cash tenders. Persist possible effect before
+            // The cashier has confirmed these exact tenders, after each method's normal authorization. Persist possible effect before
             // construction/commit so retries retain the original checkout, tender IDs and effect date.
             // This marker never means that the sale or a receipt has already committed.
-            if(!completed&&paymentsToConfirm.length>0&&paymentsToConfirm.every(payment=>payment.method==='CASH')){
+            if(!completed&&paymentsToConfirm.length>0){
                for(const payment of paymentsToConfirm)await workflowPaymentFenceRef.current?.recordPaymentEffect?.(payment.id);
             }
             const txn = await onConfirm(paymentsToConfirm, completed?.voluntaryTipAmount ?? voluntaryTip);
@@ -1148,7 +1149,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
          setFinalizeError(message ? `Error al finalizar: ${message}` : 'Ocurrió un error al finalizar. Intente nuevamente.');
          setGatewayProgress(null);
       } finally {
-         releasePaymentFence?.();
+         await releasePaymentFence?.();
          setIsFinalizing(false);
          if (trace.stages.HANDLER_END === undefined) markInteractionStage(trace, 'HANDLER_END');
       }

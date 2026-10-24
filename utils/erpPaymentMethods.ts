@@ -27,7 +27,8 @@ export const normalizeErpPaymentMethods = (
   return rows.map((value: any) => {
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('PAYMENT_METHOD_INVALID');
     const id = String(value.id || '').trim();
-    const type = String(value.type || '').toUpperCase() as PaymentMethod;
+    const sourceType = String(value.type || '').toUpperCase();
+    const type = (sourceType === 'TRANSFER' ? 'OTHER' : sourceType) as PaymentMethod;
     if (!id || ids.has(id) || !paymentTypes.has(type)) throw new Error('PAYMENT_METHOD_ID_OR_TYPE_INVALID');
     ids.add(id);
     // Only carry local settings across the same identity, or a legacy default
@@ -40,6 +41,7 @@ export const normalizeErpPaymentMethods = (
       id,
       name: String(value.name || prior?.name || value.code || id),
       type,
+      sourceType,
       isEnabled: booleanValue(value.isEnabled ?? value.is_enabled ?? value.active ?? value.isActive ?? value.is_active, prior?.isEnabled ?? true)
         && !value.deletedAt && !value.deleted_at && value._op !== 'DELETE',
       icon: value.icon ?? prior?.icon ?? (type === 'CARD' ? 'CreditCard' : type === 'CASH' ? 'Banknote' : 'Wallet'),
@@ -48,6 +50,7 @@ export const normalizeErpPaymentMethods = (
       requiresSignature: booleanValue(value.requiresSignature ?? value.requires_signature, prior?.requiresSignature ?? false),
       integration: value.integration ?? prior?.integration ?? 'NONE',
       integrationMode: value.integrationMode ?? value.integration_mode ?? prior?.integrationMode ?? 'MANUAL',
+      ...((value.integrationId??value.integration_id??prior?.integrationId)?{integrationId:value.integrationId??value.integration_id??prior?.integrationId}:{}),
       paymentTermDays: value.paymentTermDays ?? value.payment_term_days ?? prior?.paymentTermDays,
     };
   });
