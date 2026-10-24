@@ -111,7 +111,7 @@ test('actual table prepayment callback reserves locally, pins retained account, 
    offlineTablePaymentFenceRef:fenceRef,ticketAutoSyncFlushRef:{current:null},ticketAutoSyncTimeoutRef:{current:null},readTableFiscalSaleContext:currentContext,
    currentFiscalCheckoutCartIdentity:(saleContext=contextRef.current)=>JSON.stringify({fiscalSaleContext:saleContext,items:table.account.items,customerId:null,fiscalType:'E32'}),
    onUpdateCart:()=>{updates++;},createUuid:()=>uuid(7,++operation),setLargeMasterSyncV3CriticalOperation:()=>{}};
-  const js=ts.transpileModule('const invoke='+arrow.getText(ast),{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
+  const js=ts.transpileModule(text.slice(text.indexOf('   const resolveCommittedFiscalReceipt ='),text.indexOf('   const beforeV3PaymentEffects ='))+'const invoke='+arrow.getText(ast),{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
   const invoke=new Function(...Object.keys(ctx),js+';return invoke;')(...Object.values(ctx));
   f.sql.prepare("UPDATE documents SET data=? WHERE collection_name='parkedTickets' AND doc_id=?").run(JSON.stringify({...table.account,items:[],total:0}),table.account.id);
   let flushes=0;ctx.ticketAutoSyncFlushRef.current=async()=>{flushes++;f.sql.prepare("UPDATE documents SET data=? WHERE collection_name='parkedTickets' AND doc_id=?").run(table.literal,table.account.id);};

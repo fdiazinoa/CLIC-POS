@@ -76,7 +76,7 @@ test('fresh issuer loss blocks typed finalization before payment entry, provider
  const end=source.indexOf('\n   const ',start+10);
  let effects=0,error='';
  const context=evaluate(source.slice(start,end)+'\nglobalThis.finalize=handleFinalize;',{
-  recordCheckoutDiagnostic:()=>{},items:[],total:25,payments:[],isFinalizing:false,isProcessingGateway:false,
+  recordCheckoutDiagnostic:()=>{},items:[],total:25,payments:[],isFinalizing:false,isProcessingGateway:false,isSuccessScreen:false,recoverCommittedReceipt:undefined,
   canFinalize:true,canFinalizeWithTypedAmount:false,isCreditActionBlocked:false,beginPosInteraction:()=>({stages:{}}),expectInteractionRender:()=>{},
   setFinalizeError:(e:string)=>{error=e;},setSuccessNotice:()=>{},setGatewayProgress:()=>{},setIsFinalizing:()=>{},markInteractionStateUpdate:()=>{},
   beforePaymentEffects:async()=>{throw Error('FISCAL_ISSUER_RNC_REQUIRED');},
@@ -123,7 +123,9 @@ test('checkout reads persisted issuer each time, including refunds, while explic
  const get=dbAdapter.getCollection;let lotChecks=0;let rnc='130090752';
  try{
   (dbAdapter as any).getCollection=async()=>[business(rnc)];
-  const context=evaluate(body+'\nglobalThis.check=assertCheckoutFiscalAuthority;',{
+  const helpers=source.slice(source.indexOf('   const resolveCommittedFiscalReceipt ='),source.indexOf('   const beforeV3PaymentEffects ='));
+  const context=evaluate(helpers+body+'\nglobalThis.check=assertCheckoutFiscalAuthority;',{
+   fiscalCheckoutRef:{current:null},fiscalWorkflowV2Client:{},activeTable:null,
    db:{assertFiscalIssuerAuthority:db.assertFiscalIssuerAuthority,canRequestMoreNCF:async()=>{lotChecks++;return true;}},
    v3Operational:null,isOrderTakerMode:false,isFiscalModeDisabled:false,activeTerminalConfig:{fiscal:{mode:'ECF'}},terminalId:'terminal',
    processedCart:[{quantity:1}],requiredSaleFiscalType:'E32',resolveCreditNoteFiscalCode:()=> 'E34',

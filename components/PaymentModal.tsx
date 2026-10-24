@@ -67,6 +67,8 @@ export type PaymentEffectsFence = (() => void) & {completedTransaction?: Transac
 
 interface PaymentModalProps {
    openingTrace?: PosInteractionTrace | null;
+   receiptOnlyInitialTransaction?: Transaction|null;
+   recoverCommittedReceipt?: (paymentIds:string[])=>Promise<Transaction|null>;
    total: number;
    items: CartItem[]; // Added items prop
    taxAmount?: number;
@@ -256,7 +258,8 @@ type GatewayProgressOverlayState = {
 
 import SupervisorAuthModal from './SupervisorAuthModal';
 
-const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, total, items, taxAmount = 0, currencySymbol, config, onClose, onConfirm, paymentOperationId, paymentOperationDate, onFiscalAttemptClosed, offlineFiscalReserve, beforePaymentEffects, validatePaymentAuthority, themeColor, customer, isDelinquent, users, isMaster, currentUser, roles, isRestaurantMode, isInstallmentPayment = false }) => {
+const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receiptOnlyInitialTransaction, recoverCommittedReceipt, total, items, taxAmount = 0, currencySymbol, config, onClose, onConfirm, paymentOperationId, paymentOperationDate, onFiscalAttemptClosed, offlineFiscalReserve, beforePaymentEffects, validatePaymentAuthority, themeColor, customer, isDelinquent, users, isMaster, currentUser, roles, isRestaurantMode, isInstallmentPayment = false }) => {
+   const receiptOnly=Boolean(receiptOnlyInitialTransaction);
    markRenderStart('PAYMENT_MODAL');
    useLayoutEffect(() => markRenderEnd('PAYMENT_MODAL'));
    const openingDestinationMounted = useRef(false);
@@ -266,14 +269,15 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, total,
       return () => { openingDestinationMounted.current = false; };
    }, [openingTrace]);
    useEffect(() => {
+      if(receiptOnly)return;
       setLargeMasterSyncV3CriticalOperation('PAYMENT', true);
       return () => setLargeMasterSyncV3CriticalOperation('PAYMENT', false);
-   }, []);
+   }, [receiptOnly]);
    const [payments, setPayments] = useState<PaymentEntry[]>([]);
    const [activeMethodKey, setActiveMethodKey] = useState<string>('');
    const [inputAmount, setInputAmount] = useState<string>('');
-   const [isSuccessScreen, setIsSuccessScreen] = useState(false);
-   const [completedTransaction, setCompletedTransaction] = useState<Transaction | null>(null);
+   const [isSuccessScreen, setIsSuccessScreen] = useState(Boolean(receiptOnlyInitialTransaction));
+   const [completedTransaction, setCompletedTransaction] = useState<Transaction | null>(receiptOnlyInitialTransaction||null);
    const [shouldClearInput, setShouldClearInput] = useState(true);
    const [voluntaryTip, setVoluntaryTip] = useState(0);
    const [isFinalizing, setIsFinalizing] = useState(false);
@@ -440,13 +444,14 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, total,
    const denominations = selectedCurrency.code === 'USD' ? [1, 5, 10, 20, 50, 100] : [50, 100, 200, 500, 1000, 2000];
 
    useEffect(() => {
-      if (configuredMethods.length === 0) return;
+      if (isSuccessScreen || configuredMethods.length === 0) return;
       if (!configuredMethods.some(method => method.key === activeMethodKey)) {
          setActiveMethodKey(configuredMethods[0].key);
       }
-   }, [configuredMethods, activeMethodKey]);
+   }, [configuredMethods, activeMethodKey, isSuccessScreen]);
 
    useEffect(() => {
+      if(isSuccessScreen)return;
       if (remaining > 0) {
          const suggestedAmount = formatRoundedInput(
             remaining / selectedCurrency.rate,
@@ -460,7 +465,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, total,
          setInputAmount('');
          setShouldClearInput(false);
       }
-   }, [remaining, activeMethod, selectedCurrency, activeForeignCurrencyRounding, baseCurrency.code]);
+   }, [remaining, activeMethod, selectedCurrency, activeForeignCurrencyRounding, baseCurrency.code, isSuccessScreen]);
 
    const handleNumPad = (key: string) => {
       if (key === 'C') { setInputAmount(''); setShouldClearInput(false); return; }
@@ -897,7 +902,13 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, total,
 
    const handleFinalize = async () => {
       recordCheckoutDiagnostic('PAYMENT_MODAL_CONFIRM', { items, total, payments });
-      if (isFinalizing || isProcessingGateway) return;
+      if (isFinalizing || isProcessingGateway || isSuccessScreen) return;
+      if(recoverCommittedReceipt){
+         setIsFinalizing(true);
+         try{const recovered=await recoverCommittedReceipt(payments.map(payment=>payment.id));if(recovered){setCompletedTransaction(recovered);setIsSuccessScreen(true);setSuccessNotice(null);return;}}
+         catch(error){setFinalizeError(error instanceof Error?error.message:String(error));return;}
+         finally{setIsFinalizing(false);}
+      }
       if (!canFinalize && !paymentOperationId) {
          alert("Monto insuficiente");
          return;
