@@ -11,9 +11,9 @@ type SQL = {
 };
 export const TRACKING_ALLOCATION_SCHEMA = `
 CREATE TABLE IF NOT EXISTS pos_tracking_allocations_v1(id TEXT PRIMARY KEY,authority_json TEXT NOT NULL,consumed_minor INTEGER NOT NULL DEFAULT 0,state TEXT NOT NULL CHECK(state IN('ACTIVE','RETURN_PENDING','RETURNED','REVOKED')),max_local_ms INTEGER NOT NULL);
-CREATE TABLE IF NOT EXISTS pos_tracking_checkout_v1(checkout_id TEXT NOT NULL,allocation_id TEXT NOT NULL REFERENCES pos_tracking_allocations_v1(id),cart_id TEXT NOT NULL,selection_json TEXT NOT NULL,quantity_minor INTEGER NOT NULL CHECK(quantity_minor>0),phase TEXT NOT NULL CHECK(phase IN('PREPARED','EFFECT_POSSIBLE','CONSUMED','ABANDONED')),transaction_id TEXT,effect_at_ms INTEGER,PRIMARY KEY(checkout_id,allocation_id,cart_id));
+CREATE TABLE IF NOT EXISTS pos_tracking_checkout_v1(checkout_id TEXT NOT NULL,allocation_id TEXT NOT NULL REFERENCES pos_tracking_allocations_v1(id),cart_id TEXT NOT NULL,selection_set_json TEXT NOT NULL,selection_json TEXT NOT NULL,quantity_minor INTEGER NOT NULL CHECK(quantity_minor>0),phase TEXT NOT NULL CHECK(phase IN('PREPARED','EFFECT_POSSIBLE','CONSUMED','ABANDONED')),transaction_id TEXT,effect_at_ms INTEGER,PRIMARY KEY(checkout_id,allocation_id,cart_id));
 CREATE TRIGGER IF NOT EXISTS pos_tracking_allocation_immutable_v1 BEFORE UPDATE ON pos_tracking_allocations_v1 WHEN OLD.id IS NOT NEW.id OR OLD.authority_json IS NOT NEW.authority_json OR NEW.consumed_minor<OLD.consumed_minor OR NEW.max_local_ms<OLD.max_local_ms OR OLD.state IN('RETURNED','REVOKED') AND OLD.state IS NOT NEW.state BEGIN SELECT RAISE(ABORT,'TRACKING_ALLOCATION_IMMUTABLE');END;
-CREATE TRIGGER IF NOT EXISTS pos_tracking_checkout_immutable_v1 BEFORE UPDATE ON pos_tracking_checkout_v1 WHEN OLD.checkout_id IS NOT NEW.checkout_id OR OLD.allocation_id IS NOT NEW.allocation_id OR OLD.cart_id IS NOT NEW.cart_id OR OLD.selection_json IS NOT NEW.selection_json OR OLD.quantity_minor IS NOT NEW.quantity_minor OR OLD.effect_at_ms IS NOT NULL AND OLD.effect_at_ms IS NOT NEW.effect_at_ms OR OLD.phase IN('CONSUMED','ABANDONED') AND OLD.phase IS NOT NEW.phase OR OLD.phase='EFFECT_POSSIBLE' AND NEW.phase NOT IN('EFFECT_POSSIBLE','CONSUMED') BEGIN SELECT RAISE(ABORT,'TRACKING_CHECKOUT_IMMUTABLE');END;
+CREATE TRIGGER IF NOT EXISTS pos_tracking_checkout_immutable_v1 BEFORE UPDATE ON pos_tracking_checkout_v1 WHEN OLD.checkout_id IS NOT NEW.checkout_id OR OLD.allocation_id IS NOT NEW.allocation_id OR OLD.cart_id IS NOT NEW.cart_id OR OLD.selection_set_json IS NOT NEW.selection_set_json OR OLD.selection_json IS NOT NEW.selection_json OR OLD.quantity_minor IS NOT NEW.quantity_minor OR OLD.effect_at_ms IS NOT NULL AND OLD.effect_at_ms IS NOT NEW.effect_at_ms OR OLD.phase IN('CONSUMED','ABANDONED') AND OLD.phase IS NOT NEW.phase OR OLD.phase='EFFECT_POSSIBLE' AND NEW.phase NOT IN('EFFECT_POSSIBLE','CONSUMED') BEGIN SELECT RAISE(ABORT,'TRACKING_CHECKOUT_IMMUTABLE');END;
 CREATE TRIGGER IF NOT EXISTS pos_tracking_allocation_durable_v1 BEFORE DELETE ON pos_tracking_allocations_v1 BEGIN SELECT RAISE(ABORT,'TRACKING_ALLOCATION_DURABLE');END;
 CREATE TRIGGER IF NOT EXISTS pos_tracking_checkout_durable_v1 BEFORE DELETE ON pos_tracking_checkout_v1 BEGIN SELECT RAISE(ABORT,'TRACKING_CHECKOUT_DURABLE');END;
 `;
@@ -93,6 +93,21 @@ export async function prepareTrackingCheckout(
       .size !== selections.length
   )
     trackingFail("TRACKING_CHECKOUT_INVALID");
+  const previousSet =
+    (
+      await sql.query(
+        "SELECT selection_set_json FROM pos_tracking_checkout_v1 WHERE checkout_id=?",
+        [checkoutId],
+      )
+    ).values || [];
+  if (
+    previousSet.length &&
+    (previousSet.length !== selections.length ||
+      previousSet.some(
+        (row) => row.selection_set_json !== JSON.stringify(selections),
+      ))
+  )
+    trackingFail("TRACKING_CHECKOUT_SELECTION_SET_CHANGED");
   for (const selection of selections) {
     assertTrackingSelection(selection);
     const a = selection.authority;
@@ -139,11 +154,12 @@ export async function prepareTrackingCheckout(
     )
       trackingFail("TRACKING_QUOTA_EXHAUSTED");
     await sql.run(
-      "INSERT INTO pos_tracking_checkout_v1(checkout_id,allocation_id,cart_id,selection_json,quantity_minor,phase) VALUES(?,?,?,?,?,'PREPARED')",
+      "INSERT INTO pos_tracking_checkout_v1(checkout_id,allocation_id,cart_id,selection_set_json,selection_json,quantity_minor,phase) VALUES(?,?,?,?,?,?,'PREPARED')",
       [
         checkoutId,
         a.allocationId,
         selection.cartId,
+        JSON.stringify(selections),
         JSON.stringify(selection),
         selection.quantityMinor,
       ],
@@ -231,7 +247,7 @@ export async function consumeTrackingCheckout(
         [checkoutId],
       )
     ).values || [];
-  if (rows.length !== selections.length || !rows.length)
+  if (rows.length !== selections.length || !rows.length || rows.some(row=>row.selection_set_json!==JSON.stringify(selections)))
     trackingFail("TRACKING_COMMIT_SOURCE_CHANGED");
   for (const row of rows) {
     const selection = selections.find(

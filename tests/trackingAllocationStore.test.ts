@@ -292,3 +292,40 @@ test("one lot allocation supports distinct cart lines without merging their sour
     2,
   );
 });
+
+test("entire checkout selection set is immutable before any paid recovery", async () => {
+  const f = fixture();
+  f.a.kind = "LOT";
+  f.a.quantityMinor = 3000000;
+  const { checksum, ...source } = f.a;
+  f.a.checksum = createHash("sha256")
+    .update(
+      JSON.stringify(
+        Object.fromEntries(
+          Object.keys(source)
+            .sort()
+            .map((k) => [k, source[k as keyof typeof source]]),
+        ),
+      ),
+    )
+    .digest("hex");
+  await installTrackingAllocation(f.sql, f.a, false);
+  await prepareTrackingCheckout(f.sql, "sealed", [f.selection], f.scope, f.now);
+  await fenceTrackingCheckout(f.sql, "sealed", f.now);
+  await assert.rejects(
+    prepareTrackingCheckout(
+      f.sql,
+      "sealed",
+      [f.selection, { ...f.selection, cartId: "injected" }],
+      f.scope,
+      f.now,
+    ),
+    /SELECTION_SET_CHANGED/,
+  );
+  await consumeTrackingCheckout(f.sql, "sealed", "paid", [f.selection]);
+  assert.equal(
+    f.db.prepare("select consumed_minor from pos_tracking_allocations_v1").get()
+      ?.consumed_minor,
+    1000000,
+  );
+});
