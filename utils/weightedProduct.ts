@@ -12,7 +12,7 @@ export function hasV3KilogramContract(product: {
   operationalFlags?: unknown;
 }): boolean {
   const flags = product.operationalFlags as { isWeighted?: unknown; integersOnly?: unknown; trackInventory?: unknown; usesLots?: unknown; usesSerial?: unknown } | undefined;
-  return product.type === 'PRODUCT' && flags?.isWeighted === true && flags.integersOnly === false && flags.trackInventory === false
+  return product.type === 'PRODUCT' && flags?.isWeighted === true && flags.integersOnly === false && typeof flags.trackInventory === 'boolean'
     && (flags.usesLots === undefined || flags.usesLots === false)
     && (flags.usesSerial === undefined || flags.usesSerial === false)
     && weightUnit(product.measurementUnit) !== null && weightUnit(product.measurementUnit) === weightUnit(product.purchaseUnit)

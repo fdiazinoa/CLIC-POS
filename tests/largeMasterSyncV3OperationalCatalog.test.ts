@@ -190,7 +190,7 @@ test('weighted V3 product uses effective price, fractional kilograms, pinned tax
 
 test('weighted contract rejects unsupported or ambiguous source semantics and advanced features', async () => {
   const changes = [
-    ...[true, undefined, null, 0, 'false'].map(trackInventory => ({ operationalFlags: {
+    ...[undefined, null, 0, 'false'].map(trackInventory => ({ operationalFlags: {
       isWeighted: true, integersOnly: false, trackInventory, allowNegativeStock: true } })),
     { type: 'SERVICE' }, { measurementUnit: undefined }, { measurementUnit: 'lb' },
     { purchaseUnit: 'gr' }, { conversionFactor: undefined }, { conversionFactor: 0 }, { conversionFactor: 1000 },
@@ -310,4 +310,16 @@ test('proven inactive fraction aliases are visible through authoritative get/sea
  }
  const {ready}=fixture({article:{...article,restaurant_unsupported:true,fraction_rule:inactiveFraction},variants:[]});
  const stale=await LargeMasterSyncV3OperationalCatalog.open(ready,'T1','W');await assert.rejects(stale.get('A'),/ADVANCED_ARTICLE_CONTRACT_REQUIRED/);
+});
+
+
+test('stock-controlled kilogram source preserves fractional demand and rejects client policy changes',async()=>{
+ const {ready}=fixture({article:{...weightedArticle,operationalFlags:{...weightedArticle.operationalFlags,trackInventory:true}},variants:[]});
+ const catalog=await LargeMasterSyncV3OperationalCatalog.open(ready,'T1','W');const item=(await catalog.get('A'))!;
+ assert.equal(item.product.operationalFlags.trackInventory,true);assert.equal(item.product.stock,5);
+ for(const quantity of [.125,.5]){
+  const line={...item.product,cartId:'weighted',quantity} as CartItem;
+  assert.doesNotThrow(()=>validateV3PinnedLineSource(line,item.product,item.authority));
+  assert.throws(()=>validateV3PinnedLineSource({...line,operationalFlags:{...line.operationalFlags,trackInventory:false}},item.product,item.authority),/ARTICLE_SOURCE_CHANGED/);
+ }
 });
