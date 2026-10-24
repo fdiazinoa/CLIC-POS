@@ -310,7 +310,15 @@ test('flag-off scheduler sends tracking Outbox and unrelated legacy work without
         if (ts.isIfStatement(node) && (node.expression.getText(ast) === 'durableBatchActive' || (node.expression.getText(ast) === "!isSyncFeatureEnabled('sqlite_outbox_v2')" && (node.thenStatement.getText(ast).includes('apiSyncAdapter.pushTransaction(') || node.thenStatement.getText(ast).includes('apiSyncAdapter.pushInventoryMovement('))))) scheduled.push(node);
         ts.forEachChild(node, visit);
     };
-    visit(ast);
+    let syncMethod: ts.MethodDeclaration | undefined;
+    const findMethods = (node: ts.Node) => {
+        if (ts.isMethodDeclaration(node) && node.name.getText(ast) === 'sync') syncMethod = node;
+        if (ts.isMethodDeclaration(node) && node.name.getText(ast) === 'isOperationalSyncPending') pendingMethod = node;
+        ts.forEachChild(node, findMethods);
+    };
+    findMethods(ast);
+    assert.ok(syncMethod?.body);
+    visit(syncMethod.body);
     assert.ok(pendingMethod?.body);
     assert.equal(scheduled.length, 4, 'exercise the actual durable decision and both actual legacy branches');
     const transpile = (input: string) => ts.transpileModule(input, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
