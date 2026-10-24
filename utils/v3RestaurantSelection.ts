@@ -42,12 +42,13 @@ export function validateV3RestaurantSelection(line:CartItem,product:Product):num
  const source=resolveRestaurantProductConfig(product),selected=line.restaurantConfig;
  const advanced=source.combo_groups.length||source.modifier_groups.length||source.fraction_rule?.options?.length||source.note_presets.length;
  if (!advanced) {
-  const emptyArray = (value: unknown) => value === undefined || Array.isArray(value) && value.length === 0;
-  const emptyMap = (value: unknown) => value === undefined || Boolean(value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0);
+  const simpleRoute = source.product_type === 'SIMPLE' || source.product_type === 'SERVICE';
+  const emptyArray = (value: unknown) => value === undefined || value === null && simpleRoute || Array.isArray(value) && value.length === 0;
+  const emptyMap = (value: unknown) => value === undefined || value === null && simpleRoute || Boolean(value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0);
   need(emptyArray(line.selected_combo_items) && emptyArray(line.selected_modifiers)
    && emptyArray(line.selected_fraction_parts) && emptyArray(line.modifiers));
-  const simpleRoute = source.product_type === 'SIMPLE' || source.product_type === 'SERVICE';
-  if (selected !== undefined) {
+  need(selected !== null || simpleRoute);
+  if (selected != null) {
    const s = record(selected);
    need(Object.keys(s).every(key => ['product_type', 'production_area_id', 'comboGroups', 'modifierGroups',
     'fractions', 'selected_combo_items', 'selected_modifiers', 'selected_fraction_parts', 'note'].includes(key)));

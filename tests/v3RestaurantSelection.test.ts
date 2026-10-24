@@ -57,22 +57,24 @@ test('saved simple KDS routing survives JSON park/restore without a commercial t
  for (const product_type of ['SIMPLE', 'SERVICE']) {
   const product: any = {id:'water', type:'PRODUCT', product_type, production_area_id:'CAJA_4', price:85};
   const line: any = {...product, quantity:1, restaurantConfig:{production_area_id:'CAJA_4'}};
-  for (const restaurantConfig of [undefined, line.restaurantConfig, {...line.restaurantConfig, product_type},
-   {...line.restaurantConfig, comboGroups:{}, modifierGroups:{}, fractions:[], selected_combo_items:[], selected_modifiers:[], selected_fraction_parts:[]}]) {
+  for (const restaurantConfig of [undefined, null, line.restaurantConfig, {...line.restaurantConfig, product_type},
+   {...line.restaurantConfig, comboGroups:{}, modifierGroups:{}, fractions:[], selected_combo_items:[], selected_modifiers:[], selected_fraction_parts:[]},
+   {...line.restaurantConfig, comboGroups:null, modifierGroups:null, fractions:null, selected_combo_items:null, selected_modifiers:null, selected_fraction_parts:null}]) {
    const restored = JSON.parse(JSON.stringify({...line, restaurantConfig}));
    assert.equal(validateV3RestaurantSelection(restored, product), 85);
   }
   for (const patch of [{product_type:null}, {product_type:'COMBO'}, {production_area_id:'OTHER'},
-   {comboGroups:[]}, {modifierGroups:null}, {selected_modifiers:[{}]}, {fractions:[{}]}, {unknown:true}, {note:'different'}]) {
+   {comboGroups:[]}, {modifierGroups:1}, {selected_modifiers:[{}]}, {fractions:[{}]}, {unknown:true}, {note:'different'}]) {
    assert.throws(() => validateV3RestaurantSelection({...line, restaurantConfig:{...line.restaurantConfig,...patch}}, product));
   }
-  for (const patch of [{selected_modifiers:{}}, {selected_combo_items:null}, {modifiers:'bad'}, {selected_fraction_parts:[{}]}]) {
+  for (const patch of [{selected_modifiers:{}}, {selected_combo_items:'bad'}, {modifiers:'bad'}, {selected_fraction_parts:[{}]}]) {
    assert.throws(() => validateV3RestaurantSelection({...line,...patch}, product));
   }
  }
  for (const product_type of ['COMBO','FRACTIONABLE']) {
   const product:any = {product_type, price:85, production_area_id:'CAJA_4'};
   assert.throws(() => validateV3RestaurantSelection({price:85,restaurantConfig:{production_area_id:'CAJA_4'}} as any, product));
+  assert.throws(() => validateV3RestaurantSelection({price:85,restaurantConfig:null} as any, product));
  }
 });
 
@@ -89,6 +91,10 @@ test('actual kitchen dispatch preserves genuine selections and does not synthesi
  const simple:any = {id:'water',cartId:'simple',type:'PRODUCT',product_type:'SIMPLE',price:85,quantity:1,production_area_id:'CAJA_4'};
  const restored = JSON.parse(JSON.stringify(dispatch([simple,line],(item:any)=>item.cartId,new Map(),new Set(['simple',line.cartId]),'order',{},new Set(),new Set(),(item:any)=>item.production_area_id)));
  assert.equal(restored[0].restaurantConfig,undefined);
+ const nullLine = {...simple, restaurantConfig:null, selected_modifiers:null, selected_combo_items:null, selected_fraction_parts:null, modifiers:null};
+ const nullRestored = JSON.parse(JSON.stringify(dispatch([nullLine],(item:any)=>item.cartId,new Map(),new Set(['simple']),'order',{},new Set(),new Set(),(item:any)=>item.production_area_id)))[0];
+ assert.equal(nullRestored.restaurantConfig,null);
+ assert.doesNotThrow(()=>validateV3PinnedLineSource(nullRestored,simple,{taxIncluded:undefined} as any));
  assert.doesNotThrow(()=>validateV3RestaurantSelection(restored[0],simple));
  assert.doesNotThrow(()=>validateV3PinnedLineSource(restored[0],simple,{taxIncluded:undefined} as any));
  assert.deepEqual(restored[1].restaurantConfig,line.restaurantConfig);
