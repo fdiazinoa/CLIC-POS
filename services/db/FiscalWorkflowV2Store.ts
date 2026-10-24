@@ -1,3 +1,4 @@
+import {assertOfflineFiscalPaymentReceipts} from './OfflineFiscalPaymentAuthority';
 import {OFFLINE_FISCAL_ALLOCATION_SCHEMA,saveAllocation,readAllocation,prepareAllocationCheckout,assertAllocationCheckout,consumeAllocationNumber,assertNoPendingAllocationTable,assertCommittedAllocationReceipt,allocationAvailability,allocationCommitPreconditions} from './OfflineFiscalAllocationStore';
 import {OFFLINE_FISCAL_LEASE_SCHEMA,OFFLINE_FISCAL_ABANDON_SCHEMA,saveOfflineLeasePage,readOfflineLease,offlineSaleDate} from './OfflineFiscalLeaseStore';
 import {offlineFiscalAuthorityFromConfig} from '../fiscal/OfflineFiscalLeaseContext';
@@ -123,6 +124,7 @@ export async function consumeFiscalWorkflowBirth(sql:Connection,input:{checkoutI
   await consumeAllocationNumber(sql,checkout,source,eventId);
  }
  if(checkout.permit?.leaseId){
+  await assertOfflineFiscalPaymentReceipts(sql,source);
   const lease=await assertOfflineCheckoutAuthority(sql,checkout,checkout.phase==='EFFECT_POSSIBLE');
   const issuance=source.fiscalIssuance;
   if(source.fiscalEnvironment!==lease.environment||source.fiscalProvider!=='MSELLER'||source.fiscalMode!=='ECF'||source.terminalId!==lease.scope.terminalId
