@@ -21,7 +21,7 @@ env.acquire = async input => {
   if (env.fail) throw Error('SYNC_V3_BINDING_CHANGED');
   const expected = JSON.stringify(input.terminals[0].config);
   const assertCurrent = async () => { if (JSON.stringify(canonical.terminals[0].config) !== expected) throw Error('SYNC_V3_BINDING_CHANGED'); };
-  return { assertCurrent, projectConfig: async value => value, catalog: async () => ({ categories: async () => [], search: async () => { if (env.searchHold) return env.searchHold; return []; }, get: async () => { if (env.getHold) return env.getHold; return null; } }),
+  return { assertCurrent, projectConfig: async value => value, catalog: async () => ({ categories: async () => [], search: async () => { if (env.searchHold) return env.searchHold; return []; }, get: async () => { const owned = env.getHold; env.getHold = undefined; if (owned) return owned; return null; } }),
     withStocks: async rows => rows, validate: async () => { await new Promise(resolve => { releaseValidation = resolve; }); await assertCurrent(); } };
 };
 const mocks = {
