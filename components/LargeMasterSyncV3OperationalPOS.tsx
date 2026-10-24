@@ -80,7 +80,7 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps> = props => {
       setVisible([]);
       setCache([]);
       setLoadedContextKey(wantedContextKey);
-    })().catch(reason => { if (current && latestContextKey.current === wantedContextKey) setError(String(reason.message || reason)); });
+    })().catch(reason => { if (current && context === contextSequence.current && latestContextKey.current === wantedContextKey) setError(String(reason.message || reason)); });
     return () => { current = false; ++contextSequence.current; ++querySequence.current; };
   }, [props.activeTerminalId, warehouseId, tariffId, authorityKey, authorityError, configScope, catalogRevision]);
 
@@ -110,12 +110,15 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps> = props => {
     tariffId,
     categories,
     search: async (query, categoryId, categoryKeys) => {
+      // Retired reads cannot change catalog state or surface stale errors.
+      if (pinnedContext !== contextSequence.current || pinnedSource !== catalog.current || latestContextKey.current !== wantedContextKey) return;
       assertContext();
       const sequence = ++querySequence.current;
       const context = contextSequence.current;
       const source = catalog.current;
       if (!source) throw new Error('SYNC_V3_UI_CONTEXT_CHANGED');
       lastQuery.current = { query, categoryId, categoryKeys };
+      try {
       await session.assertCurrent();
       let diagnostics: V3ArticleDiagnostic[] = [];
       const items = await source.search(query, query.trim() ? null : (categoryKeys || categoryId), 60, rows => { diagnostics = rows; });
@@ -125,6 +128,10 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps> = props => {
       remember(rows);
       setVisible(rows);
       setArticleDiagnostics(diagnostics);
+      } catch (reason) {
+        if (sequence !== querySequence.current || context !== contextSequence.current || source !== catalog.current) return;
+        throw reason;
+      }
     },
     resolveCode: async raw => {
       assertContext();
@@ -173,11 +180,14 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps> = props => {
     if (!boundary || !props.cart.length) return;
     let current = true;
     const expectedContext = wantedContextKey;
+    const expectedSequence = contextSequence.current;
+    const source = catalog.current;
+    const currentRead = () => current && expectedSequence === contextSequence.current && source === catalog.current && latestContextKey.current === expectedContext;
     void Promise.all([...new Set(props.cart.map(row => row.id))].map(async id => {
-      const item = await catalog.current!.get(id);
+      const item = await source!.get(id);
       return item ? session!.withStock(item.product, warehouseId) : null;
-    })).then(rows => { if (current && latestContextKey.current === expectedContext) remember(rows.filter((row): row is Product => row !== null)); })
-      .catch(reason => { if (current && latestContextKey.current === expectedContext) setError(String(reason.message || reason)); });
+    })).then(rows => { if (currentRead()) remember(rows.filter((row): row is Product => row !== null)); })
+      .catch(reason => { if (currentRead()) setError(String(reason.message || reason)); });
     return () => { current = false; };
   }, [boundary, props.cart, remember, session, warehouseId, inventoryRevision]);
 
@@ -186,7 +196,7 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps> = props => {
       ++querySequence.current;
       setInventoryRevision(previous => previous + 1);
       if (boundary) void boundary.search(lastQuery.current.query, lastQuery.current.categoryId, lastQuery.current.categoryKeys)
-        .catch(reason => { if (latestContextKey.current === wantedContextKey) setError(String(reason.message || reason)); });
+        .catch(reason => { if (boundary === lastBoundary.current && latestContextKey.current === wantedContextKey && catalog.current) setError(String(reason.message || reason)); });
     };
     window.addEventListener('v3InventoryUpdated', refresh);
     return () => window.removeEventListener('v3InventoryUpdated', refresh);
@@ -201,7 +211,8 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps> = props => {
     const rejectAsync = async () => reject();
     return { tariffId: lastBoundary.current?.tariffId || tariffId,
       categories: lastBoundary.current?.categories || categories,
-      search: rejectAsync, resolveCode: rejectAsync, validate: rejectAsync, changeTariff: reject,
+      // Read searches wait for the replacement boundary; mutations still reject.
+      search: async () => {}, resolveCode: rejectAsync, validate: rejectAsync, changeTariff: reject,
       completedReservation: rejectAsync, expireReservation: rejectAsync, restoreReservation: rejectAsync,
       restoreRetainedTicket: rejectAsync, updateRetainedTicket: rejectAsync, waitingTickets: rejectAsync };
   }, [wantedContextKey, authorityError, error, boundary]);

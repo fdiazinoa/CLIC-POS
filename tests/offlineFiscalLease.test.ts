@@ -235,3 +235,16 @@ test('durable abandonment is exact idempotent proof; lost commit acknowledgement
   await f.adapter.commitFinancialTransaction(commit(f,third) as any);assert.equal(count(f,'sync_outbox_v2'),1);
  }finally{f.sql.close();}
 });
+
+for(const methods of [['CARD'],['CASH','CARD'],['CREDIT']])test(`existing V1 offline lease settles table with ${methods.join('+')} and legal10%`,async()=>{
+ const f=await fixture();try{
+  const table=await tableSource(f),c=await f.client().reserveOfflineCheckout('cart','method-operation',table.context),input=commit(f,c,table);
+  const tx=input.documents[0].document as any;
+  tx.payments=methods.map((method,index)=>({id:`payment-${index}`,method,methodId:method==='CARD'?'002':method==='CREDIT'?'003':'001',amount:methods.length===1?710.4:355.2}));
+  if(methods.includes('CREDIT'))Object.assign(tx,{pendingBalance:710.4,customerId:'customer',dueDate:'2026-12-31'});
+  for(const p of tx.payments)await f.client().recordPayment(c,p.id);
+  await f.adapter.commitFinancialTransaction(input as any);
+  const saved=JSON.parse(String(f.sql.prepare("SELECT data FROM documents WHERE collection_name='transactions' AND doc_id=?").get(c.transactionId)!.data));
+  assert.deepEqual(saved.payments,tx.payments);assert.equal(count(f,'sync_outbox_v2'),1);assert.equal(count(f,'pos_fiscal_permits_v2'),16);
+ }finally{f.sql.close();}
+});

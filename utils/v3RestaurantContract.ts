@@ -1,9 +1,15 @@
+import {normalizeV3RestaurantSelection} from './v3RestaurantSelection';
+import type {Product} from '../types';
 import { isInactiveFractionRule } from './inactiveFractionRule';
 const object = (value: unknown): Record<string, unknown> => value && typeof value === 'object' && !Array.isArray(value)
   ? value as Record<string, unknown> : {};
 
 /** Accept only bounded simple routing from the immutable V3 article. */
-export function v3RestaurantContract(source: Record<string, unknown>): { product_type?: 'SIMPLE' | 'SERVICE'; production_area_id?: string } {
+export function v3RestaurantContract(source: Record<string, unknown>): Pick<Product,'product_type'|'production_area_id'|'combo_groups'|'modifier_groups'|'fraction_rule'|'note_presets'> {
+  if (source.restaurant_contract_version === 1 && source.restaurant_inventory_policy === 'PARENT') {
+    if(source.restaurant_unsupported !== false) throw Error('Contrato restaurante inválido');
+    return normalizeV3RestaurantSelection(source);
+  }
   if (source.restaurant_unsupported !== undefined && source.restaurant_unsupported !== false) throw Error('Configuración avanzada de restaurante no soportada');
   const rows = [source, ...['restaurant', 'restaurantConfig', 'restaurant_config', 'comanda', 'command'].map(key => object(source[key]))];
   if (rows.some(row => ['recipeDetails', 'recipe_details', 'modifiers', 'availableModifiers', 'modifier_groups', 'modifierGroups',

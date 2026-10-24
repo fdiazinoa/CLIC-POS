@@ -125,7 +125,6 @@ export class LargeMasterSyncV3OperationalSession {
 
   /** Renew only the UI read context. Never downloads, changes the old session, or retries a sale. */
   static async acquireConfigContext(config: BusinessConfig, localTerminalId: string): Promise<LargeMasterSyncV3OperationalSession> {
-    const coordinatorGeneration = getLargeMasterSyncV3OperationalSession.captureConfigContext();
     const requested = v3OperationalConfigContext(config, { localTerminalId });
     const readAuthority = async () => {
       const guard = readOperationalTerminalBinding();
@@ -177,7 +176,18 @@ export class LargeMasterSyncV3OperationalSession {
           if (await readCached() !== cached) throw new LargeMasterSyncV3Error('SYNC_V3_RUNTIME_VERSION_CHANGED');
           session.assertSetupIdentity();
         };
-        await getLargeMasterSyncV3OperationalSession.publishConfigContext(session, coordinatorGeneration, assertPublicationAuthority);
+        // Cached reads may overlap startup preparation. Revalidate the complete authority
+        // before capturing a fresh publication generation; never retry a financial action.
+        for (let attempt = 0; ; attempt++) {
+          await assertPublicationAuthority();
+          const generation = getLargeMasterSyncV3OperationalSession.captureConfigContext();
+          try {
+            await getLargeMasterSyncV3OperationalSession.publishConfigContext(session, generation, assertPublicationAuthority);
+            break;
+          } catch (error) {
+            if (attempt >= 2 || (error as { code?: string }).code !== 'SYNC_V3_UI_CONTEXT_CHANGED') throw error;
+          }
+        }
         return session;
       })();
       configContextFlights.set(key, pending);
@@ -226,8 +236,7 @@ export class LargeMasterSyncV3OperationalSession {
   assertFinancialOfflineAuthority(transaction:Transaction):void {
     if(!this.offlineAuthority)return;
     if((!transaction.fiscalOfflineLeaseId&&!transaction.fiscalAllocationAuthorizationId)||!transaction.fiscalWorkflowCheckoutId||transaction.documentType!=='TICKET'
-      ||!transaction.items.length||transaction.items.some(line=>line.quantity<=0||line.articleFormat)
-      ||transaction.payments.some(payment=>payment.method!=='CASH'))throw new LargeMasterSyncV3Error('SYNC_V3_OFFLINE_FINANCIAL_AUTHORITY_REQUIRED');
+      ||!transaction.items.length||transaction.items.some(line=>line.quantity<=0||line.articleFormat))throw new LargeMasterSyncV3Error('SYNC_V3_OFFLINE_FINANCIAL_AUTHORITY_REQUIRED');
     const recovery=this.offlineAuthority.recovery;if(!recovery)return;
     let cart:any;try{cart=JSON.parse(recovery.cartIdentity);}catch{throw new LargeMasterSyncV3Error('SYNC_V3_OFFLINE_FINANCIAL_AUTHORITY_REQUIRED');}
     if(transaction.id!==recovery.transactionId||transaction.fiscalWorkflowCheckoutId!==recovery.checkoutId||(recovery.authorizationId?transaction.fiscalAllocationAuthorizationId!==recovery.authorizationId:transaction.fiscalOfflineLeaseId!==recovery.leaseId)

@@ -86,3 +86,20 @@ test('validated cached offline authority can acquire without live token; reconne
     f.env.offline = false; await session.assertCurrent(); assert.equal(f.env.downloads, 0);
   } finally { f.close(); }
 });
+
+test('cached read acquisition overlapping ordinary startup publishes only revalidated authority', async () => {
+  const f = await fixture(); try {
+    let startup: Promise<unknown> | undefined;
+    f.env.onConnect = () => {
+      f.env.onConnect = undefined;
+      startup = f.module.getLargeMasterSyncV3OperationalSession();
+    };
+    const before = f.state();
+    const session = await f.module.acquireLargeMasterSyncV3ConfigContext(f.env.config, id(4));
+    await startup;
+    await session.assertCurrent();
+    assert.strictEqual(await f.module.getLargeMasterSyncV3OperationalSession(), session);
+    assert.equal(f.env.downloads, 0);
+    assert.deepEqual(f.state(), before);
+  } finally { f.close(); }
+});

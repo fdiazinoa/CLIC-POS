@@ -77,6 +77,7 @@ const ModifierModal: React.FC<ModifierModalProps> = ({
     const structured = restaurantConfigSource.modifier_groups || [];
     if (structured.length > 0) {
       return structured
+        .filter(group => (group as ModifierGroup & {active?:boolean}).active !== false)
         .map(group => ({ ...group, modifiers: (group.modifiers || []).filter(mod => mod.active !== false) }))
         .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0));
     }
@@ -88,6 +89,7 @@ const ModifierModal: React.FC<ModifierModalProps> = ({
   }, [product.availableModifiers, restaurantConfigSource.modifier_groups]);
   const comboGroups = useMemo<ComboGroup[]>(
     () => (restaurantConfigSource.combo_groups || [])
+      .filter(group => (group as ComboGroup & {active?:boolean}).active !== false)
       .map(group => ({ ...group, items: (group.items || []).filter(item => item.active !== false) }))
       .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0)),
     [restaurantConfigSource.combo_groups],

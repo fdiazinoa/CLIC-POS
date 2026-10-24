@@ -1,3 +1,4 @@
+import ts from 'typescript';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -30,7 +31,13 @@ test('V3 weighted preflight does not demand one kilogram and mobile/card share c
   assert.match(source, /canAddItemToCart\(product, v3Operational && isWeighted \? 0 : 1\)/);
   assert.match(source, /const isWeighted = isWeightedProduct\(pendingProductToAdd\)/);
   assert.equal(source.match(/const isWeighted = isWeightedProduct\(product\)/g)?.length, 2);
-  assert.match(source, /canAddItemToCart\(product, quantity, /);
+  const ast=ts.createSourceFile('POSInterface.tsx',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
+  let argument:ts.Expression|undefined;
+  const visit=(node:ts.Node)=>{if(ts.isCallExpression(node)&&node.expression.getText(ast)==='canAddItemToCart'&&node.arguments[0]?.getText(ast)==='product'&&node.arguments[1]?.getText(ast).includes('presentationBaseQuantity'))argument=node.arguments[1];ts.forEachChild(node,visit);};visit(ast);assert.ok(argument);
+  const expression=ts.transpileModule('const value='+argument.getText(ast),{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
+  const quantityFor=(product:unknown,quantity:number)=>new Function('product','quantity','presentationBaseQuantity',expression+';return value;')(product,quantity,(q:number,f:number)=>q*f);
+  assert.equal(quantityFor({},.25),.25,'weighted commercial quantity is not rounded to one unit');
+  assert.equal(quantityFor({inventoryPresentation:{format:{factor:12}}},2),24,'existing format converts to inventory base quantity');
 });
 
 test('V3 classification requires validated flags and units; names/services cannot imply weight', () => {

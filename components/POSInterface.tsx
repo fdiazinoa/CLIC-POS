@@ -2271,10 +2271,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [categoryFilter, setCategoryFilter] = useState('ALL');
    useEffect(() => {
       if (!v3Operational) return;
+      let current = true;
       void v3Operational.search(catalogSearchQuery, categoryFilter === 'ALL' ? null : categoryFilter,
          categoryFilter === 'ALL' ? undefined : categoryLookup.identity.selectionFilter(categoryFilter, effectiveAllowedCategorySet.size === 0
             ? (v3Operational.categories || []).map(category => category.key) : []))
-         .catch(error => setErrorToast(`V3: ${error.message || error}`));
+         .catch(error => { if (current) setErrorToast(`V3: ${error.message || error}`); });
+      return () => { current = false; };
    }, [v3Operational, catalogSearchQuery, categoryFilter, categoryLookup.aliasToCanonical]);
    const [mobileView, setMobileView] = useState<'PRODUCTS' | 'TICKET'>('PRODUCTS');
    const returnToTicketView = useCallback(() => {
@@ -3506,11 +3508,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       expectInteractionRender(trace, 'POS_INTERACTION_VIEW');
       try {
       if (v3Operational) {
-         if (modifiers?.length || restaurantConfig || trackingData?.length || consignmentPatch) {
+         if (trackingData?.length || consignmentPatch || modifiers?.length && !restaurantConfig) {
             throw new Error('SYNC_V3_ADVANCED_ARTICLE_CONTRACT_REQUIRED');
          }
-         await v3Operational.validate([...latestAddCart.current, { ...product, quantity, cartId: 'candidate-validation' } as CartItem], { ticketId: activeTable?.currentOrderId || activeDirectV3TicketId, claimId: activeDirectV3TicketId, reservationId:activeV3Reservation?.reservation.id,reservationClaimId:activeV3Reservation?.claimId, tableId: activeTable?.id === undefined ? undefined : String(activeTable.id) });
+         await v3Operational.validate([...latestAddCart.current, { ...product, price: priceOverride ?? product.price, originalPrice: priceOverride ?? product.price, quantity, modifiers, note, restaurantConfig, selected_modifiers: restaurantConfig?.selected_modifiers, selected_combo_items: restaurantConfig?.selected_combo_items, selected_fraction_parts: restaurantConfig?.selected_fraction_parts, cartId: 'candidate-validation' } as CartItem], { ticketId: activeTable?.currentOrderId || activeDirectV3TicketId, claimId: activeDirectV3TicketId, reservationId:activeV3Reservation?.reservation.id,reservationClaimId:activeV3Reservation?.claimId, tableId: activeTable?.id === undefined ? undefined : String(activeTable.id) });
          assertV3UIContext(isCurrent);
+         if(restaurantConfig)modifiers=[...(restaurantConfig.selected_modifiers||[]).map((row:any)=>row.name),...(restaurantConfig.selected_combo_items||[]).map((row:any)=>row.name),...(note?[`Nota: ${note}`]:[])];
       }
       if (blockRecoveredUberOrderMutation('agregar artículos adicionales')) return;
       const authorize = () => authorizeSubtotalizedEdit('Agregar artículo a ticket subtotalizado');
@@ -3561,6 +3564,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             && existingConsignmentKey === consignmentIdentityKey
             && (i.variantSku || '') === (variantSku || '')
             && iMods === modifiersString
+            && (!v3Operational || JSON.stringify([i.restaurantConfig,i.note]) === JSON.stringify([lineRestaurantConfig,note]))
             && i.price === finalPrice
             && existingTaxSignature === taxSignature
             && sameWeightPresentation(i.weightPresentation, (product as CartItem).weightPresentation);
@@ -3609,7 +3613,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             variantInfo,
             appliedTaxIds: effectiveTaxIds,
             production_area_id: productionAreaId || undefined,
-            originalPrice: (product as CartItem).inventoryPresentation?priceOverride:getProductPrice(product),
+            originalPrice: (product as CartItem).inventoryPresentation || restaurantConfig ? finalPrice : getProductPrice(product),
             trackingData,
             ...consignmentPatch,
          };
@@ -4077,6 +4081,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             handleProductClick(match.product);
             return { match, added: true };
          }
+         if(match && productHasRestaurantConfiguration(match.product)){
+            if(match.quantity!==1)throw Error('Configure el artículo antes de ajustar su cantidad.');
+            handleProductClick(match.product);return {match,added:true};
+         }
          const added = match ? await addToCart(match.product, (isReturnMode ? -1 : 1) * match.quantity,
             match.price, match.modifiers, undefined, match.selectedVariant, match.variantInfo) : false;
          return { match, added };
@@ -4200,6 +4208,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             return { success: true, message: `${match.product.name}: ingrese o lea el peso` };
          }
          const hasConfiguredVariant = Boolean(match.selectedVariant || match.modifiers?.length);
+         if(productHasRestaurantConfiguration(match.product)){
+            if(match.quantity!==1)throw Error('Configure el artículo antes de ajustar su cantidad.');
+            handleProductClick(match.product);return {success:true,message:`${match.product.name}: seleccione sus opciones`};
+         }
          if (!hasConfiguredVariant && ((match.product.variants || []).length > 0 || (match.product.attributes || []).length > 0)) {
             handleProductClick(match.product);
          } else {
@@ -6776,7 +6788,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (!v3Operational) return () => {};
       const delegatedFiscalCheckout=fiscalCompliance.mode==='ECF'&&getDefaultFiscalProvider(config,activeTerminalConfig)==='MSELLER';
       const offlineAvailable=Boolean(fiscalWorkflowV2Client.offlineReady&&await fiscalWorkflowV2Client.offlineReady());
-      const offlineFiscalCheckout=offlineAvailable&&paymentMethods.length>0&&paymentMethods.every(method=>method.toUpperCase()==='CASH')
+      const offlineFiscalCheckout=offlineAvailable&&paymentMethods.length>0
         &&!hasV3ReservationCart&&!activeV3Reservation&&!activeRecoveredReservation&&!activeDirectV3TicketId
         &&processedCart.every(line=>line.quantity>0&&!line.articleFormat)
         &&(!activeTable?cartTip===0:isMaster&&!activePaymentFraction&&Boolean(activeTable.currentOrderId)
@@ -6798,7 +6810,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
         if(activeTable){
           if(!isMaster)throw Error('El cobro de mesas sin ERP debe realizarse en la caja Master que conserva la cuenta.');
           if(activePaymentFraction)throw Error('La reserva fiscal offline admite el cobro completo de la mesa; esta cuenta tiene pagos fraccionados pendientes.');
-          if(offlineAvailable)throw Error('La reserva fiscal offline de mesas admite efectivo. Este método requiere su autorización de pago habitual.');
+          if(offlineAvailable)throw Error('La cuenta no reúne las condiciones del cobro fiscal offline. Conserva la cuenta y revisa su configuración.');
           const readiness=await fiscalWorkflowV2Client.offlineReadiness();throw Error(readiness.reason==='FISCAL_RANGE_EXHAUSTED'?'Se agotaron los comprobantes fiscales asignados a esta caja. No se realizó ningún pago.':readiness.reason==='FISCAL_RANGE_EXPIRED'?'El rango fiscal asignado está vencido. No se realizó ningún pago.':`La caja todavía no tiene preparada su autorización fiscal offline (${readiness.code||readiness.reason}). Conserva la cuenta; no se realizó ningún pago.`);
         }
         throw Error('No se puede cobrar sin la autorización fiscal vigente del ERP. Sincroniza y vuelve a intentar; no se realizó ningún pago.');
