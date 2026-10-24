@@ -549,8 +549,8 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
     async readTrackingAuthority(allocationId:string):Promise<{authorityJson:string;witnessHash:string;availableMinor:number}|null>{
         const row=(await this.ensureDb().query("SELECT a.authority_json,a.delivery_witness_hash,a.state,json_extract(a.authority_json,'$.quantityMinor')-a.consumed_minor-coalesce((SELECT sum(c.quantity_minor) FROM pos_tracking_checkout_v1 c WHERE c.allocation_id=a.id AND c.phase IN('PREPARED','EFFECT_POSSIBLE')),0) available_minor FROM pos_tracking_allocations_v1 a WHERE a.id=?",[allocationId])).values?.[0];return row?{authorityJson:String(row.authority_json),witnessHash:String(row.delivery_witness_hash),availableMinor:row.state==='ACTIVE'?Number(row.available_minor):0}:null;
     }
-    async installTrackingAuthority(authority:TrackingAuthority,previouslySeen:boolean,serverConsumedMinor=0,deliveryWitnessHash?:string):Promise<void>{
-        await this.withWriteLock(()=>this.executeUnlocked([],()=>installTrackingAllocation(this.ensureDb() as any,authority,previouslySeen,serverConsumedMinor,deliveryWitnessHash),true));
+    async installTrackingAuthority(authority:TrackingAuthority,previouslySeen:boolean,serverConsumedMinor=0,deliveryWitnessHash?:string,deliveryClock?:import('../TrackingAllocationStore').TrackingDeliveryClock):Promise<void>{
+        await this.withWriteLock(()=>this.executeUnlocked([],()=>installTrackingAllocation(this.ensureDb() as any,authority,previouslySeen,serverConsumedMinor,deliveryWitnessHash,deliveryClock),true));
     }
     async prepareTrackingCheckout(checkoutId:string,selections:TrackingSelection[],scope:Pick<TrackingAuthority,'tenantId'|'companyId'|'storeId'|'warehouseId'|'terminalId'|'deviceId'>,operation:{transactionId:string;cartIdentity:string}):Promise<void>{
         await this.withWriteLock(()=>this.executeUnlocked([],async()=>{await prepareTrackingOperation(this.ensureDb() as any,checkoutId,operation.transactionId,operation.cartIdentity,scope);await prepareTrackingCheckout(this.ensureDb() as any,checkoutId,selections,scope);},true));

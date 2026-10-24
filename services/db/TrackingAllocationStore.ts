@@ -5,12 +5,20 @@ import {
   type TrackingAuthority,
   type TrackingSelection,
 } from "../tracking/TrackingAuthority";
+export type TrackingDeliveryClock = {
+  serverDeliveredMs: number;
+  localRequestStartedMs: number;
+  localReceivedMs: number;
+};
 type SQL = {
   query(sql: string, params?: any[]): Promise<{ values?: any[] }>;
   run(sql: string, params?: any[], transaction?: boolean): Promise<any>;
 };
 export const TRACKING_ALLOCATION_SCHEMA = `
 CREATE TABLE IF NOT EXISTS pos_tracking_allocations_v1(id TEXT PRIMARY KEY,authority_json TEXT NOT NULL,delivery_witness_hash TEXT NOT NULL,consumed_minor INTEGER NOT NULL DEFAULT 0,state TEXT NOT NULL CHECK(state IN('ACTIVE','RETURN_PENDING','RETURNED','REVOKED')),max_local_ms INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS pos_tracking_delivery_clock_v1(allocation_id TEXT PRIMARY KEY REFERENCES pos_tracking_allocations_v1(id),witness_hash TEXT NOT NULL,server_delivered_ms INTEGER NOT NULL,local_request_started_ms INTEGER NOT NULL,local_received_ms INTEGER NOT NULL);
+CREATE TRIGGER IF NOT EXISTS pos_tracking_clock_immutable_v1 BEFORE UPDATE ON pos_tracking_delivery_clock_v1 BEGIN SELECT RAISE(ABORT,'TRACKING_CLOCK_IMMUTABLE');END;
+CREATE TRIGGER IF NOT EXISTS pos_tracking_clock_durable_v1 BEFORE DELETE ON pos_tracking_delivery_clock_v1 BEGIN SELECT RAISE(ABORT,'TRACKING_CLOCK_DURABLE');END;
 CREATE TABLE IF NOT EXISTS pos_tracking_checkout_v1(checkout_id TEXT NOT NULL,allocation_id TEXT NOT NULL REFERENCES pos_tracking_allocations_v1(id),cart_id TEXT NOT NULL,selection_set_json TEXT NOT NULL,selection_json TEXT NOT NULL,quantity_minor INTEGER NOT NULL CHECK(quantity_minor>0),phase TEXT NOT NULL CHECK(phase IN('PREPARED','EFFECT_POSSIBLE','CONSUMED','ABANDONED')),transaction_id TEXT,effect_at_ms INTEGER,PRIMARY KEY(checkout_id,allocation_id,cart_id));
 CREATE TRIGGER IF NOT EXISTS pos_tracking_allocation_immutable_v1 BEFORE UPDATE ON pos_tracking_allocations_v1 WHEN OLD.id IS NOT NEW.id OR OLD.authority_json IS NOT NEW.authority_json OR OLD.delivery_witness_hash IS NOT NEW.delivery_witness_hash OR NEW.consumed_minor<OLD.consumed_minor OR NEW.max_local_ms<OLD.max_local_ms OR OLD.state IN('RETURNED','REVOKED') AND OLD.state IS NOT NEW.state BEGIN SELECT RAISE(ABORT,'TRACKING_ALLOCATION_IMMUTABLE');END;
 CREATE TRIGGER IF NOT EXISTS pos_tracking_checkout_immutable_v1 BEFORE UPDATE ON pos_tracking_checkout_v1 WHEN OLD.checkout_id IS NOT NEW.checkout_id OR OLD.allocation_id IS NOT NEW.allocation_id OR OLD.cart_id IS NOT NEW.cart_id OR OLD.selection_set_json IS NOT NEW.selection_set_json OR OLD.selection_json IS NOT NEW.selection_json OR OLD.quantity_minor IS NOT NEW.quantity_minor OR OLD.effect_at_ms IS NOT NULL AND OLD.effect_at_ms IS NOT NEW.effect_at_ms OR OLD.phase IN('CONSUMED','ABANDONED') AND OLD.phase IS NOT NEW.phase OR OLD.phase='EFFECT_POSSIBLE' AND NEW.phase NOT IN('EFFECT_POSSIBLE','CONSUMED') BEGIN SELECT RAISE(ABORT,'TRACKING_CHECKOUT_IMMUTABLE');END;
@@ -25,6 +33,7 @@ export async function installTrackingAllocation(
   previouslySeen: boolean,
   serverConsumedMinor = 0,
   deliveryWitnessHash?: string,
+  deliveryClock?: TrackingDeliveryClock,
 ): Promise<void> {
   await verifyTrackingAuthority(authority);
   if (!deliveryWitnessHash || !/^[a-f0-9]{64}$/.test(deliveryWitnessHash))
@@ -47,11 +56,38 @@ export async function installTrackingAllocation(
       old.authority_json !== json
     )
       trackingFail("TRACKING_AUTHORITY_CHANGED");
+    if (deliveryClock) {
+      const saved = (
+        await sql.query(
+          "SELECT * FROM pos_tracking_delivery_clock_v1 WHERE allocation_id=?",
+          [authority.allocationId],
+        )
+      ).values?.[0];
+      if (
+        !saved ||
+        saved.witness_hash !== deliveryWitnessHash ||
+        Number(saved.server_delivered_ms) !== deliveryClock.serverDeliveredMs ||
+        Number(saved.local_request_started_ms) !==
+          deliveryClock.localRequestStartedMs ||
+        Number(saved.local_received_ms) !== deliveryClock.localReceivedMs
+      )
+        trackingFail("TRACKING_DELIVERY_CLOCK_IMMUTABLE");
+    }
     if (serverConsumedMinor > Number(old.consumed_minor))
       trackingFail("TRACKING_SERVER_CONSUMPTION_REQUIRES_RECONCILIATION");
     return;
   }
   if (previouslySeen) trackingFail("TRACKING_LOCAL_OWNERSHIP_MISSING");
+  if (
+    !deliveryClock ||
+    !Object.values(deliveryClock).every(
+      (value) =>
+        Number.isSafeInteger(value) && value > 0 && value <= 8640000000000000,
+    ) ||
+    deliveryClock.localReceivedMs < deliveryClock.localRequestStartedMs ||
+    deliveryClock.serverDeliveredMs < Date.parse(authority.issuedAt)
+  )
+    trackingFail("TRACKING_DELIVERY_CLOCK_REQUIRED");
   await sql.run(
     "INSERT INTO pos_tracking_allocations_v1 VALUES(?,?,?,?,'ACTIVE',?)",
     [
@@ -59,21 +95,52 @@ export async function installTrackingAllocation(
       json,
       deliveryWitnessHash,
       serverConsumedMinor,
-      Date.now(),
+      deliveryClock.localReceivedMs,
+    ],
+    false,
+  );
+  await sql.run(
+    "INSERT INTO pos_tracking_delivery_clock_v1 VALUES(?,?,?,?,?)",
+    [
+      authority.allocationId,
+      deliveryWitnessHash,
+      deliveryClock.serverDeliveredMs,
+      deliveryClock.localRequestStartedMs,
+      deliveryClock.localReceivedMs,
     ],
     false,
   );
 }
-function assertTrackingTime(
-  a: TrackingAuthority,
-  maxLocalMs: number,
-  now: number,
-): void {
+async function trackingLogicalNow(
+  sql: SQL,
+  allocation: any,
+  localNow: number,
+): Promise<number> {
+  const anchor = (
+    await sql.query(
+      "SELECT * FROM pos_tracking_delivery_clock_v1 WHERE allocation_id=?",
+      [allocation.id],
+    )
+  ).values?.[0];
+  if (!anchor || anchor.witness_hash !== allocation.delivery_witness_hash)
+    trackingFail("TRACKING_DELIVERY_CLOCK_REQUIRED");
   if (
-    !Number.isFinite(now) ||
-    now < maxLocalMs ||
-    now < Date.parse(a.issuedAt) ||
-    now < Date.parse(a.receivedAt)
+    !Number.isSafeInteger(localNow) ||
+    localNow < Number(allocation.max_local_ms) ||
+    localNow < Number(anchor.local_received_ms)
+  )
+    trackingFail("TRACKING_CLOCK_REVERSED");
+  const logical =
+    Number(anchor.server_delivered_ms) +
+    (localNow - Number(anchor.local_request_started_ms));
+  if (!Number.isSafeInteger(logical) || logical > 8640000000000000)
+    trackingFail("TRACKING_CLOCK_INVALID");
+  return logical;
+}
+function assertTrackingTime(a: TrackingAuthority, logicalNow: number): void {
+  if (
+    logicalNow < Date.parse(a.issuedAt) ||
+    logicalNow < Date.parse(a.receivedAt)
   )
     trackingFail("TRACKING_CLOCK_REVERSED");
   const date = new Intl.DateTimeFormat("en-CA", {
@@ -81,7 +148,7 @@ function assertTrackingTime(
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
-  }).format(new Date(now));
+  }).format(new Date(logicalNow));
   if (a.expiresOn && date > a.expiresOn) trackingFail("TRACKING_LOT_EXPIRED");
 }
 export async function prepareTrackingCheckout(
@@ -109,7 +176,7 @@ export async function prepareTrackingCheckout(
   const previousSet =
     (
       await sql.query(
-        "SELECT selection_set_json FROM pos_tracking_checkout_v1 WHERE checkout_id=?",
+        "SELECT selection_set_json,phase,effect_at_ms FROM pos_tracking_checkout_v1 WHERE checkout_id=?",
         [checkoutId],
       )
     ).values || [];
@@ -121,6 +188,29 @@ export async function prepareTrackingCheckout(
       ))
   )
     trackingFail("TRACKING_CHECKOUT_SELECTION_SET_CHANGED");
+  const requiresTime =
+    !previousSet.length || previousSet.every((row) => row.phase === "PREPARED");
+  if (
+    previousSet.length &&
+    !requiresTime &&
+    previousSet.some((row) => row.phase === "PREPARED")
+  )
+    trackingFail("TRACKING_CHECKOUT_PHASE_CHANGED");
+  let logicalNow = 0;
+  if (requiresTime)
+    for (const selection of selections) {
+      const allocation = (
+        await sql.query(
+          "SELECT * FROM pos_tracking_allocations_v1 WHERE id=?",
+          [selection.authority.allocationId],
+        )
+      ).values?.[0];
+      if (!allocation) trackingFail("TRACKING_ALLOCATION_NOT_ACTIVE");
+      logicalNow = Math.max(
+        logicalNow,
+        await trackingLogicalNow(sql, allocation, now),
+      );
+    }
   for (const selection of selections) {
     assertTrackingSelection(selection);
     const a = selection.authority;
@@ -144,13 +234,19 @@ export async function prepareTrackingCheckout(
       )
     ).values?.[0];
     if (!previous || previous.phase === "PREPARED")
-      assertTrackingTime(a, Number(allocation.max_local_ms), now);
+      assertTrackingTime(a, logicalNow);
     if (previous) {
       if (
         previous.selection_json !== JSON.stringify(selection) ||
         previous.phase === "ABANDONED"
       )
         trackingFail("TRACKING_CHECKOUT_REPLAY_CHANGED");
+      if (previous.phase === "PREPARED")
+        await sql.run(
+          "UPDATE pos_tracking_allocations_v1 SET max_local_ms=? WHERE id=?",
+          [now, a.allocationId],
+          false,
+        );
       continue;
     }
     const reserved = Number(
@@ -202,8 +298,22 @@ export async function fenceTrackingCheckout(
     rows.some((r) => !["PREPARED", "EFFECT_POSSIBLE"].includes(r.phase))
   )
     trackingFail("TRACKING_PAYMENT_OWNER_REQUIRED");
+  const effects = rows.filter((row) => row.phase === "EFFECT_POSSIBLE");
+  if (effects.length) {
+    if (
+      effects.length !== rows.length ||
+      effects.some(
+        (row) =>
+          !Number.isSafeInteger(row.effect_at_ms) || row.effect_at_ms <= 0,
+      ) ||
+      new Set(effects.map((row) => row.effect_at_ms)).size !== 1
+    )
+      trackingFail("TRACKING_CHECKOUT_PHASE_CHANGED");
+    return Number(effects[0].effect_at_ms);
+  }
+  const allocations = [];
+  let effectAt = 0;
   for (const row of rows) {
-    if (row.phase === "EFFECT_POSSIBLE") continue;
     const allocation = (
       await sql.query("SELECT * FROM pos_tracking_allocations_v1 WHERE id=?", [
         row.allocation_id,
@@ -211,23 +321,26 @@ export async function fenceTrackingCheckout(
     ).values?.[0];
     if (!allocation || allocation.state !== "ACTIVE")
       trackingFail("TRACKING_ALLOCATION_NOT_ACTIVE");
-    assertTrackingTime(
-      JSON.parse(allocation.authority_json),
-      Number(allocation.max_local_ms),
-      now,
+    allocations.push(allocation);
+    effectAt = Math.max(
+      effectAt,
+      await trackingLogicalNow(sql, allocation, now),
     );
+  }
+  for (let index = 0; index < rows.length; index++) {
+    assertTrackingTime(JSON.parse(allocations[index].authority_json), effectAt);
     await sql.run(
       "UPDATE pos_tracking_allocations_v1 SET max_local_ms=? WHERE id=?",
-      [now, row.allocation_id],
+      [now, rows[index].allocation_id],
       false,
     );
     await sql.run(
       "UPDATE pos_tracking_checkout_v1 SET phase='EFFECT_POSSIBLE',effect_at_ms=? WHERE checkout_id=? AND allocation_id=? AND cart_id=?",
-      [now, checkoutId, row.allocation_id, row.cart_id],
+      [effectAt, checkoutId, rows[index].allocation_id, rows[index].cart_id],
       false,
     );
   }
-  return Math.min(...rows.map((row) => row.effect_at_ms ?? now));
+  return effectAt;
 }
 export async function abandonTrackingCheckout(
   sql: SQL,

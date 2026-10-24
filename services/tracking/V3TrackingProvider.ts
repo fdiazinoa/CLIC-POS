@@ -45,12 +45,13 @@ export async function loadV3TrackingOptions(
     await acceptTrackingDelivery(snapshot, {
       ...nativeTrackingWitnessPreferences,
       readLocal: (id) => dbAdapter.readTrackingAuthority!(id),
-      install: (authority, seen, consumed, witnessHash) =>
+      install: (authority, seen, consumed, witnessHash,clock) =>
         dbAdapter.installTrackingAuthority!(
           authority,
           seen,
           consumed,
           witnessHash,
+          clock,
         ),
       async claim(id, witnessHash) {
         const identity=readLargeMasterSyncV3BoundIdentity();const transport=createLargeMasterSyncV3BoundTransport(new URL(identity.erpSyncBaseUrl).origin);

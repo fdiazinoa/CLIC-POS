@@ -1,3 +1,4 @@
+import type { TrackingDeliveryClock } from "../db/TrackingAllocationStore";
 import { Preferences } from "@capacitor/preferences";
 import { sha256Utf8 } from "../sync/LargeMasterSyncV3Client";
 import {
@@ -27,6 +28,7 @@ type DeliveryPort = {
     previouslySeen: boolean,
     serverConsumedMinor: number,
     witnessHash: string,
+    clock?: TrackingDeliveryClock,
   ): Promise<void>;
   claim(
     allocationId: string,
@@ -35,6 +37,7 @@ type DeliveryPort = {
     allocationId: string;
     witnessHash: string;
     firstInstallationAllowed: boolean;
+    deliveredAtEpochMs?: number;
   }>;
   readWitness(key: string): Promise<string | null>;
   writeWitness(key: string, value: string): Promise<void>;
@@ -110,11 +113,18 @@ async function acceptTrackingDeliveryOnce(
   if ((await port.readWitness(key)) !== encoded)
     trackingFail("TRACKING_EXTERNAL_WITNESS_NOT_DURABLE");
   const witnessHash = await sha256Utf8(witness.nonce);
+  const localRequestStartedMs = Date.now();
   const claim = await port.claim(authority.allocationId, witnessHash);
+  const localReceivedMs = Date.now();
   if (
     claim.firstInstallationAllowed !== true ||
     claim.allocationId !== authority.allocationId ||
-    claim.witnessHash !== witnessHash
+    claim.witnessHash !== witnessHash ||
+    !Number.isSafeInteger(claim.deliveredAtEpochMs) ||
+    Number(claim.deliveredAtEpochMs) <= 0 ||
+    Number(claim.deliveredAtEpochMs) > 8640000000000000 ||
+    Number(claim.deliveredAtEpochMs) < Date.parse(authority.issuedAt) ||
+    localReceivedMs < localRequestStartedMs
   )
     trackingFail("TRACKING_FIRST_DELIVERY_RECONCILIATION_REQUIRED");
   await port.install(
@@ -122,6 +132,11 @@ async function acceptTrackingDeliveryOnce(
     false,
     snapshot.serverConsumedMinor,
     witnessHash,
+    {
+      serverDeliveredMs: claim.deliveredAtEpochMs!,
+      localRequestStartedMs,
+      localReceivedMs,
+    },
   );
 }
 
