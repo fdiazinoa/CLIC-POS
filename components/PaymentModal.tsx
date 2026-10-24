@@ -1,3 +1,4 @@
+import {assertDopFiscalSettlement,configuredFiscalBaseCurrency} from '../services/fiscal/DopFiscalSettlement';
 import InteractionProgress,{yieldInteractionPaint,type InteractionProgressHandle} from './InteractionProgress';
 import {FiscalExpiredCheckoutAction} from './FiscalExpiredCheckoutAction';
 import type {FiscalRetirementRecord} from '../services/fiscal/FiscalWorkflowV2Types';
@@ -1034,6 +1035,10 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
             }
          }
 
+         if(items.some(item=>item.v3SaleAuthority)&&!isRefund&&baseCurrency.code==='DOP'){
+            if(!config||configuredFiscalBaseCurrency(config)!=='DOP')throw Error('FISCAL_WORKFLOW_BASE_CURRENCY_CHANGED');
+            assertDopFiscalSettlement({currency:'DOP',total:effectiveTotalToPay,pendingBalance:sumCreditPaymentsBase(paymentsToConfirm),payments:paymentsToConfirm});
+         }
          paymentsToConfirm = await measureInteractionStage(
             trace,
             'SYNC_START',

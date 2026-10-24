@@ -19,3 +19,12 @@ test('profile timezone requires explicit consistent original DOP and no transact
  const f=inputs(),originalDate='2026-10-17T12:00:00.000Z';f.tx.date=originalDate;f.tx.payments=[{currency:'DOP',exchangeRate:1}];f.tx.currency='DOP';const originalTimezone=process.env.TZ;
  try{for(const timezone of ['UTC','Asia/Tokyo']){process.env.TZ=timezone;assert.equal(captureNewV3FiscalSourceMetadata(f.tx,f.config,f.binding).timezone,'America/Santo_Domingo');assert.equal(f.tx.date,originalDate);}}finally{if(originalTimezone===undefined)delete process.env.TZ;else process.env.TZ=originalTimezone;}
 });
+
+
+test('new foreign tender captures configured DOP fiscal base while retaining original currencies and rates',async()=>{
+ const {buildTransactionSettlementFields}=await import('../utils/paymentSettlement');
+ const f=inputs();f.config.currencies=[{code:'DOP',isBase:true},{code:'USD',isBase:false}];
+ Object.assign(f.tx,{currency:'DOP',total:100,...buildTransactionSettlementFields([{id:'cash',method:'CASH',amount:120,currencyCode:'USD',exchangeRate:60,amountOriginal:2} as any],100,'DOP')});
+ const original=JSON.stringify(f.tx);assert.equal(captureNewV3FiscalSourceMetadata(f.tx,f.config,f.binding).pos_operational_contract_version,'1');assert.equal(JSON.stringify(f.tx),original);
+ f.tx.payments[0].amountOriginal=1;assert.deepEqual(captureNewV3FiscalSourceMetadata(f.tx,f.config,f.binding),{});
+});

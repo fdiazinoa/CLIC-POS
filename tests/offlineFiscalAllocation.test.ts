@@ -269,3 +269,23 @@ for(const methods of [['CASH'],['CARD'],['CASH','CARD']])test(`direct legal char
   await assert.rejects(f.adapter.commitFinancialTransaction(commit as any),/DUPLICATE|CONCURRENT_FINANCIAL_UPDATE/);assert.equal(f.count('sync_outbox_v2'),1);
  }finally{f.sql.close();}
 });
+
+for(const tender of ['USD_OVER','EUR_MIX','CARD_USD','CREDIT'])test(`native allocation preserves normalized ${tender} settlement without another conversion`,async()=>{
+ const f=await fixture();try{
+  f.config.currencies=[{code:'DOP',isBase:true}];
+  f.sql.prepare("UPDATE documents SET data=? WHERE collection_name='config' AND doc_id='current'").run(JSON.stringify(f.config));
+  const payments:any[]=tender==='USD_OVER'?[{id:'usd',method:'CASH',amount:120,currencyCode:'USD',exchangeRate:60,amountOriginal:2}]:tender==='EUR_MIX'?[{id:'eur',method:'CASH',amount:65,currencyCode:'EUR',exchangeRate:65,amountOriginal:1},{id:'dop',method:'CASH',amount:35,currencyCode:'DOP',exchangeRate:1,amountOriginal:35}]:tender==='CARD_USD'?[{id:'card',method:'CARD',amount:100,currencyCode:'USD',exchangeRate:50,amountOriginal:2}]:[{id:'cash',method:'CASH',amount:70},{id:'credit',method:'CREDIT',amount:30}];
+  const settlement=(await import('../utils/paymentSettlement')).buildTransactionSettlementFields(payments,100,'DOP');
+  const items=[{id:'item',cartId:'line',quantity:1,price:100}];
+  const c=await f.client().reserveOfflineCheckout(JSON.stringify({items,customerId:null,fiscalType:'E32'}),'normalized-'+tender);
+  for(const payment of settlement.payments)await f.client().recordPayment(c,payment.id);
+  const commit=await input(f,c),source=commit.outboxEvent.payload.transaction;
+  Object.assign(source,{items,currency:'DOP',netAmount:100,taxAmount:0,total:100,pendingBalance:tender==='CREDIT'?30:0,...settlement});
+  const original=JSON.stringify(source);
+  await f.adapter.commitFinancialTransaction(commit as any);
+  const receipt=JSON.parse(String(f.sql.prepare("SELECT data FROM documents WHERE collection_name='transactions'").get()!.data));
+  assert.equal(JSON.stringify(receipt),original);assert.equal(f.count('sync_outbox_v2'),1);
+  await assert.rejects(f.adapter.commitFinancialTransaction(commit as any),/DUPLICATE|CONCURRENT_FINANCIAL_UPDATE/);
+  assert.equal(f.count('sync_outbox_v2'),1);assert.equal(f.sql.prepare("SELECT state FROM pos_fiscal_pending_numbers_v2").get()!.state,'CONSUMED');
+ }finally{f.sql.close();}
+});

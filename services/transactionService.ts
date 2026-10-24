@@ -507,6 +507,7 @@ class TransactionService {
             balanceDueAtSale: data.balanceDueAtSale,
             pendingBalance: data.pendingBalance,
             dueDate: data.dueDate,
+            ...(isV3FinancialDocument(data)&&data.currency==='DOP'?{currency:data.currency}:{}),
             settlementCurrencyCode: data.settlementCurrencyCode,
             settlementExchangeRate: data.settlementExchangeRate,
             settlementReceivedOriginal: data.settlementReceivedOriginal,

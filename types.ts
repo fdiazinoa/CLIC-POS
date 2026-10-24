@@ -1828,6 +1828,8 @@ export interface CartItem extends Product {
 }
 
 export interface Transaction {
+  /** Fiscal invoice base; tender currency remains on each payment. */
+  currency?: string;
   inventoryPresentationContract?: 1;
     /** Durable future checkout identity; never added to historical/retained sources. */
     fiscalWorkflowCheckoutId?: string;

@@ -1,3 +1,4 @@
+import {assertDopFiscalSettlement} from './DopFiscalSettlement';
 import type {OfflineFiscalAllocation} from './OfflineFiscalAllocation';
 import {cartDigest,isExpiredPrepared,retirementReason,validateRetirementReceipt} from './FiscalWorkflowRetirement';
 import {fiscalWorkflowScopeKey} from './FiscalWorkflowV2Types';
@@ -26,8 +27,9 @@ export async function verifyFiscalWorkflowState(source:Transaction,state:FiscalW
  if(envelope?.event)return false;
  const original=envelope?.transaction as Transaction;
  if(!original||financialIdentity(original)!==financialIdentity(source)||await fiscalStatusSourceChecksum(source)!==state.checksumV1)return false;
+ if(original.currency==='DOP')try{assertDopFiscalSettlement(original);}catch{return false;}
  const f=original.fiscalIssuance;
- if(!f||f.issuerRnc!==state.issuerRnc||f.tenantId!==state.scope.tenantId||f.companyId!==state.scope.companyId||f.terminalId!==state.scope.terminalId||original.fiscalEnvironment!==state.environment||((original as any).currency||original.settlementCurrencyCode)!==state.currency)return false;
+ if(!f||f.issuerRnc!==state.issuerRnc||f.tenantId!==state.scope.tenantId||f.companyId!==state.scope.companyId||f.terminalId!==state.scope.terminalId||original.fiscalEnvironment!==state.environment||(original.currency||original.settlementCurrencyCode)!==state.currency)return false;
  const digest=await sha256Utf8(json({schemaVersion:2,source:'POS_ORIGINAL_ENVELOPE_V2',scope:state.scope,saleEventId:state.saleEventId,payload:envelope}));
  if(digest!==state.originalDigestV2)return false;
  if(state.mode==='STATUS_ONLY'&&(state.workflowId!==null||state.permitId!==null||state.canCorrect||state.draftRevision!==0))return false;

@@ -6207,6 +6207,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   date:activeV3Reservation?.invoiceDate || fiscalCheckoutRef.current?.offlineSaleDate || new Date().toISOString(),
                   items: documentItems,
                   total: documentTotal,
+                  ...(v3Operational&&!hasReturns&&baseCurrency.code==='DOP'?{currency:'DOP'}:{}),
                   payments: paymentsForTransaction,
                   ...documentConsignmentFields,
                   consignmentSyncStatus: documentConsignmentFields.consignmentId ? 'PENDING' : undefined,
