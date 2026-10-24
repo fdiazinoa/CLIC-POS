@@ -1,5 +1,5 @@
 import {readTableFiscalSaleContext} from '../services/fiscal/OfflineTableFiscalCheckout';
-import type {TableFiscalSaleContext} from '../services/fiscal/OfflineFiscalLease';
+import {tableFiscalSourceDigest,type TableFiscalSaleContext} from '../services/fiscal/OfflineFiscalLease';
 import {fiscalWorkflowScopeKey} from '../services/fiscal/FiscalWorkflowV2Types';
 import {isInventoryPresentationEligible,assertInventoryPresentationEligible} from '../services/inventoryPresentations/eligibility';
 import {createPresentationRuntime,presentationAuthority,type PresentationRuntime} from '../services/inventoryPresentations/runtime';
@@ -5620,7 +5620,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          if(fiscalCheckoutRef.current&&['COMMITTED','ACKNOWLEDGED'].includes(fiscalCheckoutRef.current.phase)){
             const prior=(await db.getDocument('transactions',fiscalCheckoutRef.current.transactionId)||await db.getDocument('transactionHistory',fiscalCheckoutRef.current.transactionId)) as Transaction|null;
             if(!prior)throw Error('FISCAL_WORKFLOW_COMMITTED_RECEIPT_REQUIRED');
-            assertFiscalWorkflowCheckoutReplay(fiscalCheckoutRef.current,prior as Transaction,currentFiscalCheckoutCartIdentity(),readFiscalWorkflowLocalScope(activeTerminalConfig,activeTerminal?.id||'T1'));
+            assertFiscalWorkflowCheckoutReplay(fiscalCheckoutRef.current,prior as Transaction,currentFiscalCheckoutCartIdentity(),readFiscalWorkflowLocalScope(activeTerminalConfig,activeTerminal?.id||'T1'),payments.map(payment=>payment.id));
             if(prior.fiscalSaleContext&&activeTable&&prior.fiscalSaleContext.accountId===String(activeTable.currentOrderId)){
               const remaining=parkedTicketsRef.current.filter(ticket=>ticket.id!==prior.fiscalSaleContext!.accountId);
               parkedTicketsRef.current=remaining;
@@ -6651,18 +6651,30 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const beforeV3PaymentEffects = async (paymentIds:string[]=[],paymentMethods:string[]=[]): Promise<PaymentEffectsFence> => {
       const completed = await completedReservationForReceipt();
       if (completed) return Object.assign(() => {},{completedTransaction:completed});
-      if(activeTable&&fiscalWorkflowV2Client.localCheckout&&!fiscalCheckoutRef.current){
-        const retained=await fiscalWorkflowV2Client.localCheckout(String(activeTable.currentOrderId),String(activeTable.id)).catch(()=>null);
-        if((retained?.permit?.leaseId||retained?.allocation)&&['COMMITTED','ACKNOWLEDGED'].includes(retained.phase)
-          &&retained.fiscalSaleContext?.accountId===String(activeTable.currentOrderId)
-          &&retained.fiscalSaleContext.tableId===String(activeTable.id)){
-          offlineTableFiscalContextRef.current=retained.fiscalSaleContext;fiscalCheckoutRef.current=retained;
+      const original=fiscalCheckoutRef.current;
+      const originalOffline=Boolean(original?.allocation||original?.permit?.leaseId);
+      if(fiscalWorkflowV2Client.localCheckoutForReceipt&&(originalOffline||activeTable&&v3Operational&&fiscalCompliance.mode==='ECF')){
+        const scope=readFiscalWorkflowLocalScope(activeTerminalConfig,terminalId);
+        const durable=await fiscalWorkflowV2Client.localCheckoutForReceipt(scope,originalOffline?original!.checkoutId:undefined,
+          activeTable?.currentOrderId===undefined?undefined:String(activeTable.currentOrderId),activeTable?.id===undefined?undefined:String(activeTable.id));
+        if(originalOffline&&(!durable||durable.checkoutId!==original!.checkoutId||durable.transactionId!==original!.transactionId||durable.operationId!==original!.operationId
+          ||durable.scopeKey!==original!.scopeKey||durable.cartIdentity!==original!.cartIdentity||JSON.stringify(durable.fiscalSaleContext)!==JSON.stringify(original!.fiscalSaleContext)
+          ||durable.allocation?.authorizationId!==original!.allocation?.authorizationId||durable.permit?.permitId!==original!.permit?.permitId||durable.permit?.leaseId!==original!.permit?.leaseId
+          ||JSON.stringify([...durable.paymentIds].sort())!==JSON.stringify([...original!.paymentIds].sort())))throw Error('FISCAL_WORKFLOW_CHECKOUT_RECONCILIATION_REQUIRED');
+        if(durable&&['COMMITTED','ACKNOWLEDGED'].includes(durable.phase)){
+          if(durable.fiscalSaleContext&&(!activeTable||durable.fiscalSaleContext.accountId!==String(activeTable.currentOrderId)||durable.fiscalSaleContext.tableId!==String(activeTable.id)))throw Error('FISCAL_WORKFLOW_CHECKOUT_RECONCILIATION_REQUIRED');
+          const source=await db.getDocument('transactions',durable.transactionId)||await db.getDocument('transactionHistory',durable.transactionId);
+          if(!source)throw Error('FISCAL_WORKFLOW_COMMITTED_RECEIPT_REQUIRED');
+          assertFiscalWorkflowCheckoutReplay(durable,source as Transaction,currentFiscalCheckoutCartIdentity(durable.fiscalSaleContext),scope,paymentIds);
+          if(durable.fiscalSaleContext){const account=await db.getDocument('parkedTickets',durable.fiscalSaleContext.accountId);if(account&&await tableFiscalSourceDigest(JSON.stringify(account))!==durable.fiscalSaleContext.sourceSha256)throw Error('FISCAL_WORKFLOW_CHECKOUT_RECONCILIATION_REQUIRED');}
+          offlineTableFiscalContextRef.current=durable.fiscalSaleContext;fiscalCheckoutRef.current=durable;
+          return Object.assign(()=>{},{completedTransaction:source as Transaction});
         }
       }
       if(fiscalCheckoutRef.current&&['COMMITTED','ACKNOWLEDGED'].includes(fiscalCheckoutRef.current.phase)){
          const completed=await db.getDocument('transactions',fiscalCheckoutRef.current.transactionId)||await db.getDocument('transactionHistory',fiscalCheckoutRef.current.transactionId);
          if(!completed)throw Error('FISCAL_WORKFLOW_COMMITTED_RECEIPT_REQUIRED');
-         assertFiscalWorkflowCheckoutReplay(fiscalCheckoutRef.current,completed as Transaction,currentFiscalCheckoutCartIdentity(),readFiscalWorkflowLocalScope(activeTerminalConfig,terminalId));
+         assertFiscalWorkflowCheckoutReplay(fiscalCheckoutRef.current,completed as Transaction,currentFiscalCheckoutCartIdentity(),readFiscalWorkflowLocalScope(activeTerminalConfig,terminalId),paymentIds);
          return Object.assign(()=>{},{completedTransaction:completed as Transaction});
       }
       await assertCheckoutFiscalAuthority();

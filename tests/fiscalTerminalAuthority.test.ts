@@ -97,7 +97,7 @@ test('production checkout guard blocks sales and refunds before non-V3 payment e
     const context = createContext({ db, useRef: () => ({current:null}), useState:()=>[null,()=>{}], useEffect: () => {}, showPaymentModal:false, activeTable:null, isOrderTakerMode: false, isFiscalModeDisabled: false,
       activeTerminalConfig: { erpTerminalId: terminalId, fiscal: { mode: 'LEGACY_B', enabled: true } },
       processedCart: [{ quantity: 1 }], requiredSaleFiscalType: 'B02', terminalId,
-      fiscalCompliance: { mode: 'LEGACY_B' },
+      fiscalCompliance: { mode: 'LEGACY_B' }, fiscalWorkflowV2Client: {},
       isTerminalFiscalReceiptRequired: (terminal: any) => terminal?.fiscal?.mode !== 'NONE',
       resolveCreditNoteFiscalCode: () => 'B04', v3Operational: null, cart: [],
       activeV3Reservation: null, hasV3ReservationCart: false, selectedCustomer: undefined,
