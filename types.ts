@@ -1031,6 +1031,8 @@ export interface PaymentIntegrationDefinition {
 export type PaymentMethodRoundingRule = 'NONE' | 'UP' | 'DOWN' | 'ZERO_DECIMALS';
 
 export interface PaymentMethodDefinition {
+  /** Original ERP method type; TRANSFER is recorded through the existing OTHER runtime. */
+  sourceType?: string;
   id: string;
   name: string;
   type: PaymentMethod;
@@ -2485,6 +2487,7 @@ export interface Reservation {
 }
 
 export interface PaymentEntry {
+  sourceMethodType?: string;
   id: string;
   method: PaymentMethod;
   methodId?: string;

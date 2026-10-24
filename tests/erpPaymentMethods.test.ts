@@ -105,3 +105,13 @@ test('only explicit complete data/items arrays are authoritative, including empt
   }
   assert.equal(allowsDefaultPaymentMethods(getInitialConfig('Supermercado' as any)), true);
 });
+
+test('ERP transfer retains original method identity and type through the existing OTHER runtime',()=>{
+ const methods=normalizeErpPaymentMethods([{id:'transfer-id',name:'Transferencia',type:'transfer',is_active:true}]);
+ assert.equal(methods[0].id,'transfer-id');assert.equal(methods[0].type,'OTHER');assert.equal(methods[0].sourceType,'TRANSFER');
+});
+
+test('ERP integrated method preserves its configured integration identity instead of becoming a manual card',()=>{
+ const methods=normalizeErpPaymentMethods([{id:'gateway-card',name:'Tarjeta',type:'CARD',is_active:true,integrationMode:'INTEGRATED',integration:'AZUL',integrationId:'integration-id'}]);
+ assert.equal(methods[0].integrationMode,'INTEGRATED');assert.equal(methods[0].integrationId,'integration-id');assert.equal(methods[0].integration,'AZUL');
+});

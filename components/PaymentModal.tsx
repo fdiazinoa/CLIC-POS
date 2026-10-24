@@ -582,6 +582,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
       id: paymentOperationId ? `${paymentOperationId}:payment:${payments.length}` : createPaymentId(),
       method: getMethodRuntimeType(method),
       methodId: method.id,
+      sourceMethodType: method.definition?.sourceType,
       methodLabel: method.label,
       methodIcon: method.iconName,
       creditOverrideApproved: getMethodRuntimeType(method) === 'CREDIT' && canBypassCreditLimit ? true : undefined,
