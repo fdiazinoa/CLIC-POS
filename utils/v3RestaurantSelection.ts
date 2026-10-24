@@ -60,7 +60,9 @@ export function validateV3RestaurantSelection(line:CartItem,product:Product):num
   const emptyMap = (value: unknown) => value === undefined || value === null && simpleRoute || Boolean(value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0);
   need(emptyArray(line.selected_combo_items) && emptyArray(line.selected_modifiers)
    && emptyArray(line.selected_fraction_parts));
-  need(variantLabels?Array.isArray(line.modifiers)&&variantLabels.some(labels=>JSON.stringify(labels)===JSON.stringify(line.modifiers)):emptyArray(line.modifiers));
+  // Existing V3 barcode lines had no display labels; their pinned identity still selects the variant.
+  const legacyVariantLabels = Boolean(variantLabels && emptyArray(line.modifiers));
+  need(variantLabels?legacyVariantLabels||Array.isArray(line.modifiers)&&variantLabels.some(labels=>JSON.stringify(labels)===JSON.stringify(line.modifiers)):emptyArray(line.modifiers));
   need(selected !== null || simpleRoute);
   if (selected != null) {
    const s = record(selected);
@@ -73,7 +75,8 @@ export function validateV3RestaurantSelection(line:CartItem,product:Product):num
    need(s.note === undefined || typeof s.note === 'string' && s.note.length <= 2000 && s.note === line.note);
   }
   if(variantLabels)need(Number.isFinite(line.price)&&line.price>=0&&line.price<=variantPrice+.01
-   &&Math.abs(Number(line.originalPrice??line.price)-variantPrice)<.02);
+   &&(Math.abs(Number(line.originalPrice??line.price)-variantPrice)<.02
+    ||legacyVariantLabels&&Math.abs(Number(line.originalPrice??line.price)-product.price)<.02));
   return variantPrice;
  }
  need(selected);const s=record(selected);need(Object.keys(s).every(k=>['modifierGroups','comboGroups','fractions','selected_modifiers','selected_fraction_parts','selected_combo_items','product_type','production_area_id','note'].includes(k)));let extra=0;

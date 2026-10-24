@@ -107,3 +107,15 @@ test('variant source keeps explicitly authorized later reduction without allowin
  assert.equal(validateV3RestaurantSelection(line,product),120);
  line.price=121;assert.throws(()=>validateV3RestaurantSelection(line,product));
 });
+
+
+test('unchanged saved legacy V3 barcode line keeps empty labels and base originalPrice through JSON restore',()=>{
+ const {product,line}=fixture();
+ for(const modifiers of [[],undefined,null]){
+  const saved=JSON.parse(JSON.stringify({...line,modifiers,originalPrice:100}));
+  assert.equal(validateV3RestaurantSelection(saved,product),120);
+  assert.doesNotThrow(()=>validateV3PinnedLineSource(saved,product,product.v3SaleAuthority));
+  assert.equal(saved.originalPrice,100);assert.equal(saved.modifiers,modifiers===undefined?undefined:modifiers===null?null:saved.modifiers);
+  for(const patch of [{variantId:'foreign'},{variantSku:'FOREIGN'},{modifiers:['arbitrary']},{price:121},{originalPrice:1}])assert.throws(()=>validateV3RestaurantSelection({...saved,...patch},product));
+ }
+});
