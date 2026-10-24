@@ -180,11 +180,14 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps> = props => {
     if (!boundary || !props.cart.length) return;
     let current = true;
     const expectedContext = wantedContextKey;
+    const expectedSequence = contextSequence.current;
+    const source = catalog.current;
+    const currentRead = () => current && expectedSequence === contextSequence.current && source === catalog.current && latestContextKey.current === expectedContext;
     void Promise.all([...new Set(props.cart.map(row => row.id))].map(async id => {
-      const item = await catalog.current!.get(id);
+      const item = await source!.get(id);
       return item ? session!.withStock(item.product, warehouseId) : null;
-    })).then(rows => { if (current && latestContextKey.current === expectedContext) remember(rows.filter((row): row is Product => row !== null)); })
-      .catch(reason => { if (current && latestContextKey.current === expectedContext) setError(String(reason.message || reason)); });
+    })).then(rows => { if (currentRead()) remember(rows.filter((row): row is Product => row !== null)); })
+      .catch(reason => { if (currentRead()) setError(String(reason.message || reason)); });
     return () => { current = false; };
   }, [boundary, props.cart, remember, session, warehouseId, inventoryRevision]);
 
