@@ -1,3 +1,4 @@
+import type {Node} from 'typescript';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {normalizeV3RestaurantSelection,validateV3RestaurantSelection} from '../utils/v3RestaurantSelection';
@@ -40,8 +41,8 @@ test('fraction prices and equal parts come from source rule',()=>{
 test('actual barcode callback opens restaurant configuration before any cart mutation',async()=>{
  const {readFileSync}=await import('node:fs'),ts=(await import('typescript')).default;
  const text=readFileSync(new URL('../components/POSInterface.tsx',import.meta.url),'utf8'),ast=ts.createSourceFile('POSInterface.tsx',text,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
- let callback:ts.Node|undefined;
- const visit=(n:ts.Node)=>{if(ts.isVariableDeclaration(n)&&n.name.getText(ast)==='resolveSubmittedCode'&&n.initializer&&ts.isCallExpression(n.initializer))callback=n.initializer.arguments[0];ts.forEachChild(n,visit);};visit(ast);assert.ok(callback);
+ let callback:Node|undefined;
+ const visit=(n:Node)=>{if(ts.isVariableDeclaration(n)&&n.name.getText(ast)==='resolveSubmittedCode'&&n.initializer&&ts.isCallExpression(n.initializer))callback=n.initializer.arguments[0];ts.forEachChild(n,visit);};visit(ast);assert.ok(callback);
  const {source}=fixture();let adds=0,opened:unknown;
  const boundary={resolveCode:async()=>({product:source,quantity:1,price:550,modifiers:[]})};
  const {productHasRestaurantConfiguration}=await import('../utils/restaurantProductConfig');
