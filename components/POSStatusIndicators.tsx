@@ -8,6 +8,13 @@ export function FiscalStatusBadge({ visible, allowed, status, compact = false, s
 }) {
   if (!visible) return null;
   const detail = `${status.type} ${status.hasNCF ? (status.isTerminalBlock ? 'Bloque Terminal' : (status.isUsingPool ? 'Reservado en Pool' : 'Lote Global Activo')) : 'Agotado'}`;
+  if (short) {
+    return <div role="status" aria-label={`Status Fiscal: ${detail}`} title={`Status Fiscal: ${detail}`}
+      className={`flex h-12 w-16 shrink-0 flex-col items-center justify-center gap-0.5 rounded-2xl border px-1 text-[9px] font-black uppercase leading-tight ${allowed ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : 'bg-red-50 text-red-600 border-red-100'}`}>
+      <Landmark size={18} className="shrink-0" />
+      <span className="max-w-full truncate">{status.type}</span>
+    </div>;
+  }
   const label = short ? status.type : `Status Fiscal: ${detail}`;
   return <div role="status" aria-label={`Status Fiscal: ${detail}`} title={`Status Fiscal: ${detail}`}
     className={`${compact ? 'supermarket-fiscal-status' : 'mt-1'} flex items-center gap-1.5 ${short ? 'px-2' : 'px-3'} py-1.5 rounded-lg border text-[10px] font-bold uppercase whitespace-nowrap ${allowed ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : 'bg-red-50 text-red-600 border-red-100'}`}>

@@ -49,7 +49,7 @@ import {
    CreditCard, User, Tag, Grid, Save,
    Settings, Users, History, Wallet,
    UserPlus, PlusCircle, X, Percent, ArrowLeft, ChevronLeft, ChevronRight,
-   Scale as ScaleIcon, PauseCircle, LogOut, Minus, Plus, Edit3,
+   Scale as ScaleIcon, PauseCircle, LogOut, Minus, Plus, Edit3, Banknote,
    ArrowRightLeft, Globe, DollarSign, Split,
    ChevronDown, Check, AlertCircle, Layers,
    ShoppingBag, ScanBarcode, ArrowRight, Clock, Camera, AlertTriangle, BrushCleaning,
@@ -8019,34 +8019,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    );
 
    const renderDesktopTicketFooterActions = () => !isMobile && (!isRetailMode || cart.length > 0) && (
-      <div data-testid="desktop-ticket-footer-actions" className="flex shrink-0 items-center gap-2">
-         {cart.length > 0 && (
-            <button
-               onClick={handleClearFreshCartItems}
-               disabled={!hasClearableFreshItems}
-               aria-label="Borrar artículos nuevos del ticket"
-               title={hasClearableFreshItems ? 'Borrar artículos nuevos' : 'No hay artículos nuevos para borrar'}
-               className={`group flex h-14 w-11 shrink-0 items-center justify-center rounded-2xl border transition-all duration-200 ${
-                  hasClearableFreshItems
-                     ? 'border-rose-200 bg-white text-rose-500 hover:border-rose-300 hover:bg-rose-50 hover:text-rose-700'
-                     : 'cursor-not-allowed border-slate-200 bg-slate-50 text-slate-300'
-               }`}
-            >
-               <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border transition-all ${
-                  hasClearableFreshItems
-                     ? 'border-rose-100 bg-rose-50 text-rose-500 group-hover:border-rose-200 group-hover:bg-white group-hover:text-rose-700'
-                     : 'border-slate-100 bg-white text-slate-300'
-               }`}>
-                  <Trash2 size={18} strokeWidth={2.3} />
-               </span>
-            </button>
-         )}
+      <div data-testid="desktop-ticket-footer-actions" className="flex min-w-0 flex-1 items-center gap-2">
+         
          {!isRetailMode && (
             <button
                type="button"
                aria-pressed={rightSidebarTab === 'ACTIONS'}
                onClick={() => setRightSidebarTab(tab => tab === 'ACTIONS' ? 'CART' : 'ACTIONS')}
-               className="flex h-14 w-[88px] shrink-0 items-center justify-center gap-1 rounded-2xl border border-slate-200 bg-white px-1 text-[10px] font-black uppercase tracking-[0.02em] text-slate-700 hover:bg-slate-50"
+               className="flex h-14 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-2xl border border-slate-200 bg-white px-2 text-[10px] font-black uppercase tracking-[0.02em] text-slate-700 hover:bg-slate-50"
             >
                {rightSidebarTab === 'ACTIONS' ? <ShoppingBag size={17} /> : <Layers size={17} />}
                <span className="truncate">{rightSidebarTab === 'ACTIONS' ? 'Ver ticket' : 'Opciones'}</span>
@@ -9353,8 +9333,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                              </span>
                                           </>
                                        )}
-                                       <span className="shrink-0 text-slate-300">&middot;</span>
-                                       <span className="truncate">{lineTaxSummary}</span>
                                        {rowChips.slice(0, 3)}
                                        {rowChips.length > 3 && (
                                           <span className="inline-flex shrink-0 items-center rounded bg-slate-100 px-1 py-[1px] text-[9.5px] font-black leading-none text-slate-500">+{rowChips.length - 3}</span>
@@ -9645,6 +9623,19 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                     <div className="space-y-1">
                                        <p className="text-[10px] text-slate-400 font-black uppercase tracking-[0.28em]">Total</p>
                                        {pointsEarned > 0 && <p className="text-[10px] font-bold text-purple-500">+{pointsEarned} Puntos</p>}
+                                       {!isMobile && cart.length > 0 && (
+                                          <button
+                                             onClick={handleClearFreshCartItems}
+                                             disabled={!hasClearableFreshItems}
+                                             aria-label="Borrar artículos nuevos del ticket"
+                                             title={hasClearableFreshItems ? 'Borrar artículos nuevos' : 'No hay artículos nuevos para borrar'}
+                                             className={`mt-1 flex h-8 w-8 items-center justify-center rounded-xl border transition-all ${hasClearableFreshItems
+                                                ? 'border-rose-200 bg-rose-50 text-rose-500 hover:border-rose-300 hover:bg-rose-100 hover:text-rose-700'
+                                                : 'cursor-not-allowed border-slate-100 bg-slate-50 text-slate-300'}`}
+                                          >
+                                             <Trash2 size={15} strokeWidth={2.3} />
+                                          </button>
+                                       )}
                                     </div>
                                     <div className="pos-ticket-total text-right text-[2.65rem] font-black text-slate-900 leading-none tracking-tighter">
                                        {formatCurrency(cartTotal, baseCurrency.symbol)}
@@ -9658,10 +9649,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                     <>
                                        <button
                                           onClick={() => triggerSafetyGate('Cerrar Sesión', onLogout)}
-                                          className="h-14 w-[92px] shrink-0 px-1 rounded-2xl font-black text-[11px] uppercase tracking-[0.06em] border-2 border-red-100 bg-red-50 text-red-600 hover:bg-red-100 hover:border-red-200 shadow-lg shadow-red-100/60 transition-all active:scale-95 flex items-center justify-center gap-2"
+                                          className="h-14 w-16 shrink-0 px-1 rounded-2xl font-black text-[11px] uppercase tracking-[0.06em] border-2 border-red-100 bg-red-50 text-red-600 hover:bg-red-100 hover:border-red-200 shadow-lg shadow-red-100/60 transition-all active:scale-95 flex items-center justify-center gap-2"
                                        >
-                                          <LogOut size={20} />
-                                          <span>Salir</span>
+                                          <LogOut size={26} strokeWidth={2.4} />
+                                          <span className="sr-only">Salir</span>
                                        </button>
                                        <button
                                           onClick={async (event) => {
@@ -9672,20 +9663,20 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                              }
                                           }}
                                           disabled={cart.length === 0 || !canCheckoutWithFiscalPolicy}
-                                          className={`h-14 min-w-0 flex-1 px-1 rounded-2xl font-black text-[12px] uppercase tracking-[0.06em] shadow-xl hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-70 disabled:cursor-not-allowed flex items-center justify-center gap-2.5 ${!canCheckoutWithFiscalPolicy ? 'bg-red-100 text-red-500 cursor-not-allowed border-2 border-red-200' : 'bg-slate-900 text-white hover:bg-slate-800 disabled:bg-slate-200 disabled:text-slate-400 disabled:shadow-slate-100'}`}
+                                          className={`h-14 w-24 shrink-0 px-1 rounded-2xl font-black text-[12px] uppercase tracking-[0.06em] shadow-xl hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-70 disabled:cursor-not-allowed flex items-center justify-center gap-2.5 ${!canCheckoutWithFiscalPolicy ? 'bg-red-100 text-red-500 cursor-not-allowed border-2 border-red-200' : 'bg-slate-900 text-white hover:bg-slate-800 disabled:bg-slate-200 disabled:text-slate-400 disabled:shadow-slate-100'}`}
                                        >
-                                          <ArrowRight size={24} />
-                                          <span>{checkoutActionLabel}</span>
+                                          <Banknote size={28} strokeWidth={2.2} />
+                                          <span className="sr-only">{checkoutActionLabel}</span>
                                        </button>
                                     </>
                                  ) : (
                                     <>
                                        <button
                                           onClick={() => triggerSafetyGate('Cerrar Sesión', onLogout)}
-                                          className="h-14 w-[92px] shrink-0 px-1 rounded-2xl font-black text-[11px] uppercase tracking-[0.06em] border-2 border-red-100 bg-red-50 text-red-600 hover:bg-red-100 hover:border-red-200 shadow-lg shadow-red-100/60 transition-all active:scale-95 flex items-center justify-center gap-2"
+                                          className="h-14 w-16 shrink-0 px-1 rounded-2xl font-black text-[11px] uppercase tracking-[0.06em] border-2 border-red-100 bg-red-50 text-red-600 hover:bg-red-100 hover:border-red-200 shadow-lg shadow-red-100/60 transition-all active:scale-95 flex items-center justify-center gap-2"
                                        >
-                                          <LogOut size={20} />
-                                          <span>Salir</span>
+                                          <LogOut size={26} strokeWidth={2.4} />
+                                          <span className="sr-only">Salir</span>
                                        </button>
                                        <button
                                           onClick={async (event) => {
@@ -9694,10 +9685,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                              }
                                           }}
                                           disabled={cart.length === 0}
-                                          className="h-16 w-full flex items-center justify-center gap-2.5 rounded-2xl font-black text-[13px] uppercase tracking-[0.14em] bg-slate-900 text-white hover:bg-black shadow-xl hover:shadow-md transition-all active:scale-95 disabled:bg-slate-200 disabled:text-slate-400 disabled:opacity-100 disabled:cursor-not-allowed"
+                                          className="h-14 w-24 shrink-0 flex items-center justify-center gap-2.5 rounded-2xl font-black text-[13px] uppercase tracking-[0.14em] bg-slate-900 text-white hover:bg-black shadow-xl hover:shadow-md transition-all active:scale-95 disabled:bg-slate-200 disabled:text-slate-400 disabled:opacity-100 disabled:cursor-not-allowed"
                                        >
-                                          <ArrowRight size={24} />
-                                          <span>{isOrderTakerMode ? 'Guardar pedido' : 'Cobrar'}</span>
+                                          <Banknote size={28} strokeWidth={2.2} />
+                                          <span className="sr-only">{isOrderTakerMode ? 'Guardar pedido' : 'Cobrar'}</span>
                                        </button>
                                     </>
                                  )}
