@@ -73,7 +73,7 @@ export const validateV3FrozenLineFiscalAmounts = (transaction: Transaction, conf
     : round(calculated.reduce((sum, row) => sum + row.taxAmount, 0));
   const separateCharge=hasOfflineFiscalHeader(transaction);
   if(separateCharge&&!isOfflineTableFiscalTransaction(transaction))assertDirectFiscalCharge(transaction,config);
-  if(separateCharge&&charge>0&&JSON.stringify(transaction.serviceTaxPolicySnapshot)!==JSON.stringify(policy))throw new LargeMasterSyncV3Error('SYNC_V3_FROZEN_FISCAL_SOURCE_CHANGED');
+  if(separateCharge&&JSON.stringify(transaction.serviceTaxPolicySnapshot)!==JSON.stringify(policy))throw new LargeMasterSyncV3Error('SYNC_V3_FROZEN_FISCAL_SOURCE_CHANGED');
   const expectedNet = directSaleHeader
     ? round(transaction.items.reduce((sum, line) => sum + line.price * line.quantity, 0)
       - options.discountAmount - (options.isTaxIncluded ? expectedTax : 0) + (separateCharge?0:charge))

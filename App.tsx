@@ -6,7 +6,6 @@ import {resolveTerminalDocumentSeriesId} from './utils/seriesValidation';
 import {prepareFiscalFormatRuntime} from './services/fiscal/FiscalWorkflowV2FormatRuntime';
 import {financialIdentity} from './services/db/LargeMasterSyncV3FinancialRetention';
 import { fiscalWorkflowV2Client,fiscalWorkflowMessage } from './services/fiscal/FiscalWorkflowV2Client';
-import { reserveRefundFiscalReservation } from './services/fiscal/RefundFiscalReservation';
 import {requireFiscalErpAppliedReceipt,FISCAL_DISPATCH_CLAIMS} from './services/fiscal/FiscalMSellerDispatch';
 import { assertFormatsPostingClosed } from './services/articleFormats/activation';
 import { attachFiscalStatusLifecycle } from './services/fiscal/FiscalStatusLifecycle';
@@ -13118,7 +13117,6 @@ const AppContent: React.FC = () => {
     const creditNoteFiscalType = preparedFiscalAuthority?.ncfType || resolveCreditNoteFiscalCode(creditNoteFiscalMode);
     let creditNoteIssuance: Transaction['fiscalIssuance'];
     let creditNoteNcf: string | undefined;
-    let refundCheckout: any;
     if (creditNoteFiscalMode !== 'NONE' &&
         !(preparedFiscalAuthority
           ? await db.validatePreparedFiscalAuthority(creditNoteFiscalType, currentTerminalId, preparedFiscalAuthority.ncf, currentTerminal?.config)
@@ -13130,16 +13128,8 @@ const AppContent: React.FC = () => {
       creditNoteNcf = preparedFiscalAuthority.ncf;
       await db.reconcilePreparedNCF(preparedFiscalAuthority.ncfType, currentTerminalId, preparedFiscalAuthority.ncf, currentTerminal?.config);
     } else if (!originalTx.erpRefundSource && creditNoteFiscalMode !== 'NONE') {
-      const reservation = await reserveRefundFiscalReservation({
-        refundFiscalType: creditNoteFiscalType,
-        originalTransactionId: originalTx.id,
-        items: normalizedRefundItems.map(item => ({ id: item.id, cartId: item.cartId, quantity: Math.abs(Number(item.quantity || 0)), price: Number(item.price || 0) })),
-        client: fiscalWorkflowV2Client,
-        db: db as any,
-        terminalId: currentTerminalId,
-        activeTerminalConfig: currentTerminal?.config,
-      });
-      creditNoteNcf=reservation?.ncf; creditNoteIssuance=reservation?.fiscalIssuance; refundCheckout=reservation?.checkout;
+      const reservation=await db.reserveFiscalNumber(creditNoteFiscalType,currentTerminalId,1,currentTerminal?.config);
+      creditNoteNcf=reservation?.ncf; creditNoteIssuance=reservation?.fiscalIssuance;
       if (!creditNoteNcf) {
         alert(`No se pudo reservar el comprobante ${creditNoteFiscalType}. La devolución fue bloqueada.`);
         return null;
@@ -13210,10 +13200,6 @@ const AppContent: React.FC = () => {
       ncf: creditNoteNcf || undefined,
       fiscalIssuance: creditNoteIssuance,
       ncfType: creditNoteNcf ? creditNoteFiscalType : undefined,
-      ...(refundCheckout ? {
-        fiscalWorkflowCheckoutId: refundCheckout.checkoutId,
-        fiscalAllocationAuthorizationId: refundCheckout.allocation?.authorizationId,
-      } : {}),
       legacyNcf: creditNoteNcf && !creditNoteFiscalType.startsWith('E') ? creditNoteNcf : undefined,
       electronicNcf: creditNoteNcf && creditNoteFiscalType.startsWith('E') ? creditNoteNcf : undefined,
       fiscalMode: creditNoteFiscalMode,
