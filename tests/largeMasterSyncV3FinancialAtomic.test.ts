@@ -332,6 +332,32 @@ test('coupon redemption marks config coupon REDEEMED atomically with the sale', 
   } finally { f.sql.close(); }
 });
 
+test('E34 refund with allocation passes the checkout birth to the commit', async () => {
+  const f = fixture();
+  try {
+    const module = await financialModule(f, true);
+    let capturedCommit: any;
+    f.adapter.commitFinancialTransaction = async (input: any) => {
+      capturedCommit = input;
+      return { transaction: input.documents[0].document, created: true } as any;
+    };
+    Object.assign(f.adapter, { fiscalWorkflowStore: {
+      readCheckout: async () => ({ checkoutId: 'co', transactionId: 'refund', allocation: { authorizationId: 'auth', authorityHash: 'a'.repeat(64) } }),
+      allocationCommitPreconditions: async () => [{ collection: 'config', id: 'current', expected: '{}' }],
+    } } as any);
+    const refund = { ...module.transaction('refund', true), customerId: undefined,
+      originalTransactionId: 'sale-original', fiscalWorkflowCheckoutId: 'co', fiscalAllocationAuthorizationId: 'auth',
+      ncfType: 'E34', ncf: 'E340000000001' };
+    await module.persistV3FinancialTransaction(refund, {} as BusinessConfig, 'W', { refund: true });
+    assert.equal(capturedCommit.fiscalWorkflowCommits.length, 1);
+    assert.equal(capturedCommit.fiscalWorkflowCommits[0].checkoutId, 'co');
+    assert.equal(capturedCommit.fiscalWorkflowCommits[0].birth.schemaVersion, 3);
+    assert.equal(capturedCommit.fiscalWorkflowCommits[0].birth.authorizationId, 'auth');
+    assert.equal(capturedCommit.outboxEvent.eventType, 'SALES_CREDIT_NOTE_POSTED');
+    assert.equal(capturedCommit.fiscalAllocationPreconditions.length, 1);
+  } finally { f.sql.close(); }
+});
+
 test('native decimal stock keeps kilogram fractions and rejects actual demand above remaining stock', async () => {
   const f = fixture(0.5);
   try {
