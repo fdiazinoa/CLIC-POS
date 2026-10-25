@@ -11,7 +11,7 @@ import {presentationInventoryQuantity} from './selection';
 
 type Read=<T>(sql:string,values:(string|number|null)[])=>Promise<T[]>;
 /** Called only inside the native financial BEGIN/shared write lock. No HTTP or nested adapter calls. */
-export async function assertPresentationCommit(transaction:Transaction,proof:PresentationCommitProof|undefined,read:Read,requirements:{productId:string;warehouseId:string;quantity:number;quantityScale?:4}[]){
+export async function assertPresentationCommit(transaction:Transaction,proof:PresentationCommitProof|undefined,read:Read,requirements:{productId:string;warehouseId:string;quantity:number;quantityScale?:4|6}[]){
  const selected=transaction.items?.filter(line=>line.inventoryPresentation!==undefined)||[];
  if(!selected.length){if(transaction.inventoryPresentationContract!==undefined||proof)throw Error('INVENTORY_PRESENTATION_UNEXPECTED_PROOF');return;}
  if(transaction.documentType==='REFUND'||transaction.inventoryPresentationContract!==1||!proof)throw Error('INVENTORY_PRESENTATION_COMMIT_PROOF_REQUIRED');

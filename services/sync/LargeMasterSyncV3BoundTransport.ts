@@ -18,8 +18,9 @@ export interface LargeMasterSyncV3BoundIdentity {
 const UUID = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}';
 const V3_ROOT = '/api/sync/v3/master-syncs';
 const V3_READ_PATH = new RegExp(`^${V3_ROOT}/${UUID}/(?:manifest|datasets/(?:taxes|tariffs|articles|variants|barcodes|prices)/chunks/(?:0|[1-9][0-9]*))$`);
+const TRACKING_CLAIM_PATH=new RegExp(`^/api/sync/v3/tracking/allocations/${UUID}/claim$`);
 const validPath = (path: string, method: 'GET' | 'POST'): boolean =>
-  method === 'POST' ? path === V3_ROOT : V3_READ_PATH.test(path);
+  method === 'POST' ? path === V3_ROOT||TRACKING_CLAIM_PATH.test(path) : V3_READ_PATH.test(path);
 const normalized = (value: unknown): string => typeof value === 'string' ? value.trim() : '';
 
 const origin = (value: string): string => {
@@ -105,12 +106,15 @@ export const createLargeMasterSyncV3BoundTransport = (
   return {
     async request(path, init) {
       if (!validPath(path, init.method)) throw new LargeMasterSyncV3Error('SYNC_V3_PATH_INVALID');
+      if(init.body&&(!TRACKING_CLAIM_PATH.test(path)||Object.keys(init.body).join(',')!=='witnessHash'||! /^[a-f0-9]{64}$/.test(init.body.witnessHash)))throw new LargeMasterSyncV3Error('SYNC_V3_PATH_INVALID');
       assertStillBound();
       const beforeFiscalAssociation = fiscalAssociation();
       const response = await fetchImpl(`${v3Origin}${path}`, {
         method: init.method,
         headers: {
           Accept: 'application/json',
+          'X-Pos-Tracking-Contract':'1',
+          ...(init.body?{'Content-Type':'application/json'}:{}),
           'X-Sync-Token': bound.syncToken,
           'X-POS-Capabilities': 'largeMasterSyncV3',
           'X-Tenant-Id': bound.tenantId,
@@ -118,6 +122,7 @@ export const createLargeMasterSyncV3BoundTransport = (
           'X-Device-Id': bound.deviceId,
           'X-POS-Device-Id': bound.deviceId,
         },
+        ...(init.body?{body:JSON.stringify(init.body)}:{}),
         signal: init.signal,
         cache: 'no-store',
         credentials: 'omit',

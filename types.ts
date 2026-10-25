@@ -401,6 +401,7 @@ export interface InventoryAuditLog {
 }
 
 export interface InventoryLedgerEntry {
+  trackingCheckoutId?:string;
   v3InventoryBaseline?: string;
   v3Binding?: string;
   id: string;
@@ -1525,6 +1526,7 @@ export interface V3SaleAuthorityStamp {
 }
 
 export interface Product {
+  v3TrackingAuthorities?:import('./services/tracking/TrackingDeliveryWitness').TrackingAllocationSnapshot[];
   inventoryPresentationMaster?: import('./services/inventoryPresentations/contract').InventoryPresentationMaster;
   article_formats?: import('./services/articleFormats/contract').ArticleFormatsDTO;
   id: string;
@@ -1659,6 +1661,9 @@ export interface InventoryCommitment {
 }
 
 export interface InventoryTracking {
+  v3Authority?:import('./services/tracking/TrackingAuthority').TrackingAuthority;
+  availableMinor?:number;
+  selectedQuantityMinor?:number;
   id: string;
   productId: string;
   variantId?: string;
@@ -1830,6 +1835,8 @@ export interface CartItem extends Product {
 export interface Transaction {
   /** Fiscal invoice base; tender currency remains on each payment. */
   currency?: string;
+  trackingCheckoutId?:string;
+  trackingEffectAt?:string;
   inventoryPresentationContract?: 1;
     /** Durable future checkout identity; never added to historical/retained sources. */
     fiscalWorkflowCheckoutId?: string;
