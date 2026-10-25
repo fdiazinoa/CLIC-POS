@@ -23,13 +23,14 @@ test('non-E34 or missing original falls back to reserveFiscalNumber', async () =
     { refundFiscalType: 'B04', originalTransactionId: 'orig' },
     { refundFiscalType: 'E34', originalTransactionId: undefined },
     { refundFiscalType: 'E34', originalTransactionId: 'orig', noClient: true },
+    { refundFiscalType: 'E34', originalTransactionId: 'orig', throws: true },
   ]) {
     let fellBack = 0;
     const result = await reserveRefundFiscalReservation({
       refundFiscalType: opts.refundFiscalType,
       originalTransactionId: opts.originalTransactionId,
       items,
-      client: (opts as any).noClient ? undefined : { reserveOfflineCheckout: async () => ({}) },
+      client: (opts as any).noClient ? undefined : { reserveOfflineCheckout: async () => { if ((opts as any).throws) throw new Error('OFFLINE_FISCAL_NATIVE_REQUIRED'); return {}; } },
       db: { reserveFiscalNumber: async () => { fellBack++; return { ncf: 'B040000000001', fiscalIssuance: { ncf: 'B040000000001' } }; } },
       terminalId: 'T', activeTerminalConfig: {},
     });
