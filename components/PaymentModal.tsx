@@ -1,3 +1,4 @@
+import {assertDopFiscalSettlement,configuredFiscalBaseCurrency} from '../services/fiscal/DopFiscalSettlement';
 import InteractionProgress,{yieldInteractionPaint,type InteractionProgressHandle} from './InteractionProgress';
 import {FiscalExpiredCheckoutAction} from './FiscalExpiredCheckoutAction';
 import type {FiscalRetirementRecord} from '../services/fiscal/FiscalWorkflowV2Types';
@@ -64,7 +65,7 @@ import { sendReceiptEmailViaErp } from '../services/email/receiptEmailService';
 import { buildReceiptEmailPayload } from '../services/email/receiptEmailPayload';
 import { setLargeMasterSyncV3CriticalOperation } from '../services/sync/LargeMasterSyncV3OperationGate';
 
-export type PaymentEffectsFence = (() => void) & {completedTransaction?: Transaction;recordPaymentEffect?:(paymentId:string)=>Promise<void>;futureCheckout?:{checkoutId:string;transactionId:string;operationId?:string}};
+export type PaymentEffectsFence = (() => void|Promise<void>) & {completedTransaction?: Transaction;recordPaymentEffect?:(paymentId:string)=>Promise<void>;futureCheckout?:{checkoutId:string;transactionId:string;operationId?:string}};
 
 interface PaymentModalProps {
    openingTrace?: PosInteractionTrace | null;
@@ -1034,6 +1035,10 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
             }
          }
 
+         if(items.some(item=>item.v3SaleAuthority)&&!isRefund&&baseCurrency.code==='DOP'){
+            if(!config||configuredFiscalBaseCurrency(config)!=='DOP')throw Error('FISCAL_WORKFLOW_BASE_CURRENCY_CHANGED');
+            assertDopFiscalSettlement({currency:'DOP',total:effectiveTotalToPay,pendingBalance:sumCreditPaymentsBase(paymentsToConfirm),payments:paymentsToConfirm});
+         }
          paymentsToConfirm = await measureInteractionStage(
             trace,
             'SYNC_START',
@@ -1149,7 +1154,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
          setFinalizeError(message ? `Error al finalizar: ${message}` : 'Ocurrió un error al finalizar. Intente nuevamente.');
          setGatewayProgress(null);
       } finally {
-         releasePaymentFence?.();
+         await releasePaymentFence?.();
          setIsFinalizing(false);
          if (trace.stages.HANDLER_END === undefined) markInteractionStage(trace, 'HANDLER_END');
       }

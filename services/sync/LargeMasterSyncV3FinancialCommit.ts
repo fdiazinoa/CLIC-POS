@@ -1,5 +1,8 @@
+import {hasOfflineFiscalHeader} from '../fiscal/OfflineFiscalCharge';
+import {captureTrackingSourceMetadata} from '../tracking/TrackingSourceMetadata';
 import {isOfflineTableFiscalTransaction,assertTableFiscalSaleContext} from '../fiscal/OfflineTableFiscalCheckout';
 import {presentationInventoryQuantity} from '../inventoryPresentations/selection';
+import {calculateInventoryDeductions} from '../../utils/inventoryEngine';
 import {captureNewV3FiscalSourceMetadata} from './NewV3FiscalSourceMetadata';
 export type {V3FinancialOptions} from '../db/LargeMasterSyncV3FinancialRetention';
 import { planReservationCommitmentRelease } from './LargeMasterSyncV3ReservationCommitments';
@@ -38,36 +41,74 @@ export const validateV3FrozenFiscalAmounts = (transaction: Partial<Transaction>,
       && line.v3SaleAuthority.inventoryVersion === stamp.inventoryVersion && line.v3SaleAuthority.inventoryCursor === stamp.inventoryCursor))
     || ![transaction.netAmount, transaction.taxAmount, transaction.total].every(value => typeof value === 'number' && Number.isFinite(value))
     || Number(transaction.netAmount) < 0 || Number(transaction.taxAmount) < 0
-    || Math.abs(Number(transaction.netAmount) + Number(transaction.taxAmount) + (isOfflineTableFiscalTransaction(transaction)?Number(transaction.serviceChargeAmount||0):0) - Math.abs(Number(transaction.total))) > 0.02) {
+    || Math.abs(Number(transaction.netAmount) + Number(transaction.taxAmount) + (hasOfflineFiscalHeader(transaction)?Number(transaction.serviceChargeAmount||0):0) - Math.abs(Number(transaction.total))) > 0.02) {
     throw new LargeMasterSyncV3Error('SYNC_V3_FROZEN_FISCAL_INVALID');
   }
 };
 
-export const buildV3InventoryLedger = (transaction: Transaction, warehouseId: string, binding: string,
-  refund = false, conditions?: Map<string, 'SELLABLE' | 'DAMAGED'>): InventoryLedgerEntry[] => {
+const resolveRecipeClosure = async (line: CartItem, resolveArticle: (id: string) => Promise<Record<string, unknown> | null>): Promise<Record<string, unknown>[]> => {
+  const products: Record<string, unknown>[] = [];
+  const visited = new Set<string>();
+  const queue: string[] = (line.recipeDetails || []).map(detail => detail.childItemId).filter(Boolean);
+  while (queue.length) {
+    const id = queue.shift()!;
+    if (visited.has(id)) continue;
+    visited.add(id);
+    const article = await resolveArticle(id);
+    if (!article) throw new LargeMasterSyncV3Error('SYNC_V3_RECIPE_CHILD_MISSING');
+    products.push(article);
+    for (const detail of (article.recipeDetails as { childItemId?: string }[]) || []) if (detail.childItemId) queue.push(detail.childItemId);
+  }
+  return products;
+};
+
+export const buildV3InventoryLedger = async (transaction: Transaction, warehouseId: string, binding: string,
+  refund = false, conditions?: Map<string, 'SELLABLE' | 'DAMAGED'>,
+  resolveArticle?: (id: string) => Promise<Record<string, unknown> | null>): Promise<InventoryLedgerEntry[]> => {
   const seen = new Set<string>();
-  return transaction.items.flatMap(line => {
+  const entries: InventoryLedgerEntry[] = [];
+  for (const line of transaction.items) {
     if (!line.cartId || seen.has(line.cartId) || !line.v3SaleAuthority
       || line.v3SaleAuthority.binding !== binding || line.v3SaleAuthority.warehouseId !== warehouseId) {
       throw new LargeMasterSyncV3Error('SYNC_V3_MOVEMENT_AUTHORITY_INVALID');
     }
     seen.add(line.cartId);
-    if (line.type === 'SERVICE' || line.isInventoriable !== true) return [];
-    if (line.type !== 'PRODUCT' || line.trackingData?.length || line.recipeDetails?.length) {
-      throw new LargeMasterSyncV3Error('SYNC_V3_ADVANCED_ARTICLE_CONTRACT_REQUIRED');
-    }
+    if (line.type === 'SERVICE' || line.isInventoriable !== true) continue;
     const quantity = Math.abs(presentationInventoryQuantity(line));
     if (!Number.isFinite(quantity) || quantity === 0) throw new LargeMasterSyncV3Error('SYNC_V3_LINE_INVALID');
-    if (refund && conditions?.get(line.cartId) === 'DAMAGED') return [];
-    return [{ id: `V3-${transaction.id}-${encodeURIComponent(line.cartId)}`,
-      createdAt: transaction.date, warehouseId, productId: line.id,
-      concept: refund ? 'DEVOLUCIÓN_VENTA' : 'VENTA', documentRef: transaction.id,
-      qtyIn: refund ? quantity : 0, qtyOut: refund ? 0 : quantity,
-      unitCost: line.cost || 0, balanceQty: 0, balanceAvgCost: line.cost || 0,
-      terminalId: transaction.terminalId, variantId: line.variantId || line.variantSku,
-      syncStatus: 'PENDING', v3Binding: binding,
-      v3InventoryBaseline: v3InventoryBaselineKey(binding, line.v3SaleAuthority) }];
-  });
+    if (refund && conditions?.get(line.cartId) === 'DAMAGED') continue;
+    let deductionRows: { productId: string; quantity: number; unitCost: number }[];
+    if (line.recipeDetails?.length) {
+      if (!resolveArticle) throw new LargeMasterSyncV3Error('SYNC_V3_RECIPE_RESOLVER_REQUIRED');
+      const closure = await resolveRecipeClosure(line, resolveArticle);
+      const allProducts = [line as unknown as Record<string, unknown>, ...closure];
+      const deductions = calculateInventoryDeductions(line, quantity, allProducts as any);
+      deductionRows = deductions.map(d => {
+        const product = allProducts.find(p => p.id === d.productId) as any;
+        return { productId: d.productId, quantity: d.quantityToDeduct, unitCost: product?.cost || 0 };
+      });
+    } else {
+      deductionRows = [{ productId: line.id, quantity, unitCost: line.cost || 0 }];
+    }
+    if (line.recipeDetails?.length) {
+      (line as any).v3InventoryConsumption = { schemaVersion: 1, mode: 'COMPONENTS',
+        source: { syncId: line.v3SaleAuthority!.syncId, syncVersion: line.v3SaleAuthority!.syncVersion },
+        entries: deductionRows.map(row => ({ productId: row.productId, quantity: row.quantity, unitCost: row.unitCost })) };
+    }
+    for (const row of deductionRows) {
+      const isDirect = row.productId === line.id;
+      entries.push({ id: isDirect ? `V3-${transaction.id}-${encodeURIComponent(line.cartId)}` : `V3-${transaction.id}-${encodeURIComponent(line.cartId)}-${encodeURIComponent(row.productId)}`,
+        createdAt: transaction.date, warehouseId, productId: row.productId,
+        ...(transaction.trackingCheckoutId && isDirect ? { trackingCheckoutId: transaction.trackingCheckoutId } : {}),
+        concept: refund ? 'DEVOLUCIÓN_VENTA' : 'VENTA', documentRef: transaction.id,
+        qtyIn: refund ? row.quantity : 0, qtyOut: refund ? 0 : row.quantity,
+        unitCost: row.unitCost, balanceQty: 0, balanceAvgCost: row.unitCost,
+        terminalId: transaction.terminalId, variantId: isDirect ? (line.variantId || line.variantSku) : undefined,
+        syncStatus: 'PENDING', v3Binding: binding,
+        v3InventoryBaseline: v3InventoryBaselineKey(binding, line.v3SaleAuthority) });
+    }
+  }
+  return entries;
 };
 
 type FinancialEntry = { transaction: Transaction; options?: V3FinancialOptions };
@@ -120,6 +161,7 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
     const events: DurableOutboxEventInput[] = [];
     const intentIds: string[] = [];
     const fiscalAllocationPreconditions:NonNullable<import('../db/DatabaseAdapter').FinancialCommitInput['fiscalAllocationPreconditions']>=[];
+    const trackingCommits:NonNullable<import('../db/DatabaseAdapter').FinancialCommitInput['trackingCommits']>=[];
     const fiscalWorkflowCommits: NonNullable<import('../db/DatabaseAdapter').FinancialCommitInput['fiscalWorkflowCommits']> = [];
     const results: FinancialResult[] = [];
     const stagedCustomers = new Map<string, Customer>();
@@ -148,6 +190,8 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
       documents.push({ collectionName: retained.collection, document: { ...JSON.parse(retained.expected), state: 'SETTLED' },
         expectedDocument: retained.expected, v3ExpectedRetainedDocument: { collection: retained.collection, id: retained.id, expected: retained.expected } });
     }
+    const trackingSelections=transaction.items.flatMap(line=>line.trackingData||[]);
+    if(trackingSelections.length){if(!transaction.trackingCheckoutId||options.refund)throw Error('TRACKING_CHECKOUT_SOURCE_REQUIRED');trackingCommits.push({checkoutId:transaction.trackingCheckoutId,transactionId:transaction.id,selections:trackingSelections});}
     if(transaction.fiscalAllocationAuthorizationId){
       if(entries.length!==1||options.refund||!transaction.fiscalWorkflowCheckoutId||!dbAdapter.fiscalWorkflowStore?.allocationCommitPreconditions)throw Error('OFFLINE_FISCAL_NATIVE_REQUIRED');
       const checkout=await dbAdapter.fiscalWorkflowStore.readCheckout(transaction.fiscalWorkflowCheckoutId);if(!checkout?.allocation)throw Error('OFFLINE_FISCAL_ALLOCATION_REQUIRED');
@@ -177,7 +221,7 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
     validateV3FrozenFiscalAmounts(transaction, retained);
     validateV3FrozenLineFiscalAmounts(transaction, projected);
     if (authoritativeLines.length !== transaction.items.length) throw new LargeMasterSyncV3Error('SYNC_V3_ARTICLE_SOURCE_CHANGED');
-    const ledger = buildV3InventoryLedger({ ...transaction, items: authoritativeLines }, warehouseId, session.binding, options.refund, options.conditions);
+    const ledger = await buildV3InventoryLedger({ ...transaction, items: authoritativeLines }, warehouseId, session.binding, options.refund, options.conditions, session.ready.runtime?.getOperationalArticle?.bind(session.ready.runtime));
     const document: Transaction = { ...transaction, items: authoritativeLines, syncStatus: 'PENDING', v3Binding: session.binding,
       v3WarehouseId: warehouseId, v3CommitFingerprint: identities[index],
       v3InventoryBaseline: v3InventoryBaselineKey(session.binding, stamp!) };
@@ -207,6 +251,17 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
         ...(retained ? { v3ExpectedRetainedDocument: { collection: retained.collection, id: retained.id, expected: retained.expected } } : {}) },
       ...ledger.map(document => ({ collectionName: 'inventoryLedger', document, requireAbsent: true })),
     );
+    const redeemedCoupons = (document as any).coupons as { id: string }[] | undefined;
+    if (redeemedCoupons?.length) {
+      const configDoc = await db.getDocument('config', 'current') as any;
+      if (configDoc?.coupons) {
+        const redeemedIds = new Set(redeemedCoupons.map(coupon => coupon.id));
+        const configAfter = { ...configDoc, coupons: configDoc.coupons.map((coupon: any) => redeemedIds.has(coupon.id)
+          ? { ...coupon, status: 'REDEEMED', ticketRef: document.displayId || document.id, terminalId: document.terminalId, redeemedAt: document.date }
+          : coupon) };
+        mergeMutation({ collectionName: 'config', document: configAfter, expectedDocument: JSON.stringify(configDoc) });
+      }
+    }
     if (walletDelta) {
       if (!document.customerId || !customerBefore) throw new LargeMasterSyncV3Error('SYNC_V3_WALLET_CUSTOMER_REQUIRED');
       const wallets = await db.get('wallets' as any) as Wallet[] || [];
@@ -240,10 +295,21 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
       }
       documents.push(...originalMutations);
     }
-    if (isSyncFeatureEnabled('sqlite_outbox_v2') && !options.refund) {
+    if (isSyncFeatureEnabled('sqlite_outbox_v2')||document.items.some(line=>line.trackingData?.length)) {
+      if (options.refund) {
+        const fiscalSourceMetadata = {...captureNewV3FiscalSourceMetadata(document,projected,session.binding,{refund:true,retained:Boolean(retained),offlineTableAccount:false}),...captureTrackingSourceMetadata(document,projected)};
+        const paymentIntentIds = (document.payments || []).map((payment: any) => payment.paymentIntentId).filter(Boolean);
+        events.push({ eventId: createUuid(), eventType: 'SALES_CREDIT_NOTE_POSTED', aggregateType: 'TRANSACTION',
+            aggregateId: document.id, schemaVersion: 1,
+            payload: buildSalePostedPayload(document, { ...fiscalSourceMetadata, inventoryMovementIds: ledger.map(row => row.id), paymentIntentIds }), createdAt: document.date });
+        const paymentPosted = buildPaymentPostedPayload(document, { ...fiscalSourceMetadata, paymentIntentIds });
+        if (paymentPosted) events.push({ eventId: createUuid(), eventType: 'PAYMENT_POSTED',
+            aggregateType: 'TRANSACTION', aggregateId: document.id, schemaVersion: 1, payload: paymentPosted, createdAt: document.date });
+        intentIds.push(...paymentIntentIds);
+      } else {
       const offlineTable=isOfflineTableFiscalTransaction(document);
       if(offlineTable)await assertTableFiscalSaleContext(document,retained);
-      const fiscalSourceMetadata = captureNewV3FiscalSourceMetadata(document,projected,session.binding,{refund:options.refund,retained:Boolean(retained),offlineTableAccount:offlineTable});
+      const fiscalSourceMetadata = {...captureNewV3FiscalSourceMetadata(document,projected,session.binding,{refund:false,retained:Boolean(retained),offlineTableAccount:offlineTable}),...captureTrackingSourceMetadata(document,projected)};
       let fiscalWorkflowBirth: import('../fiscal/FiscalWorkflowV2Types').FiscalWorkflowBirthV2 | undefined;
       if(document.fiscalWorkflowCheckoutId){
         if(options.refund||retained&&!offlineTable||!dbAdapter.fiscalWorkflowStore)throw Error('FISCAL_WORKFLOW_NEW_SOURCE_REQUIRED');
@@ -266,6 +332,7 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
       if (paymentPosted) events.push({ eventId: claim?.paymentEventId || createUuid(), eventType: 'PAYMENT_POSTED',
           aggregateType: 'TRANSACTION', aggregateId: document.id, schemaVersion: 1, payload: paymentPosted, createdAt: document.date });
       intentIds.push(...paymentIntentIds);
+      }
     }
     results.push({ transaction: document, created: true });
     }
@@ -280,8 +347,9 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
     }
     if (events.length) {
       await durableOutboxRepository.commitFinancialTransaction({ documents, outboxEvent: events[0],
-        additionalOutboxEvents: events.slice(1), paymentIntentIds: intentIds,fiscalWorkflowCommits,...(fiscalAllocationPreconditions.length?{fiscalAllocationPreconditions}:{}) });
+        additionalOutboxEvents: events.slice(1), paymentIntentIds: intentIds,fiscalWorkflowCommits,trackingCommits,...(fiscalAllocationPreconditions.length?{fiscalAllocationPreconditions}:{}) });
     } else {
+      if(trackingCommits.length)throw Error('TRACKING_ATOMIC_OUTBOX_REQUIRED');
       if (!dbAdapter.saveDocumentsAtomically) throw new LargeMasterSyncV3Error('SYNC_V3_ATOMIC_COMMIT_REQUIRED');
       await dbAdapter.saveDocumentsAtomically(documents);
     }

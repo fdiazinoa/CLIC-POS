@@ -22,6 +22,10 @@ function fixture(stock = 5) {
   sql.prepare('INSERT INTO master_v3_inventory_balances VALUES(?,?,?,?,?,?)').run('P', 'W', stock + 3, 2, 1, 'now');
   let failId: string | undefined;
   const bridge = {
+    beginTransaction:async()=>{sql.exec('BEGIN IMMEDIATE');},
+    commitTransaction:async()=>{sql.exec('COMMIT');},
+    rollbackTransaction:async()=>{sql.exec('ROLLBACK');},
+    isTransactionActive:async()=>({result:sql.isTransaction}),
     query: async (query: string, params: any[] = []) => ({ values: sql.prepare(query).all(...params) }),
     execute: async (query: string) => { sql.exec(query); },
     run: async (query: string, params: any[] = []) => {
@@ -229,14 +233,37 @@ test('real batch builder preserves enabled sale/payment events in same commit an
       else delete (globalThis.crypto as Partial<Crypto>).randomUUID;
     }
     const eventIds = f.sql.prepare('SELECT event_id FROM sync_outbox_v2').all();
-    assert.equal(new Set(eventIds.map(row => row.event_id)).size, 2);
+    assert.equal(new Set(eventIds.map(row => row.event_id)).size, 3);
     for (const row of eventIds) assert.match(String(row.event_id), /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
     const events = f.sql.prepare('SELECT event_type FROM sync_outbox_v2 ORDER BY local_sequence').all();
-    assert.deepEqual(events.map(row => row.event_type), ['SALE_POSTED', 'PAYMENT_POSTED']);
+    assert.deepEqual(events.map(row => row.event_type), ['SALES_CREDIT_NOTE_POSTED', 'SALE_POSTED', 'PAYMENT_POSTED']);
     f.sql.prepare("DELETE FROM documents WHERE collection_name='transactions' AND doc_id='refund'").run();
     await assert.rejects(module.persistV3FinancialBatch(entries, {} as BusinessConfig, 'W'), /DUPLICATE_TRANSACTION_MISMATCH/);
     assert.equal(f.rows('inventoryLedger').length, 2);
-    assert.equal(events.length, 2);
+    assert.equal(events.length, 3);
+  } finally { f.sql.close(); }
+});
+test('real batch builder emits credit-note and positive refund outflow for ordinary E34 refund', async () => {
+  const f = fixture();
+  try {
+    const module = await financialModule(f, true);
+    const refund = { ...module.transaction('refund', true), customerId: undefined,
+      originalTransactionId: 'sale-original', affectedNCF: 'B010000000001',
+      payments: [{ id: 'refund-cash', method: 'CASH', amount: 118, timestamp: '2026-10-05T00:00:00Z' }],
+      settlementAppliedBase: 118 };
+    await module.persistV3FinancialBatch([{ transaction: refund, options: { refund: true } }], {} as BusinessConfig, 'W');
+    const events = f.sql.prepare('SELECT event_type, payload_json FROM sync_outbox_v2 ORDER BY local_sequence').all();
+    assert.deepEqual(events.map((row: any) => row.event_type), ['SALES_CREDIT_NOTE_POSTED', 'PAYMENT_POSTED']);
+    const creditNote = JSON.parse(String(events[0].payload_json));
+    assert.equal(creditNote.summary.document_type, 'REFUND');
+    assert.equal(creditNote.summary.original_transaction_id, 'sale-original');
+    assert.equal(creditNote.summary.affected_ncf, 'B010000000001');
+    assert.equal(creditNote.summary.total, 118);
+    const payment = JSON.parse(String(events[1].payload_json));
+    assert.equal(payment.summary.document_type, 'REFUND');
+    assert.equal(payment.summary.total, 118);
+    assert.equal(payment.payments[0].method, 'CASH');
+    assert.equal(payment.payments[0].amount, 118);
   } finally { f.sql.close(); }
 });
 test('V3 fiscal source rejects missing totals/mixed tax-inclusion before commit; service and damaged refund never create stock movements', async () => {
@@ -251,15 +278,57 @@ test('V3 fiscal source rejects missing totals/mixed tax-inclusion before commit;
     await assert.rejects(module.persistV3FinancialBatch([{ transaction: { ...transaction, taxAmount: undefined } }], {} as BusinessConfig, 'W'), /FROZEN_FISCAL_INVALID/);
     assert.equal(f.rows('transactions').length, 0);
     const service = { ...transaction, items: [{ ...transaction.items[0], type: 'SERVICE', isInventoriable: false }] };
-    assert.deepEqual(module.buildV3InventoryLedger(service, 'W', 'binding'), []);
+    assert.deepEqual(await module.buildV3InventoryLedger(service, 'W', 'binding'), []);
     const untracked = { ...transaction, items: [{ ...transaction.items[0], isInventoriable: false }] };
-    assert.deepEqual(module.buildV3InventoryLedger(untracked, 'W', 'binding'), []);
-    assert.deepEqual(module.buildV3InventoryLedger(transaction, 'W', 'binding', true,
+    assert.deepEqual(await module.buildV3InventoryLedger(untracked, 'W', 'binding'), []);
+    assert.deepEqual(await module.buildV3InventoryLedger(transaction, 'W', 'binding', true,
       new Map([[transaction.items[0].cartId, 'DAMAGED']])), []);
-    const ledger = module.buildV3InventoryLedger(transaction, 'W', 'binding');
+    const ledger = await module.buildV3InventoryLedger(transaction, 'W', 'binding');
     assert.equal(ledger[0].id, 'V3-sale-sale-line');
     assert.equal(ledger[0].qtyOut, 1);
-    assert.equal(module.buildV3InventoryLedger(transaction, 'W', 'binding', true)[0].qtyIn, 1);
+    assert.equal((await module.buildV3InventoryLedger(transaction, 'W', 'binding', true))[0].qtyIn, 1);
+  } finally { f.sql.close(); }
+});
+
+test('recipe line deduces components instead of the parent', async () => {
+  const f = fixture();
+  try {
+    const module = await financialModule(f, true);
+    const recipeTx = { ...module.transaction('recipe'), items: [{ ...module.transaction('recipe').items[0], recipeDetails: [{ childItemId: 'child', quantity: 2 }] }] };
+    const resolveArticle = async (id: string) => ({ id, cost: 5, measurementUnit: 'Unidad', type: 'PRODUCT', isInventoriable: true });
+    const ledger = await module.buildV3InventoryLedger(recipeTx, 'W', 'binding', false, undefined, resolveArticle);
+    assert.equal(ledger.length, 1);
+    assert.equal(ledger[0].productId, 'child');
+    assert.equal(ledger[0].qtyOut, 2);
+    assert.equal(ledger[0].unitCost, 5);
+    assert.deepEqual(recipeTx.items[0].v3InventoryConsumption, { schemaVersion: 1, mode: 'COMPONENTS',
+      source: { syncId: 'S', syncVersion: 2 }, entries: [{ productId: 'child', quantity: 2, unitCost: 5 }] });
+  } finally { f.sql.close(); }
+});
+
+test('recipe component deduction converts ingredient units at sale time', async () => {
+  const f = fixture();
+  try {
+    const module = await financialModule(f, true);
+    const recipeTx = { ...module.transaction('recipe'), items: [{ ...module.transaction('recipe').items[0], recipeDetails: [{ childItemId: 'child', quantity: 500, unit: 'gr' }] }] };
+    const resolveArticle = async (id: string) => ({ id, cost: 10, measurementUnit: 'kg', type: 'PRODUCT', isInventoriable: true });
+    const ledger = await module.buildV3InventoryLedger(recipeTx, 'W', 'binding', false, undefined, resolveArticle);
+    assert.equal(ledger.length, 1);
+    assert.equal(ledger[0].productId, 'child');
+    assert.equal(ledger[0].qtyOut, 0.5);
+  } finally { f.sql.close(); }
+});
+
+test('coupon redemption marks config coupon REDEEMED atomically with the sale', async () => {
+  const f = fixture();
+  try {
+    f.sql.prepare("INSERT INTO documents(collection_name,doc_id,data)VALUES('config','current',?)").run(JSON.stringify({ id: 'current', coupons: [{ id: 'coupon-1', code: 'CODE', status: 'ACTIVE' }] }));
+    const module = await financialModule(f, true);
+    const sale = { ...module.transaction('sale'), customerId: undefined, coupons: [{ id: 'coupon-1', code: 'CODE' }] };
+    await module.persistV3FinancialBatch([{ transaction: sale }], {} as BusinessConfig, 'W');
+    const config = JSON.parse(String(f.sql.prepare("SELECT data FROM documents WHERE collection_name='config' AND doc_id='current'").get()!.data));
+    assert.equal(config.coupons[0].status, 'REDEEMED');
+    assert.equal(config.coupons[0].ticketRef, sale.displayId || sale.id);
   } finally { f.sql.close(); }
 });
 
@@ -388,4 +457,14 @@ test('invalid Date is rejected at financial identity before a fresh native commi
  const f=fixture();try{const module=await financialModule(f,true),transaction=module.transaction('invalid-date');transaction.payments=[{id:'invalid-payment',method:'CASH',amount:118,timestamp:new Date(NaN)}];
   await assert.rejects(module.persistV3FinancialTransaction(transaction,{} as BusinessConfig,'W'),/SYNC_V3_FINANCIAL_DATE_INVALID/);assert.equal(f.rows('transactions').length,0);assert.equal(f.rows('transactionHistory').length,0);assert.equal(f.sql.prepare('SELECT count(*) n FROM sync_outbox_v2').get()!.n,0);
  }finally{f.sql.close();}
+});
+
+test('tracking commits require a bijection for every tracked transaction, history and outbox source',async()=>{
+ const f=fixture();const selected={authority:{allocationId:'allocation'},cartId:'line',quantityMinor:1000000};
+ const line={id:'P',cartId:'line',v3SaleAuthority:{binding:'binding'},trackingData:[selected]};
+ const transaction=(id:string)=>({collectionName:'transactions',document:{id,items:[line]}});
+ const event=(id:string)=>({eventId:'event-'+id,eventType:'SALE_POSTED',aggregateType:'Transaction',aggregateId:id,schemaVersion:1,payload:{transaction:{id,items:[line]}},createdAt:'now'});
+ await assert.rejects(f.adapter.commitFinancialTransaction({documents:[transaction('one'),transaction('two')] as any,outboxEvent:event('one'),additionalOutboxEvents:[event('two')],trackingCommits:[{checkoutId:'checkout',transactionId:'one',selections:[selected] as any}]}),/TRACKING_ATOMIC_SOURCE_REQUIRED/);
+ await assert.rejects(f.adapter.commitFinancialTransaction({documents:[transaction('one')] as any,outboxEvent:event('one'),trackingCommits:[{checkoutId:'checkout',transactionId:'one',selections:[selected] as any}]}),/TRACKING_ATOMIC_SOURCE_REQUIRED/);
+ assert.equal(f.rows('transactions').length,0);assert.equal(f.sql.prepare('select count(*) n from sync_outbox_v2').get()?.n,0);
 });

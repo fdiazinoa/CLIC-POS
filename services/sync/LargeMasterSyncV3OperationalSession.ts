@@ -56,6 +56,13 @@ export class LargeMasterSyncV3OperationalSession {
     private readonly setupCredentialGuard?:string,
   ) {}
 
+  async trackingOwner(){
+    await this.assertCurrent();
+    const {terminal}=v3OperationalConfigContext(await db.get('config') as unknown as BusinessConfig,this.identity),erp=terminal.config.erpBinding;
+    if(!erp?.companyId||!erp.storeId)throw Error('TRACKING_OWNER_REQUIRED');
+    return {tenantId:this.identity.tenantId,companyId:erp.companyId,storeId:erp.storeId,terminalId:this.identity.terminalId,deviceId:this.identity.deviceId};
+  }
+
   static async open(refresh = false, metric?: (metric: LargeMasterSyncV3Metric) => void, cachedOnly = false): Promise<LargeMasterSyncV3OperationalSession> {
     const observe = (event: LargeMasterSyncV3Metric) => { try { metric?.(event); } catch { /* Observer only. */ } };
     if (!LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED || LARGE_MASTER_SYNC_V3_CANARY) {
@@ -408,7 +415,8 @@ export class LargeMasterSyncV3OperationalSession {
     if (intent === 'REFUND') return [];
     const catalog = await this.catalog(lines[0].v3SaleAuthority!.tariffId, warehouseId);
     const demands = new Map<string, number>();
-    const baseItems=new Set(lines.filter(line=>line.inventoryPresentation).map(line=>line.id));
+    const baseItems=new Set(lines.filter(line=>line.inventoryPresentation||line.trackingData?.length).map(line=>line.id));
+    const trackingItems=new Set(lines.filter(line=>line.trackingData?.length).map(line=>line.id));
     for (const line of lines) {
       if (line.quantity <= 0) throw new LargeMasterSyncV3Error('SYNC_V3_LINE_INVALID');
       const source = await catalog.get(line.id);
@@ -419,7 +427,7 @@ export class LargeMasterSyncV3OperationalSession {
         demands.set(line.id,baseItems.has(line.id)?new Decimal(demands.get(line.id)||0).plus(presentationInventoryQuantity(line)).toNumber():(demands.get(line.id)||0)+line.quantity);
       }
     }
-    return [...demands].map(([productId, quantity]) => ({ productId, quantity, warehouseId,...(baseItems.has(productId)?{quantityScale:4 as const}:{}),
+    return [...demands].map(([productId, quantity]) => ({ productId, quantity, warehouseId,...(trackingItems.has(productId)?{quantityScale:6 as const}:baseItems.has(productId)?{quantityScale:4 as const}:{}),
       baseline: v3InventoryBaselineKey(this.binding, lines[0].v3SaleAuthority!) }));
   }
 }

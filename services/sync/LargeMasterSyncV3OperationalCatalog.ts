@@ -100,15 +100,15 @@ export class LargeMasterSyncV3OperationalCatalog {
       throw new UnsupportedArticleError('Indicador de peso inválido');
     }
     if (!['PRODUCT', 'SERVICE'].includes(String(article.type))) throw new UnsupportedArticleError('Tipo de artículo no soportado');
-    if (sourceFlags.usesLots || sourceFlags.usesSerial) throw new UnsupportedArticleError('Lotes o series no soportados');
+    if ((sourceFlags.usesLots || sourceFlags.usesSerial)&&(article.tracking_contract_version!==1||!Array.isArray(article.tracking_authorities))) throw new UnsupportedArticleError('Autoridad finita de lotes o series requerida');
     if (sourceFlags.isWeighted && !hasV3KilogramContract(article)) {
       const reasons = [sourceFlags.trackInventory && 'control de stock', sourceFlags.integersOnly !== false && 'cantidades enteras',
         (!weightUnit(article.measurementUnit) || weightUnit(article.measurementUnit) !== weightUnit(article.purchaseUnit)) && 'unidades de peso incompatibles',
         article.conversionFactor !== 1 && 'factor de conversión'].filter(Boolean);
       throw new UnsupportedArticleError('Contrato de peso: ' + (reasons.join(', ') || 'configuración avanzada no soportada'));
     }
-    if ((Array.isArray(article.recipeDetails) && article.recipeDetails.length) || (Array.isArray(article.modifiers) && article.modifiers.length)) {
-      throw new UnsupportedArticleError('Receta o modificadores no soportados');
+    if (Array.isArray(article.modifiers) && article.modifiers.length) {
+      throw new UnsupportedArticleError('Modificadores no soportados');
     }
     let restaurant: ReturnType<typeof v3RestaurantContract>;
     try { restaurant = v3RestaurantContract(article); }
@@ -157,6 +157,7 @@ export class LargeMasterSyncV3OperationalCatalog {
     });
     const product: Product = {
       ...restaurant,
+      ...((sourceFlags.usesLots||sourceFlags.usesSerial)?{v3TrackingAuthorities:structuredClone(article.tracking_authorities) as Product['v3TrackingAuthorities']}:{ }),
       id: articleId,
       sku: optionalString(article.sku),
       externalCode: optionalString(article.externalCode),

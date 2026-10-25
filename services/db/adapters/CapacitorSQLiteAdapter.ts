@@ -1,3 +1,8 @@
+import {TRACKING_OPERATION_SCHEMA,prepareTrackingOperation,readTrackingOperation,recordTrackingPaymentEffect,assertTrackingOperationCommit,readCommittedTrackingReceipt,retireTrackingOperation,type TrackingOperation,type TrackingScope} from '../TrackingCheckoutOperation';
+import {base6,readV3Base6Stock} from '../V3Base6Stock';
+import {TRACKING_ALLOCATION_SCHEMA,installTrackingAllocation,prepareTrackingCheckout,fenceTrackingCheckout,abandonTrackingCheckout,consumeTrackingCheckout} from '../TrackingAllocationStore';
+import type {Transaction} from '../../../types';
+import type {TrackingAuthority,TrackingSelection} from '../../tracking/TrackingAuthority';
 import {OFFLINE_FISCAL_ALLOCATION_WRITER_SCHEMA} from '../OfflineFiscalAllocationStore';
 import {FISCAL_RETIREMENT_WRITER_SCHEMA,OFFLINE_FISCAL_ABANDON_WRITER_SCHEMA,assertRetirementRecoveryPromotion} from '../FiscalWorkflowRetirementStore';
 import {assertTableFiscalSaleContext} from '../../fiscal/OfflineTableFiscalCheckout';
@@ -539,6 +544,24 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         return this.withWriteLock(() => db.run(normalized, params));
     }
 
+    async readTrackingCheckout(cartIdentity:string,scope:TrackingScope){return this.withWriteLock(()=>readTrackingOperation(this.ensureDb() as any,cartIdentity,scope));}
+    async readCommittedTrackingReceipt(operation:TrackingOperation){return this.withWriteLock(()=>readCommittedTrackingReceipt(this.ensureDb() as any,operation));}
+    async readTrackingAuthority(allocationId:string):Promise<{authorityJson:string;witnessHash:string;availableMinor:number}|null>{
+        const row=(await this.ensureDb().query("SELECT a.authority_json,a.delivery_witness_hash,a.state,json_extract(a.authority_json,'$.quantityMinor')-a.consumed_minor-coalesce((SELECT sum(c.quantity_minor) FROM pos_tracking_checkout_v1 c WHERE c.allocation_id=a.id AND c.phase IN('PREPARED','EFFECT_POSSIBLE')),0) available_minor FROM pos_tracking_allocations_v1 a WHERE a.id=?",[allocationId])).values?.[0];return row?{authorityJson:String(row.authority_json),witnessHash:String(row.delivery_witness_hash),availableMinor:row.state==='ACTIVE'?Number(row.available_minor):0}:null;
+    }
+    async installTrackingAuthority(authority:TrackingAuthority,previouslySeen:boolean,serverConsumedMinor=0,deliveryWitnessHash?:string,deliveryClock?:import('../TrackingAllocationStore').TrackingDeliveryClock):Promise<void>{
+        await this.withWriteLock(()=>this.executeUnlocked([],()=>installTrackingAllocation(this.ensureDb() as any,authority,previouslySeen,serverConsumedMinor,deliveryWitnessHash,deliveryClock),true));
+    }
+    async prepareTrackingCheckout(checkoutId:string,selections:TrackingSelection[],scope:Pick<TrackingAuthority,'tenantId'|'companyId'|'storeId'|'warehouseId'|'terminalId'|'deviceId'>,operation:{transactionId:string;cartIdentity:string}):Promise<void>{
+        await this.withWriteLock(()=>this.executeUnlocked([],async()=>{await prepareTrackingOperation(this.ensureDb() as any,checkoutId,operation.transactionId,operation.cartIdentity,scope);await prepareTrackingCheckout(this.ensureDb() as any,checkoutId,selections,scope);},true));
+    }
+    async fenceTrackingCheckout(checkoutId:string,paymentId:string):Promise<number>{
+        let effectAt=0;await this.withWriteLock(()=>this.executeUnlocked([],async()=>{effectAt=await fenceTrackingCheckout(this.ensureDb() as any,checkoutId);await recordTrackingPaymentEffect(this.ensureDb() as any,checkoutId,paymentId);},true));return effectAt;
+    }
+    async abandonTrackingCheckout(checkoutId:string):Promise<void>{
+        await this.withWriteLock(()=>this.executeUnlocked([],async()=>{await abandonTrackingCheckout(this.ensureDb() as any,checkoutId);await retireTrackingOperation(this.ensureDb() as any,checkoutId);},true));
+    }
+
     async commitFinancialTransaction(input: FinancialCommitInput): Promise<void> {
         const now = new Date().toISOString();
         const statements: Array<{ statement: string; values: any[] }> = [];
@@ -596,6 +619,21 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         const needsFinancialPrecondition = input.documents.some(row => row.document.v3InventoryBaseline
           || row.requireAbsent || row.expectedDocument !== undefined || row.v3StockRequirements);
         await this.withWriteLock(() => this.executeUnlocked(statements,async()=>{
+          const trackedSources=input.documents.filter(d=>d.collectionName==='transactions'&&d.document.items?.some((line:any)=>line.v3SaleAuthority&&line.trackingData?.length));
+          const trackingCommits=input.trackingCommits||[];
+          if(trackedSources.length!==trackingCommits.length||new Set(trackingCommits.map(c=>c.transactionId)).size!==trackingCommits.length||new Set(trackingCommits.map(c=>c.checkoutId)).size!==trackingCommits.length||trackedSources.some(d=>trackingCommits.filter(c=>c.transactionId===d.document.id).length!==1))throw Error('TRACKING_ATOMIC_SOURCE_REQUIRED');
+          for(const tracking of input.trackingCommits||[]){
+            const source=input.documents.find(d=>d.collectionName==='transactions'&&d.document.id===tracking.transactionId);
+            const event=outboxEvents.find(e=>e.eventType==='SALE_POSTED'&&e.aggregateId===tracking.transactionId);
+            const history=input.documents.find(d=>d.collectionName==='transactionHistory'&&d.document.id===tracking.transactionId);
+            const selections=source?.document.items?.flatMap((line:any)=>line.trackingData||[])||[];
+            if(!source||!event||!history||JSON.stringify(history.document.items?.flatMap((line:any)=>line.trackingData||[])||[])!==JSON.stringify(tracking.selections)||JSON.stringify(selections)!==JSON.stringify(tracking.selections)||JSON.stringify(event.payload.transaction?.items?.flatMap((line:any)=>line.trackingData||[])||[])!==JSON.stringify(tracking.selections))throw Error('TRACKING_ATOMIC_SOURCE_REQUIRED');
+            const effectRows=(await this.ensureDb().query('SELECT effect_at_ms FROM pos_tracking_checkout_v1 WHERE checkout_id=?',[tracking.checkoutId])).values||[];
+            if(!Number.isFinite(Date.parse(source.document.trackingEffectAt))||effectRows.some((row:any)=>row.effect_at_ms!==Date.parse(source.document.trackingEffectAt)))throw Error('TRACKING_EFFECT_TIME_REQUIRED');
+            await assertTrackingOperationCommit(this.ensureDb() as any,tracking.checkoutId,source.document as Transaction);
+            await consumeTrackingCheckout(this.ensureDb() as any,tracking.checkoutId,tracking.transactionId,tracking.selections);
+          }
+          if(input.documents.some(d=>d.collectionName==='transactions'&&d.document.items?.some((line:any)=>line.v3SaleAuthority&&line.trackingData?.length))&&!input.trackingCommits?.length)throw Error('TRACKING_ATOMIC_SOURCE_REQUIRED');
           if(needsFinancialPrecondition)await this.assertV3FinancialBaseline(input.documents);
           for(const proof of input.fiscalAllocationPreconditions||[]){
             if(!['config','fiscalAllocations','fiscalRanges','localFiscalBuffer'].includes(proof.collection))throw Error('OFFLINE_FISCAL_COMMIT_PROOF_INVALID');
@@ -625,9 +663,9 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
               const seriesMutation=input.documents.filter(d=>d.collectionName==='internalSequences'),counterMutation=input.documents.filter(d=>d.collectionName==='globalSequenceCounter');
               if(!tx.seriesId||seriesMutation.length!==1||counterMutation.length!==1||JSON.stringify([tx.displayId,tx.seriesNumber,tx.globalSequence])!==JSON.stringify([numbers.result.displayId,numbers.result.seriesNumber,numbers.result.globalSequence])||JSON.stringify(seriesMutation[0].document)!==JSON.stringify(numbers.series)||seriesMutation[0].expectedDocument!==seriesRaw||JSON.stringify(counterMutation[0].document)!==JSON.stringify(numbers.counter)||(counterRaw?counterMutation[0].expectedDocument!==counterRaw:counterMutation[0].requireAbsent!==true))throw Error('OFFLINE_FISCAL_NUMBER_PLAN_CHANGED');
             }
-            await consumeFiscalWorkflowBirth(this.ensureDb() as any,commit,source.document as any,outboxEvents.find(e=>e.eventType==='SALE_POSTED'&&e.aggregateId===commit.transactionId)?.eventId);
+            await consumeFiscalWorkflowBirth(this.ensureDb() as any,commit,source.document as any,outboxEvents.find(e=>['SALE_POSTED','SALES_CREDIT_NOTE_POSTED'].includes(e.eventType)&&e.aggregateId===commit.transactionId)?.eventId);
           }
-        },Boolean(input.fiscalAllocationPreconditions?.length)));
+        },Boolean(input.fiscalAllocationPreconditions?.length||input.trackingCommits?.length)));
     }
 
     async getMasterNumberRanges(): Promise<MasterNumberRangeRecord[]> {
@@ -1037,6 +1075,8 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             ${FISCAL_RETIREMENT_WRITER_SCHEMA}
             ${OFFLINE_FISCAL_ABANDON_WRITER_SCHEMA}
             ${OFFLINE_FISCAL_ALLOCATION_WRITER_SCHEMA}
+            ${TRACKING_ALLOCATION_SCHEMA}
+            ${TRACKING_OPERATION_SCHEMA}
             ${LARGE_MASTER_SYNC_V3_SCHEMA_SQL}
             ${ARTICLE_FORMATS_SCHEMA}
             ${NATIVE_FISCAL_RECEIPTS_SCHEMA}
@@ -1237,7 +1277,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
           if (!reads.has(key)) reads.set(key, this.ensureDb().query(sql, values));
           return reads.get(key)!;
         };
-        const demands = new Map<string, { baseline: string; productId: string; warehouseId: string; quantity: number; quantityScale?:4; exactQuantity?:string; nonFormatWriter?:boolean }>();
+        const demands = new Map<string, { baseline: string; productId: string; warehouseId: string; quantity: number; quantityScale?:4|6; exactQuantity?:string; nonFormatWriter?:boolean }>();
         for (const mutation of documents) {
             const document = mutation.document as any;
             if(mutation.collectionName==='transactions'&&mutation.requireAbsent)await assertPresentationCommit(document,mutation.inventoryPresentationPrecondition,async<T>(sql:string,values:(string|number|null)[])=>(await read(sql,values)).values as T[] || [],mutation.v3StockRequirements||[]);
@@ -1380,11 +1420,13 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             }
             for (const requirement of mutation.v3StockRequirements || []) {
               if (requirement.baseline !== document.v3InventoryBaseline || requirement.warehouseId !== document.v3WarehouseId
-                || !Number.isFinite(requirement.quantity) || requirement.quantity <= 0 || (requirement.quantityScale!==undefined && requirement.quantityScale!==4)) throw new Error('SYNC_V3_MOVEMENT_AUTHORITY_INVALID');
+                || !Number.isFinite(requirement.quantity) || requirement.quantity <= 0 || (requirement.quantityScale!==undefined && requirement.quantityScale!==4&&requirement.quantityScale!==6)) throw new Error('SYNC_V3_MOVEMENT_AUTHORITY_INVALID');
               const key = JSON.stringify([requirement.baseline, requirement.productId, requirement.warehouseId]);
               const prior = demands.get(key);
               const exactQuantity=new Money(String(requirement.quantity)).plus(prior?.exactQuantity || String(prior?.quantity || 0)).toFixed();
               const quantityScale=requirement.quantityScale || prior?.quantityScale;
+              if(prior?.quantityScale&&requirement.quantityScale&&prior.quantityScale!==requirement.quantityScale)throw Error('TRACKING_BASE_PRECISION_INVALID');
+              if(quantityScale===6){base6(requirement.quantity);const exact=new Money(exactQuantity);if(exact.dp()>6||exact.abs().times(1000000).gt(Number.MAX_SAFE_INTEGER))throw Error('TRACKING_BASE_PRECISION_INVALID');}
               if(quantityScale===4){
                 base4(requirement.quantity);
                 const exact=new Money(exactQuantity);
@@ -1396,6 +1438,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         // Both this read and every ledger write occur after BEGIN, under the shared native write queue.
         for (const demand of demands.values()) {
           if(demand.nonFormatWriter)await assertNoReconciledOrdinaryWriter(async<T>(sql:string,values:(string|number|null)[])=>(await read(sql,values)).values as T[] || [],demand.warehouseId);
+          if(demand.quantityScale===6){const stock=await readV3Base6Stock(async<T>(sql:string,values:(string|number|null)[])=>(await read(sql,values)).values as T[]||[],demand.baseline,demand.productId,demand.warehouseId);if(new Money(demand.exactQuantity!).gt(stock.available))throw Error('SYNC_V3_STOCK_INSUFFICIENT');continue;}
           if(demand.quantityScale===4){
             const stock=await readV3Base4Stock(async<T>(sql:string,values:(string|number|null)[])=>(await read(sql,values)).values as T[] || [],demand.baseline,demand.productId,demand.warehouseId);
             if(new Money(demand.exactQuantity!).gt(stock.available))throw new Error('SYNC_V3_STOCK_INSUFFICIENT');

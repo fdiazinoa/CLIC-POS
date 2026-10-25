@@ -264,6 +264,7 @@ class BackgroundSyncManager {
             return false;
         }
 
+        if(item?.trackingCheckoutId)return false; // Tracking is owned by its atomic Outbox, including when the legacy rollout flag is off.
         const status = item?.syncStatus;
         if (collectionName === 'catalogEdits' && status === 'PENDING') {
             const nextAttemptAt = Number(item?.nextAttemptAt);
@@ -405,14 +406,15 @@ class BackgroundSyncManager {
                 }
             }
 
-            const durableBatchActive = isSyncFeatureEnabled('sqlite_outbox_v2');
+            const durableBatchActive = isSyncFeatureEnabled('sqlite_outbox_v2')||await durableOutboxRepository.hasPendingTrackingEvents();
             if (durableBatchActive) {
                 const batch = await durableOutboxBatchSender.sendNext();
                 if (batch.retrying > 0) {
                     collectionErrors.push(`sync_outbox_v2: ${batch.retrying} event(s) scheduled for retry`);
                 }
                 console.log('[POS-2B] durable batch completed', batch);
-            } else {
+            }
+            if (!isSyncFeatureEnabled('sqlite_outbox_v2')) {
                 // Legacy path remains available while POS-2B is dark.
                 await this.processCollection<any>('transactions', async (item) => {
                     return apiSyncAdapter.pushTransaction(item);
@@ -466,7 +468,7 @@ class BackgroundSyncManager {
 
             // The SALE_COMMITTED durable event owns its inventory movements.
             // Sending the legacy ledger as well would duplicate the operation.
-            if (!durableBatchActive) {
+            if (!isSyncFeatureEnabled('sqlite_outbox_v2')) {
                 await this.processCollection<InventoryLedgerEntry>('inventoryLedger', async (item) => {
                     return apiSyncAdapter.pushInventoryMovement(item);
                 }).catch((error: any) => {
@@ -699,7 +701,7 @@ class BackgroundSyncManager {
     }
 
     private async updatePendingCount(collectionOverride?: string[]) {
-        const durableBatchActive = isSyncFeatureEnabled('sqlite_outbox_v2');
+        const durableBatchActive = isSyncFeatureEnabled('sqlite_outbox_v2')||await durableOutboxRepository.hasPendingTrackingEvents();
         let count = 0;
         let blockedCount = 0;
         let oldestCreatedAt: number | null = null;
@@ -712,7 +714,7 @@ class BackgroundSyncManager {
                 : null;
         }
         const collections = (collectionOverride || [...this.operationalCollections, 'catalogEdits']).filter(collection =>
-            !durableBatchActive || (collection !== 'transactions' && collection !== 'inventoryLedger')
+            !isSyncFeatureEnabled('sqlite_outbox_v2') || (collection !== 'transactions' && collection !== 'inventoryLedger')
         );
 
         for (const col of collections) {

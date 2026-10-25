@@ -34,7 +34,7 @@ export async function validateOfflineFiscalAllocation(value:OfflineFiscalAllocat
   ||!Array.isArray(value.allocations)||!value.allocations.length||value.allocations.length>128)allocationFail();
  const ids=new Set<string>();
  for(const member of value.allocations){
-  if(Object.keys(member).sort().join(',')!=='allocationId,end,expiryDate,fiscalRangeId,ncfType,padding,prefix,rangeEnd,rangeStart,start'||!uuid(member.allocationId)||ids.has(member.allocationId)||!uuid(member.fiscalRangeId)||!/^E(?:31|32|44|45)$/.test(member.ncfType)
+  if(Object.keys(member).sort().join(',')!=='allocationId,end,expiryDate,fiscalRangeId,ncfType,padding,prefix,rangeEnd,rangeStart,start'||!uuid(member.allocationId)||ids.has(member.allocationId)||!uuid(member.fiscalRangeId)||!/^E(?:31|32|34|44|45)$/.test(member.ncfType)
    ||member.prefix!==member.ncfType||member.padding!==10||![member.start,member.end,member.rangeStart,member.rangeEnd].every(Number.isSafeInteger)
    ||member.rangeStart<1||member.start<member.rangeStart||member.end<member.start||member.end>member.rangeEnd||member.rangeEnd>9999999999
    ||member.expiryDate!==null&&(!/^\d{4}-\d{2}-\d{2}$/.test(member.expiryDate)||new Date(member.expiryDate+'T00:00:00Z').toISOString().slice(0,10)!==member.expiryDate))allocationFail();

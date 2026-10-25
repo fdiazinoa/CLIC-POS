@@ -400,6 +400,15 @@ class TransactionService {
                 || !data.id || !isV3FinancialDocument(data))) {
             throw new Error('FISCAL_WORKFLOW_CHECKOUT_REQUIRED');
         }
+        const hasTrackingSource = isV3FinancialDocument(data) && data.items?.some(line => line.trackingData?.length) === true;
+        if (hasTrackingSource || data.trackingCheckoutId !== undefined || data.trackingEffectAt !== undefined) {
+            if (!hasTrackingSource || !data.id || !isV3FinancialDocument(data)
+                || typeof data.trackingCheckoutId !== 'string'
+                || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(data.trackingCheckoutId)
+                || typeof data.trackingEffectAt !== 'string' || !Number.isFinite(Date.parse(data.trackingEffectAt))) {
+                throw new Error('TRACKING_CHECKOUT_SOURCE_REQUIRED');
+            }
+        }
         // Validate required fields
         if (!data.documentType) {
             throw new Error('documentType is required');
@@ -444,6 +453,7 @@ class TransactionService {
         // Create transaction object
         const transaction: Transaction = {
             ...(data.inventoryPresentationContract===1?{inventoryPresentationContract:1 as const}:{}),
+            ...(hasTrackingSource ? {trackingCheckoutId:data.trackingCheckoutId,trackingEffectAt:data.trackingEffectAt} : {}),
             ...(data.fiscalWorkflowCheckoutId ? { fiscalWorkflowCheckoutId: data.fiscalWorkflowCheckoutId } : {}),
             ...(data.fiscalSaleContext ? {fiscalSaleContext:data.fiscalSaleContext} : {}),
             ...(data.fiscalOfflineLeaseId ? {fiscalOfflineLeaseId:data.fiscalOfflineLeaseId} : {}),
@@ -507,6 +517,7 @@ class TransactionService {
             balanceDueAtSale: data.balanceDueAtSale,
             pendingBalance: data.pendingBalance,
             dueDate: data.dueDate,
+            ...(isV3FinancialDocument(data)&&data.currency==='DOP'?{currency:data.currency}:{}),
             settlementCurrencyCode: data.settlementCurrencyCode,
             settlementExchangeRate: data.settlementExchangeRate,
             settlementReceivedOriginal: data.settlementReceivedOriginal,

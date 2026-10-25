@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFile } from 'node:fs/promises';
+import ts from 'typescript';
 
 import {
     DurableOutboxBatchSender,
@@ -291,7 +292,62 @@ test('runtime wiring uses the ERP batch endpoint and disables duplicate legacy s
     assert.match(api, /postOperationalPayload\('\/inbox\/batch',[\s\S]*?512 \* 1024/);
     assert.doesNotMatch(api, /pushDurableOutboxBatch[\s\S]*?acceptCompressedResponse: true/);
     assert.match(background, /durableOutboxBatchSender\.sendNext/);
-    assert.match(background, /} else \{[\s\S]*?pushTransaction/);
-    assert.match(background, /if \(!durableBatchActive\)[\s\S]*?pushInventoryMovement/);
+    assert.match(background, /hasPendingTrackingEvents/);
+    assert.match(background, /pushTransaction/);
+    assert.match(background, /pushInventoryMovement/);
     assert.match(repository, /status IN \('PENDING','SENDING','RETRY_WAIT'\)/);
+});
+
+
+test('flag-off scheduler sends tracking Outbox and unrelated legacy work without duplicating tracking documents', async () => {
+    const source = await readFile(new URL('../services/sync/BackgroundSyncManager.ts', import.meta.url), 'utf8');
+    const ast = ts.createSourceFile('BackgroundSyncManager.ts', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+    let pendingMethod: ts.MethodDeclaration | undefined;
+    const scheduled: ts.Statement[] = [];
+    const visit = (node: ts.Node) => {
+        if (ts.isMethodDeclaration(node) && node.name.getText(ast) === 'isOperationalSyncPending') pendingMethod = node;
+        if (ts.isVariableStatement(node) && node.declarationList.declarations.some(declaration => declaration.name.getText(ast) === 'durableBatchActive')) scheduled.push(node);
+        if (ts.isIfStatement(node) && (node.expression.getText(ast) === 'durableBatchActive' || (node.expression.getText(ast) === "!isSyncFeatureEnabled('sqlite_outbox_v2')" && (node.thenStatement.getText(ast).includes('apiSyncAdapter.pushTransaction(') || node.thenStatement.getText(ast).includes('apiSyncAdapter.pushInventoryMovement('))))) scheduled.push(node);
+        ts.forEachChild(node, visit);
+    };
+    let syncMethod: ts.MethodDeclaration | undefined;
+    const findMethods = (node: ts.Node) => {
+        if (ts.isMethodDeclaration(node) && node.name.getText(ast) === 'sync') syncMethod = node;
+        if (ts.isMethodDeclaration(node) && node.name.getText(ast) === 'isOperationalSyncPending') pendingMethod = node;
+        ts.forEachChild(node, findMethods);
+    };
+    findMethods(ast);
+    assert.ok(syncMethod?.body);
+    visit(syncMethod.body);
+    assert.ok(pendingMethod?.body);
+    assert.equal(scheduled.length, 4, 'exercise the actual durable decision and both actual legacy branches');
+    const transpile = (input: string) => ts.transpileModule(input, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+    const pending = new Function('isRecoveredOperation', transpile(`return function(item, collectionName) ${pendingMethod.body.getText(ast)}`))(() => false);
+    const calls: string[] = [];
+    const documents = [
+        { id: 'tracking-owned', syncStatus: 'PENDING', trackingCheckoutId: 'checkout-1' },
+        { id: 'unrelated-legacy', syncStatus: 'PENDING' },
+    ];
+    const context = {
+        nextRetryDelayMs: null,
+        async processCollection(collection: string, push: (item: unknown) => Promise<void>) {
+            for (const document of documents) if (pending.call(this, document, collection)) await push(document);
+        },
+    };
+    const run = new Function('isSyncFeatureEnabled', 'durableOutboxRepository', 'durableOutboxBatchSender', 'apiSyncAdapter', 'collectionErrors', 'console',
+        transpile(`return async function() { ${scheduled.map(statement => statement.getText(ast)).join('\n')} }`));
+    const errors: string[] = [];
+    await run(
+        () => false,
+        { hasPendingTrackingEvents: async () => true },
+        { sendNext: async () => { calls.push('tracking-batch'); return { retrying: 0 }; } },
+        {
+            pushTransaction: async (item: { id: string }) => { calls.push(`transaction:${item.id}`); },
+            pushInventoryMovement: async (item: { id: string }) => { calls.push(`inventory:${item.id}`); },
+        },
+        errors,
+        { log() {} },
+    ).call(context);
+    assert.deepEqual(errors, []);
+    assert.deepEqual(calls, ['tracking-batch', 'transaction:unrelated-legacy', 'inventory:unrelated-legacy']);
 });

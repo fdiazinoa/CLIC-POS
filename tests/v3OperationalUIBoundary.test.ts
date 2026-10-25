@@ -247,9 +247,42 @@ test('candidate startup does not force a competing legacy master activation when
   assert.equal(pulls, 1, 'V2 retains its legacy empty-catalog repair');
 });
 
-test('POS boundary keeps pinned catalog across config updates and retains cart cache on inventory events', () => {
+test('POS boundary keeps pinned catalog across config updates and retains cart cache on inventory events', async () => {
   const source = readFileSync(new URL('../components/LargeMasterSyncV3OperationalPOS.tsx', import.meta.url), 'utf8');
-  assert.match(source, /\}, \[props\.activeTerminalId, warehouseId, tariffId, authorityKey, authorityError, catalogRevision\]\)/);
+  const ts = await import('typescript');
+  const ast = ts.createSourceFile('Boundary.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  let effect: import('typescript').CallExpression | undefined;
+  const visit = (node: import('typescript').Node) => {
+    if (ts.isCallExpression(node) && node.expression.getText(ast) === 'useEffect'
+      && node.arguments[0]?.getText(ast).includes('acquireLargeMasterSyncV3ConfigContext')) effect = node;
+    ts.forEachChild(node, visit);
+  };
+  visit(ast); assert.ok(effect);
+  assert.equal(effect!.arguments[1].getText(ast), '[props.activeTerminalId, warehouseId, tariffId, authorityKey, authorityError, configScope, catalogRevision]');
+  const { v3OperationalConfigContext } = await import('../services/sync/LargeMasterSyncV3OperationalConfigScope');
+  const { isV3TariffContextCurrent } = await import('../services/sync/LargeMasterSyncV3TariffSelection');
+  const config: any = { terminals:[{id:'T',config:{currentDeviceId:'D',erpTerminalId:'ERP-T',pricing:{defaultTariffId:'PRICE'},inventoryScope:{warehouseId:'W'}}}] };
+  const scope = () => v3OperationalConfigContext(config,{localTerminalId:'T'}).key;
+  const originalScope = scope();
+  config.terminals[0].config.name = 'A new display name';
+  assert.equal(scope(), originalScope, 'irrelevant presentation changes do not retire pinned authority');
+  const sequence = {current:0}, query = {current:0}, catalog: any = {current:undefined};
+  const latestKey = {current:originalScope}; let opens = 0, published = 0;
+  let release: (()=>void) | undefined;
+  const gate = new Promise<void>(resolve=>{release=resolve;});
+  const deps: any = {contextSequence:sequence,querySequence:query,catalog,setError:()=>{},setArticleDiagnostics:()=>{},authorityError:'',warehouseId:'W',tariffId:'PRICE',latestProps:{current:{config,activeTerminalId:'T'}},wantedContextKey:originalScope,latestContextKey:latestKey,isV3TariffContextCurrent,
+    acquireLargeMasterSyncV3ConfigContext:async()=>{opens++;await gate;return {projectConfig:async()=>({tariffs:[{id:'PRICE'}]}),catalog:async()=>({categories:async()=>[]})};},
+    setCategories:()=>{},setSession:()=>{published++;},setProjected:()=>{},setVisible:()=>{},setCache:()=>{},setLoadedContextKey:()=>{}};
+  const compiled = await transform('const invoke='+effect!.arguments[0].getText(ast),{loader:'ts'});
+  const invoke = new Function(...Object.keys(deps),compiled.code+';return invoke;')(...Object.values(deps));
+  const cleanup = invoke();
+  config.terminals[0].config.pricing.defaultTariffId = 'OTHER'; latestKey.current = scope();
+  assert.notEqual(latestKey.current, originalScope);
+  release!(); await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(opens,1);assert.equal(published,0,'late old authority cannot publish after a real tariff scope change');cleanup();
+  assert.equal(isV3TariffContextCurrent(originalScope,originalScope,sequence.current,sequence.current),true);
+  assert.equal(isV3TariffContextCurrent(originalScope,latestKey.current,sequence.current,sequence.current),false);
+
   assert.match(source, /const effectiveConfig = useMemo/);
   assert.match(source, /sequence !== querySequence\.current \|\| context !== contextSequence\.current/);
   assert.match(source, /pinnedContext !== contextSequence\.current/);

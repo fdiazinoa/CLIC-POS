@@ -1,0 +1,777 @@
+import {
+  assertTrackingLine,
+  trackingSelectionsForCart,
+} from "../services/tracking/TrackingLine";
+import {
+  acceptTrackingDelivery,
+  type TrackingAllocationSnapshot,
+} from "../services/tracking/TrackingDeliveryWitness";
+import test from "node:test";
+import assert from "node:assert/strict";
+import { DatabaseSync } from "node:sqlite";
+import { randomUUID, createHash } from "node:crypto";
+import {
+  TRACKING_ALLOCATION_SCHEMA,
+  installTrackingAllocation,
+  prepareTrackingCheckout,
+  fenceTrackingCheckout,
+  consumeTrackingCheckout,
+  abandonTrackingCheckout,
+} from "../services/db/TrackingAllocationStore";
+import type {
+  TrackingAuthority,
+  TrackingSelection,
+} from "../services/tracking/TrackingAuthority";
+const deliveryClock = (now: number) => ({
+  serverDeliveredMs: now,
+  localRequestStartedMs: now,
+  localReceivedMs: now,
+});
+function fixture() {
+  const db = new DatabaseSync(":memory:");
+  db.exec(TRACKING_ALLOCATION_SCHEMA);
+  const sql = {
+    async query(q: string, p: any[] = []) {
+      return { values: db.prepare(q).all(...p) };
+    },
+    async run(q: string, p: any[] = []) {
+      return db.prepare(q).run(...p);
+    },
+  };
+  const now = Date.now() + 1000,
+    a: TrackingAuthority = {
+      schemaVersion: 1,
+      allocationId: randomUUID(),
+      unitId: randomUUID(),
+      tenantId: randomUUID(),
+      companyId: randomUUID(),
+      storeId: randomUUID(),
+      warehouseId: randomUUID(),
+      terminalId: randomUUID(),
+      deviceId: "test-device",
+      itemId: randomUUID(),
+      variantId: "",
+      kind: "SERIAL",
+      code: "S-1",
+      lotCode: null,
+      expiresOn: null,
+      receivedAt: new Date(now - 100000).toISOString(),
+      quantityMinor: 1000000,
+      quantityScale: 1000000,
+      revision: 1,
+      unitRevision: 1,
+      businessTimezone: "America/Santo_Domingo",
+      bindingHash: "a".repeat(64),
+      issuedAt: new Date(now - 10000).toISOString(),
+      checksum: "b".repeat(64),
+    };
+  const { checksum, ...source } = a;
+  a.checksum = createHash("sha256")
+    .update(
+      JSON.stringify(
+        Object.fromEntries(
+          Object.keys(source)
+            .sort()
+            .map((k) => [k, source[k as keyof typeof source]]),
+        ),
+      ),
+    )
+    .digest("hex");
+  const selection: TrackingSelection = {
+    authority: a,
+    itemId: a.itemId,
+    variantId: "",
+    cartId: "cart",
+    quantityMinor: 1000000,
+  };
+  const scope = {
+    tenantId: a.tenantId,
+    companyId: a.companyId,
+    storeId: a.storeId,
+    warehouseId: a.warehouseId,
+    terminalId: a.terminalId,
+    deviceId: a.deviceId,
+  };
+  return { db, sql, a, selection, scope, now };
+}
+test("serial ownership admits one checkout before any payment effect", async () => {
+  const f = fixture();
+  await installTrackingAllocation(
+    f.sql,
+    f.a,
+    false,
+    0,
+    f.a.checksum,
+    deliveryClock(f.now),
+  );
+  await prepareTrackingCheckout(
+    f.sql,
+    "checkout-1",
+    [f.selection],
+    f.scope,
+    f.now,
+  );
+  await assert.rejects(
+    prepareTrackingCheckout(f.sql, "checkout-2", [f.selection], f.scope, f.now),
+    /QUOTA_EXHAUSTED/,
+  );
+  await fenceTrackingCheckout(f.sql, "checkout-1", f.now);
+  await assert.rejects(
+    abandonTrackingCheckout(f.sql, "checkout-1"),
+    /RECONCILIATION_REQUIRED/,
+  );
+  await consumeTrackingCheckout(f.sql, "checkout-1", "sale-1", [f.selection]);
+  await consumeTrackingCheckout(f.sql, "checkout-1", "sale-1", [f.selection]);
+  assert.equal(
+    f.db.prepare("select consumed_minor from pos_tracking_allocations_v1").get()
+      ?.consumed_minor,
+    1000000,
+  );
+  await assert.rejects(
+    consumeTrackingCheckout(f.sql, "checkout-1", "sale-2", [f.selection]),
+    /SOURCE_CHANGED/,
+  );
+});
+test("only a checkout without possible effects can release a selection", async () => {
+  const f = fixture();
+  await installTrackingAllocation(
+    f.sql,
+    f.a,
+    false,
+    0,
+    f.a.checksum,
+    deliveryClock(f.now),
+  );
+  await prepareTrackingCheckout(
+    f.sql,
+    "abandon",
+    [f.selection],
+    f.scope,
+    f.now,
+  );
+  await abandonTrackingCheckout(f.sql, "abandon");
+  await prepareTrackingCheckout(
+    f.sql,
+    "replacement",
+    [f.selection],
+    f.scope,
+    f.now,
+  );
+  await fenceTrackingCheckout(f.sql, "replacement", f.now);
+  assert.equal(
+    f.db
+      .prepare(
+        "select count(*) n from pos_tracking_checkout_v1 where phase='EFFECT_POSSIBLE'",
+      )
+      .get()?.n,
+    1,
+  );
+});
+test("snapshot refresh never renews consumed serial or lost database ownership", async () => {
+  const f = fixture();
+  await assert.rejects(
+    installTrackingAllocation(
+      f.sql,
+      f.a,
+      true,
+      0,
+      f.a.checksum,
+      deliveryClock(f.now),
+    ),
+    /LOCAL_OWNERSHIP_MISSING/,
+  );
+  await installTrackingAllocation(
+    f.sql,
+    f.a,
+    false,
+    0,
+    f.a.checksum,
+    deliveryClock(f.now),
+  );
+  await prepareTrackingCheckout(f.sql, "first", [f.selection], f.scope, f.now);
+  await fenceTrackingCheckout(f.sql, "first", f.now);
+  await consumeTrackingCheckout(f.sql, "first", "sale", [f.selection]);
+  await installTrackingAllocation(
+    f.sql,
+    f.a,
+    true,
+    0,
+    f.a.checksum,
+    deliveryClock(f.now),
+  );
+  await assert.rejects(
+    prepareTrackingCheckout(f.sql, "later", [f.selection], f.scope, f.now),
+    /QUOTA_EXHAUSTED/,
+  );
+});
+test("sale and tracking quota roll back together when native writer fails", async () => {
+  const f = fixture();
+  await installTrackingAllocation(
+    f.sql,
+    f.a,
+    false,
+    0,
+    f.a.checksum,
+    deliveryClock(f.now),
+  );
+  await prepareTrackingCheckout(
+    f.sql,
+    "checkout",
+    [f.selection],
+    f.scope,
+    f.now,
+  );
+  await fenceTrackingCheckout(f.sql, "checkout", f.now);
+  f.db.exec("BEGIN IMMEDIATE");
+  await consumeTrackingCheckout(f.sql, "checkout", "sale", [f.selection]);
+  f.db.exec("ROLLBACK");
+  assert.equal(
+    f.db.prepare("select consumed_minor from pos_tracking_allocations_v1").get()
+      ?.consumed_minor,
+    0,
+  );
+  assert.equal(
+    f.db.prepare("select phase from pos_tracking_checkout_v1").get()?.phase,
+    "EFFECT_POSSIBLE",
+  );
+});
+test("prepared lot expires before first payment but paid recovery retains original effect time", async () => {
+  const f = fixture();
+  f.a.kind = "LOT";
+  f.a.expiresOn = "2026-10-24";
+  const { checksum, ...source } = f.a;
+  f.a.checksum = createHash("sha256")
+    .update(
+      JSON.stringify(
+        Object.fromEntries(
+          Object.keys(source)
+            .sort()
+            .map((k) => [k, source[k as keyof typeof source]]),
+        ),
+      ),
+    )
+    .digest("hex");
+  const before = Date.now() + 1000,
+    after = before + 172800000;
+  f.a.expiresOn = new Intl.DateTimeFormat("en-CA", {
+    timeZone: f.a.businessTimezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date(before));
+  f.a.issuedAt = new Date(before - 10000).toISOString();
+  f.a.receivedAt = new Date(before - 20000).toISOString();
+  const { checksum: unused, ...updated } = f.a;
+  f.a.checksum = createHash("sha256")
+    .update(
+      JSON.stringify(
+        Object.fromEntries(
+          Object.keys(updated)
+            .sort()
+            .map((k) => [k, updated[k as keyof typeof updated]]),
+        ),
+      ),
+    )
+    .digest("hex");
+  await installTrackingAllocation(
+    f.sql,
+    f.a,
+    false,
+    0,
+    f.a.checksum,
+    deliveryClock(f.now),
+  );
+  f.db
+    .prepare("update pos_tracking_allocations_v1 set max_local_ms=?")
+    .run(before);
+  await prepareTrackingCheckout(
+    f.sql,
+    "expired",
+    [f.selection],
+    f.scope,
+    before,
+  );
+  await assert.rejects(
+    fenceTrackingCheckout(f.sql, "expired", after),
+    /LOT_EXPIRED/,
+  );
+  await fenceTrackingCheckout(f.sql, "expired", before);
+  await fenceTrackingCheckout(f.sql, "expired", after);
+  await consumeTrackingCheckout(f.sql, "expired", "original-paid", [
+    f.selection,
+  ]);
+  assert.equal(
+    f.db.prepare("select effect_at_ms from pos_tracking_checkout_v1").get()
+      ?.effect_at_ms,
+    before,
+  );
+});
+test("one lot allocation supports distinct cart lines without merging their source identity", async () => {
+  const f = fixture();
+  f.a.kind = "LOT";
+  f.a.quantityMinor = 3000000;
+  const { checksum, ...source } = f.a;
+  f.a.checksum = createHash("sha256")
+    .update(
+      JSON.stringify(
+        Object.fromEntries(
+          Object.keys(source)
+            .sort()
+            .map((k) => [k, source[k as keyof typeof source]]),
+        ),
+      ),
+    )
+    .digest("hex");
+  const second = {
+    ...f.selection,
+    cartId: "other-price",
+    quantityMinor: 1500000,
+  };
+  await installTrackingAllocation(
+    f.sql,
+    f.a,
+    false,
+    0,
+    f.a.checksum,
+    deliveryClock(f.now),
+  );
+  await prepareTrackingCheckout(
+    f.sql,
+    "lot-checkout",
+    [f.selection, second],
+    f.scope,
+    f.now,
+  );
+  await fenceTrackingCheckout(f.sql, "lot-checkout", f.now);
+  await consumeTrackingCheckout(f.sql, "lot-checkout", "sale", [
+    f.selection,
+    second,
+  ]);
+  assert.equal(
+    f.db.prepare("select consumed_minor from pos_tracking_allocations_v1").get()
+      ?.consumed_minor,
+    2500000,
+  );
+  assert.equal(
+    f.db
+      .prepare(
+        "select count(*) n from pos_tracking_checkout_v1 where phase='CONSUMED'",
+      )
+      .get()?.n,
+    2,
+  );
+});
+
+test("entire checkout selection set is immutable before any paid recovery", async () => {
+  const f = fixture();
+  f.a.kind = "LOT";
+  f.a.quantityMinor = 3000000;
+  const { checksum, ...source } = f.a;
+  f.a.checksum = createHash("sha256")
+    .update(
+      JSON.stringify(
+        Object.fromEntries(
+          Object.keys(source)
+            .sort()
+            .map((k) => [k, source[k as keyof typeof source]]),
+        ),
+      ),
+    )
+    .digest("hex");
+  await installTrackingAllocation(
+    f.sql,
+    f.a,
+    false,
+    0,
+    f.a.checksum,
+    deliveryClock(f.now),
+  );
+  await prepareTrackingCheckout(f.sql, "sealed", [f.selection], f.scope, f.now);
+  await fenceTrackingCheckout(f.sql, "sealed", f.now);
+  await assert.rejects(
+    prepareTrackingCheckout(
+      f.sql,
+      "sealed",
+      [f.selection, { ...f.selection, cartId: "injected" }],
+      f.scope,
+      f.now,
+    ),
+    /SELECTION_SET_CHANGED/,
+  );
+  await consumeTrackingCheckout(f.sql, "sealed", "paid", [f.selection]);
+  assert.equal(
+    f.db.prepare("select consumed_minor from pos_tracking_allocations_v1").get()
+      ?.consumed_minor,
+    1000000,
+  );
+});
+
+test("external native witness plus one-shot claim prevents database and app-data reseeding", async () => {
+  const f = fixture();
+  let witness: string | null = null,
+    local: { authorityJson: string; witnessHash: string } | null = null,
+    claimed = false,
+    witnessHash: string | null = null,
+    installs = 0;
+  const port = {
+    async readWitness() {
+      return witness;
+    },
+    async writeWitness(_key: string, value: string) {
+      witness = value;
+    },
+    async readLocal() {
+      return local;
+    },
+    async claim(allocationId: string, hash: string) {
+      const first = !claimed;
+      claimed = true;
+      witnessHash = hash;
+      return {
+        allocationId,
+        witnessHash: hash,
+        firstInstallationAllowed: first,
+        deliveredAtEpochMs: f.now,
+      };
+    },
+    async install(
+      authority: TrackingAuthority,
+      previouslySeen: boolean,
+      serverConsumedMinor: number,
+      hash: string,
+      clock: any,
+    ) {
+      await installTrackingAllocation(
+        f.sql,
+        authority,
+        previouslySeen,
+        serverConsumedMinor,
+        hash,
+        clock,
+      );
+      local = { authorityJson: JSON.stringify(authority), witnessHash: hash };
+      installs++;
+    },
+  };
+  const initial: TrackingAllocationSnapshot = {
+    authority: f.a,
+    state: "ACTIVE",
+    serverConsumedMinor: 0,
+    delivered: false,
+    witnessHash: null,
+  };
+  await acceptTrackingDelivery(initial, port);
+  assert.equal(installs, 1);
+  assert.ok(witness);
+  const delivered = { ...initial, delivered: true, witnessHash };
+  await acceptTrackingDelivery(delivered, port);
+  assert.equal(installs, 2);
+  local = null;
+  await assert.rejects(
+    acceptTrackingDelivery(delivered, port),
+    /LOCAL_OWNERSHIP_MISSING/,
+  );
+  witness = null;
+  await assert.rejects(
+    acceptTrackingDelivery(delivered, port),
+    /LOCAL_OWNERSHIP_MISSING/,
+  );
+  assert.equal(installs, 2);
+});
+test("lost delivery acknowledgment cannot replay first-install permission", async () => {
+  const f = fixture();
+  let witness: string | null = null,
+    claims = 0,
+    installs = 0;
+  const initial: TrackingAllocationSnapshot = {
+    authority: f.a,
+    state: "ACTIVE",
+    serverConsumedMinor: 0,
+    delivered: false,
+    witnessHash: null,
+  };
+  const port = {
+    async readWitness() {
+      return witness;
+    },
+    async writeWitness(_key: string, value: string) {
+      witness = value;
+    },
+    async readLocal() {
+      return null;
+    },
+    async claim() {
+      claims++;
+      throw Error("lost ACK after server delivery commit");
+    },
+    async install() {
+      installs++;
+    },
+  };
+  await assert.rejects(acceptTrackingDelivery(initial, port), /lost ACK/);
+  await assert.rejects(
+    acceptTrackingDelivery(initial, port),
+    /LOCAL_OWNERSHIP_MISSING/,
+  );
+  assert.equal(claims, 1);
+  assert.equal(installs, 0);
+});
+
+for (const option of [
+  { kind: "LOT", quantity: 0.125, usesLots: true, usesSerial: false },
+  { kind: "SERIAL", quantity: 1, usesLots: false, usesSerial: true },
+  { kind: "SERIAL", quantity: 1, usesLots: true, usesSerial: true },
+])
+  test(`pinned source preserves ${option.kind} with lot=${option.usesLots} serial=${option.usesSerial}`, () => {
+    const f = fixture();
+    f.a.kind = option.kind as "LOT" | "SERIAL";
+    f.a.lotCode = option.usesLots && option.usesSerial ? "lot-1" : null;
+    const product: any = {
+      id: f.a.itemId,
+      operationalFlags: {
+        usesLots: option.usesLots,
+        usesSerial: option.usesSerial,
+      },
+      v3TrackingAuthorities: [{ authority: f.a, state: "ACTIVE" }],
+      v3SaleAuthority: { warehouseId: f.a.warehouseId },
+    };
+    const records: any = [
+        { v3Authority: f.a, selectedQuantityMinor: option.quantity * 1000000 },
+      ],
+      trackingData = trackingSelectionsForCart(records, product, "source-cart");
+    const line = {
+      ...product,
+      cartId: "source-cart",
+      quantity: option.quantity,
+      trackingData,
+    };
+    assertTrackingLine(line, product);
+    assert.equal(trackingData[0].cartId, "source-cart");
+    assert.throws(
+      () =>
+        assertTrackingLine({ ...line, quantity: option.quantity + 1 }, product),
+      /BASE_QUANTITY_CHANGED/,
+    );
+    assert.throws(
+      () => assertTrackingLine({ ...line, cartId: "substituted" }, product),
+      /SOURCE_CHANGED/,
+    );
+  });
+
+test("concurrent first delivery preserves one external witness and one claim", async () => {
+  const f = fixture();
+  let witness: string | null = null;
+  let writes = 0,
+    claims = 0,
+    installs = 0;
+  let enterClaim!: () => void, releaseClaim!: () => void;
+  const entered = new Promise<void>((resolve) => {
+    enterClaim = resolve;
+  });
+  const release = new Promise<void>((resolve) => {
+    releaseClaim = resolve;
+  });
+  const snapshot: TrackingAllocationSnapshot = {
+    authority: f.a,
+    state: "ACTIVE",
+    serverConsumedMinor: 0,
+    delivered: false,
+    witnessHash: null,
+  };
+  const port = {
+    async readLocal() {
+      return null;
+    },
+    async readWitness() {
+      return witness;
+    },
+    async writeWitness(_key: string, value: string) {
+      writes++;
+      witness = value;
+    },
+    async claim(allocationId: string, witnessHash: string) {
+      claims++;
+      enterClaim();
+      await release;
+      return {
+        allocationId,
+        witnessHash,
+        firstInstallationAllowed: true,
+        deliveredAtEpochMs: f.now,
+      };
+    },
+    async install() {
+      installs++;
+    },
+  };
+  const first = acceptTrackingDelivery(snapshot, port);
+  await entered;
+  const savedWitness = witness;
+  const second = acceptTrackingDelivery(snapshot, port);
+  assert.equal(first, second);
+  releaseClaim();
+  await Promise.all([first, second]);
+  assert.equal(witness, savedWitness);
+  assert.equal(writes, 1);
+  assert.equal(claims, 1);
+  assert.equal(installs, 1);
+});
+
+function resignAuthority(a: TrackingAuthority) {
+  const { checksum, ...source } = a;
+  a.checksum = createHash("sha256")
+    .update(
+      JSON.stringify(
+        Object.fromEntries(
+          Object.keys(source)
+            .sort()
+            .map((key) => [key, (source as any)[key]]),
+        ),
+      ),
+    )
+    .digest("hex");
+}
+for (const offset of [-1000, 1000])
+  test(`genuine delivery anchor orders first effect after server claim despite local offset ${offset}`, async () => {
+    const f = fixture(),
+      local = f.now,
+      server = local - offset;
+    f.a.issuedAt = new Date(server - 100).toISOString();
+    f.a.receivedAt = new Date(server - 1000).toISOString();
+    resignAuthority(f.a);
+    await installTrackingAllocation(f.sql, f.a, false, 0, f.a.checksum, {
+      serverDeliveredMs: server,
+      localRequestStartedMs: local - 12,
+      localReceivedMs: local,
+    });
+    await prepareTrackingCheckout(
+      f.sql,
+      "anchored",
+      [f.selection],
+      f.scope,
+      local,
+    );
+    const effect = await fenceTrackingCheckout(f.sql, "anchored", local + 1);
+    assert.equal(effect, server + 13);
+    assert.ok(effect >= server);
+    assert.equal(
+      await fenceTrackingCheckout(f.sql, "anchored", local + 86400000),
+      effect,
+    );
+    assert.equal(
+      f.db.prepare("select max_local_ms from pos_tracking_allocations_v1").get()
+        ?.max_local_ms,
+      local + 1,
+    );
+    await assert.rejects(
+      prepareTrackingCheckout(
+        f.sql,
+        "rollback",
+        [{ ...f.selection, cartId: "other" }],
+        f.scope,
+        local,
+      ),
+      /CLOCK_REVERSED/,
+    );
+  });
+test("delivery request latency crossing expiry midnight grants no response-flight grace", async () => {
+  const f = fixture(),
+    server = Date.parse("2026-10-24T23:59:59.995Z"),
+    local = server - 1000;
+  Object.assign(f.a, {
+    kind: "LOT",
+    businessTimezone: "UTC",
+    expiresOn: "2026-10-24",
+    issuedAt: new Date(server - 100).toISOString(),
+    receivedAt: new Date(server - 1000).toISOString(),
+  });
+  resignAuthority(f.a);
+  await installTrackingAllocation(f.sql, f.a, false, 0, f.a.checksum, {
+    serverDeliveredMs: server,
+    localRequestStartedMs: local - 20,
+    localReceivedMs: local,
+  });
+  await assert.rejects(
+    prepareTrackingCheckout(f.sql, "midnight", [f.selection], f.scope, local),
+    /LOT_EXPIRED/,
+  );
+});
+test("old installed quota without clock anchor cannot begin another checkout", async () => {
+  const f = fixture();
+  f.db
+    .prepare(
+      "INSERT INTO pos_tracking_allocations_v1 VALUES(?,?,?,0,'ACTIVE',?)",
+    )
+    .run(f.a.allocationId, JSON.stringify(f.a), f.a.checksum, f.now);
+  await assert.rejects(
+    prepareTrackingCheckout(
+      f.sql,
+      "missing-anchor",
+      [f.selection],
+      f.scope,
+      f.now,
+    ),
+    /DELIVERY_CLOCK_REQUIRED/,
+  );
+  await assert.rejects(
+    installTrackingAllocation(
+      f.sql,
+      f.a,
+      true,
+      0,
+      f.a.checksum,
+      deliveryClock(f.now),
+    ),
+    /CLOCK_IMMUTABLE/,
+  );
+  assert.equal(
+    f.db.prepare("select count(*) n from pos_tracking_delivery_clock_v1").get()
+      ?.n,
+    0,
+  );
+});
+
+test("all selected allocations receive the same maximum logical first-effect timestamp", async () => {
+  const f = fixture(),
+    second = structuredClone(f.a);
+  second.allocationId = randomUUID();
+  second.unitId = randomUUID();
+  second.code = "SERIAL-2";
+  resignAuthority(second);
+  await installTrackingAllocation(f.sql, f.a, false, 0, f.a.checksum, {
+    serverDeliveredMs: f.now + 1000,
+    localRequestStartedMs: f.now - 10,
+    localReceivedMs: f.now,
+  });
+  await installTrackingAllocation(f.sql, second, false, 0, second.checksum, {
+    serverDeliveredMs: f.now + 2000,
+    localRequestStartedMs: f.now - 20,
+    localReceivedMs: f.now,
+  });
+  const selections = [f.selection, { ...f.selection, authority: second }];
+  await prepareTrackingCheckout(
+    f.sql,
+    "two-anchors",
+    selections,
+    f.scope,
+    f.now,
+  );
+  const first = await fenceTrackingCheckout(f.sql, "two-anchors", f.now + 5);
+  assert.equal(first, f.now + 2025);
+  assert.deepEqual(
+    f.db
+      .prepare("select distinct effect_at_ms from pos_tracking_checkout_v1")
+      .all()
+      .map((row) => row.effect_at_ms),
+    [first],
+  );
+  assert.throws(
+    () =>
+      f.db
+        .prepare(
+          "UPDATE pos_tracking_delivery_clock_v1 SET server_delivered_ms=server_delivered_ms+1",
+        )
+        .run(),
+    /CLOCK_IMMUTABLE/,
+  );
+});
