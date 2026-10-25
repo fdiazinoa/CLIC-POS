@@ -19,7 +19,7 @@ import { LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED } from './LargeMasterSyncV3Autho
 import { LARGE_MASTER_SYNC_V3_CANARY, validateLargeMasterSyncV3CanaryUrl } from './LargeMasterSyncV3Canary';
 import { readOperationalTerminalBinding } from './OperationalTerminalConfig';
 import { readLargeMasterSyncV3BoundIdentity, type LargeMasterSyncV3BoundIdentity } from './LargeMasterSyncV3BoundTransport';
-import { prepareLargeMasterSyncV3Candidate, prepareLargeMasterSyncV3CatalogOnly, prepareLargeMasterSyncV3UnusedBaseline, type LargeMasterSyncV3CandidateReady } from './LargeMasterSyncV3Candidate';
+import { prepareLargeMasterSyncV3Candidate, prepareLargeMasterSyncV3CatalogOnly, prepareLargeMasterSyncV3UnusedBaseline, isLargeMasterSyncV3Stale, type LargeMasterSyncV3CandidateReady } from './LargeMasterSyncV3Candidate';
 import { LargeMasterSyncV3Runtime } from './LargeMasterSyncV3Runtime';
 import { LargeMasterSyncV3OperationalCatalog } from './LargeMasterSyncV3OperationalCatalog';
 import { buildLargeMasterSyncV3CheckoutFiscalInput } from './LargeMasterSyncV3CheckoutAuthority';
@@ -98,6 +98,14 @@ export class LargeMasterSyncV3OperationalSession {
     const runtime = await LargeMasterSyncV3Runtime.open(store);
     const owner = await store.getOperationalOwner();
     if (owner && owner.binding !== binding) throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
+    // Restarting the POS must pick up a newer master (version or cursors) without a manual action.
+    // The probe reuses the server session, so it is cheap and never downloads datasets.
+    if (!refresh && !cachedOnly && !offlineAuthority && runtime && owner) {
+      if (await isLargeMasterSyncV3Stale(store, v3BaseUrl, observe)) {
+        observe({ event: 'setup_phase', phase: 'stale_master_detected' });
+        refresh = true;
+      }
+    }
     if (!refresh && runtime && (runtime.version.contractVersion || 1) >= 2 && owner?.binding === binding
       && owner.syncId === runtime.version.syncId && owner.syncVersion === runtime.version.syncVersion) {
       const inventory = await runtime.getInventorySnapshotVersion();

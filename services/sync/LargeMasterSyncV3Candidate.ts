@@ -97,6 +97,39 @@ export const prepareLargeMasterSyncV3Candidate = async (
 };
 
 /** Existing stock remains authoritative. This route never requests/replaces inventory. */
+/** Cheap bound probe: does the terminal have a different master than the one cached locally? */
+export const isLargeMasterSyncV3Stale = async (
+  store: LargeMasterSyncV3Store, v3BaseUrl: string,
+  metric?: (metric: LargeMasterSyncV3Metric) => void,
+): Promise<boolean> => {
+  const local = await store.getActiveRuntimeVersion().catch(() => null);
+  if (!local) return true;
+  // Cold start can race the network stack (WebView reports "Failed to fetch" before the radio is ready).
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      const client = defaultDependencies.createClient(store, v3BaseUrl, metric);
+      const requested = await client.requestSync();
+      if ('fallback' in requested) {
+        console.info(JSON.stringify({ event: 'v3_master_probe', result: 'legacy_fallback' }));
+        return false;
+      }
+      const stale = requested.syncId !== local.syncId || requested.syncVersion !== local.syncVersion;
+      console.info(JSON.stringify({ event: 'v3_master_probe', result: stale ? 'stale' : 'current', attempt,
+        local_sync: local.syncVersion, local_id: local.syncId, server_sync: requested.syncVersion, server_id: requested.syncId }));
+      return stale;
+    } catch (error) {
+      const message = (error as Error)?.message;
+      if (attempt === 3) {
+        console.info(JSON.stringify({ event: 'v3_master_probe', result: 'failed', attempt, error: message }));
+        return false;
+      }
+      console.info(JSON.stringify({ event: 'v3_master_probe', result: 'retry', attempt, error: message }));
+      await new Promise(resolve => setTimeout(resolve, 1500));
+    }
+  }
+  return false;
+};
+
 export const prepareLargeMasterSyncV3CatalogOnly = async (
   store: LargeMasterSyncV3Store, v3BaseUrl: string, binding: string,
   metric?: (metric: LargeMasterSyncV3Metric) => void,
