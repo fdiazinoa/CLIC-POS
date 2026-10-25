@@ -2,14 +2,17 @@ import React from 'react';
 import { Cloud, CloudOff, Landmark } from 'lucide-react';
 
 // Presentation only: callers retain the existing fiscal and sync state sources.
-export function FiscalStatusBadge({ visible, allowed, status, compact = false }: {
-  visible: boolean; allowed: boolean; compact?: boolean;
+export function FiscalStatusBadge({ visible, allowed, status, compact = false, short = false }: {
+  visible: boolean; allowed: boolean; compact?: boolean; short?: boolean;
   status: { type: string; hasNCF: boolean; isTerminalBlock?: boolean; isUsingPool?: boolean };
 }) {
   if (!visible) return null;
-  return <div role="status" className={`${compact ? 'supermarket-fiscal-status' : 'mt-1'} flex items-center gap-2 px-3 py-1.5 rounded-lg border text-[10px] font-bold uppercase ${allowed ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : 'bg-red-50 text-red-600 border-red-100'}`}>
+  const detail = `${status.type} ${status.hasNCF ? (status.isTerminalBlock ? 'Bloque Terminal' : (status.isUsingPool ? 'Reservado en Pool' : 'Lote Global Activo')) : 'Agotado'}`;
+  const label = short ? status.type : `Status Fiscal: ${detail}`;
+  return <div role="status" aria-label={`Status Fiscal: ${detail}`} title={`Status Fiscal: ${detail}`}
+    className={`${compact ? 'supermarket-fiscal-status' : 'mt-1'} flex items-center gap-1.5 ${short ? 'px-2' : 'px-3'} py-1.5 rounded-lg border text-[10px] font-bold uppercase whitespace-nowrap ${allowed ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : 'bg-red-50 text-red-600 border-red-100'}`}>
     <Landmark size={12} className="shrink-0" />
-    <span>Status Fiscal: {`${status.type} ${status.hasNCF ? (status.isTerminalBlock ? 'Bloque Terminal' : (status.isUsingPool ? 'Reservado en Pool' : 'Lote Global Activo')) : 'Agotado'}`}</span>
+    <span>{label}</span>
   </div>;
 }
 

@@ -8019,25 +8019,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    );
 
    const renderDesktopTicketFooterActions = () => !isMobile && (!isRetailMode || cart.length > 0) && (
-      <div data-testid="desktop-ticket-footer-actions" className="flex items-center justify-end gap-2">
-         {!isRetailMode && (
-            <button
-               type="button"
-               aria-pressed={rightSidebarTab === 'ACTIONS'}
-               onClick={() => setRightSidebarTab(tab => tab === 'ACTIONS' ? 'CART' : 'ACTIONS')}
-               className="flex min-h-12 flex-1 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-xs font-black text-slate-700 hover:bg-slate-50"
-            >
-               {rightSidebarTab === 'ACTIONS' ? <ShoppingBag size={18} /> : <Layers size={18} />}
-               <span>{rightSidebarTab === 'ACTIONS' ? 'Ver ticket' : 'Opciones'}</span>
-            </button>
-         )}
+      <div data-testid="desktop-ticket-footer-actions" className="flex shrink-0 items-center gap-2">
          {cart.length > 0 && (
             <button
                onClick={handleClearFreshCartItems}
                disabled={!hasClearableFreshItems}
                aria-label="Borrar artículos nuevos del ticket"
                title={hasClearableFreshItems ? 'Borrar artículos nuevos' : 'No hay artículos nuevos para borrar'}
-               className={`group flex h-12 w-12 shrink-0 items-center justify-center rounded-[1.05rem] border transition-all duration-200 ${
+               className={`group flex h-14 w-11 shrink-0 items-center justify-center rounded-2xl border transition-all duration-200 ${
                   hasClearableFreshItems
                      ? 'border-rose-200 bg-white text-rose-500 hover:border-rose-300 hover:bg-rose-50 hover:text-rose-700'
                      : 'cursor-not-allowed border-slate-200 bg-slate-50 text-slate-300'
@@ -8050,6 +8039,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                }`}>
                   <Trash2 size={18} strokeWidth={2.3} />
                </span>
+            </button>
+         )}
+         {!isRetailMode && (
+            <button
+               type="button"
+               aria-pressed={rightSidebarTab === 'ACTIONS'}
+               onClick={() => setRightSidebarTab(tab => tab === 'ACTIONS' ? 'CART' : 'ACTIONS')}
+               className="flex h-14 w-[88px] shrink-0 items-center justify-center gap-1 rounded-2xl border border-slate-200 bg-white px-1 text-[10px] font-black uppercase tracking-[0.02em] text-slate-700 hover:bg-slate-50"
+            >
+               {rightSidebarTab === 'ACTIONS' ? <ShoppingBag size={17} /> : <Layers size={17} />}
+               <span className="truncate">{rightSidebarTab === 'ACTIONS' ? 'Ver ticket' : 'Opciones'}</span>
             </button>
          )}
       </div>
@@ -8949,7 +8949,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      </div>
                   )}
 
-                  <TicketStatusControls className={`ml-auto flex shrink-0 items-center justify-end gap-1 ${isRetailMode ? 'supermarket-ticket-actions' : ''}`} status={isRetailMode ? <FiscalStatusBadge compact visible={!isOrderTakerMode && !isFiscalModeDisabled} allowed={canCheckoutWithFiscalPolicy} status={fiscalStatus} /> : undefined}>
+                  <TicketStatusControls className={`ml-auto flex shrink-0 items-center justify-end gap-1 ${isRetailMode ? 'supermarket-ticket-actions' : ''}`} status={<FiscalStatusBadge compact short visible={!isOrderTakerMode && !isFiscalModeDisabled} allowed={canCheckoutWithFiscalPolicy} status={fiscalStatus} />}>
                      {!isKioskMode && <OrderServiceTypeButton value={effectiveOrderServiceType} onClick={() => handleGridAction('TAKEOUT')} />}
                   </TicketStatusControls>
                </div>
@@ -9073,7 +9073,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   </div>
                )}
 
-               {!isRetailMode && <FiscalStatusBadge visible={!isOrderTakerMode && !isFiscalModeDisabled} allowed={canCheckoutWithFiscalPolicy} status={fiscalStatus} />}
             </div >
 
             {/* --- CART ITEMS LIST & TAB VIEWS --- */}
@@ -9560,7 +9559,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
 
 
-                        {renderDesktopTicketFooterActions()}
                         {/* --- CONDITIONAL FOOTER --- */}
                         {(rightSidebarTab === 'CART' || isMobile) && (isKioskMode ? (
                            <div className="mt-auto pt-6 space-y-6">
@@ -9654,12 +9652,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                  </div>
                               </div>
 
-                               <div className={`pos-ticket-checkout grid ${isRestaurantMode ? 'grid-cols-2' : 'grid-cols-2'} items-center gap-3 pt-5 px-1`}>
+                               <div className="pos-ticket-checkout flex items-center gap-2 pt-4 px-1">
+                                 {renderDesktopTicketFooterActions()}
                                  {!isRestaurantMode ? (
                                     <>
                                        <button
                                           onClick={() => triggerSafetyGate('Cerrar Sesión', onLogout)}
-                                          className="h-16 w-full px-3 rounded-2xl font-black text-[13px] uppercase tracking-[0.14em] border-2 border-red-100 bg-red-50 text-red-600 hover:bg-red-100 hover:border-red-200 shadow-lg shadow-red-100/60 transition-all active:scale-95 flex items-center justify-center gap-2"
+                                          className="h-14 w-[92px] shrink-0 px-1 rounded-2xl font-black text-[11px] uppercase tracking-[0.06em] border-2 border-red-100 bg-red-50 text-red-600 hover:bg-red-100 hover:border-red-200 shadow-lg shadow-red-100/60 transition-all active:scale-95 flex items-center justify-center gap-2"
                                        >
                                           <LogOut size={20} />
                                           <span>Salir</span>
@@ -9673,7 +9672,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                              }
                                           }}
                                           disabled={cart.length === 0 || !canCheckoutWithFiscalPolicy}
-                                          className={`h-16 w-full rounded-2xl font-black text-[13px] uppercase tracking-[0.14em] shadow-xl hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-70 disabled:cursor-not-allowed flex items-center justify-center gap-2.5 ${!canCheckoutWithFiscalPolicy ? 'bg-red-100 text-red-500 cursor-not-allowed border-2 border-red-200' : 'bg-slate-900 text-white hover:bg-slate-800 disabled:bg-slate-200 disabled:text-slate-400 disabled:shadow-slate-100'}`}
+                                          className={`h-14 min-w-0 flex-1 px-1 rounded-2xl font-black text-[12px] uppercase tracking-[0.06em] shadow-xl hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-70 disabled:cursor-not-allowed flex items-center justify-center gap-2.5 ${!canCheckoutWithFiscalPolicy ? 'bg-red-100 text-red-500 cursor-not-allowed border-2 border-red-200' : 'bg-slate-900 text-white hover:bg-slate-800 disabled:bg-slate-200 disabled:text-slate-400 disabled:shadow-slate-100'}`}
                                        >
                                           <ArrowRight size={24} />
                                           <span>{checkoutActionLabel}</span>
@@ -9683,7 +9682,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                     <>
                                        <button
                                           onClick={() => triggerSafetyGate('Cerrar Sesión', onLogout)}
-                                          className="h-16 w-full px-3 rounded-2xl font-black text-[13px] uppercase tracking-[0.14em] border-2 border-red-100 bg-red-50 text-red-600 hover:bg-red-100 hover:border-red-200 shadow-lg shadow-red-100/60 transition-all active:scale-95 flex items-center justify-center gap-2"
+                                          className="h-14 w-[92px] shrink-0 px-1 rounded-2xl font-black text-[11px] uppercase tracking-[0.06em] border-2 border-red-100 bg-red-50 text-red-600 hover:bg-red-100 hover:border-red-200 shadow-lg shadow-red-100/60 transition-all active:scale-95 flex items-center justify-center gap-2"
                                        >
                                           <LogOut size={20} />
                                           <span>Salir</span>
