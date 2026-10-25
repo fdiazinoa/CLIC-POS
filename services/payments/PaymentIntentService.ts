@@ -64,7 +64,7 @@ export class PaymentIntentService {
              ${input.futureCheckout?'WHERE NOT EXISTS(SELECT 1 FROM pos_fiscal_checkout_retirements_v1 WHERE transaction_id=? COLLATE NOCASE)':''}
              ON CONFLICT(idempotency_key) DO NOTHING`,
             [intentId, idempotencyKey, clean(input.paymentId), clean(input.provider), clean(input.integrationId) || null,
-                Number(input.amount || 0), clean(input.currencyCode) || 'DOP', now, now,input.futureCheckout?.transactionId||null,...(input.futureCheckout?[input.futureCheckout.transactionId]:[])]
+                Number(input.amount || 0), clean(input.currencyCode) || 'DOP', now, now,input.futureCheckout?.transactionId||input.tablePart?.receiptId||null,...(input.futureCheckout?[input.futureCheckout.transactionId]:[])]
         );
         const result = await this.database.executeSQL!(
             'SELECT * FROM payment_intents_v2 WHERE idempotency_key = ? LIMIT 1',

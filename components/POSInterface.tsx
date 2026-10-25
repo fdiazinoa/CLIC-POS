@@ -6832,7 +6832,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const offlineFiscalCheckout=offlineAvailable&&paymentMethods.length>0
         &&!hasV3ReservationCart&&!activeV3Reservation&&!activeRecoveredReservation&&!activeDirectV3TicketId
         &&processedCart.every(line=>line.quantity>0&&!line.articleFormat)
-        &&(!activeTable?(cartTip===0||appliedServiceTaxPolicy.legalTip?.enabled===true&&appliedServiceTaxPolicy.legalTip.percentage===10):isMaster&&!activePaymentFraction&&Boolean(activeTable.currentOrderId)
+        &&(!activeTable?(cartTip===0||appliedServiceTaxPolicy.legalTip?.enabled===true&&appliedServiceTaxPolicy.legalTip.percentage===10):isMaster&&!isIntermediateFractionPayment&&Boolean(activeTable.currentOrderId)
           &&(cartTip===0||appliedServiceTaxPolicy.legalTip?.enabled===true&&appliedServiceTaxPolicy.legalTip.percentage===10));
       const newFiscalCheckout=delegatedFiscalCheckout&&(fiscalWorkflowV2Client.enabled()||offlineFiscalCheckout)
         &&!hasV3ReservationCart&&!activeV3Reservation&&!activeRecoveredReservation&&!activeDirectV3TicketId&&(!activeTable||offlineFiscalCheckout)
