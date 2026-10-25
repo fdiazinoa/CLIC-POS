@@ -9347,7 +9347,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                        {showUnitLine && (
                                           <>
                                              <span className="shrink-0 text-slate-300">&middot;</span>
-                                             <span className="truncate">{weightLineLabel(item, baseCurrency.symbol, item.price, quantityPresentation.salesDecimals)}</span>
+                                             <span className="truncate">
+                                                {item.weightPresentation
+                                                   ? weightLineLabel(item, baseCurrency.symbol, item.price, quantityPresentation.salesDecimals)
+                                                   : `${baseCurrency.symbol}${item.price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} c/u`}
+                                             </span>
                                           </>
                                        )}
                                        <span className="shrink-0 text-slate-300">&middot;</span>
