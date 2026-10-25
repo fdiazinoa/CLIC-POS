@@ -107,7 +107,7 @@ test('actual table prepayment callback reserves locally, pins retained account, 
    v3Operational:{validate:async()=>{if(race)f.sql.prepare("UPDATE documents SET data=? WHERE collection_name='parkedTickets'").run(JSON.stringify({...table.account,guests:9}));}},
    fiscalCompliance:{mode:'ECF'},fiscalWorkflowV2Client:f.client(),getDefaultFiscalProvider:()=> 'MSELLER',config,activeTerminalConfig:config.terminals[0].config,terminalId:scope.terminalId,
    activeRecoveredReservation:null,activeDirectV3TicketId:null,activeTable:{id:'mesa-6',currentOrderId:table.account.id},isMaster:true,activePaymentFraction:null,cartTip:55.5,appliedServiceTaxPolicy:{legalTip:{enabled:true,percentage:10}},
-   processedCart:table.account.items,cart:table.account.items,fiscalCheckoutRef:checkoutRef,fiscalCheckoutOperationRef:{current:null},offlineTableFiscalContextRef:contextRef,
+   processedCart:table.account.items,cart:table.account.items,fiscalCheckoutRef:checkoutRef,trackingCheckoutRef:{current:null},fiscalCheckoutOperationRef:{current:null},offlineTableFiscalContextRef:contextRef,
    offlineTablePaymentFenceRef:fenceRef,ticketAutoSyncFlushRef:{current:null},ticketAutoSyncTimeoutRef:{current:null},readTableFiscalSaleContext:currentContext,
    currentFiscalCheckoutCartIdentity:(saleContext=contextRef.current)=>JSON.stringify({fiscalSaleContext:saleContext,items:table.account.items,customerId:null,fiscalType:'E32'}),
    onUpdateCart:()=>{updates++;},createUuid:()=>uuid(7,++operation),setLargeMasterSyncV3CriticalOperation:()=>{}};
@@ -118,7 +118,7 @@ test('actual table prepayment callback reserves locally, pins retained account, 
   const fence=await invoke([],['CASH']);assert.equal(flushes,1,'first-item immediate checkout flushes same account before source pin');assert.ok(fence.futureCheckout);assert.equal(fenceRef.current,true);assert.equal(updates,0);assert.equal(f.requests(),0);fence();assert.equal(fenceRef.current,false);
   race=true;await assert.rejects(invoke([],['CASH']),/SOURCE_CHANGED/);assert.equal(fenceRef.current,false);assert.equal(count(f,'sync_outbox_v2'),0);
   race=false;f.sql.prepare("UPDATE documents SET data=? WHERE collection_name='parkedTickets' AND doc_id=?").run(table.literal,table.account.id);
-  const cleanup=text.match(/await fiscalWorkflowV2Client\.acknowledge\(fiscalCheckoutRef\.current\);fiscalCheckoutRef\.current=null;fiscalCheckoutOperationRef\.current=null;offlineTableFiscalContextRef\.current=undefined;offlineTablePaymentFenceRef\.current=false;/)?.[0];assert.ok(cleanup);
+  const cleanup=text.match(/await fiscalWorkflowV2Client\.acknowledge\(fiscalCheckoutRef\.current\);trackingCheckoutRef\.current=null;fiscalCheckoutRef\.current=null;fiscalCheckoutOperationRef\.current=null;offlineTableFiscalContextRef\.current=undefined;offlineTablePaymentFenceRef\.current=false;/)?.[0];assert.ok(cleanup);
   const reset=new Function(...Object.keys(ctx),'return (async()=>{'+cleanup+'})()');
   const tableA=table;const payA=await invoke([],['CASH']);await payA.recordPaymentEffect('payment');payA();assert.equal(fenceRef.current,true,'possible cash effect keeps retained source fenced');
   const checkoutA=checkoutRef.current;assert.equal(checkoutA.phase,'EFFECT_POSSIBLE');
