@@ -107,8 +107,8 @@ export class LargeMasterSyncV3OperationalCatalog {
         article.conversionFactor !== 1 && 'factor de conversión'].filter(Boolean);
       throw new UnsupportedArticleError('Contrato de peso: ' + (reasons.join(', ') || 'configuración avanzada no soportada'));
     }
-    if ((Array.isArray(article.recipeDetails) && article.recipeDetails.length) || (Array.isArray(article.modifiers) && article.modifiers.length)) {
-      throw new UnsupportedArticleError('Receta o modificadores no soportados');
+    if (Array.isArray(article.modifiers) && article.modifiers.length) {
+      throw new UnsupportedArticleError('Modificadores no soportados');
     }
     let restaurant: ReturnType<typeof v3RestaurantContract>;
     try { restaurant = v3RestaurantContract(article); }

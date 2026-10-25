@@ -278,15 +278,29 @@ test('V3 fiscal source rejects missing totals/mixed tax-inclusion before commit;
     await assert.rejects(module.persistV3FinancialBatch([{ transaction: { ...transaction, taxAmount: undefined } }], {} as BusinessConfig, 'W'), /FROZEN_FISCAL_INVALID/);
     assert.equal(f.rows('transactions').length, 0);
     const service = { ...transaction, items: [{ ...transaction.items[0], type: 'SERVICE', isInventoriable: false }] };
-    assert.deepEqual(module.buildV3InventoryLedger(service, 'W', 'binding'), []);
+    assert.deepEqual(await module.buildV3InventoryLedger(service, 'W', 'binding'), []);
     const untracked = { ...transaction, items: [{ ...transaction.items[0], isInventoriable: false }] };
-    assert.deepEqual(module.buildV3InventoryLedger(untracked, 'W', 'binding'), []);
-    assert.deepEqual(module.buildV3InventoryLedger(transaction, 'W', 'binding', true,
+    assert.deepEqual(await module.buildV3InventoryLedger(untracked, 'W', 'binding'), []);
+    assert.deepEqual(await module.buildV3InventoryLedger(transaction, 'W', 'binding', true,
       new Map([[transaction.items[0].cartId, 'DAMAGED']])), []);
-    const ledger = module.buildV3InventoryLedger(transaction, 'W', 'binding');
+    const ledger = await module.buildV3InventoryLedger(transaction, 'W', 'binding');
     assert.equal(ledger[0].id, 'V3-sale-sale-line');
     assert.equal(ledger[0].qtyOut, 1);
-    assert.equal(module.buildV3InventoryLedger(transaction, 'W', 'binding', true)[0].qtyIn, 1);
+    assert.equal((await module.buildV3InventoryLedger(transaction, 'W', 'binding', true))[0].qtyIn, 1);
+  } finally { f.sql.close(); }
+});
+
+test('recipe line deduces components instead of the parent', async () => {
+  const f = fixture();
+  try {
+    const module = await financialModule(f, true);
+    const recipeTx = { ...module.transaction('recipe'), items: [{ ...module.transaction('recipe').items[0], recipeDetails: [{ childItemId: 'child', quantity: 2 }] }] };
+    const resolveArticle = async (id: string) => ({ id, cost: 5, measurementUnit: 'Unidad', type: 'PRODUCT', isInventoriable: true });
+    const ledger = await module.buildV3InventoryLedger(recipeTx, 'W', 'binding', false, undefined, resolveArticle);
+    assert.equal(ledger.length, 1);
+    assert.equal(ledger[0].productId, 'child');
+    assert.equal(ledger[0].qtyOut, 2);
+    assert.equal(ledger[0].unitCost, 5);
   } finally { f.sql.close(); }
 });
 

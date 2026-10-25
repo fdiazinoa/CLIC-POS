@@ -2,6 +2,7 @@ import {hasOfflineFiscalHeader} from '../fiscal/OfflineFiscalCharge';
 import {captureTrackingSourceMetadata} from '../tracking/TrackingSourceMetadata';
 import {isOfflineTableFiscalTransaction,assertTableFiscalSaleContext} from '../fiscal/OfflineTableFiscalCheckout';
 import {presentationInventoryQuantity} from '../inventoryPresentations/selection';
+import {calculateInventoryDeductions} from '../../utils/inventoryEngine';
 import {captureNewV3FiscalSourceMetadata} from './NewV3FiscalSourceMetadata';
 export type {V3FinancialOptions} from '../db/LargeMasterSyncV3FinancialRetention';
 import { planReservationCommitmentRelease } from './LargeMasterSyncV3ReservationCommitments';
@@ -45,31 +46,64 @@ export const validateV3FrozenFiscalAmounts = (transaction: Partial<Transaction>,
   }
 };
 
-export const buildV3InventoryLedger = (transaction: Transaction, warehouseId: string, binding: string,
-  refund = false, conditions?: Map<string, 'SELLABLE' | 'DAMAGED'>): InventoryLedgerEntry[] => {
+const resolveRecipeClosure = async (line: CartItem, resolveArticle: (id: string) => Promise<Record<string, unknown> | null>): Promise<Record<string, unknown>[]> => {
+  const products: Record<string, unknown>[] = [];
+  const visited = new Set<string>();
+  const queue: string[] = (line.recipeDetails || []).map(detail => detail.childItemId).filter(Boolean);
+  while (queue.length) {
+    const id = queue.shift()!;
+    if (visited.has(id)) continue;
+    visited.add(id);
+    const article = await resolveArticle(id);
+    if (!article) throw new LargeMasterSyncV3Error('SYNC_V3_RECIPE_CHILD_MISSING');
+    products.push(article);
+    for (const detail of (article.recipeDetails as { childItemId?: string }[]) || []) if (detail.childItemId) queue.push(detail.childItemId);
+  }
+  return products;
+};
+
+export const buildV3InventoryLedger = async (transaction: Transaction, warehouseId: string, binding: string,
+  refund = false, conditions?: Map<string, 'SELLABLE' | 'DAMAGED'>,
+  resolveArticle?: (id: string) => Promise<Record<string, unknown> | null>): Promise<InventoryLedgerEntry[]> => {
   const seen = new Set<string>();
-  return transaction.items.flatMap(line => {
+  const entries: InventoryLedgerEntry[] = [];
+  for (const line of transaction.items) {
     if (!line.cartId || seen.has(line.cartId) || !line.v3SaleAuthority
       || line.v3SaleAuthority.binding !== binding || line.v3SaleAuthority.warehouseId !== warehouseId) {
       throw new LargeMasterSyncV3Error('SYNC_V3_MOVEMENT_AUTHORITY_INVALID');
     }
     seen.add(line.cartId);
-    if (line.type === 'SERVICE' || line.isInventoriable !== true) return [];
-    if (line.type !== 'PRODUCT' || line.recipeDetails?.length) {
-      throw new LargeMasterSyncV3Error('SYNC_V3_ADVANCED_ARTICLE_CONTRACT_REQUIRED');
-    }
+    if (line.type === 'SERVICE' || line.isInventoriable !== true) continue;
     const quantity = Math.abs(presentationInventoryQuantity(line));
     if (!Number.isFinite(quantity) || quantity === 0) throw new LargeMasterSyncV3Error('SYNC_V3_LINE_INVALID');
-    if (refund && conditions?.get(line.cartId) === 'DAMAGED') return [];
-    return [{ id: `V3-${transaction.id}-${encodeURIComponent(line.cartId)}`,
-      createdAt: transaction.date, warehouseId, productId: line.id,...(transaction.trackingCheckoutId?{trackingCheckoutId:transaction.trackingCheckoutId}:{}),
-      concept: refund ? 'DEVOLUCIÓN_VENTA' : 'VENTA', documentRef: transaction.id,
-      qtyIn: refund ? quantity : 0, qtyOut: refund ? 0 : quantity,
-      unitCost: line.cost || 0, balanceQty: 0, balanceAvgCost: line.cost || 0,
-      terminalId: transaction.terminalId, variantId: line.variantId || line.variantSku,
-      syncStatus: 'PENDING', v3Binding: binding,
-      v3InventoryBaseline: v3InventoryBaselineKey(binding, line.v3SaleAuthority) }];
-  });
+    if (refund && conditions?.get(line.cartId) === 'DAMAGED') continue;
+    let deductionRows: { productId: string; quantity: number; unitCost: number }[];
+    if (line.recipeDetails?.length) {
+      if (!resolveArticle) throw new LargeMasterSyncV3Error('SYNC_V3_RECIPE_RESOLVER_REQUIRED');
+      const closure = await resolveRecipeClosure(line, resolveArticle);
+      const allProducts = [line as unknown as Record<string, unknown>, ...closure];
+      const deductions = calculateInventoryDeductions(line, quantity, allProducts as any);
+      deductionRows = deductions.map(d => {
+        const product = allProducts.find(p => p.id === d.productId) as any;
+        return { productId: d.productId, quantity: d.quantityToDeduct, unitCost: product?.cost || 0 };
+      });
+    } else {
+      deductionRows = [{ productId: line.id, quantity, unitCost: line.cost || 0 }];
+    }
+    for (const row of deductionRows) {
+      const isDirect = row.productId === line.id;
+      entries.push({ id: isDirect ? `V3-${transaction.id}-${encodeURIComponent(line.cartId)}` : `V3-${transaction.id}-${encodeURIComponent(line.cartId)}-${encodeURIComponent(row.productId)}`,
+        createdAt: transaction.date, warehouseId, productId: row.productId,
+        ...(transaction.trackingCheckoutId && isDirect ? { trackingCheckoutId: transaction.trackingCheckoutId } : {}),
+        concept: refund ? 'DEVOLUCIÓN_VENTA' : 'VENTA', documentRef: transaction.id,
+        qtyIn: refund ? row.quantity : 0, qtyOut: refund ? 0 : row.quantity,
+        unitCost: row.unitCost, balanceQty: 0, balanceAvgCost: row.unitCost,
+        terminalId: transaction.terminalId, variantId: isDirect ? (line.variantId || line.variantSku) : undefined,
+        syncStatus: 'PENDING', v3Binding: binding,
+        v3InventoryBaseline: v3InventoryBaselineKey(binding, line.v3SaleAuthority) });
+    }
+  }
+  return entries;
 };
 
 type FinancialEntry = { transaction: Transaction; options?: V3FinancialOptions };
@@ -182,7 +216,7 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
     validateV3FrozenFiscalAmounts(transaction, retained);
     validateV3FrozenLineFiscalAmounts(transaction, projected);
     if (authoritativeLines.length !== transaction.items.length) throw new LargeMasterSyncV3Error('SYNC_V3_ARTICLE_SOURCE_CHANGED');
-    const ledger = buildV3InventoryLedger({ ...transaction, items: authoritativeLines }, warehouseId, session.binding, options.refund, options.conditions);
+    const ledger = await buildV3InventoryLedger({ ...transaction, items: authoritativeLines }, warehouseId, session.binding, options.refund, options.conditions, session.ready.runtime?.getOperationalArticle?.bind(session.ready.runtime));
     const document: Transaction = { ...transaction, items: authoritativeLines, syncStatus: 'PENDING', v3Binding: session.binding,
       v3WarehouseId: warehouseId, v3CommitFingerprint: identities[index],
       v3InventoryBaseline: v3InventoryBaselineKey(session.binding, stamp!) };
