@@ -289,3 +289,28 @@ for(const tender of ['USD_OVER','EUR_MIX','CARD_USD','CREDIT'])test(`native allo
   assert.equal(f.count('sync_outbox_v2'),1);assert.equal(f.sql.prepare("SELECT state FROM pos_fiscal_pending_numbers_v2").get()!.state,'CONSUMED');
  }finally{f.sql.close();}
 });
+test('E34 REFUND consumes assigned allocation with original reference and positive refund CAS',async()=>{
+ const f=await fixture();try{
+  const range={id:uuid(70),type:'E34',prefix:'E34',startNumber:1,endNumber:3,isActive:true,expiryDate:''};
+  const allocation={id:uuid(71),terminalId:scope.terminalId,fiscalRangeId:range.id,ncfType:'E34',prefix:'E34',reservedStart:1,reservedEnd:3,nextNumber:1,status:'ACTIVE',releasedAt:null};
+  f.put('fiscalRanges',range);f.put('fiscalAllocations',allocation);
+  const e34Config={...f.config,terminals:[{...f.config.terminals[0],config:{...f.config.terminals[0].config,fiscal:{...f.config.terminals[0].config.fiscal,fiscalRanges:[range],fiscalAllocations:[allocation]}}}]};
+  f.sql.prepare("UPDATE documents SET data=? WHERE collection_name='config' AND doc_id='current'").run(JSON.stringify(e34Config));
+  const e34Local=await offlineFiscalAuthorityFromConfig(e34Config,credentials,'device');
+  const unsigned:any={contractVersion:2,authorizationKind:'OFFLINE_FISCAL_ALLOCATION_V2',authorizationId:uuid(72),scope,issuerRnc:'101010101',provider:'MSELLER',environment:0,issuedAt:new Date(Date.now()-1000).toISOString(),bindingFingerprint:'c'.repeat(64),allocations:[{allocationId:allocation.id,fiscalRangeId:range.id,ncfType:'E34',prefix:'E34',padding:10,start:1,end:3,rangeStart:1,rangeEnd:3,expiryDate:null}]};
+  await f.store.saveAllocation!({...unsigned,authorityHash:await allocationHash(unsigned)},e34Local,new Date().toISOString());
+  const items=[{id:'item',cartId:'line',quantity:1,price:555}];
+  const c=await f.client().reserveOfflineCheckout(JSON.stringify({items,customerId:null,fiscalType:'E34',originalTransactionId:'orig-tx'}),'refund-op');
+  assert.equal(c.allocation!.ncfType,'E34');
+  await f.client().recordPayment(c,'payment-'+c.checkoutId);
+  const series=JSON.parse(String(f.sql.prepare("SELECT data FROM documents WHERE collection_name='internalSequences'").get()!.data)),counterRow=f.sql.prepare("SELECT data FROM documents WHERE collection_name='globalSequenceCounter'").get(),counter=counterRow?JSON.parse(String(counterRow.data)):undefined,numbers=planFinancialNumbers({seriesId:'SERIES',documentType:'TICKET',global:true},series,counter);
+  const tx:any={seriesId:'SERIES',displayId:numbers.result.displayId,globalSequence:numbers.result.globalSequence,seriesNumber:numbers.result.seriesNumber,id:c.transactionId,fiscalWorkflowCheckoutId:c.checkoutId,fiscalAllocationAuthorizationId:c.allocation!.authorizationId,date:c.offlineSaleDate,terminalId:scope.terminalId,ncf:c.allocation!.ncf,ncfType:'E34',fiscalIssuance:c.allocationIssuance,fiscalEnvironment:0,fiscalProvider:'MSELLER',fiscalMode:'ECF',documentType:'REFUND',originalTransactionId:'orig-tx',total:654.9,netAmount:555,taxAmount:99.9,serviceChargeAmount:0,items,payments:[{id:'payment-'+c.checkoutId,method:'CASH',amount:654.9}]};
+  const birth:any={schemaVersion:3,authorizationKind:'OFFLINE_FISCAL_ALLOCATION_V2',authorizationId:c.allocation!.authorizationId,authorityHash:c.allocation!.authorityHash,transactionId:c.transactionId,checkoutId:c.checkoutId};
+  const commit={documents:[{collectionName:'internalSequences',document:numbers.series,expectedDocument:JSON.stringify(series)},{collectionName:'globalSequenceCounter',document:numbers.counter,...(counter?{expectedDocument:JSON.stringify(counter)}:{requireAbsent:true})},{collectionName:'transactions',document:tx,requireAbsent:true},{collectionName:'transactionHistory',document:tx,requireAbsent:true}],outboxEvent:{eventId:uuid(73),eventType:'SALES_CREDIT_NOTE_POSTED',aggregateType:'TRANSACTION',aggregateId:tx.id,schemaVersion:1,createdAt:tx.date,payload:{transaction:tx,fiscalWorkflowBirth:birth}},fiscalWorkflowCommits:[{checkoutId:c.checkoutId,transactionId:tx.id,birth}],fiscalAllocationPreconditions:await f.store.allocationCommitPreconditions!(c)};
+  await f.adapter.commitFinancialTransaction(commit as any);
+  assert.equal(f.sql.prepare('SELECT state FROM pos_fiscal_pending_numbers_v2').get()!.state,'CONSUMED');
+  assert.equal(f.count('sync_outbox_v2'),1);
+  const pending=f.sql.prepare("SELECT data FROM documents WHERE collection_name='transactions'").get()!.data;
+  assert.equal(JSON.parse(String(pending)).documentType,'REFUND');
+ }finally{f.sql.close();}
+});

@@ -663,7 +663,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
               const seriesMutation=input.documents.filter(d=>d.collectionName==='internalSequences'),counterMutation=input.documents.filter(d=>d.collectionName==='globalSequenceCounter');
               if(!tx.seriesId||seriesMutation.length!==1||counterMutation.length!==1||JSON.stringify([tx.displayId,tx.seriesNumber,tx.globalSequence])!==JSON.stringify([numbers.result.displayId,numbers.result.seriesNumber,numbers.result.globalSequence])||JSON.stringify(seriesMutation[0].document)!==JSON.stringify(numbers.series)||seriesMutation[0].expectedDocument!==seriesRaw||JSON.stringify(counterMutation[0].document)!==JSON.stringify(numbers.counter)||(counterRaw?counterMutation[0].expectedDocument!==counterRaw:counterMutation[0].requireAbsent!==true))throw Error('OFFLINE_FISCAL_NUMBER_PLAN_CHANGED');
             }
-            await consumeFiscalWorkflowBirth(this.ensureDb() as any,commit,source.document as any,outboxEvents.find(e=>e.eventType==='SALE_POSTED'&&e.aggregateId===commit.transactionId)?.eventId);
+            await consumeFiscalWorkflowBirth(this.ensureDb() as any,commit,source.document as any,outboxEvents.find(e=>['SALE_POSTED','SALES_CREDIT_NOTE_POSTED'].includes(e.eventType)&&e.aggregateId===commit.transactionId)?.eventId);
           }
         },Boolean(input.fiscalAllocationPreconditions?.length||input.trackingCommits?.length)));
     }
