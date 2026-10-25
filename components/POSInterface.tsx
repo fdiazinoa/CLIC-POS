@@ -166,7 +166,7 @@ import { V3OperationalUIQueue, V3OperationalUILifetime, assertV3UIContext, autho
 import { resolveCustomerImageSrc, resolveProductImageSrc } from '../utils/entityImage';
 import { getWarehouseScopedNumber, resolveProductActiveWarehouseIds } from '../utils/masterIdentity';
 import { buildTransactionSettlementFields } from '../utils/paymentSettlement';
-import { isFullyPaidParkedTicket, isPaymentFractionPlanCurrent, retainCurrentPaymentFractionPlan } from '../utils/paymentFractions';
+import { isFullyPaidParkedTicket, isPaymentFractionPlanCurrent, retainCurrentPaymentFractionPlan, createPaymentFractionPartProof, paymentFractionPlanFingerprint } from '../utils/paymentFractions';
 import SplitTicketModal from './SplitTicketModal';
 import { getTerminalSnapshotSellers, resolveTerminalSellerName } from '../utils/terminalSnapshotSellers';
 import { productIdentityCandidates, productReferenceCandidates, resolveOperationalProductId } from '../utils/productReferences';
@@ -5716,7 +5716,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   status: 'PAID' as const,
                   payments,
                   voluntaryTip: voluntaryTip || 0,
-                  paidAt
+                  paidAt,
+                  ...(paymentFractionPartProofRef.current || createPaymentFractionPartProof()),
+                  effectPhase: 'PAID' as const,
+                  paymentIDs: payments.map(payment => payment.id).filter(Boolean),
+                  planFingerprint: paymentFractionPlanFingerprint(fractionPlan!),
                } : part)
             };
             const nextTickets = parkedTicketsRef.current.map(ticket => String(ticket.id) === activeOrderId ? {
@@ -6740,6 +6744,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    },[terminalId,showPaymentModal]);
 
    const fiscalCheckoutOperationRef=useRef<string|null>(null);
+   const paymentFractionPartProofRef=useRef<{receiptId:string;operationId:string}|null>(null);
    useEffect(()=>{if(cart.length===0)fiscalCheckoutOperationRef.current=null;},[cart.length]);
    useEffect(()=>{
       const prepare=()=>{if(v3Operational&&fiscalCompliance.mode==='ECF')void fiscalWorkflowV2Client.prepareOfflineAuthority().catch(()=>undefined);if(v3Operational&&fiscalCompliance.mode==='ECF'&&fiscalWorkflowV2Client.enabled())void fiscalWorkflowV2Client.prefetch().catch(()=>undefined);};
@@ -6827,7 +6832,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const offlineFiscalCheckout=offlineAvailable&&paymentMethods.length>0
         &&!hasV3ReservationCart&&!activeV3Reservation&&!activeRecoveredReservation&&!activeDirectV3TicketId
         &&processedCart.every(line=>line.quantity>0&&!line.articleFormat)
-        &&(!activeTable?(cartTip===0||appliedServiceTaxPolicy.legalTip?.enabled===true&&appliedServiceTaxPolicy.legalTip.percentage===10):isMaster&&!activePaymentFraction&&Boolean(activeTable.currentOrderId)
+        &&(!activeTable?(cartTip===0||appliedServiceTaxPolicy.legalTip?.enabled===true&&appliedServiceTaxPolicy.legalTip.percentage===10):isMaster&&!isIntermediateFractionPayment&&Boolean(activeTable.currentOrderId)
           &&(cartTip===0||appliedServiceTaxPolicy.legalTip?.enabled===true&&appliedServiceTaxPolicy.legalTip.percentage===10));
       const newFiscalCheckout=delegatedFiscalCheckout&&(fiscalWorkflowV2Client.enabled()||offlineFiscalCheckout)
         &&!hasV3ReservationCart&&!activeV3Reservation&&!activeRecoveredReservation&&!activeDirectV3TicketId&&(!activeTable||offlineFiscalCheckout)
@@ -6887,7 +6892,20 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
         await dbAdapter.prepareTrackingCheckout(checkoutId,trackingSelections,trackingLocalScope(),{transactionId,cartIdentity:currentTrackingCartIdentity()});
       }
       let offlineEffectPossible=fiscalCheckoutRef.current?.phase==='EFFECT_POSSIBLE';
-      return Object.assign(async()=>{if(trackingSelections.length&&!trackingEffectPossible&&trackingCheckoutRef.current){const abandoned=trackingCheckoutRef.current.checkoutId;await dbAdapter.abandonTrackingCheckout?.(abandoned);if(trackingCheckoutRef.current?.checkoutId===abandoned)trackingCheckoutRef.current=null;}if(offlineFiscalCheckout&&!offlineEffectPossible)offlineTablePaymentFenceRef.current=false;setLargeMasterSyncV3CriticalOperation('PAYMENT',false);},{...(fiscalCheckoutRef.current?{futureCheckout:{checkoutId:fiscalCheckoutRef.current.checkoutId,transactionId:fiscalCheckoutRef.current.transactionId,operationId:fiscalCheckoutRef.current.operationId}}:trackingCheckoutRef.current?{futureCheckout:trackingCheckoutRef.current}:{}),recordPaymentEffect:async(paymentId:string)=>{if(trackingSelections.length&&trackingCheckoutRef.current){const effectAt=await dbAdapter.fenceTrackingCheckout!(trackingCheckoutRef.current.checkoutId,paymentId);trackingCheckoutRef.current.effectAt=new Date(effectAt).toISOString();trackingEffectPossible=true;}if(fiscalCheckoutRef.current){await fiscalWorkflowV2Client.recordPayment(fiscalCheckoutRef.current,paymentId);offlineEffectPossible=true;}}});
+      // Intermediate table installment (no fiscal checkout): prepare a native part proof
+      // before the gateway so the provider intent is fenced against the parked ticket.
+      let tablePart: {ticketId:string;receiptId:string;operationId:string;planFingerprint:string}|undefined;
+      if(isIntermediateFractionPayment&&nextPaymentFractionPart&&activePaymentFraction&&activeTable?.currentOrderId){
+         const proof=createPaymentFractionPartProof();
+         paymentFractionPartProofRef.current=proof;
+         const fingerprint=paymentFractionPlanFingerprint(activePaymentFraction);
+         const ticketId=String(activeTable.currentOrderId);
+         const preparedTickets=parkedTicketsRef.current.map(ticket=>String(ticket.id)===ticketId?{...ticket,paymentFraction:{...activePaymentFraction,parts:activePaymentFraction.parts.map(part=>part.index===nextPaymentFractionPart.index?{...part,...proof,effectPhase:'PREPARED' as const,planFingerprint:fingerprint}:part)}}:ticket);
+         parkedTicketsRef.current=preparedTickets;
+         await Promise.resolve(onUpdateParkedTicketsRef.current(preparedTickets));
+         tablePart={ticketId,receiptId:proof.receiptId,operationId:proof.operationId,planFingerprint:fingerprint};
+      }
+      return Object.assign(async()=>{if(trackingSelections.length&&!trackingEffectPossible&&trackingCheckoutRef.current){const abandoned=trackingCheckoutRef.current.checkoutId;await dbAdapter.abandonTrackingCheckout?.(abandoned);if(trackingCheckoutRef.current?.checkoutId===abandoned)trackingCheckoutRef.current=null;}if(offlineFiscalCheckout&&!offlineEffectPossible)offlineTablePaymentFenceRef.current=false;setLargeMasterSyncV3CriticalOperation('PAYMENT',false);},{...(fiscalCheckoutRef.current?{futureCheckout:{checkoutId:fiscalCheckoutRef.current.checkoutId,transactionId:fiscalCheckoutRef.current.transactionId,operationId:fiscalCheckoutRef.current.operationId}}:trackingCheckoutRef.current?{futureCheckout:trackingCheckoutRef.current}:{}),...(tablePart?{tablePart}:{}),recordPaymentEffect:async(paymentId:string)=>{if(trackingSelections.length&&trackingCheckoutRef.current){const effectAt=await dbAdapter.fenceTrackingCheckout!(trackingCheckoutRef.current.checkoutId,paymentId);trackingCheckoutRef.current.effectAt=new Date(effectAt).toISOString();trackingEffectPossible=true;}if(fiscalCheckoutRef.current){await fiscalWorkflowV2Client.recordPayment(fiscalCheckoutRef.current,paymentId);offlineEffectPossible=true;}if(tablePart){const fencedTickets=parkedTicketsRef.current.map(ticket=>String(ticket.id)===tablePart!.ticketId?{...ticket,paymentFraction:{...(ticket.paymentFraction||activePaymentFraction!),parts:(ticket.paymentFraction||activePaymentFraction!).parts.map(part=>part.receiptId===tablePart!.receiptId?{...part,effectPhase:'EFFECT_POSSIBLE' as const,paymentIDs:[...(part.paymentIDs||[]).filter(id=>id!==paymentId),paymentId]}:part)}}:ticket);parkedTicketsRef.current=fencedTickets;await Promise.resolve(onUpdateParkedTicketsRef.current(fencedTickets));}}});
    };
 
    const startCheckoutInteraction = (inputTimeStamp?: number) => {

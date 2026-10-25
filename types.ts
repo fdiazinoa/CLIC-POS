@@ -2437,6 +2437,12 @@ export interface PaymentFractionPart {
   payments?: PaymentEntry[];
   voluntaryTip?: number;
   paidAt?: string;
+  /** Prueba nativa de la cuota: identidad estable persistida bajo CAS antes del proveedor. */
+  receiptId?: string;
+  operationId?: string;
+  effectPhase?: 'PREPARED' | 'EFFECT_POSSIBLE' | 'PAID';
+  paymentIDs?: string[];
+  planFingerprint?: string;
 }
 
 export interface PaymentFractionPlan {

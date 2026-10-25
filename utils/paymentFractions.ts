@@ -1,4 +1,5 @@
 import type { ParkedTicket, PaymentFractionPlan } from '../types';
+import { createUuid } from './uuid';
 
 export const splitAmountIntoEqualParts = (total: number, count: number): number[] => {
   const safeCount = Math.max(2, Math.min(20, Math.trunc(count)));
@@ -52,3 +53,29 @@ export const retainCurrentPaymentFractionPlan = (
 ): PaymentFractionPlan | undefined => (
   isPaymentFractionPlanCurrent(plan, currentTotal) ? plan : undefined
 );
+
+/**
+ * Deterministic fingerprint of the installment plan. Used as the `planFingerprint`
+ * of a part proof so a later plan edit (item/discount/tax change) cannot resurrect
+ * a stale part payment.
+ */
+export const paymentFractionPlanFingerprint = (plan: PaymentFractionPlan): string => {
+  const canonical = JSON.stringify({
+    originalTotal: plan.originalTotal,
+    count: plan.count,
+    parts: plan.parts.map(part => ({ index: part.index, amount: part.amount })),
+  });
+  // Simple stable digest without pulling in node:crypto in the web bundle.
+  let hash = 2166136261;
+  for (let i = 0; i < canonical.length; i++) {
+    hash ^= canonical.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
+};
+
+/** Stable identity for a part proof, generated before any provider is engaged. */
+export const createPaymentFractionPartProof = (): { receiptId: string; operationId: string } => ({
+  receiptId: createUuid(),
+  operationId: createUuid(),
+});

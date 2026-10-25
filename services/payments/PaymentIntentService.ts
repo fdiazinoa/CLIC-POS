@@ -17,6 +17,14 @@ export interface PaymentIntentHandle {
     status?: PaymentIntentStatus; providerReference?: string; authorizationCode?: string; responseCode?: string;
 }
 
+/** Native part-proof fence for an intermediate table installment (no fiscal checkout). */
+export interface PaymentTablePartFence {
+    ticketId: string;
+    receiptId: string;
+    operationId: string;
+    planFingerprint: string;
+}
+
 const createId = (): string => {
     if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
     return `PAYINT-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
@@ -42,8 +50,9 @@ export class PaymentIntentService {
         currencyCode: string;
         retainedOperation?: boolean;
         futureCheckout?: {checkoutId:string;transactionId:string};
+        tablePart?: PaymentTablePartFence;
     }): Promise<PaymentIntentHandle | null> {
-        if (!this.isEnabled()){if(input.futureCheckout)throw new Error('PAYMENT_INTENT_NATIVE_REQUIRED');return null;}
+        if (!this.isEnabled()){if(input.futureCheckout||input.tablePart)throw new Error('PAYMENT_INTENT_NATIVE_REQUIRED');return null;}
         const intentId = createId();
         const idempotencyKey = `pos-payment:${clean(input.paymentId)}`;
         const now = new Date().toISOString();
@@ -55,7 +64,7 @@ export class PaymentIntentService {
              ${input.futureCheckout?'WHERE NOT EXISTS(SELECT 1 FROM pos_fiscal_checkout_retirements_v1 WHERE transaction_id=? COLLATE NOCASE)':''}
              ON CONFLICT(idempotency_key) DO NOTHING`,
             [intentId, idempotencyKey, clean(input.paymentId), clean(input.provider), clean(input.integrationId) || null,
-                Number(input.amount || 0), clean(input.currencyCode) || 'DOP', now, now,input.futureCheckout?.transactionId||null,...(input.futureCheckout?[input.futureCheckout.transactionId]:[])]
+                Number(input.amount || 0), clean(input.currencyCode) || 'DOP', now, now,input.futureCheckout?.transactionId||input.tablePart?.receiptId||null,...(input.futureCheckout?[input.futureCheckout.transactionId]:[])]
         );
         const result = await this.database.executeSQL!(
             'SELECT * FROM payment_intents_v2 WHERE idempotency_key = ? LIMIT 1',
@@ -68,14 +77,37 @@ export class PaymentIntentService {
             return acc;
         }, {});
         if(input.futureCheckout&&!row.intent_id)throw new Error('FISCAL_WORKFLOW_RETIREMENT_FENCED');
-        if ((input.retainedOperation||input.futureCheckout) && (row.provider !== clean(input.provider) || String(row.integration_id || '') !== clean(input.integrationId)
+        if(input.tablePart&&!row.intent_id)throw new Error('PAYMENT_INTENT_TABLE_PART_REQUIRED');
+        if ((input.retainedOperation||input.futureCheckout||input.tablePart) && (row.provider !== clean(input.provider) || String(row.integration_id || '') !== clean(input.integrationId)
           || Number(row.amount) !== input.amount || row.currency_code !== clean(input.currencyCode)
           || !['CREATED','AUTHORIZED'].includes(row.status) || input.futureCheckout&&row.transaction_id!==input.futureCheckout.transactionId)) throw new Error('PAYMENT_INTENT_RECONCILIATION_REQUIRED');
+        if (input.tablePart) {
+            const partResult = await this.database.executeSQL!(
+                `SELECT 1 FROM documents d JOIN json_each(json_extract(d.data,'$.paymentFraction.parts')) p
+                 WHERE d.collection_name='parkedTickets' AND d.doc_id=?
+                 AND json_extract(p.value,'$.receiptId')=? AND json_extract(p.value,'$.operationId')=?
+                 AND json_extract(p.value,'$.effectPhase') IN ('PREPARED','EFFECT_POSSIBLE')
+                 AND json_extract(p.value,'$.planFingerprint')=?
+                 AND EXISTS(SELECT 1 FROM json_each(json_extract(p.value,'$.paymentIDs')) pid WHERE pid.value=?)`,
+                [input.tablePart.ticketId, input.tablePart.receiptId, input.tablePart.operationId, input.tablePart.planFingerprint, clean(input.paymentId)]
+            );
+            if (!partResult?.[0]?.values?.length) throw new Error('PAYMENT_INTENT_TABLE_PART_REQUIRED');
+        }
         return { ...((input.retainedOperation||input.futureCheckout) ? {status:row.status,providerReference:row.provider_reference,
             authorizationCode:row.authorization_code,responseCode:row.response_code} : {}), intentId: String(row.intent_id || intentId), idempotencyKey: String(row.idempotency_key || idempotencyKey) };
     }
 
-    async markAuthorizing(intentId: string, retainedOperation = false,futureCheckout?:{checkoutId:string;transactionId:string}): Promise<void> {
+    async markAuthorizing(intentId: string, retainedOperation = false,futureCheckout?:{checkoutId:string;transactionId:string},tablePart?:PaymentTablePartFence): Promise<void> {
+        if(tablePart){
+            if(retainedOperation||!this.isEnabled())throw new Error('PAYMENT_INTENT_RECONCILIATION_REQUIRED');
+            const result=await this.database.executeSQL!(`UPDATE payment_intents_v2 SET status='AUTHORIZING',updated_at=? WHERE intent_id=? AND status='CREATED'
+             AND EXISTS(SELECT 1 FROM documents d JOIN json_each(json_extract(d.data,'$.paymentFraction.parts')) p
+              WHERE d.collection_name='parkedTickets' AND d.doc_id=?
+              AND json_extract(p.value,'$.receiptId')=? AND json_extract(p.value,'$.operationId')=?
+              AND json_extract(p.value,'$.effectPhase')='EFFECT_POSSIBLE' AND json_extract(p.value,'$.planFingerprint')=?
+              AND EXISTS(SELECT 1 FROM json_each(json_extract(p.value,'$.paymentIDs')) pid WHERE pid.value=payment_intents_v2.payment_id))`,[new Date().toISOString(),intentId,tablePart.ticketId,tablePart.receiptId,tablePart.operationId,tablePart.planFingerprint]);
+            if(Number(result?.changes?.changes)!==1)throw new Error('PAYMENT_INTENT_RECONCILIATION_REQUIRED');return;
+        }
         if(futureCheckout){
             if(retainedOperation||!this.isEnabled())throw new Error('PAYMENT_INTENT_RECONCILIATION_REQUIRED');
             const result=await this.database.executeSQL!(`UPDATE payment_intents_v2 SET status='AUTHORIZING',updated_at=? WHERE intent_id=? AND status='CREATED' AND transaction_id=?

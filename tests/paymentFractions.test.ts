@@ -3,7 +3,9 @@ import test from 'node:test';
 
 import {
   createPaymentFractionPlan,
+  createPaymentFractionPartProof,
   isPaymentFractionPlanCurrent,
+  paymentFractionPlanFingerprint,
   retainCurrentPaymentFractionPlan,
   splitAmountIntoEqualParts
 } from '../utils/paymentFractions';
@@ -38,4 +40,21 @@ test('el autoguardado conserva las cuotas al salir y volver a la mesa', () => {
   assert.equal(retainCurrentPaymentFractionPlan(plan, 23050), plan);
   assert.equal(retainCurrentPaymentFractionPlan(plan, 23050.02), undefined);
   assert.equal(retainCurrentPaymentFractionPlan(undefined, 23050), undefined);
+});
+
+test('el fingerprint del plan es determinista y cambia si se edita el plan', () => {
+  const plan = createPaymentFractionPlan(4000, 4, '2026-07-17T00:00:00.000Z');
+  assert.equal(paymentFractionPlanFingerprint(plan), paymentFractionPlanFingerprint(plan));
+
+  const edited = { ...plan, parts: plan.parts.map((part, index) => index === 0 ? { ...part, amount: part.amount + 1 } : part) };
+  assert.notEqual(paymentFractionPlanFingerprint(edited), paymentFractionPlanFingerprint(plan));
+});
+
+test('la prueba de cuota genera identidades estables únicas', () => {
+  const first = createPaymentFractionPartProof();
+  const second = createPaymentFractionPartProof();
+  assert.ok(first.receiptId);
+  assert.ok(first.operationId);
+  assert.notEqual(first.receiptId, first.operationId);
+  assert.notEqual(first.receiptId, second.receiptId);
 });
