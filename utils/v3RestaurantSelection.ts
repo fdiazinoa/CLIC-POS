@@ -15,7 +15,7 @@ export function normalizeV3RestaurantSelection(value:unknown):Pick<Product,'prod
  const group=(raw:any,kind:'items'|'modifiers')=>{
   const g=record(raw);need((g.active===undefined||typeof g.active==='boolean')&&(g.required===undefined||typeof g.required==='boolean')&&(g.selection_type===undefined||['SINGLE','MULTIPLE'].includes(g.selection_type)));need(Object.keys(g).every(k=>['id','name','active','required','min_select','max_select','free_quantity','sort_order','selection_type',kind].includes(k)));
   const rows=list(g[kind]).filter(row=>record(row).active!==false).map(rawOption=>{
-   const o=record(rawOption);need((o.active===undefined||typeof o.active==='boolean')&&(o.affects_price===undefined||typeof o.affects_price==='boolean'));need(Object.keys(o).every(k=>['id','name','active','sort_order','product_id','price','price_delta','affects_price','modifier_type'].includes(k)));text(o.id||o.product_id,128);text(o.name);amount(o.price_delta??o.price??0);
+   const o=record(rawOption);need((o.active===undefined||typeof o.active==='boolean')&&(o.affects_price===undefined||typeof o.affects_price==='boolean'));need(Object.keys(o).every(k=>['id','name','active','sort_order','product_id','sku','price','price_delta','affects_price','modifier_type'].includes(k)));text(o.id||o.product_id,128);text(o.name);if(o.sku!==undefined)text(o.sku,128);amount(o.price_delta??o.price??0);
    if(kind==='items')text(o.product_id,128);
    if(kind==='modifiers')need(!o.modifier_type||['ADD','REMOVE','NOTE_PRESET'].includes(o.modifier_type));
    return {...o};
