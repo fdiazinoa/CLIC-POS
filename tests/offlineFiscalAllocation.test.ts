@@ -330,3 +330,20 @@ test('E34 refund reservation requires a retained original reference',async()=>{
   await assert.rejects(f.client().reserveOfflineCheckout(JSON.stringify({items,customerId:null,fiscalType:'E34',originalTransactionId:'missing-tx'}),'missing-original'),/OFFLINE_FISCAL_REFUND_ORIGINAL_RETAINED/);
  }finally{f.sql.close();}
 });
+test('final installment closes aggregated prior PAID parts under one NCF',async()=>{
+ const f=await fixture();try{
+  const account={id:'account',tableId:'mesa-6',items:[{id:'item',cartId:'line',quantity:1,price:555}],total:710.4,
+   paymentFraction:{originalTotal:710.4,count:2,createdAt:'2026-10-25T00:00:00.000Z',parts:[
+    {index:1,amount:355.2,status:'PAID',receiptId:'receipt-1',operationId:'op-1',effectPhase:'PAID',planFingerprint:'fp',paymentIDs:['prior-cash'],payments:[{id:'prior-cash',method:'CASH',amount:355.2}]},
+    {index:2,amount:355.2,status:'PENDING'}]}};
+  f.put('parkedTickets',account);
+  const context={schemaVersion:1 as const,kind:'TABLE_ACCOUNT' as const,accountId:account.id,tableId:account.tableId,sourceSha256:await tableFiscalSourceDigest(JSON.stringify(account))};
+  const c=await f.client().reserveOfflineCheckout(JSON.stringify({...JSON.parse(identity('account')),fiscalSaleContext:context}),'op',context);await f.client().recordPayment(c,'current-cash');
+  const commit=await input(f,c),payments=[{id:'prior-cash',method:'CASH',amount:355.2},{id:'current-cash',method:'CASH',amount:355.2}];
+  for(const doc of commit.documents.filter(d=>d.collectionName==='transactions'||d.collectionName==='transactionHistory'))doc.document.payments=payments;
+  commit.outboxEvent.payload.transaction.payments=payments;
+  await f.adapter.commitFinancialTransaction(commit as any);
+  assert.equal(f.sql.prepare('SELECT state FROM pos_fiscal_pending_numbers_v2').get()!.state,'CONSUMED');
+  assert.equal(f.count('sync_outbox_v2'),1);
+ }finally{f.sql.close();}
+});
