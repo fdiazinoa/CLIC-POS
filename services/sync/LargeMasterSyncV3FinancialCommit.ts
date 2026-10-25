@@ -193,13 +193,15 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
     const trackingSelections=transaction.items.flatMap(line=>line.trackingData||[]);
     if(trackingSelections.length){if(!transaction.trackingCheckoutId||options.refund)throw Error('TRACKING_CHECKOUT_SOURCE_REQUIRED');trackingCommits.push({checkoutId:transaction.trackingCheckoutId,transactionId:transaction.id,selections:trackingSelections});}
     if(transaction.fiscalAllocationAuthorizationId){
-      if(entries.length!==1||options.refund||!transaction.fiscalWorkflowCheckoutId||!dbAdapter.fiscalWorkflowStore?.allocationCommitPreconditions)throw Error('OFFLINE_FISCAL_NATIVE_REQUIRED');
+      if(entries.length!==1||!transaction.fiscalWorkflowCheckoutId||!dbAdapter.fiscalWorkflowStore?.allocationCommitPreconditions)throw Error('OFFLINE_FISCAL_NATIVE_REQUIRED');
       const checkout=await dbAdapter.fiscalWorkflowStore.readCheckout(transaction.fiscalWorkflowCheckoutId);if(!checkout?.allocation)throw Error('OFFLINE_FISCAL_ALLOCATION_REQUIRED');
       fiscalAllocationPreconditions.push(...await dbAdapter.fiscalWorkflowStore.allocationCommitPreconditions(checkout));
-      const series=await db.getDocument('internalSequences',transaction.seriesId!) as any,counter=await db.getDocument('globalSequenceCounter' as any,'value') as any;
-      const planned=planFinancialNumbers({seriesId:transaction.seriesId,documentType:transaction.documentType,global:true},series,counter);
-      transaction={...transaction,globalSequence:planned.result.globalSequence,displayId:planned.result.displayId,seriesNumber:planned.result.seriesNumber};
-      documents.push({collectionName:'internalSequences',document:planned.series!,expectedDocument:JSON.stringify(series)},{collectionName:'globalSequenceCounter',document:planned.counter!,...(counter?{expectedDocument:JSON.stringify(counter)}:{requireAbsent:true})});
+      if(!options.refund){
+        const series=await db.getDocument('internalSequences',transaction.seriesId!) as any,counter=await db.getDocument('globalSequenceCounter' as any,'value') as any;
+        const planned=planFinancialNumbers({seriesId:transaction.seriesId,documentType:transaction.documentType,global:true},series,counter);
+        transaction={...transaction,globalSequence:planned.result.globalSequence,displayId:planned.result.displayId,seriesNumber:planned.result.seriesNumber};
+        documents.push({collectionName:'internalSequences',document:planned.series!,expectedDocument:JSON.stringify(series)},{collectionName:'globalSequenceCounter',document:planned.counter!,...(counter?{expectedDocument:JSON.stringify(counter)}:{requireAbsent:true})});
+      }
     }
     if (transaction.v3ReservationClaimId) {
       const reservation = retained?.reservation;
@@ -299,9 +301,17 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
       if (options.refund) {
         const fiscalSourceMetadata = {...captureNewV3FiscalSourceMetadata(document,projected,session.binding,{refund:true,retained:Boolean(retained),offlineTableAccount:false}),...captureTrackingSourceMetadata(document,projected)};
         const paymentIntentIds = (document.payments || []).map((payment: any) => payment.paymentIntentId).filter(Boolean);
+        let fiscalWorkflowBirth: import('../fiscal/FiscalWorkflowV2Types').FiscalWorkflowBirthV2 | undefined;
+        if(document.fiscalWorkflowCheckoutId){
+          if(!dbAdapter.fiscalWorkflowStore)throw Error('FISCAL_WORKFLOW_NEW_SOURCE_REQUIRED');
+          const checkout=await dbAdapter.fiscalWorkflowStore.readCheckout(document.fiscalWorkflowCheckoutId);
+          if(!checkout||checkout.transactionId!==document.id||!checkout.allocation)throw Error('FISCAL_WORKFLOW_CHECKOUT_REQUIRED');
+          fiscalWorkflowBirth={schemaVersion:3,authorizationKind:'OFFLINE_FISCAL_ALLOCATION_V2',authorizationId:checkout.allocation.authorizationId,authorityHash:checkout.allocation.authorityHash,checkoutId:checkout.checkoutId,transactionId:checkout.transactionId};
+          fiscalWorkflowCommits.push({checkoutId:checkout.checkoutId,transactionId:document.id,birth:fiscalWorkflowBirth});
+        }
         events.push({ eventId: createUuid(), eventType: 'SALES_CREDIT_NOTE_POSTED', aggregateType: 'TRANSACTION',
             aggregateId: document.id, schemaVersion: 1,
-            payload: buildSalePostedPayload(document, { ...fiscalSourceMetadata, inventoryMovementIds: ledger.map(row => row.id), paymentIntentIds }), createdAt: document.date });
+            payload: buildSalePostedPayload(document, { ...fiscalSourceMetadata, ...(fiscalWorkflowBirth?{fiscalWorkflowBirth}:{}), inventoryMovementIds: ledger.map(row => row.id), paymentIntentIds }), createdAt: document.date });
         const paymentPosted = buildPaymentPostedPayload(document, { ...fiscalSourceMetadata, paymentIntentIds });
         if (paymentPosted) events.push({ eventId: createUuid(), eventType: 'PAYMENT_POSTED',
             aggregateType: 'TRANSACTION', aggregateId: document.id, schemaVersion: 1, payload: paymentPosted, createdAt: document.date });

@@ -6,6 +6,7 @@ import {resolveTerminalDocumentSeriesId} from './utils/seriesValidation';
 import {prepareFiscalFormatRuntime} from './services/fiscal/FiscalWorkflowV2FormatRuntime';
 import {financialIdentity} from './services/db/LargeMasterSyncV3FinancialRetention';
 import { fiscalWorkflowV2Client,fiscalWorkflowMessage } from './services/fiscal/FiscalWorkflowV2Client';
+import { reserveRefundFiscalReservation } from './services/fiscal/RefundFiscalReservation';
 import {requireFiscalErpAppliedReceipt,FISCAL_DISPATCH_CLAIMS} from './services/fiscal/FiscalMSellerDispatch';
 import { assertFormatsPostingClosed } from './services/articleFormats/activation';
 import { attachFiscalStatusLifecycle } from './services/fiscal/FiscalStatusLifecycle';
@@ -13117,6 +13118,7 @@ const AppContent: React.FC = () => {
     const creditNoteFiscalType = preparedFiscalAuthority?.ncfType || resolveCreditNoteFiscalCode(creditNoteFiscalMode);
     let creditNoteIssuance: Transaction['fiscalIssuance'];
     let creditNoteNcf: string | undefined;
+    let refundCheckout: any;
     if (creditNoteFiscalMode !== 'NONE' &&
         !(preparedFiscalAuthority
           ? await db.validatePreparedFiscalAuthority(creditNoteFiscalType, currentTerminalId, preparedFiscalAuthority.ncf, currentTerminal?.config)
@@ -13128,8 +13130,16 @@ const AppContent: React.FC = () => {
       creditNoteNcf = preparedFiscalAuthority.ncf;
       await db.reconcilePreparedNCF(preparedFiscalAuthority.ncfType, currentTerminalId, preparedFiscalAuthority.ncf, currentTerminal?.config);
     } else if (!originalTx.erpRefundSource && creditNoteFiscalMode !== 'NONE') {
-      const reservation=await db.reserveFiscalNumber(creditNoteFiscalType,currentTerminalId,1,currentTerminal?.config);
-      creditNoteNcf=reservation?.ncf; creditNoteIssuance=reservation?.fiscalIssuance;
+      const reservation = await reserveRefundFiscalReservation({
+        refundFiscalType: creditNoteFiscalType,
+        originalTransactionId: originalTx.id,
+        items: normalizedRefundItems,
+        client: fiscalWorkflowV2Client,
+        db: db as any,
+        terminalId: currentTerminalId,
+        activeTerminalConfig: currentTerminal?.config,
+      });
+      creditNoteNcf=reservation?.ncf; creditNoteIssuance=reservation?.fiscalIssuance; refundCheckout=reservation?.checkout;
       if (!creditNoteNcf) {
         alert(`No se pudo reservar el comprobante ${creditNoteFiscalType}. La devolución fue bloqueada.`);
         return null;
@@ -13178,14 +13188,22 @@ const AppContent: React.FC = () => {
         timestamp: new Date(),
       }];
 
+    // 4a. Fence the E34 allocation checkout to EFFECT_POSSIBLE with the refund payments
+    // so the native writer can consume the NCF atomically with the credit note.
+    if (refundCheckout) {
+      for (const payment of refundPayments) {
+        await fiscalWorkflowV2Client.recordPayment(refundCheckout, payment.id);
+      }
+    }
+
     // 4. Create Credit Note Record
     const creditNote: Transaction = {
-      id: createRuntimeId('NC'),
+      id: refundCheckout ? refundCheckout.transactionId : createRuntimeId('NC'),
       displayId: displayId,
       documentType: 'REFUND',
       seriesId: refundSeriesId,
       seriesNumber: refundSeriesNumber,
-      date: new Date().toISOString(),
+      date: refundCheckout ? refundCheckout.offlineSaleDate : new Date().toISOString(),
       items: normalizedRefundItems,
       total: refundTotal,
       payments: refundPayments,
@@ -13200,10 +13218,15 @@ const AppContent: React.FC = () => {
       ncf: creditNoteNcf || undefined,
       fiscalIssuance: creditNoteIssuance,
       ncfType: creditNoteNcf ? creditNoteFiscalType : undefined,
+      ...(refundCheckout ? {
+        fiscalWorkflowCheckoutId: refundCheckout.checkoutId,
+        fiscalAllocationAuthorizationId: refundCheckout.allocation?.authorizationId,
+        fiscalEnvironment: refundCheckout.allocation?.environment,
+      } : {}),
       legacyNcf: creditNoteNcf && !creditNoteFiscalType.startsWith('E') ? creditNoteNcf : undefined,
       electronicNcf: creditNoteNcf && creditNoteFiscalType.startsWith('E') ? creditNoteNcf : undefined,
-      fiscalMode: creditNoteFiscalMode,
-      fiscalProvider: creditNoteFiscalType.startsWith('E') ? getDefaultFiscalProvider(config, currentTerminal?.config) : 'NONE',
+      fiscalMode: refundCheckout ? 'ECF' : creditNoteFiscalMode,
+      fiscalProvider: refundCheckout ? 'MSELLER' : (creditNoteFiscalType.startsWith('E') ? getDefaultFiscalProvider(config, currentTerminal?.config) : 'NONE'),
       taxAmount: refundSummary.taxAmount,
       netAmount: refundSummary.netAmount,
       affectedNCF: originalTx.ncf,
