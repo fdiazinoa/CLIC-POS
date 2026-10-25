@@ -49,7 +49,7 @@ import {
    CreditCard, User, Tag, Grid, Save,
    Settings, Users, History, Wallet,
    UserPlus, PlusCircle, X, Percent, ArrowLeft, ChevronLeft, ChevronRight,
-   Scale as ScaleIcon, PauseCircle, LogOut, Minus, Plus, Edit3, Banknote,
+   Scale as ScaleIcon, PauseCircle, LogOut, Minus, Plus, Edit3,
    ArrowRightLeft, Globe, DollarSign, Split,
    ChevronDown, Check, AlertCircle, Layers,
    ShoppingBag, ScanBarcode, ArrowRight, Clock, Camera, AlertTriangle, BrushCleaning,
@@ -9663,9 +9663,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                              }
                                           }}
                                           disabled={cart.length === 0 || !canCheckoutWithFiscalPolicy}
-                                          className={`h-14 w-24 shrink-0 px-1 rounded-2xl font-black text-[12px] uppercase tracking-[0.06em] shadow-xl hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-70 disabled:cursor-not-allowed flex items-center justify-center gap-2.5 ${!canCheckoutWithFiscalPolicy ? 'bg-red-100 text-red-500 cursor-not-allowed border-2 border-red-200' : 'bg-slate-900 text-white hover:bg-slate-800 disabled:bg-slate-200 disabled:text-slate-400 disabled:shadow-slate-100'}`}
+                                          className={`h-14 w-24 shrink-0 px-1 rounded-2xl font-black text-[12px] uppercase tracking-[0.06em] shadow-xl hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-70 disabled:cursor-not-allowed flex items-center justify-center gap-2.5 ${!canCheckoutWithFiscalPolicy ? 'bg-red-100 text-red-500 cursor-not-allowed border-2 border-red-200' : 'bg-emerald-600 text-white hover:bg-emerald-500 disabled:bg-slate-200 disabled:text-slate-400 disabled:shadow-slate-100'}`}
                                        >
-                                          <Banknote size={28} strokeWidth={2.2} />
+                                          <span className="text-[26px] font-black leading-none" aria-hidden="true">$</span>
                                           <span className="sr-only">{checkoutActionLabel}</span>
                                        </button>
                                     </>
@@ -9685,9 +9685,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                              }
                                           }}
                                           disabled={cart.length === 0}
-                                          className="h-14 w-24 shrink-0 flex items-center justify-center gap-2.5 rounded-2xl font-black text-[13px] uppercase tracking-[0.14em] bg-slate-900 text-white hover:bg-black shadow-xl hover:shadow-md transition-all active:scale-95 disabled:bg-slate-200 disabled:text-slate-400 disabled:opacity-100 disabled:cursor-not-allowed"
+                                          className="h-14 w-24 shrink-0 flex items-center justify-center gap-2.5 rounded-2xl font-black text-[13px] uppercase tracking-[0.14em] bg-emerald-600 text-white hover:bg-emerald-500 shadow-xl hover:shadow-md transition-all active:scale-95 disabled:bg-slate-200 disabled:text-slate-400 disabled:opacity-100 disabled:cursor-not-allowed"
                                        >
-                                          <Banknote size={28} strokeWidth={2.2} />
+                                          <span className="text-[26px] font-black leading-none" aria-hidden="true">$</span>
                                           <span className="sr-only">{isOrderTakerMode ? 'Guardar pedido' : 'Cobrar'}</span>
                                        </button>
                                     </>
