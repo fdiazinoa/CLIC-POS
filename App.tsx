@@ -11613,6 +11613,16 @@ const AppContent: React.FC = () => {
     };
   }, [syncFiscalDocument,fiscalStatusWorker,isDataLoaded,fiscalHistoryHydrated,isSecurityLoaded]);
 
+  // Restarting the POS must pick up a newer master. Runs once the shell is idle so the
+  // operational window is free; the session probe reuses the server session (no downloads
+  // when the master did not change) and skips the refresh while a sale is active.
+  useEffect(() => {
+    if (!LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED || !usesLargeMasterSyncV3Authority(syncPolicy.resolve().kind)) return;
+    if (!isDataLoaded || !isSecurityLoaded) return;
+    const timer = setTimeout(() => { void getLargeMasterSyncV3OperationalSession(false).catch(() => undefined); }, 6000);
+    return () => clearTimeout(timer);
+  }, [isDataLoaded, isSecurityLoaded]);
+
   const fiscalStatusLifecycleKey=JSON.stringify((config.terminals || []).filter(terminal=>terminal.config?.currentDeviceId===deviceId)
     .map(terminal=>[terminal.id,terminal.config?.currentDeviceId,terminal.config?.erpBinding?.tenantId,terminal.config?.erpBinding?.companyId,
       terminal.config?.erpBinding?.storeId,getProviderEnvironment(getEffectiveFiscalComplianceConfig(config,terminal.config),'MSELLER'),
