@@ -43,18 +43,41 @@ export function V3CatalogPageView({ state, config }: { state: V3CatalogViewState
       <td>{row.stock ?? 0}</td>
       <td>{row.balance ?? 0}</td>
     </tr>)}</tbody></table></div>
-    {selected ? <section id="v3-article-classification" aria-label={`Clasificación de ${selected.name}`} className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4">
-      <h2 className="font-bold">Clasificación · {selected.name}</h2>
-      <p className="text-xs break-all">Referencia: {selected.sku || selected.id}</p>
-      <dl className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">{classificationFields.map(({ key, label }, index) => {
-        const raw = selected[key];
-        const id = key === 'posCategoryId' ? normalizeV3CategoryKey(raw) : raw;
-        const name = id ? masters[index].get(id) : undefined;
-        return <div key={key} className="min-w-0"><dt className="font-bold">{label}</dt>
-          <dd className="break-words">{id ? name || 'Nombre no disponible' : 'Sin asignar'}
-            {id && <span className="block text-xs text-slate-500 break-all">ID: {raw}</span>}</dd></div>;
-      })}</dl>
-    </section> : <p className="mt-4 text-sm text-slate-600">Selecciona un artículo para ver su clasificación.</p>}
+    {selected && (
+      <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/40 p-4" role="presentation" onClick={() => setSelectedId(null)}>
+        <section id="v3-article-classification" role="dialog" aria-modal="true" aria-label={`Ficha de ${selected.name}`}
+          className="max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl" onClick={event => event.stopPropagation()}>
+          <header className="flex items-start justify-between gap-4 border-b border-slate-200 pb-3">
+            <div className="min-w-0">
+              <h2 className="truncate text-lg font-black text-slate-900">{selected.name}</h2>
+              <p className="text-xs text-slate-500 break-all">
+                {selected.sku ? `SKU ${selected.sku}` : selected.id}{selected.barcode ? ` · ${selected.barcode}` : ''}{selected.type ? ` · ${selected.type}` : ''}
+              </p>
+            </div>
+            <button type="button" onClick={() => setSelectedId(null)} className="shrink-0 rounded-lg border border-slate-200 px-2.5 py-1 text-sm font-bold text-slate-600 hover:bg-slate-50">Cerrar</button>
+          </header>
+          <dl className="mt-4 grid gap-3 sm:grid-cols-2">
+            <div><dt className="text-[11px] font-bold uppercase tracking-wide text-slate-400">Estado</dt>
+              <dd className="font-bold text-slate-800">{selected.active ? 'Activo' : 'Inactivo'} · {selected.sellable ? 'Vendible' : 'No vendible'}</dd></div>
+            <div><dt className="text-[11px] font-bold uppercase tracking-wide text-slate-400">Precio de tarifa</dt>
+              <dd className="font-bold text-slate-800">{selected.price === null ? 'Sin precio' : selected.price.toFixed(2)}</dd></div>
+            <div><dt className="text-[11px] font-bold uppercase tracking-wide text-slate-400">Stock del almacén</dt>
+              <dd className="font-bold text-slate-800">{selected.stock ?? 0}</dd></div>
+            <div><dt className="text-[11px] font-bold uppercase tracking-wide text-slate-400">Disponible</dt>
+              <dd className="font-bold text-slate-800">{selected.balance ?? 0}</dd></div>
+          </dl>
+          <h3 className="mt-5 text-[11px] font-bold uppercase tracking-wide text-slate-400">Clasificación</h3>
+          <dl className="mt-2 grid gap-3 sm:grid-cols-2">{classificationFields.map(({ key, label }, index) => {
+            const raw = selected[key];
+            const id = key === 'posCategoryId' ? normalizeV3CategoryKey(raw) : raw;
+            const name = id ? masters[index].get(id) : undefined;
+            return <div key={key} className="min-w-0"><dt className="font-bold text-slate-700">{label}</dt>
+              <dd className="break-words text-slate-600">{id ? name || 'Nombre no disponible' : 'Sin asignar'}
+                {id && <span className="block text-xs text-slate-400 break-all">ID: {raw}</span>}</dd></div>;
+          })}</dl>
+        </section>
+      </div>
+    )}
   </>;
 }
 
@@ -110,8 +133,8 @@ export default function LargeMasterSyncV3CatalogManager(props: {
   // A changed context must not paint the old page while effects reset its cursor/reader.
   const visible = oldContext.current === contextKey ? state : { status: 'loading' as const };
   return <section className="h-full overflow-auto bg-white p-6 text-slate-900">
-    <header className="flex justify-between"><h1>Productos V3 · Sólo lectura</h1><button onClick={props.onClose}>Cerrar</button></header>
-    <p className="text-sm">Orden estable por ID. Tarifa y almacén configurados en esta terminal. Stock: existencia física más movimientos locales. Disponible: stock menos reservas y compromisos. Si no se recibió saldo para este almacén se muestra 0. Estos valores son informativos.</p>
+    <header className="flex items-center justify-between gap-4 border-b border-slate-200 pb-3"><h1 className="text-xl font-black text-slate-900">Maestro de Artículos</h1><button type="button" onClick={props.onClose} className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-bold text-slate-700 hover:bg-slate-50">Cerrar</button></header>
+    <p className="text-xs text-slate-500">Orden estable por ID. Tarifa y almacén configurados en esta terminal. Stock: existencia física más movimientos locales. Disponible: stock menos reservas y compromisos. Si no se recibió saldo para este almacén se muestra 0. Estos valores son informativos.</p>
     <div className="flex flex-wrap gap-3 my-4">
       <input aria-label="Buscar productos" maxLength={120} value={query} onChange={event => {
         view.cancel(); setQuery(event.target.value); setCursors([null]);

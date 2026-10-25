@@ -1,3 +1,4 @@
+import { scopedWarehousesForStore } from '../utils/warehouseScope';
 import {v3RetainedLineFingerprint} from '../services/sync/LargeMasterSyncV3StockAuthority';
 import {assertTrackingOperationReceipt,type TrackingScope} from '../services/db/TrackingCheckoutOperation';
 import {dbAdapter} from '../services/db';
@@ -1458,6 +1459,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const activeTerminal = (config.terminals || []).find(t => t.id === activeTerminalId) || (config.terminals || [])[0];
    const quantityPresentation = terminalQuantityPresentation(config, activeTerminalId);
    const activeTerminalConfig = activeTerminal?.config;
+   // Only the warehouses of this terminal's store may be assigned from the POS.
+   const operatingWarehouses = useMemo(
+      () => scopedWarehousesForStore(warehouses, activeTerminalConfig?.erpBinding?.storeId),
+      [warehouses, activeTerminalConfig?.erpBinding?.storeId],
+   );
    const terminalId = activeTerminal?.id || 'T1';
    const activeTerminalConfigRaw = useMemo<Record<string, unknown>>(
       () => activeTerminalConfig ? (activeTerminalConfig as unknown as Record<string, unknown>) : {},
@@ -10577,7 +10583,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         onOpenSettings('CATALOG', { productId: p.id, tab: 'KARDEX' });
                      }
                   }}
-                  warehouses={warehouses}
+                  warehouses={operatingWarehouses}
                   config={config}
                   currentUser={currentUser}
                   roles={roles}
