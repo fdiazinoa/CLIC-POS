@@ -301,6 +301,8 @@ test('recipe line deduces components instead of the parent', async () => {
     assert.equal(ledger[0].productId, 'child');
     assert.equal(ledger[0].qtyOut, 2);
     assert.equal(ledger[0].unitCost, 5);
+    assert.deepEqual(recipeTx.items[0].v3InventoryConsumption, { schemaVersion: 1, mode: 'COMPONENTS',
+      source: { syncId: 'S', syncVersion: 2 }, entries: [{ productId: 'child', quantity: 2, unitCost: 5 }] });
   } finally { f.sql.close(); }
 });
 

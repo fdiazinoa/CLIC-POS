@@ -1565,6 +1565,8 @@ export interface Product {
   isInventoriable?: boolean;
   kitInventoryMode?: KitInventoryMode;
   recipeDetails?: RecipeDetail[]; // The BOM
+  /** Frozen component consumption plan, derived at preflight/UOW and never mutated after EFFECT_POSSIBLE. */
+  v3InventoryConsumption?: { schemaVersion: 1; mode: 'DIRECT' | 'COMPONENTS'; source: { syncId: string; syncVersion: number }; entries: { productId: string; quantity: number; unitCost: number }[] };
   images: string[];
   media?: MediaAsset[];
   attributes: ProductAttribute[];

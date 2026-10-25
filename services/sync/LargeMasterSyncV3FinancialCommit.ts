@@ -90,6 +90,11 @@ export const buildV3InventoryLedger = async (transaction: Transaction, warehouse
     } else {
       deductionRows = [{ productId: line.id, quantity, unitCost: line.cost || 0 }];
     }
+    if (line.recipeDetails?.length) {
+      (line as any).v3InventoryConsumption = { schemaVersion: 1, mode: 'COMPONENTS',
+        source: { syncId: line.v3SaleAuthority!.syncId, syncVersion: line.v3SaleAuthority!.syncVersion },
+        entries: deductionRows.map(row => ({ productId: row.productId, quantity: row.quantity, unitCost: row.unitCost })) };
+    }
     for (const row of deductionRows) {
       const isDirect = row.productId === line.id;
       entries.push({ id: isDirect ? `V3-${transaction.id}-${encodeURIComponent(line.cartId)}` : `V3-${transaction.id}-${encodeURIComponent(line.cartId)}-${encodeURIComponent(row.productId)}`,
