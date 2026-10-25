@@ -306,6 +306,19 @@ test('recipe line deduces components instead of the parent', async () => {
   } finally { f.sql.close(); }
 });
 
+test('recipe component deduction converts ingredient units at sale time', async () => {
+  const f = fixture();
+  try {
+    const module = await financialModule(f, true);
+    const recipeTx = { ...module.transaction('recipe'), items: [{ ...module.transaction('recipe').items[0], recipeDetails: [{ childItemId: 'child', quantity: 500, unit: 'gr' }] }] };
+    const resolveArticle = async (id: string) => ({ id, cost: 10, measurementUnit: 'kg', type: 'PRODUCT', isInventoriable: true });
+    const ledger = await module.buildV3InventoryLedger(recipeTx, 'W', 'binding', false, undefined, resolveArticle);
+    assert.equal(ledger.length, 1);
+    assert.equal(ledger[0].productId, 'child');
+    assert.equal(ledger[0].qtyOut, 0.5);
+  } finally { f.sql.close(); }
+});
+
 test('coupon redemption marks config coupon REDEEMED atomically with the sale', async () => {
   const f = fixture();
   try {
