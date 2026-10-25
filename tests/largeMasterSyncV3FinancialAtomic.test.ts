@@ -306,6 +306,19 @@ test('recipe line deduces components instead of the parent', async () => {
   } finally { f.sql.close(); }
 });
 
+test('coupon redemption marks config coupon REDEEMED atomically with the sale', async () => {
+  const f = fixture();
+  try {
+    f.sql.prepare("INSERT INTO documents(collection_name,doc_id,data)VALUES('config','current',?)").run(JSON.stringify({ id: 'current', coupons: [{ id: 'coupon-1', code: 'CODE', status: 'ACTIVE' }] }));
+    const module = await financialModule(f, true);
+    const sale = { ...module.transaction('sale'), customerId: undefined, coupons: [{ id: 'coupon-1', code: 'CODE' }] };
+    await module.persistV3FinancialBatch([{ transaction: sale }], {} as BusinessConfig, 'W');
+    const config = JSON.parse(String(f.sql.prepare("SELECT data FROM documents WHERE collection_name='config' AND doc_id='current'").get()!.data));
+    assert.equal(config.coupons[0].status, 'REDEEMED');
+    assert.equal(config.coupons[0].ticketRef, sale.displayId || sale.id);
+  } finally { f.sql.close(); }
+});
+
 test('native decimal stock keeps kilogram fractions and rejects actual demand above remaining stock', async () => {
   const f = fixture(0.5);
   try {

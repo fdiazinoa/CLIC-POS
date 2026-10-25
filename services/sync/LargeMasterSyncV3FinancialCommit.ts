@@ -251,6 +251,17 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
         ...(retained ? { v3ExpectedRetainedDocument: { collection: retained.collection, id: retained.id, expected: retained.expected } } : {}) },
       ...ledger.map(document => ({ collectionName: 'inventoryLedger', document, requireAbsent: true })),
     );
+    const redeemedCoupons = (document as any).coupons as { id: string }[] | undefined;
+    if (redeemedCoupons?.length) {
+      const configDoc = await db.getDocument('config', 'current') as any;
+      if (configDoc?.coupons) {
+        const redeemedIds = new Set(redeemedCoupons.map(coupon => coupon.id));
+        const configAfter = { ...configDoc, coupons: configDoc.coupons.map((coupon: any) => redeemedIds.has(coupon.id)
+          ? { ...coupon, status: 'REDEEMED', ticketRef: document.displayId || document.id, terminalId: document.terminalId, redeemedAt: document.date }
+          : coupon) };
+        mergeMutation({ collectionName: 'config', document: configAfter, expectedDocument: JSON.stringify(configDoc) });
+      }
+    }
     if (walletDelta) {
       if (!document.customerId || !customerBefore) throw new LargeMasterSyncV3Error('SYNC_V3_WALLET_CUSTOMER_REQUIRED');
       const wallets = await db.get('wallets' as any) as Wallet[] || [];
