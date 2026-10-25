@@ -166,7 +166,7 @@ import { V3OperationalUIQueue, V3OperationalUILifetime, assertV3UIContext, autho
 import { resolveCustomerImageSrc, resolveProductImageSrc } from '../utils/entityImage';
 import { getWarehouseScopedNumber, resolveProductActiveWarehouseIds } from '../utils/masterIdentity';
 import { buildTransactionSettlementFields } from '../utils/paymentSettlement';
-import { isFullyPaidParkedTicket, isPaymentFractionPlanCurrent, retainCurrentPaymentFractionPlan } from '../utils/paymentFractions';
+import { isFullyPaidParkedTicket, isPaymentFractionPlanCurrent, retainCurrentPaymentFractionPlan, createPaymentFractionPartProof, paymentFractionPlanFingerprint } from '../utils/paymentFractions';
 import SplitTicketModal from './SplitTicketModal';
 import { getTerminalSnapshotSellers, resolveTerminalSellerName } from '../utils/terminalSnapshotSellers';
 import { productIdentityCandidates, productReferenceCandidates, resolveOperationalProductId } from '../utils/productReferences';
@@ -5716,7 +5716,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   status: 'PAID' as const,
                   payments,
                   voluntaryTip: voluntaryTip || 0,
-                  paidAt
+                  paidAt,
+                  ...createPaymentFractionPartProof(),
+                  effectPhase: 'PAID' as const,
+                  paymentIDs: payments.map(payment => payment.id).filter(Boolean),
+                  planFingerprint: paymentFractionPlanFingerprint(fractionPlan!),
                } : part)
             };
             const nextTickets = parkedTicketsRef.current.map(ticket => String(ticket.id) === activeOrderId ? {
