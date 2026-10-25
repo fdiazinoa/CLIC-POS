@@ -1412,6 +1412,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    // --- TICKET TABS STRATEGY STATE ---
    const [rightSidebarTab, setRightSidebarTab] = useState<'CART' | 'ACTIONS'>('CART');
+   const [showTaxBreakdown, setShowTaxBreakdown] = useState(false);
    const [compactSearchOpen, setCompactSearchOpen] = useState(false);
    const [orderServiceType, setOrderServiceType] = useState<OrderServiceType>('DINE_IN');
    const [showServiceTypeDialog, setShowServiceTypeDialog] = useState(false);
@@ -9050,7 +9051,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         </div>
                      </div>
                   ) : (
-                     <button onClick={onOpenCustomers} className="w-full flex items-center justify-between p-3 bg-white border-2 border-dashed border-gray-300 rounded-xl text-gray-400 hover:text-blue-500 group"><div className="flex items-center gap-2"><UserPlus size={18} /><span className="text-xs font-bold uppercase">Asignar Cliente</span></div><ChevronRight size={16} /></button>
+                     <button onClick={onOpenCustomers} className="w-full flex items-center justify-between px-3 py-2 bg-white border border-dashed border-gray-300 rounded-xl text-gray-400 hover:text-blue-500 group"><div className="flex items-center gap-2"><UserPlus size={18} /><span className="text-[11px] font-bold uppercase tracking-wide">Asignar Cliente</span></div><ChevronRight size={16} /></button>
                   )
                }
 
@@ -9264,148 +9265,179 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            );
                         }
 
-                        // DESKTOP CARD DESIGN (Restaurant/Retail)
+                        // DESKTOP CARD DESIGN (Restaurant/Retail) — compact ticket row
+                        const lineNote = String((item as any).note || item.restaurantConfig?.note || '').trim();
+                        const showUnitLine = Boolean(item.weightPresentation) || item.quantity !== 1;
+                        const discountChip = hasDiscount ? `-${discountPct}%` : '';
+                        const rowChips: JSX.Element[] = [];
+                        if (item.salespersonId) {
+                           rowChips.push(
+                              <span key="seller" className="inline-flex shrink-0 items-center gap-0.5 rounded bg-slate-100 px-1 py-[1px] text-[9.5px] font-black leading-none text-slate-600">
+                                 <User size={9} />{resolveSalespersonLabel(item.salespersonId) || '...'}
+                              </span>
+                           );
+                        }
+                        if (discountChip) {
+                           rowChips.push(
+                              <span key="disc" className="inline-flex shrink-0 items-center rounded bg-red-50 px-1 py-[1px] text-[9.5px] font-black leading-none text-red-600">
+                                 {discountChip}
+                              </span>
+                           );
+                        }
+                        if (item.modifiers && item.modifiers.length > 0) {
+                           rowChips.push(
+                              <span key="mods" className="inline-flex shrink-0 items-center rounded bg-blue-50 px-1 py-[1px] text-[9.5px] font-black leading-none text-blue-600">
+                                 +{item.modifiers.length} mod
+                              </span>
+                           );
+                        }
+                        if (item.consignmentDocumentNo) {
+                           rowChips.push(
+                              <span key="cons" className="inline-flex shrink-0 items-center rounded bg-cyan-50 px-1 py-[1px] text-[9.5px] font-black uppercase leading-none text-cyan-700">
+                                 Cons. {item.consignmentDocumentNo}
+                              </span>
+                           );
+                        }
+                        if (isDispatchedToKds) {
+                           rowChips.push(
+                              <span key="kds" className={`inline-flex shrink-0 items-center rounded px-1 py-[1px] text-[9.5px] font-black uppercase leading-none ${isReturnedToKds ? 'bg-red-50 text-red-600' : 'bg-blue-50 text-blue-600'}`}>
+                                 {isReturnedToKds ? 'KDS devuelto' : 'KDS enviado'}
+                              </span>
+                           );
+                        }
+                        if (isSubtotalizedItem) {
+                           rowChips.push(
+                              <span key="sub" className="inline-flex shrink-0 items-center rounded bg-violet-50 px-1 py-[1px] text-[9.5px] font-black uppercase leading-none text-violet-700">
+                                 Subtotalizado
+                              </span>
+                           );
+                        }
                         return (
                            <div
                               key={item.cartId || `cart-${idx}`}
                               onClick={() => toggleCartItemFocus(item.cartId)}
-                              className={`rounded-xl p-3 shadow-sm border group relative overflow-hidden transition-all hover:shadow-md cursor-pointer ${editingItem?.cartId === item.cartId || isActiveCartItem ? 'ring-2 ring-blue-100 border-blue-200 bg-blue-50/40' : isNewAfterSubtotal ? 'border-emerald-200 bg-emerald-50' : 'border-gray-100 bg-white hover:border-slate-200'}`}
+                              className={`rounded-xl border px-2.5 py-2 transition-all cursor-pointer ${editingItem?.cartId === item.cartId || isActiveCartItem ? 'ring-2 ring-blue-100 border-blue-200 bg-blue-50/40' : isNewAfterSubtotal ? 'border-emerald-200 bg-emerald-50' : 'border-slate-100 bg-white hover:border-slate-200'}`}
                            >
-                              {/* Discount Badge */}
-                              {hasDiscount && (
-                                 <div className="absolute top-0 right-0 bg-red-500 text-white text-[9px] font-bold px-2 py-0.5 rounded-bl-lg">
-                                    -{discountPct}%
-                                 </div>
-                              )}
-
-                              <div className="flex gap-3">
-                                 {/* Item Image */}
+                              <div className="flex items-start gap-2.5">
                                  {uxConfig.showProductImages && (
-                                    <div className="w-12 h-12 rounded-lg bg-gray-50 shrink-0 overflow-hidden border border-gray-100">
-                                       {resolveProductImageSrc(item) ? <img src={resolveProductImageSrc(item)} className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-gray-300"><Grid size={20} /></div>}
+                                    <div className="mt-0.5 h-7 w-7 shrink-0 overflow-hidden rounded-md border border-slate-100 bg-slate-50">
+                                       {resolveProductImageSrc(item) ? <img src={resolveProductImageSrc(item)} alt="" className="h-full w-full object-cover" /> : <div className="flex h-full w-full items-center justify-center text-slate-300"><Grid size={13} /></div>}
                                     </div>
                                  )}
 
-                                 {/* Item Details */}
-                                 <div className="flex-1 min-w-0">
-                                    <div className="flex justify-between items-start mb-1">
-                                       <h4 className="font-bold text-gray-800 text-sm leading-tight line-clamp-2" title={item.name}>{item.name}</h4>
-                                       <div className="text-right shrink-0 ml-2">
-                                          <p className="font-black text-gray-900">{baseCurrency.symbol}{lineNet.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
-                                          {hasDiscount && <p className="text-[10px] text-gray-400 line-through">{baseCurrency.symbol}{(item.originalPrice! * item.quantity).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>}
+                                 <div className="min-w-0 flex-1">
+                                    <div className="flex items-start justify-between gap-2">
+                                       <h4 className="min-w-0 truncate text-[13.5px] font-bold leading-tight text-slate-800" title={item.name}>{item.name}</h4>
+                                       <div className="shrink-0 text-right leading-tight">
+                                          {hasDiscount && (
+                                             <span className="block text-[10px] font-bold text-slate-400 line-through tabular-nums">
+                                                {baseCurrency.symbol}{(item.originalPrice! * item.quantity).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                             </span>
+                                          )}
+                                          <span className={`block text-[15px] font-black tabular-nums ${hasDiscount ? 'text-red-600' : 'text-slate-900'}`}>
+                                             {baseCurrency.symbol}{lineNet.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                          </span>
                                        </div>
                                     </div>
-                                    {item.articleFormat && <p className="text-xs text-blue-600">{item.articleFormat.name} · {item.articleFormat.factor} base · {item.baseQuantity} unidades</p>}{item.inventoryPresentation&&<p className="text-xs text-blue-600">{item.inventoryPresentation.format.name} · {item.inventoryPresentation.format.factor} base · {item.inventoryPresentation.baseQuantity} unidades</p>}
 
-                                    <div className="flex items-center justify-between">
-                                       <div className="flex flex-col">
-                                          <div className="flex flex-col">
-                                             <div className="flex items-center gap-1 text-sm font-bold leading-snug text-slate-700">
-                                                <span>{weightLineLabel(item, baseCurrency.symbol, item.price, quantityPresentation.salesDecimals)}</span>
-                                                {item.modifiers && item.modifiers.length > 0 && <span className="text-blue-600 font-bold ml-1">+{item.modifiers.length} mod</span>}
-                                             </div>
-                                             <div className="mt-0.5 text-[11px] font-semibold leading-snug text-slate-500">
-                                                {lineTaxSummary}
-                                             </div>
-                                             {item.consignmentDocumentNo && (
-                                                <span className="mt-1 inline-flex w-fit rounded-full bg-cyan-50 px-2 py-0.5 text-[9px] font-black uppercase tracking-wide text-cyan-700">
-                                                   Cons. {item.consignmentDocumentNo}
-                                                </span>
-                                             )}
-                                             {isDispatchedToKds && (
-                                                <span className={`mt-1 inline-flex w-fit rounded-full px-2 py-0.5 text-[9px] font-black uppercase tracking-wide ${isReturnedToKds ? 'bg-red-50 text-red-600' : 'bg-blue-50 text-blue-600'}`}>
-                                                   {isReturnedToKds ? 'KDS devuelto' : 'KDS enviado'}
-                                                </span>
-                                             )}
-                                             {isSubtotalizedItem && <span className="mt-1 inline-flex w-fit rounded-full bg-violet-50 px-2 py-0.5 text-[9px] font-black uppercase tracking-wide text-violet-700">Subtotalizado</span>}
-                                          </div>
-                                          {/* Salesperson Badge */}
-                                          {item.salespersonId && (
-                                             <div className="flex items-center gap-1 text-[9px] text-gray-400 mt-0.5">
-                                                <User size={10} />
-                                                <span className="truncate max-w-[80px]">{resolveSalespersonLabel(item.salespersonId) || '...'}</span>
-                                             </div>
-                                          )}
-                                       </div>
-
-                                       {isActiveCartItem && (
-                                          <div className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 p-1">
-                                             <button
-                                                type="button"
-                                                onClick={(e) => {
-                                                   e.stopPropagation();
-                                                   if (isDispatchedToKds) {
-                                                      alert(lockedMutationMessage);
-                                                      return;
-                                                   }
-                                                   updateCartItem({ ...item, quantity: item.quantity - canonicalWeightQuantity(item, 1) });
-                                                }}
-                                                disabled={isDispatchedToKds || !canStepCartQuantity(item.quantity, -canonicalWeightQuantity(item, 1))}
-                                                className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700 shadow-sm transition-colors hover:border-red-200 hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40"
-                                                title="Restar cantidad"
-                                             >
-                                                <Minus size={13} strokeWidth={3} />
-                                             </button>
-                                             <button
-                                                type="button"
-                                                onClick={(e) => {
-                                                   e.stopPropagation();
-                                                   if (isDispatchedToKds) {
-                                                      alert('Para agregar más cantidad a un artículo ya enviado al KDS, agrega una línea nueva desde el catálogo.');
-                                                      return;
-                                                   }
-                                                   updateCartItem({ ...item, quantity: item.quantity + canonicalWeightQuantity(item, 1) });
-                                                }}
-                                                disabled={isDispatchedToKds || !canStepCartQuantity(item.quantity, canonicalWeightQuantity(item, 1))}
-                                                className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-600 text-white shadow-sm transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-40"
-                                                title="Sumar cantidad"
-                                             >
-                                                <Plus size={13} strokeWidth={3} />
-                                             </button>
-                                             <button
-                                               onClick={(e) => {
-                                                  e.stopPropagation();
-                                                  setEditingItem(item);
-                                               }}
-                                                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-blue-200 bg-blue-50 text-blue-700 shadow-sm transition-colors hover:bg-blue-100"
-                                                title="Editar artículo"
-                                             >
-                                                <Edit3 size={12} />
-                                             </button>
-                                             {isDispatchedToKds ? (
-                                                <button
-                                                   onClick={(e) => {
-                                                      e.stopPropagation();
-                                                      handleReturnDispatchedCartItem(item);
-                                                   }}
-                                                   disabled={isReturnedToKds}
-                                                   className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-amber-200 bg-amber-50 text-amber-700 shadow-sm transition-colors hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
-                                                   title={lockedReturnTitle}
-                                                >
-                                                   <Undo2 size={12} />
-                                                </button>
-                                             ) : (
-                                                <button
-                                                   onClick={(e) => {
-                                                      e.stopPropagation();
-                                                      updateCartItem(null, item.cartId);
-                                                   }}
-                                                   className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-red-200 bg-red-50 text-red-700 shadow-sm transition-colors hover:bg-red-100"
-                                                   title="Eliminar artículo"
-                                                >
-                                                   <Trash2 size={12} />
-                                                </button>
-                                             )}
-                                          </div>
+                                    <div className="mt-0.5 flex items-center gap-1 overflow-hidden whitespace-nowrap text-[11px] font-semibold leading-snug text-slate-500">
+                                       <span className="shrink-0 font-black text-slate-700">
+                                          {formatQuantity(displayWeightQuantity(item), quantityPresentation.salesDecimals)}{item.weightPresentation ? ` ${item.weightPresentation.displayUnit}` : '\u00d7'}
+                                       </span>
+                                       {showUnitLine && (
+                                          <>
+                                             <span className="shrink-0 text-slate-300">&middot;</span>
+                                             <span className="truncate">{weightLineLabel(item, baseCurrency.symbol, item.price, quantityPresentation.salesDecimals)}</span>
+                                          </>
+                                       )}
+                                       <span className="shrink-0 text-slate-300">&middot;</span>
+                                       <span className="truncate">{lineTaxSummary}</span>
+                                       {rowChips.slice(0, 3)}
+                                       {rowChips.length > 3 && (
+                                          <span className="inline-flex shrink-0 items-center rounded bg-slate-100 px-1 py-[1px] text-[9.5px] font-black leading-none text-slate-500">+{rowChips.length - 3}</span>
                                        )}
                                     </div>
+
+                                    {lineNote && (
+                                       <div className="mt-1 flex items-center gap-1 rounded bg-amber-50 px-1.5 py-[3px] text-[10.5px] font-bold leading-none text-amber-700">
+                                          <StickyNote size={10} className="shrink-0" />
+                                          <span className="truncate" title={lineNote}>{lineNote}</span>
+                                       </div>
+                                    )}
                                  </div>
                               </div>
 
-                              {/* Modifiers List */}
-                              {item.modifiers && item.modifiers.length > 0 && (
-                                 <div className="mt-2 pl-2 border-l-2 border-blue-100">
-                                    <p className="text-[10px] text-gray-500 leading-relaxed">{item.modifiers.join(', ')}</p>
+                              {isActiveCartItem && (
+                                 <div className="mt-1.5 flex items-center gap-1.5 border-t border-slate-100 pt-1.5">
+                                    <button
+                                       type="button"
+                                       onClick={(e) => {
+                                          e.stopPropagation();
+                                          if (isDispatchedToKds) {
+                                             alert(lockedMutationMessage);
+                                             return;
+                                          }
+                                          updateCartItem({ ...item, quantity: item.quantity - canonicalWeightQuantity(item, 1) });
+                                       }}
+                                       disabled={isDispatchedToKds || !canStepCartQuantity(item.quantity, -canonicalWeightQuantity(item, 1))}
+                                       className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700 shadow-sm transition-colors hover:border-red-200 hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40"
+                                       title="Restar cantidad"
+                                    >
+                                       <Minus size={13} strokeWidth={3} />
+                                    </button>
+                                    <button
+                                       type="button"
+                                       onClick={(e) => {
+                                          e.stopPropagation();
+                                          if (isDispatchedToKds) {
+                                             alert('Para agregar más cantidad a un artículo ya enviado al KDS, agrega una línea nueva desde el catálogo.');
+                                             return;
+                                          }
+                                          updateCartItem({ ...item, quantity: item.quantity + canonicalWeightQuantity(item, 1) });
+                                       }}
+                                       disabled={isDispatchedToKds || !canStepCartQuantity(item.quantity, canonicalWeightQuantity(item, 1))}
+                                       className="flex h-7 w-7 items-center justify-center rounded-lg bg-blue-600 text-white shadow-sm transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-40"
+                                       title="Sumar cantidad"
+                                    >
+                                       <Plus size={13} strokeWidth={3} />
+                                    </button>
+                                    <button
+                                       onClick={(e) => {
+                                          e.stopPropagation();
+                                          setEditingItem(item);
+                                       }}
+                                       className="inline-flex h-7 items-center justify-center gap-1 rounded-lg border border-blue-200 bg-blue-50 px-2 text-[10px] font-black uppercase tracking-wide text-blue-700 shadow-sm transition-colors hover:bg-blue-100"
+                                       title="Editar artículo"
+                                    >
+                                       <Edit3 size={12} />
+                                       <span>Editar</span>
+                                    </button>
+                                    <div className="ml-auto flex items-center gap-1.5">
+                                       {isDispatchedToKds ? (
+                                          <button
+                                             onClick={(e) => {
+                                                e.stopPropagation();
+                                                handleReturnDispatchedCartItem(item);
+                                             }}
+                                             disabled={isReturnedToKds}
+                                             className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-amber-200 bg-amber-50 text-amber-700 shadow-sm transition-colors hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                             title={lockedReturnTitle}
+                                          >
+                                             <Undo2 size={12} />
+                                          </button>
+                                       ) : (
+                                          <button
+                                             onClick={(e) => {
+                                                e.stopPropagation();
+                                                updateCartItem(null, item.cartId);
+                                             }}
+                                             className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-red-200 bg-red-50 text-red-700 shadow-sm transition-colors hover:bg-red-100"
+                                             title="Eliminar artículo"
+                                          >
+                                             <Trash2 size={12} />
+                                          </button>
+                                       )}
+                                    </div>
                                  </div>
                               )}
                            </div>
@@ -9572,28 +9604,39 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                        <span>-{formatCurrency(discountAmount, baseCurrency.symbol)}</span>
                                     </div>
                                  )}
-                                 <div className="flex justify-between items-start text-sm font-extrabold text-slate-700">
-                                    <div className="flex flex-col gap-1">
-                                       <div className="flex items-center gap-2">
-                                          <span>IMPUESTOS</span>
-                                          {primaryTaxLabel && (
-                                             <span className="text-xs font-bold uppercase tracking-wide text-slate-600">
+                                 <div className="text-sm font-extrabold text-slate-700">
+                                    <div className="flex items-center justify-between gap-2">
+                                       <span className="flex items-center gap-1.5">
+                                          IMPUESTOS
+                                          {combinedTaxBreakdown.length > 0 && (
+                                             <button
+                                                type="button"
+                                                onClick={() => setShowTaxBreakdown(value => !value)}
+                                                className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-slate-200 text-[9px] font-black leading-none text-slate-500 hover:bg-slate-50"
+                                                title={showTaxBreakdown ? 'Ocultar desglose de impuestos' : 'Ver desglose de impuestos'}
+                                                aria-expanded={showTaxBreakdown}
+                                             >
+                                                {showTaxBreakdown ? '\u2212' : 'i'}
+                                             </button>
+                                          )}
+                                          {primaryTaxLabel && !showTaxBreakdown && (
+                                             <span className="text-[10px] font-bold uppercase tracking-wide text-slate-400">
                                                 {primaryTaxLabel}
                                              </span>
                                           )}
-                                       </div>
-                                       {combinedTaxBreakdown.length > 0 && (
-                                          <div className="space-y-1 pt-0.5">
-                                             {combinedTaxBreakdown.map((tax) => (
-                                                <div key={tax.id} className="flex items-center justify-between gap-4 text-xs font-semibold text-slate-600">
-                                                   <span>{tax.label}</span>
-                                                   <span className="font-bold tabular-nums text-slate-700">{formatCurrency(tax.amount, baseCurrency.symbol)}</span>
-                                                </div>
-                                             ))}
-                                          </div>
-                                       )}
+                                       </span>
+                                       <span className="shrink-0 tabular-nums">{formatCurrency(cartTax, baseCurrency.symbol)}</span>
                                     </div>
-                                    <span className="shrink-0 pt-0.5">{formatCurrency(cartTax, baseCurrency.symbol)}</span>
+                                    {showTaxBreakdown && combinedTaxBreakdown.length > 0 && (
+                                       <div className="mt-1 space-y-0.5 pl-1">
+                                          {combinedTaxBreakdown.map((tax) => (
+                                             <div key={tax.id} className="flex items-center justify-between gap-4 text-[11px] font-semibold text-slate-600">
+                                                <span>{tax.label}</span>
+                                                <span className="font-bold tabular-nums text-slate-700">{formatCurrency(tax.amount, baseCurrency.symbol)}</span>
+                                             </div>
+                                          ))}
+                                       </div>
+                                    )}
                                  </div>
 
                                  <div className="flex items-end justify-between gap-4 pt-3">
