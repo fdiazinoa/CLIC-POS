@@ -300,6 +300,7 @@ test('E34 REFUND consumes assigned allocation with original reference and positi
   const unsigned:any={contractVersion:2,authorizationKind:'OFFLINE_FISCAL_ALLOCATION_V2',authorizationId:uuid(72),scope,issuerRnc:'101010101',provider:'MSELLER',environment:0,issuedAt:new Date(Date.now()-1000).toISOString(),bindingFingerprint:'c'.repeat(64),allocations:[{allocationId:allocation.id,fiscalRangeId:range.id,ncfType:'E34',prefix:'E34',padding:10,start:1,end:3,rangeStart:1,rangeEnd:3,expiryDate:null}]};
   await f.store.saveAllocation!({...unsigned,authorityHash:await allocationHash(unsigned)},e34Local,new Date().toISOString());
   const items=[{id:'item',cartId:'line',quantity:1,price:555}];
+  f.sql.prepare("INSERT INTO documents(collection_name,doc_id,data)VALUES('transactions','orig-tx','{}')").run();
   const c=await f.client().reserveOfflineCheckout(JSON.stringify({items,customerId:null,fiscalType:'E34',originalTransactionId:'orig-tx'}),'refund-op');
   assert.equal(c.allocation!.ncfType,'E34');
   await f.client().recordPayment(c,'payment-'+c.checkoutId);
@@ -312,5 +313,20 @@ test('E34 REFUND consumes assigned allocation with original reference and positi
   assert.equal(f.count('sync_outbox_v2'),1);
   const pending=f.sql.prepare("SELECT data FROM documents WHERE collection_name='transactions'").get()!.data;
   assert.equal(JSON.parse(String(pending)).documentType,'REFUND');
+ }finally{f.sql.close();}
+});
+test('E34 refund reservation requires a retained original reference',async()=>{
+ const f=await fixture();try{
+  const range={id:uuid(80),type:'E34',prefix:'E34',startNumber:1,endNumber:3,isActive:true,expiryDate:''};
+  const allocation={id:uuid(81),terminalId:scope.terminalId,fiscalRangeId:range.id,ncfType:'E34',prefix:'E34',reservedStart:1,reservedEnd:3,nextNumber:1,status:'ACTIVE',releasedAt:null};
+  f.put('fiscalRanges',range);f.put('fiscalAllocations',allocation);
+  const e34Config={...f.config,terminals:[{...f.config.terminals[0],config:{...f.config.terminals[0].config,fiscal:{...f.config.terminals[0].config.fiscal,fiscalRanges:[range],fiscalAllocations:[allocation]}}}]};
+  f.sql.prepare("UPDATE documents SET data=? WHERE collection_name='config' AND doc_id='current'").run(JSON.stringify(e34Config));
+  const e34Local=await offlineFiscalAuthorityFromConfig(e34Config,credentials,'device');
+  const unsigned:any={contractVersion:2,authorizationKind:'OFFLINE_FISCAL_ALLOCATION_V2',authorizationId:uuid(82),scope,issuerRnc:'101010101',provider:'MSELLER',environment:0,issuedAt:new Date(Date.now()-1000).toISOString(),bindingFingerprint:'d'.repeat(64),allocations:[{allocationId:allocation.id,fiscalRangeId:range.id,ncfType:'E34',prefix:'E34',padding:10,start:1,end:3,rangeStart:1,rangeEnd:3,expiryDate:null}]};
+  await f.store.saveAllocation!({...unsigned,authorityHash:await allocationHash(unsigned)},e34Local,new Date().toISOString());
+  const items=[{id:'item',cartId:'line',quantity:1,price:555}];
+  await assert.rejects(f.client().reserveOfflineCheckout(JSON.stringify({items,customerId:null,fiscalType:'E34'}),'no-original'),/OFFLINE_FISCAL_REFUND_ORIGINAL_REQUIRED/);
+  await assert.rejects(f.client().reserveOfflineCheckout(JSON.stringify({items,customerId:null,fiscalType:'E34',originalTransactionId:'missing-tx'}),'missing-original'),/OFFLINE_FISCAL_REFUND_ORIGINAL_RETAINED/);
  }finally{f.sql.close();}
 });

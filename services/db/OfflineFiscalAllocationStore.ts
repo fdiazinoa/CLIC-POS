@@ -136,6 +136,11 @@ export async function prepareAllocationCheckout(sql:SQL,local:OfflineFiscalLocal
  const proof=await readAllocation(sql,local);if(!proof)allocationFail('OFFLINE_FISCAL_ALLOCATION_REQUIRED');
  let cart:any;try{cart=JSON.parse(cartIdentity);}catch{allocationFail();}if(context)validateTableFiscalSaleContext(context);
  if(!Array.isArray(cart.items)||!cart.items.length||cart.items.some((line:any)=>!line.id||!line.cartId||!Number.isFinite(line.quantity)||line.quantity<=0||!Number.isFinite(line.price)||line.price<0||line.articleFormat||line.recipeDetails?.length)||JSON.stringify(context)!==JSON.stringify(cart.fiscalSaleContext))allocationFail('OFFLINE_FISCAL_SOURCE_UNSUPPORTED');
+ if(cart.fiscalType==='E34'||cart.documentType==='REFUND'){
+  if(typeof cart.originalTransactionId!=='string'||!cart.originalTransactionId)allocationFail('OFFLINE_FISCAL_REFUND_ORIGINAL_REQUIRED');
+  const retainedOriginal=await row(sql,"SELECT doc_id FROM documents WHERE collection_name IN('transactions','transactionHistory') AND doc_id=?",[cart.originalTransactionId]);
+  if(!retainedOriginal)allocationFail('OFFLINE_FISCAL_REFUND_ORIGINAL_RETAINED');
+ }
  await assertDirectAllocationCharge(sql,cart,local);
  await assertNoPendingAllocationTable(sql,local.scope,context);
  const planned=await readAllocationSelection(sql,proof.authority,cart.fiscalType,proof.now);
