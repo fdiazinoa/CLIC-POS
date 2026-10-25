@@ -17,6 +17,7 @@ export interface SalePostedSummary extends UnknownRecord {
     discount_amount: number;
     item_count: number;
     payment_count: number;
+    original_transaction_id?: string;
 }
 
 export interface SalePostedPayload extends UnknownRecord {
@@ -241,6 +242,7 @@ export const buildSalePostedSummary = (transaction: Transaction | UnknownRecord)
             record.affected_invoice_number,
         ) || undefined,
         affected_invoice_date: firstString(record.affectedInvoiceDate, record.affected_invoice_date) || undefined,
+        original_transaction_id: firstString(record.originalTransactionId, record.original_transaction_id) || undefined,
     } as SalePostedSummary);
 };
 

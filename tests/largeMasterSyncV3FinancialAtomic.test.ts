@@ -233,14 +233,37 @@ test('real batch builder preserves enabled sale/payment events in same commit an
       else delete (globalThis.crypto as Partial<Crypto>).randomUUID;
     }
     const eventIds = f.sql.prepare('SELECT event_id FROM sync_outbox_v2').all();
-    assert.equal(new Set(eventIds.map(row => row.event_id)).size, 2);
+    assert.equal(new Set(eventIds.map(row => row.event_id)).size, 3);
     for (const row of eventIds) assert.match(String(row.event_id), /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
     const events = f.sql.prepare('SELECT event_type FROM sync_outbox_v2 ORDER BY local_sequence').all();
-    assert.deepEqual(events.map(row => row.event_type), ['SALE_POSTED', 'PAYMENT_POSTED']);
+    assert.deepEqual(events.map(row => row.event_type), ['SALES_CREDIT_NOTE_POSTED', 'SALE_POSTED', 'PAYMENT_POSTED']);
     f.sql.prepare("DELETE FROM documents WHERE collection_name='transactions' AND doc_id='refund'").run();
     await assert.rejects(module.persistV3FinancialBatch(entries, {} as BusinessConfig, 'W'), /DUPLICATE_TRANSACTION_MISMATCH/);
     assert.equal(f.rows('inventoryLedger').length, 2);
-    assert.equal(events.length, 2);
+    assert.equal(events.length, 3);
+  } finally { f.sql.close(); }
+});
+test('real batch builder emits credit-note and positive refund outflow for ordinary E34 refund', async () => {
+  const f = fixture();
+  try {
+    const module = await financialModule(f, true);
+    const refund = { ...module.transaction('refund', true), customerId: undefined,
+      originalTransactionId: 'sale-original', affectedNCF: 'B010000000001',
+      payments: [{ id: 'refund-cash', method: 'CASH', amount: 118, timestamp: '2026-10-05T00:00:00Z' }],
+      settlementAppliedBase: 118 };
+    await module.persistV3FinancialBatch([{ transaction: refund, options: { refund: true } }], {} as BusinessConfig, 'W');
+    const events = f.sql.prepare('SELECT event_type, payload_json FROM sync_outbox_v2 ORDER BY local_sequence').all();
+    assert.deepEqual(events.map((row: any) => row.event_type), ['SALES_CREDIT_NOTE_POSTED', 'PAYMENT_POSTED']);
+    const creditNote = JSON.parse(String(events[0].payload_json));
+    assert.equal(creditNote.summary.document_type, 'REFUND');
+    assert.equal(creditNote.summary.original_transaction_id, 'sale-original');
+    assert.equal(creditNote.summary.affected_ncf, 'B010000000001');
+    assert.equal(creditNote.summary.total, 118);
+    const payment = JSON.parse(String(events[1].payload_json));
+    assert.equal(payment.summary.document_type, 'REFUND');
+    assert.equal(payment.summary.total, 118);
+    assert.equal(payment.payments[0].method, 'CASH');
+    assert.equal(payment.payments[0].amount, 118);
   } finally { f.sql.close(); }
 });
 test('V3 fiscal source rejects missing totals/mixed tax-inclusion before commit; service and damaged refund never create stock movements', async () => {
