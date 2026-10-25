@@ -65,7 +65,7 @@ import { sendReceiptEmailViaErp } from '../services/email/receiptEmailService';
 import { buildReceiptEmailPayload } from '../services/email/receiptEmailPayload';
 import { setLargeMasterSyncV3CriticalOperation } from '../services/sync/LargeMasterSyncV3OperationGate';
 
-export type PaymentEffectsFence = (() => void|Promise<void>) & {completedTransaction?: Transaction;recordPaymentEffect?:(paymentId:string)=>Promise<void>;futureCheckout?:{checkoutId:string;transactionId:string;operationId?:string}};
+export type PaymentEffectsFence = (() => void|Promise<void>) & {completedTransaction?: Transaction;recordPaymentEffect?:(paymentId:string)=>Promise<void>;futureCheckout?:{checkoutId:string;transactionId:string;operationId?:string};tablePart?:{ticketId:string;receiptId:string;operationId:string;planFingerprint:string}};
 
 interface PaymentModalProps {
    openingTrace?: PosInteractionTrace | null;
@@ -645,12 +645,13 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
          currencyCode: payment.currencyCode || baseCurrency.code,
          retainedOperation: Boolean(paymentOperationId),
          futureCheckout:workflowPaymentFenceRef.current?.futureCheckout,
+         tablePart:workflowPaymentFenceRef.current?.tablePart,
       });
       // An intent alone does not retain the full provider receipt/order payload. The original approved
       // PaymentEntry can retry in this modal; a reconstructed entry after restart requires reconciliation.
       if ((paymentOperationId||workflowPaymentFenceRef.current?.futureCheckout) && intent?.status === 'AUTHORIZED') throw new Error('PAYMENT_INTENT_RECONCILIATION_REQUIRED');
       if(workflowPaymentFenceRef.current?.futureCheckout&&!intent)throw Error('PAYMENT_INTENT_NATIVE_REQUIRED');
-      if (intent) await paymentIntentService.markAuthorizing(intent.intentId,Boolean(paymentOperationId),workflowPaymentFenceRef.current?.futureCheckout);
+      if (intent) await paymentIntentService.markAuthorizing(intent.intentId,Boolean(paymentOperationId),workflowPaymentFenceRef.current?.futureCheckout,workflowPaymentFenceRef.current?.tablePart);
 
       setIsProcessingGateway(true);
       setFinalizeError(null);

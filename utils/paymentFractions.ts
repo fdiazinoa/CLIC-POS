@@ -1,4 +1,4 @@
-import type { ParkedTicket, PaymentFractionPlan, PaymentFractionPart } from '../types';
+import type { ParkedTicket, PaymentFractionPlan } from '../types';
 import { createUuid } from './uuid';
 
 export const splitAmountIntoEqualParts = (total: number, count: number): number[] => {
@@ -75,7 +75,7 @@ export const paymentFractionPlanFingerprint = (plan: PaymentFractionPlan): strin
 };
 
 /** Stable identity for a part proof, generated before any provider is engaged. */
-export const createPaymentFractionPartProof = (): Pick<PaymentFractionPart, 'receiptId' | 'operationId'> => ({
+export const createPaymentFractionPartProof = (): { receiptId: string; operationId: string } => ({
   receiptId: createUuid(),
   operationId: createUuid(),
 });
