@@ -146,6 +146,16 @@ export function validatePromotionEvidence(baseline, evidence) {
 function validatePrebuild(baseline, options) {
   const resolvedCommit = run('git', ['rev-parse', '--verify', `${options.sourceCommit}^{commit}`]);
   run('git', ['merge-base', '--is-ancestor', baseline.requiredAncestorCommit, resolvedCommit]);
+  // A build from a branch that does not contain develop silently ships an older UI/behaviour.
+  let developRef = null;
+  try { developRef = run('git', ['rev-parse', '--verify', '--quiet', 'origin/develop']); } catch { developRef = null; }
+  if (developRef) {
+    try { run('git', ['merge-base', '--is-ancestor', 'origin/develop', resolvedCommit]); }
+    catch {
+      fail(`El commit ${resolvedCommit.slice(0, 8)} no contiene origin/develop. Rebasá la rama antes de compilar: `
+        + 'un build desde una base vieja revierte cambios ya mergeados.');
+    }
+  }
   if (options.requireClean) {
     const status = run('git', ['status', '--porcelain']);
     if (status) fail('La worktree fuente no está limpia');
