@@ -1,5 +1,6 @@
 import CheckoutTrackingSettings from './CheckoutTrackingSettings';
 import { LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED } from '../services/sync/LargeMasterSyncV3Authority';
+import { needsTerminalReauthorization, reauthorizeTerminal } from '../services/sync/TerminalReauthorizationService';
 import { resolveSyncTarget } from '../services/sync/SyncProfile';
 import { useV3CatalogBrowser } from '../services/sync/LargeMasterSyncV3CatalogRead';
 
@@ -348,6 +349,28 @@ const Settings: React.FC<SettingsProps> = (props) => {
       }
     } finally {
       setIsCheckingApkUpdate(false);
+    }
+  };
+
+  const [isReauthorizing, setIsReauthorizing] = useState(false);
+  const [reauthorizationHint, setReauthorizationHint] = useState('Renueva los tokens y la reserva fiscal de esta caja');
+  useEffect(() => {
+    try {
+      const state = needsTerminalReauthorization();
+      setReauthorizationHint(state.required ? `Requerido: ${state.reason}` : 'Tokens vigentes · renovar solo si el cobro fiscal falla');
+    } catch { /* diagnostics only */ }
+  }, []);
+  const handleReauthorize = async () => {
+    if (isReauthorizing) return;
+    if (!await clicConfirm('¿Reautorizar esta terminal con el ERP? Se renuevan los tokens y se prepara la reserva fiscal; no afecta ventas ya emitidas.')) return;
+    setIsReauthorizing(true);
+    try {
+      const result = await reauthorizeTerminal();
+      setReauthorizationHint(result.message);
+      const state = needsTerminalReauthorization();
+      setReauthorizationHint(state.required ? `Requerido: ${state.reason}` : 'Tokens vigentes · renovar solo si el cobro fiscal falla');
+    } finally {
+      setIsReauthorizing(false);
     }
   };
 
@@ -1156,6 +1179,7 @@ const Settings: React.FC<SettingsProps> = (props) => {
                     locked={!hasPermission('SETTINGS_ACCESS') || isRepairingReceivables}
                   />
                   <SettingsCard icon={RefreshCw} label="Sincronización" description="Estado de Red y Réplicas" color="bg-indigo-600" onClick={() => setCurrentView('SYNC')} locked={!hasPermission('SETTINGS_ACCESS')} />
+                  <SettingsCard icon={RefreshCw} label={isReauthorizing ? 'Reautorizando…' : 'Reautorizar terminal'} description={reauthorizationHint} color="bg-amber-600" onClick={() => { void handleReauthorize(); }} locked={!hasPermission('SETTINGS_ACCESS') || isReauthorizing} />
                   <SettingsCard icon={Hash} label="Rangos de maestros" description="Códigos offline y disponibilidad" color="bg-cyan-700" onClick={() => setCurrentView('MASTER_NUMBER_RANGES')} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={ShieldAlert} label="Seguridad y Datos" description="Backups y Modo Kiosco" color="bg-red-600" onClick={() => setCurrentView('SECURITY')} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={ListChecks} label="Activar log de seguimiento" description="Checkout, sincronización y rendimiento" color="bg-slate-700" onClick={() => setCurrentView('CHECKOUT_TRACKING')} locked={!hasPermission('SETTINGS_ACCESS')} />

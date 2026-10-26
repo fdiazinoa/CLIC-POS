@@ -27,6 +27,7 @@ import { captureFiscalStatusBoundContext } from './services/fiscal/FiscalBoundCo
 import { readLargeMasterSyncV3BoundIdentity } from './services/sync/LargeMasterSyncV3BoundTransport';
 import { assertLargeMasterSyncV3NativeAndroid } from './services/sync/LargeMasterSyncV3Platform';
 import { getLargeMasterSyncV3OperationalSession, v3BindingKey } from './services/sync/LargeMasterSyncV3OperationalSession';
+import { needsTerminalReauthorization, reauthorizeTerminal } from './services/sync/TerminalReauthorizationService';
 import { assertLargeMasterSyncV3SetupContract, largeMasterSyncV3DownloadOrigin } from './services/sync/LargeMasterSyncV3DownloadOrigin';
 import { completeLargeMasterSyncV3Setup } from './services/sync/LargeMasterSyncV3SetupCompletion';
 import { createV3Progress, type V3Progress } from './services/sync/LargeMasterSyncV3Progress';
@@ -11612,6 +11613,21 @@ const AppContent: React.FC = () => {
       window.removeEventListener('online', handleFiscalOnline);
     };
   }, [syncFiscalDocument,fiscalStatusWorker,isDataLoaded,fiscalHistoryHydrated,isSecurityLoaded]);
+
+  // A terminal whose tokens expired must recover on its own; otherwise every sale ends with
+  // "no se puede cobrar sin la autorización fiscal vigente" and the cashier has no way out.
+  useEffect(() => {
+    if (!isDataLoaded || !isSecurityLoaded) return;
+    const timer = setTimeout(() => {
+      try {
+        const state = needsTerminalReauthorization();
+        if (!state.required) return;
+        console.info('[reauth] terminal sin autorización vigente:', state.reason);
+        void reauthorizeTerminal().then(result => console.info('[reauth]', result.ok ? 'ok' : 'fallo', result.message)).catch(() => undefined);
+      } catch { /* diagnostics only */ }
+    }, 8000);
+    return () => clearTimeout(timer);
+  }, [isDataLoaded, isSecurityLoaded]);
 
   // Restarting the POS must pick up a newer master. Runs once the shell is idle so the
   // operational window is free; the session probe reuses the server session (no downloads
