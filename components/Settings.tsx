@@ -172,6 +172,7 @@ type ReceivableRepairSummary = {
 
 const Settings: React.FC<SettingsProps> = (props) => {
   const [currentView, setCurrentView] = useState<SettingsView>(props.initialView || 'HOME');
+  const [openSettingsGroup, setOpenSettingsGroup] = useState<string | null>(null);
   const [isRepairingReceivables, setIsRepairingReceivables] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState<AnalyticsCategory | null>(null);
   const [ledgerEntries, setLedgerEntries] = useState<InventoryLedgerEntry[]>([]);
@@ -1010,9 +1011,18 @@ const Settings: React.FC<SettingsProps> = (props) => {
             </div>
 
             <div className="space-y-12">
-              <section>
-                <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-6 border-b border-slate-100 pb-2">Inventario y Catálogo</h2>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+  <SettingsCard icon={Package} label="Inventario y Catálogo" description="Artículos, almacenes, rastreo e importación" color="bg-emerald-700" onClick={() => setOpenSettingsGroup('CATALOG')} locked={false} />
+  <SettingsCard icon={CreditCard} label="Finanzas y Legal" description="Empresa, pagos, impuestos y documentos" color="bg-blue-700" onClick={() => setOpenSettingsGroup('FINANCE')} locked={false} />
+  <SettingsCard icon={Monitor} label="Configuración Local" description="Terminales, mesas, hardware y etiquetas" color="bg-slate-700" onClick={() => setOpenSettingsGroup('LOCAL')} locked={false} />
+  <SettingsCard icon={Users} label="Equipo y Marketing" description="Usuarios, clientes, lealtad y promociones" color="bg-pink-500" onClick={() => setOpenSettingsGroup('TEAM')} locked={false} />
+  <SettingsCard icon={ShieldAlert} label="Sistema y Auditoría" description="Sincronización, seguridad y diagnóstico" color="bg-red-600" onClick={() => setOpenSettingsGroup('SYSTEM')} locked={false} />
+              </div>
+                {openSettingsGroup === 'CATALOG' && (
+                  <div className="fixed inset-0 z-[130] flex items-center justify-center bg-black/40 p-6" onClick={() => setOpenSettingsGroup(null)}>
+                    <div className="max-h-[85vh] w-full max-w-5xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl" onClick={event => event.stopPropagation()}>
+                      <header className="mb-4 flex items-center justify-between border-b border-slate-200 pb-3"><h3 className="text-lg font-black text-slate-900">Inventario y Catálogo</h3><button type="button" onClick={() => setOpenSettingsGroup(null)} className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-bold text-slate-700 hover:bg-slate-50">Cerrar</button></header>
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                   <SettingsCard
                     icon={ChefHat}
                     label="Centros de Producción"
@@ -1062,11 +1072,14 @@ const Settings: React.FC<SettingsProps> = (props) => {
                     locked={!hasPermission('SUPPLY_CHAIN_ORDER')}
                   />
                 </div>
-              </section>
-
-              <section>
-                <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-6 border-b border-slate-100 pb-2">Finanzas y Legal</h2>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                    </div>
+                  </div>
+                )}
+                {openSettingsGroup === 'FINANCE' && (
+                  <div className="fixed inset-0 z-[130] flex items-center justify-center bg-black/40 p-6" onClick={() => setOpenSettingsGroup(null)}>
+                    <div className="max-h-[85vh] w-full max-w-5xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl" onClick={event => event.stopPropagation()}>
+                      <header className="mb-4 flex items-center justify-between border-b border-slate-200 pb-3"><h3 className="text-lg font-black text-slate-900">Finanzas y Legal</h3><button type="button" onClick={() => setOpenSettingsGroup(null)} className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-bold text-slate-700 hover:bg-slate-50">Cerrar</button></header>
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                   <SettingsCard icon={Building2} label="Empresa" description="RNC, Nombre y Contacto Legal" color="bg-blue-700" onClick={() => setCurrentView('COMPANY')} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={CreditCard} label="Métodos de Pago" description="Pasarelas, Tarjetas, QR" color="bg-indigo-500" onClick={() => setCurrentView('PAYMENTS')} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={PlugZap} label="Integraciones" description="AZUL, CardNet y adquirentes" color="bg-sky-600" onClick={() => setCurrentView('INTEGRATIONS')} locked={!hasPermission('SETTINGS_ACCESS')} />
@@ -1080,22 +1093,28 @@ const Settings: React.FC<SettingsProps> = (props) => {
                   }} locked={!hasPermission('SETTINGS_ACCESS') || !props.onOpenHistory} />
                   <SettingsCard icon={FileText} label="Documentos" description="Series, NCF, Prefijos" color="bg-blue-400" onClick={() => setCurrentView('DOCUMENTS')} locked={!hasPermission('SETTINGS_TAXES')} />
                 </div>
-              </section>
-
-              <section>
-                <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-6 border-b border-slate-100 pb-2">Configuración Local</h2>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                    </div>
+                  </div>
+                )}
+                {openSettingsGroup === 'LOCAL' && (
+                  <div className="fixed inset-0 z-[130] flex items-center justify-center bg-black/40 p-6" onClick={() => setOpenSettingsGroup(null)}>
+                    <div className="max-h-[85vh] w-full max-w-5xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl" onClick={event => event.stopPropagation()}>
+                      <header className="mb-4 flex items-center justify-between border-b border-slate-200 pb-3"><h3 className="text-lg font-black text-slate-900">Configuración Local</h3><button type="button" onClick={() => setOpenSettingsGroup(null)} className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-bold text-slate-700 hover:bg-slate-50">Cerrar</button></header>
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                   <SettingsCard icon={Monitor} label="Terminales POS" description="Perfiles de Caja, Inventario" color="bg-blue-500" onClick={() => setCurrentView('TERMINALS')} locked={!hasPermission('SETTINGS_HARDWARE')} />
                   <SettingsCard icon={Grid} label="Diseñador de Mesas" description="Plano, Salas y Distribución" color="bg-slate-700" onClick={props.onOpenTableDesigner} locked={!hasPermission('CATALOG_MANAGE')} />
                   <SettingsCard icon={Printer} label="Hardware" description="Impresoras, Balanzas, VFD" color="bg-gray-700" onClick={() => setCurrentView('HARDWARE')} locked={!hasPermission('SETTINGS_HARDWARE')} />
                   <SettingsCard icon={Tag} label="Diseño de Etiquetas" description="Plantillas Artículo y Góndola" color="bg-emerald-600" onClick={() => setCurrentView('LABELS')} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={Coins} label="Propinas" description="Cargos por Servicio y Tips" color="bg-yellow-500" onClick={() => setCurrentView('TIPS')} locked={!hasPermission('SETTINGS_ACCESS')} />
                 </div>
-              </section>
-
-              <section>
-                <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-6 border-b border-slate-100 pb-2">Equipo y Marketing</h2>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                    </div>
+                  </div>
+                )}
+                {openSettingsGroup === 'TEAM' && (
+                  <div className="fixed inset-0 z-[130] flex items-center justify-center bg-black/40 p-6" onClick={() => setOpenSettingsGroup(null)}>
+                    <div className="max-h-[85vh] w-full max-w-5xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl" onClick={event => event.stopPropagation()}>
+                      <header className="mb-4 flex items-center justify-between border-b border-slate-200 pb-3"><h3 className="text-lg font-black text-slate-900">Equipo y Marketing</h3><button type="button" onClick={() => setOpenSettingsGroup(null)} className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-bold text-slate-700 hover:bg-slate-50">Cerrar</button></header>
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                   <SettingsCard icon={Users} label="Equipo y Roles" description="Usuarios, Roles y Permisos" color="bg-pink-500" onClick={() => setCurrentView('TEAM')} locked={!hasPermission('SETTINGS_USERS')} />
                   <SettingsCard icon={UserCircle} label="Clientes" description="Directorio, Histórico, Fiscal" color="bg-teal-600" onClick={() => setCurrentView('CUSTOMERS')} locked={!hasPermission('CUSTOMER_MANAGE')} />
                   <SettingsCard icon={Award} label="Programa de Lealtad" description="Puntos, Canjes y Reglas" color="bg-purple-500" onClick={() => setCurrentView('LOYALTY')} locked={!hasPermission('SETTINGS_ACCESS')} />
@@ -1112,11 +1131,14 @@ const Settings: React.FC<SettingsProps> = (props) => {
                     locked={!hasPermission('CUSTOMER_MANAGE')}
                   />
                 </div>
-              </section>
-
-              <section>
-                <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-6 border-b border-slate-100 pb-2">Sistema y Auditoría</h2>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                    </div>
+                  </div>
+                )}
+                {openSettingsGroup === 'SYSTEM' && (
+                  <div className="fixed inset-0 z-[130] flex items-center justify-center bg-black/40 p-6" onClick={() => setOpenSettingsGroup(null)}>
+                    <div className="max-h-[85vh] w-full max-w-5xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl" onClick={event => event.stopPropagation()}>
+                      <header className="mb-4 flex items-center justify-between border-b border-slate-200 pb-3"><h3 className="text-lg font-black text-slate-900">Sistema y Auditoría</h3><button type="button" onClick={() => setOpenSettingsGroup(null)} className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-bold text-slate-700 hover:bg-slate-50">Cerrar</button></header>
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                   <SettingsCard
                     icon={ListChecks}
                     label={isRepairingReceivables ? "Reparando CxC..." : "Recalcular Deudas CxC"}
@@ -1133,7 +1155,9 @@ const Settings: React.FC<SettingsProps> = (props) => {
                   <SettingsCard icon={History} label="Traza de Auditoría" description="Logs de Operaciones" color="bg-orange-500" onClick={() => setCurrentView('LOGS')} locked={!hasPermission('AUDIT_LOG_VIEW')} />
                   <SettingsCard icon={BarChart3} label="Informes y Analítica" description="BI, Snapshots y KPIs" color="bg-blue-700" onClick={() => setCurrentView('REPORTS')} locked={!hasPermission('REPORTS_VIEW_SALES')} />
                 </div>
-              </section>
+                    </div>
+                  </div>
+                )}
 
             </div>
           </div>

@@ -182,7 +182,7 @@ test('real view and rendered component distinguish loading/error/zero/filtered/u
     let callbacks=0;let stopB=()=>{};const stopA=view.subscribe(()=>stopB());stopB=view.subscribe(()=>callbacks++);
     view.cancel();assert.equal(callbacks,0);stopA();
     const markup=renderToStaticMarkup(<CatalogManager {...f.context} onClose={()=>{}}/>);
-    assert.match(markup,/Sólo lectura/);assert.doesNotMatch(markup,/Editar|Eliminar|Guardar|Importar/);
+    assert.match(markup,/Maestro de Artículos/);assert.doesNotMatch(markup,/Editar|Eliminar|Guardar|Importar/);
     assert.equal(useV3CatalogBrowser(false,'ERP_ACTIVE'),false);
     for(const kind of ['LAN','LOCAL','ERP_CLIENT','UNBOUND'])assert.equal(useV3CatalogBrowser(true,kind),false);
     assert.equal(useV3CatalogBrowser(true,'ERP_ACTIVE'),true);

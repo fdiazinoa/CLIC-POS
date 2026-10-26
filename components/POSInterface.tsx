@@ -1,3 +1,4 @@
+import { scopedWarehousesForStore } from '../utils/warehouseScope';
 import {v3RetainedLineFingerprint} from '../services/sync/LargeMasterSyncV3StockAuthority';
 import {assertTrackingOperationReceipt,type TrackingScope} from '../services/db/TrackingCheckoutOperation';
 import {dbAdapter} from '../services/db';
@@ -1458,6 +1459,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const activeTerminal = (config.terminals || []).find(t => t.id === activeTerminalId) || (config.terminals || [])[0];
    const quantityPresentation = terminalQuantityPresentation(config, activeTerminalId);
    const activeTerminalConfig = activeTerminal?.config;
+   // Only the warehouses of this terminal's store may be assigned from the POS.
+   const operatingWarehouses = useMemo(
+      () => scopedWarehousesForStore(warehouses, activeTerminalConfig?.erpBinding?.storeId),
+      [warehouses, activeTerminalConfig?.erpBinding?.storeId],
+   );
    const terminalId = activeTerminal?.id || 'T1';
    const activeTerminalConfigRaw = useMemo<Record<string, unknown>>(
       () => activeTerminalConfig ? (activeTerminalConfig as unknown as Record<string, unknown>) : {},
@@ -8025,11 +8031,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             <button
                type="button"
                aria-pressed={rightSidebarTab === 'ACTIONS'}
+               aria-label={rightSidebarTab === 'ACTIONS' ? 'Ver ticket' : 'Opciones'}
+               title={rightSidebarTab === 'ACTIONS' ? 'Ver ticket' : 'Opciones'}
                onClick={() => setRightSidebarTab(tab => tab === 'ACTIONS' ? 'CART' : 'ACTIONS')}
-               className="flex h-14 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-2xl border border-slate-200 bg-white px-2 text-[10px] font-black uppercase tracking-[0.02em] text-slate-700 hover:bg-slate-50"
+               className="flex h-14 min-w-0 flex-[0.85] items-center justify-center rounded-2xl border border-slate-200 bg-white px-2 text-slate-700 hover:bg-slate-50"
             >
-               {rightSidebarTab === 'ACTIONS' ? <ShoppingBag size={17} /> : <Layers size={17} />}
-               <span className="truncate">{rightSidebarTab === 'ACTIONS' ? 'Ver ticket' : 'Opciones'}</span>
+               {rightSidebarTab === 'ACTIONS' ? <ShoppingBag size={22} /> : <Layers size={22} />}
+               <span className="sr-only">{rightSidebarTab === 'ACTIONS' ? 'Ver ticket' : 'Opciones'}</span>
             </button>
          )}
       </div>
@@ -8929,6 +8937,58 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      </div>
                   )}
 
+               {!isMobile && (
+                  <div className="mr-2 flex min-w-0 flex-1 items-center">
+                     {selectedCustomer ? (
+                        <div className="flex h-12 min-w-0 max-w-[300px] flex-1 items-center gap-2 rounded-2xl border border-blue-100 bg-blue-50/60 px-2">
+                           {resolveCustomerImageSrc(selectedCustomer) ? (
+                              <img src={resolveCustomerImageSrc(selectedCustomer)} alt="" className="h-7 w-7 shrink-0 rounded-full border border-blue-200 bg-white object-cover" />
+                           ) : (
+                              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-blue-100 text-[10px] font-black text-blue-600">
+                                 {selectedCustomer.name.substring(0, 2).toUpperCase()}
+                              </span>
+                           )}
+                           <div className="min-w-0 flex-1">
+                              <p className="truncate text-[12px] font-bold leading-tight text-slate-800">{selectedCustomer.name}</p>
+                              {(selectedCustomer.isTemporary || isDelinquent) && (
+                                 <span className={`text-[9px] font-black uppercase leading-tight ${isDelinquent ? 'text-red-600' : 'text-amber-600'}`}>
+                                    {isDelinquent ? 'Deuda vencida' : 'Temporal'}
+                                 </span>
+                              )}
+                           </div>
+                           {selectedCustomerActiveReservationsCount > 0 && (
+                              <button
+                                 onClick={openRecoverReservationForSelectedCustomer}
+                                 title="Ver reservas activas del cliente"
+                                 className="flex h-7 shrink-0 items-center gap-1 rounded-lg border border-teal-200 bg-teal-50 px-1.5 text-[9px] font-black uppercase text-teal-700 hover:bg-teal-100"
+                              >
+                                 <QrCode size={11} />{selectedCustomerActiveReservationsCount}
+                              </button>
+                           )}
+                           <button
+                              onClick={() => onSelectCustomer(null)}
+                              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-slate-400 hover:bg-red-50 hover:text-red-500"
+                              title="Quitar cliente"
+                           >
+                              <X size={14} />
+                           </button>
+                        </div>
+                     ) : (
+                        <button
+                           onClick={onOpenCustomers}
+                           className="flex h-12 min-w-0 max-w-[260px] flex-1 items-center justify-between gap-2 rounded-2xl border border-dashed border-slate-300 bg-white px-3 text-slate-400 transition-colors hover:border-blue-200 hover:text-blue-500"
+                           title="Asignar cliente"
+                        >
+                           <span className="flex min-w-0 items-center gap-1.5">
+                              <UserPlus size={16} className="shrink-0" />
+                              <span className="truncate text-[10px] font-black uppercase tracking-[0.06em]">Asignar cliente</span>
+                           </span>
+                           <ChevronRight size={14} className="shrink-0" />
+                        </button>
+                     )}
+                  </div>
+               )}
+
                   <TicketStatusControls className={`ml-auto flex shrink-0 items-center justify-end gap-1 ${isRetailMode ? 'supermarket-ticket-actions' : ''}`} status={<FiscalStatusBadge compact short visible={!isOrderTakerMode && !isFiscalModeDisabled} allowed={canCheckoutWithFiscalPolicy} status={fiscalStatus} />}>
                      {!isKioskMode && <OrderServiceTypeButton value={effectiveOrderServiceType} onClick={() => handleGridAction('TAKEOUT')} />}
                   </TicketStatusControls>
@@ -8980,60 +9040,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   </div>
                )}
 
-               {
-                  selectedCustomer ? (
-                     <div className="flex items-center gap-3 mb-4 p-3 bg-blue-50/50 rounded-xl border border-blue-100 animate-in slide-in-from-top-2">
-                        {resolveCustomerImageSrc(selectedCustomer) ? (
-                           <img
-                              src={resolveCustomerImageSrc(selectedCustomer)}
-                              alt={selectedCustomer.name}
-                              className="w-10 h-10 rounded-full object-cover border border-blue-200 bg-white"
-                           />
-                        ) : (
-                           <div className="w-10 h-10 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center font-black">
-                              {selectedCustomer.name.substring(0, 2).toUpperCase()}
-                           </div>
-                        )}
-                        <div className="flex-1 min-w-0">
-                           <div className="flex items-center gap-2">
-                              <p className="font-bold text-gray-800 truncate">{selectedCustomer.name}</p>
-                              {/* Save to contact feature temporarily disabled due to missing prop plumbing */}
-                           </div>
-                           <div className="flex items-center gap-2 flex-wrap">
-                              {selectedCustomer.taxId && (
-                                 <span className="text-xs font-mono text-gray-500">{selectedCustomer.taxId}</span>
-                              )}
-                              {selectedCustomer.fiscalStatus === 'ACTIVO' && (
-                                 <span className="text-[9px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded font-bold">FISCAL</span>
-                              )}
-                              {selectedCustomer.isTemporary && (
-                                 <span className="text-[9px] bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded font-bold">TEMP</span>
-                              )}
-                              {isDelinquent && (
-                                 <span className="text-[9px] bg-red-600 text-white px-1.5 py-0.5 rounded font-black shadow-lg shadow-red-200">
-                                    DEUDA VENCIDA / CRÉDITO BLOQUEADO
-                                 </span>
-                              )}
-                           </div>
-                        </div>
-                        <div className="flex items-center gap-2">
-                           <button
-                              onClick={openRecoverReservationForSelectedCustomer}
-                              title="Ver reservas activas del cliente"
-                              className="px-2.5 py-1.5 rounded-lg border border-teal-200 bg-teal-50 text-teal-700 hover:bg-teal-100 transition-all flex items-center gap-1"
-                           >
-                              <QrCode size={14} />
-                              <span className="text-[10px] font-black uppercase">Res. {selectedCustomerActiveReservationsCount}</span>
-                           </button>
-                           <button onClick={() => onSelectCustomer(null)} className="p-2 hover:bg-red-50 text-gray-400 hover:text-red-500 rounded-lg transition-colors">
-                              <X size={16} />
-                           </button>
-                        </div>
-                     </div>
-                  ) : (
-                     <button onClick={onOpenCustomers} className="w-full flex items-center justify-between px-3 py-2 bg-white border border-dashed border-gray-300 rounded-xl text-gray-400 hover:text-blue-500 group"><div className="flex items-center gap-2"><UserPlus size={18} /><span className="text-[11px] font-bold uppercase tracking-wide">Asignar Cliente</span></div><ChevronRight size={16} /></button>
-                  )
-               }
 
                {shouldShowFiscalReserveAlert && fiscalReserveAlert && (
                   <div
@@ -9277,13 +9283,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                               </span>
                            );
                         }
-                        if (isDispatchedToKds) {
-                           rowChips.push(
-                              <span key="kds" className={`inline-flex shrink-0 items-center rounded px-1 py-[1px] text-[9.5px] font-black uppercase leading-none ${isReturnedToKds ? 'bg-red-50 text-red-600' : 'bg-blue-50 text-blue-600'}`}>
-                                 {isReturnedToKds ? 'KDS devuelto' : 'KDS enviado'}
-                              </span>
-                           );
-                        }
+
                         if (isSubtotalizedItem) {
                            rowChips.push(
                               <span key="sub" className="inline-flex shrink-0 items-center rounded bg-violet-50 px-1 py-[1px] text-[9.5px] font-black uppercase leading-none text-violet-700">
@@ -9306,7 +9306,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
                                  <div className="min-w-0 flex-1">
                                     <div className="flex items-start justify-between gap-2">
-                                       <h4 className="min-w-0 truncate text-[13.5px] font-bold leading-tight text-slate-800" title={item.name}>{item.name}</h4>
+                                       <h4 className="flex min-w-0 items-center gap-1 truncate text-[13.5px] font-bold leading-tight text-slate-800" title={item.name}>
+                                          {isDispatchedToKds && (
+                                             <ChefHat size={12} className={`shrink-0 ${isReturnedToKds ? 'text-red-500' : 'text-blue-500'}`} aria-label={isReturnedToKds ? 'Devuelto en KDS' : 'Enviado a KDS'} />
+                                          )}
+                                          <span className="truncate">{item.name}</span>
+                                       </h4>
                                        <div className="shrink-0 text-right leading-tight">
                                           {hasDiscount && (
                                              <span className="block text-[10px] font-bold text-slate-400 line-through tabular-nums">
@@ -9323,16 +9328,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                        <span className="shrink-0 font-black text-slate-700">
                                           {formatQuantity(displayWeightQuantity(item), quantityPresentation.salesDecimals)}{item.weightPresentation ? ` ${item.weightPresentation.displayUnit}` : '\u00d7'}
                                        </span>
-                                       {showUnitLine && (
-                                          <>
-                                             <span className="shrink-0 text-slate-300">&middot;</span>
-                                             <span className="truncate">
-                                                {item.weightPresentation
-                                                   ? weightLineLabel(item, baseCurrency.symbol, item.price, quantityPresentation.salesDecimals)
-                                                   : `${baseCurrency.symbol}${item.price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} c/u`}
-                                             </span>
-                                          </>
-                                       )}
+                                       <span className="shrink-0 text-slate-300">&middot;</span>
+                                       <span className="truncate">
+                                          {item.weightPresentation
+                                             ? weightLineLabel(item, baseCurrency.symbol, item.price, quantityPresentation.salesDecimals)
+                                             : `${baseCurrency.symbol}${item.price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}${item.quantity > 1 ? ' c/u' : ''}`}
+                                       </span>
                                        {rowChips.slice(0, 3)}
                                        {rowChips.length > 3 && (
                                           <span className="inline-flex shrink-0 items-center rounded bg-slate-100 px-1 py-[1px] text-[9.5px] font-black leading-none text-slate-500">+{rowChips.length - 3}</span>
@@ -9649,7 +9650,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                     <>
                                        <button
                                           onClick={() => triggerSafetyGate('Cerrar Sesión', onLogout)}
-                                          className="h-14 w-16 shrink-0 px-1 rounded-2xl font-black text-[11px] uppercase tracking-[0.06em] border-2 border-red-100 bg-red-50 text-red-600 hover:bg-red-100 hover:border-red-200 shadow-lg shadow-red-100/60 transition-all active:scale-95 flex items-center justify-center gap-2"
+                                          className="h-14 min-w-0 flex-1 px-1 rounded-2xl font-black text-[11px] uppercase tracking-[0.06em] border-2 border-red-100 bg-red-50 text-red-600 hover:bg-red-100 hover:border-red-200 shadow-lg shadow-red-100/60 transition-all active:scale-95 flex items-center justify-center gap-2"
                                        >
                                           <LogOut size={26} strokeWidth={2.4} />
                                           <span className="sr-only">Salir</span>
@@ -9663,7 +9664,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                              }
                                           }}
                                           disabled={cart.length === 0 || !canCheckoutWithFiscalPolicy}
-                                          className={`h-14 w-24 shrink-0 px-1 rounded-2xl font-black text-[12px] uppercase tracking-[0.06em] shadow-xl hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-70 disabled:cursor-not-allowed flex items-center justify-center gap-2.5 ${!canCheckoutWithFiscalPolicy ? 'bg-red-100 text-red-500 cursor-not-allowed border-2 border-red-200' : 'bg-emerald-600 text-white hover:bg-emerald-500 disabled:bg-slate-200 disabled:text-slate-400 disabled:shadow-slate-100'}`}
+                                          className={`h-14 min-w-0 flex-[1.15] px-1 rounded-2xl font-black text-[12px] uppercase tracking-[0.06em] shadow-xl hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-70 disabled:cursor-not-allowed flex items-center justify-center gap-2.5 ${!canCheckoutWithFiscalPolicy ? 'bg-red-100 text-red-500 cursor-not-allowed border-2 border-red-200' : 'bg-emerald-600 text-white hover:bg-emerald-500 disabled:bg-slate-200 disabled:text-slate-400 disabled:shadow-slate-100'}`}
                                        >
                                           <span className="text-[26px] font-black leading-none" aria-hidden="true">$</span>
                                           <span className="sr-only">{checkoutActionLabel}</span>
@@ -9673,7 +9674,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                     <>
                                        <button
                                           onClick={() => triggerSafetyGate('Cerrar Sesión', onLogout)}
-                                          className="h-14 w-16 shrink-0 px-1 rounded-2xl font-black text-[11px] uppercase tracking-[0.06em] border-2 border-red-100 bg-red-50 text-red-600 hover:bg-red-100 hover:border-red-200 shadow-lg shadow-red-100/60 transition-all active:scale-95 flex items-center justify-center gap-2"
+                                          className="h-14 min-w-0 flex-1 px-1 rounded-2xl font-black text-[11px] uppercase tracking-[0.06em] border-2 border-red-100 bg-red-50 text-red-600 hover:bg-red-100 hover:border-red-200 shadow-lg shadow-red-100/60 transition-all active:scale-95 flex items-center justify-center gap-2"
                                        >
                                           <LogOut size={26} strokeWidth={2.4} />
                                           <span className="sr-only">Salir</span>
@@ -9685,7 +9686,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                              }
                                           }}
                                           disabled={cart.length === 0}
-                                          className="h-14 w-24 shrink-0 flex items-center justify-center gap-2.5 rounded-2xl font-black text-[13px] uppercase tracking-[0.14em] bg-emerald-600 text-white hover:bg-emerald-500 shadow-xl hover:shadow-md transition-all active:scale-95 disabled:bg-slate-200 disabled:text-slate-400 disabled:opacity-100 disabled:cursor-not-allowed"
+                                          className="h-14 min-w-0 flex-[1.15] flex items-center justify-center gap-2.5 rounded-2xl font-black text-[13px] uppercase tracking-[0.14em] bg-emerald-600 text-white hover:bg-emerald-500 shadow-xl hover:shadow-md transition-all active:scale-95 disabled:bg-slate-200 disabled:text-slate-400 disabled:opacity-100 disabled:cursor-not-allowed"
                                        >
                                           <span className="text-[26px] font-black leading-none" aria-hidden="true">$</span>
                                           <span className="sr-only">{isOrderTakerMode ? 'Guardar pedido' : 'Cobrar'}</span>
@@ -10577,7 +10578,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         onOpenSettings('CATALOG', { productId: p.id, tab: 'KARDEX' });
                      }
                   }}
-                  warehouses={warehouses}
+                  warehouses={operatingWarehouses}
                   config={config}
                   currentUser={currentUser}
                   roles={roles}
