@@ -1011,8 +1011,13 @@ const Settings: React.FC<SettingsProps> = (props) => {
             </div>
 
             <div className="space-y-12">
-              <section>
-                <SettingsCard icon={Package} label="Inventario y Catálogo" description="Artículos, almacenes, rastreo e importación" color="bg-emerald-700" onClick={() => setOpenSettingsGroup('CATALOG')} locked={false} />
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+  <SettingsCard icon={Package} label="Inventario y Catálogo" description="Artículos, almacenes, rastreo e importación" color="bg-emerald-700" onClick={() => setOpenSettingsGroup('CATALOG')} locked={false} />
+  <SettingsCard icon={CreditCard} label="Finanzas y Legal" description="Empresa, pagos, impuestos y documentos" color="bg-blue-700" onClick={() => setOpenSettingsGroup('FINANCE')} locked={false} />
+  <SettingsCard icon={Monitor} label="Configuración Local" description="Terminales, mesas, hardware y etiquetas" color="bg-slate-700" onClick={() => setOpenSettingsGroup('LOCAL')} locked={false} />
+  <SettingsCard icon={Users} label="Equipo y Marketing" description="Usuarios, clientes, lealtad y promociones" color="bg-pink-500" onClick={() => setOpenSettingsGroup('TEAM')} locked={false} />
+  <SettingsCard icon={ShieldAlert} label="Sistema y Auditoría" description="Sincronización, seguridad y diagnóstico" color="bg-red-600" onClick={() => setOpenSettingsGroup('SYSTEM')} locked={false} />
+              </div>
                 {openSettingsGroup === 'CATALOG' && (
                   <div className="fixed inset-0 z-[130] flex items-center justify-center bg-black/40 p-6" onClick={() => setOpenSettingsGroup(null)}>
                     <div className="max-h-[85vh] w-full max-w-5xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl" onClick={event => event.stopPropagation()}>
@@ -1070,10 +1075,6 @@ const Settings: React.FC<SettingsProps> = (props) => {
                     </div>
                   </div>
                 )}
-              </section>
-
-              <section>
-                <SettingsCard icon={CreditCard} label="Finanzas y Legal" description="Empresa, pagos, impuestos y documentos" color="bg-blue-700" onClick={() => setOpenSettingsGroup('FINANCE')} locked={false} />
                 {openSettingsGroup === 'FINANCE' && (
                   <div className="fixed inset-0 z-[130] flex items-center justify-center bg-black/40 p-6" onClick={() => setOpenSettingsGroup(null)}>
                     <div className="max-h-[85vh] w-full max-w-5xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl" onClick={event => event.stopPropagation()}>
@@ -1095,10 +1096,6 @@ const Settings: React.FC<SettingsProps> = (props) => {
                     </div>
                   </div>
                 )}
-              </section>
-
-              <section>
-                <SettingsCard icon={Monitor} label="Configuración Local" description="Terminales, mesas, hardware y etiquetas" color="bg-slate-700" onClick={() => setOpenSettingsGroup('LOCAL')} locked={false} />
                 {openSettingsGroup === 'LOCAL' && (
                   <div className="fixed inset-0 z-[130] flex items-center justify-center bg-black/40 p-6" onClick={() => setOpenSettingsGroup(null)}>
                     <div className="max-h-[85vh] w-full max-w-5xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl" onClick={event => event.stopPropagation()}>
@@ -1113,10 +1110,6 @@ const Settings: React.FC<SettingsProps> = (props) => {
                     </div>
                   </div>
                 )}
-              </section>
-
-              <section>
-                <SettingsCard icon={Users} label="Equipo y Marketing" description="Usuarios, clientes, lealtad y promociones" color="bg-pink-500" onClick={() => setOpenSettingsGroup('TEAM')} locked={false} />
                 {openSettingsGroup === 'TEAM' && (
                   <div className="fixed inset-0 z-[130] flex items-center justify-center bg-black/40 p-6" onClick={() => setOpenSettingsGroup(null)}>
                     <div className="max-h-[85vh] w-full max-w-5xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl" onClick={event => event.stopPropagation()}>
@@ -1141,10 +1134,6 @@ const Settings: React.FC<SettingsProps> = (props) => {
                     </div>
                   </div>
                 )}
-              </section>
-
-              <section>
-                <SettingsCard icon={ShieldAlert} label="Sistema y Auditoría" description="Sincronización, seguridad y diagnóstico" color="bg-red-600" onClick={() => setOpenSettingsGroup('SYSTEM')} locked={false} />
                 {openSettingsGroup === 'SYSTEM' && (
                   <div className="fixed inset-0 z-[130] flex items-center justify-center bg-black/40 p-6" onClick={() => setOpenSettingsGroup(null)}>
                     <div className="max-h-[85vh] w-full max-w-5xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl" onClick={event => event.stopPropagation()}>
@@ -1169,7 +1158,6 @@ const Settings: React.FC<SettingsProps> = (props) => {
                     </div>
                   </div>
                 )}
-              </section>
 
             </div>
           </div>
