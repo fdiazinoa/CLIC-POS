@@ -14311,6 +14311,7 @@ const AppContent: React.FC = () => {
         return (
           <Settings
             config={config}
+            onOpenAttendance={() => setCurrentView('ATTENDANCE')}
             users={users}
             currentUser={currentUser}
             roles={roles}
@@ -14396,6 +14397,7 @@ const AppContent: React.FC = () => {
         return (
           <Settings
             config={config}
+            onOpenAttendance={() => setCurrentView('ATTENDANCE')}
             users={users}
             currentUser={currentUser}
             roles={roles}

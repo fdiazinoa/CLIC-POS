@@ -1,3 +1,4 @@
+import { describeV3Error } from '../utils/v3ErrorMessages';
 import { scopedWarehousesForStore } from '../utils/warehouseScope';
 import {v3RetainedLineFingerprint} from '../services/sync/LargeMasterSyncV3StockAuthority';
 import {assertTrackingOperationReceipt,type TrackingScope} from '../services/db/TrackingCheckoutOperation';
@@ -4131,7 +4132,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             }
          }
       }
-      } catch (error: any) { setErrorToast(`V3: ${error.message || error}`); }
+      } catch (error: any) { setErrorToast(describeV3Error(error)); }
    }, [searchTerm, routeScannedCoupon, resolveSubmittedCode, v3Operational]);
 
    // --- BARCODE SCANNER LOGIC ---
@@ -4264,7 +4265,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          ? scanQueue.current.run(() => mounted() && addContext.current === context, () => performBarcode(...args))
          : performBarcode(...args);
       return operation.catch((error: any) => {
-         const message = `V3: ${error.message || error}`;
+         const message = describeV3Error(error);
          setErrorToast(message);
          return { success: false, message };
       });

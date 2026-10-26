@@ -131,6 +131,7 @@ interface SettingsProps {
   }>;
   onAdjustStock: (adjustments: { productId: string; quantity: number }[]) => void;
   onOpenFinance?: (initialCashMovementType?: 'IN' | 'OUT' | 'X_REPORT') => void;
+  onOpenAttendance?: () => void;
   onOpenZReport: () => void;
   onOpenHistory?: () => void;
   onOpenSupplyChain: () => void;
@@ -1116,6 +1117,7 @@ const Settings: React.FC<SettingsProps> = (props) => {
                       <header className="mb-4 flex items-center justify-between border-b border-slate-200 pb-3"><h3 className="text-lg font-black text-slate-900">Equipo y Marketing</h3><button type="button" onClick={() => setOpenSettingsGroup(null)} className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-bold text-slate-700 hover:bg-slate-50">Cerrar</button></header>
                       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                   <SettingsCard icon={Users} label="Equipo y Roles" description="Usuarios, Roles y Permisos" color="bg-pink-500" onClick={() => setCurrentView('TEAM')} locked={!hasPermission('SETTINGS_USERS')} />
+                    <SettingsCard icon={UserCircle} label="Asistencia" description="Entradas, salidas y horarios del personal" color="bg-teal-600" onClick={() => { setOpenSettingsGroup(null); props.onOpenAttendance?.(); }} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={UserCircle} label="Clientes" description="Directorio, Histórico, Fiscal" color="bg-teal-600" onClick={() => setCurrentView('CUSTOMERS')} locked={!hasPermission('CUSTOMER_MANAGE')} />
                   <SettingsCard icon={Award} label="Programa de Lealtad" description="Puntos, Canjes y Reglas" color="bg-purple-500" onClick={() => setCurrentView('LOYALTY')} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={Percent} label="Promociones" description="Descuentos, 2x1 y Temporadas" color="bg-rose-500" onClick={() => setCurrentView('PROMOTIONS')} locked={!hasPermission('CATALOG_MANAGE')} />
