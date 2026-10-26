@@ -1012,6 +1012,14 @@ const Settings: React.FC<SettingsProps> = (props) => {
             </div>
 
             <div className="space-y-12">
+              <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest mt-2 mb-3 border-b border-slate-100 pb-2">Accesos directos</h2>
+              <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
+                <SettingsCard icon={Building2} label="Empresa" description="RNC, Nombre y Contacto Legal" color="bg-blue-700" onClick={() => setCurrentView('COMPANY')} locked={!hasPermission('SETTINGS_ACCESS')} />
+                <SettingsCard icon={BarChart3} label="Informes y Analítica" description="BI, Snapshots y KPIs" color="bg-blue-700" onClick={() => setCurrentView('REPORTS')} locked={!hasPermission('REPORTS_VIEW_SALES')} />
+                <SettingsCard icon={Cloud} label={isCheckingApkUpdate ? 'Buscando APK...' : 'Actualizar APK'} description="Buscar y descargar release POS" color="bg-sky-700" onClick={handleManualApkUpdateCheck} locked={!hasPermission('SETTINGS_ACCESS') || isCheckingApkUpdate} />
+                <SettingsCard icon={UserCircle} label="Asistencia" description="Entradas, salidas y horarios del personal" color="bg-teal-600" onClick={() => props.onOpenAttendance?.()} locked={!hasPermission('SETTINGS_ACCESS')} />
+              </div>
+
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
   <SettingsCard icon={Package} label="Inventario y Catálogo" description="Artículos, almacenes, rastreo e importación" color="bg-emerald-700" onClick={() => setOpenSettingsGroup('CATALOG')} locked={false} />
   <SettingsCard icon={CreditCard} label="Finanzas y Legal" description="Empresa, pagos, impuestos y documentos" color="bg-blue-700" onClick={() => setOpenSettingsGroup('FINANCE')} locked={false} />
@@ -1081,7 +1089,6 @@ const Settings: React.FC<SettingsProps> = (props) => {
                     <div className="max-h-[85vh] w-full max-w-5xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl" onClick={event => event.stopPropagation()}>
                       <header className="mb-4 flex items-center justify-between border-b border-slate-200 pb-3"><h3 className="text-lg font-black text-slate-900">Finanzas y Legal</h3><button type="button" onClick={() => setOpenSettingsGroup(null)} className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-bold text-slate-700 hover:bg-slate-50">Cerrar</button></header>
                       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                  <SettingsCard icon={Building2} label="Empresa" description="RNC, Nombre y Contacto Legal" color="bg-blue-700" onClick={() => setCurrentView('COMPANY')} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={CreditCard} label="Métodos de Pago" description="Pasarelas, Tarjetas, QR" color="bg-indigo-500" onClick={() => setCurrentView('PAYMENTS')} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={PlugZap} label="Integraciones" description="AZUL, CardNet y adquirentes" color="bg-sky-600" onClick={() => setCurrentView('INTEGRATIONS')} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={ArrowRightLeft} label="Divisas y Cambio" description="Multi-moneda y Tasas" color="bg-teal-500" onClick={() => setCurrentView('EXCHANGE')} locked={!hasPermission('SETTINGS_ACCESS')} />
@@ -1117,7 +1124,6 @@ const Settings: React.FC<SettingsProps> = (props) => {
                       <header className="mb-4 flex items-center justify-between border-b border-slate-200 pb-3"><h3 className="text-lg font-black text-slate-900">Equipo y Marketing</h3><button type="button" onClick={() => setOpenSettingsGroup(null)} className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-bold text-slate-700 hover:bg-slate-50">Cerrar</button></header>
                       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                   <SettingsCard icon={Users} label="Equipo y Roles" description="Usuarios, Roles y Permisos" color="bg-pink-500" onClick={() => setCurrentView('TEAM')} locked={!hasPermission('SETTINGS_USERS')} />
-                    <SettingsCard icon={UserCircle} label="Asistencia" description="Entradas, salidas y horarios del personal" color="bg-teal-600" onClick={() => { setOpenSettingsGroup(null); props.onOpenAttendance?.(); }} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={UserCircle} label="Clientes" description="Directorio, Histórico, Fiscal" color="bg-teal-600" onClick={() => setCurrentView('CUSTOMERS')} locked={!hasPermission('CUSTOMER_MANAGE')} />
                   <SettingsCard icon={Award} label="Programa de Lealtad" description="Puntos, Canjes y Reglas" color="bg-purple-500" onClick={() => setCurrentView('LOYALTY')} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={Percent} label="Promociones" description="Descuentos, 2x1 y Temporadas" color="bg-rose-500" onClick={() => setCurrentView('PROMOTIONS')} locked={!hasPermission('CATALOG_MANAGE')} />
@@ -1151,11 +1157,9 @@ const Settings: React.FC<SettingsProps> = (props) => {
                   />
                   <SettingsCard icon={RefreshCw} label="Sincronización" description="Estado de Red y Réplicas" color="bg-indigo-600" onClick={() => setCurrentView('SYNC')} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={Hash} label="Rangos de maestros" description="Códigos offline y disponibilidad" color="bg-cyan-700" onClick={() => setCurrentView('MASTER_NUMBER_RANGES')} locked={!hasPermission('SETTINGS_ACCESS')} />
-                  <SettingsCard icon={Cloud} label={isCheckingApkUpdate ? "Buscando APK..." : "Actualizar APK"} description="Buscar y descargar release POS" color="bg-sky-700" onClick={handleManualApkUpdateCheck} locked={!hasPermission('SETTINGS_ACCESS') || isCheckingApkUpdate} />
                   <SettingsCard icon={ShieldAlert} label="Seguridad y Datos" description="Backups y Modo Kiosco" color="bg-red-600" onClick={() => setCurrentView('SECURITY')} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={ListChecks} label="Activar log de seguimiento" description="Checkout, sincronización y rendimiento" color="bg-slate-700" onClick={() => setCurrentView('CHECKOUT_TRACKING')} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={History} label="Traza de Auditoría" description="Logs de Operaciones" color="bg-orange-500" onClick={() => setCurrentView('LOGS')} locked={!hasPermission('AUDIT_LOG_VIEW')} />
-                  <SettingsCard icon={BarChart3} label="Informes y Analítica" description="BI, Snapshots y KPIs" color="bg-blue-700" onClick={() => setCurrentView('REPORTS')} locked={!hasPermission('REPORTS_VIEW_SALES')} />
                 </div>
                     </div>
                   </div>

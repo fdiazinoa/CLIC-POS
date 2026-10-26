@@ -2460,6 +2460,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       return()=>{disposed=true;generation++;unsubscribe();};
    },[v3Operational,activeTerminalId,config.featureFlags?.ARTICLE_FORMATS]);
    useEffect(()=>{let disposed=false;if(!formatRuntime)return;void Promise.all(baseProducts.slice(0,500).map(async product=>[product.id,await formatRuntime.masters.getPolicy(product.id)] as const)).then(rows=>{if(!disposed)setFormatMasters(Object.fromEntries(rows.filter(([,value])=>value)));});return()=>{disposed=true;};},[formatRuntime,baseProducts]);
+   const [warehousePrompt, setWarehousePrompt] = useState<{ product: Product; candidates: Array<{ id: string; name: string; code?: string }> } | null>(null);
    const [activeCartItemId, setActiveCartItemId] = useState<string | null>(null);
    const handledAccountActionIdsRef = useRef<Set<string>>(new Set());
    useEffect(() => {
@@ -3527,7 +3528,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          if (consignmentPatch || modifiers?.length && !restaurantConfig && !selectedVariant) {
             throw new Error('SYNC_V3_ADVANCED_ARTICLE_CONTRACT_REQUIRED');
          }
-         if(!(product.operationalFlags?.usesLots||product.operationalFlags?.usesSerial)||trackingData)await v3Operational.validate([...latestAddCart.current, { ...product, variantId: selectedVariant?.id || selectedVariant?.variantId, variantSku: selectedVariant?.sku, price: priceOverride ?? resolveVariantSalesPrice(selectedVariant, getProductPrice(product)), originalPrice: priceOverride ?? resolveVariantSalesPrice(selectedVariant, getProductPrice(product)), quantity, modifiers, note, trackingData:trackingData?trackingSelectionsForCart(trackingData,product,'candidate-validation'):undefined, restaurantConfig, selected_modifiers: restaurantConfig?.selected_modifiers, selected_combo_items: restaurantConfig?.selected_combo_items, selected_fraction_parts: restaurantConfig?.selected_fraction_parts, cartId: 'candidate-validation' } as CartItem], { ticketId: activeTable?.currentOrderId || activeDirectV3TicketId, claimId: activeDirectV3TicketId, reservationId:activeV3Reservation?.reservation.id,reservationClaimId:activeV3Reservation?.claimId, tableId: activeTable?.id === undefined ? undefined : String(activeTable.id) });
+         if(!(product.operationalFlags?.usesLots||product.operationalFlags?.usesSerial)||trackingData) {
+            try { await v3Operational.validate([...latestAddCart.current, { ...product, variantId: selectedVariant?.id || selectedVariant?.variantId, variantSku: selectedVariant?.sku, price: priceOverride ?? resolveVariantSalesPrice(selectedVariant, getProductPrice(product)), originalPrice: priceOverride ?? resolveVariantSalesPrice(selectedVariant, getProductPrice(product)), quantity, modifiers, note, trackingData:trackingData?trackingSelectionsForCart(trackingData,product,'candidate-validation'):undefined, restaurantConfig, selected_modifiers: restaurantConfig?.selected_modifiers, selected_combo_items: restaurantConfig?.selected_combo_items, selected_fraction_parts: restaurantConfig?.selected_fraction_parts, cartId: 'candidate-validation' } as CartItem], { ticketId: activeTable?.currentOrderId || activeDirectV3TicketId, claimId: activeDirectV3TicketId, reservationId:activeV3Reservation?.reservation.id,reservationClaimId:activeV3Reservation?.claimId, tableId: activeTable?.id === undefined ? undefined : String(activeTable.id) }); } catch (error: any) {
+            if (String(error?.message || '').includes('SYNC_V3_WAREHOUSE_UNAVAILABLE')) { openWarehousePrompt(product); return false; }
+            throw error;
+         }
+         }
          assertV3UIContext(isCurrent);
          if(restaurantConfig)modifiers=[...(restaurantConfig.selected_modifiers||[]).map((row:any)=>row.name),...(restaurantConfig.selected_combo_items||[]).map((row:any)=>row.name),...(note?[`Nota: ${note}`]:[])];
       }
@@ -3702,6 +3708,41 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          setPresentationSelection(null);return addToCart(line as CartItem,quantity,price);
       }catch(error){setErrorToast(error instanceof Error?error.message:String(error));return Promise.resolve(false);}
    },[activeTariffId,isReturnMode,addToCart]);
+
+   /** The sale warehouse is a single terminal setting; offer it when the article is not active there. */
+   const openWarehousePrompt = useCallback((product: Product) => {
+      const storeId = String(activeTerminalConfig?.erpBinding?.storeId || '');
+      const active = (product.activeInWarehouses || []).map(String);
+      const candidates = (warehouses || [])
+         .filter(row => (!storeId || !row.storeId || String(row.storeId) === storeId) && active.includes(String(row.id)))
+         .map(row => ({ id: String(row.id), name: row.name || row.code || String(row.id), code: row.code }));
+      if (!candidates.length) {
+         setErrorToast('Este artículo no está activo en ningún almacén de esta sucursal. Pídele al administrador que lo active en el ERP.');
+         return;
+      }
+      setWarehousePrompt({ product, candidates });
+   }, [warehouses, activeTerminalConfig?.erpBinding?.storeId]);
+
+   const applySaleWarehouse = useCallback((warehouseId: string) => {
+      const target = (warehouses || []).find(row => String(row.id) === warehouseId);
+      const terminalId = activeTerminal?.id;
+      onUpdateConfig({
+         ...config,
+         terminals: (config.terminals || []).map(terminal => terminal.id !== terminalId ? terminal : ({
+            ...terminal,
+            config: {
+               ...terminal.config,
+               inventoryScope: {
+                  ...(terminal.config.inventoryScope as Record<string, unknown> || {}),
+                  defaultSalesWarehouseId: warehouseId,
+                  ...(target ? { defaultWarehouse: target } : {}),
+               } as typeof terminal.config.inventoryScope,
+            },
+         })),
+      });
+      setWarehousePrompt(null);
+      setSuccessToast(`Almacén de venta de la caja: ${target?.name || warehouseId}. Toca el artículo de nuevo.`);
+   }, [warehouses, activeTerminal?.id, config, onUpdateConfig]);
 
    const handleProductClick = useCallback((product: Product) => {
       if (rejectFormatQuickReturn(product)) return;
@@ -10555,6 +10596,36 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                onReservationRecovered: () => setIsScannerOpen(false),
             })}
          />
+         {warehousePrompt && (
+            <div className="fixed inset-0 z-[130] flex items-center justify-center bg-black/50 p-4" role="presentation" onClick={() => setWarehousePrompt(null)}>
+               <div role="dialog" aria-modal="true" aria-label="Almacén de venta" className="w-full max-w-md overflow-hidden rounded-2xl bg-white shadow-2xl" onClick={event => event.stopPropagation()}>
+                  <div className="border-b border-slate-200 px-5 py-4">
+                     <h3 className="text-base font-black text-slate-900">Este artículo no tiene almacén de descarga en esta caja</h3>
+                     <p className="mt-1 text-xs text-slate-500">
+                        <span className="font-bold text-slate-700">{warehousePrompt.product.name}</span> tiene existencia en
+                        {warehousePrompt.candidates.length === 1 ? ' este almacén' : ' estos almacenes'}. Elegir uno cambia el almacén de venta
+                        de toda la caja (las próximas ventas descargarán de ahí).
+                     </p>
+                  </div>
+                  <div className="max-h-[45vh] space-y-2 overflow-y-auto px-5 py-4">
+                     {warehousePrompt.candidates.map(candidate => (
+                        <button key={candidate.id} onClick={() => applySaleWarehouse(candidate.id)}
+                           className="flex w-full items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-left hover:border-blue-300 hover:bg-blue-50">
+                           <span className="min-w-0">
+                              <span className="block truncate text-sm font-bold text-slate-800">{candidate.name}</span>
+                              {candidate.code && <span className="text-[10px] font-black uppercase tracking-wide text-slate-400">{candidate.code}</span>}
+                           </span>
+                           <span className="shrink-0 text-[11px] font-black text-blue-600">Usar este</span>
+                        </button>
+                     ))}
+                  </div>
+                  <div className="flex justify-end gap-2 border-t border-slate-200 bg-slate-50 px-5 py-3">
+                     <button onClick={() => setWarehousePrompt(null)} className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-600">Cancelar</button>
+                  </div>
+               </div>
+            </div>
+         )}
+
          {
             quickActionData && (
                <ProductQuickActions
