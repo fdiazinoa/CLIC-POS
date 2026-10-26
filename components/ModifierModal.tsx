@@ -12,6 +12,8 @@ import './ModifierModal.css';
 
 interface ModifierModalProps {
   product: Product;
+  productImageUrl?: string | null;
+  resolveOptionImage?: (option: { id: string; name: string; product_id?: string }) => string | null;
   currencySymbol: string;
   themeColor: string;
   onClose: () => void;
@@ -32,10 +34,11 @@ interface OptionCardProps {
   meta: string;
   selected: boolean;
   multiple: boolean;
+  imageUrl?: string | null;
   onSelect: (id: string) => void;
 }
 
-const OptionCard = memo<OptionCardProps>(({ id, label, meta, selected, multiple, onSelect }) => {
+const OptionCard = memo<OptionCardProps>(({ id, label, meta, selected, multiple, imageUrl, onSelect }) => {
   const handleClick = useCallback(() => onSelect(id), [id, onSelect]);
   return (
     <button
@@ -44,20 +47,32 @@ const OptionCard = memo<OptionCardProps>(({ id, label, meta, selected, multiple,
       aria-checked={selected}
       data-modifier-option="true"
       onClick={handleClick}
-      className={`flex min-h-[88px] w-full items-center gap-3 rounded-2xl border-2 px-4 py-3 text-left transition-colors active:scale-[0.99] ${
+      className={`group relative flex w-full flex-col overflow-hidden rounded-2xl border-2 text-left transition-colors active:scale-[0.99] ${
         selected
-          ? 'border-blue-600 bg-blue-50 text-blue-950 shadow-sm'
-          : 'border-slate-200 bg-white text-slate-900 hover:border-blue-300 hover:bg-slate-50'
+          ? 'border-blue-600 bg-blue-50/70 text-blue-950 shadow-[0_0_0_3px_rgba(37,99,235,0.10)]'
+          : 'border-slate-200 bg-white text-slate-900 hover:border-blue-300'
       }`}
     >
-      <span className={`flex h-9 w-9 shrink-0 items-center justify-center border-2 ${multiple ? 'rounded-lg' : 'rounded-full'} ${
-        selected ? 'border-blue-600 bg-blue-600 text-white' : 'border-slate-300 bg-white text-transparent'
-      }`}>
-        <Check size={15} strokeWidth={3.5} aria-hidden="true" />
+      {selected && (
+        <span aria-hidden="true" className="absolute right-2 top-2 z-10 flex h-5 w-5 items-center justify-center rounded-full bg-blue-600 text-white shadow">
+          <Check size={12} strokeWidth={3.5} />
+        </span>
+      )}
+      <span className={`flex h-[76px] w-full items-center justify-center overflow-hidden ${imageUrl ? 'bg-slate-100' : 'bg-gradient-to-br from-slate-100 to-slate-200'}`}>
+        {imageUrl
+          ? <img src={imageUrl} alt="" className="h-full w-full object-cover" loading="lazy" />
+          : <span className="text-lg font-black uppercase tracking-wide text-slate-400">{String(label || '?').slice(0, 2)}</span>}
       </span>
-      <span className="min-w-0 flex-1">
-        <span className="block text-lg font-black leading-tight">{label}</span>
-        <span className="mt-1 block text-sm font-bold text-slate-500">{meta}</span>
+      <span className="flex min-w-0 flex-1 flex-col gap-1 px-3 py-2">
+        <span className="line-clamp-2 text-[13.5px] font-black leading-tight">{label}</span>
+        <span className="mt-auto flex items-center justify-between gap-2">
+          <span className={`truncate text-[12px] font-black ${meta === 'Sin costo' || meta === 'Incluida' ? 'text-emerald-600' : 'text-slate-500'}`}>{meta}</span>
+          {multiple && (
+            <span className={`flex h-[18px] w-[18px] items-center justify-center rounded-md border-2 ${selected ? 'border-blue-600 bg-blue-600 text-white' : 'border-slate-300 bg-white text-transparent'}`}>
+              <Check size={10} strokeWidth={4} />
+            </span>
+          )}
+        </span>
       </span>
     </button>
   );
@@ -66,6 +81,8 @@ OptionCard.displayName = 'OptionCard';
 
 const ModifierModal: React.FC<ModifierModalProps> = ({
   product,
+  productImageUrl,
+  resolveOptionImage,
   currencySymbol,
   themeColor,
   onClose,
@@ -117,6 +134,7 @@ const ModifierModal: React.FC<ModifierModalProps> = ({
   const [note, setNote] = useState('');
   const [activeStepIndex, setActiveStepIndex] = useState(0);
   const [pagesByStep, setPagesByStep] = useState<Record<string, number>>({});
+  const [optionQuery, setOptionQuery] = useState('');
   const [attemptedStepId, setAttemptedStepId] = useState<string | null>(null);
   const [completedStepIds, setCompletedStepIds] = useState<Record<string, true>>({});
   const autoAdvanceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -375,7 +393,13 @@ const ModifierModal: React.FC<ModifierModalProps> = ({
 
   const currentPage = activeStep ? Math.min(pagesByStep[activeStep.id] || 0, Math.max(0, Math.ceil(activeOptions.length / MODIFIER_MODAL_LAYOUT.optionsPerPage) - 1)) : 0;
   const pageCount = Math.max(1, Math.ceil(activeOptions.length / MODIFIER_MODAL_LAYOUT.optionsPerPage));
-  const pageOptions = paginateModifierOptions(activeOptions, currentPage);
+  const showsSearch = activeOptions.length >= 6;
+  const searchedOptions = useMemo(() => {
+    const query = optionQuery.trim().toLowerCase();
+    if (!showsSearch || !query) return activeOptions;
+    return activeOptions.filter(option => String(option.label || '').toLowerCase().includes(query));
+  }, [activeOptions, optionQuery, showsSearch]);
+  const pageOptions = paginateModifierOptions(searchedOptions, currentPage);
   const selectedCount = activeOptions.filter(option => option.selected).length;
   const changePage = useCallback((nextPage: number) => {
     if (!activeStep) return;
@@ -425,10 +449,17 @@ const ModifierModal: React.FC<ModifierModalProps> = ({
       <div role="dialog" aria-modal="true" aria-labelledby="modifier-modal-title" className="flex max-h-[94vh] w-full max-w-7xl flex-col overflow-hidden rounded-3xl border border-slate-200 bg-slate-50 shadow-2xl">
         <header className="shrink-0 border-b border-slate-200 bg-white px-4 py-4 sm:px-7">
           <div className="flex items-start justify-between gap-4">
-            <div className="min-w-0">
+            <div className="flex min-w-0 items-center gap-3">
+              <span className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-slate-200 bg-slate-100">
+                {productImageUrl
+                  ? <img src={productImageUrl} alt="" className="h-full w-full object-cover" />
+                  : <span className="text-[11px] font-black uppercase text-slate-400">{String(product.name || '?').slice(0, 2)}</span>}
+              </span>
+              <div className="min-w-0">
               <p className="text-[11px] font-black uppercase tracking-[0.2em] text-blue-600">Modificadores</p>
               <h2 id="modifier-modal-title" className="mt-1 truncate text-2xl font-black text-slate-950 sm:text-3xl">{product.name}</h2>
               <p className="mt-1 text-sm font-bold text-slate-500 sm:text-lg">Precio base · {currencySymbol}{Number(product.price || 0).toFixed(2)}</p>
+              </div>
             </div>
             <button type="button" aria-label="Cerrar modificadores" onClick={handleClose} className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-slate-100 text-slate-600 hover:bg-slate-200"><X size={22} /></button>
           </div>
@@ -466,7 +497,19 @@ const ModifierModal: React.FC<ModifierModalProps> = ({
                 <span className="rounded-full bg-slate-100 px-3 py-2 text-xs font-black text-slate-600">{selectedCount} {selectedCount === 1 ? 'seleccionado' : 'seleccionados'}</span>
               </div>
               {validationMessage && <div id="modifier-validation-error" role="alert" className="mb-4 flex items-center gap-2 text-sm font-bold text-red-700"><AlertCircle size={18} />{validationMessage}</div>}
-              <div className="modifier-option-grid" role={activeOptions[0]?.multiple ? 'group' : 'radiogroup'}>{pageOptions.map(option => <OptionCard key={`${activeStep.id}-${option.id}`} {...option} onSelect={handleOptionSelect} />)}</div>
+              {showsSearch && (
+                <input
+                  value={optionQuery}
+                  onChange={event => { setOptionQuery(event.target.value); setPagesByStep(prev => ({ ...prev, [activeStep.id]: 0 })); }}
+                  placeholder={`Buscar en ${activeStep.name}…`}
+                  aria-label={`Buscar en ${activeStep.name}`}
+                  className="mb-3 w-full rounded-xl border-2 border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-700 outline-none focus:border-blue-500"
+                />
+              )}
+              {showsSearch && searchedOptions.length === 0 && (
+                <p className="py-6 text-center text-sm font-bold text-slate-500">Sin opciones para “{optionQuery}”.</p>
+              )}
+              <div className="modifier-option-grid" role={activeOptions[0]?.multiple ? 'group' : 'radiogroup'}>{pageOptions.map(option => <OptionCard key={`${activeStep.id}-${option.id}`} {...option} imageUrl={resolveOptionImage?.({ id: option.id, name: option.label, product_id: (option as { product_id?: string }).product_id })} onSelect={handleOptionSelect} />)}</div>
               {pageCount > 1 && <div className="mt-5 flex items-center justify-center gap-3"><button type="button" onClick={() => changePage(currentPage - 1)} disabled={currentPage === 0} className="flex min-h-12 items-center gap-2 rounded-xl border border-slate-200 bg-white px-5 font-black text-slate-700 disabled:opacity-40"><ChevronLeft size={19} />Anterior</button><span className="min-w-16 text-center text-sm font-black text-slate-600">{currentPage + 1} de {pageCount}</span><button type="button" onClick={() => changePage(currentPage + 1)} disabled={currentPage === pageCount - 1} className="flex min-h-12 items-center gap-2 rounded-xl border border-slate-200 bg-white px-5 font-black text-slate-700 disabled:opacity-40">Siguiente<ChevronRight size={19} /></button></div>}
             </section>
           ) : null}

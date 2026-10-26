@@ -10571,6 +10571,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          {productForModifiers && (
             <ModifierModal
                product={productForModifiers}
+               productImageUrl={resolveProductImageSrc(productForModifiers)}
+               resolveOptionImage={(option) => {
+                  const found = option.product_id ? (products || []).find(row => String(row.id) === String(option.product_id)) : null;
+                  return found ? resolveProductImageSrc(found) : null;
+               }}
                currencySymbol={baseCurrency.symbol}
                themeColor="blue"
                onClose={() => setProductForModifiers(null)}
