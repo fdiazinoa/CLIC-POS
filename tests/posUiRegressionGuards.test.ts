@@ -234,7 +234,7 @@ test('automatic reconciliation is silent for the cashier', () => {
   const src = pos();
   assert.doesNotMatch(src, /setSuccessToast\(`Almacén de venta actualizado desde el ERP/);
   assert.doesNotMatch(src, /setSuccessToast\('Ticket actualizado al inventario de hoy/);
-  assert.match(src, /console\.info\('\[checkout\] almacén de venta alineado con el ERP/);
+  assert.match(src, /recordCheckoutTrace\('WAREHOUSE_ALIGNED'/);
   // Only exceptions and money changes may speak.
   assert.match(src, /setErrorToast\(released\.note\)/);
 });
