@@ -162,3 +162,16 @@ test('an account restored after a master refresh is still settleable offline', (
   assert.doesNotMatch(source_, /v3RetainedLineFingerprint\(originals\[0\]\)/);
   assert.match(source_, /OFFLINE_FISCAL_TABLE_SOURCE_CHANGED/);
 });
+
+test('a transient failure never locks the cashier out of the next attempt', () => {
+  const src = pos();
+  // A timed-out commit is reconciled against the durable record before failing.
+  assert.match(src, /TIMEOUT_CREATE_TRANSACTION/);
+  assert.match(src, /La venta no se registró a tiempo\. Se liberó el intento anterior/);
+  assert.match(src, /const restate = async \(\) => \{/);
+  // An already approved gateway intent is reused instead of charging the card twice.
+  const modal = source('components/PaymentModal.tsx');
+  assert.match(modal, /intent\?\.status === 'AUTHORIZED'\) \{/);
+  assert.match(modal, /gatewayReference: reference/);
+  assert.doesNotMatch(modal, /&& intent\?\.status === 'AUTHORIZED'\) throw new Error\('PAYMENT_INTENT_RECONCILIATION_REQUIRED'\)/);
+});

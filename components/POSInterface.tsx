@@ -2425,9 +2425,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (!v3Operational?.reanchor || cart.length === 0) return;
       const live = v3Operational.liveInventory;
       if (!live) return;
-      // Never restate the cart while a fiscal attempt is pending for this account: the attempt is
-      // bound to the current cart identity and must be settled or released first.
-      if (fiscalCheckoutRef.current) return;
       // The warehouse and tariff are part of the sale authority: after changing the box's
       // default warehouse a saved table is stale even when the inventory generation matches.
       const liveWarehouse = defaultSalesWarehouseId;
@@ -2452,7 +2449,18 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (reanchorRef.current.fingerprint === fingerprint) return;
       reanchorRef.current.fingerprint = fingerprint;
       let cancelled = false;
-      void v3Operational.reanchor(cart).then(async lines => {
+      // A stale cart cannot be resumed: a pending attempt bound to the previous lines has to be
+      // released before restating them, otherwise the checkout and the cart disagree forever.
+      const restate = async () => {
+         if (fiscalCheckoutRef.current) {
+            const outcome = await fiscalWorkflowV2Client.cancelUnreconcilableAttempt({}).catch(() => null);
+            if (!outcome?.cancelled) return null;
+            fiscalCheckoutRef.current = null;
+            fiscalCheckoutOperationRef.current = null;
+         }
+         return v3Operational.reanchor(cart);
+      };
+      void restate().then(async lines => {
          if (cancelled || !lines) return;
          // Presentation lines keep the master revision of the catalog of their day; adopt the
          // current master so the checkout can validate them without touching the agreed amount.
@@ -6424,7 +6432,22 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   observations: uberRecoveredOrder
                      ? `Uber Eats ${uberRecoveredOrder.code} / ${uberRecoveredOrder.sourceOrderId}`
                      : undefined
-               }, { deferDurablePersistence: !isRefundOnly || Boolean(v3Operational) }), 25000, 'TIMEOUT_CREATE_TRANSACTION');
+               }, { deferDurablePersistence: !isRefundOnly || Boolean(v3Operational) }), 25000, 'TIMEOUT_CREATE_TRANSACTION').catch(async (error: any) => {
+                  if (!/TIMEOUT_CREATE_TRANSACTION/.test(String(error?.message || error))) throw error;
+                  // The native commit may have finished after the watchdog fired: the durable
+                  // transaction is the truth. Otherwise the uncertain attempt is released so the
+                  // cashier can retry instead of being locked out by its own previous click.
+                  const pendingId = fiscalCheckoutRef.current?.transactionId || trackingCheckoutRef.current?.transactionId || null;
+                  if (pendingId) {
+                     const committed = await db.getDocument('transactions', pendingId).catch(() => null)
+                        || await db.getDocument('transactionHistory', pendingId).catch(() => null);
+                     if (committed) return committed as any;
+                  }
+                  const released = await fiscalWorkflowV2Client.cancelUnreconcilableAttempt({ tags: [...new Set(cart.map(line => (line as any).fiscalCheckoutOperationId).filter(Boolean))] as string[] }).catch(() => null);
+                  throw Error(released?.cancelled
+                     ? 'La venta no se registró a tiempo. Se liberó el intento anterior; puedes reintentar el cobro.'
+                     : 'La venta no se registró a tiempo. Revisa el intento pendiente en Ajustes → Sistema y Auditoría → Diagnóstico fiscal y reintenta.');
+               });
 
                // Ensure seriesId is preserved (Backend might not return it in the root object)
                const finalTxn = {

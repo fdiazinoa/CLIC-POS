@@ -647,9 +647,27 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
          futureCheckout:workflowPaymentFenceRef.current?.futureCheckout,
          tablePart:workflowPaymentFenceRef.current?.tablePart,
       });
-      // An intent alone does not retain the full provider receipt/order payload. The original approved
-      // PaymentEntry can retry in this modal; a reconstructed entry after restart requires reconciliation.
-      if ((paymentOperationId||workflowPaymentFenceRef.current?.futureCheckout) && intent?.status === 'AUTHORIZED') throw new Error('PAYMENT_INTENT_RECONCILIATION_REQUIRED');
+      // The provider already approved this payment (a previous attempt failed after the approval).
+      // Reuse the approval instead of charging the card twice; only an unknown intent is held.
+      if ((paymentOperationId||workflowPaymentFenceRef.current?.futureCheckout) && intent?.status === 'AUTHORIZED') {
+         const reference = intent.providerReference || String((payment as any).gatewayReference || '');
+         if (!reference) throw new Error('PAYMENT_INTENT_RECONCILIATION_REQUIRED');
+         setFinalizeError(null);
+         return {
+            ...payment,
+            gatewayProvider: integration.provider,
+            gatewayIntegrationId: integration.id,
+            paymentIntentId: intent.intentId,
+            gatewayIdempotencyKey: intent.idempotencyKey,
+            gatewayTransactionType: 'SALE',
+            gatewayStatus: 'APPROVED',
+            gatewayResponseCode: intent.responseCode,
+            gatewayAuthorizationCode: intent.authorizationCode,
+            gatewayReference: reference,
+            gatewayProcessedAmount: roundToTwo(amountInBase),
+            gatewayProcessedTaxAmount: integration.provider === 'AZUL' ? roundToTwo(proportionalTax) : 0,
+         } as PaymentEntry;
+      }
       if(workflowPaymentFenceRef.current?.futureCheckout&&!intent)throw Error('PAYMENT_INTENT_NATIVE_REQUIRED');
       if (intent) await paymentIntentService.markAuthorizing(intent.intentId,Boolean(paymentOperationId),workflowPaymentFenceRef.current?.futureCheckout,workflowPaymentFenceRef.current?.tablePart);
 
