@@ -186,7 +186,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             // A write blocked by another connection must fail (and be retried) instead of hanging
             // forever: an unsettled native write stalls the whole write queue and the cashier can
             // no longer close a sale.
-            await this.db.execute('PRAGMA busy_timeout = 5000;', false);
+            await this.db.query('PRAGMA busy_timeout = 5000;');
             await this.initSchema();
             this.isReady = true;
             console.log('[CapacitorSQLiteAdapter] Connected');
@@ -995,7 +995,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         const db = this.ensureDb();
         await db.execute('PRAGMA foreign_keys = ON;', false);
         // Bounded wait for a locked database: SQLITE_BUSY is recoverable, an infinite wait is not.
-        await db.execute('PRAGMA busy_timeout = 5000;', false);
+        await db.query('PRAGMA busy_timeout = 5000;');
         await db.execute(`
             ${FISCAL_WORKFLOW_V2_SCHEMA}
             CREATE TABLE IF NOT EXISTS documents (

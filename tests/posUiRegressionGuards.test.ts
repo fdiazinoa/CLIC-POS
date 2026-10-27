@@ -368,6 +368,8 @@ test('el cobro no compite con la sincronización de fondo por la base', () => {
   const adapter = source('services/db/adapters/CapacitorSQLiteAdapter.ts');
   // Una escritura bloqueada falla y se reintenta; nunca espera para siempre.
   assert.match(adapter, /PRAGMA busy_timeout = 5000;/);
+  // PRAGMA devuelve fila: debe ir por query(), no por execute() (que rompe la inicialización).
+  assert.doesNotMatch(adapter, /execute\('PRAGMA busy_timeout/);
   assert.ok((adapter.match(/PRAGMA busy_timeout = 5000;/g) || []).length >= 2, 'al abrir y al inicializar el esquema');
   // El rollback no puede quedarse callado: dos intentos y aviso si falla.
   assert.match(adapter, /private async rollbackTransaction\(/);
