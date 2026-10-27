@@ -135,3 +135,11 @@ test('presentations have their own read-only diagnostics sweep', () => {
   assert.match(sweep, /comparePresentationScope/);
   for (const stage of ['auth', 'scope', 'negotiate', 'context', 'cache', 'cart']) assert.match(sweep, new RegExp(`id: '${stage}'`));
 });
+
+test('the presentations panel can adopt the ERP default warehouse for the box', () => {
+  const panel = source('components/PresentationDiagnostics.tsx');
+  assert.match(panel, /Usar el almacén del ERP/);
+  assert.match(panel, /defaultSalesWarehouseId: match\.id/);
+  assert.match(panel, /onUpdateConfig\?\.\(nextConfig\)/);
+  assert.match(settings(), /onUpdateConfig=\{props\.onUpdateConfig\}/);
+});

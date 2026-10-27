@@ -13,6 +13,7 @@ const list = (values: readonly string[] | undefined) => (values && values.length
 export const comparePresentationScope = (
   local: PresentationAuthority,
   remote: Partial<PresentationContext> & Record<string, any>,
+  names: Record<string, string> = {},
 ): PresentationCheck[] => {
   const rows: PresentationCheck[] = [];
   const push = (id: string, label: string, localValue: string, remoteValue: string) => {
@@ -24,8 +25,9 @@ export const comparePresentationScope = (
   for (const key of ['tenantId', 'companyId', 'storeId', 'terminalId', 'deviceId'] as const) {
     push(`scope-${key}`, `Ámbito ${key}`, local.scope[key], String(remoteScope[key] ?? '—'));
   }
-  push('warehouse', 'Almacén de venta', local.scope.warehouseId, String(remoteScope.warehouseId ?? '—'));
-  push('local', 'Local de inventario', local.scope.localId, String(remoteScope.localId ?? '—'));
+  const label = (id: string) => (names[id] ? `${names[id]} (${id.slice(0, 8)})` : id);
+  push('warehouse', 'Almacén de venta', label(local.scope.warehouseId), remoteScope.warehouseId ? label(String(remoteScope.warehouseId)) : '—');
+  push('local', 'Local de inventario', label(local.scope.localId), remoteScope.localId ? label(String(remoteScope.localId)) : '—');
   push('tariffs', 'Tarifas permitidas', list(local.tariffIds), list((remote.tariffIds || []) as string[]));
   push('categories', 'Categorías permitidas', list(local.categories), list(((remote.categories || []) as string[]).map(value => String(value).toLowerCase())));
   return rows;
@@ -36,6 +38,7 @@ export type PresentationDiagnosticsPorts = {
   terminalId: string;
   cartLines?: CartItem[];
   sql?: PresentationSQL;
+  warehouseNames?: Record<string, string>;
   authority?: () => PresentationAuthority;
   auth?: () => PresentationAuth;
   fetchImpl?: typeof fetch;
@@ -47,7 +50,7 @@ export type PresentationDiagnosticsPorts = {
  * for the negotiate/masters probes, and reports the exact local and ERP values so a divergence
  * is visible instead of a single protocol code.
  */
-export const runPresentationDiagnostics = async (ports: PresentationDiagnosticsPorts): Promise<PresentationCheck[]> => {
+export const runPresentationDiagnostics = async (ports: PresentationDiagnosticsPorts): Promise<{ checks: PresentationCheck[]; erpWarehouseId: string | null; erpLocalId: string | null }> => {
   const rows: PresentationCheck[] = [];
   let auth: PresentationAuth | null = null;
   try {
@@ -55,7 +58,7 @@ export const runPresentationDiagnostics = async (ports: PresentationDiagnosticsP
     rows.push({ id: 'auth', label: 'Autorización de la caja', status: 'OK', detail: `terminal ${auth.scope.terminalId.slice(0, 8)} · dispositivo ${auth.scope.deviceId}` });
   } catch (error) {
     rows.push({ id: 'auth', label: 'Autorización de la caja', status: 'FAIL', detail: String((error as Error)?.message || error) });
-    return rows;
+    return { checks: rows, erpWarehouseId: null, erpLocalId: null };
   }
 
   let authority: PresentationAuthority;
@@ -64,10 +67,11 @@ export const runPresentationDiagnostics = async (ports: PresentationDiagnosticsP
     rows.push({ id: 'scope', label: 'Ámbito de venta de la caja', status: 'OK', detail: `almacén ${authority.scope.warehouseId.slice(0, 8)} · local ${authority.scope.localId.slice(0, 8)} · tarifas ${list(authority.tariffIds)} · categorías ${list(authority.categories)}` });
   } catch (error) {
     rows.push({ id: 'scope', label: 'Ámbito de venta de la caja', status: 'FAIL', detail: String((error as Error)?.message || error) });
-    return rows;
+    return { checks: rows, erpWarehouseId: null, erpLocalId: null };
   }
 
   let context: PresentationContext | null = null;
+  let erpScope: Record<string, string> = {};
   const fetchImpl = ports.fetchImpl || fetch;
   try {
     const response = await fetchImpl(`${authority.origin}${PRESENTATIONS_ROOT}/negotiate`, {
@@ -81,23 +85,24 @@ export const runPresentationDiagnostics = async (ports: PresentationDiagnosticsP
     const header = response.headers.get('X-Clic-Inventory-Presentations');
     if (response.status !== 200) {
       rows.push({ id: 'negotiate', label: 'Negociación con el ERP', status: 'FAIL', detail: `HTTP ${response.status}` });
-      return rows;
+      return { checks: rows, erpWarehouseId: null, erpLocalId: null };
     }
     rows.push({ id: 'negotiate', label: 'Negociación con el ERP', status: header === '1' ? 'OK' : 'FAIL', detail: header === '1' ? 'HTTP 200 con contrato de presentaciones' : 'Falta la cabecera X-Clic-Inventory-Presentations' });
     const body = await response.json();
     const remote = { ...body, origin: new URL(String(response.url || authority.origin)).origin };
-    const comparison = comparePresentationScope(authority, remote);
+    erpScope = (body?.scope || {}) as Record<string, string>;
+    const comparison = comparePresentationScope(authority, remote, ports.warehouseNames || {});
     rows.push(...comparison);
     const mismatched = comparison.filter(row => row.status === 'FAIL');
     if (mismatched.length) {
       rows.push({ id: 'context', label: 'Contexto del ERP', status: 'FAIL', detail: `no coincide en ${mismatched.map(row => row.label.toLowerCase()).join(', ')}` });
-      return rows;
+      return { checks: rows, erpWarehouseId: erpScope.warehouseId || null, erpLocalId: erpScope.localId || null };
     }
     context = await validatePresentationContext(body, authority);
     rows.push({ id: 'context', label: 'Contexto del ERP', status: 'OK', detail: `revisión ${context.contextRevision.slice(0, 12)}…` });
   } catch (error) {
     rows.push({ id: 'negotiate', label: 'Negociación con el ERP', status: 'FAIL', detail: String((error as Error)?.message || error) });
-    return rows;
+    return { checks: rows, erpWarehouseId: null, erpLocalId: null };
   }
 
   let store = ports.store;
@@ -109,7 +114,7 @@ export const runPresentationDiagnostics = async (ports: PresentationDiagnosticsP
       await store.migrate();
     } catch (error) {
       rows.push({ id: 'cache', label: 'Caché local', status: 'FAIL', detail: String((error as Error)?.message || error) });
-      return rows;
+      return { checks: rows, erpWarehouseId: erpScope.warehouseId || null, erpLocalId: erpScope.localId || null };
     }
   }
 
@@ -144,5 +149,5 @@ export const runPresentationDiagnostics = async (ports: PresentationDiagnosticsP
   } catch (error) {
     rows.push({ id: 'cache', label: 'Caché local', status: 'FAIL', detail: String((error as Error)?.message || error) });
   }
-  return rows;
+  return { checks: rows, erpWarehouseId: erpScope.warehouseId || null, erpLocalId: erpScope.localId || null };
 };

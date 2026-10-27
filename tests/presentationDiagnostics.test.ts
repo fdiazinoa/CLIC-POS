@@ -21,17 +21,17 @@ const remoteContext = (overrides: Record<string, any> = {}): any => ({
 });
 
 test('a warehouse divergence is reported with both values, not as a single code', () => {
-  const rows = comparePresentationScope(authority, remoteContext({ scope: { ...authority.scope, warehouseId: 'ALM_A01', localId: 'local-2' } }));
+  const rows = comparePresentationScope(authority, remoteContext({ scope: { ...authority.scope, warehouseId: 'ALM_A01', localId: 'local-2' } }), { ALM_A01: 'Almacén A01', ALM_CENTRAL: 'Almacén Central' });
   const warehouse = rows.find(row => row.id === 'warehouse')!;
   assert.equal(warehouse.status, 'FAIL');
-  assert.match(warehouse.detail, /ALM_CENTRAL/);
-  assert.match(warehouse.detail, /ALM_A01/);
+  assert.match(warehouse.detail, /Almacén Central/);
+  assert.match(warehouse.detail, /Almacén A01/);
   assert.equal(rows.find(row => row.id === 'local')!.status, 'FAIL');
   assert.equal(rows.find(row => row.id === 'categories')!.status, 'OK', 'categories compare case insensitively');
 });
 
 test('the sweep stops at the first broken stage and names it', async () => {
-  const rows = await runPresentationDiagnostics({
+  const { checks: rows } = await runPresentationDiagnostics({
     config: {} as any, terminalId: 'term', auth: () => auth, authority: () => authority,
     fetchImpl: async () => new Response(JSON.stringify(remoteContext({ scope: { ...authority.scope, warehouseId: 'ALM_A01' } })), { status: 200, headers: { 'X-Clic-Inventory-Presentations': '1' } }),
   });
@@ -42,7 +42,7 @@ test('the sweep stops at the first broken stage and names it', async () => {
 });
 
 test('a non-200 negotiation is reported with its HTTP status', async () => {
-  const rows = await runPresentationDiagnostics({
+  const { checks: rows } = await runPresentationDiagnostics({
     config: {} as any, terminalId: 'term', auth: () => auth, authority: () => authority,
     fetchImpl: async () => new Response('{}', { status: 503 }),
   });

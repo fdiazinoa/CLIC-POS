@@ -738,7 +738,7 @@ const Settings: React.FC<SettingsProps> = (props) => {
         return <FiscalDiagnostics onClose={() => setCurrentView('HOME')} users={props.users} roles={props.roles} currentUser={props.currentUser} />;
 
       case 'PRESENTATION_DIAGNOSTICS':
-        return <PresentationDiagnostics onClose={() => setCurrentView('HOME')} config={props.config} terminalId={props.terminalId || ''} cart={[]} />;
+        return <PresentationDiagnostics onClose={() => setCurrentView('HOME')} config={props.config} terminalId={props.terminalId || ''} cart={[]} onUpdateConfig={props.onUpdateConfig} />;
 
       case 'CUSTOMERS':
         return (
