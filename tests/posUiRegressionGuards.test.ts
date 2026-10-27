@@ -326,3 +326,18 @@ test('the silent flow leaves a real, clearable trace', () => {
   assert.doesNotMatch(src, /setSuccessToast\(`Almacén de venta actualizado/);
   assert.match(source('services/sync/BootReconciliation.ts'), /recordCheckoutTrace\('BOOT_RECONCILED'/);
 });
+
+test('el runbook de cierre fiscal describe las mismas salidas que la caja', async () => {
+  const { readFileSync } = await import('node:fs');
+  const runbook = readFileSync(new URL('../docs/FISCAL_INTENT_CLOSURE_RUNBOOK.md', import.meta.url), 'utf8');
+  const panel = source('components/FiscalDiagnostics.tsx');
+  // Las etiquetas del diagnóstico que el runbook manda mirar existen en el panel.
+  for (const label of ['Cobros ligados al intento', 'Retiro fiscal en el ERP', 'Intento fiscal guardado']) {
+    assert.ok(panel.includes(label), label);
+    assert.ok(runbook.includes(label), label);
+  }
+  // Y las dos salidas supervisadas están nombradas con el mismo criterio.
+  assert.match(runbook, /No apareció en el voucher/);
+  assert.match(runbook, /Confirmar con el voucher/);
+  assert.match(runbook, /POS_FISCAL_WORKFLOW_V2_ENABLED/);
+});
