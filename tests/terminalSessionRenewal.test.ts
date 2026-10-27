@@ -16,7 +16,6 @@ const install = (credentials: any) => {
   };
   setTerminalCredentialNativeWriterForTests(async () => undefined);
   setTerminalCredentialNativeReaderForTests(async () => null);
-  (globalThis as any).__renewIdentity = { erpSyncBaseUrl: base, tenantId: scope.tenantId, terminalId: scope.terminalId, deviceId: scope.deviceId, syncToken: credentials.syncToken };
   return values;
 };
 
@@ -35,7 +34,7 @@ const withRenew = async (respond: (url: string) => any) => {
     return respond(String(input));
   };
   return renewTerminalSession({
-    identity: () => (globalThis as any).__renewIdentity,
+    target: () => ({ kind: 'ERP_ACTIVE', baseUrl: base }),
     credentials: () => credentials() as any,
     fetchImpl: fetchImpl as any,
   });
