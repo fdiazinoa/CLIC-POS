@@ -2419,6 +2419,38 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
    }, [activeTable, parkedTickets, transactions, onUpdateCart, cart.length]);
 
+   // The ERP is the authority for the terminal's sale warehouse. When the local copy still points to
+   // another (authorized) warehouse — a stale config snapshot — adopt the ERP value automatically
+   // instead of leaving the cashier stuck at the checkout.
+   const warehouseAlignedRef = useRef('');
+   useEffect(() => {
+      if (!v3Operational || cart.length > 0) return;
+      const scope = activeTerminalConfig?.inventoryScope;
+      const rows = scope?.warehouses || [];
+      if (!rows.length) return;
+      const key = `${activeTerminalId}:${scope?.defaultSalesWarehouseId || ''}`;
+      if (warehouseAlignedRef.current === key) return;
+      warehouseAlignedRef.current = key;
+      let cancelled = false;
+      void (async () => {
+         try {
+            const { readErpSalesWarehouse, pickAuthorizedWarehouse } = await import('../services/inventoryPresentations/salesWarehouseAlignment');
+            const erp = await readErpSalesWarehouse().catch(() => null);
+            if (!erp || cancelled) return;
+            const match = pickAuthorizedWarehouse(rows, erp);
+            if (!match || !match.id || match.id === scope?.defaultSalesWarehouseId) return;
+            onUpdateConfig({
+               ...config,
+               terminals: config.terminals.map(row => String(row.id) === String(activeTerminalId)
+                  ? { ...row, config: { ...row.config, inventoryScope: { ...scope, defaultSalesWarehouseId: match.id!, defaultWarehouse: match as any } } }
+                  : row),
+            });
+            setSuccessToast(`Almacén de venta actualizado desde el ERP: ${match.name || match.code || match.id}.`);
+         } catch { /* the checkout still reports a precise message */ }
+      })();
+      return () => { cancelled = true; };
+   }, [v3Operational, cart.length, activeTerminalId, activeTerminalConfig, config, onUpdateConfig]);
+
    // Un ticket de mesa abierto ayer conserva sus precios pactados; solo la autoridad de venta
    // (inventario, tarifa y almacén del día) se mueve a la vigente para que el cobro valide.
    const reanchorRef = useRef<{ boundary?: unknown; fingerprint: string }>({ fingerprint: '' });

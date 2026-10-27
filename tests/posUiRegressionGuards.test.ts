@@ -203,3 +203,11 @@ test('a warehouse conflict names where the ticket articles actually live', () =>
   assert.equal(alternativeWarehouseForLines(lines, warehouses, ''), null);
   assert.match(pos(), /alternativeWarehouseForLines\(processedCart as any, warehouses, defaultSalesWarehouseId\)/);
 });
+
+test('the box follows the ERP sale warehouse instead of waiting for a manual step', () => {
+  const src = pos();
+  assert.match(src, /readErpSalesWarehouse\(\)/);
+  assert.match(src, /pickAuthorizedWarehouse\(rows, erp\)/);
+  assert.match(src, /Almacén de venta actualizado desde el ERP/);
+  assert.match(src, /cart\.length > 0\) return/);
+});
