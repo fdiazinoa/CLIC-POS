@@ -203,8 +203,8 @@ export function createFiscalWorkflowV2Client({readAuth=captureFiscalStatusBoundC
   }
   return {cancelled:false,note:`El intento ${id} requiere verificación en el ERP antes de continuar.`};
  },
- async diagnostics():Promise<{authStatus:string;scope:string;session:string;enabled:boolean;offlineReady:boolean;readiness:string;attempt:string;binding:string;lease:string;lastError:string}>{
-  const out={authStatus:'',scope:'',session:'',enabled:false,offlineReady:false,readiness:'',attempt:'SIN INTENTO',binding:'',lease:'SIN RESERVA',lastError:leasePreparationError||allocationPreparationError||''};
+ async diagnostics():Promise<{authStatus:string;scope:string;session:string;enabled:boolean;offlineReady:boolean;readiness:string;attempt:string;payments:string;binding:string;lease:string;lastError:string}>{
+  const out={authStatus:'',scope:'',session:'',enabled:false,offlineReady:false,readiness:'',attempt:'SIN INTENTO',payments:'SIN INTENTO',binding:'',lease:'SIN RESERVA',lastError:leasePreparationError||allocationPreparationError||''};
   try{const auth=readAuth();out.authStatus='OK';out.scope=`${auth.descriptor.storeId.slice(0,8)} · ${auth.descriptor.terminalId.slice(0,8)}`;const expiry=(auth as any).sessionExpiresAt;out.session=expiry?new Date(expiry).toLocaleString('es-DO'):'sin vencimiento';out.enabled=this.enabled();}catch(error){out.authStatus=error instanceof Error?error.message:String(error);return out;}
   try{const readiness=await this.offlineReadiness();out.readiness=`${readiness.reason}${readiness.code?` (${readiness.code})`:''}`;
    // A disabled optional feature is not an error when the local reserve is already ready.
@@ -213,6 +213,9 @@ export function createFiscalWorkflowV2Client({readAuth=captureFiscalStatusBoundC
   try{const native=store(),local=await readOfflineAuthority().catch(()=>null);
    if(local&&native){const key=fiscalWorkflowScopeKey(local.scope);const current=await native.currentCheckout(key).catch(()=>null);
     if(current)out.attempt=`${current.phase} · ${current.checkoutId.slice(0,8)} · ${(current.paymentIds||[]).length} pago(s)`;
+    if(current&&native.intentStates){const states=await native.intentStates(current.transactionId).catch(()=>[] as Array<{paymentId:string;status:string}>);
+     // A bound payment intent is why a local release refuses an attempt with a payment.
+     out.payments=states.length?states.map(state=>`${state.paymentId.slice(-6)}:${state.status}`).join(' · '):'sin intentos de pago';}
     out.binding=local?'autoridad local OK':'sin autoridad local';
     if(current)out.binding+=current.offlineBindingHash?(current.offlineBindingHash===local.bindingHash?' · misma vinculación':' · vinculación anterior'):' · sin vinculación offline';
     if(native.offlineLease){const lease=await native.offlineLease(local,true).catch(()=>null);if(lease)out.lease=`${lease.leaseId.slice(0,8)} · ${await native.offlineLeasePermitCount?.(lease.leaseId,true)||0} disponibles · hasta ${lease.validUntil}`;}

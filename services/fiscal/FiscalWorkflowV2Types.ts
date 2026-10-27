@@ -17,6 +17,8 @@ export interface FiscalWorkflowStore {
  allocationCommitPreconditions?(checkout:FiscalWorkflowCheckoutV2):Promise<Array<{collection:string;id:string;expected:string|null}>>;
  allocationDraft?(checkout:FiscalWorkflowCheckoutV2):Promise<{ncf:string;fiscalIssuance:import('../../types').FiscalIssuanceSnapshot;fiscalEnvironment:0|1|2}>;
 
+ /** Payment intents bound to an attempt transaction (why a local release may refuse). */
+ intentStates?(transactionId:string):Promise<Array<{paymentId:string;status:string}>>;
  checkoutForTable?(scopeKey:string,accountId:string,tableId:string):Promise<FiscalWorkflowCheckoutV2|null>;
  abandonedOfflineOperation?(scopeKey:string,operationId:string):Promise<FiscalWorkflowCheckoutV2|null>;
  abandonOfflinePrepared?(expected:FiscalWorkflowCheckoutV2):Promise<void>;

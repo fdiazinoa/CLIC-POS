@@ -46,6 +46,7 @@ import {
    dispatchAuditEventConfigUpdate,
 } from '../services/payments/paymentIntegrationAudit';
 import { paymentIntentService } from '../services/payments/PaymentIntentService';
+import { describeFiscalCheckoutFailure } from '../utils/fiscalCheckoutErrorMessages';
 import {
    CardOutcomeUnknownError,
    buildVoucherConfirmedEntry,
@@ -1326,7 +1327,9 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
             setFinalizeError(null);
          } else {
             const message = error instanceof Error ? error.message : '';
-            setFinalizeError(message ? `Error al finalizar: ${message}` : 'Ocurrió un error al finalizar. Intente nuevamente.');
+            // Fiscal tokens are translated for the cashier; the code stays in the trace.
+            setFinalizeError(describeFiscalCheckoutFailure(message)
+               || (message ? `Error al finalizar: ${message}` : 'Ocurrió un error al finalizar. Intente nuevamente.'));
          }
          setGatewayProgress(null);
       } finally {

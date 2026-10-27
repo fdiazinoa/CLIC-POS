@@ -118,6 +118,7 @@ export default function FiscalDiagnostics({ onClose, users = [], roles = [], cur
          `Sesión: ${snapshot.session || 'sin vencimiento'}`,
          `Reserva offline: ${snapshot.readiness} · lista: ${snapshot.offlineReady ? 'sí' : 'no'}`,
          `Intento fiscal: ${snapshot.attempt}`,
+         `Cobros ligados al intento: ${snapshot.payments || 'sin intentos de pago'}`,
          `Vinculación: ${snapshot.binding}`,
          `Autorización local: ${snapshot.lease}`,
          `Último error de preparación: ${snapshot.lastError || 'ninguno'}`,
@@ -132,6 +133,7 @@ export default function FiscalDiagnostics({ onClose, users = [], roles = [], cur
       { label: 'Reserva fiscal local', value: snapshot.readiness, ok: snapshot.offlineReady || /READY/.test(snapshot.readiness) },
       { label: 'Comprobantes locales', value: snapshot.lease, ok: !/SIN RESERVA/.test(snapshot.lease) },
       { label: 'Intento fiscal guardado', value: snapshot.attempt, ok: /NINGUNO|SIN INTENTO|COMMITTED|ACKNOWLEDGED/.test(snapshot.attempt) },
+      { label: 'Cobros ligados al intento', value: snapshot.payments || 'sin intentos de pago', ok: /sin intentos de pago|DECLINED/.test(snapshot.payments || 'sin intentos de pago') },
       { label: 'Vinculación', value: snapshot.binding || '—', ok: /misma vinculación|autoridad local OK/.test(snapshot.binding) },
       { label: 'Ámbito', value: snapshot.scope || '—', ok: Boolean(snapshot.scope) },
    ] : [];

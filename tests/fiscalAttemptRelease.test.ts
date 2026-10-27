@@ -217,3 +217,19 @@ test('a paid online attempt still requires the ERP and reports why', async () =>
     assert.equal((await f.store.currentCheckout(key))!.phase, 'EFFECT_POSSIBLE');
   } finally { f.sql.close(); }
 });
+
+test('el diagnóstico muestra los cobros que impiden liberar el intento', async () => {
+  const f = fixture();
+  try {
+    const op = await f.store.refillOperation(key);
+    await f.store.savePermits(key, op, [f.permit(10)]);
+    const checkout = await f.store.reserveCheckout(key, 'cart', undefined, '40000000-0000-4000-8000-000000000010', { requirePermit: true, authorityHash: 'a'.repeat(64) });
+    await f.store.markPaymentPossible(checkout.checkoutId, 'payment-ten');
+    f.sql.prepare(`INSERT INTO payment_intents_v2 (intent_id,idempotency_key,payment_id,provider,integration_id,amount,currency_code,status,created_at,updated_at,transaction_id)
+      VALUES ('intent-ten','key-ten','payment-ten','AZUL','azul-main',100,'DOP','RECONCILIATION_REQUIRED','2026-01-01T00:00:00.000Z','2026-01-01T00:00:00.000Z',?)`).run(checkout.transactionId);
+    const states = await f.store.intentStates(checkout.transactionId);
+    assert.deepEqual(states, [{ paymentId: 'payment-ten', status: 'RECONCILIATION_REQUIRED' }]);
+    // Un intento sin cobros ligados no reporta estados (la liberación local es posible).
+    assert.deepEqual(await f.store.intentStates('00000000-0000-4000-8000-00000000dead'), []);
+  } finally { f.sql.close(); }
+});
