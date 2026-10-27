@@ -2425,6 +2425,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (!v3Operational?.reanchor || cart.length === 0) return;
       const live = v3Operational.liveInventory;
       if (!live) return;
+      // Never restate the cart while a fiscal attempt is pending for this account: the attempt is
+      // bound to the current cart identity and must be settled or released first.
+      if (fiscalCheckoutRef.current) return;
       // The warehouse and tariff are part of the sale authority: after changing the box's
       // default warehouse a saved table is stale even when the inventory generation matches.
       const liveWarehouse = defaultSalesWarehouseId;

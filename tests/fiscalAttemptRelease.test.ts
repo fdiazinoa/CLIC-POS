@@ -174,3 +174,16 @@ test('a box is never freed when the attempt left a document', async () => {
     assert.equal(f.sql.prepare('SELECT count(*) n FROM pos_fiscal_attempt_releases_v1').get().n, 0);
   } finally { f.sql.close(); }
 });
+
+test('a paid attempt is only releasable offline, never for an online permit', async () => {
+  const f = fixture();
+  try {
+    const op = await f.store.refillOperation(key);
+    await f.store.savePermits(key, op, [f.permit(7)]);
+    const checkout = await f.store.reserveCheckout(key, 'cart', undefined, '40000000-0000-4000-8000-000000000007', { requirePermit: true, authorityHash: 'a'.repeat(64) });
+    await f.store.markPaymentPossible(checkout.checkoutId, 'payment-seven');
+    const current = (await f.store.currentCheckout(key))!;
+    await assert.rejects(f.store.abandonPreparedWithoutEffects!(current, { allowOfflineEffect: true }), /OFFLINE_FISCAL_ABANDON_NOT_SAFE/);
+    assert.equal((await f.store.currentCheckout(key))!.phase, 'EFFECT_POSSIBLE', 'an online permit keeps the ERP as the only authority');
+  } finally { f.sql.close(); }
+});

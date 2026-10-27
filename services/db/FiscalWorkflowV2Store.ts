@@ -71,10 +71,13 @@ export class NativeFiscalWorkflowV2Store implements FiscalWorkflowStore {
   await sql.run('DELETE FROM pos_fiscal_checkout_current_v2 WHERE scope_key=? AND checkout_id=?',[expected.scopeKey,expected.checkoutId],false);
   if(Number((await sql.query('SELECT changes() count')).values?.[0]?.count)!==1)throw Error('FISCAL_ATTEMPT_RELEASE_NOT_SAFE');
  });}
- async abandonPreparedWithoutEffects(expected:FiscalWorkflowCheckoutV2):Promise<void>{await this.transaction(async sql=>{
+ async abandonPreparedWithoutEffects(expected:FiscalWorkflowCheckoutV2,options:{allowOfflineEffect?:boolean}={}):Promise<void>{await this.transaction(async sql=>{
   const proof=(await sql.query('SELECT original_identity FROM pos_offline_fiscal_abandoned_v1 WHERE checkout_id=?',[expected.checkoutId])).values?.[0];if(proof){if(proof.original_identity!==JSON.stringify(expected))throw Error('OFFLINE_FISCAL_ABANDON_NOT_SAFE');return;}
   const row=(await sql.query('SELECT c.checkout_json FROM pos_fiscal_checkout_current_v2 p JOIN pos_fiscal_checkouts_v2 c ON c.checkout_id=p.checkout_id AND c.scope_key=p.scope_key WHERE p.scope_key=? AND p.checkout_id=?',[expected.scopeKey,expected.checkoutId])).values?.[0];
-  if(!row||row.checkout_json!==JSON.stringify(expected)||!expected.permit?.permitId||expected.phase!=='PREPARED'||!Array.isArray(expected.paymentIds)||expected.paymentIds.length)throw Error('OFFLINE_FISCAL_ABANDON_NOT_SAFE');
+  // An offline-lease attempt never leaves this device: its number is only consumed by the local
+  // financial commit, so a payment marked as possible without local effects is still discardable.
+  const offlineEffect=options.allowOfflineEffect===true&&expected.phase==='EFFECT_POSSIBLE'&&Boolean(expected.permit?.leaseId);
+  if(!row||row.checkout_json!==JSON.stringify(expected)||!expected.permit?.permitId||(expected.phase!=='PREPARED'&&!offlineEffect)||!Array.isArray(expected.paymentIds)||(expected.paymentIds.length&&!offlineEffect))throw Error('OFFLINE_FISCAL_ABANDON_NOT_SAFE');
   const permit=(await sql.query('SELECT * FROM pos_fiscal_permits_v2 WHERE permit_id=?',[expected.permit.permitId])).values?.[0];
   if(!permit||permit.state!=='RESERVED'||permit.checkout_id!==expected.checkoutId||permit.transaction_id!==expected.transactionId||permit.scope_key!==expected.scopeKey||permit.permit_json!==JSON.stringify(expected.permit))throw Error('OFFLINE_FISCAL_ABANDON_NOT_SAFE');
   await assertRetirementHasNoEffects(sql,{transactionId:expected.transactionId,checkoutId:expected.checkoutId,permitId:expected.permit.permitId},{targetedQueues:true});

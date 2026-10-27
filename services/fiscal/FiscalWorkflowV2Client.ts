@@ -175,12 +175,18 @@ export function createFiscalWorkflowV2Client({readAuth=captureFiscalStatusBoundC
    &&(!current.offlineBindingHash||sameBinding);
   if(sameTicket&&!expired)return {cancelled:false,note:`El intento ${id} corresponde a este mismo ticket.`};
   // An offline-lease attempt never leaves the terminal, so its own abandon proof is authoritative.
-  if(current.permit?.leaseId&&native.abandonOfflinePrepared){try{await native.abandonOfflinePrepared(current);return {cancelled:true,note:`Se descartó el intento fiscal ${id} sin efectos.`};}catch{/* fall through to the ERP answer */}}
+  if(current.permit?.leaseId&&native.abandonOfflinePrepared){try{await native.abandonOfflinePrepared(current);return {cancelled:true,note:`Se descartó el intento fiscal ${id} sin efectos.`};}catch{/* the paid offline attempt is released below */}}
   // A possible effect is only discardable by the ERP: it is the authority on the emitted document.
   if(current.permit?.permitId){
    const retired=await this.retireUnbornAttempt(options.operator);
    if(retired.retired)return {cancelled:true,note:retired.note};
    if(current.phase==='EFFECT_POSSIBLE'||/^FISCAL_WORKFLOW_/.test(retired.note.replace(/^.*?: /,''))||/comprobante|documento/i.test(retired.note))return {cancelled:false,note:retired.note};
+  }
+  // An offline-lease permit with a possible payment and no local effects can be released here:
+  // the number is only consumed by the local commit, which never happened (asserted below).
+  if(current.phase==='EFFECT_POSSIBLE'&&current.permit?.leaseId&&native.abandonPreparedWithoutEffects){
+   try{await native.abandonPreparedWithoutEffects(current,{allowOfflineEffect:true});return {cancelled:true,note:`Se descartó el intento fiscal offline ${id} sin comprobante emitido.`};}
+   catch(error){return {cancelled:false,note:`No se pudo descartar el intento ${id}: ${error instanceof Error?error.message:String(error)}`};}
   }
   // No permit and no effects: the local no-effects release is the last resort.
   if(current.phase==='PREPARED'&&native.abandonPreparedWithoutEffects){
