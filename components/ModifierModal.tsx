@@ -293,9 +293,9 @@ const ModifierModal: React.FC<ModifierModalProps> = ({
 
   const unitsOfGroup = useCallback((groupId: string) => Object.values(modifierUnitsRef.current[groupId] || {}).reduce((total, units) => total + Math.max(0, Number(units) || 0), 0), []);
   const groupCapacity = useCallback((group: ModifierGroup) => (group.selection_type === 'SINGLE' ? 1 : Number(group.max_select || 0)), []);
-  /** Only multiple groups can repeat an option, and only when the ERP accepts quantities. */
+  /** Multiple groups accept repeated options (an undeclared cap means "as many as the contract allows"). */
   const offersUnits = useCallback((group: ModifierGroup) => quantitiesEnabled()
-    && group.selection_type !== 'SINGLE' && Number(group.max_select || 0) > 1, []);
+    && group.selection_type !== 'SINGLE' && Number(group.max_select ?? 0) !== 1, []);
 
   const activeStep = steps[activeStepIndex];
   const handleOptionSelect = useCallback((optionId: string) => {
@@ -490,7 +490,7 @@ const ModifierModal: React.FC<ModifierModalProps> = ({
       const group = activeStep.group;
       const selectedIds = selectedModifiersByGroup[group.id] || [];
       const groupUnits = modifierUnits[group.id] || {};
-      const canRepeat = group.selection_type !== 'SINGLE' && Number(group.max_select || 0) > 1;
+      const canRepeat = quantitiesEnabled() && group.selection_type !== 'SINGLE' && Number(group.max_select ?? 0) !== 1;
       return group.modifiers.map(modifier => {
         const price = getModifierPrice(modifier);
         return {
@@ -556,7 +556,7 @@ const ModifierModal: React.FC<ModifierModalProps> = ({
     const multiple = activeStep.kind === 'modifier'
       ? activeStep.group.selection_type !== 'SINGLE'
       : maxSelect > 1;
-    const repeats = activeStep.kind === 'modifier' && maxSelect > 1;
+    const repeats = activeStep.kind === 'modifier' && Number(activeStep.group.max_select ?? 0) !== 1;
     return [
       minSelect > 0 ? 'Obligatorio' : 'Opcional',
       multiple ? 'Selección múltiple' : 'Selección única',

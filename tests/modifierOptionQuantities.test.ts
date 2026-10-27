@@ -83,7 +83,7 @@ test('el modal ofrece cantidad solo en grupos múltiples y la envía con la sele
   const { readFileSync } = await import('node:fs');
   const modal = readFileSync(new URL('../components/ModifierModal.tsx', import.meta.url), 'utf8');
   assert.match(modal, /const changeOptionUnits = useCallback/);
-  assert.match(modal, /selection_type !== 'SINGLE' && Number\(group\.max_select \|\| 0\) > 1/);
+  assert.match(modal, /selection_type !== 'SINGLE' && Number\(group\.max_select \?\? 0\) !== 1/);
   assert.match(modal, /\.\.\.\(unitsFor\(group\.id, modifier\.id\) > 1 \? \{ quantity: unitsFor\(group\.id, modifier\.id\) \} : \{\}\)/);
   assert.match(modal, /ids\.map\(id => \(unitsFor\(groupId, id\) > 1 \? \{ id, quantity: unitsFor\(groupId, id\) \} : id\)\)/);
   assert.match(modal, /getModifierPrice\(modifier\) \* \(units - free\)/);
@@ -116,4 +116,16 @@ test('la cantidad solo se ofrece cuando el ERP la anuncia', async () => {
   } finally {
     delete (globalThis as any).window;
   }
+});
+
+test('un grupo sin tope declarado también admite cantidad (el contrato permite hasta 100)', async () => {
+  const product: any = source({ max_select: null });
+  const rows = [row({ quantity: 3 })];
+  assert.equal(
+    validateV3RestaurantSelection(build(product, { extras: [{ id: 'q', quantity: 3 }] }, rows, 190), product),
+    190,
+  );
+  // Por encima de lo que el contrato admite no hay cantidad posible.
+  assert.throws(() =>
+    validateV3RestaurantSelection(build(product, { extras: [{ id: 'q', quantity: 101 }] }, rows, 190), product));
 });
