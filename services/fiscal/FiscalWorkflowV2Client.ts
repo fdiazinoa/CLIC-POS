@@ -145,7 +145,12 @@ export function createFiscalWorkflowV2Client({readAuth=captureFiscalStatusBoundC
   if(!current)return {released:false,note:'No hay un intento fiscal pendiente.'};
   const id=current.checkoutId.slice(0,8);
   if(!['PREPARED','EFFECT_POSSIBLE'].includes(current.phase))return {released:false,note:`El intento ${id} ya está cerrado (${current.phase}).`};
-  try{await native.releaseAttemptWithoutErp(current,actor);return {released:true,note:`Se liberó la caja del intento ${id}. Queda registrado quién lo autorizó; verifica en el ERP que no exista comprobante para ese intento.`};}
+  // A tender the provider declined cannot hold money: it is the only payment a release may carry.
+  const intents=native.intentStates?await native.intentStates(current.transactionId).catch(()=>[]):[];
+  const unsettled=intents.filter(intent=>String(intent.status||'').toUpperCase()!=='DECLINED');
+  if(unsettled.length)return {released:false,note:`El intento ${id} tiene cobros sin resolver (${unsettled.map(intent=>intent.status).join(', ')}). Confirma el voucher o regulariza el cobro antes de liberar.`};
+  const releasedPayments=intents.map(intent=>intent.paymentId);
+  try{await native.releaseAttemptWithoutErp(current,actor,{releasedPayments});return {released:true,note:`Se liberó la caja del intento ${id}. Queda registrado quién lo autorizó; verifica en el ERP que no exista comprobante para ese intento.`};}
   catch(error){return {released:false,note:`No se pudo liberar el intento ${id}: ${error instanceof Error?error.message:String(error)}`};}
  },
  /** Read-only snapshot of the fiscal attempt held by this terminal. Never mutates state. */

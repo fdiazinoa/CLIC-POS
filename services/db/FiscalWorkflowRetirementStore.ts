@@ -50,8 +50,13 @@ async function original(sql:SQL,scopeKey:string,proof:FiscalRetirementProof):Pro
 export const RETIREMENT_SCAN_LIMITS={rows:512,encodedBytes:1048576,totalBytes:8388608,decodedBytes:1048576,nodes:50000,depth:64} as const;
 const relevantCollections=['v3RestoredTicketSources','recoveryOriginals','recoveryStage','recoveryState'];
 /** All replay stores are decoded under the writer. Unknown/oversized evidence is a hold. */
-export async function assertRetirementHasNoEffects(sql:SQL,p:Pick<FiscalRetirementProof,'transactionId'|'checkoutId'|'permitId'>,options:{targetedQueues?:boolean}={}):Promise<void>{
- for(const table of ['payment_intents_v2','pos_fiscal_watch_v2','pos_fiscal_state_v2'])if(await one(sql,`SELECT 1 FROM ${table} WHERE transaction_id=? COLLATE NOCASE LIMIT 1`,[p.transactionId]))retirementFail();
+export async function assertRetirementHasNoEffects(sql:SQL,p:Pick<FiscalRetirementProof,'transactionId'|'checkoutId'|'permitId'>,options:{targetedQueues?:boolean;releasedPayments?:string[]}={}):Promise<void>{
+ // A tender the provider declined (or the cashier confirmed as "no apareció en el voucher") never moved money,
+ // so it cannot turn an unborn attempt into a possible effect. Anything else still blocks the release.
+ const released=new Set((options.releasedPayments||[]).map(id=>String(id||'').trim()).filter(Boolean));
+ const intents=(await sql.query('SELECT payment_id,status FROM payment_intents_v2 WHERE transaction_id=? COLLATE NOCASE',[p.transactionId])).values||[];
+ if(intents.length&&!(released.size&&intents.every(row=>released.has(String(row.payment_id||''))&&String(row.status||'').toUpperCase()==='DECLINED')))retirementFail();
+ for(const table of ['pos_fiscal_watch_v2','pos_fiscal_state_v2'])if(await one(sql,`SELECT 1 FROM ${table} WHERE transaction_id=? COLLATE NOCASE LIMIT 1`,[p.transactionId]))retirementFail();
  const ids=new Set([p.transactionId,p.checkoutId,p.permitId].map(uuidIdentity));let nodes=0,total=0;
  const inspect=(value:any,depth=0,wrappers=0,key=''):void=>{
   if(++nodes>RETIREMENT_SCAN_LIMITS.nodes||depth>RETIREMENT_SCAN_LIMITS.depth||wrappers>8)retirementFail();

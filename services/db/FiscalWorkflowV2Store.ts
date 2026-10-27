@@ -61,11 +61,11 @@ export class NativeFiscalWorkflowV2Store implements FiscalWorkflowStore {
   * unavailable (503 FISCAL_WORKFLOW_DISABLED) and the attempt provably has no effects here.
   * It only frees the current pointer and leaves an immutable audit row; the permit and the
   * checkout stay fenced, so the same identity can never be reused. */
- async releaseAttemptWithoutErp(expected:FiscalWorkflowCheckoutV2,actor:string):Promise<void>{await this.transaction(async sql=>{
+ async releaseAttemptWithoutErp(expected:FiscalWorkflowCheckoutV2,actor:string,options:{releasedPayments?:string[]}={}):Promise<void>{await this.transaction(async sql=>{
   const row=(await sql.query('SELECT c.checkout_json FROM pos_fiscal_checkout_current_v2 p JOIN pos_fiscal_checkouts_v2 c ON c.checkout_id=p.checkout_id AND c.scope_key=p.scope_key WHERE p.scope_key=? AND p.checkout_id=?',[expected.scopeKey,expected.checkoutId])).values?.[0];
   if(!row||row.checkout_json!==JSON.stringify(expected)||!expected.permit?.permitId||!['PREPARED','EFFECT_POSSIBLE'].includes(expected.phase))throw Error('FISCAL_ATTEMPT_RELEASE_NOT_SAFE');
   if(!expected.operationId||!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(expected.operationId))throw Error('FISCAL_ATTEMPT_RELEASE_NOT_SAFE');
-  await assertRetirementHasNoEffects(sql,{transactionId:expected.transactionId,checkoutId:expected.checkoutId,permitId:expected.permit.permitId},{targetedQueues:true});
+  await assertRetirementHasNoEffects(sql,{transactionId:expected.transactionId,checkoutId:expected.checkoutId,permitId:expected.permit.permitId},{targetedQueues:true,releasedPayments:options.releasedPayments});
   if(actor.length<2||actor.length>120)throw Error('FISCAL_ATTEMPT_RELEASE_NOT_SAFE');
   await sql.run("INSERT INTO pos_fiscal_attempt_releases_v1(checkout_id,transaction_id,permit_id,scope_key,operation_id,phase,actor,created_at,reason)VALUES(?,?,?,?,?,?,?,?,'ERP_RETIREMENT_UNAVAILABLE')",[expected.checkoutId,expected.transactionId,expected.permit.permitId,expected.scopeKey,expected.operationId,expected.phase,actor,new Date().toISOString()],false);
   await sql.run('DELETE FROM pos_fiscal_checkout_current_v2 WHERE scope_key=? AND checkout_id=?',[expected.scopeKey,expected.checkoutId],false);

@@ -233,3 +233,62 @@ test('el diagnóstico muestra los cobros que impiden liberar el intento', async 
     assert.deepEqual(await f.store.intentStates('00000000-0000-4000-8000-00000000dead'), []);
   } finally { f.sql.close(); }
 });
+
+test('un intento con un pago ya rechazado sí se puede liberar con autorización', async () => {
+  const f = fixture();
+  try {
+    const op = await f.store.refillOperation(key);
+    await f.store.savePermits(key, op, [f.permit(11)]);
+    const checkout = await f.store.reserveCheckout(key, 'cart', undefined, '40000000-0000-4000-8000-000000000011', { requirePermit: true, authorityHash: 'a'.repeat(64) });
+    await f.store.markPaymentPossible(checkout.checkoutId, 'payment-eleven');
+    f.sql.prepare(`INSERT INTO payment_intents_v2 (intent_id,idempotency_key,payment_id,provider,integration_id,amount,currency_code,status,created_at,updated_at,transaction_id)
+      VALUES ('intent-eleven','key-eleven','payment-eleven','AZUL','azul-main',100,'DOP','DECLINED','2026-01-01T00:00:00.000Z','2026-01-01T00:00:00.000Z',?)`).run(checkout.transactionId);
+    // El cobro quedó rechazado: no hay dinero posible detrás del intento fiscal.
+    const current = await f.store.currentCheckout(key);
+    await f.store.releaseAttemptWithoutErp(current!, 'supervisor (user-1)', { releasedPayments: ['payment-eleven'] });
+    assert.equal(await f.store.currentCheckout(key), null);
+  } finally { f.sql.close(); }
+});
+
+test('un intento con un cobro autorizado no se libera aunque se pida', async () => {
+  const f = fixture();
+  try {
+    const op = await f.store.refillOperation(key);
+    await f.store.savePermits(key, op, [f.permit(12)]);
+    const checkout = await f.store.reserveCheckout(key, 'cart', undefined, '40000000-0000-4000-8000-000000000012', { requirePermit: true, authorityHash: 'a'.repeat(64) });
+    await f.store.markPaymentPossible(checkout.checkoutId, 'payment-twelve');
+    f.sql.prepare(`INSERT INTO payment_intents_v2 (intent_id,idempotency_key,payment_id,provider,integration_id,amount,currency_code,status,created_at,updated_at,transaction_id)
+      VALUES ('intent-twelve','key-twelve','payment-twelve','AZUL','azul-main',100,'DOP','AUTHORIZED','2026-01-01T00:00:00.000Z','2026-01-01T00:00:00.000Z',?)`).run(checkout.transactionId);
+    const current = await f.store.currentCheckout(key);
+    await assert.rejects(
+      f.store.releaseAttemptWithoutErp(current!, 'supervisor (user-1)', { releasedPayments: ['payment-twelve'] }),
+      /FISCAL_ATTEMPT_RELEASE_NOT_SAFE|FISCAL_WORKFLOW_RETIREMENT_RECONCILIATION_REQUIRED/,
+    );
+    assert.ok(await f.store.currentCheckout(key));
+    // Y sin declarar el cobro tampoco se libera.
+    await assert.rejects(f.store.releaseAttemptWithoutErp(current!, 'supervisor (user-1)'), /FISCAL_ATTEMPT_RELEASE_NOT_SAFE|FISCAL_WORKFLOW_RETIREMENT_RECONCILIATION_REQUIRED/);
+  } finally { f.sql.close(); }
+});
+
+test('el break-glass solo libera cuando todos los cobros del intento están rechazados', async () => {
+  const f = fixture();
+  try {
+    const op = await f.store.refillOperation(key);
+    await f.store.savePermits(key, op, [f.permit(13)]);
+    const checkout = await f.store.reserveCheckout(key, 'cart', undefined, '40000000-0000-4000-8000-000000000013', { requirePermit: true, authorityHash: 'a'.repeat(64) });
+    await f.store.markPaymentPossible(checkout.checkoutId, 'payment-thirteen');
+    const insert = f.sql.prepare(`INSERT INTO payment_intents_v2 (intent_id,idempotency_key,payment_id,provider,integration_id,amount,currency_code,status,created_at,updated_at,transaction_id)
+      VALUES (?,?,?,'AZUL','azul-main',100,'DOP',?,'2026-01-01T00:00:00.000Z','2026-01-01T00:00:00.000Z',?)`);
+    insert.run('intent-13', 'key-13', 'payment-thirteen', 'RECONCILIATION_REQUIRED', checkout.transactionId);
+    const client = clientFor(f.store, () => ({ ok: false, json: async () => ({ code: 'FISCAL_WORKFLOW_DISABLED' }) }));
+    // Un cobro sin resolver bloquea la liberación aunque el ERP no pueda retirar.
+    const blocked = await client.releasePendingAttempt('supervisor (user-1)');
+    assert.equal(blocked.released, false);
+    assert.match(blocked.note, /cobros sin resolver/);
+    // Cuando el cobro queda rechazado (no apareció en el voucher) sí se libera.
+    f.sql.prepare("UPDATE payment_intents_v2 SET status='DECLINED' WHERE payment_id='payment-thirteen'").run();
+    const released = await client.releasePendingAttempt('supervisor (user-1)');
+    assert.equal(released.released, true, released.note);
+    assert.equal(await f.store.currentCheckout(key), null);
+  } finally { f.sql.close(); }
+});

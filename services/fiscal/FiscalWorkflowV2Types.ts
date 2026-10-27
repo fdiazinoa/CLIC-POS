@@ -23,7 +23,7 @@ export interface FiscalWorkflowStore {
  abandonedOfflineOperation?(scopeKey:string,operationId:string):Promise<FiscalWorkflowCheckoutV2|null>;
  abandonOfflinePrepared?(expected:FiscalWorkflowCheckoutV2):Promise<void>;
  abandonPreparedWithoutEffects?(expected:FiscalWorkflowCheckoutV2,options?:{allowOfflineEffect?:boolean}):Promise<void>;
- releaseAttemptWithoutErp?(expected:FiscalWorkflowCheckoutV2,actor:string):Promise<void>;
+ releaseAttemptWithoutErp?(expected:FiscalWorkflowCheckoutV2,actor:string,options?:{releasedPayments?:string[]}):Promise<void>;
  saveOfflineLeasePage?(lease:import('./OfflineFiscalLease').OfflineFiscalLease,permits:FiscalWorkflowPermitV2[],authority:import('./OfflineFiscalLease').OfflineFiscalLocalAuthority,serverTime:string):Promise<void>;
  offlineLease?(authority:import('./OfflineFiscalLease').OfflineFiscalLocalAuthority,allowExpired?:boolean,leaseId?:string):Promise<import('./OfflineFiscalLease').OfflineFiscalLease|null>;
  offlineLeaseReason?(authority:import('./OfflineFiscalLease').OfflineFiscalLocalAuthority):Promise<string>;
