@@ -84,6 +84,8 @@ interface PaymentModalProps {
    paymentOperationDate?: string;
    onFiscalAttemptClosed?: (record:FiscalRetirementRecord)=>void;
    offlineFiscalReserve?:{remaining:number;validUntil:string|null;remainingByType?:Record<string,number>}|null;
+   /** One line shown only when the amount to charge differs from the saved account (day tax change). */
+   amountChangeNotice?: string | null;
    beforePaymentEffects?: (paymentIds:string[],paymentMethods?:string[]) => Promise<PaymentEffectsFence>;
    validatePaymentAuthority?: () => Promise<void>;
    themeColor: string;
@@ -262,7 +264,7 @@ type GatewayProgressOverlayState = {
 
 import SupervisorAuthModal from './SupervisorAuthModal';
 
-const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receiptOnlyInitialTransaction, recoverCommittedReceipt, total, items, taxAmount = 0, currencySymbol, config, onClose, onConfirm, paymentOperationId, paymentOperationDate, onFiscalAttemptClosed, offlineFiscalReserve, beforePaymentEffects, validatePaymentAuthority, themeColor, customer, isDelinquent, users, isMaster, currentUser, roles, isRestaurantMode, isInstallmentPayment = false, paymentIdNamespace }) => {
+const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receiptOnlyInitialTransaction, recoverCommittedReceipt, total, items, taxAmount = 0, currencySymbol, config, onClose, onConfirm, paymentOperationId, paymentOperationDate, onFiscalAttemptClosed, offlineFiscalReserve, amountChangeNotice, beforePaymentEffects, validatePaymentAuthority, themeColor, customer, isDelinquent, users, isMaster, currentUser, roles, isRestaurantMode, isInstallmentPayment = false, paymentIdNamespace }) => {
    const receiptOnly=Boolean(receiptOnlyInitialTransaction);
    markRenderStart('PAYMENT_MODAL');
    useLayoutEffect(() => markRenderEnd('PAYMENT_MODAL'));
@@ -1461,6 +1463,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
                   <p className={`font-medium uppercase text-[10px] md:text-xs tracking-widest mb-1 ${isRefund ? 'text-rose-500' : 'text-gray-500'}`}>
                      {isRefund ? 'Monto a Devolver' : 'Total a Cobrar'}
                   </p>
+                  {amountChangeNotice&&<p role="status" className="mb-1 rounded-lg border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] font-bold text-amber-800">{amountChangeNotice}</p>}
                   {offlineFiscalReserve&&<p role="status" className="text-xs text-slate-500 mt-1">{offlineFiscalReserve.remainingByType?`Comprobantes locales: ${Object.entries(offlineFiscalReserve.remainingByType).map(([type,count])=>`${type}: ${count}`).join(' · ')}`:`Reserva fiscal local: ${offlineFiscalReserve.remaining} permisos disponibles · hasta ${new Date(offlineFiscalReserve.validUntil!).toLocaleString('es-DO')}`}</p>}
 
                   <h1 className={`text-3xl md:text-4xl lg:text-[2.7rem] font-black leading-none ${isRefund ? 'text-rose-600' : 'text-gray-900'}`}>

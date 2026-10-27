@@ -257,3 +257,12 @@ test('the account only speaks when the preparation could not finish', () => {
   assert.match(src, /setAccountHold\(null\);/);
   assert.doesNotMatch(src, /Lista para cobrar/);
 });
+
+test('a changed amount is stated in one line before issuing', () => {
+  const src = pos();
+  assert.match(src, /El total de la cuenta cambió con la configuración de hoy/);
+  assert.match(src, /amountChangeNotice=\{amountChangeNotice\}/);
+  const modal = source('components/PaymentModal.tsx');
+  assert.match(modal, /amountChangeNotice\?: string \| null/);
+  assert.match(modal, /\{amountChangeNotice&&<p role="status"/);
+});

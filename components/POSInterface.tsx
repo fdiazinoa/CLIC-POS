@@ -6985,6 +6985,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    // Stable identity for the payment entries of the current cart attempt: retrying a checkout must
    // not mint new payment ids, otherwise the retained checkout looks like another operation.
    const paymentAttemptRef=useRef<{cartKey:string;id:string}|null>(null);
+   // El importe de la cuenta guardada puede diferir del de hoy si cambió la tasa de impuesto:
+   // se avisa en una línea antes de emitir, nunca se cobra distinto en silencio.
+   const amountChangeNotice=(()=>{
+      if(!activeTable?.currentOrderId)return null;
+      const parked=parkedTickets.find(ticket=>String(ticket.id)===String(activeTable.currentOrderId)) as any;
+      const stored=Number(parked?.total);
+      const current=Number(amountDueNow);
+      if(!Number.isFinite(stored)||!Number.isFinite(current)||Math.abs(stored-current)<0.01)return null;
+      return `El total de la cuenta cambió con la configuración de hoy: era RD$${stored.toFixed(2)} y ahora es RD$${current.toFixed(2)}.`;
+   })();
    const fiscalCheckoutRef=useRef<FiscalWorkflowCheckoutV2|null>(null);
    const [offlineFiscalReserveInfo,setOfflineFiscalReserveInfo]=useState<{remaining:number;validUntil:string|null;remainingByType?:Record<string,number>}|null>(null);
    useEffect(()=>{
@@ -10132,7 +10142,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                setReturnToTableMapAfterPayment(false);
                onOpenTableMap();
             }
-         }} paymentOperationId={activeV3Reservation?.claimId} paymentIdNamespace={(():string=>{const cartKey=currentFiscalCheckoutCartIdentity();if(!paymentAttemptRef.current||paymentAttemptRef.current.cartKey!==cartKey)paymentAttemptRef.current={cartKey,id:stableCheckoutAttemptId(cartKey,()=>createUuid())};return paymentAttemptRef.current.id;})()} paymentOperationDate={activeV3Reservation?.invoiceDate} onFiscalAttemptClosed={onFiscalAttemptClosed} offlineFiscalReserve={offlineFiscalReserveInfo} beforePaymentEffects={beforeV3PaymentEffects} validatePaymentAuthority={assertCheckoutFiscalAuthority} onConfirm={handlePaymentConfirm} themeColor={config.themeColor} customer={effectiveSelectedCustomer} isDelinquent={isDelinquent} users={users} roles={roles} isMaster={isMaster} currentUser={currentUser} isRestaurantMode={isRestaurantMode} isInstallmentPayment={isIntermediateFractionPayment} />}
+         }} paymentOperationId={activeV3Reservation?.claimId} paymentIdNamespace={(():string=>{const cartKey=currentFiscalCheckoutCartIdentity();if(!paymentAttemptRef.current||paymentAttemptRef.current.cartKey!==cartKey)paymentAttemptRef.current={cartKey,id:stableCheckoutAttemptId(cartKey,()=>createUuid())};return paymentAttemptRef.current.id;})()} paymentOperationDate={activeV3Reservation?.invoiceDate} onFiscalAttemptClosed={onFiscalAttemptClosed} offlineFiscalReserve={offlineFiscalReserveInfo} amountChangeNotice={amountChangeNotice} beforePaymentEffects={beforeV3PaymentEffects} validatePaymentAuthority={assertCheckoutFiscalAuthority} onConfirm={handlePaymentConfirm} themeColor={config.themeColor} customer={effectiveSelectedCustomer} isDelinquent={isDelinquent} users={users} roles={roles} isMaster={isMaster} currentUser={currentUser} isRestaurantMode={isRestaurantMode} isInstallmentPayment={isIntermediateFractionPayment} />}
          {showLoyaltyModal && <LoyaltyScanModal onClose={() => setShowLoyaltyModal(false)} onScan={handleLoyaltyScan} />}
          {showTableSellerModal && activeTable && <TableSellerModal
             tableName={activeTable.nombre || activeTable.name || 'Mesa'}
