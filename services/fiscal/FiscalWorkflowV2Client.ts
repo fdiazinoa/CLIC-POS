@@ -203,9 +203,17 @@ export function createFiscalWorkflowV2Client({readAuth=captureFiscalStatusBoundC
   }
   return {cancelled:false,note:`El intento ${id} requiere verificación en el ERP antes de continuar.`};
  },
- async diagnostics():Promise<{authStatus:string;scope:string;session:string;enabled:boolean;offlineReady:boolean;readiness:string;attempt:string;payments:string;binding:string;lease:string;lastError:string}>{
-  const out={authStatus:'',scope:'',session:'',enabled:false,offlineReady:false,readiness:'',attempt:'SIN INTENTO',payments:'SIN INTENTO',binding:'',lease:'SIN RESERVA',lastError:leasePreparationError||allocationPreparationError||''};
+ /** What the deployed ERP says about its own fiscal workflow flags (read-only, no auth). */
+ async erpDeployment():Promise<{onlineRetirement:string;host:string}>{
+  try{const auth=readAuth();const response=await fetchImpl(`${auth.base}/version`,{method:'GET',headers:{Accept:'application/json'},credentials:'omit',cache:'no-store',redirect:'error'});
+   const data=await response.json().catch(()=>null);const flag=(data as any)?.fiscalWorkflowV2;
+   if(flag&&typeof flag.retirement==='boolean')return {onlineRetirement:flag.retirement?'activo':'desactivado',host:String(auth.base||'')};
+   return {onlineRetirement:'no informado',host:String(auth.base||'')};}catch{return {onlineRetirement:'sin respuesta',host:''};}
+ },
+ async diagnostics():Promise<{authStatus:string;scope:string;session:string;enabled:boolean;offlineReady:boolean;readiness:string;attempt:string;payments:string;erpRetirement:string;binding:string;lease:string;lastError:string}>{
+  const out={authStatus:'',scope:'',session:'',enabled:false,offlineReady:false,readiness:'',attempt:'SIN INTENTO',payments:'SIN INTENTO',erpRetirement:'sin consultar',binding:'',lease:'SIN RESERVA',lastError:leasePreparationError||allocationPreparationError||''};
   try{const auth=readAuth();out.authStatus='OK';out.scope=`${auth.descriptor.storeId.slice(0,8)} · ${auth.descriptor.terminalId.slice(0,8)}`;const expiry=(auth as any).sessionExpiresAt;out.session=expiry?new Date(expiry).toLocaleString('es-DO'):'sin vencimiento';out.enabled=this.enabled();}catch(error){out.authStatus=error instanceof Error?error.message:String(error);return out;}
+  try{const erp=await this.erpDeployment();out.erpRetirement=erp.onlineRetirement+(erp.onlineRetirement==='no informado'?' (versión del ERP anterior)':'');}catch{out.erpRetirement='sin respuesta';}
   try{const readiness=await this.offlineReadiness();out.readiness=`${readiness.reason}${readiness.code?` (${readiness.code})`:''}`;
    // A disabled optional feature is not an error when the local reserve is already ready.
    if(/READY/.test(readiness.reason))out.lastError='';}catch(error){out.readiness=error instanceof Error?error.message:String(error);}

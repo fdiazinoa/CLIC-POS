@@ -44,3 +44,15 @@ test('un mensaje ajeno se deja intacto', () => {
   assert.equal(describeFiscalCheckoutFailure(''), null);
   assert.equal(describeFiscalCheckoutFailure(null), null);
 });
+
+test('el diagnóstico fiscal nombra el retiro en línea del ERP', async () => {
+  const { readFileSync } = await import('node:fs');
+  const cliente = readFileSync(new URL('../services/fiscal/FiscalWorkflowV2Client.ts', import.meta.url), 'utf8');
+  const panel = readFileSync(new URL('../components/FiscalDiagnostics.tsx', import.meta.url), 'utf8');
+  // La caja consulta /version del ERP (sin autenticación) y publica el estado en el diagnóstico.
+  assert.match(cliente, /async erpDeployment\(\)/);
+  assert.match(cliente, /fiscalWorkflowV2/);
+  assert.match(cliente, /onlineRetirement:flag\.retirement\?'activo':'desactivado'/);
+  assert.match(cliente, /erpRetirement/);
+  assert.match(panel, /Retiro fiscal en el ERP/);
+});
