@@ -266,3 +266,9 @@ test('a changed amount is stated in one line before issuing', () => {
   assert.match(modal, /amountChangeNotice\?: string \| null/);
   assert.match(modal, /\{amountChangeNotice&&<p role="status"/);
 });
+
+test('the supervised release distinguishes a wrong PIN from a missing permission', () => {
+  const panel = source('components/FiscalDiagnostics.tsx');
+  assert.match(panel, /PIN incorrecto\./);
+  assert.match(panel, /no tiene permiso de cobro para autorizar la liberación/);
+});

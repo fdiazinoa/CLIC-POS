@@ -71,8 +71,16 @@ export default function FiscalDiagnostics({ onClose, users = [], roles = [], cur
       if (!candidates.length) { setNote('Ningún usuario de esta caja puede autorizar la liberación.'); return; }
       const pin = await clicPrompt('El ERP no puede confirmar el intento. Escribe el PIN de un supervisor para liberar la caja. Verifica antes en el ERP que ese intento no tenga comprobante; la liberación queda registrada con tu nombre.', { inputType: 'password', required: true });
       if (!pin) return;
-      const supervisor = candidates.find(user => String(user.pin) === String(pin).trim());
-      if (!supervisor) { setNote('PIN incorrecto o sin permiso de cobro.'); return; }
+      const entered = String(pin).trim();
+      const supervisor = candidates.find(user => String(user.pin) === entered);
+      if (!supervisor) {
+         // Distinguish a wrong PIN from a valid user without checkout permission.
+         const known = users.find(user => String(user.pin) === entered);
+         setNote(known
+            ? `El PIN corresponde a ${known.name}, que no tiene permiso de cobro para autorizar la liberación.`
+            : 'PIN incorrecto.');
+         return;
+      }
       const confirmed = await clicConfirm(`Se liberará la caja del intento pendiente con la autorización de ${supervisor.name}. El intento queda registrado y no se puede reutilizar. ¿Continuar?`);
       if (!confirmed) return;
       setBusy('release');
