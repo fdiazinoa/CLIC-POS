@@ -211,3 +211,14 @@ test('the box follows the ERP sale warehouse instead of waiting for a manual ste
   assert.match(src, /Almacén de venta actualizado desde el ERP/);
   assert.doesNotMatch(src, /if \(!v3Operational \|\| cart\.length > 0\) return;/);
 });
+
+test('a manual payment keeps its identity when the checkout is retried', () => {
+  const modal = source('components/PaymentModal.tsx');
+  assert.match(modal, /paymentIdNamespace\?: string/);
+  assert.match(modal, /id: \(paymentOperationId \|\| paymentIdNamespace\) \? `\$\{paymentOperationId \|\| paymentIdNamespace\}:payment:\$\{payments\.length\}`/);
+  const src = pos();
+  assert.match(src, /paymentAttemptRef=useRef<\{cartKey:string;id:string\}\|null>/);
+  assert.match(src, /paymentIdNamespace=\{\(\(\):string=>\{const cartKey=currentFiscalCheckoutCartIdentity\(\)/);
+  // The retained-operation semantics stay tied to the reservation claim only.
+  assert.match(src, /paymentOperationId=\{activeV3Reservation\?\.claimId\}/);
+});

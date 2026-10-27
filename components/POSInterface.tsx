@@ -6937,6 +6937,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const currentFiscalCheckoutCartIdentity=(fiscalSaleContext=offlineTableFiscalContextRef.current)=>JSON.stringify({...(fiscalSaleContext?{fiscalSaleContext}:{}),...(!activeTable&&cartTip>0?{serviceChargeAmount:cartTip,serviceType:effectiveOrderServiceType,serviceTaxPolicySnapshot:appliedServiceTaxPolicy,discountAmount,taxExempt:isSelectedCustomerTaxExempt}:{}),items:processedCart.map(({fiscalCheckoutOperationId:_op,...line}:any)=>line),customerId:effectiveSelectedCustomer?.id||null,fiscalType:requiredSaleFiscalType});
    const currentTrackingCartIdentity=()=>JSON.stringify({lineSources:processedCart.map(v3RetainedLineFingerprint),lineQuantities:processedCart.map(line=>line.quantity),customerId:effectiveSelectedCustomer?.id||null,fiscalType:requiredSaleFiscalType,tableId:activeTable?.id===undefined?null:String(activeTable.id),accountId:activeTable?.currentOrderId||null,total:amountDueNow,serviceChargeAmount:cartTip});
    const trackingLocalScope=():TrackingScope=>({...readFiscalWorkflowLocalScope(activeTerminalConfig,terminalId),warehouseId:defaultSalesWarehouseId!});
+   // Stable identity for the payment entries of the current cart attempt: retrying a checkout must
+   // not mint new payment ids, otherwise the retained checkout looks like another operation.
+   const paymentAttemptRef=useRef<{cartKey:string;id:string}|null>(null);
    const fiscalCheckoutRef=useRef<FiscalWorkflowCheckoutV2|null>(null);
    const [offlineFiscalReserveInfo,setOfflineFiscalReserveInfo]=useState<{remaining:number;validUntil:string|null;remainingByType?:Record<string,number>}|null>(null);
    useEffect(()=>{
@@ -10081,7 +10084,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                setReturnToTableMapAfterPayment(false);
                onOpenTableMap();
             }
-         }} paymentOperationId={activeV3Reservation?.claimId} paymentOperationDate={activeV3Reservation?.invoiceDate} onFiscalAttemptClosed={onFiscalAttemptClosed} offlineFiscalReserve={offlineFiscalReserveInfo} beforePaymentEffects={beforeV3PaymentEffects} validatePaymentAuthority={assertCheckoutFiscalAuthority} onConfirm={handlePaymentConfirm} themeColor={config.themeColor} customer={effectiveSelectedCustomer} isDelinquent={isDelinquent} users={users} roles={roles} isMaster={isMaster} currentUser={currentUser} isRestaurantMode={isRestaurantMode} isInstallmentPayment={isIntermediateFractionPayment} />}
+         }} paymentOperationId={activeV3Reservation?.claimId} paymentIdNamespace={(():string=>{const cartKey=currentFiscalCheckoutCartIdentity();if(!paymentAttemptRef.current||paymentAttemptRef.current.cartKey!==cartKey)paymentAttemptRef.current={cartKey,id:createUuid()};return paymentAttemptRef.current.id;})()} paymentOperationDate={activeV3Reservation?.invoiceDate} onFiscalAttemptClosed={onFiscalAttemptClosed} offlineFiscalReserve={offlineFiscalReserveInfo} beforePaymentEffects={beforeV3PaymentEffects} validatePaymentAuthority={assertCheckoutFiscalAuthority} onConfirm={handlePaymentConfirm} themeColor={config.themeColor} customer={effectiveSelectedCustomer} isDelinquent={isDelinquent} users={users} roles={roles} isMaster={isMaster} currentUser={currentUser} isRestaurantMode={isRestaurantMode} isInstallmentPayment={isIntermediateFractionPayment} />}
          {showLoyaltyModal && <LoyaltyScanModal onClose={() => setShowLoyaltyModal(false)} onScan={handleLoyaltyScan} />}
          {showTableSellerModal && activeTable && <TableSellerModal
             tableName={activeTable.nombre || activeTable.name || 'Mesa'}

@@ -79,6 +79,8 @@ interface PaymentModalProps {
    onClose: () => void;
    onConfirm: (payments: PaymentEntry[], voluntaryTip?: number) => Promise<Transaction | null>;
    paymentOperationId?: string;
+   /** Stable namespace for the payment ids of this checkout attempt (manual payments retry safely). */
+   paymentIdNamespace?: string;
    paymentOperationDate?: string;
    onFiscalAttemptClosed?: (record:FiscalRetirementRecord)=>void;
    offlineFiscalReserve?:{remaining:number;validUntil:string|null;remainingByType?:Record<string,number>}|null;
@@ -260,7 +262,7 @@ type GatewayProgressOverlayState = {
 
 import SupervisorAuthModal from './SupervisorAuthModal';
 
-const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receiptOnlyInitialTransaction, recoverCommittedReceipt, total, items, taxAmount = 0, currencySymbol, config, onClose, onConfirm, paymentOperationId, paymentOperationDate, onFiscalAttemptClosed, offlineFiscalReserve, beforePaymentEffects, validatePaymentAuthority, themeColor, customer, isDelinquent, users, isMaster, currentUser, roles, isRestaurantMode, isInstallmentPayment = false }) => {
+const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receiptOnlyInitialTransaction, recoverCommittedReceipt, total, items, taxAmount = 0, currencySymbol, config, onClose, onConfirm, paymentOperationId, paymentOperationDate, onFiscalAttemptClosed, offlineFiscalReserve, beforePaymentEffects, validatePaymentAuthority, themeColor, customer, isDelinquent, users, isMaster, currentUser, roles, isRestaurantMode, isInstallmentPayment = false, paymentIdNamespace }) => {
    const receiptOnly=Boolean(receiptOnlyInitialTransaction);
    markRenderStart('PAYMENT_MODAL');
    useLayoutEffect(() => markRenderEnd('PAYMENT_MODAL'));
@@ -580,7 +582,10 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
       valInSelectedCurrency: number,
       amountInBase: number
    ): PaymentEntry => ({
-      id: paymentOperationId ? `${paymentOperationId}:payment:${payments.length}` : createPaymentId(),
+      // A retry of the same checkout must reuse the same payment identity: a manual card or cash
+      // payment has no external effect, so a new random id would make the retained checkout look
+      // like another operation and block the sale.
+      id: (paymentOperationId || paymentIdNamespace) ? `${paymentOperationId || paymentIdNamespace}:payment:${payments.length}` : createPaymentId(),
       method: getMethodRuntimeType(method),
       methodId: method.id,
       sourceMethodType: method.definition?.sourceType,
