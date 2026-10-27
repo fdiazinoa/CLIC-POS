@@ -147,7 +147,7 @@ export default function FiscalDiagnostics({ onClose, users = [], roles = [], cur
       { label: 'Reserva fiscal local', value: snapshot.readiness, ok: snapshot.offlineReady || /READY/.test(snapshot.readiness) },
       { label: 'Comprobantes locales', value: snapshot.lease, ok: !/SIN RESERVA/.test(snapshot.lease) },
       { label: 'Intento fiscal guardado', value: snapshot.attempt, ok: /NINGUNO|SIN INTENTO|COMMITTED|ACKNOWLEDGED/.test(snapshot.attempt) },
-      { label: 'Cobros ligados al intento', value: snapshot.payments || 'sin intentos de pago', ok: /sin intentos de pago|DECLINED/.test(snapshot.payments || 'sin intentos de pago') },
+      { label: 'Cobros ligados al intento', value: snapshot.payments || 'sin intentos de pago', ok: /sin intento|DECLINED/i.test(snapshot.payments || 'sin intentos de pago') },
       { label: 'Retiro fiscal en el ERP', value: snapshot.erpRetirement || 'sin consultar', ok: snapshot.erpRetirement === 'activo' },
       { label: 'Vinculación', value: snapshot.binding || '—', ok: /misma vinculación|autoridad local OK/.test(snapshot.binding) },
       { label: 'Ámbito', value: snapshot.scope || '—', ok: Boolean(snapshot.scope) },

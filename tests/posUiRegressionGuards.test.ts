@@ -178,6 +178,12 @@ test('a transient failure never locks the cashier out of the next attempt', () =
   assert.doesNotMatch(modal, /&& intent\?\.status === 'AUTHORIZED'\) throw new Error\('PAYMENT_INTENT_RECONCILIATION_REQUIRED'\)/);
 });
 
+test('un intento sin cobros no se marca en rojo', () => {
+  const panel = source('components/FiscalDiagnostics.tsx');
+  // «SIN INTENTO» no es un problema: la fila de cobros no debe alarmar sin cobros.
+  assert.match(panel, /ok: \/sin intento\|DECLINED\/i\.test\(snapshot\.payments/);
+});
+
 test('el cierre de un intento con cobros pide autorización de supervisor al ERP', () => {
   const panel = source('components/FiscalDiagnostics.tsx');
   // Un intento con cobros ligados no se cierra sin PIN: el ERP exige operador autorizado.
