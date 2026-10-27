@@ -33,7 +33,17 @@ export const reconcileStaleFiscalCheckout = async (): Promise<string> => {
         await store.abandonOfflinePrepared(current).catch(() => undefined);
         note = ' Se descartó un cobro fiscal preparado de la vinculación anterior.';
       } else if (current.phase === 'EFFECT_POSSIBLE') {
-        note = ' Hay un cobro con efecto posible de la vinculación anterior: revísalo antes de cobrar.';
+        // The permit belongs to the old binding, so it can never complete here. The ERP retires it
+        // only when no document exists; otherwise it keeps blocking and reports why.
+        try {
+          const { fiscalWorkflowV2Client } = await import('../fiscal/FiscalWorkflowV2Client');
+          const retired = await fiscalWorkflowV2Client.retireStaleBindingCheckout();
+          note = retired
+            ? ' Se retiró un cobro con efecto posible de la vinculación anterior (el ERP confirmó que no emitió documento).'
+            : ' Hay un cobro con efecto posible de la vinculación anterior: revísalo antes de cobrar.';
+        } catch (error) {
+          note = ` Cobro con efecto posible de la vinculación anterior sin retirar: ${error instanceof Error ? error.message : String(error)}.`;
+        }
       }
       await store.revokeOfflineLeases?.('*').catch(() => undefined);
     }

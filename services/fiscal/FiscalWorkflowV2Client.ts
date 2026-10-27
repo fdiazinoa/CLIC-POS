@@ -210,6 +210,22 @@ export function createFiscalWorkflowV2Client({readAuth=captureFiscalStatusBoundC
    fail('FISCAL_WORKFLOW_PERMIT_REQUIRED');
   })().finally(()=>{refills.delete(refillKey);});refills.set(refillKey,refill);return refill;
  },
+ /** A checkout left by a previous terminal binding can never be completed here: its permit
+  *  belongs to the old authority. Retire it through the ERP (`retire-unborn`), which refuses
+  *  when a document already exists. */
+ async retireStaleBindingCheckout():Promise<FiscalRetirementRecord|null>{
+  const auth=readAuth(),epoch=generation;auth.assertCurrent();const native=store();if(!native?.retirement||!native.offlineLease)return null;
+  const key=fiscalWorkflowScopeKey(scopeOf(auth.descriptor)),current=await native.currentCheckout(key);auth.assertCurrent();
+  if(!current||!current.permit?.permitId||!current.offlineBindingHash)return null;
+  let local;try{local=await readOfflineAuthority();}catch{return null;}
+  if(current.offlineBindingHash===local.bindingHash)return null;
+  const saved=await native.retirement(key);if(saved&&saved.checkoutId===current.checkoutId)return saved;
+  const candidate:FiscalRetirementRecord={schemaVersion:1,commandId:createUuid(),checkoutId:current.checkoutId,
+   transactionId:current.transactionId,permitId:current.permit.permitId,originalOperationId:current.operationId,
+   cartIdentitySha256:await cartDigest(current.cartIdentity),reason:retirementReason,scopeKey:key,phase:'CLOSING',receipt:null};
+  if(epoch!==generation)fail('FISCAL_WORKFLOW_CONTEXT_CHANGED');
+  return this.retireExpiredCheckout(candidate);
+ },
  async retirementCandidate():Promise<FiscalRetirementRecord|null>{
   const auth=readAuth(),epoch=generation;auth.assertCurrent();const native=store();if(!native?.retirement)return null;
   const key=fiscalWorkflowScopeKey(scopeOf(auth.descriptor)),current=await native.currentCheckout(key);auth.assertCurrent();
