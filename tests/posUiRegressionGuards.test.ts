@@ -154,3 +154,11 @@ test('a table saved on another warehouse re-anchors and its presentations adopt 
   assert.match(reconcile, /PRICE_CHANGED/);
   assert.match(source('utils/presentationErrorMessages.ts'), /INVENTORY_PRESENTATION_SOURCE_REQUIRED_NOT_YET_SUPPORTED/);
 });
+
+test('an account restored after a master refresh is still settleable offline', () => {
+  const source_ = source('services/fiscal/OfflineTableFiscalCheckout.ts');
+  assert.match(source_, /export const tableAccountLineFingerprint/);
+  assert.match(source_, /tableAccountLineFingerprint\(originals\[0\]\)!==tableAccountLineFingerprint\(line\)/);
+  assert.doesNotMatch(source_, /v3RetainedLineFingerprint\(originals\[0\]\)/);
+  assert.match(source_, /OFFLINE_FISCAL_TABLE_SOURCE_CHANGED/);
+});
