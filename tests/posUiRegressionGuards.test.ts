@@ -363,3 +363,18 @@ test('un cobro que no responde no deja la caja sin poder facturar', () => {
   // Y el intento que sí termina limpia ambos.
   assert.match(src, /paymentFinalizationInFlightRef\.current = false;\s*\n\s*paymentFinalizationStartedAtRef\.current = 0;\s*\n\s*\}\s*\n\s*\};/);
 });
+
+test('el cobro no compite con la sincronización de fondo por la base', () => {
+  const adapter = source('services/db/adapters/CapacitorSQLiteAdapter.ts');
+  // Una escritura bloqueada falla y se reintenta; nunca espera para siempre.
+  assert.match(adapter, /PRAGMA busy_timeout = 5000;/);
+  assert.ok((adapter.match(/PRAGMA busy_timeout = 5000;/g) || []).length >= 2, 'al abrir y al inicializar el esquema');
+  // El rollback no puede quedarse callado: dos intentos y aviso si falla.
+  assert.match(adapter, /private async rollbackTransaction\(/);
+  assert.match(adapter, /for \(let attempt = 0; attempt < 2; attempt \+= 1\)/);
+  assert.match(adapter, /ROLLBACK failed; the connection may still be inside a transaction/);
+  assert.doesNotMatch(adapter, /execute\('ROLLBACK;',\s*false\)\.catch\(\(\)\s*=>\s*undefined\)/);
+  // La sonda del maestro no escribe mientras hay un cobro o una impresión en curso.
+  const candidate = source('services/sync/LargeMasterSyncV3Candidate.ts');
+  assert.match(candidate, /if \(isLargeMasterSyncV3OperationalWindowHeld\(\)\) return false;/);
+});
