@@ -159,7 +159,9 @@ export function createFiscalWorkflowV2Client({readAuth=captureFiscalStatusBoundC
   const sameBinding=Boolean(local&&current.offlineBindingHash===local.bindingHash);
   const expiresAt=Date.parse(current.permit?.expiresAt||'');
   const expired=Number.isFinite(expiresAt)&&expiresAt<=Date.now();
-  if(sameBinding&&sameOperation&&!expired&&(!options.cartIdentity||options.cartIdentity===current.cartIdentity))return {cancelled:false,note:`El intento ${id} corresponde a este mismo ticket.`};
+  const sameTicket=sameOperation&&(!options.cartIdentity||options.cartIdentity===current.cartIdentity)
+   &&(!current.offlineBindingHash||sameBinding);
+  if(sameTicket&&!expired)return {cancelled:false,note:`El intento ${id} corresponde a este mismo ticket.`};
   // An offline-lease attempt never leaves the terminal, so its own abandon proof is authoritative.
   if(current.permit?.leaseId&&native.abandonOfflinePrepared){try{await native.abandonOfflinePrepared(current);return {cancelled:true,note:`Se descartó el intento fiscal ${id} sin efectos.`};}catch{/* fall through to the ERP answer */}}
   // A possible effect is only discardable by the ERP: it is the authority on the emitted document.

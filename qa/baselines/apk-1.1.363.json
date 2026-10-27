@@ -66,6 +66,7 @@
     "tests/syncMetrics.test.ts",
     "tests/syncTriggerCoordinator.test.ts",
     "tests/tableAccountModalLockContract.test.ts",
-    "tests/terminalUpgradePersistence.test.ts"
+    "tests/terminalUpgradePersistence.test.ts",
+    "tests/fiscalAttemptRelease.test.ts"
   ]
 }
