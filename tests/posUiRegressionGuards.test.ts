@@ -84,11 +84,13 @@ test('a retained fiscal attempt that can never reconcile is released instead of 
   assert.match(client, /async cancelUnreconcilableAttempt\(/);
   assert.match(client, /async pendingCheckoutInfo\(/);
   assert.match(client, /async diagnostics\(/);
-  // An attempt with a possible effect is only discardable by the ERP; the local release
-  // stays restricted to a PREPARED attempt without payments.
+  // A paid online attempt still keeps the ERP as the only authority on the document.
   assert.match(client, /async retireUnbornAttempt\(/);
-  assert.match(client, /if\(current\.phase==='EFFECT_POSSIBLE'\|\|/);
-  assert.match(client, /current\.phase==='PREPARED'&&native\.abandonPreparedWithoutEffects/);
+  assert.match(client, /current\.phase==='EFFECT_POSSIBLE'\)return \{cancelled:false,note:`\$\{retired\.note\} El intento ya tiene un pago/);
+  // Local-first: an offline permit (even with a possible payment) and a prepared online permit are
+  // released here; only a paid online attempt keeps the ERP as the authority.
+  assert.match(client, /current\.phase==='EFFECT_POSSIBLE'&&current\.permit\?\.leaseId&&native\.abandonPreparedWithoutEffects/);
+  assert.match(client, /current\.phase==='PREPARED'&&native\.abandonPreparedWithoutEffects&&current\.permit\?\.permitId/);
   assert.match(source('services/db/FiscalWorkflowRetirementStore.ts'), /export async function closeUnbornRetirement\(/);
   // The escape hatch exists only for an ERP that cannot reconcile, with an audited supervisor.
   assert.match(source('components/FiscalDiagnostics.tsx'), /Liberar con autorización/);

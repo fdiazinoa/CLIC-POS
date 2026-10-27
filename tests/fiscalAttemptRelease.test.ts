@@ -187,3 +187,33 @@ test('a paid attempt is only releasable offline, never for an online permit', as
     assert.equal((await f.store.currentCheckout(key))!.phase, 'EFFECT_POSSIBLE', 'an online permit keeps the ERP as the only authority');
   } finally { f.sql.close(); }
 });
+
+test('an online prepared attempt is released locally even when the ERP retirement is disabled', async () => {
+  const f = fixture();
+  try {
+    const op = await f.store.refillOperation(key);
+    await f.store.savePermits(key, op, [f.permit(8)]);
+    const checkout = await f.store.reserveCheckout(key, 'cart', undefined, '40000000-0000-4000-8000-000000000008', { requirePermit: true, authorityHash: 'a'.repeat(64) });
+    const client = clientFor(f.store, () => ({ ok: false, json: async () => ({ code: 'FISCAL_WORKFLOW_DISABLED' }) }));
+    const outcome = await client.cancelUnreconcilableAttempt({ tags: ['40000000-0000-4000-8000-000000000008'], cartIdentity: 'another-cart' });
+    assert.equal(outcome.cancelled, true, outcome.note);
+    assert.match(outcome.note, /sin efectos/);
+    assert.equal(await f.store.currentCheckout(key), null);
+  } finally { f.sql.close(); }
+});
+
+test('a paid online attempt still requires the ERP and reports why', async () => {
+  const f = fixture();
+  try {
+    const op = await f.store.refillOperation(key);
+    await f.store.savePermits(key, op, [f.permit(9)]);
+    const checkout = await f.store.reserveCheckout(key, 'cart', undefined, '40000000-0000-4000-8000-000000000009', { requirePermit: true, authorityHash: 'a'.repeat(64) });
+    const client = clientFor(f.store, () => ({ ok: false, json: async () => ({ code: 'FISCAL_WORKFLOW_DISABLED' }) }));
+    await f.store.markPaymentPossible(checkout.checkoutId, 'payment-nine');
+    const outcome = await client.cancelUnreconcilableAttempt({ tags: ['40000000-0000-4000-8000-000000000009'], cartIdentity: 'another-cart' });
+    assert.equal(outcome.cancelled, false);
+    assert.match(outcome.note, /FISCAL_WORKFLOW_DISABLED/);
+    assert.match(outcome.note, /ya tiene un pago/);
+    assert.equal((await f.store.currentCheckout(key))!.phase, 'EFFECT_POSSIBLE');
+  } finally { f.sql.close(); }
+});

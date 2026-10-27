@@ -174,22 +174,30 @@ export function createFiscalWorkflowV2Client({readAuth=captureFiscalStatusBoundC
   const sameTicket=sameOperation&&(!options.cartIdentity||options.cartIdentity===current.cartIdentity)
    &&(!current.offlineBindingHash||sameBinding);
   if(sameTicket&&!expired)return {cancelled:false,note:`El intento ${id} corresponde a este mismo ticket.`};
-  // An offline-lease attempt never leaves the terminal, so its own abandon proof is authoritative.
-  if(current.permit?.leaseId&&native.abandonOfflinePrepared){try{await native.abandonOfflinePrepared(current);return {cancelled:true,note:`Se descartó el intento fiscal ${id} sin efectos.`};}catch{/* the paid offline attempt is released below */}}
-  // A possible effect is only discardable by the ERP: it is the authority on the emitted document.
-  if(current.permit?.permitId){
-   const retired=await this.retireUnbornAttempt(options.operator);
-   if(retired.retired)return {cancelled:true,note:retired.note};
-   if(current.phase==='EFFECT_POSSIBLE'||/^FISCAL_WORKFLOW_/.test(retired.note.replace(/^.*?: /,''))||/comprobante|documento/i.test(retired.note))return {cancelled:false,note:retired.note};
-  }
-  // An offline-lease permit with a possible payment and no local effects can be released here:
-  // the number is only consumed by the local commit, which never happened (asserted below).
+  // 1. An offline-lease attempt never leaves the terminal: its own abandon proof is authoritative,
+  //    even with a payment marked as possible, because the number is consumed by the local commit.
+  if(current.permit?.leaseId&&native.abandonOfflinePrepared){
+   try{await native.abandonOfflinePrepared(current);return {cancelled:true,note:`Se descartó el intento fiscal ${id} sin efectos.`};}catch{/* the paid offline release below */}}
   if(current.phase==='EFFECT_POSSIBLE'&&current.permit?.leaseId&&native.abandonPreparedWithoutEffects){
    try{await native.abandonPreparedWithoutEffects(current,{allowOfflineEffect:true});return {cancelled:true,note:`Se descartó el intento fiscal offline ${id} sin comprobante emitido.`};}
    catch(error){return {cancelled:false,note:`No se pudo descartar el intento ${id}: ${error instanceof Error?error.message:String(error)}`};}
   }
-  // No permit and no effects: the local no-effects release is the last resort.
-  if(current.phase==='PREPARED'&&native.abandonPreparedWithoutEffects){
+  // 2. An online PREPARED attempt with no effects is provably local too: release it here instead of
+  //    depending on an ERP service that may be disabled.
+  if(current.phase==='PREPARED'&&native.abandonPreparedWithoutEffects&&current.permit?.permitId){
+   try{await native.abandonPreparedWithoutEffects(current);return {cancelled:true,note:`Se descartó el intento fiscal ${id} sin efectos.`};}catch{/* the ERP keeps the last word */}}
+  // 3. A paid online attempt is only discardable by the ERP: it is the authority on the document.
+  if(current.permit?.permitId){
+   const retired=await this.retireUnbornAttempt(options.operator);
+   if(retired.retired)return {cancelled:true,note:retired.note};
+   const disabled=/FISCAL_WORKFLOW_(DISABLED|UNAVAILABLE)|HTTP_5\d\d/i.test(retired.note);
+   const documented=/COMPROBANTE|DOCUMENT|EFFECT|ISSUED|BORN|EMITIDO/i.test(retired.note);
+   if(current.phase==='EFFECT_POSSIBLE')return {cancelled:false,note:`${retired.note} El intento ya tiene un pago: no se puede descartar sin la confirmación del ERP.`};
+   if(documented&&!disabled)return {cancelled:false,note:retired.note};
+   return {cancelled:false,note:retired.note};
+  }
+  // 4. No permit at all and no effects.
+  if(native.abandonPreparedWithoutEffects){
    try{await native.abandonPreparedWithoutEffects(current);return {cancelled:true,note:`Se descartó el intento fiscal ${id} sin efectos.`};}
    catch(error){return {cancelled:false,note:`No se pudo descartar el intento ${id}: ${error instanceof Error?error.message:String(error)}`};}
   }
