@@ -272,3 +272,14 @@ test('the supervised release distinguishes a wrong PIN from a missing permission
   assert.match(panel, /PIN incorrecto\./);
   assert.match(panel, /no tiene permiso de cobro para autorizar la liberación/);
 });
+
+test('the silent flow leaves a real, clearable trace', () => {
+  const src = pos();
+  assert.match(src, /recordCheckoutTrace\('WAREHOUSE_ALIGNED'/);
+  assert.match(src, /recordCheckoutTrace\('CART_REANCHORED'/);
+  assert.match(src, /recordCheckoutTrace\('ATTEMPT_RELEASED'/);
+  assert.match(src, /recordCheckoutTrace\('AMOUNT_CHANGED'/);
+  // Nothing of this is shown to the cashier.
+  assert.doesNotMatch(src, /setSuccessToast\(`Almacén de venta actualizado/);
+  assert.match(source('services/sync/BootReconciliation.ts'), /recordCheckoutTrace\('BOOT_RECONCILED'/);
+});

@@ -1,4 +1,5 @@
 import { needsTerminalReauthorization, reauthorizeTerminal, reconcileStaleFiscalCheckout } from './TerminalReauthorizationService';
+import { recordCheckoutTrace } from '../audit/CheckoutTrace';
 
 export type BootReconciliationResult = { notes: string[]; reauthorized: boolean };
 
@@ -23,5 +24,6 @@ export const runBootReconciliation = async (): Promise<BootReconciliationResult>
   } catch (error) {
     notes.push(`Reautorización: ${error instanceof Error ? error.message : String(error)}`);
   }
+  if (notes.length) recordCheckoutTrace('BOOT_RECONCILED', notes.join(' · '));
   return { notes, reauthorized };
 };

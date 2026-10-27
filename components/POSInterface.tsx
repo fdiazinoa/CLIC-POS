@@ -2,6 +2,7 @@ import { describeV3Error } from '../utils/v3ErrorMessages';
 import { describePresentationError } from '../utils/presentationErrorMessages';
 import { alternativeWarehouseForLines } from '../utils/warehouseScope';
 import { stableCheckoutAttemptId } from '../utils/checkoutAttemptIdentity';
+import { recordCheckoutTrace } from '../services/audit/CheckoutTrace';
 import { scopedWarehousesForStore } from '../utils/warehouseScope';
 import {v3RetainedLineFingerprint} from '../services/sync/LargeMasterSyncV3StockAuthority';
 import {assertTrackingOperationReceipt,type TrackingScope} from '../services/db/TrackingCheckoutOperation';
@@ -2441,6 +2442,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (outcome?.cancelled) {
          fiscalCheckoutRef.current = null;
          fiscalCheckoutOperationRef.current = null;
+         recordCheckoutTrace('ATTEMPT_RELEASED', outcome.note);
+      } else if (outcome?.note) {
+         recordCheckoutTrace('ATTEMPT_HELD', outcome.note);
       }
       return outcome || { cancelled: false, note: '' };
    };
@@ -2492,7 +2496,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   ? { ...row, config: { ...row.config, inventoryScope: { ...scope, defaultSalesWarehouseId: match.id!, defaultWarehouse: match as any } } }
                   : row),
             });
-            console.info('[checkout] almacén de venta alineado con el ERP:', match.name || match.code || match.id);
+            recordCheckoutTrace('WAREHOUSE_ALIGNED', `Almacén de venta alineado con el ERP: ${match.name || match.code || match.id}`);
          } catch { /* the checkout still reports a precise message */ }
       })();
       return () => { cancelled = true; };
@@ -2574,7 +2578,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          }
          if (cancelled) return;
          onUpdateCart(next);
-         console.info('[checkout] ticket reanclado al inventario vigente sin cambiar precios');
+         recordCheckoutTrace('CART_REANCHORED', 'Ticket reanclado al inventario vigente sin cambiar precios');
       }).catch(() => undefined);
       return () => { cancelled = true; };
    }, [cart, v3Operational, onUpdateCart]);
@@ -6993,7 +6997,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const stored=Number(parked?.total);
       const current=Number(amountDueNow);
       if(!Number.isFinite(stored)||!Number.isFinite(current)||Math.abs(stored-current)<0.01)return null;
-      return `El total de la cuenta cambió con la configuración de hoy: era RD$${stored.toFixed(2)} y ahora es RD$${current.toFixed(2)}.`;
+      const notice=`El total de la cuenta cambió con la configuración de hoy: era RD$${stored.toFixed(2)} y ahora es RD$${current.toFixed(2)}.`;
+      recordCheckoutTrace('AMOUNT_CHANGED', notice);
+      return notice;
    })();
    const fiscalCheckoutRef=useRef<FiscalWorkflowCheckoutV2|null>(null);
    const [offlineFiscalReserveInfo,setOfflineFiscalReserveInfo]=useState<{remaining:number;validUntil:string|null;remainingByType?:Record<string,number>}|null>(null);

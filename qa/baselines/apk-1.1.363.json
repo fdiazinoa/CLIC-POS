@@ -78,6 +78,8 @@
     "tests/v3LineSourceIdentity.test.ts",
     "tests/salesWarehouseAlignment.test.ts",
     "tests/checkoutAttemptIdentity.test.ts",
-    "tests/bootReconciliation.test.ts"
+    "tests/bootReconciliation.test.ts",
+    "tests/checkoutTrace.test.ts",
+    "tests/fiscalWorkflowCheckoutReplay.test.ts"
   ]
 }
