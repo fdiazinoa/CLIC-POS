@@ -182,6 +182,9 @@ test('el cierre de un intento con cobros pide autorización de supervisor al ERP
   const panel = source('components/FiscalDiagnostics.tsx');
   // Un intento con cobros ligados no se cierra sin PIN: el ERP exige operador autorizado.
   assert.match(panel, /const hasPayments = !\/sin intentos de pago\/i\.test\(snapshot\?\.payments/);
+  // La liberación de emergencia se ofrece salvo que el ERP apunte a un documento emitido.
+  assert.match(panel, /const documented = \/COMPROBANTE\|DOCUMENT\|EFFECT\|ISSUED\|BORN\|EMITIDO\/i\.test\(outcome\.note\)/);
+  assert.match(panel, /setReleaseOffered\(!outcome\.cancelled && !documented\)/);
   assert.match(panel, /const operator = hasPayments \? await requestSupervisor\(\) : null;/);
   assert.match(panel, /cancelUnreconcilableAttempt\(operator \? \{ operator \} : \{\}\)/);
   assert.match(panel, /permissions\.includes\('POS_CHECKOUT' as any\)/);

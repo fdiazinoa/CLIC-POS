@@ -80,7 +80,10 @@ export default function FiscalDiagnostics({ onClose, users = [], roles = [], cur
          if (hasPayments && !operator) { setBusy(null); return; }
          const outcome = await fiscalWorkflowV2Client.cancelUnreconcilableAttempt(operator ? { operator } : {});
          setNote(outcome.note);
-         setReleaseOffered(!outcome.cancelled && /FISCAL_WORKFLOW_(DISABLED|UNAVAILABLE)/.test(outcome.note));
+         // The ERP could not confirm the retirement and nothing points to an issued document:
+         // the supervised release may still be the way out (the client re-checks for money).
+         const documented = /COMPROBANTE|DOCUMENT|EFFECT|ISSUED|BORN|EMITIDO/i.test(outcome.note);
+         setReleaseOffered(!outcome.cancelled && !documented);
          setSnapshot(await readSnapshot());
       } catch (error) { setNote(error instanceof Error ? error.message : String(error)); }
       finally { setBusy(null); }
