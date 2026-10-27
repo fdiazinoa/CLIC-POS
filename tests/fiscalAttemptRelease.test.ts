@@ -292,3 +292,21 @@ test('el break-glass solo libera cuando todos los cobros del intento están rech
     assert.equal(await f.store.currentCheckout(key), null);
   } finally { f.sql.close(); }
 });
+
+test('una liberación offline pagada se detecta sin lanzar NOT_SAFE al reusar su operación', async () => {
+  const f = fixture();
+  try {
+    const checkoutId = '40000000-0000-4000-8000-000000000014';
+    const opId = '50000000-0000-4000-8000-000000000014';
+    const txnId = '60000000-0000-4000-8000-000000000014';
+    const permit: any = { schemaVersion: 2, permitId: '70000000-0000-4000-8000-000000000014', transactionId: txnId, nonce: 'n', createdAt: '2026-01-01T00:00:00Z', expiresAt: '2099-01-01T00:00:00Z', scope, issuerRnc: '101010101', environment: 0, authorityHash: 'a'.repeat(64), operationKind: 'SALE', leaseId: 'lease-14' };
+    const checkout: any = { checkoutId, operationId: opId, transactionId: txnId, scopeKey: key, cartIdentity: 'cart', permit, phase: 'EFFECT_POSSIBLE', paymentIds: ['payment-14'], offlineBindingHash: 'b'.repeat(64), offlineSaleDate: '2026-01-01T00:00:00Z', offlineEffectAt: '2026-01-01T00:00:00Z' };
+    f.sql.prepare(`INSERT INTO pos_fiscal_checkouts_v2(checkout_id,transaction_id,scope_key,cart_identity,permit_id,checkout_json,phase) VALUES (?,?,?,?,?,?,'EFFECT_POSSIBLE')`).run(checkoutId, txnId, key, 'cart', permit.permitId, JSON.stringify(checkout));
+    f.sql.prepare(`INSERT INTO pos_offline_fiscal_abandoned_v1(checkout_id,transaction_id,permit_id,scope_key,operation_id,original_identity,created_at,reason) VALUES (?,?,?,?,?,?,'2026-01-01T00:00:00Z','PREPARED_WITHOUT_EFFECTS')`).run(checkoutId, txnId, permit.permitId, key, opId, JSON.stringify(checkout));
+    // La operación liberada se detecta para no reusarla, sin importar que llegó a EFFECT_POSSIBLE.
+    const recovered = await f.store.abandonedOfflineOperation(key, opId);
+    assert.ok(recovered, 'la operación liberada se detecta');
+    assert.equal(recovered!.operationId, opId);
+    assert.equal(recovered!.phase, 'EFFECT_POSSIBLE');
+  } finally { f.sql.close(); }
+});
