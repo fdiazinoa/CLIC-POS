@@ -88,3 +88,32 @@ test('el modal ofrece cantidad solo en grupos múltiples y la envía con la sele
   assert.match(modal, /ids\.map\(id => \(unitsFor\(groupId, id\) > 1 \? \{ id, quantity: unitsFor\(groupId, id\) \} : id\)\)/);
   assert.match(modal, /getModifierPrice\(modifier\) \* \(units - free\)/);
 });
+
+test('la cantidad solo se ofrece cuando el ERP la anuncia', async () => {
+  const { modifierQuantitiesSupported, setModifierQuantitiesSupported, resetModifierQuantitiesSupport } =
+    await import('../utils/modifierQuantitiesCapability');
+  const store = new Map<string, string>();
+  (globalThis as any).window = {
+    localStorage: {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => { store.set(key, value); },
+    },
+  };
+  try {
+    resetModifierQuantitiesSupport();
+    assert.equal(modifierQuantitiesSupported(), false, 'sin anuncio del ERP no hay cantidades');
+    setModifierQuantitiesSupported(true);
+    assert.equal(modifierQuantitiesSupported(), true);
+    // La observación sobrevive al arranque siguiente (la capacidad se cachea).
+    resetModifierQuantitiesSupport();
+    assert.equal(modifierQuantitiesSupported(), true);
+    // Un equipo puede forzarlo o apagarlo para probar.
+    store.set('CLIC_MODIFIER_QUANTITIES', '0');
+    assert.equal(modifierQuantitiesSupported(), false);
+    store.delete('CLIC_MODIFIER_QUANTITIES');
+    setModifierQuantitiesSupported(false);
+    assert.equal(modifierQuantitiesSupported(), false);
+  } finally {
+    delete (globalThis as any).window;
+  }
+});

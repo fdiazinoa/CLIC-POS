@@ -1,4 +1,5 @@
 import {assertDopFiscalSettlement} from './DopFiscalSettlement';
+import { setModifierQuantitiesSupported } from '../../utils/modifierQuantitiesCapability';
 import type {OfflineFiscalAllocation} from './OfflineFiscalAllocation';
 import {cartDigest,isExpiredPrepared,retirementReason,validateRetirementReceipt} from './FiscalWorkflowRetirement';
 import {fiscalWorkflowScopeKey} from './FiscalWorkflowV2Types';
@@ -296,14 +297,18 @@ export function createFiscalWorkflowV2Client({readAuth=captureFiscalStatusBoundC
   const promise=(async()=>{
    const {data}=await request('capability');auth.assertCurrent();if(epoch!==generation)fail('FISCAL_WORKFLOW_CONTEXT_CHANGED');
    const keys=['schemaVersion','capability','version','scope','authorityHash','sessionExpiresAt'];
+   // One additive, optional field: the ERP announces it accepts modifier quantities.
+   const optional=['modifierQuantities'];
    const now=Date.now();
    // An open-ended session declares no date; a declared date must still be in the future.
    const current=(value:unknown)=>value==null||value===''||typeof value==='string'&&Number.isFinite(Date.parse(value))&&Date.parse(value)>now;
    const lifetime=(value:unknown)=>typeof value==='string'&&Number.isFinite(Date.parse(value))?Math.max(0,Date.parse(value)-now):300000;
    const expires=data?.sessionExpiresAt,localExpires=(auth as any).sessionExpiresAt||data?.sessionExpiresAt;
-   if(!data||typeof data!=='object'||Array.isArray(data)||Object.keys(data).length!==keys.length||keys.some(k=>!Object.prototype.hasOwnProperty.call(data,k))
+   if(!data||typeof data!=='object'||Array.isArray(data)||Object.keys(data).some(k=>!keys.includes(k)&&!optional.includes(k))||keys.some(k=>!Object.prototype.hasOwnProperty.call(data,k))
     ||data.schemaVersion!==2||data.capability!=='fiscalWorkflowV2'||data.version!==2||!contexts(data.scope,scopeOf(auth.descriptor))
     ||!current(expires)||!/^[a-f0-9]{64}$/.test(data.authorityHash)||!current(localExpires))fail();
+   if(data.modifierQuantities!==undefined&&data.modifierQuantities!==1)fail();
+   setModifierQuantitiesSupported(data.modifierQuantities===1);
    // Discovery grants availability only. The normal permit response must still prove its own authority.
    observeFiscalWorkflowCapability(auth.base,auth.headers,'2',now,Math.min(300000,lifetime(expires),lifetime(localExpires)));
   })().finally(()=>{if(discovering?.promise===promise)discovering=null;});discovering={key,promise};return promise;

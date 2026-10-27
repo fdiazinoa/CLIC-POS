@@ -9,6 +9,7 @@ import {
 } from '../utils/modifierModalPresentation';
 import { resolveRestaurantProductConfig } from '../utils/restaurantProductConfig';
 import { modifierSelectionCapNotice } from '../utils/modifierSelection';
+import { modifierQuantitiesSupported as quantitiesEnabled } from '../utils/modifierQuantitiesCapability';
 import './ModifierModal.css';
 
 interface ModifierModalProps {
@@ -292,8 +293,9 @@ const ModifierModal: React.FC<ModifierModalProps> = ({
 
   const unitsOfGroup = useCallback((groupId: string) => Object.values(modifierUnitsRef.current[groupId] || {}).reduce((total, units) => total + Math.max(0, Number(units) || 0), 0), []);
   const groupCapacity = useCallback((group: ModifierGroup) => (group.selection_type === 'SINGLE' ? 1 : Number(group.max_select || 0)), []);
-  /** Only multiple-selection groups can repeat an option: it is a quantity, not a duplicate id. */
-  const offersUnits = useCallback((group: ModifierGroup) => group.selection_type !== 'SINGLE' && Number(group.max_select || 0) > 1, []);
+  /** Only multiple groups can repeat an option, and only when the ERP accepts quantities. */
+  const offersUnits = useCallback((group: ModifierGroup) => quantitiesEnabled()
+    && group.selection_type !== 'SINGLE' && Number(group.max_select || 0) > 1, []);
 
   const activeStep = steps[activeStepIndex];
   const handleOptionSelect = useCallback((optionId: string) => {
