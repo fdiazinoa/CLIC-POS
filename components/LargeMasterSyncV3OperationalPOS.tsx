@@ -8,6 +8,7 @@ import { subscribeLargeMasterSyncV3CatalogUpdates } from '../services/sync/Large
 import type { V3OperationalCategory } from '../services/sync/LargeMasterSyncV3Categories';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import POSInterface, { type POSInterfaceProps, type V3OperationalPOSBoundary } from './POSInterface';
+import { planV3CartReanchor } from '../services/sync/LargeMasterSyncV3CartReanchor';
 import type { BusinessConfig, Product } from '../types';
 import { acquireLargeMasterSyncV3ConfigContext, type LargeMasterSyncV3OperationalSession } from '../services/sync/LargeMasterSyncV3OperationalSession';
 import type { LargeMasterSyncV3OperationalCatalog, V3ArticleDiagnostic } from '../services/sync/LargeMasterSyncV3OperationalCatalog';
@@ -153,6 +154,25 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps> = props => {
       return { product, quantity, price: resolveVariantSalesPrice(match.variant, product.price),
         modifiers: match.variant ? Object.values(match.variant.attributeValues || {}).map(String) : [], selectedVariant: match.variant || undefined,
         variantInfo: match.variant ? Object.entries(match.variant.attributeValues || {}).map(([key, value]) => `${key}: ${value}`).join(' · ') : undefined };
+    },
+    reanchor: async lines => {
+      assertContext();
+      const source = catalog.current;
+      if (!source || !lines.length) return null;
+      const authority = new Map<string, import('../types').V3SaleAuthorityStamp | null>();
+      for (const line of lines) {
+        if (authority.has(line.id)) continue;
+        const item = await source.get(line.id);
+        authority.set(line.id, item ? item.authority : null);
+      }
+      assertContext();
+      const outcome = planV3CartReanchor(lines, line => authority.get(line.id) ?? null, String((session as any).binding || ''), warehouseId);
+      if (!outcome.changed) return null;
+      void Promise.all([...new Set(lines.map(line => line.id))].map(async id => {
+        const item = await source.get(id);
+        return item ? session.withStock(item.product, warehouseId) : null;
+      })).then(rows => remember(rows.filter((row): row is NonNullable<typeof row> => row !== null))).catch(() => undefined);
+      return outcome.lines;
     },
     validate: async (lines, reference) => {
       assertContext();

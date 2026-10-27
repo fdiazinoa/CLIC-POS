@@ -266,6 +266,8 @@ export interface V3OperationalPOSBoundary {
    updateRetainedTicket?(id: string, ticket?: ParkedTicket): Promise<void>;
    waitingTickets?(tickets: ParkedTicket[]): Promise<ParkedTicket[]>;
    changeTariff(tariffId: string): void;
+   /** Moves restored/older cart lines to the live stock authority without touching agreed prices. */
+   reanchor?(lines: CartItem[]): Promise<CartItem[] | null>;
 }
 
 export interface POSInterfaceProps {
@@ -2150,7 +2152,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    );
    const changeActiveTariff = useCallback((id: string) => {
       try { v3Operational?.changeTariff(id); setActiveTariffId(id); }
-      catch (error: any) { setErrorToast(`V3: ${error.message || error}`); }
+      catch (error: any) { setErrorToast(describeV3Error(error)); }
    }, [v3Operational]);
 
    useEffect(() => {
@@ -2289,7 +2291,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       void v3Operational.search(catalogSearchQuery, categoryFilter === 'ALL' ? null : categoryFilter,
          categoryFilter === 'ALL' ? undefined : categoryLookup.identity.selectionFilter(categoryFilter, effectiveAllowedCategorySet.size === 0
             ? (v3Operational.categories || []).map(category => category.key) : []))
-         .catch(error => { if (current) setErrorToast(`V3: ${error.message || error}`); });
+         .catch(error => { if (current) setErrorToast(describeV3Error(error)); });
       return () => { current = false; };
    }, [v3Operational, catalogSearchQuery, categoryFilter, categoryLookup.aliasToCanonical]);
    const [mobileView, setMobileView] = useState<'PRODUCTS' | 'TICKET'>('PRODUCTS');
@@ -2412,6 +2414,31 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          onUpdateCart(markRestaurantLinesCommitted(ord.items));
       }
    }, [activeTable, parkedTickets, transactions, onUpdateCart, cart.length]);
+
+   // Un ticket de mesa abierto ayer conserva sus precios pactados; solo la autoridad de venta
+   // (inventario, tarifa y almacén del día) se mueve a la vigente para que el cobro valide.
+   const reanchorRef = useRef<{ boundary?: unknown; fingerprint: string }>({ fingerprint: '' });
+   useEffect(() => {
+      if (!v3Operational?.reanchor || cart.length === 0) return;
+      const fingerprint = [
+         v3Operational.tariffId,
+         cart.map(line => [
+            line.cartId, line.v3SaleAuthority?.syncId, line.v3SaleAuthority?.syncVersion,
+            line.v3SaleAuthority?.inventoryVersion, line.v3SaleAuthority?.inventoryCursor,
+            line.v3SaleAuthority?.tariffId, line.v3SaleAuthority?.taxIncluded,
+         ].join(':')).join(','),
+      ].join('|');
+      if (reanchorRef.current.boundary !== v3Operational) reanchorRef.current = { boundary: v3Operational, fingerprint: '' };
+      if (reanchorRef.current.fingerprint === fingerprint) return;
+      reanchorRef.current.fingerprint = fingerprint;
+      let cancelled = false;
+      void v3Operational.reanchor(cart).then(lines => {
+         if (cancelled || !lines) return;
+         onUpdateCart(lines);
+         setSuccessToast('Ticket actualizado al inventario de hoy. Los precios de la mesa no cambian.');
+      }).catch(() => undefined);
+      return () => { cancelled = true; };
+   }, [cart, v3Operational, onUpdateCart]);
 
    useEffect(() => {
       const orderId = String(activeTable?.currentOrderId || '').trim();
@@ -3650,7 +3677,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       return true;
       } catch (error: any) {
          if (!v3Operational) throw error;
-         setErrorToast(`V3: ${error.message || error}`);
+         setErrorToast(describeV3Error(error));
          return false;
       } finally {
          if (trace.stages.HANDLER_END === undefined) markInteractionStage(trace, 'HANDLER_END');
@@ -3663,7 +3690,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const context = v3Operational;
       const mounted = uiLifetime.current.capture();
       return addQueue.current.run(() => mounted() && addContext.current === context, () => performAddToCart(...args))
-         .catch((error: any) => { setErrorToast(`V3: ${error.message || error}`); return false; });
+         .catch((error: any) => { setErrorToast(describeV3Error(error)); return false; });
    }, [performAddToCart, v3Operational, rejectFormatQuickReturn, isReturnMode]);
 
    const addSelectedFormat = useCallback(async (product: Product, format: ArticleFormat, price: number, quantity = 1, modifiers: string[] = []) => {
@@ -4355,7 +4382,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          if (document.querySelector('[data-table-map-persistent-host][aria-modal="true"]')) return;
          const barcode = (event as CustomEvent<{ barcode?: string }>).detail?.barcode;
          if (!barcode) return;
-         void processBarcode(barcode).catch(error => setErrorToast(`V3: ${error.message || error}`));
+         void processBarcode(barcode).catch(error => setErrorToast(describeV3Error(error)));
       };
 
       window.addEventListener('barcodeScanned', handleCentralBarcodeScan as EventListener);
@@ -4778,7 +4805,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
 
       retailSearchInputRef.current?.focus();
-      } catch (error: any) { setErrorToast(`V3: ${error.message || error}`); }
+      } catch (error: any) { setErrorToast(describeV3Error(error)); }
    }, [searchTerm, resolveSubmittedCode, filteredProducts, submitProductTextSearch, v3Operational]);
 
    const categoryOptions = useMemo(() => {
@@ -6660,7 +6687,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             markInteractionStage(trace, 'HANDLER_END');
             return;
          }
-      } catch (error: any) { setErrorToast(`V3: ${error.message || error}`); return; }
+      } catch (error: any) { setErrorToast(describeV3Error(error)); return; }
       try {
          const recovered=await completeCommittedFiscalReceipt([],()=>{admission.assertCurrent();admission.locked=true;checkoutProgressRef.current?.lock();});
          if(recovered){
@@ -6668,7 +6695,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             expectInteractionDestination(trace,'PAYMENT_MODAL');paymentModalTraceRef.current=trace;setShowPaymentModal(true);
             markInteractionStateUpdate(trace,2);markInteractionStage(trace,'HANDLER_END');return;
          }
-      }catch(error:any){setErrorToast(`V3: ${error.message||error}`);return;}
+      }catch(error:any){setErrorToast(describeV3Error(error));return;}
       admission.assertCurrent();
       if(validateFiscal&&!isOrderTakerMode){const validation=validateTerminalDocument(config,terminalId,'TICKET');if(!validation.isValid){alert(validation.error);return;}}
       try{await assertNewCheckoutFiscalAuthority(admission.assertCurrent);admission.assertCurrent();}
@@ -6685,7 +6712,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             admission.assertCurrent();
             const recovered=await completeCommittedFiscalReceipt([],()=>{admission.assertCurrent();admission.locked=true;checkoutProgressRef.current?.lock();});
             if(recovered){setReceiptOnlyInitialTransaction(recovered);setShowPaymentModal(true);return;}
-            setErrorToast(`V3: ${error.message || error}`);return;
+            setErrorToast(describeV3Error(error));return;
          }
          admission.assertCurrent();
       }

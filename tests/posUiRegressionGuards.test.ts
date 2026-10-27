@@ -111,3 +111,16 @@ test('fiscal diagnostics stay reachable from Settings', () => {
   assert.match(src, /<FiscalDiagnostics onClose=/);
   assert.match(source('components/FiscalDiagnostics.tsx'), /Cerrar intento pendiente/);
 });
+
+test('a restaurant account restores with its agreed prices and only adopts today authority', () => {
+  const src = pos();
+  assert.match(src, /v3Operational\.reanchor\(cart\)/);
+  assert.match(src, /Los precios de la mesa no cambian/);
+  assert.match(source('components/LargeMasterSyncV3OperationalPOS.tsx'), /planV3CartReanchor\(/);
+  const planner = source('services/sync/LargeMasterSyncV3CartReanchor.ts');
+  assert.match(planner, /output\.push\(\{ \.\.\.line, v3SaleAuthority: next \}\)/);
+  assert.match(planner, /taxIncluded !== next\.taxIncluded/);
+  // The raw code must never reach the cashier again.
+  assert.match(source('utils/v3ErrorMessages.ts'), /SYNC_V3_CART_MIXED_VERSION/);
+  assert.doesNotMatch(src, /setErrorToast\(`V3: /);
+});
