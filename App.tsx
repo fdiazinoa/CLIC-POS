@@ -27,7 +27,7 @@ import { captureFiscalStatusBoundContext } from './services/fiscal/FiscalBoundCo
 import { readLargeMasterSyncV3BoundIdentity } from './services/sync/LargeMasterSyncV3BoundTransport';
 import { assertLargeMasterSyncV3NativeAndroid } from './services/sync/LargeMasterSyncV3Platform';
 import { getLargeMasterSyncV3OperationalSession, v3BindingKey } from './services/sync/LargeMasterSyncV3OperationalSession';
-import { needsTerminalReauthorization, reauthorizeTerminal, reconcileStaleFiscalCheckout } from './services/sync/TerminalReauthorizationService';
+import { runBootReconciliation } from './services/sync/BootReconciliation';
 import { assertLargeMasterSyncV3SetupContract, largeMasterSyncV3DownloadOrigin } from './services/sync/LargeMasterSyncV3DownloadOrigin';
 import { completeLargeMasterSyncV3Setup } from './services/sync/LargeMasterSyncV3SetupCompletion';
 import { createV3Progress, type V3Progress } from './services/sync/LargeMasterSyncV3Progress';
@@ -11619,13 +11619,10 @@ const AppContent: React.FC = () => {
   useEffect(() => {
     if (!isDataLoaded || !isSecurityLoaded) return;
     const timer = setTimeout(() => {
-      try {
-        void reconcileStaleFiscalCheckout().then(note => { if (note) console.info('[fiscal]', note); }).catch(() => undefined);
-        const state = needsTerminalReauthorization();
-        if (!state.required) return;
-        console.info('[reauth] terminal sin autorización vigente:', state.reason);
-        void reauthorizeTerminal().then(result => console.info('[reauth]', result.ok ? 'ok' : 'fallo', result.message)).catch(() => undefined);
-      } catch { /* diagnostics only */ }
+      // One boot recovery for the whole terminal: stale fiscal attempt + pairing.
+      void runBootReconciliation().then(result => {
+        if (result.notes.length) console.info('[boot]', result.notes.join(' · '));
+      }).catch(() => undefined);
     }, 8000);
     return () => clearTimeout(timer);
   }, [isDataLoaded, isSecurityLoaded]);
