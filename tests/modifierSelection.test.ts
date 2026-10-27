@@ -18,7 +18,7 @@ test('a multiple group is capped by max_select, a single group by one', () => {
   assert.equal(modifierGroupSelectionMinimum({ required: true, min_select: 2 }), 2);
 });
 
-test('the cap counts distinct options, never repeated ones', () => {
+test('the cap counts units, while ids stay unique', () => {
   const group = { selection_type: 'MULTIPLE', max_select: 2 };
   assert.equal(isModifierSelectionCapped(group, 1), false);
   assert.equal(isModifierSelectionCapped(group, 2), true);
@@ -33,7 +33,7 @@ test('the cap counts distinct options, never repeated ones', () => {
 test('the blocked tap explains the contract limit instead of doing nothing', () => {
   assert.equal(
     modifierSelectionCapNotice({ selection_type: 'MULTIPLE', max_select: 3 }),
-    'Máximo 3 opciones distintas en este grupo.',
+    'Máximo 3 unidades en este grupo. Puedes repetir una opción con la cantidad.',
   );
   assert.equal(
     modifierSelectionCapNotice({ selection_type: 'SINGLE', max_select: 1 }),

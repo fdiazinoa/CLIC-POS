@@ -1,9 +1,9 @@
 /**
- * Modifier groups as the V3 sales contract actually defines them: the cashier picks up to
- * `max_select` **distinct** options. Repeating the same option (2× "extra cheese" on one
- * article) is not representable: the client authority and the ERP both require unique option
- * ids and cap the list at `max_select`. So the UI must not silently swallow the tap that
- * exceeds the cap — it says what the limit is.
+ * Modifier groups as the V3 sales contract defines them: the cashier picks up to `max_select`
+ * **units**. Option ids stay unique, so repeating an option (2× "extra cheese" on one article)
+ * is expressed as a quantity on that option; the total units of the group honour `max_select`
+ * and `min_select`. The UI never swallows the tap that exceeds the cap — it says what the
+ * limit is and how to repeat an option.
  */
 
 export interface ModifierSelectionGroup {
@@ -38,7 +38,7 @@ export const modifierSelectionCapNotice = (group: ModifierSelectionGroup | null 
   const limit = modifierGroupSelectionLimit(group);
   if (limit <= 0) return '';
   if (String(group?.selection_type || '') === 'SINGLE') return 'Solo puedes elegir una opción en este grupo.';
-  return `Máximo ${limit} opciones distintas en este grupo.`;
+  return `Máximo ${limit} unidades en este grupo. Puedes repetir una opción con la cantidad.`;
 };
 
 /** Remaining slots before the cap; 0 means "full", null means "no cap". */

@@ -1781,7 +1781,8 @@ export interface CartItem extends Product {
   createdAt?: string;
   modifiers?: string[];
   restaurantConfig?: {
-    modifierGroups?: Record<string, string[]>;
+    /** Option ids (quantity 1) or {id, quantity} when the cashier repeated a modifier. */
+    modifierGroups?: Record<string, Array<string | { id: string; quantity: number }>>;
     comboGroups?: Record<string, string[]>;
     fractions?: Array<{ id: string; name: string; price: number; ratio: number }>;
     selected_modifiers?: any[];

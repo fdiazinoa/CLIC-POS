@@ -83,13 +83,23 @@ export function validateV3RestaurantSelection(line:CartItem,product:Product):num
  const pick=(groups:any[],mapping:unknown,kind:'items'|'modifiers')=>{
   const map=mapping==null?{}:record(mapping);need(Object.keys(map).every(id=>groups.some(g=>g.id===id)));
   return groups.flatMap(g=>{
-   const ids=list(map[g.id]);need(ids.every(id=>typeof id==='string')&&new Set(ids).size===ids.length);
-   need(ids.length>=Math.max(g.required?1:0,g.min_select||0)&&ids.length<=(g.max_select??(g.selection_type==='SINGLE'?1:100)));
+   // A selection entry is either the option id (quantity 1, every stored cart) or {id, quantity}.
+   // Ids stay unique: the same option twice is a quantity, never a duplicate.
+   const entries=list(map[g.id]).map((entry:any)=>typeof entry==='string'?{id:entry,quantity:1}
+    :{id:entry&&typeof entry==='object'?entry.id:undefined,quantity:entry&&typeof entry==='object'&&entry.quantity!==undefined?entry.quantity:1});
+   const single=g.selection_type==='SINGLE'||g.max_select===1,maximum=g.max_select??(single?1:100);
+   need(entries.every((entry:any)=>typeof entry.id==='string'&&Number.isInteger(entry.quantity)&&entry.quantity>=1&&entry.quantity<=maximum));
+   need(kind==='modifiers'||entries.every((entry:any)=>entry.quantity===1));
+   need(new Set(entries.map((entry:any)=>entry.id)).size===entries.length);
+   const units=entries.reduce((total:number,entry:any)=>total+entry.quantity,0);
+   need(units>=Math.max(g.required?1:0,g.min_select||0)&&units<=maximum);
    let free=g.free_quantity||0;
-   return ids.map(id=>{const matches=g[kind].filter((o:any)=>String(o.id||o.product_id)===id);need(matches.length===1);const o=matches[0];
-    if(kind==='items'){extra+=Number(o.price_delta||0);return {group_id:g.id,group_name:g.name,item_id:o.id||o.product_id,product_id:o.product_id,name:o.name||o.product_id,price_delta:Number(o.price_delta||0)};}
-    if(o.modifier_type!=='REMOVE'&&o.affects_price!==false){if(free>0)free--;else extra+=Number(o.price_delta??o.price??0);}
-    return {group_id:g.id,group_name:g.name,modifier_id:o.id,product_id:o.product_id,name:o.name,modifier_type:o.modifier_type||'ADD',affects_price:o.affects_price!==false,price_delta:Number(o.price_delta??o.price??0)};
+   return entries.flatMap((entry:any)=>{const matches=g[kind].filter((o:any)=>String(o.id||o.product_id)===entry.id);need(matches.length===1);const o=matches[0];
+    const priced=kind==='modifiers'&&o.modifier_type!=='REMOVE'&&o.affects_price!==false;
+    const paid=priced?Math.max(0,entry.quantity-free):0;if(priced)free=Math.max(0,free-entry.quantity);
+    if(kind==='items'){extra+=Number(o.price_delta||0)*entry.quantity;return {group_id:g.id,group_name:g.name,item_id:o.id||o.product_id,product_id:o.product_id,name:o.name||o.product_id,price_delta:Number(o.price_delta||0),...(entry.quantity>1?{quantity:entry.quantity}:{})};}
+    if(paid)extra+=Number(o.price_delta??o.price??0)*paid;
+    return {group_id:g.id,group_name:g.name,modifier_id:o.id,product_id:o.product_id,name:o.name,modifier_type:o.modifier_type||'ADD',affects_price:o.affects_price!==false,price_delta:Number(o.price_delta??o.price??0),...(entry.quantity>1?{quantity:entry.quantity}:{})};
    });
   });
  };

@@ -36,27 +36,35 @@ interface OptionCardProps {
   selected: boolean;
   multiple: boolean;
   imageUrl?: string | null;
+  /** Units of this same option, shown only when the group allows repeated modifiers. */
+  units?: number;
+  offerUnits?: boolean;
   onSelect: (id: string) => void;
+  onUnits?: (id: string, delta: number) => void;
 }
 
-const OptionCard = memo<OptionCardProps>(({ id, label, meta, selected, multiple, imageUrl, onSelect }) => {
+const OptionCard = memo<OptionCardProps>(({ id, label, meta, selected, multiple, imageUrl, units = 0, offerUnits = false, onSelect, onUnits }) => {
   const handleClick = useCallback(() => onSelect(id), [id, onSelect]);
+  const handleKey = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelect(id); }
+  }, [id, onSelect]);
   return (
-    <button
-      type="button"
+    <div
       role={multiple ? 'checkbox' : 'radio'}
       aria-checked={selected}
+      tabIndex={0}
       data-modifier-option="true"
       onClick={handleClick}
-      className={`group relative flex w-full flex-col overflow-hidden rounded-2xl border-2 text-left transition-colors active:scale-[0.99] ${
+      onKeyDown={handleKey}
+      className={`group relative flex w-full cursor-pointer flex-col overflow-hidden rounded-2xl border-2 text-left transition-colors active:scale-[0.99] ${
         selected
           ? 'border-blue-600 bg-blue-50/70 text-blue-950 shadow-[0_0_0_3px_rgba(37,99,235,0.10)]'
           : 'border-slate-200 bg-white text-slate-900 hover:border-blue-300'
       }`}
     >
       {selected && (
-        <span aria-hidden="true" className="absolute right-2 top-2 z-10 flex h-5 w-5 items-center justify-center rounded-full bg-blue-600 text-white shadow">
-          <Check size={12} strokeWidth={3.5} />
+        <span aria-hidden="true" className="absolute right-2 top-2 z-10 flex h-5 min-w-5 items-center justify-center rounded-full bg-blue-600 px-1 text-white shadow">
+          {offerUnits && units > 1 ? <span className="text-[11px] font-black">×{units}</span> : <Check size={12} strokeWidth={3.5} />}
         </span>
       )}
       <span className={`flex h-[76px] w-full items-center justify-center overflow-hidden ${imageUrl ? 'bg-slate-100' : 'bg-gradient-to-br from-slate-100 to-slate-200'}`}>
@@ -75,7 +83,28 @@ const OptionCard = memo<OptionCardProps>(({ id, label, meta, selected, multiple,
           )}
         </span>
       </span>
-    </button>
+      {offerUnits && (
+        <span className="flex w-full items-center justify-between gap-2 border-t border-slate-200 bg-white/80 px-3 py-1.5">
+          <span className="text-[11px] font-black uppercase tracking-wide text-slate-500">Cantidad</span>
+          <span className="flex items-center gap-1">
+            <button
+              type="button"
+              aria-label={`Quitar una unidad de ${label}`}
+              disabled={units <= 0}
+              onClick={(event) => { event.stopPropagation(); onUnits?.(id, -1); }}
+              className={`flex h-7 w-7 items-center justify-center rounded-lg border text-base font-black ${units > 0 ? 'border-slate-300 bg-white text-slate-700' : 'border-slate-200 bg-slate-100 text-slate-300'}`}
+            >−</button>
+            <span className="min-w-6 text-center text-[13px] font-black text-slate-900" aria-live="polite">{units}</span>
+            <button
+              type="button"
+              aria-label={`Agregar una unidad de ${label}`}
+              onClick={(event) => { event.stopPropagation(); onUnits?.(id, 1); }}
+              className="flex h-7 w-7 items-center justify-center rounded-lg border border-blue-300 bg-blue-50 text-base font-black text-blue-700"
+            >+</button>
+          </span>
+        </span>
+      )}
+    </div>
   );
 });
 OptionCard.displayName = 'OptionCard';
@@ -138,17 +167,21 @@ const ModifierModal: React.FC<ModifierModalProps> = ({
   const [optionQuery, setOptionQuery] = useState('');
   const [attemptedStepId, setAttemptedStepId] = useState<string | null>(null);
   const [selectionCapNotice, setSelectionCapNotice] = useState<string | null>(null);
+  /** Units per option for multiple-selection modifier groups (group → option → units). */
+  const [modifierUnits, setModifierUnits] = useState<Record<string, Record<string, number>>>({});
   const [completedStepIds, setCompletedStepIds] = useState<Record<string, true>>({});
   const autoAdvanceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const confirmationStartedRef = useRef(false);
   const activeStepIndexRef = useRef(activeStepIndex);
   const activeStepRef = useRef<Step | undefined>(steps[0]);
   const modifierSelectionsRef = useRef(selectedModifiersByGroup);
+  const modifierUnitsRef = useRef(modifierUnits);
   const comboSelectionsRef = useRef(selectedCombosByGroup);
   const fractionSelectionsRef = useRef(selectedFractions);
   const optionAreaRef = useRef<HTMLDivElement>(null);
 
   modifierSelectionsRef.current = selectedModifiersByGroup;
+  modifierUnitsRef.current = modifierUnits;
   comboSelectionsRef.current = selectedCombosByGroup;
   fractionSelectionsRef.current = selectedFractions;
 
@@ -198,15 +231,19 @@ const ModifierModal: React.FC<ModifierModalProps> = ({
   }, [fractionRule?.pricing_rule, getFractionOptionPrice, maxFractionParts, product.price, selectedFractionObjects]);
   const calculateModifiersTotal = useCallback(() => modifierGroups.reduce((sum, group) => {
     const selectedIds = selectedModifiersByGroup[group.id] || [];
+    const groupUnits = modifierUnits[group.id] || {};
     let freeRemaining = Number(group.free_quantity || 0);
     selectedIds.forEach(id => {
       const modifier = group.modifiers.find(mod => mod.id === id);
       if (!modifier || modifier.modifier_type === 'REMOVE' || modifier.affects_price === false) return;
-      if (freeRemaining > 0) { freeRemaining -= 1; return; }
-      sum += getModifierPrice(modifier);
+      const units = Math.max(1, Number(groupUnits[id] || 1));
+      const free = Math.min(freeRemaining, units);
+      freeRemaining -= free;
+      // Free units are consumed one by one, not one per option.
+      if (units - free > 0) sum += getModifierPrice(modifier) * (units - free);
     });
     return sum;
-  }, 0), [getModifierPrice, modifierGroups, selectedModifiersByGroup]);
+  }, 0), [getModifierPrice, modifierGroups, modifierUnits, selectedModifiersByGroup]);
   const calculateComboTotal = useCallback(
     () => selectedComboObjects.reduce((sum, entry) => sum + Number(entry.item.price_delta || 0), 0),
     [selectedComboObjects],
@@ -218,11 +255,15 @@ const ModifierModal: React.FC<ModifierModalProps> = ({
   const fractionSelectionCount = Object.keys(selectedFractions).filter(key => selectedFractions[Number(key)]).length;
   const isStepValid = useCallback((step: Step) => {
     if (step.kind === 'note') return true;
-    if (step.kind === 'modifier') return isModifierSelectionCountValid((selectedModifiersByGroup[step.group.id] || []).length, step.group);
+    if (step.kind === 'modifier') {
+      const ids = selectedModifiersByGroup[step.group.id] || [];
+      const units = ids.reduce((total, id) => total + Math.max(1, Number((modifierUnits[step.group.id] || {})[id] || 1)), 0);
+      return isModifierSelectionCountValid(units, step.group);
+    }
     if (step.kind === 'combo') return isModifierSelectionCountValid((selectedCombosByGroup[step.group.id] || []).length, step.group);
     if (productType !== 'FRACTIONABLE' && fractionSelectionCount === 0) return true;
     return Boolean(selectedFractions[step.partIndex]);
-  }, [fractionSelectionCount, productType, selectedCombosByGroup, selectedFractions, selectedModifiersByGroup]);
+  }, [fractionSelectionCount, modifierUnits, productType, selectedCombosByGroup, selectedFractions, selectedModifiersByGroup]);
 
   const focusFirstOption = useCallback(() => {
     requestAnimationFrame(() => focusFirstModifierOption(optionAreaRef.current));
@@ -249,6 +290,11 @@ const ModifierModal: React.FC<ModifierModalProps> = ({
     }, SINGLE_ADVANCE_DELAY_MS);
   }, [cancelAutoAdvance, steps.length]);
 
+  const unitsOfGroup = useCallback((groupId: string) => Object.values(modifierUnitsRef.current[groupId] || {}).reduce((total, units) => total + Math.max(0, Number(units) || 0), 0), []);
+  const groupCapacity = useCallback((group: ModifierGroup) => (group.selection_type === 'SINGLE' ? 1 : Number(group.max_select || 0)), []);
+  /** Only multiple-selection groups can repeat an option: it is a quantity, not a duplicate id. */
+  const offersUnits = useCallback((group: ModifierGroup) => group.selection_type !== 'SINGLE' && Number(group.max_select || 0) > 1, []);
+
   const activeStep = steps[activeStepIndex];
   const handleOptionSelect = useCallback((optionId: string) => {
     const currentStep = activeStepRef.current;
@@ -267,22 +313,31 @@ const ModifierModal: React.FC<ModifierModalProps> = ({
       const group = currentStep.group;
       const maxSelect = group.selection_type === 'SINGLE' ? 1 : Number(group.max_select || 0);
       const current = modifierSelectionsRef.current[group.id] || [];
+      const dropUnits = (next: Record<string, string[]>) => setModifierUnits(prev => {
+        const groupUnits = { ...(prev[group.id] || {}) }; delete groupUnits[optionId];
+        const updated = { ...prev, [group.id]: groupUnits };
+        modifierUnitsRef.current = updated;
+        return updated;
+      });
       if (current.includes(optionId)) {
         cancelAutoAdvance();
         const next = { ...modifierSelectionsRef.current, [group.id]: current.filter(id => id !== optionId) };
         modifierSelectionsRef.current = next;
         setSelectedModifiersByGroup(next);
+        dropUnits(next);
       } else if (group.selection_type === 'SINGLE') {
         const next = { ...modifierSelectionsRef.current, [group.id]: [optionId] };
         modifierSelectionsRef.current = next;
         setSelectedModifiersByGroup(next);
         if (isModifierSelectionCountValid(1, group)) scheduleAutoAdvance(currentStepIndex, currentStep.id);
-      } else if (maxSelect <= 0 || current.length < maxSelect) {
+      } else if (maxSelect <= 0 || unitsOfGroup(group.id) < maxSelect) {
         const next = { ...modifierSelectionsRef.current, [group.id]: [...current, optionId] };
         modifierSelectionsRef.current = next;
         setSelectedModifiersByGroup(next);
+        const withUnit = { ...modifierUnitsRef.current, [group.id]: { ...(modifierUnitsRef.current[group.id] || {}), [optionId]: 1 } };
+        modifierUnitsRef.current = withUnit; setModifierUnits(withUnit);
       } else {
-        // The V3 contract caps the list at max_select distinct ids: say so instead of ignoring the tap.
+        // The group is full: say so instead of ignoring the tap (units stay within max_select).
         setSelectionCapNotice(modifierSelectionCapNotice(group));
       }
       return;
@@ -309,7 +364,42 @@ const ModifierModal: React.FC<ModifierModalProps> = ({
         setSelectionCapNotice(modifierSelectionCapNotice(group));
       }
     }
-  }, [cancelAutoAdvance, scheduleAutoAdvance]);
+  }, [cancelAutoAdvance, scheduleAutoAdvance, unitsOfGroup]);
+
+  /** Add or remove one unit of an already offered option, never exceeding the group capacity. */
+  const changeOptionUnits = useCallback((optionId: string, delta: number) => {
+    const step = activeStepRef.current;
+    if (!step || step.kind !== 'modifier') return;
+    const group = step.group;
+    if (!offersUnits(group)) return;
+    const capacity = Number(group.max_select || 0);
+    const current = modifierSelectionsRef.current[group.id] || [];
+    const groupUnits = { ...(modifierUnitsRef.current[group.id] || {}) };
+    const actual = Math.max(0, Number(groupUnits[optionId] ?? (current.includes(optionId) ? 1 : 0)));
+    const others = Object.entries(groupUnits).reduce((total, [id, units]) => total + (id === optionId ? 0 : Math.max(0, Number(units) || 0)), 0);
+    const nextUnits = actual + delta;
+    setAttemptedStepId(null);
+    if (nextUnits <= 0) {
+      cancelAutoAdvance();
+      const ids = current.filter(id => id !== optionId);
+      delete groupUnits[optionId];
+      const nextSelections = { ...modifierSelectionsRef.current, [group.id]: ids };
+      const nextGroups = { ...modifierUnitsRef.current, [group.id]: groupUnits };
+      modifierSelectionsRef.current = nextSelections; modifierUnitsRef.current = nextGroups;
+      setSelectedModifiersByGroup(nextSelections); setModifierUnits(nextGroups); setSelectionCapNotice(null);
+      return;
+    }
+    if (capacity > 0 && others + nextUnits > capacity) {
+      setSelectionCapNotice(modifierSelectionCapNotice(group));
+      return;
+    }
+    groupUnits[optionId] = nextUnits;
+    const ids = nextUnits > 0 && !current.includes(optionId) ? [...current, optionId] : current;
+    const nextSelections = { ...modifierSelectionsRef.current, [group.id]: ids };
+    const nextGroups = { ...modifierUnitsRef.current, [group.id]: groupUnits };
+    modifierSelectionsRef.current = nextSelections; modifierUnitsRef.current = nextGroups;
+    setSelectedModifiersByGroup(nextSelections); setModifierUnits(nextGroups); setSelectionCapNotice(null);
+  }, [cancelAutoAdvance, offersUnits]);
 
   const validationMessage = activeStep && attemptedStepId === activeStep.id && !isStepValid(activeStep)
     ? activeStep.kind === 'fraction' ? 'Seleccione una opción para esta parte.' : `Seleccione ${activeStep.name}.`
@@ -339,10 +429,12 @@ const ModifierModal: React.FC<ModifierModalProps> = ({
     if (confirmationStartedRef.current) return;
     confirmationStartedRef.current = true;
 
+    const unitsFor = (groupId: string, optionId: string) => Math.max(1, Number((modifierUnits[groupId] || {})[optionId] || 1));
     const selectedModifierSnapshot = selectedModifierObjects.map(({ group, modifier }) => ({
       group_id: group.id, group_name: group.name, modifier_id: modifier.id, product_id: modifier.product_id,
       name: modifier.name, modifier_type: modifier.modifier_type || 'ADD', affects_price: modifier.affects_price !== false,
       price_delta: getModifierPrice(modifier),
+      ...(unitsFor(group.id, modifier.id) > 1 ? { quantity: unitsFor(group.id, modifier.id) } : {}),
     }));
     const selectedFractionSnapshot = selectedFractionObjects.map(option => ({
       id: getFractionOptionId(option), product_id: option.product_id || option.option_product_id,
@@ -357,7 +449,9 @@ const ModifierModal: React.FC<ModifierModalProps> = ({
     selectedModifierObjects.forEach(({ group, modifier }) => {
       const price = getModifierPrice(modifier);
       const prefix = modifier.modifier_type === 'REMOVE' || modifier.affects_price === false ? '' : price > 0 ? '+ ' : '';
-      labels.push(`${group.name}: ${prefix}${modifier.name}${price > 0 && modifier.affects_price !== false ? ` (${currencySymbol}${price.toFixed(2)})` : ''}`);
+      const units = unitsFor(group.id, modifier.id);
+      const unitLabel = units > 1 ? ` ×${units}` : '';
+      labels.push(`${group.name}: ${prefix}${modifier.name}${unitLabel}${price > 0 && modifier.affects_price !== false ? ` (${currencySymbol}${(price * units).toFixed(2)})` : ''}`);
     });
     selectedComboObjects.forEach(({ group, item }) => {
       const delta = Number(item.price_delta || 0);
@@ -365,12 +459,15 @@ const ModifierModal: React.FC<ModifierModalProps> = ({
     });
     if (note.trim()) labels.push(`Nota: ${note.trim()}`);
     onConfirm(labels, total, note.trim() || undefined, {
-      modifierGroups: selectedModifiersByGroup, comboGroups: selectedCombosByGroup, fractions: selectedFractionSnapshot,
+      // The authority accepts plain ids (quantity 1) or {id, quantity}: send objects only when needed.
+      modifierGroups: Object.fromEntries(Object.entries(selectedModifiersByGroup).map(([groupId, ids]) => [groupId,
+        ids.map(id => (unitsFor(groupId, id) > 1 ? { id, quantity: unitsFor(groupId, id) } : id))])),
+      comboGroups: selectedCombosByGroup, fractions: selectedFractionSnapshot,
       selected_modifiers: selectedModifierSnapshot, selected_fraction_parts: selectedFractionSnapshot,
       selected_combo_items: selectedComboSnapshot, product_type: productType,
       production_area_id: restaurantConfigSource.production_area_id, note: note.trim() || undefined,
     });
-  }, [activeStep, activeStepIndex, cancelAutoAdvance, currencySymbol, focusFirstOption, getFractionOptionId, getFractionOptionPrice, getModifierPrice, isStepValid, maxFractionParts, moveToStep, note, onConfirm, productType, restaurantConfigSource.production_area_id, selectedComboObjects, selectedCombosByGroup, selectedFractionObjects, selectedModifierObjects, selectedModifiersByGroup, showStepError, steps, total]);
+  }, [activeStep, activeStepIndex, cancelAutoAdvance, currencySymbol, focusFirstOption, getFractionOptionId, getFractionOptionPrice, getModifierPrice, isStepValid, maxFractionParts, moveToStep, note, onConfirm, productType, restaurantConfigSource.production_area_id, modifierUnits, selectedComboObjects, selectedCombosByGroup, selectedFractionObjects, selectedModifierObjects, selectedModifiersByGroup, showStepError, steps, total]);
 
   const handleClose = useCallback(() => { cancelAutoAdvance(); onClose(); }, [cancelAutoAdvance, onClose]);
   const addNotePreset = useCallback((preset: string) => setNote(prev => {
@@ -387,21 +484,30 @@ const ModifierModal: React.FC<ModifierModalProps> = ({
       meta: `${currencySymbol}${getFractionOptionPrice(option).toFixed(2)}`,
       selected: selectedFractions[activeStep.partIndex] === getFractionOptionId(option), multiple: false,
     }));
-    if (activeStep.kind === 'modifier') return activeStep.group.modifiers.map(modifier => {
-      const price = getModifierPrice(modifier);
-      return {
-        id: modifier.id, label: modifier.name,
-        meta: modifier.modifier_type === 'REMOVE' || modifier.affects_price === false || price === 0 ? 'Sin costo' : `${price > 0 ? '+' : ''}${currencySymbol}${price.toFixed(2)}`,
-        selected: (selectedModifiersByGroup[activeStep.group.id] || []).includes(modifier.id),
-        multiple: activeStep.group.selection_type !== 'SINGLE',
-      };
-    });
+    if (activeStep.kind === 'modifier') {
+      const group = activeStep.group;
+      const selectedIds = selectedModifiersByGroup[group.id] || [];
+      const groupUnits = modifierUnits[group.id] || {};
+      const canRepeat = group.selection_type !== 'SINGLE' && Number(group.max_select || 0) > 1;
+      return group.modifiers.map(modifier => {
+        const price = getModifierPrice(modifier);
+        return {
+          id: modifier.id, label: modifier.name,
+          meta: modifier.modifier_type === 'REMOVE' || modifier.affects_price === false || price === 0 ? 'Sin costo' : `${price > 0 ? '+' : ''}${currencySymbol}${price.toFixed(2)}`,
+          selected: selectedIds.includes(modifier.id),
+          multiple: group.selection_type !== 'SINGLE',
+          units: Math.max(0, Number(groupUnits[modifier.id] || (selectedIds.includes(modifier.id) ? 1 : 0))),
+          offerUnits: canRepeat,
+          onUnits: changeOptionUnits,
+        };
+      });
+    }
     return activeStep.group.items.map(item => {
       const id = String(item.id || item.product_id || item.name);
       const delta = Number(item.price_delta || 0);
       return { id, label: item.name || id, meta: delta === 0 ? 'Sin costo' : `${delta > 0 ? '+' : ''}${currencySymbol}${delta.toFixed(2)}`, selected: (selectedCombosByGroup[activeStep.group.id] || []).includes(id), multiple: Number(activeStep.group.max_select || 1) > 1 };
     });
-  }, [activeStep, currencySymbol, fractionOptions, getFractionOptionId, getFractionOptionPrice, getModifierPrice, selectedCombosByGroup, selectedFractions, selectedModifiersByGroup]);
+  }, [activeStep, changeOptionUnits, currencySymbol, fractionOptions, getFractionOptionId, getFractionOptionPrice, getModifierPrice, modifierUnits, selectedCombosByGroup, selectedFractions, selectedModifiersByGroup]);
 
   const currentPage = activeStep ? Math.min(pagesByStep[activeStep.id] || 0, Math.max(0, Math.ceil(activeOptions.length / MODIFIER_MODAL_LAYOUT.optionsPerPage) - 1)) : 0;
   const pageCount = Math.max(1, Math.ceil(activeOptions.length / MODIFIER_MODAL_LAYOUT.optionsPerPage));
@@ -426,10 +532,10 @@ const ModifierModal: React.FC<ModifierModalProps> = ({
       return option?.name || '';
     }
     const selectedCount = step.kind === 'modifier'
-      ? (selectedModifiersByGroup[step.group.id] || []).length
+      ? (selectedModifiersByGroup[step.group.id] || []).reduce((total, id) => total + Math.max(1, Number((modifierUnits[step.group.id] || {})[id] || 1)), 0)
       : (selectedCombosByGroup[step.group.id] || []).length;
     return `${selectedCount} ${selectedCount === 1 ? 'seleccionado' : 'seleccionados'}`;
-  }, [fractionOptions, getFractionOptionId, note, selectedCombosByGroup, selectedFractions, selectedModifiersByGroup]);
+  }, [fractionOptions, getFractionOptionId, modifierUnits, note, selectedCombosByGroup, selectedFractions, selectedModifiersByGroup]);
 
   const themeButtonClass = ({ blue: 'bg-blue-600 hover:bg-blue-700', orange: 'bg-orange-600 hover:bg-orange-700', gray: 'bg-slate-800 hover:bg-slate-900' } as Record<string, string>)[themeColor] || 'bg-blue-600 hover:bg-blue-700';
   const nextStep = steps[activeStepIndex + 1];
@@ -448,11 +554,13 @@ const ModifierModal: React.FC<ModifierModalProps> = ({
     const multiple = activeStep.kind === 'modifier'
       ? activeStep.group.selection_type !== 'SINGLE'
       : maxSelect > 1;
+    const repeats = activeStep.kind === 'modifier' && maxSelect > 1;
     return [
       minSelect > 0 ? 'Obligatorio' : 'Opcional',
       multiple ? 'Selección múltiple' : 'Selección única',
       minSelect > 0 ? `Mínimo ${minSelect}` : '',
       maxSelect > 0 ? `Máximo ${maxSelect}` : '',
+      repeats ? 'Cantidad por opción' : '',
     ].filter(Boolean).join(' · ');
   })();
 

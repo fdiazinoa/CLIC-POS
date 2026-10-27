@@ -86,6 +86,7 @@
     "tests/cardOutcomeNoDoubleCharge.test.ts",
     "tests/modifierSelection.test.ts",
     "tests/kdsReportsEndpoint.test.ts",
-    "tests/fiscalCheckoutErrorMessages.test.ts"
+    "tests/fiscalCheckoutErrorMessages.test.ts",
+    "tests/modifierOptionQuantities.test.ts"
   ]
 }
