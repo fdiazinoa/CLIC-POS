@@ -39,6 +39,7 @@ export interface FiscalWorkflowStore {
  retirement?(scopeKey:string):Promise<FiscalRetirementRecord|null>;
  beginRetirement?(scopeKey:string,expected:FiscalRetirementProof):Promise<FiscalRetirementRecord>;
  completeRetirement?(scopeKey:string,receipt:FiscalRetirementReceipt):Promise<FiscalRetirementRecord>;
+ closeUnbornRetirement?(scopeKey:string,proof:FiscalRetirementProof,receipt:FiscalRetirementReceipt):Promise<FiscalRetirementRecord>;
  candidates(scopeKey:string,afterId:string,limit:number):Promise<string[]>;
 }
 

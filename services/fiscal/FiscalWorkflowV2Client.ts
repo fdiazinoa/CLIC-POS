@@ -114,6 +114,27 @@ export function createFiscalWorkflowV2Client({readAuth=captureFiscalStatusBoundC
   if(checkout&&checkout.scopeKey!==key)fail('FISCAL_WORKFLOW_CHECKOUT_RECONCILIATION_REQUIRED');return checkout||null;
  },
  async localCheckout(accountId?:string,tableId?:string):Promise<FiscalWorkflowCheckoutV2|null>{const authority=await readOfflineAuthority(),key=fiscalWorkflowScopeKey(authority.scope),native=store();return accountId&&tableId&&await native?.checkoutForTable?.(key,accountId,tableId)||await native?.currentCheckout(key)||null;},
+ /** Asks the ERP to retire the pending attempt and records its answer. The ERP is the only
+  * authority on whether a document exists: it refuses and nothing changes locally when it does. */
+ async retireUnbornAttempt(operator?:{actorId:string;pin:string}):Promise<{retired:boolean;note:string}>{
+  const native=store();if(!native?.closeUnbornRetirement)return {retired:false,note:'La caja no tiene almacén fiscal local.'};
+  const auth=readAuth();auth.assertCurrent();
+  const key=fiscalWorkflowScopeKey(scopeOf(auth.descriptor)),current=await native.currentCheckout(key);auth.assertCurrent();
+  if(!current)return {retired:false,note:'No hay un intento fiscal pendiente.'};
+  const id=current.checkoutId.slice(0,8);
+  if(['COMMITTED','ACKNOWLEDGED'].includes(current.phase))return {retired:false,note:`El intento ${id} ya está cerrado (${current.phase}).`};
+  if(!current.permit?.permitId)return {retired:false,note:`El intento ${id} no tiene permiso fiscal del ERP.`};
+  const proof:FiscalRetirementProof={schemaVersion:1,commandId:createUuid(),checkoutId:current.checkoutId,transactionId:current.transactionId,
+   permitId:current.permit.permitId,originalOperationId:current.operationId,cartIdentitySha256:await cartDigest(current.cartIdentity),reason:retirementReason};
+  try{
+   const {data}=await request('retire-unborn',{...proof,nonce:current.permit.nonce,...(operator||{})});
+   auth.assertCurrent();validateRetirementReceipt(data,proof,scopeOf(auth.descriptor));
+   const closed=await native.closeUnbornRetirement!(key,proof,data);auth.assertCurrent();
+   return {retired:true,note:`El ERP confirmó que el intento ${closed.checkoutId.slice(0,8)} nunca emitió comprobante y lo retiró.`};
+  }catch(error){
+   return {retired:false,note:`El ERP no retiró el intento ${id}: ${error instanceof Error?error.message:String(error)}. Verifícalo en el ERP antes de volver a cobrar.`};
+  }
+ },
  /** Read-only snapshot of the fiscal attempt held by this terminal. Never mutates state. */
  async pendingCheckoutInfo():Promise<{checkoutId:string;phase:string;operationId:string;cartIdentity:string;payments:number;permitExpiresAt:string|null;permitId:string|null;offlineBindingHash:string|null;localBindingHash:string|null;leaseId:string|null}|null>{
   try{const auth=readAuth(),native=store();if(!native)return null;const current=await native.currentCheckout(fiscalWorkflowScopeKey(scopeOf(auth.descriptor)));
@@ -124,14 +145,14 @@ export function createFiscalWorkflowV2Client({readAuth=captureFiscalStatusBoundC
  /** Releases an attempt that can never reconcile with the current cart or authority.
   * Only PREPARED attempts without payment effects are eligible; anything with a possible
   * effect is reported and left untouched for ERP verification. */
- async cancelUnreconcilableAttempt(options:{tags?:string[];cartIdentity?:string}={}):Promise<{cancelled:boolean;note:string}>{
-  const native=store();if(!native||!native.abandonPreparedWithoutEffects)return {cancelled:false,note:'La caja no tiene almacén fiscal local.'};
+ async cancelUnreconcilableAttempt(options:{tags?:string[];cartIdentity?:string;operator?:{actorId:string;pin:string}}={}):Promise<{cancelled:boolean;note:string}>{
+  const native=store();if(!native)return {cancelled:false,note:'La caja no tiene almacén fiscal local.'};
   const auth=readAuth();auth.assertCurrent();
   const key=fiscalWorkflowScopeKey(scopeOf(auth.descriptor)),current=await native.currentCheckout(key);auth.assertCurrent();
   if(!current)return {cancelled:false,note:'No hay un intento fiscal pendiente.'};
   const id=current.checkoutId.slice(0,8);
   if(['COMMITTED','ACKNOWLEDGED'].includes(current.phase))return {cancelled:false,note:`El intento ${id} ya está cerrado (${current.phase}).`};
-  if(current.phase!=='PREPARED'||(current.paymentIds||[]).length)return {cancelled:false,note:`El intento ${id} tiene efecto posible (${current.phase}) y debe verificarse en el ERP antes de continuar.`};
+  if(!['PREPARED','EFFECT_POSSIBLE'].includes(current.phase))return {cancelled:false,note:`El intento ${id} está en un estado que requiere revisión manual (${current.phase}).`};
   const tags=[...new Set((options.tags||[]).filter(Boolean))];
   const sameOperation=tags.length>0&&tags.every(tag=>tag===current.operationId);
   const local=await readOfflineAuthority().catch(()=>null);
@@ -139,15 +160,21 @@ export function createFiscalWorkflowV2Client({readAuth=captureFiscalStatusBoundC
   const expiresAt=Date.parse(current.permit?.expiresAt||'');
   const expired=Number.isFinite(expiresAt)&&expiresAt<=Date.now();
   if(sameBinding&&sameOperation&&!expired&&(!options.cartIdentity||options.cartIdentity===current.cartIdentity))return {cancelled:false,note:`El intento ${id} corresponde a este mismo ticket.`};
-  if(current.permit?.leaseId&&native.abandonOfflinePrepared){try{await native.abandonOfflinePrepared(current);return {cancelled:true,note:`Se descartó el intento fiscal ${id} sin efectos.`};}catch{/* the ERP retirement below is the canonical path for expired permits */}}
-  if(expired&&current.permit?.permitId&&native.retirement&&native.beginRetirement&&native.completeRetirement){
-   try{const closed=await this.retireExpiredCheckout({schemaVersion:1,commandId:createUuid(),checkoutId:current.checkoutId,transactionId:current.transactionId,permitId:current.permit.permitId,originalOperationId:current.operationId,cartIdentitySha256:await cartDigest(current.cartIdentity),reason:retirementReason,scopeKey:key,phase:'CLOSING',receipt:null});
-    return {cancelled:true,note:`El ERP retiró el intento fiscal ${closed.checkoutId.slice(0,8)} sin comprobante.`};}catch{/* fall back to the local no-effects release */}
+  // An offline-lease attempt never leaves the terminal, so its own abandon proof is authoritative.
+  if(current.permit?.leaseId&&native.abandonOfflinePrepared){try{await native.abandonOfflinePrepared(current);return {cancelled:true,note:`Se descartó el intento fiscal ${id} sin efectos.`};}catch{/* fall through to the ERP answer */}}
+  // A possible effect is only discardable by the ERP: it is the authority on the emitted document.
+  if(current.permit?.permitId){
+   const retired=await this.retireUnbornAttempt(options.operator);
+   if(retired.retired)return {cancelled:true,note:retired.note};
+   if(current.phase==='EFFECT_POSSIBLE'||/^FISCAL_WORKFLOW_/.test(retired.note.replace(/^.*?: /,''))||/comprobante|documento/i.test(retired.note))return {cancelled:false,note:retired.note};
   }
-  try{await native.abandonPreparedWithoutEffects(current);return {cancelled:true,note:`Se descartó el intento fiscal ${id} sin efectos.`};}
-  catch(error){return {cancelled:false,note:`No se pudo descartar el intento ${id}: ${error instanceof Error?error.message:String(error)}`};}
+  // No permit and no effects: the local no-effects release is the last resort.
+  if(current.phase==='PREPARED'&&native.abandonPreparedWithoutEffects){
+   try{await native.abandonPreparedWithoutEffects(current);return {cancelled:true,note:`Se descartó el intento fiscal ${id} sin efectos.`};}
+   catch(error){return {cancelled:false,note:`No se pudo descartar el intento ${id}: ${error instanceof Error?error.message:String(error)}`};}
+  }
+  return {cancelled:false,note:`El intento ${id} requiere verificación en el ERP antes de continuar.`};
  },
- /** Everything the payment flow consults before charging, in one read-only snapshot. */
  async diagnostics():Promise<{authStatus:string;scope:string;enabled:boolean;offlineReady:boolean;readiness:string;attempt:string;binding:string;lease:string;lastError:string}>{
   const out={authStatus:'',scope:'',enabled:false,offlineReady:false,readiness:'',attempt:'SIN INTENTO',binding:'',lease:'SIN RESERVA',lastError:leasePreparationError||allocationPreparationError||''};
   try{const auth=readAuth();out.authStatus='OK';out.scope=`${auth.descriptor.storeId.slice(0,8)} · ${auth.descriptor.terminalId.slice(0,8)}`;out.enabled=this.enabled();}catch(error){out.authStatus=error instanceof Error?error.message:String(error);return out;}

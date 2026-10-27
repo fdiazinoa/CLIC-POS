@@ -127,6 +127,29 @@ export async function beginRetirement(sql:SQL,scopeKey:string,proof:FiscalRetire
  await sql.run("INSERT INTO pos_fiscal_checkout_retirements_v1(checkout_id,transaction_id,command_id,scope_key,operation_id,permit_id,cart_identity_sha256,phase,created_at) VALUES(?,?,?,?,?,?,?,'CLOSING',?)",[c.checkoutId,c.transactionId,proof.commandId,scopeKey,c.operationId,proof.permitId,proof.cartIdentitySha256,new Date().toISOString()],false);
  return {...proof,scopeKey,phase:'CLOSING',receipt:null};
 }
+/** ERP-first retirement: the server receipt is the only authority that the attempt never
+ * became a document, so the local record is written closed in one step after the answer.
+ * Used for attempts that already carry an effect marker, which the expired-prepared path
+ * (isExpiredPrepared) can never cover. */
+export async function closeUnbornRetirement(sql:SQL,scopeKey:string,proof:FiscalRetirementProof,receipt:FiscalRetirementReceipt):Promise<FiscalRetirementRecord>{
+ validateRetirementProof(proof);validateRetirementReceipt(receipt,proof,JSON.parse(scopeKey));
+ const existing=await one(sql,'SELECT * FROM pos_fiscal_checkout_retirements_v1 WHERE checkout_id=? COLLATE NOCASE OR command_id=? COLLATE NOCASE OR transaction_id=? COLLATE NOCASE OR permit_id=? COLLATE NOCASE',[proof.checkoutId,proof.commandId,proof.transactionId,proof.permitId]);
+ if(existing){if(existing.phase==='CLOSED'&&existing.checkout_id===proof.checkoutId&&existing.command_id===proof.commandId&&existing.receipt_json===JSON.stringify(receipt))return record(existing);retirementFail();}
+ const row=await one(sql,'SELECT c.* FROM pos_fiscal_checkouts_v2 c JOIN pos_fiscal_checkout_current_v2 p ON p.checkout_id=c.checkout_id AND p.scope_key=c.scope_key WHERE c.scope_key=? AND c.checkout_id=?',[scopeKey,proof.checkoutId]);
+ if(!row)retirementFail();let c:FiscalWorkflowCheckoutV2;try{c=JSON.parse(row.checkout_json);}catch{return retirementFail();}
+ if(c.checkoutId!==proof.checkoutId||c.transactionId!==proof.transactionId||c.operationId!==proof.originalOperationId||c.scopeKey!==scopeKey
+   ||!c.permit||c.permit.permitId!==proof.permitId||row.phase!=='PREPARED'&&row.phase!=='EFFECT_POSSIBLE'
+   ||await cartDigest(c.cartIdentity)!==proof.cartIdentitySha256)retirementFail();
+ const p=await one(sql,'SELECT * FROM pos_fiscal_permits_v2 WHERE permit_id=?',[proof.permitId]);
+ if(!p||p.state!=='RESERVED'||p.checkout_id!==proof.checkoutId||p.transaction_id!==proof.transactionId||p.scope_key!==scopeKey||p.expires_at!==c.permit.expiresAt||p.permit_json!==JSON.stringify(c.permit))retirementFail();
+ await assertRetirementHasNoEffects(sql,proof,{targetedQueues:true});
+ const now=new Date().toISOString();
+ await sql.run("INSERT INTO pos_fiscal_checkout_retirements_v1(checkout_id,transaction_id,command_id,scope_key,operation_id,permit_id,cart_identity_sha256,phase,receipt_json,created_at,closed_at)VALUES(?,?,?,?,?,?,?,'CLOSED',?,?,?)",[proof.checkoutId,proof.transactionId,proof.commandId,scopeKey,proof.originalOperationId,proof.permitId,proof.cartIdentitySha256,JSON.stringify(receipt),now,receipt.closedAt],false);
+ await sql.run('DELETE FROM pos_fiscal_checkout_current_v2 WHERE scope_key=? AND checkout_id=?',[scopeKey,proof.checkoutId],false);
+ if(Number((await one(sql,'SELECT changes() count'))?.count)!==1)retirementFail();
+ return {...proof,scopeKey,phase:'CLOSED',receipt};
+}
+
 export async function completeRetirement(sql:SQL,scopeKey:string,receipt:FiscalRetirementReceipt):Promise<FiscalRetirementRecord>{
  const row=await one(sql,'SELECT * FROM pos_fiscal_checkout_retirements_v1 WHERE command_id=? AND scope_key=?',[receipt.commandId,scopeKey]);if(!row)retirementFail();const proof=proofFrom(row);
  validateRetirementReceipt(receipt,proof,JSON.parse(scopeKey));

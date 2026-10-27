@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ArrowLeft, RefreshCw, ShieldCheck, ShieldAlert, Eraser, Loader2, ClipboardCopy } from 'lucide-react';
+import { clicConfirm } from '../services/dialog/ClicDialogService';
 
 type Snapshot = Awaited<ReturnType<typeof readSnapshot>>;
 
@@ -45,6 +46,8 @@ export default function FiscalDiagnostics({ onClose }: { onClose: () => void }) 
    const release = async () => {
       setBusy('release');
       try {
+         const confirmed = await clicConfirm('¿Cerrar el intento fiscal pendiente?\n\nLa caja pedirá al ERP que confirme que ese intento nunca emitió comprobante. Si el ERP tiene un documento, no se toca nada y te dirá por qué.');
+         if (!confirmed) return;
          const { fiscalWorkflowV2Client } = await import('../services/fiscal/FiscalWorkflowV2Client');
          const outcome = await fiscalWorkflowV2Client.cancelUnreconcilableAttempt({});
          setNote(outcome.note);

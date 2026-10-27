@@ -84,8 +84,12 @@ test('a retained fiscal attempt that can never reconcile is released instead of 
   assert.match(client, /async cancelUnreconcilableAttempt\(/);
   assert.match(client, /async pendingCheckoutInfo\(/);
   assert.match(client, /async diagnostics\(/);
-  // Only a PREPARED attempt without payment effects may be released.
-  assert.match(client, /current\.phase!=='PREPARED'\|\|\(current\.paymentIds\|\|\[\]\)\.length\)return \{cancelled:false/);
+  // An attempt with a possible effect is only discardable by the ERP; the local release
+  // stays restricted to a PREPARED attempt without payments.
+  assert.match(client, /async retireUnbornAttempt\(/);
+  assert.match(client, /if\(current\.phase==='EFFECT_POSSIBLE'\|\|/);
+  assert.match(client, /current\.phase==='PREPARED'&&native\.abandonPreparedWithoutEffects/);
+  assert.match(source('services/db/FiscalWorkflowRetirementStore.ts'), /export async function closeUnbornRetirement\(/);
   const store = source('services/db/FiscalWorkflowV2Store.ts');
   assert.match(store, /async abandonPreparedWithoutEffects\(/);
   assert.match(store, /assertRetirementHasNoEffects\(sql/);

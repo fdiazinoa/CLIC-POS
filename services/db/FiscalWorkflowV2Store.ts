@@ -3,7 +3,7 @@ import {OFFLINE_FISCAL_ALLOCATION_SCHEMA,saveAllocation,readAllocation,prepareAl
 import {OFFLINE_FISCAL_LEASE_SCHEMA,OFFLINE_FISCAL_ABANDON_SCHEMA,saveOfflineLeasePage,readOfflineLease,offlineSaleDate} from './OfflineFiscalLeaseStore';
 import {offlineFiscalAuthorityFromConfig} from '../fiscal/OfflineFiscalLeaseContext';
 import {validateTableFiscalSaleContext} from '../fiscal/OfflineFiscalLease';
-import {FISCAL_RETIREMENT_IDENTITY_SCHEMA,readRetirement,beginRetirement,completeRetirement,assertNotRetired,assertRetirementHasNoEffects} from './FiscalWorkflowRetirementStore';
+import {FISCAL_RETIREMENT_IDENTITY_SCHEMA,readRetirement,beginRetirement,completeRetirement,closeUnbornRetirement,assertNotRetired,assertRetirementHasNoEffects} from './FiscalWorkflowRetirementStore';
 import type {FiscalRetirementProof,FiscalRetirementReceipt} from '../fiscal/FiscalWorkflowV2Types';
 import {matchesPreparedRecovery,hasPreparedSalePermit} from '../fiscal/FiscalWorkflowCheckoutRecovery';
 import {fiscalWorkflowScopeKey} from '../fiscal/FiscalWorkflowV2Types';
@@ -125,6 +125,7 @@ export class NativeFiscalWorkflowV2Store implements FiscalWorkflowStore {
  async retirement(scopeKey:string){return this.lock(()=>readRetirement(this.connection(),scopeKey));}
  async beginRetirement(scopeKey:string,expected:FiscalRetirementProof){return this.transaction(sql=>beginRetirement(sql,scopeKey,expected));}
  async completeRetirement(scopeKey:string,receipt:FiscalRetirementReceipt){return this.transaction(sql=>completeRetirement(sql,scopeKey,receipt));}
+ async closeUnbornRetirement(scopeKey:string,proof:FiscalRetirementProof,receipt:FiscalRetirementReceipt){return this.transaction(sql=>closeUnbornRetirement(sql,scopeKey,proof,receipt));}
  async candidates(scopeKey:string,afterId:string,limit:number):Promise<string[]>{return this.lock(async()=>{const rows=await this.connection().query(`SELECT transaction_id FROM (SELECT transaction_id FROM pos_fiscal_state_v2 WHERE scope_key=? AND (json_extract(state_json,'$.decision')='PENDING' OR json_extract(state_json,'$.decision') IN ('ACCEPTED','ACCEPTED_CONDITIONAL') AND json_extract(state_json,'$.signature') IS NULL) UNION SELECT w.transaction_id FROM pos_fiscal_watch_v2 w WHERE w.scope_key=? AND NOT EXISTS(SELECT 1 FROM pos_fiscal_state_v2 s WHERE s.transaction_id=w.transaction_id)) WHERE transaction_id>? ORDER BY transaction_id LIMIT ?`,[scopeKey,scopeKey,afterId,Math.min(10,Math.max(0,limit))]);return (rows.values||[]).map(r=>r.transaction_id);});}
 }
 /** Called on the financial writer's ALREADY OWNED connection/transaction; never BEGIN/COMMIT here. */
