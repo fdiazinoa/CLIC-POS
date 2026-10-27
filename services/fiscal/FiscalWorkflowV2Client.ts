@@ -189,9 +189,9 @@ export function createFiscalWorkflowV2Client({readAuth=captureFiscalStatusBoundC
   }
   return {cancelled:false,note:`El intento ${id} requiere verificación en el ERP antes de continuar.`};
  },
- async diagnostics():Promise<{authStatus:string;scope:string;enabled:boolean;offlineReady:boolean;readiness:string;attempt:string;binding:string;lease:string;lastError:string}>{
-  const out={authStatus:'',scope:'',enabled:false,offlineReady:false,readiness:'',attempt:'SIN INTENTO',binding:'',lease:'SIN RESERVA',lastError:leasePreparationError||allocationPreparationError||''};
-  try{const auth=readAuth();out.authStatus='OK';out.scope=`${auth.descriptor.storeId.slice(0,8)} · ${auth.descriptor.terminalId.slice(0,8)}`;out.enabled=this.enabled();}catch(error){out.authStatus=error instanceof Error?error.message:String(error);return out;}
+ async diagnostics():Promise<{authStatus:string;scope:string;session:string;enabled:boolean;offlineReady:boolean;readiness:string;attempt:string;binding:string;lease:string;lastError:string}>{
+  const out={authStatus:'',scope:'',session:'',enabled:false,offlineReady:false,readiness:'',attempt:'SIN INTENTO',binding:'',lease:'SIN RESERVA',lastError:leasePreparationError||allocationPreparationError||''};
+  try{const auth=readAuth();out.authStatus='OK';out.scope=`${auth.descriptor.storeId.slice(0,8)} · ${auth.descriptor.terminalId.slice(0,8)}`;const expiry=(auth as any).sessionExpiresAt;out.session=expiry?new Date(expiry).toLocaleString('es-DO'):'sin vencimiento';out.enabled=this.enabled();}catch(error){out.authStatus=error instanceof Error?error.message:String(error);return out;}
   try{const readiness=await this.offlineReadiness();out.readiness=`${readiness.reason}${readiness.code?` (${readiness.code})`:''}`;}catch(error){out.readiness=error instanceof Error?error.message:String(error);}
   out.offlineReady=await this.offlineReady().catch(()=>false);
   try{const native=store(),local=await readOfflineAuthority().catch(()=>null);
@@ -269,12 +269,16 @@ export function createFiscalWorkflowV2Client({readAuth=captureFiscalStatusBoundC
   const promise=(async()=>{
    const {data}=await request('capability');auth.assertCurrent();if(epoch!==generation)fail('FISCAL_WORKFLOW_CONTEXT_CHANGED');
    const keys=['schemaVersion','capability','version','scope','authorityHash','sessionExpiresAt'];
-   const expires=Date.parse(data?.sessionExpiresAt),localExpires=Date.parse((auth as any).sessionExpiresAt||data?.sessionExpiresAt),now=Date.now();
+   const now=Date.now();
+   // An open-ended session declares no date; a declared date must still be in the future.
+   const current=(value:unknown)=>value==null||value===''||typeof value==='string'&&Number.isFinite(Date.parse(value))&&Date.parse(value)>now;
+   const lifetime=(value:unknown)=>typeof value==='string'&&Number.isFinite(Date.parse(value))?Math.max(0,Date.parse(value)-now):300000;
+   const expires=data?.sessionExpiresAt,localExpires=(auth as any).sessionExpiresAt||data?.sessionExpiresAt;
    if(!data||typeof data!=='object'||Array.isArray(data)||Object.keys(data).length!==keys.length||keys.some(k=>!Object.prototype.hasOwnProperty.call(data,k))
     ||data.schemaVersion!==2||data.capability!=='fiscalWorkflowV2'||data.version!==2||!contexts(data.scope,scopeOf(auth.descriptor))
-    ||typeof data.sessionExpiresAt!=='string'||!/^[a-f0-9]{64}$/.test(data.authorityHash)||!Number.isFinite(expires)||!Number.isFinite(localExpires)||Math.min(expires,localExpires)<=now)fail();
+    ||!current(expires)||!/^[a-f0-9]{64}$/.test(data.authorityHash)||!current(localExpires))fail();
    // Discovery grants availability only. The normal permit response must still prove its own authority.
-   observeFiscalWorkflowCapability(auth.base,auth.headers,'2',now,Math.min(300000,expires-now,localExpires-now));
+   observeFiscalWorkflowCapability(auth.base,auth.headers,'2',now,Math.min(300000,lifetime(expires),lifetime(localExpires)));
   })().finally(()=>{if(discovering?.promise===promise)discovering=null;});discovering={key,promise};return promise;
  },
  prefetch():Promise<void>{

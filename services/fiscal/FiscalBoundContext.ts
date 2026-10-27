@@ -1,5 +1,7 @@
 import {readLargeMasterSyncV3BoundIdentity,validatedLargeMasterSyncV3ErpSyncBase,type LargeMasterSyncV3BoundIdentity} from '../sync/LargeMasterSyncV3BoundTransport';
 import {readTerminalCredentialsSync,type TerminalCredentials} from '../sync/TerminalCredentialStore';
+/** A declared session date must still be valid and in the future; an absent date is an open-ended session. */
+const lapsedSession=(value:unknown,at:number)=>value!=null&&value!==''&&(!(typeof value==='string')||!Number.isFinite(Date.parse(value))||Date.parse(value)<=at);
 export const captureFiscalBoundContext=(readIdentity:()=>LargeMasterSyncV3BoundIdentity=readLargeMasterSyncV3BoundIdentity,readCredentials:()=>TerminalCredentials=readTerminalCredentialsSync,now=Date.now())=>{
  const identity=readIdentity(),credentials=readCredentials();
  const base=validatedLargeMasterSyncV3ErpSyncBase(identity.erpSyncBaseUrl),origin=new URL(base).origin;
@@ -30,11 +32,11 @@ export const captureFiscalStatusBoundContext=(readIdentity:()=>LargeMasterSyncV3
    ||!credentials.companyId||!credentials.storeId||credentials.identityMigrationRequired
    ||!['AUTHENTICATED','BOUND'].includes(credentials.authStatus||'')
    ||!['ERP_REGISTER','ERP_REGISTER_REAUTH','ERP_REGISTER_REFRESH','ERP_AUTH_REAUTH','ERP_AUTH_REFRESH'].includes(credentials.deviceTokenSource||'')
-   ||!credentials.syncTokenExpiresAt||!Number.isFinite(Date.parse(credentials.syncTokenExpiresAt))||Date.parse(credentials.syncTokenExpiresAt)<=now
+   ||lapsedSession(credentials.syncTokenExpiresAt,now)
    ||credentials.deviceTokenExpiresAt&&!Number.isFinite(Date.parse(credentials.deviceTokenExpiresAt)))throw Error('FISCAL_TERMINAL_AUTH_REQUIRED');
  const descriptor={origin,tenantId:identity.tenantId,companyId:credentials.companyId,storeId:credentials.storeId,terminalId:identity.terminalId,deviceId:identity.deviceId};
  // Both dates remain in the race fingerprint. Only the live session expiry authorizes this status GET.
  const fingerprint=JSON.stringify([descriptor,identity.syncToken,credentials.deviceToken,credentials.syncTokenExpiresAt,credentials.deviceTokenExpiresAt,credentials.authStatus,credentials.deviceTokenSource]);
- return {base,descriptor,sessionExpiresAt:credentials.syncTokenExpiresAt,headers:{Authorization:`Bearer ${identity.syncToken}`,'X-Sync-Token':identity.syncToken,'X-Terminal-Id':identity.terminalId,'X-Device-Id':identity.deviceId,'X-Device-Token':credentials.deviceToken!,'X-Tenant-Id':identity.tenantId},
+ return {base,descriptor,sessionExpiresAt:credentials.syncTokenExpiresAt||null,headers:{Authorization:`Bearer ${identity.syncToken}`,'X-Sync-Token':identity.syncToken,'X-Terminal-Id':identity.terminalId,'X-Device-Id':identity.deviceId,'X-Device-Token':credentials.deviceToken!,'X-Tenant-Id':identity.tenantId},
   assertCurrent:()=>{const fresh=captureFiscalStatusBoundContext(readIdentity,readCredentials,Date.now());if(fresh.fingerprint!==fingerprint)throw Error('FISCAL_SUBMISSION_SCOPE_CHANGED');},fingerprint};
 };

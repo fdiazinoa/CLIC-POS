@@ -93,6 +93,7 @@ export default function FiscalDiagnostics({ onClose, users = [], roles = [], cur
          `Autorización: ${snapshot.authStatus}${snapshot.reauthorization.required ? ` · ${snapshot.reauthorization.reason}` : ''}`,
          `Ámbito: ${snapshot.scope}`,
          `Capacidad fiscal V2: ${snapshot.enabled ? 'sí' : 'no'}`,
+         `Sesión: ${snapshot.session || 'sin vencimiento'}`,
          `Reserva offline: ${snapshot.readiness} · lista: ${snapshot.offlineReady ? 'sí' : 'no'}`,
          `Intento fiscal: ${snapshot.attempt}`,
          `Vinculación: ${snapshot.binding}`,
@@ -105,6 +106,7 @@ export default function FiscalDiagnostics({ onClose, users = [], roles = [], cur
    const rows: Array<{ label: string; value: string; ok: boolean }> = snapshot ? [
       { label: 'Autorización de la terminal', value: snapshot.reauthorization.required ? `${snapshot.authStatus} · ${snapshot.reauthorization.reason}` : snapshot.authStatus, ok: snapshot.authStatus === 'OK' && !snapshot.reauthorization.required },
       { label: 'Capacidad fiscal V2', value: snapshot.enabled ? 'Habilitada' : 'No habilitada por el ERP', ok: snapshot.enabled },
+      { label: 'Sesión de la terminal', value: snapshot.session || 'sin vencimiento', ok: true },
       { label: 'Reserva fiscal local', value: snapshot.readiness, ok: snapshot.offlineReady || /READY/.test(snapshot.readiness) },
       { label: 'Comprobantes locales', value: snapshot.lease, ok: !/SIN RESERVA/.test(snapshot.lease) },
       { label: 'Intento fiscal guardado', value: snapshot.attempt, ok: /NINGUNO|SIN INTENTO|COMMITTED|ACKNOWLEDGED/.test(snapshot.attempt) },
