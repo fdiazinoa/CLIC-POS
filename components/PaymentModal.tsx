@@ -1328,8 +1328,11 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
          } else {
             const message = error instanceof Error ? error.message : '';
             // Fiscal tokens are translated for the cashier; the code stays in the trace.
-            setFinalizeError(describeFiscalCheckoutFailure(message)
-               || (message ? `Error al finalizar: ${message}` : 'Ocurrió un error al finalizar. Intente nuevamente.'));
+            const inFlight = /PAYMENT_FINALIZATION_IN_FLIGHT/.test(message);
+            setFinalizeError(inFlight
+               ? 'El cobro anterior todavía se está procesando. Espera unos segundos y revisa el resultado antes de reintentar.'
+               : (describeFiscalCheckoutFailure(message)
+                  || (message ? `Error al finalizar: ${message}` : 'Ocurrió un error al finalizar. Intente nuevamente.')));
          }
          setGatewayProgress(null);
       } finally {

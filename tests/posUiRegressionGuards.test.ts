@@ -351,6 +351,14 @@ test('el runbook de cierre fiscal describe las mismas salidas que la caja', asyn
   assert.match(runbook, /POS_FISCAL_WORKFLOW_V2_ENABLED/);
 });
 
+test('un segundo cobro en vuelo lo dice en vez de mandar a buscar un motivo inexistente', () => {
+  const src = pos();
+  assert.match(src, /throw new Error\('PAYMENT_FINALIZATION_IN_FLIGHT'\);/);
+  const modal = source('components/PaymentModal.tsx');
+  assert.match(modal, /const inFlight = \/PAYMENT_FINALIZATION_IN_FLIGHT\/\.test\(message\);/);
+  assert.match(modal, /El cobro anterior todavía se está procesando\. Espera unos segundos/);
+});
+
 test('un cobro que no responde no deja la caja sin poder facturar', () => {
   const src = pos();
   // El flag de finalización en curso se libera solo cuando el intento envejece.

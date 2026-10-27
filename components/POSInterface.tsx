@@ -5856,7 +5856,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          const stale = !startedAt || Date.now() - startedAt >= PAYMENT_FINALIZATION_STALE_MS;
          if (!stale) {
             console.warn('[PAYMENT] Se ignoró un segundo intento de finalizar la misma venta.');
-            return null;
+            // Never answer with a bare null: the cashier would see "revise el motivo" with no motivo.
+            throw new Error('PAYMENT_FINALIZATION_IN_FLIGHT');
          }
          // A finalize that never settled (network/native hang) must not leave the box unable to charge.
          console.warn('[PAYMENT] El intento de cobro anterior quedó sin respuesta; se libera para reintentar.');
