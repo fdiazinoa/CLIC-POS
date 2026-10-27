@@ -227,7 +227,7 @@ test('the checkout resolves blockers before the cashier pays', () => {
   const src = pos();
   assert.match(src, /stableCheckoutAttemptId\(cartKey,\(\)=>createUuid\(\)\)/);
   assert.match(src, /if \(!showPaymentModal \|\| !v3Operational\) return;/);
-  assert.match(src, /setShowPaymentModal\(false\);\s*\n\s*setErrorToast\(released\?\.note/);
+  assert.match(src, /setShowPaymentModal\(false\);\s*\n\s*setErrorToast\(released\.note\)/);
 });
 
 test('automatic reconciliation is silent for the cashier', () => {
@@ -236,5 +236,14 @@ test('automatic reconciliation is silent for the cashier', () => {
   assert.doesNotMatch(src, /setSuccessToast\('Ticket actualizado al inventario de hoy/);
   assert.match(src, /console\.info\('\[checkout\] almacén de venta alineado con el ERP/);
   // Only exceptions and money changes may speak.
-  assert.match(src, /setErrorToast\(released\?\.note/);
+  assert.match(src, /setErrorToast\(released\.note\)/);
+});
+
+test('every preparation step releases a stale attempt through one helper', () => {
+  const src = pos();
+  assert.match(src, /const releaseStaleFiscalAttempt = async \(options: \{ identity\?: string \} = \{\}\)/);
+  // The modal preflight and the re-anchor both delegate to it.
+  const releaseCalls = src.match(/await releaseStaleFiscalAttempt\(/g) || [];
+  assert.ok(releaseCalls.length >= 2, 'both preparation steps must use the shared helper');
+  assert.doesNotMatch(src, /const outcome = await fiscalWorkflowV2Client\.cancelUnreconcilableAttempt\(\{\}\)\.catch/);
 });

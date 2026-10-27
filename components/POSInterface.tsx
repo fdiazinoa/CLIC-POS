@@ -2420,6 +2420,20 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
    }, [activeTable, parkedTickets, transactions, onUpdateCart, cart.length]);
 
+   // Único punto que descarta un intento fiscal que ya no corresponde al carrito actual. Se usa al
+   // abrir el pago y antes de reanclar las líneas, para que no existan dos caminos distintos.
+   const releaseStaleFiscalAttempt = async (options: { identity?: string } = {}): Promise<{ cancelled: boolean; note: string }> => {
+      const pending = await fiscalWorkflowV2Client.pendingCheckoutInfo().catch(() => null);
+      if (!pending || !['PREPARED', 'EFFECT_POSSIBLE'].includes(pending.phase)) return { cancelled: false, note: '' };
+      if (options.identity && pending.cartIdentity === options.identity) return { cancelled: false, note: '' };
+      const outcome = await fiscalWorkflowV2Client.cancelUnreconcilableAttempt(options.identity ? { cartIdentity: options.identity } : {}).catch(() => null);
+      if (outcome?.cancelled) {
+         fiscalCheckoutRef.current = null;
+         fiscalCheckoutOperationRef.current = null;
+      }
+      return outcome || { cancelled: false, note: '' };
+   };
+
    // Everything that could block the sale is resolved when the payment modal opens, not after the
    // cashier typed the amount: a stale attempt or an unavailable authority is reported before paying.
    useEffect(() => {
@@ -2428,13 +2442,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       void (async () => {
          try {
             const identity = currentFiscalCheckoutCartIdentity(offlineTableFiscalContextRef.current);
-            const pending = await fiscalWorkflowV2Client.pendingCheckoutInfo().catch(() => null);
-            if (cancelled || !pending || !['PREPARED', 'EFFECT_POSSIBLE'].includes(pending.phase)) return;
-            if (pending.cartIdentity === identity) return;
-            const released = await fiscalWorkflowV2Client.cancelUnreconcilableAttempt({ cartIdentity: identity }).catch(() => null);
-            if (cancelled || released?.cancelled) return;
+            const released = await releaseStaleFiscalAttempt({ identity });
+            if (cancelled || released.cancelled) return;
+            if (!released.note) return;
             setShowPaymentModal(false);
-            setErrorToast(released?.note || 'Hay un intento fiscal pendiente de verificación. Revisa Ajustes → Sistema y Auditoría → Diagnóstico fiscal.');
+            setErrorToast(released.note);
          } catch { /* the checkout still reports its own message */ }
       })();
       return () => { cancelled = true; };
@@ -2508,14 +2520,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       // A stale cart cannot be resumed: a pending attempt bound to the previous lines has to be
       // released before restating them, otherwise the checkout and the cart disagree forever.
       const restate = async () => {
-         // The attempt can also live only in the native store (for example after a restart).
-         const pending = await fiscalWorkflowV2Client.pendingCheckoutInfo().catch(() => null);
-         if (fiscalCheckoutRef.current || (pending && ['PREPARED', 'EFFECT_POSSIBLE'].includes(pending.phase))) {
-            const outcome = await fiscalWorkflowV2Client.cancelUnreconcilableAttempt({}).catch(() => null);
-            if (!outcome?.cancelled) return null;
-            fiscalCheckoutRef.current = null;
-            fiscalCheckoutOperationRef.current = null;
-         }
+         // A stale cart cannot be resumed: a pending attempt bound to the previous lines has to be
+         // released before restating them (it can also live only in the native store).
+         const released = await releaseStaleFiscalAttempt();
+         if (fiscalCheckoutRef.current || released.note && !released.cancelled) return null;
          return v3Operational.reanchor(cart);
       };
       void restate().then(async lines => {
