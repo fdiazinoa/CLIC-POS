@@ -117,7 +117,7 @@ test('fiscal diagnostics stay reachable from Settings', () => {
 test('a restaurant account restores with its agreed prices and only adopts today authority', () => {
   const src = pos();
   assert.match(src, /v3Operational\.reanchor\(cart\)/);
-  assert.match(src, /Los precios de la mesa no cambian/);
+  assert.doesNotMatch(src, /setSuccessToast\('Ticket actualizado al inventario de hoy/);
   assert.match(source('components/LargeMasterSyncV3OperationalPOS.tsx'), /planV3CartReanchor\(/);
   const planner = source('services/sync/LargeMasterSyncV3CartReanchor.ts');
   assert.match(planner, /output\.push\(\{ \.\.\.line, v3SaleAuthority: next \}\)/);
@@ -208,7 +208,7 @@ test('the box follows the ERP sale warehouse instead of waiting for a manual ste
   const src = pos();
   assert.match(src, /readErpSalesWarehouse\(\)/);
   assert.match(src, /pickAuthorizedWarehouse\(rows, erp\)/);
-  assert.match(src, /Almacén de venta actualizado desde el ERP/);
+  assert.doesNotMatch(src, /setSuccessToast\(`Almacén de venta actualizado desde el ERP/);
   assert.doesNotMatch(src, /if \(!v3Operational \|\| cart\.length > 0\) return;/);
 });
 
@@ -228,4 +228,13 @@ test('the checkout resolves blockers before the cashier pays', () => {
   assert.match(src, /stableCheckoutAttemptId\(cartKey,\(\)=>createUuid\(\)\)/);
   assert.match(src, /if \(!showPaymentModal \|\| !v3Operational\) return;/);
   assert.match(src, /setShowPaymentModal\(false\);\s*\n\s*setErrorToast\(released\?\.note/);
+});
+
+test('automatic reconciliation is silent for the cashier', () => {
+  const src = pos();
+  assert.doesNotMatch(src, /setSuccessToast\(`Almacén de venta actualizado desde el ERP/);
+  assert.doesNotMatch(src, /setSuccessToast\('Ticket actualizado al inventario de hoy/);
+  assert.match(src, /console\.info\('\[checkout\] almacén de venta alineado con el ERP/);
+  // Only exceptions and money changes may speak.
+  assert.match(src, /setErrorToast\(released\?\.note/);
 });

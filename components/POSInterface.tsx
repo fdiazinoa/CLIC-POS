@@ -2468,7 +2468,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   ? { ...row, config: { ...row.config, inventoryScope: { ...scope, defaultSalesWarehouseId: match.id!, defaultWarehouse: match as any } } }
                   : row),
             });
-            setSuccessToast(`Almacén de venta actualizado desde el ERP: ${match.name || match.code || match.id}.`);
+            console.info('[checkout] almacén de venta alineado con el ERP:', match.name || match.code || match.id);
          } catch { /* the checkout still reports a precise message */ }
       })();
       return () => { cancelled = true; };
@@ -2550,7 +2550,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          }
          if (cancelled) return;
          onUpdateCart(next);
-         setSuccessToast('Ticket actualizado al inventario de hoy. Los precios de la mesa no cambian.');
+         console.info('[checkout] ticket reanclado al inventario vigente sin cambiar precios');
       }).catch(() => undefined);
       return () => { cancelled = true; };
    }, [cart, v3Operational, onUpdateCart]);
