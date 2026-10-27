@@ -185,3 +185,11 @@ test('a native attempt bound to another cart is released instead of blocking the
   // The re-anchor also looks at the native store, not only the in-memory reference.
   assert.match(src, /const pending = await fiscalWorkflowV2Client\.pendingCheckoutInfo\(\)/);
 });
+
+test('a stale descriptive copy of an article never blocks the sale', () => {
+  const source_ = source('services/sync/LargeMasterSyncV3LineSource.ts');
+  assert.match(source_, /SYNC_V3_ARTICLE_SOURCE_CHANGED:identity/);
+  assert.match(source_, /SYNC_V3_ARTICLE_SOURCE_CHANGED:tariff/);
+  assert.doesNotMatch(source_, /JSON\.stringify\(line\.appliedTaxIds\) !== JSON\.stringify\(product\.appliedTaxIds\)/);
+  assert.match(source('utils/v3ErrorMessages.ts'), /SYNC_V3_ARTICLE_SOURCE_CHANGED/);
+});

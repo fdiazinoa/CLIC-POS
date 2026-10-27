@@ -21,6 +21,8 @@ const V3_ERROR_MESSAGES: Record<string, string> = {
     'Los impuestos de un artículo del ticket cambiaron en el maestro. Revisa el ticket antes de emitir.',
   SYNC_V3_RETAINED_OWNER_REQUIRED:
     'El ticket conserva líneas de una versión anterior del catálogo. Actualiza el ticket al inventario de hoy.',
+  SYNC_V3_ARTICLE_SOURCE_CHANGED:
+    'El artículo cambió en el maestro autorizado y el ticket conserva una copia anterior. Vuelve a agregar ese artículo para cobrarlo con el catálogo de hoy.',
   SYNC_V3_BINDING_CHANGED:
     'La terminal cambió de vinculación. Reinicia el POS para recargar la autorización.',
 };

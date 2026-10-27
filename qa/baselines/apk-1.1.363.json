@@ -74,6 +74,7 @@
     "tests/presentationErrorMessages.test.ts",
     "tests/presentationDiagnostics.test.ts",
     "tests/presentationReconcile.test.ts",
-    "tests/offlineTableFiscalFingerprint.test.ts"
+    "tests/offlineTableFiscalFingerprint.test.ts",
+    "tests/v3LineSourceIdentity.test.ts"
   ]
 }
