@@ -11,6 +11,23 @@ import subprocess
 import tempfile
 import socket
 
+try:  # Ejecutado como módulo (python -m server.kds_service)
+    from .kds_reports import (
+        apply_status_transition,
+        build_reports_router,
+        ensure_kds_schema,
+        mark_delivered,
+        ahora_iso,
+    )
+except ImportError:  # Ejecutado como script (python3 server/kds_service.py)
+    from kds_reports import (
+        apply_status_transition,
+        build_reports_router,
+        ensure_kds_schema,
+        mark_delivered,
+        ahora_iso,
+    )
+
 app = FastAPI(title="CLIC-POS KDS Service")
 
 # Setup CORS
@@ -31,7 +48,13 @@ class StatusUpdate(BaseModel):
     cart_id: Optional[str] = None
     producto_id: Optional[str] = None
     orden_id: Optional[str] = None
-    nuevo_estado: str  # 'PENDIENTE', 'EN_PREPARACION', 'LISTO', 'DEVUELTO'
+    nuevo_estado: str  # 'PENDIENTE', 'EN_PREPARACION', 'LISTO', 'DEVUELTO', 'ENTREGADO'
+
+class DeliveryUpdate(BaseModel):
+    orden_id: Optional[str] = None
+    item_id: Optional[str] = None
+    item_ids: Optional[List[str]] = None
+
 
 class ProductionArea(BaseModel):
     id: str
@@ -60,6 +83,27 @@ def get_db_connection():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+# Informes de KDS (solo lectura) y migración idempotente de las marcas de tiempo.
+app.include_router(build_reports_router(get_db_connection))
+
+
+def migrate_kds_schema() -> None:
+    """Añade las marcas recibido/inicio/listo/entregado si faltan (idempotente)."""
+    try:
+        conn = get_db_connection()
+        try:
+            resultado = ensure_kds_schema(conn)
+            if resultado["columnas_agregadas"]:
+                print(f"KDS schema: columnas agregadas {resultado['columnas_agregadas']}")
+        finally:
+            conn.close()
+    except sqlite3.Error as error:
+        print(f"WARN: no se pudo migrar el esquema KDS: {error}")
+
+
+migrate_kds_schema()
 
 def send_text_to_network_printer(printer_ip: str, content: str, port: int = 9100, timeout: int = 3):
     payload = b"\x1b@" + content.encode("ascii", "ignore") + b"\n\n\n" + b"\x1dVA0"
@@ -140,7 +184,7 @@ def upsert_direct_kds_order(conn, orden_id: str, payload: dict):
             continue
 
         conn.execute(
-            "INSERT INTO ordenes_detalles (id, orden_id, producto_id, nombre, cantidad, modificadores, estado_cocina) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO ordenes_detalles (id, orden_id, producto_id, nombre, cantidad, modificadores, estado_cocina, area_id, recibido_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 detail_id,
                 orden_id,
@@ -149,6 +193,8 @@ def upsert_direct_kds_order(conn, orden_id: str, payload: dict):
                 item["quantity"],
                 json.dumps(item["modifiers"]),
                 "PENDIENTE",
+                area_id,
+                ahora_iso(),
             )
         )
         dispatched_count += 1
@@ -214,8 +260,8 @@ def dispatch_command(orden_id: str, payload: Optional[dict] = None):
                 exists = conn.execute("SELECT 1 FROM ordenes_detalles WHERE id = ?", (item_id,)).fetchone()
                 if not exists:
                     conn.execute(
-                        "INSERT INTO ordenes_detalles (id, orden_id, producto_id, nombre, cantidad, modificadores, estado_cocina) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                        (item_id, orden_id, item['id'], item['name'], item['quantity'], json.dumps(item.get('modifiers', [])), 'PENDIENTE')
+                        "INSERT INTO ordenes_detalles (id, orden_id, producto_id, nombre, cantidad, modificadores, estado_cocina, area_id, recibido_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (item_id, orden_id, item['id'], item['name'], item['quantity'], json.dumps(item.get('modifiers', [])), 'PENDIENTE', area_id, ahora_iso())
                     )
                     dispatched_count += 1
             
@@ -431,42 +477,20 @@ def get_active_orders():
 def update_status(update: StatusUpdate):
     conn = get_db_connection()
     try:
-        now = datetime.now().isoformat()
-        
+        now = ahora_iso()
+
         if update.item_id or update.item_ids or update.cart_id:
-            # Update specific item
-            extra_sql = ""
-            extra_params = []
-            
-            if update.nuevo_estado == 'EN_PREPARACION':
-                extra_sql = ", hora_inicio_preparacion = ?"
-                extra_params.append(now)
-            elif update.nuevo_estado in ('LISTO', 'DEVUELTO'):
-                extra_sql = ", hora_terminado = ?"
-                extra_params.append(now)
+            # Update specific item(s); las marcas de tiempo usan COALESCE (idempotente).
+            apply_status_transition(
+                conn,
+                update.nuevo_estado,
+                now,
+                item_id=update.item_id,
+                item_ids=update.item_ids,
+                cart_id=update.cart_id,
+                orden_id=update.orden_id,
+            )
 
-            candidate_ids = []
-            if update.item_id:
-                candidate_ids.append(update.item_id)
-            if update.item_ids:
-                candidate_ids.extend(update.item_ids)
-
-            seen_ids = set()
-            for item_id in candidate_ids:
-                if not item_id or item_id in seen_ids:
-                    continue
-                seen_ids.add(item_id)
-                conn.execute(
-                    f"UPDATE ordenes_detalles SET estado_cocina = ? {extra_sql} WHERE id = ?",
-                    [update.nuevo_estado, *extra_params, item_id]
-                )
-
-            if update.cart_id and update.orden_id:
-                conn.execute(
-                    f"UPDATE ordenes_detalles SET estado_cocina = ? {extra_sql} WHERE orden_id = ? AND id LIKE ?",
-                    [update.nuevo_estado, *extra_params, update.orden_id, f"%{update.cart_id}%"]
-                )
-            
             # Check if all items in the same order are now 'LISTO'
             item_info = None
             if update.item_id:
@@ -475,15 +499,38 @@ def update_status(update: StatusUpdate):
                 item_info = {"orden_id": update.orden_id}
             if item_info:
                 check_all_ready(conn, item_info['orden_id'])
-                
+
         elif update.orden_id:
-            # Update entire order
-            conn.execute("UPDATE ordenes_detalles SET estado_cocina = ? WHERE orden_id = ?", (update.nuevo_estado, update.orden_id))
+            # Update entire order (estado + marcas de la transición)
+            apply_status_transition(conn, update.nuevo_estado, now, orden_id=update.orden_id)
             if update.nuevo_estado == 'LISTO':
                 conn.execute("UPDATE transactions SET status = 'PARA_ENTREGAR' WHERE id = ?", (update.orden_id,))
-                
+
         conn.commit()
         return {"status": "success"}
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
+
+@app.post("/api/cocina/marcar-entregado")
+def mark_order_delivered(update: DeliveryUpdate):
+    """Sella `entregado_at` sin alterar el estado de cocina (idempotente)."""
+    if not update.orden_id and not update.item_id and not update.item_ids:
+        raise HTTPException(status_code=400, detail="Indica orden_id, item_id o item_ids para marcar la entrega.")
+    conn = get_db_connection()
+    try:
+        now = ahora_iso()
+        updated = mark_delivered(
+            conn,
+            orden_id=update.orden_id,
+            item_id=update.item_id,
+            item_ids=update.item_ids,
+            now=now,
+        )
+        conn.commit()
+        return {"status": "success", "updated": updated, "entregado_at": now}
     except Exception as e:
         conn.rollback()
         raise HTTPException(status_code=500, detail=str(e))
