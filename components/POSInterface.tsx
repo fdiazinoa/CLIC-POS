@@ -2424,13 +2424,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    // instead of leaving the cashier stuck at the checkout.
    const warehouseAlignedRef = useRef('');
    useEffect(() => {
-      if (!v3Operational || cart.length > 0) return;
+      if (!v3Operational) return;
       const scope = activeTerminalConfig?.inventoryScope;
       const rows = scope?.warehouses || [];
       if (!rows.length) return;
+      // Retry on every mount/terminal change until the ERP value is adopted; the ref only records a
+      // successful alignment, never a failed attempt.
       const key = `${activeTerminalId}:${scope?.defaultSalesWarehouseId || ''}`;
       if (warehouseAlignedRef.current === key) return;
-      warehouseAlignedRef.current = key;
       let cancelled = false;
       void (async () => {
          try {
@@ -2439,6 +2440,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             if (!erp || cancelled) return;
             const match = pickAuthorizedWarehouse(rows, erp);
             if (!match || !match.id || match.id === scope?.defaultSalesWarehouseId) return;
+            warehouseAlignedRef.current = key;
             onUpdateConfig({
                ...config,
                terminals: config.terminals.map(row => String(row.id) === String(activeTerminalId)
@@ -2449,7 +2451,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          } catch { /* the checkout still reports a precise message */ }
       })();
       return () => { cancelled = true; };
-   }, [v3Operational, cart.length, activeTerminalId, activeTerminalConfig, config, onUpdateConfig]);
+   }, [v3Operational, activeTerminalId, activeTerminalConfig, config, onUpdateConfig]);
 
    // Un ticket de mesa abierto ayer conserva sus precios pactados; solo la autoridad de venta
    // (inventario, tarifa y almacén del día) se mueve a la vigente para que el cobro valide.

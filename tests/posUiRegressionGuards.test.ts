@@ -209,5 +209,5 @@ test('the box follows the ERP sale warehouse instead of waiting for a manual ste
   assert.match(src, /readErpSalesWarehouse\(\)/);
   assert.match(src, /pickAuthorizedWarehouse\(rows, erp\)/);
   assert.match(src, /Almacén de venta actualizado desde el ERP/);
-  assert.match(src, /cart\.length > 0\) return/);
+  assert.doesNotMatch(src, /if \(!v3Operational \|\| cart\.length > 0\) return;/);
 });
