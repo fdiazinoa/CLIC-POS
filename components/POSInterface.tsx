@@ -6901,7 +6901,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }else if(offlineFiscalCheckout)offlineTableFiscalContextRef.current=undefined;
       const requiresFiscalPermit=delegatedFiscalCheckout||processedCart.some(line=>line.articleFormat);
       const retainedFiscalOperation=fiscalCheckoutRef.current||fiscalCheckoutOperationRef.current||processedCart.some(line=>(line as any).fiscalCheckoutOperationId);
-      if(!fiscalWorkflowV2Client.enabled()&&!offlineFiscalCheckout&&retainedFiscalOperation)throw Error('FISCAL_WORKFLOW_CHECKOUT_RECONCILIATION_REQUIRED');
+      // A retained attempt that can no longer reach the ERP is not a reason to keep the box blocked:
+      // release it (only when it has no possible effects) and continue with a fresh operation.
+      const fiscalCartTags=()=>[...new Set(processedCart.map(line=>(line as any).fiscalCheckoutOperationId).filter(Boolean))] as string[];
+      const releaseUnreconcilableAttempt=async()=>fiscalWorkflowV2Client.cancelUnreconcilableAttempt({tags:fiscalCartTags(),cartIdentity:currentFiscalCheckoutCartIdentity()}).catch(error=>({cancelled:false,note:error instanceof Error?error.message:String(error)}));
+      let fiscalAttemptReleased=false;
+      if(!fiscalWorkflowV2Client.enabled()&&!offlineFiscalCheckout&&retainedFiscalOperation){
+        const outcome=await releaseUnreconcilableAttempt();
+        if(!outcome.cancelled)throw Error(`FISCAL_WORKFLOW_CHECKOUT_RECONCILIATION_REQUIRED:${outcome.note}`);
+        fiscalAttemptReleased=true;fiscalCheckoutRef.current=null;fiscalCheckoutOperationRef.current=null;
+        setSuccessToast(outcome.note);
+      }
       if(requiresFiscalPermit&&!newFiscalCheckout){
         if(activeTable){
           if(!isMaster)throw Error('El cobro de mesas sin ERP debe realizarse en la caja Master que conserva la cuenta.');
@@ -6914,8 +6924,21 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if(!newFiscalCheckout)fiscalCheckoutRef.current=null;
       if(newFiscalCheckout){
         const tagged=processedCart.map(line=>(line as any).fiscalCheckoutOperationId).filter(Boolean);
-        const operationId=fiscalCheckoutOperationRef.current|| (tagged.length===processedCart.length&&new Set(tagged).size===1?tagged[0]:createUuid());fiscalCheckoutOperationRef.current=operationId;
-        const checkout=await (offlineFiscalCheckout?fiscalWorkflowV2Client.reserveOfflineCheckout(currentFiscalCheckoutCartIdentity(),operationId,offlineTableFiscalContextRef.current):fiscalWorkflowV2Client.reserveCheckout(currentFiscalCheckoutCartIdentity(),operationId,{requirePermit:requiresFiscalPermit})).catch(error=>{if(offlineFiscalCheckout&&fiscalCheckoutRef.current?.phase!=='EFFECT_POSSIBLE')offlineTablePaymentFenceRef.current=false;if(error instanceof Error&&error.message==='FISCAL_WORKFLOW_PERMIT_REQUIRED')throw Error(offlineFiscalCheckout?'No hay permisos fiscales offline disponibles. Se requiere una nueva reserva autorizada; reconectar no garantiza reposición antes del vencimiento. No se realizó ningún pago.':'No hay autorización fiscal disponible para esta venta. Espera la sincronización y vuelve a cobrar; no se realizó ningún pago.');throw error;});
+        const reusableTag=!fiscalAttemptReleased&&tagged.length===processedCart.length&&new Set(tagged).size===1;
+        const operationId=fiscalCheckoutOperationRef.current||(reusableTag?tagged[0]:createUuid());fiscalCheckoutOperationRef.current=operationId;
+        const reserveOnce=(attemptOperationId:string)=>offlineFiscalCheckout?fiscalWorkflowV2Client.reserveOfflineCheckout(currentFiscalCheckoutCartIdentity(),attemptOperationId,offlineTableFiscalContextRef.current):fiscalWorkflowV2Client.reserveCheckout(currentFiscalCheckoutCartIdentity(),attemptOperationId,{requirePermit:requiresFiscalPermit});
+        const checkout=await reserveOnce(operationId).catch(async error=>{
+          if(offlineFiscalCheckout&&fiscalCheckoutRef.current?.phase!=='EFFECT_POSSIBLE')offlineTablePaymentFenceRef.current=false;
+          if(error instanceof Error&&/^FISCAL_WORKFLOW_(CHECKOUT_)?RECONCILIATION_REQUIRED/.test(error.message)){
+            const outcome=await releaseUnreconcilableAttempt();
+            if(!outcome.cancelled)throw error;
+            fiscalCheckoutOperationRef.current=createUuid();
+            if(outcome.note)setSuccessToast(outcome.note);
+            return reserveOnce(fiscalCheckoutOperationRef.current);
+          }
+          if(error instanceof Error&&error.message==='FISCAL_WORKFLOW_PERMIT_REQUIRED')throw Error(offlineFiscalCheckout?'No hay permisos fiscales offline disponibles. Se requiere una nueva reserva autorizada; reconectar no garantiza reposición antes del vencimiento. No se realizó ningún pago.':'No hay autorización fiscal disponible para esta venta. Espera la sincronización y vuelve a cobrar; no se realizó ningún pago.');
+          throw error;
+        });
         if(!checkout.permit&&!checkout.allocation)throw Error('FISCAL_WORKFLOW_PERMIT_REQUIRED');
         if(['COMMITTED','ACKNOWLEDGED'].includes(checkout.phase)){
           const completed=await db.getDocument('transactions',checkout.transactionId)||await db.getDocument('transactionHistory',checkout.transactionId);

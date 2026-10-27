@@ -17,38 +17,21 @@ const EXPIRY_SKEW_MS = 10 * 60_000;
  * issued. Safe to run on every boot: it is a no-op when the binding is unchanged.
  */
 export const reconcileStaleFiscalCheckout = async (): Promise<string> => {
-  let note = '';
   try {
     const { dbAdapter } = await import('../db');
-    const { readOfflineFiscalLocalAuthority } = await import('../fiscal/OfflineFiscalLeaseContext');
-    const { fiscalWorkflowScopeKey } = await import('../fiscal/FiscalWorkflowV2Types');
     await dbAdapter.connect();
-    const store = dbAdapter.fiscalWorkflowStore;
+    if (!dbAdapter.fiscalWorkflowStore) return '';
+    const { readOfflineFiscalLocalAuthority } = await import('../fiscal/OfflineFiscalLeaseContext');
+    const { fiscalWorkflowV2Client } = await import('../fiscal/FiscalWorkflowV2Client');
+    const info = await fiscalWorkflowV2Client.pendingCheckoutInfo();
+    if (!info) return '';
     const local = await readOfflineFiscalLocalAuthority().catch(() => null);
-    if (!store || !local) return note;
-    const scopeKey = fiscalWorkflowScopeKey(local.scope);
-    const current = await store.currentCheckout(scopeKey).catch(() => null);
-    if (current && current.offlineBindingHash !== local.bindingHash) {
-      if (current.phase === 'PREPARED' && store.abandonOfflinePrepared) {
-        await store.abandonOfflinePrepared(current).catch(() => undefined);
-        note = ' Se descartó un cobro fiscal preparado de la vinculación anterior.';
-      } else if (current.phase === 'EFFECT_POSSIBLE') {
-        // The permit belongs to the old binding, so it can never complete here. The ERP retires it
-        // only when no document exists; otherwise it keeps blocking and reports why.
-        try {
-          const { fiscalWorkflowV2Client } = await import('../fiscal/FiscalWorkflowV2Client');
-          const retired = await fiscalWorkflowV2Client.retireStaleBindingCheckout();
-          note = retired
-            ? ' Se retiró un cobro con efecto posible de la vinculación anterior (el ERP confirmó que no emitió documento).'
-            : ' Hay un cobro con efecto posible de la vinculación anterior: revísalo antes de cobrar.';
-        } catch (error) {
-          note = ` Cobro con efecto posible de la vinculación anterior sin retirar: ${error instanceof Error ? error.message : String(error)}.`;
-        }
-      }
-      await store.revokeOfflineLeases?.('*').catch(() => undefined);
-    }
-  } catch { /* best effort */ }
-  return note;
+    // A checkout that still matches the local authority is handled by the checkout flow itself,
+    // where the current cart proves whether it can be resumed.
+    if (local && info.offlineBindingHash === local.bindingHash) return '';
+    const outcome = await fiscalWorkflowV2Client.cancelUnreconcilableAttempt({});
+    return outcome.cancelled ? ` ${outcome.note}` : '';
+  } catch { return ''; }
 };
 
 /** True when the stored pairing can no longer authorize ERP/fiscal calls. */

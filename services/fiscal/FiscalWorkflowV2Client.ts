@@ -114,6 +114,55 @@ export function createFiscalWorkflowV2Client({readAuth=captureFiscalStatusBoundC
   if(checkout&&checkout.scopeKey!==key)fail('FISCAL_WORKFLOW_CHECKOUT_RECONCILIATION_REQUIRED');return checkout||null;
  },
  async localCheckout(accountId?:string,tableId?:string):Promise<FiscalWorkflowCheckoutV2|null>{const authority=await readOfflineAuthority(),key=fiscalWorkflowScopeKey(authority.scope),native=store();return accountId&&tableId&&await native?.checkoutForTable?.(key,accountId,tableId)||await native?.currentCheckout(key)||null;},
+ /** Read-only snapshot of the fiscal attempt held by this terminal. Never mutates state. */
+ async pendingCheckoutInfo():Promise<{checkoutId:string;phase:string;operationId:string;cartIdentity:string;payments:number;permitExpiresAt:string|null;permitId:string|null;offlineBindingHash:string|null;localBindingHash:string|null;leaseId:string|null}|null>{
+  try{const auth=readAuth(),native=store();if(!native)return null;const current=await native.currentCheckout(fiscalWorkflowScopeKey(scopeOf(auth.descriptor)));
+   if(!current)return null;const local=await readOfflineAuthority().catch(()=>null);
+   return {checkoutId:current.checkoutId,phase:current.phase,operationId:current.operationId,cartIdentity:current.cartIdentity,payments:(current.paymentIds||[]).length,permitExpiresAt:current.permit?.expiresAt||null,permitId:current.permit?.permitId||null,offlineBindingHash:current.offlineBindingHash||null,localBindingHash:local?.bindingHash||null,leaseId:current.permit?.leaseId||null};
+  }catch{return null;}
+ },
+ /** Releases an attempt that can never reconcile with the current cart or authority.
+  * Only PREPARED attempts without payment effects are eligible; anything with a possible
+  * effect is reported and left untouched for ERP verification. */
+ async cancelUnreconcilableAttempt(options:{tags?:string[];cartIdentity?:string}={}):Promise<{cancelled:boolean;note:string}>{
+  const native=store();if(!native||!native.abandonPreparedWithoutEffects)return {cancelled:false,note:'La caja no tiene almacén fiscal local.'};
+  const auth=readAuth();auth.assertCurrent();
+  const key=fiscalWorkflowScopeKey(scopeOf(auth.descriptor)),current=await native.currentCheckout(key);auth.assertCurrent();
+  if(!current)return {cancelled:false,note:'No hay un intento fiscal pendiente.'};
+  const id=current.checkoutId.slice(0,8);
+  if(['COMMITTED','ACKNOWLEDGED'].includes(current.phase))return {cancelled:false,note:`El intento ${id} ya está cerrado (${current.phase}).`};
+  if(current.phase!=='PREPARED'||(current.paymentIds||[]).length)return {cancelled:false,note:`El intento ${id} tiene efecto posible (${current.phase}) y debe verificarse en el ERP antes de continuar.`};
+  const tags=[...new Set((options.tags||[]).filter(Boolean))];
+  const sameOperation=tags.length>0&&tags.every(tag=>tag===current.operationId);
+  const local=await readOfflineAuthority().catch(()=>null);
+  const sameBinding=Boolean(local&&current.offlineBindingHash===local.bindingHash);
+  const expiresAt=Date.parse(current.permit?.expiresAt||'');
+  const expired=Number.isFinite(expiresAt)&&expiresAt<=Date.now();
+  if(sameBinding&&sameOperation&&!expired&&(!options.cartIdentity||options.cartIdentity===current.cartIdentity))return {cancelled:false,note:`El intento ${id} corresponde a este mismo ticket.`};
+  if(current.permit?.leaseId&&native.abandonOfflinePrepared){try{await native.abandonOfflinePrepared(current);return {cancelled:true,note:`Se descartó el intento fiscal ${id} sin efectos.`};}catch{/* the ERP retirement below is the canonical path for expired permits */}}
+  if(expired&&current.permit?.permitId&&native.retirement&&native.beginRetirement&&native.completeRetirement){
+   try{const closed=await this.retireExpiredCheckout({schemaVersion:1,commandId:createUuid(),checkoutId:current.checkoutId,transactionId:current.transactionId,permitId:current.permit.permitId,originalOperationId:current.operationId,cartIdentitySha256:await cartDigest(current.cartIdentity),reason:retirementReason,scopeKey:key,phase:'CLOSING',receipt:null});
+    return {cancelled:true,note:`El ERP retiró el intento fiscal ${closed.checkoutId.slice(0,8)} sin comprobante.`};}catch{/* fall back to the local no-effects release */}
+  }
+  try{await native.abandonPreparedWithoutEffects(current);return {cancelled:true,note:`Se descartó el intento fiscal ${id} sin efectos.`};}
+  catch(error){return {cancelled:false,note:`No se pudo descartar el intento ${id}: ${error instanceof Error?error.message:String(error)}`};}
+ },
+ /** Everything the payment flow consults before charging, in one read-only snapshot. */
+ async diagnostics():Promise<{authStatus:string;scope:string;enabled:boolean;offlineReady:boolean;readiness:string;attempt:string;binding:string;lease:string;lastError:string}>{
+  const out={authStatus:'',scope:'',enabled:false,offlineReady:false,readiness:'',attempt:'SIN INTENTO',binding:'',lease:'SIN RESERVA',lastError:leasePreparationError||allocationPreparationError||''};
+  try{const auth=readAuth();out.authStatus='OK';out.scope=`${auth.descriptor.storeId.slice(0,8)} · ${auth.descriptor.terminalId.slice(0,8)}`;out.enabled=this.enabled();}catch(error){out.authStatus=error instanceof Error?error.message:String(error);return out;}
+  try{const readiness=await this.offlineReadiness();out.readiness=`${readiness.reason}${readiness.code?` (${readiness.code})`:''}`;}catch(error){out.readiness=error instanceof Error?error.message:String(error);}
+  out.offlineReady=await this.offlineReady().catch(()=>false);
+  try{const native=store(),local=await readOfflineAuthority().catch(()=>null);
+   if(local&&native){const key=fiscalWorkflowScopeKey(local.scope);const current=await native.currentCheckout(key).catch(()=>null);
+    if(current)out.attempt=`${current.phase} · ${current.checkoutId.slice(0,8)} · ${(current.paymentIds||[]).length} pago(s)`;
+    out.binding=local?'autoridad local OK':'sin autoridad local';
+    if(current)out.binding+=current.offlineBindingHash?(current.offlineBindingHash===local.bindingHash?' · misma vinculación':' · vinculación anterior'):' · sin vinculación offline';
+    if(native.offlineLease){const lease=await native.offlineLease(local,true).catch(()=>null);if(lease)out.lease=`${lease.leaseId.slice(0,8)} · ${await native.offlineLeasePermitCount?.(lease.leaseId,true)||0} disponibles · hasta ${lease.validUntil}`;}
+   }else out.binding='sin autoridad local';
+  }catch(error){out.binding=error instanceof Error?error.message:String(error);}
+  return out;
+ },
  async offlineReady():Promise<boolean>{const readiness=await this.offlineReadiness();if(readiness.reason==='READY_ALLOCATION')return true;try{const native=store();if(!native?.offlineLease)return false;const authority=await readOfflineAuthority();if(await native.offlineLease(authority))return true;const current=await native.currentCheckout(fiscalWorkflowScopeKey(authority.scope));return Boolean(current?.phase==='EFFECT_POSSIBLE'&&current.permit?.leaseId&&current.offlineBindingHash===authority.bindingHash&&Number.isFinite(Date.parse(current.offlineEffectAt||''))&&Date.parse(current.offlineEffectAt!)<Date.parse(current.permit.expiresAt));}catch(error){if(error instanceof Error&&error.message==='OFFLINE_FISCAL_BINDING_CHANGED')await store()?.revokeOfflineLeases?.('*');return false;}},
  prefetchOfflineLease():Promise<void>{
   if(offlinePrefetch)return offlinePrefetch;

@@ -73,3 +73,32 @@ test('settings rows are grouped cards that open a modal grid', () => {
     assert.ok(src.includes(`label="${group}"`), `missing settings group ${group}`);
   }
 });
+
+test('a retained fiscal attempt that can never reconcile is released instead of blocking the box', () => {
+  const src = pos();
+  // The checkout flow must offer an escape hatch before failing the reconciliation guard.
+  assert.match(src, /fiscalWorkflowV2Client\.cancelUnreconcilableAttempt\(/);
+  assert.match(src, /FISCAL_WORKFLOW_CHECKOUT_RECONCILIATION_REQUIRED:\$\{outcome\.note\}/);
+  assert.match(src, /const reusableTag=!fiscalAttemptReleased/);
+  const client = source('services/fiscal/FiscalWorkflowV2Client.ts');
+  assert.match(client, /async cancelUnreconcilableAttempt\(/);
+  assert.match(client, /async pendingCheckoutInfo\(/);
+  assert.match(client, /async diagnostics\(/);
+  // Only a PREPARED attempt without payment effects may be released.
+  assert.match(client, /current\.phase!=='PREPARED'\|\|\(current\.paymentIds\|\|\[\]\)\.length\)return \{cancelled:false/);
+  const store = source('services/db/FiscalWorkflowV2Store.ts');
+  assert.match(store, /async abandonPreparedWithoutEffects\(/);
+  assert.match(store, /assertRetirementHasNoEffects\(sql/);
+  // Boot reconciliation can no longer bail out when the terminal lost its local authority.
+  const service = source('services/sync/TerminalReauthorizationService.ts');
+  assert.doesNotMatch(service, /if \(!store \|\| !local\) return note;/);
+  assert.match(service, /cancelUnreconcilableAttempt\(\{\}\)/);
+});
+
+test('fiscal diagnostics stay reachable from Settings', () => {
+  const src = settings();
+  assert.match(src, /'FISCAL_DIAGNOSTICS'/);
+  assert.match(src, /label="Diagnóstico fiscal"/);
+  assert.match(src, /<FiscalDiagnostics onClose=/);
+  assert.match(source('components/FiscalDiagnostics.tsx'), /Cerrar intento pendiente/);
+});
