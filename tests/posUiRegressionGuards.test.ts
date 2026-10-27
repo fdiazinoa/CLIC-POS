@@ -171,11 +171,43 @@ test('a transient failure never locks the cashier out of the next attempt', () =
   assert.match(src, /TIMEOUT_CREATE_TRANSACTION/);
   assert.match(src, /La venta no se registró a tiempo\. Se liberó el intento anterior/);
   assert.match(src, /const restate = async \(\) => \{/);
-  // An already approved gateway intent is reused instead of charging the card twice.
+  // A card the terminal already approved is reused instead of charged twice.
   const modal = source('components/PaymentModal.tsx');
-  assert.match(modal, /intent\?\.status === 'AUTHORIZED'\) \{/);
+  assert.match(modal, /if \(intent && isChargedCardIntentStatus\(intent\.status\)\) \{/);
   assert.match(modal, /gatewayReference: reference/);
   assert.doesNotMatch(modal, /&& intent\?\.status === 'AUTHORIZED'\) throw new Error\('PAYMENT_INTENT_RECONCILIATION_REQUIRED'\)/);
+});
+
+test('a modifier tap beyond max_select explains the limit instead of doing nothing', () => {
+  const modal = source('components/ModifierModal.tsx');
+  // The V3 contract caps a group at max_select distinct option ids: repeated options are impossible.
+  assert.match(modal, /setSelectionCapNotice\(modifierSelectionCapNotice\(group\)\)/);
+  assert.match(modal, /const capNoticeMessage = selectionCapNotice/);
+  assert.match(modal, /role="status"[^\n]*capNoticeMessage/);
+});
+
+test('an unanswered card is never charged twice: the cashier confirms it with the voucher', () => {
+  const modal = source('components/PaymentModal.tsx');
+  // The ambiguous intent states stop the sale before a second provider call.
+  assert.match(modal, /isUnknownCardOutcomeStatus\(intent\.status\)/);
+  assert.match(modal, /throw new CardOutcomeUnknownError\(outcome\)/);
+  // One line plus the two supervised exits; no reconciliation jargon on screen.
+  assert.match(modal, /cardOutcomeNoticeLine\(currencySymbol, cardOutcome\.amountBase, cardOutcome\.providerLabel\)/);
+  assert.match(modal, /Confirmar con el voucher/);
+  assert.match(modal, /No apareció en el voucher/);
+  assert.match(modal, /requestSupervisor\('CARD_VOUCHER'\)/);
+  assert.match(modal, /requestSupervisor\('CARD_RETRY'\)/);
+  // Confirming adopts the printed voucher and resumes the same sale.
+  assert.match(modal, /paymentIntentService\.markAuthorized\(outcome\.intentId/);
+  assert.match(modal, /buildVoucherConfirmedEntry\(outcome\.payment/);
+  // Stating that nothing was charged releases the intent so the retry is a fresh charge.
+  assert.match(modal, /paymentIntentService\.markFailed\(outcome\.intentId, \{\s*declined: true,\s*error: 'VOUCHER_NOT_CHARGED'/);
+  // The raw gateway string never replaces the exception block.
+  assert.match(modal, /if \(isCardOutcomeUnknownError\(error\)\)/);
+  const intents = source('services/payments/PaymentIntentService.ts');
+  // The persisted status always comes back, and only CREATED/DECLINED may authorize again.
+  assert.match(intents, /status: row\.status/);
+  assert.match(intents, /WHERE intent_id=\? AND status IN \('CREATED','DECLINED'\)/);
 });
 
 test('a native attempt bound to another cart is released instead of blocking the payment', () => {

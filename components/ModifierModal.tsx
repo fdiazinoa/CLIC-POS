@@ -8,6 +8,7 @@ import {
   paginateModifierOptions,
 } from '../utils/modifierModalPresentation';
 import { resolveRestaurantProductConfig } from '../utils/restaurantProductConfig';
+import { modifierSelectionCapNotice } from '../utils/modifierSelection';
 import './ModifierModal.css';
 
 interface ModifierModalProps {
@@ -136,6 +137,7 @@ const ModifierModal: React.FC<ModifierModalProps> = ({
   const [pagesByStep, setPagesByStep] = useState<Record<string, number>>({});
   const [optionQuery, setOptionQuery] = useState('');
   const [attemptedStepId, setAttemptedStepId] = useState<string | null>(null);
+  const [selectionCapNotice, setSelectionCapNotice] = useState<string | null>(null);
   const [completedStepIds, setCompletedStepIds] = useState<Record<string, true>>({});
   const autoAdvanceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const confirmationStartedRef = useRef(false);
@@ -233,6 +235,7 @@ const ModifierModal: React.FC<ModifierModalProps> = ({
   const moveToStep = useCallback((index: number) => {
     cancelAutoAdvance();
     setAttemptedStepId(null);
+    setSelectionCapNotice(null);
     setActiveStepIndex(Math.max(0, Math.min(index, steps.length - 1)));
   }, [cancelAutoAdvance, steps.length]);
   const scheduleAutoAdvance = useCallback((stepIndex: number, stepId: string) => {
@@ -252,6 +255,7 @@ const ModifierModal: React.FC<ModifierModalProps> = ({
     const currentStepIndex = activeStepIndexRef.current;
     if (!currentStep) return;
     setAttemptedStepId(null);
+    setSelectionCapNotice(null);
     if (currentStep.kind === 'fraction') {
       const next = { ...fractionSelectionsRef.current, [currentStep.partIndex]: optionId };
       fractionSelectionsRef.current = next;
@@ -277,6 +281,9 @@ const ModifierModal: React.FC<ModifierModalProps> = ({
         const next = { ...modifierSelectionsRef.current, [group.id]: [...current, optionId] };
         modifierSelectionsRef.current = next;
         setSelectedModifiersByGroup(next);
+      } else {
+        // The V3 contract caps the list at max_select distinct ids: say so instead of ignoring the tap.
+        setSelectionCapNotice(modifierSelectionCapNotice(group));
       }
       return;
     }
@@ -298,12 +305,17 @@ const ModifierModal: React.FC<ModifierModalProps> = ({
         const next = { ...comboSelectionsRef.current, [group.id]: [...current, optionId] };
         comboSelectionsRef.current = next;
         setSelectedCombosByGroup(next);
+      } else {
+        setSelectionCapNotice(modifierSelectionCapNotice(group));
       }
     }
   }, [cancelAutoAdvance, scheduleAutoAdvance]);
 
   const validationMessage = activeStep && attemptedStepId === activeStep.id && !isStepValid(activeStep)
     ? activeStep.kind === 'fraction' ? 'Seleccione una opción para esta parte.' : `Seleccione ${activeStep.name}.`
+    : null;
+  const capNoticeMessage = selectionCapNotice && activeStep && activeStep.kind !== 'note' && activeStep.kind !== 'fraction'
+    ? selectionCapNotice
     : null;
 
   const handleContinue = useCallback(() => {
@@ -497,6 +509,7 @@ const ModifierModal: React.FC<ModifierModalProps> = ({
                 <span className="rounded-full bg-slate-100 px-3 py-2 text-xs font-black text-slate-600">{selectedCount} {selectedCount === 1 ? 'seleccionado' : 'seleccionados'}</span>
               </div>
               {validationMessage && <div id="modifier-validation-error" role="alert" className="mb-4 flex items-center gap-2 text-sm font-bold text-red-700"><AlertCircle size={18} />{validationMessage}</div>}
+              {capNoticeMessage && <div role="status" className="mb-4 flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-bold text-amber-800"><AlertCircle size={18} />{capNoticeMessage}</div>}
               {showsSearch && (
                 <input
                   value={optionQuery}

@@ -47,6 +47,15 @@ import {
 } from '../services/payments/paymentIntegrationAudit';
 import { paymentIntentService } from '../services/payments/PaymentIntentService';
 import {
+   CardOutcomeUnknownError,
+   buildVoucherConfirmedEntry,
+   cardOutcomeNoticeLine,
+   isCardOutcomeUnknownError,
+   isChargedCardIntentStatus,
+   isUnknownCardOutcomeStatus,
+   normalizeVoucherReference,
+} from '../utils/cardOutcomeException';
+import {
    beginPosInteraction,
    commitInteractionDestination,
    type PosInteractionTrace,
@@ -293,6 +302,10 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
    const [verifiedBalance, setVerifiedBalance] = useState<number | null>(null);
    const [showSupervisorModal, setShowSupervisorModal] = useState(false);
    const [isOverrideActive, setIsOverrideActive] = useState(false);
+   const [supervisorPurpose, setSupervisorPurpose] = useState<'CREDIT_OVERRIDE' | 'CARD_VOUCHER' | 'CARD_RETRY'>('CREDIT_OVERRIDE');
+   const [cardOutcome, setCardOutcome] = useState<{ payment: PaymentEntry; intentId?: string; amountBase: number; providerLabel: string } | null>(null);
+   const [voucherReference, setVoucherReference] = useState('');
+   const [resumeAfterCardFix, setResumeAfterCardFix] = useState(false);
    const [isProcessingGateway, setIsProcessingGateway] = useState(false);
    const [gatewayProgress, setGatewayProgress] = useState<GatewayProgressOverlayState | null>(null);
    const printTicketPending = React.useRef(false);
@@ -519,7 +532,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
       } else {
          setFinalizeError(`Límite de crédito excedido (${currencySymbol}${gate.limit.toFixed(2)}). Requiere autorización.`);
       }
-      setShowSupervisorModal(true);
+      requestSupervisor('CREDIT_OVERRIDE');
       return false;
    };
 
@@ -655,8 +668,9 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
          tablePart:workflowPaymentFenceRef.current?.tablePart,
       });
       // The provider already approved this payment (a previous attempt failed after the approval).
-      // Reuse the approval instead of charging the card twice; only an unknown intent is held.
-      if ((paymentOperationId||workflowPaymentFenceRef.current?.futureCheckout) && intent?.status === 'AUTHORIZED') {
+      // Reuse the approval instead of charging the card twice; an unanswered card becomes a
+      // supervised exception (voucher confirmation), never a silent second charge.
+      if (intent && isChargedCardIntentStatus(intent.status)) {
          const reference = intent.providerReference || String((payment as any).gatewayReference || '');
          if (!reference) throw new Error('PAYMENT_INTENT_RECONCILIATION_REQUIRED');
          setFinalizeError(null);
@@ -676,6 +690,16 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
          } as PaymentEntry;
       }
       if(workflowPaymentFenceRef.current?.futureCheckout&&!intent)throw Error('PAYMENT_INTENT_NATIVE_REQUIRED');
+      if (intent && isUnknownCardOutcomeStatus(intent.status)) {
+         // A previous attempt left the terminal unanswered: the card may already be charged.
+         const outcome = {
+            paymentId: payment.id, payment, intentId: intent.intentId, amountBase: amountInBase,
+            providerLabel: resolveGatewayDisplayName(integration, integration.provider),
+         };
+         setCardOutcome(outcome);
+         setFinalizeError(null);
+         throw new CardOutcomeUnknownError(outcome);
+      }
       if (intent) await paymentIntentService.markAuthorizing(intent.intentId,Boolean(paymentOperationId),workflowPaymentFenceRef.current?.futureCheckout,workflowPaymentFenceRef.current?.tablePart);
 
       setIsProcessingGateway(true);
@@ -685,6 +709,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
          providerLabel: resolveGatewayDisplayName(integration, integration.provider),
          detail: 'Espere la confirmación del procesador.',
       });
+      let gatewayCharged = false;
       try {
          const requestDetails: Record<string, string> = {
             Amount: amountInBase.toFixed(2),
@@ -704,6 +729,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
                : (() => {
                   throw new Error(`La integración ${integration.provider} todavía no está soportada en caja.`);
                })();
+         gatewayCharged = true;
 
          if (integration.provider === 'AZUL') {
             requestDetails.Itbis = proportionalTax.toFixed(2);
@@ -785,16 +811,21 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
             gatewayRawResponse: gatewayResult.rawResponse,
          };
       } catch (error) {
+         // The terminal already answered: nothing here may be reclassified as "unknown".
+         if (gatewayCharged) throw error;
          const gatewayError = error instanceof AzulGatewayError ? error : null;
          const ingenicoError = error instanceof IngenicoAzulWebApiError ? error : null;
+         const normalized = gatewayError?.normalized || ingenicoError?.normalized;
+         // No explicit decline means the card may have been charged: never retry blindly.
+         const unexplainedOutcome = !(normalized && normalized.approved === false);
          if (intent) {
-            const normalized = gatewayError?.normalized || ingenicoError?.normalized;
             await paymentIntentService.markFailed(intent.intentId, {
-               declined: Boolean(normalized && normalized.approved === false),
+               declined: !unexplainedOutcome,
                error: error instanceof Error ? error.message : 'Resultado desconocido del procesador.',
                responseCode: normalized?.responseCode,
             });
          }
+         try {
          if (config) {
             await dispatchAuditEventConfigUpdate(
                config,
@@ -845,6 +876,20 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
                })
             );
          }
+         } catch (auditFailure) {
+            // A failed audit never hides the provider outcome from the cashier.
+            console.error('No se pudo auditar el resultado del cobro:', auditFailure);
+         }
+         if (unexplainedOutcome) {
+            // Audited as FAILED above; on screen it is one line plus the two supervised exits.
+            const outcome = {
+               paymentId: payment.id, payment, intentId: intent?.intentId, amountBase: amountInBase,
+               providerLabel: resolveGatewayDisplayName(integration, integration.provider),
+            };
+            setCardOutcome(outcome);
+            setFinalizeError(null);
+            throw new CardOutcomeUnknownError(outcome);
+         }
          throw error;
       } finally {
          setIsProcessingGateway(false);
@@ -875,6 +920,103 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
          }
       }
       return processedEntries;
+   };
+
+   const requestSupervisor = (purpose: 'CREDIT_OVERRIDE' | 'CARD_VOUCHER' | 'CARD_RETRY') => {
+      setSupervisorPurpose(purpose);
+      setShowSupervisorModal(true);
+   };
+
+   /**
+    * The cashier checked the printed voucher and the charge exists: adopt it instead of
+    * sending the sale again. The reference is the only external fact we record.
+    */
+   const confirmCardChargeWithVoucher = async () => {
+      const outcome = cardOutcome;
+      if (!outcome) return;
+      const reference = normalizeVoucherReference(voucherReference);
+      if (!reference) {
+         setFinalizeError('Escribe la referencia que aparece en el voucher.');
+         return;
+      }
+      let approved: PaymentEntry;
+      try {
+         approved = buildVoucherConfirmedEntry(outcome.payment, {
+            reference,
+            taxAmount: roundToTwo(calculateGatewayTaxAmount(outcome.amountBase)),
+         }) as PaymentEntry;
+      } catch {
+         setFinalizeError('Escribe la referencia que aparece en el voucher.');
+         return;
+      }
+      if (outcome.intentId) {
+         try {
+            await paymentIntentService.markAuthorized(outcome.intentId, {
+               providerReference: reference,
+               authorizationCode: reference,
+               responseCode: 'VOUCHER',
+            });
+         } catch (error) {
+            console.error('No se pudo marcar el intento como autorizado con voucher:', error);
+         }
+      }
+      if (config) {
+         try {
+            const integration = resolveGatewayIntegrationForPayment(outcome.payment, resolvePaymentMethodForEntry(outcome.payment));
+            if (integration) {
+               await dispatchAuditEventConfigUpdate(
+                  config,
+                  integration.id,
+                  createPaymentIntegrationAuditEvent(integration, {
+                     action: 'SALE',
+                     status: 'SUCCESS',
+                     message: `Cobro confirmado manualmente con el voucher ${reference}.`,
+                     requestDetails: { Amount: outcome.amountBase.toFixed(2) },
+                     responseDetails: {
+                        MerchantId: integration.merchantId || '',
+                        TerminalId: integration.terminalId || '',
+                        EntryMode: 'MANUAL',
+                        CardBrand: '',
+                     },
+                     responseCode: 'VOUCHER',
+                     responseMessage: 'Confirmado con voucher',
+                     authorizationCode: reference,
+                     referenceNumber: reference,
+                  })
+               );
+            }
+         } catch (error) {
+            console.error('No se pudo auditar la confirmación por voucher:', error);
+         }
+      }
+      setPayments(prev => prev.map(entry => (entry.id === outcome.payment.id ? approved : entry)));
+      setCardOutcome(null);
+      setVoucherReference('');
+      setFinalizeError(null);
+      recordCheckoutDiagnostic('CARD_VOUCHER_CONFIRMED', { transactionId: outcome.intentId, status: 'VOUCHER_CONFIRMED', reason: reference, total: outcome.amountBase });
+      setResumeAfterCardFix(true);
+   };
+
+   /** The cashier checked the printed voucher and no charge exists: the card may be charged again. */
+   const retryCardChargeNotOnVoucher = async () => {
+      const outcome = cardOutcome;
+      if (!outcome) return;
+      if (outcome.intentId) {
+         try {
+            await paymentIntentService.markFailed(outcome.intentId, {
+               declined: true,
+               error: 'VOUCHER_NOT_CHARGED',
+               responseCode: 'VOID',
+            });
+         } catch (error) {
+            console.error('No se pudo liberar el intento de cobro:', error);
+         }
+      }
+      setCardOutcome(null);
+      setVoucherReference('');
+      setFinalizeError(null);
+      recordCheckoutDiagnostic('CARD_VOUCHER_ABSENT_RETRY', { transactionId: outcome.intentId, status: 'VOUCHER_ABSENT', total: outcome.amountBase });
+      setResumeAfterCardFix(true);
    };
 
    const handleAddPayment = async (amountOverride?: number) => {
@@ -927,7 +1069,10 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
       }
    };
 
-   const handleRemovePayment = (id: string) => { setPayments(prev => prev.filter(p => p.id !== id)); };
+   const handleRemovePayment = (id: string) => {
+      setPayments(prev => prev.filter(p => p.id !== id));
+      setCardOutcome(prev => (prev && prev.payment.id === id ? null : prev));
+   };
 
    const finalizationProgressRef=useRef<InteractionProgressHandle|null>(null);
    const finalizationSubmissionRef=useRef(false);
@@ -966,7 +1111,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
 
       if (isCreditActionBlocked && !paymentOperationId) {
          setFinalizeError('Límite de crédito excedido. Requiere autorización.');
-         setShowSupervisorModal(true);
+         requestSupervisor('CREDIT_OVERRIDE');
          return;
       }
 
@@ -984,7 +1129,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
          const completed = releasePaymentFence?.completedTransaction;
          let paymentsToConfirm = completed?.payments || payments;
          if (!completed && !canFinalize) { alert('Monto insuficiente'); return; }
-         if (!completed && isCreditActionBlocked) { setFinalizeError('Límite de crédito excedido. Requiere autorización.'); setShowSupervisorModal(true); return; }
+         if (!completed && isCreditActionBlocked) { setFinalizeError('Límite de crédito excedido. Requiere autorización.'); requestSupervisor('CREDIT_OVERRIDE'); return; }
          if (!completed) {
 
          // UX: If cashier typed an amount but didn't press "Agregar",
@@ -1041,7 +1186,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
          const hasZeroPriceItem = items.some(item => item.price === 0);
          if (hasZeroPriceItem && !hasPermission('POS_ALLOW_ZERO_PRICE') && !isOverrideActive) {
             setFinalizeError(`Venta contiene artículos con precio en $0.00. Requiere autorización.`);
-            setShowSupervisorModal(true);
+            requestSupervisor('CREDIT_OVERRIDE');
             setIsFinalizing(false);
             return;
          }
@@ -1176,17 +1321,30 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
          }
       } catch (error) {
          console.error('❌ Payment finalization failed:', error);
-         const message = error instanceof Error ? error.message : '';
-         setFinalizeError(message ? `Error al finalizar: ${message}` : 'Ocurrió un error al finalizar. Intente nuevamente.');
+         if (isCardOutcomeUnknownError(error)) {
+            // The exception block owns the message; never replace it with a raw gateway string.
+            setFinalizeError(null);
+         } else {
+            const message = error instanceof Error ? error.message : '';
+            setFinalizeError(message ? `Error al finalizar: ${message}` : 'Ocurrió un error al finalizar. Intente nuevamente.');
+         }
          setGatewayProgress(null);
       } finally {
          await releasePaymentFence?.();
          setIsFinalizing(false);
          if (trace.stages.HANDLER_END === undefined) markInteractionStage(trace, 'HANDLER_END');
       }
-      }catch(error){setFinalizeError(error instanceof Error?error.message:String(error));}
+      }catch(error){if(isCardOutcomeUnknownError(error)){setFinalizeError(null);}else{setFinalizeError(error instanceof Error?error.message:String(error));}}
       finally{finalizationSubmissionRef.current=false;finalizationProgressRef.current?.hide();}
    };
+
+   const resumeFinalizeRef = useRef<(() => void) | null>(null);
+   resumeFinalizeRef.current = () => { void handleFinalize(); };
+   useEffect(() => {
+      if (!resumeAfterCardFix) return;
+      setResumeAfterCardFix(false);
+      resumeFinalizeRef.current?.();
+   }, [resumeAfterCardFix]);
 
    const themeBgClass = { blue: 'bg-blue-600', orange: 'bg-orange-600', gray: 'bg-gray-800' }[themeColor] || 'bg-indigo-600';
    const themeTextClass = { blue: 'text-blue-600', orange: 'text-orange-600', gray: 'text-gray-800' }[themeColor] || 'text-indigo-600';
@@ -1604,6 +1762,36 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
 
                <div className="sticky bottom-0 z-10 p-3 bg-white border-t border-gray-200 rounded-xl md:rounded-2xl mt-3 lg:mt-3 shadow-inner shrink-0">
                   {onFiscalAttemptClosed&&<FiscalExpiredCheckoutAction users={users} operationIds={items.map(item=>(item as any).fiscalCheckoutOperationId).filter(Boolean)} onClosed={onFiscalAttemptClosed}/>}
+                  {cardOutcome && (
+                     <div className="mb-3 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2">
+                        <p className="text-xs font-bold text-amber-900" data-testid="card-outcome-notice">
+                           {cardOutcomeNoticeLine(currencySymbol, cardOutcome.amountBase, cardOutcome.providerLabel)}
+                        </p>
+                        <div className="mt-2 flex flex-col gap-2 sm:flex-row">
+                           <input
+                              value={voucherReference}
+                              onChange={(event) => setVoucherReference(event.target.value)}
+                              placeholder="Referencia del voucher"
+                              aria-label="Referencia del voucher"
+                              className="min-w-0 flex-1 rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm font-bold text-slate-800 outline-none focus:border-amber-500"
+                           />
+                           <button
+                              type="button"
+                              onClick={() => requestSupervisor('CARD_VOUCHER')}
+                              className="rounded-lg bg-amber-600 px-3 py-2 text-xs font-black uppercase tracking-wide text-white hover:bg-amber-700"
+                           >
+                              Confirmar con el voucher
+                           </button>
+                           <button
+                              type="button"
+                              onClick={() => requestSupervisor('CARD_RETRY')}
+                              className="rounded-lg border border-amber-300 bg-white px-3 py-2 text-xs font-black uppercase tracking-wide text-amber-800 hover:bg-amber-100"
+                           >
+                              No apareció en el voucher
+                           </button>
+                        </div>
+                     </div>
+                  )}
                   {finalizeError && (
                      <div className="mb-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-bold text-red-600">
                         {finalizeError}
@@ -1632,10 +1820,12 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
                   </div>
                   <button
                      onClick={handleFinalize}
-                     disabled={(!canFinalize && !paymentOperationId) || isFinalizing || isProcessingGateway}
+                     disabled={(!canFinalize && !paymentOperationId) || isFinalizing || isProcessingGateway || Boolean(cardOutcome)}
                      className={`w-full py-3 rounded-xl md:rounded-2xl font-black text-sm md:text-base text-white transition-all shadow-lg ${(!canFinalize && !paymentOperationId) || isFinalizing || isProcessingGateway ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : `${isRefund ? 'bg-rose-600 hover:bg-rose-700' : `${themeBgClass} hover:brightness-110`}`}`}
                   >
-                     {isProcessingGateway
+                     {cardOutcome
+                        ? 'CONFIRMA EL COBRO'
+                        : isProcessingGateway
                         ? 'PROCESANDO TARJETA...'
                         : isFinalizing
                         ? 'PROCESANDO...'
@@ -1660,7 +1850,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
                         <span>CLIENTE EN MORA - CRÉDITO RESTRINGIDO</span>
                      </div>
                      <button
-                        onClick={() => setShowSupervisorModal(true)}
+                        onClick={() => requestSupervisor('CREDIT_OVERRIDE')}
                         className="px-3 py-1 bg-red-600 text-white rounded-lg text-[10px] font-black uppercase tracking-widest hover:bg-red-700 transition-colors"
                      >
                         Override
@@ -1751,11 +1941,13 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
             isOpen={showSupervisorModal}
             onClose={() => setShowSupervisorModal(false)}
             onSuccess={() => {
-               setIsOverrideActive(true);
                setShowSupervisorModal(false);
+               if (supervisorPurpose === 'CARD_VOUCHER') void confirmCardChargeWithVoucher();
+               else if (supervisorPurpose === 'CARD_RETRY') void retryCardChargeNotOnVoucher();
+               else setIsOverrideActive(true);
             }}
             users={users}
-            requiredPermission="POS_CREDIT_OVERRIDE"
+            requiredPermission={supervisorPurpose === 'CREDIT_OVERRIDE' ? 'POS_CREDIT_OVERRIDE' : 'POS_CHECKOUT'}
          />
       )}
    </>

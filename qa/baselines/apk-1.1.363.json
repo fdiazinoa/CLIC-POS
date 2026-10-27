@@ -81,6 +81,9 @@
     "tests/bootReconciliation.test.ts",
     "tests/checkoutTrace.test.ts",
     "tests/fiscalWorkflowCheckoutReplay.test.ts",
-    "tests/kdsReportsContract.test.ts"
+    "tests/kdsReportsContract.test.ts",
+    "tests/cardOutcomeException.test.ts",
+    "tests/cardOutcomeNoDoubleCharge.test.ts",
+    "tests/modifierSelection.test.ts"
   ]
 }
