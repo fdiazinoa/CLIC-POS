@@ -93,8 +93,8 @@ test('a retained fiscal attempt that can never reconcile is released instead of 
   // The escape hatch exists only for an ERP that cannot reconcile, with an audited supervisor.
   assert.match(source('components/FiscalDiagnostics.tsx'), /Liberar con autorización/);
   assert.match(source('components/FiscalDiagnostics.tsx'), /inputType: 'password'/);
-  assert.match(store, /async releaseAttemptWithoutErp\(/);
-  assert.match(store, /pos_fiscal_attempt_releases_v1/);
+  assert.match(source('services/db/FiscalWorkflowV2Store.ts'), /async releaseAttemptWithoutErp\(/);
+  assert.match(source('services/db/FiscalWorkflowV2Store.ts'), /pos_fiscal_attempt_releases_v1/);
   const store = source('services/db/FiscalWorkflowV2Store.ts');
   assert.match(store, /async abandonPreparedWithoutEffects\(/);
   assert.match(store, /assertRetirementHasNoEffects\(sql/);
