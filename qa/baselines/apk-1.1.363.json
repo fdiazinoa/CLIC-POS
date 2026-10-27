@@ -71,6 +71,7 @@
     "tests/fiscalOpenSession.test.ts",
     "tests/terminalSessionRenewal.test.ts",
     "tests/v3CartReanchor.test.ts",
-    "tests/presentationErrorMessages.test.ts"
+    "tests/presentationErrorMessages.test.ts",
+    "tests/presentationDiagnostics.test.ts"
   ]
 }

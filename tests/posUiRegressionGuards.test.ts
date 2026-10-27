@@ -124,3 +124,14 @@ test('a restaurant account restores with its agreed prices and only adopts today
   assert.match(source('utils/v3ErrorMessages.ts'), /SYNC_V3_CART_MIXED_VERSION/);
   assert.doesNotMatch(src, /setErrorToast\(`V3: /);
 });
+
+test('presentations have their own read-only diagnostics sweep', () => {
+  assert.match(settings(), /label="Diagnóstico de presentaciones"/);
+  assert.match(settings(), /'PRESENTATION_DIAGNOSTICS'/);
+  const panel = source('components/PresentationDiagnostics.tsx');
+  assert.match(panel, /runPresentationDiagnostics\(/);
+  assert.match(panel, /no descarga presentaciones ni emite documentos/);
+  const sweep = source('services/inventoryPresentations/diagnostics.ts');
+  assert.match(sweep, /comparePresentationScope/);
+  for (const stage of ['auth', 'scope', 'negotiate', 'context', 'cache', 'cart']) assert.match(sweep, new RegExp(`id: '${stage}'`));
+});

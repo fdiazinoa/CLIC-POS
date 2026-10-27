@@ -82,6 +82,7 @@ const SourcingIntelligence = React.lazy(() => import('./SourcingIntelligence'));
 const CompanySettings = React.lazy(() => import('./CompanySettings'));
 const MasterNumberRangeDiagnostics = React.lazy(() => import('./MasterNumberRangeDiagnostics'));
 const FiscalDiagnostics = React.lazy(() => import('./FiscalDiagnostics'));
+const PresentationDiagnostics = React.lazy(() => import('./PresentationDiagnostics'));
 
 const SettingsModuleFallback: React.FC = () => (
   <div className="flex h-full min-h-[280px] items-center justify-center bg-slate-50">
@@ -150,7 +151,7 @@ interface SettingsProps {
   erpRoleAuthority?: boolean;
 }
 
-type SettingsView = 'INVENTORY_TRACKING' | 'CHECKOUT_TRACKING' | 'HOME' | 'CATALOG' | 'WAREHOUSES' | 'PAYMENTS' | 'INTEGRATIONS' | 'COMPANY' | 'RECEIPT' | 'TERMINALS' | 'TEAM' | 'HARDWARE' | 'SECURITY' | 'LOGS' | 'EXCHANGE' | 'EMAIL' | 'TIPS' | 'DOCUMENTS' | 'TAXES' | 'SERVICE_TYPES' | 'PROMOTIONS' | 'IMPORT_EXPORT' | 'LOYALTY' | 'WALLET_KEYS' | 'SYNC' | 'MASTER_NUMBER_RANGES' | 'FISCAL_DIAGNOSTICS' | 'LAYOUT' | 'PRODUCTION_AREAS' | 'LABELS' | 'CUSTOMERS' | 'REPORTS' | 'AGENDA' | 'SPACES';
+type SettingsView = 'INVENTORY_TRACKING' | 'CHECKOUT_TRACKING' | 'HOME' | 'CATALOG' | 'WAREHOUSES' | 'PAYMENTS' | 'INTEGRATIONS' | 'COMPANY' | 'RECEIPT' | 'TERMINALS' | 'TEAM' | 'HARDWARE' | 'SECURITY' | 'LOGS' | 'EXCHANGE' | 'EMAIL' | 'TIPS' | 'DOCUMENTS' | 'TAXES' | 'SERVICE_TYPES' | 'PROMOTIONS' | 'IMPORT_EXPORT' | 'LOYALTY' | 'WALLET_KEYS' | 'SYNC' | 'MASTER_NUMBER_RANGES' | 'FISCAL_DIAGNOSTICS' | 'PRESENTATION_DIAGNOSTICS' | 'LAYOUT' | 'PRODUCTION_AREAS' | 'LABELS' | 'CUSTOMERS' | 'REPORTS' | 'AGENDA' | 'SPACES';
 
 const ORDER_TAKER_SETTINGS_VIEWS = new Set<SettingsView>([
   'HOME',
@@ -736,6 +737,9 @@ const Settings: React.FC<SettingsProps> = (props) => {
       case 'FISCAL_DIAGNOSTICS':
         return <FiscalDiagnostics onClose={() => setCurrentView('HOME')} users={props.users} roles={props.roles} currentUser={props.currentUser} />;
 
+      case 'PRESENTATION_DIAGNOSTICS':
+        return <PresentationDiagnostics onClose={() => setCurrentView('HOME')} config={props.config} terminalId={props.terminalId || ''} cart={[]} />;
+
       case 'CUSTOMERS':
         return (
           <CustomerManagement
@@ -1184,6 +1188,7 @@ const Settings: React.FC<SettingsProps> = (props) => {
                   />
                   <SettingsCard icon={RefreshCw} label="Sincronización" description="Estado de Red y Réplicas" color="bg-indigo-600" onClick={() => setCurrentView('SYNC')} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={RefreshCw} label={isReauthorizing ? 'Reautorizando…' : 'Reautorizar terminal'} description={reauthorizationHint} color="bg-amber-600" onClick={() => { void handleReauthorize(); }} locked={!hasPermission('SETTINGS_ACCESS') || isReauthorizing} />
+                  <SettingsCard icon={Package} label="Diagnóstico de presentaciones" description="Almacén, tarifas, caché y carrito" color="bg-sky-700" onClick={() => setCurrentView('PRESENTATION_DIAGNOSTICS')} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={Stethoscope} label="Diagnóstico fiscal" description="Autorización, reserva e intento guardado" color="bg-teal-700" onClick={() => setCurrentView('FISCAL_DIAGNOSTICS')} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={Hash} label="Rangos de maestros" description="Códigos offline y disponibilidad" color="bg-cyan-700" onClick={() => setCurrentView('MASTER_NUMBER_RANGES')} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={ShieldAlert} label="Seguridad y Datos" description="Backups y Modo Kiosco" color="bg-red-600" onClick={() => setCurrentView('SECURITY')} locked={!hasPermission('SETTINGS_ACCESS')} />
