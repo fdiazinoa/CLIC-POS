@@ -1,6 +1,7 @@
 import { readTerminalCredentialsSync } from './TerminalCredentialStore';
 import { registerErpSyncTerminal } from '../../utils/erpSyncLifecycle';
 import { resolveLocalDeviceId } from '../../utils/deviceRevocation';
+import { renewTerminalSession } from './TerminalSessionRenewal';
 
 export type TerminalReauthorizationResult = {
   ok: boolean;
@@ -79,6 +80,12 @@ export const reauthorizeTerminal = async (): Promise<TerminalReauthorizationResu
   }
 
   const staleNote = await reconcileStaleFiscalCheckout();
+  // The register rotates the ERP-side session token, so the device must adopt the current one;
+  // renewing here (never re-pairing) keeps the binding and the offline reserve intact.
+  const session = await renewTerminalSession();
+  const sessionNote = session.renewed
+    ? (session.expiresAt ? `Sesión renovada hasta ${new Date(session.expiresAt).toLocaleString('es-DO')}.` : 'Sesión renovada sin vencimiento.')
+    : `Sesión sin renovar: ${session.reason}.`;
 
   let fiscal = 'No se pudo preparar la reserva fiscal.';
   try {
@@ -96,7 +103,7 @@ export const reauthorizeTerminal = async (): Promise<TerminalReauthorizationResu
   const updated = readTerminalCredentialsSync();
   return {
     ok: true,
-    message: `Terminal reautorizada. ${fiscal}${staleNote}`,
+    message: `Terminal reautorizada. ${sessionNote} ${fiscal}${staleNote}`,
     authStatus: updated.authStatus || null,
     expiresAt: updated.syncTokenExpiresAt || null,
   };

@@ -22,7 +22,7 @@ const tone = (ok: boolean) => ok ? 'text-emerald-700 bg-emerald-50 border-emeral
  */
 export default function FiscalDiagnostics({ onClose, users = [], roles = [], currentUser = null }: { onClose: () => void; users?: User[]; roles?: RoleDefinition[]; currentUser?: User | null }) {
    const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
-   const [busy, setBusy] = useState<'refresh' | 'prepare' | 'release' | null>(null);
+   const [busy, setBusy] = useState<'refresh' | 'prepare' | 'release' | 'session' | null>(null);
    const [note, setNote] = useState('');
    const [releaseOffered, setReleaseOffered] = useState(false);
 
@@ -83,6 +83,20 @@ export default function FiscalDiagnostics({ onClose, users = [], roles = [], cur
          setReleaseOffered(false);
          setSnapshot(await readSnapshot());
          if (outcome.released) await clicAlert('Caja liberada. No se emitió ni anuló ningún comprobante. Verifica en el ERP que el intento no tenga documento antes de volver a cobrar.');
+      } catch (error) { setNote(error instanceof Error ? error.message : String(error)); }
+      finally { setBusy(null); }
+   };
+
+   /** Session-only handshake: renews the ERP session without re-pairing the device. */
+   const renewSession = async () => {
+      setBusy('session');
+      try {
+         const { renewTerminalSession } = await import('../services/sync/TerminalSessionRenewal');
+         const result = await renewTerminalSession();
+         setNote(result.renewed
+            ? (result.expiresAt ? `Sesión renovada hasta ${new Date(result.expiresAt).toLocaleString('es-DO')}.` : 'Sesión renovada sin vencimiento.')
+            : `No se pudo renovar la sesión: ${result.reason}.`);
+         setSnapshot(await readSnapshot());
       } catch (error) { setNote(error instanceof Error ? error.message : String(error)); }
       finally { setBusy(null); }
    };
@@ -151,7 +165,8 @@ export default function FiscalDiagnostics({ onClose, users = [], roles = [], cur
                </div>
             )}
 
-            <div className="mt-4 grid gap-2 sm:grid-cols-2">
+            <div className="mt-4 grid gap-2 sm:grid-cols-3">
+               <button onClick={() => { void renewSession(); }} disabled={busy !== null} className="flex items-center justify-center gap-2 rounded-xl bg-slate-700 px-4 py-3 text-sm font-black text-white disabled:opacity-40">{busy === 'session' ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />} Renovar sesión</button>
                <button onClick={() => { void prepare(); }} disabled={busy !== null} className="flex items-center justify-center gap-2 rounded-xl bg-amber-600 px-4 py-3 text-sm font-black text-white disabled:opacity-40">{busy === 'prepare' ? <Loader2 size={16} className="animate-spin" /> : <ShieldCheck size={16} />} Renovar reserva fiscal</button>
                <button onClick={() => { void release(); }} disabled={busy !== null} className="flex items-center justify-center gap-2 rounded-xl bg-rose-600 px-4 py-3 text-sm font-black text-white disabled:opacity-40">{busy === 'release' ? <Loader2 size={16} className="animate-spin" /> : <Eraser size={16} />} Cerrar intento pendiente</button>
             </div>

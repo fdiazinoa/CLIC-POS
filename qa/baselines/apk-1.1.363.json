@@ -68,6 +68,7 @@
     "tests/tableAccountModalLockContract.test.ts",
     "tests/terminalUpgradePersistence.test.ts",
     "tests/fiscalAttemptRelease.test.ts",
-    "tests/fiscalOpenSession.test.ts"
+    "tests/fiscalOpenSession.test.ts",
+    "tests/terminalSessionRenewal.test.ts"
   ]
 }
