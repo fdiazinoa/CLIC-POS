@@ -138,3 +138,39 @@ test('a pending attempt that still matches this ticket is left alone', async () 
     assert.equal((await f.store.currentCheckout(key))!.checkoutId, checkout.checkoutId);
   } finally { f.sql.close(); }
 });
+
+test('a supervisor can free the box when the ERP retirement service is unavailable, with an immutable audit row', async () => {
+  const f = fixture();
+  try {
+    const op = await f.store.refillOperation(key);
+    await f.store.savePermits(key, op, [f.permit(5)]);
+    const checkout = await f.store.reserveCheckout(key, 'cart', undefined, '40000000-0000-4000-8000-000000000005', { requirePermit: true, authorityHash: 'a'.repeat(64) });
+    await f.store.markPaymentPossible(checkout.checkoutId, 'payment-five');
+    const client = clientFor(f.store, () => ({ ok: false, json: async () => ({ code: 'FISCAL_WORKFLOW_DISABLED' }) }));
+    const refused = await client.cancelUnreconcilableAttempt({ tags: ['40000000-0000-4000-8000-000000000005'], cartIdentity: 'another-cart' });
+    assert.equal(refused.cancelled, false);
+    const record = (await f.store.currentCheckout(key))!;
+    await assert.rejects(f.store.releaseAttemptWithoutErp!(record, ''), /NOT_SAFE/);
+    await f.store.releaseAttemptWithoutErp!(record, 'Yuli (user-1)');
+    assert.equal(await f.store.currentCheckout(key), null);
+    const audit = f.sql.prepare('SELECT actor,phase,reason FROM pos_fiscal_attempt_releases_v1').get() as any;
+    assert.deepEqual({ actor: audit.actor, phase: audit.phase, reason: audit.reason }, { actor: 'Yuli (user-1)', phase: 'EFFECT_POSSIBLE', reason: 'ERP_RETIREMENT_UNAVAILABLE' });
+    // The released identity stays fenced: it can never be reused or rewritten.
+    assert.throws(() => f.sql.prepare("UPDATE pos_fiscal_attempt_releases_v1 SET actor='other'").run(), /IMMUTABLE/);
+  } finally { f.sql.close(); }
+});
+
+test('a box is never freed when the attempt left a document', async () => {
+  const f = fixture();
+  try {
+    const op = await f.store.refillOperation(key);
+    await f.store.savePermits(key, op, [f.permit(6)]);
+    const checkout = await f.store.reserveCheckout(key, 'cart', undefined, '40000000-0000-4000-8000-000000000006', { requirePermit: true, authorityHash: 'a'.repeat(64) });
+    await f.store.markPaymentPossible(checkout.checkoutId, 'payment-six');
+    f.sql.prepare("INSERT INTO documents(collection_name,doc_id,data)VALUES('transactionHistory',?,?)")
+      .run(checkout.transactionId, JSON.stringify({ id: checkout.transactionId }));
+    await assert.rejects(f.store.releaseAttemptWithoutErp!((await f.store.currentCheckout(key))!, 'Yuli (user-1)'), /RETIREMENT_RECONCILIATION_REQUIRED/);
+    assert.equal((await f.store.currentCheckout(key))!.phase, 'EFFECT_POSSIBLE');
+    assert.equal(f.sql.prepare('SELECT count(*) n FROM pos_fiscal_attempt_releases_v1').get().n, 0);
+  } finally { f.sql.close(); }
+});

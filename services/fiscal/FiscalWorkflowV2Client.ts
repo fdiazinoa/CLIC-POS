@@ -135,6 +135,18 @@ export function createFiscalWorkflowV2Client({readAuth=captureFiscalStatusBoundC
    return {retired:false,note:`El ERP no retiró el intento ${id}: ${error instanceof Error?error.message:String(error)}. Verifícalo en el ERP antes de volver a cobrar.`};
   }
  },
+ /** Supervised break-glass: the ERP retirement service answered that it is disabled, the
+  * attempt has no local effects, and a supervisor authorized freeing the box. */
+ async releasePendingAttempt(actor:string):Promise<{released:boolean;note:string}>{
+  const native=store();if(!native?.releaseAttemptWithoutErp)return {released:false,note:'La caja no tiene almacén fiscal local.'};
+  const auth=readAuth();auth.assertCurrent();
+  const key=fiscalWorkflowScopeKey(scopeOf(auth.descriptor)),current=await native.currentCheckout(key);auth.assertCurrent();
+  if(!current)return {released:false,note:'No hay un intento fiscal pendiente.'};
+  const id=current.checkoutId.slice(0,8);
+  if(!['PREPARED','EFFECT_POSSIBLE'].includes(current.phase))return {released:false,note:`El intento ${id} ya está cerrado (${current.phase}).`};
+  try{await native.releaseAttemptWithoutErp(current,actor);return {released:true,note:`Se liberó la caja del intento ${id}. Queda registrado quién lo autorizó; verifica en el ERP que no exista comprobante para ese intento.`};}
+  catch(error){return {released:false,note:`No se pudo liberar el intento ${id}: ${error instanceof Error?error.message:String(error)}`};}
+ },
  /** Read-only snapshot of the fiscal attempt held by this terminal. Never mutates state. */
  async pendingCheckoutInfo():Promise<{checkoutId:string;phase:string;operationId:string;cartIdentity:string;payments:number;permitExpiresAt:string|null;permitId:string|null;offlineBindingHash:string|null;localBindingHash:string|null;leaseId:string|null}|null>{
   try{const auth=readAuth(),native=store();if(!native)return null;const current=await native.currentCheckout(fiscalWorkflowScopeKey(scopeOf(auth.descriptor)));

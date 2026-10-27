@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ArrowLeft, RefreshCw, ShieldCheck, ShieldAlert, Eraser, Loader2, ClipboardCopy } from 'lucide-react';
-import { clicConfirm } from '../services/dialog/ClicDialogService';
+import { clicConfirm, clicPrompt, clicAlert } from '../services/dialog/ClicDialogService';
+import type { RoleDefinition, User } from '../types';
 
 type Snapshot = Awaited<ReturnType<typeof readSnapshot>>;
 
@@ -19,10 +20,11 @@ const tone = (ok: boolean) => ok ? 'text-emerald-700 bg-emerald-50 border-emeral
  * Everything the fiscal checkout consults before charging, in one screen.
  * It is read-only except for the two recovery actions, which never touch a document.
  */
-export default function FiscalDiagnostics({ onClose }: { onClose: () => void }) {
+export default function FiscalDiagnostics({ onClose, users = [], roles = [], currentUser = null }: { onClose: () => void; users?: User[]; roles?: RoleDefinition[]; currentUser?: User | null }) {
    const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
    const [busy, setBusy] = useState<'refresh' | 'prepare' | 'release' | null>(null);
    const [note, setNote] = useState('');
+   const [releaseOffered, setReleaseOffered] = useState(false);
 
    const refresh = useCallback(async () => {
       setBusy('refresh');
@@ -46,12 +48,41 @@ export default function FiscalDiagnostics({ onClose }: { onClose: () => void }) 
    const release = async () => {
       setBusy('release');
       try {
+         setReleaseOffered(false);
          const confirmed = await clicConfirm('¿Cerrar el intento fiscal pendiente?\n\nLa caja pedirá al ERP que confirme que ese intento nunca emitió comprobante. Si el ERP tiene un documento, no se toca nada y te dirá por qué.');
          if (!confirmed) return;
          const { fiscalWorkflowV2Client } = await import('../services/fiscal/FiscalWorkflowV2Client');
          const outcome = await fiscalWorkflowV2Client.cancelUnreconcilableAttempt({});
          setNote(outcome.note);
+         setReleaseOffered(!outcome.cancelled && /FISCAL_WORKFLOW_(DISABLED|UNAVAILABLE)/.test(outcome.note));
          setSnapshot(await readSnapshot());
+      } catch (error) { setNote(error instanceof Error ? error.message : String(error)); }
+      finally { setBusy(null); }
+   };
+
+   /** Break-glass: only when the ERP retirement service answers DISABLED/UNAVAILABLE, the attempt
+    * has no local effects and a supervisor authorizes it with their PIN. */
+   const releaseWithoutErp = async () => {
+      const authorized = users.filter(user => {
+         const role = roles.find(item => item.id === user.role);
+         return Array.isArray(role?.permissions) && role!.permissions.includes('POS_CHECKOUT' as any);
+      });
+      const candidates = authorized.length ? authorized : currentUser ? [currentUser] : [];
+      if (!candidates.length) { setNote('Ningún usuario de esta caja puede autorizar la liberación.'); return; }
+      const pin = await clicPrompt('El ERP no puede confirmar el intento. Escribe el PIN de un supervisor para liberar la caja. Verifica antes en el ERP que ese intento no tenga comprobante; la liberación queda registrada con tu nombre.', { inputType: 'password', required: true });
+      if (!pin) return;
+      const supervisor = candidates.find(user => String(user.pin) === String(pin).trim());
+      if (!supervisor) { setNote('PIN incorrecto o sin permiso de cobro.'); return; }
+      const confirmed = await clicConfirm(`Se liberará la caja del intento pendiente con la autorización de ${supervisor.name}. El intento queda registrado y no se puede reutilizar. ¿Continuar?`);
+      if (!confirmed) return;
+      setBusy('release');
+      try {
+         const { fiscalWorkflowV2Client } = await import('../services/fiscal/FiscalWorkflowV2Client');
+         const outcome = await fiscalWorkflowV2Client.releasePendingAttempt(`${supervisor.name} (${supervisor.id})`);
+         setNote(outcome.note);
+         setReleaseOffered(false);
+         setSnapshot(await readSnapshot());
+         if (outcome.released) await clicAlert('Caja liberada. No se emitió ni anuló ningún comprobante. Verifica en el ERP que el intento no tenga documento antes de volver a cobrar.');
       } catch (error) { setNote(error instanceof Error ? error.message : String(error)); }
       finally { setBusy(null); }
    };
@@ -111,6 +142,12 @@ export default function FiscalDiagnostics({ onClose }: { onClose: () => void }) 
             )}
 
             {note && <p className="mt-3 whitespace-pre-wrap rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-xs font-bold text-sky-900">{note}</p>}
+            {releaseOffered && (
+               <div className="mt-3 rounded-xl border border-rose-300 bg-rose-50 px-4 py-3">
+                  <p className="text-xs font-bold leading-relaxed text-rose-900">El ERP no puede confirmar ni retirar el intento (servicio deshabilitado). Si verificaste que no hay comprobante, un supervisor puede liberar la caja; queda registrado con su nombre.</p>
+                  <button onClick={() => { void releaseWithoutErp(); }} disabled={busy !== null} className="mt-2 flex w-full items-center justify-center gap-2 rounded-xl bg-rose-700 px-4 py-3 text-sm font-black text-white disabled:opacity-40">{busy === 'release' ? <Loader2 size={16} className="animate-spin" /> : <ShieldAlert size={16} />} Liberar con autorización</button>
+               </div>
+            )}
 
             <div className="mt-4 grid gap-2 sm:grid-cols-2">
                <button onClick={() => { void prepare(); }} disabled={busy !== null} className="flex items-center justify-center gap-2 rounded-xl bg-amber-600 px-4 py-3 text-sm font-black text-white disabled:opacity-40">{busy === 'prepare' ? <Loader2 size={16} className="animate-spin" /> : <ShieldCheck size={16} />} Renovar reserva fiscal</button>

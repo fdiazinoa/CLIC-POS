@@ -734,7 +734,7 @@ const Settings: React.FC<SettingsProps> = (props) => {
         return <MasterNumberRangeDiagnostics onClose={() => setCurrentView('HOME')} />;
 
       case 'FISCAL_DIAGNOSTICS':
-        return <FiscalDiagnostics onClose={() => setCurrentView('HOME')} />;
+        return <FiscalDiagnostics onClose={() => setCurrentView('HOME')} users={props.users} roles={props.roles} currentUser={props.currentUser} />;
 
       case 'CUSTOMERS':
         return (

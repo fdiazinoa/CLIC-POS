@@ -21,6 +21,9 @@ CREATE TABLE IF NOT EXISTS pos_fiscal_watch_v2(transaction_id TEXT PRIMARY KEY,s
 CREATE INDEX IF NOT EXISTS pos_fiscal_watch_scope_v2 ON pos_fiscal_watch_v2(scope_key,transaction_id);
 CREATE TABLE IF NOT EXISTS pos_fiscal_refill_v2(scope_key TEXT PRIMARY KEY,operation_id TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS pos_fiscal_state_v2(transaction_id TEXT PRIMARY KEY,scope_key TEXT NOT NULL,source_identity TEXT NOT NULL,source_original TEXT NOT NULL,state_json TEXT NOT NULL,version INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS pos_fiscal_attempt_releases_v1(checkout_id TEXT PRIMARY KEY,transaction_id TEXT NOT NULL UNIQUE,permit_id TEXT NOT NULL,scope_key TEXT NOT NULL,operation_id TEXT NOT NULL,phase TEXT NOT NULL CHECK(phase IN ('PREPARED','EFFECT_POSSIBLE')),actor TEXT NOT NULL,created_at TEXT NOT NULL,reason TEXT NOT NULL CHECK(reason='ERP_RETIREMENT_UNAVAILABLE'));
+CREATE TRIGGER IF NOT EXISTS pos_fiscal_attempt_release_immutable_v1 BEFORE UPDATE ON pos_fiscal_attempt_releases_v1 BEGIN SELECT RAISE(ABORT,'FISCAL_ATTEMPT_RELEASE_IMMUTABLE');END;
+CREATE TRIGGER IF NOT EXISTS pos_fiscal_attempt_release_delete_v1 BEFORE DELETE ON pos_fiscal_attempt_releases_v1 BEGIN SELECT RAISE(ABORT,'FISCAL_ATTEMPT_RELEASE_IMMUTABLE');END;
 CREATE INDEX IF NOT EXISTS pos_fiscal_state_candidates_v2 ON pos_fiscal_state_v2(scope_key,transaction_id);
 CREATE TRIGGER IF NOT EXISTS pos_fiscal_permit_identity_v2 BEFORE UPDATE ON pos_fiscal_permits_v2 WHEN OLD.permit_id IS NOT NEW.permit_id OR OLD.transaction_id IS NOT NEW.transaction_id OR OLD.scope_key IS NOT NEW.scope_key OR OLD.permit_json IS NOT NEW.permit_json OR OLD.expires_at IS NOT NEW.expires_at OR OLD.state='CONSUMED' AND NEW.state<>'CONSUMED' OR OLD.checkout_id IS NOT NULL AND OLD.checkout_id IS NOT NEW.checkout_id BEGIN SELECT RAISE(ABORT,'FISCAL_WORKFLOW_PERMIT_IMMUTABLE');END;
 CREATE TRIGGER IF NOT EXISTS pos_fiscal_checkout_identity_v2 BEFORE UPDATE ON pos_fiscal_checkouts_v2 WHEN OLD.checkout_id IS NOT NEW.checkout_id OR OLD.transaction_id IS NOT NEW.transaction_id OR OLD.scope_key IS NOT NEW.scope_key OR OLD.cart_identity IS NOT NEW.cart_identity OR OLD.permit_id IS NOT NEW.permit_id OR OLD.phase IN ('COMMITTED','ACKNOWLEDGED') AND NEW.phase NOT IN ('COMMITTED','ACKNOWLEDGED') BEGIN SELECT RAISE(ABORT,'FISCAL_WORKFLOW_CHECKOUT_IMMUTABLE');END;
@@ -54,6 +57,20 @@ export class NativeFiscalWorkflowV2Store implements FiscalWorkflowStore {
  /** Releases a PREPARED attempt that never acquired effects, whatever its permit kind.
   * It is the online-permit counterpart of abandonOfflinePrepared: same immutable proof table,
   * same no-effects assertions, and the same durable fence for the retired identity. */
+ /** Supervised escape hatch for a box the ERP cannot reconcile: the retirement service is
+  * unavailable (503 FISCAL_WORKFLOW_DISABLED) and the attempt provably has no effects here.
+  * It only frees the current pointer and leaves an immutable audit row; the permit and the
+  * checkout stay fenced, so the same identity can never be reused. */
+ async releaseAttemptWithoutErp(expected:FiscalWorkflowCheckoutV2,actor:string):Promise<void>{await this.transaction(async sql=>{
+  const row=(await sql.query('SELECT c.checkout_json FROM pos_fiscal_checkout_current_v2 p JOIN pos_fiscal_checkouts_v2 c ON c.checkout_id=p.checkout_id AND c.scope_key=p.scope_key WHERE p.scope_key=? AND p.checkout_id=?',[expected.scopeKey,expected.checkoutId])).values?.[0];
+  if(!row||row.checkout_json!==JSON.stringify(expected)||!expected.permit?.permitId||!['PREPARED','EFFECT_POSSIBLE'].includes(expected.phase))throw Error('FISCAL_ATTEMPT_RELEASE_NOT_SAFE');
+  if(!expected.operationId||!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(expected.operationId))throw Error('FISCAL_ATTEMPT_RELEASE_NOT_SAFE');
+  await assertRetirementHasNoEffects(sql,{transactionId:expected.transactionId,checkoutId:expected.checkoutId,permitId:expected.permit.permitId},{targetedQueues:true});
+  if(actor.length<2||actor.length>120)throw Error('FISCAL_ATTEMPT_RELEASE_NOT_SAFE');
+  await sql.run("INSERT INTO pos_fiscal_attempt_releases_v1(checkout_id,transaction_id,permit_id,scope_key,operation_id,phase,actor,created_at,reason)VALUES(?,?,?,?,?,?,?,?,'ERP_RETIREMENT_UNAVAILABLE')",[expected.checkoutId,expected.transactionId,expected.permit.permitId,expected.scopeKey,expected.operationId,expected.phase,actor,new Date().toISOString()],false);
+  await sql.run('DELETE FROM pos_fiscal_checkout_current_v2 WHERE scope_key=? AND checkout_id=?',[expected.scopeKey,expected.checkoutId],false);
+  if(Number((await sql.query('SELECT changes() count')).values?.[0]?.count)!==1)throw Error('FISCAL_ATTEMPT_RELEASE_NOT_SAFE');
+ });}
  async abandonPreparedWithoutEffects(expected:FiscalWorkflowCheckoutV2):Promise<void>{await this.transaction(async sql=>{
   const proof=(await sql.query('SELECT original_identity FROM pos_offline_fiscal_abandoned_v1 WHERE checkout_id=?',[expected.checkoutId])).values?.[0];if(proof){if(proof.original_identity!==JSON.stringify(expected))throw Error('OFFLINE_FISCAL_ABANDON_NOT_SAFE');return;}
   const row=(await sql.query('SELECT c.checkout_json FROM pos_fiscal_checkout_current_v2 p JOIN pos_fiscal_checkouts_v2 c ON c.checkout_id=p.checkout_id AND c.scope_key=p.scope_key WHERE p.scope_key=? AND p.checkout_id=?',[expected.scopeKey,expected.checkoutId])).values?.[0];
