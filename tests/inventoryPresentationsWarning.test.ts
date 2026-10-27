@@ -4,6 +4,7 @@ import {readFileSync} from 'node:fs';
 import React from 'react';
 import {renderToStaticMarkup} from 'react-dom/server';
 import ts from 'typescript';
+import {describePresentationError} from '../utils/presentationErrorMessages';
 
 const source=readFileSync(new URL('../components/POSInterface.tsx',import.meta.url),'utf8');
 const ast=ts.createSourceFile('POSInterface.tsx',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
@@ -20,7 +21,7 @@ const ordinary={id:'plain',name:'Artículo normal',quantity:1,price:10};
 const formatted={id:'pack',name:'Agua',quantity:1,price:250,inventoryPresentation:{schemaVersion:1,itemId:'pack',variantId:null,format:{schemaVersion:1,id:'pack12',name:'Paquete',abbreviation:'PK',factor:12,barcode:''},commercialQuantity:1,baseQuantity:12,tariffId:'tariff',masterRevision:'a'.repeat(64)}};
 const selector={id:'pack',name:'Agua',inventoryPresentationMaster:{itemId:'pack',formats:[formatted.inventoryPresentation.format]}};
 function markup(cart:unknown[],presentationError:string|null,presentationSelection:unknown=null,retry:()=>void=()=>{}){
- const Warning=new Function('React','cart','presentationError','presentationSelection','setPresentationRetry',warningJS+';return warning;')(React,cart,presentationError,presentationSelection,retry);
+ const Warning=new Function('React','cart','presentationError','presentationSelection','setPresentationRetry','describePresentationError',warningJS+';return warning;')(React,cart,presentationError,presentationSelection,retry,describePresentationError);
  return renderToStaticMarkup(React.createElement(Warning));
 }
 for(const error of ['INVENTORY_PRESENTATION_AUTH_REQUIRED','network offline','INVENTORY_PRESENTATION_HTTP_403','INVENTORY_PRESENTATIONS_DISABLED']){
@@ -51,6 +52,6 @@ test('base-unit presentations and restored formatted tickets retain their warnin
 });
 test('retry button executes its original functional state updater in presentation context',()=>{
  let retries=3;
- const tree=new Function('React','cart','presentationError','presentationSelection','setPresentationRetry',warningJS+';return warning();')(React,[formatted],'network offline',null,(update:(value:number)=>number)=>{retries=update(retries);});
+ const tree=new Function('React','cart','presentationError','presentationSelection','setPresentationRetry','describePresentationError',warningJS+';return warning();')(React,[formatted],'network offline',null,(update:(value:number)=>number)=>{retries=update(retries);},describePresentationError);
  const banner=tree.props.children,button=banner.props.children.find((node:any)=>React.isValidElement(node)&&node.type==='button');assert.ok(button);button.props.onClick();assert.equal(retries,4);
 });
