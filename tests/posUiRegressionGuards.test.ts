@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { scopedWarehousesForStore } from '../utils/warehouseScope';
+import { scopedWarehousesForStore, alternativeWarehouseForLines } from '../utils/warehouseScope';
 import type { Warehouse } from '../types';
 
 const source = (relative: string) => readFileSync(new URL(`../${relative}`, import.meta.url), 'utf8');
@@ -192,4 +192,14 @@ test('a stale descriptive copy of an article never blocks the sale', () => {
   assert.match(source_, /SYNC_V3_ARTICLE_SOURCE_CHANGED:tariff/);
   assert.doesNotMatch(source_, /JSON\.stringify\(line\.appliedTaxIds\) !== JSON\.stringify\(product\.appliedTaxIds\)/);
   assert.match(source('utils/v3ErrorMessages.ts'), /SYNC_V3_ARTICLE_SOURCE_CHANGED/);
+});
+
+test('a warehouse conflict names where the ticket articles actually live', () => {
+  const lines = [{ id: 'a', name: 'Pechuga', activeInWarehouses: ['ALM_CENTRAL'] }];
+  const warehouses = [{ id: 'ALM_CENTRAL', name: 'Almacén Central' }, { id: 'A01', name: 'Almacén A01' }];
+  const alternative = alternativeWarehouseForLines(lines, warehouses, 'A01');
+  assert.deepEqual(alternative, { warehouseId: 'ALM_CENTRAL', name: 'Almacén Central', lineName: 'Pechuga' });
+  assert.equal(alternativeWarehouseForLines([{ id: 'b', activeInWarehouses: ['A01'] }], warehouses, 'A01'), null);
+  assert.equal(alternativeWarehouseForLines(lines, warehouses, ''), null);
+  assert.match(pos(), /alternativeWarehouseForLines\(processedCart as any, warehouses, defaultSalesWarehouseId\)/);
 });

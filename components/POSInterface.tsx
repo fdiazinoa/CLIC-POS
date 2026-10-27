@@ -1,5 +1,6 @@
 import { describeV3Error } from '../utils/v3ErrorMessages';
 import { describePresentationError } from '../utils/presentationErrorMessages';
+import { alternativeWarehouseForLines } from '../utils/warehouseScope';
 import { scopedWarehousesForStore } from '../utils/warehouseScope';
 import {v3RetainedLineFingerprint} from '../services/sync/LargeMasterSyncV3StockAuthority';
 import {assertTrackingOperationReceipt,type TrackingScope} from '../services/db/TrackingCheckoutOperation';
@@ -5825,7 +5826,19 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          }
          assertFormatsPostingClosed(processedCart);
          await assertCheckoutFiscalAuthority();
-         if (v3Operational) await v3Operational.validate(processedCart, { ticketId: activeTable?.currentOrderId || activeDirectV3TicketId, claimId: activeDirectV3TicketId, reservationId:activeV3Reservation?.reservation.id,reservationClaimId:activeV3Reservation?.claimId, tableId: activeTable?.id === undefined ? undefined : String(activeTable.id) });
+         if (v3Operational) {
+            try { await v3Operational.validate(processedCart, { ticketId: activeTable?.currentOrderId || activeDirectV3TicketId, claimId: activeDirectV3TicketId, reservationId:activeV3Reservation?.reservation.id,reservationClaimId:activeV3Reservation?.claimId, tableId: activeTable?.id === undefined ? undefined : String(activeTable.id) }); }
+            catch (error: any) {
+               // Name the warehouse where the ticket's articles actually live: "no disponible" alone
+               // leaves the cashier without a decision.
+               if (/SYNC_V3_WAREHOUSE_UNAVAILABLE/.test(String(error?.message || ''))) {
+                  const alternative = alternativeWarehouseForLines(processedCart as any, warehouses, defaultSalesWarehouseId);
+                  const current = (warehouses || []).find(row => row.id === defaultSalesWarehouseId);
+                  if (alternative) throw Error(`Este ticket usa artículos que no están activos en ${current?.name || current?.code || 'el almacén de esta caja'}; están activos en ${alternative.name}. Cambia el almacén de venta de la caja en Ajustes → Configuración Local o actívalos en el ERP.`);
+               }
+               throw error;
+            }
+         }
          const invalidQuantityItem = processedCart.find(item => !isValidCartQuantity(item.quantity));
          if (invalidQuantityItem) {
             alert(`La cantidad de "${invalidQuantityItem.name}" no es válida. Elimine la línea y agréguela nuevamente.`);
