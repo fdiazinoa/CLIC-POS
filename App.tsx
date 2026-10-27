@@ -27,7 +27,7 @@ import { captureFiscalStatusBoundContext } from './services/fiscal/FiscalBoundCo
 import { readLargeMasterSyncV3BoundIdentity } from './services/sync/LargeMasterSyncV3BoundTransport';
 import { assertLargeMasterSyncV3NativeAndroid } from './services/sync/LargeMasterSyncV3Platform';
 import { getLargeMasterSyncV3OperationalSession, v3BindingKey } from './services/sync/LargeMasterSyncV3OperationalSession';
-import { needsTerminalReauthorization, reauthorizeTerminal } from './services/sync/TerminalReauthorizationService';
+import { needsTerminalReauthorization, reauthorizeTerminal, reconcileStaleFiscalCheckout } from './services/sync/TerminalReauthorizationService';
 import { assertLargeMasterSyncV3SetupContract, largeMasterSyncV3DownloadOrigin } from './services/sync/LargeMasterSyncV3DownloadOrigin';
 import { completeLargeMasterSyncV3Setup } from './services/sync/LargeMasterSyncV3SetupCompletion';
 import { createV3Progress, type V3Progress } from './services/sync/LargeMasterSyncV3Progress';
@@ -11620,6 +11620,7 @@ const AppContent: React.FC = () => {
     if (!isDataLoaded || !isSecurityLoaded) return;
     const timer = setTimeout(() => {
       try {
+        void reconcileStaleFiscalCheckout().then(note => { if (note) console.info('[fiscal]', note); }).catch(() => undefined);
         const state = needsTerminalReauthorization();
         if (!state.required) return;
         console.info('[reauth] terminal sin autorización vigente:', state.reason);

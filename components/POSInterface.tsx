@@ -5488,6 +5488,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
    };
 
+   const handleClearAllCartItems = async () => {
+      if (!cart.length) return;
+      if (!await clicConfirm('¿Eliminar todos los artículos del ticket?')) return;
+      onUpdateCart([]);
+   };
+
    const handleClearFreshCartItems = async () => {
       if (blockRecoveredUberOrderMutation('limpiar los artículos nuevos del ticket')) return;
       if (hasSubtotalizedCart) {
@@ -8837,6 +8843,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      </span>
                   </button>
                   {!isKioskMode && <OrderServiceTypeButton value={effectiveOrderServiceType} onClick={() => handleGridAction('TAKEOUT')} />}
+                  {isRetailMode && cart.length > 0 && (
+                     <button
+                        type="button"
+                        onClick={() => { void handleClearAllCartItems(); }}
+                        title="Eliminar todos los artículos"
+                        aria-label="Eliminar todos los artículos"
+                        className="ml-1 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-rose-200 bg-rose-50 text-rose-600 transition-colors hover:bg-rose-100"
+                     >
+                        <Trash2 size={17} />
+                     </button>
+                  )}
                </TicketStatusControls>
 
                {/* CUSTOMER PILL (MOBILE) */}

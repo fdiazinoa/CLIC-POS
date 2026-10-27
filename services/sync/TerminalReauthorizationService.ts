@@ -11,6 +11,36 @@ export type TerminalReauthorizationResult = {
 
 const EXPIRY_SKEW_MS = 10 * 60_000;
 
+/**
+ * A prepared checkout (or lease) created under a previous terminal binding can never
+ * reconcile. This retires it and revokes the stale leases so a fresh authority can be
+ * issued. Safe to run on every boot: it is a no-op when the binding is unchanged.
+ */
+export const reconcileStaleFiscalCheckout = async (): Promise<string> => {
+  let note = '';
+  try {
+    const { dbAdapter } = await import('../db');
+    const { readOfflineFiscalLocalAuthority } = await import('../fiscal/OfflineFiscalLeaseContext');
+    const { fiscalWorkflowScopeKey } = await import('../fiscal/FiscalWorkflowV2Types');
+    await dbAdapter.connect();
+    const store = dbAdapter.fiscalWorkflowStore;
+    const local = await readOfflineFiscalLocalAuthority().catch(() => null);
+    if (!store || !local) return note;
+    const scopeKey = fiscalWorkflowScopeKey(local.scope);
+    const current = await store.currentCheckout(scopeKey).catch(() => null);
+    if (current && current.offlineBindingHash !== local.bindingHash) {
+      if (current.phase === 'PREPARED' && store.abandonOfflinePrepared) {
+        await store.abandonOfflinePrepared(current).catch(() => undefined);
+        note = ' Se descartó un cobro fiscal preparado de la vinculación anterior.';
+      } else if (current.phase === 'EFFECT_POSSIBLE') {
+        note = ' Hay un cobro con efecto posible de la vinculación anterior: revísalo antes de cobrar.';
+      }
+      await store.revokeOfflineLeases?.('*').catch(() => undefined);
+    }
+  } catch { /* best effort */ }
+  return note;
+};
+
 /** True when the stored pairing can no longer authorize ERP/fiscal calls. */
 export const needsTerminalReauthorization = (): { required: boolean; reason: string } => {
   const credentials = readTerminalCredentialsSync();
@@ -55,6 +85,8 @@ export const reauthorizeTerminal = async (): Promise<TerminalReauthorizationResu
     return { ok: false, message: `No se pudo reautorizar la terminal: ${detail}` };
   }
 
+  const staleNote = await reconcileStaleFiscalCheckout();
+
   let fiscal = 'No se pudo preparar la reserva fiscal.';
   try {
     const { fiscalWorkflowV2Client } = await import('../fiscal/FiscalWorkflowV2Client');
@@ -71,7 +103,7 @@ export const reauthorizeTerminal = async (): Promise<TerminalReauthorizationResu
   const updated = readTerminalCredentialsSync();
   return {
     ok: true,
-    message: `Terminal reautorizada. ${fiscal}`,
+    message: `Terminal reautorizada. ${fiscal}${staleNote}`,
     authStatus: updated.authStatus || null,
     expiresAt: updated.syncTokenExpiresAt || null,
   };
