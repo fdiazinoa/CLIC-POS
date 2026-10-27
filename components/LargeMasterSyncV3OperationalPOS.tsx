@@ -110,6 +110,7 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps> = props => {
     };
     return {
     tariffId,
+    liveInventory: pinnedSource.liveInventory,
     categories,
     search: async (query, categoryId, categoryKeys) => {
       // Retired reads cannot change catalog state or surface stale errors.

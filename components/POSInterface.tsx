@@ -268,6 +268,8 @@ export interface V3OperationalPOSBoundary {
    changeTariff(tariffId: string): void;
    /** Moves restored/older cart lines to the live stock authority without touching agreed prices. */
    reanchor?(lines: CartItem[]): Promise<CartItem[] | null>;
+   /** Live inventory generation, used to detect stale cart stamps without extra reads. */
+   liveInventory?: { syncId: string; syncVersion: number; inventoryVersion: number; inventoryCursor: string };
 }
 
 export interface POSInterfaceProps {
@@ -2420,6 +2422,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const reanchorRef = useRef<{ boundary?: unknown; fingerprint: string }>({ fingerprint: '' });
    useEffect(() => {
       if (!v3Operational?.reanchor || cart.length === 0) return;
+      const live = v3Operational.liveInventory;
+      if (!live) return;
+      const stale = cart.some(line => {
+         const stamp = line.v3SaleAuthority;
+         return !stamp || stamp.inventoryVersion !== live.inventoryVersion
+            || stamp.inventoryCursor !== live.inventoryCursor || stamp.syncId !== live.syncId
+            || stamp.syncVersion !== live.syncVersion;
+      });
+      if (!stale) return;
       const fingerprint = [
          v3Operational.tariffId,
          cart.map(line => [

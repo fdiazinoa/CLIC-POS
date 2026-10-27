@@ -81,6 +81,16 @@ export class LargeMasterSyncV3OperationalCatalog {
     return catalog;
   }
 
+  /** Cheap live identity used by the POS to detect cart lines stamped on another inventory generation. */
+  get liveInventory(): { syncId: string; syncVersion: number; inventoryVersion: number; inventoryCursor: string } {
+    return {
+      syncId: this.ready.runtime.version.syncId,
+      syncVersion: this.ready.runtime.version.syncVersion,
+      inventoryVersion: this.ready.inventoryVersion,
+      inventoryCursor: this.ready.inventoryCursor,
+    };
+  }
+
   private async assertInventoryVersion(): Promise<void> {
     const inventory = await this.ready.runtime.getInventorySnapshotVersion();
     if (!inventory || inventory.version !== this.ready.inventoryVersion
