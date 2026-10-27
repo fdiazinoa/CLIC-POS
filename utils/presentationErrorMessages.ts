@@ -19,8 +19,12 @@ const HINTS: Record<string, string> = {
     'El almacenamiento de presentaciones no está disponible en este equipo. Reinstala el APK.',
   INVENTORY_PRESENTATION_LOCAL_REQUIRED:
     'La caja no tiene el identificador local del almacén de venta. Sincroniza la configuración de la terminal.',
+  INVENTORY_PRESENTATION_SOURCE_REQUIRED_NOT_YET_SUPPORTED:
+    'El ticket conserva la presentación de un catálogo anterior. Vuelve a agregar ese artículo para cobrarlo con el catálogo de hoy.',
   INVENTORY_PRESENTATION_MASTER_REQUIRED:
     'La presentación del artículo no está descargada en esta caja. Reintenta con conexión.',
+  INVENTORY_PRESENTATION_PRICE_MISMATCH:
+    'El precio de la presentación cambió en el catálogo. Revisa el artículo antes de cobrar.',
   INVENTORY_PRESENTATION_TARIFF_FORBIDDEN:
     'La tarifa del artículo no está habilitada para esta caja. Revisa las tarifas permitidas en el ERP.',
 };

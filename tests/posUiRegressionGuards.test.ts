@@ -143,3 +143,14 @@ test('the presentations panel can adopt the ERP default warehouse for the box', 
   assert.match(panel, /onUpdateConfig\?\.\(nextConfig\)/);
   assert.match(settings(), /onUpdateConfig=\{props\.onUpdateConfig\}/);
 });
+
+test('a table saved on another warehouse re-anchors and its presentations adopt today master', () => {
+  const src = pos();
+  assert.match(src, /stamp\.warehouseId !== liveWarehouse/);
+  assert.match(src, /reconcilePresentationLine\(/);
+  assert.match(src, /el precio de la presentación cambió/);
+  const reconcile = source('services/inventoryPresentations/reconcile.ts');
+  assert.match(reconcile, /status: 'reconciled'/);
+  assert.match(reconcile, /PRICE_CHANGED/);
+  assert.match(source('utils/presentationErrorMessages.ts'), /INVENTORY_PRESENTATION_SOURCE_REQUIRED_NOT_YET_SUPPORTED/);
+});

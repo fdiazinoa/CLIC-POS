@@ -2425,11 +2425,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (!v3Operational?.reanchor || cart.length === 0) return;
       const live = v3Operational.liveInventory;
       if (!live) return;
+      // The warehouse and tariff are part of the sale authority: after changing the box's
+      // default warehouse a saved table is stale even when the inventory generation matches.
+      const liveWarehouse = defaultSalesWarehouseId;
       const stale = cart.some(line => {
          const stamp = line.v3SaleAuthority;
          return !stamp || stamp.inventoryVersion !== live.inventoryVersion
             || stamp.inventoryCursor !== live.inventoryCursor || stamp.syncId !== live.syncId
-            || stamp.syncVersion !== live.syncVersion;
+            || stamp.syncVersion !== live.syncVersion
+            || (liveWarehouse ? stamp.warehouseId !== liveWarehouse : false)
+            || (v3Operational.tariffId ? stamp.tariffId !== v3Operational.tariffId : false);
       });
       if (!stale) return;
       const fingerprint = [
@@ -2444,9 +2449,38 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (reanchorRef.current.fingerprint === fingerprint) return;
       reanchorRef.current.fingerprint = fingerprint;
       let cancelled = false;
-      void v3Operational.reanchor(cart).then(lines => {
+      void v3Operational.reanchor(cart).then(async lines => {
          if (cancelled || !lines) return;
-         onUpdateCart(lines);
+         // Presentation lines keep the master revision of the catalog of their day; adopt the
+         // current master so the checkout can validate them without touching the agreed amount.
+         const runtime = presentationRuntimeRef.current;
+         let next = lines;
+         if (runtime && lines.some(line => line.inventoryPresentation !== undefined)) {
+            try {
+               const cached = await runtime.client.cached();
+               if (cached) {
+                  const masters = await runtime.store.masters(cached.bindingKey, [...new Set(lines.filter(line => line.inventoryPresentation !== undefined).map(line => line.id))]);
+                  const { reconcilePresentationLine } = await import('../services/inventoryPresentations/reconcile');
+                  const failures: string[] = [];
+                  next = lines.map(line => {
+                     if (line.inventoryPresentation === undefined) return line;
+                     const master = masters[line.id];
+                     if (!master) { failures.push(`${line.name}: presentación sin catálogo actual`); return line; }
+                     const outcome = reconcilePresentationLine(line, master);
+                     if (outcome.status === 'reconciled') return outcome.line;
+                     if (outcome.status === 'unavailable') {
+                        failures.push(outcome.reason === 'PRICE_CHANGED'
+                           ? `${line.name}: el precio de la presentación cambió`
+                           : `${line.name}: la presentación ya no está disponible`);
+                     }
+                     return line;
+                  });
+                  if (failures.length) setErrorToast(failures.slice(0, 2).join(' · '));
+               }
+            } catch { /* the checkout reports its own actionable message */ }
+         }
+         if (cancelled) return;
+         onUpdateCart(next);
          setSuccessToast('Ticket actualizado al inventario de hoy. Los precios de la mesa no cambian.');
       }).catch(() => undefined);
       return () => { cancelled = true; };
