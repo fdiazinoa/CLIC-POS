@@ -2452,7 +2452,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       // A stale cart cannot be resumed: a pending attempt bound to the previous lines has to be
       // released before restating them, otherwise the checkout and the cart disagree forever.
       const restate = async () => {
-         if (fiscalCheckoutRef.current) {
+         // The attempt can also live only in the native store (for example after a restart).
+         const pending = await fiscalWorkflowV2Client.pendingCheckoutInfo().catch(() => null);
+         if (fiscalCheckoutRef.current || (pending && ['PREPARED', 'EFFECT_POSSIBLE'].includes(pending.phase))) {
             const outcome = await fiscalWorkflowV2Client.cancelUnreconcilableAttempt({}).catch(() => null);
             if (!outcome?.cancelled) return null;
             fiscalCheckoutRef.current = null;
@@ -6978,6 +6980,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          return Object.assign(()=>{},{completedTransaction:completed as Transaction});
       }
       await assertCheckoutFiscalAuthority();
+      // A native attempt bound to another cart can never be resumed; release it here so the
+      // cashier is not blocked by a previous click (the release asserts there are no effects).
+      const pendingAttempt = await fiscalWorkflowV2Client.pendingCheckoutInfo().catch(() => null);
+      if (pendingAttempt && ['PREPARED', 'EFFECT_POSSIBLE'].includes(pendingAttempt.phase)
+        && pendingAttempt.cartIdentity !== currentFiscalCheckoutCartIdentity(offlineTableFiscalContextRef.current)) {
+         const released = await fiscalWorkflowV2Client.cancelUnreconcilableAttempt({ cartIdentity: currentFiscalCheckoutCartIdentity(offlineTableFiscalContextRef.current) }).catch(() => null);
+         if (!released?.cancelled) throw Error(`FISCAL_WORKFLOW_CHECKOUT_RECONCILIATION_REQUIRED:${released?.note || 'revisa el intento pendiente'}`);
+         fiscalCheckoutRef.current = null;
+         fiscalCheckoutOperationRef.current = null;
+      }
       if (hasV3ReservationCart && !activeV3Reservation) throw new Error('La referencia de la reserva aún no está validada.');
       if (activeV3Reservation && selectedCustomer?.id !== activeV3Reservation.reservation.customerId) throw new Error('El cliente de la reserva no puede cambiarse.');
       if (!v3Operational) return () => {};

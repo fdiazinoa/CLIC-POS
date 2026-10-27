@@ -175,3 +175,11 @@ test('a transient failure never locks the cashier out of the next attempt', () =
   assert.match(modal, /gatewayReference: reference/);
   assert.doesNotMatch(modal, /&& intent\?\.status === 'AUTHORIZED'\) throw new Error\('PAYMENT_INTENT_RECONCILIATION_REQUIRED'\)/);
 });
+
+test('a native attempt bound to another cart is released instead of blocking the payment', () => {
+  const src = pos();
+  assert.match(src, /pendingAttempt\.cartIdentity !== currentFiscalCheckoutCartIdentity/);
+  assert.match(src, /FISCAL_WORKFLOW_CHECKOUT_RECONCILIATION_REQUIRED:\$\{released\?\.note/);
+  // The re-anchor also looks at the native store, not only the in-memory reference.
+  assert.match(src, /const pending = await fiscalWorkflowV2Client\.pendingCheckoutInfo\(\)/);
+});
