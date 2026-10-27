@@ -6,6 +6,7 @@ const componenteSource = readFileSync(new URL('../components/KdsReports.tsx', im
 const settingsSource = readFileSync(new URL('../components/Settings.tsx', import.meta.url), 'utf8');
 const servicioSource = readFileSync(new URL('../server/kds_reports.py', import.meta.url), 'utf8');
 const kdsServiceSource = readFileSync(new URL('../server/kds_service.py', import.meta.url), 'utf8');
+const endpointSource = readFileSync(new URL('../utils/kdsReportsEndpoint.ts', import.meta.url), 'utf8');
 
 test('existe el componente de informes de KDS y se carga desde Settings', () => {
   assert.ok(componenteSource.length > 0);
@@ -120,4 +121,20 @@ test('el backend expone las marcas del ciclo y los cinco informes', () => {
   assert.match(servicioSource, /ROW_NUMBER\(\) OVER/);
   assert.match(servicioSource, /GROUP BY estacion/);
   assert.match(servicioSource, /strftime\('%H'/);
+});
+
+test('los informes usan el mismo puerto que la pantalla de cocina', () => {
+  // El puerto se resuelve como en KitchenDisplay (parámetro o preferencia del equipo),
+  // no fijo en 8001: si la cocina sirve en otro puerto, los informes deben encontrarla.
+  assert.doesNotMatch(componenteSource, /:8001`/);
+  assert.match(componenteSource, /resolveKdsReportsBaseUrl as resolveKdsDeviceBaseUrl/);
+  assert.match(componenteSource, /resolveKdsDeviceBaseUrl\(\{ override \}\)/);
+  assert.match(endpointSource, /new URLSearchParams\(search\)\.get\('kdsPort'\)/);
+  assert.match(endpointSource, /localStorage\.getItem\('CLIC_POS_KDS_PORT'\)/);
+});
+
+test('una orden devuelta no aporta un tiempo de preparación inventado', () => {
+  // hora_terminado de una fila DEVUELTO es la devolución, no el momento de estar lista.
+  assert.match(servicioSource, /UPPER\(COALESCE\(estado_cocina, ''\)\) <> 'DEVUELTO'/);
+  assert.match(servicioSource, /listo_at_devuelto_omitido/);
 });

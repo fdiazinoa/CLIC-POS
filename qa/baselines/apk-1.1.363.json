@@ -84,6 +84,7 @@
     "tests/kdsReportsContract.test.ts",
     "tests/cardOutcomeException.test.ts",
     "tests/cardOutcomeNoDoubleCharge.test.ts",
-    "tests/modifierSelection.test.ts"
+    "tests/modifierSelection.test.ts",
+    "tests/kdsReportsEndpoint.test.ts"
   ]
 }

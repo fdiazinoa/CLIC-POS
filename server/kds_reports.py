@@ -173,7 +173,9 @@ def backfill_kds_timestamps(conn: sqlite3.Connection) -> Dict[str, int]:
         """,
     )
 
-    # listo_at <- hora_terminado (las filas DEVUELTO antiguas también lo usaban).
+    # listo_at <- hora_terminado, salvo las filas DEVUELTO: en ellas hora_terminado es el
+    # momento en que se devolvió el platillo, no el momento en que estuvo listo. Fabricar
+    # esa marca inflaría los tiempos de preparación, así que se deja sin dato.
     resultado["listo_at"] = _run_update(
         conn,
         """
@@ -182,6 +184,17 @@ def backfill_kds_timestamps(conn: sqlite3.Connection) -> Dict[str, int]:
          WHERE listo_at IS NULL
            AND hora_terminado IS NOT NULL
            AND hora_terminado <> ''
+           AND UPPER(COALESCE(estado_cocina, '')) <> 'DEVUELTO'
+        """,
+    )
+    resultado["listo_at_devuelto_omitido"] = _run_count(
+        conn,
+        """
+        SELECT COUNT(*) FROM ordenes_detalles
+         WHERE listo_at IS NULL
+           AND hora_terminado IS NOT NULL
+           AND hora_terminado <> ''
+           AND UPPER(COALESCE(estado_cocina, '')) = 'DEVUELTO'
         """,
     )
 
@@ -234,6 +247,14 @@ def backfill_kds_timestamps(conn: sqlite3.Connection) -> Dict[str, int]:
     if any(resultado.values()):
         conn.commit()
     return resultado
+
+
+def _run_count(conn: sqlite3.Connection, sql: str) -> int:
+    try:
+        fila = conn.execute(sql).fetchone()
+        return int(fila[0] if fila else 0)
+    except sqlite3.Error:
+        return 0
 
 
 def _run_update(conn: sqlite3.Connection, sql: str) -> int:

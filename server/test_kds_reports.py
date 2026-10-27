@@ -105,6 +105,17 @@ class MigracionTests(unittest.TestCase):
         fila = conn.execute("SELECT recibido_at FROM ordenes_detalles WHERE id = 'O1_0'").fetchone()
         self.assertEqual(fila["recibido_at"], iso())
 
+    def test_backfill_no_inventa_listo_at_para_devueltos(self):
+        conn = conectar()
+        orden(conn, "O1", iso())
+        # Fila devuelta: hora_terminado es el momento de la devolución, no de estar listo.
+        detalle(conn, "O1_0", "O1", estado="DEVUELTO")
+        conn.execute("UPDATE ordenes_detalles SET hora_terminado = ? WHERE id = 'O1_0'", (iso(7),))
+        resultado = kds_reports.backfill_kds_timestamps(conn)
+        fila = conn.execute("SELECT * FROM ordenes_detalles WHERE id = 'O1_0'").fetchone()
+        self.assertIsNone(fila["listo_at"])
+        self.assertEqual(resultado["listo_at_devuelto_omitido"], 1)
+
     def test_backfill_no_sobrescribe_marcas_existentes(self):
         conn = conectar()
         orden(conn, "O1", iso())

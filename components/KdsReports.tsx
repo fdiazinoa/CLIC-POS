@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { resolveKdsReportsBaseUrl as resolveKdsDeviceBaseUrl } from '../utils/kdsReportsEndpoint';
 import {
   ArrowLeft,
   BarChart3,
@@ -146,14 +147,12 @@ interface InformeKds {
   volumen: HourlyVolume;
 }
 
-/** Base del servicio KDS local (mismo puerto que usa la pantalla de cocina). */
-export const resolveKdsReportsBaseUrl = (override?: string): string => {
-  const explicito = String(override || '').trim();
-  if (explicito) return explicito.replace(/\/+$/, '');
-  const host = typeof window !== 'undefined' && window.location?.hostname ? window.location.hostname : 'localhost';
-  const hostUtil = !host || host === '0.0.0.0' ? 'localhost' : host;
-  return `http://${hostUtil}:8001`;
-};
+/**
+ * Base del servicio KDS: el mismo host y puerto que resuelve la pantalla de cocina
+ * (el puerto puede venir del emparejamiento o de la preferencia del equipo).
+ */
+export const resolveKdsReportsBaseUrl = (override?: string): string =>
+  resolveKdsDeviceBaseUrl({ override });
 
 const dosDigitos = (valor: number) => String(valor).padStart(2, '0');
 
