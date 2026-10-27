@@ -47,3 +47,31 @@ export const resolveKdsReportsBaseUrl = (input?: {
   const host = !hostname || hostname === '0.0.0.0' ? 'localhost' : hostname;
   return `http://${host}:${resolveKdsReportsPort({ search: input?.search, storedPort: input?.storedPort })}`;
 };
+
+export interface KdsAreaEndpoint {
+  kds_host?: unknown;
+  kds_port?: unknown;
+  modo_salida?: unknown;
+  mode?: unknown;
+}
+
+/**
+ * The kitchen may run on another device: if a production area declares its KDS host,
+ * the reports must go there instead of the terminal's own host.
+ */
+export const resolveKdsReportsBaseUrlForAreas = (areas: readonly KdsAreaEndpoint[] | null | undefined): string | null => {
+  const usable = (areas || [])
+    .map((area) => ({
+      host: String(area?.kds_host ?? '').trim(),
+      port: String(area?.kds_port ?? '').trim(),
+      mode: String(area?.modo_salida ?? area?.mode ?? '').trim().toUpperCase(),
+    }))
+    .filter((area) => area.host.length > 0);
+  if (!usable.length) return null;
+  // A real kitchen output wins over an area that only prints.
+  const chosen = usable.find((area) => area.mode === 'KDS' || area.mode === 'AMBOS') || usable[0];
+  if (/^https?:\/\//i.test(chosen.host)) return chosen.host.replace(/\/+$/, '');
+  const host = chosen.host.replace(/\/+$/, '');
+  const port = PORT_PATTERN.test(chosen.port) ? chosen.port : DEFAULT_KDS_PORT;
+  return `http://${host}${/:\d+$/.test(host) ? '' : `:${port}`}`;
+};

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { resolveKdsReportsBaseUrl as resolveKdsDeviceBaseUrl } from '../utils/kdsReportsEndpoint';
+import { resolveKdsReportsBaseUrl as resolveKdsDeviceBaseUrl, resolveKdsReportsBaseUrlForAreas } from '../utils/kdsReportsEndpoint';
+import { db } from '../utils/db';
 import {
   ArrowLeft,
   BarChart3,
@@ -258,13 +259,28 @@ export default function KdsReports({ onClose, kdsBaseUrl }: KdsReportsProps) {
   const [error, setError] = useState('');
   const [estacionesConocidas, setEstacionesConocidas] = useState<Array<{ id: string; nombre: string }>>([]);
   const solicitudRef = useRef(0);
+  /** Cocina configurada en el ERP: si declara su equipo, los informes van ahí. */
+  const [configuredBase, setConfiguredBase] = useState<string | null>(null);
+  useEffect(() => {
+    let vigente = true;
+    void (async () => {
+      try {
+        const areas = await db.get('productionAreas' as never) as unknown as Parameters<typeof resolveKdsReportsBaseUrlForAreas>[0];
+        const resuelto = resolveKdsReportsBaseUrlForAreas(areas);
+        if (vigente && resuelto) setConfiguredBase(resuelto);
+      } catch {
+        /* Sin catálogo de producción: se usa el host de este equipo. */
+      }
+    })();
+    return () => { vigente = false; };
+  }, []);
 
   const cargar = useCallback(async () => {
     const solicitud = solicitudRef.current + 1;
     solicitudRef.current = solicitud;
     const controlador = new AbortController();
     const temporizador = window.setTimeout(() => controlador.abort(), KDS_REPORTS_TIMEOUT_MS);
-    const base = resolveKdsReportsBaseUrl(kdsBaseUrl);
+    const base = resolveKdsReportsBaseUrl(kdsBaseUrl || configuredBase || undefined);
     const { desde, hasta } = buildKdsReportsRange(rango, personalizado);
     const comun = new URLSearchParams({ desde, hasta });
     if (estacion) comun.set('estacion', estacion);
@@ -292,18 +308,22 @@ export default function KdsReports({ onClose, kdsBaseUrl }: KdsReportsProps) {
       }
     } catch (fallo) {
       if (solicitudRef.current !== solicitud) return;
+      const sinRespuesta = fallo instanceof TypeError
+        || (fallo instanceof Error && /failed to fetch|networkerror|load failed/i.test(fallo.message));
       const mensaje = fallo instanceof Error && fallo.name === 'AbortError'
         ? 'El servicio KDS no respondió a tiempo. Verifica que la cocina esté encendida y en la misma red.'
-        : fallo instanceof Error
-          ? fallo.message
-          : 'Error desconocido al consultar los informes.';
+        : sinRespuesta
+          ? `No se pudo contactar el servicio de cocina en ${base}. Verifica que el KDS esté encendido y accesible desde este equipo.`
+          : fallo instanceof Error
+            ? fallo.message
+            : 'Error desconocido al consultar los informes.';
       setDatos(null);
       setError(`No se pudieron cargar los informes de KDS: ${mensaje}`);
     } finally {
       window.clearTimeout(temporizador);
       if (solicitudRef.current === solicitud) setCargando(false);
     }
-  }, [rango, personalizado, estacion, sla, kdsBaseUrl]);
+  }, [rango, personalizado, estacion, sla, kdsBaseUrl, configuredBase]);
 
   useEffect(() => {
     void cargar();
