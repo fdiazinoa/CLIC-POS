@@ -247,3 +247,13 @@ test('every preparation step releases a stale attempt through one helper', () =>
   assert.ok(releaseCalls.length >= 2, 'both preparation steps must use the shared helper');
   assert.doesNotMatch(src, /const outcome = await fiscalWorkflowV2Client\.cancelUnreconcilableAttempt\(\{\}\)\.catch/);
 });
+
+test('the account only speaks when the preparation could not finish', () => {
+  const src = pos();
+  assert.match(src, /Revisar antes de cobrar/);
+  assert.match(src, /const \[accountHold, setAccountHold\] = useState<\{ note: string \} \| null>\(null\)/);
+  assert.match(src, /setAccountHold\(\{ note: released\.note \}\)/);
+  // A resolved account clears the warning and keeps the ticket silent.
+  assert.match(src, /setAccountHold\(null\);/);
+  assert.doesNotMatch(src, /Lista para cobrar/);
+});

@@ -2420,6 +2420,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
    }, [activeTable, parkedTickets, transactions, onUpdateCart, cart.length]);
 
+   // Veredicto de la cuenta: solo se muestra cuando la preparación no pudo dejar el cobro listo.
+   // Todo lo que se resuelve solo permanece invisible para el cajero.
+   const [accountHold, setAccountHold] = useState<{ note: string } | null>(null);
+   const accountHoldKeyRef = useRef('');
+   useEffect(() => {
+      const key = currentFiscalCheckoutCartIdentity(offlineTableFiscalContextRef.current);
+      if (accountHoldKeyRef.current === key) return;
+      accountHoldKeyRef.current = key;
+      setAccountHold(null);
+   }, [cart]);
+
    // Único punto que descarta un intento fiscal que ya no corresponde al carrito actual. Se usa al
    // abrir el pago y antes de reanclar las líneas, para que no existan dos caminos distintos.
    const releaseStaleFiscalAttempt = async (options: { identity?: string } = {}): Promise<{ cancelled: boolean; note: string }> => {
@@ -2443,8 +2454,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          try {
             const identity = currentFiscalCheckoutCartIdentity(offlineTableFiscalContextRef.current);
             const released = await releaseStaleFiscalAttempt({ identity });
-            if (cancelled || released.cancelled) return;
-            if (!released.note) return;
+            if (cancelled) return;
+            if (released.cancelled || !released.note) { if (released.cancelled) setAccountHold(null); return; }
+            setAccountHold({ note: released.note });
             setShowPaymentModal(false);
             setErrorToast(released.note);
          } catch { /* the checkout still reports its own message */ }
@@ -2523,7 +2535,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          // A stale cart cannot be resumed: a pending attempt bound to the previous lines has to be
          // released before restating them (it can also live only in the native store).
          const released = await releaseStaleFiscalAttempt();
-         if (fiscalCheckoutRef.current || released.note && !released.cancelled) return null;
+         if (fiscalCheckoutRef.current || released.note && !released.cancelled) {
+            if (released.note && !released.cancelled) setAccountHold({ note: released.note });
+            return null;
+         }
+         setAccountHold(null);
          return v3Operational.reanchor(cart);
       };
       void restate().then(async lines => {
@@ -9261,7 +9277,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   </div>
                )}
 
-                  <TicketStatusControls className={`ml-auto flex shrink-0 items-center justify-end gap-1 ${isRetailMode ? 'supermarket-ticket-actions' : ''}`} status={<FiscalStatusBadge compact short visible={!isOrderTakerMode && !isFiscalModeDisabled} allowed={canCheckoutWithFiscalPolicy} status={fiscalStatus} />}>
+                  <TicketStatusControls className={`ml-auto flex shrink-0 items-center justify-end gap-1 ${isRetailMode ? 'supermarket-ticket-actions' : ''}`} status={<>
+                     {accountHold && <button type="button" onClick={() => setErrorToast(accountHold.note)} title={accountHold.note} className="flex items-center gap-1.5 rounded-full border border-amber-300 bg-amber-50 px-2.5 py-1 text-[11px] font-black text-amber-800"><span className="h-1.5 w-1.5 rounded-full bg-amber-500" /> Revisar antes de cobrar</button>}
+                     <FiscalStatusBadge compact short visible={!isOrderTakerMode && !isFiscalModeDisabled} allowed={canCheckoutWithFiscalPolicy} status={fiscalStatus} />
+                  </>}>
                      {!isKioskMode && <OrderServiceTypeButton value={effectiveOrderServiceType} onClick={() => handleGridAction('TAKEOUT')} />}
                   </TicketStatusControls>
                </div>
