@@ -350,3 +350,16 @@ test('el runbook de cierre fiscal describe las mismas salidas que la caja', asyn
   assert.match(runbook, /Confirmar con el voucher/);
   assert.match(runbook, /POS_FISCAL_WORKFLOW_V2_ENABLED/);
 });
+
+test('un cobro que no responde no deja la caja sin poder facturar', () => {
+  const src = pos();
+  // El flag de finalización en curso se libera solo cuando el intento envejece.
+  assert.match(src, /const PAYMENT_FINALIZATION_STALE_MS = 45_000;/);
+  assert.match(src, /const stale = !startedAt \|\| Date\.now\(\) - startedAt >= PAYMENT_FINALIZATION_STALE_MS;/);
+  assert.match(src, /El intento de cobro anterior quedó sin respuesta; se libera para reintentar/);
+  assert.match(src, /paymentFinalizationStartedAtRef\.current = Date\.now\(\);/);
+  // Cerrar la pantalla de cobro también abandona el intento en curso.
+  assert.match(src, /paymentFinalizationInFlightRef\.current = false;\s*\n\s*paymentFinalizationStartedAtRef\.current = 0;\s*\n\s*setReceiptOnlyInitialTransaction/);
+  // Y el intento que sí termina limpia ambos.
+  assert.match(src, /paymentFinalizationInFlightRef\.current = false;\s*\n\s*paymentFinalizationStartedAtRef\.current = 0;\s*\n\s*\}\s*\n\s*\};/);
+});

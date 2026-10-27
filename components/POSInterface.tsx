@@ -1341,6 +1341,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const onTableOrderClosedRef = useRef(onTableOrderClosed);
    const closedTableOrderIdsRef = useRef<Set<string>>(new Set());
    const paymentFinalizationInFlightRef = useRef(false);
+   /** When the current finalize started: an attempt that never settles must not lock the box. */
+   const paymentFinalizationStartedAtRef = useRef(0);
+   const PAYMENT_FINALIZATION_STALE_MS = 45_000;
    const activeAddTraceRef = useRef<PosInteractionTrace | null>(null);
    const checkoutTraceRef = useRef<PosInteractionTrace | null>(null);
    const paymentModalTraceRef = useRef<PosInteractionTrace | null>(null);
@@ -5849,10 +5852,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const handlePaymentConfirm = async (payments: PaymentEntry[], voluntaryTip?: number): Promise<Transaction | null> => {
       recordCheckoutDiagnostic('CHECKOUT_CONFIRM', { items: processedCart, expectedItemCount: cart.length, total: cartTotal, payments, tableId: activeTable?.id, orderId: activeTable?.currentOrderId, terminalId: activeTerminalId });
       if (paymentFinalizationInFlightRef.current) {
-         console.warn('[PAYMENT] Se ignoró un segundo intento de finalizar la misma venta.');
-         return null;
+         const startedAt = paymentFinalizationStartedAtRef.current;
+         const stale = !startedAt || Date.now() - startedAt >= PAYMENT_FINALIZATION_STALE_MS;
+         if (!stale) {
+            console.warn('[PAYMENT] Se ignoró un segundo intento de finalizar la misma venta.');
+            return null;
+         }
+         // A finalize that never settled (network/native hang) must not leave the box unable to charge.
+         console.warn('[PAYMENT] El intento de cobro anterior quedó sin respuesta; se libera para reintentar.');
       }
       const paymentTrace = getLatestPosInteraction('PAYMENT_CONFIRM');
+      paymentFinalizationStartedAtRef.current = Date.now();
       paymentFinalizationInFlightRef.current = true;
          const withTimeout = async <T,>(promise: Promise<T>, timeoutMs: number, timeoutLabel: string): Promise<T> => {
          let timeoutHandle: number | undefined;
@@ -6738,6 +6748,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             markInteractionStage(paymentTrace, 'SQL_END');
          }
          paymentFinalizationInFlightRef.current = false;
+         paymentFinalizationStartedAtRef.current = 0;
       }
    };
 
@@ -10143,6 +10154,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          {showPaymentModal && <UnifiedPaymentModal receiptOnlyInitialTransaction={receiptOnlyInitialTransaction} recoverCommittedReceipt={completeCommittedFiscalReceipt} openingTrace={paymentModalTraceRef.current} total={amountDueNow} items={cart} taxAmount={nextPaymentFractionPart && cartTotal > 0 ? cartTax * (amountDueNow / cartTotal) : cartTax} currencySymbol={baseCurrency.symbol} config={config} onClose={() => {
             finishInteraction(paymentModalTraceRef.current, 'cancelled');
             recordCheckoutDiagnostic('PAYMENT_CLOSE');
+            // Closing the charge screen abandons the attempt: never keep the box locked on it.
+            paymentFinalizationInFlightRef.current = false;
+            paymentFinalizationStartedAtRef.current = 0;
             setReceiptOnlyInitialTransaction(null);setShowPaymentModal(false);
             if (returnToTableMapAfterPayment && onOpenTableMap) {
                setReturnToTableMapAfterPayment(false);
