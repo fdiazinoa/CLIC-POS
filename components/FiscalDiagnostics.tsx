@@ -45,6 +45,28 @@ export default function FiscalDiagnostics({ onClose, users = [], roles = [], cur
       finally { setBusy(null); }
    };
 
+   /** A supervisor with checkout permission authorizes the ERP retirement of a paid attempt. */
+   const requestSupervisor = async (): Promise<{ actorId: string; pin: string } | null> => {
+      const authorized = users.filter(user => {
+         const role = roles.find(item => item.id === user.role);
+         return Array.isArray(role?.permissions) && role!.permissions.includes('POS_CHECKOUT' as any);
+      });
+      const candidates = authorized.length ? authorized : currentUser ? [currentUser] : [];
+      if (!candidates.length) { setNote('Ningún usuario de esta caja puede autorizar el cierre del intento.'); return null; }
+      const pin = await clicPrompt('Este intento ya registró un cobro. Escribe el PIN de un supervisor con permiso de cobro para que el ERP confirme el cierre.', { inputType: 'password', required: true });
+      if (!pin) return null;
+      const entered = String(pin).trim();
+      const supervisor = candidates.find(user => String(user.pin) === entered);
+      if (!supervisor) {
+         const known = users.find(user => String(user.pin) === entered);
+         setNote(known
+            ? `El PIN corresponde a ${known.name}, que no tiene permiso de cobro para autorizar el cierre.`
+            : 'PIN incorrecto.');
+         return null;
+      }
+      return { actorId: `${supervisor.name} (${supervisor.id})`, pin: entered };
+   };
+
    const release = async () => {
       setBusy('release');
       try {
@@ -52,7 +74,11 @@ export default function FiscalDiagnostics({ onClose, users = [], roles = [], cur
          const confirmed = await clicConfirm('¿Cerrar el intento fiscal pendiente?\n\nLa caja pedirá al ERP que confirme que ese intento nunca emitió comprobante. Si el ERP tiene un documento, no se toca nada y te dirá por qué.');
          if (!confirmed) return;
          const { fiscalWorkflowV2Client } = await import('../services/fiscal/FiscalWorkflowV2Client');
-         const outcome = await fiscalWorkflowV2Client.cancelUnreconcilableAttempt({});
+         // Un intento con cobros ligados solo lo puede cerrar el ERP con autorización de un supervisor.
+         const hasPayments = !/sin intentos de pago/i.test(snapshot?.payments || 'sin intentos de pago');
+         const operator = hasPayments ? await requestSupervisor() : null;
+         if (hasPayments && !operator) { setBusy(null); return; }
+         const outcome = await fiscalWorkflowV2Client.cancelUnreconcilableAttempt(operator ? { operator } : {});
          setNote(outcome.note);
          setReleaseOffered(!outcome.cancelled && /FISCAL_WORKFLOW_(DISABLED|UNAVAILABLE)/.test(outcome.note));
          setSnapshot(await readSnapshot());
@@ -63,30 +89,14 @@ export default function FiscalDiagnostics({ onClose, users = [], roles = [], cur
    /** Break-glass: only when the ERP retirement service answers DISABLED/UNAVAILABLE, the attempt
     * has no local effects and a supervisor authorizes it with their PIN. */
    const releaseWithoutErp = async () => {
-      const authorized = users.filter(user => {
-         const role = roles.find(item => item.id === user.role);
-         return Array.isArray(role?.permissions) && role!.permissions.includes('POS_CHECKOUT' as any);
-      });
-      const candidates = authorized.length ? authorized : currentUser ? [currentUser] : [];
-      if (!candidates.length) { setNote('Ningún usuario de esta caja puede autorizar la liberación.'); return; }
-      const pin = await clicPrompt('El ERP no puede confirmar el intento. Escribe el PIN de un supervisor para liberar la caja. Verifica antes en el ERP que ese intento no tenga comprobante; la liberación queda registrada con tu nombre.', { inputType: 'password', required: true });
-      if (!pin) return;
-      const entered = String(pin).trim();
-      const supervisor = candidates.find(user => String(user.pin) === entered);
-      if (!supervisor) {
-         // Distinguish a wrong PIN from a valid user without checkout permission.
-         const known = users.find(user => String(user.pin) === entered);
-         setNote(known
-            ? `El PIN corresponde a ${known.name}, que no tiene permiso de cobro para autorizar la liberación.`
-            : 'PIN incorrecto.');
-         return;
-      }
-      const confirmed = await clicConfirm(`Se liberará la caja del intento pendiente con la autorización de ${supervisor.name}. El intento queda registrado y no se puede reutilizar. ¿Continuar?`);
+      const operator = await requestSupervisor();
+      if (!operator) return;
+      const confirmed = await clicConfirm(`Se liberará la caja del intento pendiente con la autorización de ${operator.actorId}. El intento queda registrado y no se puede reutilizar. ¿Continuar?`);
       if (!confirmed) return;
       setBusy('release');
       try {
          const { fiscalWorkflowV2Client } = await import('../services/fiscal/FiscalWorkflowV2Client');
-         const outcome = await fiscalWorkflowV2Client.releasePendingAttempt(`${supervisor.name} (${supervisor.id})`);
+         const outcome = await fiscalWorkflowV2Client.releasePendingAttempt(operator.actorId);
          setNote(outcome.note);
          setReleaseOffered(false);
          setSnapshot(await readSnapshot());

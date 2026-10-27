@@ -178,6 +178,17 @@ test('a transient failure never locks the cashier out of the next attempt', () =
   assert.doesNotMatch(modal, /&& intent\?\.status === 'AUTHORIZED'\) throw new Error\('PAYMENT_INTENT_RECONCILIATION_REQUIRED'\)/);
 });
 
+test('el cierre de un intento con cobros pide autorización de supervisor al ERP', () => {
+  const panel = source('components/FiscalDiagnostics.tsx');
+  // Un intento con cobros ligados no se cierra sin PIN: el ERP exige operador autorizado.
+  assert.match(panel, /const hasPayments = !\/sin intentos de pago\/i\.test\(snapshot\?\.payments/);
+  assert.match(panel, /const operator = hasPayments \? await requestSupervisor\(\) : null;/);
+  assert.match(panel, /cancelUnreconcilableAttempt\(operator \? \{ operator \} : \{\}\)/);
+  assert.match(panel, /permissions\.includes\('POS_CHECKOUT' as any\)/);
+  // El break-glass reutiliza el mismo PIN y distingue PIN inválido de permiso faltante.
+  assert.match(panel, /El PIN corresponde a \$\{known\.name\}, que no tiene permiso de cobro/);
+});
+
 test('a modifier tap beyond max_select explains the limit instead of doing nothing', () => {
   const modal = source('components/ModifierModal.tsx');
   // The V3 contract caps a group at max_select distinct option ids: repeated options are impossible.
@@ -302,7 +313,7 @@ test('a changed amount is stated in one line before issuing', () => {
 test('the supervised release distinguishes a wrong PIN from a missing permission', () => {
   const panel = source('components/FiscalDiagnostics.tsx');
   assert.match(panel, /PIN incorrecto\./);
-  assert.match(panel, /no tiene permiso de cobro para autorizar la liberación/);
+  assert.match(panel, /no tiene permiso de cobro para autorizar el cierre/);
 });
 
 test('the silent flow leaves a real, clearable trace', () => {
