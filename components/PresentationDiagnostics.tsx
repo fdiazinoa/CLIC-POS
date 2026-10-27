@@ -71,6 +71,25 @@ export default function PresentationDiagnostics({ onClose, config, terminalId, c
       setTimeout(() => { setBusy(false); void run(); }, 400);
    };
 
+   /** Downloads the presentations for the current scope (the same prepare the POS does at startup). */
+   const download = async () => {
+      setBusy(true);
+      try {
+         const [{ createPresentationRuntime }, { presentationAuthority }] = await Promise.all([
+            import('../services/inventoryPresentations/runtime'),
+            import('../services/inventoryPresentations/authority'),
+         ]);
+         const runtime = createPresentationRuntime(() => presentationAuthority(config, terminalId));
+         await runtime.client.prepare();
+         setNote('Presentaciones descargadas para esta caja.');
+      } catch (error) {
+         setNote(describePresentationError(error));
+      } finally {
+         setBusy(false);
+         void run();
+      }
+   };
+
    const copy = async () => {
       const text = rows.map(row => `${row.status} · ${row.label}: ${row.detail}`).join('\n');
       try { await navigator.clipboard.writeText(text); setNote('Diagnóstico copiado.'); } catch { setNote(text); }
@@ -109,7 +128,12 @@ export default function PresentationDiagnostics({ onClose, config, terminalId, c
             {rows.some(row => row.id === 'warehouse' && row.status === 'FAIL') && (
                <div className="mt-3 rounded-xl border border-sky-300 bg-sky-50 px-4 py-3">
                   <p className="text-xs font-bold leading-relaxed text-sky-900">La caja vende desde un almacén distinto al que el ERP usa para presentaciones (el de por defecto en la terminal). Puedes adoptar el del ERP para esta caja.</p>
-                  <button onClick={() => { void alignWithErp(); }} disabled={busy} className="mt-2 flex w-full items-center justify-center gap-2 rounded-xl bg-sky-700 px-4 py-3 text-sm font-black text-white disabled:opacity-40">Usar el almacén del ERP</button>
+                  <button onClick={() => { void alignWithErp(); }} disabled={busy} className="mt-2 flex w-full items-center justify-center gap-2 rounded-xl bg-sky-700 px-4 py-3 text-sm font-black text-white disabled:opacity-40">Usar el almacén del ERP</button>               </div>
+            )}
+            {!rows.some(row => row.id === 'warehouse' && row.status === 'FAIL') && rows.some(row => row.id === 'cache' && row.status === 'FAIL') && (
+               <div className="mt-3 rounded-xl border border-emerald-300 bg-emerald-50 px-4 py-3">
+                  <p className="text-xs font-bold leading-relaxed text-emerald-900">El ámbito ya coincide con el ERP pero esta caja no tiene las presentaciones descargadas.</p>
+                  <button onClick={() => { void download(); }} disabled={busy} className="mt-2 flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-700 px-4 py-3 text-sm font-black text-white disabled:opacity-40">Descargar presentaciones</button>
                </div>
             )}
             {failed.length > 0 && (
