@@ -61,6 +61,10 @@ export interface V3OperationalProduct {
  * legacy product, price, tax or inventory collections and does not persist the
  * adapted product into them. The authority stamp must travel with cart lines.
  */
+/** Opened catalogs keyed by runtime instance + immutable ready/inventory revision. A WeakMap keeps
+ * two runtimes with the same version (tests, retained sources) from ever sharing a catalog. */
+const catalogOpenCache = new WeakMap<object, Map<string, Promise<LargeMasterSyncV3OperationalCatalog>>>();
+
 export class LargeMasterSyncV3OperationalCatalog {
   private constructor(
     private readonly saleCatalog: LargeMasterSyncV3SaleCatalog,
@@ -74,11 +78,29 @@ export class LargeMasterSyncV3OperationalCatalog {
     warehouseId: string,
   ): Promise<LargeMasterSyncV3OperationalCatalog> {
     if (!stringValue(warehouseId)) throw new LargeMasterSyncV3Error('SYNC_V3_WAREHOUSE_REQUIRED');
-    const catalog = new LargeMasterSyncV3OperationalCatalog(
-      await LargeMasterSyncV3SaleCatalog.open(ready.runtime, tariffId), ready, warehouseId.trim(),
-    );
-    await catalog.assertInventoryVersion();
-    return catalog;
+    // Every add-to-cart and every checkout validated the cart by rebuilding the sale catalog and
+    // re-reading the inventory snapshot. The snapshot is immutable for a given ready/inventory
+    // revision, so the opened catalog (and its inventory proof) is reused until that revision moves.
+    const key = JSON.stringify([ready.inventoryVersion, ready.inventoryCursor, tariffId, warehouseId.trim()]);
+    const perRuntime = catalogOpenCache.get(ready.runtime) || new Map<string, Promise<LargeMasterSyncV3OperationalCatalog>>();
+    catalogOpenCache.set(ready.runtime, perRuntime);
+    const cached = perRuntime.get(key);
+    if (cached) return cached;
+    const opening = (async () => {
+      const catalog = new LargeMasterSyncV3OperationalCatalog(
+        await LargeMasterSyncV3SaleCatalog.open(ready.runtime, tariffId), ready, warehouseId.trim(),
+      );
+      await catalog.assertInventoryVersion();
+      return catalog;
+    })();
+    perRuntime.set(key, opening);
+    while (perRuntime.size > 4) {
+      const oldest = perRuntime.keys().next().value;
+      if (oldest === undefined) break;
+      perRuntime.delete(oldest);
+    }
+    opening.catch(() => { if (perRuntime.get(key) === opening) perRuntime.delete(key); });
+    return opening;
   }
 
   /** Cheap live identity used by the POS to detect cart lines stamped on another inventory generation. */

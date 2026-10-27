@@ -380,3 +380,13 @@ test('el cobro no compite con la sincronización de fondo por la base', () => {
   const candidate = source('services/sync/LargeMasterSyncV3Candidate.ts');
   assert.match(candidate, /if \(isLargeMasterSyncV3OperationalWindowHeld\(\)\) return false;/);
 });
+
+test('el catálogo operativo no se reconstruye en cada validación del carrito', () => {
+  const catalog = source('services/sync/LargeMasterSyncV3OperationalCatalog.ts');
+  // La caché va por instancia de runtime: dos runtimes con la misma versión nunca comparten.
+  assert.match(catalog, /const catalogOpenCache = new WeakMap<object, Map<string, Promise<LargeMasterSyncV3OperationalCatalog>>>/);
+  assert.match(catalog, /const perRuntime = catalogOpenCache\.get\(ready\.runtime\)/);
+  assert.match(catalog, /key = JSON\.stringify\(\[ready\.inventoryVersion, ready\.inventoryCursor, tariffId, warehouseId\.trim\(\)\]\)/);
+  // Y se acota para no crecer sin control.
+  assert.match(catalog, /while \(perRuntime\.size > 4\)/);
+});
