@@ -80,6 +80,7 @@
     "tests/checkoutAttemptIdentity.test.ts",
     "tests/bootReconciliation.test.ts",
     "tests/checkoutTrace.test.ts",
-    "tests/fiscalWorkflowCheckoutReplay.test.ts"
+    "tests/fiscalWorkflowCheckoutReplay.test.ts",
+    "tests/kdsReportsContract.test.ts"
   ]
 }
