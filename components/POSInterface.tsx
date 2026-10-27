@@ -1,6 +1,7 @@
 import { describeV3Error } from '../utils/v3ErrorMessages';
 import { describePresentationError } from '../utils/presentationErrorMessages';
 import { alternativeWarehouseForLines } from '../utils/warehouseScope';
+import { stableCheckoutAttemptId } from '../utils/checkoutAttemptIdentity';
 import { scopedWarehousesForStore } from '../utils/warehouseScope';
 import {v3RetainedLineFingerprint} from '../services/sync/LargeMasterSyncV3StockAuthority';
 import {assertTrackingOperationReceipt,type TrackingScope} from '../services/db/TrackingCheckoutOperation';
@@ -2418,6 +2419,26 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          onUpdateCart(markRestaurantLinesCommitted(ord.items));
       }
    }, [activeTable, parkedTickets, transactions, onUpdateCart, cart.length]);
+
+   // Everything that could block the sale is resolved when the payment modal opens, not after the
+   // cashier typed the amount: a stale attempt or an unavailable authority is reported before paying.
+   useEffect(() => {
+      if (!showPaymentModal || !v3Operational) return;
+      let cancelled = false;
+      void (async () => {
+         try {
+            const identity = currentFiscalCheckoutCartIdentity(offlineTableFiscalContextRef.current);
+            const pending = await fiscalWorkflowV2Client.pendingCheckoutInfo().catch(() => null);
+            if (cancelled || !pending || !['PREPARED', 'EFFECT_POSSIBLE'].includes(pending.phase)) return;
+            if (pending.cartIdentity === identity) return;
+            const released = await fiscalWorkflowV2Client.cancelUnreconcilableAttempt({ cartIdentity: identity }).catch(() => null);
+            if (cancelled || released?.cancelled) return;
+            setShowPaymentModal(false);
+            setErrorToast(released?.note || 'Hay un intento fiscal pendiente de verificación. Revisa Ajustes → Sistema y Auditoría → Diagnóstico fiscal.');
+         } catch { /* the checkout still reports its own message */ }
+      })();
+      return () => { cancelled = true; };
+   }, [showPaymentModal, v3Operational]);
 
    // The ERP is the authority for the terminal's sale warehouse. When the local copy still points to
    // another (authorized) warehouse — a stale config snapshot — adopt the ERP value automatically
@@ -10084,7 +10105,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                setReturnToTableMapAfterPayment(false);
                onOpenTableMap();
             }
-         }} paymentOperationId={activeV3Reservation?.claimId} paymentIdNamespace={(():string=>{const cartKey=currentFiscalCheckoutCartIdentity();if(!paymentAttemptRef.current||paymentAttemptRef.current.cartKey!==cartKey)paymentAttemptRef.current={cartKey,id:createUuid()};return paymentAttemptRef.current.id;})()} paymentOperationDate={activeV3Reservation?.invoiceDate} onFiscalAttemptClosed={onFiscalAttemptClosed} offlineFiscalReserve={offlineFiscalReserveInfo} beforePaymentEffects={beforeV3PaymentEffects} validatePaymentAuthority={assertCheckoutFiscalAuthority} onConfirm={handlePaymentConfirm} themeColor={config.themeColor} customer={effectiveSelectedCustomer} isDelinquent={isDelinquent} users={users} roles={roles} isMaster={isMaster} currentUser={currentUser} isRestaurantMode={isRestaurantMode} isInstallmentPayment={isIntermediateFractionPayment} />}
+         }} paymentOperationId={activeV3Reservation?.claimId} paymentIdNamespace={(():string=>{const cartKey=currentFiscalCheckoutCartIdentity();if(!paymentAttemptRef.current||paymentAttemptRef.current.cartKey!==cartKey)paymentAttemptRef.current={cartKey,id:stableCheckoutAttemptId(cartKey,()=>createUuid())};return paymentAttemptRef.current.id;})()} paymentOperationDate={activeV3Reservation?.invoiceDate} onFiscalAttemptClosed={onFiscalAttemptClosed} offlineFiscalReserve={offlineFiscalReserveInfo} beforePaymentEffects={beforeV3PaymentEffects} validatePaymentAuthority={assertCheckoutFiscalAuthority} onConfirm={handlePaymentConfirm} themeColor={config.themeColor} customer={effectiveSelectedCustomer} isDelinquent={isDelinquent} users={users} roles={roles} isMaster={isMaster} currentUser={currentUser} isRestaurantMode={isRestaurantMode} isInstallmentPayment={isIntermediateFractionPayment} />}
          {showLoyaltyModal && <LoyaltyScanModal onClose={() => setShowLoyaltyModal(false)} onScan={handleLoyaltyScan} />}
          {showTableSellerModal && activeTable && <TableSellerModal
             tableName={activeTable.nombre || activeTable.name || 'Mesa'}

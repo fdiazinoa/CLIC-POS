@@ -222,3 +222,10 @@ test('a manual payment keeps its identity when the checkout is retried', () => {
   // The retained-operation semantics stay tied to the reservation claim only.
   assert.match(src, /paymentOperationId=\{activeV3Reservation\?\.claimId\}/);
 });
+
+test('the checkout resolves blockers before the cashier pays', () => {
+  const src = pos();
+  assert.match(src, /stableCheckoutAttemptId\(cartKey,\(\)=>createUuid\(\)\)/);
+  assert.match(src, /if \(!showPaymentModal \|\| !v3Operational\) return;/);
+  assert.match(src, /setShowPaymentModal\(false\);\s*\n\s*setErrorToast\(released\?\.note/);
+});
