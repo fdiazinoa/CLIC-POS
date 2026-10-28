@@ -410,3 +410,11 @@ test('la pantalla de cobro abre antes de las validaciones fiscales pesadas', () 
   // Un artículo con presentación sí espera la preparación antes de abrir.
   assert.match(src, /if \(processedCart\.some\(line => line\.articleFormat\)\) await fiscalConfirmation;/);
 });
+
+test('el retiro fiscal en el ERP tiene un plazo propio, más largo que un comando normal', () => {
+  const client = source('services/fiscal/FiscalWorkflowV2Client.ts');
+  assert.match(client, /const RETIREMENT_TIMEOUT_MS = 30_000;/);
+  assert.match(client, /const request=async\(path:string,body\?:Record<string,any>,signal\?:AbortSignal,timeoutMs=8000\)/);
+  // Todas las llamadas de retiro usan el plazo largo (2 sitios), sin excepción.
+  assert.equal((client.match(/RETIREMENT_TIMEOUT_MS\)/g) || []).length, 2);
+});

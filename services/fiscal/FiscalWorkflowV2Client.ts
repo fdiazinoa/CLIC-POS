@@ -57,8 +57,11 @@ export function createFiscalWorkflowV2Client({readAuth=captureFiscalStatusBoundC
  let discovering:{key:string;promise:Promise<void>}|null=null;
  const authorityFingerprint=(auth:ReturnType<typeof readAuth>)=>json([auth.base,auth.headers,(auth as any).fingerprint||null]);
  const authorityFor=(auth:ReturnType<typeof readAuth>)=>currentAuthority?.fingerprint===authorityFingerprint(auth)&&currentAuthority.expires>Date.now()?currentAuthority.authorityHash:undefined;
- const request=async(path:string,body?:Record<string,any>,signal?:AbortSignal)=>{
-  const auth=readAuth();auth.assertCurrent();const controller=new AbortController(),abort=()=>controller.abort();signal?.addEventListener('abort',abort,{once:true});const timer=setTimeout(abort,8000);
+ /** The ERP retirement proves document coverage; it legitimately takes longer than a command. */
+const RETIREMENT_TIMEOUT_MS = 30_000;
+
+const request=async(path:string,body?:Record<string,any>,signal?:AbortSignal,timeoutMs=8000)=>{
+  const auth=readAuth();auth.assertCurrent();const controller=new AbortController(),abort=()=>controller.abort();signal?.addEventListener('abort',abort,{once:true});const timer=setTimeout(abort,timeoutMs);
   try{const response=await fetchImpl(`${auth.base}/fiscal/workflow/v2/${path}`,{method:body?'POST':'GET',headers:{...auth.headers,Accept:'application/json',...(body?{'Content-Type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{}),credentials:'omit',cache:'no-store',redirect:'error',signal:controller.signal});const data=await response.json();auth.assertCurrent();if(!response.ok)fail(typeof data?.code==='string'?data.code:'FISCAL_WORKFLOW_UNAVAILABLE');if(JSON.stringify(data).length>600000)fail();return {data,auth};}finally{clearTimeout(timer);signal?.removeEventListener('abort',abort);}
  };
  return {
@@ -128,7 +131,7 @@ export function createFiscalWorkflowV2Client({readAuth=captureFiscalStatusBoundC
   const proof:FiscalRetirementProof={schemaVersion:1,commandId:createUuid(),checkoutId:current.checkoutId,transactionId:current.transactionId,
    permitId:current.permit.permitId,originalOperationId:current.operationId,cartIdentitySha256:await cartDigest(current.cartIdentity),reason:retirementReason};
   try{
-   const {data}=await request('retire-unborn',{...proof,nonce:current.permit.nonce,...(operator||{})});
+   const {data}=await request('retire-unborn',{...proof,nonce:current.permit.nonce,...(operator||{})},undefined,RETIREMENT_TIMEOUT_MS);
    auth.assertCurrent();validateRetirementReceipt(data,proof,scopeOf(auth.descriptor));
    const closed=await native.closeUnbornRetirement!(key,proof,data);auth.assertCurrent();
    return {retired:true,note:`El ERP confirmó que el intento ${closed.checkoutId.slice(0,8)} nunca emitió comprobante y lo retiró.`};
@@ -375,7 +378,7 @@ export function createFiscalWorkflowV2Client({readAuth=captureFiscalStatusBoundC
    if(candidate.phase==='CLOSED'&&candidate.receipt){auth.assertCurrent();return native!.completeRetirement!(key,candidate.receipt);}
    const pending=await native!.beginRetirement!(key,proof);auth.assertCurrent();if(epoch!==generation)fail('FISCAL_WORKFLOW_CONTEXT_CHANGED');
    const original=await native!.readCheckout(pending.checkoutId);auth.assertCurrent();if(!original?.permit||original.permit.permitId!==pending.permitId)fail();
-   const {data}=await request('retire-unborn',{...proof,nonce:original!.permit!.nonce,...(operator?{actorId:operator.actorId,pin:operator.pin}:{})});
+   const {data}=await request('retire-unborn',{...proof,nonce:original!.permit!.nonce,...(operator?{actorId:operator.actorId,pin:operator.pin}:{})},undefined,RETIREMENT_TIMEOUT_MS);
    auth.assertCurrent();if(epoch!==generation)fail('FISCAL_WORKFLOW_CONTEXT_CHANGED');validateRetirementReceipt(data,proof,scopeOf(auth.descriptor));
    const closed=await native!.completeRetirement!(key,data);auth.assertCurrent();if(epoch!==generation)fail('FISCAL_WORKFLOW_CONTEXT_CHANGED');return closed;
   })().finally(()=>retirements.delete(key));retirements.set(key,run);return run;
