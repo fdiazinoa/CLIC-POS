@@ -6880,24 +6880,31 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }catch(error:any){setErrorToast(describeV3Error(error));return;}
       admission.assertCurrent();
       if(validateFiscal&&!isOrderTakerMode){const validation=validateTerminalDocument(config,terminalId,'TICKET');if(!validation.isValid){alert(validation.error);return;}}
-      try{await assertNewCheckoutFiscalAuthority(admission.assertCurrent);admission.assertCurrent();}
-      catch(error){
-         admission.assertCurrent();
-         const recovered=await completeCommittedFiscalReceipt([],()=>{admission.assertCurrent();admission.locked=true;checkoutProgressRef.current?.lock();});
-         if(recovered){setReceiptOnlyInitialTransaction(recovered);setShowPaymentModal(true);return;}
-         throw error;
-      }
       if (hasV3ReservationCart && !activeV3Reservation) { setErrorToast('La referencia de la reserva aún no está validada.'); return; }
-      if (v3Operational) {
-         try { if(processedCart.some(line=>line.articleFormat)){if(!formatRuntime)throw Error('FISCAL_WORKFLOW_FORMAT_NOT_READY');await formatRuntime.prepareIssuance(requiredSaleFiscalType);}else await v3Operational.validate(cart, { ticketId: activeTable?.currentOrderId || activeDirectV3TicketId, claimId: activeDirectV3TicketId, reservationId:activeV3Reservation?.reservation.id,reservationClaimId:activeV3Reservation?.claimId, tableId: activeTable?.id === undefined ? undefined : String(activeTable.id) }); }
-         catch (error: any) {
+      // La autoridad fiscal y la validación V3 se confirman antes de EMITIR, no antes de mostrar la
+      // pantalla de cobro: el cajero la ve al instante y, si algo falla, el aviso aparece sin haber
+      // cobrado nada. El finalizar vuelve a validar ambas antes de emitir cualquier comprobante.
+      const fiscalConfirmation = (async () => {
+         await assertNewCheckoutFiscalAuthority(admission.assertCurrent);
+         admission.assertCurrent();
+         if (!v3Operational) return;
+         if (processedCart.some(line=>line.articleFormat)) {
+            if (!formatRuntime) throw Error('FISCAL_WORKFLOW_FORMAT_NOT_READY');
+            await formatRuntime.prepareIssuance(requiredSaleFiscalType);
+            return;
+         }
+         await v3Operational.validate(cart, { ticketId: activeTable?.currentOrderId || activeDirectV3TicketId, claimId: activeDirectV3TicketId, reservationId:activeV3Reservation?.reservation.id,reservationClaimId:activeV3Reservation?.claimId, tableId: activeTable?.id === undefined ? undefined : String(activeTable.id) });
+         admission.assertCurrent();
+      })();
+      void fiscalConfirmation.catch(async (error:any) => {
+         if (/CHECKOUT_ADMISSION_CONTEXT_CHANGED/.test(String(error?.message || ''))) return;
+         try {
             admission.assertCurrent();
             const recovered=await completeCommittedFiscalReceipt([],()=>{admission.assertCurrent();admission.locked=true;checkoutProgressRef.current?.lock();});
-            if(recovered){setReceiptOnlyInitialTransaction(recovered);setShowPaymentModal(true);return;}
-            setErrorToast(describeV3Error(error));return;
-         }
-         admission.assertCurrent();
-      }
+            if(recovered){setReceiptOnlyInitialTransaction(recovered);setReturnToTableMapAfterPayment(false);expectInteractionDestination(trace,'PAYMENT_MODAL');paymentModalTraceRef.current=trace;setShowPaymentModal(true);markInteractionStateUpdate(trace,2);markInteractionStage(trace,'HANDLER_END');return;}
+         } catch { /* el error original es el que se muestra */ }
+         setErrorToast(describeV3Error(error));
+      });
       if (isOrderTakerMode) {
          admission.assertCurrent();admission.locked=true;checkoutProgressRef.current?.lock();
          try {
@@ -6953,6 +6960,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          handlePaymentConfirm(marketplacePayment ? [marketplacePayment] : []).catch(console.error);
          return;
       }
+      if (processedCart.some(line => line.articleFormat)) await fiscalConfirmation;
       admission.assertCurrent();
       setReturnToTableMapAfterPayment(false);
       recordCheckoutDiagnostic('CHECKOUT_OPEN', { items: processedCart, expectedItemCount: cart.length, total: cartTotal, tableId: activeTable?.id, orderId: activeTable?.currentOrderId, terminalId: activeTerminalId });

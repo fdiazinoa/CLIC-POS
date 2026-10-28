@@ -398,3 +398,15 @@ test('el catálogo operativo no se reconstruye en cada validación del carrito',
   // Y se acota para no crecer sin control.
   assert.match(catalog, /while \(perRuntime\.size > 4\)/);
 });
+
+test('la pantalla de cobro abre antes de las validaciones fiscales pesadas', () => {
+  const src = pos();
+  // La confirmación fiscal corre en segundo plano y el cobro no espera por ella.
+  assert.match(src, /const fiscalConfirmation = \(async \(\) => \{/);
+  assert.match(src, /void fiscalConfirmation\.catch\(async \(error:any\) => \{/);
+  // El finalizar vuelve a validar la autoridad antes de emitir.
+  assert.match(src, /const assertCheckoutFiscalAuthority = async \(\) => \{/);
+  assert.match(src, /await assertCheckoutFiscalAuthority\(\);/);
+  // Un artículo con presentación sí espera la preparación antes de abrir.
+  assert.match(src, /if \(processedCart\.some\(line => line\.articleFormat\)\) await fiscalConfirmation;/);
+});
