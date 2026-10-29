@@ -1,0 +1,70 @@
+{
+  "capturedAt": "2026-09-20",
+  "taskId": "queue-latency-20260919",
+  "project": "Clic-Pos",
+  "access": "read-only SQL aggregates",
+  "terminalAlias": "Caja 01 / device identifier redacted",
+  "runtime": {
+    "appVersionHint": "1.1.405",
+    "lastSeenUtc": "2026-09-20T03:22:46.814Z",
+    "deviceRole": "STANDARD_POS",
+    "terminalType": "STANDARD_POS",
+    "isPrimaryNode": false,
+    "bindingModeResolvedByCode": "SLAVE",
+    "legacyTopLevelRole": "MASTER"
+  },
+  "queryWindow": {
+    "utc": "2026-09-20T01:30:00Z/2026-09-20T03:40:00Z",
+    "americaSantoDomingo": "2026-09-19T21:30:00-04:00/2026-09-19T23:40:00-04:00"
+  },
+  "inboxTotals": [
+    {"eventType": "SALE_POSTED", "status": "APPLIED", "count": 54, "errors": 0},
+    {"eventType": "PAYMENT_POSTED", "status": "APPLIED", "count": 54, "errors": 0}
+  ],
+  "deadLetters": 0,
+  "remoteOutboxEvents": 0,
+  "processingLatency": {
+    "definition": "processed_at - created_at in erp_sync_inbox",
+    "percentileMethod": "PostgreSQL percentile_cont",
+    "unit": "milliseconds",
+    "windows": {
+      "before2255": {
+        "SALE_POSTED": {"n": 36, "avg": 2258.9, "p50": 1874.6, "p95": 4276.1, "max": 4859.1},
+        "PAYMENT_POSTED": {"n": 36, "avg": 2678.4, "p50": 2276.3, "p95": 4659.4, "max": 5257.1}
+      },
+      "supportWindow2255To2310": {
+        "SALE_POSTED": {"n": 10, "avg": 3263.2, "p50": 2746.2, "p95": 5424.5, "max": 6153.7},
+        "PAYMENT_POSTED": {"n": 10, "avg": 3709.3, "p50": 3212.7, "p95": 5848.7, "max": 6502.7}
+      },
+      "after2310": {
+        "SALE_POSTED": {"n": 8, "avg": 2527.1, "p50": 2279.5, "p95": 3843.3, "max": 3936.8},
+        "PAYMENT_POSTED": {"n": 8, "avg": 2989.5, "p50": 2694.5, "p95": 4387.9, "max": 4510.8}
+      }
+    }
+  },
+  "supportWindowMinuteCounts": [
+    {"localMinute": "22:57", "sales": 1, "payments": 1, "maxProcessMs": 5049.3},
+    {"localMinute": "22:58", "sales": 1, "payments": 1, "maxProcessMs": 2270.2},
+    {"localMinute": "23:01", "sales": 1, "payments": 1, "maxProcessMs": 4790.6},
+    {"localMinute": "23:03", "sales": 1, "payments": 1, "maxProcessMs": 3124.8},
+    {"localMinute": "23:04", "sales": 2, "payments": 2, "maxProcessMs": 4661.3},
+    {"localMinute": "23:05", "sales": 2, "payments": 2, "maxProcessMs": 6502.7},
+    {"localMinute": "23:06", "sales": 2, "payments": 2, "maxProcessMs": 2629.4}
+  ],
+  "snapshotContext": {
+    "manifestSnapshotsCreated": 7,
+    "createdLocalRange": "22:11-22:42",
+    "currentStatus": "STALE",
+    "lastErrorCount": 0,
+    "allMarkedStaleAtUtc": "2026-09-20T03:23:45.794348Z",
+    "fiscalAndInventoryStatus": "READY",
+    "causalInference": "none; current STALE status does not prove status at incident time"
+  },
+  "limitations": [
+    "Only aggregate rows were preserved; raw event IDs and local creation timestamps were not retained.",
+    "The support window contains ten observations per event type and no significance test was performed.",
+    "The ten pairs are compatible with backlog drainage but may include gradually created live operations.",
+    "Remote processing latency does not establish main-thread or UI causality."
+  ],
+  "conclusion": "No persisted apply failures were visible in the queried Supabase tables. Ten transaction pairs arrived during the support window with elevated processing latency; backlog and UI causality remain unproven."
+}
