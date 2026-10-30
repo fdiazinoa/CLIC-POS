@@ -280,7 +280,29 @@ export class LargeMasterSyncV3OperationalSession {
     const [tariffs, sourceTaxes] = await Promise.all([
       this.ready.runtime.getOperationalTariffs(), this.ready.runtime.getOperationalTaxes(),
     ]);
-    const taxes: TaxDefinition[] = sourceTaxes.map(row => {
+    return this.projectConfigRows(config, tariffs, sourceTaxes);
+  }
+
+  /** A credit note repeats the issued document: its tax photo is the ticket's generation, never today's. */
+  async projectRefundConfig(config: BusinessConfig, stamp: V3SaleAuthorityStamp): Promise<BusinessConfig> {
+    await this.assertCurrent();
+    const source = v3StockSource(stamp);
+    if (!source.syncId || !Number.isSafeInteger(source.syncVersion)) {
+      throw new LargeMasterSyncV3Error('SYNC_V3_STOCK_AUTHORITY_INVALID');
+    }
+    const [tariffs, sourceTaxes] = await Promise.all([
+      this.ready.runtime.getOperationalTariffs(),
+      this.store.getOperationalTaxes({ syncId: source.syncId, syncVersion: source.syncVersion, contractVersion: 2 }),
+    ]);
+    if (!Array.isArray(sourceTaxes) || !sourceTaxes.length) {
+      throw new LargeMasterSyncV3Error('SYNC_V3_RETAINED_OWNER_REQUIRED');
+    }
+    return this.projectConfigRows(config, tariffs, sourceTaxes);
+  }
+
+  private projectConfigRows(config: BusinessConfig, tariffs: Awaited<ReturnType<LargeMasterSyncV3Runtime['getOperationalTariffs']>>,
+    sourceTaxes: Record<string, unknown>[]): BusinessConfig {
+    const taxes: TaxDefinition[] = sourceTaxes.map((row: any) => {
       const type = row.type === 'SALES' ? 'VAT' : row.type;
       if (!['VAT', 'SERVICE_CHARGE', 'EXEMPT'].includes(String(type)) || typeof row.rate !== 'number'
         || !Number.isFinite(row.rate) || row.rate < 0 || row.rate > 1) {
@@ -464,12 +486,18 @@ export const getLargeMasterSyncV3OperationalSession = createLargeMasterSyncV3Ses
 );
 
 /** Reversal path: reuse the active runtime and never negotiate a master. A credit note reverses a
- * document that was already issued, so refreshing the catalog must never decide whether it prints. */
-export const getLargeMasterSyncV3RetainedSession = createLargeMasterSyncV3SessionCoordinator(
+ * document that was already issued, so refreshing the catalog must never decide whether it prints.
+ * Its coordinator cache is independent from the operational one, so a sync that moved the runtime
+ * makes the first call fail closed; that single case reopens once instead of surfacing a raw code. */
+const retainedSessionCoordinator = createLargeMasterSyncV3SessionCoordinator(
   (_refresh, metric) => LargeMasterSyncV3OperationalSession.open(false, metric, true),
   () => {try{const identity=readLargeMasterSyncV3BoundIdentity();return JSON.stringify([v3BindingKey(identity,largeMasterSyncV3DownloadOrigin()),identity.syncToken]);}
     catch{return JSON.stringify(['offline-observation',readOperationalCatalogBindingProof(),resolveSyncTarget().baseUrl,largeMasterSyncV3DownloadOrigin()]);}},
 );
+export const getLargeMasterSyncV3RetainedSession = ((refresh?: boolean) => retainedSessionCoordinator(refresh).catch(error => {
+  if ((error as { code?: string })?.code !== 'SYNC_V3_RUNTIME_VERSION_CHANGED') throw error;
+  return retainedSessionCoordinator(refresh);
+})) as typeof retainedSessionCoordinator;
 
 export const acquireLargeMasterSyncV3ConfigContext = (config: BusinessConfig, localTerminalId: string) =>
   LargeMasterSyncV3OperationalSession.acquireConfigContext(config, localTerminalId);

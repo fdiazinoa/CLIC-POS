@@ -11373,11 +11373,14 @@ const AppContent: React.FC = () => {
         // Keep deterministic pre-submit evidence and unresolved attempts intact, even if config validation fails.
         if (transaction.fiscalProviderStatus === 'V3_ISSUE_REQUESTED' && !getExistingFiscalProviderReference(transaction)
           && !(transaction.fiscalClassificationProjection && transaction.fiscalClassificationAttemptedAt && explicitClassificationRetry)) return;
-        const session = await getLargeMasterSyncV3OperationalSession();
+        // Sealing a reversal repeats the issued document, so it reads the ticket's own tax photo and
+        // never negotiates a master. A sale keeps the live-catalog projection exactly as before.
+        const sealReversal = transaction.documentType === 'REFUND' || Boolean(transaction.originalTransactionId);
+        const session = await (sealReversal ? getLargeMasterSyncV3RetainedSession() : getLargeMasterSyncV3OperationalSession());
         await session.assertCurrent();
         const stamp = transaction.items[0]?.v3SaleAuthority;
         if (!stamp) throw new Error('SYNC_V3_CART_LEGACY_LINE');
-        fiscalConfig = await session.projectConfig(config);
+        fiscalConfig = sealReversal ? await session.projectRefundConfig(config, stamp) : await session.projectConfig(config);
         const retained = await session.validate(fiscalConfig, transaction.items, stamp.tariffId, stamp.warehouseId || '',
           'REFUND', undefined, { originalTransactionId: transaction.id }, true);
         validateV3FrozenFiscalAmounts(transaction, retained);
@@ -13083,11 +13086,14 @@ const AppContent: React.FC = () => {
     // snapshot and must never wait for, or trigger, a catalog refresh. Drift is reported, not blocked.
     const refundClassificationNotices: V3TaxClassificationNotice[] = [];
     if (LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED) {
-      const session = await getLargeMasterSyncV3RetainedSession();
-      refundConfig = await session.projectConfig(config);
       const stamp = normalizedRefundItems[0]?.v3SaleAuthority;
+      const session = await getLargeMasterSyncV3RetainedSession();
+      // Amounts also come from the ticket's tax photo: a repeated rate is never re-priced by today's master.
+      refundConfig = stamp ? await session.projectRefundConfig(config, stamp) : await session.projectConfig(config);
       await session.validate(refundConfig, normalizedRefundItems, stamp?.tariffId || '', stamp?.warehouseId || '', 'REFUND', undefined,
-        { originalTransactionId: originalTx.id }, false, notice => { refundClassificationNotices.push(notice); });
+        { originalTransactionId: originalTx.id }, false, notice => {
+          if (!refundClassificationNotices.some(row => row.taxId === notice.taxId)) refundClassificationNotices.push(notice);
+        });
       if (refundClassificationNotices.length) {
         console.warn('⚠️ [refund] clasificación fiscal distinta en el maestro actual:', refundClassificationNotices);
       }
@@ -13271,8 +13277,6 @@ const AppContent: React.FC = () => {
       erpRefundPreparation: options.erpRefundPreparation,
       refundReason: reason,
       isTaxIncluded: refundTaxIncluded,
-      // Evidence for accounting/diagnostics: the NC mirrors the invoice even if the master drifted.
-      ...(refundClassificationNotices.length ? { metadata: { v3TaxClassificationNotice: refundClassificationNotices } } : {}),
       syncStatus: 'PENDING'
     };
 
