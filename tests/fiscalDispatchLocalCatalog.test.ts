@@ -43,3 +43,16 @@ test('the fiscal metadata guard only requires the binding of the stamped catalog
   // Si algún día el guard pasa a exigir versión de maestro, esta ruta deja de ser válida y el test cae.
   assert.doesNotMatch(guard, /v3CurrentCatalog!\.syncVersion/);
 });
+
+test('App fiscal publication and classification retry never open an operational session', () => {
+  const app=source('App.tsx');
+  for(const [begin,end] of [
+    ['const loadFiscalStatusContext =','const fiscalStatusWorker ='],
+    ['const upsertFiscalTransaction =','const correctFiscalDocument ='],
+    ['const retryFiscalDocument =','const fiscalRecoveryInFlightRef ='],
+  ]) {
+    const section=app.slice(app.indexOf(begin),app.indexOf(end,app.indexOf(begin)));
+    assert.match(section,/getLargeMasterSyncV3RetainedSession/);
+    assert.doesNotMatch(section,/getLargeMasterSyncV3OperationalSession/);
+  }
+});

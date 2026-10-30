@@ -61,6 +61,7 @@ export const createMSellerDispatcher=(deps:FiscalDispatchDependencies)=>(async(i
  await deps.commit([{collectionName:FISCAL_DISPATCH_CLAIMS,document:claim,requireAbsent:true,v3FiscalMetadataOperation:'FISCAL_DISPATCH_CLAIM'},
   ...([['transactions',source],['transactionHistory',history]] as const).map(([collectionName,original])=>({collectionName,
    document:{...original,fiscalSubmissionScope:submissionScope,fiscalProviderStatus:'V3_ISSUE_REQUESTED'},expectedDocument:JSON.stringify(original),v3CurrentCatalog:catalog,
+   v3ExpectedRetainedDocument:{collection:'transactions' as const,id:source.id,expected:JSON.stringify(source)},
    v3FiscalMetadataOperation:'FISCAL_DISPATCH_CLAIM' as const})),
   {collectionName:'config',document:config,expectedDocument:JSON.stringify(config),v3FiscalMetadataOperation:'FISCAL_DISPATCH_CLAIM'}]);
  context.assertCurrent(); // Failure after claim is conservatively GET-only forever, even before fetch.
