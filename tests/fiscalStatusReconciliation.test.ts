@@ -207,13 +207,13 @@ test('actual App historical sync only consults: missing original attempt stays h
  const start=source.indexOf('async (transaction: Transaction,',source.indexOf('const syncFiscalDocument ='));
  const end=source.indexOf('}, [config, pollFiscalDocumentStatus, upsertFiscalTransaction, loadFiscalStatusContext, fiscalStatusWorker]);',start);assert.ok(start>0&&end>start);
  const code=(await transform('const callback='+source.slice(start,end+1)+';',{loader:'ts'})).code;
- const create=new Function('f',`const {LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED,v3FiscalInFlightRef,config,db,dbAdapter,getLargeMasterSyncV3OperationalSession,validateV3FrozenFiscalAmounts,validateV3FrozenLineFiscalAmounts,getEffectiveFiscalComplianceConfig,getProviderEnvironment,getFiscalProviderConfig,getExistingFiscalProviderReference,pollFiscalDocumentStatus,resolveFiscalProviderEstablishmentCode,resolveFiscalProviderCashierCode,calculateTransactionFiscalSummary,buildV3FrozenFiscalProviderTransaction,upsertFiscalTransaction,issueFiscalDocument,applyFiscalProviderResult,isDelegatedFiscalProvider,window,loadFiscalStatusContext,fiscalStatusSourceChecksum,requireFiscalErpAppliedReceipt,FISCAL_DISPATCH_CLAIMS,fiscalStatusWorker}=f;${code}return callback;`);
+ const create=new Function('f',`const {LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED,v3FiscalInFlightRef,config,db,dbAdapter,getLargeMasterSyncV3OperationalSession,getLargeMasterSyncV3RetainedSession,validateV3FrozenFiscalAmounts,validateV3FrozenLineFiscalAmounts,getEffectiveFiscalComplianceConfig,getProviderEnvironment,getFiscalProviderConfig,getExistingFiscalProviderReference,pollFiscalDocumentStatus,resolveFiscalProviderEstablishmentCode,resolveFiscalProviderCashierCode,calculateTransactionFiscalSummary,buildV3FrozenFiscalProviderTransaction,upsertFiscalTransaction,issueFiscalDocument,applyFiscalProviderResult,isDelegatedFiscalProvider,window,loadFiscalStatusContext,fiscalStatusSourceChecksum,requireFiscalErpAppliedReceipt,FISCAL_DISPATCH_CLAIMS,fiscalStatusWorker}=f;${code}return callback;`);
  const f=await native();try{
   const original=f.read('transactions');for(const key of ['fiscalSubmissionScope','fiscalProviderStatus','fiscalClassificationAttemptedAt','fiscalClassificationProjection','fiscalPreSubmitRecoveryAudit'])delete original[key];
   f.sql.prepare("UPDATE documents SET data=? WHERE collection_name='transactions'").run(JSON.stringify(original));
   let issues=0;const context=await f.deps.context();
   const sync=create({LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED:true,v3FiscalInFlightRef:{current:new Map()},config:{terminals:[],companyInfo:{rnc:'130090752'}},
-   db:{getDocument:async(name:string)=>name==='transactions'?f.read('transactions'):null},dbAdapter:f.adapter,getLargeMasterSyncV3OperationalSession:async()=>({assertCurrent:async()=>{},projectConfig:async()=>({terminals:[]}),validate:async()=>undefined}),
+   db:{getDocument:async(name:string)=>name==='transactions'?f.read('transactions'):null},dbAdapter:f.adapter,getLargeMasterSyncV3RetainedSession:async()=>{throw Error("NO_RETAINED_LOCAL_SESSION");},getLargeMasterSyncV3OperationalSession:async()=>({assertCurrent:async()=>{},projectConfig:async()=>({terminals:[]}),validate:async()=>undefined}),
    validateV3FrozenFiscalAmounts:()=>{},validateV3FrozenLineFiscalAmounts:()=>{},getEffectiveFiscalComplianceConfig:()=>({}),getProviderEnvironment:()=>0,getFiscalProviderConfig:()=>({}),getExistingFiscalProviderReference:(row:any)=>row.fiscalReferenceId,
    pollFiscalDocumentStatus:async()=>{},resolveFiscalProviderEstablishmentCode:()=>undefined,resolveFiscalProviderCashierCode:()=>undefined,calculateTransactionFiscalSummary:()=>{throw Error('legacy forbidden');},
    buildV3FrozenFiscalProviderTransaction:(row:any)=>row,upsertFiscalTransaction:async(row:any)=>f.adapter.saveDocument('transactions',row),
@@ -241,13 +241,13 @@ test('actual App durable callback prepends missing React rows, updates existing 
  const publish=source.slice(source.indexOf('const publishFiscalTransaction ='),source.indexOf('const loadFiscalStatusContext ='));
  const upsert=source.slice(source.indexOf('const upsertFiscalTransaction ='),source.indexOf('const correctFiscalDocument ='));
  const code=(await transform(publish+upsert,{loader:'ts'})).code;
- const create=new Function('f',`const {setTransactions,window,db,dbAdapter,LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED,getLargeMasterSyncV3OperationalSession,console,closedFiscalPublicationIds={current:new Set()},isTransactionReservedForClose=()=>false}=f;const useCallback=(fn)=>fn;${code}return upsertFiscalTransaction;`);
+ const create=new Function('f',`const {setTransactions,window,db,dbAdapter,LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED,getLargeMasterSyncV3OperationalSession,getLargeMasterSyncV3RetainedSession,console,closedFiscalPublicationIds={current:new Set()},isTransactionReservedForClose=()=>false}=f;const useCallback=(fn)=>fn;${code}return upsertFiscalTransaction;`);
  let rows:any[]=[{id:'existing',total:1}],stored:any=null,warnings=0,events=0,saves:string[]=[];
  const db={getDocument:async()=>stored,saveDocument:async(collection:string,row:any)=>{
   saves.push(collection);if(collection==='transactionHistory')throw Error('legacy mirror unavailable');stored=row;
  }};
  const callback=create({setTransactions:(update:any)=>{rows=update(rows);},window:{dispatchEvent:()=>{events++;}},db,dbAdapter:{},
-  LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED:false,getLargeMasterSyncV3OperationalSession:()=>{throw Error('legacy must not open V3');},console:{warn:()=>{warnings++;}}});
+  LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED:false,getLargeMasterSyncV3RetainedSession:async()=>{throw Error("NO_RETAINED_LOCAL_SESSION");},getLargeMasterSyncV3OperationalSession:()=>{throw Error('legacy must not open V3');},console:{warn:()=>{warnings++;}}});
  const next={id:'missing',fiscalSyncStatus:'ERROR',total:108.8};await callback(next);
  assert.deepEqual(saves,['transactions','transactionHistory']);assert.equal(warnings,1);assert.equal(events,1);assert.deepEqual(rows,[next,{id:'existing',total:1}]);
  await callback({...next,fiscalResponseMessage:'updated'});assert.equal(rows.length,2);assert.equal((rows[0] as any).fiscalResponseMessage,'updated');
@@ -404,10 +404,10 @@ test('actual late fiscal callback never writes or republishes durable closed sal
  const publish=source.slice(source.indexOf('const publishFiscalTransaction ='),source.indexOf('const loadFiscalStatusContext ='));
  const upsert=source.slice(source.indexOf('const upsertFiscalTransaction ='),source.indexOf('const correctFiscalDocument ='));
  const code=(await transform(publish+upsert,{loader:'ts'})).code;
- const create=new Function('f',`const {setTransactions,window,db,dbAdapter,LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED,getLargeMasterSyncV3OperationalSession,console,closedFiscalPublicationIds,isTransactionReservedForClose}=f;const useCallback=(fn)=>fn;${code}return upsertFiscalTransaction;`);
+ const create=new Function('f',`const {setTransactions,window,db,dbAdapter,LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED,getLargeMasterSyncV3OperationalSession,getLargeMasterSyncV3RetainedSession,console,closedFiscalPublicationIds,isTransactionReservedForClose}=f;const useCallback=(fn)=>fn;${code}return upsertFiscalTransaction;`);
  let rows:any[]=[{id:'closed'}],writes=0;
  const callback=create({setTransactions:(update:any)=>{rows=update(rows);},window:{dispatchEvent:()=>{}},db:{getDocument:async()=>null,saveDocument:async()=>{writes++;}},dbAdapter:{},
-  LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED:true,getLargeMasterSyncV3OperationalSession:()=>{throw Error('must not issue');},console,
+  LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED:true,getLargeMasterSyncV3RetainedSession:async()=>{throw Error("NO_RETAINED_LOCAL_SESSION");},getLargeMasterSyncV3OperationalSession:()=>{throw Error('must not issue');},console,
   closedFiscalPublicationIds:{current:new Set(['closed'])},isTransactionReservedForClose:()=>false});
  await callback({id:'closed',v3InventoryBaseline:'source',fiscalSyncStatus:'SYNCED'});assert.deepEqual(rows,[]);assert.equal(writes,0);
  await assert.rejects(()=>callback({id:'unknown-missing',v3InventoryBaseline:'source'}),/ARCHIVED_RECONCILIATION_REQUIRED/);assert.equal(writes,0);
@@ -572,7 +572,7 @@ async function actualAppStatusContext(f:any,state:any){
  const configStart=source.indexOf('const resolvePersistedBusinessConfig ='),configEnd=source.indexOf('const normalizeTerminalDocumentAssignments =',configStart);
  const configCode=(await transform(source.slice(configStart,configEnd),{loader:'ts'})).code;
  const deps={db:{get:async()=>f.read('config')},dbAdapter:state.adapter,
-  getLargeMasterSyncV3OperationalSession:async()=>{state.opens++;throw Error('FORBIDDEN_BOOTSTRAP_POST');},
+  getLargeMasterSyncV3RetainedSession:async()=>{throw Error("NO_RETAINED_LOCAL_SESSION");},getLargeMasterSyncV3OperationalSession:async()=>{state.opens++;throw Error('FORBIDDEN_BOOTSTRAP_POST');},
   captureFiscalStatusBoundContext:()=>captureFiscalStatusBoundContext(()=>f.identity,()=>f.credentials),
   readLargeMasterSyncV3BoundIdentity:()=>f.identity,largeMasterSyncV3DownloadOrigin:()=>state.origin,
   assertLargeMasterSyncV3NativeAndroid:()=>{if(!state.native)throw Error('SYNC_V3_NATIVE_ANDROID_REQUIRED');},
