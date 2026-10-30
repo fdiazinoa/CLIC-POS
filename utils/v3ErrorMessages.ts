@@ -26,13 +26,27 @@ const V3_ERROR_MESSAGES: Record<string, string> = {
   SYNC_V3_BINDING_CHANGED:
     'La terminal cambió de vinculación. Reinicia el POS para recargar la autorización.',
   SYNC_V3_BASELINE_MIGRATION_REQUIRED:
-    'El maestro del ERP cambió y esta caja necesita un inventario base nuevo, pero ya registró ventas o devoluciones con el anterior. No se puede cobrar ni emitir notas de crédito hasta migrar el inventario: avisa a soporte.',
+    'El maestro del ERP cambió y esta caja necesita un inventario base nuevo, pero ya registró ventas con el anterior. No se puede cobrar hasta migrar el inventario; las notas de crédito sobre facturas ya emitidas sí se pueden emitir. Avisa a soporte.',
   SYNC_V3_INVENTORY_COVERAGE_REQUIRED:
     'Esta caja ya registró movimientos de inventario y no puede adoptar un inventario base nuevo. Avisa a soporte para migrar el inventario de la caja.',
   SYNC_V3_CATALOG_SEMANTICS_CHANGED:
     'El ERP cambió impuestos, tarifas o unidades de artículos que esta caja ya vendió, así que su inventario base quedó desalineado. Avisa a soporte antes de volver a cobrar.',
   SYNC_V3_STOCK_AUTHORITY_INVALID:
-    'El inventario de esta caja ya no coincide con el maestro autorizado. Descarga el catálogo desde el diagnóstico; si persiste, avisa a soporte.',
+    'El inventario de esta caja ya no coincide con el maestro autorizado. Sincroniza en Ajustes → Sincronización; si el problema sigue, avisa a soporte.',
+  SYNC_V3_RUNTIME_VERSION_CHANGED:
+    'El catálogo se actualizó mientras se procesaba la operación. Inténtalo de nuevo.',
+  SYNC_V3_REFUND_ORIGINAL_CHANGED:
+    'La factura que intentas acreditar cambió o ya no está como estaba. Abre el ticket de nuevo y repite la devolución.',
+  SYNC_V3_REFUND_ORIGINAL_NOT_REFUNDABLE:
+    'Este documento no admite devolución: ya fue acreditado por completo o no es una venta.',
+  SYNC_V3_FROZEN_FISCAL_SOURCE_CHANGED:
+    'Los importes fiscales del ticket no coinciden con el original. No se emitió ningún documento: revisa el ticket antes de reintentar.',
+  SYNC_V3_DUPLICATE_TRANSACTION_MISMATCH:
+    'Ya existe una nota de crédito para esta devolución. Refresca el historial antes de volver a intentarlo.',
+  SYNC_V3_CONFIG_REQUIRED:
+    'La configuración de la caja no está disponible. Reconecta y vuelve a sincronizar.',
+  SYNC_V3_CART_MIXED_VERSION:
+    'El ticket mezcla inventarios de distintas fechas y no se puede procesar así. Reábrelo desde el historial; si persiste, avisa a soporte.',
 };
 
 export const describeV3Error = (error: unknown): string => {

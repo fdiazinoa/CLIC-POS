@@ -441,3 +441,18 @@ test('describeV3Error maps the known codes and never hides an unknown one', asyn
   assert.match(describeV3Error(new Error('SYNC_V3_STOCK_INSUFFICIENT: detalle del ERP')), /^No hay existencia suficiente/);
   assert.equal(describeV3Error(undefined), 'No se pudo completar la operación.');
 });
+
+test('every rejection the refund surface can actually raise is translated', async () => {
+  const { describeV3Error } = await import('../utils/v3ErrorMessages');
+  // Los códigos que de verdad aparecen en handleProcessRefund -> persistStandaloneRefundTransaction.
+  for (const code of ['SYNC_V3_RUNTIME_VERSION_CHANGED', 'SYNC_V3_REFUND_ORIGINAL_CHANGED',
+    'SYNC_V3_REFUND_ORIGINAL_NOT_REFUNDABLE', 'SYNC_V3_FROZEN_FISCAL_SOURCE_CHANGED',
+    'SYNC_V3_DUPLICATE_TRANSACTION_MISMATCH', 'SYNC_V3_CONFIG_REQUIRED', 'SYNC_V3_CART_MIXED_VERSION']) {
+    assert.notEqual(describeV3Error(new Error(code)), code, `${code} debe tener mensaje humano`);
+  }
+  // El texto no puede prometer que la NC también está bloqueada: se emite con la foto del ticket.
+  assert.doesNotMatch(describeV3Error(new Error('SYNC_V3_BASELINE_MIGRATION_REQUIRED')),
+    /ni emitir notas de crédito/i);
+  // Y no debe mandar a una acción que no existe.
+  assert.doesNotMatch(describeV3Error(new Error('SYNC_V3_STOCK_AUTHORITY_INVALID')), /diagnóstico/i);
+});
