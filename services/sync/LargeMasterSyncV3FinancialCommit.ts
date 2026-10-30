@@ -314,7 +314,9 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
         }
         events.push({ eventId: createUuid(), eventType: 'SALES_CREDIT_NOTE_POSTED', aggregateType: 'TRANSACTION',
             aggregateId: document.id, schemaVersion: 1,
-            payload: buildSalePostedPayload(document, { ...fiscalSourceMetadata, ...(fiscalWorkflowBirth?{fiscalWorkflowBirth}:{}), inventoryMovementIds: ledger.map(row => row.id), paymentIntentIds }), createdAt: document.date });
+            payload: buildSalePostedPayload(document, { ...fiscalSourceMetadata, ...(fiscalWorkflowBirth?{fiscalWorkflowBirth}:{}), inventoryMovementIds: ledger.map(row => row.id), paymentIntentIds,
+              // Goes straight to the ERP journal NOTA; it is audit evidence, never financial identity.
+              ...(options.taxClassificationNotice?.length ? { v3TaxClassificationNotice: options.taxClassificationNotice } : {}) }), createdAt: document.date });
         const paymentPosted = buildPaymentPostedPayload(document, { ...fiscalSourceMetadata, paymentIntentIds });
         if (paymentPosted) events.push({ eventId: createUuid(), eventType: 'PAYMENT_POSTED',
             aggregateType: 'TRANSACTION', aggregateId: document.id, schemaVersion: 1, payload: paymentPosted, createdAt: document.date });

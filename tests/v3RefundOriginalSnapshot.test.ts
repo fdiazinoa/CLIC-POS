@@ -112,10 +112,20 @@ test('a reversal-only batch posts locally while a sale batch keeps live authorit
   assert.match(src, /export const readV3CommittedRefundReplay[\s\S]{0,400}?getLargeMasterSyncV3RetainedSession\(\);await session\.assertCurrent\(\)/);
 });
 
-test('the drift never rides on the immutable financial identity', () => {
+test('the drift travels to the ERP journal NOTA, never into the financial identity', () => {
   const app = source('App.tsx');
-  // `metadata`/`fiscalCorrectionAudit` are not mutable fields: carrying the notice there would make a
-  // replayed credit note look like a different document after any sync.
-  assert.doesNotMatch(app, /v3TaxClassificationNotice\s*:/);
+  // Evidence for accounting, deduplicated per tax, passed as an operation option...
   assert.match(app, /refundClassificationNotices\.some\(row => row\.taxId === notice\.taxId\)/);
+  assert.match(app, /taxClassificationNotice: refundClassificationNotices/);
+  // ...never as a field of the credit note: `metadata` is inside the immutable financial identity, so a
+  // replay after any sync would look like a different document.
+  assert.doesNotMatch(app, /metadata: \{ v3TaxClassificationNotice/);
+  assert.doesNotMatch(app, /fiscalCorrectionAudit: \{/);
+  // The observation rides the credit-note outbox payload, which the ERP turns into the journal NOTA.
+  assert.match(source('services/sync/LargeMasterSyncV3FinancialCommit.ts'),
+    /\.\.\.\(options\.taxClassificationNotice\?\.length \? \{ v3TaxClassificationNotice: options\.taxClassificationNotice \} : \{\}\)/);
+  // The replay identity enumerates option fields explicitly; the observation is not one of them.
+  const retention = source('services/db/LargeMasterSyncV3FinancialRetention.ts');
+  const identity = retention.slice(retention.indexOf('export const financialOperationIdentity'));
+  assert.doesNotMatch(identity, /taxClassificationNotice/);
 });

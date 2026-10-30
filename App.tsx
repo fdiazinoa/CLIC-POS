@@ -13301,6 +13301,8 @@ const AppContent: React.FC = () => {
         persistOriginal: !originalTx.erpRefundSource,
         adjustCustomerBalance: LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED,
         skipWalletDeposit: options.skipWalletDeposit,
+        // Evidence for the ERP journal NOTA when the tax classification drifted since the sale.
+        taxClassificationNotice: refundClassificationNotices,
         conditions
       }
     );
