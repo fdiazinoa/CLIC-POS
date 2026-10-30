@@ -159,7 +159,7 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
       await db.assertFiscalTransactionAuthority(transaction,
         config.terminals?.find(terminal => terminal.id === transaction.terminalId || terminal.config?.erpTerminalId === transaction.terminalId)?.config);
     }
-    const projected = await session.projectConfig(config);
+    const saleConfig = entries.some(entry => !entry.options?.refund) ? await session.projectConfig(config) : undefined;
     const documents: DurableDocumentMutation[] = [];
     const events: DurableOutboxEventInput[] = [];
     const intentIds: string[] = [];
@@ -177,6 +177,8 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
     for (let index = 0; index < entries.length; index++) {
     let { transaction, options = {} } = entries[index];
     const stamp = transaction.items[0]?.v3SaleAuthority;
+    if (!stamp) throw new LargeMasterSyncV3Error('SYNC_V3_CART_LEGACY_LINE');
+    const projected = options.refund ? await session.projectRefundConfig(config, stamp, transaction.items) : saleConfig!;
     const authoritativeLines: CartItem[] = [];
     const retained = await session.validate(projected, transaction.items, stamp?.tariffId || '', warehouseId,
       options.refund ? 'REFUND' : 'SALE', (line, source) => {

@@ -11380,7 +11380,7 @@ const AppContent: React.FC = () => {
         await session.assertCurrent();
         const stamp = transaction.items[0]?.v3SaleAuthority;
         if (!stamp) throw new Error('SYNC_V3_CART_LEGACY_LINE');
-        fiscalConfig = sealReversal ? await session.projectRefundConfig(config, stamp) : await session.projectConfig(config);
+        fiscalConfig = sealReversal ? await session.projectRefundConfig(config, stamp, transaction.items) : await session.projectConfig(config);
         const retained = await session.validate(fiscalConfig, transaction.items, stamp.tariffId, stamp.warehouseId || '',
           'REFUND', undefined, { originalTransactionId: transaction.id }, true);
         validateV3FrozenFiscalAmounts(transaction, retained);
@@ -13089,7 +13089,7 @@ const AppContent: React.FC = () => {
       const stamp = normalizedRefundItems[0]?.v3SaleAuthority;
       const session = await getLargeMasterSyncV3RetainedSession();
       // Amounts also come from the ticket's tax photo: a repeated rate is never re-priced by today's master.
-      refundConfig = stamp ? await session.projectRefundConfig(config, stamp) : await session.projectConfig(config);
+      refundConfig = stamp ? await session.projectRefundConfig(config, stamp, normalizedRefundItems) : await session.projectConfig(config);
       await session.validate(refundConfig, normalizedRefundItems, stamp?.tariffId || '', stamp?.warehouseId || '', 'REFUND', undefined,
         { originalTransactionId: originalTx.id }, false, notice => {
           if (!refundClassificationNotices.some(row => row.taxId === notice.taxId)) refundClassificationNotices.push(notice);

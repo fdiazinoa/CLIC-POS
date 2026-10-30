@@ -284,18 +284,45 @@ export class LargeMasterSyncV3OperationalSession {
   }
 
   /** A credit note repeats the issued document: its tax photo is the ticket's generation, never today's. */
-  async projectRefundConfig(config: BusinessConfig, stamp: V3SaleAuthorityStamp): Promise<BusinessConfig> {
+  async projectRefundConfig(config: BusinessConfig, stamp: V3SaleAuthorityStamp, lines: CartItem[] = []): Promise<BusinessConfig> {
     await this.assertCurrent();
-    const source = v3StockSource(stamp);
+    const source = { syncId: stamp.syncId, syncVersion: stamp.syncVersion };
     if (!source.syncId || !Number.isSafeInteger(source.syncVersion)) {
       throw new LargeMasterSyncV3Error('SYNC_V3_STOCK_AUTHORITY_INVALID');
     }
     const [tariffs, sourceTaxes] = await Promise.all([
-      this.ready.runtime.getOperationalTariffs(),
+      this.store.getOperationalTariffs({ ...source, contractVersion: 2 }),
       this.store.getOperationalTaxes({ syncId: source.syncId, syncVersion: source.syncVersion, contractVersion: 2 }),
     ]);
-    if (!Array.isArray(sourceTaxes) || !sourceTaxes.length) {
+    if (!Array.isArray(sourceTaxes)) {
       throw new LargeMasterSyncV3Error('SYNC_V3_RETAINED_OWNER_REQUIRED');
+    }
+    // A retained ticket can contain catalog generations sharing one inventory anchor.
+    // Collect the taxes actually used in each generation; the first line's table may not
+    // contain a tax introduced for an article added later to that same ticket.
+    if (lines.length) {
+      const epochs = new Map<string, Promise<Record<string, unknown>[]>>();
+      epochs.set(JSON.stringify([source.syncId, source.syncVersion]), Promise.resolve(sourceTaxes));
+      const used = new Map<string, Record<string, unknown>>();
+      for (const line of lines) {
+        const row = line.v3SaleAuthority;
+        if (!row || !Array.isArray(line.appliedTaxIds)) throw new LargeMasterSyncV3Error('SYNC_V3_LINE_INVALID');
+        const key = JSON.stringify([row.syncId, row.syncVersion]);
+        if (!epochs.has(key)) epochs.set(key, this.store.getOperationalTaxes({ syncId: row.syncId, syncVersion: row.syncVersion, contractVersion: 2 }));
+        const taxes = await epochs.get(key)!;
+        for (const id of line.appliedTaxIds) {
+          const matches = taxes.filter(tax => tax.id === id);
+          if (matches.length !== 1) throw new LargeMasterSyncV3Error('SYNC_V3_TAX_UNAVAILABLE');
+          const previous = used.get(id);
+          // Conflicting ORIGINAL definitions cannot share a single financial tax identity.
+          // This is distinct from harmless drift against today's master.
+          if (previous && v3TaxSemantics(previous) !== v3TaxSemantics(matches[0])) {
+            throw new LargeMasterSyncV3Error('SYNC_V3_RETAINED_TAX_CLASSIFICATION_CHANGED');
+          }
+          used.set(id, matches[0]);
+        }
+      }
+      return this.projectConfigRows(config, tariffs, [...used.values()]);
     }
     return this.projectConfigRows(config, tariffs, sourceTaxes);
   }
@@ -385,6 +412,8 @@ export class LargeMasterSyncV3OperationalSession {
         || stamp.taxIncluded !== authority.taxIncluded || !sameV3StockAuthority(stamp, anchor)) {
         throw new LargeMasterSyncV3Error('SYNC_V3_CART_MIXED_VERSION');
       }
+      // A refund is authorized by the independently read original even when its catalog is still current.
+      if (refund) assertV3RetainedLine(line, retained);
       if (stamp.syncId === this.ready.runtime.version.syncId && stamp.syncVersion === this.ready.runtime.version.syncVersion) {
         return currentCatalog.get(line.id);
       }

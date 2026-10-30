@@ -69,18 +69,29 @@ test('the credit note is priced with the ticket tax generation, not the live mas
       inventoryVersion: 42, inventoryCursor: 'cursor-42' },
     'B',
     { getInventoryAuthority: async () => ({ syncId: 'old', syncVersion: 1, version: 42, cursor: 'cursor-42' }),
-      getOperationalTaxes: async input => { requested.push(input); return issued; },
+      getOperationalTaxes: async input => { requested.push(input); return input.syncId === 'later' ? [{ id: 'NEW', type: 'VAT', rate: 0.1, active: true, name: 'Nuevo' }] : issued; },
+      getOperationalTariffs: async () => [{ id: 'tar-1', name: 'Original', taxIncluded: true }],
       getCatalogReceipt: async () => ({ syncId: 'old', syncVersion: 1, version: 42, cursor: 'cursor-42' }) },
     'origin', { deviceId: 'device' });
   s.assertCurrent = async () => {};
 
-  const refund = await s.projectRefundConfig({ terminals: [] } as any, stamp() as any);
+  const refund = await s.projectRefundConfig({ terminals: [] } as any, stamp({ inventorySyncId: 'inventory-only', inventorySyncVersion: 99, taxIncluded: true }) as any);
   // The issued rate survives; the live 16% never re-prices the reversal.
   assert.equal(refund.taxes?.[0]?.rate, 0.18);
+  assert.equal(refund.tariffs?.[0]?.taxIncluded, true);
   assert.deepEqual(requested, [{ syncId: 'aaaaaaaa-0000-4000-8000-000000000007', syncVersion: 7, contractVersion: 2 }]);
   // A sale keeps projecting today's master, unchanged.
   const sale = await s.projectConfig({ terminals: [] } as any);
   assert.equal(sale.taxes?.[0]?.rate, 0.16);
+  const mixed = await s.projectRefundConfig({ terminals: [] } as any, stamp(), [
+    { appliedTaxIds: ['ITBIS'], v3SaleAuthority: stamp() },
+    { appliedTaxIds: ['NEW'], v3SaleAuthority: stamp({ syncId: 'later', syncVersion: 8 }) },
+  ] as any);
+  assert.deepEqual(mixed.taxes?.map(t => [t.id, t.rate]), [['ITBIS', .18], ['NEW', .1]]);
+  const exempt = await s.projectRefundConfig({ terminals: [] } as any, stamp(), [
+    { appliedTaxIds: [], v3SaleAuthority: stamp() },
+  ] as any);
+  assert.deepEqual(exempt.taxes, []);
 });
 
 test('validate only demands a live baseline for sales', () => {
@@ -103,7 +114,7 @@ test('the reversal path never negotiates a master and reopens once after a sync'
   assert.match(gate, /getLargeMasterSyncV3RetainedSession\(\)/);
   assert.doesNotMatch(gate, /getLargeMasterSyncV3OperationalSession\(\)/);
   // Amounts must come from the ticket generation as well.
-  assert.match(gate, /session\.projectRefundConfig\(config, stamp\)/);
+  assert.match(gate, /session\.projectRefundConfig\(config, stamp, normalizedRefundItems\)/);
 });
 
 test('a reversal-only batch posts locally while a sale batch keeps live authority', () => {
@@ -129,4 +140,50 @@ test('the drift travels to the ERP journal NOTA, never into the financial identi
   const retention = source('services/db/LargeMasterSyncV3FinancialRetention.ts');
   const identity = retention.slice(retention.indexOf('export const financialOperationIdentity'));
   assert.doesNotMatch(identity, /taxClassificationNotice/);
+});
+
+// Execute the real checkout and retained-source guards: these cases must not be regex-only checks.
+test('refund validation rejects malformed lines and missing receipts, and pins mixed generations to the original', async () => {
+  const authority = { binding: 'B', warehouseId: 'W', tariffId: 'T', syncId: 'old', syncVersion: 1,
+    inventoryVersion: 1, inventoryCursor: 'C', taxIncluded: false };
+  const first = { id: 'P', cartId: 'P', quantity: 1, price: 100, taxable: true, appliedTaxIds: ['VAT'],
+    type: 'SERVICE', activeInWarehouses: ['W'], v3SaleAuthority: authority };
+  const second = { ...first, id: 'Q', cartId: 'Q', v3SaleAuthority: { ...authority, syncId: 'old-2',
+    syncVersion: 2, inventorySyncId: 'old', inventorySyncVersion: 1 } };
+  const rows = [first, second];
+  (globalThis as any).__refundGuards = { items: rows };
+  const mocks: Record<string, string> = {
+    './LargeMasterSyncV3OperationalCatalog': 'export class LargeMasterSyncV3OperationalCatalog { static async open(){return {get:async id=>{const p=globalThis.__refundGuards.items.find(p=>p.id===id);return p?{product:p,authority:p.v3SaleAuthority}:null}}} }',
+    './LargeMasterSyncV3Runtime': 'export class LargeMasterSyncV3Runtime { static retained(){return {}} }',
+    '../../utils/db': 'export const db={getDocument:async()=>({id:"original",items:globalThis.__refundGuards.items})};',
+    '../db': 'export const dbAdapter={};',
+    './LargeMasterSyncV3Authority': 'export const LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED=true;export const assertLegacyMasterPullAllowed=()=>{};export const usesLargeMasterSyncV3Authority=()=>true;',
+    './LargeMasterSyncV3Canary': 'export const LARGE_MASTER_SYNC_V3_CANARY=false;export const validateLargeMasterSyncV3CanaryUrl=x=>x;',
+  };
+  const bundle = await build({entryPoints:[new URL('../services/sync/LargeMasterSyncV3OperationalSession.ts',import.meta.url).pathname],
+    bundle:true,write:false,format:'esm',platform:'node',plugins:[{name:'refund-guards',setup(b){
+      b.onResolve({filter:/.*/},a=>mocks[a.path]?{path:a.path,namespace:'guards'}:undefined);
+      b.onLoad({filter:/.*/,namespace:'guards'},a=>({contents:mocks[a.path],loader:'js'}));
+    }}]});
+  const {LargeMasterSyncV3OperationalSession} = await import('data:text/javascript;base64,'+Buffer.from(bundle.outputFiles[0].text).toString('base64'));
+  const taxes=[{id:'VAT',name:'Original',type:'VAT',rate:.18}];
+  const store:any={getOperationalTaxes:async()=>taxes,
+    getCatalogReceipt:async()=>({syncId:'old',syncVersion:1,version:1,cursor:'C'})};
+  const session=new LargeMasterSyncV3OperationalSession({runtime:{version:{syncId:'today',syncVersion:9},
+    getOperationalTaxes:async()=>[]},inventoryVersion:9,inventoryCursor:'today'},'B',store,'origin',{deviceId:'device'});
+  session.assertCurrent=async()=>{};
+  const validate=(lines:any[])=>session.validate({terminals:[],taxes},lines,'T','W','REFUND',undefined,{originalTransactionId:'original'});
+  const notices:any[]=[];
+  await session.validate({terminals:[],taxes},rows,'T','W','REFUND',undefined,{originalTransactionId:'original'},false,n=>notices.push(n));
+  assert.equal(notices.length,2); // Both deleted live taxes only warn.
+  await assert.rejects(()=>validate([{...first,appliedTaxIds:undefined}]),/SYNC_V3_LINE_INVALID/);
+  await assert.rejects(()=>validate([{...first,appliedTaxIds:[]}]),/SYNC_V3_LINE_INVALID/);
+  await assert.rejects(()=>validate([{...first,price:999}]),/SYNC_V3_RETAINED_LINE_CHANGED/);
+  await assert.rejects(()=>validate([first,{...second,v3SaleAuthority:{...second.v3SaleAuthority,inventoryVersion:2}}]),/SYNC_V3_CART_MIXED_VERSION/);
+  delete store.getCatalogReceipt;
+  await assert.rejects(()=>validate([first]),/SYNC_V3_RETAINED_OWNER_REQUIRED/);
+  // Even a still-current catalog cannot authorize repricing the issued original.
+  session.ready.runtime.version={syncId:'old',syncVersion:1};
+  await validate([first]);
+  await assert.rejects(()=>validate([{...first,price:999}]),/SYNC_V3_RETAINED_LINE_CHANGED/);
 });

@@ -154,6 +154,8 @@ async function financialModule(f: ReturnType<typeof fixture>, durable = false) {
       } },
     session: { binding: 'binding', ready: { runtime: { version: { syncId: 'S', syncVersion: 2 } } }, assertCurrent: async () => {}, projectConfig: async (config: any) => ({ ...config,
       terminals: [], taxes: [{ id: 'TX', name: 'ITBIS', rate: 0.18, type: 'VAT' }] }),
+      projectRefundConfig: async (config: any) => ({ ...config, terminals: [],
+        taxes: [{ id: 'TX', name: 'ITBIS original', rate: 0.18, type: 'VAT' }] }),
       validate: async (_config: any, items: any[], _tariff: string, _warehouse: string, _intent: string, validated: any) => {
         for (const line of items) validated?.(line, line);
       }, stockRequirements: async (_config: any, items: any[], _warehouse: string, intent: string) =>
@@ -495,3 +497,24 @@ test('tracking commits require a bijection for every tracked transaction, histor
  await assert.rejects(f.adapter.commitFinancialTransaction({documents:[transaction('one')] as any,outboxEvent:event('one'),trackingCommits:[{checkoutId:'checkout',transactionId:'one',selections:[selected] as any}]}),/TRACKING_ATOMIC_SOURCE_REQUIRED/);
  assert.equal(f.rows('transactions').length,0);assert.equal(f.sql.prepare('select count(*) n from sync_outbox_v2').get()?.n,0);
 });
+
+for (const currentTaxes of [[{ id: 'TX', name: 'Changed', rate: 0.16, type: 'VAT' }], []]) {
+  test(`refund commit preserves original 18% with live taxes ${JSON.stringify(currentTaxes)}`, async () => {
+    const f = fixture();
+    try {
+      const module = await financialModule(f, true);
+      const session = (globalThis as any).__v3FinancialFixture.session;
+      session.projectConfig = async () => ({ terminals: [], taxes: currentTaxes });
+      const refund = { ...module.transaction('refund-original', true), customerId: undefined };
+      const options = { refund: true, taxClassificationNotice: [{ taxId: 'TX', before: 'VAT 18%', after: null }] };
+      await module.persistV3FinancialBatch([{ transaction: refund, options }], {} as BusinessConfig, 'W');
+      assert.equal(f.rows('transactions')[0].taxAmount, 18);
+      assert.equal(f.rows('transactions')[0].total, 118);
+      // A later observation is audit-only and cannot change replay identity.
+      const replay = await module.persistV3FinancialBatch([{ transaction: refund,
+        options: { refund: true, taxClassificationNotice: [] } }], {} as BusinessConfig, 'W');
+      assert.equal(replay[0].created, false);
+      assert.equal(f.rows('inventoryLedger').length, 1);
+    } finally { f.sql.close(); }
+  });
+}
