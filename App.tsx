@@ -26,7 +26,8 @@ import { buildV3FrozenFiscalProviderTransaction } from './components/v3Operation
 import { captureFiscalStatusBoundContext } from './services/fiscal/FiscalBoundContext';
 import { readLargeMasterSyncV3BoundIdentity } from './services/sync/LargeMasterSyncV3BoundTransport';
 import { assertLargeMasterSyncV3NativeAndroid } from './services/sync/LargeMasterSyncV3Platform';
-import { getLargeMasterSyncV3OperationalSession, v3BindingKey } from './services/sync/LargeMasterSyncV3OperationalSession';
+import { getLargeMasterSyncV3OperationalSession, getLargeMasterSyncV3RetainedSession, v3BindingKey } from './services/sync/LargeMasterSyncV3OperationalSession';
+import type { V3TaxClassificationNotice } from './services/sync/LargeMasterSyncV3OperationalSession';
 import { runBootReconciliation } from './services/sync/BootReconciliation';
 import { assertLargeMasterSyncV3SetupContract, largeMasterSyncV3DownloadOrigin } from './services/sync/LargeMasterSyncV3DownloadOrigin';
 import { completeLargeMasterSyncV3Setup } from './services/sync/LargeMasterSyncV3SetupCompletion';
@@ -13078,11 +13079,18 @@ const AppContent: React.FC = () => {
     }
 
     let refundConfig = config;
+    // A credit note reverses a document that was already issued: it is built from the ticket's own
+    // snapshot and must never wait for, or trigger, a catalog refresh. Drift is reported, not blocked.
+    const refundClassificationNotices: V3TaxClassificationNotice[] = [];
     if (LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED) {
-      const session = await getLargeMasterSyncV3OperationalSession();
+      const session = await getLargeMasterSyncV3RetainedSession();
       refundConfig = await session.projectConfig(config);
       const stamp = normalizedRefundItems[0]?.v3SaleAuthority;
-      await session.validate(refundConfig, normalizedRefundItems, stamp?.tariffId || '', stamp?.warehouseId || '', 'REFUND', undefined, { originalTransactionId: originalTx.id });
+      await session.validate(refundConfig, normalizedRefundItems, stamp?.tariffId || '', stamp?.warehouseId || '', 'REFUND', undefined,
+        { originalTransactionId: originalTx.id }, false, notice => { refundClassificationNotices.push(notice); });
+      if (refundClassificationNotices.length) {
+        console.warn('⚠️ [refund] clasificación fiscal distinta en el maestro actual:', refundClassificationNotices);
+      }
     }
 
     // 1. Calculations
@@ -13263,6 +13271,8 @@ const AppContent: React.FC = () => {
       erpRefundPreparation: options.erpRefundPreparation,
       refundReason: reason,
       isTaxIncluded: refundTaxIncluded,
+      // Evidence for accounting/diagnostics: the NC mirrors the invoice even if the master drifted.
+      ...(refundClassificationNotices.length ? { metadata: { v3TaxClassificationNotice: refundClassificationNotices } } : {}),
       syncStatus: 'PENDING'
     };
 
