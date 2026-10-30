@@ -84,6 +84,7 @@ import {
 } from '../services/invoices/InvoiceReviewService';
 import { resolveInvoiceScan, resolveInvoiceSearchReference, transactionInvoiceScanAliases } from '../utils/invoiceScan';
 import { completeLegacyMutationAfterDurableAck } from '../services/sync/LegacyMutationJournal';
+import { describeV3Error } from '../utils/v3ErrorMessages';
 
 interface TicketHistoryProps {
    transactions: Transaction[];
@@ -2681,7 +2682,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
             conditions,
             REASONS.find(r => r.id === returnReason)?.label || 'Devolución',
             refundRequestMode
-         ); } catch(error) { alert(error instanceof Error ? error.message : 'No se pudo completar la devolución.'); return; }
+         ); } catch(error) { alert(describeV3Error(error)); return; }
          setReturnModeId(null);
          setSelectedItemsQty(new Map());
       }

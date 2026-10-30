@@ -418,3 +418,26 @@ test('el retiro fiscal en el ERP tiene un plazo propio, más largo que un comand
   // Todas las llamadas de retiro usan el plazo largo (2 sitios), sin excepción.
   assert.equal((client.match(/RETIREMENT_TIMEOUT_MS\)/g) || []).length, 2);
 });
+
+test('an unmigrated V3 baseline explains itself instead of leaking its code', () => {
+  const messages = source('utils/v3ErrorMessages.ts');
+  // El cajero no puede hacer nada con el código crudo: los cuatro rechazos del baseline
+  // tienen que llegar traducidos, tanto en la nota de crédito como en el cobro.
+  assert.match(messages, /SYNC_V3_BASELINE_MIGRATION_REQUIRED:\s*\n\s*'/);
+  assert.match(messages, /SYNC_V3_INVENTORY_COVERAGE_REQUIRED:\s*\n\s*'/);
+  assert.match(messages, /SYNC_V3_CATALOG_SEMANTICS_CHANGED:\s*\n\s*'/);
+  assert.match(messages, /SYNC_V3_STOCK_AUTHORITY_INVALID:\s*\n\s*'/);
+  assert.match(source('components/RefundModal.tsx'), /setSubmitError\(describeV3Error\(error\)\)/);
+  assert.doesNotMatch(source('components/RefundModal.tsx'), /setSubmitError\(error instanceof Error \? error\.message/);
+  assert.match(source('components/TicketHistory.tsx'), /catch\(error\) \{ alert\(describeV3Error\(error\)\); return; \}/);
+  assert.match(source('App.tsx'), /Error procesando devolución: \$\{refundDetail\}/);
+  assert.doesNotMatch(source('App.tsx'), /Error procesando devolución: \$\{refundError\?\.message/);
+});
+
+test('describeV3Error maps the known codes and never hides an unknown one', async () => {
+  const { describeV3Error } = await import('../utils/v3ErrorMessages');
+  assert.match(describeV3Error(new Error('SYNC_V3_BASELINE_MIGRATION_REQUIRED')), /inventario/);
+  assert.equal(describeV3Error(new Error('SYNC_V3_SOMETHING_NEW')), 'SYNC_V3_SOMETHING_NEW');
+  assert.match(describeV3Error(new Error('SYNC_V3_STOCK_INSUFFICIENT: detalle del ERP')), /^No hay existencia suficiente/);
+  assert.equal(describeV3Error(undefined), 'No se pudo completar la operación.');
+});

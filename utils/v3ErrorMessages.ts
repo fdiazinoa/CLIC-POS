@@ -25,6 +25,14 @@ const V3_ERROR_MESSAGES: Record<string, string> = {
     'El artículo cambió en el maestro autorizado y el ticket conserva una copia anterior. Vuelve a agregar ese artículo para cobrarlo con el catálogo de hoy.',
   SYNC_V3_BINDING_CHANGED:
     'La terminal cambió de vinculación. Reinicia el POS para recargar la autorización.',
+  SYNC_V3_BASELINE_MIGRATION_REQUIRED:
+    'El maestro del ERP cambió y esta caja necesita un inventario base nuevo, pero ya registró ventas o devoluciones con el anterior. No se puede cobrar ni emitir notas de crédito hasta migrar el inventario: avisa a soporte.',
+  SYNC_V3_INVENTORY_COVERAGE_REQUIRED:
+    'Esta caja ya registró movimientos de inventario y no puede adoptar un inventario base nuevo. Avisa a soporte para migrar el inventario de la caja.',
+  SYNC_V3_CATALOG_SEMANTICS_CHANGED:
+    'El ERP cambió impuestos, tarifas o unidades de artículos que esta caja ya vendió, así que su inventario base quedó desalineado. Avisa a soporte antes de volver a cobrar.',
+  SYNC_V3_STOCK_AUTHORITY_INVALID:
+    'El inventario de esta caja ya no coincide con el maestro autorizado. Descarga el catálogo desde el diagnóstico; si persiste, avisa a soporte.',
 };
 
 export const describeV3Error = (error: unknown): string => {
