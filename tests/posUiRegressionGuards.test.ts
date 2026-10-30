@@ -456,3 +456,11 @@ test('every rejection the refund surface can actually raise is translated', asyn
   // Y no debe mandar a una acción que no existe.
   assert.doesNotMatch(describeV3Error(new Error('SYNC_V3_STOCK_AUTHORITY_INVALID')), /diagnóstico/i);
 });
+
+test('refund errors never assert issuance outcome or instruct replacing the original snapshot', async () => {
+  const { describeV3Error } = await import('../utils/v3ErrorMessages');
+  assert.doesNotMatch(describeV3Error(new Error('SYNC_V3_FROZEN_FISCAL_SOURCE_CHANGED')), /No se emitió ningún documento/i);
+  assert.doesNotMatch(describeV3Error(new Error('SYNC_V3_DUPLICATE_TRANSACTION_MISMATCH')), /Ya existe una nota de crédito/i);
+  assert.doesNotMatch(describeV3Error(new Error('SYNC_V3_RETAINED_OWNER_REQUIRED')), /inventario de hoy/i);
+  assert.doesNotMatch(describeV3Error(new Error('SYNC_V3_BASELINE_MIGRATION_REQUIRED')), /sí se pueden emitir/i);
+});
