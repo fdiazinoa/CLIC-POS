@@ -1,5 +1,5 @@
 import {TAX_SERVICE_APPLIED_PROFILE,validatePreparedAppliedReceipt,assertFiscalOriginalMirror,captureFiscalOutboxAnchors,type PreparedAppliedReceipt,type FiscalOutboxAnchor} from './FiscalAppliedReceiptV2';
-import {getLargeMasterSyncV3OperationalSession} from '../sync/LargeMasterSyncV3OperationalSession';
+import {getLargeMasterSyncV3RetainedSession} from '../sync/LargeMasterSyncV3OperationalSession';
 import type {Transaction} from '../../types';
 import type {IssueFiscalDocumentInput,FiscalIssueResponse} from './fiscalService';
 import type {DurableDocumentMutation} from '../db/DatabaseAdapter';
@@ -96,5 +96,7 @@ export const createMSellerDispatcher=(deps:FiscalDispatchDependencies)=>(async(i
  }catch{throw unknown();}finally{clearTimeout(timeout);}
 });
 export const dispatchMSellerDocument=createMSellerDispatcher({outboxRows:async id=>{if(!dbAdapter.getFiscalAppliedSourceRows)throw Error('FISCAL_NATIVE_CAS_REQUIRED');return dbAdapter.getFiscalAppliedSourceRows(id);},assertReady:requireFiscalErpAppliedReceipt,context:captureFiscalBoundContext,
- catalog:async()=>{const session=await getLargeMasterSyncV3OperationalSession();await session.assertCurrent();return {...session.ready.runtime.version,binding:session.binding};},
+ // Fiscal submission of an already committed document only needs the binding, so it must never
+ // negotiate a master: a refresh at this point cannot change a document that was already issued.
+ catalog:async()=>{const session=await getLargeMasterSyncV3RetainedSession();await session.assertCurrent();return {...session.ready.runtime.version,binding:session.binding};},
  get:(collection,id)=>db.getDocument(collection as any,id),commit:async mutations=>{if(!dbAdapter.supportsV3FiscalMetadataCAS||!dbAdapter.saveDocumentsAtomically)throw Error('FISCAL_NATIVE_CAS_REQUIRED');await dbAdapter.saveDocumentsAtomically(mutations);},fetchImpl:(input,init)=>fetch(input,init)});
