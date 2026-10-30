@@ -90,7 +90,8 @@ test('validate only demands a live baseline for sales', () => {
   assert.match(src, /const anchor = refund \? v3RefundAnchor\(authority!\) :/);
   assert.match(src, /if \(old\.length !== 1\) throw new LargeMasterSyncV3Error\('SYNC_V3_RETAINED_TAX_CLASSIFICATION_CHANGED'\)/);
   assert.match(src, /if \(!refund\) throw new LargeMasterSyncV3Error\('SYNC_V3_RETAINED_TAX_CLASSIFICATION_CHANGED'\)/);
-  assert.match(src, /onTaxClassificationChanged\?\.\(\{ taxId: id, before: v3TaxSemantics\(old\[0\]\)/);
+  // The notice is human-readable because it lands in the ERP journal NOTA.
+  assert.match(src, /onTaxClassificationChanged\?\.\(\{ taxId: id, before: describe\(old\[0\]\)!/);
 });
 
 test('the reversal path never negotiates a master and reopens once after a sync', () => {

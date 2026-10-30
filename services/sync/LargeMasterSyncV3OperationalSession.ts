@@ -402,8 +402,11 @@ export class LargeMasterSyncV3OperationalSession {
           if (current.length === 1 && v3TaxSemantics(old[0]) === v3TaxSemantics(current[0])) continue;
           // A credit note mirrors the issued document: report the drift, never block the reversal.
           if (!refund) throw new LargeMasterSyncV3Error('SYNC_V3_RETAINED_TAX_CLASSIFICATION_CHANGED');
-          onTaxClassificationChanged?.({ taxId: id, before: v3TaxSemantics(old[0]),
-            after: current.length === 1 ? v3TaxSemantics(current[0]) : null });
+          // Readable on purpose: this text ends up in the ERP journal NOTA.
+          const describe = (row?: Record<string, any>) => row
+            ? `${String(row.type)} ${Math.round(Number(row.rate) * 1000) / 10}%${row.active === false ? ' (inactivo)' : ''}`
+            : null;
+          onTaxClassificationChanged?.({ taxId: id, before: describe(old[0])!, after: describe(current[0]) });
         }
       }
       const receipt = await this.store.getCatalogReceipt?.({ syncId: stamp.syncId, syncVersion: stamp.syncVersion }, this.binding);
