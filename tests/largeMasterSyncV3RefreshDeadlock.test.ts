@@ -174,7 +174,7 @@ test('production financial builder with real Session reserves and invoices witho
    '../../utils/db':'export const db={getDocument:(...a)=>globalThis.__invoice.adapter.getDocument(...a),get:n=>globalThis.__invoice.adapter.getCollection(n),assertFiscalTransactionAuthority:async()=>{}};',
    './SyncFeatureFlags':'export const isSyncFeatureEnabled=()=>true;',
    './DurableOutboxRepository':'export const durableOutboxRepository={commitFinancialTransaction:i=>globalThis.__invoice.adapter.commitFinancialTransaction(i)};',
-   './LargeMasterSyncV3OperationalSession':'export const getLargeMasterSyncV3OperationalSession=async()=>globalThis.__invoice.session;export const v3InventoryBaselineKey=(b,s)=>JSON.stringify([b,s.inventorySyncId||s.syncId,s.inventorySyncVersion??s.syncVersion,s.inventoryVersion,s.inventoryCursor]);',
+   './LargeMasterSyncV3OperationalSession':'export const getLargeMasterSyncV3OperationalSession=async()=>globalThis.__invoice.session;export const getLargeMasterSyncV3RetainedSession=async()=>globalThis.__invoice.session;export const v3InventoryBaselineKey=(b,s)=>JSON.stringify([b,s.inventorySyncId||s.syncId,s.inventorySyncVersion??s.syncVersion,s.inventoryVersion,s.inventoryCursor]);',
   };
   const compiled=await build({entryPoints:[new URL('../services/sync/LargeMasterSyncV3FinancialCommit.ts',import.meta.url).pathname],bundle:true,write:false,platform:'node',format:'esm',plugins:[{name:'synthetic-invoice-ports',setup(b){b.onResolve({filter:/.*/},a=>modules[a.path]?{path:a.path,namespace:'invoice'}:undefined);b.onLoad({filter:/.*/,namespace:'invoice'},a=>({contents:modules[a.path],loader:'js'}));}}]});
   const module=await import('data:text/javascript;base64,'+Buffer.from(compiled.outputFiles[0].text).toString('base64'));

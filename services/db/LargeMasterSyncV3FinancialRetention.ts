@@ -55,9 +55,12 @@ export const financialIdentity = (transaction: Transaction): string => {
   return JSON.stringify(canonical(input));
 };
 
+export type V3TaxClassificationObservation = { taxId: string; before: string; after: string | null };
 export type V3FinancialOptions = { refund?: boolean; conditions?: Map<string, 'SELLABLE' | 'DAMAGED'>; original?: Transaction;
     expectedOriginal?: Transaction; expectedOriginalHistory?: Transaction | null; originalCollection?: 'transactions' | 'transactionHistory';
-    adjustCustomerBalance?: boolean; skipWalletDeposit?: boolean };
+    adjustCustomerBalance?: boolean; skipWalletDeposit?: boolean;
+    /** Audit-only evidence for the ERP journal NOTA; never part of the financial identity. */
+    taxClassificationNotice?: V3TaxClassificationObservation[] };
 export const financialOperationIdentity=(transaction:Transaction,warehouseId:string,options:V3FinancialOptions):string=>JSON.stringify([
   financialIdentity(transaction),warehouseId,options.refund===true,[...(options.conditions || new Map()).entries()].sort(),
   options.adjustCustomerBalance===true,options.skipWalletDeposit===true,options.original?financialIdentity(options.original):null,

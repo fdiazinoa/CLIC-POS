@@ -18,7 +18,7 @@ import { db } from '../../utils/db';
 import { durableOutboxRepository } from './DurableOutboxRepository';
 import { isSyncFeatureEnabled } from './SyncFeatureFlags';
 import { buildSalePostedPayload, buildPaymentPostedPayload } from './SalePostedContract';
-import { getLargeMasterSyncV3OperationalSession, v3InventoryBaselineKey } from './LargeMasterSyncV3OperationalSession';
+import { getLargeMasterSyncV3OperationalSession, getLargeMasterSyncV3RetainedSession, v3InventoryBaselineKey } from './LargeMasterSyncV3OperationalSession';
 import { LargeMasterSyncV3Error } from './LargeMasterSyncV3Types';
 import { buildV3RefundOriginalMutations } from './LargeMasterSyncV3RefundAuthority';
 import { validateV3FrozenLineFiscalAmounts } from './LargeMasterSyncV3LineSource';
@@ -123,7 +123,7 @@ const assertFinancialReplay=(stored:Transaction|null,transaction:Transaction,ide
 export const readV3CommittedRefundReplay=async(transaction:Transaction,warehouseId:string,options:V3FinancialOptions):Promise<Transaction|null>=>{
   const [active,history]=await Promise.all([db.getDocument('transactions',transaction.id),db.getDocument('transactionHistory',transaction.id)]) as [Transaction|null,Transaction|null];
   if(!active&&!history)return null;
-  const session=await getLargeMasterSyncV3OperationalSession();await session.assertCurrent();
+  const session=await getLargeMasterSyncV3RetainedSession();await session.assertCurrent();
   const identity=financialOperationIdentity(transaction,warehouseId,options);
   if(!options.refund||!history||!active&&!history.zReportId||history.v3Binding!==session.binding||active&&active.v3Binding!==session.binding)
     throw new LargeMasterSyncV3Error('SYNC_V3_DUPLICATE_TRANSACTION_MISMATCH');
@@ -143,7 +143,10 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
   if (pending) return pending.identity === identity ? pending.promise
     : Promise.reject(new LargeMasterSyncV3Error('SYNC_V3_DUPLICATE_TRANSACTION_MISMATCH'));
   const commit = (async (): Promise<FinancialResult[]> => {
-    const session = await getLargeMasterSyncV3OperationalSession();
+    // A pure reversal batch posts against the documents it reverses, so it must never negotiate a
+    // master; any batch that also contains a sale keeps the live-catalog authority.
+    const reversalOnly = entries.every(entry => entry.options?.refund === true);
+    const session = await (reversalOnly ? getLargeMasterSyncV3RetainedSession() : getLargeMasterSyncV3OperationalSession());
     await session.assertCurrent();
     const existing = await Promise.all(entries.map(entry => db.getDocument('transactions', entry.transaction.id) as Promise<Transaction | null>));
     if (existing.some(Boolean)) {
@@ -156,7 +159,7 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
       await db.assertFiscalTransactionAuthority(transaction,
         config.terminals?.find(terminal => terminal.id === transaction.terminalId || terminal.config?.erpTerminalId === transaction.terminalId)?.config);
     }
-    const projected = await session.projectConfig(config);
+    const saleConfig = entries.some(entry => !entry.options?.refund) ? await session.projectConfig(config) : undefined;
     const documents: DurableDocumentMutation[] = [];
     const events: DurableOutboxEventInput[] = [];
     const intentIds: string[] = [];
@@ -174,6 +177,8 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
     for (let index = 0; index < entries.length; index++) {
     let { transaction, options = {} } = entries[index];
     const stamp = transaction.items[0]?.v3SaleAuthority;
+    if (!stamp) throw new LargeMasterSyncV3Error('SYNC_V3_CART_LEGACY_LINE');
+    const projected = options.refund ? await session.projectRefundConfig(config, stamp, transaction.items) : saleConfig!;
     const authoritativeLines: CartItem[] = [];
     const retained = await session.validate(projected, transaction.items, stamp?.tariffId || '', warehouseId,
       options.refund ? 'REFUND' : 'SALE', (line, source) => {
@@ -311,7 +316,9 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
         }
         events.push({ eventId: createUuid(), eventType: 'SALES_CREDIT_NOTE_POSTED', aggregateType: 'TRANSACTION',
             aggregateId: document.id, schemaVersion: 1,
-            payload: buildSalePostedPayload(document, { ...fiscalSourceMetadata, ...(fiscalWorkflowBirth?{fiscalWorkflowBirth}:{}), inventoryMovementIds: ledger.map(row => row.id), paymentIntentIds }), createdAt: document.date });
+            payload: buildSalePostedPayload(document, { ...fiscalSourceMetadata, ...(fiscalWorkflowBirth?{fiscalWorkflowBirth}:{}), inventoryMovementIds: ledger.map(row => row.id), paymentIntentIds,
+              // Goes straight to the ERP journal NOTA; it is audit evidence, never financial identity.
+              ...(options.taxClassificationNotice?.length ? { v3TaxClassificationNotice: options.taxClassificationNotice } : {}) }), createdAt: document.date });
         const paymentPosted = buildPaymentPostedPayload(document, { ...fiscalSourceMetadata, paymentIntentIds });
         if (paymentPosted) events.push({ eventId: createUuid(), eventType: 'PAYMENT_POSTED',
             aggregateType: 'TRANSACTION', aggregateId: document.id, schemaVersion: 1, payload: paymentPosted, createdAt: document.date });

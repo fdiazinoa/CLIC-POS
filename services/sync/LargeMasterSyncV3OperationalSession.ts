@@ -11,7 +11,7 @@ import {requiresProductStockAvailability} from '../../utils/productStockPolicy';
 import { v3TaxSemantics } from './LargeMasterSyncV3StockAuthority';
 import { db } from '../../utils/db';
 import { readV3RetainedCheckout, assertV3RetainedLine, type V3RetainedContext, type V3RetainedReference } from './LargeMasterSyncV3RetainedCheckout';
-import { v3StockSource, sameV3StockAuthority, v3RetainedLineFingerprint } from './LargeMasterSyncV3StockAuthority';
+import { v3StockSource, sameV3StockAuthority, v3RetainedLineFingerprint, v3RefundAnchor } from './LargeMasterSyncV3StockAuthority';
 import { assertLargeMasterSyncV3NativeAndroid } from './LargeMasterSyncV3Platform';
 import type { BusinessConfig, CartItem, Product, ProductVariant, TaxDefinition, V3SaleAuthorityStamp, Transaction } from '../../types';
 import { dbAdapter } from '../db';
@@ -40,6 +40,9 @@ export const v3InventoryBaselineKey = (binding: string, stamp: V3SaleAuthoritySt
 
 export type V3CodeMatch = { product: Product; quantity: number; price: number; modifiers: string[];
   selectedVariant?: ProductVariant; variantInfo?: string };
+
+/** A credit note was issued with a tax classification that the current master no longer declares. */
+export type V3TaxClassificationNotice = { taxId: string; before: string; after: string | null };
 
 const configContextFlights = new Map<string, Promise<LargeMasterSyncV3OperationalSession>>();
 
@@ -277,7 +280,56 @@ export class LargeMasterSyncV3OperationalSession {
     const [tariffs, sourceTaxes] = await Promise.all([
       this.ready.runtime.getOperationalTariffs(), this.ready.runtime.getOperationalTaxes(),
     ]);
-    const taxes: TaxDefinition[] = sourceTaxes.map(row => {
+    return this.projectConfigRows(config, tariffs, sourceTaxes);
+  }
+
+  /** A credit note repeats the issued document: its tax photo is the ticket's generation, never today's. */
+  async projectRefundConfig(config: BusinessConfig, stamp: V3SaleAuthorityStamp, lines: CartItem[] = []): Promise<BusinessConfig> {
+    await this.assertCurrent();
+    const source = { syncId: stamp.syncId, syncVersion: stamp.syncVersion };
+    if (!source.syncId || !Number.isSafeInteger(source.syncVersion)) {
+      throw new LargeMasterSyncV3Error('SYNC_V3_STOCK_AUTHORITY_INVALID');
+    }
+    const [tariffs, sourceTaxes] = await Promise.all([
+      this.store.getOperationalTariffs({ ...source, contractVersion: 2 }),
+      this.store.getOperationalTaxes({ syncId: source.syncId, syncVersion: source.syncVersion, contractVersion: 2 }),
+    ]);
+    if (!Array.isArray(sourceTaxes)) {
+      throw new LargeMasterSyncV3Error('SYNC_V3_RETAINED_OWNER_REQUIRED');
+    }
+    // A retained ticket can contain catalog generations sharing one inventory anchor.
+    // Collect the taxes actually used in each generation; the first line's table may not
+    // contain a tax introduced for an article added later to that same ticket.
+    if (lines.length) {
+      const epochs = new Map<string, Promise<Record<string, unknown>[]>>();
+      epochs.set(JSON.stringify([source.syncId, source.syncVersion]), Promise.resolve(sourceTaxes));
+      const used = new Map<string, Record<string, unknown>>();
+      for (const line of lines) {
+        const row = line.v3SaleAuthority;
+        if (!row || !Array.isArray(line.appliedTaxIds)) throw new LargeMasterSyncV3Error('SYNC_V3_LINE_INVALID');
+        const key = JSON.stringify([row.syncId, row.syncVersion]);
+        if (!epochs.has(key)) epochs.set(key, this.store.getOperationalTaxes({ syncId: row.syncId, syncVersion: row.syncVersion, contractVersion: 2 }));
+        const taxes = await epochs.get(key)!;
+        for (const id of line.appliedTaxIds) {
+          const matches = taxes.filter(tax => tax.id === id);
+          if (matches.length !== 1) throw new LargeMasterSyncV3Error('SYNC_V3_TAX_UNAVAILABLE');
+          const previous = used.get(id);
+          // Conflicting ORIGINAL definitions cannot share a single financial tax identity.
+          // This is distinct from harmless drift against today's master.
+          if (previous && v3TaxSemantics(previous) !== v3TaxSemantics(matches[0])) {
+            throw new LargeMasterSyncV3Error('SYNC_V3_RETAINED_TAX_CLASSIFICATION_CHANGED');
+          }
+          used.set(id, matches[0]);
+        }
+      }
+      return this.projectConfigRows(config, tariffs, [...used.values()]);
+    }
+    return this.projectConfigRows(config, tariffs, sourceTaxes);
+  }
+
+  private projectConfigRows(config: BusinessConfig, tariffs: Awaited<ReturnType<LargeMasterSyncV3Runtime['getOperationalTariffs']>>,
+    sourceTaxes: Record<string, unknown>[]): BusinessConfig {
+    const taxes: TaxDefinition[] = sourceTaxes.map((row: any) => {
       const type = row.type === 'SALES' ? 'VAT' : row.type;
       if (!['VAT', 'SERVICE_CHARGE', 'EXEMPT'].includes(String(type)) || typeof row.rate !== 'number'
         || !Number.isFinite(row.rate) || row.rate < 0 || row.rate > 1) {
@@ -331,20 +383,25 @@ export class LargeMasterSyncV3OperationalSession {
   }
 
   async validate(config: BusinessConfig, lines: CartItem[], tariffId: string, warehouseId: string,
-    intent: V3FinancialIntent = 'SALE', onValidatedSource?: (line: CartItem, source: Product) => void, reference?: V3RetainedReference, fiscalDeliveryOnly = false): Promise<V3RetainedContext | undefined> {
+    intent: V3FinancialIntent = 'SALE', onValidatedSource?: (line: CartItem, source: Product) => void, reference?: V3RetainedReference, fiscalDeliveryOnly = false,
+    onTaxClassificationChanged?: (notice: V3TaxClassificationNotice) => void): Promise<V3RetainedContext | undefined> {
     await this.assertCurrent();
     if (!lines.length) throw new LargeMasterSyncV3Error('SYNC_V3_CART_EMPTY');
     let presentationProof:Awaited<ReturnType<LargeMasterSyncV3OperationalSession['presentationProof']>>;
     if(!fiscalDeliveryOnly&&lines.some(line=>line.inventoryPresentation!==undefined)){if(intent==='REFUND')throw Error('INVENTORY_PRESENTATION_SOURCE_REQUIRED_NOT_YET_SUPPORTED');presentationProof=await this.presentationProof(config,lines);}
     const authority = lines[0].v3SaleAuthority;
+    const refund = intent === 'REFUND';
+    // A credit note reverses the invoice as issued, so the ticket's own inventory authority is the
+    // anchor. Only a sale/checkout has to match the live baseline.
     if (!authority || authority.binding !== this.binding || authority.warehouseId !== warehouseId
-      || authority.tariffId !== tariffId || authority.inventoryVersion !== this.ready.inventoryVersion
-      || authority.inventoryCursor !== this.ready.inventoryCursor) throw new LargeMasterSyncV3Error('SYNC_V3_CART_MIXED_VERSION');
-    const retained = await readV3RetainedCheckout(reference, intent === 'REFUND');
+      || authority.tariffId !== tariffId
+      || (!refund && (authority.inventoryVersion !== this.ready.inventoryVersion
+        || authority.inventoryCursor !== this.ready.inventoryCursor))) throw new LargeMasterSyncV3Error('SYNC_V3_CART_MIXED_VERSION');
+    const retained = await readV3RetainedCheckout(reference, refund);
     if (retained?.reservation) { assertV3ReservationSource(retained.reservation,this.binding,warehouseId); assertV3ReservationLines(retained.reservation,lines); validateV3ReservationPricing(retained.reservation,config); }
-    const anchor = await this.store.getInventoryAuthority?.() || { syncId: this.ready.inventorySyncId || this.ready.runtime.version.syncId,
+    const anchor = refund ? v3RefundAnchor(authority!) : (await this.store.getInventoryAuthority?.() || { syncId: this.ready.inventorySyncId || this.ready.runtime.version.syncId,
       syncVersion: this.ready.inventorySyncVersion ?? this.ready.runtime.version.syncVersion,
-      version: this.ready.inventoryVersion, cursor: this.ready.inventoryCursor };
+      version: this.ready.inventoryVersion, cursor: this.ready.inventoryCursor });
     const currentCatalog = await this.catalogAfterAssert(tariffId, warehouseId);
     const sourceCatalogs = new Map<string, LargeMasterSyncV3OperationalCatalog>();
     let currentTaxes: Promise<Record<string, unknown>[]> | undefined;
@@ -355,6 +412,8 @@ export class LargeMasterSyncV3OperationalSession {
         || stamp.taxIncluded !== authority.taxIncluded || !sameV3StockAuthority(stamp, anchor)) {
         throw new LargeMasterSyncV3Error('SYNC_V3_CART_MIXED_VERSION');
       }
+      // A refund is authorized by the independently read original even when its catalog is still current.
+      if (refund) assertV3RetainedLine(line, retained);
       if (stamp.syncId === this.ready.runtime.version.syncId && stamp.syncVersion === this.ready.runtime.version.syncVersion) {
         return currentCatalog.get(line.id);
       }
@@ -367,9 +426,16 @@ export class LargeMasterSyncV3OperationalSession {
         const newTaxes = await (currentTaxes ??= this.ready.runtime.getOperationalTaxes());
         for (const id of line.appliedTaxIds || []) {
           const old = oldTaxes.filter(row => row.id === id), current = newTaxes.filter(row => row.id === id);
-          if (old.length !== 1 || current.length !== 1 || v3TaxSemantics(old[0]) !== v3TaxSemantics(current[0])) {
-            throw new LargeMasterSyncV3Error('SYNC_V3_RETAINED_TAX_CLASSIFICATION_CHANGED');
-          }
+          // The ticket's own generation must still classify its tax; otherwise the source is corrupt.
+          if (old.length !== 1) throw new LargeMasterSyncV3Error('SYNC_V3_RETAINED_TAX_CLASSIFICATION_CHANGED');
+          if (current.length === 1 && v3TaxSemantics(old[0]) === v3TaxSemantics(current[0])) continue;
+          // A credit note mirrors the issued document: report the drift, never block the reversal.
+          if (!refund) throw new LargeMasterSyncV3Error('SYNC_V3_RETAINED_TAX_CLASSIFICATION_CHANGED');
+          // Readable on purpose: this text ends up in the ERP journal NOTA.
+          const describe = (row?: Record<string, any>) => row
+            ? `${String(row.type)} ${Math.round(Number(row.rate) * 1000) / 10}%${row.active === false ? ' (inactivo)' : ''}`
+            : null;
+          onTaxClassificationChanged?.({ taxId: id, before: describe(old[0])!, after: describe(current[0]) });
         }
       }
       const receipt = await this.store.getCatalogReceipt?.({ syncId: stamp.syncId, syncVersion: stamp.syncVersion }, this.binding);
@@ -450,6 +516,20 @@ export const getLargeMasterSyncV3OperationalSession = createLargeMasterSyncV3Ses
   () => {try{const identity=readLargeMasterSyncV3BoundIdentity();return JSON.stringify([v3BindingKey(identity,largeMasterSyncV3DownloadOrigin()),identity.syncToken]);}
     catch{return JSON.stringify(['offline-observation',readOperationalCatalogBindingProof(),resolveSyncTarget().baseUrl,largeMasterSyncV3DownloadOrigin()]);}},
 );
+
+/** Reversal path: reuse the active runtime and never negotiate a master. A credit note reverses a
+ * document that was already issued, so refreshing the catalog must never decide whether it prints.
+ * Its coordinator cache is independent from the operational one, so a sync that moved the runtime
+ * makes the first call fail closed; that single case reopens once instead of surfacing a raw code. */
+const retainedSessionCoordinator = createLargeMasterSyncV3SessionCoordinator(
+  (_refresh, metric) => LargeMasterSyncV3OperationalSession.open(false, metric, true),
+  () => {try{const identity=readLargeMasterSyncV3BoundIdentity();return JSON.stringify([v3BindingKey(identity,largeMasterSyncV3DownloadOrigin()),identity.syncToken]);}
+    catch{return JSON.stringify(['offline-observation',readOperationalCatalogBindingProof(),resolveSyncTarget().baseUrl,largeMasterSyncV3DownloadOrigin()]);}},
+);
+export const getLargeMasterSyncV3RetainedSession = ((refresh?: boolean) => retainedSessionCoordinator(refresh).catch(error => {
+  if ((error as { code?: string })?.code !== 'SYNC_V3_RUNTIME_VERSION_CHANGED') throw error;
+  return retainedSessionCoordinator(refresh);
+})) as typeof retainedSessionCoordinator;
 
 export const acquireLargeMasterSyncV3ConfigContext = (config: BusinessConfig, localTerminalId: string) =>
   LargeMasterSyncV3OperationalSession.acquireConfigContext(config, localTerminalId);

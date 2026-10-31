@@ -2,7 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {build} from 'esbuild';
 
-for(const intent of ['SALE','REFUND']) for(const changed of [true,false]) test(`actual retained ${intent} affected=${changed} blocks before financial consumers`,async()=>{
+/**
+ * Contract change (NC con la foto original): una reclasificación retenida sigue bloqueando la VENTA
+ * antes de cualquier consumidor financiero, mientras que la DEVOLUCIÓN resuelve y reporta la deriva,
+ * porque la nota de crédito repite el documento ya emitido.
+ */
+for(const intent of ['SALE','REFUND']) for(const changed of [true,false]) test(`actual retained ${intent} affected=${changed} ${
+  intent==='REFUND' ? 'reports the drift' : 'blocks before financial consumers'}`,async()=>{
  const stamp={binding:'B',warehouseId:'W',tariffId:'T',syncId:'old',syncVersion:1,inventoryVersion:1,inventoryCursor:'C',taxIncluded:false};
  const line={id:'P',cartId:'P',quantity:1,price:85,appliedTaxIds:['TIP'],v3SaleAuthority:stamp};
  const source={product:{...line,type:'SERVICE',activeInWarehouses:['W']},authority:stamp};
@@ -26,9 +32,21 @@ for(const intent of ['SALE','REFUND']) for(const changed of [true,false]) test(`
   getInventoryAuthority:async()=>({syncId:'old',syncVersion:1,version:1,cursor:'C'}),getOperationalTaxes:async()=>{taxReads++;return old;},
   getCatalogReceipt:async()=>({syncId:'old',syncVersion:1,version:1,cursor:'C'})},'origin',{deviceId:'device'});
  session.assertCurrent=async()=>{};session.catalog=async()=>({get:async()=>source});session.withStock=async(product:any)=>product;
- const validate=()=>session.validate({terminals:[],taxes:current},[line], 'T','W',intent,()=>{validated++;},{ticketId:'parked',originalTransactionId:'original'});
- if(changed){await assert.rejects(validate,/RETAINED_TAX_CLASSIFICATION_CHANGED/);assert.equal(validated,0);}
- else{await validate();assert.equal(validated,1);}
+ const notices:Array<{taxId:string}>=[];let readAfterFirst=0;
+ const validate=(delivery=false)=>session.validate({terminals:[],taxes:current},[line],'T','W',intent,()=>{validated++;},
+   {ticketId:'parked',originalTransactionId:'original'},delivery,notice=>notices.push(notice));
+ if(changed&&intent==='SALE'){
+   await assert.rejects(validate,/RETAINED_TAX_CLASSIFICATION_CHANGED/);
+   assert.equal(validated,0);assert.equal(notices.length,0);
+   // `fiscalDeliveryOnly` skips the comparison for sales too, exactly as before this change.
+   readAfterFirst=taxReads;
+   await session.validate({terminals:[],taxes:current},[line],'T','W',intent,undefined,{originalTransactionId:'original'},true);
+   assert.equal(taxReads,readAfterFirst);
+ }else{
+   await validate();
+   assert.equal(validated,1);
+   assert.equal(notices.length,changed?1:0);
+   if(changed)assert.equal(notices[0].taxId,'TIP');
+ }
  assert.equal(taxReads,1);
- if(changed){await session.validate({terminals:[],taxes:current},[line],'T','W',intent,undefined,{originalTransactionId:'original'},true);assert.equal(taxReads,1);}
 });
