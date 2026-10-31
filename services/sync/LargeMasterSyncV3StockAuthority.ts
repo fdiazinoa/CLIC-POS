@@ -14,6 +14,12 @@ export const sameV3StockAuthority = (stamp: V3SaleAuthorityStamp, anchor: LargeM
   return source.syncId === anchor.syncId && source.syncVersion === anchor.syncVersion
     && stamp.inventoryVersion === anchor.version && stamp.inventoryCursor === anchor.cursor;
 };
+/** A credit note reverses the document as issued: the ticket's own authority is the anchor. */
+export const v3RefundAnchor = (stamp: V3SaleAuthorityStamp): LargeMasterSyncV3InventoryAuthority => {
+  const source = v3StockSource(stamp);
+  return { syncId: source.syncId, syncVersion: source.syncVersion, contractVersion: 2,
+    version: stamp.inventoryVersion, cursor: stamp.inventoryCursor };
+};
 
 /** Descriptive/category changes do not reinterpret stock or fiscal quantities. */
 export const v3ArticleSemantics = (row: Record<string, any>): string => JSON.stringify([
