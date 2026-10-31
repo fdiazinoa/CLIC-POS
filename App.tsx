@@ -11035,7 +11035,7 @@ const AppContent: React.FC = () => {
         if (JSON.stringify(await snapshot()) !== fingerprint) throw new Error('FISCAL_STATUS_SCOPE_CHANGED');
       }};
     }
-    const session = await getLargeMasterSyncV3OperationalSession();
+    const session = await getLargeMasterSyncV3RetainedSession();
     await session.assertCurrent();
     const persisted = resolvePersistedBusinessConfig(await db.get('config') as unknown);
     if (!persisted || !dbAdapter.supportsV3FiscalMetadataCAS) throw new Error('FISCAL_STATUS_NATIVE_REQUIRED');
@@ -11097,7 +11097,7 @@ const AppContent: React.FC = () => {
     if (LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED && current?.v3InventoryBaseline) {
       const history = await db.getDocument('transactionHistory',nextTransaction.id) as Transaction | null;
       if (!history || !dbAdapter.saveDocumentsAtomically) throw new Error('FISCAL_STATUS_SOURCE_REQUIRED');
-      const session = await getLargeMasterSyncV3OperationalSession();await session.assertCurrent();
+      const session = await getLargeMasterSyncV3RetainedSession();await session.assertCurrent();
       const catalog = { ...session.ready.runtime.version,binding:session.binding };
       await dbAdapter.saveDocumentsAtomically([
         {collectionName:'transactions',document:nextTransaction,expectedDocument:JSON.stringify(current),v3CurrentCatalog:catalog},
@@ -11528,7 +11528,7 @@ const AppContent: React.FC = () => {
       const original = await db.getDocument('transactions', transaction.id) as Transaction | null;
       if (!original || !dbAdapter.saveDocumentsAtomically) throw new Error('FISCAL_CLASSIFICATION_STALE');
       const consumed = await consumeFiscalClassificationAttempt(original);
-      const session = await getLargeMasterSyncV3OperationalSession();
+      const session = await getLargeMasterSyncV3RetainedSession();
       await session.assertCurrent();
       await dbAdapter.saveDocumentsAtomically([{ collectionName: 'transactions', document: consumed, v3FiscalMetadataOperation: 'CLASSIFICATION_ATTEMPT_CONSUME',
         expectedDocument: JSON.stringify(original), v3CurrentCatalog: { syncId: session.ready.runtime.version.syncId,

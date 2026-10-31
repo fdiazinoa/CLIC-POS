@@ -253,3 +253,43 @@ for(const stage of ['before-get','during-get','after-claim'])test(`current full 
  if(stage==='after-claim'){const commit=f.deps.commit;f.deps.commit=async(rows:any[])=>{await commit(rows);drift=true;};}
  try{await assert.rejects(()=>createMSellerDispatcher(f.deps)(f.input));assert.equal(f.requests.filter(r=>r.init?.method==='POST').length,0);assert.equal(f.requests.filter(r=>r.init?.method==='GET').length,stage==='before-get'?0:1);assert.equal(Boolean(await f.get(FISCAL_DISPATCH_CLAIMS,f.id)),stage==='after-claim');}finally{await f.close();}
 });
+
+test('catalog version changes preserve binding through readiness, claim and retry without another ISSUE', async () => {
+  const f=await appliedFixture('E32-none');
+  const catalog=f.deps.catalog;let reads=0;
+  f.deps.catalog=async()=>{
+    const current=await catalog(),version=f.stamp.syncVersion+(++reads);
+    // Model an actual locally activated catalog, with owner + receipt aligned.
+    // A fabricated version absent from SQLite must remain rejected by the native CAS.
+    f.sql().prepare('UPDATE master_v3_state SET active_sync_id=?,active_version=?').run('new-local-catalog',version);
+    f.sql().prepare('UPDATE master_v3_operational_owner SET sync_id=?,sync_version=?').run('new-local-catalog',version);
+    f.sql().prepare('INSERT INTO master_v3_catalog_owners VALUES(?,?,?,?,?,?,?)').run('new-local-catalog',version,current.binding,
+      f.stamp.inventorySyncId||f.stamp.syncId,f.stamp.inventorySyncVersion??f.stamp.syncVersion,f.stamp.inventoryVersion,f.stamp.inventoryCursor);
+    return {...current,syncId:'new-local-catalog',syncVersion:version};
+  };
+  try {
+    await createMSellerDispatcher(f.deps)(f.input);
+    assert.ok(reads>=2);
+    assert.equal(f.requests.filter(r=>r.init?.method==='POST').length,1);
+    await assert.rejects(()=>createMSellerDispatcher(f.deps)(f.input),/UNKNOWN_GET_ONLY/);
+    assert.equal(f.requests.filter(r=>r.init?.method==='POST').length,1);
+  } finally { await f.close(); }
+});
+
+test('actual App fiscal metadata publication uses local authority and never refreshes a master', async () => {
+  const tx:any={id:'committed-refund',v3InventoryBaseline:'baseline',v3Binding:'B',total:118,taxAmount:18};
+  let local=0,published=0;const writes:any[]=[];
+  const callback=await appCallback('upsertFiscalTransaction','async (nextTransaction: Transaction) => {',
+    '}, [publishFiscalTransaction]);',
+    'db,dbAdapter,LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED,closedFiscalPublicationIds,isTransactionReservedForClose,getLargeMasterSyncV3RetainedSession,getLargeMasterSyncV3OperationalSession,publishFiscalTransaction',{
+      db:{getDocument:async()=>tx},dbAdapter:{saveDocumentsAtomically:async rows=>{writes.push(...rows);}},
+      LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED:true,closedFiscalPublicationIds:{current:new Set()},
+      isTransactionReservedForClose:()=>false,
+      getLargeMasterSyncV3OperationalSession:async()=>{throw Error('MASTER_REFRESH_FORBIDDEN');},
+      getLargeMasterSyncV3RetainedSession:async()=>{local++;return{binding:'B',ready:{runtime:{version:{syncId:'local',syncVersion:2}}},assertCurrent:async()=>{}};},
+      publishFiscalTransaction:()=>{published++;},
+    });
+  await callback({...tx,fiscalSyncStatus:'ERROR'});
+  assert.equal(local,1);assert.equal(published,1);assert.equal(writes.length,2);
+  assert.ok(writes.every(row=>row.v3CurrentCatalog.binding==='B'&&row.document.total===118&&row.document.taxAmount===18));
+});
