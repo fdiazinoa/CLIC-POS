@@ -1,5 +1,5 @@
 import {TAX_SERVICE_APPLIED_PROFILE,validatePreparedAppliedReceipt,assertFiscalOriginalMirror,captureFiscalOutboxAnchors,type PreparedAppliedReceipt,type FiscalOutboxAnchor} from './FiscalAppliedReceiptV2';
-import {getLargeMasterSyncV3OperationalSession} from '../sync/LargeMasterSyncV3OperationalSession';
+import {getLargeMasterSyncV3RetainedSession} from '../sync/LargeMasterSyncV3OperationalSession';
 import type {Transaction} from '../../types';
 import type {IssueFiscalDocumentInput,FiscalIssueResponse} from './fiscalService';
 import type {DurableDocumentMutation} from '../db/DatabaseAdapter';
@@ -61,6 +61,7 @@ export const createMSellerDispatcher=(deps:FiscalDispatchDependencies)=>(async(i
  await deps.commit([{collectionName:FISCAL_DISPATCH_CLAIMS,document:claim,requireAbsent:true,v3FiscalMetadataOperation:'FISCAL_DISPATCH_CLAIM'},
   ...([['transactions',source],['transactionHistory',history]] as const).map(([collectionName,original])=>({collectionName,
    document:{...original,fiscalSubmissionScope:submissionScope,fiscalProviderStatus:'V3_ISSUE_REQUESTED'},expectedDocument:JSON.stringify(original),v3CurrentCatalog:catalog,
+   v3ExpectedRetainedDocument:{collection:'transactions' as const,id:source.id,expected:JSON.stringify(source)},
    v3FiscalMetadataOperation:'FISCAL_DISPATCH_CLAIM' as const})),
   {collectionName:'config',document:config,expectedDocument:JSON.stringify(config),v3FiscalMetadataOperation:'FISCAL_DISPATCH_CLAIM'}]);
  context.assertCurrent(); // Failure after claim is conservatively GET-only forever, even before fetch.
@@ -96,5 +97,7 @@ export const createMSellerDispatcher=(deps:FiscalDispatchDependencies)=>(async(i
  }catch{throw unknown();}finally{clearTimeout(timeout);}
 });
 export const dispatchMSellerDocument=createMSellerDispatcher({outboxRows:async id=>{if(!dbAdapter.getFiscalAppliedSourceRows)throw Error('FISCAL_NATIVE_CAS_REQUIRED');return dbAdapter.getFiscalAppliedSourceRows(id);},assertReady:requireFiscalErpAppliedReceipt,context:captureFiscalBoundContext,
- catalog:async()=>{const session=await getLargeMasterSyncV3OperationalSession();await session.assertCurrent();return {...session.ready.runtime.version,binding:session.binding};},
+ // Fiscal submission of an already committed document only needs the binding, so it must never
+ // negotiate a master: a refresh at this point cannot change a document that was already issued.
+ catalog:async()=>{const session=await getLargeMasterSyncV3RetainedSession();await session.assertCurrent();return {...session.ready.runtime.version,binding:session.binding};},
  get:(collection,id)=>db.getDocument(collection as any,id),commit:async mutations=>{if(!dbAdapter.supportsV3FiscalMetadataCAS||!dbAdapter.saveDocumentsAtomically)throw Error('FISCAL_NATIVE_CAS_REQUIRED');await dbAdapter.saveDocumentsAtomically(mutations);},fetchImpl:(input,init)=>fetch(input,init)});
