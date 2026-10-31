@@ -1,5 +1,6 @@
 import { assertRefundFinancialSource,assertRefundOriginalState,assertRefundCommercialVersion } from './sync/LargeMasterSyncV3RefundAuthority';
 import { BusinessConfig, CartItem, Transaction } from '../types';
+import type { V3TaxClassificationObservation } from './db/LargeMasterSyncV3FinancialRetention';
 import { isV3FinancialDocument, persistV3FinancialTransaction, readV3CommittedRefundReplay } from './sync/LargeMasterSyncV3FinancialCommit';
 import { db } from '../utils/db';
 import { getRemainingRefundQuantities, hasRefundableItems } from '../utils/refundAvailability';
@@ -16,6 +17,8 @@ interface PersistRefundOptions {
   persistOriginal?: boolean;
   adjustCustomerBalance?: boolean;
   skipWalletDeposit?: boolean;
+  /** Audit-only evidence for the ERP journal NOTA when the tax classification drifted. */
+  taxClassificationNotice?: V3TaxClassificationObservation[];
 }
 
 const emitCollectionUpdate = (collection: 'transactions' | 'products' | 'productStocks') => {
@@ -99,7 +102,8 @@ export async function persistStandaloneRefundTransaction(
     const result = await persistV3FinancialTransaction(persistedRefund, config, options.warehouseId,
       { refund: true, conditions: options.conditions, original: updatedOriginal,
         expectedOriginal: expectedOriginal || undefined, expectedOriginalHistory, originalCollection,
-        adjustCustomerBalance: options.adjustCustomerBalance, skipWalletDeposit: options.skipWalletDeposit });
+        adjustCustomerBalance: options.adjustCustomerBalance, skipWalletDeposit: options.skipWalletDeposit,
+        taxClassificationNotice: options.taxClassificationNotice });
     if (result.created) {
       emitCollectionUpdate('transactions');
       import('./sync/BackgroundSyncManager').then(module => { void module.backgroundSyncManager.triggerSync().catch(console.error); });

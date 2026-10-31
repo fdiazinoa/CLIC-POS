@@ -26,7 +26,8 @@ import { buildV3FrozenFiscalProviderTransaction } from './components/v3Operation
 import { captureFiscalStatusBoundContext } from './services/fiscal/FiscalBoundContext';
 import { readLargeMasterSyncV3BoundIdentity } from './services/sync/LargeMasterSyncV3BoundTransport';
 import { assertLargeMasterSyncV3NativeAndroid } from './services/sync/LargeMasterSyncV3Platform';
-import { getLargeMasterSyncV3OperationalSession, v3BindingKey } from './services/sync/LargeMasterSyncV3OperationalSession';
+import { getLargeMasterSyncV3OperationalSession, getLargeMasterSyncV3RetainedSession, v3BindingKey } from './services/sync/LargeMasterSyncV3OperationalSession';
+import type { V3TaxClassificationNotice } from './services/sync/LargeMasterSyncV3OperationalSession';
 import { assertLargeMasterSyncV3SetupContract, largeMasterSyncV3DownloadOrigin } from './services/sync/LargeMasterSyncV3DownloadOrigin';
 import { completeLargeMasterSyncV3Setup } from './services/sync/LargeMasterSyncV3SetupCompletion';
 import { createV3Progress, type V3Progress } from './services/sync/LargeMasterSyncV3Progress';
@@ -40,6 +41,7 @@ import { isRecoveredOperation } from './services/recovery/PendingOperationsRecov
 import { recordCheckoutDiagnostic } from './services/CheckoutDiagnostics';
 import { allowsDefaultPaymentMethods } from './utils/erpPaymentMethods';
 import { canExitTableMapToDirectSale } from './utils/tableMapExitPermission';
+import { describeV3Error } from './utils/v3ErrorMessages';
 import { createStartupTrace } from './utils/startupTrace';
 import { freezeCount, freezePhase } from './diagnostics/freezeCounters';
 import { markWebviewProfileNavigation } from './diagnostics/webviewProfileMarks';
@@ -11034,7 +11036,7 @@ const AppContent: React.FC = () => {
         if (JSON.stringify(await snapshot()) !== fingerprint) throw new Error('FISCAL_STATUS_SCOPE_CHANGED');
       }};
     }
-    const session = await getLargeMasterSyncV3OperationalSession();
+    const session = await getLargeMasterSyncV3RetainedSession();
     await session.assertCurrent();
     const persisted = resolvePersistedBusinessConfig(await db.get('config') as unknown);
     if (!persisted || !dbAdapter.supportsV3FiscalMetadataCAS) throw new Error('FISCAL_STATUS_NATIVE_REQUIRED');
@@ -11096,7 +11098,7 @@ const AppContent: React.FC = () => {
     if (LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED && current?.v3InventoryBaseline) {
       const history = await db.getDocument('transactionHistory',nextTransaction.id) as Transaction | null;
       if (!history || !dbAdapter.saveDocumentsAtomically) throw new Error('FISCAL_STATUS_SOURCE_REQUIRED');
-      const session = await getLargeMasterSyncV3OperationalSession();await session.assertCurrent();
+      const session = await getLargeMasterSyncV3RetainedSession();await session.assertCurrent();
       const catalog = { ...session.ready.runtime.version,binding:session.binding };
       await dbAdapter.saveDocumentsAtomically([
         {collectionName:'transactions',document:nextTransaction,expectedDocument:JSON.stringify(current),v3CurrentCatalog:catalog},
@@ -11371,11 +11373,14 @@ const AppContent: React.FC = () => {
         // Keep deterministic pre-submit evidence and unresolved attempts intact, even if config validation fails.
         if (transaction.fiscalProviderStatus === 'V3_ISSUE_REQUESTED' && !getExistingFiscalProviderReference(transaction)
           && !(transaction.fiscalClassificationProjection && transaction.fiscalClassificationAttemptedAt && explicitClassificationRetry)) return;
-        const session = await getLargeMasterSyncV3OperationalSession();
+        // Sealing a reversal repeats the issued document, so it reads the ticket's own tax photo and
+        // never negotiates a master. A sale keeps the live-catalog projection exactly as before.
+        const sealReversal = transaction.documentType === 'REFUND' || Boolean(transaction.originalTransactionId);
+        const session = await (sealReversal ? getLargeMasterSyncV3RetainedSession() : getLargeMasterSyncV3OperationalSession());
         await session.assertCurrent();
         const stamp = transaction.items[0]?.v3SaleAuthority;
         if (!stamp) throw new Error('SYNC_V3_CART_LEGACY_LINE');
-        fiscalConfig = await session.projectConfig(config);
+        fiscalConfig = sealReversal ? await session.projectRefundConfig(config, stamp, transaction.items) : await session.projectConfig(config);
         const retained = await session.validate(fiscalConfig, transaction.items, stamp.tariffId, stamp.warehouseId || '',
           'REFUND', undefined, { originalTransactionId: transaction.id }, true);
         validateV3FrozenFiscalAmounts(transaction, retained);
@@ -11524,7 +11529,7 @@ const AppContent: React.FC = () => {
       const original = await db.getDocument('transactions', transaction.id) as Transaction | null;
       if (!original || !dbAdapter.saveDocumentsAtomically) throw new Error('FISCAL_CLASSIFICATION_STALE');
       const consumed = await consumeFiscalClassificationAttempt(original);
-      const session = await getLargeMasterSyncV3OperationalSession();
+      const session = await getLargeMasterSyncV3RetainedSession();
       await session.assertCurrent();
       await dbAdapter.saveDocumentsAtomically([{ collectionName: 'transactions', document: consumed, v3FiscalMetadataOperation: 'CLASSIFICATION_ATTEMPT_CONSUME',
         expectedDocument: JSON.stringify(original), v3CurrentCatalog: { syncId: session.ready.runtime.version.syncId,
@@ -13064,11 +13069,21 @@ const AppContent: React.FC = () => {
     }
 
     let refundConfig = config;
+    // A credit note reverses a document that was already issued: it is built from the ticket's own
+    // snapshot and must never wait for, or trigger, a catalog refresh. Drift is reported, not blocked.
+    const refundClassificationNotices: V3TaxClassificationNotice[] = [];
     if (LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED) {
-      const session = await getLargeMasterSyncV3OperationalSession();
-      refundConfig = await session.projectConfig(config);
       const stamp = normalizedRefundItems[0]?.v3SaleAuthority;
-      await session.validate(refundConfig, normalizedRefundItems, stamp?.tariffId || '', stamp?.warehouseId || '', 'REFUND', undefined, { originalTransactionId: originalTx.id });
+      const session = await getLargeMasterSyncV3RetainedSession();
+      // Amounts also come from the ticket's tax photo: a repeated rate is never re-priced by today's master.
+      refundConfig = stamp ? await session.projectRefundConfig(config, stamp, normalizedRefundItems) : await session.projectConfig(config);
+      await session.validate(refundConfig, normalizedRefundItems, stamp?.tariffId || '', stamp?.warehouseId || '', 'REFUND', undefined,
+        { originalTransactionId: originalTx.id }, false, notice => {
+          if (!refundClassificationNotices.some(row => row.taxId === notice.taxId)) refundClassificationNotices.push(notice);
+        });
+      if (refundClassificationNotices.length) {
+        console.warn('⚠️ [refund] clasificación fiscal distinta en el maestro actual:', refundClassificationNotices);
+      }
     }
 
     // 1. Calculations
@@ -13273,6 +13288,8 @@ const AppContent: React.FC = () => {
         persistOriginal: !originalTx.erpRefundSource,
         adjustCustomerBalance: LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED,
         skipWalletDeposit: options.skipWalletDeposit,
+        // Evidence for the ERP journal NOTA when the tax classification drifted since the sale.
+        taxClassificationNotice: refundClassificationNotices,
         conditions
       }
     );
@@ -14558,10 +14575,11 @@ const AppContent: React.FC = () => {
                 return await handleProcessRefund(tx, items || [], validConditions, actualReason, options);
               } catch (refundError: any) {
                 console.error('❌ Refund flow failed:', refundError);
+                const refundDetail = describeV3Error(refundError);
                 if (options?.settlementMode === 'CARD_VOID') {
-                  alert(`AZUL anuló el pago, pero el POS no pudo completar la nota de crédito.\nDetalle: ${refundError?.message || 'Error desconocido'}`);
+                  alert(`AZUL anuló el pago, pero el POS no pudo completar la nota de crédito.\nDetalle: ${refundDetail}`);
                 } else {
-                  alert(`Error procesando devolución: ${refundError?.message || 'Error desconocido'}`);
+                  alert(`Error procesando devolución: ${refundDetail}`);
                 }
                 throw refundError;
               }
