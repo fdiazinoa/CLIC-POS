@@ -6,6 +6,7 @@ import { X, RotateCcw, AlertTriangle, Check, Archive, Trash2, ListChecks } from 
 import { Transaction, CartItem, RefundProcessingOptions } from '../types';
 import { refundLine } from '../services/articleFormats/domain';
 import { getRefundItemKey, hasRefundableItems } from '../utils/refundAvailability';
+import { describeV3Error } from '../utils/v3ErrorMessages';
 
 type RefundModalMode = 'STANDARD' | 'AZUL_GATEWAY_REFUND';
 
@@ -134,7 +135,7 @@ export const RefundModal: React.FC<RefundModalProps> = ({
 
         if((transaction as any).articleFormatWire?.schema_version===2&&!fiscalCode)throw Error('Selecciona el motivo fiscal de la nota de crédito.');
         await onConfirm(transaction, itemsToRefund, itemConditions, reason || 'Devolución General',(transaction as any).articleFormatWire?.schema_version===2?{fiscalOperationId:fiscalOperationRef.current,fiscalOperationKind:fiscalKind,fiscalModificationCode:fiscalCode as '1'|'2'|'3'}:undefined);
-        } catch(error) { setSubmitError(error instanceof Error ? error.message : 'No se pudo completar la devolución.'); }
+        } catch(error) { setSubmitError(describeV3Error(error)); }
         finally { submittingRef.current=false; setSubmitting(false); }
     };
 

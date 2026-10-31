@@ -41,6 +41,7 @@ import { isRecoveredOperation } from './services/recovery/PendingOperationsRecov
 import { recordCheckoutDiagnostic } from './services/CheckoutDiagnostics';
 import { allowsDefaultPaymentMethods } from './utils/erpPaymentMethods';
 import { canExitTableMapToDirectSale } from './utils/tableMapExitPermission';
+import { describeV3Error } from './utils/v3ErrorMessages';
 import { createStartupTrace } from './utils/startupTrace';
 import { freezeCount, freezePhase } from './diagnostics/freezeCounters';
 import { markWebviewProfileNavigation } from './diagnostics/webviewProfileMarks';
@@ -14574,10 +14575,11 @@ const AppContent: React.FC = () => {
                 return await handleProcessRefund(tx, items || [], validConditions, actualReason, options);
               } catch (refundError: any) {
                 console.error('❌ Refund flow failed:', refundError);
+                const refundDetail = describeV3Error(refundError);
                 if (options?.settlementMode === 'CARD_VOID') {
-                  alert(`AZUL anuló el pago, pero el POS no pudo completar la nota de crédito.\nDetalle: ${refundError?.message || 'Error desconocido'}`);
+                  alert(`AZUL anuló el pago, pero el POS no pudo completar la nota de crédito.\nDetalle: ${refundDetail}`);
                 } else {
-                  alert(`Error procesando devolución: ${refundError?.message || 'Error desconocido'}`);
+                  alert(`Error procesando devolución: ${refundDetail}`);
                 }
                 throw refundError;
               }
