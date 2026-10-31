@@ -1,4 +1,5 @@
 import {assertDopFiscalSettlement} from './DopFiscalSettlement';
+import { setModifierQuantitiesSupported } from '../../utils/modifierQuantitiesCapability';
 import type {OfflineFiscalAllocation} from './OfflineFiscalAllocation';
 import {cartDigest,isExpiredPrepared,retirementReason,validateRetirementReceipt} from './FiscalWorkflowRetirement';
 import {fiscalWorkflowScopeKey} from './FiscalWorkflowV2Types';
@@ -56,8 +57,11 @@ export function createFiscalWorkflowV2Client({readAuth=captureFiscalStatusBoundC
  let discovering:{key:string;promise:Promise<void>}|null=null;
  const authorityFingerprint=(auth:ReturnType<typeof readAuth>)=>json([auth.base,auth.headers,(auth as any).fingerprint||null]);
  const authorityFor=(auth:ReturnType<typeof readAuth>)=>currentAuthority?.fingerprint===authorityFingerprint(auth)&&currentAuthority.expires>Date.now()?currentAuthority.authorityHash:undefined;
- const request=async(path:string,body?:Record<string,any>,signal?:AbortSignal)=>{
-  const auth=readAuth();auth.assertCurrent();const controller=new AbortController(),abort=()=>controller.abort();signal?.addEventListener('abort',abort,{once:true});const timer=setTimeout(abort,8000);
+ /** The ERP retirement proves document coverage; it legitimately takes longer than a command. */
+const RETIREMENT_TIMEOUT_MS = 30_000;
+
+const request=async(path:string,body?:Record<string,any>,signal?:AbortSignal,timeoutMs=8000)=>{
+  const auth=readAuth();auth.assertCurrent();const controller=new AbortController(),abort=()=>controller.abort();signal?.addEventListener('abort',abort,{once:true});const timer=setTimeout(abort,timeoutMs);
   try{const response=await fetchImpl(`${auth.base}/fiscal/workflow/v2/${path}`,{method:body?'POST':'GET',headers:{...auth.headers,Accept:'application/json',...(body?{'Content-Type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{}),credentials:'omit',cache:'no-store',redirect:'error',signal:controller.signal});const data=await response.json();auth.assertCurrent();if(!response.ok)fail(typeof data?.code==='string'?data.code:'FISCAL_WORKFLOW_UNAVAILABLE');if(JSON.stringify(data).length>600000)fail();return {data,auth};}finally{clearTimeout(timer);signal?.removeEventListener('abort',abort);}
  };
  return {
@@ -114,6 +118,128 @@ export function createFiscalWorkflowV2Client({readAuth=captureFiscalStatusBoundC
   if(checkout&&checkout.scopeKey!==key)fail('FISCAL_WORKFLOW_CHECKOUT_RECONCILIATION_REQUIRED');return checkout||null;
  },
  async localCheckout(accountId?:string,tableId?:string):Promise<FiscalWorkflowCheckoutV2|null>{const authority=await readOfflineAuthority(),key=fiscalWorkflowScopeKey(authority.scope),native=store();return accountId&&tableId&&await native?.checkoutForTable?.(key,accountId,tableId)||await native?.currentCheckout(key)||null;},
+ /** Asks the ERP to retire the pending attempt and records its answer. The ERP is the only
+  * authority on whether a document exists: it refuses and nothing changes locally when it does. */
+ async retireUnbornAttempt(operator?:{actorId:string;pin:string}):Promise<{retired:boolean;note:string}>{
+  const native=store();if(!native?.closeUnbornRetirement)return {retired:false,note:'La caja no tiene almacén fiscal local.'};
+  const auth=readAuth();auth.assertCurrent();
+  const key=fiscalWorkflowScopeKey(scopeOf(auth.descriptor)),current=await native.currentCheckout(key);auth.assertCurrent();
+  if(!current)return {retired:false,note:'No hay un intento fiscal pendiente.'};
+  const id=current.checkoutId.slice(0,8);
+  if(['COMMITTED','ACKNOWLEDGED'].includes(current.phase))return {retired:false,note:`El intento ${id} ya está cerrado (${current.phase}).`};
+  if(!current.permit?.permitId)return {retired:false,note:`El intento ${id} no tiene permiso fiscal del ERP.`};
+  const proof:FiscalRetirementProof={schemaVersion:1,commandId:createUuid(),checkoutId:current.checkoutId,transactionId:current.transactionId,
+   permitId:current.permit.permitId,originalOperationId:current.operationId,cartIdentitySha256:await cartDigest(current.cartIdentity),reason:retirementReason};
+  try{
+   const {data}=await request('retire-unborn',{...proof,nonce:current.permit.nonce,...(operator||{})},undefined,RETIREMENT_TIMEOUT_MS);
+   auth.assertCurrent();validateRetirementReceipt(data,proof,scopeOf(auth.descriptor));
+   const closed=await native.closeUnbornRetirement!(key,proof,data);auth.assertCurrent();
+   return {retired:true,note:`El ERP confirmó que el intento ${closed.checkoutId.slice(0,8)} nunca emitió comprobante y lo retiró.`};
+  }catch(error){
+   return {retired:false,note:`El ERP no retiró el intento ${id}: ${error instanceof Error?error.message:String(error)}. Verifícalo en el ERP antes de volver a cobrar.`};
+  }
+ },
+ /** Supervised break-glass: the ERP retirement service answered that it is disabled, the
+  * attempt has no local effects, and a supervisor authorized freeing the box. */
+ async releasePendingAttempt(actor:string):Promise<{released:boolean;note:string}>{
+  const native=store();if(!native?.releaseAttemptWithoutErp)return {released:false,note:'La caja no tiene almacén fiscal local.'};
+  const auth=readAuth();auth.assertCurrent();
+  const key=fiscalWorkflowScopeKey(scopeOf(auth.descriptor)),current=await native.currentCheckout(key);auth.assertCurrent();
+  if(!current)return {released:false,note:'No hay un intento fiscal pendiente.'};
+  const id=current.checkoutId.slice(0,8);
+  if(!['PREPARED','EFFECT_POSSIBLE'].includes(current.phase))return {released:false,note:`El intento ${id} ya está cerrado (${current.phase}).`};
+  // A tender the provider declined cannot hold money: it is the only payment a release may carry.
+  const intents=native.intentStates?await native.intentStates(current.transactionId).catch(()=>[]):[];
+  const unsettled=intents.filter(intent=>String(intent.status||'').toUpperCase()!=='DECLINED');
+  if(unsettled.length)return {released:false,note:`El intento ${id} tiene cobros sin resolver (${unsettled.map(intent=>intent.status).join(', ')}). Confirma el voucher o regulariza el cobro antes de liberar.`};
+  const releasedPayments=intents.map(intent=>intent.paymentId);
+  try{await native.releaseAttemptWithoutErp(current,actor,{releasedPayments});return {released:true,note:`Se liberó la caja del intento ${id}. Queda registrado quién lo autorizó; verifica en el ERP que no exista comprobante para ese intento.`};}
+  catch(error){return {released:false,note:`No se pudo liberar el intento ${id}: ${error instanceof Error?error.message:String(error)}`};}
+ },
+ /** Read-only snapshot of the fiscal attempt held by this terminal. Never mutates state. */
+ async pendingCheckoutInfo():Promise<{checkoutId:string;phase:string;operationId:string;cartIdentity:string;payments:number;permitExpiresAt:string|null;permitId:string|null;offlineBindingHash:string|null;localBindingHash:string|null;leaseId:string|null}|null>{
+  try{const auth=readAuth(),native=store();if(!native)return null;const current=await native.currentCheckout(fiscalWorkflowScopeKey(scopeOf(auth.descriptor)));
+   if(!current)return null;const local=await readOfflineAuthority().catch(()=>null);
+   return {checkoutId:current.checkoutId,phase:current.phase,operationId:current.operationId,cartIdentity:current.cartIdentity,payments:(current.paymentIds||[]).length,permitExpiresAt:current.permit?.expiresAt||null,permitId:current.permit?.permitId||null,offlineBindingHash:current.offlineBindingHash||null,localBindingHash:local?.bindingHash||null,leaseId:current.permit?.leaseId||null};
+  }catch{return null;}
+ },
+ /** Releases an attempt that can never reconcile with the current cart or authority.
+  * Only PREPARED attempts without payment effects are eligible; anything with a possible
+  * effect is reported and left untouched for ERP verification. */
+ async cancelUnreconcilableAttempt(options:{tags?:string[];cartIdentity?:string;operator?:{actorId:string;pin:string}}={}):Promise<{cancelled:boolean;note:string}>{
+  const native=store();if(!native)return {cancelled:false,note:'La caja no tiene almacén fiscal local.'};
+  const auth=readAuth();auth.assertCurrent();
+  const key=fiscalWorkflowScopeKey(scopeOf(auth.descriptor)),current=await native.currentCheckout(key);auth.assertCurrent();
+  if(!current)return {cancelled:false,note:'No hay un intento fiscal pendiente.'};
+  const id=current.checkoutId.slice(0,8);
+  if(['COMMITTED','ACKNOWLEDGED'].includes(current.phase))return {cancelled:false,note:`El intento ${id} ya está cerrado (${current.phase}).`};
+  if(!['PREPARED','EFFECT_POSSIBLE'].includes(current.phase))return {cancelled:false,note:`El intento ${id} está en un estado que requiere revisión manual (${current.phase}).`};
+  const tags=[...new Set((options.tags||[]).filter(Boolean))];
+  const sameOperation=tags.length>0&&tags.every(tag=>tag===current.operationId);
+  const local=await readOfflineAuthority().catch(()=>null);
+  const sameBinding=Boolean(local&&current.offlineBindingHash===local.bindingHash);
+  const expiresAt=Date.parse(current.permit?.expiresAt||'');
+  const expired=Number.isFinite(expiresAt)&&expiresAt<=Date.now();
+  const sameTicket=sameOperation&&(!options.cartIdentity||options.cartIdentity===current.cartIdentity)
+   &&(!current.offlineBindingHash||sameBinding);
+  if(sameTicket&&!expired)return {cancelled:false,note:`El intento ${id} corresponde a este mismo ticket.`};
+  // 1. An offline-lease attempt never leaves the terminal: its own abandon proof is authoritative,
+  //    even with a payment marked as possible, because the number is consumed by the local commit.
+  if(current.permit?.leaseId&&native.abandonOfflinePrepared){
+   try{await native.abandonOfflinePrepared(current);return {cancelled:true,note:`Se descartó el intento fiscal ${id} sin efectos.`};}catch{/* the paid offline release below */}}
+  if(current.phase==='EFFECT_POSSIBLE'&&current.permit?.leaseId&&native.abandonPreparedWithoutEffects){
+   try{await native.abandonPreparedWithoutEffects(current,{allowOfflineEffect:true});return {cancelled:true,note:`Se descartó el intento fiscal offline ${id} sin comprobante emitido.`};}
+   catch(error){return {cancelled:false,note:`No se pudo descartar el intento ${id}: ${error instanceof Error?error.message:String(error)}`};}
+  }
+  // 2. An online PREPARED attempt with no effects is provably local too: release it here instead of
+  //    depending on an ERP service that may be disabled.
+  if(current.phase==='PREPARED'&&native.abandonPreparedWithoutEffects&&current.permit?.permitId){
+   try{await native.abandonPreparedWithoutEffects(current);return {cancelled:true,note:`Se descartó el intento fiscal ${id} sin efectos.`};}catch{/* the ERP keeps the last word */}}
+  // 3. A paid online attempt is only discardable by the ERP: it is the authority on the document.
+  if(current.permit?.permitId){
+   const retired=await this.retireUnbornAttempt(options.operator);
+   if(retired.retired)return {cancelled:true,note:retired.note};
+   const disabled=/FISCAL_WORKFLOW_(DISABLED|UNAVAILABLE)|HTTP_5\d\d/i.test(retired.note);
+   const documented=/COMPROBANTE|DOCUMENT|EFFECT|ISSUED|BORN|EMITIDO/i.test(retired.note);
+   if(current.phase==='EFFECT_POSSIBLE')return {cancelled:false,note:`${retired.note} El intento ya tiene un pago: no se puede descartar sin la confirmación del ERP.`};
+   if(documented&&!disabled)return {cancelled:false,note:retired.note};
+   return {cancelled:false,note:retired.note};
+  }
+  // 4. No permit at all and no effects.
+  if(native.abandonPreparedWithoutEffects){
+   try{await native.abandonPreparedWithoutEffects(current);return {cancelled:true,note:`Se descartó el intento fiscal ${id} sin efectos.`};}
+   catch(error){return {cancelled:false,note:`No se pudo descartar el intento ${id}: ${error instanceof Error?error.message:String(error)}`};}
+  }
+  return {cancelled:false,note:`El intento ${id} requiere verificación en el ERP antes de continuar.`};
+ },
+ /** What the deployed ERP says about its own fiscal workflow flags (read-only, no auth). */
+ async erpDeployment():Promise<{onlineRetirement:string;host:string}>{
+  try{const auth=readAuth();const response=await fetchImpl(`${auth.base}/version`,{method:'GET',headers:{Accept:'application/json'},credentials:'omit',cache:'no-store',redirect:'error'});
+   const data=await response.json().catch(()=>null);const flag=(data as any)?.fiscalWorkflowV2;
+   if(flag&&typeof flag.retirement==='boolean')return {onlineRetirement:flag.retirement?'activo':'desactivado',host:String(auth.base||'')};
+   return {onlineRetirement:'no informado',host:String(auth.base||'')};}catch{return {onlineRetirement:'sin respuesta',host:''};}
+ },
+ async diagnostics():Promise<{authStatus:string;scope:string;session:string;enabled:boolean;offlineReady:boolean;readiness:string;attempt:string;payments:string;erpRetirement:string;binding:string;lease:string;lastError:string}>{
+  const out={authStatus:'',scope:'',session:'',enabled:false,offlineReady:false,readiness:'',attempt:'SIN INTENTO',payments:'SIN INTENTO',erpRetirement:'sin consultar',binding:'',lease:'SIN RESERVA',lastError:leasePreparationError||allocationPreparationError||''};
+  try{const auth=readAuth();out.authStatus='OK';out.scope=`${auth.descriptor.storeId.slice(0,8)} · ${auth.descriptor.terminalId.slice(0,8)}`;const expiry=(auth as any).sessionExpiresAt;out.session=expiry?new Date(expiry).toLocaleString('es-DO'):'sin vencimiento';out.enabled=this.enabled();}catch(error){out.authStatus=error instanceof Error?error.message:String(error);return out;}
+  try{const erp=await this.erpDeployment();out.erpRetirement=erp.onlineRetirement+(erp.onlineRetirement==='no informado'?' (versión del ERP anterior)':'');}catch{out.erpRetirement='sin respuesta';}
+  try{const readiness=await this.offlineReadiness();out.readiness=`${readiness.reason}${readiness.code?` (${readiness.code})`:''}`;
+   // A disabled optional feature is not an error when the local reserve is already ready.
+   if(/READY/.test(readiness.reason))out.lastError='';}catch(error){out.readiness=error instanceof Error?error.message:String(error);}
+  out.offlineReady=await this.offlineReady().catch(()=>false);
+  try{const native=store(),local=await readOfflineAuthority().catch(()=>null);
+   if(local&&native){const key=fiscalWorkflowScopeKey(local.scope);const current=await native.currentCheckout(key).catch(()=>null);
+    if(current)out.attempt=`${current.phase} · ${current.checkoutId.slice(0,8)} · ${(current.paymentIds||[]).length} pago(s)`;
+    if(current&&native.intentStates){const states=await native.intentStates(current.transactionId).catch(()=>[] as Array<{paymentId:string;status:string}>);
+     // A bound payment intent is why a local release refuses an attempt with a payment.
+     out.payments=states.length?states.map(state=>`${state.paymentId.slice(-6)}:${state.status}`).join(' · '):'sin intentos de pago';}
+    out.binding=local?'autoridad local OK':'sin autoridad local';
+    if(current)out.binding+=current.offlineBindingHash?(current.offlineBindingHash===local.bindingHash?' · misma vinculación':' · vinculación anterior'):' · sin vinculación offline';
+    if(native.offlineLease){const lease=await native.offlineLease(local,true).catch(()=>null);if(lease)out.lease=`${lease.leaseId.slice(0,8)} · ${await native.offlineLeasePermitCount?.(lease.leaseId,true)||0} disponibles · hasta ${lease.validUntil}`;}
+   }else out.binding='sin autoridad local';
+  }catch(error){out.binding=error instanceof Error?error.message:String(error);}
+  return out;
+ },
  async offlineReady():Promise<boolean>{const readiness=await this.offlineReadiness();if(readiness.reason==='READY_ALLOCATION')return true;try{const native=store();if(!native?.offlineLease)return false;const authority=await readOfflineAuthority();if(await native.offlineLease(authority))return true;const current=await native.currentCheckout(fiscalWorkflowScopeKey(authority.scope));return Boolean(current?.phase==='EFFECT_POSSIBLE'&&current.permit?.leaseId&&current.offlineBindingHash===authority.bindingHash&&Number.isFinite(Date.parse(current.offlineEffectAt||''))&&Date.parse(current.offlineEffectAt!)<Date.parse(current.permit.expiresAt));}catch(error){if(error instanceof Error&&error.message==='OFFLINE_FISCAL_BINDING_CHANGED')await store()?.revokeOfflineLeases?.('*');return false;}},
  prefetchOfflineLease():Promise<void>{
   if(offlinePrefetch)return offlinePrefetch;
@@ -179,12 +305,20 @@ export function createFiscalWorkflowV2Client({readAuth=captureFiscalStatusBoundC
   const promise=(async()=>{
    const {data}=await request('capability');auth.assertCurrent();if(epoch!==generation)fail('FISCAL_WORKFLOW_CONTEXT_CHANGED');
    const keys=['schemaVersion','capability','version','scope','authorityHash','sessionExpiresAt'];
-   const expires=Date.parse(data?.sessionExpiresAt),localExpires=Date.parse((auth as any).sessionExpiresAt||data?.sessionExpiresAt),now=Date.now();
-   if(!data||typeof data!=='object'||Array.isArray(data)||Object.keys(data).length!==keys.length||keys.some(k=>!Object.prototype.hasOwnProperty.call(data,k))
+   // One additive, optional field: the ERP announces it accepts modifier quantities.
+   const optional=['modifierQuantities'];
+   const now=Date.now();
+   // An open-ended session declares no date; a declared date must still be in the future.
+   const current=(value:unknown)=>value==null||value===''||typeof value==='string'&&Number.isFinite(Date.parse(value))&&Date.parse(value)>now;
+   const lifetime=(value:unknown)=>typeof value==='string'&&Number.isFinite(Date.parse(value))?Math.max(0,Date.parse(value)-now):300000;
+   const expires=data?.sessionExpiresAt,localExpires=(auth as any).sessionExpiresAt||data?.sessionExpiresAt;
+   if(!data||typeof data!=='object'||Array.isArray(data)||Object.keys(data).some(k=>!keys.includes(k)&&!optional.includes(k))||keys.some(k=>!Object.prototype.hasOwnProperty.call(data,k))
     ||data.schemaVersion!==2||data.capability!=='fiscalWorkflowV2'||data.version!==2||!contexts(data.scope,scopeOf(auth.descriptor))
-    ||typeof data.sessionExpiresAt!=='string'||!/^[a-f0-9]{64}$/.test(data.authorityHash)||!Number.isFinite(expires)||!Number.isFinite(localExpires)||Math.min(expires,localExpires)<=now)fail();
+    ||!current(expires)||!/^[a-f0-9]{64}$/.test(data.authorityHash)||!current(localExpires))fail();
+   if(data.modifierQuantities!==undefined&&data.modifierQuantities!==1)fail();
+   setModifierQuantitiesSupported(data.modifierQuantities===1);
    // Discovery grants availability only. The normal permit response must still prove its own authority.
-   observeFiscalWorkflowCapability(auth.base,auth.headers,'2',now,Math.min(300000,expires-now,localExpires-now));
+   observeFiscalWorkflowCapability(auth.base,auth.headers,'2',now,Math.min(300000,lifetime(expires),lifetime(localExpires)));
   })().finally(()=>{if(discovering?.promise===promise)discovering=null;});discovering={key,promise};return promise;
  },
  prefetch():Promise<void>{
@@ -210,6 +344,22 @@ export function createFiscalWorkflowV2Client({readAuth=captureFiscalStatusBoundC
    fail('FISCAL_WORKFLOW_PERMIT_REQUIRED');
   })().finally(()=>{refills.delete(refillKey);});refills.set(refillKey,refill);return refill;
  },
+ /** A checkout left by a previous terminal binding can never be completed here: its permit
+  *  belongs to the old authority. Retire it through the ERP (`retire-unborn`), which refuses
+  *  when a document already exists. */
+ async retireStaleBindingCheckout():Promise<FiscalRetirementRecord|null>{
+  const auth=readAuth(),epoch=generation;auth.assertCurrent();const native=store();if(!native?.retirement||!native.offlineLease)return null;
+  const key=fiscalWorkflowScopeKey(scopeOf(auth.descriptor)),current=await native.currentCheckout(key);auth.assertCurrent();
+  if(!current||!current.permit?.permitId||!current.offlineBindingHash)return null;
+  let local;try{local=await readOfflineAuthority();}catch{return null;}
+  if(current.offlineBindingHash===local.bindingHash)return null;
+  const saved=await native.retirement(key);if(saved&&saved.checkoutId===current.checkoutId)return saved;
+  const candidate:FiscalRetirementRecord={schemaVersion:1,commandId:createUuid(),checkoutId:current.checkoutId,
+   transactionId:current.transactionId,permitId:current.permit.permitId,originalOperationId:current.operationId,
+   cartIdentitySha256:await cartDigest(current.cartIdentity),reason:retirementReason,scopeKey:key,phase:'CLOSING',receipt:null};
+  if(epoch!==generation)fail('FISCAL_WORKFLOW_CONTEXT_CHANGED');
+  return this.retireExpiredCheckout(candidate);
+ },
  async retirementCandidate():Promise<FiscalRetirementRecord|null>{
   const auth=readAuth(),epoch=generation;auth.assertCurrent();const native=store();if(!native?.retirement)return null;
   const key=fiscalWorkflowScopeKey(scopeOf(auth.descriptor)),current=await native.currentCheckout(key);auth.assertCurrent();
@@ -228,7 +378,7 @@ export function createFiscalWorkflowV2Client({readAuth=captureFiscalStatusBoundC
    if(candidate.phase==='CLOSED'&&candidate.receipt){auth.assertCurrent();return native!.completeRetirement!(key,candidate.receipt);}
    const pending=await native!.beginRetirement!(key,proof);auth.assertCurrent();if(epoch!==generation)fail('FISCAL_WORKFLOW_CONTEXT_CHANGED');
    const original=await native!.readCheckout(pending.checkoutId);auth.assertCurrent();if(!original?.permit||original.permit.permitId!==pending.permitId)fail();
-   const {data}=await request('retire-unborn',{...proof,nonce:original!.permit!.nonce,...(operator?{actorId:operator.actorId,pin:operator.pin}:{})});
+   const {data}=await request('retire-unborn',{...proof,nonce:original!.permit!.nonce,...(operator?{actorId:operator.actorId,pin:operator.pin}:{})},undefined,RETIREMENT_TIMEOUT_MS);
    auth.assertCurrent();if(epoch!==generation)fail('FISCAL_WORKFLOW_CONTEXT_CHANGED');validateRetirementReceipt(data,proof,scopeOf(auth.descriptor));
    const closed=await native!.completeRetirement!(key,data);auth.assertCurrent();if(epoch!==generation)fail('FISCAL_WORKFLOW_CONTEXT_CHANGED');return closed;
   })().finally(()=>retirements.delete(key));retirements.set(key,run);return run;

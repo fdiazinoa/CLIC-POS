@@ -17,9 +17,13 @@ export interface FiscalWorkflowStore {
  allocationCommitPreconditions?(checkout:FiscalWorkflowCheckoutV2):Promise<Array<{collection:string;id:string;expected:string|null}>>;
  allocationDraft?(checkout:FiscalWorkflowCheckoutV2):Promise<{ncf:string;fiscalIssuance:import('../../types').FiscalIssuanceSnapshot;fiscalEnvironment:0|1|2}>;
 
+ /** Payment intents bound to an attempt transaction (why a local release may refuse). */
+ intentStates?(transactionId:string):Promise<Array<{paymentId:string;status:string}>>;
  checkoutForTable?(scopeKey:string,accountId:string,tableId:string):Promise<FiscalWorkflowCheckoutV2|null>;
  abandonedOfflineOperation?(scopeKey:string,operationId:string):Promise<FiscalWorkflowCheckoutV2|null>;
  abandonOfflinePrepared?(expected:FiscalWorkflowCheckoutV2):Promise<void>;
+ abandonPreparedWithoutEffects?(expected:FiscalWorkflowCheckoutV2,options?:{allowOfflineEffect?:boolean}):Promise<void>;
+ releaseAttemptWithoutErp?(expected:FiscalWorkflowCheckoutV2,actor:string,options?:{releasedPayments?:string[]}):Promise<void>;
  saveOfflineLeasePage?(lease:import('./OfflineFiscalLease').OfflineFiscalLease,permits:FiscalWorkflowPermitV2[],authority:import('./OfflineFiscalLease').OfflineFiscalLocalAuthority,serverTime:string):Promise<void>;
  offlineLease?(authority:import('./OfflineFiscalLease').OfflineFiscalLocalAuthority,allowExpired?:boolean,leaseId?:string):Promise<import('./OfflineFiscalLease').OfflineFiscalLease|null>;
  offlineLeaseReason?(authority:import('./OfflineFiscalLease').OfflineFiscalLocalAuthority):Promise<string>;
@@ -38,6 +42,7 @@ export interface FiscalWorkflowStore {
  retirement?(scopeKey:string):Promise<FiscalRetirementRecord|null>;
  beginRetirement?(scopeKey:string,expected:FiscalRetirementProof):Promise<FiscalRetirementRecord>;
  completeRetirement?(scopeKey:string,receipt:FiscalRetirementReceipt):Promise<FiscalRetirementRecord>;
+ closeUnbornRetirement?(scopeKey:string,proof:FiscalRetirementProof,receipt:FiscalRetirementReceipt):Promise<FiscalRetirementRecord>;
  candidates(scopeKey:string,afterId:string,limit:number):Promise<string[]>;
 }
 

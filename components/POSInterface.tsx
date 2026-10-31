@@ -1,3 +1,8 @@
+import { describeV3Error } from '../utils/v3ErrorMessages';
+import { describePresentationError } from '../utils/presentationErrorMessages';
+import { alternativeWarehouseForLines } from '../utils/warehouseScope';
+import { stableCheckoutAttemptId } from '../utils/checkoutAttemptIdentity';
+import { recordCheckoutTrace } from '../services/audit/CheckoutTrace';
 import { scopedWarehousesForStore } from '../utils/warehouseScope';
 import {v3RetainedLineFingerprint} from '../services/sync/LargeMasterSyncV3StockAuthority';
 import {assertTrackingOperationReceipt,type TrackingScope} from '../services/db/TrackingCheckoutOperation';
@@ -265,6 +270,10 @@ export interface V3OperationalPOSBoundary {
    updateRetainedTicket?(id: string, ticket?: ParkedTicket): Promise<void>;
    waitingTickets?(tickets: ParkedTicket[]): Promise<ParkedTicket[]>;
    changeTariff(tariffId: string): void;
+   /** Moves restored/older cart lines to the live stock authority without touching agreed prices. */
+   reanchor?(lines: CartItem[]): Promise<CartItem[] | null>;
+   /** Live inventory generation, used to detect stale cart stamps without extra reads. */
+   liveInventory?: { syncId: string; syncVersion: number; inventoryVersion: number; inventoryCursor: string };
 }
 
 export interface POSInterfaceProps {
@@ -1332,6 +1341,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const onTableOrderClosedRef = useRef(onTableOrderClosed);
    const closedTableOrderIdsRef = useRef<Set<string>>(new Set());
    const paymentFinalizationInFlightRef = useRef(false);
+   /** When the current finalize started: an attempt that never settles must not lock the box. */
+   const paymentFinalizationStartedAtRef = useRef(0);
+   const PAYMENT_FINALIZATION_STALE_MS = 45_000;
    const activeAddTraceRef = useRef<PosInteractionTrace | null>(null);
    const checkoutTraceRef = useRef<PosInteractionTrace | null>(null);
    const paymentModalTraceRef = useRef<PosInteractionTrace | null>(null);
@@ -2149,7 +2161,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    );
    const changeActiveTariff = useCallback((id: string) => {
       try { v3Operational?.changeTariff(id); setActiveTariffId(id); }
-      catch (error: any) { setErrorToast(`V3: ${error.message || error}`); }
+      catch (error: any) { setErrorToast(describeV3Error(error)); }
    }, [v3Operational]);
 
    useEffect(() => {
@@ -2288,7 +2300,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       void v3Operational.search(catalogSearchQuery, categoryFilter === 'ALL' ? null : categoryFilter,
          categoryFilter === 'ALL' ? undefined : categoryLookup.identity.selectionFilter(categoryFilter, effectiveAllowedCategorySet.size === 0
             ? (v3Operational.categories || []).map(category => category.key) : []))
-         .catch(error => { if (current) setErrorToast(`V3: ${error.message || error}`); });
+         .catch(error => { if (current) setErrorToast(describeV3Error(error)); });
       return () => { current = false; };
    }, [v3Operational, catalogSearchQuery, categoryFilter, categoryLookup.aliasToCanonical]);
    const [mobileView, setMobileView] = useState<'PRODUCTS' | 'TICKET'>('PRODUCTS');
@@ -2412,6 +2424,168 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
    }, [activeTable, parkedTickets, transactions, onUpdateCart, cart.length]);
 
+   // Veredicto de la cuenta: solo se muestra cuando la preparación no pudo dejar el cobro listo.
+   // Todo lo que se resuelve solo permanece invisible para el cajero.
+   const [accountHold, setAccountHold] = useState<{ note: string } | null>(null);
+   const accountHoldKeyRef = useRef('');
+   useEffect(() => {
+      const key = currentFiscalCheckoutCartIdentity(offlineTableFiscalContextRef.current);
+      if (accountHoldKeyRef.current === key) return;
+      accountHoldKeyRef.current = key;
+      setAccountHold(null);
+   }, [cart]);
+
+   // Único punto que descarta un intento fiscal que ya no corresponde al carrito actual. Se usa al
+   // abrir el pago y antes de reanclar las líneas, para que no existan dos caminos distintos.
+   const releaseStaleFiscalAttempt = async (options: { identity?: string } = {}): Promise<{ cancelled: boolean; note: string }> => {
+      const pending = await fiscalWorkflowV2Client.pendingCheckoutInfo().catch(() => null);
+      if (!pending || !['PREPARED', 'EFFECT_POSSIBLE'].includes(pending.phase)) return { cancelled: false, note: '' };
+      if (options.identity && pending.cartIdentity === options.identity) return { cancelled: false, note: '' };
+      const outcome = await fiscalWorkflowV2Client.cancelUnreconcilableAttempt(options.identity ? { cartIdentity: options.identity } : {}).catch(() => null);
+      if (outcome?.cancelled) {
+         fiscalCheckoutRef.current = null;
+         fiscalCheckoutOperationRef.current = null;
+         recordCheckoutTrace('ATTEMPT_RELEASED', outcome.note);
+      } else if (outcome?.note) {
+         recordCheckoutTrace('ATTEMPT_HELD', outcome.note);
+      }
+      return outcome || { cancelled: false, note: '' };
+   };
+
+   // Everything that could block the sale is resolved when the payment modal opens, not after the
+   // cashier typed the amount: a stale attempt or an unavailable authority is reported before paying.
+   useEffect(() => {
+      if (!showPaymentModal || !v3Operational) return;
+      let cancelled = false;
+      void (async () => {
+         try {
+            const identity = currentFiscalCheckoutCartIdentity(offlineTableFiscalContextRef.current);
+            const released = await releaseStaleFiscalAttempt({ identity });
+            if (cancelled) return;
+            if (released.cancelled || !released.note) { if (released.cancelled) setAccountHold(null); return; }
+            setAccountHold({ note: released.note });
+            setShowPaymentModal(false);
+            setErrorToast(released.note);
+         } catch { /* the checkout still reports its own message */ }
+      })();
+      return () => { cancelled = true; };
+   }, [showPaymentModal, v3Operational]);
+
+   // The ERP is the authority for the terminal's sale warehouse. When the local copy still points to
+   // another (authorized) warehouse — a stale config snapshot — adopt the ERP value automatically
+   // instead of leaving the cashier stuck at the checkout.
+   const warehouseAlignedRef = useRef('');
+   useEffect(() => {
+      if (!v3Operational) return;
+      const scope = activeTerminalConfig?.inventoryScope;
+      const rows = scope?.warehouses || [];
+      if (!rows.length) return;
+      // Retry on every mount/terminal change until the ERP value is adopted; the ref only records a
+      // successful alignment, never a failed attempt.
+      const key = `${activeTerminalId}:${scope?.defaultSalesWarehouseId || ''}`;
+      if (warehouseAlignedRef.current === key) return;
+      let cancelled = false;
+      void (async () => {
+         try {
+            const { readErpSalesWarehouse, pickAuthorizedWarehouse } = await import('../services/inventoryPresentations/salesWarehouseAlignment');
+            const erp = await readErpSalesWarehouse().catch(() => null);
+            if (!erp || cancelled) return;
+            const match = pickAuthorizedWarehouse(rows, erp);
+            if (!match || !match.id || match.id === scope?.defaultSalesWarehouseId) return;
+            warehouseAlignedRef.current = key;
+            onUpdateConfig({
+               ...config,
+               terminals: config.terminals.map(row => String(row.id) === String(activeTerminalId)
+                  ? { ...row, config: { ...row.config, inventoryScope: { ...scope, defaultSalesWarehouseId: match.id!, defaultWarehouse: match as any } } }
+                  : row),
+            });
+            recordCheckoutTrace('WAREHOUSE_ALIGNED', `Almacén de venta alineado con el ERP: ${match.name || match.code || match.id}`);
+         } catch { /* the checkout still reports a precise message */ }
+      })();
+      return () => { cancelled = true; };
+   }, [v3Operational, activeTerminalId, activeTerminalConfig, config, onUpdateConfig]);
+
+   // Un ticket de mesa abierto ayer conserva sus precios pactados; solo la autoridad de venta
+   // (inventario, tarifa y almacén del día) se mueve a la vigente para que el cobro valide.
+   const reanchorRef = useRef<{ boundary?: unknown; fingerprint: string }>({ fingerprint: '' });
+   useEffect(() => {
+      if (!v3Operational?.reanchor || cart.length === 0) return;
+      const live = v3Operational.liveInventory;
+      if (!live) return;
+      // The warehouse and tariff are part of the sale authority: after changing the box's
+      // default warehouse a saved table is stale even when the inventory generation matches.
+      const liveWarehouse = defaultSalesWarehouseId;
+      const stale = cart.some(line => {
+         const stamp = line.v3SaleAuthority;
+         return !stamp || stamp.inventoryVersion !== live.inventoryVersion
+            || stamp.inventoryCursor !== live.inventoryCursor || stamp.syncId !== live.syncId
+            || stamp.syncVersion !== live.syncVersion
+            || (liveWarehouse ? stamp.warehouseId !== liveWarehouse : false)
+            || (v3Operational.tariffId ? stamp.tariffId !== v3Operational.tariffId : false);
+      });
+      if (!stale) return;
+      const fingerprint = [
+         v3Operational.tariffId,
+         cart.map(line => [
+            line.cartId, line.v3SaleAuthority?.syncId, line.v3SaleAuthority?.syncVersion,
+            line.v3SaleAuthority?.inventoryVersion, line.v3SaleAuthority?.inventoryCursor,
+            line.v3SaleAuthority?.tariffId, line.v3SaleAuthority?.taxIncluded,
+         ].join(':')).join(','),
+      ].join('|');
+      if (reanchorRef.current.boundary !== v3Operational) reanchorRef.current = { boundary: v3Operational, fingerprint: '' };
+      if (reanchorRef.current.fingerprint === fingerprint) return;
+      reanchorRef.current.fingerprint = fingerprint;
+      let cancelled = false;
+      // A stale cart cannot be resumed: a pending attempt bound to the previous lines has to be
+      // released before restating them, otherwise the checkout and the cart disagree forever.
+      const restate = async () => {
+         // A stale cart cannot be resumed: a pending attempt bound to the previous lines has to be
+         // released before restating them (it can also live only in the native store).
+         const released = await releaseStaleFiscalAttempt();
+         if (fiscalCheckoutRef.current || released.note && !released.cancelled) {
+            if (released.note && !released.cancelled) setAccountHold({ note: released.note });
+            return null;
+         }
+         setAccountHold(null);
+         return v3Operational.reanchor(cart);
+      };
+      void restate().then(async lines => {
+         if (cancelled || !lines) return;
+         // Presentation lines keep the master revision of the catalog of their day; adopt the
+         // current master so the checkout can validate them without touching the agreed amount.
+         const runtime = presentationRuntimeRef.current;
+         let next = lines;
+         if (runtime && lines.some(line => line.inventoryPresentation !== undefined)) {
+            try {
+               const cached = await runtime.client.cached();
+               if (cached) {
+                  const masters = await runtime.store.masters(cached.bindingKey, [...new Set(lines.filter(line => line.inventoryPresentation !== undefined).map(line => line.id))]);
+                  const { reconcilePresentationLine } = await import('../services/inventoryPresentations/reconcile');
+                  const failures: string[] = [];
+                  next = lines.map(line => {
+                     if (line.inventoryPresentation === undefined) return line;
+                     const master = masters[line.id];
+                     if (!master) { failures.push(`${line.name}: presentación sin catálogo actual`); return line; }
+                     const outcome = reconcilePresentationLine(line, master);
+                     if (outcome.status === 'reconciled') return outcome.line;
+                     if (outcome.status === 'unavailable') {
+                        failures.push(outcome.reason === 'PRICE_CHANGED'
+                           ? `${line.name}: el precio de la presentación cambió`
+                           : `${line.name}: la presentación ya no está disponible`);
+                     }
+                     return line;
+                  });
+                  if (failures.length) setErrorToast(failures.slice(0, 2).join(' · '));
+               }
+            } catch { /* the checkout reports its own actionable message */ }
+         }
+         if (cancelled) return;
+         onUpdateCart(next);
+         recordCheckoutTrace('CART_REANCHORED', 'Ticket reanclado al inventario vigente sin cambiar precios');
+      }).catch(() => undefined);
+      return () => { cancelled = true; };
+   }, [cart, v3Operational, onUpdateCart]);
+
    useEffect(() => {
       const orderId = String(activeTable?.currentOrderId || '').trim();
       if (!orderId) {
@@ -2459,6 +2633,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       return()=>{disposed=true;generation++;unsubscribe();};
    },[v3Operational,activeTerminalId,config.featureFlags?.ARTICLE_FORMATS]);
    useEffect(()=>{let disposed=false;if(!formatRuntime)return;void Promise.all(baseProducts.slice(0,500).map(async product=>[product.id,await formatRuntime.masters.getPolicy(product.id)] as const)).then(rows=>{if(!disposed)setFormatMasters(Object.fromEntries(rows.filter(([,value])=>value)));});return()=>{disposed=true;};},[formatRuntime,baseProducts]);
+   const [warehousePrompt, setWarehousePrompt] = useState<{ product: Product; candidates: Array<{ id: string; name: string; code?: string }> } | null>(null);
    const [activeCartItemId, setActiveCartItemId] = useState<string | null>(null);
    const handledAccountActionIdsRef = useRef<Set<string>>(new Set());
    useEffect(() => {
@@ -3526,7 +3701,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          if (consignmentPatch || modifiers?.length && !restaurantConfig && !selectedVariant) {
             throw new Error('SYNC_V3_ADVANCED_ARTICLE_CONTRACT_REQUIRED');
          }
-         if(!(product.operationalFlags?.usesLots||product.operationalFlags?.usesSerial)||trackingData)await v3Operational.validate([...latestAddCart.current, { ...product, variantId: selectedVariant?.id || selectedVariant?.variantId, variantSku: selectedVariant?.sku, price: priceOverride ?? resolveVariantSalesPrice(selectedVariant, getProductPrice(product)), originalPrice: priceOverride ?? resolveVariantSalesPrice(selectedVariant, getProductPrice(product)), quantity, modifiers, note, trackingData:trackingData?trackingSelectionsForCart(trackingData,product,'candidate-validation'):undefined, restaurantConfig, selected_modifiers: restaurantConfig?.selected_modifiers, selected_combo_items: restaurantConfig?.selected_combo_items, selected_fraction_parts: restaurantConfig?.selected_fraction_parts, cartId: 'candidate-validation' } as CartItem], { ticketId: activeTable?.currentOrderId || activeDirectV3TicketId, claimId: activeDirectV3TicketId, reservationId:activeV3Reservation?.reservation.id,reservationClaimId:activeV3Reservation?.claimId, tableId: activeTable?.id === undefined ? undefined : String(activeTable.id) });
+         if(!(product.operationalFlags?.usesLots||product.operationalFlags?.usesSerial)||trackingData) {
+            try { await v3Operational.validate([...latestAddCart.current, { ...product, variantId: selectedVariant?.id || selectedVariant?.variantId, variantSku: selectedVariant?.sku, price: priceOverride ?? resolveVariantSalesPrice(selectedVariant, getProductPrice(product)), originalPrice: priceOverride ?? resolveVariantSalesPrice(selectedVariant, getProductPrice(product)), quantity, modifiers, note, trackingData:trackingData?trackingSelectionsForCart(trackingData,product,'candidate-validation'):undefined, restaurantConfig, selected_modifiers: restaurantConfig?.selected_modifiers, selected_combo_items: restaurantConfig?.selected_combo_items, selected_fraction_parts: restaurantConfig?.selected_fraction_parts, cartId: 'candidate-validation' } as CartItem], { ticketId: activeTable?.currentOrderId || activeDirectV3TicketId, claimId: activeDirectV3TicketId, reservationId:activeV3Reservation?.reservation.id,reservationClaimId:activeV3Reservation?.claimId, tableId: activeTable?.id === undefined ? undefined : String(activeTable.id) }); } catch (error: any) {
+            if (String(error?.message || '').includes('SYNC_V3_WAREHOUSE_UNAVAILABLE')) { openWarehousePrompt(product); return false; }
+            throw error;
+         }
+         }
          assertV3UIContext(isCurrent);
          if(restaurantConfig)modifiers=[...(restaurantConfig.selected_modifiers||[]).map((row:any)=>row.name),...(restaurantConfig.selected_combo_items||[]).map((row:any)=>row.name),...(note?[`Nota: ${note}`]:[])];
       }
@@ -3643,7 +3823,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       return true;
       } catch (error: any) {
          if (!v3Operational) throw error;
-         setErrorToast(`V3: ${error.message || error}`);
+         setErrorToast(describeV3Error(error));
          return false;
       } finally {
          if (trace.stages.HANDLER_END === undefined) markInteractionStage(trace, 'HANDLER_END');
@@ -3656,7 +3836,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const context = v3Operational;
       const mounted = uiLifetime.current.capture();
       return addQueue.current.run(() => mounted() && addContext.current === context, () => performAddToCart(...args))
-         .catch((error: any) => { setErrorToast(`V3: ${error.message || error}`); return false; });
+         .catch((error: any) => { setErrorToast(describeV3Error(error)); return false; });
    }, [performAddToCart, v3Operational, rejectFormatQuickReturn, isReturnMode]);
 
    const addSelectedFormat = useCallback(async (product: Product, format: ArticleFormat, price: number, quantity = 1, modifiers: string[] = []) => {
@@ -3701,6 +3881,41 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          setPresentationSelection(null);return addToCart(line as CartItem,quantity,price);
       }catch(error){setErrorToast(error instanceof Error?error.message:String(error));return Promise.resolve(false);}
    },[activeTariffId,isReturnMode,addToCart]);
+
+   /** The sale warehouse is a single terminal setting; offer it when the article is not active there. */
+   const openWarehousePrompt = useCallback((product: Product) => {
+      const storeId = String(activeTerminalConfig?.erpBinding?.storeId || '');
+      const active = (product.activeInWarehouses || []).map(String);
+      const candidates = (warehouses || [])
+         .filter(row => (!storeId || !row.storeId || String(row.storeId) === storeId) && active.includes(String(row.id)))
+         .map(row => ({ id: String(row.id), name: row.name || row.code || String(row.id), code: row.code }));
+      if (!candidates.length) {
+         setErrorToast('Este artículo no está activo en ningún almacén de esta sucursal. Pídele al administrador que lo active en el ERP.');
+         return;
+      }
+      setWarehousePrompt({ product, candidates });
+   }, [warehouses, activeTerminalConfig?.erpBinding?.storeId]);
+
+   const applySaleWarehouse = useCallback((warehouseId: string) => {
+      const target = (warehouses || []).find(row => String(row.id) === warehouseId);
+      const terminalId = activeTerminal?.id;
+      onUpdateConfig({
+         ...config,
+         terminals: (config.terminals || []).map(terminal => terminal.id !== terminalId ? terminal : ({
+            ...terminal,
+            config: {
+               ...terminal.config,
+               inventoryScope: {
+                  ...(terminal.config.inventoryScope as Record<string, unknown> || {}),
+                  defaultSalesWarehouseId: warehouseId,
+                  ...(target ? { defaultWarehouse: target } : {}),
+               } as typeof terminal.config.inventoryScope,
+            },
+         })),
+      });
+      setWarehousePrompt(null);
+      setSuccessToast(`Almacén de venta de la caja: ${target?.name || warehouseId}. Toca el artículo de nuevo.`);
+   }, [warehouses, activeTerminal?.id, config, onUpdateConfig]);
 
    const handleProductClick = useCallback((product: Product) => {
       if (rejectFormatQuickReturn(product)) return;
@@ -4131,7 +4346,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             }
          }
       }
-      } catch (error: any) { setErrorToast(`V3: ${error.message || error}`); }
+      } catch (error: any) { setErrorToast(describeV3Error(error)); }
    }, [searchTerm, routeScannedCoupon, resolveSubmittedCode, v3Operational]);
 
    // --- BARCODE SCANNER LOGIC ---
@@ -4264,7 +4479,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          ? scanQueue.current.run(() => mounted() && addContext.current === context, () => performBarcode(...args))
          : performBarcode(...args);
       return operation.catch((error: any) => {
-         const message = `V3: ${error.message || error}`;
+         const message = describeV3Error(error);
          setErrorToast(message);
          return { success: false, message };
       });
@@ -4313,7 +4528,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          if (document.querySelector('[data-table-map-persistent-host][aria-modal="true"]')) return;
          const barcode = (event as CustomEvent<{ barcode?: string }>).detail?.barcode;
          if (!barcode) return;
-         void processBarcode(barcode).catch(error => setErrorToast(`V3: ${error.message || error}`));
+         void processBarcode(barcode).catch(error => setErrorToast(describeV3Error(error)));
       };
 
       window.addEventListener('barcodeScanned', handleCentralBarcodeScan as EventListener);
@@ -4736,7 +4951,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
 
       retailSearchInputRef.current?.focus();
-      } catch (error: any) { setErrorToast(`V3: ${error.message || error}`); }
+      } catch (error: any) { setErrorToast(describeV3Error(error)); }
    }, [searchTerm, resolveSubmittedCode, filteredProducts, submitProductTextSearch, v3Operational]);
 
    const categoryOptions = useMemo(() => {
@@ -5446,6 +5661,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
    };
 
+   const handleClearAllCartItems = async () => {
+      if (!cart.length) return;
+      if (!await clicConfirm('¿Eliminar todos los artículos del ticket?')) return;
+      onUpdateCart([]);
+   };
+
    const handleClearFreshCartItems = async () => {
       if (blockRecoveredUberOrderMutation('limpiar los artículos nuevos del ticket')) return;
       if (hasSubtotalizedCart) {
@@ -5631,10 +5852,18 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const handlePaymentConfirm = async (payments: PaymentEntry[], voluntaryTip?: number): Promise<Transaction | null> => {
       recordCheckoutDiagnostic('CHECKOUT_CONFIRM', { items: processedCart, expectedItemCount: cart.length, total: cartTotal, payments, tableId: activeTable?.id, orderId: activeTable?.currentOrderId, terminalId: activeTerminalId });
       if (paymentFinalizationInFlightRef.current) {
-         console.warn('[PAYMENT] Se ignoró un segundo intento de finalizar la misma venta.');
-         return null;
+         const startedAt = paymentFinalizationStartedAtRef.current;
+         const stale = !startedAt || Date.now() - startedAt >= PAYMENT_FINALIZATION_STALE_MS;
+         if (!stale) {
+            console.warn('[PAYMENT] Se ignoró un segundo intento de finalizar la misma venta.');
+            // Never answer with a bare null: the cashier would see "revise el motivo" with no motivo.
+            throw new Error('PAYMENT_FINALIZATION_IN_FLIGHT');
+         }
+         // A finalize that never settled (network/native hang) must not leave the box unable to charge.
+         console.warn('[PAYMENT] El intento de cobro anterior quedó sin respuesta; se libera para reintentar.');
       }
       const paymentTrace = getLatestPosInteraction('PAYMENT_CONFIRM');
+      paymentFinalizationStartedAtRef.current = Date.now();
       paymentFinalizationInFlightRef.current = true;
          const withTimeout = async <T,>(promise: Promise<T>, timeoutMs: number, timeoutLabel: string): Promise<T> => {
          let timeoutHandle: number | undefined;
@@ -5691,7 +5920,19 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          }
          assertFormatsPostingClosed(processedCart);
          await assertCheckoutFiscalAuthority();
-         if (v3Operational) await v3Operational.validate(processedCart, { ticketId: activeTable?.currentOrderId || activeDirectV3TicketId, claimId: activeDirectV3TicketId, reservationId:activeV3Reservation?.reservation.id,reservationClaimId:activeV3Reservation?.claimId, tableId: activeTable?.id === undefined ? undefined : String(activeTable.id) });
+         if (v3Operational) {
+            try { await v3Operational.validate(processedCart, { ticketId: activeTable?.currentOrderId || activeDirectV3TicketId, claimId: activeDirectV3TicketId, reservationId:activeV3Reservation?.reservation.id,reservationClaimId:activeV3Reservation?.claimId, tableId: activeTable?.id === undefined ? undefined : String(activeTable.id) }); }
+            catch (error: any) {
+               // Name the warehouse where the ticket's articles actually live: "no disponible" alone
+               // leaves the cashier without a decision.
+               if (/SYNC_V3_WAREHOUSE_UNAVAILABLE/.test(String(error?.message || ''))) {
+                  const alternative = alternativeWarehouseForLines(processedCart as any, warehouses, defaultSalesWarehouseId);
+                  const current = (warehouses || []).find(row => row.id === defaultSalesWarehouseId);
+                  if (alternative) throw Error(`Este ticket usa artículos que no están activos en ${current?.name || current?.code || 'el almacén de esta caja'}; están activos en ${alternative.name}. Cambia el almacén de venta de la caja en Ajustes → Configuración Local o actívalos en el ERP.`);
+               }
+               throw error;
+            }
+         }
          const invalidQuantityItem = processedCart.find(item => !isValidCartQuantity(item.quantity));
          if (invalidQuantityItem) {
             alert(`La cantidad de "${invalidQuantityItem.name}" no es válida. Elimine la línea y agréguela nuevamente.`);
@@ -6300,7 +6541,22 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   observations: uberRecoveredOrder
                      ? `Uber Eats ${uberRecoveredOrder.code} / ${uberRecoveredOrder.sourceOrderId}`
                      : undefined
-               }, { deferDurablePersistence: !isRefundOnly || Boolean(v3Operational) }), 25000, 'TIMEOUT_CREATE_TRANSACTION');
+               }, { deferDurablePersistence: !isRefundOnly || Boolean(v3Operational) }), 25000, 'TIMEOUT_CREATE_TRANSACTION').catch(async (error: any) => {
+                  if (!/TIMEOUT_CREATE_TRANSACTION/.test(String(error?.message || error))) throw error;
+                  // The native commit may have finished after the watchdog fired: the durable
+                  // transaction is the truth. Otherwise the uncertain attempt is released so the
+                  // cashier can retry instead of being locked out by its own previous click.
+                  const pendingId = fiscalCheckoutRef.current?.transactionId || trackingCheckoutRef.current?.transactionId || null;
+                  if (pendingId) {
+                     const committed = await db.getDocument('transactions', pendingId).catch(() => null)
+                        || await db.getDocument('transactionHistory', pendingId).catch(() => null);
+                     if (committed) return committed as any;
+                  }
+                  const released = await fiscalWorkflowV2Client.cancelUnreconcilableAttempt({ tags: [...new Set(cart.map(line => (line as any).fiscalCheckoutOperationId).filter(Boolean))] as string[] }).catch(() => null);
+                  throw Error(released?.cancelled
+                     ? 'La venta no se registró a tiempo. Se liberó el intento anterior; puedes reintentar el cobro.'
+                     : 'La venta no se registró a tiempo. Revisa el intento pendiente en Ajustes → Sistema y Auditoría → Diagnóstico fiscal y reintenta.');
+               });
 
                // Ensure seriesId is preserved (Backend might not return it in the root object)
                const finalTxn = {
@@ -6493,6 +6749,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             markInteractionStage(paymentTrace, 'SQL_END');
          }
          paymentFinalizationInFlightRef.current = false;
+         paymentFinalizationStartedAtRef.current = 0;
       }
    };
 
@@ -6612,7 +6869,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             markInteractionStage(trace, 'HANDLER_END');
             return;
          }
-      } catch (error: any) { setErrorToast(`V3: ${error.message || error}`); return; }
+      } catch (error: any) { setErrorToast(describeV3Error(error)); return; }
       try {
          const recovered=await completeCommittedFiscalReceipt([],()=>{admission.assertCurrent();admission.locked=true;checkoutProgressRef.current?.lock();});
          if(recovered){
@@ -6620,27 +6877,34 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             expectInteractionDestination(trace,'PAYMENT_MODAL');paymentModalTraceRef.current=trace;setShowPaymentModal(true);
             markInteractionStateUpdate(trace,2);markInteractionStage(trace,'HANDLER_END');return;
          }
-      }catch(error:any){setErrorToast(`V3: ${error.message||error}`);return;}
+      }catch(error:any){setErrorToast(describeV3Error(error));return;}
       admission.assertCurrent();
       if(validateFiscal&&!isOrderTakerMode){const validation=validateTerminalDocument(config,terminalId,'TICKET');if(!validation.isValid){alert(validation.error);return;}}
-      try{await assertNewCheckoutFiscalAuthority(admission.assertCurrent);admission.assertCurrent();}
-      catch(error){
-         admission.assertCurrent();
-         const recovered=await completeCommittedFiscalReceipt([],()=>{admission.assertCurrent();admission.locked=true;checkoutProgressRef.current?.lock();});
-         if(recovered){setReceiptOnlyInitialTransaction(recovered);setShowPaymentModal(true);return;}
-         throw error;
-      }
       if (hasV3ReservationCart && !activeV3Reservation) { setErrorToast('La referencia de la reserva aún no está validada.'); return; }
-      if (v3Operational) {
-         try { if(processedCart.some(line=>line.articleFormat)){if(!formatRuntime)throw Error('FISCAL_WORKFLOW_FORMAT_NOT_READY');await formatRuntime.prepareIssuance(requiredSaleFiscalType);}else await v3Operational.validate(cart, { ticketId: activeTable?.currentOrderId || activeDirectV3TicketId, claimId: activeDirectV3TicketId, reservationId:activeV3Reservation?.reservation.id,reservationClaimId:activeV3Reservation?.claimId, tableId: activeTable?.id === undefined ? undefined : String(activeTable.id) }); }
-         catch (error: any) {
+      // La autoridad fiscal y la validación V3 se confirman antes de EMITIR, no antes de mostrar la
+      // pantalla de cobro: el cajero la ve al instante y, si algo falla, el aviso aparece sin haber
+      // cobrado nada. El finalizar vuelve a validar ambas antes de emitir cualquier comprobante.
+      const fiscalConfirmation = (async () => {
+         await assertNewCheckoutFiscalAuthority(admission.assertCurrent);
+         admission.assertCurrent();
+         if (!v3Operational) return;
+         if (processedCart.some(line=>line.articleFormat)) {
+            if (!formatRuntime) throw Error('FISCAL_WORKFLOW_FORMAT_NOT_READY');
+            await formatRuntime.prepareIssuance(requiredSaleFiscalType);
+            return;
+         }
+         await v3Operational.validate(cart, { ticketId: activeTable?.currentOrderId || activeDirectV3TicketId, claimId: activeDirectV3TicketId, reservationId:activeV3Reservation?.reservation.id,reservationClaimId:activeV3Reservation?.claimId, tableId: activeTable?.id === undefined ? undefined : String(activeTable.id) });
+         admission.assertCurrent();
+      })();
+      void fiscalConfirmation.catch(async (error:any) => {
+         if (/CHECKOUT_ADMISSION_CONTEXT_CHANGED/.test(String(error?.message || ''))) return;
+         try {
             admission.assertCurrent();
             const recovered=await completeCommittedFiscalReceipt([],()=>{admission.assertCurrent();admission.locked=true;checkoutProgressRef.current?.lock();});
-            if(recovered){setReceiptOnlyInitialTransaction(recovered);setShowPaymentModal(true);return;}
-            setErrorToast(`V3: ${error.message || error}`);return;
-         }
-         admission.assertCurrent();
-      }
+            if(recovered){setReceiptOnlyInitialTransaction(recovered);setReturnToTableMapAfterPayment(false);expectInteractionDestination(trace,'PAYMENT_MODAL');paymentModalTraceRef.current=trace;setShowPaymentModal(true);markInteractionStateUpdate(trace,2);markInteractionStage(trace,'HANDLER_END');return;}
+         } catch { /* el error original es el que se muestra */ }
+         setErrorToast(describeV3Error(error));
+      });
       if (isOrderTakerMode) {
          admission.assertCurrent();admission.locked=true;checkoutProgressRef.current?.lock();
          try {
@@ -6696,6 +6960,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          handlePaymentConfirm(marketplacePayment ? [marketplacePayment] : []).catch(console.error);
          return;
       }
+      if (processedCart.some(line => line.articleFormat)) await fiscalConfirmation;
       admission.assertCurrent();
       setReturnToTableMapAfterPayment(false);
       recordCheckoutDiagnostic('CHECKOUT_OPEN', { items: processedCart, expectedItemCount: cart.length, total: cartTotal, tableId: activeTable?.id, orderId: activeTable?.currentOrderId, terminalId: activeTerminalId });
@@ -6741,6 +7006,21 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const currentFiscalCheckoutCartIdentity=(fiscalSaleContext=offlineTableFiscalContextRef.current)=>JSON.stringify({...(fiscalSaleContext?{fiscalSaleContext}:{}),...(!activeTable&&cartTip>0?{serviceChargeAmount:cartTip,serviceType:effectiveOrderServiceType,serviceTaxPolicySnapshot:appliedServiceTaxPolicy,discountAmount,taxExempt:isSelectedCustomerTaxExempt}:{}),items:processedCart.map(({fiscalCheckoutOperationId:_op,...line}:any)=>line),customerId:effectiveSelectedCustomer?.id||null,fiscalType:requiredSaleFiscalType});
    const currentTrackingCartIdentity=()=>JSON.stringify({lineSources:processedCart.map(v3RetainedLineFingerprint),lineQuantities:processedCart.map(line=>line.quantity),customerId:effectiveSelectedCustomer?.id||null,fiscalType:requiredSaleFiscalType,tableId:activeTable?.id===undefined?null:String(activeTable.id),accountId:activeTable?.currentOrderId||null,total:amountDueNow,serviceChargeAmount:cartTip});
    const trackingLocalScope=():TrackingScope=>({...readFiscalWorkflowLocalScope(activeTerminalConfig,terminalId),warehouseId:defaultSalesWarehouseId!});
+   // Stable identity for the payment entries of the current cart attempt: retrying a checkout must
+   // not mint new payment ids, otherwise the retained checkout looks like another operation.
+   const paymentAttemptRef=useRef<{cartKey:string;id:string}|null>(null);
+   // El importe de la cuenta guardada puede diferir del de hoy si cambió la tasa de impuesto:
+   // se avisa en una línea antes de emitir, nunca se cobra distinto en silencio.
+   const amountChangeNotice=(()=>{
+      if(!activeTable?.currentOrderId)return null;
+      const parked=parkedTickets.find(ticket=>String(ticket.id)===String(activeTable.currentOrderId)) as any;
+      const stored=Number(parked?.total);
+      const current=Number(amountDueNow);
+      if(!Number.isFinite(stored)||!Number.isFinite(current)||Math.abs(stored-current)<0.01)return null;
+      const notice=`El total de la cuenta cambió con la configuración de hoy: era RD$${stored.toFixed(2)} y ahora es RD$${current.toFixed(2)}.`;
+      recordCheckoutTrace('AMOUNT_CHANGED', notice);
+      return notice;
+   })();
    const fiscalCheckoutRef=useRef<FiscalWorkflowCheckoutV2|null>(null);
    const [offlineFiscalReserveInfo,setOfflineFiscalReserveInfo]=useState<{remaining:number;validUntil:string|null;remainingByType?:Record<string,number>}|null>(null);
    useEffect(()=>{
@@ -6831,6 +7111,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          return Object.assign(()=>{},{completedTransaction:completed as Transaction});
       }
       await assertCheckoutFiscalAuthority();
+      // A native attempt bound to another cart can never be resumed; release it here so the
+      // cashier is not blocked by a previous click (the release asserts there are no effects).
+      const pendingAttempt = await fiscalWorkflowV2Client.pendingCheckoutInfo().catch(() => null);
+      if (pendingAttempt && ['PREPARED', 'EFFECT_POSSIBLE'].includes(pendingAttempt.phase)
+        && pendingAttempt.cartIdentity !== currentFiscalCheckoutCartIdentity(offlineTableFiscalContextRef.current)) {
+         const released = await fiscalWorkflowV2Client.cancelUnreconcilableAttempt({ cartIdentity: currentFiscalCheckoutCartIdentity(offlineTableFiscalContextRef.current) }).catch(() => null);
+         if (!released?.cancelled) throw Error(`FISCAL_WORKFLOW_CHECKOUT_RECONCILIATION_REQUIRED:${released?.note || 'revisa el intento pendiente'}`);
+         fiscalCheckoutRef.current = null;
+         fiscalCheckoutOperationRef.current = null;
+      }
       if (hasV3ReservationCart && !activeV3Reservation) throw new Error('La referencia de la reserva aún no está validada.');
       if (activeV3Reservation && selectedCustomer?.id !== activeV3Reservation.reservation.customerId) throw new Error('El cliente de la reserva no puede cambiarse.');
       if (!v3Operational) return () => {};
@@ -6853,7 +7143,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }else if(offlineFiscalCheckout)offlineTableFiscalContextRef.current=undefined;
       const requiresFiscalPermit=delegatedFiscalCheckout||processedCart.some(line=>line.articleFormat);
       const retainedFiscalOperation=fiscalCheckoutRef.current||fiscalCheckoutOperationRef.current||processedCart.some(line=>(line as any).fiscalCheckoutOperationId);
-      if(!fiscalWorkflowV2Client.enabled()&&!offlineFiscalCheckout&&retainedFiscalOperation)throw Error('FISCAL_WORKFLOW_CHECKOUT_RECONCILIATION_REQUIRED');
+      // A retained attempt that can no longer reach the ERP is not a reason to keep the box blocked:
+      // release it (only when it has no possible effects) and continue with a fresh operation.
+      const fiscalCartTags=()=>[...new Set(processedCart.map(line=>(line as any).fiscalCheckoutOperationId).filter(Boolean))] as string[];
+      const releaseUnreconcilableAttempt=async()=>fiscalWorkflowV2Client.cancelUnreconcilableAttempt({tags:fiscalCartTags(),cartIdentity:currentFiscalCheckoutCartIdentity()}).catch(error=>({cancelled:false,note:error instanceof Error?error.message:String(error)}));
+      let fiscalAttemptReleased=false;
+      if(!fiscalWorkflowV2Client.enabled()&&!offlineFiscalCheckout&&retainedFiscalOperation){
+        const outcome=await releaseUnreconcilableAttempt();
+        if(!outcome.cancelled)throw Error(`FISCAL_WORKFLOW_CHECKOUT_RECONCILIATION_REQUIRED:${outcome.note}`);
+        fiscalAttemptReleased=true;fiscalCheckoutRef.current=null;fiscalCheckoutOperationRef.current=null;
+        setSuccessToast(outcome.note);
+      }
       if(requiresFiscalPermit&&!newFiscalCheckout){
         if(activeTable){
           if(!isMaster)throw Error('El cobro de mesas sin ERP debe realizarse en la caja Master que conserva la cuenta.');
@@ -6866,8 +7166,21 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if(!newFiscalCheckout)fiscalCheckoutRef.current=null;
       if(newFiscalCheckout){
         const tagged=processedCart.map(line=>(line as any).fiscalCheckoutOperationId).filter(Boolean);
-        const operationId=fiscalCheckoutOperationRef.current|| (tagged.length===processedCart.length&&new Set(tagged).size===1?tagged[0]:createUuid());fiscalCheckoutOperationRef.current=operationId;
-        const checkout=await (offlineFiscalCheckout?fiscalWorkflowV2Client.reserveOfflineCheckout(currentFiscalCheckoutCartIdentity(),operationId,offlineTableFiscalContextRef.current):fiscalWorkflowV2Client.reserveCheckout(currentFiscalCheckoutCartIdentity(),operationId,{requirePermit:requiresFiscalPermit})).catch(error=>{if(offlineFiscalCheckout&&fiscalCheckoutRef.current?.phase!=='EFFECT_POSSIBLE')offlineTablePaymentFenceRef.current=false;if(error instanceof Error&&error.message==='FISCAL_WORKFLOW_PERMIT_REQUIRED')throw Error(offlineFiscalCheckout?'No hay permisos fiscales offline disponibles. Se requiere una nueva reserva autorizada; reconectar no garantiza reposición antes del vencimiento. No se realizó ningún pago.':'No hay autorización fiscal disponible para esta venta. Espera la sincronización y vuelve a cobrar; no se realizó ningún pago.');throw error;});
+        const reusableTag=!fiscalAttemptReleased&&tagged.length===processedCart.length&&new Set(tagged).size===1;
+        const operationId=fiscalCheckoutOperationRef.current||(reusableTag?tagged[0]:createUuid());fiscalCheckoutOperationRef.current=operationId;
+        const reserveOnce=(attemptOperationId:string)=>offlineFiscalCheckout?fiscalWorkflowV2Client.reserveOfflineCheckout(currentFiscalCheckoutCartIdentity(),attemptOperationId,offlineTableFiscalContextRef.current):fiscalWorkflowV2Client.reserveCheckout(currentFiscalCheckoutCartIdentity(),attemptOperationId,{requirePermit:requiresFiscalPermit});
+        const checkout=await reserveOnce(operationId).catch(async error=>{
+          if(offlineFiscalCheckout&&fiscalCheckoutRef.current?.phase!=='EFFECT_POSSIBLE')offlineTablePaymentFenceRef.current=false;
+          if(error instanceof Error&&/^FISCAL_WORKFLOW_(CHECKOUT_)?RECONCILIATION_REQUIRED/.test(error.message)){
+            const outcome=await releaseUnreconcilableAttempt();
+            if(!outcome.cancelled)throw error;
+            fiscalCheckoutOperationRef.current=createUuid();
+            if(outcome.note)setSuccessToast(outcome.note);
+            return reserveOnce(fiscalCheckoutOperationRef.current);
+          }
+          if(error instanceof Error&&error.message==='FISCAL_WORKFLOW_PERMIT_REQUIRED')throw Error(offlineFiscalCheckout?'No hay permisos fiscales offline disponibles. Se requiere una nueva reserva autorizada; reconectar no garantiza reposición antes del vencimiento. No se realizó ningún pago.':'No hay autorización fiscal disponible para esta venta. Espera la sincronización y vuelve a cobrar; no se realizó ningún pago.');
+          throw error;
+        });
         if(!checkout.permit&&!checkout.allocation)throw Error('FISCAL_WORKFLOW_PERMIT_REQUIRED');
         if(['COMMITTED','ACKNOWLEDGED'].includes(checkout.phase)){
           const completed=await db.getDocument('transactions',checkout.transactionId)||await db.getDocument('transactionHistory',checkout.transactionId);
@@ -8083,7 +8396,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             />
          )}
 
-         {presentationError&&(cart.some(line=>line.inventoryPresentation!==undefined)||presentationSelection?.inventoryPresentationMaster)&&<div role="status" className="fixed top-16 right-4 z-50 bg-amber-50 border rounded-xl p-3 max-w-sm"><p>Presentaciones no disponibles. Revisa la conexión o la habilitación de esta caja en el ERP.</p><button type="button" onClick={()=>setPresentationRetry(value=>value+1)}>Reintentar</button><details><summary>Detalle</summary><code>{presentationError}</code></details></div>}
+         {presentationError&&(cart.some(line=>line.inventoryPresentation!==undefined)||presentationSelection?.inventoryPresentationMaster)&&<div role="status" className="fixed top-16 right-4 z-50 bg-amber-50 border rounded-xl p-3 max-w-sm"><p>Presentaciones no disponibles. {describePresentationError(presentationError)}</p><button type="button" onClick={()=>setPresentationRetry(value=>value+1)}>Reintentar</button><details><summary>Detalle</summary><code>{presentationError}</code></details></div>}
          {errorToast && (
             <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-[100] animate-in slide-in-from-bottom-5 fade-in duration-300">
                <div className="bg-red-600 text-white px-6 py-4 rounded-2xl shadow-2xl flex items-center gap-3 font-bold border-2 border-red-400">
@@ -8795,6 +9108,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      </span>
                   </button>
                   {!isKioskMode && <OrderServiceTypeButton value={effectiveOrderServiceType} onClick={() => handleGridAction('TAKEOUT')} />}
+                  {isRetailMode && cart.length > 0 && (
+                     <button
+                        type="button"
+                        onClick={() => { void handleClearAllCartItems(); }}
+                        title="Eliminar todos los artículos"
+                        aria-label="Eliminar todos los artículos"
+                        className="ml-1 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-rose-200 bg-rose-50 text-rose-600 transition-colors hover:bg-rose-100"
+                     >
+                        <Trash2 size={17} />
+                     </button>
+                  )}
                </TicketStatusControls>
 
                {/* CUSTOMER PILL (MOBILE) */}
@@ -8989,7 +9313,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   </div>
                )}
 
-                  <TicketStatusControls className={`ml-auto flex shrink-0 items-center justify-end gap-1 ${isRetailMode ? 'supermarket-ticket-actions' : ''}`} status={<FiscalStatusBadge compact short visible={!isOrderTakerMode && !isFiscalModeDisabled} allowed={canCheckoutWithFiscalPolicy} status={fiscalStatus} />}>
+                  <TicketStatusControls className={`ml-auto flex shrink-0 items-center justify-end gap-1 ${isRetailMode ? 'supermarket-ticket-actions' : ''}`} status={<>
+                     {accountHold && <button type="button" onClick={() => setErrorToast(accountHold.note)} title={accountHold.note} className="flex items-center gap-1.5 rounded-full border border-amber-300 bg-amber-50 px-2.5 py-1 text-[11px] font-black text-amber-800"><span className="h-1.5 w-1.5 rounded-full bg-amber-500" /> Revisar antes de cobrar</button>}
+                     <FiscalStatusBadge compact short visible={!isOrderTakerMode && !isFiscalModeDisabled} allowed={canCheckoutWithFiscalPolicy} status={fiscalStatus} />
+                  </>}>
                      {!isKioskMode && <OrderServiceTypeButton value={effectiveOrderServiceType} onClick={() => handleGridAction('TAKEOUT')} />}
                   </TicketStatusControls>
                </div>
@@ -9836,12 +10163,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          {showPaymentModal && <UnifiedPaymentModal receiptOnlyInitialTransaction={receiptOnlyInitialTransaction} recoverCommittedReceipt={completeCommittedFiscalReceipt} openingTrace={paymentModalTraceRef.current} total={amountDueNow} items={cart} taxAmount={nextPaymentFractionPart && cartTotal > 0 ? cartTax * (amountDueNow / cartTotal) : cartTax} currencySymbol={baseCurrency.symbol} config={config} onClose={() => {
             finishInteraction(paymentModalTraceRef.current, 'cancelled');
             recordCheckoutDiagnostic('PAYMENT_CLOSE');
+            // Closing the charge screen abandons the attempt: never keep the box locked on it.
+            paymentFinalizationInFlightRef.current = false;
+            paymentFinalizationStartedAtRef.current = 0;
             setReceiptOnlyInitialTransaction(null);setShowPaymentModal(false);
             if (returnToTableMapAfterPayment && onOpenTableMap) {
                setReturnToTableMapAfterPayment(false);
                onOpenTableMap();
             }
-         }} paymentOperationId={activeV3Reservation?.claimId} paymentOperationDate={activeV3Reservation?.invoiceDate} onFiscalAttemptClosed={onFiscalAttemptClosed} offlineFiscalReserve={offlineFiscalReserveInfo} beforePaymentEffects={beforeV3PaymentEffects} validatePaymentAuthority={assertCheckoutFiscalAuthority} onConfirm={handlePaymentConfirm} themeColor={config.themeColor} customer={effectiveSelectedCustomer} isDelinquent={isDelinquent} users={users} roles={roles} isMaster={isMaster} currentUser={currentUser} isRestaurantMode={isRestaurantMode} isInstallmentPayment={isIntermediateFractionPayment} />}
+         }} paymentOperationId={activeV3Reservation?.claimId} paymentIdNamespace={(():string=>{const cartKey=currentFiscalCheckoutCartIdentity();if(!paymentAttemptRef.current||paymentAttemptRef.current.cartKey!==cartKey)paymentAttemptRef.current={cartKey,id:stableCheckoutAttemptId(cartKey,()=>createUuid())};return paymentAttemptRef.current.id;})()} paymentOperationDate={activeV3Reservation?.invoiceDate} onFiscalAttemptClosed={onFiscalAttemptClosed} offlineFiscalReserve={offlineFiscalReserveInfo} amountChangeNotice={amountChangeNotice} beforePaymentEffects={beforeV3PaymentEffects} validatePaymentAuthority={assertCheckoutFiscalAuthority} onConfirm={handlePaymentConfirm} themeColor={config.themeColor} customer={effectiveSelectedCustomer} isDelinquent={isDelinquent} users={users} roles={roles} isMaster={isMaster} currentUser={currentUser} isRestaurantMode={isRestaurantMode} isInstallmentPayment={isIntermediateFractionPayment} />}
          {showLoyaltyModal && <LoyaltyScanModal onClose={() => setShowLoyaltyModal(false)} onScan={handleLoyaltyScan} />}
          {showTableSellerModal && activeTable && <TableSellerModal
             tableName={activeTable.nombre || activeTable.name || 'Mesa'}
@@ -10529,6 +10859,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          {productForModifiers && (
             <ModifierModal
                product={productForModifiers}
+               productImageUrl={resolveProductImageSrc(productForModifiers)}
+               resolveOptionImage={(option) => {
+                  const found = option.product_id ? (products || []).find(row => String(row.id) === String(option.product_id)) : null;
+                  return found ? resolveProductImageSrc(found) : null;
+               }}
                currencySymbol={baseCurrency.symbol}
                themeColor="blue"
                onClose={() => setProductForModifiers(null)}
@@ -10554,6 +10889,36 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                onReservationRecovered: () => setIsScannerOpen(false),
             })}
          />
+         {warehousePrompt && (
+            <div className="fixed inset-0 z-[130] flex items-center justify-center bg-black/50 p-4" role="presentation" onClick={() => setWarehousePrompt(null)}>
+               <div role="dialog" aria-modal="true" aria-label="Almacén de venta" className="w-full max-w-md overflow-hidden rounded-2xl bg-white shadow-2xl" onClick={event => event.stopPropagation()}>
+                  <div className="border-b border-slate-200 px-5 py-4">
+                     <h3 className="text-base font-black text-slate-900">Este artículo no tiene almacén de descarga en esta caja</h3>
+                     <p className="mt-1 text-xs text-slate-500">
+                        <span className="font-bold text-slate-700">{warehousePrompt.product.name}</span> tiene existencia en
+                        {warehousePrompt.candidates.length === 1 ? ' este almacén' : ' estos almacenes'}. Elegir uno cambia el almacén de venta
+                        de toda la caja (las próximas ventas descargarán de ahí).
+                     </p>
+                  </div>
+                  <div className="max-h-[45vh] space-y-2 overflow-y-auto px-5 py-4">
+                     {warehousePrompt.candidates.map(candidate => (
+                        <button key={candidate.id} onClick={() => applySaleWarehouse(candidate.id)}
+                           className="flex w-full items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-left hover:border-blue-300 hover:bg-blue-50">
+                           <span className="min-w-0">
+                              <span className="block truncate text-sm font-bold text-slate-800">{candidate.name}</span>
+                              {candidate.code && <span className="text-[10px] font-black uppercase tracking-wide text-slate-400">{candidate.code}</span>}
+                           </span>
+                           <span className="shrink-0 text-[11px] font-black text-blue-600">Usar este</span>
+                        </button>
+                     ))}
+                  </div>
+                  <div className="flex justify-end gap-2 border-t border-slate-200 bg-slate-50 px-5 py-3">
+                     <button onClick={() => setWarehousePrompt(null)} className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-600">Cancelar</button>
+                  </div>
+               </div>
+            </div>
+         )}
+
          {
             quickActionData && (
                <ProductQuickActions

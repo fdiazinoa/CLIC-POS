@@ -4,7 +4,6 @@ import {validateV3RestaurantSelection} from '../../utils/v3RestaurantSelection';
 import {isOfflineTableFiscalTransaction} from '../fiscal/OfflineTableFiscalCheckout';
 import { validWeightPresentation } from '../../utils/scaleWeight';
 import { hasV3KilogramContract } from '../../utils/weightedProduct';
-import { resolveRestaurantProductConfig } from '../../utils/restaurantProductConfig';
 import type { BusinessConfig, CartItem, Product, Transaction, V3SaleAuthorityStamp } from '../../types';
 import { calculateTaxBreakdownFromItems, calculateLineFiscalValuesForTransaction, calculateUncoveredServiceChargeBase, freezeAuthoritativeLineFiscalAmounts } from '../../utils/fiscalBreakdown';
 import { resolveAppliedServiceTaxPolicy } from '../../utils/serviceTaxPolicy';
@@ -12,19 +11,16 @@ import { LargeMasterSyncV3Error } from './LargeMasterSyncV3Types';
 
 /** A valid stamp cannot authorize changing the source's inventory or fiscal semantics. */
 export const validateV3PinnedLineSource = (line: CartItem, product: Product, authority: V3SaleAuthorityStamp): void => {
-  const lineRestaurant = resolveRestaurantProductConfig(line);
-  const sourceRestaurant = resolveRestaurantProductConfig(product);
-  if (lineRestaurant.production_area_id !== sourceRestaurant.production_area_id
-    || lineRestaurant.product_type !== sourceRestaurant.product_type) {
-    throw new LargeMasterSyncV3Error('SYNC_V3_ARTICLE_SOURCE_CHANGED');
-  }
-  if (line.id !== product.id || line.type !== product.type || line.isInventoriable !== product.isInventoriable
-    || line.taxable !== product.taxable || line.v3SaleAuthority?.taxIncluded !== authority.taxIncluded
-    || JSON.stringify(line.appliedTaxIds) !== JSON.stringify(product.appliedTaxIds)) {
-    throw new LargeMasterSyncV3Error('SYNC_V3_ARTICLE_SOURCE_CHANGED');
+  // The authoritative line is rebuilt from the source by the commit callback, so a stale copy of
+  // the descriptive fields (type, inventariable, taxable, tax ids, production area) is corrected
+  // there instead of blocking the sale. Only the identity that affects stock and fiscal binding is
+  // enforced here: the article itself, the tariff treatment, the weight contract and the variant.
+  if (line.id !== product.id) throw new LargeMasterSyncV3Error('SYNC_V3_ARTICLE_SOURCE_CHANGED:identity');
+  if (line.v3SaleAuthority && line.v3SaleAuthority.taxIncluded !== authority.taxIncluded) {
+    throw new LargeMasterSyncV3Error('SYNC_V3_ARTICLE_SOURCE_CHANGED:tariff');
   }
   if (!validWeightPresentation(line.weightPresentation, product.measurementUnit)) {
-    throw new LargeMasterSyncV3Error('SYNC_V3_ARTICLE_SOURCE_CHANGED');
+    throw new LargeMasterSyncV3Error('SYNC_V3_ARTICLE_SOURCE_CHANGED:weight');
   }
   if (line.operationalFlags?.isWeighted || product.operationalFlags?.isWeighted) {
     if (!hasV3KilogramContract(line) || !hasV3KilogramContract(product)
@@ -34,7 +30,7 @@ export const validateV3PinnedLineSource = (line: CartItem, product: Product, aut
       || line.operationalFlags?.trackInventory !== product.operationalFlags?.trackInventory
       || line.variantId || line.variantSku || line.variants?.length
       || line.recipeDetails?.length || line.modifiers?.length) {
-      throw new LargeMasterSyncV3Error('SYNC_V3_ARTICLE_SOURCE_CHANGED');
+      throw new LargeMasterSyncV3Error('SYNC_V3_ARTICLE_SOURCE_CHANGED:weight-contract');
     }
   }
   if (line.variantId || line.variantSku) {

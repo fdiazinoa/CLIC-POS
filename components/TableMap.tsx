@@ -2905,10 +2905,10 @@ const SmartTableNode = React.memo(({
                                     </div>
                                 ) : model.hasPendingKitchenDispatch ? (
                                     <span
-                                        className="absolute inset-0 flex items-center justify-center rounded-full bg-amber-400 text-amber-950 shadow-[0_0_18px_rgba(251,191,36,0.8)]"
+                                        className="absolute inset-0 flex items-center justify-center rounded-full bg-amber-400/95 text-amber-950 shadow-[0_0_10px_rgba(251,191,36,0.6)]"
                                         title="Pedido pendiente de recepción en cocina"
                                     >
-                                        <CircleHelp size={19} strokeWidth={3} />
+                                        <CircleHelp size={13} strokeWidth={2.8} />
                                     </span>
                                 ) : null}
                             </div>

@@ -30,7 +30,8 @@
     "test:article-formats": "tsx --test tests/articleFormats.test.ts tests/articleFormatsAndroid.test.ts tests/articleFormatRefundEntries.test.ts tests/articleFormatsDocuments.test.ts tests/articleFormatsNativeAtomicity.test.ts",
     "test:article-formats:network": "tsx --test tests/articleFormatsNetwork.test.ts tests/articleFormatsNetworkMaster.test.ts",
     "test:article-formats:erp-local": "tsx --test tests/articleFormatsERPIntegration.test.ts",
-    "test:article-formats:return-context:erp-local": "tsx --test tests/articleFormatsReturnContextERP.test.ts"
+    "test:article-formats:return-context:erp-local": "tsx --test tests/articleFormatsReturnContextERP.test.ts",
+    "qa:ui-contract": "tsx --test tests/posUiRegressionGuards.test.ts"
   },
   "dependencies": {
     "@capacitor-community/sqlite": "^8.0.0",

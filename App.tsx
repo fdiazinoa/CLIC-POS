@@ -28,6 +28,7 @@ import { readLargeMasterSyncV3BoundIdentity } from './services/sync/LargeMasterS
 import { assertLargeMasterSyncV3NativeAndroid } from './services/sync/LargeMasterSyncV3Platform';
 import { getLargeMasterSyncV3OperationalSession, getLargeMasterSyncV3RetainedSession, v3BindingKey } from './services/sync/LargeMasterSyncV3OperationalSession';
 import type { V3TaxClassificationNotice } from './services/sync/LargeMasterSyncV3OperationalSession';
+import { runBootReconciliation } from './services/sync/BootReconciliation';
 import { assertLargeMasterSyncV3SetupContract, largeMasterSyncV3DownloadOrigin } from './services/sync/LargeMasterSyncV3DownloadOrigin';
 import { completeLargeMasterSyncV3Setup } from './services/sync/LargeMasterSyncV3SetupCompletion';
 import { createV3Progress, type V3Progress } from './services/sync/LargeMasterSyncV3Progress';
@@ -11618,6 +11619,19 @@ const AppContent: React.FC = () => {
     };
   }, [syncFiscalDocument,fiscalStatusWorker,isDataLoaded,fiscalHistoryHydrated,isSecurityLoaded]);
 
+  // A terminal whose tokens expired must recover on its own; otherwise every sale ends with
+  // "no se puede cobrar sin la autorización fiscal vigente" and the cashier has no way out.
+  useEffect(() => {
+    if (!isDataLoaded || !isSecurityLoaded) return;
+    const timer = setTimeout(() => {
+      // One boot recovery for the whole terminal: stale fiscal attempt + pairing.
+      void runBootReconciliation().then(result => {
+        if (result.notes.length) console.info('[boot]', result.notes.join(' · '));
+      }).catch(() => undefined);
+    }, 8000);
+    return () => clearTimeout(timer);
+  }, [isDataLoaded, isSecurityLoaded]);
+
   // Restarting the POS must pick up a newer master. Runs once the shell is idle so the
   // operational window is free; the session probe reuses the server session (no downloads
   // when the master did not change) and skips the refresh while a sale is active.
@@ -14328,6 +14342,7 @@ const AppContent: React.FC = () => {
         return (
           <Settings
             config={config}
+            onOpenAttendance={() => setCurrentView('ATTENDANCE')}
             users={users}
             currentUser={currentUser}
             roles={roles}
@@ -14413,6 +14428,7 @@ const AppContent: React.FC = () => {
         return (
           <Settings
             config={config}
+            onOpenAttendance={() => setCurrentView('ATTENDANCE')}
             users={users}
             currentUser={currentUser}
             roles={roles}

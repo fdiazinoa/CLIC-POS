@@ -1,6 +1,18 @@
 import type {Transaction} from '../../types';
 import {tableFiscalSourceDigest,validateTableFiscalSaleContext,type TableFiscalSaleContext} from './OfflineFiscalLease';
-import {v3RetainedLineFingerprint} from '../sync/LargeMasterSyncV3StockAuthority';
+/**
+ * The table account is a commercial document. Its lines keep the amount and the options agreed
+ * with the customer; the sale authority (inventory generation, warehouse, tariff) belongs to the
+ * sale and is validated by the offline checkout itself. Comparing the authority here made every
+ * account restored after a daily master refresh unreconcilable.
+ */
+export const tableAccountLineFingerprint = (line: any): string => JSON.stringify([
+ line.cartId, line.id, line.price, line.quantity, line.discountAmount, line.taxable,
+ line.appliedTaxIds, line.type, line.isInventoriable, line.measurementUnit, line.purchaseUnit,
+ line.conversionFactor, line.variantId, line.variantSku, line.restaurantConfig,
+ line.selected_combo_items, line.selected_modifiers, line.selected_fraction_parts,
+ line.note, line.trackingData, line.inventoryPresentation,
+]);
 
 export function isOfflineTableFiscalTransaction(source:Partial<Transaction>):boolean {
  return Boolean(source.fiscalWorkflowCheckoutId&&source.fiscalSaleContext?.kind==='TABLE_ACCOUNT');
@@ -29,5 +41,5 @@ export async function assertTableFiscalSaleContext(source:Partial<Transaction>,r
   ||(account.paymentFraction&&!closingInstallment)||account.paymentFractions?.length||Number(account.paidAmount||0)>0)throw Error('OFFLINE_FISCAL_TABLE_PARTIAL_UNSUPPORTED');
  if(!Array.isArray(account.items)||account.items.length!==source.items.length||Math.abs(Number(account.total)-Number(source.total))>.01
   ||source.items.some(line=>{const originals=account.items.filter((item:any)=>item.id===line.id&&item.cartId===line.cartId);return originals.length!==1
-    ||Number(originals[0].quantity)!==Number(line.quantity)||v3RetainedLineFingerprint(originals[0])!==v3RetainedLineFingerprint(line);}))throw Error('OFFLINE_FISCAL_TABLE_PARTIAL_UNSUPPORTED');
+    ||Number(originals[0].quantity)!==Number(line.quantity)||tableAccountLineFingerprint(originals[0])!==tableAccountLineFingerprint(line);}))throw Error('OFFLINE_FISCAL_TABLE_SOURCE_CHANGED');
 }

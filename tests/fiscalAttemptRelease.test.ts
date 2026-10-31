@@ -1,0 +1,312 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { DatabaseSync } from 'node:sqlite';
+import { NativeFiscalWorkflowV2Store, FISCAL_WORKFLOW_V2_SCHEMA } from '../services/db/FiscalWorkflowV2Store';
+import { CapacitorSQLiteAdapter } from '../services/db/adapters/CapacitorSQLiteAdapter';
+import { DURABLE_OUTBOX_SCHEMA_SQL } from '../services/sync/DurableOutboxSchema';
+import { createFiscalWorkflowV2Client } from '../services/fiscal/FiscalWorkflowV2Client';
+import { fiscalWorkflowScopeKey } from '../services/fiscal/FiscalWorkflowV2Types';
+import type { FiscalWorkflowPermitV2 } from '../services/fiscal/FiscalWorkflowV2Types';
+
+const scope = { tenantId: 'tenant', companyId: 'company', storeId: 'store', terminalId: 'terminal', deviceId: 'device' };
+const key = fiscalWorkflowScopeKey(scope);
+const base = 'https://erp.example.invalid/api/sync';
+const headers = { 'X-Tenant-Id': 'tenant', 'X-Terminal-Id': 'terminal', 'X-Device-Id': 'device', 'X-Sync-Token': 'synthetic' };
+
+function fixture() {
+  const sql = new DatabaseSync(':memory:');
+  sql.exec(FISCAL_WORKFLOW_V2_SCHEMA + DURABLE_OUTBOX_SCHEMA_SQL
+    + "CREATE TABLE documents(collection_name TEXT,doc_id TEXT,data TEXT,sort_order INTEGER,updatedAt TEXT,PRIMARY KEY(collection_name,doc_id));"
+    + "CREATE TABLE IF NOT EXISTS sync_queue(id TEXT PRIMARY KEY,payload TEXT);");
+  const bridge = {
+    query: async (q: string, v: any[] = []) => ({ values: sql.prepare(q).all(...v) }),
+    run: async (q: string, v: any[] = []) => ({ changes: sql.prepare(q).run(...v) }),
+    execute: async (q: string) => { sql.exec(q); },
+  };
+  const adapter = new CapacitorSQLiteAdapter();
+  Object.assign(adapter, { db: bridge, isReady: true });
+  const store = adapter.fiscalWorkflowStore;
+  const permit = (index: number): FiscalWorkflowPermitV2 => ({
+    schemaVersion: 2, permitId: `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
+    transactionId: `10000000-0000-4000-8000-${String(index).padStart(12, '0')}`, nonce: `nonce-${index}`,
+    createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 600000).toISOString(), scope,
+    issuerRnc: '101010101', environment: 0, authorityHash: 'a'.repeat(64), operationKind: 'SALE', state: 'PERMIT',
+  });
+  return { sql, store, permit };
+}
+
+const receiptFor = (proof: any): any => ({
+  schemaVersion: 1, commandId: proof.commandId, checkoutId: proof.checkoutId, permitId: proof.permitId,
+  transactionId: proof.transactionId, originalOperationId: proof.originalOperationId,
+  cartIdentitySha256: proof.cartIdentitySha256, reason: proof.reason, scope, state: 'HELD' as const,
+  closedAt: new Date().toISOString(), historyId: '20000000-0000-4000-8000-000000000001',
+});
+
+const proofFor = async (checkout: any) => {
+  const { cartDigest, retirementReason } = await import('../services/fiscal/FiscalWorkflowRetirement');
+  return {
+    schemaVersion: 1 as const, commandId: '30000000-0000-4000-8000-000000000001', checkoutId: checkout.checkoutId,
+    transactionId: checkout.transactionId, permitId: checkout.permit.permitId,
+    originalOperationId: checkout.operationId, cartIdentitySha256: await cartDigest(checkout.cartIdentity),
+    reason: retirementReason,
+  };
+};
+
+const clientFor = (store: any, respond: (url: string, body: any) => any) => createFiscalWorkflowV2Client({
+  store: () => store,
+  readAuth: () => ({ base, headers, descriptor: scope, assertCurrent() { } }),
+  readOfflineAuthority: async () => { throw Error('OFFLINE_FISCAL_BINDING_CHANGED'); },
+  fetchImpl: async (url: string, init: any) => respond(String(url), init?.body ? JSON.parse(init.body) : null),
+} as any);
+
+test('an attempt with a possible effect is closed only with the ERP receipt and leaves the pointer empty', async () => {
+  const f = fixture();
+  try {
+    const op = await f.store.refillOperation(key);
+    await f.store.savePermits(key, op, [f.permit(1)]);
+    const checkout = await f.store.reserveCheckout(key, 'cart', undefined, '40000000-0000-4000-8000-000000000001', { requirePermit: true, authorityHash: 'a'.repeat(64) });
+    await f.store.markPaymentPossible(checkout.checkoutId, 'payment-one');
+    assert.equal((await f.store.currentCheckout(key))!.phase, 'EFFECT_POSSIBLE');
+    const proof = await proofFor(checkout);
+    // The expired-prepared path can never accept a possible effect: that is the dead end.
+    await assert.rejects(f.store.beginRetirement(key, proof), /RETIREMENT_RECONCILIATION_REQUIRED/);
+    const closed = await f.store.closeUnbornRetirement!(key, proof, receiptFor(proof));
+    assert.equal(closed.phase, 'CLOSED');
+    assert.equal(closed.receipt!.state, 'HELD');
+    assert.equal(await f.store.currentCheckout(key), null);
+    assert.equal(f.sql.prepare("SELECT count(*) n FROM pos_fiscal_checkout_retirements_v1 WHERE phase='CLOSED'").get().n, 1);
+    // A receipt for another identity is refused, never recorded.
+    await assert.rejects(f.store.closeUnbornRetirement!(key, proof, { ...receiptFor(proof), permitId: f.permit(9).permitId }), /RECONCILIATION|INVALID/);
+  } finally { f.sql.close(); }
+});
+
+test('a possible effect that already left a document is never released', async () => {
+  const f = fixture();
+  try {
+    const op = await f.store.refillOperation(key);
+    await f.store.savePermits(key, op, [f.permit(2)]);
+    const checkout = await f.store.reserveCheckout(key, 'cart', undefined, '40000000-0000-4000-8000-000000000002', { requirePermit: true, authorityHash: 'a'.repeat(64) });
+    await f.store.markPaymentPossible(checkout.checkoutId, 'payment-two');
+    f.sql.prepare("INSERT INTO documents(collection_name,doc_id,data)VALUES('transactions',?,?)")
+      .run(checkout.transactionId, JSON.stringify({ id: checkout.transactionId }));
+    const proof = await proofFor(checkout);
+    await assert.rejects(f.store.closeUnbornRetirement!(key, proof, receiptFor(proof)), /RETIREMENT_RECONCILIATION_REQUIRED/);
+    assert.equal((await f.store.currentCheckout(key))!.phase, 'EFFECT_POSSIBLE');
+    assert.equal(f.sql.prepare('SELECT count(*) n FROM pos_fiscal_checkout_retirements_v1').get().n, 0);
+  } finally { f.sql.close(); }
+});
+
+test('the client asks the ERP before touching a possible effect and reports its refusal unchanged', async () => {
+  const f = fixture();
+  try {
+    const op = await f.store.refillOperation(key);
+    await f.store.savePermits(key, op, [f.permit(3)]);
+    const checkout = await f.store.reserveCheckout(key, 'cart', undefined, '40000000-0000-4000-8000-000000000003', { requirePermit: true, authorityHash: 'a'.repeat(64) });
+    await f.store.markPaymentPossible(checkout.checkoutId, 'payment-three');
+    const calls: string[] = [];
+    const refusing = clientFor(f.store, (url, body) => {
+      calls.push(url);
+      return { ok: false, json: async () => ({ code: 'FISCAL_WORKFLOW_DOCUMENT_EXISTS' }) };
+    });
+    const refused = await refusing.cancelUnreconcilableAttempt({ tags: ['40000000-0000-4000-8000-000000000003'], cartIdentity: 'another-cart' });
+    assert.equal(refused.cancelled, false);
+    assert.match(refused.note, /FISCAL_WORKFLOW_DOCUMENT_EXISTS/);
+    assert.deepEqual(calls, [`${base}/fiscal/workflow/v2/retire-unborn`]);
+    assert.equal((await f.store.currentCheckout(key))!.phase, 'EFFECT_POSSIBLE', 'a refusal leaves the attempt untouched');
+
+    const accepting = clientFor(f.store, (url, body) => {
+      calls.push(url);
+      return { ok: true, json: async () => receiptFor(body) };
+    });
+    const retired = await accepting.cancelUnreconcilableAttempt({ tags: ['40000000-0000-4000-8000-000000000003'], cartIdentity: 'another-cart' });
+    assert.equal(retired.cancelled, true);
+    assert.equal(await f.store.currentCheckout(key), null);
+    assert.equal(f.sql.prepare("SELECT count(*) n FROM pos_fiscal_checkout_retirements_v1 WHERE phase='CLOSED'").get().n, 1);
+  } finally { f.sql.close(); }
+});
+
+test('a pending attempt that still matches this ticket is left alone', async () => {
+  const f = fixture();
+  try {
+    const op = await f.store.refillOperation(key);
+    await f.store.savePermits(key, op, [f.permit(4)]);
+    const checkout = await f.store.reserveCheckout(key, 'cart', undefined, '40000000-0000-4000-8000-000000000004', { requirePermit: true, authorityHash: 'a'.repeat(64) });
+    const client = clientFor(f.store, () => { throw Error('the ERP must not be called'); });
+    const outcome = await client.cancelUnreconcilableAttempt({ tags: ['40000000-0000-4000-8000-000000000004'], cartIdentity: checkout.cartIdentity });
+    assert.equal(outcome.cancelled, false);
+    assert.match(outcome.note, /mismo ticket/);
+    assert.equal((await f.store.currentCheckout(key))!.checkoutId, checkout.checkoutId);
+  } finally { f.sql.close(); }
+});
+
+test('a supervisor can free the box when the ERP retirement service is unavailable, with an immutable audit row', async () => {
+  const f = fixture();
+  try {
+    const op = await f.store.refillOperation(key);
+    await f.store.savePermits(key, op, [f.permit(5)]);
+    const checkout = await f.store.reserveCheckout(key, 'cart', undefined, '40000000-0000-4000-8000-000000000005', { requirePermit: true, authorityHash: 'a'.repeat(64) });
+    await f.store.markPaymentPossible(checkout.checkoutId, 'payment-five');
+    const client = clientFor(f.store, () => ({ ok: false, json: async () => ({ code: 'FISCAL_WORKFLOW_DISABLED' }) }));
+    const refused = await client.cancelUnreconcilableAttempt({ tags: ['40000000-0000-4000-8000-000000000005'], cartIdentity: 'another-cart' });
+    assert.equal(refused.cancelled, false);
+    const record = (await f.store.currentCheckout(key))!;
+    await assert.rejects(f.store.releaseAttemptWithoutErp!(record, ''), /NOT_SAFE/);
+    await f.store.releaseAttemptWithoutErp!(record, 'Yuli (user-1)');
+    assert.equal(await f.store.currentCheckout(key), null);
+    const audit = f.sql.prepare('SELECT actor,phase,reason FROM pos_fiscal_attempt_releases_v1').get() as any;
+    assert.deepEqual({ actor: audit.actor, phase: audit.phase, reason: audit.reason }, { actor: 'Yuli (user-1)', phase: 'EFFECT_POSSIBLE', reason: 'ERP_RETIREMENT_UNAVAILABLE' });
+    // The released identity stays fenced: it can never be reused or rewritten.
+    assert.throws(() => f.sql.prepare("UPDATE pos_fiscal_attempt_releases_v1 SET actor='other'").run(), /IMMUTABLE/);
+  } finally { f.sql.close(); }
+});
+
+test('a box is never freed when the attempt left a document', async () => {
+  const f = fixture();
+  try {
+    const op = await f.store.refillOperation(key);
+    await f.store.savePermits(key, op, [f.permit(6)]);
+    const checkout = await f.store.reserveCheckout(key, 'cart', undefined, '40000000-0000-4000-8000-000000000006', { requirePermit: true, authorityHash: 'a'.repeat(64) });
+    await f.store.markPaymentPossible(checkout.checkoutId, 'payment-six');
+    f.sql.prepare("INSERT INTO documents(collection_name,doc_id,data)VALUES('transactionHistory',?,?)")
+      .run(checkout.transactionId, JSON.stringify({ id: checkout.transactionId }));
+    await assert.rejects(f.store.releaseAttemptWithoutErp!((await f.store.currentCheckout(key))!, 'Yuli (user-1)'), /RETIREMENT_RECONCILIATION_REQUIRED/);
+    assert.equal((await f.store.currentCheckout(key))!.phase, 'EFFECT_POSSIBLE');
+    assert.equal(f.sql.prepare('SELECT count(*) n FROM pos_fiscal_attempt_releases_v1').get().n, 0);
+  } finally { f.sql.close(); }
+});
+
+test('a paid attempt is only releasable offline, never for an online permit', async () => {
+  const f = fixture();
+  try {
+    const op = await f.store.refillOperation(key);
+    await f.store.savePermits(key, op, [f.permit(7)]);
+    const checkout = await f.store.reserveCheckout(key, 'cart', undefined, '40000000-0000-4000-8000-000000000007', { requirePermit: true, authorityHash: 'a'.repeat(64) });
+    await f.store.markPaymentPossible(checkout.checkoutId, 'payment-seven');
+    const current = (await f.store.currentCheckout(key))!;
+    await assert.rejects(f.store.abandonPreparedWithoutEffects!(current, { allowOfflineEffect: true }), /OFFLINE_FISCAL_ABANDON_NOT_SAFE/);
+    assert.equal((await f.store.currentCheckout(key))!.phase, 'EFFECT_POSSIBLE', 'an online permit keeps the ERP as the only authority');
+  } finally { f.sql.close(); }
+});
+
+test('an online prepared attempt is released locally even when the ERP retirement is disabled', async () => {
+  const f = fixture();
+  try {
+    const op = await f.store.refillOperation(key);
+    await f.store.savePermits(key, op, [f.permit(8)]);
+    const checkout = await f.store.reserveCheckout(key, 'cart', undefined, '40000000-0000-4000-8000-000000000008', { requirePermit: true, authorityHash: 'a'.repeat(64) });
+    const client = clientFor(f.store, () => ({ ok: false, json: async () => ({ code: 'FISCAL_WORKFLOW_DISABLED' }) }));
+    const outcome = await client.cancelUnreconcilableAttempt({ tags: ['40000000-0000-4000-8000-000000000008'], cartIdentity: 'another-cart' });
+    assert.equal(outcome.cancelled, true, outcome.note);
+    assert.match(outcome.note, /sin efectos/);
+    assert.equal(await f.store.currentCheckout(key), null);
+  } finally { f.sql.close(); }
+});
+
+test('a paid online attempt still requires the ERP and reports why', async () => {
+  const f = fixture();
+  try {
+    const op = await f.store.refillOperation(key);
+    await f.store.savePermits(key, op, [f.permit(9)]);
+    const checkout = await f.store.reserveCheckout(key, 'cart', undefined, '40000000-0000-4000-8000-000000000009', { requirePermit: true, authorityHash: 'a'.repeat(64) });
+    const client = clientFor(f.store, () => ({ ok: false, json: async () => ({ code: 'FISCAL_WORKFLOW_DISABLED' }) }));
+    await f.store.markPaymentPossible(checkout.checkoutId, 'payment-nine');
+    const outcome = await client.cancelUnreconcilableAttempt({ tags: ['40000000-0000-4000-8000-000000000009'], cartIdentity: 'another-cart' });
+    assert.equal(outcome.cancelled, false);
+    assert.match(outcome.note, /FISCAL_WORKFLOW_DISABLED/);
+    assert.match(outcome.note, /ya tiene un pago/);
+    assert.equal((await f.store.currentCheckout(key))!.phase, 'EFFECT_POSSIBLE');
+  } finally { f.sql.close(); }
+});
+
+test('el diagnóstico muestra los cobros que impiden liberar el intento', async () => {
+  const f = fixture();
+  try {
+    const op = await f.store.refillOperation(key);
+    await f.store.savePermits(key, op, [f.permit(10)]);
+    const checkout = await f.store.reserveCheckout(key, 'cart', undefined, '40000000-0000-4000-8000-000000000010', { requirePermit: true, authorityHash: 'a'.repeat(64) });
+    await f.store.markPaymentPossible(checkout.checkoutId, 'payment-ten');
+    f.sql.prepare(`INSERT INTO payment_intents_v2 (intent_id,idempotency_key,payment_id,provider,integration_id,amount,currency_code,status,created_at,updated_at,transaction_id)
+      VALUES ('intent-ten','key-ten','payment-ten','AZUL','azul-main',100,'DOP','RECONCILIATION_REQUIRED','2026-01-01T00:00:00.000Z','2026-01-01T00:00:00.000Z',?)`).run(checkout.transactionId);
+    const states = await f.store.intentStates(checkout.transactionId);
+    assert.deepEqual(states, [{ paymentId: 'payment-ten', status: 'RECONCILIATION_REQUIRED' }]);
+    // Un intento sin cobros ligados no reporta estados (la liberación local es posible).
+    assert.deepEqual(await f.store.intentStates('00000000-0000-4000-8000-00000000dead'), []);
+  } finally { f.sql.close(); }
+});
+
+test('un intento con un pago ya rechazado sí se puede liberar con autorización', async () => {
+  const f = fixture();
+  try {
+    const op = await f.store.refillOperation(key);
+    await f.store.savePermits(key, op, [f.permit(11)]);
+    const checkout = await f.store.reserveCheckout(key, 'cart', undefined, '40000000-0000-4000-8000-000000000011', { requirePermit: true, authorityHash: 'a'.repeat(64) });
+    await f.store.markPaymentPossible(checkout.checkoutId, 'payment-eleven');
+    f.sql.prepare(`INSERT INTO payment_intents_v2 (intent_id,idempotency_key,payment_id,provider,integration_id,amount,currency_code,status,created_at,updated_at,transaction_id)
+      VALUES ('intent-eleven','key-eleven','payment-eleven','AZUL','azul-main',100,'DOP','DECLINED','2026-01-01T00:00:00.000Z','2026-01-01T00:00:00.000Z',?)`).run(checkout.transactionId);
+    // El cobro quedó rechazado: no hay dinero posible detrás del intento fiscal.
+    const current = await f.store.currentCheckout(key);
+    await f.store.releaseAttemptWithoutErp(current!, 'supervisor (user-1)', { releasedPayments: ['payment-eleven'] });
+    assert.equal(await f.store.currentCheckout(key), null);
+  } finally { f.sql.close(); }
+});
+
+test('un intento con un cobro autorizado no se libera aunque se pida', async () => {
+  const f = fixture();
+  try {
+    const op = await f.store.refillOperation(key);
+    await f.store.savePermits(key, op, [f.permit(12)]);
+    const checkout = await f.store.reserveCheckout(key, 'cart', undefined, '40000000-0000-4000-8000-000000000012', { requirePermit: true, authorityHash: 'a'.repeat(64) });
+    await f.store.markPaymentPossible(checkout.checkoutId, 'payment-twelve');
+    f.sql.prepare(`INSERT INTO payment_intents_v2 (intent_id,idempotency_key,payment_id,provider,integration_id,amount,currency_code,status,created_at,updated_at,transaction_id)
+      VALUES ('intent-twelve','key-twelve','payment-twelve','AZUL','azul-main',100,'DOP','AUTHORIZED','2026-01-01T00:00:00.000Z','2026-01-01T00:00:00.000Z',?)`).run(checkout.transactionId);
+    const current = await f.store.currentCheckout(key);
+    await assert.rejects(
+      f.store.releaseAttemptWithoutErp(current!, 'supervisor (user-1)', { releasedPayments: ['payment-twelve'] }),
+      /FISCAL_ATTEMPT_RELEASE_NOT_SAFE|FISCAL_WORKFLOW_RETIREMENT_RECONCILIATION_REQUIRED/,
+    );
+    assert.ok(await f.store.currentCheckout(key));
+    // Y sin declarar el cobro tampoco se libera.
+    await assert.rejects(f.store.releaseAttemptWithoutErp(current!, 'supervisor (user-1)'), /FISCAL_ATTEMPT_RELEASE_NOT_SAFE|FISCAL_WORKFLOW_RETIREMENT_RECONCILIATION_REQUIRED/);
+  } finally { f.sql.close(); }
+});
+
+test('el break-glass solo libera cuando todos los cobros del intento están rechazados', async () => {
+  const f = fixture();
+  try {
+    const op = await f.store.refillOperation(key);
+    await f.store.savePermits(key, op, [f.permit(13)]);
+    const checkout = await f.store.reserveCheckout(key, 'cart', undefined, '40000000-0000-4000-8000-000000000013', { requirePermit: true, authorityHash: 'a'.repeat(64) });
+    await f.store.markPaymentPossible(checkout.checkoutId, 'payment-thirteen');
+    const insert = f.sql.prepare(`INSERT INTO payment_intents_v2 (intent_id,idempotency_key,payment_id,provider,integration_id,amount,currency_code,status,created_at,updated_at,transaction_id)
+      VALUES (?,?,?,'AZUL','azul-main',100,'DOP',?,'2026-01-01T00:00:00.000Z','2026-01-01T00:00:00.000Z',?)`);
+    insert.run('intent-13', 'key-13', 'payment-thirteen', 'RECONCILIATION_REQUIRED', checkout.transactionId);
+    const client = clientFor(f.store, () => ({ ok: false, json: async () => ({ code: 'FISCAL_WORKFLOW_DISABLED' }) }));
+    // Un cobro sin resolver bloquea la liberación aunque el ERP no pueda retirar.
+    const blocked = await client.releasePendingAttempt('supervisor (user-1)');
+    assert.equal(blocked.released, false);
+    assert.match(blocked.note, /cobros sin resolver/);
+    // Cuando el cobro queda rechazado (no apareció en el voucher) sí se libera.
+    f.sql.prepare("UPDATE payment_intents_v2 SET status='DECLINED' WHERE payment_id='payment-thirteen'").run();
+    const released = await client.releasePendingAttempt('supervisor (user-1)');
+    assert.equal(released.released, true, released.note);
+    assert.equal(await f.store.currentCheckout(key), null);
+  } finally { f.sql.close(); }
+});
+
+test('una liberación offline pagada se detecta sin lanzar NOT_SAFE al reusar su operación', async () => {
+  const f = fixture();
+  try {
+    const checkoutId = '40000000-0000-4000-8000-000000000014';
+    const opId = '50000000-0000-4000-8000-000000000014';
+    const txnId = '60000000-0000-4000-8000-000000000014';
+    const permit: any = { schemaVersion: 2, permitId: '70000000-0000-4000-8000-000000000014', transactionId: txnId, nonce: 'n', createdAt: '2026-01-01T00:00:00Z', expiresAt: '2099-01-01T00:00:00Z', scope, issuerRnc: '101010101', environment: 0, authorityHash: 'a'.repeat(64), operationKind: 'SALE', leaseId: 'lease-14' };
+    const checkout: any = { checkoutId, operationId: opId, transactionId: txnId, scopeKey: key, cartIdentity: 'cart', permit, phase: 'EFFECT_POSSIBLE', paymentIds: ['payment-14'], offlineBindingHash: 'b'.repeat(64), offlineSaleDate: '2026-01-01T00:00:00Z', offlineEffectAt: '2026-01-01T00:00:00Z' };
+    f.sql.prepare(`INSERT INTO pos_fiscal_checkouts_v2(checkout_id,transaction_id,scope_key,cart_identity,permit_id,checkout_json,phase) VALUES (?,?,?,?,?,?,'EFFECT_POSSIBLE')`).run(checkoutId, txnId, key, 'cart', permit.permitId, JSON.stringify(checkout));
+    f.sql.prepare(`INSERT INTO pos_offline_fiscal_abandoned_v1(checkout_id,transaction_id,permit_id,scope_key,operation_id,original_identity,created_at,reason) VALUES (?,?,?,?,?,?,'2026-01-01T00:00:00Z','PREPARED_WITHOUT_EFFECTS')`).run(checkoutId, txnId, permit.permitId, key, opId, JSON.stringify(checkout));
+    // La operación liberada se detecta para no reusarla, sin importar que llegó a EFFECT_POSSIBLE.
+    const recovered = await f.store.abandonedOfflineOperation(key, opId);
+    assert.ok(recovered, 'la operación liberada se detecta');
+    assert.equal(recovered!.operationId, opId);
+    assert.equal(recovered!.phase, 'EFFECT_POSSIBLE');
+  } finally { f.sql.close(); }
+});
