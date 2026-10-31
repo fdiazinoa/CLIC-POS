@@ -1,4 +1,5 @@
 import { assertLargeMasterSyncV3NativeAndroid } from './LargeMasterSyncV3Platform';
+import { isLargeMasterSyncV3OperationalWindowHeld } from './LargeMasterSyncV3OperationGate';
 import { LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED } from './LargeMasterSyncV3Authority';
 import { createLargeMasterSyncV3BoundClient,
   readLargeMasterSyncV3BoundIdentity } from './LargeMasterSyncV3BoundTransport';
@@ -102,6 +103,9 @@ export const isLargeMasterSyncV3Stale = async (
   store: LargeMasterSyncV3Store, v3BaseUrl: string,
   metric?: (metric: LargeMasterSyncV3Metric) => void,
 ): Promise<boolean> => {
+  // Never probe (or open a sync session) while the cashier is charging or printing: background
+  // work must not compete with the checkout for the database. The next tick retries.
+  if (isLargeMasterSyncV3OperationalWindowHeld()) return false;
   const local = await store.getActiveRuntimeVersion().catch(() => null);
   if (!local) return true;
   // Cold start can race the network stack (WebView reports "Failed to fetch" before the radio is ready).

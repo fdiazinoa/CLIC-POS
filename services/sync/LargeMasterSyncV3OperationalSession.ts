@@ -271,6 +271,11 @@ export class LargeMasterSyncV3OperationalSession {
     return LargeMasterSyncV3OperationalCatalog.open(this.ready, tariffId, warehouseId);
   }
 
+  /** Catalog read for callers that just ran assertCurrent themselves (one set of identity reads). */
+  private catalogAfterAssert(tariffId: string, warehouseId: string) {
+    return LargeMasterSyncV3OperationalCatalog.open(this.ready, tariffId, warehouseId);
+  }
+
   async projectConfig(config: BusinessConfig): Promise<BusinessConfig> {
     const [tariffs, sourceTaxes] = await Promise.all([
       this.ready.runtime.getOperationalTariffs(), this.ready.runtime.getOperationalTaxes(),
@@ -397,7 +402,7 @@ export class LargeMasterSyncV3OperationalSession {
     const anchor = refund ? v3RefundAnchor(authority!) : (await this.store.getInventoryAuthority?.() || { syncId: this.ready.inventorySyncId || this.ready.runtime.version.syncId,
       syncVersion: this.ready.inventorySyncVersion ?? this.ready.runtime.version.syncVersion,
       version: this.ready.inventoryVersion, cursor: this.ready.inventoryCursor });
-    const currentCatalog = await this.catalog(tariffId, warehouseId);
+    const currentCatalog = await this.catalogAfterAssert(tariffId, warehouseId);
     const sourceCatalogs = new Map<string, LargeMasterSyncV3OperationalCatalog>();
     let currentTaxes: Promise<Record<string, unknown>[]> | undefined;
     const sourceTaxes = new Map<string, Promise<Record<string, unknown>[]>>();

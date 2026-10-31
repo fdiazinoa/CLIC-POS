@@ -295,6 +295,31 @@ CREATE TABLE IF NOT EXISTS transactions (
     syncError TEXT
 );
 
+-- Detalle de cocina (KDS). El servicio KDS la crea y migra por su cuenta; aquí queda
+-- documentada para que una base creada solo con este esquema no quede incompleta.
+CREATE TABLE IF NOT EXISTS ordenes_detalles (
+    id TEXT PRIMARY KEY,
+    orden_id TEXT NOT NULL,
+    producto_id TEXT NOT NULL DEFAULT '',
+    nombre TEXT NOT NULL DEFAULT '',
+    cantidad REAL DEFAULT 1,
+    modificadores TEXT,
+    estado_cocina TEXT DEFAULT 'PENDIENTE',
+    hora_inicio_preparacion TEXT,
+    hora_terminado TEXT,
+    area_id TEXT,
+    recibido_at TEXT,
+    inicio_at TEXT,
+    listo_at TEXT,
+    entregado_at TEXT,
+    FOREIGN KEY (orden_id) REFERENCES transactions(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ordenes_detalles_orden ON ordenes_detalles (orden_id);
+CREATE INDEX IF NOT EXISTS idx_ordenes_detalles_area ON ordenes_detalles (area_id);
+CREATE INDEX IF NOT EXISTS idx_ordenes_detalles_recibido ON ordenes_detalles (recibido_at);
+CREATE INDEX IF NOT EXISTS idx_ordenes_detalles_listo ON ordenes_detalles (listo_at);
+
 CREATE TABLE IF NOT EXISTS transaction_history (
     id TEXT PRIMARY KEY,
     globalSequence INTEGER,

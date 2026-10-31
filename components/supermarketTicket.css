@@ -1,7 +1,7 @@
 .supermarket-ticket-table { min-width: 760px; }
 .supermarket-ticket-table .supermarket-money { width: 10.5rem; }
-.supermarket-ticket-table td.supermarket-money { font-size: 1rem; overflow-wrap: anywhere; }
-.supermarket-ticket-table td.supermarket-line-total { font-size: 1.125rem; }
+.supermarket-ticket-table td.supermarket-money { font-size: .95rem; overflow-wrap: anywhere; }
+.supermarket-ticket-table td.supermarket-line-total { font-size: 1rem; }
 .supermarket-ticket-table td.supermarket-money-long { font-size: .875rem; }
 .supermarket-variant { max-width: 100%; overflow-wrap: anywhere; }
 .supermarket-footer {

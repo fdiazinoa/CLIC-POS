@@ -34,6 +34,9 @@ export interface TerminalCredentials {
     identityMigrationRequired?: boolean | null;
 }
 
+/** An open-ended session has no date: the mirror key is absent and `null` is the only match. */
+const mirrorSessionDate=(storage:Storage,value:unknown)=>{if(value==null||value==='')storage.removeItem('clic_erp_sync_token_expires_at');else storage.setItem('clic_erp_sync_token_expires_at',String(value));};
+const sameSessionDate=(actual:string|null,expected:unknown)=>expected==null||expected===''?actual==null:actual===expected;
 const CREDENTIALS_KEY = 'clic_terminal_credentials_v1';
 let credentialWriteGeneration = 0;
 const AUTH_PROJECTION_MARKER='clic_terminal_auth_envelope_projection_v1';
@@ -211,9 +214,7 @@ const writeLegacyMirrors = (credentials: TerminalCredentials): void => {
         if (credentials.syncToken) {
             storage.setItem('clic_erp_sync_token', credentials.syncToken);
             storage.setItem('clic_erp_sync_token_updated_at', credentials.syncTokenUpdatedAt || new Date().toISOString());
-            if (credentials.syncTokenExpiresAt) {
-                storage.setItem('clic_erp_sync_token_expires_at', credentials.syncTokenExpiresAt);
-            }
+            mirrorSessionDate(storage, credentials.syncTokenExpiresAt);
         }
         if (credentials.authStatus) {
             storage.setItem('clic_sync_auth_status', credentials.authStatus);
@@ -256,7 +257,7 @@ export const readTerminalCredentialsSync = (): TerminalCredentials => {
     if(projectedTerminalAuthDocument!==null&&raw===projectedTerminalAuthDocument){
         const canonical=readJson(raw),status=storage.getItem('clic_sync_auth_status')||'';
         if(/DEVICE_NOT_AUTHORIZED|NEEDS_REAUTH|BOUND_AUTH_MISMATCH|AUTH_ERROR|REVOKED/i.test(status))return {...canonical,authStatus:status};
-        try{assertTerminalBindingMirrors(storage,canonical);if(storage.getItem('clic_erp_sync_token')!==canonical.syncToken||storage.getItem('clic_erp_sync_token_expires_at')!==canonical.syncTokenExpiresAt||storage.getItem('clic_erp_sync_token_updated_at')!==canonical.syncTokenUpdatedAt)throw Error('drift');}catch{return {...canonical,authStatus:'BOUND_AUTH_MISMATCH'};}
+        try{assertTerminalBindingMirrors(storage,canonical);if(storage.getItem('clic_erp_sync_token')!==canonical.syncToken||!sameSessionDate(storage.getItem('clic_erp_sync_token_expires_at'),canonical.syncTokenExpiresAt)||storage.getItem('clic_erp_sync_token_updated_at')!==canonical.syncTokenUpdatedAt)throw Error('drift');}catch{return {...canonical,authStatus:'BOUND_AUTH_MISMATCH'};}
         return canonical;
     }
     const stored = readJson(raw);
@@ -391,19 +392,20 @@ export const captureTerminalSessionSnapshot=():TerminalSessionSnapshot=>{
     if(!credentials||typeof credentials!=='object'||Array.isArray(credentials))throw Error('SYNC_AUTH_CANONICAL_CREDENTIALS_REQUIRED');
     return {document,generation:credentialWriteGeneration,credentials};
 };
-export const saveTerminalSessionCAS=(snapshot:TerminalSessionSnapshot,session:{token:string;expiresAt:string;observation:TerminalSessionObservation},assertCurrent:()=>void):Promise<void>=>{
+export const saveTerminalSessionCAS=(snapshot:TerminalSessionSnapshot,session:{token:string;expiresAt:string|null;observation:TerminalSessionObservation},assertCurrent:()=>void):Promise<void>=>{
     const operation=credentialWriteQueue.then(async()=>{
         const storage=getStorage();
         const current=()=>{assertCurrent();if(!storage||credentialWriteGeneration!==snapshot.generation||storage.getItem(CREDENTIALS_KEY)!==snapshot.document)throw Error('SYNC_AUTH_SESSION_CHANGED');};
         current();
-        if(typeof session.token!=='string'||!session.token||session.token.trim()!==session.token||/[\r\n\t]/.test(session.token)||!Number.isFinite(Date.parse(session.expiresAt))||Date.parse(session.expiresAt)<=Date.now()||session.observation.source!=='LOCAL_OBSERVATION_OF_ERP_SYNC_AUTH')throw Error('SYNC_AUTH_SESSION_INVALID');
-        const next={...JSON.parse(snapshot.document),syncToken:session.token,syncTokenExpiresAt:session.expiresAt,syncTokenUpdatedAt:session.observation.observedAt,syncSessionObservation:session.observation};
+        const openEnded=session.expiresAt==null||session.expiresAt==='';
+        if(typeof session.token!=='string'||!session.token||session.token.trim()!==session.token||/[\r\n\t]/.test(session.token)||(!openEnded&&(!Number.isFinite(Date.parse(session.expiresAt as string))||Date.parse(session.expiresAt as string)<=Date.now()))||session.observation.source!=='LOCAL_OBSERVATION_OF_ERP_SYNC_AUTH')throw Error('SYNC_AUTH_SESSION_INVALID');
+        const next={...JSON.parse(snapshot.document),syncToken:session.token,syncTokenExpiresAt:openEnded?null:session.expiresAt,syncTokenUpdatedAt:session.observation.observedAt,syncSessionObservation:session.observation};
         // Preferences and localStorage are separate stores: propagate failures/partial persistence, never label them atomic/durable success.
         await writeNativeCredentials(JSON.stringify(next));
         current();
         storage!.setItem(CREDENTIALS_KEY,JSON.stringify(next));
         storage!.setItem('clic_erp_sync_token',session.token);
-        storage!.setItem('clic_erp_sync_token_expires_at',session.expiresAt);
+        mirrorSessionDate(storage!,session.expiresAt);
         storage!.setItem('clic_erp_sync_token_updated_at',session.observation.observedAt);
         credentialWriteGeneration++;
     });
@@ -417,14 +419,14 @@ export const projectTerminalAuthEnvelope=(before:string,after:string,assertCurre
         const storage=getStorage(),allowed=async()=>{await assertCurrent();const raw=storage?.getItem(CREDENTIALS_KEY);if(!storage||raw!==before&&raw!==after)throw Error('SYNC_BINDING_PROJECTION_CONFLICT');assertTerminalBindingMirrors(storage,JSON.parse(after));};
         await allowed();const generation=credentialWriteGeneration;
         const native=await readNativeCredentialsForProjection();if(native!==null&&native!==before&&native!==after)throw Error('SYNC_BINDING_PROJECTION_CONFLICT');
-        const projected=JSON.parse(after);if(native===after&&storage!.getItem(CREDENTIALS_KEY)===after&&storage!.getItem('clic_erp_sync_token')===projected.syncToken&&storage!.getItem('clic_erp_sync_token_expires_at')===projected.syncTokenExpiresAt&&storage!.getItem('clic_erp_sync_token_updated_at')===projected.syncTokenUpdatedAt){projectedTerminalAuthDocument=after;return;}
+        const projected=JSON.parse(after);if(native===after&&storage!.getItem(CREDENTIALS_KEY)===after&&storage!.getItem('clic_erp_sync_token')===projected.syncToken&&sameSessionDate(storage!.getItem('clic_erp_sync_token_expires_at'),projected.syncTokenExpiresAt)&&storage!.getItem('clic_erp_sync_token_updated_at')===projected.syncTokenUpdatedAt){projectedTerminalAuthDocument=after;return;}
         await writeNativeCredentials(after);
         await allowed();if(generation!==credentialWriteGeneration)throw Error('SYNC_BINDING_PROJECTION_CONFLICT');
         const next=JSON.parse(after);
         storage!.setItem(AUTH_PROJECTION_MARKER,'1');
         storage!.setItem(CREDENTIALS_KEY,after);
         storage!.setItem('clic_erp_sync_token',next.syncToken);
-        storage!.setItem('clic_erp_sync_token_expires_at',next.syncTokenExpiresAt);
+        mirrorSessionDate(storage!,next.syncTokenExpiresAt);
         storage!.setItem('clic_erp_sync_token_updated_at',next.syncTokenUpdatedAt);
         projectedTerminalAuthDocument=after;
         credentialWriteGeneration++;
@@ -438,5 +440,5 @@ const assertTerminalBindingMirrors=(storage:Storage,c:TerminalCredentials)=>{
 };
 export const verifyTerminalAuthProjection=async(document:string):Promise<void>=>{
     const storage=getStorage();if(!storage||storage.getItem(CREDENTIALS_KEY)!==document)throw Error('SYNC_BINDING_PROJECTION_CONFLICT');const c=JSON.parse(document);assertTerminalBindingMirrors(storage,c);
-    if(storage.getItem('clic_erp_sync_token')!==c.syncToken||storage.getItem('clic_erp_sync_token_expires_at')!==c.syncTokenExpiresAt||storage.getItem('clic_erp_sync_token_updated_at')!==c.syncTokenUpdatedAt||await readNativeCredentialsForProjection()!==document)throw Error('SYNC_BINDING_PROJECTION_CONFLICT');
+    if(storage.getItem('clic_erp_sync_token')!==c.syncToken||!sameSessionDate(storage.getItem('clic_erp_sync_token_expires_at'),c.syncTokenExpiresAt)||storage.getItem('clic_erp_sync_token_updated_at')!==c.syncTokenUpdatedAt||await readNativeCredentialsForProjection()!==document)throw Error('SYNC_BINDING_PROJECTION_CONFLICT');
 };

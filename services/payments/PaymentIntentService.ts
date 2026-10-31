@@ -93,8 +93,11 @@ export class PaymentIntentService {
             );
             if (!partResult?.[0]?.values?.length) throw new Error('PAYMENT_INTENT_TABLE_PART_REQUIRED');
         }
-        return { ...((input.retainedOperation||input.futureCheckout) ? {status:row.status,providerReference:row.provider_reference,
-            authorizationCode:row.authorization_code,responseCode:row.response_code} : {}), intentId: String(row.intent_id || intentId), idempotencyKey: String(row.idempotency_key || idempotencyKey) };
+        // The persisted status always travels back: an unanswered card (AUTHORIZING/UNKNOWN/
+        // RECONCILIATION_REQUIRED) must never be charged again by a silent retry.
+        return { status: row.status, providerReference:row.provider_reference,
+            authorizationCode:row.authorization_code,responseCode:row.response_code,
+            intentId: String(row.intent_id || intentId), idempotencyKey: String(row.idempotency_key || idempotencyKey) };
     }
 
     async markAuthorizing(intentId: string, retainedOperation = false,futureCheckout?:{checkoutId:string;transactionId:string},tablePart?:PaymentTablePartFence): Promise<void> {
@@ -129,7 +132,14 @@ export class PaymentIntentService {
             if (Number(result?.changes?.changes) !== 1) throw new Error('PAYMENT_INTENT_RECONCILIATION_REQUIRED');
             return;
         }
-        await this.update(intentId, 'AUTHORIZING');
+        if (!this.isEnabled()) return;
+        // A card whose outcome nobody knows is not authorized again: only a fresh (CREATED)
+        // or explicitly declined tender may start a new charge.
+        const result = await this.database.executeSQL!(
+            `UPDATE payment_intents_v2 SET status='AUTHORIZING', updated_at=? WHERE intent_id=? AND status IN ('CREATED','DECLINED')`,
+            [new Date().toISOString(), intentId]
+        );
+        if (Number(result?.changes?.changes) !== 1) throw new Error('PAYMENT_INTENT_RECONCILIATION_REQUIRED');
     }
 
     async markAuthorized(intentId: string, result: {
@@ -175,14 +185,6 @@ export class PaymentIntentService {
             [now, cutoff.toISOString()]
         );
         return Number(result?.changes?.changes ?? result?.changes ?? 0);
-    }
-
-    private async update(intentId: string, status: PaymentIntentStatus): Promise<void> {
-        if (!this.isEnabled()) return;
-        await this.database.executeSQL!(
-            'UPDATE payment_intents_v2 SET status = ?, updated_at = ? WHERE intent_id = ?',
-            [status, new Date().toISOString(), intentId]
-        );
     }
 }
 

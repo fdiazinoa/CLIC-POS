@@ -1,5 +1,6 @@
 import CheckoutTrackingSettings from './CheckoutTrackingSettings';
 import { LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED } from '../services/sync/LargeMasterSyncV3Authority';
+import { needsTerminalReauthorization, reauthorizeTerminal } from '../services/sync/TerminalReauthorizationService';
 import { resolveSyncTarget } from '../services/sync/SyncProfile';
 import { useV3CatalogBrowser } from '../services/sync/LargeMasterSyncV3CatalogRead';
 
@@ -9,7 +10,7 @@ import {
   Monitor, Users, Truck, ShieldCheck, FileText,
   Globe, Database, Activity, Mail, Coins, Grid,
   Cpu, HardDrive, Smartphone, Cloud, Lock, Package, Building2,
-  Printer, ArrowRightLeft, ShieldAlert, ListChecks, History, Tag, Percent, Award, Wallet, RefreshCw, Layers, ChefHat, UserCircle, BarChart3, Calendar, MessageCircle, Map as MapIcon, MapPin, PlugZap, ShoppingBag, Hash
+  Printer, ArrowRightLeft, ShieldAlert, ListChecks, History, Tag, Percent, Award, Wallet, RefreshCw, Layers, ChefHat, UserCircle, BarChart3, Calendar, MessageCircle, Map as MapIcon, MapPin, PlugZap, ShoppingBag, Hash, Stethoscope
 } from 'lucide-react';
 import { createNumberedMaster } from '../services/sync/MasterNumberRangeService';
 import {
@@ -80,6 +81,9 @@ const ReportViewer = React.lazy(() => import('./ReportViewer'));
 const SourcingIntelligence = React.lazy(() => import('./SourcingIntelligence'));
 const CompanySettings = React.lazy(() => import('./CompanySettings'));
 const MasterNumberRangeDiagnostics = React.lazy(() => import('./MasterNumberRangeDiagnostics'));
+const FiscalDiagnostics = React.lazy(() => import('./FiscalDiagnostics'));
+const PresentationDiagnostics = React.lazy(() => import('./PresentationDiagnostics'));
+const KdsReports = React.lazy(() => import('./KdsReports'));
 
 const SettingsModuleFallback: React.FC = () => (
   <div className="flex h-full min-h-[280px] items-center justify-center bg-slate-50">
@@ -131,6 +135,7 @@ interface SettingsProps {
   }>;
   onAdjustStock: (adjustments: { productId: string; quantity: number }[]) => void;
   onOpenFinance?: (initialCashMovementType?: 'IN' | 'OUT' | 'X_REPORT') => void;
+  onOpenAttendance?: () => void;
   onOpenZReport: () => void;
   onOpenHistory?: () => void;
   onOpenSupplyChain: () => void;
@@ -147,7 +152,7 @@ interface SettingsProps {
   erpRoleAuthority?: boolean;
 }
 
-type SettingsView = 'INVENTORY_TRACKING' | 'CHECKOUT_TRACKING' | 'HOME' | 'CATALOG' | 'WAREHOUSES' | 'PAYMENTS' | 'INTEGRATIONS' | 'COMPANY' | 'RECEIPT' | 'TERMINALS' | 'TEAM' | 'HARDWARE' | 'SECURITY' | 'LOGS' | 'EXCHANGE' | 'EMAIL' | 'TIPS' | 'DOCUMENTS' | 'TAXES' | 'SERVICE_TYPES' | 'PROMOTIONS' | 'IMPORT_EXPORT' | 'LOYALTY' | 'WALLET_KEYS' | 'SYNC' | 'MASTER_NUMBER_RANGES' | 'LAYOUT' | 'PRODUCTION_AREAS' | 'LABELS' | 'CUSTOMERS' | 'REPORTS' | 'AGENDA' | 'SPACES';
+type SettingsView = 'INVENTORY_TRACKING' | 'CHECKOUT_TRACKING' | 'HOME' | 'CATALOG' | 'WAREHOUSES' | 'PAYMENTS' | 'INTEGRATIONS' | 'COMPANY' | 'RECEIPT' | 'TERMINALS' | 'TEAM' | 'HARDWARE' | 'SECURITY' | 'LOGS' | 'EXCHANGE' | 'EMAIL' | 'TIPS' | 'DOCUMENTS' | 'TAXES' | 'SERVICE_TYPES' | 'PROMOTIONS' | 'IMPORT_EXPORT' | 'LOYALTY' | 'WALLET_KEYS' | 'SYNC' | 'MASTER_NUMBER_RANGES' | 'FISCAL_DIAGNOSTICS' | 'PRESENTATION_DIAGNOSTICS' | 'KDS_REPORTS' | 'LAYOUT' | 'PRODUCTION_AREAS' | 'LABELS' | 'CUSTOMERS' | 'REPORTS' | 'AGENDA' | 'SPACES';
 
 const ORDER_TAKER_SETTINGS_VIEWS = new Set<SettingsView>([
   'HOME',
@@ -347,6 +352,28 @@ const Settings: React.FC<SettingsProps> = (props) => {
       }
     } finally {
       setIsCheckingApkUpdate(false);
+    }
+  };
+
+  const [isReauthorizing, setIsReauthorizing] = useState(false);
+  const [reauthorizationHint, setReauthorizationHint] = useState('Renueva los tokens y la reserva fiscal de esta caja');
+  useEffect(() => {
+    try {
+      const state = needsTerminalReauthorization();
+      setReauthorizationHint(state.required ? `Requerido: ${state.reason}` : 'Tokens vigentes · renovar solo si el cobro fiscal falla');
+    } catch { /* diagnostics only */ }
+  }, []);
+  const handleReauthorize = async () => {
+    if (isReauthorizing) return;
+    if (!await clicConfirm('¿Reautorizar esta terminal con el ERP? Se renuevan los tokens y se prepara la reserva fiscal; no afecta ventas ya emitidas.')) return;
+    setIsReauthorizing(true);
+    try {
+      const result = await reauthorizeTerminal();
+      setReauthorizationHint(result.message);
+      const state = needsTerminalReauthorization();
+      setReauthorizationHint(state.required ? `Requerido: ${state.reason}` : 'Tokens vigentes · renovar solo si el cobro fiscal falla');
+    } finally {
+      setIsReauthorizing(false);
     }
   };
 
@@ -708,6 +735,15 @@ const Settings: React.FC<SettingsProps> = (props) => {
       case 'MASTER_NUMBER_RANGES':
         return <MasterNumberRangeDiagnostics onClose={() => setCurrentView('HOME')} />;
 
+      case 'FISCAL_DIAGNOSTICS':
+        return <FiscalDiagnostics onClose={() => setCurrentView('HOME')} users={props.users} roles={props.roles} currentUser={props.currentUser} />;
+
+      case 'PRESENTATION_DIAGNOSTICS':
+        return <PresentationDiagnostics onClose={() => setCurrentView('HOME')} config={props.config} terminalId={props.terminalId || ''} cart={[]} onUpdateConfig={props.onUpdateConfig} />;
+
+      case 'KDS_REPORTS':
+        return <KdsReports onClose={() => setCurrentView('HOME')} />;
+
       case 'CUSTOMERS':
         return (
           <CustomerManagement
@@ -1011,6 +1047,14 @@ const Settings: React.FC<SettingsProps> = (props) => {
             </div>
 
             <div className="space-y-12">
+              <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest mt-2 mb-3 border-b border-slate-100 pb-2">Accesos directos</h2>
+              <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
+                <SettingsCard icon={Building2} label="Empresa" description="RNC, Nombre y Contacto Legal" color="bg-blue-700" onClick={() => setCurrentView('COMPANY')} locked={!hasPermission('SETTINGS_ACCESS')} />
+                <SettingsCard icon={BarChart3} label="Informes y Analítica" description="BI, Snapshots y KPIs" color="bg-blue-700" onClick={() => setCurrentView('REPORTS')} locked={!hasPermission('REPORTS_VIEW_SALES')} />
+                <SettingsCard icon={Cloud} label={isCheckingApkUpdate ? 'Buscando APK...' : 'Actualizar APK'} description="Buscar y descargar release POS" color="bg-sky-700" onClick={handleManualApkUpdateCheck} locked={!hasPermission('SETTINGS_ACCESS') || isCheckingApkUpdate} />
+                <SettingsCard icon={UserCircle} label="Asistencia" description="Entradas, salidas y horarios del personal" color="bg-teal-600" onClick={() => props.onOpenAttendance?.()} locked={!hasPermission('SETTINGS_ACCESS')} />
+              </div>
+
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
   <SettingsCard icon={Package} label="Inventario y Catálogo" description="Artículos, almacenes, rastreo e importación" color="bg-emerald-700" onClick={() => setOpenSettingsGroup('CATALOG')} locked={false} />
   <SettingsCard icon={CreditCard} label="Finanzas y Legal" description="Empresa, pagos, impuestos y documentos" color="bg-blue-700" onClick={() => setOpenSettingsGroup('FINANCE')} locked={false} />
@@ -1080,7 +1124,6 @@ const Settings: React.FC<SettingsProps> = (props) => {
                     <div className="max-h-[85vh] w-full max-w-5xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl" onClick={event => event.stopPropagation()}>
                       <header className="mb-4 flex items-center justify-between border-b border-slate-200 pb-3"><h3 className="text-lg font-black text-slate-900">Finanzas y Legal</h3><button type="button" onClick={() => setOpenSettingsGroup(null)} className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-bold text-slate-700 hover:bg-slate-50">Cerrar</button></header>
                       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                  <SettingsCard icon={Building2} label="Empresa" description="RNC, Nombre y Contacto Legal" color="bg-blue-700" onClick={() => setCurrentView('COMPANY')} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={CreditCard} label="Métodos de Pago" description="Pasarelas, Tarjetas, QR" color="bg-indigo-500" onClick={() => setCurrentView('PAYMENTS')} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={PlugZap} label="Integraciones" description="AZUL, CardNet y adquirentes" color="bg-sky-600" onClick={() => setCurrentView('INTEGRATIONS')} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={ArrowRightLeft} label="Divisas y Cambio" description="Multi-moneda y Tasas" color="bg-teal-500" onClick={() => setCurrentView('EXCHANGE')} locked={!hasPermission('SETTINGS_ACCESS')} />
@@ -1148,12 +1191,14 @@ const Settings: React.FC<SettingsProps> = (props) => {
                     locked={!hasPermission('SETTINGS_ACCESS') || isRepairingReceivables}
                   />
                   <SettingsCard icon={RefreshCw} label="Sincronización" description="Estado de Red y Réplicas" color="bg-indigo-600" onClick={() => setCurrentView('SYNC')} locked={!hasPermission('SETTINGS_ACCESS')} />
+                  <SettingsCard icon={RefreshCw} label={isReauthorizing ? 'Reautorizando…' : 'Reautorizar terminal'} description={reauthorizationHint} color="bg-amber-600" onClick={() => { void handleReauthorize(); }} locked={!hasPermission('SETTINGS_ACCESS') || isReauthorizing} />
+                  <SettingsCard icon={Package} label="Diagnóstico de presentaciones" description="Almacén, tarifas, caché y carrito" color="bg-sky-700" onClick={() => setCurrentView('PRESENTATION_DIAGNOSTICS')} locked={!hasPermission('SETTINGS_ACCESS')} />
+                  <SettingsCard icon={Stethoscope} label="Diagnóstico fiscal" description="Autorización, reserva e intento guardado" color="bg-teal-700" onClick={() => setCurrentView('FISCAL_DIAGNOSTICS')} locked={!hasPermission('SETTINGS_ACCESS')} />
+                  <SettingsCard icon={BarChart3} label="Informes de KDS" description="Estados, tiempos, retrasos y volumen por hora" color="bg-emerald-700" onClick={() => setCurrentView('KDS_REPORTS')} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={Hash} label="Rangos de maestros" description="Códigos offline y disponibilidad" color="bg-cyan-700" onClick={() => setCurrentView('MASTER_NUMBER_RANGES')} locked={!hasPermission('SETTINGS_ACCESS')} />
-                  <SettingsCard icon={Cloud} label={isCheckingApkUpdate ? "Buscando APK..." : "Actualizar APK"} description="Buscar y descargar release POS" color="bg-sky-700" onClick={handleManualApkUpdateCheck} locked={!hasPermission('SETTINGS_ACCESS') || isCheckingApkUpdate} />
                   <SettingsCard icon={ShieldAlert} label="Seguridad y Datos" description="Backups y Modo Kiosco" color="bg-red-600" onClick={() => setCurrentView('SECURITY')} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={ListChecks} label="Activar log de seguimiento" description="Checkout, sincronización y rendimiento" color="bg-slate-700" onClick={() => setCurrentView('CHECKOUT_TRACKING')} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={History} label="Traza de Auditoría" description="Logs de Operaciones" color="bg-orange-500" onClick={() => setCurrentView('LOGS')} locked={!hasPermission('AUDIT_LOG_VIEW')} />
-                  <SettingsCard icon={BarChart3} label="Informes y Analítica" description="BI, Snapshots y KPIs" color="bg-blue-700" onClick={() => setCurrentView('REPORTS')} locked={!hasPermission('REPORTS_VIEW_SALES')} />
                 </div>
                     </div>
                   </div>

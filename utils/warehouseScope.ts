@@ -18,3 +18,26 @@ export const scopedWarehousesForStore = (
   });
   return scoped.length > 0 ? scoped : rows;
 };
+
+/**
+ * A restored ticket may hold articles that are only active in another warehouse of the box.
+ * Naming that warehouse turns "artículo no disponible" into a decision the cashier can take.
+ */
+export const alternativeWarehouseForLines = (
+  lines: readonly { id?: string; name?: string; activeInWarehouses?: string[] }[] | null | undefined,
+  warehouses: readonly { id?: string; name?: string; code?: string }[] | null | undefined,
+  sessionWarehouseId?: string | null,
+): { warehouseId: string; name: string; lineName: string } | null => {
+  const session = String(sessionWarehouseId || '').trim();
+  if (!session) return null;
+  const known = new Map((warehouses || []).map(row => [String(row?.id || ''), row]));
+  for (const line of Array.isArray(lines) ? lines : []) {
+    const active = Array.isArray(line?.activeInWarehouses) ? line.activeInWarehouses.map(String) : [];
+    if (!active.length || active.includes(session)) continue;
+    const candidate = active.find(id => known.has(id)) || active[0];
+    if (!candidate) continue;
+    const row = known.get(candidate);
+    return { warehouseId: candidate, name: String(row?.name || row?.code || candidate).trim(), lineName: String(line?.name || line?.id || '').trim() };
+  }
+  return null;
+};

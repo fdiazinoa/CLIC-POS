@@ -1,5 +1,6 @@
 
 import React, { useState, useMemo } from 'react';
+import { readCheckoutTrace, clearCheckoutTrace } from '../services/audit/CheckoutTrace';
 import {
    Search, AlertTriangle, Trash2, Unlock, User,
    ShoppingCart, Percent, RefreshCcw, FileText,
@@ -23,51 +24,31 @@ interface LogEntry {
 }
 
 // Mock Data Generator
-const GENERATE_LOGS = (): LogEntry[] => {
-   const actions: { type: ActionType; desc: string; sev: Severity }[] = [
-      { type: 'SALE', desc: 'Venta completada #T-1024', sev: 'INFO' },
-      { type: 'DELETE_ITEM', desc: 'Eliminó "Coca Cola" del carrito', sev: 'WARNING' },
-      { type: 'OPEN_DRAWER', desc: 'Apertura de cajón sin venta', sev: 'CRITICAL' },
-      { type: 'VOID_TICKET', desc: 'Anulación total de ticket #T-1020', sev: 'CRITICAL' },
-      { type: 'DISCOUNT', desc: 'Aplicó descuento manual 50%', sev: 'WARNING' },
-      { type: 'LOGIN', desc: 'Inicio de sesión en POS-01', sev: 'INFO' },
-      { type: 'REFUND', desc: 'Devolución de "Sandwich Mixto"', sev: 'WARNING' },
-   ];
-
-   const users = [
-      { name: 'Ana Cajera', avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=facearea&facepad=2&w=100&h=100&q=80' },
-      { name: 'Roberto Sup.', avatar: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=facearea&facepad=2&w=100&h=100&q=80' },
-      { name: 'Carlos Mesero', avatar: null }
-   ];
-
-   return Array.from({ length: 25 }).map((_, i) => {
-      const act = actions[Math.floor(Math.random() * actions.length)];
-      const user = users[Math.floor(Math.random() * users.length)];
-      const time = new Date();
-      time.setMinutes(time.getMinutes() - (i * 15)); // Stagger times
-
-      return {
-         id: `log-${i}`,
-         userId: `u-${i}`,
-         userName: user.name,
-         userAvatar: user.avatar || undefined,
-         action: act.type,
-         description: act.desc,
-         timestamp: time,
-         ticketId: Math.random() > 0.5 ? `T-${1000 + i}` : undefined,
-         severity: act.sev
-      };
-   });
+const SEVERITY_BY_KIND: Record<string, Severity> = {
+   ATTEMPT_HELD: 'WARNING',
+   AMOUNT_CHANGED: 'WARNING',
 };
+
+/** Real reconciliation trace of this terminal; empty when the POS never had to repair anything. */
+const readTrace = (): LogEntry[] => readCheckoutTrace().map(entry => ({
+   id: entry.id,
+   userId: 'pos',
+   userName: 'Reconciliación automática',
+   action: 'SALE' as ActionType,
+   description: entry.detail,
+   timestamp: new Date(entry.at),
+   severity: (SEVERITY_BY_KIND[entry.kind] || entry.severity) as Severity,
+}));
 
 interface ActivityLogProps {
    onClose: () => void;
 }
 
 const ActivityLog: React.FC<ActivityLogProps> = ({ onClose }) => {
-   const [logs] = useState<LogEntry[]>(GENERATE_LOGS());
+   const [logs, setLogs] = useState<LogEntry[]>(readTrace);
    const [searchTerm, setSearchTerm] = useState('');
    const [filterRiskOnly, setFilterRiskOnly] = useState(false);
+   const clearTrace = () => { clearCheckoutTrace(); setLogs([]); };
 
    // --- FILTERS ---
    const filteredLogs = useMemo(() => {
@@ -139,6 +120,13 @@ const ActivityLog: React.FC<ActivityLogProps> = ({ onClose }) => {
                >
                   <AlertTriangle size={18} className={filterRiskOnly ? 'fill-current' : ''} />
                   <span className="hidden sm:inline">Solo Riesgos</span>
+               </button>
+               <button
+                  onClick={clearTrace}
+                  className="px-4 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 transition-all border bg-white text-slate-600 border-slate-200 hover:bg-slate-50"
+               >
+                  <Trash2 size={18} />
+                  <span className="hidden sm:inline">Limpiar traza</span>
                </button>
             </div>
          </div>

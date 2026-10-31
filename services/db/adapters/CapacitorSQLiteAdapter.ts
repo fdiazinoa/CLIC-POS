@@ -183,6 +183,10 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             }
 
             if (!(await this.db.isDBOpen()).result) await this.db.open();
+            // A write blocked by another connection must fail (and be retried) instead of hanging
+            // forever: an unsettled native write stalls the whole write queue and the cashier can
+            // no longer close a sale.
+            await this.db.query('PRAGMA busy_timeout = 5000;');
             await this.initSchema();
             this.isReady = true;
             console.log('[CapacitorSQLiteAdapter] Connected');
@@ -384,7 +388,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
                 }
                 await db.execute('COMMIT;', false);
               } catch(error) {
-                await db.execute('ROLLBACK;',false).catch(()=>undefined);
+                await this.rollbackTransaction(db);
                 throw error;
               }
               return;
@@ -816,7 +820,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
                 code: String(document.external_code),
             };
         } catch (error) {
-            await db.execute('ROLLBACK;', false).catch(() => undefined);
+            await this.rollbackTransaction(db);
             throw error;
         }
         });
@@ -990,6 +994,8 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
     private async initSchema(): Promise<void> {
         const db = this.ensureDb();
         await db.execute('PRAGMA foreign_keys = ON;', false);
+        // Bounded wait for a locked database: SQLITE_BUSY is recoverable, an infinite wait is not.
+        await db.query('PRAGMA busy_timeout = 5000;');
         await db.execute(`
             ${FISCAL_WORKFLOW_V2_SCHEMA}
             CREATE TABLE IF NOT EXISTS documents (
@@ -1480,8 +1486,23 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             }
             await db.execute('COMMIT;', false);
         } catch (error) {
-            await db.execute('ROLLBACK;', false).catch(() => undefined);
+            await this.rollbackTransaction(db);
             throw error;
+        }
+    }
+
+    /** A rolled back transaction must actually close: a silent rollback failure leaves the
+     * connection inside a transaction, which then blocks or corrupts later writes. */
+    private async rollbackTransaction(db: SQLiteDBConnectionInstance): Promise<void> {
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+            try {
+                await db.execute('ROLLBACK;', false);
+                return;
+            } catch (error) {
+                if (attempt === 1) {
+                    console.error('[CapacitorSQLiteAdapter] ROLLBACK failed; the connection may still be inside a transaction', error);
+                }
+            }
         }
     }
 

@@ -9,6 +9,8 @@ import {canonicalPresentationJson,inventoryPresentationRevision,validateInventor
 
 export {presentationAuthority} from './authority';
 export const isTransientPresentationFailure=(error:unknown)=>/network|fetch|timeout|abort|INVENTORY_PRESENTATION_HTTP_(?:408|429|5\d{2})\b/i.test(String(error));
+/** Only an ERP answer disables the local presentations; a scope/config divergence must not poison the cache. */
+export const isErpPresentationDenial=(error:unknown)=>/INVENTORY_PRESENTATION_(ERP_DENIED|UNSUPPORTED|AUTH_REQUIRED|HTTP_(?:401|403))\b/i.test(String(error));
 export function createPresentationRuntime(authority:()=>PresentationAuthority,ports:{sql?:PresentationSQL;auth?:()=>PresentationAuth;fetchImpl?:typeof fetch;sessionId?:()=>string}={}){
  const sql=ports.sql??dbAdapter.inventoryPresentationsSQL?.();if(!sql)throw Error('INVENTORY_PRESENTATION_NATIVE_REQUIRED');
  const store=new InventoryPresentationStore(sql),raw=createInventoryPresentationClient({store,authority,sessionId:ports.sessionId??createUuid,...(ports.auth?{auth:ports.auth}:{}),...(ports.fetchImpl?{fetchImpl:ports.fetchImpl}:{})});
@@ -21,7 +23,9 @@ export function createPresentationRuntime(authority:()=>PresentationAuthority,po
     try{const cached=await raw.cached();if(cached&&version===generation&&canonicalPresentationJson(authority())===canonicalPresentationJson(expected))return cached.context;}catch{/* A known denial or invalid session never authorizes fallback. */}
     throw error;
    }
-   await store.deny(await inventoryPresentationRevision({origin:expected.origin,scope:expected.scope}));
+   // A mismatched local scope (for example a stale sales warehouse) is not an ERP denial:
+   // keeping the previous cache lets a corrected configuration recover without a reinstall.
+   if(isErpPresentationDenial(error))await store.deny(await inventoryPresentationRevision({origin:expected.origin,scope:expected.scope}));
    throw error;
   }).finally(()=>finishPresentationAdmission(lease));
  },async cached(){assertPresentationAdmission(authority());return raw.cached();}};
