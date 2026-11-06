@@ -38,63 +38,63 @@
     "qa": {
       "status": "PENDING",
       "role": "qa",
-      "agentId": "UNASSIGNED",
+      "agentId": "/root/dispatch_qa",
       "candidateSha": "1e3273e94309c2a4e50b19767cef981eaf51f5dd",
       "artifacts": []
     },
     "functional": {
       "status": "PENDING",
       "role": "qa",
-      "agentId": "UNASSIGNED",
+      "agentId": "/root/dispatch_qa",
       "candidateSha": "1e3273e94309c2a4e50b19767cef981eaf51f5dd",
       "artifacts": []
     },
     "regression": {
       "status": "PENDING",
       "role": "qa",
-      "agentId": "UNASSIGNED",
+      "agentId": "/root/dispatch_qa",
       "candidateSha": "1e3273e94309c2a4e50b19767cef981eaf51f5dd",
       "artifacts": []
     },
     "sync": {
       "status": "PENDING",
       "role": "sync-validator",
-      "agentId": "UNASSIGNED",
+      "agentId": "/root/dispatch_sync",
       "candidateSha": "1e3273e94309c2a4e50b19767cef981eaf51f5dd",
       "artifacts": []
     },
     "offline": {
       "status": "PENDING",
       "role": "qa",
-      "agentId": "UNASSIGNED",
+      "agentId": "/root/dispatch_qa",
       "candidateSha": "1e3273e94309c2a4e50b19767cef981eaf51f5dd",
       "artifacts": []
     },
     "device": {
       "status": "PENDING",
       "role": "qa",
-      "agentId": "UNASSIGNED",
+      "agentId": "/root/dispatch_qa",
       "candidateSha": "1e3273e94309c2a4e50b19767cef981eaf51f5dd",
       "artifacts": []
     },
     "performance": {
       "status": "PENDING",
       "role": "performance",
-      "agentId": "UNASSIGNED",
+      "agentId": "/root/dispatch_performance",
       "candidateSha": "1e3273e94309c2a4e50b19767cef981eaf51f5dd",
       "artifacts": []
     },
     "build": {
       "status": "PENDING",
       "role": "release",
-      "agentId": "UNASSIGNED",
+      "agentId": "/root/visibility_release",
       "candidateSha": "1e3273e94309c2a4e50b19767cef981eaf51f5dd",
       "artifacts": []
     },
     "internalApproval": {
       "status": "PENDING",
       "role": "orchestrator",
-      "agentId": "UNASSIGNED",
+      "agentId": "/root",
       "candidateSha": "1e3273e94309c2a4e50b19767cef981eaf51f5dd",
       "artifacts": []
     },
