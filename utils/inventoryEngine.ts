@@ -1,3 +1,4 @@
+import {dispatchInventoryConsumptionMode} from '../services/dispatch/companyDispatchDemand.js';
 
 import { Product, Season, Supplier, InventoryLedgerEntry, Warehouse, StockTransfer, CartItem } from '../types';
 import { db } from './db';
@@ -6,31 +7,7 @@ import { inventoryQuantity } from '../services/articleFormats/domain';
 
 // ... existing code ...
 
-const normalizeKitInventoryMode = (value: unknown): Product['kitInventoryMode'] | undefined => {
-    if (typeof value !== 'string') return undefined;
-    const normalized = value.trim().toUpperCase();
-    if (normalized === 'FINISHED_GOOD' || normalized === 'COMPONENT_CONSUMPTION') {
-        return normalized;
-    }
-    return undefined;
-};
-
-export const resolveInventoryConsumptionMode = (item: Pick<Product, 'type' | 'recipeDetails' | 'isInventoriable' | 'kitInventoryMode'>): 'DIRECT' | 'COMPONENTS' => {
-    const type = String(item?.type || '').trim().toUpperCase();
-    const recipeDetails = Array.isArray(item?.recipeDetails) ? item.recipeDetails : [];
-    const explicitMode = normalizeKitInventoryMode(item?.kitInventoryMode);
-
-    if (explicitMode === 'FINISHED_GOOD') return 'DIRECT';
-    if (explicitMode === 'COMPONENT_CONSUMPTION') return 'COMPONENTS';
-
-    if (recipeDetails.length === 0) return 'DIRECT';
-    if (type === 'RECETA') return 'COMPONENTS';
-    if (type === 'KIT') {
-        return item?.isInventoriable === false ? 'COMPONENTS' : 'DIRECT';
-    }
-
-    return 'COMPONENTS';
-};
+export const resolveInventoryConsumptionMode = (item: Pick<Product, 'type' | 'recipeDetails' | 'isInventoriable' | 'kitInventoryMode'>): 'DIRECT' | 'COMPONENTS' => dispatchInventoryConsumptionMode(item);
 
 /**
  * Helper to recursively calculate inventory deductions for a sold item.
