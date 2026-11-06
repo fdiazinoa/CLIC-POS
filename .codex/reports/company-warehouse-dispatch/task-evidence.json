@@ -11,18 +11,22 @@
   ],
   "gates": {
     "analysis": {
-      "status": "PENDING",
+      "status": "PASS",
       "role": "analyst",
       "agentId": "/root/pos_dispatch_analysis",
       "candidateSha": "1e3273e94309c2a4e50b19767cef981eaf51f5dd",
-      "artifacts": []
+      "artifacts": [
+        "planning/pos-analysis.md"
+      ]
     },
     "plan": {
-      "status": "PENDING",
+      "status": "PASS",
       "role": "plan-approver",
       "agentId": "/root/operations_review",
       "candidateSha": "1e3273e94309c2a4e50b19767cef981eaf51f5dd",
-      "artifacts": []
+      "artifacts": [
+        "planning/review-g1-final.md"
+      ]
     },
     "review": {
       "status": "PENDING",
@@ -176,5 +180,7 @@
       }
     }
   },
-  "scope": "Code implementation and isolated QA only. No operational APK installation, internal deployment or production release requested."
+  "scope": "Code implementation and isolated QA only. No operational APK installation, internal deployment or production release requested.",
+  "g0G1ApprovedPlanSha256": "035d34e5a33d14844ed578e097deaded96e2aee0c4bacc532021d77298d9f574",
+  "g0G1ApprovedSourceBase": "1e3273e94309c2a4e50b19767cef981eaf51f5dd"
 }
