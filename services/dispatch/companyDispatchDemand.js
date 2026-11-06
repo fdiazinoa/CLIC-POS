@@ -8,15 +8,21 @@ const decimal=(value,code)=>{let n;try{n=new D(String(value));}catch{fail(code);
 /** Existing POS mode selection, kept pure so the new retained-source compiler and
  * the operational inventory engine agree without sharing legacy mutable reads. */
 export function dispatchInventoryConsumptionMode(item){
- const mode=text(item.kitInventoryMode).toUpperCase(),details=array(item.recipeDetails),type=text(item.type).toUpperCase();
+ const mode=text(item?.kitInventoryMode).toUpperCase(),details=array(item?.recipeDetails),type=String(item?.type||'').trim().toUpperCase();
  if(mode==='FINISHED_GOOD')return'DIRECT';if(mode==='COMPONENT_CONSUMPTION')return'COMPONENTS';
- if(!details.length)return'DIRECT';if(type==='RECETA')return'COMPONENTS';if(type==='KIT')return item.isInventoriable===false?'COMPONENTS':'DIRECT';return'COMPONENTS';
+ if(!details.length)return'DIRECT';if(type==='RECETA')return'COMPONENTS';if(type==='KIT')return item?.isInventoriable===false?'COMPONENTS':'DIRECT';return'COMPONENTS';
 }
 const unit=v=>{const s=text(v).toLowerCase();return({unidad:'un',unidades:'un',und:'un',ud:'un',unit:'un',units:'un',gramo:'gr',gramos:'gr',g:'gr',kilogramo:'kg',kilogramos:'kg',litro:'l',litros:'l',mililitro:'ml',mililitros:'ml'})[s]||s;};
 const variants=raw=>array(object(raw.metadata).variants);
 const stock=raw=>{const m=object(raw.metadata),f=object(m.operationalFlags||m.operational_flags);return!['SERVICE','SERVICIO'].includes(text(raw.type).toUpperCase())&&(m.isInventoriable??m.is_inventoriable)!==false&&f.trackInventory!==false;};
 const tracking=raw=>{const m=object(raw.metadata),f=object(m.operationalFlags||m.operational_flags),o=object(m.operations);return f.usesSerial===true||f.usesSerialNumbers===true||o.tracks_serials===true||m.is_serialized===true?'SERIAL':f.usesLots===true||o.tracks_lots===true?'LOT':null;};
-const minor=n=>{const value=n.times(1000000);if(n.dp()>6||!value.isInteger()||value.gt(Number.MAX_SAFE_INTEGER)||!value.mod(100).isZero())fail('DISPATCH_DEMAND_NOT_BASE4_REPRESENTABLE');return value.toNumber();};
+// Carry rational quantities through the entire graph. Decimal division at an
+// intermediate recipe yield would round 1/3 before a later factor cancels it.
+const gcd=(a,b)=>{while(b){const r=a%b;a=b;b=r;}return a;};
+const fraction=n=>{if(n.e>18||n.e< -18||n.sd()>30)fail('DISPATCH_RECIPE_QUANTITY_RANGE');const parts=n.toFixed().split('.'),den=10n**BigInt(parts[1]?.length||0),num=BigInt(parts.join(''));const g=gcd(num,den);return{num:num/g,den:den/g};};
+const multiply=(a,b)=>{const num=a.num*b.num,den=a.den*b.den,g=gcd(num,den);return{num:num/g,den:den/g};};
+const divide=(a,b)=>multiply(a,{num:b.den,den:b.num});
+const minor=n=>{const scaled=n.num*1000000n;if(scaled%n.den!==0n)fail('DISPATCH_DEMAND_NOT_BASE4_REPRESENTABLE');const value=scaled/n.den;if(value>BigInt(Number.MAX_SAFE_INTEGER)||value%100n!==0n)fail('DISPATCH_DEMAND_NOT_BASE4_REPRESENTABLE');return Number(value);};
 /** Only issuer-retained raw records are accepted here. Never use sale-carried
  * recipeDetails or a generic operational lookup that hides nonsellable children.
  * The result contains physical quantities, not sale-time valuation. */
@@ -45,17 +51,17 @@ export function compileCompanyDispatchDemand(catalog,line){
    for(const detail of details){if(!detail||typeof detail!=='object'||['waste','wastePercent','wastePercentage','optional','isOptional','bomVariantId','variantId','variant_id'].some(k=>detail[k]!==undefined&&detail[k]!==false&&detail[k]!==0&&detail[k]!==null&&detail[k]!==''))fail('DISPATCH_RECIPE_SEMANTICS_UNPROVEN');
     const ref=text(detail.childItemId||detail.child_item_id||detail.productId||detail.product_id||detail.childSku||detail.child_sku),matches=[...nodes.values()].filter(n=>n.id===ref||n.sku===ref);if(!ref||matches.length!==1)fail('DISPATCH_RECIPE_CHILD_MISSING_OR_AMBIGUOUS');const child=matches[0],childMeta=object(child.metadata);
     if(variants(child).length)fail('DISPATCH_RECIPE_CHILD_VARIANT_UNPROVEN');
-    let required=decimal(detail.quantity,'DISPATCH_RECIPE_QUANTITY_INVALID');const conversion=decimal(detail.conversionFactor??detail.conversion_factor??1,'DISPATCH_RECIPE_CONVERSION_INVALID');
+    let required=fraction(decimal(detail.quantity,'DISPATCH_RECIPE_QUANTITY_INVALID'));const conversion=decimal(detail.conversionFactor??detail.conversion_factor??1,'DISPATCH_RECIPE_CONVERSION_INVALID');
     const from=unit(detail.unit||detail.measurementUnit),original=unit(detail.originalUnit||detail.original_unit),target=unit(childMeta.measurementUnit||childMeta.measurement_unit||child.uom||'Unidad');
-    if(original&&original!==from){if(original!==target||!from)fail('DISPATCH_RECIPE_UOM_UNPROVEN');required=required.times(conversion);}
+    if(original&&original!==from){if(original!==target||!from)fail('DISPATCH_RECIPE_UOM_UNPROVEN');required=multiply(required,fraction(conversion));}
     else if(!conversion.eq(1)||from&&from!==target)fail('DISPATCH_RECIPE_UOM_UNPROVEN');
-    visit(child,amount.div(yieldQuantity).times(required),[...path,raw.id],'',false);
+    visit(child,divide(multiply(amount,required),fraction(yieldQuantity)),[...path,raw.id],'',false);
    }return;
   }
   if(!stock(raw))return;if(raw.company_id!==catalog.scope.companyId)fail('DISPATCH_SHARED_OR_FOREIGN_STOCK_ITEM');
   const choices=variants(raw);if(choices.length){if(!isRoot||!variantId||!choices.some(v=>String(v.id||v.variant_id||v.sku)===variantId))fail('DISPATCH_VARIANT_SELECTION_REQUIRED');}else if(variantId)fail('DISPATCH_VARIANT_NOT_ISSUED');
   const dimensions=variantId?{variantId}:{},key=raw.id+'|'+JSON.stringify(dimensions),previous=result.get(key),quantityMinor=minor(amount);if(quantityMinor<=0)fail('DISPATCH_DEMAND_QUANTITY_INVALID');const combined=(previous?.quantityMinor||0)+quantityMinor;if(!Number.isSafeInteger(combined))fail('DISPATCH_DEMAND_OVERFLOW');result.set(key,{itemId:raw.id,dimensions,quantityMinor:combined,trackingKind:tracking(raw),paths:[...(previous?.paths||[]),[...path,raw.id]]});
  };
- visit(root,quantity.times(factor),[],line.variantId||'',true);
+ visit(root,multiply(fraction(quantity),fraction(factor)),[],line.variantId||'',true);
  return{schemaVersion:1,source:'ISSUED_RAW_GRAPH_BASE6_V1',commercialItemId:root.id,commercialQuantity:quantity.toNumber(),formatFactor:factor.toNumber(),demands:[...result.values()].sort((a,b)=>(a.itemId+'|'+JSON.stringify(a.dimensions)).localeCompare(b.itemId+'|'+JSON.stringify(b.dimensions))),nonStockReason:result.size?null:['SERVICE','SERVICIO'].includes(text(root.type).toUpperCase())?'CANONICAL_SERVICE':'CANONICAL_NON_STOCK_GRAPH'};
 }
