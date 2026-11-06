@@ -1,3 +1,4 @@
+import {assertDispatchFinancedSource} from '../../dispatch/DispatchFinancedSource';
 import {verifyDispatchQuotaDelivery,type DispatchQuotaDelivery,type DispatchScope} from '../../dispatch/DispatchAuthority';
 import {COMPANY_DISPATCH_ESCROW_SCHEMA,installDispatchQuota,prepareDispatchPrecharge,markDispatchEffectPossible,commitDispatchPrecharge,abandonDispatchPrecharge,type DispatchDemand} from '../CompanyDispatchEscrowStore';
 import {TRACKING_OPERATION_SCHEMA,prepareTrackingOperation,readTrackingOperation,recordTrackingPaymentEffect,assertTrackingOperationCommit,readCommittedTrackingReceipt,retireTrackingOperation,type TrackingOperation,type TrackingScope} from '../TrackingCheckoutOperation';
@@ -583,6 +584,13 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         await this.withWriteLock(()=>this.executeUnlocked([],async()=>{
             const active=(await this.ensureDb().query('SELECT a.pool_id FROM pos_dispatch_active_pool_v1 a JOIN master_v3_operational_owner o ON o.binding=a.native_binding WHERE a.singleton=1')).values?.[0];
             if(active?.pool_id!==input.poolId)throw Error('DISPATCH_ACTIVE_BINDING_POOL_MISMATCH');
+            if(!Array.isArray(input.demands)||input.demands.length<1||input.demands.length>200)throw Error('DISPATCH_DEMAND_INVALID');
+            const pool=(await this.ensureDb().query('SELECT * FROM pos_dispatch_pool_v1 WHERE pool_id=?',[input.poolId])).values?.[0];
+            const owner=(await this.ensureDb().query('SELECT native_binding FROM pos_dispatch_active_pool_v1 WHERE singleton=1')).values?.[0];
+            if(input.source.v3Binding!==owner?.native_binding)throw Error('DISPATCH_CHECKOUT_NATIVE_OWNER_MISMATCH');
+            const placeholders=input.demands.map(()=>'?').join(',');
+            const quotas=(await this.ensureDb().query(`SELECT q.*,d.witness_hash FROM pos_dispatch_quota_v1 q JOIN pos_dispatch_quota_delivery_v1 d ON d.quota_id=q.id WHERE q.pool_id=? AND q.id IN(${placeholders})`,[input.poolId,...input.demands.map(d=>d.quotaId)])).values||[];
+            assertDispatchFinancedSource(input.source,input.demands,quotas,pool||{},input.checkoutId,input.transactionId);
             await prepareDispatchPrecharge(this.ensureDb() as any,input);
         },true));
     }

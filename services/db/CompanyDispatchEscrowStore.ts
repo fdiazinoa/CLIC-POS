@@ -38,7 +38,7 @@ export function dispatchPaymentIntents(payments:unknown):string{
  return canonicalDispatchJSON(intents);
 }
 export function dispatchCommercialSource(source:Record<string,unknown>):string{
- return canonicalDispatchJSON(Object.fromEntries(['items','customerId','customer','currency','total','tax','taxAmount','discount','subtotal','v3Binding','v3WarehouseId'].map(k=>[k,source[k]])));
+ return canonicalDispatchJSON(Object.fromEntries(['companyDispatchSource','items','customerId','customer','currency','total','tax','taxAmount','discount','subtotal','v3Binding','v3WarehouseId'].map(k=>[k,source[k]])));
 }
 export type DispatchDemand={quotaId:string;quantityMinor:number};
 const fail=(code:string):never=>{throw new Error(code);};
