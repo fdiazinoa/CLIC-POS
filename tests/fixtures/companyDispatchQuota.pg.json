@@ -1,0 +1,131 @@
+{
+  "id": "cbe8d05e-69b2-4ad3-8763-640d9efe1b4a",
+  "kind": "COMPANY_DISPATCH_QUOTA",
+  "scope": {
+    "localId": "80000000-0000-4000-8000-000000000002",
+    "storeId": "50000000-0000-4000-8000-000000000002",
+    "deviceId": "fixture-device",
+    "tenantId": "10000000-0000-4000-8000-000000000001",
+    "bindingId": "74cd0984-96bd-48f6-8ca7-d5c4ec5b1d7a",
+    "companyId": "20000000-0000-4000-8000-000000000001",
+    "generation": "27df01e3-f812-43d9-802e-15086a0a7aa0",
+    "terminalId": "50000000-0000-4000-8000-000000000003",
+    "warehouseId": "80000000-0000-4000-8000-000000000003"
+  },
+  "itemId": "80000000-0000-4000-8000-000000000001",
+  "dimensions": {},
+  "grantedMinor": 8000000,
+  "authorityHash": "64db1d81bd7ed9d235a508103ea8d2d800dfa8f615ec5334c21c48e39cafb96a",
+  "catalogSource": {
+    "taxes": [],
+    "tariffs": [],
+    "stockItem": {
+      "id": "80000000-0000-4000-8000-000000000001",
+      "sku": "TEST",
+      "uom": null,
+      "type": "PRODUCT",
+      "nombre": "Sintético ñ / café 😀",
+      "taxable": false,
+      "metadata": {
+        "articleFormats": [
+          {
+            "id": "base:item",
+            "name": "Unidad",
+            "active": true,
+            "factor": 1,
+            "isBase": true,
+            "prices": [],
+            "barcode": "",
+            "allowSale": true,
+            "sortOrder": 0,
+            "variantId": null,
+            "defaultSale": true,
+            "abbreviation": "UND",
+            "allowPurchase": true,
+            "allowTransfer": true,
+            "defaultPurchase": false
+          },
+          {
+            "id": "BOX6",
+            "name": "Caja",
+            "active": true,
+            "factor": 6,
+            "isBase": false,
+            "prices": [],
+            "barcode": "",
+            "allowSale": true,
+            "sortOrder": 1,
+            "variantId": null,
+            "defaultSale": false,
+            "abbreviation": "CJ",
+            "allowPurchase": true,
+            "allowTransfer": true,
+            "defaultPurchase": true
+          }
+        ]
+      },
+      "is_active": true,
+      "tenant_id": "10000000-0000-4000-8000-000000000001",
+      "company_id": "20000000-0000-4000-8000-000000000001",
+      "precio_venta": null
+    },
+    "discriminator": "COMPANY_DISPATCH_CATALOG_SOURCE_V1",
+    "schemaVersion": 1,
+    "commercialItem": {
+      "id": "80000000-0000-4000-8000-000000000001",
+      "sku": "TEST",
+      "uom": null,
+      "type": "PRODUCT",
+      "nombre": "Sintético ñ / café 😀",
+      "taxable": false,
+      "metadata": {
+        "articleFormats": [
+          {
+            "id": "base:item",
+            "name": "Unidad",
+            "active": true,
+            "factor": 1,
+            "isBase": true,
+            "prices": [],
+            "barcode": "",
+            "allowSale": true,
+            "sortOrder": 0,
+            "variantId": null,
+            "defaultSale": true,
+            "abbreviation": "UND",
+            "allowPurchase": true,
+            "allowTransfer": true,
+            "defaultPurchase": false
+          },
+          {
+            "id": "BOX6",
+            "name": "Caja",
+            "active": true,
+            "factor": 6,
+            "isBase": false,
+            "prices": [],
+            "barcode": "",
+            "allowSale": true,
+            "sortOrder": 1,
+            "variantId": null,
+            "defaultSale": false,
+            "abbreviation": "CJ",
+            "allowPurchase": true,
+            "allowTransfer": true,
+            "defaultPurchase": true
+          }
+        ]
+      },
+      "is_active": true,
+      "tenant_id": "10000000-0000-4000-8000-000000000001",
+      "company_id": "20000000-0000-4000-8000-000000000001",
+      "precio_venta": null
+    }
+  },
+  "digestVersion": "DISPATCH_JSONB_CANONICAL_UTF8_V1",
+  "issuedSequence": 1,
+  "policyRevision": 1,
+  "contractVersion": 1,
+  "authorityCanonical": "{\"catalogSource\":{\"commercialItem\":{\"company_id\":\"20000000-0000-4000-8000-000000000001\",\"id\":\"80000000-0000-4000-8000-000000000001\",\"is_active\":true,\"metadata\":{\"articleFormats\":[{\"abbreviation\":\"UND\",\"active\":true,\"allowPurchase\":true,\"allowSale\":true,\"allowTransfer\":true,\"barcode\":\"\",\"defaultPurchase\":false,\"defaultSale\":true,\"factor\":1,\"id\":\"base:item\",\"isBase\":true,\"name\":\"Unidad\",\"prices\":[],\"sortOrder\":0,\"variantId\":null},{\"abbreviation\":\"CJ\",\"active\":true,\"allowPurchase\":true,\"allowSale\":true,\"allowTransfer\":true,\"barcode\":\"\",\"defaultPurchase\":true,\"defaultSale\":false,\"factor\":6,\"id\":\"BOX6\",\"isBase\":false,\"name\":\"Caja\",\"prices\":[],\"sortOrder\":1,\"variantId\":null}]},\"nombre\":\"Sintético ñ / café 😀\",\"precio_venta\":null,\"sku\":\"TEST\",\"taxable\":false,\"tenant_id\":\"10000000-0000-4000-8000-000000000001\",\"type\":\"PRODUCT\",\"uom\":null},\"discriminator\":\"COMPANY_DISPATCH_CATALOG_SOURCE_V1\",\"schemaVersion\":1,\"stockItem\":{\"company_id\":\"20000000-0000-4000-8000-000000000001\",\"id\":\"80000000-0000-4000-8000-000000000001\",\"is_active\":true,\"metadata\":{\"articleFormats\":[{\"abbreviation\":\"UND\",\"active\":true,\"allowPurchase\":true,\"allowSale\":true,\"allowTransfer\":true,\"barcode\":\"\",\"defaultPurchase\":false,\"defaultSale\":true,\"factor\":1,\"id\":\"base:item\",\"isBase\":true,\"name\":\"Unidad\",\"prices\":[],\"sortOrder\":0,\"variantId\":null},{\"abbreviation\":\"CJ\",\"active\":true,\"allowPurchase\":true,\"allowSale\":true,\"allowTransfer\":true,\"barcode\":\"\",\"defaultPurchase\":true,\"defaultSale\":false,\"factor\":6,\"id\":\"BOX6\",\"isBase\":false,\"name\":\"Caja\",\"prices\":[],\"sortOrder\":1,\"variantId\":null}]},\"nombre\":\"Sintético ñ / café 😀\",\"precio_venta\":null,\"sku\":\"TEST\",\"taxable\":false,\"tenant_id\":\"10000000-0000-4000-8000-000000000001\",\"type\":\"PRODUCT\",\"uom\":null},\"tariffs\":[],\"taxes\":[]},\"contractVersion\":1,\"dimensions\":{},\"grantedMinor\":8000000,\"id\":\"cbe8d05e-69b2-4ad3-8763-640d9efe1b4a\",\"inventoryEffectsContract\":\"WAREHOUSE_RESERVATION_V1\",\"issuedSequence\":1,\"itemId\":\"80000000-0000-4000-8000-000000000001\",\"kind\":\"COMPANY_DISPATCH_QUOTA\",\"policyRevision\":1,\"scope\":{\"bindingId\":\"74cd0984-96bd-48f6-8ca7-d5c4ec5b1d7a\",\"companyId\":\"20000000-0000-4000-8000-000000000001\",\"deviceId\":\"fixture-device\",\"generation\":\"27df01e3-f812-43d9-802e-15086a0a7aa0\",\"localId\":\"80000000-0000-4000-8000-000000000002\",\"storeId\":\"50000000-0000-4000-8000-000000000002\",\"tenantId\":\"10000000-0000-4000-8000-000000000001\",\"terminalId\":\"50000000-0000-4000-8000-000000000003\",\"warehouseId\":\"80000000-0000-4000-8000-000000000003\"}}",
+  "inventoryEffectsContract": "WAREHOUSE_RESERVATION_V1"
+}

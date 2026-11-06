@@ -38,6 +38,7 @@ export interface DurableOutboxEventInput {
 }
 
 export interface FinancialCommitInput {
+    dispatchCommit?:{checkoutId:string;transactionId:string};
     trackingCommits?:Array<{checkoutId:string;transactionId:string;selections:import('../tracking/TrackingAuthority').TrackingSelection[]}>;
     fiscalAllocationPreconditions?:Array<{collection:string;id:string;expected:string|null}>;
     fiscalWorkflowCommits?: Array<{checkoutId:string;transactionId:string;birth:import('../fiscal/FiscalWorkflowV2Types').FiscalWorkflowBirthV2|null}>;
@@ -141,6 +142,11 @@ export interface DatabaseAdapter {
     // Android SQLite only. POS-2A uses this boundary to commit the financial
     // documents and their durable outbox events in one database transaction.
     commitFinancialTransaction?(input: FinancialCommitInput): Promise<void>;
+    readDispatchQuota?(id:string):Promise<{authorityCanonical:string;authorityHash:string;witnessHash:string;availableMinor:number}|null>;
+    installDispatchQuota?(delivery:import('../dispatch/DispatchAuthority').DispatchQuotaDelivery,scope:import('../dispatch/DispatchAuthority').DispatchScope,poolId:string,previouslySeen:boolean,witnessHash:string):Promise<void>;
+    prepareDispatchPrecharge?(input:{checkoutId:string;transactionId:string;poolId:string;demandDigest:string;source:Record<string,unknown>;demands:import('./CompanyDispatchEscrowStore').DispatchDemand[]}):Promise<void>;
+    markDispatchEffectPossible?(checkoutId:string,effectDigest:string,payments:unknown[]):Promise<void>;
+    abandonDispatchPrecharge?(checkoutId:string):Promise<void>;
 
     readTrackingCheckout?(cartIdentity:string,scope:import('./TrackingCheckoutOperation').TrackingScope):Promise<import('./TrackingCheckoutOperation').TrackingOperation|null>;
     readCommittedTrackingReceipt?(operation:import('./TrackingCheckoutOperation').TrackingOperation):Promise<import('../../types').Transaction|null>;

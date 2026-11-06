@@ -1,3 +1,5 @@
+import {verifyDispatchQuotaDelivery,type DispatchQuotaDelivery,type DispatchScope} from '../../dispatch/DispatchAuthority';
+import {COMPANY_DISPATCH_ESCROW_SCHEMA,installDispatchQuota,prepareDispatchPrecharge,markDispatchEffectPossible,commitDispatchPrecharge,abandonDispatchPrecharge,type DispatchDemand} from '../CompanyDispatchEscrowStore';
 import {TRACKING_OPERATION_SCHEMA,prepareTrackingOperation,readTrackingOperation,recordTrackingPaymentEffect,assertTrackingOperationCommit,readCommittedTrackingReceipt,retireTrackingOperation,type TrackingOperation,type TrackingScope} from '../TrackingCheckoutOperation';
 import {base6,readV3Base6Stock} from '../V3Base6Stock';
 import {TRACKING_ALLOCATION_SCHEMA,installTrackingAllocation,prepareTrackingCheckout,fenceTrackingCheckout,abandonTrackingCheckout,consumeTrackingCheckout} from '../TrackingAllocationStore';
@@ -566,6 +568,34 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         await this.withWriteLock(()=>this.executeUnlocked([],async()=>{await abandonTrackingCheckout(this.ensureDb() as any,checkoutId);await retireTrackingOperation(this.ensureDb() as any,checkoutId);},true));
     }
 
+    async readDispatchQuota(id:string):Promise<{authorityCanonical:string;authorityHash:string;witnessHash:string;availableMinor:number}|null>{
+        return this.withWriteLock(async()=>{const row=(await this.ensureDb().query("SELECT q.*,d.witness_hash,COALESCE((SELECT SUM(l.quantity_minor) FROM pos_dispatch_precharge_lines_v1 l JOIN pos_dispatch_precharge_v1 p ON p.checkout_id=l.checkout_id WHERE l.quota_id=q.id AND p.phase IN('PREPARED','EFFECT_POSSIBLE')),0) prepared FROM pos_dispatch_quota_v1 q JOIN pos_dispatch_quota_delivery_v1 d ON d.quota_id=q.id WHERE q.id=?",[id])).values?.[0];return row?{authorityCanonical:row.authority_json,authorityHash:row.authority_hash,witnessHash:row.witness_hash,availableMinor:row.state==='ACTIVE'?Number(row.granted_minor)-Number(row.consumed_minor)-Number(row.returned_minor)-Number(row.prepared):0}:null;});
+    }
+    async installDispatchQuota(delivery:DispatchQuotaDelivery,scope:DispatchScope,poolId:string,previouslySeen:boolean,witnessHash:string):Promise<void>{
+        await verifyDispatchQuotaDelivery(delivery,scope);
+        await this.withWriteLock(()=>this.executeUnlocked([],async()=>{
+            const active=(await this.ensureDb().query('SELECT a.pool_id FROM pos_dispatch_active_pool_v1 a JOIN master_v3_operational_owner o ON o.binding=a.native_binding WHERE a.singleton=1')).values?.[0];
+            if(active?.pool_id!==poolId)throw Error('DISPATCH_ACTIVE_BINDING_POOL_MISMATCH');
+            await installDispatchQuota(this.ensureDb() as any,delivery,poolId,previouslySeen,witnessHash);
+        },true));
+    }
+    async prepareDispatchPrecharge(input:{checkoutId:string;transactionId:string;poolId:string;demandDigest:string;source:Record<string,unknown>;demands:DispatchDemand[]}):Promise<void>{
+        await this.withWriteLock(()=>this.executeUnlocked([],async()=>{
+            const active=(await this.ensureDb().query('SELECT a.pool_id FROM pos_dispatch_active_pool_v1 a JOIN master_v3_operational_owner o ON o.binding=a.native_binding WHERE a.singleton=1')).values?.[0];
+            if(active?.pool_id!==input.poolId)throw Error('DISPATCH_ACTIVE_BINDING_POOL_MISMATCH');
+            await prepareDispatchPrecharge(this.ensureDb() as any,input);
+        },true));
+    }
+    async markDispatchEffectPossible(checkoutId:string,effectDigest:string,payments:unknown[]):Promise<void>{
+        await this.withWriteLock(()=>this.executeUnlocked([],async()=>{
+            const active=(await this.ensureDb().query('SELECT p.checkout_id FROM pos_dispatch_precharge_v1 p JOIN pos_dispatch_active_pool_v1 a ON a.pool_id=p.pool_id JOIN master_v3_operational_owner o ON o.binding=a.native_binding WHERE p.checkout_id=? AND a.singleton=1',[checkoutId])).values?.[0];
+            if(!active)throw Error('DISPATCH_ACTIVE_BINDING_POOL_MISMATCH');
+            await markDispatchEffectPossible(this.ensureDb() as any,checkoutId,effectDigest,payments);
+        },true));
+    }
+    async abandonDispatchPrecharge(checkoutId:string):Promise<void>{
+        await this.withWriteLock(()=>this.executeUnlocked([],()=>abandonDispatchPrecharge(this.ensureDb() as any,checkoutId),true));
+    }
     async commitFinancialTransaction(input: FinancialCommitInput): Promise<void> {
         const now = new Date().toISOString();
         const statements: Array<{ statement: string; values: any[] }> = [];
@@ -623,6 +653,17 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         const needsFinancialPrecondition = input.documents.some(row => row.document.v3InventoryBaseline
           || row.requireAbsent || row.expectedDocument !== undefined || row.v3StockRequirements);
         await this.withWriteLock(() => this.executeUnlocked(statements,async()=>{
+          const guardedPool=(await this.ensureDb().query("SELECT p.pool_id,p.state FROM pos_dispatch_pool_v1 p JOIN pos_dispatch_active_pool_v1 a ON a.pool_id=p.pool_id JOIN master_v3_operational_owner o ON o.binding=a.native_binding WHERE a.singleton=1 AND p.state IN('WAREHOUSE_DISPATCH','FROZEN')")).values?.[0];
+          if(guardedPool&&input.documents.some(d=>d.collectionName==='transactions')&&!input.dispatchCommit)throw Error('DISPATCH_CANONICAL_POOL_REQUIRES_ESCROW_COMMIT');
+          const dispatchSources=input.documents.filter(d=>d.collectionName==='transactions'&&d.document.inventoryEffectsContract==='WAREHOUSE_RESERVATION_V1');
+          if(dispatchSources.length||input.dispatchCommit){
+            const commit=input.dispatchCommit;
+            const source=dispatchSources[0];
+            const history=input.documents.find(d=>d.collectionName==='transactionHistory'&&d.document.id===commit?.transactionId);
+            const dispatchEvent=outboxEvents.find(e=>e.eventType==='SALE_POSTED'&&e.aggregateId===commit?.transactionId);
+            if(!commit||dispatchSources.length!==1||source?.document.id!==commit.transactionId||!source.requireAbsent||!history?.requireAbsent||JSON.stringify(source.document)!==JSON.stringify(history.document)||JSON.stringify(dispatchEvent?.payload.transaction)!==JSON.stringify(source.document))throw Error('DISPATCH_ATOMIC_SOURCE_REQUIRED');
+            await commitDispatchPrecharge(this.ensureDb() as any,commit.checkoutId,commit.transactionId,dispatchEvent!.eventId,source.document);
+          }
           const trackedSources=input.documents.filter(d=>d.collectionName==='transactions'&&d.document.items?.some((line:any)=>line.v3SaleAuthority&&line.trackingData?.length));
           const trackingCommits=input.trackingCommits||[];
           if(trackedSources.length!==trackingCommits.length||new Set(trackingCommits.map(c=>c.transactionId)).size!==trackingCommits.length||new Set(trackingCommits.map(c=>c.checkoutId)).size!==trackingCommits.length||trackedSources.some(d=>trackingCommits.filter(c=>c.transactionId===d.document.id).length!==1))throw Error('TRACKING_ATOMIC_SOURCE_REQUIRED');
@@ -671,7 +712,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             }
             await consumeFiscalWorkflowBirth(this.ensureDb() as any,commit,source.document as any,outboxEvents.find(e=>['SALE_POSTED','SALES_CREDIT_NOTE_POSTED'].includes(e.eventType)&&e.aggregateId===commit.transactionId)?.eventId);
           }
-        },Boolean(input.fiscalAllocationPreconditions?.length||input.trackingCommits?.length)));
+        },Boolean(input.fiscalAllocationPreconditions?.length||input.trackingCommits?.length||input.dispatchCommit)));
     }
 
     async getMasterNumberRanges(): Promise<MasterNumberRangeRecord[]> {
@@ -1084,6 +1125,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             ${OFFLINE_FISCAL_ABANDON_WRITER_SCHEMA}
             ${OFFLINE_FISCAL_ALLOCATION_WRITER_SCHEMA}
             ${TRACKING_ALLOCATION_SCHEMA}
+            ${COMPANY_DISPATCH_ESCROW_SCHEMA}
             ${TRACKING_OPERATION_SCHEMA}
             ${LARGE_MASTER_SYNC_V3_SCHEMA_SQL}
             ${ARTICLE_FORMATS_SCHEMA}
