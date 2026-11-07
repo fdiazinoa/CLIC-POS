@@ -536,6 +536,7 @@ test('ordinary reserved checkout uses installed quota and the real financial bui
   await assert.rejects(compileDispatchCheckoutSource(installed,transaction.items.map(line=>({...line,taxable:false})),{...transaction,v3WarehouseId:'W'}),/TAX_ASSIGNMENT/);
   await assert.rejects(compileDispatchCheckoutSource(installed,transaction.items,{...transaction,v3WarehouseId:'foreign'}),/ITEM_QUOTA_REQUIRED/);
   assert.equal((f.sql.prepare('SELECT count(*) n FROM pos_dispatch_precharge_v1').get() as any).n,0);
+  await assert.rejects(compileDispatchCheckoutSource(installed,transaction.items,{...transaction,v3WarehouseId:'W',serviceChargeAmount:1,total:119}),/SERVICE_CHARGE_NOT_READY/);
   const selected=await compileDispatchCheckoutSource(installed,transaction.items,{...transaction,v3WarehouseId:'W'});
   const source={...selected.source,id:transaction.id,companyDispatchSource:{...selected.source.companyDispatchSource,checkoutId:'checkout'}} as unknown as Transaction;
   await f.adapter.prepareDispatchPrecharge({...selected,source:source as any,checkoutId:'checkout',transactionId:source.id});await f.adapter.markDispatchEffectPossible('checkout','a'.repeat(64),source.payments);

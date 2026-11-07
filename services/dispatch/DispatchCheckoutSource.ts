@@ -9,6 +9,7 @@ const requireValue=(ok:unknown,code:string)=>{if(!ok)throw Error(code);};
  * rechecks exact demand and balances in its writer transaction before payment. */
 export async function compileDispatchCheckoutSource(authority:DispatchCheckoutAuthority,items:CartItem[],commercial:Record<string,unknown>){
  requireValue(items.length>0&&items.length<=200,'DISPATCH_CHECKOUT_LINES_REQUIRED');
+ requireValue(new Money(commercial.serviceChargeAmount as number||0).eq(0),'DISPATCH_SERVICE_CHARGE_NOT_READY');
  const used=new Map<string,number>(),lines=[];
  for(const line of items){
   const candidates=authority.quotas.filter(row=>row.authority.scope?.warehouseId===commercial.v3WarehouseId&&row.authority.catalogSource?.commercialItem?.id===line.id&&row.authority.itemId===line.id&&row.authority.scope?.bindingId===authority.bindingId&&row.authority.scope.generation===authority.generation&&row.authority.policyRevision===authority.policyRevision);

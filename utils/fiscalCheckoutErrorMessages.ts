@@ -21,6 +21,7 @@ export const PAID_ATTEMPT_ACTION =
 export const describeFiscalCheckoutFailure = (message: string | null | undefined): string | null => {
   const text = String(message || '').trim();
   if (!text) return null;
+  if(/DISPATCH_SERVICE_CHARGE_NOT_READY/.test(text))return 'Este recargo todavía no admite despacho por almacén. No se realizó ningún pago; conserva el ticket y revisa su configuración.';
   if(/DISPATCH_PREVIOUS_PAYMENT_RECONCILIATION_REQUIRED/.test(text))return 'Quedó un pago anterior pendiente en esta caja. Recupera su recibo antes de iniciar otro cobro; no se liberaron sus cupos.';
   if (RETIREMENT_DISABLED.test(text)) {
     return PAID_ATTEMPT.test(text)
