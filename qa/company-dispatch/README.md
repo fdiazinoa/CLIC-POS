@@ -43,3 +43,14 @@ curl -sS http://127.0.0.1:PUERTO/lab/call -H 'Content-Type: application/json' \
 El proveedor es un stub explícito que responde pendiente sin firma DGII. Se espera un fence persistido, `providerIssues:1` y estado `OUTCOME_UNKNOWN` sin error; no significa aceptación fiscal. Repetir no autoriza otro ISSUE. El selector y la confirmación de conduce son los mismos del perfil ordinario.
 
 El puente HTTP conserva el argumento opcional `undefined` y las mutaciones del objeto checkout de los métodos fiscales reales. El adaptador SQL ejecuta también el join de binding solicitado por el lector de adopción. No sustituye resultados ni autoriza rutas operativas externas. Este perfil no acredita el transporte de autenticación real ni el plugin Android.
+
+## Política contable CASH_CLOSE
+
+Añadir `--cash-close` (compatible con `--fiscal`) configura la empresa sintética antes del nacimiento de la venta. Tras vender y enviar SALE/PAYMENT, no debe existir journal de ingreso/cobro por documento. `closeCash` inserta un envelope Z sintético y llama **al aplicador ERP existente**; no simula ni siembra el asiento, sus contribuciones o las marcas. El ingreso/autorización/secuencia Z son una frontera fixture explícita.
+
+```sh
+curl -sS http://127.0.0.1:PUERTO/lab/call -H 'Content-Type: application/json' \
+  -d '{"name":"closeCash","args":[]}'
+```
+
+Repetir usa el mismo inbox Z. `--fail-close-projection` inyecta un único error de IO antes del primer projector de factura, después de creado el GL. `--fail-close-projection=2` falla el segundo projector para comprobar recuperación de un cierre con dos facturas. El reintento debe reutilizar el journal Z y completar las proyecciones; el conduce conserva su COGS independiente y único. La inyección pertenece sólo al lab, nunca al writer de producto.

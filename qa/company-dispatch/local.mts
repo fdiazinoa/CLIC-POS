@@ -26,6 +26,8 @@ register('data:text/javascript,' + encodeURIComponent("export async function res
 const { createCompanyDispatchErpFlowFixture } = await import(erp + '/server/services/companyDispatch.erpFlow.fixture.js');
 const f = await createCompanyDispatchErpFlowFixture();
 await f.db.query(await readFile(resolve(erp,'supabase/migrations/20261107101743_company_store_dispatch_policy.sql'),'utf8'));
+await f.db.query(await readFile(resolve(erp,'supabase/migrations/20261107115547_pos_dispatch_cash_close.sql'),'utf8'));
+if(process.argv.includes('--cash-close'))await f.db.query("update erp_companies set config=jsonb_set(config,'{accounting}',coalesce(config->'accounting','{}')||'{\"salesPostingMode\":\"CASH_CLOSE\"}'::jsonb) where id=$1",[f.ids.company]);
 f.command=async(action:string,body:any={},key=randomUUID())=>{await f.db.query('set role service_role');try{return(await f.db.query('select erp_company_dispatch_command_v1($1,$2,$3,$4) result',[{tenantId:f.ids.tenant,companyId:f.ids.company,storeId:f.ids.store},f.ids.actor,key,{action,...body}])).rows[0].result;}finally{await f.db.query('reset role');}};
 await f.db.query('update locales set mall_id=$1 where id=$2',[f.ids.store,f.ids.local]);
 const dir = await mkdtemp(resolve(tmpdir(), 'clic-dispatch-ui-'));
@@ -169,7 +171,16 @@ n.adapter.commitFinancialTransaction = async (input) => {
     }
     return originalCommit(input);
 };
-const op: Record<string, (...a: any[]) => any> = { sync, flush, state, assertFiscalIssuerAuthority:(...args:any[])=>global.__dispatchLab.db.assertFiscalIssuerAuthority(...args),assertFiscalTransactionAuthority:(...args:any[])=>global.__dispatchLab.db.assertFiscalTransactionAuthority(...args), fiscalWorker:async()=>{if(!fiscalWorker)throw Error('LAB_FISCAL_DISABLED');return{round:await fiscalWorker.runRound(),health:fiscalWorker.health(),providerIssues,rows:(await f.db.query("select id,state,reason,dispatch_fence,ncf,document_id from erp_pos_fiscal_workflows_v2 where scope->>'companyId'=$1",[ids.company])).rows};}, replayPayments: async () => { const before = await state(), rows = (await f.db.query("select id from erp_sync_inbox where store_id=$1 and event_type='PAYMENT_POSTED' and status='APPLIED'", [ids.store])).rows; if (!rows.length)
+let failCloseProjection=process.argv.some(arg=>arg==='--fail-close-projection'||arg.startsWith('--fail-close-projection='));
+let closeProjectionCallsBeforeFault=Number(process.argv.find(arg=>arg.startsWith('--fail-close-projection='))?.split('=')[1]||1);
+const existingRpc=queryClient.rpc.bind(queryClient);
+queryClient.rpc=async(name:string,args:any)=>{if(name==='erp_pos_dispatch_cash_close_project_v1'&&failCloseProjection&&--closeProjectionCallsBeforeFault===0){failCloseProjection=false;return{data:null,error:{message:'LAB_CLOSE_PROJECTION_FAULT'}};}return existingRpc(name,args);};
+let closeInbox:string|undefined;
+async function closeCash(){
+ if(!closeInbox){const event=randomUUID();closeInbox=randomUUID();const closedAt=new Date().toISOString(),openedAt=new Date(Date.now()-3600000).toISOString();const payload={tenant_id:ids.tenant,company_id:ids.company,store_id:ids.store,terminal_id:ids.terminal,device_id:ids.device,summary:{report_id:event,sequence_number:'LAB-Z-1',base_currency:'DOP',transaction_count:1,opened_at:openedAt,closed_at:closedAt},report:{id:event,openedAt,closedAt,baseCurrency:'DOP',sequenceNumber:'LAB-Z-1'}};await f.db.query("insert into erp_sync_inbox(id,event_id,event_type,status,tenant_id,store_id,terminal_id,payload)values($1,$2,'CASH_CLOSE_POSTED','RECEIVED',$3,$4,$5,$6)",[closeInbox,event,ids.tenant,ids.store,ids.terminal,payload]);}
+ return{application:await applySyncInboxEventById(closeInbox),state:await state()};
+}
+const op: Record<string, (...a: any[]) => any> = { sync, flush, state, closeCash, assertFiscalIssuerAuthority:(...args:any[])=>global.__dispatchLab.db.assertFiscalIssuerAuthority(...args),assertFiscalTransactionAuthority:(...args:any[])=>global.__dispatchLab.db.assertFiscalTransactionAuthority(...args), fiscalWorker:async()=>{if(!fiscalWorker)throw Error('LAB_FISCAL_DISABLED');return{round:await fiscalWorker.runRound(),health:fiscalWorker.health(),providerIssues,rows:(await f.db.query("select id,state,reason,dispatch_fence,ncf,document_id from erp_pos_fiscal_workflows_v2 where scope->>'companyId'=$1",[ids.company])).rows};}, replayPayments: async () => { const before = await state(), rows = (await f.db.query("select id from erp_sync_inbox where store_id=$1 and event_type='PAYMENT_POSTED' and status='APPLIED'", [ids.store])).rows; if (!rows.length)
         throw Error('PAYMENT_NOT_APPLIED'); const results = []; for (const row of rows)
         results.push(await applySyncInboxEventById(row.id)); const after = await state(); if (JSON.stringify(before) !== JSON.stringify(after))
         throw Error('PAYMENT_REPLAY_CHANGED_EFFECTS'); return { unchanged: true, results }; }, sessionValidate: (lines: any[]) => session.validate(config, lines, ids.tariff, ids.warehouse, 'SALE'), transactionCreate: (...a: any[]) => r.transactionService.createTransaction(...a), appComplete, sessionSearch: async () => [(await (await session.catalog(ids.tariff, ids.warehouse)).get(ids.item)).product], sessionResolve: async () => null };
