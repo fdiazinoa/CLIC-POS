@@ -1,6 +1,5 @@
 import {DISPATCH_POOL_INSTALL_SCHEMA,installDispatchPoolSnapshot,prepareDispatchBarrierProof,type DispatchPoolSnapshot,dispatchPoolId} from '../CompanyDispatchPool';
 import {DISPATCH_ADOPTION_SCHEMA,acknowledgeDispatchAdoption,type DispatchAdoptionProof} from '../CompanyDispatchAdoption';
-import {DISPATCH_OPERATOR_AUTH_SCHEMA} from '../../dispatch/DispatchOperatorAuthentication';
 import {assertDispatchFinancedSource} from '../../dispatch/DispatchFinancedSource';
 import {verifyDispatchQuotaDelivery,type DispatchQuotaDelivery,type DispatchScope} from '../../dispatch/DispatchAuthority';
 import {COMPANY_DISPATCH_ESCROW_SCHEMA,DISPATCH_FINANCIAL_SOURCE_GUARDS,installDispatchQuota,prepareDispatchPrecharge,markDispatchEffectPossible,commitDispatchPrecharge,sealDispatchNativeCapture,dispatchFinancialIntentDigest,snapshotDispatchFinancialPlan,canonicalDispatchJSON,abandonDispatchPrecharge,type DispatchDemand} from '../CompanyDispatchEscrowStore';
@@ -1210,7 +1209,6 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             ${DISPATCH_ADOPTION_SCHEMA}
             ${DISPATCH_POOL_INSTALL_SCHEMA}
             ${DISPATCH_FINANCIAL_SOURCE_GUARDS}
-            ${DISPATCH_OPERATOR_AUTH_SCHEMA}
             ${TRACKING_OPERATION_SCHEMA}
             ${LARGE_MASTER_SYNC_V3_SCHEMA_SQL}
             ${ARTICLE_FORMATS_SCHEMA}
