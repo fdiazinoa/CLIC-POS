@@ -5223,6 +5223,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       ? activePaymentFraction?.parts.filter(part => part.status === 'PENDING').length || 0
       : 0;
    const isIntermediateFractionPayment = Boolean(nextPaymentFractionPart && pendingPaymentFractionCount > 1);
+   const [retainedDispatchPayment,setRetainedDispatchPayment]=useState<{phase:string;payments:PaymentEntry[];receipt?:Transaction}|null>(null);
+   useEffect(()=>{let live=true;setRetainedDispatchPayment(null);if(!showPaymentModal)return;
+      void dbAdapter.readDispatchPendingCheckout?.(processedCart.map(line=>line.cartId)).then(pending=>{if(!live||!pending)return;const source=pending.receipt||pending.source as Record<string,any>;if(source.total===cartTotal&&source.customerId===effectiveSelectedCustomer?.id&&source.items?.length===processedCart.length&&processedCart.every(line=>source.items.some((original:CartItem)=>original.cartId===line.cartId&&original.id===line.id&&original.quantity===line.quantity&&original.price===line.price)))setRetainedDispatchPayment(pending);}).catch(()=>{if(live)setErrorToast('No se pudo recuperar el intento anterior. No registre otro cobro hasta revisarlo.');});
+      return()=>{live=false;};
+   },[showPaymentModal,processedCart,cartTotal,effectiveSelectedCustomer?.id]);
    const amountDueNow = activeRecoveredReservation
       ? (isRecoveredUberOrder ? 0 : reservationBalanceDue)
       : nextPaymentFractionPart?.amount ?? cartTotal;
@@ -7129,13 +7134,18 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       checkoutAdmissionRef.current?.assertCurrent();
    };
    const completeCommittedFiscalReceipt = async (paymentIds:string[]=[],beforeRecovery?:()=>void) => {
+      const dispatch=await resolveCommittedDispatchReceipt();if(dispatch){beforeRecovery?.();const result=await handlePaymentConfirm(dispatch.payments,dispatch.voluntaryTipAmount);if(!result)throw Error('DISPATCH_COMMITTED_RECEIPT_COMPLETION_REQUIRED');return result;}
       const receipt=await resolveCommittedFiscalReceipt(paymentIds);
       if(!receipt){const source=await resolveCommittedTrackingReceipt(paymentIds);if(!source)return null;beforeRecovery?.();const result=await handlePaymentConfirm(source.payments||[],source.voluntaryTipAmount);if(!result)throw Error('TRACKING_COMMITTED_RECEIPT_COMPLETION_REQUIRED');return result;}
       beforeRecovery?.();bindCommittedFiscalReceipt(receipt);
       const completed=await handlePaymentConfirm(receipt.transaction.payments||[],receipt.transaction.voluntaryTipAmount);
       if(!completed)throw Error('FISCAL_WORKFLOW_RECEIPT_COMPLETION_REQUIRED');return completed;
    };
-   const beforeV3PaymentEffects = async (paymentIds:string[]=[],paymentMethods:string[]=[]): Promise<PaymentEffectsFence> => {
+   const validatePaymentModalAuthority = async (additionalAmount=0) => {
+      if(additionalAmount!==0&&(dispatchProjection?.mode==='WAREHOUSE_DISPATCH'||await dbAdapter.readDispatchActivePoolState?.()==='WAREHOUSE_DISPATCH'))throw Error('DISPATCH_SERVICE_CHARGE_NOT_READY');
+      await assertCheckoutFiscalAuthority();
+   };
+   const beforeV3PaymentEffects = async (paymentIds:string[]=[],paymentMethods:string[]=[],voluntaryTip=0): Promise<PaymentEffectsFence> => {
       const completed = await completedReservationForReceipt();
       if (completed) return Object.assign(() => {},{completedTransaction:completed});
       const receipt=await resolveCommittedFiscalReceipt(paymentIds);
@@ -7160,6 +7170,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const nativeDispatchState=await dbAdapter.readDispatchActivePoolState?.();
       if(dispatchProjection?.phase==='PREPARING'||nativeDispatchState==='FROZEN')throw Error('La caja está cerrando la transición de despacho. Sincroniza los efectos pendientes y espera la activación de la política.');
       const dispatchCheckout=dispatchProjection?.mode==='WAREHOUSE_DISPATCH'||nativeDispatchState==='WAREHOUSE_DISPATCH';
+      if(dispatchCheckout&&voluntaryTip!==0)throw Error('DISPATCH_SERVICE_CHARGE_NOT_READY');
       if(dispatchCheckout&&(!dbAdapter.readDispatchCheckoutAuthority||!dbAdapter.prepareDispatchPrecharge||!dbAdapter.markDispatchEffectPossible||!v3Operational))throw Error('El despacho requiere la base local nativa y sus cupos instalados antes de cobrar.');
       await assertCheckoutFiscalAuthority();
       // A native attempt bound to another cart can never be resumed; release it here so the
@@ -7199,7 +7210,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
         const pending=!fiscalCheckoutRef.current&&!dispatchCheckoutRef.current?await dbAdapter.readDispatchPendingCheckout?.():null;
         const authority=await dbAdapter.readDispatchCheckoutAuthority!(fiscalCheckoutRef.current?.checkoutId||dispatchCheckoutRef.current?.checkoutId||pending?.checkoutId);
         const frozen=freezeAuthoritativeLineFiscalAmounts(processedCart,config,{discountAmount,isTaxIncluded,terminalConfig:activeTerminalConfig,transactionNetAmount:Math.round((cartTotal-cartTax-cartTip)*100)/100,transactionTaxAmount:cartTax,transactionTotal:cartTotal-cartTip,taxExempt:isSelectedCustomerTaxExempt,allowedTaxIds:appliedServiceTaxPolicy.taxIds});
-        dispatchPreparation=await compileDispatchCheckoutSource(authority,frozen,{total:cartTotal,netAmount:Math.round((cartTotal-cartTax-cartTip)*100)/100,taxAmount:cartTax,taxBreakdown,discountAmount,discountType:globalDiscount.type,discountValue:globalDiscount.value,isTaxIncluded,serviceChargeAmount:cartTip,userId:currentUser.id,customerId:effectiveSelectedCustomer?.id,customerSnapshot:effectiveSelectedCustomer?buildTransactionCustomerSnapshot(effectiveSelectedCustomer):undefined,currency:'DOP',v3WarehouseId:defaultSalesWarehouseId});
+        dispatchPreparation=await compileDispatchCheckoutSource(authority,frozen,{total:cartTotal,netAmount:Math.round((cartTotal-cartTax-cartTip)*100)/100,taxAmount:cartTax,taxBreakdown,discountAmount,discountType:globalDiscount.type,discountValue:globalDiscount.value,isTaxIncluded,serviceChargeAmount:cartTip,userId:currentUser.id,customerId:effectiveSelectedCustomer?.id,customerSnapshot:effectiveSelectedCustomer?buildTransactionCustomerSnapshot(effectiveSelectedCustomer):undefined,currency:'DOP',settlementCurrencyCode:'DOP',v3WarehouseId:defaultSalesWarehouseId});
         if(pending){
           const candidate={...dispatchPreparation.source,id:pending.transactionId,companyDispatchSource:{...dispatchPreparation.source.companyDispatchSource,checkoutId:pending.checkoutId}};
           if(dispatchCommercialSource(candidate)!==dispatchCommercialSource(pending.source))throw Error('El cobro anterior requiere reconciliación: cambió su intención. No se registró otro pago.');
@@ -10233,7 +10244,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             />
          )}
          <InteractionProgress ref={checkoutProgressRef}/>
-         {showPaymentModal && <UnifiedPaymentModal receiptOnlyInitialTransaction={receiptOnlyInitialTransaction} recoverCommittedReceipt={completeCommittedFiscalReceipt} openingTrace={paymentModalTraceRef.current} total={amountDueNow} items={cart} taxAmount={nextPaymentFractionPart && cartTotal > 0 ? cartTax * (amountDueNow / cartTotal) : cartTax} currencySymbol={baseCurrency.symbol} config={config} onClose={() => {
+         {showPaymentModal && <UnifiedPaymentModal retainedPaymentIntent={retainedDispatchPayment} receiptOnlyInitialTransaction={receiptOnlyInitialTransaction} recoverCommittedReceipt={completeCommittedFiscalReceipt} openingTrace={paymentModalTraceRef.current} total={amountDueNow} items={cart} taxAmount={nextPaymentFractionPart && cartTotal > 0 ? cartTax * (amountDueNow / cartTotal) : cartTax} currencySymbol={baseCurrency.symbol} config={config} onClose={() => {
             finishInteraction(paymentModalTraceRef.current, 'cancelled');
             recordCheckoutDiagnostic('PAYMENT_CLOSE');
             // Closing the charge screen abandons the attempt: never keep the box locked on it.
@@ -10244,7 +10255,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                setReturnToTableMapAfterPayment(false);
                onOpenTableMap();
             }
-         }} paymentOperationId={activeV3Reservation?.claimId} paymentIdNamespace={(():string=>{const cartKey=currentFiscalCheckoutCartIdentity();if(!paymentAttemptRef.current||paymentAttemptRef.current.cartKey!==cartKey)paymentAttemptRef.current={cartKey,id:stableCheckoutAttemptId(cartKey,()=>createUuid())};return paymentAttemptRef.current.id;})()} paymentOperationDate={activeV3Reservation?.invoiceDate} onFiscalAttemptClosed={onFiscalAttemptClosed} offlineFiscalReserve={offlineFiscalReserveInfo} amountChangeNotice={amountChangeNotice} beforePaymentEffects={beforeV3PaymentEffects} validatePaymentAuthority={assertCheckoutFiscalAuthority} onConfirm={handlePaymentConfirm} themeColor={config.themeColor} customer={effectiveSelectedCustomer} isDelinquent={isDelinquent} users={users} roles={roles} isMaster={isMaster} currentUser={currentUser} isRestaurantMode={isRestaurantMode} isInstallmentPayment={isIntermediateFractionPayment} />}
+         }} paymentOperationId={activeV3Reservation?.claimId} paymentIdNamespace={(():string=>{const cartKey=currentFiscalCheckoutCartIdentity();if(!paymentAttemptRef.current||paymentAttemptRef.current.cartKey!==cartKey)paymentAttemptRef.current={cartKey,id:stableCheckoutAttemptId(cartKey,()=>createUuid())};return paymentAttemptRef.current.id;})()} paymentOperationDate={activeV3Reservation?.invoiceDate} onFiscalAttemptClosed={onFiscalAttemptClosed} offlineFiscalReserve={offlineFiscalReserveInfo} amountChangeNotice={amountChangeNotice} beforePaymentEffects={beforeV3PaymentEffects} validatePaymentAuthority={validatePaymentModalAuthority} onConfirm={handlePaymentConfirm} themeColor={config.themeColor} customer={effectiveSelectedCustomer} isDelinquent={isDelinquent} users={users} roles={roles} isMaster={isMaster} currentUser={currentUser} isRestaurantMode={isRestaurantMode} isInstallmentPayment={isIntermediateFractionPayment} />}
          {showLoyaltyModal && <LoyaltyScanModal onClose={() => setShowLoyaltyModal(false)} onScan={handleLoyaltyScan} />}
          {showTableSellerModal && activeTable && <TableSellerModal
             tableName={activeTable.nombre || activeTable.name || 'Mesa'}

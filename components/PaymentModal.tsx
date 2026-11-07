@@ -80,6 +80,7 @@ export type PaymentEffectsFence = (() => void|Promise<void>) & {completedTransac
 interface PaymentModalProps {
    openingTrace?: PosInteractionTrace | null;
    receiptOnlyInitialTransaction?: Transaction|null;
+   retainedPaymentIntent?:{phase:string;payments:PaymentEntry[];receipt?:Transaction}|null;
    recoverCommittedReceipt?: (paymentIds:string[])=>Promise<Transaction|null>;
    total: number;
    items: CartItem[]; // Added items prop
@@ -96,8 +97,8 @@ interface PaymentModalProps {
    offlineFiscalReserve?:{remaining:number;validUntil:string|null;remainingByType?:Record<string,number>}|null;
    /** One line shown only when the amount to charge differs from the saved account (day tax change). */
    amountChangeNotice?: string | null;
-   beforePaymentEffects?: (paymentIds:string[],paymentMethods?:string[]) => Promise<PaymentEffectsFence>;
-   validatePaymentAuthority?: () => Promise<void>;
+   beforePaymentEffects?: (paymentIds:string[],paymentMethods?:string[],voluntaryTip?:number) => Promise<PaymentEffectsFence>;
+   validatePaymentAuthority?: (voluntaryTip?:number) => Promise<void>;
    themeColor: string;
    customer?: Customer | null;
    isDelinquent?: boolean;
@@ -274,7 +275,7 @@ type GatewayProgressOverlayState = {
 
 import SupervisorAuthModal from './SupervisorAuthModal';
 
-const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receiptOnlyInitialTransaction, recoverCommittedReceipt, total, items, taxAmount = 0, currencySymbol, config, onClose, onConfirm, paymentOperationId, paymentOperationDate, onFiscalAttemptClosed, offlineFiscalReserve, amountChangeNotice, beforePaymentEffects, validatePaymentAuthority, themeColor, customer, isDelinquent, users, isMaster, currentUser, roles, isRestaurantMode, isInstallmentPayment = false, paymentIdNamespace }) => {
+const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receiptOnlyInitialTransaction, retainedPaymentIntent, recoverCommittedReceipt, total, items, taxAmount = 0, currencySymbol, config, onClose, onConfirm, paymentOperationId, paymentOperationDate, onFiscalAttemptClosed, offlineFiscalReserve, amountChangeNotice, beforePaymentEffects, validatePaymentAuthority, themeColor, customer, isDelinquent, users, isMaster, currentUser, roles, isRestaurantMode, isInstallmentPayment = false, paymentIdNamespace }) => {
    const receiptOnly=Boolean(receiptOnlyInitialTransaction);
    markRenderStart('PAYMENT_MODAL');
    useLayoutEffect(() => markRenderEnd('PAYMENT_MODAL'));
@@ -312,6 +313,10 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
    const printTicketPending = React.useRef(false);
    const [isPrintingTicket, setIsPrintingTicket] = useState(false);
    const [successNotice, setSuccessNotice] = useState<string | null>(null);
+   useEffect(()=>{
+      if(retainedPaymentIntent?.receipt){setCompletedTransaction(retainedPaymentIntent.receipt);setIsSuccessScreen(true);return;}
+      if(retainedPaymentIntent?.phase==='EFFECT_POSSIBLE'&&retainedPaymentIntent.payments.every(payment=>payment.method==='CASH'))setPayments(current=>current.length?current:retainedPaymentIntent.payments);
+   },[retainedPaymentIntent]);
 
    const userPermissions = useMemo(() => {
       if (!currentUser) return [];
@@ -655,7 +660,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
       );
       const proportionalTax = calculateGatewayTaxAmount(amountInBase);
       // Recheck authority immediately before each provider intent, including split payments.
-      if (validatePaymentAuthority) await validatePaymentAuthority();
+      if (validatePaymentAuthority) await validatePaymentAuthority(voluntaryTip);
       const orderNumber = createAzulOrderNumber();
       await workflowPaymentFenceRef.current?.recordPaymentEffect?.(payment.id);
       const intent = await paymentIntentService.create({
@@ -1057,7 +1062,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
 
       try {
          setFinalizeError(null);
-         if (validatePaymentAuthority) await validatePaymentAuthority();
+         if (validatePaymentAuthority) await validatePaymentAuthority(voluntaryTip);
          const newPayment = buildPaymentEntry(activePaymentMethod, valInSelectedCurrency);
          setPayments((prev) => [...prev, newPayment]);
          setInputAmount(
@@ -1125,7 +1130,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
       markInteractionStateUpdate(trace, 3);
       let releasePaymentFence: PaymentEffectsFence | undefined;
       try {
-         if (beforePaymentEffects) releasePaymentFence = await beforePaymentEffects(payments.map(payment=>payment.id),[...payments.map(payment=>payment.method),...(canFinalizeWithTypedAmount?[activeRuntimeMethod]:[])]);
+         if (beforePaymentEffects) releasePaymentFence = await beforePaymentEffects(payments.map(payment=>payment.id),[...payments.map(payment=>payment.method),...(canFinalizeWithTypedAmount?[activeRuntimeMethod]:[])],voluntaryTip);
          workflowPaymentFenceRef.current=releasePaymentFence||null;assertContext(releasePaymentFence);
          const completed = releasePaymentFence?.completedTransaction;
          const recoveringPayment=Boolean(releasePaymentFence?.recoveryPayments);
@@ -1217,6 +1222,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
             // Freeze the exact intended tenders, including the auto-created entry,
             // BEFORE a gateway request can occur. Provider outcome fields are additive.
             paymentsToConfirm=await Promise.all(paymentsToConfirm.map(async payment=>{
+               payment={...payment,creditOverrideApproved:payment.creditOverrideApproved===true};
                if(!paymentRequiresGatewayAuthorization(payment))return payment;
                const method=resolvePaymentMethodForEntry(payment);
                const integration=resolveGatewayIntegrationForPayment(payment,method);
@@ -1840,6 +1846,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
                         </div>
                      )}
                   </div>
+                  {retainedPaymentIntent?.phase==='EFFECT_POSSIBLE'&&<p role="status" className="mb-2 text-xs font-semibold text-amber-800">Intento anterior de efectivo pendiente. No cobre otra vez; confirme la venta sólo si ya recibió ese efectivo.</p>}
                   <button
                      onClick={handleFinalize}
                      disabled={(!canFinalize && !paymentOperationId) || isFinalizing || isProcessingGateway || Boolean(cardOutcome)}
