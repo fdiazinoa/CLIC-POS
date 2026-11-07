@@ -1,3 +1,5 @@
+import {COMPANY_DISPATCH_ESCROW_SCHEMA} from '../services/db/CompanyDispatchEscrowStore';
+import {LARGE_MASTER_SYNC_V3_SCHEMA_SQL} from '../services/db/LargeMasterSyncV3Schema';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
@@ -23,7 +25,7 @@ const credentials={...scope,erpTenantId:'tenant',erpTerminalId:'00000000-0000-40
 async function fixture(capacity=16,download=true){
  const entries=new Map<string,string>([['clic_terminal_credentials_v1',JSON.stringify(credentials)],['CLIC_POS_DEVICE_ID','device']]);
  Object.defineProperty(globalThis,'localStorage',{value:{getItem:(k:string)=>entries.get(k)||null,setItem:(k:string,v:string)=>entries.set(k,v),removeItem:(k:string)=>entries.delete(k)},configurable:true});
- const sql=new DatabaseSync(':memory:');sql.exec(FISCAL_WORKFLOW_V2_SCHEMA+DURABLE_OUTBOX_SCHEMA_SQL+`CREATE TABLE documents(collection_name TEXT,doc_id TEXT,data TEXT,sort_order INTEGER,updatedAt TEXT,PRIMARY KEY(collection_name,doc_id));CREATE TABLE sync_queue(id TEXT PRIMARY KEY,payload TEXT NOT NULL);`+OFFLINE_FISCAL_ABANDON_WRITER_SCHEMA);
+ const sql=new DatabaseSync(':memory:');sql.exec(FISCAL_WORKFLOW_V2_SCHEMA+DURABLE_OUTBOX_SCHEMA_SQL+COMPANY_DISPATCH_ESCROW_SCHEMA+LARGE_MASTER_SYNC_V3_SCHEMA_SQL.match(/CREATE TABLE IF NOT EXISTS master_v3_operational_owner \([\s\S]*?\n\);/)![0]+`CREATE TABLE documents(collection_name TEXT,doc_id TEXT,data TEXT,sort_order INTEGER,updatedAt TEXT,PRIMARY KEY(collection_name,doc_id));CREATE TABLE sync_queue(id TEXT PRIMARY KEY,payload TEXT NOT NULL);`+OFFLINE_FISCAL_ABANDON_WRITER_SCHEMA);
  let fault=false;const bridge={query:async(q:string,v:any[]=[])=>({values:sql.prepare(q).all(...v)}),run:async(q:string,v:any[]=[])=>({changes:sql.prepare(q).run(...v)}),execute:async(q:string)=>{if(fault&&q.includes('INSERT INTO documents'))throw Error('SYNTHETIC_DISK_FAILURE');sql.exec(q);}};
  const adapter=new CapacitorSQLiteAdapter();Object.assign(adapter,{db:bridge,isReady:true});const store=adapter.fiscalWorkflowStore;
  const authority=await offlineFiscalAuthorityFromConfig(config,credentials,'device'),now=Date.now();

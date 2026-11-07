@@ -1,3 +1,5 @@
+import {COMPANY_DISPATCH_ESCROW_SCHEMA} from '../services/db/CompanyDispatchEscrowStore';
+import {LARGE_MASTER_SYNC_V3_SCHEMA_SQL} from '../services/db/LargeMasterSyncV3Schema';
 import {buildTransactionSettlementFields} from '../utils/paymentSettlement';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -21,7 +23,7 @@ const credentials={...scope,erpTenantId:scope.tenantId,erpTerminalId:scope.termi
 async function fixture({buffer=true,expiry=null as string|null,download=true}={}){
  const entries=new Map([['clic_terminal_credentials_v1',JSON.stringify(credentials)],['CLIC_POS_DEVICE_ID','device']]);
  Object.defineProperty(globalThis,'localStorage',{value:{getItem:(k:string)=>entries.get(k)||null,setItem:(k:string,v:string)=>entries.set(k,v),removeItem:(k:string)=>entries.delete(k)},configurable:true});
- const sql=new DatabaseSync(':memory:');sql.exec(FISCAL_WORKFLOW_V2_SCHEMA+DURABLE_OUTBOX_SCHEMA_SQL+`CREATE TABLE documents(collection_name TEXT,doc_id TEXT,data TEXT,sort_order INTEGER,updatedAt TEXT,PRIMARY KEY(collection_name,doc_id));CREATE TABLE sync_queue(id TEXT PRIMARY KEY,payload TEXT,status TEXT,createdAt TEXT);`+NATIVE_FISCAL_RECEIPTS_SCHEMA+OFFLINE_FISCAL_ALLOCATION_WRITER_SCHEMA);
+ const sql=new DatabaseSync(':memory:');sql.exec(FISCAL_WORKFLOW_V2_SCHEMA+DURABLE_OUTBOX_SCHEMA_SQL+COMPANY_DISPATCH_ESCROW_SCHEMA+LARGE_MASTER_SYNC_V3_SCHEMA_SQL.match(/CREATE TABLE IF NOT EXISTS master_v3_operational_owner \([\s\S]*?\n\);/)![0]+`CREATE TABLE documents(collection_name TEXT,doc_id TEXT,data TEXT,sort_order INTEGER,updatedAt TEXT,PRIMARY KEY(collection_name,doc_id));CREATE TABLE sync_queue(id TEXT PRIMARY KEY,payload TEXT,status TEXT,createdAt TEXT);`+NATIVE_FISCAL_RECEIPTS_SCHEMA+OFFLINE_FISCAL_ALLOCATION_WRITER_SCHEMA);
  const range={id:uuid(2),type:'E32',prefix:'E32',startNumber:1,endNumber:3,isActive:true,expiryDate:expiry||''};
  const allocation={id:uuid(3),terminalId:scope.terminalId,fiscalRangeId:range.id,ncfType:'E32',prefix:'E32',reservedStart:1,reservedEnd:3,nextNumber:buffer?4:1,status:'ACTIVE',releasedAt:null};
  const config:any={id:'current',companyInfo:{rnc:'101010101'},terminals:[{id:scope.terminalId,config:{erpBinding:scope,erpTerminalId:scope.terminalId,currentDeviceId:'device',isPrimaryNode:true,governedByMaster:false,syncConfig:{mode:'MASTER'},fiscal:{providerId:'MSELLER',mode:'ECF',enabled:true,environment:0,credentialKey:'101010101',fiscalRanges:[range],fiscalAllocations:[allocation]}}}]};
