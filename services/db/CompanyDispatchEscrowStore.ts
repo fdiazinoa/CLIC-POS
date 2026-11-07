@@ -79,11 +79,12 @@ export async function prepareDispatchPrecharge(sql:DispatchSQL,input:{checkoutId
  const old=(await sql.query('SELECT * FROM pos_dispatch_precharge_v1 WHERE checkout_id=?',[checkoutId])).values?.[0];
  if(old){const prior=(await sql.query('SELECT quota_id,quantity_minor FROM pos_dispatch_precharge_lines_v1 WHERE checkout_id=? ORDER BY quota_id',[checkoutId])).values||[];
  if(old.pool_id!==poolId||old.transaction_id!==transactionId||old.demand_digest!==demandDigest||old.source_json!==sourceJSON||JSON.stringify(prior.map(x=>({quotaId:x.quota_id,quantityMinor:Number(x.quantity_minor)})))!==JSON.stringify(demands))fail('DISPATCH_PRECHARGE_PAYLOAD_CONFLICT');
- if(old.phase==='ABANDONED')fail('DISPATCH_PRECHARGE_ABANDONED');return;}
+ if(old.phase==='ABANDONED')fail('DISPATCH_PRECHARGE_ABANDONED');if(old.phase==='PREPARED')await assertDispatchTrackingClocks(sql,demands.map(d=>d.quotaId));return;}
  const pool=(await sql.query('SELECT state FROM pos_dispatch_pool_v1 WHERE pool_id=?',[poolId])).values?.[0];
  if(pool?.state!=='WAREHOUSE_DISPATCH')fail('DISPATCH_POOL_FROZEN_OR_UNAVAILABLE');
  for(const d of demands){const quota=(await sql.query("SELECT q.*,COALESCE((SELECT SUM(l.quantity_minor) FROM pos_dispatch_precharge_lines_v1 l JOIN pos_dispatch_precharge_v1 p ON p.checkout_id=l.checkout_id WHERE l.quota_id=q.id AND p.phase IN('PREPARED','EFFECT_POSSIBLE')),0) prepared FROM pos_dispatch_quota_v1 q WHERE q.id=? AND q.pool_id=?",[d.quotaId,poolId])).values?.[0];
  if(!quota||quota.state!=='ACTIVE'||Number(quota.granted_minor)-Number(quota.consumed_minor)-Number(quota.returned_minor)-Number(quota.prepared)<d.quantityMinor)fail('DISPATCH_LOCAL_QUOTA_EXHAUSTED');}
+ await assertDispatchTrackingClocks(sql,demands.map(d=>d.quotaId));
  await sql.run("INSERT INTO pos_dispatch_precharge_v1(checkout_id,pool_id,transaction_id,demand_digest,source_json,phase) VALUES(?,?,?,?,?,'PREPARED')",[checkoutId,poolId,transactionId,demandDigest,sourceJSON],false);
  for(const d of demands)await sql.run('INSERT INTO pos_dispatch_precharge_lines_v1(checkout_id,quota_id,quantity_minor) VALUES(?,?,?)',[checkoutId,d.quotaId,d.quantityMinor],false);
 }
@@ -91,8 +92,11 @@ export async function markDispatchEffectPossible(sql:DispatchSQL,checkoutId:stri
  if(!Array.isArray(payments)||!payments.length||!/^[a-f0-9]{64}$/.test(effectDigest))fail('DISPATCH_EFFECT_DIGEST_REQUIRED');
  const p=(await sql.query('SELECT * FROM pos_dispatch_precharge_v1 WHERE checkout_id=?',[checkoutId])).values?.[0];
  if(!p||p.phase==='ABANDONED'||p.phase==='COMMITTED'||p.effect_digest&&p.effect_digest!==effectDigest||p.effects_json&&p.effects_json!==dispatchPaymentIntents(payments))fail('DISPATCH_PRECHARGE_EFFECT_CONFLICT');
+ if(p.phase==='EFFECT_POSSIBLE')return; // exact paid/uncertain replay retains its original time, including expiry/cutover
  const pool=(await sql.query('SELECT state FROM pos_dispatch_pool_v1 WHERE pool_id=?',[p.pool_id])).values?.[0];
  if(pool?.state!=='WAREHOUSE_DISPATCH')fail('DISPATCH_POOL_FROZEN_OR_UNAVAILABLE');
+ const quotaIds=((await sql.query('SELECT quota_id FROM pos_dispatch_precharge_lines_v1 WHERE checkout_id=?',[checkoutId])).values||[]).map(row=>String(row.quota_id));
+ const times=await assertDispatchTrackingClocks(sql,quotaIds);if(times.length)await sql.run('INSERT INTO pos_dispatch_effect_clock_v2 VALUES(?,?)',[checkoutId,canonicalDispatchJSON({schemaVersion:1,source:'DISPATCH_EFFECT_CLOCK_V1',checkoutId,transactionId:p.transaction_id,times})],false);
  await sql.run("UPDATE pos_dispatch_precharge_v1 SET phase='EFFECT_POSSIBLE',effect_digest=?,effects_json=? WHERE checkout_id=?",[effectDigest,dispatchPaymentIntents(payments),checkoutId],false);
 }
 /** Must share the transaction with the durable document and outbox INSERTs.
@@ -171,4 +175,44 @@ export function snapshotDispatchFinancialPlan<T>(value:T):T{
   seen.set(entry,true);const result=Array.isArray(entry)?entry.map(copy):Object.fromEntries(Object.entries(entry).map(([key,item])=>[key,copy(item)]));seen.delete(entry);return result;
  };
  return copy(value) as T;
+}
+
+// Auxiliary to V1 financial tables: never changes retained authority/source bytes.
+export type DispatchDeliveryClock={serverDeliveredMs:number;localRequestStartedMs:number;localReceivedMs:number};
+export const DISPATCH_TRACKING_CLOCK_SCHEMA_V2=`
+CREATE TABLE IF NOT EXISTS pos_dispatch_delivery_clock_v2(quota_id TEXT PRIMARY KEY REFERENCES pos_dispatch_quota_v1(id),witness_hash TEXT NOT NULL,server_delivered_ms INTEGER NOT NULL,local_request_started_ms INTEGER NOT NULL,local_received_ms INTEGER NOT NULL,max_local_ms INTEGER NOT NULL);
+CREATE TRIGGER IF NOT EXISTS dispatch_clock_immutable_v2 BEFORE UPDATE ON pos_dispatch_delivery_clock_v2 WHEN OLD.quota_id IS NOT NEW.quota_id OR OLD.witness_hash IS NOT NEW.witness_hash OR OLD.server_delivered_ms IS NOT NEW.server_delivered_ms OR OLD.local_request_started_ms IS NOT NEW.local_request_started_ms OR OLD.local_received_ms IS NOT NEW.local_received_ms OR NEW.max_local_ms<OLD.max_local_ms BEGIN SELECT RAISE(ABORT,'DISPATCH_CLOCK_IMMUTABLE');END;
+CREATE TRIGGER IF NOT EXISTS dispatch_clock_durable_v2 BEFORE DELETE ON pos_dispatch_delivery_clock_v2 BEGIN SELECT RAISE(ABORT,'DISPATCH_CLOCK_DURABLE');END;
+CREATE TABLE IF NOT EXISTS pos_dispatch_effect_clock_v2(checkout_id TEXT PRIMARY KEY REFERENCES pos_dispatch_precharge_v1(checkout_id),proof_json TEXT NOT NULL);
+CREATE TRIGGER IF NOT EXISTS dispatch_effect_clock_immutable_v2 BEFORE UPDATE ON pos_dispatch_effect_clock_v2 BEGIN SELECT RAISE(ABORT,'DISPATCH_EFFECT_CLOCK_IMMUTABLE');END;
+CREATE TRIGGER IF NOT EXISTS dispatch_effect_clock_durable_v2 BEFORE DELETE ON pos_dispatch_effect_clock_v2 BEGIN SELECT RAISE(ABORT,'DISPATCH_EFFECT_CLOCK_DURABLE');END;
+`;
+function dispatchTrackingLogicalTime(authority:Record<string,any>,anchor:Record<string,any>|undefined,localNow:number):number{
+ const source=authority.trackingClockSource;
+ if(source?.schemaVersion!==1||source.expiresOn!==(authority.dimensions?.expiresOn||null)||source.source!=='DISPATCH_TRACKING_CLOCK_SOURCE_V1'||!anchor||!Number.isSafeInteger(localNow)||localNow<Number(anchor.max_local_ms)||localNow<Number(anchor.local_received_ms))fail('DISPATCH_TRACKING_CLOCK_REQUIRED');
+ const logical=Number(anchor.server_delivered_ms)+(localNow-Number(anchor.local_request_started_ms));
+ if(!Number.isSafeInteger(logical)||logical>8640000000000000||!Number.isFinite(Date.parse(source.issuedAt))||!Number.isFinite(Date.parse(source.receivedAt))||logical<Date.parse(source.issuedAt)||logical<Date.parse(source.receivedAt))fail('DISPATCH_TRACKING_CLOCK_REVERSED');
+ const date=new Intl.DateTimeFormat('en-CA',{timeZone:source.businessTimezone,year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(logical));
+ if(source.expiresOn&&date>source.expiresOn)fail('TRACKING_LOT_EXPIRED');
+ return logical;
+}
+export async function installDispatchDeliveryClock(sql:DispatchSQL,delivery:Record<string,any>,witnessHash:string,previouslySeen:boolean,clock?:DispatchDeliveryClock):Promise<void>{
+ if(!delivery.trackingClockSource)return;
+ const prior=(await sql.query('SELECT * FROM pos_dispatch_delivery_clock_v2 WHERE quota_id=?',[delivery.id])).values?.[0];
+ if(prior){if(prior.witness_hash!==witnessHash)fail('DISPATCH_TRACKING_CLOCK_REQUIRED');return;}
+ if(previouslySeen||!clock||![clock.serverDeliveredMs,clock.localRequestStartedMs,clock.localReceivedMs].every(Number.isSafeInteger)||clock.localReceivedMs<clock.localRequestStartedMs||clock.serverDeliveredMs<Date.parse(delivery.trackingClockSource.issuedAt))fail('DISPATCH_TRACKING_CLOCK_REQUIRED');
+ const anchor={server_delivered_ms:clock.serverDeliveredMs,local_request_started_ms:clock.localRequestStartedMs,local_received_ms:clock.localReceivedMs,max_local_ms:clock.localReceivedMs};dispatchTrackingLogicalTime(delivery,anchor,clock.localReceivedMs);
+ await sql.run('INSERT INTO pos_dispatch_delivery_clock_v2 VALUES(?,?,?,?,?,?)',[delivery.id,witnessHash,clock.serverDeliveredMs,clock.localRequestStartedMs,clock.localReceivedMs,clock.localReceivedMs],false);
+}
+export async function assertDispatchTrackingClocks(sql:DispatchSQL,quotaIds:string[],localNow=Date.now()):Promise<Array<{quotaId:string;effectAt:string}>>{
+ const times:Array<{quotaId:string;effectAt:string}>=[];
+ for(const id of [...quotaIds].sort()){const row=(await sql.query('SELECT q.authority_json,d.witness_hash FROM pos_dispatch_quota_v1 q LEFT JOIN pos_dispatch_quota_delivery_v1 d ON d.quota_id=q.id WHERE q.id=?',[id])).values?.[0];if(!row)fail('DISPATCH_QUOTA_REQUIRED');const authority=JSON.parse(String(row.authority_json));if(authority.catalogSource?.stockSelectionProfile==='DISPATCH_QUOTA_GRAIN_V2'&&authority.dimensions?.trackingUnitId&&!authority.trackingClockSource)fail('DISPATCH_TRACKING_CLOCK_REQUIRED');if(!authority.trackingClockSource)continue;
+  const clock=(await sql.query('SELECT * FROM pos_dispatch_delivery_clock_v2 WHERE quota_id=?',[id])).values?.[0];if(clock?.witness_hash!==row.witness_hash)fail('DISPATCH_TRACKING_CLOCK_REQUIRED');const logical=dispatchTrackingLogicalTime(authority,clock,localNow);times.push({quotaId:id,effectAt:new Date(logical).toISOString()});await sql.run('UPDATE pos_dispatch_delivery_clock_v2 SET max_local_ms=? WHERE quota_id=?',[localNow,id],false);
+ }
+ return times;
+}
+export async function readDispatchEffectClock(sql:DispatchSQL,checkoutId:string):Promise<Record<string,unknown>|null>{const row=(await sql.query('SELECT proof_json FROM pos_dispatch_effect_clock_v2 WHERE checkout_id=?',[checkoutId])).values?.[0];return row?JSON.parse(String(row.proof_json)):null;}
+export function dispatchTrackingClockAvailable(authority:Record<string,any>,anchor:Record<string,any>,localNow=Date.now()):boolean{
+ if(!authority.trackingClockSource)return !(authority.catalogSource?.stockSelectionProfile==='DISPATCH_QUOTA_GRAIN_V2'&&authority.dimensions?.trackingUnitId);
+ try{if(anchor.clock_witness_hash!==anchor.witness_hash)return false;dispatchTrackingLogicalTime(authority,anchor,localNow);return true;}catch{return false;}
 }

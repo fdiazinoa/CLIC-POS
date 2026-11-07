@@ -1,4 +1,4 @@
-import {compileDispatchCheckoutSource} from '../services/dispatch/DispatchCheckoutSource';
+import {compileDispatchCheckoutSource,dispatchCatalogueView,dispatchTrackingOptions,type DispatchCheckoutAuthority} from '../services/dispatch/DispatchCheckoutSource';
 import {dispatchCommercialSource,dispatchPaymentIntents} from '../services/db/CompanyDispatchEscrowStore';
 import {synchronizeNativeCompanyDispatch} from '../services/dispatch/CompanyDispatchRuntime';
 import { describeV3Error } from '../utils/v3ErrorMessages';
@@ -1306,7 +1306,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [presentationReadyGeneration,setPresentationReadyGeneration]=useState(0);
    const [formatRuntime,setFormatRuntime]=useState<Awaited<ReturnType<typeof prepareFiscalFormatRuntime>>|null>(null);
    const [formatMasters,setFormatMasters]=useState<Record<string,any>>({});
-   const products=useMemo(()=>baseProducts.map(raw=>{const product=isInventoryPresentationEligible(raw)&&presentationMasters[raw.id]?.formats.some(f=>f.active&&f.allowSale&&!f.isBase)?{...raw,inventoryPresentationMaster:presentationMasters[raw.id]}:raw;return formatMasters[product.id]?{...product,article_formats:formatMasters[product.id].dto,articleFormatVariantSkus:formatMasters[product.id].policy.variant_skus}:product;}),[baseProducts,formatMasters,presentationMasters]);
+   const [dispatchLocalAuthority,setDispatchLocalAuthority]=useState<DispatchCheckoutAuthority|null>(null);
+   const [dispatchLocalRefresh,setDispatchLocalRefresh]=useState(0);
+   const dispatchView=useMemo(()=>dispatchCatalogueView(dispatchLocalAuthority,((config.terminals||[]).find(t=>t.id===activeTerminalId)||(config.terminals||[])[0])?.config.inventoryScope?.defaultSalesWarehouseId),[dispatchLocalAuthority,config.terminals,activeTerminalId]);
+   const products=useMemo(()=>baseProducts.map(raw=>{const product=isInventoryPresentationEligible(raw)&&presentationMasters[raw.id]?.formats.some(f=>f.active&&f.allowSale&&!f.isBase)?{...raw,inventoryPresentationMaster:presentationMasters[raw.id]}:raw;const formatted=formatMasters[product.id]?{...product,article_formats:formatMasters[product.id].dto,articleFormatVariantSkus:formatMasters[product.id].policy.variant_skus}:product;const master=dispatchView.catalogues[product.id]?.commercialItem;return master?{...formatted,tariffs:master.metadata?.tariffs||formatted.tariffs,...(dispatchView.formats[product.id]?{article_formats:dispatchView.formats[product.id],articleFormatVariantSkus:dispatchView.variantSkus[product.id]}:{})}:formatted;}),[baseProducts,formatMasters,presentationMasters,dispatchView]);
    freezeCount('POS_RENDER_COUNT');
    markRenderStart('POS_INTERACTION_VIEW');
    const tableQa = React.useSyncExternalStore(subscribeTableLatencyQa, getTableLatencyQaState, getTableLatencyQaState);
@@ -1490,12 +1493,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const dispatchPolicyKey=JSON.stringify([terminalId,dispatchProjection?.contractVersion,dispatchProjection?.mode,dispatchProjection?.phase,dispatchProjection?.revision]);
    useEffect(()=>{
       let disposed=false;setDispatchAuthorityError(null);
-      if(dispatchProjection?.phase!=='PREPARING'&&dispatchProjection?.mode!=='WAREHOUSE_DISPATCH')return;
+      if(!dispatchProjection?.contractVersion)return;
       // The producer only installs/fences authority. It never captures payment or
       // treats a config JSON projection as an issued quota/operator grant.
-      void synchronizeNativeCompanyDispatch().then(()=>{if(!disposed)setDispatchAuthorityError(null);}).catch(error=>{if(!disposed)setDispatchAuthorityError(/^DISPATCH_[A-Z0-9_]+$/.test(String(error?.message))?error.message:'DISPATCH_AUTHORITY_UNAVAILABLE');});
+      void synchronizeNativeCompanyDispatch().then(()=>{if(!disposed){setDispatchAuthorityError(null);setDispatchLocalRefresh(value=>value+1);}}).catch(error=>{if(!disposed)setDispatchAuthorityError(/^DISPATCH_[A-Z0-9_]+$/.test(String(error?.message))?error.message:'DISPATCH_AUTHORITY_UNAVAILABLE');});
       return()=>{disposed=true;};
    },[dispatchPolicyKey,dispatchAuthorityRetry]);
+   useEffect(()=>{
+      let disposed=false;
+      void Promise.resolve(dbAdapter.readDispatchActivePoolState?.()).then(state=>state==='WAREHOUSE_DISPATCH'?dbAdapter.readDispatchCheckoutAuthority?.():null).then(value=>{if(!disposed)setDispatchLocalAuthority(value||null);}).catch(()=>{if(!disposed)setDispatchLocalAuthority(null);});
+      return()=>{disposed=true;};
+   },[dispatchPolicyKey,dispatchLocalRefresh]);
    const activeTableContext = useMemo(
       () => buildTableContextLabels(activeTable, rooms),
       [activeTable, rooms]
@@ -1887,6 +1895,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       [productMatchesTerminalWarehouse, productWarehouseBlockedById]
    );
    const getScopedProductStock = useCallback((product: Product) => {
+      if(dispatchLocalAuthority||dispatchProjection?.mode==='WAREHOUSE_DISPATCH')return dispatchView.available[product.id]||0;
       if (defaultSalesWarehouseId) {
          const directDefaultStock = getWarehouseScopedNumber(product.stockBalances || {}, defaultSalesWarehouseId, warehouses, Number.NaN);
          if (Number.isFinite(directDefaultStock)) return directDefaultStock;
@@ -1914,6 +1923,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
       return Number(product.stock ?? 0);
    }, [
+      dispatchLocalAuthority,dispatchProjection?.mode,dispatchView,
       activeTerminalConfig?.inventoryScope?.defaultWarehouse,
       defaultSalesWarehouseId,
       effectiveWarehouseKeys,
@@ -2636,7 +2646,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const [editingItem, setEditingItem] = useState<CartItem | null>(null);
    const [formatSelection, setFormatSelection] = useState<{product: Product; variantId: string | null; basePrice: number; modifiers: string[]} | null>(null);
-   const articleFormatsEnabled = Boolean(formatRuntime)&&fiscalWorkflowV2Client.enabled() || formatsEnabled(config, { capabilities: activeTerminalConfig?.articleFormatCapabilities });
+   const articleFormatsEnabled = Object.keys(dispatchView.formats).length>0 || Boolean(formatRuntime)&&fiscalWorkflowV2Client.enabled() || formatsEnabled(config, { capabilities: activeTerminalConfig?.articleFormatCapabilities });
    useEffect(()=>{
       let disposed=false,generation=0;
       const prepare=()=>{
@@ -2782,8 +2792,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [showMobileConfigModal, setShowMobileConfigModal] = useState(false);
    const [pendingProductToAdd, setPendingProductToAdd] = useState<Product | null>(null);
    const trackingCheckoutRef=useRef<{checkoutId:string;transactionId:string;operationId:string;effectAt?:string;paymentIds?:string[]}|null>(null);
-   const [pendingTrackingProduct, setPendingTrackingProduct] = useState<{ product: Product, quantity: number, price?: number, modifiers?: string[],selectedVariant?:ProductVariant,variantInfo?:string,note?:string,restaurantConfig?:CartItem['restaurantConfig'] } | null>(null);
-   const loadPendingV3Tracking=useCallback(()=>pendingTrackingProduct?loadV3TrackingOptions(pendingTrackingProduct.product,defaultSalesWarehouseId||'wh_central',pendingTrackingProduct.selectedVariant?.id||pendingTrackingProduct.selectedVariant?.variantId||pendingTrackingProduct.selectedVariant?.sku||''):Promise.resolve([]),[pendingTrackingProduct,defaultSalesWarehouseId]);
+   const [pendingTrackingProduct, setPendingTrackingProduct] = useState<{ product: Product, quantity: number, price?: number, modifiers?: string[],selectedVariant?:ProductVariant,variantInfo?:string,note?:string,restaurantConfig?:CartItem['restaurantConfig'];format?:ArticleFormat } | null>(null);
+   const loadPendingV3Tracking=useCallback(async()=>{if(!pendingTrackingProduct)return[];const warehouse=defaultSalesWarehouseId||'wh_central',variant=String(pendingTrackingProduct.format?.variantId||pendingTrackingProduct.selectedVariant?.id||pendingTrackingProduct.selectedVariant?.variantId||pendingTrackingProduct.selectedVariant?.sku||'');if(dispatchProjection?.mode==='WAREHOUSE_DISPATCH'||await dbAdapter.readDispatchActivePoolState?.()==='WAREHOUSE_DISPATCH'){if(!dbAdapter.readDispatchCheckoutAuthority)throw Error('DISPATCH_NATIVE_REQUIRED');return dispatchTrackingOptions(await dbAdapter.readDispatchCheckoutAuthority(),pendingTrackingProduct.product.id,warehouse,variant);}return loadV3TrackingOptions(pendingTrackingProduct.product,warehouse,variant);},[pendingTrackingProduct,defaultSalesWarehouseId,dispatchProjection?.mode]);
 
    // --- PROMO BOTTOM SHEET ---
    const [showPromoSheet, setShowPromoSheet] = useState(false);
@@ -3489,11 +3499,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    }, [activeTariffTokens, productPriceIndex, products]);
 
    const getTariffPrice = useCallback((p: Product) => {
+      const issued=dispatchView.catalogues[p.id]?.commercialItem.metadata?.tariffs?.find((row:any)=>row.tariffId===activeTariffId);if(issued?.price!=null&&Number.isFinite(Number(issued.price)))return Number(issued.price);
       if (p?.id && productTariffPriceById.has(p.id)) {
          return productTariffPriceById.get(p.id) ?? null;
       }
       return resolveActiveTariffPrice(p, activeTariffTokens, productPriceIndex);
-   }, [activeTariffTokens, productPriceIndex, productTariffPriceById]);
+   }, [activeTariffTokens, productPriceIndex, productTariffPriceById,activeTariffId,dispatchView]);
 
    const productHasBasePrice = useCallback((p: Product) => {
       const price = Number(p?.price);
@@ -3854,7 +3865,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          .catch((error: any) => { setErrorToast(describeV3Error(error)); return false; });
    }, [performAddToCart, v3Operational, rejectFormatQuickReturn, isReturnMode]);
 
-   const addSelectedFormat = useCallback(async (product: Product, format: ArticleFormat, price: number, quantity = 1, modifiers: string[] = []) => {
+   const addSelectedFormat = useCallback(async (product: Product, format: ArticleFormat, price: number, quantity = 1, modifiers: string[] = [],trackingData?:Parameters<typeof trackingSelectionsForCart>[0]) => {
       if (rejectFormatQuickReturn(product,isReturnMode || quantity < 0)) { setFormatSelection(null); return false; }
       if (!articleFormatsEnabled) { setErrorToast('Presentaciones pendientes de habilitación'); return false; }
       const context = v3Operational;
@@ -3867,10 +3878,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             if (!(context ? await authorizeV3UIContext(isCurrent,authorize) : await authorize())) return false;
             if (!ensureSalesWithOpenZPermission()) return false;
             if (!canAddItemToCart(product,toBaseQuantity(quantity,format.factor))) return false;
-            const selectedProduct = { ...product, appliedTaxIds: resolveEffectiveTaxIds(product.appliedTaxIds,activeTerminalConfig,product.taxable) };
+            if(dispatchLocalAuthority&&(product.operationalFlags?.usesLots||product.operationalFlags?.usesSerial)&&!trackingData){setFormatSelection(null);setPendingTrackingProduct({product,quantity,price,modifiers,format});return true;}
+            const selectedProduct = { ...product,...(dispatchLocalAuthority?{variantId:format.variantId||undefined}:{}), appliedTaxIds: resolveEffectiveTaxIds(product.appliedTaxIds,activeTerminalConfig,product.taxable) };
             const previous = latestAddCart.current;
-            const next = addFormatLine(previous,selectedProduct,format,quantity,price,createUuid(),modifiers);
-            if (context && !formatRuntime) {
+            const created=addFormatLine(trackingData?[]:previous,selectedProduct,format,quantity,price,createUuid(),modifiers);
+            const next=trackingData?[{...created[0],trackingData:trackingSelectionsForCart(trackingData,product,created[0].cartId)},...previous]:created;
+            if (context && !formatRuntime&&!dispatchLocalAuthority) {
                await context.validate(next,{ticketId:activeTable?.currentOrderId || activeDirectV3TicketId,claimId:activeDirectV3TicketId,reservationId:activeV3Reservation?.reservation.id,reservationClaimId:activeV3Reservation?.claimId,tableId:activeTable?.id === undefined ? undefined : String(activeTable.id)});
                assertV3UIContext(isCurrent);
             }
@@ -3882,7 +3895,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          } catch (error) { setErrorToast(error instanceof Error ? error.message : 'Presentación no válida'); return false; }
       };
       return context ? addQueue.current.run(isCurrent,operation) : operation();
-   },[rejectFormatQuickReturn,isReturnMode,articleFormatsEnabled,formatRuntime,v3Operational,blockRecoveredUberOrderMutation,authorizeSubtotalizedEdit,ensureSalesWithOpenZPermission,canAddItemToCart,activeTerminalConfig,activeTable?.currentOrderId,activeTable?.id,activeDirectV3TicketId,onUpdateCart]);
+   },[rejectFormatQuickReturn,isReturnMode,articleFormatsEnabled,formatRuntime,dispatchLocalAuthority,v3Operational,blockRecoveredUberOrderMutation,authorizeSubtotalizedEdit,ensureSalesWithOpenZPermission,canAddItemToCart,activeTerminalConfig,activeTable?.currentOrderId,activeTable?.id,activeDirectV3TicketId,onUpdateCart]);
 
    const addSelectedPresentation=useCallback((product:Product,formatId:string,quantity=1)=>{
       try{
@@ -5942,16 +5955,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             trackingCheckoutRef.current=null;onUpdateCart([]);resetCompletedSaleDiscount(setGlobalDiscount);onSelectCustomer(null);return trackingReceipt;
          }
 
-         if(processedCart.some(line=>line.articleFormat)){
+         if(processedCart.some(line=>line.articleFormat)&&!dispatchCheckoutRef.current){
             if(!formatRuntime||!fiscalCheckoutRef.current?.permit||processedCart.some(line=>line.quantity<=0)||activeTable||activeDirectV3TicketId||activeV3Reservation||activeRecoveredReservation)throw Error('FISCAL_WORKFLOW_FORMAT_NOT_READY');
             await formatRuntime.assertCurrent();const result=await formatRuntime.commitSale({checkout:fiscalCheckoutRef.current,lines:processedCart,ncfType:requiredSaleFiscalType,buyer:buildTransactionCustomerSnapshot(effectiveSelectedCustomer)||{},customerId:effectiveSelectedCustomer?.id,payments,seriesId:resolveTerminalDocumentSeriesId(activeTerminalConfig,'TICKET')!,userId:currentUser.id,userName:currentUser.name});
             await onTransactionComplete(result);await fiscalWorkflowV2Client.acknowledge(fiscalCheckoutRef.current);trackingCheckoutRef.current=null;fiscalCheckoutRef.current=null;fiscalCheckoutOperationRef.current=null;offlineTableFiscalContextRef.current=undefined;offlineTablePaymentFenceRef.current=false;
             void fiscalWorkflowV2Client.prefetch().catch(()=>undefined);
             onUpdateCart([]);resetCompletedSaleDiscount(setGlobalDiscount);onSelectCustomer(null);return result;
          }
-         assertFormatsPostingClosed(processedCart);
+         if(!dispatchCheckoutRef.current)assertFormatsPostingClosed(processedCart);
          await assertCheckoutFiscalAuthority();
-         if (v3Operational) {
+         if (v3Operational&&!dispatchCheckoutRef.current) {
             try { await v3Operational.validate(processedCart, { ticketId: activeTable?.currentOrderId || activeDirectV3TicketId, claimId: activeDirectV3TicketId, reservationId:activeV3Reservation?.reservation.id,reservationClaimId:activeV3Reservation?.claimId, tableId: activeTable?.id === undefined ? undefined : String(activeTable.id) }); }
             catch (error: any) {
                // Name the warehouse where the ticket's articles actually live: "no disponible" alone
@@ -6499,7 +6512,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   : undefined;
                const txn = await withTimeout(transactionService.createTransaction({
                   ...(newDirectFiscalEnvironment !== undefined ? { fiscalEnvironment: newDirectFiscalEnvironment } : {}),
-                  ...(dispatchCheckoutRef.current?{id:dispatchCheckoutRef.current.transactionId}:{}),
+                  ...(dispatchCheckoutRef.current?{id:dispatchCheckoutRef.current.transactionId,inventoryEffectsContract:'WAREHOUSE_RESERVATION_V1',companyDispatchSource:dispatchCheckoutRef.current.source.companyDispatchSource}:{}),
                   ...(trackingCheckoutRef.current?{id:trackingCheckoutRef.current.transactionId,trackingCheckoutId:trackingCheckoutRef.current.checkoutId,trackingEffectAt:trackingCheckoutRef.current.effectAt}:{}),
                   ...(fiscalCheckoutRef.current?{id:fiscalCheckoutRef.current.transactionId,fiscalWorkflowCheckoutId:fiscalCheckoutRef.current.checkoutId,...(fiscalCheckoutRef.current.permit?.leaseId?{fiscalOfflineLeaseId:fiscalCheckoutRef.current.permit.leaseId}:{}),...(fiscalCheckoutRef.current.allocation?{fiscalAllocationAuthorizationId:fiscalCheckoutRef.current.allocation.authorizationId}:{}),...(fiscalCheckoutRef.current.fiscalSaleContext?{fiscalSaleContext:fiscalCheckoutRef.current.fiscalSaleContext}:{})}:{}),
                   ...(activeV3Reservation ? {id:reservationInvoiceId(activeV3Reservation.reservation.id),v3ReservationClaimId:activeV3Reservation.claimId} : {}),
@@ -6622,7 +6635,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   );
                } else {
                   await Promise.resolve(onTransactionComplete(settledFinalTxn));
-                  if(dispatchCheckoutRef.current){const captured=(await db.getDocument('transactions',settledFinalTxn.id)||await db.getDocument('transactionHistory',settledFinalTxn.id)) as Transaction|null;if(!captured?.companyDispatchSource?.sequence)throw Error('DISPATCH_NATIVE_CAPTURE_REQUIRED');settledFinalTxn=captured as Transaction;dispatchCheckoutRef.current=null;}
+                  if(dispatchCheckoutRef.current){const captured=(await db.getDocument('transactions',settledFinalTxn.id)||await db.getDocument('transactionHistory',settledFinalTxn.id)) as Transaction|null;if(!captured?.companyDispatchSource?.sequence)throw Error('DISPATCH_NATIVE_CAPTURE_REQUIRED');settledFinalTxn=captured as Transaction;setDispatchLocalRefresh(value=>value+1);dispatchCheckoutRef.current=null;}
                   if (durableSaleCommit && settledFinalTxn.consignmentId) {
                      settledFinalTxn = await syncConsignmentSettlement(settledFinalTxn);
                   }
@@ -6923,6 +6936,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          admission.assertCurrent();
          if (!v3Operational) return;
          if (processedCart.some(line=>line.articleFormat)) {
+            if(dispatchProjection?.mode==='WAREHOUSE_DISPATCH'||await dbAdapter.readDispatchActivePoolState?.()==='WAREHOUSE_DISPATCH')return; // issued quota preparation is rechecked before effects
             if (!formatRuntime) throw Error('FISCAL_WORKFLOW_FORMAT_NOT_READY');
             await formatRuntime.prepareIssuance(requiredSaleFiscalType);
             return;
@@ -7113,7 +7127,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       return source;
    };
    const resolveCommittedTrackingReceipt=async(paymentIds:string[]=[])=>{
-      if(!processedCart.some(line=>line.trackingData?.length))return null;
+      if(!processedCart.some(line=>line.trackingData?.some(selection=>!selection.dispatchQuotaAuthority)))return null;
       if(!dbAdapter.readTrackingCheckout||!dbAdapter.readCommittedTrackingReceipt)throw Error('TRACKING_NATIVE_AUTHORITY_REQUIRED');
       const scope=trackingLocalScope(),identity=currentTrackingCartIdentity(),operation=await dbAdapter.readTrackingCheckout(identity,scope);
       if(!operation)return null;
@@ -7190,7 +7204,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const offlineAvailable=Boolean(fiscalWorkflowV2Client.offlineReady&&await fiscalWorkflowV2Client.offlineReady());
       const offlineFiscalCheckout=offlineAvailable&&paymentMethods.length>0
         &&!hasV3ReservationCart&&!activeV3Reservation&&!activeRecoveredReservation&&!activeDirectV3TicketId
-        &&processedCart.every(line=>line.quantity>0&&!line.articleFormat)
+        &&processedCart.every(line=>line.quantity>0&&(!line.articleFormat||dispatchCheckout))
         &&(!activeTable?(cartTip===0||appliedServiceTaxPolicy.legalTip?.enabled===true&&appliedServiceTaxPolicy.legalTip.percentage===10):isMaster&&!isIntermediateFractionPayment&&Boolean(activeTable.currentOrderId)
           &&(cartTip===0||appliedServiceTaxPolicy.legalTip?.enabled===true&&appliedServiceTaxPolicy.legalTip.percentage===10));
       const newFiscalCheckout=delegatedFiscalCheckout&&(fiscalWorkflowV2Client.enabled()||offlineFiscalCheckout)
@@ -7203,7 +7217,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
         offlineTableFiscalContextRef.current=await readTableFiscalSaleContext(String(activeTable.currentOrderId),String(activeTable.id));
         offlineTablePaymentFenceRef.current=true;
       }else if(offlineFiscalCheckout)offlineTableFiscalContextRef.current=undefined;
-      const requiresFiscalPermit=delegatedFiscalCheckout||processedCart.some(line=>line.articleFormat);
+      const requiresFiscalPermit=delegatedFiscalCheckout||!dispatchCheckout&&processedCart.some(line=>line.articleFormat);
       let dispatchPreparation:Awaited<ReturnType<typeof compileDispatchCheckoutSource>>|undefined;
       if(dispatchCheckout){
         if(activeTable||hasV3ReservationCart||activeRecoveredReservation||activeDirectV3TicketId||processedCart.some(line=>line.quantity<=0)||baseCurrency.code!=='DOP'||redeemedCoupon)throw Error('Esta operación requiere su contrato de despacho integrado antes de cobrar.');
@@ -7280,10 +7294,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
         dispatchCheckoutRef.current={checkoutId,transactionId,source,effectPossible:previous?.checkoutId===checkoutId&&previous.effectPossible||checkout?.phase==='EFFECT_POSSIBLE',...(previous?.recoveryPayments?{recoveryPayments:previous.recoveryPayments}:{})};
       }
       setLargeMasterSyncV3CriticalOperation('PAYMENT', true);
-      try { if(processedCart.some(line=>line.articleFormat)){if(!formatRuntime)throw Error('FISCAL_WORKFLOW_FORMAT_NOT_READY');await formatRuntime.prepareIssuance(requiredSaleFiscalType);}else await v3Operational.validate(cart, { ticketId: activeTable?.currentOrderId || activeDirectV3TicketId, claimId: activeDirectV3TicketId, reservationId:activeV3Reservation?.reservation.id,reservationClaimId:activeV3Reservation?.claimId, tableId: activeTable?.id === undefined ? undefined : String(activeTable.id) }); }
+      try { if(processedCart.some(line=>line.articleFormat)&&!dispatchPreparation){if(!formatRuntime)throw Error('FISCAL_WORKFLOW_FORMAT_NOT_READY');await formatRuntime.prepareIssuance(requiredSaleFiscalType);}else if(!dispatchPreparation)await v3Operational.validate(cart, { ticketId: activeTable?.currentOrderId || activeDirectV3TicketId, claimId: activeDirectV3TicketId, reservationId:activeV3Reservation?.reservation.id,reservationClaimId:activeV3Reservation?.claimId, tableId: activeTable?.id === undefined ? undefined : String(activeTable.id) }); }
       catch (error) { if(offlineFiscalCheckout&&fiscalCheckoutRef.current?.phase!=='EFFECT_POSSIBLE')offlineTablePaymentFenceRef.current=false;setLargeMasterSyncV3CriticalOperation('PAYMENT', false); throw error; }
       if(offlineFiscalCheckout&&activeTable&&JSON.stringify(await readTableFiscalSaleContext(String(activeTable.currentOrderId),String(activeTable.id)).catch(error=>{offlineTablePaymentFenceRef.current=false;setLargeMasterSyncV3CriticalOperation('PAYMENT',false);throw error;}))!==JSON.stringify(offlineTableFiscalContextRef.current)){offlineTablePaymentFenceRef.current=false;setLargeMasterSyncV3CriticalOperation('PAYMENT',false);throw Error('OFFLINE_FISCAL_TABLE_SOURCE_CHANGED');}
-      const trackingSelections=processedCart.flatMap(line=>line.trackingData||[]);
+      const trackingSelections=dispatchPreparation?[]:processedCart.flatMap(line=>line.trackingData||[]);
       let trackingEffectPossible=false;
       if(trackingSelections.length){
         if(!durableOutboxRepository.isSupported()||!dbAdapter.prepareTrackingCheckout||!dbAdapter.fenceTrackingCheckout)throw Error('TRACKING_NATIVE_AUTHORITY_REQUIRED');
@@ -11080,10 +11094,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                <TrackingSelectionModal
                   product={pendingTrackingProduct.product}
                   warehouseId={defaultSalesWarehouseId || 'wh_central'}
-                  quantity={v3Operational?presentationInventoryQuantity({...pendingTrackingProduct.product,quantity:pendingTrackingProduct.quantity} as CartItem):pendingTrackingProduct.quantity}
+                  quantity={pendingTrackingProduct.format?toBaseQuantity(pendingTrackingProduct.quantity,pendingTrackingProduct.format.factor):v3Operational?presentationInventoryQuantity({...pendingTrackingProduct.product,quantity:pendingTrackingProduct.quantity} as CartItem):pendingTrackingProduct.quantity}
                   loadOptions={v3Operational?loadPendingV3Tracking:undefined}
                   onClose={() => setPendingTrackingProduct(null)}
                   onSelect={(tracking) => {
+                     if(pendingTrackingProduct.format){void addSelectedFormat(pendingTrackingProduct.product,pendingTrackingProduct.format,pendingTrackingProduct.price!,pendingTrackingProduct.quantity,pendingTrackingProduct.modifiers,tracking);setPendingTrackingProduct(null);return;}
                      addToCart(
                         pendingTrackingProduct.product,
                         pendingTrackingProduct.quantity,

@@ -35,7 +35,7 @@ export async function synchronizeNativeCompanyDispatch(transport?:LargeMasterSyn
   for(const row of snapshot.rows){
    const delivery=row.delivery,b=snapshot.binding;
    const scope={...delivery.scope,tenantId:b.tenant_id,companyId:b.company_id,storeId:b.store_id,terminalId:b.terminal_id,deviceId:b.device_id,bindingId:b.id,generation:b.generation};
-   await acceptDispatchDelivery(row,scope,{...witness,readLocal:id=>database.readDispatchQuota!(id),claim:(quotaId,witnessHash)=>command('claimQuota',{quotaId,witnessHash,authorityHash:delivery.authorityHash,nativeSchemaHash:schemaHash}),install:(value,seen,witness)=>database.installDispatchQuota!(value,scope,poolId,seen,witness)});
+   await acceptDispatchDelivery(row,scope,{...witness,readLocal:id=>database.readDispatchQuota!(id),claim:(quotaId,witnessHash)=>command('claimQuota',{quotaId,witnessHash,authorityHash:delivery.authorityHash,nativeSchemaHash:schemaHash}),install:(value,seen,witness,clock)=>database.installDispatchQuota!(value,scope,poolId,seen,witness,clock)});
    const installed=await database.readDispatchQuota!(delivery.id);if(!installed)throw Error('DISPATCH_NATIVE_DELIVERY_INSTALL_REQUIRED');
    const ack=await command<{quotaId:string;installed:boolean;authorityHash:string;generation:string}>('ackQuotaInstalled',{quotaId:delivery.id,authorityHash:delivery.authorityHash,witnessHash:installed.witnessHash,nativeSchemaHash:schemaHash});
    if(ack.quotaId!==delivery.id||ack.installed!==true||ack.authorityHash!==delivery.authorityHash||ack.generation!==b.generation)throw Error('DISPATCH_NATIVE_DELIVERY_ACK_CONFLICT');installedQuotas++;

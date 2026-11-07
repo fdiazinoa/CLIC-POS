@@ -1663,6 +1663,7 @@ export interface InventoryCommitment {
 }
 
 export interface InventoryTracking {
+  dispatchQuotaAuthority?:import('./services/tracking/TrackingLine').DispatchQuotaTrackingAuthority;
   v3Authority?:import('./services/tracking/TrackingAuthority').TrackingAuthority;
   availableMinor?:number;
   selectedQuantityMinor?:number;

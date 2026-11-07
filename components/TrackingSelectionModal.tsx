@@ -126,7 +126,7 @@ const TrackingSelectionModal: React.FC<TrackingSelectionModalProps> = ({
         selectedMinor !== requestedMinor ||
         selected.some(
           (t) =>
-            !t.v3Authority ||
+            !t.v3Authority&&!t.dispatchQuotaAuthority ||
             minor(lotQuantities[t.id] || "0") <= 0 ||
             minor(lotQuantities[t.id] || "0") > Number(t.availableMinor),
         )
@@ -156,7 +156,7 @@ const TrackingSelectionModal: React.FC<TrackingSelectionModalProps> = ({
       if (
         selected.some(
           (t) =>
-            !t.v3Authority ||
+            !t.v3Authority&&!t.dispatchQuotaAuthority ||
             Number(t.availableMinor) <
               (isSerial ? 1000000 : quantity * 1000000),
         )

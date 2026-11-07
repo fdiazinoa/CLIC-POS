@@ -1,3 +1,4 @@
+import {assertDispatchQuotaTrackingSelection} from '../tracking/TrackingLine';
 import {compileCompanyDispatchDemand,type DispatchRawItem} from './companyDispatchDemand.js';
 import {canonicalDispatchJSON,type DispatchDemand} from '../db/CompanyDispatchEscrowStore';
 type RecordValue=Record<string,unknown>;
@@ -13,28 +14,33 @@ export function assertDispatchFinancedSource(source:RecordValue,demands:Dispatch
  requireSource(source.inventoryEffectsContract==='WAREHOUSE_RESERVATION_V1'&&source.id===transactionId&&contract.schemaVersion===1&&contract.source==='COMPANY_DISPATCH_ESCROW_V1'&&contract.checkoutId===checkoutId&&contract.bindingId===pool.binding_id&&contract.generation===pool.generation&&contract.policyRevision===Number(pool.policy_revision)&&items.length>0&&items.length===lines.length,'DISPATCH_CANONICAL_CHECKOUT_SOURCE_REQUIRED');
  const localRows=new Map(rows.map(row=>[String(row.id),row]));
  const quotas=new Map(rows.map(row=>[String(row.id),JSON.parse(String(row.authority_json)) as RecordValue]));
- const funded=new Map<string,number>(),seen=new Set<string>();
+ const funded=new Map<string,number>(),seen=new Set<string>(),serialUnits=new Set<string>();
  for(const item of items){
   const cartId=String(item.cartId||'');requireSource(cartId&&!seen.has(cartId),'DISPATCH_CART_LINE_IDENTITY');seen.add(cartId);
   const matches=lines.filter(line=>line.cartId===cartId);requireSource(matches.length===1,'DISPATCH_CART_LINE_IDENTITY');
   const allocations=array(matches[0].quotaAllocations);requireSource(allocations.length>0&&new Set(allocations.map(a=>a.quotaId)).size===allocations.length,'DISPATCH_ISSUED_LINE_QUOTAS_REQUIRED');
-  let catalog:RecordValue|undefined;const selected:Array<{quota:RecordValue;quantity:number}>=[];
+  let catalog:RecordValue|undefined;const selected:Array<{quota:RecordValue;quantity:number;allocation:RecordValue}>=[];
   for(const allocation of allocations){
    const quota=quotas.get(String(allocation.quotaId)),scope=record(quota?.scope);
    requireSource(quota&&canonicalDispatchJSON(allocation.dimensions)===canonicalDispatchJSON(quota.dimensions)&&allocation.authorityHash===localRows.get(String(allocation.quotaId))?.authority_hash&&allocation.deliveryWitnessHash===localRows.get(String(allocation.quotaId))?.witness_hash&&scope.bindingId===pool.binding_id&&scope.generation===pool.generation&&quota.policyRevision===Number(pool.policy_revision)&&Number.isSafeInteger(allocation.quantityMinor)&&Number(allocation.quantityMinor)>0&&Number(allocation.quantityMinor)%100===0,'DISPATCH_ISSUED_LINE_SCOPE');
    const next=record(quota!.catalogSource);
-   const projection=(value:RecordValue)=>canonicalDispatchJSON({commercialItem:value.commercialItem,rawGraph:value.rawGraph,tariffs:value.tariffs,taxes:value.taxes});
+   const projection=(value:RecordValue)=>canonicalDispatchJSON({commercialItem:value.commercialItem,rawGraph:value.rawGraph,tariffs:value.tariffs,taxes:value.taxes,priceAuthority:value.priceAuthority});
    requireSource(!catalog||projection(catalog)===projection(next),'DISPATCH_CATALOG_REVISION_MIXED');catalog=next;
-   selected.push({quota:quota!,quantity:Number(allocation.quantityMinor)});
+   selected.push({quota:quota!,quantity:Number(allocation.quantityMinor),allocation});
    funded.set(String(allocation.quotaId),(funded.get(String(allocation.quotaId))||0)+Number(allocation.quantityMinor));
   }
   const scope=record(selected[0].quota.scope),root=record(catalog!.commercialItem);
   requireSource(root.id===item.id&&Array.isArray(catalog!.rawGraph),'DISPATCH_ISSUED_GRAPH_REQUIRED');
   if(item.articleFormatSnapshot&&item.articleFormat)requireSource(canonicalDispatchJSON(item.articleFormatSnapshot)===canonicalDispatchJSON(item.articleFormat),'DISPATCH_ISSUED_FORMAT_CONFLICT');
   const compiled=compileCompanyDispatchDemand({scope:{tenantId:String(scope.tenantId),companyId:String(scope.companyId)},items:catalog!.rawGraph as DispatchRawItem[]},{itemId:String(item.id),quantity:Number(item.quantity),variantId:item.variantId as string|undefined,articleFormat:(item.articleFormatSnapshot||item.articleFormat) as Parameters<typeof compileCompanyDispatchDemand>[1]['articleFormat']});
+  if(catalog!.stockSelectionProfile==='DISPATCH_QUOTA_GRAIN_V2'&&compiled.demands.some(d=>d.trackingKind)){
+   const selections=array(item.trackingData);requireSource(selections.length===selected.length&&new Set(selections.map(s=>record(s.dispatchQuotaAuthority).quotaId)).size===selections.length,'DISPATCH_TRACKING_SELECTION_CHANGED');
+   for(const part of selected){const selection=selections.find(s=>record(s.dispatchQuotaAuthority).quotaId===part.quota.id);requireSource(selection&&selection.cartId===cartId&&selection.itemId===item.id,'DISPATCH_TRACKING_SELECTION_CHANGED');assertDispatchQuotaTrackingSelection(selection as any,part.quota,part.allocation);}
+  }
   const quantities=new Map<string,number>();
   for(const {quota,quantity} of selected){const dims=record(quota.dimensions),expected=compiled.demands.find(d=>d.itemId===quota.itemId&&String(d.dimensions.variantId||'')===String(dims.variantId||''));
    requireSource(expected&&(!expected.trackingKind||dims.trackingUnitId)&&(!expected||expected.trackingKind!=='SERIAL'||quantity===1000000),'DISPATCH_PHYSICAL_GRAIN_NOT_FINANCED');
+   if(expected?.trackingKind==='SERIAL'){requireSource(!serialUnits.has(String(dims.trackingUnitId)),'DISPATCH_SERIAL_DUPLICATE');serialUnits.add(String(dims.trackingUnitId));}
    const key=String(quota.itemId)+'|'+String(dims.variantId||'');quantities.set(key,(quantities.get(key)||0)+quantity);
   }
   requireSource(compiled.demands.every(d=>quantities.get(d.itemId+'|'+String(d.dimensions.variantId||''))===d.quantityMinor),'DISPATCH_PHYSICAL_DEMAND_NOT_FINANCED');

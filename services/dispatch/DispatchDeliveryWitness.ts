@@ -1,7 +1,7 @@
 import {Preferences} from '@capacitor/preferences';
 import {verifyDispatchQuotaDelivery,type DispatchQuotaDelivery,type DispatchScope} from './DispatchAuthority';
 type Snapshot={delivery:DispatchQuotaDelivery;delivered:boolean;witnessHash:string|null};
-type Port={readLocal(id:string):Promise<{authorityCanonical:string;authorityHash:string;witnessHash:string}|null>;readWitness(key:string):Promise<string|null>;writeWitness(key:string,value:string):Promise<void>;claim(quotaId:string,witnessHash:string):Promise<{quotaId:string;authorityHash:string;witnessHash:string;firstInstallationAllowed:boolean}>;install(delivery:DispatchQuotaDelivery,previouslySeen:boolean,witnessHash:string):Promise<void>};
+type Port={readLocal(id:string):Promise<{authorityCanonical:string;authorityHash:string;witnessHash:string}|null>;readWitness(key:string):Promise<string|null>;writeWitness(key:string,value:string):Promise<void>;claim(quotaId:string,witnessHash:string):Promise<{quotaId:string;authorityHash:string;witnessHash:string;firstInstallationAllowed:boolean;deliveredAtEpochMs?:number}>;install(delivery:DispatchQuotaDelivery,previouslySeen:boolean,witnessHash:string,clock?:import('../db/CompanyDispatchEscrowStore').DispatchDeliveryClock):Promise<void>};
 export const nativeDispatchWitnessPreferences={async readWitness(key:string){return(await Preferences.get({key})).value;},async writeWitness(key:string,value:string){await Preferences.set({key,value});}};
 const hash=async(value:string)=>Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(value))),x=>x.toString(16).padStart(2,'0')).join('');
 async function acceptOnce(snapshot:Snapshot,scope:DispatchScope,port:Port):Promise<void>{
@@ -13,9 +13,9 @@ async function acceptOnce(snapshot:Snapshot,scope:DispatchScope,port:Port):Promi
  if(witness||snapshot.delivered||snapshot.witnessHash)throw Error('DISPATCH_LOCAL_OWNERSHIP_MISSING');
  const bytes=crypto.getRandomValues(new Uint8Array(32));witness={schemaVersion:1,quotaId:delivery.id,authorityHash:delivery.authorityHash,nonce:Array.from(bytes,x=>x.toString(16).padStart(2,'0')).join('')};
  const encoded=JSON.stringify(witness);await port.writeWitness(key,encoded);if(await port.readWitness(key)!==encoded)throw Error('DISPATCH_EXTERNAL_WITNESS_NOT_DURABLE');
- const witnessHash=await hash(witness.nonce),claim=await port.claim(delivery.id,witnessHash);
+ const witnessHash=await hash(witness.nonce),localRequestStartedMs=Date.now(),claim=await port.claim(delivery.id,witnessHash),localReceivedMs=Date.now();
  if(claim.quotaId!==delivery.id||claim.authorityHash!==delivery.authorityHash||claim.witnessHash!==witnessHash||claim.firstInstallationAllowed!==true)throw Error('DISPATCH_FIRST_DELIVERY_RECONCILIATION_REQUIRED');
- await port.install(delivery,false,witnessHash);
+ await port.install(delivery,false,witnessHash,delivery.trackingClockSource?{serverDeliveredMs:Number(claim.deliveredAtEpochMs),localRequestStartedMs,localReceivedMs}:undefined);
 }
 const pending=new Map<string,{hash:string;promise:Promise<void>}>();
 export async function acceptDispatchDelivery(snapshot:Snapshot,scope:DispatchScope,port:Port):Promise<void>{

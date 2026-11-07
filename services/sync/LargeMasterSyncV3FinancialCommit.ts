@@ -198,7 +198,7 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
       documents.push({ collectionName: retained.collection, document: { ...JSON.parse(retained.expected), state: 'SETTLED' },
         expectedDocument: retained.expected, v3ExpectedRetainedDocument: { collection: retained.collection, id: retained.id, expected: retained.expected } });
     }
-    const trackingSelections=transaction.items.flatMap(line=>line.trackingData||[]);
+    const trackingSelections=dispatch?[]:transaction.items.flatMap(line=>line.trackingData||[]);
     if(trackingSelections.length){if(!transaction.trackingCheckoutId||options.refund)throw Error('TRACKING_CHECKOUT_SOURCE_REQUIRED');trackingCommits.push({checkoutId:transaction.trackingCheckoutId,transactionId:transaction.id,selections:trackingSelections});}
     if(transaction.fiscalAllocationAuthorizationId){
       if(entries.length!==1||!transaction.fiscalWorkflowCheckoutId||!dbAdapter.fiscalWorkflowStore?.allocationCommitPreconditions)throw Error('OFFLINE_FISCAL_NATIVE_REQUIRED');
@@ -328,7 +328,8 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
       } else {
       const offlineTable=isOfflineTableFiscalTransaction(document);
       if(offlineTable)await assertTableFiscalSaleContext(document,retained);
-      const fiscalSourceMetadata = {...captureNewV3FiscalSourceMetadata(document,projected,session.binding,{refund:false,retained:Boolean(retained),offlineTableAccount:offlineTable}),...captureTrackingSourceMetadata(document,projected)};
+      const dispatchEffectClock=dispatch?await dbAdapter.readDispatchEffectClock?.(document.companyDispatchSource!.checkoutId):null;
+      const fiscalSourceMetadata = {...captureNewV3FiscalSourceMetadata(document,projected,session.binding,{refund:false,retained:Boolean(retained),offlineTableAccount:offlineTable}),...(!dispatch?captureTrackingSourceMetadata(document,projected):{}),...(dispatchEffectClock?{dispatchEffectClock}:{})};
       let fiscalWorkflowBirth: import('../fiscal/FiscalWorkflowV2Types').FiscalWorkflowBirthV2 | undefined;
       if(document.fiscalWorkflowCheckoutId){
         if(options.refund||retained&&!offlineTable||!dbAdapter.fiscalWorkflowStore)throw Error('FISCAL_WORKFLOW_NEW_SOURCE_REQUIRED');
