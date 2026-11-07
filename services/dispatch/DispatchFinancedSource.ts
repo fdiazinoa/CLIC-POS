@@ -17,11 +17,11 @@ export function assertDispatchFinancedSource(source:RecordValue,demands:Dispatch
  for(const item of items){
   const cartId=String(item.cartId||'');requireSource(cartId&&!seen.has(cartId),'DISPATCH_CART_LINE_IDENTITY');seen.add(cartId);
   const matches=lines.filter(line=>line.cartId===cartId);requireSource(matches.length===1,'DISPATCH_CART_LINE_IDENTITY');
-  const allocations=array(matches[0].quotaAllocations);requireSource(allocations.length>0,'DISPATCH_ISSUED_LINE_QUOTAS_REQUIRED');
+  const allocations=array(matches[0].quotaAllocations);requireSource(allocations.length>0&&new Set(allocations.map(a=>a.quotaId)).size===allocations.length,'DISPATCH_ISSUED_LINE_QUOTAS_REQUIRED');
   let catalog:RecordValue|undefined;const selected:Array<{quota:RecordValue;quantity:number}>=[];
   for(const allocation of allocations){
    const quota=quotas.get(String(allocation.quotaId)),scope=record(quota?.scope);
-   requireSource(quota&&allocation.authorityHash===localRows.get(String(allocation.quotaId))?.authority_hash&&allocation.deliveryWitnessHash===localRows.get(String(allocation.quotaId))?.witness_hash&&scope.bindingId===pool.binding_id&&scope.generation===pool.generation&&quota.policyRevision===Number(pool.policy_revision)&&Number.isSafeInteger(allocation.quantityMinor)&&Number(allocation.quantityMinor)>0&&Number(allocation.quantityMinor)%100===0,'DISPATCH_ISSUED_LINE_SCOPE');
+   requireSource(quota&&canonicalDispatchJSON(allocation.dimensions)===canonicalDispatchJSON(quota.dimensions)&&allocation.authorityHash===localRows.get(String(allocation.quotaId))?.authority_hash&&allocation.deliveryWitnessHash===localRows.get(String(allocation.quotaId))?.witness_hash&&scope.bindingId===pool.binding_id&&scope.generation===pool.generation&&quota.policyRevision===Number(pool.policy_revision)&&Number.isSafeInteger(allocation.quantityMinor)&&Number(allocation.quantityMinor)>0&&Number(allocation.quantityMinor)%100===0,'DISPATCH_ISSUED_LINE_SCOPE');
    const next=record(quota!.catalogSource);
    const projection=(value:RecordValue)=>canonicalDispatchJSON({commercialItem:value.commercialItem,rawGraph:value.rawGraph,tariffs:value.tariffs,taxes:value.taxes});
    requireSource(!catalog||projection(catalog)===projection(next),'DISPATCH_CATALOG_REVISION_MIXED');catalog=next;
@@ -30,6 +30,7 @@ export function assertDispatchFinancedSource(source:RecordValue,demands:Dispatch
   }
   const scope=record(selected[0].quota.scope),root=record(catalog!.commercialItem);
   requireSource(root.id===item.id&&Array.isArray(catalog!.rawGraph),'DISPATCH_ISSUED_GRAPH_REQUIRED');
+  if(item.articleFormatSnapshot&&item.articleFormat)requireSource(canonicalDispatchJSON(item.articleFormatSnapshot)===canonicalDispatchJSON(item.articleFormat),'DISPATCH_ISSUED_FORMAT_CONFLICT');
   const compiled=compileCompanyDispatchDemand({scope:{tenantId:String(scope.tenantId),companyId:String(scope.companyId)},items:catalog!.rawGraph as DispatchRawItem[]},{itemId:String(item.id),quantity:Number(item.quantity),variantId:item.variantId as string|undefined,articleFormat:(item.articleFormatSnapshot||item.articleFormat) as Parameters<typeof compileCompanyDispatchDemand>[1]['articleFormat']});
   const quantities=new Map<string,number>();
   for(const {quota,quantity} of selected){const dims=record(quota.dimensions),expected=compiled.demands.find(d=>d.itemId===quota.itemId&&String(d.dimensions.variantId||'')===String(dims.variantId||''));

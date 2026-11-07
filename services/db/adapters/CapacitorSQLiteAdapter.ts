@@ -6,11 +6,11 @@ import {base6,readV3Base6Stock} from '../V3Base6Stock';
 import {TRACKING_ALLOCATION_SCHEMA,installTrackingAllocation,prepareTrackingCheckout,fenceTrackingCheckout,abandonTrackingCheckout,consumeTrackingCheckout} from '../TrackingAllocationStore';
 import type {Transaction} from '../../../types';
 import type {TrackingAuthority,TrackingSelection} from '../../tracking/TrackingAuthority';
-import {OFFLINE_FISCAL_ALLOCATION_WRITER_SCHEMA} from '../OfflineFiscalAllocationStore';
+import {OFFLINE_FISCAL_ALLOCATION_WRITER_SCHEMA,prepareAllocationCheckout} from '../OfflineFiscalAllocationStore';
 import {FISCAL_RETIREMENT_WRITER_SCHEMA,OFFLINE_FISCAL_ABANDON_WRITER_SCHEMA,assertRetirementRecoveryPromotion} from '../FiscalWorkflowRetirementStore';
 import {assertTableFiscalSaleContext} from '../../fiscal/OfflineTableFiscalCheckout';
 import {assertPresentationCommit} from '../../inventoryPresentations/nativeGuard';
-import { NativeFiscalWorkflowV2Store,FISCAL_WORKFLOW_V2_SCHEMA,consumeFiscalWorkflowBirth } from '../FiscalWorkflowV2Store';
+import { NativeFiscalWorkflowV2Store,FISCAL_WORKFLOW_V2_SCHEMA,reserveFiscalWorkflowCheckoutInTransaction,consumeFiscalWorkflowBirth } from '../FiscalWorkflowV2Store';
 import {NativeTerminalAuthEvidenceStore,TERMINAL_AUTH_EVIDENCE_SCHEMA} from '../TerminalAuthEvidenceStore';
 import {FISCAL_OUTBOX_SOURCE_SQL,fiscalOutboxSourceParams,captureFiscalOutboxAnchors,type FiscalOutboxAnchor} from '../../fiscal/FiscalAppliedReceiptV2';
 import {assertV3ReservationSource,assertV3ReservationLines,assertV3ReservationInvoice,reservationClaimId} from '../../sync/LargeMasterSyncV3ReservationAuthority';
@@ -581,7 +581,9 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         },true));
     }
     async prepareDispatchPrecharge(input:{checkoutId:string;transactionId:string;poolId:string;demandDigest:string;source:Record<string,unknown>;demands:DispatchDemand[]}):Promise<void>{
-        await this.withWriteLock(()=>this.executeUnlocked([],async()=>{
+        await this.withWriteLock(()=>this.executeUnlocked([],()=>this.prepareDispatchPrechargeUnlocked(input),true));
+    }
+    private async prepareDispatchPrechargeUnlocked(input:{checkoutId:string;transactionId:string;poolId:string;demandDigest:string;source:Record<string,unknown>;demands:DispatchDemand[]}):Promise<void>{
             const active=(await this.ensureDb().query('SELECT a.pool_id FROM pos_dispatch_active_pool_v1 a JOIN master_v3_operational_owner o ON o.binding=a.native_binding WHERE a.singleton=1')).values?.[0];
             if(active?.pool_id!==input.poolId)throw Error('DISPATCH_ACTIVE_BINDING_POOL_MISMATCH');
             if(!Array.isArray(input.demands)||input.demands.length<1||input.demands.length>200)throw Error('DISPATCH_DEMAND_INVALID');
@@ -592,7 +594,28 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             const quotas=(await this.ensureDb().query(`SELECT q.*,d.witness_hash FROM pos_dispatch_quota_v1 q JOIN pos_dispatch_quota_delivery_v1 d ON d.quota_id=q.id WHERE q.pool_id=? AND q.id IN(${placeholders})`,[input.poolId,...input.demands.map(d=>d.quotaId)])).values||[];
             assertDispatchFinancedSource(input.source,input.demands,quotas,pool||{},input.checkoutId,input.transactionId);
             await prepareDispatchPrecharge(this.ensureDb() as any,input);
-        },true));
+    }
+    /** Both identities are owned by this one writer transaction; no fiscal store transaction is nested. */
+    async prepareDispatchFiscalCheckout(input:import('../DispatchFiscalPreparation').DispatchFiscalPreparation):Promise<import('../../fiscal/FiscalWorkflowV2Types').FiscalWorkflowCheckoutV2>{
+        return this.withWriteLock(()=>this.withNativeTransaction(async()=>{
+            const sql=this.ensureDb() as any;
+            const fiscal=input.fiscal;
+            const checkout=fiscal.kind==='ALLOCATION'
+                ?await prepareAllocationCheckout(sql,fiscal.authority,input.cartIdentity,input.operationId,fiscal.context)
+                :await reserveFiscalWorkflowCheckoutInTransaction(sql,fiscal.scopeKey,input.cartIdentity,undefined,input.operationId,fiscal.options);
+            if(checkout.phase==='COMMITTED'||checkout.phase==='ACKNOWLEDGED')throw Error('DISPATCH_COMMITTED_CHECKOUT_RECOVERY_REQUIRED');
+            const fiscalScope=checkout.permit?.scope||fiscal.kind==='ALLOCATION'&&fiscal.authority.scope;
+            if(!fiscalScope)throw Error('DISPATCH_FISCAL_AUTHORITY_REQUIRED');
+            for(const demand of input.demands){
+                const row=(await sql.query('SELECT authority_json FROM pos_dispatch_quota_v1 WHERE id=? AND pool_id=?',[demand.quotaId,input.poolId])).values?.[0];
+                const quotaScope=row?JSON.parse(row.authority_json).scope:null;
+                if(!quotaScope||['tenantId','companyId','storeId','terminalId','deviceId'].some(key=>quotaScope[key]!==fiscalScope[key as keyof typeof fiscalScope]))throw Error('DISPATCH_FISCAL_QUOTA_SCOPE_CONFLICT');
+            }
+            const source={...input.source,id:checkout.transactionId,fiscalWorkflowCheckoutId:checkout.checkoutId,
+                companyDispatchSource:{...(input.source.companyDispatchSource as Record<string,unknown>),checkoutId:checkout.checkoutId}};
+            await this.prepareDispatchPrechargeUnlocked({checkoutId:checkout.checkoutId,transactionId:checkout.transactionId,poolId:input.poolId,demandDigest:input.demandDigest,source,demands:input.demands});
+            return checkout;
+        }));
     }
     async markDispatchEffectPossible(checkoutId:string,effectDigest:string,payments:unknown[]):Promise<void>{
         await this.withWriteLock(()=>this.executeUnlocked([],async()=>{

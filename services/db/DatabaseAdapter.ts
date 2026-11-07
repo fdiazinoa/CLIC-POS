@@ -144,6 +144,7 @@ export interface DatabaseAdapter {
     commitFinancialTransaction?(input: FinancialCommitInput): Promise<void>;
     readDispatchQuota?(id:string):Promise<{authorityCanonical:string;authorityHash:string;witnessHash:string;availableMinor:number}|null>;
     installDispatchQuota?(delivery:import('../dispatch/DispatchAuthority').DispatchQuotaDelivery,scope:import('../dispatch/DispatchAuthority').DispatchScope,poolId:string,previouslySeen:boolean,witnessHash:string):Promise<void>;
+    prepareDispatchFiscalCheckout?(input:import('./DispatchFiscalPreparation').DispatchFiscalPreparation):Promise<import('../fiscal/FiscalWorkflowV2Types').FiscalWorkflowCheckoutV2>;
     prepareDispatchPrecharge?(input:{checkoutId:string;transactionId:string;poolId:string;demandDigest:string;source:Record<string,unknown>;demands:import('./CompanyDispatchEscrowStore').DispatchDemand[]}):Promise<void>;
     markDispatchEffectPossible?(checkoutId:string,effectDigest:string,payments:unknown[]):Promise<void>;
     abandonDispatchPrecharge?(checkoutId:string):Promise<void>;
