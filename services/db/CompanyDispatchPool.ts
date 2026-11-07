@@ -1,6 +1,9 @@
 import {canonicalDispatchJSON,type DispatchSQL} from './CompanyDispatchEscrowStore';
 export type DispatchPoolSnapshot={contractVersion:1;policy:{tenant_id?:string;company_id?:string;effective_mode:string;target_mode:string;phase:string;revision:number;transition_id?:string};binding:{id:string;tenant_id:string;company_id:string;store_id:string;terminal_id:string;device_id:string;generation:string;accepted_sequence:number;native_schema_hash:string|null};barrier:null|{id:string;nonce:string;state:string;transition_id:string;proof:Record<string,unknown>|null};readiness:{historicalUniverseComplete:boolean}};
 export const DISPATCH_POOL_INSTALL_SCHEMA=`
+CREATE TABLE IF NOT EXISTS pos_dispatch_policy_snapshot_v1(pool_id TEXT PRIMARY KEY REFERENCES pos_dispatch_pool_v1(pool_id),revision INTEGER NOT NULL CHECK(revision>0),identity_json TEXT NOT NULL);
+CREATE TRIGGER IF NOT EXISTS dispatch_policy_snapshot_monotonic BEFORE UPDATE ON pos_dispatch_policy_snapshot_v1 WHEN OLD.pool_id IS NOT NEW.pool_id OR NEW.revision<OLD.revision OR NEW.revision=OLD.revision AND NEW.identity_json IS NOT OLD.identity_json BEGIN SELECT RAISE(ABORT,'DISPATCH_POOL_POLICY_REVISION_CONFLICT');END;
+CREATE TRIGGER IF NOT EXISTS dispatch_policy_snapshot_durable BEFORE DELETE ON pos_dispatch_policy_snapshot_v1 BEGIN SELECT RAISE(ABORT,'DISPATCH_POOL_POLICY_SNAPSHOT_DURABLE');END;
 CREATE TABLE IF NOT EXISTS pos_dispatch_pool_install_v1(pool_id TEXT PRIMARY KEY REFERENCES pos_dispatch_pool_v1(pool_id),native_binding TEXT NOT NULL,witness_hash TEXT NOT NULL,native_schema_hash TEXT NOT NULL);
 CREATE TRIGGER IF NOT EXISTS dispatch_pool_install_immutable BEFORE UPDATE ON pos_dispatch_pool_install_v1 BEGIN SELECT RAISE(ABORT,'DISPATCH_POOL_INSTALL_IMMUTABLE');END;
 CREATE TRIGGER IF NOT EXISTS dispatch_pool_install_durable BEFORE DELETE ON pos_dispatch_pool_install_v1 BEGIN SELECT RAISE(ABORT,'DISPATCH_POOL_INSTALL_DURABLE');END;
@@ -19,8 +22,21 @@ export async function installDispatchPoolSnapshot(sql:DispatchSQL,snapshot:Dispa
  const configurations=(await sql.query("SELECT data FROM documents WHERE collection_name='config' AND doc_id NOT IN('_db_initialized','config_metadata')")).values||[];
  const matches=configurations.flatMap(row=>{const config=JSON.parse(String(row.data));return (config.terminals||[]).filter((terminal:any)=>terminal.id===b.terminal_id&&terminal.config?.currentDeviceId===b.device_id&&terminal.config?.erpBinding?.tenantId===b.tenant_id&&terminal.config?.erpBinding?.companyId===b.company_id&&terminal.config?.erpBinding?.storeId===b.store_id);});
  if(matches.length!==1)fail('DISPATCH_POOL_CONFIG_SCOPE');
+ const policyIdentity=canonicalDispatchJSON({tenantId:b.tenant_id,companyId:b.company_id,revision:p.revision,effectiveMode:p.effective_mode,targetMode:p.target_mode,phase:p.phase,transitionId:p.transition_id,barrier:barrier?{id:barrier.id,nonce:barrier.nonce,transitionId:barrier.transition_id}:null});
+ // Company policy revisions outlive a local pool/generation. An in-flight old
+ // generation must not regain the active slot after a newer generation froze.
+ const companyLatest=(await sql.query("SELECT revision,identity_json FROM pos_dispatch_policy_snapshot_v1 WHERE json_extract(identity_json,'$.tenantId')=? AND json_extract(identity_json,'$.companyId')=? ORDER BY revision DESC LIMIT 1",[b.tenant_id,b.company_id])).values?.[0];
+ if(companyLatest){
+  const prior=JSON.parse(String(companyLatest.identity_json));const incoming=JSON.parse(policyIdentity);delete prior.barrier;delete incoming.barrier;
+  if(p.revision<Number(companyLatest.revision)||p.revision===Number(companyLatest.revision)&&canonicalDispatchJSON(prior)!==canonicalDispatchJSON(incoming))fail('DISPATCH_POOL_POLICY_REVISION_CONFLICT');
+ }
  const poolId=dispatchPoolId(b),old=(await sql.query('SELECT * FROM pos_dispatch_pool_install_v1 WHERE pool_id=?',[poolId])).values?.[0];
- if(old){if(old.native_binding!==owner?.binding||old.witness_hash!==witnessHash||old.native_schema_hash!==nativeSchemaHash)fail('DISPATCH_POOL_OWNERSHIP_CONFLICT');}
+ if(old){
+  if(old.native_binding!==owner?.binding||old.witness_hash!==witnessHash||old.native_schema_hash!==nativeSchemaHash)fail('DISPATCH_POOL_OWNERSHIP_CONFLICT');
+  const retained=(await sql.query('SELECT s.*,p.policy_revision FROM pos_dispatch_policy_snapshot_v1 s JOIN pos_dispatch_pool_v1 p ON p.pool_id=s.pool_id WHERE s.pool_id=?',[poolId])).values?.[0];
+  if(!retained||Number(retained.revision)!==Number(retained.policy_revision))fail('DISPATCH_POOL_POLICY_RECONCILIATION_REQUIRED');
+  if(p.revision<Number(retained.revision)||p.revision===Number(retained.revision)&&policyIdentity!==retained.identity_json)fail('DISPATCH_POOL_POLICY_REVISION_CONFLICT');
+ }
  else{
   if(previouslySeen||b.accepted_sequence!==0||barrier?.proof?.nativePoolWitnessHash||p.phase!=='PREPARING'||!barrier||barrier.transition_id!==p.transition_id||snapshot.readiness?.historicalUniverseComplete!==true)fail('DISPATCH_POOL_RECONCILIATION_REQUIRED');
   await sql.run("INSERT INTO pos_dispatch_pool_v1(pool_id,binding_id,generation,policy_revision,state,barrier_id)VALUES(?,?,?,?,'FROZEN',?)",[poolId,b.id,b.generation,p.revision,barrier.id],false);
@@ -40,6 +56,7 @@ export async function installDispatchPoolSnapshot(sql:DispatchSQL,snapshot:Dispa
    if(rights.length)fail('DISPATCH_POOL_DRAIN_RIGHTS_REQUIRED');state='IMMEDIATE';
   }else fail('DISPATCH_POOL_POLICY_INVALID');
  }else if(p.phase!=='PREPARING')fail('DISPATCH_POOL_POLICY_INVALID');
+ await sql.run('INSERT INTO pos_dispatch_policy_snapshot_v1(pool_id,revision,identity_json)VALUES(?,?,?) ON CONFLICT(pool_id)DO UPDATE SET revision=excluded.revision,identity_json=excluded.identity_json',[poolId,p.revision,policyIdentity],false);
  await sql.run('UPDATE pos_dispatch_pool_v1 SET state=?,policy_revision=?,barrier_id=?,barrier_digest=? WHERE pool_id=?',[state,p.revision,barrier?.id||null,barrier?.proof?canonicalDispatchJSON(barrier.proof):null,poolId],false);
  await sql.run('INSERT INTO pos_dispatch_active_pool_v1(singleton,pool_id,native_binding)VALUES(1,?,?) ON CONFLICT(singleton)DO UPDATE SET pool_id=excluded.pool_id,native_binding=excluded.native_binding',[poolId,owner!.binding],false);
  return poolId;

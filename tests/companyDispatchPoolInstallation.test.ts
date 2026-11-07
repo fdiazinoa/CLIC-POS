@@ -51,3 +51,16 @@ test('production synchronizer stages a barrier, keeps it fenced after ACK, then 
  s.rows=[{delivery:authority,delivered:false,witnessHash:null}];s.snapshotSequence=1;s.nextSequence=1;
  assert.deepEqual(await synchronizeNativeCompanyDispatch(transport,f.adapter,install,witness),{state:'WAREHOUSE_DISPATCH',installedQuotas:1});assert.deepEqual(calls,['acceptBarrier','claimQuota','ackQuotaInstalled']);assert.equal(await f.adapter.readDispatchActivePoolState(),'WAREHOUSE_DISPATCH');assert.equal((f.db.prepare('SELECT last_sequence n FROM pos_dispatch_capture_cursor_v1').get() as {n:number}).n,0);
 });
+
+test('late STABLE rev2 cannot undo a newer rev3 freeze; same-revision rekeys/phase/mode also conflict',async t=>{
+ const f=await setup();t.after(()=>f.db.close());const first=snapshot();await installNativeDispatchPool(first,f.hash,f.port);const proof=await f.adapter.prepareDispatchBarrierProof(first);
+ const stable=structuredClone(first);stable.policy={...stable.policy,phase:'STABLE',effective_mode:'WAREHOUSE_DISPATCH',revision:2};stable.barrier!.state='DRAINED';stable.barrier!.proof=proof;stable.binding.native_schema_hash=f.hash;await installNativeDispatchPool(stable,f.hash,f.port);
+ const frozen=structuredClone(stable);frozen.policy={...frozen.policy,phase:'PREPARING',revision:3,transition_id:id(240)};frozen.barrier={id:id(241),nonce:id(242),state:'REQUIRED',transition_id:id(240),proof:null};await installNativeDispatchPool(frozen,f.hash,f.port);
+ for(const late of [stable,{...frozen,policy:{...frozen.policy,phase:'STABLE'}},{...frozen,policy:{...frozen.policy,target_mode:'IMMEDIATE'}},{...frozen,barrier:{...frozen.barrier,id:id(243)}}]){
+  await assert.rejects(installNativeDispatchPool(late,f.hash,f.port),/POOL_POLICY_REVISION_CONFLICT/);assert.equal(await f.adapter.readDispatchActivePoolState(),'FROZEN');assert.equal((f.db.prepare('SELECT policy_revision FROM pos_dispatch_pool_v1').get() as {policy_revision:number}).policy_revision,3);
+ }
+ await installNativeDispatchPool(frozen,f.hash,f.port);assert.equal(await f.adapter.readDispatchActivePoolState(),'FROZEN');
+ const nextGeneration=structuredClone(frozen);nextGeneration.binding.id=id(245);nextGeneration.binding.generation=id(246);nextGeneration.policy.revision=4;nextGeneration.policy.transition_id=id(247);nextGeneration.barrier={id:id(248),nonce:id(249),state:'REQUIRED',transition_id:id(247),proof:null};
+ await installNativeDispatchPool(nextGeneration,f.hash,f.port);await assert.rejects(installNativeDispatchPool(frozen,f.hash,f.port),/POOL_POLICY_REVISION_CONFLICT/);assert.equal((f.db.prepare('SELECT pool_id FROM pos_dispatch_active_pool_v1').get() as {pool_id:string}).pool_id,dispatchPoolId(nextGeneration.binding));
+ assert.throws(()=>f.db.prepare('UPDATE pos_dispatch_policy_snapshot_v1 SET revision=2').run(),/POLICY_REVISION_CONFLICT/);
+});
