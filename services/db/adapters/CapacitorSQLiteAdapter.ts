@@ -1,3 +1,4 @@
+import {DISPATCH_POOL_INSTALL_SCHEMA,installDispatchPoolSnapshot,prepareDispatchBarrierProof,type DispatchPoolSnapshot,dispatchPoolId} from '../CompanyDispatchPool';
 import {DISPATCH_ADOPTION_SCHEMA,acknowledgeDispatchAdoption,type DispatchAdoptionProof} from '../CompanyDispatchAdoption';
 import {DISPATCH_OPERATOR_AUTH_SCHEMA} from '../../dispatch/DispatchOperatorAuthentication';
 import {assertDispatchFinancedSource} from '../../dispatch/DispatchFinancedSource';
@@ -571,6 +572,21 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         await this.withWriteLock(()=>this.executeUnlocked([],async()=>{await abandonTrackingCheckout(this.ensureDb() as any,checkoutId);await retireTrackingOperation(this.ensureDb() as any,checkoutId);},true));
     }
 
+    async readDispatchActivePoolState():Promise<string|null>{
+        return this.withWriteLock(async()=>{const row=(await this.ensureDb().query('SELECT p.state FROM pos_dispatch_pool_v1 p JOIN pos_dispatch_active_pool_v1 a ON a.pool_id=p.pool_id JOIN master_v3_operational_owner o ON o.binding=a.native_binding WHERE a.singleton=1')).values?.[0];return row?String(row.state):null;});
+    }
+    async dispatchNativeSchemaHash():Promise<string>{
+        return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(COMPANY_DISPATCH_ESCROW_SCHEMA+DISPATCH_ADOPTION_SCHEMA+DISPATCH_POOL_INSTALL_SCHEMA+DISPATCH_FINANCIAL_SOURCE_GUARDS))),n=>n.toString(16).padStart(2,'0')).join('');
+    }
+    async prepareDispatchBarrierProof(snapshot:DispatchPoolSnapshot):Promise<Record<string,unknown>>{
+        return this.withWriteLock(()=>this.withNativeTransaction(()=>prepareDispatchBarrierProof(this.ensureDb() as any,snapshot)));
+    }
+    async readDispatchPoolInstallation(bindingId:string,generation:string):Promise<{witnessHash:string;nativeSchemaHash:string}|null>{
+        return this.withWriteLock(async()=>{const row=(await this.ensureDb().query('SELECT witness_hash,native_schema_hash FROM pos_dispatch_pool_install_v1 WHERE pool_id=?',[dispatchPoolId({id:bindingId,generation})])).values?.[0];return row?{witnessHash:String(row.witness_hash),nativeSchemaHash:String(row.native_schema_hash)}:null;});
+    }
+    async installDispatchPoolSnapshot(snapshot:DispatchPoolSnapshot,witnessHash:string,nativeSchemaHash:string,previouslySeen:boolean):Promise<string>{
+        return this.withWriteLock(()=>this.withNativeTransaction(()=>installDispatchPoolSnapshot(this.ensureDb() as any,snapshot,witnessHash,nativeSchemaHash,previouslySeen)));
+    }
     async acknowledgeDispatchAdoption(eventId:string,proof:DispatchAdoptionProof,at:string):Promise<void>{
         await this.withWriteLock(()=>this.withNativeTransaction(()=>acknowledgeDispatchAdoption(this.ensureDb() as any,eventId,proof,at)));
     }
@@ -1192,6 +1208,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             ${TRACKING_ALLOCATION_SCHEMA}
             ${COMPANY_DISPATCH_ESCROW_SCHEMA}
             ${DISPATCH_ADOPTION_SCHEMA}
+            ${DISPATCH_POOL_INSTALL_SCHEMA}
             ${DISPATCH_FINANCIAL_SOURCE_GUARDS}
             ${DISPATCH_OPERATOR_AUTH_SCHEMA}
             ${TRACKING_OPERATION_SCHEMA}

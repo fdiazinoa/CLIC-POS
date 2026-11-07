@@ -1,3 +1,4 @@
+import {synchronizeNativeCompanyDispatch} from '../services/dispatch/CompanyDispatchRuntime';
 import { describeV3Error } from '../utils/v3ErrorMessages';
 import { describePresentationError } from '../utils/presentationErrorMessages';
 import { alternativeWarehouseForLines } from '../utils/warehouseScope';
@@ -1481,6 +1482,18 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       () => activeTerminalConfig ? (activeTerminalConfig as unknown as Record<string, unknown>) : {},
       [activeTerminalConfig]
    );
+   const dispatchProjection=activeTerminalConfigRaw.inventoryDispatch as {contractVersion?:number;mode?:string;phase?:string;revision?:number}|undefined;
+   const [dispatchAuthorityError,setDispatchAuthorityError]=useState<string|null>(null);
+   const [dispatchAuthorityRetry,setDispatchAuthorityRetry]=useState(0);
+   const dispatchPolicyKey=JSON.stringify([terminalId,dispatchProjection?.contractVersion,dispatchProjection?.mode,dispatchProjection?.phase,dispatchProjection?.revision]);
+   useEffect(()=>{
+      let disposed=false;setDispatchAuthorityError(null);
+      if(dispatchProjection?.phase!=='PREPARING'&&dispatchProjection?.mode!=='WAREHOUSE_DISPATCH')return;
+      // The producer only installs/fences authority. It never captures payment or
+      // treats a config JSON projection as an issued quota/operator grant.
+      void synchronizeNativeCompanyDispatch().then(()=>{if(!disposed)setDispatchAuthorityError(null);}).catch(error=>{if(!disposed)setDispatchAuthorityError(/^DISPATCH_[A-Z0-9_]+$/.test(String(error?.message))?error.message:'DISPATCH_AUTHORITY_UNAVAILABLE');});
+      return()=>{disposed=true;};
+   },[dispatchPolicyKey,dispatchAuthorityRetry]);
    const activeTableContext = useMemo(
       () => buildTableContextLabels(activeTable, rooms),
       [activeTable, rooms]
@@ -7110,6 +7123,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          assertFiscalWorkflowCheckoutReplay(fiscalCheckoutRef.current,completed as Transaction,currentFiscalCheckoutCartIdentity(),readFiscalWorkflowLocalScope(activeTerminalConfig,terminalId),paymentIds);
          return Object.assign(()=>{},{completedTransaction:completed as Transaction});
       }
+      const nativeDispatchState=await dbAdapter.readDispatchActivePoolState?.();
+      if(dispatchProjection?.phase==='PREPARING'||nativeDispatchState==='FROZEN')throw Error('La caja está cerrando la transición de despacho. Sincroniza los efectos pendientes y espera la activación de la política.');
+      if(dispatchProjection?.mode==='WAREHOUSE_DISPATCH'||nativeDispatchState==='WAREHOUSE_DISPATCH')throw Error('El cobro requiere la preparación conjunta del cupo de despacho y la autoridad fiscal de esta venta.');
       await assertCheckoutFiscalAuthority();
       // A native attempt bound to another cart can never be resumed; release it here so the
       // cashier is not blocked by a previous click (the release asserts there are no effects).
@@ -8396,6 +8412,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             />
          )}
 
+         {dispatchAuthorityError&&<div role="status" className="fixed top-16 right-4 z-50 bg-amber-50 border rounded-xl p-3 max-w-sm"><p>La autoridad de despacho está pendiente. Los cobros nuevos permanecen cerrados hasta completar la preparación.</p><button type="button" onClick={()=>setDispatchAuthorityRetry(value=>value+1)}>Reintentar sincronización</button><details><summary>Detalle</summary><code>{dispatchAuthorityError}</code></details></div>}
          {presentationError&&(cart.some(line=>line.inventoryPresentation!==undefined)||presentationSelection?.inventoryPresentationMaster)&&<div role="status" className="fixed top-16 right-4 z-50 bg-amber-50 border rounded-xl p-3 max-w-sm"><p>Presentaciones no disponibles. {describePresentationError(presentationError)}</p><button type="button" onClick={()=>setPresentationRetry(value=>value+1)}>Reintentar</button><details><summary>Detalle</summary><code>{presentationError}</code></details></div>}
          {errorToast && (
             <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-[100] animate-in slide-in-from-bottom-5 fade-in duration-300">
