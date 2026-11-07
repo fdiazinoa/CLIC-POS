@@ -15,8 +15,8 @@ CREATE TRIGGER IF NOT EXISTS dispatch_authenticated_operator_immutable BEFORE UP
 CREATE TRIGGER IF NOT EXISTS dispatch_authenticated_operator_durable BEFORE DELETE ON pos_dispatch_authenticated_operator_v1 BEGIN SELECT RAISE(ABORT,'DISPATCH_AUTHENTICATED_OPERATOR_DURABLE');END;
 `;
 interface SensitiveAuthority {
- publicPolicy:{schemaVersion:1;source:'ERP_DISPATCH_OPERATOR_AUTHORITY_V1';id:string;scope:{bindingId:string;generation:string;deviceId:string};issuedAt:string;validUntil:string;authenticationPolicy:AuthenticationPolicy;operators:DispatchOperatorPolicy[]};
- privateAuthentication:{schemaVersion:1;source:'ERP_DISPATCH_PIN_VERIFIERS_V1';authorityId:string;verifiers:Array<{userId:string;algorithm:string;salt:string;verifier:string}>};
+ publicPolicy:{schemaVersion:1|2;source:'ERP_DISPATCH_OPERATOR_AUTHORITY_V1'|'ERP_DISPATCH_OPERATOR_AUTHORITY_V2';id:string;scope:{bindingId:string;generation:string;deviceId:string};issuedAt:string;eligibility?:{profile:'FINITE_QUOTA_SET';quotaSet:Array<{quotaId:string;authorityHash:string}>;allowedNoStockSources:Array<{sourceId:string;authorityHash:string}>};authenticationPolicy:AuthenticationPolicy;operators:DispatchOperatorPolicy[]};
+ privateAuthentication:{schemaVersion:1|2;source:'ERP_DISPATCH_PIN_VERIFIERS_V1'|'ERP_DISPATCH_PIN_VERIFIERS_V2';authorityId:string;verifiers:Array<{userId:string;algorithm:string;salt:string;verifier:string}>};
 }
 type AuthenticationPolicy={schemaVersion:1;maxUserFailures:number;maxDeviceFailures:number;windowMilliseconds:number;recovery:'AUTHENTICATED_SERVER_COOLDOWN'};
 export type DispatchAuthenticationResult={ok:true;authenticationId:string;userId:string;intentDigest:string}|{ok:false;code:string;retryAfterMilliseconds?:number};
@@ -31,12 +31,12 @@ const equal=(a:string,b:string)=>{let difference=a.length^b.length;for(let n=0;n
 export async function authenticateDispatchOperator(sql:DispatchSQL,input:{authorityId:string;checkoutId:string;userId:string;pin:string},trusted:{now:number;serverObservedAt:number;verifyWitness:(authorityHash:string,authenticationHash:string,witnessHash:string)=>Promise<void>}):Promise<DispatchAuthenticationResult>{
  const {now,serverObservedAt}=trusted;
  if(!Number.isSafeInteger(now)||now<0||!Number.isSafeInteger(serverObservedAt)||serverObservedAt<0||serverObservedAt>now)throw Error('DISPATCH_AUTH_CLOCK_POLICY_REQUIRED');
- const row=(await sql.query('SELECT a.*,p.source_json,p.phase precharge_phase,p.pool_id checkout_pool,q.binding_id,q.generation FROM pos_dispatch_operator_authority_v1 a JOIN pos_dispatch_precharge_v1 p ON p.checkout_id=? JOIN pos_dispatch_pool_v1 q ON q.pool_id=p.pool_id WHERE a.id=?',[input.checkoutId,input.authorityId])).values?.[0];
+ const row=(await sql.query('SELECT a.*,p.source_json,p.phase precharge_phase,p.pool_id checkout_pool,q.binding_id,q.generation,q.state pool_state FROM pos_dispatch_operator_authority_v1 a JOIN pos_dispatch_precharge_v1 p ON p.checkout_id=? JOIN pos_dispatch_pool_v1 q ON q.pool_id=p.pool_id WHERE a.id=?',[input.checkoutId,input.authorityId])).values?.[0];
  if(!row||row.pool_id!==row.checkout_pool)throw Error('DISPATCH_OPERATOR_AUTHORITY_SCOPE');
  await trusted.verifyWitness(String(row.authority_hash),String(row.authentication_hash),String(row.witness_hash));
  if(await sha(String(row.authority_canonical))!==row.authority_hash)throw Error('DISPATCH_OPERATOR_AUTHORITY_HASH');
  const authority={publicPolicy:JSON.parse(String(row.authority_canonical))} as SensitiveAuthority,scope=authority.publicPolicy?.scope;
- if(authority.publicPolicy?.schemaVersion!==1||authority.publicPolicy?.source!=='ERP_DISPATCH_OPERATOR_AUTHORITY_V1'||authority.publicPolicy?.id!==input.authorityId||scope?.bindingId!==row.binding_id||scope?.generation!==row.generation)throw Error('DISPATCH_OPERATOR_AUTHORITY_SCOPE');
+ if(!([1,2].includes(authority.publicPolicy?.schemaVersion)&&authority.publicPolicy?.source===`ERP_DISPATCH_OPERATOR_AUTHORITY_V${authority.publicPolicy.schemaVersion}`)||authority.publicPolicy?.id!==input.authorityId||scope?.bindingId!==row.binding_id||scope?.generation!==row.generation)throw Error('DISPATCH_OPERATOR_AUTHORITY_SCOPE');
  const policy=authority.publicPolicy.authenticationPolicy;
  if(policy?.schemaVersion!==1||policy.recovery!=='AUTHENTICATED_SERVER_COOLDOWN'||![policy.maxUserFailures,policy.maxDeviceFailures,policy.windowMilliseconds].every(v=>Number.isSafeInteger(v)&&v>0))throw Error('DISPATCH_AUTH_POLICY_REQUIRED');
  const retainedSource=JSON.parse(String(row.source_json));
@@ -44,8 +44,17 @@ export async function authenticateDispatchOperator(sql:DispatchSQL,input:{author
  const intentDigest=await sha(String(row.source_json));
  const previous=(await sql.query('SELECT * FROM pos_dispatch_authenticated_operator_v1 WHERE checkout_id=? AND authority_id=? AND user_id=?',[input.checkoutId,input.authorityId,input.userId])).values?.[0];
  if(previous&&['EFFECT_POSSIBLE','COMMITTED'].includes(String(row.precharge_phase))){if(previous.intent_digest!==intentDigest||previous.authority_hash!==row.authority_hash)throw Error('DISPATCH_OPERATOR_AUTHENTICATION_CONFLICT');return{ok:true,authenticationId:String(previous.id),userId:String(previous.user_id),intentDigest};}
- if(!Number.isFinite(Date.parse(authority.publicPolicy.issuedAt))||serverObservedAt<Date.parse(authority.publicPolicy.issuedAt))return{ok:false,code:'DISPATCH_AUTH_SERVER_CLOCK_REQUIRED'};
- if(row.state!=='ACTIVE'||!Number.isFinite(Date.parse(authority.publicPolicy.validUntil))||now>=Date.parse(authority.publicPolicy.validUntil))return{ok:false,code:'DISPATCH_OPERATOR_NEW_AUTHORITY_REQUIRED'};
+ if(authority.publicPolicy.schemaVersion!==2||authority.publicPolicy.eligibility?.profile!=='FINITE_QUOTA_SET')return{ok:false,code:'DISPATCH_OPERATOR_FINITE_PROFILE_REQUIRED'};
+ if(row.pool_state!=='WAREHOUSE_DISPATCH')return{ok:false,code:'DISPATCH_POOL_FROZEN_OR_UNAVAILABLE'};
+ if(row.state!=='ACTIVE')return{ok:false,code:'DISPATCH_OPERATOR_NEW_AUTHORITY_REQUIRED'};
+ if(retainedSource.companyDispatchSource?.operatorAuthorityHash!==row.authority_hash)throw Error('DISPATCH_OPERATOR_CHECKOUT_AUTHORITY_CONFLICT');
+ const eligibility=authority.publicPolicy.eligibility;
+ if(!Array.isArray(eligibility.quotaSet)||!Array.isArray(eligibility.allowedNoStockSources)||eligibility.quotaSet.length+eligibility.allowedNoStockSources.length===0)throw Error('DISPATCH_OPERATOR_FINITE_AUTHORITY_REQUIRED');
+ const quotaSet=new Map(eligibility.quotaSet.map(q=>[q.quotaId,q.authorityHash]));
+ if(quotaSet.size!==eligibility.quotaSet.length)throw Error('DISPATCH_OPERATOR_FINITE_AUTHORITY_REQUIRED');
+ const financed=(await sql.query('SELECT l.quota_id,q.authority_hash FROM pos_dispatch_precharge_lines_v1 l JOIN pos_dispatch_quota_v1 q ON q.id=l.quota_id AND q.pool_id=? WHERE l.checkout_id=?',[row.pool_id,input.checkoutId])).values||[];
+ if(!financed.length||retainedSource.companyDispatchSource?.noStockSources?.length)throw Error('DISPATCH_NO_STOCK_CHECKOUT_PROOF_REQUIRED');
+ if(financed.some(q=>quotaSet.get(String(q.quota_id))!==q.authority_hash))throw Error('DISPATCH_OPERATOR_QUOTA_SET_CONFLICT');
  if(row.precharge_phase!=='PREPARED')return{ok:false,code:'DISPATCH_OPERATOR_CHECKOUT_NOT_PREPARED'};
  const operator=authority.publicPolicy.operators.find(o=>o.userId===input.userId);
  const keys=[...(operator?[{key:canonicalDispatchJSON(['USER',scope.bindingId,operator.erpPosUserId]),limit:policy.maxUserFailures}]:[]),{key:canonicalDispatchJSON(['DEVICE',scope.deviceId]),limit:policy.maxDeviceFailures}];
@@ -61,7 +70,7 @@ export async function authenticateDispatchOperator(sql:DispatchSQL,input:{author
  const material=(await sql.query('SELECT authentication_canonical FROM pos_dispatch_operator_auth_material_v1 WHERE authority_id=?',[input.authorityId])).values?.[0];
  if(!material||await sha(String(material.authentication_canonical))!==row.authentication_hash)throw Error('DISPATCH_OPERATOR_AUTH_MATERIAL_REQUIRED');
  authority.privateAuthentication=JSON.parse(String(material.authentication_canonical));
- if(authority.privateAuthentication.schemaVersion!==1||authority.privateAuthentication.source!=='ERP_DISPATCH_PIN_VERIFIERS_V1'||authority.privateAuthentication.authorityId!==input.authorityId)throw Error('DISPATCH_OPERATOR_AUTHORITY_SCOPE');
+ if(authority.privateAuthentication.schemaVersion!==2||authority.privateAuthentication.source!=='ERP_DISPATCH_PIN_VERIFIERS_V2'||authority.privateAuthentication.authorityId!==input.authorityId)throw Error('DISPATCH_OPERATOR_AUTHORITY_SCOPE');
  const verifier=authority.privateAuthentication.verifiers.find(v=>v.userId===input.userId);
  if(operator&&(!verifier||verifier.algorithm!=='DISPATCH_PIN_SHA256_SALTED_V1'||!/^[a-f0-9]{64}$/.test(verifier.salt)||!/^[a-f0-9]{64}$/.test(verifier.verifier)))throw Error('DISPATCH_OPERATOR_VERIFIER_INVALID');
  const digest=verifier&&/^\d{4}$/.test(input.pin)?await sha(JSON.stringify([verifier.algorithm,scope.bindingId,scope.generation,input.userId,verifier.salt,input.pin])):'';

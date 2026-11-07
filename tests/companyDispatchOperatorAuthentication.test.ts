@@ -4,12 +4,12 @@ import {DISPATCH_OPERATOR_AUTH_SCHEMA,authenticateDispatchOperator,retireDispatc
 const hash=(value:string)=>createHash('sha256').update(value).digest('hex');
 function fixture(policy={schemaVersion:1,maxUserFailures:2,maxDeviceFailures:4,windowMilliseconds:1000,recovery:'AUTHENTICATED_SERVER_COOLDOWN'}){
  const directory=mkdtempSync(join(tmpdir(),'clic-dispatch-auth-')),file=join(directory,'own.sqlite');let db=new DatabaseSync(file);db.exec(COMPANY_DISPATCH_ESCROW_SCHEMA+DISPATCH_OPERATOR_AUTH_SCHEMA);
- db.exec("INSERT INTO pos_dispatch_pool_v1 VALUES('pool','binding','generation',1,'WAREHOUSE_DISPATCH',NULL,NULL);INSERT INTO pos_dispatch_precharge_v1(checkout_id,pool_id,transaction_id,demand_digest,source_json,phase)VALUES('checkout','pool','transaction','digest','{\"items\":[{\"id\":\"item\",\"quantity\":1}],\"companyDispatchSource\":{\"operatorAuthorityId\":\"grant\"}}','PREPARED')");
+ db.exec("INSERT INTO pos_dispatch_pool_v1 VALUES('pool','binding','generation',1,'WAREHOUSE_DISPATCH',NULL,NULL);INSERT INTO pos_dispatch_quota_v1 VALUES('quota','pool','{}','"+'c'.repeat(64)+"',10000000,0,0,'ACTIVE')");
  const sql={query:async(q:string,v:any[]=[])=>({values:db.prepare(q).all(...v) as any[]}),run:async(q:string,v:any[]=[],transaction?:boolean)=>{assert.equal(transaction,false);return db.prepare(q).run(...v);}};
  const grants=new Map<string,{publicHash:string;privateHash:string}>();
  const install=(id='grant')=>{const scope={bindingId:'binding',generation:'generation',deviceId:'device'},users=[['user','9073'],['supervisor','6184']];
-  const authority={publicPolicy:{schemaVersion:1,source:'ERP_DISPATCH_OPERATOR_AUTHORITY_V1',id,scope,issuedAt:new Date(0).toISOString(),validUntil:'2027-01-01T00:00:00Z',authenticationPolicy:policy,operators:users.map(([userId])=>({userId,erpPosUserId:'erp-'+userId,roleId:'CASHIER',roleVersion:1,permissions:['POS_DISCOUNT'],userOverride:null,limitSource:'ERP_ASSIGNED_ROLE',discountLimit:{kind:'PERCENT',value:10}}))},privateAuthentication:{schemaVersion:1,source:'ERP_DISPATCH_PIN_VERIFIERS_V1',authorityId:id,verifiers:users.map(([userId,pin])=>({userId,algorithm:'DISPATCH_PIN_SHA256_SALTED_V1',salt:'a'.repeat(64),verifier:hash(JSON.stringify(['DISPATCH_PIN_SHA256_SALTED_V1','binding','generation',userId,'a'.repeat(64),pin]))}))}};
-  const raw=JSON.stringify(authority.publicPolicy),privateRaw=JSON.stringify(authority.privateAuthentication),digest=hash(raw),privateDigest=hash(privateRaw);grants.set(id,{publicHash:digest,privateHash:privateDigest});db.prepare('INSERT INTO pos_dispatch_operator_authority_v1 VALUES(?,?,?,?,?,?,?)').run(id,'pool',raw,digest,privateDigest,'synthetic-external-witness','ACTIVE');db.prepare('INSERT INTO pos_dispatch_operator_auth_material_v1 VALUES(?,?)').run(id,privateRaw);if(id!=='grant')db.prepare("INSERT INTO pos_dispatch_precharge_v1(checkout_id,pool_id,transaction_id,demand_digest,source_json,phase)VALUES(?,'pool',?,'digest',?,'PREPARED')").run('checkout-'+id,'transaction-'+id,JSON.stringify({items:[{id:'item',quantity:1}],companyDispatchSource:{operatorAuthorityId:id}}));
+  const authority={publicPolicy:{schemaVersion:2,source:'ERP_DISPATCH_OPERATOR_AUTHORITY_V2',id,scope,issuedAt:new Date(0).toISOString(),eligibility:{profile:'FINITE_QUOTA_SET',quotaSet:[{quotaId:'quota',authorityHash:'c'.repeat(64)}],allowedNoStockSources:[]},authenticationPolicy:policy,operators:users.map(([userId])=>({userId,erpPosUserId:'erp-'+userId,roleId:'CASHIER',roleVersion:1,permissions:['POS_DISCOUNT'],userOverride:null,limitSource:'ERP_ASSIGNED_ROLE',discountLimit:{kind:'PERCENT',value:10}}))},privateAuthentication:{schemaVersion:2,source:'ERP_DISPATCH_PIN_VERIFIERS_V2',authorityId:id,verifiers:users.map(([userId,pin])=>({userId,algorithm:'DISPATCH_PIN_SHA256_SALTED_V1',salt:'a'.repeat(64),verifier:hash(JSON.stringify(['DISPATCH_PIN_SHA256_SALTED_V1','binding','generation',userId,'a'.repeat(64),pin]))}))}};
+  const raw=JSON.stringify(authority.publicPolicy),privateRaw=JSON.stringify(authority.privateAuthentication),digest=hash(raw),privateDigest=hash(privateRaw);grants.set(id,{publicHash:digest,privateHash:privateDigest});db.prepare('INSERT INTO pos_dispatch_operator_authority_v1 VALUES(?,?,?,?,?,?,?)').run(id,'pool',raw,digest,privateDigest,'synthetic-external-witness','ACTIVE');db.prepare('INSERT INTO pos_dispatch_operator_auth_material_v1 VALUES(?,?)').run(id,privateRaw);const checkout=id==='grant'?'checkout':'checkout-'+id;db.prepare("INSERT INTO pos_dispatch_precharge_v1(checkout_id,pool_id,transaction_id,demand_digest,source_json,phase)VALUES(?,'pool',?,'digest',?,'PREPARED')").run(checkout,'transaction-'+id,JSON.stringify({items:[{id:'item',quantity:1}],companyDispatchSource:{operatorAuthorityId:id,operatorAuthorityHash:digest}}));db.prepare('INSERT INTO pos_dispatch_precharge_lines_v1 VALUES(?,?,?)').run(checkout,'quota',1000000);
  };
  install();
  const invoke=async({pin='9073',userId='user',authorityId='grant',checkoutId=authorityId==='grant'?'checkout':'checkout-'+authorityId,now=1000,serverObservedAt=0}={})=>{
@@ -34,7 +34,7 @@ test('global device budget spans operators and local rollback never clears a use
 });
 test('a paid uncertain checkout retains its exact authentication after grant revocation without reauthentication or release',async t=>{
  const f=fixture();t.after(()=>f.close());const initial=await f.invoke();assert.equal(initial.ok,true);
- await f.retire();assert.equal(f.read('SELECT count(*) n FROM pos_dispatch_operator_auth_material_v1')[0].n,0);f.exec("UPDATE pos_dispatch_precharge_v1 SET phase='EFFECT_POSSIBLE'");
+ f.exec("UPDATE pos_dispatch_pool_v1 SET state='FROZEN'");await f.retire();assert.equal(f.read('SELECT count(*) n FROM pos_dispatch_operator_auth_material_v1')[0].n,0);f.exec("UPDATE pos_dispatch_precharge_v1 SET phase='EFFECT_POSSIBLE'");
  const recovered=await f.invoke({pin:'0000',now:Date.parse('2028-01-01T00:00:00Z')});assert.deepEqual(recovered,initial);
  assert.equal(f.read('SELECT count(*) n FROM pos_dispatch_auth_attempt_v1 WHERE failures>0')[0].n,0);
  assert.equal(f.read('SELECT phase FROM pos_dispatch_precharge_v1')[0].phase,'EFFECT_POSSIBLE');
@@ -58,5 +58,17 @@ test('another valid issued grant cannot authenticate an intent that retained a d
  const f=fixture();t.after(()=>f.close());f.install('other');
  await assert.rejects(f.invoke({authorityId:'other',checkoutId:'checkout'}),/CHECKOUT_AUTHORITY_CONFLICT/);
  assert.equal(f.read('SELECT count(*) n FROM pos_dispatch_authenticated_operator_v1')[0].n,0);
+ assert.equal(f.read("SELECT phase FROM pos_dispatch_precharge_v1 WHERE checkout_id='checkout'")[0].phase,'PREPARED');
+});
+
+test('a finite auth package cannot inherit a later quota, even under the same pool and operator',async t=>{
+ const f=fixture();t.after(()=>f.close());
+ f.exec("INSERT INTO pos_dispatch_quota_v1 SELECT 'new-quota',pool_id,authority_json,authority_hash,granted_minor,0,0,'ACTIVE' FROM pos_dispatch_quota_v1 WHERE id='quota';INSERT INTO pos_dispatch_precharge_v1(checkout_id,pool_id,transaction_id,demand_digest,source_json,phase) SELECT 'later-checkout',pool_id,'later-transaction',demand_digest,source_json,'PREPARED' FROM pos_dispatch_precharge_v1 WHERE checkout_id='checkout';INSERT INTO pos_dispatch_precharge_lines_v1 VALUES('later-checkout','new-quota',1000000)");
+ await assert.rejects(f.invoke({checkoutId:'later-checkout'}),/QUOTA_SET_CONFLICT/);
+ assert.equal(f.read('SELECT count(*) n FROM pos_dispatch_authenticated_operator_v1')[0].n,0);
+});
+test('a frozen pool denies new authentications without releasing a prepared obligation',async t=>{
+ const f=fixture();t.after(()=>f.close());f.exec("UPDATE pos_dispatch_pool_v1 SET state='FROZEN'");
+ assert.deepEqual(await f.invoke(),{ok:false,code:'DISPATCH_POOL_FROZEN_OR_UNAVAILABLE'});
  assert.equal(f.read("SELECT phase FROM pos_dispatch_precharge_v1 WHERE checkout_id='checkout'")[0].phase,'PREPARED');
 });
