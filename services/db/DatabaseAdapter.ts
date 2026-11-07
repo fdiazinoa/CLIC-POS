@@ -144,7 +144,7 @@ export interface DatabaseAdapter {
     commitFinancialTransaction?(input: FinancialCommitInput): Promise<void>;
     readDispatchCommittedReceipt?(transactionId:string):Promise<import('../../types').Transaction|null>;
     readDispatchPendingCheckout?(cartIds?:string[]):Promise<{checkoutId:string;transactionId:string;phase:string;source:Record<string,unknown>;payments:import('../../types').PaymentEntry[];receipt?:import('../../types').Transaction}|null>;
-    readDispatchCheckoutAuthority?(checkoutId?:string):Promise<import('../dispatch/DispatchCheckoutSource').DispatchCheckoutAuthority>;
+    readDispatchCheckoutAuthority?(checkoutId?:string,items?:import('../../types').CartItem[]):Promise<import('../dispatch/DispatchCheckoutSource').DispatchCheckoutAuthority>;
     readDispatchActivePoolState?():Promise<string|null>;
     dispatchNativeSchemaHash?():Promise<string>;
     prepareDispatchBarrierProof?(snapshot:import('./CompanyDispatchPool').DispatchPoolSnapshot):Promise<Record<string,unknown>>;

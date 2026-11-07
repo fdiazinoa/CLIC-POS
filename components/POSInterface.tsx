@@ -1931,9 +1931,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       warehouses,
    ]);
    const isProductOutOfStock = useCallback((product: Product) => {
+      if((dispatchLocalAuthority||dispatchProjection?.mode==='WAREHOUSE_DISPATCH')&&(product.type==='SERVICE'||product.isInventoriable===false))return false;
       const trackInventory = product.operationalFlags?.trackInventory ?? config.features?.stockTracking ?? false;
       return Boolean(trackInventory && getScopedProductStock(product) <= 0);
-   }, [config.features?.stockTracking, getScopedProductStock]);
+   }, [config.features?.stockTracking, getScopedProductStock,dispatchLocalAuthority,dispatchProjection?.mode]);
    // Terminal scope is configuration authority, even before matching catalog chunks arrive.
    const effectiveAllowedCategorySet = useMemo(() => new Set(
       (activeTerminalConfig?.catalog?.allowedCategories || [])
@@ -3676,7 +3677,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             return true;
          }
 
-         if (requiresProductStockAvailability(product)) {
+         if (!((dispatchLocalAuthority||dispatchProjection?.mode==='WAREHOUSE_DISPATCH')&&(product.type==='SERVICE'||product.isInventoriable===false))&&requiresProductStockAvailability(product)) {
             const currentStock = getScopedProductStock(product);
             if (!Number.isFinite(currentStock)) { setErrorToast('Inventario no disponible para validar el artículo.'); return false; }
             const committedQty = product.v3SaleAuthority ? 0 : committedByProduct[product.id] || 0;
@@ -3693,7 +3694,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
 
       return true;
-   }, [activeTerminalConfig, cartInventoryDemandByProduct, cartQuantityByProduct, committedByProduct, config.features?.stockTracking, getScopedProductStock, getTerminalWarehouseName, productById, productHasActiveTariff, productMatchesTerminalWarehouse, products, warehouses]);
+   }, [dispatchLocalAuthority,dispatchProjection?.mode,activeTerminalConfig, cartInventoryDemandByProduct, cartQuantityByProduct, committedByProduct, config.features?.stockTracking, getScopedProductStock, getTerminalWarehouseName, productById, productHasActiveTariff, productMatchesTerminalWarehouse, products, warehouses]);
 
    const [lastAddedCartId, setLastAddedCartId] = useState<string | null>(null);
    const latestAddCart = useRef(cart);
@@ -7222,7 +7223,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if(dispatchCheckout){
         if(activeTable||hasV3ReservationCart||activeRecoveredReservation||activeDirectV3TicketId||processedCart.some(line=>line.quantity<=0)||baseCurrency.code!=='DOP'||redeemedCoupon)throw Error('Esta operación requiere su contrato de despacho integrado antes de cobrar.');
         const pending=!fiscalCheckoutRef.current&&!dispatchCheckoutRef.current?await dbAdapter.readDispatchPendingCheckout?.():null;
-        const authority=await dbAdapter.readDispatchCheckoutAuthority!(fiscalCheckoutRef.current?.checkoutId||dispatchCheckoutRef.current?.checkoutId||pending?.checkoutId);
+        const authority=await dbAdapter.readDispatchCheckoutAuthority!(fiscalCheckoutRef.current?.checkoutId||dispatchCheckoutRef.current?.checkoutId||pending?.checkoutId,processedCart);
         const frozen=freezeAuthoritativeLineFiscalAmounts(processedCart,config,{discountAmount,isTaxIncluded,terminalConfig:activeTerminalConfig,transactionNetAmount:Math.round((cartTotal-cartTax-cartTip)*100)/100,transactionTaxAmount:cartTax,transactionTotal:cartTotal-cartTip,taxExempt:isSelectedCustomerTaxExempt,allowedTaxIds:appliedServiceTaxPolicy.taxIds});
         dispatchPreparation=await compileDispatchCheckoutSource(authority,frozen,{total:cartTotal,netAmount:Math.round((cartTotal-cartTax-cartTip)*100)/100,taxAmount:cartTax,taxBreakdown,discountAmount,discountType:globalDiscount.type,discountValue:globalDiscount.value,isTaxIncluded,serviceChargeAmount:cartTip,userId:currentUser.id,customerId:effectiveSelectedCustomer?.id,customerSnapshot:effectiveSelectedCustomer?buildTransactionCustomerSnapshot(effectiveSelectedCustomer):undefined,currency:'DOP',settlementCurrencyCode:'DOP',v3WarehouseId:defaultSalesWarehouseId});
         if(pending){

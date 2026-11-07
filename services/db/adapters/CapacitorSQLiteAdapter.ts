@@ -608,7 +608,20 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             return{checkoutId:String(row.checkout_id),transactionId:String(row.transaction_id),phase:String(row.phase),source:JSON.parse(String(row.source_json)),payments:receipt?.payments||(row.effects_json?JSON.parse(String(row.effects_json)):[]),...(receipt?{receipt}:{})};
         });
     }
-    async readDispatchCheckoutAuthority(checkoutId?:string):Promise<import('../../dispatch/DispatchCheckoutSource').DispatchCheckoutAuthority>{
+    private async readDispatchNoStockSourcesUnlocked(items:Record<string,any>[]=[]):Promise<Array<{pin:Record<string,any>;facts:Record<string,any>}>>{
+        const sources:Array<{pin:Record<string,any>;facts:Record<string,any>}>=[];
+        if(items.length>200)throw Error('DISPATCH_CHECKOUT_LINES_REQUIRED');
+        for(const item of items){const stamp=item.v3SaleAuthority;if(!stamp)continue;
+            const row=(await this.ensureDb().query('SELECT record_json FROM master_v3_articles WHERE sync_version=? AND article_id=?',[stamp.syncVersion,item.id])).values?.[0];if(!row)continue;const product=JSON.parse(String(row.record_json));if(product.type!=='SERVICE'&&product.inventoriable!==false)continue;
+            const version=(await this.ensureDb().query('SELECT sync_id FROM sync_v3_sessions WHERE sync_id=? AND sync_version=?',[stamp.syncId,stamp.syncVersion])).values?.[0];if(!version)throw Error('DISPATCH_NOSTOCK_PIN_REQUIRED');
+            const price=(await this.ensureDb().query('SELECT price FROM master_v3_prices WHERE sync_version=? AND article_id=? AND tariff_id=?',[stamp.syncVersion,item.id,stamp.tariffId])).values?.[0];
+            const tariff=(await this.ensureDb().query('SELECT record_json FROM master_v3_tariffs WHERE sync_version=? AND tariff_id=? AND active=1',[stamp.syncVersion,stamp.tariffId])).values?.[0];
+            const taxes=(await this.ensureDb().query('SELECT record_json FROM master_v3_taxes WHERE sync_version=? AND active=1',[stamp.syncVersion])).values||[];
+            if(!price||!tariff)throw Error('DISPATCH_NOSTOCK_TARIFF_REQUIRED');
+            sources.push({pin:{syncId:stamp.syncId,syncVersion:stamp.syncVersion,itemId:item.id,tariffId:stamp.tariffId,binding:stamp.binding},facts:{product,price:Number(price.price),tariff:JSON.parse(String(tariff.record_json)),taxes:taxes.map(t=>JSON.parse(String(t.record_json)))}});
+        }return sources;
+    }
+    async readDispatchCheckoutAuthority(checkoutId?:string,items:import('../../../types').CartItem[]=[]):Promise<import('../../dispatch/DispatchCheckoutSource').DispatchCheckoutAuthority>{
         return this.withWriteLock(async()=>{
             const pool=(await this.ensureDb().query('SELECT p.*,a.native_binding FROM pos_dispatch_active_pool_v1 a JOIN pos_dispatch_pool_v1 p ON p.pool_id=a.pool_id JOIN master_v3_operational_owner o ON o.binding=a.native_binding WHERE a.singleton=1')).values?.[0];
             if(!pool||pool.state!=='WAREHOUSE_DISPATCH')throw Error('DISPATCH_ACTIVE_POOL_REQUIRED');
@@ -618,7 +631,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             if(terminals.length!==1)throw Error('DISPATCH_ACTIVE_STORE_REQUIRED');
             const expected=terminals[0].config.erpBinding,scoped=(await this.ensureDb().query('SELECT * FROM pos_dispatch_policy_scope_v2 WHERE pool_id=?',[pool.pool_id])).values?.[0];
             if(!expected?.storeId||!expected.companyId||scoped&&(scoped.store_id!==expected.storeId||scoped.company_id!==expected.companyId)||quotas.some(row=>{const q=JSON.parse(String(row.authority_json));return q.scope?.storeId!==expected.storeId||q.scope?.companyId!==expected.companyId;}))throw Error('DISPATCH_ACTIVE_STORE_CHANGED');
-            return{poolId:String(pool.pool_id),bindingId:String(pool.binding_id),generation:String(pool.generation),policyRevision:Number(pool.policy_revision),nativeBinding:String(pool.native_binding),quotas:quotas.map(row=>({authority:JSON.parse(String(row.authority_json)),authorityHash:String(row.authority_hash),witnessHash:String(row.witness_hash),availableMinor:dispatchTrackingClockAvailable(JSON.parse(String(row.authority_json)),row)?Number(row.granted_minor)-Number(row.consumed_minor)-Number(row.returned_minor)-Number(row.prepared):0}))};
+            return{poolId:String(pool.pool_id),bindingId:String(pool.binding_id),generation:String(pool.generation),policyRevision:Number(pool.policy_revision),nativeBinding:String(pool.native_binding),noStockSources:await this.readDispatchNoStockSourcesUnlocked(items),quotas:quotas.map(row=>({authority:JSON.parse(String(row.authority_json)),authorityHash:String(row.authority_hash),witnessHash:String(row.witness_hash),availableMinor:dispatchTrackingClockAvailable(JSON.parse(String(row.authority_json)),row)?Number(row.granted_minor)-Number(row.consumed_minor)-Number(row.returned_minor)-Number(row.prepared):0}))};
         });
     }
     async readDispatchQuota(id:string):Promise<{authorityCanonical:string;authorityHash:string;witnessHash:string;availableMinor:number}|null>{
@@ -644,13 +657,13 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             if(uncertain)throw Error('DISPATCH_PREVIOUS_PAYMENT_RECONCILIATION_REQUIRED');
             const cursor=(await this.ensureDb().query('SELECT last_sequence FROM pos_dispatch_capture_cursor_v1 WHERE pool_id=?',[input.poolId])).values?.[0];
             if(!cursor||!Number.isSafeInteger(Number(cursor.last_sequence))||Number(cursor.last_sequence)<0)throw Error('DISPATCH_NATIVE_CURSOR_REQUIRED');
-            if(!Array.isArray(input.demands)||input.demands.length<1||input.demands.length>200)throw Error('DISPATCH_DEMAND_INVALID');
+            if(!Array.isArray(input.demands)||input.demands.length>200)throw Error('DISPATCH_DEMAND_INVALID');
             const pool=(await this.ensureDb().query('SELECT * FROM pos_dispatch_pool_v1 WHERE pool_id=?',[input.poolId])).values?.[0];
             const owner=(await this.ensureDb().query('SELECT native_binding FROM pos_dispatch_active_pool_v1 WHERE singleton=1')).values?.[0];
             if(input.source.v3Binding!==owner?.native_binding)throw Error('DISPATCH_CHECKOUT_NATIVE_OWNER_MISMATCH');
             const placeholders=input.demands.map(()=>'?').join(',');
             const quotas=(await this.ensureDb().query(`SELECT q.*,d.witness_hash FROM pos_dispatch_quota_v1 q JOIN pos_dispatch_quota_delivery_v1 d ON d.quota_id=q.id LEFT JOIN pos_dispatch_delivery_clock_v2 clk ON clk.quota_id=q.id WHERE q.pool_id=? AND q.id IN(${placeholders})`,[input.poolId,...input.demands.map(d=>d.quotaId)])).values||[];
-            assertDispatchFinancedSource(input.source,input.demands,quotas,pool||{},input.checkoutId,input.transactionId);
+            assertDispatchFinancedSource(input.source,input.demands,quotas,pool||{},input.checkoutId,input.transactionId,await this.readDispatchNoStockSourcesUnlocked(input.source.items as Record<string,any>[]));
             await prepareDispatchPrecharge(this.ensureDb() as any,input);
     }
     /** Both identities are owned by this one writer transaction; no fiscal store transaction is nested. */

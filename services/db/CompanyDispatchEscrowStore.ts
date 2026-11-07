@@ -73,7 +73,7 @@ const safe=(n:number)=>Number.isSafeInteger(n)&&n>0&&n%100===0;
 export async function prepareDispatchPrecharge(sql:DispatchSQL,input:{checkoutId:string;transactionId:string;poolId:string;demandDigest:string;source:Record<string,unknown>;demands:DispatchDemand[]}):Promise<void>{
  const {checkoutId,transactionId,poolId,demandDigest}=input;
  const sourceJSON=dispatchCommercialSource(input.source);
- if(!checkoutId||!transactionId||!poolId||!/^[a-f0-9]{64}$/.test(demandDigest)||!input.demands.length||input.demands.length>200)fail('DISPATCH_PRECHARGE_INVALID');
+ if(!checkoutId||!transactionId||!poolId||!/^[a-f0-9]{64}$/.test(demandDigest)||input.demands.length>200)fail('DISPATCH_PRECHARGE_INVALID');
  const demands=[...input.demands].sort((a,b)=>a.quotaId.localeCompare(b.quotaId));
  if(new Set(demands.map(x=>x.quotaId)).size!==demands.length||demands.some(x=>!safe(x.quantityMinor)))fail('DISPATCH_DEMAND_INVALID');
  const old=(await sql.query('SELECT * FROM pos_dispatch_precharge_v1 WHERE checkout_id=?',[checkoutId])).values?.[0];

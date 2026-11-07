@@ -1,3 +1,4 @@
+import {assertDispatchDirectNoStock,assertDispatchLineAmounts} from './DispatchFinancedSource';
 import {assertDispatchQuotaTrackingSelection} from '../tracking/TrackingLine';
 import Money from 'decimal.js';
 import {formatPrice} from '../articleFormats/domain';
@@ -6,7 +7,7 @@ import type {CartItem} from '../../types';
 import {compileCompanyDispatchDemand} from './companyDispatchDemand.js';
 import {canonicalDispatchJSON,type DispatchDemand} from '../db/CompanyDispatchEscrowStore';
 export type DispatchCheckoutQuota={authority:Record<string,any>;authorityHash:string;witnessHash:string;availableMinor:number};
-export type DispatchCheckoutAuthority={poolId:string;bindingId:string;generation:string;policyRevision:number;nativeBinding:string;quotas:DispatchCheckoutQuota[]};
+export type DispatchCheckoutAuthority={poolId:string;bindingId:string;generation:string;policyRevision:number;nativeBinding:string;quotas:DispatchCheckoutQuota[];noStockSources?:Array<{pin:Record<string,any>;facts:Record<string,any>}>};
 const requireValue=(ok:unknown,code:string)=>{if(!ok)throw Error(code);};
 /** Select only installed server-issued rights. The native joint preparation
  * rechecks exact demand and balances in its writer transaction before payment. */
@@ -15,6 +16,9 @@ export async function compileDispatchCheckoutSource(authority:DispatchCheckoutAu
  requireValue(new Money(commercial.serviceChargeAmount as number||0).eq(0),'DISPATCH_SERVICE_CHARGE_NOT_READY');
  const used=new Map<string,number>(),lines=[],serialUnits=new Set<string>();
  for(const line of items){
+  const noStock=authority.noStockSources?.find(row=>row.pin.itemId===line.id&&row.pin.syncId===line.v3SaleAuthority?.syncId&&row.pin.syncVersion===line.v3SaleAuthority?.syncVersion&&row.pin.tariffId===line.v3SaleAuthority?.tariffId);
+  if(noStock){assertDispatchDirectNoStock(line as any,noStock.pin,noStock.facts,authority.nativeBinding);lines.push({cartId:line.cartId,tariffId:noStock.pin.tariffId,noStockSource:noStock.pin,quotaAllocations:[]});continue;}
+
   const candidates=authority.quotas.filter(row=>row.authority.scope?.warehouseId===commercial.v3WarehouseId&&row.authority.catalogSource?.commercialItem?.id===line.id&&row.authority.itemId===line.id&&row.authority.scope?.bindingId===authority.bindingId&&row.authority.scope.generation===authority.generation&&row.authority.policyRevision===authority.policyRevision);
   requireValue(candidates.length,'DISPATCH_ITEM_QUOTA_REQUIRED');
   let selected:Array<{quota:DispatchCheckoutQuota;quantityMinor:number}>|undefined,profileError:Error|undefined;
@@ -62,12 +66,7 @@ export async function compileDispatchCheckoutSource(authority:DispatchCheckoutAu
   const price=snapshot?formatPrice({...issuedFormat,factor:issuedFormat?.factor||1,prices:issuedFormat?.prices||[]} as any,String(tariffId),basePrice):issuedPrice?resolveVariantSalesPrice(variant,priceEntry?.price):priceEntry?.price;
   requireValue(tariff&&Number.isFinite(Number(price))&&new Money(line.price).eq(price),'DISPATCH_ISSUED_PRICE_MISMATCH');
   requireValue(Boolean(line.taxable)===Boolean(master.taxable)&&canonicalDispatchJSON([...(line.appliedTaxIds||[])].sort())===canonicalDispatchJSON([...(master.metadata?.appliedTaxIds||[])].sort()),'DISPATCH_ISSUED_TAX_ASSIGNMENT');
-  const taxIds=line.appliedTaxIds||[],rate=catalog.taxes.filter((tax:any)=>taxIds.includes(tax.id)).reduce((sum:Money,tax:any)=>sum.plus(tax.rate),new Money(0));
-  const round=(value:Money)=>value.toDecimalPlaces(2,Money.ROUND_HALF_UP);
-  const discounted=round(round(new Money(line.quantity).times(line.price)).minus(line.discountAmount||0));
-  const net=tariff.tax_included&&rate.gt(0)?round(discounted.div(rate.plus(1))):discounted;
-  const tax=tariff.tax_included?round(discounted.minus(net)):round(net.times(rate));
-  requireValue(new Money(line.taxRate||0).eq(rate)&&new Money(line.netAmount??NaN).eq(net)&&new Money(line.taxAmount??NaN).eq(tax)&&new Money(line.totalAmount??NaN).eq(net.plus(tax)),'DISPATCH_ISSUED_COMMERCIAL_TOTALS');
+  assertDispatchLineAmounts(line as any,Number(price),tariff.tax_included===true,catalog.taxes);
   const quotaAllocations=selected!.map(({quota,quantityMinor})=>{const quotaId=String(quota.authority.id);used.set(quotaId,(used.get(quotaId)||0)+quantityMinor);return{quotaId,quantityMinor,dimensions:quota.authority.dimensions,authorityHash:quota.authorityHash,deliveryWitnessHash:quota.witnessHash};});
   lines.push({cartId:line.cartId,tariffId,quotaAllocations});
  }

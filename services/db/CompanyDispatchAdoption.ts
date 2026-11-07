@@ -16,8 +16,9 @@ const fail=(code:string):never=>{throw Error(code);};
 export async function acknowledgeDispatchAdoption(sql:DispatchSQL,eventId:string,proof:DispatchAdoptionProof,at:string):Promise<void>{
  const capture=(await sql.query('SELECT c.*,p.binding_id,p.generation FROM pos_dispatch_native_capture_v1 c JOIN pos_dispatch_pool_v1 p ON p.pool_id=c.pool_id WHERE c.event_id=?',[eventId])).values?.[0];
  if(!capture)fail('DISPATCH_NATIVE_CAPTURE_REQUIRED');
- if(!proof||proof.sourceEventId!==eventId||proof.bindingId!==capture.binding_id||proof.generation!==capture.generation||proof.acceptedSequence!==Number(capture.sequence)||!Number.isSafeInteger(proof.acceptedSequence)||!/^[a-f0-9]{64}$/.test(proof.sourceHash)||proof.nativeSourceDigestVersion!=='DISPATCH_NATIVE_JSON_V1'||!/^[a-f0-9]{64}$/.test(proof.nativeSourceHash)||!Array.isArray(proof.quotaEffects)||!proof.quotaEffects.length)fail('DISPATCH_ADOPTION_SCOPE_CONFLICT');
+ if(!proof||proof.sourceEventId!==eventId||proof.bindingId!==capture.binding_id||proof.generation!==capture.generation||proof.acceptedSequence!==Number(capture.sequence)||!Number.isSafeInteger(proof.acceptedSequence)||!/^[a-f0-9]{64}$/.test(proof.sourceHash)||proof.nativeSourceDigestVersion!=='DISPATCH_NATIVE_JSON_V1'||!/^[a-f0-9]{64}$/.test(proof.nativeSourceHash)||!Array.isArray(proof.quotaEffects))fail('DISPATCH_ADOPTION_SCOPE_CONFLICT');
  const source=JSON.parse(String(capture.source_snapshot_json));
+ if(!proof.quotaEffects.length&&(!source.items?.length||!source.companyDispatchSource?.lines?.length||source.companyDispatchSource.lines.some((line:any)=>!line.noStockSource||!Array.isArray(line.quotaAllocations)||line.quotaAllocations.length)))fail('DISPATCH_ADOPTION_QUOTA_CONFLICT');
  const hash=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(canonicalDispatchJSON(source)))),n=>n.toString(16).padStart(2,'0')).join('');
  if(hash!==proof.nativeSourceHash)fail('DISPATCH_ADOPTION_SOURCE_CONFLICT');
  const local=(await sql.query('SELECT quota_id,quantity_minor FROM pos_dispatch_precharge_lines_v1 WHERE checkout_id=? ORDER BY quota_id',[capture.checkout_id])).values||[];
