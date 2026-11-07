@@ -61,6 +61,14 @@ test('late STABLE rev2 cannot undo a newer rev3 freeze; same-revision rekeys/pha
  }
  await installNativeDispatchPool(frozen,f.hash,f.port);assert.equal(await f.adapter.readDispatchActivePoolState(),'FROZEN');
  const nextGeneration=structuredClone(frozen);nextGeneration.binding.id=id(245);nextGeneration.binding.generation=id(246);nextGeneration.policy.revision=4;nextGeneration.policy.transition_id=id(247);nextGeneration.barrier={id:id(248),nonce:id(249),state:'REQUIRED',transition_id:id(247),proof:null};
- await installNativeDispatchPool(nextGeneration,f.hash,f.port);await assert.rejects(installNativeDispatchPool(frozen,f.hash,f.port),/POOL_POLICY_REVISION_CONFLICT/);assert.equal((f.db.prepare('SELECT pool_id FROM pos_dispatch_active_pool_v1').get() as {pool_id:string}).pool_id,dispatchPoolId(nextGeneration.binding));
+ await installNativeDispatchPool(nextGeneration,f.hash,f.port);await assert.rejects(installNativeDispatchPool(frozen,f.hash,f.port),/POOL_POLICY_REVISION_CONFLICT|POOL_GENERATION_SUPERSEDED/);assert.equal((f.db.prepare('SELECT pool_id FROM pos_dispatch_active_pool_v1').get() as {pool_id:string}).pool_id,dispatchPoolId(nextGeneration.binding));
  assert.throws(()=>f.db.prepare('UPDATE pos_dispatch_policy_snapshot_v1 SET revision=2').run(),/POLICY_REVISION_CONFLICT/);
+});
+
+test('a superseded generation cannot reclaim the active slot at the same company policy revision',async t=>{
+ const f=await setup();t.after(()=>f.db.close());const a=snapshot();await installNativeDispatchPool(a,f.hash,f.port);
+ const b=structuredClone(a);b.binding.id=id(250);b.binding.generation=id(251);b.barrier={id:id(252),nonce:id(253),state:'REQUIRED',transition_id:b.policy.transition_id!,proof:null};await installNativeDispatchPool(b,f.hash,f.port);
+ await assert.rejects(installNativeDispatchPool(a,f.hash,f.port),/POOL_GENERATION_SUPERSEDED/);
+ assert.equal((f.db.prepare('SELECT pool_id FROM pos_dispatch_active_pool_v1').get() as {pool_id:string}).pool_id,dispatchPoolId(b.binding));assert.equal(await f.adapter.readDispatchActivePoolState(),'FROZEN');assert.equal((f.db.prepare('SELECT successor_pool_id FROM pos_dispatch_superseded_pool_v1').get() as {successor_pool_id:string}).successor_pool_id,dispatchPoolId(b.binding));
+ await installNativeDispatchPool(b,f.hash,f.port);assert.throws(()=>f.db.exec('DELETE FROM pos_dispatch_superseded_pool_v1'),/SUPERSEDED_POOL_DURABLE/);
 });

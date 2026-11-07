@@ -1,6 +1,9 @@
 import {canonicalDispatchJSON,type DispatchSQL} from './CompanyDispatchEscrowStore';
 export type DispatchPoolSnapshot={contractVersion:1;policy:{tenant_id?:string;company_id?:string;effective_mode:string;target_mode:string;phase:string;revision:number;transition_id?:string};binding:{id:string;tenant_id:string;company_id:string;store_id:string;terminal_id:string;device_id:string;generation:string;accepted_sequence:number;native_schema_hash:string|null};barrier:null|{id:string;nonce:string;state:string;transition_id:string;proof:Record<string,unknown>|null};readiness:{historicalUniverseComplete:boolean}};
 export const DISPATCH_POOL_INSTALL_SCHEMA=`
+CREATE TABLE IF NOT EXISTS pos_dispatch_superseded_pool_v1(pool_id TEXT PRIMARY KEY REFERENCES pos_dispatch_pool_v1(pool_id),successor_pool_id TEXT NOT NULL REFERENCES pos_dispatch_pool_v1(pool_id));
+CREATE TRIGGER IF NOT EXISTS dispatch_superseded_pool_immutable BEFORE UPDATE ON pos_dispatch_superseded_pool_v1 BEGIN SELECT RAISE(ABORT,'DISPATCH_SUPERSEDED_POOL_IMMUTABLE');END;
+CREATE TRIGGER IF NOT EXISTS dispatch_superseded_pool_durable BEFORE DELETE ON pos_dispatch_superseded_pool_v1 BEGIN SELECT RAISE(ABORT,'DISPATCH_SUPERSEDED_POOL_DURABLE');END;
 CREATE TABLE IF NOT EXISTS pos_dispatch_policy_snapshot_v1(pool_id TEXT PRIMARY KEY REFERENCES pos_dispatch_pool_v1(pool_id),revision INTEGER NOT NULL CHECK(revision>0),identity_json TEXT NOT NULL);
 CREATE TRIGGER IF NOT EXISTS dispatch_policy_snapshot_monotonic BEFORE UPDATE ON pos_dispatch_policy_snapshot_v1 WHEN OLD.pool_id IS NOT NEW.pool_id OR NEW.revision<OLD.revision OR NEW.revision=OLD.revision AND NEW.identity_json IS NOT OLD.identity_json BEGIN SELECT RAISE(ABORT,'DISPATCH_POOL_POLICY_REVISION_CONFLICT');END;
 CREATE TRIGGER IF NOT EXISTS dispatch_policy_snapshot_durable BEFORE DELETE ON pos_dispatch_policy_snapshot_v1 BEGIN SELECT RAISE(ABORT,'DISPATCH_POOL_POLICY_SNAPSHOT_DURABLE');END;
@@ -31,6 +34,7 @@ export async function installDispatchPoolSnapshot(sql:DispatchSQL,snapshot:Dispa
   if(p.revision<Number(companyLatest.revision)||p.revision===Number(companyLatest.revision)&&canonicalDispatchJSON(prior)!==canonicalDispatchJSON(incoming))fail('DISPATCH_POOL_POLICY_REVISION_CONFLICT');
  }
  const poolId=dispatchPoolId(b),old=(await sql.query('SELECT * FROM pos_dispatch_pool_install_v1 WHERE pool_id=?',[poolId])).values?.[0];
+ if((await sql.query('SELECT 1 retired FROM pos_dispatch_superseded_pool_v1 WHERE pool_id=?',[poolId])).values?.length)fail('DISPATCH_POOL_GENERATION_SUPERSEDED');
  if(old){
   if(old.native_binding!==owner?.binding||old.witness_hash!==witnessHash||old.native_schema_hash!==nativeSchemaHash)fail('DISPATCH_POOL_OWNERSHIP_CONFLICT');
   const retained=(await sql.query('SELECT s.*,p.policy_revision FROM pos_dispatch_policy_snapshot_v1 s JOIN pos_dispatch_pool_v1 p ON p.pool_id=s.pool_id WHERE s.pool_id=?',[poolId])).values?.[0];
@@ -46,7 +50,14 @@ export async function installDispatchPoolSnapshot(sql:DispatchSQL,snapshot:Dispa
  const cursor=(await sql.query('SELECT last_sequence FROM pos_dispatch_capture_cursor_v1 WHERE pool_id=?',[poolId])).values?.[0];
  if(!cursor||!Number.isSafeInteger(Number(cursor.last_sequence))||b.accepted_sequence>Number(cursor.last_sequence))fail('DISPATCH_POOL_CURSOR_RECONCILIATION_REQUIRED');
  const active=(await sql.query('SELECT * FROM pos_dispatch_active_pool_v1 WHERE singleton=1')).values?.[0];
- if(active&&active.pool_id!==poolId){const rights=(await sql.query("SELECT 1 AS held FROM pos_dispatch_precharge_v1 WHERE pool_id=? AND phase IN('PREPARED','EFFECT_POSSIBLE') UNION ALL SELECT 1 FROM pos_dispatch_quota_v1 WHERE pool_id=? AND granted_minor>consumed_minor+returned_minor UNION ALL SELECT 1 FROM pos_dispatch_native_capture_v1 c WHERE c.pool_id=? AND NOT EXISTS(SELECT 1 FROM pos_dispatch_adoption_v1 a WHERE a.event_id=c.event_id) LIMIT 1",[active.pool_id,active.pool_id,active.pool_id])).values||[];if(rights.length)fail('DISPATCH_PREVIOUS_POOL_RIGHTS_UNRESOLVED');}
+ if(active&&active.pool_id!==poolId){const rights=(await sql.query("SELECT 1 AS held FROM pos_dispatch_precharge_v1 WHERE pool_id=? AND phase IN('PREPARED','EFFECT_POSSIBLE') UNION ALL SELECT 1 FROM pos_dispatch_quota_v1 WHERE pool_id=? AND granted_minor>consumed_minor+returned_minor UNION ALL SELECT 1 FROM pos_dispatch_native_capture_v1 c WHERE c.pool_id=? AND NOT EXISTS(SELECT 1 FROM pos_dispatch_adoption_v1 a WHERE a.event_id=c.event_id) LIMIT 1",[active.pool_id,active.pool_id,active.pool_id])).values||[];if(rights.length)fail('DISPATCH_PREVIOUS_POOL_RIGHTS_UNRESOLVED');
+  const previous=(await sql.query('SELECT identity_json FROM pos_dispatch_policy_snapshot_v1 WHERE pool_id=?',[active.pool_id])).values?.[0];
+  const identity=previous?JSON.parse(String(previous.identity_json)):null;
+  if(active.native_binding===owner?.binding&&identity?.tenantId===b.tenant_id&&identity?.companyId===b.company_id){
+   await sql.run('INSERT INTO pos_dispatch_superseded_pool_v1(pool_id,successor_pool_id)VALUES(?,?)',[active.pool_id,poolId],false);
+   await sql.run("UPDATE pos_dispatch_pool_v1 SET state='FROZEN' WHERE pool_id=?",[active.pool_id],false);
+  }
+ }
  let state='FROZEN';
  if(p.phase==='STABLE'){
   if(!barrier||barrier.state!=='DRAINED'||barrier.transition_id!==p.transition_id||barrier.proof?.nativePoolWitnessHash!==witnessHash||barrier.proof?.nativeSchemaHash!==nativeSchemaHash||b.native_schema_hash!==nativeSchemaHash)fail('DISPATCH_POOL_POLICY_INSTALL_PROOF_REQUIRED');
