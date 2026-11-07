@@ -1,6 +1,6 @@
 import Money from 'decimal.js';
 import {assertDispatchQuotaTrackingSelection} from '../tracking/TrackingLine';
-import {compileCompanyDispatchDemand,type DispatchRawItem} from './companyDispatchDemand.js';
+import {compileCompanyDispatchDemand,dispatchInventoryConsumptionMode,type DispatchRawItem} from './companyDispatchDemand.js';
 import {canonicalDispatchJSON,type DispatchDemand} from '../db/CompanyDispatchEscrowStore';
 type RecordValue=Record<string,unknown>;
 const record=(v:unknown):RecordValue=>v&&typeof v==='object'&&!Array.isArray(v)?v as RecordValue:{};
@@ -55,7 +55,7 @@ export function assertDispatchFinancedSource(source:RecordValue,demands:Dispatch
 export function assertDispatchDirectNoStock(line:RecordValue,pin:RecordValue,facts:RecordValue,binding?:string):void{
  const product=record(facts.product),stamp=record(line.v3SaleAuthority),tariff=record(facts.tariff);
  requireSource(product.id===line.id&&pin.itemId===line.id&&pin.syncId===stamp.syncId&&pin.syncVersion===stamp.syncVersion&&pin.tariffId===stamp.tariffId&&pin.binding===stamp.binding&&(!binding||pin.binding===binding),'DISPATCH_NOSTOCK_PIN_CONFLICT');
- requireSource((product.type==='SERVICE'||product.inventoriable===false)&&product.active===true&&product.sellable===true&&!array(product.recipeDetails).length&&!array(product.modifiers).length&&product.kitInventoryMode!=='COMPONENTS'&&!line.articleFormat&&!line.articleFormatSnapshot&&!line.inventoryPresentation&&!array(line.trackingData).length&&!array(line.recipeDetails).length&&!array(line.modifiers).length&&!array(line.selected_combo_items).length&&!array(line.selected_modifiers).length&&!array(line.selected_fraction_parts).length,'DISPATCH_DIRECT_NOSTOCK_SOURCE_REQUIRED');
+ requireSource((product.type==='SERVICE'||product.inventoriable===false)&&product.active===true&&product.sellable===true&&!array(product.recipeDetails).length&&!array(product.modifiers).length&&String(product.kitInventoryMode||'').trim().toUpperCase()!=='COMPONENTS'&&dispatchInventoryConsumptionMode({...product,isInventoriable:product.inventoriable===true})==='DIRECT'&&!line.articleFormat&&!line.articleFormatSnapshot&&!line.inventoryPresentation&&!array(line.trackingData).length&&!array(line.recipeDetails).length&&!array(line.modifiers).length&&!array(line.selected_combo_items).length&&!array(line.selected_modifiers).length&&!array(line.selected_fraction_parts).length,'DISPATCH_DIRECT_NOSTOCK_SOURCE_REQUIRED');
  requireSource(line.type===product.type&&line.isInventoriable===product.inventoriable&&line.taxable===product.taxable&&canonicalDispatchJSON([...(line.appliedTaxIds as string[]||[])].sort())===canonicalDispatchJSON([...(product.taxIds as string[]||[])].sort())&&stamp.taxIncluded===tariff.taxIncluded,'DISPATCH_NOSTOCK_SEMANTICS_CHANGED');
  requireSource(typeof line.quantity==='number'&&line.quantity>0&&Number.isFinite(line.quantity)&&Number(line.price)===Number(facts.price),'DISPATCH_NOSTOCK_COMMERCIAL_SOURCE_CHANGED');
  assertDispatchLineAmounts(line,Number(facts.price),tariff.taxIncluded===true,array(facts.taxes));
