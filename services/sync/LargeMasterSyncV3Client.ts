@@ -18,7 +18,7 @@ export interface LargeMasterSyncV3HttpResponse {
   text: string;
 }
 
-export type V3BoundRequestBody={witnessHash:string}|{action:'claimQuota'|'ackQuotaInstalled'|'acceptBarrier';requestKey:string;bindingId:string;generation:string;[key:string]:unknown};
+export type V3BoundRequestBody={action:'readAdoptionProofs';eventIds:string[]}|{witnessHash:string}|{action:'claimQuota'|'ackQuotaInstalled'|'acceptBarrier';requestKey:string;bindingId:string;generation:string;[key:string]:unknown};
 export interface LargeMasterSyncV3Transport {
   request(path: string, init: { method: 'GET' | 'POST'; signal?: AbortSignal;body?:V3BoundRequestBody }): Promise<LargeMasterSyncV3HttpResponse>;
 }

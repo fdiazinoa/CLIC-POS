@@ -82,3 +82,16 @@ test('bound client requires the operational contract before touching SQLite', as
   await assert.rejects(() => client.resumeSync(syncId), /SYNC_V3_OPERATIONAL_CONTRACT_REQUIRED/);
   assert.equal(storeCalls, 0);
 });
+
+test('dispatch adoption reads stay on the bound ERP origin with a closed read-only batch body',async()=>{
+ const {readDispatchAdoptionProofs}=await import('../services/dispatch/DispatchAdoptionClient');const requests:Array<{url:string;init?:RequestInit}>=[];
+ const transport=createLargeMasterSyncV3BoundTransport('https://erp.example.test/',()=>binding,(async(url:string,init?:RequestInit)=>{requests.push({url,init});return new Response(JSON.stringify({proofs:[{sourceEventId:syncId}]}),{status:200});}) as typeof fetch);
+ assert.deepEqual(await readDispatchAdoptionProofs([syncId],transport),[{sourceEventId:syncId}]);assert.equal(requests.length,1);assert.equal(requests[0].url,'https://erp.example.test/api/sync/v3/company-dispatch');
+ assert.deepEqual(JSON.parse(String(requests[0].init?.body)),{action:'readAdoptionProofs',eventIds:[syncId]});assert.equal((requests[0].init?.headers as Record<string,string>)['X-Company-Dispatch-Contract'],'1');
+ await assert.rejects(transport.request('/api/sync/v3/company-dispatch',{method:'POST',body:{action:'readAdoptionProofs',eventIds:[syncId],scope:'caller'} as any}),/SYNC_V3_PATH_INVALID/);
+ await assert.rejects(transport.request('/api/sync/v3/company-dispatch',{method:'POST',body:{action:'readAdoptionProofs',eventIds:['invalid']} as any}),/SYNC_V3_PATH_INVALID/);assert.equal(requests.length,1);
+});
+test('direct adoption client never accepts an unrelated or duplicate proof result',async()=>{
+ const {readDispatchAdoptionProofs}=await import('../services/dispatch/DispatchAdoptionClient');
+ for(const proofs of [[{sourceEventId:'other'}],[{sourceEventId:syncId},{sourceEventId:syncId}]])await assert.rejects(readDispatchAdoptionProofs([syncId],{request:async()=>({status:200,headers:{},text:JSON.stringify({proofs})})}),/ERP_ADOPTION_INVALID/);
+});

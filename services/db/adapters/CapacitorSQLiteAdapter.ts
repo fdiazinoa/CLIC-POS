@@ -1,3 +1,4 @@
+import {DISPATCH_ADOPTION_SCHEMA,acknowledgeDispatchAdoption,type DispatchAdoptionProof} from '../CompanyDispatchAdoption';
 import {DISPATCH_OPERATOR_AUTH_SCHEMA} from '../../dispatch/DispatchOperatorAuthentication';
 import {assertDispatchFinancedSource} from '../../dispatch/DispatchFinancedSource';
 import {verifyDispatchQuotaDelivery,type DispatchQuotaDelivery,type DispatchScope} from '../../dispatch/DispatchAuthority';
@@ -570,6 +571,9 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         await this.withWriteLock(()=>this.executeUnlocked([],async()=>{await abandonTrackingCheckout(this.ensureDb() as any,checkoutId);await retireTrackingOperation(this.ensureDb() as any,checkoutId);},true));
     }
 
+    async acknowledgeDispatchAdoption(eventId:string,proof:DispatchAdoptionProof,at:string):Promise<void>{
+        await this.withWriteLock(()=>this.withNativeTransaction(()=>acknowledgeDispatchAdoption(this.ensureDb() as any,eventId,proof,at)));
+    }
     async readDispatchQuota(id:string):Promise<{authorityCanonical:string;authorityHash:string;witnessHash:string;availableMinor:number}|null>{
         return this.withWriteLock(async()=>{const row=(await this.ensureDb().query("SELECT q.*,d.witness_hash,COALESCE((SELECT SUM(l.quantity_minor) FROM pos_dispatch_precharge_lines_v1 l JOIN pos_dispatch_precharge_v1 p ON p.checkout_id=l.checkout_id WHERE l.quota_id=q.id AND p.phase IN('PREPARED','EFFECT_POSSIBLE')),0) prepared FROM pos_dispatch_quota_v1 q JOIN pos_dispatch_quota_delivery_v1 d ON d.quota_id=q.id WHERE q.id=?",[id])).values?.[0];return row?{authorityCanonical:row.authority_json,authorityHash:row.authority_hash,witnessHash:row.witness_hash,availableMinor:row.state==='ACTIVE'?Number(row.granted_minor)-Number(row.consumed_minor)-Number(row.returned_minor)-Number(row.prepared):0}:null;});
     }
@@ -1187,6 +1191,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             ${OFFLINE_FISCAL_ALLOCATION_WRITER_SCHEMA}
             ${TRACKING_ALLOCATION_SCHEMA}
             ${COMPANY_DISPATCH_ESCROW_SCHEMA}
+            ${DISPATCH_ADOPTION_SCHEMA}
             ${DISPATCH_FINANCIAL_SOURCE_GUARDS}
             ${DISPATCH_OPERATOR_AUTH_SCHEMA}
             ${TRACKING_OPERATION_SCHEMA}

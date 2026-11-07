@@ -115,3 +115,39 @@ test('the native financial plan is isolated without requiring structuredClone in
  try{await f.adapter.commitFinancialTransaction(input);}finally{if(original)Object.defineProperty(globalThis,'structuredClone',original);else delete(globalThis as any).structuredClone;}
  assert.equal(f.documents('transactionHistory')[0].companyDispatchSource.sequence,1);assert.equal((f.db.prepare('SELECT count(*) n FROM sync_outbox_v2').get() as {n:number}).n,1);
 });
+
+async function capturedForAck(f:Awaited<ReturnType<typeof setup>>){
+ const {buildSalePostedPayload}=await import('../services/sync/SalePostedContract');
+ const receipt={...structuredClone(document),date:'2026-11-06T16:00:00Z',items:document.items.map(line=>({...line,totalAmount:60}))};
+ const input=commit();input.documents=input.documents.map(row=>({...row,document:receipt}));input.outboxEvent.payload={...buildSalePostedPayload(receipt as any),transaction:receipt};
+ await f.adapter.prepareDispatchPrecharge({checkoutId:'checkout',transactionId:receipt.id,poolId:'pool',demandDigest:'a'.repeat(64),source:receipt,demands:[{quotaId:'quota',quantityMinor:1000000}]});await f.adapter.markDispatchEffectPossible('checkout','b'.repeat(64),receipt.payments);await f.adapter.commitFinancialTransaction(input);
+ const source=f.documents('transactionHistory')[0];const {canonicalDispatchJSON}=await import('../services/db/CompanyDispatchEscrowStore');
+ const nativeSourceHash=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(canonicalDispatchJSON(source)))),n=>n.toString(16).padStart(2,'0')).join('');
+ return{sourceEventId:id(92),sourceHash:'e'.repeat(64),bindingId:'binding',generation:'generation',acceptedSequence:1,quotaEffects:[{quotaId:'quota',eventId:id(193),quantityMinor:1000000}],nativeSourceDigestVersion:'DISPATCH_NATIVE_JSON_V1' as const,nativeSourceHash};
+}
+test('actual sender + native repository requires a direct ERP receipt even if the master says APPLIED; retry adopts once without recredit',async t=>{
+ const f=await setup();t.after(()=>f.db.close());const proof=await capturedForAck(f);
+ const {DurableOutboxRepository}=await import('../services/sync/DurableOutboxRepository');const {DurableOutboxBatchSender}=await import('../services/sync/DurableOutboxBatchSender');
+ const repository=new DurableOutboxRepository(f.adapter);let available=false,reads=0;
+ const sender=new DurableOutboxBatchSender(repository,async()=>({eventResults:[{eventId:id(92),disposition:'APPLIED',dispatchAdoptionProof:{forged:true}}]}),async ids=>{reads++;assert.deepEqual(ids,[id(92)]);return available?[proof]:[];});
+ const first=await sender.sendNext(new Date('2026-11-06T16:01:00Z'));assert.equal(first.applied,0);assert.equal(first.retrying,1);assert.equal((f.db.prepare('SELECT count(*) n FROM pos_dispatch_adoption_v1').get() as {n:number}).n,0);
+ available=true;const second=await sender.sendNext(new Date('2026-11-06T16:02:00Z'));assert.equal(second.applied,1);assert.equal(reads,2);assert.equal((f.db.prepare('SELECT status FROM sync_outbox_v2').get() as {status:string}).status,'APPLIED_ERP');assert.equal((f.db.prepare('SELECT consumed_minor n FROM pos_dispatch_quota_v1').get() as {n:number}).n,1000000);
+ const before=f.db.prepare('SELECT * FROM sync_outbox_v2').get();await f.adapter.acknowledgeDispatchAdoption(id(92),proof,'2026-11-06T17:00:00Z');assert.deepEqual(f.db.prepare('SELECT * FROM sync_outbox_v2').get(),before);
+ await assert.rejects(f.adapter.acknowledgeDispatchAdoption(id(92),{...proof,sourceHash:'f'.repeat(64)},'2026-11-06T17:00:00Z'),/ADOPTION_REPLAY_CONFLICT/);
+});
+test('native ACK rejects wrong sequence, source, grant or generation atomically and bare APPLIED cannot bypass it',async t=>{
+ const f=await setup();t.after(()=>f.db.close());const proof=await capturedForAck(f);f.db.exec("UPDATE sync_outbox_v2 SET status='SENDING'");
+ assert.throws(()=>f.db.exec("UPDATE sync_outbox_v2 SET status='APPLIED_ERP'"),/ERP_ADOPTION_PROOF_REQUIRED/);
+ for(const changed of [{...proof,acceptedSequence:2},{...proof,generation:'other'},{...proof,nativeSourceHash:'0'.repeat(64)},{...proof,quotaEffects:[{...proof.quotaEffects[0],quantityMinor:2000000}]}]){
+  await assert.rejects(f.adapter.acknowledgeDispatchAdoption(id(92),changed,'2026-11-06T17:00:00Z'),/DISPATCH_ADOPTION_/);assert.equal((f.db.prepare('SELECT count(*) n FROM pos_dispatch_adoption_v1').get() as {n:number}).n,0);assert.equal((f.db.prepare('SELECT status FROM sync_outbox_v2').get() as {status:string}).status,'SENDING');
+ }
+ f.db.exec("CREATE TRIGGER ignore_ack BEFORE UPDATE OF status ON sync_outbox_v2 WHEN NEW.status='APPLIED_ERP' BEGIN SELECT RAISE(IGNORE);END");
+ await assert.rejects(f.adapter.acknowledgeDispatchAdoption(id(92),proof,'2026-11-06T17:00:00Z'),/ADOPTION_WRITE_REQUIRED/);assert.equal((f.db.prepare('SELECT count(*) n FROM pos_dispatch_adoption_v1').get() as {n:number}).n,0);
+});
+
+test('a prototype bare APPLIED receipt is requeued unchanged for retained-proof reconciliation, never re-financed',async t=>{
+ const f=await setup();t.after(()=>f.db.close());await capturedForAck(f);
+ f.db.exec("DROP TRIGGER dispatch_outbox_proof_required;UPDATE sync_outbox_v2 SET status='APPLIED_ERP'");
+ const before=f.db.prepare('SELECT event_id,payload_json FROM sync_outbox_v2').get();await (f.adapter as unknown as {initSchema():Promise<void>}).initSchema();
+ assert.equal((f.db.prepare('SELECT status FROM sync_outbox_v2').get() as {status:string}).status,'RETRY_WAIT');assert.deepEqual(f.db.prepare('SELECT event_id,payload_json FROM sync_outbox_v2').get(),before);assert.equal((f.db.prepare('SELECT consumed_minor n FROM pos_dispatch_quota_v1').get() as {n:number}).n,1000000);assert.equal((f.db.prepare('SELECT last_sequence n FROM pos_dispatch_capture_cursor_v1').get() as {n:number}).n,1);
+});

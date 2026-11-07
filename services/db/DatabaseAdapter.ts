@@ -142,6 +142,7 @@ export interface DatabaseAdapter {
     // Android SQLite only. POS-2A uses this boundary to commit the financial
     // documents and their durable outbox events in one database transaction.
     commitFinancialTransaction?(input: FinancialCommitInput): Promise<void>;
+    acknowledgeDispatchAdoption?(eventId:string,proof:import('./CompanyDispatchAdoption').DispatchAdoptionProof,at:string):Promise<void>;
     readDispatchQuota?(id:string):Promise<{authorityCanonical:string;authorityHash:string;witnessHash:string;availableMinor:number}|null>;
     installDispatchQuota?(delivery:import('../dispatch/DispatchAuthority').DispatchQuotaDelivery,scope:import('../dispatch/DispatchAuthority').DispatchScope,poolId:string,previouslySeen:boolean,witnessHash:string):Promise<void>;
     prepareDispatchFiscalCheckout?(input:import('./DispatchFiscalPreparation').DispatchFiscalPreparation):Promise<import('../fiscal/FiscalWorkflowV2Types').FiscalWorkflowCheckoutV2>;

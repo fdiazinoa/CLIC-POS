@@ -112,7 +112,8 @@ export const createLargeMasterSyncV3BoundTransport = (
         const body=init.body as Record<string,unknown>;
         const tracking=TRACKING_CLAIM_PATH.test(path)&&Object.keys(body).join(',')==='witnessHash'&&typeof body.witnessHash==='string'&&/^[a-f0-9]{64}$/.test(body.witnessHash);
         const dispatch=path===DISPATCH_ROOT&&['claimQuota','ackQuotaInstalled','acceptBarrier'].includes(String(body.action))&&typeof body.requestKey==='string'&&typeof body.bindingId==='string'&&typeof body.generation==='string'&&JSON.stringify(body).length<=1048576;
-        if(!tracking&&!dispatch)throw new LargeMasterSyncV3Error('SYNC_V3_PATH_INVALID');
+        const dispatchRead=path===DISPATCH_ROOT&&body.action==='readAdoptionProofs'&&Object.keys(body).every(key=>['action','eventIds'].includes(key))&&Array.isArray(body.eventIds)&&body.eventIds.length>0&&body.eventIds.length<=50&&body.eventIds.every(id=>typeof id==='string'&&new RegExp('^'+UUID+'$').test(id));
+        if(!tracking&&!dispatch&&!dispatchRead)throw new LargeMasterSyncV3Error('SYNC_V3_PATH_INVALID');
       }
 
       assertStillBound();

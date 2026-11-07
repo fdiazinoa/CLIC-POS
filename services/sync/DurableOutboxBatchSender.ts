@@ -1,3 +1,5 @@
+import {readDispatchAdoptionProofs} from '../dispatch/DispatchAdoptionClient';
+import type {DispatchAdoptionProof} from '../db/CompanyDispatchAdoption';
 import { recordCheckoutDiagnostic } from '../CheckoutDiagnostics';
 import { apiSyncAdapter } from './ApiSyncAdapter';
 import {
@@ -117,6 +119,9 @@ const normalizeStatus = (result: any): string => String(
     || result?.status || result?.state || result?.appliedStatus || result?.applied_status || ''
 ).trim().toUpperCase();
 
+const appliedStatus=(status:string)=>['APPLIED','APPLIED_ERP','DUPLICATE','DUPLICATE_APPLIED','ALREADY_APPLIED'].includes(status);
+const dispatchCapture=(record:DurableOutboxRecord)=>record.eventType==='SALE_POSTED'&&Boolean(record.payload?.transaction?.companyDispatchSource);
+
 const resultEventId = (result: any): string => String(
     result?.eventId || result?.event_id || result?.id || ''
 ).trim();
@@ -138,6 +143,7 @@ export class DurableOutboxBatchSender {
     constructor(
         private readonly repository: DurableOutboxRepository = durableOutboxRepository,
         private readonly transport: BatchTransport = events => apiSyncAdapter.pushDurableOutboxBatch(events),
+        private readonly readDispatchProofs:(eventIds:string[])=>Promise<DispatchAdoptionProof[]>=readDispatchAdoptionProofs,
     ) {}
 
     async sendNext(now = new Date()): Promise<DurableBatchSendSummary> {
@@ -198,12 +204,18 @@ export class DurableOutboxBatchSender {
         }
 
         const results = new Map(responseResults(response).map(result => [resultEventId(result), result]));
+        const dispatchIds=selection.events.filter(record=>dispatchCapture(record)&&appliedStatus(normalizeStatus(results.get(record.eventId)))).map(record=>record.eventId);
+        let dispatchProofs=new Map<string,DispatchAdoptionProof>();let dispatchProofError='DISPATCH_ERP_ADOPTION_PROOF_PENDING';
+        if(dispatchIds.length){try{const proofs=await this.readDispatchProofs(dispatchIds);dispatchProofs=new Map(proofs.map(proof=>[proof.sourceEventId,proof]));}catch(error){dispatchProofError=error instanceof Error?error.message:'DISPATCH_ERP_ADOPTION_UNAVAILABLE';}}
         for (const record of selection.events) {
             const result = results.get(record.eventId);
             const status = normalizeStatus(result);
             recordCheckoutDiagnostic('OUTBOX_RESULT', { transactionId: record.aggregateId, eventId: record.eventId, status });
-            if (['APPLIED', 'APPLIED_ERP', 'DUPLICATE', 'DUPLICATE_APPLIED', 'ALREADY_APPLIED'].includes(status)) {
-                await this.repository.markAppliedErp(record.eventId, now);
+            if (appliedStatus(status)) {
+                if(dispatchCapture(record)){
+                    try{const proof=dispatchProofs.get(record.eventId);if(!proof)throw Error(dispatchProofError);await this.repository.markDispatchAppliedErp(record.eventId,proof,now);}
+                    catch(error){await this.repository.markRetry(record.eventId,error instanceof Error?error.message:'DISPATCH_ERP_ADOPTION_INVALID',new Date(now.getTime()+retryDelay(record.attemptCount)));summary.retrying++;continue;}
+                }else await this.repository.markAppliedErp(record.eventId, now);
                 summary.applied++;
                 syncMetrics.increment('ack_total');
                 continue;
