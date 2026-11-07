@@ -54,3 +54,7 @@ curl -sS http://127.0.0.1:PUERTO/lab/call -H 'Content-Type: application/json' \
 ```
 
 Repetir usa el mismo inbox Z. `--fail-close-projection` inyecta un único error de IO antes del primer projector de factura, después de creado el GL. `--fail-close-projection=2` falla el segundo projector para comprobar recuperación de un cierre con dos facturas. El reintento debe reutilizar el journal Z y completar las proyecciones; el conduce conserva su COGS independiente y único. La inyección pertenece sólo al lab, nunca al writer de producto.
+
+Stock compatibility smoke: add `--format --lot` to `--fiscal` for BOX6 funded by two canonical LOT grants (4 base each); registered stock is 5 base per lot. Select LOT-A4/LOT-B2. `--serial` uses real registrations and whole-unit quotas. The existing policy panel is mounted at `/?assignment` for terminal/warehouse/article/grain selection and the actual issueQuota command; auth and names remain explicit fixture boundaries.
+
+Direct no-stock smoke: `--service` (with or without `--fiscal`) uses no quotas. It retains V3 article/price/tariff records produced by the actual projectors through `erp_sync_v3_put_chunk`; session publication/version32 and master/device/auth provisioning are fixture boundaries, not an end-to-end master-sync/API claim. The native writer and ERP resolve those retained records and run the same financial/fiscal/capture/ACK path. Recipe/component consumption remains outside this direct-service smoke. No physical entry, COGS or dispatchable obligation is created by the sale.

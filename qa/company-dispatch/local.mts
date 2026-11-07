@@ -7,7 +7,8 @@ import { createServer } from 'node:http';
 import { readFile, readdir, mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { tmpdir } from 'node:os';
-import { randomUUID } from 'node:crypto';
+import { randomUUID,createHash } from 'node:crypto';
+import {gzipSync} from 'node:zlib';
 import { build } from 'esbuild';
 import ts from 'typescript';
 import SQLite from 'better-sqlite3';
@@ -18,7 +19,7 @@ import {financialIdentity} from '../../services/db/LargeMasterSyncV3FinancialRet
 import { nativeFixture } from '../../tests/articleFormatsNativeFixture';
 import { getInitialConfig } from '../../constants';
 import { SubVertical } from '../../types';
-const fiscalLab=process.argv.includes('--fiscal'),formatLab=process.argv.includes('--format'),trackedKind=process.argv.includes('--lot')?'LOT':process.argv.includes('--serial')?'SERIAL':null;
+const serviceLab=process.argv.includes('--service');const fiscalLab=process.argv.includes('--fiscal'),formatLab=process.argv.includes('--format'),trackedKind=process.argv.includes('--lot')?'LOT':process.argv.includes('--serial')?'SERIAL':null;
 const repo = process.cwd(), erp = resolve(repo, '../CLIC-ERP-company-dispatch');
 if (process.env.CLIC_DISPATCH_TEST_PG_PORT !== '55443')
     throw Error('Explicit isolated PG55443 required');
@@ -30,6 +31,8 @@ await f.db.query(await readFile(resolve(erp,'supabase/migrations/20261107101743_
 await f.db.query(await readFile(resolve(erp,'supabase/migrations/20261107115547_pos_dispatch_cash_close.sql'),'utf8'));
 await f.db.query(await readFile(resolve(erp,'supabase/migrations/20261107121403_dispatch_stock_parts.sql'),'utf8'));
 await f.db.query(await readFile(resolve(erp,'supabase/migrations/20261107133003_dispatch_quota_assignment_reader.sql'),'utf8'));
+await f.db.query(await readFile(resolve(erp,'supabase/migrations/20261107135323_dispatch_direct_nostock_v3.sql'),'utf8'));
+await f.db.query(await readFile(resolve(erp,'supabase/migrations/20261107140714_dispatch_bin_stock_read_model.sql'),'utf8'));
 if(process.argv.includes('--cash-close'))await f.db.query("update erp_companies set config=jsonb_set(config,'{accounting}',coalesce(config->'accounting','{}')||'{\"salesPostingMode\":\"CASH_CLOSE\"}'::jsonb) where id=$1",[f.ids.company]);
 f.command=async(action:string,body:any={},key=randomUUID())=>{await f.db.query('set role service_role');try{return(await f.db.query('select erp_company_dispatch_command_v1($1,$2,$3,$4) result',[{tenantId:f.ids.tenant,companyId:f.ids.company,storeId:f.ids.store},f.ids.actor,key,{action,...body}])).rows[0].result;}finally{await f.db.query('reset role');}};
 await f.db.query('update locales set mall_id=$1 where id=$2',[f.ids.store,f.ids.local]);
@@ -45,6 +48,7 @@ const ids = { ...f.ids, terminal: randomUUID(), device: 'lab-device-' + randomUU
 await f.db.query("insert into erp_terminals select(jsonb_populate_record(null::erp_terminals,to_jsonb(t)||jsonb_build_object('id',$1::text,'store_id',$2::text,'device_id',$3::text,'authorized_device_id',$3::text,'config',jsonb_build_object('security',jsonb_build_object('deviceTokenFingerprint',$4::text))))).* from erp_terminals t where id=$5", [ids.terminal, ids.store, ids.device, fingerprint, f.ids.terminal]);
 await f.db.query('insert into erp_tariffs(id,tenant_id,company_id)values($1,$2,$3)', [ids.tariff, ids.tenant, ids.company]);
 await f.db.query("update items set metadata=(metadata-'articleFormats'-'article_formats')||jsonb_build_object('tariffs',jsonb_build_array(jsonb_build_object('tariffId',$2::text,'price',50))) where id=$1", [ids.item, ids.tariff]);
+if(serviceLab)await f.db.query("update items set type='SERVICE',metadata=metadata||'{\"isInventoriable\":false}'::jsonb where id=$1",[ids.item]);
 const labFormat={schemaVersion:1,id:'BOX6',name:'Caja de seis',abbreviation:'CJ',factor:6,variantId:null,active:true,allowSale:true,prices:[]};
 if(formatLab)await f.db.query("update items set metadata=metadata||jsonb_build_object('articleFormats',$2::jsonb) where id=$1",[ids.item,JSON.stringify([labFormat])]);
 if(trackedKind)await f.db.query("update items set metadata=metadata||jsonb_build_object('operationalFlags',$2::jsonb) where id=$1",[ids.item,{usesLots:trackedKind==='LOT',usesSerial:trackedKind==='SERIAL'}]);
@@ -68,6 +72,7 @@ n.db.prepare('INSERT INTO master_v3_operational_owner VALUES(1,?,?,?)').run(ids.
 n.db.prepare('INSERT INTO master_v3_inventory_state VALUES(1,?,?,?,?,?)').run(ids.sync, 32, 4, 'lab-inventory', 'synthetic');
 n.db.prepare("INSERT INTO sync_v3_sessions(sync_id,sync_version,schema_version,contract_version,status,manifest_json,created_at,updated_at)VALUES(?,32,3,2,'ACTIVE','{}','synthetic','synthetic')").run(ids.sync);
 const product:any = { id: ids.item, name: 'Artículo sintético', type: 'PRODUCT', inventoriable: true, active: true, sellable: true, taxable: false, taxIds: [], variants: [], cost: 10, activeWarehouseIds: [ids.warehouse], operationalFlags: { trackInventory: true, allowNegativeStock: false } };
+if(serviceLab){product.type='SERVICE';product.inventoriable=false;product.recipeDetails=[];}
 if(trackedKind){Object.assign(product.operationalFlags,{usesLots:trackedKind==='LOT',usesSerial:trackedKind==='SERIAL'});Object.assign(product,{tracking_contract_version:1,tracking_authorities:[]});}
 n.db.prepare('INSERT INTO master_v3_inventory_balances VALUES(?,?,?,?,?,?)').run(ids.item, ids.warehouse, 10, 0, 0, 'synthetic');
 n.db.prepare('INSERT INTO master_v3_articles(sync_version,article_id,taxable,tax_ids_json,active,sellable,record_json)VALUES(32,?,0,?,1,1,?)').run(ids.item, '[]', JSON.stringify(product));
@@ -88,6 +93,7 @@ const runtimeEntry = `export {LargeMasterSyncV3Runtime} from './services/sync/La
 const built = await build({ stdin: { contents: runtimeEntry, resolveDir: repo, loader: 'ts' }, bundle: true, write: false, format: 'esm', platform: 'node', plugins: [{ name: 'declared-lab-boundaries', setup(b) { b.onResolve({ filter: /.*/ }, a => ports[a.path] ? { path: a.path, namespace: 'lab' } : undefined); b.onLoad({ filter: /.*/, namespace: 'lab' }, a => ({ contents: ports[a.path], loader: 'js' })); } }] });
 await writeFile(resolve(dir, 'runtime.mjs'), built.outputFiles[0].text);
 const r = await import(resolve(dir, 'runtime.mjs'));
+if(serviceLab){const {toV3Article,toV3Prices,toV3Tariff}=await import(erp+'/server/services/largeMasterSyncV3.js'),master=(await f.db.query('select * from items where id=$1',[ids.item])).rows[0],token=randomUUID();await f.db.query("insert into erp_sync_v3_sessions(id,sync_version,tenant_id,company_id,store_id,version_key,generation_token,requested_terminal_id) overriding system value values($1,32,$2,$3,$4,$5,$6,$7)",[ids.sync,ids.tenant,ids.company,ids.store,'synthetic-service-'+ids.sync,token,ids.terminal]);const datasets={articles:[toV3Article(master,{activeTaxes:[]})],prices:toV3Prices(master,new Set([ids.tariff])),tariffs:[toV3Tariff({id:ids.tariff,is_active:true,currency:'DOP',tax_included:false})]};for(const[dataset,records]of Object.entries(datasets)){const text=JSON.stringify({schemaVersion:3,syncId:ids.sync,dataset,chunkIndex:0,records}),start=dataset==='prices'?ids.item+'::'+ids.tariff:records[0].id;await f.db.query('select erp_sync_v3_put_chunk($1,$2,$3,0,$4,$5,$6,$7,$8,$8,$9)',[ids.sync,token,dataset,records.length,Buffer.byteLength(text),gzipSync(text).length,createHash('sha256').update(text).digest('hex'),start,text]);}await f.db.query("update erp_sync_v3_sessions set status='READY',ready_at=now()where id=$1",[ids.sync]);}
 const store = n.adapter.masterSyncV3Store, runtime = await r.LargeMasterSyncV3Runtime.open(store);
 global.__dispatchLab.session = new r.LargeMasterSyncV3OperationalSession({ runtime, inventoryVersion: 4, inventoryCursor: 'lab-inventory' }, binding, store, 'https://erp.invalid', global.__dispatchLab.identity);
 const session = global.__dispatchLab.session;
@@ -113,7 +119,7 @@ await sync();
 await f.command('setPolicy', { mode: 'WAREHOUSE_DISPATCH', phase: 'activate', transitionId: prepare.transition_id, expectedRevision: prepare.revision });
 await sync();
 const current = await n.adapter.readDispatchCheckoutAuthority!();
-await f.command('issueQuota', { bindingId: current.bindingId, lines: trackedKind?trackedUnits.slice(0,trackedKind==='LOT'?2:4).map(u=>({itemId:ids.item,warehouseId:ids.warehouse,quantity:trackedKind==='LOT'?4:1,dimensions:{trackingUnitId:u.id,...(trackedKind==='LOT'?{lotCode:u.code}:{serialNumber:u.code})}})):(process.argv.includes('--split-quota')?[2,2]:formatLab?[4,4]:[4]).map(quantity=>({itemId:ids.item,warehouseId:ids.warehouse,quantity})) });
+if(!serviceLab)await f.command('issueQuota', { bindingId: current.bindingId, lines: trackedKind?trackedUnits.slice(0,trackedKind==='LOT'?2:4).map(u=>({itemId:ids.item,warehouseId:ids.warehouse,quantity:trackedKind==='LOT'?4:1,dimensions:{trackingUnitId:u.id,...(trackedKind==='LOT'?{lotCode:u.code}:{serialNumber:u.code})}})):(process.argv.includes('--split-quota')?[2,2]:formatLab?[4,4]:[4]).map(quantity=>({itemId:ids.item,warehouseId:ids.warehouse,quantity})) });
 await sync();
 console.log('REAL_POOL_INSTALLED', await n.adapter.readDispatchActivePoolState!());
 let fiscalClient:any,fiscalWorker:any;let providerIssues=0;
