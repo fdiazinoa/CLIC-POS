@@ -666,17 +666,30 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             assertDispatchFinancedSource(input.source,input.demands,quotas,pool||{},input.checkoutId,input.transactionId,await this.readDispatchNoStockSourcesUnlocked(input.source.items as Record<string,any>[]));
             await prepareDispatchPrecharge(this.ensureDb() as any,input);
     }
+    private async assertDispatchFiscalScopeUnlocked(poolId:string,scope:Record<string,unknown>):Promise<void>{
+        const row=(await this.ensureDb().query('SELECT a.native_binding FROM pos_dispatch_active_pool_v1 a JOIN master_v3_operational_owner o ON o.binding=a.native_binding WHERE a.singleton=1 AND a.pool_id=?',[poolId])).values?.[0];
+        if(!row)throw Error('DISPATCH_FISCAL_NATIVE_SCOPE_CONFLICT');const owner=JSON.parse(String(row.native_binding));
+        const configs=(await this.ensureDb().query("SELECT data FROM documents WHERE collection_name='config' AND doc_id NOT IN('_db_initialized','config_metadata')")).values||[];
+        const terminals=configs.flatMap(record=>(JSON.parse(String(record.data)).terminals||[]).filter((terminal:any)=>terminal.id===owner[1]&&terminal.config?.currentDeviceId===owner[2]));
+        if(terminals.length!==1)throw Error('DISPATCH_FISCAL_NATIVE_SCOPE_CONFLICT');const binding=terminals[0].config.erpBinding;
+        const expected={tenantId:owner[0],companyId:binding?.companyId,storeId:binding?.storeId,terminalId:owner[1],deviceId:owner[2]};
+        if(binding?.tenantId!==owner[0]||Object.entries(expected).some(([key,value])=>!value||scope?.[key]!==value))throw Error('DISPATCH_FISCAL_NATIVE_SCOPE_CONFLICT');
+        const policy=(await this.ensureDb().query('SELECT tenant_id,company_id,store_id FROM pos_dispatch_policy_scope_v2 WHERE pool_id=?',[poolId])).values?.[0];
+        if(policy&&(policy.tenant_id!==expected.tenantId||policy.company_id!==expected.companyId||policy.store_id!==expected.storeId))throw Error('DISPATCH_FISCAL_NATIVE_SCOPE_CONFLICT');
+    }
     /** Both identities are owned by this one writer transaction; no fiscal store transaction is nested. */
     async prepareDispatchFiscalCheckout(input:import('../DispatchFiscalPreparation').DispatchFiscalPreparation):Promise<import('../../fiscal/FiscalWorkflowV2Types').FiscalWorkflowCheckoutV2>{
         return this.withWriteLock(()=>this.withNativeTransaction(async()=>{
             const sql=this.ensureDb() as any;
             const fiscal=input.fiscal;
+            const requestedScope=fiscal.kind==='ALLOCATION'?fiscal.authority.scope:JSON.parse(fiscal.scopeKey);await this.assertDispatchFiscalScopeUnlocked(input.poolId,requestedScope);
             const checkout=fiscal.kind==='ALLOCATION'
                 ?await prepareAllocationCheckout(sql,fiscal.authority,input.cartIdentity,input.operationId,fiscal.context,true)
                 :await reserveFiscalWorkflowCheckoutInTransaction(sql,fiscal.scopeKey,input.cartIdentity,undefined,input.operationId,fiscal.options);
             if(checkout.phase==='COMMITTED'||checkout.phase==='ACKNOWLEDGED')throw Error('DISPATCH_COMMITTED_CHECKOUT_RECOVERY_REQUIRED');
             const fiscalScope=checkout.permit?.scope||fiscal.kind==='ALLOCATION'&&fiscal.authority.scope;
             if(!fiscalScope)throw Error('DISPATCH_FISCAL_AUTHORITY_REQUIRED');
+            await this.assertDispatchFiscalScopeUnlocked(input.poolId,fiscalScope as unknown as Record<string,unknown>);
             for(const demand of input.demands){
                 const row=(await sql.query('SELECT authority_json FROM pos_dispatch_quota_v1 WHERE id=? AND pool_id=?',[demand.quotaId,input.poolId])).values?.[0];
                 const quotaScope=row?JSON.parse(row.authority_json).scope:null;

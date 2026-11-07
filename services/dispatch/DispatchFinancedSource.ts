@@ -58,6 +58,7 @@ export function assertDispatchDirectNoStock(line:RecordValue,pin:RecordValue,fac
  requireSource((product.type==='SERVICE'||product.inventoriable===false)&&product.active===true&&product.sellable===true&&!array(product.recipeDetails).length&&!array(product.modifiers).length&&String(product.kitInventoryMode||'').trim().toUpperCase()!=='COMPONENTS'&&dispatchInventoryConsumptionMode({...product,isInventoriable:product.inventoriable===true})==='DIRECT'&&!line.articleFormat&&!line.articleFormatSnapshot&&!line.inventoryPresentation&&!array(line.trackingData).length&&!array(line.recipeDetails).length&&!array(line.modifiers).length&&!array(line.selected_combo_items).length&&!array(line.selected_modifiers).length&&!array(line.selected_fraction_parts).length,'DISPATCH_DIRECT_NOSTOCK_SOURCE_REQUIRED');
  requireSource(line.type===product.type&&line.isInventoriable===product.inventoriable&&line.taxable===product.taxable&&canonicalDispatchJSON([...(line.appliedTaxIds as string[]||[])].sort())===canonicalDispatchJSON([...(product.taxIds as string[]||[])].sort())&&stamp.taxIncluded===tariff.taxIncluded,'DISPATCH_NOSTOCK_SEMANTICS_CHANGED');
  requireSource(typeof line.quantity==='number'&&line.quantity>0&&Number.isFinite(line.quantity)&&Number(line.price)===Number(facts.price),'DISPATCH_NOSTOCK_COMMERCIAL_SOURCE_CHANGED');
+ requireSource(new Money(Number(line.quantity)).decimalPlaces()<=4,'DISPATCH_COMMERCIAL_QUANTITY_PRECISION');
  assertDispatchLineAmounts(line,Number(facts.price),tariff.taxIncluded===true,array(facts.taxes));
 }
 
