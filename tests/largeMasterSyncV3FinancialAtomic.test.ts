@@ -1,3 +1,5 @@
+import {COMPANY_DISPATCH_ESCROW_SCHEMA,DISPATCH_FINANCIAL_SOURCE_GUARDS} from '../services/db/CompanyDispatchEscrowStore';
+import {compileDispatchCheckoutSource} from '../services/dispatch/DispatchCheckoutSource';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
@@ -16,6 +18,7 @@ function fixture(stock = 5) {
     sort_order INTEGER, updatedAt TEXT, PRIMARY KEY(collection_name, doc_id));`);
   sql.exec(LARGE_MASTER_SYNC_V3_SCHEMA_SQL);
   sql.exec(DURABLE_OUTBOX_SCHEMA_SQL);
+  sql.exec(COMPANY_DISPATCH_ESCROW_SCHEMA);sql.exec(DISPATCH_FINANCIAL_SOURCE_GUARDS);
   sql.exec(`UPDATE master_v3_state SET active_sync_id='S',active_version=2 WHERE singleton=1;
     INSERT INTO master_v3_operational_owner VALUES(1,'S',2,'binding');
     INSERT INTO master_v3_inventory_state VALUES(1,'S',2,4,'C','now');`);
@@ -518,3 +521,28 @@ for (const currentTaxes of [[{ id: 'TX', name: 'Changed', rate: 0.16, type: 'VAT
     } finally { f.sql.close(); }
   });
 }
+
+test('ordinary reserved checkout uses installed quota and the real financial builder without a physical ledger',async()=>{
+ const f=fixture();try{
+  const module=await financialModule(f,true),transaction={...module.transaction('dispatch-ordinary'),customerId:undefined,payments:[{id:'cash-dispatch',method:'CASH',amount:118,timestamp:'2026-11-07T12:00:00Z'}]};
+  transaction.items=transaction.items.map(line=>({...line,taxRate:0.18}));
+  f.sql.exec("INSERT INTO pos_dispatch_pool_v1 VALUES('pool','bindingID','generation',1,'WAREHOUSE_DISPATCH',NULL,NULL);INSERT INTO pos_dispatch_active_pool_v1 VALUES(1,'pool','binding');INSERT INTO pos_dispatch_capture_cursor_v1 VALUES('pool',0)");
+  const master={id:'P',tenant_id:'tenant',company_id:'company',type:'PRODUCT',taxable:true,metadata:{appliedTaxIds:['TX'],tariffs:[{tariffId:'T',price:118}]}};
+  const authority={id:'quota',scope:{tenantId:'tenant',companyId:'company',storeId:'store',warehouseId:'W',terminalId:'terminal',deviceId:'device',bindingId:'bindingID',generation:'generation'},policyRevision:1,itemId:'P',dimensions:{},catalogSource:{commercialItem:master,rawGraph:[master],tariffs:[{id:'T',tax_included:true}],taxes:[{id:'TX',rate:0.18}]}};
+  f.sql.prepare("INSERT INTO pos_dispatch_quota_v1 VALUES('quota','pool',?,'hash',2000000,0,0,'ACTIVE')").run(JSON.stringify(authority));f.sql.exec("INSERT INTO pos_dispatch_quota_delivery_v1 VALUES('quota','witness')");
+  const installed=await f.adapter.readDispatchCheckoutAuthority();
+  await assert.rejects(compileDispatchCheckoutSource(installed,transaction.items.map(line=>({...line,quantity:3})),{...transaction,v3WarehouseId:'W'}),/QUOTA_EXHAUSTED/);
+  await assert.rejects(compileDispatchCheckoutSource(installed,transaction.items.map(line=>({...line,price:1})),{...transaction,v3WarehouseId:'W'}),/PRICE_MISMATCH/);
+  await assert.rejects(compileDispatchCheckoutSource(installed,transaction.items.map(line=>({...line,taxable:false})),{...transaction,v3WarehouseId:'W'}),/TAX_ASSIGNMENT/);
+  await assert.rejects(compileDispatchCheckoutSource(installed,transaction.items,{...transaction,v3WarehouseId:'foreign'}),/ITEM_QUOTA_REQUIRED/);
+  assert.equal((f.sql.prepare('SELECT count(*) n FROM pos_dispatch_precharge_v1').get() as any).n,0);
+  const selected=await compileDispatchCheckoutSource(installed,transaction.items,{...transaction,v3WarehouseId:'W'});
+  const source={...selected.source,id:transaction.id,companyDispatchSource:{...selected.source.companyDispatchSource,checkoutId:'checkout'}} as unknown as Transaction;
+  await f.adapter.prepareDispatchPrecharge({...selected,source:source as any,checkoutId:'checkout',transactionId:source.id});await f.adapter.markDispatchEffectPossible('checkout','a'.repeat(64),source.payments);
+  await module.persistV3FinancialBatch([{transaction:source}],{} as BusinessConfig,'W');
+  assert.equal(f.rows('inventoryLedger').length,0);assert.equal((f.sql.prepare("SELECT qty_on_hand n FROM master_v3_inventory_balances WHERE item_id='P'").get() as any).n,8);assert.equal(f.rows('transactions').length,1);assert.equal((f.sql.prepare('SELECT consumed_minor n FROM pos_dispatch_quota_v1').get() as any).n,1000000);
+  const row=f.sql.prepare("SELECT payload_json FROM sync_outbox_v2 WHERE event_type='SALE_POSTED'").get() as any;const published=JSON.parse(row.payload_json).transaction;
+  assert.equal(published.companyDispatchSource.sequence,1);assert.equal(published.inventoryEffectsContract,'WAREHOUSE_RESERVATION_V1');assert.equal(f.rows('transactionHistory')[0].companyDispatchSource.sequence,1);
+  await module.persistV3FinancialBatch([{transaction:source}],{} as BusinessConfig,'W');assert.equal((f.sql.prepare('SELECT consumed_minor n FROM pos_dispatch_quota_v1').get() as any).n,1000000);
+ }finally{f.sql.close();}
+});

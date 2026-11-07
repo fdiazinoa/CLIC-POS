@@ -176,11 +176,14 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
     };
     for (let index = 0; index < entries.length; index++) {
     let { transaction, options = {} } = entries[index];
+    const dispatch=transaction.inventoryEffectsContract==='WAREHOUSE_RESERVATION_V1';
+    if(dispatch&&(entries.length!==1||options.refund||!transaction.companyDispatchSource?.checkoutId))throw Error('DISPATCH_SINGLE_FINANCIAL_SOURCE_REQUIRED');
     const stamp = transaction.items[0]?.v3SaleAuthority;
     if (!stamp) throw new LargeMasterSyncV3Error('SYNC_V3_CART_LEGACY_LINE');
     const projected = options.refund ? await session.projectRefundConfig(config, stamp, transaction.items) : saleConfig!;
     const authoritativeLines: CartItem[] = [];
-    const retained = await session.validate(projected, transaction.items, stamp?.tariffId || '', warehouseId,
+    if(dispatch)authoritativeLines.push(...transaction.items);
+    const retained = dispatch ? undefined : await session.validate(projected, transaction.items, stamp?.tariffId || '', warehouseId,
       options.refund ? 'REFUND' : 'SALE', (line, source) => {
         authoritativeLines.push({ ...line, type: source.type, isInventoriable: source.isInventoriable,
           taxable: source.taxable, appliedTaxIds: [...(source.appliedTaxIds || [])],
@@ -225,10 +228,9 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
       documents.push({collectionName:'internalSequences',document:issuance.series!,expectedDocument:JSON.stringify(series)},
         {collectionName:'globalSequenceCounter',document:issuance.counter!,...(counter ? {expectedDocument:JSON.stringify(counter)} : {requireAbsent:true})});
     }
-    validateV3FrozenFiscalAmounts(transaction, retained);
-    validateV3FrozenLineFiscalAmounts(transaction, projected);
+    if(!dispatch){validateV3FrozenFiscalAmounts(transaction, retained);validateV3FrozenLineFiscalAmounts(transaction, projected);}
     if (authoritativeLines.length !== transaction.items.length) throw new LargeMasterSyncV3Error('SYNC_V3_ARTICLE_SOURCE_CHANGED');
-    const ledger = await buildV3InventoryLedger({ ...transaction, items: authoritativeLines }, warehouseId, session.binding, options.refund, options.conditions, session.ready.runtime?.getOperationalArticle?.bind(session.ready.runtime));
+    const ledger = dispatch ? [] : await buildV3InventoryLedger({ ...transaction, items: authoritativeLines }, warehouseId, session.binding, options.refund, options.conditions, session.ready.runtime?.getOperationalArticle?.bind(session.ready.runtime));
     const document: Transaction = { ...transaction, items: authoritativeLines, syncStatus: 'PENDING', v3Binding: session.binding,
       v3WarehouseId: warehouseId, v3CommitFingerprint: identities[index],
       v3InventoryBaseline: v3InventoryBaselineKey(session.binding, stamp!) };
@@ -253,7 +255,7 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
       { collectionName: 'transactions', document: document as any, requireAbsent: true,
         ...(transaction.items.some(line=>line.inventoryPresentation!==undefined)?{inventoryPresentationPrecondition:await session.presentationProof(projected,transaction.items)}:{}),
         ...(retained ? { v3ExpectedRetainedDocument: { collection: retained.collection, id: retained.id, expected: retained.expected } } : {}),
-        v3StockRequirements: await session.stockRequirements(projected, transaction.items, warehouseId, options.refund ? 'REFUND' : 'SALE') },
+        v3StockRequirements: dispatch ? [] : await session.stockRequirements(projected, transaction.items, warehouseId, options.refund ? 'REFUND' : 'SALE') },
       { collectionName: 'transactionHistory', document: document as any, requireAbsent: true,
         ...(retained ? { v3ExpectedRetainedDocument: { collection: retained.collection, id: retained.id, expected: retained.expected } } : {}) },
       ...ledger.map(document => ({ collectionName: 'inventoryLedger', document, requireAbsent: true })),
@@ -302,7 +304,7 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
       }
       documents.push(...originalMutations);
     }
-    if (isSyncFeatureEnabled('sqlite_outbox_v2')||document.items.some(line=>line.trackingData?.length)) {
+    if (dispatch||isSyncFeatureEnabled('sqlite_outbox_v2')||document.items.some(line=>line.trackingData?.length)) {
       if (options.refund) {
         const fiscalSourceMetadata = {...captureNewV3FiscalSourceMetadata(document,projected,session.binding,{refund:true,retained:Boolean(retained),offlineTableAccount:false}),...captureTrackingSourceMetadata(document,projected)};
         const paymentIntentIds = (document.payments || []).map((payment: any) => payment.paymentIntentId).filter(Boolean);
@@ -364,7 +366,7 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
     }
     if (events.length) {
       await durableOutboxRepository.commitFinancialTransaction({ documents, outboxEvent: events[0],
-        additionalOutboxEvents: events.slice(1), paymentIntentIds: intentIds,fiscalWorkflowCommits,trackingCommits,...(fiscalAllocationPreconditions.length?{fiscalAllocationPreconditions}:{}) });
+        additionalOutboxEvents: events.slice(1), paymentIntentIds: intentIds,fiscalWorkflowCommits,trackingCommits,...(entries[0].transaction.inventoryEffectsContract==='WAREHOUSE_RESERVATION_V1'?{dispatchCommit:{checkoutId:entries[0].transaction.companyDispatchSource!.checkoutId,transactionId:entries[0].transaction.id}}:{}),...(fiscalAllocationPreconditions.length?{fiscalAllocationPreconditions}:{}) });
     } else {
       if(trackingCommits.length)throw Error('TRACKING_ATOMIC_OUTBOX_REQUIRED');
       if (!dbAdapter.saveDocumentsAtomically) throw new LargeMasterSyncV3Error('SYNC_V3_ATOMIC_COMMIT_REQUIRED');

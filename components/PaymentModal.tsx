@@ -75,7 +75,7 @@ import { sendReceiptEmailViaErp } from '../services/email/receiptEmailService';
 import { buildReceiptEmailPayload } from '../services/email/receiptEmailPayload';
 import { setLargeMasterSyncV3CriticalOperation } from '../services/sync/LargeMasterSyncV3OperationGate';
 
-export type PaymentEffectsFence = (() => void|Promise<void>) & {completedTransaction?: Transaction;recordPaymentEffect?:(paymentId:string)=>Promise<void>;futureCheckout?:{checkoutId:string;transactionId:string;operationId?:string};tablePart?:{ticketId:string;receiptId:string;operationId:string;planFingerprint:string}};
+export type PaymentEffectsFence = (() => void|Promise<void>) & {completedTransaction?: Transaction;recordPaymentEffect?:(paymentId:string)=>Promise<void>;preparePaymentEffects?:(payments:PaymentEntry[])=>Promise<void>;futureCheckout?:{checkoutId:string;transactionId:string;operationId?:string};tablePart?:{ticketId:string;receiptId:string;operationId:string;planFingerprint:string}};
 
 interface PaymentModalProps {
    openingTrace?: PosInteractionTrace | null;
@@ -1210,6 +1210,20 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
          if(items.some(item=>item.v3SaleAuthority)&&!isRefund&&baseCurrency.code==='DOP'){
             if(!config||configuredFiscalBaseCurrency(config)!=='DOP')throw Error('FISCAL_WORKFLOW_BASE_CURRENCY_CHANGED');
             assertDopFiscalSettlement({currency:'DOP',total:effectiveTotalToPay,pendingBalance:sumCreditPaymentsBase(paymentsToConfirm),payments:paymentsToConfirm});
+         }
+         if(workflowPaymentFenceRef.current?.preparePaymentEffects){
+            // Freeze the exact intended tenders, including the auto-created entry,
+            // BEFORE a gateway request can occur. Provider outcome fields are additive.
+            paymentsToConfirm=await Promise.all(paymentsToConfirm.map(async payment=>{
+               if(!paymentRequiresGatewayAuthorization(payment))return payment;
+               const method=resolvePaymentMethodForEntry(payment);
+               const integration=resolveGatewayIntegrationForPayment(payment,method);
+               if(!integration)throw Error('DISPATCH_PAYMENT_INTEGRATION_REQUIRED');
+               const intent=await paymentIntentService.create({paymentId:payment.id,provider:integration.provider,integrationId:integration.id,amount:roundToTwo(payment.amount),currencyCode:payment.currencyCode||baseCurrency.code,retainedOperation:Boolean(paymentOperationId),futureCheckout:workflowPaymentFenceRef.current?.futureCheckout});
+               if(!intent)throw Error('PAYMENT_INTENT_NATIVE_REQUIRED');
+               return {...payment,gatewayProvider:integration.provider,gatewayIntegrationId:integration.id,gatewayTransactionType:'SALE' as const,paymentIntentId:intent.intentId,gatewayIdempotencyKey:intent.idempotencyKey};
+            }));
+            await workflowPaymentFenceRef.current.preparePaymentEffects(paymentsToConfirm);
          }
          paymentsToConfirm = await measureInteractionStage(
             trace,

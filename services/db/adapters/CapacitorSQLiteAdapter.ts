@@ -589,6 +589,14 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
     async acknowledgeDispatchAdoption(eventId:string,proof:DispatchAdoptionProof,at:string):Promise<void>{
         await this.withWriteLock(()=>this.withNativeTransaction(()=>acknowledgeDispatchAdoption(this.ensureDb() as any,eventId,proof,at)));
     }
+    async readDispatchCheckoutAuthority(checkoutId?:string):Promise<import('../../dispatch/DispatchCheckoutSource').DispatchCheckoutAuthority>{
+        return this.withWriteLock(async()=>{
+            const pool=(await this.ensureDb().query('SELECT p.*,a.native_binding FROM pos_dispatch_active_pool_v1 a JOIN pos_dispatch_pool_v1 p ON p.pool_id=a.pool_id JOIN master_v3_operational_owner o ON o.binding=a.native_binding WHERE a.singleton=1')).values?.[0];
+            if(!pool||pool.state!=='WAREHOUSE_DISPATCH')throw Error('DISPATCH_ACTIVE_POOL_REQUIRED');
+            const quotas=(await this.ensureDb().query("SELECT q.*,d.witness_hash,COALESCE((SELECT SUM(l.quantity_minor) FROM pos_dispatch_precharge_lines_v1 l JOIN pos_dispatch_precharge_v1 p ON p.checkout_id=l.checkout_id WHERE l.quota_id=q.id AND p.phase IN('PREPARED','EFFECT_POSSIBLE') AND p.checkout_id<>?),0) prepared FROM pos_dispatch_quota_v1 q JOIN pos_dispatch_quota_delivery_v1 d ON d.quota_id=q.id WHERE q.pool_id=? AND q.state='ACTIVE' ORDER BY q.id",[checkoutId||'',pool.pool_id])).values||[];
+            return{poolId:String(pool.pool_id),bindingId:String(pool.binding_id),generation:String(pool.generation),policyRevision:Number(pool.policy_revision),nativeBinding:String(pool.native_binding),quotas:quotas.map(row=>({authority:JSON.parse(String(row.authority_json)),authorityHash:String(row.authority_hash),witnessHash:String(row.witness_hash),availableMinor:Number(row.granted_minor)-Number(row.consumed_minor)-Number(row.returned_minor)-Number(row.prepared)}))};
+        });
+    }
     async readDispatchQuota(id:string):Promise<{authorityCanonical:string;authorityHash:string;witnessHash:string;availableMinor:number}|null>{
         return this.withWriteLock(async()=>{const row=(await this.ensureDb().query("SELECT q.*,d.witness_hash,COALESCE((SELECT SUM(l.quantity_minor) FROM pos_dispatch_precharge_lines_v1 l JOIN pos_dispatch_precharge_v1 p ON p.checkout_id=l.checkout_id WHERE l.quota_id=q.id AND p.phase IN('PREPARED','EFFECT_POSSIBLE')),0) prepared FROM pos_dispatch_quota_v1 q JOIN pos_dispatch_quota_delivery_v1 d ON d.quota_id=q.id WHERE q.id=?",[id])).values?.[0];return row?{authorityCanonical:row.authority_json,authorityHash:row.authority_hash,witnessHash:row.witness_hash,availableMinor:row.state==='ACTIVE'?Number(row.granted_minor)-Number(row.consumed_minor)-Number(row.returned_minor)-Number(row.prepared):0}:null;});
     }

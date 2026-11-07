@@ -52,7 +52,8 @@ export const financialIdentity = (transaction: Transaction): string => {
         'updatedAt', 'status', 'v3InventoryBaseline', 'v3Binding', 'v3WarehouseId', 'v3CommitFingerprint', 'fiscalStatus',
         'fiscalResponseMessage', 'fiscalResponseCode', 'fiscalSignedXml', 'fiscalQrCode'].includes(key))
       .map(key => [key, canonical(value[key])])) : value;
-  const input = transaction.v3ReservationClaimId ? JSON.parse(JSON.stringify({...transaction,globalSequence:undefined,displayId:undefined,seriesNumber:undefined})) : transaction;
+  const intent=transaction.inventoryEffectsContract==='WAREHOUSE_RESERVATION_V1'&&transaction.companyDispatchSource?{...transaction,companyDispatchSource:{...transaction.companyDispatchSource,sequence:undefined}}:transaction;
+  const input = intent.v3ReservationClaimId ? JSON.parse(JSON.stringify({...intent,globalSequence:undefined,displayId:undefined,seriesNumber:undefined})) : intent;
   return JSON.stringify(canonical(input));
 };
 
