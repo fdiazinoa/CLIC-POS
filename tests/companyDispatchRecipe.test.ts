@@ -22,3 +22,9 @@ describe('native retained recipe quantities / pure source, no bridge claim',()=>
   assert.throws(()=>compileCompanyDispatchDemand({scope,items:[item('recipe','RECETA',{recipeDetails:[{childItemId:'missing',quantity:1}]})]},{itemId:'recipe',quantity:1}),/CHILD_MISSING/);
  });
 });
+
+describe('SERVICE retained semantic proof vectors',()=>{
+ it('proves a direct canonical service has no physical demand',()=>{const result=compileCompanyDispatchDemand({scope,items:[item('service','SERVICE')]},{itemId:'service',quantity:2});assert.deepEqual(result.demands,[]);assert.equal(result.nonStockReason,'CANONICAL_SERVICE');});
+ it('finances every leaf of SERVICE COMPONENTS without inventing stock for the parent',()=>{const items=[item('service','SERVICE',{isInventoriable:false,kitInventoryMode:'COMPONENT_CONSUMPTION',recipeDetails:[{childItemId:'child',quantity:2}]}),item('child')];const result=compileCompanyDispatchDemand({scope,items},{itemId:'service',quantity:3});assert.equal(result.demands.length,1);assert.equal(result.demands[0].itemId,'child');assert.equal(result.demands[0].quantityMinor,6000000);assert.equal(result.nonStockReason,null);});
+ it('rejects ambiguous SERVICE FINISHED_GOOD plus recipe before declaring it no-stock',()=>{const items=[item('service','SERVICE',{kitInventoryMode:'FINISHED_GOOD',recipeDetails:[{childItemId:'child',quantity:2}]}),item('child')];assert.throws(()=>compileCompanyDispatchDemand({scope,items},{itemId:'service',quantity:1}),/DISPATCH_SERVICE_RECIPE_MODE_UNPROVEN/);});
+});

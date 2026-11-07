@@ -40,11 +40,12 @@ export function compileCompanyDispatchDemand(catalog,line){
  const result=new Map();const visit=(raw,amount,path,variantId,isRoot)=>{
   if(path.includes(raw.id)||path.length>=32)fail('DISPATCH_RECIPE_CYCLE_OR_DEPTH');
   const m=object(raw.metadata),f=object(m.operationalFlags||m.operational_flags);if(raw.is_active===false)fail('DISPATCH_RECIPE_CHILD_INACTIVE');
-  if(['SERVICE','SERVICIO'].includes(text(raw.type).toUpperCase()))return;
   const details=m.recipeDetails??m.recipe_details??[];if(!Array.isArray(details))fail('DISPATCH_RECIPE_DETAILS_INVALID');
   const inventoriable=(m.isInventoriable??m.is_inventoriable)!==false&&f.trackInventory!==false;
   const mode=dispatchInventoryConsumptionMode({type:raw.type,recipeDetails:details,isInventoriable:inventoriable,kitInventoryMode:m.kitInventoryMode||m.kit_inventory_mode});
-  if(!inventoriable&&text(raw.type).toUpperCase()!=='KIT'){if(mode==='COMPONENTS')fail('DISPATCH_NON_INVENTORY_COMPONENT_CONTRACT_UNPROVEN');return;}
+  const service=['SERVICE','SERVICIO'].includes(text(raw.type).toUpperCase());
+  if(service&&mode==='DIRECT'){if(details.length)fail('DISPATCH_SERVICE_RECIPE_MODE_UNPROVEN');return;}
+  if(!inventoriable&&!['KIT','RECETA','SERVICE','SERVICIO'].includes(text(raw.type).toUpperCase())){if(mode==='COMPONENTS')fail('DISPATCH_NON_INVENTORY_COMPONENT_CONTRACT_UNPROVEN');return;}
   if(mode==='COMPONENTS'){
    if(!details.length)fail('DISPATCH_RECIPE_DETAILS_REQUIRED');
    const yieldQuantity=decimal(m.batchYield??m.batch_yield??1,'DISPATCH_RECIPE_YIELD_INVALID');
@@ -63,5 +64,5 @@ export function compileCompanyDispatchDemand(catalog,line){
   const dimensions=variantId?{variantId}:{},key=raw.id+'|'+JSON.stringify(dimensions),previous=result.get(key),quantityMinor=minor(amount);if(quantityMinor<=0)fail('DISPATCH_DEMAND_QUANTITY_INVALID');const combined=(previous?.quantityMinor||0)+quantityMinor;if(!Number.isSafeInteger(combined))fail('DISPATCH_DEMAND_OVERFLOW');result.set(key,{itemId:raw.id,dimensions,quantityMinor:combined,trackingKind:tracking(raw),paths:[...(previous?.paths||[]),[...path,raw.id]]});
  };
  visit(root,multiply(fraction(quantity),fraction(factor)),[],line.variantId||'',true);
- return{schemaVersion:1,source:'ISSUED_RAW_GRAPH_BASE6_V1',commercialItemId:root.id,commercialQuantity:quantity.toNumber(),formatFactor:factor.toNumber(),demands:[...result.values()].sort((a,b)=>(a.itemId+'|'+JSON.stringify(a.dimensions)).localeCompare(b.itemId+'|'+JSON.stringify(b.dimensions))),nonStockReason:result.size?null:['SERVICE','SERVICIO'].includes(text(root.type).toUpperCase())?'CANONICAL_SERVICE':'CANONICAL_NON_STOCK_GRAPH'};
+ return{schemaVersion:1,source:'ISSUED_RAW_GRAPH_BASE6_V1',commercialItemId:root.id,commercialQuantity:quantity.toNumber(),formatFactor:factor.toNumber(),demands:[...result.values()].sort((a,b)=>(a.itemId+'|'+JSON.stringify(a.dimensions)).localeCompare(b.itemId+'|'+JSON.stringify(b.dimensions))),nonStockReason:result.size?null:!array(metadata.recipeDetails??metadata.recipe_details).length&&['SERVICE','SERVICIO'].includes(text(root.type).toUpperCase())?'CANONICAL_SERVICE':'CANONICAL_NON_STOCK_GRAPH'};
 }
