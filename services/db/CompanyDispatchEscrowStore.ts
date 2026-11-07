@@ -43,6 +43,9 @@ CREATE TRIGGER IF NOT EXISTS dispatch_financial_source_delete BEFORE DELETE ON d
 BEGIN SELECT CASE WHEN OLD.collection_name='transactionHistory' OR NOT EXISTS(SELECT 1 FROM documents h JOIN pos_dispatch_native_capture_v1 c ON c.transaction_id=h.doc_id WHERE h.collection_name='transactionHistory' AND h.doc_id=OLD.doc_id AND NOT(${differentFinancialSource('OLD','h')})) THEN RAISE(ABORT,'DISPATCH_RETAINED_SOURCE_REQUIRED') END;END;
 `;
 export function canonicalDispatchJSON(value:unknown):string{
+ // Native constructors may retain Date objects until SQLite JSON serialization.
+ // Canonical comparison must use the same ISO bytes as that durable JSON.
+ if(value instanceof Date){if(!Number.isFinite(value.getTime()))throw Error('DISPATCH_FINANCIAL_PLAN_DATE');return JSON.stringify(value.toISOString());}
  if(value===null||typeof value!=='object')return JSON.stringify(value);
  if(Array.isArray(value))return '['+value.map(canonicalDispatchJSON).join(',')+']';
  return '{'+Object.keys(value).sort().filter(k=>(value as Record<string,unknown>)[k]!==undefined).map(k=>JSON.stringify(k)+':'+canonicalDispatchJSON((value as Record<string,unknown>)[k])).join(',')+'}';
