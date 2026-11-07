@@ -1,7 +1,7 @@
 import {DISPATCH_OPERATOR_AUTH_SCHEMA} from '../../dispatch/DispatchOperatorAuthentication';
 import {assertDispatchFinancedSource} from '../../dispatch/DispatchFinancedSource';
 import {verifyDispatchQuotaDelivery,type DispatchQuotaDelivery,type DispatchScope} from '../../dispatch/DispatchAuthority';
-import {COMPANY_DISPATCH_ESCROW_SCHEMA,DISPATCH_FINANCIAL_SOURCE_GUARDS,installDispatchQuota,prepareDispatchPrecharge,markDispatchEffectPossible,commitDispatchPrecharge,sealDispatchNativeCapture,abandonDispatchPrecharge,type DispatchDemand} from '../CompanyDispatchEscrowStore';
+import {COMPANY_DISPATCH_ESCROW_SCHEMA,DISPATCH_FINANCIAL_SOURCE_GUARDS,installDispatchQuota,prepareDispatchPrecharge,markDispatchEffectPossible,commitDispatchPrecharge,sealDispatchNativeCapture,dispatchFinancialIntentDigest,snapshotDispatchFinancialPlan,canonicalDispatchJSON,abandonDispatchPrecharge,type DispatchDemand} from '../CompanyDispatchEscrowStore';
 import {TRACKING_OPERATION_SCHEMA,prepareTrackingOperation,readTrackingOperation,recordTrackingPaymentEffect,assertTrackingOperationCommit,readCommittedTrackingReceipt,retireTrackingOperation,type TrackingOperation,type TrackingScope} from '../TrackingCheckoutOperation';
 import {base6,readV3Base6Stock} from '../V3Base6Stock';
 import {TRACKING_ALLOCATION_SCHEMA,installTrackingAllocation,prepareTrackingCheckout,fenceTrackingCheckout,abandonTrackingCheckout,consumeTrackingCheckout} from '../TrackingAllocationStore';
@@ -46,7 +46,7 @@ import { applyMasterNumberToDocument, buildNumberedCustomerMutation } from '../.
 import { compactStoredTerminalCatalog } from '../../../utils/compactTerminalCatalogSnapshot';
 import { LARGE_MASTER_SYNC_V3_SCHEMA_SQL, ensureLargeMasterSyncV3ContractColumns, backfillLargeMasterSyncV3Categories } from '../LargeMasterSyncV3Schema';
 import { LargeMasterSyncV3SqliteStore } from '../LargeMasterSyncV3SqliteStore';
-import { V3_FINANCIAL_RETAINED_UPSERT_SQL } from '../LargeMasterSyncV3FinancialRetention';
+import { V3_FINANCIAL_RETAINED_UPSERT_SQL,financialIdentity } from '../LargeMasterSyncV3FinancialRetention';
 
 const DB_NAME = 'clic_pos_native';
 const DB_VERSION = 1;
@@ -631,7 +631,18 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         await this.withWriteLock(()=>this.executeUnlocked([],()=>abandonDispatchPrecharge(this.ensureDb() as any,checkoutId),true));
     }
     async commitFinancialTransaction(input: FinancialCommitInput): Promise<void> {
-        if(input.dispatchCommit)input=structuredClone(input);
+        if(input.dispatchCommit)input=snapshotDispatchFinancialPlan(input);
+        const dispatchIntent=input.dispatchCommit?await dispatchFinancialIntentDigest(input):null;
+        let sealedDispatchEvent=false;let sealedDispatchSource:Record<string,unknown>|null=null;let dispatchReplayed=false;
+        const assertDispatchOutbox=async()=>{if(!sealedDispatchEvent)return;for(const event of [input.outboxEvent,...(input.additionalOutboxEvents||[])]){const row=(await this.ensureDb().query('SELECT * FROM sync_outbox_v2 WHERE event_id=?',[event.eventId])).values?.[0];
+            if(!row||row.event_type!==event.eventType||row.aggregate_type!==event.aggregateType||row.aggregate_id!==event.aggregateId||Number(row.schema_version)!==event.schemaVersion||row.created_at!==event.createdAt||canonicalDispatchJSON(JSON.parse(row.payload_json))!==canonicalDispatchJSON(event.payload))throw Error('DISPATCH_OUTBOX_EVENT_CONFLICT');
+        }
+          const rows=(await this.ensureDb().query("SELECT collection_name,data FROM documents WHERE collection_name IN('transactions','transactionHistory') AND doc_id=?",[input.dispatchCommit!.transactionId])).values||[];
+          for(const collection of ['transactionHistory','transactions']){const row=rows.find((value:any)=>value.collection_name===collection);
+            if(!row&&collection==='transactions'&&dispatchReplayed)continue;
+            if(!row||financialIdentity(JSON.parse(row.data))!==financialIdentity(sealedDispatchSource as unknown as Transaction))throw Error('DISPATCH_RETAINED_SOURCE_REQUIRED');
+          }
+        };
         const now = new Date().toISOString();
         const statements: Array<{ statement: string; values: any[] }> = [];
 
@@ -697,14 +708,21 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             const history=input.documents.find(d=>d.collectionName==='transactionHistory'&&d.document.id===commit?.transactionId);
             const dispatchEvent=outboxEvents.find(e=>e.eventType==='SALE_POSTED'&&e.aggregateId===commit?.transactionId);
             if(!commit||dispatchSources.length!==1||source?.document.id!==commit.transactionId||!source.requireAbsent||!history?.requireAbsent||JSON.stringify(source.document)!==JSON.stringify(history.document)||JSON.stringify(dispatchEvent?.payload.transaction)!==JSON.stringify(source.document))throw Error('DISPATCH_ATOMIC_SOURCE_REQUIRED');
+            if(new Set(outboxEvents.map(event=>event.eventId)).size!==outboxEvents.length)throw Error('DISPATCH_OUTBOX_EVENT_CONFLICT');
+            const existingEvents=[];
+            for(const event of outboxEvents){const row=(await this.ensureDb().query('SELECT event_id FROM sync_outbox_v2 WHERE event_id=?',[event.eventId])).values?.[0];if(row)existingEvents.push(row);}
+            const priorCapture=(await this.ensureDb().query('SELECT checkout_id FROM pos_dispatch_native_capture_v1 WHERE checkout_id=? AND transaction_id=? AND event_id=?',[commit.checkoutId,commit.transactionId,dispatchEvent!.eventId])).values?.[0];
+            if(existingEvents.length&&!priorCapture)throw Error('DISPATCH_OUTBOX_EVENT_CONFLICT');
             await commitDispatchPrecharge(this.ensureDb() as any,commit.checkoutId,commit.transactionId,dispatchEvent!.eventId,source.document);
-            const captured=await sealDispatchNativeCapture(this.ensureDb() as any,commit.checkoutId,commit.transactionId,dispatchEvent!.eventId,source.document);
+            const captured=await sealDispatchNativeCapture(this.ensureDb() as any,commit.checkoutId,commit.transactionId,dispatchEvent!.eventId,source.document,dispatchIntent!);
             for(const mutation of input.documents)if(['transactions','transactionHistory'].includes(mutation.collectionName)&&mutation.document.id===commit.transactionId)mutation.document=captured as {id:string};
             dispatchEvent!.payload.transaction=captured;
             // These slots were built from the original draft. Serialize the sealed
             // source only after native sequence allocation, inside this same TX.
             for(let index=0;index<input.documents.length;index++)statements[index].values[2]=JSON.stringify(input.documents[index].document);
             for(let index=0;index<outboxEvents.length;index++)statements[input.documents.length+index].values[5]=JSON.stringify(outboxEvents[index].payload);
+            sealedDispatchEvent=true;sealedDispatchSource=captured;dispatchReplayed=Boolean(priorCapture);
+            if(priorCapture)return false as const; // Exact replay: never reapply ancillary financial mutations.
 
           }
           const trackedSources=input.documents.filter(d=>d.collectionName==='transactions'&&d.document.items?.some((line:any)=>line.v3SaleAuthority&&line.trackingData?.length));
@@ -755,7 +773,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             }
             await consumeFiscalWorkflowBirth(this.ensureDb() as any,commit,source.document as any,outboxEvents.find(e=>['SALE_POSTED','SALES_CREDIT_NOTE_POSTED'].includes(e.eventType)&&e.aggregateId===commit.transactionId)?.eventId);
           }
-        },Boolean(input.fiscalAllocationPreconditions?.length||input.trackingCommits?.length||input.dispatchCommit)));
+        },Boolean(input.fiscalAllocationPreconditions?.length||input.trackingCommits?.length||input.dispatchCommit),assertDispatchOutbox));
     }
 
     async getMasterNumberRanges(): Promise<MasterNumberRangeRecord[]> {
@@ -1188,6 +1206,9 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             await backfillLargeMasterSyncV3Categories(db);
         });
         await this.migrateLegacyCollectionsBlobTable();
+        const captureColumns=(await db.query('PRAGMA table_info(pos_dispatch_native_capture_v1)')).values||[];
+        if(!captureColumns.some((column:any)=>column.name==='financial_intent_digest'))await db.execute('ALTER TABLE pos_dispatch_native_capture_v1 ADD COLUMN financial_intent_digest TEXT;',false);
+
     }
 
     private async readStoredDocuments(collectionName: string): Promise<any[]> {
@@ -1551,26 +1572,27 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         }
     }
 
-    private async executeUnlocked(statements: Array<{ statement: string; values: any[] }>, precondition?: () => Promise<void>, nativeFinancial=false): Promise<void> {
+    private async executeUnlocked(statements: Array<{ statement: string; values: any[] }>, precondition?: () => Promise<void|false>, nativeFinancial=false,postcondition?:()=>Promise<void>): Promise<void> {
         const db = this.ensureDb();
         const executable = statements.map((entry) => ({
             statement: entry.statement.trim(),
             values: entry.values,
         }));
 
-        if(nativeFinancial){await this.withNativeTransaction(async()=>{await precondition?.();for(const entry of executable)await db.run(entry.statement,entry.values,false);});return;}
+        if(nativeFinancial){await this.withNativeTransaction(async()=>{const proceed=await precondition?.();if(proceed!==false)for(const entry of executable)await db.run(entry.statement,entry.values,false);await postcondition?.();});return;}
 
-        if (!precondition && typeof (db as any).executeSet === 'function') {
+        if (!precondition && !postcondition && typeof (db as any).executeSet === 'function') {
             await (db as any).executeSet(executable, true, 'no');
             return;
         }
 
         await db.execute('BEGIN TRANSACTION;', false);
         try {
-            await precondition?.();
-            for (const entry of executable) {
+            const proceed=await precondition?.();
+            if(proceed!==false)for (const entry of executable) {
                 await db.run(entry.statement, entry.values, false);
             }
+            await postcondition?.();
             await db.execute('COMMIT;', false);
         } catch (error) {
             await this.rollbackTransaction(db);

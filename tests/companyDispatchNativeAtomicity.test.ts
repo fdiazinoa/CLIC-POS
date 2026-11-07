@@ -72,3 +72,46 @@ test('a stripped inventory contract fails native preparation before a possible p
  await assert.rejects(f.adapter.prepareDispatchPrecharge({checkoutId:'checkout',transactionId:document.id,poolId:'pool',demandDigest:'a'.repeat(64),source,demands:[{quotaId:'quota',quantityMinor:1000000}]}),/CANONICAL_CHECKOUT_SOURCE_REQUIRED/);
  assert.equal((f.db.prepare('SELECT count(*) n FROM pos_dispatch_precharge_v1').get() as {n:number}).n,0);
 });
+test('an existing foreign outbox event ID rejects the whole financial plan before quota or cursor consumption',async t=>{
+ const f=await setup();t.after(()=>f.db.close());await f.adapter.prepareDispatchPrecharge({checkoutId:'checkout',transactionId:document.id,poolId:'pool',demandDigest:'a'.repeat(64),source:document,demands:[{quotaId:'quota',quantityMinor:1000000}]});await f.adapter.markDispatchEffectPossible('checkout','b'.repeat(64),document.payments);
+ const foreign=JSON.stringify({transaction:{id:id(199),total:999}});f.db.prepare("INSERT INTO sync_outbox_v2(event_id,event_type,aggregate_type,aggregate_id,schema_version,payload_json,created_at,updated_at)VALUES(?,'SALE_POSTED','TRANSACTION',?,1,?,'old','old')").run(id(92),id(199),foreign);
+ await assert.rejects(f.adapter.commitFinancialTransaction(commit()),/DISPATCH_OUTBOX_EVENT_CONFLICT/);
+ assert.equal((f.db.prepare('SELECT consumed_minor n FROM pos_dispatch_quota_v1').get() as {n:number}).n,0);assert.equal((f.db.prepare('SELECT last_sequence n FROM pos_dispatch_capture_cursor_v1').get() as {n:number}).n,0);assert.equal(f.documents('transactions').length,0);
+ assert.equal((f.db.prepare('SELECT payload_json FROM sync_outbox_v2').get() as {payload_json:string}).payload_json,foreign);
+});
+test('a silently ignored outbox INSERT is detected by a same-transaction postcondition and rolls all effects back',async t=>{
+ const f=await setup();t.after(()=>f.db.close());await f.adapter.prepareDispatchPrecharge({checkoutId:'checkout',transactionId:document.id,poolId:'pool',demandDigest:'a'.repeat(64),source:document,demands:[{quotaId:'quota',quantityMinor:1000000}]});await f.adapter.markDispatchEffectPossible('checkout','b'.repeat(64),document.payments);
+ f.db.exec('CREATE TRIGGER silently_ignore_outbox BEFORE INSERT ON sync_outbox_v2 BEGIN SELECT RAISE(IGNORE);END');
+ await assert.rejects(f.adapter.commitFinancialTransaction(commit()),/DISPATCH_OUTBOX_EVENT_CONFLICT/);
+ assert.equal((f.db.prepare('SELECT count(*) n FROM pos_dispatch_native_capture_v1').get() as {n:number}).n,0);assert.equal((f.db.prepare('SELECT last_sequence n FROM pos_dispatch_capture_cursor_v1').get() as {n:number}).n,0);assert.equal((f.db.prepare('SELECT consumed_minor n FROM pos_dispatch_quota_v1').get() as {n:number}).n,0);assert.equal(f.documents('transactionHistory').length,0);
+ assert.equal((f.db.prepare('SELECT phase FROM pos_dispatch_precharge_v1').get() as {phase:string}).phase,'EFFECT_POSSIBLE');
+});
+test('exact financial replay preserves outbox status and never reapplies ancillary mutations; changed plans conflict',async t=>{
+ const f=await setup();t.after(()=>f.db.close());await f.adapter.prepareDispatchPrecharge({checkoutId:'checkout',transactionId:document.id,poolId:'pool',demandDigest:'a'.repeat(64),source:document,demands:[{quotaId:'quota',quantityMinor:1000000}]});await f.adapter.markDispatchEffectPossible('checkout','b'.repeat(64),document.payments);
+ const input=commit();input.documents.push({collectionName:'wallets',document:{id:'wallet',balance:10} as any,requireAbsent:true});await f.adapter.commitFinancialTransaction(input);
+ await f.adapter.saveDocument('wallets',{id:'wallet',balance:15});f.db.exec("UPDATE sync_outbox_v2 SET status='SENDING'");
+ await f.adapter.commitFinancialTransaction(input);assert.equal(f.documents('wallets')[0].balance,15);assert.equal((f.db.prepare('SELECT status FROM sync_outbox_v2').get() as {status:string}).status,'SENDING');assert.equal((f.db.prepare('SELECT last_sequence n FROM pos_dispatch_capture_cursor_v1').get() as {n:number}).n,1);
+ const changed=structuredClone(input);(changed.documents.at(-1)!.document as any).balance=999;
+ await assert.rejects(f.adapter.commitFinancialTransaction(changed),/DISPATCH_CAPTURE_REPLAY_CONFLICT/);assert.equal(f.documents('wallets')[0].balance,15);assert.equal((f.db.prepare('SELECT consumed_minor n FROM pos_dispatch_quota_v1').get() as {n:number}).n,1000000);
+});
+test('a silently ignored history write cannot commit a capture or publish its outbox',async t=>{
+ const f=await setup();t.after(()=>f.db.close());await f.adapter.prepareDispatchPrecharge({checkoutId:'checkout',transactionId:document.id,poolId:'pool',demandDigest:'a'.repeat(64),source:document,demands:[{quotaId:'quota',quantityMinor:1000000}]});await f.adapter.markDispatchEffectPossible('checkout','b'.repeat(64),document.payments);
+ f.db.exec("CREATE TRIGGER silently_ignore_history BEFORE INSERT ON documents WHEN NEW.collection_name='transactionHistory' BEGIN SELECT RAISE(IGNORE);END");
+ await assert.rejects(f.adapter.commitFinancialTransaction(commit()),/DISPATCH_RETAINED_SOURCE_REQUIRED/);
+ assert.equal((f.db.prepare('SELECT count(*) n FROM sync_outbox_v2').get() as {n:number}).n,0);assert.equal((f.db.prepare('SELECT count(*) n FROM pos_dispatch_native_capture_v1').get() as {n:number}).n,0);assert.equal((f.db.prepare('SELECT consumed_minor n FROM pos_dispatch_quota_v1').get() as {n:number}).n,0);
+});
+test('the prior capture schema upgrades without fabricating a missing financial-plan proof or replaying its mutations',async t=>{
+ const f=await setup();t.after(()=>f.db.close());await f.adapter.prepareDispatchPrecharge({checkoutId:'checkout',transactionId:document.id,poolId:'pool',demandDigest:'a'.repeat(64),source:document,demands:[{quotaId:'quota',quantityMinor:1000000}]});await f.adapter.markDispatchEffectPossible('checkout','b'.repeat(64),document.payments);const input=commit();await f.adapter.commitFinancialTransaction(input);
+ const source=structuredClone(f.documents('transactionHistory')[0]);
+ f.db.exec('ALTER TABLE pos_dispatch_native_capture_v1 DROP COLUMN financial_intent_digest');await (f.adapter as unknown as {initSchema():Promise<void>}).initSchema();
+ assert.equal((f.db.prepare('SELECT financial_intent_digest FROM pos_dispatch_native_capture_v1').get() as {financial_intent_digest:string|null}).financial_intent_digest,null);
+ await assert.rejects(f.adapter.commitFinancialTransaction(input),/DISPATCH_CAPTURE_RECONCILIATION_REQUIRED/);
+ assert.deepEqual(f.documents('transactionHistory')[0],source);assert.equal((f.db.prepare('SELECT last_sequence n FROM pos_dispatch_capture_cursor_v1').get() as {n:number}).n,1);assert.equal((f.db.prepare('SELECT consumed_minor n FROM pos_dispatch_quota_v1').get() as {n:number}).n,1000000);
+});
+test('the native financial plan is isolated without requiring structuredClone in an older WebView',async t=>{
+ const f=await setup();t.after(()=>f.db.close());await f.adapter.prepareDispatchPrecharge({checkoutId:'checkout',transactionId:document.id,poolId:'pool',demandDigest:'a'.repeat(64),source:document,demands:[{quotaId:'quota',quantityMinor:1000000}]});await f.adapter.markDispatchEffectPossible('checkout','b'.repeat(64),document.payments);
+ const input=commit(),original=Object.getOwnPropertyDescriptor(globalThis,'structuredClone');Object.freeze(input);Object.freeze(input.documents);
+ Object.defineProperty(globalThis,'structuredClone',{value:undefined,configurable:true,writable:true});
+ try{await f.adapter.commitFinancialTransaction(input);}finally{if(original)Object.defineProperty(globalThis,'structuredClone',original);else delete(globalThis as any).structuredClone;}
+ assert.equal(f.documents('transactionHistory')[0].companyDispatchSource.sequence,1);assert.equal((f.db.prepare('SELECT count(*) n FROM sync_outbox_v2').get() as {n:number}).n,1);
+});

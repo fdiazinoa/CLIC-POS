@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS pos_dispatch_active_pool_v1(singleton INTEGER PRIMARY
 CREATE TABLE IF NOT EXISTS pos_dispatch_capture_cursor_v1(pool_id TEXT PRIMARY KEY REFERENCES pos_dispatch_pool_v1(pool_id),last_sequence INTEGER NOT NULL CHECK(last_sequence>=0));
 CREATE TRIGGER IF NOT EXISTS dispatch_capture_cursor_monotonic BEFORE UPDATE ON pos_dispatch_capture_cursor_v1 WHEN NEW.pool_id IS NOT OLD.pool_id OR NEW.last_sequence<>OLD.last_sequence+1 BEGIN SELECT RAISE(ABORT,'DISPATCH_CAPTURE_CURSOR_CONFLICT');END;
 CREATE TRIGGER IF NOT EXISTS dispatch_capture_cursor_durable BEFORE DELETE ON pos_dispatch_capture_cursor_v1 BEGIN SELECT RAISE(ABORT,'DISPATCH_CAPTURE_CURSOR_DURABLE');END;
-CREATE TABLE IF NOT EXISTS pos_dispatch_native_capture_v1(checkout_id TEXT PRIMARY KEY,pool_id TEXT NOT NULL REFERENCES pos_dispatch_pool_v1(pool_id),transaction_id TEXT NOT NULL UNIQUE,event_id TEXT NOT NULL UNIQUE,sequence INTEGER NOT NULL CHECK(sequence>0),source_snapshot_json TEXT NOT NULL,UNIQUE(pool_id,sequence),FOREIGN KEY(checkout_id,pool_id,transaction_id,event_id) REFERENCES pos_dispatch_precharge_v1(checkout_id,pool_id,transaction_id,event_id));
+CREATE TABLE IF NOT EXISTS pos_dispatch_native_capture_v1(checkout_id TEXT PRIMARY KEY,pool_id TEXT NOT NULL REFERENCES pos_dispatch_pool_v1(pool_id),transaction_id TEXT NOT NULL UNIQUE,event_id TEXT NOT NULL UNIQUE,sequence INTEGER NOT NULL CHECK(sequence>0),source_snapshot_json TEXT NOT NULL,financial_intent_digest TEXT,UNIQUE(pool_id,sequence),FOREIGN KEY(checkout_id,pool_id,transaction_id,event_id) REFERENCES pos_dispatch_precharge_v1(checkout_id,pool_id,transaction_id,event_id));
 CREATE TRIGGER IF NOT EXISTS dispatch_capture_immutable BEFORE UPDATE ON pos_dispatch_native_capture_v1 BEGIN SELECT RAISE(ABORT,'DISPATCH_CAPTURE_IMMUTABLE');END;
 CREATE TRIGGER IF NOT EXISTS dispatch_capture_durable BEFORE DELETE ON pos_dispatch_native_capture_v1 BEGIN SELECT RAISE(ABORT,'DISPATCH_CAPTURE_DURABLE');END;
 CREATE TABLE IF NOT EXISTS pos_dispatch_quota_v1(id TEXT PRIMARY KEY,pool_id TEXT NOT NULL REFERENCES pos_dispatch_pool_v1(pool_id),authority_json TEXT NOT NULL,authority_hash TEXT NOT NULL,granted_minor INTEGER NOT NULL CHECK(granted_minor>0),consumed_minor INTEGER NOT NULL DEFAULT 0 CHECK(consumed_minor>=0 AND consumed_minor<=granted_minor),returned_minor INTEGER NOT NULL DEFAULT 0 CHECK(returned_minor>=0 AND consumed_minor+returned_minor<=granted_minor),state TEXT NOT NULL CHECK(state IN('ACTIVE','RETURN_PENDING','RETURNED')));
@@ -125,20 +125,47 @@ export async function installDispatchQuota(sql:DispatchSQL,delivery:import('../d
 
 /** The financial writer seals the final receipt and assigns its sequence only at
  * commit. An abandoned PREPARED checkout therefore never creates a cursor gap. */
-export async function sealDispatchNativeCapture(sql:DispatchSQL,checkoutId:string,transactionId:string,eventId:string,source:Record<string,unknown>):Promise<Record<string,unknown>>{
+export async function sealDispatchNativeCapture(sql:DispatchSQL,checkoutId:string,transactionId:string,eventId:string,source:Record<string,unknown>,financialIntentDigest:string):Promise<Record<string,unknown>>{
+ if(!/^[a-f0-9]{64}$/.test(financialIntentDigest))fail('DISPATCH_FINANCIAL_INTENT_REQUIRED');
  const charge=(await sql.query("SELECT * FROM pos_dispatch_precharge_v1 WHERE checkout_id=? AND transaction_id=? AND event_id=? AND phase='COMMITTED'",[checkoutId,transactionId,eventId])).values?.[0];
  if(!charge||source.inventoryEffectsContract!=='WAREHOUSE_RESERVATION_V1')fail('DISPATCH_CAPTURE_COMMIT_REQUIRED');
  const descriptor=source.companyDispatchSource as Record<string,unknown>|undefined;
  if(descriptor?.checkoutId!==checkoutId||source.id!==transactionId)fail('DISPATCH_CAPTURE_SOURCE_IDENTITY');
  const prior=(await sql.query('SELECT * FROM pos_dispatch_native_capture_v1 WHERE checkout_id=?',[checkoutId])).values?.[0];
- if(prior){const retained=JSON.parse(String(prior.source_snapshot_json));const candidate={...source,companyDispatchSource:{...descriptor,sequence:Number(prior.sequence)}};
-  if(prior.transaction_id!==transactionId||prior.event_id!==eventId||canonicalDispatchJSON(retained)!==canonicalDispatchJSON(candidate))fail('DISPATCH_CAPTURE_REPLAY_CONFLICT');return retained;
+ if(prior){if(!/^[a-f0-9]{64}$/.test(String(prior.financial_intent_digest||'')))fail('DISPATCH_CAPTURE_RECONCILIATION_REQUIRED');const retained=JSON.parse(String(prior.source_snapshot_json));const candidate={...source,companyDispatchSource:{...descriptor,sequence:Number(prior.sequence)}};
+  if(prior.transaction_id!==transactionId||prior.event_id!==eventId||prior.financial_intent_digest!==financialIntentDigest||canonicalDispatchJSON(retained)!==canonicalDispatchJSON(candidate))fail('DISPATCH_CAPTURE_REPLAY_CONFLICT');return retained;
  }
  const cursor=(await sql.query('SELECT last_sequence FROM pos_dispatch_capture_cursor_v1 WHERE pool_id=?',[charge.pool_id])).values?.[0];
  const sequence=Number(cursor?.last_sequence)+1;if(!cursor||!Number.isSafeInteger(sequence)||sequence<1)fail('DISPATCH_NATIVE_CURSOR_REQUIRED');
  const captured={...source,companyDispatchSource:{...descriptor,sequence}};
  await sql.run('UPDATE pos_dispatch_capture_cursor_v1 SET last_sequence=? WHERE pool_id=? AND last_sequence=?',[sequence,charge.pool_id,sequence-1],false);
  if(Number((await sql.query('SELECT changes() n')).values?.[0]?.n)!==1)fail('DISPATCH_CAPTURE_CURSOR_CONFLICT');
- await sql.run('INSERT INTO pos_dispatch_native_capture_v1(checkout_id,pool_id,transaction_id,event_id,sequence,source_snapshot_json)VALUES(?,?,?,?,?,?)',[checkoutId,charge.pool_id,transactionId,eventId,sequence,JSON.stringify(captured)],false);
+ await sql.run('INSERT INTO pos_dispatch_native_capture_v1(checkout_id,pool_id,transaction_id,event_id,sequence,source_snapshot_json,financial_intent_digest)VALUES(?,?,?,?,?,?,?)',[checkoutId,charge.pool_id,transactionId,eventId,sequence,JSON.stringify(captured),financialIntentDigest],false);
  return captured;
+}
+
+/** Snapshot the whole original financial plan, not just the receipt. Reusing an
+ * event cannot smuggle a second wallet/customer/ledger mutation into a replay. */
+export async function dispatchFinancialIntentDigest(input:{documents:Array<{collectionName:string;document:Record<string,unknown>}>;outboxEvent:{payload:Record<string,unknown>};additionalOutboxEvents?:Array<{payload:Record<string,unknown>}>;dispatchCommit?:{transactionId:string}}):Promise<string>{
+ const plan=JSON.parse(JSON.stringify(input));
+ const normalize=(document:Record<string,unknown>)=>{if(document?.id===input.dispatchCommit?.transactionId&&document.companyDispatchSource&&typeof document.companyDispatchSource==='object')delete (document.companyDispatchSource as Record<string,unknown>).sequence;};
+ for(const mutation of plan.documents)if(['transactions','transactionHistory'].includes(mutation.collectionName))normalize(mutation.document);
+ for(const event of [plan.outboxEvent,...(plan.additionalOutboxEvents||[])])if(event.payload?.transaction)normalize(event.payload.transaction);
+ return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(canonicalDispatchJSON(plan)))),value=>value.toString(16).padStart(2,'0')).join('');
+}
+
+/** WebViews without structuredClone must still take an owned snapshot before
+ * waiting on the writer queue. Financial plans contain data, never callbacks. */
+export function snapshotDispatchFinancialPlan<T>(value:T):T{
+ const seen=new WeakMap<object,unknown>();
+ const copy=(entry:unknown):unknown=>{
+  if(entry===null||typeof entry!=='object'){if(typeof entry==='function'||typeof entry==='symbol'||typeof entry==='bigint')fail('DISPATCH_FINANCIAL_PLAN_NOT_SERIALIZABLE');return entry;}
+  if(seen.has(entry))fail('DISPATCH_FINANCIAL_PLAN_CYCLE');
+  if(entry instanceof Date){if(!Number.isFinite(entry.getTime()))fail('DISPATCH_FINANCIAL_PLAN_DATE');return new Date(entry.getTime());}
+  if(entry instanceof ArrayBuffer)return entry.slice(0);
+  if(ArrayBuffer.isView(entry)){const bytes=entry.buffer.slice(entry.byteOffset,entry.byteOffset+entry.byteLength);return entry instanceof DataView?new DataView(bytes):new (entry.constructor as new(buffer:ArrayBufferLike)=>unknown)(bytes);}
+  if(!Array.isArray(entry)&&Object.getPrototypeOf(entry)!==Object.prototype&&Object.getPrototypeOf(entry)!==null)fail('DISPATCH_FINANCIAL_PLAN_NOT_SERIALIZABLE');
+  seen.set(entry,true);const result=Array.isArray(entry)?entry.map(copy):Object.fromEntries(Object.entries(entry).map(([key,item])=>[key,copy(item)]));seen.delete(entry);return result;
+ };
+ return copy(value) as T;
 }
