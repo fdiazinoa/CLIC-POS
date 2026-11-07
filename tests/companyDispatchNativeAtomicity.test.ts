@@ -151,3 +151,13 @@ test('a prototype bare APPLIED receipt is requeued unchanged for retained-proof 
  const before=f.db.prepare('SELECT event_id,payload_json FROM sync_outbox_v2').get();await (f.adapter as unknown as {initSchema():Promise<void>}).initSchema();
  assert.equal((f.db.prepare('SELECT status FROM sync_outbox_v2').get() as {status:string}).status,'RETRY_WAIT');assert.deepEqual(f.db.prepare('SELECT event_id,payload_json FROM sync_outbox_v2').get(),before);assert.equal((f.db.prepare('SELECT consumed_minor n FROM pos_dispatch_quota_v1').get() as {n:number}).n,1000000);assert.equal((f.db.prepare('SELECT last_sequence n FROM pos_dispatch_capture_cursor_v1').get() as {n:number}).n,1);
 });
+
+test('restart cannot turn an unresolved nonfiscal payment into another funded checkout even when quota remains',async t=>{
+ const f=await setup();t.after(()=>f.db.close());f.db.exec("INSERT INTO pos_dispatch_quota_v1 SELECT 'spare',pool_id,authority_json,authority_hash,2000000,0,0,'ACTIVE' FROM pos_dispatch_quota_v1;INSERT INTO pos_dispatch_quota_delivery_v1 VALUES('spare','witness')");
+ await f.adapter.prepareDispatchPrecharge({checkoutId:'checkout',transactionId:document.id,poolId:'pool',demandDigest:'a'.repeat(64),source:document,demands:[{quotaId:'quota',quantityMinor:1000000}]});await f.adapter.markDispatchEffectPossible('checkout','b'.repeat(64),document.payments);
+ const {CapacitorSQLiteAdapter}=await import('../services/db/adapters/CapacitorSQLiteAdapter');const restarted=new CapacitorSQLiteAdapter();Object.assign(restarted,{db:(f.adapter as any).db,isReady:true});
+ const next=structuredClone(document);next.id=id(999);next.companyDispatchSource.checkoutId='after-restart';next.companyDispatchSource.lines[0].quotaAllocations[0].quotaId='spare';
+ await assert.rejects(restarted.prepareDispatchPrecharge({checkoutId:'after-restart',transactionId:next.id,poolId:'pool',demandDigest:'a'.repeat(64),source:next,demands:[{quotaId:'spare',quantityMinor:1000000}]}),/PREVIOUS_PAYMENT_RECONCILIATION_REQUIRED/);
+ assert.equal((f.db.prepare('SELECT count(*) n FROM pos_dispatch_precharge_v1').get() as any).n,1);assert.equal((f.db.prepare('SELECT phase FROM pos_dispatch_precharge_v1').get() as any).phase,'EFFECT_POSSIBLE');assert.equal((f.db.prepare('SELECT consumed_minor n FROM pos_dispatch_quota_v1').get() as any).n,0);
+ await restarted.prepareDispatchPrecharge({checkoutId:'checkout',transactionId:document.id,poolId:'pool',demandDigest:'a'.repeat(64),source:document,demands:[{quotaId:'quota',quantityMinor:1000000}]});
+});

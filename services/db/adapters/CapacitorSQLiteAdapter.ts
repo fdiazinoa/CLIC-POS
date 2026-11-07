@@ -589,6 +589,22 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
     async acknowledgeDispatchAdoption(eventId:string,proof:DispatchAdoptionProof,at:string):Promise<void>{
         await this.withWriteLock(()=>this.withNativeTransaction(()=>acknowledgeDispatchAdoption(this.ensureDb() as any,eventId,proof,at)));
     }
+    async readDispatchPendingCheckout(cartIds?:string[]):Promise<{checkoutId:string;transactionId:string;phase:string;source:Record<string,unknown>;payments:import('../../../types').PaymentEntry[];receipt?:Transaction}|null>{
+        return this.withWriteLock(async()=>{
+            const rows=(await this.ensureDb().query("SELECT p.* FROM pos_dispatch_precharge_v1 p JOIN pos_dispatch_active_pool_v1 a ON a.pool_id=p.pool_id JOIN master_v3_operational_owner o ON o.binding=a.native_binding WHERE a.singleton=1 AND p.phase IN('PREPARED','EFFECT_POSSIBLE') AND NOT EXISTS(SELECT 1 FROM pos_fiscal_checkouts_v2 f WHERE f.checkout_id=p.checkout_id) ORDER BY p.checkout_id LIMIT 2")).values||[];
+            if(rows.length>1)throw Error('DISPATCH_PREVIOUS_PAYMENT_RECONCILIATION_REQUIRED');
+            let row=rows[0];
+            if(!row&&cartIds?.length){
+                if(cartIds.some(id=>typeof id!=='string'||!id)||new Set(cartIds).size!==cartIds.length)throw Error('DISPATCH_CART_LINE_IDENTITY');
+                const committed=(await this.ensureDb().query("SELECT p.*,c.source_snapshot_json FROM pos_dispatch_precharge_v1 p JOIN pos_dispatch_active_pool_v1 a ON a.pool_id=p.pool_id JOIN master_v3_operational_owner o ON o.binding=a.native_binding JOIN pos_dispatch_native_capture_v1 c ON c.checkout_id=p.checkout_id AND c.transaction_id=p.transaction_id WHERE a.singleton=1 AND p.phase='COMMITTED' AND (SELECT json_group_array(cart_id) FROM (SELECT json_extract(value,'$.cartId') cart_id FROM json_each(p.source_json,'$.items') ORDER BY cart_id))=? LIMIT 2",[JSON.stringify([...cartIds].sort())])).values||[];
+                if(committed.length>1)throw Error('DISPATCH_PREVIOUS_PAYMENT_RECONCILIATION_REQUIRED');row=committed[0];
+            }
+            if(!row)return null;
+            const receipt=row.source_snapshot_json?JSON.parse(String(row.source_snapshot_json)) as Transaction:undefined;
+            if(receipt&&!((await this.ensureDb().query("SELECT 1 retained FROM documents WHERE collection_name='transactionHistory' AND doc_id=?",[row.transaction_id])).values?.length))throw Error('DISPATCH_RETAINED_RECEIPT_REQUIRED');
+            return{checkoutId:String(row.checkout_id),transactionId:String(row.transaction_id),phase:String(row.phase),source:JSON.parse(String(row.source_json)),payments:receipt?.payments||(row.effects_json?JSON.parse(String(row.effects_json)):[]),...(receipt?{receipt}:{})};
+        });
+    }
     async readDispatchCheckoutAuthority(checkoutId?:string):Promise<import('../../dispatch/DispatchCheckoutSource').DispatchCheckoutAuthority>{
         return this.withWriteLock(async()=>{
             const pool=(await this.ensureDb().query('SELECT p.*,a.native_binding FROM pos_dispatch_active_pool_v1 a JOIN pos_dispatch_pool_v1 p ON p.pool_id=a.pool_id JOIN master_v3_operational_owner o ON o.binding=a.native_binding WHERE a.singleton=1')).values?.[0];
@@ -614,6 +630,8 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
     private async prepareDispatchPrechargeUnlocked(input:{checkoutId:string;transactionId:string;poolId:string;demandDigest:string;source:Record<string,unknown>;demands:DispatchDemand[]}):Promise<void>{
             const active=(await this.ensureDb().query('SELECT a.pool_id FROM pos_dispatch_active_pool_v1 a JOIN master_v3_operational_owner o ON o.binding=a.native_binding WHERE a.singleton=1')).values?.[0];
             if(active?.pool_id!==input.poolId)throw Error('DISPATCH_ACTIVE_BINDING_POOL_MISMATCH');
+            const uncertain=(await this.ensureDb().query("SELECT checkout_id FROM pos_dispatch_precharge_v1 WHERE pool_id=? AND phase='EFFECT_POSSIBLE' AND checkout_id<>? LIMIT 1",[input.poolId,input.checkoutId])).values?.[0];
+            if(uncertain)throw Error('DISPATCH_PREVIOUS_PAYMENT_RECONCILIATION_REQUIRED');
             const cursor=(await this.ensureDb().query('SELECT last_sequence FROM pos_dispatch_capture_cursor_v1 WHERE pool_id=?',[input.poolId])).values?.[0];
             if(!cursor||!Number.isSafeInteger(Number(cursor.last_sequence))||Number(cursor.last_sequence)<0)throw Error('DISPATCH_NATIVE_CURSOR_REQUIRED');
             if(!Array.isArray(input.demands)||input.demands.length<1||input.demands.length>200)throw Error('DISPATCH_DEMAND_INVALID');

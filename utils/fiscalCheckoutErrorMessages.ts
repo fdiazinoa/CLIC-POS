@@ -21,6 +21,7 @@ export const PAID_ATTEMPT_ACTION =
 export const describeFiscalCheckoutFailure = (message: string | null | undefined): string | null => {
   const text = String(message || '').trim();
   if (!text) return null;
+  if(/DISPATCH_PREVIOUS_PAYMENT_RECONCILIATION_REQUIRED/.test(text))return 'Quedó un pago anterior pendiente en esta caja. Recupera su recibo antes de iniciar otro cobro; no se liberaron sus cupos.';
   if (RETIREMENT_DISABLED.test(text)) {
     return PAID_ATTEMPT.test(text)
       ? `${RETIREMENT_DISABLED_ACTION} ${PAID_ATTEMPT_ACTION}`

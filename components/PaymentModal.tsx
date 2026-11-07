@@ -75,7 +75,7 @@ import { sendReceiptEmailViaErp } from '../services/email/receiptEmailService';
 import { buildReceiptEmailPayload } from '../services/email/receiptEmailPayload';
 import { setLargeMasterSyncV3CriticalOperation } from '../services/sync/LargeMasterSyncV3OperationGate';
 
-export type PaymentEffectsFence = (() => void|Promise<void>) & {completedTransaction?: Transaction;recordPaymentEffect?:(paymentId:string)=>Promise<void>;preparePaymentEffects?:(payments:PaymentEntry[])=>Promise<void>;futureCheckout?:{checkoutId:string;transactionId:string;operationId?:string};tablePart?:{ticketId:string;receiptId:string;operationId:string;planFingerprint:string}};
+export type PaymentEffectsFence = (() => void|Promise<void>) & {completedTransaction?: Transaction;recordPaymentEffect?:(paymentId:string)=>Promise<void>;preparePaymentEffects?:(payments:PaymentEntry[])=>Promise<void>;recoveryPayments?:PaymentEntry[];futureCheckout?:{checkoutId:string;transactionId:string;operationId?:string};tablePart?:{ticketId:string;receiptId:string;operationId:string;planFingerprint:string}};
 
 interface PaymentModalProps {
    openingTrace?: PosInteractionTrace | null;
@@ -1128,14 +1128,16 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
          if (beforePaymentEffects) releasePaymentFence = await beforePaymentEffects(payments.map(payment=>payment.id),[...payments.map(payment=>payment.method),...(canFinalizeWithTypedAmount?[activeRuntimeMethod]:[])]);
          workflowPaymentFenceRef.current=releasePaymentFence||null;assertContext(releasePaymentFence);
          const completed = releasePaymentFence?.completedTransaction;
-         let paymentsToConfirm = completed?.payments || payments;
+         const recoveringPayment=Boolean(releasePaymentFence?.recoveryPayments);
+         let paymentsToConfirm = completed?.payments || releasePaymentFence?.recoveryPayments || payments;
+         if(recoveringPayment)setSuccessNotice('Se está recuperando el efectivo del intento anterior. No vuelva a cobrarlo.');
          if (!completed && !canFinalize) { alert('Monto insuficiente'); return; }
          if (!completed && isCreditActionBlocked) { setFinalizeError('Límite de crédito excedido. Requiere autorización.'); requestSupervisor('CREDIT_OVERRIDE'); return; }
          if (!completed) {
 
          // UX: If cashier typed an amount but didn't press "Agregar",
          // auto-create the payment entry so "Finalizar Venta" still works.
-         if (canFinalizeWithTypedAmount) {
+         if (canFinalizeWithTypedAmount&&!recoveringPayment) {
             if (!activePaymentMethod) {
                setFinalizeError('Seleccione un método de pago.');
                return;
@@ -1229,7 +1231,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
             trace,
             'SYNC_START',
             'SYNC_END',
-            () => authorizePendingGatewayPayments(paymentsToConfirm),
+            () => recoveringPayment?Promise.resolve(paymentsToConfirm):authorizePendingGatewayPayments(paymentsToConfirm),
          );
          setPayments(paymentsToConfirm);
          }

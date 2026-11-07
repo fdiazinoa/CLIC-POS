@@ -1,3 +1,4 @@
+import {assertInventoryPresentationReturnAllowed} from '../services/inventoryPresentations/selection';
 import {createUuid} from '../utils/uuid';
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -46,13 +47,13 @@ const box: ArticleFormat = {schemaVersion:1,id:'fixture-box',variantId:null,name
 const product = (formatted = true): Product => ({id:'fixture-item',name:'Fixture',price:10,category:'fixture',images:[],attributes:[],variants:[],tariffs:[],appliedTaxIds:[],
   ...(formatted ? {article_formats:{schema_version:1,inventory_quantity_unit:'BASE',item_id:'fixture-item',formats:[box]}} : {})});
 
-function fixture(isReturnMode: boolean, articleFormatsEnabled: boolean, isMobile = false) {
+function fixture(isReturnMode: boolean, articleFormatsEnabled: boolean, isMobile = false,dispatchMode='IMMEDIATE') {
   const effects: {name:string;value:unknown}[]=[];
   let cart: CartItem[]=[];
   const pending: Promise<unknown>[]=[];
   const effect = (name:string) => (value:unknown) => effects.push({name,value});
   const latestAddCart={current:cart};
-  const common: Record<string,any> = {createUuid,formatRuntime:null,isReturnMode,articleFormatsEnabled,isMobile,defaultSalesWarehouseId:'fixture-wh',activeTariffId:'retail',
+  const common: Record<string,any> = {dispatchProjection:{mode:dispatchMode},assertInventoryPresentationReturnAllowed,createUuid,formatRuntime:null,isReturnMode,articleFormatsEnabled,isMobile,defaultSalesWarehouseId:'fixture-wh',activeTariffId:'retail',
     setErrorToast:effect('error'),setSelectedProductForVariants:effect('variants'),setFormatSelection:effect('formats'),setPendingProductToAdd:effect('pending'),
     setShowMobileConfigModal:effect('mobile'),setProductForScale:effect('scale'),setPendingTrackingProduct:effect('tracking'),setLastAddedCartId:effect('highlight'),
     assertOriginalSaleForFormatReturn,legacyMergeCandidate,addFormatLine,toBaseQuantity,crypto:{randomUUID:() => 'fixture-format-line'},cart,
@@ -109,7 +110,7 @@ test('legacy grid and variant returns remain base Unit x1 and variant quantity i
     if (entry === 'grid') productionHandler('handleProductClick',f.common)(p);
     else productionProp('ProductVariantSelector','onConfirm',f.common)(p,['Red'],12,{sku:'red-SKU',barcode:[],attributeValues:{Color:'Red'}});
     await f.flush();
-    assert.equal(f.cart.length,1);assert.equal(f.cart[0].quantity,-1);
+    assert.equal(f.cart.length,1,entry+': '+JSON.stringify(f.effects));assert.equal(f.cart[0].quantity,-1);
     assert.equal(f.cart[0].articleFormat,undefined);assert.equal(f.cart[0].baseQuantity,undefined);
     assert.equal(f.cart[0].price,entry === 'grid' ? 10 : 12);
   }
@@ -149,4 +150,10 @@ test('actual variant confirmation and both scanner paths preserve ERP_ID while r
  assert.equal(scan('7501234567893').format.variantId,erpId);assert.equal(scan('7501234567893').price,168);
  assert.equal(scan('legacy-variant-code').format.variantId,erpId);assert.equal(scan('legacy-variant-code').price,7);
  const cart=addFormatLine([],p,caseFormat,1,168,'format-line');assert.equal(cart[0].variantSku,sku);assert.equal(cart[0].articleFormat!.variantId,erpId);
+});
+
+test('the real add-to-cart producer gives a fresh UUID to the next warehouse-dispatch sale of the same item',async()=>{
+ const f=fixture(false,false,false,'WAREHOUSE_DISPATCH');const product={id:'ordinary-same-sku',name:'Synthetic',price:100,type:'PRODUCT',isInventoriable:true,taxable:false,appliedTaxIds:[]} as Product;
+ assert.equal(await f.common.performAddToCart(product),true);const first=f.cart[0].cartId;assert.match(first,/^[a-f0-9-]{36}$/);
+ f.common.onUpdateCart(()=>[]);assert.equal(await f.common.performAddToCart(product),true);const next=f.cart[0].cartId;assert.match(next,/^[a-f0-9-]{36}$/);assert.notEqual(next,first);assert.equal(f.cart[0].id,product.id);
 });
