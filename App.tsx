@@ -11663,6 +11663,7 @@ const AppContent: React.FC = () => {
   }, [fiscalStatusWorker,isDataLoaded,fiscalHistoryHydrated,isSecurityLoaded,deviceId,config.companyInfo.rnc,fiscalStatusLifecycleKey]);
 
   const handleTransactionComplete = async (txn: Transaction, onCommitted?: (transaction: Transaction) => void) => {
+    if(txn.inventoryEffectsContract==='WAREHOUSE_RESERVATION_V1'&&dbAdapter.readDispatchCommittedReceipt){const original=await dbAdapter.readDispatchCommittedReceipt(txn.id);if(original){if(financialIdentity(original)!==financialIdentity(txn))throw Error('DISPATCH_RETAINED_SOURCE_CHANGED');setTransactions(previous=>[...previous.filter(row=>row.id!==original.id),original]);onCommitted?.(original);return;}}
     if((txn as any).articleFormatWire?.schema_version===2){const original=await db.getDocument('transactionHistory',txn.id) as Transaction|null;if(!original||financialIdentity(original)!==financialIdentity(txn))throw Error('FISCAL_WORKFLOW_RETAINED_SOURCE_CHANGED');setTransactions(previous=>[...previous.filter(row=>row.id!==original.id),original]);return;}
     assertFormatsPostingClosed(txn.items || []);
     const fiscalTerminal = (config.terminals || []).find(terminal => terminal.config?.currentDeviceId === deviceId);

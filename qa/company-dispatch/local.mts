@@ -12,6 +12,7 @@ import { build } from 'esbuild';
 import ts from 'typescript';
 import SQLite from 'better-sqlite3';
 import { dispatchCommercialSource, dispatchPaymentIntents } from '../../services/db/CompanyDispatchEscrowStore';
+import {financialIdentity} from '../../services/db/LargeMasterSyncV3FinancialRetention';
 import { nativeFixture } from '../../tests/articleFormatsNativeFixture';
 import { getInitialConfig } from '../../constants';
 import { SubVertical } from '../../types';
@@ -138,7 +139,7 @@ for (const file of ['App.tsx', erp + '/server/routes/syncInbox.js'])
     sources.set(file, await readFile(file, 'utf8'));
 function requireText(file: string) { return sources.get(file)!; }
 const { assertFormatsPostingClosed } = await import('../../services/articleFormats/activation');
-const appComplete = callback('App.tsx', 'handleTransactionComplete', { assertFormatsPostingClosed, config, deviceId: ids.device, db: global.__dispatchLab.db, LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED: true, persistV3FinancialTransaction: r.persistV3FinancialTransaction, fiscalSinglePreparation: { commit: () => { throw Error('NO_FISCAL_NONE'); } }, readV3CompletedReservation: () => { throw Error('NO_RESERVATION_FIXTURE'); }, setTransactions: no, setCustomers: no, syncFiscalDocument: async () => { }, backgroundSyncManager: { triggerSync: async () => { } }, console });
+const appComplete = callback('App.tsx', 'handleTransactionComplete', { dbAdapter:n.adapter,financialIdentity,assertFormatsPostingClosed, config, deviceId: ids.device, db: global.__dispatchLab.db, LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED: true, persistV3FinancialTransaction: r.persistV3FinancialTransaction, fiscalSinglePreparation: { commit: () => { throw Error('NO_FISCAL_NONE'); } }, readV3CompletedReservation: () => { throw Error('NO_RESERVATION_FIXTURE'); }, setTransactions: no, setCustomers: no, syncFiscalDocument: async () => { }, backgroundSyncManager: { triggerSync: async () => { } }, console });
 const { normalizePosInboxEventPayload } = await import(erp + '/server/services/posSaleEventContract.js');
 const { V3_PLAN_KEY } = await import(erp + '/server/services/fiscal/posFiscalV3Source.js');
 const envelope = callback(erp + '/server/routes/syncInbox.js', 'buildPosEventEnvelope', { normalizePosInboxEventPayload, V3_PLAN_KEY });

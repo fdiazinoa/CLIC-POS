@@ -72,3 +72,15 @@ test('a superseded generation cannot reclaim the active slot at the same company
  assert.equal((f.db.prepare('SELECT pool_id FROM pos_dispatch_active_pool_v1').get() as {pool_id:string}).pool_id,dispatchPoolId(b.binding));assert.equal(await f.adapter.readDispatchActivePoolState(),'FROZEN');assert.equal((f.db.prepare('SELECT successor_pool_id FROM pos_dispatch_superseded_pool_v1').get() as {successor_pool_id:string}).successor_pool_id,dispatchPoolId(b.binding));
  await installNativeDispatchPool(b,f.hash,f.port);assert.throws(()=>f.db.exec('DELETE FROM pos_dispatch_superseded_pool_v1'),/SUPERSEDED_POOL_DURABLE/);
 });
+
+test('store-scoped policy upgrade preserves V1 financial coordinates and rejects late company-only authority',async t=>{
+ const f=await setup();t.after(()=>f.db.close());const old=snapshot();await installNativeDispatchPool(old,f.hash,f.port);const pool=dispatchPoolId(old.binding),before=f.db.prepare('SELECT * FROM pos_dispatch_pool_v1').get(),cursor=f.db.prepare('SELECT * FROM pos_dispatch_capture_cursor_v1').get();
+ const scoped=structuredClone(old);scoped.policy.store_id=scoped.binding.store_id;await installNativeDispatchPool(scoped,f.hash,f.port);
+ assert.deepEqual(f.db.prepare('SELECT * FROM pos_dispatch_pool_v1').get(),before);assert.deepEqual(f.db.prepare('SELECT * FROM pos_dispatch_capture_cursor_v1').get(),cursor);assert.equal(await f.adapter.dispatchNativeSchemaHash(),f.hash);assert.equal((f.db.prepare('SELECT store_id FROM pos_dispatch_policy_scope_v2 WHERE pool_id=?').get(pool) as any).store_id,id(3));
+ await assert.rejects(installNativeDispatchPool(old,f.hash,f.port),/STORE_UPGRADE_REQUIRED/);const forged=structuredClone(scoped);forged.policy.store_id=id(999);await assert.rejects(installNativeDispatchPool(forged,f.hash,f.port),/STORE_SCOPE/);
+});
+test('branch B revision1 does not compete with A revision9 and never tombstones the foreign store generation',async t=>{
+ const f=await setup();t.after(()=>f.db.close());const a=snapshot();a.policy.store_id=a.binding.store_id;a.policy.revision=9;await installNativeDispatchPool(a,f.hash,f.port);
+ const b=structuredClone(a);b.policy.store_id=id(301);b.policy.revision=1;b.policy.transition_id=id(302);b.binding.store_id=id(301);b.binding.id=id(303);b.binding.generation=id(304);b.barrier={id:id(305),nonce:id(306),state:'REQUIRED',transition_id:id(302),proof:null};
+ const config=f.documents('config')[0];config.terminals[0].config.erpBinding.storeId=b.binding.store_id;f.db.prepare("UPDATE documents SET data=? WHERE collection_name='config' AND doc_id='current'").run(JSON.stringify(config));await installNativeDispatchPool(b,f.hash,f.port);assert.equal((f.db.prepare('SELECT pool_id FROM pos_dispatch_active_pool_v1').get() as any).pool_id,dispatchPoolId(b.binding));assert.equal((f.db.prepare('SELECT count(*) n FROM pos_dispatch_superseded_pool_v1').get() as any).n,0);await assert.rejects(installNativeDispatchPool(a,f.hash,f.port),/CONFIG_SCOPE/);
+});
