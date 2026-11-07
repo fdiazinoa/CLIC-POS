@@ -1,7 +1,7 @@
 import {DISPATCH_OPERATOR_AUTH_SCHEMA} from '../../dispatch/DispatchOperatorAuthentication';
 import {assertDispatchFinancedSource} from '../../dispatch/DispatchFinancedSource';
 import {verifyDispatchQuotaDelivery,type DispatchQuotaDelivery,type DispatchScope} from '../../dispatch/DispatchAuthority';
-import {COMPANY_DISPATCH_ESCROW_SCHEMA,installDispatchQuota,prepareDispatchPrecharge,markDispatchEffectPossible,commitDispatchPrecharge,abandonDispatchPrecharge,type DispatchDemand} from '../CompanyDispatchEscrowStore';
+import {COMPANY_DISPATCH_ESCROW_SCHEMA,DISPATCH_FINANCIAL_SOURCE_GUARDS,installDispatchQuota,prepareDispatchPrecharge,markDispatchEffectPossible,commitDispatchPrecharge,sealDispatchNativeCapture,abandonDispatchPrecharge,type DispatchDemand} from '../CompanyDispatchEscrowStore';
 import {TRACKING_OPERATION_SCHEMA,prepareTrackingOperation,readTrackingOperation,recordTrackingPaymentEffect,assertTrackingOperationCommit,readCommittedTrackingReceipt,retireTrackingOperation,type TrackingOperation,type TrackingScope} from '../TrackingCheckoutOperation';
 import {base6,readV3Base6Stock} from '../V3Base6Stock';
 import {TRACKING_ALLOCATION_SCHEMA,installTrackingAllocation,prepareTrackingCheckout,fenceTrackingCheckout,abandonTrackingCheckout,consumeTrackingCheckout} from '../TrackingAllocationStore';
@@ -587,6 +587,8 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
     private async prepareDispatchPrechargeUnlocked(input:{checkoutId:string;transactionId:string;poolId:string;demandDigest:string;source:Record<string,unknown>;demands:DispatchDemand[]}):Promise<void>{
             const active=(await this.ensureDb().query('SELECT a.pool_id FROM pos_dispatch_active_pool_v1 a JOIN master_v3_operational_owner o ON o.binding=a.native_binding WHERE a.singleton=1')).values?.[0];
             if(active?.pool_id!==input.poolId)throw Error('DISPATCH_ACTIVE_BINDING_POOL_MISMATCH');
+            const cursor=(await this.ensureDb().query('SELECT last_sequence FROM pos_dispatch_capture_cursor_v1 WHERE pool_id=?',[input.poolId])).values?.[0];
+            if(!cursor||!Number.isSafeInteger(Number(cursor.last_sequence))||Number(cursor.last_sequence)<0)throw Error('DISPATCH_NATIVE_CURSOR_REQUIRED');
             if(!Array.isArray(input.demands)||input.demands.length<1||input.demands.length>200)throw Error('DISPATCH_DEMAND_INVALID');
             const pool=(await this.ensureDb().query('SELECT * FROM pos_dispatch_pool_v1 WHERE pool_id=?',[input.poolId])).values?.[0];
             const owner=(await this.ensureDb().query('SELECT native_binding FROM pos_dispatch_active_pool_v1 WHERE singleton=1')).values?.[0];
@@ -629,6 +631,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         await this.withWriteLock(()=>this.executeUnlocked([],()=>abandonDispatchPrecharge(this.ensureDb() as any,checkoutId),true));
     }
     async commitFinancialTransaction(input: FinancialCommitInput): Promise<void> {
+        if(input.dispatchCommit)input=structuredClone(input);
         const now = new Date().toISOString();
         const statements: Array<{ statement: string; values: any[] }> = [];
 
@@ -695,6 +698,14 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             const dispatchEvent=outboxEvents.find(e=>e.eventType==='SALE_POSTED'&&e.aggregateId===commit?.transactionId);
             if(!commit||dispatchSources.length!==1||source?.document.id!==commit.transactionId||!source.requireAbsent||!history?.requireAbsent||JSON.stringify(source.document)!==JSON.stringify(history.document)||JSON.stringify(dispatchEvent?.payload.transaction)!==JSON.stringify(source.document))throw Error('DISPATCH_ATOMIC_SOURCE_REQUIRED');
             await commitDispatchPrecharge(this.ensureDb() as any,commit.checkoutId,commit.transactionId,dispatchEvent!.eventId,source.document);
+            const captured=await sealDispatchNativeCapture(this.ensureDb() as any,commit.checkoutId,commit.transactionId,dispatchEvent!.eventId,source.document);
+            for(const mutation of input.documents)if(['transactions','transactionHistory'].includes(mutation.collectionName)&&mutation.document.id===commit.transactionId)mutation.document=captured as {id:string};
+            dispatchEvent!.payload.transaction=captured;
+            // These slots were built from the original draft. Serialize the sealed
+            // source only after native sequence allocation, inside this same TX.
+            for(let index=0;index<input.documents.length;index++)statements[index].values[2]=JSON.stringify(input.documents[index].document);
+            for(let index=0;index<outboxEvents.length;index++)statements[input.documents.length+index].values[5]=JSON.stringify(outboxEvents[index].payload);
+
           }
           const trackedSources=input.documents.filter(d=>d.collectionName==='transactions'&&d.document.items?.some((line:any)=>line.v3SaleAuthority&&line.trackingData?.length));
           const trackingCommits=input.trackingCommits||[];
@@ -1158,6 +1169,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             ${OFFLINE_FISCAL_ALLOCATION_WRITER_SCHEMA}
             ${TRACKING_ALLOCATION_SCHEMA}
             ${COMPANY_DISPATCH_ESCROW_SCHEMA}
+            ${DISPATCH_FINANCIAL_SOURCE_GUARDS}
             ${DISPATCH_OPERATOR_AUTH_SCHEMA}
             ${TRACKING_OPERATION_SCHEMA}
             ${LARGE_MASTER_SYNC_V3_SCHEMA_SQL}

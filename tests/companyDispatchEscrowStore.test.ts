@@ -10,3 +10,11 @@ test('barrier FROZEN prevents new precharge; clean PREPARED abandonment releases
 test('mutating items or payment effects after precharge rejects before any consumption',async()=>{const f=fixture();try{await f.tx(()=>prepareDispatchPrecharge(f.sql,demand()));await f.tx(()=>markDispatchEffectPossible(f.sql,'checkout','b'.repeat(64),[{id:'cash',amount:60}]));await assert.rejects(f.tx(()=>commitDispatchPrecharge(f.sql,'checkout','tx-checkout','event',{...demand().source,items:[{id:'item',quantity:100}],payments:[{id:'cash',amount:60}]})),/SOURCE_CHANGED/);await assert.rejects(f.tx(()=>commitDispatchPrecharge(f.sql,'checkout','tx-checkout','event',{...demand().source,payments:[{id:'cash',amount:1}]})),/SOURCE_CHANGED/);assert.equal((f.db.prepare('SELECT consumed_minor n FROM pos_dispatch_quota_v1').get() as {n:number}).n,0);}finally{f.db.close();}});
 
 test('gateway outcome fields are additive while stable intent amounts remain frozen',async()=>{const f=fixture();try{await f.tx(()=>prepareDispatchPrecharge(f.sql,demand()));await f.tx(()=>markDispatchEffectPossible(f.sql,'checkout','b'.repeat(64),[{id:'cash',amount:60,method:'card',gatewayIntegrationId:'gateway'}]));await f.tx(()=>commitDispatchPrecharge(f.sql,'checkout','tx-checkout','event',{...demand().source,payments:[{id:'cash',amount:60,method:'card',gatewayIntegrationId:'gateway',gatewayReference:'synthetic-approved',gatewayStatus:'APPROVED'}]}));assert.equal((f.db.prepare('SELECT consumed_minor n FROM pos_dispatch_quota_v1').get() as {n:number}).n,6000000);}finally{f.db.close();}});
+
+test('known commercial header amounts remain bound after EFFECT_POSSIBLE while sequence is owned only by the native commit',async()=>{
+ const f=fixture();try{const prepared=demand();prepared.source={...prepared.source,netAmount:60,taxAmount:0,discountAmount:0,currency:'DOP'} as typeof prepared.source;
+ await f.tx(()=>prepareDispatchPrecharge(f.sql,prepared));await f.tx(()=>markDispatchEffectPossible(f.sql,'checkout','b'.repeat(64),[{id:'cash',amount:60}]));
+ await assert.rejects(f.tx(()=>commitDispatchPrecharge(f.sql,'checkout','tx-checkout','event',{...prepared.source,netAmount:1,payments:[{id:'cash',amount:60}]})),/SOURCE_CHANGED/);
+ assert.equal((f.db.prepare('SELECT consumed_minor n FROM pos_dispatch_quota_v1').get() as {n:number}).n,0);
+ }finally{f.db.close();}
+});

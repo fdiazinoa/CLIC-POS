@@ -10,7 +10,7 @@ const requireSource=(ok:unknown,code:string):void=>{if(!ok)throw Error(code);};
  */
 export function assertDispatchFinancedSource(source:RecordValue,demands:DispatchDemand[],rows:RecordValue[],pool:RecordValue,checkoutId:string,transactionId:string):void{
  const contract=record(source.companyDispatchSource),lines=array(contract.lines),items=array(source.items);
- requireSource(source.id===transactionId&&contract.schemaVersion===1&&contract.source==='COMPANY_DISPATCH_ESCROW_V1'&&contract.checkoutId===checkoutId&&contract.bindingId===pool.binding_id&&contract.generation===pool.generation&&contract.policyRevision===Number(pool.policy_revision)&&items.length>0&&items.length===lines.length,'DISPATCH_CANONICAL_CHECKOUT_SOURCE_REQUIRED');
+ requireSource(source.inventoryEffectsContract==='WAREHOUSE_RESERVATION_V1'&&source.id===transactionId&&contract.schemaVersion===1&&contract.source==='COMPANY_DISPATCH_ESCROW_V1'&&contract.checkoutId===checkoutId&&contract.bindingId===pool.binding_id&&contract.generation===pool.generation&&contract.policyRevision===Number(pool.policy_revision)&&items.length>0&&items.length===lines.length,'DISPATCH_CANONICAL_CHECKOUT_SOURCE_REQUIRED');
  const localRows=new Map(rows.map(row=>[String(row.id),row]));
  const quotas=new Map(rows.map(row=>[String(row.id),JSON.parse(String(row.authority_json)) as RecordValue]));
  const funded=new Map<string,number>(),seen=new Set<string>();

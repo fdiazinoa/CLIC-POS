@@ -27,7 +27,8 @@ const localCompleteSourceSql = `json_extract(excluded.data, '$.v3CommitFingerpri
       WHERE incoming.key = original.key AND incoming.type = original.type AND incoming.value IS original.value))`;
 
 export const V3_FINANCIAL_RETAINED_UPSERT_SQL = `CASE WHEN documents.collection_name IN ('transactions','transactionHistory')
-  AND json_extract(documents.data, '$.v3InventoryBaseline') IS NOT NULL THEN
+  AND (json_extract(documents.data, '$.v3InventoryBaseline') IS NOT NULL
+    OR json_extract(documents.data,'$.inventoryEffectsContract')='WAREHOUSE_RESERVATION_V1') THEN
   json_set(json_patch(CASE WHEN ${localCompleteSourceSql}
     THEN json_remove(documents.data, ${transientSyncFields.map(key => `'$.${key}'`).join(',')})
     ELSE documents.data END, (SELECT json_group_object(key, json(CASE type
