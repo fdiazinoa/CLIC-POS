@@ -179,6 +179,12 @@ export function snapshotDispatchFinancialPlan<T>(value:T):T{
 
 // Auxiliary to V1 financial tables: never changes retained authority/source bytes.
 export type DispatchDeliveryClock={serverDeliveredMs:number;localRequestStartedMs:number;localReceivedMs:number};
+/** Physical access paths only: excluded from the retained V1 logical schema
+ * digest. Reinstalling these indexes never changes ownership/source bytes. */
+export const DISPATCH_QUERY_INDEX_SCHEMA=`
+CREATE INDEX IF NOT EXISTS dispatch_precharge_quota_checkout_v1 ON pos_dispatch_precharge_lines_v1(quota_id,checkout_id);
+CREATE INDEX IF NOT EXISTS dispatch_quota_pool_state_id_v1 ON pos_dispatch_quota_v1(pool_id,state,id);
+`;
 export const DISPATCH_TRACKING_CLOCK_SCHEMA_V2=`
 CREATE TABLE IF NOT EXISTS pos_dispatch_delivery_clock_v2(quota_id TEXT PRIMARY KEY REFERENCES pos_dispatch_quota_v1(id),witness_hash TEXT NOT NULL,server_delivered_ms INTEGER NOT NULL,local_request_started_ms INTEGER NOT NULL,local_received_ms INTEGER NOT NULL,max_local_ms INTEGER NOT NULL);
 CREATE TRIGGER IF NOT EXISTS dispatch_clock_immutable_v2 BEFORE UPDATE ON pos_dispatch_delivery_clock_v2 WHEN OLD.quota_id IS NOT NEW.quota_id OR OLD.witness_hash IS NOT NEW.witness_hash OR OLD.server_delivered_ms IS NOT NEW.server_delivered_ms OR OLD.local_request_started_ms IS NOT NEW.local_request_started_ms OR OLD.local_received_ms IS NOT NEW.local_received_ms OR NEW.max_local_ms<OLD.max_local_ms BEGIN SELECT RAISE(ABORT,'DISPATCH_CLOCK_IMMUTABLE');END;

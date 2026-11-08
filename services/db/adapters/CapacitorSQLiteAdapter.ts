@@ -2,7 +2,7 @@ import {DISPATCH_STORE_POLICY_SCHEMA_V2,DISPATCH_POOL_INSTALL_SCHEMA,installDisp
 import {DISPATCH_ADOPTION_SCHEMA,acknowledgeDispatchAdoption,type DispatchAdoptionProof} from '../CompanyDispatchAdoption';
 import {assertDispatchFinancedSource} from '../../dispatch/DispatchFinancedSource';
 import {verifyDispatchQuotaDelivery,type DispatchQuotaDelivery,type DispatchScope} from '../../dispatch/DispatchAuthority';
-import {COMPANY_DISPATCH_ESCROW_SCHEMA,DISPATCH_TRACKING_CLOCK_SCHEMA_V2,installDispatchDeliveryClock,readDispatchEffectClock,dispatchTrackingClockAvailable,DISPATCH_FINANCIAL_SOURCE_GUARDS,installDispatchQuota,prepareDispatchPrecharge,markDispatchEffectPossible,commitDispatchPrecharge,sealDispatchNativeCapture,dispatchFinancialIntentDigest,snapshotDispatchFinancialPlan,canonicalDispatchJSON,abandonDispatchPrecharge,type DispatchDemand} from '../CompanyDispatchEscrowStore';
+import {COMPANY_DISPATCH_ESCROW_SCHEMA,DISPATCH_TRACKING_CLOCK_SCHEMA_V2,DISPATCH_QUERY_INDEX_SCHEMA,installDispatchDeliveryClock,readDispatchEffectClock,dispatchTrackingClockAvailable,DISPATCH_FINANCIAL_SOURCE_GUARDS,installDispatchQuota,prepareDispatchPrecharge,markDispatchEffectPossible,commitDispatchPrecharge,sealDispatchNativeCapture,dispatchFinancialIntentDigest,snapshotDispatchFinancialPlan,canonicalDispatchJSON,abandonDispatchPrecharge,type DispatchDemand} from '../CompanyDispatchEscrowStore';
 import {TRACKING_OPERATION_SCHEMA,prepareTrackingOperation,readTrackingOperation,recordTrackingPaymentEffect,assertTrackingOperationCommit,readCommittedTrackingReceipt,retireTrackingOperation,type TrackingOperation,type TrackingScope} from '../TrackingCheckoutOperation';
 import {base6,readV3Base6Stock} from '../V3Base6Stock';
 import {TRACKING_ALLOCATION_SCHEMA,installTrackingAllocation,prepareTrackingCheckout,fenceTrackingCheckout,abandonTrackingCheckout,consumeTrackingCheckout} from '../TrackingAllocationStore';
@@ -1270,6 +1270,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             ${TRACKING_ALLOCATION_SCHEMA}
             ${COMPANY_DISPATCH_ESCROW_SCHEMA}
             ${DISPATCH_TRACKING_CLOCK_SCHEMA_V2}
+            ${DISPATCH_QUERY_INDEX_SCHEMA}
             ${DISPATCH_ADOPTION_SCHEMA}
             ${DISPATCH_POOL_INSTALL_SCHEMA}
             ${DISPATCH_STORE_POLICY_SCHEMA_V2}
