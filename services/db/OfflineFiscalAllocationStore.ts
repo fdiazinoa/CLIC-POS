@@ -1,3 +1,4 @@
+import {issuedBaseLine} from '../dispatch/IssuedDispatchBaseLine';
 import {canonicalDispatchJSON} from './CompanyDispatchEscrowStore';
 import {assertDopFiscalSettlement,configuredFiscalBaseCurrency} from '../fiscal/DopFiscalSettlement';
 import {assertDirectFiscalCharge} from '../fiscal/OfflineFiscalCharge';
@@ -162,6 +163,36 @@ export async function assertAllocationCheckout(sql:SQL,checkout:FiscalWorkflowCh
  const planned=await readAllocationSelection(sql,proof.authority,checkout.allocation.ncfType,at,checkout.allocation);
  return {...proof,planned};
 }
+/** Historical identity proof only: no current availability, clock or pricing reads. */
+async function dispatchBaseCatalogues(sql:SQL,checkout:FiscalWorkflowCheckoutV2,source:Transaction,eventId:string):Promise<Map<string,any>>{
+ const rows=(await sql.query("SELECT p.source_json,p.pool_id,pl.quota_id,pl.quantity_minor,q.authority_json,q.authority_hash,d.witness_hash FROM pos_dispatch_precharge_v1 p JOIN pos_dispatch_precharge_lines_v1 pl ON pl.checkout_id=p.checkout_id JOIN pos_dispatch_quota_v1 q ON q.id=pl.quota_id AND q.pool_id=p.pool_id JOIN pos_dispatch_quota_delivery_v1 d ON d.quota_id=q.id WHERE p.checkout_id=? AND p.transaction_id=? AND p.event_id=? AND p.phase='COMMITTED'",[checkout.checkoutId,source.id,eventId])).values||[];
+ const result=new Map<string,any>();
+ if(!rows.length)return result;
+ const retained=JSON.parse(rows[0].source_json),descriptor=retained.companyDispatchSource,fiscalScope=JSON.parse(checkout.scopeKey);
+ for(const line of source.items){
+  const matches=descriptor?.lines?.filter((entry:any)=>entry.cartId===line.cartId)||[];
+  if(matches.length!==1)continue;
+  const allocations=matches[0].quotaAllocations;
+  if(!Array.isArray(allocations)||!allocations.length||new Set(allocations.map((a:any)=>a.quotaId)).size!==allocations.length)continue;
+  let catalog:any,scope:any,valid=true;
+  for(const allocation of allocations){
+   const entries=rows.filter(row=>row.quota_id===allocation.quotaId);
+   if(entries.length!==1){valid=false;break;}
+   const entry=entries[0],authority=JSON.parse(entry.authority_json);
+   if(['tenantId','companyId','storeId','terminalId','deviceId'].some(key=>authority.scope?.[key]!==fiscalScope[key])||authority.catalogSource?.commercialItem?.id!==line.id||authority.id!==allocation.quotaId||entry.authority_hash!==allocation.authorityHash||entry.witness_hash!==allocation.deliveryWitnessHash||Number(entry.quantity_minor)<allocation.quantityMinor||authority.itemId!==line.id||String(authority.dimensions?.variantId||'')!==String(line.variantId||'')||canonicalDispatchJSON(authority.dimensions)!==canonicalDispatchJSON(allocation.dimensions)||authority.scope?.bindingId!==descriptor.bindingId||authority.scope?.generation!==descriptor.generation||catalog&&canonicalDispatchJSON(catalog)!==canonicalDispatchJSON(authority.catalogSource)||scope&&canonicalDispatchJSON(scope)!==canonicalDispatchJSON(authority.scope)){valid=false;break;}
+   catalog=authority.catalogSource;scope=authority.scope;
+  }
+  if(valid&&catalog)result.set(line.cartId,catalog);
+ }
+ return result;
+}
+function allocationLineFormatMatches(old:any,line:any,catalog:any):boolean{
+ if(canonicalDispatchJSON(old.articleFormat)===canonicalDispatchJSON(line.articleFormat))return true;
+ if(old.articleFormat!=null||!catalog)return false;
+ const derived=issuedBaseLine(old,catalog);
+ return derived!==old&&derived.articleFormat?.factor===1&&derived.baseQuantity===old.quantity&&line.baseQuantity===derived.baseQuantity&&canonicalDispatchJSON(derived.articleFormat)===canonicalDispatchJSON(line.articleFormat);
+}
+const allocationSelectionTuple=(line:any)=>[line.restaurantConfig,line.selected_combo_items,line.selected_modifiers,line.selected_fraction_parts,line.note,line.variantId,line.variantSku,line.trackingData];
 /** Caller owns the native financial transaction. Never allocates or commits independently. */
 export async function consumeAllocationNumber(sql:SQL,checkout:FiscalWorkflowCheckoutV2,source:Transaction,eventId:string):Promise<void>{
  const proof=await assertAllocationCheckout(sql,checkout,checkout.phase==='EFFECT_POSSIBLE'),selection=checkout.allocation!;
@@ -173,12 +204,13 @@ export async function consumeAllocationNumber(sql:SQL,checkout:FiscalWorkflowChe
   if(!capture||canonicalDispatchJSON(JSON.parse(capture.source_snapshot_json))!==canonicalDispatchJSON(source))allocationFail('OFFLINE_FISCAL_DISPATCH_CAPTURE_REQUIRED');
   reservedDispatch=true;
  }
+ const baseCatalogues=reservedDispatch?await dispatchBaseCatalogues(sql,checkout,source,eventId):new Map<string,any>();
  const cart=JSON.parse(checkout.cartIdentity),money=(v:unknown)=>typeof v==='number'&&Number.isFinite(v)?Math.round(v*100):NaN;
  const sourcePaymentIds=new Set(source.payments.map(p=>p.id)),currentPaymentIds=new Set(checkout.paymentIds),priorPartPaymentIds=new Set<string>();
  const accountId=checkout.fiscalSaleContext?.accountId||source.restaurantOrderId;
  if(accountId){const ticketRows=(await sql.query("SELECT data FROM documents WHERE collection_name='parkedTickets' AND doc_id=?",[accountId])).values||[];const ticket=ticketRows[0]&&(ticketRows[0] as {data?:unknown}).data?JSON.parse(String((ticketRows[0] as {data:unknown}).data)):null;for(const part of ticket?.paymentFraction?.parts||[])if(part.status==='PAID'&&part.receiptId)for(const paymentId of part.paymentIDs||[])priorPartPaymentIds.add(String(paymentId));}
  const paymentSetOk=sourcePaymentIds.size===source.payments.length&&source.payments.every(p=>currentPaymentIds.has(p.id)||priorPartPaymentIds.has(p.id))&&[...new Set([...currentPaymentIds,...priorPartPaymentIds])].every(id=>sourcePaymentIds.has(id));
- if(checkout.phase!=='EFFECT_POSSIBLE'||!paymentSetOk||(source.documentType!=='TICKET'&&source.documentType!=='REFUND')||(source.documentType==='REFUND'&&(!source.originalTransactionId||source.ncfType!=='E34'))||(source.documentType==='TICKET'&&source.originalTransactionId)||source.reservationId||source.v3ReservationClaimId||source.v3RestoredTicketId||source.payments.length===0||source.payments.some(p=>!['CASH','CARD','QR','WALLET','ADVANCE','OTHER','CREDIT','STORE_CREDIT','UBER_EATS'].includes(p.method))||money(Number(source.pendingBalance||0))!==source.payments.filter(p=>p.method==='CREDIT').reduce((sum,p)=>sum+money(p.amount),0)||source.items.length!==cart.items.length||source.items.some(line=>line.quantity<=0||line.articleFormat&&!reservedDispatch||line.recipeDetails?.length||cart.items.filter((old:any)=>old.id===line.id&&old.cartId===line.cartId&&old.quantity===line.quantity&&old.price===line.price&&(!reservedDispatch||canonicalDispatchJSON(old.articleFormat)===canonicalDispatchJSON(line.articleFormat))&&JSON.stringify([old.restaurantConfig,old.selected_combo_items,old.selected_modifiers,old.selected_fraction_parts,old.note,old.variantId,old.variantSku,old.trackingData])===JSON.stringify([line.restaurantConfig,line.selected_combo_items,line.selected_modifiers,line.selected_fraction_parts,line.note,line.variantId,line.variantSku,line.trackingData])).length!==1)||(source.customerId||null)!==(cart.customerId||null)||source.ncfType!==cart.fiscalType||money(source.netAmount)+money(source.taxAmount)+money(Number(source.serviceChargeAmount||0))!==money(source.total)||source.payments.filter(p=>p.method!=='CREDIT').reduce((sum,p)=>sum+money(p.amountApplied??p.appliedAmount??p.amount),0)+money(Number(source.pendingBalance||0))!==money(source.total)||!checkout.fiscalSaleContext&&Number(source.serviceChargeAmount||0)!==Number(cart.serviceChargeAmount||0))allocationFail('OFFLINE_FISCAL_SOURCE_UNSUPPORTED');
+ if(checkout.phase!=='EFFECT_POSSIBLE'||!paymentSetOk||(source.documentType!=='TICKET'&&source.documentType!=='REFUND')||(source.documentType==='REFUND'&&(!source.originalTransactionId||source.ncfType!=='E34'))||(source.documentType==='TICKET'&&source.originalTransactionId)||source.reservationId||source.v3ReservationClaimId||source.v3RestoredTicketId||source.payments.length===0||source.payments.some(p=>!['CASH','CARD','QR','WALLET','ADVANCE','OTHER','CREDIT','STORE_CREDIT','UBER_EATS'].includes(p.method))||money(Number(source.pendingBalance||0))!==source.payments.filter(p=>p.method==='CREDIT').reduce((sum,p)=>sum+money(p.amount),0)||source.items.length!==cart.items.length||source.items.some(line=>line.quantity<=0||line.articleFormat&&!reservedDispatch||line.recipeDetails?.length||cart.items.filter((old:any)=>old.id===line.id&&old.cartId===line.cartId&&old.quantity===line.quantity&&old.price===line.price&&(!reservedDispatch||allocationLineFormatMatches(old,line,baseCatalogues.get(line.cartId)))&&(reservedDispatch?canonicalDispatchJSON(allocationSelectionTuple(old))===canonicalDispatchJSON(allocationSelectionTuple(line)):JSON.stringify(allocationSelectionTuple(old))===JSON.stringify(allocationSelectionTuple(line)))).length!==1)||(source.customerId||null)!==(cart.customerId||null)||source.ncfType!==cart.fiscalType||money(source.netAmount)+money(source.taxAmount)+money(Number(source.serviceChargeAmount||0))!==money(source.total)||source.payments.filter(p=>p.method!=='CREDIT').reduce((sum,p)=>sum+money(p.amountApplied??p.appliedAmount??p.amount),0)+money(Number(source.pendingBalance||0))!==money(source.total)||!checkout.fiscalSaleContext&&Number(source.serviceChargeAmount||0)!==Number(cart.serviceChargeAmount||0))allocationFail('OFFLINE_FISCAL_SOURCE_UNSUPPORTED');
  if(!checkout.fiscalSaleContext&&Number(source.serviceChargeAmount||0)>0){
   if(JSON.stringify(source.serviceTaxPolicySnapshot)!==JSON.stringify(cart.serviceTaxPolicySnapshot)||source.serviceType!==cart.serviceType||Number(source.discountAmount||0)!==Number(cart.discountAmount||0)||Boolean(source.customerSnapshot?.isTaxExempt)!==Boolean(cart.taxExempt))allocationFail('OFFLINE_FISCAL_DIRECT_TIP_INVALID');
  }
