@@ -448,3 +448,45 @@ for(const attack of ['claim','history','number','source','content'] as const)tes
   const before=snapshot(f);await assert.rejects(f.readV3CompletedReservation(request));await assert.rejects(f.restoreV3ReservationReference(reservationId,warehouse));assert.deepEqual(snapshot(f),before);
  }finally{f.db.close();}
 });
+
+// Execute the real pre-payment consumer and retained SQLite session, rather than treating a
+// successful post-payment reconstruction as proof that the cashier saw the correct tax.
+test('actual beforePaymentEffects rejects changed taxability before a gateway, while descriptive copies commit canonically',async()=>{
+ const f=await fixture();try{
+  const tax={id:'TX',name:'ITBIS',type:'VAT',rate:.18,active:true};
+  const article=JSON.parse((f.db.prepare('SELECT record_json FROM master_v3_articles').get() as any).record_json);
+  article.taxable=true;article.taxIds=['TX'];
+  f.db.prepare("UPDATE master_v3_articles SET taxable=1,tax_ids_json='[\"TX\"]',record_json=?").run(JSON.stringify(article));
+  f.db.prepare('INSERT INTO master_v3_taxes(sync_version,tax_id,active,rate,record_json) VALUES(32,?,1,.18,?)').run(tax.id,JSON.stringify(tax));
+  f.session=(await modules(f)).session;
+  const config=await f.session.projectConfig(f.config),canonical=await f.session.withStock((await(await f.session.catalog(tariff,warehouse)).get(product)).product,warehouse);
+  const original={...canonical,cartId:'tax-precharge',quantity:1};
+  const changed={...original,taxable:false};
+  let providerCalls=0,effects=0;
+  const refs:Record<string,any>={dbAdapter:f.adapter,dispatchProjection:null,dispatchCheckoutRef:{current:null},processedCart:[changed],cart:[changed],cartTotal:100,effectiveSelectedCustomer:null,
+   completedReservationForReceipt:async()=>null,resolveCommittedFiscalReceipt:async()=>null,resolveCommittedTrackingReceipt:async()=>null,assertCheckoutFiscalAuthority:async()=>{},
+   v3Operational:{validate:(lines:any[],reference:any)=>f.session.validate(config,lines,tariff,warehouse,'SALE',undefined,reference)},fiscalCompliance:{mode:'NONE'},
+   fiscalWorkflowV2Client:{pendingCheckoutInfo:async()=>null,enabled:()=>false,offlineReady:async()=>false},hasV3ReservationCart:false,activeV3Reservation:null,activeRecoveredReservation:null,
+   selectedCustomer:null,activeDirectV3TicketId:null,activeTable:null,fiscalCheckoutRef:{current:null},fiscalCheckoutOperationRef:{current:null},offlineTableFiscalContextRef:{current:undefined},trackingCheckoutRef:{current:null},
+   isIntermediateFractionPayment:false,setLargeMasterSyncV3CriticalOperation:()=>{}};
+  refs.resolveCommittedDispatchReceipt=actualCallback('components/POSInterface.tsx','resolveCommittedDispatchReceipt',refs);
+  const before=actualCallback('components/POSInterface.tsx','beforeV3PaymentEffects',refs),snapshotBefore=snapshot(f),writes=f.fault.writes;
+  await assert.rejects(async()=>{const fence=await before(['tax-card'],['CARD']);effects++;await fence.recordPaymentEffect?.('tax-card');providerCalls++;},/SYNC_V3_ARTICLE_SOURCE_CHANGED:taxable/);
+  assert.equal(providerCalls,0);assert.equal(effects,0);assert.equal(f.fault.writes,writes);assert.deepEqual(snapshot(f),snapshotBefore);
+  await assert.rejects(f.session.validate(config,[{...original,appliedTaxIds:[]}],tariff,warehouse),/SYNC_V3_LINE_INVALID/);
+  await f.session.validate(config,[{...original,taxable:undefined}],tariff,warehouse);
+  const stale={...original,type:'SERVICE',isInventoriable:false};
+  await f.session.validate(config,[stale],tariff,warehouse);
+  const items=freezeAuthoritativeLineFiscalAmounts([stale],config,{discountAmount:0,isTaxIncluded:false,transactionNetAmount:100,transactionTaxAmount:18,transactionTotal:118});
+  const transaction={id:id(901),seriesId:id(9),documentType:'TICKET',date:'2026-11-08T12:00:00Z',terminalId:id(4),status:'COMPLETED',total:118,netAmount:100,taxAmount:18,isTaxIncluded:false,userId:id(25),userName:'Synthetic',items,payments:[{id:'canonical-cash',method:'CASH',amount:118}]};
+  const result=await f.persistV3FinancialTransaction(transaction,config,warehouse);
+  assert.equal(result.created,true);assert.equal(result.transaction.items[0].type,'PRODUCT');assert.equal(result.transaction.items[0].isInventoriable,true);
+  assert.equal(result.transaction.items[0].taxable,true);assert.deepEqual(result.transaction.items[0].appliedTaxIds,['TX']);assert.equal(result.transaction.taxAmount,18);
+  assert.equal(f.documents('inventoryLedger')[0].qtyOut,1);
+  article.taxable=false;f.db.prepare('UPDATE master_v3_articles SET taxable=0,record_json=?').run(JSON.stringify(article));
+  f.session=(await modules(f)).session;
+  const exempt=await f.session.withStock((await(await f.session.catalog(tariff,warehouse)).get(product)).product,warehouse),committed=snapshot(f);
+  await assert.rejects(f.session.validate(config,[{...exempt,cartId:'inverse-tax',quantity:1,taxable:true}],tariff,warehouse),/SYNC_V3_ARTICLE_SOURCE_CHANGED:taxable/);
+  assert.deepEqual(snapshot(f),committed);
+ }finally{f.db.close();}
+});

@@ -24,9 +24,11 @@ const line = (overrides: Partial<CartItem> = {}) => ({
 
 test('a stale descriptive copy is corrected by the commit instead of blocking the sale', () => {
   const stale = line({
-    type: 'SERVICE' as any, isInventoriable: false, taxable: false, appliedTaxIds: ['OTRO'],
+    type: 'SERVICE' as any, isInventoriable: false,
   });
   assert.doesNotThrow(() => validateV3PinnedLineSource(stale, product(), authority));
+  assert.doesNotThrow(() => validateV3PinnedLineSource(line({taxable:undefined}), product(), authority));
+  assert.throws(() => validateV3PinnedLineSource(line({taxable:false}), product(), authority), /ARTICLE_SOURCE_CHANGED:taxable/);
 });
 
 test('the article identity, the tariff treatment, the weight contract and the variant are still enforced', () => {

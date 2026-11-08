@@ -11,10 +11,11 @@ import { LargeMasterSyncV3Error } from './LargeMasterSyncV3Types';
 
 /** A valid stamp cannot authorize changing the source's inventory or fiscal semantics. */
 export const validateV3PinnedLineSource = (line: CartItem, product: Product, authority: V3SaleAuthorityStamp): void => {
-  // The authoritative line is rebuilt from the source by the commit callback, so a stale copy of
-  // the descriptive fields (type, inventariable, taxable, tax ids, production area) is corrected
-  // there instead of blocking the sale. Only the identity that affects stock and fiscal binding is
-  // enforced here: the article itself, the tariff treatment, the weight contract and the variant.
+  // Commit rebuilds descriptive inventory fields, but taxability already affects the amount
+  // shown and charged. Reject a changed effective tax exemption before payment effects.
+  if ((line.taxable === false) !== (product.taxable === false)) {
+    throw new LargeMasterSyncV3Error('SYNC_V3_ARTICLE_SOURCE_CHANGED:taxable');
+  }
   if (line.id !== product.id) throw new LargeMasterSyncV3Error('SYNC_V3_ARTICLE_SOURCE_CHANGED:identity');
   if (line.v3SaleAuthority && line.v3SaleAuthority.taxIncluded !== authority.taxIncluded) {
     throw new LargeMasterSyncV3Error('SYNC_V3_ARTICLE_SOURCE_CHANGED:tariff');

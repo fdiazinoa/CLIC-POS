@@ -38,10 +38,10 @@ function sqliteFixture() {
   Object.assign(adapter, { db: bridge, isReady: true });
   return { sql, bridge, adapter };
 }
-test('pinned line rejects type, inventory, taxable, tax inclusion and variant tampering before a simulated side effect', () => {
+test('pinned line rejects effective taxability, tax inclusion and variant tampering before a simulated side effect', () => {
   validateV3PinnedLineSource(line, product, stamp);
   const changes: Partial<CartItem>[] = [
-    { type: 'SERVICE' }, { isInventoriable: false }, { taxable: false }, { appliedTaxIds: [] },
+    { taxable: false },
     { v3SaleAuthority: { ...stamp, taxIncluded: false } }, { variantId: 'foreign' }, { variantSku: 'foreign' },
   ];
   let mutations = 0;
@@ -52,6 +52,9 @@ test('pinned line rejects type, inventory, taxable, tax inclusion and variant ta
     }, /SYNC_V3_(ARTICLE|VARIANT)_SOURCE_CHANGED/);
   }
   assert.equal(mutations, 0);
+  // These copies are rebuilt by the real financial writer; the Session separately checks tax IDs.
+  validateV3PinnedLineSource({...line,type:'SERVICE',isInventoriable:false},product,stamp);
+  validateV3PinnedLineSource({...line,taxable:undefined},product,stamp);
   assert.throws(() => validateV3PinnedLineSource(line, { ...product, variants: [] }, stamp), /VARIANT_SOURCE_CHANGED/);
 });
 test('frozen fiscal source rejects plausible aggregate totals with altered line taxes while preserving final price edits and discounts', () => {

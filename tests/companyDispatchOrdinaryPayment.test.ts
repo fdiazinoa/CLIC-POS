@@ -13,12 +13,12 @@ import {freezeAuthoritativeLineFiscalAmounts} from '../utils/fiscalBreakdown';
 import {assertDopFiscalSettlement,configuredFiscalBaseCurrency} from '../services/fiscal/DopFiscalSettlement';
 const pos=readFileSync('components/POSInterface.tsx','utf8'),modal=readFileSync('components/PaymentModal.tsx','utf8');
 function callback(source:string,name:string,bindings:Record<string,any>){const ast=ts.createSourceFile('component.tsx',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);let arrow:ts.Expression|undefined;function visit(node:ts.Node){if(ts.isVariableDeclaration(node)&&node.name.getText(ast)===name)arrow=node.initializer;ts.forEachChild(node,visit);}visit(ast);assert.ok(arrow);return new Function(...Object.keys(bindings),ts.transpileModule('const invoke='+arrow.getText(ast)+';return invoke;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText)(...Object.values(bindings));}
-async function fixture(){const f=await nativeFixture();const binding=String((f.db.prepare('SELECT binding FROM master_v3_operational_owner').get() as any).binding);f.db.exec("INSERT INTO pos_dispatch_pool_v1 VALUES('pool','binding','generation',1,'WAREHOUSE_DISPATCH',NULL,NULL);INSERT INTO pos_dispatch_active_pool_v1 SELECT 1,'pool',binding FROM master_v3_operational_owner;INSERT INTO pos_dispatch_capture_cursor_v1 VALUES('pool',0)");
+async function fixture(taxed=false){const f=await nativeFixture();const binding=String((f.db.prepare('SELECT binding FROM master_v3_operational_owner').get() as any).binding);f.db.exec("INSERT INTO pos_dispatch_pool_v1 VALUES('pool','binding','generation',1,'WAREHOUSE_DISPATCH',NULL,NULL);INSERT INTO pos_dispatch_active_pool_v1 SELECT 1,'pool',binding FROM master_v3_operational_owner;INSERT INTO pos_dispatch_capture_cursor_v1 VALUES('pool',0)");
  f.db.prepare("INSERT INTO pos_dispatch_pool_install_v1 VALUES('pool',?,'fixture-witness','fixture-native-schema')").run(binding);
- const master={id:id(7),tenant_id:id(1),company_id:id(2),type:'PRODUCT',taxable:false,metadata:{tariffs:[{tariffId:id(6),price:100}]}};
- const authority={id:'quota',scope:{tenantId:id(1),companyId:id(2),storeId:id(3),warehouseId:id(5),terminalId:id(4),deviceId:id(50),bindingId:'binding',generation:'generation'},policyRevision:1,itemId:id(7),dimensions:{},catalogSource:{commercialItem:master,rawGraph:[master],tariffs:[{id:id(6),tax_included:false}],taxes:[]}};
+ const master={id:id(7),tenant_id:id(1),company_id:id(2),type:'PRODUCT',taxable:taxed,metadata:{appliedTaxIds:taxed?['TX']:[],tariffs:[{tariffId:id(6),price:100}]}};
+ const authority={id:'quota',scope:{tenantId:id(1),companyId:id(2),storeId:id(3),warehouseId:id(5),terminalId:id(4),deviceId:id(50),bindingId:'binding',generation:'generation'},policyRevision:1,itemId:id(7),dimensions:{},catalogSource:{commercialItem:master,rawGraph:[master],tariffs:[{id:id(6),tax_included:false}],taxes:taxed?[{id:'TX',type:'VAT',rate:.18}]:[]}};
  f.db.prepare("INSERT INTO pos_dispatch_quota_v1 VALUES('quota','pool',?,'hash',5000000,0,0,'ACTIVE')").run(JSON.stringify(authority));f.db.exec("INSERT INTO pos_dispatch_quota_delivery_v1 VALUES('quota','witness')");
- const item:any={id:id(7),cartId:'ordinary-line',name:'Synthetic',type:'PRODUCT',isInventoriable:true,taxable:false,appliedTaxIds:[],quantity:1,price:100,v3SaleAuthority:{binding,warehouseId:id(5),tariffId:id(6),taxIncluded:false}};
+ const item:any={id:id(7),cartId:'ordinary-line',name:'Synthetic',type:'PRODUCT',isInventoriable:true,taxable:taxed,appliedTaxIds:taxed?['TX']:[],quantity:1,price:100,v3SaleAuthority:{binding,warehouseId:id(5),tariffId:id(6),taxIncluded:false}};
  return{...f,item};}
 /** Actual production prepayment + modal callbacks. Auth/V3 read and provider ports
  * are explicit fixtures; native quota, pending lookup, writer TX and restart are real. */
@@ -42,4 +42,16 @@ test('actual offline modal reuses durable NF identity after adapter/ref restart 
  const validate=callback(pos,'validatePaymentModalAuthority',{dispatchProjection:{mode:'WAREHOUSE_DISPATCH'},dbAdapter:restarted,assertCheckoutFiscalAuthority:async()=>{throw Error('must reject before fiscal gate');}});let intents=0;const card=callback(modal,'authorizeIntegratedCardPayment',{resolvePaymentMethodForEntry:()=>({}),resolveGatewayIntegrationForPayment:()=>({id:'lab',provider:'AZUL'}),roundToTwo:(n:number)=>n,selectedCurrency:{rate:1},calculateGatewayTaxAmount:()=>0,validatePaymentAuthority:validate,voluntaryTip:1,paymentIntentService:{create:async()=>{intents++;}},createAzulOrderNumber:()=>{throw Error('must reject before gateway intent');}});await assert.rejects(card({amount:101,exchangeRate:1}),/DISPATCH_SERVICE_CHARGE_NOT_READY/);assert.equal(intents,0);
  const voluntary=checkout(restarted,{...f.item,cartId:randomUUID()},'voluntary-tip',false,0,1);await voluntary.run();assert.equal(voluntary.calls.provider,0);assert.equal(voluntary.calls.confirm,0);assert.ok(voluntary.errors.some(error=>error.includes('recargo')));assert.equal((f.db.prepare("SELECT count(*) n FROM pos_dispatch_precharge_v1 WHERE phase<>'COMMITTED'").get() as any).n,0);
  const nextSale=checkout(restarted,{...f.item,cartId:randomUUID()},'next-sale-cash',true);await nextSale.run();assert.deepEqual(nextSale.errors,[]);assert.equal(nextSale.calls.provider,1);assert.equal(nextSale.calls.confirm,1);assert.notEqual(nextSale.ref.current.transactionId,pending!.transactionId);assert.equal((f.db.prepare('SELECT consumed_minor n FROM pos_dispatch_quota_v1').get() as any).n,2000000);assert.equal((f.db.prepare('SELECT count(*) n FROM sync_outbox_v2').get() as any).n,2);
+});
+
+// The WAREHOUSE path uses its retained issued catalogue rather than the IMMEDIATE session.
+test('actual WAREHOUSE modal denies same-tax-ID taxability changes before PREPARED or payment effects',async()=>{
+ const f=await fixture(true);try{
+  const before=JSON.stringify(f.db.prepare('SELECT * FROM pos_dispatch_quota_v1').all()),writes=f.fault.writes;
+  const attempt=checkout(f.adapter,{...f.item,taxable:false},'tampered-tax-card');
+  await attempt.run();assert.equal(attempt.calls.provider,0);assert.equal(attempt.calls.confirm,0);
+  assert.ok(attempt.errors.some(message=>message.includes('DISPATCH_ISSUED_TAX_ASSIGNMENT')),JSON.stringify(attempt.errors));
+  assert.equal(f.fault.writes,writes);assert.equal(JSON.stringify(f.db.prepare('SELECT * FROM pos_dispatch_quota_v1').all()),before);
+  for(const table of ['pos_dispatch_precharge_v1','pos_dispatch_native_capture_v1','sync_outbox_v2'])assert.equal((f.db.prepare('SELECT count(*) n FROM '+table).get() as any).n,0);
+ }finally{f.db.close();}
 });
