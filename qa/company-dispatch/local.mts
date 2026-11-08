@@ -35,6 +35,7 @@ await f.db.query(await readFile(resolve(erp,'supabase/migrations/20261107135323_
 await f.db.query(await readFile(resolve(erp,'supabase/migrations/20261107140714_dispatch_bin_stock_read_model.sql'),'utf8'));
 await f.db.query(await readFile(resolve(erp,'supabase/migrations/20261108130423_dispatch_unspent_active_quota_filter.sql'),'utf8'));
 await f.db.query(await readFile(resolve(erp,'supabase/migrations/20261108135851_dispatch_request_omni_memo.sql'),'utf8'));
+await f.db.query(await readFile(resolve(erp,'supabase/migrations/20261108143815_dispatch_memo_eligibility_aggregate.sql'),'utf8'));
 if(process.argv.includes('--cash-close'))await f.db.query("update erp_companies set config=jsonb_set(config,'{accounting}',coalesce(config->'accounting','{}')||'{\"salesPostingMode\":\"CASH_CLOSE\"}'::jsonb) where id=$1",[f.ids.company]);
 f.command=async(action:string,body:any={},key=randomUUID())=>{await f.db.query('set role service_role');try{return(await f.db.query('select erp_company_dispatch_command_v1($1,$2,$3,$4) result',[{tenantId:f.ids.tenant,companyId:f.ids.company,storeId:f.ids.store},f.ids.actor,key,{action,...body}])).rows[0].result;}finally{await f.db.query('reset role');}};
 await f.db.query('update locales set mall_id=$1 where id=$2',[f.ids.store,f.ids.local]);
