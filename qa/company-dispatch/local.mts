@@ -26,7 +26,7 @@ if (process.env.CLIC_DISPATCH_TEST_PG_PORT !== '55443')
 register('data:text/javascript,' + encodeURIComponent("export async function resolve(specifier,context,next){if(specifier.endsWith('/supabaseClient.js'))return {url:'data:text/javascript,'+encodeURIComponent('export default new Proxy({}, {get:(_t,k)=>(...args)=>globalThis.__dispatchLab.erpClient[k](...args)});'),shortCircuit:true};return next(specifier,context);}"));
 const { createCompanyDispatchErpFlowFixture } = await import(erp + '/server/services/companyDispatch.erpFlow.fixture.js');
 const receipts=trackedKind?(trackedKind==='LOT'?[{quantity:5,metadata:{lot_code:'LOT-A'},dimensions:{lotCode:'LOT-A'}},{quantity:5,metadata:{lot_code:'LOT-B'},dimensions:{lotCode:'LOT-B'}}]:Array.from({length:10},(_,i)=>({quantity:1,metadata:{serial_number:'SERIAL-'+(i+1)},dimensions:{serialNumber:'SERIAL-'+(i+1)}}))):null;
-const f = await createCompanyDispatchErpFlowFixture({openingReceipts:receipts});
+const f = await createCompanyDispatchErpFlowFixture({unspentFilter:false,openingReceipts:receipts});
 await f.db.query(await readFile(resolve(erp,'supabase/migrations/20261107101743_company_store_dispatch_policy.sql'),'utf8'));
 await f.db.query(await readFile(resolve(erp,'supabase/migrations/20261107115547_pos_dispatch_cash_close.sql'),'utf8'));
 await f.db.query(await readFile(resolve(erp,'supabase/migrations/20261107121403_dispatch_stock_parts.sql'),'utf8'));
@@ -34,6 +34,7 @@ await f.db.query(await readFile(resolve(erp,'supabase/migrations/20261107133003_
 await f.db.query(await readFile(resolve(erp,'supabase/migrations/20261107135323_dispatch_direct_nostock_v3.sql'),'utf8'));
 await f.db.query(await readFile(resolve(erp,'supabase/migrations/20261107140714_dispatch_bin_stock_read_model.sql'),'utf8'));
 await f.db.query(await readFile(resolve(erp,'supabase/migrations/20261108130423_dispatch_unspent_active_quota_filter.sql'),'utf8'));
+await f.db.query(await readFile(resolve(erp,'supabase/migrations/20261108135851_dispatch_request_omni_memo.sql'),'utf8'));
 if(process.argv.includes('--cash-close'))await f.db.query("update erp_companies set config=jsonb_set(config,'{accounting}',coalesce(config->'accounting','{}')||'{\"salesPostingMode\":\"CASH_CLOSE\"}'::jsonb) where id=$1",[f.ids.company]);
 f.command=async(action:string,body:any={},key=randomUUID())=>{await f.db.query('set role service_role');try{return(await f.db.query('select erp_company_dispatch_command_v1($1,$2,$3,$4) result',[{tenantId:f.ids.tenant,companyId:f.ids.company,storeId:f.ids.store},f.ids.actor,key,{action,...body}])).rows[0].result;}finally{await f.db.query('reset role');}};
 await f.db.query('update locales set mall_id=$1 where id=$2',[f.ids.store,f.ids.local]);
