@@ -125,7 +125,7 @@ const ProductVariantSelector: React.FC<ProductVariantSelectorProps> = ({
             name: 'Variante',
             type: 'TEXT',
             options: variants.map((variant, idx) => ({
-               id: variant.sku || `variant-${idx}`,
+               id: `variant-${idx}`,
                label: variant.sku || `Variante ${idx + 1}`,
                value: variant.sku || `Variante ${idx + 1}`,
                stock: typeof variant.initialStock === 'number' ? variant.initialStock : 99,
@@ -163,7 +163,7 @@ const ProductVariantSelector: React.FC<ProductVariantSelectorProps> = ({
       if (!product || variants.length === 0) return undefined;
       if (groups.length === 1 && groups[0].id === 'variant') {
          const selected = selections.variant;
-         return variants.find(variant => variant.sku === selected?.label);
+         return variants.find((_variant, idx) => selected?.id === `variant-${idx}`);
       }
       return variants.find(variant => groups.every(group => {
          const selected = selections[group.id]?.label;

@@ -50,7 +50,7 @@ export function validateV3RestaurantSelection(line:CartItem,product:Product):num
   // Scanner uses the selected record's order; the selector uses the pinned union of attribute keys.
   const keys=Array.from(new Set(variants.flatMap(row=>Object.keys(row.attributeValues||{}))));
   variantLabels=[Object.values(values).map(String),keys.map(key=>values[key]||values[key.toLowerCase()]||values[key.toUpperCase()]).filter(Boolean)];
-  if(!keys.length)variantLabels.push([variant.sku]);
+  if(!keys.length)variantLabels.push([variant.sku || `Variante ${variants.indexOf(variant)+1}`]);
   variantPrice=resolveVariantSalesPrice(variant,product.price);
  }
  const advanced=source.combo_groups.length||source.modifier_groups.length||source.fraction_rule?.options?.length||source.note_presets.length;
