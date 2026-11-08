@@ -19,7 +19,7 @@ function issuedBaseLine(line:CartItem,catalog:any):CartItem{
  try{
   const snapshots=formats.map((format:any)=>{
    if(!format||format.factor!==1||format.isBase===false)throw Error('NOT_CANONICAL_BASE');
-   const value=issuedFormatSnapshot(format);
+   const value=issuedFormatSnapshot({schemaVersion:1,...format});
    if(value.id!=='base:'+String(value.variantId||'item')||value.variantId!==null&&(!Array.isArray(variants)||!variants.some((v:any)=>String(v.id||v.variant_id||v.sku)===value.variantId)))throw Error('NOT_CANONICAL_BASE');
    return value;
   });
