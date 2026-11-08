@@ -1,7 +1,7 @@
 import {assertDispatchDirectNoStock,assertDispatchLineAmounts} from './DispatchFinancedSource';
 import {assertDispatchQuotaTrackingSelection} from '../tracking/TrackingLine';
 import Money from 'decimal.js';
-import {formatPrice} from '../articleFormats/domain';
+import {formatPrice,freezeLine,snapshot as issuedFormatSnapshot} from '../articleFormats/domain';
 import {resolveVariantSalesPrice} from '../../utils/variantSalesPrice';
 import type {CartItem} from '../../types';
 import {compileCompanyDispatchDemand} from './companyDispatchDemand.js';
@@ -9,26 +9,46 @@ import {canonicalDispatchJSON,type DispatchDemand} from '../db/CompanyDispatchEs
 export type DispatchCheckoutQuota={authority:Record<string,any>;authorityHash:string;witnessHash:string;availableMinor:number};
 export type DispatchCheckoutAuthority={poolId:string;bindingId:string;generation:string;policyRevision:number;nativeBinding:string;quotas:DispatchCheckoutQuota[];noStockSources?:Array<{pin:Record<string,any>;facts:Record<string,any>}>};
 const requireValue=(ok:unknown,code:string)=>{if(!ok)throw Error(code);};
+/** Derive only a canonical issued BASE snapshot; never edit the cart or reprice. */
+function issuedBaseLine(line:CartItem,catalog:any):CartItem{
+ if(line.articleFormat!=null)return line;
+ const master=catalog.commercialItem,formats=master.metadata?.articleFormats,variants=master.metadata?.variants||[];
+ if(!Array.isArray(formats)||formats.length===0)return line;
+ const variantId=line.variantId??null;
+ if(variantId!==null&&(!Array.isArray(variants)||variants.filter((v:any)=>String(v.id||v.variant_id||v.sku)===variantId).length!==1))return line;
+ try{
+  const snapshots=formats.map((format:any)=>{
+   if(!format||format.factor!==1||format.isBase===false)throw Error('NOT_CANONICAL_BASE');
+   const value=issuedFormatSnapshot(format);
+   if(value.id!=='base:'+String(value.variantId||'item')||value.variantId!==null&&(!Array.isArray(variants)||!variants.some((v:any)=>String(v.id||v.variant_id||v.sku)===value.variantId)))throw Error('NOT_CANONICAL_BASE');
+   return value;
+  });
+  if(new Set(snapshots.map(value=>value.id)).size!==snapshots.length)return line;
+  const matches=formats.map((format:any,index:number)=>({format,value:snapshots[index]})).filter(({format,value})=>value.variantId===variantId&&format.active===true&&format.allowSale===true);
+  return matches.length===1?freezeLine(line,matches[0].value):line;
+ }catch{return line;}
+}
 /** Select only installed server-issued rights. The native joint preparation
  * rechecks exact demand and balances in its writer transaction before payment. */
 export async function compileDispatchCheckoutSource(authority:DispatchCheckoutAuthority,items:CartItem[],commercial:Record<string,unknown>){
  requireValue(items.length>0&&items.length<=200,'DISPATCH_CHECKOUT_LINES_REQUIRED');
  requireValue(new Money(commercial.serviceChargeAmount as number||0).eq(0),'DISPATCH_SERVICE_CHARGE_NOT_READY');
- const used=new Map<string,number>(),lines=[],serialUnits=new Set<string>();
- for(const line of items){
+ const used=new Map<string,number>(),lines=[],effectiveItems:CartItem[]=[],serialUnits=new Set<string>();
+ for(const originalLine of items){
+  let line=originalLine;
   const noStock=authority.noStockSources?.find(row=>row.pin.itemId===line.id&&row.pin.syncId===line.v3SaleAuthority?.syncId&&row.pin.syncVersion===line.v3SaleAuthority?.syncVersion&&row.pin.tariffId===line.v3SaleAuthority?.tariffId);
-  if(noStock){assertDispatchDirectNoStock(line as any,noStock.pin,noStock.facts,authority.nativeBinding);lines.push({cartId:line.cartId,tariffId:noStock.pin.tariffId,noStockSource:noStock.pin,quotaAllocations:[]});continue;}
+  if(noStock){assertDispatchDirectNoStock(line as any,noStock.pin,noStock.facts,authority.nativeBinding);lines.push({cartId:line.cartId,tariffId:noStock.pin.tariffId,noStockSource:noStock.pin,quotaAllocations:[]});effectiveItems.push(line);continue;}
 
   const candidates=authority.quotas.filter(row=>row.authority.scope?.warehouseId===commercial.v3WarehouseId&&row.authority.catalogSource?.commercialItem?.id===line.id&&row.authority.itemId===line.id&&row.authority.scope?.bindingId===authority.bindingId&&row.authority.scope.generation===authority.generation&&row.authority.policyRevision===authority.policyRevision);
   requireValue(candidates.length,'DISPATCH_ITEM_QUOTA_REQUIRED');
-  let selected:Array<{quota:DispatchCheckoutQuota;quantityMinor:number}>|undefined,profileError:Error|undefined;
+  let selected:Array<{quota:DispatchCheckoutQuota;quantityMinor:number}>|undefined,selectedLine:CartItem|undefined,profileError:Error|undefined;
   const revisions=new Map<string,DispatchCheckoutQuota[]>();
   for(const row of [...candidates].sort((a,b)=>Number(b.authority.issuedSequence||0)-Number(a.authority.issuedSequence||0)||String(a.authority.id).localeCompare(String(b.authority.id)))){const key=canonicalDispatchJSON(row.authority.catalogSource);revisions.set(key,[...(revisions.get(key)||[]),row]);}
   for(const rows of revisions.values()){
-   const catalog=rows[0].authority.catalogSource,scope=rows[0].authority.scope;
+   const catalog=rows[0].authority.catalogSource,scope=rows[0].authority.scope,effectiveLine=issuedBaseLine(originalLine,catalog);
    if(line.trackingData?.some(selection=>selection.dispatchQuotaAuthority&&!rows.some(q=>q.authority.id===selection.dispatchQuotaAuthority.quotaId)))continue;
    let compiled:ReturnType<typeof compileCompanyDispatchDemand>;
-   try{compiled=compileCompanyDispatchDemand({scope,items:catalog.rawGraph},{itemId:line.id,quantity:line.quantity,variantId:line.variantId,articleFormat:line.articleFormat});}catch(error){if(error instanceof Error&&/^DISPATCH_(FORMAT_|VARIANT_|RECIPE_)/.test(error.message)){profileError=error;continue;}throw error;}
+   try{compiled=compileCompanyDispatchDemand({scope,items:catalog.rawGraph},{itemId:effectiveLine.id,quantity:effectiveLine.quantity,variantId:effectiveLine.variantId,articleFormat:effectiveLine.articleFormat});}catch(error){if(error instanceof Error&&/^DISPATCH_(FORMAT_|VARIANT_|RECIPE_)/.test(error.message)){profileError=error;continue;}throw error;}
    // Only the existing direct-stock model is connected here. A component graph
    // cannot be flattened into a commercial item or financed as its parent.
    if(compiled.demands.length!==1||compiled.demands[0].itemId!==line.id)continue;
@@ -38,7 +58,7 @@ export async function compileDispatchCheckoutSource(authority:DispatchCheckoutAu
     requireValue(catalog.stockSelectionProfile==='DISPATCH_QUOTA_GRAIN_V2'&&Array.isArray(line.trackingData)&&line.trackingData.length>0,'DISPATCH_TRACKING_SELECTION_REQUIRED');
     const seen=new Set<string>();
     for(const selection of line.trackingData){const id=selection.dispatchQuotaAuthority?.quotaId,quota=rows.find(q=>q.authority.id===id);requireValue(quota&&!seen.has(id),'DISPATCH_TRACKING_SELECTION_CHANGED');const allocation={quantityMinor:selection.quantityMinor,authorityHash:quota!.authorityHash,deliveryWitnessHash:quota!.witnessHash};assertDispatchQuotaTrackingSelection(selection,quota!.authority,allocation);requireValue(selection.cartId===line.cartId&&selection.itemId===line.id&&selection.variantId===String(demand.dimensions.variantId||'')&&selection.quantityMinor<=quota!.availableMinor-(used.get(id)||0),'DISPATCH_TRACKING_SELECTION_CHANGED');if(demand.trackingKind==='SERIAL'){const unit=quota!.authority.dimensions.trackingUnitId;requireValue(!serialUnits.has(unit),'DISPATCH_SERIAL_DUPLICATE');serialUnits.add(unit);}seen.add(id);parts.push({quota:quota!,quantityMinor:selection.quantityMinor});remaining-=selection.quantityMinor;}
-    requireValue(remaining===0,'DISPATCH_TRACKING_SELECTION_QUANTITY');selected=parts.sort((a,b)=>String(a.quota.authority.id).localeCompare(String(b.quota.authority.id)));break;
+    requireValue(remaining===0,'DISPATCH_TRACKING_SELECTION_QUANTITY');selected=parts.sort((a,b)=>String(a.quota.authority.id).localeCompare(String(b.quota.authority.id)));selectedLine=effectiveLine;break;
    }
 
    for(const quota of [...rows].sort((a,b)=>String(a.authority.id).localeCompare(String(b.authority.id)))){
@@ -47,10 +67,11 @@ export async function compileDispatchCheckoutSource(authority:DispatchCheckoutAu
     if(take<=0)continue;requireValue(Number.isSafeInteger(take)&&take%100===0,'DISPATCH_QUANTITY_NOT_REPRESENTABLE');
     parts.push({quota,quantityMinor:take});remaining-=take;if(remaining===0)break;
    }
-   if(remaining===0){selected=parts;break;}
+   if(remaining===0){selected=parts;selectedLine=effectiveLine;break;}
   }
   if(!selected&&profileError)throw profileError;
   requireValue(selected,line.trackingData?.length?'DISPATCH_TRACKING_CATALOG_REVISIONS_MIXED_OR_EXHAUSTED':'DISPATCH_LOCAL_QUOTA_EXHAUSTED_OR_PROFILE_NOT_READY');
+  line=selectedLine!;
   const quota=selected![0].quota,catalog=quota.authority.catalogSource,master=catalog.commercialItem;
   const tariffId=line.v3SaleAuthority?.tariffId,tariff=catalog.tariffs.find((row:any)=>row.id===tariffId),priceEntry=master.metadata?.tariffs?.find((row:any)=>row.tariffId===tariffId);
   const variant=master.metadata?.variants?.find((row:any)=>String(row.id||row.variant_id||row.sku)===String(line.variantId||''));
@@ -64,14 +85,15 @@ export async function compileDispatchCheckoutSource(authority:DispatchCheckoutAu
   const basePrice=priceEntry?.price??variant?.price??master.precio_venta,formatOverride=issuedFormat?.prices?.find((row:any)=>row.tariffId===tariffId);
   requireValue(tariff&&(snapshot?Number.isFinite(Number(formatOverride?.price??basePrice))&&(formatOverride?.price??basePrice)!=null:Number(variant?.price)>0||priceEntry?.price!=null&&Number.isFinite(Number(priceEntry.price))),'DISPATCH_ISSUED_TARIFF_REQUIRED');
   const price=snapshot?formatPrice({...issuedFormat,factor:issuedFormat?.factor||1,prices:issuedFormat?.prices||[]} as any,String(tariffId),basePrice):issuedPrice?resolveVariantSalesPrice(variant,priceEntry?.price):priceEntry?.price;
+  if(line!==originalLine)requireValue(issuedPrice&&new Money(resolveVariantSalesPrice(variant,priceEntry?.price)).eq(price),'DISPATCH_ISSUED_PRICE_MISMATCH');
   requireValue(tariff&&Number.isFinite(Number(price))&&new Money(line.price).eq(price),'DISPATCH_ISSUED_PRICE_MISMATCH');
   requireValue(Boolean(line.taxable)===Boolean(master.taxable)&&canonicalDispatchJSON([...(line.appliedTaxIds||[])].sort())===canonicalDispatchJSON([...(master.metadata?.appliedTaxIds||[])].sort()),'DISPATCH_ISSUED_TAX_ASSIGNMENT');
   assertDispatchLineAmounts(line as any,Number(price),tariff.tax_included===true,catalog.taxes);
   const quotaAllocations=selected!.map(({quota,quantityMinor})=>{const quotaId=String(quota.authority.id);used.set(quotaId,(used.get(quotaId)||0)+quantityMinor);return{quotaId,quantityMinor,dimensions:quota.authority.dimensions,authorityHash:quota.authorityHash,deliveryWitnessHash:quota.witnessHash};});
-  lines.push({cartId:line.cartId,tariffId,quotaAllocations});
+  lines.push({cartId:line.cartId,tariffId,quotaAllocations});effectiveItems.push(line);
  }
  requireValue(new Money(commercial.netAmount as number).eq(items.reduce((sum,line)=>sum.plus(line.netAmount||0),new Money(0)))&&new Money(commercial.taxAmount as number).eq(items.reduce((sum,line)=>sum.plus(line.taxAmount||0),new Money(0)))&&new Money(commercial.total as number).eq(new Money(commercial.netAmount as number).plus(commercial.taxAmount as number).plus(commercial.serviceChargeAmount as number||0)),'DISPATCH_ISSUED_HEADER_TOTALS');
- const source={...commercial,items,inventoryEffectsContract:'WAREHOUSE_RESERVATION_V1',v3Binding:authority.nativeBinding,companyDispatchSource:{schemaVersion:1,source:'COMPANY_DISPATCH_ESCROW_V1',bindingId:authority.bindingId,generation:authority.generation,policyRevision:authority.policyRevision,lines}};
+ const source={...commercial,items:effectiveItems,inventoryEffectsContract:'WAREHOUSE_RESERVATION_V1',v3Binding:authority.nativeBinding,companyDispatchSource:{schemaVersion:1,source:'COMPANY_DISPATCH_ESCROW_V1',bindingId:authority.bindingId,generation:authority.generation,policyRevision:authority.policyRevision,lines}};
  const demands:DispatchDemand[]=[...used].map(([quotaId,quantityMinor])=>({quotaId,quantityMinor}));
  const demandDigest=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(canonicalDispatchJSON({source,demands})))),n=>n.toString(16).padStart(2,'0')).join('');
  return{poolId:authority.poolId,source,demands,demandDigest};
