@@ -1,3 +1,5 @@
+import {describeFiscalCheckoutFailure} from '../utils/fiscalCheckoutErrorMessages';
+import {isCardOutcomeUnknownError} from '../utils/cardOutcomeException';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -76,7 +78,7 @@ test('fresh issuer loss blocks typed finalization before payment entry, provider
  const end=source.indexOf('\n   const ',start+10);
  let effects=0,error='';
  const context=evaluate(source.slice(start,end)+'\nglobalThis.finalize=handleFinalize;',{
-  recordCheckoutDiagnostic:()=>{},items:[],total:25,payments:[],finalizationMountedRef:{current:true},finalizationSubmissionRef:{current:false},finalizationProgressRef:{current:null},finalizationContextRef:{current:{}},yieldInteractionPaint:async()=>{},isFinalizing:false,isProcessingGateway:false,isSuccessScreen:false,recoverCommittedReceipt:undefined,
+  voluntaryTip:0,isCardOutcomeUnknownError,describeFiscalCheckoutFailure,recordCheckoutDiagnostic:()=>{},items:[],total:25,payments:[],finalizationMountedRef:{current:true},finalizationSubmissionRef:{current:false},finalizationProgressRef:{current:null},finalizationContextRef:{current:{}},yieldInteractionPaint:async()=>{},isFinalizing:false,isProcessingGateway:false,isSuccessScreen:false,recoverCommittedReceipt:undefined,
   canFinalize:true,canFinalizeWithTypedAmount:false,isCreditActionBlocked:false,beginPosInteraction:()=>({stages:{}}),expectInteractionRender:()=>{},
   setFinalizeError:(e:string)=>{error=e;},setSuccessNotice:()=>{},setGatewayProgress:()=>{},setIsFinalizing:()=>{},markInteractionStateUpdate:()=>{},
   beforePaymentEffects:async()=>{throw Error('FISCAL_ISSUER_RNC_REQUIRED');},
