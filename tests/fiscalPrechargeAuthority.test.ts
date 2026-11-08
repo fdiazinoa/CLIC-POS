@@ -59,7 +59,7 @@ test('manual add validates before changing payment or input and retains a previo
  let changes=0,builds=0,checks=0;let error='';
  const approved=[{id:'approved',gatewayStatus:'APPROVED',amount:10}];const before=JSON.stringify(approved);
  const context=evaluate(body+'\nglobalThis.add=handleAddPayment;',{
-  inputAmount:'25',roundPaymentAmountByMethod:(n:number)=>n,activeForeignCurrencyRounding:null,
+  inputAmount:'25',voluntaryTip:0,roundPaymentAmountByMethod:(n:number)=>n,activeForeignCurrencyRounding:null,
   selectedCurrency:{code:'DOP',rate:1},baseCurrency:{code:'DOP'},activePaymentMethod:{type:'CASH'},activeIsCxCCredit:false,
   activeRequiresOnline:false,isOnline:false,isMaster:true,roundToTwo:(n:number)=>n,
   validatePaymentAuthority:async()=>{checks++;throw Error('FISCAL_ISSUER_RNC_REQUIRED');},
