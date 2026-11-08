@@ -1,4 +1,5 @@
-import {COMPANY_DISPATCH_ESCROW_SCHEMA,DISPATCH_FINANCIAL_SOURCE_GUARDS} from '../services/db/CompanyDispatchEscrowStore';
+import {DISPATCH_POOL_INSTALL_SCHEMA,DISPATCH_STORE_POLICY_SCHEMA_V2} from '../services/db/CompanyDispatchPool';
+import {COMPANY_DISPATCH_ESCROW_SCHEMA,DISPATCH_TRACKING_CLOCK_SCHEMA_V2,DISPATCH_FINANCIAL_SOURCE_GUARDS} from '../services/db/CompanyDispatchEscrowStore';
 import {compileDispatchCheckoutSource} from '../services/dispatch/DispatchCheckoutSource';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -18,7 +19,7 @@ function fixture(stock = 5) {
     sort_order INTEGER, updatedAt TEXT, PRIMARY KEY(collection_name, doc_id));`);
   sql.exec(LARGE_MASTER_SYNC_V3_SCHEMA_SQL);
   sql.exec(DURABLE_OUTBOX_SCHEMA_SQL);
-  sql.exec(COMPANY_DISPATCH_ESCROW_SCHEMA);sql.exec(DISPATCH_FINANCIAL_SOURCE_GUARDS);
+  sql.exec(COMPANY_DISPATCH_ESCROW_SCHEMA);sql.exec(DISPATCH_TRACKING_CLOCK_SCHEMA_V2);sql.exec(DISPATCH_POOL_INSTALL_SCHEMA);sql.exec(DISPATCH_STORE_POLICY_SCHEMA_V2);sql.exec(DISPATCH_FINANCIAL_SOURCE_GUARDS);
   sql.exec(`UPDATE master_v3_state SET active_sync_id='S',active_version=2 WHERE singleton=1;
     INSERT INTO master_v3_operational_owner VALUES(1,'S',2,'binding');
     INSERT INTO master_v3_inventory_state VALUES(1,'S',2,4,'C','now');`);
@@ -525,8 +526,15 @@ for (const currentTaxes of [[{ id: 'TX', name: 'Changed', rate: 0.16, type: 'VAT
 test('ordinary reserved checkout uses installed quota and the real financial builder without a physical ledger',async()=>{
  const f=fixture();try{
   const module=await financialModule(f,true),transaction={...module.transaction('dispatch-ordinary'),customerId:undefined,payments:[{id:'cash-dispatch',method:'CASH',amount:118,timestamp:'2026-11-07T12:00:00Z'}]};
-  transaction.items=transaction.items.map(line=>({...line,taxRate:0.18}));
-  f.sql.exec("INSERT INTO pos_dispatch_pool_v1 VALUES('pool','bindingID','generation',1,'WAREHOUSE_DISPATCH',NULL,NULL);INSERT INTO pos_dispatch_active_pool_v1 VALUES(1,'pool','binding');INSERT INTO pos_dispatch_capture_cursor_v1 VALUES('pool',0)");
+  const nativeBinding=JSON.stringify(['tenant','terminal','device','https://erp.invalid','https://erp.invalid']);
+  f.sql.prepare('UPDATE master_v3_operational_owner SET binding=?').run(nativeBinding);
+  (globalThis as any).__v3FinancialFixture.session.binding=nativeBinding;
+  transaction.items=transaction.items.map(line=>({...line,taxRate:0.18,v3SaleAuthority:{...line.v3SaleAuthority,binding:nativeBinding}}));
+  f.sql.prepare('INSERT INTO documents VALUES(?,?,?,?,?)').run('config','current',JSON.stringify({terminals:[{id:'terminal',config:{currentDeviceId:'device',erpBinding:{tenantId:'tenant',companyId:'company',storeId:'store'}}}]}),0,'fixture');
+  f.sql.exec("INSERT INTO pos_dispatch_pool_v1 VALUES('pool','bindingID','generation',1,'WAREHOUSE_DISPATCH',NULL,NULL);INSERT INTO pos_dispatch_capture_cursor_v1 VALUES('pool',0)");
+  f.sql.prepare("INSERT INTO pos_dispatch_active_pool_v1 VALUES(1,'pool',?)").run(nativeBinding);
+  f.sql.prepare("INSERT INTO pos_dispatch_pool_install_v1 VALUES('pool',?,'fixture-witness','fixture-schema')").run(nativeBinding);
+  f.sql.exec("INSERT INTO pos_dispatch_policy_scope_v2 VALUES('pool','tenant','company','store')");
   const master={id:'P',tenant_id:'tenant',company_id:'company',type:'PRODUCT',taxable:true,metadata:{appliedTaxIds:['TX'],tariffs:[{tariffId:'T',price:118}]}};
   const authority={id:'quota',scope:{tenantId:'tenant',companyId:'company',storeId:'store',warehouseId:'W',terminalId:'terminal',deviceId:'device',bindingId:'bindingID',generation:'generation'},policyRevision:1,itemId:'P',dimensions:{},catalogSource:{commercialItem:master,rawGraph:[master],tariffs:[{id:'T',tax_included:true}],taxes:[{id:'TX',rate:0.18}]}};
   f.sql.prepare("INSERT INTO pos_dispatch_quota_v1 VALUES('quota','pool',?,'hash',2000000,0,0,'ACTIVE')").run(JSON.stringify(authority));f.sql.exec("INSERT INTO pos_dispatch_quota_delivery_v1 VALUES('quota','witness')");
