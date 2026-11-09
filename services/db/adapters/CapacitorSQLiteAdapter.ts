@@ -592,11 +592,23 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
     async readDispatchCommittedReceipt(transactionId:string):Promise<Transaction|null>{
         return this.withWriteLock(async()=>{const rows=(await this.ensureDb().query("SELECT c.source_snapshot_json FROM pos_dispatch_native_capture_v1 c JOIN pos_dispatch_precharge_v1 p ON p.checkout_id=c.checkout_id AND p.phase='COMMITTED' AND p.event_id=c.event_id JOIN pos_dispatch_pool_install_v1 i ON i.pool_id=c.pool_id JOIN master_v3_operational_owner o ON o.binding=i.native_binding WHERE c.transaction_id=? AND EXISTS(SELECT 1 FROM documents d WHERE d.collection_name='transactionHistory' AND d.doc_id=c.transaction_id) LIMIT 2",[transactionId])).values||[];if(rows.length>1)throw Error('DISPATCH_RETAINED_RECEIPT_REQUIRED');return rows[0]?JSON.parse(String(rows[0].source_snapshot_json)):null;});
     }
-    async readDispatchPendingCheckout(cartIds?:string[]):Promise<{checkoutId:string;transactionId:string;phase:string;source:Record<string,unknown>;payments:import('../../../types').PaymentEntry[];receipt?:Transaction}|null>{
+    async readDispatchPendingCheckout(cartIds?:string[]):Promise<{checkoutId:string;transactionId:string;phase:string;source:Record<string,unknown>;payments:import('../../../types').PaymentEntry[];receipt?:Transaction;fiscalCheckout?:import('../../fiscal/FiscalWorkflowV2Types').FiscalWorkflowCheckoutV2}|null>{
         return this.withWriteLock(async()=>{
             const rows=(await this.ensureDb().query("SELECT p.* FROM pos_dispatch_precharge_v1 p JOIN pos_dispatch_pool_install_v1 a ON a.pool_id=p.pool_id JOIN master_v3_operational_owner o ON o.binding=a.native_binding WHERE p.phase IN('PREPARED','EFFECT_POSSIBLE') AND NOT EXISTS(SELECT 1 FROM pos_fiscal_checkouts_v2 f WHERE f.checkout_id=p.checkout_id) ORDER BY p.checkout_id LIMIT 2")).values||[];
-            if(rows.length>1)throw Error('DISPATCH_PREVIOUS_PAYMENT_RECONCILIATION_REQUIRED');
-            let row=rows[0];
+            const joint=(await this.ensureDb().query("SELECT p.*,f.checkout_id fiscal_checkout_id,f.transaction_id fiscal_transaction_id,f.scope_key fiscal_scope_key,f.cart_identity fiscal_cart_identity,f.phase fiscal_phase,f.checkout_json fiscal_checkout_json FROM pos_dispatch_precharge_v1 p JOIN pos_dispatch_pool_install_v1 a ON a.pool_id=p.pool_id JOIN master_v3_operational_owner o ON o.binding=a.native_binding LEFT JOIN pos_fiscal_checkouts_v2 f ON f.checkout_id=p.checkout_id WHERE p.phase='EFFECT_POSSIBLE' AND (f.checkout_id IS NOT NULL OR EXISTS(SELECT 1 FROM pos_fiscal_checkout_current_v2 c WHERE c.checkout_id=p.checkout_id) OR EXISTS(SELECT 1 FROM pos_fiscal_pending_numbers_v2 n WHERE n.checkout_id=p.checkout_id)) ORDER BY p.checkout_id LIMIT 2")).values||[];
+            let fiscalCheckout:import('../../fiscal/FiscalWorkflowV2Types').FiscalWorkflowCheckoutV2|undefined;
+            for(const candidate of joint){
+                try{
+                    const checkout=JSON.parse(String(candidate.fiscal_checkout_json)),source=JSON.parse(String(candidate.source_json)),scope=JSON.parse(checkout.scopeKey);
+                    const pointers=(await this.ensureDb().query('SELECT scope_key,checkout_id FROM pos_fiscal_checkout_current_v2 WHERE checkout_id=? OR scope_key=?',[candidate.checkout_id,checkout.scopeKey])).values||[];
+                    if(candidate.fiscal_checkout_id!==candidate.checkout_id||candidate.fiscal_transaction_id!==candidate.transaction_id||candidate.fiscal_phase!=='EFFECT_POSSIBLE'||checkout.checkoutId!==candidate.checkout_id||checkout.transactionId!==candidate.transaction_id||checkout.phase!==candidate.fiscal_phase||checkout.scopeKey!==candidate.fiscal_scope_key||checkout.cartIdentity!==candidate.fiscal_cart_identity||source.companyDispatchSource?.checkoutId!==candidate.checkout_id||typeof checkout.operationId!=='string'||!checkout.operationId||!Array.isArray(checkout.paymentIds)||!checkout.paymentIds.length||checkout.paymentIds.some((id:unknown)=>typeof id!=='string'||!id)||new Set(checkout.paymentIds).size!==checkout.paymentIds.length||pointers.length!==1||pointers[0].checkout_id!==candidate.checkout_id||pointers[0].scope_key!==checkout.scopeKey)throw Error('INVALID_JOINT_IDENTITY');
+                    await this.assertDispatchFiscalScopeUnlocked(String(candidate.pool_id),scope);
+                    fiscalCheckout=checkout;
+                }catch{throw Error('DISPATCH_JOINT_CHECKOUT_RECONCILIATION_REQUIRED');}
+            }
+            const pending=[...rows.filter(row=>!joint.some(candidate=>candidate.checkout_id===row.checkout_id)),...joint];
+            if(pending.length>1)throw Error('DISPATCH_PREVIOUS_PAYMENT_RECONCILIATION_REQUIRED');
+            let row=pending[0];
             if(!row&&cartIds?.length){
                 if(cartIds.some(id=>typeof id!=='string'||!id)||new Set(cartIds).size!==cartIds.length)throw Error('DISPATCH_CART_LINE_IDENTITY');
                 const committed=(await this.ensureDb().query("SELECT p.*,c.source_snapshot_json FROM pos_dispatch_precharge_v1 p JOIN pos_dispatch_pool_install_v1 a ON a.pool_id=p.pool_id JOIN master_v3_operational_owner o ON o.binding=a.native_binding JOIN pos_dispatch_native_capture_v1 c ON c.checkout_id=p.checkout_id AND c.transaction_id=p.transaction_id WHERE p.phase='COMMITTED' AND (SELECT json_group_array(cart_id) FROM (SELECT json_extract(value,'$.cartId') cart_id FROM json_each(p.source_json,'$.items') ORDER BY cart_id))=? LIMIT 2",[JSON.stringify([...cartIds].sort())])).values||[];
@@ -605,7 +617,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             if(!row)return null;
             const receipt=row.source_snapshot_json?JSON.parse(String(row.source_snapshot_json)) as Transaction:undefined;
             if(receipt&&!((await this.ensureDb().query("SELECT 1 retained FROM documents WHERE collection_name='transactionHistory' AND doc_id=?",[row.transaction_id])).values?.length))throw Error('DISPATCH_RETAINED_RECEIPT_REQUIRED');
-            return{checkoutId:String(row.checkout_id),transactionId:String(row.transaction_id),phase:String(row.phase),source:JSON.parse(String(row.source_json)),payments:receipt?.payments||(row.effects_json?JSON.parse(String(row.effects_json)):[]),...(receipt?{receipt}:{})};
+            return{checkoutId:String(row.checkout_id),transactionId:String(row.transaction_id),phase:String(row.phase),source:JSON.parse(String(row.source_json)),payments:receipt?.payments||(row.effects_json?JSON.parse(String(row.effects_json)):[]),...(receipt?{receipt}:{}),...(fiscalCheckout?{fiscalCheckout}:{})};
         });
     }
     private async readDispatchNoStockSourcesUnlocked(items:Record<string,any>[]=[]):Promise<Array<{pin:Record<string,any>;facts:Record<string,any>}>>{

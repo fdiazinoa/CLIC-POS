@@ -5940,6 +5940,22 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          if(dispatchCheckoutRef.current?.recoveryPayments){
             const retained=dispatchCheckoutRef.current,source=retained.source;
             if(dispatchPaymentIntents(payments)!==dispatchPaymentIntents(retained.recoveryPayments))throw Error('DISPATCH_PRECHARGE_EFFECT_CONFLICT');
+            if(fiscalCheckoutRef.current){
+               const checkout=fiscalCheckoutRef.current;
+               if(checkout.checkoutId!==retained.checkoutId||checkout.transactionId!==retained.transactionId||checkout.phase!=='EFFECT_POSSIBLE'||!checkout.allocation||!checkout.offlineSaleDate||!checkout.allocationIssuance)throw Error('DISPATCH_JOINT_CHECKOUT_RECONCILIATION_REQUIRED');
+               const reservation=await fiscalWorkflowV2Client.allocationDraft(checkout);
+               if(reservation.ncf!==checkout.allocation.ncf||JSON.stringify(reservation.fiscalIssuance)!==JSON.stringify(checkout.allocationIssuance)||reservation.fiscalEnvironment!==checkout.allocation.environment)throw Error('DISPATCH_JOINT_CHECKOUT_RECONCILIATION_REQUIRED');
+               const fiscalFields={fiscalWorkflowCheckoutId:checkout.checkoutId,fiscalAllocationAuthorizationId:checkout.allocation.authorizationId,date:checkout.offlineSaleDate,ncf:checkout.allocation.ncf,ncfType:checkout.allocation.ncfType,electronicNcf:checkout.allocation.ncf,fiscalIssuance:checkout.allocationIssuance,fiscalEnvironment:reservation.fiscalEnvironment,fiscalMode:'ECF' as const,fiscalProvider:'MSELLER' as const,...(checkout.fiscalSaleContext?{fiscalSaleContext:checkout.fiscalSaleContext}:{})};
+               const matchesFiscal=(value:Transaction)=>value.id===checkout.transactionId&&value.fiscalWorkflowCheckoutId===checkout.checkoutId&&value.fiscalAllocationAuthorizationId===checkout.allocation!.authorizationId&&value.date===checkout.offlineSaleDate&&value.ncf===checkout.allocation!.ncf&&value.ncfType===checkout.allocation!.ncfType&&value.fiscalEnvironment===reservation.fiscalEnvironment&&value.fiscalMode==='ECF'&&value.fiscalProvider==='MSELLER'&&JSON.stringify(value.fiscalIssuance)===JSON.stringify(checkout.allocationIssuance);
+               const draft=await transactionService.createTransaction({...source,...fiscalFields,id:retained.transactionId,documentType:'TICKET',seriesId:resolveTerminalDocumentSeriesId(activeTerminalConfig,'TICKET'),terminalId:activeTerminalId,userId:source.userId,userName:currentUser.name,status:'COMPLETED',payments} as Partial<Transaction>,{deferDurablePersistence:true});
+               if(!matchesFiscal(draft))throw Error('DISPATCH_JOINT_CHECKOUT_RECONCILIATION_REQUIRED');
+               await onTransactionComplete({...draft,...source,...fiscalFields,id:retained.transactionId,payments} as Transaction);
+               const captured=(await db.getDocument('transactions',retained.transactionId)||await db.getDocument('transactionHistory',retained.transactionId)) as Transaction|null;
+               if(!captured?.companyDispatchSource?.sequence||!matchesFiscal(captured))throw Error('DISPATCH_NATIVE_CAPTURE_REQUIRED');
+               await fiscalWorkflowV2Client.acknowledge(checkout);
+               fiscalCheckoutRef.current=null;fiscalCheckoutOperationRef.current=null;offlineTableFiscalContextRef.current=undefined;offlineTablePaymentFenceRef.current=false;
+               onUpdateCart([]);resetCompletedSaleDiscount(setGlobalDiscount);setRedeemedCoupon(null);setCouponCode('');onSelectCustomer(null);dispatchCheckoutRef.current=null;return captured;
+            }
             const draft=await transactionService.createTransaction({...source,id:retained.transactionId,documentType:'TICKET',seriesId:resolveTerminalDocumentSeriesId(activeTerminalConfig,'TICKET'),date:new Date().toISOString(),terminalId:activeTerminalId,userId:source.userId,userName:currentUser.name,status:'COMPLETED',fiscalMode:'NONE',fiscalProvider:'NONE',payments} as Partial<Transaction>,{deferDurablePersistence:true});
             await onTransactionComplete({...draft,...source,id:retained.transactionId,payments} as Transaction);
             const captured=(await db.getDocument('transactions',retained.transactionId)||await db.getDocument('transactionHistory',retained.transactionId)) as Transaction|null;
@@ -7179,6 +7195,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
         const source=possibleDispatch.source as Record<string,any>;
         if(source.total!==cartTotal||source.customerId!==effectiveSelectedCustomer?.id||source.items?.length!==processedCart.length||processedCart.some(line=>!source.items.some((original:CartItem)=>original.cartId===line.cartId&&original.id===line.id&&original.quantity===line.quantity&&original.price===line.price)))throw Error('El cobro anterior requiere reconciliación; no se registró otro pago.');
         if(!possibleDispatch.payments.length||possibleDispatch.payments.some(payment=>payment.method!=='CASH'))throw Error('El pago anterior tiene resultado pendiente. Recupéralo antes de iniciar otro cobro.');
+        if(possibleDispatch.fiscalCheckout){
+          const checkout=possibleDispatch.fiscalCheckout,scope=readFiscalWorkflowLocalScope(activeTerminalConfig,terminalId);
+          const ids=possibleDispatch.payments.map(payment=>payment.id);
+          if(checkout.scopeKey!==fiscalWorkflowScopeKey(scope)||checkout.cartIdentity!==currentFiscalCheckoutCartIdentity(checkout.fiscalSaleContext)||checkout.fiscalSaleContext&&(checkout.fiscalSaleContext.accountId!==String(activeTable?.currentOrderId)||checkout.fiscalSaleContext.tableId!==String(activeTable?.id))||new Set(ids).size!==ids.length||JSON.stringify([...ids].sort())!==JSON.stringify([...checkout.paymentIds].sort())||JSON.stringify([...paymentIds].sort())!==JSON.stringify([...checkout.paymentIds].sort()))throw Error('DISPATCH_JOINT_CHECKOUT_RECONCILIATION_REQUIRED');
+          fiscalCheckoutRef.current=checkout;fiscalCheckoutOperationRef.current=checkout.operationId;
+        }
         dispatchCheckoutRef.current={checkoutId:possibleDispatch.checkoutId,transactionId:possibleDispatch.transactionId,source:{...source,id:possibleDispatch.transactionId,inventoryEffectsContract:'WAREHOUSE_RESERVATION_V1'},effectPossible:true,recoveryPayments:possibleDispatch.payments};
         return Object.assign(()=>{},{recoveryPayments:possibleDispatch.payments,futureCheckout:{checkoutId:possibleDispatch.checkoutId,transactionId:possibleDispatch.transactionId},preparePaymentEffects:async(payments:PaymentEntry[])=>{if(dispatchPaymentIntents(payments)!==dispatchPaymentIntents(possibleDispatch.payments))throw Error('DISPATCH_PRECHARGE_EFFECT_CONFLICT');}});
       }

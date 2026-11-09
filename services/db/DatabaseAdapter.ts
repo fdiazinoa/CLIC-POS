@@ -143,7 +143,7 @@ export interface DatabaseAdapter {
     // documents and their durable outbox events in one database transaction.
     commitFinancialTransaction?(input: FinancialCommitInput): Promise<void>;
     readDispatchCommittedReceipt?(transactionId:string):Promise<import('../../types').Transaction|null>;
-    readDispatchPendingCheckout?(cartIds?:string[]):Promise<{checkoutId:string;transactionId:string;phase:string;source:Record<string,unknown>;payments:import('../../types').PaymentEntry[];receipt?:import('../../types').Transaction}|null>;
+    readDispatchPendingCheckout?(cartIds?:string[]):Promise<{checkoutId:string;transactionId:string;phase:string;source:Record<string,unknown>;payments:import('../../types').PaymentEntry[];receipt?:import('../../types').Transaction;fiscalCheckout?:import('../fiscal/FiscalWorkflowV2Types').FiscalWorkflowCheckoutV2}|null>;
     readDispatchCheckoutAuthority?(checkoutId?:string,items?:import('../../types').CartItem[]):Promise<import('../dispatch/DispatchCheckoutSource').DispatchCheckoutAuthority>;
     readDispatchActivePoolState?():Promise<string|null>;
     dispatchNativeSchemaHash?():Promise<string>;
