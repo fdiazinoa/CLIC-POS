@@ -1,11 +1,12 @@
+import {COMPANY_DISPATCH_ESCROW_SCHEMA} from '../services/db/CompanyDispatchEscrowStore';
 import test from 'node:test';import assert from 'node:assert/strict';import {DatabaseSync} from 'node:sqlite';
-import {NativeFiscalWorkflowV2Store,FISCAL_WORKFLOW_V2_SCHEMA} from '../services/db/FiscalWorkflowV2Store';
+import {NativeFiscalWorkflowV2Store,FISCAL_WORKFLOW_V2_SCHEMA,reserveFiscalWorkflowCheckoutInTransaction} from '../services/db/FiscalWorkflowV2Store';
 import {CapacitorSQLiteAdapter} from '../services/db/adapters/CapacitorSQLiteAdapter';
 import {DURABLE_OUTBOX_SCHEMA_SQL} from '../services/sync/DurableOutboxSchema';
 import {fiscalWorkflowScopeKey} from '../services/fiscal/FiscalWorkflowV2Types';
 import type {FiscalWorkflowPermitV2,FiscalWorkflowStateV2} from '../services/fiscal/FiscalWorkflowV2Types';
 const scope={tenantId:'tenant',companyId:'company',storeId:'store',terminalId:'terminal',deviceId:'device'},key=fiscalWorkflowScopeKey(scope);
-function fixture(){const sql=new DatabaseSync(':memory:');sql.exec(FISCAL_WORKFLOW_V2_SCHEMA+DURABLE_OUTBOX_SCHEMA_SQL+`CREATE TABLE documents(collection_name TEXT,doc_id TEXT,data TEXT,sort_order INTEGER,updatedAt TEXT,PRIMARY KEY(collection_name,doc_id));`);let fault=false;
+function fixture(){const sql=new DatabaseSync(':memory:');sql.exec(FISCAL_WORKFLOW_V2_SCHEMA+DURABLE_OUTBOX_SCHEMA_SQL+COMPANY_DISPATCH_ESCROW_SCHEMA+`CREATE TABLE master_v3_operational_owner(singleton INTEGER,binding TEXT);`+`CREATE TABLE documents(collection_name TEXT,doc_id TEXT,data TEXT,sort_order INTEGER,updatedAt TEXT,PRIMARY KEY(collection_name,doc_id));`);let fault=false;
  const bridge={query:async(q:string,v:any[]=[])=>({values:sql.prepare(q).all(...v)}),run:async(q:string,v:any[]=[])=>{if(fault&&q.includes('INSERT INTO documents'))throw Error('SYNTHETIC_DOCUMENT_WRITE');return {changes:sql.prepare(q).run(...v)};},execute:async(q:string)=>{sql.exec(q);}};
  const adapter=new CapacitorSQLiteAdapter();Object.assign(adapter,{db:bridge,isReady:true});
  const store=adapter.fiscalWorkflowStore;const permit=(index:number):FiscalWorkflowPermitV2=>({schemaVersion:2,permitId:`00000000-0000-4000-8000-${String(index).padStart(12,'0')}`,transactionId:`10000000-0000-4000-8000-${String(index).padStart(12,'0')}`,nonce:`nonce-${index}`,createdAt:new Date().toISOString(),expiresAt:new Date(Date.now()+600000).toISOString(),scope,issuerRnc:'101010101',environment:0,authorityHash:'a'.repeat(64),operationKind:'SALE',state:'PERMIT'});
@@ -135,4 +136,29 @@ test('client context invalidation between current read and reservation cannot mu
   const before=recoverySnapshot(f),writes=changes(f);await assert.rejects(c.client.reserveCheckout('cart','remounted-ui',{requirePermit:true}),/DISABLED/);
   assert.equal(recoverySnapshot(f),before);assert.equal(changes(f),writes);
  }finally{clearFiscalWorkflowCapability();f.sql.close();}
+});
+
+// This is a caller-owned SQLite transaction, not a second bridge transaction.
+test('caller-owned checkout preparation rolls permit identity back when its companion reservation fails',async()=>{
+ const f=fixture();try{
+  const operation=await f.store.refillOperation(key);await f.store.savePermits(key,operation,[f.permit(1)]);
+  let ownTransactionStatements=0;const sql={...f.bridge,execute:async()=>{ownTransactionStatements++;throw Error('NESTED_TRANSACTION_FORBIDDEN');}};
+  f.sql.exec('BEGIN IMMEDIATE');
+  const first=await reserveFiscalWorkflowCheckoutInTransaction(sql,key,'joint-cart',undefined,'joint-operation',{requirePermit:true,authorityHash:'a'.repeat(64)});
+  assert.equal(first.transactionId,f.permit(1).transactionId);
+  // A quota failure must be rolled back by the same outer owner, including the selected permit.
+  f.sql.exec('ROLLBACK');
+  assert.equal((f.sql.prepare('SELECT state FROM pos_fiscal_permits_v2').get() as any).state,'AVAILABLE');
+  assert.equal((f.sql.prepare('SELECT count(*) n FROM pos_fiscal_checkouts_v2').get() as any).n,0);
+  f.sql.exec('BEGIN IMMEDIATE');
+  const retried=await reserveFiscalWorkflowCheckoutInTransaction(sql,key,'joint-cart',undefined,'joint-operation',{requirePermit:true,authorityHash:'a'.repeat(64)});
+  const replay=await reserveFiscalWorkflowCheckoutInTransaction(sql,key,'joint-cart',undefined,'joint-operation',{requirePermit:true,authorityHash:'a'.repeat(64)});
+  assert.deepEqual(replay,retried);assert.equal(retried.transactionId,first.transactionId);
+  f.sql.exec('COMMIT');assert.equal(ownTransactionStatements,0);
+  await f.store.markPaymentPossible(retried.checkoutId,'payment');
+  f.sql.exec('BEGIN IMMEDIATE');
+  const uncertain=await reserveFiscalWorkflowCheckoutInTransaction(sql,key,'joint-cart',undefined,'joint-operation',{requirePermit:true,authorityHash:'a'.repeat(64)});
+  assert.equal(uncertain.phase,'EFFECT_POSSIBLE');assert.equal(uncertain.checkoutId,retried.checkoutId);assert.deepEqual(uncertain.paymentIds,['payment']);
+  f.sql.exec('COMMIT');
+ }finally{f.sql.close();}
 });

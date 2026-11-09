@@ -1,0 +1,186 @@
+{
+  "schemaVersion": 2,
+  "taskId": "company-warehouse-dispatch",
+  "baseSha": "1e3273e94309c2a4e50b19767cef981eaf51f5dd",
+  "candidateSha": "1e3273e94309c2a4e50b19767cef981eaf51f5dd",
+  "implementationAuthors": [
+    "/root/implementation"
+  ],
+  "additionalRequiredGates": [
+    "device"
+  ],
+  "gates": {
+    "analysis": {
+      "status": "PASS",
+      "role": "analyst",
+      "agentId": "/root/pos_dispatch_analysis",
+      "candidateSha": "1e3273e94309c2a4e50b19767cef981eaf51f5dd",
+      "artifacts": [
+        "planning/pos-analysis.md"
+      ]
+    },
+    "plan": {
+      "status": "PASS",
+      "role": "plan-approver",
+      "agentId": "/root/operations_review",
+      "candidateSha": "1e3273e94309c2a4e50b19767cef981eaf51f5dd",
+      "artifacts": [
+        "planning/review-g1-final.md"
+      ]
+    },
+    "review": {
+      "status": "PENDING",
+      "role": "reviewer",
+      "agentId": "/root/operations_review",
+      "candidateSha": "1e3273e94309c2a4e50b19767cef981eaf51f5dd",
+      "artifacts": []
+    },
+    "qa": {
+      "status": "PENDING",
+      "role": "qa",
+      "agentId": "/root/dispatch_qa",
+      "candidateSha": "1e3273e94309c2a4e50b19767cef981eaf51f5dd",
+      "artifacts": []
+    },
+    "functional": {
+      "status": "PENDING",
+      "role": "qa",
+      "agentId": "/root/dispatch_qa",
+      "candidateSha": "1e3273e94309c2a4e50b19767cef981eaf51f5dd",
+      "artifacts": []
+    },
+    "regression": {
+      "status": "PENDING",
+      "role": "qa",
+      "agentId": "/root/dispatch_qa",
+      "candidateSha": "1e3273e94309c2a4e50b19767cef981eaf51f5dd",
+      "artifacts": []
+    },
+    "sync": {
+      "status": "PENDING",
+      "role": "sync-validator",
+      "agentId": "/root/dispatch_sync",
+      "candidateSha": "1e3273e94309c2a4e50b19767cef981eaf51f5dd",
+      "artifacts": []
+    },
+    "offline": {
+      "status": "PENDING",
+      "role": "qa",
+      "agentId": "/root/dispatch_qa",
+      "candidateSha": "1e3273e94309c2a4e50b19767cef981eaf51f5dd",
+      "artifacts": []
+    },
+    "device": {
+      "status": "PENDING",
+      "role": "qa",
+      "agentId": "/root/dispatch_qa",
+      "candidateSha": "1e3273e94309c2a4e50b19767cef981eaf51f5dd",
+      "artifacts": []
+    },
+    "performance": {
+      "status": "PENDING",
+      "role": "performance",
+      "agentId": "/root/dispatch_performance",
+      "candidateSha": "1e3273e94309c2a4e50b19767cef981eaf51f5dd",
+      "artifacts": []
+    },
+    "build": {
+      "status": "PENDING",
+      "role": "release",
+      "agentId": "/root/visibility_release",
+      "candidateSha": "1e3273e94309c2a4e50b19767cef981eaf51f5dd",
+      "artifacts": []
+    },
+    "internalApproval": {
+      "status": "PENDING",
+      "role": "orchestrator",
+      "agentId": "/root",
+      "candidateSha": "1e3273e94309c2a4e50b19767cef981eaf51f5dd",
+      "artifacts": []
+    },
+    "internalDeployment": {
+      "status": "PENDING",
+      "role": "internal-deploy",
+      "agentId": "UNASSIGNED",
+      "candidateSha": "1e3273e94309c2a4e50b19767cef981eaf51f5dd",
+      "artifacts": [],
+      "environment": "INTERNAL_TESTING",
+      "releaseStatus": "internal_testing",
+      "steps": [
+        {
+          "name": "IDENTIFY",
+          "status": "PENDING"
+        },
+        {
+          "name": "VALIDATE",
+          "status": "PENDING"
+        },
+        {
+          "name": "INSPECT_CURRENT",
+          "status": "PENDING"
+        },
+        {
+          "name": "UPLOAD_NEW",
+          "status": "PENDING"
+        },
+        {
+          "name": "VERIFY_STORAGE",
+          "status": "PENDING"
+        },
+        {
+          "name": "PUBLISH_INTERNAL",
+          "status": "PENDING"
+        },
+        {
+          "name": "VERIFY_DOWNLOAD",
+          "status": "PENDING"
+        },
+        {
+          "name": "CLEANUP",
+          "status": "PENDING"
+        }
+      ],
+      "storage": {
+        "sha256": "REPLACE",
+        "sizeBytes": 0
+      },
+      "download": {
+        "sha256": "REPLACE",
+        "sizeBytes": 0
+      },
+      "publishedReference": "",
+      "previousInspected": false,
+      "previousRetainedUntilVerification": false
+    },
+    "internalTesting": {
+      "status": "PENDING",
+      "role": "qa",
+      "agentId": "UNASSIGNED",
+      "candidateSha": "1e3273e94309c2a4e50b19767cef981eaf51f5dd",
+      "artifacts": []
+    },
+    "productionApproval": {
+      "status": "PENDING",
+      "role": "release",
+      "agentId": "UNASSIGNED",
+      "candidateSha": "1e3273e94309c2a4e50b19767cef981eaf51f5dd",
+      "artifacts": []
+    },
+    "productionRelease": {
+      "status": "PENDING",
+      "role": "release",
+      "agentId": "UNASSIGNED",
+      "candidateSha": "1e3273e94309c2a4e50b19767cef981eaf51f5dd",
+      "artifacts": [],
+      "environment": "PRODUCTION",
+      "publishedReference": "",
+      "download": {
+        "sha256": "REPLACE",
+        "sizeBytes": 0
+      }
+    }
+  },
+  "scope": "Code implementation and isolated QA only. No operational APK installation, internal deployment or production release requested.",
+  "g0G1ApprovedPlanSha256": "035d34e5a33d14844ed578e097deaded96e2aee0c4bacc532021d77298d9f574",
+  "g0G1ApprovedSourceBase": "1e3273e94309c2a4e50b19767cef981eaf51f5dd"
+}

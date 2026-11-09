@@ -18,8 +18,9 @@ export interface LargeMasterSyncV3HttpResponse {
   text: string;
 }
 
+export type V3BoundRequestBody={action:'readAdoptionProofs';eventIds:string[]}|{witnessHash:string}|{action:'claimQuota'|'ackQuotaInstalled'|'acceptBarrier';requestKey:string;bindingId:string;generation:string;[key:string]:unknown};
 export interface LargeMasterSyncV3Transport {
-  request(path: string, init: { method: 'GET' | 'POST'; signal?: AbortSignal;body?:{witnessHash:string} }): Promise<LargeMasterSyncV3HttpResponse>;
+  request(path: string, init: { method: 'GET' | 'POST'; signal?: AbortSignal;body?:V3BoundRequestBody }): Promise<LargeMasterSyncV3HttpResponse>;
 }
 
 export interface LargeMasterSyncV3Metric {
@@ -232,7 +233,7 @@ export class FetchLargeMasterSyncV3Transport implements LargeMasterSyncV3Transpo
     private readonly fetchImpl: typeof fetch = fetch,
   ) {}
 
-  async request(path: string, init: { method: 'GET' | 'POST'; signal?: AbortSignal;body?:{witnessHash:string} }): Promise<LargeMasterSyncV3HttpResponse> {
+  async request(path: string, init: { method: 'GET' | 'POST'; signal?: AbortSignal;body?:V3BoundRequestBody }): Promise<LargeMasterSyncV3HttpResponse> {
     const response = await this.fetchImpl(`${this.baseUrl.replace(/\/+$/, '')}${path}`, {
       method: init.method,
       headers: {...this.getHeaders(),'X-Pos-Tracking-Contract':'1',...(init.body?{'Content-Type':'application/json'}:{})},

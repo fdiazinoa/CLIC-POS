@@ -1,3 +1,5 @@
+import type {DispatchFiscalPreparation} from '../db/DispatchFiscalPreparation';
+type DispatchCheckoutPreparation=Pick<DispatchFiscalPreparation,'poolId'|'demandDigest'|'source'|'demands'>;
 import {assertDopFiscalSettlement} from './DopFiscalSettlement';
 import { setModifierQuantitiesSupported } from '../../utils/modifierQuantitiesCapability';
 import type {OfflineFiscalAllocation} from './OfflineFiscalAllocation';
@@ -49,7 +51,7 @@ async function verifyFormatWorkflowSource(source:Transaction,state:FiscalWorkflo
   return digest===state.originalDigestV2;
  }catch{return false;}
 }
-export function createFiscalWorkflowV2Client({readAuth=captureFiscalStatusBoundContext,readOfflineAuthority=readOfflineFiscalLocalAuthority,fetchImpl=fetch,store=()=>dbAdapter.fiscalWorkflowStore,readSource=async(id:string)=>await dbAdapter.getDocument<Transaction>('transactions',id)||await dbAdapter.getDocument<Transaction>('transactionHistory',id)}={}){
+export function createFiscalWorkflowV2Client({readAuth=captureFiscalStatusBoundContext,readOfflineAuthority=readOfflineFiscalLocalAuthority,fetchImpl=fetch,prepareDispatch=(input:DispatchFiscalPreparation)=>{if(!dbAdapter.prepareDispatchFiscalCheckout)throw Error('DISPATCH_NATIVE_ATOMIC_CHECKOUT_REQUIRED');return dbAdapter.prepareDispatchFiscalCheckout(input);},store=()=>dbAdapter.fiscalWorkflowStore,readSource=async(id:string)=>await dbAdapter.getDocument<Transaction>('transactions',id)||await dbAdapter.getDocument<Transaction>('transactionHistory',id)}={}){
  let offlinePrefetch:Promise<void>|null=null;
  const retirements=new Map<string,Promise<FiscalRetirementRecord>>();
  const refills=new Map<string,Promise<void>>();const inFlight=new Map<string,Promise<FiscalWorkflowStateV2>>();let cursor='',generation=0;let currentAuthority:{fingerprint:string;authorityHash:string;expires:number}|null=null;
@@ -270,13 +272,13 @@ const request=async(path:string,body?:Record<string,any>,signal?:AbortSignal,tim
    if(typeof window!=='undefined')window.dispatchEvent(new CustomEvent('offlineFiscalReserveUpdated'));
   })().catch(async error=>{leasePreparationError=error instanceof Error&&/^[A-Z0-9_]+$/.test(error.message)?error.message:'OFFLINE_FISCAL_PREPARATION_FAILED';if(error instanceof Error&&/^(FISCAL_OFFLINE_(LEASE_REVOKED|BINDING_CHANGED|AUTHORITY_CHANGED|MASTER_REQUIRED)|OFFLINE_FISCAL_LEASE_REVOKED|FISCAL_WORKFLOW_(SCOPE_CHANGED|DEVICE_CHANGED|ERP_ACTIVE_REQUIRED|ASSIGNMENT_REQUIRED|ISSUER_SCOPE_REQUIRED))$/.test(error.message))await store()?.revokeOfflineLeases?.('*');throw error;}).finally(()=>{offlinePrefetch=null;});return offlinePrefetch;
  },
- async reserveOfflineCheckout(cartIdentity:string,operationId:string,fiscalSaleContext?:TableFiscalSaleContext):Promise<FiscalWorkflowCheckoutV2>{
+ async reserveOfflineCheckout(cartIdentity:string,operationId:string,fiscalSaleContext?:TableFiscalSaleContext,dispatch?:DispatchCheckoutPreparation):Promise<FiscalWorkflowCheckoutV2>{
   const native=store();if(!native?.offlineLease)fail('OFFLINE_FISCAL_NATIVE_REQUIRED');
   const authority=await readOfflineAuthority(),scopeKey=fiscalWorkflowScopeKey(authority.scope);let current=await native.currentCheckout(scopeKey);
   // An existing paid attempt keeps its original kind, even when a new authority is downloaded.
   if(current?.allocation||!current&&await native.allocationAvailability?.(authority)){
    if(!native.reserveAllocationCheckout)fail('OFFLINE_FISCAL_NATIVE_REQUIRED');
-   return native.reserveAllocationCheckout!(authority,cartIdentity,operationId,fiscalSaleContext);
+   return dispatch?prepareDispatch({...dispatch,cartIdentity,operationId,fiscal:{kind:'ALLOCATION',authority,context:fiscalSaleContext}}):native.reserveAllocationCheckout!(authority,cartIdentity,operationId,fiscalSaleContext);
   }
   let requestedOperation=operationId;
   if(!current&&await native.abandonedOfflineOperation?.(scopeKey,operationId))requestedOperation=createUuid();
@@ -291,8 +293,9 @@ const request=async(path:string,body?:Record<string,any>,signal?:AbortSignal,tim
    expectedCurrent={scopeKey,checkoutId:current.checkoutId,transactionId:current.transactionId,operationId:current.operationId,cartIdentity,phase:'PREPARED',paymentIds:[]};
    if(!matchesPreparedRecovery(current,expectedCurrent)||current.permit?.leaseId!==lease.leaseId||current.permit.authorityHash!==lease.authorityHash)fail('FISCAL_WORKFLOW_CHECKOUT_RECONCILIATION_REQUIRED');
   }
-  const checkout=await native.reserveCheckout(scopeKey,cartIdentity,undefined,expectedCurrent?.operationId||requestedOperation,
-   {requirePermit:true,authorityHash:lease.authorityHash,offline:{authority,leaseId:lease.leaseId,...(paidRecovery?{allowPaidRecovery:true}:{}),...(fiscalSaleContext?{fiscalSaleContext}:{})},...(expectedCurrent?{expectedCurrent}:{})});
+  const chosenOperation=expectedCurrent?.operationId||requestedOperation;
+  const reserveOptions={requirePermit:true,authorityHash:lease.authorityHash,offline:{authority,leaseId:lease.leaseId,...(paidRecovery?{allowPaidRecovery:true}:{}),...(fiscalSaleContext?{fiscalSaleContext}:{})},...(expectedCurrent?{expectedCurrent}:{})};
+  const checkout=dispatch?await prepareDispatch({...dispatch,cartIdentity,operationId:chosenOperation,fiscal:{kind:'PERMIT',scopeKey,options:reserveOptions}}):await native.reserveCheckout(scopeKey,cartIdentity,undefined,chosenOperation,reserveOptions);
   if(JSON.stringify(await readOfflineAuthority())!==JSON.stringify(authority))fail('OFFLINE_FISCAL_BINDING_CHANGED');
   return checkout;
  },
@@ -383,7 +386,7 @@ const request=async(path:string,body?:Record<string,any>,signal?:AbortSignal,tim
    const closed=await native!.completeRetirement!(key,data);auth.assertCurrent();if(epoch!==generation)fail('FISCAL_WORKFLOW_CONTEXT_CHANGED');return closed;
   })().finally(()=>retirements.delete(key));retirements.set(key,run);return run;
  },
- async reserveCheckout(cartIdentity:string,operationId:string,options?:{requirePermit?:boolean}):Promise<FiscalWorkflowCheckoutV2>{
+ async reserveCheckout(cartIdentity:string,operationId:string,options?:{requirePermit?:boolean;dispatch?:DispatchCheckoutPreparation}):Promise<FiscalWorkflowCheckoutV2>{
   if(!this.enabled())fail('FISCAL_WORKFLOW_DISABLED');const native=store();if(!native)fail('FISCAL_WORKFLOW_NATIVE_REQUIRED');
   const auth=readAuth(),epoch=generation,scopeKey=json(scopeOf(auth.descriptor));auth.assertCurrent();
   const current=await native.currentCheckout(scopeKey);auth.assertCurrent();
@@ -396,8 +399,8 @@ const request=async(path:string,body?:Record<string,any>,signal?:AbortSignal,tim
      ||!hasPreparedSalePermit(current,scopeKey,authorityFor(auth)))fail('FISCAL_WORKFLOW_CHECKOUT_RECONCILIATION_REQUIRED');
   }
   const chosenOperation=expectedCurrent?.operationId||operationId;
-  const checkout=await native.reserveCheckout(scopeKey,cartIdentity,undefined,chosenOperation,
-    {...options,...(options?.requirePermit?{authorityHash:authorityFor(auth)}:{}),...(expectedCurrent?{expectedCurrent}:{})});
+  const reserveOptions={requirePermit:options?.requirePermit,...(options?.requirePermit?{authorityHash:authorityFor(auth)}:{}),...(expectedCurrent?{expectedCurrent}:{})};
+  const checkout=options?.dispatch?await prepareDispatch({...options.dispatch,cartIdentity,operationId:chosenOperation,fiscal:{kind:'PERMIT',scopeKey,options:reserveOptions}}):await native.reserveCheckout(scopeKey,cartIdentity,undefined,chosenOperation,reserveOptions);
   auth.assertCurrent();if(epoch!==generation||!this.enabled())fail('FISCAL_WORKFLOW_DISABLED');
   if(expectedCurrent&&(!matchesPreparedRecovery(checkout,expectedCurrent)||!hasPreparedSalePermit(checkout,scopeKey,authorityFor(auth))))fail('FISCAL_WORKFLOW_CHECKOUT_RECONCILIATION_REQUIRED');
   return checkout;

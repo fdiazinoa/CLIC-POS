@@ -320,6 +320,13 @@ export class DurableOutboxRepository {
         await this.refreshMetrics();
     }
 
+    async markDispatchAppliedErp(eventId:string,proof:import('../db/CompanyDispatchAdoption').DispatchAdoptionProof,at=new Date()):Promise<void>{
+        if(!this.database.acknowledgeDispatchAdoption)throw Error('DISPATCH_NATIVE_ADOPTION_UNSUPPORTED');
+        await this.database.acknowledgeDispatchAdoption(eventId,proof,at.toISOString());
+        syncMetrics.markErpApplied(at.toISOString());
+        await this.refreshMetrics();
+    }
+
     async markAppliedErp(eventId: string, at = new Date()): Promise<void> {
         const timestamp = at.toISOString();
         await this.requireSql()(

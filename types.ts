@@ -1663,6 +1663,7 @@ export interface InventoryCommitment {
 }
 
 export interface InventoryTracking {
+  dispatchQuotaAuthority?:import('./services/tracking/TrackingLine').DispatchQuotaTrackingAuthority;
   v3Authority?:import('./services/tracking/TrackingAuthority').TrackingAuthority;
   availableMinor?:number;
   selectedQuantityMinor?:number;
@@ -1836,6 +1837,8 @@ export interface CartItem extends Product {
 }
 
 export interface Transaction {
+  inventoryEffectsContract?:'WAREHOUSE_RESERVATION_V1';
+  companyDispatchSource?:{schemaVersion:1;source:'COMPANY_DISPATCH_ESCROW_V1';checkoutId:string;bindingId:string;generation:string;policyRevision:number;sequence?:number;lines:Array<Record<string,unknown>>};
   /** Fiscal invoice base; tender currency remains on each payment. */
   currency?: string;
   trackingCheckoutId?:string;

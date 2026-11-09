@@ -254,7 +254,7 @@ export class LargeMasterSyncV3OperationalSession {
   assertFinancialOfflineAuthority(transaction:Transaction):void {
     if(!this.offlineAuthority)return;
     if((!transaction.fiscalOfflineLeaseId&&!transaction.fiscalAllocationAuthorizationId)||!transaction.fiscalWorkflowCheckoutId||transaction.documentType!=='TICKET'
-      ||!transaction.items.length||transaction.items.some(line=>line.quantity<=0||line.articleFormat))throw new LargeMasterSyncV3Error('SYNC_V3_OFFLINE_FINANCIAL_AUTHORITY_REQUIRED');
+      ||!transaction.items.length||transaction.items.some(line=>line.quantity<=0||line.articleFormat&&transaction.inventoryEffectsContract!=='WAREHOUSE_RESERVATION_V1'))throw new LargeMasterSyncV3Error('SYNC_V3_OFFLINE_FINANCIAL_AUTHORITY_REQUIRED');
     const recovery=this.offlineAuthority.recovery;if(!recovery)return;
     let cart:any;try{cart=JSON.parse(recovery.cartIdentity);}catch{throw new LargeMasterSyncV3Error('SYNC_V3_OFFLINE_FINANCIAL_AUTHORITY_REQUIRED');}
     if(transaction.id!==recovery.transactionId||transaction.fiscalWorkflowCheckoutId!==recovery.checkoutId||(recovery.authorizationId?transaction.fiscalAllocationAuthorizationId!==recovery.authorizationId:transaction.fiscalOfflineLeaseId!==recovery.leaseId)

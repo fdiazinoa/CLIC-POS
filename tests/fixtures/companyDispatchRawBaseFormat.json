@@ -1,0 +1,17 @@
+{
+  "id": "base:item",
+  "variantId": null,
+  "name": "Unidad",
+  "abbreviation": "UND",
+  "factor": 1,
+  "barcode": "",
+  "isBase": true,
+  "defaultPurchase": true,
+  "defaultSale": true,
+  "allowPurchase": true,
+  "allowSale": true,
+  "allowTransfer": true,
+  "active": true,
+  "sortOrder": 0,
+  "prices": []
+}

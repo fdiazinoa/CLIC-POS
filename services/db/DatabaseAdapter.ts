@@ -38,6 +38,7 @@ export interface DurableOutboxEventInput {
 }
 
 export interface FinancialCommitInput {
+    dispatchCommit?:{checkoutId:string;transactionId:string};
     trackingCommits?:Array<{checkoutId:string;transactionId:string;selections:import('../tracking/TrackingAuthority').TrackingSelection[]}>;
     fiscalAllocationPreconditions?:Array<{collection:string;id:string;expected:string|null}>;
     fiscalWorkflowCommits?: Array<{checkoutId:string;transactionId:string;birth:import('../fiscal/FiscalWorkflowV2Types').FiscalWorkflowBirthV2|null}>;
@@ -141,6 +142,22 @@ export interface DatabaseAdapter {
     // Android SQLite only. POS-2A uses this boundary to commit the financial
     // documents and their durable outbox events in one database transaction.
     commitFinancialTransaction?(input: FinancialCommitInput): Promise<void>;
+    readDispatchCommittedReceipt?(transactionId:string):Promise<import('../../types').Transaction|null>;
+    readDispatchPendingCheckout?(cartIds?:string[]):Promise<{checkoutId:string;transactionId:string;phase:string;source:Record<string,unknown>;payments:import('../../types').PaymentEntry[];receipt?:import('../../types').Transaction;fiscalCheckout?:import('../fiscal/FiscalWorkflowV2Types').FiscalWorkflowCheckoutV2}|null>;
+    readDispatchCheckoutAuthority?(checkoutId?:string,items?:import('../../types').CartItem[]):Promise<import('../dispatch/DispatchCheckoutSource').DispatchCheckoutAuthority>;
+    readDispatchActivePoolState?():Promise<string|null>;
+    dispatchNativeSchemaHash?():Promise<string>;
+    prepareDispatchBarrierProof?(snapshot:import('./CompanyDispatchPool').DispatchPoolSnapshot):Promise<Record<string,unknown>>;
+    readDispatchPoolInstallation?(bindingId:string,generation:string):Promise<{witnessHash:string;nativeSchemaHash:string}|null>;
+    installDispatchPoolSnapshot?(snapshot:import('./CompanyDispatchPool').DispatchPoolSnapshot,witnessHash:string,nativeSchemaHash:string,previouslySeen:boolean):Promise<string>;
+    acknowledgeDispatchAdoption?(eventId:string,proof:import('./CompanyDispatchAdoption').DispatchAdoptionProof,at:string):Promise<void>;
+    readDispatchQuota?(id:string):Promise<{authorityCanonical:string;authorityHash:string;witnessHash:string;availableMinor:number}|null>;
+    readDispatchEffectClock?(checkoutId:string):Promise<Record<string,unknown>|null>;
+    installDispatchQuota?(delivery:import('../dispatch/DispatchAuthority').DispatchQuotaDelivery,scope:import('../dispatch/DispatchAuthority').DispatchScope,poolId:string,previouslySeen:boolean,witnessHash:string,clock?:import('./CompanyDispatchEscrowStore').DispatchDeliveryClock):Promise<void>;
+    prepareDispatchFiscalCheckout?(input:import('./DispatchFiscalPreparation').DispatchFiscalPreparation):Promise<import('../fiscal/FiscalWorkflowV2Types').FiscalWorkflowCheckoutV2>;
+    prepareDispatchPrecharge?(input:{checkoutId:string;transactionId:string;poolId:string;demandDigest:string;source:Record<string,unknown>;demands:import('./CompanyDispatchEscrowStore').DispatchDemand[]}):Promise<void>;
+    markDispatchEffectPossible?(checkoutId:string,effectDigest:string,payments:unknown[]):Promise<void>;
+    abandonDispatchPrecharge?(checkoutId:string):Promise<void>;
 
     readTrackingCheckout?(cartIdentity:string,scope:import('./TrackingCheckoutOperation').TrackingScope):Promise<import('./TrackingCheckoutOperation').TrackingOperation|null>;
     readCommittedTrackingReceipt?(operation:import('./TrackingCheckoutOperation').TrackingOperation):Promise<import('../../types').Transaction|null>;

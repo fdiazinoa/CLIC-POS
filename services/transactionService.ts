@@ -392,7 +392,7 @@ class TransactionService {
             if(data.documentType==='REFUND'||data.items.some(line=>line.quantity<=0))assertInventoryPresentationReturnAllowed(data);
             data={...data,inventoryPresentationContract:1};
         }else if(data.inventoryPresentationContract!==undefined)throw Error('INVENTORY_PRESENTATION_INVALID');
-        assertFormatsPostingClosed(data.items || []);
+        if(!(options.deferDurablePersistence===true&&data.inventoryEffectsContract==='WAREHOUSE_RESERVATION_V1'&&data.companyDispatchSource?.checkoutId))assertFormatsPostingClosed(data.items || []);
         // Checkout authority is immutable source identity, not a post-sale fiscal annotation.
         if (data.fiscalWorkflowCheckoutId !== undefined
             && (typeof data.fiscalWorkflowCheckoutId !== 'string'
@@ -400,7 +400,7 @@ class TransactionService {
                 || !data.id || !isV3FinancialDocument(data))) {
             throw new Error('FISCAL_WORKFLOW_CHECKOUT_REQUIRED');
         }
-        const hasTrackingSource = isV3FinancialDocument(data) && data.items?.some(line => line.trackingData?.length) === true;
+        const hasTrackingSource = isV3FinancialDocument(data) && data.items?.some(line => line.trackingData?.some(selection=>!(options.deferDurablePersistence===true&&data.inventoryEffectsContract==='WAREHOUSE_RESERVATION_V1'&&data.companyDispatchSource?.checkoutId&&selection.dispatchQuotaAuthority))) === true;
         if (hasTrackingSource || data.trackingCheckoutId !== undefined || data.trackingEffectAt !== undefined) {
             if (!hasTrackingSource || !data.id || !isV3FinancialDocument(data)
                 || typeof data.trackingCheckoutId !== 'string'

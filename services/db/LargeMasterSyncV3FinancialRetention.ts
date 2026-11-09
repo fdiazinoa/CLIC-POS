@@ -27,7 +27,8 @@ const localCompleteSourceSql = `json_extract(excluded.data, '$.v3CommitFingerpri
       WHERE incoming.key = original.key AND incoming.type = original.type AND incoming.value IS original.value))`;
 
 export const V3_FINANCIAL_RETAINED_UPSERT_SQL = `CASE WHEN documents.collection_name IN ('transactions','transactionHistory')
-  AND json_extract(documents.data, '$.v3InventoryBaseline') IS NOT NULL THEN
+  AND (json_extract(documents.data, '$.v3InventoryBaseline') IS NOT NULL
+    OR json_extract(documents.data,'$.inventoryEffectsContract')='WAREHOUSE_RESERVATION_V1') THEN
   json_set(json_patch(CASE WHEN ${localCompleteSourceSql}
     THEN json_remove(documents.data, ${transientSyncFields.map(key => `'$.${key}'`).join(',')})
     ELSE documents.data END, (SELECT json_group_object(key, json(CASE type
@@ -51,7 +52,8 @@ export const financialIdentity = (transaction: Transaction): string => {
         'updatedAt', 'status', 'v3InventoryBaseline', 'v3Binding', 'v3WarehouseId', 'v3CommitFingerprint', 'fiscalStatus',
         'fiscalResponseMessage', 'fiscalResponseCode', 'fiscalSignedXml', 'fiscalQrCode'].includes(key))
       .map(key => [key, canonical(value[key])])) : value;
-  const input = transaction.v3ReservationClaimId ? JSON.parse(JSON.stringify({...transaction,globalSequence:undefined,displayId:undefined,seriesNumber:undefined})) : transaction;
+  const intent=transaction.inventoryEffectsContract==='WAREHOUSE_RESERVATION_V1'&&transaction.companyDispatchSource?{...transaction,companyDispatchSource:{...transaction.companyDispatchSource,sequence:undefined}}:transaction;
+  const input = intent.v3ReservationClaimId ? JSON.parse(JSON.stringify({...intent,globalSequence:undefined,displayId:undefined,seriesNumber:undefined})) : intent;
   return JSON.stringify(canonical(input));
 };
 
