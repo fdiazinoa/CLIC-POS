@@ -237,3 +237,10 @@ test('old in-flight A assertion failure cannot clear the already published B fli
   assert.strictEqual(await get(), b); hold.resolve(); await oldFailure;
   assert.strictEqual(await get(), b, 'old consumer failure must not erase newer B');
 });
+
+test('waiting for UI context contention never starts preparation when no owner exists', async () => {
+  let opens = 0;
+  const get = createLargeMasterSyncV3SessionCoordinator(async () => { opens++; return contextSession('A'); });
+  await get.waitForPendingContext();
+  assert.equal(opens, 0);
+});

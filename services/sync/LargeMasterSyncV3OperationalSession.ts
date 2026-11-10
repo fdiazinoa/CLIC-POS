@@ -204,6 +204,13 @@ export class LargeMasterSyncV3OperationalSession {
             break;
           } catch (error) {
             if (attempt >= 2 || (error as { code?: string }).code !== 'SYNC_V3_UI_CONTEXT_CHANGED') throw error;
+            // A refresh owns publication until its shared flight finishes. Immediate
+            // retries only exhaust the budget while SQLite is still being checked.
+            // Await that owner, then revalidate all authority above before publishing.
+            try { await getLargeMasterSyncV3OperationalSession.waitForPendingContext(); }
+            catch (pendingError) {
+              if ((pendingError as { code?: string }).code !== 'SYNC_V3_UI_CONTEXT_CHANGED') throw pendingError;
+            }
           }
         }
         return session;
