@@ -1,4 +1,5 @@
 import React, { CSSProperties, useEffect, useRef, useState } from 'react';
+import { Trash2 } from 'lucide-react';
 import { CartItem, BusinessConfig } from '../types';
 import { createSupermarketLineInteraction } from '../utils/supermarketLineInteraction';
 import './supermarketTicket.css';
@@ -9,6 +10,7 @@ interface ProductTableSupermarketProps {
     currencySymbol: string;
     lastAddedCartId: string | null;
     onEditItem: (cartId: string) => void;
+    onRemoveItem: (cartId: string) => void;
     containerStyle?: CSSProperties;
     taxIncluded?: boolean;
 }
@@ -19,6 +21,7 @@ const ProductTableSupermarket: React.FC<ProductTableSupermarketProps> = ({
     currencySymbol,
     lastAddedCartId,
     onEditItem,
+    onRemoveItem,
     containerStyle
 }) => {
     const [highlightedId, setHighlightedId] = useState<string | null>(null);
@@ -59,6 +62,7 @@ const ProductTableSupermarket: React.FC<ProductTableSupermarketProps> = ({
                         <th className="supermarket-money px-3 py-2 text-right">Precio</th>
                         <th className="supermarket-money px-3 py-2 text-right">ITBIS</th>
                         <th className="supermarket-money px-3 py-2 text-right text-gray-800">Total</th>
+                        <th className="w-14"><span className="sr-only">Eliminar artículo</span></th>
                     </tr>
                 </thead>
                 <tbody className="text-sm divide-y divide-gray-50">
@@ -131,6 +135,25 @@ const ProductTableSupermarket: React.FC<ProductTableSupermarketProps> = ({
                                     {currencySymbol}{total.toFixed(2)}
                                 </td>
 
+                                <td className="px-1 py-2 text-center">
+                                    <button
+                                        type="button"
+                                        aria-label={`Eliminar ${item.name}`}
+                                        title="Eliminar artículo"
+                                        disabled={!item.cartId}
+                                        onClick={(event) => {
+                                            event.stopPropagation();
+                                            if (item.cartId) onRemoveItem(item.cartId);
+                                        }}
+                                        onContextMenu={(event) => {
+                                            event.preventDefault();
+                                            event.stopPropagation();
+                                        }}
+                                        className="inline-flex h-11 w-11 shrink-0 touch-manipulation items-center justify-center rounded-xl border border-rose-200 bg-rose-50 text-rose-600 transition-colors hover:bg-rose-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-rose-500 disabled:cursor-not-allowed disabled:opacity-40"
+                                    >
+                                        <Trash2 size={18} aria-hidden="true" />
+                                    </button>
+                                </td>
                             </tr>
                         );
                     })}
