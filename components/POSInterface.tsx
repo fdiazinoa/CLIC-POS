@@ -9439,6 +9439,18 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      <FiscalStatusBadge compact short visible={!isOrderTakerMode && !isFiscalModeDisabled} allowed={canCheckoutWithFiscalPolicy} status={fiscalStatus} />
                   </>}>
                      {!isKioskMode && <OrderServiceTypeButton value={effectiveOrderServiceType} onClick={() => handleGridAction('TAKEOUT')} />}
+                     {isRetailMode && (
+                        <button
+                           type="button"
+                           onClick={() => { void handleClearFreshCartItems(); }}
+                           disabled={cart.length === 0}
+                           title="Eliminar todos los artículos"
+                           aria-label="Eliminar todos los artículos"
+                           className="ml-1 flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-rose-200 bg-rose-50 text-rose-600 transition-colors hover:bg-rose-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-rose-500 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                           <Trash2 size={18} aria-hidden="true" />
+                        </button>
+                     )}
                   </TicketStatusControls>
                </div>
 
@@ -9525,6 +9537,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   taxIncluded={isTaxIncluded}
                   currencySymbol={baseCurrency.symbol}
                   lastAddedCartId={lastAddedCartId}
+                  onRemoveItem={(cartId) => { void updateCartItem(null, cartId); }}
                   onEditItem={(cartId) => {
                      const selectedLine = cart.find(item => item.cartId === cartId);
                      if (selectedLine) setEditingItem(selectedLine);
