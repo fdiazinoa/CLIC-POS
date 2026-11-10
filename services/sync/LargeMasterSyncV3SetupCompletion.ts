@@ -43,6 +43,7 @@ export interface V3SessionContextGeneration {
 export type V3SessionCoordinator<T extends V3SetupSession> = ((refresh?: boolean) => Promise<T>) & {
   progress: V3Progress;
   captureConfigContext(): V3SessionContextGeneration;
+  waitForPendingContext(): Promise<void>;
   publishConfigContext(session: T, expected: V3SessionContextGeneration, assertAuthority: () => Promise<void>): Promise<void>;
 };
 
@@ -143,5 +144,8 @@ export const createLargeMasterSyncV3SessionCoordinator = <T extends V3SetupSessi
       throw error;
     }
   };
-  return Object.assign(get, { progress, captureConfigContext, publishConfigContext });
+  // Read-side contention may wait for an existing owner, but must never start
+  // setup/downloads or repeat a financial operation just to renew the UI.
+  const waitForPendingContext = async () => { if (opening) await opening; };
+  return Object.assign(get, { progress, captureConfigContext, publishConfigContext, waitForPendingContext });
 };

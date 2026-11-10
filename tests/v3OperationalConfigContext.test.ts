@@ -103,3 +103,43 @@ test('cached read acquisition overlapping ordinary startup publishes only revali
     assert.deepEqual(f.state(), before);
   } finally { f.close(); }
 });
+
+for (const drift of [false, true]) test(`cached UI acquisition waits for an active refresh and rechecks binding (drift=${drift})`, async () => {
+  const f = await fixture();
+  let release!: () => void;
+  const hold = new Promise<void>(resolve => { release = resolve; });
+  try {
+    const current = await f.module.getLargeMasterSyncV3OperationalSession();
+    // Model a completed refresh with the same durable catalog; the fixture forbids
+    // network downloads. Keep the real coordinator and native authority reads.
+    const open = f.module.LargeMasterSyncV3OperationalSession.open;
+    f.module.LargeMasterSyncV3OperationalSession.open = (_refresh: boolean, ...args: unknown[]) =>
+      open.call(f.module.LargeMasterSyncV3OperationalSession, false, ...args);
+    const assertCurrent = current.assertCurrent.bind(current);
+    let entered!: () => void;
+    const refreshing = new Promise<void>(resolve => { entered = resolve; });
+    current.assertCurrent = async () => { entered(); await hold; await assertCurrent(); };
+    const refresh = f.module.getLargeMasterSyncV3OperationalSession(true);
+    // Attach rejection observers immediately; a real binding drift must still fail closed.
+    const refreshed = refresh.then(() => undefined, (error: Error) => error);
+    await refreshing;
+    let outcome = 'pending';
+    const acquisition = f.module.acquireLargeMasterSyncV3ConfigContext(f.env.config, id(4));
+    const acquired = acquisition.then((session: unknown) => { outcome = 'ready'; return session; }, (error: Error) => { outcome = 'failed'; return error; });
+    for (let n = 0; n < 10; n++) await new Promise(resolve => setImmediate(resolve));
+    assert.equal(outcome, 'pending', 'a UI read must wait for renewal instead of exhausting immediate publication retries');
+    if (drift) f.env.guard = 'changed-during-refresh';
+    release();
+    const result = await acquired;
+    await refreshed;
+    if (drift) assert.match((result as Error).message, /BINDING_CHANGED/);
+    else {
+      assert.equal(outcome, 'ready');
+      await (result as any).assertCurrent();
+      assert.strictEqual(await f.module.getLargeMasterSyncV3OperationalSession(), result);
+    }
+    assert.equal(f.env.downloads, 0);
+    assert.deepEqual(f.documents('transactions'), []);
+    assert.deepEqual(f.documents('inventoryLedger'), []);
+  } finally { release(); f.close(); }
+});
