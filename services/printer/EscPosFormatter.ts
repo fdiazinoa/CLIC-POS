@@ -14,6 +14,7 @@ import { resolveLineDiscountPresentation } from '../../utils/lineDiscountPresent
 import { resolveTerminalDisplayName } from '../../utils/transactionHistoryPresentation';
 import { resolveGlobalDiscountLabel } from '../../utils/globalDiscountPresentation';
 import { resolveReceiptCouponCodes } from '../../utils/receiptCouponPresentation';
+import { receiptSaleOperator, receiptUsesRestaurantService } from '../../utils/receiptSaleContext';
 import { formatReceiptVariant } from '../../utils/receiptVariant';
 import { getCloseReceiptSummary, closeTaxLabel } from '../../utils/closeReceiptSummary';
 import { getZReportPaymentMethodSummary, paymentMethodSummaryTotal } from '../../utils/zReportPaymentSummary';
@@ -505,7 +506,8 @@ export const buildEscPosTicketPayload = (
   if (transaction.tableDisplayLabel) {
     pushTextLines(chunks, splitLines(`Mesa/Sala: ${transaction.tableDisplayLabel}`, width));
   }
-  if (transaction.serviceType) {
+  pushTextLines(chunks, splitLines(`Cajero: ${receiptSaleOperator(transaction)}`, width));
+  if (receiptUsesRestaurantService(config, transaction.terminalId) && transaction.serviceType) {
     const serviceLabel = transaction.serviceType === 'TAKEOUT'
       ? 'Para llevar'
       : transaction.serviceType === 'DELIVERY'
