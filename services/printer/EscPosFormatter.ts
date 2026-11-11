@@ -1,3 +1,5 @@
+import type { CouponIssuanceEnvelope } from '../coupons/CouponIssuanceClient';
+import { couponSlipLines } from '../../utils/couponSlipPresentation';
 import {inventoryPresentationTicketLabel} from '../inventoryPresentations/selection';
 import {isVerifiedFiscalPrintDisplay,fiscalPrintTransaction,type FiscalPrintDisplay} from '../fiscal/FiscalPrintEvidence';
 import { articleFormatTicketLabel } from '../articleFormats/ticket';
@@ -12,8 +14,6 @@ import { resolveLineDiscountPresentation } from '../../utils/lineDiscountPresent
 import { resolveTerminalDisplayName } from '../../utils/transactionHistoryPresentation';
 import { resolveGlobalDiscountLabel } from '../../utils/globalDiscountPresentation';
 import { resolveReceiptCouponCodes } from '../../utils/receiptCouponPresentation';
-import type { CouponIssuanceEnvelope } from '../coupons/CouponIssuanceClient';
-import { couponSlipLines } from '../../utils/couponSlipPresentation';
 import { formatReceiptVariant } from '../../utils/receiptVariant';
 import { getCloseReceiptSummary, closeTaxLabel } from '../../utils/closeReceiptSummary';
 import { getZReportPaymentMethodSummary, paymentMethodSummaryTotal } from '../../utils/zReportPaymentSummary';
