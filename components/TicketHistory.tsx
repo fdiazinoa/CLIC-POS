@@ -32,7 +32,7 @@ import {
    InvoiceReviewPriority,
 } from '../types';
 import { validateTerminalDocument } from '../utils/validation';
-import { printIntegratedPaymentArtifacts, printTicket } from '../utils/printer';
+import { printIntegratedPaymentArtifacts, printTicket, printCouponForTransaction } from '../utils/printer';
 import { useSupervisorAuth } from '../hooks/useSupervisorAuth';
 import SupervisorModal from './SupervisorModal';
 import { User, DeviceRole } from '../types';
@@ -689,6 +689,7 @@ const TicketDetailDrawer: React.FC<{
    config: BusinessConfig;
    onClose: () => void;
    onPrint: (tx: Transaction) => void;
+   onPrintCoupon: (tx: Transaction) => Promise<boolean>;
    onRequestRefund: (tx: Transaction) => void;
    onRequestAzulRefund: (tx: Transaction) => void;
    onRetryFiscalDocument?: (tx: Transaction) => Promise<string>;
@@ -705,7 +706,8 @@ const TicketDetailDrawer: React.FC<{
    themeText: string;
    themeBg: string;
    users: User[];
-}> = ({ tx, config, onClose, onPrint, onRequestRefund, onRequestAzulRefund, onRetryFiscalDocument, onConsultFiscalStatus, customers = [], onCorrectFiscalDocument, reviewFlags, onSendEmail, onFlagForReview, themeText, themeBg, users }) => {
+}> = ({ tx, config, onClose, onPrint, onPrintCoupon, onRequestRefund, onRequestAzulRefund, onRetryFiscalDocument, onConsultFiscalStatus, customers = [], onCorrectFiscalDocument, reviewFlags, onSendEmail, onFlagForReview, themeText, themeBg, users }) => {
+   const [isPrintingCoupon, setIsPrintingCoupon] = useState(false);
    const [isRetryingFiscal, setIsRetryingFiscal] = useState(false);
    const [isConsultingFiscal,setIsConsultingFiscal]=useState(false);
    const [retryFeedback, setRetryFeedback] = useState<string | null>(null);
@@ -1265,6 +1267,15 @@ const TicketDetailDrawer: React.FC<{
                      >
                         <Printer size={18} /> Reimprimir
                      </button>
+                     {config.receiptConfig?.printCouponSlip && tx.documentType === 'TICKET' && tx.status === 'COMPLETED' && (
+                        <button type="button" disabled={isPrintingCoupon} onClick={async () => {
+                           setIsPrintingCoupon(true);
+                           try { await onPrintCoupon(tx); }
+                           finally { setIsPrintingCoupon(false); }
+                        }} className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white px-3 text-xs font-bold text-gray-700 disabled:opacity-50">
+                           <Printer size={16} /> {isPrintingCoupon ? 'Preparando cupón…' : 'Imprimir cupón'}
+                        </button>
+                     )}
                      {tx.status !== 'REFUNDED' && (
                         <button
                            onClick={() => onRequestRefund(tx)}
@@ -2980,6 +2991,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
             config={config}
             onClose={() => setSelectedTxId(null)}
             onPrint={(tx) => { void handlePrintTransaction(tx); }}
+            onPrintCoupon={(tx) => printCouponForTransaction(tx, config)}
             onRequestRefund={(tx) => {
                const remaining = getRemainingRefundQuantities(tx, allKnownTransactions);
                if (!hasRefundableItems(remaining)) {

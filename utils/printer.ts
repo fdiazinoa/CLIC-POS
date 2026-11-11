@@ -1,4 +1,5 @@
 import {inventoryPresentationTicketHTML} from '../services/inventoryPresentations/selection';
+import { clicAlert } from '../services/dialog/ClicDialogService';
 import {fiscalQrSvg} from '../services/fiscal/FiscalQrSvg';
 import {resolveFiscalPrintReadiness,fiscalPrintTransaction} from '../services/fiscal/FiscalPrintEvidence';
 import { articleFormatTicketHTML } from '../services/articleFormats/ticket';
@@ -1291,10 +1292,27 @@ const printComandaInternal = async (
 // Shared feedback also covers callers that do not inspect the boolean result.
 const printGatewayVoucher = (...args: Parameters<typeof printGatewayVoucherInternal>) =>
     runPrintTask(`voucher:${args[1].referenceId}:${args[1].copyLabel}`, `Voucher ${args[1].copyLabel}`, () => printGatewayVoucherInternal(...args));
-export const printTicket = (...args: Parameters<typeof printTicketInternal>) => {
+export const printCouponForTransaction = async (transaction: Transaction, config: BusinessConfig, notifyEmpty = true): Promise<boolean> => {
+    if (!config.receiptConfig?.printCouponSlip) return false;
+    try {
+        const { printReceiptCouponSlips } = await import('../services/coupons/CouponSlipPrinting');
+        return await printReceiptCouponSlips(transaction, config, notifyEmpty);
+    } catch {
+        await clicAlert('No se pudo preparar el cupón. La venta no se repetirá. Use «Imprimir cupón» en el historial para reintentar.', { title: 'Cupón pendiente', tone: 'warning' });
+        return false;
+    }
+};
+export const printTicket = async (...args: Parameters<typeof printTicketInternal>) => {
     const transaction = args[0];
-    return trackCheckoutPrint({transactionId:transaction.id,displayId:transaction.displayId,items:transaction.items,total:transaction.total,reason:'TICKET'},
+    const accepted = await trackCheckoutPrint({transactionId:transaction.id,displayId:transaction.displayId,items:transaction.items,total:transaction.total,reason:'TICKET'},
         ()=>runPrintTask(`ticket:${transaction.id}`, 'Ticket', () => printTicketInternal(...args)));
+    if (accepted && args[1].receiptConfig?.printCouponSlip) {
+        // Optional issuance starts after invoice/checkout tracking has finished.
+        // Its failure must never report the already accepted invoice as failed.
+        try { await printCouponForTransaction(transaction, args[1], false); }
+        catch { console.warn('No se pudo abrir la impresión del cupón; use el historial para reintentar sólo la coletilla.'); }
+    }
+    return accepted;
 };
 export const printReservation = (...args: Parameters<typeof printReservationInternal>) =>
     runPrintTask(`reservation:${args[0].id}`, 'Reserva', () => printReservationInternal(...args));

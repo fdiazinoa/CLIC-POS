@@ -490,6 +490,7 @@ export interface ReceiptConfig {
   showCustomerInfo?: boolean;
   showSavings?: boolean;
   showQr?: boolean;
+  printCouponSlip?: boolean; // Default off: separate slip for ERP-issued next-purchase coupons.
   showForeignCurrencyTotals?: boolean;
   showSerialNumbers?: boolean; // NEW: Toggle printing serial numbers
   showLotNumbers?: boolean; // NEW: Toggle printing lot numbers
