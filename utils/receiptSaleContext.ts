@@ -1,6 +1,6 @@
 import type { BusinessConfig, Transaction } from '../types';
 
-/** Match the operational restaurant scope used by the sales screen. */
+/** Service labels belong to restaurant receipts; explicit terminal scope wins. */
 export function receiptUsesRestaurantService(config: BusinessConfig, terminalId?: string): boolean {
   const terminal = config.terminals?.find(row => row.id === terminalId);
   const ux = terminal?.config?.ux as Record<string, unknown> | undefined;
@@ -8,7 +8,8 @@ export function receiptUsesRestaurantService(config: BusinessConfig, terminalId?
   const mode = String(ux?.viewMode || ux?.mode || operational?.viewMode || '').trim().toUpperCase().replace(/[\s_-]+/g, '_');
   if (['RETAIL', 'RETAIL_MODE', 'POS', 'STANDARD', 'SUPERMARKET', 'SUPERMERCADO'].includes(mode)) return false;
   const vertical = String(terminal?.config?.operational?.vertical_negocio || '');
-  return vertical === 'RESTAURANT' || vertical === 'RESTAURANTE' || config.vertical === 'RESTAURANT';
+  if (vertical) return vertical === 'RESTAURANT' || vertical === 'RESTAURANTE';
+  return config.vertical === 'RESTAURANT';
 }
 
 /** A reprint identifies the original operator, never whoever is logged in now. */

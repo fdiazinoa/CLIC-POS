@@ -32,6 +32,11 @@ test('a historical receipt without an operator does not borrow the current login
   assert.equal(receiptSaleOperator({ userName: ' ' }), 'No registrado');
   assert.match(printed(config(), { ...sale, userName: '' }), /Cajero: No registrado/);
 });
+test('a Retail terminal does not inherit restaurant service labels from a shared company', () => {
+  const shared = config('RESTAURANT');
+  shared.terminals[0].config.operational.vertical_negocio = 'RETAIL';
+  assert.doesNotMatch(printed(shared), /Tipo servicio|Consumo en mesa/);
+});
 
 test('real HTML print path hides service in Retail and escapes the original operator', async () => {
   const { build } = await import('esbuild');
