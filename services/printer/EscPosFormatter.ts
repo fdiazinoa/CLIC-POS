@@ -1,3 +1,5 @@
+import type { CouponIssuanceEnvelope } from '../coupons/CouponIssuanceClient';
+import { couponSlipLines } from '../../utils/couponSlipPresentation';
 import {inventoryPresentationTicketLabel} from '../inventoryPresentations/selection';
 import {isVerifiedFiscalPrintDisplay,fiscalPrintTransaction,type FiscalPrintDisplay} from '../fiscal/FiscalPrintEvidence';
 import { articleFormatTicketLabel } from '../articleFormats/ticket';
@@ -707,6 +709,20 @@ export const buildEscPosTicketPayload = (
   chunks.push(align(0));
   finalizeReceipt(chunks);
 
+  return toBase64(concat(chunks));
+};
+
+export const buildEscPosCouponSlipsPayload = (result: CouponIssuanceEnvelope, config: BusinessConfig, now = Date.now()): string | null => {
+  if (!result.coupons.length) return null;
+  const chunks: Uint8Array[] = [initPrinter()];
+  for (const coupon of result.coupons) {
+    buildReceiptHeader(chunks, config, 'CUPON PROXIMA COMPRA', RECEIPT_LINE_WIDTH);
+    pushTextLines(chunks, couponSlipLines(coupon, result.receiptReference, now).flatMap(line => splitLines(line, RECEIPT_LINE_WIDTH)));
+    chunks.push(align(1));
+    pushQrCode(chunks, coupon.code);
+    chunks.push(align(0));
+    finalizeReceipt(chunks);
+  }
   return toBase64(concat(chunks));
 };
 

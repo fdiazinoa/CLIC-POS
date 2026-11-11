@@ -69,6 +69,7 @@ const ReceiptDesigner: React.FC<ReceiptDesignerProps> = ({ config, onUpdateConfi
       showCustomerInfo: config.receiptConfig?.showCustomerInfo ?? true,
       showSavings: config.receiptConfig?.showSavings ?? false,
       showQr: config.receiptConfig?.showQr ?? true,
+      printCouponSlip: config.receiptConfig?.printCouponSlip ?? false,
       showForeignCurrencyTotals: config.receiptConfig?.showForeignCurrencyTotals ?? false,
       showSerialNumbers: config.receiptConfig?.showSerialNumbers ?? false,
       showLotNumbers: config.receiptConfig?.showLotNumbers ?? false,
@@ -233,6 +234,10 @@ const ReceiptDesigner: React.FC<ReceiptDesignerProps> = ({ config, onUpdateConfi
                   <ToggleSwitch label="Ahorro Total" checked={localReceipt.showSavings || false} onChange={v => setLocalReceipt(prev => ({ ...prev, showSavings: v }))} />
                   <ToggleSwitch label="Otras Monedas" checked={localReceipt.showForeignCurrencyTotals || false} onChange={v => setLocalReceipt(prev => ({ ...prev, showForeignCurrencyTotals: v }))} />
                   <ToggleSwitch label="Código QR Factura" checked={localReceipt.showQr || false} onChange={v => setLocalReceipt(prev => ({ ...prev, showQr: v }))} />
+                  <label className="flex items-center justify-between gap-3 rounded-xl border border-gray-200 bg-white p-3 text-sm font-medium text-gray-600">
+                     Imprimir cupón en coletilla separada
+                     <input type="checkbox" className="h-5 w-5 accent-blue-600" checked={localReceipt.printCouponSlip || false} onChange={event => setLocalReceipt(prev => ({ ...prev, printCouponSlip: event.target.checked }))} />
+                  </label>
                   <ToggleSwitch label="Imprimir No. Orden" checked={localReceipt.showOrderNumber || false} onChange={v => setLocalReceipt(prev => ({ ...prev, showOrderNumber: v }))} />
                   <ToggleSwitch label="Imprimir No. Serie" checked={localReceipt.showSerialNumbers || false} onChange={v => setLocalReceipt(prev => ({ ...prev, showSerialNumbers: v }))} />
                   <ToggleSwitch label="Mostrar nombres de variantes" checked={localReceipt.showVariantLabels || false} onChange={v => setLocalReceipt(prev => ({ ...prev, showVariantLabels: v }))} />
@@ -240,6 +245,7 @@ const ReceiptDesigner: React.FC<ReceiptDesignerProps> = ({ config, onUpdateConfi
                </div>
 
                <p className="text-xs text-gray-500 mb-4">Variantes: Azul / L. Con nombres: Color: Azul / Talla: L.</p>
+               <p className="text-xs text-gray-500 mb-4">El cupón requiere una promoción de próxima compra del ERP y una venta sincronizada. Su QR contiene el código del cupón. La impresora térmica recibe un corte independiente; en navegador se imprime en otra página. Si está pendiente, puede reintentar sólo el cupón desde el historial.</p>
 
                <div>
                   <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 ml-1">Mensaje en Pie de Ticket</label>
@@ -419,6 +425,15 @@ const ReceiptDesigner: React.FC<ReceiptDesignerProps> = ({ config, onUpdateConfi
                         </div>
                      )}
                   </div>
+                  {localReceipt.printCouponSlip && (
+                     <div className="mt-6 border-t-2 border-dashed border-gray-400 pt-5 text-center text-[10px] space-y-2">
+                        <div className="font-bold">CORTE · COLETILLA DEL CUPÓN</div>
+                        <div className="font-bold">EJEMPLO · SIN VALOR</div>
+                        <div>Cupón para próxima compra</div>
+                        <QrCode size={64} className="mx-auto" aria-hidden="true" />
+                        <div>El beneficio y la vigencia los determina la promoción del ERP.</div>
+                     </div>
+                  )}
                </div>
             </div>
          </div>
