@@ -19,6 +19,7 @@ import { getTerminalSnapshotSellers, resolveTerminalSellerName } from './termina
 import { normalizePrintCopies, resolveConfiguredPrintCopies, resolveTransactionPrintKind } from './printCopies';
 import { resolveGlobalDiscountLabel } from './globalDiscountPresentation';
 import { resolveReceiptCouponCodes } from './receiptCouponPresentation';
+import { receiptSaleOperator, receiptUsesRestaurantService } from './receiptSaleContext';
 import { formatReceiptVariant, receiptModifiersWithoutVariant } from './receiptVariant';
 
 const delay = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
@@ -422,7 +423,8 @@ const printTicketInternal = async (transaction: Transaction, config: BusinessCon
                 </div>
                 ${receiptConfig?.showOrderNumber && transaction.orderNumber && !receiptConfig?.showQr ? `<div class="meta-row" style="font-weight: bold; margin-top: 3px;">No. Orden: ${transaction.orderNumber}</div>` : ''}
                 ${transaction.tableDisplayLabel ? `<div class="meta-row" style="font-weight: bold;">Mesa/Sala: ${transaction.tableDisplayLabel}</div>` : ''}
-                ${transaction.serviceType ? `<div class="meta-row" style="font-weight: bold;">Tipo de servicio: ${transaction.serviceType === 'TAKEOUT' ? 'Para llevar' : transaction.serviceType === 'DELIVERY' ? 'Delivery' : 'Consumo en mesa'}</div>` : ''}
+                <div class="meta-row">Cajero: ${escapeFiscal(receiptSaleOperator(transaction))}</div>
+                ${receiptUsesRestaurantService(config, transaction.terminalId) && transaction.serviceType ? `<div class="meta-row" style="font-weight: bold;">Tipo de servicio: ${transaction.serviceType === 'TAKEOUT' ? 'Para llevar' : transaction.serviceType === 'DELIVERY' ? 'Delivery' : 'Consumo en mesa'}</div>` : ''}
             </div>
 
             <div class="divider"></div>
