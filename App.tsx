@@ -1,3 +1,4 @@
+import {refundRetryIdentity,withRefundProcessingLock} from './services/fiscal/RefundRetryIdentity';
 import { useLargeMasterSyncV3Kiosk } from './components/kiosk/useLargeMasterSyncV3Kiosk';
 import {resolveAttendanceScope} from './services/attendance/LocalAttendance';
 import {assertInventoryPresentationReturnAllowed} from './services/inventoryPresentations/selection';
@@ -13039,7 +13040,7 @@ const AppContent: React.FC = () => {
     conditions: Map<string, 'SELLABLE' | 'DAMAGED'>,
     reason: string,
     options: RefundProcessingOptions = {}
-  ): Promise<Transaction | null> => {
+  ): Promise<Transaction | null> => withRefundProcessingLock(async () => {
     originalTx = await readRefundOriginal(originalTx);
       assertInventoryPresentationReturnAllowed(originalTx);
     if((originalTx as any).articleFormatWire?.schema_version===2){
@@ -13147,6 +13148,15 @@ const AppContent: React.FC = () => {
     const resolvedCustomerId = originalTx.customerId || (LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED ? undefined : matchedCustomer?.id);
     const resolvedCustomerName = originalTx.customerName || (LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED ? undefined : matchedCustomer?.name);
 
+    const retry = await refundRetryIdentity({terminalId:currentTerminal?.id,
+      erpTerminalId:currentTerminal?.config?.erpTerminalId,deviceId:currentTerminal?.config?.currentDeviceId,
+      binding:currentTerminal?.config?.erpBinding && {tenantId:currentTerminal.config.erpBinding.tenantId,
+        companyId:currentTerminal.config.erpBinding.companyId,storeId:currentTerminal.config.erpBinding.storeId},
+      erpBase:resolveSyncTarget().kind==='ERP_ACTIVE' ? resolveSyncTarget().baseUrl : null}, originalTx,normalizedRefundItems,conditions,reason,options);
+    const durableRetryNumbers=Boolean(dbAdapter.reserveFinancialNumbers);
+    const preparedRetry = await dbAdapter.getDocument<{id:string;fingerprint:string;transaction:Transaction}>('refundRetryDocuments',retry.key);
+    if(preparedRetry && preparedRetry.fingerprint!==retry.fingerprint) throw Error('Hay una devolución pendiente de esta factura. Reintenta con los mismos artículos, cantidades, motivo y forma de pago.');
+
     // 2. Resolución fiscal para la nota de crédito
     const currentTerminalId = currentTerminal?.id || config.terminals?.[0]?.id || 't1';
     const fiscalCompliance = getEffectiveFiscalComplianceConfig(config, currentTerminal?.config);
@@ -13159,18 +13169,22 @@ const AppContent: React.FC = () => {
     let creditNoteIssuance: Transaction['fiscalIssuance'];
     let creditNoteNcf: string | undefined;
     let refundCheckout: any;
-    if (creditNoteFiscalMode !== 'NONE' &&
-        !(preparedFiscalAuthority
-          ? await db.validatePreparedFiscalAuthority(creditNoteFiscalType, currentTerminalId, preparedFiscalAuthority.ncf, currentTerminal?.config)
-          : await db.canRequestMoreNCF(creditNoteFiscalType, currentTerminalId, currentTerminal?.config))) {
-      alert(`No hay comprobantes ${creditNoteFiscalType} habilitados y disponibles para esta terminal.`);
-      return null;
+    if (preparedFiscalAuthority && !await db.validatePreparedFiscalAuthority(creditNoteFiscalType,currentTerminalId,preparedFiscalAuthority.ncf,currentTerminal?.config)) {
+      throw Error('La autorización fiscal de esta devolución ya no está disponible.');
     }
-    if (preparedFiscalAuthority) {
+    if (preparedRetry) {
+      creditNoteNcf=preparedRetry.transaction.ncf;
+      creditNoteIssuance=preparedRetry.transaction.fiscalIssuance;
+      if(preparedRetry.transaction.fiscalWorkflowCheckoutId){
+        refundCheckout=await fiscalWorkflowV2Client.localCheckout();
+        if(refundCheckout?.checkoutId!==preparedRetry.transaction.fiscalWorkflowCheckoutId) throw Error('FISCAL_WORKFLOW_CHECKOUT_RECONCILIATION_REQUIRED');
+      }
+    } else if (preparedFiscalAuthority) {
       creditNoteNcf = preparedFiscalAuthority.ncf;
       await db.reconcilePreparedNCF(preparedFiscalAuthority.ncfType, currentTerminalId, preparedFiscalAuthority.ncf, currentTerminal?.config);
     } else if (!originalTx.erpRefundSource && creditNoteFiscalMode !== 'NONE') {
       const reservation = await reserveRefundFiscalReservation({
+        retryKey: durableRetryNumbers ? `${retry.key}:fiscal` : undefined,operationId:retry.operationId,retryFingerprint:retry.fingerprint,
         refundFiscalType: creditNoteFiscalType,
         originalTransactionId: originalTx.id,
         items: normalizedRefundItems,
@@ -13194,10 +13208,14 @@ const AppContent: React.FC = () => {
     const refundSeries = resolvedRefundSeriesId
       ? sequences.find(s => s.id === resolvedRefundSeriesId)
       : undefined;
-    let displayId = `NC-${Date.now().toString().slice(-6)}`;
+    let displayId = `NC-${retry.key.slice(0,12)}`;
     let refundSeriesId: string | undefined;
     let refundSeriesNumber: number | undefined;
-    if (preparedAuthority) {
+    if(preparedRetry){
+      refundSeriesId=preparedRetry.transaction.seriesId;
+      refundSeriesNumber=preparedRetry.transaction.seriesNumber;
+      displayId=preparedRetry.transaction.displayId || preparedRetry.transaction.id;
+    } else if (preparedAuthority) {
       refundSeriesId = preparedAuthority.documentAuthority.seriesId;
       refundSeriesNumber = preparedAuthority.documentAuthority.seriesNumber;
       displayId = preparedAuthority.documentAuthority.displayId;
@@ -13209,7 +13227,7 @@ const AppContent: React.FC = () => {
         setInternalSequences(updatedSequences);
       }
     } else if (refundSeries) {
-      const reserved=await db.reserveSeriesNumbers(refundSeries.id,'REFUND');
+      const reserved=await db.reserveSeriesNumbers(refundSeries.id,'REFUND',durableRetryNumbers ? `${retry.key}:series` : undefined,retry.fingerprint);
       refundSeriesId = refundSeries.id;
       refundSeriesNumber = reserved?.seriesNumber ?? refundSeries.nextNumber;
       displayId = reserved?.displayId ?? `${refundSeries.prefix}${refundSeriesNumber.toString().padStart(refundSeries.padding, '0')}`;
@@ -13218,32 +13236,26 @@ const AppContent: React.FC = () => {
       setInternalSequences(updatedSequences);
     }
 
-    const refundPayments: PaymentEntry[] = options.refundPayments && options.refundPayments.length > 0
+    const savedSeriesReservation=await dbAdapter.getDocument<any>('refundNumberReservations',`${retry.key}:series`);
+    const retryDate=preparedRetry?.transaction.date || savedSeriesReservation?.result?.reservedAt || refundCheckout?.offlineSaleDate || new Date().toISOString();
+    const refundPayments: PaymentEntry[] = preparedRetry?.transaction.payments || (options.refundPayments && options.refundPayments.length > 0
       ? options.refundPayments
       : [{
-        id: `refund-${Date.now()}`,
+        id: `${retry.transactionId}:payment`,
         method: 'STORE_CREDIT',
         methodLabel: 'Nota de crédito',
         amount: refundTotal,
-        timestamp: new Date(),
-      }];
-
-    // 4a. Fence the E34 allocation checkout to EFFECT_POSSIBLE with the refund payments
-    // so the native writer can consume the NCF atomically with the credit note.
-    if (refundCheckout) {
-      for (const payment of refundPayments) {
-        await fiscalWorkflowV2Client.recordPayment(refundCheckout, payment.id);
-      }
-    }
+        timestamp: new Date(retryDate),
+      }]);
 
     // 4. Create Credit Note Record
-    const creditNote: Transaction = {
-      id: refundCheckout ? refundCheckout.transactionId : createRuntimeId('NC'),
+    const creditNote: Transaction = preparedRetry?.transaction || {
+      id: refundCheckout ? refundCheckout.transactionId : retry.transactionId,
       displayId: displayId,
       documentType: 'REFUND',
       seriesId: refundSeriesId,
       seriesNumber: refundSeriesNumber,
-      date: refundCheckout ? refundCheckout.offlineSaleDate : new Date().toISOString(),
+      date: retryDate,
       items: normalizedRefundItems,
       total: refundTotal,
       payments: refundPayments,
@@ -13281,6 +13293,18 @@ const AppContent: React.FC = () => {
       isTaxIncluded: refundTaxIncluded,
       syncStatus: 'PENDING'
     };
+
+    // Preserve the exact financial document before any payment fencing or commit attempt.
+    // A failed save cannot advance either counter again: their retry receipts are atomic.
+    if(!preparedRetry) await dbAdapter.saveDocument('refundRetryDocuments',{id:retry.key,fingerprint:retry.fingerprint,transaction:creditNote});
+
+    // 4a. Fence the E34 allocation checkout to EFFECT_POSSIBLE with the refund payments
+    // so the native writer can consume the NCF atomically with the credit note.
+    if (refundCheckout) {
+      for (const payment of refundPayments) {
+        await fiscalWorkflowV2Client.recordPayment(refundCheckout, payment.id);
+      }
+    }
 
     // 5. Persist refund, history mirror and Kardex through the standalone helper
     const defaultWarehouseId =
@@ -13410,7 +13434,7 @@ const AppContent: React.FC = () => {
 
     alert(`Devolución procesada correctamente.\nDocumento: ${displayId}\n${creditNoteNcf ? 'NCF: ' + creditNoteNcf : ''}${autoPrintNotice}`);
     return finalizedCreditNote;
-  };
+  });
 
   const renderView = (view: ViewState = currentView) => {
     switch (view) {

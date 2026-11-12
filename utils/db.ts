@@ -1450,7 +1450,21 @@ export const db = {
   requestFiscalBatch: (terminalId: string, type: FiscalDocumentCode, _batchSize: number, context?: TerminalConfig): Promise<LocalFiscalBuffer | null> =>
     withFiscalIssueLock(() => reserveFiscalBatch(terminalId, type, context)),
 
-  reserveFiscalNumber: (type: FiscalDocumentCode, terminalId: string, _customBatchSize?: number, context?: TerminalConfig): Promise<{ncf:string;fiscalIssuance:FiscalIssuanceSnapshot} | null> => withFiscalIssueLock(async () => {
+  getReservedRefundFiscalNumber: async (retryKey:string,type:string,retryFingerprint?:string) => {
+    const saved=await dbAdapter.getDocument<any>('refundNumberReservations',retryKey);
+    if(saved && (JSON.parse(saved.identity)[3]!==type || JSON.parse(saved.identity)[4] !== (retryFingerprint || null))) throw Error('Hay una devolución pendiente de esta factura. Reintenta con los mismos artículos, cantidades, motivo y forma de pago. [REFUND_RESERVATION_ID_MISMATCH]');
+    return saved ? {ncf:saved.result.ncf,fiscalIssuance:saved.result.fiscalIssuance} : null;
+  },
+
+  reserveFiscalNumber: (type: FiscalDocumentCode, terminalId: string, _customBatchSize?: number, context?: TerminalConfig, retryKey?: string,retryFingerprint?:string): Promise<{ncf:string;fiscalIssuance:FiscalIssuanceSnapshot} | null> => withFiscalIssueLock(async () => {
+    if(retryKey){
+      if(!dbAdapter.reserveFinancialNumbers) throw Error('REFUND_DURABLE_NUMBERING_REQUIRED');
+      const saved=await dbAdapter.getDocument<any>('refundNumberReservations',retryKey);
+      if(saved){
+        if((JSON.parse(saved.identity)[3]!==type || JSON.parse(saved.identity)[4] !== (retryFingerprint || null))) throw Error('Hay una devolución pendiente de esta factura. Reintenta con los mismos artículos, cantidades, motivo y forma de pago. [REFUND_RESERVATION_ID_MISMATCH]');
+        return {ncf:saved.result.ncf,fiscalIssuance:saved.result.fiscalIssuance};
+      }
+    }
     await assertPersistedFiscalIssuer(type);
     const allocations = await dbAdapter.getCollection<FiscalAllocation>('fiscalAllocations') || [];
     const policy = await resolveFiscalTerminalPolicy(terminalId, allocations, context);
@@ -1538,9 +1552,9 @@ export const db = {
         expected.push(raw);
       }
       fiscalIssuance=snapshotFiscalIssuance(JSON.parse(expected[0]),JSON.parse(expected[3]),JSON.parse(expected[2]),JSON.parse(expected[1]),ncf);
-      await dbAdapter.reserveFinancialNumbers({global:false,fiscal:{terminalId,type,ncf,
+      const reserved=await dbAdapter.reserveFinancialNumbers({global:false,retryKey,retryFingerprint,fiscalIssuance,fiscal:{terminalId,type,ncf,
         expectedConfig:expected[0],expectedBuffer:expected[1],expectedAllocation:expected[2],expectedRange:expected[3]}});
-      return {ncf,fiscalIssuance};
+      return {ncf:reserved.ncf!,fiscalIssuance:reserved.fiscalIssuance || fiscalIssuance};
     }
     buffer.currentNumber += 1;
     await dbAdapter.saveCollection('localFiscalBuffer', buffers);
@@ -1619,9 +1633,9 @@ export const db = {
     }
   }),
 
-  reserveSeriesNumbers: async (seriesId:string,documentType:string) => {
+  reserveSeriesNumbers: async (seriesId:string,documentType:string,retryKey?:string,retryFingerprint?:string) => {
     if(!dbAdapter.reserveFinancialNumbers) return undefined;
-    return dbAdapter.reserveFinancialNumbers({seriesId,documentType,global:false});
+    return dbAdapter.reserveFinancialNumbers({seriesId,documentType,global:false,retryKey,retryFingerprint});
   },
 
   reserveTransactionNumbers: async (seriesId:string, documentType:string) => {
