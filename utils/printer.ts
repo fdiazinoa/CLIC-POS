@@ -289,6 +289,8 @@ const printTicketInternal = async (transaction: Transaction, config: BusinessCon
         'B15': 'GUBERNAMENTAL'
     };
     const comprobanteTypeLabels: Record<string, string> = {
+        'E31': 'Crédito Fiscal',
+        'E32': 'Consumo Final',
         'B01': 'Crédito Fiscal',
         'B02': 'Consumidor Final',
         'B04': 'Nota de Crédito',
@@ -602,7 +604,7 @@ const printTicketInternal = async (transaction: Transaction, config: BusinessCon
                 </div>
             ` : ''}
 
-            ${fiscalPrint ? `<div class="divider"></div><div style="text-align:center"><b>COMPROBANTE ELECTRÓNICO FIRMADO</b><div>${escapeFiscal(fiscalPrint.certifiedNcf)}</div><div id="fiscal-qrcode">${fiscalSvg}</div><div>Código de seguridad: ${escapeFiscal(fiscalPrint.securityCode)}</div><div>Fecha firma: ${escapeFiscal(fiscalPrint.signedAt)}</div><div>Estado DGII: ${fiscalPrint.dgiiConditional?'Aceptado condicionalmente':fiscalPrint.dgiiAccepted?'Aceptado':'Pendiente de confirmación'}</div></div>` : transaction.ncfType?.startsWith('E') ? '<div>Representación fiscal firmada aún no disponible.</div>' : ''}
+            ${fiscalPrint ? `<div class="divider"></div><div style="text-align:center"><b>COMPROBANTE ELECTRÓNICO FIRMADO</b><div>${escapeFiscal(fiscalPrint.certifiedNcf)}</div><div id="fiscal-qrcode">${fiscalSvg}</div><div>Código de seguridad: ${escapeFiscal(fiscalPrint.securityCode)}</div><div>Fecha firma: ${escapeFiscal(fiscalPrint.signedAt)}</div><div>Estado DGII: ${fiscalPrint.dgiiConditional?'Aceptado condicionalmente':fiscalPrint.dgiiAccepted?'Aceptado':'Pendiente de confirmación'}</div></div>` : ''}
             <div class="footer">
                 ${receiptConfig?.footerMessage ? `<div style="margin-bottom: 8px;">${receiptConfig.footerMessage}</div>` : ''}
                 <div>¡Gracias por su compra!</div>

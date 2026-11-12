@@ -14,6 +14,19 @@ const sale: any = { id: 'sale', displayId: 'TCK1', terminalId: 'T', date: '2026-
   items: [{ id: 'P', cartId: 'L', name: 'Articulo', quantity: 1, price: 100 }], payments: [] };
 const printed = (configuration: any, tx = sale) => Buffer.from(buildEscPosTicketPayload(tx, configuration, [{ id: 'current', name: 'Otro cajero' }])!, 'base64').toString('latin1');
 
+for (const [ncfType, label] of [['E31', 'CREDITO FISCAL'], ['E32', 'CONSUMO FINAL']]) {
+  test(`native receipt names ${ncfType} without unsigned representation notice`, () => {
+    const tx = { ...sale, ncfType, ncf: `${ncfType}0000000123` };
+    const configuration = config();
+    configuration.receiptConfig.showQr = true;
+    const output = printed(configuration, tx);
+    assert.match(output, new RegExp(label));
+    assert.ok(output.includes(tx.ncf));
+    assert.doesNotMatch(output, /Representacion fiscal firmada aun no disponible/);
+    assert.ok(!output.split(/\r?\n/).includes(ncfType));
+  });
+}
+
 test('Retail never prints restaurant service even when the stored sale defaults to DINE_IN', () => {
   const before = JSON.stringify(sale);
   assert.doesNotMatch(printed(config()), /Consumo en mesa|Tipo servicio/);
@@ -61,6 +74,16 @@ test('real HTML print path hides service in Retail and escapes the original oper
     assert.equal(await module.exports.printTicket({ ...sale, userName: '<Ana & Original>' }, config()), true);
     assert.doesNotMatch(env.html, /Tipo de servicio:|Consumo en mesa/);
     assert.match(env.html, /Cajero: &lt;Ana &amp; Original&gt;/);
+    for (const [ncfType, label] of [['E31', 'Crédito Fiscal'], ['E32', 'Consumo Final']]) {
+      const configuration = config();
+      configuration.receiptConfig.showQr = true;
+      const tx = { ...sale, ncfType, ncf: `${ncfType}0000000123` };
+      assert.equal(await module.exports.printTicket(tx, configuration), true);
+      assert.ok(env.html.includes(label));
+      assert.ok(env.html.includes(tx.ncf));
+      assert.doesNotMatch(env.html, /Representación fiscal firmada aún no disponible/);
+      assert.ok(!env.html.includes(`>${ncfType}</div>`));
+    }
     assert.equal(await module.exports.printTicket(sale, config('RESTAURANT')), true);
     assert.match(env.html, /Tipo de servicio: Consumo en mesa/);
   } finally { delete (globalThis as any).__retailReceiptTest; }
