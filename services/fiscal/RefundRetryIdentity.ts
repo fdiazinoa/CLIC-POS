@@ -22,7 +22,8 @@ export async function refundRetryIdentity(scope: unknown, original: Transaction,
       condition:conditions.get(item.cartId) || 'SELLABLE'})).sort((a,b)=>a.cartId.localeCompare(b.cartId)),
     reason,payments,skipWalletDeposit:options.skipWalletDeposit === true,
     preparedAuthority:options.erpRefundAuthority || null})));
-  return {key,scopeKey,fingerprint,transactionId:`NC-${key}`,operationId:`${key.slice(0,8)}-${key.slice(8,12)}-5${key.slice(13,16)}-a${key.slice(17,20)}-${key.slice(20,32)}`};
+  const operationId=`${key.slice(0,8)}-${key.slice(8,12)}-4${key.slice(13,16)}-a${key.slice(17,20)}-${key.slice(20,32)}`;
+  return {key,scopeKey,fingerprint,transactionId:`NC-${operationId}`,operationId};
 }
 
 // Serializes standard refund callbacks, including double clicks, through fresh-source validation.

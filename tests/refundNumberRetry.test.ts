@@ -64,6 +64,8 @@ test('retry identity ignores sync/catalog flags, timestamps and line ordering; c
  const first=await refundRetryIdentity({tenantId:'one'},original,items,conditions,'return',{});
  const retry=await refundRetryIdentity({tenantId:'one'},{...original,syncStatus:'COMPLETED'},[...items].reverse().map(i=>({...i,syncStatus:'COMPLETED'})),conditions,'return',{});
  assert.deepEqual(retry,first);
+ assert.match(first.operationId,/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/);
+ assert.equal(first.transactionId,`NC-${first.operationId}`);assert.ok(first.transactionId.length<=64);
  assert.notEqual((await refundRetryIdentity({tenantId:'two'},original,items,conditions,'return',{})).key,first.key);
  assert.notEqual((await refundRetryIdentity({tenantId:'one'},{...original,relatedTransactions:['previous']},items,conditions,'return',{})).key,first.key);
  const changed=await refundRetryIdentity({tenantId:'one'},original,[{...items[0],quantity:2}],conditions,'return',{});
