@@ -469,6 +469,8 @@ export const buildEscPosTicketPayload = (
     B15: 'GUBERNAMENTAL'
   };
   const comprobanteTypeLabels: Record<string, string> = {
+    E31: 'CREDITO FISCAL',
+    E32: 'CONSUMO FINAL',
     B01: 'CREDITO FISCAL',
     B02: 'CONSUMIDOR FINAL',
     B04: 'NOTA DE CREDITO',
@@ -673,7 +675,7 @@ export const buildEscPosTicketPayload = (
     pushTextLines(chunks,splitLines(`Fecha firma: ${fiscalPrint.signedAt}`,width));
     pushTextLines(chunks,splitLines(fiscalPrint.dgiiConditional?'DGII: Aceptado condicionalmente':fiscalPrint.dgiiAccepted?'DGII: Aceptado':'DGII: Pendiente de confirmacion',width));
     chunks.push(align(0));chunks.push(divider(width));
-  } else if(transaction.ncfType?.startsWith('E')) pushTextLines(chunks,splitLines('Representacion fiscal firmada aun no disponible.',width));
+  }
   const footerLines = (config.receiptConfig?.footerMessage || 'Gracias por su compra.\nVuelva pronto.')
     .split('\n')
     .map(line => line.trim())
