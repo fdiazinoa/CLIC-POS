@@ -8403,6 +8403,18 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const renderQuickActionsPanel = () => (
       <div className="animate-in fade-in zoom-in-95 duration-200 mt-2">
+         <div className="sticky top-0 z-10 mb-3 flex justify-end bg-gray-100 py-2">
+            <button
+               type="button"
+               aria-label="Ocultar acciones y volver al ticket"
+               aria-pressed={rightSidebarTab === 'ACTIONS'}
+               onClick={() => setRightSidebarTab(tab => tab === 'ACTIONS' ? 'CART' : 'ACTIONS')}
+               className="flex min-h-12 items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-bold text-slate-700 hover:bg-slate-50"
+            >
+               <Layers size={22} />
+               <span>Ocultar acciones</span>
+            </button>
+         </div>
          <button
             onClick={onOpenHistory}
             className="mb-3 flex w-full items-center justify-between rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-left text-sm font-black text-blue-700 shadow-sm transition-all hover:bg-blue-100"
@@ -9215,8 +9227,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   <button
                      type="button"
                      data-testid="mobile-actions-tab-button"
-                     onClick={() => setRightSidebarTab('ACTIONS')}
-                     aria-label="Abrir acciones rápidas"
+                     onClick={() => setRightSidebarTab(tab => tab === 'ACTIONS' ? 'CART' : 'ACTIONS')}
+                     aria-label={rightSidebarTab === 'ACTIONS' ? 'Ocultar acciones y volver al ticket' : 'Abrir acciones rápidas'}
                      aria-pressed={rightSidebarTab === 'ACTIONS'}
                      className={`group flex h-12 w-12 shrink-0 items-center justify-center rounded-[1.05rem] border transition-all duration-200 ${
                         rightSidebarTab === 'ACTIONS'
