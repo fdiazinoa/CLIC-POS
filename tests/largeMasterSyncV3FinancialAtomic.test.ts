@@ -416,7 +416,7 @@ test('two sequential partial refunds retain archived original and never create a
    const source=await f.adapter.getDocument('transactionHistory','source') as any;
    return {collection:'transactionHistory',id:'source',expected:JSON.stringify(source),items:source.items};
   };
-  const refund=(name:string)=>({...module.transaction(name,true),type:'REFUND',...scope,customerId:undefined,originalTransactionId:'source',items:[{...original.items[0],quantity:0.5,netAmount:50,taxAmount:9,totalAmount:59}],total:59,netAmount:50,taxAmount:9});
+  const refund=(name:string)=>({...module.transaction(name,true),...scope,customerId:undefined,originalTransactionId:'source',items:[{...original.items[0],quantity:0.5,netAmount:50,taxAmount:9,totalAmount:59}],total:59,netAmount:50,taxAmount:9});
   for(const name of ['partial-1','partial-2']){
    const before=await f.adapter.getDocument('transactionHistory','source') as any;
    const intended={...before,status:name==='partial-1'?'PARTIAL_REFUND':'REFUNDED',relatedTransactions:[...before.relatedTransactions,name]};
@@ -440,7 +440,7 @@ test('actual refund helper lost ACK replays exact canonical receipt without writ
    relatedTransactions:[],items:[{...module.transaction('source').items[0],quantity:10,netAmount:1000,taxAmount:180,totalAmount:1180}]};
   await f.adapter.saveDocument('config',{id:'current'});
   await f.adapter.saveDocument('transactions',original);await f.adapter.saveDocument('transactionHistory',original);
-  const refund={...module.transaction('own-refund',true),type:'REFUND',...scope,customerId:undefined,customerName:undefined,
+  const refund={...module.transaction('own-refund',true),...scope,customerId:undefined,customerName:undefined,
    originalTransactionId:'source',total:472,netAmount:400,taxAmount:72,items:[{...original.items[0],quantity:4,netAmount:400,taxAmount:72,totalAmount:472}]};
   const options={warehouseId:'W',originalSource:original,originalTransaction:{...original,status:'PARTIAL_REFUND'},conditions:new Map([[original.items[0].cartId,'SELLABLE']])};
   const commit=f.adapter.saveDocumentsAtomically.bind(f.adapter);let writes=0;
@@ -555,3 +555,24 @@ test('ordinary reserved checkout uses installed quota and the real financial bui
   await module.persistV3FinancialBatch([{transaction:source}],{} as BusinessConfig,'W');assert.equal((f.sql.prepare('SELECT consumed_minor n FROM pos_dispatch_quota_v1').get() as any).n,1000000);
  }finally{f.sql.close();}
 });
+
+for (const collection of ['transactions', 'transactionHistory']) {
+  test(`native retained ${collection} accepts canonical refund discriminator and rejects a type alias`, async () => {
+    const f = fixture();
+    try {
+      const original = { id: 'original', ...scope, documentType: 'TICKET', status: 'COMPLETED',
+        ...(collection === 'transactionHistory' ? { zReportId: 'Z' } : {}), total: 118 };
+      await f.adapter.saveDocument(collection, original);
+      const retained = { collection, id: original.id, expected: JSON.stringify(original) };
+      const mutation = (id: string, documentType: string, type?: string): DurableDocumentMutation => ({
+        collectionName: 'transactions', requireAbsent: true,
+        document: { id, ...scope, documentType, ...(type ? { type } : {}), originalTransactionId: original.id, total: 118 },
+        v3ExpectedRetainedDocument: retained as any,
+      });
+      await assert.rejects(f.adapter.saveDocumentsAtomically([mutation('alias', 'TICKET', 'REFUND')]), /SYNC_V3_RETAINED_SOURCE_REQUIRED/);
+      assert.equal(await f.adapter.getDocument('transactions', 'alias'), null);
+      await f.adapter.saveDocumentsAtomically([mutation('refund', 'REFUND')]);
+      assert.equal((await f.adapter.getDocument('transactions', 'refund') as any).documentType, 'REFUND');
+    } finally { f.sql.close(); }
+  });
+}

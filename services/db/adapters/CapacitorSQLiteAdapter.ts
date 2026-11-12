@@ -1509,7 +1509,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             if (mutation.v3ExpectedRetainedDocument) {
               const expected = mutation.v3ExpectedRetainedDocument;
               if(['transactions','transactionHistory'].includes(expected.collection) && document.id !== expected.id
-                && (document.type !== 'REFUND' || document.originalTransactionId !== expected.id)) {
+                && (document.documentType !== 'REFUND' || document.originalTransactionId !== expected.id)) {
                 throw new Error('SYNC_V3_RETAINED_SOURCE_REQUIRED');
               }
               const stored = await read('SELECT data FROM documents WHERE collection_name = ? AND doc_id = ?', [expected.collection, expected.id]);
