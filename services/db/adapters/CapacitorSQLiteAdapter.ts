@@ -1218,11 +1218,12 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
                 PRIMARY KEY (collection_name, doc_id)
             );
             CREATE TRIGGER IF NOT EXISTS preserve_refund_retry_update BEFORE UPDATE OF data ON documents
-            WHEN OLD.collection_name IN ('refundNumberReservations','refundRetryDocuments') AND OLD.data<>NEW.data
+            WHEN OLD.collection_name IN ('refundNumberReservations','refundRetryDocuments','refundRetryAcknowledgements') AND OLD.data<>NEW.data
             BEGIN SELECT RAISE(ABORT, 'REFUND_RETRY_EVIDENCE_IMMUTABLE'); END;
             CREATE TRIGGER IF NOT EXISTS preserve_refund_retry_delete BEFORE DELETE ON documents
-            WHEN OLD.collection_name IN ('refundNumberReservations','refundRetryDocuments')
+            WHEN OLD.collection_name IN ('refundNumberReservations','refundRetryDocuments','refundRetryAcknowledgements')
             BEGIN SELECT RAISE(ABORT, 'REFUND_RETRY_EVIDENCE_IMMUTABLE'); END;
+            CREATE INDEX IF NOT EXISTS idx_refund_retry_scope_source ON documents(json_extract(data,'$.scopeKey'),json_extract(data,'$.transaction.originalTransactionId')) WHERE collection_name='refundRetryDocuments';
             CREATE INDEX IF NOT EXISTS idx_documents_collection_sort
             ON documents(collection_name, sort_order, updatedAt);
             CREATE INDEX IF NOT EXISTS idx_documents_v3_inventory_baseline

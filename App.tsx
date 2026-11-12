@@ -1,4 +1,5 @@
-import {refundRetryIdentity,withRefundProcessingLock} from './services/fiscal/RefundRetryIdentity';
+import {recoverCommittedRefundRetry} from './services/fiscal/RefundRetryRecovery';
+import {refundRetryIdentity,refundRetryScopeKey,withRefundProcessingLock} from './services/fiscal/RefundRetryIdentity';
 import { useLargeMasterSyncV3Kiosk } from './components/kiosk/useLargeMasterSyncV3Kiosk';
 import {resolveAttendanceScope} from './services/attendance/LocalAttendance';
 import {assertInventoryPresentationReturnAllowed} from './services/inventoryPresentations/selection';
@@ -13041,6 +13042,21 @@ const AppContent: React.FC = () => {
     reason: string,
     options: RefundProcessingOptions = {}
   ): Promise<Transaction | null> => withRefundProcessingLock(async () => {
+    const retryTerminal=getCurrentTerminal();
+    const currentTerminal=retryTerminal;
+    const retryScope={terminalId:currentTerminal?.id,
+      erpTerminalId:currentTerminal?.config?.erpTerminalId,deviceId:currentTerminal?.config?.currentDeviceId,
+      binding:currentTerminal?.config?.erpBinding && {tenantId:currentTerminal.config.erpBinding.tenantId,
+        companyId:currentTerminal.config.erpBinding.companyId,storeId:currentTerminal.config.erpBinding.storeId},
+      erpBase:resolveSyncTarget().kind==='ERP_ACTIVE' ? resolveSyncTarget().baseUrl : null};
+    if(LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED && dbAdapter.reserveFinancialNumbers && !originalTx.erpRefundSource && !options.refundPayments?.length && !(originalTx as any).articleFormatWire){
+      const recovered=await recoverCommittedRefundRetry(dbAdapter,await refundRetryScopeKey(retryScope),originalTx.id);
+      if(recovered){
+        backgroundSyncManager.triggerSync().catch(console.error);
+        alert(`Esta devolución ya estaba guardada. Se recuperó ${recovered.displayId || recovered.id}${recovered.ncf ? ' / '+recovered.ncf : ''}. No se creó otra nota de crédito.`);
+        return recovered;
+      }
+    }
     originalTx = await readRefundOriginal(originalTx);
       assertInventoryPresentationReturnAllowed(originalTx);
     if((originalTx as any).articleFormatWire?.schema_version===2){
@@ -13103,7 +13119,6 @@ const AppContent: React.FC = () => {
     }
 
     // 1. Calculations
-    const currentTerminal = getCurrentTerminal();
     const refundTaxIncluded = LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED
       ? normalizedRefundItems[0].v3SaleAuthority!.taxIncluded : Boolean(originalTx.isTaxIncluded);
     const v3RefundFiscal = LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED
@@ -13148,11 +13163,7 @@ const AppContent: React.FC = () => {
     const resolvedCustomerId = originalTx.customerId || (LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED ? undefined : matchedCustomer?.id);
     const resolvedCustomerName = originalTx.customerName || (LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED ? undefined : matchedCustomer?.name);
 
-    const retry = await refundRetryIdentity({terminalId:currentTerminal?.id,
-      erpTerminalId:currentTerminal?.config?.erpTerminalId,deviceId:currentTerminal?.config?.currentDeviceId,
-      binding:currentTerminal?.config?.erpBinding && {tenantId:currentTerminal.config.erpBinding.tenantId,
-        companyId:currentTerminal.config.erpBinding.companyId,storeId:currentTerminal.config.erpBinding.storeId},
-      erpBase:resolveSyncTarget().kind==='ERP_ACTIVE' ? resolveSyncTarget().baseUrl : null}, originalTx,normalizedRefundItems,conditions,reason,options);
+    const retry = await refundRetryIdentity(retryScope, originalTx,normalizedRefundItems,conditions,reason,options);
     const durableRetryNumbers=Boolean(dbAdapter.reserveFinancialNumbers);
     const preparedRetry = await dbAdapter.getDocument<{id:string;fingerprint:string;transaction:Transaction}>('refundRetryDocuments',retry.key);
     if(preparedRetry && preparedRetry.fingerprint!==retry.fingerprint) throw Error('Hay una devolución pendiente de esta factura. Reintenta con los mismos artículos, cantidades, motivo y forma de pago.');
@@ -13296,7 +13307,7 @@ const AppContent: React.FC = () => {
 
     // Preserve the exact financial document before any payment fencing or commit attempt.
     // A failed save cannot advance either counter again: their retry receipts are atomic.
-    if(!preparedRetry) await dbAdapter.saveDocument('refundRetryDocuments',{id:retry.key,fingerprint:retry.fingerprint,transaction:creditNote});
+    if(!preparedRetry) await dbAdapter.saveDocument('refundRetryDocuments',{id:retry.key,scopeKey:retry.scopeKey,fingerprint:retry.fingerprint,transaction:creditNote});
 
     // 4a. Fence the E34 allocation checkout to EFFECT_POSSIBLE with the refund payments
     // so the native writer can consume the NCF atomically with the credit note.
@@ -13432,6 +13443,7 @@ const AppContent: React.FC = () => {
     // Sync
     backgroundSyncManager.triggerSync().catch(console.error);
 
+    if(LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED) await dbAdapter.saveDocument('refundRetryAcknowledgements',{id:retry.key,transactionId:finalizedCreditNote.id});
     alert(`Devolución procesada correctamente.\nDocumento: ${displayId}\n${creditNoteNcf ? 'NCF: ' + creditNoteNcf : ''}${autoPrintNotice}`);
     return finalizedCreditNote;
   });

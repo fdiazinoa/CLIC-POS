@@ -195,3 +195,57 @@ test('E34 allocation retry preserves its operation ID and never switches to lega
  }},db:{getReservedRefundFiscalNumber:async()=>null,reserveFiscalNumber:async()=>{throw Error('must never switch route');}}};
  assert.deepEqual(await reserveRefundFiscalReservation(options),await reserveRefundFiscalReservation(options));assert.equal(issued,1);
 });
+
+test('committed partial NC with lost response is recovered before a fresh refund frontier can issue another number',async t=>{
+ const {recoverCommittedRefundRetry}=await import('../services/fiscal/RefundRetryRecovery');
+ const f=await nativeFixture();t.after(()=>f.db.close());
+ const tx={id:'refund',documentType:'REFUND',originalTransactionId:'sale',date:'2026-11-12T22:00:00Z',items:[],total:10,payments:[],displayId:'NC-7',ncf:'E340000000007'} as unknown as Transaction;
+ await f.adapter.saveDocument('refundRetryDocuments',{id:key,scopeKey:'scope',transaction:tx});
+ assert.equal(await recoverCommittedRefundRetry(f.adapter,'other-scope','sale'),null);
+ assert.equal(await recoverCommittedRefundRetry(f.adapter,'scope','other-sale'),null);
+ assert.equal(await recoverCommittedRefundRetry(f.adapter,'scope','sale'),null,'uncommitted draft follows normal retry');
+ const committed={...tx,v3CommitFingerprint:'exact-native-commit',v3Binding:'binding',v3InventoryBaseline:'baseline',syncStatus:'COMPLETED' as const};
+ await f.adapter.saveDocument('transactions',committed);await f.adapter.saveDocument('transactionHistory',committed);
+ const before=f.documents('internalSequences');
+ assert.deepEqual(await recoverCommittedRefundRetry(f.adapter,'scope','sale'),committed);
+ assert.deepEqual(f.documents('internalSequences'),before);
+ assert.equal(f.documents('refundRetryAcknowledgements')[0].transactionId,'refund');
+ assert.equal(await recoverCommittedRefundRetry(f.adapter,'scope','sale'),null,'an acknowledged prior NC no longer intercepts a legitimate next partial return');
+});
+
+test('pending recovery requires complete matching native financial history and never acknowledges ambiguous money',async t=>{
+ const {recoverCommittedRefundRetry}=await import('../services/fiscal/RefundRetryRecovery');
+ const f=await nativeFixture();t.after(()=>f.db.close());
+ const tx={id:'refund',documentType:'REFUND',originalTransactionId:'sale',items:[],total:10,payments:[]} as unknown as Transaction;
+ await f.adapter.saveDocument('refundRetryDocuments',{id:key,scopeKey:'scope',transaction:tx});
+ await f.adapter.saveDocument('transactions',{...tx,v3CommitFingerprint:'commit'});
+ await assert.rejects(recoverCommittedRefundRetry(f.adapter,'scope','sale'),/conciliación/);
+ await f.adapter.saveDocument('transactionHistory',{...tx,total:11,v3CommitFingerprint:'commit'});
+ await assert.rejects(recoverCommittedRefundRetry(f.adapter,'scope','sale'),/conciliación/);
+ assert.equal(f.documents('refundRetryAcknowledgements').length,0);
+});
+
+test('actual App callback recovers a committed partial refund before stale-source validation or any new numbering',async t=>{
+ const {readFileSync}=await import('node:fs');const {transform}=await import('esbuild');
+ const {recoverCommittedRefundRetry}=await import('../services/fiscal/RefundRetryRecovery');
+ const {refundRetryScopeKey}=await import('../services/fiscal/RefundRetryIdentity');
+ const f=await nativeFixture();t.after(()=>f.db.close());
+ const app=readFileSync(new URL('../App.tsx',import.meta.url),'utf8');const start=app.indexOf('  const handleProcessRefund = async (');
+ const code=await transform(app.slice(start,app.indexOf('  const renderView =',start))+'\nmodule.exports=handleProcessRefund;',{loader:'ts',format:'cjs',target:'es2022'});
+ const terminal={id:'local',config:{erpTerminalId:'erp',currentDeviceId:'device',erpBinding:{tenantId:'tenant',companyId:'company',storeId:'store'}}};
+ const scope={terminalId:'local',erpTerminalId:'erp',deviceId:'device',binding:terminal.config.erpBinding,erpBase:'https://erp.invalid/api/sync'};
+ const tx={id:'refund',originalTransactionId:'sale',documentType:'REFUND',items:[],total:10,payments:[],displayId:'NC-7',ncf:'E340000000007'} as unknown as Transaction;
+ await f.adapter.saveDocument('refundRetryDocuments',{id:key,scopeKey:await refundRetryScopeKey(scope),transaction:tx});
+ const committed={...tx,v3CommitFingerprint:'committed-once'};
+ await f.adapter.saveDocument('transactions',committed);await f.adapter.saveDocument('transactionHistory',committed);
+ const notices:string[]=[];let syncs=0;
+ const ports={withRefundProcessingLock,getCurrentTerminal:()=>terminal,resolveSyncTarget:()=>({kind:'ERP_ACTIVE',baseUrl:scope.erpBase}),
+ LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED:true,dbAdapter:f.adapter,refundRetryScopeKey,recoverCommittedRefundRetry,
+ readRefundOriginal:async()=>{throw Error('must recover before stale source validation');},
+ backgroundSyncManager:{triggerSync:async()=>{syncs++;}},alert:(message:string)=>notices.push(message)};
+ const module={exports:undefined};new Function(...Object.keys(ports),'module',code.code)(...Object.values(ports),module);
+ const callback=module.exports as unknown as (tx:Transaction,items:CartItem[],conditions:Map<string,string>,reason:string)=>Promise<Transaction>;
+ const before=f.documents('internalSequences');
+ assert.deepEqual(await callback({id:'sale',relatedTransactions:['refund']} as Transaction,[],new Map(),'Return'),committed);
+ assert.deepEqual(f.documents('internalSequences'),before);assert.equal(syncs,1);assert.match(notices[0],/No se creó otra/);
+});
