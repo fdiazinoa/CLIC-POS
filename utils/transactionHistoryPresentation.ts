@@ -46,6 +46,7 @@ export const resolveTerminalDisplayName = (
 };
 
 const resolveLineDiscount = (item: CartItem): number => {
+  if (item.adjustmentSource === 'MANUAL_PRICE_OVERRIDE') return 0;
   const quantity = Math.abs(Number(item.quantity || 0));
   const originalPrice = Number((item as any).originalPrice);
   const price = Number(item.price || 0);

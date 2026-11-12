@@ -268,7 +268,7 @@ const printTicketInternal = async (transaction: Transaction, config: BusinessCon
     let lineDiscountTotal = 0;
     transaction.items.forEach(item => {
         const originalPrice = item.originalPrice || item.price;
-        lineDiscountTotal += Math.max(0, (originalPrice - item.price) * item.quantity);
+        lineDiscountTotal += resolveLineDiscountPresentation(item).discountAmount;
     });
 
     const discountTotal = Math.max(0, Number(transaction.discountAmount || 0));

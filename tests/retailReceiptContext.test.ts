@@ -84,6 +84,9 @@ test('real HTML print path hides service in Retail and escapes the original oper
       assert.doesNotMatch(env.html, /Representación fiscal firmada aún no disponible/);
       assert.ok(!env.html.includes(`>${ncfType}</div>`));
     }
+    const override = { ...sale, items: [{ ...sale.items[0], price: 10, originalPrice: 350, adjustmentSource: 'MANUAL_PRICE_OVERRIDE' }], total: 10 };
+    assert.equal(await module.exports.printTicket(override, config()), true);
+    assert.doesNotMatch(env.html, /340[.,]00|DESCUENTO TOTAL/);
     assert.equal(await module.exports.printTicket(sale, config('RESTAURANT')), true);
     assert.match(env.html, /Tipo de servicio: Consumo en mesa/);
   } finally { delete (globalThis as any).__retailReceiptTest; }
