@@ -70,7 +70,7 @@ const ProductTableSupermarket: React.FC<ProductTableSupermarketProps> = ({
                         const isHighlighted = highlightedId === item.cartId;
                         const taxAmount = item.price * item.quantity * (config.taxRate || 0.18);
                         const total = item.price * item.quantity;
-                        const hasDiscount = item.originalPrice && item.price < item.originalPrice;
+                        const hasDiscount = item.adjustmentSource !== 'MANUAL_PRICE_OVERRIDE' && item.originalPrice && item.price < item.originalPrice;
                         const displayCode = item.variantSku || item.sku || item.barcode || item.id;
                         const isReturn = item.quantity < 0;
 

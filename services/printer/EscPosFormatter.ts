@@ -303,7 +303,7 @@ const calculateTransactionTotals = (transaction: Transaction, config: BusinessCo
   transaction.items.forEach(item => {
     const originalPrice = item.originalPrice || item.price;
     const lineVal = item.price * item.quantity;
-    const lineDiscount = (originalPrice - item.price) * item.quantity;
+    const lineDiscount = resolveLineDiscountPresentation(item).discountAmount;
 
     lineDiscountTotal += Math.max(0, lineDiscount);
     rawGrossTotal += lineVal;

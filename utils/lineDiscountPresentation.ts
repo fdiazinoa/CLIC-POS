@@ -2,6 +2,7 @@ interface DiscountableLine {
   price?: number;
   originalPrice?: number;
   quantity?: number;
+  adjustmentSource?: string;
 }
 
 export interface LineDiscountPresentation {
@@ -24,7 +25,7 @@ export const formatLineDiscountPercentage = (percentage: number): string => {
 
 export const resolveLineDiscountPresentation = (item: DiscountableLine): LineDiscountPresentation => {
   const finalUnitPrice = Math.max(0, Number(item.price || 0));
-  const originalUnitPrice = Math.max(finalUnitPrice, Number(item.originalPrice || finalUnitPrice));
+  const originalUnitPrice = Math.max(finalUnitPrice, Number(item.adjustmentSource === 'MANUAL_PRICE_OVERRIDE' ? finalUnitPrice : (item.originalPrice || finalUnitPrice)));
   const quantity = Math.max(0, Number(item.quantity || 0));
   const discountPerUnit = Math.max(0, originalUnitPrice - finalUnitPrice);
   const discountAmount = round2(discountPerUnit * quantity);

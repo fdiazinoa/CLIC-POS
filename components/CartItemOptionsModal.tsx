@@ -50,6 +50,7 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
   const [note, setNote] = useState(item.note || '');
   const [salespersonId, setSalespersonId] = useState(item.salespersonId || '');
 
+  const [adjustmentIntent, setAdjustmentIntent] = useState<'NONE' | 'PRICE' | 'DISCOUNT'>('NONE');
   const [discountType, setDiscountType] = useState<'PERCENT' | 'FIXED'>('PERCENT');
   const [discountValue, setDiscountValue] = useState<string>('');
   const [activeNumericField, setActiveNumericField] = useState<'PRICE' | 'DISCOUNT'>(
@@ -60,7 +61,7 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
   const isAndroid = Capacitor.getPlatform() === 'android';
 
   const originalPrice = item.originalPrice || item.price;
-  const adjustmentBasePrice = (item.adjustmentSource === 'PROMOTION' || item.adjustmentSource === 'TARIFF')
+  const adjustmentBasePrice = (item.adjustmentSource === 'PROMOTION' || item.adjustmentSource === 'TARIFF' || item.adjustmentSource === 'MANUAL_PRICE_OVERRIDE')
     ? item.price
     : originalPrice;
 
@@ -84,6 +85,7 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
   };
 
   const applyDiscount = (rawValue: string, type: 'PERCENT' | 'FIXED') => {
+    setAdjustmentIntent('DISCOUNT');
     const val = parseFloat(rawValue);
     if (isNaN(val) || val <= 0) {
       setPrice(adjustmentBasePrice);
@@ -113,6 +115,7 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
   };
 
   const handlePriceValueChange = (rawValue: string) => {
+    setAdjustmentIntent('PRICE');
     setPriceInputValue(rawValue);
     setReplacePriceOnNextKey(false);
     const val = parseFloat(rawValue);
@@ -136,7 +139,16 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
       salespersonId: lockedSalespersonName ? item.salespersonId : salespersonId
     };
 
-    if (
+    if (adjustmentIntent === 'PRICE' && canOverridePrice) {
+      nextItem.originalPrice = item.originalPrice ?? item.price;
+      nextItem.discountAmount = undefined;
+      nextItem.discountRate = undefined;
+      nextItem.adjustmentSource = 'MANUAL_PRICE_OVERRIDE';
+      delete nextItem.appliedPromotionId;
+      delete nextItem.appliedPromotionCode;
+      delete nextItem.appliedPromotionName;
+      delete nextItem.promotionTrace;
+    } else if (
       Math.abs(nextPrice - item.price) <= EPSILON
       && (item.adjustmentSource === 'MANUAL_DISCOUNT' || item.adjustmentSource === 'MANUAL_PRICE_OVERRIDE')
     ) {

@@ -52,10 +52,10 @@ const normalizeTransactionItems = (items: CartItem[]): CartItem[] => {
         const effectiveOriginalPrice = (typeof originalPrice === 'number' && originalPrice > 0 && originalPrice !== price)
             ? originalPrice
             : undefined;
-        const derivedDiscountAmount = effectiveOriginalPrice && price < effectiveOriginalPrice
+        const derivedDiscountAmount = item.adjustmentSource !== 'MANUAL_PRICE_OVERRIDE' && effectiveOriginalPrice && price < effectiveOriginalPrice
             ? round2((effectiveOriginalPrice - price) * quantity)
             : undefined;
-        const derivedDiscountRate = effectiveOriginalPrice && price < effectiveOriginalPrice && effectiveOriginalPrice > 0
+        const derivedDiscountRate = item.adjustmentSource !== 'MANUAL_PRICE_OVERRIDE' && effectiveOriginalPrice && price < effectiveOriginalPrice && effectiveOriginalPrice > 0
             ? round4((effectiveOriginalPrice - price) / effectiveOriginalPrice)
             : undefined;
         const netAmount = normalizeNumber(item?.netAmount);
@@ -68,8 +68,8 @@ const normalizeTransactionItems = (items: CartItem[]): CartItem[] => {
             price,
             quantity,
             originalPrice: effectiveOriginalPrice,
-            discountAmount: derivedDiscountAmount ?? item.discountAmount,
-            discountRate: derivedDiscountRate ?? item.discountRate,
+            discountAmount: item.adjustmentSource === 'MANUAL_PRICE_OVERRIDE' ? undefined : derivedDiscountAmount ?? item.discountAmount,
+            discountRate: item.adjustmentSource === 'MANUAL_PRICE_OVERRIDE' ? undefined : derivedDiscountRate ?? item.discountRate,
             netAmount,
             taxAmount,
             totalAmount,

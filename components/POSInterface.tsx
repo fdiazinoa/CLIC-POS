@@ -9577,7 +9577,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         </div>
                      ) : (
                         processedCart.map((item, idx) => {
-                        const hasDiscount = item.originalPrice && item.price < item.originalPrice;
+                        const hasDiscount = item.adjustmentSource !== 'MANUAL_PRICE_OVERRIDE' && item.originalPrice && item.price < item.originalPrice;
                         const discountPct = hasDiscount ? Math.round((1 - item.price / item.originalPrice!) * 100) : 0;
                         const lineNet = item.price * item.quantity;
                         const lineTaxSummary = getCartItemTaxSummary(item);
