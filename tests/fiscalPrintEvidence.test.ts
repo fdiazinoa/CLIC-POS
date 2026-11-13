@@ -76,9 +76,9 @@ test('actual TicketHistory email refreshes archived persisted proof after approv
  const code=(await transform(segment,{loader:'ts'})).code;
  const f=await fixture(),stale={...f.tx};delete stale.fiscalPrintProof;let sent:any;const reads:string[]=[];
  const {resolveFiscalAcceptance}=await import('../services/fiscal/FiscalPrintEvidence');
- const call=new Function('f',`const {requireCurrentUser,requestApproval,db,config,users,sendReceiptEmailViaErp,buildReceiptEmailPayload,resolveFiscalPrintReadiness,resolveFiscalAcceptance,recordInvoiceAuditEvent}=f;${code};return handleSendInvoiceEmail;`)({
+ const call=new Function('f',`const {requireCurrentUser,requestApproval,db,config,users,requestReceiptEmail,recordInvoiceAuditEvent}=f;${code};return handleSendInvoiceEmail;`)({
   requireCurrentUser:()=>({id:'actor'}),requestApproval:async()=>true,db:{getDocument:async(collection:string)=>{reads.push(collection);return collection==='transactionHistory'?{...f.tx,zReportId:'Z'}:null;}},config:{currencySymbol:'RD$'},users:[],
-  sendReceiptEmailViaErp:async(payload:any)=>{sent=payload;return{success:true};},buildReceiptEmailPayload,resolveFiscalPrintReadiness:resolveFiscalPrintDisplay,resolveFiscalAcceptance,recordInvoiceAuditEvent:async()=>{},
+  requestReceiptEmail:async(tx:any,email:string,config:any,currency:string,users:any[])=>{sent=buildReceiptEmailPayload(tx,email,config,currency,users,await resolveFiscalPrintDisplay(tx),await resolveFiscalAcceptance(tx));return{success:true};},recordInvoiceAuditEvent:async()=>{},
  });
  await call(stale,'fixture@example.invalid');assert.deepEqual(reads,['transactions','transactionHistory']);assert.equal(sent.fiscalPrintEvidence.qrUrl,f.proof.providerReceipt.printEvidence.qrUrl);assert.equal(sent.fiscalValidated,false);
 });

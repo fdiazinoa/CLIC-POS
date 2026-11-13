@@ -1,3 +1,4 @@
+import { sameFiscalNcf } from '../fiscal/FiscalStatusProof';
 import { readTerminalCredentialsSync, type TerminalCredentials } from '../sync/TerminalCredentialStore';
 import { requestJson, type RequestJsonResult } from '../network/httpClient';
 import { resolveErpBaseUrl } from '../../utils/erpBaseUrl';
@@ -36,7 +37,7 @@ type ReceiptEmailDependencies = {
 
 export const withReceiptDeliveryRequestId = (payload: ReceiptEmailPayload): ReceiptEmailPayload => ({
   ...payload,
-  deliveryRequestId: uuidv4(),
+  deliveryRequestId: payload.deliveryRequestId || uuidv4(),
 });
 
 const asNonEmptyString = (value: unknown): string | undefined => {
@@ -94,6 +95,12 @@ export const sendReceiptEmailViaErp = async (
   payload: ReceiptEmailPayload,
   dependencies: ReceiptEmailDependencies | ReceiptEmailRequest = {},
 ): Promise<ReceiptEmailResult> => {
+  const electronic = [payload.ncfType, payload.ncf].some(value => /^E\d{2}/.test(String(value || '')));
+  const evidence = payload.fiscalPrintEvidence as Record<string, unknown> | undefined;
+  if (electronic && (!evidence?.qrUrl || !evidence.securityCode || !evidence.signedAt
+      || !sameFiscalNcf(evidence.certifiedNcf, payload.ncf) || payload.showQr !== true)) {
+    return { success: false, status: 'pending_signature', message: 'El correo electrónico requiere el QR fiscal firmado.' };
+  }
   const normalizedDependencies: ReceiptEmailDependencies = typeof dependencies === 'function'
     ? { request: dependencies }
     : dependencies;
@@ -111,7 +118,10 @@ export const sendReceiptEmailViaErp = async (
     };
   }
 
+  const identity = (value: TerminalCredentials) => JSON.stringify([value.erpTenantId || value.tenantId,
+    value.companyId, value.erpTerminalId || value.terminalId, value.deviceId]);
   let credentials = readCredentials();
+  const deliveryIdentity = identity(credentials);
   const syncToken = asNonEmptyString(credentials.syncToken);
   if (!syncToken) {
     return {
@@ -123,6 +133,8 @@ export const sendReceiptEmailViaErp = async (
   try {
     const deliveryPayload = withReceiptDeliveryRequestId(payload);
     const send = (activeCredentials: TerminalCredentials) => {
+      if (identity(activeCredentials) !== deliveryIdentity || identity(readCredentials()) !== deliveryIdentity
+          || resolveErpBaseUrl() !== erpBaseUrl) throw new Error('RECEIPT_EMAIL_SCOPE_CHANGED');
       const activeSyncToken = asNonEmptyString(activeCredentials.syncToken);
       if (!activeSyncToken) throw new Error('TERMINAL_AUTHORIZATION_UNAVAILABLE');
       return request({
@@ -159,6 +171,9 @@ export const sendReceiptEmailViaErp = async (
 
     return parseReceiptEmailResponse(response);
   } catch (error) {
+    if (error instanceof Error && error.message === 'RECEIPT_EMAIL_SCOPE_CHANGED') {
+      return { success: false, message: 'Cambió la vinculación de la terminal. El correo queda pendiente en su empresa original.' };
+    }
     if (error instanceof Error && error.message === 'TERMINAL_AUTHORIZATION_UNAVAILABLE') {
       return { success: false, message: 'La terminal no tiene autorización vigente para enviar correos.' };
     }
