@@ -75,7 +75,7 @@ los gateways no soportados permanecen pendientes sin efecto bancario.
 
 ## Evidencia y límites
 
-- 406/406 pruebas en 14 suites acotadas (ver comando siguiente).
+- 434/434 pruebas en 15 suites acotadas, incluida fiscalWorkflowV2Native (ver comando).
 - Revisión posterior acota el metadato nuevo únicamente a ordinary SALE; VOID y
   el perfil sin operationKind conservan su referencia a la factura afectada.
   Las 20 pruebas del consumidor y typecheck/lint se repitieron: aprobados.
@@ -96,12 +96,18 @@ los gateways no soportados permanecen pendientes sin efecto bancario.
   simulado; no demuestra despliegue ERP, MSeller real, Realtime ni Android.
 - No se ejecutó Android/Capacitor en dispositivo ni se generó/instaló APK.
 - No se modificaron ni conciliaron E340000000003 y E340000000006.
-- Una suite adicional fiscalWorkflowV2Native encontró un ReferenceError dbAdapter
-  en el contexto extraído del callback POSInterface (archivo no modificado aquí).
-  No se cambió esa fixture ni se presenta como una prueba verde.
+- La fixture fiscalWorkflowV2Native ahora pasa con el callback POSInterface real,
+  el adaptador SQLite real y el esquema de instalación de despacho usado por sus
+  consultas. Declara el contexto ordinario sin despacho y observa las consultas SQL;
+  conserva concurrencia, adopción de identidad, commit cash, rechazo duplicado,
+  ACK y un único outbox/historial/permiso consumido. No crea efectos de despacho.
+  Su reader de identidad offline sintética está ligado al mismo scope; se comprueba
+  que el almacén real no tiene leases/allocations ni disponibilidad offline. No se
+  sustituye offlineReady ni el adaptador por un null/no-op. Es una fixture online,
+  no una validación del bootstrap operativo o Android.
 
 ```sh
-npx tsx --test --test-force-exit tests/fiscalReturnDigestWire.test.ts tests/fiscalReturnConsumer.test.ts tests/refundNumberRetry.test.ts tests/refundFiscalReservation.test.ts tests/largeMasterSyncV3FinancialAtomic.test.ts tests/offlineFiscalAllocation.test.ts tests/durableOutboxV2.test.ts tests/durableOutboxBatchSender.test.ts tests/posUiRegressionGuards.test.ts tests/v3RefundOriginalSnapshot.test.ts tests/v3RetainedTaxClassification.test.ts tests/fiscalDispatchLocalCatalog.test.ts tests/fiscalErpDispatch.test.ts tests/erpRefundSource.test.ts
+npx tsx --test --test-force-exit tests/fiscalWorkflowV2Native.test.ts tests/fiscalReturnDigestWire.test.ts tests/fiscalReturnConsumer.test.ts tests/refundNumberRetry.test.ts tests/refundFiscalReservation.test.ts tests/largeMasterSyncV3FinancialAtomic.test.ts tests/offlineFiscalAllocation.test.ts tests/durableOutboxV2.test.ts tests/durableOutboxBatchSender.test.ts tests/posUiRegressionGuards.test.ts tests/v3RefundOriginalSnapshot.test.ts tests/v3RetainedTaxClassification.test.ts tests/fiscalDispatchLocalCatalog.test.ts tests/fiscalErpDispatch.test.ts tests/erpRefundSource.test.ts
 npm run build
 ```
 
