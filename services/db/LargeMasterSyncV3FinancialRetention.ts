@@ -58,7 +58,7 @@ export const financialIdentity = (transaction: Transaction): string => {
 };
 
 export type V3TaxClassificationObservation = { taxId: string; before: string; after: string | null };
-export type V3FinancialOptions = { refund?: boolean; conditions?: Map<string, 'SELLABLE' | 'DAMAGED'>; original?: Transaction;
+export type V3FinancialOptions = { fiscalReturnAttemptId?:string; refund?: boolean; conditions?: Map<string, 'SELLABLE' | 'DAMAGED'>; original?: Transaction;
     expectedOriginal?: Transaction; expectedOriginalHistory?: Transaction | null; originalCollection?: 'transactions' | 'transactionHistory';
     adjustCustomerBalance?: boolean; skipWalletDeposit?: boolean;
     /** Audit-only evidence for the ERP journal NOTA; never part of the financial identity. */

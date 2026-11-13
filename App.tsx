@@ -1,3 +1,5 @@
+import {createFiscalReturnConsumer,createFiscalReturnTransport} from './services/fiscal/FiscalReturnConsumer';
+import {returnOperatorMessage} from './services/fiscal/FiscalReturnV1';
 import {recoverCommittedRefundRetry} from './services/fiscal/RefundRetryRecovery';
 import {refundRetryIdentity,refundRetryScopeKey,withRefundProcessingLock} from './services/fiscal/RefundRetryIdentity';
 import { useLargeMasterSyncV3Kiosk } from './components/kiosk/useLargeMasterSyncV3Kiosk';
@@ -13055,6 +13057,41 @@ const AppContent: React.FC = () => {
         backgroundSyncManager.triggerSync().catch(console.error);
         alert(`Esta devolución ya estaba guardada. Se recuperó ${recovered.displayId || recovered.id}${recovered.ncf ? ' / '+recovered.ncf : ''}. No se creó otra nota de crédito.`);
         return recovered;
+      }
+    }
+    const returnFiscalMode=getEffectiveFiscalComplianceConfig(config,currentTerminal?.config).mode;
+    if(returnFiscalMode==='ECF' && !(originalTx as any).articleFormatWire){
+      try{
+        if(!LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED||originalTx.erpRefundSource||options.refundPayments?.length)throw Error('FISCAL_RETURN_SOURCE_PROOF_REQUIRED');
+        const sequences=await db.get('internalSequences') as DocumentSeries[];
+        const seriesId=resolveDocumentAssignmentId('REFUND',sequences,currentTerminal?.config?.documentAssignments?.REFUND)
+          ||resolveDocumentAssignmentId('REFUND',sequences,'REFUND');
+        if(!seriesId)throw Error('FISCAL_RETURN_SERIES_REQUIRED');
+        const consumer=createFiscalReturnConsumer({adapter:dbAdapter,transport:createFiscalReturnTransport(),workflow:fiscalWorkflowV2Client,
+          readOriginal:readRefundOriginal,
+          commit:async(source,attempt)=>{
+            const fresh=await readRefundOriginal(originalTx);
+            const [active,archived]=await Promise.all([db.get('transactions'),db.get('transactionHistory')]) as [Transaction[],Transaction[]];
+            const available=validateRefundItems(fresh,source.items,[...(active||[]),...(archived||[])]);
+            if('message' in available)throw Error('FISCAL_RETURN_QUANTITY_CONFLICT');
+            const remaining=Array.from(available.remaining.values()).reduce((n,q)=>n+q,0);
+            const returned=source.items.reduce((n,l)=>n+Math.abs(l.quantity),0);
+            const result=await persistStandaloneRefundTransaction(source,{fiscalReturnAttemptId:attempt.id,
+              warehouseId:attempt.preparation!.returnSnapshot.warehouseId,terminalId:source.terminalId,originalSource:fresh,
+              originalTransaction:{...fresh,status:returned>=remaining?'REFUNDED':'PARTIAL_REFUND'},persistOriginal:true,
+              adjustCustomerBalance:Number(attempt.preparation!.returnSnapshot.pendingBalance)>0,skipWalletDeposit:true,conditions});
+            return result.refund;
+          }});
+        const result=await consumer.process(originalTx,itemsToRefund,conditions,reason,seriesId,{id:currentUser?.id||'sys',name:currentUser?.name||'System'});
+        const fresh=await db.get('transactions') as Transaction[];if(Array.isArray(fresh))setTransactions(fresh);
+        const products=await readAppProducts();if(products.length)setProducts(products);
+        backgroundSyncManager.triggerSync().catch(console.error);
+        void fiscalWorkflowV2Client.consult(result.id).catch(()=>{});
+        alert(`Devolución guardada: ${result.displayId || result.id}. Pendiente de sincronización y confirmación fiscal; guardar no equivale a aceptación DGII.`);
+        return result;
+      }catch(error){
+        console.warn('[RETURN/E34]',/^FISCAL_[A-Z0-9_]+$/.test((error as Error)?.message)?(error as Error).message:'FISCAL_RETURN_PENDING');
+        throw Error(returnOperatorMessage(error));
       }
     }
     originalTx = await readRefundOriginal(originalTx);

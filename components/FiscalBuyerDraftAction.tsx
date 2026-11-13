@@ -2,7 +2,7 @@ import React,{useEffect,useState} from 'react';
 import type {Transaction,User} from '../types';
 import type {FiscalWorkflowStateV2} from '../services/fiscal/FiscalWorkflowV2Types';
 import {fiscalWorkflowV2Client,fiscalWorkflowMessage,fiscalWorkflowReason} from '../services/fiscal/FiscalWorkflowV2Client';
-export const hasFiscalWorkflowSourceMarker=(transaction:Transaction):boolean=>transaction.fiscalProvider==='MSELLER'&&Boolean((transaction as any).fiscalWorkflowBirth?.schemaVersion===2||(transaction as any).articleFormatWire?.schema_version===2);
+export const hasFiscalWorkflowSourceMarker=(transaction:Transaction):boolean=>transaction.fiscalProvider==='MSELLER'&&Boolean(transaction.fiscalWorkflowCheckoutId||(transaction as any).fiscalWorkflowBirth?.schemaVersion===2||(transaction as any).articleFormatWire?.schema_version===2);
 /** Shared buyer-only fiscal draft. Never edits the sale/customer master, reserves NCF, or calls ISSUE. */
 export function FiscalBuyerDraftAction({transaction,users,children}:{transaction:Transaction;users:User[];children?:React.ReactNode}){
  const [state,setState]=useState<FiscalWorkflowStateV2|null>(null),[open,setOpen]=useState(false),[busy,setBusy]=useState(false),[message,setMessage]=useState(''),[buyer,setBuyer]=useState<Record<string,string>>({}),[reason,setReason]=useState(''),[actorId,setActorId]=useState(''),[pin,setPin]=useState('');
@@ -16,7 +16,7 @@ export function FiscalBuyerDraftAction({transaction,users,children}:{transaction
  return <div className="mt-3 space-y-2 text-xs">
   <p className="text-[10px] font-bold uppercase text-slate-400">Estado fiscal</p>
   <p role="status" className="font-semibold">{current?fiscalWorkflowMessage(current):'Estado fiscal pendiente de consulta.'}</p>
-  {current&&<p className="text-slate-500">Última actualización: {new Date(current.observedAt).toLocaleString()}</p>}
+  {current?.observedAt&&<p className="text-slate-500">Última actualización: {new Date(current.observedAt).toLocaleString()}</p>}
   {enabled&&<button type="button" disabled={busy} onClick={()=>void inspect()} className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 font-bold text-amber-800 disabled:opacity-50">{busy?'Validando…':current?.canCorrect?'Corregir comprador fiscal':'Consultar estado fiscal'}</button>}
   {message&&<p role="status">{message}</p>}
   {open&&<div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/50 p-4"><form onSubmit={save} className="max-h-[90vh] w-full max-w-lg space-y-3 overflow-auto rounded-2xl bg-white p-6 text-slate-900">
