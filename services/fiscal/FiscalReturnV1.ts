@@ -160,8 +160,22 @@ export function buildReturnSource(a: ReturnAttempt, original: Transaction, serie
         fiscalSubmissionScope: undefined, fiscalLookupApproval: undefined, syncStatus: 'PENDING' } as Transaction;
 }
 export function returnContract(a: ReturnAttempt): ReturnContract { return { schemaVersion: 1, profile: RETURN_PROFILE, preparationId: a.preparation!.preparationId, returnSnapshotDigest: a.preparation!.returnSnapshotDigest, originalReference: a.preparation!.originalReference, localCommittedAt: a.localCommittedAt! }; }
+/** This is authenticated identity metadata, not RETURN admission authority. */
+export function validOrdinaryReturnReference(source: Transaction, state: import('./FiscalWorkflowV2Types').FiscalWorkflowStateV2): boolean {
+    const reference = state.originalReference;
+    return Boolean(reference && Object.keys(reference).sort().join(',') === 'documentId,environment,issuerRnc,ncf,sourceChecksum,transactionId'
+        && uuid(reference.documentId) && reference.transactionId === source.id && reference.ncf === source.ncf
+        && reference.ncf === state.ncf && reference.issuerRnc === state.issuerRnc && reference.environment === state.environment
+        && reference.sourceChecksum === state.checksumV1 && /^[a-f0-9]{64}$/.test(reference.sourceChecksum));
+}
+export function originalReferencePendingCode(reason: unknown): string {
+    return typeof reason === 'string' && /^FISCAL_ORIGINAL_REFERENCE_[A-Z0-9_]{1,96}$/.test(reason)
+        ? reason : 'FISCAL_RETURN_ACCEPTED_ORIGINAL_REQUIRED';
+}
 export function returnOperatorMessage(error: unknown): string {
     const code = (error as Error)?.message || '';
+    if (code === 'FISCAL_ORIGINAL_REFERENCE_STORAGE_UNAVAILABLE')
+        return 'El ERP no pudo verificar la factura original. La devolución sigue pendiente; vuelve a consultar cuando haya conexión.';
     if (/CONFLICT|MISMATCH|PROOF|REFERENCE|SOURCE|BUYER/.test(code))
         return 'Esta devolución necesita revisión del documento original. No se emitió otra nota de crédito.';
     if (/PAYMENT|BANK/.test(code))

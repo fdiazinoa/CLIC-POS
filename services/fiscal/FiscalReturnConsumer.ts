@@ -4,7 +4,7 @@ import type { NativeFiscalReturnStore } from '../db/NativeFiscalReturnStore';
 import { fiscalWorkflowScopeKey } from './FiscalWorkflowV2Types';
 import type { FiscalWorkflowCheckoutV2, FiscalWorkflowStateV2 } from './FiscalWorkflowV2Types';
 import { captureFiscalStatusBoundContext } from './FiscalBoundContext';
-import { assertReturnAdmission, assertReturnPreparation, buildReturnSource, returnJSON, returnNeed, sameReturn, type ReturnAttempt, type ReturnCapability, type ReturnPreparation, type ReturnCommand } from './FiscalReturnV1';
+import { assertReturnAdmission, assertReturnPreparation, buildReturnSource, returnJSON, returnNeed, sameReturn, validOrdinaryReturnReference, originalReferencePendingCode, type ReturnAttempt, type ReturnCapability, type ReturnPreparation, type ReturnCommand } from './FiscalReturnV1';
 import { sha256Utf8 } from '../sync/LargeMasterSyncV3Client';
 import { financialIdentity } from '../db/LargeMasterSyncV3FinancialRetention';
 export function createFiscalReturnTransport(readAuth = captureFiscalStatusBoundContext, fetcher: typeof fetch = fetch) {
@@ -125,7 +125,8 @@ export function createFiscalReturnConsumer(ports: ConsumerPorts) {
                     returnNeed(checkout.allocation?.authorizationId === c.authorizationId && checkout.allocation?.authorityHash === c.authorityHash && checkout.phase === 'PREPARED' && checkout.operationId === a.operationId, 'FISCAL_RETURN_AUTHORITY_REQUIRED');
                     const parent = await ports.workflow.consult(original.id);
                     const reference = parent.originalReference;
-                    returnNeed(parent.mode === 'WORKFLOW' && parent.sourceKind === 'ORDINARY_SOURCE_V2' && parent.signature && ['ACCEPTED', 'ACCEPTED_CONDITIONAL'].includes(parent.decision) && reference && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(reference.documentId) && reference.transactionId === original.id && reference.ncf === original.ncf && reference.ncf === parent.ncf && reference.issuerRnc === parent.issuerRnc && reference.environment === parent.environment && reference.sourceChecksum === parent.checksumV1 && /^[a-f0-9]{64}$/.test(reference.sourceChecksum), 'FISCAL_RETURN_ACCEPTED_ORIGINAL_REQUIRED');
+                    returnNeed(reference, originalReferencePendingCode(parent.originalReferenceReason));
+                    returnNeed(parent.mode === 'WORKFLOW' && parent.sourceKind === 'ORDINARY_SOURCE_V2' && parent.signature && ['ACCEPTED', 'ACCEPTED_CONDITIONAL'].includes(parent.decision) && validOrdinaryReturnReference(original, parent), 'FISCAL_RETURN_ACCEPTED_ORIGINAL_REQUIRED');
                     const command: ReturnCommand = { schemaVersion: 1, capability: 'fiscalReturnV1', operationId: a.operationId, checkoutId: checkout.checkoutId, transactionId: checkout.transactionId,
                         authorizationId: c.authorizationId, authorityHash: c.authorityHash, originalReference: reference!, lines,
                         payments: requested.map((p, i) => ({ ...p, id: a.paymentIds[i] })), financialEventId: a.financialEventId,

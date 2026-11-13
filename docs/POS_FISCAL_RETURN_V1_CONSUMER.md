@@ -1,25 +1,42 @@
 # Consumidor POS RETURN/E34 v1 — implementación en revisión
 
 Contrato ERP: `docs/pos-fiscal-return-v1-contract.md`, PR CLIC-ERP #2509,
-commit revisado `a61a8ba25635d8d93d682f6aa666ae3413421174`.
+commit inicial `a61a8ba25635d8d93d682f6aa666ae3413421174`; referencia original
+actualizada a `05d9bc9204fcc11bfe179f9dabc52ff80c2ee9f9`, documentada en
+`docs/return-original-reference.md` del ERP.
 Perfil: `ORDINARY_RETURN_DOP_V1`. El ERP sigue en draft y no desplegado.
 Base POS: develop + PR #997 (`e45bac7b`); conserva sus recibos y recuperación
 para B04. La ruta E34 ordinaria exige el consumidor preparado, nunca reserva legacy.
 
 ## Límite que impide declarar el flujo completo
 
-La prueba con API HTTP y PostgreSQL aislados del ERP se detiene en
-`FISCAL_RETURN_ACCEPTED_ORIGINAL_REQUIRED`, antes de return/prepare.
-prepare exige `originalReference.documentId`, pero el status ordinario SALE del
-commit ERP revisado no devuelve ese UUID; sólo lo proyecta para ARTICLE_FORMATS_V2.
-El POS no lo deduce del número de ticket ni lo toma de la fixture de laboratorio.
-El hilo ERP confirmó el faltante: añadirá el objeto completo originalReference al
-status autenticado existente, incluido originalReference.documentId. El SHA corregido
-todavía no está publicado. El POS pasa ese objeto completo sin reconstruirlo; si
-falta o es null, mantiene el pendiente. Hasta resolverlo,
-este trabajo debe permanecer draft: no habilitar ni publicar APK con este flujo.
-El intento queda persistido y no hay devolución, pago, inventario ni avance de
-consecutivo emitido. Puede existir una reserva nativa PREPARED sin efectos.
+La referencia original ya se obtiene del endpoint autenticado del ERP05d9. El POS
+pasa el objeto completo sin reconstruirlo. Una referencia ausente/null conserva el
+intento pendiente y su código `originalReferenceReason` seguro; no altera la decisión,
+firma ni motivo fiscal original. Si llega una referencia nueva a igual versión fiscal,
+se utiliza como metadato autenticado transitorio, sin sobrescribir el sidecar SQLite.
+El estado fiscal debe coincidir exactamente; versión anterior o evidencia contradictoria
+bloquean. Un null nuevo siempre prevalece sobre una referencia cacheada.
+
+La integración HTTP/PostgreSQL real ahora alcanza `return/prepare` (HTTP200), pero
+la verificación estricta de `returnSnapshotDigest` detiene el commit local con
+`FISCAL_RETURN_PROOF_INVALID`. En la fuente ERP05d9, `pos_return_hash_v1` utiliza el
+canonicalizador PostgreSQL, que conserva escala numérica: por ejemplo,
+`"discountAmount":0.00`. El snapshot transmitido y parseado en JavaScript contiene
+el número0, cuyo JSON canónico es `"discountAmount":0`. Son bytes y hashes distintos.
+El POS no omite el digest ni normaliza campos a ciegas para simular compatibilidad.
+Hace falta que ERP documente y publique una representación canónica reproducible
+del snapshot por el consumidor HTTP. Hasta comprobar ese contrato y terminar la
+integración, el PR permanece draft y no es apto para merge ni APK.
+
+La fixture antigua del ERP tenía trackId en OBSERVATION y no en su workflow original;
+el endpoint real devolvió `FISCAL_ORIGINAL_REFERENCE_OBSERVATION_MISMATCH`. La prueba
+reconcilia únicamente ese dato sintético con su evidencia ya retenida y obtiene la
+referencia del verificador real. No inyecta documentId ni originalReference al POS.
+Se comprueba igualdad del objeto autenticado contra el enviado a prepare y cero
+inventario/outbox/avance de numeración emitida al detenerse en el digest. Puede existir
+una reserva PREPARED sin efectos y una preparación remota pendiente; no se libera ni
+se reemplaza automáticamente durante un reintento.
 
 ## Persistencia y recuperación
 
@@ -42,16 +59,20 @@ los gateways no soportados permanecen pendientes sin efecto bancario.
 
 ## Evidencia y límites
 
-- 375/375 pruebas en 13 suites acotadas (ver comando siguiente).
+- 378/378 pruebas en 13 suites acotadas (ver comando siguiente).
 - npm run build (tsc -b + Vite) aprobado; advertencia de tamaño de chunks.
 - ESLint sobre archivos nuevos y pantallas modificadas: 0 errores, 14 avisos
-  no-case-declarations en App. Typecheck y 14 pruebas del consumidor repetidos
-  después de formatear los archivos nuevos: aprobados.
+  no-case-declarations en App en la revisión anterior. En este seguimiento, ESLint
+  de los seis archivos funcionales/pruebas modificados: 0 errores y 0 avisos.
+  Typecheck y compilación repetidos: aprobados.
 - Fixtures SQLite usan CapacitorSQLiteAdapter, NativeFiscalReturnStore,
   FinancialCommit y outbox reales sobre better-sqlite3; red/capacidad simuladas.
 - Cubren denegación/offline, doble clic, replay de prepare, rollback nativo,
   revocación de autoridad, parciales con centavos residuales, reapertura de archivo
-  y pérdida de respuesta, transporte y estado fiscal incierto consult-only.
+  y pérdida de respuesta, transporte y estado fiscal incierto consult-only. Las tres
+  regresiones nuevas verifican referencia nula/válida a igual versión, retiro de la
+  referencia cacheada, rechazo de versión anterior/cambio de core/perfil/scope/checksum
+  y diagnóstico ERP seguro sin efectos.
 - La integración HTTP/PostgreSQL real NO completó E34 por el bloqueo documentado;
   no demuestra todavía un ISSUE único de extremo a extremo ni orden de recepción
   real de pago/inventario. Las comprobaciones posteriores quedan pendientes.

@@ -276,3 +276,76 @@ test('prepare preserves the complete authenticated originalReference without rec
  await f.run();
  assert.deepEqual(JSON.parse(f.prepareCalls[0]).originalReference, reference);
 });
+
+async function ordinaryReferenceStatusFixture() {
+    const { createFiscalWorkflowV2Client } = await import('../services/fiscal/FiscalWorkflowV2Client');
+    const { observeFiscalWorkflowCapability, clearFiscalWorkflowCapability } = await import('../services/fiscal/FiscalWorkflowV2Capability');
+    const { fiscalStatusSourceChecksum } = await import('../services/fiscal/FiscalStatusProof');
+    const { sha256Utf8 } = await import('../services/sync/LargeMasterSyncV3Client');
+    const { returnJSON } = await import('../services/fiscal/FiscalReturnV1');
+    const f = await returnFixture();
+    Object.assign(f.original, { fiscalEnvironment: 0, fiscalIssuance: { ncf: f.original.ncf, ncfType: 'E32', issuerRnc: '101010101', tenantId: f.scope.tenantId, companyId: f.scope.companyId, terminalId: f.scope.terminalId } });
+    // Seed the synthetic original with its fiscal source before exercising the client.
+    // Normal retained-source upserts correctly refuse adding fiscal identity afterward.
+    f.db.prepare("UPDATE documents SET data=? WHERE collection_name IN ('transactions','transactionHistory') AND doc_id=?").run(JSON.stringify(f.original), f.original.id);
+    const envelope = { transaction: structuredClone(f.original) };
+    const state: any = { schemaVersion: 2, source: 'ERP_POS_FISCAL_WORKFLOW_V2', sourceKind: 'ORDINARY_SOURCE_V2', operationKind: 'SALE', mode: 'WORKFLOW', transactionId: f.original.id, workflowId: '40000000-0000-4000-8000-000000000001', permitId: null, scope: f.scope, issuerRnc: '101010101', environment: 0, ncf: f.original.ncf, ncfType: 'E32', currency: 'DOP', exchangeRate: 1, total: f.original.total, saleEventId: '40000000-0000-4000-8000-000000000002', originalSourceEnvelope: envelope, checksumV1: await fiscalStatusSourceChecksum(f.original), state: 'ACCEPTED', decision: 'ACCEPTED', signature: { schemaVersion: 1, qrUrl: 'https://fc.dgii.gov.do/testecf/consultatimbrefc', securityCode: 'ABCDEF', signedAt: '12-11-2026 10:11:12' }, draftRevision: 0, buyer: f.original.customerSnapshot, projectionDigest: 'a'.repeat(64), observationVersion: 1, canCorrect: false, reason: null, history: [], observedAt: new Date().toISOString(), originalReference: null, originalReferenceReason: 'FISCAL_ORIGINAL_REFERENCE_OBSERVATION_MISMATCH' };
+    state.originalDigestV2 = await sha256Utf8(returnJSON({ schemaVersion: 2, source: 'POS_ORIGINAL_ENVELOPE_V2', scope: f.scope, saleEventId: state.saleEventId, payload: envelope }));
+    const reference = { documentId: '40000000-0000-4000-8000-000000000003', transactionId: f.original.id, ncf: f.original.ncf, issuerRnc: state.issuerRnc, environment: state.environment, sourceChecksum: state.checksumV1 };
+    let response = structuredClone(state);
+    const base = 'https://reference-fixture.invalid/api/sync', headers = { 'X-Tenant-Id': f.scope.tenantId, 'X-Terminal-Id': f.scope.terminalId, 'X-Device-Id': f.scope.deviceId, 'X-Sync-Token': 'synthetic' };
+    observeFiscalWorkflowCapability(base, headers, '2');
+    const workflow = createFiscalWorkflowV2Client({ store: () => f.adapter.fiscalWorkflowStore, readSource: async () => f.original, readAuth: () => ({ base, headers, descriptor: f.scope, assertCurrent() {} }), fetchImpl: async (url: any) => { assert.match(String(url), /\/status\?transactionId=/); return Response.json(response); } } as any);
+    return { ...f, state, reference, workflow, setResponse: (value: any) => { response = structuredClone(value); }, cleanup: () => { clearFiscalWorkflowCapability(); f.cleanup(); } };
+}
+
+test('equal-version authenticated ordinary reference refresh is transient, and fresh null overrides a cached reference', async t => {
+    const f = await ordinaryReferenceStatusFixture(); t.after(() => f.cleanup());
+    await f.adapter.fiscalWorkflowStore.saveState(f.original, f.state, null);
+    const before = await f.adapter.fiscalWorkflowStore.readState(f.original.id);
+    f.setResponse({ ...f.state, originalReference: f.reference, originalReferenceReason: null });
+    assert.deepEqual((await f.workflow.consult(f.original.id)).originalReference, f.reference);
+    assert.deepEqual(await f.adapter.fiscalWorkflowStore.readState(f.original.id), before);
+    // A separate native fixture starts with an already verified reference; no state deletion
+    // or equal-version write bypass is needed to test its transient withdrawal.
+    const g = await ordinaryReferenceStatusFixture(); t.after(() => g.cleanup());
+    await g.adapter.fiscalWorkflowStore.saveState(g.original, { ...g.state, originalReference: g.reference, originalReferenceReason: null }, null);
+    g.setResponse({ ...g.state, originalReference: null, originalReferenceReason: 'FISCAL_ORIGINAL_REFERENCE_STORAGE_UNAVAILABLE' });
+    const fresh = await g.workflow.consult(g.original.id);
+    assert.equal(fresh.originalReference, null);
+    assert.equal(fresh.originalReferenceReason, 'FISCAL_ORIGINAL_REFERENCE_STORAGE_UNAVAILABLE');
+    assert.deepEqual((await g.adapter.fiscalWorkflowStore.readState(g.original.id)).originalReference, g.reference);
+    assert.equal(fresh.decision, 'ACCEPTED');
+    assert.deepEqual(fresh.signature, g.state.signature);
+});
+
+test('equal-version altered fiscal evidence, malformed reference and older observations cannot admit a RETURN', async t => {
+    const { createFiscalReturnConsumer } = await import('../services/fiscal/FiscalReturnConsumer');
+    const f = await ordinaryReferenceStatusFixture(); t.after(() => f.cleanup());
+    const cached = { ...f.state, originalReference: f.reference, originalReferenceReason: null };
+    await f.adapter.fiscalWorkflowStore.saveState(f.original, cached, null);
+    const consumer = createFiscalReturnConsumer({ adapter: f.adapter, transport: { context: () => ({ descriptor: f.scope, assertCurrent() {} } as any), capability: async () => ({ schemaVersion: 1, version: 1, capability: 'fiscalReturnV1', profile: 'ORDINARY_RETURN_DOP_V1', enabled: true, ready: true, operationKind: 'RETURN', ncfType: 'E34', birthSchemaVersion: 3, eventSchemaVersion: 1, scope: f.scope, bindingAuthorityHash: 'b'.repeat(64), authorizationId: f.grant.authorizationId, authorityHash: f.grant.authorityHash, environment: 0, issuerRnc: '101010101', requiresOnlinePreparation: true, readiness: { admission: true, recovery: true, bank: false }, transport: { requiresPreservedOuterContract: true, batch: { enabled: true, path: '/api/sync/inbox/batch' }, singular: { enabled: true, path: '/api/sync/inbox' } } }), prepare: async () => { assert.fail('no prepare from stale or contradictory evidence'); } }, workflow: { ...f.localClient, consult: (id: string) => f.workflow.consult(id) }, readOriginal: async () => f.original, commit: async () => { assert.fail('no financial effects'); } });
+    for (const changed of [ { ...cached, observationVersion: 0 }, { ...cached, mode: 'STATUS_ONLY', workflowId: null, permitId: null, originalReference: null }, { ...cached, sourceKind: undefined, originalReference: null }, { ...cached, signature: { ...cached.signature, securityCode: 'CHANGED' } }, { ...cached, originalReference: { ...f.reference, documentId: 'not-a-uuid' } }, { ...cached, checksumV1: 'd'.repeat(64) }, { ...cached, scope: { ...f.scope, tenantId: 'other-tenant' } } ]) {
+        f.setResponse(changed);
+        await assert.rejects(consumer.process(f.original, f.original.items, new Map([['line', 'SELLABLE']]), 'Synthetic return', f.documents('internalSequences').find(s => s.documentType === 'REFUND').id, { id: 'user', name: 'User' }));
+        assert.deepEqual(await f.adapter.fiscalWorkflowStore.readState(f.original.id), cached);
+        assert.equal(f.documents('inventoryLedger').length, 0);
+        assert.equal((f.db.prepare('SELECT count(*) n FROM sync_outbox_v2').get() as any).n, 0);
+        assert.equal(f.documents('internalSequences').find(s => s.documentType === 'REFUND').nextNumber, 1);
+    }
+});
+
+test('null original reference propagates safe ERP reason without interpreting it as a fiscal decision', async t => {
+    const { returnOperatorMessage } = await import('../services/fiscal/FiscalReturnV1');
+    const f = await returnFixture(); t.after(() => f.cleanup());
+    f.parent.originalReference = null;
+    f.parent.originalReferenceReason = 'FISCAL_ORIGINAL_REFERENCE_STORAGE_UNAVAILABLE';
+    await assert.rejects(f.run(), /FISCAL_ORIGINAL_REFERENCE_STORAGE_UNAVAILABLE/);
+    assert.match(returnOperatorMessage(Error(f.parent.originalReferenceReason)), /ERP.*pendiente/);
+    f.parent.originalReferenceReason = 'database password=SECRET';
+    await assert.rejects(f.run(), /FISCAL_RETURN_ACCEPTED_ORIGINAL_REQUIRED/);
+    assert.equal(f.parent.decision, 'ACCEPTED');
+    assert.equal(f.prepareCalls.length, 0);
+    assert.equal(f.documents('inventoryLedger').length, 0);
+    assert.equal((f.db.prepare('SELECT count(*) n FROM sync_outbox_v2').get() as any).n, 0);
+});
