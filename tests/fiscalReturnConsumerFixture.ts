@@ -1,3 +1,8 @@
+import { v3InventoryBaselineKey } from '../services/sync/LargeMasterSyncV3OperationalSession';
+import assert from 'node:assert/strict';
+import { financialIdentity } from '../services/db/LargeMasterSyncV3FinancialRetention';
+import { fiscalStatusSourceChecksum } from '../services/fiscal/FiscalStatusProof';
+import { v3StockSource } from '../services/sync/LargeMasterSyncV3StockAuthority';
 import { writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -7,7 +12,7 @@ import { offlineFiscalAuthorityFromConfig } from '../services/fiscal/OfflineFisc
 import { allocationHash } from '../services/fiscal/OfflineFiscalAllocation';
 import { createFiscalWorkflowV2Client } from '../services/fiscal/FiscalWorkflowV2Client';
 import { createFiscalReturnConsumer } from '../services/fiscal/FiscalReturnConsumer';
-import { returnDigest, RETURN_PROFILE } from '../services/fiscal/FiscalReturnV1';
+import { returnDigest, RETURN_PROFILE, RETURN_DIGEST_WIRE_SCHEME, returnJSON } from '../services/fiscal/FiscalReturnV1';
 import type { ReturnCommand, ReturnPreparation, ReturnCapability } from '../services/fiscal/FiscalReturnV1';
 import type { Transaction } from '../types';
 export async function returnFixture(database?: any, seed = true, server?: {
@@ -36,8 +41,18 @@ export async function returnFixture(database?: any, seed = true, server?: {
         original = { id: id(201), displayId: 'SALE-1', date: new Date().toISOString(), terminalId: scope.terminalId, documentType: 'TICKET', status: 'COMPLETED', ncfType: 'E32', ncf: 'E320000000001', currency: 'DOP', exchangeRate: 1, isTaxIncluded: true,
             v3Binding: stamp.binding, v3InventoryBaseline: JSON.stringify([stamp.binding, stamp.syncId, stamp.syncVersion, stamp.inventoryVersion, stamp.inventoryCursor]), v3WarehouseId: id(5), fiscalMode: 'ECF', fiscalProvider: 'MSELLER', total: 10, netAmount: 8.47, taxAmount: 1.53, discountAmount: 0, pendingBalance: 0, relatedTransactions: [], customerSnapshot: { taxId: '101010102', name: 'Synthetic buyer' }, userId: 'user', userName: 'User',
             items: [{ category: 'Synthetic', images: [], attributes: [], variants: [], tariffs: [], id: id(7), cartId: 'line', name: 'Synthetic', type: 'PRODUCT', quantity: 1, price: 10, isInventoriable: true, taxable: true, taxRate: .18, appliedTaxIds: ['TX'], netAmount: 8.47, taxAmount: 1.53, totalAmount: 10, cost: 35, v3SaleAuthority: stamp }], payments: [{ id: id(202), method: 'CASH', methodId: 'cash', amount: 10, timestamp: new Date().toISOString() }] } as unknown as Transaction;
-        if (external)
+        if (external) {
             original = structuredClone(external.source.transaction);
+            // The ERP fixture changes scope on the frozen line authority but retains a
+            // root local-baseline string from its template. Seed only POS-local metadata.
+            const stock = v3StockSource(stamp);
+            original.v3Binding = stamp.binding;
+            original.v3InventoryBaseline = JSON.stringify([stamp.binding, stock.syncId, stock.syncVersion, stamp.inventoryVersion, stamp.inventoryCursor]);
+            original.v3WarehouseId = stamp.warehouseId;
+            assert.equal(financialIdentity(original), financialIdentity(external.source.transaction));
+            assert.equal(await fiscalStatusSourceChecksum(original), await fiscalStatusSourceChecksum(external.source.transaction));
+            assert.deepEqual(original.items, external.source.transaction.items);
+        }
         await f.adapter.saveDocument('transactions', original);
         await f.adapter.saveDocument('transactionHistory', original);
         const local = await offlineFiscalAuthorityFromConfig(config, credentials, scope.deviceId);
@@ -63,6 +78,7 @@ export async function returnFixture(database?: any, seed = true, server?: {
     parent.originalReference = { documentId: parent.documentId, transactionId: parent.transactionId, ncf: parent.ncf, issuerRnc: parent.issuerRnc, environment: parent.environment, sourceChecksum: parent.checksumV1 };
     const localClient = createFiscalWorkflowV2Client({ store: () => f.adapter.fiscalWorkflowStore, readOfflineAuthority: () => offlineFiscalAuthorityFromConfig(config, credentials, scope.deviceId), readAuth: () => { throw Error('NO_PUBLIC_NETWORK'); } } as any);
     const preparations = server?.preparations || new Map<string, ReturnPreparation>();
+    let proofTransform: ((p: ReturnPreparation) => ReturnPreparation) | undefined;
     let prepareCalls: string[] = [], offline = false, losePrepare = false, deny = false;
     const prepare = async (bytes: string) => {
         prepareCalls.push(bytes);
@@ -80,16 +96,18 @@ export async function returnFixture(database?: any, seed = true, server?: {
             const l = { cartId: 'line', itemId: id(7), unitPrice: 10, quantity: q, originalQuantity: 1, stockDisposition: 'RESTOCK', netAmount: net, taxAmount: tax, totalAmount: total, discountAmount: 0, originalItem: original.items[0], sourceFiscalSnapshot: { appliedTaxIds: ['TX'] }, inventoryEntries: [{ itemId: id(7), quantity: q, unitCost: 35 }] };
             const snapshot = { schemaVersion: 1, profile: RETURN_PROFILE, loyaltyDisposition: 'NO_EFFECT_VERIFIED', loyaltyProofDigest: 'd'.repeat(64), originalReference: c.originalReference, originalDate: original.date, originalDisplayId: original.displayId, buyer: original.customerSnapshot, currency: 'DOP', exchangeRate: 1, lines: [l], netAmount: net, taxAmount: tax, vatAmount: tax, total, discountAmount: 0, sourceServiceChargeAmount: 0, paidAmount: total, pendingBalance: 0, sourceCustomerId: null, modificationCode: q === 1 ? 1 : 3, warehouseId: id(5), taxBreakdown: [{ id: 'TX', name: 'ITBIS', type: 'VAT', rate: .18, amount: tax, taxableBase: net, total }], paymentCommands: c.payments.map(x => ({ ...x, method: 'CASH' })) };
             p = { schemaVersion: 1, profile: RETURN_PROFILE, preparationId: crypto.randomUUID(), operationId: c.operationId, checkoutId: c.checkoutId, transactionId: c.transactionId, financialEventId: c.financialEventId, inventoryMovementIds: c.inventoryMovementIds, authorizationId: c.authorizationId, authorityHash: c.authorityHash, scope, environment: 0, issuerRnc: '101010101', originalReference: c.originalReference, originalProofDigest: 'e'.repeat(64), returnSnapshot: snapshot, returnSnapshotDigest: await returnDigest(snapshot), reservationState: 'PREPARED', preparedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 600000).toISOString() };
+            p.returnSnapshotDigestScheme = RETURN_DIGEST_WIRE_SCHEME;
+            p.returnSnapshotDigestInput = returnJSON({ schemaVersion: 1, source: 'ERP_POS_FISCAL_RETURN_V1', value: snapshot });
             preparations.set(c.operationId, p);
         }
         if (losePrepare) {
             losePrepare = false;
             throw Error('FISCAL_RETURN_UNAVAILABLE');
         }
-        return p;
+        return proofTransform ? proofTransform(structuredClone(p)) : p;
     };
     // Only retained-session/catalog boundaries are fixture ports; financial writer, SQLite, allocation and Outbox are real.
-    const state: any = { adapter: f.adapter, config, stamp };
+    const state: any = { inventoryBaseline: v3InventoryBaselineKey, adapter: f.adapter, config, stamp };
     (globalThis as any).__returnConsumerFixture = state;
     const modules: Record<string, string> = {
         '../db': 'export const dbAdapter=globalThis.__returnConsumerFixture.adapter;',
@@ -99,7 +117,7 @@ export async function returnFixture(database?: any, seed = true, server?: {
         '../utils/db': `export const db={getDocument:(n,id)=>globalThis.__returnConsumerFixture.adapter.getDocument(n,id),assertFiscalTransactionAuthority:async()=>{}};`,
         './SyncFeatureFlags': 'export const isSyncFeatureEnabled=()=>true;',
         './DurableOutboxRepository': 'export const durableOutboxRepository={commitFinancialTransaction:i=>globalThis.__returnConsumerFixture.adapter.commitFinancialTransaction(i)};',
-        './LargeMasterSyncV3OperationalSession': `const s={binding:${JSON.stringify(stamp.binding)},ready:{runtime:{version:{syncId:${JSON.stringify(stamp.syncId)},syncVersion:${stamp.syncVersion}}}},assertCurrent:async()=>{},projectConfig:async c=>c,projectRefundConfig:async c=>c,validate:async(c,items,t,w,intent,validated)=>{items.forEach(l=>validated?.(l,l));},stockRequirements:async()=>[]};export const getLargeMasterSyncV3OperationalSession=async()=>s;export const getLargeMasterSyncV3RetainedSession=async()=>s;export const v3InventoryBaselineKey=(b,s)=>JSON.stringify([b,s.syncId,s.syncVersion,s.inventoryVersion,s.inventoryCursor]);`,
+        './LargeMasterSyncV3OperationalSession': `const s={binding:${JSON.stringify(stamp.binding)},ready:{runtime:{version:{syncId:${JSON.stringify(stamp.syncId)},syncVersion:${stamp.syncVersion}}}},assertCurrent:async()=>{},projectConfig:async c=>c,projectRefundConfig:async c=>c,validate:async(c,items,t,w,intent,validated)=>{items.forEach(l=>validated?.(l,l));},stockRequirements:async()=>[]};export const getLargeMasterSyncV3OperationalSession=async()=>s;export const getLargeMasterSyncV3RetainedSession=async()=>s;export const v3InventoryBaselineKey=(b,s)=>globalThis.__returnConsumerFixture.inventoryBaseline(b,s);`,
     };
     const code = await build({ entryPoints: [new URL('../services/sync/LargeMasterSyncV3FinancialCommit.ts', import.meta.url).pathname], bundle: true, write: false, format: 'esm', platform: 'node', plugins: [{ name: 'retained-boundaries', setup(b) { b.onResolve({ filter: /.*/ }, a => modules[a.path] ? { path: a.path, namespace: 'fixture' } : undefined); b.onLoad({ filter: /.*/, namespace: 'fixture' }, a => ({ contents: modules[a.path], loader: 'js' })); } }] });
     const generated = mkdtempSync(join(tmpdir(), 'clic-return-fixture-'));
@@ -118,5 +136,5 @@ export async function returnFixture(database?: any, seed = true, server?: {
                 throw Error('FISCAL_RETURN_UNAVAILABLE'); return capability; }, prepare }, workflow: { ...localClient, consult: async () => parent }, readOriginal: async () => (await f.adapter.getDocument<Transaction>('transactions', original.id))!,
         commit: commitSource });
     const run = (q = 1) => client.process(original, [{ ...original.items[0], quantity: q }], new Map([['line', 'SELLABLE']]), 'Synthetic return', id(10), { id: 'user', name: 'User' });
-    return { ...f, cleanup: () => { f.db.close(); rmSync(generated, { recursive: true, force: true }); }, scope, config, original, parent, grant, client, run, commitSource, preparations, prepareCalls, setOffline: (v: boolean) => offline = v, setLosePrepare: () => losePrepare = true, setDenied: (v: boolean) => deny = v, setCapability: (v: Partial<ReturnCapability>) => { capability = { ...capability, ...v }; }, localClient };
+    return { ...f, cleanup: () => { f.db.close(); rmSync(generated, { recursive: true, force: true }); }, scope, config, original, parent, grant, client, run, commitSource, preparations, prepareCalls, setProofTransform: (transform?: (p: ReturnPreparation) => ReturnPreparation) => proofTransform = transform, setOffline: (v: boolean) => offline = v, setLosePrepare: () => losePrepare = true, setDenied: (v: boolean) => deny = v, setCapability: (v: Partial<ReturnCapability>) => { capability = { ...capability, ...v }; }, localClient };
 }

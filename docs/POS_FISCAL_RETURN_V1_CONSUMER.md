@@ -1,42 +1,58 @@
 # Consumidor POS RETURN/E34 v1 — implementación en revisión
 
-Contrato ERP: `docs/pos-fiscal-return-v1-contract.md`, PR CLIC-ERP #2509,
-commit inicial `a61a8ba25635d8d93d682f6aa666ae3413421174`; referencia original
-actualizada a `05d9bc9204fcc11bfe179f9dabc52ff80c2ee9f9`, documentada en
-`docs/return-original-reference.md` del ERP.
-Perfil: `ORDINARY_RETURN_DOP_V1`. El ERP sigue en draft y no desplegado.
-Base POS: develop + PR #997 (`e45bac7b`); conserva sus recibos y recuperación
-para B04. La ruta E34 ordinaria exige el consumidor preparado, nunca reserva legacy.
+Contrato ERP: `docs/pos-fiscal-return-v1-contract.md`, perfil `ORDINARY_RETURN_DOP_V1`,
+PR CLIC-ERP #2509. Integración actual fijada a
+`e0a57705579a317b03e6bff0bf97ef85bdab60d5`, que incluye referencia original autenticada
+(05d9bc92) y el contrato aditivo de digest wire. ERP continúa en draft y sin desplegar.
+Base POS: develop + PR #997 (`e45bac7b`); conserva recibos y recuperación para B04.
+E34 ordinaria exige el consumidor preparado, nunca reserva legacy.
 
-## Límite que impide declarar el flujo completo
+## Contrato consumido y alcance de la comprobación
 
-La referencia original ya se obtiene del endpoint autenticado del ERP05d9. El POS
-pasa el objeto completo sin reconstruirlo. Una referencia ausente/null conserva el
-intento pendiente y su código `originalReferenceReason` seguro; no altera la decisión,
-firma ni motivo fiscal original. Si llega una referencia nueva a igual versión fiscal,
-se utiliza como metadato autenticado transitorio, sin sobrescribir el sidecar SQLite.
-El estado fiscal debe coincidir exactamente; versión anterior o evidencia contradictoria
-bloquean. Un null nuevo siempre prevalece sobre una referencia cacheada.
+El POS toma `originalReference` completo del status autenticado, sin reconstrucción.
+Una referencia ausente/null conserva el intento pendiente y su `originalReferenceReason`
+seguro. A igual versión fiscal, sólo la referencia y su diagnóstico se refrescan como
+metadatos transitorios; estado/firma/decisión deben coincidir exactamente y el sidecar
+SQLite no se sobrescribe. Una referencia null nueva prevalece sobre la cacheada.
+La modificación se limita a ordinary SALE; VOID conserva su referencia a la afectada.
 
-La integración HTTP/PostgreSQL real ahora alcanza `return/prepare` (HTTP200), pero
-la verificación estricta de `returnSnapshotDigest` detiene el commit local con
-`FISCAL_RETURN_PROOF_INVALID`. En la fuente ERP05d9, `pos_return_hash_v1` utiliza el
-canonicalizador PostgreSQL, que conserva escala numérica: por ejemplo,
-`"discountAmount":0.00`. El snapshot transmitido y parseado en JavaScript contiene
-el número0, cuyo JSON canónico es `"discountAmount":0`. Son bytes y hashes distintos.
-El POS no omite el digest ni normaliza campos a ciegas para simular compatibilidad.
-Hace falta que ERP documente y publique una representación canónica reproducible
-del snapshot por el consumidor HTTP. Hasta comprobar ese contrato y terminar la
-integración, el PR permanece draft y no es apto para merge ni APK.
+La preparación exige el esquema exacto
+`ERP_POS_FISCAL_RETURN_V1_PG_CANONICAL_UTF8_SHA256_V1` y verifica SHA256 de los bytes
+UTF-8 de `returnSnapshotDigestInput` tal como se recibieron, antes de parsearlo.
+No hace trim, normalización Unicode ni JSON.stringify para reconstruir el digest.
+Después comprueba el sobre exacto schemaVersion/source/value y compara value contra
+el snapshot con tipos/keys/orden de arrays/números finitos e enteros seguros. Mantiene
+los validadores monetarios y de líneas anteriores. Usa JSON.parse como el contrato
+publicado; no afirma rechazo léxico adicional de claves duplicadas. El recorrido de
+valores es iterativo y el tamaño del input está limitado como la respuesta HTTP.
 
-La fixture antigua del ERP tenía trackId en OBSERVATION y no en su workflow original;
-el endpoint real devolvió `FISCAL_ORIGINAL_REFERENCE_OBSERVATION_MISMATCH`. La prueba
-reconcilia únicamente ese dato sintético con su evidencia ya retenida y obtiene la
-referencia del verificador real. No inyecta documentId ni originalReference al POS.
-Se comprueba igualdad del objeto autenticado contra el enviado a prepare y cero
-inventario/outbox/avance de numeración emitida al detenerse en el digest. Puede existir
-una reserva PREPARED sin efectos y una preparación remota pendiente; no se libera ni
-se reemplaza automáticamente durante un reintento.
+Los dos campos wire son sólo DTO, nunca entran al snapshot, contrato fiscal de seis
+campos, identidad financiera, pagos o eventos. Preparaciones históricas sin esos
+campos se recuperan repitiendo el comando durable exacto: se exige igualdad de todo
+el DTO anterior salvo los dos campos nuevos y se guarda únicamente un suplemento
+write-once en el intento. El snapshot/digest/DTO original, IDs, checkout, source y
+localCommittedAt permanecen intactos. Trigger adicional protege el suplemento; no
+se relajan los triggers anteriores ni la recuperación de operaciones COMMITTED.
+Una prueba ausente, parcial, desconocida o alterada mantiene pendiente sin efectos.
+
+La integración real aislada ya completa consumidor POS -> adaptador SQLite nativo ->
+FinancialCommit/outbox -> HTTP/PostgreSQL ERP -> worker con proveedor simulado.
+Comprueba un receipt/fence, un ISSUE, pérdida de respuesta y sólo GET hasta ACCEPTED;
+conserva pruebas de pago antes de NC, inventario antes/después y eventos/ACK repetidos.
+Esto NO equivale a aceptación real de MSeller/DGII ni prueba Android/WebView.
+
+Para usar las fixtures antiguas con los componentes reales se cargó la migración
+publicada de fingerprint de token en la base privada. Se concilia sólo track_id de la
+venta sintética con su OBSERVATION retenida; la referencia sigue viniendo del endpoint
+real. El POS-fixture deriva su metadato local root de baseline desde la autoridad de
+línea intacta y exige que financialIdentity/fiscalStatusSourceChecksum sean idénticos
+al original ERP. Usa los helpers reales v3InventoryBaselineKey y toDurableWireEvent,
+sin sustituir validadores, auth ni generador de referencia. ERP source no se editó.
+El hint Supabase opcional de laboratorio no dispone client.channel; quedó registrado,
+y la consulta HTTP recuperó el estado. Realtime real no está validado.
+El runner de integración registra una prueba node:test y usa test-force-exit tras
+await de cleanup de HTTP/PG por temporizadores importados de la aplicación. No
+equivale a una prueba de cierre/reinicio de proceso Android.
 
 ## Persistencia y recuperación
 
@@ -59,7 +75,7 @@ los gateways no soportados permanecen pendientes sin efecto bancario.
 
 ## Evidencia y límites
 
-- 378/378 pruebas en 13 suites acotadas (ver comando siguiente).
+- 406/406 pruebas en 14 suites acotadas (ver comando siguiente).
 - Revisión posterior acota el metadato nuevo únicamente a ordinary SALE; VOID y
   el perfil sin operationKind conservan su referencia a la factura afectada.
   Las 20 pruebas del consumidor y typecheck/lint se repitieron: aprobados.
@@ -76,9 +92,8 @@ los gateways no soportados permanecen pendientes sin efecto bancario.
   regresiones nuevas verifican referencia nula/válida a igual versión, retiro de la
   referencia cacheada, rechazo de versión anterior/cambio de core/perfil/scope/checksum
   y diagnóstico ERP seguro sin efectos.
-- La integración HTTP/PostgreSQL real NO completó E34 por el bloqueo documentado;
-  no demuestra todavía un ISSUE único de extremo a extremo ni orden de recepción
-  real de pago/inventario. Las comprobaciones posteriores quedan pendientes.
+- La integración HTTP/PostgreSQL aislada completó el flujo descrito. Proveedor
+  simulado; no demuestra despliegue ERP, MSeller real, Realtime ni Android.
 - No se ejecutó Android/Capacitor en dispositivo ni se generó/instaló APK.
 - No se modificaron ni conciliaron E340000000003 y E340000000006.
 - Una suite adicional fiscalWorkflowV2Native encontró un ReferenceError dbAdapter
@@ -86,7 +101,7 @@ los gateways no soportados permanecen pendientes sin efecto bancario.
   No se cambió esa fixture ni se presenta como una prueba verde.
 
 ```sh
-npx tsx --test --test-force-exit tests/fiscalReturnConsumer.test.ts tests/refundNumberRetry.test.ts tests/refundFiscalReservation.test.ts tests/largeMasterSyncV3FinancialAtomic.test.ts tests/offlineFiscalAllocation.test.ts tests/durableOutboxV2.test.ts tests/durableOutboxBatchSender.test.ts tests/posUiRegressionGuards.test.ts tests/v3RefundOriginalSnapshot.test.ts tests/v3RetainedTaxClassification.test.ts tests/fiscalDispatchLocalCatalog.test.ts tests/fiscalErpDispatch.test.ts tests/erpRefundSource.test.ts
+npx tsx --test --test-force-exit tests/fiscalReturnDigestWire.test.ts tests/fiscalReturnConsumer.test.ts tests/refundNumberRetry.test.ts tests/refundFiscalReservation.test.ts tests/largeMasterSyncV3FinancialAtomic.test.ts tests/offlineFiscalAllocation.test.ts tests/durableOutboxV2.test.ts tests/durableOutboxBatchSender.test.ts tests/posUiRegressionGuards.test.ts tests/v3RefundOriginalSnapshot.test.ts tests/v3RetainedTaxClassification.test.ts tests/fiscalDispatchLocalCatalog.test.ts tests/fiscalErpDispatch.test.ts tests/erpRefundSource.test.ts
 npm run build
 ```
 
@@ -97,5 +112,5 @@ La integración opcional `tests/integration/fiscalReturnErp.ts` requiere un chec
 ERP local fijado al contrato y arranca una base privada, sin datos de producción:
 
 ```sh
-env -i PATH='/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin' LANG=C SYNC_BATCH_INBOX_ENABLED=true CLIC_RETURN_TEST_ERP_ROOT=/tmp/clic-erp-return-consumer-fixture /usr/local/bin/node node_modules/tsx/dist/cli.mjs tests/integration/fiscalReturnErp.ts
+env -i PATH='/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin' LANG=C SYNC_BATCH_INBOX_ENABLED=true CLIC_RETURN_TEST_ERP_ROOT=/tmp/clic-erp-return-consumer-fixture /usr/local/bin/node node_modules/tsx/dist/cli.mjs --test --test-force-exit tests/integration/fiscalReturnErp.ts
 ```

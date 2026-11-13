@@ -1,13 +1,16 @@
 /** Opt-in: ERP_ROOT must point to the reviewed contract checkout. Only its isolated local
  * PostgreSQL/HTTP/provider fixtures are used; no production credentials are inherited. */
 import assert from 'node:assert/strict';
+import test from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { join } from 'node:path';
+import { toDurableWireEvent } from '../../services/sync/DurableOutboxBatchSender';
+import { readFile } from 'node:fs/promises';
 import { returnFixture } from '../fiscalReturnConsumerFixture';
 import { createFiscalReturnConsumer, createFiscalReturnTransport } from '../../services/fiscal/FiscalReturnConsumer';
 import { createFiscalWorkflowV2Client } from '../../services/fiscal/FiscalWorkflowV2Client';
 import { offlineFiscalAuthorityFromConfig } from '../../services/fiscal/OfflineFiscalLeaseContext';
-import { returnDigest, sameReturn, returnJSON } from '../../services/fiscal/FiscalReturnV1';
+import { assertReturnSnapshotDigest } from '../../services/fiscal/FiscalReturnV1';
 import { buildErpInventoryLedgerPayload } from '../../services/sync/erpOutboundPayloads';
 const root = process.env.CLIC_RETURN_TEST_ERP_ROOT;
 if (!root)
@@ -15,9 +18,14 @@ if (!root)
 const load = (file: string) => import(pathToFileURL(join(root, file)).href);
 const { bootReturnFixture } = await load('server/test-support/posFiscalReturnV1PostgresFixture.mjs');
 const { startReturnHttpFixture } = await load('server/test-support/posFiscalReturnV1HttpFixture.mjs');
+test('actual RETURN consumer commits once and reaches accepted through ERP-owned ISSUE and query-only recovery', async () => {
 const pg = await bootReturnFixture();
 let http: any, n: any;
 try {
+    // The actual batch route requires the published indexed token lookup schema;
+    // the older RETURN fixture intentionally installs only its economic prerequisites.
+    await pg.query('create schema if not exists extensions; grant usage on schema extensions to service_role');
+    await pg.query(await readFile(join(root, 'supabase/migrations/20260728200001_sync_terminal_token_fingerprint_lookup.sql'), 'utf8'));
     http = await startReturnHttpFixture({ fixture: pg });
     const c = await pg.createCase({ paymentMode: 'cash', monetary: { netAmount: 8.47, taxAmount: 1.53, total: 10 }, originalQuantity: 1 });
     n = await returnFixture(undefined, true, undefined, c);
@@ -32,16 +40,10 @@ try {
             assert.deepEqual(JSON.parse(String(options?.body)).originalReference, latestOriginalReference,
                 'prepare must preserve the complete authenticated reference without fixture UUID injection');
         if (path.endsWith('/return/prepare') && result.status === 200) {
-            const p = result.body, snapshot = p.returnSnapshot;
-            console.log('Preparation snapshot contract checks:', {schemaVersion:snapshot?.schemaVersion,profile:snapshot?.profile,currency:snapshot?.currency,exchangeRate:snapshot?.exchangeRate,loyaltyDisposition:snapshot?.loyaltyDisposition,loyaltyProofDigestValid:/^[a-f0-9]{64}$/.test(snapshot?.loyaltyProofDigest),referenceEqual:sameReturn(snapshot?.originalReference,p.originalReference),digestEqual:await returnDigest(snapshot)===p.returnSnapshotDigest});
-            if (await returnDigest(snapshot) !== p.returnSnapshotDigest) {
-                const sql = await pg.query("select public.erp_pos_fiscal_canonical_json_v2(jsonb_build_object('schemaVersion',1,'source','ERP_POS_FISCAL_RETURN_V1','value',snapshot)) canonical from private.pos_fiscal_return_preparations_v1 where operation_id=$1", [p.operationId]);
-                const expected = sql.rows[0].canonical, actual = returnJSON({schemaVersion:1,source:'ERP_POS_FISCAL_RETURN_V1',value:snapshot});
-                let index=0; while(index<expected.length && expected[index]===actual[index])index++;
-                console.log('First digest canonical mismatch (synthetic fixture only):', {index,postgres:expected.slice(Math.max(0,index-60),index+100),javascript:actual.slice(Math.max(0,index-60),index+100)});
-            }
-
+            await assertReturnSnapshotDigest(result.body);
+            console.log('Exact PostgreSQL UTF-8 snapshot proof verified:', result.body.returnSnapshotDigestScheme);
         }
+
         return Response.json(result.body, { status: result.status });
     };
     const credentials = { ...c.scope, erpTenantId: c.scope.tenantId, erpTerminalId: c.scope.terminalId, deviceToken: 'synthetic', authStatus: 'BOUND' };
@@ -88,11 +90,15 @@ try {
     });
     assert.equal(first.id, duplicate.id);
     const rows = n.db.prepare('SELECT * FROM sync_outbox_v2 ORDER BY local_sequence').all();
-    const events = rows.map((r: any) => ({ eventId: r.event_id, eventType: r.event_type, schemaVersion: r.schema_version, payload: JSON.parse(r.payload_json) }));
+    const events = rows.map((r: any) => toDurableWireEvent({ eventId: r.event_id, localSequence: r.local_sequence, eventType: r.event_type, aggregateType: r.aggregate_type, aggregateId: r.aggregate_id, schemaVersion: r.schema_version, payload: JSON.parse(r.payload_json), createdAt: r.created_at } as any));
     await http.register(c, events.map((e: any) => ({ event_id: e.eventId, event_type: e.eventType, payload: e.payload })));
     const ledger = n.documents('inventoryLedger').map(buildErpInventoryLedgerPayload);
     const beforeStock = await http.request('/api/sync/inventory/movements', { method: 'POST', headers: http.headers(c), body: { items: ledger } });
-    assert.notEqual(beforeStock.body?.results?.[0]?.status, 'APPLIED');
+    console.log('Stock before NC application:', beforeStock.status, beforeStock.body.results?.[0]?.status, beforeStock.body.results?.[0]?.error_code);
+    assert.equal(beforeStock.status, 422);
+    assert.equal(beforeStock.body.results[0].status, 'PENDING');
+    assert.equal(beforeStock.body.results[0].error_code, 'FISCAL_RETURN_APPLICATION_PENDING');
+    assert.equal(Number((await pg.query('select count(*) n from private.pos_fiscal_return_stock_v1 where preparation_id=$1', [(await n.adapter.fiscalReturnStore.byTransaction(first.id)).preparation.preparationId])).rows[0].n), 0);
     const paymentFirst = await transport.deliver([...events].reverse());
     assert.equal(paymentFirst.appliedCount, 1);
     const response = await transport.deliver(events);
@@ -114,9 +120,26 @@ try {
     assert.ok(status.signature);
     assert.equal(n.documents('inventoryLedger').reduce((v: number, l: any) => v + l.qtyIn, 0), .5);
     assert.equal(n.db.prepare('SELECT count(*) n FROM sync_outbox_v2').get().n, 2);
-    const economics = await pg.query("select (select count(*) from private.pos_fiscal_return_receipts_v1 where workflow_id=$1) as receipts,(select count(*) from private.pos_fiscal_return_fences_v1 where workflow_id=$1) as fences", [first.fiscalWorkflowCheckoutId]);
+    const economics = await pg.query(`select
+        (select count(*) from private.pos_fiscal_return_receipts_v1 where workflow_id=$1) receipts,
+        (select count(*) from private.pos_fiscal_return_fences_v1 where workflow_id=$1) fences,
+        (select count(*) from erp_journal_entries j join private.pos_fiscal_return_receipts_v1 r
+            on j.id=(r.payment->>'receipt_entry_id')::uuid where r.workflow_id=$1 and j.tenant_id=$2) payment_receipts,
+        (select count(*) from erp_accounting_journal_entries j join private.pos_fiscal_return_receipts_v1 r
+            on j.id=(r.payment->>'accounting_entry_id')::uuid where r.workflow_id=$1 and j.source_document_type='CUSTOMER_REFUND'
+            and j.tenant_id=$2 and j.status='POSTED') payment_postings,
+        (select count(*) from private.pos_fiscal_return_stock_v1 s join private.pos_fiscal_return_receipts_v1 r
+            on r.preparation_id=s.preparation_id join erp_inventory_movements m on m.id=s.inventory_movement_id
+            where r.workflow_id=$1 and m.tenant_id=$2) inventory_effects,
+        (select sum(m.cantidad) from private.pos_fiscal_return_stock_v1 s join private.pos_fiscal_return_receipts_v1 r
+            on r.preparation_id=s.preparation_id join erp_inventory_movements m on m.id=s.inventory_movement_id
+            where r.workflow_id=$1 and m.tenant_id=$2) inventory_quantity`, [first.fiscalWorkflowCheckoutId, c.scope.tenantId]);
     assert.equal(Number(economics.rows[0].receipts), 1);
     assert.equal(Number(economics.rows[0].fences), 1);
+    assert.equal(Number(economics.rows[0].payment_receipts), 1);
+    assert.equal(Number(economics.rows[0].payment_postings), 1);
+    assert.equal(Number(economics.rows[0].inventory_effects), 1);
+    assert.equal(Number(economics.rows[0].inventory_quantity), .5);
     console.log('PASS actual POS consumer -> native SQLite/FinancialCommit/outbox -> isolated ERP HTTP/PostgreSQL -> one commercial receipt, one ISSUE, lost response -> GET accepted; payment/stock ordering and duplicate delivery do not repeat effects.');
 }
 finally {
@@ -124,3 +147,5 @@ finally {
     await http?.close();
     await pg.cleanup();
 }
+
+});
