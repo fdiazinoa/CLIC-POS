@@ -13,7 +13,10 @@ La prueba con API HTTP y PostgreSQL aislados del ERP se detiene en
 prepare exige `originalReference.documentId`, pero el status ordinario SALE del
 commit ERP revisado no devuelve ese UUID; sólo lo proyecta para ARTICLE_FORMATS_V2.
 El POS no lo deduce del número de ticket ni lo toma de la fixture de laboratorio.
-Hace falta un campo/endpoint autenticado documentado por ERP. Hasta resolverlo,
+El hilo ERP confirmó el faltante: añadirá el objeto completo originalReference al
+status autenticado existente, incluido originalReference.documentId. El SHA corregido
+todavía no está publicado. El POS pasa ese objeto completo sin reconstruirlo; si
+falta o es null, mantiene el pendiente. Hasta resolverlo,
 este trabajo debe permanecer draft: no habilitar ni publicar APK con este flujo.
 El intento queda persistido y no hay devolución, pago, inventario ni avance de
 consecutivo emitido. Puede existir una reserva nativa PREPARED sin efectos.
@@ -39,7 +42,7 @@ los gateways no soportados permanecen pendientes sin efecto bancario.
 
 ## Evidencia y límites
 
-- 373/373 pruebas en 13 suites acotadas (ver comando siguiente).
+- 375/375 pruebas en 13 suites acotadas (ver comando siguiente).
 - npm run build (tsc -b + Vite) aprobado; advertencia de tamaño de chunks.
 - ESLint sobre archivos nuevos y pantallas modificadas: 0 errores, 14 avisos
   no-case-declarations en App. Typecheck y 14 pruebas del consumidor repetidos

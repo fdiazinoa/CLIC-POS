@@ -256,3 +256,23 @@ test('ordinary E34 routes to its consumer before legacy gateway or NCF actions',
     assert.ok(route < flow.indexOf("requestMode === 'AZUL_GATEWAY_REFUND'"));
     assert.match(flow.slice(route, flow.indexOf('let refundOptions')), /await onRefundTransaction[\s\S]*return;/);
 });
+
+test('missing or null authenticated originalReference remains pending without preparing or financial effects', async t => {
+ const f = await returnFixture(); t.after(() => f.cleanup());
+ for (const reference of [undefined, null, { ...f.parent.originalReference, transactionId: 'different-sale' }]) {
+  f.parent.originalReference = reference;
+  await assert.rejects(f.run(), /FISCAL_RETURN_ACCEPTED_ORIGINAL_REQUIRED/);
+  assert.equal(f.prepareCalls.length, 0);
+  assert.equal(f.documents('inventoryLedger').length, 0);
+  assert.equal((f.db.prepare('SELECT count(*) n FROM sync_outbox_v2').get() as any).n, 0);
+  assert.equal(f.documents('internalSequences').find(s => s.documentType === 'REFUND').nextNumber, 1);
+ }
+});
+
+test('prepare preserves the complete authenticated originalReference without reconstructing it', async t => {
+ const f = await returnFixture(); t.after(() => f.cleanup());
+ const reference = structuredClone(f.parent.originalReference);
+ delete f.parent.documentId;
+ await f.run();
+ assert.deepEqual(JSON.parse(f.prepareCalls[0]).originalReference, reference);
+});
