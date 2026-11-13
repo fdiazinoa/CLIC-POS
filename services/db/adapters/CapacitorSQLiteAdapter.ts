@@ -1,3 +1,4 @@
+import {NativeFiscalReturnStore,FISCAL_RETURN_SCHEMA,consumeNativeFiscalReturn} from '../NativeFiscalReturnStore';
 import {DISPATCH_STORE_POLICY_SCHEMA_V2,DISPATCH_POOL_INSTALL_SCHEMA,installDispatchPoolSnapshot,prepareDispatchBarrierProof,type DispatchPoolSnapshot,dispatchPoolId} from '../CompanyDispatchPool';
 import {DISPATCH_ADOPTION_SCHEMA,acknowledgeDispatchAdoption,type DispatchAdoptionProof} from '../CompanyDispatchAdoption';
 import {assertDispatchFinancedSource} from '../../dispatch/DispatchFinancedSource';
@@ -132,6 +133,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
     private writeQueue: Promise<unknown> = Promise.resolve();
     public readonly adapterType = 'local';
     public readonly fiscalWorkflowStore=new NativeFiscalWorkflowV2Store(()=>this.ensureDb() as any,work=>this.withWriteLock(work));
+    public readonly fiscalReturnStore=new NativeFiscalReturnStore(()=>this.ensureDb() as any,work=>this.withWriteLock(work),work=>this.withWriteLock(()=>this.withNativeTransaction(work)));
     public readonly terminalAuthEvidenceStore=new NativeTerminalAuthEvidenceStore(()=>this.ensureDb() as any,work=>this.withWriteLock(work),work=>this.withNativeTransaction(work));
     public readonly masterSyncV3Store = this.serializedMasterStore();
 
@@ -841,6 +843,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             if(actual!==proof.expected)throw Error('OFFLINE_FISCAL_COMMIT_AUTHORITY_CHANGED');
           }
           if(input.fiscalWorkflowCommits?.some(c=>c.birth?.schemaVersion===3)&&!input.fiscalAllocationPreconditions?.length)throw Error('OFFLINE_FISCAL_COMMIT_PROOF_REQUIRED');
+          await consumeNativeFiscalReturn(this.ensureDb() as any,input);
           const births=outboxEvents.filter(e=>e.eventType==='SALE_POSTED'&&e.payload.fiscalWorkflowBirth);
           if(births.some(e=>!input.fiscalWorkflowCommits?.some(c=>c.transactionId===e.aggregateId&&JSON.stringify(c.birth)===JSON.stringify(e.payload.fiscalWorkflowBirth))))throw Error('FISCAL_WORKFLOW_ATOMIC_BIRTH_REQUIRED');
           for(const commit of input.fiscalWorkflowCommits||[]){
@@ -1209,6 +1212,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         await db.query('PRAGMA busy_timeout = 5000;');
         await db.execute(`
             ${FISCAL_WORKFLOW_V2_SCHEMA}
+            ${FISCAL_RETURN_SCHEMA}
             CREATE TABLE IF NOT EXISTS documents (
                 collection_name TEXT NOT NULL,
                 doc_id TEXT NOT NULL,
