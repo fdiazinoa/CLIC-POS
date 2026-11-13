@@ -75,16 +75,10 @@ test('retry identity ignores sync/catalog flags, timestamps and line ordering; c
  await refundRetryIdentity({},original,items,conditions,'return',{refundPayments:[{...payment,timestamp:new Date(0)}]}));
 });
 
-test('durable legacy fiscal retry never calls a new allocation checkout; uncertain allocation never falls back',async()=>{
- const saved={ncf:'E340000000007',fiscalIssuance:{ncf:'E340000000007'}};
- const base={retryKey:`${key}:fiscal`,operationId:'same-operation',refundFiscalType:'E34',originalTransactionId:'sale',
- items:[{id:'p',cartId:'p',quantity:1,price:10}],terminalId:'t',activeTerminalConfig:{},
- db:{getReservedRefundFiscalNumber:async()=>saved,reserveFiscalNumber:async()=>{throw Error('must not reserve again');}}};
- assert.equal(await reserveRefundFiscalReservation({...base,client:{reserveOfflineCheckout:async()=>{throw Error('must not switch routes');}}}),saved);
- let calls=0;
- await assert.rejects(reserveRefundFiscalReservation({...base,db:{...base.db,getReservedRefundFiscalNumber:async()=>null},
- client:{allocationReady:async()=>true,reserveOfflineCheckout:async(_cart,op)=>{calls++;assert.equal(op,'same-operation');throw Error('NATIVE_FINANCIAL_COMMIT_UNCERTAIN');}}}),/COMMIT_UNCERTAIN/);
- assert.equal(calls,1);
+test('E34 historical helper cannot recover or allocate an unprepared fiscal birth',async()=>{
+ let calls=0;await assert.rejects(reserveRefundFiscalReservation({retryKey:`${key}:fiscal`,refundFiscalType:'E34',originalTransactionId:'sale',items:[],terminalId:'t',activeTerminalConfig:{},
+ db:{getReservedRefundFiscalNumber:async()=>{calls++;return {ncf:'E340000000007'};},reserveFiscalNumber:async()=>{calls++;return {};}}}),/FISCAL_RETURN_PREPARATION_REQUIRED/);
+ assert.equal(calls,0);
 });
 
 test('callbacks serialize through validation even after a failed attempt',async()=>{
@@ -150,7 +144,7 @@ test('actual App refund callback reuses both numbers and the exact document afte
    save:async()=>{},
    getReservedRefundFiscalNumber:async(key:string)=>clone(receipts.get(key)||null),
    reserveFiscalNumber:async(_type:string,_terminal:string,_count:number,_config:unknown,key:string)=>{
-    if(!receipts.has(key)){fiscalCount++;receipts.set(key,{ncf:'E340000000007',fiscalIssuance:{ncf:'E340000000007'}});}
+    if(!receipts.has(key)){fiscalCount++;receipts.set(key,{ncf:'B0400000007',fiscalIssuance:{ncf:'B0400000007'}});}
     return clone(receipts.get(key));
    },
    reserveSeriesNumbers:async(_id:string,_type:string,key:string)=>{
@@ -166,7 +160,7 @@ test('actual App refund callback reuses both numbers and the exact document afte
    transactions:[original],validateRefundItems:()=>({remaining:new Map([['line',2]])}),
    calculateTransactionTaxSummary:(items:CartItem[])=>({total:items.reduce((n,item)=>n+item.quantity*item.price,0),netAmount:10,taxAmount:0}),
    customers:[],resolveSyncTarget:()=>({kind:'ERP_ACTIVE',baseUrl:'https://erp.invalid/api/sync'}),
-   getEffectiveFiscalComplianceConfig:()=>({mode:'ECF'}),resolveCreditNoteFiscalCode:()=> 'E34',
+   getEffectiveFiscalComplianceConfig:()=>({mode:'LEGACY_B'}),resolveCreditNoteFiscalCode:()=> 'B04',
    fiscalWorkflowV2Client:{allocationReady:async()=>false,localCheckout:async()=>null},reserveRefundFiscalReservation,
    resolveDocumentAssignmentId:()=> 'nc',setInternalSequences:()=>{},currentUser:{id:'cashier',name:'Cashier'},getDefaultFiscalProvider:()=> 'MSELLER',
    persistStandaloneRefundTransaction:async(tx:Transaction)=>{seen.push(clone(tx));if(failure==='commit'&&!failed){failed=true;throw Error('injected financial commit');}return {refund:tx};},
@@ -181,21 +175,15 @@ test('actual App refund callback reuses both numbers and the exact document afte
    assert.deepEqual([fiscalCount,seriesCount],before);
   }
   const result=await freshCallback()(original,selected,conditions,'Return');
-  assert.equal(result.displayId,'NC-000007');assert.equal(result.ncf,'E340000000007');
+  assert.equal(result.displayId,'NC-000007');assert.equal(result.ncf,'B0400000007');
   assert.deepEqual([fiscalCount,seriesCount],[1,1]);
   if(failure==='commit')assert.deepEqual(seen[1],seen[0],'date, payment IDs and financial identity stay identical');
  }
 });
 
-test('E34 allocation retry preserves its operation ID and never switches to legacy numbering',async()=>{
- let chosen:string|undefined;let issued=0;
- const checkout={checkoutId:'checkout',transactionId:'refund',allocation:{ncf:'E340000000008'},allocationIssuance:{ncf:'E340000000008'}};
- const options={retryKey:`${key}:fiscal`,retryFingerprint:'b'.repeat(64),operationId:'stable-operation',refundFiscalType:'E34',originalTransactionId:'sale',
- items:[{id:'p',cartId:'line',quantity:1,price:10}],terminalId:'terminal',activeTerminalConfig:{},
- client:{allocationReady:async()=>true,localCheckout:async()=>chosen?checkout:null,reserveOfflineCheckout:async(_cart:string,operation:string)=>{
-   if(chosen){assert.equal(operation,chosen);}else{chosen=operation;issued++;}return checkout;
- }},db:{getReservedRefundFiscalNumber:async()=>null,reserveFiscalNumber:async()=>{throw Error('must never switch route');}}};
- assert.deepEqual(await reserveRefundFiscalReservation(options),await reserveRefundFiscalReservation(options));assert.equal(issued,1);
+test('E34 reservation without RETURN preparation is denied even when a checkout is advertised',async()=>{
+ let issued=0;await assert.rejects(reserveRefundFiscalReservation({retryKey:`${key}:fiscal`,operationId:'stable-operation',refundFiscalType:'E34',originalTransactionId:'sale',items:[],terminalId:'t',activeTerminalConfig:{},
+ client:{allocationReady:async()=>true,reserveOfflineCheckout:async()=>{issued++;return {allocation:{ncf:'E340000000001'}};}},db:{reserveFiscalNumber:async()=>{issued++;return {};}}}),/FISCAL_RETURN_PREPARATION_REQUIRED/);assert.equal(issued,0);
 });
 
 test('committed partial NC with lost response is recovered before a fresh refund frontier can issue another number',async t=>{
