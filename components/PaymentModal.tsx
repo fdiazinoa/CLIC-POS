@@ -2,7 +2,6 @@ import {assertDopFiscalSettlement,configuredFiscalBaseCurrency} from '../service
 import InteractionProgress,{yieldInteractionPaint,type InteractionProgressHandle} from './InteractionProgress';
 import {FiscalExpiredCheckoutAction} from './FiscalExpiredCheckoutAction';
 import type {FiscalRetirementRecord} from '../services/fiscal/FiscalWorkflowV2Types';
-import {resolveFiscalPrintReadiness,resolveFiscalAcceptance} from '../services/fiscal/FiscalPrintEvidence';
 import { recordCheckoutDiagnostic } from '../services/CheckoutDiagnostics';
 import { allowsDefaultPaymentMethods } from '../utils/erpPaymentMethods';
 
@@ -71,8 +70,8 @@ import {
    buildPaymentSettlementSummary,
    resolveCurrencySymbol,
 } from '../utils/paymentSettlement';
-import { sendReceiptEmailViaErp } from '../services/email/receiptEmailService';
-import { buildReceiptEmailPayload } from '../services/email/receiptEmailPayload';
+import type { ReceiptEmailResult } from '../services/email/receiptEmailService';
+import { requestReceiptEmail } from '../services/email/fiscalReceiptEmailDelivery';
 import { setLargeMasterSyncV3CriticalOperation } from '../services/sync/LargeMasterSyncV3OperationGate';
 
 export type PaymentEffectsFence = (() => void|Promise<void>) & {completedTransaction?: Transaction;recordPaymentEffect?:(paymentId:string)=>Promise<void>;preparePaymentEffects?:(payments:PaymentEntry[])=>Promise<void>;recoveryPayments?:PaymentEntry[];futureCheckout?:{checkoutId:string;transactionId:string;operationId?:string};tablePart?:{ticketId:string;receiptId:string;operationId:string;planFingerprint:string}};
@@ -222,8 +221,8 @@ const sendReceiptEmailRequest = async (
    config: BusinessConfig | undefined,
    currencySymbol: string,
    users: User[],
-): Promise<{ success: boolean; message?: string }> => {
-   return sendReceiptEmailViaErp(buildReceiptEmailPayload(transaction, email, config, currencySymbol, users,await resolveFiscalPrintReadiness(transaction),await resolveFiscalAcceptance(transaction)));
+): Promise<ReceiptEmailResult> => {
+   return requestReceiptEmail(transaction, email, config, currencySymbol, users);
 };
 
 const roundPaymentAmountByMethod = (
@@ -1298,7 +1297,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
                         try {
                            const emailResult = await sendReceiptEmailRequest(finalizedTransaction, preferredReceiptEmail, config, currencySymbol, users);
                            deliveryNotice = emailResult.success
-                              ? `Ticket enviado automáticamente a ${preferredReceiptEmail}.`
+                              ? emailResult.status === 'pending_signature' ? emailResult.message : `Ticket enviado automáticamente a ${preferredReceiptEmail}.`
                               : `Venta aprobada. No se pudo enviar automáticamente el ticket a ${preferredReceiptEmail}: ${emailResult.message || 'error desconocido'}.`;
                         } catch (emailError) {
                            console.error('❌ Auto receipt email failed:', emailError);
@@ -1436,7 +1435,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
       try {
          const data = await sendReceiptEmailRequest(completedTransaction, email, config, currencySymbol, users);
          if (data.success) {
-            alert(`Ticket enviado a ${email}`);
+            alert(data.status === 'pending_signature' ? data.message : `Ticket enviado a ${email}`);
             setShowEmailInput(false);
             if (!canStartNewSale) onClose();
          } else {

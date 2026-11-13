@@ -1,3 +1,4 @@
+import { fiscalReceiptEmailQueue } from './services/email/fiscalReceiptEmailDelivery';
 import { useLargeMasterSyncV3Kiosk } from './components/kiosk/useLargeMasterSyncV3Kiosk';
 import {resolveAttendanceScope} from './services/attendance/LocalAttendance';
 import {assertInventoryPresentationReturnAllowed} from './services/inventoryPresentations/selection';
@@ -11661,6 +11662,20 @@ const AppContent: React.FC = () => {
       syncTime:backgroundSyncManager.getState().lastSyncTime,subscribe:listener=>backgroundSyncManager.subscribe(listener),
     });
   }, [fiscalStatusWorker,isDataLoaded,fiscalHistoryHydrated,isSecurityLoaded,deviceId,config.companyInfo.rnc,fiscalStatusLifecycleKey]);
+
+  useEffect(() => attachFiscalStatusLifecycle({
+    runAutomatic: () => fiscalReceiptEmailQueue.runAutomatic(),
+    dispose: () => {},
+  }, {
+    hydrated: isDataLoaded && fiscalHistoryHydrated && isSecurityLoaded,
+    online: () => navigator.onLine,
+    addOnline: listener => window.addEventListener('online', listener),
+    removeOnline: listener => window.removeEventListener('online', listener),
+    addTransactionsUpdated: listener => window.addEventListener('transactionsUpdated', listener),
+    removeTransactionsUpdated: listener => window.removeEventListener('transactionsUpdated', listener),
+    syncTime: backgroundSyncManager.getState().lastSyncTime,
+    subscribe: listener => backgroundSyncManager.subscribe(listener),
+  }), [isDataLoaded, fiscalHistoryHydrated, isSecurityLoaded, deviceId, fiscalStatusLifecycleKey]);
 
   const handleTransactionComplete = async (txn: Transaction, onCommitted?: (transaction: Transaction) => void) => {
     if(txn.inventoryEffectsContract==='WAREHOUSE_RESERVATION_V1'&&dbAdapter.readDispatchCommittedReceipt){const original=await dbAdapter.readDispatchCommittedReceipt(txn.id);if(original){if(financialIdentity(original)!==financialIdentity(txn))throw Error('DISPATCH_RETAINED_SOURCE_CHANGED');setTransactions(previous=>[...previous.filter(row=>row.id!==original.id),original]);onCommitted?.(original);return;}}

@@ -9,9 +9,7 @@
 import React, { useMemo, useRef, useState } from 'react';
 import { CreditCard, Banknote, ArrowLeft, CheckCircle, User, Smartphone, Printer, Mail, XCircle, QrCode, Wallet, DollarSign, Zap, Search, Ticket, X } from 'lucide-react';
 import { BusinessConfig, User as PosUser, CartItem, Customer, PaymentMethod, RedeemedCouponRef, Transaction } from '../../types';
-import { sendReceiptEmailViaErp } from '../../services/email/receiptEmailService';
-import { buildReceiptEmailPayload } from '../../services/email/receiptEmailPayload';
-import { resolveFiscalPrintReadiness, resolveFiscalAcceptance } from '../../services/fiscal/FiscalPrintEvidence';
+import { requestReceiptEmail } from '../../services/email/fiscalReceiptEmailDelivery';
 
 export type KioskResolvedPaymentMethod = {
     key: string;
@@ -175,6 +173,7 @@ const KioskPayment: React.FC<KioskPaymentProps> = ({
     const [email, setEmail] = useState('');
     const [sendingEmail, setSendingEmail] = useState(false);
     const [emailSent, setEmailSent] = useState(false);
+    const [emailPendingSignature, setEmailPendingSignature] = useState(false);
     const emailInFlight = useRef(false);
     const [lookupMode, setLookupMode] = useState<KioskLookupMode | null>(null);
     const [lookupValue, setLookupValue] = useState('');
@@ -297,15 +296,12 @@ const KioskPayment: React.FC<KioskPaymentProps> = ({
         setSendingEmail(true);
 
         try {
-            const result = await sendReceiptEmailViaErp(buildReceiptEmailPayload(
-                transaction, recipient, config, config?.currencySymbol || '$', users,
-                await resolveFiscalPrintReadiness(transaction),
-                await resolveFiscalAcceptance(transaction),
-            ));
+            const result = await requestReceiptEmail(transaction, recipient, config, config?.currencySymbol || '$', users);
             if (!result.success) {
                 throw new Error(result.message || 'Resend no confirmo el envio.');
             }
 
+            setEmailPendingSignature(result.status === 'pending_signature');
             setEmailSent(true);
             setTimeout(() => {
                 handleFinish();
@@ -545,13 +541,13 @@ const KioskPayment: React.FC<KioskPaymentProps> = ({
                     </div>
 
                     <h2 className="text-4xl font-black text-gray-800 mb-4">
-                        {emailSent ? '¡Correo Enviado!' : 'Ingresa tu Email'}
+                        {emailSent ? emailPendingSignature ? 'Correo pendiente de firma fiscal' : '¡Correo Enviado!' : 'Ingresa tu Email'}
                     </h2>
 
                     {!emailSent ? (
                         <>
                             <p className="text-xl text-gray-500 mb-8">
-                                Te enviaremos tu recibo digital al instante.
+                                Te enviaremos tu recibo digital. Si es electrónico, esperaremos su firma fiscal.
                             </p>
 
                             <input
@@ -589,7 +585,7 @@ const KioskPayment: React.FC<KioskPaymentProps> = ({
                     ) : (
                         <div className="animate-in zoom-in-95">
                             <p className="text-xl text-gray-500 mb-8">
-                                Revisa tu bandeja de entrada.
+                                {emailPendingSignature ? 'Lo enviaremos automáticamente cuando el comprobante tenga firma fiscal.' : 'Revisa tu bandeja de entrada.'}
                             </p>
                             <div className="w-16 h-16 bg-green-100 text-green-600 rounded-full flex items-center justify-center mx-auto animate-bounce">
                                 <CheckCircle size={32} />

@@ -123,7 +123,7 @@ export const buildReceiptEmailPayload = (
   const baseCurrencyCode = String(
     config?.currencies?.find(currency => currency.isBase)?.code || 'DOP',
   ).trim().toUpperCase();
-  const fiscalCode = transaction.ncfType || getFiscalCodeFromNcf(transaction.ncf);
+  const fiscalCode = transaction.ncfType || getFiscalCodeFromNcf(transaction.electronicNcf || transaction.ncf);
   const fiscalDocumentLabel = fiscalCode ? FISCAL_DOCUMENT_LABELS[fiscalCode] : undefined;
   const cart = (transaction.items || []).map(item => {
     const discount = resolveLineDiscountPresentation(item);
@@ -154,7 +154,7 @@ export const buildReceiptEmailPayload = (
     paymentMethod: transaction.payments?.[0]?.method || 'CASH',
     payments: (transaction.payments || []).map(payment => buildReceiptEmailPayment(payment, baseCurrencyCode)),
     transactionId: transaction.displayId || transaction.id || 'PENDING-ID',
-    ncf: transaction.ncf,
+    ncf: transaction.ncf || transaction.electronicNcf,
     ncfType: fiscalCode || undefined,
     fiscalDocumentLabel,
     fiscalMode: transaction.fiscalMode,

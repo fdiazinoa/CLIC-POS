@@ -1,6 +1,5 @@
 import {assertInventoryPresentationReturnAllowed} from '../services/inventoryPresentations/selection';
 import {FiscalBuyerDraftAction,hasFiscalWorkflowSourceMarker} from './FiscalBuyerDraftAction';
-import {resolveFiscalPrintReadiness,resolveFiscalAcceptance} from '../services/fiscal/FiscalPrintEvidence';
 import {readRefundOriginal} from '../services/localRefundPersistence';
 import { canProjectFiscalClassification } from '../utils/fiscalClassificationProjection';
 import { formatQuantity, terminalQuantityPresentation } from '../utils/quantityPresentation';
@@ -76,8 +75,8 @@ import {
    normalizeErpRefundSourceTransaction,
    validateErpRefundItems,
 } from '../services/refunds/erpRefundSource';
-import { sendReceiptEmailViaErp, type ReceiptEmailResult } from '../services/email/receiptEmailService';
-import { buildReceiptEmailPayload } from '../services/email/receiptEmailPayload';
+import type { ReceiptEmailResult } from '../services/email/receiptEmailService';
+import { requestReceiptEmail } from '../services/email/fiscalReceiptEmailDelivery';
 import {
    createInvoiceReview,
    recordInvoiceAuditEvent,
@@ -781,7 +780,7 @@ const TicketDetailDrawer: React.FC<{
             setEmailFeedback(result.message || 'No se pudo enviar la factura.');
             return;
          }
-         setEmailFeedback(`Factura enviada a ${normalizedEmail}.`);
+         setEmailFeedback(result.status === 'pending_signature' ? result.message || 'Correo pendiente de firma fiscal.' : `Factura enviada a ${normalizedEmail}.`);
       } catch (error: any) {
          setEmailFeedback(error?.message || 'No se pudo enviar la factura.');
       } finally {
@@ -1320,7 +1319,7 @@ const TicketDetailDrawer: React.FC<{
                            className="w-full rounded-xl border border-slate-200 px-3 py-3 text-sm font-bold outline-none focus:ring-2 focus:ring-blue-200"
                         />
                         {emailFeedback && (
-                           <p className={`rounded-xl p-3 text-xs font-bold ${emailFeedback.startsWith('Factura enviada') ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>
+                           <p className={`rounded-xl p-3 text-xs font-bold ${(emailFeedback.startsWith('Factura enviada') || emailFeedback.startsWith('Correo pendiente')) ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>
                               {emailFeedback}
                            </p>
                         )}
@@ -2151,13 +2150,11 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
       if (!approved) throw new Error('La acción no fue autorizada.');
 
       transaction=await db.getDocument('transactions',transaction.id) as Transaction || await db.getDocument('transactionHistory',transaction.id) as Transaction || transaction;
-      const result = await sendReceiptEmailViaErp(
-         buildReceiptEmailPayload(transaction, email, config, config.currencySymbol || 'RD$', users,await resolveFiscalPrintReadiness(transaction),await resolveFiscalAcceptance(transaction)),
-      );
+      const result = await requestReceiptEmail(transaction, email, config, config.currencySymbol || 'RD$', users);
       try {
          await recordInvoiceAuditEvent({
             transaction,
-            eventType: result.success ? 'EMAIL_RESENT' : 'EMAIL_RESEND_FAILED',
+            eventType: result.success ? result.status === 'pending_signature' ? 'EMAIL_REQUESTED' : 'EMAIL_RESENT' : 'EMAIL_RESEND_FAILED',
             actor,
             authorizedBy,
             reason: result.message,

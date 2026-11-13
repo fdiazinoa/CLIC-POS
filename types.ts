@@ -2916,6 +2916,7 @@ export interface InvoiceReviewFlag {
 export type InvoiceAuditEventType =
   | 'REVIEW_FLAGGED'
   | 'REVIEW_STATUS_CHANGED'
+  | 'EMAIL_REQUESTED'
   | 'EMAIL_RESENT'
   | 'EMAIL_RESEND_FAILED'
   | 'VOLUNTARY_TIP_ADJUSTED'
