@@ -2318,6 +2318,16 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
       assertInventoryPresentationReturnAllowed(originalTx);
       const terminalConfig = config.terminals?.find(t => t.id === activeTerminalId)?.config;
       const fiscalMode = getEffectiveFiscalComplianceConfig(config, terminalConfig).mode;
+      // RETURN/E34 must obtain ERP preparation before any external banking effect.
+      // The consumer retains unsupported gateway operations without refunding the bank first.
+      if (fiscalMode === 'ECF' && (originalTx as any).articleFormatWire?.schema_version !== 2) {
+         await onRefundTransaction(originalTx, refundItems, conditions, reason || 'Devolución');
+         setIsRefundModalOpen(false);
+         setRefundTx(null);
+         setRefundRequestMode('STANDARD');
+         setSelectedTxId(null);
+         return;
+      }
       if (fiscalMode !== 'NONE') {
          const creditType = resolveCreditNoteFiscalCode(fiscalMode);
          if (!await db.canRequestMoreNCF(creditType, activeTerminalId, terminalConfig)) {

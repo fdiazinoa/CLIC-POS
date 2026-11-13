@@ -339,7 +339,7 @@ test('coupon redemption marks config coupon REDEEMED atomically with the sale', 
   } finally { f.sql.close(); }
 });
 
-test('E34 refund with allocation passes the checkout birth to the commit', async () => {
+test('E34 allocation alone cannot publish a refund without RETURN preparation', async () => {
   const f = fixture();
   try {
     const module = await financialModule(f, true);
@@ -355,13 +355,8 @@ test('E34 refund with allocation passes the checkout birth to the commit', async
     const refund = { ...module.transaction('refund', true), customerId: undefined,
       originalTransactionId: 'sale-original', fiscalWorkflowCheckoutId: 'co', fiscalAllocationAuthorizationId: 'auth',
       ncfType: 'E34', ncf: 'E340000000001' };
-    await module.persistV3FinancialTransaction(refund, {} as BusinessConfig, 'W', { refund: true });
-    assert.equal(capturedCommit.fiscalWorkflowCommits.length, 1);
-    assert.equal(capturedCommit.fiscalWorkflowCommits[0].checkoutId, 'co');
-    assert.equal(capturedCommit.fiscalWorkflowCommits[0].birth.schemaVersion, 3);
-    assert.equal(capturedCommit.fiscalWorkflowCommits[0].birth.authorizationId, 'auth');
-    assert.equal(capturedCommit.outboxEvent.eventType, 'SALES_CREDIT_NOTE_POSTED');
-    assert.equal(capturedCommit.fiscalAllocationPreconditions.length, 1);
+    await assert.rejects(module.persistV3FinancialTransaction(refund, {} as BusinessConfig, 'W', { refund: true }),/FISCAL_RETURN_PREPARATION_REQUIRED/);
+    assert.equal(capturedCommit,undefined);
   } finally { f.sql.close(); }
 });
 

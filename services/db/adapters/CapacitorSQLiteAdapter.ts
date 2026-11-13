@@ -1,3 +1,4 @@
+import {NativeFiscalReturnStore,FISCAL_RETURN_SCHEMA,consumeNativeFiscalReturn} from '../NativeFiscalReturnStore';
 import {DISPATCH_STORE_POLICY_SCHEMA_V2,DISPATCH_POOL_INSTALL_SCHEMA,installDispatchPoolSnapshot,prepareDispatchBarrierProof,type DispatchPoolSnapshot,dispatchPoolId} from '../CompanyDispatchPool';
 import {DISPATCH_ADOPTION_SCHEMA,acknowledgeDispatchAdoption,type DispatchAdoptionProof} from '../CompanyDispatchAdoption';
 import {assertDispatchFinancedSource} from '../../dispatch/DispatchFinancedSource';
@@ -132,6 +133,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
     private writeQueue: Promise<unknown> = Promise.resolve();
     public readonly adapterType = 'local';
     public readonly fiscalWorkflowStore=new NativeFiscalWorkflowV2Store(()=>this.ensureDb() as any,work=>this.withWriteLock(work));
+    public readonly fiscalReturnStore=new NativeFiscalReturnStore(()=>this.ensureDb() as any,work=>this.withWriteLock(work),work=>this.withWriteLock(()=>this.withNativeTransaction(work)));
     public readonly terminalAuthEvidenceStore=new NativeTerminalAuthEvidenceStore(()=>this.ensureDb() as any,work=>this.withWriteLock(work),work=>this.withNativeTransaction(work));
     public readonly masterSyncV3Store = this.serializedMasterStore();
 
@@ -841,6 +843,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             if(actual!==proof.expected)throw Error('OFFLINE_FISCAL_COMMIT_AUTHORITY_CHANGED');
           }
           if(input.fiscalWorkflowCommits?.some(c=>c.birth?.schemaVersion===3)&&!input.fiscalAllocationPreconditions?.length)throw Error('OFFLINE_FISCAL_COMMIT_PROOF_REQUIRED');
+          await consumeNativeFiscalReturn(this.ensureDb() as any,input);
           const births=outboxEvents.filter(e=>e.eventType==='SALE_POSTED'&&e.payload.fiscalWorkflowBirth);
           if(births.some(e=>!input.fiscalWorkflowCommits?.some(c=>c.transactionId===e.aggregateId&&JSON.stringify(c.birth)===JSON.stringify(e.payload.fiscalWorkflowBirth))))throw Error('FISCAL_WORKFLOW_ATOMIC_BIRTH_REQUIRED');
           for(const commit of input.fiscalWorkflowCommits||[]){
@@ -1149,14 +1152,24 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
     }
 
     async reserveFinancialNumbers(input:FinancialNumberReservation):Promise<FinancialNumberResult> {
-        // Reservation fields are primitives; fiscal contains only primitive/serialized snapshot fields.
-        input={...input,...(input.fiscal?{fiscal:{...input.fiscal}}:{})};
+        // Capture caller-owned evidence before entering the asynchronous native queue.
+        input={...input,...(input.fiscal?{fiscal:{...input.fiscal}}:{}),...(input.fiscalIssuance?{fiscalIssuance:JSON.parse(JSON.stringify(input.fiscalIssuance))}:{})};
         return this.withWriteLock(()=>this.withNativeTransaction(async()=>{
             const db=this.ensureDb();
             const read=async(collection:string,id:string)=>{
                 const rows=await db.query('SELECT data FROM documents WHERE collection_name=? AND doc_id=?',[collection,id]);
                 return rows.values?.[0]?.data ? JSON.parse(String(rows.values[0].data)) : undefined;
             };
+            const retryId=input.retryKey;
+            if(retryId && (!/^[a-f0-9]{64}:(fiscal|series)$/.test(retryId) || input.global)) throw Error('REFUND_RESERVATION_ID_INVALID');
+            const retryIdentity=JSON.stringify([input.seriesId || null,input.documentType || null,input.fiscal?.terminalId || null,input.fiscal?.type || null,input.retryFingerprint || null]);
+            if(retryId){
+                const saved=await read('refundNumberReservations',retryId);
+                if(saved){
+                    if(saved.identity!==retryIdentity) throw Error('Hay una devolución pendiente de esta factura. Reintenta con los mismos artículos, cantidades, motivo y forma de pago. [REFUND_RESERVATION_ID_MISMATCH]');
+                    return saved.result;
+                }
+            }
             let fiscalBuffer:any;
             let fiscalReceipt:Awaited<ReturnType<typeof planNativeFiscalReceipt>>;
             if(input.fiscal){
@@ -1183,7 +1196,12 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
                 if(document) await db.run(DOCUMENT_UPSERT_SQL,[collection,document.id,JSON.stringify(document),collection,document.id,collection,now],false);
             }
             if(fiscalReceipt)await db.run('DELETE FROM article_format_wire_write_scope WHERE id=1',[],false);
-            return {...plan.result,...(input.fiscal ? {ncf:input.fiscal.ncf} : {})};
+            const result={...plan.result,...(input.fiscal ? {ncf:input.fiscal.ncf,fiscalIssuance:input.fiscalIssuance} : {}),...(retryId ? {reservedAt:now} : {})};
+            if(retryId){
+                const receipt={id:retryId,identity:retryIdentity,result};
+                await db.run(DOCUMENT_UPSERT_SQL,['refundNumberReservations',retryId,JSON.stringify(receipt),'refundNumberReservations',retryId,'refundNumberReservations',now],false);
+            }
+            return result;
         }));
     }
 
@@ -1194,6 +1212,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         await db.query('PRAGMA busy_timeout = 5000;');
         await db.execute(`
             ${FISCAL_WORKFLOW_V2_SCHEMA}
+            ${FISCAL_RETURN_SCHEMA}
             CREATE TABLE IF NOT EXISTS documents (
                 collection_name TEXT NOT NULL,
                 doc_id TEXT NOT NULL,
@@ -1202,6 +1221,13 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
                 updatedAt TEXT NOT NULL,
                 PRIMARY KEY (collection_name, doc_id)
             );
+            CREATE TRIGGER IF NOT EXISTS preserve_refund_retry_update BEFORE UPDATE OF data ON documents
+            WHEN OLD.collection_name IN ('refundNumberReservations','refundRetryDocuments','refundRetryAcknowledgements') AND OLD.data<>NEW.data
+            BEGIN SELECT RAISE(ABORT, 'REFUND_RETRY_EVIDENCE_IMMUTABLE'); END;
+            CREATE TRIGGER IF NOT EXISTS preserve_refund_retry_delete BEFORE DELETE ON documents
+            WHEN OLD.collection_name IN ('refundNumberReservations','refundRetryDocuments','refundRetryAcknowledgements')
+            BEGIN SELECT RAISE(ABORT, 'REFUND_RETRY_EVIDENCE_IMMUTABLE'); END;
+            CREATE INDEX IF NOT EXISTS idx_refund_retry_scope_source ON documents(json_extract(data,'$.scopeKey'),json_extract(data,'$.transaction.originalTransactionId')) WHERE collection_name='refundRetryDocuments';
             CREATE INDEX IF NOT EXISTS idx_documents_collection_sort
             ON documents(collection_name, sort_order, updatedAt);
             CREATE INDEX IF NOT EXISTS idx_documents_v3_inventory_baseline
