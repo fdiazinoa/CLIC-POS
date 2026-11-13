@@ -11,10 +11,10 @@ export const requiresV3SaleAvailability = (intent: V3FinancialIntent, trackInven
   productAllowsNegative: boolean, _terminalAllowsNegative?: boolean): boolean =>
   intent === 'SALE' && requiresProductStockAvailability({operationalFlags:{trackInventory,allowNegativeStock:productAllowsNegative}});
 
-/** Only root transport/status metadata is mutable. Nested line/customer/payment status remains financial identity. */
+/** Only listed root transport/status/presentation metadata is mutable. Nested line/customer/payment status remains financial identity. */
 export const refundFinancialSourceIdentity = (transaction: Transaction): string => {
   const mutable = new Set(['status','updatedAt','syncStatus','syncError','cloudSyncStatus','cloudSyncError','cloudSyncedAt',
-    'relatedTransactions','zReportId','syncStartedAt','syncRetryAfter','syncBlockedReason','syncBlockedAt','_forceSyncReplay',
+    'relatedTransactions','zReportId','_isArchived','syncStartedAt','syncRetryAfter','syncBlockedReason','syncBlockedAt','_forceSyncReplay',
     'fiscalResponseCode','fiscalSignedXml','fiscalQrCode','fiscalStatus','fiscalPreSubmitRecoveryAudit','fiscalSyncStatus','fiscalSyncError','fiscalSyncedAt','fiscalReferenceId',
     'fiscalResponseMessage','fiscalProviderStatus','fiscalCertifiedNcf','fiscalStatusProof','fiscalSubmissionScope',
     'fiscalLookupApproval','fiscalPrintScope','fiscalPrintProof','fiscalClassificationProjection','fiscalClassificationAttemptedAt','fiscalQrUrl','fiscalSecurityCode','fiscalSignedAt']);
