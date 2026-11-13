@@ -39,7 +39,11 @@ export interface ReturnContract {
     originalReference: ReturnReference;
     localCommittedAt: string;
 }
+export const RETURN_DIGEST_WIRE_SCHEME = 'ERP_POS_FISCAL_RETURN_V1_PG_CANONICAL_UTF8_SHA256_V1';
+export interface ReturnDigestProof { returnSnapshotDigestScheme: string; returnSnapshotDigestInput: string; }
 export interface ReturnPreparation {
+    returnSnapshotDigestScheme?: string;
+    returnSnapshotDigestInput?: string;
     schemaVersion: 1;
     profile: typeof RETURN_PROFILE;
     preparationId: string;
@@ -74,6 +78,7 @@ export interface ReturnAttempt {
     checkout?: FiscalWorkflowCheckoutV2;
     commandBytes?: string;
     preparation?: ReturnPreparation;
+    preparationDigestProof?: ReturnDigestProof;
     localCommittedAt?: string;
     admission?: any;
     source?: Transaction;
@@ -122,11 +127,46 @@ export function assertReturnAdmission(c: ReturnCapability, scope: FiscalWorkflow
     if (p)
         returnNeed(p.authorizationId === c.authorizationId && p.authorityHash === c.authorityHash && p.environment === c.environment && p.issuerRnc === c.issuerRnc && sameReturn(p.scope, scope) && Date.parse(p.preparedAt) <= now && now <= Date.parse(p.expiresAt), 'FISCAL_RETURN_PREPARATION_EXPIRED');
 }
+/** Verify the exact PostgreSQL UTF-8 input before interpreting any snapshot values. */
+export async function assertReturnSnapshotDigest(p: Pick<ReturnPreparation, 'returnSnapshot' | 'returnSnapshotDigest' | 'returnSnapshotDigestScheme' | 'returnSnapshotDigestInput'>, supplement?: ReturnDigestProof): Promise<void> {
+    const proof = supplement || p;
+    if (supplement) {
+        returnNeed(Object.keys(supplement).sort().join(',') === 'returnSnapshotDigestInput,returnSnapshotDigestScheme', 'FISCAL_RETURN_DIGEST_WIRE_INVALID');
+        returnNeed(p.returnSnapshotDigestScheme === undefined && p.returnSnapshotDigestInput === undefined, 'FISCAL_RETURN_DIGEST_WIRE_CONFLICT');
+    }
+    returnNeed(proof.returnSnapshotDigestScheme === RETURN_DIGEST_WIRE_SCHEME, 'FISCAL_RETURN_DIGEST_WIRE_SCHEME_REQUIRED');
+    const raw = proof.returnSnapshotDigestInput;
+    returnNeed(typeof raw === 'string' && raw.length <= 1000000 && typeof p.returnSnapshotDigest === 'string' && /^[a-f0-9]{64}$/.test(p.returnSnapshotDigest), 'FISCAL_RETURN_DIGEST_WIRE_REQUIRED');
+    returnNeed(await sha256Utf8(raw!) === p.returnSnapshotDigest, 'FISCAL_RETURN_DIGEST_WIRE_HASH_MISMATCH');
+    let envelope: any;
+    try { envelope = JSON.parse(raw!); } catch { throw Error('FISCAL_RETURN_DIGEST_WIRE_ENVELOPE_INVALID'); }
+    const object = (value: any) => value !== null && typeof value === 'object' && !Array.isArray(value) && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
+    returnNeed(object(envelope) && Object.keys(envelope).sort().join(',') === 'schemaVersion,source,value' && envelope.schemaVersion === 1 && envelope.source === 'ERP_POS_FISCAL_RETURN_V1' && object(envelope.value) && object(p.returnSnapshot), 'FISCAL_RETURN_DIGEST_WIRE_ENVELOPE_INVALID');
+    // Iterative traversal avoids stack overflow on hostile/deep JSON. The response-size
+    // limit bounds work; types/own keys/array order are compared without coercion.
+    const pending: Array<[any, any]> = [[envelope.value, p.returnSnapshot]];
+    while (pending.length) {
+        const [a, b] = pending.pop()!;
+        returnNeed(typeof a === typeof b, 'FISCAL_RETURN_DIGEST_WIRE_VALUE_MISMATCH');
+        if (typeof a === 'number') {
+            returnNeed(Number.isFinite(a) && Number.isFinite(b) && (!Number.isInteger(a) || Number.isSafeInteger(a)) && (!Number.isInteger(b) || Number.isSafeInteger(b)), 'FISCAL_RETURN_DIGEST_WIRE_NUMBER_UNSUPPORTED');
+            returnNeed(a === b, 'FISCAL_RETURN_DIGEST_WIRE_VALUE_MISMATCH');
+        } else if (a === null || b === null || typeof a !== 'object') {
+            returnNeed((a === null || ['string', 'boolean'].includes(typeof a)) && a === b, 'FISCAL_RETURN_DIGEST_WIRE_VALUE_MISMATCH');
+        } else {
+            returnNeed(Array.isArray(a) === Array.isArray(b) && (Array.isArray(a) || object(a) && object(b)), 'FISCAL_RETURN_DIGEST_WIRE_VALUE_MISMATCH');
+            const ak = Object.keys(a), bk = Object.keys(b);
+            returnNeed(ak.length === bk.length && (!Array.isArray(a) || a.length === b.length) && ak.every(k => Object.hasOwn(b, k)), 'FISCAL_RETURN_DIGEST_WIRE_VALUE_MISMATCH');
+            for (const key of ak) pending.push([a[key], b[key]]);
+        }
+    }
+}
 export async function assertReturnPreparation(p: ReturnPreparation, a: ReturnAttempt) {
     const c: ReturnCommand = JSON.parse(a.commandBytes!);
     returnNeed(p?.schemaVersion === 1 && p.profile === RETURN_PROFILE && uuid(p.preparationId) && p.reservationState === 'PREPARED' && ['operationId', 'checkoutId', 'transactionId', 'financialEventId', 'authorizationId', 'authorityHash'].every(k => (p as any)[k] === (c as any)[k]) && sameReturn(p.scope, a.scope) && sameReturn(p.originalReference, c.originalReference) && sameReturn(p.inventoryMovementIds, c.inventoryMovementIds) && p.environment === c.originalReference.environment && p.issuerRnc === c.originalReference.issuerRnc && /^[a-f0-9]{64}$/.test(p.originalProofDigest) && Date.parse(p.preparedAt) < Date.parse(p.expiresAt));
     const s = p.returnSnapshot;
-    returnNeed(s?.schemaVersion === 1 && s.profile === RETURN_PROFILE && s.currency === 'DOP' && s.exchangeRate === 1 && s.loyaltyDisposition === 'NO_EFFECT_VERIFIED' && /^[a-f0-9]{64}$/.test(s.loyaltyProofDigest) && sameReturn(s.originalReference, c.originalReference) && await returnDigest(s) === p.returnSnapshotDigest);
+    await assertReturnSnapshotDigest(p, a.preparationDigestProof);
+    returnNeed(s?.schemaVersion === 1 && s.profile === RETURN_PROFILE && s.currency === 'DOP' && s.exchangeRate === 1 && s.loyaltyDisposition === 'NO_EFFECT_VERIFIED' && /^[a-f0-9]{64}$/.test(s.loyaltyProofDigest) && sameReturn(s.originalReference, c.originalReference));
     returnNeed(Array.isArray(s.lines) && s.lines.length === c.lines.length && new Set(s.lines.map((l: any) => l.cartId)).size === s.lines.length && Array.isArray(s.paymentCommands) && s.paymentCommands.length === c.payments.length);
     for (const l of s.lines) {
         const requested = c.lines.find(x => x.cartId === l.cartId);

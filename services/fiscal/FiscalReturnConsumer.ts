@@ -4,7 +4,7 @@ import type { NativeFiscalReturnStore } from '../db/NativeFiscalReturnStore';
 import { fiscalWorkflowScopeKey } from './FiscalWorkflowV2Types';
 import type { FiscalWorkflowCheckoutV2, FiscalWorkflowStateV2 } from './FiscalWorkflowV2Types';
 import { captureFiscalStatusBoundContext } from './FiscalBoundContext';
-import { assertReturnAdmission, assertReturnPreparation, buildReturnSource, returnJSON, returnNeed, sameReturn, validOrdinaryReturnReference, originalReferencePendingCode, type ReturnAttempt, type ReturnCapability, type ReturnPreparation, type ReturnCommand } from './FiscalReturnV1';
+import { assertReturnAdmission, assertReturnPreparation, assertReturnSnapshotDigest, buildReturnSource, returnJSON, returnNeed, sameReturn, validOrdinaryReturnReference, originalReferencePendingCode, type ReturnAttempt, type ReturnCapability, type ReturnPreparation, type ReturnCommand } from './FiscalReturnV1';
 import { sha256Utf8 } from '../sync/LargeMasterSyncV3Client';
 import { financialIdentity } from '../db/LargeMasterSyncV3FinancialRetention';
 export function createFiscalReturnTransport(readAuth = captureFiscalStatusBoundContext, fetcher: typeof fetch = fetch) {
@@ -139,6 +139,17 @@ export function createFiscalReturnConsumer(ports: ConsumerPorts) {
                     await assertReturnPreparation(preparation, a);
                     a = await store!.save(a, { ...a, preparation, phase: 'PREPARED' });
                 }
+                if (a.preparation && a.preparation.returnSnapshotDigestScheme === undefined && a.preparation.returnSnapshotDigestInput === undefined && !a.preparationDigestProof) {
+                    // Historical DTOs are immutable. Replay the exact durable command and
+                    // retain only its new write-once proof after checking every original field.
+                    const recovered = await ports.transport.prepare(a.commandBytes!);
+                    auth.assertCurrent();
+                    const { returnSnapshotDigestScheme, returnSnapshotDigestInput, ...originalFields } = recovered;
+                    returnNeed(sameReturn(originalFields, a.preparation), 'FISCAL_RETURN_PREPARATION_RECOVERY_CONFLICT');
+                    await assertReturnSnapshotDigest(recovered);
+                    a = await store!.save(a, { ...a, preparationDigestProof: { returnSnapshotDigestScheme: returnSnapshotDigestScheme!, returnSnapshotDigestInput: returnSnapshotDigestInput! } });
+                }
+                await assertReturnPreparation(a.preparation!, a);
                 // Historical prepare replay after revocation/flag OFF never authorizes a fresh financial commit.
                 c = await ports.transport.capability();
                 auth.assertCurrent();

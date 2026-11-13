@@ -18,6 +18,9 @@ OR NEW.phase IN('PREPARING','PREPARED','SEALED','COMMITTED') AND json_extract(NE
 OR NEW.phase IN('PREPARED','SEALED','COMMITTED') AND json_extract(NEW.data,'$.preparation') IS NULL
 OR NEW.phase IN('SEALED','COMMITTED') AND (json_extract(NEW.data,'$.source') IS NULL OR json_extract(NEW.data,'$.localCommittedAt') IS NULL)
 BEGIN SELECT RAISE(ABORT,'FISCAL_RETURN_PHASE_CONFLICT');END;
+CREATE TRIGGER IF NOT EXISTS pos_return_digest_proof_v1 BEFORE UPDATE ON pos_fiscal_return_attempts_v1
+WHEN json_extract(OLD.data,'$.preparationDigestProof') IS NOT NULL AND json_extract(OLD.data,'$.preparationDigestProof') IS NOT json_extract(NEW.data,'$.preparationDigestProof')
+BEGIN SELECT RAISE(ABORT,'FISCAL_RETURN_DIGEST_WIRE_CONFLICT');END;
 CREATE TRIGGER IF NOT EXISTS pos_return_no_delete_v1 BEFORE DELETE ON pos_fiscal_return_attempts_v1 BEGIN SELECT RAISE(ABORT,'FISCAL_RETURN_RECOVERY_REQUIRED');END;
 CREATE TRIGGER IF NOT EXISTS pos_return_identity_v1 BEFORE UPDATE ON pos_fiscal_return_attempts_v1
 WHEN OLD.id<>NEW.id OR OLD.slot<>NEW.slot OR OLD.transaction_id IS NOT NULL AND OLD.transaction_id IS NOT NEW.transaction_id
