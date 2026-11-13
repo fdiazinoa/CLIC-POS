@@ -60,6 +60,9 @@ los gateways no soportados permanecen pendientes sin efecto bancario.
 ## Evidencia y límites
 
 - 378/378 pruebas en 13 suites acotadas (ver comando siguiente).
+- Revisión posterior acota el metadato nuevo únicamente a ordinary SALE; VOID y
+  el perfil sin operationKind conservan su referencia a la factura afectada.
+  Las 20 pruebas del consumidor y typecheck/lint se repitieron: aprobados.
 - npm run build (tsc -b + Vite) aprobado; advertencia de tamaño de chunks.
 - ESLint sobre archivos nuevos y pantallas modificadas: 0 errores, 14 avisos
   no-case-declarations en App en la revisión anterior. En este seguimiento, ESLint

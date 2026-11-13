@@ -39,7 +39,7 @@ export async function verifyFiscalWorkflowState(source:Transaction,state:FiscalW
  const digest=await sha256Utf8(json({schemaVersion:2,source:'POS_ORIGINAL_ENVELOPE_V2',scope:state.scope,saleEventId:state.saleEventId,payload:envelope}));
  if(digest!==state.originalDigestV2)return false;
  if(state.mode==='STATUS_ONLY'&&(state.workflowId!==null||state.permitId!==null||state.canCorrect||state.draftRevision!==0))return false;
- if(state.originalReference!=null&&!validOrdinaryReturnReference(source,state))return false;
+ if(state.sourceKind==='ORDINARY_SOURCE_V2'&&state.operationKind==='SALE'&&state.originalReference!=null&&!validOrdinaryReturnReference(source,state))return false;
  return true;
 }
 async function verifyFormatWorkflowSource(source:Transaction,state:FiscalWorkflowStateV2):Promise<boolean>{
@@ -423,7 +423,7 @@ const request=async(path:string,body?:Record<string,any>,signal?:AbortSignal,tim
  async acknowledge(checkout:FiscalWorkflowCheckoutV2){await store()?.acknowledgeCheckout(checkout.checkoutId);},
  async cached(id:string){return await store()?.readState(id)||null;},
  consult(id:string,signal?:AbortSignal):Promise<FiscalWorkflowStateV2>{if(!this.enabled())return Promise.reject(Error('FISCAL_WORKFLOW_DISABLED'));const current=inFlight.get(id);if(current)return current;const version=generation;const promise=(async()=>{const native=store(),source=await readSource(id);if(!native||!source)fail('FISCAL_WORKFLOW_RETAINED_SOURCE_REQUIRED');const before=await native.readState(id),{data,auth}=await request('status?'+new URLSearchParams({transactionId:id}),undefined,signal);if(version!==generation||signal?.aborted)fail('FISCAL_WORKFLOW_CONTEXT_CHANGED');if(!contexts(data.scope,scopeOf(auth.descriptor))||!await verifyFiscalWorkflowState(source,data,await native.readReturnAttempt?.(source.id)||null))fail();if(data.sourceKind==='RETURN_SOURCE_V1'&&!await verifyReturnStatus(source,data,await native.readReturnAttempt?.(source.id)||null,before))fail();if(before&&before.observationVersion>=data.observationVersion&&!(before.mode==='PREPARED'&&data.mode==='WORKFLOW')){
- const ordinary=before.sourceKind==='ORDINARY_SOURCE_V2'&&before.mode==='WORKFLOW'&&['ACCEPTED','ACCEPTED_CONDITIONAL'].includes(before.decision)&&!((source as any).articleFormatWire);
+ const ordinary=before.sourceKind==='ORDINARY_SOURCE_V2'&&before.operationKind==='SALE'&&before.mode==='WORKFLOW'&&['ACCEPTED','ACCEPTED_CONDITIONAL'].includes(before.decision)&&!((source as any).articleFormatWire);
  if(ordinary){
   const core=(state:FiscalWorkflowStateV2)=>{const {originalReference: _reference,originalReferenceReason: _reason,...rest}=state;return rest;};
   if(before.observationVersion!==data.observationVersion||json(core(before))!==json(core(data))||data.originalReference!=null&&!validOrdinaryReturnReference(source,data))fail('FISCAL_WORKFLOW_OBSERVATION_CONFLICT');

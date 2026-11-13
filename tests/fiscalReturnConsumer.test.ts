@@ -349,3 +349,19 @@ test('null original reference propagates safe ERP reason without interpreting it
     assert.equal(f.documents('inventoryLedger').length, 0);
     assert.equal((f.db.prepare('SELECT count(*) n FROM sync_outbox_v2').get() as any).n, 0);
 });
+
+// Referenced VOID carries the affected sale identity, not the current transaction identity.
+// The new SALE metadata contract must not reinterpret that pre-existing profile.
+test('non-SALE ordinary reference semantics remain unchanged by SALE metadata refresh', async t => {
+    const { verifyFiscalWorkflowState } = await import('../services/fiscal/FiscalWorkflowV2Client');
+    for (const operationKind of ['VOID', undefined]) {
+        const f = await ordinaryReferenceStatusFixture(); t.after(() => f.cleanup());
+        const state = { ...f.state, operationKind, originalReference: { ...f.reference, transactionId: '40000000-0000-4000-8000-000000000099' }, originalReferenceReason: null };
+        if (operationKind === undefined) delete state.operationKind;
+        assert.equal(await verifyFiscalWorkflowState(f.original, state), true);
+        await f.adapter.fiscalWorkflowStore.saveState(f.original, state, null);
+        f.setResponse(state);
+        assert.deepEqual(await f.workflow.consult(f.original.id), state);
+        assert.deepEqual(await f.adapter.fiscalWorkflowStore.readState(f.original.id), state);
+    }
+});
