@@ -1,3 +1,4 @@
+import {verifyReturnSettlementPresentation,returnSettlementLines} from '../services/fiscal/ReturnSettlementPresentation';
 import {inventoryPresentationTicketHTML} from '../services/inventoryPresentations/selection';
 import { clicAlert } from '../services/dialog/ClicDialogService';
 import {fiscalQrSvg} from '../services/fiscal/FiscalQrSvg';
@@ -254,6 +255,7 @@ const printTicketInternal = async (transaction: Transaction, config: BusinessCon
     const persisted=await dbAdapter.getDocument<Transaction>('transactions',transaction.id) || await dbAdapter.getDocument<Transaction>('transactionHistory',transaction.id);
     if(persisted)transaction=persisted;
     const fiscalPrint=await resolveFiscalPrintReadiness(transaction);
+    const sealedReturnLines=returnSettlementLines(transaction);
     transaction=fiscalPrintTransaction(transaction,fiscalPrint);
     const escapeFiscal=(value:string)=>value.replace(/[&<>"']/g,character=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[character]!));
     
@@ -548,6 +550,8 @@ const printTicketInternal = async (transaction: Transaction, config: BusinessCon
             const paymentPresentation = buildPaymentReceiptPresentation(settlementSummary, config, baseCurrencyCode, currencySymbol);
             const paymentById = new Map(payments.map((payment: any) => [payment.id, payment]));
 
+            const returnLines=sealedReturnLines;
+            if(returnLines.length)return `<div class="divider"></div><div class="totals-section">${returnLines.map(line=>`<div>${escapeHtml(line)}</div>`).join('')}</div>`;
             if (payments.length === 0) return '';
 
             return `
@@ -1308,6 +1312,7 @@ export const printCouponForTransaction = async (transaction: Transaction, config
 };
 export const printTicket = async (...args: Parameters<typeof printTicketInternal>) => {
     const transaction = args[0];
+    await verifyReturnSettlementPresentation(transaction);
     const accepted = await trackCheckoutPrint({transactionId:transaction.id,displayId:transaction.displayId,items:transaction.items,total:transaction.total,reason:'TICKET'},
         ()=>runPrintTask(`ticket:${transaction.id}`, 'Ticket', () => printTicketInternal(...args)));
     if (accepted && args[1].receiptConfig?.printCouponSlip) {

@@ -336,8 +336,16 @@ export class DurableOutboxRepository {
              WHERE event_id = ? AND status IN ('SENDING','SYNCED_MASTER','APPLIED_ERP')`,
             [timestamp, timestamp, eventId]
         );
+        await this.database.fiscalReturnStore?.acknowledgeApplied(eventId);
+        void import('../fiscal/FiscalReturnCreditApplication').then(m=>m.refreshPendingReturnCustomerProjections()).catch(()=>undefined);
         syncMetrics.markErpApplied(timestamp);
         await this.refreshMetrics();
+    }
+
+    async hasPendingReturnEvents():Promise<boolean>{
+        if(!this.isSupported())return false;
+        const result=await this.requireSql()("SELECT 1 present FROM sync_outbox_v2 WHERE json_extract(payload_json,'$.fiscalReturnContract.profile')='ORDINARY_RETURN_DOP_V1' AND status IN('PENDING','SENDING','RETRY_WAIT','SYNCED_MASTER') LIMIT 1");
+        return rowsFromResult(result).length>0;
     }
 
     async hasPendingTrackingEvents():Promise<boolean>{

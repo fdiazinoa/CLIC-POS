@@ -1,3 +1,7 @@
+import {isElectronicFiscalDocument,isOrdinaryElectronicReturnSource} from '../utils/returnSettlementEligibility';
+import {captureFiscalStatusBoundContext} from '../services/fiscal/FiscalBoundContext';
+import {loadReturnSettlementSelection} from '../services/fiscal/FiscalReturnSettlementUI';
+import type {ReturnSettlementDestination} from '../services/fiscal/FiscalReturnV1';
 import {createUuid} from '../utils/uuid';
 import { formatQuantity } from '../utils/quantityPresentation';
 import { displayWeightQuantity, displayWeightPrice, canonicalWeightQuantity, formatWeightNumber } from '../utils/scaleWeight';
@@ -43,6 +47,8 @@ export const RefundModal: React.FC<RefundModalProps> = ({
     const [submitting,setSubmitting] = useState(false);
     const [submitError,setSubmitError] = useState('');
     const [reason, setReason] = useState('Devolución de Cliente');
+    const [settlementState,setSettlementState]=useState<Awaited<ReturnType<typeof loadReturnSettlementSelection>>|null>(null);
+    const [settlementDestination,setSettlementDestination]=useState<ReturnSettlementDestination>('ORIGINAL_PAYMENT');
     const fiscalOperationRef=useRef(createUuid());const [fiscalCode,setFiscalCode]=useState<''|'1'|'2'|'3'>('');const [fiscalKind,setFiscalKind]=useState<'RETURN'|'VOID'>('RETURN');
 
     useEffect(() => {
@@ -68,6 +74,15 @@ export const RefundModal: React.FC<RefundModalProps> = ({
             setReason('');
         }
     }, [isOpen, mode, remainingQuantities, transaction]);
+
+    let settlementContext='';try{if(isOpen)settlementContext=captureFiscalStatusBoundContext().fingerprint;}catch{/* Binding unavailable: no new settlement choice. */}
+    useEffect(()=>{
+        let cancelled=false;setSettlementState(null);setSettlementDestination('ORIGINAL_PAYMENT');
+        if(isOpen&&isOrdinaryElectronicReturnSource(transaction,mode)){
+            void loadReturnSettlementSelection(transaction).then(value=>{if(!cancelled){setSettlementState(value);setSettlementDestination(value.destination);if(value.locked&&value.requestedLines){setRefundQuantities(new Map(value.requestedLines.map((l:any)=>[l.cartId,l.quantity])));setItemConditions(new Map(value.requestedLines.map((l:any)=>[l.cartId,l.stockDisposition==='DAMAGED'?'DAMAGED':'SELLABLE'])));setReason(value.reason||'');}}}).catch(()=>{});
+        }
+        return()=>{cancelled=true;};
+    },[isOpen,transaction?.id,settlementContext]);
 
     if (!isOpen || !transaction) return null;
 
@@ -115,7 +130,7 @@ export const RefundModal: React.FC<RefundModalProps> = ({
 
     const totalRefundAmount = transaction.items.reduce((sum, item) => {
         const qty = refundQuantities.get(item.cartId) || 0;
-        return sum + (item.price * qty);
+        return sum + ((isOrdinaryElectronicReturnSource(transaction,mode)&&item.quantity>0)?Number(item.totalAmount??item.price*item.quantity)*qty/item.quantity:item.price*qty);
     }, 0);
 
     const isFullRefund = transaction.items.every(item =>
@@ -134,7 +149,7 @@ export const RefundModal: React.FC<RefundModalProps> = ({
             }));
 
         if((transaction as any).articleFormatWire?.schema_version===2&&!fiscalCode)throw Error('Selecciona el motivo fiscal de la nota de crédito.');
-        await onConfirm(transaction, itemsToRefund, itemConditions, reason || 'Devolución General',(transaction as any).articleFormatWire?.schema_version===2?{fiscalOperationId:fiscalOperationRef.current,fiscalOperationKind:fiscalKind,fiscalModificationCode:fiscalCode as '1'|'2'|'3'}:undefined);
+        await onConfirm(transaction, itemsToRefund, itemConditions, reason || 'Devolución General',(transaction as any).articleFormatWire?.schema_version===2?{fiscalOperationId:fiscalOperationRef.current,fiscalOperationKind:fiscalKind,fiscalModificationCode:fiscalCode as '1'|'2'|'3'}:settlementState?.enabled||settlementState?.locked&&!settlementState.legacyPending?{returnSettlementDestination:settlementDestination}:undefined);
         } catch(error) { setSubmitError(describeV3Error(error)); }
         finally { submittingRef.current=false; setSubmitting(false); }
     };
@@ -170,7 +185,7 @@ export const RefundModal: React.FC<RefundModalProps> = ({
                     <div className="mb-6 flex gap-4 p-4 bg-blue-50/50 border border-blue-100 rounded-xl items-start">
                         <AlertTriangle className="text-blue-500 shrink-0 mt-0.5" size={18} />
                         <div className="text-sm text-blue-800">
-                            <p className="font-bold mb-1">{isGatewayRefundMode ? 'Refund AZUL + Nota de Crédito Fiscal (B04)' : 'Nota de Crédito Fiscal (B04)'}</p>
+                            <p className="font-bold mb-1">{isGatewayRefundMode ? 'Refund AZUL + Nota de Crédito Fiscal (B04)' : `Nota de Crédito Fiscal (${isElectronicFiscalDocument(transaction)?'E34':'B04'})`}</p>
                             <p className="opacity-80">
                                 {isGatewayRefundMode
                                     ? 'Este flujo ejecutará el refund total en AZUL y luego generará la nota de crédito vinculada a este comprobante.'
@@ -179,7 +194,7 @@ export const RefundModal: React.FC<RefundModalProps> = ({
                         </div>
                     </div>
 
-                    <fieldset disabled={submitting}><table className="w-full text-left border-collapse">
+                    <fieldset disabled={submitting||settlementState?.locked}><table className="w-full text-left border-collapse">
                         <thead>
                             <tr className="text-xs font-bold text-gray-400 uppercase border-b border-gray-100">
                                 <th className="pb-3 pl-2">Producto</th>
@@ -288,7 +303,7 @@ export const RefundModal: React.FC<RefundModalProps> = ({
                             <button
                                 type="button"
                                 onClick={selectAll}
-                                disabled={submitting || !hasAvailableBalance}
+                                disabled={submitting || settlementState?.locked || !hasAvailableBalance}
                                 className="inline-flex items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-black text-blue-700 transition-colors hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
                             >
                                 <ListChecks size={17} /> Seleccionar todos
@@ -299,11 +314,21 @@ export const RefundModal: React.FC<RefundModalProps> = ({
                         </div>
                     )}
 
+                    {(settlementState?.enabled||settlementState?.locked)&&<div className="mb-4 rounded-xl border border-blue-200 bg-blue-50 p-3">
+                        {settlementState.legacyPending?<p>Se recuperará la operación anterior sin cambiar su liquidación.</p>:<>
+                        <label className="block font-bold">Destino de la devolución</label>
+                        <select aria-label="Destino de la devolución" disabled={submitting||settlementState.locked} value={settlementDestination} onChange={e=>setSettlementDestination(e.target.value as ReturnSettlementDestination)} className="w-full rounded border p-2">
+                            <option value="ORIGINAL_PAYMENT">Reembolsar por la forma de pago original</option>
+                            <option value="CUSTOMER_CREDIT" disabled={!settlementState.customerId}>Saldo a favor del cliente original</option>
+                        </select><p className="mt-2 text-xs">El ERP reduce primero la deuda y autoriza el importe de reembolso o saldo. No se entrega dinero por el saldo a favor.</p>
+                        {settlementState.prepared&&<p className="mt-2 text-sm">Autorizado: deuda DOP {settlementState.prepared.debtReduction.toFixed(2)} · reembolso DOP {settlementState.prepared.refundAmount.toFixed(2)} · saldo DOP {settlementState.prepared.customerCreditAmount.toFixed(2)}</p>}
+                        </>}
+                    </div>}
                     <div className="mt-6">
                         <label className="block text-xs font-bold text-gray-500 uppercase mb-2">Motivo de la Devolución</label>
                         <input
                             type="text"
-                            disabled={submitting} value={reason}
+                            disabled={submitting||settlementState?.locked} value={reason}
                             onChange={(e) => setReason(e.target.value)}
                             placeholder="Ej: Producto defectuoso, cambio de opinión..."
                             className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all"
@@ -316,10 +341,11 @@ export const RefundModal: React.FC<RefundModalProps> = ({
                 {/* Footer */}
                 <div className="p-6 border-t border-gray-100 bg-gray-50 rounded-b-2xl flex justify-between items-center">
                     <div>
-                        <p className="text-xs font-bold text-gray-400 uppercase">Total a Reembolsar</p>
+                        <p className="text-xs font-bold text-gray-400 uppercase">{isOrdinaryElectronicReturnSource(transaction,mode)?'Importe seleccionado de la devolución':'Total a Reembolsar'}</p>
                         <p className="text-2xl font-black text-red-600">
                             {currencySymbol}{totalRefundAmount.toFixed(2)}
                         </p>
+                        {isOrdinaryElectronicReturnSource(transaction,mode)&&<p className="text-xs text-gray-500">Estimación de la factura original. El ERP autoriza la deuda, el reembolso o el saldo final.</p>}
                         {isFullRefund && refundQuantities.size > 0 && (
                             <span className="text-[10px] font-bold bg-red-100 text-red-600 px-2 py-0.5 rounded-md">
                                 {isGatewayRefundMode ? 'REFUND TOTAL AZUL' : 'ANULACIÓN TOTAL'}

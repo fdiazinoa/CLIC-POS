@@ -264,6 +264,7 @@ class BackgroundSyncManager {
             return false;
         }
 
+        if(collectionName==='transactions'&&item?.documentType==='REFUND'&&item?.ncfType==='E34'&&item?.fiscalWorkflowCheckoutId)return false; // RETURN owns its original Outbox envelope.
         if(item?.trackingCheckoutId)return false; // Tracking is owned by its atomic Outbox, including when the legacy rollout flag is off.
         const status = item?.syncStatus;
         if (collectionName === 'catalogEdits' && status === 'PENDING') {
@@ -406,7 +407,7 @@ class BackgroundSyncManager {
                 }
             }
 
-            const durableBatchActive = isSyncFeatureEnabled('sqlite_outbox_v2')||await durableOutboxRepository.hasPendingTrackingEvents();
+            const durableBatchActive = isSyncFeatureEnabled('sqlite_outbox_v2')||await durableOutboxRepository.hasPendingTrackingEvents()||await durableOutboxRepository.hasPendingReturnEvents();
             if (durableBatchActive) {
                 const batch = await durableOutboxBatchSender.sendNext();
                 if (batch.retrying > 0) {
@@ -701,7 +702,7 @@ class BackgroundSyncManager {
     }
 
     private async updatePendingCount(collectionOverride?: string[]) {
-        const durableBatchActive = isSyncFeatureEnabled('sqlite_outbox_v2')||await durableOutboxRepository.hasPendingTrackingEvents();
+        const durableBatchActive = isSyncFeatureEnabled('sqlite_outbox_v2')||await durableOutboxRepository.hasPendingTrackingEvents()||await durableOutboxRepository.hasPendingReturnEvents();
         let count = 0;
         let blockedCount = 0;
         let oldestCreatedAt: number | null = null;

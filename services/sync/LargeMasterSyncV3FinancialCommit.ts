@@ -1,3 +1,4 @@
+import {returnContract,returnNeed,type ReturnAttempt} from '../fiscal/FiscalReturnV1';
 import {hasOfflineFiscalHeader} from '../fiscal/OfflineFiscalCharge';
 import {captureTrackingSourceMetadata} from '../tracking/TrackingSourceMetadata';
 import {isOfflineTableFiscalTransaction,assertTableFiscalSaleContext} from '../fiscal/OfflineTableFiscalCheckout';
@@ -176,6 +177,9 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
     };
     for (let index = 0; index < entries.length; index++) {
     let { transaction, options = {} } = entries[index];
+    const returnAttempt=options.fiscalReturnAttemptId ? await dbAdapter.fiscalReturnStore?.get(options.fiscalReturnAttemptId) : null;
+    if(transaction.documentType==='REFUND'&&transaction.ncfType==='E34'&&!(transaction as any).articleFormatWire)returnNeed(returnAttempt,'FISCAL_RETURN_PREPARATION_REQUIRED');
+    if(options.fiscalReturnAttemptId)returnNeed(returnAttempt?.phase==='SEALED'&&returnAttempt.preparation?.transactionId===transaction.id,'FISCAL_RETURN_PREPARATION_REQUIRED');
     const dispatch=transaction.inventoryEffectsContract==='WAREHOUSE_RESERVATION_V1';
     if(dispatch&&(entries.length!==1||options.refund||!transaction.companyDispatchSource?.checkoutId))throw Error('DISPATCH_SINGLE_FINANCIAL_SOURCE_REQUIRED');
     const stamp = transaction.items[0]?.v3SaleAuthority;
@@ -200,6 +204,12 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
     }
     const trackingSelections=dispatch?[]:transaction.items.flatMap(line=>line.trackingData||[]);
     if(trackingSelections.length){if(!transaction.trackingCheckoutId||options.refund)throw Error('TRACKING_CHECKOUT_SOURCE_REQUIRED');trackingCommits.push({checkoutId:transaction.trackingCheckoutId,transactionId:transaction.id,selections:trackingSelections});}
+    if(returnAttempt){
+      const series=await db.getDocument('internalSequences',transaction.seriesId!) as any;
+      const numbering=planFinancialNumbers({seriesId:transaction.seriesId,documentType:'REFUND',global:false},series,undefined);
+      transaction={...transaction,displayId:numbering.result.displayId,seriesNumber:numbering.result.seriesNumber};
+      documents.push({collectionName:'internalSequences',document:numbering.series!,expectedDocument:JSON.stringify(series)});
+    }
     if(transaction.fiscalAllocationAuthorizationId){
       if(entries.length!==1||!transaction.fiscalWorkflowCheckoutId||!dbAdapter.fiscalWorkflowStore?.allocationCommitPreconditions)throw Error('OFFLINE_FISCAL_NATIVE_REQUIRED');
       const checkout=await dbAdapter.fiscalWorkflowStore.readCheckout(transaction.fiscalWorkflowCheckoutId);if(!checkout?.allocation)throw Error('OFFLINE_FISCAL_ALLOCATION_REQUIRED');
@@ -246,8 +256,9 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
         || await db.getDocument('customers', document.customerId) as Customer | null;
       if (!customer) throw new LargeMasterSyncV3Error('SYNC_V3_CREDIT_CUSTOMER_REQUIRED');
       customerBefore = customer;
-      const reduction = options.adjustCustomerBalance && options.original?.pendingBalance
+      const reduction = returnAttempt ? Number(returnAttempt.preparation!.returnSnapshot.pendingBalance) : options.adjustCustomerBalance && options.original?.pendingBalance
         ? Math.min(customer.currentDebt || 0, document.total) : 0;
+      if(returnAttempt)returnNeed(reduction>=0&&reduction<=Number(customer.currentDebt||0),'FISCAL_RETURN_CUSTOMER_BALANCE_CONFLICT');
       if (options.adjustCustomerBalance && !options.skipWalletDeposit) walletDelta += document.total - reduction;
       customerUpdate = { ...customer, currentDebt: Math.round(((customer.currentDebt || 0) + debtAddition - reduction) * 100) / 100 };
     }
@@ -304,7 +315,7 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
       }
       documents.push(...originalMutations);
     }
-    if (dispatch||isSyncFeatureEnabled('sqlite_outbox_v2')||document.items.some(line=>line.trackingData?.length)) {
+    if (returnAttempt||dispatch||isSyncFeatureEnabled('sqlite_outbox_v2')||document.items.some(line=>line.trackingData?.length)) {
       if (options.refund) {
         const fiscalSourceMetadata = {...captureNewV3FiscalSourceMetadata(document,projected,session.binding,{refund:true,retained:Boolean(retained),offlineTableAccount:false}),...captureTrackingSourceMetadata(document,projected)};
         const paymentIntentIds = (document.payments || []).map((payment: any) => payment.paymentIntentId).filter(Boolean);
@@ -316,13 +327,14 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
           fiscalWorkflowBirth={schemaVersion:3,authorizationKind:'OFFLINE_FISCAL_ALLOCATION_V2',authorizationId:checkout.allocation.authorizationId,authorityHash:checkout.allocation.authorityHash,checkoutId:checkout.checkoutId,transactionId:checkout.transactionId};
           fiscalWorkflowCommits.push({checkoutId:checkout.checkoutId,transactionId:document.id,birth:fiscalWorkflowBirth});
         }
-        events.push({ eventId: createUuid(), eventType: 'SALES_CREDIT_NOTE_POSTED', aggregateType: 'TRANSACTION',
+        events.push({ eventId: returnAttempt?.financialEventId || createUuid(), eventType: 'SALES_CREDIT_NOTE_POSTED', aggregateType: 'TRANSACTION',
             aggregateId: document.id, schemaVersion: 1,
-            payload: buildSalePostedPayload(document, { ...fiscalSourceMetadata, ...(fiscalWorkflowBirth?{fiscalWorkflowBirth}:{}), inventoryMovementIds: ledger.map(row => row.id), paymentIntentIds,
+            payload: buildSalePostedPayload(document, { ...fiscalSourceMetadata, ...(returnAttempt?{fiscalReturnContract:returnContract(returnAttempt),tenant_id:returnAttempt.scope.tenantId,company_id:returnAttempt.scope.companyId,store_id:returnAttempt.scope.storeId,terminal_id:returnAttempt.scope.terminalId,device_id:returnAttempt.scope.deviceId}:{}), ...(fiscalWorkflowBirth?{fiscalWorkflowBirth}:{}), inventoryMovementIds: ledger.map(row => row.id), paymentIntentIds,
               // Goes straight to the ERP journal NOTA; it is audit evidence, never financial identity.
               ...(options.taxClassificationNotice?.length ? { v3TaxClassificationNotice: options.taxClassificationNotice } : {}) }), createdAt: document.date });
-        const paymentPosted = buildPaymentPostedPayload(document, { ...fiscalSourceMetadata, paymentIntentIds });
-        if (paymentPosted) events.push({ eventId: createUuid(), eventType: 'PAYMENT_POSTED',
+        const paymentPosted = buildPaymentPostedPayload(document, { ...fiscalSourceMetadata, ...(returnAttempt?{fiscalReturnContract:returnContract(returnAttempt),tenant_id:returnAttempt.scope.tenantId,company_id:returnAttempt.scope.companyId,store_id:returnAttempt.scope.storeId,terminal_id:returnAttempt.scope.terminalId,device_id:returnAttempt.scope.deviceId}:{}), paymentIntentIds });
+        if(paymentPosted&&returnAttempt)(paymentPosted as any).payments=returnAttempt.preparation!.returnSnapshot.paymentCommands;
+        if (paymentPosted && (!returnAttempt || returnAttempt.preparation!.returnSnapshot.paidAmount>0)) events.push({ eventId: returnAttempt?.paymentEventId || createUuid(), eventType: 'PAYMENT_POSTED',
             aggregateType: 'TRANSACTION', aggregateId: document.id, schemaVersion: 1, payload: paymentPosted, createdAt: document.date });
         intentIds.push(...paymentIntentIds);
       } else {

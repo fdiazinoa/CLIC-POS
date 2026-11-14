@@ -1,3 +1,4 @@
+import {returnSettlementLines} from '../fiscal/ReturnSettlementPresentation';
 import {isVerifiedFiscalPrintDisplay,fiscalPrintTransaction,type FiscalPrintDisplay,isVerifiedFiscalAcceptance,type VerifiedFiscalAcceptance} from '../fiscal/FiscalPrintEvidence';
 import { terminalQuantityPresentation } from '../../utils/quantityPresentation';
 import { weightLineLabel } from '../../utils/scaleWeight';
@@ -146,12 +147,14 @@ export const buildReceiptEmailPayload = (
     };
   });
 
+  const sealedReturnLines=returnSettlementLines(transaction);
   transaction=fiscalPrintTransaction(transaction,fiscalPrint);
   return {
     email,
     cart,
     total: Number(transaction.total || 0),
-    paymentMethod: transaction.payments?.[0]?.method || 'CASH',
+    paymentMethod: transaction.returnSettlementV1?sealedReturnLines.join(' | '):transaction.payments?.[0]?.method || 'CASH',
+    ...(transaction.returnSettlementV1?{returnSettlementV1:transaction.returnSettlementV1,returnSettlementLines:sealedReturnLines}:{}),
     payments: (transaction.payments || []).map(payment => buildReceiptEmailPayment(payment, baseCurrencyCode)),
     transactionId: transaction.displayId || transaction.id || 'PENDING-ID',
     ncf: transaction.ncf || transaction.electronicNcf,

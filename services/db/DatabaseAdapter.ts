@@ -84,6 +84,10 @@ export interface NumberedMasterCommitResult {
 }
 
 export interface FinancialNumberReservation {
+    /** Durable, scoped retry identity; persisted atomically with the counters. */
+    retryKey?: string;
+    retryFingerprint?: string;
+    fiscalIssuance?: import('../../types').FiscalIssuanceSnapshot;
     seriesId?: string;
     documentType?: string;
     global: boolean;
@@ -91,6 +95,8 @@ export interface FinancialNumberReservation {
         expectedConfig:string;expectedBuffer:string;expectedAllocation:string;expectedRange:string};
 }
 export interface FinancialNumberResult {
+    reservedAt?: string;
+    fiscalIssuance?: import('../../types').FiscalIssuanceSnapshot;
     ncf?: string;
     globalSequence?: number;
     seriesNumber?: number;
@@ -99,6 +105,8 @@ export interface FinancialNumberResult {
 }
 
 export interface DatabaseAdapter {
+    readonly fiscalCreditApplicationStore?: import('./NativeFiscalCreditApplicationStore').NativeFiscalCreditApplicationStore;
+    readonly fiscalReturnStore?: import('./NativeFiscalReturnStore').NativeFiscalReturnStore;
     connect(): Promise<void>;
     disconnect(): Promise<void>;
     articleFormatSQL?():import('../articleFormats/store').FormatSQL;

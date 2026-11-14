@@ -8,8 +8,8 @@ async function handler(onConfirm:()=>Promise<unknown>){
  const segment=source.slice(source.indexOf('    const handleConfirm ='),source.indexOf('\n    return (',source.indexOf('    const handleConfirm =')));
  const code=(await transform(segment,{loader:'ts'})).code;
  const ref={current:false},states:boolean[]=[],errors:string[]=[];
- const create=new Function('f',`const {submittingRef,setSubmitting,setSubmitError,transaction,refundQuantities,itemConditions,reason,onConfirm,describeV3Error}=f;${code};return handleConfirm;`);
- return{ref,states,errors,run:create({submittingRef:ref,setSubmitting:(value:boolean)=>states.push(value),setSubmitError:(value:string)=>errors.push(value),transaction:{items:[{cartId:'L',quantity:1}]},refundQuantities:new Map([['L',1]]),itemConditions:new Map(),reason:'Return',onConfirm,describeV3Error})};
+ const create=new Function('f',`const {submittingRef,setSubmitting,setSubmitError,transaction,refundQuantities,itemConditions,reason,onConfirm,describeV3Error,settlementState,settlementDestination}=f;${code};return handleConfirm;`);
+ return{ref,states,errors,run:create({submittingRef:ref,setSubmitting:(value:boolean)=>states.push(value),setSubmitError:(value:string)=>errors.push(value),transaction:{items:[{cartId:'L',quantity:1}]},refundQuantities:new Map([['L',1]]),itemConditions:new Map(),reason:'Return',onConfirm,describeV3Error,settlementState:null,settlementDestination:'ORIGINAL_PAYMENT'})};
 }
 test('same-tick duplicate Confirm spans slow approval/preparation/commit and finally unlocks',async()=>{
  let release!:()=>void,calls=0;const pending=new Promise<void>(resolve=>release=resolve);

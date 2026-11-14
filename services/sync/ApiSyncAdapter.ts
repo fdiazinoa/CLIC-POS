@@ -1,3 +1,4 @@
+import {createFiscalReturnTransport} from '../fiscal/FiscalReturnConsumer';
 import {CAJA6_FISCAL_SCOPE} from '../fiscal/Caja6FiscalPreparationPolicy';
 import {serializeBindingAuthExchange,fetchBindingAuthOnce,captureNormalBindingAuthAttempt,persistBindingAuthResponse,recoverBindingAuthEvidence,type BindingAuthAttempt} from './BindingAuthEvidencePersistence';
 import {validateBoundSessionAuthResponse} from './Caja6BoundSessionAuth';
@@ -6179,6 +6180,7 @@ export class ApiSyncAdapter {
     async pushDurableOutboxBatch(events: object[]): Promise<any> {
         if (!events.length) return { results: [] };
         if (events.length > 50) throw new Error('BATCH_EVENT_LIMIT_EXCEEDED');
+        if(events.some((event:any)=>event.payload?.fiscalReturnContract?.profile==='ORDINARY_RETURN_DOP_V1'))return createFiscalReturnTransport().deliver(events);
         const eventIds = events.map(event => String((event as any).eventId || (event as any).id || '')).filter(Boolean);
         return this.postOperationalPayload('/inbox/batch', { events }, {
             inventoryPresentations: events.some((event:any)=>event.eventType==='SALE_POSTED'&&event.payload?.transaction?.inventoryPresentationContract===1),
