@@ -1,3 +1,4 @@
+import {DISPATCH_POOL_INSTALL_SCHEMA} from '../services/db/CompanyDispatchPool';
 import {COMPANY_DISPATCH_ESCROW_SCHEMA} from '../services/db/CompanyDispatchEscrowStore';
 import test from 'node:test';import assert from 'node:assert/strict';import {DatabaseSync} from 'node:sqlite';
 import {NativeFiscalWorkflowV2Store,FISCAL_WORKFLOW_V2_SCHEMA,reserveFiscalWorkflowCheckoutInTransaction} from '../services/db/FiscalWorkflowV2Store';
@@ -45,10 +46,10 @@ import {readFileSync} from 'node:fs';
 import ts from 'typescript';
 import {assertFiscalWorkflowCheckoutReplay} from '../services/fiscal/FiscalWorkflowCheckoutReplay';
 const recoveryBase='https://erp.example.invalid/api/sync';
-async function recoveryClient(f:ReturnType<typeof fixture>){
+async function recoveryClient(f:ReturnType<typeof fixture>,readOfflineAuthority?:()=>Promise<any>){
  const headers={'X-Tenant-Id':'tenant','X-Terminal-Id':'terminal','X-Device-Id':'device','X-Sync-Token':'recovery-fixture'};
  observeFiscalWorkflowCapability(recoveryBase,headers,'2');let requests=0;
- const client=createFiscalWorkflowV2Client({store:()=>f.store,readAuth:()=>({base:recoveryBase,headers,descriptor:scope,assertCurrent(){}}),
+ const client=createFiscalWorkflowV2Client({store:()=>f.store,...(readOfflineAuthority?{readOfflineAuthority}:{}),readAuth:()=>({base:recoveryBase,headers,descriptor:scope,assertCurrent(){}}),
   fetchImpl:async()=>{requests++;return {ok:true,json:async()=>({schemaVersion:2,authorityHash:'a'.repeat(64),permits:[f.permit(1),f.permit(2),f.permit(3)]})} as Response;}} as any);
  await client.prefetch();return {client,requests:()=>requests};
 }
@@ -91,12 +92,21 @@ test('native recovery rejects incomplete/forged expected tuples with zero attemp
 });
 
 test('actual remounted prepayment callback adopts returned durable op then one cash birth/ACK replays without another effect',async()=>{
- const f=fixture();try{const c=await recoveryClient(f),cart=[{id:'item',cartId:'line',quantity:1,price:748.8}],cartIdentity=JSON.stringify({items:cart,customerId:null,fiscalType:'E32'});
+ const f=fixture();try{
+  // The extracted callback now reads the native dispatch boundary before an ordinary
+  // fiscal sale. Install its real query schema and observe SQL without replacing it.
+  f.sql.exec(DISPATCH_POOL_INSTALL_SCHEMA);
+  const nativeQueries:string[]=[],nativeQuery=f.bridge.query;
+  f.bridge.query=async(q:string,v:any[]=[])=>{nativeQueries.push(q);return nativeQuery(q,v);};
+  const localAuthority={scope,issuerRnc:'101010101',environment:0,bindingHash:'b'.repeat(64)};
+  const c=await recoveryClient(f,async()=>localAuthority),cart=[{id:'item',cartId:'line',quantity:1,price:748.8}],cartIdentity=JSON.stringify({items:cart,customerId:null,fiscalType:'E32'});
+  assert.equal(await c.client.offlineReady(),false);
+  for(const table of ['pos_offline_fiscal_leases_v1','pos_offline_fiscal_allocations_v2'])assert.equal((f.sql.prepare('SELECT count(*) n FROM '+table).get() as any).n,0);
   const original=await c.client.reserveCheckout(cartIdentity,'interrupted-operation',{requirePermit:true});
   const text=readFileSync(new URL('../components/POSInterface.tsx',import.meta.url),'utf8'),ast=ts.createSourceFile('POSInterface.tsx',text,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);let arrow:any;
   function visit(n:ts.Node){if(ts.isVariableDeclaration(n)&&n.name.getText(ast)==='beforeV3PaymentEffects')arrow=n.initializer;ts.forEachChild(n,visit);}visit(ast);
   const updates:any[]=[],checkoutRef:any={current:null},operationRef:any={current:null};let validation=0;
-  const context:any={completedReservationForReceipt:async()=>null,assertCheckoutFiscalAuthority:async()=>{},hasV3ReservationCart:false,activeV3Reservation:null,selectedCustomer:null,
+  const context:any={dbAdapter:f.adapter,dispatchProjection:null,dispatchCheckoutRef:{current:null},completedReservationForReceipt:async()=>null,assertCheckoutFiscalAuthority:async()=>{},hasV3ReservationCart:false,activeV3Reservation:null,selectedCustomer:null,
    v3Operational:{validate:async()=>{validation++;}},fiscalCompliance:{mode:'ECF'},fiscalWorkflowV2Client:c.client,getDefaultFiscalProvider:()=> 'MSELLER',config:{},activeTerminalConfig:{},terminalId:'terminal',
    activeRecoveredReservation:null,activeDirectV3TicketId:null,activeTable:null,activePaymentFraction:null,isIntermediateFractionPayment:false,nextPaymentFractionPart:undefined,paymentFractionPartProofRef:{current:null},parkedTicketsRef:{current:[]},onUpdateParkedTicketsRef:{current:async()=>{}},createPaymentFractionPartProof:()=>({receiptId:'receipt',operationId:'operation'}),paymentFractionPlanFingerprint:()=> 'fingerprint',processedCart:cart,cart,fiscalCheckoutRef:checkoutRef,fiscalCheckoutOperationRef:operationRef,offlineTableFiscalContextRef:{current:undefined},offlineTablePaymentFenceRef:{current:false},
    currentFiscalCheckoutCartIdentity:()=>cartIdentity,onUpdateCart:(items:any[])=>updates.push(items),createUuid:()=> 'fresh-ui-operation',setLargeMasterSyncV3CriticalOperation:()=>{},
@@ -106,6 +116,9 @@ test('actual remounted prepayment callback adopts returned durable op then one c
   assert.deepEqual(first.futureCheckout,{checkoutId:original.checkoutId,transactionId:original.transactionId,operationId:original.operationId});assert.deepEqual(repeat.futureCheckout,first.futureCheckout);
   assert.equal(operationRef.current,'interrupted-operation');assert.ok(updates.every(rows=>rows.every((row:any)=>row.fiscalCheckoutOperationId==='interrupted-operation')));assert.equal(validation,2);
   assert.equal((f.sql.prepare('SELECT count(*) n FROM pos_fiscal_checkouts_v2').get() as any).n,1);assert.equal(c.requests(),1);
+  assert.ok(nativeQueries.filter(q=>q.includes('FROM pos_dispatch_precharge_v1')).length>=2);
+  assert.ok(nativeQueries.filter(q=>q.includes('SELECT p.state FROM pos_dispatch_pool_v1')).length>=2);
+  for(const table of ['pos_dispatch_precharge_v1','pos_dispatch_pool_install_v1','pos_dispatch_active_pool_v1'])assert.equal((f.sql.prepare('SELECT count(*) n FROM '+table).get() as any).n,0);
   const tx={...transaction(original),items:cart,total:748.8,netAmount:748.8};await f.adapter.commitFinancialTransaction(commit(original,tx));
   await assert.rejects(f.adapter.commitFinancialTransaction(commit(original,tx)),/DUPLICATE/);
   const receipt=(await invoke()).completedTransaction;assert.equal(receipt.id,original.transactionId);await c.client.acknowledge(await f.store.readCheckout(original.checkoutId) as any);

@@ -9,6 +9,7 @@ import { assertFormatsPostingClosed } from './articleFormats/activation';
 type RefundCondition = 'SELLABLE' | 'DAMAGED';
 
 interface PersistRefundOptions {
+  fiscalReturnAttemptId?:string;
   warehouseId: string;
   terminalId?: string;
   originalTransaction?: Transaction | null;
@@ -100,7 +101,7 @@ export async function persistStandaloneRefundTransaction(
       syncStatus: 'PENDING' as const,
     } : undefined;
     const result = await persistV3FinancialTransaction(persistedRefund, config, options.warehouseId,
-      { refund: true, conditions: options.conditions, original: updatedOriginal,
+      { fiscalReturnAttemptId:options.fiscalReturnAttemptId, refund: true, conditions: options.conditions, original: updatedOriginal,
         expectedOriginal: expectedOriginal || undefined, expectedOriginalHistory, originalCollection,
         adjustCustomerBalance: options.adjustCustomerBalance, skipWalletDeposit: options.skipWalletDeposit,
         taxClassificationNotice: options.taxClassificationNotice });
