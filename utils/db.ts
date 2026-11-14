@@ -16,6 +16,7 @@ import {
   DEFAULT_ROLES, DEFAULT_TERMINAL_CONFIG, DEFAULT_DOCUMENT_SERIES
 } from '../constants';
 import { dbAdapter } from '../services/db';
+import { isDeferredFiscalReservation, markDeferredFiscalReservation } from '../services/fiscal/DeferredFiscalReservation';
 import { Capacitor } from '@capacitor/core';
 import { permissionService } from '../services/sync/PermissionService';
 import { mergeDocumentSeriesCollection, mergeIncomingDocumentSeriesWithoutRewind } from './documentSeriesIdentity';
@@ -578,6 +579,61 @@ const assertPersistedFiscalIssuer = async (type: FiscalDocumentCode): Promise<vo
   assertNewFiscalIssuer(business || {} as BusinessConfig, type);
 };
 
+/** Reserva de solo lectura: el NCF se elige, pero el recibo y el puntero se escriben
+ *  recién cuando la venta se compromete. Un intento fallido no quema el número y la
+ *  siguiente venta usa el mismo NCF (secuencia continua, sin saltos). */
+const reserveDeferredFiscalNumber = async (type: FiscalDocumentCode, terminalId: string, context?: TerminalConfig): Promise<{ ncf: string; fiscalIssuance: FiscalIssuanceSnapshot } | null> => {
+    await assertPersistedFiscalIssuer(type);
+    const [ranges, rawAllocations] = await Promise.all([
+      dbAdapter.getCollection<FiscalRangeDGII>('fiscalRanges'),
+      dbAdapter.getCollection<FiscalAllocation>('fiscalAllocations'),
+    ]);
+    const allocations = rawAllocations || [];
+    const policy = await resolveFiscalTerminalPolicy(terminalId, allocations, context);
+    if (!policy.enabled || !terminalId?.trim() || !policy.authorityId?.trim()) return null;
+    const authorityId = policy.authorityId || terminalId;
+    const allocation = getTerminalFiscalAllocation(allocations, authorityId, type as any);
+    if (!allocation || !isAllocationAllowedByPolicy(allocation, policy)) return null;
+    if (allocation.status !== 'ACTIVE') return null;
+    const rangesList = ranges || [];
+    if (!hasValidAllocatedFiscalRange(rangesList, allocation, type)) return null;
+    const range = getFiscalRangeForEmission(rangesList, type as any, allocation);
+    if (!range) return null;
+    const rawAllocation = allocations.find((candidate) => candidate.id === allocation.id);
+    if (!rawAllocation || !hasValidFiscalAllocationPointer(rawAllocation)) return null;
+    const buffers = await dbAdapter.getCollection<LocalFiscalBuffer>('localFiscalBuffer') || [];
+    const buffer = (buffers || []).find((candidate) =>
+      candidate.type === type &&
+      normalizeSequenceKey(candidate.terminalId) === normalizeSequenceKey(authorityId) &&
+      candidate.allocationId === allocation.id);
+    const pointer = Math.max(allocation.reservedStart, Number(allocation.nextNumber) || allocation.reservedStart);
+    // Mismas guardas que la reserva atómica: un buffer atrasado, ajeno o fuera de bloque
+    // no puede retroceder el puntero autoritativo del ERP.
+    const bufferUsable = Boolean(buffer &&
+      normalizeSequenceKey(buffer.terminalId) === normalizeSequenceKey(authorityId) &&
+      buffer.allocationId === allocation.id &&
+      buffer.fiscalRangeId === allocation.fiscalRangeId &&
+      buffer.prefix === (allocation.prefix || type) &&
+      buffer.expiryDate === (range.expiryDate || '') &&
+      Number.isSafeInteger(buffer.currentNumber) && Number.isSafeInteger(buffer.startNumber) && Number.isSafeInteger(buffer.endNumber) &&
+      buffer.currentNumber >= buffer.startNumber &&
+      buffer.startNumber >= allocation.reservedStart &&
+      buffer.endNumber <= allocation.reservedEnd &&
+      buffer.currentNumber >= pointer &&
+      buffer.currentNumber <= Math.min(buffer.endNumber, allocation.reservedEnd));
+    const candidate = bufferUsable && buffer ? buffer.currentNumber : pointer;
+    if (!Number.isSafeInteger(candidate) || candidate < allocation.reservedStart || candidate > allocation.reservedEnd) return null;
+    const prefix = range.prefix || allocation.prefix || type;
+    const ncf = formatFiscalNumber(type, prefix, candidate);
+    const synthetic: LocalFiscalBuffer = {
+      id: type, type: type as any, prefix, currentNumber: candidate, startNumber: candidate, endNumber: candidate,
+      expiryDate: range.expiryDate || '', terminalId: authorityId, fiscalRangeId: range.id, allocationId: allocation.id,
+    };
+    const storedBusiness = await dbAdapter.getCollection<BusinessConfig>('config');
+    const business = (Array.isArray(storedBusiness) ? storedBusiness[0] : storedBusiness) || {} as BusinessConfig;
+    markDeferredFiscalReservation(ncf);
+    return { ncf, fiscalIssuance: snapshotFiscalIssuance(business, range, allocation, synthetic, ncf) };
+};
 const reserveFiscalBatch = async (terminalId: string, type: FiscalDocumentCode, context?: TerminalConfig): Promise<LocalFiscalBuffer | null> => {
     await assertPersistedFiscalIssuer(type);
     const [ranges, rawAllocations] = await Promise.all([
@@ -1395,8 +1451,10 @@ export const db = {
       return;
     }
     if (transaction.ncf || transaction.ncfType) {
+      // Una reserva diferida (APK) aún no movió el puntero: el candidato ES allocation.nextNumber.
+      const deferred = Boolean(transaction.ncf && isDeferredFiscalReservation(transaction.ncf));
       if (!transaction.ncf || !transaction.ncfType || !transaction.terminalId ||
-          !await db.validatePreparedFiscalAuthority(transaction.ncfType, transaction.terminalId, transaction.ncf, context)) {
+          !await db.validatePreparedFiscalAuthority(transaction.ncfType, transaction.terminalId, transaction.ncf, context, deferred)) {
         throw new Error('FISCAL_TERMINAL_AUTHORITY_REQUIRED');
       }
       return;
@@ -1410,7 +1468,7 @@ export const db = {
     }
   },
 
-  validatePreparedFiscalAuthority: async (type: FiscalDocumentCode, terminalId: string, ncf: string, context?: TerminalConfig): Promise<boolean> => {
+  validatePreparedFiscalAuthority: async (type: FiscalDocumentCode, terminalId: string, ncf: string, context?: TerminalConfig, allowAtCursor = false): Promise<boolean> => {
     const allocations = await dbAdapter.getCollection<FiscalAllocation>('fiscalAllocations') || [];
     const policy = await resolveFiscalTerminalPolicy(terminalId, allocations, context);
     if (!policy.enabled || !terminalId?.trim() || !policy.authorityId?.trim()) return false;
@@ -1425,7 +1483,8 @@ export const db = {
     return Boolean(raw && hasValidFiscalAllocationPointer(raw) &&
       (allocation.status === 'ACTIVE' || allocation.status === 'EXHAUSTED') &&
       Number.isSafeInteger(number) && suffix.length === getFiscalSequencePadding(type) &&
-      number >= allocation.reservedStart && number <= allocation.reservedEnd && number < allocation.nextNumber);
+      number >= allocation.reservedStart && number <= allocation.reservedEnd &&
+      (number < allocation.nextNumber || (allowAtCursor && number === allocation.nextNumber)));
   },
 
   canRequestMoreNCF: async (type: FiscalDocumentCode, terminalId?: string, context?: TerminalConfig): Promise<boolean> => {
@@ -1456,7 +1515,9 @@ export const db = {
     return saved ? {ncf:saved.result.ncf,fiscalIssuance:saved.result.fiscalIssuance} : null;
   },
 
-  reserveFiscalNumber: (type: FiscalDocumentCode, terminalId: string, _customBatchSize?: number, context?: TerminalConfig, retryKey?: string,retryFingerprint?:string): Promise<{ncf:string;fiscalIssuance:FiscalIssuanceSnapshot} | null> => withFiscalIssueLock(async () => {
+  reserveFiscalNumber: (type: FiscalDocumentCode, terminalId: string, _customBatchSize?: number, context?: TerminalConfig, retryKey?: string,retryFingerprint?:string,deferUntilCommit?:boolean): Promise<{ncf:string;fiscalIssuance:FiscalIssuanceSnapshot} | null> => withFiscalIssueLock(async () => {
+    // APK y ventas: la reserva no escribe. El recibo y el puntero los escribe el commit.
+    if(deferUntilCommit && dbAdapter.reserveFinancialNumbers && !retryKey) return reserveDeferredFiscalNumber(type,terminalId,context);
     if(retryKey){
       if(!dbAdapter.reserveFinancialNumbers) throw Error('REFUND_DURABLE_NUMBERING_REQUIRED');
       const saved=await dbAdapter.getDocument<any>('refundNumberReservations',retryKey);
