@@ -209,6 +209,117 @@ test('actual legacy getNextNCF and format fiscal commit reserve distinct numbers
  const posting=f.posting.post(event,options);await entered.promise;const legacy=db.getNextNCF('B02',id(4));release.release();await posting;
  assert.equal(await legacy,'B0200000002');assert.equal(f.documents('localFiscalBuffer')[0].currentNumber,3);
 });
+
+test('deferred legacy reservation writes nothing until commit and a failed attempt reuses the same NCF',async t=>{
+ const {seedNativeFiscal}=await import('./articleFormatsNativeFixture');const f=await nativeFixture();t.after(()=>f.db.close());seedNativeFiscal(f);
+ const {dbAdapter}=await import('../services/db');const {db}=await import('../utils/db');
+ const names=['getCollection','saveCollection','getDocument','executeSQL','reserveFinancialNumbers'] as const;const originals=new Map(names.map(n=>[n,(dbAdapter as any)[n]]));
+ for(const n of names)(dbAdapter as any)[n]=(f.adapter as any)[n].bind(f.adapter);
+ t.after(()=>{for(const n of names){if(originals.get(n))(dbAdapter as any)[n]=originals.get(n);else delete (dbAdapter as any)[n];}});
+ const receipts=()=>f.documents('nativeFiscalReservations').length;
+ const first=await db.reserveFiscalNumber('B02',id(4),1,undefined,undefined,undefined,true);
+ assert.ok(first);const ncf=first!.ncf;
+ assert.equal(receipts(),0,'a deferred reservation must not write a receipt');
+ const retry=await db.reserveFiscalNumber('B02',id(4),1,undefined,undefined,undefined,true);
+ assert.equal(retry!.ncf,ncf,'a failed attempt must not burn the number');
+ const tx:any={id:id(60),terminalId:id(4),date:new Date().toISOString(),ncf,ncfType:'B02',fiscalIssuance:first!.fiscalIssuance};
+ await f.adapter.saveDocument('transactions',tx);
+ assert.equal(receipts(),1,'the sale commit writes exactly one receipt');
+ assert.equal(f.documents('nativeFiscalReservations')[0].ncf,ncf);
+ assert.equal(f.documents('nativeFiscalReservations')[0].transactionId,id(60));
+ const next=await db.reserveFiscalNumber('B02',id(4),1,undefined,undefined,undefined,true);
+ assert.notEqual(next!.ncf,ncf,'the next sale advances to the following number');
+});
+
+test('deferred legacy reservation commits its receipt through the financial commit path too',async t=>{
+ const {seedNativeFiscal}=await import('./articleFormatsNativeFixture');const f=await nativeFixture();t.after(()=>f.db.close());seedNativeFiscal(f);
+ const {dbAdapter}=await import('../services/db');const {db}=await import('../utils/db');
+ const names=['getCollection','saveCollection','getDocument','executeSQL','reserveFinancialNumbers'] as const;const originals=new Map(names.map(n=>[n,(dbAdapter as any)[n]]));
+ for(const n of names)(dbAdapter as any)[n]=(f.adapter as any)[n].bind(f.adapter);
+ t.after(()=>{for(const n of names){if(originals.get(n))(dbAdapter as any)[n]=originals.get(n);else delete (dbAdapter as any)[n];}});
+ const first=await db.reserveFiscalNumber('B02',id(4),1,undefined,undefined,undefined,true);
+ assert.equal(f.documents('nativeFiscalReservations').length,0);
+ const tx:any={id:id(61),terminalId:id(4),date:new Date().toISOString(),ncf:first!.ncf,ncfType:'B02',fiscalIssuance:first!.fiscalIssuance};
+ const event:any={eventId:id(71),eventType:'SALE_POSTED',aggregateType:'TRANSACTION',aggregateId:tx.id,schemaVersion:1,payload:{transaction:tx},createdAt:tx.date};
+ await f.adapter.commitFinancialTransaction({documents:[{collectionName:'transactions',document:tx,requireAbsent:true}],outboxEvent:event} as any);
+ assert.equal(f.documents('nativeFiscalReservations').length,1);
+ assert.equal(f.documents('nativeFiscalReservations')[0].ncf,first!.ncf);
+ assert.equal(f.documents('nativeFiscalReservations')[0].transactionId,id(61));
+});
+
+test('a failed deferred commit leaves the number unused and the retry writes exactly one receipt',async t=>{
+ const {seedNativeFiscal}=await import('./articleFormatsNativeFixture');const f=await nativeFixture();t.after(()=>f.db.close());seedNativeFiscal(f);
+ const {dbAdapter}=await import('../services/db');const {db}=await import('../utils/db');
+ const names=['getCollection','saveCollection','getDocument','executeSQL','reserveFinancialNumbers'] as const;const originals=new Map(names.map(n=>[n,(dbAdapter as any)[n]]));
+ for(const n of names)(dbAdapter as any)[n]=(f.adapter as any)[n].bind(f.adapter);
+ t.after(()=>{for(const n of names){if(originals.get(n))(dbAdapter as any)[n]=originals.get(n);else delete (dbAdapter as any)[n];}});
+ const first=await db.reserveFiscalNumber('B02',id(4),1,undefined,undefined,undefined,true);
+ const tx:any={id:id(62),terminalId:id(4),date:new Date().toISOString(),ncf:first!.ncf,ncfType:'B02',fiscalIssuance:first!.fiscalIssuance};
+ f.fault.failWrite=f.fault.writes;
+ await assert.rejects(f.adapter.saveDocument('transactions',tx));
+ assert.equal(f.documents('nativeFiscalReservations').length,0,'a rolled back commit writes no receipt');
+ assert.equal(f.documents('transactions').length,0,'a rolled back commit writes no sale');
+ f.fault.failWrite=undefined;
+ const retry=await db.reserveFiscalNumber('B02',id(4),1,undefined,undefined,undefined,true);
+ assert.equal(retry!.ncf,first!.ncf,'the failed number stays available');
+ await f.adapter.saveDocument('transactions',tx);
+ assert.equal(f.documents('nativeFiscalReservations').length,1);
+ assert.equal(f.documents('nativeFiscalReservations')[0].transactionId,id(62));
+});
+
+test('a deferred reservation never uses a stale local buffer behind the ERP pointer',async t=>{
+ const {seedNativeFiscal}=await import('./articleFormatsNativeFixture');const f=await nativeFixture();t.after(()=>f.db.close());const seeded=seedNativeFiscal(f);
+ const {dbAdapter}=await import('../services/db');const {db}=await import('../utils/db');
+ const names=['getCollection','saveCollection','getDocument','executeSQL','reserveFinancialNumbers'] as const;const originals=new Map(names.map(n=>[n,(dbAdapter as any)[n]]));
+ for(const n of names)(dbAdapter as any)[n]=(f.adapter as any)[n].bind(f.adapter);
+ t.after(()=>{for(const n of names){if(originals.get(n))(dbAdapter as any)[n]=originals.get(n);else delete (dbAdapter as any)[n];}});
+ await f.adapter.saveDocument('localFiscalBuffer',{...seeded.buffer,currentNumber:1,startNumber:1,endNumber:1});
+ await f.adapter.saveDocument('fiscalAllocations',{...seeded.allocation,nextNumber:3});
+ const reserved=await db.reserveFiscalNumber('B02',id(4),1,undefined,undefined,undefined,true);
+ assert.equal(reserved!.fiscalIssuance.sequence,3,'the authoritative pointer wins over a stale buffer');
+ assert.equal(reserved!.ncf,'B0200000003');
+});
+test('a second sale cannot reuse a committed NCF after the session marker was cleared',async t=>{
+ const {seedNativeFiscal}=await import('./articleFormatsNativeFixture');const f=await nativeFixture();t.after(()=>f.db.close());seedNativeFiscal(f);
+ const {dbAdapter}=await import('../services/db');const {db}=await import('../utils/db');
+ const names=['getCollection','saveCollection','getDocument','executeSQL','reserveFinancialNumbers'] as const;const originals=new Map(names.map(n=>[n,(dbAdapter as any)[n]]));
+ for(const n of names)(dbAdapter as any)[n]=(f.adapter as any)[n].bind(f.adapter);
+ t.after(()=>{for(const n of names){if(originals.get(n))(dbAdapter as any)[n]=originals.get(n);else delete (dbAdapter as any)[n];}});
+ const first=await db.reserveFiscalNumber('B02',id(4),1,undefined,undefined,undefined,true);
+ const tx1:any={id:id(63),terminalId:id(4),date:new Date().toISOString(),ncf:first!.ncf,ncfType:'B02',fiscalIssuance:first!.fiscalIssuance};
+ await f.adapter.saveDocument('transactions',tx1);
+ const tx2:any={...tx1,id:id(64)};
+ await assert.rejects(f.adapter.saveDocument('transactions',tx2),/ALREADY_ISSUED/);
+ assert.equal(f.documents('nativeFiscalReservations').length,1);
+});
+test('saveDocumentsAtomically also writes the deferred receipt with the sale',async t=>{
+ const {seedNativeFiscal}=await import('./articleFormatsNativeFixture');const f=await nativeFixture();t.after(()=>f.db.close());seedNativeFiscal(f);
+ const {dbAdapter}=await import('../services/db');const {db}=await import('../utils/db');
+ const names=['getCollection','saveCollection','getDocument','executeSQL','reserveFinancialNumbers'] as const;const originals=new Map(names.map(n=>[n,(dbAdapter as any)[n]]));
+ for(const n of names)(dbAdapter as any)[n]=(f.adapter as any)[n].bind(f.adapter);
+ t.after(()=>{for(const n of names){if(originals.get(n))(dbAdapter as any)[n]=originals.get(n);else delete (dbAdapter as any)[n];}});
+ const first=await db.reserveFiscalNumber('B02',id(4),1,undefined,undefined,undefined,true);
+ assert.equal(f.documents('nativeFiscalReservations').length,0);
+ const tx:any={id:id(65),terminalId:id(4),date:new Date().toISOString(),ncf:first!.ncf,ncfType:'B02',fiscalIssuance:first!.fiscalIssuance};
+ await f.adapter.saveDocumentsAtomically([{collectionName:'transactions',document:tx,requireAbsent:true} as any]);
+ assert.equal(f.documents('nativeFiscalReservations').length,1);
+ assert.equal(f.documents('nativeFiscalReservations')[0].transactionId,id(65));
+});
+
+test('same-id re-saves are idempotent and a foreign NCF with a receipt fails closed',async t=>{
+ const {seedNativeFiscal}=await import('./articleFormatsNativeFixture');const f=await nativeFixture();t.after(()=>f.db.close());seedNativeFiscal(f);
+ const {dbAdapter}=await import('../services/db');const {db}=await import('../utils/db');
+ const names=['getCollection','saveCollection','getDocument','executeSQL','reserveFinancialNumbers'] as const;const originals=new Map(names.map(n=>[n,(dbAdapter as any)[n]]));
+ for(const n of names)(dbAdapter as any)[n]=(f.adapter as any)[n].bind(f.adapter);
+ t.after(()=>{for(const n of names){if(originals.get(n))(dbAdapter as any)[n]=originals.get(n);else delete (dbAdapter as any)[n];}});
+ const first=await db.reserveFiscalNumber('B02',id(4),1,undefined,undefined,undefined,true);
+ const tx:any={id:id(66),terminalId:id(4),date:new Date().toISOString(),ncf:first!.ncf,ncfType:'B02',fiscalIssuance:first!.fiscalIssuance};
+ await f.adapter.saveDocument('transactions',tx);
+ await f.adapter.saveDocument('transactions',tx);
+ assert.equal(f.documents('nativeFiscalReservations').length,1,'a same-id re-save adds no receipt');
+ await assert.rejects(f.adapter.saveDocument('transactions',{...tx,id:id(67)}),/ALREADY_ISSUED/);
+ assert.equal(f.documents('nativeFiscalReservations').length,1);
+});
 test('fiscal immutable issuer receipt rejects rotated allocation/terminal replay and generic import/delete/update',async t=>{
  const {seedNativeFiscal}=await import('./articleFormatsNativeFixture');const f=await nativeFixture();t.after(()=>f.db.close());const seeded=seedNativeFiscal(f);await f.posting.post(seeded.event,options);
  const receipt=f.documents('nativeFiscalReservations')[0];assert.equal(receipt.issuerRnc,'101010101');

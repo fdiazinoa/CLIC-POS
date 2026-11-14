@@ -95,6 +95,16 @@ export async function readAllocation(sql:SQL,local:OfflineFiscalLocalAuthority,i
   return {authority:value,now:now+saved.server_offset_ms};
  }return null;
 }
+/** Un buffer nuevo nunca puede arrancar por debajo de un NCF que esta caja ya emitió.
+ *  El ERP puede sincronizar un nextNumber atrasado (reclamos offline V2 que no movieron
+ *  su contador) y reutilizar un número emitido es ilegal: el libro nativo inmutable lo
+ *  rechazaría con NATIVE_FISCAL_NUMBER_ALREADY_ISSUED al cobrar.
+ *  Se acota al mismo rango fiscal: un rango nuevo no hereda numeración ajena. */
+async function issuedSequenceFloor(sql:SQL,fiscalRangeId:string,issuerRnc:string,prefix:string):Promise<number>{
+ const rows=(await sql.query("SELECT MAX(CAST(json_extract(data,'$.number') AS INTEGER)) AS last FROM documents WHERE collection_name='nativeFiscalReservations' AND json_extract(data,'$.fiscalRangeId')=? AND UPPER(TRIM(json_extract(data,'$.issuerRnc')))=UPPER(TRIM(?)) AND json_extract(data,'$.prefix')=?",[fiscalRangeId,issuerRnc,prefix])).values||[];
+ const last=Number(rows[0]?.last);
+ return Number.isSafeInteger(last)&&last>0?last+1:1;
+}
 export async function readAllocationSelection(sql:SQL,authority:OfflineFiscalAllocation,type:string,time:number,selection?:OfflineFiscalAllocationSelection,allocationId?:string){
  if(selection&&selection.environment!==undefined&&selection.environment!==authority.environment)allocationFail('OFFLINE_FISCAL_AUTHORITY_CHANGED');
  const members=authority.allocations.filter(a=>a.ncfType===type&&(!selection||a.allocationId===selection.allocationId)&&(!allocationId||a.allocationId===allocationId));
@@ -107,9 +117,20 @@ export async function readAllocationSelection(sql:SQL,authority:OfflineFiscalAll
   const buffers=(await sql.query("SELECT data FROM documents WHERE collection_name='localFiscalBuffer' AND json_extract(data,'$.allocationId')=?",[member.allocationId])).values||[];
   if(buffers.length>1)allocationFail('OFFLINE_FISCAL_ALLOCATION_REQUIRED');
   const createBuffer=buffers.length===0;
-  let buffer:LocalFiscalBuffer=createBuffer?{id:'V2-'+allocation.id,type:type as any,prefix:member.prefix,currentNumber:allocation.nextNumber,startNumber:allocation.nextNumber,endNumber:member.end,expiryDate:member.expiryDate||'',terminalId:authority.scope.terminalId,allocationId:allocation.id,fiscalRangeId:range.id}:JSON.parse(buffers[0].data);
+  /** end+1 es la marca de "bloque ya reservado localmente", no un puntero real. Sin
+   *  recibos locales que prueben lo emitido no se reinicia el bloque: se conserva el
+   *  puntero y la caja falla cerrada en vez de reemitir números de otro equipo. */
+  const freshStart=async()=>{
+   const floor=await issuedSequenceFloor(sql,member.fiscalRangeId,authority.issuerRnc,member.prefix);
+   const pointer=Number(allocation.nextNumber)||member.start;
+   const erpPointer=pointer<=member.end?pointer:(floor>1?member.start:pointer);
+   return Math.max(erpPointer,floor,member.start);
+  };
+  let buffer:LocalFiscalBuffer;
+  if(createBuffer){const start=await freshStart();buffer={id:'V2-'+allocation.id,type:type as any,prefix:member.prefix,currentNumber:start,startNumber:start,endNumber:member.end,expiryDate:member.expiryDate||'',terminalId:authority.scope.terminalId,allocationId:allocation.id,fiscalRangeId:range.id};}
+  else buffer=JSON.parse(buffers[0].data);
   const refillBuffer=!createBuffer&&buffer.currentNumber>buffer.endNumber&&allocation.nextNumber<=member.end&&allocation.nextNumber>buffer.endNumber;
-  if(refillBuffer)buffer={...buffer,currentNumber:allocation.nextNumber,startNumber:allocation.nextNumber,endNumber:member.end};
+  if(refillBuffer){const start=await freshStart();buffer={...buffer,currentNumber:start,startNumber:start,endNumber:member.end};}
   const reserveAllocation=createBuffer||refillBuffer;
   const reservedAllocation=reserveAllocation?{...allocation,nextNumber:member.end+1}:allocation;
   if(buffer.currentNumber>Math.min(buffer.endNumber,member.end))continue;

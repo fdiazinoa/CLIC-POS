@@ -3,6 +3,7 @@ import {dispatchCommercialSource,dispatchPaymentIntents} from '../services/db/Co
 import {synchronizeNativeCompanyDispatch} from '../services/dispatch/CompanyDispatchRuntime';
 import { describeV3Error } from '../utils/v3ErrorMessages';
 import { describePresentationError } from '../utils/presentationErrorMessages';
+import { describeFiscalCheckoutFailure } from '../utils/fiscalCheckoutErrorMessages';
 import { alternativeWarehouseForLines } from '../utils/warehouseScope';
 import { stableCheckoutAttemptId } from '../utils/checkoutAttemptIdentity';
 import { recordCheckoutTrace } from '../services/audit/CheckoutTrace';
@@ -6205,7 +6206,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                alert('No hay comprobantes de venta disponibles para esta terminal.');
                return null;
             }
-            const reservation=await db.reserveFiscalNumber(refundFiscalType,terminalId,1,activeTerminalConfig);
+            const reservation=await db.reserveFiscalNumber(refundFiscalType,terminalId,1,activeTerminalConfig,undefined,undefined,true);
             reservedRefundNcf=reservation?.ncf; refundIssuance=reservation?.fiscalIssuance;
             if (!reservedRefundNcf) {
                alert(`No se pudo reservar el comprobante ${refundFiscalType}. La devolución fue bloqueada.`);
@@ -6236,7 +6237,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             finalNcf = reservedRefundNcf; finalIssuance=refundIssuance;
             finalNcfType = refundFiscalType;
          } else {
-            const reservation=fiscalCheckoutRef.current?.allocation?await fiscalWorkflowV2Client.allocationDraft(fiscalCheckoutRef.current):await db.reserveFiscalNumber(fiscalStatus.type,terminalId,1,activeTerminalConfig);
+            const reservation=fiscalCheckoutRef.current?.allocation?await fiscalWorkflowV2Client.allocationDraft(fiscalCheckoutRef.current):await db.reserveFiscalNumber(fiscalStatus.type,terminalId,1,activeTerminalConfig,undefined,undefined,true);
             finalNcf=reservation?.ncf; finalIssuance=reservation?.fiscalIssuance;
 
             if (!finalNcf) {
@@ -6806,7 +6807,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          }
       } catch (error: any) {
          console.error('Payment confirm error:', error);
-         alert(`Error al finalizar venta: ${error?.message || 'Error desconocido'}`);
+         // El código fiscal se queda en el trace; en pantalla va la causa y el siguiente paso.
+         alert(`Error al finalizar venta: ${describeFiscalCheckoutFailure(error?.message) || error?.message || 'Error desconocido'}`);
          return null;
       } finally {
          if (paymentTrace?.stages.SQL_START !== undefined && paymentTrace.stages.SQL_END === undefined) {

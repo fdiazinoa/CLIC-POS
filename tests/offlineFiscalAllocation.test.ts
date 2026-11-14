@@ -404,3 +404,43 @@ for(const profile of ['valid','restart','restartPointer','restartScope','restart
   await f.adapter.commitFinancialTransaction(plan);assert.equal(f.count('pos_dispatch_native_capture_v1'),1);assert.equal(f.count('sync_outbox_v2'),1);
  }finally{f.sql.close();}
 });
+
+test('un buffer recreado no reutiliza un NCF ya emitido aunque el ERP sincronice un nextNumber atrasado',async()=>{
+ const f=await fixture({buffer:false});try{
+  const first=await f.client().reserveOfflineCheckout(identity('a'),'op-reuse-1');
+  assert.equal(first.allocation!.sequence,1);
+  await f.client().recordPayment(first,'payment-'+first.checkoutId);
+  await f.adapter.commitFinancialTransaction(await input(f,first) as any);
+  await f.store.acknowledgeCheckout(first.checkoutId);
+  const receipts=()=>Number(f.sql.prepare("SELECT count(*) n FROM documents WHERE collection_name='nativeFiscalReservations'").get()!.n);
+  assert.equal(receipts(),1);
+  // Reasignación/restauración: el ERP vuelve a mandar el puntero del bloque y la caja
+  // rehidrata su buffer. Sin piso, la caja reintentaría el NCF ya emitido.
+  f.sql.prepare("UPDATE documents SET data=json_set(data,'$.nextNumber',1) WHERE collection_name='fiscalAllocations'").run();
+  f.sql.prepare("DELETE FROM documents WHERE collection_name='localFiscalBuffer'").run();
+  const second=await f.client().reserveOfflineCheckout(identity('b'),'op-reuse-2');
+  assert.equal(second.allocation!.sequence,2);
+  assert.equal(second.allocation!.ncf,'E320000000002');
+ }finally{f.sql.close();}
+});
+
+test('el marcador end+1 reanuda por encima de lo emitido sin reiniciar el bloque',async()=>{
+ const f=await fixture({buffer:false});try{
+  const first=await f.client().reserveOfflineCheckout(identity('a'),'op-sentinel-1');
+  await f.client().recordPayment(first,'payment-'+first.checkoutId);
+  await f.adapter.commitFinancialTransaction(await input(f,first) as any);
+  await f.store.acknowledgeCheckout(first.checkoutId);
+  const pointer=JSON.parse(String(f.sql.prepare("SELECT data FROM documents WHERE collection_name='fiscalAllocations'").get()!.data)).nextNumber;
+  assert.equal(pointer,4);
+  f.sql.prepare("DELETE FROM documents WHERE collection_name='localFiscalBuffer'").run();
+  const second=await f.client().reserveOfflineCheckout(identity('b'),'op-sentinel-2');
+  assert.equal(second.allocation!.sequence,2);
+ }finally{f.sql.close();}
+});
+test('sin recibos locales el marcador end+1 falla cerrado en vez de reemitir el bloque',async()=>{
+ const f=await fixture({buffer:false});try{
+  f.sql.prepare("UPDATE documents SET data=json_set(data,'$.nextNumber',4) WHERE collection_name='fiscalAllocations'").run();
+  await assert.rejects(f.client().reserveOfflineCheckout(identity('a'),'op-no-evidence'),/RANGE_EXHAUSTED/);
+  assert.equal(f.count('pos_fiscal_pending_numbers_v2'),0);
+ }finally{f.sql.close();}
+});
