@@ -1,3 +1,4 @@
+import {returnSettlementLines} from '../fiscal/ReturnSettlementPresentation';
 import type { CouponIssuanceEnvelope } from '../coupons/CouponIssuanceClient';
 import { couponSlipLines } from '../../utils/couponSlipPresentation';
 import {inventoryPresentationTicketLabel} from '../inventoryPresentations/selection';
@@ -450,6 +451,7 @@ export const buildEscPosTicketPayload = (
   fiscalPrint?: FiscalPrintDisplay,
 ): string | null => {
   if (!transaction?.items?.length) return null;
+  const returnLines=returnSettlementLines(transaction);
 
   const width = RECEIPT_LINE_WIDTH;
   const chunks: Uint8Array[] = [];
@@ -611,7 +613,8 @@ export const buildEscPosTicketPayload = (
     chunks.push(align(0));
   }
 
-  if ((transaction.payments || []).length > 0) {
+  if(returnLines.length){chunks.push(divider(width));for(const line of returnLines)pushTextLines(chunks,splitLines(line,width));}
+  if (!returnLines.length && (transaction.payments || []).length > 0) {
     chunks.push(divider(width));
     const baseCurrencyCode = config.currencies?.find(currency => currency.isBase)?.code || 'DOP';
     const settlementSummary = buildPaymentSettlementSummary(

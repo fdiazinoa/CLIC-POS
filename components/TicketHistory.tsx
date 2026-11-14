@@ -1,3 +1,4 @@
+import {FiscalCreditApplicationAction} from './FiscalCreditApplicationAction';
 import {assertInventoryPresentationReturnAllowed} from '../services/inventoryPresentations/selection';
 import {FiscalBuyerDraftAction,hasFiscalWorkflowSourceMarker} from './FiscalBuyerDraftAction';
 import {readRefundOriginal} from '../services/localRefundPersistence';
@@ -1260,6 +1261,7 @@ const TicketDetailDrawer: React.FC<{
                            </span>
                         )}
                      </button>
+                     <FiscalCreditApplicationAction transaction={tx}/>
                      <button
                         onClick={() => onPrint(tx)}
                         className="flex min-w-[140px] flex-1 items-center justify-center gap-2 py-3 bg-white border border-gray-200 text-gray-700 rounded-2xl font-bold hover:bg-gray-100 transition-all shadow-sm"
@@ -2312,7 +2314,8 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
       refundItems: CartItem[],
       conditions: Map<string, 'SELLABLE' | 'DAMAGED'>,
       reason: string,
-      requestMode: RefundRequestMode = 'STANDARD'
+      requestMode: RefundRequestMode = 'STANDARD',
+      fiscalOptions?: RefundProcessingOptions
    ) => {
       originalTx = await readRefundOriginal(originalTx);
       assertInventoryPresentationReturnAllowed(originalTx);
@@ -2321,7 +2324,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
       // RETURN/E34 must obtain ERP preparation before any external banking effect.
       // The consumer retains unsupported gateway operations without refunding the bank first.
       if (fiscalMode === 'ECF' && (originalTx as any).articleFormatWire?.schema_version !== 2) {
-         await onRefundTransaction(originalTx, refundItems, conditions, reason || 'Devolución');
+         await onRefundTransaction(originalTx, refundItems, conditions, reason || 'Devolución',fiscalOptions);
          setIsRefundModalOpen(false);
          setRefundTx(null);
          setRefundRequestMode('STANDARD');
@@ -2758,7 +2761,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
       if (!authorized) return;
 
       if((originalTx as any).articleFormatWire?.schema_version===2){await onRefundTransaction(originalTx,refundItems,conditions,reason||'Devolución',fiscalOptions);setIsRefundModalOpen(false);setRefundTx(null);setSelectedTxId(null);return;}
-      await executeRefundFlow(originalTx, refundItems, conditions, reason || 'Devolución', refundRequestMode);
+      await executeRefundFlow(originalTx, refundItems, conditions, reason || 'Devolución', refundRequestMode,fiscalOptions);
    };
 
    // Calculate Refund Total
