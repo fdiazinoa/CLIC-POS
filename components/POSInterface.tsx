@@ -6206,7 +6206,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                alert('No hay comprobantes de venta disponibles para esta terminal.');
                return null;
             }
-            const reservation=await db.reserveFiscalNumber(refundFiscalType,terminalId,1,activeTerminalConfig);
+            const reservation=await db.reserveFiscalNumber(refundFiscalType,terminalId,1,activeTerminalConfig,undefined,undefined,true);
             reservedRefundNcf=reservation?.ncf; refundIssuance=reservation?.fiscalIssuance;
             if (!reservedRefundNcf) {
                alert(`No se pudo reservar el comprobante ${refundFiscalType}. La devolución fue bloqueada.`);
@@ -6237,7 +6237,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             finalNcf = reservedRefundNcf; finalIssuance=refundIssuance;
             finalNcfType = refundFiscalType;
          } else {
-            const reservation=fiscalCheckoutRef.current?.allocation?await fiscalWorkflowV2Client.allocationDraft(fiscalCheckoutRef.current):await db.reserveFiscalNumber(fiscalStatus.type,terminalId,1,activeTerminalConfig);
+            const reservation=fiscalCheckoutRef.current?.allocation?await fiscalWorkflowV2Client.allocationDraft(fiscalCheckoutRef.current):await db.reserveFiscalNumber(fiscalStatus.type,terminalId,1,activeTerminalConfig,undefined,undefined,true);
             finalNcf=reservation?.ncf; finalIssuance=reservation?.fiscalIssuance;
 
             if (!finalNcf) {

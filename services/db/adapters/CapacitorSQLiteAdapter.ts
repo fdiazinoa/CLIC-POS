@@ -25,6 +25,7 @@ import {Money} from '../../articleFormats/wire';
 import {NATIVE_FISCAL_RECEIPTS_SCHEMA,planNativeFiscalReceipt} from '../NativeFiscalReservation';
 import type {LargeMasterSyncV3Store} from '../../sync/LargeMasterSyncV3Types';
 import {validateFiscalBufferReservation} from '../../../utils/fiscalBufferAuthority';
+import {clearDeferredFiscalReservation,isDeferredFiscalReservation} from '../../fiscal/DeferredFiscalReservation';
 import { ARTICLE_FORMAT_RETAINED_UPSERT_SQL } from '../ArticleFormatFinancialRetention';
 import { planFinancialNumbers, FINANCIAL_COUNTER_UPSERT_SQL } from '../FinancialNumberReservation';
 import { ARTICLE_FORMATS_SCHEMA } from '../../articleFormats/schema';
@@ -295,7 +296,17 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
     }
 
     async saveDocument<T extends { id: string }>(collectionName: string, doc: T): Promise<void> {
-        await this.upsertStoredDocuments(collectionName, [doc]);
+        const deferredFiscal=collectionName==='transactions'&&(doc as any)?.fiscalIssuance&&!(doc as any)?.fiscalAllocationAuthorizationId;
+        if(!deferredFiscal){await this.upsertStoredDocuments(collectionName,[doc]);return;}
+        // La venta y sus efectos fiscales (recibo/buffer/puntero) son una sola transacción:
+        // si la venta no se guarda, el NCF no queda quemado y la siguiente venta lo reutiliza.
+        await this.withWriteLock(async()=>{
+            const now=new Date().toISOString();
+            const statements=this.toDocumentRows(collectionName,[doc]).map(row=>({statement:DOCUMENT_UPSERT_SQL,values:[collectionName,row.docId,row.data,collectionName,row.docId,collectionName,now]}));
+            const fiscalStatements=await this.planLegacyFiscalCommit(doc as any);
+            await this.executeUnlocked([...statements,...fiscalStatements],undefined,true);
+            clearDeferredFiscalReservation(String((doc as any).fiscalIssuance?.ncf||''));
+        });
     }
 
     async getFiscalStatusCandidates(binding: string, afterId: string, limit: number): Promise<string[]> {
@@ -795,7 +806,10 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
 
         const needsFinancialPrecondition = input.documents.some(row => row.document.v3InventoryBaseline
           || row.requireAbsent || row.expectedDocument !== undefined || row.v3StockRequirements);
-        await this.withWriteLock(() => this.executeUnlocked(statements,async()=>{
+        await this.withWriteLock(async()=>{
+          const legacyTxs=input.documents.filter(row=>row.collectionName==='transactions'&&(row.document as any)?.fiscalIssuance&&!(row.document as any).fiscalAllocationAuthorizationId).map(row=>row.document as any);
+          const fiscalStatements=(await Promise.all(legacyTxs.map(tx=>this.planLegacyFiscalCommit(tx)))).flat();
+          await this.executeUnlocked([...statements,...fiscalStatements],async()=>{
           const guardedPool=(await this.ensureDb().query("SELECT p.pool_id,p.state FROM pos_dispatch_pool_v1 p JOIN pos_dispatch_active_pool_v1 a ON a.pool_id=p.pool_id JOIN master_v3_operational_owner o ON o.binding=a.native_binding WHERE a.singleton=1 AND p.state IN('WAREHOUSE_DISPATCH','FROZEN')")).values?.[0];
           if(guardedPool&&input.documents.some(d=>d.collectionName==='transactions')&&!input.dispatchCommit)throw Error('DISPATCH_CANONICAL_POOL_REQUIRES_ESCROW_COMMIT');
           const dispatchSources=input.documents.filter(d=>d.collectionName==='transactions'&&d.document.inventoryEffectsContract==='WAREHOUSE_RESERVATION_V1');
@@ -872,7 +886,9 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             }
             await consumeFiscalWorkflowBirth(this.ensureDb() as any,commit,source.document as any,outboxEvents.find(e=>['SALE_POSTED','SALES_CREDIT_NOTE_POSTED'].includes(e.eventType)&&e.aggregateId===commit.transactionId)?.eventId);
           }
-        },Boolean(input.fiscalAllocationPreconditions?.length||input.trackingCommits?.length||input.dispatchCommit),assertDispatchOutbox));
+        },Boolean(input.fiscalAllocationPreconditions?.length||input.trackingCommits?.length||input.dispatchCommit),assertDispatchOutbox);
+          for(const tx of legacyTxs)clearDeferredFiscalReservation(String(tx.fiscalIssuance?.ncf||''));
+        });
     }
 
     async getMasterNumberRanges(): Promise<MasterNumberRangeRecord[]> {
@@ -1205,6 +1221,60 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             }
             return result;
         }));
+    }
+
+    /** Efectos fiscales legacy (B/E sin asignación V2) dentro de la MISMA transacción que
+     *  la venta. La reserva ya no escribe el recibo: si la venta falla no se quema el NCF,
+     *  y la siguiente venta usa el mismo número (sin saltos). */
+    private async planLegacyFiscalCommit(tx:any):Promise<Array<{statement:string;values:any[]}>> {
+        const issuance=tx?.fiscalIssuance;
+        if(!issuance||issuance.schemaVersion!==1||issuance.source!=='POS_FISCAL_RESERVATION_V1'||tx?.fiscalAllocationAuthorizationId)return [];
+        const db=this.ensureDb();
+        const read=async(collection:string,id:string)=>{const rows=await db.query('SELECT data FROM documents WHERE collection_name=? AND doc_id=?',[collection,id]);return rows.values?.[0]?.data?JSON.parse(String(rows.values[0].data)):undefined;};
+        const ncf=String(issuance.ncf||'');
+        // Solo las reservas diferidas de esta sesión liquidan efectos fiscales al commit.
+        if(!isDeferredFiscalReservation(ncf))return [];
+        // Una venta ya comprometida con este NCF es la autoridad: replay idempotente o rechazo.
+        const issued=(await db.query("SELECT doc_id FROM documents WHERE collection_name IN('transactions','transactionHistory') AND json_extract(data,'$.ncf')=? LIMIT 1",[ncf])).values?.[0];
+        if(issued){if(String(issued.doc_id)===String(tx.id))return [];throw new Error('NATIVE_FISCAL_NUMBER_ALREADY_ISSUED');}
+        const receiptRows=(await db.query("SELECT data FROM documents WHERE collection_name='nativeFiscalReservations' AND json_extract(data,'$.ncf')=? LIMIT 1",[ncf])).values||[];
+        const existingReceipt=receiptRows[0]?JSON.parse(String(receiptRows[0].data)):null;
+        if(existingReceipt&&existingReceipt.transactionId&&String(existingReceipt.transactionId)!==String(tx.id))throw new Error('NATIVE_FISCAL_NUMBER_ALREADY_ISSUED');
+        const config=await read('config','current'),allocation=await read('fiscalAllocations',issuance.fiscalAllocationId),range=await read('fiscalRanges',issuance.fiscalRangeId);
+        if(!config||!allocation||!range||allocation.fiscalRangeId!==range.id||allocation.ncfType!==issuance.ncfType||range.type!==issuance.ncfType||allocation.fiscalRangeId!==issuance.fiscalRangeId)throw new Error('NATIVE_FISCAL_AUTHORITY_CONFLICT');
+        const sequence=Number(issuance.sequence);
+        if(!Number.isSafeInteger(sequence)||sequence<allocation.reservedStart||sequence>allocation.reservedEnd)throw new Error('NATIVE_FISCAL_AUTHORITY_CONFLICT');
+        const bufferRows=(await db.query("SELECT doc_id,data FROM documents WHERE collection_name='localFiscalBuffer' AND json_extract(data,'$.type')=? AND json_extract(data,'$.terminalId')=?",[issuance.ncfType,tx.terminalId])).values||[];
+        const bufferDoc=bufferRows[0]?JSON.parse(String(bufferRows[0].data)):null;
+        const nextNumber=Math.max(Number(allocation.nextNumber)||0,sequence+1);
+        const currentPointer=bufferDoc?Number(bufferDoc.currentNumber):(Number(allocation.nextNumber)||allocation.reservedStart);
+        const alreadyAdvanced=currentPointer>sequence;
+        if(existingReceipt){
+            // Recibo preexistente sin venta (reserva previa o número quemado): no se inserta otro.
+            // Si el buffer ya avanzó, no hay nada que hacer; si no, se avanza sin tocar el recibo.
+            if(alreadyAdvanced)return [];
+            const advancedBuffer={...(bufferDoc||{id:String(issuance.ncfType),type:issuance.ncfType,prefix:issuance.prefix,startNumber:sequence,endNumber:sequence,expiryDate:range.expiryDate||'',terminalId:tx.terminalId,fiscalRangeId:range.id,allocationId:allocation.id}),currentNumber:sequence+1};
+            const advancedAllocation={...allocation,nextNumber,status:nextNumber>allocation.reservedEnd?'EXHAUSTED':allocation.status};
+            const now=new Date().toISOString();
+            return [
+                {statement:DOCUMENT_UPSERT_SQL,values:['localFiscalBuffer',advancedBuffer.id,JSON.stringify(advancedBuffer),'localFiscalBuffer',advancedBuffer.id,'localFiscalBuffer',now]},
+                {statement:DOCUMENT_UPSERT_SQL,values:['fiscalAllocations',advancedAllocation.id,JSON.stringify(advancedAllocation),'fiscalAllocations',advancedAllocation.id,'fiscalAllocations',now]},
+            ];
+        }
+        if(bufferDoc&&(Number(bufferDoc.currentNumber)!==sequence||bufferDoc.fiscalRangeId!==range.id||bufferDoc.allocationId!==allocation.id))throw new Error('NATIVE_FISCAL_AUTHORITY_CONFLICT');
+        const buffer:any=bufferDoc||{id:String(issuance.ncfType),type:issuance.ncfType,prefix:issuance.prefix,currentNumber:sequence,startNumber:sequence,endNumber:sequence,expiryDate:range.expiryDate||'',terminalId:tx.terminalId,fiscalRangeId:range.id,allocationId:allocation.id};
+        const allocationForValidation={...allocation,nextNumber:Math.max(nextNumber,sequence+1)};
+        const nextBuffer=validateFiscalBufferReservation({business:config,buffer,allocation:allocationForValidation,range,terminalId:tx.terminalId,type:issuance.ncfType,ncf});
+        const receipt=await planNativeFiscalReceipt(async<T>(sql:string,values:(string|number|null)[])=>(await db.query(sql,values)).values as T[] || [],config,buffer,ncf,{requireIssuer:String(issuance.ncfType).startsWith('E'),transactionId:String(tx.id),occurredAt:tx.date});
+        const nextAllocation={...allocation,nextNumber,status:nextNumber>allocation.reservedEnd?'EXHAUSTED':allocation.status};
+        const now=new Date().toISOString();
+        return [
+            {statement:'INSERT INTO article_format_wire_write_scope VALUES(1)',values:[]},
+            {statement:receipt.statement.statement,values:receipt.statement.values||[]},
+            {statement:'DELETE FROM article_format_wire_write_scope WHERE id=1',values:[]},
+            {statement:DOCUMENT_UPSERT_SQL,values:['localFiscalBuffer',nextBuffer.id,JSON.stringify(nextBuffer),'localFiscalBuffer',nextBuffer.id,'localFiscalBuffer',now]},
+            {statement:DOCUMENT_UPSERT_SQL,values:['fiscalAllocations',nextAllocation.id,JSON.stringify(nextAllocation),'fiscalAllocations',nextAllocation.id,'fiscalAllocations',now]},
+        ];
     }
 
     private async initSchema(): Promise<void> {
