@@ -1235,16 +1235,19 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         const db=this.ensureDb();
         const read=async(collection:string,id:string)=>{const rows=await db.query('SELECT data FROM documents WHERE collection_name=? AND doc_id=?',[collection,id]);return rows.values?.[0]?.data?JSON.parse(String(rows.values[0].data)):undefined;};
         const ncf=String(issuance.ncf||'');
-        // Una venta ya comprometida con este NCF es la autoridad: replay idempotente o rechazo.
-        // Esto corre ANTES del marcador de sesión: dos ventas con el mismo NCF nunca deben
-        // guardarse sin recibo solo porque el marcador ya se consumió.
-        const issued=(await db.query("SELECT doc_id FROM documents WHERE collection_name IN('transactions','transactionHistory') AND json_extract(data,'$.ncf')=? LIMIT 1",[ncf])).values?.[0];
-        if(issued){if(String(issued.doc_id)===String(tx.id))return [];throw new Error('NATIVE_FISCAL_NUMBER_ALREADY_ISSUED');}
+        // El recibo está indexado por NCF: es la comprobación barata y suficiente para
+        // detectar un NCF ya comprometido (incluida una segunda venta con el marcador consumido).
         const receiptRows=(await db.query("SELECT data FROM documents WHERE collection_name='nativeFiscalReservations' AND json_extract(data,'$.ncf')=? LIMIT 1",[ncf])).values||[];
         const existingReceipt=receiptRows[0]?JSON.parse(String(receiptRows[0].data)):null;
-        if(existingReceipt&&existingReceipt.transactionId&&String(existingReceipt.transactionId)!==String(tx.id))throw new Error('NATIVE_FISCAL_NUMBER_ALREADY_ISSUED');
+        if(existingReceipt?.transactionId){
+            if(String(existingReceipt.transactionId)===String(tx.id))return [];
+            throw new Error('NATIVE_FISCAL_NUMBER_ALREADY_ISSUED');
+        }
         // Solo las reservas diferidas de esta sesión liquidan efectos fiscales al commit.
         if(!isDeferredFiscalReservation(ncf))return [];
+        // Ya es una reserva diferida: la transacción es la autoridad (replay idempotente o rechazo).
+        const issued=(await db.query("SELECT doc_id FROM documents WHERE collection_name IN('transactions','transactionHistory') AND json_extract(data,'$.ncf')=? LIMIT 1",[ncf])).values?.[0];
+        if(issued){if(String(issued.doc_id)===String(tx.id))return [];throw new Error('NATIVE_FISCAL_NUMBER_ALREADY_ISSUED');}
         const config=await read('config','current'),allocation=await read('fiscalAllocations',issuance.fiscalAllocationId),range=await read('fiscalRanges',issuance.fiscalRangeId);
         if(!config||!allocation||!range||allocation.fiscalRangeId!==range.id||allocation.ncfType!==issuance.ncfType||range.type!==issuance.ncfType||allocation.fiscalRangeId!==issuance.fiscalRangeId)throw new Error('NATIVE_FISCAL_AUTHORITY_CONFLICT');
         const sequence=Number(issuance.sequence);
