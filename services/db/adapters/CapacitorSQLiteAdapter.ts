@@ -428,10 +428,13 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
               await this.assertV3FinancialBaseline(documents);
               if (requireAbsent) await assertAbsent();
             };
+            const legacyTxs=documents.filter(row=>row.collectionName==='transactions'&&(row.document as any)?.fiscalIssuance&&!(row.document as any).fiscalAllocationAuthorizationId).map(row=>row.document as any);
+            const fiscalStatements=(await Promise.all(legacyTxs.map(tx=>this.planLegacyFiscalCommit(tx)))).flat();
             await this.executeUnlocked([...replaceCollections.flatMap(name => this.collectionReplacementStatements(name,documents.filter(d=>d.collectionName===name).map(d=>d.document.id),now)), ...documents.map(({ collectionName, document }) => ({
                 statement: DOCUMENT_UPSERT_SQL,
                 values: [collectionName, document.id, JSON.stringify(document), collectionName, document.id, collectionName, now],
-            }))], needsFinancialPrecondition ? precondition : undefined);
+            })), ...fiscalStatements], needsFinancialPrecondition ? precondition : undefined);
+            for(const tx of legacyTxs)clearDeferredFiscalReservation(String(tx.fiscalIssuance?.ncf||''));
         });
     }
 
@@ -1232,14 +1235,16 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         const db=this.ensureDb();
         const read=async(collection:string,id:string)=>{const rows=await db.query('SELECT data FROM documents WHERE collection_name=? AND doc_id=?',[collection,id]);return rows.values?.[0]?.data?JSON.parse(String(rows.values[0].data)):undefined;};
         const ncf=String(issuance.ncf||'');
-        // Solo las reservas diferidas de esta sesión liquidan efectos fiscales al commit.
-        if(!isDeferredFiscalReservation(ncf))return [];
         // Una venta ya comprometida con este NCF es la autoridad: replay idempotente o rechazo.
+        // Esto corre ANTES del marcador de sesión: dos ventas con el mismo NCF nunca deben
+        // guardarse sin recibo solo porque el marcador ya se consumió.
         const issued=(await db.query("SELECT doc_id FROM documents WHERE collection_name IN('transactions','transactionHistory') AND json_extract(data,'$.ncf')=? LIMIT 1",[ncf])).values?.[0];
         if(issued){if(String(issued.doc_id)===String(tx.id))return [];throw new Error('NATIVE_FISCAL_NUMBER_ALREADY_ISSUED');}
         const receiptRows=(await db.query("SELECT data FROM documents WHERE collection_name='nativeFiscalReservations' AND json_extract(data,'$.ncf')=? LIMIT 1",[ncf])).values||[];
         const existingReceipt=receiptRows[0]?JSON.parse(String(receiptRows[0].data)):null;
         if(existingReceipt&&existingReceipt.transactionId&&String(existingReceipt.transactionId)!==String(tx.id))throw new Error('NATIVE_FISCAL_NUMBER_ALREADY_ISSUED');
+        // Solo las reservas diferidas de esta sesión liquidan efectos fiscales al commit.
+        if(!isDeferredFiscalReservation(ncf))return [];
         const config=await read('config','current'),allocation=await read('fiscalAllocations',issuance.fiscalAllocationId),range=await read('fiscalRanges',issuance.fiscalRangeId);
         if(!config||!allocation||!range||allocation.fiscalRangeId!==range.id||allocation.ncfType!==issuance.ncfType||range.type!==issuance.ncfType||allocation.fiscalRangeId!==issuance.fiscalRangeId)throw new Error('NATIVE_FISCAL_AUTHORITY_CONFLICT');
         const sequence=Number(issuance.sequence);
@@ -1249,13 +1254,15 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         // La autoridad fiscal puede ser el erpTerminalId, no el id local de la caja.
         const authorityId=String(allocation.terminalId||tx.terminalId);
         const nextNumber=Math.max(Number(allocation.nextNumber)||0,sequence+1);
-        const currentPointer=bufferDoc?Number(bufferDoc.currentNumber):(Number(allocation.nextNumber)||allocation.reservedStart);
+        // Un buffer atrasado o ajeno no es autoridad: se ignora y manda el puntero del ERP.
+        const bufferUsable=Boolean(bufferDoc&&Number(bufferDoc.currentNumber)===sequence&&bufferDoc.fiscalRangeId===range.id&&bufferDoc.allocationId===allocation.id);
+        const currentPointer=bufferUsable?Number(bufferDoc.currentNumber):(Number(allocation.nextNumber)||allocation.reservedStart);
         const alreadyAdvanced=currentPointer>sequence;
         if(existingReceipt){
             // Recibo preexistente sin venta (reserva previa o número quemado): no se inserta otro.
             // Si el buffer ya avanzó, no hay nada que hacer; si no, se avanza sin tocar el recibo.
             if(alreadyAdvanced)return [];
-            const advancedBuffer={...(bufferDoc||{id:String(issuance.ncfType),type:issuance.ncfType,prefix:issuance.prefix,startNumber:sequence,endNumber:sequence,expiryDate:range.expiryDate||'',terminalId:authorityId,fiscalRangeId:range.id,allocationId:allocation.id}),currentNumber:sequence+1};
+            const advancedBuffer={...(bufferUsable?bufferDoc:{id:String(issuance.ncfType),type:issuance.ncfType,prefix:issuance.prefix,startNumber:sequence,endNumber:sequence,expiryDate:range.expiryDate||'',terminalId:authorityId,fiscalRangeId:range.id,allocationId:allocation.id}),currentNumber:sequence+1};
             const advancedAllocation={...allocation,nextNumber,status:nextNumber>allocation.reservedEnd?'EXHAUSTED':allocation.status};
             const now=new Date().toISOString();
             return [
@@ -1263,8 +1270,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
                 {statement:DOCUMENT_UPSERT_SQL,values:['fiscalAllocations',advancedAllocation.id,JSON.stringify(advancedAllocation),'fiscalAllocations',advancedAllocation.id,'fiscalAllocations',now]},
             ];
         }
-        if(bufferDoc&&(Number(bufferDoc.currentNumber)!==sequence||bufferDoc.fiscalRangeId!==range.id||bufferDoc.allocationId!==allocation.id))throw new Error('NATIVE_FISCAL_AUTHORITY_CONFLICT');
-        const buffer:any=bufferDoc||{id:String(issuance.ncfType),type:issuance.ncfType,prefix:issuance.prefix,currentNumber:sequence,startNumber:sequence,endNumber:sequence,expiryDate:range.expiryDate||'',terminalId:authorityId,fiscalRangeId:range.id,allocationId:allocation.id};
+        const buffer:any=bufferUsable?bufferDoc:{id:String(issuance.ncfType),type:issuance.ncfType,prefix:issuance.prefix,currentNumber:sequence,startNumber:sequence,endNumber:sequence,expiryDate:range.expiryDate||'',terminalId:authorityId,fiscalRangeId:range.id,allocationId:allocation.id};
         const allocationForValidation={...allocation,nextNumber:Math.max(nextNumber,sequence+1)};
         const nextBuffer=validateFiscalBufferReservation({business:config,buffer,allocation:allocationForValidation,range,terminalId:buffer.terminalId,type:issuance.ncfType,ncf});
         const receipt=await planNativeFiscalReceipt(async<T>(sql:string,values:(string|number|null)[])=>(await db.query(sql,values)).values as T[] || [],config,buffer,ncf,{requireIssuer:String(issuance.ncfType).startsWith('E'),transactionId:String(tx.id),occurredAt:tx.date});

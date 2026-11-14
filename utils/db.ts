@@ -16,7 +16,7 @@ import {
   DEFAULT_ROLES, DEFAULT_TERMINAL_CONFIG, DEFAULT_DOCUMENT_SERIES
 } from '../constants';
 import { dbAdapter } from '../services/db';
-import { markDeferredFiscalReservation } from '../services/fiscal/DeferredFiscalReservation';
+import { isDeferredFiscalReservation, markDeferredFiscalReservation } from '../services/fiscal/DeferredFiscalReservation';
 import { Capacitor } from '@capacitor/core';
 import { permissionService } from '../services/sync/PermissionService';
 import { mergeDocumentSeriesCollection, mergeIncomingDocumentSeriesWithoutRewind } from './documentSeriesIdentity';
@@ -594,7 +594,7 @@ const reserveDeferredFiscalNumber = async (type: FiscalDocumentCode, terminalId:
     const authorityId = policy.authorityId || terminalId;
     const allocation = getTerminalFiscalAllocation(allocations, authorityId, type as any);
     if (!allocation || !isAllocationAllowedByPolicy(allocation, policy)) return null;
-    if (!['ACTIVE', 'EXHAUSTED'].includes(allocation.status)) return null;
+    if (allocation.status !== 'ACTIVE') return null;
     const rangesList = ranges || [];
     if (!hasValidAllocatedFiscalRange(rangesList, allocation, type)) return null;
     const range = getFiscalRangeForEmission(rangesList, type as any, allocation);
@@ -607,9 +607,21 @@ const reserveDeferredFiscalNumber = async (type: FiscalDocumentCode, terminalId:
       normalizeSequenceKey(candidate.terminalId) === normalizeSequenceKey(authorityId) &&
       candidate.allocationId === allocation.id);
     const pointer = Math.max(allocation.reservedStart, Number(allocation.nextNumber) || allocation.reservedStart);
-    const candidate = buffer && Number.isSafeInteger(buffer.currentNumber) && buffer.currentNumber <= Math.min(buffer.endNumber, allocation.reservedEnd)
-      ? buffer.currentNumber
-      : pointer;
+    // Mismas guardas que la reserva atómica: un buffer atrasado, ajeno o fuera de bloque
+    // no puede retroceder el puntero autoritativo del ERP.
+    const bufferUsable = Boolean(buffer &&
+      normalizeSequenceKey(buffer.terminalId) === normalizeSequenceKey(authorityId) &&
+      buffer.allocationId === allocation.id &&
+      buffer.fiscalRangeId === allocation.fiscalRangeId &&
+      buffer.prefix === (allocation.prefix || type) &&
+      buffer.expiryDate === (range.expiryDate || '') &&
+      Number.isSafeInteger(buffer.currentNumber) && Number.isSafeInteger(buffer.startNumber) && Number.isSafeInteger(buffer.endNumber) &&
+      buffer.currentNumber >= buffer.startNumber &&
+      buffer.startNumber >= allocation.reservedStart &&
+      buffer.endNumber <= allocation.reservedEnd &&
+      buffer.currentNumber >= pointer &&
+      buffer.currentNumber <= Math.min(buffer.endNumber, allocation.reservedEnd));
+    const candidate = bufferUsable && buffer ? buffer.currentNumber : pointer;
     if (!Number.isSafeInteger(candidate) || candidate < allocation.reservedStart || candidate > allocation.reservedEnd) return null;
     const prefix = range.prefix || allocation.prefix || type;
     const ncf = formatFiscalNumber(type, prefix, candidate);
@@ -1440,7 +1452,7 @@ export const db = {
     }
     if (transaction.ncf || transaction.ncfType) {
       // Una reserva diferida (APK) aún no movió el puntero: el candidato ES allocation.nextNumber.
-      const deferred = Boolean(transaction.fiscalIssuance && !transaction.fiscalAllocationAuthorizationId);
+      const deferred = Boolean(transaction.ncf && isDeferredFiscalReservation(transaction.ncf));
       if (!transaction.ncf || !transaction.ncfType || !transaction.terminalId ||
           !await db.validatePreparedFiscalAuthority(transaction.ncfType, transaction.terminalId, transaction.ncf, context, deferred)) {
         throw new Error('FISCAL_TERMINAL_AUTHORITY_REQUIRED');
