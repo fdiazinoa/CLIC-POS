@@ -106,7 +106,7 @@ export function createFiscalReturnConsumer(ports: ConsumerPorts) {
             const requestedSelection=priorIntent?.settlementRequested||{schemaVersion:1 as const,destination:destination||'ORIGINAL_PAYMENT'};
             if(active&&destination)returnNeed(!isLegacy&&requestedSelection.destination===destination,'FISCAL_RETURN_IDEMPOTENCY_CONFLICT');
             const legacyRequested=isLegacy?await legacyPayments():null;
-            const intent=returnJSON({originalId:original.id,lines,...(isLegacy?{payments:legacyRequested}:{settlementRequested:requestedSelection}),reason,seriesId,user});
+            const intent=returnJSON({originalId:original.id,lines,...(isLegacy?{payments:legacyRequested}:{settlementRequested:requestedSelection,...(active?(Object.hasOwn(priorIntent,'settlementRequired')?{settlementRequired:priorIntent.settlementRequired}:{}):{settlementRequired:Boolean(destination)})}),reason,seriesId,user});
             let a=active||await store!.begin(slot,intent,scope,payments.length);
             returnNeed(a.intent===intent,'FISCAL_RETURN_IDEMPOTENCY_CONFLICT');
             returnNeed(!payments.some(p=>p.gatewayProvider||p.gatewayIntegrationId||p.paymentIntentId),'FISCAL_RETURN_GATEWAY_PROOF_REQUIRED');
@@ -117,9 +117,10 @@ export function createFiscalReturnConsumer(ports: ConsumerPorts) {
                 let c = await ports.transport.capability();
                 auth.assertCurrent();
                 assertReturnAdmission(c, scope);
-                const selection=a.commandBytes?JSON.parse(a.commandBytes).settlement:!isLegacy&&c.settlement?.enabled?requestedSelection:undefined;
+                const selection=a.commandBytes?JSON.parse(a.commandBytes).settlement:a.settlementSelection||(!isLegacy&&c.settlement?.enabled?requestedSelection:undefined);
                 if(selection)assertReturnSettlementCapability(c,scope);
-                if(!a.commandBytes&&requestedSelection.destination==='CUSTOMER_CREDIT'&&!selection)throw Error('FISCAL_RETURN_SETTLEMENT_DISABLED');
+                if(!a.commandBytes&&(JSON.parse(a.intent).settlementRequired||requestedSelection.destination==='CUSTOMER_CREDIT')&&!selection)throw Error('FISCAL_RETURN_SETTLEMENT_DISABLED');
+                if(selection&&!a.settlementSelection)a=await store!.save(a,{...a,settlementSelection:selection});
                 const requested=selection?[]:legacyRequested||await legacyPayments();
                 if (!a.checkout) {
                     // This genuine native reservation is PREPARED only: no issued counter, payment or stock effect.

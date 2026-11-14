@@ -2254,6 +2254,10 @@ const AppContent: React.FC = () => {
   });
   const historyReturnViewRef = useRef<'POS' | 'SETTINGS' | 'SETTINGS_SYNC'>('POS');
   const previousAccountActionViewRef = useRef(currentView);
+  useEffect(()=>{const refresh=()=>{void import('./services/fiscal/FiscalReturnCreditApplication').then(m=>m.refreshPendingReturnCustomerProjections()).catch(()=>undefined);};
+    refresh();window.addEventListener('online',refresh);return()=>window.removeEventListener('online',refresh);
+  },[]);
+
   useEffect(() => {
     const previousView = previousAccountActionViewRef.current;
     previousAccountActionViewRef.current = currentView;

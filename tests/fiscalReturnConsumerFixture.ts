@@ -78,6 +78,7 @@ export async function returnFixture(database?: any, seed = true, server?: {
     parent.originalReference = { documentId: parent.documentId, transactionId: parent.transactionId, ncf: parent.ncf, issuerRnc: parent.issuerRnc, environment: parent.environment, sourceChecksum: parent.checksumV1 };
     const localClient = createFiscalWorkflowV2Client({ store: () => f.adapter.fiscalWorkflowStore, readOfflineAuthority: () => offlineFiscalAuthorityFromConfig(config, credentials, scope.deviceId), readAuth: () => { throw Error('NO_PUBLIC_NETWORK'); } } as any);
     const preparations = server?.preparations || new Map<string, ReturnPreparation>();
+    let commitTransform: ((tx:Transaction)=>Transaction)|undefined;
     let proofTransform: ((p: ReturnPreparation) => ReturnPreparation) | undefined;
     let prepareCalls: string[] = [], offline = false, losePrepare = false, deny = false;
     const prepare = async (bytes: string) => {
@@ -125,16 +126,17 @@ export async function returnFixture(database?: any, seed = true, server?: {
     writeFileSync(file, code.outputFiles[0].text);
     const financial = await import(file);
     const commitSource = async (tx: Transaction, attempt: any) => {
+        if(commitTransform)tx=commitTransform(structuredClone(tx));
         (globalThis as any).__returnConsumerFixture = state;
         const current = (await f.adapter.getDocument<Transaction>('transactions', original.id))!;
         const history = await f.adapter.getDocument<Transaction>('transactionHistory', original.id);
         const updated = { ...current, status: 'PARTIAL_REFUND' as const, relatedTransactions: [...(current.relatedTransactions || []), tx.id], syncStatus: 'PENDING' as const };
-        const result = await financial.persistV3FinancialTransaction(tx, config, stamp.warehouseId, { refund: true, fiscalReturnAttemptId: attempt.id, original: updated, expectedOriginal: current, expectedOriginalHistory: history, originalCollection: 'transactions', skipWalletDeposit: true, conditions: new Map(original.items.map(l => [l.cartId, 'SELLABLE'])) });
+        const result = await financial.persistV3FinancialTransaction(tx, config, stamp.warehouseId, { refund: true, fiscalReturnAttemptId: attempt.id, original: updated, expectedOriginal: current, expectedOriginalHistory: history, originalCollection: 'transactions', adjustCustomerBalance:Number(attempt.preparation.returnSnapshot.pendingBalance)>0, skipWalletDeposit: true, conditions: new Map(original.items.map(l => [l.cartId, 'SELLABLE'])) });
         return result.transaction;
     };
     const client = createFiscalReturnConsumer({ adapter: f.adapter, transport: { context: () => ({ descriptor: scope, assertCurrent: () => { } } as any), capability: async () => { if (offline)
                 throw Error('FISCAL_RETURN_UNAVAILABLE'); return capability; }, prepare }, workflow: { ...localClient, consult: async () => parent }, readOriginal: async () => (await f.adapter.getDocument<Transaction>('transactions', original.id))!,
         commit: commitSource });
     const run = (q = 1) => client.process(original, [{ ...original.items[0], quantity: q }], new Map([['line', 'SELLABLE']]), 'Synthetic return', id(10), { id: 'user', name: 'User' });
-    return { ...f, cleanup: () => { f.db.close(); rmSync(generated, { recursive: true, force: true }); }, scope, config, original, parent, grant, client, run, commitSource, preparations, prepareCalls, setProofTransform: (transform?: (p: ReturnPreparation) => ReturnPreparation) => proofTransform = transform, setOffline: (v: boolean) => offline = v, setLosePrepare: () => losePrepare = true, setDenied: (v: boolean) => deny = v, setCapability: (v: Partial<ReturnCapability>) => { capability = { ...capability, ...v }; }, localClient };
+    return { ...f, cleanup: () => { f.db.close(); rmSync(generated, { recursive: true, force: true }); }, scope, config, original, parent, grant, client, run, commitSource, preparations, prepareCalls, setCommitTransform:(transform:(tx:Transaction)=>Transaction)=>commitTransform=transform, setProofTransform: (transform?: (p: ReturnPreparation) => ReturnPreparation) => proofTransform = transform, setOffline: (v: boolean) => offline = v, setLosePrepare: () => losePrepare = true, setDenied: (v: boolean) => deny = v, setCapability: (v: Partial<ReturnCapability>) => { capability = { ...capability, ...v }; }, localClient };
 }

@@ -1,3 +1,4 @@
+import {NativeFiscalCreditApplicationStore,FISCAL_CREDIT_APPLICATION_SCHEMA} from '../NativeFiscalCreditApplicationStore';
 import {NativeFiscalReturnStore,FISCAL_RETURN_SCHEMA,consumeNativeFiscalReturn} from '../NativeFiscalReturnStore';
 import {DISPATCH_STORE_POLICY_SCHEMA_V2,DISPATCH_POOL_INSTALL_SCHEMA,installDispatchPoolSnapshot,prepareDispatchBarrierProof,type DispatchPoolSnapshot,dispatchPoolId} from '../CompanyDispatchPool';
 import {DISPATCH_ADOPTION_SCHEMA,acknowledgeDispatchAdoption,type DispatchAdoptionProof} from '../CompanyDispatchAdoption';
@@ -133,6 +134,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
     private writeQueue: Promise<unknown> = Promise.resolve();
     public readonly adapterType = 'local';
     public readonly fiscalWorkflowStore=new NativeFiscalWorkflowV2Store(()=>this.ensureDb() as any,work=>this.withWriteLock(work));
+    public readonly fiscalCreditApplicationStore=new NativeFiscalCreditApplicationStore(()=>this.ensureDb() as any,work=>this.withWriteLock(work),work=>this.withWriteLock(()=>this.withNativeTransaction(work)));
     public readonly fiscalReturnStore=new NativeFiscalReturnStore(()=>this.ensureDb() as any,work=>this.withWriteLock(work),work=>this.withWriteLock(()=>this.withNativeTransaction(work)));
     public readonly terminalAuthEvidenceStore=new NativeTerminalAuthEvidenceStore(()=>this.ensureDb() as any,work=>this.withWriteLock(work),work=>this.withNativeTransaction(work));
     public readonly masterSyncV3Store = this.serializedMasterStore();
@@ -1213,6 +1215,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         await db.execute(`
             ${FISCAL_WORKFLOW_V2_SCHEMA}
             ${FISCAL_RETURN_SCHEMA}
+            ${FISCAL_CREDIT_APPLICATION_SCHEMA}
             CREATE TABLE IF NOT EXISTS documents (
                 collection_name TEXT NOT NULL,
                 doc_id TEXT NOT NULL,

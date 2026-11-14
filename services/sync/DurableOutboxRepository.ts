@@ -337,6 +337,7 @@ export class DurableOutboxRepository {
             [timestamp, timestamp, eventId]
         );
         await this.database.fiscalReturnStore?.acknowledgeApplied(eventId);
+        void import('../fiscal/FiscalReturnCreditApplication').then(m=>m.refreshPendingReturnCustomerProjections()).catch(()=>undefined);
         syncMetrics.markErpApplied(timestamp);
         await this.refreshMetrics();
     }

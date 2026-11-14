@@ -105,6 +105,7 @@ export interface FinancialNumberResult {
 }
 
 export interface DatabaseAdapter {
+    readonly fiscalCreditApplicationStore?: import('./NativeFiscalCreditApplicationStore').NativeFiscalCreditApplicationStore;
     readonly fiscalReturnStore?: import('./NativeFiscalReturnStore').NativeFiscalReturnStore;
     connect(): Promise<void>;
     disconnect(): Promise<void>;

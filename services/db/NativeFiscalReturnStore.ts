@@ -18,6 +18,7 @@ OR NEW.phase IN('PREPARING','PREPARED','SEALED','COMMITTED') AND json_extract(NE
 OR NEW.phase IN('PREPARED','SEALED','COMMITTED') AND json_extract(NEW.data,'$.preparation') IS NULL
 OR NEW.phase IN('SEALED','COMMITTED') AND (json_extract(NEW.data,'$.source') IS NULL OR json_extract(NEW.data,'$.localCommittedAt') IS NULL)
 BEGIN SELECT RAISE(ABORT,'FISCAL_RETURN_PHASE_CONFLICT');END;
+CREATE TRIGGER IF NOT EXISTS pos_return_settlement_selection_v1 BEFORE UPDATE ON pos_fiscal_return_attempts_v1 WHEN json_extract(OLD.data,'$.settlementSelection') IS NOT NULL AND json_extract(OLD.data,'$.settlementSelection') IS NOT json_extract(NEW.data,'$.settlementSelection') BEGIN SELECT RAISE(ABORT,'FISCAL_RETURN_IDEMPOTENCY_CONFLICT');END;
 CREATE TRIGGER IF NOT EXISTS pos_return_digest_proof_v1 BEFORE UPDATE ON pos_fiscal_return_attempts_v1
 WHEN json_extract(OLD.data,'$.preparationDigestProof') IS NOT NULL AND json_extract(OLD.data,'$.preparationDigestProof') IS NOT json_extract(NEW.data,'$.preparationDigestProof')
 BEGIN SELECT RAISE(ABORT,'FISCAL_RETURN_DIGEST_WIRE_CONFLICT');END;
@@ -66,6 +67,10 @@ export class NativeFiscalReturnStore {
             checkout.phase = 'ACKNOWLEDGED';
             await this.connection().run("UPDATE pos_fiscal_checkouts_v2 SET phase='ACKNOWLEDGED',checkout_json=? WHERE checkout_id=?", [JSON.stringify(checkout), checkout.checkoutId], false);
             await this.connection().run("UPDATE documents SET data=json_set(data,'$.syncStatus','APPLIED_ERP') WHERE collection_name IN('transactions','transactionHistory') AND doc_id=?", [checkout.transactionId], false);
+            const customerId=a.preparation!.returnSnapshot.settlement?.customerId;
+            if(customerId){const request={id:`RETURN-${checkout.transactionId}`,transactionId:checkout.transactionId,scope:a.scope,customerId,state:'PENDING'};
+                await this.connection().run("INSERT OR IGNORE INTO documents(collection_name,doc_id,data,sort_order,updatedAt)VALUES('fiscalReturnProjectionRequests',?,?,0,?)",[request.id,JSON.stringify(request),new Date().toISOString()],false);}
+
         });
     }
     fence(id: string) {
