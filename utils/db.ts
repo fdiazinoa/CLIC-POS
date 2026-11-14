@@ -1,6 +1,6 @@
 import {snapshotFiscalIssuance,assertFiscalIssuance,assertNewFiscalIssuer} from './fiscalIssuance';
 import {fiscalSequencePadding as getFiscalSequencePadding,formatFiscalNumber} from './fiscalNumber';
-import { resolveFiscalTerminalPolicyFromConfig,hasValidFiscalAllocationPointer,getFiscalRangeForEmission,hasValidAllocatedFiscalRange,isAllocationAllowedByPolicy } from './fiscalBufferAuthority';
+import { resolveFiscalTerminalPolicyFromConfig,isDeferredFiscalBufferUsable,hasValidFiscalAllocationPointer,getFiscalRangeForEmission,hasValidAllocatedFiscalRange,isAllocationAllowedByPolicy } from './fiscalBufferAuthority';
 import { applyLocalUserProfiles } from './localUserProfiles';
 import {
   BusinessConfig, Product, User, Customer, Transaction,
@@ -609,18 +609,7 @@ const reserveDeferredFiscalNumber = async (type: FiscalDocumentCode, terminalId:
     const pointer = Math.max(allocation.reservedStart, Number(allocation.nextNumber) || allocation.reservedStart);
     // Mismas guardas que la reserva atómica: un buffer atrasado, ajeno o fuera de bloque
     // no puede retroceder el puntero autoritativo del ERP.
-    const bufferUsable = Boolean(buffer &&
-      normalizeSequenceKey(buffer.terminalId) === normalizeSequenceKey(authorityId) &&
-      buffer.allocationId === allocation.id &&
-      buffer.fiscalRangeId === allocation.fiscalRangeId &&
-      buffer.prefix === (allocation.prefix || type) &&
-      buffer.expiryDate === (range.expiryDate || '') &&
-      Number.isSafeInteger(buffer.currentNumber) && Number.isSafeInteger(buffer.startNumber) && Number.isSafeInteger(buffer.endNumber) &&
-      buffer.currentNumber >= buffer.startNumber &&
-      buffer.startNumber >= allocation.reservedStart &&
-      buffer.endNumber <= allocation.reservedEnd &&
-      buffer.currentNumber >= pointer &&
-      buffer.currentNumber <= Math.min(buffer.endNumber, allocation.reservedEnd));
+    const bufferUsable = isDeferredFiscalBufferUsable(buffer,allocation,range,authorityId,type);
     const candidate = bufferUsable && buffer ? buffer.currentNumber : pointer;
     if (!Number.isSafeInteger(candidate) || candidate < allocation.reservedStart || candidate > allocation.reservedEnd) return null;
     const prefix = range.prefix || allocation.prefix || type;

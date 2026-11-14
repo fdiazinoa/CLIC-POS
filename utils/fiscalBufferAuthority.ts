@@ -104,6 +104,21 @@ export const isAllocationAllowedByPolicy = (
 };
 
 
+/** A downloaded buffer is optional for a deferred selection, but it must never
+ * override a newer ERP pointer or carry stale lot metadata into the commit. */
+export function isDeferredFiscalBufferUsable(buffer:LocalFiscalBuffer|undefined|null,allocation:FiscalAllocation,
+ range:FiscalRangeDGII,authorityId:string,type:FiscalDocumentCode):buffer is LocalFiscalBuffer {
+ const pointer=Math.max(allocation.reservedStart,Number(allocation.nextNumber)||allocation.reservedStart);
+ return Boolean(buffer&&buffer.type===type&&buffer.terminalId===authorityId
+  &&buffer.allocationId===allocation.id&&buffer.fiscalRangeId===range.id
+  &&buffer.prefix===(allocation.prefix||type)&&buffer.prefix===range.prefix
+  &&buffer.expiryDate===(range.expiryDate||'')
+  &&Number.isSafeInteger(buffer.currentNumber)&&Number.isSafeInteger(buffer.startNumber)&&Number.isSafeInteger(buffer.endNumber)
+  &&buffer.currentNumber>=buffer.startNumber!&&buffer.startNumber!>=allocation.reservedStart&&buffer.endNumber<=allocation.reservedEnd
+  &&buffer.currentNumber>=pointer&&buffer.currentNumber<=Math.min(buffer.endNumber,allocation.reservedEnd));
+}
+
+
 export function validateFiscalBufferReservation(input:{business:BusinessConfig;terminalId:string;type:FiscalDocumentCode;
  buffer:LocalFiscalBuffer;allocation:FiscalAllocation;range:FiscalRangeDGII;ncf:string;requireLegacyBMode?:boolean}):LocalFiscalBuffer {
  const {business,terminalId,type,buffer,allocation,range,ncf}=input;

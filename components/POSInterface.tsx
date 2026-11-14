@@ -1,3 +1,4 @@
+import {LegacyFiscalCheckoutAttempt} from '../services/fiscal/LegacyFiscalCheckoutAttempt';
 import {compileDispatchCheckoutSource,dispatchCatalogueView,dispatchTrackingOptions,type DispatchCheckoutAuthority} from '../services/dispatch/DispatchCheckoutSource';
 import {dispatchCommercialSource,dispatchPaymentIntents} from '../services/db/CompanyDispatchEscrowStore';
 import {synchronizeNativeCompanyDispatch} from '../services/dispatch/CompanyDispatchRuntime';
@@ -5884,6 +5885,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       setActiveRecoveredReservation(null); setActiveV3Reservation(null); setOrderServiceType('DINE_IN');
    };
 
+   const legacyFiscalAttemptRef=useRef(new LegacyFiscalCheckoutAttempt());
+
    const handlePaymentConfirm = async (payments: PaymentEntry[], voluntaryTip?: number): Promise<Transaction | null> => {
       recordCheckoutDiagnostic('CHECKOUT_CONFIRM', { items: processedCart, expectedItemCount: cart.length, total: cartTotal, payments, tableId: activeTable?.id, orderId: activeTable?.currentOrderId, terminalId: activeTerminalId });
       if (paymentFinalizationInFlightRef.current) {
@@ -5915,6 +5918,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       };
 
       try {
+         const legacyAttemptIdentity=JSON.stringify({terminalId:activeTerminalId,cart:processedCart,customerId:effectiveSelectedCustomer?.id||null,
+            payments,total:cartTotal,tip:voluntaryTip||0,fiscalType:fiscalStatus.type,discount:globalDiscount,userId:currentUser.id});
+         const pendingLegacyDraft=legacyFiscalAttemptRef.current.resume(legacyAttemptIdentity);
+         const retainedLegacyTxn=pendingLegacyDraft
+            ?await withTimeout(pendingLegacyDraft,25000,'TIMEOUT_CREATE_TRANSACTION'):undefined;
          const completed = await completedReservationForReceipt();
          if (completed) { clearCompletedReservationCart(); return completed; }
          const receipt=await resolveCommittedFiscalReceipt(payments.map(payment=>payment.id));
@@ -5981,8 +5989,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             onUpdateCart([]);resetCompletedSaleDiscount(setGlobalDiscount);onSelectCustomer(null);return result;
          }
          if(!dispatchCheckoutRef.current)assertFormatsPostingClosed(processedCart);
-         await assertCheckoutFiscalAuthority();
-         if (v3Operational&&!dispatchCheckoutRef.current) {
+         if(!retainedLegacyTxn)await assertCheckoutFiscalAuthority();
+         if (!retainedLegacyTxn&&v3Operational&&!dispatchCheckoutRef.current) {
             try { await v3Operational.validate(processedCart, { ticketId: activeTable?.currentOrderId || activeDirectV3TicketId, claimId: activeDirectV3TicketId, reservationId:activeV3Reservation?.reservation.id,reservationClaimId:activeV3Reservation?.claimId, tableId: activeTable?.id === undefined ? undefined : String(activeTable.id) }); }
             catch (error: any) {
                // Name the warehouse where the ticket's articles actually live: "no disponible" alone
@@ -6141,7 +6149,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             }
          }
 
-         for (const item of processedCart) {
+         if(!retainedLegacyTxn)for (const item of processedCart) {
             const sourceProduct = productsById.get(item.id);
             if (!sourceProduct) {
                alert(`No se pudo validar el artículo ${item.name}. Refresque la lista e intente nuevamente.`);
@@ -6175,7 +6183,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             return null;
          }
 
-         if (creditAmount > 0) {
+         if (creditAmount > 0 && !retainedLegacyTxn) {
             const creditGate = evaluateCreditSupervisorGate(customerForCheckout, 0, creditAmount);
             if (creditGate?.reason === 'NO_CUSTOMER') {
                alert('No se puede guardar un ticket con pago pendiente a crédito sin un cliente asociado.');
@@ -6192,6 +6200,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                return null;
             }
          }
+
+         const retainLegacyFiscalAttempt=Boolean(isRetailMode&&v3Operational&&Capacitor.isNativePlatform()
+            &&!hasReturns&&!activeTable&&!activeOrderId&&!activeV3Reservation&&!activeRecoveredReservation&&!activeDirectV3TicketId
+            &&!uberRecoveredOrder&&!dispatchCheckoutRef.current&&!trackingCheckoutRef.current&&!fiscalCheckoutRef.current
+            &&['B01','B02'].includes(fiscalStatus.type)&&!processedCart.some(line=>line.trackingData?.length));
 
          const refundFiscalType = resolveCreditNoteFiscalCode(fiscalCompliance.mode);
          let reservedRefundNcf: string | undefined;
@@ -6230,7 +6243,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             return null;
          }
 
-         if (isFiscalModeDisabledForCheckout) {
+         if(retainedLegacyTxn){
+            finalNcf=retainedLegacyTxn.ncf;finalNcfType=retainedLegacyTxn.ncfType;finalIssuance=retainedLegacyTxn.fiscalIssuance;
+         } else if (isFiscalModeDisabledForCheckout) {
             finalNcf = undefined;
             finalNcfType = undefined;
          } else if (isRefundOnly) {
@@ -6484,9 +6499,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                const walletPaymentAmount = payments.filter(p => p.method === 'WALLET').reduce((acc, p) => acc + p.amount, 0);
                const refundDocumentTotal = normalizedRefundItems.reduce((acc, item) => acc + (item.price * item.quantity), 0);
                const rawDocumentItems = isRefundOnly ? normalizedRefundItems : processedCart;
-               const saleOrderNumber = !isRefundOnly
+               const saleOrderNumber = retainedLegacyTxn?.orderNumber || (!isRefundOnly
                   ? (readCartOrderNumber(processedCart) || reserveNextOrderNumber())
-                  : undefined;
+                  : undefined);
                const contextualDocumentItems = !isRefundOnly
                   ? applyOrderContextToItems(rawDocumentItems, saleOrderNumber)
                   : rawDocumentItems;
@@ -6528,7 +6543,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   && ['E31', 'E32', 'E44', 'E45'].includes(finalNcfType || '')
                   ? explicitTerminalFiscalEnvironment(activeTerminal, terminalId, getDefaultFiscalProvider(config, activeTerminalConfig), fiscalCompliance.mode)
                   : undefined;
-               const txn = await withTimeout(transactionService.createTransaction({
+               const createOrdinaryDraft=()=>transactionService.createTransaction({
                   ...(newDirectFiscalEnvironment !== undefined ? { fiscalEnvironment: newDirectFiscalEnvironment } : {}),
                   ...(dispatchCheckoutRef.current?{id:dispatchCheckoutRef.current.transactionId,inventoryEffectsContract:'WAREHOUSE_RESERVATION_V1',companyDispatchSource:dispatchCheckoutRef.current.source.companyDispatchSource}:{}),
                   ...(trackingCheckoutRef.current?{id:trackingCheckoutRef.current.transactionId,trackingCheckoutId:trackingCheckoutRef.current.checkoutId,trackingEffectAt:trackingCheckoutRef.current.effectAt}:{}),
@@ -6604,7 +6619,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   observations: uberRecoveredOrder
                      ? `Uber Eats ${uberRecoveredOrder.code} / ${uberRecoveredOrder.sourceOrderId}`
                      : undefined
-               }, { deferDurablePersistence: !isRefundOnly || Boolean(v3Operational) }), 25000, 'TIMEOUT_CREATE_TRANSACTION').catch(async (error: any) => {
+               }, { deferDurablePersistence: !isRefundOnly || Boolean(v3Operational) });
+               const txn = retainedLegacyTxn || await withTimeout(retainLegacyFiscalAttempt
+                  ?legacyFiscalAttemptRef.current.create(legacyAttemptIdentity,createOrdinaryDraft):createOrdinaryDraft(),25000,'TIMEOUT_CREATE_TRANSACTION').catch(async (error: any) => {
+                  if(retainLegacyFiscalAttempt)throw error;
+
                   if (!/TIMEOUT_CREATE_TRANSACTION/.test(String(error?.message || error))) throw error;
                   // The native commit may have finished after the watchdog fired: the durable
                   // transaction is the truth. Otherwise the uncertain attempt is released so the
@@ -6652,6 +6671,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      }
                   );
                } else {
+                  if(retainLegacyFiscalAttempt)legacyFiscalAttemptRef.current.retain(legacyAttemptIdentity,settledFinalTxn);
                   await Promise.resolve(onTransactionComplete(settledFinalTxn));
                   if(dispatchCheckoutRef.current){const captured=(await db.getDocument('transactions',settledFinalTxn.id)||await db.getDocument('transactionHistory',settledFinalTxn.id)) as Transaction|null;if(!captured?.companyDispatchSource?.sequence)throw Error('DISPATCH_NATIVE_CAPTURE_REQUIRED');settledFinalTxn=captured as Transaction;setDispatchLocalRefresh(value=>value+1);dispatchCheckoutRef.current=null;}
                   if (durableSaleCommit && settledFinalTxn.consignmentId) {
@@ -6780,6 +6800,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   await fiscalWorkflowV2Client.acknowledge(fiscalCheckoutRef.current);trackingCheckoutRef.current=null;fiscalCheckoutRef.current=null;fiscalCheckoutOperationRef.current=null;offlineTableFiscalContextRef.current=undefined;offlineTablePaymentFenceRef.current=false;
                   void fiscalWorkflowV2Client.prefetch().catch(()=>undefined);
                }
+               legacyFiscalAttemptRef.current.complete(legacyAttemptIdentity);
                recordCheckoutDiagnostic('CART_CLEAR_REQUEST', { items: cart, tableId: activeTable?.id, orderId: activeTable?.currentOrderId, reason: 'POS_CLEAR_07' });
                trackingCheckoutRef.current=null;
                onUpdateCart([]);
@@ -9397,9 +9418,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   )}
 
                {!isMobile && (
-                  <div className="mr-2 flex min-w-0 flex-1 items-center">
+                  <div className={`mr-2 flex min-w-0 items-center ${isRetailMode ? 'shrink' : 'flex-1'}`}>
                      {selectedCustomer ? (
-                        <div className="flex h-12 min-w-0 max-w-[300px] flex-1 items-center gap-2 rounded-2xl border border-blue-100 bg-blue-50/60 px-2">
+                        <div className={`flex h-12 min-w-0 items-center gap-2 rounded-2xl border border-blue-100 bg-blue-50/60 px-2 ${isRetailMode ? 'max-w-[220px]' : 'max-w-[300px] flex-1'}`}>
                            {resolveCustomerImageSrc(selectedCustomer) ? (
                               <img src={resolveCustomerImageSrc(selectedCustomer)} alt="" className="h-7 w-7 shrink-0 rounded-full border border-blue-200 bg-white object-cover" />
                            ) : (
@@ -9435,7 +9456,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      ) : (
                         <button
                            onClick={onOpenCustomers}
-                           className="flex h-12 min-w-0 max-w-[260px] flex-1 items-center justify-between gap-2 rounded-2xl border border-dashed border-slate-300 bg-white px-3 text-slate-400 transition-colors hover:border-blue-200 hover:text-blue-500"
+                           className={`flex h-12 min-w-0 items-center justify-between gap-2 rounded-2xl border border-dashed border-slate-300 bg-white px-3 text-slate-400 transition-colors hover:border-blue-200 hover:text-blue-500 ${isRetailMode ? '' : 'max-w-[260px] flex-1'}`}
                            title="Asignar cliente"
                         >
                            <span className="flex min-w-0 items-center gap-1.5">

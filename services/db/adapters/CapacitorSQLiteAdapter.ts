@@ -24,7 +24,7 @@ import {readV3Base4Stock,base4} from '../V3Base4Stock';
 import {Money} from '../../articleFormats/wire';
 import {NATIVE_FISCAL_RECEIPTS_SCHEMA,planNativeFiscalReceipt} from '../NativeFiscalReservation';
 import type {LargeMasterSyncV3Store} from '../../sync/LargeMasterSyncV3Types';
-import {validateFiscalBufferReservation} from '../../../utils/fiscalBufferAuthority';
+import {validateFiscalBufferReservation,isDeferredFiscalBufferUsable} from '../../../utils/fiscalBufferAuthority';
 import {clearDeferredFiscalReservation,isDeferredFiscalReservation} from '../../fiscal/DeferredFiscalReservation';
 import { ARTICLE_FORMAT_RETAINED_UPSERT_SQL } from '../ArticleFormatFinancialRetention';
 import { planFinancialNumbers, FINANCIAL_COUNTER_UPSERT_SQL } from '../FinancialNumberReservation';
@@ -1258,7 +1258,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         const authorityId=String(allocation.terminalId||tx.terminalId);
         const nextNumber=Math.max(Number(allocation.nextNumber)||0,sequence+1);
         // Un buffer atrasado o ajeno no es autoridad: se ignora y manda el puntero del ERP.
-        const bufferUsable=Boolean(bufferDoc&&Number(bufferDoc.currentNumber)===sequence&&bufferDoc.fiscalRangeId===range.id&&bufferDoc.allocationId===allocation.id);
+        const bufferUsable=isDeferredFiscalBufferUsable(bufferDoc,allocation,range,authorityId,issuance.ncfType)&&bufferDoc.currentNumber===sequence;
         const currentPointer=bufferUsable?Number(bufferDoc.currentNumber):(Number(allocation.nextNumber)||allocation.reservedStart);
         const alreadyAdvanced=currentPointer>sequence;
         if(existingReceipt){
@@ -1273,6 +1273,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
                 {statement:DOCUMENT_UPSERT_SQL,values:['fiscalAllocations',advancedAllocation.id,JSON.stringify(advancedAllocation),'fiscalAllocations',advancedAllocation.id,'fiscalAllocations',now]},
             ];
         }
+        if(!bufferUsable&&sequence!==allocation.nextNumber)throw new Error('NATIVE_FISCAL_AUTHORITY_CONFLICT');
         const buffer:any=bufferUsable?bufferDoc:{id:String(issuance.ncfType),type:issuance.ncfType,prefix:issuance.prefix,currentNumber:sequence,startNumber:sequence,endNumber:sequence,expiryDate:range.expiryDate||'',terminalId:authorityId,fiscalRangeId:range.id,allocationId:allocation.id};
         const allocationForValidation={...allocation,nextNumber:Math.max(nextNumber,sequence+1)};
         const nextBuffer=validateFiscalBufferReservation({business:config,buffer,allocation:allocationForValidation,range,terminalId:buffer.terminalId,type:issuance.ncfType,ncf});
