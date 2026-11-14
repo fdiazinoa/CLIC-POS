@@ -1,3 +1,4 @@
+import {isElectronicFiscalDocument,isOrdinaryElectronicReturnSource} from '../utils/returnSettlementEligibility';
 import {captureFiscalStatusBoundContext} from '../services/fiscal/FiscalBoundContext';
 import {loadReturnSettlementSelection} from '../services/fiscal/FiscalReturnSettlementUI';
 import type {ReturnSettlementDestination} from '../services/fiscal/FiscalReturnV1';
@@ -77,7 +78,7 @@ export const RefundModal: React.FC<RefundModalProps> = ({
     let settlementContext='';try{if(isOpen)settlementContext=captureFiscalStatusBoundContext().fingerprint;}catch{/* Binding unavailable: no new settlement choice. */}
     useEffect(()=>{
         let cancelled=false;setSettlementState(null);setSettlementDestination('ORIGINAL_PAYMENT');
-        if(isOpen&&transaction&&/^E3[12]/.test(transaction.ncf||'')&&!(transaction as any).articleFormatWire){
+        if(isOpen&&isOrdinaryElectronicReturnSource(transaction,mode)){
             void loadReturnSettlementSelection(transaction).then(value=>{if(!cancelled){setSettlementState(value);setSettlementDestination(value.destination);if(value.locked&&value.requestedLines){setRefundQuantities(new Map(value.requestedLines.map((l:any)=>[l.cartId,l.quantity])));setItemConditions(new Map(value.requestedLines.map((l:any)=>[l.cartId,l.stockDisposition==='DAMAGED'?'DAMAGED':'SELLABLE'])));setReason(value.reason||'');}}}).catch(()=>{});
         }
         return()=>{cancelled=true;};
@@ -129,7 +130,7 @@ export const RefundModal: React.FC<RefundModalProps> = ({
 
     const totalRefundAmount = transaction.items.reduce((sum, item) => {
         const qty = refundQuantities.get(item.cartId) || 0;
-        return sum + ((/^E3[12]/.test(transaction.ncf||'')&&!isGatewayRefundMode&&item.quantity>0)?Number(item.totalAmount??item.price*item.quantity)*qty/item.quantity:item.price*qty);
+        return sum + ((isOrdinaryElectronicReturnSource(transaction,mode)&&item.quantity>0)?Number(item.totalAmount??item.price*item.quantity)*qty/item.quantity:item.price*qty);
     }, 0);
 
     const isFullRefund = transaction.items.every(item =>
@@ -184,7 +185,7 @@ export const RefundModal: React.FC<RefundModalProps> = ({
                     <div className="mb-6 flex gap-4 p-4 bg-blue-50/50 border border-blue-100 rounded-xl items-start">
                         <AlertTriangle className="text-blue-500 shrink-0 mt-0.5" size={18} />
                         <div className="text-sm text-blue-800">
-                            <p className="font-bold mb-1">{isGatewayRefundMode ? 'Refund AZUL + Nota de Crédito Fiscal (B04)' : `Nota de Crédito Fiscal (${transaction.fiscalMode==='ECF'||/^E/.test(transaction.ncf||'')?'E34':'B04'})`}</p>
+                            <p className="font-bold mb-1">{isGatewayRefundMode ? 'Refund AZUL + Nota de Crédito Fiscal (B04)' : `Nota de Crédito Fiscal (${isElectronicFiscalDocument(transaction)?'E34':'B04'})`}</p>
                             <p className="opacity-80">
                                 {isGatewayRefundMode
                                     ? 'Este flujo ejecutará el refund total en AZUL y luego generará la nota de crédito vinculada a este comprobante.'
@@ -340,11 +341,11 @@ export const RefundModal: React.FC<RefundModalProps> = ({
                 {/* Footer */}
                 <div className="p-6 border-t border-gray-100 bg-gray-50 rounded-b-2xl flex justify-between items-center">
                     <div>
-                        <p className="text-xs font-bold text-gray-400 uppercase">{/^E3[12]/.test(transaction.ncf||'')&&!isGatewayRefundMode?'Importe seleccionado de la devolución':'Total a Reembolsar'}</p>
+                        <p className="text-xs font-bold text-gray-400 uppercase">{isOrdinaryElectronicReturnSource(transaction,mode)?'Importe seleccionado de la devolución':'Total a Reembolsar'}</p>
                         <p className="text-2xl font-black text-red-600">
                             {currencySymbol}{totalRefundAmount.toFixed(2)}
                         </p>
-                        {/^E3[12]/.test(transaction.ncf||'')&&!isGatewayRefundMode&&<p className="text-xs text-gray-500">Estimación de la factura original. El ERP autoriza la deuda, el reembolso o el saldo final.</p>}
+                        {isOrdinaryElectronicReturnSource(transaction,mode)&&<p className="text-xs text-gray-500">Estimación de la factura original. El ERP autoriza la deuda, el reembolso o el saldo final.</p>}
                         {isFullRefund && refundQuantities.size > 0 && (
                             <span className="text-[10px] font-bold bg-red-100 text-red-600 px-2 py-0.5 rounded-md">
                                 {isGatewayRefundMode ? 'REFUND TOTAL AZUL' : 'ANULACIÓN TOTAL'}

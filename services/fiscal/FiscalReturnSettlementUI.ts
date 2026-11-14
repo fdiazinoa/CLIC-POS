@@ -1,17 +1,18 @@
+import {canOfferReturnSettlement} from '../../utils/returnSettlementEligibility';
 import type {Transaction,Customer} from '../../types';
 import {dbAdapter} from '../db';
 import {apiSyncAdapter} from '../sync/ApiSyncAdapter';
 import {resolveSyncTarget} from '../sync/SyncProfile';
 import {captureFiscalStatusBoundContext} from './FiscalBoundContext';
 import {createFiscalReturnTransport} from './FiscalReturnConsumer';
-import {assertReturnSettlementCapability,returnNeed,type ReturnSettlementDestination} from './FiscalReturnV1';
+import {returnNeed,type ReturnSettlementDestination} from './FiscalReturnV1';
 export async function loadReturnSettlementSelection(source:Transaction){
  const auth=captureFiscalStatusBoundContext(),{tenantId,companyId,storeId,terminalId,deviceId}=auth.descriptor,scope={tenantId,companyId,storeId,terminalId,deviceId};
  const attempt=await dbAdapter.fiscalReturnStore?.active(scope,source.id);auth.assertCurrent();
  const intent=attempt?JSON.parse(attempt.intent):null,command=attempt?.commandBytes?JSON.parse(attempt.commandBytes):null;
  const durable=command?command.settlement:attempt?.settlementSelection||intent?.settlementRequested||intent?.settlement;
  const capability=await createFiscalReturnTransport().capability();auth.assertCurrent();
- let enabled=true;try{assertReturnSettlementCapability(capability,scope);}catch{enabled=false;}
+ const enabled=canOfferReturnSettlement(source,capability,scope);
  let customerId:string|null=null;
  if(enabled&&source.customerId&&resolveSyncTarget().kind==='ERP_ACTIVE'){
   const rows=await apiSyncAdapter.pull('customers') as Customer[];auth.assertCurrent();
