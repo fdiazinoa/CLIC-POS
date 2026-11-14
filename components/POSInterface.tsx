@@ -9397,9 +9397,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   )}
 
                {!isMobile && (
-                  <div className="mr-2 flex min-w-0 flex-1 items-center">
+                  <div className={`mr-2 flex min-w-0 items-center ${isRetailMode ? 'shrink' : 'flex-1'}`}>
                      {selectedCustomer ? (
-                        <div className="flex h-12 min-w-0 max-w-[300px] flex-1 items-center gap-2 rounded-2xl border border-blue-100 bg-blue-50/60 px-2">
+                        <div className={`flex h-12 min-w-0 items-center gap-2 rounded-2xl border border-blue-100 bg-blue-50/60 px-2 ${isRetailMode ? 'max-w-[220px]' : 'max-w-[300px] flex-1'}`}>
                            {resolveCustomerImageSrc(selectedCustomer) ? (
                               <img src={resolveCustomerImageSrc(selectedCustomer)} alt="" className="h-7 w-7 shrink-0 rounded-full border border-blue-200 bg-white object-cover" />
                            ) : (
@@ -9435,7 +9435,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      ) : (
                         <button
                            onClick={onOpenCustomers}
-                           className="flex h-12 min-w-0 max-w-[260px] flex-1 items-center justify-between gap-2 rounded-2xl border border-dashed border-slate-300 bg-white px-3 text-slate-400 transition-colors hover:border-blue-200 hover:text-blue-500"
+                           className={`flex h-12 min-w-0 items-center justify-between gap-2 rounded-2xl border border-dashed border-slate-300 bg-white px-3 text-slate-400 transition-colors hover:border-blue-200 hover:text-blue-500 ${isRetailMode ? '' : 'max-w-[260px] flex-1'}`}
                            title="Asignar cliente"
                         >
                            <span className="flex min-w-0 items-center gap-1.5">
