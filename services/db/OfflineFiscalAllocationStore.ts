@@ -117,9 +117,15 @@ export async function readAllocationSelection(sql:SQL,authority:OfflineFiscalAll
   const buffers=(await sql.query("SELECT data FROM documents WHERE collection_name='localFiscalBuffer' AND json_extract(data,'$.allocationId')=?",[member.allocationId])).values||[];
   if(buffers.length>1)allocationFail('OFFLINE_FISCAL_ALLOCATION_REQUIRED');
   const createBuffer=buffers.length===0;
-  /** end+1 es la marca de "bloque ya reservado localmente", no un puntero real. */
-  const pointer=Number(allocation.nextNumber)||member.start,erpPointer=pointer<=member.end?pointer:member.start;
-  const freshStart=async()=>Math.max(erpPointer,await issuedSequenceFloor(sql,member.fiscalRangeId,authority.issuerRnc,member.prefix),member.start);
+  /** end+1 es la marca de "bloque ya reservado localmente", no un puntero real. Sin
+   *  recibos locales que prueben lo emitido no se reinicia el bloque: se conserva el
+   *  puntero y la caja falla cerrada en vez de reemitir números de otro equipo. */
+  const freshStart=async()=>{
+   const floor=await issuedSequenceFloor(sql,member.fiscalRangeId,authority.issuerRnc,member.prefix);
+   const pointer=Number(allocation.nextNumber)||member.start;
+   const erpPointer=pointer<=member.end?pointer:(floor>1?member.start:pointer);
+   return Math.max(erpPointer,floor,member.start);
+  };
   let buffer:LocalFiscalBuffer;
   if(createBuffer){const start=await freshStart();buffer={id:'V2-'+allocation.id,type:type as any,prefix:member.prefix,currentNumber:start,startNumber:start,endNumber:member.end,expiryDate:member.expiryDate||'',terminalId:authority.scope.terminalId,allocationId:allocation.id,fiscalRangeId:range.id};}
   else buffer=JSON.parse(buffers[0].data);
