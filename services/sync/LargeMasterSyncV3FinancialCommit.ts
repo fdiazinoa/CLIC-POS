@@ -334,7 +334,7 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
               ...(options.taxClassificationNotice?.length ? { v3TaxClassificationNotice: options.taxClassificationNotice } : {}) }), createdAt: document.date });
         const paymentPosted = buildPaymentPostedPayload(document, { ...fiscalSourceMetadata, ...(returnAttempt?{fiscalReturnContract:returnContract(returnAttempt),tenant_id:returnAttempt.scope.tenantId,company_id:returnAttempt.scope.companyId,store_id:returnAttempt.scope.storeId,terminal_id:returnAttempt.scope.terminalId,device_id:returnAttempt.scope.deviceId}:{}), paymentIntentIds });
         if(paymentPosted&&returnAttempt)(paymentPosted as any).payments=returnAttempt.preparation!.returnSnapshot.paymentCommands;
-        if (paymentPosted) events.push({ eventId: returnAttempt?.paymentEventId || createUuid(), eventType: 'PAYMENT_POSTED',
+        if (paymentPosted && (!returnAttempt || returnAttempt.preparation!.returnSnapshot.paidAmount>0)) events.push({ eventId: returnAttempt?.paymentEventId || createUuid(), eventType: 'PAYMENT_POSTED',
             aggregateType: 'TRANSACTION', aggregateId: document.id, schemaVersion: 1, payload: paymentPosted, createdAt: document.date });
         intentIds.push(...paymentIntentIds);
       } else {

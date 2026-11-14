@@ -133,6 +133,7 @@ export async function consumeNativeFiscalReturn(sql: SQL, input: FinancialCommit
     returnNeed(mutation.length === 1 && mutation[0].expectedDocument === seriesRow?.data && sameReturn(mutation[0].document, number.series) && source.document.displayId === number.result.displayId && source.document.seriesNumber === number.result.seriesNumber, 'FISCAL_RETURN_NUMBER_PLAN_CHANGED');
     const nc = events.find(e => e.eventType === 'SALES_CREDIT_NOTE_POSTED');
     returnNeed(nc?.eventId === a.financialEventId && sameReturn(nc.payload.fiscalReturnContract, returnContract(a)) && nc.payload.fiscalWorkflowBirth?.checkoutId === a.checkout!.checkoutId && sameReturn(nc.payload.inventoryMovementIds, p.inventoryMovementIds), 'FISCAL_RETURN_EVENT_MISMATCH');
+    returnNeed(!events.some(e=>e.eventType==='WALLET_MOVEMENT_POSTED'),'FISCAL_RETURN_PAYMENT_INVALID');
     const payment = events.find(e => e.eventType === 'PAYMENT_POSTED');
     returnNeed(p.returnSnapshot.paymentCommands.length ? payment?.eventId === a.paymentEventId && sameReturn(payment.payload.fiscalReturnContract, returnContract(a)) && sameReturn(payment.payload.payments, p.returnSnapshot.paymentCommands) : !payment, 'FISCAL_RETURN_PAYMENT_INVALID');
     const ledger = input.documents.filter(d => d.collectionName === 'inventoryLedger');

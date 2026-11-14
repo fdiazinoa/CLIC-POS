@@ -4,7 +4,7 @@ import type { NativeFiscalReturnStore } from '../db/NativeFiscalReturnStore';
 import { fiscalWorkflowScopeKey } from './FiscalWorkflowV2Types';
 import type { FiscalWorkflowCheckoutV2, FiscalWorkflowStateV2 } from './FiscalWorkflowV2Types';
 import { captureFiscalStatusBoundContext } from './FiscalBoundContext';
-import { assertReturnAdmission, assertReturnPreparation, assertReturnSnapshotDigest, buildReturnSource, returnJSON, returnNeed, sameReturn, validOrdinaryReturnReference, originalReferencePendingCode, type ReturnAttempt, type ReturnCapability, type ReturnPreparation, type ReturnCommand } from './FiscalReturnV1';
+import { assertReturnAdmission, assertReturnSettlementCapability, assertReturnPreparation, assertReturnSnapshotDigest, buildReturnSource, returnJSON, returnNeed, sameReturn, validOrdinaryReturnReference, originalReferencePendingCode, type ReturnAttempt, type ReturnCapability, type ReturnPreparation, type ReturnCommand } from './FiscalReturnV1';
 import { sha256Utf8 } from '../sync/LargeMasterSyncV3Client';
 import { financialIdentity } from '../db/LargeMasterSyncV3FinancialRetention';
 export function createFiscalReturnTransport(readAuth = captureFiscalStatusBoundContext, fetcher: typeof fetch = fetch) {
@@ -75,7 +75,7 @@ export function createFiscalReturnConsumer(ports: ConsumerPorts) {
     return { async process(original: Transaction, items: CartItem[], conditions: Map<string, 'SELLABLE' | 'DAMAGED'>, reason: string, seriesId: string, user: {
             id: string;
             name: string;
-        }): Promise<Transaction> {
+        }, destination?: import('./FiscalReturnV1').ReturnSettlementDestination): Promise<Transaction> {
             const auth = ports.transport.context(), scope = { tenantId: auth.descriptor.tenantId, companyId: auth.descriptor.companyId, storeId: auth.descriptor.storeId, terminalId: auth.descriptor.terminalId, deviceId: auth.descriptor.deviceId };
             const store = ports.adapter.fiscalReturnStore;
             returnNeed(store, 'FISCAL_RETURN_NATIVE_REQUIRED');
@@ -91,23 +91,25 @@ export function createFiscalReturnConsumer(ports: ConsumerPorts) {
             original = await (ports.readOriginal?.(original) || Promise.resolve(original));
             const slot = await sha256Utf8(returnJSON([scope, original.id, [...(original.relatedTransactions || [])].sort()]));
             const selected = [...items].sort((a, b) => a.cartId.localeCompare(b.cartId));
-            const refunds = await ports.adapter.getCollection<Transaction>('transactionHistory');
-            const prior = refunds.filter(t => t.originalTransactionId === original.id);
-            const total = Math.round(selected.reduce((n, l) => { const old = original.items.find(x => x.cartId === l.cartId); returnNeed(old && l.quantity > 0, 'FISCAL_RETURN_LINES_REQUIRED'); return n + (old!.totalAmount ?? old!.price * old!.quantity) * l.quantity / old!.quantity; }, 0) * 100) / 100;
-            const payments = original.payments.filter(p => p.method !== 'CREDIT' && p.amount > 0);
-            let remaining = Math.min(total, Math.max(0, original.total - Number(original.pendingBalance || 0) - prior.reduce((n, t) => n + t.payments.reduce((m, p) => m + p.amount, 0), 0)));
-            const requested = payments.map(p => {
-                const methodId = p.methodId || p.method;
-                const used = prior.flatMap(t => t.payments).filter(x => (x.methodId || x.method) === methodId).reduce((n, x) => n + x.amount, 0);
-                const amount = Math.round(Math.min(remaining, Math.max(0, Number(p.appliedAmount ?? p.amount) - used)) * 100) / 100;
-                remaining = Math.round((remaining - amount) * 100) / 100;
-                return { methodId, amount, currency: 'DOP' as const };
-            }).filter(p => p.amount > 0);
             const lines = selected.map(l => ({ cartId: l.cartId, quantity: Math.abs(l.quantity), stockDisposition: l.type === 'SERVICE' ? 'SERVICE' as const : conditions.get(l.cartId) === 'DAMAGED' ? 'DAMAGED' as const : 'RESTOCK' as const }));
-            const intent = returnJSON({ originalId: original.id, lines, payments: requested, reason, seriesId, user });
-            let a = active || await store!.begin(slot, intent, scope, requested.length);
-            returnNeed(a.intent === intent, 'FISCAL_RETURN_IDEMPOTENCY_CONFLICT');
-            returnNeed(!payments.some(p => p.gatewayProvider || p.gatewayIntegrationId || p.paymentIntentId), 'FISCAL_RETURN_GATEWAY_PROOF_REQUIRED');
+            const payments = original.payments.filter(p => p.method !== 'CREDIT' && p.amount > 0);
+            const legacyPayments = async () => {
+                const refunds=await ports.adapter.getCollection<Transaction>('transactionHistory'),prior=refunds.filter(t=>t.originalTransactionId===original.id);
+                const total=Math.round(selected.reduce((n,l)=>{const old=original.items.find(x=>x.cartId===l.cartId);returnNeed(old&&l.quantity>0,'FISCAL_RETURN_LINES_REQUIRED');return n+(old!.totalAmount??old!.price*old!.quantity)*l.quantity/old!.quantity;},0)*100)/100;
+                let remaining=Math.min(total,Math.max(0,original.total-Number(original.pendingBalance||0)-prior.reduce((n,t)=>n+t.payments.reduce((m,p)=>m+p.amount,0),0)));
+                return payments.map(p=>{const methodId=p.methodId||p.method,used=prior.flatMap(t=>t.payments).filter(x=>(x.methodId||x.method)===methodId).reduce((n,x)=>n+x.amount,0);
+                    const amount=Math.round(Math.min(remaining,Math.max(0,Number(p.appliedAmount??p.amount)-used))*100)/100;remaining=Math.round((remaining-amount)*100)/100;
+                    return {methodId,amount,currency:'DOP' as const};}).filter(p=>p.amount>0);
+            };
+            const priorIntent=active?JSON.parse(active.intent):null;
+            const isLegacy=Boolean(active&&!priorIntent.settlementRequested);
+            const requestedSelection=priorIntent?.settlementRequested||{schemaVersion:1 as const,destination:destination||'ORIGINAL_PAYMENT'};
+            if(active&&destination)returnNeed(!isLegacy&&requestedSelection.destination===destination,'FISCAL_RETURN_IDEMPOTENCY_CONFLICT');
+            const legacyRequested=isLegacy?await legacyPayments():null;
+            const intent=returnJSON({originalId:original.id,lines,...(isLegacy?{payments:legacyRequested}:{settlementRequested:requestedSelection}),reason,seriesId,user});
+            let a=active||await store!.begin(slot,intent,scope,payments.length);
+            returnNeed(a.intent===intent,'FISCAL_RETURN_IDEMPOTENCY_CONFLICT');
+            returnNeed(!payments.some(p=>p.gatewayProvider||p.gatewayIntegrationId||p.paymentIntentId),'FISCAL_RETURN_GATEWAY_PROOF_REQUIRED');
             const pending = inflight.get(a.id);
             if (pending)
                 return pending;
@@ -115,6 +117,10 @@ export function createFiscalReturnConsumer(ports: ConsumerPorts) {
                 let c = await ports.transport.capability();
                 auth.assertCurrent();
                 assertReturnAdmission(c, scope);
+                const selection=a.commandBytes?JSON.parse(a.commandBytes).settlement:!isLegacy&&c.settlement?.enabled?requestedSelection:undefined;
+                if(selection)assertReturnSettlementCapability(c,scope);
+                if(!a.commandBytes&&requestedSelection.destination==='CUSTOMER_CREDIT'&&!selection)throw Error('FISCAL_RETURN_SETTLEMENT_DISABLED');
+                const requested=selection?[]:legacyRequested||await legacyPayments();
                 if (!a.checkout) {
                     // This genuine native reservation is PREPARED only: no issued counter, payment or stock effect.
                     const cart = returnJSON({ items: selected, customerId: original.customerId ?? null, fiscalType: 'E34', originalTransactionId: original.id,
@@ -129,7 +135,7 @@ export function createFiscalReturnConsumer(ports: ConsumerPorts) {
                     returnNeed(parent.mode === 'WORKFLOW' && parent.sourceKind === 'ORDINARY_SOURCE_V2' && parent.signature && ['ACCEPTED', 'ACCEPTED_CONDITIONAL'].includes(parent.decision) && validOrdinaryReturnReference(original, parent), 'FISCAL_RETURN_ACCEPTED_ORIGINAL_REQUIRED');
                     const command: ReturnCommand = { schemaVersion: 1, capability: 'fiscalReturnV1', operationId: a.operationId, checkoutId: checkout.checkoutId, transactionId: checkout.transactionId,
                         authorizationId: c.authorizationId, authorityHash: c.authorityHash, originalReference: reference!, lines,
-                        payments: requested.map((p, i) => ({ ...p, id: a.paymentIds[i] })), financialEventId: a.financialEventId,
+                        payments: requested.map((p, i) => ({ ...p, id: a.paymentIds[i] })), ...(selection?{settlement:selection}:{}), financialEventId: a.financialEventId,
                         inventoryMovementIds: selected.filter(l => l.type !== 'SERVICE' && l.isInventoriable === true && conditions.get(l.cartId) !== 'DAMAGED').map(l => `V3-${checkout.transactionId}-${encodeURIComponent(l.cartId)}`) };
                     a = await store!.save(a, { ...a, checkout, commandBytes: JSON.stringify(command), phase: 'PREPARING' });
                 }
@@ -154,6 +160,7 @@ export function createFiscalReturnConsumer(ports: ConsumerPorts) {
                 c = await ports.transport.capability();
                 auth.assertCurrent();
                 assertReturnAdmission(c, scope, a.preparation, now());
+                if(selection)assertReturnSettlementCapability(c,scope);
                 const draft = await ports.workflow.allocationDraft(a.checkout!);
                 returnNeed(draft.fiscalEnvironment === a.preparation!.environment, 'FISCAL_RETURN_AUTHORITY_REQUIRED');
                 if (!a.localCommittedAt) {

@@ -13097,7 +13097,7 @@ const AppContent: React.FC = () => {
               adjustCustomerBalance:Number(attempt.preparation!.returnSnapshot.pendingBalance)>0,skipWalletDeposit:true,conditions});
             return result.refund;
           }});
-        const result=await consumer.process(originalTx,itemsToRefund,conditions,reason,seriesId,{id:currentUser?.id||'sys',name:currentUser?.name||'System'});
+        const result=await consumer.process(originalTx,itemsToRefund,conditions,reason,seriesId,{id:currentUser?.id||'sys',name:currentUser?.name||'System'},options.returnSettlementDestination);
         const fresh=await db.get('transactions') as Transaction[];if(Array.isArray(fresh))setTransactions(fresh);
         const products=await readAppProducts();if(products.length)setProducts(products);
         backgroundSyncManager.triggerSync().catch(console.error);

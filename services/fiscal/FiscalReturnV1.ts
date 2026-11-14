@@ -8,8 +8,39 @@ export const returnDigest = (value: unknown) => sha256Utf8(returnJSON({ schemaVe
 export const returnNeed = (ok: unknown, code = 'FISCAL_RETURN_PROOF_INVALID'): void => { if (!ok)
     throw Error(code); };
 export type ReturnReference = NonNullable<FiscalWorkflowPermitV2['originalReference']>;
+export type ReturnSettlementDestination = 'ORIGINAL_PAYMENT' | 'CUSTOMER_CREDIT';
+export interface ReturnSettlementSelection { schemaVersion: 1; destination: ReturnSettlementDestination; }
+export interface ReturnSettlementAuthorization extends ReturnSettlementSelection {
+ currency: 'DOP'; total: number; debtReduction: number; refundAmount: number; customerCreditAmount: number;
+ customerId: string | null; advanceAccount: string | null; fundingPayments: Array<{id:string;methodId:string;method:string;amount:number;currency:'DOP'}>;
+}
+export const RETURN_CREDIT_PATH = '/api/sync/fiscal/workflow/v2/return/credit/apply';
+export function assertReturnSettlementCapability(c: ReturnCapability, scope: FiscalWorkflowScope) {
+ assertReturnAdmission(c, scope);
+ returnNeed(c.settlement?.schemaVersion===1 && c.settlement.enabled===true && c.settlement.defaultDestination==='ORIGINAL_PAYMENT'
+  && sameReturn(c.settlement.destinations,['ORIGINAL_PAYMENT','CUSTOMER_CREDIT']) && c.settlement.requiresEmptyPayments===true
+  && c.settlement.creditApplicationPath===RETURN_CREDIT_PATH,'FISCAL_RETURN_SETTLEMENT_DISABLED');
+}
+const cents = (n:any) => { returnNeed(typeof n==='number'&&Number.isFinite(n)&&n>=0&&Number.isSafeInteger(Math.round(n*100))&&Math.abs(n*100-Math.round(n*100))<1e-6,'FISCAL_RETURN_SETTLEMENT_INVALID');return Math.round(n*100); };
+const erpUuid = (n:any) => typeof n==='string' && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(n);
+export function assertReturnSettlement(s:any, selection:ReturnSettlementSelection) {
+ const a=s.settlement as ReturnSettlementAuthorization;
+ returnNeed(selection?.schemaVersion===1&&['ORIGINAL_PAYMENT','CUSTOMER_CREDIT'].includes(selection.destination)
+  &&a?.schemaVersion===1&&a.destination===selection.destination&&a.currency==='DOP','FISCAL_RETURN_SETTLEMENT_INVALID');
+ returnNeed(cents(a.total)===cents(s.total)&&cents(a.total)===cents(a.debtReduction)+cents(a.refundAmount)+cents(a.customerCreditAmount)
+  &&cents(s.pendingBalance)===cents(a.debtReduction)&&cents(s.paidAmount)===cents(a.refundAmount),'FISCAL_RETURN_SETTLEMENT_INVALID');
+ returnNeed(!a.customerId||erpUuid(a.customerId),'FISCAL_RETURN_CUSTOMER_SCOPE_REQUIRED');
+ returnNeed(a.customerId===(s.erpCustomerId??null),'FISCAL_RETURN_CUSTOMER_SCOPE_REQUIRED');
+ const payments=(rows:any)=> {returnNeed(Array.isArray(rows),'FISCAL_RETURN_PAYMENT_INVALID');const ids=new Set();for(const p of rows){returnNeed(erpUuid(p.id)&&!ids.has(p.id)&&typeof p.methodId==='string'&&p.methodId.length>0&&typeof p.method==='string'&&p.method.length>0&&p.currency==='DOP'&&cents(p.amount)>0,'FISCAL_RETURN_PAYMENT_INVALID');ids.add(p.id);}return rows.reduce((n:number,p:any)=>n+cents(p.amount),0);};
+ returnNeed(payments(a.fundingPayments)===cents(a.refundAmount)+cents(a.customerCreditAmount),'FISCAL_RETURN_PAYMENT_INVALID');
+ returnNeed(payments(s.paymentCommands)===cents(a.refundAmount)&&Array.isArray(s.liquidityTargets),'FISCAL_RETURN_PAYMENT_INVALID');
+ if(a.destination==='CUSTOMER_CREDIT') returnNeed(erpUuid(a.customerId)&&typeof a.advanceAccount==='string'&&a.advanceAccount.length>0&&cents(a.refundAmount)===0&&s.paymentCommands.length===0&&s.liquidityTargets.length===0,'FISCAL_RETURN_CUSTOMER_SCOPE_REQUIRED');
+ else returnNeed(cents(a.customerCreditAmount)===0&&a.advanceAccount===null&&sameReturn(a.fundingPayments,s.paymentCommands),'FISCAL_RETURN_SETTLEMENT_INVALID');
+ returnNeed(s.liquidityTargets.length===s.paymentCommands.length&&s.liquidityTargets.every((t:any)=>s.paymentCommands.some((p:any)=>p.id===t.paymentId&&p.methodId===t.methodId&&cents(p.amount)===cents(t.amount))&&typeof t.accountCode==='string'&&t.accountCode.length>0),'FISCAL_RETURN_PAYMENT_INVALID');
+}
 export interface ReturnCommand {
     schemaVersion: 1;
+    settlement?: ReturnSettlementSelection;
     capability: 'fiscalReturnV1';
     operationId: string;
     checkoutId: string;
@@ -85,6 +116,7 @@ export interface ReturnAttempt {
     committedSource?: Transaction;
 }
 export interface ReturnCapability {
+    settlement?: {schemaVersion:1;enabled:boolean;defaultDestination:ReturnSettlementDestination;destinations:ReturnSettlementDestination[];requiresEmptyPayments:true;creditApplicationPath:string};
     schemaVersion: 1;
     version: 1;
     capability: 'fiscalReturnV1';
@@ -167,17 +199,18 @@ export async function assertReturnPreparation(p: ReturnPreparation, a: ReturnAtt
     const s = p.returnSnapshot;
     await assertReturnSnapshotDigest(p, a.preparationDigestProof);
     returnNeed(s?.schemaVersion === 1 && s.profile === RETURN_PROFILE && s.currency === 'DOP' && s.exchangeRate === 1 && s.loyaltyDisposition === 'NO_EFFECT_VERIFIED' && /^[a-f0-9]{64}$/.test(s.loyaltyProofDigest) && sameReturn(s.originalReference, c.originalReference));
-    returnNeed(Array.isArray(s.lines) && s.lines.length === c.lines.length && new Set(s.lines.map((l: any) => l.cartId)).size === s.lines.length && Array.isArray(s.paymentCommands) && s.paymentCommands.length === c.payments.length);
+    returnNeed(Array.isArray(s.lines) && s.lines.length === c.lines.length && new Set(s.lines.map((l: any) => l.cartId)).size === s.lines.length && Array.isArray(s.paymentCommands) && (c.settlement ? c.payments.length===0 : s.paymentCommands.length === c.payments.length));
     for (const l of s.lines) {
         const requested = c.lines.find(x => x.cartId === l.cartId);
         returnNeed(requested && l.quantity === requested.quantity && l.stockDisposition === requested.stockDisposition && l.originalItem?.id === l.itemId && l.originalItem?.cartId === l.cartId && Array.isArray(l.inventoryEntries) && l.inventoryEntries.length <= 1 && l.inventoryEntries.every((e: any) => e.itemId === l.itemId && Number.isFinite(e.quantity) && e.quantity > 0 && Number.isFinite(e.unitCost) && e.unitCost >= 0));
     }
-    for (const payment of s.paymentCommands) {
+    if(c.settlement) assertReturnSettlement(s,c.settlement);
+    for (const payment of c.settlement ? [] : s.paymentCommands) {
         const requested = c.payments.find(x => x.id === payment.id);
         returnNeed(requested && sameReturn({ ...payment, method: undefined }, requested) && ['CASH', 'CARD', 'TRANSFER', 'CREDIT', 'OTHER'].includes(payment.method), 'FISCAL_RETURN_PAYMENT_INVALID');
     }
     const money = (n: any) => typeof n === 'number' && Number.isFinite(n) && n >= 0 && Number.isSafeInteger(Math.round(n * 100)) && Math.abs(n * 100 - Math.round(n * 100)) < 1e-6;
-    returnNeed(['netAmount', 'taxAmount', 'total', 'discountAmount', 'pendingBalance', 'paidAmount'].every(k => money(s[k])) && Math.round((s.netAmount + s.taxAmount) * 100) === Math.round(s.total * 100) && Math.round((s.pendingBalance + s.paidAmount) * 100) === Math.round(s.total * 100) && Math.round(s.paymentCommands.reduce((n: number, x: any) => n + x.amount, 0) * 100) === Math.round(s.paidAmount * 100));
+    returnNeed(['netAmount', 'taxAmount', 'total', 'discountAmount', 'pendingBalance', 'paidAmount'].every(k => money(s[k])) && Math.round((s.netAmount + s.taxAmount) * 100) === Math.round(s.total * 100) && Math.round((s.pendingBalance + s.paidAmount + (c.settlement ? s.settlement.customerCreditAmount : 0)) * 100) === Math.round(s.total * 100) && Math.round(s.paymentCommands.reduce((n: number, x: any) => n + x.amount, 0) * 100) === Math.round(s.paidAmount * 100));
 }
 export function buildReturnSource(a: ReturnAttempt, original: Transaction, seriesId: string, user: {
     id: string;
@@ -188,6 +221,7 @@ export function buildReturnSource(a: ReturnAttempt, original: Transaction, serie
         netAmount: l.netAmount, taxAmount: l.taxAmount, totalAmount: l.totalAmount, cost: l.inventoryEntries[0]?.unitCost ?? 0,
         ...(l.originalItem.inventoryPresentation ? { inventoryPresentation: { ...l.originalItem.inventoryPresentation, commercialQuantity: l.quantity, baseQuantity: l.inventoryEntries[0]?.quantity } } : {}) })) as CartItem[];
     return { terminalId: p.scope.terminalId, isTaxIncluded: original.isTaxIncluded, serviceType: original.serviceType, serviceTaxPolicySnapshot: original.serviceTaxPolicySnapshot, id: c.transactionId, displayId: undefined, seriesId, seriesNumber: undefined, globalSequence: undefined, date: c.offlineSaleDate!, documentType: 'REFUND', status: 'REFUNDED', items,
+        ...(s.settlement?{returnSettlementV1:structuredClone(s.settlement)}:{}),
         refundReason: JSON.parse(a.intent).reason, total: s.total, netAmount: s.netAmount, taxAmount: s.taxAmount, discountAmount: s.discountAmount, serviceChargeAmount: s.sourceServiceChargeAmount,
         customerId: s.sourceCustomerId ?? undefined, customerSnapshot: s.buyer, customerName: s.buyer?.name, payments: s.paymentCommands as any, currency: 'DOP', exchangeRate: 1,
         pendingBalance: s.pendingBalance, paidAmount: s.paidAmount, taxBreakdown: s.taxBreakdown, userId: user.id, userName: user.name,
