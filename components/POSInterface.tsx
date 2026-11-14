@@ -6800,9 +6800,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   await fiscalWorkflowV2Client.acknowledge(fiscalCheckoutRef.current);trackingCheckoutRef.current=null;fiscalCheckoutRef.current=null;fiscalCheckoutOperationRef.current=null;offlineTableFiscalContextRef.current=undefined;offlineTablePaymentFenceRef.current=false;
                   void fiscalWorkflowV2Client.prefetch().catch(()=>undefined);
                }
+               legacyFiscalAttemptRef.current.complete(legacyAttemptIdentity);
                recordCheckoutDiagnostic('CART_CLEAR_REQUEST', { items: cart, tableId: activeTable?.id, orderId: activeTable?.currentOrderId, reason: 'POS_CLEAR_07' });
                trackingCheckoutRef.current=null;
-               legacyFiscalAttemptRef.current.complete(legacyAttemptIdentity);
                onUpdateCart([]);
                resetCompletedSaleDiscount(setGlobalDiscount);
                setRedeemedCoupon(null);
