@@ -25,7 +25,7 @@ import LargeMasterSyncV3CanaryScreen from './components/LargeMasterSyncV3CanaryS
 import { LARGE_MASTER_SYNC_V3_CANARY } from './services/sync/LargeMasterSyncV3Canary';
 import { LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED, usesLargeMasterSyncV3Authority } from './services/sync/LargeMasterSyncV3Authority';
 import LargeMasterSyncV3OperationalPOS from './components/LargeMasterSyncV3OperationalPOS';
-import { persistV3FinancialTransaction, validateV3FrozenFiscalAmounts,readV3CompletedReservation } from './services/sync/LargeMasterSyncV3FinancialCommit';
+import { persistV3FinancialTransaction, validateV3FrozenFiscalAmounts,readV3CompletedReservation,readV3CommittedLegacySaleReplay } from './services/sync/LargeMasterSyncV3FinancialCommit';
 import { validateV3FrozenLineFiscalAmounts } from './services/sync/LargeMasterSyncV3LineSource';
 import { buildV3FrozenFiscalProviderTransaction } from './components/v3OperationalUIQueue';
 import { captureFiscalStatusBoundContext } from './services/fiscal/FiscalBoundContext';
@@ -11693,6 +11693,17 @@ const AppContent: React.FC = () => {
     if ((txn.ncf || txn.ncfType) && (!fiscalTerminal ||
         (txn.terminalId && txn.terminalId !== fiscalTerminal.id && txn.terminalId !== fiscalTerminal.config?.erpTerminalId))) {
       throw new Error('FISCAL_TERMINAL_IDENTITY_REQUIRED');
+    }
+    if(LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED&&['B01','B02'].includes(txn.ncfType||'')){
+      const warehouse=fiscalTerminal?.config?.inventoryScope?.defaultSalesWarehouseId;
+      if(warehouse){
+        const retained=await readV3CommittedLegacySaleReplay({...txn,terminalId:fiscalTerminal!.id,
+          terminalName:fiscalTerminal!.config.terminalName||fiscalTerminal!.id},warehouse);
+        if(retained){
+          setTransactions(previous=>[...previous.filter(row=>row.id!==retained.id),retained]);onCommitted?.(retained);
+          backgroundSyncManager.triggerSync().catch(console.error);return;
+        }
+      }
     }
     await db.assertFiscalTransactionAuthority({ ...txn, terminalId: fiscalTerminal?.id || txn.terminalId }, fiscalTerminal?.config);
     if (LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED) {

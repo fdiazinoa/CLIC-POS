@@ -131,6 +131,21 @@ export const readV3CommittedRefundReplay=async(transaction:Transaction,warehouse
   assertFinancialReplay(history,transaction,identity);if(active)assertFinancialReplay(active,transaction,identity);
   return history.zReportId?history:active!;
 };
+/** Ordinary legacy fiscal checkout retry: only a matching durable sale can
+ * bypass the already-consumed fiscal authority check. */
+export const readV3CommittedLegacySaleReplay=async(transaction:Transaction,warehouseId:string):Promise<Transaction|null>=>{
+ if(transaction.documentType!=='TICKET'||!['B01','B02'].includes(transaction.ncfType||'')
+  ||transaction.fiscalWorkflowCheckoutId||transaction.fiscalAllocationAuthorizationId||transaction.trackingCheckoutId
+  ||transaction.companyDispatchSource||transaction.v3ReservationClaimId)return null;
+ const [active,history]=await Promise.all([db.getDocument('transactions',transaction.id),db.getDocument('transactionHistory',transaction.id)]) as [Transaction|null,Transaction|null];
+ if(!active&&!history)return null;
+ const session=await getLargeMasterSyncV3RetainedSession();await session.assertCurrent();
+ if(!history||!active&&!history.zReportId||history.v3Binding!==session.binding||active&&active.v3Binding!==session.binding)
+  throw new LargeMasterSyncV3Error('SYNC_V3_DUPLICATE_TRANSACTION_MISMATCH');
+ const identity=financialOperationIdentity(transaction,warehouseId,{});
+ assertFinancialReplay(history,transaction,identity);if(active)assertFinancialReplay(active,transaction,identity);
+ return history.zReportId?history:active!;
+};
 const commits = new Map<string, { identity: string; promise: Promise<FinancialResult[]> }>();
 
 /** Prepare every document before one native transaction; no split publication can precede its companion. */
