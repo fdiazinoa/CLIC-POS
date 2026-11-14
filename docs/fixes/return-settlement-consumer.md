@@ -49,6 +49,33 @@ TCKS001000116. Las pruebas utilizan únicamente datos y servicios aislados.
 
 ## Validación
 
-Los SHA y resultados finales de revisión, QA, sincronización y pruebas nativas
-se registrarán al congelar el candidato. La existencia de este documento no es
-una aprobación de código, artefacto Android ni despliegue.
+Candidato funcional: `89512ba341cbe82670e529a2cea263953d750b65`.
+Revisión independiente: PASS, incluido el cierre de la selección E44/E45.
+QA independiente: 256/256 pruebas afectadas, 293/293 comprobaciones transversales,
+compilación web/TypeScript y nueve comprobaciones del componente React en Chrome.
+Lint de archivos modificados: cero errores y un warning previo de escape.
+
+Integración aislada con el ERP986c: cinco escenarios aprobados usando PostgreSQL,
+HTTP loopback, SQLite de archivo y proveedor simulado. Incluye pagos mixtos,
+devolución parcial con deuda, crédito de100 y consumo de70 sobre factura de150,
+respuesta perdida y reapertura: saldo30/deuda80, un recibo/asiento, comandos
+idénticos, sin débito local ni NC o consecutivo adicionales. No equivale a un
+reembolso bancario real ni a aceptación DGII productiva.
+
+Límites conservados al cerrar por petición del usuario de detener pruebas
+adicionales: Android no ejecutó el bundle candidato; el harness abortó en el
+preflight de transporte/espera del PID, antes de casos financieros nativos.
+El análisis de rendimiento en Chrome obtuvo p95 menor de18ms, pero observó
+incrementos relativos por encima de5% (+1.1ms al abrir y +1.6ms al seleccionar
+todo); no se completó su investigación. No se declaran esos gates aprobados.
+No hay aprobación de APK, instalación o producción.
+
+El consumo exige una identidad de FACTURA ERP recibida por el status autenticado;
+si falta, se retiene. Nunca se sustituye por el UUID local del ticket. Tras el
+ACK de una NC, una nueva confirmación sobre la frontera actualizada de cantidades
+representa otra devolución parcial; no se presenta como reintento de la anterior.
+Las preparaciones y operaciones pendientes conservan sus propias identidades.
+
+Informes externos de las sesiones independientes: /tmp/return-settlement-review.md,
+/tmp/return-settlement-qa.md, /tmp/return-settlement-sync.md y
+/tmp/return-settlement-performance.md. No contienen credenciales productivas.
