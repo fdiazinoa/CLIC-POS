@@ -1244,8 +1244,10 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         if(!config||!allocation||!range||allocation.fiscalRangeId!==range.id||allocation.ncfType!==issuance.ncfType||range.type!==issuance.ncfType||allocation.fiscalRangeId!==issuance.fiscalRangeId)throw new Error('NATIVE_FISCAL_AUTHORITY_CONFLICT');
         const sequence=Number(issuance.sequence);
         if(!Number.isSafeInteger(sequence)||sequence<allocation.reservedStart||sequence>allocation.reservedEnd)throw new Error('NATIVE_FISCAL_AUTHORITY_CONFLICT');
-        const bufferRows=(await db.query("SELECT doc_id,data FROM documents WHERE collection_name='localFiscalBuffer' AND json_extract(data,'$.type')=? AND json_extract(data,'$.terminalId')=?",[issuance.ncfType,tx.terminalId])).values||[];
+        const bufferRows=(await db.query("SELECT doc_id,data FROM documents WHERE collection_name='localFiscalBuffer' AND json_extract(data,'$.allocationId')=? AND json_extract(data,'$.type')=?",[issuance.fiscalAllocationId,issuance.ncfType])).values||[];
         const bufferDoc=bufferRows[0]?JSON.parse(String(bufferRows[0].data)):null;
+        // La autoridad fiscal puede ser el erpTerminalId, no el id local de la caja.
+        const authorityId=String(allocation.terminalId||tx.terminalId);
         const nextNumber=Math.max(Number(allocation.nextNumber)||0,sequence+1);
         const currentPointer=bufferDoc?Number(bufferDoc.currentNumber):(Number(allocation.nextNumber)||allocation.reservedStart);
         const alreadyAdvanced=currentPointer>sequence;
@@ -1253,7 +1255,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             // Recibo preexistente sin venta (reserva previa o número quemado): no se inserta otro.
             // Si el buffer ya avanzó, no hay nada que hacer; si no, se avanza sin tocar el recibo.
             if(alreadyAdvanced)return [];
-            const advancedBuffer={...(bufferDoc||{id:String(issuance.ncfType),type:issuance.ncfType,prefix:issuance.prefix,startNumber:sequence,endNumber:sequence,expiryDate:range.expiryDate||'',terminalId:tx.terminalId,fiscalRangeId:range.id,allocationId:allocation.id}),currentNumber:sequence+1};
+            const advancedBuffer={...(bufferDoc||{id:String(issuance.ncfType),type:issuance.ncfType,prefix:issuance.prefix,startNumber:sequence,endNumber:sequence,expiryDate:range.expiryDate||'',terminalId:authorityId,fiscalRangeId:range.id,allocationId:allocation.id}),currentNumber:sequence+1};
             const advancedAllocation={...allocation,nextNumber,status:nextNumber>allocation.reservedEnd?'EXHAUSTED':allocation.status};
             const now=new Date().toISOString();
             return [
@@ -1262,9 +1264,9 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             ];
         }
         if(bufferDoc&&(Number(bufferDoc.currentNumber)!==sequence||bufferDoc.fiscalRangeId!==range.id||bufferDoc.allocationId!==allocation.id))throw new Error('NATIVE_FISCAL_AUTHORITY_CONFLICT');
-        const buffer:any=bufferDoc||{id:String(issuance.ncfType),type:issuance.ncfType,prefix:issuance.prefix,currentNumber:sequence,startNumber:sequence,endNumber:sequence,expiryDate:range.expiryDate||'',terminalId:tx.terminalId,fiscalRangeId:range.id,allocationId:allocation.id};
+        const buffer:any=bufferDoc||{id:String(issuance.ncfType),type:issuance.ncfType,prefix:issuance.prefix,currentNumber:sequence,startNumber:sequence,endNumber:sequence,expiryDate:range.expiryDate||'',terminalId:authorityId,fiscalRangeId:range.id,allocationId:allocation.id};
         const allocationForValidation={...allocation,nextNumber:Math.max(nextNumber,sequence+1)};
-        const nextBuffer=validateFiscalBufferReservation({business:config,buffer,allocation:allocationForValidation,range,terminalId:tx.terminalId,type:issuance.ncfType,ncf});
+        const nextBuffer=validateFiscalBufferReservation({business:config,buffer,allocation:allocationForValidation,range,terminalId:buffer.terminalId,type:issuance.ncfType,ncf});
         const receipt=await planNativeFiscalReceipt(async<T>(sql:string,values:(string|number|null)[])=>(await db.query(sql,values)).values as T[] || [],config,buffer,ncf,{requireIssuer:String(issuance.ncfType).startsWith('E'),transactionId:String(tx.id),occurredAt:tx.date});
         const nextAllocation={...allocation,nextNumber,status:nextNumber>allocation.reservedEnd?'EXHAUSTED':allocation.status};
         const now=new Date().toISOString();
