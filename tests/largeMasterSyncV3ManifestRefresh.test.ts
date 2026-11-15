@@ -18,6 +18,7 @@ const actual = ['manualCatalogSync', 'manualSyncAll', 'v3CatalogRefresh', 'refre
 
 async function fixture() {
   const storage = new Map<string, string>(); const events: string[] = [];
+  const resolvedRequests: any[] = [];
   let identity = { tenantId: 'tenant', terminalId: 'erp-terminal', deviceId: 'device', syncToken: 'secret', erpSyncBaseUrl: 'https://erp.test/api/sync' };
   let config: any = getInitialConfig('Supermercado' as any);
   const localId = config.terminals[0].id;
@@ -77,13 +78,15 @@ async function fixture() {
       markStartupManifestSyncCompleted: () => {}, recordSnapshotDiagnostics: () => {},
       normalizeVersionToken: (value: unknown) => value == null ? null : String(value),
       incrementSyncTelemetry: () => {}, publishSyncHealthUpdate: () => {}, refreshErpPaymentMethods: async () => {},
-      refreshTerminalResolvedConfig: async () => clone(config),
+      refreshTerminalResolvedConfig: async (_snapshot: unknown, options: unknown) => {
+        resolvedRequests.push(options); return clone(config);
+      },
       fetchTerminalProductPricesBlock: async () => { throw Error('Unexpected legacy prices download'); },
     }); return instance;
   };
   const marker = () => storage.get(`clic_v3_applied_manifest_${localId}`);
   return { instance: restart(), restart, manifest: () => manifest, active: () => active, events, exports: () => exports,
-    fetches: () => fetches, cursors: () => cursors, marker, config: () => config,
+    fetches: () => fetches, cursors: () => cursors, marker, config: () => config, resolvedRequests,
     change: (patch: Partial<typeof identity>) => { identity = { ...identity, ...patch }; },
     onFetch: (callback: typeof onFetch) => { onFetch = callback; }, onPrepare: (callback: typeof prepare) => { prepare = callback; },
     onSave: (callback: typeof save) => { save = callback; }, corrupt: () => { corrupt = true; },
@@ -94,6 +97,20 @@ const sync = (f: any) => {
   f.instance.lastBackgroundTerminalManifestSyncAt = 0;
   return f.instance.syncTerminalManifestInBackground(f.config(), { reason: 'periodic_manifest', throwOnError: true });
 };
+
+test('explicit catalog refresh requests complete operational authority without legacy masters', async () => {
+  const f = await fixture();
+  await f.instance.syncTerminalManifestInBackground(f.config(), { reason: 'manual_sync', throwOnError: true });
+  assert.equal(f.resolvedRequests.length, 1);
+  const request = f.resolvedRequests[0];
+  assert.equal(request.requireOperationalTerminalConfig, true);
+  assert.equal(request.forceRemoteFetch, true);
+  assert.deepEqual(Array.from(request.resolvedScopes),
+    ['identity', 'terminal', 'device_role', 'role', 'pricing', 'inventory', 'documents', 'catalog']);
+  assert.equal(request.masterScopes.length, 0);
+  assert.equal(request.blockScopes.length, 0);
+  assert.equal(request.supplementalMode, 'skip');
+});
 
 test('manual and force negotiate once with a matching checkpoint while ordinary manifests stay idle', async () => {
   for (const reason of ['manual_sync', 'force_sync'] as const) {
@@ -131,7 +148,8 @@ test('explicit manual production metadata refresh is scoped without items; failu
  const f=await fixture();await sync(f);const marker=f.marker();const before=f.fetches();let configs=0;
  f.instance.refreshTerminalResolvedConfig=async(_snapshot:unknown,options:any)=>{
   configs++;assert.deepEqual(Array.from(options.masterScopes),[]);assert.deepEqual(Array.from(options.blockScopes),[]);
-  assert.deepEqual(Array.from(options.resolvedScopes),['catalog']);assert.equal(options.supplementalMode,'skip');
+  assert.deepEqual(Array.from(options.resolvedScopes),
+   ['identity','terminal','device_role','role','pricing','inventory','documents','catalog']);assert.equal(options.supplementalMode,'skip');
   assert.equal(options.forceRemoteFetch,true);assert.equal(options.requireOperationalTerminalConfig,true);
   throw Error('TERMINAL_PRODUCTION_AREAS_QUERY_FAILED');
  };

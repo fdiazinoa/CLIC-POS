@@ -2493,7 +2493,8 @@ class SyncManager {
                         await this.refreshV3Catalog();
                         if (options?.explicitV3Refresh) {
                             await this.refreshTerminalResolvedConfig(undefined, { baseConfig: config, persist: true,
-                                forceRemoteFetch: true, masterScopes: [], blockScopes: [], resolvedScopes: ['catalog'],
+                                forceRemoteFetch: true, masterScopes: [], blockScopes: [],
+                                resolvedScopes: ['identity', 'terminal', 'device_role', 'role', 'pricing', 'inventory', 'documents', 'catalog'],
                                 supplementalMode: 'skip', deferDuringSale: true, dispatchEvent: false,
                                 requireOperationalTerminalConfig: true });
                             assertManifestBinding();
