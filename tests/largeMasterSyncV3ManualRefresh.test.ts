@@ -51,7 +51,7 @@ async function fixture(v3=true, primary=true, kind='ERP_ACTIVE') {
     usesLargeMasterSyncV3Authority:()=>v3&&kind==='ERP_ACTIVE',syncPolicy:{resolve:()=>target},
     readLargeMasterSyncV3BoundIdentity:()=>({...identity}),LargeMasterSyncV3Error,
     persistLargeMasterSyncV3ConfigPushCatalog:helper.persistLargeMasterSyncV3ConfigPushCatalog,
-    captureLargeMasterSyncV3ConfigRefreshAuthority:()=>authority,
+    captureLargeMasterSyncV3ConfigRefreshAuthorityFromStore:async()=>authority,
     syncTriggerCoordinator:{request:async()=>{calls.push('coordinator:events0');await reconcile();}},
     window:{dispatchEvent:(event:{type:string})=>{events.push(event.type);}},CustomEvent:class{constructor(public type:string){}},
     permissionService:{isMasterTerminal:()=>true,shouldShowGlobalSales:()=>false},isLargeMasterSyncV3ReplacedCollection,

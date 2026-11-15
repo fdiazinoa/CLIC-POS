@@ -96,7 +96,7 @@ async function fixture(candidate = true, channel = 'ERP_ACTIVE') {
     './LargeMasterSyncV3OperationalSession': 'export const acquireLargeMasterSyncV3ConfigContext=async()=>{};export const getLargeMasterSyncV3OperationalSession=async(refresh)=>{if(refresh) await globalThis.__v3ConfigFixture.refresh();return {assertSetupIdentity:()=>{},assertCurrent:async()=>{},projectConfig:async x=>x}};',
     '../services/sync/LargeMasterSyncV3OperationalSession': 'export const getLargeMasterSyncV3OperationalSession=async(refresh)=>{if(refresh) await globalThis.__v3ConfigFixture.refresh();return {assertCurrent:async()=>{},projectConfig:async x=>x}};',
     '../services/sync/SyncManager': 'export const syncManager={refreshTerminalResolvedConfig:async()=>{throw Error("Unexpected catalog fallback")}};',
-    '../services/sync/LargeMasterSyncV3ConfigRefreshAuthority':'export const captureLargeMasterSyncV3ConfigRefreshAuthority=()=>({localTerminalId:"fixture",assertCurrent:()=>{}});',
+    '../services/sync/LargeMasterSyncV3ConfigRefreshAuthority':'export const captureLargeMasterSyncV3ConfigRefreshAuthorityFromStore=async()=>({localTerminalId:"fixture",assertCurrent:()=>{}});',
     '../services/sync/ProductImageCacheService': 'export const productImageCacheService={normalizeIncomingProducts:async x=>x};',
     '../services/sync/MasterNumberRangeService': 'export const persistMasterNumberRangesFromSnapshot=async()=>globalThis.__v3ConfigFixture.ranges();',
     '../services/sync/SyncMetrics': 'export const syncMetrics=new Proxy({}, {get:()=>()=>{}});',

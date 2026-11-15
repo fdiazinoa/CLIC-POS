@@ -62,7 +62,7 @@ async function fixture() {
     readOperationalCatalogBindingProof: () => ({ companyId: config.terminals[0].config.erpBinding.companyId }),
     largeMasterSyncV3DownloadOrigin: () => 'https://download.test', LargeMasterSyncV3Error,
     persistLargeMasterSyncV3ConfigPushCatalog: helper.persistLargeMasterSyncV3ConfigPushCatalog,
-    captureLargeMasterSyncV3ConfigRefreshAuthority:()=>({localTerminalId:localId,assertCurrent:()=>{}}),
+    captureLargeMasterSyncV3ConfigRefreshAuthorityFromStore:async()=>({localTerminalId:localId,assertCurrent:()=>{}}),
     window: { dispatchEvent: (event: { type: string }) => { events.push(event.type); } }, CustomEvent: class { constructor(public type: string) {} },
     localStorage: { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value) },
     navigator: { onLine: true }, protectsLocalCatalogFromCloud: () => false, waitForBackgroundSyncWindow: async () => {},

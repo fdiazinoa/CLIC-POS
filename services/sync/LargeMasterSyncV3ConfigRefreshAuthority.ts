@@ -4,6 +4,7 @@ import { resolveSyncTarget } from './SyncProfile';
 import { largeMasterSyncV3DownloadOrigin } from './LargeMasterSyncV3DownloadOrigin';
 import { validatedLargeMasterSyncV3ErpSyncBase } from './LargeMasterSyncV3BoundTransport';
 import { LargeMasterSyncV3Error } from './LargeMasterSyncV3Types';
+import { isTerminalAuthorizationSuperseded } from '../../utils/terminalAuthorizationGuard';
 
 const brand: unique symbol = Symbol('V3ConfigRefreshAuthority');
 export type V3ConfigRefreshAuthority = Readonly<{
@@ -13,6 +14,22 @@ export type V3ConfigRefreshAuthority = Readonly<{
 }>;
 const changed = (): never => { throw new LargeMasterSyncV3Error('SYNC_V3_REFRESH_AUTHORITY_CHANGED'); };
 const text = (value: unknown): string => typeof value === 'string' ? value.trim() : '';
+const readRefreshGuard = (): string => {
+  if (isTerminalAuthorizationSuperseded()) return changed();
+  return JSON.stringify([readOperationalTerminalBinding(), largeMasterSyncV3DownloadOrigin(),
+    ...['clic_terminal_authorization_block', 'clic_sync_last_auth_error', 'clic_sync_auth_status',
+      'clic_erp_sync_store_id'].map(key => localStorage.getItem(key))]);
+};
+
+/** Pin credentials/location synchronously before a queued read can yield to another owner. */
+export async function captureLargeMasterSyncV3ConfigRefreshAuthorityFromStore(
+  readConfig: () => Promise<BusinessConfig>,
+): Promise<V3ConfigRefreshAuthority> {
+  const guard = readRefreshGuard();
+  const config = await readConfig();
+  if (readRefreshGuard() !== guard) return changed();
+  return captureLargeMasterSyncV3ConfigRefreshAuthority(config);
+}
 
 /** Pure canonical reads only: never normalize/migrate credentials, repair profiles or renew tokens.
  * The credential fingerprint remains private in this closure; never serialize/log it. */
@@ -36,7 +53,7 @@ export function captureLargeMasterSyncV3ConfigRefreshAuthority(config: BusinessC
       const target = resolveSyncTarget(profile);
       if (target.kind !== 'ERP_ACTIVE' || target.useLocalTarget || !target.canPullMasters
         || target.terminalId !== identity[3] || !target.baseUrl) return changed();
-      return { identity, fingerprint: JSON.stringify([identity, readOperationalTerminalBinding(),
+      return { identity, fingerprint: JSON.stringify([identity, readRefreshGuard(),
         validatedLargeMasterSyncV3ErpSyncBase(target.baseUrl), largeMasterSyncV3DownloadOrigin()]) };
     } catch { return changed(); }
   };

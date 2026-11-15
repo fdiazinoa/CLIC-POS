@@ -16,7 +16,7 @@ import { syncErpPaymentMethods } from './PaymentMethodsSync';
 import { assertLegacyMasterPullAllowed, isLargeMasterSyncV3ReplacedCollection,
     usesLargeMasterSyncV3Authority } from './LargeMasterSyncV3Authority';
 import { persistLargeMasterSyncV3ConfigPushCatalog } from './LargeMasterSyncV3ConfigPush';
-import { captureLargeMasterSyncV3ConfigRefreshAuthority } from './LargeMasterSyncV3ConfigRefreshAuthority';
+import { captureLargeMasterSyncV3ConfigRefreshAuthorityFromStore } from './LargeMasterSyncV3ConfigRefreshAuthority';
 import { persistProductionAreaSnapshot } from '../restaurant/ProductionAreaSnapshot';
 import { readLargeMasterSyncV3BoundIdentity } from './LargeMasterSyncV3BoundTransport';
 import { LargeMasterSyncV3Error } from './LargeMasterSyncV3Types';
@@ -402,7 +402,8 @@ class SyncManager {
             return this.v3CatalogRefresh.promise;
         }
         const promise = Promise.resolve().then(async () => {
-            const authority = captureLargeMasterSyncV3ConfigRefreshAuthority(await db.get('config') as unknown as BusinessConfig);
+            const authority = await captureLargeMasterSyncV3ConfigRefreshAuthorityFromStore(
+                async () => await db.get('config') as unknown as BusinessConfig);
             assertBinding();
             await persistLargeMasterSyncV3ConfigPushCatalog(assertBinding, authority);
             assertBinding();

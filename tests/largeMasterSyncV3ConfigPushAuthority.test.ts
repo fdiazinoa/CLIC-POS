@@ -61,7 +61,7 @@ async function fixture(){
  '../services/sync/TerminalCredentialStore':'export const readTerminalCredentialsSync=()=>JSON.parse(localStorage.getItem("clic_terminal_credentials_v1"));export const buildTerminalSyncAuthHeaders=()=>({"X-Sync-Token":readTerminalCredentialsSync().syncToken});export const clearStoredSyncToken=()=>{throw Error("credential-migration-forbidden")};export const awaitTerminalCredentialWrites=async()=>{};export const saveTerminalCredentialsSync=()=>{throw Error("credential-migration-forbidden")};',
  '../services/sync/SyncProfile':`import {resolveSyncTarget} from ${JSON.stringify(ROOT+'/services/sync/SyncProfile.ts')};export const syncPolicy={resolve:()=>resolveSyncTarget(JSON.parse(localStorage.getItem('clic_sync_profile')))};export const loadSyncProfile=()=>{throw Error('profile-migration-forbidden')};export const restoreClientMasterUrl=()=>null;export const updateClientMasterUrl=()=>{throw Error('profile-migration-forbidden')};`,
  };
- const built=await build({stdin:{contents:`export {captureLargeMasterSyncV3ConfigRefreshAuthority} from './services/sync/LargeMasterSyncV3ConfigRefreshAuthority';export {persistLargeMasterSyncV3ConfigPushCatalog} from './services/sync/LargeMasterSyncV3ConfigPush';export {buildConfigPushV2DomainWrites,diagnosticAtomicApply,triggerErpSyncOutbox,getConfigPushV2Diagnostics} from './utils/erpSyncLifecycle';`,resolveDir:ROOT,loader:'ts'},absWorkingDir:ROOT,bundle:true,write:false,format:'cjs',platform:'node',define:{'import.meta.env':JSON.stringify({VITE_LARGE_MASTER_SYNC_V3_CANDIDATE:'true',VITE_LARGE_MASTER_SYNC_V3_BASE_URL:'https://erp.invalid'})},plugins:[{name:'actual-config-authority-boundaries',setup(b){b.onResolve({filter:/.*/},a=>mocks[a.path]?{path:a.path,namespace:'fixture'}:a.namespace==='fixture'&&a.path.startsWith(ROOT+'/')?{path:a.path,namespace:'file'}:undefined);b.onLoad({filter:/.*/,namespace:'fixture'},a=>({contents:mocks[a.path],loader:'js'}));b.onLoad({filter:/erpSyncLifecycle\.ts$/},a=>({contents:readFileSync(a.path,'utf8')+'\nexport {applyConfigPushV2DomainsAtomically as diagnosticAtomicApply};',loader:'ts'}));}}]});
+ const built=await build({stdin:{contents:`export {captureLargeMasterSyncV3ConfigRefreshAuthority,captureLargeMasterSyncV3ConfigRefreshAuthorityFromStore} from './services/sync/LargeMasterSyncV3ConfigRefreshAuthority';export {persistLargeMasterSyncV3ConfigPushCatalog} from './services/sync/LargeMasterSyncV3ConfigPush';export {buildConfigPushV2DomainWrites,diagnosticAtomicApply,triggerErpSyncOutbox,getConfigPushV2Diagnostics} from './utils/erpSyncLifecycle';`,resolveDir:ROOT,loader:'ts'},absWorkingDir:ROOT,bundle:true,write:false,format:'cjs',platform:'node',define:{'import.meta.env':JSON.stringify({VITE_LARGE_MASTER_SYNC_V3_CANDIDATE:'true',VITE_LARGE_MASTER_SYNC_V3_BASE_URL:'https://erp.invalid'})},plugins:[{name:'actual-config-authority-boundaries',setup(b){b.onResolve({filter:/.*/},a=>mocks[a.path]?{path:a.path,namespace:'fixture'}:a.namespace==='fixture'&&a.path.startsWith(ROOT+'/')?{path:a.path,namespace:'file'}:undefined);b.onLoad({filter:/.*/,namespace:'fixture'},a=>({contents:mocks[a.path],loader:'js'}));b.onLoad({filter:/erpSyncLifecycle\.ts$/},a=>({contents:readFileSync(a.path,'utf8')+'\nexport {applyConfigPushV2DomainsAtomically as diagnosticAtomicApply};',loader:'ts'}));}}]});
  const loaded={exports:{} as any};new Function('module','exports',built.outputFiles[0].text)(loaded,loaded.exports);
  const api=loaded.exports;
  const before=financialState(f);
@@ -141,6 +141,33 @@ for(const phase of ['domain','projection'] as const)test(`${phase} native CAS pr
  }finally{f.close();}
 });
 
+for(const block of ['superseded-error','persisted-block'] as const)for(const phase of ['capture','begin'] as const)test(`canonical ${block} at ${phase} prevents domain writes and refresh`,async()=>{
+ const f=await fixture();try{
+  const before=f.documents('config')[0];
+  const revoke=()=>f.values.set(block==='superseded-error'?'clic_sync_last_auth_error':'clic_terminal_authorization_block',
+   block==='superseded-error'?'DEVICE_SUPERSEDED':JSON.stringify({terminalLabel:'synthetic',message:'synthetic block'}));
+  if(phase==='capture'){
+   revoke();assert.throws(f.capture,/AUTHORITY_CHANGED/);
+  }else{
+   const authority=f.capture();const bridge=(f.adapter as any).db;const execute=bridge.execute.bind(bridge);let entered=false;
+   bridge.execute=async(sql:string,...args:any[])=>{const result=await execute(sql,...args);if(/^BEGIN/i.test(sql.trim())){entered=true;revoke();}return result;};
+   await assert.rejects(f.commit(authority),/AUTHORITY_CHANGED/);assert.equal(entered,true);
+  }
+  assert.deepEqual(f.documents('config')[0],before);assert.deepEqual(f.documents('documentSeries'),[]);assert.equal(f.env.downloads,0);f.assertFinancial();
+ }finally{f.close();}
+});
+
+test('async config capture pins raw binding before awaiting the native reader',async()=>{
+ const f=await fixture();try{
+  const before=f.documents('config')[0];let entered=false;
+  await assert.rejects(f.api.captureLargeMasterSyncV3ConfigRefreshAuthorityFromStore(async()=>{
+   entered=true;f.patchCredentials({storeId:id(999)});
+   const changed=structuredClone(before);changed.terminals[0].config.erpBinding.storeId=id(999);return changed;
+  }),/AUTHORITY_CHANGED/);
+  assert.equal(entered,true);assert.deepEqual(f.documents('config')[0],before);assert.equal(f.env.downloads,0);f.assertFinancial();
+ }finally{f.close();}
+});
+
 test('domain authority guard runs after native BEGIN and rejects changed credential before writes',async()=>{
  const f=await fixture();try{
   const authority=f.capture();const configBefore=f.documents('config')[0];
@@ -148,6 +175,29 @@ test('domain authority guard runs after native BEGIN and rejects changed credent
   bridge.execute=async(sql:string,...args:any[])=>{const result=await execute(sql,...args);if(/^BEGIN/i.test(sql.trim())){entered=true;f.patchCredentials({syncToken:'changed-inside-begin'});}return result;};
   await assert.rejects(f.commit(authority),/AUTHORITY_CHANGED/);
   assert.equal(entered,true);assert.deepEqual(f.documents('config')[0],configBefore);assert.deepEqual(f.documents('documentSeries'),[]);assert.equal(f.env.downloads,0);f.assertFinancial();
+ }finally{f.close();}
+});
+
+test('lifecycle keeps the original authority across snapshot await and cannot adopt a new store',async()=>{
+ const f=await fixture();try{
+  const versions={catalog:1,fiscal:1};const event={id:id(90),event_type:'CONFIG_PUSH_V2',status:'PROCESSING',payload:{contract_version:2,snapshot_id:id(91),version_hash:'synthetic-version',versions,scopes:['catalog','fiscal'],terminal_id:id(4),tenant_id:id(1)}};
+  const acks:any[]=[];
+  globalThis.fetch=(async(input:any,init:any)=>{
+   const url=String(input);
+   if(url.includes('/outbox/pull'))return Response.json({status:'success',events:[event],count:1});
+   if(url.includes('/config-snapshots/')){
+    const changed=f.documents('config')[0];changed.terminals[0].config.erpBinding.storeId=id(999);
+    await f.adapter.saveCollection('config',changed);f.patchCredentials({storeId:id(999)});f.values.set('clic_erp_sync_store_id',id(999));
+    return Response.json({status:'success',snapshot_id:id(91),version_hash:'synthetic-version',tenant_id:id(1),terminal_id:id(4),versions,scopes:['catalog','fiscal'],domains});
+   }
+   if(url.includes('/outbox/ack')){acks.push(JSON.parse(init.body));return Response.json({status:'success'});}
+   throw Error('unexpected-route');
+  }) as any;
+  const result=await f.api.triggerErpSyncOutbox('manual_sync');assert.equal(result.applied,0);
+  assert.equal(acks.some(ack=>ack.status==='APPLIED'),false);
+  assert.equal(f.documents('config')[0].terminals[0].config.erpBinding.storeId,id(999));
+  assert.deepEqual(f.documents('documentSeries'),[]);assert.equal(f.env.downloads,0);
+  assert.equal(f.api.getConfigPushV2Diagnostics().versionHash,null);f.assertFinancial();
  }finally{f.close();}
 });
 

@@ -32,7 +32,7 @@ import {
     sanitizeTerminalSnapshotFiscalSecrets,
 } from './terminalConfigSnapshot';
 import { db } from './db';
-import { captureLargeMasterSyncV3ConfigRefreshAuthority, type V3ConfigRefreshAuthority } from '../services/sync/LargeMasterSyncV3ConfigRefreshAuthority';
+import { captureLargeMasterSyncV3ConfigRefreshAuthorityFromStore, type V3ConfigRefreshAuthority } from '../services/sync/LargeMasterSyncV3ConfigRefreshAuthority';
 import { recordConfigPushNativeDiagnostic } from '../services/sync/ConfigPushNativeDiagnostic';
 import { dbAdapter } from '../services/db';
 import { DEFAULT_TERMINAL_DOCUMENT_ASSIGNMENTS } from '../constants';
@@ -1025,6 +1025,9 @@ const processConfigPushV2Event = async (
     if (eventTenantId && eventTenantId.toLowerCase() !== boundTenantId.toLowerCase()) {
         throw new Error('CONFIG_PUSH_V2_TENANT_MISMATCH');
     }
+    const configAuthority = v3Authority && scopes.some(scope => ['catalog', 'prices'].includes(scope))
+        ? await captureLargeMasterSyncV3ConfigRefreshAuthorityFromStore(
+            async () => await db.get('config') as unknown as BusinessConfig) : undefined;
 
     configPushV2Log('CONFIG_PUSH_V2_APPLY_STARTED', {
         outbox_id: eventId,
@@ -1281,8 +1284,6 @@ const processConfigPushV2Event = async (
             const rollbackJournal: ConfigPushV2RollbackJournal = new Map();
             try {
                 assertBinding();
-                const configAuthority = v3Authority && staleScopesBase.some(scope => ['catalog', 'prices'].includes(scope))
-                    ? captureLargeMasterSyncV3ConfigRefreshAuthority(await db.get('config') as unknown as BusinessConfig) : undefined;
                 if (couplesFiscalCatalog) {
                     touchedCollections = await applyConfigPushV2DomainsAtomically(staleScopes, domains, assertBinding, configAuthority);
                 } else {
