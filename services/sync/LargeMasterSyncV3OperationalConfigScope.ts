@@ -11,7 +11,7 @@ export function v3OperationalConfigContext(config: BusinessConfig, selector: Sel
     && (selector.tenantId === undefined || row.config.erpBinding?.tenantId === selector.tenantId));
   if (matches?.length !== 1) throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
   const terminal = matches[0];
-  const scope = JSON.stringify([terminal.config.erpBinding?.companyId,
+  const scope = JSON.stringify([terminal.config.erpBinding?.companyId, terminal.config.erpBinding?.storeId,
     terminal.config.inventoryScope, terminal.config.pricing, terminal.config.fiscal]);
   return { terminal, scope, key: JSON.stringify([terminal.id, terminal.config.currentDeviceId,
     terminal.config.erpTerminalId, terminal.config.erpBinding?.tenantId, scope]) };

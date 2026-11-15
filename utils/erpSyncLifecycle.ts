@@ -32,6 +32,8 @@ import {
     sanitizeTerminalSnapshotFiscalSecrets,
 } from './terminalConfigSnapshot';
 import { db } from './db';
+import { captureLargeMasterSyncV3ConfigRefreshAuthority, type V3ConfigRefreshAuthority } from '../services/sync/LargeMasterSyncV3ConfigRefreshAuthority';
+import { recordConfigPushNativeDiagnostic } from '../services/sync/ConfigPushNativeDiagnostic';
 import { dbAdapter } from '../services/db';
 import { DEFAULT_TERMINAL_DOCUMENT_ASSIGNMENTS } from '../constants';
 import { getDefaultRoleConfig, normalizeDeviceRoleValue, resolveDeviceRoleValue } from './deviceRoleHelpers';
@@ -293,6 +295,7 @@ const compactErrorDetail = (value: unknown): string => {
 };
 
 const configPushV2Log = (eventName: string, details: Record<string, unknown>) => {
+    recordConfigPushNativeDiagnostic(eventName, details);
     const safeDetails = { ...details };
     delete safeDetails.payload;
     delete safeDetails.headers;
@@ -831,9 +834,15 @@ const applyConfigPushV2DomainsAtomically = async (
     scopes: string[],
     domains: Record<string, unknown>,
     assertBinding: () => void,
+    authority?: V3ConfigRefreshAuthority,
 ): Promise<string[]> => {
     if (!dbAdapter.saveDocumentsAtomically) {
         throw new Error('CONFIG_PUSH_V2_ATOMIC_STORAGE_UNAVAILABLE');
+    }
+    const expectedConfig = authority ? await db.get('config') as unknown as BusinessConfig : undefined;
+    if (authority) {
+        if (dbAdapter.supportsV3ConfigPushAuthority !== true) throw new Error('SYNC_V3_NATIVE_STORE_UNAVAILABLE');
+        authority.assertCurrent(expectedConfig!);
     }
     const orderedScopes = [...scopes].sort((left, right) => {
         const order = ['fiscal', 'catalog'];
@@ -892,7 +901,10 @@ const applyConfigPushV2DomainsAtomically = async (
     });
     const replaceCollections = Array.from(writes.keys());
     assertBinding();
-    await dbAdapter.saveDocumentsAtomically(documents, false, replaceCollections);
+    if (authority && writes.has('config')) authority.assertCurrent(writes.get('config') as BusinessConfig);
+    await dbAdapter.saveDocumentsAtomically(documents, false, replaceCollections, authority ? {
+        expectedConfig: expectedConfig!, assertIdentity: () => authority.assertCurrent(expectedConfig!),
+    } : undefined);
     if (writes.has('config')) await assertConfigPushV2ConfigPersisted(writes.get('config'));
     return replaceCollections;
 };
@@ -1269,8 +1281,10 @@ const processConfigPushV2Event = async (
             const rollbackJournal: ConfigPushV2RollbackJournal = new Map();
             try {
                 assertBinding();
+                const configAuthority = v3Authority && staleScopesBase.some(scope => ['catalog', 'prices'].includes(scope))
+                    ? captureLargeMasterSyncV3ConfigRefreshAuthority(await db.get('config') as unknown as BusinessConfig) : undefined;
                 if (couplesFiscalCatalog) {
-                    touchedCollections = await applyConfigPushV2DomainsAtomically(staleScopes, domains, assertBinding);
+                    touchedCollections = await applyConfigPushV2DomainsAtomically(staleScopes, domains, assertBinding, configAuthority);
                 } else {
                     for (const scope of staleScopes) {
                         assertBinding();
@@ -1290,7 +1304,8 @@ const processConfigPushV2Event = async (
                 }
                 if (v3Authority && staleScopesBase.some(scope => ['catalog', 'prices'].includes(scope))) {
                     const { persistLargeMasterSyncV3ConfigPushCatalog } = await import('../services/sync/LargeMasterSyncV3ConfigPush');
-                    await persistLargeMasterSyncV3ConfigPushCatalog(assertBinding);
+                    if (!configAuthority) throw new Error('SYNC_V3_REFRESH_AUTHORITY_CHANGED');
+                    await persistLargeMasterSyncV3ConfigPushCatalog(assertBinding, configAuthority);
                 }
                 assertBinding();
                 // Do not activate a range from an event whose later domain fails.
@@ -1313,6 +1328,7 @@ const processConfigPushV2Event = async (
                     version_hash: versionHash,
                     scopes: staleScopes,
                     code: compactErrorDetail(error),
+                    reason: (error as { bindingReason?: string })?.bindingReason,
                     rolled_back_collections: couplesFiscalCatalog ? 0 : rollbackJournal.size,
                     atomic_transaction: couplesFiscalCatalog,
                 });
@@ -1928,19 +1944,41 @@ const buildDeviceHeaders = (deviceId?: unknown): Record<string, string> => {
     };
 };
 
+let diagnosticRequestSequence = 0;
 const fetchLifecycleRequest = async (input: string, init: RequestInit): Promise<Response> => {
     const controller = new AbortController();
     const timeoutId = globalThis.setTimeout(
         () => controller.abort(),
         ERP_SYNC_LIFECYCLE_REQUEST_TIMEOUT_MS,
     );
+    let operation: string | undefined;
+    try {
+        const path = new URL(input).pathname;
+        operation = path.endsWith('/outbox/pull') ? 'OUTBOX_PULL' : path.endsWith('/outbox/ack') ? 'OUTBOX_ACK'
+            : path.includes('/config-snapshots/') ? 'CONFIG_SNAPSHOT' : undefined;
+    } catch { /* Diagnostics must not change URL/error handling. */ }
+    const requestSequence = ++diagnosticRequestSequence;
+    const diagnosticStart = Date.now();
+    if (operation) recordConfigPushNativeDiagnostic('HTTP_REQUEST_STARTED', {
+        operation, request_sequence: requestSequence, status: 'STARTED',
+    });
 
     try {
-        return await fetch(input, {
+        const response = await fetch(input, {
             ...init,
             signal: controller.signal,
         });
+        if (operation) recordConfigPushNativeDiagnostic('HTTP_REQUEST_COMPLETED', {
+            operation, request_sequence: requestSequence, status: response.ok ? 'COMPLETED' : 'FAILED',
+            http_status: response.status, duration_ms: Date.now() - diagnosticStart,
+        });
+        return response;
     } catch (error) {
+        if (operation) recordConfigPushNativeDiagnostic('HTTP_REQUEST_COMPLETED', {
+            operation, request_sequence: requestSequence, status: 'FAILED', http_status: 0,
+            code: controller.signal.aborted ? 'ERP_SYNC_TIMEOUT' : 'ERP_SYNC_HTTP_NETWORK_ERROR',
+            duration_ms: Date.now() - diagnosticStart,
+        });
         if (controller.signal.aborted) {
             const timeoutError = new Error(
                 `ERP sync lifecycle request timed out after ${ERP_SYNC_LIFECYCLE_REQUEST_TIMEOUT_MS}ms`,

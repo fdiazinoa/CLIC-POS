@@ -37,14 +37,17 @@ async function fixture() {
   const getSession = async (refresh = false) => {
     if (refresh) { exports++; await prepare(); active = { syncId: 'new', syncVersion: 102, price: 85 }; }
     const version = { syncId: active.syncId, syncVersion: active.syncVersion }; const bound = JSON.stringify(identity);
-    return { ready: { runtime: { version }, inventorySyncId: 'old', inventorySyncVersion: 47, inventoryVersion: 4, inventoryCursor: 'C' }, assertCurrent: async () => {
+    return { assertSetupIdentity:()=>{},ready: { runtime: { version }, inventorySyncId: 'old', inventorySyncVersion: 47, inventoryVersion: 4, inventoryCursor: 'C' }, assertCurrent: async () => {
       if (bound !== JSON.stringify(identity)) throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
       if (version.syncId !== active.syncId || version.syncVersion !== active.syncVersion) throw new LargeMasterSyncV3Error('SYNC_V3_RUNTIME_VERSION_CHANGED');
     }, projectConfig: async (value: any) => ({ ...value, taxRate: 0, taxes: [{ id: 'TX', rate: .18 }], tariffs: [{ id: 'T', name: 'General', taxIncluded: false }] }) };
   };
-  Object.assign(globalThis, { __v3ManifestFixture: { db, getSession } });
+  Object.assign(globalThis, { __v3ManifestFixture: { db, getSession, cas: async(expected:any,next:any,guard:()=>void)=>{
+    assert.equal(JSON.stringify(config),JSON.stringify(expected));guard();await db.save('config',next);
+  } } });
   const mocks: Record<string, string> = { '../../utils/db': 'export const db=globalThis.__v3ManifestFixture.db;',
-    './LargeMasterSyncV3OperationalSession': 'export const getLargeMasterSyncV3OperationalSession=globalThis.__v3ManifestFixture.getSession;' };
+    './LargeMasterSyncV3OperationalSession': 'export const getLargeMasterSyncV3OperationalSession=globalThis.__v3ManifestFixture.getSession;export const acquireLargeMasterSyncV3ConfigContext=async()=>{};',
+    '../db':'export const dbAdapter={compareAndSwapV3SetupConfig:globalThis.__v3ManifestFixture.cas};' };
   const built = await build({ entryPoints: [new URL('../services/sync/LargeMasterSyncV3ConfigPush.ts', import.meta.url).pathname],
     bundle: true, write: false, format: 'esm', platform: 'node', plugins: [{ name: 'manifest-boundaries', setup(b) {
       b.onResolve({ filter: /.*/ }, args => mocks[args.path] ? { path: args.path, namespace: 'fixture' } : undefined);
@@ -59,6 +62,7 @@ async function fixture() {
     readOperationalCatalogBindingProof: () => ({ companyId: config.terminals[0].config.erpBinding.companyId }),
     largeMasterSyncV3DownloadOrigin: () => 'https://download.test', LargeMasterSyncV3Error,
     persistLargeMasterSyncV3ConfigPushCatalog: helper.persistLargeMasterSyncV3ConfigPushCatalog,
+    captureLargeMasterSyncV3ConfigRefreshAuthority:()=>({localTerminalId:localId,assertCurrent:()=>{}}),
     window: { dispatchEvent: (event: { type: string }) => { events.push(event.type); } }, CustomEvent: class { constructor(public type: string) {} },
     localStorage: { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value) },
     navigator: { onLine: true }, protectsLocalCatalogFromCloud: () => false, waitForBackgroundSyncWindow: async () => {},
