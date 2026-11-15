@@ -36,6 +36,8 @@ export class CouponIssuancePending extends Error {
   }
 }
 const safeText = (value: unknown, max = 160): value is string =>
+  // Reject control bytes in ERP-issued printable identifiers.
+  // eslint-disable-next-line no-control-regex
   typeof value === 'string' && value.trim().length > 0 && value.length <= max && !/[\x00-\x1f\x7f]/.test(value);
 
 export function validateCouponIssuance(value: unknown, identity: CouponPrintIdentity, transactionId: string): CouponIssuanceEnvelope {
