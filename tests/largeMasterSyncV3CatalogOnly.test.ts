@@ -257,7 +257,7 @@ test('historical refund requires actual original transaction CAS and preserves i
   const original={id:'original',items:[oldLine],type:'SALE',status:'COMPLETED'};f.insert('transactions',original);
   f.stage('N',102);await f.store.activateCatalogOnly('N',await f.transition());
   const documents=financial('refund',1,102,'N');
-  Object.assign(documents[0].document,{type:'REFUND',originalTransactionId:'original',items:[{...oldLine,quantity:-1}]});
+  Object.assign(documents[0].document,{type:'REFUND',documentType:'REFUND',originalTransactionId:'original',items:[{...oldLine,quantity:-1}]});
   documents[0].v3StockRequirements=[];
   Object.assign(documents[1].document,{qtyOut:0,qtyIn:1});
   await assert.rejects(f.adapter.saveDocumentsAtomically(documents),/RETAINED_SOURCE_REQUIRED/);
@@ -274,7 +274,7 @@ test(`historical refund native status ${status ?? 'missing'} preserves authority
   const original={id:'original',items:[oldLine],type:'SALE',...(status ? {status} : {})};f.insert('transactions',original);
   f.stage('N',102);await f.store.activateCatalogOnly('N',await f.transition());
   const documents=financial('refund',1,102,'N');
-  Object.assign(documents[0].document,{type:'REFUND',originalTransactionId:'original',items:[{...oldLine,quantity:-1}]});
+  Object.assign(documents[0].document,{type:'REFUND',documentType:'REFUND',originalTransactionId:'original',items:[{...oldLine,quantity:-1}]});
   documents[0].v3StockRequirements=[];
   documents[0].v3ExpectedRetainedDocument={collection:'transactions',id:'original',expected:JSON.stringify(original)};
   Object.assign(documents[1].document,{qtyOut:0,qtyIn:1});
@@ -326,10 +326,10 @@ for(const drift of ['none','syncToken','tenantId','company','warehouse','origin'
   const identity={tenantId:'tenant',terminalId:'terminal',deviceId:'device',syncToken:'token',erpSyncBaseUrl:'https://erp.test/api/sync'};
   const origin='https://download.test';const binding=JSON.stringify([identity.tenantId,identity.terminalId,identity.deviceId,identity.erpSyncBaseUrl,origin]);
   f.sql.prepare('UPDATE master_v3_operational_owner SET binding=?').run(binding);
-  const state:any={identity,origin,config:{terminals:[{id:'local',config:{currentDeviceId:'device',erpTerminalId:'terminal',erpBinding:{companyId:'company'},inventoryScope:{defaultSalesWarehouseId:'W'}}}]}};
+  const state:any={identity,origin,config:{terminals:[{id:'local',config:{currentDeviceId:'device',erpTerminalId:'terminal',erpBinding:{tenantId:'tenant',companyId:'company',storeId:'store'},inventoryScope:{defaultSalesWarehouseId:'W'}}}]}};
   const adapter=Object.create(f.adapter);adapter.masterSyncV3Store=f.store;adapter.connect=async()=>{};
   Object.assign(globalThis,{__sessionFence:{state,adapter,db:{get:async()=>state.config}}});
-  f.onLastActivationWrite(()=>{
+  let liveFenceReached=false;f.onLastActivationWrite(()=>{liveFenceReached=true;
    if(drift==='syncToken'||drift==='tenantId')state.identity={...state.identity,[drift]:'changed'};
    if(drift==='company')state.config.terminals[0].config.erpBinding.companyId='foreign';
    if(drift==='warehouse')state.config.terminals[0].config.inventoryScope.defaultSalesWarehouseId='foreign';
@@ -353,6 +353,7 @@ for(const drift of ['none','syncToken','tenantId','company','warehouse','origin'
    assert.equal((await f.store.getOperationalOwner())?.syncId,'S');assert.equal((await f.store.getActiveRuntimeVersion())?.syncId,'S');
    assert.equal(f.sql.prepare('SELECT COUNT(*) AS count FROM master_v3_catalog_owners').get()?.count,0);
   }
+  assert.equal(liveFenceReached,true,'intended last native await must be reached');
  }finally{f.sql.close();}
 });
 
