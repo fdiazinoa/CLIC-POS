@@ -136,7 +136,7 @@ test('pure binding fingerprint reads legacy credentials/profile without migratio
 const source = readFileSync(new URL('../services/sync/SyncManager.ts', import.meta.url), 'utf8');
 const refreshMethod = source.slice(source.indexOf('    async refreshTerminalResolvedConfig('), source.indexOf('    private async applySnapshotProducts('));
 function refreshFixture(response: unknown = snapshot(), kind = 'ERP_ACTIVE', fetchError?: string) {
-  const writes: string[] = [], events: string[] = [], endpoints: string[] = [];
+  const writes: string[] = [], events: string[] = [], endpoints: string[] = [], requests: any[] = [];
   let local = config(); let active = terminalId; let credentials = { syncToken: 'fixture-token' };
   let companyId = 'company';
   local.terminals[0].config.erpBinding = { terminalId, tenantId: identity.tenantId, deviceId: identity.posDeviceId, companyId } as any;
@@ -149,6 +149,8 @@ function refreshFixture(response: unknown = snapshot(), kind = 'ERP_ACTIVE', fet
     syncPolicy: { resolve: () => target },
     readOperationalTerminalBinding: () => JSON.stringify([target, credentials, companyId]),
     readOperationalCatalogBindingProof: () => ({ terminalId, tenantId: identity.tenantId, deviceId: identity.posDeviceId, companyId }),
+    readLargeMasterSyncV3BoundIdentity: () => ({ tenantId: identity.tenantId, terminalId, deviceId: identity.posDeviceId,
+      syncToken: credentials.syncToken }), LargeMasterSyncV3Error: class extends Error {},
     db: { get: async (collection: string) => collection === 'config' ? local : [],
       save: async (collection: string, value: any) => { writes.push(collection); if (collection === 'config') local = value; },
       rehydrateOperationalDocumentState: async () => { writes.push('documents'); } },
@@ -158,7 +160,7 @@ function refreshFixture(response: unknown = snapshot(), kind = 'ERP_ACTIVE', fet
     posCatalogDebugMatchesRaw: () => false, posCatalogDebugSummarizeItem: (v: unknown) => v,
     posCatalogDebugLogDbRows: async () => undefined,
     buildTerminalSyncAuthHeaders: () => assert.fail('operational preflight must not call migrating credential loader'),
-    fetchAndReadWithTimeout: async (endpoint: string) => { endpoints.push(endpoint); if (fetchError) throw new Error(fetchError);
+    fetchAndReadWithTimeout: async (endpoint: string, init: unknown) => { endpoints.push(endpoint); requests.push(init); if (fetchError) throw new Error(fetchError);
       if (mutateDuringFetch) mutateDuringFetch(); return { payload: response, contentType: 'application/json' }; },
     persistMasterNumberRangesFromSnapshot: async () => { writes.push('ranges'); },
     applyTerminalConfigSnapshot, extractTerminalOperationalDocumentState: () => ({ documentSeries: [], fiscalRanges: [], fiscalAllocations: [], terminalId }),
@@ -179,14 +181,31 @@ function refreshFixture(response: unknown = snapshot(), kind = 'ERP_ACTIVE', fet
     refreshTerminalStructuredMasterData: async () => { writes.push('structured'); return {}; },
     sanitizeConfig: (value: any) => value, resolveRuntimeWarehousesFromConfig: () => [],
   });
-  return { instance, writes, events, endpoints, getConfig: () => local, changeIdentity: () => { active = 'foreign'; },
+  return { instance, writes, events, endpoints, requests, getConfig: () => local, changeIdentity: () => { active = 'foreign'; },
     changeCompany: () => { companyId = 'other'; },
     changeToken: () => { credentials = { syncToken: 'rotated-fixture-token' }; },
+    clearToken: () => { credentials = { syncToken: '' }; },
     changeTarget: () => { target = { ...target, baseUrl: 'https://different.example.test' }; },
     duringFetch: (callback: () => void) => { mutateDuringFetch = callback; } };
 }
 const options = { forceRemoteFetch: true, requireOperationalTerminalConfig: true, masterScopes: [], blockScopes: [],
   resolvedScopes: ['identity', 'pricing', 'inventory', 'documents'], supplementalMode: 'skip' };
+test('fresh V3 authority uses authenticated POST without legacy catalog payload or redirects', async () => {
+  const f = refreshFixture();
+  await f.instance.refreshTerminalResolvedConfig(undefined, options);
+  assert.equal(f.requests.length, 1);
+  assert.equal(f.requests[0].method, 'POST');
+  assert.equal(f.requests[0].redirect, 'error');
+  assert.equal(f.requests[0].headers['X-Sync-Token'], 'fixture-token');
+  assert.equal(f.requests[0].headers['X-POS-Capabilities'], 'largeMasterSyncV3');
+  assert.equal(f.requests[0].headers['Content-Type'], 'application/json');
+  assert.deepEqual(JSON.parse(f.requests[0].body), {});
+});
+test('fresh V3 authority without bound token fails before network and persistence', async () => {
+  const f = refreshFixture(); f.clearToken();
+  await assert.rejects(f.instance.refreshTerminalResolvedConfig(undefined, options), /SYNC_V3_ERP_BINDING_REQUIRED/);
+  assert.equal(f.endpoints.length, 0); assert.deepEqual(f.writes, []); assert.deepEqual(f.events, []);
+});
 for (const failure of ['timeout', 'HTTP 401', 'HTTP 403', 'HTTP 500']) {
   test(`queued scoped refresh ${failure} leaves all authority/persistence/events untouched`, async () => {
     const f = refreshFixture(snapshot(), 'ERP_ACTIVE', failure); const before = structuredClone(f.getConfig());
