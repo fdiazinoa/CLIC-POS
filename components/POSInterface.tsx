@@ -6619,7 +6619,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   observations: uberRecoveredOrder
                      ? `Uber Eats ${uberRecoveredOrder.code} / ${uberRecoveredOrder.sourceOrderId}`
                      : undefined
-               }, { deferDurablePersistence: !isRefundOnly || Boolean(v3Operational) });
+               }, { deferDurablePersistence: !isRefundOnly || Boolean(v3Operational), deferLegacySaleNumbering:retainLegacyFiscalAttempt });
                const txn = retainedLegacyTxn || await withTimeout(retainLegacyFiscalAttempt
                   ?legacyFiscalAttemptRef.current.create(legacyAttemptIdentity,createOrdinaryDraft):createOrdinaryDraft(),25000,'TIMEOUT_CREATE_TRANSACTION').catch(async (error: any) => {
                   if(retainLegacyFiscalAttempt)throw error;

@@ -1,3 +1,4 @@
+import {assertAtomicLegacySaleNumbering} from './fiscal/AtomicLegacySaleNumbering';
 import {isOfflineTableFiscalTransaction} from './fiscal/OfflineTableFiscalCheckout';
 import {assertInventoryPresentationReturnAllowed} from './inventoryPresentations/selection';
 import { withOriginal } from './recovery/OriginalCapture';
@@ -274,6 +275,14 @@ const enqueueSequenceBroadcast = (seriesId: string, seriesConfig: any): void => 
 };
 
 class TransactionService {
+    /** Numbering is already committed; propagation never reserves another number. */
+    broadcastCommittedNumbers(transaction:Transaction):void {
+        if(transaction.legacySaleNumbering!==1||!transaction.seriesId||!Number.isSafeInteger(transaction.seriesNumber))return;
+        void db.getDocument('internalSequences',transaction.seriesId).then(series=>{
+            if(series)enqueueSequenceBroadcast(transaction.seriesId!,series);
+        }).catch(error=>console.warn('Sequence broadcast could not be scheduled',error));
+    }
+
     /**
      * Prefer terminal.config.documentAssignments[documentType] when present (merged with
      * internalSequences + terminal documentSeries); otherwise keep caller seriesId with
@@ -385,8 +394,13 @@ class TransactionService {
      */
     async createTransaction(
         data: Partial<Transaction>,
-        options: { deferDurablePersistence?: boolean } = {},
+        options: { deferDurablePersistence?: boolean; deferLegacySaleNumbering?: boolean } = {},
     ): Promise<Transaction> {
+        if(options.deferLegacySaleNumbering){
+            if(options.deferDurablePersistence!==true||['globalSequence','displayId','seriesNumber'].some(key=>(data as any)[key]!==undefined))throw Error('LEGACY_ATOMIC_NUMBERING_SOURCE_INVALID');
+            data={...data,legacySaleNumbering:1};
+            assertAtomicLegacySaleNumbering(data);
+        }else if(data.legacySaleNumbering!==undefined)throw Error('LEGACY_ATOMIC_NUMBERING_SOURCE_INVALID');
         recordCheckoutDiagnostic('TRANSACTION_CREATE_INPUT', { items: data.items, total: data.total, transactionId: data.id, payments: data.payments, terminalId: data.terminalId });
         if(data.items?.some(line=>line.inventoryPresentation!==undefined)){
             if(data.documentType==='REFUND'||data.items.some(line=>line.quantity<=0))assertInventoryPresentationReturnAllowed(data);
@@ -447,11 +461,12 @@ class TransactionService {
 
         // Generate IDs
         const { globalSequence, displayId, seriesNumber } =
-            (data.v3ReservationClaimId||data.fiscalAllocationAuthorizationId) ? {globalSequence:undefined,displayId:undefined,seriesNumber:undefined} : await this.generateTransactionId(data.documentType, resolvedSeriesId);
+            (data.v3ReservationClaimId||data.fiscalAllocationAuthorizationId||data.legacySaleNumbering===1) ? {globalSequence:undefined,displayId:undefined,seriesNumber:undefined} : await this.generateTransactionId(data.documentType, resolvedSeriesId);
         const normalizedFiscalAmounts = await normalizeFiscalAmounts(data);
 
         // Create transaction object
         const transaction: Transaction = {
+            ...(data.legacySaleNumbering===1?{legacySaleNumbering:1 as const}:{}),
             ...(data.inventoryPresentationContract===1?{inventoryPresentationContract:1 as const}:{}),
             ...(hasTrackingSource ? {trackingCheckoutId:data.trackingCheckoutId,trackingEffectAt:data.trackingEffectAt} : {}),
             ...(data.fiscalWorkflowCheckoutId ? { fiscalWorkflowCheckoutId: data.fiscalWorkflowCheckoutId } : {}),

@@ -1,3 +1,4 @@
+import {assertAtomicLegacySaleNumbering,hasAtomicLegacySaleNumbering,withoutAtomicSaleNumbers} from '../fiscal/AtomicLegacySaleNumbering';
 import {returnContract,returnNeed,type ReturnAttempt} from '../fiscal/FiscalReturnV1';
 import {hasOfflineFiscalHeader} from '../fiscal/OfflineFiscalCharge';
 import {captureTrackingSourceMetadata} from '../tracking/TrackingSourceMetadata';
@@ -114,10 +115,10 @@ export const buildV3InventoryLedger = async (transaction: Transaction, warehouse
 
 type FinancialEntry = { transaction: Transaction; options?: V3FinancialOptions };
 type FinancialResult = { transaction: Transaction; created: boolean };
-const allocationDraftIdentity=(transaction:Transaction,warehouseId:string,options:V3FinancialOptions)=>financialOperationIdentity(transaction.fiscalAllocationAuthorizationId?{...transaction,globalSequence:undefined,displayId:undefined,seriesNumber:undefined}:transaction,warehouseId,options);
+const allocationDraftIdentity=(transaction:Transaction,warehouseId:string,options:V3FinancialOptions)=>financialOperationIdentity(transaction.fiscalAllocationAuthorizationId||hasAtomicLegacySaleNumbering(transaction)?withoutAtomicSaleNumbers(transaction):transaction,warehouseId,options);
 const assertFinancialReplay=(stored:Transaction|null,transaction:Transaction,identity:string,warehouseId?:string,options:V3FinancialOptions={}):void=>{
-  if(transaction.fiscalAllocationAuthorizationId&&stored&&(['globalSequence','displayId','seriesNumber'] as const).some(key=>transaction[key]!==undefined&&transaction[key]!==stored[key]))throw new LargeMasterSyncV3Error('SYNC_V3_DUPLICATE_TRANSACTION_MISMATCH');
-  if(!stored||(transaction.fiscalAllocationAuthorizationId?financialIdentity({...stored,globalSequence:undefined,displayId:undefined,seriesNumber:undefined})!==financialIdentity({...transaction,globalSequence:undefined,displayId:undefined,seriesNumber:undefined}):financialIdentity(stored)!==financialIdentity(transaction))||stored.v3CommitFingerprint!==(transaction.fiscalAllocationAuthorizationId&&warehouseId?financialOperationIdentity(stored,warehouseId,options):identity))
+  if((transaction.fiscalAllocationAuthorizationId||hasAtomicLegacySaleNumbering(transaction))&&stored&&(['globalSequence','displayId','seriesNumber'] as const).some(key=>transaction[key]!==undefined&&transaction[key]!==stored[key]))throw new LargeMasterSyncV3Error('SYNC_V3_DUPLICATE_TRANSACTION_MISMATCH');
+  if(!stored||(transaction.fiscalAllocationAuthorizationId||hasAtomicLegacySaleNumbering(transaction)?financialIdentity(withoutAtomicSaleNumbers(stored))!==financialIdentity(withoutAtomicSaleNumbers(transaction)):financialIdentity(stored)!==financialIdentity(transaction))||stored.v3CommitFingerprint!==((transaction.fiscalAllocationAuthorizationId||hasAtomicLegacySaleNumbering(transaction))&&warehouseId?financialOperationIdentity(stored,warehouseId,options):identity))
     throw new LargeMasterSyncV3Error('SYNC_V3_DUPLICATE_TRANSACTION_MISMATCH');
 };
 /** A committed receipt is checked with the same canonical identity as the financial writer, never by ID alone. */
@@ -134,6 +135,7 @@ export const readV3CommittedRefundReplay=async(transaction:Transaction,warehouse
 /** Ordinary legacy fiscal checkout retry: only a matching durable sale can
  * bypass the already-consumed fiscal authority check. */
 export const readV3CommittedLegacySaleReplay=async(transaction:Transaction,warehouseId:string):Promise<Transaction|null>=>{
+ assertAtomicLegacySaleNumbering(transaction);
  if(transaction.documentType!=='TICKET'||!['B01','B02'].includes(transaction.ncfType||'')
   ||transaction.fiscalWorkflowCheckoutId||transaction.fiscalAllocationAuthorizationId||transaction.trackingCheckoutId
   ||transaction.companyDispatchSource||transaction.v3ReservationClaimId)return null;
@@ -143,7 +145,7 @@ export const readV3CommittedLegacySaleReplay=async(transaction:Transaction,wareh
  if(!history||!active&&!history.zReportId||history.v3Binding!==session.binding||active&&active.v3Binding!==session.binding)
   throw new LargeMasterSyncV3Error('SYNC_V3_DUPLICATE_TRANSACTION_MISMATCH');
  const identity=financialOperationIdentity(transaction,warehouseId,{});
- assertFinancialReplay(history,transaction,identity);if(active)assertFinancialReplay(active,transaction,identity);
+ assertFinancialReplay(history,transaction,identity,warehouseId);if(active)assertFinancialReplay(active,transaction,identity,warehouseId);
  return history.zReportId?history:active!;
 };
 const commits = new Map<string, { identity: string; promise: Promise<FinancialResult[]> }>();
@@ -153,8 +155,9 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
   if (!entries.length || new Set(entries.map(entry => entry.transaction.id)).size !== entries.length) {
     return Promise.reject(new LargeMasterSyncV3Error('SYNC_V3_DUPLICATE_TRANSACTION_MISMATCH'));
   }
+  try{for(const {transaction,options} of entries){assertAtomicLegacySaleNumbering(transaction);if(hasAtomicLegacySaleNumbering(transaction)&&(entries.length!==1||options?.refund))throw Error('LEGACY_ATOMIC_NUMBERING_SOURCE_INVALID');}}catch(error){return Promise.reject(error);}
   const identities = entries.map(({transaction,options={}})=>allocationDraftIdentity(transaction,warehouseId,options));
-  const identity = JSON.stringify([entries.map(entry => entry.transaction.id), identities,entries.map(({transaction})=>transaction.fiscalAllocationAuthorizationId?[transaction.globalSequence,transaction.displayId,transaction.seriesNumber]:null)]);
+  const identity = JSON.stringify([entries.map(entry => entry.transaction.id), identities,entries.map(({transaction})=>transaction.fiscalAllocationAuthorizationId||hasAtomicLegacySaleNumbering(transaction)?[transaction.globalSequence,transaction.displayId,transaction.seriesNumber]:null)]);
   const pending = entries.map(entry => commits.get(entry.transaction.id)).find(Boolean);
   if (pending) return pending.identity === identity ? pending.promise
     : Promise.reject(new LargeMasterSyncV3Error('SYNC_V3_DUPLICATE_TRANSACTION_MISMATCH'));
@@ -225,6 +228,14 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
       transaction={...transaction,displayId:numbering.result.displayId,seriesNumber:numbering.result.seriesNumber};
       documents.push({collectionName:'internalSequences',document:numbering.series!,expectedDocument:JSON.stringify(series)});
     }
+    if(hasAtomicLegacySaleNumbering(transaction)){
+      if(retained||options.refund||['globalSequence','displayId','seriesNumber'].some(key=>(transaction as any)[key]!==undefined))throw Error('LEGACY_ATOMIC_NUMBERING_SOURCE_INVALID');
+      const series=await db.getDocument('internalSequences',transaction.seriesId!) as any,counter=await db.getDocument('globalSequenceCounter' as any,'value') as any;
+      const planned=planFinancialNumbers({seriesId:transaction.seriesId,documentType:transaction.documentType,global:true},series,counter);
+      transaction={...transaction,globalSequence:planned.result.globalSequence,displayId:planned.result.displayId,seriesNumber:planned.result.seriesNumber};
+      documents.push({collectionName:'internalSequences',document:planned.series!,expectedDocument:JSON.stringify(series)},
+        {collectionName:'globalSequenceCounter',document:planned.counter!,...(counter?{expectedDocument:JSON.stringify(counter)}:{requireAbsent:true})});
+    }
     if(transaction.fiscalAllocationAuthorizationId){
       if(entries.length!==1||!transaction.fiscalWorkflowCheckoutId||!dbAdapter.fiscalWorkflowStore?.allocationCommitPreconditions)throw Error('OFFLINE_FISCAL_NATIVE_REQUIRED');
       const checkout=await dbAdapter.fiscalWorkflowStore.readCheckout(transaction.fiscalWorkflowCheckoutId);if(!checkout?.allocation)throw Error('OFFLINE_FISCAL_ALLOCATION_REQUIRED');
@@ -261,7 +272,7 @@ export const persistV3FinancialBatch = (entries: FinancialEntry[], config: Busin
       v3InventoryBaseline: v3InventoryBaselineKey(session.binding, stamp!) };
     // Draft identity coordinates retries before numbering. The immutable source fingerprint
     // covers the final numbered/validated document written with receipt, history and Outbox.
-    if(document.fiscalAllocationAuthorizationId)document.v3CommitFingerprint=financialOperationIdentity(document,warehouseId,options);
+    if(document.fiscalAllocationAuthorizationId||hasAtomicLegacySaleNumbering(document))document.v3CommitFingerprint=financialOperationIdentity(document,warehouseId,options);
     let customerUpdate: Customer | null = null;
     let customerBefore: Customer | null = null;
     let walletDelta = options.refund ? Number(document.walletDepositAmount || 0) : -Number(document.walletPaymentAmount || 0);
