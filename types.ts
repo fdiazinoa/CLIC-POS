@@ -1838,6 +1838,8 @@ export interface CartItem extends Product {
 }
 
 export interface Transaction {
+  /** Ordinary B01/B02 native V3 numbering is committed with the financial document. */
+  legacySaleNumbering?: 1;
   returnSettlementV1?: import('./services/fiscal/FiscalReturnV1').ReturnSettlementAuthorization;
   inventoryEffectsContract?:'WAREHOUSE_RESERVATION_V1';
   companyDispatchSource?:{schemaVersion:1;source:'COMPANY_DISPATCH_ESCROW_V1';checkoutId:string;bindingId:string;generation:string;policyRevision:number;sequence?:number;lines:Array<Record<string,unknown>>};

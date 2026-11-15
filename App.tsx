@@ -11700,6 +11700,7 @@ const AppContent: React.FC = () => {
         const retained=await readV3CommittedLegacySaleReplay({...txn,terminalId:fiscalTerminal!.id,
           terminalName:fiscalTerminal!.config.terminalName||fiscalTerminal!.id},warehouse);
         if(retained){
+          if(txn.legacySaleNumbering===1)Object.assign(txn,retained);
           setTransactions(previous=>[...previous.filter(row=>row.id!==retained.id),retained]);onCommitted?.(retained);
           backgroundSyncManager.triggerSync().catch(console.error);return;
         }
@@ -11722,7 +11723,8 @@ const AppContent: React.FC = () => {
         result = {transaction:completed,created:false};
       }
       onCommitted?.(result.transaction);
-      if (txn.v3ReservationClaimId||txn.fiscalAllocationAuthorizationId) Object.assign(txn,result.transaction); // Return committed numbering to the existing receipt caller.
+      if(result.created&&txn.legacySaleNumbering===1)transactionService.broadcastCommittedNumbers(result.transaction);
+      if (txn.v3ReservationClaimId||txn.fiscalAllocationAuthorizationId||txn.legacySaleNumbering===1) Object.assign(txn,result.transaction); // Return committed numbering to the existing receipt caller.
       setTransactions(previous => [...previous.filter(row => row.id !== result.transaction.id), result.transaction]);
       if (result.transaction.customerId && result.transaction.pendingBalance) {
         const updated = await db.getDocument('customers', result.transaction.customerId) as Customer | null;
