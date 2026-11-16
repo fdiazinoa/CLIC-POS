@@ -274,19 +274,24 @@ test('keeps Mast-01 and Slav-01 visible when ERP reuses POS-001 across terminal 
   assert.equal(terminals[0].occupied, true);
 });
 
-test('initial ERP bootstrap carries root and nested UX/agenda into terminal snapshot application', async () => {
+test('initial ERP bootstrap carries root and nested UX/agenda into terminal snapshot application', async t => {
+  const { dbAdapter } = await import('../services/db');
+  // This HTTP/config fixture models empty CURRENT checkpoints, not durable v2 storage.
+  const securityRead = t.mock.method(dbAdapter, 'readPosSecurityState', async () => []);
   const { fetchInitialConfigFromErp } = await import('../services/setup/erpTerminalSetup');
   const { terminalConfigRequestCoordinator } = await import('../services/sync/TerminalConfigRequestCoordinator');
   const { applyTerminalConfigSnapshot } = await import('../utils/terminalConfigSnapshot');
   const originalRequest = terminalConfigRequestCoordinator.request;
   try {
     for (const root of [true, false]) {
+      const securityReadsBefore = securityRead.mock.callCount();
       const preferences = { ux: { showProductImages: false, viewMode: 'RETAIL' }, startWithAgenda: true };
       const payload = root
         ? { terminal_config: { terminal_id: 'ERP-A', config: {} }, ...preferences }
         : { terminal_config: { terminal_id: 'ERP-A', config: preferences } };
       (terminalConfigRequestCoordinator as any).request = async () => ({ payload, configVersion: 'bootstrap-1', etag: null, unchanged: false });
       const result = await fetchInitialConfigFromErp({ erpBaseUrl: 'https://erp.example.test', tenantId: 'tenant-test', erpTerminalId: 'ERP-A', posDeviceId: 'DEV-A' });
+      assert.ok(securityRead.mock.callCount() > securityReadsBefore, `CURRENT checkpoint read for root=${root}`);
       const config = structuredClone(getInitialConfig('Supermercado' as any));
       const applied = applyTerminalConfigSnapshot(config, { terminalId: config.terminals[0].id, incomingSnapshot: result.terminal_config as any });
       assert.equal(applied.config.terminals[0].config.ux.showProductImages, false);

@@ -1,3 +1,5 @@
+import { posSecurityV2SetupHeaders } from '../sync/PosSecurityV2Transport';
+import { receivePosSecurityV2 } from '../sync/PosSecurityV2Sync';
 import { BusinessConfig, DeviceProfile, Product, TerminalConfig } from '../../types';
 import { DEFAULT_TERMINAL_CONFIG } from '../../constants';
 import { getDefaultRoleConfig, resolveDeviceRoleValue } from '../../utils/deviceRoleHelpers';
@@ -1859,12 +1861,13 @@ export const fetchInitialConfigFromErp = async (input: {
   let configVersion: string | null = null;
   let etag: string | null = null;
 
+  const securityHeaders = posSecurityV2SetupHeaders({ baseUrl: input.erpBaseUrl, terminalId: input.erpTerminalId, tenantId: input.tenantId, deviceId: input.posDeviceId });
   const downloadOrigin = input.candidateV3 ? largeMasterSyncV3DownloadOrigin(input.downloadOrigin) : undefined;
   if (input.candidateV3) {
     const query = new URLSearchParams({ tenant_id: input.tenantId, device_id: input.posDeviceId });
     const response = await requestJson<Record<string, any>>({
       url: `${downloadOrigin}/api/setup/initial-config/${encodeURIComponent(input.erpTerminalId)}?${query}`,
-      headers: { Accept: 'application/json', ...buildDeviceHeaders(input.posDeviceId),
+      headers: { Accept: 'application/json', ...securityHeaders, ...buildDeviceHeaders(input.posDeviceId),
         'X-POS-Capabilities': 'largeMasterSyncV3' },
       timeoutMs: REQUEST_TIMEOUT_MS,
       rejectRedirects: true,
@@ -1884,6 +1887,7 @@ export const fetchInitialConfigFromErp = async (input: {
       `/api/setup/initial-config/${encodeURIComponent(input.erpTerminalId)}?${query.toString()}`,
       {
         headers: {
+          ...securityHeaders,
           ...buildDeviceHeaders(input.posDeviceId),
           ...(input.canaryV3 ? { 'X-POS-Capabilities': 'largeMasterSyncV3' } : {}),
         },
@@ -1919,6 +1923,7 @@ export const fetchInitialConfigFromErp = async (input: {
     }
 
     if (result.status === 'unchanged') {
+      await receivePosSecurityV2({}, 'initial-config');
       const localConfig = await db.get('config') as unknown as BusinessConfig | null;
       const matchingTerminal = localConfig && !Array.isArray(localConfig)
         ? (localConfig.terminals || []).find((terminal) => (
@@ -1953,6 +1958,7 @@ export const fetchInitialConfigFromErp = async (input: {
     etag = result.etag;
   }
 
+  await receivePosSecurityV2(payload, 'initial-config');
   const payloadBusinessConfig = asObject(payload?.business_config || payload?.businessConfig);
   const payloadOperational = asObject(payload?.operational);
   const terminalConfig: Record<string, any> = {

@@ -52,6 +52,8 @@ const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value));
 const collections = new Map<string, unknown>();
 
 const resetHarness = () => {
+    // This suite models CURRENT storage in memory; security v2 has separate durable/HTTP suites.
+    dbAdapter.readPosSecurityState = async () => [];
     localStorage.clear();
     sessionStorage.clear();
     dispatchedEvents.length = 0;

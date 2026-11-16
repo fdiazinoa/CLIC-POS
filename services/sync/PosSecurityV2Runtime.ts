@@ -4,7 +4,7 @@ import { readPosSecurityRecords, type PosSecurityRecord } from './PosSecurityV2C
 import { sameSecurityValue, type SecurityBinding } from './PosSecurityV2Contract';
 
 export interface ReturnSecurityContext { mode: 'CURRENT' | 'V2' | 'BLOCKED'; token: string; roles: RoleDefinition[]; users: User[] }
-// Future integration supplies authenticated context. No transport, announcement or activation occurs here.
+// The sync runtime supplies authenticated context. No announcement or activation occurs here.
 let authorizedContext: (() => Promise<SecurityBinding | null>) | null = null;
 export const configureReturnSecurityContext = (provider: (() => Promise<SecurityBinding | null>) | null): void => { authorizedContext = provider; };
 const matchesApplied = (record: PosSecurityRecord, binding: SecurityBinding): boolean => {

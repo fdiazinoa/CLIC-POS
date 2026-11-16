@@ -11,7 +11,7 @@ export interface PosSecurityRecord {
   appliedReference: SecurityReference | null;
   localBlock?: string;
 }
-/** Supplied only by future authenticated integration. There is deliberately no HTTP implementation or default transport. */
+/** Authenticated integration port. HTTP implementation and runtime injection live in PosSecurityV2Transport/Sync. */
 export interface PosSecurityV2Transport {
   authorizedBinding(): Promise<SecurityBinding>;
   offer(body: ReturnType<typeof securityAnnouncement>): Promise<unknown>;
@@ -47,6 +47,13 @@ export async function readPosSecurityRecords(adapter: DatabaseAdapter): Promise<
 export async function assertLegacySecurityWriteAllowed(adapter: DatabaseAdapter, collection: string): Promise<void> {
   if (!['roles', 'users'].includes(collection) || !adapter.readPosSecurityState) return;
   if ((await readPosSecurityRecords(adapter)).some(row => row.protocolFloor === 2)) securityFail('POS_SECURITY_LEGACY_WRITE_BLOCKED');
+}
+export function extractPosSecurityConfigCarrier(body: unknown, carrier: 'initial-config' | 'terminal-config' | 'config-snapshot'): { pos_security: unknown } {
+    const container = isRecord(body) ? (carrier === 'config-snapshot'
+      ? (isRecord(body.domains) ? body.domains.catalog : undefined) : body.terminal_config) : undefined;
+    if (!isRecord(container) || !Object.hasOwn(container, 'pos_security') || ['pos_roles', 'pos_users', 'roles', 'users'].some(key => Object.hasOwn(container, key))
+      || (isRecord(container.masters) && ['pos_roles', 'pos_users'].some(key => Object.hasOwn(container.masters as object, key)))) return securityFail('POS_SECURITY_CARRIER_INVALID');
+    return { pos_security: container.pos_security };
 }
 /** Prepared client; receiving ACTIVE is not creating an approval. The transport must authenticate its server/context. */
 export class PosSecurityV2Consumer {
@@ -119,12 +126,9 @@ export class PosSecurityV2Consumer {
     await this.commit(next, record, snapshot.roles, snapshot.users); return 'APPLIED';
   }
   async receiveConfig(body: unknown, carrier: 'initial-config' | 'terminal-config' | 'config-snapshot'): Promise<'APPLIED' | 'DUPLICATE'> {
-    const container = isRecord(body) ? (carrier === 'config-snapshot'
-      ? (isRecord(body.domains) ? body.domains.catalog : undefined) : body.terminal_config) : undefined;
-    if (!isRecord(container) || !Object.hasOwn(container, 'pos_security') || ['pos_roles', 'pos_users', 'roles', 'users'].some(key => Object.hasOwn(container, key))
-      || (isRecord(container.masters) && ['pos_roles', 'pos_users'].some(key => Object.hasOwn(container.masters as object, key)))) return securityFail('POS_SECURITY_CARRIER_INVALID');
-    return this.applyCarrier({ pos_security: container.pos_security });
+    return this.applyCarrier(extractPosSecurityConfigCarrier(body, carrier));
   }
+
   async receiveConfigPush(payload: unknown): Promise<'APPLIED' | 'DUPLICATE'> {
     if (!isRecord(payload) || !Object.hasOwn(payload, 'security_contract') || ['roles', 'users', 'pos_roles', 'pos_users', 'pos_security'].some(key => Object.hasOwn(payload, key))) return securityFail('POS_SECURITY_CARRIER_INVALID');
     return this.receiveReference(payload.security_contract);
