@@ -20,7 +20,9 @@ async function fixture(t:any,type:'B01'|'B02'='B02'){
  const session={binding,ready:{runtime:{version:{syncId:id(60),syncVersion:32}}},assertCurrent:async()=>{},projectConfig:async(c:any)=>c,
   validate:async(_c:any,items:any[],_t:any,_w:any,_i:any,validated:any)=>{for(const line of items)validated?.(line,line);},
   stockRequirements:async(_c:any,items:any[])=>items.map(line=>({baseline:JSON.stringify([binding,id(60),32,4,'inventory-cursor']),productId:line.id,warehouseId:id(5),quantity:line.quantity}))};
- const global=globalThis as any;global.__atomicLegacyFixture={adapter:f.adapter,db,session};global.window={dispatchEvent:()=>{}};global.localStorage={getItem:()=>null,setItem:()=>{},removeItem:()=>{}};
+ const fixtureState={adapter:f.adapter,db,session,configContextAcquisitions:0};
+ t.after(()=>assert.equal(fixtureState.configContextAcquisitions,0,'checkout must not refresh the operational config context'));
+ const global=globalThis as any;global.__atomicLegacyFixture=fixtureState;global.window={dispatchEvent:()=>{}};global.localStorage={getItem:()=>null,setItem:()=>{},removeItem:()=>{}};
  const mocks:Record<string,string>={
  '../db':'export const dbAdapter=globalThis.__atomicLegacyFixture.adapter;',
  '../../utils/db':'export const db=globalThis.__atomicLegacyFixture.db;',
@@ -28,8 +30,8 @@ async function fixture(t:any,type:'B01'|'B02'='B02'){
  './SyncFeatureFlags':"export const isSyncFeatureEnabled=name=>name==='sqlite_outbox_v2';",
  './sync/SyncFeatureFlags':"export const isSyncFeatureEnabled=name=>name==='sqlite_outbox_v2';",
  './DurableOutboxRepository':'export const durableOutboxRepository={commitFinancialTransaction:input=>globalThis.__atomicLegacyFixture.adapter.commitFinancialTransaction(input)};',
- './LargeMasterSyncV3OperationalSession':'export const getLargeMasterSyncV3OperationalSession=async()=>globalThis.__atomicLegacyFixture.session;export const getLargeMasterSyncV3RetainedSession=async()=>globalThis.__atomicLegacyFixture.session;export const v3InventoryBaselineKey=(binding,s)=>JSON.stringify([binding,s.syncId,s.syncVersion,s.inventoryVersion,s.inventoryCursor]);',
- './sync/LargeMasterSyncV3OperationalSession':'export const getLargeMasterSyncV3OperationalSession=async()=>globalThis.__atomicLegacyFixture.session;',
+ './LargeMasterSyncV3OperationalSession':'export const acquireLargeMasterSyncV3ConfigContext=async()=>{globalThis.__atomicLegacyFixture.configContextAcquisitions++;throw Error("unexpected config-context acquisition in atomic checkout fixture")};export const getLargeMasterSyncV3OperationalSession=async()=>globalThis.__atomicLegacyFixture.session;export const getLargeMasterSyncV3RetainedSession=async()=>globalThis.__atomicLegacyFixture.session;export const v3InventoryBaselineKey=(binding,s)=>JSON.stringify([binding,s.syncId,s.syncVersion,s.inventoryVersion,s.inventoryCursor]);',
+ './sync/LargeMasterSyncV3OperationalSession':'export const acquireLargeMasterSyncV3ConfigContext=async()=>{globalThis.__atomicLegacyFixture.configContextAcquisitions++;throw Error("unexpected config-context acquisition in atomic checkout fixture")};export const getLargeMasterSyncV3OperationalSession=async()=>globalThis.__atomicLegacyFixture.session;',
  './CheckoutDiagnostics':'export const recordCheckoutDiagnostic=()=>{};',
  '../CheckoutDiagnostics':'export const recordCheckoutDiagnostic=()=>{};',
  };
