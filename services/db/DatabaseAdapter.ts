@@ -27,6 +27,12 @@ export interface DurableDocumentMutation {
     v3StockRequirements?: Array<{ baseline: string; productId: string; warehouseId: string; quantity: number; quantityScale?: 4|6 }>;
 }
 
+export interface V3ConfigPushAuthorityPrecondition {
+    expectedConfig: import('../../types').BusinessConfig;
+    /** Pure synchronous storage/credential check; no public DB reads under native ownership. */
+    assertIdentity: () => void;
+}
+
 export interface DurableOutboxEventInput {
     eventId: string;
     eventType: string;
@@ -183,7 +189,9 @@ export interface DatabaseAdapter {
 
     /** Strict all-or-nothing local publication; never falls back to a second storage backend. */
     isV3TicketClosed?(id: string): Promise<boolean>;
-    saveDocumentsAtomically?(documents: DurableDocumentMutation[], requireAbsent?: boolean, replaceCollections?: string[]): Promise<void>;
+    readonly supportsV3ConfigPushAuthority?: true;
+    saveDocumentsAtomically?(documents: DurableDocumentMutation[], requireAbsent?: boolean, replaceCollections?: string[],
+        configAuthority?: V3ConfigPushAuthorityPrecondition): Promise<void>;
 
     // Stats
     getStats?(): Promise<{ type: string; size: number; tables: number }>;

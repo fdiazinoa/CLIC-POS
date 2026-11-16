@@ -125,7 +125,7 @@ test('older WebView without Array.at reads administrative pages forward/back and
     assert.deepEqual(await f.store.readAdministrativeCatalogPage(version,request),first);
     const React=await import('react'); const {renderToStaticMarkup}=await import('react-dom/server');
     const {default:Manager}=await import('../components/LargeMasterSyncV3CatalogManager');
-    assert.match(renderToStaticMarkup(React.createElement(Manager,{config:{terminals:[]} as any,warehouses:[],onClose:()=>{}})),/Productos V3/);
+    assert.match(renderToStaticMarkup(React.createElement(Manager,{config:{terminals:[]} as any,warehouses:[],onClose:()=>{}})),/Maestro de Artículos/);
     // SSR does not run effects; source assertion complements the real browser effect test.
     assert.doesNotMatch(readFileSync(new URL('../components/LargeMasterSyncV3CatalogManager.tsx',import.meta.url),'utf8'),/\.at\(/);
   }finally{if(at)Object.defineProperty(Array.prototype,'at',at);f.db.close();}

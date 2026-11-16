@@ -5,12 +5,12 @@ import {build} from 'esbuild';
 import {financialOperationIdentity} from '../services/db/LargeMasterSyncV3FinancialRetention';
 
 test('last-number committed sale is recovered without fresh stock/NCF authority; mismatches fail closed',async()=>{
- const state:any={documents:new Map(),binding:'tenant-terminal-device',reads:0};
+ const state:any={documents:new Map(),binding:'tenant-terminal-device',reads:0,configContextAcquisitions:0};
  (globalThis as any).__legacyReplayFixture=state;
  const mocks:Record<string,string>={
   '../../utils/db':`export const db={getDocument:async(name,id)=>globalThis.__legacyReplayFixture.documents.get(name+':'+id)||null};`,
   '../db':'export const dbAdapter={};',
-  './LargeMasterSyncV3OperationalSession':`export const getLargeMasterSyncV3RetainedSession=async()=>({binding:globalThis.__legacyReplayFixture.binding,assertCurrent:async()=>{globalThis.__legacyReplayFixture.reads++}});export const getLargeMasterSyncV3OperationalSession=async()=>{throw Error('fresh stock unavailable')};export const v3InventoryBaselineKey=()=>'';`,
+  './LargeMasterSyncV3OperationalSession':`export const acquireLargeMasterSyncV3ConfigContext=async()=>{globalThis.__legacyReplayFixture.configContextAcquisitions++;throw Error('unexpected config-context acquisition in retained replay fixture')};export const getLargeMasterSyncV3RetainedSession=async()=>({binding:globalThis.__legacyReplayFixture.binding,assertCurrent:async()=>{globalThis.__legacyReplayFixture.reads++}});export const getLargeMasterSyncV3OperationalSession=async()=>{throw Error('fresh stock unavailable')};export const v3InventoryBaselineKey=()=>'';`,
  };
  const bundle=await build({entryPoints:[new URL('../services/sync/LargeMasterSyncV3FinancialCommit.ts',import.meta.url).pathname],bundle:true,write:false,format:'esm',platform:'node',plugins:[{name:'replay-fixture',setup(b){
   b.onResolve({filter:/.*/},a=>mocks[a.path]?{path:a.path,namespace:'fixture'}:undefined);
@@ -28,6 +28,7 @@ test('last-number committed sale is recovered without fresh stock/NCF authority;
  put(stored,null);await assert.rejects(replay(candidate,'warehouse'),/MISMATCH/);
  put(null,{...stored,zReportId:'Z-closed'});assert.equal((await replay(candidate,'warehouse')).zReportId,'Z-closed');
  put(null,null);assert.equal(await replay(candidate,'warehouse'),null);
+ assert.equal(state.configContextAcquisitions,0,'retained replay must not refresh the operational config context');
  delete (globalThis as any).__legacyReplayFixture;
 });
 test('retained draft resumes before fresh checkout stock/NCF checks and order numbering',()=>{

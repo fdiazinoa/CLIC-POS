@@ -55,6 +55,18 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps> = props => {
   const latestContextKey = useRef(wantedContextKey);
   latestContextKey.current = authorityError ? '' : wantedContextKey;
   const [loadedContextKey, setLoadedContextKey] = useState('');
+  const acquisition = useRef<{ config: BusinessConfig; key: string; phase: 'pending' | 'failed' | 'ready' }>();
+  const [configRetryRevision, setConfigRetryRevision] = useState(0);
+
+  useEffect(() => {
+    const attempt = acquisition.current;
+    if (!attempt || attempt.phase === 'ready' || attempt.config === props.config
+      || attempt.key !== wantedContextKey || authorityError) return;
+    // A deferred config publication can replace props without changing its scope.
+    // Retire only the unfinished/failed read; a ready presentation-only update stays live.
+    ++contextSequence.current; ++querySequence.current; catalog.current = undefined;
+    setConfigRetryRevision(previous => previous + 1);
+  }, [props.config, wantedContextKey, authorityError]);
 
   useEffect(() => {
     if (!authorityError && reconciled && JSON.stringify(selection) !== JSON.stringify(reconciled)) setSelection(reconciled);
@@ -63,6 +75,11 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps> = props => {
   useEffect(() => {
     let current = true;
     const context = ++contextSequence.current;
+    const attempt = { config: latestProps.current.config, key: wantedContextKey, phase: 'pending' as 'pending' | 'failed' | 'ready' };
+    acquisition.current = attempt;
+    const currentAttempt = () => current && acquisition.current === attempt
+      && attempt.config === latestProps.current.config
+      && isV3TariffContextCurrent(wantedContextKey, latestContextKey.current, context, contextSequence.current);
     catalog.current = undefined;
     setError('');
     setArticleDiagnostics([]);
@@ -70,11 +87,13 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps> = props => {
     void (async () => {
       if (authorityError) throw new Error(authorityError);
       if (!warehouseId || !tariffId) throw new Error('SYNC_V3_CONFIGURED_TARIFF_WAREHOUSE_REQUIRED');
-      const ready = await acquireLargeMasterSyncV3ConfigContext(latestProps.current.config, latestProps.current.activeTerminalId || '');
-      const [config, source] = await Promise.all([ready.projectConfig(latestProps.current.config), ready.catalog(tariffId, warehouseId)]);
+      const ready = await acquireLargeMasterSyncV3ConfigContext(attempt.config, latestProps.current.activeTerminalId || '');
+      if (!currentAttempt()) return;
+      const [config, source] = await Promise.all([ready.projectConfig(attempt.config), ready.catalog(tariffId, warehouseId)]);
       const categoryMetadata = await source.categories();
-      if (!current || !isV3TariffContextCurrent(wantedContextKey, latestContextKey.current, context, contextSequence.current)) return;
+      if (!currentAttempt()) return;
       if (!config.tariffs.some(row => row.id === tariffId)) throw new Error('SYNC_V3_TARIFF_UNAVAILABLE');
+      attempt.phase = 'ready';
       catalog.current = source;
       setCategories(categoryMetadata);
       setSession(ready);
@@ -82,9 +101,13 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps> = props => {
       setVisible([]);
       setCache([]);
       setLoadedContextKey(wantedContextKey);
-    })().catch(reason => { if (current && context === contextSequence.current && latestContextKey.current === wantedContextKey) setError(String(reason.message || reason)); });
+    })().catch(reason => {
+      if (!currentAttempt()) return;
+      attempt.phase = 'failed';
+      setError(String(reason.message || reason));
+    });
     return () => { current = false; ++contextSequence.current; ++querySequence.current; };
-  }, [props.activeTerminalId, warehouseId, tariffId, authorityKey, authorityError, configScope, catalogRevision]);
+  }, [props.activeTerminalId, warehouseId, tariffId, authorityKey, authorityError, configScope, catalogRevision, configRetryRevision]);
 
   const effectiveConfig = useMemo(() => projected ? {
     ...(loadedContextKey === wantedContextKey && !authorityError ? props.config : projected),

@@ -18,6 +18,7 @@ const actual = ['manualCatalogSync', 'manualSyncAll', 'v3CatalogRefresh', 'refre
 
 async function fixture() {
   const storage = new Map<string, string>(); const events: string[] = [];
+  const resolvedRequests: any[] = [];
   let identity = { tenantId: 'tenant', terminalId: 'erp-terminal', deviceId: 'device', syncToken: 'secret', erpSyncBaseUrl: 'https://erp.test/api/sync' };
   let config: any = getInitialConfig('Supermercado' as any);
   const localId = config.terminals[0].id;
@@ -36,14 +37,17 @@ async function fixture() {
   const getSession = async (refresh = false) => {
     if (refresh) { exports++; await prepare(); active = { syncId: 'new', syncVersion: 102, price: 85 }; }
     const version = { syncId: active.syncId, syncVersion: active.syncVersion }; const bound = JSON.stringify(identity);
-    return { ready: { runtime: { version }, inventorySyncId: 'old', inventorySyncVersion: 47, inventoryVersion: 4, inventoryCursor: 'C' }, assertCurrent: async () => {
+    return { assertSetupIdentity:()=>{},ready: { runtime: { version }, inventorySyncId: 'old', inventorySyncVersion: 47, inventoryVersion: 4, inventoryCursor: 'C' }, assertCurrent: async () => {
       if (bound !== JSON.stringify(identity)) throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
       if (version.syncId !== active.syncId || version.syncVersion !== active.syncVersion) throw new LargeMasterSyncV3Error('SYNC_V3_RUNTIME_VERSION_CHANGED');
     }, projectConfig: async (value: any) => ({ ...value, taxRate: 0, taxes: [{ id: 'TX', rate: .18 }], tariffs: [{ id: 'T', name: 'General', taxIncluded: false }] }) };
   };
-  Object.assign(globalThis, { __v3ManifestFixture: { db, getSession } });
+  Object.assign(globalThis, { __v3ManifestFixture: { db, getSession, cas: async(expected:any,next:any,guard:()=>void)=>{
+    assert.equal(JSON.stringify(config),JSON.stringify(expected));guard();await db.save('config',next);
+  } } });
   const mocks: Record<string, string> = { '../../utils/db': 'export const db=globalThis.__v3ManifestFixture.db;',
-    './LargeMasterSyncV3OperationalSession': 'export const getLargeMasterSyncV3OperationalSession=globalThis.__v3ManifestFixture.getSession;' };
+    './LargeMasterSyncV3OperationalSession': 'export const getLargeMasterSyncV3OperationalSession=globalThis.__v3ManifestFixture.getSession;export const acquireLargeMasterSyncV3ConfigContext=async()=>{};',
+    '../db':'export const dbAdapter={compareAndSwapV3SetupConfig:globalThis.__v3ManifestFixture.cas};' };
   const built = await build({ entryPoints: [new URL('../services/sync/LargeMasterSyncV3ConfigPush.ts', import.meta.url).pathname],
     bundle: true, write: false, format: 'esm', platform: 'node', plugins: [{ name: 'manifest-boundaries', setup(b) {
       b.onResolve({ filter: /.*/ }, args => mocks[args.path] ? { path: args.path, namespace: 'fixture' } : undefined);
@@ -58,6 +62,7 @@ async function fixture() {
     readOperationalCatalogBindingProof: () => ({ companyId: config.terminals[0].config.erpBinding.companyId }),
     largeMasterSyncV3DownloadOrigin: () => 'https://download.test', LargeMasterSyncV3Error,
     persistLargeMasterSyncV3ConfigPushCatalog: helper.persistLargeMasterSyncV3ConfigPushCatalog,
+    captureLargeMasterSyncV3ConfigRefreshAuthorityFromStore:async()=>({localTerminalId:localId,assertCurrent:()=>{}}),
     window: { dispatchEvent: (event: { type: string }) => { events.push(event.type); } }, CustomEvent: class { constructor(public type: string) {} },
     localStorage: { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value) },
     navigator: { onLine: true }, protectsLocalCatalogFromCloud: () => false, waitForBackgroundSyncWindow: async () => {},
@@ -77,13 +82,15 @@ async function fixture() {
       markStartupManifestSyncCompleted: () => {}, recordSnapshotDiagnostics: () => {},
       normalizeVersionToken: (value: unknown) => value == null ? null : String(value),
       incrementSyncTelemetry: () => {}, publishSyncHealthUpdate: () => {}, refreshErpPaymentMethods: async () => {},
-      refreshTerminalResolvedConfig: async () => clone(config),
+      refreshTerminalResolvedConfig: async (_snapshot: unknown, options: unknown) => {
+        resolvedRequests.push(options); return clone(config);
+      },
       fetchTerminalProductPricesBlock: async () => { throw Error('Unexpected legacy prices download'); },
     }); return instance;
   };
   const marker = () => storage.get(`clic_v3_applied_manifest_${localId}`);
   return { instance: restart(), restart, manifest: () => manifest, active: () => active, events, exports: () => exports,
-    fetches: () => fetches, cursors: () => cursors, marker, config: () => config,
+    fetches: () => fetches, cursors: () => cursors, marker, config: () => config, resolvedRequests,
     change: (patch: Partial<typeof identity>) => { identity = { ...identity, ...patch }; },
     onFetch: (callback: typeof onFetch) => { onFetch = callback; }, onPrepare: (callback: typeof prepare) => { prepare = callback; },
     onSave: (callback: typeof save) => { save = callback; }, corrupt: () => { corrupt = true; },
@@ -94,6 +101,20 @@ const sync = (f: any) => {
   f.instance.lastBackgroundTerminalManifestSyncAt = 0;
   return f.instance.syncTerminalManifestInBackground(f.config(), { reason: 'periodic_manifest', throwOnError: true });
 };
+
+test('explicit catalog refresh requests complete operational authority without legacy masters', async () => {
+  const f = await fixture();
+  await f.instance.syncTerminalManifestInBackground(f.config(), { reason: 'manual_sync', throwOnError: true });
+  assert.equal(f.resolvedRequests.length, 1);
+  const request = f.resolvedRequests[0];
+  assert.equal(request.requireOperationalTerminalConfig, true);
+  assert.equal(request.forceRemoteFetch, true);
+  assert.deepEqual(Array.from(request.resolvedScopes),
+    ['identity', 'terminal', 'device_role', 'role', 'pricing', 'inventory', 'documents', 'catalog']);
+  assert.equal(request.masterScopes.length, 0);
+  assert.equal(request.blockScopes.length, 0);
+  assert.equal(request.supplementalMode, 'skip');
+});
 
 test('manual and force negotiate once with a matching checkpoint while ordinary manifests stay idle', async () => {
   for (const reason of ['manual_sync', 'force_sync'] as const) {
@@ -131,7 +152,8 @@ test('explicit manual production metadata refresh is scoped without items; failu
  const f=await fixture();await sync(f);const marker=f.marker();const before=f.fetches();let configs=0;
  f.instance.refreshTerminalResolvedConfig=async(_snapshot:unknown,options:any)=>{
   configs++;assert.deepEqual(Array.from(options.masterScopes),[]);assert.deepEqual(Array.from(options.blockScopes),[]);
-  assert.deepEqual(Array.from(options.resolvedScopes),['catalog']);assert.equal(options.supplementalMode,'skip');
+  assert.deepEqual(Array.from(options.resolvedScopes),
+   ['identity','terminal','device_role','role','pricing','inventory','documents','catalog']);assert.equal(options.supplementalMode,'skip');
   assert.equal(options.forceRemoteFetch,true);assert.equal(options.requireOperationalTerminalConfig,true);
   throw Error('TERMINAL_PRODUCTION_AREAS_QUERY_FAILED');
  };

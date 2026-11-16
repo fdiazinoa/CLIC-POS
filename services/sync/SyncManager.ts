@@ -16,6 +16,7 @@ import { syncErpPaymentMethods } from './PaymentMethodsSync';
 import { assertLegacyMasterPullAllowed, isLargeMasterSyncV3ReplacedCollection,
     usesLargeMasterSyncV3Authority } from './LargeMasterSyncV3Authority';
 import { persistLargeMasterSyncV3ConfigPushCatalog } from './LargeMasterSyncV3ConfigPush';
+import { captureLargeMasterSyncV3ConfigRefreshAuthorityFromStore } from './LargeMasterSyncV3ConfigRefreshAuthority';
 import { persistProductionAreaSnapshot } from '../restaurant/ProductionAreaSnapshot';
 import { readLargeMasterSyncV3BoundIdentity } from './LargeMasterSyncV3BoundTransport';
 import { LargeMasterSyncV3Error } from './LargeMasterSyncV3Types';
@@ -401,7 +402,10 @@ class SyncManager {
             return this.v3CatalogRefresh.promise;
         }
         const promise = Promise.resolve().then(async () => {
-            await persistLargeMasterSyncV3ConfigPushCatalog(assertBinding);
+            const authority = await captureLargeMasterSyncV3ConfigRefreshAuthorityFromStore(
+                async () => await db.get('config') as unknown as BusinessConfig);
+            assertBinding();
+            await persistLargeMasterSyncV3ConfigPushCatalog(assertBinding, authority);
             assertBinding();
             window.dispatchEvent(new CustomEvent('v3CatalogUpdated'));
             window.dispatchEvent(new CustomEvent('configUpdated'));
@@ -2493,7 +2497,8 @@ class SyncManager {
                         await this.refreshV3Catalog();
                         if (options?.explicitV3Refresh) {
                             await this.refreshTerminalResolvedConfig(undefined, { baseConfig: config, persist: true,
-                                forceRemoteFetch: true, masterScopes: [], blockScopes: [], resolvedScopes: ['catalog'],
+                                forceRemoteFetch: true, masterScopes: [], blockScopes: [],
+                                resolvedScopes: ['identity', 'terminal', 'device_role', 'role', 'pricing', 'inventory', 'documents', 'catalog'],
                                 supplementalMode: 'skip', deferDuringSale: true, dispatchEvent: false,
                                 requireOperationalTerminalConfig: true });
                             assertManifestBinding();
@@ -3699,20 +3704,32 @@ class SyncManager {
                         requestedBlockScopes,
                         requestedResolvedScopes,
                     });
-                    const catalogAuthHeaders = options?.requireOperationalTerminalConfig ? {} : buildTerminalSyncAuthHeaders();
+                    const authenticatedAuthority = Boolean(options?.requireOperationalTerminalConfig && v3Authority);
+                    let catalogAuthHeaders: Record<string, string> = options?.requireOperationalTerminalConfig ? {} : buildTerminalSyncAuthHeaders();
+                    if (authenticatedAuthority) {
+                        const bound = readLargeMasterSyncV3BoundIdentity();
+                        if (!bound.syncToken || /[\r\n]/.test(bound.syncToken)
+                            || bound.tenantId !== context.tenantId || bound.terminalId !== context.terminalId
+                            || bound.deviceId !== context.posDeviceId) {
+                            throw new LargeMasterSyncV3Error('SYNC_V3_ERP_BINDING_REQUIRED');
+                        }
+                        await assertRefreshAuthorityCurrent();
+                        catalogAuthHeaders = { 'X-Sync-Token': bound.syncToken, 'X-POS-Capabilities': 'largeMasterSyncV3' };
+                    }
                     const sendCatalogState = Boolean(catalogAuthHeaders['X-Sync-Token']
                         && currentCatalogCursor && hasCompleteCachedCatalog
                         && !options?.forceFullCatalog && requestedMasterScopes?.includes('items'));
                     const result = await fetchAndReadWithTimeout(endpoint, {
                         ...(usesLargeMasterSyncV3Authority(syncPolicy.resolve().kind) ? { redirect: 'error' as const } : {}),
-                        method: sendCatalogState ? 'POST' : 'GET',
+                        method: authenticatedAuthority || sendCatalogState ? 'POST' : 'GET',
                         headers: {
                             Accept: 'application/json',
-                            ...(sendCatalogState ? { 'Content-Type': 'application/json' } : {}),
+                            ...(authenticatedAuthority || sendCatalogState ? { 'Content-Type': 'application/json' } : {}),
                             ...this.buildPosDeviceHeaders(context.posDeviceId),
-                            ...(sendCatalogState ? catalogAuthHeaders : {}),
+                            ...(authenticatedAuthority || sendCatalogState ? catalogAuthHeaders : {}),
                         },
-                        ...(sendCatalogState ? { body: JSON.stringify({ catalog_items: catalogItems }) } : {}),
+                        ...(sendCatalogState ? { body: JSON.stringify({ catalog_items: catalogItems }) }
+                            : authenticatedAuthority ? { body: '{}' } : {}),
                     }, async (response) => {
                         if (!response.ok) {
                             throw await this.buildTerminalEndpointError(

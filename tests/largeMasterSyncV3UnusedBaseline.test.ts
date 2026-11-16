@@ -143,7 +143,7 @@ for(const result of ['success','identity-race','retained-race','other-error','no
  const f=fixture();try{
   f.stage('N',102,2000,corrected);
   const state:any={identity:{tenantId:'tenant',terminalId:'terminal',deviceId:'device',syncToken:'token',erpSyncBaseUrl:'https://erp.test/api/sync'},origin:'https://download.test',
-    config:{terminals:[{id:'local',config:{currentDeviceId:'device',erpTerminalId:'terminal',erpBinding:{companyId:'company'},inventoryScope:{defaultSalesWarehouseId:'W'}}}]},fetches:0,resumed:[]};
+    config:{terminals:[{id:'local',config:{currentDeviceId:'device',erpTerminalId:'terminal',erpBinding:{tenantId:'tenant',companyId:'company',storeId:'store'},inventoryScope:{defaultSalesWarehouseId:'W'}}}]},fetches:0,resumed:[]};
   const binding=JSON.stringify([state.identity.tenantId,state.identity.terminalId,state.identity.deviceId,state.identity.erpSyncBaseUrl,state.origin]);
   f.sql.prepare('UPDATE master_v3_operational_owner SET binding=?').run(binding);
   const adapter=Object.create(f.adapter);adapter.masterSyncV3Store=f.store;adapter.connect=async()=>{};
@@ -152,7 +152,7 @@ for(const result of ['success','identity-race','retained-race','other-error','no
     '../../utils/db':'export const db=globalThis.__unusedSession.db;', '../db':'export const dbAdapter=globalThis.__unusedSession.adapter;',
     './LargeMasterSyncV3Authority':'export const LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED=true;',
     './LargeMasterSyncV3CanaryFacade':'export const LARGE_MASTER_SYNC_V3_CANARY=false;export const validateLargeMasterSyncV3CanaryUrl=value=>value;',
-    './OperationalTerminalConfig':'export const readOperationalTerminalBinding=()=>"credentials";',
+    './OperationalTerminalConfig':'export const readOperationalTerminalBinding=()=>"credentials";export const readOperationalCatalogBindingProof=()=>{throw Error("UNEXPECTED_OPERATIONAL_PROOF_IN_BASELINE_FIXTURE")};',
     './LargeMasterSyncV3Platform':'export const assertLargeMasterSyncV3NativeAndroid=()=>{};',
     './LargeMasterSyncV3DownloadOrigin':'export const largeMasterSyncV3DownloadOrigin=()=>globalThis.__unusedSession.state.origin;',
     './LargeMasterSyncV3Inventory':`export const fetchLargeMasterSyncV3Inventory=async()=>{const {state,fresh}=globalThis.__unusedSession;state.fetches++;if(state.failFetch)throw Error('HTTP offline');${result==='identity-race'?"state.identity={...state.identity,terminalId:'foreign'};":''}return fresh;};`,
