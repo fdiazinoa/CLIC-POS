@@ -5,13 +5,15 @@ import { normalizeErpRole } from '../utils/erpSecuritySnapshot';
 import { generateZReportReceipt } from '../services/printer/templates/ZReportReceipt';
 import { buildEscPosZReportPayload } from '../services/printer/EscPosFormatter';
 
-const report = {
+const report: ZReport = {
   id: 'z1', terminalId: 'T1', sequenceNumber: 'Z0001', openedAt: '2026-11-15T10:00:00Z', closedAt: '2026-11-15T12:00:00Z',
   closedByUserId: 'u1', closedByUserName: 'Ana', baseCurrency: 'DOP', totalsByMethod: { CASH: 100 },
   cashExpected: { DOP: 100 }, cashCounted: { DOP: 100 }, cashDiscrepancy: { DOP: 0 },
   cashSales: 100, cashIn: 0, cashOut: 0, transactionCount: 1, notes: '',
-  stats: { grossSales: 100, netSales: 100, averageTicket: 100, itemsPerSale: 1 },
-} as ZReport;
+  stats: { grossSales: 100, netSales: 100, averageTicket: 100, itemsPerSale: 1,
+    peakHour: '10:00 - 11:00', topProduct: null, returnsCount: 0, returnsTotal: 0,
+    discountsTotal: 0, advancementsTotal: 0, collectionsTotal: 0 },
+};
 const config = { companyInfo: { name: 'CLIC' }, currencySymbol: 'RD$', terminals: [] } as unknown as BusinessConfig;
 const labels: Record<ZReportModule, RegExp> = {
   FINANCIAL: /RESUMEN FINANCIERO/, PAYMENTS: /FORMAS DE PAGO/, CASH_DETAILS: /ARQUEO DE CAJA/,
