@@ -1,3 +1,5 @@
+import { receivePosSecurityV2 } from './PosSecurityV2Sync';
+import { posSecurityV2SetupHeaders } from './PosSecurityV2Transport';
 export type TerminalConfigSyncReason =
   | 'startup'
   | 'pairing'
@@ -86,6 +88,7 @@ export class TerminalConfigRequestCoordinator {
     private readonly fetcher: typeof fetch = globalThis.fetch,
     private readonly retryDelaysMs: number[] = RETRY_DELAYS_MS,
     private readonly sleeper: (delayMs: number, signal?: AbortSignal) => Promise<void> = wait,
+    private readonly security?: { headers: (input: RequestInput<unknown>) => Record<string, string>; receive: (body: unknown) => Promise<unknown> },
   ) {}
 
   readCache(terminalId: string): TerminalConfigCacheEntry {
@@ -181,7 +184,7 @@ export class TerminalConfigRequestCoordinator {
       if (input.deviceId) params.set('device_id', input.deviceId);
       if (cache.configVersion) params.set('current_version', cache.configVersion);
       const endpoint = `${trimTrailingSlashes(input.baseUrl)}/api/setup/initial-config/${encodeURIComponent(input.terminalId)}${params.size ? `?${params}` : ''}`;
-      const headers: Record<string, string> = { Accept: 'application/json' };
+      const headers: Record<string, string> = { Accept: 'application/json', ...this.security?.headers(input) };
       if (cache.etag) headers['If-None-Match'] = cache.etag;
       if (input.deviceId) {
         headers['X-Device-Id'] = input.deviceId;
@@ -193,6 +196,7 @@ export class TerminalConfigRequestCoordinator {
         const response = await this.fetcher(endpoint, { method: 'GET', headers, signal });
         const durationMs = Date.now() - startedAt;
         if (response.status === 304) {
+          await this.security?.receive({});
           this.writeCache(input.terminalId, {
             ...cache,
             lastCheckedAt: new Date().toISOString(),
@@ -222,6 +226,7 @@ export class TerminalConfigRequestCoordinator {
         if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
           throw new Error('Invalid initial-config payload');
         }
+        await this.security?.receive(payload);
         await input.apply?.(payload);
 
         const configVersion = normalize(
@@ -251,7 +256,7 @@ export class TerminalConfigRequestCoordinator {
       } catch (error) {
         if ((error as Error)?.name === 'AbortError') throw error;
         const status = Number((error as any)?.status || 0);
-        const retryable = !status || (!NON_RETRYABLE_STATUS.has(status) && (status === 408 || status === 429 || status >= 500));
+        const retryable = !(error as Error)?.message?.startsWith('POS_SECURITY_') && (!status || (!NON_RETRYABLE_STATUS.has(status) && (status === 408 || status === 429 || status >= 500)));
         if (!retryable || attempt >= this.retryDelaysMs.length) {
           this.log(input, status, cache.configVersion, null, Date.now() - startedAt, 'failed', 0);
           throw error;
@@ -297,4 +302,6 @@ export class TerminalConfigRequestCoordinator {
   }
 }
 
-export const terminalConfigRequestCoordinator = new TerminalConfigRequestCoordinator();
+export const terminalConfigRequestCoordinator = new TerminalConfigRequestCoordinator(undefined, undefined, undefined, undefined, {
+  headers: posSecurityV2SetupHeaders, receive: body => receivePosSecurityV2(body, 'initial-config'),
+});

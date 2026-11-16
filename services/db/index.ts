@@ -24,4 +24,5 @@ export const dbAdapter = recoveryDatabase(getAdapter(), () => isSyncFeatureEnabl
 
 export const initDatabase = async () => {
     await dbAdapter.connect();
+    await (await import('../sync/PosSecurityV2Sync')).getPosSecurityV2Sync();
 };

@@ -1,3 +1,4 @@
+import { receivePosSecurityV2 } from '../services/sync/PosSecurityV2Sync';
 import { resolveStoredErpTenantIdentity } from './tenantIdentityStorage';
 import { usesLargeMasterSyncV3Authority } from '../services/sync/LargeMasterSyncV3Authority';
 import { syncPolicy } from '../services/sync/SyncProfile';
@@ -988,6 +989,8 @@ const processConfigPushV2Event = async (
     };
     const ackApplied = async (id: string) => {
         assertBinding();
+        await receivePosSecurityV2(event.payload, 'config-push');
+        assertBinding();
         try { await ackErpOutboxEvent(id, 'APPLIED'); }
         catch (error) {
             assertBinding();
@@ -1025,6 +1028,8 @@ const processConfigPushV2Event = async (
     if (eventTenantId && eventTenantId.toLowerCase() !== boundTenantId.toLowerCase()) {
         throw new Error('CONFIG_PUSH_V2_TENANT_MISMATCH');
     }
+    await receivePosSecurityV2(event.payload, 'config-push');
+    assertBinding();
     const configAuthority = v3Authority && scopes.some(scope => ['catalog', 'prices'].includes(scope))
         ? await captureLargeMasterSyncV3ConfigRefreshAuthorityFromStore(
             async () => await db.get('config') as unknown as BusinessConfig) : undefined;
@@ -1258,6 +1263,7 @@ const processConfigPushV2Event = async (
                 terminalId,
             });
 
+            await receivePosSecurityV2(snapshotPayload, 'config-snapshot');
             assertBinding();
             const authorityChannel = syncPolicy.resolve().kind;
             if (usesLargeMasterSyncV3Authority(authorityChannel)) {

@@ -1,3 +1,4 @@
+import 'fake-indexeddb/auto';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {ownBrowserFixtureTimers} from './browserFixtureLifecycle';
@@ -76,6 +77,9 @@ const event = (id: string) => ({
     },
 });
 
+const { dbAdapter } = await import('../services/db');
+await dbAdapter.connect();
+test.after(() => dbAdapter.disconnect());
 const lifecycle = await import('../utils/erpSyncLifecycle');
 
 test('outbox pull and ACK send the bound tenant, terminal and device identity', async () => {
@@ -444,4 +448,70 @@ test('bootstrap y timer comparten un único heartbeat HTTP en vuelo', async () =
     assert.equal(heartbeatRequests, 1);
     releaseRequest();
     await Promise.all([bootstrapHeartbeat, periodicHeartbeat]);
+});
+
+test('security v2 bypasses generic version cache only after durable commit; stale/304/failure never ACK APPLIED', async () => {
+    resetRuntime();
+    localStorage.setItem('CLIC_ERP_ACTIVE', 'true');
+    localStorage.setItem('clic_sync_mode', 'POS_ERP');
+    const binding = { tenantId: 'tenant-config-push', terminalId, deviceId, bindingEpoch: 3 };
+    localStorage.setItem('clic_terminal_credentials_v1', JSON.stringify({ erpTerminalId: terminalId, terminalId, tenantId: binding.tenantId, deviceId, syncToken }));
+    const { securityAnnouncement, securityHash } = await import('../services/sync/PosSecurityV2Contract');
+    const { posSecurityV2SetupHeaders } = await import('../services/sync/PosSecurityV2Transport');
+    const setupScope = { baseUrl: 'https://erp.example.test', terminalId, tenantId: binding.tenantId, deviceId };
+    assert.deepEqual(posSecurityV2SetupHeaders(setupScope), { 'X-Sync-Token': syncToken });
+    for (const patch of [{ baseUrl: 'https://foreign.example.test' }, { tenantId: 'foreign' }, { terminalId: 'foreign' }, { deviceId: 'foreign' }]) {
+        assert.deepEqual(posSecurityV2SetupHeaders({ ...setupScope, ...patch }), {});
+    }
+    const { readPosSecurityRecords } = await import('../services/sync/PosSecurityV2Consumer');
+    const { IndexedDBAdapter } = await import('../services/db/adapters/IndexedDBAdapter');
+    const control = { status: 'success', negotiation: { status: 'ACTIVE', stateRevision: 3, protocolFloor: 2, binding,
+        offer: { ...securityAnnouncement(binding), offerId: 'fixture-offer', agreementId: 'fixture-agreement', expiresAt: 300001 } },
+        selection: { mode: 'V2', currentOperationsUnchanged: false, agreementId: 'fixture-agreement' } };
+    const makeBlock = async (securityRevision: number, permissions: string[]) => {
+        const block = { ...securityAnnouncement(binding), agreementId: 'fixture-agreement', securityRevision,
+            roles: [{ id: 'R', permissionContractVersion: 2, permissions, permission_keys: permissions }], users: [{ id: 'u', role_id: 'R' }] };
+        return { ...block, contentHash: await securityHash(block) };
+    };
+    const ref = (block: Awaited<ReturnType<typeof makeBlock>>) => ({ binding, agreementId: block.agreementId, contractDigest: block.contractDigest, permissionContractVersion: 2, securityRevision: block.securityRevision, contentHash: block.contentHash });
+    let block = await makeBlock(1, ['POS_RETURNS']);
+    let eventRef = ref(block), config304 = false;
+    let gateCommit = true, commitStarted!: () => void, releaseCommit!: () => void;
+    const started = new Promise<void>(resolve => { commitStarted = resolve; });
+    const gate = new Promise<void>(resolve => { releaseCommit = resolve; });
+    const acks: string[] = [];
+    dbAdapter.saveDocumentsAtomically = async function (...args) {
+        if (args[2]?.includes('roles') && gateCommit) { commitStarted(); await gate; throw new Error('SYNTHETIC_COMMIT_FAILURE'); }
+        return IndexedDBAdapter.prototype.saveDocumentsAtomically.call(this, ...args);
+    };
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes('/outbox/pull')) return Response.json({ status: 'success', events: [{ ...event('security-event'), payload: { ...event('x').payload, security_contract: eventRef } }] });
+        if (url.includes('/security-contract')) return Response.json(control);
+        if (url.includes('/manifest')) return Response.json({ manifest: { security_contract: ref(block) } });
+        if (url.endsWith('/config')) return config304 ? new Response(null, { status: 304 }) : Response.json({ terminal_config: { pos_security: block } });
+        if (url.includes('/outbox/ack')) {
+            const body = JSON.parse(String(init?.body)); acks.push(body.status);
+            if (body.status === 'APPLIED') assert.equal((await readPosSecurityRecords(dbAdapter))[0].appliedReference!.contentHash, block.contentHash, 'ACK sees committed checkpoint');
+            return Response.json({ status: 'success' });
+        }
+        throw new Error(`Unexpected request: ${url}`);
+    }) as typeof fetch;
+    try {
+        const pending = lifecycle.triggerErpSyncOutbox('manual_sync');
+        await started; assert.deepEqual(acks, [], 'no ACK before transaction settles');
+        assert.deepEqual(await dbAdapter.getCollection('roles'), [], 'no partial roles before commit');
+        releaseCommit(); await pending;
+        assert.ok(!acks.includes('APPLIED')); assert.deepEqual(await dbAdapter.getCollection('roles'), []);
+        assert.equal((await readPosSecurityRecords(dbAdapter))[0].appliedReference, null);
+        gateCommit = false; acks.length = 0;
+        await lifecycle.triggerErpSyncOutbox('manual_sync'); assert.deepEqual(acks, ['APPLIED']);
+        block = await makeBlock(2, []); // event ref is now old, even with identical generic version_hash.
+        acks.length = 0; await lifecycle.triggerErpSyncOutbox('manual_sync'); assert.ok(!acks.includes('APPLIED'));
+        eventRef = ref(block); config304 = true;
+        acks.length = 0; await lifecycle.triggerErpSyncOutbox('manual_sync'); assert.ok(!acks.includes('APPLIED'));
+        config304 = false; acks.length = 0;
+        await lifecycle.triggerErpSyncOutbox('manual_sync'); assert.deepEqual(acks, ['APPLIED']);
+        assert.deepEqual((await dbAdapter.getCollection<{ permissions: string[] }>('roles'))[0].permissions, []);
+    } finally { delete (dbAdapter as any).saveDocumentsAtomically; }
 });

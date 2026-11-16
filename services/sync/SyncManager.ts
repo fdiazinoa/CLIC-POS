@@ -1,3 +1,5 @@
+import { posSecurityV2SetupHeaders } from './PosSecurityV2Transport';
+import { receivePosSecurityV2 } from './PosSecurityV2Sync';
 import { openArticleFormatsRuntime } from '../articleFormats/runtime';
 import type { FormatTransport } from '../articleFormats/wire';
 import type { FormatSQL } from '../articleFormats/store';
@@ -2040,6 +2042,7 @@ class SyncManager {
                     endpoint,
                     {
                         Accept: 'application/json',
+                        ...posSecurityV2SetupHeaders({ baseUrl: endpointCandidate.baseUrl, terminalId: context.terminalId, tenantId: context.tenantId, deviceId: context.posDeviceId }),
                         ...this.buildPosDeviceHeaders(context.posDeviceId),
                     }
                 );
@@ -2053,6 +2056,7 @@ class SyncManager {
                 }
 
                 const payload = await response.json();
+                await receivePosSecurityV2(payload, 'manifest');
                 const normalizedManifest = this.normalizeTerminalManifestPayload(payload);
                 posCatalogDebugLog('startup manifest: fetch success', {
                     endpointMode: endpointCandidate.mode,
@@ -3602,6 +3606,7 @@ class SyncManager {
         let catalogDelta: Record<string, unknown> | null = null;
         let nextCatalogCursor: string | null = null;
 
+        if (snapshotOverride !== undefined) await receivePosSecurityV2(snapshotOverride, 'terminal-config');
         let snapshot = extractTerminalConfigSnapshot(snapshotOverride);
         const pendingSnapshot = snapshot
             ? null
@@ -3726,7 +3731,8 @@ class SyncManager {
                             Accept: 'application/json',
                             ...(authenticatedAuthority || sendCatalogState ? { 'Content-Type': 'application/json' } : {}),
                             ...this.buildPosDeviceHeaders(context.posDeviceId),
-                            ...(authenticatedAuthority || sendCatalogState ? catalogAuthHeaders : {}),
+                            ...(authenticatedAuthority || sendCatalogState ? catalogAuthHeaders
+                                : posSecurityV2SetupHeaders({ baseUrl: endpointCandidate.baseUrl, terminalId: context.terminalId!, tenantId: context.tenantId, deviceId: context.posDeviceId })),
                         },
                         ...(sendCatalogState ? { body: JSON.stringify({ catalog_items: catalogItems }) }
                             : authenticatedAuthority ? { body: '{}' } : {}),
@@ -3745,6 +3751,7 @@ class SyncManager {
                     }, remainingRequestMs ?? 15_000);
                     const responseContentType = result.contentType;
                     payload = result.payload;
+                    await receivePosSecurityV2(payload, 'terminal-config');
                     if (options?.requireOperationalTerminalConfig) assertOperationalTerminalConfig(payload, {
                         tenantId: context.tenantId!, terminalId: context.terminalId!, posDeviceId: context.posDeviceId,
                     });
