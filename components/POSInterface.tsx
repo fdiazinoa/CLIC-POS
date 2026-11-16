@@ -2145,7 +2145,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const canSellWithOpenZ = hasPermission('POS_ALLOW_SALES_WITH_OPEN_Z');
    const canCloseXReport = !isOrderTakerMode && hasPermission('POS_CLOSE_X');
    const canCloseZReport = !isOrderTakerMode && hasPermission('POS_CLOSE_Z');
-   const canRegisterCashMovement = hasPermission('CASH_IN_OUT' as Permission);
+   const canRegisterCashMovement = hasPermission('CASH_IN_OUT');
    const cartItemEditCapabilities = useMemo(
       () => resolveCartItemEditCapabilities(userPermissions),
       [userPermissions]

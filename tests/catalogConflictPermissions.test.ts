@@ -2,8 +2,16 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { CATALOG_CONFLICT_PERMISSIONS, canResolveCatalogEdit, hasCatalogConflictPermission, shouldShowCatalogEditInSyncMonitor } from '../services/sync/catalogEdits';
 import type { RoleDefinition, User } from '../types';
+import { AVAILABLE_PERMISSIONS, DEFAULT_ROLES } from '../constants';
 
 const user = { id: 'user-1', name: 'Operador', pin: '1234', role: 'LIMITED', roleId: 'LIMITED' } satisfies User;
+
+test('the local editor exposes each existing conflict permission once without adding default grants', () => {
+    for (const permission of Object.values(CATALOG_CONFLICT_PERMISSIONS)) {
+        assert.equal(AVAILABLE_PERMISSIONS.filter(entry => entry.key === permission).length, 1);
+        assert.equal(DEFAULT_ROLES.some(role => role.permissions.includes(permission)), false);
+    }
+});
 
 test('catalog conflict permissions are resolved from the current user role', () => {
     const roles = [{ id: 'LIMITED', name: 'Limitado', permissions: [CATALOG_CONFLICT_PERMISSIONS.view] }] as RoleDefinition[];

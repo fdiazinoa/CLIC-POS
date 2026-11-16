@@ -1,4 +1,4 @@
-import type { Permission, RoleDefinition, User } from '../types';
+import type { Permission, RoleDefinition, User, ZReportModule } from '../types';
 import { normalizeSalesPercent } from './userSalesPolicy';
 
 type SnapshotRow = Record<string, unknown>;
@@ -68,6 +68,21 @@ export const normalizeErpPermissions = (value: unknown): Permission[] | null => 
   return typeof value === 'string' && permissions.length === 0 ? null : permissions;
 };
 
+const Z_REPORT_MODULES: readonly ZReportModule[] = ['FINANCIAL', 'PAYMENTS', 'CASH_DETAILS', 'KPIS', 'AUDIT'];
+
+const normalizeZReportConfig = (value: unknown): RoleDefinition['zReportConfig'] | null => {
+  // Old snapshots did not include the optional configuration (nullable in ERP).
+  if (value == null) return undefined;
+  if (typeof value !== 'object' || Array.isArray(value)) return null;
+  const config = value as SnapshotRow;
+  if (Object.keys(config).some((key) => key !== 'hiddenModules')
+    || !Array.isArray(config.hiddenModules) || config.hiddenModules.length > 5
+    || config.hiddenModules.some((key) => typeof key !== 'string' || !Z_REPORT_MODULES.includes(key as ZReportModule))) {
+    return null;
+  }
+  return { hiddenModules: [...new Set(config.hiddenModules)] as ZReportModule[] };
+};
+
 export const normalizeErpRole = (raw: unknown): RoleDefinition | null => {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const row = raw as SnapshotRow;
@@ -80,6 +95,14 @@ export const normalizeErpRole = (raw: unknown): RoleDefinition | null => {
   );
   if (!id || permissions === null) return null;
 
+  const camelConfig = normalizeZReportConfig(row.zReportConfig);
+  const snakeConfig = normalizeZReportConfig(row.z_report_config);
+  // Reject malformed restrictions instead of silently exposing report sections.
+  if (camelConfig === null || snakeConfig === null) return null;
+  if (camelConfig && snakeConfig && (camelConfig.hiddenModules.length !== snakeConfig.hiddenModules.length
+    || camelConfig.hiddenModules.some((module) => !snakeConfig.hiddenModules.includes(module)))) return null;
+  const zReportConfig = camelConfig ?? snakeConfig;
+
   const maxDiscountPercent = normalizeSalesPercent(row.maxDiscountPercent ?? row.max_discount_percent);
   const roleVersion = version(row.version);
   return {
@@ -90,6 +113,7 @@ export const normalizeErpRole = (raw: unknown): RoleDefinition | null => {
     isActive: bool(row.isActive ?? row.is_active ?? row.active) ?? true,
     ...(maxDiscountPercent !== undefined ? { maxDiscountPercent } : {}),
     ...(roleVersion !== undefined ? { version: roleVersion } : {}),
+    ...(zReportConfig !== undefined ? { zReportConfig } : {}),
     syncSource: 'ERP_SNAPSHOT',
   };
 };
@@ -130,7 +154,7 @@ export const buildAuthoritativeErpSecuritySnapshot = ({
   const roles = roleRows === null ? currentRoles : roleRows.map((raw, index) => {
     const normalized = normalizeErpRole(raw);
     if (!normalized) {
-      throw new ErpSecuritySnapshotError(`Rol ERP inválido en la posición ${index}; permissions es obligatorio.`);
+      throw new ErpSecuritySnapshotError(`Rol ERP inválido en la posición ${index}; permissions es obligatorio y zReportConfig debe ser válido.`);
     }
     return normalized;
   });
