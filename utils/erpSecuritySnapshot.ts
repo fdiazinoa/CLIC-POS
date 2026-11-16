@@ -83,14 +83,14 @@ const normalizeZReportConfig = (value: unknown): RoleDefinition['zReportConfig']
   return { hiddenModules: [...new Set(config.hiddenModules)] as ZReportModule[] };
 };
 
-export const normalizeErpRole = (raw: unknown): RoleDefinition | null => {
+export const normalizeErpRole = (raw: unknown, permissionContractVersion?: 2): RoleDefinition | null => {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const row = raw as SnapshotRow;
   const id = text(
     row.id ?? row.pos_role_id ?? row.posRoleId ?? row.pos_role_code ?? row.posRoleCode
     ?? row.role_id ?? row.roleId ?? row.code,
   );
-  const permissions = normalizeErpPermissions(
+  const permissions = permissionContractVersion === 2 ? (Array.isArray(row.permissions) ? [...row.permissions] as Permission[] : null) : normalizeErpPermissions(
     row.permissions ?? row.permission_keys ?? row.permissionKeys ?? row.pos_permissions ?? row.posPermissions,
   );
   if (!id || permissions === null) return null;
@@ -114,6 +114,7 @@ export const normalizeErpRole = (raw: unknown): RoleDefinition | null => {
     ...(maxDiscountPercent !== undefined ? { maxDiscountPercent } : {}),
     ...(roleVersion !== undefined ? { version: roleVersion } : {}),
     ...(zReportConfig !== undefined ? { zReportConfig } : {}),
+    ...(permissionContractVersion === 2 ? { permissionContractVersion } : {}),
     syncSource: 'ERP_SNAPSHOT',
   };
 };
@@ -128,6 +129,7 @@ export interface AuthoritativeErpSecurityInput {
   userRows: unknown[] | null;
   existingRoles: RoleDefinition[];
   existingUsers: User[];
+  permissionContractVersion?: 2;
 }
 
 export interface AuthoritativeErpSecuritySnapshot {
@@ -143,6 +145,7 @@ export const buildAuthoritativeErpSecuritySnapshot = ({
   userRows,
   existingRoles,
   existingUsers,
+  permissionContractVersion,
 }: AuthoritativeErpSecurityInput): AuthoritativeErpSecuritySnapshot => {
   const currentRoles = Array.isArray(existingRoles)
     ? existingRoles.filter((role) => role?.syncSource === 'ERP_SNAPSHOT')
@@ -152,7 +155,7 @@ export const buildAuthoritativeErpSecuritySnapshot = ({
     : [];
 
   const roles = roleRows === null ? currentRoles : roleRows.map((raw, index) => {
-    const normalized = normalizeErpRole(raw);
+    const normalized = normalizeErpRole(raw, permissionContractVersion);
     if (!normalized) {
       throw new ErpSecuritySnapshotError(`Rol ERP inválido en la posición ${index}; permissions es obligatorio y zReportConfig debe ser válido.`);
     }
@@ -169,6 +172,16 @@ export const buildAuthoritativeErpSecuritySnapshot = ({
       throw new ErpSecuritySnapshotError(`Usuario ERP inválido en la posición ${index}.`);
     }
     const row = raw as SnapshotRow;
+    if (permissionContractVersion === 2) {
+      const id = row.id as string;
+      const roleId = row.role_id as string;
+      // Wire validation is performed on the complete envelope before this projection.
+      // Never inherit credentials or policy from an older catalog.
+      return [{ ...row, id, name: typeof row.name === 'string' ? row.name : id,
+        pin: typeof row.pin === 'string' ? row.pin : '', role: roleId, roleId,
+        isActive: row.isActive !== false && row.is_active !== false,
+        permissionContractVersion: 2, syncSource: 'ERP_SNAPSHOT' } as User];
+    }
     if (isRemoval(row)) return [];
 
     const id = userId(row);
@@ -222,7 +235,7 @@ export const buildAuthoritativeErpSecuritySnapshot = ({
     if (userIds.has(user.id)) throw new ErpSecuritySnapshotError(`Usuario ERP duplicado: ${user.id}.`);
     userIds.add(user.id);
     const role = rolesById.get(user.roleId || user.role);
-    if (user.isActive !== false && (!role || role.isActive === false)) {
+    if ((permissionContractVersion === 2 && !role) || (permissionContractVersion !== 2 && user.isActive !== false && (!role || role.isActive === false))) {
       throw new ErpSecuritySnapshotError(`El usuario ${user.id} referencia el rol inexistente o inactivo ${user.roleId || user.role}.`);
     }
   });

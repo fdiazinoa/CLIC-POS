@@ -1,3 +1,4 @@
+import { readPosSecurityRecords } from './services/sync/PosSecurityV2Consumer';
 import {canViewTicketHistory} from './utils/ticketHistoryPermission';
 import { fiscalReceiptEmailQueue } from './services/email/fiscalReceiptEmailDelivery';
 import {createFiscalReturnConsumer,createFiscalReturnTransport} from './services/fiscal/FiscalReturnConsumer';
@@ -8475,7 +8476,14 @@ const AppContent: React.FC = () => {
           break;
         case 'customers': setCustomers(freshData as Customer[]); break;
         case 'suppliers': setSuppliers(freshData as Supplier[]); break;
-        case 'users': setUsers(visiblePosUsersForRuntime(freshData)); break;
+        case 'users': {
+          const nextUsers = visiblePosUsersForRuntime(freshData);
+          setUsers(nextUsers);
+          if ((await readPosSecurityRecords(dbAdapter)).some(record => record.protocolFloor === 2)) {
+            setCurrentUser(previous => previous ? nextUsers.find(user => user.id === previous.id && user.isActive !== false) || null : null);
+          }
+          break;
+        }
         case 'roles': setRoles(Array.isArray(freshData) ? freshData as RoleDefinition[] : DEFAULT_ROLES); break;
         case 'purchaseOrders': setPurchaseOrders(Array.isArray(freshData) ? freshData as PurchaseOrder[] : []); break;
         case 'transfers': setTransfers(Array.isArray(freshData) ? freshData as StockTransfer[] : []); break;
