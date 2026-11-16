@@ -316,14 +316,11 @@ const TeamHub: React.FC<TeamHubProps> = ({
    const togglePermission = (roleId: string, permKey: string) => {
       if (erpManaged) return;
       const updatedRoles = roles.map(role => {
-         if (role.id === roleId) {
+         if (role.id === roleId && !role.permissions.includes('ALL')) {
             const permission = permKey as any; // Cast to any first to avoid strict check issues with string
-            const hasPerm = role.permissions.includes(permission);
             const newRole = {
                ...role,
-               permissions: hasPerm
-                  ? role.permissions.filter(p => p !== permission)
-                  : [...role.permissions, permission]
+               permissions: role.permissions.includes(permission) ? role.permissions.filter(p=>p!==permission) : [...role.permissions,permission]
             };
             // Also update local state
             if (editingRole?.id === roleId) setEditingRole(newRole);
@@ -922,7 +919,7 @@ const TeamHub: React.FC<TeamHubProps> = ({
                                        <h2 className="text-3xl font-black text-gray-800">{editingRole.name}</h2>
                                     )}
                                  <p className="text-gray-500 text-sm mt-1">
-                                       {erpManaged ? 'Permisos definidos por el ERP (solo lectura).' : editingRole.isSystem ? 'Rol de sistema (Solo lectura parcial).' : 'Define los accesos para este perfil.'}
+                                       {editingRole.permissions.includes('ALL') ? 'ALL concede todos los permisos. Usa un rol con permisos específicos para restringir accesos.' : erpManaged ? 'Permisos definidos por el ERP (solo lectura).' : editingRole.isSystem ? 'Rol de sistema (Solo lectura parcial).' : 'Define los accesos para este perfil.'}
                                     </p>
                                  </div>
                               </div>
@@ -968,12 +965,12 @@ const TeamHub: React.FC<TeamHubProps> = ({
                                        </h4>
                                        <div className="space-y-4">
                                           {perms.map(perm => {
-                                             const isEnabled = editingRole.permissions.includes(perm.key as any);
+                                             const isEnabled = editingRole.permissions.includes('ALL') || editingRole.permissions.includes(perm.key as any);
                                              return (
                                                 <div
                                                    key={perm.key}
-                                                   onClick={() => togglePermission(editingRole.id, perm.key)}
-                                                   className={`flex items-center justify-between p-4 rounded-2xl border-2 transition-all ${erpManaged ? 'cursor-default' : 'cursor-pointer'} ${isEnabled
+                                                   onClick={() => { if(!editingRole.permissions.includes('ALL'))togglePermission(editingRole.id, perm.key); }}
+                                                   className={`flex items-center justify-between p-4 rounded-2xl border-2 transition-all ${erpManaged || editingRole.permissions.includes('ALL') ? 'cursor-default' : 'cursor-pointer'} ${isEnabled
                                                       ? 'bg-purple-50 border-purple-500 shadow-sm'
                                                       : 'bg-white border-gray-100 hover:border-gray-300'
                                                       }`}

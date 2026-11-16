@@ -1,3 +1,4 @@
+import {canViewTicketHistory,canReprintTicketHistory} from '../utils/ticketHistoryPermission';
 import {FiscalCreditApplicationAction} from './FiscalCreditApplicationAction';
 import {assertInventoryPresentationReturnAllowed} from '../services/inventoryPresentations/selection';
 import {FiscalBuyerDraftAction,hasFiscalWorkflowSourceMarker} from './FiscalBuyerDraftAction';
@@ -689,6 +690,7 @@ const TicketDetailDrawer: React.FC<{
    config: BusinessConfig;
    onClose: () => void;
    onPrint: (tx: Transaction) => void;
+   canReprint: boolean;
    onPrintCoupon: (tx: Transaction) => Promise<boolean>;
    onRequestRefund: (tx: Transaction) => void;
    onRequestAzulRefund: (tx: Transaction) => void;
@@ -706,7 +708,7 @@ const TicketDetailDrawer: React.FC<{
    themeText: string;
    themeBg: string;
    users: User[];
-}> = ({ tx, config, onClose, onPrint, onPrintCoupon, onRequestRefund, onRequestAzulRefund, onRetryFiscalDocument, onConsultFiscalStatus, customers = [], onCorrectFiscalDocument, reviewFlags, onSendEmail, onFlagForReview, themeText, themeBg, users }) => {
+}> = ({ tx, config, onClose, onPrint, canReprint, onPrintCoupon, onRequestRefund, onRequestAzulRefund, onRetryFiscalDocument, onConsultFiscalStatus, customers = [], onCorrectFiscalDocument, reviewFlags, onSendEmail, onFlagForReview, themeText, themeBg, users }) => {
    const [isPrintingCoupon, setIsPrintingCoupon] = useState(false);
    const [isRetryingFiscal, setIsRetryingFiscal] = useState(false);
    const [isConsultingFiscal,setIsConsultingFiscal]=useState(false);
@@ -1262,13 +1264,13 @@ const TicketDetailDrawer: React.FC<{
                         )}
                      </button>
                      <FiscalCreditApplicationAction transaction={tx}/>
-                     <button
+                     {canReprint && <button
                         onClick={() => onPrint(tx)}
                         className="flex min-w-[140px] flex-1 items-center justify-center gap-2 py-3 bg-white border border-gray-200 text-gray-700 rounded-2xl font-bold hover:bg-gray-100 transition-all shadow-sm"
                      >
                         <Printer size={18} /> Reimprimir
-                     </button>
-                     {config.receiptConfig?.printCouponSlip && tx.documentType === 'TICKET' && tx.status === 'COMPLETED' && (
+                     </button>}
+                     {canReprint && config.receiptConfig?.printCouponSlip && tx.documentType === 'TICKET' && tx.status === 'COMPLETED' && (
                         <button type="button" disabled={isPrintingCoupon} onClick={async () => {
                            setIsPrintingCoupon(true);
                            try { await onPrintCoupon(tx); }
@@ -1496,7 +1498,7 @@ const TicketDetailDrawer: React.FC<{
    );
 };
 
-const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, currentUser, onUpdateConfig, users, roles, onClose, activeTerminalId, onRefundTransaction, initialSelectedId, onInitialSelectionHandled, onRetryFiscalDocument, onConsultFiscalStatus, customers = [], onCorrectFiscalDocument }) => {
+const AuthorizedTicketHistory: React.FC<TicketHistoryProps & {historyAccess:React.MutableRefObject<{view:boolean;reprint:boolean;identity:string}>}> = ({ transactions, config, currentUser, onUpdateConfig, users, roles, onClose, activeTerminalId, onRefundTransaction, initialSelectedId, onInitialSelectionHandled, onRetryFiscalDocument, onConsultFiscalStatus, customers = [], onCorrectFiscalDocument,historyAccess }) => {
    const [searchTerm, setSearchTerm] = useState('');
    const [expandedId, setExpandedId] = useState<string | null>(null);
    const [showFilters, setShowFilters] = useState(false);
@@ -1668,7 +1670,10 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
    };
 
    const handlePrintTransaction = async (transaction: Transaction) => {
+      const permission=historyAccess.current;
+      if(!permission.view||!permission.reprint)return;
       transaction=await db.getDocument('transactions',transaction.id) as Transaction || await db.getDocument('transactionHistory',transaction.id) as Transaction || transaction;
+      if(historyAccess.current!==permission||!historyAccess.current.view||!historyAccess.current.reprint)return;
       const gatewayPayments = (transaction.payments || []).filter((payment: any) =>
          payment?.gatewayProvider && (payment?.gatewayReceiptMerchant || payment?.gatewayReceiptClient)
       );
@@ -1686,9 +1691,12 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
 
    // Load History on Mount
    useEffect(() => {
+      let cancelled=false;
       const loadHistory = async () => {
          try {
+            if(!historyAccess.current.view)return;
             const { db } = await import('../utils/db');
+            if(cancelled||!historyAccess.current.view)return;
             const [activeTransactions, archivedTransactions, wallets, walletTxns, customers, storedReviewFlags] = await Promise.all([
                db.get('transactions') as Promise<Transaction[]>,
                db.get('transactionHistory') as Promise<Transaction[]>,
@@ -1697,6 +1705,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
                db.get('customers') as Promise<any[]>,
                db.get('invoiceReviewFlags') as Promise<InvoiceReviewFlag[]>
             ]);
+            if(cancelled||!historyAccess.current.view)return;
             setReviewFlags(Array.isArray(storedReviewFlags) ? storedReviewFlags : []);
 
             const toTimestamp = (value?: string) => {
@@ -1887,6 +1896,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
             setHistoryTransactions(markedHistory);
 
             const zReports = await db.get('zReports') as any[];
+            if(cancelled||!historyAccess.current.view)return;
             if (zReports) {
                const map = new Map<string, string>();
                zReports.forEach(r => map.set(r.id, r.sequenceNumber));
@@ -1896,11 +1906,12 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
          } catch (e) {
             console.error("Failed to load history:", e);
          } finally {
-            setHistoryLoaded(true);
+            if(!cancelled&&historyAccess.current.view)setHistoryLoaded(true);
          }
       };
-      loadHistory();
-   }, []);
+      void loadHistory();
+      return ()=>{cancelled=true;};
+   }, [historyAccess]);
 
    // Resolve after archived history is ready so business references never get
    // mistaken for the primary Transaction.id used by the drawer/refund flow.
@@ -2136,6 +2147,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
    const { requestApproval, supervisorModalProps } = useSupervisorAuth({ config, currentUser, roles, onUpdateConfig, terminalSecurity: config.terminals?.find(t => t.id === activeTerminalId)?.config.security });
 
    const requireCurrentUser = (): User => {
+      if(!historyAccess.current.view)throw new Error('No tienes permiso para ver el historial de tickets.');
       if (!currentUser) throw new Error('Debes iniciar sesión para realizar esta acción.');
       return currentUser;
    };
@@ -2150,8 +2162,10 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
          onAuthorized: supervisor => { authorizedBy = supervisor; },
       });
       if (!approved) throw new Error('La acción no fue autorizada.');
+      requireCurrentUser();
 
       transaction=await db.getDocument('transactions',transaction.id) as Transaction || await db.getDocument('transactionHistory',transaction.id) as Transaction || transaction;
+      requireCurrentUser();
       const result = await requestReceiptEmail(transaction, email, config, config.currencySymbol || 'RD$', users);
       try {
          await recordInvoiceAuditEvent({
@@ -2189,6 +2203,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
          onAuthorized: supervisor => { authorizedBy = supervisor; },
       });
       if (!approved) throw new Error('La acción no fue autorizada.');
+      requireCurrentUser();
 
       const { review } = await createInvoiceReview({
          transaction,
@@ -2242,6 +2257,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
    };
 
    const openErpRefundSource = async (match: ErpRefundSourceMatch) => {
+      const permission=historyAccess.current;if(!permission.view)return;
       setErpSearchLoading(true);
       setErpSearchError(null);
       try {
@@ -2252,6 +2268,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
          const transaction = match.transaction || normalizeErpRefundSourceTransaction(
             await apiSyncAdapter.getRefundSource(match.sourceId)
          );
+         if(historyAccess.current!==permission||!historyAccess.current.view)return;
          if (!canSeeGlobalSales && !matchesSalesTerminal(transaction.terminalId, salesTerminalAliases)) {
             setErpSearchError('Esta terminal solo puede consultar sus propias ventas.');
             return;
@@ -2281,6 +2298,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
    };
 
    const searchInvoiceInErp = async () => {
+      const permission=historyAccess.current;if(!permission.view)return;
       const reference = searchTerm.trim();
       if (reference.length < 3) {
          setErpSearchError('Escribe al menos 3 caracteres del número de factura, ticket o NCF.');
@@ -2292,6 +2310,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
       try {
          const matches = normalizeErpRefundSearchResponse(await apiSyncAdapter.searchRefundSources(reference))
             .filter(match => canSeeGlobalSales || matchesSalesTerminal(match.terminalId, salesTerminalAliases));
+         if(historyAccess.current!==permission||!historyAccess.current.view)return;
          if (matches.length === 0) {
             setErpSearchError('ERP no encontró una factura con esa referencia.');
             return;
@@ -2317,7 +2336,9 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
       requestMode: RefundRequestMode = 'STANDARD',
       fiscalOptions?: RefundProcessingOptions
    ) => {
+      const permission=historyAccess.current;if(!permission.view)throw new Error('No tienes permiso para ver el historial de tickets.');
       originalTx = await readRefundOriginal(originalTx);
+      if(historyAccess.current!==permission||!historyAccess.current.view)throw new Error('No tienes permiso para ver el historial de tickets.');
       assertInventoryPresentationReturnAllowed(originalTx);
       const terminalConfig = config.terminals?.find(t => t.id === activeTerminalId)?.config;
       const fiscalMode = getEffectiveFiscalComplianceConfig(config, terminalConfig).mode;
@@ -3000,8 +3021,9 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
             tx={selectedTx}
             config={config}
             onClose={() => setSelectedTxId(null)}
+            canReprint={historyAccess.current.reprint}
             onPrint={(tx) => { void handlePrintTransaction(tx); }}
-            onPrintCoupon={(tx) => printCouponForTransaction(tx, config)}
+            onPrintCoupon={(tx) => historyAccess.current.view && historyAccess.current.reprint ? printCouponForTransaction(tx, config) : Promise.resolve(false)}
             onRequestRefund={(tx) => {
                const remaining = getRemainingRefundQuantities(tx, allKnownTransactions);
                if (!hasRefundableItems(remaining)) {
@@ -3085,4 +3107,17 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
    );
 };
 
+const TicketHistory:React.FC<TicketHistoryProps>=(props)=>{
+   const view=canViewTicketHistory(props.currentUser,props.roles);
+   const reprint=canReprintTicketHistory(props.currentUser,props.roles);
+   const identity=JSON.stringify([props.currentUser?.id,props.currentUser?.roleId||props.currentUser?.role,view,reprint]);
+   const permission=useMemo(()=>({view,reprint,identity}),[view,reprint,identity]);
+   const historyAccess=useRef(permission);
+   historyAccess.current=permission;
+   React.useLayoutEffect(()=>{
+      historyAccess.current=permission;
+      return()=>{historyAccess.current={...permission,view:false,reprint:false};};
+   },[permission]);
+   return view?<AuthorizedTicketHistory {...props} historyAccess={historyAccess}/>:null;
+};
 export default TicketHistory;

@@ -22,6 +22,7 @@ interface ActionGridProps {
     serviceType?: OrderServiceType;
     actionRegion?: 'all' | 'ticket' | 'other';
     hideFinancialClosings?: boolean;
+    allowHistory?: boolean;
 }
 
 const ActionGrid: React.FC<ActionGridProps> = ({
@@ -40,6 +41,7 @@ const ActionGrid: React.FC<ActionGridProps> = ({
     serviceType = isTakeout ? 'TAKEOUT' : 'DINE_IN',
     actionRegion = 'all',
     hideFinancialClosings = false,
+    allowHistory = false,
 }) => {
     const isHorizontal = orientation === 'horizontal';
     const shouldRenderLogout = showLogout && isHorizontal;
@@ -131,7 +133,7 @@ const ActionGrid: React.FC<ActionGridProps> = ({
 
                 {/* UTILITY GROUP (Gray) */}
                 {renderButton('SETTINGS', 'Ajustes', <Settings />, 'utility')}
-                {renderButton('HISTORY', 'Historial Factura', <History />, 'utility')}
+                {allowHistory && renderButton('HISTORY', 'Historial Factura', <History />, 'utility')}
                 {renderButton('DRAWER', 'Cajón', <Box />, 'utility')}
                 {renderButton('CASH_IN', 'Entrada', <ArrowDownLeft />, 'utility')}
                 {renderButton('CASH_OUT', 'Salida', <ArrowUpRight />, 'utility')}
