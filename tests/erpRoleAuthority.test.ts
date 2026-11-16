@@ -6,6 +6,7 @@ import {
   buildAuthoritativeErpSecuritySnapshot,
   ErpSecuritySnapshotError,
   normalizeErpPermissions,
+  normalizeErpRole,
 } from '../utils/erpSecuritySnapshot';
 
 const customRole = (permissions: string[] = ['POS_CHECKOUT', 'POS_CLOSE_Z']) => ({
@@ -153,4 +154,33 @@ test('metadatos de roles y usuarios ERP se conservan', () => {
     { version: snapshot.users[0].version, isActive: snapshot.users[0].isActive, syncSource: snapshot.users[0].syncSource },
     { version: 2, isActive: true, syncSource: 'ERP_SNAPSHOT' },
   );
+});
+
+test('zReportConfig admite ambos aliases y los cinco módulos sin compartir el array recibido', () => {
+  const hiddenModules = ['FINANCIAL', 'PAYMENTS', 'CASH_DETAILS', 'KPIS', 'AUDIT'];
+  for (const alias of ['zReportConfig', 'z_report_config']) {
+    const role = normalizeErpRole({ ...customRole(), [alias]: { hiddenModules } });
+    assert.deepEqual(role?.zReportConfig, { hiddenModules });
+    assert.notEqual(role?.zReportConfig?.hiddenModules, hiddenModules);
+  }
+  assert.deepEqual(normalizeErpRole({ ...customRole(), zReportConfig: { hiddenModules: ['AUDIT', 'AUDIT'] } })?.zReportConfig,
+    { hiddenModules: ['AUDIT'] });
+  for (const legacy of [{}, { zReportConfig: null }, { z_report_config: null }]) {
+    assert.equal(normalizeErpRole({ ...customRole(), ...legacy })?.zReportConfig, undefined);
+  }
+});
+
+test('zReportConfig inválido rechaza el snapshot completo, aunque el otro alias sea válido', () => {
+  const invalidConfigs = [{}, [], 'AUDIT', { hiddenModules: 'AUDIT' }, { hiddenModules: ['UNKNOWN'] },
+    { hiddenModules: [null] }, { hiddenModules: ['audit'] }, { hiddenModules: [], extra: true },
+    { hiddenModules: Array(6).fill('AUDIT') }];
+  for (const invalid of invalidConfigs) {
+    for (const alias of ['zReportConfig', 'z_report_config']) {
+      assert.throws(() => build([{ ...customRole(), [alias]: invalid }], [martha()]), ErpSecuritySnapshotError);
+    }
+  }
+  assert.throws(() => build([{ ...customRole(), zReportConfig: {}, z_report_config: { hiddenModules: [] } }], [martha()]), ErpSecuritySnapshotError);
+  assert.throws(() => build([{ ...customRole(), zReportConfig: { hiddenModules: [] }, z_report_config: { hiddenModules: ['AUDIT'] } }], [martha()]), ErpSecuritySnapshotError);
+  assert.deepEqual(normalizeErpRole({ ...customRole(), zReportConfig: { hiddenModules: ['AUDIT', 'KPIS'] },
+    z_report_config: { hiddenModules: ['KPIS', 'AUDIT'] } })?.zReportConfig, { hiddenModules: ['AUDIT', 'KPIS'] });
 });

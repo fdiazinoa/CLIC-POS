@@ -445,6 +445,11 @@ export const AVAILABLE_PERMISSIONS = [
   { key: 'CATALOG_VIEW', label: 'Ver Catálogo', description: 'Acceso a lista de productos', category: 'CATALOG' },
   { key: 'CATALOG_MANAGE', label: 'Gestionar Productos', description: 'Crear, editar y eliminar productos', category: 'CATALOG' },
   { key: 'CATALOG_VIEW_COST', label: 'Ver Costos', description: 'Ver CPP y márgenes de ganancia', category: 'CATALOG' },
+  { key: 'POS_CATALOG_CONFLICT_VIEW', label: 'Ver conflictos de catálogo', description: 'Consultar conflictos de ediciones de catálogo en el monitor de sincronización', category: 'CATALOG' },
+  { key: 'POS_CATALOG_CONFLICT_RETRY', label: 'Reintentar conflictos de catálogo', description: 'Reintentar una edición de catálogo en conflicto', category: 'CATALOG' },
+  { key: 'POS_CATALOG_CONFLICT_DISCARD', label: 'Descartar ediciones de catálogo', description: 'Descartar una edición de catálogo pendiente con error o en conflicto', category: 'CATALOG' },
+  { key: 'POS_CATALOG_CONFLICT_ACCEPT_ERP', label: 'Aceptar catálogo del ERP', description: 'Resolver un conflicto de catálogo aceptando los datos del ERP', category: 'CATALOG' },
+  { key: 'POS_CATALOG_CONFLICT_FORCE', label: 'Forzar edición de catálogo', description: 'Resolver un conflicto de catálogo forzando la edición local', category: 'CATALOG' },
   { key: 'TARIFF_MANAGE', label: 'Gestionar Tarifas', description: 'Editar listas de precios', category: 'CATALOG' },
 
   // --- INVENTORY ---
