@@ -8,7 +8,7 @@ import type { BusinessConfig } from '../types';
 
 const props = {
   config: {} as BusinessConfig, parkedTicketsCount: 0, globalDiscountValue: 0,
-  isReturnMode: false, hasCartItems: false,
+  isReturnMode: false, hasCartItems: false, allowHistory:true,
 };
 
 const buttonsIn = (node: React.ReactNode): React.ReactElement<any>[] => {
@@ -49,4 +49,12 @@ test('POS history action routes to existing callback and retains attendance rout
   const source = readFileSync(new URL('../components/POSInterface.tsx', import.meta.url), 'utf8');
   assert.match(source, /case 'HISTORY': onOpenHistory\(\); break;/);
   assert.match(source, /case 'ATTENDANCE': onOpenAttendance\(\); break;/);
+});
+
+test('history is hidden unless explicitly permitted, without affecting checkout utilities',()=>{
+ for(const allowHistory of [false,undefined]){
+  const tree=ActionGrid({...props,allowHistory,onAction:()=>{}});
+  assert.equal(buttonsIn(tree).some(button=>button.props['data-action-id']==='HISTORY'),false);
+  assert.equal(buttonsIn(tree).some(button=>button.props['data-action-id']==='ATTENDANCE'),true);
+ }
 });

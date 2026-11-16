@@ -23,7 +23,7 @@ const appSettings=elements(app,'Settings');assert.equal(appSettings.length,2);
 for(const [index,route] of ['SETTINGS','SETTINGS_SYNC'].entries()){
  test(`actual ${route} callback opens existing history, clears scan and closes to same Settings`,()=>{
   let view='SETTINGS',scan:any='old-selection';const origin={current:'POS'};
-  const scope={roles:[{id:'cashier',permissions:['SETTINGS_ACCESS']}],currentUser:{role:'cashier'},getCurrentDeviceRole:()=> 'STANDARD_POS',DeviceRole:{ORDER_TAKER:'ORDER_TAKER'},isAdminMode:false,
+  const scope={canViewHistory:true,openTicketHistory:(returnView:string,selectedId:any=null)=>{origin.current=returnView;scan=selectedId;view='HISTORY';},roles:[{id:'cashier',permissions:['SETTINGS_ACCESS','POS_VIEW_TICKET_HISTORY']}],currentUser:{role:'cashier'},getCurrentDeviceRole:()=> 'STANDARD_POS',DeviceRole:{ORDER_TAKER:'ORDER_TAKER'},isAdminMode:false,
    historyReturnViewRef:origin,setScanTargetTicketId:(value:any)=>{scan=value;},setCurrentView:(value:string)=>{view=value;}};
   evaluate(attribute(appSettings[index],'onOpenHistory'),scope)();assert.equal(view,'HISTORY');assert.equal(origin.current,route);assert.equal(scan,null);
   const history=elements(app,'TicketHistory').find(node=>attribute(node,'onClose').getText().includes('historyReturnViewRef'))!;
@@ -31,7 +31,7 @@ for(const [index,route] of ['SETTINGS','SETTINGS_SYNC'].entries()){
  });
  for(const access of ['missing-user','denied','order-taker','admin-order-taker'] as const)test(`actual ${route} history callback denies ${access}`,()=>{
   const roles=[{id:'cashier',permissions:access==='denied'?[]:['SETTINGS_ACCESS']}];let transitions=0;
-  evaluate(attribute(appSettings[index],'onOpenHistory'),{roles,currentUser:access==='missing-user'?null:{role:'cashier'},getCurrentDeviceRole:()=>access.includes('order-taker')?'ORDER_TAKER':'STANDARD_POS',DeviceRole:{ORDER_TAKER:'ORDER_TAKER'},isAdminMode:access==='admin-order-taker',
+  evaluate(attribute(appSettings[index],'onOpenHistory'),{canViewHistory:true,openTicketHistory:()=>{transitions++;},roles,currentUser:access==='missing-user'?null:{role:'cashier'},getCurrentDeviceRole:()=>access.includes('order-taker')?'ORDER_TAKER':'STANDARD_POS',DeviceRole:{ORDER_TAKER:'ORDER_TAKER'},isAdminMode:access==='admin-order-taker',
    historyReturnViewRef:{current:'POS'},setScanTargetTicketId:()=>{transitions++;},setCurrentView:()=>{transitions++;}})();assert.equal(transitions,0);
  });
 }
@@ -42,13 +42,18 @@ test('Settings history card guards its callback and keeps SETTINGS_ACCESS instea
  for(const [allowed,orderTaker,expected]of [[false,false,0],[true,true,0],[true,false,1]] as const){
   evaluate(attribute(card,'onClick'),{isOrderTakerMode:orderTaker,hasPermission:(permission:string)=>{assert.equal(permission,'SETTINGS_ACCESS');return allowed;},props:{onOpenHistory:()=>{opens++;}}})();assert.equal(opens,expected);
  }
- assert.equal(evaluate(attribute(card,'locked'),{hasPermission:()=>true,props:{}}),true);
+ assert.equal(evaluate(attribute(card,'locked'),{hasPermission:()=>false,props:{}}),true);
+ assert.match(card.parent.getText(),/props\.onOpenHistory &&/);
 });
 
 test('POS history and invoice scan override a previous Settings origin back to POS',()=>{
  for(const name of ['onOpenHistory','onOpenInvoiceActions']){
   const pos=elements(app,'PersistentPOSHost')[0];assert.ok(pos);let view='',scan:any=null;const origin={current:'SETTINGS'};
-  evaluate(attribute(pos,name),{historyReturnViewRef:origin,setCurrentView:(value:string)=>{view=value;},setScanTargetTicketId:(value:any)=>{scan=value;}})('invoice-id');
+  evaluate(attribute(pos,name),{openTicketHistory:(returnView='POS',selectedId:any=null)=>{origin.current=returnView;view='HISTORY';scan=selectedId;},historyReturnViewRef:origin,setCurrentView:(value:string)=>{view=value;},setScanTargetTicketId:(value:any)=>{scan=value;}})('invoice-id');
   assert.equal(origin.current,'POS');assert.equal(view,'HISTORY');assert.equal(scan,name==='onOpenInvoiceActions'?'invoice-id':null);
  }
+});
+
+for(const [index,route] of ['SETTINGS','SETTINGS_SYNC'].entries())test(`${route} hides callback without the role permission`,()=>{
+ assert.equal(evaluate(attribute(appSettings[index],'onOpenHistory'),{canViewHistory:false}),undefined);
 });

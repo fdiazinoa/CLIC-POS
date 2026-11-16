@@ -1,3 +1,4 @@
+import {canViewTicketHistory} from './utils/ticketHistoryPermission';
 import { fiscalReceiptEmailQueue } from './services/email/fiscalReceiptEmailDelivery';
 import {createFiscalReturnConsumer,createFiscalReturnTransport} from './services/fiscal/FiscalReturnConsumer';
 import {returnOperatorMessage} from './services/fiscal/FiscalReturnV1';
@@ -4551,6 +4552,20 @@ const AppContent: React.FC = () => {
   }, [currentUser, currentView, getCurrentTerminal, isDataLoaded, isSecurityLoaded, terminalAuthorizationBlock, users]);
 
   const [roles, setRoles] = useState<RoleDefinition[]>(DEFAULT_ROLES);
+  const ticketHistoryAccessRef = useRef({currentUser,roles});
+  ticketHistoryAccessRef.current = {currentUser,roles};
+  const canViewHistory = canViewTicketHistory(currentUser,roles);
+  const openTicketHistory = (returnView:'POS'|'SETTINGS'|'SETTINGS_SYNC'='POS',selectedId:string|null=null) => {
+    const access=ticketHistoryAccessRef.current;
+    if(!canViewTicketHistory(access.currentUser,access.roles))return;
+    historyReturnViewRef.current=returnView;
+    setScanTargetTicketId(selectedId);
+    setCurrentView('HISTORY');
+  };
+  useEffect(()=>{
+    if(currentView==='HISTORY'&&!canViewHistory){setScanTargetTicketId(null);historyReturnViewRef.current='POS';setCurrentView('POS');}
+  },[currentView,canViewHistory]);
+
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
@@ -6724,8 +6739,7 @@ const AppContent: React.FC = () => {
     onTicketScan: currentView === 'HISTORY'
       ? (ticketId) => {
         console.log(`🎟️ Smart Scan: Opening Ticket History for ${ticketId}`);
-        setScanTargetTicketId(ticketId);
-        setCurrentView('HISTORY');
+        openTicketHistory('POS',ticketId);
       }
       : undefined
   });
@@ -14196,11 +14210,9 @@ const AppContent: React.FC = () => {
             }}
             onOpenAttendance={() => setCurrentView('ATTENDANCE')}
             onOpenCustomers={() => setCurrentView('CUSTOMERS')}
-            onOpenHistory={() => { historyReturnViewRef.current = 'POS'; setCurrentView('HISTORY'); }}
+            onOpenHistory={() => openTicketHistory()}
             onOpenInvoiceActions={(scanValue) => {
-              historyReturnViewRef.current = 'POS';
-              setScanTargetTicketId(scanValue);
-              setCurrentView('HISTORY');
+              openTicketHistory('POS',scanValue);
             }}
             onOpenFinance={handleOpenFinanceFromPos}
             onRegisterCashMovement={handleRegisterMovement}
@@ -14493,14 +14505,12 @@ const AppContent: React.FC = () => {
             }}
             onOpenFinance={handleOpenFinanceFromPos}
             onOpenZReport={() => { void handleOpenZReport(); }}
-            onOpenHistory={() => {
-              const role = roles.find(row => row.id === currentUser?.role);
+            onOpenHistory={canViewHistory ? () => {
+              const role = roles.find(row => row.id === (currentUser?.roleId || currentUser?.role));
               if (getCurrentDeviceRole() === DeviceRole.ORDER_TAKER ||
                   (!isAdminMode && (!currentUser || !role?.permissions.some(permission => permission === 'ALL' || permission === 'SETTINGS_ACCESS')))) return;
-              historyReturnViewRef.current = 'SETTINGS';
-              setScanTargetTicketId(null);
-              setCurrentView('HISTORY');
-            }}
+              openTicketHistory('SETTINGS');
+            } : undefined}
             onOpenSupplyChain={() => setCurrentView('SUPPLY_CHAIN')}
             onOpenFranchise={() => setCurrentView('FRANCHISE_DASHBOARD')}
             onOpenTableDesigner={() => {
@@ -14574,14 +14584,12 @@ const AppContent: React.FC = () => {
             }}
             onOpenFinance={handleOpenFinanceFromPos}
             onOpenZReport={() => { void handleOpenZReport(); }}
-            onOpenHistory={() => {
-              const role = roles.find(row => row.id === currentUser?.role);
+            onOpenHistory={canViewHistory ? () => {
+              const role = roles.find(row => row.id === (currentUser?.roleId || currentUser?.role));
               if (getCurrentDeviceRole() === DeviceRole.ORDER_TAKER ||
                   (!isAdminMode && (!currentUser || !role?.permissions.some(permission => permission === 'ALL' || permission === 'SETTINGS_ACCESS')))) return;
-              historyReturnViewRef.current = 'SETTINGS_SYNC';
-              setScanTargetTicketId(null);
-              setCurrentView('HISTORY');
-            }}
+              openTicketHistory('SETTINGS_SYNC');
+            } : undefined}
             onOpenSupplyChain={() => setCurrentView('SUPPLY_CHAIN')}
             onOpenFranchise={() => setCurrentView('FRANCHISE_DASHBOARD')}
             onOpenTableDesigner={() => {
@@ -14665,6 +14673,7 @@ const AppContent: React.FC = () => {
         );
 
       case 'HISTORY':
+        if(!canViewHistory)return null;
         return (
           <TicketHistory
             transactions={transactions}

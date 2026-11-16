@@ -1,3 +1,4 @@
+import {canViewTicketHistory} from '../utils/ticketHistoryPermission';
 import {LegacyFiscalCheckoutAttempt} from '../services/fiscal/LegacyFiscalCheckoutAttempt';
 import {compileDispatchCheckoutSource,dispatchCatalogueView,dispatchTrackingOptions,type DispatchCheckoutAuthority} from '../services/dispatch/DispatchCheckoutSource';
 import {dispatchCommercialSource,dispatchPaymentIntents} from '../services/db/CompanyDispatchEscrowStore';
@@ -1257,8 +1258,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    onOpenSettings,
    onOpenAttendance,
    onOpenCustomers,
-   onOpenHistory,
-   onOpenInvoiceActions,
+   onOpenHistory: openHistory,
+   onOpenInvoiceActions: openInvoiceActions,
    onOpenFinance,
    onRegisterCashMovement,
    onOpenZReport,
@@ -2128,6 +2129,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       [userPermissions]
    );
 
+   const canViewHistory = canViewTicketHistory(currentUser, roles || config.roles || []);
+   const historyPermissionRef = useRef({currentUser,roles:roles || config.roles || []});
+   historyPermissionRef.current = {currentUser,roles:roles || config.roles || []};
+   const onOpenHistory = useCallback(() => {
+      const access=historyPermissionRef.current;
+      if(canViewTicketHistory(access.currentUser,access.roles))openHistory();
+   },[openHistory]);
+   const onOpenInvoiceActions = useCallback((scanValue:string) => {
+      const access=historyPermissionRef.current;
+      if(canViewTicketHistory(access.currentUser,access.roles))openInvoiceActions(scanValue);
+   },[openInvoiceActions]);
    const canChangeTariff = hasPermission('POS_CHANGE_TARIFF');
    const canCheckout = hasPermission('POS_CHECKOUT');
    const canSellWithOpenZ = hasPermission('POS_ALLOW_SALES_WITH_OPEN_Z');
@@ -8438,7 +8450,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                <span>Ocultar acciones</span>
             </button>
          </div>
-         <button
+         {canViewHistory && <button
             onClick={onOpenHistory}
             className="mb-3 flex w-full items-center justify-between rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-left text-sm font-black text-blue-700 shadow-sm transition-all hover:bg-blue-100"
          >
@@ -8452,7 +8464,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                </div>
             </div>
             <ChevronRight size={18} />
-         </button>
+         </button>}
          <div className="pos-landscape-settings mb-3 hidden space-y-2">
             <p className="text-xs text-gray-500">{currentUser.name} · {terminalDisplayLabel}</p>
             <label className="block text-xs font-bold text-purple-700">
@@ -8475,6 +8487,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             </div>
          )}
          <ActionGrid
+            allowHistory={canViewHistory}
             orientation="vertical"
             onAction={(action) => {
                handleGridAction(action);
@@ -9102,14 +9115,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            <ChefHat size={20} />
                            <span>Cocina</span>
                         </button>
-                        <button
+                        {canViewHistory && <button
                            type="button"
                            onClick={onOpenHistory}
                            className="flex h-16 items-center justify-center gap-2 rounded-xl border border-orange-400 bg-orange-500 px-3 text-sm font-black uppercase tracking-wide text-white shadow-sm shadow-orange-500/25 transition-all hover:bg-orange-600 active:scale-95"
                         >
                            <History size={20} />
                            <span>Tickets</span>
-                        </button>
+                        </button>}
                         </div>
                      </div>
 
@@ -9204,7 +9217,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      <div className="relative group">
                         <button className="h-10 w-10 rounded-xl bg-emerald-600 text-white shadow-sm shadow-emerald-600/25 hover:bg-emerald-700 flex items-center justify-center"><MoreVertical size={20} /></button>
                         <div className="absolute right-0 top-full mt-2 w-48 bg-white rounded-xl shadow-xl border border-gray-100 hidden group-hover:block z-50">
-                           <button onClick={onOpenHistory} className="w-full px-4 py-3 text-left text-sm font-bold text-gray-600 hover:bg-gray-50 flex items-center gap-2"><History size={16} /> Historial</button>
+                           {canViewHistory && <button onClick={onOpenHistory} className="w-full px-4 py-3 text-left text-sm font-bold text-gray-600 hover:bg-gray-50 flex items-center gap-2"><History size={16} /> Historial</button>}
                            {canCloseXReport && <button onClick={() => onOpenFinance('X_REPORT')} className="w-full px-4 py-3 text-left text-sm font-bold text-gray-600 hover:bg-gray-50 flex items-center gap-2"><ClipboardCheck size={16} /> Cierre X</button>}
                            {canCloseZReport && <button onClick={onOpenZReport || (() => onOpenFinance())} className="w-full px-4 py-3 text-left text-sm font-bold text-gray-600 hover:bg-gray-50 flex items-center gap-2"><Lock size={16} /> Cierre Z</button>}
                            <button onClick={() => onOpenSettings()} className="w-full px-4 py-3 text-left text-sm font-bold text-gray-600 hover:bg-gray-50 flex items-center gap-2"><Settings size={16} /> Ajustes</button>
@@ -9960,6 +9973,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      <>
                         <div className="supermarket-footer-secondary min-w-0">
                            <ActionGrid
+            allowHistory={canViewHistory}
                               actionRegion="other"
                               orientation="horizontal"
                               onAction={handleGridAction}
@@ -9988,6 +10002,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         <div className="supermarket-checkout">
                            {renderDesktopTicketFooterActions()}
                            <ActionGrid
+            allowHistory={canViewHistory}
                               actionRegion="ticket"
                               orientation="horizontal"
                               onAction={handleGridAction}

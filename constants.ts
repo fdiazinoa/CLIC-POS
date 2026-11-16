@@ -205,7 +205,7 @@ export const DEFAULT_ROLES: RoleDefinition[] = [
     name: 'Supervisor',
     permissions: [
       'POS_VOID_ITEM', 'POS_DISCOUNT', 'POS_OPEN_DRAWER',
-      'POS_RETURNS', 'POS_REPRINT_RECEIPT', 'POS_NEW_SALE', 'POS_CHECKOUT', 'POS_CHANGE_TARIFF', 'POS_VIEW_X_REPORT', 'POS_CLOSE_X', 'POS_ALLOW_SALES_WITH_OPEN_Z', 'POS_ACCESS_OTHER_SELLER_TABLES', 'POS_EXIT_TABLE_MAP', 'TABLE_CONTROL_CENTER'
+      'POS_RETURNS', 'POS_VIEW_TICKET_HISTORY', 'POS_REPRINT_RECEIPT', 'POS_NEW_SALE', 'POS_CHECKOUT', 'POS_CHANGE_TARIFF', 'POS_VIEW_X_REPORT', 'POS_CLOSE_X', 'POS_ALLOW_SALES_WITH_OPEN_Z', 'POS_ACCESS_OTHER_SELLER_TABLES', 'POS_EXIT_TABLE_MAP', 'TABLE_CONTROL_CENTER'
     ],
     isSystem: true,
     maxDiscountPercent: 20
@@ -399,6 +399,8 @@ export const FOOD_PRODUCTS: Product[] = [
 
 export const AVAILABLE_PERMISSIONS = [
   // --- POS CORE ---
+  { key: 'POS_VIEW_TICKET_HISTORY', label: 'Ver historial de tickets', description: 'Consultar tickets y facturas históricas; sin permiso se ocultan sus accesos', category: 'SALES' },
+  { key: 'POS_REPRINT_RECEIPT', label: 'Reimprimir tickets', description: 'Reimprimir comprobantes desde el historial; requiere acceso al historial', category: 'SALES' },
   { key: 'SALE', label: 'Realizar Ventas', description: 'Acceso a pantalla de cobro', category: 'SALES' },
   { key: 'POS_CHECKOUT', label: 'Cobrar', description: 'Permite abrir la pantalla de pago y finalizar ventas', category: 'SALES' },
   { key: 'POS_ALLOW_SALES_WITH_OPEN_Z', label: 'Permitir ventas con cierre Z abierto', description: 'Permite agregar y cobrar ventas durante la jornada/corte Z abierto', category: 'SALES' },
