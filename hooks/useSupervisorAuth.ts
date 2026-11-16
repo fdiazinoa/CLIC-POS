@@ -1,5 +1,7 @@
+import { dbAdapter } from '../services/db';
+import { canAuthorizeReturn, canCompleteReturnApproval, isReturnPermission, hasReturnRequestContext, readReturnSecurityContext, type ReturnSecurityContext } from '../services/sync/PosSecurityV2Runtime';
 import { requiresTerminalPolicyPin } from '../utils/terminalAuthorizationPolicy';
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { BusinessConfig, User, Permission, AuditLogEntry, RoleDefinition, TerminalConfig } from '../types';
 import { canGrantDiscountPercent } from '../utils/userSalesPolicy';
 
@@ -29,16 +31,22 @@ export const useSupervisorAuth = ({ config, currentUser, roles, onUpdateConfig, 
     const [pendingRequest, setPendingRequest] = useState<{
         resolve: (value: boolean) => void;
         params: RequestApprovalParams;
+        returnContext?: ReturnSecurityContext;
     } | null>(null);
+
+    const pendingRef = useRef(pendingRequest);
 
     const requestApproval = useCallback((params: RequestApprovalParams): Promise<boolean> => {
         return new Promise((resolve) => {
+          void (async () => {
+            const returnContext = isReturnPermission(params.permission) ? await readReturnSecurityContext(dbAdapter, roles) : undefined;
+            if (returnContext && !hasReturnRequestContext(returnContext, currentUser)) { resolve(false); return; }
             // 1. Check if current user has permission
             const userRole = roles?.find(r => r.id === currentUser?.roleId) ||
                 roles?.find(r => r.id === currentUser?.role);
 
-            if (userRole) {
-                const hasPermission = userRole.permissions.includes('ALL') || userRole.permissions.includes(params.permission);
+            if (userRole || returnContext?.mode === 'V2') {
+                const hasPermission = returnContext ? canAuthorizeReturn(returnContext, currentUser) : userRole!.permissions.includes('ALL') || userRole!.permissions.includes(params.permission);
 
                 // Check limits (e.g., max discount)
                 let withinLimits = true;
@@ -59,27 +67,33 @@ export const useSupervisorAuth = ({ config, currentUser, roles, onUpdateConfig, 
             }
 
             // 2. If not, open modal
-            setPendingRequest({ resolve, params });
+            pendingRef.current?.resolve(false);
+            pendingRef.current = { resolve, params, returnContext };
+            setPendingRequest(pendingRef.current);
             setIsModalOpen(true);
+          })().catch(() => resolve(false));
         });
     }, [config, currentUser, roles, terminalSecurity]);
 
-    const handleAuthorize = (supervisor: User) => {
-        if (pendingRequest) {
-            logAction(currentUser || supervisor, supervisor, pendingRequest.params);
-            pendingRequest.params.onAuthorized?.(supervisor);
-            pendingRequest.resolve(true);
-            setPendingRequest(null);
-            setIsModalOpen(false);
+    const handleAuthorize = async (supervisor: User) => {
+        const request = pendingRef.current;
+        if (!request) return;
+        if (request.returnContext) {
+            const current = await readReturnSecurityContext(dbAdapter, roles);
+            if (pendingRef.current !== request) return;
+            if (!canCompleteReturnApproval(request.returnContext, current, supervisor, currentUser)) {
+                request.resolve(false); pendingRef.current = null; setPendingRequest(null); setIsModalOpen(false); return;
+            }
         }
+        if (pendingRef.current !== request) return;
+        logAction(currentUser || supervisor, supervisor, request.params);
+        request.params.onAuthorized?.(supervisor);
+        request.resolve(true); pendingRef.current = null; setPendingRequest(null); setIsModalOpen(false);
     };
 
     const handleClose = () => {
-        if (pendingRequest) {
-            pendingRequest.resolve(false);
-            setPendingRequest(null);
-            setIsModalOpen(false);
-        }
+        pendingRef.current?.resolve(false); pendingRef.current = null;
+        setPendingRequest(null); setIsModalOpen(false);
     };
 
     const logAction = (cashier: User, supervisor: User, params: RequestApprovalParams) => {

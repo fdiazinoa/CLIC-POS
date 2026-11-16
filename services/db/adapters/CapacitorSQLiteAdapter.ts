@@ -327,6 +327,18 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
       return this.withWriteLock(async()=> (await this.ensureDb().query(FISCAL_OUTBOX_SOURCE_SQL,fiscalOutboxSourceParams(transactionId))).values as FiscalOutboxAnchor[] || []);
     }
 
+    async readPosSecurityState(): Promise<unknown[]> {
+        return this.withWriteLock(async () => {
+            const result = await this.ensureDb().query("SELECT doc_id, CASE WHEN length(data) <= ? THEN data ELSE NULL END AS data FROM documents WHERE collection_name = 'syncMetadata' AND doc_id LIKE 'pos-security-state:%'", [MAX_DOCUMENT_JSON_BYTES]);
+            return (result.values || []).map((row: { doc_id: string; data: unknown }) => {
+                if (typeof row.data !== 'string') throw new Error('POS_SECURITY_DURABLE_READ_UNAVAILABLE');
+                const value = JSON.parse(row.data);
+                if (!value || value.id !== row.doc_id) throw new Error('POS_SECURITY_PERSISTED_STATE_INVALID');
+                return value;
+            });
+        });
+    }
+
     async saveDocumentsAtomically(documents: DurableDocumentMutation[], requireAbsent = false, replaceCollections: string[] = [],
         configAuthority?: import('../DatabaseAdapter').V3ConfigPushAuthorityPrecondition): Promise<void> {
         if (!documents.length && !replaceCollections.length) return;
@@ -1501,12 +1513,14 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         const preserveIncomingRows=['localFiscalBuffer','config','fiscalAllocations','fiscalRanges'].includes(name)&&ids.length>0;
         statements.push({statement:`DELETE FROM documents WHERE collection_name=?
             AND collection_name NOT IN ('internalSequences','globalSequenceCounter')
+            ${name === 'syncMetadata' ? "AND doc_id NOT LIKE 'pos-security-state:%'" : ''}
             ${preserveIncomingRows ? `AND doc_id NOT IN (${placeholders})` : ''}`,
             values:[name,...(preserveIncomingRows ? ids : [])]});
         return statements;
     }
 
     private async replaceStoredDocuments(collectionName: string, docs: any[]): Promise<void> {
+        if (collectionName === 'syncMetadata') docs = docs.filter(row => !String(row?.id || '').startsWith('pos-security-state:'));
         const db = this.ensureDb();
         const now = new Date().toISOString();
         const rows=this.toDocumentRows(collectionName,docs);

@@ -1,3 +1,4 @@
+import { assertLegacySecurityWriteAllowed, readPosSecurityRecords } from '../sync/PosSecurityV2Consumer';
 import { recoveryUuid } from "./RecoveryUuid";
 import { projectNativeZConfiguration } from "./NativeZConfiguration";
 import type {
@@ -150,6 +151,13 @@ export function recoveryDatabase(
       )
         return (collectionName: string, value: any) =>
           exclusive(async () => {
+            await assertLegacySecurityWriteAllowed(base, collectionName);
+            if (collectionName === 'syncMetadata' && base.readPosSecurityState) {
+              const records = await readPosSecurityRecords(base);
+              const protectedId = (row: any) => row?.kind === 'POS_SECURITY_V2_CHECKPOINT' || String(row?.id || '').startsWith('pos-security-state:');
+              if (key === 'saveCollection') value = [...(Array.isArray(value) ? value : []).filter(row => !protectedId(row)), ...records];
+              else if ((key === 'saveDocument' ? [value] : value).some(protectedId)) throw new Error('POS_SECURITY_LEGACY_STATE_WRITE_BLOCKED');
+            }
             if (!enabled() || !CAPTURE_COLLECTIONS[collectionName])
               return (target[key] as any).call(target, collectionName, value);
             const docs = key === "saveDocument" ? [value] : value;
@@ -184,7 +192,25 @@ export function recoveryDatabase(
         typeof (target as any)[key] === "function"
       )
         return (...args: any[]) =>
-          exclusive(() => (target as any)[key](...args));
+          exclusive(async () => {
+            if (key === 'deleteDocument') {
+              await assertLegacySecurityWriteAllowed(base, args[0]);
+              if (args[0] === 'syncMetadata' && String(args[1]).startsWith('pos-security-state:')) throw new Error('POS_SECURITY_LEGACY_STATE_WRITE_BLOCKED');
+            }
+            if (key === 'saveDocumentsAtomically') {
+              const docs = args[0] as DurableDocumentMutation[];
+              const replacements = args[2] as string[] | undefined;
+              if (!docs.some(row => row.collectionName === 'syncMetadata' && row.document.kind === 'POS_SECURITY_V2_CHECKPOINT')) {
+                for (const collection of new Set([...(replacements || []), ...docs.map(row => row.collectionName)])) await assertLegacySecurityWriteAllowed(base, collection);
+                if (replacements?.includes('syncMetadata') && base.readPosSecurityState) {
+                  const retained = await readPosSecurityRecords(base);
+                  args[0] = [...docs.filter(row => row.collectionName !== 'syncMetadata' || !String(row.document.id).startsWith('pos-security-state:')),
+                    ...retained.map(document => ({ collectionName: 'syncMetadata', document, expectedDocument: JSON.stringify(document) }))];
+                }
+              }
+            }
+            return (target as any)[key](...args);
+          });
       const value = Reflect.get(target, key);
       return typeof value === "function" ? value.bind(target) : value;
     },

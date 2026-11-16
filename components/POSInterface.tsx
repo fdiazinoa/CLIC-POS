@@ -8340,7 +8340,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             if (blockRecoveredUberOrderMutation('mezclar devoluciones con este pedido')) return;
             if (!isReturnMode) {
                const authorized = await requestApproval({
-                  permission: 'CAN_REFUND',
+                  permission: 'POS_RETURNS',
                   actionDescription: 'Iniciar devolución',
                   onAuthorized: approver => setRefundAuthorizedBy({ id: approver.id, name: approver.name }),
                });

@@ -1,3 +1,4 @@
+import { readPosSecurityRecords } from '../services/sync/PosSecurityV2Consumer';
 import {snapshotFiscalIssuance,assertFiscalIssuance,assertNewFiscalIssuer} from './fiscalIssuance';
 import {fiscalSequencePadding as getFiscalSequencePadding,formatFiscalNumber} from './fiscalNumber';
 import { resolveFiscalTerminalPolicyFromConfig,isDeferredFiscalBufferUsable,hasValidFiscalAllocationPointer,getFiscalRangeForEmission,hasValidAllocatedFiscalRange,isAllocationAllowedByPolicy } from './fiscalBufferAuthority';
@@ -797,6 +798,7 @@ export const db = {
       console.log('🔌 Connecting to DB Adapter...');
       await withTimeout(dbAdapter.connect(), 15000, 'DB_CONNECT');
       console.log('✅ DB Adapter connected');
+      const securityFloor2 = (await readPosSecurityRecords(dbAdapter)).some(record => record.protocolFloor === 2);
 
       // Check if seeded
       console.log('🔍 Checking config collection...');
@@ -885,7 +887,7 @@ export const db = {
           const allowFullDemoSeed = shouldSeedFullDemoData();
           console.log(`🌱 First run detected - seeding ${allowFullDemoSeed ? 'full demo' : 'core bootstrap'} data...`);
           for (const [key, value] of Object.entries(SEED_DATA)) {
-            if (options.skipCollections?.includes(key)) continue;
+            if (options.skipCollections?.includes(key) || (securityFloor2 && ['roles', 'users'].includes(key))) continue;
             if (!allowFullDemoSeed && !FIRST_RUN_BOOTSTRAP_COLLECTIONS.has(key)) continue;
             if (!shouldCheckSeedForCollection(key, value)) continue;
             try {
@@ -942,11 +944,11 @@ export const db = {
         const allowFullDemoSeed = shouldSeedFullDemoData();
         console.log(`🌱 No config found on Master (First Run): Returning ${allowFullDemoSeed ? 'SEED_DATA' : 'bootstrap data'}`);
         if (allowFullDemoSeed) {
-          return SEED_DATA;
+          if (!securityFloor2) return SEED_DATA;
         }
 
         return Object.keys(SEED_DATA).reduce((acc: any, key) => {
-          acc[key] = FIRST_RUN_BOOTSTRAP_COLLECTIONS.has(key)
+          acc[key] = (!securityFloor2 || !['roles', 'users'].includes(key)) && FIRST_RUN_BOOTSTRAP_COLLECTIONS.has(key)
             ? (SEED_DATA as any)[key]
             : getFallbackCollectionValue(key);
           return acc;
@@ -959,6 +961,7 @@ export const db = {
       const keys = Object.keys(SEED_DATA);
 
       const loadCollectionValue = async (key: string) => {
+        if (securityFloor2 && ['roles', 'users'].includes(key)) return dbAdapter.getCollection(key);
         if (isDeferredHeavyCollection(key)) {
           console.warn(`⏭️ Skipping heavy collection during init: ${key}`);
           return getFallbackCollectionValue(key);
@@ -1006,6 +1009,7 @@ export const db = {
           data[key] = result.value;
         } else {
           console.error(`❌ Failed to load ${key}:`, result.reason);
+          if (securityFloor2 && ['roles', 'users'].includes(key)) throw result.reason;
           data[key] = getFallbackCollectionValue(key);
         }
       });
@@ -1238,7 +1242,7 @@ export const db = {
 
   get: async (collection: keyof typeof SEED_DATA, queryParams?: Record<string, string>) => {
     const records = await dbAdapter.getCollection(collection as string, queryParams);
-    return collection === 'users' ? applyLocalUserProfiles(records as User[]) : records;
+    return collection === 'users' && !(await readPosSecurityRecords(dbAdapter)).some(record => record.protocolFloor === 2) ? applyLocalUserProfiles(records as User[]) : records;
   },
 
   save: async (collection: keyof typeof SEED_DATA, payload: any) => {

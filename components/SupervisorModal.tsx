@@ -1,3 +1,5 @@
+import { dbAdapter } from '../services/db';
+import { canAuthorizeReturn, isReturnPermission, readReturnSecurityContext } from '../services/sync/PosSecurityV2Runtime';
 import React, { useState } from 'react';
 import { ShieldCheck, X, Delete, Lock } from 'lucide-react';
 import { User, BusinessConfig, Permission, RoleDefinition } from '../types';
@@ -45,7 +47,14 @@ const SupervisorModal: React.FC<SupervisorModalProps> = ({
         setError(null);
     };
 
-    const handleAuthorize = () => {
+    const handleAuthorize = async () => {
+        if (isReturnPermission(requiredPermission)) {
+            const context = await readReturnSecurityContext(dbAdapter, roles, users);
+            const candidates = context.mode === 'V2' ? context.users : users;
+            const approver = candidates.find(candidate => candidate.pin === pin && candidate.pin.length === 4);
+            if (!approver || !canAuthorizeReturn(context, approver)) { setError('PIN incorrecto o permisos insuficientes'); setPin(''); return; }
+            onAuthorize(approver); setPin(''); setError(null); return;
+        }
         // 1. Find user by PIN
         const user = users.find(u => u.pin === pin);
 

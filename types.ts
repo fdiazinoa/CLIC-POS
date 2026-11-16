@@ -1342,6 +1342,7 @@ export interface BusinessConfig {
 }
 
 export interface RoleDefinition {
+  permissionContractVersion?: 2;
   id: string;
   name: string;
   permissions: Permission[];
@@ -1356,6 +1357,7 @@ export interface RoleDefinition {
 }
 
 export interface User {
+  permissionContractVersion?: 2;
   id: string;
   name: string;
   pin: string;

@@ -139,6 +139,9 @@ export interface DatabaseAdapter {
     compareAndSwapV3SetupConfig?(expected: import('../../types').BusinessConfig,
         projected: import('../../types').BusinessConfig, assertIdentity: () => void): Promise<void>;
 
+    /** Strict durable read of security checkpoints; no fallback backend or floor reset. */
+    readPosSecurityState?(): Promise<unknown[]>;
+
     // Generic CRUD
     getCollection<T>(collectionName: string, queryParams?: Record<string, string>): Promise<T[]>;
     saveCollection<T>(collectionName: string, data: T[]): Promise<void>;

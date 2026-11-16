@@ -496,8 +496,17 @@ export class IndexedDBAdapter implements DatabaseAdapter {
             const transaction = this.db!.transaction(collectionName, 'readwrite');
             const store = transaction.objectStore(collectionName);
 
-            store.clear();
-            docs.forEach(doc => store.put(doc));
+            if (collectionName === 'syncMetadata') {
+                const request = store.getAll();
+                request.onsuccess = () => {
+                    const protectedRows = request.result.filter(row => String(row?.id || '').startsWith('pos-security-state:'));
+                    store.clear();
+                    [...docs.filter(row => !String(row?.id || '').startsWith('pos-security-state:')), ...protectedRows].forEach(row => store.put(row));
+                };
+            } else {
+                store.clear();
+                docs.forEach(doc => store.put(doc));
+            }
 
             transaction.oncomplete = () => resolve();
             if (this.isStrictDurableCollection(collectionName)) {
@@ -574,6 +583,11 @@ export class IndexedDBAdapter implements DatabaseAdapter {
         });
     }
 
+    async readPosSecurityState(): Promise<unknown[]> {
+        if (!this.db || this.storageOnlyMode || !this.hasStore('syncMetadata')) throw new Error('POS_SECURITY_DURABLE_READ_UNAVAILABLE');
+        return (await this.readStoreCollection('syncMetadata')).filter(row => row?.kind === 'POS_SECURITY_V2_CHECKPOINT' || String(row?.id || '').startsWith('pos-security-state:'));
+    }
+
     async saveDocumentsAtomically(documents: DurableDocumentMutation[], requireAbsent = false, replaceCollections: string[] = []): Promise<void> {
         if (!documents.length && !replaceCollections.length) return;
         const names = [...new Set([...replaceCollections, ...documents.map(d => d.collectionName)])];
@@ -593,20 +607,37 @@ export class IndexedDBAdapter implements DatabaseAdapter {
             };
             try {
                 const seen = new Set<string>();
-                for (const name of replaceCollections) tx.objectStore(name).clear();
                 for (const mutation of documents) {
                     const identity = JSON.stringify([mutation.collectionName, mutation.document.id]);
-                    if (requireAbsent && seen.has(identity)) throw new Error('RECOVERY_LOCAL_CONFLICT:' + identity);
+                    if (seen.has(identity)) throw new Error('RECOVERY_LOCAL_CONFLICT:' + identity);
                     seen.add(identity);
-                    const store = tx.objectStore(mutation.collectionName);
-                    if (!requireAbsent) { put(store, mutation.document); if (failure) break; continue; }
-                    const request = store.get(mutation.document.id);
+                }
+                // Check preconditions against the pre-replacement image inside the same transaction.
+                // Clearing a collection first would erase the very checkpoint being compared.
+                const checks = documents.filter(row => requireAbsent || row.requireAbsent || row.expectedDocument !== undefined);
+                let pending = checks.length;
+                const publish = () => {
+                    if (failure) return;
+                    const finish = (retained: unknown[] = []) => {
+                        for (const name of replaceCollections) tx.objectStore(name).clear();
+                        for (const row of retained) put(tx.objectStore('syncMetadata'), row);
+                        for (const mutation of documents) { put(tx.objectStore(mutation.collectionName), mutation.document); if (failure) return; }
+                    };
+                    if (replaceCollections.includes('syncMetadata')) {
+                        const request = tx.objectStore('syncMetadata').getAll();
+                        request.onsuccess = () => finish(request.result.filter(row => String(row?.id || '').startsWith('pos-security-state:')));
+                    } else finish();
+                };
+                if (!pending) publish();
+                for (const mutation of checks) {
+                    const request = tx.objectStore(mutation.collectionName).get(mutation.document.id);
                     request.onsuccess = () => {
                         if (failure) return;
-                        if (request.result !== undefined) {
-                            failure = new Error('RECOVERY_LOCAL_CONFLICT:' + identity);
-                            tx.abort();
-                        } else put(store, mutation.document);
+                        if (((requireAbsent || mutation.requireAbsent) && request.result !== undefined)
+                            || (mutation.expectedDocument !== undefined && JSON.stringify(request.result) !== mutation.expectedDocument)) {
+                            failure = new Error('RECOVERY_LOCAL_CONFLICT:' + mutation.document.id); tx.abort(); return;
+                        }
+                        if (--pending === 0) publish();
                     };
                 }
             } catch (error) {
