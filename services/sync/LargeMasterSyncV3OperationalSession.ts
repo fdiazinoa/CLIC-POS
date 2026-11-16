@@ -82,8 +82,9 @@ export class LargeMasterSyncV3OperationalSession {
     const expectedScope=configScope(await db.get('config') as unknown as BusinessConfig);
     const assertIdentity = async (owned?: LargeMasterSyncV3IdentityReadContext) => {
       const currentScope=configScope(owned ? await owned.readConfig() : await db.get('config') as unknown as BusinessConfig);
-      if(largeMasterSyncV3DownloadOrigin()!==v3BaseUrl||currentScope!==expectedScope)throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
-      try{if(JSON.stringify(readLargeMasterSyncV3BoundIdentity())!==JSON.stringify(identity)||readOperationalTerminalBinding()!==credentialGuard)throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');}
+      if(largeMasterSyncV3DownloadOrigin()!==v3BaseUrl)throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED',undefined,false,'ORIGIN');
+      if(currentScope!==expectedScope)throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED',undefined,false,'CONFIG_SCOPE');
+      try{if(JSON.stringify(readLargeMasterSyncV3BoundIdentity())!==JSON.stringify(identity)||readOperationalTerminalBinding()!==credentialGuard)throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED',undefined,false,'CREDENTIAL');}
       catch(error){
         // Download/activation owns its SQL connection and retains live transport authority.
         if(owned)throw error;
@@ -234,7 +235,7 @@ export class LargeMasterSyncV3OperationalSession {
     }
     if(this.expectedConfigScope!==undefined){
     const config=await db.get('config') as unknown as BusinessConfig;
-    if(v3OperationalConfigContext(config,this.identity).scope!==this.expectedConfigScope)throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
+    if(v3OperationalConfigContext(config,this.identity).scope!==this.expectedConfigScope)throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED',undefined,false,'CONFIG_SCOPE');
     }
     const active = await this.store.getActiveRuntimeVersion();
     const inventory = await this.ready.runtime.getInventorySnapshotVersion();

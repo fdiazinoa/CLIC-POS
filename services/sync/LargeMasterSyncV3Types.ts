@@ -177,7 +177,8 @@ export interface V3CatalogPageRequest {
 export interface V3CatalogPage { rows: V3CatalogArticle[]; total: number; filteredTotal: number; nextCursor: string | null }
 
 export class LargeMasterSyncV3Error extends Error {
-  constructor(public readonly code: string, message = code, public readonly retryable = false) {
+  constructor(public readonly code: string, message = code, public readonly retryable = false,
+    public readonly bindingReason?: 'IDENTITY' | 'ORIGIN' | 'CREDENTIAL' | 'CONFIG_SCOPE' | 'OWNER' | 'TRANSITION' | 'RUNTIME') {
     super(message);
     this.name = 'LargeMasterSyncV3Error';
   }

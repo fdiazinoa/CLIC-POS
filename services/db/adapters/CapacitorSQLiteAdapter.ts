@@ -125,6 +125,7 @@ export const NATIVE_V3_METHOD_CONCURRENCY = {
 } satisfies Record<keyof LargeMasterSyncV3Store,'read'|'write'>;
 
 export class CapacitorSQLiteAdapter implements DatabaseAdapter {
+    readonly supportsV3ConfigPushAuthority = true as const;
     readonly supportsV3FiscalMetadataCAS = true;
     private sqliteConnection: SQLiteConnectionInstance | null = null;
     private db: SQLiteDBConnectionInstance | null = null;
@@ -326,8 +327,15 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
       return this.withWriteLock(async()=> (await this.ensureDb().query(FISCAL_OUTBOX_SOURCE_SQL,fiscalOutboxSourceParams(transactionId))).values as FiscalOutboxAnchor[] || []);
     }
 
-    async saveDocumentsAtomically(documents: DurableDocumentMutation[], requireAbsent = false, replaceCollections: string[] = []): Promise<void> {
+    async saveDocumentsAtomically(documents: DurableDocumentMutation[], requireAbsent = false, replaceCollections: string[] = [],
+        configAuthority?: import('../DatabaseAdapter').V3ConfigPushAuthorityPrecondition): Promise<void> {
         if (!documents.length && !replaceCollections.length) return;
+        const expectedConfigJson = configAuthority ? JSON.stringify(configAuthority.expectedConfig) : undefined;
+        const assertConfigIdentity = configAuthority?.assertIdentity;
+        if (configAuthority && documents.some(row => row.v3FiscalMetadataOperation || row.recoveryOriginal
+            || row.document.v3InventoryBaseline || row.requireAbsent || row.expectedDocument !== undefined || row.v3StockRequirements)) {
+            throw new Error('SYNC_V3_CONFIG_PUSH_PRECONDITION_INCOMPATIBLE');
+        }
         await this.withWriteLock(async () => {
             const db = this.ensureDb();
             const now = new Date().toISOString();
@@ -413,7 +421,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
               }
               return;
             }
-            const needsFinancialPrecondition = documents.some(row => row.recoveryOriginal || row.document.v3InventoryBaseline
+            const needsFinancialPrecondition = Boolean(configAuthority) || documents.some(row => row.recoveryOriginal || row.document.v3InventoryBaseline
               || row.requireAbsent || row.expectedDocument !== undefined || row.v3StockRequirements);
             const assertAbsent = async () => {
               for (const { collectionName, document } of documents) {
@@ -424,6 +432,11 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             // Preserve the established legacy executeSet path; V3/CAS checks must run after BEGIN.
             if (requireAbsent && !needsFinancialPrecondition) await assertAbsent();
             const precondition = async () => {
+              if (configAuthority) {
+                if (JSON.stringify(await this.readConfigOwned()) !== expectedConfigJson) throw new Error('SYNC_V3_BINDING_CHANGED');
+                const result: unknown = assertConfigIdentity!();
+                if (result && typeof (result as { then?: unknown }).then === 'function') throw new Error('SYNC_V3_ASYNC_IDENTITY_GUARD_FORBIDDEN');
+              }
               await assertRetirementRecoveryPromotion(db,documents);
               await this.assertV3FinancialBaseline(documents);
               if (requireAbsent) await assertAbsent();

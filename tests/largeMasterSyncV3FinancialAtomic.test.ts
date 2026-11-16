@@ -176,6 +176,7 @@ async function financialModule(f: ReturnType<typeof fixture>, durable = false) {
     './DurableOutboxRepository': 'export const durableOutboxRepository={commitFinancialTransaction:input=>globalThis.__v3FinancialFixture.adapter.commitFinancialTransaction(input)};',
     '../CheckoutDiagnostics': 'export const recordCheckoutDiagnostic=()=>{};',
     './LargeMasterSyncV3OperationalSession': `export const getLargeMasterSyncV3OperationalSession=async()=>globalThis.__v3FinancialFixture.session;
+      export const acquireLargeMasterSyncV3ConfigContext=async()=>{throw Error("Unexpected catalog refresh in financial fixture")};
       export const getLargeMasterSyncV3RetainedSession=async()=>globalThis.__v3FinancialFixture.session;
       export const v3InventoryBaselineKey=(binding,stamp)=>JSON.stringify([binding,stamp.syncId,stamp.syncVersion,stamp.inventoryVersion,stamp.inventoryCursor]);`,
   };

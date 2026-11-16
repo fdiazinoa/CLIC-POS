@@ -70,7 +70,10 @@ async function fixture(candidate = true, channel = 'ERP_ACTIVE') {
   let ranges = 0;
   const db = { get: async (name: string) => clone(collections.get(name) ?? []),
     save: async (name: string, value: unknown) => { await saveBarrier(); saves.push(name); collections.set(name, clone(value)); } };
-  const adapter = { saveDocumentsAtomically: async (documents: any[], _silent: boolean, replace: string[]) => {
+  const adapter = { supportsV3ConfigPushAuthority: true, compareAndSwapV3SetupConfig:async(expected:any,next:any,guard:()=>void)=>{
+    assert.deepEqual(collections.get('config'),expected);guard();await db.save('config',next);
+  },saveDocumentsAtomically: async (documents: any[], _silent: boolean, replace: string[], authority?:any) => {
+    if(authority){assert.deepEqual(collections.get('config'),authority.expectedConfig);authority.assertIdentity();}
     atomic++;
     for (const name of replace) {
       const rows = documents.filter(row => row.collectionName === name).map(row => row.document);
@@ -90,9 +93,10 @@ async function fixture(candidate = true, channel = 'ERP_ACTIVE') {
     '../../utils/db': 'export const db=globalThis.__v3ConfigFixture.db;',
     '../services/db': 'export const dbAdapter=globalThis.__v3ConfigFixture.adapter;',
     '../db': 'export const dbAdapter=globalThis.__v3ConfigFixture.adapter;',
-    './LargeMasterSyncV3OperationalSession': 'export const getLargeMasterSyncV3OperationalSession=async(refresh)=>{if(refresh) await globalThis.__v3ConfigFixture.refresh();return {assertCurrent:async()=>{},projectConfig:async x=>x}};',
+    './LargeMasterSyncV3OperationalSession': 'export const acquireLargeMasterSyncV3ConfigContext=async()=>{};export const getLargeMasterSyncV3OperationalSession=async(refresh)=>{if(refresh) await globalThis.__v3ConfigFixture.refresh();return {assertSetupIdentity:()=>{},assertCurrent:async()=>{},projectConfig:async x=>x}};',
     '../services/sync/LargeMasterSyncV3OperationalSession': 'export const getLargeMasterSyncV3OperationalSession=async(refresh)=>{if(refresh) await globalThis.__v3ConfigFixture.refresh();return {assertCurrent:async()=>{},projectConfig:async x=>x}};',
     '../services/sync/SyncManager': 'export const syncManager={refreshTerminalResolvedConfig:async()=>{throw Error("Unexpected catalog fallback")}};',
+    '../services/sync/LargeMasterSyncV3ConfigRefreshAuthority':'export const captureLargeMasterSyncV3ConfigRefreshAuthorityFromStore=async()=>({localTerminalId:"fixture",assertCurrent:()=>{}});',
     '../services/sync/ProductImageCacheService': 'export const productImageCacheService={normalizeIncomingProducts:async x=>x};',
     '../services/sync/MasterNumberRangeService': 'export const persistMasterNumberRangesFromSnapshot=async()=>globalThis.__v3ConfigFixture.ranges();',
     '../services/sync/SyncMetrics': 'export const syncMetrics=new Proxy({}, {get:()=>()=>{}});',

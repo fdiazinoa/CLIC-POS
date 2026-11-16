@@ -24,17 +24,21 @@ async function fixture(v3=true, primary=true, kind='ERP_ACTIVE') {
   let save:()=>Promise<void>=async()=>{}; let prepare:()=>Promise<void>=async()=>{};
   let reconcile:()=>Promise<void>=async()=>{}; let manifest:()=>Promise<null>=async()=>null;
   let corruptReadback=false;
-  const session={assertCurrent:async()=>{calls.push('verify');},projectConfig:async(value:any)=>{
+  const session={assertSetupIdentity:()=>{},assertCurrent:async()=>{calls.push('verify');},projectConfig:async(value:any)=>{
     calls.push('project');return {...value,taxRate:0,taxes:[{id:'TX',rate:0.18,type:'VAT',name:'ITBIS'}],tariffs:[{id:'T',name:'General',taxIncluded:false}]};}};
   const getSession=createLargeMasterSyncV3SessionCoordinator(async(refresh:boolean)=>{
     calls.push(refresh?'refresh':'cached');await prepare();return session;
   },()=>JSON.stringify(identity));
+  const authority = { localTerminalId: config.terminals[0].id, assertCurrent: () => {} };
   Object.assign(globalThis,{__v3Manual:{db:{get:async()=>{calls.push('read');return corruptReadback?{}:clone(config);},
     save:async(_name:string,value:any)=>{calls.push('save');await save();config=clone(value);}},
-    getSession}});
+    getSession, cas: async(expected:any,next:any,guard:()=>void)=>{
+      assert.equal(JSON.stringify(config),JSON.stringify(expected));guard();calls.push('save');await save();config=clone(next);
+    }}});
   const mocks:Record<string,string>={
     '../../utils/db':'export const db=globalThis.__v3Manual.db;',
-    './LargeMasterSyncV3OperationalSession':'export const getLargeMasterSyncV3OperationalSession=globalThis.__v3Manual.getSession;',
+    './LargeMasterSyncV3OperationalSession':'export const getLargeMasterSyncV3OperationalSession=globalThis.__v3Manual.getSession;export const acquireLargeMasterSyncV3ConfigContext=async()=>{};',
+    '../db':'export const dbAdapter={compareAndSwapV3SetupConfig:globalThis.__v3Manual.cas};',
   };
   const built=await build({entryPoints:[new URL('../services/sync/LargeMasterSyncV3ConfigPush.ts',import.meta.url).pathname],bundle:true,
     write:false,format:'esm',platform:'node',plugins:[{name:'manual-boundaries',setup(b){
@@ -47,19 +51,20 @@ async function fixture(v3=true, primary=true, kind='ERP_ACTIVE') {
     usesLargeMasterSyncV3Authority:()=>v3&&kind==='ERP_ACTIVE',syncPolicy:{resolve:()=>target},
     readLargeMasterSyncV3BoundIdentity:()=>({...identity}),LargeMasterSyncV3Error,
     persistLargeMasterSyncV3ConfigPushCatalog:helper.persistLargeMasterSyncV3ConfigPushCatalog,
+    captureLargeMasterSyncV3ConfigRefreshAuthorityFromStore:async()=>authority,
     syncTriggerCoordinator:{request:async()=>{calls.push('coordinator:events0');await reconcile();}},
     window:{dispatchEvent:(event:{type:string})=>{events.push(event.type);}},CustomEvent:class{constructor(public type:string){}},
     permissionService:{isMasterTerminal:()=>true,shouldShowGlobalSales:()=>false},isLargeMasterSyncV3ReplacedCollection,
     isErpMasterPullCollection:()=>true,logSkippedNonMasterPull:()=>{},ERP_SUPPORTED_MASTER_COLLECTIONS:new Set(),
     apiSyncAdapter:{getMetadata:async()=>({version:1})},reportSyncErrorDiagnostic:()=>{},isPaymentMethodsMissingSyncError:()=>false,
-    db:{get:async()=>[]},console:{info(){},warn(){}},
+    db:(globalThis as any).__v3Manual.db,console:{info(){},warn(){}},
   };
   const Constructor=runInNewContext(ts.transpileModule('class Subject{'+actual+'}\nSubject;',{
     compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
   const instance=new Constructor();Object.assign(instance,{isDisabled:false,syncVersions:new Map(),lastBackgroundTerminalManifestSyncAt:0,
     isUsingConfigPushV2Primary:()=>primary,purgeSyncedHistoricalData:async()=>{},pullCatalog:async(name:string)=>{calls.push('legacy:'+name);},
     reconcileTerminalManifest:async(_config:any,options:any)=>{calls.push('manifest');const result=await manifest();if(v3&&kind==='ERP_ACTIVE'&&options.explicitV3Refresh)await instance.refreshV3Catalog();return result;},refreshErpPaymentMethods:async()=>{}});
-  return {instance,calls,events,helper,config:()=>config,identity:()=>identity,change:(patch:Partial<typeof identity>)=>{identity={...identity,...patch};},
+  return {instance,calls,events,helper,authority,config:()=>config,identity:()=>identity,change:(patch:Partial<typeof identity>)=>{identity={...identity,...patch};},
     onSave:(callback:typeof save)=>{save=callback;},onPrepare:(callback:typeof prepare)=>{prepare=callback;},
     onCoordinator:(callback:typeof reconcile)=>{reconcile=callback;},onManifest:(callback:typeof manifest)=>{manifest=callback;},
     corrupt:()=>{corruptReadback=true;}};
@@ -144,7 +149,7 @@ test('manual and config-push projection share session negotiation and retain one
   f.onPrepare(async()=>{preparing=true;await barrier;});
   const manual=f.instance.manualSyncAll();while(!preparing)await new Promise(resolve=>setImmediate(resolve));
   const identity=JSON.stringify(f.identity());
-  const push=f.helper.persistLargeMasterSyncV3ConfigPushCatalog(()=>{assert.equal(JSON.stringify(f.identity()),identity);});
+  const push=f.helper.persistLargeMasterSyncV3ConfigPushCatalog(()=>{assert.equal(JSON.stringify(f.identity()),identity);},f.authority);
   release();await Promise.all([manual,push]);
   assert.equal(f.calls.filter(call=>call==='refresh').length,1);
   assert.equal(f.config().taxes[0].id,'TX');assert.equal(f.config().terminals[0].config.scales[0].port,'USB');
