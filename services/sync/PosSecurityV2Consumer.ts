@@ -1,7 +1,7 @@
 import type { DatabaseAdapter } from '../db/DatabaseAdapter';
 import type { RoleDefinition, User } from '../../types';
 import { buildAuthoritativeErpSecuritySnapshot } from '../../utils/erpSecuritySnapshot';
-import { assertSameSecurityBinding, assertSecurityBinding, assertSecurityOffer, compareSecurityRevision, isRecord, sameSecurityValue, securityAnnouncement, securityFail, securityPartition, validateSecurityControl, validateSecurityEnvelope, validateSecurityReference, validateStoredSecurityReference, type SecurityBinding, type SecurityControl, type SecurityReference } from './PosSecurityV2Contract';
+import { assertSameSecurityBinding, assertSecurityBinding, assertSecurityOffer, canonicalSecurityJSON, compareSecurityRevision, isRecord, sameSecurityValue, securityAnnouncement, securityFail, securityPartition, validateSecurityControl, validateSecurityEnvelope, validateSecurityReference, validateStoredSecurityReference, type SecurityBinding, type SecurityControl, type SecurityReference } from './PosSecurityV2Contract';
 
 export const SECURITY_STATE_KIND = 'POS_SECURITY_V2_CHECKPOINT';
 export interface PosSecurityRecord {
@@ -22,7 +22,7 @@ export interface PosSecurityV2Transport {
   download(reference: SecurityReference, partition: string): Promise<unknown>;
 }
 export const securityScopeId = (binding: Pick<SecurityBinding, 'tenantId' | 'terminalId'>): string => `pos-security-state:${JSON.stringify([binding.tenantId, binding.terminalId])}`;
-const agreementKey = (binding: SecurityBinding, agreementId: string, digest: string): string => JSON.stringify([binding, agreementId, digest, 2]);
+const agreementKey = (binding: SecurityBinding, agreementId: string, digest: string): string => canonicalSecurityJSON([binding, agreementId, digest, 2]);
 export async function readPosSecurityRecords(adapter: DatabaseAdapter): Promise<PosSecurityRecord[]> {
   if (!adapter.readPosSecurityState) return securityFail('POS_SECURITY_DURABLE_READ_UNAVAILABLE');
   const rows = await adapter.readPosSecurityState();
@@ -135,7 +135,7 @@ export class PosSecurityV2Consumer {
   }
   async receiveReference(reference: unknown): Promise<'APPLIED' | 'DUPLICATE'> {
     const { binding, record } = await this.context();
-    if (!record) return securityFail('POS_SECURITY_NOT_ACTIVE');
+    if (!record || record.localBlock || record.control.negotiation.status !== 'ACTIVE' || record.control.selection.mode !== 'V2') return securityFail('POS_SECURITY_NOT_ACTIVE');
     const current = validateSecurityReference(await this.transport.currentReference(), binding, record.control);
     const candidate = validateSecurityReference(reference, binding, record.control);
     if (!sameSecurityValue(candidate, current)) securityFail('POS_SECURITY_REFERENCE_MISMATCH');

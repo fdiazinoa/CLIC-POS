@@ -71,7 +71,7 @@ test('complete v2 snapshot persists exact permissions, revocation, empty catalog
   const s = await setup(); try {
     await s.adapter.saveCollection('users', [{ id: 'cashier', pin: 'OLD', name: 'Old' }]);
     await s.consumer.refreshControl();
-    const data = await envelope(1, [role(), { id: 'ADMIN', permissions: ['ALL'], permission_keys: ['ALL'], permissionContractVersion: 2, isSystem: true }], [{ id: 'cashier', role_id: 'R' }]);
+    const data = await envelope(1, [role(), { id: 'ADMIN', permissions: ['ALL'], permission_keys: ['ALL'], permissionContractVersion: 2, isSystem: true }], [{ id: 'cashier', role_id: 'R' }], { bindingEpoch: 1, deviceId: B.deviceId, terminalId: B.terminalId, tenantId: B.tenantId });
     s.fixture.data = data; await s.consumer.applyCarrier(data);
     assert.deepEqual((await s.adapter.getCollection<RoleDefinition>('roles')).find(r => r.id === 'R')!.permissions, ['POS_RETURNS', 'custom_exact']);
     assert.equal((await s.adapter.getCollection<User>('users'))[0].pin, '');
@@ -154,7 +154,15 @@ test('floor survives loss, rebind, rollback and metadata resets without restorin
   const s = await setup(); try {
     await s.consumer.refreshControl(); await s.consumer.applyCarrier(s.fixture.data);
     const saved = structuredClone((await readPosSecurityRecords(s.adapter))[0]);
-    s.fixture.response = control('SUSPENDED', 4); await s.consumer.reportLoss('ROLLBACK');
+    s.fixture.response = control('SUSPENDED', 4);
+    let lookups = 0;
+    const disconnected = new PosSecurityV2Consumer(s.adapter, { ...s.transport,
+      capability: async () => { throw new Error('NETWORK_UNAVAILABLE'); },
+      currentReference: async () => { lookups++; return reference(s.fixture.data); } });
+    await assert.rejects(disconnected.reportLoss('ROLLBACK'), /NETWORK_UNAVAILABLE/);
+    await assert.rejects(disconnected.receiveReference(reference(s.fixture.data)), /NOT_ACTIVE/);
+    assert.equal(lookups, 0, 'local capability-loss fence rejects before reference lookup/download');
+    await s.consumer.refreshControl();
     assert.equal((await readReturnSecurityContext(s.adapter, [], [], async () => B)).mode, 'BLOCKED');
     await s.adapter.saveCollection('syncMetadata', []);
     await s.raw.saveCollection('syncMetadata', [saved]); // another legacy metadata writer cannot restore old checkpoint content
