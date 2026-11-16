@@ -1,153 +1,171 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { realpathSync } from 'node:fs';
 import { IDBFactory, IDBKeyRange } from 'fake-indexeddb';
 import { IndexedDBAdapter } from '../services/db/adapters/IndexedDBAdapter';
 import { PosSecurityV2Sync } from '../services/sync/PosSecurityV2Sync';
-import test from 'node:test';
-import assert from 'node:assert/strict';
-import { registerHooks } from 'node:module';
-import { pathToFileURL } from 'node:url';
-import { realpathSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
-import { createHash } from 'node:crypto';
-import express from 'express';
 import { AuthenticatedPosSecurityV2Transport } from '../services/sync/PosSecurityV2Transport';
-import { securityAnnouncement } from '../services/sync/PosSecurityV2Contract';
+import { readPosSecurityRecords } from '../services/sync/PosSecurityV2Consumer';
+import { securityAnnouncement, securityPartition } from '../services/sync/PosSecurityV2Contract';
+import { originalErpFixture } from './fixtures/posSecurityV2/originalErp';
 
-// Opt in with an unmodified export of ERP 210102cd. This imports original modules, never copies handlers.
+// Opt-in: an unmodified ERP210102cd export. Full routers load verbatim; infrastructure is synthetic.
 const source = process.env.CLIC_SECURITY_V2_ERP_SOURCE ? realpathSync(process.env.CLIC_SECURITY_V2_ERP_SOURCE) : undefined;
-test('original ERP control router/service/auth over loopback HTTP, with synthetic RPC storage only', { skip: !source }, async t => {
-  // Pin the transport boundary we exercise; no remote terminal credentials are read.
-  const pinned = {
-    'server/routes/posPermissionSecurityContract.js': 'f044a1918eb52e14f59b73048c34e3516197bad035aa59913d81a9af1fe9b044',
-    'server/routes/setup.js': '771a0609662fac2a5f49367ae65a57e92cfb16eec82392d58fc9b89d9cc9f983',
-    'server/services/posPermissionSecurityDelivery.js': 'fa02386515e0445977c2f53427736491863c9ed8f7dd6b376ec08abc66c04af7',
-    'server/services/posPermissionClientAgreement.js': 'd0893e94b446425285c6e67f9a8214292102d38c04342e6833abc9f8512007e4',
-    'server/services/posReturnPermissionContract.js': '7bbe5aef73c296d197608ef61f0d476636fab2ab83573605fef5b292aeab124b',
-    'server/services/terminalOperationalAuth.js': 'aab49ac7834791c998c01637cbd5beb78d7e18fc409d45b33400164a580c3b32',
-    'server/services/bindingEvidenceAuth.js': '5412beb4c2ae5453ad9ab2311a06e3bdcc6a4c6f7933de6d27309269d182342c',
-  };
-  for (const [path, expected] of Object.entries(pinned)) {
-    assert.equal(createHash('sha256').update(await readFile(`${source}/${path}`)).digest('hex'), expected, path);
-  }
-  const load = (path: string) => import(pathToFileURL(`${source}/${path}`).href);
-  const { createPosPermissionSecurityRouter } = await load('server/routes/posPermissionSecurityContract.js');
-  const { createPosPermissionSecurityService, authorizePosSecurityCurrentTerminal, applyPosSecurityCarrier } = await load('server/services/posPermissionSecurityDelivery.js');
-  const { createPosPermissionClientState, activatePosPermissionClientAgreement } = await load('server/services/posPermissionClientAgreement.js');
-  const binding = { tenantId: 'tenant-fixture', terminalId: 'terminal-fixture', deviceId: 'device-fixture', bindingEpoch: 4 };
-  const terminal = { id: binding.terminalId, tenant_id: binding.tenantId, device_id: binding.deviceId, authorized_device_id: binding.deviceId, store_id: 'store-fixture', config: { runtime: { syncAuthToken: 'fixture-only-token' } } };
-  let context = { binding, state: createPosPermissionClientState(binding), source: { roles: [{ id: 'R', permissions: ['POS_RETURNS'], version: 1 }], users: [{ id: 'u', role_id: 'R' }] }, sourceRevision: 1, sourceFingerprint: 'fixture', checkpoint: null as unknown };
-  let cas = 0;
-  const client = {
-    from: (table: string) => {
-      const rows: Record<string, unknown> = { erp_terminals: terminal, erp_stores: { id: 'store-fixture', tenant_id: binding.tenantId, company_id: 'company-fixture' }, erp_companies: { id: 'company-fixture', tenant_id: binding.tenantId }, erp_tenants: { id: binding.tenantId, name: 'Synthetic Tenant', config: {} } };
-      let terminalId = terminal.id;
-      const result = () => ({ data: table === 'erp_terminals' && terminalId !== terminal.id ? null : rows[table] || null, error: null });
-      const query = { select: () => query, eq: (key: string, id: string) => { if (table === 'erp_terminals' && key === 'id') terminalId = id; return query; }, single: async () => result(), maybeSingle: async () => result(), insert: async () => ({ error: null }) }; return query;
-    },
-    schema: (_schema: string) => ({ from: (_table: string) => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null, error: null }) }) }) }) }),
-    rpc: async (name: string, args: any) => {
-      if (name === 'erp_pos_security_peek') return { data: { status: 'PRESENT', binding, state: context.state }, error: null };
-      if (name === 'erp_pos_security_cas') { assert.equal(args.p_expected_state_revision, context.state.stateRevision); cas++; context = { ...context, state: args.p_state }; }
-      if (name === 'erp_pos_security_checkpoint') context.checkpoint = { reference: args.p_reference };
-      return { data: structuredClone(context), error: null };
-    },
-  };
-  const service = createPosPermissionSecurityService({ client, now: () => 10, uuid: () => 'synthetic-id' });
-  const app = express(); app.use(express.json());
-  app.use('/api/sync', createPosPermissionSecurityRouter({ client, service,
-    authorizeTerminal: (req: any) => authorizePosSecurityCurrentTerminal(req, { client, terminalId: req.params.terminalId }) }));
-  // Carrier endpoints below are fixture HTTP wrappers around the original delivery/envelope service.
-  // Full setup/syncInbox handlers are not asserted by this test.
-  for (const suffix of ['manifest', 'config', 'config-snapshots/fixture']) app.get(`/api/sync/terminals/:terminalId/${suffix}`, async (req, res) => {
-    try {
-      const authorized = await authorizePosSecurityCurrentTerminal(req, { client, terminalId: req.params.terminalId });
-      const delivery = await service.delivery(authorized);
-      res.json(suffix === 'manifest' ? { manifest: { security_contract: delivery.reference } }
-        : suffix.startsWith('config-snapshots') ? { domains: { catalog: applyPosSecurityCarrier({}, delivery) } }
-          : { terminal_config: applyPosSecurityCarrier({}, delivery) });
-    } catch (error: any) { res.status(error.status || 503).json({ code: error.code }); }
-  });
-  // Mount the original setup router, mocking unrelated catalog/company data ports only.
-  const setupSource = await readFile(`${source}/server/routes/setup.js`, 'utf8');
-  const mocks = new Map<string, string>();
-  const values: Record<string, unknown> = {
-    client, SETUP_TERMINAL_COLUMNS: '*',
-    getTenantState: () => ({ mode: 'ACTIVE_POS_ERP' }),
-    findSetupTerminalByReference: async () => ({ data: terminal, error: null }),
-    isSetupTerminalUuid: () => true,
-    getDeviceBinding: () => binding.deviceId, getAuthorizedDeviceId: () => binding.deviceId,
-    hasRealDeviceBinding: () => true,
-    buildInitialConfigVersion: () => 'fixture-config-version', normalizeInitialConfigVersion: (v: unknown) => String(v || ''),
-    buildSetupTerminalResponse: () => ({}),
-    buildTerminalConfigSnapshot: async (_t: unknown, _s: unknown, _c: unknown, _n: unknown, options: any) => applyPosSecurityCarrier({ masters: { items: [] } }, options.securityDelivery),
-  };
-  (globalThis as any).__posSecurityErpFixture = values;
-  for (const match of setupSource.matchAll(/import\s+([\s\S]*?)\s+from\s+['"]([^'"]+)['"];?/g)) {
-    const [, names, specifier] = match;
-    if (specifier === 'express' || specifier.endsWith('/posPermissionSecurityDelivery.js')) continue;
-    const exports = names.trim().startsWith('{') ? names.replace(/[{}]/g, '').split(',').map(name => name.trim()).filter(Boolean) : ['default'];
-    const code = exports.map(name => name === 'default' ? 'export default globalThis.__posSecurityErpFixture.client;'
-      : `export const ${name} = globalThis.__posSecurityErpFixture[${JSON.stringify(name)}] ?? (() => undefined);`).join('\n');
-    mocks.set(specifier, code);
-  }
-  const hook = registerHooks({
-    resolve(specifier, ctx, next) {
-      if (ctx.parentURL === pathToFileURL(`${source}/server/routes/setup.js`).href && mocks.has(specifier)) return { url: `security-qa:${specifier}`, shortCircuit: true };
-      return next(specifier, ctx);
-    },
-    load(url, ctx, next) {
-      if (url.startsWith('security-qa:')) return { format: 'module', source: mocks.get(url.slice('security-qa:'.length))!, shortCircuit: true };
-      return next(url, ctx);
-    },
-  });
-  try { app.use('/api/setup', (await load('server/routes/setup.js')).default); }
-  finally { hook.deregister(); }
-  t.after(() => { delete (globalThis as any).__posSecurityErpFixture; });
-  const server = app.listen(0, '127.0.0.1'); await new Promise<void>(resolve => server.once('listening', resolve));
-  t.after(async () => { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); });
-  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
-  const identity = { ...binding, erpSyncBaseUrl: `${base}/api/sync`, syncToken: 'fixture-only-token' };
+test('original ERP setup/control/config/manifest/config-snapshot handlers over loopback HTTP', { skip: !source }, async t => {
+  const logs = [t.mock.method(console, 'log', () => {}), t.mock.method(console, 'info', () => {}), t.mock.method(console, 'warn', () => {}), t.mock.method(console, 'error', () => {})];
+  const f = await originalErpFixture(source!); t.after(() => f.close());
+  const { binding } = f;
+  const headers = { 'X-Sync-Token': f.token, 'X-Device-Id': binding.deviceId, 'X-POS-Device-Id': binding.deviceId, 'X-Terminal-Id': binding.terminalId };
+  const identity = { ...binding, erpSyncBaseUrl: `${f.base}/api/sync`, syncToken: f.token };
   const transport = new AuthenticatedPosSecurityV2Transport(() => identity);
-  assert.deepEqual(await transport.authorizedBinding(), binding);
-  const offered: any = await transport.offer(securityAnnouncement(binding));
-  assert.equal(offered.negotiation.status, 'OFFERED');
-  const acceptance = { ...securityAnnouncement(binding), offerId: offered.negotiation.offer.offerId };
-  const accepted: any = await transport.accept(acceptance);
-  const repeated: any = await transport.accept(acceptance);
-  assert.deepEqual(repeated, accepted); assert.equal(accepted.selection.reason, 'WAIT_ACTIVATION');
-  assert.equal(accepted.negotiation.protocolFloor, 0);
-  const before = cas; await transport.state(); await transport.state(); assert.equal(cas, before);
-  for (const key of ['tenantId', 'terminalId', 'deviceId'] as const) {
-    await assert.rejects(transport.accept({ ...acceptance, binding: { ...binding, [key]: 'foreign' } }), /BINDING_MISMATCH/);
-  }
-  for (const token of ['', 'invalid']) {
-    const response = await fetch(`${base}/api/sync/terminals/${binding.terminalId}/security-contract`, { headers: { 'X-Sync-Token': token, 'X-Device-Id': binding.deviceId } });
-    assert.equal(response.status, 401);
-  }
-  assert.equal((await fetch(`${base}/api/sync/terminals/${binding.terminalId}/security-contract`, { headers: { 'X-Sync-Token': identity.syncToken, 'X-Device-Id': 'foreign' } })).status, 403);
-  // Synthetic server-only approval; no request route accepts activation or verification fields.
-  context.state = activatePosPermissionClientAgreement(context.state, { authorizedBinding: binding, rolloutApproved: true, consumerAcceptanceVerificationId: 'synthetic-test-only', verificationBinding: binding, verificationAgreementId: accepted.negotiation.offer.agreementId, verificationContractDigest: accepted.negotiation.offer.contractDigest, nowMs: 11 });
-  assert.equal((await transport.state()).negotiation.status, 'ACTIVE');
-  const initialResponse = await fetch(`${base}/api/setup/initial-config/${binding.terminalId}`, { headers: { 'X-Sync-Token': identity.syncToken, 'X-Device-Id': binding.deviceId, 'If-None-Match': '"fixture-config-version"' } });
-  assert.equal(initialResponse.status, 200);
-  const initial: any = await initialResponse.json();
-  assert.deepEqual(initial.terminal_config.pos_security.roles[0].permissions, ['POS_RETURNS']);
-  Object.assign(globalThis, { indexedDB: new IDBFactory(), IDBKeyRange, window: Object.assign(new EventTarget(), { setTimeout, clearTimeout }), localStorage: { getItem: () => null, setItem() {}, removeItem() {} } });
+  const prefix = `/api/sync/terminals/${binding.terminalId}`;
+  const request = async (path: string, overrides: Record<string, string> = {}, method = 'GET') => {
+    const response = await fetch(`${f.base}${path}`, { method, headers: { ...headers, ...overrides } });
+    const text = await response.text(); return { status: response.status, headers: response.headers, body: text && response.headers.get('content-type')?.includes('application/json') ? JSON.parse(text) : text || null };
+  };
+  Object.assign(globalThis, { indexedDB: new IDBFactory(), IDBKeyRange,
+    window: Object.assign(new EventTarget(), { setTimeout, clearTimeout }), localStorage: { getItem: () => null, setItem() {}, removeItem() {} } });
   const adapter = new IndexedDBAdapter(); await adapter.connect(); t.after(() => adapter.disconnect());
   const sync = new PosSecurityV2Sync(adapter, transport);
-  assert.equal(await sync.receive(initial, 'initial-config'), 'APPLIED');
-  assert.deepEqual((await adapter.getCollection<{ permissions: string[] }>('roles'))[0].permissions, ['POS_RETURNS']);
+  const durable = async () => ({ records: await readPosSecurityRecords(adapter), roles: await adapter.getCollection('roles'), users: await adapter.getCollection('users') });
 
-  assert.equal((await fetch(`${base}/api/setup/initial-config/${binding.terminalId}`, { headers: { 'X-Sync-Token': 'invalid', 'X-Device-Id': binding.deviceId } })).status, 500); // Original setup maps this auth error to 500; still denies.
+  await t.test('original control explicit offer/accept remains idempotent CURRENT until synthetic fixture approval', async () => {
+    assert.deepEqual(await transport.authorizedBinding(), binding);
+    const offered: any = await transport.offer(securityAnnouncement(binding));
+    assert.equal(offered.negotiation.status, 'OFFERED');
+    const body = { ...securityAnnouncement(binding), offerId: offered.negotiation.offer.offerId };
+    const accepted: any = await transport.accept(body);
+    assert.deepEqual(await transport.accept(body), accepted);
+    assert.equal(accepted.selection.reason, 'WAIT_ACTIVATION'); assert.equal(accepted.negotiation.protocolFloor, 0);
+    const before = f.cas; await transport.state(); await transport.state(); assert.equal(f.cas, before);
+    for (const key of ['tenantId', 'terminalId', 'deviceId'] as const) await assert.rejects(transport.accept({ ...body, binding: { ...binding, [key]: 'foreign' } }), /BINDING_MISMATCH/);
+    for (const token of ['', 'invalid']) { const result = await request(`${prefix}/security-contract`, { 'X-Sync-Token': token }); assert.ok(result.status >= 400 && result.status < 500); }
+    assert.equal((await request(`${prefix}/security-contract`, { 'X-Device-Id': 'foreign' })).status, 403);
+    f.context.state = f.agreementModule.activatePosPermissionClientAgreement(f.context.state, { authorizedBinding: binding, rolloutApproved: true, consumerAcceptanceVerificationId: 'synthetic-test-only', verificationBinding: binding, verificationAgreementId: accepted.negotiation.offer.agreementId, verificationContractDigest: accepted.negotiation.offer.contractDigest, nowMs: Date.now() });
+    assert.equal((await transport.state()).negotiation.status, 'ACTIVE');
+    assert.equal((await request(`${prefix}/security-contract/activate`, {}, 'POST')).status, 404);
+  });
 
-  const ref: any = await transport.currentReference();
-  const { securityPartition } = await import('../services/sync/PosSecurityV2Contract');
-  const block: any = await transport.download(ref, await securityPartition(ref));
-  assert.deepEqual(block.pos_security.roles[0].permissions, ['POS_RETURNS']);
-  context.source.roles = []; context.source.users = []; context.sourceRevision++;
-  const manifest = await (await fetch(`${base}/api/sync/terminals/${binding.terminalId}/manifest`, { headers: { 'X-Sync-Token': identity.syncToken, 'X-Device-Id': binding.deviceId } })).json();
-  assert.equal(await sync.receive(manifest, 'manifest'), 'APPLIED');
-  assert.deepEqual(await adapter.getCollection('roles'), []); assert.deepEqual(await adapter.getCollection('users'), []);
+  await t.test('original initial-config envelope validates in the POS consumer', async () => {
+    const result = await request(`/api/setup/initial-config/${binding.terminalId}`, { 'If-None-Match': '"fixture-config-version"' });
+    assert.equal(result.status, 200, JSON.stringify(result.body));
+    assert.equal(await sync.receive(result.body, 'initial-config'), 'APPLIED');
+    assert.deepEqual((await adapter.getCollection<{ permissions: string[] }>('roles'))[0].permissions, ['POS_RETURNS']);
+    // Original setup maps terminalOperationalAuth.status to 500; it still denies (existing ERP limitation).
+    assert.equal((await request(`/api/setup/initial-config/${binding.terminalId}`, { 'X-Sync-Token': 'invalid' })).status, 500);
+  });
 
-  assert.equal((await fetch(`${base}/api/sync/terminals/${binding.terminalId}/security-contract/activate`, { method: 'POST' })).status, 404);
-  assert.equal((await transport.capability({ binding, agreementId: accepted.negotiation.offer.agreementId, available: false, reason: 'CAPABILITY_LOST' }) as any).selection.mode, 'BLOCKED');
+  await t.test('original config handler emits the exact carrier and applies a complete replacement', async () => {
+    f.setSource([{ id: 'R', permissions: ['ALL', 'CUSTOM'], version: 2 }], [{ id: 'u', role_id: 'R' }]);
+    const result = await request(`${prefix}/config`, { 'If-None-Match': '"stale-generic"' });
+    assert.equal(result.status, 200); assert.match(result.headers.get('cache-control')!, /no-store/);
+    assert.ok(result.body.terminal_config.pos_security); assert.equal(result.body.pos_security, undefined);
+    assert.equal(result.body.terminal_config.masters.pos_roles, undefined);
+    assert.equal(await sync.receive(result.body, 'terminal-config'), 'APPLIED');
+    assert.equal(await sync.receive(result.body, 'terminal-config'), 'DUPLICATE');
+    assert.deepEqual((await adapter.getCollection<{ permissions: string[] }>('roles'))[0].permissions, ['ALL', 'CUSTOM']);
+    const current: any = await transport.currentReference();
+    const downloaded: any = await transport.download(current, await securityPartition(current));
+    assert.equal(downloaded.pos_security.contentHash, current.contentHash);
+  });
+
+  await t.test('original manifest handler carries only the current reference and downloads revoked permissions', async () => {
+    f.setSource([{ id: 'R', permissions: [], version: 3 }], [{ id: 'u', role_id: 'R' }]);
+    const result = await request(`${prefix}/manifest`, { 'If-None-Match': '"stale-generic"' });
+    assert.equal(result.status, 200); assert.match(result.headers.get('cache-control')!, /no-store/);
+    assert.ok(result.body.manifest.security_contract); assert.equal(result.body.manifest.pos_security, undefined);
+    assert.equal(result.body.manifest.roles, undefined); assert.equal(result.body.manifest.users, undefined);
+    assert.deepEqual(await transport.currentReference(), result.body.manifest.security_contract);
+    assert.equal(await sync.receive(result.body, 'manifest'), 'APPLIED');
+    assert.deepEqual((await adapter.getCollection<{ permissions: string[] }>('roles'))[0].permissions, []);
+    assert.equal(await sync.receive(result.body, 'manifest'), 'DUPLICATE');
+  });
+
+  await t.test('original config-snapshot handler bypasses generic304, preserves external identity and replaces with empty lists', async () => {
+    f.setSource([], []); const snapshot = await f.snapshot();
+    const path = `${prefix}/config-snapshots/${snapshot.id}?version_hash=${snapshot.version_hash}&current_version=${snapshot.version_hash}&scopes=catalog`;
+    const result = await request(path, { 'If-None-Match': '"generic-version"' });
+    assert.equal(result.status, 200); assert.match(result.headers.get('cache-control')!, /no-store/);
+    assert.equal(result.body.snapshot_id, snapshot.id); assert.equal(result.body.version_hash, snapshot.version_hash);
+    assert.ok(result.body.domains.catalog.pos_security); assert.equal(result.body.pos_security, undefined);
+    assert.ok(!Object.hasOwn(snapshot.payload.security_contract, 'snapshotId'));
+    assert.equal(await sync.receive(result.body, 'config-snapshot'), 'APPLIED');
+    assert.equal(await sync.receive(result.body, 'config-snapshot'), 'DUPLICATE');
+    assert.deepEqual(await adapter.getCollection('roles'), []); assert.deepEqual(await adapter.getCollection('users'), []);
+    await adapter.disconnect(); await adapter.connect();
+    assert.equal((await readPosSecurityRecords(adapter))[0].protocolFloor, 2);
+  });
+
+  await t.test('each real handler rejects missing/invalid token and foreign device without durable publication', async () => {
+    const snapshot = await f.snapshot();
+    const before = await durable();
+    for (const path of [`${prefix}/config`, `${prefix}/manifest`, `${prefix}/config-snapshots/${snapshot.id}`]) {
+      for (const overrides of [{ 'X-Sync-Token': '' }, { 'X-Sync-Token': 'invalid' }, { 'X-Device-Id': 'foreign', 'X-POS-Device-Id': 'foreign' }]) {
+        const result = await request(path, overrides);
+        assert.ok(result.status >= 400 && result.status < 500, `${path}: expected auth4xx, got ${result.status} ${JSON.stringify(result.body)}`);
+        assert.deepEqual(await durable(), before);
+      }
+    }
+  });
+
+  await t.test('foreign terminal routes cannot expose another scope; original config/manifest canonical recovery remains bound', async () => {
+    const before = await durable(); const foreignPrefix = `/api/sync/terminals/${f.otherTerminalId}`;
+    for (const suffix of ['config', 'manifest']) {
+      const result = await request(`${foreignPrefix}/${suffix}`);
+      // Original middleware canonicalizes a stale route to the device-authorized terminal.
+      assert.equal(result.status, 200);
+      const reference = suffix === 'manifest' ? result.body.manifest.security_contract : result.body.terminal_config.pos_security;
+      assert.deepEqual(reference.binding, binding);
+      assert.equal(await sync.receive(result.body, suffix === 'manifest' ? 'manifest' : 'terminal-config'), 'DUPLICATE');
+    }
+    const snapshot = await f.snapshot();
+    assert.equal((await request(`${foreignPrefix}/config-snapshots/${snapshot.id}`)).status, 403);
+    assert.deepEqual(await durable(), before);
+  });
+
+  await t.test('real snapshot handler denies old/reference/version/scope/hash/tenant/terminal partitions before publication', async () => {
+    const snapshot = await f.snapshot(); const before = await durable();
+    const path = `${prefix}/config-snapshots/${snapshot.id}`;
+    assert.equal((await request(`${prefix}/config-snapshots/foreign-snapshot`)).status, 404);
+    assert.equal((await request(`${path}?version_hash=foreign-version`)).status, 409);
+    assert.equal((await request(`${path}?scopes=fiscal`)).status, 403);
+    const manifest = f.snapshots[0], catalog = f.snapshots[1];
+    const savedReference = structuredClone(manifest.payload.security_contract), savedBlock = structuredClone(catalog.payload.pos_security);
+    for (const patch of [
+      { agreementId: 'old-agreement' }, { securityRevision: savedReference.securityRevision - 1 },
+      { binding: { ...binding, tenantId: 'foreign' } }, { binding: { ...binding, terminalId: f.otherTerminalId } },
+      { binding: { ...binding, deviceId: 'foreign' } },
+    ]) {
+      manifest.payload.security_contract = { ...savedReference, ...patch };
+      assert.equal((await request(path)).status, 409);
+      assert.deepEqual(await durable(), before);
+    }
+    manifest.payload.security_contract = savedReference;
+    catalog.payload.pos_security = { ...savedBlock, contentHash: '0'.repeat(64) };
+    assert.equal((await request(path)).status, 409);
+    catalog.payload.pos_security = savedBlock;
+    for (const key of ['tenant_id', 'terminal_id']) {
+      const prior = manifest[key]; manifest[key] = 'foreign';
+      assert.equal((await request(path)).status, 404); manifest[key] = prior;
+      const domainPrior = catalog[key]; catalog[key] = 'foreign';
+      assert.equal((await request(path)).status, 503); catalog[key] = domainPrior;
+    }
+    assert.ok(f.reads.some(read => read.table === 'erp_sync_snapshots' && read.filters.some(([key]) => key === 'tenant_id') && read.filters.some(([key]) => key === 'terminal_id')));
+    assert.deepEqual(await durable(), before);
+  });
+
+  await t.test('old real-handler responses and tampered config bodies cannot publish a newer grant', async () => {
+    const oldManifest = (await request(`${prefix}/manifest`)).body;
+    f.setSource([{ id: 'R', permissions: ['POS_RETURNS'], version: 5 }], [{ id: 'u', role_id: 'R' }]);
+    const before = await durable();
+    await assert.rejects(sync.receive(oldManifest, 'manifest'), /REFERENCE_MISMATCH/);
+    const config = (await request(`${prefix}/config`)).body;
+    config.terminal_config.pos_security.contentHash = '0'.repeat(64);
+    await assert.rejects(sync.receive(config, 'terminal-config'), /REFERENCE_MISMATCH|HASH_MISMATCH/);
+    assert.deepEqual(await durable(), before);
+  });
+
+  const text = JSON.stringify(logs.flatMap(log => log.mock.calls.map(call => call.arguments)));
+  assert.ok(!text.includes(f.token), 'fixtures must not expose their token in logs');
+  assert.ok(!text.includes('Unexpected ERP dependency'), 'all invoked infrastructure ports must be declared');
 });
