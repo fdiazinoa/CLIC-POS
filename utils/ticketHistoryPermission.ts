@@ -11,4 +11,3 @@ export const canViewTicketHistory=(user:User|null|undefined,roles:readonly RoleD
  hasTicketRolePermission(user,roles,'POS_VIEW_TICKET_HISTORY');
 export const canReprintTicketHistory=(user:User|null|undefined,roles:readonly RoleDefinition[]):boolean=>
  canViewTicketHistory(user,roles)&&hasTicketRolePermission(user,roles,'POS_REPRINT_RECEIPT');
-
