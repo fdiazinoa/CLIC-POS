@@ -8983,17 +8983,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      { idle: 'bg-sky-100 border-sky-200 text-sky-800 hover:bg-sky-200', active: 'bg-sky-600 border-sky-600 text-white shadow-sky-200' },
                      { idle: 'bg-amber-100 border-amber-200 text-amber-900 hover:bg-amber-200', active: 'bg-amber-500 border-amber-500 text-slate-950 shadow-amber-200' },
                   ][idx % 6];
-                  const configuredStyle = configuredColor ? {
+                  const configuredStyle = !isCompactHandheld && configuredColor ? {
                      backgroundColor: isActiveCategory ? configuredColor : `${configuredColor}1F`,
                      borderColor: configuredColor,
                      color: isActiveCategory ? readableTextColor(configuredColor) : configuredColor,
                   } : undefined;
-                  const categoryGridPosition = resolvePosCategoryGridPosition(idx);
+                  const categoryGridPosition = isCompactHandheld ? {} : resolvePosCategoryGridPosition(idx);
                   return (
                   <button
                      key={categoryOption.id || `cat-${idx}`}
                      onClick={() => setCategoryFilter(categoryOption.id)}
-                     style={isCompactHandheld ? undefined : { ...configuredStyle, ...categoryGridPosition }}
+                     style={{ ...configuredStyle, ...categoryGridPosition }}
                      aria-pressed={isActiveCategory}
                      className={`h-[42px] md:h-[48px] w-full min-w-0 px-2 md:px-3 rounded-xl text-[11px] md:text-[12px] leading-tight font-black uppercase tracking-[0.08em] transition-all whitespace-normal text-center border shadow-sm active:scale-95 ${isActiveCategory
                         ? `${configuredColor ? '' : categoryTone.active} shadow-lg -translate-y-0.5`
