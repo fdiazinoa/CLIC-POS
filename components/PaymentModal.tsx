@@ -1492,12 +1492,12 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ compactHandheld = fa
       return (
          <>
             {gatewayProgressOverlay}
-            <div className="fixed inset-0 z-[60] flex items-center justify-center bg-gray-900/90 backdrop-blur-md p-4">
-               <div className="bg-white rounded-[2.5rem] w-full max-w-lg p-8 shadow-2xl flex flex-col items-center text-center relative">
+            <div data-handheld-payment={compactHandheld ? 'true' : undefined} className="payment-success-overlay fixed inset-0 z-[60] flex items-center justify-center bg-gray-900/90 backdrop-blur-md p-4">
+               <div className="payment-success-card bg-white rounded-[2.5rem] w-full max-w-lg p-8 shadow-2xl flex flex-col items-center text-center relative">
 
                {/* Email Input Modal Overlay */}
                {showEmailInput && (
-                  <div className="absolute inset-0 z-10 bg-white/95 backdrop-blur-sm rounded-[2.5rem] flex flex-col items-center justify-center p-8 animate-in fade-in">
+                  <div className="payment-success-email absolute inset-0 z-10 bg-white/95 backdrop-blur-sm rounded-[2.5rem] flex flex-col items-center justify-center p-8 animate-in fade-in">
                      <h3 className="text-xl font-black text-gray-800 mb-4">Enviar Ticket por Correo</h3>
                      <input
                         autoFocus
@@ -1527,11 +1527,11 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ compactHandheld = fa
                   </div>
                )}
 
-               <div className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mb-6">
+               <div className="payment-success-icon w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mb-6">
                   <CheckCircle2 size={40} className="text-green-600" />
                </div>
-               <h2 className="text-3xl font-black text-gray-900 mb-2">{isInstallmentPayment ? 'Cuota registrada' : '¡Venta Exitosa!'}</h2>
-               <div className="w-full bg-gray-50 rounded-2xl p-6 mb-8 border border-gray-100">
+               <h2 className="payment-success-title text-3xl font-black text-gray-900 mb-2">{isInstallmentPayment ? 'Cuota registrada' : '¡Venta Exitosa!'}</h2>
+               <div className="payment-success-summary w-full bg-gray-50 rounded-2xl p-6 mb-8 border border-gray-100">
                   <div className="flex items-end justify-between gap-4 mb-2">
                      <span className="text-lg md:text-xl font-black text-gray-700">Recibido</span>
                      <span className="text-3xl md:text-4xl font-black text-gray-900">
@@ -1575,7 +1575,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ compactHandheld = fa
                      </div>
                   )}
                </div>
-               <div className="w-full space-y-3">
+               <div className="payment-success-actions w-full space-y-3">
                   {successNotice && (
                      <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-left text-xs font-bold text-amber-700">
                         {successNotice}
