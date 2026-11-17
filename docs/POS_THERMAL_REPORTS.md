@@ -1,6 +1,6 @@
 # Informes POS en ticket térmico
 
-Acceso: **Ajustes → Finanzas y Legal → Informes POS**. Requiere
+Acceso: **Ajustes → Informes POS**, junto a **Sistema y Auditoría**. Requiere
 `REPORTS_VIEW_SALES`; el historial y la reimpresión Z requieren además
 `POS_CLOSE_Z`. Consultar e imprimir no ejecuta cierres ni modifica documentos.
 
