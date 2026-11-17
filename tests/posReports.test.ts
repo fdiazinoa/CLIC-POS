@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { BusinessConfig, CashMovement, Transaction, ZReport } from '../types';
-import { buildPosReportText, filterPosReportSource, localDate, validReportDates } from '../utils/posReports';
+import { buildPosReportText, filterPosReportSource, localDate, validReportDates, wrapPosReportText } from '../utils/posReports';
 import { buildEscPosVoucherPayload } from '../services/printer/EscPosFormatter';
 
 const config = { companyInfo: { name: 'Mi tienda' }, currencies: [{ code: 'DOP', isBase: true }],
@@ -95,4 +95,52 @@ test('different article formats are ranked separately and product limit is appli
   assert.match(text, /Cafe \(Paq\)/);
   assert.match(text, /Cant: 3 {2}DOP 900.00/);
   assert.match(text, /Mostrados: 1 de 2/);
+});
+
+test('cashier sales retain original refunded sales, subtract credit notes once and keep same-name users separate', () => {
+  const text = reportText('CASHIERS', [sale({ userId: 'a', userName: 'Ana', status: 'REFUNDED' }),
+    sale({ id: 'nc', userId: 'a', userName: 'Ana', documentType: 'REFUND', total: -40 }),
+    sale({ id: 'b', userId: 'b', userName: 'Ana', total: 200 }),
+    sale({ id: 'c', userId: 'c', userName: 'Luis', currency: 'USD', total: 5 })]);
+  assert.match(text, /Venta neta: DOP 60.00/);
+  assert.match(text, /Ticket promedio: DOP 100.00/);
+  assert.match(text, /Venta neta: DOP 200.00/);
+  assert.match(text, /TOTAL NETO: DOP 260.00/);
+  assert.match(text, /TOTAL NETO: USD 5.00/);
+  assert.equal(text.match(/\nAna\n/g)?.length, 2);
+});
+test('hourly report sorts local hours, aggregates days and subtracts returns at their recorded hour', () => {
+  const text = reportText('HOURS', [sale({ date: '2026-11-17T23:59:00' }),
+    sale({ id: 'midnight', date: '2026-11-17T00:00:00', total: 60 }),
+    sale({ id: 'nextday', date: '2026-11-18T00:30:00', total: 50 }),
+    sale({ id: 'nc', date: '2026-11-17T00:59:00', documentType: 'REFUND', total: 10 })]);
+  assert.ok(text.indexOf('00:00 - 00:59') < text.indexOf('23:00 - 23:59'));
+  assert.match(text, /Tickets de venta: 2\nVentas: DOP 110.00\nDevoluciones \(1\): DOP 10.00\nVenta neta: DOP 100.00/);
+  assert.match(text, /TOTAL NETO: DOP 200.00/);
+});
+test('adjustments show global and line discounts, ignore price overrides and report only credit documents as returns', () => {
+  const text = reportText('ADJUSTMENTS', [sale({ status: 'REFUNDED', displayId: 'T-001', authorizedByName: 'Supervisor', items: [
+    { id: 'a', name: 'Cafe', price: 50, originalPrice: 60, quantity: 2 },
+    { id: 'b', name: 'Ajuste', price: 50, originalPrice: 100, quantity: 1, adjustmentSource: 'MANUAL_PRICE_OVERRIDE' },
+  ] } as Partial<Transaction>),
+    sale({ id: 'nc', displayId: 'NC-001', documentType: 'REFUND', total: -40, refundReason: 'Producto incorrecto', affectedInvoiceNumber: 'T-001' })]);
+  assert.match(text, /Tickets con descuento: 1/);
+  assert.match(text, /Descuentos globales: DOP 10.00/);
+  assert.match(text, /Descuentos en lineas: DOP 20.00/);
+  assert.match(text, /Total descuentos: DOP 30.00/);
+  assert.match(text, /Devoluciones \(1\): DOP 40.00/);
+  assert.match(text, /Autorizo: Supervisor/);
+  assert.match(text, /Origen: T-001\nMotivo: Producto incorrecto/);
+});
+test('new reports explicitly describe empty periods', () => {
+  for (const kind of ['CASHIERS', 'HOURS', 'ADJUSTMENTS'] as const) assert.match(reportText(kind, []), /Sin registros en el periodo/);
+});
+
+
+test('ticket preview wraps at 32 columns, preserves words and splits long identifiers', () => {
+  const text = wrapPosReportText('Ventas tras descuentos: DOP 100.00\n\n' + 'X'.repeat(70));
+  assert.ok(text.split('\n').every(line => line.length <= 32));
+  assert.match(text, /Ventas tras descuentos: DOP\n100.00/);
+  assert.ok(text.includes('\n\n'));
+  assert.equal(wrapPosReportText('Texto corto'), 'Texto corto');
 });

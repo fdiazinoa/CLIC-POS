@@ -1,11 +1,13 @@
 import type { BusinessConfig, CashMovement, Transaction, ZReport } from '../types';
+import { resolveLineDiscountPresentation } from './lineDiscountPresentation';
 import { calculateZReportStats } from './analytics';
 import { buildZReportPaymentMethodSummary } from './zReportPaymentSummary';
 import { resolveTerminalDisplayName } from './transactionHistoryPresentation';
 
-export type PosReportKind = 'SALES' | 'PAYMENTS' | 'PRODUCTS' | 'CASH' | 'Z_HISTORY';
+export type PosReportKind = 'SALES' | 'PAYMENTS' | 'PRODUCTS' | 'CASHIERS' | 'HOURS' | 'ADJUSTMENTS' | 'CASH' | 'Z_HISTORY';
 export const POS_REPORT_NAMES: Record<PosReportKind, string> = {
   SALES: 'Resumen de ventas', PAYMENTS: 'Formas de pago', PRODUCTS: 'Productos vendidos',
+  CASHIERS: 'Ventas por cajero', HOURS: 'Ventas por hora', ADJUSTMENTS: 'Descuentos y devoluciones',
   CASH: 'Movimientos de efectivo', Z_HISTORY: 'Historial de cierres Z',
 };
 export interface PosReportFilters { start: string; end: string; terminalId: string; productLimit: number }
@@ -103,6 +105,63 @@ export const buildPosReportText = (
       lines.push(`Mostrados: ${Math.min(filters.productLimit || ranked.length, ranked.length)} de ${ranked.length}`);
     }
     lines.push('Cantidades netas de devoluciones.', 'Importe a precio registrado de linea;', 'sin prorratear descuento global.');
+  } else if (kind === 'CASHIERS' || kind === 'HOURS') {
+    for (const [currency, transactions] of grouped) {
+      const buckets = new Map<string, { label: string; tickets: number; sales: number; returns: number; returnCount: number }>();
+      for (const tx of transactions) {
+        const hour = new Date(tx.date).getHours();
+        const key = kind === 'CASHIERS' ? (tx.userId || tx.userName || 'unknown') : String(hour).padStart(2, '0');
+        const label = kind === 'CASHIERS' ? (tx.userName || 'Sin cajero registrado') : `${key}:00 - ${key}:59`;
+        const row = buckets.get(key) || { label, tickets: 0, sales: 0, returns: 0, returnCount: 0 };
+        if (refund(tx)) { row.returns += Math.abs(number(tx.total)); row.returnCount += 1; }
+        else { row.sales += number(tx.total); row.tickets += 1; }
+        buckets.set(key, row);
+      }
+      lines.push('', currency);
+      const sorted = [...buckets.entries()].sort(([a, rowA], [b, rowB]) => kind === 'HOURS' ? a.localeCompare(b) : rowA.label.localeCompare(rowB.label));
+      for (const [, row] of sorted) {
+        lines.push('', row.label, `Tickets de venta: ${row.tickets}`, `Ventas: ${money(row.sales, currency)}`,
+          `Devoluciones (${row.returnCount}): ${money(row.returns, currency)}`, `Venta neta: ${money(row.sales - row.returns, currency)}`);
+        if (kind === 'CASHIERS') lines.push(`Ticket promedio: ${money(row.tickets ? row.sales / row.tickets : 0, currency)}`);
+      }
+      const stats = calculateZReportStats(transactions);
+      lines.push('', `TOTAL NETO: ${money(stats.netSales, currency)}`);
+    }
+    lines.push(kind === 'HOURS' ? 'Horas locales acumuladas del periodo.' : 'Cajero que registro cada documento.',
+      'La nota de credito descuenta la', 'devolucion; no el estado de la venta.');
+  } else if (kind === 'ADJUSTMENTS') {
+    for (const [currency, transactions] of grouped) {
+      let globalDiscounts = 0;
+      let lineDiscounts = 0;
+      let returns = 0;
+      let discountCount = 0;
+      let returnCount = 0;
+      const details: string[] = [];
+      for (const tx of transactions) {
+        const reference = tx.displayId || tx.id;
+        const cashier = tx.userName || 'Sin cajero registrado';
+        if (refund(tx)) {
+          returns += Math.abs(number(tx.total)); returnCount += 1;
+          details.push('', `DEVOLUCION ${reference}`, new Date(tx.date).toLocaleString(), cashier,
+            `Importe: ${money(Math.abs(number(tx.total)), currency)}`,
+            `Origen: ${tx.affectedInvoiceNumber || tx.originalTransactionId || tx.original_transaction_id || 'No registrado'}`,
+            `Motivo: ${tx.refundReason || 'No registrado'}`);
+        } else {
+          const global = Math.max(0, number(tx.discountAmount));
+          const line = (tx.items || []).reduce((sum, item) => sum + resolveLineDiscountPresentation(item).discountAmount, 0);
+          if (!global && !line) continue;
+          globalDiscounts += global; lineDiscounts += line; discountCount += 1;
+          details.push('', `DESCUENTO ${reference}`, new Date(tx.date).toLocaleString(), cashier,
+            `Global: ${money(global, currency)}`, `En lineas: ${money(line, currency)}`);
+          if (tx.authorizedByName) details.push(`Autorizo: ${tx.authorizedByName}`);
+        }
+      }
+      lines.push('', currency, `Tickets con descuento: ${discountCount}`, `Descuentos globales: ${money(globalDiscounts, currency)}`,
+        `Descuentos en lineas: ${money(lineDiscounts, currency)}`, `Total descuentos: ${money(globalDiscounts + lineDiscounts, currency)}`,
+        `Devoluciones (${returnCount}): ${money(returns, currency)}`, ...details);
+      if (!discountCount && !returnCount) lines.push('Sin descuentos ni devoluciones.');
+    }
+    lines.push('Descuentos otorgados en ventas;', 'ya aplicados, no se restan otra vez.');
   } else if (kind === 'CASH') {
     const totals = new Map<string, { incoming: number; outgoing: number }>();
     for (const movement of [...source.movements].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())) {
@@ -120,3 +179,17 @@ export const buildPosReportText = (
   if ((kind === 'CASH' ? source.movements.length : source.transactions.length) === 0) lines.push('Sin registros en el periodo.');
   return lines.join('\n');
 };
+
+// Match the 32-column thermal receipt in the on-screen preview and browser print.
+export const wrapPosReportText = (text: string, width = 32): string => text.split('\n').flatMap(line => {
+  const rows: string[] = [];
+  let remaining = line;
+  while (remaining.length > width) {
+    const space = remaining.lastIndexOf(' ', width);
+    const split = space > 0 ? space : width;
+    rows.push(remaining.slice(0, split));
+    remaining = remaining.slice(split).trimStart();
+  }
+  rows.push(remaining);
+  return rows;
+}).join('\n');
