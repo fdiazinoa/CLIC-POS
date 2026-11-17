@@ -5,6 +5,7 @@ import type {FiscalRetirementRecord} from '../services/fiscal/FiscalWorkflowV2Ty
 import { recordCheckoutDiagnostic } from '../services/CheckoutDiagnostics';
 import { allowsDefaultPaymentMethods } from '../utils/erpPaymentMethods';
 
+import './handheldPayment.css';
 import React, { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback } from 'react';
 import {
    X, CreditCard, Banknote, QrCode, CheckCircle2,
@@ -77,6 +78,8 @@ import { setLargeMasterSyncV3CriticalOperation } from '../services/sync/LargeMas
 export type PaymentEffectsFence = (() => void|Promise<void>) & {completedTransaction?: Transaction;recordPaymentEffect?:(paymentId:string)=>Promise<void>;preparePaymentEffects?:(payments:PaymentEntry[])=>Promise<void>;recoveryPayments?:PaymentEntry[];futureCheckout?:{checkoutId:string;transactionId:string;operationId?:string};tablePart?:{ticketId:string;receiptId:string;operationId:string;planFingerprint:string}};
 
 interface PaymentModalProps {
+   /** Presentation only; the sales shell opts in exclusively for mobile/PDA. */
+   compactHandheld?: boolean;
    openingTrace?: PosInteractionTrace | null;
    receiptOnlyInitialTransaction?: Transaction|null;
    retainedPaymentIntent?:{phase:string;payments:PaymentEntry[];receipt?:Transaction}|null;
@@ -274,7 +277,7 @@ type GatewayProgressOverlayState = {
 
 import SupervisorAuthModal from './SupervisorAuthModal';
 
-const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receiptOnlyInitialTransaction, retainedPaymentIntent, recoverCommittedReceipt, total, items, taxAmount = 0, currencySymbol, config, onClose, onConfirm, paymentOperationId, paymentOperationDate, onFiscalAttemptClosed, offlineFiscalReserve, amountChangeNotice, beforePaymentEffects, validatePaymentAuthority, themeColor, customer, isDelinquent, users, isMaster, currentUser, roles, isRestaurantMode, isInstallmentPayment = false, paymentIdNamespace }) => {
+const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ compactHandheld = false, openingTrace, receiptOnlyInitialTransaction, retainedPaymentIntent, recoverCommittedReceipt, total, items, taxAmount = 0, currencySymbol, config, onClose, onConfirm, paymentOperationId, paymentOperationDate, onFiscalAttemptClosed, offlineFiscalReserve, amountChangeNotice, beforePaymentEffects, validatePaymentAuthority, themeColor, customer, isDelinquent, users, isMaster, currentUser, roles, isRestaurantMode, isInstallmentPayment = false, paymentIdNamespace }) => {
    const receiptOnly=Boolean(receiptOnlyInitialTransaction);
    markRenderStart('PAYMENT_MODAL');
    useLayoutEffect(() => markRenderEnd('PAYMENT_MODAL'));
@@ -1451,7 +1454,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
 
    // Pending feedback does not rebuild unchanged method icons/buttons or their handlers.
    const paymentMethodPresentation=useMemo(()=>isSuccessScreen?null:(
-               <div className="flex flex-wrap p-3 md:p-4 gap-2 md:gap-3 shrink-0 max-h-[150px] overflow-y-auto no-scrollbar">
+               <div className="payment-methods flex flex-wrap p-3 md:p-4 gap-2 md:gap-3 shrink-0 max-h-[150px] overflow-y-auto no-scrollbar">
                   {configuredMethods.length === 0 && <p role="status" className="w-full p-3 text-sm text-gray-600">No hay formas de pago habilitadas.</p>}
                   {configuredMethods.map(method => {
                      const methodRuntimeType = resolvePaymentMethodTypeForRuntime(method.type, method.label, method.id);
@@ -1624,11 +1627,12 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
       <>
          <InteractionProgress ref={finalizationProgressRef}/>
          {gatewayProgressOverlay}
-         <div className="fixed inset-0 z-[60] flex items-end lg:items-center justify-center bg-black/60 backdrop-blur-sm lg:p-3">
-            <div className="bg-white w-full max-w-6xl h-[100dvh] lg:h-[92dvh] lg:max-h-[760px] lg:rounded-[2.5rem] shadow-2xl flex flex-col lg:flex-row overflow-hidden">
+         <div data-handheld-payment={compactHandheld ? 'true' : undefined} className="fixed inset-0 z-[60] flex items-end lg:items-center justify-center bg-black/60 backdrop-blur-sm lg:p-3">
+            <div className="payment-dialog bg-white w-full max-w-6xl h-[100dvh] lg:h-[92dvh] lg:max-h-[760px] lg:rounded-[2.5rem] shadow-2xl flex flex-col lg:flex-row overflow-hidden">
 
             {/* SUMMARY SECTION (Collapsible/Header on mobile, Sidebar on desktop) */}
-            <div className="flex lg:w-[34%] w-full bg-gray-50 border-b lg:border-b-0 lg:border-r border-gray-200 flex-col p-4 md:p-5 lg:p-6 shrink-0 min-h-0">
+            <div className="payment-summary flex lg:w-[34%] w-full bg-gray-50 border-b lg:border-b-0 lg:border-r border-gray-200 flex-col p-4 md:p-5 lg:p-6 shrink-0 min-h-0">
+               <div className="contents payment-summary-content">
                <div className="flex justify-between items-center mb-3 lg:mb-4">
                   <button onClick={onClose} className="p-2 -ml-2 text-gray-400 hover:bg-gray-200 rounded-full transition-colors"><X size={24} /></button>
                   <div className="flex md:hidden gap-1">
@@ -1731,7 +1735,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
                   </div>
 
                {/* Payments List (Compact on mobile) */}
-               <div className="flex-1 min-h-[72px] overflow-y-auto space-y-2 no-scrollbar max-h-[30vh] lg:max-h-none">
+               <div className="payment-payments-list flex-1 min-h-[72px] overflow-y-auto space-y-2 no-scrollbar max-h-[30vh] lg:max-h-none">
                   {payments.map(p => {
                      const EntryIcon = getEntryIcon(p);
                      const previewLine = paymentPreviewById.get(p.id);
@@ -1787,7 +1791,9 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
                   })}
                </div>
 
-               <div className="sticky bottom-0 z-10 p-3 bg-white border-t border-gray-200 rounded-xl md:rounded-2xl mt-3 lg:mt-3 shadow-inner shrink-0">
+               </div>
+               <div className="payment-finalization sticky bottom-0 z-10 p-3 bg-white border-t border-gray-200 rounded-xl md:rounded-2xl mt-3 lg:mt-3 shadow-inner shrink-0">
+                  <div className="contents payment-finalization-body">
                   {onFiscalAttemptClosed&&<FiscalExpiredCheckoutAction users={users} operationIds={items.map(item=>(item as any).fiscalCheckoutOperationId).filter(Boolean)} onClosed={onFiscalAttemptClosed}/>}
                   {cardOutcome && (
                      <div className="mb-3 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2">
@@ -1846,10 +1852,11 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
                      )}
                   </div>
                   {retainedPaymentIntent?.phase==='EFFECT_POSSIBLE'&&<p role="status" className="mb-2 text-xs font-semibold text-amber-800">Intento anterior de efectivo pendiente. No cobre otra vez; confirme la venta sólo si ya recibió ese efectivo.</p>}
+                  </div>
                   <button
                      onClick={handleFinalize}
                      disabled={(!canFinalize && !paymentOperationId) || isFinalizing || isProcessingGateway || Boolean(cardOutcome)}
-                     className={`w-full py-3 rounded-xl md:rounded-2xl font-black text-sm md:text-base text-white transition-all shadow-lg ${(!canFinalize && !paymentOperationId) || isFinalizing || isProcessingGateway ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : `${isRefund ? 'bg-rose-600 hover:bg-rose-700' : `${themeBgClass} hover:brightness-110`}`}`}
+                     className={`payment-finalize-button w-full py-3 rounded-xl md:rounded-2xl font-black text-sm md:text-base text-white transition-all shadow-lg ${(!canFinalize && !paymentOperationId) || isFinalizing || isProcessingGateway ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : `${isRefund ? 'bg-rose-600 hover:bg-rose-700' : `${themeBgClass} hover:brightness-110`}`}`}
                   >
                      {cardOutcome
                         ? 'CONFIRMA EL COBRO'
@@ -1867,7 +1874,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
             </div>
 
             {/* INPUT SECTION */}
-            <div className="flex-1 flex flex-col bg-white overflow-hidden min-h-0">
+            <div className="payment-input-section flex-1 flex flex-col bg-white overflow-hidden min-h-0">
                {/* Payment Methods */}
                {paymentMethodPresentation}
 
@@ -1887,7 +1894,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
                )}
 
                {/* Amount Input */}
-               <div className="px-4 md:px-6 mt-1 shrink-0">
+               <div className="payment-amount-section px-4 md:px-6 mt-1 shrink-0">
                   <div className="bg-gray-100 rounded-2xl md:rounded-[1.5rem] p-3 md:p-4 flex justify-between items-center border border-gray-200 shadow-inner">
                      <span className="text-xl md:text-2xl text-gray-400 font-black">{selectedCurrency.symbol}</span>
                      <input
@@ -1909,7 +1916,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
                   )}
 
                   {activeMethod === 'CASH' && (
-                     <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 mt-2 md:mt-3">
+                     <div className="payment-denominations grid grid-cols-3 sm:grid-cols-6 gap-2 mt-2 md:mt-3">
                         {denominations.map(d => (
                            <button
                               key={d}
@@ -1939,7 +1946,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ openingTrace, receip
                </div>
 
                {/* Numpad - Responsive grid */}
-               <div className="flex-1 p-3 md:p-4 lg:p-5 grid grid-cols-4 gap-2 md:gap-3 content-stretch min-h-0">
+               <div className="payment-numpad flex-1 p-3 md:p-4 lg:p-5 grid grid-cols-4 gap-2 md:gap-3 content-stretch min-h-0">
                   {[1, 2, 3].map(n => <button key={n} onClick={() => handleNumPad(n.toString())} className="min-h-[50px] bg-white border border-gray-100 rounded-xl md:rounded-2xl text-2xl md:text-3xl font-black text-gray-700 active:bg-gray-50 active:scale-95 transition-all shadow-sm">{n}</button>)}
 
                   <button

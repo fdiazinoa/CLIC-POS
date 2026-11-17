@@ -10423,7 +10423,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             />
          )}
          <InteractionProgress ref={checkoutProgressRef}/>
-         {showPaymentModal && <UnifiedPaymentModal retainedPaymentIntent={retainedDispatchPayment} receiptOnlyInitialTransaction={receiptOnlyInitialTransaction} recoverCommittedReceipt={completeCommittedFiscalReceipt} openingTrace={paymentModalTraceRef.current} total={amountDueNow} items={cart} taxAmount={nextPaymentFractionPart && cartTotal > 0 ? cartTax * (amountDueNow / cartTotal) : cartTax} currencySymbol={baseCurrency.symbol} config={config} onClose={() => {
+         {showPaymentModal && <UnifiedPaymentModal compactHandheld={isCompactHandheld} retainedPaymentIntent={retainedDispatchPayment} receiptOnlyInitialTransaction={receiptOnlyInitialTransaction} recoverCommittedReceipt={completeCommittedFiscalReceipt} openingTrace={paymentModalTraceRef.current} total={amountDueNow} items={cart} taxAmount={nextPaymentFractionPart && cartTotal > 0 ? cartTax * (amountDueNow / cartTotal) : cartTax} currencySymbol={baseCurrency.symbol} config={config} onClose={() => {
             finishInteraction(paymentModalTraceRef.current, 'cancelled');
             recordCheckoutDiagnostic('PAYMENT_CLOSE');
             // Closing the charge screen abandons the attempt: never keep the box locked on it.
