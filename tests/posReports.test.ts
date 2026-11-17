@@ -140,7 +140,8 @@ test('new reports explicitly describe empty periods', () => {
 test('ticket preview wraps at 32 columns, preserves words and splits long identifiers', () => {
   const text = wrapPosReportText('Ventas tras descuentos: DOP 100.00\n\n' + 'X'.repeat(70));
   assert.ok(text.split('\n').every(line => line.length <= 32));
-  assert.match(text, /Ventas tras descuentos: DOP\n100.00/);
+  assert.match(text, /Ventas tras descuentos:\n +DOP 100.00/);
+  assert.equal(wrapPosReportText(text), text);
   assert.ok(text.includes('\n\n'));
   assert.equal(wrapPosReportText('Texto corto'), 'Texto corto');
 });
