@@ -1,3 +1,4 @@
+import { eligiblePrinters } from './PrinterPreferences';
 import { PrintOutputError } from './PrintFeedback';
 import { BusinessConfig, PrinterDevice } from '../../types';
 import { LocalPrintAgentService } from './LocalPrintAgentService';
@@ -34,9 +35,10 @@ const resolveTerminalPrinter = (
     terminalId?: string,
     preferredPrinterId?: string
 ): PrinterDevice | undefined => {
+    const printers = eligiblePrinters(config.availablePrinters);
     if (preferredPrinterId) {
-        const preferred = (config.availablePrinters || []).find(p => 
-            p.id === preferredPrinterId || 
+        const preferred = printers.find(p =>
+            p.id === preferredPrinterId ||
             p.productionAreaId === preferredPrinterId
         );
         if (preferred) return preferred;
@@ -57,18 +59,18 @@ const resolveTerminalPrinter = (
         (role === 'TICKET' ? terminal?.config?.hardware?.receiptPrinterId : undefined);
 
     if (assignedPrinterId) {
-        const assigned = (config.availablePrinters || []).find(p => p.id === assignedPrinterId);
+        const assigned = printers.find(p => p.id === assignedPrinterId);
         if (assigned) return assigned;
     }
 
-    const byType = (config.availablePrinters || []).find(p => p.type === role);
+    const byType = printers.find(p => p.type === role);
     if (byType) return byType;
 
     if (role !== 'TICKET') {
-        return (config.availablePrinters || []).find(p => p.type === 'TICKET');
+        return printers.find(p => p.type === 'TICKET');
     }
 
-    return (config.availablePrinters || [])[0];
+    return printers[0];
 };
 
 export const PrintRouterService = {

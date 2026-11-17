@@ -1619,6 +1619,14 @@ class AndroidPrinterBridge @JvmOverloads constructor(context: Context, webView: 
     }
 
     private fun isUsbPrinterCandidate(device: UsbDevice): Boolean {
+        // Symbol SNAPI scanners expose a vendor OUT endpoint, not a printer.
+        // Restrict this exclusion to the confirmed reader, preserving thermal
+        // printers with vendor-specific interfaces and the scanner integration.
+        if ((device.vendorId == 1504 && device.productId == 6400) ||
+            Regex("bar\\s*code\\s+scanner", RegexOption.IGNORE_CASE).containsMatchIn(device.productName ?: "")) {
+            return false
+        }
+
         if (device.deviceClass == UsbConstants.USB_CLASS_PRINTER) {
             return true
         }
