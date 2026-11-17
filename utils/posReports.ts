@@ -1,3 +1,4 @@
+import { compactReportDateTime, preparePosReportText, reportHeading, reportPrintableText, POS_REPORT_COLUMNS } from './posReportPresentation';
 import type { BusinessConfig, CashMovement, Transaction, ZReport } from '../types';
 import { resolveLineDiscountPresentation } from './lineDiscountPresentation';
 import { calculateZReportStats } from './analytics';
@@ -45,12 +46,13 @@ export const filterPosReportSource = (source: PosReportSource, filters: PosRepor
 
 export const buildPosReportText = (
   kind: PosReportKind, source: PosReportSource, filters: PosReportFilters, config: BusinessConfig, issuedAt = new Date(),
+  formatDateTime: (date: Date) => string = date => date.toLocaleString(),
 ): string => {
   const base = baseReportCurrency(config);
   const lines = [config.companyInfo?.name || 'CLIC POS', POS_REPORT_NAMES[kind],
     `Periodo: ${filters.start} / ${filters.end}`,
     `Caja: ${filters.terminalId ? resolveTerminalDisplayName(filters.terminalId, config.terminals) : 'Todas'}`,
-    `Emitido: ${issuedAt.toLocaleString()}`, '--------------------------------', 'Consulta local - no cierra caja'];
+    `Emitido: ${formatDateTime(issuedAt)}`, '--------------------------------', 'Consulta local - no cierra caja'];
   const grouped = new Map<string, Transaction[]>();
   for (const tx of source.transactions) {
     const currency = tx.currency || base;
@@ -142,7 +144,7 @@ export const buildPosReportText = (
         const cashier = tx.userName || 'Sin cajero registrado';
         if (refund(tx)) {
           returns += Math.abs(number(tx.total)); returnCount += 1;
-          details.push('', `DEVOLUCION ${reference}`, new Date(tx.date).toLocaleString(), cashier,
+          details.push('', `DEVOLUCION ${reference}`, formatDateTime(new Date(tx.date)), cashier,
             `Importe: ${money(Math.abs(number(tx.total)), currency)}`,
             `Origen: ${tx.affectedInvoiceNumber || tx.originalTransactionId || tx.original_transaction_id || 'No registrado'}`,
             `Motivo: ${tx.refundReason || 'No registrado'}`);
@@ -151,7 +153,7 @@ export const buildPosReportText = (
           const line = (tx.items || []).reduce((sum, item) => sum + resolveLineDiscountPresentation(item).discountAmount, 0);
           if (!global && !line) continue;
           globalDiscounts += global; lineDiscounts += line; discountCount += 1;
-          details.push('', `DESCUENTO ${reference}`, new Date(tx.date).toLocaleString(), cashier,
+          details.push('', `DESCUENTO ${reference}`, formatDateTime(new Date(tx.date)), cashier,
             `Global: ${money(global, currency)}`, `En lineas: ${money(line, currency)}`);
           if (tx.authorizedByName) details.push(`Autorizo: ${tx.authorizedByName}`);
         }
@@ -169,7 +171,7 @@ export const buildPosReportText = (
       const row = totals.get(currency) || { incoming: 0, outgoing: 0 };
       row[movement.type === 'IN' ? 'incoming' : 'outgoing'] += number(movement.amount);
       totals.set(currency, row);
-      lines.push('', `${new Date(movement.timestamp).toLocaleString()} ${movement.type === 'IN' ? 'Entrada' : 'Salida'}`,
+      lines.push('', `${formatDateTime(new Date(movement.timestamp))} ${movement.type === 'IN' ? 'Entrada' : 'Salida'}`,
         `${movement.userName} / ${resolveTerminalDisplayName(movement.terminalId, config.terminals)}`,
         movement.reason, money(number(movement.amount), currency));
     }
@@ -180,16 +182,22 @@ export const buildPosReportText = (
   return lines.join('\n');
 };
 
-// Match the 32-column thermal receipt in the on-screen preview and browser print.
-export const wrapPosReportText = (text: string, width = 32): string => text.split('\n').flatMap(line => {
-  const rows: string[] = [];
-  let remaining = line;
-  while (remaining.length > width) {
-    const space = remaining.lastIndexOf(' ', width);
-    const split = space > 0 ? space : width;
-    rows.push(remaining.slice(0, split));
-    remaining = remaining.slice(split).trimStart();
-  }
-  rows.push(remaining);
-  return rows;
-}).join('\n');
+// Presentation only: raw report calculations and their contracts stay above.
+export const buildPosReportTicket = (
+  kind: PosReportKind, source: PosReportSource, filters: PosReportFilters, config: BusinessConfig, issuedAt = new Date(),
+): string => {
+  const presentationConfig = { ...config, companyInfo: { ...config.companyInfo, name: reportPrintableText(config.companyInfo?.name || 'CLIC POS').replace(/\n/g, ' ') } };
+  const raw = buildPosReportText(kind, source, filters, presentationConfig, issuedAt, compactReportDateTime).split('\n');
+  const date = (value: string) => value.split('-').reverse().join('/');
+  const lines = [reportHeading(raw[0]), reportHeading(raw[1].toUpperCase()), '='.repeat(POS_REPORT_COLUMNS),
+    `Desde: ${date(filters.start)}`, `Hasta: ${date(filters.end)}`, ...raw.slice(3)];
+  return preparePosReportText(lines.map(line => {
+    if (/^[A-Z][A-Z0-9$._-]*(?: - Top (?:\d+|todos))?$/.test(line)) return reportHeading(`[ ${line} ]`);
+    if (/^(Venta neta|TOTAL NETO|Total descuentos|Balance movimientos):/.test(line)) {
+      return '-'.repeat(POS_REPORT_COLUMNS) + '\n' + line.replace(/^([^:]+):/, label => label.toUpperCase());
+    }
+    return line;
+  }).join('\n'));
+};
+
+export const wrapPosReportText = preparePosReportText;
