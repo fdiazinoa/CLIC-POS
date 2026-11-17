@@ -1,3 +1,4 @@
+import { reconcileAuthorizationBackups } from '../audit/PosOperationalAudit';
 import { isFormatOwnedDocument } from '../articleFormats/activation';
 import { isRecoveredOperation } from '../recovery/PendingOperationsRecovery';
 import { db } from '../../utils/db';
@@ -33,7 +34,8 @@ export interface SyncState {
 }
 
 class BackgroundSyncManager {
-    private readonly operationalCollections = ['customerMutations', 'posUserMutations', 'inventoryLedger', 'cashMovements', 'zReports', 'transactions', 'wallet_transactions', 'loyalty_events'];
+    private readonly operationalCollections = ['customerMutations', 'posUserMutations', 'inventoryLedger', 'cashMovements', 'zReports', 'transactions', 'wallet_transactions', 'loyalty_events', 'posAuditEvents', 'invoiceAuditEvents'];
+    private auditPendingCount = 0;
     private isProcessing = false;
     private interval: any = null;
     private retryTimeout: any = null;
@@ -236,6 +238,11 @@ class BackgroundSyncManager {
                 : JSON.stringify(error || '');
         const normalized = message.toLowerCase();
         return [
+            'pos_audit_scope_mismatch',
+            'pos_audit_terminal_mismatch',
+            'pos_audit_replay_conflict',
+            'pos_audit_version_unsupported',
+            'pos_audit_timestamp_invalid',
             'erp_context_missing',
             'catalog_missing',
             'item_mapping_missing',
@@ -267,6 +274,7 @@ class BackgroundSyncManager {
         if(collectionName==='transactions'&&item?.documentType==='REFUND'&&item?.ncfType==='E34'&&item?.fiscalWorkflowCheckoutId)return false; // RETURN owns its original Outbox envelope.
         if(item?.trackingCheckoutId)return false; // Tracking is owned by its atomic Outbox, including when the legacy rollout flag is off.
         const status = item?.syncStatus;
+        if ((collectionName === 'posAuditEvents' || collectionName === 'invoiceAuditEvents') && Date.parse(String(item?.syncRetryAfter || '')) > Date.now()) return false;
         if (collectionName === 'catalogEdits' && status === 'PENDING') {
             const nextAttemptAt = Number(item?.nextAttemptAt);
             if (Number.isFinite(nextAttemptAt) && nextAttemptAt > Date.now()) {
@@ -331,7 +339,9 @@ class BackgroundSyncManager {
             'zReports',
             'transactions',
             'wallet_transactions',
-            'loyalty_events'
+            'loyalty_events',
+            'posAuditEvents',
+            'invoiceAuditEvents'
         ]);
 
         if (!terminalScopedCollections.has(collectionName)) return true;
@@ -505,6 +515,26 @@ class BackgroundSyncManager {
                 collectionErrors.push(`loyalty_events: ${error?.message || 'unknown error'}`);
             });
 
+            // Audit transport runs last and remains independent from commercial queues.
+            // An old ERP/master without this endpoint leaves these records in RETRY_WAIT.
+            if (isSyncFeatureEnabled('pos_operational_audit') && ['ERP_ACTIVE', 'POS_CLOUD_STAGING'].includes(operationalTarget.kind) && !isPosSaleActive()) {
+                await reconcileAuthorizationBackups(dbAdapter, permissionService.getTerminalId()).catch((error: any) => {
+                    collectionErrors.push(`posAuditRecovery: ${error?.message || 'storage unavailable'}`);
+                });
+                await this.processCollection<any>('posAuditEvents', item => apiSyncAdapter.pushAuditEvent(item)).catch((error: any) => {
+                    console.warn('[POS_AUDIT_TRANSPORT_PENDING]', error?.message || 'unknown error');
+                    this.nextRetryDelayMs = this.nextRetryDelayMs === null ? this.WORKER_INTERVAL_MS : Math.min(this.nextRetryDelayMs, this.WORKER_INTERVAL_MS);
+                });
+                // The native Outbox owns its invoice events when enabled. Legacy storage
+                // needs an explicit drain too; both paths use the same source event ID.
+                if (!isSyncFeatureEnabled('sqlite_outbox_v2') || !durableOutboxRepository.isSupported()) {
+                    await this.processCollection<any>('invoiceAuditEvents', item => apiSyncAdapter.pushAuditEvent(item, true)).catch((error: any) => {
+                        console.warn('[POS_INVOICE_AUDIT_TRANSPORT_PENDING]', error?.message || 'unknown error');
+                        this.nextRetryDelayMs = this.nextRetryDelayMs === null ? this.WORKER_INTERVAL_MS : Math.min(this.nextRetryDelayMs, this.WORKER_INTERVAL_MS);
+                    });
+                }
+            }
+
             // Report range cursors only after the normal master/document queues.
             // The local row remains pending until the ERP acknowledges it.
             if (!isPosSaleActive()) {
@@ -545,7 +575,9 @@ class BackgroundSyncManager {
             if (this.remoteEnabled && generation === this.remoteGeneration
                 && navigator.onLine && (shouldRetrySoon || this.state.pendingCount > 0)
                 && !(pausedForSaleActivity && this.state.pendingCount === 0)) {
-                this.scheduleSync(this.nextRetryDelayMs ?? this.FAST_RETRY_DELAY_MS);
+                const unsupportedAuditOnly = (!isSyncFeatureEnabled('pos_operational_audit') || !['ERP_ACTIVE', 'POS_CLOUD_STAGING'].includes(operationalTarget.kind))
+                    && !shouldRetrySoon && this.state.pendingCount === this.auditPendingCount;
+                this.scheduleSync(unsupportedAuditOnly ? this.WORKER_INTERVAL_MS : this.nextRetryDelayMs ?? this.FAST_RETRY_DELAY_MS);
             }
         }
     }
@@ -705,6 +737,7 @@ class BackgroundSyncManager {
         const durableBatchActive = isSyncFeatureEnabled('sqlite_outbox_v2')||await durableOutboxRepository.hasPendingTrackingEvents()||await durableOutboxRepository.hasPendingReturnEvents();
         let count = 0;
         let blockedCount = 0;
+        let auditPendingCount = 0;
         let oldestCreatedAt: number | null = null;
         if (durableBatchActive && durableOutboxRepository.isSupported()) {
             await durableOutboxRepository.refreshMetrics();
@@ -715,7 +748,8 @@ class BackgroundSyncManager {
                 : null;
         }
         const collections = (collectionOverride || [...this.operationalCollections, 'catalogEdits']).filter(collection =>
-            !isSyncFeatureEnabled('sqlite_outbox_v2') || (collection !== 'transactions' && collection !== 'inventoryLedger')
+            (!isSyncFeatureEnabled('sqlite_outbox_v2') || (collection !== 'transactions' && collection !== 'inventoryLedger'))
+            && !(collection === 'invoiceAuditEvents' && isSyncFeatureEnabled('sqlite_outbox_v2') && durableOutboxRepository.isSupported())
         );
 
         for (const col of collections) {
@@ -730,6 +764,7 @@ class BackgroundSyncManager {
                     this.isOperationalSyncPending(item, col)
                 );
                 count += pendingItems.length;
+                if (col === 'posAuditEvents' || col === 'invoiceAuditEvents') auditPendingCount += pendingItems.length;
                 pendingItems.forEach((item: any) => {
                     const itemTime = this.resolveItemDate(item)?.getTime();
                     if (itemTime === undefined || !Number.isFinite(itemTime)) return;
@@ -754,6 +789,7 @@ class BackgroundSyncManager {
         count += pendingRanges.length;
 
         syncMetrics.setOutboxState(count, oldestCreatedAt);
+        this.auditPendingCount = auditPendingCount;
         this.updateState({ pendingCount: count, blockedCount });
     }
 
@@ -924,6 +960,7 @@ class BackgroundSyncManager {
         const collections = this.operationalCollections;
 
         for (const colName of collections) {
+            if (colName === 'invoiceAuditEvents') continue;
             if (isPosSaleActive()) return;
             try {
                 const data = await db.get(colName as any) as any[];

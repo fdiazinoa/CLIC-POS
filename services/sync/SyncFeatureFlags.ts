@@ -1,4 +1,5 @@
 export type SyncFeatureFlagName =
+    | 'pos_operational_audit'
     | 'adaptive_polling'
     | 'sync_hint_v2'
     | 'heartbeat_v2'
@@ -7,6 +8,7 @@ export type SyncFeatureFlagName =
     | 'pending_operations_recovery';
 
 const DEFAULTS: Record<SyncFeatureFlagName, boolean> = {
+    pos_operational_audit: true,
     pending_operations_recovery: false,
     adaptive_polling: true,
     sync_hint_v2: true,
@@ -18,6 +20,7 @@ const DEFAULTS: Record<SyncFeatureFlagName, boolean> = {
 };
 
 const ENV_KEYS: Record<SyncFeatureFlagName, string> = {
+    pos_operational_audit: 'VITE_POS_OPERATIONAL_AUDIT_ENABLED',
     pending_operations_recovery: 'VITE_PENDING_OPERATIONS_RECOVERY_ENABLED',
     adaptive_polling: 'VITE_ADAPTIVE_POLLING_ENABLED',
     sync_hint_v2: 'VITE_SYNC_HINT_V2_ENABLED',

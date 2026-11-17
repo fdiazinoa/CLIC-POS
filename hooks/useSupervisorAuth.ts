@@ -1,8 +1,10 @@
+import { buildAuthorizationLog, persistAuthorizationLog } from '../services/audit/PosOperationalAudit';
+import { permissionService } from '../services/sync/PermissionService';
 import { dbAdapter } from '../services/db';
 import { canAuthorizeReturn, canCompleteReturnApproval, isReturnPermission, hasReturnRequestContext, readReturnSecurityContext, type ReturnSecurityContext } from '../services/sync/PosSecurityV2Runtime';
 import { requiresTerminalPolicyPin } from '../utils/terminalAuthorizationPolicy';
-import { useState, useCallback, useRef } from 'react';
-import { BusinessConfig, User, Permission, AuditLogEntry, RoleDefinition, TerminalConfig } from '../types';
+import { useState, useCallback, useRef, useEffect } from 'react';
+import { BusinessConfig, User, Permission, RoleDefinition, TerminalConfig } from '../types';
 import { canGrantDiscountPercent } from '../utils/userSalesPolicy';
 
 interface UseSupervisorAuthProps {
@@ -35,6 +37,16 @@ export const useSupervisorAuth = ({ config, currentUser, roles, onUpdateConfig, 
     } | null>(null);
 
     const pendingRef = useRef(pendingRequest);
+    const mountedRef = useRef(true);
+    useEffect(() => {
+        mountedRef.current = true;
+        return () => { mountedRef.current = false; pendingRef.current?.resolve(false); pendingRef.current = null; };
+    }, []);
+    const authorizationInFlight = useRef(false);
+    const authContextRef = useRef({ currentUser, roles, terminalSecurity });
+    authContextRef.current = { currentUser, roles, terminalSecurity };
+    const configRef = useRef(config);
+    configRef.current = config;
 
     const requestApproval = useCallback((params: RequestApprovalParams): Promise<boolean> => {
         return new Promise((resolve) => {
@@ -59,7 +71,9 @@ export const useSupervisorAuth = ({ config, currentUser, roles, onUpdateConfig, 
 
                 if (hasPermission && withinLimits && !requiresTerminalPolicyPin(terminalSecurity, params.permission)) {
                     // Log self-authorization
-                    logAction(currentUser!, currentUser!, params);
+                    await logAction(currentUser!, currentUser!, params);
+                    if (!mountedRef.current || authContextRef.current.currentUser !== currentUser || authContextRef.current.roles !== roles || authContextRef.current.terminalSecurity !== terminalSecurity) { resolve(false); return; }
+                    if (returnContext && !canCompleteReturnApproval(returnContext, await readReturnSecurityContext(dbAdapter, roles), currentUser, currentUser)) { resolve(false); return; }
                     params.onAuthorized?.(currentUser!);
                     resolve(true);
                     return;
@@ -77,18 +91,25 @@ export const useSupervisorAuth = ({ config, currentUser, roles, onUpdateConfig, 
 
     const handleAuthorize = async (supervisor: User) => {
         const request = pendingRef.current;
-        if (!request) return;
-        if (request.returnContext) {
-            const current = await readReturnSecurityContext(dbAdapter, roles);
-            if (pendingRef.current !== request) return;
-            if (!canCompleteReturnApproval(request.returnContext, current, supervisor, currentUser)) {
-                request.resolve(false); pendingRef.current = null; setPendingRequest(null); setIsModalOpen(false); return;
+        if (!request || authorizationInFlight.current) return;
+        authorizationInFlight.current = true;
+        try {
+            if (request.returnContext) {
+                const current = await readReturnSecurityContext(dbAdapter, roles);
+                if (pendingRef.current !== request) return;
+                if (!canCompleteReturnApproval(request.returnContext, current, supervisor, currentUser)) {
+                    request.resolve(false); pendingRef.current = null; setPendingRequest(null); setIsModalOpen(false); return;
+                }
             }
-        }
-        if (pendingRef.current !== request) return;
-        logAction(currentUser || supervisor, supervisor, request.params);
-        request.params.onAuthorized?.(supervisor);
-        request.resolve(true); pendingRef.current = null; setPendingRequest(null); setIsModalOpen(false);
+            if (pendingRef.current !== request) return;
+            await logAction(currentUser || supervisor, supervisor, request.params);
+            if (pendingRef.current !== request) return;
+            if (!mountedRef.current || authContextRef.current.currentUser !== currentUser || authContextRef.current.roles !== roles || authContextRef.current.terminalSecurity !== terminalSecurity) { request.resolve(false); pendingRef.current = null; setPendingRequest(null); setIsModalOpen(false); return; }
+            if (request.returnContext && !canCompleteReturnApproval(request.returnContext, await readReturnSecurityContext(dbAdapter, roles), supervisor, currentUser)) { request.resolve(false); pendingRef.current = null; setPendingRequest(null); setIsModalOpen(false); return; }
+            if (pendingRef.current !== request) return;
+            request.params.onAuthorized?.(supervisor);
+            request.resolve(true); pendingRef.current = null; setPendingRequest(null); setIsModalOpen(false);
+        } finally { authorizationInFlight.current = false; }
     };
 
     const handleClose = () => {
@@ -96,31 +117,24 @@ export const useSupervisorAuth = ({ config, currentUser, roles, onUpdateConfig, 
         setPendingRequest(null); setIsModalOpen(false);
     };
 
-    const logAction = (cashier: User, supervisor: User, params: RequestApprovalParams) => {
-        const newLog: AuditLogEntry = {
-            id: `LOG-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
-            timestamp: new Date().toISOString(),
-            actionType: params.permission,
-            actionDescription: params.actionDescription,
-            cashierId: cashier.id,
-            supervisorId: supervisor.id,
-            terminalId: 'current-terminal', // In a real app, pass this from context
-            ticketId: params.context?.ticketId,
-            itemId: params.context?.itemId,
-            originalValue: params.context?.originalValue,
-            newValue: params.context?.newValue,
-            reason: params.context?.reason,
-            details: [
-                params.actionDescription,
-                params.context?.reason,
-                params.context?.ticketId ? `Ticket: ${params.context.ticketId}` : '',
-                params.context?.itemId ? `Item: ${params.context.itemId}` : ''
-            ].filter(Boolean).join(' | '),
-            hash: 'simulated-hash'
-        };
-
-        const updatedLogs = [...(config.auditLogs || []), newLog];
-        onUpdateConfig({ ...config, auditLogs: updatedLogs });
+    const logAction = async (cashier: User, supervisor: User, params: RequestApprovalParams) => {
+        const newLog = buildAuthorizationLog(cashier, supervisor, params, permissionService.getTerminalId() || '');
+        const warning = await persistAuthorizationLog(dbAdapter, configRef.current, newLog);
+        const backup = warning ? await dbAdapter.getDocument<BusinessConfig>('config', 'current').catch(() => null) : null;
+        const current = configRef.current;
+        const logsById = new Map([...(backup?.auditLogs || []), ...(current.auditLogs || [])].map(log => [log.id, log]));
+        logsById.set(newLog.id, newLog);
+        const updated = { ...current, auditLogs: [...logsById.values()] };
+        configRef.current = updated;
+        try {
+            const update = onUpdateConfig(updated);
+            void Promise.resolve(update).catch(() => {
+                if (typeof window !== 'undefined') window.alert('La copia local de auditoría no se pudo actualizar. Revisa los pendientes y el almacenamiento del POS.');
+            });
+        } catch {
+            if (typeof window !== 'undefined') window.alert('No se pudo actualizar la copia local de auditoría. Revisa el almacenamiento del POS.');
+        }
+        if (warning && typeof window !== 'undefined') window.alert(warning);
     };
 
     return {
