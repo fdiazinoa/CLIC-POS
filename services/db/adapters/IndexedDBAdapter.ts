@@ -13,7 +13,7 @@ import {
 } from '../../sync/masterNumberRangeContract';
 
 const DB_NAME = 'clic_pos_indexeddb';
-const DB_VERSION = 27; // v27 adds the dedicated local attendance store
+const DB_VERSION = 28; // v28 adds the additive operational audit queue
 const OLD_DB_KEY = 'clic_pos_db_v1';
 const OPEN_TIMEOUT_MS = 15000;
 const CURSOR_IDLE_TIMEOUT_MS = 3000;
@@ -23,6 +23,7 @@ const STRICT_DURABLE_COLLECTIONS = new Set([
     'legacyMutationCompletions',
     'kdsDispatchQueue',
     'productionPrintQueue',
+    'posAuditEvents',
 ]);
 
 const STORES = [
@@ -40,7 +41,7 @@ const STORES = [
     'offline_print_queue', 'reservations', 'inventoryCommitments', 'serviceTypes', 'activities', 'collections',
     'crmOpportunities', 'erp_sales_documents', 'customerMutations',
     'currencyAuditLogs', 'currencyRateSchedules',
-    'invoiceReviewFlags', 'invoiceAuditEvents', 'invoiceAdjustments',
+    'invoiceReviewFlags', 'invoiceAuditEvents', 'invoiceAdjustments', 'posAuditEvents',
     'masterNumberRanges', 'masterNumberSyncReceipts',
     'recoveryOriginals', 'recoveryState', 'recoveryStage', 'wallet_transactions',
     'legacyMutationJournal', 'legacyMutationCompletions',

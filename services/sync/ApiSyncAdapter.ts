@@ -1,3 +1,4 @@
+import { posAuditWireItem, assertPosAuditAcknowledgement, type PosAuditQueueItem } from '../audit/PosOperationalAudit';
 import {createFiscalReturnTransport} from '../fiscal/FiscalReturnConsumer';
 import {CAJA6_FISCAL_SCOPE} from '../fiscal/Caja6FiscalPreparationPolicy';
 import {serializeBindingAuthExchange,fetchBindingAuthOnce,captureNormalBindingAuthAttempt,persistBindingAuthResponse,recoverBindingAuthEvidence,type BindingAuthAttempt} from './BindingAuthEvidencePersistence';
@@ -6141,6 +6142,15 @@ export class ApiSyncAdapter {
     /**
      * Push wallet / loyalty operational events (normalized, idempotent by source_event_id on Master).
      */
+    async pushAuditEvent(item: PosAuditQueueItem | import('../../types').InvoiceAuditEvent, invoice = false): Promise<any> {
+        const wire = posAuditWireItem(item, invoice);
+        const eventId = invoice ? String((item as import('../../types').InvoiceAuditEvent).idempotencyKey || item.id) : item.id;
+        return this.postOperationalPayload('/audit-events', { items: [wire] }, {
+            maxRequestBytes: 64 * 1024,
+            responseValidator: { reference: `pushAuditEvent:${eventId}`, validate: data => assertPosAuditAcknowledgement(data, eventId) },
+        });
+    }
+
     async pushOperationalEvents(items: Record<string, unknown>[]): Promise<any> {
         if (items.some(isRecoveredOperation)) throw new Error('RECOVERED_OPERATION_NO_REPLAY');
         if (!items.length) return;
