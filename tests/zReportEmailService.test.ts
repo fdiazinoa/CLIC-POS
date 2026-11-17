@@ -95,7 +95,7 @@ test('Pendiente aparece separado y nunca genera declaración', () => {
   assert.equal(contract.paymentMethodDeclarations.some((line: any) => line.methodId === 'pending-id'), false);
 });
 
-test('solo declara las formas cuyos IDs están configurados', () => {
+test('conserva todas las declaraciones guardadas aunque cambie la selección actual', () => {
   const report = contractReport({
     paymentMethodSummary: [
       { methodId: 'card-id', methodType: 'CARD', name: 'Tarjeta', amount: 3000 },
@@ -109,7 +109,7 @@ test('solo declara las formas cuyos IDs están configurados', () => {
     ],
   });
   const contract = buildZReportEmailContractReport(report, contractConfig(['qr-id'])) as any;
-  assert.deepEqual(contract.paymentMethodDeclarations.map((line: any) => line.methodId), ['qr-id']);
+  assert.deepEqual(contract.paymentMethodDeclarations, report.paymentMethodDeclarations);
 });
 
 test('acepta z_report_declared_payment_method_ids en snake_case', () => {
@@ -121,9 +121,42 @@ test('acepta z_report_declared_payment_method_ids en snake_case', () => {
   assert.deepEqual(contract.paymentMethodDeclarations.map((line: any) => line.methodId), ['card-id']);
 });
 
-test('una configuración declarable vacía produce declaraciones vacías', () => {
-  const contract = buildZReportEmailContractReport(contractReport(), contractConfig([])) as any;
-  assert.deepEqual(contract.paymentMethodDeclarations, []);
+test('una configuración vacía conserva la declaración histórica de tarjeta', () => {
+  const report = contractReport();
+  const contract = buildZReportEmailContractReport(report, contractConfig([]));
+  assert.deepEqual(contract.paymentMethodDeclarations, [report.paymentMethodDeclarations![0]]);
+});
+
+test('conserva métodos retirados y declaraciones sin ventas sin recalcular el snapshot', () => {
+  const saved = { methodId: 'retired-id', methodType: 'CARD', name: 'Tarjeta retirada', amount: 80, expected: 80, declared: 75, difference: -5 };
+  const report = contractReport({ paymentMethodSummary: [], paymentMethodDeclarations: [saved] });
+  const before = JSON.stringify(report);
+  const contract = buildZReportEmailContractReport(report, contractConfig([]));
+  assert.deepEqual(contract.paymentMethodDeclarations, [saved]);
+  assert.equal(JSON.stringify(report), before);
+  assert.notEqual(contract.paymentMethodDeclarations![0], saved);
+});
+
+test('varias tarjetas conservan identidad y valores guardados, incluido declarado cero', () => {
+  const declarations = [
+    { methodId: 'card-id', methodType: 'CARD', name: 'Tarjeta A', amount: 100, expected: 100, declared: 0, difference: -100 },
+    { methodId: 'card-b', methodType: 'CARD', name: 'Tarjeta B', amount: 20, expected: 20, declared: 120, difference: 100 },
+  ];
+  const report = contractReport({
+    paymentMethodSummary: declarations.map(line => ({ ...line, amount: 999 })),
+    paymentMethodDeclarations: declarations,
+  });
+  const contract = buildZReportEmailContractReport(report, contractConfig(['new-id']));
+  assert.deepEqual(contract.paymentMethodDeclarations, declarations);
+});
+
+test('una declaración ausente no se fabrica como cero por estar configurada', () => {
+  for (const paymentMethodDeclarations of [undefined, []]) {
+    const report = contractReport({ paymentMethodDeclarations });
+    const contract = buildZReportEmailContractReport(report, contractConfig(['card-id']));
+    assert.deepEqual(contract.paymentMethodDeclarations, []);
+    assert.equal(report.paymentMethodDeclarations, paymentMethodDeclarations);
+  }
 });
 
 test('los descuadres usan siempre declarado menos esperado', () => {
@@ -282,4 +315,23 @@ test('envía al ERP los anexos seleccionados y calculados del cierre Z', async (
   assert.deepEqual(sentBody.report.enabledSections, ['SELLER_SUMMARY', 'ITEM_SUMMARY']);
   assert.equal(sentBody.report.reportDetails.sellerSummary[0].userName, 'Ana');
   assert.equal(sentBody.report.denominationBreakdown.DOP[0].total, 500);
+});
+
+test('envía las declaraciones guardadas sin depender de la configuración actual', async () => {
+  const report = contractReport();
+  const config = contractConfig([]);
+  let sentReport: ZReport | undefined;
+  const result = await sendZReportEmailViaErp({ recipients: 'cierres@example.com', report, config }, {
+    readCredentials: () => ({ syncToken: 'valid-test-token' }),
+    request: async input => {
+      sentReport = (input.body as { report: ZReport }).report;
+      return {
+        ok: true, status: 200, headers: { 'content-type': 'application/json' },
+        data: { success: true, id: 'test-delivery', status: 'accepted' }, text: '',
+        networkEngine: 'fetch', fetchStage: 'response',
+      };
+    },
+  });
+  assert.equal(result.success, true);
+  assert.deepEqual(sentReport?.paymentMethodDeclarations, [report.paymentMethodDeclarations![0]]);
 });
