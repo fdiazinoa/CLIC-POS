@@ -18,6 +18,16 @@ Acceso: **Ajustes → Informes POS**, junto a **Sistema y Auditoría**. Requiere
 - **Productos vendidos**: cantidad neta de devoluciones e importe al precio de
   línea. No prorratea descuento global. Presentaciones diferentes se separan.
   Orden descendente por cantidad; top 10, top 20 o todos.
+- **Ventas por cajero**: tickets, ventas, devoluciones, venta neta y ticket
+  promedio por usuario y moneda. Atribuye cada documento a quien lo registró;
+  el promedio usa ventas antes de devoluciones, igual que el cierre.
+- **Ventas por hora**: horas locales ordenadas de 00 a 23, acumuladas durante
+  el período, con tickets, ventas, devoluciones y venta neta por moneda.
+- **Descuentos y devoluciones**: descuentos globales y de líneas en ventas,
+  excluyendo cambios manuales de precio; detalle del ticket, usuario y autorizador
+  cuando existe. Las notas de crédito muestran importe, origen y motivo guardado.
+  No deduce otra vez descuentos ya aplicados ni interpreta el estado de una venta
+  como una segunda devolución.
 - **Movimientos de efectivo**: entradas, salidas, motivo, usuario y balance por
   moneda. Ese balance no representa el efectivo esperado de caja.
 - **Historial Z**: vista previa y reimpresión del documento guardado completo,
@@ -42,3 +52,7 @@ Además: `npm run lint`, `npm run build` y smoke de interfaz con datos sintétic
 para los cinco informes, filtros, vista previa Z, envío térmico simulado y ancho
 móvil. La salida real en papel requiere prueba en impresora física. Esta tarea
 no genera, instala ni publica un APK.
+
+La selección de informes usa una cuadrícula adaptable; los filtros y la acción
+Imprimir permanecen dentro del ancho disponible. La vista previa envuelve las
+líneas por palabras a 32 columnas, igual que el contenido enviado a la térmica.
