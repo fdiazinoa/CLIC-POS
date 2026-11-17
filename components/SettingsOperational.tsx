@@ -148,7 +148,7 @@ const SettingsOperational: React.FC<SettingsOperationalProps> = ({ config, onUpd
     };
 
     return (
-        <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+        <div className="handheld-operational-settings space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
             <section className="bg-white p-6 rounded-2xl border border-gray-200" aria-label="Presentación de cantidades">
                 <h3 className="font-bold text-gray-800">Decimales de cantidad</h3>
                 <p className="text-sm text-gray-500 mb-4">Sólo visualización; no modifica peso, cálculo ni datos.</p>
@@ -176,7 +176,7 @@ const SettingsOperational: React.FC<SettingsOperationalProps> = ({ config, onUpd
                 </div>
             )}
             {/* Header / Intro */}
-            <div className="bg-gradient-to-br from-indigo-600 to-purple-700 p-8 rounded-[2.5rem] text-white shadow-xl relative overflow-hidden">
+            <div className="handheld-operational-intro bg-gradient-to-br from-indigo-600 to-purple-700 p-8 rounded-[2.5rem] text-white shadow-xl relative overflow-hidden">
                 <div className="relative z-10">
                     <h2 className="text-2xl font-black mb-2 flex items-center gap-3">
                         <Building2 size={32} />
@@ -190,7 +190,7 @@ const SettingsOperational: React.FC<SettingsOperationalProps> = ({ config, onUpd
             </div>
 
             {/* Section: Business Mode */}
-            <div className="bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-sm space-y-6">
+            <div className="handheld-business-mode bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-sm space-y-6">
                 <div className="flex items-center gap-3 mb-2">
                     <div className="w-10 h-10 bg-blue-100 text-blue-600 rounded-2xl flex items-center justify-center">
                         <ShoppingBag size={20} />
