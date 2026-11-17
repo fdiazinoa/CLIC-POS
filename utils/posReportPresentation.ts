@@ -20,11 +20,12 @@ const wrapLine = (line: string, width: number): string[] => {
 };
 
 /** Idempotent: an already prepared preview retains every alignment space. */
-export const preparePosReportText = (text: string, width = POS_REPORT_COLUMNS): string => {
+export const preparePosReportText = (text: string, width = POS_REPORT_COLUMNS, currencyCodes: readonly string[] = ['DOP', 'USD', 'EUR']): string => {
   if (!Number.isInteger(width) || width < 1) throw new Error('Ancho de informe no válido.');
+  const currencies = new Set(currencyCodes.map(reportPrintableText));
   return reportPrintableText(text).split('\n').flatMap(line => {
     const pair = line.trim().match(/^(?:(.*\S)\s+)?([^:\s]+) (-?(?:\d+\.\d+|\d+(?:\.\d+)?e[+-]?\d+))$/);
-    if (!pair) return wrapLine(line, width);
+    if (!pair || !currencies.has(pair[2])) return wrapLine(line, width);
     const label = (pair[1] || '').trim();
     const amount = `${pair[2]} ${pair[3]}`;
     if (amount.length > width) throw new Error('El importe no cabe en el formato de 32 columnas. No se envió a imprimir.');

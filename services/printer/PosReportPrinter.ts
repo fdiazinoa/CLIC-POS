@@ -6,19 +6,20 @@ import { runPrintTask } from './PrintFeedback';
 import { shouldSuppressBrowserPrintFallback } from './PrintRuntime';
 import { notifyBrowserPrint } from './BrowserPrint';
 
-export const posReportHtml = (text: string): string => {
-  const escaped = preparePosReportText(text).replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]!));
+export const posReportHtml = (text: string, currencyCodes?: readonly string[]): string => {
+  const escaped = preparePosReportText(text, 32, currencyCodes).replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]!));
   return `<!doctype html><html><head><meta charset="utf-8"><title>Informe POS</title><style>@page{margin:3mm}body{margin:0;width:48mm;font:9px monospace}pre{margin:0;width:32ch;white-space:pre}</style></head><body><pre>${escaped}</pre></body></html>`;
 };
 
 export const printPosReport = (text: string, config: BusinessConfig, terminalId?: string): Promise<boolean> =>
   runPrintTask(`pos-report:${terminalId || 'local'}`, 'Informe POS', async () => {
     // Compact 32-column output fits the narrow ticket format. No drawer command.
-    const escPosBase64 = buildEscPosPosReportPayload(text);
+    const currencies = config.currencies?.map(currency => currency.code);
+    const escPosBase64 = buildEscPosPosReportPayload(text, currencies);
     const params = { config, role: 'TICKET' as const, terminalId, jobType: 'TICKET', copies: 1 };
     if (await PrintRouterService.routeAndPrintEscPos({ ...params, escPosBase64 })) return true;
     if (shouldSuppressBrowserPrintFallback()) return false;
-    const html = posReportHtml(text);
+    const html = posReportHtml(text, currencies);
     if (await PrintRouterService.routeAndPrintHtml({ ...params, html })) return true;
     const iframe = document.createElement('iframe');
     iframe.style.cssText = 'position:fixed;width:0;height:0;border:0';

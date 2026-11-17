@@ -64,6 +64,23 @@ test('multiline company metadata retains the report title, range, full company a
  assert.doesNotMatch(text,/Periodo:/);assert.deepEqual(amountTokens(text),amountTokens(buildPosReportText('SALES',source,filters,custom,issued)));
 });
 
+test('free descriptions ending in decimals are not invented currencies, while declared oversized monetary tokens are rejected',()=>{
+ const name='NombreDeProductoSinEspaciosDeCuarentaCaracteres 1.00';
+ const custom={...config,companyInfo:{...config.companyInfo,name}};
+ const data={...source,transactions:[tx({items:[{id:'p',name,quantity:1,price:100}] as Transaction['items']})]};
+ for(const kind of ['PRODUCTS','SALES'] as const){
+  const text=buildPosReportTicket(kind,data,filters,custom,issued);
+  assert.ok(text.replace(/\s/g,'').includes(name.replace(/\s/g,'')));
+  assert.ok(text.split('\n').every(line=>line.length<=32));
+  assert.equal(preparePosReportText(text),text);
+  decodeReport(buildEscPosPosReportPayload(text));
+ }
+ const code='MONEDACONOCIDAQUEEXCEDELAS32COLUMNAS';
+ const declared={...config,currencies:[{code,isBase:true}]} as BusinessConfig;
+ assert.throws(()=>buildPosReportTicket('SALES',{...source,transactions:[tx({currency:code})]},filters,declared,issued),/no cabe/);
+ const raw=preparePosReportText(name);assert.ok(raw.replace(/\s/g,'').includes(name.replace(/\s/g,'')));
+});
+
 test('all seven presentations preserve financial tokens/order and inputs across refunds, currencies and long fields',()=>{
  const before=JSON.stringify(source);
  for(const kind of kinds){
@@ -92,7 +109,7 @@ test('empty reports, negative amounts and largest safe amounts keep every curren
 
 test('currency tokens and symbols retain their complete codes, including four letters and negative amounts',()=>{
  for(const currency of ['USDT','RD$','USD$','X-A','dolar'])for(const amount of ['58873.60','-58873.60']){
-  const text=preparePosReportText(`Ventas tras descuentos: ${currency} ${amount}`);
+  const text=preparePosReportText(`Ventas tras descuentos: ${currency} ${amount}`,32,[currency]);
   assert.ok(text.split('\n').some(line=>line.trim()===`${currency} ${amount}`),text);
   assert.equal(preparePosReportText(text),text);
   decodeReport(buildEscPosPosReportPayload(text));

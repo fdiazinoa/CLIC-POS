@@ -191,13 +191,17 @@ export const buildPosReportTicket = (
   const date = (value: string) => value.split('-').reverse().join('/');
   const lines = [reportHeading(raw[0]), reportHeading(raw[1].toUpperCase()), '='.repeat(POS_REPORT_COLUMNS),
     `Desde: ${date(filters.start)}`, `Hasta: ${date(filters.end)}`, ...raw.slice(3)];
+  const currencies = [...new Set([baseReportCurrency(config), ...(config.currencies || []).map(currency => currency.code),
+    ...source.transactions.map(tx => tx.currency || baseReportCurrency(config)),
+    ...source.movements.map(movement => movement.currencyCode || baseReportCurrency(config))])];
+  const currencySections = new Set(currencies.flatMap(currency => [currency, `${currency} - Top ${filters.productLimit || 'todos'}`]));
   return preparePosReportText(lines.map(line => {
-    if (/^[A-Z][A-Z0-9$._-]*(?: - Top (?:\d+|todos))?$/.test(line)) return reportHeading(`[ ${line} ]`);
+    if (currencySections.has(line)) return reportHeading(`[ ${line} ]`);
     if (/^(Venta neta|TOTAL NETO|Total descuentos|Balance movimientos):/.test(line)) {
       return '-'.repeat(POS_REPORT_COLUMNS) + '\n' + line.replace(/^([^:]+):/, label => label.toUpperCase());
     }
     return line;
-  }).join('\n'));
+  }).join('\n'), POS_REPORT_COLUMNS, currencies);
 };
 
 export const wrapPosReportText = preparePosReportText;

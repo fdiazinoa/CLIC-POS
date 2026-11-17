@@ -1,8 +1,8 @@
 import { preparePosReportText } from '../../utils/posReportPresentation';
 
 /** Dedicated report output: never changes shared payment vouchers or Z receipts. */
-export const buildEscPosPosReportPayload = (text: string): string => {
-  const lines = preparePosReportText(text).split('\n');
+export const buildEscPosPosReportPayload = (text: string, currencyCodes?: readonly string[]): string => {
+  const lines = preparePosReportText(text, 32, currencyCodes).split('\n');
   // Reset, font A, normal width/height, left alignment, emphasis off.
   const bytes: number[] = [0x1b, 0x40, 0x1b, 0x21, 0, 0x1b, 0x4d, 0, 0x1d, 0x21, 0, 0x1b, 0x61, 0, 0x1b, 0x45, 0];
   let header = lines.includes('='.repeat(32));
