@@ -2,12 +2,18 @@ import React from 'react';
 import { Cloud, CloudOff, Landmark } from 'lucide-react';
 
 // Presentation only: callers retain the existing fiscal and sync state sources.
-export function FiscalStatusBadge({ visible, allowed, status, compact = false, short = false }: {
-  visible: boolean; allowed: boolean; compact?: boolean; short?: boolean;
+export function FiscalStatusBadge({ visible, allowed, status, compact = false, short = false, inline = false }: {
+  visible: boolean; allowed: boolean; compact?: boolean; short?: boolean; inline?: boolean;
   status: { type: string; hasNCF: boolean; isTerminalBlock?: boolean; isUsingPool?: boolean };
 }) {
   if (!visible) return null;
   const detail = `${status.type} ${status.hasNCF ? (status.isTerminalBlock ? 'Bloque Terminal' : (status.isUsingPool ? 'Reservado en Pool' : 'Lote Global Activo')) : 'Agotado'}`;
+  if (inline) {
+    return <details className={`handheld-fiscal ${allowed ? 'handheld-fiscal-ready' : 'handheld-fiscal-blocked'}`}>
+      <summary aria-label={`Estado fiscal: ${detail}`}><Landmark size={11} aria-hidden="true" />Fiscal · {status.type}{!status.hasNCF ? ' · Agotado' : ''}</summary>
+      <div role="status">{detail}</div>
+    </details>;
+  }
   if (short) {
     return <div role="status" aria-label={`Status Fiscal: ${detail}`} title={`Status Fiscal: ${detail}`}
       className={`flex h-12 w-16 shrink-0 flex-col items-center justify-center gap-0.5 rounded-2xl border px-1 text-[9px] font-black uppercase leading-tight ${allowed ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : 'bg-red-50 text-red-600 border-red-100'}`}>

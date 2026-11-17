@@ -1021,7 +1021,7 @@ const ProductGridCard = React.memo(({
          onTouchMove={handleTouchMove}
          onTouchEnd={onProductTouchEnd}
          onTouchCancel={onProductTouchEnd}
-         style={{ touchAction: 'manipulation', contentVisibility: 'auto', containIntrinsicSize: compactHandheld ? '118px' : '214px' }}
+         style={{ touchAction: 'manipulation', contentVisibility: 'auto', containIntrinsicSize: compactHandheld ? '98px' : '214px' }}
          className={`pos-product-card ${compactHandheld ? 'handheld-product-card' : ''} w-full min-w-0 bg-white dark:bg-slate-800 dark:border-slate-700 border border-gray-100 transition-all group relative overflow-hidden ${
             warehouseSaleBlocked
                ? 'cursor-not-allowed opacity-[0.82] saturate-[0.72] ring-1 ring-inset ring-amber-300/50 dark:ring-amber-800/45 border-amber-100/90 dark:border-amber-900/30'
@@ -4880,7 +4880,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       key: '', viewportHeight: 0, columns: 4, rowHeight: 0, rowGap: 12, paddingTop: 0, paddingBottom: 0,
    });
    const catalogMeasurementKey = `${isCompactHandheld}:${usesExpandedCatalog}:${usesSupermarketLayout}:${isMobile}:${uxConfig.gridDensity}:${uxConfig.showProductImages}`;
-   const estimatedCatalogRowHeight = isCompactHandheld ? 140 : usesExpandedCatalog
+   const estimatedCatalogRowHeight = isCompactHandheld ? 120 : usesExpandedCatalog
       ? 176
       : usesSupermarketLayout
          ? 230
@@ -8468,7 +8468,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    };
 
    const renderQuickActionsPanel = () => (
-      <div className="animate-in fade-in zoom-in-95 duration-200 mt-2">
+      <div className={`${isCompactHandheld ? 'handheld-quick-actions' : ''} animate-in fade-in zoom-in-95 duration-200 mt-2`}>
+         {!isCompactHandheld && (
          <div className="sticky top-0 z-10 mb-3 flex justify-end bg-gray-100 py-2">
             <button
                type="button"
@@ -8481,7 +8482,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                <span>Ocultar acciones</span>
             </button>
          </div>
-         {canViewHistory && <button
+         )}
+         {canViewHistory && !isCompactHandheld && <button
             onClick={onOpenHistory}
             className="mb-3 flex w-full items-center justify-between rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-left text-sm font-black text-blue-700 shadow-sm transition-all hover:bg-blue-100"
          >
@@ -8517,7 +8519,18 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                )}
             </div>
          )}
+         {isCompactHandheld && <div className="handheld-extra-actions">
+            {cart.length > 0 && <button type="button" disabled={!hasClearableFreshItems} onClick={handleClearFreshCartItems}><Trash2 size={16} />Borrar artículos nuevos</button>}
+            {isRetailMode && cart.length > 0 && <button type="button" onClick={() => { void handleClearAllCartItems(); }}><Trash2 size={16} />Vaciar ticket</button>}
+            {isRestaurantMode && <button type="button" disabled={!activeTable || activeTableAccounts.length === 0} onClick={() => setShowTableSellerModal(true)}><UserCheck size={16} />Vendedor</button>}
+            {canReceiveConsignments && <button type="button" onClick={() => { setShowConsignmentModal(true); setConsignmentError(null); }}><Package size={16} />Consignaciones</button>}
+            {(activeTerminalConfig?.operational?.usa_modulos_cocina || mobileOrderTakerActions.showKitchen) && <button type="button" disabled={cart.length === 0} onClick={() => { void handleDispatchCommand(); }}><ChefHat size={16} />Cocina</button>}
+            {isRestaurantMode && <button type="button" disabled={cart.length === 0} onClick={handlePrintPrecuenta}><Printer size={16} />Sub-total</button>}
+            {canCloseXReport && <button type="button" onClick={() => onOpenFinance('X_REPORT')}><ClipboardCheck size={16} />Cierre X</button>}
+            <button type="button" onClick={onLogout}><LogOut size={16} />Salir de sesión</button>
+         </div>}
          <ActionGrid
+            compact={isCompactHandheld}
             allowHistory={canViewHistory}
             orientation="vertical"
             onAction={(action) => {
@@ -8816,7 +8829,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             table={activeTable ? (activeBarTabName || activeTableHeaderLabel || activeTable.name || activeTable.nombre) : undefined}
             view={mobileView}
             quantity={formatQuantity(cartQuantity, quantityPresentation.salesDecimals)}
-            status={<><SyncStatusBadge online={navigator.onLine} state={syncState} /><FiscalStatusBadge compact visible={!isOrderTakerMode && !isFiscalModeDisabled} allowed={canCheckoutWithFiscalPolicy} status={fiscalStatus} /></>}
+            actionsOpen={mobileView === 'TICKET' && rightSidebarTab === 'ACTIONS'}
+            tariff={<label className="handheld-tariff"><Tag size={13} aria-hidden="true" /><select
+               aria-label="Tarifa activa"
+               value={activeTariffId}
+               disabled={!canChangeTariff}
+               onChange={event => changeActiveTariff(event.target.value)}
+            >{allowedTariffs.map(tariff => <option key={tariff.id} value={tariff.id}>{tariff.name}</option>)}</select></label>}
+            status={<><SyncStatusBadge online={navigator.onLine} state={syncState} /><FiscalStatusBadge inline visible={!isOrderTakerMode && !isFiscalModeDisabled} allowed={canCheckoutWithFiscalPolicy} status={fiscalStatus} /></>}
             onView={(view) => { setMobileView(view); setRightSidebarTab('CART'); }}
             onActions={() => { setMobileView('TICKET'); setRightSidebarTab('ACTIONS'); }}
             onSettings={onOpenSettings}
@@ -8845,7 +8865,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
 
                <div className="w-full md:flex-1 flex flex-nowrap items-center gap-2 md:gap-3 md:min-w-0">
-                  <div className="pos-catalog-tariff relative shrink-0 ml-auto order-2 md:order-3" ref={tariffSelectorRef}>
+                  {!isCompactHandheld && <div className="pos-catalog-tariff relative shrink-0 ml-auto order-2 md:order-3" ref={tariffSelectorRef}>
                      <button
                         type="button"
                         onClick={() => {
@@ -8898,7 +8918,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            </div>
                         </div>
                      )}
-                  </div>
+                  </div>}
 
                   <div className="relative order-1 md:order-2 flex-1 group min-w-[140px] md:min-w-[220px] max-w-[620px]">
                      <Search className="absolute left-3 md:left-4 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
@@ -8949,9 +8969,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   </button>
 
                   {/* MOBILE SETTINGS BUTTON */}
-                  <button onClick={() => onOpenSettings()} className="md:hidden order-4 h-11 w-11 bg-gray-100 rounded-xl text-gray-600 hover:bg-gray-200 shrink-0 flex items-center justify-center">
+                  {!isCompactHandheld && <button onClick={() => onOpenSettings()} className="md:hidden order-4 h-11 w-11 bg-gray-100 rounded-xl text-gray-600 hover:bg-gray-200 shrink-0 flex items-center justify-center">
                      <Settings size={20} />
-                  </button>
+                  </button>}
                </div>
             </header>
             <V3CatalogArticleWarning diagnostics={catalogArticleDiagnostics || []} />
@@ -9229,6 +9249,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
             {/* MOBILE HEADER */}
             < div className={`pos-mobile-ticket-header ${isMobile ? 'flex' : 'hidden'} px-4 py-3 border-b border-gray-100 bg-white flex-col gap-3 shrink-0`} >
+               {!isCompactHandheld && <>
                <div className="flex flex-wrap justify-between items-start gap-2">
                   <div className="flex min-w-0 flex-wrap items-center gap-3">
                      {renderTicketBrand(true)}
@@ -9342,6 +9363,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      </button>
                   )}
                </TicketStatusControls>
+
+               </>}
+               {isCompactHandheld && !isKioskMode && <OrderServiceTypeButton compact value={effectiveOrderServiceType} onClick={() => handleGridAction('TAKEOUT')} />}
 
                {/* CUSTOMER PILL (MOBILE) */}
                {
@@ -10280,6 +10304,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         {renderTableAccountNavigator()}
                      </div>
                   )}
+                  {!isCompactHandheld && (
                   <div className="handheld-checkout-tools flex justify-between items-center mb-4 px-2 gap-3">
                      <div className="flex gap-2 overflow-x-auto overflow-y-hidden no-scrollbar pr-1">
                         <button onClick={() => {
@@ -10352,6 +10377,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         {discountAmount > 0 && <span className="text-[10px] font-bold text-red-500 uppercase block">Desc: -{baseCurrency.symbol}{discountAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>}
                      </div>
                   </div>
+                  )}
                   <div className={`flex items-center gap-4 ${isRetailMode ? 'supermarket-mobile-checkout' : ''}`}>
                      <TicketTotalStatusRow className="flex-1 min-w-0" status={isRetailMode ? <SyncStatusBadge online={navigator.onLine} state={syncState} /> : undefined}>
                         <div className="min-w-0">

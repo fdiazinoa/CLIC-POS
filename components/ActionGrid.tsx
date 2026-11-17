@@ -23,6 +23,7 @@ interface ActionGridProps {
     actionRegion?: 'all' | 'ticket' | 'other';
     hideFinancialClosings?: boolean;
     allowHistory?: boolean;
+    compact?: boolean;
 }
 
 const ActionGrid: React.FC<ActionGridProps> = ({
@@ -42,6 +43,7 @@ const ActionGrid: React.FC<ActionGridProps> = ({
     actionRegion = 'all',
     hideFinancialClosings = false,
     allowHistory = false,
+    compact = false,
 }) => {
     const isHorizontal = orientation === 'horizontal';
     const shouldRenderLogout = showLogout && isHorizontal;
@@ -55,6 +57,7 @@ const ActionGrid: React.FC<ActionGridProps> = ({
         badge?: number | boolean,
         active: boolean = false,
     ) => {
+        if (compact && id === 'SETTINGS') return null;
         const isTicketAction = ['DISCOUNT', 'COUPON', 'PARK_LIST', 'SAVE'].includes(id);
         if (actionRegion === 'ticket' && !isTicketAction) return null;
         if (actionRegion === 'other' && isTicketAction) return null;
@@ -117,7 +120,7 @@ const ActionGrid: React.FC<ActionGridProps> = ({
     };
 
     return (
-        <div className={`w-full ${isHorizontal ? 'max-h-[200px] bg-white border-t border-gray-100 p-2 shadow-inner overflow-x-hidden overflow-y-auto custom-scrollbar' : ''}`}>
+        <div className={`${compact ? 'handheld-action-grid' : ''} w-full ${isHorizontal ? 'max-h-[200px] bg-white border-t border-gray-100 p-2 shadow-inner overflow-x-hidden overflow-y-auto custom-scrollbar' : ''}`}>
             <div className={`mx-auto grid gap-2 ${actionRegion === 'ticket' ? 'grid-cols-2' : isHorizontal ? 'grid-cols-4' : 'grid-cols-3'}`}>
                 {/* SALES GROUP (Blue) */}
                 {renderButton('DISCOUNT', 'Descuento', <Percent />, 'sales')}
