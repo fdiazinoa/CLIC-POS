@@ -2,8 +2,9 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Printer, X } from 'lucide-react';
 import type { BusinessConfig, CashMovement, Transaction, ZReport } from '../types';
 import { db } from '../utils/db';
-import { buildPosReportText, filterPosReportSource, localDate, POS_REPORT_NAMES, validReportDates, wrapPosReportText } from '../utils/posReports';
+import { buildPosReportDocument, filterPosReportSource, localDate, POS_REPORT_NAMES, validReportDates } from '../utils/posReports';
 import type { PosReportKind, PosReportSource } from '../utils/posReports';
+import { QUERY_THERMAL_80MM, queryReportPlainText } from '../services/printer/PosReportThermalLayout';
 import { printPosReport } from '../services/printer/PosReportPrinter';
 import { generateZReportReceipt } from '../services/printer/templates/ZReportReceipt';
 import { ThermalPrinterService } from '../services/printer/ThermalPrinterService';
@@ -58,9 +59,14 @@ const PosReports: React.FC<Props> = ({ config, transactions, terminalId, canRepr
 
   const filters = useMemo(() => ({ start, end, terminalId: selectedTerminal, productLimit }), [start, end, selectedTerminal, productLimit]);
   const filtered = useMemo(() => filterPosReportSource(source, filters, config), [source, filters, config]);
-  const preview = useMemo(() => wrapPosReportText(buildPosReportText(kind, filtered, filters, config, issuedAt)), [kind, filtered, filters, config, issuedAt]);
+  const document = useMemo(() => kind === 'Z_HISTORY' ? null : buildPosReportDocument(kind, filtered, filters, config, issuedAt), [kind, filtered, filters, config, issuedAt]);
+  const presentation = useMemo(() => {
+    try { return { text: document ? queryReportPlainText(document) : '', error: '' }; }
+    catch (cause) { return { text: '', error: cause instanceof Error ? cause.message : 'No se pudo preparar el formato térmico.' }; }
+  }, [document]);
+  const preview = presentation.text;
   const valid = validReportDates(filters);
-  const ready = valid && !loading && !error && !printing;
+  const ready = valid && !loading && !error && !presentation.error && !printing;
   const changePeriod = (value: string) => {
     setPeriod(value);
     if (value === 'CUSTOM') return;
@@ -73,7 +79,7 @@ const PosReports: React.FC<Props> = ({ config, transactions, terminalId, canRepr
     setPrinting(true);
     try {
       if (report) await ThermalPrinterService.printZReport(report, [], config, { terminalId });
-      else await printPosReport(preview, config, terminalId);
+      else if (document) await printPosReport(document, config, terminalId);
     } finally { setPrinting(false); }
   };
   const inputClass = 'w-full min-w-0 rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900';
@@ -97,7 +103,8 @@ const PosReports: React.FC<Props> = ({ config, transactions, terminalId, canRepr
       </div>
       {!valid && <p role="alert" className="text-red-700">Selecciona un rango válido: la fecha inicial debe ser anterior o igual a la final.</p>}
       {error && <p role="alert" className="text-red-700">{error}</p>}
-      {loading ? <p role="status">Cargando informes…</p> : !error && valid && (kind === 'Z_HISTORY' ?
+      {presentation.error && <p role="alert" className="text-red-700">No se puede imprimir este informe: {presentation.error}</p>}
+      {loading ? <p role="status">Cargando informes…</p> : !error && !presentation.error && valid && (kind === 'Z_HISTORY' ?
         <div className="space-y-3">{filtered.reports.length === 0 && <p>No hay cierres Z en este período.</p>}{filtered.reports.map(report => <article key={report.id} className="rounded-2xl border border-slate-200 bg-white p-4">
           <h2 className="font-bold">{report.sequenceNumber} · {resolveTerminalDisplayName(report.terminalId, config.terminals)}</h2>
           <p className="text-sm text-slate-600">{new Date(report.closedAt).toLocaleString()} · {report.closedByUserName} · {report.transactionCount} tickets</p>
@@ -106,10 +113,10 @@ const PosReports: React.FC<Props> = ({ config, transactions, terminalId, canRepr
         </article>)}</div> :
         <section className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-white">
           <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 p-4">
-            <div className="min-w-0"><h2 className="font-bold text-slate-900">{POS_REPORT_NAMES[kind]}</h2><p className="mt-1 text-xs text-slate-500">Vista previa del ticket · 32 columnas</p></div>
+            <div className="min-w-0"><h2 className="font-bold text-slate-900">{POS_REPORT_NAMES[kind]}</h2><p className="mt-1 text-xs text-slate-500">Vista previa · 80 mm · Font A · {QUERY_THERMAL_80MM.columns} columnas</p></div>
             <button type="button" disabled={!ready} onClick={() => void print()} className="flex shrink-0 items-center justify-center gap-2 rounded-xl bg-blue-700 px-4 py-3 text-sm font-bold text-white disabled:opacity-50"><Printer size={18} />{printing ? 'Enviando…' : 'Imprimir ticket'}</button>
           </header>
-          <div className="min-w-0 bg-slate-100 p-3 md:p-5"><pre className="mx-auto w-full min-w-0 max-w-sm whitespace-pre-wrap bg-white p-4 font-mono text-xs leading-5 text-black shadow-sm [overflow-wrap:anywhere]">{preview}</pre></div>
+          <div className="min-w-0 bg-slate-100 p-3 md:p-5"><pre className="mx-auto w-full min-w-0 max-w-sm overflow-x-auto whitespace-pre bg-white p-4 font-mono text-xs leading-5 text-black shadow-sm">{preview}</pre></div>
         </section>)}
     </div>
   </div>;

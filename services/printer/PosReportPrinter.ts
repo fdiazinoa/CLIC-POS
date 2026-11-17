@@ -1,23 +1,23 @@
 import type { BusinessConfig } from '../../types';
-import { buildEscPosVoucherPayload } from './EscPosFormatter';
+import type { PosReportDocument } from './PosReportDocument';
+import { buildQueryReportEscPos, buildQueryReportHtml, QUERY_THERMAL_80MM, type QueryThermalProfile } from './PosReportThermalLayout';
 import { PrintRouterService } from './PrintRouterService';
 import { runPrintTask } from './PrintFeedback';
 import { shouldSuppressBrowserPrintFallback } from './PrintRuntime';
 import { notifyBrowserPrint } from './BrowserPrint';
 
-export const posReportHtml = (text: string): string => {
-  const escaped = text.replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]!));
-  return `<!doctype html><html><head><meta charset="utf-8"><title>Informe POS</title><style>@page{margin:3mm}body{margin:0;width:48mm;font:11px monospace}pre{white-space:pre-wrap;overflow-wrap:anywhere}</style></head><body><pre>${escaped}</pre></body></html>`;
-};
+export const posReportHtml = buildQueryReportHtml;
 
-export const printPosReport = (text: string, config: BusinessConfig, terminalId?: string): Promise<boolean> =>
+export const printPosReport = (report: PosReportDocument, config: BusinessConfig, terminalId?: string, profile: QueryThermalProfile = QUERY_THERMAL_80MM): Promise<boolean> =>
   runPrintTask(`pos-report:${terminalId || 'local'}`, 'Informe POS', async () => {
-    // Compact 32-column output fits the narrow ticket format. No drawer command.
-    const escPosBase64 = buildEscPosVoucherPayload('INFORMES POS', 'CONSULTA', text, 32)!;
     const params = { config, role: 'TICKET' as const, terminalId, jobType: 'TICKET', copies: 1 };
-    if (await PrintRouterService.routeAndPrintEscPos({ ...params, escPosBase64 })) return true;
-    if (shouldSuppressBrowserPrintFallback()) return false;
-    const html = posReportHtml(text);
+    // Native Android writes ESC/POS bytes. The local desktop agent in this repo
+    // spools HTML and does not consume dataBase64: do not submit an empty raw job.
+    if (shouldSuppressBrowserPrintFallback()) {
+      const escPosBase64 = buildQueryReportEscPos(report, profile);
+      return PrintRouterService.routeAndPrintEscPos({ ...params, escPosBase64 });
+    }
+    const html = posReportHtml(report, profile);
     if (await PrintRouterService.routeAndPrintHtml({ ...params, html })) return true;
     const iframe = document.createElement('iframe');
     iframe.style.cssText = 'position:fixed;width:0;height:0;border:0';

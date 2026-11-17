@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { BusinessConfig, CashMovement, Transaction, ZReport } from '../types';
-import { buildPosReportText, filterPosReportSource, localDate, validReportDates, wrapPosReportText } from '../utils/posReports';
+import { buildPosReportText, filterPosReportSource, localDate, validReportDates } from '../utils/posReports';
 import { buildEscPosVoucherPayload } from '../services/printer/EscPosFormatter';
 
 const config = { companyInfo: { name: 'Mi tienda' }, currencies: [{ code: 'DOP', isBase: true }],
@@ -134,13 +134,4 @@ test('adjustments show global and line discounts, ignore price overrides and rep
 });
 test('new reports explicitly describe empty periods', () => {
   for (const kind of ['CASHIERS', 'HOURS', 'ADJUSTMENTS'] as const) assert.match(reportText(kind, []), /Sin registros en el periodo/);
-});
-
-
-test('ticket preview wraps at 32 columns, preserves words and splits long identifiers', () => {
-  const text = wrapPosReportText('Ventas tras descuentos: DOP 100.00\n\n' + 'X'.repeat(70));
-  assert.ok(text.split('\n').every(line => line.length <= 32));
-  assert.match(text, /Ventas tras descuentos: DOP\n100.00/);
-  assert.ok(text.includes('\n\n'));
-  assert.equal(wrapPosReportText('Texto corto'), 'Texto corto');
 });
