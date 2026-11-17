@@ -1066,6 +1066,7 @@ const Settings: React.FC<SettingsProps> = (props) => {
   <SettingsCard icon={Monitor} label="Configuración Local" description="Terminales, mesas, hardware y etiquetas" color="bg-slate-700" onClick={() => setOpenSettingsGroup('LOCAL')} locked={false} />
   <SettingsCard icon={Users} label="Equipo y Marketing" description="Usuarios, clientes, lealtad y promociones" color="bg-pink-500" onClick={() => setOpenSettingsGroup('TEAM')} locked={false} />
   <SettingsCard icon={ShieldAlert} label="Sistema y Auditoría" description="Sincronización, seguridad y diagnóstico" color="bg-red-600" onClick={() => setOpenSettingsGroup('SYSTEM')} locked={false} />
+  <SettingsCard icon={Printer} label="Informes POS" description="Ventas, pagos, productos y tickets térmicos" color="bg-blue-700" onClick={() => { if (hasPermission('REPORTS_VIEW_SALES')) setCurrentView('POS_REPORTS'); }} locked={!hasPermission('REPORTS_VIEW_SALES')} />
               </div>
                 {openSettingsGroup === 'CATALOG' && (
                   <div className="fixed inset-0 z-[130] flex items-center justify-center bg-black/40 p-6" onClick={() => setOpenSettingsGroup(null)}>
@@ -1134,7 +1135,6 @@ const Settings: React.FC<SettingsProps> = (props) => {
                   <SettingsCard icon={ArrowRightLeft} label="Divisas y Cambio" description="Multi-moneda y Tasas" color="bg-teal-500" onClick={() => setCurrentView('EXCHANGE')} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={Percent} label="Impuestos" description="ITBIS, Exentos y Cargos" color="bg-emerald-500" onClick={() => setCurrentView('TAXES')} locked={!hasPermission('SETTINGS_TAXES')} />
                   <SettingsCard icon={ShoppingBag} label="Tipo de servicio" description="En local, Para llevar y Delivery" color="bg-violet-600" onClick={() => setCurrentView('SERVICE_TYPES')} locked={!hasPermission('SETTINGS_TAXES')} />
-                  <SettingsCard icon={Printer} label="Informes POS" description="Ventas, pagos, productos y tickets térmicos" color="bg-blue-700" onClick={() => { if (hasPermission('REPORTS_VIEW_SALES')) setCurrentView('POS_REPORTS'); }} locked={!hasPermission('REPORTS_VIEW_SALES')} />
                   <SettingsCard icon={ListChecks} label="Cierre X" description="Arqueo parcial sin limpiar ventas" color="bg-blue-700" onClick={() => props.onOpenFinance ? props.onOpenFinance('X_REPORT') : props.onOpenZReport()} locked={!hasPermission('POS_CLOSE_X')} />
                   <SettingsCard icon={Lock} label="Cierre de Caja" description="Corte Z y Auditoría Fiscal" color="bg-slate-900" onClick={props.onOpenZReport} locked={!hasPermission('POS_CLOSE_Z')} />
                   {props.onOpenHistory && <SettingsCard icon={History} label="Historial de facturas" description="Consultar facturas realizadas y su estado fiscal" color="bg-cyan-700" onClick={() => {
