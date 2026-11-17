@@ -6,7 +6,7 @@
 | --- | --- | --- |
 | `useSupervisorAuth.logAction` (descuento, anulación, devolución, cantidad, cobro y otras solicitudes de permiso) | Solo `config.auditLogs`; no envío ERP | Cola local `posAuditEvents` + `/api/sync/audit-events` |
 | `InvoiceReviewService` con Outbox nativo activo | `INVOICE_AUDIT_RECORDED` / `INVOICE_REVIEW_FLAGGED` recibidos en inbox, sin bitácora ERP | Proyección del recibo durable hacia `erp_audit_events` |
-| `InvoiceReviewService` sin Outbox | `invoiceAuditEvents` local pendiente sin drenaje | Drenaje por endpoint dedicado usando la misma identidad que inbox |
+| `InvoiceReviewService` sin Outbox | `invoiceAuditEvents` local pendiente sin drenaje | Drenaje por endpoint dedicado usando la misma identidad que inbox; activar Outbox después no deja huérfanas las filas legacy |
 
 El hook acredita **autorización concedida**, incluida autoautorización. Ocurre antes del callback de negocio: nunca prueba descuento aplicado, devolución completada, anulación efectuada o apertura física de gaveta. La UI muestra «Autorizar descuento» / «Autorizar operación», el resultado `AUTHORIZED`, cajero/supervisor y valores declarados. Los correos distinguen solicitud, reenvío exitoso y fallo según el evento real del productor.
 
@@ -47,7 +47,7 @@ El POS comprueba versión de su propio registro y ACK por ID estable/UUID de bit
 5. El endpoint debe estar desplegado antes del nuevo POS. ERP anterior/ausente conserva filas en reintento con ACK estricto. El transporte dedicado se usa solo en canales `ERP_ACTIVE` / `POS_CLOUD_STAGING`. **POS_MASTER sin forward compatible conserva pendientes sin tráfico al endpoint desconocido**; no se cambian reglas LAN ni Kotlin ni se salta SyncProfile. Validación de esa topología permanece pendiente.
 6. Logs históricos `current-terminal`, sin terminal real o hash simulado no se atribuyen retroactivamente. No se reemiten automáticamente eventos de negocio para reconstruir auditoría. Una recuperación histórica de inbox debe ser selectiva por scope e IDs, proyectar la fila durable con este servicio y comprobar idempotencia, mediante tarea autorizada; no ejecutar el aplicador de ventas.
 
-Rollback de aplicación: revertir PR por flujo protegido, conservando cola/histórico. La extensión SQL puede permanecer compatible con ERP anterior. No restaurar un constraint antiguo que rechace acciones ya almacenadas ni borrar historial para hacer rollback. Nunca desinstalar/limpiar datos del POS para revertir.
+Rollback preferido: pausar transporte mediante feature flag, conservando cola/histórico. Si se revierte el código POS, conservar `DB_VERSION = 28` y el store aditivo `posAuditEvents`; nunca bajar la versión IndexedDB ni borrar la base para volver a un bundle anterior. SQLite Android no recibió un cambio de esquema comercial. Revertir PR por flujo protegido solo con esa compatibilidad preservada. La extensión SQL puede permanecer compatible con ERP anterior. No restaurar un constraint antiguo que rechace acciones ya almacenadas ni borrar historial para hacer rollback. Nunca desinstalar/limpiar datos del POS para revertir.
 
 ## Evidencia local y límites de verificación
 
@@ -55,4 +55,4 @@ Tests focalizados: PostgreSQL PGlite + HTTP real de la factory, persistencia/dup
 
 ## Nombre del usuario afectado en eventos ERP
 
-La acción de descatalogar un usuario POS emitía `entity_display = user.id` y omitía su nombre en la selección SQL. El productor ahora conserva nombre real (email disponible como fallback) y UUID técnico, sin cambiar la descatalogación ni permisos. Para eventos históricos `erp_pos_user` cuyo título está vacío o es UUID, la lectura compartida de lista/CSV prioriza nombre del snapshot y luego hace una única consulta por lote a `erp_pos_users.id` dentro del tenant. No reemplaza títulos históricos legibles, no modifica filas históricas ni interpreta el ID como `auth.users`; si el usuario ya no existe o no hay nombre disponible conserva el identificador original.
+La acción de descatalogar un usuario POS emitía `entity_display = user.id` y omitía su nombre en la selección SQL. El productor ahora conserva nombre real (email disponible como fallback) y UUID técnico, sin cambiar la descatalogación ni permisos. El nombre se conserva como metadata de identidad (`entity_name`), fuera del diff de campos modificados. Para eventos históricos `erp_pos_user` cuyo título está vacío o es UUID, la lectura compartida de lista/CSV prioriza nombre del snapshot y luego hace una única consulta por lote a `erp_pos_users.id` dentro del tenant. No reemplaza títulos históricos legibles, no modifica filas históricas ni interpreta el ID como `auth.users`; si el usuario ya no existe o no hay nombre disponible conserva el identificador original.

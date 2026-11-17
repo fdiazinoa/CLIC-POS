@@ -525,14 +525,13 @@ class BackgroundSyncManager {
                     console.warn('[POS_AUDIT_TRANSPORT_PENDING]', error?.message || 'unknown error');
                     this.nextRetryDelayMs = this.nextRetryDelayMs === null ? this.WORKER_INTERVAL_MS : Math.min(this.nextRetryDelayMs, this.WORKER_INTERVAL_MS);
                 });
-                // The native Outbox owns its invoice events when enabled. Legacy storage
-                // needs an explicit drain too; both paths use the same source event ID.
-                if (!isSyncFeatureEnabled('sqlite_outbox_v2') || !durableOutboxRepository.isSupported()) {
-                    await this.processCollection<any>('invoiceAuditEvents', item => apiSyncAdapter.pushAuditEvent(item, true)).catch((error: any) => {
-                        console.warn('[POS_INVOICE_AUDIT_TRANSPORT_PENDING]', error?.message || 'unknown error');
-                        this.nextRetryDelayMs = this.nextRetryDelayMs === null ? this.WORKER_INTERVAL_MS : Math.min(this.nextRetryDelayMs, this.WORKER_INTERVAL_MS);
-                    });
-                }
+                // A global Outbox flag cannot establish ownership of historical rows.
+                // Dedicated delivery and Inbox share a stable source identity in ERP,
+                // so even a row delivered by both paths produces one audit record.
+                await this.processCollection<any>('invoiceAuditEvents', item => apiSyncAdapter.pushAuditEvent(item, true)).catch((error: any) => {
+                    console.warn('[POS_INVOICE_AUDIT_TRANSPORT_PENDING]', error?.message || 'unknown error');
+                    this.nextRetryDelayMs = this.nextRetryDelayMs === null ? this.WORKER_INTERVAL_MS : Math.min(this.nextRetryDelayMs, this.WORKER_INTERVAL_MS);
+                });
             }
 
             // Report range cursors only after the normal master/document queues.
@@ -749,7 +748,6 @@ class BackgroundSyncManager {
         }
         const collections = (collectionOverride || [...this.operationalCollections, 'catalogEdits']).filter(collection =>
             (!isSyncFeatureEnabled('sqlite_outbox_v2') || (collection !== 'transactions' && collection !== 'inventoryLedger'))
-            && !(collection === 'invoiceAuditEvents' && isSyncFeatureEnabled('sqlite_outbox_v2') && durableOutboxRepository.isSupported())
         );
 
         for (const col of collections) {

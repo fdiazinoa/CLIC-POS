@@ -1,3 +1,4 @@
+import { confirmCurrentAuthorization } from '../utils/supervisorAuthorizationGuard';
 import { buildAuthorizationLog, persistAuthorizationLog } from '../services/audit/PosOperationalAudit';
 import { permissionService } from '../services/sync/PermissionService';
 import { dbAdapter } from '../services/db';
@@ -34,10 +35,13 @@ export const useSupervisorAuth = ({ config, currentUser, roles, onUpdateConfig, 
         resolve: (value: boolean) => void;
         params: RequestApprovalParams;
         returnContext?: ReturnSecurityContext;
+        attempt: number;
+        isCurrent: () => boolean;
     } | null>(null);
 
     const pendingRef = useRef(pendingRequest);
     const mountedRef = useRef(true);
+    const authorizationAttemptRef = useRef(0);
     useEffect(() => {
         mountedRef.current = true;
         return () => { mountedRef.current = false; pendingRef.current?.resolve(false); pendingRef.current = null; };
@@ -48,10 +52,18 @@ export const useSupervisorAuth = ({ config, currentUser, roles, onUpdateConfig, 
     const configRef = useRef(config);
     configRef.current = config;
 
+    const isCurrentContext = useCallback(() => mountedRef.current
+        && authContextRef.current.currentUser === currentUser
+        && authContextRef.current.roles === roles
+        && authContextRef.current.terminalSecurity === terminalSecurity, [currentUser, roles, terminalSecurity]);
+
     const requestApproval = useCallback((params: RequestApprovalParams): Promise<boolean> => {
+        const attempt = ++authorizationAttemptRef.current;
+        const isCurrent = () => isCurrentContext() && authorizationAttemptRef.current === attempt;
         return new Promise((resolve) => {
           void (async () => {
             const returnContext = isReturnPermission(params.permission) ? await readReturnSecurityContext(dbAdapter, roles) : undefined;
+            if (!isCurrent()) { resolve(false); return; }
             if (returnContext && !hasReturnRequestContext(returnContext, currentUser)) { resolve(false); return; }
             // 1. Check if current user has permission
             const userRole = roles?.find(r => r.id === currentUser?.roleId) ||
@@ -72,8 +84,11 @@ export const useSupervisorAuth = ({ config, currentUser, roles, onUpdateConfig, 
                 if (hasPermission && withinLimits && !requiresTerminalPolicyPin(terminalSecurity, params.permission)) {
                     // Log self-authorization
                     await logAction(currentUser!, currentUser!, params);
-                    if (!mountedRef.current || authContextRef.current.currentUser !== currentUser || authContextRef.current.roles !== roles || authContextRef.current.terminalSecurity !== terminalSecurity) { resolve(false); return; }
-                    if (returnContext && !canCompleteReturnApproval(returnContext, await readReturnSecurityContext(dbAdapter, roles), currentUser, currentUser)) { resolve(false); return; }
+                    const confirmed = await confirmCurrentAuthorization({ isCurrent,
+                        readFinalContext: returnContext ? () => readReturnSecurityContext(dbAdapter, roles) : undefined,
+                        acceptsFinalContext: returnContext ? current => canCompleteReturnApproval(returnContext, current, currentUser!, currentUser) : undefined,
+                    });
+                    if (!confirmed || !isCurrent()) { resolve(false); return; }
                     params.onAuthorized?.(currentUser!);
                     resolve(true);
                     return;
@@ -82,16 +97,17 @@ export const useSupervisorAuth = ({ config, currentUser, roles, onUpdateConfig, 
 
             // 2. If not, open modal
             pendingRef.current?.resolve(false);
-            pendingRef.current = { resolve, params, returnContext };
+            pendingRef.current = { resolve, params, returnContext, attempt, isCurrent };
             setPendingRequest(pendingRef.current);
             setIsModalOpen(true);
           })().catch(() => resolve(false));
         });
-    }, [config, currentUser, roles, terminalSecurity]);
+    }, [config, currentUser, roles, terminalSecurity, isCurrentContext]);
 
     const handleAuthorize = async (supervisor: User) => {
         const request = pendingRef.current;
         if (!request || authorizationInFlight.current) return;
+        if (!request.isCurrent()) { request.resolve(false); pendingRef.current = null; setPendingRequest(null); setIsModalOpen(false); return; }
         authorizationInFlight.current = true;
         try {
             if (request.returnContext) {
@@ -104,9 +120,16 @@ export const useSupervisorAuth = ({ config, currentUser, roles, onUpdateConfig, 
             if (pendingRef.current !== request) return;
             await logAction(currentUser || supervisor, supervisor, request.params);
             if (pendingRef.current !== request) return;
-            if (!mountedRef.current || authContextRef.current.currentUser !== currentUser || authContextRef.current.roles !== roles || authContextRef.current.terminalSecurity !== terminalSecurity) { request.resolve(false); pendingRef.current = null; setPendingRequest(null); setIsModalOpen(false); return; }
-            if (request.returnContext && !canCompleteReturnApproval(request.returnContext, await readReturnSecurityContext(dbAdapter, roles), supervisor, currentUser)) { request.resolve(false); pendingRef.current = null; setPendingRequest(null); setIsModalOpen(false); return; }
-            if (pendingRef.current !== request) return;
+            const isCurrent = () => request.isCurrent() && pendingRef.current === request && authorizationAttemptRef.current === request.attempt;
+            const confirmed = await confirmCurrentAuthorization({ isCurrent,
+                readFinalContext: request.returnContext ? () => readReturnSecurityContext(dbAdapter, roles) : undefined,
+                acceptsFinalContext: request.returnContext ? current => canCompleteReturnApproval(request.returnContext!, current, supervisor, currentUser) : undefined,
+            });
+            if (!confirmed || !isCurrent()) {
+                request.resolve(false);
+                if (pendingRef.current === request) { pendingRef.current = null; setPendingRequest(null); setIsModalOpen(false); }
+                return;
+            }
             request.params.onAuthorized?.(supervisor);
             request.resolve(true); pendingRef.current = null; setPendingRequest(null); setIsModalOpen(false);
         } finally { authorizationInFlight.current = false; }

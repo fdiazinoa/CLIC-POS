@@ -95,6 +95,6 @@ test('old endpoint, partial receipt and missing/mismatched ACK never confirm a l
 test('worker keeps audit after commercial queues, respects sale activity and legacy invoice ownership; hook rechecks async authorization',()=>{
     const worker=readFileSync(new URL('../services/sync/BackgroundSyncManager.ts',import.meta.url),'utf8');
     assert.ok(worker.indexOf("processCollection<any>('posAuditEvents'")>worker.indexOf("processCollection<any>('loyalty_events'"));
-    assert.match(worker,/pos_operational_audit'\) && \['ERP_ACTIVE', 'POS_CLOUD_STAGING'\]\.includes\(operationalTarget.kind\) && !isPosSaleActive\(\)/);assert.match(worker,/!isSyncFeatureEnabled\('sqlite_outbox_v2'\) \|\| !durableOutboxRepository.isSupported\(\)/);
-    const hook=readFileSync(new URL('../hooks/useSupervisorAuth.ts',import.meta.url),'utf8');assert.match(hook,/await persistAuthorizationLog/);assert.match(hook,/authorizationInFlight.current/);assert.match(hook,/authContextRef.current.currentUser !== currentUser/);assert.match(hook,/await logAction[\s\S]*if \(pendingRef.current !== request\) return/);
+    assert.match(worker,/pos_operational_audit'\) && \['ERP_ACTIVE', 'POS_CLOUD_STAGING'\]\.includes\(operationalTarget.kind\) && !isPosSaleActive\(\)/);assert.doesNotMatch(worker,/collection === 'invoiceAuditEvents' && isSyncFeatureEnabled/);
+    const hook=readFileSync(new URL('../hooks/useSupervisorAuth.ts',import.meta.url),'utf8');assert.match(hook,/await persistAuthorizationLog/);assert.match(hook,/authorizationInFlight.current/);assert.match(hook,/authContextRef.current.currentUser === currentUser/);assert.equal((hook.match(/if \(!confirmed \|\| !isCurrent\(\)\)/g)||[]).length,2);assert.match(hook,/await logAction[\s\S]*if \(pendingRef.current !== request\) return/);
 });
