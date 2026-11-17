@@ -119,6 +119,9 @@ import { calculateInventoryDeductions, resolveInventoryConsumptionMode, transfer
 import { useSupervisorAuth } from '../hooks/useSupervisorAuth';
 import { calculateSalesCommission } from '../utils/userSalesPolicy';
 import SupervisorModal from './SupervisorModal';
+import { HandheldPOSHeader, HandheldCartSummary } from './HandheldPOSChrome';
+import { usesHandheldSalePresentation } from '../utils/handheldPresentation';
+import './handheldPOS.css';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { useBottomSafeOffset } from '../hooks/useBottomSafeOffset';
 import MobileConfigModal from './MobileConfigModal';
@@ -928,6 +931,7 @@ interface ProductGridCardProps {
    usesSupermarketLayout: boolean;
    usesExpandedCatalog: boolean;
    isMobile: boolean;
+   compactHandheld?: boolean;
    showProductImages: boolean;
    baseCurrencySymbol: string;
    isProductWarehouseBlockedForSale: (product: Product) => boolean;
@@ -949,6 +953,7 @@ const ProductGridCard = React.memo(({
    usesExpandedCatalog,
    isMobile,
    showProductImages,
+   compactHandheld = false,
    baseCurrencySymbol,
    isProductWarehouseBlockedForSale,
    getTerminalWarehouseName,
@@ -1003,14 +1008,21 @@ const ProductGridCard = React.memo(({
                ? `No vendible en ${getTerminalWarehouseName()}: habilite este artículo en el almacén de ventas de esta caja (ERP).`
                : undefined
          }
+         role={compactHandheld ? 'button' : undefined}
+         tabIndex={compactHandheld ? 0 : undefined}
+         aria-label={compactHandheld ? `${productName}, ${baseCurrencySymbol}${price.toFixed(2)}${outOfStock ? ', sin stock' : ''}${warehouseSaleBlocked ? ', sin almacén en esta caja' : ''}` : undefined}
+         onKeyDown={compactHandheld ? (event) => {
+            if (event.target !== event.currentTarget) return;
+            if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onProductClick(product); }
+         } : undefined}
          onClick={() => onProductClick(product)}
          onContextMenu={(event) => onProductContextMenu(product, event)}
          onTouchStart={handleTouchStart}
          onTouchMove={handleTouchMove}
          onTouchEnd={onProductTouchEnd}
          onTouchCancel={onProductTouchEnd}
-         style={{ touchAction: 'manipulation', contentVisibility: 'auto', containIntrinsicSize: '214px' }}
-         className={`pos-product-card w-full min-w-0 bg-white dark:bg-slate-800 dark:border-slate-700 border border-gray-100 transition-all group relative overflow-hidden ${
+         style={{ touchAction: 'manipulation', contentVisibility: 'auto', containIntrinsicSize: compactHandheld ? '118px' : '214px' }}
+         className={`pos-product-card ${compactHandheld ? 'handheld-product-card' : ''} w-full min-w-0 bg-white dark:bg-slate-800 dark:border-slate-700 border border-gray-100 transition-all group relative overflow-hidden ${
             warehouseSaleBlocked
                ? 'cursor-not-allowed opacity-[0.82] saturate-[0.72] ring-1 ring-inset ring-amber-300/50 dark:ring-amber-800/45 border-amber-100/90 dark:border-amber-900/30'
                : 'cursor-pointer hover:border-purple-300 hover:-translate-y-1 active:scale-95'
@@ -1028,6 +1040,18 @@ const ProductGridCard = React.memo(({
                   ? `rounded-[1.4rem] p-2.5 min-h-[148px] shadow-sm flex flex-col ${warehouseSaleBlocked ? '' : 'hover:shadow-xl'}`
                   : `rounded-[1.6rem] p-3 min-h-[166px] shadow-sm flex flex-col ${warehouseSaleBlocked ? '' : 'hover:shadow-xl'}`}`}
       >
+         {compactHandheld ? <>
+            <div className="handheld-product-top">
+               <span className="handheld-product-icon">{imageSrc ? <img src={imageSrc} alt="" loading="lazy" decoding="async" /> : <ShoppingBag size={20} />}</span>
+               {outOfStock && <span className="handheld-stock-label">Sin stock</span>}
+               {isWeighted && <ScaleIcon size={16} aria-label="Producto por peso" />}
+               {!isWeighted && hasVariants && <Layers size={16} aria-label="Tiene variantes" />}
+            </div>
+            <h3 className="handheld-product-name">{productName}</h3>
+            <div className="handheld-product-price"><strong>{baseCurrencySymbol}{price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong><span aria-hidden="true">+</span></div>
+            {hasPromotion && <button type="button" className="handheld-promotion" onClick={(event) => { event.stopPropagation(); onOpenPromotion(product); }}>Ver oferta</button>}
+            {warehouseSaleBlocked && <span className="handheld-warehouse-label">Sin almacén en esta caja</span>}
+         </> : <>
          {showProductImages && (
             <div className={`w-full min-w-0 ${usesSupermarketLayout ? 'h-full rounded-[1.35rem] mb-0 p-2.5' : usesExpandedCatalog ? 'h-full rounded-[1.1rem] mb-0 p-1.5' : isCompactMobileCard ? 'h-[6.75rem] rounded-[1.15rem] mb-1.5 p-2' : 'h-28 md:h-32 rounded-[1.5rem] mb-2.5'} bg-gray-50 dark:bg-slate-800 overflow-hidden relative flex items-center justify-center`}>
                {imageSrc ? <img src={imageSrc} loading="lazy" decoding="async" className={`w-full h-full ${usesSupermarketLayout || usesExpandedCatalog || isCompactMobileCard ? 'object-contain' : 'object-cover object-center'}`} /> : <div className="w-full h-full flex items-center justify-center text-gray-200 dark:text-slate-700"><Grid size={usesSupermarketLayout ? 56 : 48} strokeWidth={1} /></div>}
@@ -1153,6 +1177,7 @@ const ProductGridCard = React.memo(({
                </span>
             </div>
          )}
+         </>}
       </div>
    );
 });
@@ -2115,7 +2140,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       onSelectCustomer
    ]);
 
-   const isMobile = useIsMobile(isTabletProfile ? 900 : 768, isOrderTakerMode);
+   const isCompactHandheld = usesHandheldSalePresentation(activeDeviceProfile.formFactor, isRetailMode, isRestaurantMode, isKioskMode);
+   const isMobileViewport = useIsMobile(isTabletProfile ? 900 : 768, isOrderTakerMode);
+   const isMobile = isCompactHandheld || isMobileViewport;
    const tariffSelectorRef = useRef<HTMLDivElement>(null);
 
    const userPermissions = useMemo(() => {
@@ -2162,6 +2189,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    );
 
    const gridClass = useMemo(() => {
+      if (isCompactHandheld) return "grid grid-cols-2 gap-2 content-start";
       if (usesSupermarketLayout) {
         return "grid [grid-template-columns:repeat(auto-fill,minmax(210px,1fr))] gap-4 md:gap-5 content-start auto-rows-fr";
       }
@@ -2175,15 +2203,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          return "grid [grid-template-columns:repeat(auto-fill,minmax(145px,1fr))] gap-3 content-start";
       }
       return "grid [grid-template-columns:repeat(auto-fill,minmax(160px,1fr))] gap-3 md:gap-4 content-start";
-   }, [isMobile, usesExpandedCatalog, usesSupermarketLayout, uxConfig.gridDensity]);
+   }, [isCompactHandheld, isMobile, usesExpandedCatalog, usesSupermarketLayout, uxConfig.gridDensity]);
 
    const categoryContainerClass = useMemo(() => {
+      if (isCompactHandheld) return "handheld-category-strip";
       if (usesSupermarketLayout) {
          return "hidden";
       }
       const scrollbarClass = uxConfig.quickKeysLayout === 'B' ? 'custom-scrollbar' : 'no-scrollbar';
       return `pos-category-strip bg-white border-b border-gray-200 px-3 md:px-8 py-2 md:py-3 grid grid-flow-col grid-rows-2 auto-cols-[112px] md:auto-cols-[132px] gap-x-3 gap-y-2 overflow-x-auto overflow-y-hidden shrink-0 ${scrollbarClass}`;
-   }, [usesSupermarketLayout, uxConfig.quickKeysLayout]);
+   }, [isCompactHandheld, usesSupermarketLayout, uxConfig.quickKeysLayout]);
 
    const allowedTariffs = useMemo(() => {
       const allowedIds = activeTerminalConfig?.pricing?.allowedTariffIds || [];
@@ -3964,7 +3993,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (rejectFormatQuickReturn(product)) return;
       if (Date.now() < suppressProductInputUntilMs) return;
       // MOBILE INTERCEPTION
-      if (isMobile && !defaultSalesWarehouseId) {
+      if (isMobileViewport && !defaultSalesWarehouseId) {
          setPendingProductToAdd(product);
          setShowMobileConfigModal(true);
          return;
@@ -3994,7 +4023,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       else if(product.inventoryPresentationMaster&&!isReturnMode)setPresentationSelection(product);
       else if (articleFormatsEnabled && product.article_formats?.formats.length && !isReturnMode) setFormatSelection({product,variantId:null,basePrice:getProductPrice(product),modifiers:[]});
       else addToCart(product, isReturnMode ? -1 : 1);
-   }, [isMobile, defaultSalesWarehouseId, ensureSalesWithOpenZPermission, canAddItemToCart, addToCart, isReturnMode, suppressProductInputUntilMs, v3Operational, config, activeTerminalId, rejectFormatQuickReturn, articleFormatsEnabled, getProductPrice]);
+   }, [isMobileViewport, defaultSalesWarehouseId, ensureSalesWithOpenZPermission, canAddItemToCart, addToCart, isReturnMode, suppressProductInputUntilMs, v3Operational, config, activeTerminalId, rejectFormatQuickReturn, articleFormatsEnabled, getProductPrice]);
 
    useEffect(() => {
       if (!productForScale || !saleScaleContext) return;
@@ -4803,7 +4832,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       tableLatencyQaMark('FILTER_START', { products: sortedSalesCatalogProductEntries.length });
       // The retail ticket has no catalog grid. Keep only a bounded set of
       // suggestions so a 4,000-item catalog does not render on every keystroke.
-      if (isRetailMode && !catalogSearchQuery.trim()) {
+      if (isRetailMode && !isCompactHandheld && !catalogSearchQuery.trim()) {
          tableLatencyQaMark('FILTER_END', { products: 0 });
          return [];
       }
@@ -4830,7 +4859,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             if (seenIds.has(p.id)) return false;
             seenIds.add(p.id);
             return true;
-         }).slice(0, isRetailMode ? 60 : undefined);
+         }).slice(0, isRetailMode && !isCompactHandheld ? 60 : undefined);
       const trace = searchFilterTraceRef.current;
       if (trace?.stages.FILTER_START !== undefined && trace.stages.FILTER_END === undefined) {
          trace.allocationsApprox += filtered.length + result.length + 1;
@@ -4838,7 +4867,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
       tableLatencyQaMark('FILTER_END', { products: result.length });
       return result;
-   }, [sortedSalesCatalogProductEntries, categoryFilter, catalogSearchQuery, canonicalizeCategory, effectiveAllowedCategorySet, categoryLookup.presentationByCanonical, isRetailMode]);
+   }, [sortedSalesCatalogProductEntries, categoryFilter, catalogSearchQuery, canonicalizeCategory, effectiveAllowedCategorySet, categoryLookup.presentationByCanonical, isRetailMode, isCompactHandheld]);
 
    // Keep the complete result set searchable. Only the ProductCard DOM follows
    // the current scroll viewport; leaving Venta mounted preserves its state.
@@ -4850,8 +4879,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [catalogMeasurements, setCatalogMeasurements] = useState({
       key: '', viewportHeight: 0, columns: 4, rowHeight: 0, rowGap: 12, paddingTop: 0, paddingBottom: 0,
    });
-   const catalogMeasurementKey = `${usesExpandedCatalog}:${usesSupermarketLayout}:${isMobile}:${uxConfig.gridDensity}:${uxConfig.showProductImages}`;
-   const estimatedCatalogRowHeight = usesExpandedCatalog
+   const catalogMeasurementKey = `${isCompactHandheld}:${usesExpandedCatalog}:${usesSupermarketLayout}:${isMobile}:${uxConfig.gridDensity}:${uxConfig.showProductImages}`;
+   const estimatedCatalogRowHeight = isCompactHandheld ? 140 : usesExpandedCatalog
       ? 176
       : usesSupermarketLayout
          ? 230
@@ -4869,7 +4898,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       ? Math.max(176, (catalogViewportHeight - 24 - catalogMeasurements.rowGap) / 2)
       : catalogRowHeight;
    const virtualCatalogWindow = catalogViewportWindow({
-      itemCount: isRetailMode ? 0 : catalogProductsForGrid.length,
+      itemCount: isRetailMode && !isCompactHandheld ? 0 : catalogProductsForGrid.length,
       columns: catalogMeasurements.columns,
       rowHeight: effectiveCatalogRowHeight,
       rowGap: catalogMeasurements.rowGap,
@@ -4913,7 +4942,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          const paddingTop = parseFloat(computed.paddingTop) || 0;
          const paddingBottom = parseFloat(computed.paddingBottom) || 0;
          const firstCard = grid.querySelector<HTMLElement>('.pos-product-card');
-         const measuredRowHeight = firstCard?.getBoundingClientRect().height || estimatedCatalogRowHeight;
+         const measuredRowHeight = isCompactHandheld
+            ? Math.max(estimatedCatalogRowHeight, ...Array.from(grid.querySelectorAll<HTMLElement>('.pos-product-card'), card => card.scrollHeight + 2))
+            : firstCard?.getBoundingClientRect().height || estimatedCatalogRowHeight;
          setCatalogMeasurements(previous => {
             const next = {
                key: catalogMeasurementKey,
@@ -4938,7 +4969,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const observer = new ResizeObserver(measure);
       observer.observe(viewport);
       return () => observer.disconnect();
-   }, [catalogMeasurementKey, estimatedCatalogRowHeight, visibleCatalogProducts.length]);
+   }, [catalogMeasurementKey, estimatedCatalogRowHeight, visibleCatalogProducts.length, isCompactHandheld, isCompactHandheld ? virtualCatalogWindow.startIndex : 0]);
    useEffect(() => () => {
       if (catalogScrollFrameRef.current !== null) cancelAnimationFrame(catalogScrollFrameRef.current);
    }, []);
@@ -8529,6 +8560,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          ref={posRootRef}
          data-pos-scanner-enabled={!isAnyModalOpen ? 'true' : 'false'}
          className={`clic-pos-device-shell fixed inset-0 w-full overflow-hidden bg-gray-50 flex font-sans select-none text-gray-900 ${isTabletProfile ? 'clic-pos-tablet-shell' : ''}`}
+         data-handheld-compact={isCompactHandheld ? 'true' : undefined}
          data-pos-layout={isRetailMode ? 'retail' : isRestaurantMode ? 'restaurant' : 'catalog'}
          data-device-form-factor={activeDeviceProfile.formFactor}
          data-device-orientation={activeDeviceProfile.orientation}
@@ -8765,7 +8797,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             currentCategory={categoryFilter}
          />
 
-         {isMobile && mobileView === 'PRODUCTS' && (
+         {isMobile && !isCompactHandheld && mobileView === 'PRODUCTS' && (
             <MobileCartButton
                buttonRef={mobileCartButtonRef}
                itemCount={cart.length}
@@ -8777,8 +8809,21 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             />
          )}
 
+         {isCompactHandheld && <HandheldPOSHeader
+            restaurant={isRestaurantMode}
+            operator={currentUser.name}
+            terminal={terminalDisplayLabel}
+            table={activeTable ? (activeBarTabName || activeTableHeaderLabel || activeTable.name || activeTable.nombre) : undefined}
+            view={mobileView}
+            quantity={formatQuantity(cartQuantity, quantityPresentation.salesDecimals)}
+            status={<><SyncStatusBadge online={navigator.onLine} state={syncState} /><FiscalStatusBadge compact visible={!isOrderTakerMode && !isFiscalModeDisabled} allowed={canCheckoutWithFiscalPolicy} status={fiscalStatus} /></>}
+            onView={(view) => { setMobileView(view); setRightSidebarTab('CART'); }}
+            onActions={() => { setMobileView('TICKET'); setRightSidebarTab('ACTIONS'); }}
+            onSettings={onOpenSettings}
+            onTables={showTableMapButton && onOpenTableMap ? () => { void handleBackToMap(); } : undefined}
+         />}
          {/* LEFT AREA: PRODUCTS */}
-         <div className={`flex-1 min-h-0 flex flex-col min-w-0 bg-gray-50 transition-all duration-300 ${isMobile && mobileView === 'TICKET' ? 'hidden' : 'flex'} ${isRetailMode ? '!hidden' : ''}`}>
+         <div className={`flex-1 min-h-0 flex flex-col min-w-0 bg-gray-50 transition-all duration-300 ${isMobile && mobileView === 'TICKET' ? 'hidden' : 'flex'} ${isRetailMode && !isCompactHandheld ? '!hidden' : ''}`}>
             <header data-search-open={compactSearchOpen || Boolean(searchTerm) ? 'true' : 'false'} className="pos-catalog-header bg-white px-3 md:px-8 py-2 md:py-4 border-b border-gray-200 flex flex-wrap items-center gap-1.5 md:gap-6 shadow-sm z-10 shrink-0">
                <div className="pos-catalog-identity flex items-center gap-3 pr-0 md:pr-4 border-r-0 md:border-r border-gray-100 shrink-0">
                   <div className="w-9 h-9 md:w-10 md:h-10 rounded-full bg-gray-50 overflow-hidden border border-gray-200 shadow-inner shrink-0">
@@ -8911,7 +8956,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             </header>
             <V3CatalogArticleWarning diagnostics={catalogArticleDiagnostics || []} />
 
-            {isMobile && !isKioskMode && (
+            {isMobile && !isCompactHandheld && !isKioskMode && (
                <MobilePosNavigation
                   onOpenTables={mobileOrderTakerActions.showTables ? () => { void handleBackToMap(); } : undefined}
                   onOpenActions={() => {
@@ -8948,7 +8993,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   <button
                      key={categoryOption.id || `cat-${idx}`}
                      onClick={() => setCategoryFilter(categoryOption.id)}
-                     style={{ ...configuredStyle, ...categoryGridPosition }}
+                     style={isCompactHandheld ? undefined : { ...configuredStyle, ...categoryGridPosition }}
+                     aria-pressed={isActiveCategory}
                      className={`h-[42px] md:h-[48px] w-full min-w-0 px-2 md:px-3 rounded-xl text-[11px] md:text-[12px] leading-tight font-black uppercase tracking-[0.08em] transition-all whitespace-normal text-center border shadow-sm active:scale-95 ${isActiveCategory
                         ? `${configuredColor ? '' : categoryTone.active} shadow-lg -translate-y-0.5`
                         : `${configuredColor ? '' : categoryTone.idle} hover:-translate-y-0.5 hover:shadow-md`
@@ -8982,13 +9028,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            : undefined,
                      }}
                   >
-                  {!isRetailMode && visibleCatalogProducts.map((product, idx) => (
+                  {(!isRetailMode || isCompactHandheld) && visibleCatalogProducts.map((product, idx) => (
                      <ProductGridCard
                         key={product.id || `prod-${virtualCatalogWindow.startIndex + idx}`}
                         product={product}
                         usesSupermarketLayout={usesSupermarketLayout}
                         usesExpandedCatalog={usesExpandedCatalog}
                         isMobile={isMobile}
+                        compactHandheld={isCompactHandheld}
                         showProductImages={uxConfig.showProductImages}
                         baseCurrencySymbol={baseCurrency.symbol}
                         isProductWarehouseBlockedForSale={isProductWarehouseBlockedForSale}
@@ -9171,11 +9218,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             )}
          </div >
 
+         {isCompactHandheld && mobileView === 'PRODUCTS' && <HandheldCartSummary
+            total={`${baseCurrency.symbol}${cartTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+            quantity={formatQuantity(cartQuantity, quantityPresentation.salesDecimals)}
+            restaurant={isRestaurantMode}
+            onOpen={() => { setRightSidebarTab('CART'); setMobileView('TICKET'); }}
+         />}
          {/* RIGHT SIDEBAR: CURRENT TICKET */}
-         <div className={`pos-ticket-sidebar ${!isMobile && !isRetailMode ? 'w-96 shrink-0' : 'w-full'} h-full min-h-0 bg-white border-l border-gray-200 shadow-2xl flex flex-col z-20 transition-all duration-300 ${isMobile && mobileView === 'PRODUCTS' && !isRetailMode ? 'hidden' : 'flex'}`}>
+         <div className={`pos-ticket-sidebar ${!isMobile && !isRetailMode ? 'w-96 shrink-0' : 'w-full'} h-full min-h-0 bg-white border-l border-gray-200 shadow-2xl flex flex-col z-20 transition-all duration-300 ${isMobile && mobileView === 'PRODUCTS' && (!isRetailMode || isCompactHandheld) ? 'hidden' : 'flex'}`}>
 
             {/* MOBILE HEADER */}
-            < div className={`${isMobile ? 'flex' : 'hidden'} px-4 py-3 border-b border-gray-100 bg-white flex-col gap-3 shrink-0`} >
+            < div className={`pos-mobile-ticket-header ${isMobile ? 'flex' : 'hidden'} px-4 py-3 border-b border-gray-100 bg-white flex-col gap-3 shrink-0`} >
                <div className="flex flex-wrap justify-between items-start gap-2">
                   <div className="flex min-w-0 flex-wrap items-center gap-3">
                      {renderTicketBrand(true)}
@@ -9228,7 +9281,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                </div>
 
                <TicketStatusControls
-                  status={isRetailMode ? <FiscalStatusBadge compact visible={!isOrderTakerMode && !isFiscalModeDisabled} allowed={canCheckoutWithFiscalPolicy} status={fiscalStatus} /> : undefined}
+                  status={isRetailMode && !isCompactHandheld ? <FiscalStatusBadge compact visible={!isOrderTakerMode && !isFiscalModeDisabled} allowed={canCheckoutWithFiscalPolicy} status={fiscalStatus} /> : undefined}
                   data-testid="mobile-sidebar-tabs"
                   className="flex items-center justify-end gap-2"
                   aria-label="Vista del ticket"
@@ -9374,7 +9427,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         {/* SEARCH RESULTS DROPDOWN */}
                         {searchTerm && filteredProducts.length > 0 && (
                            <div className="absolute top-full left-0 right-0 mt-2 bg-white rounded-xl shadow-2xl border border-gray-100 max-h-[60vh] overflow-y-auto z-50">
-                              {filteredProducts.map((product, idx) => {
+                              {filteredProducts.slice(0, 60).map((product, idx) => {
                                  const whBlocked = isProductWarehouseBlockedForSale(product);
                                  return (
                                     <div
@@ -9577,7 +9630,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                >
                   {renderQuickActionsPanel()}
                </div>
-            ) : isRetailMode ? (
+            ) : isRetailMode && !isCompactHandheld ? (
                // SUPERMARKET MODE (DENSE TABLE)
                <ProductTableSupermarket
                   cart={processedCart}
@@ -9631,7 +9684,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                               <div
                                  key={item.cartId || `cart-m-${idx}`}
                                  onClick={() => toggleCartItemFocus(item.cartId)}
-                                 className={`rounded-2xl p-3 shadow-sm border flex gap-3 animate-in slide-in-from-right-2 transition-all cursor-pointer ${isActiveCartItem ? 'border-blue-200 ring-2 ring-blue-100 shadow-md' : isNewAfterSubtotal ? 'border-emerald-200 bg-emerald-50' : 'border-gray-100 bg-white hover:border-slate-200'}`}
+                                 className={`${isCompactHandheld ? 'handheld-ticket-item' : ''} rounded-2xl p-3 shadow-sm border flex gap-3 animate-in slide-in-from-right-2 transition-all cursor-pointer ${isActiveCartItem ? 'border-blue-200 ring-2 ring-blue-100 shadow-md' : isNewAfterSubtotal ? 'border-emerald-200 bg-emerald-50' : 'border-gray-100 bg-white hover:border-slate-200'}`}
                               >
                                  <div className="w-16 h-16 rounded-xl bg-gray-50 overflow-hidden shrink-0 border border-gray-100">
                                     {resolveProductImageSrc(item) ? <img src={resolveProductImageSrc(item)} className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-gray-300"><Grid size={24} /></div>}
@@ -10227,7 +10280,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         {renderTableAccountNavigator()}
                      </div>
                   )}
-                  <div className="flex justify-between items-center mb-4 px-2 gap-3">
+                  <div className="handheld-checkout-tools flex justify-between items-center mb-4 px-2 gap-3">
                      <div className="flex gap-2 overflow-x-auto overflow-y-hidden no-scrollbar pr-1">
                         <button onClick={() => {
                            if (blockRecoveredUberOrderMutation('aplicar descuentos')) return;

@@ -1,5 +1,6 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
+import './handheldPOS.css';
 import { Capacitor } from '@capacitor/core';
 import {
    Database, Clock, WifiOff, X, Save, Image as ImageIcon,
@@ -548,10 +549,13 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
       </div>
    );
 
+   const operatingTerminal = (currentDeviceId ? terminals.find(terminal => terminal.config.currentDeviceId === currentDeviceId) : undefined) || activeTerminal;
+   const compactHandheldSettings = resolveDeviceProfile([operatingTerminal?.config], operatingTerminal?.config.deviceRole?.role).formFactor === DeviceFormFactor.HANDHELD;
+
    return (
-      <div className={`responsive-shell flex h-full bg-gray-50 animate-in fade-in overflow-hidden relative flex-col lg:flex-row`}>
+      <div data-handheld-settings={compactHandheldSettings ? 'true' : undefined} className={`responsive-shell flex h-full bg-gray-50 animate-in fade-in overflow-hidden relative flex-col lg:flex-row`}>
          <div className="responsive-content flex-1 flex flex-col min-w-0 h-full">
-            <header className="bg-white px-8 py-6 border-b border-gray-100 flex flex-col md:flex-row md:items-center justify-between gap-6 shrink-0 z-30 shadow-sm relative">
+            <header className="handheld-settings-header bg-white px-8 py-6 border-b border-gray-100 flex flex-col md:flex-row md:items-center justify-between gap-6 shrink-0 z-30 shadow-sm relative">
                <div className="flex items-center gap-5">
                   <div className="p-3 bg-blue-600 text-white rounded-[1.25rem] shadow-xl shadow-blue-200/50">
                      <Monitor size={32} strokeWidth={2.5} />
@@ -573,7 +577,7 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                </div>
             </header>
 
-            <div className="bg-white border-b border-gray-100 p-6 z-20 overflow-x-auto no-scrollbar">
+            <div className="handheld-terminal-picker bg-white border-b border-gray-100 p-6 z-20 overflow-x-auto no-scrollbar">
                <div className="flex gap-4">
                   {terminals.map((t) => (
                      <div key={t.id} onClick={() => setSelectedTerminalId(t.id)} className={`min-w-[200px] p-4 rounded-3xl border-2 transition-all cursor-pointer ${selectedTerminalId === t.id ? 'bg-blue-600 border-blue-600 text-white shadow-xl' : 'bg-white border-slate-100'}`}>
@@ -594,7 +598,7 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                </div>
             </div>
 
-            <div className="bg-white border-b border-gray-100 px-6 py-4 shrink-0 z-10 overflow-x-auto no-scrollbar">
+            <div className="handheld-settings-tabs bg-white border-b border-gray-100 px-6 py-4 shrink-0 z-10 overflow-x-auto no-scrollbar">
                <div className="flex min-w-max gap-3">
                {[
                   { id: 'IDENTITY', label: 'Identidad', icon: UserCircle },
@@ -621,10 +625,10 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                </div>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-8 bg-slate-50/50">
+            <div className="handheld-settings-body flex-1 overflow-y-auto p-8 bg-slate-50/50">
                {activeTerminal ? (
                   <div className="max-w-5xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-4">
-                     <div className="bg-white rounded-[2.5rem] border border-slate-200 shadow-2xl p-10 overflow-hidden">
+                     <div className="handheld-settings-panel bg-white rounded-[2.5rem] border border-slate-200 shadow-2xl p-10 overflow-hidden">
                         
                         {activeTab === 'IDENTITY' && (
                            <div className="space-y-8">
@@ -648,7 +652,7 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                         )}
 
                         {activeTab === 'OPERATIONAL' && (
-                           <div className="space-y-8">
+                           <div className="handheld-operational-tab space-y-8">
                               <h3 className="text-2xl font-black text-slate-800 flex items-center gap-3"><Zap className="text-yellow-500" /> Operativa</h3>
                               <Toggle label="Terminal Principal" description="Actúa como servidor local." checked={activeTerminal.config.isPrimaryNode} onChange={handleToggleMasterNode} icon={Crown} disabled={activeTerminal.config.governedByMaster} />
                               {!activeTerminal.config.isPrimaryNode && <Toggle label="Gobernado por Maestra" checked={activeTerminal.config.governedByMaster} onChange={(v: boolean) => handleUpdateActiveConfig('', 'governedByMaster', v)} icon={ShieldCheck} />}
@@ -710,7 +714,7 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                     </div>
                                  )}
                               </div>
-                              <div className="p-6 bg-slate-50 rounded-[2rem] border border-slate-100 space-y-5">
+                              <div className="handheld-device-options p-6 bg-slate-50 rounded-[2rem] border border-slate-100 space-y-5">
                                  <div className="flex items-start gap-4">
                                     <div className="p-3 rounded-2xl bg-white text-indigo-600 shadow-sm">
                                        <Smartphone size={20} />
@@ -731,6 +735,7 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                              type="button"
                                              key={option.value}
                                              onClick={() => handleUpdateDeviceProfile({ formFactor: option.value })}
+                                             aria-pressed={selected}
                                              disabled={isReadOnly}
                                              className={`p-4 rounded-2xl border-2 text-left transition-all ${selected ? 'bg-indigo-50 border-indigo-500 text-indigo-900 shadow-sm' : 'bg-white border-slate-100 text-slate-600 hover:border-slate-300'} ${isReadOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
                                           >
