@@ -76,6 +76,7 @@ const ProductionAreaManager = React.lazy(() => import('./ProductionAreaManager')
 const ProductionSettingsOperatorBoundary = React.lazy(() => import('./ProductionSettingsOperatorBoundary'));
 const LabelDesigner = React.lazy(() => import('./LabelDesigner'));
 const CustomerManagement = React.lazy(() => import('./CustomerManagement'));
+const PosReports = React.lazy(() => import('./PosReports'));
 const ReportDashboard = React.lazy(() => import('./ReportDashboard'));
 const ReportViewer = React.lazy(() => import('./ReportViewer'));
 const SourcingIntelligence = React.lazy(() => import('./SourcingIntelligence'));
@@ -152,7 +153,7 @@ interface SettingsProps {
   erpRoleAuthority?: boolean;
 }
 
-type SettingsView = 'INVENTORY_TRACKING' | 'CHECKOUT_TRACKING' | 'HOME' | 'CATALOG' | 'WAREHOUSES' | 'PAYMENTS' | 'INTEGRATIONS' | 'COMPANY' | 'RECEIPT' | 'TERMINALS' | 'TEAM' | 'HARDWARE' | 'SECURITY' | 'LOGS' | 'EXCHANGE' | 'EMAIL' | 'TIPS' | 'DOCUMENTS' | 'TAXES' | 'SERVICE_TYPES' | 'PROMOTIONS' | 'IMPORT_EXPORT' | 'LOYALTY' | 'WALLET_KEYS' | 'SYNC' | 'MASTER_NUMBER_RANGES' | 'FISCAL_DIAGNOSTICS' | 'PRESENTATION_DIAGNOSTICS' | 'KDS_REPORTS' | 'LAYOUT' | 'PRODUCTION_AREAS' | 'LABELS' | 'CUSTOMERS' | 'REPORTS' | 'AGENDA' | 'SPACES';
+type SettingsView = 'POS_REPORTS' | 'INVENTORY_TRACKING' | 'CHECKOUT_TRACKING' | 'HOME' | 'CATALOG' | 'WAREHOUSES' | 'PAYMENTS' | 'INTEGRATIONS' | 'COMPANY' | 'RECEIPT' | 'TERMINALS' | 'TEAM' | 'HARDWARE' | 'SECURITY' | 'LOGS' | 'EXCHANGE' | 'EMAIL' | 'TIPS' | 'DOCUMENTS' | 'TAXES' | 'SERVICE_TYPES' | 'PROMOTIONS' | 'IMPORT_EXPORT' | 'LOYALTY' | 'WALLET_KEYS' | 'SYNC' | 'MASTER_NUMBER_RANGES' | 'FISCAL_DIAGNOSTICS' | 'PRESENTATION_DIAGNOSTICS' | 'KDS_REPORTS' | 'LAYOUT' | 'PRODUCTION_AREAS' | 'LABELS' | 'CUSTOMERS' | 'REPORTS' | 'AGENDA' | 'SPACES';
 
 const ORDER_TAKER_SETTINGS_VIEWS = new Set<SettingsView>([
   'HOME',
@@ -800,6 +801,10 @@ const Settings: React.FC<SettingsProps> = (props) => {
           />
         );
 
+      case 'POS_REPORTS':
+        if (!hasPermission('REPORTS_VIEW_SALES')) return <div className="p-6">No tienes permiso para consultar informes POS.</div>;
+        return <PosReports config={props.config} transactions={props.transactions} terminalId={props.terminalId} canReprintZ={hasPermission('POS_CLOSE_Z')} onClose={() => setCurrentView('HOME')} />;
+
       case 'REPORTS':
         if (selectedCategory) {
           let reportData: any[] = [];
@@ -1129,6 +1134,7 @@ const Settings: React.FC<SettingsProps> = (props) => {
                   <SettingsCard icon={ArrowRightLeft} label="Divisas y Cambio" description="Multi-moneda y Tasas" color="bg-teal-500" onClick={() => setCurrentView('EXCHANGE')} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={Percent} label="Impuestos" description="ITBIS, Exentos y Cargos" color="bg-emerald-500" onClick={() => setCurrentView('TAXES')} locked={!hasPermission('SETTINGS_TAXES')} />
                   <SettingsCard icon={ShoppingBag} label="Tipo de servicio" description="En local, Para llevar y Delivery" color="bg-violet-600" onClick={() => setCurrentView('SERVICE_TYPES')} locked={!hasPermission('SETTINGS_TAXES')} />
+                  <SettingsCard icon={Printer} label="Informes POS" description="Ventas, pagos, productos y tickets térmicos" color="bg-blue-700" onClick={() => { if (hasPermission('REPORTS_VIEW_SALES')) setCurrentView('POS_REPORTS'); }} locked={!hasPermission('REPORTS_VIEW_SALES')} />
                   <SettingsCard icon={ListChecks} label="Cierre X" description="Arqueo parcial sin limpiar ventas" color="bg-blue-700" onClick={() => props.onOpenFinance ? props.onOpenFinance('X_REPORT') : props.onOpenZReport()} locked={!hasPermission('POS_CLOSE_X')} />
                   <SettingsCard icon={Lock} label="Cierre de Caja" description="Corte Z y Auditoría Fiscal" color="bg-slate-900" onClick={props.onOpenZReport} locked={!hasPermission('POS_CLOSE_Z')} />
                   {props.onOpenHistory && <SettingsCard icon={History} label="Historial de facturas" description="Consultar facturas realizadas y su estado fiscal" color="bg-cyan-700" onClick={() => {
