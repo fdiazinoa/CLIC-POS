@@ -18,6 +18,7 @@ import { SCALE_PRESETS, ZEBRA_USB_CONFIG, applyScalePreset, applyLocalZebraSetti
 import { permissionService } from '../services/sync/PermissionService';
 import { parseScaleBarcodeDetailed } from '../utils/barcodeParser';
 import { nativePrintBridge } from '../services/printer/NativePrintBridge';
+import { eligiblePrinters, isKnownUsbScanner, receiptPrinterPreference, withPrinterPreferences } from '../services/printer/PrinterPreferences';
 import { buildEscPosHardwareTestPayload } from '../services/printer/EscPosFormatter';
 import { biometricService } from '../services/BiometricAuthService';
 import {
@@ -113,7 +114,7 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
 
    // -- Local State synced with Config --
    const [scales, setScales] = useState<ScaleDevice[]>(globalConfig.terminals?.find(t => t.id === (terminalId || permissionService.getTerminalId()))?.config.hardware?.scales || globalConfig.scales || []);
-   const [printers, setPrinters] = useState<PrinterDevice[]>(globalConfig.availablePrinters || []);
+   const [printers, setPrinters] = useState<PrinterDevice[]>(eligiblePrinters(globalConfig.availablePrinters));
    const [editingZebra, setEditingZebra] = useState(false);
    const [editingLocalZebra, setEditingLocalZebra] = useState(false);
    const [editingScale, setEditingScale] = useState<ScaleDevice | null>(null);
@@ -136,6 +137,13 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
       const selectedId = terminalId || permissionService.getTerminalId();
       return globalConfig.terminals?.find(t => t.id === selectedId);
    }, [globalConfig.terminals, terminalId]);
+
+   const [defaultPrinterId, setDefaultPrinterId] = useState(() => receiptPrinterPreference(currentTerminalConfig?.config.hardware));
+   const printerEditingDisabled = isReadOnly || isSavingHardware || !currentTerminalConfig;
+   const excludedScannerCount = (globalConfig.availablePrinters || []).filter(isKnownUsbScanner).length;
+   useEffect(() => {
+      setDefaultPrinterId(receiptPrinterPreference(currentTerminalConfig?.config.hardware));
+   }, [currentTerminalConfig?.id, currentTerminalConfig?.config.hardware?.printerAssignments?.TICKET, currentTerminalConfig?.config.hardware?.receiptPrinterId]);
 
    const [displayConfig, setDisplayConfig] = useState<CustomerDisplayConfig>(
       normalizeCustomerDisplayConfig(currentTerminalConfig?.config?.hardware?.customerDisplay || DEFAULT_DISPLAY_CONFIG)
@@ -260,7 +268,7 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
          if (!isManualMode || isScanning !== 'USB') return;
          if (manualData.address.trim()) return;
 
-         const detected = await nativePrintBridge.discoverPrinters('USB');
+         const detected = (await nativePrintBridge.discoverPrinters('USB')).filter(device => !isKnownUsbScanner(device));
          if (cancelled || detected.length === 0) {
             setDiscoveryNotice(prev => prev || 'No se detectó automáticamente un puerto USB. Revise cable, OTG y energía de la impresora.');
             return;
@@ -446,34 +454,34 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
 
       setIsSavingHardware(true);
       setHardwareSaveFeedback(null);
-      const normalizedDisplayConfig = normalizeCustomerDisplayConfig(displayConfig);
-      const newConfig = { ...globalConfig, availablePrinters: printers, scaleLabelConfig };
-      if (newConfig.terminals) {
-         // Update the specific terminal config
-         newConfig.terminals = newConfig.terminals.map(t => {
-            if (t.id === selectedTerminalId) {
-               return {
-                  ...t,
-                  config: {
-                     ...t.config,
-                     hardware: {
-                        ...t.config.hardware,
-                        scales, defaultScaleId,
-                        customerDisplay: normalizedDisplayConfig,
-                        fingerprintReader
-                     },
-                     security: {
-                        ...t.config.security,
-                        allowBiometrics
-                     }
-                  }
-               };
-            }
-            return t;
-         });
-      }
-
       try {
+         const normalizedDisplayConfig = normalizeCustomerDisplayConfig(displayConfig);
+         const newConfig = { ...withPrinterPreferences(globalConfig, selectedTerminalId, printers, defaultPrinterId), scaleLabelConfig };
+         if (newConfig.terminals) {
+            // Update the specific terminal config
+            newConfig.terminals = newConfig.terminals.map(t => {
+               if (t.id === selectedTerminalId) {
+                  return {
+                     ...t,
+                     config: {
+                        ...t.config,
+                        hardware: {
+                           ...t.config.hardware,
+                           scales, defaultScaleId,
+                           customerDisplay: normalizedDisplayConfig,
+                           fingerprintReader
+                        },
+                        security: {
+                           ...t.config.security,
+                           allowBiometrics
+                        }
+                     }
+                  };
+               }
+               return t;
+            });
+         }
+
          await persistScaleConfigurationDefault(selectedTerminalId, defaultScaleId, async () => { await onUpdateConfig(newConfig); });
          setHardwareSaveFeedback({ success: true, message: 'Configuración de hardware guardada correctamente.' });
       } catch (error) {
@@ -815,7 +823,7 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
       if (nativePrintBridge.supportsPeripheralBinding()) {
          try {
             const nativeDevices = await nativePrintBridge.discoverPrinters(type);
-            setDiscoveredDevices(nativeDevices);
+            setDiscoveredDevices(nativeDevices.filter(device => !isKnownUsbScanner(device)));
             if (nativeDevices.length === 0) {
                if (runtime === 'ANDROID' && type === 'USB') {
                   setDiscoveryNotice('No se detectó una impresora USB conectada. Revise cable, OTG, permisos y energía del equipo.');
@@ -847,7 +855,7 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
    };
 
    const resolveUsbAddress = async () => {
-      const detected = await nativePrintBridge.discoverPrinters('USB');
+      const detected = (await nativePrintBridge.discoverPrinters('USB')).filter(device => !isKnownUsbScanner(device));
       if (detected.length === 0) {
          return null;
       }
@@ -910,6 +918,10 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
          status: 'CONNECTED',
          type: (dev.type as any) || 'TICKET'
       };
+      if (isKnownUsbScanner(newPrinter)) {
+         setDiscoveryNotice('Este dispositivo es un lector de códigos, no una impresora.');
+         return;
+      }
       setPrinters([...printers, newPrinter]);
       setIsScanning(null);
       setIsDiscoveryLoading(false);
@@ -946,6 +958,10 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
          status: 'CONNECTED',
          type: 'TICKET'
       };
+      if (isKnownUsbScanner(newPrinter)) {
+         setDiscoveryNotice('Este dispositivo es un lector de códigos, no una impresora.');
+         return;
+      }
       setPrinters([...printers, newPrinter]);
       setIsScanning(null);
       setIsDiscoveryLoading(false);
@@ -1458,6 +1474,22 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
                            </div>
                         </div>
                      )}
+                     <div className="bg-white rounded-2xl border border-slate-200 p-4 space-y-2">
+                        <label htmlFor="default-receipt-printer" className="block text-sm font-bold text-slate-800">Tickera predeterminada de esta terminal</label>
+                        <select id="default-receipt-printer" value={defaultPrinterId} disabled={printerEditingDisabled}
+                           onChange={event => { if (!printerEditingDisabled) setDefaultPrinterId(event.target.value); }}
+                           className="w-full min-h-11 rounded-xl border border-slate-200 px-3 py-2 text-sm disabled:opacity-60">
+                           <option value="">Automática por tipo</option>
+                           {defaultPrinterId && !printers.some(printer => printer.id === defaultPrinterId && printer.type === 'TICKET') && (
+                              <option value={defaultPrinterId}>Predeterminada no disponible — selecciona otra</option>
+                           )}
+                           {printers.filter(printer => printer.type === 'TICKET').map(printer => (
+                              <option key={printer.id} value={printer.id}>{printer.name} · {printer.connection} · {printer.address}</option>
+                           ))}
+                        </select>
+                        <p className="text-xs text-slate-500">Se usará para tickets e informes de esta terminal al guardar. No cambia las impresoras de cocina ni de etiquetas.</p>
+                        {excludedScannerCount > 0 && <p role="status" className="text-xs text-amber-700">Se excluyó un lector de códigos de la lista de impresoras. Al guardar se retirará sólo su registro como impresora; el escáner seguirá funcionando.</p>}
+                     </div>
                      <div className="bg-white rounded-3xl border border-gray-200 shadow-sm divide-y divide-slate-50 overflow-hidden">
                         <div className="px-6 py-4 bg-slate-50 border-b border-slate-100 flex items-center gap-2">
                            <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Hardware Activo</h3>
@@ -1481,9 +1513,12 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
                                     <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">Tipo / Uso de Impresora</label>
                                     <select
                                        value={resolvePrinterRoleId(p)}
+                                       disabled={printerEditingDisabled}
                                        onChange={(e) => {
+                                          if (printerEditingDisabled) return;
                                           const selectedRole = PRINTER_ROLE_OPTIONS.find(option => option.id === e.target.value) || PRINTER_ROLE_OPTIONS[0];
                                           const productionAreaId = selectedRole.type === 'KITCHEN' ? selectedRole.id : undefined;
+                                          if (defaultPrinterId === p.id && selectedRole.type !== 'TICKET') setDefaultPrinterId('');
                                           setPrinters(printers.map(x => x.id === p.id ? {
                                              ...x,
                                              productionAreaId,
@@ -1508,7 +1543,11 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
                                     {testingPrinterId === p.id ? <Loader2 size={14} className="animate-spin" /> : <Activity size={14} />}
                                     Imprimir prueba
                                  </button>
-                                 <button onClick={() => setPrinters(printers.filter(x => x.id !== p.id))} className="p-2 text-slate-300 hover:text-red-500 transition-colors"><Trash2 size={20} /></button>
+                                 <button disabled={printerEditingDisabled} aria-label={`Retirar impresora ${p.name}`} onClick={() => {
+                                    if (printerEditingDisabled) return;
+                                    if (defaultPrinterId === p.id) setDefaultPrinterId('');
+                                    setPrinters(printers.filter(x => x.id !== p.id));
+                                 }} className="p-2 text-slate-300 hover:text-red-500 transition-colors"><Trash2 size={20} /></button>
                                  </div>
                               </div>
                            </div>
