@@ -53,15 +53,19 @@ test('closing the completed-sale modal performs the deferred table navigation', 
   for (const deferred of [false, true]) {
     for (const hasNavigation of [false, true]) {
       const calls: unknown[][] = [];
+      const inFlight = {current:true};
+      const startedAt = {current:123};
       const close = new Function('recordCheckoutDiagnostic', 'setShowPaymentModal',
-        'returnToTableMapAfterPayment', 'onOpenTableMap', 'setReturnToTableMapAfterPayment', 'finishInteraction', 'paymentModalTraceRef', `${body}; return close;`)(
+        'returnToTableMapAfterPayment', 'onOpenTableMap', 'setReturnToTableMapAfterPayment', 'finishInteraction', 'paymentModalTraceRef', 'paymentFinalizationInFlightRef', 'paymentFinalizationStartedAtRef', 'setReceiptOnlyInitialTransaction', `${body}; return close;`)(
         (event: string) => calls.push(['diagnostic', event]),
         (value: boolean) => calls.push(['visible', value]), deferred,
         hasNavigation ? () => calls.push(['navigate']) : undefined,
         (value: boolean) => calls.push(['deferred', value]),
-        () => {}, { current: null },
+        () => {}, { current: null }, inFlight, startedAt, (value: unknown) => assert.equal(value,null),
       );
       close();
+      assert.equal(inFlight.current,false);
+      assert.equal(startedAt.current,0);
       assert.deepEqual(calls, [ ['diagnostic', 'PAYMENT_CLOSE'], ['visible', false],
         ...(deferred && hasNavigation ? [['deferred', false], ['navigate']] : []) ]);
     }
