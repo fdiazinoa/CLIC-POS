@@ -107,28 +107,6 @@ const currencyMapToBase = (
   return roundMoney(total);
 };
 
-const resolveDeclarationIds = (report: ZReport, config: BusinessConfig): string[] => {
-  const normalizedTerminalId = String(report.terminalId || '').trim().toLowerCase();
-  const terminal = (config.terminals || []).find(candidate => (
-    String(candidate.id || '').trim().toLowerCase() === normalizedTerminalId
-    || String(candidate.config?.erpTerminalId || '').trim().toLowerCase() === normalizedTerminalId
-  ));
-  const rawConfig = config as BusinessConfig & {
-    workflow?: { session?: Record<string, unknown> };
-    session?: Record<string, unknown>;
-  };
-  const session = (
-    terminal?.config?.workflow?.session
-    || rawConfig.workflow?.session
-    || rawConfig.session
-    || {}
-  ) as Record<string, unknown>;
-  const configured = session.zReportDeclaredPaymentMethodIds
-    ?? session.z_report_declared_payment_method_ids;
-  if (!Array.isArray(configured)) return [];
-  return configured.map(value => String(value || '').trim().toLowerCase()).filter(Boolean);
-};
-
 const buildEmailPaymentSummary = (
   report: ZReport,
   config: BusinessConfig,
@@ -175,39 +153,15 @@ const buildEmailPaymentSummary = (
   return { lines, cashSales };
 };
 
-const buildEmailPaymentDeclarations = (
-  report: ZReport,
-  summary: ZReportPaymentMethodLine[],
-  configuredIds: string[],
-): ZReportPaymentMethodDeclaration[] => {
-  if (configuredIds.length === 0) return [];
-  const selectedIds = new Set(configuredIds);
-  const existing = Array.isArray(report.paymentMethodDeclarations)
+const buildEmailPaymentDeclarations = (report: ZReport): ZReportPaymentMethodDeclaration[] => {
+  // The close snapshot is historical evidence. Current terminal settings and
+  // sales totals must not remove, replace or fabricate a saved declaration.
+  const saved = Array.isArray(report.paymentMethodDeclarations)
     ? report.paymentMethodDeclarations
     : [];
-
-  return summary
-    .filter(line => {
-      const methodId = String(line.methodId || '').trim().toLowerCase();
-      return Boolean(methodId)
-        && selectedIds.has(methodId)
-        && normalizeMarker(line.methodType) !== 'CASH'
-        && !isPendingPaymentLine(line);
-    })
-    .map(line => {
-      const saved = existing.find(candidate => (
-        String(candidate.methodId || '').trim().toLowerCase()
-        === String(line.methodId || '').trim().toLowerCase()
-      ));
-      const expected = roundMoney(line.amount);
-      const declared = roundMoney(saved?.declared);
-      return {
-        ...line,
-        expected,
-        declared,
-        difference: roundMoney(declared - expected),
-      };
-    });
+  return saved
+    .filter(line => normalizeMarker(line.methodType) !== 'CASH' && !isPendingPaymentLine(line))
+    .map(line => ({ ...line }));
 };
 
 /**
@@ -226,11 +180,7 @@ export const buildZReportEmailContractReport = (
   const cashExpected = roundMoney(cashSales + cashIn - cashOut);
   const cashCounted = currencyMapToBase(report.cashCounted, baseCurrencyCode, config);
   const cashDiscrepancy = roundMoney(cashCounted - cashExpected);
-  const paymentMethodDeclarations = buildEmailPaymentDeclarations(
-    report,
-    paymentMethodSummary,
-    resolveDeclarationIds(report, config),
-  );
+  const paymentMethodDeclarations = buildEmailPaymentDeclarations(report);
 
   return {
     ...report,
