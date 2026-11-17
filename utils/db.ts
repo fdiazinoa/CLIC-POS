@@ -126,6 +126,7 @@ const SEED_DATA = {
   transactionHistory: [] as Transaction[],
   invoiceReviewFlags: [],
   invoiceAuditEvents: [],
+  posAuditEvents: [],
   invoiceAdjustments: [],
   cashMovements: [] as CashMovement[],
   transfers: [] as StockTransfer[],

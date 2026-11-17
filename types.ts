@@ -2878,6 +2878,10 @@ export type Permission =
 
 
 export interface AuditLogEntry {
+  auditSyncVersion?: 1;
+  auditRecoveryPending?: boolean;
+  cashierName?: string;
+  supervisorName?: string;
   id: string;
   timestamp: string;
   actionType: Permission;
