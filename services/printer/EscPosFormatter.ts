@@ -805,12 +805,13 @@ export const buildEscPosComandaPayload = (data: EscPosKitchenOrderData): string 
 export const buildEscPosVoucherPayload = (
   providerLabel: string,
   copyLabel: string,
-  receiptText: string
+  receiptText: string,
+  lineWidth = RECEIPT_LINE_WIDTH,
 ): string | null => {
   const normalizedText = String(receiptText || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').trimEnd();
   if (!normalizedText.trim()) return null;
 
-  const width = RECEIPT_LINE_WIDTH;
+  const width = lineWidth;
   const chunks: Uint8Array[] = [];
 
   chunks.push(initPrinter());
