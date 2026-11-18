@@ -1,3 +1,4 @@
+import { collectBaselineReferenceInventory } from '../diagnostics/BaselineReferenceInventory';
 import { describeV3BaselineChange } from '../sync/LargeMasterSyncV3MigrationDiagnostic';
 import {readReconciledInventory} from '../articleFormats/inventoryJournal';
 import { authorizeV3TaxClassification } from '../sync/LargeMasterSyncV3TaxClassification';
@@ -82,6 +83,10 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
     private readonly fault?: LargeMasterSyncV3SqliteFaultHook,
     private readonly readOwnedConfig?: LargeMasterSyncV3IdentityReadContext['readConfig'],
   ) {}
+
+  async readBaselineReferenceInventory() {
+    return collectBaselineReferenceInventory(this.connection());
+  }
 
   private assertOperationalWindow(): void {
     if (isLargeMasterSyncV3OperationalWindowHeld()) throw new LargeMasterSyncV3Error('SYNC_V3_OPERATIONAL_WINDOW_HELD');
