@@ -158,7 +158,7 @@ for(const result of ['success','identity-race','retained-race','other-error','no
     './LargeMasterSyncV3DownloadOrigin':'export const largeMasterSyncV3DownloadOrigin=()=>globalThis.__unusedSession.state.origin;',
     './LargeMasterSyncV3Inventory':`export const fetchLargeMasterSyncV3Inventory=async()=>{const {state,fresh}=globalThis.__unusedSession;state.fetches++;if(state.failFetch)throw Error('HTTP offline');${result==='identity-race'?"state.identity={...state.identity,terminalId:'foreign'};":''}return fresh;};`,
     './LargeMasterSyncV3BoundTransport':`export const readLargeMasterSyncV3BoundIdentity=()=>({...globalThis.__unusedSession.state.identity});export const validatedLargeMasterSyncV3ErpSyncBase=value=>value;
-      export const createLargeMasterSyncV3BoundClient=store=>({requestSync:async()=>{throw Error('new ERP session forbidden while staging exists');},resumeSync:async id=>{globalThis.__unusedSession.state.resumed.push(id);${result==='other-error'?"throw Error('SYNC_V3_UNKNOWN_ERROR');":'return store.activate(id);'}}});`,
+      export const createLargeMasterSyncV3BoundClient=store=>({requestSync:async()=>({syncId:'N',syncVersion:102,schemaVersion:3,status:'READY',manifestUrl:'manifest'}),resumeSync:async id=>{globalThis.__unusedSession.state.resumed.push(id);${result==='other-error'?"throw Error('SYNC_V3_UNKNOWN_ERROR');":'return store.activate(id);'}}});`,
   };
   if(result==='retained-race')f.onLastActivationWrite(()=>f.insert('parkedTickets',{id:'late',items:[oldLine]}));
   const bundled=await build({entryPoints:[new URL('../services/sync/LargeMasterSyncV3OperationalSession.ts',import.meta.url).pathname],bundle:true,write:false,format:'esm',platform:'node',plugins:[{name:'fresh-session-io',setup(b){

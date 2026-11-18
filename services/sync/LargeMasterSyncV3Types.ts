@@ -108,12 +108,15 @@ export interface LargeMasterSyncV3InventoryAuthority extends LargeMasterSyncV3Ru
 export interface LargeMasterSyncV3IdentityReadContext { readonly readConfig: () => Promise<BusinessConfig> }
 export interface LargeMasterSyncV3CatalogTransition { binding: string; expectedCatalog: LargeMasterSyncV3RuntimeVersion; inventory: LargeMasterSyncV3InventoryAuthority; assertIdentity?: (context?: LargeMasterSyncV3IdentityReadContext) => void | Promise<void> }
 
+/** Exact pending-session snapshot required to replace only obsolete staging, never active data. */
+export interface LargeMasterSyncV3StagingReplacement { syncId: string; syncVersion: number; status: string }
+
 export interface LargeMasterSyncV3Store {
   readBaselineReferenceInventory?(options: BaselineReferenceInventoryOptions): Promise<BaselineReferenceInventory>;
   getInventoryAuthority?(): Promise<LargeMasterSyncV3InventoryAuthority | null>;
   assertCanReplaceUnusedBaseline?(transition: LargeMasterSyncV3CatalogTransition): Promise<void>;
   activateUnusedBaseline?(syncId: string, snapshot: LargeMasterSyncV3InventorySnapshot, transition: LargeMasterSyncV3CatalogTransition): Promise<LargeMasterSyncV3RuntimeVersion>;
-  prepareCatalogOnly?(manifest: LargeMasterSyncV3Manifest, transition: LargeMasterSyncV3CatalogTransition): Promise<void>;
+  prepareCatalogOnly?(manifest: LargeMasterSyncV3Manifest, transition: LargeMasterSyncV3CatalogTransition, expectedStaging?: LargeMasterSyncV3StagingReplacement): Promise<void>;
   activateCatalogOnly?(syncId: string, transition: LargeMasterSyncV3CatalogTransition): Promise<LargeMasterSyncV3RuntimeVersion>;
   getCatalogReceipt?(runtime: LargeMasterSyncV3RuntimeVersion, binding: string): Promise<LargeMasterSyncV3InventoryAuthority | null>;
   readProductionCatalogPage?(runtime: LargeMasterSyncV3RuntimeVersion, request: V3ProductionCatalogRequest): Promise<V3ProductionCatalogPage>;

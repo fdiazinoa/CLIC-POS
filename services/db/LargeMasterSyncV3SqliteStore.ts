@@ -3,7 +3,7 @@ import { describeV3BaselineChange } from '../sync/LargeMasterSyncV3MigrationDiag
 import {readReconciledInventory} from '../articleFormats/inventoryJournal';
 import { authorizeV3TaxClassification } from '../sync/LargeMasterSyncV3TaxClassification';
 import { v3ArticleSemantics, v3TaxSemantics, v3TariffSemantics, v3VariantSemantics } from '../sync/LargeMasterSyncV3StockAuthority';
-import type { LargeMasterSyncV3InventoryAuthority, LargeMasterSyncV3CatalogTransition, LargeMasterSyncV3IdentityReadContext } from '../sync/LargeMasterSyncV3Types';
+import type { LargeMasterSyncV3InventoryAuthority, LargeMasterSyncV3StagingReplacement, LargeMasterSyncV3CatalogTransition, LargeMasterSyncV3IdentityReadContext } from '../sync/LargeMasterSyncV3Types';
 import { normalizeV3CategoryKey, type V3CategoryFilter, type V3OperationalCategory } from '../sync/LargeMasterSyncV3Categories';
 import {
   LARGE_MASTER_SYNC_V3_DATASETS,
@@ -352,18 +352,23 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
     return this.activateInternal(syncId, transition, snapshot);
   }
 
-  async prepareCatalogOnly(manifest: LargeMasterSyncV3Manifest, transition: LargeMasterSyncV3CatalogTransition): Promise<void> {
-    return this.prepareInternal(manifest, transition);
+  async prepareCatalogOnly(manifest: LargeMasterSyncV3Manifest, transition: LargeMasterSyncV3CatalogTransition, expectedStaging?: LargeMasterSyncV3StagingReplacement): Promise<void> {
+    return this.prepareInternal(manifest, transition, expectedStaging);
   }
   async prepare(manifest: LargeMasterSyncV3Manifest): Promise<void> { return this.prepareInternal(manifest); }
-  private async prepareInternal(manifest: LargeMasterSyncV3Manifest, transition?: LargeMasterSyncV3CatalogTransition): Promise<void> {
+  private async prepareInternal(manifest: LargeMasterSyncV3Manifest, transition?: LargeMasterSyncV3CatalogTransition, expectedStaging?: LargeMasterSyncV3StagingReplacement): Promise<void> {
     await this.writeLock(async () => {
       const db = this.connection();
       await db.execute('BEGIN IMMEDIATE TRANSACTION;', false);
       try {
         // Staging metadata does not replace the active baseline; the client separately waits before chunk apply.
-        if (transition) await this.assertCatalogTransition(transition);
-        else await this.assertUnmovedBaseline(false);
+        if (transition) {
+          await this.assertCatalogTransition(transition);
+          if (manifest.syncVersion < transition.expectedCatalog.syncVersion
+            || manifest.syncVersion === transition.expectedCatalog.syncVersion && manifest.syncId !== transition.expectedCatalog.syncId) {
+            throw new LargeMasterSyncV3Error('SYNC_V3_STAGING_CONFLICT');
+          }
+        } else await this.assertUnmovedBaseline(false);
         const existing = first(await db.query(
           'SELECT sync_version, schema_version, contract_version, manifest_json, status FROM sync_v3_sessions WHERE sync_id = ?',
           [manifest.syncId],
@@ -376,6 +381,40 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
         }
         if (existing?.status === 'ROLLED_BACK' || existing?.status === 'FAILED') {
           throw new LargeMasterSyncV3Error('SYNC_V3_SESSION_NOT_RESUMABLE');
+        }
+        if (expectedStaging) {
+          if (!transition || !['STAGING','VALIDATED'].includes(expectedStaging.status)
+            || !Number.isSafeInteger(expectedStaging.syncVersion) || !Number.isSafeInteger(manifest.syncVersion)
+            || expectedStaging.syncId === manifest.syncId || manifest.syncVersion <= expectedStaging.syncVersion
+            || manifest.syncVersion <= transition.expectedCatalog.syncVersion || (manifest.contractVersion || 1) < 2
+            || expectedStaging.syncId === transition.expectedCatalog.syncId || expectedStaging.syncVersion === transition.expectedCatalog.syncVersion
+            || expectedStaging.syncId === transition.inventory.syncId || expectedStaging.syncVersion === transition.inventory.syncVersion
+            || manifest.syncId === transition.inventory.syncId || existing?.status === 'ACTIVE') {
+            throw new LargeMasterSyncV3Error('SYNC_V3_STAGING_CONFLICT');
+          }
+          const versionCollision = first(await db.query('SELECT sync_id FROM sync_v3_sessions WHERE sync_version = ? AND sync_id != ? LIMIT 1', [manifest.syncVersion,manifest.syncId]));
+          if (versionCollision) throw new LargeMasterSyncV3Error('SYNC_V3_STAGING_CONFLICT');
+          const pending = first(await db.query(`SELECT s.sync_id, s.sync_version, s.status
+            FROM sync_v3_sessions s JOIN master_v3_state state ON state.singleton = 1
+            WHERE state.staging_sync_id = s.sync_id AND state.staging_version = s.sync_version
+              AND state.active_sync_id = ? AND state.active_version = ?`,
+          [transition.expectedCatalog.syncId,transition.expectedCatalog.syncVersion]));
+          if (!pending || pending.sync_id !== expectedStaging.syncId || Number(pending.sync_version) !== expectedStaging.syncVersion
+            || pending.status !== expectedStaging.status) throw new LargeMasterSyncV3Error('SYNC_V3_STAGING_CONFLICT');
+          // Retain old rows, chunks and progress as evidence; only its non-active lifecycle changes.
+          await db.run(`UPDATE sync_v3_sessions SET status = 'FAILED', error_code = 'SUPERSEDED', updated_at = ?
+            WHERE sync_id = ? AND sync_version = ? AND status = ?`,
+          [now(),expectedStaging.syncId,expectedStaging.syncVersion,expectedStaging.status],false);
+          await db.run(`UPDATE master_v3_state SET staging_sync_id = NULL, staging_version = NULL
+            WHERE singleton = 1 AND staging_sync_id = ? AND staging_version = ?
+              AND active_sync_id = ? AND active_version = ?`,
+          [expectedStaging.syncId,expectedStaging.syncVersion,transition.expectedCatalog.syncId,transition.expectedCatalog.syncVersion],false);
+          const cleared = first(await db.query('SELECT staging_sync_id, staging_version FROM master_v3_state WHERE singleton = 1'));
+          const superseded = first(await db.query('SELECT status, error_code FROM sync_v3_sessions WHERE sync_id = ?', [expectedStaging.syncId]));
+          if (cleared?.staging_sync_id != null || cleared?.staging_version != null
+            || superseded?.status !== 'FAILED' || superseded?.error_code !== 'SUPERSEDED') {
+            throw new LargeMasterSyncV3Error('SYNC_V3_STAGING_CONFLICT');
+          }
         }
         if (existing?.status === 'ACTIVE') {
           const active = first(await db.query(`SELECT active_sync_id, active_version
@@ -420,11 +459,13 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
         await db.run(`UPDATE master_v3_state SET staging_version = ?, staging_sync_id = ?, updated_at = ?
           WHERE singleton = 1 AND (staging_sync_id IS NULL OR staging_sync_id = ?)`,
         [manifest.syncVersion, manifest.syncId, timestamp, manifest.syncId], false);
-        const state = first(await db.query('SELECT staging_sync_id FROM master_v3_state WHERE singleton = 1'));
-        if (String(state?.staging_sync_id || '') !== manifest.syncId) {
+        const state = first(await db.query('SELECT staging_sync_id, staging_version FROM master_v3_state WHERE singleton = 1'));
+        if (String(state?.staging_sync_id || '') !== manifest.syncId
+          || Number(state?.staging_version) !== manifest.syncVersion) {
           throw new LargeMasterSyncV3Error('SYNC_V3_STAGING_CONFLICT');
         }
-        await this.assertTransitionIdentity(transition);
+        if (expectedStaging && transition) await this.assertCatalogTransition(transition);
+        else await this.assertTransitionIdentity(transition);
         await db.execute('COMMIT;', false);
       } catch (error) {
         await db.execute('ROLLBACK;', false).catch(() => undefined);
