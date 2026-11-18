@@ -140,7 +140,7 @@ test('la UI bloquea mutaciones en ERP y conserva los handlers en LOCAL_ONLY', ()
 
 test('CONFIG_PUSH_V2 y startup convergen en la rutina autoritativa compartida', () => {
   const source = readFileSync(new URL('../services/sync/SyncManager.ts', import.meta.url), 'utf8');
-  assert.match(source, /refreshTerminalStructuredMasterData[\s\S]*applyAuthoritativeErpSecuritySnapshot\(roleRows, userRows\)/);
+  assert.match(source, /refreshTerminalStructuredMasterData[\s\S]*applyAuthoritativeErpSecuritySnapshot\(roleRows, userRows, \{masterScopes:options\?\.masterScopes,assertCurrent:options\?\.assertCurrent\}\)/);
   assert.match(source, /Promise\.allSettled\([\s\S]*db\.save\('roles', previousRoles\)[\s\S]*db\.save\('users', previousUsers\)/);
 });
 

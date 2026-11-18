@@ -144,6 +144,7 @@ function refreshFixture(response: unknown = snapshot(), kind = 'ERP_ACTIVE', fet
   let target = { kind, baseUrl: 'https://original.example.test', terminalId };
   const storage = new Map<string, string>();
   const deps = {
+    receivePosSecurityV2: async () => undefined,
     freezeCount() {}, freezePhase() {}, protectsLocalCatalogFromCloud: () => false,
     usesLargeMasterSyncV3Authority: () => kind === 'ERP_ACTIVE',
     syncPolicy: { resolve: () => target },
@@ -319,4 +320,16 @@ test('current company changes during structured master await reject before confi
   await assert.rejects(f.instance.refreshTerminalResolvedConfig(undefined, options), /BINDING_CHANGED/);
   assert.deepEqual(f.getConfig(), before); assert.equal(f.writes.includes('config'), false);
   assert.deepEqual(f.events, []);
+});
+
+
+test('security scope propagation distinguishes an explicit full carrier from a fetched none-scoped config',async()=>{
+ for(const scenario of ['carrier','explicit-none-carrier','remote-none']){
+  const f=refreshFixture();let securityScopes:unknown='not called';
+  f.instance.refreshTerminalStructuredMasterData=async(_snapshot:unknown,_delta:unknown,options:any)=>{securityScopes=options.masterScopes;return {};};
+  if(scenario==='remote-none')await f.instance.refreshTerminalResolvedConfig(undefined,{baseConfig:config(),requireOperationalTerminalConfig:true,masterScopes:[],resolvedScopes:['catalog'],supplementalMode:'skip'});
+  else await f.instance.refreshTerminalResolvedConfig(snapshot(),{baseConfig:config(),persist:false,dispatchEvent:false,supplementalMode:'skip',...(scenario==='explicit-none-carrier'?{masterScopes:[]}:{} )});
+  if(scenario==='carrier')assert.equal(securityScopes,null);
+  else assert.deepEqual(Array.from(securityScopes as []),[]);
+ }
 });
