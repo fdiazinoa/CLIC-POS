@@ -50,3 +50,18 @@ Es el primer rechazo observado; **no es un censo completo**. La migración requi
 ## Qué falta para este incidente
 
 Captura del diagnóstico ampliado y lectura consistente de las referencias locales. Hasta obtenerlas, no hay un cambio/ref local confirmado y no puede emitirse un plan numérico ni SQL de migración seguro. La protección permanece activa.
+
+
+## Evidencia ERP completada para Master-01 / ABSOLUTE
+
+Corte investigado: base 21419, candidato pendiente 23135 y último maestro READY 23908. Los tres pertenecen a la misma terminal, tienda y ámbito GENERAL, con las mismas dos tarifas y contrato 2. La captura local identifica la comparación 21419→23135; la correspondencia de sus números con sesiones ERP está comprobada, pero falta una lectura/hash de los estados locales.
+
+- **21419→23135**: un único artículo existente cambia semánticamente: MAK015, inventariable true→false. Cuatro altas (AEBR06, LGB, SP, LGY), con sus cuatro códigos de barras y precios. Sin bajas ni diferencias semánticas de impuestos, tarifas o variantes. MEBL02 permanece a 250; LGFR04 no está en ese candidato.
+- **21419→23908**: dos artículos existentes cambian semánticamente: MAK015 y MEBL02, inventariable true→false. Siete altas (LS502, LGFR04, AEBR06, LGB, SP, LGY, LGS), siete códigos de barras y siete precios nuevos. MEBL02 pasa de 250 a 300; LGFR04 está a 350. Sin bajas ni diferencias semánticas de impuestos, tarifas o variantes.
+- El diff completo de campos reporta 2430 artículos existentes y 2430 registros de precio modificados; incluye cambios de timestamps y presentación. No significa que existan 2430 incompatibilidades semánticas: la proyección de compatibilidad identifica exactamente los dos artículos anteriores.
+
+La referencia local confirmada por la captura es un movimiento inventoryLedger con $.v3InventoryBaseline. El diagnóstico emitió la **primera** referencia; no permite contar las restantes ni afirmar a qué artículo pertenece. No transcribir como definitivo un identificador de fila parcialmente legible en la imagen.
+
+La futura migración debe validar un objetivo actual que incorpore las actualizaciones requeridas: activar únicamente 23135 no entregaría LGFR04 ni MEBL02 a 300. Esto no autoriza eliminar staging ni cambiar punteros manualmente.
+
+**Pendiente decisivo:** inventario consistente de SQLite local y cobertura de operaciones del ERP. Sin esos datos no se calculan saldos ni se habilita una migración ejecutable. El manifiesto de preparación tiene executionAllowed=false y cero comandos de escritura.
