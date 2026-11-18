@@ -57,9 +57,15 @@ test('total wrapper without a sync slot preserves its content and caller classes
 });
 test('retail placements use existing state and preserve guards and non-retail status placement', () => {
   const source = readFileSync(new URL('../components/POSInterface.tsx', import.meta.url), 'utf8');
-  assert.equal((source.match(/status=\{isRetailMode \? <FiscalStatusBadge compact visible=\{!isOrderTakerMode && !isFiscalModeDisabled\}/g) || []).length, 2);
-  assert.match(source, /!isRetailMode && <FiscalStatusBadge visible=\{!isOrderTakerMode && !isFiscalModeDisabled\}/);
-  assert.equal((source.match(/<SyncStatusBadge online=\{navigator.onLine\} state=\{syncState\}/g) || []).length, 3);
+  // The retained handheld layout moved fiscal badges before this task. Enforce
+  // the existing three fiscal guards and all four real sync placements.
+  assert.equal((source.match(/<FiscalStatusBadge (?:inline|compact(?: short)?) visible=\{!isOrderTakerMode && !isFiscalModeDisabled\} allowed=\{canCheckoutWithFiscalPolicy\} status=\{fiscalStatus\}/g)||[]).length,3);
+  assert.match(source,/status=\{isRetailMode && !isCompactHandheld \? <FiscalStatusBadge compact/);
+  assert.match(source,/status=\{<><SyncStatusBadge[^\n]+<FiscalStatusBadge inline/);
+  assert.equal((source.match(/<SyncStatusBadge online=\{navigator.onLine\} state=\{syncState\}/g) || []).length, 4);
+  assert.match(source,/className="pos-catalog-sync h-9 md:h-auto shrink-0"/);
+  assert.match(source,/status=\{<SyncStatusBadge online=\{navigator.onLine\} state=\{syncState\} \/>\}/);
+  assert.match(source,/status=\{isRetailMode \? <SyncStatusBadge online=\{navigator.onLine\} state=\{syncState\} \/> : undefined\}/);
   assert.match(source, /cart.length === 0 \|\| !canCheckoutWithFiscalPolicy/);
   assert.match(source, /shouldShowFiscalReserveAlert && fiscalReserveAlert/);
 });
