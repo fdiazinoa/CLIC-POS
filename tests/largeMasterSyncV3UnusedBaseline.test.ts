@@ -139,9 +139,10 @@ test('source inserted after preflight is denied at final transaction, and malfor
  }finally{f.sql.close();}
 });
 
-for(const result of ['success','identity-race','retained-race','other-error','normal-retry'])test('actual Session→catalog-only semantic rejection→atomic fresh route '+result,async()=>{
+for(const result of ['success','identity-race','retained-race','other-error','normal-retry','existing-reference'])test('actual Session→catalog-only semantic rejection→atomic fresh route '+result,async()=>{
  const f=fixture();try{
   f.stage('N',102,2000,corrected);
+  if(result==='existing-reference')f.insert('transactions',{id:'SALE-KEEP',items:[oldLine]});
   const state:any={identity:{tenantId:'tenant',terminalId:'terminal',deviceId:'device',syncToken:'token',erpSyncBaseUrl:'https://erp.test/api/sync'},origin:'https://download.test',
     config:{terminals:[{id:'local',config:{currentDeviceId:'device',erpTerminalId:'terminal',erpBinding:{tenantId:'tenant',companyId:'company',storeId:'store'},inventoryScope:{defaultSalesWarehouseId:'W'}}}]},fetches:0,resumed:[]};
   const binding=JSON.stringify([state.identity.tenantId,state.identity.terminalId,state.identity.deviceId,state.identity.erpSyncBaseUrl,state.origin]);
@@ -174,10 +175,46 @@ for(const result of ['success','identity-race','retained-race','other-error','no
     const session=await helper.LargeMasterSyncV3OperationalSession.open(true);assert.equal(session.ready.runtime.version.syncId,'N');
     assert.equal(session.ready.inventoryCursor,'fresh-LB');assert.equal(state.fetches,1);assert.deepEqual(state.resumed,['N','N']);
     const catalog=await session.catalog('T','W');assert.equal((await catalog.get('P'))?.product.measurementUnit,'LB');
+  }else if(result==='existing-reference'){
+    const before=authorityState(f), documents=f.read('transactions');
+    await assert.rejects(helper.LargeMasterSyncV3OperationalSession.open(true),(error:any)=>{
+      assert.equal(error.code,'SYNC_V3_BASELINE_MIGRATION_REQUIRED');
+      assert.equal(error.baselineMigration.change.dataset,'articles');
+      assert.equal(error.baselineMigration.change.recordId,'P');
+      assert.equal(error.baselineMigration.change.fromVersion,47);
+      assert.equal(error.baselineMigration.change.toVersion,102);
+      assert.ok(error.baselineMigration.change.fields.some((field:any)=>field.field==='purchaseUnit'&&field.before==='"UND"'&&field.after==='"LB"'));
+      assert.deepEqual(error.baselineMigration.reference,{collection:'transactions',documentId:'SALE-KEEP',path:'$["items"][0].v3SaleAuthority',kind:'RETAINED_SOURCE'});
+      return true;
+    });
+    assert.deepEqual(authorityState(f),before);assert.deepEqual(f.read('transactions'),documents);
+    assert.equal(state.fetches,0);assert.deepEqual(state.resumed,['N']);
   }else{
     await assert.rejects(helper.LargeMasterSyncV3OperationalSession.open(true),/BINDING_CHANGED|MIGRATION_REQUIRED|UNKNOWN_ERROR/);
     assert.equal((await f.store.getActiveRuntimeVersion())?.syncId,'S');assert.equal((await f.store.getInventoryAuthority())?.cursor,'C');
     assert.equal(f.read('parkedTickets').length,0);if(result==='other-error')assert.equal(state.fetches,0);
   }
  }finally{f.sql.close();}
+});
+
+
+test('migration evidence identifies inventory and malformed blockers without changing stored data',async()=>{
+ const f=fixture();try{
+  f.stage('N',102,2000,corrected);const transition=await f.transition();
+  f.insert('inventoryLedger',{id:'MOVE-KEEP',v3InventoryBaseline:baseline,productId:'P',qtyOut:3,warehouseId:'W'});
+  const before=authorityState(f), ledger=f.read('inventoryLedger');
+  await assert.rejects(f.store.assertCanReplaceUnusedBaseline(transition),(error:any)=>{
+   assert.equal(error.code,'SYNC_V3_BASELINE_MIGRATION_REQUIRED');
+   assert.deepEqual(error.baselineMigration.reference,{collection:'inventoryLedger',documentId:'MOVE-KEEP',path:'$.v3InventoryBaseline',kind:'INVENTORY_MOVEMENT'});return true;
+  });
+  assert.deepEqual(authorityState(f),before);assert.deepEqual(f.read('inventoryLedger'),ledger);
+ }finally{f.sql.close();}
+ const malformed=fixture();try{
+  malformed.sql.prepare('INSERT INTO documents(collection_name,doc_id,data) VALUES(?,?,?)').run('transactions','BROKEN-KEEP','{');
+  const before=authorityState(malformed);
+  await assert.rejects(malformed.store.assertCanReplaceUnusedBaseline(await malformed.transition()),(error:any)=>{
+   assert.equal(error.baselineMigration.reference.documentId,'BROKEN-KEEP');assert.equal(error.baselineMigration.reference.kind,'MALFORMED_SOURCE');return true;
+  });
+  assert.deepEqual(authorityState(malformed),before);assert.deepEqual(malformed.read('transactions'),['{']);
+ }finally{malformed.sql.close();}
 });

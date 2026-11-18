@@ -1,3 +1,4 @@
+import { describeV3BaselineChange } from '../sync/LargeMasterSyncV3MigrationDiagnostic';
 import {readReconciledInventory} from '../articleFormats/inventoryJournal';
 import { authorizeV3TaxClassification } from '../sync/LargeMasterSyncV3TaxClassification';
 import { v3ArticleSemantics, v3TaxSemantics, v3TariffSemantics, v3VariantSemantics } from '../sync/LargeMasterSyncV3StockAuthority';
@@ -97,7 +98,12 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
     if (!exists) { if (requireOperationalWindow) this.assertOperationalWindow(); return; }
     const moved = first(await this.connection().query(`SELECT doc_id FROM documents
       WHERE collection_name = 'inventoryLedger' AND json_extract(data, '$.v3InventoryBaseline') IS NOT NULL LIMIT 1`));
-    if (moved) throw new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_COVERAGE_REQUIRED');
+    if (moved) {
+      const error = new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_COVERAGE_REQUIRED');
+      error.baselineMigration = { reference: { collection: 'inventoryLedger', documentId: String(moved.doc_id),
+        path: '$.v3InventoryBaseline', kind: 'INVENTORY_MOVEMENT' } };
+      throw error;
+    }
     if (requireOperationalWindow) this.assertOperationalWindow();
   }
 
@@ -293,10 +299,18 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
     try { await this.assertUnmovedBaseline(); }
     catch (error) {
       if (error instanceof LargeMasterSyncV3Error && error.code === 'SYNC_V3_INVENTORY_COVERAGE_REQUIRED') {
-        throw new LargeMasterSyncV3Error('SYNC_V3_BASELINE_MIGRATION_REQUIRED');
+        const blocked = new LargeMasterSyncV3Error('SYNC_V3_BASELINE_MIGRATION_REQUIRED');
+        blocked.baselineMigration = error.baselineMigration;
+        throw blocked;
       }
       throw error;
     }
+    const blockedSource = (row: RecordObject, path: string, malformed = false) => {
+      const error = new LargeMasterSyncV3Error('SYNC_V3_BASELINE_MIGRATION_REQUIRED');
+      error.baselineMigration = { reference: { collection: String(row.collection_name), documentId: String(row.doc_id),
+        path, kind: malformed ? 'MALFORMED_SOURCE' : 'RETAINED_SOURCE' } };
+      return error;
+    };
     const db = this.connection();
     const table = first(await db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='documents'"));
     if (!table) return;
@@ -308,18 +322,19 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
         AND collection_name || ':' || doc_id > ? ORDER BY collection_name || ':' || doc_id LIMIT 250`, [after]));
       for (const row of batch) {
         let source: unknown;
-        try { source = JSON.parse(String(row.data)); } catch { throw new LargeMasterSyncV3Error('SYNC_V3_BASELINE_MIGRATION_REQUIRED'); }
-        if (!source || typeof source !== 'object' || Array.isArray(source)) throw new LargeMasterSyncV3Error('SYNC_V3_BASELINE_MIGRATION_REQUIRED');
-        const pending: unknown[] = [source];
+        try { source = JSON.parse(String(row.data)); } catch { throw blockedSource(row, '$', true); }
+        if (!source || typeof source !== 'object' || Array.isArray(source)) throw blockedSource(row, '$', true);
+        const pending: Array<{ value: unknown; path: string }> = [{ value: source, path: '$' }];
         while (pending.length) {
-          const value = pending.pop();
+          const { value, path } = pending.pop()!;
           if (!value || typeof value !== 'object') continue;
-          if (Array.isArray(value)) { pending.push(...value); continue; }
+          if (Array.isArray(value)) { pending.push(...value.map((entry, index) => ({ value: entry, path: `${path}[${index}]` }))); continue; }
           const record = value as RecordObject;
           if ('v3SaleAuthority' in record || 'v3InventoryBaseline' in record || 'v3Binding' in record) {
-            throw new LargeMasterSyncV3Error('SYNC_V3_BASELINE_MIGRATION_REQUIRED');
+            const field = ['v3SaleAuthority', 'v3InventoryBaseline', 'v3Binding'].find(key => key in record)!;
+            throw blockedSource(row, `${path}.${field}`);
           }
-          pending.push(...Object.values(record));
+          pending.push(...Object.entries(record).map(([key, entry]) => ({ value: entry, path: `${path}[${JSON.stringify(key)}]` })));
         }
       }
       if (batch.length < 250) break;
@@ -688,7 +703,9 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
             }
             const normalize = (records: RecordObject[]) => records.map(semantics).sort();
             if (JSON.stringify(normalize(oldRows)) !== JSON.stringify(normalize(newRows))) {
-              throw new LargeMasterSyncV3Error('SYNC_V3_CATALOG_SEMANTICS_CHANGED');
+              const error = new LargeMasterSyncV3Error('SYNC_V3_CATALOG_SEMANTICS_CHANGED');
+              error.baselineMigration = { change: describeV3BaselineChange(dataset, oldRows, newRows, previous, next) };
+              throw error;
             }
           }
           let lastArticleId = '';
@@ -699,7 +716,10 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
               [transition.inventory.syncVersion, next, lastArticleId]));
             for (const row of overlap) {
               if (v3ArticleSemantics(JSON.parse(String(row.old_json))) !== v3ArticleSemantics(JSON.parse(String(row.fresh_json)))) {
-                throw new LargeMasterSyncV3Error('SYNC_V3_CATALOG_SEMANTICS_CHANGED');
+                const error = new LargeMasterSyncV3Error('SYNC_V3_CATALOG_SEMANTICS_CHANGED');
+                error.baselineMigration = { change: describeV3BaselineChange('articles',
+                  [JSON.parse(String(row.old_json))], [JSON.parse(String(row.fresh_json))], transition.inventory.syncVersion, next) };
+                throw error;
               }
             }
             if (overlap.length < 250) break;

@@ -1075,7 +1075,7 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, currentUser, roles,
                             {syncFeedback ? (
                                 <p
                                     role="status"
-                                    className={`text-xs font-bold ${syncFeedback.type === 'error' ? 'text-red-600' : 'text-emerald-600'}`}
+                                    className={`whitespace-pre-wrap break-words text-xs font-bold ${syncFeedback.type === 'error' ? 'text-red-600' : 'text-emerald-600'}`}
                                 >
                                     {syncFeedback.message}
                                 </p>
