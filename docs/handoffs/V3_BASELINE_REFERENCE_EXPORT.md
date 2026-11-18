@@ -1,23 +1,33 @@
-# Exportación local de referencias V3
+# Exportación local de referencias V3 con memoria acotada
 
-Este APK candidato agrega un reporte de diagnóstico de solo lectura. No migra ni borra datos, no cambia la vinculación y no desactiva la protección de baseline. No transmite el reporte al ERP ni a Cloud-Admin.
+El APK anterior 1.1.659 acumulaba todo el censo, lo serializaba completo y lo mostraba en un textarea. Además, paginar por número de filas no limitaba el tamaño de una celda SQLite que cruzaba al WebView. Son riesgos comprobados en el código; sin logs nativos no se ha confirmado la causa del cierre de Master-01.
 
 ## Uso por AnyDesk
 
-1. Tras actualizar el APK conservando la instalación existente, abrir Centro de Sincronización → Monitor de Datos.
-2. En **Inventario de referencias locales V3**, pulsar **Exportar inventario local V3 (solo lectura)** y esperar a que termine. Durante la lectura se ocupa la cola SQLite; realizarla sin operar ventas simultáneamente.
-3. El resultado muestra cantidades de tablas, referencias e incidencias, y el JSON completo en pantalla. Si se puede guardar, crea `Documents/Download/clic-v3-inventario-local-<fecha>.json` mediante el plugin Filesystem existente; la ubicación efectiva depende de Android.
-4. Transferir ese archivo con las funciones disponibles de AnyDesk o usar **Copiar JSON**. Si el portapapeles no está disponible o el permiso de archivos falla, seleccionar el texto del reporte para copiarlo manualmente o reintentar **Guardar JSON**. El JSON permanece visible aunque falle el guardado.
-5. Entregar el JSON para completar el inventario local y preparar la conciliación. El reporte conserva `migrationAllowed: false`; no autoriza ejecutar una migración.
+1. Actualizar conservando la instalación existente; no desinstalar, borrar datos, restaurar ni vincular de nuevo.
+2. Sin cobros simultáneos, abrir Centro de Sincronización → Monitor de Datos → **Exportar inventario local V3 (solo lectura)**.
+3. Se muestra progreso de tabla, filas y referencias. La lectura ocupa la cola SQLite para mantener un snapshot consistente; las escrituras esperan. **Cancelar exportación** cierra la lectura sin modificar datos; salir de la pantalla también solicita cancelación.
+4. Al finalizar, transferir por AnyDesk el archivo indicado: `Documents/Download/clic-v3-inventario-local-<identificador>.jsonl`. Es JSON Lines: un objeto JSON por línea; no renombrarlo a `.json` ni tratarlo como un único objeto JSON.
+5. La pantalla solo muestra una **vista parcial limitada**, que se puede copiar manualmente. El censo completo está en el archivo, no en el texto visible.
 
-## Cobertura y límites
+## Conservación y límites
 
-- Recorre todas las filas de todas las tablas SQLite persistidas dentro de una transacción de lectura, con paginación y hashes de páginas; no se limita al primer bloqueo.
-- Enumera claves de autoridad V3 conocidas en JSON, columnas nativas de baseline/sincronización/vinculación y claves foráneas declaradas. Incluye localizadores de registros, rutas, versiones y saldos de inventario.
-- No exporta los documentos íntegros ni credenciales o valores de vinculación; las referencias sensibles se representan mediante hashes. El reporte contiene identificadores de empresa, terminal y dispositivo y debe compartirse solo con quienes realizan el diagnóstico.
-- No incluye tickets aún en memoria ni relaciones implícitas que la aplicación no declare. JSON malformado, tablas esenciales ausentes o BLOB opaco producen incidencias y `referenceInventoryComplete: false`. No interpretar ese estado como un censo completo.
-- Si falla la lectura no se ofrece un reporte parcial. Si la transacción no puede cerrarse, la conexión queda bloqueada para impedir posteriores escrituras sobre una transacción incierta; requiere recuperación de conexión antes de continuar. No se borra ni restaura la BD.
+- Solo SELECT/PRAGMA y control de transacción de lectura en SQLite; ninguna migración, borrado, escritura de ventas/saldos, cambio de owner, token, vinculación o protección. No hay envío de red.
+- Antes de leer filas se consultan sus longitudes SQL. Cada lote limita los datos crudos a 128 KiB; el envoltorio JSON del bridge puede expandirlos hasta aproximadamente seis veces más las claves del esquema. Una fila que exceda ese presupuesto detiene la exportación e indica tabla, tamaño y límite; no se lee su payload ni se recorta silenciosamente.
+- Las referencias se emiten de forma incremental, sin arrays globales de documentos, referencias, saldos, incidencias o hashes de páginas. Las líneas y escrituras al archivo tienen un máximo exacto de 32 KiB UTF-8. La vista parcial retiene como máximo 2048 unidades UTF-16 (menos de 8 KiB UTF-8), independientemente del volumen total.
+- Cada escritura de archivo se espera antes de continuar: no se acumulan promesas ni buffers sin límite. El árbol JSON se recorre con marcos por profundidad, sin copiar rutas completas para cada descendiente.
+- El archivo inicial lleva sufijo `.partial`. Solo después de COMMIT y de reconfirmar vinculación/cancelación se escribe el cierre y renombra a `.jsonl`. Si el proceso es terminado por Android, un `.partial` nunca se considera censo completo. Ante error/cancelación se intenta eliminar solo los archivos de diagnóstico propios; si falla esa limpieza, se informa expresamente. No se toca la BD.
+- Un fallo de permisos/espacio al crear el archivo detiene antes de abrir el snapshot. Revisar permisos de archivos y espacio; no borrar datos del POS para resolverlo. Se eliminó el fallback que construía el JSON completo en memoria.
+- Un rollback que no confirma el cierre conserva la cuarentena del adaptador antes de liberar su cola. No se permite operar sobre una conexión incierta.
 
-## Validación pendiente en dispositivo
+## Formato y cobertura
 
-Las pruebas automatizadas verifican paginación, preservación de filas y saldos, bloqueo compartido de escrituras, fallos de lectura/transacción y fallback de pantalla. Quedan pendientes en Master-01 la ejecución con su volumen real, respuesta de WebView, permisos/ruta Filesystem, portapapeles y transferencia por AnyDesk. No se ha instalado ni publicado el APK mediante esta tarea.
+Esquema 2: eventos `header`, `scope`, `table`, `page`, `reference`, `balance`, `version`, `issue`, `table_end`; el último evento `complete` contiene el resumen. `migrationAllowed` siempre es `false`.
+
+La cobertura conserva todas las filas/tablas SQLite persistidas y las claves de autoridad V3 conocidas, columnas nativas baseline/sync/binding y claves foráneas declaradas. Excluye estado UI sin persistir y relaciones implícitas no declaradas. No exporta documentos completos, datos de clientes o credenciales. Las claves privadas y referencias sensibles se representan mediante hashes.
+
+Las celdas BLOB se sustituyen por un marcador y una incidencia, sin cruzar su contenido al bridge. Los hashes de página corresponden a esa proyección y lo declaran en `scope`. JSON malformado, BLOB opaco o tabla esencial ausente dejan `referenceInventoryComplete:false`. Un archivo final con incidencias no autoriza migración ni equivale a cobertura completa. Una fila/entrada excesiva, error de lectura/disco o cancelación impiden publicar un resultado final satisfactorio.
+
+## Evidencia técnica y límites físicos
+
+Las pruebas automatizadas cubren 100.000 referencias sin acumular el reporte, páginas y escritura acotadas, Unicode/escape JSON, celda grande rechazada antes del bridge, datos/saldos conservados, backpressure, permisos/disco, cancelación, identidad, BEGIN ambiguo, cuarentena, rename con respuesta perdida y cleanup fallido. No acreditan aún el uso real de memoria Android, permisos Filesystem, ruta, transferencia AnyDesk o estabilidad física sobre la BD de Master-01. No se ha instalado ni publicado por esta tarea.

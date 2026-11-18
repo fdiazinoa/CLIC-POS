@@ -1,4 +1,4 @@
-import { collectBaselineReferenceInventory } from '../diagnostics/BaselineReferenceInventory';
+import { collectBaselineReferenceInventory, type BaselineReferenceInventoryOptions } from '../diagnostics/BaselineReferenceInventory';
 import { describeV3BaselineChange } from '../sync/LargeMasterSyncV3MigrationDiagnostic';
 import {readReconciledInventory} from '../articleFormats/inventoryJournal';
 import { authorizeV3TaxClassification } from '../sync/LargeMasterSyncV3TaxClassification';
@@ -84,8 +84,8 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
     private readonly readOwnedConfig?: LargeMasterSyncV3IdentityReadContext['readConfig'],
   ) {}
 
-  async readBaselineReferenceInventory() {
-    return collectBaselineReferenceInventory(this.connection());
+  async readBaselineReferenceInventory(options: BaselineReferenceInventoryOptions) {
+    return collectBaselineReferenceInventory(this.connection(), options);
   }
 
   private assertOperationalWindow(): void {

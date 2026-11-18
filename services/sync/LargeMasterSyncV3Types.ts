@@ -1,4 +1,4 @@
-import type { BaselineReferenceInventory } from '../diagnostics/BaselineReferenceInventory';
+import type { BaselineReferenceInventory, BaselineReferenceInventoryOptions } from '../diagnostics/BaselineReferenceInventory';
 import type {BusinessConfig} from '../../types';
 import type { V3CategoryFilter, V3OperationalCategory } from './LargeMasterSyncV3Categories';
 export const LARGE_MASTER_SYNC_V3_SCHEMA_VERSION = 3 as const;
@@ -109,7 +109,7 @@ export interface LargeMasterSyncV3IdentityReadContext { readonly readConfig: () 
 export interface LargeMasterSyncV3CatalogTransition { binding: string; expectedCatalog: LargeMasterSyncV3RuntimeVersion; inventory: LargeMasterSyncV3InventoryAuthority; assertIdentity?: (context?: LargeMasterSyncV3IdentityReadContext) => void | Promise<void> }
 
 export interface LargeMasterSyncV3Store {
-  readBaselineReferenceInventory?(): Promise<BaselineReferenceInventory>;
+  readBaselineReferenceInventory?(options: BaselineReferenceInventoryOptions): Promise<BaselineReferenceInventory>;
   getInventoryAuthority?(): Promise<LargeMasterSyncV3InventoryAuthority | null>;
   assertCanReplaceUnusedBaseline?(transition: LargeMasterSyncV3CatalogTransition): Promise<void>;
   activateUnusedBaseline?(syncId: string, snapshot: LargeMasterSyncV3InventorySnapshot, transition: LargeMasterSyncV3CatalogTransition): Promise<LargeMasterSyncV3RuntimeVersion>;
