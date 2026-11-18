@@ -14,6 +14,7 @@ import { getConfigPushV2Diagnostics, triggerErpSyncOutbox } from '../utils/erpSy
 import { syncTriggerCoordinator } from '../services/sync/SyncTriggerCoordinator';
 import { CATALOG_CONFLICT_PERMISSIONS, catalogEditQueue, hasCatalogConflictPermission, resolveCatalogConflict, shouldShowCatalogEditInSyncMonitor } from '../services/sync/catalogEdits';
 import { waitForBackgroundSyncWindow, yieldBackgroundSyncChunk } from '../utils/backgroundSyncScheduler';
+import { formatManualSyncFailure, type ManualSyncStage } from '../utils/manualSyncDiagnostic';
 
 const catalogFieldLabels: Record<string, string> = {
     tax_ids: 'Impuestos',
@@ -628,12 +629,15 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, currentUser, roles,
         // the same idle gate as automatic sync, so downloads, applies and
         // uploads cannot compete with an operator transition.
         void (async () => {
+            let stage: ManualSyncStage = 'ESPERA';
             try {
                 await waitForBackgroundSyncWindow();
                 if (!syncManager.isUsingConfigPushV2Primary()) {
+                    stage = 'CONFIGURACION';
                     await syncTriggerCoordinator.request({ reason: 'MANUAL' });
                 }
                 await yieldBackgroundSyncChunk();
+                stage = 'SINCRONIZAR_TODO';
                 await syncManager.manualSyncAll();
 
                 setLastSyncTime(new Date());
@@ -642,12 +646,13 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, currentUser, roles,
                     message: 'Sincronización completada en segundo plano.',
                 });
                 await yieldBackgroundSyncChunk();
+                stage = 'MONITOR';
                 await loadStatus();
             } catch (error) {
                 console.error('Sync error:', error);
                 setSyncFeedback({
                     type: 'error',
-                    message: 'No se pudo completar la sincronización. Revise el monitor para más detalles.',
+                    message: formatManualSyncFailure(error, stage),
                 });
             } finally {
                 setIsSyncing(false);
