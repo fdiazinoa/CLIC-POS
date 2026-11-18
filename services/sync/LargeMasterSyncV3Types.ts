@@ -1,3 +1,4 @@
+import type { BaselineReferenceInventory } from '../diagnostics/BaselineReferenceInventory';
 import type {BusinessConfig} from '../../types';
 import type { V3CategoryFilter, V3OperationalCategory } from './LargeMasterSyncV3Categories';
 export const LARGE_MASTER_SYNC_V3_SCHEMA_VERSION = 3 as const;
@@ -108,6 +109,7 @@ export interface LargeMasterSyncV3IdentityReadContext { readonly readConfig: () 
 export interface LargeMasterSyncV3CatalogTransition { binding: string; expectedCatalog: LargeMasterSyncV3RuntimeVersion; inventory: LargeMasterSyncV3InventoryAuthority; assertIdentity?: (context?: LargeMasterSyncV3IdentityReadContext) => void | Promise<void> }
 
 export interface LargeMasterSyncV3Store {
+  readBaselineReferenceInventory?(): Promise<BaselineReferenceInventory>;
   getInventoryAuthority?(): Promise<LargeMasterSyncV3InventoryAuthority | null>;
   assertCanReplaceUnusedBaseline?(transition: LargeMasterSyncV3CatalogTransition): Promise<void>;
   activateUnusedBaseline?(syncId: string, snapshot: LargeMasterSyncV3InventorySnapshot, transition: LargeMasterSyncV3CatalogTransition): Promise<LargeMasterSyncV3RuntimeVersion>;
@@ -176,7 +178,25 @@ export interface V3CatalogPageRequest {
 }
 export interface V3CatalogPage { rows: V3CatalogArticle[]; total: number; filteredTotal: number; nextCursor: string | null }
 
+export interface V3BaselineMigrationDiagnostic {
+  change?: {
+    dataset: 'articles' | 'tariffs' | 'variants';
+    recordId: string;
+    sku?: string;
+    fields: Array<{ field: string; before: string; after: string }>;
+    fromVersion: number;
+    toVersion: number;
+  };
+  reference?: {
+    collection: string;
+    documentId: string;
+    path: string;
+    kind: 'INVENTORY_MOVEMENT' | 'RETAINED_SOURCE' | 'MALFORMED_SOURCE';
+  };
+}
+
 export class LargeMasterSyncV3Error extends Error {
+  baselineMigration?: V3BaselineMigrationDiagnostic;
   constructor(public readonly code: string, message = code, public readonly retryable = false,
     public readonly bindingReason?: 'IDENTITY' | 'ORIGIN' | 'CREDENTIAL' | 'CONFIG_SCOPE' | 'OWNER' | 'TRANSITION' | 'RUNTIME') {
     super(message);

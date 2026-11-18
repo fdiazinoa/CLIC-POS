@@ -1,3 +1,5 @@
+import { readOperationalCatalogBindingProof, readOperationalTerminalBinding } from '../services/sync/OperationalTerminalConfig';
+import { saveBaselineReferenceInventory } from '../services/diagnostics/SaveBaselineReferenceInventory';
 import PendingOperationsRecoveryPanel from './PendingOperationsRecoveryPanel';
 import React, { useState, useEffect } from 'react';
 import { RefreshCw, CheckCircle2, AlertCircle, Clock, UploadCloud, DownloadCloud, Database, Server, ArrowRight, ShieldCheck, X, Wifi, WifiOff, Globe, Monitor, Laptop, Search, Filter, RotateCcw, Code, Copy, Check } from 'lucide-react';
@@ -14,6 +16,7 @@ import { getConfigPushV2Diagnostics, triggerErpSyncOutbox } from '../utils/erpSy
 import { syncTriggerCoordinator } from '../services/sync/SyncTriggerCoordinator';
 import { CATALOG_CONFLICT_PERMISSIONS, catalogEditQueue, hasCatalogConflictPermission, resolveCatalogConflict, shouldShowCatalogEditInSyncMonitor } from '../services/sync/catalogEdits';
 import { waitForBackgroundSyncWindow, yieldBackgroundSyncChunk } from '../utils/backgroundSyncScheduler';
+import { formatManualSyncFailure, type ManualSyncStage } from '../utils/manualSyncDiagnostic';
 
 const catalogFieldLabels: Record<string, string> = {
     tax_ids: 'Impuestos',
@@ -52,6 +55,9 @@ interface SyncSettingsProps {
 }
 
 const SyncSettings: React.FC<SyncSettingsProps> = ({ config, currentUser, roles, onClose }) => {
+    const [isExportingReferences, setIsExportingReferences] = useState(false);
+    const [referenceExportJson, setReferenceExportJson] = useState('');
+    const [referenceExportMessage, setReferenceExportMessage] = useState('');
     const [status, setStatus] = useState<any[]>([]);
     const [isSyncing, setIsSyncing] = useState(false);
     const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
@@ -628,12 +634,15 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, currentUser, roles,
         // the same idle gate as automatic sync, so downloads, applies and
         // uploads cannot compete with an operator transition.
         void (async () => {
+            let stage: ManualSyncStage = 'ESPERA';
             try {
                 await waitForBackgroundSyncWindow();
                 if (!syncManager.isUsingConfigPushV2Primary()) {
+                    stage = 'CONFIGURACION';
                     await syncTriggerCoordinator.request({ reason: 'MANUAL' });
                 }
                 await yieldBackgroundSyncChunk();
+                stage = 'SINCRONIZAR_TODO';
                 await syncManager.manualSyncAll();
 
                 setLastSyncTime(new Date());
@@ -642,17 +651,48 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, currentUser, roles,
                     message: 'Sincronización completada en segundo plano.',
                 });
                 await yieldBackgroundSyncChunk();
+                stage = 'MONITOR';
                 await loadStatus();
             } catch (error) {
                 console.error('Sync error:', error);
                 setSyncFeedback({
                     type: 'error',
-                    message: 'No se pudo completar la sincronización. Revise el monitor para más detalles.',
+                    message: formatManualSyncFailure(error, stage),
                 });
             } finally {
                 setIsSyncing(false);
             }
         })();
+    };
+
+    const handleExportReferences = async () => {
+        if (isExportingReferences || isSyncing) return;
+        setIsExportingReferences(true); setReferenceExportJson('');
+        setReferenceExportMessage('Leyendo inventario local. No se modifica la base de datos.');
+        try {
+            const guard = readOperationalTerminalBinding();
+            const identity = readOperationalCatalogBindingProof();
+            if (!identity) throw new Error('SYNC_V3_ERP_BINDING_REQUIRED');
+            const read = dbAdapter.masterSyncV3Store?.readBaselineReferenceInventory;
+            if (!read) throw new Error('SYNC_V3_NATIVE_STORE_UNAVAILABLE');
+            const report = await dbAdapter.masterSyncV3Store!.readBaselineReferenceInventory!();
+            if (readOperationalTerminalBinding() !== guard) throw new Error('SYNC_V3_BINDING_CHANGED');
+            const json = JSON.stringify({ ...report, identity }, null, 2);
+            setReferenceExportJson(json);
+            const summary = `${report.references.length} referencias · ${report.tables.length} tablas · ${report.issues.length} incidencias. ${report.referenceInventoryComplete ? 'Censo completado.' : 'Hay incidencias: revisar el reporte antes de considerarlo completo.'}`;
+            try { setReferenceExportMessage(`${summary} Archivo: ${await saveBaselineReferenceInventory(json)}`); }
+            catch { setReferenceExportMessage(`${summary} No se pudo guardar el archivo. El JSON está disponible abajo para copiar o reintentar Guardar JSON.`); }
+        } catch (error) {
+            setReferenceExportMessage(formatManualSyncFailure(error, 'MONITOR'));
+        } finally { setIsExportingReferences(false); }
+    };
+
+    const handleCopyReferenceJson = async () => {
+        try {
+            if (!navigator.clipboard?.writeText) throw new Error('CLIPBOARD_UNAVAILABLE');
+            await navigator.clipboard.writeText(referenceExportJson);
+            setReferenceExportMessage('JSON copiado.');
+        } catch { setReferenceExportMessage('Selecciona el texto del reporte y cópialo manualmente.'); }
     };
 
     const handleRetryConfigPush = async () => {
@@ -1070,7 +1110,7 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, currentUser, roles,
                             {syncFeedback ? (
                                 <p
                                     role="status"
-                                    className={`text-xs font-bold ${syncFeedback.type === 'error' ? 'text-red-600' : 'text-emerald-600'}`}
+                                    className={`whitespace-pre-wrap break-words text-xs font-bold ${syncFeedback.type === 'error' ? 'text-red-600' : 'text-emerald-600'}`}
                                 >
                                     {syncFeedback.message}
                                 </p>
@@ -1220,6 +1260,22 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, currentUser, roles,
                                             </div>
                                         ))}
                                     </div>
+                                </div>
+
+                                <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                                    <h3 className="font-bold">Inventario de referencias locales V3</h3>
+                                    <p className="mt-2 text-sm">Recorre las referencias V3 y relaciones declaradas de todas las tablas de SQLite, sin modificar datos, vinculación ni protección. El ticket en memoria no forma parte de este reporte. Genera un reporte de auditoría; no ejecuta migraciones ni envía información al servidor.</p>
+                                    <button type="button" disabled={isExportingReferences || isSyncing} onClick={() => void handleExportReferences()} className="mt-3 rounded-xl bg-blue-600 px-4 py-3 font-bold text-white disabled:opacity-50">
+                                        {isExportingReferences ? 'Generando inventario local…' : 'Exportar inventario local V3 (solo lectura)'}
+                                    </button>
+                                    {referenceExportMessage && <p role="status" className="mt-3 break-words text-sm">{referenceExportMessage}</p>}
+                                    {referenceExportJson && <>
+                                        <div className="mt-3 flex gap-3">
+                                            <button type="button" onClick={() => void handleCopyReferenceJson()} className="rounded border px-4 py-2">Copiar JSON</button>
+                                            <button type="button" onClick={() => void saveBaselineReferenceInventory(referenceExportJson).then(path => setReferenceExportMessage(`Archivo: ${path}`)).catch(() => setReferenceExportMessage('No se pudo guardar. Usa Copiar JSON o selecciona el texto.'))} className="rounded border px-4 py-2">Guardar JSON</button>
+                                        </div>
+                                        <textarea aria-label="Inventario completo de referencias locales V3" readOnly value={referenceExportJson} onFocus={event => event.currentTarget.select()} className="mt-3 h-64 w-full rounded border p-3 font-mono text-xs" />
+                                    </>}
                                 </div>
 
                                 <div className="rounded-2xl border border-blue-200 bg-white p-5 shadow-sm">

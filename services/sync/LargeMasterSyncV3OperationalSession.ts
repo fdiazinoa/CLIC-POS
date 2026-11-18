@@ -129,8 +129,15 @@ export class LargeMasterSyncV3OperationalSession {
         try { ready = await prepareLargeMasterSyncV3CatalogOnly(store, v3BaseUrl, binding, observe, undefined, assertIdentity); }
         catch (error) {
           if (!(error instanceof LargeMasterSyncV3Error) || error.code !== 'SYNC_V3_CATALOG_SEMANTICS_CHANGED') throw error;
-          ready = await prepareLargeMasterSyncV3UnusedBaseline(store, v3BaseUrl,
-            { expectedCatalog: runtime!.version, inventory: anchor!, binding, assertIdentity }, observe);
+          try {
+            ready = await prepareLargeMasterSyncV3UnusedBaseline(store, v3BaseUrl,
+              { expectedCatalog: runtime!.version, inventory: anchor!, binding, assertIdentity }, observe);
+          } catch (blocked) {
+            if (blocked instanceof LargeMasterSyncV3Error && blocked.code === 'SYNC_V3_BASELINE_MIGRATION_REQUIRED') {
+              blocked.baselineMigration = { ...blocked.baselineMigration, change: error.baselineMigration?.change };
+            }
+            throw blocked;
+          }
         }
       } else ready = await prepareLargeMasterSyncV3Candidate(store, v3BaseUrl, observe);
       await assertIdentity();
