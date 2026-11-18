@@ -176,7 +176,25 @@ export interface V3CatalogPageRequest {
 }
 export interface V3CatalogPage { rows: V3CatalogArticle[]; total: number; filteredTotal: number; nextCursor: string | null }
 
+export interface V3BaselineMigrationDiagnostic {
+  change?: {
+    dataset: 'articles' | 'tariffs' | 'variants';
+    recordId: string;
+    sku?: string;
+    fields: Array<{ field: string; before: string; after: string }>;
+    fromVersion: number;
+    toVersion: number;
+  };
+  reference?: {
+    collection: string;
+    documentId: string;
+    path: string;
+    kind: 'INVENTORY_MOVEMENT' | 'RETAINED_SOURCE' | 'MALFORMED_SOURCE';
+  };
+}
+
 export class LargeMasterSyncV3Error extends Error {
+  baselineMigration?: V3BaselineMigrationDiagnostic;
   constructor(public readonly code: string, message = code, public readonly retryable = false,
     public readonly bindingReason?: 'IDENTITY' | 'ORIGIN' | 'CREDENTIAL' | 'CONFIG_SCOPE' | 'OWNER' | 'TRANSITION' | 'RUNTIME') {
     super(message);
