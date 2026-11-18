@@ -1,3 +1,4 @@
+import { isAuditContextMissing } from './AuditContextRetry';
 import type { DatabaseAdapter } from '../db/DatabaseAdapter';
 
 export interface PendingSyncDocument {
@@ -78,6 +79,7 @@ export function pendingSyncDiagnostic(row: PendingSyncDocument): string {
 export const canRetryPendingSyncQueue = (row: PendingSyncDocument | null): boolean => Boolean(row && (
   ['PENDING','RETRY_WAIT','SYNCING','SENDING'].includes(row.status)
   || row.source==='transfer_receipt_queue'&&row.status==='APPLIED'
+  || row.status==='BLOCKED_FUNCTIONAL'&&isAuditContextMissing(row.source,row.reason)
 ));
 
 /** The existing sender retains its own ACK/idempotency/blocking policy; never requeue blocked records here. */
