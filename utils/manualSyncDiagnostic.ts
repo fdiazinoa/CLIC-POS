@@ -1,3 +1,4 @@
+import type { V3BaselineMigrationDiagnostic } from '../services/sync/LargeMasterSyncV3Types';
 export type ManualSyncStage = 'ESPERA' | 'CONFIGURACION' | 'SINCRONIZAR_TODO' | 'MONITOR';
 
 /** Only diagnostic identifiers are shown: arbitrary server messages may contain credentials. */
@@ -20,5 +21,23 @@ export function formatManualSyncFailure(error: unknown, stage: ManualSyncStage):
     const location = typeof value.stack === 'string' ? value.stack.match(/\/(assets\/[A-Za-z0-9_-]+\.js:\d+:\d+)(?:[)\s]|$)/)?.[1] : undefined;
     if (location) fields.push(`Origen: ${location}`);
   }
-  return `No se pudo completar la sincronización. ${fields.join(' · ')}`;
+  let detail = '';
+  if (code === 'SYNC_V3_BASELINE_MIGRATION_REQUIRED' && value.baselineMigration) {
+    const evidence = value.baselineMigration as V3BaselineMigrationDiagnostic;
+    const text = (input: unknown) => typeof input === 'string' ? input.replace(/[\r\n\t]/g, ' ').slice(0, 180) : '?';
+    if (evidence.change && typeof evidence.change === 'object') {
+      const change = evidence.change;
+      detail += `\nCambio: ${text(change.dataset)} · ${text(change.sku || change.recordId)} · maestro ${change.fromVersion} → ${change.toVersion}`;
+      for (const field of (Array.isArray(change.fields) ? change.fields.slice(0, 12) : [])) {
+        if (!field || typeof field !== 'object') continue;
+        detail += `\n${text(field.field)}: ${text(field.before)} → ${text(field.after)}`;
+      }
+    }
+    if (evidence.reference && typeof evidence.reference === 'object') {
+      const ref = evidence.reference;
+      detail += `\nReferencia local: ${text(ref.collection)} / ${text(ref.documentId)}\nRuta: ${text(ref.path)} · ${text(ref.kind)}`;
+    }
+    detail += '\nMigración no ejecutada. Datos y protección conservados.';
+  }
+  return `No se pudo completar la sincronización. ${fields.join(' · ')}${detail}`;
 }
