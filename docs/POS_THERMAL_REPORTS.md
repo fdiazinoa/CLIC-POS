@@ -40,8 +40,9 @@ activa prevalece sobre la archivada. Se excluyen pendientes y documentos ajenos
 a ventas. El alcance entre cajas depende de los datos disponibles en ese POS.
 
 Los informes nuevos se envían a la impresora TICKET de la terminal actual, una
-copia, en ESC/POS de 32 columnas y sin orden de abrir cajón. En web se conserva
-la alternativa HTML/diálogo de impresión; en Android no se intenta ese diálogo.
+copia, con el perfil térmico de 80 mm y Font A de 42 columnas. Android transmite
+ESC/POS; web envía HTML monoespaciado de ancho físico al agente o al diálogo de
+impresión. No se abre el cajón. Ver [perfil y evidencia](./POS_QUERY_THERMAL_80MM.md).
 Los errores usan los avisos y la protección contra envíos simultáneos existentes.
 
 ## Validación
@@ -49,10 +50,11 @@ Los errores usan los avisos y la protección contra envíos simultáneos existen
 `npx tsx --test tests/posReports.test.ts tests/zReportPaymentSummary.test.ts tests/zReportTerminalName.test.ts`
 
 Además: `npm run lint`, `npm run build` y smoke de interfaz con datos sintéticos
-para los cinco informes, filtros, vista previa Z, envío térmico simulado y ancho
+para los informes, filtros, vista previa Z, envío térmico simulado y ancho
 móvil. La salida real en papel requiere prueba en impresora física. Esta tarea
 no genera, instala ni publica un APK.
 
 La selección de informes usa una cuadrícula adaptable; los filtros y la acción
-Imprimir permanecen dentro del ancho disponible. La vista previa envuelve las
-líneas por palabras a 32 columnas, igual que el contenido enviado a la térmica.
+Imprimir permanecen dentro del ancho disponible. Los siete informes de consulta
+comparten un motor tabular que calcula columnas y conserva indivisibles importes,
+fechas y códigos. La vista previa utiliza las mismas líneas que la impresión.
