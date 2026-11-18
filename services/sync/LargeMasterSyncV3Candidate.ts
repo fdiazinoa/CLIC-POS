@@ -153,17 +153,37 @@ export const prepareLargeMasterSyncV3CatalogOnly = async (
   if (!assertIdentity) throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
   await assertIdentity();
   const transition = { expectedCatalog, binding, inventory, assertIdentity };
+  let expectedStaging: import('./LargeMasterSyncV3Types').LargeMasterSyncV3StagingReplacement | undefined;
+  let expectedTarget: LargeMasterSyncV3RuntimeVersion | undefined;
   const scopedStore = new Proxy(store, { get(target, key) {
-    if (key === 'prepare') return (manifest: Parameters<LargeMasterSyncV3Store['prepare']>[0]) => target.prepareCatalogOnly!(manifest, transition);
+    if (key === 'prepare') return (manifest: Parameters<LargeMasterSyncV3Store['prepare']>[0]) => {
+      if (!expectedTarget || manifest.syncId !== expectedTarget.syncId || manifest.syncVersion !== expectedTarget.syncVersion) {
+        throw new LargeMasterSyncV3Error('SYNC_V3_STAGING_CONFLICT');
+      }
+      return target.prepareCatalogOnly!(manifest, transition, expectedStaging);
+    };
     if (key === 'activate') return (syncId: string) => target.activateCatalogOnly!(syncId, transition);
     const value = Reflect.get(target, key);
     return typeof value === 'function' ? value.bind(target) : value;
   } });
   const client = dependencies.createClient(scopedStore, v3BaseUrl, metric);
-  // Interrupted refreshes retain their manifest/chunks. Resume them before negotiating another session.
-  const incomplete = await store.findIncomplete();
-  const requested = incomplete || await client.requestSync();
+  // Negotiate first: the ERP may have corrected the pending catalog's incompatible semantics.
+  // A network/manifest failure leaves the pending session and every downloaded row untouched.
+  const requested = await client.requestSync();
   if ('fallback' in requested) throw new LargeMasterSyncV3Error('SYNC_V3_LEGACY_FALLBACK_REJECTED');
+  if (!Number.isSafeInteger(requested.syncVersion) || requested.syncVersion < expectedCatalog.syncVersion
+    || requested.syncVersion === expectedCatalog.syncVersion && requested.syncId !== expectedCatalog.syncId) {
+    throw new LargeMasterSyncV3Error('SYNC_V3_STAGING_CONFLICT');
+  }
+  expectedTarget = Object.freeze({syncId:requested.syncId,syncVersion:requested.syncVersion});
+  const incomplete = await store.findIncomplete();
+  if (incomplete && (incomplete.syncId !== requested.syncId || incomplete.syncVersion !== requested.syncVersion)) {
+    if (!['STAGING','VALIDATED'].includes(incomplete.status) || requested.syncId === incomplete.syncId
+      || requested.syncVersion <= incomplete.syncVersion || requested.syncVersion <= expectedCatalog.syncVersion) {
+      throw new LargeMasterSyncV3Error('SYNC_V3_STAGING_CONFLICT');
+    }
+    expectedStaging = Object.freeze({syncId:incomplete.syncId,syncVersion:incomplete.syncVersion,status:incomplete.status});
+  }
   const version = await client.resumeSync(requested.syncId);
   if (version.syncId !== requested.syncId || version.syncVersion !== requested.syncVersion) {
     throw new LargeMasterSyncV3Error('SYNC_V3_STAGING_CONFLICT');

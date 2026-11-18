@@ -1,5 +1,6 @@
-import React from 'react';
+import React, { lazy, Suspense, useCallback, useState } from 'react';
 import { Cloud, CloudOff, Landmark } from 'lucide-react';
+const PendingSyncDocumentsModal = lazy(()=>import('./PendingSyncDocumentsModal'));
 
 // Presentation only: callers retain the existing fiscal and sync state sources.
 export function FiscalStatusBadge({ visible, allowed, status, compact = false, short = false, inline = false }: {
@@ -33,15 +34,17 @@ export function SyncStatusBadge({ online, state, className = '' }: {
   online: boolean; state: { hasError: boolean; pendingCount: number; blockedCount: number }; className?: string;
 }) {
   const attention = state.hasError || state.pendingCount > 0 || state.blockedCount > 0;
-  return <div role="status" className={`${className} flex items-center gap-2 px-2.5 md:px-4 py-1.5 md:py-2 rounded-xl md:rounded-2xl bg-gray-50 border border-gray-100 shadow-inner`}>
+  const [showPending,setShowPending]=useState(false);
+  const closePending=useCallback(()=>setShowPending(false),[]);
+  return <><button type="button" aria-label="Ver documentos pendientes de sincronización" aria-haspopup="dialog" onClick={()=>setShowPending(true)} className={`${className} flex items-center gap-2 px-2.5 md:px-4 py-1.5 md:py-2 rounded-xl md:rounded-2xl bg-gray-50 border border-gray-100 shadow-inner`}>
     {!online ? <CloudOff size={18} className="shrink-0 text-red-500" /> : <Cloud size={18} className={`shrink-0 ${attention ? 'text-amber-500' : 'text-emerald-500'}`} />}
-    <div className="flex flex-col leading-none">
+    <div role="status" className="flex flex-col leading-none">
       <span className="text-[9px] font-black text-gray-400 uppercase tracking-widest hidden md:block">Sincronización</span>
       <span className={`text-[10px] font-bold ${!online ? 'text-red-600' : attention ? 'text-amber-600' : 'text-emerald-600'}`}>
         {!online ? 'Offline' : state.blockedCount > 0 ? `Bloqueado · ${state.blockedCount}` : state.pendingCount > 0 ? `Online · ${state.pendingCount}` : 'Online'}
       </span>
     </div>
-  </div>;
+  </button>{showPending&&<Suspense fallback={<div role="status">Abriendo documentos pendientes…</div>}><PendingSyncDocumentsModal onClose={closePending}/></Suspense>}</>;
 }
 
 export function TicketStatusControls({ status, children, className = '', ...attributes }: React.HTMLAttributes<HTMLDivElement> & { status?: React.ReactNode }) {

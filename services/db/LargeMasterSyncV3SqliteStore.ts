@@ -1,7 +1,9 @@
+import { collectBaselineReferenceInventory, type BaselineReferenceInventoryOptions } from '../diagnostics/BaselineReferenceInventory';
+import { describeV3BaselineChange } from '../sync/LargeMasterSyncV3MigrationDiagnostic';
 import {readReconciledInventory} from '../articleFormats/inventoryJournal';
 import { authorizeV3TaxClassification } from '../sync/LargeMasterSyncV3TaxClassification';
 import { v3ArticleSemantics, v3TaxSemantics, v3TariffSemantics, v3VariantSemantics } from '../sync/LargeMasterSyncV3StockAuthority';
-import type { LargeMasterSyncV3InventoryAuthority, LargeMasterSyncV3CatalogTransition, LargeMasterSyncV3IdentityReadContext } from '../sync/LargeMasterSyncV3Types';
+import type { LargeMasterSyncV3InventoryAuthority, LargeMasterSyncV3StagingReplacement, LargeMasterSyncV3CatalogTransition, LargeMasterSyncV3IdentityReadContext } from '../sync/LargeMasterSyncV3Types';
 import { normalizeV3CategoryKey, type V3CategoryFilter, type V3OperationalCategory } from '../sync/LargeMasterSyncV3Categories';
 import {
   LARGE_MASTER_SYNC_V3_DATASETS,
@@ -82,6 +84,10 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
     private readonly readOwnedConfig?: LargeMasterSyncV3IdentityReadContext['readConfig'],
   ) {}
 
+  async readBaselineReferenceInventory(options: BaselineReferenceInventoryOptions) {
+    return collectBaselineReferenceInventory(this.connection(), options);
+  }
+
   private assertOperationalWindow(): void {
     if (isLargeMasterSyncV3OperationalWindowHeld()) throw new LargeMasterSyncV3Error('SYNC_V3_OPERATIONAL_WINDOW_HELD');
   }
@@ -97,7 +103,12 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
     if (!exists) { if (requireOperationalWindow) this.assertOperationalWindow(); return; }
     const moved = first(await this.connection().query(`SELECT doc_id FROM documents
       WHERE collection_name = 'inventoryLedger' AND json_extract(data, '$.v3InventoryBaseline') IS NOT NULL LIMIT 1`));
-    if (moved) throw new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_COVERAGE_REQUIRED');
+    if (moved) {
+      const error = new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_COVERAGE_REQUIRED');
+      error.baselineMigration = { reference: { collection: 'inventoryLedger', documentId: String(moved.doc_id),
+        path: '$.v3InventoryBaseline', kind: 'INVENTORY_MOVEMENT' } };
+      throw error;
+    }
     if (requireOperationalWindow) this.assertOperationalWindow();
   }
 
@@ -293,10 +304,18 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
     try { await this.assertUnmovedBaseline(); }
     catch (error) {
       if (error instanceof LargeMasterSyncV3Error && error.code === 'SYNC_V3_INVENTORY_COVERAGE_REQUIRED') {
-        throw new LargeMasterSyncV3Error('SYNC_V3_BASELINE_MIGRATION_REQUIRED');
+        const blocked = new LargeMasterSyncV3Error('SYNC_V3_BASELINE_MIGRATION_REQUIRED');
+        blocked.baselineMigration = error.baselineMigration;
+        throw blocked;
       }
       throw error;
     }
+    const blockedSource = (row: RecordObject, path: string, malformed = false) => {
+      const error = new LargeMasterSyncV3Error('SYNC_V3_BASELINE_MIGRATION_REQUIRED');
+      error.baselineMigration = { reference: { collection: String(row.collection_name), documentId: String(row.doc_id),
+        path, kind: malformed ? 'MALFORMED_SOURCE' : 'RETAINED_SOURCE' } };
+      return error;
+    };
     const db = this.connection();
     const table = first(await db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='documents'"));
     if (!table) return;
@@ -308,18 +327,19 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
         AND collection_name || ':' || doc_id > ? ORDER BY collection_name || ':' || doc_id LIMIT 250`, [after]));
       for (const row of batch) {
         let source: unknown;
-        try { source = JSON.parse(String(row.data)); } catch { throw new LargeMasterSyncV3Error('SYNC_V3_BASELINE_MIGRATION_REQUIRED'); }
-        if (!source || typeof source !== 'object' || Array.isArray(source)) throw new LargeMasterSyncV3Error('SYNC_V3_BASELINE_MIGRATION_REQUIRED');
-        const pending: unknown[] = [source];
+        try { source = JSON.parse(String(row.data)); } catch { throw blockedSource(row, '$', true); }
+        if (!source || typeof source !== 'object' || Array.isArray(source)) throw blockedSource(row, '$', true);
+        const pending: Array<{ value: unknown; path: string }> = [{ value: source, path: '$' }];
         while (pending.length) {
-          const value = pending.pop();
+          const { value, path } = pending.pop()!;
           if (!value || typeof value !== 'object') continue;
-          if (Array.isArray(value)) { pending.push(...value); continue; }
+          if (Array.isArray(value)) { pending.push(...value.map((entry, index) => ({ value: entry, path: `${path}[${index}]` }))); continue; }
           const record = value as RecordObject;
           if ('v3SaleAuthority' in record || 'v3InventoryBaseline' in record || 'v3Binding' in record) {
-            throw new LargeMasterSyncV3Error('SYNC_V3_BASELINE_MIGRATION_REQUIRED');
+            const field = ['v3SaleAuthority', 'v3InventoryBaseline', 'v3Binding'].find(key => key in record)!;
+            throw blockedSource(row, `${path}.${field}`);
           }
-          pending.push(...Object.values(record));
+          pending.push(...Object.entries(record).map(([key, entry]) => ({ value: entry, path: `${path}[${JSON.stringify(key)}]` })));
         }
       }
       if (batch.length < 250) break;
@@ -332,18 +352,24 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
     return this.activateInternal(syncId, transition, snapshot);
   }
 
-  async prepareCatalogOnly(manifest: LargeMasterSyncV3Manifest, transition: LargeMasterSyncV3CatalogTransition): Promise<void> {
-    return this.prepareInternal(manifest, transition);
+  async prepareCatalogOnly(manifest: LargeMasterSyncV3Manifest, transition: LargeMasterSyncV3CatalogTransition, expectedStaging?: LargeMasterSyncV3StagingReplacement): Promise<void> {
+    return this.prepareInternal(manifest, transition, expectedStaging);
   }
   async prepare(manifest: LargeMasterSyncV3Manifest): Promise<void> { return this.prepareInternal(manifest); }
-  private async prepareInternal(manifest: LargeMasterSyncV3Manifest, transition?: LargeMasterSyncV3CatalogTransition): Promise<void> {
+  private async prepareInternal(manifest: LargeMasterSyncV3Manifest, transition?: LargeMasterSyncV3CatalogTransition, expectedStaging?: LargeMasterSyncV3StagingReplacement): Promise<void> {
     await this.writeLock(async () => {
       const db = this.connection();
-      await db.execute('BEGIN IMMEDIATE TRANSACTION;', false);
       try {
+        // The native bridge can lose a response after BEGIN has already opened the transaction.
+        await db.execute('BEGIN IMMEDIATE TRANSACTION;', false);
         // Staging metadata does not replace the active baseline; the client separately waits before chunk apply.
-        if (transition) await this.assertCatalogTransition(transition);
-        else await this.assertUnmovedBaseline(false);
+        if (transition) {
+          await this.assertCatalogTransition(transition);
+          if (manifest.syncVersion < transition.expectedCatalog.syncVersion
+            || manifest.syncVersion === transition.expectedCatalog.syncVersion && manifest.syncId !== transition.expectedCatalog.syncId) {
+            throw new LargeMasterSyncV3Error('SYNC_V3_STAGING_CONFLICT');
+          }
+        } else await this.assertUnmovedBaseline(false);
         const existing = first(await db.query(
           'SELECT sync_version, schema_version, contract_version, manifest_json, status FROM sync_v3_sessions WHERE sync_id = ?',
           [manifest.syncId],
@@ -356,6 +382,40 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
         }
         if (existing?.status === 'ROLLED_BACK' || existing?.status === 'FAILED') {
           throw new LargeMasterSyncV3Error('SYNC_V3_SESSION_NOT_RESUMABLE');
+        }
+        if (expectedStaging) {
+          if (!transition || !['STAGING','VALIDATED'].includes(expectedStaging.status)
+            || !Number.isSafeInteger(expectedStaging.syncVersion) || !Number.isSafeInteger(manifest.syncVersion)
+            || expectedStaging.syncId === manifest.syncId || manifest.syncVersion <= expectedStaging.syncVersion
+            || manifest.syncVersion <= transition.expectedCatalog.syncVersion || (manifest.contractVersion || 1) < 2
+            || expectedStaging.syncId === transition.expectedCatalog.syncId || expectedStaging.syncVersion === transition.expectedCatalog.syncVersion
+            || expectedStaging.syncId === transition.inventory.syncId || expectedStaging.syncVersion === transition.inventory.syncVersion
+            || manifest.syncId === transition.inventory.syncId || existing?.status === 'ACTIVE') {
+            throw new LargeMasterSyncV3Error('SYNC_V3_STAGING_CONFLICT');
+          }
+          const versionCollision = first(await db.query('SELECT sync_id FROM sync_v3_sessions WHERE sync_version = ? AND sync_id != ? LIMIT 1', [manifest.syncVersion,manifest.syncId]));
+          if (versionCollision) throw new LargeMasterSyncV3Error('SYNC_V3_STAGING_CONFLICT');
+          const pending = first(await db.query(`SELECT s.sync_id, s.sync_version, s.status
+            FROM sync_v3_sessions s JOIN master_v3_state state ON state.singleton = 1
+            WHERE state.staging_sync_id = s.sync_id AND state.staging_version = s.sync_version
+              AND state.active_sync_id = ? AND state.active_version = ?`,
+          [transition.expectedCatalog.syncId,transition.expectedCatalog.syncVersion]));
+          if (!pending || pending.sync_id !== expectedStaging.syncId || Number(pending.sync_version) !== expectedStaging.syncVersion
+            || pending.status !== expectedStaging.status) throw new LargeMasterSyncV3Error('SYNC_V3_STAGING_CONFLICT');
+          // Retain old rows, chunks and progress as evidence; only its non-active lifecycle changes.
+          await db.run(`UPDATE sync_v3_sessions SET status = 'FAILED', error_code = 'SUPERSEDED', updated_at = ?
+            WHERE sync_id = ? AND sync_version = ? AND status = ?`,
+          [now(),expectedStaging.syncId,expectedStaging.syncVersion,expectedStaging.status],false);
+          await db.run(`UPDATE master_v3_state SET staging_sync_id = NULL, staging_version = NULL
+            WHERE singleton = 1 AND staging_sync_id = ? AND staging_version = ?
+              AND active_sync_id = ? AND active_version = ?`,
+          [expectedStaging.syncId,expectedStaging.syncVersion,transition.expectedCatalog.syncId,transition.expectedCatalog.syncVersion],false);
+          const cleared = first(await db.query('SELECT staging_sync_id, staging_version FROM master_v3_state WHERE singleton = 1'));
+          const superseded = first(await db.query('SELECT status, error_code FROM sync_v3_sessions WHERE sync_id = ?', [expectedStaging.syncId]));
+          if (cleared?.staging_sync_id != null || cleared?.staging_version != null
+            || superseded?.status !== 'FAILED' || superseded?.error_code !== 'SUPERSEDED') {
+            throw new LargeMasterSyncV3Error('SYNC_V3_STAGING_CONFLICT');
+          }
         }
         if (existing?.status === 'ACTIVE') {
           const active = first(await db.query(`SELECT active_sync_id, active_version
@@ -400,14 +460,21 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
         await db.run(`UPDATE master_v3_state SET staging_version = ?, staging_sync_id = ?, updated_at = ?
           WHERE singleton = 1 AND (staging_sync_id IS NULL OR staging_sync_id = ?)`,
         [manifest.syncVersion, manifest.syncId, timestamp, manifest.syncId], false);
-        const state = first(await db.query('SELECT staging_sync_id FROM master_v3_state WHERE singleton = 1'));
-        if (String(state?.staging_sync_id || '') !== manifest.syncId) {
+        const state = first(await db.query('SELECT staging_sync_id, staging_version FROM master_v3_state WHERE singleton = 1'));
+        if (String(state?.staging_sync_id || '') !== manifest.syncId
+          || Number(state?.staging_version) !== manifest.syncVersion) {
           throw new LargeMasterSyncV3Error('SYNC_V3_STAGING_CONFLICT');
         }
-        await this.assertTransitionIdentity(transition);
+        if (expectedStaging && transition) await this.assertCatalogTransition(transition);
+        else await this.assertTransitionIdentity(transition);
         await db.execute('COMMIT;', false);
       } catch (error) {
-        await db.execute('ROLLBACK;', false).catch(() => undefined);
+        try { await db.execute('ROLLBACK;', false); }
+        catch (rollbackError) {
+          const uncertain = new LargeMasterSyncV3Error('SYNC_V3_CONNECTION_UNCERTAIN');
+          uncertain.cause = {error,rollbackError};
+          throw uncertain;
+        }
         throw error;
       }
     });
@@ -688,7 +755,9 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
             }
             const normalize = (records: RecordObject[]) => records.map(semantics).sort();
             if (JSON.stringify(normalize(oldRows)) !== JSON.stringify(normalize(newRows))) {
-              throw new LargeMasterSyncV3Error('SYNC_V3_CATALOG_SEMANTICS_CHANGED');
+              const error = new LargeMasterSyncV3Error('SYNC_V3_CATALOG_SEMANTICS_CHANGED');
+              error.baselineMigration = { change: describeV3BaselineChange(dataset, oldRows, newRows, previous, next) };
+              throw error;
             }
           }
           let lastArticleId = '';
@@ -699,7 +768,10 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
               [transition.inventory.syncVersion, next, lastArticleId]));
             for (const row of overlap) {
               if (v3ArticleSemantics(JSON.parse(String(row.old_json))) !== v3ArticleSemantics(JSON.parse(String(row.fresh_json)))) {
-                throw new LargeMasterSyncV3Error('SYNC_V3_CATALOG_SEMANTICS_CHANGED');
+                const error = new LargeMasterSyncV3Error('SYNC_V3_CATALOG_SEMANTICS_CHANGED');
+                error.baselineMigration = { change: describeV3BaselineChange('articles',
+                  [JSON.parse(String(row.old_json))], [JSON.parse(String(row.fresh_json))], transition.inventory.syncVersion, next) };
+                throw error;
               }
             }
             if (overlap.length < 250) break;

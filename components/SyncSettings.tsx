@@ -1,3 +1,6 @@
+import { readOperationalCatalogBindingProof, readOperationalTerminalBinding } from '../services/sync/OperationalTerminalConfig';
+import { BaselineReferenceRowTooLargeError, REFERENCE_AUDIT_PAGE_BYTES } from '../services/diagnostics/BaselineReferenceInventory';
+import { runBaselineReferenceExport } from '../services/diagnostics/SaveBaselineReferenceInventory';
 import PendingOperationsRecoveryPanel from './PendingOperationsRecoveryPanel';
 import React, { useState, useEffect } from 'react';
 import { RefreshCw, CheckCircle2, AlertCircle, Clock, UploadCloud, DownloadCloud, Database, Server, ArrowRight, ShieldCheck, X, Wifi, WifiOff, Globe, Monitor, Laptop, Search, Filter, RotateCcw, Code, Copy, Check } from 'lucide-react';
@@ -14,6 +17,7 @@ import { getConfigPushV2Diagnostics, triggerErpSyncOutbox } from '../utils/erpSy
 import { syncTriggerCoordinator } from '../services/sync/SyncTriggerCoordinator';
 import { CATALOG_CONFLICT_PERMISSIONS, catalogEditQueue, hasCatalogConflictPermission, resolveCatalogConflict, shouldShowCatalogEditInSyncMonitor } from '../services/sync/catalogEdits';
 import { waitForBackgroundSyncWindow, yieldBackgroundSyncChunk } from '../utils/backgroundSyncScheduler';
+import { formatManualSyncFailure, type ManualSyncStage } from '../utils/manualSyncDiagnostic';
 
 const catalogFieldLabels: Record<string, string> = {
     tax_ids: 'Impuestos',
@@ -52,6 +56,15 @@ interface SyncSettingsProps {
 }
 
 const SyncSettings: React.FC<SyncSettingsProps> = ({ config, currentUser, roles, onClose }) => {
+    const [isExportingReferences, setIsExportingReferences] = useState(false);
+    const [referenceExportJson, setReferenceExportJson] = useState('');
+    const [referenceExportMessage, setReferenceExportMessage] = useState('');
+    const referenceExportController = React.useRef<AbortController | null>(null);
+    const referenceExportMounted = React.useRef(true);
+    useEffect(() => {
+        referenceExportMounted.current = true;
+        return () => { referenceExportMounted.current = false; referenceExportController.current?.abort(); };
+    }, []);
     const [status, setStatus] = useState<any[]>([]);
     const [isSyncing, setIsSyncing] = useState(false);
     const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
@@ -628,12 +641,15 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, currentUser, roles,
         // the same idle gate as automatic sync, so downloads, applies and
         // uploads cannot compete with an operator transition.
         void (async () => {
+            let stage: ManualSyncStage = 'ESPERA';
             try {
                 await waitForBackgroundSyncWindow();
                 if (!syncManager.isUsingConfigPushV2Primary()) {
+                    stage = 'CONFIGURACION';
                     await syncTriggerCoordinator.request({ reason: 'MANUAL' });
                 }
                 await yieldBackgroundSyncChunk();
+                stage = 'SINCRONIZAR_TODO';
                 await syncManager.manualSyncAll();
 
                 setLastSyncTime(new Date());
@@ -642,17 +658,59 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, currentUser, roles,
                     message: 'Sincronización completada en segundo plano.',
                 });
                 await yieldBackgroundSyncChunk();
+                stage = 'MONITOR';
                 await loadStatus();
             } catch (error) {
                 console.error('Sync error:', error);
                 setSyncFeedback({
                     type: 'error',
-                    message: 'No se pudo completar la sincronización. Revise el monitor para más detalles.',
+                    message: formatManualSyncFailure(error, stage),
                 });
             } finally {
                 setIsSyncing(false);
             }
         })();
+    };
+
+    const handleExportReferences = async () => {
+        if (isExportingReferences || isSyncing || referenceExportController.current) return;
+        const controller = new AbortController();
+        referenceExportController.current = controller;
+        setIsExportingReferences(true); setReferenceExportJson('');
+        setReferenceExportMessage('Preparando archivo local. No se modifica la base de datos.');
+        try {
+            if (!dbAdapter.masterSyncV3Store?.readBaselineReferenceInventory) throw new Error('SYNC_V3_NATIVE_STORE_UNAVAILABLE');
+            const result = await runBaselineReferenceExport({
+                read: options => dbAdapter.masterSyncV3Store!.readBaselineReferenceInventory!(options),
+                readBinding: readOperationalTerminalBinding,
+                readIdentity: readOperationalCatalogBindingProof,
+                signal: controller.signal,
+                onProgress: progress => {
+                    if (referenceExportMounted.current) setReferenceExportMessage(`${progress.table} · ${progress.rows} filas · ${progress.references} referencias. No realices cobros durante la lectura.`);
+                },
+                onPreview: preview => { if (referenceExportMounted.current) setReferenceExportJson(preview); },
+            });
+            if (referenceExportMounted.current) setReferenceExportMessage(`${result.summary.referenceCount} referencias · ${result.summary.tableCount} tablas · ${result.summary.issueCount} incidencias. ${result.summary.referenceInventoryComplete ? 'Censo completado.' : 'Cobertura incompleta: revisar incidencias.'} Archivo: ${result.path}`);
+        } catch (error) {
+            if (referenceExportMounted.current) setReferenceExportMessage(error instanceof BaselineReferenceRowTooLargeError
+                ? `Exportación detenida sin recortar datos: tabla ${error.table}, fila de ${error.rowBytes} bytes; límite seguro ${REFERENCE_AUDIT_PAGE_BYTES} bytes. Necesita diagnóstico específico para esa tabla. No se publicó un reporte final.`
+                : error instanceof Error && error.message === 'REFERENCE_AUDIT_REPORT_CLEANUP_FAILED'
+                ? 'Exportación no completada. No se pudo confirmar la limpieza del archivo de diagnóstico; no lo uses como censo válido. Los datos del POS no se modificaron.'
+                : error instanceof Error && error.message === 'REFERENCE_AUDIT_CANCELLED'
+                ? 'Exportación cancelada. No se publicó un reporte final; datos conservados.'
+                : `Exportación no completada. ${formatManualSyncFailure(error, 'MONITOR')} No se publicó un reporte final. Revisa espacio y permisos de archivos; no borres datos del POS.`);
+        } finally {
+            referenceExportController.current = null;
+            if (referenceExportMounted.current) setIsExportingReferences(false);
+        }
+    };
+
+    const handleCopyReferenceJson = async () => {
+        try {
+            if (!navigator.clipboard?.writeText) throw new Error('CLIPBOARD_UNAVAILABLE');
+            await navigator.clipboard.writeText(referenceExportJson);
+            setReferenceExportMessage('Vista parcial copiada. El censo completo está en el archivo JSONL.');
+        } catch { setReferenceExportMessage('Selecciona el texto del reporte y cópialo manualmente.'); }
     };
 
     const handleRetryConfigPush = async () => {
@@ -1070,7 +1128,7 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, currentUser, roles,
                             {syncFeedback ? (
                                 <p
                                     role="status"
-                                    className={`text-xs font-bold ${syncFeedback.type === 'error' ? 'text-red-600' : 'text-emerald-600'}`}
+                                    className={`whitespace-pre-wrap break-words text-xs font-bold ${syncFeedback.type === 'error' ? 'text-red-600' : 'text-emerald-600'}`}
                                 >
                                     {syncFeedback.message}
                                 </p>
@@ -1220,6 +1278,24 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, currentUser, roles,
                                             </div>
                                         ))}
                                     </div>
+                                </div>
+
+                                <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                                    <h3 className="font-bold">Inventario de referencias locales V3</h3>
+                                    <p className="mt-2 text-sm">Recorre las referencias V3 y relaciones declaradas de todas las tablas de SQLite, sin modificar datos, vinculación ni protección. El archivo JSONL se escribe por partes. No realices cobros durante la lectura. Puedes cancelar y la protección permanece activa. El ticket en memoria queda fuera; no ejecuta migraciones ni envía información al servidor.</p>
+                                    <button type="button" disabled={isExportingReferences || isSyncing} onClick={() => void handleExportReferences()} className="mt-3 rounded-xl bg-blue-600 px-4 py-3 font-bold text-white disabled:opacity-50">
+                                        {isExportingReferences ? 'Generando inventario local…' : 'Exportar inventario local V3 (solo lectura)'}
+                                    </button>
+                                    {isExportingReferences && <button type="button" onClick={() => referenceExportController.current?.abort()} className="ml-3 rounded border px-4 py-3">Cancelar exportación</button>}
+                                    {referenceExportMessage && <p role="status" className="mt-3 break-words text-sm">{referenceExportMessage}</p>}
+                                    {referenceExportJson && <>
+                                        <div className="mt-3 flex gap-3">
+                                            <button type="button" onClick={() => void handleCopyReferenceJson()} className="rounded border px-4 py-2">Copiar vista parcial</button>
+
+                                        </div>
+                                        <p className="mt-2 text-sm">Vista parcial limitada. Para el inventario completo, transfiere el archivo JSONL indicado al finalizar.</p>
+                                        <textarea aria-label="Vista parcial de referencias locales V3" readOnly value={referenceExportJson} onFocus={event => event.currentTarget.select()} className="mt-3 h-64 w-full rounded border p-3 font-mono text-xs" />
+                                    </>}
                                 </div>
 
                                 <div className="rounded-2xl border border-blue-200 bg-white p-5 shadow-sm">

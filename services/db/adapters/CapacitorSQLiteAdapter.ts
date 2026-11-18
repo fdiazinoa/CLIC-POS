@@ -1,3 +1,4 @@
+import { BaselineReferenceConnectionUncertainError } from '../../diagnostics/BaselineReferenceInventory';
 import {NativeFiscalCreditApplicationStore,FISCAL_CREDIT_APPLICATION_SCHEMA} from '../NativeFiscalCreditApplicationStore';
 import {NativeFiscalReturnStore,FISCAL_RETURN_SCHEMA,consumeNativeFiscalReturn} from '../NativeFiscalReturnStore';
 import {DISPATCH_STORE_POLICY_SCHEMA_V2,DISPATCH_POOL_INSTALL_SCHEMA,installDispatchPoolSnapshot,prepareDispatchBarrierProof,type DispatchPoolSnapshot,dispatchPoolId} from '../CompanyDispatchPool';
@@ -23,7 +24,7 @@ import {assertNoReconciledOrdinaryWriter} from '../../articleFormats/inventoryJo
 import {readV3Base4Stock,base4} from '../V3Base4Stock';
 import {Money} from '../../articleFormats/wire';
 import {NATIVE_FISCAL_RECEIPTS_SCHEMA,planNativeFiscalReceipt} from '../NativeFiscalReservation';
-import type {LargeMasterSyncV3Store} from '../../sync/LargeMasterSyncV3Types';
+import {LargeMasterSyncV3Error,type LargeMasterSyncV3Store} from '../../sync/LargeMasterSyncV3Types';
 import {validateFiscalBufferReservation,isDeferredFiscalBufferUsable} from '../../../utils/fiscalBufferAuthority';
 import {clearDeferredFiscalReservation,isDeferredFiscalReservation} from '../../fiscal/DeferredFiscalReservation';
 import { ARTICLE_FORMAT_RETAINED_UPSERT_SQL } from '../ArticleFormatFinancialRetention';
@@ -97,6 +98,7 @@ export const NATIVE_V3_METHOD_CONCURRENCY = {
     validateStaging: 'write',
     activate: 'write',
     rollback: 'write',
+    readBaselineReferenceInventory: 'read',
     getActiveRuntimeVersion: 'read',
     getPragmaSnapshot: 'read',
     getDatabaseSizeBytes: 'read',
@@ -142,7 +144,13 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
     public readonly masterSyncV3Store = this.serializedMasterStore();
 
     private serializedMasterStore():LargeMasterSyncV3SqliteStore {
-        const store=new LargeMasterSyncV3SqliteStore(()=>this.ensureDb() as any,operation=>this.withWriteLock(operation),undefined,()=>this.readConfigOwned());
+        const store=new LargeMasterSyncV3SqliteStore(()=>this.ensureDb() as any,operation=>this.withWriteLock(async()=>{
+            try { return await operation(); }
+            catch(error) {
+                if(error instanceof LargeMasterSyncV3Error && error.code==='SYNC_V3_CONNECTION_UNCERTAIN') this.financialConnectionError=error;
+                throw error;
+            }
+        }),undefined,()=>this.readConfigOwned());
 
         return new Proxy(store,{get:(target,key)=>{
             const value=Reflect.get(target,key);
@@ -150,7 +158,13 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             // Internal calls retain the raw target and explicit connection. Public observers wait for committed state.
             const mode=NATIVE_V3_METHOD_CONCURRENCY[key as keyof typeof NATIVE_V3_METHOD_CONCURRENCY];
             if(!mode) throw new Error('NATIVE_MASTER_STORE_METHOD_UNCLASSIFIED:'+String(key));
-            return mode==='write' ? value.bind(target) : (...args:any[])=>this.withWriteLock(()=>value.apply(target,args));
+            return mode==='write' ? value.bind(target) : (...args:any[])=>this.withWriteLock(async()=>{
+                try { return await value.apply(target,args); }
+                catch(error) {
+                    if(error instanceof BaselineReferenceConnectionUncertainError) this.financialConnectionError=error;
+                    throw error;
+                }
+            });
         }});
     }
 

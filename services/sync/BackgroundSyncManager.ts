@@ -1,3 +1,4 @@
+import { AUDIT_CONTEXT_RETRY_DELAY_MS, isAuditContextBlocked, isAuditContextMissing } from './AuditContextRetry';
 import { reconcileAuthorizationBackups } from '../audit/PosOperationalAudit';
 import { isFormatOwnedDocument } from '../articleFormats/activation';
 import { isRecoveredOperation } from '../recovery/PendingOperationsRecovery';
@@ -284,6 +285,8 @@ class BackgroundSyncManager {
                     : Math.min(this.nextRetryDelayMs, delay);
             }
         }
+        if (status === 'BLOCKED_FUNCTIONAL' && (collectionName === 'posAuditEvents' || collectionName === 'invoiceAuditEvents')
+            && isAuditContextBlocked(collectionName,item)) return true;
         if (status === 'PENDING') return true;
         if (status === 'RETRY_WAIT') return true;
         if (status === 'SYNCING') {
@@ -521,6 +524,7 @@ class BackgroundSyncManager {
                 await reconcileAuthorizationBackups(dbAdapter, permissionService.getTerminalId()).catch((error: any) => {
                     collectionErrors.push(`posAuditRecovery: ${error?.message || 'storage unavailable'}`);
                 });
+                if (!this.remoteEnabled || generation !== this.remoteGeneration) return;
                 await this.processCollection<any>('posAuditEvents', item => apiSyncAdapter.pushAuditEvent(item)).catch((error: any) => {
                     console.warn('[POS_AUDIT_TRANSPORT_PENDING]', error?.message || 'unknown error');
                     this.nextRetryDelayMs = this.nextRetryDelayMs === null ? this.WORKER_INTERVAL_MS : Math.min(this.nextRetryDelayMs, this.WORKER_INTERVAL_MS);
@@ -528,6 +532,7 @@ class BackgroundSyncManager {
                 // A global Outbox flag cannot establish ownership of historical rows.
                 // Dedicated delivery and Inbox share a stable source identity in ERP,
                 // so even a row delivered by both paths produces one audit record.
+                if (!this.remoteEnabled || generation !== this.remoteGeneration) return;
                 await this.processCollection<any>('invoiceAuditEvents', item => apiSyncAdapter.pushAuditEvent(item, true)).catch((error: any) => {
                     console.warn('[POS_INVOICE_AUDIT_TRANSPORT_PENDING]', error?.message || 'unknown error');
                     this.nextRetryDelayMs = this.nextRetryDelayMs === null ? this.WORKER_INTERVAL_MS : Math.min(this.nextRetryDelayMs, this.WORKER_INTERVAL_MS);
@@ -638,6 +643,12 @@ class BackgroundSyncManager {
                 delete (item as any).syncRetryAfter;
                 await db.saveDocument(collectionName as any, item as any);
 
+                // Authorization or binding may have changed while the native SYNCING write was pending.
+                if (!this.remoteEnabled || generation !== this.remoteGeneration) return;
+                if ((collectionName === 'posAuditEvents' || collectionName === 'invoiceAuditEvents')
+                    && (!navigator.onLine || isPosSaleActive() || !isSyncFeatureEnabled('pos_operational_audit')
+                        || !['ERP_ACTIVE','POS_CLOUD_STAGING'].includes(syncPolicy.resolve().kind)
+                        || !syncPolicy.resolve().canPushOperations)) return;
                 // Attempt push
                 const mutationResult = await pushFn(item);
                 if (!this.remoteEnabled || generation !== this.remoteGeneration) {
@@ -701,6 +712,23 @@ class BackgroundSyncManager {
                         : Math.min(this.nextRetryDelayMs, this.RECOVERABLE_TRANSACTION_RETRY_DELAY_MS);
                     await db.saveDocument(collectionName as any, item as any);
                     break;
+                }
+
+                if ((collectionName === 'posAuditEvents' || collectionName === 'invoiceAuditEvents')
+                    && isAuditContextMissing(collectionName,error)) {
+                    // Retry the original event through the normal authenticated, idempotent audit endpoint.
+                    // Preserve its identity/content and historical blocked timestamp; never force commercial replay.
+                    item.syncStatus = 'RETRY_WAIT';
+                    item.syncError = error?.message || 'ERP_CONTEXT_MISSING';
+                    if (!(item as any).syncBlockedReason) (item as any).syncBlockedReason = 'ERP_CONTEXT_MISSING';
+                    (item as any).syncRetryAfter = new Date(Date.now() + AUDIT_CONTEXT_RETRY_DELAY_MS).toISOString();
+                    delete (item as any).syncStartedAt;
+                    syncMetrics.increment('retry_count');
+                    this.nextRetryDelayMs = this.nextRetryDelayMs === null
+                        ? AUDIT_CONTEXT_RETRY_DELAY_MS
+                        : Math.min(this.nextRetryDelayMs,AUDIT_CONTEXT_RETRY_DELAY_MS);
+                    await db.saveDocument(collectionName as any,item as any);
+                    continue;
                 }
 
                 if (this.isFunctionalSyncError(error)) {

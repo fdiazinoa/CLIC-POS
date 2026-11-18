@@ -343,7 +343,7 @@ for(const drift of ['none','syncToken','tenantId','company','warehouse','origin'
    './LargeMasterSyncV3Platform':'export const assertLargeMasterSyncV3NativeAndroid=()=>{};',
    './LargeMasterSyncV3DownloadOrigin':'export const largeMasterSyncV3DownloadOrigin=()=>globalThis.__sessionFence.state.origin;',
    './LargeMasterSyncV3BoundTransport':`export const readLargeMasterSyncV3BoundIdentity=()=>({...globalThis.__sessionFence.state.identity});export const validatedLargeMasterSyncV3ErpSyncBase=value=>value;
-    export const createLargeMasterSyncV3BoundClient=store=>({requestSync:async()=>({syncId:'N'}),resumeSync:async id=>store.activate(id)});`,
+    export const createLargeMasterSyncV3BoundClient=store=>({requestSync:async()=>({syncId:'N',syncVersion:102,schemaVersion:3,status:'READY',manifestUrl:'manifest'}),resumeSync:async id=>store.activate(id)});`,
   };
   const bundled=await build({entryPoints:[new URL('../services/sync/LargeMasterSyncV3OperationalSession.ts',import.meta.url).pathname],bundle:true,write:false,format:'esm',platform:'node',plugins:[{name:'fence-io',setup(b){
    b.onResolve({filter:/.*/},a=>mocks[a.path]?{path:a.path,namespace:'fixture'}:undefined);b.onLoad({filter:/.*/,namespace:'fixture'},a=>({contents:mocks[a.path],loader:'js'}));}}]});

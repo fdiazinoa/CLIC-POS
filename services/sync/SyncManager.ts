@@ -475,6 +475,7 @@ class SyncManager {
     private readonly IMAGE_SYNC_BATCH_SIZE = 40;
     private terminalManifestSyncInFlight = false;
     private terminalConfigRefreshQueue: Promise<void> = Promise.resolve();
+    private erpSecurityApplyQueue: Promise<void> = Promise.resolve();
     private lastBackgroundTerminalManifestSyncAt = 0;
     private readyToSellStartedAt = 0;
     private readyToSellState: {
@@ -3605,7 +3606,7 @@ class SyncManager {
             return null;
         }
         const currentTerminalCursorMap = this.readStoredTerminalCursorMap(snapshotTerminalId);
-        const requestedMasterScopes = Array.isArray(options?.masterScopes)
+        let requestedMasterScopes = Array.isArray(options?.masterScopes)
             ? Array.from(new Set(options.masterScopes.filter(scope => Boolean(scope) && !(v3Authority && scope === 'items'))))
             : v3Authority ? [] : null;
         const requestedBlockScopes = Array.isArray(options?.blockScopes)
@@ -3621,6 +3622,10 @@ class SyncManager {
 
         if (snapshotOverride !== undefined) await receivePosSecurityV2(snapshotOverride, 'terminal-config');
         let snapshot = extractTerminalConfigSnapshot(snapshotOverride);
+        // A supplied full carrier made no scoped HTTP request. Do not confuse V3's default
+        // master_scopes=none for remote fetches with authority of that explicit carrier.
+        let securityMasterScopes = snapshot && snapshotOverride !== undefined && options?.masterScopes == null
+            ? null : requestedMasterScopes;
         const pendingSnapshot = snapshot
             ? null
             : this.getPendingTerminalSnapshot(context.terminalId, snapshotTerminalId);
@@ -3681,6 +3686,12 @@ class SyncManager {
         }
 
         if (!snapshot && canFetchRemote) {
+            // ERP returns users and roles together whenever either security collection is requested.
+            // Declare that authority on the actual HTTP request; supplied partial carriers stay partial.
+            if (requestedMasterScopes?.some(scope => ['users','pos_users','roles','pos_roles'].includes(scope))) {
+                requestedMasterScopes = Array.from(new Set<TerminalManifestMasterScope>([...requestedMasterScopes,'pos_users','pos_roles']));
+                securityMasterScopes = requestedMasterScopes;
+            }
             let lastFetchError: unknown = null;
 
             for (const endpointCandidate of endpointCandidates) {
@@ -3916,6 +3927,7 @@ class SyncManager {
                 }
                 const structuredMasterData = await this.refreshTerminalStructuredMasterData(snapshot, catalogDelta, {
                     assertCurrent: options?.requireOperationalTerminalConfig ? assertRefreshAuthorityCurrent : undefined,
+                    masterScopes: securityMasterScopes,
                     terminalIds: [
                         context.terminalId,
                         snapshotTerminalId,
@@ -4560,6 +4572,9 @@ class SyncManager {
         const rows: unknown[] = [];
 
         for (const key of keys) {
+            const masters = snapshot && typeof snapshot === 'object' ? (snapshot as Record<string, any>).masters : null;
+            if (masters && typeof masters === 'object' && Object.prototype.hasOwnProperty.call(masters,key)
+                && !Array.isArray(masters[key])) throw new Error('Snapshot de seguridad ERP inválido: se esperaba un arreglo.');
             const snapshotRows = this.snapshotMasterRows(snapshot, key);
             if (snapshotRows === null) continue;
             found = true;
@@ -4730,38 +4745,76 @@ class SyncManager {
     private async applyAuthoritativeErpSecuritySnapshot(
         roleRows: unknown[] | null,
         userRows: unknown[] | null,
+        options?: {masterScopes?: TerminalManifestMasterScope[] | null; assertCurrent?: () => Promise<void>},
     ): Promise<{ roles: number; users: number }> {
-        const previousRoles = ((await db.get('roles')) as RoleDefinition[]) || [];
-        const previousUsers = ((await db.get('users')) as User[]) || [];
-        const next = buildAuthoritativeErpSecuritySnapshot({
-            roleRows,
-            userRows,
-            existingRoles: Array.isArray(previousRoles) ? previousRoles : [],
-            existingUsers: Array.isArray(previousUsers) ? previousUsers : [],
-        });
+        const requestedScopes = Array.isArray(options?.masterScopes) ? [...options.masterScopes] : options?.masterScopes;
+        const assertCurrent = options?.assertCurrent;
+        const apply = this.erpSecurityApplyQueue.then(async () => {
+            await assertCurrent?.();
+            const previousRoles = ((await db.get('roles')) as RoleDefinition[]) || [];
+            const previousUsers = ((await db.get('users')) as User[]) || [];
+            const scopes = requestedScopes;
+            if (scopes != null && (!Array.isArray(scopes) || scopes.some(scope => typeof scope !== 'string'))) {
+                throw new Error('Alcance de seguridad ERP inválido.');
+            }
+            const fullUsers = scopes == null || scopes.includes('users') || scopes.includes('pos_users');
+            const fullRoles = scopes == null || scopes.includes('roles') || scopes.includes('pos_roles');
+            if (!fullRoles && roleRows?.length) throw new Error('Snapshot de roles ERP fuera del alcance solicitado.');
+            const removedIds = new Set<string>();
+            if (!fullUsers && userRows !== null) {
+                for (const row of userRows) {
+                    const id = this.snapshotPosUserId(row);
+                    if (!id || !this.snapshotExplicitlyRemovesPosUser(row)) {
+                        throw new Error('Snapshot de usuarios ERP fuera de alcance: solo se admiten bajas explícitas con ID.');
+                    }
+                    removedIds.add(id);
+                }
+            }
+            const retainedUsers = !fullUsers && removedIds.size > 0
+                ? previousUsers.filter(user => !removedIds.has(this.snapshotPosUserId(user))) : previousUsers;
+            const scopedRoles = fullRoles ? roleRows : null;
+            const scopedUsers = fullUsers ? userRows : null;
+            const next = scopedRoles === null && scopedUsers === null
+                ? {roles:previousRoles,users:previousUsers,rolesChanged:false,usersChanged:false}
+                : buildAuthoritativeErpSecuritySnapshot({
+                roleRows: scopedRoles,
+                userRows: scopedUsers,
+                existingRoles: Array.isArray(previousRoles) ? previousRoles : [],
+                existingUsers: Array.isArray(retainedUsers) ? retainedUsers : [],
+            });
 
-        try {
-            if (next.rolesChanged) await db.save('roles', next.roles);
-            if (next.usersChanged) await db.save('users', next.users);
-        } catch (error) {
-            // Best-effort rollback: roles and users form one logical security snapshot.
-            await Promise.allSettled([
-                db.save('roles', previousRoles),
-                db.save('users', previousUsers),
-            ]);
-            throw error;
-        }
+            if (!fullUsers && removedIds.size > 0) {
+                // Unsolicited tombstones are a delta, not a complete authorization roster.
+                next.users = retainedUsers;
+                next.usersChanged = next.users.length !== previousUsers.length;
+            }
 
-        if (next.rolesChanged) window.dispatchEvent(new CustomEvent('rolesUpdated'));
-        if (next.usersChanged) window.dispatchEvent(new CustomEvent('usersUpdated'));
-        console.info('[SYNC_SECURITY] authoritative_erp_snapshot_applied', {
-            roles: next.roles.length,
-            users: next.users.length,
+            await assertCurrent?.();
+            try {
+                if (next.rolesChanged) await db.save('roles', next.roles);
+                if (next.usersChanged) await db.save('users', next.users);
+            } catch (error) {
+                // Best-effort rollback: roles and users form one logical security snapshot.
+                await Promise.allSettled([
+                    db.save('roles', previousRoles),
+                    db.save('users', previousUsers),
+                ]);
+                throw error;
+            }
+
+            if (next.rolesChanged) window.dispatchEvent(new CustomEvent('rolesUpdated'));
+            if (next.usersChanged) window.dispatchEvent(new CustomEvent('usersUpdated'));
+            console.info('[SYNC_SECURITY] authoritative_erp_snapshot_applied', {
+                roles: next.roles.length,
+                users: next.users.length,
+            });
+            return {
+                roles: next.rolesChanged ? next.roles.length : 0,
+                users: next.usersChanged ? next.users.length : 0,
+            };
         });
-        return {
-            roles: next.rolesChanged ? next.roles.length : 0,
-            users: next.usersChanged ? next.users.length : 0,
-        };
+        this.erpSecurityApplyQueue = apply.then(() => undefined,() => undefined);
+        return apply;
     }
 
     private async applySnapshotPosUsers(
@@ -5085,6 +5138,7 @@ class SyncManager {
         options?: {
             terminalIds?: Array<string | null | undefined>;
             assertCurrent?: () => Promise<void>;
+            masterScopes?: TerminalManifestMasterScope[] | null;
         }
     ): Promise<{
         users: number;
@@ -5112,7 +5166,7 @@ class SyncManager {
         const roleRows = this.collectSnapshotMasterRows(snapshot, ['pos_roles', 'roles']);
         const userRows = this.collectSnapshotMasterRows(snapshot, ['pos_users', 'users']);
         if (syncPolicy.resolve().kind === 'ERP_ACTIVE' && (roleRows !== null || userRows !== null)) {
-            const security = await this.applyAuthoritativeErpSecuritySnapshot(roleRows, userRows);
+            const security = await this.applyAuthoritativeErpSecuritySnapshot(roleRows, userRows, {masterScopes:options?.masterScopes,assertCurrent:options?.assertCurrent});
             results.roles = security.roles;
             results.users = security.users;
         } else {
