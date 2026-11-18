@@ -24,7 +24,7 @@ import {assertNoReconciledOrdinaryWriter} from '../../articleFormats/inventoryJo
 import {readV3Base4Stock,base4} from '../V3Base4Stock';
 import {Money} from '../../articleFormats/wire';
 import {NATIVE_FISCAL_RECEIPTS_SCHEMA,planNativeFiscalReceipt} from '../NativeFiscalReservation';
-import type {LargeMasterSyncV3Store} from '../../sync/LargeMasterSyncV3Types';
+import {LargeMasterSyncV3Error,type LargeMasterSyncV3Store} from '../../sync/LargeMasterSyncV3Types';
 import {validateFiscalBufferReservation,isDeferredFiscalBufferUsable} from '../../../utils/fiscalBufferAuthority';
 import {clearDeferredFiscalReservation,isDeferredFiscalReservation} from '../../fiscal/DeferredFiscalReservation';
 import { ARTICLE_FORMAT_RETAINED_UPSERT_SQL } from '../ArticleFormatFinancialRetention';
@@ -144,7 +144,13 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
     public readonly masterSyncV3Store = this.serializedMasterStore();
 
     private serializedMasterStore():LargeMasterSyncV3SqliteStore {
-        const store=new LargeMasterSyncV3SqliteStore(()=>this.ensureDb() as any,operation=>this.withWriteLock(operation),undefined,()=>this.readConfigOwned());
+        const store=new LargeMasterSyncV3SqliteStore(()=>this.ensureDb() as any,operation=>this.withWriteLock(async()=>{
+            try { return await operation(); }
+            catch(error) {
+                if(error instanceof LargeMasterSyncV3Error && error.code==='SYNC_V3_CONNECTION_UNCERTAIN') this.financialConnectionError=error;
+                throw error;
+            }
+        }),undefined,()=>this.readConfigOwned());
 
         return new Proxy(store,{get:(target,key)=>{
             const value=Reflect.get(target,key);

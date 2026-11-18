@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { LargeMasterSyncV3Client } from '../services/sync/LargeMasterSyncV3Client';
 import { prepareLargeMasterSyncV3CatalogOnly } from '../services/sync/LargeMasterSyncV3Candidate';
+import { CapacitorSQLiteAdapter } from '../services/db/adapters/CapacitorSQLiteAdapter';
 import { LargeMasterSyncV3SqliteStore } from '../services/db/LargeMasterSyncV3SqliteStore';
 import { LARGE_MASTER_SYNC_V3_SCHEMA_SQL } from '../services/db/LargeMasterSyncV3Schema';
 import type { LargeMasterSyncV3Manifest, LargeMasterSyncV3RuntimeVersion, LargeMasterSyncV3Store, LargeMasterSyncV3StagingReplacement } from '../services/sync/LargeMasterSyncV3Types';
@@ -37,7 +38,7 @@ function fixture(){
  sql.prepare("INSERT INTO sync_v3_chunks(sync_id,dataset,chunk_index,checksum,record_count,raw_bytes,status,applied_at) VALUES(?,'articles',0,'old-hash',1,10,'APPLIED','old')").run(pending.syncId);
  const transition=async()=>({binding:'binding',expectedCatalog:active,inventory:(await store.getInventoryAuthority())!,assertIdentity:()=>{}});
  const snapshot=()=>JSON.stringify(sql.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all().map(row=>[row.name,sql.prepare(`SELECT * FROM "${row.name}"`).all()]));
- return {sql,store,stageData,transition,snapshot,fault:(value:string)=>{fault=value;}};
+ return {sql,bridge,store,stageData,transition,snapshot,fault:(value:string)=>{fault=value;}};
 }
 const rows=(f:ReturnType<typeof fixture>,table:string)=>JSON.stringify(f.sql.prepare(`SELECT * FROM ${table}`).all());
 function dependencies(f:ReturnType<typeof fixture>,requested:LargeMasterSyncV3RuntimeVersion=target,downloaded=requested){
@@ -155,6 +156,35 @@ test('owner or inventory changes during the final identity callback roll back su
    const transition=await f.transition();let reads=0;
    transition.assertIdentity=()=>{if(++reads===2)f.sql.exec(table==='master_v3_operational_owner'?"UPDATE master_v3_operational_owner SET binding='other'":"UPDATE master_v3_inventory_state SET cursor='other'");};
    const before=f.snapshot();await assert.rejects(f.store.prepareCatalogOnly(manifest(),transition,pending),/TRANSITION_CHANGED/);assert.equal(f.snapshot(),before);
+  }finally{f.sql.close();}
+ }
+});
+
+
+test('failed supersession rollback quarantines the actual adapter before its queued writer can execute',async()=>{
+ const f=fixture();try{
+  const execute=f.bridge.execute;f.bridge.execute=async q=>{if(q==='ROLLBACK;')throw Error('rollback response lost');return execute(q);};
+  f.fault("UPDATE sync_v3_sessions SET status = 'FAILED'");
+  const adapter=new CapacitorSQLiteAdapter();Object.assign(adapter,{db:f.bridge,isReady:true});
+  const operation=adapter.masterSyncV3Store.prepareCatalogOnly!(manifest(),await f.transition(),pending);
+  let wrote=false;const queued=(adapter as any).withWriteLock(async()=>{wrote=true;f.sql.exec("INSERT INTO documents VALUES('transactions','unsafe','{}')");});
+  await assert.rejects(operation,/SYNC_V3_CONNECTION_UNCERTAIN/);await assert.rejects(queued,/SYNC_V3_CONNECTION_UNCERTAIN/);assert.equal(wrote,false);
+  await assert.rejects(adapter.masterSyncV3Store.getActiveRuntimeVersion(),/SYNC_V3_CONNECTION_UNCERTAIN/);assert.throws(()=>(adapter as any).ensureDb(),/SYNC_V3_CONNECTION_UNCERTAIN/);
+  assert.equal(f.sql.prepare("SELECT COUNT(*) AS count FROM documents WHERE doc_id='unsafe'").get()?.count,0);
+ }finally{f.sql.close();}
+});
+
+test('applied BEGIN with lost response rolls back or quarantines before another adapter write',async()=>{
+ for(const rollbackFailure of [false,true]){
+  const f=fixture();try{
+   const before=f.snapshot(),execute=f.bridge.execute;
+   f.bridge.execute=async q=>{if(rollbackFailure&&q==='ROLLBACK;')throw Error('rollback failed');await execute(q);if(q.startsWith('BEGIN'))throw Error('begin response lost');};
+   const adapter=new CapacitorSQLiteAdapter();Object.assign(adapter,{db:f.bridge,isReady:true});
+   const operation=adapter.masterSyncV3Store.prepareCatalogOnly!(manifest(),await f.transition(),pending);let wrote=false;
+   const queued=(adapter as any).withWriteLock(async()=>{wrote=true;});
+   await assert.rejects(operation,rollbackFailure?/SYNC_V3_CONNECTION_UNCERTAIN/:/begin response lost/);
+   if(rollbackFailure){await assert.rejects(queued,/SYNC_V3_CONNECTION_UNCERTAIN/);assert.equal(wrote,false);}
+   else{await queued;assert.equal(wrote,true);assert.equal(f.snapshot(),before);f.sql.exec('BEGIN;ROLLBACK;');}
   }finally{f.sql.close();}
  }
 });

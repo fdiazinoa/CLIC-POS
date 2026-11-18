@@ -359,8 +359,9 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
   private async prepareInternal(manifest: LargeMasterSyncV3Manifest, transition?: LargeMasterSyncV3CatalogTransition, expectedStaging?: LargeMasterSyncV3StagingReplacement): Promise<void> {
     await this.writeLock(async () => {
       const db = this.connection();
-      await db.execute('BEGIN IMMEDIATE TRANSACTION;', false);
       try {
+        // The native bridge can lose a response after BEGIN has already opened the transaction.
+        await db.execute('BEGIN IMMEDIATE TRANSACTION;', false);
         // Staging metadata does not replace the active baseline; the client separately waits before chunk apply.
         if (transition) {
           await this.assertCatalogTransition(transition);
@@ -468,7 +469,12 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
         else await this.assertTransitionIdentity(transition);
         await db.execute('COMMIT;', false);
       } catch (error) {
-        await db.execute('ROLLBACK;', false).catch(() => undefined);
+        try { await db.execute('ROLLBACK;', false); }
+        catch (rollbackError) {
+          const uncertain = new LargeMasterSyncV3Error('SYNC_V3_CONNECTION_UNCERTAIN');
+          uncertain.cause = {error,rollbackError};
+          throw uncertain;
+        }
         throw error;
       }
     });
