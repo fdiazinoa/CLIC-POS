@@ -97,3 +97,12 @@ test('queued security authority is checked inside its lane and again before writ
  await f.apply({masters:{users:[]}},['users']);assert.deepEqual(f.values.get('users'),[]);
  const g=fixture();let count=0;await assert.rejects(g.apply({masters:{users:[]}},['users'],async()=>{if(++count===2)throw Error('BINDING_CHANGED');}),/BINDING_CHANGED/);assert.deepEqual(g.writes,[]);assert.deepEqual(g.events,[]);assert.deepEqual(g.values.get('users'),users);
 });
+
+
+test('a roles-only carrier can revoke a role and its explicit user together without dropping other users',async()=>{
+ const f=fixture();const current=structuredClone(users);current[0].role='SUPERVISOR';current[0].roleId='SUPERVISOR';f.values.set('users',current);
+ const remainingRoles=roles.filter(role=>role.id!=='SUPERVISOR');
+ await f.apply({masters:{pos_roles:remainingRoles,pos_users:[tombstone('U0')]}},['roles']);
+ assert.deepEqual(f.values.get('users'),current.slice(1));assert.deepEqual(f.values.get('roles').map((role:any)=>role.id),remainingRoles.map(role=>role.id));
+ assert.deepEqual(f.events,['rolesUpdated','usersUpdated']);
+});

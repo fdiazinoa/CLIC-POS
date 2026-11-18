@@ -333,3 +333,20 @@ test('security scope propagation distinguishes an explicit full carrier from a f
   else assert.deepEqual(Array.from(securityScopes as []),[]);
  }
 });
+
+
+test('actual security HTTP requests explicitly couple users and roles without widening provided partial carriers',async()=>{
+ for(const scope of ['users','pos_users','roles','pos_roles']){
+  const securityPayload={...snapshot(),masters:{pos_users:[{id:'ERP-USER',name:'Operador',pin:'1234',role_id:'ERP-ROLE',is_active:true,can_operate_pos:true}],pos_roles:[{id:'ERP-ROLE',name:'Cajero',permissions:['POS_CHECKOUT'],is_active:true}]}};
+  const f=refreshFixture(securityPayload);let securityScopes:string[]=[];
+  f.instance.refreshTerminalStructuredMasterData=async(_snapshot:unknown,_delta:unknown,options:any)=>{securityScopes=Array.from(options.masterScopes);return {};};
+  await f.instance.refreshTerminalResolvedConfig(undefined,{baseConfig:config(),requireOperationalTerminalConfig:true,masterScopes:[scope],resolvedScopes:['catalog'],supplementalMode:'skip'});
+  assert.ok(securityScopes.includes('pos_users'));assert.ok(securityScopes.includes('pos_roles'));
+  const sent=new URL(f.endpoints[0]).searchParams.get('master_scopes')!.split(',');assert.deepEqual(sent,securityScopes);
+ }
+ const carrier=snapshot() as any;carrier.masters={pos_roles:[],pos_users:[{id:'REMOVED',_op:'DELETE'}]};
+ const f=refreshFixture();let securityScopes:unknown;
+ f.instance.refreshTerminalStructuredMasterData=async(_snapshot:unknown,_delta:unknown,options:any)=>{securityScopes=Array.from(options.masterScopes);return {};};
+ await f.instance.refreshTerminalResolvedConfig(carrier,{baseConfig:config(),masterScopes:['roles'],persist:false,dispatchEvent:false,supplementalMode:'skip'});
+ assert.deepEqual(securityScopes,['roles']);assert.equal(f.endpoints.length,0);
+});

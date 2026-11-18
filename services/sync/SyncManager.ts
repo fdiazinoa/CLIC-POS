@@ -3606,7 +3606,7 @@ class SyncManager {
             return null;
         }
         const currentTerminalCursorMap = this.readStoredTerminalCursorMap(snapshotTerminalId);
-        const requestedMasterScopes = Array.isArray(options?.masterScopes)
+        let requestedMasterScopes = Array.isArray(options?.masterScopes)
             ? Array.from(new Set(options.masterScopes.filter(scope => Boolean(scope) && !(v3Authority && scope === 'items'))))
             : v3Authority ? [] : null;
         const requestedBlockScopes = Array.isArray(options?.blockScopes)
@@ -3624,7 +3624,7 @@ class SyncManager {
         let snapshot = extractTerminalConfigSnapshot(snapshotOverride);
         // A supplied full carrier made no scoped HTTP request. Do not confuse V3's default
         // master_scopes=none for remote fetches with authority of that explicit carrier.
-        const securityMasterScopes = snapshot && snapshotOverride !== undefined && options?.masterScopes == null
+        let securityMasterScopes = snapshot && snapshotOverride !== undefined && options?.masterScopes == null
             ? null : requestedMasterScopes;
         const pendingSnapshot = snapshot
             ? null
@@ -3686,6 +3686,12 @@ class SyncManager {
         }
 
         if (!snapshot && canFetchRemote) {
+            // ERP returns users and roles together whenever either security collection is requested.
+            // Declare that authority on the actual HTTP request; supplied partial carriers stay partial.
+            if (requestedMasterScopes?.some(scope => ['users','pos_users','roles','pos_roles'].includes(scope))) {
+                requestedMasterScopes = Array.from(new Set<TerminalManifestMasterScope>([...requestedMasterScopes,'pos_users','pos_roles']));
+                securityMasterScopes = requestedMasterScopes;
+            }
             let lastFetchError: unknown = null;
 
             for (const endpointCandidate of endpointCandidates) {
@@ -4764,6 +4770,8 @@ class SyncManager {
                     removedIds.add(id);
                 }
             }
+            const retainedUsers = !fullUsers && removedIds.size > 0
+                ? previousUsers.filter(user => !removedIds.has(this.snapshotPosUserId(user))) : previousUsers;
             const scopedRoles = fullRoles ? roleRows : null;
             const scopedUsers = fullUsers ? userRows : null;
             const next = scopedRoles === null && scopedUsers === null
@@ -4772,12 +4780,12 @@ class SyncManager {
                 roleRows: scopedRoles,
                 userRows: scopedUsers,
                 existingRoles: Array.isArray(previousRoles) ? previousRoles : [],
-                existingUsers: Array.isArray(previousUsers) ? previousUsers : [],
+                existingUsers: Array.isArray(retainedUsers) ? retainedUsers : [],
             });
 
             if (!fullUsers && removedIds.size > 0) {
                 // Unsolicited tombstones are a delta, not a complete authorization roster.
-                next.users = previousUsers.filter(user => !removedIds.has(this.snapshotPosUserId(user)));
+                next.users = retainedUsers;
                 next.usersChanged = next.users.length !== previousUsers.length;
             }
 
