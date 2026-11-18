@@ -22,7 +22,7 @@ import { captureLargeMasterSyncV3ConfigRefreshAuthorityFromStore } from './Large
 import { persistProductionAreaSnapshot } from '../restaurant/ProductionAreaSnapshot';
 import { readLargeMasterSyncV3BoundIdentity } from './LargeMasterSyncV3BoundTransport';
 import { LargeMasterSyncV3Error } from './LargeMasterSyncV3Types';
-import { getLargeMasterSyncV3OperationalSession } from './LargeMasterSyncV3OperationalSession';
+import { acquireLargeMasterSyncV3ConfigContext, getLargeMasterSyncV3OperationalSession } from './LargeMasterSyncV3OperationalSession';
 import { assertLargeMasterSyncV3ConfigPayload, largeMasterSyncV3DownloadOrigin } from './LargeMasterSyncV3DownloadOrigin';
 import { assertOperationalTerminalConfig, readOperationalCatalogBindingProof, readOperationalTerminalBinding } from './OperationalTerminalConfig';
 import { freezeCount, freezePhase } from '../../diagnostics/freezeCounters';
@@ -2489,7 +2489,20 @@ class SyncManager {
                     const markerKey = `clic_v3_applied_manifest_${localTerminalId}`;
                     let checkpoint: V3ManifestCheckpoint | null = null;
                     try { checkpoint = JSON.parse(localStorage.getItem(markerKey) || 'null'); } catch { /* Unknown marker retries. */ }
-                    const session = await getLargeMasterSyncV3OperationalSession(false);
+                    let session;
+                    try {
+                        session = await getLargeMasterSyncV3OperationalSession(false);
+                    } catch (error) {
+                        if (!(error instanceof LargeMasterSyncV3Error)
+                            || error.code !== 'SYNC_V3_BINDING_CHANGED' || error.bindingReason !== 'CONFIG_SCOPE') throw error;
+                        // Config sync can retire the cached read scope without changing pairing.
+                        // Reacquire from persisted authority before capturing inventory; this does
+                        // not download a catalog, retry a sale, or accept a different identity.
+                        assertManifestBinding();
+                        const currentConfig = await db.get('config') as unknown as BusinessConfig;
+                        session = await acquireLargeMasterSyncV3ConfigContext(currentConfig, terminal?.id || localTerminalId);
+                        assertManifestBinding();
+                    }
                     await session.assertCurrent();
                     const stockAuthority = JSON.stringify([session.ready.inventorySyncId || session.ready.runtime.version.syncId,
                       session.ready.inventorySyncVersion ?? session.ready.runtime.version.syncVersion, session.ready.inventoryVersion, session.ready.inventoryCursor]);
