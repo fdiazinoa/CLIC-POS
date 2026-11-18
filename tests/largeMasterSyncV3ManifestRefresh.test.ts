@@ -31,10 +31,12 @@ async function fixture() {
   let active = { syncId: 'old', syncVersion: 47, price: 70 }; let exports = 0; let fetches = 0;
   let prepare: () => Promise<void> = async () => {}; let save: () => Promise<void> = async () => {};
   let onFetch: () => Promise<void> = async () => {}; let corrupt = false;
+  let cachedError: LargeMasterSyncV3Error | undefined; let acquisitions = 0;
   const db = { get: async (name: string) => name === 'config' ? (corrupt ? {} : clone(config))
     : name === 'internalSequences' ? [{ source: 'ERP_TERMINAL_CONFIG' }] : [],
     save: async (_name: string, value: any) => { await save(); config = clone(value); } };
   const getSession = async (refresh = false) => {
+    if (cachedError) { const error = cachedError; cachedError = undefined; throw error; }
     if (refresh) { exports++; await prepare(); active = { syncId: 'new', syncVersion: 102, price: 85 }; }
     const version = { syncId: active.syncId, syncVersion: active.syncVersion }; const bound = JSON.stringify(identity);
     return { assertSetupIdentity:()=>{},ready: { runtime: { version }, inventorySyncId: 'old', inventorySyncVersion: 47, inventoryVersion: 4, inventoryCursor: 'C' }, assertCurrent: async () => {
@@ -55,7 +57,13 @@ async function fixture() {
     } }] });
   const helper = await import(`data:text/javascript;base64,${Buffer.from(built.outputFiles[0].text + '\n//' + crypto.randomUUID()).toString('base64')}`);
   const context = {
-    syncTriggerCoordinator: {request: async () => {}}, db, getLargeMasterSyncV3OperationalSession: getSession, v3ManifestFingerprint, needsV3ManifestRefresh,
+    syncTriggerCoordinator: {request: async () => {}}, db, getLargeMasterSyncV3OperationalSession: getSession,
+    acquireLargeMasterSyncV3ConfigContext: async (current: any, terminalId: string) => {
+      acquisitions++;
+      assert.equal(terminalId, localId);
+      assert.deepEqual(current, clone(config));
+      return getSession();
+    }, v3ManifestFingerprint, needsV3ManifestRefresh,
     usesLargeMasterSyncV3Authority: () => true, syncPolicy: { resolve: () => ({ kind: 'ERP_ACTIVE' }) },
     readLargeMasterSyncV3BoundIdentity: () => ({ ...identity }),
     readOperationalTerminalBinding: () => JSON.stringify([identity, config.terminals[0].config.erpBinding.companyId]),
@@ -94,6 +102,7 @@ async function fixture() {
     change: (patch: Partial<typeof identity>) => { identity = { ...identity, ...patch }; },
     onFetch: (callback: typeof onFetch) => { onFetch = callback; }, onPrepare: (callback: typeof prepare) => { prepare = callback; },
     onSave: (callback: typeof save) => { save = callback; }, corrupt: () => { corrupt = true; },
+    failCachedSession: (error: LargeMasterSyncV3Error) => { cachedError = error; }, acquisitions: () => acquisitions,
     changeGeneration: () => { active = { ...active, syncId: 'external', syncVersion: 103 }; } };
 }
 const sync = (f: any) => {
@@ -228,4 +237,29 @@ test('manual and concurrent periodic wrapper share repair and cannot publish che
  const periodic=f.instance.syncTerminalManifestInBackground(f.config(),{reason:'periodic_manifest',throwOnError:true});
  assert.equal(completed,false);assert.equal(f.marker(),undefined);assert.equal(f.exports(),1);
  release();await Promise.all([manual,periodic]);assert.ok(f.marker());assert.equal(f.exports(),1);
+});
+
+
+test('manual refresh renews a stale persisted config scope before updating articles and prices', async () => {
+  const f = await fixture();
+  f.failCachedSession(new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED', undefined, false, 'CONFIG_SCOPE'));
+  await f.instance.syncTerminalManifestInBackground(undefined, { reason: 'manual_sync', throwOnError: true });
+  assert.equal(f.acquisitions(), 1);
+  assert.equal(f.exports(), 1);
+  assert.equal(f.active().price, 85);
+  assert.ok(f.marker());
+  assert.deepEqual(f.events, ['v3CatalogUpdated', 'configUpdated']);
+});
+
+test('catalog refresh never renews a changed identity, credentials, origin or owner', async () => {
+  for (const reason of ['IDENTITY', 'CREDENTIAL', 'ORIGIN', 'OWNER', undefined] as const) {
+    const f = await fixture();
+    f.failCachedSession(new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED', undefined, false, reason));
+    await assert.rejects(f.instance.syncTerminalManifestInBackground(undefined,
+      { reason: 'manual_sync', throwOnError: true }), /SYNC_V3_BINDING_CHANGED/);
+    assert.equal(f.acquisitions(), 0);
+    assert.equal(f.exports(), 0);
+    assert.equal(f.marker(), undefined);
+    assert.deepEqual(f.events, []);
+  }
 });
