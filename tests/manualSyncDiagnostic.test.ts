@@ -77,3 +77,17 @@ test('uncoded network failures and message-only codes remain actionable', () => 
   assert.doesNotMatch(formatManualSyncFailure(new Error('SYNC_V3_INVENTORY_COVERAGE_REQUIRED: sensitive detail'), 'SINCRONIZAR_TODO'), /sensitive/);
   assert.match(formatManualSyncFailure(null, 'ESPERA'), /ERROR_SIN_CODIGO/);
 });
+
+
+test('migration error renders exact changed fields and the blocking local reference',async()=>{
+ const error=new LargeMasterSyncV3Error('SYNC_V3_BASELINE_MIGRATION_REQUIRED');
+ error.baselineMigration={change:{dataset:'articles',recordId:'P',sku:'LGFR04',fromVersion:47,toVersion:102,
+  fields:[{field:'trackInventory',before:'true',after:'false'}]},
+  reference:{collection:'transactions',documentId:'SALE-KEEP',path:'$["items"][0].v3SaleAuthority',kind:'RETAINED_SOURCE'}};
+ const result=await clickSync('SINCRONIZAR_TODO',error);
+ assert.match(result.feedback.message,/LGFR04.*47 → 102/);
+ assert.match(result.feedback.message,/trackInventory: true → false/);
+ assert.match(result.feedback.message,/transactions \/ SALE-KEEP/);
+ assert.ok(result.feedback.message.includes('$["items"][0].v3SaleAuthority'));
+ assert.match(result.feedback.message,/Migración no ejecutada/);
+});
