@@ -27,6 +27,7 @@ import { UnitSelector } from './UnitSelector';
 import { ConversionHelper } from './ConversionHelper';
 import { calculateCost, UNITS } from '../utils/units';
 import LabelPrintModal from './LabelPrintModal';
+import { labelCatalogProductId } from '../services/sync/ItemLabelCatalog';
 import { canonicalizeTaxIdentifiers, findTaxByIdentifier, normalizeTaxIdentifiersForSelection, taxIdentifierSetMatches } from '../utils/taxIdentity';
 import { ProductEditorHeader, ProductEditorTabs, type ProductEditorTab } from './product-editor/ProductEditorChrome';
 import {
@@ -4410,9 +4411,11 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
             isOpen={isLabelModalOpen}
             onClose={() => setIsLabelModalOpen(false)}
             config={config}
+            labelCatalogTerminalId={activeTerminalId || undefined}
             items={[
               {
                 productId: formData.id,
+                catalogItemId: labelCatalogProductId(formData),
                 productName: formData.name || formData.id,
                 sku: formData.barcode || formData.id,
                 price: formData.price || 0,

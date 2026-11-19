@@ -2645,7 +2645,7 @@ export interface TimeRecord {
 }
 
 export type LabelElementType = 'TEXT' | 'BARCODE' | 'QR';
-export type LabelDataSource = 'CUSTOM_TEXT' | 'PRODUCT_NAME' | 'PRODUCT_PRICE' | 'PRODUCT_SKU';
+export type LabelDataSource = 'CUSTOM_TEXT' | 'PRODUCT_NAME' | 'PRODUCT_PRICE' | 'PRODUCT_LABEL_PRICE' | 'PRODUCT_SKU';
 export type LabelTemplateCategory = 'ARTICLE' | 'GONDOLA';
 
 export interface LabelElement {

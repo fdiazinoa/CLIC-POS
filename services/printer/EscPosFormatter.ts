@@ -1,3 +1,4 @@
+import { formatItemLabelPrice, type ItemLabelPrice } from '../../utils/itemLabelPrice';
 import {returnSettlementLines} from '../fiscal/ReturnSettlementPresentation';
 import type { CouponIssuanceEnvelope } from '../coupons/CouponIssuanceClient';
 import { couponSlipLines } from '../../utils/couponSlipPresentation';
@@ -25,6 +26,7 @@ export interface EscPosLabelRecord {
   productName: string;
   sku?: string;
   price?: number;
+  labelPrice?: ItemLabelPrice | null;
   copies: number;
 }
 
@@ -1212,6 +1214,17 @@ export const buildEscPosLabelPayload = (
     if (typeof record.price === 'number') {
       const amount = `${currencySymbol}${record.price.toFixed(2)}`;
       chunks.push(text(padRight(`PRECIO: ${toAscii(amount)}`, LABEL_LINE_WIDTH)));
+    }
+
+    const labelPrice = formatItemLabelPrice(record.labelPrice);
+    if (labelPrice !== null) {
+      const labelAmount = `PRECIO ETIQUETA: ${labelPrice}`;
+      if (labelAmount.length > LABEL_LINE_WIDTH) {
+        chunks.push(text('PRECIO ETIQUETA:'));
+        chunks.push(text(labelPrice));
+      } else {
+        chunks.push(text(padRight(labelAmount, LABEL_LINE_WIDTH)));
+      }
     }
 
     chunks.push(align(1));

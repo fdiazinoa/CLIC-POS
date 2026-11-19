@@ -120,6 +120,7 @@ export interface LargeMasterSyncV3Store {
   activateCatalogOnly?(syncId: string, transition: LargeMasterSyncV3CatalogTransition): Promise<LargeMasterSyncV3RuntimeVersion>;
   getCatalogReceipt?(runtime: LargeMasterSyncV3RuntimeVersion, binding: string): Promise<LargeMasterSyncV3InventoryAuthority | null>;
   readProductionCatalogPage?(runtime: LargeMasterSyncV3RuntimeVersion, request: V3ProductionCatalogRequest): Promise<V3ProductionCatalogPage>;
+  readLabelCatalogArticles?(runtime: LargeMasterSyncV3RuntimeVersion, itemIds: string[]): Promise<Record<string, unknown>[]>;
   readAdministrativeCatalogPage?(runtime: LargeMasterSyncV3RuntimeVersion, request: V3CatalogPageRequest): Promise<V3CatalogPage>;
   prepare(manifest: LargeMasterSyncV3Manifest): Promise<void>;
   readProgress(syncId: string): Promise<LargeMasterSyncV3Progress | null>;

@@ -928,6 +928,14 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
       assignedCounts:Object.fromEntries(assigned.map(row=>[String(row.id),Number(row.count)]))};
   }
 
+  async readLabelCatalogArticles(runtime: LargeMasterSyncV3RuntimeVersion, itemIds: string[]): Promise<Record<string, unknown>[]> {
+    requireOperationalVersion(runtime);
+    if (!itemIds.length || itemIds.length > 100) return [];
+    return rows(await this.connection().query(`SELECT record_json FROM master_v3_articles
+      WHERE sync_version = ? AND active = 1 AND article_id IN (${itemIds.map(() => '?').join(',')})`,
+    [runtime.syncVersion, ...itemIds])).map(operationalRecord);
+  }
+
   async readAdministrativeCatalogPage(runtime: LargeMasterSyncV3RuntimeVersion, request: V3CatalogPageRequest): Promise<V3CatalogPage> {
     requireOperationalVersion(runtime);
     const inventory = await this.getInventorySnapshotVersion(runtime);
