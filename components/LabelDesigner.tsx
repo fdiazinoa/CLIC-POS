@@ -1,3 +1,4 @@
+import { formatItemLabelPrice } from '../utils/itemLabelPrice';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Printer, Type, ScanBarcode, QrCode,
@@ -15,7 +16,7 @@ interface LabelDesignerProps {
 const MM_TO_PX = 3.78;
 const CATEGORY_ORDER: Record<LabelTemplateCategory, number> = { ARTICLE: 0, GONDOLA: 1 };
 const DEFAULT_TEMPLATE_IDS = new Set(DEFAULT_LABEL_TEMPLATE_IDS);
-const PRINTABLE_SOURCES: LabelDataSource[] = ['PRODUCT_NAME', 'PRODUCT_PRICE', 'PRODUCT_SKU'];
+const PRINTABLE_SOURCES: LabelDataSource[] = ['PRODUCT_NAME', 'PRODUCT_PRICE', 'PRODUCT_LABEL_PRICE', 'PRODUCT_SKU'];
 
 const cloneTemplates = (templates: LabelTemplate[]): LabelTemplate[] => (
   templates.map(template => ({
@@ -424,7 +425,7 @@ const LabelDesigner: React.FC<LabelDesignerProps> = ({ config, onUpdateConfig, o
                       }}
                       className="text-gray-800"
                     >
-                      {element.dataSource === 'CUSTOM_TEXT' ? element.content : `[${element.dataSource.replace('PRODUCT_', '')}]`}
+                      {element.dataSource === 'CUSTOM_TEXT' ? element.content : element.dataSource === 'PRODUCT_LABEL_PRICE' ? formatItemLabelPrice({ amountCents: 1999, currencyCode: 'USD' }) : `[${element.dataSource.replace('PRODUCT_', '')}]`}
                     </span>
                   )}
 
@@ -631,6 +632,7 @@ const LabelDesigner: React.FC<LabelDesignerProps> = ({ config, onUpdateConfig, o
                   <option value="CUSTOM_TEXT">Texto Personalizado</option>
                   <option value="PRODUCT_NAME">Nombre del Producto</option>
                   <option value="PRODUCT_PRICE">Precio</option>
+                  <option value="PRODUCT_LABEL_PRICE">Precio de etiqueta</option>
                   <option value="PRODUCT_SKU">Codigo / SKU</option>
                 </select>
 

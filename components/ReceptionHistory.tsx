@@ -4,6 +4,7 @@ import { Search, Package, Calendar, User, ArrowRight, Clock, X, Hash, Box, Trash
 import { Reception, BusinessConfig, Supplier, PurchaseOrder, Product } from '../types';
 import { formatSafeDate, formatSafeTime } from '../utils/dateUtils';
 import LabelPrintModal from './LabelPrintModal';
+import { labelCatalogProductId } from '../services/sync/ItemLabelCatalog';
 
 interface ReceptionHistoryProps {
     receptions: Reception[];
@@ -42,6 +43,7 @@ const ReceptionHistory: React.FC<ReceptionHistoryProps> = ({ receptions, config,
             const catalogProduct = products.find(product => product.id === item.productId);
             return {
                 productId: item.productId,
+                catalogItemId: labelCatalogProductId(catalogProduct),
                 productName: item.productName,
                 sku: item.variantSku || catalogProduct?.barcode || item.productId,
                 price: catalogProduct?.price ?? item.cost,
@@ -270,6 +272,7 @@ const ReceptionHistory: React.FC<ReceptionHistoryProps> = ({ receptions, config,
                     items={receptionLabelItems}
                     sourceTitle={`Recepcion #${selectedReception.id}`}
                     terminalId={selectedReception.terminalId}
+                    labelCatalogTerminalId={terminalId}
                     defaultTemplateCategory="ARTICLE"
                     defaultQuantityMode="RECEIVED"
                 />

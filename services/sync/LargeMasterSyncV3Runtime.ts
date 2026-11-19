@@ -28,6 +28,11 @@ export class LargeMasterSyncV3Runtime {
     return this.store.listArticlesPage(this.version, afterArticleId, limit);
   }
 
+  readLabelCatalogArticles(itemIds: string[]) {
+    if (!this.store.readLabelCatalogArticles) throw new Error('SYNC_V3_LABEL_CATALOG_READ_UNAVAILABLE');
+    return this.store.readLabelCatalogArticles(this.version, itemIds);
+  }
+
   readAdministrativeCatalogPage(request: V3CatalogPageRequest) {
     if (!this.store.readAdministrativeCatalogPage) throw new Error('SYNC_V3_CATALOG_READ_UNAVAILABLE');
     return this.store.readAdministrativeCatalogPage(this.version, request);

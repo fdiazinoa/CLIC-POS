@@ -151,6 +151,7 @@ export interface DatabaseAdapter {
     bulkUpsert<T extends { id: string }>(collectionName: string, docs: T[]): Promise<void>; // NEW: Efficient bulk upsert
     bulkUpdateProducts(productIds: string[], updates: any, userId?: string, userName?: string): Promise<void>; // NEW: Bulk specific handling
     getDocument<T>(collectionName: string, id: string): Promise<T | null>;
+    getDocumentsByIds?<T>(collectionName: string, ids: readonly string[]): Promise<T[]>;
     deleteDocument(collectionName: string, id: string): Promise<void>;
 
     // Raw Query (for SQLite specific optimizations later)

@@ -1,3 +1,4 @@
+import { formatItemLabelPrice, missingItemLabelPriceMessage, usesItemLabelPrice, type ItemLabelPrice } from './itemLabelPrice';
 import { notifyPrintQueued, runPrintTask } from '../services/printer/PrintFeedback';
 import { BusinessConfig, LabelElement, LabelTemplate } from '../types';
 import { PrintRouterService } from '../services/printer/PrintRouterService';
@@ -10,9 +11,11 @@ const MM_TO_PX = 3.78;
 
 export interface LabelPrintRecord {
   productId: string;
+  catalogItemId?: string;
   productName: string;
   sku?: string;
   price?: number;
+  labelPrice?: ItemLabelPrice | null;
   copies: number;
 }
 
@@ -22,12 +25,14 @@ interface PrintLabelsOptions {
   records: LabelPrintRecord[];
   terminalId?: string;
   referenceId?: string;
+  assertPriceAuthority?: () => Promise<void>;
 }
 
 export interface PrintLabelsResult {
   printed: boolean;
   method: 'silent' | 'browser' | 'queued' | 'none';
   message: string;
+  priceAuthorityChanged?: boolean;
 }
 
 const escapeHtml = (value: string): string => (
@@ -49,6 +54,8 @@ const valueFromElement = (
       return record.productName || element.content || '';
     case 'PRODUCT_PRICE':
       return typeof record.price === 'number' ? `${currencySymbol}${record.price.toFixed(2)}` : element.content || '';
+    case 'PRODUCT_LABEL_PRICE':
+      return formatItemLabelPrice(record.labelPrice) ?? '';
     case 'PRODUCT_SKU':
       return record.sku || record.productId || element.content || '';
     case 'CUSTOM_TEXT':
@@ -179,7 +186,8 @@ const printLabelsFromTemplateInternal = async ({
   template,
   records,
   terminalId,
-  referenceId
+  referenceId,
+  assertPriceAuthority
 }: PrintLabelsOptions): Promise<PrintLabelsResult> => {
   const preparedRecords = records.filter(record => Number.isFinite(record.copies) && record.copies > 0);
   if (preparedRecords.length === 0) {
@@ -192,10 +200,29 @@ const printLabelsFromTemplateInternal = async ({
 
   const printRef = referenceId || `LBL-${Date.now()}`;
   const printableHtml = renderPrintableDocument(template, preparedRecords, config.currencySymbol || '$', false);
-  const escPosBase64 = buildEscPosLabelPayload(preparedRecords, config.currencySymbol || '$');
+  const printLabelPrice = usesItemLabelPrice(template);
+  const printSalePrice = !printLabelPrice || template.elements.some(element => element.dataSource === 'PRODUCT_PRICE');
+  const escPosBase64 = buildEscPosLabelPayload(preparedRecords.map(record => ({
+    ...record,
+    price: printSalePrice ? record.price : undefined,
+    labelPrice: printLabelPrice ? record.labelPrice : undefined,
+  })), config.currencySymbol || '$');
+
+  const stillCurrent = async () => {
+    try {
+      await assertPriceAuthority?.();
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const stalePrice: PrintLabelsResult = {
+    printed: false, method: 'none', priceAuthorityChanged: true,
+    message: 'Los precios de etiqueta o la terminal cambiaron. Revisa la vista previa.',
+  };
 
   let printedSilently = false;
-
+  if (!await stillCurrent()) return stalePrice;
   try {
     if (escPosBase64) {
       printedSilently = await PrintRouterService.routeAndPrintEscPos({
@@ -209,6 +236,7 @@ const printLabelsFromTemplateInternal = async ({
     }
 
     if (!printedSilently) {
+      if (!await stillCurrent()) return stalePrice;
       printedSilently = await PrintRouterService.routeAndPrintHtml({
         config,
         html: printableHtml,
@@ -231,6 +259,7 @@ const printLabelsFromTemplateInternal = async ({
     };
   }
 
+  if (!await stillCurrent()) return stalePrice;
   const shouldQueue = !navigator.onLine || nativePrintBridge.isAvailable();
   if (shouldQueue) {
     await offlinePrintQueueService.enqueueJob({
@@ -278,6 +307,9 @@ const printLabelsFromTemplateInternal = async ({
 };
 
 export const printLabelsFromTemplate = async (options: PrintLabelsOptions): Promise<PrintLabelsResult> => {
+  const missingPrice = missingItemLabelPriceMessage(options.template, options.records);
+  if (missingPrice) return { printed: false, method: 'none', message: missingPrice };
+
   let result: PrintLabelsResult = { printed: false, method: 'none', message: 'No se pudo confirmar la impresión de etiquetas.' };
   await runPrintTask(`labels:${JSON.stringify([options.terminalId, options.referenceId, options.template, options.records])}`, 'Etiquetas', async () => {
     result = await printLabelsFromTemplateInternal(options);
@@ -285,7 +317,7 @@ export const printLabelsFromTemplate = async (options: PrintLabelsOptions): Prom
       notifyPrintQueued();
       return true; // Accepted by the queue; result.printed remains false.
     }
-    return result.printed;
+    return result.printed || result.priceAuthorityChanged === true;
   });
   return result;
 };

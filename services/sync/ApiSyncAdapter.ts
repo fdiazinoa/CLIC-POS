@@ -4481,6 +4481,38 @@ export class ApiSyncAdapter {
      * Downloads an authoritative ERP master snapshot without consulting local
      * versions, timestamps, cursors or HTTP caches.
      */
+    async pullItemLabelPricePage(sinceVersion: number, terminalId: string, v3: boolean): Promise<unknown> {
+        const request = async (force = false): Promise<unknown> => {
+            const target = await this.authenticateOperationalTarget(force, 'background', 'PULL_MASTERS');
+            if (target.kind !== 'ERP_ACTIVE' || target.useLocalTarget || target.terminalId !== terminalId) {
+                throw new Error('ITEM_LABEL_PRICE_BINDING_CHANGED');
+            }
+            const url = new URL(`${target.baseUrl}/collections/item-label-prices/delta`);
+            url.searchParams.set('terminal_id', terminalId);
+            url.searchParams.set('sinceVersion', String(sinceVersion));
+            url.searchParams.set('limit', '200');
+            const response = await this.fetchWithRetry(url.toString(), {
+                method: 'GET',
+                headers: {
+                    ...this.buildOperationalHeaders(target, target.token),
+                    ...(v3 ? { 'X-POS-Capabilities': 'largeMasterSyncV3' } : {}),
+                },
+                cache: 'no-store',
+            }, 2, 500, 'background', 'PULL_MASTERS');
+            if (response.status === 401 && !force) {
+                this.erpAuthToken = null;
+                this.clearCanonicalErpSyncToken();
+                return request(true);
+            }
+            if (response.status === 404) return null;
+            if (!response.ok) throw new Error(`ITEM_LABEL_PRICE_PULL_FAILED:${response.status}`);
+            const payload = await response.json();
+            if (payload?.status === 'success' && payload?.supported === false) return null;
+            return payload;
+        };
+        return request();
+    }
+
     async pullFullSnapshot(collection: 'taxes' | 'products'): Promise<PullDeltaResult> {
         assertLegacyMasterPullAllowed(collection, resolveSyncTarget().kind);
         if (!isErpMasterPullCollection(collection)) {

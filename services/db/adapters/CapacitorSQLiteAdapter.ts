@@ -89,6 +89,7 @@ export const NATIVE_V3_METHOD_CONCURRENCY = {
     activateCatalogOnly: 'write',
     getCatalogReceipt: 'read',
     readAdministrativeCatalogPage: 'read',
+    readLabelCatalogArticles: 'read',
     readProductionCatalogPage: 'read',
     prepare: 'write',
     readProgress: 'read',
@@ -552,6 +553,18 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
 
     getDocument<T>(collectionName:string,id:string):Promise<T|null> {
         return this.withWriteLock(()=>this.getDocumentUnlocked<T>(collectionName,id));
+    }
+
+    getDocumentsByIds<T>(collectionName: string, ids: readonly string[]): Promise<T[]> {
+        return this.withWriteLock(async () => {
+            if (!ids.length) return [];
+            if (ids.length > 100) throw new Error('DOCUMENT_BATCH_READ_LIMIT');
+            const result = await this.ensureDb().query(
+                `SELECT data FROM documents WHERE collection_name = ? AND doc_id IN (${ids.map(() => '?').join(',')})`,
+                [collectionName, ...ids],
+            );
+            return (result.values || []).map(row => JSON.parse(String(row.data)) as T);
+        });
     }
 
     private async getDocumentUnlocked<T>(collectionName: string, id: string): Promise<T | null> {

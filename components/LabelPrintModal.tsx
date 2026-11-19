@@ -3,11 +3,16 @@ import { X, Printer, Package, Copy, ListOrdered } from 'lucide-react';
 import { BusinessConfig, LabelTemplate, LabelTemplateCategory } from '../types';
 import { DEFAULT_LABEL_TEMPLATES } from '../constants';
 import { LabelPrintRecord, printLabelsFromTemplate } from '../utils/labelPrinter';
+import { formatItemLabelPrice, missingItemLabelPriceMessage, usesItemLabelPrice } from '../utils/itemLabelPrice';
+import { readLabelPricePreview, type LabelPricePreview } from '../services/sync/ItemLabelCatalog';
+import { ITEM_LABEL_PRICES_UPDATED } from '../services/sync/ItemLabelPriceCollection';
+import { subscribeLargeMasterSyncV3CatalogUpdates } from '../services/sync/LargeMasterSyncV3CatalogUpdates';
 
 type QuantityMode = 'RECEIVED' | 'FIXED';
 
 export interface LabelPrintModalItem {
   productId: string;
+  catalogItemId?: string;
   productName: string;
   sku?: string;
   price?: number;
@@ -21,6 +26,7 @@ interface LabelPrintModalProps {
   items: LabelPrintModalItem[];
   sourceTitle?: string;
   terminalId?: string;
+  labelCatalogTerminalId?: string;
   defaultProductId?: string;
   defaultTemplateCategory?: LabelTemplateCategory;
   defaultQuantityMode?: QuantityMode;
@@ -45,6 +51,7 @@ const LabelPrintModal: React.FC<LabelPrintModalProps> = ({
   items,
   sourceTitle,
   terminalId,
+  labelCatalogTerminalId,
   defaultProductId,
   defaultTemplateCategory = 'ARTICLE',
   defaultQuantityMode = 'RECEIVED'
@@ -58,6 +65,14 @@ const LabelPrintModal: React.FC<LabelPrintModalProps> = ({
   const [includeZeroQty, setIncludeZeroQty] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [isPrinting, setIsPrinting] = useState(false);
+  const [previewRevision, setPreviewRevision] = useState(0);
+  const [pricePreview, setPricePreview] = useState<{
+    records: LabelPrintRecord[];
+    config: BusinessConfig;
+    revision: number;
+    preview?: LabelPricePreview;
+    error?: string;
+  } | null>(null);
 
   const templates = useMemo(() => {
     return getTemplates(config).sort((a, b) => {
@@ -115,6 +130,7 @@ const LabelPrintModal: React.FC<LabelPrintModalProps> = ({
 
       return {
         productId: item.productId,
+        catalogItemId: item.catalogItemId,
         productName: item.productName,
         sku: item.sku || item.productId,
         price: item.price,
@@ -137,7 +153,10 @@ const LabelPrintModal: React.FC<LabelPrintModalProps> = ({
   );
 
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen) {
+      setPricePreview(null);
+      return;
+    }
 
     const preferredTemplate = templates.find(template => template.category === defaultTemplateCategory) || templates[0];
     setTemplateId(preferredTemplate?.id || '');
@@ -149,6 +168,44 @@ const LabelPrintModal: React.FC<LabelPrintModalProps> = ({
     setIncludeZeroQty(false);
     setStatusMessage(null);
   }, [isOpen, templates, defaultTemplateCategory, defaultQuantityMode, defaultProductId]);
+
+  const requiresLabelPrice = usesItemLabelPrice(selectedTemplate);
+
+  useEffect(() => {
+    if (!isOpen || !requiresLabelPrice) return;
+    const refresh = () => setPreviewRevision(value => value + 1);
+    const unsubscribe = subscribeLargeMasterSyncV3CatalogUpdates(refresh);
+    window.addEventListener(ITEM_LABEL_PRICES_UPDATED, refresh);
+    window.addEventListener('configUpdated', refresh);
+    return () => {
+      unsubscribe();
+      window.removeEventListener(ITEM_LABEL_PRICES_UPDATED, refresh);
+      window.removeEventListener('configUpdated', refresh);
+    };
+  }, [isOpen, requiresLabelPrice]);
+
+  useEffect(() => {
+    if (!isOpen || !requiresLabelPrice || !preparedRecords.length) return;
+    let cancelled = false;
+    const activeTerminalId = labelCatalogTerminalId || localStorage.getItem('active_terminal_id')
+      || localStorage.getItem('CLIC_POS_TERMINAL_ID') || terminalId || '';
+    void readLabelPricePreview(config, activeTerminalId, preparedRecords).then(preview => {
+      if (!cancelled) setPricePreview({ records: preparedRecords, config, revision: previewRevision, preview });
+    }).catch(() => {
+      if (!cancelled) setPricePreview({ records: preparedRecords, config, revision: previewRevision,
+        error: 'No se pudo consultar el precio de etiqueta para esta terminal. Actualiza el catálogo y vuelve a intentarlo.' });
+    });
+    return () => { cancelled = true; };
+  }, [isOpen, requiresLabelPrice, preparedRecords, previewRevision, config, terminalId, labelCatalogTerminalId]);
+
+  const currentPricePreview = pricePreview?.records === preparedRecords && pricePreview.revision === previewRevision && pricePreview.config === config
+    ? pricePreview : null;
+  const displayRecords = currentPricePreview?.preview?.records ?? preparedRecords;
+  const priceWarning = requiresLabelPrice && preparedRecords.length
+    ? currentPricePreview?.error
+      || (currentPricePreview?.preview ? missingItemLabelPriceMessage(selectedTemplate, displayRecords)
+        : 'Consultando precios de etiqueta…')
+    : null;
 
   if (!isOpen) return null;
 
@@ -163,20 +220,29 @@ const LabelPrintModal: React.FC<LabelPrintModalProps> = ({
       return;
     }
 
+    if (requiresLabelPrice && (!currentPricePreview?.preview || priceWarning)) {
+      setStatusMessage(priceWarning || 'Los precios de etiqueta cambiaron. Revisa la vista previa.');
+      return;
+    }
+
     setIsPrinting(true);
     setStatusMessage(null);
     try {
       const result = await printLabelsFromTemplate({
         config,
         template: selectedTemplate,
-        records: preparedRecords,
+        records: displayRecords,
+        assertPriceAuthority: requiresLabelPrice ? currentPricePreview?.preview?.assertCurrent : undefined,
         terminalId,
         referenceId: sourceTitle || `LBL-${Date.now()}`
       });
       setStatusMessage(result.message);
+      if (result.priceAuthorityChanged) setPreviewRevision(value => value + 1);
     } catch (error) {
       console.error('Label print error:', error);
-      setStatusMessage('Ocurrio un error al preparar la impresion de etiquetas.');
+      setStatusMessage(requiresLabelPrice ? 'Los precios de etiqueta o la terminal cambiaron. Revisa la vista previa.'
+        : 'Ocurrio un error al preparar la impresion de etiquetas.');
+      if (requiresLabelPrice) setPreviewRevision(value => value + 1);
     } finally {
       setIsPrinting(false);
     }
@@ -318,9 +384,14 @@ const LabelPrintModal: React.FC<LabelPrintModalProps> = ({
             </div>
 
             <div className="mt-3 space-y-1 max-h-40 overflow-y-auto pr-2">
-              {preparedRecords.slice(0, 30).map((record, idx) => (
+              {displayRecords.slice(0, 30).map((record, idx) => (
                 <div key={`${record.productId}-${record.sku}-${idx}`} className="flex items-center justify-between text-sm text-gray-700 bg-white border border-blue-100 rounded-lg px-3 py-2">
                   <span className="font-semibold truncate mr-3">{record.productName}</span>
+                  {requiresLabelPrice && currentPricePreview?.preview && (
+                    <span className="font-mono text-gray-700 mr-3">
+                      {formatItemLabelPrice(record.labelPrice) ?? 'Sin precio de etiqueta'}
+                    </span>
+                  )}
                   <span className="font-black text-blue-700">{record.copies}</span>
                 </div>
               ))}
@@ -329,6 +400,12 @@ const LabelPrintModal: React.FC<LabelPrintModalProps> = ({
               )}
             </div>
           </div>
+
+          {priceWarning && (
+            <div role="status" className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-sm text-amber-900">
+              {priceWarning}
+            </div>
+          )}
 
           {statusMessage && (
             <div className="p-3 rounded-xl bg-gray-100 border border-gray-200 text-sm font-medium text-gray-700">
@@ -346,7 +423,7 @@ const LabelPrintModal: React.FC<LabelPrintModalProps> = ({
           </button>
           <button
             onClick={handlePrint}
-            disabled={isPrinting}
+            disabled={isPrinting || Boolean(priceWarning)}
             className="px-6 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-sm transition-colors disabled:opacity-50 flex items-center gap-2"
           >
             <Printer size={16} />

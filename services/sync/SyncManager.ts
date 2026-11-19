@@ -120,6 +120,7 @@ import {
     resolveProductTaxLog,
 } from '../../utils/erpFiscalCatalogSync';
 import { findTaxByIdentifier } from '../../utils/taxIdentity';
+import { itemLabelPriceBinding, syncItemLabelPrices } from './ItemLabelPriceCollection';
 
 export type SyncableCollection =
     | 'products' | 'items' | 'taxes' | 'customers' | 'suppliers' | 'warehouses'
@@ -2379,6 +2380,23 @@ class SyncManager {
         return null;
     }
 
+    private async refreshItemLabelPrices(): Promise<void> {
+        if (this.isDisabled || !navigator.onLine || !apiSyncAdapter.isErpActiveOperationalTarget()) return;
+        try {
+            const getBinding = async () => {
+                if (this.isDisabled) return null;
+                const config = await db.get('config') as unknown as BusinessConfig;
+                const localTerminalId = this.getActiveTerminalContext(config).localTerminalId;
+                return localTerminalId ? itemLabelPriceBinding(config, localTerminalId) : null;
+            };
+            await syncItemLabelPrices(getBinding, (revision, binding) => apiSyncAdapter.pullItemLabelPricePage(
+                revision, binding.terminalId, usesLargeMasterSyncV3Authority(syncPolicy.resolve().kind)));
+        } catch (error) {
+            // A supplemental collection can retry without blocking operational master sync.
+            console.warn('[ITEM_LABEL_PRICE_SYNC_DEFERRED]', error instanceof Error ? error.message : 'UNKNOWN');
+        }
+    }
+
     private async reconcileTerminalManifest(
         baseConfig: BusinessConfig | null,
         options?: {
@@ -2832,6 +2850,7 @@ class SyncManager {
             return refreshedConfig || v3RefreshedConfig;
         } finally {
             this.terminalManifestSyncInFlight = false;
+            void this.refreshItemLabelPrices();
         }
     }
 
@@ -2843,6 +2862,7 @@ class SyncManager {
                 markStartupCompleted: true,
                 deferDuringSale: true,
             });
+            void this.refreshItemLabelPrices();
             if (usesLargeMasterSyncV3Authority(syncPolicy.resolve().kind)) {
                 const session = await getLargeMasterSyncV3OperationalSession();
                 await session.assertCurrent();
@@ -6036,6 +6056,7 @@ class SyncManager {
      * This handles the case where Master storage is wiped (e.g. new origin) but Server has data.
      */
     private async initializeMasterData() {
+        void this.refreshItemLabelPrices();
         const collections: SyncableCollection[] = ['internalSequences', 'fiscalRanges', 'products', 'customers', 'suppliers', 'paymentMethods'];
 
         // Detect stale local master snapshot...
@@ -7032,6 +7053,7 @@ class SyncManager {
         }
 
         // 1. Sync Catalogs
+        if (target.kind === 'ERP_ACTIVE') void this.refreshItemLabelPrices();
         for (const collection of catalogs) {
             try {
                 if (target.canPushMasters && target.dataMaster === 'POS') {
@@ -7873,6 +7895,8 @@ class SyncManager {
         if (updates.length > 0) {
             console.log(`📥 Auto-sync: Found updates for ${updates.join(', ')}`);
             await this.syncAllCatalogs();
+        } else {
+            void this.refreshItemLabelPrices();
         }
     }
 
