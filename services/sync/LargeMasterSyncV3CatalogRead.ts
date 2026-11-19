@@ -4,6 +4,7 @@ import { LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED } from './LargeMasterSyncV3Autho
 import { readLargeMasterSyncV3BoundIdentity, type LargeMasterSyncV3BoundIdentity } from './LargeMasterSyncV3BoundTransport';
 import { largeMasterSyncV3DownloadOrigin } from './LargeMasterSyncV3DownloadOrigin';
 import { v3BindingKey, v3InventoryBaselineKey } from './LargeMasterSyncV3OperationalSession';
+import { v3ErpStockDisplay, v3ErpStockDisplayScope } from './LargeMasterSyncV3ErpStockDisplay';
 import { LargeMasterSyncV3Runtime } from './LargeMasterSyncV3Runtime';
 import { LargeMasterSyncV3Error, type LargeMasterSyncV3Store, type V3CatalogPageRequest } from './LargeMasterSyncV3Types';
 
@@ -25,8 +26,9 @@ const configured = (context: V3CatalogContext, identity: LargeMasterSyncV3BoundI
   if (!terminal || terminal.config.currentDeviceId !== identity.deviceId
     || (terminal.config.erpTerminalId || terminal.id) !== identity.terminalId
     || !tariffId || !warehouseId || !warehouse) throw new LargeMasterSyncV3Error('SYNC_V3_CATALOG_CONTEXT_REQUIRED');
-  return { tariffId, warehouseId, key: JSON.stringify([terminal.id, terminal.config.erpTerminalId,
-    terminal.config.currentDeviceId, tariffId, warehouse]) };
+  return { terminal, tariffId, warehouseId, key: JSON.stringify([terminal.id, terminal.config.erpTerminalId,
+    terminal.config.currentDeviceId, terminal.config.erpBinding?.tenantId, terminal.config.erpBinding?.companyId,
+    terminal.config.erpBinding?.storeId, terminal.config.inventoryScope, tariffId, warehouse]) };
 };
 
 /** Cached reads only: never connect, prepare, refresh, activate, set owner or contact ERP. */
@@ -78,15 +80,21 @@ export class LargeMasterSyncV3CatalogRead {
     await this.assertCurrent();
     const result = await this.runtime.readAdministrativeCatalogPage({ ...request, ...this.scope,
       inventoryVersion: this.inventory.version, inventoryCursor: this.inventory.cursor });
-    const deltas = result.rows.length ? await this.dependencies.store!.getLocalInventoryDeltas!(
+    const displayScope = v3ErpStockDisplayScope(this.scope.terminal, this.identity.tenantId, this.binding, this.runtime.version);
+    const erpRows = new Map(result.rows.map(row => [row.id, v3ErpStockDisplay.read(displayScope, row.id)]));
+    const localIds = result.rows.filter(row => !erpRows.get(row.id)).map(row => row.id);
+    const deltas = localIds.length ? await this.dependencies.store!.getLocalInventoryDeltas!(
       v3InventoryBaselineKey(this.binding, { ...this.runtime.version,
         ...(this.inventory.syncId ? { inventorySyncId: this.inventory.syncId, inventorySyncVersion: this.inventory.syncVersion } : {}), inventoryVersion: this.inventory.version,
         inventoryCursor: this.inventory.cursor, tariffId: this.scope.tariffId, warehouseId: this.scope.warehouseId,
         taxIncluded: this.taxIncluded }),
-      result.rows.map(row => row.id), this.scope.warehouseId) : {};
+      localIds, this.scope.warehouseId) : {};
     await this.assertCurrent();
-    return { ...result, rows: result.rows.map(row => ({ ...row,
-      stock: row.stock == null ? null : row.stock + (deltas[row.id] || 0),
-      balance: row.balance === null ? null : row.balance + (deltas[row.id] || 0) })) };
+    return { ...result, rows: result.rows.map(row => {
+      const erp = erpRows.get(row.id);
+      if (erp) return { ...row, ...erp, stockSource: 'ERP' as const };
+      return { ...row, stock: row.stock == null ? null : row.stock + (deltas[row.id] || 0),
+        balance: row.balance === null ? null : row.balance + (deltas[row.id] || 0) };
+    }) };
   }
 }

@@ -22,6 +22,10 @@ import { captureLargeMasterSyncV3ConfigRefreshAuthorityFromStore } from './Large
 import { persistProductionAreaSnapshot } from '../restaurant/ProductionAreaSnapshot';
 import { readLargeMasterSyncV3BoundIdentity } from './LargeMasterSyncV3BoundTransport';
 import { LargeMasterSyncV3Error } from './LargeMasterSyncV3Types';
+import { fetchLargeMasterSyncV3Inventory } from './LargeMasterSyncV3Inventory';
+import { v3ErpStockDisplay, v3ErpStockDisplayScope } from './LargeMasterSyncV3ErpStockDisplay';
+import { v3OperationalConfigContext } from './LargeMasterSyncV3OperationalConfigScope';
+import { v3BindingKey } from './LargeMasterSyncV3BindingKey';
 import { acquireLargeMasterSyncV3ConfigContext, getLargeMasterSyncV3OperationalSession } from './LargeMasterSyncV3OperationalSession';
 import { assertLargeMasterSyncV3ConfigPayload, largeMasterSyncV3DownloadOrigin } from './LargeMasterSyncV3DownloadOrigin';
 import { assertOperationalTerminalConfig, readOperationalCatalogBindingProof, readOperationalTerminalBinding } from './OperationalTerminalConfig';
@@ -440,6 +444,30 @@ class SyncManager {
             } else {
                 assertBinding();
                 await this.syncAllCatalogs({ refreshV3: true });
+            }
+            if (v3Authority) {
+                const readScope = async () => {
+                    assertBinding();
+                    const identity = readLargeMasterSyncV3BoundIdentity();
+                    const currentBinding = v3BindingKey(identity, largeMasterSyncV3DownloadOrigin());
+                    const store = dbAdapter.masterSyncV3Store;
+                    const [config, catalog, owner] = await Promise.all([
+                        db.get('config') as unknown as Promise<BusinessConfig>,
+                        store?.getActiveRuntimeVersion(), store?.getOperationalOwner?.(),
+                    ]);
+                    assertBinding();
+                    if (!catalog || (catalog.contractVersion ?? 1) < 2 || owner?.binding !== currentBinding
+                        || owner.syncId !== catalog.syncId || owner.syncVersion !== catalog.syncVersion) {
+                        throw new LargeMasterSyncV3Error('SYNC_V3_CATALOG_VERSION_CHANGED');
+                    }
+                    const { terminal } = v3OperationalConfigContext(config, identity);
+                    const scope = v3ErpStockDisplayScope(terminal, identity.tenantId, currentBinding, catalog);
+                    if (!scope) throw new LargeMasterSyncV3Error('SYNC_V3_CATALOG_CONTEXT_REQUIRED');
+                    return scope;
+                };
+                await v3ErpStockDisplay.refresh(readScope, signal => fetchLargeMasterSyncV3Inventory(
+                    readLargeMasterSyncV3BoundIdentity, fetch, signal, largeMasterSyncV3DownloadOrigin()));
+                window.dispatchEvent(new CustomEvent('v3ErpStockDisplayUpdated'));
             }
         });
         this.manualCatalogSync = { binding, promise };

@@ -170,7 +170,7 @@ export interface LargeMasterSyncV3Store {
 export interface V3CatalogArticle {
   id: string; name: string; sku: string | null; barcode: string | null; categoryId: string | null;
   departmentId?: string | null; sectionId?: string | null; familyId?: string | null; brandId?: string | null; posCategoryId?: string | null;
-  active: boolean; sellable: boolean; type: string | null; price: number | null; balance: number | null; stock?: number | null;
+  active: boolean; sellable: boolean; type: string | null; price: number | null; balance: number | null; stock?: number | null; stockSource?: 'ERP';
 }
 export interface V3CatalogPageRequest {
   /** Optional operational POS identity filter; legacy administrative callers are unchanged. */
