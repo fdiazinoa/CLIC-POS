@@ -174,12 +174,12 @@ test('file reopen after lost prepare response retains command bytes and payment-
     assert.equal(tx.id, before.checkout.transactionId);
     assert.equal(server.preparations.size, 1);
 });
-test('native status projection distinguishes PREPARED/WORKFLOW, validates RETURN semantics and rejects regressions', async (t) => {
+for (const consumerFinalE32 of [false, true]) test(`native status and print proof for a ${consumerFinalE32 ? 'buyerless' : 'buyer-identified'} E34`, async (t) => {
     const { verifyReturnStatus, returnStatusMessage } = await import('../services/fiscal/FiscalReturnStatus');
     const { returnContract, returnJSON } = await import('../services/fiscal/FiscalReturnV1');
     const { sha256Utf8 } = await import('../services/sync/LargeMasterSyncV3Client');
     const { fiscalStatusSourceChecksum } = await import('../services/fiscal/FiscalStatusProof');
-    const f = await returnFixture();
+    const f = await returnFixture(undefined, true, undefined, null, consumerFinalE32);
     t.after(() => f.cleanup());
     const tx = await f.run();
     const a = (await f.adapter.fiscalReturnStore.byTransaction(tx.id))!;
@@ -200,10 +200,10 @@ test('native status projection distinguishes PREPARED/WORKFLOW, validates RETURN
     }
     assert.equal(await verifyReturnStatus(tx, pending, a, workflow), false);
     assert.deepEqual(await f.adapter.fiscalWorkflowStore.readState(tx.id), JSON.parse(JSON.stringify(workflow)));
-    const { fiscalCivilDate } = await import('../services/fiscal/FiscalPrintEvidence');
+    const { fiscalCivilDate, resolveFiscalPrintDisplay } = await import('../services/fiscal/FiscalPrintEvidence');
     const signedAt = fiscalCivilDate(tx.date) + ' 10:11:12';
     const url = new URL('https://ecf.dgii.gov.do/testecf/ConsultaTimbre');
-    for (const [key, value] of Object.entries({ RncEmisor: p.issuerRnc, RncComprador: tx.customerSnapshot!.taxId, ENCF: tx.ncf, FechaEmision: fiscalCivilDate(tx.date), MontoTotal: tx.total, FechaFirma: signedAt, CodigoSeguridad: 'ABCDEF' }))
+    for (const [key, value] of Object.entries({ RncEmisor: p.issuerRnc, ...(tx.customerSnapshot?.taxId ? { RncComprador: tx.customerSnapshot.taxId } : {}), ENCF: tx.ncf, FechaEmision: fiscalCivilDate(tx.date), MontoTotal: tx.total, FechaFirma: signedAt, CodigoSeguridad: 'ABCDEF' }))
         url.searchParams.set(key, String(value));
     const signed = { ...workflow, state: 'SIGNED_PENDING', observationVersion: 1, signature: { schemaVersion: 1, qrUrl: url.href, securityCode: 'ABCDEF', signedAt } };
     assert.equal(await verifyReturnStatus(tx, signed, a, workflow), true);
@@ -215,6 +215,31 @@ test('native status projection distinguishes PREPARED/WORKFLOW, validates RETURN
     assert.equal(await verifyReturnStatus(tx, { ...accepted, buyer: { taxId: '999999999' } }, a), false);
     assert.equal(await verifyReturnStatus(tx, signed, a, accepted), false);
     assert.match(returnStatusMessage(accepted), /aceptada por DGII/);
+    const { dbAdapter } = await import('../services/db');
+    const { fiscalWorkflowV2Client } = await import('../services/fiscal/FiscalWorkflowV2Client');
+    t.mock.method(fiscalWorkflowV2Client, 'cached', (id: string) => f.adapter.fiscalWorkflowStore.readState(id));
+    Object.defineProperty(dbAdapter, 'fiscalReturnStore', { value: f.adapter.fiscalReturnStore, configurable: true });
+    t.after(() => { Reflect.deleteProperty(dbAdapter, 'fiscalReturnStore'); });
+    const display = await resolveFiscalPrintDisplay(tx);
+    assert.equal(display?.qrUrl, url.href);
+    assert.equal(display?.dgiiAccepted, true);
+    if (consumerFinalE32) {
+        const forged = structuredClone(a);
+        delete forged.preparation!.returnSnapshot.consumerFinalE32;
+        assert.equal(await verifyReturnStatus(tx, accepted, forged), false);
+        const wrongSnapshot = structuredClone(a);
+        wrongSnapshot.preparation!.returnSnapshot.originalDisplayId = 'unsealed';
+        assert.equal(await verifyReturnStatus(tx, accepted, wrongSnapshot), false);
+        for (const [field, value] of [['RncComprador', ''], ['RncEmisor', '999999999'], ['FechaEmision', '01-01-2000'], ['MontoTotal', '999'], ['FechaFirma', '01-01-2000 10:11:12']]) {
+            const wrong = new URL(url);
+            wrong.searchParams.set(field, value);
+            assert.equal(await verifyReturnStatus(tx, { ...accepted, signature: { ...accepted.signature, qrUrl: wrong.href } }, a), false);
+        }
+    } else {
+        const wrong = new URL(url);
+        wrong.searchParams.delete('RncComprador');
+        assert.equal(await verifyReturnStatus(tx, { ...accepted, signature: { ...accepted.signature, qrUrl: wrong.href } }, a), false);
+    }
 });
 test('authenticated RETURN transport preserves the batch envelope and forbids implicit legacy fallback', async () => {
     const { createFiscalReturnTransport } = await import('../services/fiscal/FiscalReturnConsumer');
@@ -223,16 +248,19 @@ test('authenticated RETURN transport preserves the batch envelope and forbids im
     const calls: Array<{
         url: string;
         body: any;
+        capabilities: string | null;
     }> = [];
     const event = { eventId: crypto.randomUUID(), eventType: 'SALES_CREDIT_NOTE_POSTED', payload: { tenant_id: scope.tenantId, company_id: scope.companyId, store_id: scope.storeId, terminal_id: scope.terminalId, device_id: scope.deviceId, fiscalReturnContract: { profile: 'ORDINARY_RETURN_DOP_V1' } } };
     let batch = true, compatible = true;
     const transport = createFiscalReturnTransport(() => auth, async (url, init) => {
-        calls.push({ url: String(url), body: init?.body ? JSON.parse(String(init.body)) : null });
+        calls.push({ url: String(url), body: init?.body ? JSON.parse(String(init.body)) : null, capabilities: new Headers(init?.headers).get('X-POS-Capabilities') });
         if (String(url).endsWith('capability'))
             return Response.json({ schemaVersion: 1, version: 1, profile: 'ORDINARY_RETURN_DOP_V1', capability: 'fiscalReturnV1', scope, enabled: false, transport: { requiresPreservedOuterContract: compatible, batch: { path: '/api/sync/inbox/batch', enabled: batch }, singular: { path: '/api/sync/inbox', enabled: true } } });
         return Response.json(batch ? { results: [{ eventId: event.eventId, status: 'APPLIED' }] } : { eventId: event.eventId, status: 'APPLIED' });
     });
     await transport.deliver([event]);
+    assert.equal(calls[0].capabilities, 'fiscalReturnConsumerFinalE32');
+    assert.equal(calls[1].capabilities, null);
     assert.deepEqual(calls[1].body, { events: [event] });
     assert.ok(calls[1].url.endsWith('/inbox/batch'));
     batch = false;
@@ -244,6 +272,8 @@ test('authenticated RETURN transport preserves the batch envelope and forbids im
     await assert.rejects(transport.deliver([event]), /TRANSPORT/);
     assert.equal(calls.length, count + 1, 'capability GET only; no blind POST fallback');
     assert.ok(calls.every(c => !c.url.includes('issue')));
+    await transport.prepare('{}');
+    assert.equal(calls.at(-1)?.capabilities, 'fiscalReturnConsumerFinalE32');
 });
 // The UI must never execute the legacy gateway refund before RETURN preparation.
 test('ordinary E34 routes to its consumer before legacy gateway or NCF actions', async () => {

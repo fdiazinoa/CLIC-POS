@@ -194,11 +194,21 @@ export async function assertReturnSnapshotDigest(p: Pick<ReturnPreparation, 'ret
         }
     }
 }
+/** The ERP assigns this profile only from the sealed, accepted original E32. */
+export function isConsumerFinalE32Return(p: ReturnPreparation): boolean {
+    const s = p.returnSnapshot;
+    return s?.consumerFinalE32 === true && /^E32\d{10}$/.test(p.originalReference?.ncf)
+        && sameReturn(s.originalReference, p.originalReference)
+        && !s.buyer?.taxId;
+}
+
 export async function assertReturnPreparation(p: ReturnPreparation, a: ReturnAttempt) {
     const c: ReturnCommand = JSON.parse(a.commandBytes!);
     returnNeed(p?.schemaVersion === 1 && p.profile === RETURN_PROFILE && uuid(p.preparationId) && p.reservationState === 'PREPARED' && ['operationId', 'checkoutId', 'transactionId', 'financialEventId', 'authorizationId', 'authorityHash'].every(k => (p as any)[k] === (c as any)[k]) && sameReturn(p.scope, a.scope) && sameReturn(p.originalReference, c.originalReference) && sameReturn(p.inventoryMovementIds, c.inventoryMovementIds) && p.environment === c.originalReference.environment && p.issuerRnc === c.originalReference.issuerRnc && /^[a-f0-9]{64}$/.test(p.originalProofDigest) && Date.parse(p.preparedAt) < Date.parse(p.expiresAt));
     const s = p.returnSnapshot;
     await assertReturnSnapshotDigest(p, a.preparationDigestProof);
+    if (Object.hasOwn(s || {}, 'consumerFinalE32'))
+        returnNeed(isConsumerFinalE32Return(p), 'FISCAL_RETURN_CONSUMER_FINAL_PROFILE_INVALID');
     returnNeed(s?.schemaVersion === 1 && s.profile === RETURN_PROFILE && s.currency === 'DOP' && s.exchangeRate === 1 && s.loyaltyDisposition === 'NO_EFFECT_VERIFIED' && /^[a-f0-9]{64}$/.test(s.loyaltyProofDigest) && sameReturn(s.originalReference, c.originalReference));
     returnNeed(Array.isArray(s.lines) && s.lines.length === c.lines.length && new Set(s.lines.map((l: any) => l.cartId)).size === s.lines.length && Array.isArray(s.paymentCommands) && (c.settlement ? c.payments.length===0 : s.paymentCommands.length === c.payments.length));
     for (const l of s.lines) {

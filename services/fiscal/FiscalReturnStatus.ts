@@ -1,6 +1,6 @@
 import type { Transaction } from '../../types';
 import type { ReturnAttempt } from './FiscalReturnV1';
-import { RETURN_PROFILE, returnContract, returnJSON, sameReturn } from './FiscalReturnV1';
+import { RETURN_PROFILE, assertReturnSnapshotDigest, isConsumerFinalE32Return, returnContract, returnJSON, sameReturn } from './FiscalReturnV1';
 import { financialIdentity } from '../db/LargeMasterSyncV3FinancialRetention';
 import { fiscalStatusSourceChecksum } from './FiscalStatusProof';
 import { sha256Utf8 } from '../sync/LargeMasterSyncV3Client';
@@ -31,7 +31,14 @@ export async function verifyReturnStatus(source: Transaction, state: any, a: Ret
         const birth = envelope.fiscalWorkflowBirth;
         if (!sameReturn(birth, { schemaVersion: 3, authorizationKind: 'OFFLINE_FISCAL_ALLOCATION_V2', authorizationId: a.preparation.authorizationId, authorityHash: a.preparation.authorityHash, checkoutId: a.checkout.checkoutId, transactionId: source.id }))
             return false;
-        if (state.signature && !validateDgiiPrintContext({ issuerRnc: state.issuerRnc, environment: state.environment, ncf: state.ncf, evidence: state.signature }, source))
+        const consumerFinalE32 = isConsumerFinalE32Return(a.preparation);
+        if (Object.hasOwn(a.preparation.returnSnapshot, 'consumerFinalE32')) {
+            if (!consumerFinalE32 || source.ncfType !== 'E34' || source.customerSnapshot?.taxId
+                || source.affectedNCF !== a.preparation.originalReference.ncf)
+                return false;
+            await assertReturnSnapshotDigest(a.preparation, a.preparationDigestProof);
+        }
+        if (state.signature && !validateDgiiPrintContext({ issuerRnc: state.issuerRnc, environment: state.environment, ncf: state.ncf, evidence: state.signature }, source, consumerFinalE32))
             return false;
         if (['ACCEPTED', 'ACCEPTED_CONDITIONAL'].includes(state.decision) && (!state.signature || state.state !== state.decision))
             return false;
