@@ -193,11 +193,20 @@ test('initial and incremental prices survive SQLite restart, drop stale revision
     const resetRequested: number[] = [];
     await syncItemLabelPrices(getBinding, async revision => {
       resetRequested.push(revision);
+      if (revision === 0) {
+        const duringReplay = await readItemLabelPrices(scope, ['A'], storage);
+        assert.equal(duringReplay.hasIncrementalCollection, true);
+        assert.equal(duringReplay.prices.has('A'), false);
+        assert.equal(selectItemLabelPrice({ labelPrice: eur, revision: 5 }, null, duringReplay.hasIncrementalCollection), null);
+      }
       return page('company-a', 'visibility-2', 6, []);
     }, storage);
     assert.deepEqual(resetRequested, [6, 0]);
     assert.equal((await readItemLabelPrices(scope, ['A', 'B'], storage)).prices.size, 0);
     assert.equal(storage.count(), beforeVisibility);
+    const replayed = await readItemLabelPrices(scope, ['A'], storage);
+    assert.equal(selectItemLabelPrice({ labelPrice: eur, revision: 5 }, null, replayed.hasIncrementalCollection), null);
+    assert.deepEqual(selectItemLabelPrice({ labelPrice: eur, revision: 5 }, null, false), eur);
   } finally {
     storage.close();
     rmSync(directory, { recursive: true, force: true });

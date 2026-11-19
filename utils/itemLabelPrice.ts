@@ -49,7 +49,11 @@ export function missingItemLabelPriceMessage(
 export function selectItemLabelPrice(
   catalog: ItemLabelPriceVersion | null,
   incremental: ItemLabelPriceVersion | null,
+  hasIncrementalCollection = false,
 ): ItemLabelPrice | null {
+  // After starting the protected collection, a missing item during a scope
+  // replay must not resurrect a price cleared after the cached V3 snapshot.
+  if (hasIncrementalCollection && !incremental) return null;
   if (incremental && (!catalog || incremental.revision >= catalog.revision)) return incremental.labelPrice;
   return catalog?.labelPrice ?? null;
 }

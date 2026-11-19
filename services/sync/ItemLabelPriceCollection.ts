@@ -169,5 +169,5 @@ export async function readItemLabelPrices(
     }
   }
   await assertCurrent();
-  return { prices, assertCurrent };
+  return { prices, hasIncrementalCollection: Boolean(cursor), assertCurrent };
 }

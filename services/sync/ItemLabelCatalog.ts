@@ -95,7 +95,7 @@ export async function readLabelPricePreview(
     const revision = article?.labelPriceRevision;
     const catalog = typeof revision === 'number' && Number.isSafeInteger(revision) && revision >= 0
       ? { labelPrice: normalizeItemLabelPrice(article?.labelPrice), revision } : null;
-    return selectItemLabelPrice(catalog, local?.prices.get(id) ?? null);
+    return selectItemLabelPrice(catalog, local?.prices.get(id) ?? null, local?.hasIncrementalCollection);
   };
   await assertCurrent();
   return {
