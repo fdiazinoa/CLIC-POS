@@ -131,7 +131,19 @@ test('fresh sparse invoice denies a new article when the retained dataset is inc
 test('fresh sparse invoice denies a new warehouse for an article with inventory presentation effects', async () => {
  await invoiceCase(true, true, 0, true, 'presentation', 'warehouse');
 });
-async function invoiceCase(track:boolean,negative:boolean,opening:number,missing:boolean,attack?:string,addition?:'warehouse'|'article'){
+for (const addition of ['warehouse', 'article'] as const) test(`fresh sparse invoice accepts the ERP v1 tracking marker without allocations for a new ${addition}`, async () => {
+ await invoiceCase(true, true, 0, true, undefined, addition, { tracking_contract_version: 1, tracking_authorities: [] });
+});
+for (const tracking of [
+ {tracking_contract_version: 2, tracking_authorities: []},
+ {tracking_contract_version: 1},
+ {tracking_contract_version: 1, tracking_authorities: null},
+ {tracking_contract_version: 1, tracking_authorities: [{}]},
+ {tracking_authorities: []},
+]) test(`fresh sparse invoice rejects incomplete or allocated ERP tracking metadata ${JSON.stringify(tracking)}`, async () => {
+ await invoiceCase(true, true, 0, true, 'tracking', 'warehouse', tracking);
+});
+async function invoiceCase(track:boolean,negative:boolean,opening:number,missing:boolean,attack?:string,addition?:'warehouse'|'article',erpTracking?: Record<string, unknown>){
  const f=await fixture(undefined,track,false);try{
   f.db.prepare('UPDATE master_v3_inventory_balances SET qty_on_hand=?').run(opening);if(missing)f.db.prepare('DELETE FROM master_v3_inventory_balances').run();
   f.db.prepare('INSERT INTO documents VALUES(?,?,?,?,?)').run('transactionHistory','retained-before-refresh',JSON.stringify({id:'retained-before-refresh',items:[],status:'COMPLETED'}),0,'fixture');
@@ -154,7 +166,7 @@ async function invoiceCase(track:boolean,negative:boolean,opening:number,missing
    if(track)await assert.rejects(previous.validate(f.config,[oldLine],tariff,warehouse),/STOCK_INSUFFICIENT/);
   }
   const refresh = (globalThis as any).__refresh;
-  refresh.patch={operationalFlags:{trackInventory:track,allowNegativeStock:negative},...(addition === 'warehouse' ? { activeWarehouseIds: [warehouse] } : {})};
+  refresh.patch={operationalFlags:{trackInventory:track,allowNegativeStock:negative},...erpTracking,...(addition === 'warehouse' ? { activeWarehouseIds: [warehouse] } : {})};
   if (addition === 'article') refresh.afterStage = () => {
    const row = f.db.prepare('SELECT * FROM master_v3_articles WHERE sync_version=33 AND article_id=?').get(oldProductId) as Record<string, unknown>;
    row.article_id = product;
@@ -195,7 +207,7 @@ async function invoiceCase(track:boolean,negative:boolean,opening:number,missing
    if(attack==='write-fault')f.bridge.run=async(sql:string,values:any[],transaction:boolean)=>{if(values[0]==='payments')throw Error('injected-payment-write');return run(sql,values,transaction);};
    if(attack==='precommit-fault')f.bridge.execute=async(sql:string,transaction?:boolean)=>{if(sql==='COMMIT;')throw Error('injected-precommit');return execute(sql,transaction);};
    const untouched=state(f);
-   const error = attack === 'purged-article' ? /SYNC_V3_INVENTORY_COVERAGE_REQUIRED/
+   const error = ['purged-article', 'tracking'].includes(attack) ? /SYNC_V3_INVENTORY_COVERAGE_REQUIRED/
     : attack === 'write-fault' && addition ? /injected-payment-write/ : undefined;
    await assert.rejects(f.adapter.commitFinancialTransaction(input), error);
    assert.deepEqual(state(f),untouched);return;

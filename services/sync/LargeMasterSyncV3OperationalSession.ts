@@ -16,7 +16,7 @@ import { assertLargeMasterSyncV3NativeAndroid } from './LargeMasterSyncV3Platfor
 import type { BusinessConfig, CartItem, Product, ProductVariant, TaxDefinition, V3SaleAuthorityStamp, Transaction } from '../../types';
 import { dbAdapter } from '../db';
 import { LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED } from './LargeMasterSyncV3Authority';
-import { LARGE_MASTER_SYNC_V3_CANARY, validateLargeMasterSyncV3CanaryUrl } from './LargeMasterSyncV3Canary';
+import { LARGE_MASTER_SYNC_V3_CANARY } from './LargeMasterSyncV3Canary';
 import { readOperationalTerminalBinding } from './OperationalTerminalConfig';
 import { readLargeMasterSyncV3BoundIdentity, type LargeMasterSyncV3BoundIdentity } from './LargeMasterSyncV3BoundTransport';
 import { prepareLargeMasterSyncV3Candidate, prepareLargeMasterSyncV3CatalogOnly, prepareLargeMasterSyncV3UnusedBaseline, isLargeMasterSyncV3Stale, type LargeMasterSyncV3CandidateReady } from './LargeMasterSyncV3Candidate';
@@ -31,9 +31,8 @@ import { largeMasterSyncV3DownloadOrigin } from './LargeMasterSyncV3DownloadOrig
 import { createLargeMasterSyncV3SessionCoordinator } from './LargeMasterSyncV3SetupCompletion';
 import type { LargeMasterSyncV3Metric } from './LargeMasterSyncV3Client';
 
-export const v3BindingKey = (identity: Omit<LargeMasterSyncV3BoundIdentity,'syncToken'>, v3BaseUrl: string): string =>
-  JSON.stringify([identity.tenantId, identity.terminalId, identity.deviceId,
-    identity.erpSyncBaseUrl, validateLargeMasterSyncV3CanaryUrl(v3BaseUrl)]);
+import { v3BindingKey } from './LargeMasterSyncV3BindingKey';
+export { v3BindingKey } from './LargeMasterSyncV3BindingKey';
 
 export const v3InventoryBaselineKey = (binding: string, stamp: V3SaleAuthorityStamp): string =>
   JSON.stringify([binding, v3StockSource(stamp).syncId, v3StockSource(stamp).syncVersion, stamp.inventoryVersion, stamp.inventoryCursor]);

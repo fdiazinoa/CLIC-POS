@@ -7,6 +7,7 @@ import { LARGE_MASTER_SYNC_V3_SCHEMA_SQL } from '../services/db/LargeMasterSyncV
 import { LargeMasterSyncV3SqliteStore } from '../services/db/LargeMasterSyncV3SqliteStore';
 import { LargeMasterSyncV3CatalogRead, useV3CatalogBrowser } from '../services/sync/LargeMasterSyncV3CatalogRead';
 import { v3BindingKey, v3InventoryBaselineKey } from '../services/sync/LargeMasterSyncV3OperationalSession';
+import { v3ErpStockDisplay, v3ErpStockDisplayScope } from '../services/sync/LargeMasterSyncV3ErpStockDisplay';
 import { createV3CatalogView } from '../services/sync/LargeMasterSyncV3CatalogView';
 import CatalogManager, { V3CatalogPageView } from '../components/LargeMasterSyncV3CatalogManager';
 import type { BusinessConfig, Warehouse } from '../types';
@@ -229,4 +230,43 @@ test('five administrative IDs remain distinct from SKU/ERP category and filter b
   const reader=await LargeMasterSyncV3CatalogRead.open(()=>f.context,f.deps);assert.equal((await reader.page({posCategoryId:'pos-id'})).filteredTotal,65);
   assert.equal((await reader.page({posCategoryId:'REF0'})).filteredTotal,0);assert.equal(f.writes(),0);assert.ok(f.queries.every(row=>row.length<=100));
  }finally{f.sql.close();}
+});
+
+test('MS0001 displays 50 from ERP after refresh without adopting SQLite inventory or adding the local ledger', async () => {
+  const f = fixture();
+  try {
+    const terminal = f.context.config.terminals[0];
+    Object.assign(terminal.config, { erpBinding: { tenantId: identity.tenantId, companyId: 'mykon', storeId: 'mega-centro' } });
+    f.sql.exec("UPDATE master_v3_articles SET sku='MS0001' WHERE sync_version=2 AND article_id='P000002'");
+    const reader = await LargeMasterSyncV3CatalogRead.open(() => f.context, f.deps);
+    const initial = (await reader.page({ query: 'MS0001' })).rows[0];
+    assert.equal(initial.stock, null);
+    assert.equal(initial.balance, null);
+    assert.equal(initial.stockSource, undefined);
+    const scope = v3ErpStockDisplayScope(terminal, identity.tenantId, v3BindingKey(identity, origin), version)!;
+    await v3ErpStockDisplay.refresh(async () => scope, async () => ({
+      version: 1, cursor: 'erp-count', balances: [
+        { item_id: 'P000002', warehouse_id: 'W', qty_on_hand: 50, qty_reserved: 0, qty_committed: 0, updated_at: 'now' },
+        { item_id: 'P000002', warehouse_id: 'OTHER', qty_on_hand: 99, qty_reserved: 0, qty_committed: 0, updated_at: 'now' },
+        { item_id: 'P000000', warehouse_id: 'W', qty_on_hand: 0, qty_reserved: 0, qty_committed: 0, updated_at: 'now' },
+      ],
+    }));
+    const start = f.queries.length;
+    const updatedPage = await reader.page({ query: 'MS0001' });
+    const updated = updatedPage.rows[0];
+    assert.deepEqual([updated.stock, updated.balance, updated.stockSource], [50, 50, 'ERP']);
+    assert.deepEqual(
+      (({ stock, balance, stockSource }) => [stock, balance, stockSource])((await reader.page({ query: 'REF0' })).rows[0]),
+      [0, 0, 'ERP'],
+    );
+    assert(!f.queries.slice(start).some(query => query.sql.includes("collection_name = 'inventoryLedger'")));
+    assert.match(renderToStaticMarkup(<V3CatalogPageView state={{ status: 'ready', page: updatedPage }} />), /50.*ERP/);
+    assert.equal(f.writes(), 0);
+    assert.equal((await f.store.getInventoryAuthority())?.cursor, 'C');
+
+    terminal.config.erpBinding!.companyId = 'other-company';
+    await assert.rejects(reader.page({ query: 'MS0001' }), {code:'SYNC_V3_CATALOG_CONTEXT_CHANGED'});
+    const foreign = await LargeMasterSyncV3CatalogRead.open(() => f.context, f.deps);
+    assert.equal((await foreign.page({ query: 'MS0001' })).rows[0].stockSource, undefined);
+  } finally { f.sql.close(); }
 });

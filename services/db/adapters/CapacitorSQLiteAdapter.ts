@@ -1658,7 +1658,10 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
 
         // The newly covered path only applies to an ordinary direct sale under current article authority.
         if (hasSpecialSource || source.active !== true || source.sellable !== true
-            || source.article_formats != null || source.articleFormats != null || source.tracking_contract_version != null
+            || source.article_formats != null || source.articleFormats != null
+            || ((source.tracking_contract_version !== undefined || source.tracking_authorities !== undefined)
+                && (source.tracking_contract_version !== 1 || !Array.isArray(source.tracking_authorities)
+                    || source.tracking_authorities.length !== 0))
             || source.kitInventoryMode === 'COMPONENTS' || source.kit_inventory_mode === 'COMPONENTS'
             || [source.recipeDetails, source.recipe_details].some(recipe => recipe != null && (!Array.isArray(recipe) || recipe.length > 0))
             || line.inventoryPresentation || line.articleFormat || line.articleFormatSnapshot || line.formatWireLine
