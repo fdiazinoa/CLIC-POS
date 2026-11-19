@@ -96,7 +96,8 @@ test('cerrar una mesa vacía actualiza y desbloquea localmente antes de persisti
   assert.match(closeSource, /setTables\(previousTables => \{/);
   assert.match(closeSource, /releaseActiveTableEditLock\(\{ deferRemote: true \}\)/);
   assert.ok(closeSource.indexOf('setTables(previousTables => {') < closeSource.indexOf("db.saveDocument('tables', affectedTable)"));
-  assert.ok(closeSource.indexOf('releaseActiveTableEditLock') < closeSource.indexOf('await clearActiveCartDraftStorage'));
+  assert.ok(closeSource.indexOf('releaseActiveTableEditLock') < closeSource.indexOf('await dispatchLegacyLanMutation'));
+  assert.doesNotMatch(closeSource, /clearActiveCartDraftStorage/);
   assert.match(closeSource, /window\.setTimeout\(\(\) => \{/);
   assert.match(closeSource, /if \(closedOrderId\) return;\s*try \{\s*const receipt = await dispatchLegacyLanMutation/);
 

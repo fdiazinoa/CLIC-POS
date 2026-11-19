@@ -138,7 +138,7 @@ import { canStepCartQuantity, isValidCartQuantity, isValidCartQuantityTransition
 import ModifierModal from './ModifierModal';
 import { productHasRestaurantConfiguration, resolveRestaurantProductConfig } from '../utils/restaurantProductConfig';
 import { shouldBlockTableMapForDirectSale } from '../utils/restaurantNavigation';
-import { isDirectSaleParkedTicket } from '../utils/directSaleParkedTickets';
+import { canRecoverDirectSale, isDirectSaleParkedTicket } from '../utils/directSaleParkedTickets';
 import { rememberClosedRestaurantOrder } from '../utils/tableTicketIntegrity';
 import { visorSync } from '../utils/visorSync';
 import { isCustomerDisplaySurface, maybeAutoLaunchCustomerDisplay } from '../utils/customerDisplay';
@@ -275,7 +275,10 @@ export interface V3OperationalPOSBoundary {
    completedReservation?(source: Reservation,lines: CartItem[],customerId?: string): Promise<Transaction | null>;
    expireReservation?(id: string): Promise<boolean>;
    restoreReservation?(id: string): Promise<V3RecoveredReservation>;
-   restoreRetainedTicket?(id: string): Promise<ParkedTicket | null>;
+   restoreRetainedTicket?(
+      id: string,
+      assertAuthorized: (ticket: ParkedTicket) => void,
+   ): Promise<import('../services/sync/LargeMasterSyncV3DirectTicketSource').V3DirectTicketRestoration>;
    updateRetainedTicket?(id: string, ticket?: ParkedTicket): Promise<void>;
    waitingTickets?(tickets: ParkedTicket[]): Promise<ParkedTicket[]>;
    changeTariff(tariffId: string): void;
@@ -302,6 +305,10 @@ export interface POSInterfaceProps {
    zReports: ZReport[];
    closedHistoryIds?: ReadonlySet<string>;
    onUpdateCart: React.Dispatch<React.SetStateAction<CartItem[]>>;
+   getDirectSaleOperatorId?: () => string | undefined;
+   getDirectSaleDraftId?: () => string | undefined;
+   getDirectSaleOwnerId?: () => string | null | undefined;
+   onDirectSaleRestored?: (ticket: ParkedTicket, retainedCheckpointId?: string) => void;
    selectedCustomer: Customer | null;
    onSelectCustomer: (customer: Customer | null) => void;
    parkedTickets: ParkedTicket[];
@@ -1274,6 +1281,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    zReports,
    closedHistoryIds,
    onUpdateCart: onUpdateCartRaw,
+   getDirectSaleOperatorId,
+   getDirectSaleDraftId,
+   getDirectSaleOwnerId,
+   onDirectSaleRestored,
    selectedCustomer,
    onSelectCustomer,
    parkedTickets,
@@ -2843,9 +2854,23 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [showPromoSheet, setShowPromoSheet] = useState(false);
    const [selectedPromoProduct, setSelectedPromoProduct] = useState<Product | null>(null);
 
+   const directSaleRecoveryAccess = useRef({ user: currentUser, roles, activeTable });
+   directSaleRecoveryAccess.current = { user: currentUser, roles, activeTable };
+   const directSaleRecoveryMounted = useRef(false);
+   const restoringDirectSale = useRef(false);
+   useLayoutEffect(() => {
+      directSaleRecoveryMounted.current = true;
+      return () => { directSaleRecoveryMounted.current = false; };
+   }, []);
+
    const directSaleParkedTickets = useMemo(
       () => (v3Operational ? v3WaitingTickets : (Array.isArray(parkedTickets) ? parkedTickets : [])).filter(isDirectSaleParkedTicket).filter(ticket => ticket.id !== activeDirectV3TicketId),
       [parkedTickets, v3WaitingTickets, v3Operational, activeDirectV3TicketId]
+   );
+
+   const recoverableDirectSaleTickets = useMemo(
+      () => directSaleParkedTickets.filter(ticket => canRecoverDirectSale(ticket.directSaleOwnerId, currentUser, roles)),
+      [directSaleParkedTickets, currentUser, roles],
    );
 
    const buildParkedTicketName = useCallback(() => {
@@ -8096,7 +8121,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (blockRecoveredUberOrderMutation('guardarlo como ticket en espera')) return;
       const ticketItems = cartOverride || cart;
       if (ticketItems.length === 0) return;
-      const parkedTicketId = activeTable?.currentOrderId || activeDirectV3TicketId || `P-${Date.now()}`;
+      const parkedTicketId = activeTable?.currentOrderId || activeDirectV3TicketId
+         || (!activeTable && getDirectSaleDraftId?.()) || `P-${Date.now()}`;
       const existingParked = (Array.isArray(parkedTickets) ? parkedTickets : []).find((ticket) => ticket.id === parkedTicketId);
       const normalizedAlias = aliasInput === undefined
          ? existingParked?.alias
@@ -8136,6 +8162,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          serviceType: effectiveOrderServiceType,
          paymentFraction: retainCurrentPaymentFractionPlan(existingParked?.paymentFraction, resolvedTicketTotal),
       };
+
+      if (isDirectSaleParkedTicket(newParked) && !activeTable) {
+         const directSaleOwnerId = getDirectSaleOwnerId?.();
+         newParked.directSaleOwnerId = directSaleOwnerId !== undefined
+            ? directSaleOwnerId
+            : existingParked ? existingParked.directSaleOwnerId ?? null : currentUser.id;
+      }
 
       // Remove existing if updating same ID
       const updatedTickets = [...(Array.isArray(parkedTickets) ? parkedTickets : []).filter(p => p.id !== newParked.id), newParked];
@@ -8310,27 +8343,44 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    };
 
    const handleRestoreTicket = async (parked: ParkedTicket) => {
-      const directTicket = canParkDirectSale
-         ? directSaleParkedTickets.find(ticket => ticket.id === parked.id)
-         : undefined;
-      if (!directTicket || !isDirectSaleParkedTicket(directTicket)) return;
-      let restored = directTicket;
-      let retained = false;
+      if (!canParkDirectSale || restoringDirectSale.current) return;
+      const directTicket = recoverableDirectSaleTickets.find(ticket => ticket.id === parked.id);
+      if (!directTicket) return;
+      const assertAuthorized = (ticket: ParkedTicket) => {
+         const access = directSaleRecoveryAccess.current;
+         if (!directSaleRecoveryMounted.current || access.user.id !== currentUser.id
+            || (getDirectSaleOperatorId && getDirectSaleOperatorId() !== currentUser.id) || access.activeTable
+            || !isDirectSaleParkedTicket(ticket)
+            || !canRecoverDirectSale(ticket.directSaleOwnerId, access.user, access.roles)) {
+            throw new Error('Tu rol no permite recuperar esta venta en espera.');
+         }
+      };
+
+      restoringDirectSale.current = true;
       try {
-         const claimed = await v3Operational?.restoreRetainedTicket?.(directTicket.id);
-         if (claimed) { restored = claimed; retained = true; setActiveDirectV3TicketId(claimed.id); }
-      } catch (error) { setErrorToast(error instanceof Error ? error.message : String(error)); return; }
-      onUpdateCart(markRestaurantLinesCommitted(restored.items, restored.timestamp));
-      setOrderServiceType(directTicket.serviceType || 'DINE_IN');
-      if (directTicket.customerId) {
-         const found = (customers || []).find(c => c.id === directTicket.customerId);
-         if (found) onSelectCustomer(found);
+         assertAuthorized(directTicket);
+         const restoration = await v3Operational?.restoreRetainedTicket?.(directTicket.id, assertAuthorized);
+         const restored = restoration?.ticket ?? parkedTicketsRef.current.find(ticket => ticket.id === directTicket.id);
+         if (!restored) return;
+         assertAuthorized(restored);
+         if (restoration?.retainedCheckpointId) setActiveDirectV3TicketId(restored.id);
+         onDirectSaleRestored?.(restored, restoration?.retainedCheckpointId);
+         onUpdateCart(markRestaurantLinesCommitted(restored.items, restored.timestamp));
+         setOrderServiceType(restored.serviceType || 'DINE_IN');
+         if (restored.customerId) {
+            const found = (customers || []).find(c => c.id === restored.customerId);
+            if (found) onSelectCustomer(found);
+         }
+         onUpdateParkedTickets(parkedTicketsRef.current.filter(ticket => ticket.id !== restored.id));
+         setActiveRecoveredReservation(null);
+         setActiveV3Reservation(null);
+         setShowParkedList(false);
+         returnToTicketView();
+      } catch (error) {
+         setErrorToast(error instanceof Error ? error.message : String(error));
+      } finally {
+         restoringDirectSale.current = false;
       }
-      onUpdateParkedTickets(parkedTickets.filter(p => p.id !== directTicket.id));
-      setActiveRecoveredReservation(null);
-      setActiveV3Reservation(null);
-      setShowParkedList(false);
-      returnToTicketView();
    };
 
    const handleOpenDrawer = async () => {
@@ -8537,7 +8587,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                handleGridAction(action);
             }}
             config={config}
-            parkedTicketsCount={directSaleParkedTickets.length}
+            parkedTicketsCount={recoverableDirectSaleTickets.length}
             isReturnMode={isReturnMode}
             hasCartItems={cart.length > 0}
             globalDiscountValue={globalDiscount.value}
@@ -9283,7 +9333,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      {canParkDirectSale && (
                         <button onClick={() => setShowParkedList(!showParkedList)} className="h-10 w-10 rounded-xl bg-orange-500 text-white shadow-sm shadow-orange-500/25 hover:bg-orange-600 relative flex items-center justify-center" title="Recuperar Ticket">
                            <Inbox size={20} />
-                           {directSaleParkedTickets.length > 0 && (
+                           {recoverableDirectSaleTickets.length > 0 && (
                               <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-orange-500 rounded-full border-2 border-white"></span>
                            )}
                         </button>
@@ -10055,7 +10105,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                               orientation="horizontal"
                               onAction={handleGridAction}
                               config={config}
-                              parkedTicketsCount={directSaleParkedTickets.length}
+                              parkedTicketsCount={recoverableDirectSaleTickets.length}
                               isReturnMode={isReturnMode}
                               hasCartItems={cart.length > 0}
                               globalDiscountValue={globalDiscount.value}
@@ -10084,7 +10134,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                               orientation="horizontal"
                               onAction={handleGridAction}
                               config={config}
-                              parkedTicketsCount={directSaleParkedTickets.length}
+                              parkedTicketsCount={recoverableDirectSaleTickets.length}
                               isReturnMode={isReturnMode}
                               hasCartItems={cart.length > 0}
                               globalDiscountValue={globalDiscount.value}
@@ -10346,7 +10396,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                  <button onClick={() => setShowParkedList(!showParkedList)} className="relative flex h-12 min-w-[58px] flex-col items-center justify-center gap-0.5 rounded-xl bg-orange-500 px-2 text-white shadow-sm shadow-orange-500/25 active:scale-95">
                                     <Inbox size={18} />
                                     <span className="text-[9px] font-bold uppercase">Esp.</span>
-                                    {directSaleParkedTickets.length > 0 && <span className="absolute -top-1 -right-1 w-2 h-2 bg-orange-500 rounded-full"></span>}
+                                    {recoverableDirectSaleTickets.length > 0 && <span className="absolute -top-1 -right-1 w-2 h-2 bg-orange-500 rounded-full"></span>}
                                  </button>
                               )}
                               <button onClick={openReservationModal} className="flex h-12 min-w-[58px] flex-col items-center justify-center gap-0.5 rounded-xl bg-orange-500 px-2 text-white shadow-sm shadow-orange-500/25 active:scale-95">
@@ -11089,7 +11139,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         <button onClick={() => setShowParkedList(false)} className="p-2 hover:bg-gray-200 rounded-full"><X size={20} /></button>
                      </div>
                      <div className="p-4 overflow-y-auto max-h-[60vh] space-y-3">
-                        {directSaleParkedTickets.map((pt, idx) => (
+                        {recoverableDirectSaleTickets.map((pt, idx) => (
                            <div key={pt.id || `parked-${idx}`} onClick={() => handleRestoreTicket(pt)} className="p-4 bg-white border border-gray-100 rounded-2xl hover:border-orange-400 hover:bg-orange-50 cursor-pointer group transition-all">
                               <div className="flex justify-between items-start mb-2">
                                  <div className="min-w-0 pr-3">
@@ -11113,7 +11163,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                               </div>
                            </div>
                         ))}
-                        {directSaleParkedTickets.length === 0 && <div className="py-10 text-center text-gray-400 italic">No hay tickets directos guardados</div>}
+                        {recoverableDirectSaleTickets.length === 0 && <div className="py-10 text-center text-gray-400 italic">No hay tickets directos guardados</div>}
                      </div>
                   </div>
                </div>

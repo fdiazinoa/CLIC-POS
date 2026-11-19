@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import ts from 'typescript';
+import {RECOVER_OTHER_SELLER_PARKED_SALES} from '../utils/directSaleParkedTickets';
 import {canViewTicketHistory} from '../utils/ticketHistoryPermission';
 const source=(name:string)=>ts.createSourceFile(name,readFileSync(new URL('../'+name,import.meta.url),'utf8'),ts.ScriptTarget.Latest,true,name.endsWith('tsx')?ts.ScriptKind.TSX:ts.ScriptKind.TS);
 function declaration(file:ts.SourceFile,name:string){let found:ts.Expression|undefined;const visit=(node:ts.Node)=>{if(ts.isVariableDeclaration(node)&&node.name.getText(file)===name)found=node.initializer;ts.forEachChild(node,visit);};visit(file);assert.ok(found,name);return found!;}
@@ -39,7 +40,7 @@ test('actual history wrapper denies mounting without permission and survives Str
 test('editable ALL roles retain wildcard semantics and cannot silently revoke other capabilities',()=>{
  const team=source('components/TeamHub.tsx');let updated:any;
  const roles=[{id:'CUSTOM',permissions:['ALL','POS_EXTRA']}];
- const toggle=evaluate(declaration(team,'togglePermission'),{erpManaged:false,roles,editingRole:null,setEditingRole:()=>{},onUpdateRoles:(value:any)=>updated=value,setRoleSaveStatus:()=>{}});
+ const toggle=evaluate(declaration(team,'togglePermission'),{erpManaged:false,roles,RECOVER_OTHER_SELLER_PARKED_SALES,editingRole:null,setEditingRole:()=>{},onUpdateRoles:(value:any)=>updated=value,setRoleSaveStatus:()=>{}});
  toggle('CUSTOM','POS_VIEW_TICKET_HISTORY');assert.deepEqual(updated,roles);
  roles[0].permissions=['POS_CHECKOUT','POS_VIEW_TICKET_HISTORY'];toggle('CUSTOM','POS_VIEW_TICKET_HISTORY');
  assert.deepEqual(updated[0].permissions,['POS_CHECKOUT']);

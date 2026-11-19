@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { User, RoleDefinition, Shift, ZReportModule } from '../types';
 import { AVAILABLE_PERMISSIONS } from '../constants';
+import { RECOVER_OTHER_SELLER_PARKED_SALES } from '../utils/directSaleParkedTickets';
 import LocalUserProfileModal from './LocalUserProfileModal';
 import { biometricService } from '../services/BiometricAuthService';
 import { resolveTeamHubTabs, TeamHubMode, TeamHubTab } from '../utils/teamHubAccess';
@@ -316,7 +317,7 @@ const TeamHub: React.FC<TeamHubProps> = ({
    const togglePermission = (roleId: string, permKey: string) => {
       if (erpManaged) return;
       const updatedRoles = roles.map(role => {
-         if (role.id === roleId && !role.permissions.includes('ALL')) {
+         if (role.id === roleId && (permKey === RECOVER_OTHER_SELLER_PARKED_SALES || !role.permissions.includes('ALL'))) {
             const permission = permKey as any; // Cast to any first to avoid strict check issues with string
             const newRole = {
                ...role,
@@ -919,7 +920,7 @@ const TeamHub: React.FC<TeamHubProps> = ({
                                        <h2 className="text-3xl font-black text-gray-800">{editingRole.name}</h2>
                                     )}
                                  <p className="text-gray-500 text-sm mt-1">
-                                       {editingRole.permissions.includes('ALL') ? 'ALL concede todos los permisos. Usa un rol con permisos específicos para restringir accesos.' : erpManaged ? 'Permisos definidos por el ERP (solo lectura).' : editingRole.isSystem ? 'Rol de sistema (Solo lectura parcial).' : 'Define los accesos para este perfil.'}
+                                       {editingRole.permissions.includes('ALL') ? 'ALL concede los permisos generales. La recuperación de ventas en espera de otros vendedores requiere activar su opción.' : erpManaged ? 'Permisos definidos por el ERP (solo lectura).' : editingRole.isSystem ? 'Rol de sistema (Solo lectura parcial).' : 'Define los accesos para este perfil.'}
                                     </p>
                                  </div>
                               </div>
@@ -965,12 +966,13 @@ const TeamHub: React.FC<TeamHubProps> = ({
                                        </h4>
                                        <div className="space-y-4">
                                           {perms.map(perm => {
-                                             const isEnabled = editingRole.permissions.includes('ALL') || editingRole.permissions.includes(perm.key as any);
+                                             const grantedByAll = perm.key !== RECOVER_OTHER_SELLER_PARKED_SALES && editingRole.permissions.includes('ALL');
+                                             const isEnabled = grantedByAll || editingRole.permissions.includes(perm.key as any);
                                              return (
                                                 <div
                                                    key={perm.key}
-                                                   onClick={() => { if(!editingRole.permissions.includes('ALL'))togglePermission(editingRole.id, perm.key); }}
-                                                   className={`flex items-center justify-between p-4 rounded-2xl border-2 transition-all ${erpManaged || editingRole.permissions.includes('ALL') ? 'cursor-default' : 'cursor-pointer'} ${isEnabled
+                                                   onClick={() => { if (!grantedByAll) togglePermission(editingRole.id, perm.key); }}
+                                                   className={`flex items-center justify-between p-4 rounded-2xl border-2 transition-all ${erpManaged || grantedByAll ? 'cursor-default' : 'cursor-pointer'} ${isEnabled
                                                       ? 'bg-purple-50 border-purple-500 shadow-sm'
                                                       : 'bg-white border-gray-100 hover:border-gray-300'
                                                       }`}

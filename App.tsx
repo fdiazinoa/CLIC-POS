@@ -1,3 +1,4 @@
+import { ACTIVE_CART_DRAFT_STORAGE_KEY, canRecoverDirectSale } from './utils/directSaleParkedTickets';
 import { readPosSecurityRecords } from './services/sync/PosSecurityV2Consumer';
 import {canViewTicketHistory} from './utils/ticketHistoryPermission';
 import { fiscalReceiptEmailQueue } from './services/email/fiscalReceiptEmailDelivery';
@@ -519,7 +520,9 @@ type RecoverySequencePromptState = RuntimeTerminalRecoveryState & {
 };
 
 type ActiveCartDraft = {
-  id: 'current';
+  id: string;
+  directSaleOwnerId?: string | null;
+  retainedCheckpointId?: string;
   status: 'ACTIVE' | 'EMPTY';
   source: 'AUTO_CART_DRAFT';
   savedAt: string;
@@ -540,6 +543,9 @@ type SafeExitSnapshot = {
   selectedCustomer: Customer | null;
   activeTable: Table | null;
   terminalId?: string;
+  directSaleDraftId?: string;
+  directSaleOwnerId?: string | null;
+  retainedCheckpointId?: string;
 };
 
 type ActiveTableEditLock = {
@@ -594,7 +600,6 @@ const parseNativeBridgeJson = (value: unknown): any => {
 const LICENSE_REFRESH_BASE_MS = 60_000;
 const TIMER_JITTER_MIN_MS = 3_000;
 const TIMER_JITTER_MAX_MS = 5_000;
-const ACTIVE_CART_DRAFT_STORAGE_KEY = 'clic_pos_active_cart_draft_v1';
 const PARKED_TICKETS_STORAGE_KEY = 'clic_pos_parked_tickets_mirror_v1';
 const CASH_MOVEMENTS_STORAGE_KEY = 'clic_pos_cash_movements_mirror_v1';
 const FLOOR_PLAN_STORAGE_KEY = 'clic_pos_floor_plan_mirror_v1';
@@ -679,10 +684,12 @@ const isTableManagedCartSnapshot = (snapshot: Pick<SafeExitSnapshot, 'activeTabl
 const isTableManagedCartDraft = (draft: Pick<ActiveCartDraft, 'activeTable'>): boolean =>
   Boolean(draft.activeTable?.id || draft.activeTable?.currentOrderId);
 
-const buildActiveCartDraft = (snapshot: SafeExitSnapshot, reason = 'auto'): ActiveCartDraft => {
+const buildActiveCartDraft = (id: string, snapshot: SafeExitSnapshot, reason: string): ActiveCartDraft => {
   const items = Array.isArray(snapshot.cart) ? snapshot.cart : [];
   return {
-    id: 'current',
+    id,
+    directSaleOwnerId: snapshot.directSaleOwnerId ?? null,
+    retainedCheckpointId: snapshot.retainedCheckpointId,
     status: items.length > 0 ? 'ACTIVE' : 'EMPTY',
     source: 'AUTO_CART_DRAFT',
     savedAt: new Date().toISOString(),
@@ -698,29 +705,31 @@ const buildActiveCartDraft = (snapshot: SafeExitSnapshot, reason = 'auto'): Acti
   };
 };
 
-const normalizeActiveCartDraft = (value: unknown): ActiveCartDraft | null => {
-  const candidate = Array.isArray(value)
-    ? value.find((entry: any) => entry?.id === 'current') || value[0]
-    : value;
-  if (!candidate || typeof candidate !== 'object') return null;
-  const draft = candidate as ActiveCartDraft;
-  if (!Array.isArray(draft.items) || draft.items.length === 0 || draft.status === 'EMPTY') return null;
-  if (isTableManagedCartDraft(draft)) return null;
-  return {
-    ...draft,
-    id: 'current',
-    status: 'ACTIVE',
-    source: 'AUTO_CART_DRAFT',
-    total: Number(draft.total || 0),
-  };
+const readActiveCartDraftRows = (value: unknown): ActiveCartDraft[] => {
+  const rows = Array.isArray(value) ? value : [value];
+  return rows.filter((row): row is ActiveCartDraft =>
+    row && typeof row.id === 'string' && row.source === 'AUTO_CART_DRAFT'
+    && typeof row.savedAt === 'string' && Array.isArray(row.items) && !isTableManagedCartDraft(row),
+  );
 };
 
-const readActiveCartDraftFromLocalStorage = (): ActiveCartDraft | null => {
+const readActiveCartDraftMirror = (): ActiveCartDraft[] => {
   try {
     const raw = window.localStorage.getItem(ACTIVE_CART_DRAFT_STORAGE_KEY);
-    return raw ? normalizeActiveCartDraft(JSON.parse(raw)) : null;
+    return raw ? readActiveCartDraftRows(JSON.parse(raw)) : [];
   } catch {
-    return null;
+    return [];
+  }
+};
+
+const writeActiveCartDraftMirror = (id: string, draft?: ActiveCartDraft) => {
+  try {
+    const remaining = readActiveCartDraftMirror().filter(row => row.id !== id);
+    const rows = draft ? [...remaining, draft] : remaining;
+    if (rows.length) window.localStorage.setItem(ACTIVE_CART_DRAFT_STORAGE_KEY, JSON.stringify(rows));
+    else window.localStorage.removeItem(ACTIVE_CART_DRAFT_STORAGE_KEY);
+  } catch {
+    // Best effort. The local document store is the durable source.
   }
 };
 
@@ -964,39 +973,28 @@ const mergePendingClientTableTickets = (
 };
 
 const persistActiveCartDraftSnapshot = async (snapshot: SafeExitSnapshot, reason = 'auto') => {
-  if (isTableManagedCartSnapshot(snapshot)) {
-    await clearActiveCartDraftStorage();
-    return;
+  if (!snapshot.directSaleDraftId || isTableManagedCartSnapshot(snapshot)) return null;
+  const draft = buildActiveCartDraft(snapshot.directSaleDraftId, snapshot, reason);
+  if (draft.status === 'EMPTY') {
+    await clearActiveCartDraftStorage(draft.id);
+    return null;
   }
-
-  const draft = buildActiveCartDraft(snapshot, reason);
-  try {
-    if (draft.status === 'ACTIVE') {
-      window.localStorage.setItem(ACTIVE_CART_DRAFT_STORAGE_KEY, JSON.stringify(draft));
-    } else {
-      window.localStorage.removeItem(ACTIVE_CART_DRAFT_STORAGE_KEY);
-    }
-  } catch {
-    // Best effort: SQLite/native adapter remains the durable source.
-  }
-
-  await db.save('activeCartDraft' as any, draft);
+  writeActiveCartDraftMirror(draft.id, draft);
+  await db.saveDocument('activeCartDraft' as any, draft);
+  return draft;
 };
 
-const clearActiveCartDraftStorage = async () => {
-  try {
-    window.localStorage.removeItem(ACTIVE_CART_DRAFT_STORAGE_KEY);
-  } catch {
-    // ignore
+const clearActiveCartDraftStorage = async (id: string) => {
+  // A tombstone blocks a stale durable copy until the local delete completes.
+  const cleared: ActiveCartDraft = {
+    id, status: 'EMPTY', source: 'AUTO_CART_DRAFT',
+    savedAt: new Date().toISOString(), items: [], total: 0,
+  };
+  writeActiveCartDraftMirror(id, cleared);
+  await db.deleteDocument('activeCartDraft' as any, id);
+  if (readActiveCartDraftMirror().some(row => row.id === id && row.status === 'EMPTY')) {
+    writeActiveCartDraftMirror(id);
   }
-  await db.save('activeCartDraft' as any, {
-    id: 'current',
-    status: 'EMPTY',
-    source: 'AUTO_CART_DRAFT',
-    savedAt: new Date().toISOString(),
-    items: [],
-    total: 0,
-  } as ActiveCartDraft);
 };
 
 const persistCriticalLocalStateSnapshot = async (
@@ -1005,9 +1003,10 @@ const persistCriticalLocalStateSnapshot = async (
 ) => {
   let nextParkedTickets = Array.isArray(snapshot.parkedTickets) ? [...snapshot.parkedTickets] : [];
 
-  if (options.parkActiveCart && snapshot.currentView === 'POS' && Array.isArray(snapshot.cart) && snapshot.cart.length > 0) {
+  if (options.parkActiveCart && snapshot.currentView === 'POS' && !snapshot.retainedCheckpointId
+      && Array.isArray(snapshot.cart) && snapshot.cart.length > 0) {
     const existingId = snapshot.activeTable?.currentOrderId;
-    const ticketId = existingId || `AUTO-${Date.now()}`;
+    const ticketId = existingId || (!snapshot.activeTable && snapshot.directSaleDraftId) || `AUTO-${Date.now()}`;
     const tableName = snapshot.activeTable?.nombre || snapshot.activeTable?.name || '';
     const autoTicket: ParkedTicket = {
       id: ticketId,
@@ -1019,6 +1018,7 @@ const persistCriticalLocalStateSnapshot = async (
       customerName: snapshot.selectedCustomer?.name,
       timestamp: new Date().toISOString(),
       tableId: snapshot.activeTable?.id,
+      ...(!snapshot.activeTable ? { directSaleOwnerId: snapshot.directSaleOwnerId ?? null } : {}),
     };
 
     nextParkedTickets = [
@@ -3438,6 +3438,8 @@ const AppContent: React.FC = () => {
     clearFiscalWorkflowCapability();
     clearActiveUserSession();
     clearSecurityState();
+    detachDirectSaleForLogin();
+    currentUserRef.current = null;
     setCurrentUser(null);
     setCurrentView('LOGIN');
   }, [clearSecurityState]);
@@ -3467,6 +3469,7 @@ const AppContent: React.FC = () => {
     };
 
     markForceLoginAfterExit();
+    currentUserRef.current = null;
     clearActiveUserSession();
     clearSecurityState();
     setCurrentUser(null);
@@ -4623,7 +4626,10 @@ const AppContent: React.FC = () => {
   const [viewData, setViewData] = useState<any>(null);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
-  const [activeCartDraftRestorePrompt, setActiveCartDraftRestorePrompt] = useState<ActiveCartDraft | null>(null);
+  const [activeCartDrafts, setActiveCartDrafts] = useState<ActiveCartDraft[]>([]);
+  const activeCartDraftIdRef = useRef<string>();
+  const directSaleOriginRef = useRef<{ ownerId: string | null; retainedCheckpointId?: string }>();
+  const nextDirectSaleDraftNumber = useRef(0);
   const masterRestaurantRevisionRef = useRef(0);
   const lastAppliedMasterRestaurantRevisionRef = useRef(0);
   const restaurantPersistenceQueueRef = useRef(new RestaurantPersistenceQueue());
@@ -5151,6 +5157,11 @@ const AppContent: React.FC = () => {
     }
   }, [activeRoomId, currentView, isDataLoaded, rooms, tables]);
 
+  const activeCartDraftRestorePrompt = currentView === 'POS' && !activeTable && cart.length === 0
+    ? activeCartDrafts.find(draft => !draft.retainedCheckpointId && !parkedTickets.some(ticket => ticket.id === draft.id)
+      && canRecoverDirectSale(draft.directSaleOwnerId, currentUser, roles))
+    : undefined;
+
   const safeExitSnapshotRef = useRef<SafeExitSnapshot>({
     currentView,
     cart: [],
@@ -5160,17 +5171,44 @@ const AppContent: React.FC = () => {
     activeTable: null,
   });
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    const previous = safeExitSnapshotRef.current;
+    if (!activeTable && cart.length > 0 && currentView === 'POS' && currentUser && !activeCartDraftIdRef.current) {
+      nextDirectSaleDraftNumber.current = Math.max(Date.now(), nextDirectSaleDraftNumber.current + 1);
+      activeCartDraftIdRef.current = `P-${nextDirectSaleDraftNumber.current}`;
+    }
+    if (cart.length === 0 || activeTable) {
+      const id = activeCartDraftIdRef.current;
+      activeCartDraftIdRef.current = undefined;
+      directSaleOriginRef.current = undefined;
+      if (id) void clearActiveCartDraftStorage(id).catch(error => console.warn('No se pudo limpiar el borrador local:', error));
+    }
+    const origin = directSaleOriginRef.current;
     safeExitSnapshotRef.current = {
-      currentView,
-      cart,
-      parkedTickets,
-      cashMovements,
-      selectedCustomer,
-      activeTable,
+      currentView, cart, parkedTickets, cashMovements, selectedCustomer, activeTable,
       terminalId: getCurrentTerminal()?.id,
+      directSaleDraftId: activeCartDraftIdRef.current,
+      directSaleOwnerId: origin ? origin.ownerId : previous.directSaleDraftId && previous.directSaleDraftId === activeCartDraftIdRef.current
+        ? previous.directSaleOwnerId : currentUser?.id,
+      retainedCheckpointId: origin?.retainedCheckpointId,
     };
-  }, [currentView, cart, parkedTickets, cashMovements, selectedCustomer, activeTable, getCurrentTerminal]);
+  }, [currentView, cart, parkedTickets, cashMovements, selectedCustomer, activeTable, currentUser, getCurrentTerminal]);
+
+  function detachDirectSaleForLogin() {
+    const snapshot = safeExitSnapshotRef.current;
+    if (!snapshot.directSaleDraftId || !snapshot.cart.length || isTableManagedCartSnapshot(snapshot)) return;
+    activeCartDraftIdRef.current = undefined;
+    directSaleOriginRef.current = undefined;
+    safeExitSnapshotRef.current = { ...snapshot, cart: [], directSaleDraftId: undefined, retainedCheckpointId: undefined };
+    setCart([]);
+    setSelectedCustomer(null);
+    if (!snapshot.retainedCheckpointId) {
+      const draft = buildActiveCartDraft(snapshot.directSaleDraftId, snapshot, 'operator_logout');
+      setActiveCartDrafts(previous => [draft, ...previous.filter(row => row.id !== draft.id)]);
+    }
+    void persistActiveCartDraftSnapshot(snapshot, 'operator_logout')
+      .catch(error => console.warn('No se pudo guardar la venta directa al cerrar sesión:', error));
+  }
 
   useEffect(() => {
     if (!isDataLoaded || currentView !== 'POS') return;
@@ -5180,31 +5218,26 @@ const AppContent: React.FC = () => {
   }, [cart, selectedCustomer, activeTable, currentView, isDataLoaded]);
 
   useEffect(() => {
-    if (!isDataLoaded || cart.length > 0 || activeCartDraftRestorePrompt) return;
+    if (!isDataLoaded) return;
     let cancelled = false;
 
-    const loadDraft = async () => {
-      const localDraft = readActiveCartDraftFromLocalStorage();
-      if (localDraft) {
-        if (!cancelled) setActiveCartDraftRestorePrompt(localDraft);
-        return;
-      }
-
+    const loadDrafts = async () => {
+      let durable: ActiveCartDraft[] = [];
       try {
-        const dbDraft = normalizeActiveCartDraft(await db.get('activeCartDraft' as any));
-        if (dbDraft && !cancelled) {
-          setActiveCartDraftRestorePrompt(dbDraft);
-        }
+        durable = readActiveCartDraftRows(await db.get('activeCartDraft' as any));
       } catch (error) {
-        console.warn('No se pudo leer el borrador activo del carrito:', error);
+        console.warn('No se pudieron leer los borradores del carrito:', error);
       }
+      const rows = new Map(durable.map(draft => [draft.id, draft]));
+      for (const draft of readActiveCartDraftMirror()) rows.set(draft.id, draft);
+      if (!cancelled) setActiveCartDrafts([...rows.values()]
+        .filter(draft => draft.status !== 'EMPTY' && draft.items.length > 0)
+        .sort((first, second) => second.savedAt.localeCompare(first.savedAt)));
     };
 
-    void loadDraft();
-    return () => {
-      cancelled = true;
-    };
-  }, [activeCartDraftRestorePrompt, cart.length, isDataLoaded]);
+    void loadDrafts();
+    return () => { cancelled = true; };
+  }, [isDataLoaded]);
 
   useEffect(() => {
     if (!isDataLoaded) return;
@@ -13725,6 +13758,8 @@ const AppContent: React.FC = () => {
           onLogin: async (u: User, input?: { startedAt: number }) => {
             const trace = beginPosInteraction('OPEN_SALE_SCREEN', { measurementBoundary: 'authorized-input-to-destination' }, input?.startedAt);
             markInteractionStateUpdate(trace, 2);
+            detachDirectSaleForLogin();
+            currentUserRef.current = u;
             setCurrentUser(u);
             const role = getCurrentDeviceRole();
             const terminal = getCurrentTerminal();
@@ -14205,6 +14240,14 @@ const AppContent: React.FC = () => {
             zReports={zReports}
             closedHistoryIds={durableClosedMembershipIds}
             onUpdateCart={setCart}
+            getDirectSaleOperatorId={() => currentUserRef.current?.id}
+            getDirectSaleDraftId={() => activeCartDraftIdRef.current}
+            getDirectSaleOwnerId={() => directSaleOriginRef.current?.ownerId}
+            onDirectSaleRestored={(ticket, retainedCheckpointId) => {
+              activeCartDraftIdRef.current = ticket.id;
+              directSaleOriginRef.current = { ownerId: ticket.directSaleOwnerId ?? null, retainedCheckpointId };
+              setActiveCartDrafts(previous => previous.filter(draft => draft.id !== ticket.id));
+            }}
             selectedCustomer={selectedCustomer}
             onSelectCustomer={setSelectedCustomer}
             parkedTickets={parkedTickets}
@@ -14394,7 +14437,6 @@ const AppContent: React.FC = () => {
               }
               window.setTimeout(() => {
                 void (async () => {
-                  await clearActiveCartDraftStorage().catch((error) => console.warn('No se pudo limpiar borrador activo tras cerrar mesa:', error));
                   // A closed order is released by /api/mesas/liberar after its
                   // parked-ticket write. An additional table PUT races with
                   // the active edit lock and can overwrite a newly opened order.
@@ -16008,38 +16050,15 @@ const AppContent: React.FC = () => {
                     type="button"
                     onClick={() => {
                       const draft = activeCartDraftRestorePrompt;
+                      if (!canRecoverDirectSale(draft.directSaleOwnerId, currentUserRef.current, roles)) return;
+                      activeCartDraftIdRef.current = draft.id === 'current' ? undefined : draft.id;
+                      directSaleOriginRef.current = { ownerId: draft.directSaleOwnerId ?? null };
+                      setActiveCartDrafts(previous => previous.filter(row => row.id !== draft.id));
                       setCart(draft.items);
+                      if (draft.id === 'current') void clearActiveCartDraftStorage(draft.id).catch(console.warn);
                       if (draft.selectedCustomer?.id) {
                         setSelectedCustomer(customers.find(customer => customer.id === draft.selectedCustomer?.id) || null);
                       }
-                      if (draft.activeTable) {
-                        const restoredOrderId = draft.activeTable.currentOrderId || `AUTO-${Date.now()}`;
-                        const restoredTable = {
-                          ...draft.activeTable,
-                          status: 'OCCUPIED' as const,
-                          currentOrderId: restoredOrderId,
-                          currentOrderTotal: draft.total,
-                        };
-                        const restoredTicket: ParkedTicket = {
-                          id: restoredOrderId,
-                          name: `Mesa: ${draft.activeTable.nombre || draft.activeTable.name || 'sin nombre'}`,
-                          items: draft.items,
-                          total: draft.total,
-                          customerId: draft.selectedCustomer?.id,
-                          customerName: draft.selectedCustomer?.name,
-                          timestamp: draft.savedAt,
-                          tableId: draft.activeTable.id,
-                        };
-                        const nextParkedTickets = [
-                          ...parkedTickets.filter(ticket => ticket.id !== restoredTicket.id),
-                          restoredTicket,
-                        ];
-                        writeCriticalCollectionsMirror(nextParkedTickets, cashMovements);
-                        setParkedTickets(nextParkedTickets);
-                        void db.save('parkedTickets', nextParkedTickets).catch(console.error);
-                        setActiveTable(restoredTable);
-                      }
-                      setActiveCartDraftRestorePrompt(null);
                       setCurrentView('POS');
                     }}
                     className="flex-1 rounded-2xl bg-slate-900 px-4 py-3 text-xs font-black uppercase tracking-[0.12em] text-white shadow-lg active:scale-95"
@@ -16049,8 +16068,10 @@ const AppContent: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => {
-                      setActiveCartDraftRestorePrompt(null);
-                      void clearActiveCartDraftStorage().catch(console.error);
+                      const draft = activeCartDraftRestorePrompt;
+                      if (!canRecoverDirectSale(draft.directSaleOwnerId, currentUserRef.current, roles)) return;
+                      setActiveCartDrafts(previous => previous.filter(row => row.id !== draft.id));
+                      void clearActiveCartDraftStorage(draft.id).catch(console.error);
                     }}
                     className="rounded-2xl border border-slate-200 px-4 py-3 text-xs font-black uppercase tracking-[0.12em] text-slate-500 active:scale-95"
                   >

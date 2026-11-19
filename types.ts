@@ -2404,6 +2404,8 @@ export interface Reception {
 
 export interface ParkedTicket {
   id: string;
+  /** Operador que dejó en espera la venta directa. null representa un ticket anterior al control. */
+  directSaleOwnerId?: string | null;
   name: string;
   alias?: string;
   /** Vendedor/camarero de la mesa; compartido por todas sus cuentas abiertas. */
@@ -2833,6 +2835,7 @@ export type Permission =
   | 'POS_VIEW_ACTIVE_CASH'
   | 'CASH_IN_OUT'
   | 'POS_MANAGE_PARKED'
+  | 'POS_RECOVER_OTHER_SELLER_PARKED_SALES'
   | 'POS_EXIT_TABLE_MAP'
   | 'POS_ACCESS_OTHER_SELLER_TABLES'
   | 'TABLE_CONTROL_CENTER'

@@ -207,7 +207,7 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps> = props => {
     completedReservation: async (source,lines,customerId) => { assertContext(); const transaction = await readV3CompletedReservation({reservationId:source.id,claimId:`reservation:${source.id}`,expectedSource:source,lines,customerId}); assertContext(); return transaction; },
     expireReservation: async id => { assertContext(); const expired = await expireV3Reservation(id); assertContext(); return expired; },
     restoreReservation: async id => { assertContext(); const recovery = await restoreV3ReservationReference(id,warehouseId); assertContext(); remember(recovery.products); return recovery; },
-    restoreRetainedTicket: async id => { assertContext(); const ticket = await claimV3DirectTicket(id); assertContext(); return ticket; },
+    restoreRetainedTicket: async (id, assertAuthorized) => { assertContext(); const restoration = await claimV3DirectTicket(id, assertAuthorized); assertContext(); return restoration; },
     updateRetainedTicket: async (id,ticket) => { assertContext(); await updateV3DirectTicket(id,ticket); assertContext(); },
     waitingTickets: async tickets => { assertContext(); const result = await readV3DirectWaitingTickets(tickets); assertContext(); return result; },
     changeTariff: id => {
