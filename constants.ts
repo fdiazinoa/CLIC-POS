@@ -1,3 +1,4 @@
+import { RECOVER_OTHER_SELLER_PARKED_SALES } from './utils/directSaleParkedTickets';
 
 import { RoleDefinition, User, Customer, Product, BusinessConfig, SubVertical, DocumentSeries, Tariff, TaxDefinition, DeviceRole, AuthLevel, LabelTemplate, DeviceFormFactor, DeviceOrientation } from './types';
 
@@ -416,6 +417,7 @@ export const AVAILABLE_PERMISSIONS = [
   { key: 'POS_VOID_PAID_TICKET', label: 'Anular Factura Pagada', description: 'Revertir una venta finalizada', category: 'SALES' },
   { key: 'POS_RETURNS', label: 'Autorizar Devoluciones y Notas de Crédito', description: 'Permite activar el modo de devolución en el POS y procesar notas de crédito', category: 'SALES' },
   { key: 'POS_MANAGE_PARKED', label: 'Gestionar Cuentas', description: 'Ver y recuperar cuentas de otros', category: 'SALES' },
+  { key: RECOVER_OTHER_SELLER_PARKED_SALES, label: 'Recuperar ventas en espera de otros vendedores', description: 'Permite recuperar ventas directas de otros vendedores o sin vendedor registrado', category: 'SALES' },
   { key: 'POS_EXIT_TABLE_MAP', label: 'Salir de Mesas a Venta Directa', description: 'Permite cerrar el mapa de mesas para operar una venta directa', category: 'SALES' },
   { key: 'POS_ACCESS_OTHER_SELLER_TABLES', label: 'Acceder a mesas de otros vendedores', description: 'Permite abrir mesas ocupadas por otro vendedor sin habilitarlo para todo el terminal', category: 'SALES' },
   { key: 'POS_NEW_SALE', label: 'Nueva Venta sin Imprimir', description: 'Permite cerrar la pantalla de venta exitosa sin forzar ticket o email', category: 'SALES' },

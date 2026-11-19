@@ -178,11 +178,12 @@ test('completed pre-upgrade sale closes stale parked source without new settleme
 
 test('public direct claim recovery/repark/cancel keeps one native CAS identity',async()=>{
   const f=fixture();try{
-   const ticket={id:'waiting',items:[oldLine]};f.insert('parkedTickets',ticket);f.stage('N',102);await f.store.activateCatalogOnly('N',await f.transition());
+   const ticket={id:'waiting',name:'Venta directa',directSaleOwnerId:'cashier-a',items:[oldLine]};f.insert('parkedTickets',ticket);f.stage('N',102);await f.store.activateCatalogOnly('N',await f.transition());
    const db={getDocument:async(collection:string,id:string)=>{const row=f.sql.prepare('SELECT data FROM documents WHERE collection_name=? AND doc_id=?').get(collection,id);return row?JSON.parse(String(row.data)):null;},
     get:async(collection:string)=>collection==='config'?{}:f.read(collection).map(value=>JSON.parse(value))};
+   let afterValidation = () => {};
    const session={binding:'binding',ready:{runtime:{version:{syncId:'N',syncVersion:102}}},assertCurrent:async()=>{
-     assert.equal((await f.store.getOperationalOwner())?.syncId,'N');},projectConfig:async(value:any)=>value,validate:async()=>{}};
+     assert.equal((await f.store.getOperationalOwner())?.syncId,'N');},projectConfig:async(value:any)=>value,validate:async()=>afterValidation()};
    Object.assign(globalThis,{__directClaim:{db,adapter:f.adapter,session}});
    const mocks:Record<string,string>={'../../utils/db':'export const db=globalThis.__directClaim.db;',
      '../db':'export const dbAdapter=globalThis.__directClaim.adapter;',
@@ -190,15 +191,41 @@ test('public direct claim recovery/repark/cancel keeps one native CAS identity',
    const bundled=await build({entryPoints:[new URL('../services/sync/LargeMasterSyncV3DirectTicketSource.ts',import.meta.url).pathname],bundle:true,write:false,format:'esm',platform:'node',plugins:[{name:'claim-io',setup(b){
      b.onResolve({filter:/.*/},a=>mocks[a.path]?{path:a.path,namespace:'fixture'}:undefined);b.onLoad({filter:/.*/,namespace:'fixture'},a=>({contents:mocks[a.path],loader:'js'}));}}]});
    const helper=await import('data:text/javascript;base64,'+Buffer.from(bundled.outputFiles[0].text).toString('base64'));
-   await helper.claimV3DirectTicket('waiting');
+   let authorized = false;
+   const assertOwner = (candidate: typeof ticket) => {
+     assert.equal(candidate.directSaleOwnerId, 'cashier-a');
+     if (!authorized) throw Error('DENIED');
+   };
+   await assert.rejects(helper.claimV3DirectTicket('waiting', assertOwner), /DENIED/);
+   assert.equal(f.read('v3RestoredTicketSources').length, 0);
+   authorized = true;
+   afterValidation = () => { authorized = false; };
+   await assert.rejects(helper.claimV3DirectTicket('waiting', assertOwner), /DENIED/);
+   assert.equal(f.read('v3RestoredTicketSources').length, 0);
+   authorized = true;
+   afterValidation = () => {};
+   const first = await helper.claimV3DirectTicket('waiting', assertOwner);
    assert.equal((await helper.readV3DirectWaitingTickets([ticket])).length,1);
    f.sql.exec("DELETE FROM documents WHERE collection_name='parkedTickets';");
    assert.equal((await helper.readV3DirectWaitingTickets([])).length,1);
-   await helper.claimV3DirectTicket('waiting');assert.equal(f.read('v3RestoredTicketSources').length,1);
-   await helper.updateV3DirectTicket('waiting',ticket);assert.equal(JSON.parse(f.read('v3RestoredTicketSources')[0]).state,'PARKED');
-   await helper.claimV3DirectTicket('waiting');await helper.updateV3DirectTicket('waiting');
+   f.insert('activeCartDraft', {
+     id:'waiting', status:'ACTIVE', directSaleOwnerId:'cashier-a', retainedCheckpointId:first.retainedCheckpointId,
+     total:8, selectedCustomer:{id:'client-1',name:'Cliente local'},items:[{...oldLine,quantity:2}],
+   });
+   const restarted = await helper.claimV3DirectTicket('waiting', assertOwner);
+   assert.equal(restarted.ticket.items[0].quantity,2);
+   assert.equal(restarted.ticket.customerId,'client-1');
+   assert.notEqual(restarted.retainedCheckpointId,first.retainedCheckpointId);
+   assert.equal(f.read('v3RestoredTicketSources').length,1);
+   await helper.updateV3DirectTicket('waiting',{...ticket,directSaleOwnerId:'cashier-b'});
+   const reparked=JSON.parse(f.read('v3RestoredTicketSources')[0]);
+   assert.equal(reparked.state,'PARKED');
+   assert.equal(reparked.directSaleOwnerId,'cashier-a');
+   const reopened = await helper.claimV3DirectTicket('waiting', assertOwner);
+   assert.equal(reopened.ticket.items[0].quantity,oldLine.quantity);
+   await helper.updateV3DirectTicket('waiting');
    assert.equal((await helper.readV3DirectWaitingTickets([ticket])).length,0);
-   await assert.rejects(helper.claimV3DirectTicket('waiting'),/RETAINED_TICKET_CHANGED/);
+   await assert.rejects(helper.claimV3DirectTicket('waiting', assertOwner),/RETAINED_TICKET_CHANGED/);
    assert.equal(await f.stock(),100);
   }finally{f.sql.close();}
  });
