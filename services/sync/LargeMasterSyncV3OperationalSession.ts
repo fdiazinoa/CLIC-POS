@@ -228,6 +228,16 @@ export class LargeMasterSyncV3OperationalSession {
     return pending;
   }
 
+  needsSessionRenewal(): boolean {
+    if (this.setupCredentialGuard === readOperationalTerminalBinding()) return false;
+    try {
+      const current = readLargeMasterSyncV3BoundIdentity();
+      return v3BindingKey(current, largeMasterSyncV3DownloadOrigin()) === this.binding;
+    } catch {
+      return false;
+    }
+  }
+
   async assertCurrent(): Promise<void> {
     assertLargeMasterSyncV3NativeAndroid();
     try{

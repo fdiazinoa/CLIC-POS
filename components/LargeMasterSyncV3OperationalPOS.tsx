@@ -1,3 +1,4 @@
+import { TERMINAL_SESSION_RENEWED_EVENT } from '../services/sync/OperationalTerminalConfig';
 import { resolveVariantSalesPrice } from '../utils/variantSalesPrice';
 import { v3OperationalConfigContext } from '../services/sync/LargeMasterSyncV3OperationalConfigScope';
 import {readV3CompletedReservation} from '../services/sync/LargeMasterSyncV3FinancialCommit';
@@ -82,6 +83,19 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps & { settingsSu
     ++contextSequence.current; ++querySequence.current; catalog.current = undefined;
     setCatalogRevision(previous => previous + 1);
   }, true), []);
+  useEffect(() => {
+    const renew = () => {
+      if (latestPresentation.current.suspended || !session?.needsSessionRenewal()) return;
+      ++contextSequence.current;
+      ++querySequence.current;
+      catalog.current = undefined;
+      setCatalogRevision(previous => previous + 1);
+    };
+    window.addEventListener(TERMINAL_SESSION_RENEWED_EVENT, renew);
+    // A renewal can finish while the initial catalog is still opening.
+    renew();
+    return () => window.removeEventListener(TERMINAL_SESSION_RENEWED_EVENT, renew);
+  }, [session]);
   const latestProps = useRef(props);
   latestProps.current = props;
   const terminal = props.config.terminals.find(row => row.id === props.activeTerminalId);

@@ -1,3 +1,4 @@
+import { TERMINAL_SESSION_RENEWED_EVENT } from './OperationalTerminalConfig';
 import {isTerminalAuthorizationSuperseded} from '../../utils/terminalAuthorizationGuard';
 import { Preferences } from '@capacitor/preferences';
 import type { BusinessConfig } from '../../types';
@@ -408,6 +409,7 @@ export const saveTerminalSessionCAS=(snapshot:TerminalSessionSnapshot,session:{t
         mirrorSessionDate(storage!,session.expiresAt);
         storage!.setItem('clic_erp_sync_token_updated_at',session.observation.observedAt);
         credentialWriteGeneration++;
+        if (typeof window !== 'undefined') window.dispatchEvent(new Event(TERMINAL_SESSION_RENEWED_EVENT));
     });
     credentialWriteQueue=operation.catch(()=>undefined);
     return operation;
@@ -430,6 +432,7 @@ export const projectTerminalAuthEnvelope=(before:string,after:string,assertCurre
         storage!.setItem('clic_erp_sync_token_updated_at',next.syncTokenUpdatedAt);
         projectedTerminalAuthDocument=after;
         credentialWriteGeneration++;
+        if (typeof window !== 'undefined') window.dispatchEvent(new Event(TERMINAL_SESSION_RENEWED_EVENT));
     });credentialWriteQueue=operation.catch(()=>undefined);return operation;
 };
 
