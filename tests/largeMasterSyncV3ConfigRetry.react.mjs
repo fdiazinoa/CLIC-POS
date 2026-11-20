@@ -40,6 +40,7 @@ async function fixture({initialHold,emptyCart=false}={}){
   if(outcome.fail||!env.validIdentity)throw Error('SYNC_V3_BINDING_CHANGED');
   const source={categories:async()=>{env.categoryReads.push(index);if(outcome.categories)await outcome.categories;return [{key:`C${index}`,label:`category-${index}`,count:1}];},search:async query=>query ? [{product:{id:'filtered',name:query}}] : [],get:async()=>null,findBarcode:async()=>({item:{product:{id:`P${index}`,name:`product-${index}`,price:index}}})};
   return {binding:`binding-${binding}`,ready:{runtime:{version:{syncId:'master',syncVersion:runtime}}},
+   needsSessionRenewal:()=>env.validIdentity && binding!==env.bindingVersion,
    assertSetupIdentity:()=>{if(binding!==env.bindingVersion)throw Error('SYNC_V3_BINDING_CHANGED');},assertCurrent:async()=>{
    if(env.resumeGuard)await env.resumeGuard;
    if(!env.validIdentity)throw Error('SYNC_V3_BINDING_CHANGED');
@@ -56,6 +57,22 @@ async function fixture({initialHold,emptyCart=false}={}){
 }
 const results=[];
 try{
+ // Renew the authorization without remounting the POS or changing the active ticket.
+ {const f=await fixture();try{
+  const retained=env.child.retained,old=env.child.props.v3Operational;
+  const renew=()=>window.dispatchEvent(new Event('terminalSessionRenewed'));
+  await act(async()=>renew());await settle();assert.equal(env.requests.length,1);
+  env.bindingVersion++;
+  await act(async()=>renew());await settle();assert.equal(env.requests.length,2);
+  await assert.rejects(old.resolveCode('P'),/UI_CONTEXT_CHANGED/);
+  let match;await act(async()=>{match=await env.child.props.v3Operational.resolveCode('P');});
+  assert.equal(match.product.id,'P2');
+  f.unchanged(retained);
+  env.bindingVersion++;env.validIdentity=false;
+  await act(async()=>renew());await settle();assert.equal(env.requests.length,2);
+  f.unchanged(retained);
+  results.push('session renewal reopens the POS authority without changing the ticket');
+ }finally{await f.close();}}
  // New props before rejection: replacement succeeds; the retired catch cannot overwrite it.
  {const f=await fixture();try{
   const retained=env.child.retained,old=env.child.props.v3Operational,gate=defer();

@@ -1,3 +1,5 @@
+export const TERMINAL_SESSION_RENEWED_EVENT = 'terminalSessionRenewed';
+
 type Identity = { tenantId: string; terminalId: string; posDeviceId?: string | null };
 const object = (value: unknown): value is Record<string, any> => Boolean(value && typeof value === 'object' && !Array.isArray(value));
 const ids = (value: unknown): value is string[] => Array.isArray(value) && value.length > 0
