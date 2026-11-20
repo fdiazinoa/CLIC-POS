@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { returnFixture } from './fiscalReturnConsumerFixture';
+import { fiscalWorkflowScopeKey } from '../services/fiscal/FiscalWorkflowV2Types';
 test('native RETURN commits original snapshot, enriched payments and stable events together', async (t) => {
     const f = await returnFixture();
     t.after(() => f.cleanup());
@@ -19,6 +20,29 @@ test('native RETURN commits original snapshot, enriched payments and stable even
     assert.equal(f.documents('inventoryLedger').length, 1);
     assert.equal(f.documents('inventoryLedger')[0].qtyIn, 1);
     assert.equal((f.db.prepare('SELECT state FROM pos_fiscal_pending_numbers_v2').get() as any).state, 'CONSUMED');
+});
+test('an acknowledged V1 sale does not divert the next E34 to the legacy permit path', async (t) => {
+    const f = await returnFixture();
+    t.after(() => f.cleanup());
+    const sale = {
+        checkoutId: 'acknowledged-v1',
+        transactionId: f.original.id,
+        scopeKey: fiscalWorkflowScopeKey(f.scope),
+        cartIdentity: JSON.stringify({ fiscalType: 'E32' }),
+        phase: 'ACKNOWLEDGED',
+        operationId: 'previous-sale',
+        permit: { leaseId: 'legacy-lease', permitId: 'legacy-permit' },
+        paymentIds: [f.original.payments[0].id],
+    };
+    f.db.prepare('INSERT INTO pos_fiscal_checkouts_v2(checkout_id,transaction_id,scope_key,cart_identity,permit_id,checkout_json,phase) VALUES(?,?,?,?,?,?,?)')
+        .run(sale.checkoutId, sale.transactionId, sale.scopeKey, sale.cartIdentity, sale.permit.permitId, JSON.stringify(sale), sale.phase);
+    f.db.prepare('INSERT INTO pos_fiscal_checkout_current_v2(scope_key,checkout_id) VALUES(?,?)')
+        .run(sale.scopeKey, sale.checkoutId);
+    assert.equal((await f.adapter.fiscalWorkflowStore.currentCheckout(sale.scopeKey))?.checkoutId, sale.checkoutId);
+    const tx = await f.run();
+    assert.equal(tx.ncfType, 'E34');
+    assert.equal(tx.fiscalAllocationAuthorizationId, f.grant.authorizationId);
+    assert.deepEqual(await f.adapter.fiscalWorkflowStore.readCheckout(sale.checkoutId), sale);
 });
 for (const kind of ['disabled', 'denied', 'offline'] as const)
     test(`${kind} leaves a durable pending attempt and no financial or issued-number effects`, async (t) => {

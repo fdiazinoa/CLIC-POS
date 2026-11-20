@@ -276,6 +276,20 @@ const request=async(path:string,body?:Record<string,any>,signal?:AbortSignal,tim
    if(typeof window!=='undefined')window.dispatchEvent(new CustomEvent('offlineFiscalReserveUpdated'));
   })().catch(async error=>{leasePreparationError=error instanceof Error&&/^[A-Z0-9_]+$/.test(error.message)?error.message:'OFFLINE_FISCAL_PREPARATION_FAILED';if(error instanceof Error&&/^(FISCAL_OFFLINE_(LEASE_REVOKED|BINDING_CHANGED|AUTHORITY_CHANGED|MASTER_REQUIRED)|OFFLINE_FISCAL_LEASE_REVOKED|FISCAL_WORKFLOW_(SCOPE_CHANGED|DEVICE_CHANGED|ERP_ACTIVE_REQUIRED|ASSIGNMENT_REQUIRED|ISSUER_SCOPE_REQUIRED))$/.test(error.message))await store()?.revokeOfflineLeases?.('*');throw error;}).finally(()=>{offlinePrefetch=null;});return offlinePrefetch;
  },
+ async reserveReturnCheckout(cartIdentity:string,operationId:string):Promise<FiscalWorkflowCheckoutV2>{
+  const native=store();
+  if(!native?.reserveAllocationCheckout)fail('OFFLINE_FISCAL_NATIVE_REQUIRED');
+  const authority=await readOfflineAuthority();
+  const current=await native!.currentCheckout(fiscalWorkflowScopeKey(authority.scope));
+  // Older POS builds could reserve a V1 permit before detecting the missing V2 allocation.
+  // The native abandonment proof ensures that the permit never produced financial effects.
+  if(current?.phase==='PREPARED'&&current.permit?.leaseId&&!current.allocation
+   &&current.operationId===operationId&&current.cartIdentity===cartIdentity){
+   if(!native!.abandonOfflinePrepared)fail('OFFLINE_FISCAL_ABANDON_NOT_SAFE');
+   await native!.abandonOfflinePrepared!(current);
+  }
+  return native!.reserveAllocationCheckout!(authority,cartIdentity,operationId);
+ },
  async reserveOfflineCheckout(cartIdentity:string,operationId:string,fiscalSaleContext?:TableFiscalSaleContext,dispatch?:DispatchCheckoutPreparation):Promise<FiscalWorkflowCheckoutV2>{
   const native=store();if(!native?.offlineLease)fail('OFFLINE_FISCAL_NATIVE_REQUIRED');
   const authority=await readOfflineAuthority(),scopeKey=fiscalWorkflowScopeKey(authority.scope);let current=await native.currentCheckout(scopeKey);
