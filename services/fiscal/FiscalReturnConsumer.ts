@@ -8,12 +8,13 @@ import { assertReturnAdmission, assertReturnSettlementCapability, assertReturnPr
 import { sha256Utf8 } from '../sync/LargeMasterSyncV3Client';
 import { financialIdentity } from '../db/LargeMasterSyncV3FinancialRetention';
 export function createFiscalReturnTransport(readAuth = captureFiscalStatusBoundContext, fetcher: typeof fetch = fetch) {
-    const request = async (path: string, bytes?: string, root = 'fiscal/workflow/v2/return/') => {
+    const returnPath = 'fiscal/workflow/v2/return/';
+    const request = async (path: string, bytes?: string, root = returnPath) => {
         const auth = readAuth(), controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 10000);
         try {
             auth.assertCurrent();
-            const response = await fetcher(`${auth.base}/${root}${path}`, { method: bytes === undefined ? 'GET' : 'POST', headers: { ...auth.headers, ...(bytes === undefined ? {} : { 'Content-Type': 'application/json' }) }, body: bytes, signal: controller.signal, credentials: 'omit', redirect: 'error', cache: 'no-store' });
+            const response = await fetcher(`${auth.base}/${root}${path}`, { method: bytes === undefined ? 'GET' : 'POST', headers: { ...auth.headers, ...(root === returnPath && (path === 'capability' || path === 'prepare') ? { 'X-POS-Capabilities': 'fiscalReturnConsumerFinalE32' } : {}), ...(bytes === undefined ? {} : { 'Content-Type': 'application/json' }) }, body: bytes, signal: controller.signal, credentials: 'omit', redirect: 'error', cache: 'no-store' });
             returnNeed(Number(response.headers.get('content-length') || 0) <= 2000000, 'FISCAL_RETURN_RESPONSE_INVALID');
             const text = await response.text();
             returnNeed(text.length <= 1000000, 'FISCAL_RETURN_RESPONSE_INVALID');

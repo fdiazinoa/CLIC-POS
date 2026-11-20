@@ -10,7 +10,7 @@ export const fiscalCivilDate=(value:string):string=>{
  const date=new Date(value);if(!Number.isFinite(date.getTime()))return '';
  return new Intl.DateTimeFormat('en-GB',{timeZone:'America/Santo_Domingo',day:'2-digit',month:'2-digit',year:'numeric'}).format(date).replace(/\//g,'-');
 };
-export const validateDgiiPrintContext=(context:{issuerRnc:string;environment:number;ncf:string;evidence?:FiscalPrintEvidence},tx:Transaction):FiscalPrintDisplay|undefined=>{
+export const validateDgiiPrintContext=(context:{issuerRnc:string;environment:number;ncf:string;evidence?:FiscalPrintEvidence},tx:Transaction,consumerFinalE32Return=false):FiscalPrintDisplay|undefined=>{
  const evidence=context.evidence;
  if(!evidence||evidence.schemaVersion!==1||typeof evidence.qrUrl!=='string'||evidence.qrUrl.length>4096
    ||typeof evidence.securityCode!=='string'||!/^[A-Za-z0-9+/=]{6}$/.test(evidence.securityCode)
@@ -25,15 +25,18 @@ export const validateDgiiPrintContext=(context:{issuerRnc:string;environment:num
    ||url.pathname.toLowerCase()!==`/${environmentPath}/${consumer?'consultatimbrefc':'consultatimbre'}`)return;
  const params=new Map<string,string>();
  for(const [key,value] of url.searchParams){const normalized=key.toLowerCase();if(params.has(normalized))return;params.set(normalized,value);}
- const allowed=consumer?['rncemisor','encf','montototal','codigoseguridad']:['rncemisor','rnccomprador','encf','fechaemision','montototal','fechafirma','codigoseguridad'];
+ const buyer=String(tx.customerSnapshot?.taxId||'').replace(/\D/g,'');
+ const anonymousReturn=consumerFinalE32Return&&tx.ncfType==='E34'&&ncf.startsWith('E34')
+   &&/^E32\d{10}$/.test(tx.affectedNCF||'')&&!tx.customerSnapshot?.taxId;
+ const allowed=consumer?['rncemisor','encf','montototal','codigoseguridad']
+   :['rncemisor','encf','fechaemision','montototal','fechafirma','codigoseguridad',...(anonymousReturn?[]:['rnccomprador'])];
  if([...params.keys()].some(key=>!allowed.includes(key))||allowed.some(key=>!params.has(key)))return;
  const amount=params.get('montototal')!;
  if(params.get('rncemisor')!==context.issuerRnc||params.get('encf')!==ncf||params.get('codigoseguridad')!==evidence.securityCode
    ||!/^\d+(?:\.\d{1,2})?$/.test(amount)||Math.abs(Number(amount)-Math.abs(tx.total))>=0.005)return;
  if(!consumer){
-   const buyer=String(tx.customerSnapshot?.taxId||'').replace(/\D/g,'');
    const date=fiscalCivilDate(tx.date);
-   if(!buyer||params.get('rnccomprador')!==buyer||params.get('fechaemision')!==date||params.get('fechafirma')!==evidence.signedAt)return;
+   if((!anonymousReturn&&(!buyer||params.get('rnccomprador')!==buyer))||params.get('fechaemision')!==date||params.get('fechafirma')!==evidence.signedAt)return;
  }
  return {...evidence,certifiedNcf:ncf,dgiiAccepted:false};
 };
@@ -54,7 +57,8 @@ export interface VerifiedFiscalAcceptance {schemaVersion:1;dgiiAccepted:true;dgi
 const accepted=new WeakSet<object>();
 export const isVerifiedFiscalAcceptance=(value:VerifiedFiscalAcceptance|undefined):value is VerifiedFiscalAcceptance=>Boolean(value&&accepted.has(value));
 export const resolveFiscalAcceptance=async(tx:Transaction):Promise<VerifiedFiscalAcceptance|undefined>=>{
- const state=await readVerifiedWorkflowState(tx);
+ const verifiedState=await readVerifiedWorkflowState(tx);
+ const state=verifiedState?.state;
  if(state&&['ACCEPTED','ACCEPTED_CONDITIONAL'].includes(state.decision)){const result:VerifiedFiscalAcceptance={schemaVersion:1,dgiiAccepted:true,dgiiConditional:state.decision==='ACCEPTED_CONDITIONAL'};accepted.add(Object.freeze(result));return result;}
  const scope=tx.fiscalSubmissionScope||tx.fiscalLookupApproval||tx.fiscalPrintScope;
  if(!scope||!tx.fiscalStatusProof||!await verifyFiscalStatusProof(tx.fiscalStatusProof,scope,tx))return;
@@ -66,15 +70,24 @@ async function readVerifiedWorkflowState(tx:Transaction){
  if(tx.fiscalProvider!=='MSELLER')return null;
  const {fiscalWorkflowV2Client,verifyFiscalWorkflowState}=await import('./FiscalWorkflowV2Client');
  const state=await fiscalWorkflowV2Client.cached(tx.id);
- return state&&await verifyFiscalWorkflowState(tx,state)?state:null;
+ if(!state)return null;
+ if(state.sourceKind==='RETURN_SOURCE_V1'){
+  const {dbAdapter}=await import('../db');
+  const {isConsumerFinalE32Return}=await import('./FiscalReturnV1');
+  const attempt=await dbAdapter.fiscalReturnStore?.byTransaction(tx.id)||null;
+  if(!await verifyFiscalWorkflowState(tx,state,attempt))return null;
+  return {state,consumerFinalE32:Boolean(attempt?.preparation&&isConsumerFinalE32Return(attempt.preparation))};
+ }
+ return await verifyFiscalWorkflowState(tx,state)?{state,consumerFinalE32:false}:null;
 }
 async function resolveWorkflowPrintDisplay(tx:Transaction):Promise<FiscalPrintDisplay|undefined>{
- const state=await readVerifiedWorkflowState(tx);if(!state?.signature||state.decision==='REJECTED')return;
- const effective={...tx,customerSnapshot:{...state.buyer,name:state.buyer.name||''}} as Transaction;
- const display=validateDgiiPrintContext({issuerRnc:state.issuerRnc,environment:state.environment,ncf:state.ncf,evidence:state.signature},effective);
+ const verifiedState=await readVerifiedWorkflowState(tx);
+ const state=verifiedState?.state;if(!state?.signature||state.decision==='REJECTED')return;
+ const effective=state.buyer?{...tx,customerSnapshot:{...state.buyer,name:state.buyer.name||''}} as Transaction:tx;
+ const display=validateDgiiPrintContext({issuerRnc:state.issuerRnc,environment:state.environment,ncf:state.ncf,evidence:state.signature},effective,verifiedState.consumerFinalE32);
  if(!display)return;
  display.dgiiAccepted=['ACCEPTED','ACCEPTED_CONDITIONAL'].includes(state.decision);
- display.dgiiConditional=state.decision==='ACCEPTED_CONDITIONAL';display.effectiveBuyer=Object.freeze({...state.buyer});
+ display.dgiiConditional=state.decision==='ACCEPTED_CONDITIONAL';if(state.buyer)display.effectiveBuyer=Object.freeze({...state.buyer});
  verified.add(Object.freeze(display));return display;
 }
 export const fiscalPrintTransaction=(tx:Transaction,display:FiscalPrintDisplay|undefined):Transaction=>
