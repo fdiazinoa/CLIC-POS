@@ -81,6 +81,51 @@ test('an abandoned V1 refund resumes with one durable V2 operation and preserves
     assert.equal(readAttempt().commandBytes, prepared.commandBytes);
     assert.equal(f.documents('transactions').filter(row => row.documentType === 'REFUND').length, 1);
 });
+test('an unsubmitted E34 reservation for another ticket releases its number and keeps its original attempt recoverable', async (t) => {
+    const f = await returnFixture();
+    t.after(() => f.cleanup());
+    const native = f.adapter.fiscalReturnStore!;
+    const other = { ...f.original, id: 'other-original', relatedTransactions: [] };
+    await f.adapter.saveDocument('transactions', other);
+    const cart = returnJSON({ items: other.items, customerId: null, fiscalType: 'E34',
+        originalTransactionId: other.id, serviceChargeAmount: 0 });
+    const old = await native.begin('other-slot', JSON.stringify({ originalId: other.id }), f.scope, 1);
+    const withReplacement = await native.save(old, { ...old, replacementOperationId: 'earlier-replacement' });
+    const stranded = await f.localClient.reserveReturnCheckout(cart, withReplacement.replacementOperationId!);
+    const tx = await f.run();
+    assert.equal(tx.ncfType, 'E34');
+    assert.equal(tx.ncf, stranded.allocation?.ncf);
+    const recovered = await native.get(old.id);
+    assert.equal(recovered?.phase, 'WAITING_AUTHORITY');
+    assert.equal(recovered?.financialEventId, old.financialEventId);
+    assert.notEqual(recovered?.replacementOperationId, withReplacement.replacementOperationId);
+    assert.equal((f.db.prepare('SELECT state FROM pos_fiscal_pending_numbers_v2 WHERE checkout_id=?')
+        .get(stranded.checkoutId) as any).state, 'ABANDONED');
+    assert.equal(f.preparations.size, 1);
+});
+
+test('a durable E34 command protects its reservation even when preparation failed', async (t) => {
+    const f = await returnFixture();
+    t.after(() => f.cleanup());
+    f.setDenied(true);
+    await assert.rejects(f.run());
+    const native = f.adapter.fiscalReturnStore!;
+    const checkout = await f.adapter.fiscalWorkflowStore.currentCheckout(fiscalWorkflowScopeKey(f.scope));
+    assert.ok(checkout);
+    await assert.rejects(native.releaseUnsubmittedReturn(f.scope, checkout), /FISCAL_RETURN_RECOVERY_REQUIRED/);
+    assert.deepEqual(await f.adapter.fiscalWorkflowStore.currentCheckout(checkout.scopeKey), checkout);
+    assert.equal((f.db.prepare('SELECT state FROM pos_fiscal_pending_numbers_v2 WHERE checkout_id=?')
+        .get(checkout.checkoutId) as any).state, 'PREPARED');
+});
+test('an unaccepted original cannot reserve an E34 number', async (t) => {
+    const f = await returnFixture();
+    t.after(() => f.cleanup());
+    f.parent.originalReference = null;
+    f.parent.originalReferenceReason = 'FISCAL_ORIGINAL_REFERENCE_NOT_SIGNED_ACCEPTED';
+    await assert.rejects(f.run(), /FISCAL_ORIGINAL_REFERENCE_NOT_SIGNED_ACCEPTED/);
+    assert.equal((f.db.prepare('SELECT count(*) n FROM pos_fiscal_pending_numbers_v2').get() as any).n, 0);
+    assert.equal(f.preparations.size, 0);
+});
 for (const kind of ['disabled', 'denied', 'offline'] as const)
     test(`${kind} leaves a durable pending attempt and no financial or issued-number effects`, async (t) => {
         const f = await returnFixture();

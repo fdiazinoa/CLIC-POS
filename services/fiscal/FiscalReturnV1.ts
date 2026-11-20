@@ -262,6 +262,8 @@ export function returnOperatorMessage(error: unknown): string {
     const code = (error as Error)?.message || '';
     if (/FISCAL_RETURN_.*(?:SETTLEMENT|CUSTOMER|ADVANCE|WALLET|DEBT|CREDIT|PAYMENT_ATTRIBUTION|PAYMENT_EXCEEDED)/.test(code))
         return `El ERP retuvo esta liquidación. Revisa el cliente, la deuda y la configuración de saldo; se conserva la misma operación. (${code})`;
+    if (code === 'FISCAL_RETURN_RECOVERY_REQUIRED')
+        return 'Hay una reserva fiscal pendiente que requiere revisión antes de continuar. Se conserva la devolución.';
     if (code === 'FISCAL_ORIGINAL_REFERENCE_STORAGE_UNAVAILABLE')
         return 'El ERP no pudo verificar la factura original. La devolución sigue pendiente; vuelve a consultar cuando haya conexión.';
     if (/CONFLICT|MISMATCH|PROOF|REFERENCE|SOURCE|BUYER/.test(code))

@@ -1,8 +1,9 @@
 import { createUuid } from '../../utils/uuid';
 import { assertReturnPreparation, assertReturnAdmission, buildReturnSource, returnContract, returnJSON, sameReturn, returnNeed, type ReturnAttempt } from '../fiscal/FiscalReturnV1';
-import type { FiscalWorkflowScope } from '../fiscal/FiscalWorkflowV2Types';
+import { fiscalWorkflowScopeKey, type FiscalWorkflowCheckoutV2, type FiscalWorkflowScope } from '../fiscal/FiscalWorkflowV2Types';
 import type { FinancialCommitInput } from './DatabaseAdapter';
 import { planFinancialNumbers } from './FinancialNumberReservation';
+import { assertRetirementHasNoEffects } from './FiscalWorkflowRetirementStore';
 import { financialIdentity } from './LargeMasterSyncV3FinancialRetention';
 type SQL = {
     query: (sql: string, values?: any[]) => Promise<{
@@ -23,11 +24,17 @@ CREATE TRIGGER IF NOT EXISTS pos_return_digest_proof_v1 BEFORE UPDATE ON pos_fis
 WHEN json_extract(OLD.data,'$.preparationDigestProof') IS NOT NULL AND json_extract(OLD.data,'$.preparationDigestProof') IS NOT json_extract(NEW.data,'$.preparationDigestProof')
 BEGIN SELECT RAISE(ABORT,'FISCAL_RETURN_DIGEST_WIRE_CONFLICT');END;
 CREATE TRIGGER IF NOT EXISTS pos_return_no_delete_v1 BEFORE DELETE ON pos_fiscal_return_attempts_v1 BEGIN SELECT RAISE(ABORT,'FISCAL_RETURN_RECOVERY_REQUIRED');END;
-CREATE TRIGGER IF NOT EXISTS pos_return_replacement_operation_v1 BEFORE UPDATE ON pos_fiscal_return_attempts_v1
+DROP TRIGGER IF EXISTS pos_return_replacement_operation_v1;
+CREATE TRIGGER pos_return_replacement_operation_v1 BEFORE UPDATE ON pos_fiscal_return_attempts_v1
 WHEN json_extract(OLD.data,'$.replacementOperationId') IS NOT json_extract(NEW.data,'$.replacementOperationId')
-AND (json_extract(OLD.data,'$.replacementOperationId') IS NOT NULL OR OLD.phase<>'WAITING_AUTHORITY'
- OR NEW.phase<>'WAITING_AUTHORITY' OR json_extract(OLD.data,'$.checkout') IS NOT NULL
- OR json_extract(OLD.data,'$.commandBytes') IS NOT NULL)
+AND (NEW.phase<>'WAITING_AUTHORITY' OR OLD.phase<>'WAITING_AUTHORITY'
+ OR json_extract(NEW.data,'$.replacementOperationId') IS NULL
+ OR json_extract(OLD.data,'$.checkout') IS NOT NULL OR json_extract(OLD.data,'$.commandBytes') IS NOT NULL
+ OR (json_extract(OLD.data,'$.replacementOperationId') IS NOT NULL AND NOT EXISTS(
+  SELECT 1 FROM pos_fiscal_pending_numbers_v2 p JOIN pos_fiscal_checkouts_v2 c ON c.checkout_id=p.checkout_id
+  WHERE p.state='ABANDONED' AND substr(p.ncf,1,3)='E34'
+   AND json_extract(c.checkout_json,'$.operationId')=json_extract(OLD.data,'$.replacementOperationId')
+ )))
 BEGIN SELECT RAISE(ABORT,'FISCAL_RETURN_IDENTITY_CONFLICT');END;
 CREATE TRIGGER IF NOT EXISTS pos_return_identity_v1 BEFORE UPDATE ON pos_fiscal_return_attempts_v1
 WHEN OLD.id<>NEW.id OR OLD.slot<>NEW.slot OR OLD.transaction_id IS NOT NULL AND OLD.transaction_id IS NOT NEW.transaction_id
@@ -52,6 +59,42 @@ export class NativeFiscalReturnStore {
             const pending = rows.map(r => JSON.parse(r.data) as ReturnAttempt).filter(a => sameReturn(a.scope, scope));
             returnNeed(pending.length <= 1, 'FISCAL_RETURN_RECOVERY_REQUIRED');
             return pending[0] || null;
+        });
+    }
+    releaseUnsubmittedReturn(scope: FiscalWorkflowScope, expected: FiscalWorkflowCheckoutV2) {
+        return this.transaction(async () => {
+            const sql = this.connection();
+            const scopeKey = fiscalWorkflowScopeKey(scope);
+            const row = (await sql.query(`SELECT c.checkout_json, p.state AS claim_state, p.ncf, p.transaction_id
+                FROM pos_fiscal_checkout_current_v2 active
+                JOIN pos_fiscal_checkouts_v2 c ON c.checkout_id=active.checkout_id
+                JOIN pos_fiscal_pending_numbers_v2 p ON p.checkout_id=c.checkout_id
+                WHERE active.scope_key=? AND c.scope_key=? AND c.checkout_id=? AND c.phase='PREPARED'`,
+                [scopeKey, scopeKey, expected.checkoutId])).values?.[0];
+            returnNeed(row?.claim_state === 'PREPARED' && row.ncf === expected.allocation?.ncf &&
+                row.transaction_id === expected.transactionId && sameReturn(JSON.parse(row.checkout_json), expected) &&
+                expected.phase === 'PREPARED' && expected.allocation?.ncfType === 'E34' &&
+                Array.isArray(expected.paymentIds) && !expected.paymentIds.length && !expected.offlineEffectAt,
+                'FISCAL_RETURN_RECOVERY_REQUIRED');
+            const matches = (await sql.query(`SELECT data FROM pos_fiscal_return_attempts_v1
+                WHERE coalesce(json_extract(data,'$.replacementOperationId'),json_extract(data,'$.operationId'))=?`,
+                [expected.operationId])).values || [];
+            const attempt = matches.length === 1 ? JSON.parse(matches[0].data) as ReturnAttempt : null;
+            const originalId = JSON.parse(expected.cartIdentity).originalTransactionId;
+            returnNeed(attempt?.phase === 'WAITING_AUTHORITY' && sameReturn(attempt.scope, scope)
+                && !attempt.checkout && !attempt.commandBytes && !attempt.preparation && !attempt.localCommittedAt
+                && typeof originalId === 'string' && originalId.length > 0 && JSON.parse(attempt.intent).originalId === originalId,
+                'FISCAL_RETURN_RECOVERY_REQUIRED');
+
+            // A RETURN command must be durable before the ERP request. An unsubmitted
+            // reservation can release only its number claim and current pointer.
+            await assertRetirementHasNoEffects(sql, { checkoutId: expected.checkoutId,
+                transactionId: expected.transactionId, permitId: expected.checkoutId }, { targetedQueues: true });
+            await sql.run("UPDATE pos_fiscal_pending_numbers_v2 SET state='ABANDONED' WHERE checkout_id=? AND state='PREPARED'", [expected.checkoutId], false);
+            await sql.run('DELETE FROM pos_fiscal_checkout_current_v2 WHERE scope_key=? AND checkout_id=?', [scopeKey, expected.checkoutId], false);
+            const replacement = { ...attempt!, replacementOperationId: createUuid() };
+            await sql.run("UPDATE pos_fiscal_return_attempts_v1 SET data=? WHERE id=? AND phase='WAITING_AUTHORITY'",
+                [JSON.stringify(replacement), attempt!.id], false);
         });
     }
     acknowledgeApplied(eventId: string) {
