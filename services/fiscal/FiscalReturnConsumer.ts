@@ -125,14 +125,22 @@ export function createFiscalReturnConsumer(ports: ConsumerPorts) {
                 if(selection&&!a.settlementSelection)a=await store!.save(a,{...a,settlementSelection:selection});
                 const requested=selection?[]:legacyRequested||await legacyPayments();
                 if (!a.checkout) {
+                    const parent = await ports.workflow.consult(original.id);
+                    const reference = parent.originalReference;
+                    returnNeed(reference, originalReferencePendingCode(parent.originalReferenceReason));
+                    returnNeed(parent.mode === 'WORKFLOW' && parent.sourceKind === 'ORDINARY_SOURCE_V2' && parent.signature && ['ACCEPTED', 'ACCEPTED_CONDITIONAL'].includes(parent.decision) && validOrdinaryReturnReference(original, parent), 'FISCAL_RETURN_ACCEPTED_ORIGINAL_REQUIRED');
+                    auth.assertCurrent();
                     // This genuine native reservation is PREPARED only: no issued counter, payment or stock effect.
                     const cart = returnJSON({ items: selected, customerId: original.customerId ?? null, fiscalType: 'E34', originalTransactionId: original.id,
                         serviceChargeAmount: 0, serviceType: original.serviceType, serviceTaxPolicySnapshot: original.serviceTaxPolicySnapshot });
                     const native = ports.adapter.fiscalWorkflowStore;
                     const scopeKey = fiscalWorkflowScopeKey(scope);
-                    const current = await native?.currentCheckout(scopeKey);
-                    returnNeed(!current || current.phase === 'ACKNOWLEDGED' ||
-                        current.operationId === (a.replacementOperationId ?? a.operationId), 'FISCAL_RETURN_RECOVERY_REQUIRED');
+                    let current = await native?.currentCheckout(scopeKey);
+                    if (current && current.phase !== 'ACKNOWLEDGED' &&
+                        current.operationId !== (a.replacementOperationId ?? a.operationId)) {
+                        await store!.releaseUnsubmittedReturn(scope, current);
+                        current = null;
+                    }
                     if (!a.replacementOperationId) {
                         if (current?.phase === 'PREPARED' && current.permit?.leaseId && !current.allocation &&
                             current.operationId === a.operationId && current.cartIdentity === cart) {
@@ -150,10 +158,6 @@ export function createFiscalReturnConsumer(ports: ConsumerPorts) {
                     const operationId = a.replacementOperationId ?? a.operationId;
                     const checkout = await ports.workflow.reserveReturnCheckout(cart, operationId);
                     returnNeed(checkout.allocation?.authorizationId === c.authorizationId && checkout.allocation?.authorityHash === c.authorityHash && checkout.phase === 'PREPARED' && checkout.operationId === operationId, 'FISCAL_RETURN_AUTHORITY_REQUIRED');
-                    const parent = await ports.workflow.consult(original.id);
-                    const reference = parent.originalReference;
-                    returnNeed(reference, originalReferencePendingCode(parent.originalReferenceReason));
-                    returnNeed(parent.mode === 'WORKFLOW' && parent.sourceKind === 'ORDINARY_SOURCE_V2' && parent.signature && ['ACCEPTED', 'ACCEPTED_CONDITIONAL'].includes(parent.decision) && validOrdinaryReturnReference(original, parent), 'FISCAL_RETURN_ACCEPTED_ORIGINAL_REQUIRED');
                     const command: ReturnCommand = { schemaVersion: 1, capability: 'fiscalReturnV1', operationId, checkoutId: checkout.checkoutId, transactionId: checkout.transactionId,
                         authorizationId: c.authorizationId, authorityHash: c.authorityHash, originalReference: reference!, lines,
                         payments: requested.map((p, i) => ({ ...p, id: a.paymentIds[i] })), ...(selection?{settlement:selection}:{}), financialEventId: a.financialEventId,
