@@ -12,7 +12,10 @@ export function v3ErpStockDisplayScope(terminal: BusinessConfig['terminals'][num
   if (!warehouseId || !erp?.companyId || !erp.storeId || erp.tenantId !== tenantId) return undefined;
   const warehouse = inventory?.warehouses?.find(row => row.id === warehouseId)
     ?? (inventory?.defaultWarehouse?.id === warehouseId ? inventory.defaultWarehouse : undefined);
-  const erpWarehouseId = warehouse?.erpWarehouseId || warehouseId;
+  // The snapshot normalizer can use the inventory-local alias as a fallback ERP ID.
+  const mappedErpWarehouseId = warehouse?.erpWarehouseId !== warehouse?.inventoryLocalId
+    ? warehouse?.erpWarehouseId : undefined;
+  const erpWarehouseId = mappedErpWarehouseId || warehouse?.sourceWarehouseId || warehouse?.warehouseId || warehouseId;
   return {
     erpWarehouseId,
     key: JSON.stringify([binding, terminal.id, erp.companyId, erp.storeId, warehouseId, erpWarehouseId,
