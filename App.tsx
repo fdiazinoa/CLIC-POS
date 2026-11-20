@@ -4291,6 +4291,11 @@ const AppContent: React.FC = () => {
         void syncTriggerCoordinator.request({ reason: 'ONLINE' });
         void requestConditionalTerminalConfig('connection_restored').catch((error) => {
           console.warn('[CONFIG_SYNC] connection recovery check failed; local config preserved.', error);
+        }).finally(() => {
+          // A 304 skips snapshot application but the local status can still change.
+          if (!disposed) window.dispatchEvent(new CustomEvent('terminalFiscalDocumentsUpdated', {
+            detail: { terminalId: currentTerminal.id },
+          }));
         });
       }
     };

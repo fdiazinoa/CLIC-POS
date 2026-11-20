@@ -4,6 +4,16 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { readFileSync } from 'node:fs';
 import { FiscalStatusBadge, SyncStatusBadge, TicketStatusControls, TicketTotalStatusRow } from '../components/POSStatusIndicators';
+
+test('all E32 badge variants distinguish a failed fiscal check from exhaustion', () => {
+  const status = { type: 'E32', hasNCF: false, verificationUnavailable: true };
+  for (const variant of [{ inline: true }, { compact: true }, { compact: true, short: true }]) {
+    const html = renderToStaticMarkup(<FiscalStatusBadge visible allowed={false} status={status} {...variant} />);
+    assert.match(html, /E32 Sin confirmar/);
+    assert.doesNotMatch(html, /Agotado/);
+    assert.match(html, /text-amber-700/);
+  }
+});
 import SupermarketTicketSummary from '../components/SupermarketTicketSummary';
 
 const renderSync = (online: boolean, pendingCount = 0, blockedCount = 0, hasError = false) => renderToStaticMarkup(<SyncStatusBadge online={online} state={{ pendingCount, blockedCount, hasError }} />);
@@ -59,7 +69,7 @@ test('retail placements use existing state and preserve guards and non-retail st
   const source = readFileSync(new URL('../components/POSInterface.tsx', import.meta.url), 'utf8');
   // The retained handheld layout moved fiscal badges before this task. Enforce
   // the existing three fiscal guards and all four real sync placements.
-  assert.equal((source.match(/<FiscalStatusBadge (?:inline|compact(?: short)?) visible=\{!isOrderTakerMode && !isFiscalModeDisabled\} allowed=\{canCheckoutWithFiscalPolicy\} status=\{fiscalStatus\}/g)||[]).length,3);
+  assert.equal((source.match(/<FiscalStatusBadge (?:inline|compact(?: short)?) visible=\{!isOrderTakerMode && !isFiscalModeDisabled\} allowed=\{canCheckoutWithFiscalPolicy\} status=\{fiscalDisplayStatus\}/g)||[]).length,3);
   assert.match(source,/status=\{isRetailMode && !isCompactHandheld \? <FiscalStatusBadge compact/);
   assert.match(source,/status=\{<><SyncStatusBadge[^\n]+<FiscalStatusBadge inline/);
   assert.equal((source.match(/<SyncStatusBadge online=\{navigator.onLine\} state=\{syncState\}/g) || []).length, 4);
