@@ -2335,6 +2335,7 @@ const AppContent: React.FC = () => {
     }));
   }, [currentView]);
   const [config, setConfig] = useState<BusinessConfig>(() => getInitialConfig('Supermercado' as any));
+  const v3ConfigPublication = useRef<{ renderedConfig: BusinessConfig; persistedConfigs: BusinessConfig[] }>();
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isLandscape, setIsLandscape] = useState(window.innerWidth > window.innerHeight);
 
@@ -8635,18 +8636,31 @@ const AppContent: React.FC = () => {
     const applyV3CatalogConfig = (event: Event) => {
       const update = (event as CustomEvent<{ config: BusinessConfig; authority: V3ConfigRefreshAuthority }>).detail;
       if (!update) return;
-      // The native catalog refresh already persisted and verified this projection.
-      // Update React without reinitializing sync or launching a legacy catalog pull.
+      try {
+        update.authority.assertCurrent(config);
+        update.authority.assertCurrent(update.config);
+      } catch {
+        return;
+      }
+      const previous = v3ConfigPublication.current;
+      const previousCatalogConfigs = previous?.renderedConfig === config ? previous.persistedConfigs : [];
+      const publication = { renderedConfig: config, persistedConfigs: [...previousCatalogConfigs, update.config] };
+      v3ConfigPublication.current = publication;
+
+      // Apply the verified native configuration without restarting synchronization.
       setConfig(current => {
+        if (v3ConfigPublication.current !== publication) return current;
         try {
           update.authority.assertCurrent(current);
           update.authority.assertCurrent(update.config);
           if (current === config) return update.config;
-          // Preserve fields changed by another React update in the same batch.
+          // A previous V3 setter may already have run eagerly in this batch.
           const pendingChanges = Object.fromEntries(Object.entries(current)
             .filter(([key, value]) => {
-              const previous = config[key as keyof BusinessConfig];
-              return !Object.is(value, previous) && JSON.stringify(value) !== JSON.stringify(previous);
+              const field = key as keyof BusinessConfig;
+              const matches = (candidate: BusinessConfig) => Object.is(value, candidate[field])
+                || JSON.stringify(value) === JSON.stringify(candidate[field]);
+              return !matches(config) && !previousCatalogConfigs.some(matches);
             }));
           return { ...update.config, ...pendingChanges };
         } catch {
