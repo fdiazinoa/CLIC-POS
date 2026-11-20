@@ -413,8 +413,10 @@ class SyncManager {
                 async () => await db.get('config') as unknown as BusinessConfig);
             assertBinding();
             await persistLargeMasterSyncV3ConfigPushCatalog(assertBinding, authority);
+            const config = await db.get('config') as unknown as BusinessConfig;
             assertBinding();
-            window.dispatchEvent(new CustomEvent('v3CatalogUpdated'));
+            authority.assertCurrent(config);
+            window.dispatchEvent(new CustomEvent('v3CatalogUpdated', { detail: { config, authority } }));
             window.dispatchEvent(new CustomEvent('configUpdated'));
         });
         this.v3CatalogRefresh = { binding, promise };
@@ -510,6 +512,7 @@ class SyncManager {
     private terminalConfigRefreshQueue: Promise<void> = Promise.resolve();
     private erpSecurityApplyQueue: Promise<void> = Promise.resolve();
     private lastBackgroundTerminalManifestSyncAt = 0;
+    private lastV3BackgroundManifestSuccess: { binding: string; at: number } | null = null;
     private readyToSellStartedAt = 0;
     private readyToSellState: {
         readyToSell: boolean;
@@ -2437,6 +2440,8 @@ class SyncManager {
             explicitV3Refresh?: boolean;
             bootstrapBlocks?: boolean;
             deferDuringSale?: boolean;
+            assertV3Binding?: () => void;
+            onV3ManifestReconciled?: () => void;
         }
     ): Promise<BusinessConfig | null> {
         if (this.isDisabled || this.terminalManifestSyncInFlight || !navigator.onLine) {
@@ -2450,6 +2455,7 @@ class SyncManager {
             return null;
         }
 
+        options?.assertV3Binding?.();
         const context = this.getActiveTerminalContext(baseConfig);
         const localTerminalId = context.localTerminalId || context.terminalId;
         if (!context.terminalId || !localTerminalId || !context.tenantId) {
@@ -2735,6 +2741,7 @@ class SyncManager {
                     this.markStartupManifestSyncCompleted(localTerminalId);
                 }
                 refreshErpStockDisplay();
+                if (v3Authority) options?.onV3ManifestReconciled?.();
                 return v3RefreshedConfig;
             }
 
@@ -2891,6 +2898,7 @@ class SyncManager {
 
             assertManifestBinding();
             if (!terminalChanged || refreshedConfig) refreshErpStockDisplay();
+            if (v3Authority && (!shouldRefreshTerminalConfig || refreshedConfig)) options?.onV3ManifestReconciled?.();
             return refreshedConfig || v3RefreshedConfig;
         } finally {
             this.terminalManifestSyncInFlight = false;
@@ -3354,7 +3362,13 @@ class SyncManager {
             reason?: 'startup' | 'connection_restored' | 'app_resumed' | 'manual_sync' | 'force_sync' | 'periodic_manifest' | 'realtime';
         }
     ): Promise<BusinessConfig | null> {
-        const binding = usesLargeMasterSyncV3Authority(syncPolicy.resolve().kind) ? JSON.stringify(readLargeMasterSyncV3BoundIdentity()) : '';
+        const v3Authority = usesLargeMasterSyncV3Authority(syncPolicy.resolve().kind);
+        const readBinding = () => JSON.stringify([readLargeMasterSyncV3BoundIdentity(),
+            readOperationalTerminalBinding(), largeMasterSyncV3DownloadOrigin()]);
+        const binding = v3Authority ? readBinding() : '';
+        const assertV3Binding = () => {
+            if (readBinding() !== binding) throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
+        };
         if (this.backgroundManifestFlight) {
             if(this.backgroundManifestFlight.binding !== binding) throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
             return this.backgroundManifestFlight.promise;
@@ -3362,9 +3376,12 @@ class SyncManager {
         const startedAt = Date.now();
         const reason = options?.reason || 'periodic_manifest';
         const isExplicitRefresh = reason === 'manual_sync' || reason === 'force_sync';
-        if (!isExplicitRefresh && startedAt - this.lastBackgroundTerminalManifestSyncAt < 60_000) {
-            return null;
-        }
+        const lastV3Success = this.lastV3BackgroundManifestSuccess;
+        const recentlyReconciled = v3Authority
+            ? lastV3Success?.binding === binding && startedAt - lastV3Success.at < 60_000
+            : startedAt - this.lastBackgroundTerminalManifestSyncAt < 60_000;
+        const v3LifecycleCheck = v3Authority && (reason === 'startup' || reason === 'app_resumed' || reason === 'connection_restored');
+        if (!isExplicitRefresh && !v3LifecycleCheck && recentlyReconciled) return null;
         const promise = Promise.resolve().then(async () => { try {
             const result = await this.reconcileTerminalManifest(baseConfig ?? null, {
                 skipIfStartupCompleted: false,
@@ -3372,8 +3389,13 @@ class SyncManager {
                 explicitV3Refresh: isExplicitRefresh,
                 bootstrapBlocks: Boolean(options?.bootstrapBlocks),
                 deferDuringSale: true,
+                assertV3Binding: v3Authority ? assertV3Binding : undefined,
+                onV3ManifestReconciled: v3Authority ? () => {
+                    assertV3Binding();
+                    this.lastV3BackgroundManifestSuccess = { binding, at: Date.now() };
+                } : undefined,
             });
-            this.lastBackgroundTerminalManifestSyncAt = Date.now();
+            if (!v3Authority) this.lastBackgroundTerminalManifestSyncAt = Date.now();
             try { await this.refreshErpPaymentMethods(); }
             catch (error) { console.warn('Payment methods refresh failed; keeping saved methods:', error); }
             console.info('[SYNC_FALLBACK]', {
