@@ -12,6 +12,7 @@ test('real editor distinguishes authorized lower/higher prices from explicit dis
   const react = {
     createElement: (type: unknown, props: any, ...children: any[]) => ({ type, props: { ...props, children } }),
     useMemo: (fn: () => any) => fn(),
+    useSyncExternalStore: (_subscribe: unknown, getSnapshot: () => number | undefined) => getSnapshot(),
     useState: (initial: any) => { const index = cursor++; if (!(index in values)) values[index] = typeof initial === 'function' ? initial() : initial;
       return [values[index], (next: any) => { values[index] = typeof next === 'function' ? next(values[index]) : next; }]; },
   };
@@ -39,15 +40,29 @@ test('real editor distinguishes authorized lower/higher prices from explicit dis
       ['DISCOUNT','10',315,'MANUAL_DISCOUNT',35],
     ] as const) {
       values=[];
-      const item={id:'P',cartId:'L',name:'EYE LINER',price:350,originalPrice:350,quantity:1};
+      const item={id:'P',cartId:'L',name:'EYE LINER',price:350,originalPrice:350,quantity:1,stock:7};
       let saved:any;
-      const props={item,config:{currencySymbol:'RD$'},users:[],roles:[],onClose(){},onUpdate(value:any){saved=value;},canApplyDiscount:true,canOverridePrice:true,canEditQuantity:true,canVoidItem:true};
+      let erpStock: number | undefined = 49;
+      const props={item,readCartItemErpAvailableStock:(itemId:string)=>itemId===item.id?erpStock:undefined,
+        config:{currencySymbol:'RD$'},users:[],roles:[],onClose(){},onUpdate(value:any){saved=value;},canApplyDiscount:true,canOverridePrice:true,canEditQuantity:true,canVoidItem:true};
       const render=()=>{cursor=0;return component(props);};
       let tree=render();
+      const badge=find(tree,n=>n.props?.className==='text-lg font-black text-blue-700').props.children[0];
+      for (const [stock, displayed] of [[49,49],[0,0],[undefined,7]] as const) {
+        erpStock=stock;
+        const [quantity, , source]=badge.type(badge.props).props.children;
+        assert.equal(quantity,displayed);
+        assert.equal(source?.props?.children?.[0],stock===undefined?undefined:'ERP');
+      }
+      cursor=0;
+      const legacy=component({...props,readCartItemErpAvailableStock:undefined});
+      assert.deepEqual(find(legacy,n=>n.props?.className==='text-lg font-black text-blue-700').props.children[0].props.children,[7,' u.']);
+      erpStock=49;
       const field=find(tree,n=>n.type==='input'&&n.props?.value===(mode==='PRICE'?'350':''));
       assert.ok(field);field.props.onChange({target:{value:input}});
       tree=render();find(tree,n=>n.props?.onClick?.name==='handleSave').props.onClick();
       assert.equal(saved.price,expectedPrice);assert.equal(saved.originalPrice,350);
+      assert.equal(saved.stock,item.stock);
       assert.equal(saved.adjustmentSource,expectedSource);
       assert.equal(saved.discountAmount||0,expectedDiscount);
       assert.equal(resolveLineDiscountPresentation(saved).discountAmount,expectedDiscount);

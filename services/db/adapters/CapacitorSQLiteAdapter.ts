@@ -34,6 +34,7 @@ import type { FormatSQL,FormatStatement } from '../../articleFormats/store';
 import { getEffectiveFiscalComplianceConfig, getProviderEnvironment } from '../../../utils/fiscal/fiscalHelpers';
 import { validateV3FiscalMetadataMutation,validateFiscalDispatchClaimBatch } from '../LargeMasterSyncV3FiscalMetadata';
 import { v3ArticleSemantics, v3RetainedLineFingerprint } from '../../sync/LargeMasterSyncV3StockAuthority';
+import { v3RestaurantContract } from '../../../utils/v3RestaurantContract';
 import { SYNC_MONITOR_PAGE_SQL, syncMonitorPageParams, decodeSyncMonitorPage, type SyncMonitorPageRequest } from '../SyncMonitorPage';
 import { Capacitor } from '@capacitor/core';
 import type {
@@ -1625,27 +1626,64 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         });
     }
 
-    /** Missing cells remain zero only for an anchored, unchanged base product with current canonical permission. */
+    /** A catalog assignment can be newer than its retained inventory baseline. */
     private async assertKnownSparseNegativeArticle(
-        read:(sql:string,values:any[])=>Promise<{values?:any[]}>,line:any,warehouseId:string,inventoryVersion:number,
-        current:{syncId:string;syncVersion:number;binding:string},
+        read: (sql: string, values: any[]) => Promise<{ values?: any[] }>,
+        line: any, warehouseId: string, inventory: { syncId: string; syncVersion: number },
+        current: { syncId: string; syncVersion: number }, hasSpecialSource: boolean,
     ):Promise<void> {
-        const denied=()=>new Error('SYNC_V3_INVENTORY_COVERAGE_REQUIRED');
-        const stamp=line.v3SaleAuthority;
-        if(stamp?.syncId!==current.syncId||stamp.syncVersion!==current.syncVersion||line.variantId||line.variantSku)throw denied();
-        const records=(await read('SELECT sync_version,record_json FROM master_v3_articles WHERE article_id=? AND sync_version IN (?,?)',
-            [line.id,inventoryVersion,current.syncVersion])).values || [];
-        const anchored=records.filter(r=>r.sync_version===inventoryVersion),selected=records.filter(r=>r.sync_version===current.syncVersion);
-        if(anchored.length!==1||selected.length!==1)throw denied();
-        let original:any,source:any;
-        try{original=JSON.parse(anchored[0].record_json);source=JSON.parse(selected[0].record_json);}catch{throw denied();}
-        if(!original||!source||Array.isArray(original)||Array.isArray(source)||original.id!==line.id||source.id!==line.id
-            ||source.type!=='PRODUCT'||source.inventoriable!==true||source.active===false||source.sellable===false
-            ||source.operationalFlags?.trackInventory!==true||source.operationalFlags?.allowNegativeStock!==true
-            ||['isWeighted','usesLots','usesSerial'].some(flag=>source.operationalFlags?.[flag]===true)
-            ||!Array.isArray(original.activeWarehouseIds)||!original.activeWarehouseIds.includes(warehouseId)
-            ||!Array.isArray(source.activeWarehouseIds)||!source.activeWarehouseIds.includes(warehouseId)
-            ||v3ArticleSemantics(original)!==v3ArticleSemantics(source))throw denied();
+        const denied = () => new Error('SYNC_V3_INVENTORY_COVERAGE_REQUIRED');
+        const stamp = line.v3SaleAuthority;
+        if (stamp?.syncId !== current.syncId || stamp.syncVersion !== current.syncVersion || line.variantId || line.variantSku) throw denied();
+        const records = (await read('SELECT sync_version,record_json FROM master_v3_articles WHERE article_id=? AND sync_version IN (?,?)',
+            [line.id, inventory.syncVersion, current.syncVersion])).values || [];
+        const anchored = records.filter(row => row.sync_version === inventory.syncVersion);
+        const selected = records.filter(row => row.sync_version === current.syncVersion);
+        if (anchored.length > 1 || selected.length !== 1) throw denied();
+
+        let original: Record<string, any> | undefined;
+        let source: Record<string, any>;
+        try {
+            source = JSON.parse(selected[0].record_json);
+            if (anchored.length) original = JSON.parse(anchored[0].record_json);
+        } catch { throw denied(); }
+        if (!source || Array.isArray(source) || source.id !== line.id
+            || source.type !== 'PRODUCT' || source.inventoriable !== true || source.active === false || source.sellable === false
+            || source.operationalFlags?.trackInventory !== true || source.operationalFlags?.allowNegativeStock !== true
+            || ['isWeighted', 'usesLots', 'usesSerial'].some(flag => source.operationalFlags?.[flag] === true)
+            || !Array.isArray(source.activeWarehouseIds) || !source.activeWarehouseIds.includes(warehouseId)) throw denied();
+        if (anchored.length && (!original || Array.isArray(original) || original.id !== line.id
+            || !Array.isArray(original.activeWarehouseIds) || v3ArticleSemantics(original) !== v3ArticleSemantics(source))) throw denied();
+        if (original?.activeWarehouseIds.includes(warehouseId)) return;
+
+        // The newly covered path only applies to an ordinary direct sale under current article authority.
+        if (hasSpecialSource || source.active !== true || source.sellable !== true
+            || source.article_formats != null || source.articleFormats != null
+            || ((source.tracking_contract_version !== undefined || source.tracking_authorities !== undefined)
+                && (source.tracking_contract_version !== 1 || !Array.isArray(source.tracking_authorities)
+                    || source.tracking_authorities.length !== 0))
+            || source.kitInventoryMode === 'COMPONENTS' || source.kit_inventory_mode === 'COMPONENTS'
+            || [source.recipeDetails, source.recipe_details].some(recipe => recipe != null && (!Array.isArray(recipe) || recipe.length > 0))
+            || line.inventoryPresentation || line.articleFormat || line.articleFormatSnapshot || line.formatWireLine
+            || line.trackingData?.length || line.recipeDetails?.length || line.kitInventoryMode === 'COMPONENTS'
+            || line.selected_combo_items?.length || line.selected_modifiers?.length || line.selected_fraction_parts?.length) throw denied();
+        try {
+            const restaurant = v3RestaurantContract(source);
+            if (restaurant.production_area_id || restaurant.product_type === 'SERVICE' || restaurant.combo_groups?.length
+                || restaurant.modifier_groups?.length || restaurant.fraction_rule) throw denied();
+        } catch { throw denied(); }
+        if (original) return;
+
+        // An absent article is only evidence of a new item when the old dataset is still complete.
+        const retained = await read(`SELECT 1 FROM sync_v3_sessions s
+          JOIN sync_v3_dataset_progress d ON d.sync_id=s.sync_id AND d.dataset='articles'
+          WHERE s.sync_id=? AND s.sync_version=? AND s.contract_version>=2 AND s.status IN ('ACTIVE','ROLLED_BACK')
+          AND d.status='VALIDATED' AND d.applied_count=d.expected_count AND d.applied_chunks=d.expected_chunks
+          AND d.expected_count=(SELECT COUNT(*) FROM master_v3_articles WHERE sync_version=s.sync_version)
+          AND d.expected_chunks=(SELECT COUNT(*) FROM sync_v3_chunks WHERE sync_id=s.sync_id AND dataset=d.dataset)
+          AND d.expected_count=(SELECT COALESCE(SUM(record_count),0) FROM sync_v3_chunks WHERE sync_id=s.sync_id AND dataset=d.dataset)`,
+          [inventory.syncId, inventory.syncVersion]);
+        if (!retained.values?.length) throw denied();
     }
 
     private async assertV3FinancialBaseline(documents: DurableDocumentMutation[]): Promise<void> {
@@ -1745,7 +1783,8 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
                 && line.isInventoriable && line.operationalFlags?.trackInventory !== false && line.type !== 'SERVICE') {
                 const coverage = await read('SELECT item_id FROM master_v3_inventory_balances WHERE item_id=? AND warehouse_id=?', [line.id,document.v3WarehouseId]);
                 if (!coverage.values?.length) {
-                  await this.assertKnownSparseNegativeArticle(read,line,document.v3WarehouseId,syncVersion,current);
+                  await this.assertKnownSparseNegativeArticle(read, line, document.v3WarehouseId, { syncId, syncVersion }, current,
+                    Boolean(mutation.v3ExpectedRetainedDocument || document.articleFormatEventId || document.restaurantOrderId));
                 }
               }
               const stamp = line.v3SaleAuthority;

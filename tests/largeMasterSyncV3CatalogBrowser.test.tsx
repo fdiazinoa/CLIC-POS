@@ -7,8 +7,11 @@ import { LARGE_MASTER_SYNC_V3_SCHEMA_SQL } from '../services/db/LargeMasterSyncV
 import { LargeMasterSyncV3SqliteStore } from '../services/db/LargeMasterSyncV3SqliteStore';
 import { LargeMasterSyncV3CatalogRead, useV3CatalogBrowser } from '../services/sync/LargeMasterSyncV3CatalogRead';
 import { v3BindingKey, v3InventoryBaselineKey } from '../services/sync/LargeMasterSyncV3OperationalSession';
+import { v3ErpStockDisplay, v3ErpStockDisplayScope } from '../services/sync/LargeMasterSyncV3ErpStockDisplay';
 import { createV3CatalogView } from '../services/sync/LargeMasterSyncV3CatalogView';
 import CatalogManager, { V3CatalogPageView } from '../components/LargeMasterSyncV3CatalogManager';
+import { getInitialConfig } from '../constants';
+import { applyTerminalConfigSnapshot } from '../utils/terminalConfigSnapshot';
 import type { BusinessConfig, Warehouse } from '../types';
 
 const version = { syncId: 'S', syncVersion: 2, contractVersion: 2 };
@@ -229,4 +232,101 @@ test('five administrative IDs remain distinct from SKU/ERP category and filter b
   const reader=await LargeMasterSyncV3CatalogRead.open(()=>f.context,f.deps);assert.equal((await reader.page({posCategoryId:'pos-id'})).filteredTotal,65);
   assert.equal((await reader.page({posCategoryId:'REF0'})).filteredTotal,0);assert.equal(f.writes(),0);assert.ok(f.queries.every(row=>row.length<=100));
  }finally{f.sql.close();}
+});
+
+test('MS0001 displays 50 from ERP after refresh without adopting SQLite inventory or adding the local ledger', async () => {
+  const f = fixture();
+  try {
+    const terminal = f.context.config.terminals[0];
+    Object.assign(terminal.config, { erpBinding: { tenantId: identity.tenantId, companyId: 'mykon', storeId: 'mega-centro' } });
+    f.sql.exec("UPDATE master_v3_articles SET sku='MS0001' WHERE sync_version=2 AND article_id='P000002'");
+    const reader = await LargeMasterSyncV3CatalogRead.open(() => f.context, f.deps);
+    const initial = (await reader.page({ query: 'MS0001' })).rows[0];
+    assert.equal(initial.stock, null);
+    assert.equal(initial.balance, null);
+    assert.equal(initial.stockSource, undefined);
+    const scope = v3ErpStockDisplayScope(terminal, identity.tenantId, v3BindingKey(identity, origin), version)!;
+    await v3ErpStockDisplay.refresh(async () => scope, async () => ({
+      version: 1, cursor: 'erp-count', balances: [
+        { item_id: 'P000002', warehouse_id: 'W', qty_on_hand: 50, qty_reserved: 0, qty_committed: 0, updated_at: 'now' },
+        { item_id: 'P000002', warehouse_id: 'OTHER', qty_on_hand: 99, qty_reserved: 0, qty_committed: 0, updated_at: 'now' },
+        { item_id: 'P000000', warehouse_id: 'W', qty_on_hand: 0, qty_reserved: 0, qty_committed: 0, updated_at: 'now' },
+      ],
+    }));
+    const start = f.queries.length;
+    const updatedPage = await reader.page({ query: 'MS0001' });
+    const updated = updatedPage.rows[0];
+    assert.deepEqual([updated.stock, updated.balance, updated.stockSource], [50, 50, 'ERP']);
+    assert.deepEqual(
+      (({ stock, balance, stockSource }) => [stock, balance, stockSource])((await reader.page({ query: 'REF0' })).rows[0]),
+      [0, 0, 'ERP'],
+    );
+    assert(!f.queries.slice(start).some(query => query.sql.includes("collection_name = 'inventoryLedger'")));
+    assert.match(renderToStaticMarkup(<V3CatalogPageView state={{ status: 'ready', page: updatedPage }} />), /50.*ERP/);
+    assert.equal(f.writes(), 0);
+    assert.equal((await f.store.getInventoryAuthority())?.cursor, 'C');
+
+    terminal.config.erpBinding!.companyId = 'other-company';
+    await assert.rejects(reader.page({ query: 'MS0001' }), {code:'SYNC_V3_CATALOG_CONTEXT_CHANGED'});
+    const foreign = await LargeMasterSyncV3CatalogRead.open(() => f.context, f.deps);
+    assert.equal((await foreign.page({ query: 'MS0001' })).rows[0].stockSource, undefined);
+  } finally { f.sql.close(); }
+});
+
+test('ERP stock uses the selected warehouse ID when Caja 6 receives a separate inventory-local alias', async () => {
+  const f = fixture();
+  try {
+    const terminal = f.context.config.terminals[0];
+    const rawWarehouse = { id: 'W', name: 'Almacén Central', inventory_local_id: 'central-alias' };
+    const normalized = applyTerminalConfigSnapshot(getInitialConfig('Supermercado'), {
+      terminalId: terminal.id,
+      posDeviceId: identity.deviceId,
+      incomingSnapshot: {
+        terminal_id: identity.terminalId,
+        resolved: {
+          identity: { terminal_id: identity.terminalId, tenant_id: identity.tenantId, company_id: 'company-6', store_id: 'store-6' },
+          inventory: { default_warehouse_id: 'W', default_warehouse: rawWarehouse, allowed_warehouse_ids: ['W'], warehouses: [rawWarehouse] },
+        },
+      },
+    }).config.terminals.find(row => row.id === terminal.id)!;
+    terminal.config.inventoryScope = normalized.config.inventoryScope;
+    terminal.config.erpBinding = normalized.config.erpBinding;
+    const selected = terminal.config.inventoryScope!.warehouses![0];
+    assert.equal(selected.erpWarehouseId, 'central-alias', 'preexisting normalizer produces the alias');
+    assert.equal(selected.sourceWarehouseId, undefined);
+
+    f.sql.exec("UPDATE master_v3_articles SET sku='C001-05' WHERE sync_version=2 AND article_id='P000002'");
+    const binding = v3BindingKey(identity, origin);
+    const scope = v3ErpStockDisplayScope(terminal, identity.tenantId, binding, version)!;
+    assert.equal(scope.erpWarehouseId, 'W');
+    await v3ErpStockDisplay.refresh(async () => scope, async () => ({
+      version: 1, cursor: 'erp-count', balances: [
+        { item_id: 'P000002', warehouse_id: 'W', qty_on_hand: 49, qty_reserved: 0, qty_committed: 0, updated_at: 'now' },
+        { item_id: 'P000002', warehouse_id: 'central-alias', qty_on_hand: 99, qty_reserved: 0, qty_committed: 0, updated_at: 'now' },
+        { item_id: 'P000002', warehouse_id: 'OTHER', qty_on_hand: 11, qty_reserved: 0, qty_committed: 0, updated_at: 'now' },
+      ],
+    }));
+    const reader = await LargeMasterSyncV3CatalogRead.open(() => f.context, f.deps);
+    const row = (await reader.page({ query: 'C001-05' })).rows[0];
+    assert.deepEqual([row.stock, row.balance, row.stockSource], [49, 49, 'ERP']);
+    assert.equal(f.writes(), 0);
+
+    const mappings: Array<{ fields: Partial<Warehouse>; expected: string }> = [
+      { fields: { sourceWarehouseId: 'explicit-source' }, expected: 'explicit-source' },
+      { fields: { sourceWarehouseId: 'central-alias' }, expected: 'central-alias' },
+      { fields: { erpWarehouseId: 'explicit-erp', sourceWarehouseId: 'explicit-source' }, expected: 'explicit-erp' },
+      { fields: { warehouseId: 'canonical-warehouse' }, expected: 'canonical-warehouse' },
+    ];
+    for (const { fields, expected } of mappings) {
+      const mapped = structuredClone(terminal);
+      Object.assign(mapped.config.inventoryScope!.warehouses![0], fields);
+      assert.equal(v3ErpStockDisplayScope(mapped, identity.tenantId, binding, version)?.erpWarehouseId, expected);
+    }
+
+    for (const change of [{ companyId: 'other-company' }, { storeId: 'other-store' }]) {
+      const foreign = structuredClone(terminal);
+      Object.assign(foreign.config.erpBinding!, change);
+      assert.equal(v3ErpStockDisplay.read(v3ErpStockDisplayScope(foreign, identity.tenantId, binding, version), row.id), undefined);
+    }
+  } finally { f.sql.close(); }
 });

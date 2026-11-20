@@ -40,3 +40,73 @@ test('startup retains security validation and uses bounded configuration with ba
   assert.match(startup, /await syncManager\.refreshErpPosUserRoster/);
   assert.match(startup, /requestTimeoutMs: 8_000,\s*supplementalMode: 'background'/);
 });
+
+const v3Handler = app.slice(app.indexOf('    const applyV3CatalogConfig ='),
+  app.indexOf("    window.addEventListener('v3CatalogUpdated', applyV3CatalogConfig"));
+const v3HandlerCode = ts.transpile(`${v3Handler}
+applyV3CatalogConfig;`, { target: ts.ScriptTarget.ES2022 });
+
+test('V3 catalog publication applies persisted config and preserves a batched unrelated edit', () => {
+  const config = { terminals: [{ id: 'T1', warehouse: 'W1' }], tariffs: ['old'], currencySymbol: '$' };
+  const persisted = { ...config, terminals: [{ id: 'T1', warehouse: 'W2' }], tariffs: ['new'] };
+  const pending = { ...config, terminals: [{ ...config.terminals[0] }], currencySymbol: 'RD$' };
+  let applied: typeof config = pending;
+  const apply = runInNewContext(v3HandlerCode, {
+    config,
+    v3ConfigPublication: { current: undefined },
+    setConfig(update: (value: typeof config) => typeof config) {
+      applied = update(applied);
+    },
+  });
+  const detail = { config: persisted, authority: { assertCurrent(value: typeof config) {
+    if (value.terminals[0].id !== 'T1') throw Error('SYNC_V3_BINDING_CHANGED');
+  } } };
+
+  apply({ detail: undefined });
+  assert.equal(applied, pending);
+  apply({ detail });
+  assert.equal(applied.tariffs, persisted.tariffs);
+  assert.equal(applied.terminals, persisted.terminals);
+  assert.equal(applied.currencySymbol, pending.currencySymbol);
+
+  const newer = { ...pending, terminals: [{ id: 'T1', warehouse: 'W3' }] };
+  applied = newer;
+  apply({ detail });
+  assert.equal(applied.terminals, newer.terminals);
+
+  const otherTerminal = { ...config, terminals: [{ id: 'T2', warehouse: 'W2' }] };
+  applied = otherTerminal;
+  apply({ detail });
+  assert.equal(applied, otherTerminal);
+});
+
+for (const eager of [false, true]) {
+  test(`latest V3 catalog publication wins in the same React batch (eager=${eager})`, () => {
+    const config = { terminals: [{ id: 'T1', warehouse: 'W1' }], tariffs: ['T1'], currencySymbol: '$' };
+    const first = { ...config, terminals: [{ id: 'T1', warehouse: 'W2' }], tariffs: ['T2'] };
+    const latest = { ...config, terminals: [{ id: 'T1', warehouse: 'W3' }], tariffs: ['T3'] };
+    let applied = config;
+    const queued: Array<(value: typeof config) => typeof config> = [];
+    const apply = runInNewContext(v3HandlerCode, {
+      config,
+      v3ConfigPublication: { current: undefined },
+      setConfig(update: (value: typeof config) => typeof config) { queued.push(update); },
+    });
+    const authority = { assertCurrent(value: typeof config) {
+      if (value.terminals[0].id !== 'T1') throw Error('SYNC_V3_BINDING_CHANGED');
+    } };
+
+    apply({ detail: { config: first, authority } });
+    if (eager) {
+      applied = queued.shift()!(applied);
+      assert.equal(applied.tariffs, first.tariffs);
+    }
+    queued.push(current => ({ ...current, currencySymbol: 'RD$' }));
+    apply({ detail: { config: latest, authority } });
+    for (const update of queued) applied = update(applied);
+
+    assert.equal(applied.terminals, latest.terminals);
+    assert.equal(applied.tariffs, latest.tariffs);
+    assert.equal(applied.currencySymbol, 'RD$');
+  });
+}

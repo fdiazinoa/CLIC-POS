@@ -40,7 +40,7 @@ export function V3CatalogPageView({ state, config }: { state: V3CatalogViewState
         {row.categoryId?.trim() ? ` · Categoría ERP: ${row.categoryId}` : ' · Categoría ERP sin asignar'}{row.type ? ` · ${row.type}` : ''}</div></td>
       <td>{row.active ? 'Activo' : 'Inactivo'} · {row.sellable ? 'Vendible' : 'No vendible'}</td>
       <td>{row.price === null ? 'Sin precio' : row.price.toFixed(2)}</td>
-      <td>{row.stock ?? 0}</td>
+      <td>{row.stock ?? 0} <small>{row.stockSource === 'ERP' ? 'ERP' : 'Local'}</small></td>
       <td>{row.balance ?? 0}</td>
     </tr>)}</tbody></table></div>
     {selected && (
@@ -62,7 +62,7 @@ export function V3CatalogPageView({ state, config }: { state: V3CatalogViewState
             <div><dt className="text-[11px] font-bold uppercase tracking-wide text-slate-400">Precio de tarifa</dt>
               <dd className="font-bold text-slate-800">{selected.price === null ? 'Sin precio' : selected.price.toFixed(2)}</dd></div>
             <div><dt className="text-[11px] font-bold uppercase tracking-wide text-slate-400">Stock del almacén</dt>
-              <dd className="font-bold text-slate-800">{selected.stock ?? 0}</dd></div>
+              <dd className="font-bold text-slate-800">{selected.stock ?? 0} <small>{selected.stockSource === 'ERP' ? 'ERP' : 'Local'}</small></dd></div>
             <div><dt className="text-[11px] font-bold uppercase tracking-wide text-slate-400">Disponible</dt>
               <dd className="font-bold text-slate-800">{selected.balance ?? 0}</dd></div>
           </dl>
@@ -96,15 +96,17 @@ export default function LargeMasterSyncV3CatalogManager(props: {
   const [cursors, setCursors] = useState<Array<string | null>>([null]);
   const terminal = props.config.terminals.find(row => row.id === props.terminalId);
   const contextKey = JSON.stringify([props.terminalId, terminal?.config.currentDeviceId, terminal?.config.erpTerminalId,
-    terminal?.config.pricing?.defaultTariffId, terminal?.config.inventoryScope?.defaultSalesWarehouseId,
-    props.warehouses]);
+    terminal?.config.erpBinding?.tenantId, terminal?.config.erpBinding?.companyId, terminal?.config.erpBinding?.storeId,
+    terminal?.config.pricing?.defaultTariffId, terminal?.config.inventoryScope, props.warehouses]);
   const [catalogRevision, setCatalogRevision] = useState(0);
   useEffect(() => {
     const refresh = () => {
       view.cancel(); reader.current = undefined;
       setCursors([null]); setCatalogRevision(previous => previous + 1);
     };
-    return subscribeLargeMasterSyncV3CatalogUpdates(refresh);
+    const unsubscribe = subscribeLargeMasterSyncV3CatalogUpdates(refresh);
+    window.addEventListener('v3ErpStockDisplayUpdated', refresh);
+    return () => { unsubscribe(); window.removeEventListener('v3ErpStockDisplayUpdated', refresh); };
   }, [view]);
   const oldContext = useRef(contextKey);
   const reader = useRef<Promise<LargeMasterSyncV3CatalogRead>>();
@@ -134,7 +136,7 @@ export default function LargeMasterSyncV3CatalogManager(props: {
   const visible = oldContext.current === contextKey ? state : { status: 'loading' as const };
   return <section className="h-full overflow-auto bg-white p-6 text-slate-900">
     <header className="flex items-center justify-between gap-4 border-b border-slate-200 pb-3"><h1 className="text-xl font-black text-slate-900">Maestro de Artículos</h1><button type="button" onClick={props.onClose} className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-bold text-slate-700 hover:bg-slate-50">Cerrar</button></header>
-    <p className="text-xs text-slate-500">Orden estable por ID. Tarifa y almacén configurados en esta terminal. Stock: existencia física más movimientos locales. Disponible: stock menos reservas y compromisos. Si no se recibió saldo para este almacén se muestra 0. Estos valores son informativos.</p>
+    <p className="text-xs text-slate-500">Tarifa y almacén configurados en esta terminal. ERP indica el último saldo recibido al sincronizar. Local indica el saldo de la caja con sus movimientos locales. Estos valores son informativos.</p>
     <div className="flex flex-wrap gap-3 my-4">
       <input aria-label="Buscar productos" maxLength={120} value={query} onChange={event => {
         view.cancel(); setQuery(event.target.value); setCursors([null]);

@@ -22,6 +22,10 @@ import { captureLargeMasterSyncV3ConfigRefreshAuthorityFromStore } from './Large
 import { persistProductionAreaSnapshot } from '../restaurant/ProductionAreaSnapshot';
 import { readLargeMasterSyncV3BoundIdentity } from './LargeMasterSyncV3BoundTransport';
 import { LargeMasterSyncV3Error } from './LargeMasterSyncV3Types';
+import { fetchLargeMasterSyncV3Inventory } from './LargeMasterSyncV3Inventory';
+import { v3ErpStockDisplay, v3ErpStockDisplayScope } from './LargeMasterSyncV3ErpStockDisplay';
+import { v3OperationalConfigContext } from './LargeMasterSyncV3OperationalConfigScope';
+import { v3BindingKey } from './LargeMasterSyncV3BindingKey';
 import { acquireLargeMasterSyncV3ConfigContext, getLargeMasterSyncV3OperationalSession } from './LargeMasterSyncV3OperationalSession';
 import { assertLargeMasterSyncV3ConfigPayload, largeMasterSyncV3DownloadOrigin } from './LargeMasterSyncV3DownloadOrigin';
 import { assertOperationalTerminalConfig, readOperationalCatalogBindingProof, readOperationalTerminalBinding } from './OperationalTerminalConfig';
@@ -409,8 +413,10 @@ class SyncManager {
                 async () => await db.get('config') as unknown as BusinessConfig);
             assertBinding();
             await persistLargeMasterSyncV3ConfigPushCatalog(assertBinding, authority);
+            const config = await db.get('config') as unknown as BusinessConfig;
             assertBinding();
-            window.dispatchEvent(new CustomEvent('v3CatalogUpdated'));
+            authority.assertCurrent(config);
+            window.dispatchEvent(new CustomEvent('v3CatalogUpdated', { detail: { config, authority } }));
             window.dispatchEvent(new CustomEvent('configUpdated'));
         });
         this.v3CatalogRefresh = { binding, promise };
@@ -418,6 +424,31 @@ class SyncManager {
             if (this.v3CatalogRefresh?.promise === promise) this.v3CatalogRefresh = null;
         }).catch(() => undefined);
         return promise;
+    }
+
+    private async refreshV3ErpStockDisplay(assertBinding: () => void, marker?: string): Promise<void> {
+        const readScope = async () => {
+            assertBinding();
+            const identity = readLargeMasterSyncV3BoundIdentity();
+            const currentBinding = v3BindingKey(identity, largeMasterSyncV3DownloadOrigin());
+            const store = dbAdapter.masterSyncV3Store;
+            const [config, catalog, owner] = await Promise.all([
+                db.get('config') as unknown as Promise<BusinessConfig>,
+                store?.getActiveRuntimeVersion(), store?.getOperationalOwner?.(),
+            ]);
+            assertBinding();
+            if (!catalog || (catalog.contractVersion ?? 1) < 2 || owner?.binding !== currentBinding
+                || owner.syncId !== catalog.syncId || owner.syncVersion !== catalog.syncVersion) {
+                throw new LargeMasterSyncV3Error('SYNC_V3_CATALOG_VERSION_CHANGED');
+            }
+            const { terminal } = v3OperationalConfigContext(config, identity);
+            const scope = v3ErpStockDisplayScope(terminal, identity.tenantId, currentBinding, catalog);
+            if (!scope) throw new LargeMasterSyncV3Error('SYNC_V3_CATALOG_CONTEXT_REQUIRED');
+            return scope;
+        };
+        const changed = await v3ErpStockDisplay.refresh(readScope, signal => fetchLargeMasterSyncV3Inventory(
+            readLargeMasterSyncV3BoundIdentity, fetch, signal, largeMasterSyncV3DownloadOrigin()), marker);
+        if (changed) window.dispatchEvent(new CustomEvent('v3ErpStockDisplayUpdated'));
     }
 
     /** Explicit operator refresh includes V3 even when ERP outbox has no events. */
@@ -440,6 +471,9 @@ class SyncManager {
             } else {
                 assertBinding();
                 await this.syncAllCatalogs({ refreshV3: true });
+            }
+            if (v3Authority) {
+                await this.refreshV3ErpStockDisplay(assertBinding);
             }
         });
         this.manualCatalogSync = { binding, promise };
@@ -478,6 +512,7 @@ class SyncManager {
     private terminalConfigRefreshQueue: Promise<void> = Promise.resolve();
     private erpSecurityApplyQueue: Promise<void> = Promise.resolve();
     private lastBackgroundTerminalManifestSyncAt = 0;
+    private lastV3BackgroundManifestSuccess: { binding: string; at: number } | null = null;
     private readyToSellStartedAt = 0;
     private readyToSellState: {
         readyToSell: boolean;
@@ -2405,6 +2440,8 @@ class SyncManager {
             explicitV3Refresh?: boolean;
             bootstrapBlocks?: boolean;
             deferDuringSale?: boolean;
+            assertV3Binding?: () => void;
+            onV3ManifestReconciled?: () => void;
         }
     ): Promise<BusinessConfig | null> {
         if (this.isDisabled || this.terminalManifestSyncInFlight || !navigator.onLine) {
@@ -2418,6 +2455,7 @@ class SyncManager {
             return null;
         }
 
+        options?.assertV3Binding?.();
         const context = this.getActiveTerminalContext(baseConfig);
         const localTerminalId = context.localTerminalId || context.terminalId;
         if (!context.terminalId || !localTerminalId || !context.tenantId) {
@@ -2561,6 +2599,15 @@ class SyncManager {
             const productPricesChanged = !v3Authority && (Boolean(manifest.changed.product_prices) || changedBlocks.includes('product_prices'));
             const remoteInventoryVersion = this.normalizeVersionToken(manifest.inventory_version);
             const remotePriceVersion = this.normalizeVersionToken(manifest.price_version);
+            const refreshErpStockDisplay = () => {
+                if (!v3Authority || this.manualCatalogSync) return;
+                const cursor = manifest.cursor_map?.inventory || manifest.domain_hashes?.inventory;
+                if (!cursor && !remoteInventoryVersion) return;
+                const marker = JSON.stringify([cursor || null, remoteInventoryVersion]);
+                void this.refreshV3ErpStockDisplay(assertManifestBinding, marker).catch(error => {
+                    console.warn('[ERP_STOCK_DISPLAY_SYNC_DEFERRED]', error instanceof Error ? error.message : 'UNKNOWN');
+                });
+            };
             const inventoryVersionComparable = Boolean(localInventoryVersion && remoteInventoryVersion);
             const priceVersionComparable = Boolean(localPriceVersion && remotePriceVersion);
             const inventoryVersionMatch = inventoryVersionComparable
@@ -2693,6 +2740,8 @@ class SyncManager {
                 if (options?.markStartupCompleted) {
                     this.markStartupManifestSyncCompleted(localTerminalId);
                 }
+                refreshErpStockDisplay();
+                if (v3Authority) options?.onV3ManifestReconciled?.();
                 return v3RefreshedConfig;
             }
 
@@ -2837,6 +2886,7 @@ class SyncManager {
             }
 
             if (!refreshedConfig && !v3RefreshedConfig && (!inventoryChanged || inventorySyncSkippedByVersion) && (!productPricesChanged || priceSyncSkippedByVersion) && !bootstrapInventoryOnStartup && !bootstrapProductPricesOnStartup) {
+                if (!terminalChanged) refreshErpStockDisplay();
                 return null;
             }
 
@@ -2847,6 +2897,8 @@ class SyncManager {
             }
 
             assertManifestBinding();
+            if (!terminalChanged || refreshedConfig) refreshErpStockDisplay();
+            if (v3Authority && (!shouldRefreshTerminalConfig || refreshedConfig)) options?.onV3ManifestReconciled?.();
             return refreshedConfig || v3RefreshedConfig;
         } finally {
             this.terminalManifestSyncInFlight = false;
@@ -3310,7 +3362,13 @@ class SyncManager {
             reason?: 'startup' | 'connection_restored' | 'app_resumed' | 'manual_sync' | 'force_sync' | 'periodic_manifest' | 'realtime';
         }
     ): Promise<BusinessConfig | null> {
-        const binding = usesLargeMasterSyncV3Authority(syncPolicy.resolve().kind) ? JSON.stringify(readLargeMasterSyncV3BoundIdentity()) : '';
+        const v3Authority = usesLargeMasterSyncV3Authority(syncPolicy.resolve().kind);
+        const readBinding = () => JSON.stringify([readLargeMasterSyncV3BoundIdentity(),
+            readOperationalTerminalBinding(), largeMasterSyncV3DownloadOrigin()]);
+        const binding = v3Authority ? readBinding() : '';
+        const assertV3Binding = () => {
+            if (readBinding() !== binding) throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
+        };
         if (this.backgroundManifestFlight) {
             if(this.backgroundManifestFlight.binding !== binding) throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED');
             return this.backgroundManifestFlight.promise;
@@ -3318,9 +3376,12 @@ class SyncManager {
         const startedAt = Date.now();
         const reason = options?.reason || 'periodic_manifest';
         const isExplicitRefresh = reason === 'manual_sync' || reason === 'force_sync';
-        if (!isExplicitRefresh && startedAt - this.lastBackgroundTerminalManifestSyncAt < 60_000) {
-            return null;
-        }
+        const lastV3Success = this.lastV3BackgroundManifestSuccess;
+        const recentlyReconciled = v3Authority
+            ? lastV3Success?.binding === binding && startedAt - lastV3Success.at < 60_000
+            : startedAt - this.lastBackgroundTerminalManifestSyncAt < 60_000;
+        const v3LifecycleCheck = v3Authority && (reason === 'startup' || reason === 'app_resumed' || reason === 'connection_restored');
+        if (!isExplicitRefresh && !v3LifecycleCheck && recentlyReconciled) return null;
         const promise = Promise.resolve().then(async () => { try {
             const result = await this.reconcileTerminalManifest(baseConfig ?? null, {
                 skipIfStartupCompleted: false,
@@ -3328,8 +3389,13 @@ class SyncManager {
                 explicitV3Refresh: isExplicitRefresh,
                 bootstrapBlocks: Boolean(options?.bootstrapBlocks),
                 deferDuringSale: true,
+                assertV3Binding: v3Authority ? assertV3Binding : undefined,
+                onV3ManifestReconciled: v3Authority ? () => {
+                    assertV3Binding();
+                    this.lastV3BackgroundManifestSuccess = { binding, at: Date.now() };
+                } : undefined,
             });
-            this.lastBackgroundTerminalManifestSyncAt = Date.now();
+            if (!v3Authority) this.lastBackgroundTerminalManifestSyncAt = Date.now();
             try { await this.refreshErpPaymentMethods(); }
             catch (error) { console.warn('Payment methods refresh failed; keeping saved methods:', error); }
             console.info('[SYNC_FALLBACK]', {

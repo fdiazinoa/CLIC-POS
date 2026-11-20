@@ -95,7 +95,7 @@ let sessionBundle:Promise<any>|undefined;
 async function sessionModule(f:Awaited<ReturnType<typeof fixture>>){
  const g=globalThis as any;g.__refresh={adapter:f.adapter,identity:{tenantId:id(1),terminalId:id(4),deviceId:id(50),erpSyncBaseUrl:'https://erp.invalid',syncToken:'synthetic'},origin:'https://erp.invalid',guard:'synthetic-guard'};Object.assign(f.adapter,{connect:async()=>{}});
  g.__refresh.refresh=async(store:any,_url:any,binding:any,_observe:any,_deps:any,assertIdentity:any)=>{
-  await assertIdentity();const transition={...await f.transition(),binding,assertIdentity};await store.prepareCatalogOnly(manifest,transition);f.stage(33,g.__refresh.patch || {});await store.activateCatalogOnly(newId,transition);
+  await assertIdentity();const transition={...await f.transition(),binding,assertIdentity};await store.prepareCatalogOnly(manifest,transition);f.stage(33,g.__refresh.patch || {});g.__refresh.afterStage?.();await store.activateCatalogOnly(newId,transition);
   return {runtime:await LargeMasterSyncV3Runtime.open(store),inventoryVersion:4,inventoryCursor:'inventory-cursor',inventorySyncId:oldId,inventorySyncVersion:32};
  };
  sessionBundle ||= build({entryPoints:[new URL('../services/sync/LargeMasterSyncV3OperationalSession.ts',import.meta.url).pathname],bundle:true,write:false,platform:'node',format:'esm',define:{'import.meta.env':'{}'},plugins:[{name:'native-refresh-environment',setup(b){b.onResolve({filter:/^(\.\.\/db|\.\.\/\.\.\/utils\/db|\.\/LargeMasterSyncV3(?:Platform|Authority|Candidate|BoundTransport|DownloadOrigin)|\.\/OperationalTerminalConfig)$/},a=>({path:a.path,namespace:'refresh'}));b.onLoad({filter:/.*/,namespace:'refresh'},a=>({loader:'js',contents:a.path==='../db'?'export const dbAdapter=new Proxy({}, {get:(_t,k)=>{const a=globalThis.__refresh.adapter;return typeof a[k]==="function"?a[k].bind(a):a[k];}});':a.path==='../../utils/db'?'export const db={get:()=>globalThis.__refresh.adapter.getCollection("config"),getDocument:(...a)=>globalThis.__refresh.adapter.getDocument(...a)};':a.path.endsWith('Platform')?'export const assertLargeMasterSyncV3NativeAndroid=()=>{};':a.path.endsWith('Authority')?'export const LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED=true;':a.path.endsWith('Candidate')?'export const isLargeMasterSyncV3Stale=async()=>false;export const prepareLargeMasterSyncV3CatalogOnly=(...a)=>globalThis.__refresh.refresh(...a);export const prepareLargeMasterSyncV3Candidate=()=>{throw Error("unexpected fresh download")};export const prepareLargeMasterSyncV3UnusedBaseline=()=>{throw Error("unexpected baseline replacement")};':a.path.endsWith('BoundTransport')?'export const readLargeMasterSyncV3BoundIdentity=()=>globalThis.__refresh.identity;export const validatedLargeMasterSyncV3ErpSyncBase=value=>value;':a.path.endsWith('DownloadOrigin')?'export const largeMasterSyncV3DownloadOrigin=()=>globalThis.__refresh.origin;':'export const readOperationalTerminalBinding=()=>globalThis.__refresh.readGuard?.()??globalThis.__refresh.guard;export const readOperationalCatalogBindingProof=()=>undefined;'}));}}]}).then(r=>import('data:text/javascript;base64,'+Buffer.from(r.outputFiles[0].text).toString('base64')));
@@ -117,15 +117,64 @@ for(const track of [false,true])test(`full synthetic invoice with missing stock 
  await invoiceCase(track,true,0,true);
 });
 for(const attack of ['unknown-anchor','canonical-false','retained-source','warehouse','semantics','cursor','binding','receipt','write-fault','precommit-fault'])test(`sparse invoice denies ${attack} with whole financial rollback`,async()=>{await invoiceCase(true,true,0,true,attack);});
-async function invoiceCase(track:boolean,negative:boolean,opening:number,missing:boolean,attack?:string){
+for(const addition of ['warehouse', 'article'] as const) {
+ test(`fresh sparse invoice accepts a new ${addition} with one payment, inventory effect and Outbox event`, async () => {
+  await invoiceCase(true, true, 0, true, undefined, addition);
+ });
+}
+test('fresh sparse invoice with a new article still rolls back on a failed payment write', async () => {
+ await invoiceCase(true, true, 0, true, 'write-fault', 'article');
+});
+test('fresh sparse invoice denies a new article when the retained dataset is incomplete', async () => {
+ await invoiceCase(true, true, 0, true, 'purged-article', 'article');
+});
+test('fresh sparse invoice denies a new warehouse for an article with inventory presentation effects', async () => {
+ await invoiceCase(true, true, 0, true, 'presentation', 'warehouse');
+});
+for (const addition of ['warehouse', 'article'] as const) test(`fresh sparse invoice accepts the ERP v1 tracking marker without allocations for a new ${addition}`, async () => {
+ await invoiceCase(true, true, 0, true, undefined, addition, { tracking_contract_version: 1, tracking_authorities: [] });
+});
+for (const tracking of [
+ {tracking_contract_version: 2, tracking_authorities: []},
+ {tracking_contract_version: 1},
+ {tracking_contract_version: 1, tracking_authorities: null},
+ {tracking_contract_version: 1, tracking_authorities: [{}]},
+ {tracking_authorities: []},
+]) test(`fresh sparse invoice rejects incomplete or allocated ERP tracking metadata ${JSON.stringify(tracking)}`, async () => {
+ await invoiceCase(true, true, 0, true, 'tracking', 'warehouse', tracking);
+});
+async function invoiceCase(track:boolean,negative:boolean,opening:number,missing:boolean,attack?:string,addition?:'warehouse'|'article',erpTracking?: Record<string, unknown>){
  const f=await fixture(undefined,track,false);try{
   f.db.prepare('UPDATE master_v3_inventory_balances SET qty_on_hand=?').run(opening);if(missing)f.db.prepare('DELETE FROM master_v3_inventory_balances').run();
   f.db.prepare('INSERT INTO documents VALUES(?,?,?,?,?)').run('transactionHistory','retained-before-refresh',JSON.stringify({id:'retained-before-refresh',items:[],status:'COMPLETED'}),0,'fixture');
+  const oldProductId = addition === 'article' ? id(31) : product;
+  if (addition === 'warehouse') {
+   f.db.prepare("UPDATE master_v3_articles SET record_json=json_set(record_json,'$.activeWarehouseIds',json('[]')) WHERE sync_version=32").run();
+  }
+  if (addition === 'article') {
+   f.db.prepare('DELETE FROM master_v3_prices WHERE sync_version=32').run();
+   f.db.prepare("UPDATE master_v3_articles SET article_id=?,record_json=json_set(record_json,'$.id',?) WHERE sync_version=32").run(oldProductId,oldProductId);
+   f.db.prepare('INSERT INTO master_v3_prices VALUES(32,?,?,45)').run(oldProductId,tariff);
+   f.db.prepare("INSERT INTO sync_v3_dataset_progress VALUES(?,'articles',1,1,NULL,1,1,'VALIDATED','fixture')").run(oldId);
+   f.db.prepare("INSERT INTO sync_v3_chunks VALUES(?,'articles',0,'fixture',1,0,'APPLIED','fixture')").run(oldId);
+  }
   const retained=f.documents('transactionHistory'),anchor=JSON.stringify(await f.store.getInventoryAuthority()),oldRecord=(f.db.prepare('SELECT record_json FROM master_v3_articles WHERE sync_version=32').get() as any).record_json;
-  const {LargeMasterSyncV3OperationalSession:Session}=await sessionModule(f);const previous=await Session.open(false),oldProduct=await previous.withStock((await (await previous.catalog(tariff,warehouse)).get(product)).product,warehouse);
-  const oldLine={...oldProduct,cartId:'old-line',quantity:1,operationalFlags:{...oldProduct.operationalFlags,allowNegativeStock:true}};
-  if(track)await assert.rejects(previous.validate(f.config,[oldLine],tariff,warehouse),/STOCK_INSUFFICIENT/);
-  (globalThis as any).__refresh.patch={operationalFlags:{trackInventory:track,allowNegativeStock:negative}};
+  const {LargeMasterSyncV3OperationalSession:Session}=await sessionModule(f);const previous=await Session.open(false);
+  if (!addition) {
+   const oldProduct=await previous.withStock((await (await previous.catalog(tariff,warehouse)).get(product)).product,warehouse);
+   const oldLine={...oldProduct,cartId:'old-line',quantity:1,operationalFlags:{...oldProduct.operationalFlags,allowNegativeStock:true}};
+   if(track)await assert.rejects(previous.validate(f.config,[oldLine],tariff,warehouse),/STOCK_INSUFFICIENT/);
+  }
+  const refresh = (globalThis as any).__refresh;
+  refresh.patch={operationalFlags:{trackInventory:track,allowNegativeStock:negative},...erpTracking,...(addition === 'warehouse' ? { activeWarehouseIds: [warehouse] } : {})};
+  if (addition === 'article') refresh.afterStage = () => {
+   const row = f.db.prepare('SELECT * FROM master_v3_articles WHERE sync_version=33 AND article_id=?').get(oldProductId) as Record<string, unknown>;
+   row.article_id = product;
+   row.record_json = JSON.stringify({ ...JSON.parse(String(row.record_json)), id: product });
+   const columns = Object.keys(row);
+   f.db.prepare(`INSERT INTO master_v3_articles(${columns.join(',')}) VALUES(${columns.map(() => '?').join(',')})`).run(...Object.values(row));
+   f.db.prepare('INSERT INTO master_v3_prices VALUES(33,?,?,45)').run(product,tariff);
+  };
   const session=await Session.open(true),config=await session.projectConfig(f.config),source=await session.withStock((await (await session.catalog(tariff,warehouse)).get(product)).product,warehouse);
   const line={...source,cartId:'invoice-line',quantity:1,operationalFlags:{...source.operationalFlags,allowNegativeStock:!negative}};
   const required=track&&!negative;if(required)await assert.rejects(session.validate(config,[line],tariff,warehouse),/STOCK_INSUFFICIENT/);else await session.validate(config,[line],tariff,warehouse);
@@ -149,10 +198,19 @@ async function invoiceCase(track:boolean,negative:boolean,opening:number,missing
    if(attack==='cursor')invoice.items[0].v3SaleAuthority={...invoice.items[0].v3SaleAuthority,inventoryCursor:'foreign'};
    if(attack==='binding')invoice.items[0].v3SaleAuthority={...invoice.items[0].v3SaleAuthority,binding:'foreign'};
    if(attack==='receipt')f.db.prepare('DELETE FROM master_v3_catalog_owners WHERE sync_version=33').run();
+   if(attack==='purged-article'){
+    f.db.prepare('DELETE FROM master_v3_prices WHERE sync_version=32').run();
+    f.db.prepare('DELETE FROM master_v3_articles WHERE sync_version=32').run();
+   }
+   if(attack==='presentation')invoice.items[0].inventoryPresentation={id:id(42)};
    const run=f.bridge.run.bind(f.bridge),execute=f.bridge.execute.bind(f.bridge);
    if(attack==='write-fault')f.bridge.run=async(sql:string,values:any[],transaction:boolean)=>{if(values[0]==='payments')throw Error('injected-payment-write');return run(sql,values,transaction);};
    if(attack==='precommit-fault')f.bridge.execute=async(sql:string,transaction?:boolean)=>{if(sql==='COMMIT;')throw Error('injected-precommit');return execute(sql,transaction);};
-   const untouched=state(f);await assert.rejects(f.adapter.commitFinancialTransaction(input));assert.deepEqual(state(f),untouched);return;
+   const untouched=state(f);
+   const error = ['purged-article', 'tracking'].includes(attack) ? /SYNC_V3_INVENTORY_COVERAGE_REQUIRED/
+    : attack === 'write-fault' && addition ? /injected-payment-write/ : undefined;
+   await assert.rejects(f.adapter.commitFinancialTransaction(input), error);
+   assert.deepEqual(state(f),untouched);return;
   }
   const before=state(f);if(required){await assert.rejects(f.adapter.commitFinancialTransaction(input),/STOCK_INSUFFICIENT/);assert.deepEqual(state(f),before);}
   else{

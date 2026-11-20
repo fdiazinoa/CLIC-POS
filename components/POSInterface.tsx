@@ -290,6 +290,7 @@ export interface V3OperationalPOSBoundary {
 
 export interface POSInterfaceProps {
    v3Operational?: V3OperationalPOSBoundary;
+   readCartItemErpAvailableStock?: (itemId: string) => number | undefined;
    catalogSearchProducts?: Product[];
    catalogArticleDiagnostics?: V3ArticleDiagnostic[];
    config: BusinessConfig;
@@ -1321,6 +1322,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    productPrices: externalProductPrices = EMPTY_PRODUCT_PRICES,
    suppressProductInputUntilMs = 0,
    v3Operational,
+   readCartItemErpAvailableStock,
    catalogSearchProducts,
    catalogArticleDiagnostics,
 }) => {
@@ -10496,6 +10498,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          />}
          {editingItem && <CartItemOptionsModal
             item={editingItem}
+            readCartItemErpAvailableStock={readCartItemErpAvailableStock}
             quantityDecimals={quantityPresentation.salesDecimals}
             config={config}
             users={users}

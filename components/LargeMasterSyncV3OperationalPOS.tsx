@@ -5,6 +5,7 @@ import {restoreV3ReservationReference,expireV3Reservation} from '../services/syn
 import { claimV3DirectTicket, readV3DirectWaitingTickets, updateV3DirectTicket } from '../services/sync/LargeMasterSyncV3DirectTicketSource';
 import { assertWeightedCodeInput } from '../utils/weightedProduct';
 import { subscribeLargeMasterSyncV3CatalogUpdates } from '../services/sync/LargeMasterSyncV3CatalogUpdates';
+import { v3ErpStockDisplay, v3ErpStockDisplayScope } from '../services/sync/LargeMasterSyncV3ErpStockDisplay';
 import type { V3OperationalCategory } from '../services/sync/LargeMasterSyncV3Categories';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import POSInterface, { type POSInterfaceProps, type V3OperationalPOSBoundary } from './POSInterface';
@@ -16,7 +17,7 @@ import { reconcileV3TariffSelection, v3TariffContextKey, isV3TariffContextCurren
   type V3TariffSelection } from '../services/sync/LargeMasterSyncV3TariffSelection';
 
 /** Real POS, with a bounded native read boundary; never mounts a legacy fallback. */
-const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps> = props => {
+const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps & { settingsSuspended?: boolean }> = ({ settingsSuspended, ...props }) => {
   const [session, setSession] = useState<LargeMasterSyncV3OperationalSession>();
   const [projected, setProjected] = useState<BusinessConfig>();
   const [visible, setVisible] = useState<Product[]>([]);
@@ -30,6 +31,53 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps> = props => {
   const lastQuery = useRef<{ query: string; categoryId: string | null; categoryKeys?: { ids: readonly string[]; aliases: readonly string[] } }>({ query: '', categoryId: null });
   const [inventoryRevision, setInventoryRevision] = useState(0);
   const [catalogRevision, setCatalogRevision] = useState(0);
+  const [selection, setSelection] = useState<V3TariffSelection>();
+  const wasSettingsSuspended = useRef(false);
+  const suspended = Boolean(settingsSuspended);
+  const presentation = useMemo(() => ({ suspended, resumed: !suspended && wasSettingsSuspended.current }), [suspended]);
+  const latestPresentation = useRef(presentation);
+  latestPresentation.current = presentation;
+  const [validatedPresentation, setValidatedPresentation] = useState<typeof presentation>();
+  const [readyPresentation, setReadyPresentation] = useState<typeof presentation>();
+  const resumePending = presentation.resumed && validatedPresentation !== presentation;
+  useEffect(() => {
+    const enteringSettings = !wasSettingsSuspended.current && presentation.suspended;
+    wasSettingsSuspended.current = presentation.suspended;
+    if (enteringSettings) {
+      ++querySequence.current;
+      lastQuery.current = { query: '', categoryId: null };
+      setVisible([]);
+      setArticleDiagnostics([]);
+      setSelection(undefined);
+    }
+    if (!resumePending) return;
+
+    const reopen = () => {
+      ++contextSequence.current;
+      ++querySequence.current;
+      catalog.current = undefined;
+      setCatalogRevision(previous => previous + 1);
+    };
+    if (error || !session || !catalog.current) {
+      if (error) reopen();
+      setValidatedPresentation(presentation);
+      return;
+    }
+
+    let current = true;
+    const sequence = contextSequence.current;
+    // Settings can refresh the stored runtime without publishing a catalog event.
+    void (async () => {
+      try {
+        await session.assertCurrent();
+        session.assertSetupIdentity();
+      } catch {
+        if (current && latestPresentation.current === presentation && contextSequence.current === sequence) reopen();
+      }
+      if (current && latestPresentation.current === presentation) setValidatedPresentation(presentation);
+    })();
+    return () => { current = false; };
+  }, [presentation, resumePending, session, error]);
   useEffect(() => subscribeLargeMasterSyncV3CatalogUpdates(() => {
     ++contextSequence.current; ++querySequence.current; catalog.current = undefined;
     setCatalogRevision(previous => previous + 1);
@@ -42,7 +90,6 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps> = props => {
     defaultTariffId: terminal?.config.pricing?.defaultTariffId || '',
     allowedTariffIds: terminal?.config.pricing?.allowedTariffIds || [] };
   const authorityKey = v3TariffContextKey(authority);
-  const [selection, setSelection] = useState<V3TariffSelection>();
   let reconciled: V3TariffSelection | undefined;
   let authorityError = '';
   try { reconciled = reconcileV3TariffSelection(selection, authority, props.cart.length > 0); }
@@ -124,11 +171,13 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps> = props => {
   }, []);
 
   const boundary = useMemo<V3OperationalPOSBoundary | undefined>(() => {
-    if (!session || !projected || !catalog.current || loadedContextKey !== wantedContextKey || authorityError) return undefined;
+    if (suspended || resumePending || !session || !projected || !catalog.current || loadedContextKey !== wantedContextKey || authorityError) return undefined;
     const pinnedSource = catalog.current;
     const pinnedContext = contextSequence.current;
+    const isCurrent = () => presentation === latestPresentation.current && pinnedContext === contextSequence.current
+      && pinnedSource === catalog.current && latestContextKey.current === wantedContextKey;
     const assertContext = () => {
-      if (pinnedContext !== contextSequence.current || pinnedSource !== catalog.current) throw new Error('SYNC_V3_UI_CONTEXT_CHANGED');
+      if (presentation !== latestPresentation.current || pinnedContext !== contextSequence.current || pinnedSource !== catalog.current) throw new Error('SYNC_V3_UI_CONTEXT_CHANGED');
       if (latestContextKey.current !== wantedContextKey) throw new Error('SYNC_V3_UI_CONTEXT_CHANGED');
     };
     return {
@@ -137,7 +186,7 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps> = props => {
     categories,
     search: async (query, categoryId, categoryKeys) => {
       // Retired reads cannot change catalog state or surface stale errors.
-      if (pinnedContext !== contextSequence.current || pinnedSource !== catalog.current || latestContextKey.current !== wantedContextKey) return;
+      if (!isCurrent()) return;
       assertContext();
       const sequence = ++querySequence.current;
       const context = contextSequence.current;
@@ -150,12 +199,12 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps> = props => {
       const items = await source.search(query, query.trim() ? null : (categoryKeys || categoryId), 60, rows => { diagnostics = rows; });
       const rows = await session.withStocks(items.map(item => item.product), warehouseId);
       if (sequence !== querySequence.current || context !== contextSequence.current) return;
-      assertContext();
+      if (!isCurrent()) return;
       remember(rows);
       setVisible(rows);
       setArticleDiagnostics(diagnostics);
       } catch (reason) {
-        if (sequence !== querySequence.current || context !== contextSequence.current || source !== catalog.current) return;
+        if (sequence !== querySequence.current || !isCurrent()) return;
         throw reason;
       }
     },
@@ -195,7 +244,7 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps> = props => {
       void Promise.all([...new Set(lines.map(line => line.id))].map(async id => {
         const item = await source.get(id);
         return item ? session.withStock(item.product, warehouseId) : null;
-      })).then(rows => remember(rows.filter((row): row is NonNullable<typeof row> => row !== null))).catch(() => undefined);
+      })).then(rows => { if (isCurrent()) remember(rows.filter((row): row is NonNullable<typeof row> => row !== null)); }).catch(() => undefined);
       return outcome.lines;
     },
     validate: async (lines, reference) => {
@@ -219,7 +268,7 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps> = props => {
       latestContextKey.current = '';
       setSelection({ ...authority, tariffId: id, mode: 'manual' });
     },
-  }; }, [session, projected, tariffId, warehouseId, categories, remember, loadedContextKey, wantedContextKey, authorityError]);
+  }; }, [session, projected, tariffId, warehouseId, categories, remember, loadedContextKey, wantedContextKey, authorityError, presentation, catalogRevision, resumePending]);
 
   useEffect(() => {
     if (!boundary || !props.cart.length) return;
@@ -227,25 +276,53 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps> = props => {
     const expectedContext = wantedContextKey;
     const expectedSequence = contextSequence.current;
     const source = catalog.current;
-    const currentRead = () => current && expectedSequence === contextSequence.current && source === catalog.current && latestContextKey.current === expectedContext;
+    const currentRead = () => current && presentation === latestPresentation.current
+      && expectedSequence === contextSequence.current && source === catalog.current && latestContextKey.current === expectedContext;
     void Promise.all([...new Set(props.cart.map(row => row.id))].map(async id => {
       const item = await source!.get(id);
       return item ? session!.withStock(item.product, warehouseId) : null;
     })).then(rows => { if (currentRead()) remember(rows.filter((row): row is Product => row !== null)); })
       .catch(reason => { if (currentRead()) setError(String(reason.message || reason)); });
     return () => { current = false; };
-  }, [boundary, props.cart, remember, session, warehouseId, inventoryRevision]);
+  }, [boundary, props.cart, remember, session, warehouseId, inventoryRevision, presentation]);
 
   useEffect(() => {
     const refresh = () => {
       ++querySequence.current;
       setInventoryRevision(previous => previous + 1);
       if (boundary) void boundary.search(lastQuery.current.query, lastQuery.current.categoryId, lastQuery.current.categoryKeys)
-        .catch(reason => { if (boundary === lastBoundary.current && latestContextKey.current === wantedContextKey && catalog.current) setError(String(reason.message || reason)); });
+        .catch(reason => { if (presentation === latestPresentation.current && boundary === lastBoundary.current && latestContextKey.current === wantedContextKey && catalog.current) setError(String(reason.message || reason)); });
     };
     window.addEventListener('v3InventoryUpdated', refresh);
     return () => window.removeEventListener('v3InventoryUpdated', refresh);
-  }, [boundary]);
+  }, [boundary, presentation]);
+
+  const failure = authorityError || error;
+  const erpStockScope = useMemo(() => {
+    const tenantId = terminal?.config.erpBinding?.tenantId;
+    if (!boundary || failure || !session || !terminal || !tenantId) return undefined;
+    return v3ErpStockDisplayScope(terminal, tenantId, session.binding, session.ready.runtime.version);
+  }, [boundary, failure, session, terminal]);
+  useEffect(() => {
+    if (!erpStockScope) return;
+    let current = true;
+    void v3ErpStockDisplay.hydrate(erpStockScope).then(loaded => {
+      if (current && loaded) window.dispatchEvent(new CustomEvent('v3ErpStockDisplayUpdated'));
+    });
+    return () => { current = false; };
+  }, [erpStockScope]);
+  const readCartItemErpAvailableStock = useMemo(() => {
+    if (!erpStockScope) return undefined;
+    const sequence = contextSequence.current;
+    return (itemId: string) => presentation === latestPresentation.current && sequence === contextSequence.current
+      && latestContextKey.current === wantedContextKey
+      ? v3ErpStockDisplay.read(erpStockScope, itemId)?.balance : undefined;
+  }, [erpStockScope, wantedContextKey, presentation]);
+  const completingSettingsReturn = presentation.resumed && readyPresentation !== presentation;
+  const checkingRetainedCatalog = completingSettingsReturn && !boundary && Boolean(projected) && !failure;
+  useEffect(() => {
+    if (completingSettingsReturn && boundary && !failure) setReadyPresentation(presentation);
+  }, [completingSettingsReturn, boundary, failure, presentation]);
 
   // Keep the mounted POS (including retained-ticket/reservation/payment state) across renewal.
   // A distinct rejecting boundary also retires the child's queued and in-flight old actions.
@@ -261,16 +338,19 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps> = props => {
       completedReservation: rejectAsync, expireReservation: rejectAsync, restoreReservation: rejectAsync,
       restoreRetainedTicket: rejectAsync, updateRetainedTicket: rejectAsync, waitingTickets: rejectAsync };
   }, [wantedContextKey, authorityError, error, boundary]);
-  const failure = authorityError || error;
+  if (suspended) return null;
   const notice = failure ? <div role="alert" className="p-6 text-red-700">
     <p>Candidato V3 detenido: {failure}</p>
     <button type="button" onClick={() => props.onOpenSettings()} className="mt-4 rounded bg-blue-600 px-4 py-2 text-white">
       Abrir ajustes
     </button>
-  </div> : !boundary ? <div role="status" className="p-6">Preparando catálogo V3 e inventario del dispositivo vinculado…</div> : null;
-  if (!projected) return notice;
+  </div> : !boundary ? <div role="status" className="p-6">
+    {checkingRetainedCatalog ? 'Verificando catálogo e inventario…' : 'Preparando catálogo V3 e inventario del dispositivo vinculado…'}
+  </div> : null;
+  if (!projected || (completingSettingsReturn && (!boundary || failure))) return notice;
   return <>{notice}<POSInterface {...props} config={effectiveConfig!} products={cache} productPrices={[]}
     v3Operational={failure ? blockedBoundary : boundary || blockedBoundary} catalogSearchProducts={visible}
+    readCartItemErpAvailableStock={readCartItemErpAvailableStock}
     catalogArticleDiagnostics={articleDiagnostics}
     onUpdateProducts={() => { throw new Error('SYNC_V3_LOCAL_CATALOG_EDIT_UNSUPPORTED'); }}
     onUpdateConfig={next => props.onUpdateConfig({ ...next, taxes: props.config.taxes,

@@ -5,6 +5,8 @@ import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
 import { build } from 'esbuild';
 import { getInitialConfig } from '../constants';
+import { createV3ErpStockDisplay, v3ErpStockDisplayScope } from '../services/sync/LargeMasterSyncV3ErpStockDisplay';
+import { v3OperationalConfigContext } from '../services/sync/LargeMasterSyncV3OperationalConfigScope';
 import { LargeMasterSyncV3Error } from '../services/sync/LargeMasterSyncV3Types';
 import { createLargeMasterSyncV3SessionCoordinator } from '../services/sync/LargeMasterSyncV3SetupCompletion';
 import { isLargeMasterSyncV3ReplacedCollection } from '../services/sync/LargeMasterSyncV3Authority';
@@ -13,16 +15,23 @@ const source = readFileSync(new URL('../services/sync/SyncManager.ts', import.me
 const parsed = ts.createSourceFile('SyncManager.ts',source,ts.ScriptTarget.Latest,true);
 const cls = parsed.statements.find(node => ts.isClassDeclaration(node) && node.name?.text === 'SyncManager') as ts.ClassDeclaration;
 const method = (name:string) => cls.members.find(node => node.name?.getText(parsed) === name)!.getText(parsed);
-const actual = ['manualCatalogSync','v3CatalogRefresh','refreshV3Catalog','manualSyncAll','syncAllCatalogs','syncTerminalManifestInBackground'].map(method).join('\n');
+const actual = ['manualCatalogSync','v3CatalogRefresh','refreshV3Catalog','refreshV3ErpStockDisplay','manualSyncAll','syncAllCatalogs','syncTerminalManifestInBackground'].map(method).join('\n');
 const clone = <T>(value:T):T => JSON.parse(JSON.stringify(value));
 
 async function fixture(v3=true, primary=true, kind='ERP_ACTIVE') {
   let identity = {tenantId:'tenant',terminalId:'terminal',deviceId:'device',syncToken:'token',erpSyncBaseUrl:'https://erp.test/api/sync'};
   let config:any = getInitialConfig('Supermercado' as any);
-  config.terminals[0].config.scales=[{id:'scale',brand:'ZEBRA',model:'MP7000',port:'USB'}];
+  Object.assign(config.terminals[0].config, {
+    currentDeviceId: identity.deviceId, erpTerminalId: identity.terminalId,
+    erpBinding: { tenantId: identity.tenantId, companyId: 'company', storeId: 'store' },
+    inventoryScope: { defaultSalesWarehouseId: 'warehouse' },
+    scales: [{ id: 'scale', brand: 'ZEBRA', model: 'MP7000', port: 'USB' }],
+  });
+  const stockDisplay = createV3ErpStockDisplay();
   const calls:string[]=[]; const events:string[]=[];
   let save:()=>Promise<void>=async()=>{}; let prepare:()=>Promise<void>=async()=>{};
   let reconcile:()=>Promise<void>=async()=>{}; let manifest:()=>Promise<null>=async()=>null;
+  let stockRefresh:()=>Promise<void>=async()=>{};
   let corruptReadback=false;
   const session={assertSetupIdentity:()=>{},assertCurrent:async()=>{calls.push('verify');},projectConfig:async(value:any)=>{
     calls.push('project');return {...value,taxRate:0,taxes:[{id:'TX',rate:0.18,type:'VAT',name:'ITBIS'}],tariffs:[{id:'T',name:'General',taxIncluded:false}]};}};
@@ -49,9 +58,23 @@ async function fixture(v3=true, primary=true, kind='ERP_ACTIVE') {
   const target={kind,canPullMasters:true,canPushMasters:false,dataMaster:'ERP'};
   const context={
     usesLargeMasterSyncV3Authority:()=>v3&&kind==='ERP_ACTIVE',syncPolicy:{resolve:()=>target},
-    readLargeMasterSyncV3BoundIdentity:()=>({...identity}),LargeMasterSyncV3Error,
+    readLargeMasterSyncV3BoundIdentity:()=>({...identity}),
+    readOperationalTerminalBinding:()=>JSON.stringify(identity),LargeMasterSyncV3Error,
     persistLargeMasterSyncV3ConfigPushCatalog:helper.persistLargeMasterSyncV3ConfigPushCatalog,
     captureLargeMasterSyncV3ConfigRefreshAuthorityFromStore:async()=>authority,
+    v3ErpStockDisplay:stockDisplay,v3ErpStockDisplayScope,v3OperationalConfigContext,
+    v3BindingKey:()=> 'test-binding',largeMasterSyncV3DownloadOrigin:()=> 'https://download.test',
+    dbAdapter:{masterSyncV3Store:{
+      getActiveRuntimeVersion:async()=>({syncId:'S',syncVersion:2,contractVersion:2}),
+      getOperationalOwner:async()=>({syncId:'S',syncVersion:2,binding:'test-binding'}),
+    }},
+    fetch:()=>{throw Error('unmocked fetch');},
+    fetchLargeMasterSyncV3Inventory:async(readIdentity:()=>typeof identity,_fetch:unknown,signal:AbortSignal,origin:string)=>{
+      assert.deepEqual(readIdentity(),identity);assert.equal(origin,'https://download.test');
+      assert.equal(signal.aborted,false);calls.push('erp-stock');await stockRefresh();
+      return {version:45,cursor:'erp-inventory',balances:[{item_id:'example',warehouse_id:'warehouse',
+        qty_on_hand:50,qty_reserved:0,qty_committed:0,updated_at:'fixture'}]};
+    },
     syncTriggerCoordinator:{request:async()=>{calls.push('coordinator:events0');await reconcile();}},
     window:{dispatchEvent:(event:{type:string})=>{events.push(event.type);}},CustomEvent:class{constructor(public type:string){}},
     permissionService:{isMasterTerminal:()=>true,shouldShowGlobalSales:()=>false},isLargeMasterSyncV3ReplacedCollection,
@@ -63,10 +86,11 @@ async function fixture(v3=true, primary=true, kind='ERP_ACTIVE') {
     compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
   const instance=new Constructor();Object.assign(instance,{isDisabled:false,syncVersions:new Map(),lastBackgroundTerminalManifestSyncAt:0,
     isUsingConfigPushV2Primary:()=>primary,purgeSyncedHistoricalData:async()=>{},pullCatalog:async(name:string)=>{calls.push('legacy:'+name);},
+    refreshItemLabelPrices:async()=>{calls.push('label-prices');},
     reconcileTerminalManifest:async(_config:any,options:any)=>{calls.push('manifest');const result=await manifest();if(v3&&kind==='ERP_ACTIVE'&&options.explicitV3Refresh)await instance.refreshV3Catalog();return result;},refreshErpPaymentMethods:async()=>{}});
   return {instance,calls,events,helper,authority,config:()=>config,identity:()=>identity,change:(patch:Partial<typeof identity>)=>{identity={...identity,...patch};},
     onSave:(callback:typeof save)=>{save=callback;},onPrepare:(callback:typeof prepare)=>{prepare=callback;},
-    onCoordinator:(callback:typeof reconcile)=>{reconcile=callback;},onManifest:(callback:typeof manifest)=>{manifest=callback;},
+    onCoordinator:(callback:typeof reconcile)=>{reconcile=callback;},onManifest:(callback:typeof manifest)=>{manifest=callback;},onStockRefresh:(callback:typeof stockRefresh)=>{stockRefresh=callback;},
     corrupt:()=>{corruptReadback=true;}};
 }
 
@@ -74,10 +98,11 @@ test('explicit V3 manual refresh receives catalog with zero outbox events and no
   const f=await fixture();await f.instance.manualSyncAll();
   assert.deepEqual(f.calls.filter(call=>['coordinator:events0','manifest','refresh','project','save'].includes(call)),
     ['coordinator:events0','manifest','refresh','project','save']);
-  assert.deepEqual(f.events,['v3CatalogUpdated','configUpdated']);
+  assert.deepEqual(f.events,['v3CatalogUpdated','configUpdated','v3ErpStockDisplayUpdated']);
   assert.equal(f.config().taxes[0].rate,0.18);assert.equal(f.config().tariffs[0].id,'T');
   assert.equal(f.config().terminals[0].config.scales[0].port,'USB');
   assert(!f.calls.some(call=>call.startsWith('legacy:')));
+  assert.equal(f.calls.filter(call=>call==='erp-stock').length,1);
 });
 
 test('concurrent explicit refresh shares one flight and cannot succeed before projection commit',async()=>{
@@ -117,6 +142,8 @@ test('foreign scope cannot join an outstanding manual refresh',async()=>{
 test('direct syncAllCatalogs includes V3 refresh while filtering replaced legacy masters',async()=>{
   const f=await fixture(true,false);await f.instance.manualSyncAll();
   assert.equal(f.calls.filter(call=>call==='refresh').length,1);
+  assert.equal(f.calls.filter(call=>call==='label-prices').length,1);
+  assert.equal(f.calls.filter(call=>call==='erp-stock').length,1);
   for(const collection of ['products','taxes','priceLists','productPrices','productStocks'])assert(!f.calls.includes('legacy:'+collection));
 });
 
@@ -125,6 +152,7 @@ test('V2 primary and legacy fallback retain original routes without V3 work',asy
   assert.deepEqual(primary.calls,['coordinator:events0','manifest']);assert.deepEqual(primary.events,[]);
   const fallback=await fixture(false,false);await fallback.instance.manualSyncAll();
   assert(fallback.calls.includes('legacy:products'));assert(!fallback.calls.includes('refresh'));
+  assert(!fallback.calls.includes('erp-stock'));
 });
 
 test('both manual UI callers use shared route and periodic strategy does not invoke it',()=>{
@@ -140,6 +168,7 @@ test('both manual UI callers use shared route and periodic strategy does not inv
 test('default catalog sweep does not add a V3 download to automatic/startup callers',async()=>{
   const f=await fixture();await f.instance.syncAllCatalogs();
   assert(!f.calls.includes('refresh'));assert.deepEqual(f.events,[]);
+  assert(f.calls.includes('label-prices'));assert(!f.calls.includes('erp-stock'));
 });
 
 
@@ -153,5 +182,13 @@ test('manual and config-push projection share session negotiation and retain one
   release();await Promise.all([manual,push]);
   assert.equal(f.calls.filter(call=>call==='refresh').length,1);
   assert.equal(f.config().taxes[0].id,'TX');assert.equal(f.config().terminals[0].config.scales[0].port,'USB');
-  assert.deepEqual(f.events,['v3CatalogUpdated','configUpdated']);
+  assert.deepEqual(f.events,['v3CatalogUpdated','configUpdated','v3ErpStockDisplayUpdated']);
+});
+
+for (const primary of [true, false]) test(`manual V3 ${primary ? 'config push' : 'catalog sweep'} reports failed stock fetch without a stock publication`, async () => {
+  const f = await fixture(true, primary);
+  f.onStockRefresh(async () => { throw new LargeMasterSyncV3Error('SYNC_V3_INVENTORY_HTTP_ERROR'); });
+  await assert.rejects(f.instance.manualSyncAll(), /SYNC_V3_INVENTORY_HTTP_ERROR/);
+  assert.equal(f.calls.filter(call => call === 'erp-stock').length, 1);
+  assert.deepEqual(f.events, ['v3CatalogUpdated', 'configUpdated']);
 });

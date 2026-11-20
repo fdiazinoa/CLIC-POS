@@ -15,6 +15,7 @@ import NumericKeypad from './NumericKeypad';
 interface CartItemOptionsModalProps {
   quantityDecimals?: number;
   item: CartItem;
+  readCartItemErpAvailableStock?: (itemId: string) => number | undefined;
   config: BusinessConfig;
   users: UserType[];
   salesUsers?: TerminalSnapshotSeller[];
@@ -28,8 +29,24 @@ interface CartItemOptionsModalProps {
   canVoidItem: boolean;
 }
 
+const subscribeToErpStockDisplay = (notify: () => void) => {
+  window.addEventListener('v3ErpStockDisplayUpdated', notify);
+  return () => window.removeEventListener('v3ErpStockDisplayUpdated', notify);
+};
+
+function ErpStockQuantity({ itemId, fallback, read }: {
+  itemId: string;
+  fallback: number;
+  read: NonNullable<CartItemOptionsModalProps['readCartItemErpAvailableStock']>;
+}) {
+  const getStock = () => read(itemId);
+  const stock = React.useSyncExternalStore(subscribeToErpStockDisplay, getStock, getStock);
+  return <>{stock ?? fallback} u. {stock !== undefined && <small className="ml-2 text-xs">ERP</small>}</>;
+}
+
 const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
   item,
+  readCartItemErpAvailableStock,
   quantityDecimals = 3,
   config,
   users,
@@ -288,7 +305,9 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
               <Package size={20} />
               <span className="text-sm font-black uppercase tracking-wider">Stock Disponible</span>
             </div>
-            <span className="text-lg font-black text-blue-700">{item.stock || 0} u.</span>
+            <span className="text-lg font-black text-blue-700">{readCartItemErpAvailableStock
+              ? <ErpStockQuantity itemId={item.id} fallback={item.stock || 0} read={readCartItemErpAvailableStock} />
+              : <>{item.stock || 0} u.</>}</span>
           </div>
           )}
 
