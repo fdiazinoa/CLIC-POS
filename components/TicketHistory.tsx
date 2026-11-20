@@ -2144,7 +2144,7 @@ const AuthorizedTicketHistory: React.FC<TicketHistoryProps & {historyAccess:Reac
       , [filteredTransactions, selectedTxId]);
 
    // --- SUPERVISOR AUTH ---
-   const { requestApproval, supervisorModalProps } = useSupervisorAuth({ config, currentUser, roles, onUpdateConfig, terminalSecurity: config.terminals?.find(t => t.id === activeTerminalId)?.config.security });
+   const { requestApproval, supervisorModalProps } = useSupervisorAuth({ config, currentUser, roles, onUpdateConfig, terminalId: activeTerminalId, terminalSecurity: config.terminals?.find(t => t.id === activeTerminalId)?.config.security });
 
    const requireCurrentUser = (): User => {
       if(!historyAccess.current.view)throw new Error('No tienes permiso para ver el historial de tickets.');
@@ -2702,6 +2702,9 @@ const AuthorizedTicketHistory: React.FC<TicketHistoryProps & {historyAccess:Reac
             ticketId: transaction.id,
             originalValue: currentRefundTotal
          }
+      }).catch(error => {
+         alert(describeV3Error(error));
+         return false;
       });
       if (!authorized) return;
 
