@@ -17,6 +17,7 @@ const phaseLabels: Record<string,string> = {
     TRANSACTION_CREATE_INPUT:'Preparación de la transacción', TRANSACTION_CREATED:'Transacción construida',
     FINANCIAL_COMMIT_START:'Guardado de venta y evento iniciado', FINANCIAL_COMMIT_OK:'Transacción guardada', LEGACY_PERSIST_OK:'Transacción guardada',
     PAYMENT_RESULT:'Cobro finalizado', CART_CLEAR_REQUEST:'Limpieza de carrito solicitada',
+    FISCAL_RETURN_FAILED:'Falló la devolución fiscal',
     PRINT_DELIVERY_PLAN:'Salida de comprobante prevista', PRINT_REQUEST:'Impresión solicitada', PRINT_RESULT:'Resultado del sistema de impresión; no confirma papel',
 };
 export const diagnosticBytes = (v: unknown) => new TextEncoder().encode(JSON.stringify(v)).length;
