@@ -11,7 +11,7 @@ const original={window:globalThis.window,act:globalThis.IS_REACT_ACT_ENVIRONMENT
 globalThis.window=new EventTarget();globalThis.IS_REACT_ACT_ENVIRONMENT=true;
 const env={React};globalThis.__v3ConfigRetry=env;
 const defer=()=>{let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no;});return {promise,resolve,reject};};
-const config=()=>({terminals:[{id:'local',config:{currentDeviceId:'device',erpTerminalId:'erp',erpBinding:{tenantId:'tenant',companyId:'company',storeId:'store'},inventoryScope:{defaultSalesWarehouseId:'W'},pricing:{defaultTariffId:'T',allowedTariffIds:['T']}}}],tariffs:[{id:'T',taxIncluded:false}],taxes:[],taxRate:0});
+const config=()=>({terminals:[{id:'local',config:{currentDeviceId:'device',erpTerminalId:'erp',erpBinding:{tenantId:'tenant',companyId:'company',storeId:'store'},inventoryScope:{defaultSalesWarehouseId:'W'},pricing:{defaultTariffId:'T',allowedTariffIds:['T','OTHER']}}}],tariffs:[{id:'T',taxIncluded:false},{id:'OTHER',taxIncluded:false}],taxes:[],taxRate:0});
 const cart=()=>[{id:'retained',cartId:'same-line',quantity:2,price:45,v3SaleAuthority:{syncId:'old-cart-generation',syncVersion:4,binding:'same-owner'}}];
 const mocks={
  react:'module.exports=globalThis.__v3ConfigRetry.React;module.exports.default=module.exports;',
@@ -25,19 +25,25 @@ const mocks={
 const built=await build({entryPoints:['components/LargeMasterSyncV3OperationalPOS.tsx'],bundle:true,write:false,format:'cjs',platform:'node',jsx:'transform',tsconfigRaw:{compilerOptions:{jsx:'react'}},plugins:[{name:'config-retry-react-boundaries',setup(b){b.onResolve({filter:/.*/},a=>mocks[a.path]?{path:a.path,namespace:'fixture'}:undefined);b.onLoad({filter:/.*/,namespace:'fixture'},a=>({contents:mocks[a.path]}));}}]});
 const loaded={exports:{}};new Function('module','exports',built.outputFiles[0].text)(loaded,loaded.exports);const Component=loaded.exports.default;
 const settle=()=>act(async()=>{for(let n=0;n<30;n++)await Promise.resolve();});
-async function fixture({initialHold}={}){
- Object.assign(env,{child:undefined,mounts:0,unmounts:0,requests:[],outcomes:initialHold?[{acquire:initialHold.promise}]:[],validIdentity:true,projects:[],categoryReads:[]});
- let rendered=config();const lines=cart(),before=JSON.stringify(lines);let renderer;
+async function fixture({initialHold,emptyCart=false}={}){
+ Object.assign(env,{child:undefined,mounts:0,unmounts:0,requests:[],outcomes:initialHold?[{acquire:initialHold.promise}]:[],validIdentity:true,bindingVersion:1,runtimeVersion:1,resumeGuard:undefined,projects:[],categoryReads:[]});
+ let rendered=config();const lines=emptyCart?[]:cart(),before=JSON.stringify(lines);let renderer;
  env.acquire=async input=>{
+  const binding = env.bindingVersion;
+  const runtime = env.runtimeVersion;
   const index=env.requests.length+1,outcome=env.outcomes.shift()||{};env.requests.push(input);
   if(outcome.acquire)await outcome.acquire;
   if(outcome.fail||!env.validIdentity)throw Error('SYNC_V3_BINDING_CHANGED');
-  const source={categories:async()=>{env.categoryReads.push(index);if(outcome.categories)await outcome.categories;return [{key:`C${index}`,label:`category-${index}`,count:1}];},search:async()=>[],get:async()=>null,findBarcode:async()=>({item:{product:{id:`P${index}`,name:`product-${index}`,price:index}}})};
-  return {assertCurrent:async()=>{if(!env.validIdentity)throw Error('SYNC_V3_BINDING_CHANGED');},projectConfig:async value=>{env.projects.push(index);return value;},catalog:async()=>source,withStocks:async rows=>rows,withStock:async row=>row,validate:async()=>{if(!env.validIdentity)throw Error('SYNC_V3_BINDING_CHANGED');}};
+  const source={categories:async()=>{env.categoryReads.push(index);if(outcome.categories)await outcome.categories;return [{key:`C${index}`,label:`category-${index}`,count:1}];},search:async query=>query ? [{product:{id:'filtered',name:query}}] : [],get:async()=>null,findBarcode:async()=>({item:{product:{id:`P${index}`,name:`product-${index}`,price:index}}})};
+  return {assertSetupIdentity:()=>{if(binding!==env.bindingVersion)throw Error('SYNC_V3_BINDING_CHANGED');},assertCurrent:async()=>{
+   if(env.resumeGuard)await env.resumeGuard;
+   if(!env.validIdentity)throw Error('SYNC_V3_BINDING_CHANGED');
+   if(runtime!==env.runtimeVersion)throw Error('SYNC_V3_RUNTIME_VERSION_CHANGED');
+  },projectConfig:async value=>{env.projects.push(index);return value;},catalog:async()=>source,withStocks:async rows=>rows,withStock:async row=>row,validate:async()=>{if(!env.validIdentity)throw Error('SYNC_V3_BINDING_CHANGED');}};
  };
  const props=()=>({config:rendered,activeTerminalId:'local',cart:lines,onOpenSettings(){},onUpdateCart(){throw Error('cart-mutation-forbidden');}});
  await act(async()=>{renderer=Renderer.create(React.createElement(Component,props()));});await settle();
- return {renderer,lines,before,props,update:async({newRef=false,name}={})=>{if(newRef)rendered={...rendered,...(name?{name}:{})};await act(async()=>renderer.update(React.createElement(Component,props())));await settle();},event:async()=>{await act(async()=>env.catalogUpdated());await settle();},text:()=>JSON.stringify(renderer.toJSON()),unchanged:retained=>{assert.equal(env.mounts,1);assert.equal(env.unmounts,0);assert.strictEqual(env.child.retained,retained);assert.strictEqual(env.child.props.cart,lines);assert.equal(JSON.stringify(lines),before);},close:async()=>{await act(async()=>renderer.unmount());}};
+ return {renderer,lines,before,props,update:async({newRef=false,name,settingsSuspended}={})=>{if(newRef)rendered={...rendered,...(name?{name}:{})};await act(async()=>renderer.update(React.createElement(Component,{...props(),settingsSuspended})));await settle();},event:async()=>{await act(async()=>env.catalogUpdated());await settle();},text:()=>JSON.stringify(renderer.toJSON()),unchanged:retained=>{assert.equal(env.mounts,1);assert.equal(env.unmounts,0);assert.strictEqual(env.child.retained,retained);assert.strictEqual(env.child.props.cart,lines);assert.equal(JSON.stringify(lines),before);},close:async()=>{await act(async()=>renderer.unmount());}};
 }
 const results=[];
 try{
@@ -86,6 +92,77 @@ try{
   await act(async()=>gate.resolve());await settle();assert.equal(env.mounts,1);assert.equal(env.unmounts,0);assert.equal(env.projects.filter(n=>n===1).length,0,'retired initial read must not project');
   let match;await act(async()=>{match=await env.child.props.v3Operational.resolveCode('P');});assert.equal(match.product.id,'P2');assert.equal(JSON.stringify(f.lines),f.before);
   results.push('initial pending replacement publishes once and drops stale acquire completion');
+ }finally{await f.close();}}
+ // An Ajustes round trip remounts the sales UI without reading the catalog context again.
+ {const f=await fixture();try{
+  const previous=env.child.props.v3Operational;
+  await act(async()=>previous.search('filtered',null));
+  assert.equal(env.child.props.catalogSearchProducts[0].id,'filtered');
+  await f.update({settingsSuspended:true});
+  assert.equal(f.renderer.toJSON(),null);
+  assert.equal(env.unmounts,1);
+  const guard=defer();env.resumeGuard=guard.promise;
+  await f.update({settingsSuspended:false});
+  assert.ok(!f.text().includes('Preparando catálogo'));
+  assert.ok(f.text().includes('Verificando catálogo'));
+  assert.equal(env.mounts,1);
+  assert.equal(f.renderer.root.findAllByProps({'data-pos':true}).length,0);
+  await assert.rejects(previous.resolveCode('P'),/UI_CONTEXT_CHANGED/);
+  await act(async()=>guard.resolve());await settle();
+  assert.equal(env.mounts,2);
+  assert.ok(!f.text().includes('Verificando catálogo'));
+  assert.equal(env.requests.length,1);
+  assert.deepEqual(env.projects,[1]);
+  assert.deepEqual(env.categoryReads,[1]);
+  assert.deepEqual(env.child.props.catalogSearchProducts,[]);
+  assert.strictEqual(env.child.props.cart,f.lines);
+  await assert.rejects(previous.resolveCode('P'),/UI_CONTEXT_CHANGED/);
+  await act(async()=>{assert.equal((await env.child.props.v3Operational.resolveCode('P')).product.id,'P1');});
+  results.push('Ajustes: retains warm catalog, remounts sales, resets search and fences retired UI actions');
+ }finally{await f.close();}}
+ // A changed binding or a failed catalog must still acquire a new context when returning.
+ {const f=await fixture();try{
+  await f.update({settingsSuspended:true});env.bindingVersion++;
+  await f.update({settingsSuspended:false});
+  assert.equal(env.requests.length,2);
+  await act(async()=>{assert.equal((await env.child.props.v3Operational.resolveCode('P')).product.id,'P2');});
+  const replacement=defer();env.outcomes.push({acquire:replacement.promise});
+  await f.update({settingsSuspended:true});env.runtimeVersion++;
+  await f.update({settingsSuspended:false});
+  assert.equal(env.requests.length,3);
+  assert.equal(f.renderer.root.findAllByProps({'data-pos':true}).length,0,'sales waits for the replacement context');
+  await act(async()=>replacement.resolve());await settle();
+  assert.equal(f.renderer.root.findAllByProps({'data-pos':true}).length,1);
+  await act(async()=>{assert.equal((await env.child.props.v3Operational.resolveCode('P')).product.id,'P3');});
+  env.outcomes.push({fail:true});await f.event();
+  assert.ok(f.text().includes('SYNC_V3_BINDING_CHANGED'));
+  await f.update({settingsSuspended:true});
+  env.outcomes.push({fail:true});
+  await f.update({settingsSuspended:false});
+  assert.equal(env.requests.length,5);
+  assert.equal(f.renderer.root.findAllByProps({'data-pos':true}).length,0);
+  assert.ok(f.text().includes('SYNC_V3_BINDING_CHANGED'));
+  assert.deepEqual(f.renderer.root.findByType('button').children,['Abrir ajustes']);
+  await f.update({settingsSuspended:true});
+  await f.update({settingsSuspended:false});
+  assert.equal(env.requests.length,6);
+  assert.ok(!f.text().includes('SYNC_V3_BINDING_CHANGED'));
+  results.push('Ajustes: a changed binding, cached runtime, or previous failure renews the catalog normally');
+ }finally{await f.close();}}
+ {const f=await fixture({emptyCart:true});try{
+  await act(async()=>env.child.props.v3Operational.changeTariff('T'));await settle();
+  await f.update({settingsSuspended:true});await f.update({settingsSuspended:false});
+  assert.equal(env.requests.length,1,'changing only the manual/default mode does not require a catalog read');
+  await act(async()=>env.child.props.v3Operational.changeTariff('OTHER'));await settle();
+  assert.equal(env.child.props.v3Operational.tariffId,'OTHER');
+  assert.equal(env.requests.length,2);
+  f.lines.push(...cart());
+  const retainedCart=JSON.stringify(f.lines);
+  await f.update({settingsSuspended:true});await f.update({settingsSuspended:false});
+  assert.equal(env.child.props.v3Operational.tariffId,'T');
+  assert.equal(env.requests.length,3);
+  assert.equal(JSON.stringify(f.lines),retainedCart);
+  results.push('Ajustes: restores the default tariff and never updates the retained cart');
  }finally{await f.close();}}
  console.log(JSON.stringify({result:'PASS',cases:results,limits:'Actual React component, effects and context checks; acquire/native identity boundary modeled. No financial/native Android/network proof.'}));
 }finally{globalThis.window=original.window;globalThis.IS_REACT_ACT_ENVIRONMENT=original.act;delete globalThis.__v3ConfigRetry;}
