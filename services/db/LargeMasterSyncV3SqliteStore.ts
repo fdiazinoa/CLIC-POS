@@ -42,6 +42,15 @@ export type LargeMasterSyncV3SqliteFaultHook = (
 
 type RecordObject = Record<string, unknown>;
 const CHUNK_SUB_BATCH_SIZE = 250;
+const INVENTORY_SNAPSHOT_SQL = `SELECT i.inventory_version, i.cursor
+      FROM master_v3_inventory_state i JOIN master_v3_state s ON s.singleton = 1
+      WHERE i.singleton = 1
+      AND (s.active_sync_id = i.sync_id AND s.active_version = i.sync_version
+        AND s.active_sync_id = ? AND s.active_version = ? OR EXISTS (
+        SELECT 1 FROM master_v3_catalog_owners r JOIN master_v3_operational_owner o ON o.singleton = 1
+        WHERE r.sync_id = ? AND r.sync_version = ? AND r.binding = o.binding
+        AND r.inventory_sync_id = i.sync_id AND r.inventory_sync_version = i.sync_version
+        AND r.inventory_version = i.inventory_version AND r.inventory_cursor = i.cursor))`;
 const object = (value: unknown): RecordObject => value && typeof value === 'object' && !Array.isArray(value)
   ? value as RecordObject : {};
 const requiredId = (row: RecordObject, key: string): string => {
@@ -883,6 +892,25 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
         ...(Number(state.contract_version) >= 2 ? { contractVersion: Number(state.contract_version) } : {}) } : null;
   }
 
+  async readOperationalSnapshot(runtime: LargeMasterSyncV3RuntimeVersion) {
+    requireOperationalVersion(runtime);
+    const row = first(await this.connection().query(`WITH inventory AS (${INVENTORY_SNAPSHOT_SQL})
+      SELECT s.active_sync_id, s.active_version, o.sync_id AS owner_sync_id,
+        o.sync_version AS owner_version, o.binding, i.inventory_version, i.cursor
+      FROM master_v3_state s
+      LEFT JOIN master_v3_operational_owner o ON o.singleton = 1
+      LEFT JOIN inventory i ON 1 = 1
+      WHERE s.singleton = 1`, [runtime.syncId, runtime.syncVersion, runtime.syncId, runtime.syncVersion]));
+    return {
+      active: row?.active_sync_id && row.active_version != null
+        ? { syncId: String(row.active_sync_id), syncVersion: Number(row.active_version) } : null,
+      inventory: row?.inventory_version != null
+        ? { version: Number(row.inventory_version), cursor: String(row.cursor) } : null,
+      owner: row?.owner_sync_id != null
+        ? { syncId: String(row.owner_sync_id), syncVersion: Number(row.owner_version), binding: String(row.binding) } : null,
+    };
+  }
+
   async listArticlesPage(runtime: LargeMasterSyncV3RuntimeVersion, afterArticleId: string | null, limit: number): Promise<Record<string, unknown>[]> {
     const safeLimit = Math.max(1, Math.min(500, Math.floor(limit)));
     return rows(await this.connection().query(`SELECT a.article_id AS id, a.sku, a.description,
@@ -1195,15 +1223,7 @@ export class LargeMasterSyncV3SqliteStore implements LargeMasterSyncV3Store {
 
   async getInventorySnapshotVersion(runtime: LargeMasterSyncV3RuntimeVersion): Promise<{ version: number; cursor: string } | null> {
     requireOperationalVersion(runtime);
-    const row = first(await this.connection().query(`SELECT i.inventory_version, i.cursor
-      FROM master_v3_inventory_state i JOIN master_v3_state s ON s.singleton = 1
-      WHERE i.singleton = 1
-      AND (s.active_sync_id = i.sync_id AND s.active_version = i.sync_version
-        AND s.active_sync_id = ? AND s.active_version = ? OR EXISTS (
-        SELECT 1 FROM master_v3_catalog_owners r JOIN master_v3_operational_owner o ON o.singleton = 1
-        WHERE r.sync_id = ? AND r.sync_version = ? AND r.binding = o.binding
-        AND r.inventory_sync_id = i.sync_id AND r.inventory_sync_version = i.sync_version
-        AND r.inventory_version = i.inventory_version AND r.inventory_cursor = i.cursor))`,
+    const row = first(await this.connection().query(INVENTORY_SNAPSHOT_SQL,
     [runtime.syncId, runtime.syncVersion, runtime.syncId, runtime.syncVersion]));
     return row ? { version: Number(row.inventory_version), cursor: String(row.cursor) } : null;
   }

@@ -54,6 +54,41 @@ function financial(id: string, quantity: number, version = 47, sourceId = 'S'): 
     { collectionName: 'inventoryLedger', document: { id: 'ledger-' + id, ...scope, productId: 'P', warehouseId: 'W', qtyOut: quantity, qtyIn: 0, syncStatus: 'PENDING' }, requireAbsent: true, v3CurrentCatalog: current }];
 }
 
+test('operational snapshot matches the separate reads before and after catalog rotation', async () => {
+  const f = fixture();
+  try {
+    const compare = async (version: {syncId: string; syncVersion: number; contractVersion: number}) => {
+      const snapshot = await f.adapter.masterSyncV3Store.readOperationalSnapshot(version);
+      const active = await f.store.getActiveRuntimeVersion();
+      assert.deepEqual(snapshot.active, active && { syncId: active.syncId, syncVersion: active.syncVersion });
+      assert.deepEqual(snapshot.inventory, await f.store.getInventorySnapshotVersion(version));
+      assert.deepEqual(snapshot.owner, await f.store.getOperationalOwner());
+    };
+    const original = { syncId: 'S', syncVersion: 47, contractVersion: 2 };
+    await compare(original);
+    f.stage('N', 102);
+    await f.store.activateCatalogOnly('N', await f.transition());
+    await compare({ syncId: 'N', syncVersion: 102, contractVersion: 2 });
+    await compare(original);
+  } finally { f.sql.close(); }
+});
+
+test('the fiscal authority read preserves the relevant config JSON and omits unrelated data', async () => {
+  const f = fixture();
+  try {
+    const config = { companyInfo: { rnc: '101010101', name: 'QA' },
+      terminals: [{ id: 'T', config: { fiscal: { enabled: false, environment: 0 } } }],
+      products: [{ id: 'unused' }] };
+    const put = f.sql.prepare("INSERT INTO documents(collection_name,doc_id,data) VALUES ('config','current',?)");
+    put.run(JSON.stringify(config));
+    assert.deepEqual(await f.adapter.readOfflineFiscalAuthorityConfig(), {
+      companyInfo: { rnc: config.companyInfo.rnc }, terminals: config.terminals,
+    });
+    f.sql.exec("UPDATE documents SET data='malformed' WHERE collection_name='config'");
+    assert.equal(await f.adapter.readOfflineFiscalAuthorityConfig(), null);
+  } finally { f.sql.close(); }
+});
+
 test('real SQLite catalog-only 70→85 preserves stock anchor and PENDING/APPLIED deltas across three generations/restart', async () => {
   const f = fixture();
   try {

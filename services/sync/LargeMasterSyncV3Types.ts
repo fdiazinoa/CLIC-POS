@@ -131,6 +131,11 @@ export interface LargeMasterSyncV3Store {
   activate(syncId: string): Promise<LargeMasterSyncV3RuntimeVersion>;
   rollback(): Promise<LargeMasterSyncV3RuntimeVersion>;
   getActiveRuntimeVersion(): Promise<LargeMasterSyncV3RuntimeVersion | null>;
+  readOperationalSnapshot?(runtime: LargeMasterSyncV3RuntimeVersion): Promise<{
+    active: LargeMasterSyncV3RuntimeVersion | null;
+    inventory: { version: number; cursor: string } | null;
+    owner: { syncId: string; syncVersion: number; binding: string } | null;
+  }>;
   getPragmaSnapshot(): Promise<Record<string, string | number | null>>;
   getDatabaseSizeBytes(): Promise<number>;
   listArticlesPage(runtime: LargeMasterSyncV3RuntimeVersion, afterArticleId: string | null, limit: number): Promise<Record<string, unknown>[]>;

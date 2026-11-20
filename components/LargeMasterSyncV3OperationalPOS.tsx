@@ -1,3 +1,4 @@
+import { markSettingsReturnQa, measureSettingsReturnQa } from '../settingsReturnQaTrace';
 import { TERMINAL_SESSION_RENEWED_EVENT } from '../services/sync/OperationalTerminalConfig';
 import { resolveVariantSalesPrice } from '../utils/variantSalesPrice';
 import { v3OperationalConfigContext } from '../services/sync/LargeMasterSyncV3OperationalConfigScope';
@@ -70,7 +71,7 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps & { settingsSu
     // Settings can refresh the stored runtime without publishing a catalog event.
     void (async () => {
       try {
-        await session.assertCurrent();
+        await measureSettingsReturnQa('v3.resume.assertCurrent', () => session.assertCurrent());
         session.assertSetupIdentity();
       } catch {
         if (current && latestPresentation.current === presentation && contextSequence.current === sequence) reopen();
@@ -148,7 +149,7 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps & { settingsSu
     void (async () => {
       if (authorityError) throw new Error(authorityError);
       if (!warehouseId || !tariffId) throw new Error('SYNC_V3_CONFIGURED_TARIFF_WAREHOUSE_REQUIRED');
-      const ready = await acquireLargeMasterSyncV3ConfigContext(attempt.config, latestProps.current.activeTerminalId || '');
+      const ready = await measureSettingsReturnQa('v3.acquireContext', () => acquireLargeMasterSyncV3ConfigContext(attempt.config, latestProps.current.activeTerminalId || ''));
       if (!currentAttempt()) return;
       const [config, source] = await Promise.all([ready.projectConfig(attempt.config), ready.catalog(tariffId, warehouseId)]);
       const categoryMetadata = await source.categories();
@@ -335,7 +336,10 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps & { settingsSu
   const completingSettingsReturn = presentation.resumed && readyPresentation !== presentation;
   const checkingRetainedCatalog = completingSettingsReturn && !boundary && Boolean(projected) && !failure;
   useEffect(() => {
-    if (completingSettingsReturn && boundary && !failure) setReadyPresentation(presentation);
+    if (completingSettingsReturn && boundary && !failure) {
+      markSettingsReturnQa('v3.salesReady');
+      setReadyPresentation(presentation);
+    }
   }, [completingSettingsReturn, boundary, failure, presentation]);
 
   // Keep the mounted POS (including retained-ticket/reservation/payment state) across renewal.
