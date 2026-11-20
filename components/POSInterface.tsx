@@ -2796,6 +2796,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       isTerminalBlock?: boolean;
       remaining?: number;
       total?: number;
+      verificationUnavailable?: boolean;
+      verificationScope?: string;
    }>({
       type: 'B02', hasNCF: false, localBuffer: null, isUsingPool: false
    });
@@ -4666,16 +4668,33 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const [fiscalReceiptRecoveryAvailable,setFiscalReceiptRecoveryAvailable]=useState(false);
    const [receiptOnlyInitialTransaction,setReceiptOnlyInitialTransaction]=useState<Transaction|null>(null);
+   const usesDelegatedEcf = Boolean(v3Operational) && fiscalCompliance.mode === 'ECF'
+      && getDefaultFiscalProvider(config, activeTerminalConfig) === 'MSELLER';
+   const fiscalCheckScope = JSON.stringify([
+      terminalId, activeTerminalConfig?.erpTerminalId, activeTerminalConfig?.currentDeviceId,
+      activeTerminalConfig?.erpBinding?.tenantId, activeTerminalConfig?.erpBinding?.companyId,
+      activeTerminalConfig?.erpBinding?.storeId, activeTerminalConfig?.fiscal?.environment,
+      activeTerminalConfig?.fiscal?.credentialKey, config.companyInfo?.rnc, requiredSaleFiscalType,
+   ]);
+   const currentFiscalCheckScope = useRef(fiscalCheckScope);
+   useLayoutEffect(() => { currentFiscalCheckScope.current = fiscalCheckScope; }, [fiscalCheckScope]);
+   const isFiscalDisplayScopeCurrent = !usesDelegatedEcf || fiscalStatus.verificationScope === fiscalCheckScope;
+   const fiscalDisplayStatus = isFiscalDisplayScopeCurrent ? fiscalStatus : {
+      type: requiredSaleFiscalType, hasNCF: false, verificationUnavailable: true,
+   };
    useEffect(() => {
       let cancelled = false;
+      let checking = false;
+      let requested = 0;
 
-      const checkFiscalStatus = async () => {
+      const checkFiscalStatus = async (isCurrent: () => boolean) => {
          const type = requiredSaleFiscalType;
-         try{const receipt=await resolveCommittedFiscalReceipt();if(cancelled)return;setFiscalReceiptRecoveryAvailable(Boolean(receipt));}
-         catch{if(cancelled)return;setFiscalReceiptRecoveryAvailable(false);}
+         try{const receipt=await resolveCommittedFiscalReceipt();if(!isCurrent())return;setFiscalReceiptRecoveryAvailable(Boolean(receipt));}
+         catch{if(!isCurrent())return;setFiscalReceiptRecoveryAvailable(false);}
          if (isOrderTakerMode || isFiscalModeDisabled) {
             setStatus(null);
             setFiscalStatus({
+               verificationScope: fiscalCheckScope,
                type,
                hasNCF: true,
                localBuffer: null,
@@ -4690,42 +4709,83 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          try {
             if(v3Operational&&fiscalCompliance.mode==='ECF'){
                const allocation=await fiscalWorkflowV2Client.checkoutFiscalStatus(type);
-               if(cancelled)return;
+               if(!isCurrent())return;
                if(allocation){
                   setStatus(null);
-                  setFiscalStatus({type,hasNCF:allocation.remaining>0,localBuffer:null,isUsingPool:false,isTerminalBlock:true,remaining:allocation.remaining,total:allocation.total});
+                  setFiscalStatus({verificationScope:fiscalCheckScope,type,hasNCF:allocation.remaining>0,localBuffer:null,isUsingPool:false,isTerminalBlock:true,remaining:allocation.remaining,total:allocation.total});
                   return;
                }
             }
-            const canIssue = await db.canRequestMoreNCF(type, terminalId, activeTerminalConfig);
+            let canIssue = await db.canRequestMoreNCF(type, terminalId, activeTerminalConfig);
+            if (!isCurrent()) return;
+            if (canIssue && usesDelegatedEcf && !navigator.onLine) {
+               // V1 authorizes the offline sale, while the typed allocation
+               // checked above supplies its document number.
+               const reserve = await fiscalWorkflowV2Client.offlineStatus();
+               canIssue = Boolean(reserve?.validUntil && reserve.remaining > 0);
+               if (!isCurrent()) return;
+            }
             const allocations = await db.get('fiscalAllocations');
             const authorityId = activeTerminalConfig?.erpTerminalId || terminalId;
             const allocation: any = (Array.isArray(allocations) ? allocations : []).find((entry: any) =>
                entry.terminalId === authorityId && entry.ncfType === type && entry.status === 'ACTIVE');
-            if (cancelled) return;
+            if (!isCurrent()) return;
             const remaining = canIssue && allocation ? allocation.reservedEnd - allocation.nextNumber + 1 : 0;
             const total = canIssue && allocation ? allocation.reservedEnd - allocation.reservedStart + 1 : 0;
             if (canIssue && allocation) {
                const ranges = await db.get('fiscalRanges');
-               if (cancelled) return;
+               if (!isCurrent()) return;
                const range: any = (Array.isArray(ranges) ? ranges : []).find((entry: any) => entry.id === allocation.fiscalRangeId);
                setStatus({ isConnected: true, currentNCF: `${range.prefix}${allocation.nextNumber.toString().padStart(8, '0')}`,
                   remaining, expiryDate: range.expiryDate, batteryLevel: 100 });
             } else setStatus(null);
-            setFiscalStatus({ type, hasNCF: canIssue, localBuffer: canIssue ? allocation : null,
+            setFiscalStatus({ verificationScope: fiscalCheckScope, type, hasNCF: canIssue, localBuffer: canIssue ? allocation : null,
                isUsingPool: false, isTerminalBlock: Boolean(allocation), remaining, total });
          } catch (error) {
-            if (cancelled) return;
+            if (!isCurrent()) return;
             console.error('No se pudo validar la asignación fiscal de la terminal', error);
             setStatus(null);
-            setFiscalStatus({ type, hasNCF: false, localBuffer: null, isUsingPool: false, isTerminalBlock: false, remaining: 0, total: 0 });
+            setFiscalStatus({
+               verificationScope: fiscalCheckScope,
+               type, hasNCF: false, localBuffer: null, isUsingPool: false, isTerminalBlock: false,
+               remaining: 0, total: 0, verificationUnavailable: usesDelegatedEcf,
+            });
          }
       };
-      const refresh=()=>{void checkFiscalStatus();};
-      refresh();window.addEventListener('offlineFiscalReserveUpdated',refresh);window.addEventListener('transactionsUpdated',refresh);window.addEventListener('configUpdated',refresh);
+      const refresh = async () => {
+         requested++;
+         if (checking) return;
+         checking = true;
+         let started: number;
+         do {
+            started = requested;
+            await checkFiscalStatus(() => !cancelled && started === requested
+               && currentFiscalCheckScope.current === fiscalCheckScope);
+         } while (!cancelled && started !== requested);
+         checking = false;
+      };
+      const refreshDocumentState = (event: Event) => {
+         if ((event as CustomEvent<{ terminalId: string }>).detail?.terminalId === terminalId) void refresh();
+      };
+      void refresh();
+      window.addEventListener('offlineFiscalReserveUpdated', refresh);
+      window.addEventListener('transactionsUpdated', refresh);
+      window.addEventListener('configUpdated', refresh);
+      if (usesDelegatedEcf) {
+         window.addEventListener('online', refresh);
+         window.addEventListener('offline', refresh);
+         window.addEventListener('terminalFiscalDocumentsUpdated', refreshDocumentState);
+      }
       return () => {
          cancelled = true;
-         window.removeEventListener('offlineFiscalReserveUpdated',refresh);window.removeEventListener('transactionsUpdated',refresh);window.removeEventListener('configUpdated',refresh);
+         window.removeEventListener('offlineFiscalReserveUpdated', refresh);
+         window.removeEventListener('transactionsUpdated', refresh);
+         window.removeEventListener('configUpdated', refresh);
+         if (usesDelegatedEcf) {
+            window.removeEventListener('online', refresh);
+            window.removeEventListener('offline', refresh);
+            window.removeEventListener('terminalFiscalDocumentsUpdated', refreshDocumentState);
+         }
       };
    }, [
       v3Operational,
@@ -4739,15 +4799,19 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       isOrderTakerMode,
       requiredSaleFiscalType,
       terminalId,
+      usesDelegatedEcf,
+      fiscalCheckScope,
+      activeTerminalConfig?.fiscal?.enabled,
+      activeTerminalConfig?.fiscal?.typeConfigs,
       activeTerminalConfig?.fiscal?.fiscalAllocations,
       activeTerminalConfig?.fiscal?.fiscalRanges
    ]);
 
    const fiscalReserveAlert = useMemo(() => {
       if (isOrderTakerMode || isFiscalModeDisabled) return null;
-      if (!fiscalStatus.hasNCF) return null;
+      if (!isFiscalDisplayScopeCurrent || !fiscalStatus.hasNCF) return null;
       return getFiscalReserveAlert(fiscalStatus.remaining || 0, fiscalStatus.total || 0, fiscalCompliance);
-   }, [fiscalCompliance, fiscalStatus.hasNCF, fiscalStatus.remaining, fiscalStatus.total, isFiscalModeDisabled, isOrderTakerMode]);
+   }, [fiscalCompliance, fiscalStatus.hasNCF, fiscalStatus.remaining, fiscalStatus.total, isFiscalModeDisabled, isOrderTakerMode, isFiscalDisplayScopeCurrent]);
 
    const shouldShowFiscalReserveAlert = Boolean(
       fiscalReserveAlert &&
@@ -5322,11 +5386,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          tableId: activeTable?.id, orderId: activeTable?.currentOrderId, terminalId: activeTerminalId });
    }, [processedCart, cartTotal, activeTable?.id, activeTable?.currentOrderId]);
 
-   const canCheckoutWithFiscalPolicy = isOrderTakerMode || isFiscalModeDisabled || fiscalStatus.hasNCF || fiscalReceiptRecoveryAvailable;
+   const canCheckoutWithFiscalPolicy = isOrderTakerMode || isFiscalModeDisabled
+      || (isFiscalDisplayScopeCurrent && (fiscalStatus.hasNCF || fiscalReceiptRecoveryAvailable));
    const checkoutActionLabel = isOrderTakerMode
       ? 'GUARDAR PEDIDO'
       : !canCheckoutWithFiscalPolicy
-      ? 'Sin Secuencia'
+      ? (fiscalDisplayStatus.verificationUnavailable ? 'Sin confirmar' : 'Sin Secuencia')
       : isRecoveredUberOrder
          ? 'FACTURAR UBER'
          : activeRecoveredReservation
@@ -8888,7 +8953,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                disabled={!canChangeTariff}
                onChange={event => changeActiveTariff(event.target.value)}
             >{allowedTariffs.map(tariff => <option key={tariff.id} value={tariff.id}>{tariff.name}</option>)}</select></label>}
-            status={<><SyncStatusBadge online={navigator.onLine} state={syncState} /><FiscalStatusBadge inline visible={!isOrderTakerMode && !isFiscalModeDisabled} allowed={canCheckoutWithFiscalPolicy} status={fiscalStatus} /></>}
+            status={<><SyncStatusBadge online={navigator.onLine} state={syncState} /><FiscalStatusBadge inline visible={!isOrderTakerMode && !isFiscalModeDisabled} allowed={canCheckoutWithFiscalPolicy} status={fiscalDisplayStatus} /></>}
             onView={(view) => { setMobileView(view); setRightSidebarTab('CART'); }}
             onActions={() => { setMobileView('TICKET'); setRightSidebarTab('ACTIONS'); }}
             onSettings={onOpenSettings}
@@ -9354,7 +9419,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                </div>
 
                <TicketStatusControls
-                  status={isRetailMode && !isCompactHandheld ? <FiscalStatusBadge compact visible={!isOrderTakerMode && !isFiscalModeDisabled} allowed={canCheckoutWithFiscalPolicy} status={fiscalStatus} /> : undefined}
+                  status={isRetailMode && !isCompactHandheld ? <FiscalStatusBadge compact visible={!isOrderTakerMode && !isFiscalModeDisabled} allowed={canCheckoutWithFiscalPolicy} status={fiscalDisplayStatus} /> : undefined}
                   data-testid="mobile-sidebar-tabs"
                   className="flex items-center justify-end gap-2"
                   aria-label="Vista del ticket"
@@ -9613,7 +9678,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
                   <TicketStatusControls className={`ml-auto flex shrink-0 items-center justify-end gap-1 ${isRetailMode ? 'supermarket-ticket-actions' : ''}`} status={<>
                      {accountHold && <button type="button" onClick={() => setErrorToast(accountHold.note)} title={accountHold.note} className="flex items-center gap-1.5 rounded-full border border-amber-300 bg-amber-50 px-2.5 py-1 text-[11px] font-black text-amber-800"><span className="h-1.5 w-1.5 rounded-full bg-amber-500" /> Revisar antes de cobrar</button>}
-                     <FiscalStatusBadge compact short visible={!isOrderTakerMode && !isFiscalModeDisabled} allowed={canCheckoutWithFiscalPolicy} status={fiscalStatus} />
+                     <FiscalStatusBadge compact short visible={!isOrderTakerMode && !isFiscalModeDisabled} allowed={canCheckoutWithFiscalPolicy} status={fiscalDisplayStatus} />
                   </>}>
                      {!isKioskMode && <OrderServiceTypeButton value={effectiveOrderServiceType} onClick={() => handleGridAction('TAKEOUT')} />}
                      {isRetailMode && (
