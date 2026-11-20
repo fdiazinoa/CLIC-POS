@@ -33,7 +33,7 @@ import { ARTICLE_FORMATS_SCHEMA } from '../../articleFormats/schema';
 import type { FormatSQL,FormatStatement } from '../../articleFormats/store';
 import { getEffectiveFiscalComplianceConfig, getProviderEnvironment } from '../../../utils/fiscal/fiscalHelpers';
 import { validateV3FiscalMetadataMutation,validateFiscalDispatchClaimBatch } from '../LargeMasterSyncV3FiscalMetadata';
-import { v3ArticleSemantics, v3RetainedLineFingerprint } from '../../sync/LargeMasterSyncV3StockAuthority';
+import { sameV3RetainedLine, v3ArticleSemantics } from '../../sync/LargeMasterSyncV3StockAuthority';
 import { v3RestaurantContract } from '../../../utils/v3RestaurantContract';
 import { SYNC_MONITOR_PAGE_SQL, syncMonitorPageParams, decodeSyncMonitorPage, type SyncMonitorPageRequest } from '../SyncMonitorPage';
 import { Capacitor } from '@capacitor/core';
@@ -908,14 +908,14 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             await consumeTrackingCheckout(this.ensureDb() as any,tracking.checkoutId,tracking.transactionId,tracking.selections);
           }
           if(input.documents.some(d=>d.collectionName==='transactions'&&d.document.id!==sealedDispatchSource?.id&&d.document.items?.some((line:any)=>line.v3SaleAuthority&&line.trackingData?.length))&&!input.trackingCommits?.length)throw Error('TRACKING_ATOMIC_SOURCE_REQUIRED');
-          if(needsFinancialPrecondition)await this.assertV3FinancialBaseline(input.documents);
           for(const proof of input.fiscalAllocationPreconditions||[]){
             if(!['config','fiscalAllocations','fiscalRanges','localFiscalBuffer'].includes(proof.collection))throw Error('OFFLINE_FISCAL_COMMIT_PROOF_INVALID');
             const actual=(await this.ensureDb().query('SELECT data FROM documents WHERE collection_name=? AND doc_id=?',[proof.collection,proof.id])).values?.[0]?.data||null;
             if(actual!==proof.expected)throw Error('OFFLINE_FISCAL_COMMIT_AUTHORITY_CHANGED');
           }
           if(input.fiscalWorkflowCommits?.some(c=>c.birth?.schemaVersion===3)&&!input.fiscalAllocationPreconditions?.length)throw Error('OFFLINE_FISCAL_COMMIT_PROOF_REQUIRED');
-          await consumeNativeFiscalReturn(this.ensureDb() as any,input);
+          const verifiedFiscalReturnSource=await consumeNativeFiscalReturn(this.ensureDb() as any,input);
+          if(needsFinancialPrecondition)await this.assertV3FinancialBaseline(input.documents,verifiedFiscalReturnSource);
           const births=outboxEvents.filter(e=>e.eventType==='SALE_POSTED'&&e.payload.fiscalWorkflowBirth);
           if(births.some(e=>!input.fiscalWorkflowCommits?.some(c=>c.transactionId===e.aggregateId&&JSON.stringify(c.birth)===JSON.stringify(e.payload.fiscalWorkflowBirth))))throw Error('FISCAL_WORKFLOW_ATOMIC_BIRTH_REQUIRED');
           for(const commit of input.fiscalWorkflowCommits||[]){
@@ -1686,7 +1686,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         if (!retained.values?.length) throw denied();
     }
 
-    private async assertV3FinancialBaseline(documents: DurableDocumentMutation[]): Promise<void> {
+    private async assertV3FinancialBaseline(documents: DurableDocumentMutation[], verifiedFiscalReturnSource?: DurableDocumentMutation): Promise<void> {
         const retainedSources = new Map<string,{document:any;lines:Map<string,any[]>}>();
         const reads = new Map<string, Promise<any>>();
         const read = (sql: string, values: any[]) => {
@@ -1778,7 +1778,10 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
               if (!receipt.values?.length) throw new Error('SYNC_V3_STOCK_AUTHORITY_INVALID');
             }
             for (const line of document.items || []) {
+              // A sealed E34 proves its replenishment inside this write transaction.
+              // Coverage of a live balance is still required for other checkout writes.
               if (mutation.requireAbsent && mutation.collectionName === 'transactions'
+                && mutation !== verifiedFiscalReturnSource
                 && (current.syncId !== syncId || current.syncVersion !== syncVersion)
                 && line.isInventoriable && line.operationalFlags?.trackInventory !== false && line.type !== 'SERVICE') {
                 const coverage = await read('SELECT item_id FROM master_v3_inventory_balances WHERE item_id=? AND warehouse_id=?', [line.id,document.v3WarehouseId]);
@@ -1820,7 +1823,8 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
                 const sources = source.lines.get(JSON.stringify([sourceLineId,line.id])) || [];
                 if (formatSourceLine && (source.document.articleFormatEventId !== document.articleFormatWire?.source_event_id
                   || JSON.stringify(sources[0]?.articleFormat) !== JSON.stringify(line.articleFormat))) throw new Error('SYNC_V3_RETAINED_LINE_CHANGED');
-                if (sources.length !== 1 || v3RetainedLineFingerprint(sources[0]) !== v3RetainedLineFingerprint(formatSourceLine ? {...line,cartId:sourceLineId} : line)) {
+                if (sources.length !== 1 || !sameV3RetainedLine(sources[0], formatSourceLine ? {...line,cartId:sourceLineId} : line,
+                  document.documentType === 'REFUND')) {
                   throw new Error('SYNC_V3_RETAINED_LINE_CHANGED');
                 }
                 if (!['transactions','transactionHistory'].includes(context.collection)) {

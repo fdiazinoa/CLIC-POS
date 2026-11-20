@@ -1,4 +1,4 @@
-import { v3RetainedLineFingerprint } from './LargeMasterSyncV3StockAuthority';
+import { sameV3RetainedLine } from './LargeMasterSyncV3StockAuthority';
 import { assertV3ReservationSource, reservationClaimId } from './LargeMasterSyncV3ReservationAuthority';
 import type { CartItem, ParkedTicket, Transaction, Reservation } from '../../types';
 import { db } from '../../utils/db';
@@ -66,9 +66,9 @@ export const readV3RetainedCheckout = async (reference: V3RetainedReference | un
   return context;
 };
 
-export const assertV3RetainedLine = (line: CartItem, context: V3RetainedContext | undefined): void => {
+export const assertV3RetainedLine = (line: CartItem, context: V3RetainedContext | undefined, refund = false): void => {
   const matches = context?.items.filter(source => source.cartId === line.cartId && source.id === line.id) || [];
-  if (matches.length !== 1 || v3RetainedLineFingerprint(matches[0]) !== v3RetainedLineFingerprint(line)) {
+  if (matches.length !== 1 || !sameV3RetainedLine(matches[0], line, refund)) {
     throw new LargeMasterSyncV3Error('SYNC_V3_RETAINED_LINE_CHANGED');
   }
 };

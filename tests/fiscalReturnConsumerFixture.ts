@@ -108,7 +108,14 @@ export async function returnFixture(database?: any, seed = true, server?: {
         return proofTransform ? proofTransform(structuredClone(p)) : p;
     };
     // Only retained-session/catalog boundaries are fixture ports; financial writer, SQLite, allocation and Outbox are real.
-    const state: any = { inventoryBaseline: v3InventoryBaselineKey, adapter: f.adapter, config, stamp };
+    const state = {
+        inventoryBaseline: v3InventoryBaselineKey, adapter: f.adapter,
+        activeVersion: () => f.db.prepare('SELECT active_sync_id AS syncId, active_version AS syncVersion FROM master_v3_state WHERE singleton=1').get(),
+        readRetainedOriginal: async (originalId: string) => {
+            const stored = await f.adapter.getDocument<Transaction>('transactions', originalId);
+            return stored && { id: originalId, collection: 'transactions', expected: JSON.stringify(stored), items: stored.items };
+        },
+    };
     (globalThis as any).__returnConsumerFixture = state;
     const modules: Record<string, string> = {
         '../db': 'export const dbAdapter=globalThis.__returnConsumerFixture.adapter;',
@@ -118,7 +125,18 @@ export async function returnFixture(database?: any, seed = true, server?: {
         '../utils/db': `export const db={getDocument:(n,id)=>globalThis.__returnConsumerFixture.adapter.getDocument(n,id),assertFiscalTransactionAuthority:async()=>{}};`,
         './SyncFeatureFlags': 'export const isSyncFeatureEnabled=()=>true;',
         './DurableOutboxRepository': 'export const durableOutboxRepository={commitFinancialTransaction:i=>globalThis.__returnConsumerFixture.adapter.commitFinancialTransaction(i)};',
-        './LargeMasterSyncV3OperationalSession': `const s={binding:${JSON.stringify(stamp.binding)},ready:{runtime:{version:{syncId:${JSON.stringify(stamp.syncId)},syncVersion:${stamp.syncVersion}}}},assertCurrent:async()=>{},projectConfig:async c=>c,projectRefundConfig:async c=>c,validate:async(c,items,t,w,intent,validated)=>{items.forEach(l=>validated?.(l,l));},stockRequirements:async()=>[]};export const acquireLargeMasterSyncV3ConfigContext=async()=>{throw Error('UNEXPECTED_CONFIG_CONTEXT');};export const getLargeMasterSyncV3OperationalSession=async()=>s;export const getLargeMasterSyncV3RetainedSession=async()=>s;export const v3InventoryBaselineKey=(b,s)=>globalThis.__returnConsumerFixture.inventoryBaseline(b,s);`,
+        './LargeMasterSyncV3OperationalSession': `
+          const s={binding:${JSON.stringify(stamp.binding)},ready:{runtime:{get version(){return globalThis.__returnConsumerFixture.activeVersion();}}},
+            assertCurrent:async()=>{},projectConfig:async c=>c,projectRefundConfig:async c=>c,
+            validate:async(c,items,t,w,intent,validated,reference)=>{
+              items.forEach(l=>validated?.(l,l));
+              if(intent==='REFUND'&&reference?.originalTransactionId)return globalThis.__returnConsumerFixture.readRetainedOriginal(reference.originalTransactionId);
+            },stockRequirements:async()=>[]};
+          export const acquireLargeMasterSyncV3ConfigContext=async()=>{throw Error('UNEXPECTED_CONFIG_CONTEXT');};
+          export const getLargeMasterSyncV3OperationalSession=async()=>s;
+          export const getLargeMasterSyncV3RetainedSession=async()=>s;
+          export const v3InventoryBaselineKey=(b,s)=>globalThis.__returnConsumerFixture.inventoryBaseline(b,s);
+        `,
     };
     const code = await build({ entryPoints: [new URL('../services/sync/LargeMasterSyncV3FinancialCommit.ts', import.meta.url).pathname], bundle: true, write: false, format: 'esm', platform: 'node', plugins: [{ name: 'retained-boundaries', setup(b) { b.onResolve({ filter: /.*/ }, a => modules[a.path] ? { path: a.path, namespace: 'fixture' } : undefined); b.onLoad({ filter: /.*/, namespace: 'fixture' }, a => ({ contents: modules[a.path], loader: 'js' })); } }] });
     const generated = mkdtempSync(join(tmpdir(), 'clic-return-fixture-'));

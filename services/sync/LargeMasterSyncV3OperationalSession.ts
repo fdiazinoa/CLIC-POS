@@ -437,11 +437,11 @@ export class LargeMasterSyncV3OperationalSession {
         throw new LargeMasterSyncV3Error('SYNC_V3_CART_MIXED_VERSION');
       }
       // A refund is authorized by the independently read original even when its catalog is still current.
-      if (refund) assertV3RetainedLine(line, retained);
+      if (refund) assertV3RetainedLine(line, retained, true);
       if (stamp.syncId === this.ready.runtime.version.syncId && stamp.syncVersion === this.ready.runtime.version.syncVersion) {
         return currentCatalog.get(line.id);
       }
-      assertV3RetainedLine(line, retained);
+      if (!refund) assertV3RetainedLine(line, retained);
       // Delivery of an already committed invoice is distinct from a new sale/refund checkout.
       if (!fiscalDeliveryOnly) {
         const epoch = JSON.stringify([stamp.syncId,stamp.syncVersion]);

@@ -1,5 +1,5 @@
 import { LargeMasterSyncV3Error, type LargeMasterSyncV3InventoryAuthority } from './LargeMasterSyncV3Types';
-import type { V3SaleAuthorityStamp } from '../../types';
+import type { CartItem, V3SaleAuthorityStamp } from '../../types';
 
 export const v3StockSource = (stamp: V3SaleAuthorityStamp): { syncId: string; syncVersion: number } => {
   const explicit = stamp.inventorySyncId !== undefined || stamp.inventorySyncVersion !== undefined;
@@ -32,4 +32,21 @@ export const v3TariffSemantics = (row: Record<string, any>): string => JSON.stri
 export const v3VariantSemantics = (row: Record<string, any>): string => JSON.stringify([row.id, row.articleId, row.sku,
   row.active, row.attributeValues, row.barcodes]);
 
-export const v3RetainedLineFingerprint = (line: import('../../types').CartItem): string => JSON.stringify([line.cartId, line.id, line.v3SaleAuthority, line.price, line.discountAmount, line.taxable, line.appliedTaxIds, line.type, line.isInventoriable, line.measurementUnit, line.purchaseUnit, line.conversionFactor, line.variantId, line.variantSku, line.restaurantConfig, line.selected_combo_items, line.selected_modifiers, line.selected_fraction_parts, line.note,line.trackingData]);
+const retainedLineFields = (line: CartItem, discountAmount = line.discountAmount) => [
+  line.cartId, line.id, line.v3SaleAuthority, line.price, discountAmount, line.taxable, line.appliedTaxIds,
+  line.type, line.isInventoriable, line.measurementUnit, line.purchaseUnit, line.conversionFactor,
+  line.variantId, line.variantSku, line.restaurantConfig, line.selected_combo_items, line.selected_modifiers,
+  line.selected_fraction_parts, line.note, line.trackingData,
+];
+
+export const v3RetainedLineFingerprint = (line: CartItem): string => JSON.stringify(retainedLineFields(line));
+
+export const sameV3RetainedLine = (original: CartItem, candidate: CartItem, refund = false): boolean => {
+  if (!refund) return v3RetainedLineFingerprint(original) === v3RetainedLineFingerprint(candidate);
+  // The ERP returns explicit zero for an absent discount and JSONB may reorder object keys.
+  const asRefund = (line: CartItem): string => JSON.stringify(retainedLineFields(line, line.discountAmount ?? 0),
+    (_key, value) => value && typeof value === 'object' && !Array.isArray(value)
+      ? Object.fromEntries(Object.keys(value).sort().map(key => [key, value[key]]))
+      : value);
+  return asRefund(original) === asRefund(candidate);
+};

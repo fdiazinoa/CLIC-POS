@@ -17,7 +17,7 @@ const toolbar=element('desktop-ticket-toolbar'),leftIdentity=element('pos-catalo
 const footer=source.slice(source.indexOf('   const renderDesktopTicketFooterActions ='),source.indexOf('   return (\n      <div\n         ref={posRootRef}'));
 const user={id:'u',name:'Jonas Nombre Largo',photo:'https://example.invalid/cashier.jpg'};
 function context(patch:Record<string,unknown>={}){return {React,Layers,ShoppingBag,Trash2,Search,X,ScanBarcode,OrderServiceTypeButton,TicketStatusControls,FiscalStatusBadge,
- isRetailMode:false,isTabletProfile:false,isRestaurantMode:false,isMobile:false,isKioskMode:false,isOrderTakerMode:false,isFiscalModeDisabled:false,canCheckoutWithFiscalPolicy:true,fiscalStatus:{type:'B02',hasNCF:true,isTerminalBlock:true},
+ isRetailMode:false,isTabletProfile:false,isRestaurantMode:false,isMobile:false,isKioskMode:false,isOrderTakerMode:false,isFiscalModeDisabled:false,canCheckoutWithFiscalPolicy:true,fiscalDisplayStatus:{type:'B02',hasNCF:true,isTerminalBlock:true},
  currentUser:user,terminalDisplayLabel:'Mast2',renderTicketBrand:()=> <SalesOperatorIdentity user={user} terminalLabel="Mast2"/>,
  effectiveOrderServiceType:'DINE_IN',handleGridAction:()=>{},searchTerm:'',filteredProducts:[],retailSearchInputRef:{current:null},
  cart:[{cartId:'fresh',quantity:1}],hasClearableFreshItems:true,rightSidebarTab:'CART',setRightSidebarTab:()=>{},handleClearFreshCartItems:()=>{},...patch};}

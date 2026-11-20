@@ -22,6 +22,64 @@ test('native RETURN commits original snapshot, enriched payments and stable even
     assert.equal(f.documents('inventoryLedger')[0].qtyIn, 1);
     assert.equal((f.db.prepare('SELECT state FROM pos_fiscal_pending_numbers_v2').get() as any).state, 'CONSUMED');
 });
+test('sealed E34 restocks an older catalog without opening sparse inventory for other writes', async (t) => {
+    const f = await returnFixture();
+    t.after(() => f.cleanup());
+    const original = f.original;
+    const originalLine = original.items[0];
+    const stamp = originalLine.v3SaleAuthority!;
+    const current = { syncId: 'new-catalog', syncVersion: stamp.syncVersion + 1, binding: stamp.binding };
+    f.db.prepare('INSERT INTO master_v3_catalog_owners VALUES(?,?,?,?,?,?,?)')
+        .run(stamp.syncId, stamp.syncVersion, stamp.binding, stamp.syncId, stamp.syncVersion, stamp.inventoryVersion, stamp.inventoryCursor);
+    f.db.prepare('INSERT INTO master_v3_catalog_owners VALUES(?,?,?,?,?,?,?)')
+        .run(current.syncId, current.syncVersion, stamp.binding, stamp.syncId, stamp.syncVersion, stamp.inventoryVersion, stamp.inventoryCursor);
+    f.db.prepare('UPDATE master_v3_state SET active_sync_id=?,active_version=? WHERE singleton=1').run(current.syncId, current.syncVersion);
+    f.db.prepare('UPDATE master_v3_operational_owner SET sync_id=?,sync_version=? WHERE singleton=1').run(current.syncId, current.syncVersion);
+    f.db.prepare('DELETE FROM master_v3_inventory_balances WHERE item_id=? AND warehouse_id=?').run(originalLine.id, stamp.warehouseId);
+
+    const scope = { v3Binding: stamp.binding, v3WarehouseId: stamp.warehouseId, v3InventoryBaseline: original.v3InventoryBaseline };
+    const retained = { collection: 'transactions', id: original.id, expected: JSON.stringify(original) };
+    await assert.rejects(f.adapter.saveDocumentsAtomically([{ collectionName: 'transactions', requireAbsent: true,
+        v3CurrentCatalog: current, v3ExpectedRetainedDocument: retained,
+        document: { ...scope, id: 'unproved-refund', documentType: 'REFUND', originalTransactionId: original.id, items: [originalLine] },
+    }]), /SYNC_V3_INVENTORY_COVERAGE_REQUIRED/);
+    const currentLine = { ...originalLine, v3SaleAuthority: { ...stamp, syncId: current.syncId, syncVersion: current.syncVersion,
+        inventorySyncId: stamp.syncId, inventorySyncVersion: stamp.syncVersion } };
+    await assert.rejects(f.adapter.saveDocumentsAtomically([{ collectionName: 'transactions', requireAbsent: true,
+        v3CurrentCatalog: current, document: { ...scope, id: 'unproved-sale', documentType: 'TICKET', items: [currentLine] },
+    }]), /SYNC_V3_INVENTORY_COVERAGE_REQUIRED/);
+
+    let failed = false;
+    f.fault.beforeRun = async (_sql, values) => {
+        if (!failed && values[0] === 'inventoryLedger') {
+            failed = true;
+            throw Error('SYNTHETIC_STOCK_DISK_FAILURE');
+        }
+    };
+    await assert.rejects(f.run(), /SYNTHETIC_STOCK_DISK_FAILURE/);
+    const readAttempt = () => JSON.parse((f.db.prepare('SELECT data FROM pos_fiscal_return_attempts_v1').get() as any).data);
+    const attempt = readAttempt();
+    assert.equal(attempt.phase, 'SEALED');
+    assert.equal(f.documents('inventoryLedger').length, 0);
+    assert.equal(f.documents('transactions').length, 1);
+    assert.equal(f.documents('internalSequences').find(s => s.documentType === 'REFUND').nextNumber, 1);
+    assert.equal((f.db.prepare('SELECT count(*) n FROM sync_outbox_v2').get() as any).n, 0);
+
+    const tx = await f.run();
+    assert.equal(tx.id, attempt.checkout.transactionId);
+    assert.equal(readAttempt().phase, 'COMMITTED');
+    assert.equal(readAttempt().localCommittedAt, attempt.localCommittedAt);
+    assert.equal((await f.run()).id, tx.id);
+    assert.equal(f.preparations.size, 1);
+    assert.equal(f.documents('transactions').length, 2);
+    assert.equal(f.documents('inventoryLedger').length, 1);
+    assert.equal(f.documents('inventoryLedger')[0].qtyIn, 1);
+    assert.equal(f.documents('inventoryLedger')[0].warehouseId, stamp.warehouseId);
+    assert.equal(f.documents('internalSequences').find(s => s.documentType === 'REFUND').nextNumber, 2);
+    assert.deepEqual(f.db.prepare('SELECT event_type FROM sync_outbox_v2 ORDER BY local_sequence').all().map((row: any) => row.event_type),
+        ['SALES_CREDIT_NOTE_POSTED', 'PAYMENT_POSTED']);
+    assert.equal((f.db.prepare('SELECT count(*) n FROM master_v3_inventory_balances').get() as any).n, 0);
+});
 test('an acknowledged V1 sale does not divert the next E34 to the legacy permit path', async (t) => {
     const f = await returnFixture();
     t.after(() => f.cleanup());
