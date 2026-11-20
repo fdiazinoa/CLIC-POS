@@ -298,16 +298,26 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps & { settingsSu
   }, [boundary, presentation]);
 
   const failure = authorityError || error;
-  const readCartItemErpAvailableStock = useMemo(() => {
+  const erpStockScope = useMemo(() => {
     const tenantId = terminal?.config.erpBinding?.tenantId;
     if (!boundary || failure || !session || !terminal || !tenantId) return undefined;
-    const scope = v3ErpStockDisplayScope(terminal, tenantId, session.binding, session.ready.runtime.version);
-    if (!scope) return undefined;
+    return v3ErpStockDisplayScope(terminal, tenantId, session.binding, session.ready.runtime.version);
+  }, [boundary, failure, session, terminal]);
+  useEffect(() => {
+    if (!erpStockScope) return;
+    let current = true;
+    void v3ErpStockDisplay.hydrate(erpStockScope).then(loaded => {
+      if (current && loaded) window.dispatchEvent(new CustomEvent('v3ErpStockDisplayUpdated'));
+    });
+    return () => { current = false; };
+  }, [erpStockScope]);
+  const readCartItemErpAvailableStock = useMemo(() => {
+    if (!erpStockScope) return undefined;
     const sequence = contextSequence.current;
     return (itemId: string) => presentation === latestPresentation.current && sequence === contextSequence.current
       && latestContextKey.current === wantedContextKey
-      ? v3ErpStockDisplay.read(scope, itemId)?.balance : undefined;
-  }, [boundary, failure, session, terminal, wantedContextKey, presentation]);
+      ? v3ErpStockDisplay.read(erpStockScope, itemId)?.balance : undefined;
+  }, [erpStockScope, wantedContextKey, presentation]);
   const completingSettingsReturn = presentation.resumed && readyPresentation !== presentation;
   const checkingRetainedCatalog = completingSettingsReturn && !boundary && Boolean(projected) && !failure;
   useEffect(() => {

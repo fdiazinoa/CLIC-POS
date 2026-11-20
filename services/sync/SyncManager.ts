@@ -424,6 +424,31 @@ class SyncManager {
         return promise;
     }
 
+    private async refreshV3ErpStockDisplay(assertBinding: () => void, marker?: string): Promise<void> {
+        const readScope = async () => {
+            assertBinding();
+            const identity = readLargeMasterSyncV3BoundIdentity();
+            const currentBinding = v3BindingKey(identity, largeMasterSyncV3DownloadOrigin());
+            const store = dbAdapter.masterSyncV3Store;
+            const [config, catalog, owner] = await Promise.all([
+                db.get('config') as unknown as Promise<BusinessConfig>,
+                store?.getActiveRuntimeVersion(), store?.getOperationalOwner?.(),
+            ]);
+            assertBinding();
+            if (!catalog || (catalog.contractVersion ?? 1) < 2 || owner?.binding !== currentBinding
+                || owner.syncId !== catalog.syncId || owner.syncVersion !== catalog.syncVersion) {
+                throw new LargeMasterSyncV3Error('SYNC_V3_CATALOG_VERSION_CHANGED');
+            }
+            const { terminal } = v3OperationalConfigContext(config, identity);
+            const scope = v3ErpStockDisplayScope(terminal, identity.tenantId, currentBinding, catalog);
+            if (!scope) throw new LargeMasterSyncV3Error('SYNC_V3_CATALOG_CONTEXT_REQUIRED');
+            return scope;
+        };
+        const changed = await v3ErpStockDisplay.refresh(readScope, signal => fetchLargeMasterSyncV3Inventory(
+            readLargeMasterSyncV3BoundIdentity, fetch, signal, largeMasterSyncV3DownloadOrigin()), marker);
+        if (changed) window.dispatchEvent(new CustomEvent('v3ErpStockDisplayUpdated'));
+    }
+
     /** Explicit operator refresh includes V3 even when ERP outbox has no events. */
     manualSyncAll(): Promise<void> {
         const v3Authority = usesLargeMasterSyncV3Authority(syncPolicy.resolve().kind);
@@ -446,28 +471,7 @@ class SyncManager {
                 await this.syncAllCatalogs({ refreshV3: true });
             }
             if (v3Authority) {
-                const readScope = async () => {
-                    assertBinding();
-                    const identity = readLargeMasterSyncV3BoundIdentity();
-                    const currentBinding = v3BindingKey(identity, largeMasterSyncV3DownloadOrigin());
-                    const store = dbAdapter.masterSyncV3Store;
-                    const [config, catalog, owner] = await Promise.all([
-                        db.get('config') as unknown as Promise<BusinessConfig>,
-                        store?.getActiveRuntimeVersion(), store?.getOperationalOwner?.(),
-                    ]);
-                    assertBinding();
-                    if (!catalog || (catalog.contractVersion ?? 1) < 2 || owner?.binding !== currentBinding
-                        || owner.syncId !== catalog.syncId || owner.syncVersion !== catalog.syncVersion) {
-                        throw new LargeMasterSyncV3Error('SYNC_V3_CATALOG_VERSION_CHANGED');
-                    }
-                    const { terminal } = v3OperationalConfigContext(config, identity);
-                    const scope = v3ErpStockDisplayScope(terminal, identity.tenantId, currentBinding, catalog);
-                    if (!scope) throw new LargeMasterSyncV3Error('SYNC_V3_CATALOG_CONTEXT_REQUIRED');
-                    return scope;
-                };
-                await v3ErpStockDisplay.refresh(readScope, signal => fetchLargeMasterSyncV3Inventory(
-                    readLargeMasterSyncV3BoundIdentity, fetch, signal, largeMasterSyncV3DownloadOrigin()));
-                window.dispatchEvent(new CustomEvent('v3ErpStockDisplayUpdated'));
+                await this.refreshV3ErpStockDisplay(assertBinding);
             }
         });
         this.manualCatalogSync = { binding, promise };
@@ -2589,6 +2593,15 @@ class SyncManager {
             const productPricesChanged = !v3Authority && (Boolean(manifest.changed.product_prices) || changedBlocks.includes('product_prices'));
             const remoteInventoryVersion = this.normalizeVersionToken(manifest.inventory_version);
             const remotePriceVersion = this.normalizeVersionToken(manifest.price_version);
+            const refreshErpStockDisplay = () => {
+                if (!v3Authority || this.manualCatalogSync) return;
+                const cursor = manifest.cursor_map?.inventory || manifest.domain_hashes?.inventory;
+                if (!cursor && !remoteInventoryVersion) return;
+                const marker = JSON.stringify([cursor || null, remoteInventoryVersion]);
+                void this.refreshV3ErpStockDisplay(assertManifestBinding, marker).catch(error => {
+                    console.warn('[ERP_STOCK_DISPLAY_SYNC_DEFERRED]', error instanceof Error ? error.message : 'UNKNOWN');
+                });
+            };
             const inventoryVersionComparable = Boolean(localInventoryVersion && remoteInventoryVersion);
             const priceVersionComparable = Boolean(localPriceVersion && remotePriceVersion);
             const inventoryVersionMatch = inventoryVersionComparable
@@ -2721,6 +2734,7 @@ class SyncManager {
                 if (options?.markStartupCompleted) {
                     this.markStartupManifestSyncCompleted(localTerminalId);
                 }
+                refreshErpStockDisplay();
                 return v3RefreshedConfig;
             }
 
@@ -2865,6 +2879,7 @@ class SyncManager {
             }
 
             if (!refreshedConfig && !v3RefreshedConfig && (!inventoryChanged || inventorySyncSkippedByVersion) && (!productPricesChanged || priceSyncSkippedByVersion) && !bootstrapInventoryOnStartup && !bootstrapProductPricesOnStartup) {
+                if (!terminalChanged) refreshErpStockDisplay();
                 return null;
             }
 
@@ -2875,6 +2890,7 @@ class SyncManager {
             }
 
             assertManifestBinding();
+            if (!terminalChanged || refreshedConfig) refreshErpStockDisplay();
             return refreshedConfig || v3RefreshedConfig;
         } finally {
             this.terminalManifestSyncInFlight = false;
