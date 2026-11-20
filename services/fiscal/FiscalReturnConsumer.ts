@@ -62,7 +62,7 @@ interface ConsumerPorts {
     transport: Pick<ReturnType<typeof createFiscalReturnTransport>, 'context' | 'capability' | 'prepare'>;
     workflow: {
         consult: (id: string) => Promise<FiscalWorkflowStateV2>;
-        reserveOfflineCheckout: (cart: string, operation: string) => Promise<FiscalWorkflowCheckoutV2>;
+        reserveReturnCheckout: (cart: string, operation: string) => Promise<FiscalWorkflowCheckoutV2>;
         allocationDraft: (checkout: FiscalWorkflowCheckoutV2) => Promise<any>;
         recordPayment: (checkout: FiscalWorkflowCheckoutV2, paymentId: string) => Promise<void>;
     };
@@ -129,7 +129,7 @@ export function createFiscalReturnConsumer(ports: ConsumerPorts) {
                         serviceChargeAmount: 0, serviceType: original.serviceType, serviceTaxPolicySnapshot: original.serviceTaxPolicySnapshot });
                     const current = await ports.adapter.fiscalWorkflowStore?.currentCheckout(fiscalWorkflowScopeKey(scope));
                     returnNeed(!current || current.phase === 'ACKNOWLEDGED' || current.operationId === a.operationId, 'FISCAL_RETURN_RECOVERY_REQUIRED');
-                    const checkout = await ports.workflow.reserveOfflineCheckout(cart, a.operationId);
+                    const checkout = await ports.workflow.reserveReturnCheckout(cart, a.operationId);
                     returnNeed(checkout.allocation?.authorizationId === c.authorizationId && checkout.allocation?.authorityHash === c.authorityHash && checkout.phase === 'PREPARED' && checkout.operationId === a.operationId, 'FISCAL_RETURN_AUTHORITY_REQUIRED');
                     const parent = await ports.workflow.consult(original.id);
                     const reference = parent.originalReference;
