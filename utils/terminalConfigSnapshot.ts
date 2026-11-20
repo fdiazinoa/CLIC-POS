@@ -939,7 +939,7 @@ export const normalizeFiscalAllocation = (raw: unknown): FiscalAllocation | null
     reservedStart: asNumber(data.reservedStart ?? data.reserved_start, 0),
     reservedEnd: asNumber(data.reservedEnd ?? data.reserved_end, 0),
     nextNumber: asNumber(data.nextNumber ?? data.next_number, 0),
-    status: (isInactive && ['ACTIVE', 'EXHAUSTED'].includes(status) ? 'PAUSED' : status) as FiscalAllocation['status'],
+    status: (isInactive && status === 'ACTIVE' ? 'PAUSED' : status) as FiscalAllocation['status'],
     releasedAt: asString(data.releasedAt ?? data.released_at) || null,
     metadata: {
       ...metadata,

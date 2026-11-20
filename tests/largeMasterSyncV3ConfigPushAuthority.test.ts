@@ -103,6 +103,11 @@ test('ERP fiscal snapshots keep an unchanged V2 authorization and revoke it on a
   const unchanged = { fiscal_ranges: [wireRange], fiscal_allocations: [wireAllocation] };
   const scenarios = [
     { name: 'unchanged', documents: unchanged, revoked: 0 },
+    { name: 'unchanged exhausted allocation', documents: { ...unchanged,
+      fiscal_allocations: [{ ...wireAllocation, status: 'EXHAUSTED', active: false, next_number: '11' }],
+    }, storedAllocation: { ...allocation, status: 'EXHAUSTED', nextNumber: 11 }, revoked: 0 },
+    { name: 'legacy prefixless allocation with a prepared pointer', documents: unchanged,
+      storedAllocation: { ...allocation, prefix: undefined }, prepared: true, revoked: 0 },
     { name: 'changed range end', documents: { ...unchanged, fiscal_ranges: [{ ...wireRange, end_number: '31' }] }, revoked: 1 },
     { name: 'inactive range', documents: { ...unchanged, fiscal_ranges: [{ ...wireRange, active: false }] }, revoked: 1 },
     { name: 'inactive allocation', documents: { ...unchanged, fiscal_allocations: [{ ...wireAllocation, active: false }] }, revoked: 1 },
@@ -114,23 +119,43 @@ test('ERP fiscal snapshots keep an unchanged V2 authorization and revoke it on a
     await t.test(scenario.name, async () => {
       const f = await fixture();
       try {
+        const storedAllocation = scenario.storedAllocation ?? allocation;
         await f.adapter.saveDocumentsAtomically([
           { collectionName: 'fiscalRanges', document: range },
-          { collectionName: 'fiscalAllocations', document: allocation },
+          { collectionName: 'fiscalAllocations', document: storedAllocation },
         ]);
         f.db.prepare('INSERT INTO pos_offline_fiscal_allocations_v2 VALUES(?,?,?,?,?,?,0)')
           .run(id(92), 'fixture-scope', JSON.stringify(authority), 'fixture-binding', 0, 0);
-        const writes = await f.api.buildConfigPushV2DomainWrites('fiscal', { documents: scenario.documents });
-        const fiscalWrites = writes.filter((write: any) => ['fiscalRanges', 'fiscalAllocations'].includes(write.collection));
-        await f.adapter.saveDocumentsAtomically(
-          fiscalWrites.flatMap((write: any) => write.value.map((document: any) => ({ collectionName: write.collection, document }))),
-          false,
-          fiscalWrites.map((write: any) => write.collection),
-        );
+        const apply = async (documents: typeof scenario.documents) => {
+          const writes = await f.api.buildConfigPushV2DomainWrites('fiscal', { documents });
+          const fiscalWrites = writes.filter((write: any) => ['fiscalRanges', 'fiscalAllocations'].includes(write.collection));
+          await f.adapter.saveDocumentsAtomically(
+            fiscalWrites.flatMap((write: any) => write.value.map((document: any) => ({ collectionName: write.collection, document }))),
+            false,
+            fiscalWrites.map((write: any) => write.collection),
+          );
+        };
+        if (scenario.prepared) {
+          f.db.prepare(`INSERT INTO pos_fiscal_pending_numbers_v2
+            (checkout_id,transaction_id,authorization_id,issuer_rnc,environment,buffer_id,allocation_id,ncf,sequence,state)
+            VALUES(?,?,?,?,0,?,?,?,1,'PREPARED')`)
+            .run(id(93), id(94), id(92), '101010101', id(95), allocation.id, 'E340000000001');
+          const pending = f.db.prepare('SELECT * FROM pos_fiscal_pending_numbers_v2');
+          const original = pending.get();
+          await assert.rejects(apply({ ...unchanged, fiscal_allocations: [{ ...wireAllocation, next_number: '3' }] }),
+            /OFFLINE_FISCAL_NUMBER_RESERVED/);
+          assert.deepEqual(pending.get(), original);
+          assert.deepEqual(f.documents('fiscalAllocations'), [JSON.parse(JSON.stringify(storedAllocation))]);
+          await apply(scenario.documents);
+          await apply(scenario.documents);
+          assert.deepEqual(pending.get(), original);
+        } else {
+          await apply(scenario.documents);
+        }
         assert.deepEqual(f.db.prepare('SELECT revoked FROM pos_offline_fiscal_allocations_v2').get(), { revoked: scenario.revoked });
         if (!scenario.revoked) {
           assert.deepEqual(f.documents('fiscalRanges'), [range]);
-          assert.deepEqual(f.documents('fiscalAllocations'), [allocation]);
+          assert.deepEqual(f.documents('fiscalAllocations'), [{ ...storedAllocation, prefix: allocation.prefix }]);
         }
         f.assertFinancial();
       } finally {
