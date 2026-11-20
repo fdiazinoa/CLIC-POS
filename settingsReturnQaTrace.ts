@@ -55,7 +55,7 @@ function createTrace() {
   };
 }
 
-const trace = import.meta.env.VITE_POS_SETTINGS_RETURN_TRACE === 'true' ? createTrace() : undefined;
+const trace = import.meta.env?.VITE_POS_SETTINGS_RETURN_TRACE === 'true' ? createTrace() : undefined;
 if (trace && typeof window !== 'undefined') Object.assign(window, {
   posSettingsReturnTrace: { start: trace.start, stop: trace.stop },
 });
