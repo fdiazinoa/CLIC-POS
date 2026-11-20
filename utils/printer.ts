@@ -1,14 +1,16 @@
+import { financialIdentity } from '../services/db/LargeMasterSyncV3FinancialRetention';
 import {verifyReturnSettlementPresentation,returnSettlementLines} from '../services/fiscal/ReturnSettlementPresentation';
 import {inventoryPresentationTicketHTML} from '../services/inventoryPresentations/selection';
 import { clicAlert } from '../services/dialog/ClicDialogService';
 import {fiscalQrSvg} from '../services/fiscal/FiscalQrSvg';
-import {resolveFiscalPrintReadiness,fiscalPrintTransaction} from '../services/fiscal/FiscalPrintEvidence';
+import {resolveFiscalPrintReadiness,fiscalPrintTransaction,isVerifiedFiscalPrintDisplay,type FiscalPrintDisplay} from '../services/fiscal/FiscalPrintEvidence';
+import { fiscalTicketPrintQueue, isSignedFiscalSaleTicket } from '../services/fiscal/fiscalTicketPrintDelivery';
 import { articleFormatTicketHTML } from '../services/articleFormats/ticket';
 import { formatQuantity, terminalQuantityPresentation } from './quantityPresentation';
 import { weightLineLabel, displayWeightQuantity } from './scaleWeight';
 import { trackCheckoutPrint } from '../services/CheckoutPrintTracking';
 import { notifyBrowserPrint } from '../services/printer/BrowserPrint';
-import { PrintOutputError, runPrintTask } from '../services/printer/PrintFeedback';
+import { notifyPrintQueued, PrintOutputError, runPrintTask } from '../services/printer/PrintFeedback';
 import { Transaction, BusinessConfig, Reservation, CartItem, Table, CashMovement, TerminalConfig } from '../types';
 import { PrintRouterService } from '../services/printer/PrintRouterService';
 import { buildEscPosCashDrawerPayload, buildEscPosCashMovementReceiptPayload, buildEscPosComandaPayload, buildEscPosReservationPayload, buildEscPosSubtotalPayload, buildEscPosTicketPayload, buildEscPosVoucherPayload, shouldOpenDrawerForTransaction } from '../services/printer/EscPosFormatter';
@@ -251,10 +253,13 @@ export const buildTicketTaxPresentationHtml = (
     return { fiscalSummary, itemTaxHtml, totalTaxHtml };
 };
 
-const printTicketInternal = async (transaction: Transaction, config: BusinessConfig): Promise<boolean> => {
+const printTicketInternal = async (transaction: Transaction, config: BusinessConfig,
+    queued?: { evidence: FiscalPrintDisplay; isCurrent: () => boolean }): Promise<boolean> => {
     const persisted=await dbAdapter.getDocument<Transaction>('transactions',transaction.id) || await dbAdapter.getDocument<Transaction>('transactionHistory',transaction.id);
-    if(persisted)transaction=persisted;
-    const fiscalPrint=await resolveFiscalPrintReadiness(transaction);
+    if (queued && (!persisted || financialIdentity(persisted) !== financialIdentity(transaction))) return false;
+    if (persisted) transaction = persisted;
+    const fiscalPrint = queued?.evidence || await resolveFiscalPrintReadiness(transaction);
+    if (isSignedFiscalSaleTicket(transaction) && !isVerifiedFiscalPrintDisplay(fiscalPrint)) return false;
     const sealedReturnLines=returnSettlementLines(transaction);
     transaction=fiscalPrintTransaction(transaction,fiscalPrint);
     const escapeFiscal=(value:string)=>value.replace(/[&<>"']/g,character=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[character]!));
@@ -645,6 +650,7 @@ const printTicketInternal = async (transaction: Transaction, config: BusinessCon
 
     const escPosBase64 = buildEscPosTicketPayload(transaction, config, salesUsers.length > 0 ? salesUsers : users, fiscalPrint);
     let printedSilently = false;
+    if (queued && !queued.isCurrent()) return false;
 
     if (escPosBase64) {
         printedSilently = await PrintRouterService.routeAndPrintEscPos({
@@ -658,7 +664,7 @@ const printTicketInternal = async (transaction: Transaction, config: BusinessCon
         });
     }
 
-    if (printedSilently) return true;
+    if (queued || printedSilently) return printedSilently;
 
     if (!shouldSuppressBrowserPrintFallback()) {
         printedSilently = await PrintRouterService.routeAndPrintHtml({
@@ -692,7 +698,8 @@ const printTicketInternal = async (transaction: Transaction, config: BusinessCon
 
 export const printIntegratedPaymentArtifacts = async (
     transaction: Transaction,
-    config: BusinessConfig
+    config: BusinessConfig,
+    options: { deferTicket?: boolean } = {},
 ): Promise<{ ticketPrinted: boolean; voucherCopiesPrinted: number; voucherCopiesFailed: string[] }> => {
     const payments = (transaction.payments || []) as Array<Record<string, any>>;
     const gatewayPayments = payments.filter(payment =>
@@ -739,8 +746,8 @@ export const printIntegratedPaymentArtifacts = async (
         }
     }
 
-    const ticketPrinted = await printTicket(transaction, config);
-    if (!ticketPrinted) {
+    const ticketPrinted = !options.deferTicket && await printTicket(transaction, config);
+    if (!ticketPrinted && !options.deferTicket) {
         voucherCopiesFailed.push('ticket');
     }
 
@@ -1310,7 +1317,7 @@ export const printCouponForTransaction = async (transaction: Transaction, config
         return false;
     }
 };
-export const printTicket = async (...args: Parameters<typeof printTicketInternal>) => {
+const sendTicketToPrinter = async (...args: Parameters<typeof printTicketInternal>) => {
     const transaction = args[0];
     await verifyReturnSettlementPresentation(transaction);
     const accepted = await trackCheckoutPrint({transactionId:transaction.id,displayId:transaction.displayId,items:transaction.items,total:transaction.total,reason:'TICKET'},
@@ -1322,6 +1329,18 @@ export const printTicket = async (...args: Parameters<typeof printTicketInternal
         catch { console.warn('No se pudo abrir la impresión del cupón; use el historial para reintentar sólo la coletilla.'); }
     }
     return accepted;
+};
+export const printTicket = async (transaction: Transaction, config: BusinessConfig) => {
+    if (isSignedFiscalSaleTicket(transaction) && await fiscalTicketPrintQueue.blocksManualPrint(transaction.id)) {
+        notifyPrintQueued();
+        return false;
+    }
+    return sendTicketToPrinter(transaction, config);
+};
+export const printQueuedSignedFiscalTicket = async (transaction: Transaction, config: BusinessConfig,
+    evidence: FiscalPrintDisplay, isCurrent: () => boolean) => {
+    if (!isVerifiedFiscalPrintDisplay(evidence)) return false;
+    return sendTicketToPrinter(transaction, config, { evidence, isCurrent });
 };
 export const printReservation = (...args: Parameters<typeof printReservationInternal>) =>
     runPrintTask(`reservation:${args[0].id}`, 'Reserva', () => printReservationInternal(...args));

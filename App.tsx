@@ -1,3 +1,4 @@
+import { attachFiscalTicketPrinter, isSignedFiscalSaleTicket, queueSignedFiscalTicket } from './services/fiscal/fiscalTicketPrintDelivery';
 import { ACTIVE_CART_DRAFT_STORAGE_KEY, canRecoverDirectSale } from './utils/directSaleParkedTickets';
 import { readPosSecurityRecords } from './services/sync/PosSecurityV2Consumer';
 import {canViewTicketHistory} from './utils/ticketHistoryPermission';
@@ -11795,6 +11796,12 @@ const AppContent: React.FC = () => {
     });
   }, [fiscalStatusWorker,isDataLoaded,fiscalHistoryHydrated,isSecurityLoaded,deviceId,config.companyInfo.rnc,fiscalStatusLifecycleKey]);
 
+  const fiscalTicketConfig = useRef(config);
+  fiscalTicketConfig.current = config;
+  useEffect(() => {
+    if (isDataLoaded && fiscalHistoryHydrated && isSecurityLoaded) return attachFiscalTicketPrinter(() => fiscalTicketConfig.current);
+  }, [isDataLoaded, fiscalHistoryHydrated, isSecurityLoaded, fiscalStatusLifecycleKey]);
+
   useEffect(() => attachFiscalStatusLifecycle({
     runAutomatic: () => fiscalReceiptEmailQueue.runAutomatic(),
     dispose: () => {},
@@ -15729,6 +15736,10 @@ const AppContent: React.FC = () => {
                 throw new Error('No hay configuración disponible para imprimir.');
               }
 
+              if (isSignedFiscalSaleTicket(transaction)) {
+                await queueSignedFiscalTicket(transaction);
+                return true;
+              }
               const printed = await printTicket(transaction, kioskPaymentConfig);
               if (!printed) {
                 throw new Error('La impresora no respondió. Verifica el módulo de hardware.');

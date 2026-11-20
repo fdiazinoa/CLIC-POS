@@ -1,3 +1,5 @@
+import { FISCAL_TICKET_PENDING } from '../services/fiscal/FiscalTicketPrintQueue';
+import { fiscalTicketPrintQueue, isSignedFiscalSaleTicket, queueSignedFiscalTicket } from '../services/fiscal/fiscalTicketPrintDelivery';
 import {assertDopFiscalSettlement,configuredFiscalBaseCurrency} from '../services/fiscal/DopFiscalSettlement';
 import InteractionProgress,{yieldInteractionPaint,type InteractionProgressHandle} from './InteractionProgress';
 import {FiscalExpiredCheckoutAction} from './FiscalExpiredCheckoutAction';
@@ -1270,19 +1272,27 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ compactHandheld = fa
                const preferredReceiptEmail = finalizedTransaction.customerSnapshot?.email || customer?.email;
                const shouldEmailReceiptOnly = Boolean(customer?.prefersEmail && preferredReceiptEmail);
 
+               const deferFiscalTicket = !isInstallmentPayment && Boolean(config) && !shouldEmailReceiptOnly
+                  && isSignedFiscalSaleTicket(finalizedTransaction);
+               const queuedFiscalTicket = deferFiscalTicket
+                  ? queueSignedFiscalTicket(finalizedTransaction).then(() => true, () => false)
+                  : Promise.resolve(false);
+
                recordCheckoutDiagnostic('PRINT_DELIVERY_PLAN', {transactionId:txn.id,displayId:txn.displayId,
-                  status:isInstallmentPayment ? 'INSTALLMENT_FLOW' : shouldEmailReceiptOnly ? 'EMAIL_ONLY' : gatewayPayments.length ? 'AUTO_GATEWAY_PRINT' : 'MANUAL_PRINT_BUTTON',
+                  status:isInstallmentPayment ? 'INSTALLMENT_FLOW' : shouldEmailReceiptOnly ? 'EMAIL_ONLY' : deferFiscalTicket ? 'WAITING_FISCAL_SIGNATURE' : gatewayPayments.length ? 'AUTO_GATEWAY_PRINT' : 'MANUAL_PRINT_BUTTON',
                   reason:'PLAN_ONLY_NOT_PRINT_CONFIRMATION'});
 
                // The sale is already durable. Render success before touching any
                // printer, cash drawer, email service or payment-gateway receipt.
-               setSuccessNotice(null);
+               setSuccessNotice(deferFiscalTicket ? FISCAL_TICKET_PENDING : null);
                setCompletedTransaction(finalizedTransaction);
                setIsSuccessScreen(true);
 
                window.setTimeout(() => {
                   void (async () => {
-                     let deliveryNotice: string | null = null;
+                     let deliveryNotice: string | null = deferFiscalTicket
+                        ? await queuedFiscalTicket ? FISCAL_TICKET_PENDING : 'Venta registrada. No se pudo guardar la impresión automática. Imprime desde el historial cuando el timbre esté disponible.'
+                        : null;
 
                      if (!isInstallmentPayment && config) {
                         try {
@@ -1319,11 +1329,11 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ compactHandheld = fa
                         setGatewayProgress({
                            title: 'Imprimiendo comprobantes',
                            providerLabel,
-                           detail: 'Imprimiendo voucher y ticket automáticamente.',
+                           detail: deferFiscalTicket ? 'Imprimiendo voucher. El ticket fiscal espera el timbre firmado.' : 'Imprimiendo voucher y ticket automáticamente.',
                         });
 
                         try {
-                           const printResult = await printIntegratedPaymentArtifacts(finalizedTransaction, config);
+                           const printResult = await printIntegratedPaymentArtifacts(finalizedTransaction, config, { deferTicket: deferFiscalTicket });
                            if (printResult.voucherCopiesFailed.length > 0) {
                               deliveryNotice = `Venta aprobada. No se pudo imprimir automáticamente: ${printResult.voucherCopiesFailed.join(', ')}.`;
                            }
@@ -1588,6 +1598,11 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ compactHandheld = fa
                            printTicketPending.current = true;
                            setIsPrintingTicket(true);
                            try {
+                              if (isSignedFiscalSaleTicket(completedTransaction)
+                                 && await fiscalTicketPrintQueue.blocksManualPrint(completedTransaction.id)) {
+                                 setSuccessNotice(FISCAL_TICKET_PENDING);
+                                 return;
+                              }
                               const accepted = await printTicket(completedTransaction, config);
                               setSuccessNotice(accepted
                                  ? 'Ticket enviado a impresión. Comprueba la salida antes de imprimir otra copia.'
