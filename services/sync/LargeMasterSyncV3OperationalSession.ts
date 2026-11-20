@@ -253,9 +253,13 @@ export class LargeMasterSyncV3OperationalSession {
     const config=await db.get('config') as unknown as BusinessConfig;
     if(v3OperationalConfigContext(config,this.identity).scope!==this.expectedConfigScope)throw new LargeMasterSyncV3Error('SYNC_V3_BINDING_CHANGED',undefined,false,'CONFIG_SCOPE');
     }
-    const active = await this.store.getActiveRuntimeVersion();
-    const inventory = await this.ready.runtime.getInventorySnapshotVersion();
-    const owner = await this.store.getOperationalOwner!();
+    const { active, inventory, owner } = this.store.readOperationalSnapshot
+      ? await this.store.readOperationalSnapshot(this.ready.runtime.version)
+      : {
+        active: await this.store.getActiveRuntimeVersion(),
+        inventory: await this.ready.runtime.getInventorySnapshotVersion(),
+        owner: await this.store.getOperationalOwner!(),
+      };
     if (active?.syncId !== this.ready.runtime.version.syncId
       || active.syncVersion !== this.ready.runtime.version.syncVersion
       || inventory?.version !== this.ready.inventoryVersion || inventory.cursor !== this.ready.inventoryCursor

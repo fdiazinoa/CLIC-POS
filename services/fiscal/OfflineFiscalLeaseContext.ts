@@ -6,8 +6,10 @@ import {sha256Utf8} from '../sync/LargeMasterSyncV3Client';
 import {resolveSyncTarget} from '../sync/SyncProfile';
 import {offlineFiscalFail,type OfflineFiscalLocalAuthority} from './OfflineFiscalLease';
 
+type FiscalAuthorityConfig = Pick<BusinessConfig, 'companyInfo' | 'terminals'>;
+
 /** Identity and downloaded fiscal assignment only; online bearer lifetime never grants local issuance. */
-export async function offlineFiscalAuthorityFromConfig(config:BusinessConfig,
+export async function offlineFiscalAuthorityFromConfig(config:FiscalAuthorityConfig|null,
  credentials=readTerminalCredentialsSync(),deviceId=resolveLocalDeviceId()):Promise<OfflineFiscalLocalAuthority> {
  const terminalId=credentials.erpTerminalId||credentials.terminalId;
  const terminals=(config?.terminals||[]).filter(t=>(t.config?.erpTerminalId||t.id)===terminalId&&t.config?.currentDeviceId===deviceId);
@@ -33,6 +35,11 @@ export async function offlineFiscalAuthorityFromConfig(config:BusinessConfig,
 export async function readOfflineFiscalLocalAuthority():Promise<OfflineFiscalLocalAuthority>{
  const {dbAdapter}=await import('../db');
  await dbAdapter.connect();
- try{return await offlineFiscalAuthorityFromConfig(await dbAdapter.getDocument<BusinessConfig>('config','current') as BusinessConfig);}
+ try {
+  const config = dbAdapter.readOfflineFiscalAuthorityConfig
+   ? await dbAdapter.readOfflineFiscalAuthorityConfig()
+   : await dbAdapter.getDocument<FiscalAuthorityConfig>('config','current');
+  return await offlineFiscalAuthorityFromConfig(config);
+ }
  catch(error){if(error instanceof Error&&error.message==='OFFLINE_FISCAL_BINDING_CHANGED'){await dbAdapter.fiscalWorkflowStore?.revokeOfflineLeases?.('*');await dbAdapter.fiscalWorkflowStore?.revokeAllocations?.('*');}throw error;}
 }
