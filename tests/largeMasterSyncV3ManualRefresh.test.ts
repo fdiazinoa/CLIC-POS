@@ -58,7 +58,8 @@ async function fixture(v3=true, primary=true, kind='ERP_ACTIVE') {
   const target={kind,canPullMasters:true,canPushMasters:false,dataMaster:'ERP'};
   const context={
     usesLargeMasterSyncV3Authority:()=>v3&&kind==='ERP_ACTIVE',syncPolicy:{resolve:()=>target},
-    readLargeMasterSyncV3BoundIdentity:()=>({...identity}),LargeMasterSyncV3Error,
+    readLargeMasterSyncV3BoundIdentity:()=>({...identity}),
+    readOperationalTerminalBinding:()=>JSON.stringify(identity),LargeMasterSyncV3Error,
     persistLargeMasterSyncV3ConfigPushCatalog:helper.persistLargeMasterSyncV3ConfigPushCatalog,
     captureLargeMasterSyncV3ConfigRefreshAuthorityFromStore:async()=>authority,
     v3ErpStockDisplay:stockDisplay,v3ErpStockDisplayScope,v3OperationalConfigContext,

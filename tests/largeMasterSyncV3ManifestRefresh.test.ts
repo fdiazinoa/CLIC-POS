@@ -18,6 +18,7 @@ const actual = ['manualCatalogSync', 'manualSyncAll', 'v3CatalogRefresh', 'refre
 
 async function fixture() {
   const storage = new Map<string, string>(); const events: string[] = [];
+  let publishedConfig: unknown;
   const resolvedRequests: any[] = [];
   let identity = { tenantId: 'tenant', terminalId: 'erp-terminal', deviceId: 'device', syncToken: 'secret', erpSyncBaseUrl: 'https://erp.test/api/sync' };
   let config: any = getInitialConfig('Supermercado' as any);
@@ -31,6 +32,8 @@ async function fixture() {
   let active = { syncId: 'old', syncVersion: 47, price: 70 }; let exports = 0; let fetches = 0;
   let prepare: () => Promise<void> = async () => {}; let save: () => Promise<void> = async () => {};
   let onFetch: () => Promise<void> = async () => {}; let corrupt = false;
+  let onWait: () => Promise<void> = async () => {};
+  let origin = 'https://download.test';
   let cachedError: LargeMasterSyncV3Error | undefined; let acquisitions = 0;
   const db = { get: async (name: string) => name === 'config' ? (corrupt ? {} : clone(config))
     : name === 'internalSequences' ? [{ source: 'ERP_TERMINAL_CONFIG' }] : [],
@@ -68,12 +71,15 @@ async function fixture() {
     readLargeMasterSyncV3BoundIdentity: () => ({ ...identity }),
     readOperationalTerminalBinding: () => JSON.stringify([identity, config.terminals[0].config.erpBinding.companyId]),
     readOperationalCatalogBindingProof: () => ({ companyId: config.terminals[0].config.erpBinding.companyId }),
-    largeMasterSyncV3DownloadOrigin: () => 'https://download.test', LargeMasterSyncV3Error,
+    largeMasterSyncV3DownloadOrigin: () => origin, LargeMasterSyncV3Error,
     persistLargeMasterSyncV3ConfigPushCatalog: helper.persistLargeMasterSyncV3ConfigPushCatalog,
     captureLargeMasterSyncV3ConfigRefreshAuthorityFromStore:async()=>({localTerminalId:localId,assertCurrent:()=>{}}),
-    window: { dispatchEvent: (event: { type: string }) => { events.push(event.type); } }, CustomEvent: class { constructor(public type: string) {} },
+    window: { dispatchEvent: (event: { type: string; options?: { detail?: { config?: unknown } } }) => {
+      events.push(event.type);
+      if (event.type === 'v3CatalogUpdated') publishedConfig = event.options?.detail?.config;
+    } }, CustomEvent: class { constructor(public type: string, public options?: object) {} },
     localStorage: { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value) },
-    navigator: { onLine: true }, protectsLocalCatalogFromCloud: () => false, waitForBackgroundSyncWindow: async () => {},
+    navigator: { onLine: true }, protectsLocalCatalogFromCloud: () => false, waitForBackgroundSyncWindow: () => onWait(),
     apiSyncAdapter: { isErpActiveOperationalTarget: () => true }, console: { warn() {}, info() {} },
     ERP_SUPPORTED_MASTER_COLLECTIONS: new Set(),
   };
@@ -90,6 +96,7 @@ async function fixture() {
       markStartupManifestSyncCompleted: () => {}, recordSnapshotDiagnostics: () => {},
       normalizeVersionToken: (value: unknown) => value == null ? null : String(value),
       incrementSyncTelemetry: () => {}, publishSyncHealthUpdate: () => {}, refreshErpPaymentMethods: async () => {},
+      refreshItemLabelPrices: async () => {}, refreshV3ErpStockDisplay: async () => {},
       refreshTerminalResolvedConfig: async (_snapshot: unknown, options: unknown) => {
         resolvedRequests.push(options); return clone(config);
       },
@@ -99,17 +106,78 @@ async function fixture() {
   const marker = () => storage.get(`clic_v3_applied_manifest_${localId}`);
   return { instance: restart(), restart, manifest: () => manifest, active: () => active, events, exports: () => exports,
     fetches: () => fetches, cursors: () => cursors, marker, config: () => config, resolvedRequests,
+    publishedConfig: () => publishedConfig,
+    changeOrigin: (value: string) => { origin = value; },
     change: (patch: Partial<typeof identity>) => { identity = { ...identity, ...patch }; },
-    onFetch: (callback: typeof onFetch) => { onFetch = callback; }, onPrepare: (callback: typeof prepare) => { prepare = callback; },
+    onFetch: (callback: typeof onFetch) => { onFetch = callback; },
+    onWait: (callback: typeof onWait) => { onWait = callback; }, onPrepare: (callback: typeof prepare) => { prepare = callback; },
     onSave: (callback: typeof save) => { save = callback; }, corrupt: () => { corrupt = true; },
     failCachedSession: (error: LargeMasterSyncV3Error) => { cachedError = error; }, acquisitions: () => acquisitions,
     changeGeneration: () => { active = { ...active, syncId: 'external', syncVersion: 103 }; } };
 }
 const sync = (f: any) => {
   // Exercise automatic reconciliation without its wall-clock throttle.
-  f.instance.lastBackgroundTerminalManifestSyncAt = 0;
+  f.instance.lastV3BackgroundManifestSuccess = null;
   return f.instance.syncTerminalManifestInBackground(f.config(), { reason: 'periodic_manifest', throwOnError: true });
 };
+
+test('startup skips incomplete responses without delaying the next foreground reconciliation', async () => {
+  const f = await fixture();
+  const changed = f.manifest().changed;
+  f.manifest().changed = null;
+  await f.instance.syncTerminalManifestInBackground(f.config(), { reason: 'startup', throwOnError: true });
+  assert.equal(f.exports(), 0);
+  assert.equal(f.fetches(), 1);
+  assert.equal(f.marker(), undefined);
+
+  f.manifest().changed = changed;
+  await f.instance.syncTerminalManifestInBackground(f.config(), { reason: 'app_resumed', throwOnError: true });
+  assert.equal(f.exports(), 1);
+  assert.equal(f.fetches(), 2);
+  assert.ok(f.marker());
+
+  await f.instance.syncTerminalManifestInBackground(f.config(), { reason: 'connection_restored', throwOnError: true });
+  assert.equal(f.fetches(), 3);
+  assert.equal(f.exports(), 1);
+});
+
+test('the POS checks a new catalog on foreground even after a recent successful check', async () => {
+  const f = await fixture();
+  await f.instance.syncTerminalManifestInBackground(f.config(), { reason: 'startup', throwOnError: true });
+  assert.equal(f.exports(), 1);
+  f.manifest().cursor_map.items = 'new-article';
+  await f.instance.syncTerminalManifestInBackground(f.config(), { reason: 'app_resumed', throwOnError: true });
+  assert.equal(f.fetches(), 2);
+  assert.equal(f.exports(), 2);
+  await f.instance.syncTerminalManifestInBackground(f.config(), { reason: 'periodic_manifest', throwOnError: true });
+  assert.equal(f.fetches(), 2);
+});
+
+test('a deferred foreground manifest rejects a changed binding before making a request', async () => {
+  const f = await fixture();
+  f.onWait(async () => { f.changeOrigin('https://new-download.test'); });
+  await assert.rejects(f.instance.syncTerminalManifestInBackground(f.config(), {
+    reason: 'app_resumed', throwOnError: true,
+  }), /BINDING_CHANGED/);
+  assert.equal(f.fetches(), 0);
+  assert.equal(f.marker(), undefined);
+});
+
+test('background manifest cooldown belongs to the binding and avoids duplicate exports', async () => {
+  const f = await fixture();
+  await sync(f);
+  await f.instance.syncTerminalManifestInBackground(f.config(), { reason: 'periodic_manifest', throwOnError: true });
+  assert.equal(f.fetches(), 1);
+  assert.equal(f.exports(), 1);
+
+  f.changeOrigin('https://new-download.test');
+  await f.instance.syncTerminalManifestInBackground(f.config(), { reason: 'periodic_manifest', throwOnError: true });
+  assert.equal(f.fetches(), 2);
+  assert.equal(f.exports(), 2);
+  await sync(f);
+  assert.equal(f.fetches(), 3);
+  assert.equal(f.exports(), 2);
+});
 
 test('explicit catalog refresh requests complete operational authority without legacy masters', async () => {
   const f = await fixture();
@@ -137,7 +205,7 @@ test('manual and force negotiate once with a matching checkpoint while ordinary 
     assert.deepEqual(f.cursors(), cursor);
     assert.deepEqual(f.events, ['v3CatalogUpdated', 'configUpdated', 'v3CatalogUpdated', 'configUpdated']);
     for (const automatic of ['periodic_manifest', 'realtime'] as const) {
-      f.instance.lastBackgroundTerminalManifestSyncAt = 0;
+      f.instance.lastV3BackgroundManifestSuccess = null;
       await f.instance.syncTerminalManifestInBackground(f.config(), { reason: automatic, throwOnError: true });
       assert.equal(f.exports(), 2);
     }
@@ -148,6 +216,7 @@ test('consumed manifest with false flags repairs BEB003 70 to 85 through V3 and 
   const f = await fixture(); assert.equal(f.active().price, 70);
   assert.ok(await sync(f)); assert.equal(f.active().price, 85); assert.equal(f.exports(), 1);
   assert.deepEqual(f.events, ['v3CatalogUpdated', 'configUpdated']);
+  assert.deepEqual(f.publishedConfig(), f.config());
   assert.ok(f.marker()); assert.equal(f.marker()!.includes('secret'), false);
   f.instance = f.restart(); await sync(f); assert.equal(f.active().price, 85); assert.equal(f.exports(), 1);
   f.manifest().cursor_map.inventory = 'inventory-2'; f.manifest().changed.inventory = true;

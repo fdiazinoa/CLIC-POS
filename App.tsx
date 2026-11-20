@@ -33,6 +33,7 @@ import { validateV3FrozenLineFiscalAmounts } from './services/sync/LargeMasterSy
 import { buildV3FrozenFiscalProviderTransaction } from './components/v3OperationalUIQueue';
 import { captureFiscalStatusBoundContext } from './services/fiscal/FiscalBoundContext';
 import { readLargeMasterSyncV3BoundIdentity } from './services/sync/LargeMasterSyncV3BoundTransport';
+import type { V3ConfigRefreshAuthority } from './services/sync/LargeMasterSyncV3ConfigRefreshAuthority';
 import { assertLargeMasterSyncV3NativeAndroid } from './services/sync/LargeMasterSyncV3Platform';
 import { getLargeMasterSyncV3OperationalSession, getLargeMasterSyncV3RetainedSession, v3BindingKey } from './services/sync/LargeMasterSyncV3OperationalSession';
 import type { V3TaxClassificationNotice } from './services/sync/LargeMasterSyncV3OperationalSession';
@@ -4140,7 +4141,8 @@ const AppContent: React.FC = () => {
         const forceManifestRefreshRequested = Boolean(options?.forceManifestRefresh);
         const shouldHonorForcedManifestRefresh = forceManifestRefreshRequested
           && sessionStorage.getItem(bootManifestSyncKey) !== 'true';
-        const shouldRefreshManifest = shouldHonorForcedManifestRefresh
+        const v3Authority = usesLargeMasterSyncV3Authority(syncPolicy.resolve().kind);
+        const shouldRefreshManifest = v3Authority || shouldHonorForcedManifestRefresh
           || now - lastManifestRefreshAt >= MANIFEST_REFRESH_INTERVAL_MS;
 
         if (shouldRefreshManifest) {
@@ -4148,19 +4150,19 @@ const AppContent: React.FC = () => {
             reason: options?.reason || 'startup',
             mechanism: 'terminal_manifest',
             legacy_collection_sweep: false,
-            interval_ms: MANIFEST_REFRESH_INTERVAL_MS,
+            interval_ms: v3Authority ? 0 : MANIFEST_REFRESH_INTERVAL_MS,
           });
           const refreshedFromManifest = await syncManager.syncTerminalManifestInBackground(undefined, {
-            bootstrapBlocks: shouldHonorForcedManifestRefresh,
+            bootstrapBlocks: !v3Authority && shouldHonorForcedManifestRefresh,
             reason: options?.reason,
           });
           if (!disposed && refreshedFromManifest && !Array.isArray(refreshedFromManifest) && refreshedFromManifest.terminals) {
             console.log(`[ERP SYNC] ${terminalName} actualizó su estado runtime desde el manifest del ERP.`);
           }
-          lastManifestRefreshAt = now;
-          sessionStorage.setItem(lastManifestRefreshKey, String(now));
-          if (forceManifestRefreshRequested) {
-            sessionStorage.setItem(bootManifestSyncKey, 'true');
+          if (!v3Authority) {
+            lastManifestRefreshAt = now;
+            sessionStorage.setItem(lastManifestRefreshKey, String(now));
+            if (forceManifestRefreshRequested) sessionStorage.setItem(bootManifestSyncKey, 'true');
           }
         }
         return true;
@@ -8628,6 +8630,33 @@ const AppContent: React.FC = () => {
       syncEvents.forEach(e => window.removeEventListener(e, handleSyncEvent));
     };
   }, []);
+
+  useEffect(() => {
+    const applyV3CatalogConfig = (event: Event) => {
+      const update = (event as CustomEvent<{ config: BusinessConfig; authority: V3ConfigRefreshAuthority }>).detail;
+      if (!update) return;
+      // The native catalog refresh already persisted and verified this projection.
+      // Update React without reinitializing sync or launching a legacy catalog pull.
+      setConfig(current => {
+        try {
+          update.authority.assertCurrent(current);
+          update.authority.assertCurrent(update.config);
+          if (current === config) return update.config;
+          // Preserve fields changed by another React update in the same batch.
+          const pendingChanges = Object.fromEntries(Object.entries(current)
+            .filter(([key, value]) => {
+              const previous = config[key as keyof BusinessConfig];
+              return !Object.is(value, previous) && JSON.stringify(value) !== JSON.stringify(previous);
+            }));
+          return { ...update.config, ...pendingChanges };
+        } catch {
+          return current;
+        }
+      });
+    };
+    window.addEventListener('v3CatalogUpdated', applyV3CatalogConfig);
+    return () => window.removeEventListener('v3CatalogUpdated', applyV3CatalogConfig);
+  }, [config]);
 
   useEffect(() => {
     const handleConfigUpdated = async (event: Event) => {
