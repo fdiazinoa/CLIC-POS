@@ -66,6 +66,24 @@ export function measureSettingsReturnQa<T>(name: string, operation: () => Promis
 }
 export const settingsReturnQaEnabled = Boolean(trace);
 
+const v3ErrorCodes = new Set([
+  'SYNC_V3_BINDING_CHANGED', 'SYNC_V3_RUNTIME_VERSION_CHANGED',
+  'SYNC_V3_UI_CONTEXT_CHANGED', 'SYNC_V3_OFFLINE_CACHED_RUNTIME_REQUIRED',
+  'SYNC_V3_NATIVE_STORE_UNAVAILABLE', 'SYNC_V3_BASE_URL_REQUIRED',
+  'SYNC_V3_TARIFF_UNAVAILABLE', 'SYNC_V3_CONFIGURED_TARIFF_WAREHOUSE_REQUIRED',
+]);
+const v3BindingReasons = new Set(['IDENTITY', 'ORIGIN', 'CREDENTIAL', 'CONFIG_SCOPE', 'OWNER', 'TRANSITION', 'RUNTIME']);
+
+export function markSettingsReturnV3Failure(stage: 'resume' | 'acquire', error: unknown) {
+  if (!trace) return;
+  const value = error as { code?: unknown; message?: unknown; bindingReason?: unknown } | null;
+  const rawCode = value?.code ?? value?.message;
+  const code = typeof rawCode === 'string' && v3ErrorCodes.has(rawCode) ? rawCode : 'OTHER';
+  const reason = typeof value?.bindingReason === 'string' && v3BindingReasons.has(value.bindingReason)
+    ? value.bindingReason : 'UNSPECIFIED';
+  trace.mark(`v3.failure.${stage}.${code}.${reason}`);
+}
+
 let traceSequence = 0;
 let traceTimer: ReturnType<typeof setTimeout> | undefined;
 

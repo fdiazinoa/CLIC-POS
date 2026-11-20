@@ -1,4 +1,4 @@
-import { markSettingsReturnQa, measureSettingsReturnQa } from '../settingsReturnQaTrace';
+import { markSettingsReturnQa, markSettingsReturnV3Failure, measureSettingsReturnQa } from '../settingsReturnQaTrace';
 import { TERMINAL_SESSION_RENEWED_EVENT } from '../services/sync/OperationalTerminalConfig';
 import { resolveVariantSalesPrice } from '../utils/variantSalesPrice';
 import { v3OperationalConfigContext } from '../services/sync/LargeMasterSyncV3OperationalConfigScope';
@@ -55,6 +55,7 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps & { settingsSu
     if (!resumePending) return;
 
     const reopen = () => {
+      markSettingsReturnQa('v3.trigger.resumeReopen');
       ++contextSequence.current;
       ++querySequence.current;
       catalog.current = undefined;
@@ -73,7 +74,8 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps & { settingsSu
       try {
         await measureSettingsReturnQa('v3.resume.assertCurrent', () => session.assertCurrent());
         session.assertSetupIdentity();
-      } catch {
+      } catch (error) {
+        markSettingsReturnV3Failure('resume', error);
         if (current && latestPresentation.current === presentation && contextSequence.current === sequence) reopen();
       }
       if (current && latestPresentation.current === presentation) setValidatedPresentation(presentation);
@@ -81,12 +83,14 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps & { settingsSu
     return () => { current = false; };
   }, [presentation, resumePending, session, error]);
   useEffect(() => subscribeLargeMasterSyncV3CatalogUpdates(() => {
+    markSettingsReturnQa('v3.trigger.catalogPublished');
     ++contextSequence.current; ++querySequence.current; catalog.current = undefined;
     setCatalogRevision(previous => previous + 1);
   }, true), []);
   useEffect(() => {
-    const renew = () => {
+    const renew = (event?: Event) => {
       if (latestPresentation.current.suspended || !session?.needsSessionRenewal()) return;
+      markSettingsReturnQa(event ? 'v3.trigger.terminalSessionRenewed' : 'v3.trigger.renewalDetected');
       ++contextSequence.current;
       ++querySequence.current;
       catalog.current = undefined;
@@ -114,6 +118,13 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps & { settingsSu
   try { configScope = v3OperationalConfigContext(props.config, { localTerminalId: props.activeTerminalId || '' }).key; }
   catch (reason) { authorityError = String((reason as Error).message || reason); }
   const wantedContextKey = JSON.stringify([authorityKey, tariffId, configScope]);
+  const observedContextKey = useRef(wantedContextKey);
+  useEffect(() => {
+    if (observedContextKey.current !== wantedContextKey) {
+      markSettingsReturnQa('v3.trigger.contextKeyChanged');
+      observedContextKey.current = wantedContextKey;
+    }
+  }, [wantedContextKey]);
   const latestContextKey = useRef(wantedContextKey);
   latestContextKey.current = authorityError ? '' : wantedContextKey;
   const [loadedContextKey, setLoadedContextKey] = useState('');
@@ -127,6 +138,7 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps & { settingsSu
     // A deferred config publication can replace props without changing its scope.
     // Retire only the unfinished/failed read; a ready presentation-only update stays live.
     ++contextSequence.current; ++querySequence.current; catalog.current = undefined;
+    markSettingsReturnQa('v3.trigger.configPublished');
     setConfigRetryRevision(previous => previous + 1);
   }, [props.config, wantedContextKey, authorityError]);
 
@@ -164,6 +176,7 @@ const LargeMasterSyncV3OperationalPOS: React.FC<POSInterfaceProps & { settingsSu
       setCache([]);
       setLoadedContextKey(wantedContextKey);
     })().catch(reason => {
+      markSettingsReturnV3Failure('acquire', reason);
       if (!currentAttempt()) return;
       attempt.phase = 'failed';
       setError(String(reason.message || reason));

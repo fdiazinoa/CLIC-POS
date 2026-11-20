@@ -186,9 +186,9 @@ public class MainActivity extends BridgeActivity {
 
         @JavascriptInterface
         public void recordSettingsReturnTrace(String line) {
-            if (line == null || line.length() > 100) return;
+            if (line == null || line.length() > 150) return;
             String[] fields = line.split(" ", -1);
-            if (fields.length != 6 || !fields[1].matches("settings[.]close|v3[.]resume[.]assertCurrent|v3[.]acquireContext|v3[.]salesReady|fiscal[.]receiptRecovery|fiscal[.]checkoutStatus|fiscal[.]canRequestMoreNCF|fiscal[.]check|fiscal[.]localAuthority|fiscal[.]currentCheckout|fiscal[.]allocationAvailability|fiscal[.]offlineStatus|fiscal[.]allocationsFallback|fiscal[.]rangesFallback|ui[.]unconfirmed|ui[.]noSequence|ui[.]checkoutLabel|sqlite[.]read|summary")) return;
+            if (fields.length != 6 || !fields[1].matches("settings[.]close|v3[.]resume[.]assertCurrent|v3[.]acquireContext|v3[.]salesReady|fiscal[.]receiptRecovery|fiscal[.]checkoutStatus|fiscal[.]canRequestMoreNCF|fiscal[.]check|fiscal[.]localAuthority|fiscal[.]currentCheckout|fiscal[.]allocationAvailability|fiscal[.]offlineStatus|fiscal[.]allocationsFallback|fiscal[.]rangesFallback|ui[.]unconfirmed|ui[.]noSequence|ui[.]checkoutLabel|sqlite[.]read|summary|fiscal[.]allocation(Queued|Execution)|v3[.]trigger[.](resumeReopen|catalogPublished|terminalSessionRenewed|renewalDetected|configPublished|contextKeyChanged)|v3[.]failure[.](resume|acquire)[.](SYNC_V3_(BINDING_CHANGED|RUNTIME_VERSION_CHANGED|UI_CONTEXT_CHANGED|OFFLINE_CACHED_RUNTIME_REQUIRED|NATIVE_STORE_UNAVAILABLE|BASE_URL_REQUIRED|TARIFF_UNAVAILABLE|CONFIGURED_TARIFF_WAREHOUSE_REQUIRED)|OTHER)[.](IDENTITY|ORIGIN|CREDENTIAL|CONFIG_SCOPE|OWNER|TRANSITION|RUNTIME|UNSPECIFIED)")) return;
             for (int index : new int[]{0, 2, 3, 4, 5}) {
                 if (!fields[index].matches("-?[0-9]{1,8}")) return;
             }
