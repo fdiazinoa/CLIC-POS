@@ -1,3 +1,4 @@
+import { createUuid } from '../../utils/uuid';
 import type { Transaction, CartItem, BusinessConfig } from '../../types';
 import type { DatabaseAdapter } from '../db/DatabaseAdapter';
 import type { NativeFiscalReturnStore } from '../db/NativeFiscalReturnStore';
@@ -127,15 +128,33 @@ export function createFiscalReturnConsumer(ports: ConsumerPorts) {
                     // This genuine native reservation is PREPARED only: no issued counter, payment or stock effect.
                     const cart = returnJSON({ items: selected, customerId: original.customerId ?? null, fiscalType: 'E34', originalTransactionId: original.id,
                         serviceChargeAmount: 0, serviceType: original.serviceType, serviceTaxPolicySnapshot: original.serviceTaxPolicySnapshot });
-                    const current = await ports.adapter.fiscalWorkflowStore?.currentCheckout(fiscalWorkflowScopeKey(scope));
-                    returnNeed(!current || current.phase === 'ACKNOWLEDGED' || current.operationId === a.operationId, 'FISCAL_RETURN_RECOVERY_REQUIRED');
-                    const checkout = await ports.workflow.reserveReturnCheckout(cart, a.operationId);
-                    returnNeed(checkout.allocation?.authorizationId === c.authorizationId && checkout.allocation?.authorityHash === c.authorityHash && checkout.phase === 'PREPARED' && checkout.operationId === a.operationId, 'FISCAL_RETURN_AUTHORITY_REQUIRED');
+                    const native = ports.adapter.fiscalWorkflowStore;
+                    const scopeKey = fiscalWorkflowScopeKey(scope);
+                    const current = await native?.currentCheckout(scopeKey);
+                    returnNeed(!current || current.phase === 'ACKNOWLEDGED' ||
+                        current.operationId === (a.replacementOperationId ?? a.operationId), 'FISCAL_RETURN_RECOVERY_REQUIRED');
+                    if (!a.replacementOperationId) {
+                        if (current?.phase === 'PREPARED' && current.permit?.leaseId && !current.allocation &&
+                            current.operationId === a.operationId && current.cartIdentity === cart) {
+                            returnNeed(native?.abandonOfflinePrepared, 'OFFLINE_FISCAL_ABANDON_NOT_SAFE');
+                            await native!.abandonOfflinePrepared!(current);
+                        }
+                        const abandoned = await native?.abandonedOfflineOperation?.(scopeKey, a.operationId);
+                        if (abandoned) {
+                            returnNeed(abandoned.phase === 'PREPARED' && !abandoned.paymentIds.length &&
+                                abandoned.cartIdentity === cart && !abandoned.allocation, 'FISCAL_RETURN_RECOVERY_REQUIRED');
+                            // Persist before reserving so retries reuse the same replacement even after an interrupted response.
+                            a = await store!.save(a, { ...a, replacementOperationId: createUuid() });
+                        }
+                    }
+                    const operationId = a.replacementOperationId ?? a.operationId;
+                    const checkout = await ports.workflow.reserveReturnCheckout(cart, operationId);
+                    returnNeed(checkout.allocation?.authorizationId === c.authorizationId && checkout.allocation?.authorityHash === c.authorityHash && checkout.phase === 'PREPARED' && checkout.operationId === operationId, 'FISCAL_RETURN_AUTHORITY_REQUIRED');
                     const parent = await ports.workflow.consult(original.id);
                     const reference = parent.originalReference;
                     returnNeed(reference, originalReferencePendingCode(parent.originalReferenceReason));
                     returnNeed(parent.mode === 'WORKFLOW' && parent.sourceKind === 'ORDINARY_SOURCE_V2' && parent.signature && ['ACCEPTED', 'ACCEPTED_CONDITIONAL'].includes(parent.decision) && validOrdinaryReturnReference(original, parent), 'FISCAL_RETURN_ACCEPTED_ORIGINAL_REQUIRED');
-                    const command: ReturnCommand = { schemaVersion: 1, capability: 'fiscalReturnV1', operationId: a.operationId, checkoutId: checkout.checkoutId, transactionId: checkout.transactionId,
+                    const command: ReturnCommand = { schemaVersion: 1, capability: 'fiscalReturnV1', operationId, checkoutId: checkout.checkoutId, transactionId: checkout.transactionId,
                         authorizationId: c.authorizationId, authorityHash: c.authorityHash, originalReference: reference!, lines,
                         payments: requested.map((p, i) => ({ ...p, id: a.paymentIds[i] })), ...(selection?{settlement:selection}:{}), financialEventId: a.financialEventId,
                         inventoryMovementIds: selected.filter(l => l.type !== 'SERVICE' && l.isInventoriable === true && conditions.get(l.cartId) !== 'DAMAGED').map(l => `V3-${checkout.transactionId}-${encodeURIComponent(l.cartId)}`) };

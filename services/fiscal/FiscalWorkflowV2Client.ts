@@ -280,14 +280,6 @@ const request=async(path:string,body?:Record<string,any>,signal?:AbortSignal,tim
   const native=store();
   if(!native?.reserveAllocationCheckout)fail('OFFLINE_FISCAL_NATIVE_REQUIRED');
   const authority=await readOfflineAuthority();
-  const current=await native!.currentCheckout(fiscalWorkflowScopeKey(authority.scope));
-  // Older POS builds could reserve a V1 permit before detecting the missing V2 allocation.
-  // The native abandonment proof ensures that the permit never produced financial effects.
-  if(current?.phase==='PREPARED'&&current.permit?.leaseId&&!current.allocation
-   &&current.operationId===operationId&&current.cartIdentity===cartIdentity){
-   if(!native!.abandonOfflinePrepared)fail('OFFLINE_FISCAL_ABANDON_NOT_SAFE');
-   await native!.abandonOfflinePrepared!(current);
-  }
   return native!.reserveAllocationCheckout!(authority,cartIdentity,operationId);
  },
  async reserveOfflineCheckout(cartIdentity:string,operationId:string,fiscalSaleContext?:TableFiscalSaleContext,dispatch?:DispatchCheckoutPreparation):Promise<FiscalWorkflowCheckoutV2>{
