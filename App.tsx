@@ -13241,8 +13241,19 @@ const AppContent: React.FC = () => {
         alert(`Devolución guardada: ${result.displayId || result.id}. Pendiente de sincronización y confirmación fiscal; guardar no equivale a aceptación DGII.`);
         return result;
       }catch(error){
-        console.warn('[RETURN/E34]',/^FISCAL_[A-Z0-9_]+$/.test((error as Error)?.message)?(error as Error).message:'FISCAL_RETURN_PENDING');
-        throw Error(returnOperatorMessage(error));
+        const message = (error as Error)?.message;
+        const code = /^(?:FISCAL|SYNC_V3)_[A-Z0-9_]{1,100}$/.test(message) ? message
+          : (error as Error)?.name === 'AbortError' ? 'FISCAL_RETURN_REQUEST_TIMEOUT'
+          : 'FISCAL_RETURN_PENDING';
+        console.warn('[RETURN/E34]', code);
+        recordCheckoutDiagnostic('FISCAL_RETURN_FAILED', {
+          transactionId: originalTx.id,
+          displayId: originalTx.displayId,
+          status: 'FAILED',
+          reason: code,
+        });
+        const detail = returnOperatorMessage(error);
+        throw Error(detail.includes(code) ? detail : `${detail} Código: ${code}.`);
       }
     }
     originalTx = await readRefundOriginal(originalTx);
