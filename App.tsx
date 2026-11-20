@@ -2036,12 +2036,15 @@ const App: React.FC = () => {
 
 type PersistentPOSHostProps = React.ComponentProps<typeof POSInterface> & {
   visible: boolean;
+  settingsSuspended?: boolean;
   minimalContent?: boolean;
   closeTrace?: PosInteractionTrace | null;
   tableDestination?: { trace: PosInteractionTrace; tableId: string; orderId: string; cart: CartItem[] } | null;
   onInteractive?: () => void;
 };
-const MemoizedPOSInterface = React.memo(LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED ? LargeMasterSyncV3OperationalPOS : POSInterface);
+const MemoizedPOSInterface = React.memo<React.ComponentProps<typeof LargeMasterSyncV3OperationalPOS>>(
+  LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED ? LargeMasterSyncV3OperationalPOS : POSInterface,
+);
 const readAppProducts = (): Promise<Product[]> => LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED
   ? Promise.resolve([]) : db.get('products') as Promise<Product[]>;
 const MemoizedTableMap = React.memo(TableMap);
@@ -2073,7 +2076,7 @@ const StableTableMap: React.FC<React.ComponentProps<typeof TableMap>> = (incomin
  * props are proxied through refs so App-level navigation renders do not defeat
  * the memo boundary, while handlers always execute their latest closure.
  */
-const PersistentPOSHost: React.FC<PersistentPOSHostProps> = ({ visible, minimalContent, closeTrace, tableDestination, onInteractive, ...incomingProps }) => {
+const PersistentPOSHost: React.FC<PersistentPOSHostProps> = ({ visible, settingsSuspended, minimalContent, closeTrace, tableDestination, onInteractive, ...incomingProps }) => {
   const hostRef = useRef<HTMLDivElement>(null);
   const consumedCloseTraceRef = useRef<PosInteractionTrace | null>(null);
   const destinationVisibleRef = useRef(visible);
@@ -2148,9 +2151,9 @@ const PersistentPOSHost: React.FC<PersistentPOSHostProps> = ({ visible, minimalC
         <React.Profiler id="POSInterface" onRender={(_id, phase, actualDuration, baseDuration, startTime, commitTime) => {
           tableLatencyQaMark('REACT_POS_RENDER', { phase, actualDuration, baseDuration, startTime, commitTime });
         }}>
-          <MemoizedPOSInterface {...stableProps} />
+          <MemoizedPOSInterface {...stableProps} settingsSuspended={settingsSuspended} />
         </React.Profiler>
-      ) : <MemoizedPOSInterface {...stableProps} />}
+      ) : <MemoizedPOSInterface {...stableProps} settingsSuspended={settingsSuspended} />}
     </div>
   );
 };
@@ -3390,6 +3393,24 @@ const AppContent: React.FC = () => {
   const getCurrentDeviceRole = React.useCallback((): DeviceRole => {
     return getCurrentDeviceRoleRaw() ?? DeviceRole.STANDARD_POS;
   }, [getCurrentDeviceRoleRaw]);
+
+  const retainedSettingsSalesSessionRef = useRef<string | null>(null);
+  const salesOperatorId = currentUser?.id;
+  const readSettingsSalesSession = useCallback(() => {
+    if (!LARGE_MASTER_SYNC_V3_CANDIDATE_ENABLED || !salesOperatorId || getCurrentDeviceRole() !== DeviceRole.STANDARD_POS) return null;
+    const terminal = getCurrentTerminal();
+    if (!terminal) return null;
+    const { currentDeviceId, erpTerminalId, erpBinding } = terminal.config;
+    return JSON.stringify([salesOperatorId, deviceId, terminal.id, currentDeviceId, erpTerminalId,
+      erpBinding?.tenantId, erpBinding?.companyId, erpBinding?.storeId]);
+  }, [salesOperatorId, deviceId, getCurrentDeviceRole, getCurrentTerminal]);
+
+  useLayoutEffect(() => {
+    if (currentView === 'POS') retainedSettingsSalesSessionRef.current = readSettingsSalesSession();
+    else if (currentView !== 'SETTINGS' || retainedSettingsSalesSessionRef.current !== readSettingsSalesSession()) {
+      retainedSettingsSalesSessionRef.current = null;
+    }
+  }, [currentView, readSettingsSalesSession]);
 
   useEffect(() => {
     let disposed = false;
@@ -14223,6 +14244,7 @@ const AppContent: React.FC = () => {
         return (
           <PersistentPOSHost
             visible={currentView === 'POS'}
+            settingsSuspended={currentView === 'SETTINGS'}
             minimalContent={tableLatencyQaEnabled && tableQa.mode === 'minimal-sales'}
             closeTrace={tableMapCloseTraceRef.current}
             tableDestination={tableOpenDestinationRef.current}
@@ -15796,18 +15818,24 @@ const AppContent: React.FC = () => {
     }
 
     const role = getCurrentDeviceRole();
-    const content = currentView === 'POS' || currentView === 'TABLE_MAP'
-      ? (
-        <div className="h-screen overflow-hidden relative" data-pos-table-shell="true">
-          {renderView('POS')}
-          {tableMapHasMounted || currentView === 'TABLE_MAP' ? (
-            <TableMapLifecycleBoundary visible={currentView === 'TABLE_MAP'} closeTrace={tableMapCloseTraceRef.current} onRequestClose={() => handleCloseTableMap()}>
-              {renderView('TABLE_MAP')}
-            </TableMapLifecycleBoundary>
-          ) : null}
-        </div>
-      )
-      : renderView();
+    const showsSalesShell = currentView === 'POS' || currentView === 'TABLE_MAP';
+    const retainSalesForSettings = currentView === 'SETTINGS' && retainedSettingsSalesSessionRef.current !== null
+      && retainedSettingsSalesSessionRef.current === readSettingsSalesSession();
+    const content = (
+      <>
+        {showsSalesShell || retainSalesForSettings ? (
+          <div className="h-screen overflow-hidden relative" data-pos-table-shell="true" hidden={retainSalesForSettings}>
+            {renderView('POS')}
+            {showsSalesShell && (tableMapHasMounted || currentView === 'TABLE_MAP') ? (
+              <TableMapLifecycleBoundary visible={currentView === 'TABLE_MAP'} closeTrace={tableMapCloseTraceRef.current} onRequestClose={() => handleCloseTableMap()}>
+                {renderView('TABLE_MAP')}
+              </TableMapLifecycleBoundary>
+            ) : null}
+          </div>
+        ) : null}
+        {showsSalesShell ? null : renderView()}
+      </>
+    );
 
     // Handle escape hatch for kiosk modes
     const handleEscapeHatch = async () => {
