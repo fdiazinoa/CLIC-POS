@@ -4106,6 +4106,10 @@ class SyncManager {
 
         if (options?.requireOperationalTerminalConfig) await assertRefreshAuthorityCurrent();
 
+        window.dispatchEvent(new CustomEvent('terminalFiscalDocumentsUpdated', {
+            detail: { terminalId: operationalDocumentState.terminalId },
+        }));
+
         if (snapshot && this.getPendingTerminalSnapshot(context.terminalId, snapshotTerminalId)) {
             this.clearPendingTerminalSnapshot();
         }
