@@ -103,6 +103,7 @@ export const NATIVE_V3_METHOD_CONCURRENCY = {
     rollback: 'write',
     readBaselineReferenceInventory: 'read',
     getActiveRuntimeVersion: 'read',
+    readOperationalSnapshot: 'read',
     getPragmaSnapshot: 'read',
     getDatabaseSizeBytes: 'read',
     listArticlesPage: 'read',
@@ -561,6 +562,18 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
 
     getDocument<T>(collectionName:string,id:string):Promise<T|null> {
         return this.withWriteLock(()=>this.getDocumentUnlocked<T>(collectionName,id));
+    }
+
+    readOfflineFiscalAuthorityConfig(): Promise<Pick<import('../../../types').BusinessConfig, 'companyInfo' | 'terminals'> | null> {
+        return this.withWriteLock(async () => {
+            // Preserve the persisted RNC and terminal JSON types while avoiding unrelated config data.
+            const result = await this.ensureDb().query(`SELECT CASE WHEN json_valid(data) THEN
+                json_object('companyInfo', json_object('rnc', data -> '$.companyInfo.rnc'),
+                            'terminals', data -> '$.terminals') END AS data
+                FROM documents WHERE collection_name = ? AND doc_id = ? LIMIT 1`, ['config', 'current']);
+            const projected = result.values?.[0]?.data;
+            return typeof projected === 'string' ? JSON.parse(projected) : null;
+        });
     }
 
     getDocumentsByIds<T>(collectionName: string, ids: readonly string[]): Promise<T[]> {
