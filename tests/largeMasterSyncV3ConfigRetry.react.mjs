@@ -22,8 +22,12 @@ const mocks={
  '../services/sync/LargeMasterSyncV3ReservationRecovery':'exports.restoreV3ReservationReference=exports.expireV3Reservation=()=>{throw Error("unused-financial-boundary")};',
  '../services/sync/LargeMasterSyncV3DirectTicketSource':'exports.claimV3DirectTicket=exports.readV3DirectWaitingTickets=exports.updateV3DirectTicket=()=>{throw Error("unused-financial-boundary")};',
 };
-const built=await build({entryPoints:['components/LargeMasterSyncV3OperationalPOS.tsx'],bundle:true,write:false,format:'cjs',platform:'node',jsx:'transform',tsconfigRaw:{compilerOptions:{jsx:'react'}},plugins:[{name:'config-retry-react-boundaries',setup(b){b.onResolve({filter:/.*/},a=>mocks[a.path]?{path:a.path,namespace:'fixture'}:undefined);b.onLoad({filter:/.*/,namespace:'fixture'},a=>({contents:mocks[a.path]}));}}]});
-const loaded={exports:{}};new Function('module','exports',built.outputFiles[0].text)(loaded,loaded.exports);const Component=loaded.exports.default;
+const built=await build({stdin:{contents:`
+ export { default } from './components/LargeMasterSyncV3OperationalPOS';
+ export { v3ErpStockDisplay, v3ErpStockDisplayScope } from './services/sync/LargeMasterSyncV3ErpStockDisplay';
+`,resolveDir:process.cwd()},bundle:true,write:false,format:'cjs',platform:'node',jsx:'transform',tsconfigRaw:{compilerOptions:{jsx:'react'}},plugins:[{name:'config-retry-react-boundaries',setup(b){b.onResolve({filter:/.*/},a=>mocks[a.path]?{path:a.path,namespace:'fixture'}:undefined);b.onLoad({filter:/.*/,namespace:'fixture'},a=>({contents:mocks[a.path]}));}}]});
+const loaded={exports:{}};new Function('module','exports',built.outputFiles[0].text)(loaded,loaded.exports);
+const { default:Component, v3ErpStockDisplay, v3ErpStockDisplayScope }=loaded.exports;
 const settle=()=>act(async()=>{for(let n=0;n<30;n++)await Promise.resolve();});
 async function fixture({initialHold,emptyCart=false}={}){
  Object.assign(env,{child:undefined,mounts:0,unmounts:0,requests:[],outcomes:initialHold?[{acquire:initialHold.promise}]:[],validIdentity:true,bindingVersion:1,runtimeVersion:1,resumeGuard:undefined,projects:[],categoryReads:[]});
@@ -35,7 +39,8 @@ async function fixture({initialHold,emptyCart=false}={}){
   if(outcome.acquire)await outcome.acquire;
   if(outcome.fail||!env.validIdentity)throw Error('SYNC_V3_BINDING_CHANGED');
   const source={categories:async()=>{env.categoryReads.push(index);if(outcome.categories)await outcome.categories;return [{key:`C${index}`,label:`category-${index}`,count:1}];},search:async query=>query ? [{product:{id:'filtered',name:query}}] : [],get:async()=>null,findBarcode:async()=>({item:{product:{id:`P${index}`,name:`product-${index}`,price:index}}})};
-  return {assertSetupIdentity:()=>{if(binding!==env.bindingVersion)throw Error('SYNC_V3_BINDING_CHANGED');},assertCurrent:async()=>{
+  return {binding:`binding-${binding}`,ready:{runtime:{version:{syncId:'master',syncVersion:runtime}}},
+   assertSetupIdentity:()=>{if(binding!==env.bindingVersion)throw Error('SYNC_V3_BINDING_CHANGED');},assertCurrent:async()=>{
    if(env.resumeGuard)await env.resumeGuard;
    if(!env.validIdentity)throw Error('SYNC_V3_BINDING_CHANGED');
    if(runtime!==env.runtimeVersion)throw Error('SYNC_V3_RUNTIME_VERSION_CHANGED');
@@ -43,7 +48,11 @@ async function fixture({initialHold,emptyCart=false}={}){
  };
  const props=()=>({config:rendered,activeTerminalId:'local',cart:lines,onOpenSettings(){},onUpdateCart(){throw Error('cart-mutation-forbidden');}});
  await act(async()=>{renderer=Renderer.create(React.createElement(Component,props()));});await settle();
- return {renderer,lines,before,props,update:async({newRef=false,name,settingsSuspended}={})=>{if(newRef)rendered={...rendered,...(name?{name}:{})};await act(async()=>renderer.update(React.createElement(Component,{...props(),settingsSuspended})));await settle();},event:async()=>{await act(async()=>env.catalogUpdated());await settle();},text:()=>JSON.stringify(renderer.toJSON()),unchanged:retained=>{assert.equal(env.mounts,1);assert.equal(env.unmounts,0);assert.strictEqual(env.child.retained,retained);assert.strictEqual(env.child.props.cart,lines);assert.equal(JSON.stringify(lines),before);},close:async()=>{await act(async()=>renderer.unmount());}};
+ return {renderer,lines,before,props,update:async({newRef=false,name,erpBinding,settingsSuspended}={})=>{
+  if(newRef)rendered={...rendered,...(name?{name}:{})};
+  if(erpBinding){rendered=structuredClone(rendered);Object.assign(rendered.terminals[0].config.erpBinding,erpBinding);}
+  await act(async()=>renderer.update(React.createElement(Component,{...props(),settingsSuspended})));await settle();
+ },event:async()=>{await act(async()=>env.catalogUpdated());await settle();},text:()=>JSON.stringify(renderer.toJSON()),unchanged:retained=>{assert.equal(env.mounts,1);assert.equal(env.unmounts,0);assert.strictEqual(env.child.retained,retained);assert.strictEqual(env.child.props.cart,lines);assert.equal(JSON.stringify(lines),before);},close:async()=>{await act(async()=>renderer.unmount());}};
 }
 const results=[];
 try{
@@ -163,6 +172,27 @@ try{
   assert.equal(env.requests.length,3);
   assert.equal(JSON.stringify(f.lines),retainedCart);
   results.push('Ajustes: restores the default tariff and never updates the retained cart');
+ }finally{await f.close();}}
+ {const f=await fixture();try{
+  const scope=v3ErpStockDisplayScope(f.props().config.terminals[0],'tenant','binding-1',{syncId:'master',syncVersion:1});
+  const refresh=(onHand,reserved)=>v3ErpStockDisplay.refresh(async()=>scope,async()=>({version:1,cursor:'erp',balances:[
+   {item_id:'retained',warehouse_id:'W',qty_on_hand:onHand,qty_reserved:reserved,qty_committed:1,updated_at:'now'},
+   {item_id:'retained',warehouse_id:'other',qty_on_hand:99,qty_reserved:0,qty_committed:0,updated_at:'now'},
+  ]}));
+  const read=env.child.props.readCartItemErpAvailableStock;
+  assert.equal(read('retained'),undefined);
+  await refresh(51,1);
+  assert.equal(read('retained'),49);
+  assert.equal(read('unknown'),undefined);
+  await refresh(2,1);
+  assert.equal(read('retained'),0);
+  assert.equal(JSON.stringify(f.lines),f.before);
+  await f.update({erpBinding:{companyId:'other-company'}});
+  assert.equal(env.child.props.readCartItemErpAvailableStock('retained'),undefined);
+  assert.equal(read('retained'),undefined,'superseded authority cannot expose the old stock cache');
+  env.validIdentity=false;await f.event();
+  assert.equal(env.child.props.readCartItemErpAvailableStock,undefined);
+  results.push('Item options uses only the ready scoped ERP balance, including zero, without editing the cart');
  }finally{await f.close();}}
  console.log(JSON.stringify({result:'PASS',cases:results,limits:'Actual React component, effects and context checks; acquire/native identity boundary modeled. No financial/native Android/network proof.'}));
 }finally{globalThis.window=original.window;globalThis.IS_REACT_ACT_ENVIRONMENT=original.act;delete globalThis.__v3ConfigRetry;}
