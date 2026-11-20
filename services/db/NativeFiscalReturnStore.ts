@@ -1,7 +1,7 @@
 import { createUuid } from '../../utils/uuid';
 import { assertReturnPreparation, assertReturnAdmission, buildReturnSource, returnContract, returnJSON, sameReturn, returnNeed, type ReturnAttempt } from '../fiscal/FiscalReturnV1';
 import { fiscalWorkflowScopeKey, type FiscalWorkflowCheckoutV2, type FiscalWorkflowScope } from '../fiscal/FiscalWorkflowV2Types';
-import type { FinancialCommitInput } from './DatabaseAdapter';
+import type { DurableDocumentMutation, FinancialCommitInput } from './DatabaseAdapter';
 import { planFinancialNumbers } from './FinancialNumberReservation';
 import { assertRetirementHasNoEffects } from './FiscalWorkflowRetirementStore';
 import { financialIdentity } from './LargeMasterSyncV3FinancialRetention';
@@ -160,7 +160,7 @@ export class NativeFiscalReturnStore {
     }
 }
 /** Runs INSIDE the existing native financial transaction. All assertions precede durable publication. */
-export async function consumeNativeFiscalReturn(sql: SQL, input: FinancialCommitInput) {
+export async function consumeNativeFiscalReturn(sql: SQL, input: FinancialCommitInput): Promise<DurableDocumentMutation | undefined> {
     const events = [input.outboxEvent, ...(input.additionalOutboxEvents || [])];
     const source = input.documents.find(x => x.collectionName === 'transactions' && x.document.documentType === 'REFUND' && x.document.ncfType === 'E34' && !x.document.articleFormatWire);
     if (!source)
@@ -175,7 +175,7 @@ export async function consumeNativeFiscalReturn(sql: SQL, input: FinancialCommit
     const local = Date.parse(a.localCommittedAt!), p = a.preparation!;
     const civil = (n: number) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Santo_Domingo' }).format(n);
     returnNeed(Date.parse(p.preparedAt) <= local && local <= Date.parse(p.expiresAt) && Date.parse(a.checkout!.offlineSaleDate!) <= local && civil(local) === civil(Date.parse(a.checkout!.offlineSaleDate!)), 'FISCAL_RETURN_LOCAL_COMMIT_TIME_REQUIRED');
-    const originalRow = (await sql.query("SELECT data FROM documents WHERE collection_name IN('transactions','transactionHistory') AND doc_id=? ORDER BY CASE collection_name WHEN 'transactions' THEN 0 ELSE 1 END LIMIT 1", [p.originalReference.transactionId])).values?.[0];
+    const originalRow = (await sql.query("SELECT collection_name,data FROM documents WHERE collection_name IN('transactions','transactionHistory') AND doc_id=? ORDER BY CASE collection_name WHEN 'transactions' THEN 0 ELSE 1 END LIMIT 1", [p.originalReference.transactionId])).values?.[0];
     returnNeed(originalRow, 'FISCAL_RETURN_ORIGINAL_REQUIRED');
     const intent = JSON.parse(a.intent), expected = buildReturnSource(a, JSON.parse(originalRow.data), intent.seriesId, intent.user);
     const withoutNumber = (t: any) => ({ ...t, displayId: undefined, seriesNumber: undefined, globalSequence: undefined });
@@ -195,9 +195,15 @@ export async function consumeNativeFiscalReturn(sql: SQL, input: FinancialCommit
     for (const l of p.returnSnapshot.lines)
         for (const stock of l.inventoryEntries) {
             const movement = ledger.find(d => d.document.id === `V3-${p.transactionId}-${encodeURIComponent(l.cartId)}`)?.document;
-            returnNeed(movement?.productId === stock.itemId && movement?.qtyIn === stock.quantity && movement?.qtyOut === 0 && movement?.unitCost === stock.unitCost, 'FISCAL_RETURN_STOCK_MISMATCH');
+            returnNeed(movement?.productId === stock.itemId && movement?.warehouseId === p.returnSnapshot.warehouseId
+                && movement?.qtyIn === stock.quantity && movement?.qtyOut === 0 && movement?.unitCost === stock.unitCost, 'FISCAL_RETURN_STOCK_MISMATCH');
         }
     // The same transaction commits this receipt, source/history, counters, allocation and Outbox.
     const committed = { ...a, phase: 'COMMITTED' as const, committedSource: source.document };
     await sql.run("UPDATE pos_fiscal_return_attempts_v1 SET phase='COMMITTED',data=? WHERE id=? AND phase='SEALED'", [JSON.stringify(committed), a.id], false);
+    const retained = source.v3ExpectedRetainedDocument;
+    if (retained?.id === p.originalReference.transactionId && retained.collection === originalRow.collection_name
+        && retained.expected === originalRow.data && source.document.v3WarehouseId === p.returnSnapshot.warehouseId) {
+        return source;
+    }
 }

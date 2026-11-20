@@ -908,14 +908,14 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             await consumeTrackingCheckout(this.ensureDb() as any,tracking.checkoutId,tracking.transactionId,tracking.selections);
           }
           if(input.documents.some(d=>d.collectionName==='transactions'&&d.document.id!==sealedDispatchSource?.id&&d.document.items?.some((line:any)=>line.v3SaleAuthority&&line.trackingData?.length))&&!input.trackingCommits?.length)throw Error('TRACKING_ATOMIC_SOURCE_REQUIRED');
-          if(needsFinancialPrecondition)await this.assertV3FinancialBaseline(input.documents);
           for(const proof of input.fiscalAllocationPreconditions||[]){
             if(!['config','fiscalAllocations','fiscalRanges','localFiscalBuffer'].includes(proof.collection))throw Error('OFFLINE_FISCAL_COMMIT_PROOF_INVALID');
             const actual=(await this.ensureDb().query('SELECT data FROM documents WHERE collection_name=? AND doc_id=?',[proof.collection,proof.id])).values?.[0]?.data||null;
             if(actual!==proof.expected)throw Error('OFFLINE_FISCAL_COMMIT_AUTHORITY_CHANGED');
           }
           if(input.fiscalWorkflowCommits?.some(c=>c.birth?.schemaVersion===3)&&!input.fiscalAllocationPreconditions?.length)throw Error('OFFLINE_FISCAL_COMMIT_PROOF_REQUIRED');
-          await consumeNativeFiscalReturn(this.ensureDb() as any,input);
+          const verifiedFiscalReturnSource=await consumeNativeFiscalReturn(this.ensureDb() as any,input);
+          if(needsFinancialPrecondition)await this.assertV3FinancialBaseline(input.documents,verifiedFiscalReturnSource);
           const births=outboxEvents.filter(e=>e.eventType==='SALE_POSTED'&&e.payload.fiscalWorkflowBirth);
           if(births.some(e=>!input.fiscalWorkflowCommits?.some(c=>c.transactionId===e.aggregateId&&JSON.stringify(c.birth)===JSON.stringify(e.payload.fiscalWorkflowBirth))))throw Error('FISCAL_WORKFLOW_ATOMIC_BIRTH_REQUIRED');
           for(const commit of input.fiscalWorkflowCommits||[]){
@@ -1686,7 +1686,7 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         if (!retained.values?.length) throw denied();
     }
 
-    private async assertV3FinancialBaseline(documents: DurableDocumentMutation[]): Promise<void> {
+    private async assertV3FinancialBaseline(documents: DurableDocumentMutation[], verifiedFiscalReturnSource?: DurableDocumentMutation): Promise<void> {
         const retainedSources = new Map<string,{document:any;lines:Map<string,any[]>}>();
         const reads = new Map<string, Promise<any>>();
         const read = (sql: string, values: any[]) => {
@@ -1778,7 +1778,10 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
               if (!receipt.values?.length) throw new Error('SYNC_V3_STOCK_AUTHORITY_INVALID');
             }
             for (const line of document.items || []) {
+              // A sealed E34 proves its replenishment inside this write transaction.
+              // Coverage of a live balance is still required for other checkout writes.
               if (mutation.requireAbsent && mutation.collectionName === 'transactions'
+                && mutation !== verifiedFiscalReturnSource
                 && (current.syncId !== syncId || current.syncVersion !== syncVersion)
                 && line.isInventoriable && line.operationalFlags?.trackInventory !== false && line.type !== 'SERVICE') {
                 const coverage = await read('SELECT item_id FROM master_v3_inventory_balances WHERE item_id=? AND warehouse_id=?', [line.id,document.v3WarehouseId]);
