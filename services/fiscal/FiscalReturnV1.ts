@@ -102,6 +102,7 @@ export interface ReturnAttempt {
     scope: FiscalWorkflowScope;
     intent: string;
     operationId: string;
+    replacementOperationId?: string;
     financialEventId: string;
     paymentEventId: string;
     paymentIds: string[];

@@ -23,6 +23,12 @@ CREATE TRIGGER IF NOT EXISTS pos_return_digest_proof_v1 BEFORE UPDATE ON pos_fis
 WHEN json_extract(OLD.data,'$.preparationDigestProof') IS NOT NULL AND json_extract(OLD.data,'$.preparationDigestProof') IS NOT json_extract(NEW.data,'$.preparationDigestProof')
 BEGIN SELECT RAISE(ABORT,'FISCAL_RETURN_DIGEST_WIRE_CONFLICT');END;
 CREATE TRIGGER IF NOT EXISTS pos_return_no_delete_v1 BEFORE DELETE ON pos_fiscal_return_attempts_v1 BEGIN SELECT RAISE(ABORT,'FISCAL_RETURN_RECOVERY_REQUIRED');END;
+CREATE TRIGGER IF NOT EXISTS pos_return_replacement_operation_v1 BEFORE UPDATE ON pos_fiscal_return_attempts_v1
+WHEN json_extract(OLD.data,'$.replacementOperationId') IS NOT json_extract(NEW.data,'$.replacementOperationId')
+AND (json_extract(OLD.data,'$.replacementOperationId') IS NOT NULL OR OLD.phase<>'WAITING_AUTHORITY'
+ OR NEW.phase<>'WAITING_AUTHORITY' OR json_extract(OLD.data,'$.checkout') IS NOT NULL
+ OR json_extract(OLD.data,'$.commandBytes') IS NOT NULL)
+BEGIN SELECT RAISE(ABORT,'FISCAL_RETURN_IDENTITY_CONFLICT');END;
 CREATE TRIGGER IF NOT EXISTS pos_return_identity_v1 BEFORE UPDATE ON pos_fiscal_return_attempts_v1
 WHEN OLD.id<>NEW.id OR OLD.slot<>NEW.slot OR OLD.transaction_id IS NOT NULL AND OLD.transaction_id IS NOT NEW.transaction_id
 OR json_extract(OLD.data,'$.intent')<>json_extract(NEW.data,'$.intent') OR json_extract(OLD.data,'$.scope')<>json_extract(NEW.data,'$.scope')
@@ -80,7 +86,7 @@ export class NativeFiscalReturnStore {
             assertReturnAdmission(a!.admission.capability, a!.scope, a!.preparation);
             const row = (await this.connection().query('SELECT checkout_json FROM pos_fiscal_checkouts_v2 WHERE checkout_id=?', [a!.checkout!.checkoutId])).values?.[0];
             const checkout = row && JSON.parse(row.checkout_json);
-            returnNeed(checkout && ['PREPARED', 'EFFECT_POSSIBLE'].includes(checkout.phase) && checkout.transactionId === a!.preparation!.transactionId && checkout.operationId === a!.operationId && checkout.offlineSaleDate === a!.checkout!.offlineSaleDate, 'FISCAL_RETURN_CHECKOUT_CONFLICT');
+            returnNeed(checkout && ['PREPARED', 'EFFECT_POSSIBLE'].includes(checkout.phase) && checkout.transactionId === a!.preparation!.transactionId && checkout.operationId === (a!.replacementOperationId ?? a!.operationId) && checkout.offlineSaleDate === a!.checkout!.offlineSaleDate, 'FISCAL_RETURN_CHECKOUT_CONFLICT');
             checkout.phase = 'EFFECT_POSSIBLE';
             checkout.paymentIds = a!.preparation!.returnSnapshot.paymentCommands.map((p: any) => p.id);
             checkout.offlineEffectAt = checkout.offlineEffectAt || a!.localCommittedAt;

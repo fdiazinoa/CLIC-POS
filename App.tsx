@@ -13242,7 +13242,7 @@ const AppContent: React.FC = () => {
         return result;
       }catch(error){
         const message = (error as Error)?.message;
-        const code = /^(?:FISCAL|SYNC_V3)_[A-Z0-9_]{1,100}$/.test(message) ? message
+        const code = /^(?:FISCAL|OFFLINE_FISCAL|SYNC_V3)_[A-Z0-9_]{1,100}$/.test(message) ? message
           : (error as Error)?.name === 'AbortError' ? 'FISCAL_RETURN_REQUEST_TIMEOUT'
           : 'FISCAL_RETURN_PENDING';
         console.warn('[RETURN/E34]', code);

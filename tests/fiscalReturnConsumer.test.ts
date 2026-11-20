@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { returnFixture } from './fiscalReturnConsumerFixture';
 import { fiscalWorkflowScopeKey } from '../services/fiscal/FiscalWorkflowV2Types';
+import { returnJSON } from '../services/fiscal/FiscalReturnV1';
 test('native RETURN commits original snapshot, enriched payments and stable events together', async (t) => {
     const f = await returnFixture();
     t.after(() => f.cleanup());
@@ -43,6 +44,42 @@ test('an acknowledged V1 sale does not divert the next E34 to the legacy permit 
     assert.equal(tx.ncfType, 'E34');
     assert.equal(tx.fiscalAllocationAuthorizationId, f.grant.authorizationId);
     assert.deepEqual(await f.adapter.fiscalWorkflowStore.readCheckout(sale.checkoutId), sale);
+});
+test('an abandoned V1 refund resumes with one durable V2 operation and preserves financial event IDs', async (t) => {
+    const f = await returnFixture();
+    t.after(() => f.cleanup());
+    f.setCapability({ enabled: false, ready: false });
+    await assert.rejects(f.run(), /FISCAL_RETURN_AUTHORITY_REQUIRED/);
+    const readAttempt = () => JSON.parse((f.db.prepare('SELECT data FROM pos_fiscal_return_attempts_v1').get() as any).data);
+    const originalAttempt = readAttempt();
+    const cartIdentity = returnJSON({
+        items: f.original.items, customerId: null, fiscalType: 'E34', originalTransactionId: f.original.id,
+        serviceChargeAmount: 0, serviceType: f.original.serviceType, serviceTaxPolicySnapshot: f.original.serviceTaxPolicySnapshot,
+    });
+    const legacy = {
+        checkoutId: 'abandoned-v1', transactionId: 'legacy-refund',
+        scopeKey: fiscalWorkflowScopeKey(f.scope), cartIdentity, phase: 'PREPARED',
+        operationId: originalAttempt.operationId, permit: { leaseId: 'legacy-lease', permitId: 'legacy-permit' },
+        paymentIds: [],
+    };
+    f.db.prepare('INSERT INTO pos_fiscal_checkouts_v2(checkout_id,transaction_id,scope_key,cart_identity,permit_id,checkout_json,phase) VALUES(?,?,?,?,?,?,?)')
+        .run(legacy.checkoutId, legacy.transactionId, legacy.scopeKey, cartIdentity, legacy.permit.permitId, JSON.stringify(legacy), legacy.phase);
+    f.db.prepare('INSERT INTO pos_offline_fiscal_abandoned_v1(checkout_id,transaction_id,permit_id,scope_key,operation_id,original_identity,created_at,reason) VALUES(?,?,?,?,?,?,?,?)')
+        .run(legacy.checkoutId, legacy.transactionId, legacy.permit.permitId, legacy.scopeKey, legacy.operationId, JSON.stringify(legacy), new Date().toISOString(), 'PREPARED_WITHOUT_EFFECTS');
+    f.setCapability({ enabled: true, ready: true });
+    f.setDenied(true);
+    await assert.rejects(f.run());
+    const prepared = readAttempt();
+    assert.equal(prepared.phase, 'PREPARING');
+    assert.notEqual(prepared.replacementOperationId, originalAttempt.operationId);
+    assert.equal(JSON.parse(prepared.commandBytes).operationId, prepared.replacementOperationId);
+    assert.equal(prepared.financialEventId, originalAttempt.financialEventId);
+    assert.equal(prepared.paymentEventId, originalAttempt.paymentEventId);
+    f.setDenied(false);
+    const tx = await f.run();
+    assert.equal(tx.ncfType, 'E34');
+    assert.equal(readAttempt().commandBytes, prepared.commandBytes);
+    assert.equal(f.documents('transactions').filter(row => row.documentType === 'REFUND').length, 1);
 });
 for (const kind of ['disabled', 'denied', 'offline'] as const)
     test(`${kind} leaves a durable pending attempt and no financial or issued-number effects`, async (t) => {
