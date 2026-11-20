@@ -85,6 +85,61 @@ test('real fiscal builder and native atomic commit renew actual session before r
  }finally{f.close();}
 });
 
+test('ERP fiscal snapshots keep an unchanged V2 authorization and revoke it on authority changes', async (t) => {
+  const range = { id: id(90), type: 'E34', prefix: 'E34', startNumber: 1, endNumber: 30,
+    currentGlobal: 10, expiryDate: '2099-12-31', isActive: true };
+  const allocation = { id: id(91), terminalId: id(4), fiscalRangeId: range.id, ncfType: 'E34',
+    prefix: 'E34', reservedStart: 1, reservedEnd: 10, nextNumber: 2, status: 'ACTIVE', releasedAt: null,
+    metadata: { sourceTerminalId: id(4) } };
+  const wireRange = { id: range.id, ncf_type: 'E34', prefix: 'E34', start_number: '1', end_number: '30',
+    current_global: 10, expiry_date: range.expiryDate, active: true };
+  const wireAllocation = { id: allocation.id, terminal_id: id(4), fiscal_range_id: range.id,
+    ncf_type: 'E34', prefix: 'E34', reserved_start: '1', reserved_end: '10', next_number: '2',
+    status: 'ACTIVE', released_at: null, active: true };
+  const authority = { scope: { terminalId: id(4) }, allocations: [{
+    allocationId: allocation.id, fiscalRangeId: range.id, ncfType: 'E34', prefix: 'E34',
+    start: 1, end: 10, rangeStart: 1, rangeEnd: 30, expiryDate: range.expiryDate,
+  }] };
+  const unchanged = { fiscal_ranges: [wireRange], fiscal_allocations: [wireAllocation] };
+  const scenarios = [
+    { name: 'unchanged', documents: unchanged, revoked: 0 },
+    { name: 'changed range end', documents: { ...unchanged, fiscal_ranges: [{ ...wireRange, end_number: '31' }] }, revoked: 1 },
+    { name: 'inactive range', documents: { ...unchanged, fiscal_ranges: [{ ...wireRange, active: false }] }, revoked: 1 },
+    { name: 'inactive allocation', documents: { ...unchanged, fiscal_allocations: [{ ...wireAllocation, active: false }] }, revoked: 1 },
+    { name: 'empty authoritative ranges', documents: { ...unchanged, fiscal_ranges: [] }, revoked: 1 },
+    { name: 'missing fiscal collections', documents: {}, revoked: 0 },
+  ];
+
+  for (const scenario of scenarios) {
+    await t.test(scenario.name, async () => {
+      const f = await fixture();
+      try {
+        await f.adapter.saveDocumentsAtomically([
+          { collectionName: 'fiscalRanges', document: range },
+          { collectionName: 'fiscalAllocations', document: allocation },
+        ]);
+        f.db.prepare('INSERT INTO pos_offline_fiscal_allocations_v2 VALUES(?,?,?,?,?,?,0)')
+          .run(id(92), 'fixture-scope', JSON.stringify(authority), 'fixture-binding', 0, 0);
+        const writes = await f.api.buildConfigPushV2DomainWrites('fiscal', { documents: scenario.documents });
+        const fiscalWrites = writes.filter((write: any) => ['fiscalRanges', 'fiscalAllocations'].includes(write.collection));
+        await f.adapter.saveDocumentsAtomically(
+          fiscalWrites.flatMap((write: any) => write.value.map((document: any) => ({ collectionName: write.collection, document }))),
+          false,
+          fiscalWrites.map((write: any) => write.collection),
+        );
+        assert.deepEqual(f.db.prepare('SELECT revoked FROM pos_offline_fiscal_allocations_v2').get(), { revoked: scenario.revoked });
+        if (!scenario.revoked) {
+          assert.deepEqual(f.documents('fiscalRanges'), [range]);
+          assert.deepEqual(f.documents('fiscalAllocations'), [allocation]);
+        }
+        f.assertFinancial();
+      } finally {
+        f.close();
+      }
+    });
+  }
+});
+
 for(const problem of ['tenant','company','store','device','terminal','token','origin','missing-terminal','ambiguous-terminal','missing-credentials','invalid-profile','migration-required','mirror','revoked'] as const)test(`authority rejects ${problem} without credential/profile migration`,async()=>{
  const f=await fixture();try{
   const authority=f.capture();await f.commit(authority);
