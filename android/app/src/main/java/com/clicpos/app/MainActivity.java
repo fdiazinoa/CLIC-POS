@@ -185,6 +185,17 @@ public class MainActivity extends BridgeActivity {
         }
 
         @JavascriptInterface
+        public void recordSettingsReturnTrace(String line) {
+            if (line == null || line.length() > 100) return;
+            String[] fields = line.split(" ", -1);
+            if (fields.length != 6 || !fields[1].matches("settings[.]close|v3[.]resume[.]assertCurrent|v3[.]acquireContext|v3[.]salesReady|fiscal[.]receiptRecovery|fiscal[.]checkoutStatus|fiscal[.]canRequestMoreNCF|fiscal[.]check|fiscal[.]localAuthority|fiscal[.]currentCheckout|fiscal[.]allocationAvailability|fiscal[.]offlineStatus|fiscal[.]allocationsFallback|fiscal[.]rangesFallback|ui[.]unconfirmed|ui[.]noSequence|ui[.]checkoutLabel|sqlite[.]read|summary")) return;
+            for (int index : new int[]{0, 2, 3, 4, 5}) {
+                if (!fields[index].matches("-?[0-9]{1,8}")) return;
+            }
+            Log.i("CLICPOS_SETTINGS_QA", line);
+        }
+
+        @JavascriptInterface
         public String getLaunchContext() {
             return activityRecreated ? "activity_recreated" : "fresh_start";
         }
