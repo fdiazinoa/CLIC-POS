@@ -33,7 +33,7 @@ import { ARTICLE_FORMATS_SCHEMA } from '../../articleFormats/schema';
 import type { FormatSQL,FormatStatement } from '../../articleFormats/store';
 import { getEffectiveFiscalComplianceConfig, getProviderEnvironment } from '../../../utils/fiscal/fiscalHelpers';
 import { validateV3FiscalMetadataMutation,validateFiscalDispatchClaimBatch } from '../LargeMasterSyncV3FiscalMetadata';
-import { v3ArticleSemantics, v3RetainedLineFingerprint } from '../../sync/LargeMasterSyncV3StockAuthority';
+import { sameV3RetainedLine, v3ArticleSemantics } from '../../sync/LargeMasterSyncV3StockAuthority';
 import { v3RestaurantContract } from '../../../utils/v3RestaurantContract';
 import { SYNC_MONITOR_PAGE_SQL, syncMonitorPageParams, decodeSyncMonitorPage, type SyncMonitorPageRequest } from '../SyncMonitorPage';
 import { Capacitor } from '@capacitor/core';
@@ -1820,7 +1820,8 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
                 const sources = source.lines.get(JSON.stringify([sourceLineId,line.id])) || [];
                 if (formatSourceLine && (source.document.articleFormatEventId !== document.articleFormatWire?.source_event_id
                   || JSON.stringify(sources[0]?.articleFormat) !== JSON.stringify(line.articleFormat))) throw new Error('SYNC_V3_RETAINED_LINE_CHANGED');
-                if (sources.length !== 1 || v3RetainedLineFingerprint(sources[0]) !== v3RetainedLineFingerprint(formatSourceLine ? {...line,cartId:sourceLineId} : line)) {
+                if (sources.length !== 1 || !sameV3RetainedLine(sources[0], formatSourceLine ? {...line,cartId:sourceLineId} : line,
+                  document.documentType === 'REFUND')) {
                   throw new Error('SYNC_V3_RETAINED_LINE_CHANGED');
                 }
                 if (!['transactions','transactionHistory'].includes(context.collection)) {

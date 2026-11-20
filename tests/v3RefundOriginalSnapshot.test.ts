@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { build } from 'esbuild';
-import { v3RefundAnchor } from '../services/sync/LargeMasterSyncV3StockAuthority';
+import { sameV3RetainedLine, v3RefundAnchor } from '../services/sync/LargeMasterSyncV3StockAuthority';
+import type { CartItem } from '../types';
 
 const source = (relative: string) => readFileSync(new URL(`../${relative}`, import.meta.url), 'utf8');
 const session = () => source('services/sync/LargeMasterSyncV3OperationalSession.ts');
@@ -27,6 +28,18 @@ test('the reversal anchor is the ticket inventory, not the live one', () => {
   const other = v3RefundAnchor(stamp({ inventoryVersion: 90, inventoryCursor: 'cursor-90' }));
   assert.equal(other.version, 90);
   assert.equal(other.cursor, 'cursor-90');
+});
+
+test('only retained refunds normalize zero discounts and JSON object key order', () => {
+  const original = { cartId: 'line', id: 'article', price: 14000, appliedTaxIds: ['VAT', 'OTHER'],
+    v3SaleAuthority: stamp() } as CartItem;
+  const reordered = Object.fromEntries(Object.entries(original.v3SaleAuthority!).reverse()) as typeof original.v3SaleAuthority;
+  const refund = { ...original, discountAmount: 0, v3SaleAuthority: reordered };
+  assert.equal(sameV3RetainedLine(original, refund), false);
+  assert.equal(sameV3RetainedLine(original, refund, true), true);
+  assert.equal(sameV3RetainedLine({ ...original, discountAmount: null } as unknown as CartItem, refund, true), true);
+  assert.equal(sameV3RetainedLine(original, { ...refund, appliedTaxIds: ['OTHER', 'VAT'] }, true), false);
+  assert.equal(sameV3RetainedLine(original, { ...refund, v3SaleAuthority: stamp({ extra: true }) }, true), false);
 });
 
 test('an explicit inventory sync id wins over the catalog stamp', () => {
@@ -176,6 +189,11 @@ test('refund validation rejects malformed lines and missing receipts, and pins m
   const notices:any[]=[];
   await session.validate({terminals:[],taxes},rows,'T','W','REFUND',undefined,{originalTransactionId:'original'},false,n=>notices.push(n));
   assert.equal(notices.length,2); // Both deleted live taxes only warn.
+  const sealed = { ...first, discountAmount: 0,
+    v3SaleAuthority: Object.fromEntries(Object.entries(authority).reverse()) };
+  await validate([sealed]);
+  await assert.rejects(() => validate([{ ...sealed, discountAmount: 1 }]), /SYNC_V3_RETAINED_LINE_CHANGED/);
+
   await assert.rejects(()=>validate([{...first,appliedTaxIds:undefined}]),/SYNC_V3_LINE_INVALID/);
   await assert.rejects(()=>validate([{...first,appliedTaxIds:[]}]),/SYNC_V3_LINE_INVALID/);
   await assert.rejects(()=>validate([{...first,price:999}]),/SYNC_V3_RETAINED_LINE_CHANGED/);
@@ -184,6 +202,6 @@ test('refund validation rejects malformed lines and missing receipts, and pins m
   await assert.rejects(()=>validate([first]),/SYNC_V3_RETAINED_OWNER_REQUIRED/);
   // Even a still-current catalog cannot authorize repricing the issued original.
   session.ready.runtime.version={syncId:'old',syncVersion:1};
-  await validate([first]);
+  await validate([sealed]);
   await assert.rejects(()=>validate([{...first,price:999}]),/SYNC_V3_RETAINED_LINE_CHANGED/);
 });

@@ -572,3 +572,28 @@ for (const collection of ['transactions', 'transactionHistory']) {
     } finally { f.sql.close(); }
   });
 }
+
+
+test('native retained refund accepts the sealed ERP line for an older catalog without permitting a changed price', async () => {
+  const f = fixture();
+  try {
+    const authority = { binding: scope.v3Binding, warehouseId: scope.v3WarehouseId, tariffId: 'T', syncId: 'old',
+      syncVersion: 1, inventorySyncId: 'S', inventorySyncVersion: 2, inventoryVersion: 4, inventoryCursor: 'C', taxIncluded: false };
+    f.sql.prepare('INSERT INTO master_v3_catalog_owners VALUES(?,?,?,?,?,?,?)')
+      .run('old', 1, scope.v3Binding, 'S', 2, 4, 'C');
+    const line = { cartId: 'line', id: 'P', quantity: 1, price: 14000, v3SaleAuthority: authority };
+    const original = { id: 'original', ...scope, documentType: 'TICKET', status: 'COMPLETED', items: [line] };
+    await f.adapter.saveDocument('transactions', original);
+    const refundLine = { ...line, discountAmount: 0, v3SaleAuthority: Object.fromEntries(Object.entries(authority).reverse()) };
+    const mutation = (id: string, price: number): DurableDocumentMutation => ({
+      collectionName: 'transactions', requireAbsent: true,
+      document: { id, ...scope, documentType: 'REFUND', originalTransactionId: original.id, items: [{ ...refundLine, price }] },
+      v3ExpectedRetainedDocument: { collection: 'transactions', id: original.id, expected: JSON.stringify(original) },
+    });
+    await assert.rejects(f.adapter.saveDocumentsAtomically([mutation('changed', 1)]), /SYNC_V3_RETAINED_LINE_CHANGED/);
+    assert.equal(await f.adapter.getDocument('transactions', 'changed'), null);
+    await f.adapter.saveDocumentsAtomically([mutation('matched', 14000)]);
+    assert.deepEqual(await f.adapter.getDocument('transactions', 'original'), original);
+    assert.deepEqual((await f.adapter.getDocument<Transaction>('transactions', 'matched'))?.items, [refundLine]);
+  } finally { f.sql.close(); }
+});
