@@ -62,7 +62,7 @@ interface ConsumerPorts {
     adapter: DatabaseAdapter;
     transport: Pick<ReturnType<typeof createFiscalReturnTransport>, 'context' | 'capability' | 'prepare'>;
     workflow: {
-        consult: (id: string) => Promise<FiscalWorkflowStateV2>;
+        consult: (id: string, signal?: AbortSignal, timeoutMs?: number) => Promise<FiscalWorkflowStateV2>;
         reserveReturnCheckout: (cart: string, operation: string) => Promise<FiscalWorkflowCheckoutV2>;
         allocationDraft: (checkout: FiscalWorkflowCheckoutV2) => Promise<any>;
         recordPayment: (checkout: FiscalWorkflowCheckoutV2, paymentId: string) => Promise<void>;
@@ -71,6 +71,7 @@ interface ConsumerPorts {
     commit: (source: Transaction, attempt: ReturnAttempt) => Promise<Transaction>;
     now?: () => number;
 }
+const RETURN_ORIGINAL_STATUS_TIMEOUT_MS = 20_000;
 const inflight = new Map<string, Promise<Transaction>>();
 export function createFiscalReturnConsumer(ports: ConsumerPorts) {
     const now = ports.now || Date.now;
@@ -125,7 +126,13 @@ export function createFiscalReturnConsumer(ports: ConsumerPorts) {
                 if(selection&&!a.settlementSelection)a=await store!.save(a,{...a,settlementSelection:selection});
                 const requested=selection?[]:legacyRequested||await legacyPayments();
                 if (!a.checkout) {
-                    const parent = await ports.workflow.consult(original.id);
+                    const consultOriginal = () => ports.workflow.consult(original.id, undefined, RETURN_ORIGINAL_STATUS_TIMEOUT_MS);
+                    const parent = await consultOriginal().catch(error => {
+                        if (error?.name !== 'AbortError') throw error;
+                        auth.assertCurrent();
+                        // Only retry the authenticated GET. No checkout or ERP preparation exists yet.
+                        return consultOriginal();
+                    });
                     const reference = parent.originalReference;
                     returnNeed(reference, originalReferencePendingCode(parent.originalReferenceReason));
                     returnNeed(parent.mode === 'WORKFLOW' && parent.sourceKind === 'ORDINARY_SOURCE_V2' && parent.signature && ['ACCEPTED', 'ACCEPTED_CONDITIONAL'].includes(parent.decision) && validOrdinaryReturnReference(original, parent), 'FISCAL_RETURN_ACCEPTED_ORIGINAL_REQUIRED');
