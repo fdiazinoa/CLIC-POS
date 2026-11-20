@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { confirmCurrentAuthorization } from '../utils/supervisorAuthorizationGuard';
+import { confirmCurrentAuthorization, paidReturnAuthorizationKey } from '../utils/supervisorAuthorizationGuard';
 
 for(const mode of ['SELF','SUPERVISOR'])for(const change of ['logout','unmount','user','roles','security','attempt','request'])test(`${mode} cannot execute after ${change} during the final asynchronous permission read`,async()=>{
     const original={user:{id:'cashier'},roles:{revision:1},security:{revision:1},attempt:1,request:{id:1}};
@@ -24,4 +24,28 @@ test('unchanged final permission context confirms, denied or stale input never c
     assert.equal(await confirmCurrentAuthorization({isCurrent:()=>true,readFinalContext:async()=>({allowed:true}),acceptsFinalContext:c=>c.allowed}),true);
     assert.equal(await confirmCurrentAuthorization({isCurrent:()=>true,readFinalContext:async()=>({allowed:false}),acceptsFinalContext:c=>c.allowed}),false);
     let reads=0;assert.equal(await confirmCurrentAuthorization({isCurrent:()=>false,readFinalContext:async()=>{reads++;return true;}}),false);assert.equal(reads,0);
+});
+
+test('paid return survives an equivalent role refresh but blocks changes in terminal, cashier, permission or PIN policy', async () => {
+    const user = { id: 'cashier', name: 'Caja', pin: '', role: 'cashier', roleId: 'cashier' };
+    const roles = [{ id: 'supervisor', name: 'Supervisor', permissions: ['POS_VOID_PAID_TICKET'] }] as const;
+    const snapshot = roles.map(role => ({ ...role, permissions: [...role.permissions] }));
+    const security = { deviceBindingToken: 'binding', requirePinForVoid: false, requirePinForDiscount: false,
+        requireManagerForRefunds: false, autoLogoutMinutes: 0 };
+    const key = paidReturnAuthorizationKey('caja', user, snapshot, security);
+    let live = key;
+    const approve = () => confirmCurrentAuthorization({ isCurrent: () => live === key });
+    live = paidReturnAuthorizationKey('caja', { ...user }, structuredClone(snapshot), { ...security, requirePinForDiscount: true });
+    assert.equal(await approve(), true);
+    for (const changed of [
+        paidReturnAuthorizationKey('otra-caja', user, snapshot, security),
+        paidReturnAuthorizationKey('caja', null, snapshot, security),
+        paidReturnAuthorizationKey('caja', { ...user, roleId: 'otro' }, snapshot, security),
+        paidReturnAuthorizationKey('caja', user, [{ ...snapshot[0], permissions: [] }], security),
+        paidReturnAuthorizationKey('caja', user, snapshot, { ...security, requirePinForVoid: true }),
+        paidReturnAuthorizationKey('caja', user, snapshot, { ...security, deviceBindingToken: 'other' }),
+    ]) {
+        live = changed;
+        assert.equal(await approve(), false);
+    }
 });
