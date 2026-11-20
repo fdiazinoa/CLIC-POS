@@ -29,6 +29,8 @@ import { extractTerminalConfigRequestedScopes } from './terminalConfigPushScopes
 import {
     applyTerminalConfigSnapshot,
     mergeTerminalConfigSnapshots,
+    normalizeFiscalAllocation,
+    normalizeFiscalRange,
     sanitizeFiscalConfigSecrets,
     sanitizeTerminalSnapshotFiscalSecrets,
 } from './terminalConfigSnapshot';
@@ -719,8 +721,14 @@ export const buildConfigPushV2DomainWrites = async (
     } else if (scope === 'fiscal') {
         addArray('documentSeries', domain.documentSeries, domain.document_series, documents.documentSeries, documents.document_series);
         addArray('documentTypes', domain.documentTypes, domain.document_types, documents.documentTypes, documents.document_types);
-        addArray('fiscalRanges', domain.fiscalRanges, domain.fiscal_ranges, documents.fiscalRanges, documents.fiscal_ranges);
-        addArray('fiscalAllocations', domain.fiscalAllocations, domain.fiscal_allocations, documents.fiscalAllocations, documents.fiscal_allocations);
+        const fiscalRanges = firstArray(domain.fiscalRanges, domain.fiscal_ranges, documents.fiscalRanges, documents.fiscal_ranges);
+        if (fiscalRanges !== null) {
+            writes.set('fiscalRanges', fiscalRanges.map(normalizeFiscalRange).filter(row => row !== null));
+        }
+        const fiscalAllocations = firstArray(domain.fiscalAllocations, domain.fiscal_allocations, documents.fiscalAllocations, documents.fiscal_allocations);
+        if (fiscalAllocations !== null) {
+            writes.set('fiscalAllocations', fiscalAllocations.map(normalizeFiscalAllocation).filter(row => row !== null));
+        }
         addArray('taxes', domain.taxes);
         const configWrite = await buildConfigWriteFromSnapshot(domain, {
             documents,

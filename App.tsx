@@ -1,3 +1,4 @@
+import { beginSettingsReturnQa } from './settingsReturnQaTrace';
 import { ACTIVE_CART_DRAFT_STORAGE_KEY, canRecoverDirectSale } from './utils/directSaleParkedTickets';
 import { readPosSecurityRecords } from './services/sync/PosSecurityV2Consumer';
 import {canViewTicketHistory} from './utils/ticketHistoryPermission';
@@ -14655,6 +14656,7 @@ const AppContent: React.FC = () => {
             onClose={() => {
               setSettingsInitialView(undefined);
               setSettingsInitialData(undefined);
+              beginSettingsReturnQa();
               setIsAdminMode(false); // Exit admin mode when closing settings
 
               // Return to appropriate view based on role
