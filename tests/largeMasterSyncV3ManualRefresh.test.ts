@@ -15,7 +15,7 @@ const source = readFileSync(new URL('../services/sync/SyncManager.ts', import.me
 const parsed = ts.createSourceFile('SyncManager.ts',source,ts.ScriptTarget.Latest,true);
 const cls = parsed.statements.find(node => ts.isClassDeclaration(node) && node.name?.text === 'SyncManager') as ts.ClassDeclaration;
 const method = (name:string) => cls.members.find(node => node.name?.getText(parsed) === name)!.getText(parsed);
-const actual = ['manualCatalogSync','v3CatalogRefresh','refreshV3Catalog','manualSyncAll','syncAllCatalogs','syncTerminalManifestInBackground'].map(method).join('\n');
+const actual = ['manualCatalogSync','v3CatalogRefresh','refreshV3Catalog','refreshV3ErpStockDisplay','manualSyncAll','syncAllCatalogs','syncTerminalManifestInBackground'].map(method).join('\n');
 const clone = <T>(value:T):T => JSON.parse(JSON.stringify(value));
 
 async function fixture(v3=true, primary=true, kind='ERP_ACTIVE') {

@@ -53,6 +53,8 @@ export class LargeMasterSyncV3CatalogRead {
     const tariff = await store.getAdministrativeTariff(runtime.version, scope.tariffId);
     const reader = new LargeMasterSyncV3CatalogRead(dependencies, getContext, runtime, identity, origin, binding, scope, { ...inventory, ...await store.getInventoryAuthority?.() }, tariff.taxIncluded);
     await reader.assertCurrent();
+    const displayScope = v3ErpStockDisplayScope(scope.terminal, identity.tenantId, binding, runtime.version);
+    if (displayScope) await v3ErpStockDisplay.hydrate(displayScope);
     return reader;
   }
 
