@@ -1,3 +1,4 @@
+import { measureSettingsReturnQa, settingsReturnQaEnabled } from '../../../settingsReturnQaTrace';
 import { BaselineReferenceConnectionUncertainError } from '../../diagnostics/BaselineReferenceInventory';
 import {NativeFiscalCreditApplicationStore,FISCAL_CREDIT_APPLICATION_SCHEMA} from '../NativeFiscalCreditApplicationStore';
 import {NativeFiscalReturnStore,FISCAL_RETURN_SCHEMA,consumeNativeFiscalReturn} from '../NativeFiscalReturnStore';
@@ -209,6 +210,12 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
                 this.db = await this.sqliteConnection.createConnection(DB_NAME, false, 'no-encryption', DB_VERSION, false);
             }
 
+            if (settingsReturnQaEnabled) {
+                const query = this.db.query.bind(this.db);
+                this.db.query = (...args) => /^\s*(SELECT|WITH)\b/i.test(args[0])
+                    ? measureSettingsReturnQa('sqlite.read', () => query(...args), args[0], args[1])
+                    : query(...args);
+            }
             if (!(await this.db.isDBOpen()).result) await this.db.open();
             // A write blocked by another connection must fail (and be retried) instead of hanging
             // forever: an unsettled native write stalls the whole write queue and the cashier can
