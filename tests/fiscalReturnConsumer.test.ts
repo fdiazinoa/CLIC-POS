@@ -117,6 +117,37 @@ test('a durable E34 command protects its reservation even when preparation faile
     assert.equal((f.db.prepare('SELECT state FROM pos_fiscal_pending_numbers_v2 WHERE checkout_id=?')
         .get(checkout.checkoutId) as any).state, 'PREPARED');
 });
+test('an original status timeout retries only the GET before making one E34 preparation', async (t) => {
+    const f = await returnFixture();
+    t.after(() => f.cleanup());
+    let reads = 0;
+    f.setConsult(async (id, _signal, timeoutMs) => {
+        assert.equal(id, f.original.id);
+        assert.equal(timeoutMs, 20_000);
+        assert.equal(f.prepareCalls.length, 0);
+        assert.equal((f.db.prepare('SELECT count(*) n FROM pos_fiscal_pending_numbers_v2').get() as any).n, 0);
+        if (++reads === 1) throw new DOMException('Synthetic status timeout', 'AbortError');
+        return f.parent;
+    });
+    assert.equal((await f.run()).ncfType, 'E34');
+    assert.equal(reads, 2);
+    assert.equal(f.prepareCalls.length, 1);
+});
+
+test('two original status timeouts leave the attempt unprepared', async (t) => {
+    const f = await returnFixture();
+    t.after(() => f.cleanup());
+    let reads = 0;
+    f.setConsult(async () => {
+        reads++;
+        throw new DOMException('Synthetic status timeout', 'AbortError');
+    });
+    await assert.rejects(f.run(), { name: 'AbortError' });
+    assert.equal(reads, 2);
+    assert.equal(f.prepareCalls.length, 0);
+    assert.equal((f.db.prepare('SELECT count(*) n FROM pos_fiscal_pending_numbers_v2').get() as any).n, 0);
+});
+
 test('an unaccepted original cannot reserve an E34 number', async (t) => {
     const f = await returnFixture();
     t.after(() => f.cleanup());
