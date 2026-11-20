@@ -39,7 +39,14 @@ CREATE INDEX IF NOT EXISTS pos_fiscal_pending_buffer_v2 ON pos_fiscal_pending_nu
 CREATE TRIGGER IF NOT EXISTS pos_pending_number_identity_v2 BEFORE UPDATE ON pos_fiscal_pending_numbers_v2 WHEN OLD.checkout_id IS NOT NEW.checkout_id OR OLD.transaction_id IS NOT NEW.transaction_id OR OLD.authorization_id IS NOT NEW.authorization_id OR OLD.account_key IS NOT NEW.account_key OR OLD.issuer_rnc IS NOT NEW.issuer_rnc OR OLD.environment IS NOT NEW.environment OR OLD.buffer_id IS NOT NEW.buffer_id OR OLD.allocation_id IS NOT NEW.allocation_id OR OLD.ncf IS NOT NEW.ncf OR OLD.sequence IS NOT NEW.sequence OR OLD.state IN('CONSUMED','ABANDONED') AND NEW.state<>OLD.state OR OLD.state='EFFECT_POSSIBLE' AND NEW.state NOT IN('EFFECT_POSSIBLE','CONSUMED') BEGIN SELECT RAISE(ABORT,'OFFLINE_FISCAL_NUMBER_OWNER_IMMUTABLE');END;
 CREATE TRIGGER IF NOT EXISTS pos_pending_number_durable_v2 BEFORE DELETE ON pos_fiscal_pending_numbers_v2 BEGIN SELECT RAISE(ABORT,'OFFLINE_FISCAL_NUMBER_OWNER_DURABLE');END;
 `;
-const allocationIdentityStillOwned=(oldData:string)=>['terminalId','fiscalRangeId','ncfType','prefix','reservedStart','reservedEnd'].map(key=>`json_extract(NEW.data,'$.${key}') IS json_extract(${oldData},'$.${key}')`).join(' AND ')+" AND json_extract(NEW.data,'$.status') IN('ACTIVE','EXHAUSTED') AND json_extract(NEW.data,'$.releasedAt') IS NULL";
+// Older documents omit the prefix and use the fiscal type as their effective prefix.
+const allocationPrefix=(data:string)=>`coalesce(nullif(json_extract(${data},'$.prefix'),''),json_extract(${data},'$.ncfType'))`;
+const allocationIdentityStillOwned=(oldData:string)=>[
+ ...['terminalId','fiscalRangeId','ncfType','reservedStart','reservedEnd'].map(key=>`json_extract(NEW.data,'$.${key}') IS json_extract(${oldData},'$.${key}')`),
+ `${allocationPrefix('NEW.data')} IS ${allocationPrefix(oldData)}`,
+ "json_extract(NEW.data,'$.status') IN('ACTIVE','EXHAUSTED')",
+ "json_extract(NEW.data,'$.releasedAt') IS NULL",
+].join(' AND ');
 const previousAllocationData="coalesce((SELECT data FROM documents WHERE collection_name=NEW.collection_name AND doc_id=NEW.doc_id),(SELECT data FROM pos_fiscal_authority_withdrawals_v2 WHERE collection_name=NEW.collection_name AND doc_id=NEW.doc_id ORDER BY id DESC LIMIT 1))";
 /** Install after documents exists. Covers all generic, snapshot, V1 and format numbering writers.
  * Keep multi-statement trigger bodies on one line: Android UtilsSQLite splits at semicolon+newline. */
