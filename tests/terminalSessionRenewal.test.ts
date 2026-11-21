@@ -202,3 +202,37 @@ test('fiscal recovery restores native credentials when takeover arrives during t
   assert.equal(writes, 2);
   assert.equal(native, originalNative);
 });
+
+test('fiscal recovery rolls back partial WebView writes and preserves newer authorization state', async () => {
+  const { renewFiscalTerminalSession } = await import('../services/sync/TerminalSessionRenewal');
+  const { current, values } = installStaleAuth();
+  values.set('clic_erp_sync_token', current.syncToken);
+  values.set('clic_erp_sync_token_expires_at', current.syncTokenExpiresAt);
+  values.set('clic_erp_sync_token_updated_at', 'initial-time');
+  const originalNative = JSON.stringify({ ...current, nativeMetadata: 'untouched' });
+  let native = originalNative;
+  setTerminalCredentialNativeReaderForTests(async () => native);
+  setTerminalCredentialNativeWriterForTests(async value => { native = value; });
+
+  const removeItem = localStorage.removeItem;
+  localStorage.removeItem = key => {
+    removeItem(key);
+    if (key !== 'clic_sync_last_auth_error') return;
+    values.set('clic_terminal_authorization_block', '{}');
+    values.set('clic_sync_auth_status', 'REVOKED');
+    values.set('clic_sync_last_auth_error', 'DEVICE_REVOKED');
+    throw new Error('WebView storage write failed');
+  };
+
+  const result = await renewFiscalTerminalSession(fiscalRenewalPorts(current, () => authResponse));
+  assert.equal(result.renewed, false);
+  assert.equal(result.reason, 'WebView storage write failed');
+  assert.equal(native, originalNative);
+  assert.deepEqual(JSON.parse(values.get('clic_terminal_credentials_v1')!), current);
+  assert.equal(values.get('clic_erp_sync_token'), current.syncToken);
+  assert.equal(values.get('clic_erp_sync_token_expires_at'), current.syncTokenExpiresAt);
+  assert.equal(values.get('clic_erp_sync_token_updated_at'), 'initial-time');
+  assert.equal(values.get('clic_sync_auth_status'), 'REVOKED');
+  assert.equal(values.get('clic_sync_last_auth_error'), 'DEVICE_REVOKED');
+  assert.equal(values.get('clic_terminal_authorization_block'), '{}');
+});

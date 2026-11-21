@@ -437,16 +437,39 @@ export const saveTerminalSessionCAS=(snapshot:TerminalSessionSnapshot,session:{t
             next.authStatus = 'AUTHENTICATED';
             next.lastAuthError = null;
         }
-        // The queue fences other credential writes. If recovery loses its guard while
-        // Preferences is writing, restore only when our bytes are still current.
+        // Roll back only keys that still contain this recovery's attempted values.
         const nextDocument = JSON.stringify(next);
         const nativeBefore = session.recoverStaleAuthorization ? await readNativeCredentialsForProjection() : null;
+        const webWrites: Array<{ key: string; before: string | null; after: string | null }> = [];
+        const writeWeb = (key: string, value: string | null) => {
+            if (session.recoverStaleAuthorization) webWrites.push({ key, before: storage!.getItem(key), after: value });
+            if (value === null) storage!.removeItem(key);
+            else storage!.setItem(key, value);
+        };
         current();
         try {
             await writeNativeCredentials(nextDocument);
             current();
+            writeWeb(CREDENTIALS_KEY, nextDocument);
+            writeWeb('clic_erp_sync_token', session.token);
+            writeWeb('clic_erp_sync_token_expires_at', openEnded ? null : session.expiresAt);
+            writeWeb('clic_erp_sync_token_updated_at', session.observation.observedAt);
+            if (session.recoverStaleAuthorization) {
+                writeWeb('clic_sync_auth_status', 'AUTHENTICATED');
+                writeWeb('clic_sync_last_auth_error', null);
+            }
         } catch (error) {
             if (session.recoverStaleAuthorization) {
+                let webRestored = true;
+                for (const { key, before, after } of webWrites.reverse()) {
+                    try {
+                        if (before === after || storage!.getItem(key) !== after) continue;
+                        if (before === null) storage!.removeItem(key);
+                        else storage!.setItem(key, before);
+                    } catch {
+                        webRestored = false;
+                    }
+                }
                 try {
                     if (await readNativeCredentialsForProjection() === nextDocument) {
                         if (nativeBefore === null) await Preferences.remove({ key: CREDENTIALS_KEY });
@@ -455,16 +478,9 @@ export const saveTerminalSessionCAS=(snapshot:TerminalSessionSnapshot,session:{t
                 } catch {
                     throw Error('SYNC_AUTH_RECOVERY_NATIVE_RESTORE_FAILED');
                 }
+                if (!webRestored) throw Error('SYNC_AUTH_RECOVERY_WEBVIEW_RESTORE_FAILED');
             }
             throw error;
-        }
-        storage!.setItem(CREDENTIALS_KEY,nextDocument);
-        storage!.setItem('clic_erp_sync_token',session.token);
-        mirrorSessionDate(storage!,session.expiresAt);
-        storage!.setItem('clic_erp_sync_token_updated_at',session.observation.observedAt);
-        if (session.recoverStaleAuthorization) {
-            storage!.setItem('clic_sync_auth_status', 'AUTHENTICATED');
-            storage!.removeItem('clic_sync_last_auth_error');
         }
         credentialWriteGeneration++;
         if (typeof window !== 'undefined') window.dispatchEvent(new Event(TERMINAL_SESSION_RENEWED_EVENT));
